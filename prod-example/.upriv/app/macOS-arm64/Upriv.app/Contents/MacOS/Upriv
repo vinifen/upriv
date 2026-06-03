@@ -1,0 +1,4 @@
+#!/bin/sh
+echo "Upriv 0.1.0-demo FAKE (macOS arm64)"
+echo "Args: $*"
+read -r -p "Enter..."

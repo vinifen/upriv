@@ -1,0 +1,10 @@
+{
+  "format_version": 1,
+  "vault_id": "cold-storage",
+  "display_name": "Cold Storage",
+  "sync_generation": 1,
+  "archive_hash": "sha256:demo-vault-example-3-archive",
+  "last_close_ok_at": "2026-05-28T16:00:00Z",
+  "sealed_at": "2026-05-28T16:00:00Z",
+  "persistence": "sealed"
+}

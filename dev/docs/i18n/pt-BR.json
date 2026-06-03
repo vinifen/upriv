@@ -1,0 +1,97 @@
+{
+  "app.title": "Upriv",
+  "app.tagline": "Cofres cifrados universais em .7z",
+  "app.new_vault": "Novo cofre",
+
+  "vault.status.open": "Aberto",
+  "vault.status.closed": "Fechado",
+  "vault.status.sealed": "Selado",
+  "vault.status.recovery": "Recuperação",
+  "vault.status.closing": "Fechando…",
+
+  "vault.name.label": "Nome do cofre",
+  "vault.name.invalid_chars": "O nome não pode conter \\ / : * ? \" < > | nem caracteres de controle.",
+  "vault.name.empty": "O nome não pode ficar vazio.",
+  "vault.name.trailing": "O nome não pode terminar com espaço ou ponto.",
+  "vault.name.reserved": "Este nome é reservado pelo sistema operacional.",
+  "vault.name.too_long": "Nome longo demais (máx. {max} caracteres).",
+
+  "vault.order.label": "Ordem de exibição",
+  "vault.order.help": "Números menores aparecem primeiro na lista de cofres.",
+
+  "vault.export.filename_sanitized": "O nome do arquivo foi ajustado para este sistema: {filename}",
+  "vault.export.invalid_filename": "Este nome de arquivo não pode ser salvo neste sistema.",
+
+  "vault.import.title": "Importar arquivo",
+  "vault.import.rename_prompt": "O nome do arquivo contém caracteres que não podem ser usados como nome do cofre. Escolha um nome de exibição:",
+  "vault.import.suggested_name": "Nome sugerido",
+
+  "vault.create.title": "Novo cofre",
+  "vault.create.password": "Senha",
+  "vault.create.password_confirm": "Confirmar senha",
+  "vault.create.password_hint": "Dica da senha (opcional)",
+  "vault.create.password_hint_help": "Um lembrete curto para você — não repita a senha aqui.",
+  "vault.create.note": "Anotação (opcional)",
+  "vault.create.note_help": "Anotação curta deste cofre (máx. {max} caracteres).",
+  "vault.create.password_mismatch": "As senhas não coincidem.",
+
+  "vault.change_password.title": "Alterar senha",
+  "vault.change_password.current": "Senha atual",
+  "vault.change_password.new": "Nova senha",
+  "vault.change_password.confirm": "Confirmar nova senha",
+  "vault.change_password.submit": "Alterar senha",
+
+  "unlock.password_hint_label": "Dica",
+
+  "action.backups": "Backups",
+  "action.settings": "Configurações",
+  "action.unlock": "Desbloquear",
+  "action.lock": "Bloquear",
+  "action.seal": "Selar",
+  "action.close": "Fechar",
+  "action.open_folder": "Abrir pasta",
+  "action.continue": "Continuar",
+  "action.cancel": "Cancelar",
+  "action.delete": "Excluir",
+  "action.restore": "Restaurar",
+  "action.drag_reorder": "Arrastar para reordenar",
+
+  "close.dialog.title": "Fechar cofre",
+  "close.dialog.close_hint": "Mantém cópia cifrada no disco para reabrir mais rápido.",
+  "close.dialog.seal_hint": "Resta apenas o arquivo .7z (máxima portabilidade).",
+  "close.dialog.seal_confirm": "Só o arquivo .7z permanecerá. A cache cifrada no disco será apagada.",
+
+  "modal.backup.title": "Backups",
+  "modal.backup.delete_confirm": "Digite o nome do cofre para confirmar a exclusão:",
+  "modal.settings.title": "Configurações do cofre",
+  "modal.settings.note": "Anotação",
+  "modal.settings.password_hint": "Dica da senha",
+  "modal.settings.change_password": "Alterar senha",
+  "modal.settings.danger_zone": "Zona de perigo",
+  "modal.settings.delete_vault": "Apagar cofre",
+  "modal.settings.delete_confirm": "Digite o nome do cofre para confirmar:",
+
+  "unlock.title": "Desbloquear cofre",
+  "unlock.password": "Senha",
+  "unlock.submit": "Desbloquear",
+
+  "recovery.title": "Recuperação necessária",
+  "recovery.use_store": "Usar repositório cifrado",
+  "recovery.reimport_archive": "Reimportar .7z",
+  "recovery.compare": "Comparar",
+  "recovery.discard_workspace": "Descartar workspace",
+
+  "warning.vault_open_on_exit": "Um cofre ainda está aberto. Fechar antes de sair?",
+  "warning.external_editor": "Apps externos podem copiar arquivos para fora do cofre (pastas temporárias).",
+  "warning.plain_mode": "O modo plain guarda arquivos em claro no disco até fechar. Não recomendado.",
+  "warning.password_change_backups": "Os backups existentes continuarão com a senha antiga. Só o arquivo principal e os novos backups usarão a nova senha.",
+  "warning.auto_close_soon": "O cofre fechará em {seconds} s por inatividade.",
+
+  "error.wrong_password": "Senha incorreta",
+  "error.vault_already_open": "Cofre já está aberto (lock ativo)",
+  "error.archive_test_failed": "Teste do arquivo falhou — fechamento cancelado",
+  "error.sync_mismatch": "Arquivo .7z e repositório cifrado estão dessincronizados",
+
+  "empty.no_vaults": "Nenhum cofre configurado",
+  "empty.workspace_closed": "Desbloqueie um cofre para acessar os arquivos"
+}

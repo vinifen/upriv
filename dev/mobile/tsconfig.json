@@ -1,0 +1,13 @@
+{
+  "extends": "./node_modules/expo/tsconfig.base.json",
+  "compilerOptions": {
+    "strict": true,
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"],
+      "@i18n/*": ["../docs/i18n/*"]
+    },
+    "resolveJsonModule": true
+  },
+  "include": ["**/*.ts", "**/*.tsx", "../docs/i18n/*.json"]
+}

@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+
+# Frontend build
+desktop/dist/
+mobile/node_modules/
+mobile/.expo/
+mobile/dist/
+mobile/web-build/
+
+# Rust (workspace + legacy per-crate)
+target/
+src-tauri/target/
+
+# Tauri generated (regenerated on build)
+src-tauri/gen/
+
+# Logs / OS
+*.log
+.DS_Store
+Thumbs.db
+
+# Env (never commit secrets)
+.env
+.env.*

@@ -1,0 +1,39 @@
+# Vault config — demo example for list reorder testing
+
+[vault]
+id = "backup-mirror"
+display_name = "Backup Mirror"
+order = 14
+vault_file = "archive/Backup Mirror.7z"
+store_dir = "store"
+backups_dir = "backups"
+password_hint = ""
+note = "Secondary copy vault"
+
+[storage]
+mode = "encrypted_dir"
+
+[close]
+default_action = "close"
+
+[backup]
+enabled = false
+mode = "keep_last"
+
+[security]
+mode = "session_ram"
+
+[auto_close]
+enabled = false
+idle_minutes = 15
+warn_before_seconds = 0
+close_on_app_minimize = false
+
+[seven_zip]
+encrypt_file_names = true
+archive_mode = "encrypt_only"
+
+[policy]
+allow_external_editors = true
+disallow_copy_outside_mount = false
+require_unmount_on_sleep = false

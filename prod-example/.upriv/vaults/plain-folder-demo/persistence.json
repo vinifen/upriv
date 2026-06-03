@@ -1,0 +1,9 @@
+{
+  "format_version": 1,
+  "vault_id": "plain-folder-demo",
+  "display_name": "Plain Folder Demo",
+  "sync_generation": 1,
+  "archive_hash": "sha256:demo-vault-example-4-archive",
+  "last_close_ok_at": "2026-05-28T14:00:00Z",
+  "persistence": "closed"
+}

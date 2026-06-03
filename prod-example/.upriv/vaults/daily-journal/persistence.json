@@ -1,0 +1,11 @@
+{
+  "format_version": 1,
+  "vault_id": "daily-journal",
+  "display_name": "Daily Journal",
+  "sync_generation": 1,
+  "archive_hash": "sha256:demo-daily-journal-archive",
+  "store_hash": "sha256:demo-daily-journal-store",
+  "last_close_ok_at": "2026-05-28T12:00:00Z",
+  "last_store_write_at": "2026-05-28T12:00:00Z",
+  "persistence": "closed"
+}

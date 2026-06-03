@@ -1,0 +1,40 @@
+# Vault config — storage, security, backup, 7z, policies (static; survives seal)
+# Example 2 — compress + encrypt, keep_all backups, auto-close with warning (sealed on disk)
+
+[vault]
+id = "vault-example-2"                              # normalized (folder, backups, paths)
+display_name = "Vault ExaMple 2"                    # UI — verbatim user input at creation
+order = 1
+vault_file = "archive/Vault ExaMple 2.7z"           # main archive — NEVER normalized (same as display_name + .7z)
+backups_dir = "backups"
+
+[storage]
+mode = "encrypted_dir"
+
+[close]
+default_action = "close"
+
+[backup]
+enabled = true
+mode = "keep_all"
+
+[security]
+mode = "session_ram"
+
+[auto_close]
+enabled = true
+idle_minutes = 15
+warn_before_seconds = 60
+close_on_app_minimize = false
+
+[seven_zip]
+encrypt_file_names = true
+archive_mode = "compress_encrypt"
+compression_level = 5
+solid = false
+method = "lzma2"
+
+[policy]
+allow_external_editors = true
+disallow_copy_outside_mount = true
+require_unmount_on_sleep = true

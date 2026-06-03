@@ -1,0 +1,11 @@
+{
+  "format_version": 1,
+  "vault_id": "medical-records",
+  "display_name": "Medical Records",
+  "sync_generation": 1,
+  "archive_hash": "sha256:demo-medical-records-archive",
+  "store_hash": "sha256:demo-medical-records-store",
+  "last_close_ok_at": "2026-05-28T12:00:00Z",
+  "last_store_write_at": "2026-05-28T12:00:00Z",
+  "persistence": "closed"
+}

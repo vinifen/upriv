@@ -1,0 +1,12 @@
+[package]
+name = "upriv-core"
+version = "0.1.0"
+description = "Upriv shared Rust core (desktop, mobile)"
+authors = ["Upriv"]
+edition = "2021"
+rust-version = "1.77.2"
+
+[lib]
+name = "upriv_core"
+path = "src/lib.rs"
+crate-type = ["rlib", "cdylib", "staticlib"]

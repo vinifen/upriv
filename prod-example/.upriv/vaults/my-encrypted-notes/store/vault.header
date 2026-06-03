@@ -1,0 +1,19 @@
+{
+  "format": "upriv-encrypted-dir",
+  "version": 1,
+  "vault_id": "my-encrypted-notes",
+  "kdf": {
+    "algorithm": "argon2id",
+    "salt_b64": "fM2UXwLToJ+0F4f3eQxqzQ==",
+    "memory_kib": 131072,
+    "iterations": 3,
+    "parallelism": 1
+  },
+  "crypto": {
+    "content_cipher": "XChaCha20-Poly1305",
+    "name_cipher": "AES-SIV",
+    "chunk_size": 262144
+  },
+  "wrapped_master_key_b64": "9P1H6EZXqP4nE4XJ4QxTqFJ7n5sH0t6X7Wv8R2mYQ+0=",
+  "created_at": "2026-05-28T10:00:00Z"
+}

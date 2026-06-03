@@ -1,0 +1,20 @@
+@echo off
+REM Upriv — Windows launcher at vault-root (x64 / ARM64)
+setlocal
+set "ROOT=%~dp0"
+set "ARCH=%PROCESSOR_ARCHITECTURE%"
+
+if /I "%ARCH%"=="ARM64" (
+  set "APP=%~dp0.upriv\app\Windows-arm64\Upriv.exe"
+) else (
+  set "APP=%~dp0.upriv\app\Windows-x64\Upriv.exe"
+)
+
+if not exist "%APP%" (
+  echo [ERROR] Upriv not found: %APP%
+  pause
+  exit /b 1
+)
+
+start "" "%APP%" --vault "%ROOT%"
+endlocal

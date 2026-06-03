@@ -1,0 +1,2 @@
+DEMO session.enc — encrypted session key blob (NOT plaintext password).
+security.mode = disk_open_close for plain-folder-demo (plain mode only).

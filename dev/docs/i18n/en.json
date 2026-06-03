@@ -1,0 +1,97 @@
+{
+  "app.title": "Upriv",
+  "app.tagline": "Universal encrypted vaults in .7z",
+  "app.new_vault": "New vault",
+
+  "vault.status.open": "Open",
+  "vault.status.closed": "Closed",
+  "vault.status.sealed": "Sealed",
+  "vault.status.recovery": "Recovery",
+  "vault.status.closing": "Closing…",
+
+  "vault.name.label": "Vault name",
+  "vault.name.invalid_chars": "Name cannot contain \\ / : * ? \" < > | or control characters.",
+  "vault.name.empty": "Name cannot be empty.",
+  "vault.name.trailing": "Name cannot end with a space or period.",
+  "vault.name.reserved": "This name is reserved by the operating system.",
+  "vault.name.too_long": "Name is too long (max {max} characters).",
+
+  "vault.order.label": "Display order",
+  "vault.order.help": "Lower numbers appear first in the vault list.",
+
+  "vault.export.filename_sanitized": "The filename was adjusted for this system: {filename}",
+  "vault.export.invalid_filename": "This filename cannot be saved on this system.",
+
+  "vault.import.title": "Import archive",
+  "vault.import.rename_prompt": "The file name contains characters that cannot be used as a vault name. Choose a display name:",
+  "vault.import.suggested_name": "Suggested name",
+
+  "vault.create.title": "New vault",
+  "vault.create.password": "Password",
+  "vault.create.password_confirm": "Confirm password",
+  "vault.create.password_hint": "Password hint (optional)",
+  "vault.create.password_hint_help": "A short reminder for you — do not repeat the password here.",
+  "vault.create.note": "Note (optional)",
+  "vault.create.note_help": "Short annotation for this vault (max {max} characters).",
+  "vault.create.password_mismatch": "Passwords do not match.",
+
+  "vault.change_password.title": "Change password",
+  "vault.change_password.current": "Current password",
+  "vault.change_password.new": "New password",
+  "vault.change_password.confirm": "Confirm new password",
+  "vault.change_password.submit": "Change password",
+
+  "unlock.password_hint_label": "Hint",
+
+  "action.backups": "Backups",
+  "action.settings": "Settings",
+  "action.unlock": "Unlock",
+  "action.lock": "Lock",
+  "action.seal": "Seal",
+  "action.close": "Close",
+  "action.open_folder": "Open folder",
+  "action.continue": "Continue",
+  "action.cancel": "Cancel",
+  "action.delete": "Delete",
+  "action.restore": "Restore",
+  "action.drag_reorder": "Drag to reorder",
+
+  "close.dialog.title": "Close vault",
+  "close.dialog.close_hint": "Keeps encrypted cache on disk for faster reopen.",
+  "close.dialog.seal_hint": "Only the .7z archive remains (maximum portability).",
+  "close.dialog.seal_confirm": "Only the .7z file will remain. Encrypted cache on disk will be erased.",
+
+  "modal.backup.title": "Backups",
+  "modal.backup.delete_confirm": "Type the vault name to confirm deletion:",
+  "modal.settings.title": "Vault settings",
+  "modal.settings.note": "Note",
+  "modal.settings.password_hint": "Password hint",
+  "modal.settings.change_password": "Change password",
+  "modal.settings.danger_zone": "Danger zone",
+  "modal.settings.delete_vault": "Delete vault",
+  "modal.settings.delete_confirm": "Type the vault name to confirm:",
+
+  "unlock.title": "Unlock vault",
+  "unlock.password": "Password",
+  "unlock.submit": "Unlock",
+
+  "recovery.title": "Recovery required",
+  "recovery.use_store": "Use encrypted store",
+  "recovery.reimport_archive": "Re-import .7z",
+  "recovery.compare": "Compare",
+  "recovery.discard_workspace": "Discard workspace",
+
+  "warning.vault_open_on_exit": "A vault is still open. Close it before exiting?",
+  "warning.external_editor": "External apps may copy files outside the vault (temp folders).",
+  "warning.plain_mode": "Plain mode stores decrypted files on disk until close. Not recommended.",
+  "warning.password_change_backups": "Existing backups will keep the old password. Only the main archive and new backups will use the new password.",
+  "warning.auto_close_soon": "Vault will close in {seconds} s due to inactivity.",
+
+  "error.wrong_password": "Wrong password",
+  "error.vault_already_open": "Vault is already open (lock held)",
+  "error.archive_test_failed": "Archive test failed — close aborted",
+  "error.sync_mismatch": "Archive and encrypted store are out of sync",
+
+  "empty.no_vaults": "No vaults configured",
+  "empty.workspace_closed": "Unlock a vault to access files"
+}
