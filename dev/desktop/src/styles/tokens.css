@@ -1,0 +1,23 @@
+:root {
+  /* Surfaces — design baseline (SDD §8.2, stitch DESIGN.md) */
+  --background: #081425;
+  --surface-container: #152031;
+  --surface-container-high: #1f2a3c;
+  --on-surface: #d8e3fb;
+  --on-surface-variant: #c6c6cd;
+  --outline-variant: #45464d;
+
+  /* Accent / actions */
+  --accent: #6b8cff;
+  --accent-foreground: #0f172a;
+
+  /* Vault status (PRD §3.7.1) — consumed by StatusDot + Tailwind */
+  --vault-status-open: #3dd68c;
+  --vault-status-closed: #6b8cff;
+  --vault-status-sealed: #8b8b8b;
+  --vault-status-recovery: #f5a623;
+
+  /* Semantic */
+  --error-container: #93000a;
+  --on-error-container: #ffdad6;
+}

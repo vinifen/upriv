@@ -1,0 +1,26 @@
+@import "./fonts.css";
+@import "./tokens.css";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    @apply antialiased;
+  }
+
+  body {
+    @apply min-h-screen bg-background font-body text-on-surface;
+  }
+
+  #root {
+    @apply min-h-screen;
+  }
+}
+
+@layer utilities {
+  .shadow-modal {
+    box-shadow: 0 16px 48px rgb(0 0 0 / 35%);
+  }
+}
