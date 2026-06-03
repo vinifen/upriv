@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Upriv — Linux launcher at vault-root (x64 / ARM64)
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+APP_DIR="$ROOT/.upriv/app"
+ARCH="$(uname -m)"
+
+case "$ARCH" in
+  x86_64|amd64) APP="$APP_DIR/Linux-x64/Upriv" ;;
+  aarch64|arm64) APP="$APP_DIR/Linux-arm64/Upriv" ;;
+  *)
+    echo "[ERROR] Unsupported architecture: $ARCH"
+    exit 1
+    ;;
+esac
+
+if [[ ! -x "$APP" ]]; then
+  echo "[ERROR] Upriv not found or not executable: $APP"
+  exit 1
+fi
+
+exec "$APP" --vault "$ROOT"

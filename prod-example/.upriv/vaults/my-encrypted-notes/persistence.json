@@ -1,0 +1,11 @@
+{
+  "format_version": 1,
+  "vault_id": "my-encrypted-notes",
+  "display_name": "My Encrypted Notes",
+  "sync_generation": 1,
+  "archive_hash": "sha256:demo-vault-example-1-archive",
+  "store_hash": "sha256:demo-vault-example-1-store",
+  "last_close_ok_at": "2026-05-28T14:00:00Z",
+  "last_store_write_at": "2026-05-28T14:00:00Z",
+  "persistence": "closed"
+}

@@ -1,0 +1,16 @@
+DEMO — open session write path (my-encrypted-notes / My Encrypted Notes)
+==========================================
+
+Logical file (what you edit):
+  workspace/My Encrypted Notes/notes/demo-note.txt
+
+Encrypted persistence on HD/SSD (write-through):
+  .upriv/vaults/my-encrypted-notes/store/data/<hash>/….chunk.enc
+  .upriv/vaults/my-encrypted-notes/store/index/root.idx.enc
+  .upriv/vaults/my-encrypted-notes/persistence.json  → last_store_write_at
+
+Archive (.7z) — updated only on Close or Seal:
+  .upriv/vaults/my-encrypted-notes/archive/My Encrypted Notes.7z
+
+Runtime (RAM / app):
+  .upriv/state.json          → session: open

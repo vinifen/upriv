@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<!--
+  Upriv — Stitch design baseline (NOT final UI).
+  Reference prototype only. See dev/docs/stitch_upriv_vault_manager/README.md
+  Product spec: dev/docs/prd.md §3.7, dev/docs/sdd.md §8.2, dev/docs/i18n/
+-->
+
+<html class="dark" lang="en" style=""><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Upriv Vault - Security Core</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@500&amp;family=Hanken+Grotesk:wght@600;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        body {
+            background-color: #081425;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+        }
+        ::-webkit-scrollbar {
+            width: 4px;
+        }
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #2a3548;
+            border-radius: 10px;
+        }
+        .vault-row-transition {
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        .glass-blur {
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+        }
+        .popover-hidden {
+            display: none;
+        }
+    </style>
+<script id="tailwind-config">
+        tailwind.config = {
+          darkMode: "class",
+          theme: {
+            extend: {
+              "colors": {
+                      "on-tertiary": "#003920",
+                      "inverse-surface": "#d8e3fb",
+                      "on-primary-fixed-variant": "#3f465c",
+                      "background": "#081425",
+                      "surface": "#081425",
+                      "on-secondary": "#00277f",
+                      "secondary-fixed": "#dce1ff",
+                      "surface-bright": "#2f3a4c",
+                      "on-primary": "#283044",
+                      "on-primary-fixed": "#131b2e",
+                      "surface-container": "#152031",
+                      "on-surface-variant": "#c6c6cd",
+                      "error-container": "#93000a",
+                      "error": "#ffb4ab",
+                      "on-secondary-container": "#a3b5ff",
+                      "secondary-container": "#103eb0",
+                      "on-background": "#d8e3fb",
+                      "surface-container-lowest": "#040e1f",
+                      "inverse-on-surface": "#263143",
+                      "on-secondary-fixed-variant": "#0a3bad",
+                      "tertiary-container": "#001c0d",
+                      "surface-container-low": "#111c2d",
+                      "on-error": "#690005",
+                      "tertiary-fixed-dim": "#49e095",
+                      "on-error-container": "#ffdad6",
+                      "tertiary": "#49e095",
+                      "on-tertiary-fixed-variant": "#005230",
+                      "on-primary-container": "#798098",
+                      "surface-container-highest": "#2a3548",
+                      "primary-fixed-dim": "#bec6e0",
+                      "secondary": "#b6c4ff",
+                      "surface-dim": "#081425",
+                      "surface-container-high": "#1f2a3c",
+                      "on-surface": "#d8e3fb",
+                      "secondary-fixed-dim": "#b6c4ff",
+                      "surface-variant": "#2a3548",
+                      "outline-variant": "#45464d",
+                      "outline": "#909097",
+                      "tertiary-fixed": "#6bfdaf",
+                      "primary-container": "#0f172a",
+                      "primary-fixed": "#dae2fd",
+                      "primary": "#bec6e0",
+                      "on-tertiary-container": "#00935a",
+                      "surface-tint": "#bec6e0",
+                      "on-secondary-fixed": "#001550",
+                      "inverse-primary": "#565e74",
+                      "on-tertiary-fixed": "#002110"
+              },
+              "borderRadius": {
+                      "DEFAULT": "0.125rem",
+                      "lg": "0.25rem",
+                      "xl": "0.5rem",
+                      "full": "0.75rem"
+              },
+              "spacing": {
+                      "xs": "4px",
+                      "margin-desktop": "32px",
+                      "max-width": "1200px",
+                      "sm": "8px",
+                      "lg": "24px",
+                      "md": "16px",
+                      "unit": "4px",
+                      "xl": "48px",
+                      "margin-mobile": "16px",
+                      "gutter": "16px"
+              },
+              "fontFamily": {
+                      "body-md": ["Inter"],
+                      "label-md": ["JetBrains Mono"],
+                      "label-sm": ["JetBrains Mono"],
+                      "headline-md": ["Hanken Grotesk"],
+                      "body-lg": ["Inter"],
+                      "body-sm": ["Inter"],
+                      "headline-lg-mobile": ["Hanken Grotesk"],
+                      "headline-lg": ["Hanken Grotesk"],
+                      "headline-xl": ["Hanken Grotesk"]
+              },
+              "fontSize": {
+                      "body-md": ["16px", {"lineHeight": "24px", "fontWeight": "400"}],
+                      "label-md": ["14px", {"lineHeight": "16px", "letterSpacing": "0.02em", "fontWeight": "500"}],
+                      "label-sm": ["12px", {"lineHeight": "14px", "letterSpacing": "0.05em", "fontWeight": "500"}],
+                      "headline-md": ["22px", {"lineHeight": "28px", "fontWeight": "600"}],
+                      "body-lg": ["18px", {"lineHeight": "28px", "fontWeight": "400"}],
+                      "body-sm": ["14px", {"lineHeight": "20px", "fontWeight": "400"}],
+                      "headline-lg-mobile": ["24px", {"lineHeight": "32px", "fontWeight": "600"}],
+                      "headline-lg": ["28px", {"lineHeight": "36px", "letterSpacing": "-0.01em", "fontWeight": "600"}],
+                      "headline-xl": ["36px", {"lineHeight": "44px", "letterSpacing": "-0.02em", "fontWeight": "700"}]
+              }
+            },
+          },
+        }
+    </script>
+</head>
+<body class="font-body-md text-on-surface bg-surface min-h-screen flex flex-col">
+<!-- Top Nav Bar -->
+<header class="sticky top-0 z-50 bg-surface/80 glass-blur px-margin-mobile md:px-margin-desktop py-md border-b border-outline-variant/10">
+<div class="max-w-max-width mx-auto flex justify-between items-center">
+<div class="flex items-center gap-md">
+<img alt="Upriv" class="h-5 md:h-6 w-auto object-contain" src="https://lh3.googleusercontent.com/aida-public/AB6AXuD-kmiZCIPVS6YpmRKnPaw70oEojp0KXxuuQXaUF-h3OXa3f5QJcnHJR2dDevJKb1TEkfgWk1_WwTRFwxNQ0fiZJYhTPaozXiom9YpwaNrDBmQXaA4tLR0KNMUUtou7z-3Ecix0bVfjib-4GVOTptwYXWCdOwMTPRvl11xL0a8MzTp-M8-9cfRGa8glSvjOK_FUQzgJpElWxEx4TS5_kDF3XxRDseVNENlSqcjAPpsHZ1-h_nytrj87Evn0NgY4jc192FS7Fe2-YZA"/>
+</div>
+<div class="flex items-center gap-sm">
+<button class="bg-primary text-on-primary font-label-md text-label-md px-lg py-md rounded-xl hover:scale-[0.98] transition-all flex items-center gap-sm shadow-lg shadow-primary/10">
+<span class="material-symbols-outlined text-[20px]" data-icon="add">add</span>
+                    New Vault
+                </button>
+<div class="relative group">
+<button class="p-md text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high rounded-xl transition-all">
+<span class="material-symbols-outlined" data-icon="more_vert">more_vert</span>
+</button>
+<!-- Overflow Menu -->
+<div class="absolute right-0 mt-2 w-48 bg-surface-container-high border border-outline-variant/20 rounded-xl shadow-2xl py-sm hidden group-focus-within:block">
+<a class="flex items-center gap-md px-md py-md hover:bg-surface-container-highest text-on-surface transition-colors" href="#">
+<span class="material-symbols-outlined text-[20px]" data-icon="settings">settings</span>
+<span class="text-label-md">System Settings</span>
+</a>
+<a class="flex items-center gap-md px-md py-md hover:bg-surface-container-highest text-on-surface transition-colors" href="#">
+<span class="material-symbols-outlined text-[20px]" data-icon="terminal">terminal</span>
+<span class="text-label-md">View Logs</span>
+</a>
+<a class="flex items-center gap-md px-md py-md hover:bg-surface-container-highest text-on-surface transition-colors" href="#">
+<span class="material-symbols-outlined text-[20px]" data-icon="help">help</span>
+<span class="text-label-md">Help</span>
+</a>
+</div>
+</div>
+</div>
+</div>
+</header>
+<!-- Main Content Canvas -->
+<main class="flex-1 flex flex-col items-center justify-center py-xl">
+<section class="w-full max-w-[900px] px-margin-mobile md:px-margin-desktop">
+<div class="mb-xl text-center md:text-left">
+<h1 class="font-headline-lg text-headline-lg text-on-surface">Active Vaults</h1>
+<p class="text-body-sm text-on-surface-variant mt-xs">Securely managing your encrypted directories and cold storage.</p>
+</div>
+<!-- Vault List Container -->
+<div class="space-y-md relative">
+<!-- Vault 1: My Encrypted Notes (OPEN) -->
+<div class="bg-surface-container border-l-2 border-tertiary rounded-xl flex flex-col sm:flex-row items-center justify-between gap-lg vault-row-transition hover:bg-surface-container-high py-xl px-xl">
+<div class="flex items-center gap-lg w-full sm:w-auto">
+<div class="w-10 h-10 rounded-full bg-tertiary/10 flex items-center justify-center">
+<span class="material-symbols-outlined text-tertiary" data-icon="lock_open">lock_open</span>
+</div>
+<div class="flex-1">
+<div class="flex items-center gap-sm">
+<div class="flex items-center gap-sm"><span class="w-2.5 h-2.5 rounded-full bg-tertiary"></span><h3 class="font-body-md text-on-surface font-semibold text-body-lg">My Encrypted Notes</h3></div>
+</div>
+<div class="flex items-center gap-sm mt-1"><span class="font-label-sm text-label-sm text-on-tertiary-container bg-tertiary/5 px-sm py-[2px] rounded uppercase">OPENED</span><span class="text-xs text-on-surface-variant ml-sm">Last accessed: 2m ago</span></div>
+</div>
+</div>
+<div class="flex items-center gap-md w-full sm:w-auto justify-end">
+<div class="flex items-center gap-xs text-on-surface-variant">
+<button class="p-sm hover:text-on-surface hover:bg-surface-container-highest rounded-lg transition-all" title="Vault Settings">
+<span class="material-symbols-outlined text-[20px]" data-icon="settings">settings</span>
+</button>
+<button class="p-sm hover:text-on-surface hover:bg-surface-container-highest rounded-lg transition-all" title="Vault Note">
+<span class="material-symbols-outlined text-[20px]" data-icon="sticky_note_2">sticky_note_2</span>
+</button>
+<button class="p-sm hover:text-on-surface hover:bg-surface-container-highest rounded-lg transition-all" title="Backups">
+<span class="material-symbols-outlined text-[20px]" data-icon="cloud_sync">cloud_sync</span>
+</button>
+</div>
+<div class="relative inline-flex items-stretch rounded-xl overflow-hidden shadow-lg group">
+<button class="bg-primary text-on-primary font-label-md text-label-md px-lg py-md hover:opacity-90 transition-opacity">
+                                Lock
+                            </button>
+<button class="bg-primary/90 text-on-primary font-label-md text-label-md px-sm py-md border-l border-on-primary/10 hover:bg-primary transition-colors flex items-center">
+<span class="material-symbols-outlined" data-icon="expand_more">expand_more</span>
+</button>
+<!-- Dropdown for Lock/Seal -->
+<div class="absolute right-0 top-full mt-1 w-full min-w-[120px] bg-surface-container-highest border border-outline-variant/20 rounded-xl shadow-2xl py-xs hidden group-focus-within:block z-10">
+<button class="w-full flex items-center gap-md px-md py-md hover:bg-surface-variant text-error transition-colors" onclick="toggleConfirm(event, 'seal-1')">
+<span class="material-symbols-outlined text-[18px]" data-icon="security">security</span>
+<span class="text-label-md">Seal Vault</span>
+</button>
+<!-- Inline Confirmation -->
+<div class="popover-hidden p-md bg-surface-container-low border-t border-outline-variant/10 text-center" id="seal-1">
+<p class="text-[10px] text-on-surface-variant uppercase mb-sm">Are you sure?</p>
+<div class="flex gap-xs">
+<button class="flex-1 text-[10px] bg-error text-on-error py-xs rounded">Yes</button>
+<button class="flex-1 text-[10px] bg-surface-variant py-xs rounded" onclick="toggleConfirm(event, 'seal-1')">No</button>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+<!-- Vault 2: Vault ExaMple 2 (SEALED) -->
+<div class="bg-surface-container rounded-xl flex flex-col sm:flex-row items-center justify-between gap-lg vault-row-transition hover:bg-surface-container-high border border-outline-variant/10 py-xl px-xl">
+<div class="flex items-center gap-lg w-full sm:w-auto">
+<div class="w-10 h-10 rounded-full bg-surface-container-highest flex items-center justify-center">
+<span class="material-symbols-outlined text-on-surface-variant" data-icon="encrypted">encrypted</span>
+</div>
+<div class="flex-1">
+<div class="flex items-center gap-sm">
+<div class="flex items-center gap-sm"><span class="w-2.5 h-2.5 rounded-full bg-outline"></span><h3 class="font-body-md text-on-surface font-semibold text-body-lg">Vault ExaMple 2</h3></div>
+</div>
+<div class="flex items-center gap-sm mt-1"><span class="font-label-sm text-label-sm text-on-surface-variant bg-surface-variant px-sm py-[2px] rounded uppercase">SEALED</span><span class="text-xs text-on-surface-variant ml-sm"><span class="" style="background-color: rgb(31, 42, 60);">Last accessed: 2 days ago</span></span></div>
+</div>
+</div>
+<div class="flex items-center gap-md w-full sm:w-auto justify-end">
+<div class="flex items-center gap-xs text-on-surface-variant">
+<button class="p-sm hover:text-on-surface hover:bg-surface-container-highest rounded-lg transition-all">
+<span class="material-symbols-outlined text-[20px]" data-icon="settings">settings</span>
+</button>
+<button class="p-sm hover:text-on-surface hover:bg-surface-container-highest rounded-lg transition-all">
+<span class="material-symbols-outlined text-[20px]" data-icon="sticky_note_2">sticky_note_2</span>
+</button>
+<button class="p-sm hover:text-on-surface hover:bg-surface-container-highest rounded-lg transition-all">
+<span class="material-symbols-outlined text-[20px]" data-icon="cloud_sync">cloud_sync</span>
+</button>
+</div>
+<button class="w-full sm:w-auto border border-outline text-on-surface font-label-md text-label-md px-xl py-md rounded-xl hover:bg-surface-container-highest transition-all">
+                            Unlock
+                        </button>
+</div>
+</div>
+<!-- Vault 3: Cold Storage (CLOSED) -->
+<div class="bg-surface-container rounded-xl flex flex-col sm:flex-row items-center justify-between gap-lg vault-row-transition hover:bg-surface-container-high border border-outline-variant/10 py-xl px-xl">
+<div class="flex items-center gap-lg w-full sm:w-auto">
+<div class="w-10 h-10 rounded-full bg-surface-container-highest flex items-center justify-center">
+<span class="material-symbols-outlined text-on-surface-variant" data-icon="lock">lock</span>
+</div>
+<div class="flex-1">
+<div class="flex items-center gap-sm">
+<div class="flex items-center gap-sm"><span class="w-2.5 h-2.5 rounded-full bg-secondary-container"></span><h3 class="font-body-md text-on-surface font-semibold text-body-lg">Cold Storage</h3></div>
+</div>
+<div class="flex items-center gap-sm mt-1"><span class="font-label-sm text-label-sm text-on-surface-variant bg-surface-variant px-sm py-[2px] rounded uppercase">CLOSED</span><span class="text-xs text-on-surface-variant ml-sm">Last accessed: 14 days ago</span></div>
+</div>
+</div>
+<div class="flex items-center gap-md w-full sm:w-auto justify-end">
+<div class="flex items-center gap-xs text-on-surface-variant">
+<button class="p-sm hover:text-on-surface hover:bg-surface-container-highest rounded-lg transition-all">
+<span class="material-symbols-outlined text-[20px]" data-icon="settings">settings</span>
+</button>
+<button class="p-sm hover:text-on-surface hover:bg-surface-container-highest rounded-lg transition-all">
+<span class="material-symbols-outlined text-[20px]" data-icon="sticky_note_2">sticky_note_2</span>
+</button>
+<button class="p-sm hover:text-on-surface hover:bg-surface-container-highest rounded-lg transition-all">
+<span class="material-symbols-outlined text-[20px]" data-icon="cloud_sync">cloud_sync</span>
+</button>
+</div>
+<button class="w-full sm:w-auto border border-outline text-on-surface font-label-md text-label-md px-xl py-md rounded-xl hover:bg-surface-container-highest transition-all">
+                            Unlock
+                        </button>
+</div>
+</div>
+<!-- Vault 4: System Logs (RECOVERY) -->
+<!-- Vault 5: Personal Photos (SEALED) -->
+<div class="bg-surface-container rounded-xl flex flex-col sm:flex-row items-center justify-between gap-lg vault-row-transition hover:bg-surface-container-high border border-outline-variant/10 py-xl px-xl">
+<div class="flex items-center gap-lg w-full sm:w-auto">
+<div class="w-10 h-10 rounded-full bg-surface-container-highest flex items-center justify-center">
+<span class="material-symbols-outlined text-on-surface-variant" data-icon="encrypted">encrypted</span>
+</div>
+<div class="flex-1">
+<div class="flex items-center gap-sm">
+<div class="flex items-center gap-sm"><span class="w-2.5 h-2.5 rounded-full bg-outline"></span><h3 class="font-body-md text-on-surface font-semibold text-body-lg">Personal Photos</h3></div>
+</div>
+<div class="flex items-center gap-sm mt-1"><span class="font-label-sm text-label-sm text-on-surface-variant bg-surface-variant px-sm py-[2px] rounded uppercase">SEALED</span><span class="text-xs text-on-surface-variant ml-sm">Last accessed: 2 days ago</span></div>
+</div>
+</div>
+<div class="flex items-center gap-md w-full sm:w-auto justify-end"><div class="flex items-center gap-xs text-on-surface-variant">
+<button class="p-sm hover:text-on-surface hover:bg-surface-container-highest rounded-lg transition-all" title="Vault Settings">
+<span class="material-symbols-outlined text-[20px]" data-icon="settings">settings</span>
+</button>
+<button class="p-sm hover:text-on-surface hover:bg-surface-container-highest rounded-lg transition-all" title="Vault Note">
+<span class="material-symbols-outlined text-[20px]" data-icon="sticky_note_2">sticky_note_2</span>
+</button>
+<button class="p-sm hover:text-on-surface hover:bg-surface-container-highest rounded-lg transition-all" title="Backups">
+<span class="material-symbols-outlined text-[20px]" data-icon="cloud_sync">cloud_sync</span>
+</button>
+</div>
+<button class="w-full sm:w-auto border border-outline text-on-surface font-label-md text-label-md px-xl py-md rounded-xl hover:bg-surface-container-highest transition-all">
+            Unlock
+        </button>
+</div>
+</div>
+<!-- Vault 6: Work Documents (CLOSED) -->
+<div class="bg-surface-container rounded-xl flex flex-col sm:flex-row items-center justify-between gap-lg vault-row-transition hover:bg-surface-container-high border border-outline-variant/10 py-xl px-xl">
+<div class="flex items-center gap-lg w-full sm:w-auto">
+<div class="w-10 h-10 rounded-full bg-surface-container-highest flex items-center justify-center">
+<span class="material-symbols-outlined text-on-surface-variant" data-icon="lock">lock</span>
+</div>
+<div class="flex-1">
+<div class="flex items-center gap-sm">
+<div class="flex items-center gap-sm"><span class="w-2.5 h-2.5 rounded-full bg-secondary-container"></span><h3 class="font-body-md text-on-surface font-semibold text-body-lg">Work Documents</h3></div>
+</div>
+<div class="flex items-center gap-sm mt-1"><span class="font-label-sm text-label-sm text-on-surface-variant bg-surface-variant px-sm py-[2px] rounded uppercase bg-error/10 text-error">AUTO-LOCKED</span><span class="text-xs text-on-surface-variant ml-sm">Last accessed: 2 days ago</span></div>
+</div>
+</div>
+<div class="flex items-center gap-md w-full sm:w-auto justify-end"><div class="flex items-center gap-xs text-on-surface-variant">
+<button class="p-sm hover:text-on-surface hover:bg-surface-container-highest rounded-lg transition-all" title="Vault Settings">
+<span class="material-symbols-outlined text-[20px]" data-icon="settings">settings</span>
+</button>
+<button class="p-sm hover:text-on-surface hover:bg-surface-container-highest rounded-lg transition-all" title="Vault Note">
+<span class="material-symbols-outlined text-[20px]" data-icon="sticky_note_2">sticky_note_2</span>
+</button>
+<button class="p-sm hover:text-on-surface hover:bg-surface-container-highest rounded-lg transition-all" title="Backups">
+<span class="material-symbols-outlined text-[20px]" data-icon="cloud_sync">cloud_sync</span>
+</button>
+</div>
+<button class="w-full sm:w-auto border border-outline text-on-surface font-label-md text-label-md px-xl py-md rounded-xl hover:bg-surface-container-highest transition-all">
+            Unlock
+        </button>
+</div>
+</div>
+<!-- Vault 7: Old Archive (SEALED) -->
+<div class="bg-surface-container rounded-xl flex flex-col sm:flex-row items-center justify-between gap-lg vault-row-transition hover:bg-surface-container-high border border-outline-variant/10 py-xl px-xl">
+<div class="flex items-center gap-lg w-full sm:w-auto">
+<div class="w-10 h-10 rounded-full bg-surface-container-highest flex items-center justify-center">
+<span class="material-symbols-outlined text-on-surface-variant" data-icon="encrypted">encrypted</span>
+</div>
+<div class="flex-1">
+<div class="flex items-center gap-sm">
+<div class="flex items-center gap-sm"><span class="w-2.5 h-2.5 rounded-full bg-outline"></span><h3 class="font-body-md text-on-surface font-semibold text-body-lg">Old Archive</h3></div>
+</div>
+<div class="flex items-center gap-sm mt-1"><span class="font-label-sm text-label-sm text-on-surface-variant bg-surface-variant px-sm py-[2px] rounded uppercase">SEALED</span><span class="text-xs text-on-surface-variant ml-sm">Last accessed: Jan 2023</span></div>
+</div>
+</div>
+<div class="flex items-center gap-md w-full sm:w-auto justify-end"><div class="flex items-center gap-xs text-on-surface-variant">
+<button class="p-sm hover:text-on-surface hover:bg-surface-container-highest rounded-lg transition-all" title="Vault Settings">
+<span class="material-symbols-outlined text-[20px]" data-icon="settings">settings</span>
+</button>
+<button class="p-sm hover:text-on-surface hover:bg-surface-container-highest rounded-lg transition-all" title="Vault Note">
+<span class="material-symbols-outlined text-[20px]" data-icon="sticky_note_2">sticky_note_2</span>
+</button>
+<button class="p-sm hover:text-on-surface hover:bg-surface-container-highest rounded-lg transition-all" title="Backups">
+<span class="material-symbols-outlined text-[20px]" data-icon="cloud_sync">cloud_sync</span>
+</button>
+</div>
+<button class="w-full sm:w-auto border border-outline text-on-surface font-label-md text-label-md px-xl py-md rounded-xl hover:bg-surface-container-highest transition-all">
+            Unlock
+        </button>
+</div>
+</div>
+<div class="h-12 opacity-20"></div></div><div class="fixed bottom-0 left-0 right-0 h-32 bg-gradient-to-t from-surface to-transparent pointer-events-none z-20"></div>
+</section>
+</main>
+<!-- Global Scripts -->
+<script>
+        function toggleConfirm(event, id) {
+            event.stopPropagation();
+            const el = document.getElementById(id);
+            if (el.classList.contains('popover-hidden')) {
+                el.classList.remove('popover-hidden');
+            } else {
+                el.classList.add('popover-hidden');
+            }
+        }
+
+        // Atmospheric effect: Subtle pulse on active vault status
+        setInterval(() => {
+            const dot = document.querySelector('.bg-\\[\\#3dd68c\\]');
+            if(dot) {
+                dot.style.boxShadow = dot.style.boxShadow ? '' : '0 0 10px rgba(61, 214, 140, 0.5)';
+                dot.style.transition = 'box-shadow 1s ease-in-out';
+            }
+        }, 1000);
+    </script>
+</body></html>

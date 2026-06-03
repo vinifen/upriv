@@ -1,0 +1,39 @@
+# Vault config — storage, security, backup, 7z, policies (static; survives seal)
+# Example 3 — sealed vault (archive only on disk; default close action = seal)
+
+[vault]
+id = "cold-storage"
+display_name = "Cold Storage"
+order = 2
+vault_file = "archive/Cold Storage.7z"
+password_hint = "Winter project codes"
+note = "Long-term archive — open rarely"
+
+[storage]
+mode = "encrypted_dir"
+
+[close]
+default_action = "seal"
+
+[backup]
+enabled = false
+mode = "keep_last"
+
+[security]
+mode = "session_ram"
+password_changed_at = "2026-05-28T10:00:00Z"   # set by app on change password; omit until first change
+
+[auto_close]
+enabled = false
+idle_minutes = 15
+warn_before_seconds = 0
+close_on_app_minimize = false
+
+[seven_zip]
+encrypt_file_names = true
+archive_mode = "encrypt_only"
+
+[policy]
+allow_external_editors = true
+disallow_copy_outside_mount = false
+require_unmount_on_sleep = false

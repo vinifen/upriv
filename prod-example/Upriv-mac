@@ -1,0 +1,28 @@
+#!/bin/sh
+# Upriv-mac — macOS launcher at vault-root (Apple Silicon / Intel)
+set -e
+
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+APP_DIR="$ROOT/.upriv/app"
+ARCH="$(uname -m)"
+
+case "$ARCH" in
+  arm64|aarch64)
+    APP="$APP_DIR/macOS-arm64/Upriv.app/Contents/MacOS/Upriv"
+    ;;
+  x86_64)
+    APP="$APP_DIR/macOS-x64/Upriv.app/Contents/MacOS/Upriv"
+    ;;
+  *)
+    echo "[ERROR] Unsupported macOS architecture: $ARCH" >&2
+    exit 1
+    ;;
+esac
+
+if [[ ! -x "$APP" ]]; then
+  echo "[ERROR] Upriv not found: $APP" >&2
+  echo "        v1 bundle includes macOS-arm64; Intel needs app/macOS-x64/ (see README)." >&2
+  exit 1
+fi
+
+exec "$APP" --vault "$ROOT"

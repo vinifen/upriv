@@ -1,0 +1,28 @@
+{
+  "name": "upriv-desktop",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "tauri": "sh -c 'cd ../src-tauri && npx --prefix ../desktop tauri \"$@\"' --"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "2.11.0",
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.11.2",
+    "@types/react": "18.3.18",
+    "@types/react-dom": "18.3.5",
+    "@vitejs/plugin-react": "4.4.1",
+    "autoprefixer": "10.4.21",
+    "postcss": "8.4.49",
+    "tailwindcss": "3.4.17",
+    "typescript": "5.7.3",
+    "vite": "6.3.5"
+  }
+}

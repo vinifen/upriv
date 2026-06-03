@@ -1,0 +1,27 @@
+{
+  "app_version": "0.2.0-demo",
+  "vaults": {
+    "my-encrypted-notes": {
+      "session": "open",
+      "storage_mode": "encrypted_dir",
+      "security_mode": "session_ram",
+      "workspace": "workspace/My Encrypted Notes",
+      "vault_root": ".upriv/vaults/my-encrypted-notes",
+      "archive_path": ".upriv/vaults/my-encrypted-notes/archive/My Encrypted Notes.7z",
+      "store_path": ".upriv/vaults/my-encrypted-notes/store",
+      "opened_at": "2026-05-28T16:00:00Z",
+      "last_activity_at": "2026-05-28T16:12:00Z"
+    },
+    "plain-folder-demo": {
+      "session": "open",
+      "storage_mode": "plain",
+      "security_mode": "disk_open_close",
+      "workspace": "workspace/Plain Folder Demo",
+      "vault_root": ".upriv/vaults/plain-folder-demo",
+      "archive_path": ".upriv/vaults/plain-folder-demo/archive/Plain Folder Demo.7z",
+      "auth_path": ".upriv/vaults/plain-folder-demo/auth",
+      "opened_at": "2026-05-28T14:00:00Z",
+      "last_activity_at": "2026-05-28T14:30:00Z"
+    }
+  }
+}

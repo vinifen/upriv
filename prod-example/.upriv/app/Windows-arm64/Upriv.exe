@@ -1,0 +1,9 @@
+@echo off
+echo.
+echo  ========================================
+echo   Upriv 0.1.0-demo  (EXECUTAVEL FAKE)
+echo  ========================================
+echo   Nao e o app real  apenas estrutura.
+echo   Args: %*
+echo.
+pause

@@ -1,0 +1,7 @@
+0001 2026-05-29T12:00:00.010Z INFO  app_start          version=0.2.0-demo vaults=4
+0002 2026-05-29T12:00:00.120Z INFO  vault_discovered   vault=my-encrypted-notes persistence=closed
+0003 2026-05-29T12:00:00.125Z INFO  vault_discovered   vault=vault-example-2 persistence=sealed
+0004 2026-05-29T12:00:00.130Z INFO  vault_discovered   vault=cold-storage persistence=sealed
+0005 2026-05-29T12:00:00.135Z INFO  vault_discovered   vault=plain-folder-demo persistence=closed
+0006 2026-05-29T12:01:15.402Z INFO  vault_open         vault=my-encrypted-notes storage_mode=encrypted_dir
+0007 2026-05-29T12:01:18.900Z INFO  vault_open         vault=plain-folder-demo storage_mode=plain security_mode=disk_open_close

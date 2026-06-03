@@ -1,0 +1,6 @@
+Demo note — encrypted_dir vault (My Encrypted Notes)
+
+Edits here go write-through to:
+  .upriv/vaults/my-encrypted-notes/store/
+
+Not durable plaintext on HD in production (virtual mount).

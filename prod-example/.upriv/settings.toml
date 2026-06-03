@@ -1,0 +1,25 @@
+# Upriv marker + app settings (vault-root directory)
+
+[package]
+version = 1
+label = "Upriv Demo"
+vaults_dir = ".upriv/vaults"       # vaults/<id>/ — config.toml, persistence, archive, store, …
+state_file = ".upriv/state.json"   # open sessions only (cleared on quit)
+logs_dir = ".upriv/logs"
+app_dir = ".upriv/app"
+workspace_dir = "workspace"
+default_vault = "my-encrypted-notes"
+
+[ui]
+locale = "en"   # UI: dev/docs/i18n/{locale}.json
+theme = "dark"
+show_recovery_hints = true
+
+[logging]
+enabled = true
+level = "info"                    # trace | debug | info | warn | error
+entries_per_file = 1000
+
+[app]
+auto_detect_vault_root = true
+last_opened_vault = "my-encrypted-notes"

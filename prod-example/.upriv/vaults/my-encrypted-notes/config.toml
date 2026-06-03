@@ -1,0 +1,41 @@
+# Vault config — storage, security, backup, 7z, policies (static; survives seal)
+# Example 1 — baseline closed vault (encrypt-only archive, keep_last backup)
+
+[vault]
+id = "my-encrypted-notes"
+display_name = "My Encrypted Notes"
+order = 4
+vault_file = "archive/My Encrypted Notes.7z"
+store_dir = "store"
+backups_dir = "backups"
+
+[storage]
+mode = "encrypted_dir"
+
+[close]
+default_action = "close"
+
+[backup]
+enabled = true
+mode = "keep_last"
+
+[security]
+mode = "session_ram"
+
+[auto_close]
+enabled = false
+idle_minutes = 15
+warn_before_seconds = 60
+close_on_app_minimize = false
+
+[seven_zip]
+encrypt_file_names = true
+archive_mode = "encrypt_only"
+compression_level = 5
+solid = false
+method = "lzma2"
+
+[policy]
+allow_external_editors = true
+disallow_copy_outside_mount = false
+require_unmount_on_sleep = true

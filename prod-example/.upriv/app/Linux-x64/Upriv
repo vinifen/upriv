@@ -1,0 +1,7 @@
+#!/bin/sh
+echo "========================================"
+echo " Upriv 0.1.0-demo  (EXECUTAVEL FAKE)"
+echo "========================================"
+echo " Nao e o app real — apenas estrutura."
+echo " Args: $*"
+read -r -p "Enter para sair..."

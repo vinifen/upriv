@@ -1,0 +1,42 @@
+# Vault config — storage, security, backup, 7z, policies (static; survives seal)
+# Example 4 — plain mode: literal workspace on HD + local session on disk
+
+[vault]
+id = "plain-folder-demo"
+display_name = "Plain Folder Demo"
+order = 3
+vault_file = "archive/Plain Folder Demo.7z"
+auth_dir = "auth"
+session_file = ".session.enc"
+quick_auth_file = ".quick-auth"
+
+[storage]
+mode = "plain"
+
+[close]
+default_action = "seal"
+
+[backup]
+enabled = false
+mode = "keep_last"
+
+[security]
+mode = "disk_open_close"
+secure_wipe_workspace = true
+wipe_passes = 1
+wipe_pattern = "random"
+
+[auto_close]
+enabled = false
+idle_minutes = 30
+warn_before_seconds = 120
+close_on_app_minimize = false
+
+[seven_zip]
+encrypt_file_names = true
+archive_mode = "encrypt_only"
+
+[policy]
+allow_external_editors = true
+disallow_copy_outside_mount = false
+require_unmount_on_sleep = false

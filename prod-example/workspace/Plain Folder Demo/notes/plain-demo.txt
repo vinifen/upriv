@@ -1,0 +1,6 @@
+DEMO — plaintext on disk (plain mode).
+
+This file is literally on the HD under workspace/.
+Edits are NOT write-through to stores/ — there is no store for this vault.
+
+Close/Seal: re-pack to .upriv/vaults/plain-folder-demo/archive/Plain Folder Demo.7z then wipe this folder.
