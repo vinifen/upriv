@@ -1,0 +1,76 @@
+import { Icon, type IconName } from "@/components/icons";
+import { useTranslation } from "@/i18n";
+import type { VaultDisplayStatus } from "@/types";
+import { resolveVaultDisplayStatus } from "@/types";
+import { vaultStatusIconClass, vaultStatusRowClass } from "@/theme";
+import { VaultLockButton } from "./VaultLockButton";
+import { VaultRowActions } from "./VaultRowActions";
+import { VaultStatusBadge } from "./VaultStatusBadge";
+import type { VaultListItem } from "./types";
+
+interface VaultBlockCardProps {
+  vault: VaultListItem;
+  onOpenBackups: (vaultId: string) => void;
+  onOpenNote: (vaultId: string) => void;
+}
+
+function statusIconName(status: VaultDisplayStatus, isOpen: boolean): IconName {
+  if (isOpen) return "lock-open";
+  if (status === "sealed") return "seal";
+  return "lock";
+}
+
+export function VaultBlockCard({ vault, onOpenBackups, onOpenNote }: VaultBlockCardProps) {
+  const { t } = useTranslation();
+  const status = resolveVaultDisplayStatus(vault);
+  const isOpen = status === "open";
+
+  return (
+    <article
+      className={[
+        "vault-row flex min-h-[11.5rem] flex-col rounded-xl p-4 transition-[box-shadow,background-color] sm:min-h-[12rem] sm:p-5",
+        vaultStatusRowClass[status],
+        isOpen ? "cursor-pointer" : "",
+      ]
+        .filter(Boolean)
+        .join(" ")}
+      onClick={() => {
+        if (isOpen) {
+          /* future: vault_open_workspace */
+        }
+      }}
+    >
+      <div className="flex items-start gap-2.5">
+        <div
+          className={[
+            "flex h-9 w-9 shrink-0 items-center justify-center rounded-full sm:h-10 sm:w-10",
+            vaultStatusIconClass[status],
+          ].join(" ")}
+        >
+          <Icon name={statusIconName(status, isOpen)} size={18} />
+        </div>
+        <div className="min-w-0 flex-1">
+          <h3 className="line-clamp-2 text-sm font-semibold leading-snug text-on-surface sm:text-base">
+            {vault.displayName}
+          </h3>
+          <div className="mt-1.5">
+            <VaultStatusBadge status={status} />
+          </div>
+        </div>
+      </div>
+
+      <p className="mt-2 text-[11px] leading-snug text-on-surface-variant sm:text-xs">
+        {t("vault.last_accessed", { when: vault.lastAccessedWhen })}
+      </p>
+
+      <div
+        className="mt-auto flex flex-col gap-2.5 pt-3"
+        onClick={(event) => event.stopPropagation()}
+        onKeyDown={(event) => event.stopPropagation()}
+      >
+        <VaultRowActions vault={vault} onOpenBackups={onOpenBackups} onOpenNote={onOpenNote} />
+        <VaultLockButton status={status} layout="block" />
+      </div>
+    </article>
+  );
+}

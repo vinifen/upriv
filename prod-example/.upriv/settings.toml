@@ -14,6 +14,10 @@ default_vault = "my-encrypted-notes"
 locale = "en"   # UI: dev/docs/i18n/{locale}.json
 theme = "dark"
 show_recovery_hints = true
+# Vault list preferences (desktop UI reads/writes when wired to Tauri)
+vault_list_sort = "order"              # order | name | state | last_accessed
+vault_list_sort_direction = "asc"      # asc | desc
+vault_list_view = "default"            # default | large | compact | blocks
 
 [logging]
 enabled = true

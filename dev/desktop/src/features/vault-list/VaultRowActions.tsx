@@ -11,10 +11,11 @@ const rowActionProps = {
 
 interface VaultRowActionsProps {
   vault: VaultListItem;
+  onOpenBackups: (vaultId: string) => void;
   onOpenNote: (vaultId: string) => void;
 }
 
-export function VaultRowActions({ vault, onOpenNote }: VaultRowActionsProps) {
+export function VaultRowActions({ vault, onOpenBackups, onOpenNote }: VaultRowActionsProps) {
   const { t } = useTranslation();
 
   const moreItems = useMemo(
@@ -23,6 +24,9 @@ export function VaultRowActions({ vault, onOpenNote }: VaultRowActionsProps) {
         id: "backups",
         label: t("action.backups"),
         icon: <Icon name="archive" size={18} />,
+        onSelect: () => {
+          window.requestAnimationFrame(() => onOpenBackups(vault.id));
+        },
       },
       {
         id: "note",
@@ -33,7 +37,7 @@ export function VaultRowActions({ vault, onOpenNote }: VaultRowActionsProps) {
         },
       },
     ],
-    [t, vault.id, onOpenNote],
+    [t, vault.id, onOpenBackups, onOpenNote],
   );
 
   return (

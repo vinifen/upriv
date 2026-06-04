@@ -1,11 +1,16 @@
 import { useTranslation } from "@/i18n";
+import { VaultBlockCard } from "./VaultBlockCard";
 import { VaultRow } from "./VaultRow";
+import type { VaultListViewMode } from "./vaultListView";
 import type { VaultListItem } from "./types";
 
 interface VaultListProps {
   vaults: VaultListItem[];
+  viewMode: VaultListViewMode;
+  canReorder: boolean;
   draggingId: string | null;
   dragOverId: string | null;
+  onOpenBackups: (vaultId: string) => void;
   onOpenNote: (vaultId: string) => void;
   onDragStart: (vaultId: string) => (event: React.DragEvent) => void;
   onDragEnd: () => void;
@@ -16,8 +21,11 @@ interface VaultListProps {
 
 export function VaultList({
   vaults,
+  viewMode,
+  canReorder,
   draggingId,
   dragOverId,
+  onOpenBackups,
   onOpenNote,
   onDragStart,
   onDragEnd,
@@ -35,14 +43,37 @@ export function VaultList({
     );
   }
 
+  if (viewMode === "blocks") {
+    return (
+      <div className="relative">
+        <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-3">
+          {vaults.map((vault) => (
+            <VaultBlockCard
+              key={vault.id}
+              vault={vault}
+              onOpenBackups={onOpenBackups}
+              onOpenNote={onOpenNote}
+            />
+          ))}
+        </div>
+        <div className="pointer-events-none fixed bottom-0 left-0 right-0 h-32 bg-gradient-to-t from-background to-transparent" />
+      </div>
+    );
+  }
+
+  const listGap = viewMode === "compact" ? "space-y-3" : viewMode === "large" ? "space-y-5" : "space-y-4";
+
   return (
-    <div className="relative space-y-4 overflow-visible">
+    <div className={`relative overflow-visible ${listGap}`}>
       {vaults.map((vault) => (
         <VaultRow
           key={vault.id}
           vault={vault}
+          viewMode={viewMode}
+          dragDisabled={!canReorder}
           isDragging={draggingId === vault.id}
           isDragOver={dragOverId === vault.id && draggingId !== vault.id}
+          onOpenBackups={onOpenBackups}
           onOpenNote={onOpenNote}
           onDragStart={onDragStart}
           onDragEnd={onDragEnd}

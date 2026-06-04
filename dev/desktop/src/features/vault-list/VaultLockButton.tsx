@@ -11,16 +11,26 @@ const LOCK_CHEVRON_CLASS = "flex h-full w-11 shrink-0 items-center justify-cente
 
 interface VaultLockButtonProps {
   status: VaultDisplayStatus;
+  /** `block` — full-width control for grid cards. */
+  layout?: "inline" | "block";
   onLock?: () => void;
   onUnlock?: () => void;
   onSeal?: () => void;
 }
 
-export function VaultLockButton({ status, onLock, onUnlock, onSeal }: VaultLockButtonProps) {
+export function VaultLockButton({
+  status,
+  layout = "inline",
+  onLock,
+  onUnlock,
+  onSeal,
+}: VaultLockButtonProps) {
   const { t } = useTranslation();
   const [menuOpen, setMenuOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const menuId = useId();
+
+  const controlSizeClass = layout === "block" ? "h-10 w-full" : LOCK_CONTROL_CLASS;
 
   const isOpen = status === "open";
   const isSealed = status === "sealed";
@@ -70,7 +80,7 @@ export function VaultLockButton({ status, onLock, onUnlock, onSeal }: VaultLockB
       <button
         type="button"
         className={[
-          LOCK_CONTROL_CLASS,
+          controlSizeClass,
           "rounded-xl transition-colors",
           surfaceClass,
           labelClass,
@@ -89,14 +99,15 @@ export function VaultLockButton({ status, onLock, onUnlock, onSeal }: VaultLockB
     <div
       ref={rootRef}
       className={[
-        "relative inline-flex flex-col items-stretch",
+        "relative flex flex-col items-stretch",
+        layout === "block" ? "w-full" : "w-36",
         isOpen ? "shadow-lg shadow-primary/10" : "",
       ].join(" ")}
       onClick={(event) => event.stopPropagation()}
     >
       <div
         className={[
-          LOCK_CONTROL_CLASS,
+          controlSizeClass,
           "inline-flex items-stretch overflow-hidden rounded-xl",
         ].join(" ")}
       >
@@ -142,12 +153,12 @@ export function VaultLockButton({ status, onLock, onUnlock, onSeal }: VaultLockB
           id={menuId}
           role="menu"
           aria-label={t("action.seal")}
-          className={["absolute right-0 top-full z-50 mt-1.5 min-w-[9rem]", menuPanelClass].join(" ")}
+          className={["absolute inset-x-0 top-full z-50 mt-1.5 min-w-full", menuPanelClass].join(" ")}
         >
           <button
             type="button"
             role="menuitem"
-            className={menuItemClass}
+            className={[menuItemClass, "justify-center px-5"].join(" ")}
             onClick={handleSeal}
           >
             <Icon name="seal" size={18} />

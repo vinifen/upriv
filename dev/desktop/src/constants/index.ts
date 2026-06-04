@@ -3,3 +3,4 @@ export {
   VAULT_NOTE_MAX_LENGTH,
   VAULT_PASSWORD_HINT_MAX_LENGTH,
 } from "./vault";
+export { UI_SETTINGS_KEYS } from "./ui-settings";
