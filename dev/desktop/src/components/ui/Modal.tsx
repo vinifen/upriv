@@ -1,4 +1,5 @@
 import { type ReactNode, useEffect, useId } from "react";
+import { createPortal } from "react-dom";
 import { Button } from "./Button";
 
 export interface ModalProps {
@@ -21,33 +22,46 @@ export function Modal({ open, title, onClose, children, footer }: ModalProps) {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [open, onClose]);
 
+  useEffect(() => {
+    if (!open) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [open]);
+
   if (!open) return null;
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <button
-        type="button"
-        aria-label="Close dialog backdrop"
-        className="absolute inset-0 bg-background/70 backdrop-blur-xl"
+  return createPortal(
+    <div className="fixed inset-0 z-[100]">
+      <div
+        className="absolute inset-0 bg-background/80 backdrop-blur-sm"
+        aria-hidden
         onClick={onClose}
       />
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={titleId}
-        className="relative z-10 w-full max-w-lg rounded-xl border border-outline-variant/40 bg-surface-container-high p-6 shadow-modal"
-      >
-        <header className="mb-4 flex items-start justify-between gap-4">
-          <h2 id={titleId} className="font-display text-xl font-semibold text-on-surface">
-            {title}
-          </h2>
-          <Button variant="ghost" size="sm" onClick={onClose} aria-label="Close">
-            ×
-          </Button>
-        </header>
-        <div className="text-body text-on-surface-variant">{children}</div>
-        {footer ? <footer className="mt-6 flex justify-end gap-2">{footer}</footer> : null}
+      <div className="pointer-events-none relative z-10 flex min-h-full items-center justify-center p-4">
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby={titleId}
+          className="pointer-events-auto w-full max-w-lg overflow-hidden rounded-xl border border-outline-variant/40 bg-surface-container-high p-6 shadow-modal"
+          onMouseDown={(event) => event.stopPropagation()}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <header className="mb-4 flex items-start justify-between gap-4">
+            <h2 id={titleId} className="font-display text-xl font-semibold text-on-surface">
+              {title}
+            </h2>
+            <Button variant="ghost" size="sm" onClick={onClose} aria-label="Close">
+              ×
+            </Button>
+          </header>
+          <div className="text-body text-on-surface">{children}</div>
+          {footer ? <footer className="mt-6 flex justify-end gap-2">{footer}</footer> : null}
+        </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

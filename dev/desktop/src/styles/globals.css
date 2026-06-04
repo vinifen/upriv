@@ -8,6 +8,10 @@
 @layer base {
   html {
     @apply antialiased;
+    /* Reserve gutter so content width does not jump when scrollbar appears */
+    scrollbar-gutter: stable;
+    scrollbar-width: thin;
+    scrollbar-color: var(--scrollbar-thumb) transparent;
   }
 
   body {
@@ -17,10 +21,39 @@
   #root {
     @apply min-h-screen;
   }
+
+  /* WebKit (Tauri WebView, Chrome) — slim thumb, no bright track */
+  *::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  *::-webkit-scrollbar-thumb {
+    background-color: var(--scrollbar-thumb);
+    border: 2px solid transparent;
+    border-radius: 9999px;
+    background-clip: padding-box;
+  }
+
+  *::-webkit-scrollbar-thumb:hover {
+    background-color: var(--scrollbar-thumb-hover);
+  }
+
+  *::-webkit-scrollbar-corner {
+    background: transparent;
+  }
 }
 
 @layer utilities {
   .shadow-modal {
     box-shadow: 0 16px 48px rgb(0 0 0 / 35%);
+  }
+
+  .vault-row {
+    transition: background-color 0.2s cubic-bezier(0.4, 0, 0.2, 1);
   }
 }

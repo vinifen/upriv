@@ -7,9 +7,13 @@ export default {
         background: "var(--background)",
         "surface-container": "var(--surface-container)",
         "surface-container-high": "var(--surface-container-high)",
+        "surface-row-hover": "var(--surface-row-hover)",
         "on-surface": "var(--on-surface)",
         "on-surface-variant": "var(--on-surface-variant)",
         "outline-variant": "var(--outline-variant)",
+        primary: "var(--primary)",
+        "on-primary": "var(--on-primary)",
+        "surface-container-highest": "var(--surface-container-highest)",
         accent: "var(--accent)",
         "accent-foreground": "var(--accent-foreground)",
         "error-container": "var(--error-container)",
@@ -28,6 +32,7 @@ export default {
       },
       maxWidth: {
         content: "1200px",
+        "vault-list": "900px",
       },
       spacing: {
         "margin-mobile": "16px",

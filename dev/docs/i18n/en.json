@@ -2,6 +2,17 @@
   "app.title": "Upriv",
   "app.tagline": "Universal encrypted vaults in .7z",
   "app.new_vault": "New vault",
+  "app.menu.more": "More options",
+  "app.menu.system_settings": "System settings",
+  "app.menu.view_logs": "View logs",
+  "app.menu.help": "Help",
+
+  "vault.list.title": "Active vaults",
+  "vault.list.subtitle": "Securely managing your encrypted directories and cold storage.",
+  "vault.last_accessed": "Last accessed: {when}",
+
+  "action.refresh": "Refresh",
+  "action.note": "Note",
 
   "vault.status.open": "Open",
   "vault.status.closed": "Closed",
@@ -64,6 +75,9 @@
   "modal.backup.title": "Backups",
   "modal.backup.delete_confirm": "Type the vault name to confirm deletion:",
   "modal.settings.title": "Vault settings",
+  "modal.note.title": "Note — {name}",
+  "modal.note.placeholder": "Add a short note for this vault…",
+  "modal.note.saved": "Saved",
   "modal.settings.note": "Note",
   "modal.settings.password_hint": "Password hint",
   "modal.settings.change_password": "Change password",
