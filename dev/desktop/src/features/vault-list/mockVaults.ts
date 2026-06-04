@@ -11,6 +11,7 @@ export const MOCK_VAULTS: VaultListItem[] = [
     order: 1,
     canSeal: true,
     lastAccessedWhen: "2m ago",
+    lastAccessedAt: "2026-06-02T11:58:00Z",
     note: "Daily scratch pad — sync after laptop backup.",
   },
   {
@@ -22,6 +23,7 @@ export const MOCK_VAULTS: VaultListItem[] = [
     order: 2,
     canSeal: false,
     lastAccessedWhen: "2 days ago",
+    lastAccessedAt: "2026-05-31T10:00:00Z",
     note: "",
   },
   {
@@ -33,6 +35,7 @@ export const MOCK_VAULTS: VaultListItem[] = [
     order: 3,
     canSeal: false,
     lastAccessedWhen: "14 days ago",
+    lastAccessedAt: "2026-05-19T08:00:00Z",
     note: "",
   },
   {
@@ -44,6 +47,7 @@ export const MOCK_VAULTS: VaultListItem[] = [
     order: 4,
     canSeal: false,
     lastAccessedWhen: "2 days ago",
+    lastAccessedAt: "2026-05-31T14:30:00Z",
     note: "RAW exports only; JPEG previews live elsewhere.",
   },
   {
@@ -55,6 +59,7 @@ export const MOCK_VAULTS: VaultListItem[] = [
     order: 5,
     canSeal: false,
     lastAccessedWhen: "2 days ago",
+    lastAccessedAt: "2026-05-31T09:15:00Z",
     note: "",
   },
   {
@@ -66,6 +71,7 @@ export const MOCK_VAULTS: VaultListItem[] = [
     order: 6,
     canSeal: false,
     lastAccessedWhen: "Jan 2023",
+    lastAccessedAt: "2023-01-15T12:00:00Z",
     note: "",
   },
   {
@@ -77,6 +83,7 @@ export const MOCK_VAULTS: VaultListItem[] = [
     order: 7,
     canSeal: false,
     lastAccessedWhen: "5 days ago",
+    lastAccessedAt: "2026-05-28T16:00:00Z",
     note: "Tax receipts + bank CSV exports.",
   },
   {
@@ -88,6 +95,7 @@ export const MOCK_VAULTS: VaultListItem[] = [
     order: 8,
     canSeal: false,
     lastAccessedWhen: "3 weeks ago",
+    lastAccessedAt: "2026-05-12T11:00:00Z",
     note: "",
   },
   {
@@ -99,6 +107,7 @@ export const MOCK_VAULTS: VaultListItem[] = [
     order: 9,
     canSeal: true,
     lastAccessedWhen: "18m ago",
+    lastAccessedAt: "2026-06-02T11:42:00Z",
     note: "",
   },
   {
@@ -110,6 +119,7 @@ export const MOCK_VAULTS: VaultListItem[] = [
     order: 10,
     canSeal: false,
     lastAccessedWhen: "Yesterday",
+    lastAccessedAt: "2026-06-01T18:00:00Z",
     note: "",
   },
   {
@@ -121,6 +131,7 @@ export const MOCK_VAULTS: VaultListItem[] = [
     order: 11,
     canSeal: false,
     lastAccessedWhen: "4h ago",
+    lastAccessedAt: "2026-06-02T08:00:00Z",
     note: "Recovery pending — last good entry 2026-05-28.",
   },
 ];

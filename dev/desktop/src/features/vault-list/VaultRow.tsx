@@ -10,12 +10,17 @@ import { VaultDragHandle } from "./VaultDragHandle";
 import { VaultLockButton } from "./VaultLockButton";
 import { VaultRowActions } from "./VaultRowActions";
 import { VaultStatusBadge } from "./VaultStatusBadge";
+import type { VaultListViewMode } from "./vaultListView";
+import { vaultRowDensityClass } from "./vaultListView";
 import type { VaultListItem } from "./types";
 
 interface VaultRowProps {
   vault: VaultListItem;
+  viewMode: VaultListViewMode;
+  dragDisabled: boolean;
   isDragging: boolean;
   isDragOver: boolean;
+  onOpenBackups: (vaultId: string) => void;
   onOpenNote: (vaultId: string) => void;
   onDragStart: (vaultId: string) => (event: React.DragEvent) => void;
   onDragEnd: () => void;
@@ -32,8 +37,11 @@ function statusIconName(status: VaultDisplayStatus, isOpen: boolean): IconName {
 
 export function VaultRow({
   vault,
+  viewMode,
+  dragDisabled,
   isDragging,
   isDragOver,
+  onOpenBackups,
   onOpenNote,
   onDragStart,
   onDragEnd,
@@ -44,11 +52,14 @@ export function VaultRow({
   const { t } = useTranslation();
   const status = resolveVaultDisplayStatus(vault);
   const isOpen = status === "open";
+  const density =
+    viewMode === "blocks" ? vaultRowDensityClass.default : vaultRowDensityClass[viewMode];
 
   return (
     <article
       className={[
-        "vault-row flex flex-col items-center justify-between gap-6 overflow-visible rounded-xl px-4 py-6 transition-[opacity,box-shadow,background-color] sm:flex-row sm:pl-2 sm:pr-6",
+        "vault-row flex flex-col items-center justify-between gap-6 overflow-visible rounded-xl px-4 transition-[opacity,box-shadow,background-color] sm:flex-row sm:pl-2 sm:pr-6",
+        density.article,
         vaultStatusRowClass[status],
         isOpen ? "cursor-pointer" : "",
         isDragging ? "opacity-45" : "",
@@ -75,21 +86,28 @@ export function VaultRow({
       <div className="flex w-full items-center gap-2 sm:w-auto sm:gap-3">
         <VaultDragHandle
           vaultId={vault.id}
+          disabled={dragDisabled}
           onDragStart={onDragStart}
           onDragEnd={onDragEnd}
         />
         <div
           className={[
-            "flex h-10 w-10 shrink-0 items-center justify-center rounded-full",
+            "flex shrink-0 items-center justify-center rounded-full",
+            density.icon,
             vaultStatusIconClass[status],
           ].join(" ")}
         >
-          <Icon name={statusIconName(status, isOpen)} size={20} />
+          <Icon name={statusIconName(status, isOpen)} size={density.iconSize} />
         </div>
         <div className="min-w-0 flex-1">
           <div className="grid grid-cols-[0.625rem_minmax(0,1fr)] items-center gap-x-2 gap-y-1.5">
             <StatusDotInline status={status} className="col-start-1 row-start-1" />
-            <h3 className="col-start-2 row-start-1 truncate text-lg font-semibold text-on-surface">
+            <h3
+              className={[
+                "col-start-2 row-start-1 truncate font-semibold text-on-surface",
+                density.title,
+              ].join(" ")}
+            >
               {vault.displayName}
             </h3>
             <div className="col-start-2 row-start-2 flex flex-wrap items-center gap-2">
@@ -107,7 +125,7 @@ export function VaultRow({
         onClick={(event) => event.stopPropagation()}
         onKeyDown={(event) => event.stopPropagation()}
       >
-        <VaultRowActions vault={vault} onOpenNote={onOpenNote} />
+        <VaultRowActions vault={vault} onOpenBackups={onOpenBackups} onOpenNote={onOpenNote} />
         <VaultLockButton status={status} />
       </div>
     </article>

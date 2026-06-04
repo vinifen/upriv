@@ -8,9 +8,18 @@ export interface ModalProps {
   onClose: () => void;
   children: ReactNode;
   footer?: ReactNode;
+  /** Panel width utility (default `max-w-lg`). */
+  panelClassName?: string;
 }
 
-export function Modal({ open, title, onClose, children, footer }: ModalProps) {
+export function Modal({
+  open,
+  title,
+  onClose,
+  children,
+  footer,
+  panelClassName = "max-w-lg",
+}: ModalProps) {
   const titleId = useId();
 
   useEffect(() => {
@@ -45,7 +54,10 @@ export function Modal({ open, title, onClose, children, footer }: ModalProps) {
           role="dialog"
           aria-modal="true"
           aria-labelledby={titleId}
-          className="pointer-events-auto w-full max-w-lg overflow-hidden rounded-xl border border-outline-variant/40 bg-surface-container-high p-6 shadow-modal"
+          className={[
+            "pointer-events-auto w-full overflow-hidden rounded-xl border border-outline-variant/40 bg-surface-container-high p-6 shadow-modal",
+            panelClassName,
+          ].join(" ")}
           onMouseDown={(event) => event.stopPropagation()}
           onClick={(event) => event.stopPropagation()}
         >
