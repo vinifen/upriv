@@ -3,11 +3,23 @@
   --background: #081425;
   --surface-container: #152031;
   --surface-container-high: #1f2a3c;
+  --surface-row-hover: #1c2839;
   --on-surface: #d8e3fb;
   --on-surface-variant: #c6c6cd;
   --outline-variant: #45464d;
+  --split-divider: rgba(144, 144, 151, 0.38);
+  --split-divider-on-primary: rgba(40, 48, 68, 0.32);
 
-  /* Accent / actions */
+  /* Scrollbar (thin, dark — avoids layout shift with scrollbar-gutter) */
+  --scrollbar-thumb: #2a3548;
+  --scrollbar-thumb-hover: #45464d;
+
+  /* Primary actions (stitch baseline) */
+  --primary: #bec6e0;
+  --on-primary: #283044;
+  --surface-container-highest: #2a3548;
+
+  /* Accent / secondary actions */
   --accent: #6b8cff;
   --accent-foreground: #0f172a;
 
@@ -16,6 +28,8 @@
   --vault-status-closed: #6b8cff;
   --vault-status-sealed: #8b8b8b;
   --vault-status-recovery: #f5a623;
+  /* Open status chip (stitch: tertiary/5 + on-tertiary) — opaque mix, not Tailwind /opacity on vars */
+  --vault-open-badge-bg: rgba(61, 214, 140, 0.1);
 
   /* Semantic */
   --error-container: #93000a;

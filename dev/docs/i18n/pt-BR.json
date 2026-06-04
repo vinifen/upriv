@@ -2,6 +2,17 @@
   "app.title": "Upriv",
   "app.tagline": "Cofres cifrados universais em .7z",
   "app.new_vault": "Novo cofre",
+  "app.menu.more": "Mais opções",
+  "app.menu.system_settings": "Configurações do sistema",
+  "app.menu.view_logs": "Ver logs",
+  "app.menu.help": "Ajuda",
+
+  "vault.list.title": "Cofres ativos",
+  "vault.list.subtitle": "Gerenciando com segurança seus diretórios cifrados e cold storage.",
+  "vault.last_accessed": "Último acesso: {when}",
+
+  "action.refresh": "Atualizar",
+  "action.note": "Anotação",
 
   "vault.status.open": "Aberto",
   "vault.status.closed": "Fechado",
@@ -64,6 +75,9 @@
   "modal.backup.title": "Backups",
   "modal.backup.delete_confirm": "Digite o nome do cofre para confirmar a exclusão:",
   "modal.settings.title": "Configurações do cofre",
+  "modal.note.title": "Anotação — {name}",
+  "modal.note.placeholder": "Adicione uma anotação curta para este cofre…",
+  "modal.note.saved": "Salvo",
   "modal.settings.note": "Anotação",
   "modal.settings.password_hint": "Dica da senha",
   "modal.settings.change_password": "Alterar senha",

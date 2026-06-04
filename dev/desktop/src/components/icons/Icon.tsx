@@ -1,0 +1,159 @@
+import type { ReactNode, SVGAttributes } from "react";
+
+export type IconName =
+  | "add"
+  | "archive"
+  | "backups"
+  | "chevron-down"
+  | "encrypted"
+  | "grip-vertical"
+  | "help"
+  | "lock"
+  | "lock-open"
+  | "more-horizontal"
+  | "more-vertical"
+  | "note"
+  | "refresh"
+  | "seal"
+  | "settings"
+  | "terminal";
+
+const paths: Record<IconName, ReactNode> = {
+  add: (
+    <>
+      <path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+    </>
+  ),
+  archive: (
+    <>
+      <path
+        d="M4 7h16v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7z"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        fill="none"
+        strokeLinejoin="round"
+      />
+      <path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" stroke="currentColor" strokeWidth="1.75" fill="none" />
+      <path d="M10 12h4" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
+    </>
+  ),
+  backups: (
+    <>
+      <path
+        d="M7 18a4 4 0 0 1 0-8 5 5 0 0 1 9.9-1.1A4 4 0 1 1 17 18H7z"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        fill="none"
+      />
+      <path d="M12 12v6M9 15l3 3 3-3" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+    </>
+  ),
+  "chevron-down": <path d="M6 9l6 6 6-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" fill="none" />,
+  encrypted: (
+    <>
+      <rect x="5" y="11" width="14" height="10" rx="2" stroke="currentColor" strokeWidth="1.75" fill="none" />
+      <path d="M8 11V8a4 4 0 0 1 8 0v3" stroke="currentColor" strokeWidth="1.75" fill="none" />
+    </>
+  ),
+  "grip-vertical": (
+    <>
+      <circle cx="9" cy="6" r="1.25" fill="currentColor" />
+      <circle cx="9" cy="12" r="1.25" fill="currentColor" />
+      <circle cx="9" cy="18" r="1.25" fill="currentColor" />
+      <circle cx="15" cy="6" r="1.25" fill="currentColor" />
+      <circle cx="15" cy="12" r="1.25" fill="currentColor" />
+      <circle cx="15" cy="18" r="1.25" fill="currentColor" />
+    </>
+  ),
+  help: (
+    <>
+      <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.75" fill="none" />
+      <path d="M9.5 9.5a2.5 2.5 0 0 1 4.2 1.8c0 2-2.7 2.2-2.7 3.7" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" fill="none" />
+      <circle cx="12" cy="17" r="0.75" fill="currentColor" />
+    </>
+  ),
+  lock: (
+    <>
+      <rect x="5" y="11" width="14" height="10" rx="2" stroke="currentColor" strokeWidth="1.75" fill="none" />
+      <path d="M8 11V8a4 4 0 0 1 8 0v3" stroke="currentColor" strokeWidth="1.75" fill="none" />
+    </>
+  ),
+  "lock-open": (
+    <>
+      <rect x="5" y="11" width="14" height="10" rx="2" stroke="currentColor" strokeWidth="1.75" fill="none" />
+      <path d="M8 11V8a4 4 0 0 1 8 0" stroke="currentColor" strokeWidth="1.75" fill="none" />
+    </>
+  ),
+  "more-horizontal": (
+    <>
+      <circle cx="5" cy="12" r="1.25" fill="currentColor" />
+      <circle cx="12" cy="12" r="1.25" fill="currentColor" />
+      <circle cx="19" cy="12" r="1.25" fill="currentColor" />
+    </>
+  ),
+  "more-vertical": (
+    <>
+      <circle cx="12" cy="5" r="1.25" fill="currentColor" />
+      <circle cx="12" cy="12" r="1.25" fill="currentColor" />
+      <circle cx="12" cy="19" r="1.25" fill="currentColor" />
+    </>
+  ),
+  note: (
+    <>
+      <path d="M7 4h10a2 2 0 0 1 2 2v14l-4-3H7a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z" stroke="currentColor" strokeWidth="1.75" fill="none" strokeLinejoin="round" />
+      <path d="M11 9h6M11 13h4" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
+    </>
+  ),
+  refresh: (
+    <>
+      <path d="M4 12a8 8 0 0 1 13.5-5.7" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" fill="none" />
+      <path d="M20 3v5h-5" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+      <path d="M20 12a8 8 0 0 1-13.5 5.7" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" fill="none" />
+      <path d="M4 21v-5h5" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+    </>
+  ),
+  seal: (
+    <>
+      <path d="M12 3l7 4v5c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V7l7-4z" stroke="currentColor" strokeWidth="1.75" fill="none" strokeLinejoin="round" />
+    </>
+  ),
+  settings: (
+    <>
+      <circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="1.75" fill="none" />
+      <path
+        d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        fill="none"
+      />
+    </>
+  ),
+  terminal: (
+    <>
+      <rect x="3" y="5" width="18" height="14" rx="2" stroke="currentColor" strokeWidth="1.75" fill="none" />
+      <path d="M7 10l3 3-3 3M12 16h5" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+    </>
+  ),
+};
+
+export interface IconProps extends SVGAttributes<SVGSVGElement> {
+  name: IconName;
+  size?: number;
+}
+
+export function Icon({ name, size = 20, className = "", ...props }: IconProps) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      aria-hidden
+      className={className}
+      {...props}
+    >
+      {paths[name]}
+    </svg>
+  );
+}
