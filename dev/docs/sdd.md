@@ -508,12 +508,14 @@ note = ""            # optional; max 256 chars; simple user annotation
 [backup]
 enabled = true
 mode = "keep_last"
+keep_last = 1
 
 [security]
-mode = "session_ram"
-secure_wipe_workspace = true
-wipe_passes = 1
-wipe_pattern = "random"
+mode = "session_ram"              # v1 UI: fixed for encrypted_dir (see §3.2.3a)
+secure_wipe_workspace = true      # UI: Security
+wipe_passes = 1                   # hidden default
+wipe_pattern = "random"           # hidden default
+# password_changed_at = "..."     # set by app on change-password; omit until first change
 
 [auto_close]
 enabled = true
@@ -582,16 +584,23 @@ User-facing metadata that is **not** sync state:
 
 #### 3.2.3 Change password
 
-Available in vault settings (`[security]` section in UI). Vault must be **open** (session active).
+Available in vault settings (**Security** section in UI; stored fields span `[vault]` hint + `[security]` metadata). Works with vault **open or closed** — user **always** enters the **current password** (never inferred from session alone without explicit confirmation in this flow).
+
+**Why closed is allowed:** the operation only needs the current password to decrypt the main archive and store, re-encrypt in RAM/disk temp, then atomically replace files. An open session is **not** required.
 
 | Step | Action |
 |------|--------|
-| 1 | User enters **current password**, **new password**, **confirm new password** |
+| 1 | User enters **current password**, **new password**, **confirm new password** (new ≠ current) |
 | 2 | UI shows **`warning.password_change_backups`** — existing `backups/*.7z` keep the password from when each snapshot was created |
-| 3 | Validate current password (`7z t` on main archive + store unlock) |
-| 4 | Re-encrypt store blobs and regenerate main `archive/{display_name}.7z` with new password (same atomic close pipeline) |
-| 5 | Update `persistence.json` hashes / `sync_generation`; set `security.password_changed_at` in `config.toml` (ISO 8601 UTC) |
-| 6 | **Do not** re-encrypt or delete existing `backups/` files automatically |
+| 3 | **`upriv-core`:** validate current password — `7zz t -p{current}` on main `vault_file`; unlock / read store with current password |
+| 4 | **If vault open:** keep user workspace available; decrypt store + workspace path in controlled temp/RAM; do not leave plaintext on disk when `encrypted_dir` |
+| 5 | **If vault closed:** extract archive + store to temp workspace in RAM (or encrypted temp per policy); no user-facing mount required |
+| 6 | **Optional (recommended):** snapshot current main `.7z` into `backups/` **before** replace (uses **old** password — consistent with backup semantics) |
+| 7 | Re-encrypt store blobs and create new main `archive/{display_name}.7z` with **new** password (same atomic pipeline as close: `.7z.new` → rename) |
+| 8 | Secure-delete superseded archive/store/workspace temp; remove stale plaintext |
+| 9 | Update `persistence.json` hashes / `sync_generation`; set `[security] password_changed_at` (ISO 8601 UTC) |
+| 10 | **If vault was open:** refresh in-memory session with new password; remount FUSE if applicable |
+| 11 | **Do not** re-encrypt or delete existing `backups/` files automatically |
 
 **Config after change:**
 
@@ -603,7 +612,27 @@ password_changed_at = "2026-05-30T18:00:00Z"   # omitted or empty until first ch
 
 Backups opened via Plan B or Upriv backups modal still require the **password active when that backup was taken**. Document in vault settings and backups modal footer.
 
-Related: PRD **RF-58**, **RF-59**; i18n `vault.create.*`, `vault.change_password.*`, `warning.password_change_backups`.
+**Desktop UI (v1, implemented in mock):** expandable panel under Security — `vault.change_password.*`, `warning.password_change_backups`, `modal.settings.change_password_help`. Submit calls Tauri `vault_change_password` when wired.
+
+Related: PRD **RF-58**, **RF-59**; i18n `vault.change_password.*`, `warning.password_change_backups`.
+
+#### 3.2.3a Vault settings UI — field visibility (v1 desktop)
+
+Settings modal edits `config.toml` but **does not mirror every key** — advanced or system-owned values stay in TOML with defaults.
+
+| TOML section | Shown in UI | Hidden in UI (defaults / system) |
+|--------------|-------------|----------------------------------|
+| `[vault]` | `display_name`, `order`, `note` | `id` (slug — derived/normalized on rename migration), `vault_file`, `store_dir`, `backups_dir` (layout internal; user may relocate **package root** later via onboarding, not per-vault paths) |
+| `[close]` + `[auto_close]` + `[security].secure_wipe_workspace` | **Close** section: default lock action, secure wipe, idle auto-close | — |
+| `[security]` | `password_hint` (UI under **Security**; file still `[vault]`), **`mode` (password in memory — 2 UI options for encrypted_dir)**, **change password** | `secure_wipe_workspace` (UI under **Close**), `wipe_passes`, `wipe_pattern`, `password_changed_at` (set by app) |
+
+**Password in memory (UI):** `session_ram` **or** ask on open and close (saved as `always_prompt`; `ram_on_close_only` in old configs displays as the same choice and normalizes on save).
+| `[seven_zip]` | `archive_mode`, `encrypt_file_names` | `compression_level`, `method`, `solid` (defaults: 5, `lzma2`, `false`) |
+| `[policy]` | `allow_external_editors`, `disallow_copy_outside_mount` (two radio groups) | `require_unmount_on_sleep` |
+
+**Modal UX (unlike note/backups modals):** explicit **Save** (enabled only when dirty) → confirm save; close with dirty draft → **discard all and close** confirm; backdrop/Esc while confirm open cancels close attempt.
+
+Related: PRD **RF-UI-04**, **RF-UI-15**.
 
 #### 3.2.4 Mutable config (design requirement)
 
@@ -645,7 +674,7 @@ impl ConfigStore {
 | `[auto_close]` | Immediate on timer (recalculate `auto_close_at`) | Immediate |
 | `[security]` (`secure_wipe_workspace`, `wipe_passes`, …) | Next **close** / discard | Immediate if only `mode`; wipe on close |
 | `[vault] password_hint`, `[vault] note`, `[vault] order` | Immediate (UI / list) | Immediate |
-| `[security] password_changed_at` | Set by change-password flow only | Set when change succeeds (vault open) |
+| `[security] password_changed_at` | Set when change-password succeeds | Set when change-password succeeds (open or closed) |
 | `[vault] id` / `vault_file` | Only with **migration flow** (rename `.toml`, `.7z`, folders) | **Block** — close vault first |
 | `main.toml` `[package]` paths | Next open of any vault | Same |
 
@@ -1507,7 +1536,8 @@ vault_path = "/media/user/HD/my-vault"
 | Vault root | `.upriv/` groups system | UX: `workspace/` + 3 launchers at root |
 | Android file editing | Intent to manager | Avoid full FM in Upriv v1 |
 | Hint + note storage | `config.toml` `[vault]` | User metadata; survives seal; not sync manifest |
-| Change password | Re-encrypt archive + store; backups unchanged | Historical snapshots keep old password by design |
+| Change password | Open **or** closed; current password required; re-encrypt archive + store in RAM/temp; backups unchanged | Historical snapshots keep old password by design |
+| Settings UI (v1) | Subset of TOML; explicit save/discard | Hide `id`, paths, session mode, 7z tuning, wipe passes |
 
 ---
 

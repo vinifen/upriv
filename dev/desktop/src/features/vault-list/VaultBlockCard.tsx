@@ -12,6 +12,7 @@ interface VaultBlockCardProps {
   vault: VaultListItem;
   onOpenBackups: (vaultId: string) => void;
   onOpenNote: (vaultId: string) => void;
+  onOpenSettings: (vaultId: string) => void;
 }
 
 function statusIconName(status: VaultDisplayStatus, isOpen: boolean): IconName {
@@ -20,7 +21,12 @@ function statusIconName(status: VaultDisplayStatus, isOpen: boolean): IconName {
   return "lock";
 }
 
-export function VaultBlockCard({ vault, onOpenBackups, onOpenNote }: VaultBlockCardProps) {
+export function VaultBlockCard({
+  vault,
+  onOpenBackups,
+  onOpenNote,
+  onOpenSettings,
+}: VaultBlockCardProps) {
   const { t } = useTranslation();
   const status = resolveVaultDisplayStatus(vault);
   const isOpen = status === "open";
@@ -68,7 +74,12 @@ export function VaultBlockCard({ vault, onOpenBackups, onOpenNote }: VaultBlockC
         onClick={(event) => event.stopPropagation()}
         onKeyDown={(event) => event.stopPropagation()}
       >
-        <VaultRowActions vault={vault} onOpenBackups={onOpenBackups} onOpenNote={onOpenNote} />
+        <VaultRowActions
+          vault={vault}
+          onOpenBackups={onOpenBackups}
+          onOpenNote={onOpenNote}
+          onOpenSettings={onOpenSettings}
+        />
         <VaultLockButton status={status} layout="block" />
       </div>
     </article>

@@ -7,9 +7,18 @@ import { useTranslation } from "@/i18n";
 interface VaultListHeaderProps {
   onRefresh?: () => void;
   isRefreshing?: boolean;
+  onOpenSystemSettings?: () => void;
+  onViewLogs?: () => void;
+  onOpenHelp?: () => void;
 }
 
-export function VaultListHeader({ onRefresh, isRefreshing = false }: VaultListHeaderProps) {
+export function VaultListHeader({
+  onRefresh,
+  isRefreshing = false,
+  onOpenSystemSettings,
+  onViewLogs,
+  onOpenHelp,
+}: VaultListHeaderProps) {
   const { t } = useTranslation();
 
   const overflowItems = useMemo(
@@ -18,19 +27,22 @@ export function VaultListHeader({ onRefresh, isRefreshing = false }: VaultListHe
         id: "system-settings",
         label: t("app.menu.system_settings"),
         icon: <Icon name="settings" size={18} />,
+        onSelect: onOpenSystemSettings,
       },
       {
         id: "view-logs",
         label: t("app.menu.view_logs"),
         icon: <Icon name="terminal" size={18} />,
+        onSelect: onViewLogs,
       },
       {
         id: "help",
         label: t("app.menu.help"),
         icon: <Icon name="help" size={18} />,
+        onSelect: onOpenHelp,
       },
     ],
-    [t],
+    [t, onOpenSystemSettings, onViewLogs, onOpenHelp],
   );
 
   return (

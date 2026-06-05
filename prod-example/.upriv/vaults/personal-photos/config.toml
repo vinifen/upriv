@@ -21,7 +21,11 @@ enabled = false
 mode = "keep_last"
 
 [security]
+# Session — password retention (PRD §4); v1 encrypted_dir → session_ram
 mode = "session_ram"
+secure_wipe_workspace = true
+wipe_passes = 1
+wipe_pattern = "random"
 
 [auto_close]
 enabled = false
