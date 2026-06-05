@@ -13,7 +13,7 @@ Canonical layout for the product — see **`dev/docs/sdd.md`** §3 and **`dev/do
 | File | Scope | Contents |
 |------|--------|----------|
 | **`.upriv/settings.toml`** | App / drive | Marker, paths, UI, logging, app preferences |
-| **`vaults/<id>/config.toml`** | One vault | Vault config: storage mode, security, backup, 7z, policies, optional **`order`**, **`password_hint`**, and **`note`** |
+| **`vaults/<id>/config.toml`** | One vault | Vault config: storage mode, security, backup, 7z, policies, optional **`order`**, **`password_hint`**, **`note`**, and **`hidden`** |
 
 Same word **config**, different **folder** — no collision. Discovery: scan `vaults/*/config.toml` on app start.
 
@@ -180,6 +180,7 @@ Stored in **`config.toml`** (not `persistence.json`):
 | `order` | `[vault]` | Display order in the vault list (ascending integer; lower = higher on screen). Omit → sorted after explicit values, then by `display_name` |
 | `password_hint` | `[vault]` | Optional reminder at unlock — **not** the password (max 128 chars) |
 | `note` | `[vault]` | Optional short user annotation (max 256 chars) |
+| `hidden` | `[vault]` | When `true`, vault stays on disk but is omitted from the list until the user shows hidden vaults (system settings or session toggle) |
 | `password_changed_at` | `[security]` | ISO 8601 UTC; set by app after change password; omitted until first change |
 
 **Vault list order:** on app start (and when the list reloads), sort all vaults by `[vault] order` ascending; tie-break by `display_name` (case-insensitive). This field is **only** for UI ordering — it does not affect paths, discovery, or sync.
@@ -302,6 +303,20 @@ Example (file `current-000001-…`):
 0002 2026-05-29T12:00:00.120Z INFO  vault_discovered   vault=my-encrypted-notes persistence=closed
 0003 2026-05-29T12:01:15.402Z INFO  vault_open         vault=my-encrypted-notes storage_mode=encrypted_dir
 ```
+
+### UI (`settings.toml` → `[ui]`)
+
+| Key | Type | Default (demo) | Effect |
+|-----|------|----------------|--------|
+| `locale` | string | `"en"` | UI strings — `dev/docs/i18n/{locale}.json` |
+| `theme` | string | `"dark"` | `"dark"` \| `"light"` |
+| `vault_list_sort` | string | `"order"` | `order` \| `name` \| `state` \| `last_accessed` |
+| `vault_list_sort_direction` | string | `"asc"` | `asc` \| `desc` |
+| `vault_list_view` | string | `"default"` | `default` \| `large` \| `compact` \| `blocks` |
+| `always_show_hidden_vaults` | bool | `false` | When `true`, vaults with `[vault] hidden = true` appear in the list on every launch |
+| `file_manager_dock_expanded` | bool | `false` | When `true`, minimized file manager chips stay expanded; when `false`, only a single button expands the dock |
+
+**Demo:** `finance-2025` has `hidden = true` in `config.toml`; list visibility also depends on `always_show_hidden_vaults` and the session “show hidden vaults” toggle in system settings.
 
 ### Logging (`settings.toml` → `[logging]`)
 

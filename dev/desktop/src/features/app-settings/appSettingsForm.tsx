@@ -70,6 +70,22 @@ export function AppSettingsAppearanceSection({ config, onChange }: SectionPatchP
           ))}
         </div>
       </SettingsField>
+
+      <SettingsField
+        label={t("modal.app_settings.field.file_manager_dock_expanded")}
+        hint={t("modal.app_settings.field.file_manager_dock_expanded_help")}
+      >
+        <label className="flex cursor-pointer items-center justify-between gap-3 rounded-lg bg-surface-container px-3 py-2.5">
+          <span className="text-sm text-on-surface">
+            {t("modal.app_settings.field.file_manager_dock_expanded_label")}
+          </span>
+          <Switch
+            checked={config.file_manager_dock_expanded}
+            onChange={(file_manager_dock_expanded) => onChange({ file_manager_dock_expanded })}
+            label={t("modal.app_settings.field.file_manager_dock_expanded")}
+          />
+        </label>
+      </SettingsField>
     </SettingsFormGrid>
   );
 }

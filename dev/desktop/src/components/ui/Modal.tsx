@@ -60,7 +60,7 @@ export function Modal({
           aria-modal="true"
           aria-labelledby={titleId}
           className={[
-            "pointer-events-auto w-full overflow-hidden border border-outline-variant/40 bg-surface-container-high shadow-modal",
+            "pointer-events-auto w-full overflow-hidden bg-surface-container-high shadow-modal",
             "rounded-none sm:rounded-xl",
             "p-4 sm:p-6",
             scrollFooterLayout

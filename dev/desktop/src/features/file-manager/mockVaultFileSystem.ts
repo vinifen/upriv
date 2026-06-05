@@ -1,0 +1,178 @@
+import type { FileTreeNode, MockFileContent, MockFileLanguage } from "./fileTreeTypes";
+import {
+  addChild,
+  collectFilePaths,
+  findNode,
+  getParentPath,
+  moveNode,
+  removeContentPaths,
+  removeNode,
+  remapContentPaths,
+  renameNode,
+  siblingNames,
+  uniqueFolderName,
+  uniqueName,
+} from "./fileTreeOps";
+import { fileBaseName, joinPath } from "./fileTreeUtils";
+import { getMockFileContent, getMockVaultFileTree } from "./mockVaultFileTree";
+
+interface VaultFileSession {
+  tree: FileTreeNode;
+  contents: Record<string, string>;
+  languages: Record<string, MockFileLanguage>;
+  revision: number;
+}
+
+const sessions = new Map<string, VaultFileSession>();
+
+function languageFromPath(path: string): MockFileLanguage {
+  const lower = path.toLowerCase();
+  if (lower.endsWith(".pdf")) return "binary";
+  if (lower.endsWith(".md")) return "markdown";
+  if (lower.endsWith(".sh")) return "shell";
+  if (lower.endsWith(".env") || lower.includes(".env.")) return "env";
+  return "text";
+}
+
+function loadInitialContents(vaultId: string, tree: FileTreeNode): VaultFileSession {
+  const contents: Record<string, string> = {};
+  const languages: Record<string, MockFileLanguage> = {};
+  for (const path of collectFilePaths(tree)) {
+    const file = getMockFileContent(vaultId, path);
+    if (file) {
+      contents[path] = file.content;
+      languages[path] = file.language;
+    }
+  }
+  return { tree, contents, languages, revision: 0 };
+}
+
+function ensureSession(vaultId: string): VaultFileSession {
+  let session = sessions.get(vaultId);
+  if (!session) {
+    const tree = getMockVaultFileTree(vaultId);
+    session = loadInitialContents(vaultId, tree);
+    sessions.set(vaultId, session);
+  }
+  return session;
+}
+
+function bump(session: VaultFileSession): number {
+  session.revision += 1;
+  return session.revision;
+}
+
+export function resetVaultFileSession(vaultId: string): void {
+  sessions.delete(vaultId);
+}
+
+export function getVaultTreeRevision(vaultId: string): number {
+  return ensureSession(vaultId).revision;
+}
+
+export function getVaultFileTree(vaultId: string): FileTreeNode {
+  return ensureSession(vaultId).tree;
+}
+
+export function getVaultFileContent(vaultId: string, path: string): MockFileContent | null {
+  const session = ensureSession(vaultId);
+  if (!(path in session.contents)) {
+    const initial = getMockFileContent(vaultId, path);
+    if (!initial) return null;
+    return initial;
+  }
+  return {
+    content: session.contents[path] ?? "",
+    language: session.languages[path] ?? languageFromPath(path),
+  };
+}
+
+export function isVaultFileEditable(vaultId: string, path: string): boolean {
+  const file = getVaultFileContent(vaultId, path);
+  return Boolean(file && file.language !== "binary");
+}
+
+export function setVaultFileContent(vaultId: string, path: string, content: string): number {
+  const session = ensureSession(vaultId);
+  session.contents[path] = content;
+  session.languages[path] ??= languageFromPath(path);
+  return bump(session);
+}
+
+export function createVaultFile(vaultId: string, parentPath: string, baseName: string): string | null {
+  const session = ensureSession(vaultId);
+  const names = siblingNames(session.tree, parentPath);
+  const name = uniqueName(names, baseName);
+  session.tree = addChild(session.tree, parentPath, { name, type: "file" });
+  const path = joinPath(parentPath, name);
+  session.contents[path] = "";
+  session.languages[path] = languageFromPath(path);
+  bump(session);
+  return path;
+}
+
+export function createVaultFolder(vaultId: string, parentPath: string, baseName: string): string | null {
+  const session = ensureSession(vaultId);
+  const names = siblingNames(session.tree, parentPath);
+  const name = uniqueFolderName(names, baseName);
+  session.tree = addChild(session.tree, parentPath, { name, type: "folder", children: [] });
+  bump(session);
+  return joinPath(parentPath, name);
+}
+
+export function renameVaultPath(vaultId: string, path: string, newName: string): string | null {
+  if (path === "/") return null;
+  const session = ensureSession(vaultId);
+  const parentPath = getParentPath(path);
+  const names = siblingNames(session.tree, parentPath).filter((n) => n !== fileBaseName(path));
+  if (names.includes(newName)) return null;
+
+  const newPath = joinPath(parentPath, newName);
+  session.tree = renameNode(session.tree, path, newName);
+  session.contents = remapContentPaths(session.contents, path, newPath);
+  const nextLanguages: Record<string, MockFileLanguage> = {};
+  for (const [p, lang] of Object.entries(session.languages)) {
+    if (p === path) nextLanguages[newPath] = lang;
+    else if (p.startsWith(`${path}/`)) nextLanguages[`${newPath}${p.slice(path.length)}`] = lang;
+    else nextLanguages[p] = lang;
+  }
+  session.languages = nextLanguages;
+  bump(session);
+  return newPath;
+}
+
+export function deleteVaultPath(vaultId: string, path: string): boolean {
+  if (path === "/") return false;
+  const session = ensureSession(vaultId);
+  session.tree = removeNode(session.tree, path);
+  session.contents = removeContentPaths(session.contents, path);
+  session.languages = removeContentPaths(session.languages, path) as Record<string, MockFileLanguage>;
+  bump(session);
+  return true;
+}
+
+export function moveVaultPath(vaultId: string, fromPath: string, toFolderPath: string): string | null {
+  if (fromPath === "/" || fromPath === toFolderPath) return null;
+  const session = ensureSession(vaultId);
+  const node = findNode(session.tree, fromPath);
+  if (!node) return null;
+
+  const newPath = joinPath(toFolderPath, node.name);
+  if (findNode(session.tree, toFolderPath)?.type !== "folder") return null;
+  if (getParentPath(fromPath) === toFolderPath) return fromPath;
+
+  const targetNames = siblingNames(session.tree, toFolderPath);
+  if (targetNames.includes(node.name)) return null;
+
+  session.tree = moveNode(session.tree, fromPath, toFolderPath);
+  session.contents = remapContentPaths(session.contents, fromPath, newPath);
+  const nextLanguages: Record<string, MockFileLanguage> = {};
+  for (const [p, lang] of Object.entries(session.languages)) {
+    if (p === fromPath) nextLanguages[newPath] = lang;
+    else if (p.startsWith(`${fromPath}/`)) nextLanguages[`${newPath}${p.slice(fromPath.length)}`] = lang;
+    else nextLanguages[p] = lang;
+  }
+  session.languages = nextLanguages;
+  bump(session);
+  return newPath;
+}

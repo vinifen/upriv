@@ -9,6 +9,7 @@ store_dir = "store"
 backups_dir = "backups"
 password_hint = "Year end"
 note = "Tax receipts and invoices"
+hidden = true                      # omit from vault list until user shows hidden vaults
 
 [storage]
 mode = "encrypted_dir"

@@ -18,6 +18,7 @@ vault_list_sort = "order"              # order | name | state | last_accessed
 vault_list_sort_direction = "asc"      # asc | desc
 vault_list_view = "default"            # default | large | compact | blocks
 always_show_hidden_vaults = false
+file_manager_dock_expanded = false   # minimized file managers: show all chips vs single expand button
 
 [logging]
 enabled = true

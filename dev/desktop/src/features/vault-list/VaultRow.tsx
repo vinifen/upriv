@@ -24,6 +24,7 @@ interface VaultRowProps {
   onOpenBackups: (vaultId: string) => void;
   onOpenNote: (vaultId: string) => void;
   onOpenSettings: (vaultId: string) => void;
+  onOpenFileManager: (vault: VaultListItem) => void;
   onDragStart: (vaultId: string) => (event: React.DragEvent) => void;
   onDragEnd: () => void;
   onDragOver: (vaultId: string) => (event: React.DragEvent) => void;
@@ -46,6 +47,7 @@ export function VaultRow({
   onOpenBackups,
   onOpenNote,
   onOpenSettings,
+  onOpenFileManager,
   onDragStart,
   onDragEnd,
   onDragOver,
@@ -74,13 +76,12 @@ export function VaultRow({
       onDragLeave={onDragLeave(vault.id)}
       onDrop={onDrop(vault.id)}
       onClick={() => {
-        if (isOpen) {
-          /* future: vault_open_workspace */
-        }
+        if (isOpen) onOpenFileManager(vault);
       }}
       onKeyDown={(event) => {
         if (isOpen && (event.key === "Enter" || event.key === " ")) {
           event.preventDefault();
+          onOpenFileManager(vault);
         }
       }}
       role={isOpen ? "button" : undefined}

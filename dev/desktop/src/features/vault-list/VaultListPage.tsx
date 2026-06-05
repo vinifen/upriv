@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useState } from "react";
 import { AppSettingsModal, useAppSettingsContext } from "@/features/app-settings";
 import { CreateVaultWizardModal, type CreateVaultResult } from "@/features/vault-create";
+import { FileManagerLayer, useFileManager } from "@/features/file-manager";
 import { HelpModal } from "@/features/help";
 import { LogsModal } from "@/features/logs";
 import { useTranslation } from "@/i18n";
@@ -18,6 +19,7 @@ import { useVaultListState } from "./useVaultListState";
 
 export function VaultListPage() {
   const { t } = useTranslation();
+  const { openFromVault, close: closeFileManager } = useFileManager();
   const { settings, patchSettings, showHiddenVaultsSession } = useAppSettingsContext();
   const showHiddenVaults =
     settings.ui.always_show_hidden_vaults || showHiddenVaultsSession;
@@ -161,6 +163,7 @@ export function VaultListPage() {
             onOpenBackups={setBackupVaultId}
             onOpenNote={setNoteVaultId}
             onOpenSettings={setSettingsVaultId}
+            onOpenFileManager={openFromVault}
             onDragStart={onDragStart}
             onDragEnd={onDragEnd}
             onDragOver={onDragOver}
@@ -185,8 +188,12 @@ export function VaultListPage() {
         open={settingsVaultId !== null}
         onClose={() => setSettingsVaultId(null)}
         onVaultSettingsSaved={updateVaultSettings}
-        onVaultDelete={removeVault}
+        onVaultDelete={(vaultId) => {
+          closeFileManager(vaultId);
+          removeVault(vaultId);
+        }}
       />
+      <FileManagerLayer />
       <AppSettingsModal open={appSettingsOpen} onClose={() => setAppSettingsOpen(false)} />
       <LogsModal open={logsOpen} onClose={() => setLogsOpen(false)} />
       <HelpModal open={helpOpen} onClose={() => setHelpOpen(false)} />
