@@ -355,7 +355,7 @@ function LogFileViewer({ file }: { file: AppLogFile }) {
   );
 
   return (
-    <div className="max-h-[min(70vh,40rem)] overflow-auto rounded-xl bg-[#0d1117] p-4 ring-1 ring-outline-variant/25 sm:p-5">
+    <div className="max-h-[min(70vh,40rem)] overflow-auto rounded-xl bg-[var(--log-viewer-bg)] p-4 ring-1 ring-outline-variant/25 sm:p-5">
       <div
         className="grid w-max min-w-full gap-x-5 gap-y-0.5 font-mono text-xs leading-6 sm:text-sm sm:leading-7"
         style={{ gridTemplateColumns: "auto auto auto auto max-content" }}

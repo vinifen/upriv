@@ -6,3 +6,4 @@ export {
   vaultStatusIconClass,
   vaultStatusRowClass,
 } from "./vault-status";
+export { applyDocumentTheme } from "./applyTheme";
