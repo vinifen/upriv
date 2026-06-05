@@ -521,7 +521,7 @@ wipe_pattern = "random"           # hidden default
 enabled = true
 idle_minutes = 15
 warn_before_seconds = 60
-close_on_app_minimize = false
+close_on_app_exit = false
 
 [seven_zip]
 encrypt_file_names = true
@@ -726,7 +726,7 @@ fn validate_vault_id(id: &str, vault_root: &Path) -> Result<()> {
 | `enabled` | bool | `false` | Enable automatic close |
 | `idle_minutes` | u32 | `15` | Idle time until close (min. 1, max. 1440 suggested) |
 | `warn_before_seconds` | u32 | `60` | Toast/dialog N seconds before; `0` = close directly |
-| `close_on_app_minimize` | bool | `false` | If true, close on minimize (in addition to or instead of timer) |
+| `close_on_app_exit` | bool | `false` | If true, close open vaults when the app quits (independent of idle timer) |
 
 **What resets the inactivity timer:**
 
@@ -763,7 +763,7 @@ struct AutoCloseConfig {
     enabled: bool,
     idle: Duration,
     warn_before: Duration,
-    close_on_minimize: bool,
+    close_on_app_exit: bool,
 }
 
 struct AutoCloseHandle {

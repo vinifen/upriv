@@ -285,10 +285,14 @@ function renderSettingsSection(
           close={draft.close}
           autoClose={draft.auto_close}
           secureWipe={draft.security.secure_wipe_workspace}
+          requireUnmountOnSleep={draft.policy.require_unmount_on_sleep}
           onCloseChange={(patch) => patchDraft("close", patch)}
           onAutoCloseChange={(patch) => patchDraft("auto_close", patch)}
           onSecureWipeChange={(secure_wipe_workspace) =>
             patchDraft("security", { secure_wipe_workspace })
+          }
+          onRequireUnmountOnSleepChange={(require_unmount_on_sleep) =>
+            patchDraft("policy", { require_unmount_on_sleep })
           }
         />
       );

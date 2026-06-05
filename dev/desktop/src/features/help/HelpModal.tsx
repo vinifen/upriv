@@ -58,7 +58,7 @@ export function HelpModal({ open, onClose }: HelpModalProps) {
           value={query}
           onChange={(event) => setQuery(event.target.value)}
           placeholder={t("modal.help.search_placeholder")}
-          className={`${settingsControlClass} bg-surface-container ring-1 ring-accent/35 focus:ring-2 focus:ring-accent/50 placeholder:text-on-surface-variant/70`}
+          className={`${settingsControlClass} placeholder:text-on-surface-variant/70`}
           autoComplete="off"
           spellCheck={false}
         />

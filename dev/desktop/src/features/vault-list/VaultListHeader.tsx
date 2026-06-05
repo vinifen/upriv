@@ -10,6 +10,7 @@ interface VaultListHeaderProps {
   onOpenSystemSettings?: () => void;
   onViewLogs?: () => void;
   onOpenHelp?: () => void;
+  onNewVault?: () => void;
 }
 
 export function VaultListHeader({
@@ -18,6 +19,7 @@ export function VaultListHeader({
   onOpenSystemSettings,
   onViewLogs,
   onOpenHelp,
+  onNewVault,
 }: VaultListHeaderProps) {
   const { t } = useTranslation();
 
@@ -66,6 +68,7 @@ export function VaultListHeader({
             variant="primary"
             size="md"
             className="gap-2 rounded-xl bg-primary font-mono text-sm font-medium text-on-primary shadow-lg shadow-primary/10 hover:bg-primary/95"
+            onClick={onNewVault}
           >
             <Icon name="add" size={18} />
             {t("app.new_vault")}

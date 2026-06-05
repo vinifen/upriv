@@ -1,7 +1,10 @@
 import { useCallback, useMemo, useState } from "react";
 import { AppSettingsModal, useAppSettingsContext } from "@/features/app-settings";
+import { CreateVaultWizardModal, type CreateVaultResult } from "@/features/vault-create";
 import { HelpModal } from "@/features/help";
 import { LogsModal } from "@/features/logs";
+import { useTranslation } from "@/i18n";
+import { registerMockVaultSettings } from "./mockVaultSettings";
 import { MOCK_VAULTS } from "./mockVaults";
 import { VaultList } from "./VaultList";
 import { VaultListHeader, useRefreshState } from "./VaultListHeader";
@@ -14,6 +17,7 @@ import type { VaultListViewMode } from "./vaultListView";
 import { useVaultListState } from "./useVaultListState";
 
 export function VaultListPage() {
+  const { t } = useTranslation();
   const { settings, patchSettings } = useAppSettingsContext();
   const { isRefreshing, refresh: runRefreshAnimation } = useRefreshState();
   const [noteVaultId, setNoteVaultId] = useState<string | null>(null);
@@ -22,6 +26,7 @@ export function VaultListPage() {
   const [appSettingsOpen, setAppSettingsOpen] = useState(false);
   const [logsOpen, setLogsOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [createVaultOpen, setCreateVaultOpen] = useState(false);
 
   const listDefaults = useMemo(
     () => ({
@@ -47,6 +52,7 @@ export function VaultListPage() {
     resetList,
     updateNote,
     removeVault,
+    addVault,
     updateVaultSettings,
     onDragStart,
     onDragEnd,
@@ -91,6 +97,32 @@ export function VaultListPage() {
     [vaults, settingsVaultId],
   );
 
+  const existingVaultIds = useMemo(() => vaults.map((vault) => vault.id), [vaults]);
+  const existingOrders = useMemo(
+    () => vaults.map((vault) => vault.order ?? 0),
+    [vaults],
+  );
+
+  const handleCreateVault = useCallback(
+    (result: CreateVaultResult) => {
+      registerMockVaultSettings(result.settings);
+      addVault({
+        id: result.vaultId,
+        displayName: result.displayName,
+        persistence: "sealed",
+        session: null,
+        storageMode: result.storageMode,
+        order: result.order,
+        canSeal: false,
+        lastAccessedWhen: t("vault.create.just_created"),
+        lastAccessedAt: new Date().toISOString(),
+        note: result.note,
+        passwordHint: result.passwordHint || undefined,
+      });
+    },
+    [addVault, t],
+  );
+
   const handleRefresh = useCallback(() => {
     resetList();
     runRefreshAnimation();
@@ -104,6 +136,7 @@ export function VaultListPage() {
         onOpenSystemSettings={() => setAppSettingsOpen(true)}
         onViewLogs={() => setLogsOpen(true)}
         onOpenHelp={() => setHelpOpen(true)}
+        onNewVault={() => setCreateVaultOpen(true)}
       />
       <main className="flex flex-1 flex-col items-center py-10 md:py-12">
         <section className="w-full max-w-vault-list px-margin-mobile md:px-margin-desktop">
@@ -151,6 +184,13 @@ export function VaultListPage() {
       <AppSettingsModal open={appSettingsOpen} onClose={() => setAppSettingsOpen(false)} />
       <LogsModal open={logsOpen} onClose={() => setLogsOpen(false)} />
       <HelpModal open={helpOpen} onClose={() => setHelpOpen(false)} />
+      <CreateVaultWizardModal
+        open={createVaultOpen}
+        existingVaultIds={existingVaultIds}
+        existingOrders={existingOrders}
+        onClose={() => setCreateVaultOpen(false)}
+        onCreate={handleCreateVault}
+      />
     </div>
   );
 }

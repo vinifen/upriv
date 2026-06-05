@@ -121,6 +121,10 @@ export function useVaultListState(
     });
   }, []);
 
+  const addVault = useCallback((vault: VaultListItem) => {
+    setVaults((current) => sortVaultsByOrder([...current, vault]));
+  }, []);
+
   return {
     vaults,
     displayVaults,
@@ -134,6 +138,7 @@ export function useVaultListState(
     resetList,
     updateNote,
     removeVault,
+    addVault,
     updateVaultSettings,
     onDragStart,
     onDragEnd,
