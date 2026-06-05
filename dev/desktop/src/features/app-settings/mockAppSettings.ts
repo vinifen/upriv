@@ -8,6 +8,7 @@ export const DEFAULT_APP_SETTINGS: AppSettingsConfig = {
     vault_list_sort_direction: "asc",
     vault_list_view: "default",
     always_show_hidden_vaults: false,
+    file_manager_dock_expanded: false,
   },
   logging: {
     enabled: true,

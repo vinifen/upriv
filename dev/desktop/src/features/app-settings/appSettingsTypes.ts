@@ -20,6 +20,8 @@ export interface AppSettingsConfig {
     vault_list_view: VaultListViewMode;
     /** TOML: `[ui] always_show_hidden_vaults` */
     always_show_hidden_vaults: boolean;
+    /** TOML: `[ui] file_manager_dock_expanded` */
+    file_manager_dock_expanded: boolean;
   };
   logging: {
     enabled: boolean;

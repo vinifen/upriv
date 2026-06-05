@@ -16,6 +16,10 @@ import {
 export const settingsControlClass =
   "w-full rounded-lg border-0 bg-surface-container-highest px-2.5 py-2 text-sm text-on-surface outline-none ring-0 focus:ring-2 focus:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-60 sm:px-3 sm:py-2.5";
 
+/** Native radio inside policy cards — accent only when checked (dot), neutral border otherwise. */
+export const settingsRadioInputClass =
+  "mt-0.5 h-4 w-4 shrink-0 border-outline-variant text-accent focus:ring-0 focus-visible:ring-0";
+
 interface SettingsFieldProps {
   label: string;
   hint?: string;
@@ -615,9 +619,18 @@ export function PolicyRadioOption({
     <label
       htmlFor={inputId}
       className={[
-        "block cursor-pointer select-none rounded-lg bg-surface-container p-2.5 transition-colors sm:p-3",
-        checked ? "ring-2 ring-accent/50" : "ring-1 ring-outline-variant/25 hover:ring-outline-variant/40",
-        tone === "less-secure" && !checked ? "ring-on-error-container/20" : "",
+        "block cursor-pointer select-none rounded-lg border p-2.5 transition-colors sm:p-3",
+        tone === "less-secure"
+          ? "bg-[color-mix(in_srgb,var(--error-container)_7%,var(--surface-container))]"
+          : "bg-surface-container",
+        checked
+          ? "border-2 border-[var(--accent)]"
+          : [
+              "border-outline-variant",
+              tone === "less-secure"
+                ? "hover:bg-[color-mix(in_srgb,var(--error-container)_11%,var(--surface-container))]"
+                : "hover:bg-surface-container-highest/60",
+            ].join(" "),
       ]
         .filter(Boolean)
         .join(" ")}
@@ -630,7 +643,7 @@ export function PolicyRadioOption({
           value={value}
           checked={checked}
           onChange={onSelect}
-          className="mt-0.5 h-4 w-4 shrink-0 border-outline-variant/50 text-accent focus:ring-accent/50"
+          className={settingsRadioInputClass}
         />
         <span className="min-w-0 flex-1">
           <span className="flex flex-wrap items-center gap-2">

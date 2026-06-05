@@ -14,6 +14,7 @@ interface VaultBlockCardProps {
   onOpenBackups: (vaultId: string) => void;
   onOpenNote: (vaultId: string) => void;
   onOpenSettings: (vaultId: string) => void;
+  onOpenFileManager: (vault: VaultListItem) => void;
 }
 
 function statusIconName(status: VaultDisplayStatus, isOpen: boolean): IconName {
@@ -27,6 +28,7 @@ export function VaultBlockCard({
   onOpenBackups,
   onOpenNote,
   onOpenSettings,
+  onOpenFileManager,
 }: VaultBlockCardProps) {
   const { t } = useTranslation();
   const status = resolveVaultDisplayStatus(vault);
@@ -42,10 +44,16 @@ export function VaultBlockCard({
         .filter(Boolean)
         .join(" ")}
       onClick={() => {
-        if (isOpen) {
-          /* future: vault_open_workspace */
+        if (isOpen) onOpenFileManager(vault);
+      }}
+      onKeyDown={(event) => {
+        if (isOpen && (event.key === "Enter" || event.key === " ")) {
+          event.preventDefault();
+          onOpenFileManager(vault);
         }
       }}
+      role={isOpen ? "button" : undefined}
+      tabIndex={isOpen ? 0 : undefined}
     >
       <div className="flex items-start gap-2.5">
         <div
