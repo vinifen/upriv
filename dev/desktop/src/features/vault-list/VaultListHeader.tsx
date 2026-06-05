@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from "react";
-import wordmark from "@assets/Upriv-wordmark-white.svg";
+import { UprivWordmark } from "@/components/brand/UprivWordmark";
 import { Icon } from "@/components/icons";
 import { Button, DropdownMenu, IconButton } from "@/components/ui";
 import { useTranslation } from "@/i18n";
@@ -48,11 +48,7 @@ export function VaultListHeader({
   return (
     <header className="sticky top-0 z-40 bg-background/80 backdrop-blur-xl">
       <div className="mx-auto flex max-w-vault-list items-center justify-between px-margin-mobile py-4 md:px-margin-desktop">
-        <img
-          src={wordmark}
-          alt={t("app.title")}
-          className="h-5 w-auto object-contain md:h-6"
-        />
+        <UprivWordmark className="h-5 w-auto object-contain md:h-6" />
         <div className="flex items-center gap-2">
           <IconButton
             label={t("action.refresh")}

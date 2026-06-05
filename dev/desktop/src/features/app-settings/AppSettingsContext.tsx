@@ -1,5 +1,6 @@
-import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { I18nProvider } from "@/i18n";
+import { applyDocumentTheme } from "@/theme";
 import { getMockAppSettings } from "./mockAppSettings";
 import type { AppSettingsConfig, AppSettingsPatch } from "./appSettingsTypes";
 
@@ -31,6 +32,10 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
     () => ({ settings, replaceSettings, patchSettings }),
     [settings, replaceSettings, patchSettings],
   );
+
+  useEffect(() => {
+    applyDocumentTheme(settings.ui.theme);
+  }, [settings.ui.theme]);
 
   return (
     <AppSettingsContext.Provider value={value}>

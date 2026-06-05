@@ -1,4 +1,7 @@
-:root {
+:root,
+[data-theme="dark"] {
+  color-scheme: dark;
+
   /* Surfaces — design baseline (SDD §8.2, stitch DESIGN.md) */
   --background: #081425;
   --surface-container: #152031;
@@ -10,11 +13,11 @@
   --split-divider: rgba(144, 144, 151, 0.38);
   --split-divider-on-primary: rgba(40, 48, 68, 0.32);
 
-  /* Scrollbar (thin, dark — avoids layout shift with scrollbar-gutter) */
+  /* Scrollbar */
   --scrollbar-thumb: #2a3548;
   --scrollbar-thumb-hover: #45464d;
 
-  /* Primary actions (stitch baseline) */
+  /* Primary actions */
   --primary: #bec6e0;
   --on-primary: #283044;
   --surface-container-highest: #2a3548;
@@ -23,15 +26,60 @@
   --accent: #6b8cff;
   --accent-foreground: #0f172a;
 
-  /* Vault status (PRD §3.7.1) — consumed by StatusDot + Tailwind */
+  /* Vault status (PRD §3.7.1) */
   --vault-status-open: #3dd68c;
   --vault-status-closed: #6b8cff;
   --vault-status-sealed: #8b8b8b;
   --vault-status-recovery: #f5a623;
-  /* Open status chip (stitch: tertiary/5 + on-tertiary) — opaque mix, not Tailwind /opacity on vars */
   --vault-open-badge-bg: rgba(61, 214, 140, 0.1);
+  --vault-recovery-badge-bg: rgba(245, 166, 35, 0.12);
+  --vault-open-glow: rgba(61, 214, 140, 0.45);
 
   /* Semantic */
   --error-container: #93000a;
   --on-error-container: #ffdad6;
+
+  /* Chrome */
+  --modal-scrim: rgb(8 20 37 / 80%);
+  --modal-shadow: 0 16px 48px rgb(0 0 0 / 35%);
+  --log-viewer-bg: #0d1117;
+}
+
+[data-theme="light"] {
+  color-scheme: light;
+
+  --background: #f5f7fb;
+  --surface-container: #ffffff;
+  --surface-container-high: #eceff6;
+  --surface-row-hover: #e3e8f2;
+  --on-surface: #131b2e;
+  --on-surface-variant: #5c667a;
+  --outline-variant: #c5cad6;
+  --split-divider: rgba(92, 102, 122, 0.22);
+  --split-divider-on-primary: rgba(255, 255, 255, 0.35);
+
+  --scrollbar-thumb: #c5cad6;
+  --scrollbar-thumb-hover: #a8b0c0;
+
+  --primary: #283044;
+  --on-primary: #f5f7fb;
+  --surface-container-highest: #dfe4ef;
+
+  --accent: #3d5ccc;
+  --accent-foreground: #ffffff;
+
+  --vault-status-open: #1a9d5c;
+  --vault-status-closed: #3d5ccc;
+  --vault-status-sealed: #6b7280;
+  --vault-status-recovery: #c47d00;
+  --vault-open-badge-bg: rgba(26, 157, 92, 0.12);
+  --vault-recovery-badge-bg: rgba(196, 125, 0, 0.12);
+  --vault-open-glow: rgba(26, 157, 92, 0.35);
+
+  --error-container: #ffdad6;
+  --on-error-container: #93000a;
+
+  --modal-scrim: rgb(19 27 46 / 45%);
+  --modal-shadow: 0 16px 48px rgb(19 27 46 / 14%);
+  --log-viewer-bg: #eef1f8;
 }

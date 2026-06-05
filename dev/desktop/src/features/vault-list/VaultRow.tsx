@@ -152,7 +152,7 @@ function StatusDotInline({
       className={[
         "inline-block h-2.5 w-2.5 shrink-0 rounded-full self-center",
         className,
-        status === "open" ? "bg-vault-open shadow-[0_0_8px_rgba(61,214,140,0.45)]" : "",
+        status === "open" ? "bg-vault-open shadow-[0_0_8px_var(--vault-open-glow)]" : "",
         status === "closed" ? "bg-vault-closed" : "",
         status === "sealed" ? "bg-vault-sealed" : "",
         status === "recovery" ? "bg-vault-recovery" : "",

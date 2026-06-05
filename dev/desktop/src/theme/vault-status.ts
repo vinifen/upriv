@@ -34,7 +34,7 @@ export const vaultStatusBadgeClass = {
   open: "bg-[var(--vault-open-badge-bg)] text-vault-open",
   closed: "bg-surface-container-highest text-on-surface-variant",
   sealed: "bg-surface-container-highest text-on-surface-variant",
-  recovery: "bg-[rgba(245,166,35,0.12)] text-vault-recovery",
+  recovery: "bg-[var(--vault-recovery-badge-bg)] text-vault-recovery",
 } as const satisfies Record<VaultDisplayStatus, string>;
 
 /** Leading circle icon tint on vault row. */

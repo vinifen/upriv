@@ -50,7 +50,7 @@
 
 @layer utilities {
   .shadow-modal {
-    box-shadow: 0 16px 48px rgb(0 0 0 / 35%);
+    box-shadow: var(--modal-shadow);
   }
 
   /** Modal body scroll — stable width when scrollbar appears (no layout jump). */
