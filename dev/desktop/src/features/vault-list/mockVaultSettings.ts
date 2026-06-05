@@ -22,6 +22,7 @@ const DEFAULTS: VaultSettingsConfig = {
     backups_dir: "backups",
     password_hint: "",
     note: "",
+    hidden: false,
   },
   storage: { mode: "encrypted_dir" },
   close: { default_action: "close" },
@@ -87,9 +88,20 @@ const MOCK_BY_VAULT: Record<string, VaultSettingsOverrides> = {
       order: 5,
       password_hint: "Q4 spreadsheet",
       note: "",
+      hidden: true,
       ...vaultPaths("finance-2025", "Finance 2025"),
     },
     backup: { enabled: true, mode: "keep_last", keep_last: 5 },
+  },
+  "old-archive": {
+    vault: {
+      display_name: "Old Archive",
+      order: 6,
+      password_hint: "",
+      note: "",
+      hidden: true,
+      ...vaultPaths("old-archive", "Old Archive"),
+    },
   },
 };
 
@@ -128,5 +140,6 @@ export function vaultSettingsToListPatch(config: VaultSettingsConfig) {
     displayName: config.vault.display_name,
     order: config.vault.order,
     note: config.vault.note,
+    hidden: config.vault.hidden,
   };
 }

@@ -34,6 +34,7 @@ export interface CreateVaultDraft {
   security: Pick<VaultSettingsConfig["security"], "mode" | "secure_wipe_workspace">;
   policy: VaultSettingsConfig["policy"];
   order: number;
+  hidden: boolean;
 }
 
 export interface CreateVaultResult {

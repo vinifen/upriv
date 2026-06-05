@@ -11,3 +11,4 @@ export {
 export { IconButton, type IconButtonProps } from "./IconButton";
 export { Modal, type ModalProps } from "./Modal";
 export { StatusDot, type StatusDotProps } from "./StatusDot";
+export { Switch, type SwitchProps } from "./Switch";

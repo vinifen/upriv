@@ -6,6 +6,7 @@ import type { VaultListItem } from "./types";
 
 interface VaultListProps {
   vaults: VaultListItem[];
+  allVaultsHidden?: boolean;
   viewMode: VaultListViewMode;
   canReorder: boolean;
   draggingId: string | null;
@@ -22,6 +23,7 @@ interface VaultListProps {
 
 export function VaultList({
   vaults,
+  allVaultsHidden = false,
   viewMode,
   canReorder,
   draggingId,
@@ -40,7 +42,7 @@ export function VaultList({
   if (vaults.length === 0) {
     return (
       <p className="py-16 text-center font-mono text-sm uppercase tracking-widest text-on-surface-variant">
-        {t("empty.no_vaults")}
+        {allVaultsHidden ? t("empty.vaults_all_hidden") : t("empty.no_vaults")}
       </p>
     );
   }

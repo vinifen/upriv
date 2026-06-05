@@ -19,6 +19,7 @@ export function buildCreateVaultResult(
       backups_dir: "backups",
       password_hint: draft.passwordHint.trim(),
       note: draft.note.trim(),
+      hidden: draft.hidden,
     },
     storage: { ...draft.storage },
     close: { ...draft.close },

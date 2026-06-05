@@ -381,6 +381,7 @@ function CreateVaultGeneralStep({ draft, onChange }: StepProps) {
 function CreateVaultAdvancedStep({ draft, onChange }: StepProps) {
   const { t } = useTranslation();
   const orderId = useId();
+  const hiddenId = useId();
   const storageGroup = useId();
   const securityGroup = useId();
   const closeGroup = useId();
@@ -408,6 +409,22 @@ function CreateVaultAdvancedStep({ draft, onChange }: StepProps) {
               className={[settingsControlClass, "font-mono tabular-nums"].join(" ")}
             />
           </SettingsField>
+
+          <div className="space-y-1.5">
+            <label className="flex cursor-pointer select-none items-center gap-3">
+              <input
+                id={hiddenId}
+                type="checkbox"
+                checked={draft.hidden}
+                onChange={(e) => onChange({ hidden: e.target.checked })}
+                className="h-4 w-4 rounded border-outline-variant/50 text-accent focus:ring-accent/50"
+              />
+              <span className="text-sm text-on-surface">{t("modal.settings.field.vault.hidden")}</span>
+            </label>
+            <p className="pl-7 text-xs leading-relaxed text-on-surface-variant">
+              {t("modal.settings.field.vault.hidden_help")}
+            </p>
+          </div>
 
           <SettingsField label={t("modal.settings.field.storage.mode")} hint={t("modal.settings.field.storage.mode_help")}>
             <div role="radiogroup" className="grid gap-2">

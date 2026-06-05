@@ -18,7 +18,9 @@ import { useVaultListState } from "./useVaultListState";
 
 export function VaultListPage() {
   const { t } = useTranslation();
-  const { settings, patchSettings } = useAppSettingsContext();
+  const { settings, patchSettings, showHiddenVaultsSession } = useAppSettingsContext();
+  const showHiddenVaults =
+    settings.ui.always_show_hidden_vaults || showHiddenVaultsSession;
   const { isRefreshing, refresh: runRefreshAnimation } = useRefreshState();
   const [noteVaultId, setNoteVaultId] = useState<string | null>(null);
   const [backupVaultId, setBackupVaultId] = useState<string | null>(null);
@@ -59,7 +61,7 @@ export function VaultListPage() {
     onDragOver,
     onDragLeave,
     onDrop,
-  } = useVaultListState(MOCK_VAULTS, listDefaults);
+  } = useVaultListState(MOCK_VAULTS, { ...listDefaults, showHiddenVaults });
 
   const handleSortChange = useCallback(
     (next: VaultListSort) => {
@@ -118,6 +120,7 @@ export function VaultListPage() {
         lastAccessedAt: new Date().toISOString(),
         note: result.note,
         passwordHint: result.passwordHint || undefined,
+        hidden: result.settings.vault.hidden,
       });
     },
     [addVault, t],
@@ -148,6 +151,9 @@ export function VaultListPage() {
           />
           <VaultList
             vaults={displayVaults}
+            allVaultsHidden={
+              displayVaults.length === 0 && vaults.some((vault) => vault.hidden)
+            }
             viewMode={viewMode}
             canReorder={canReorder}
             draggingId={draggingId}
