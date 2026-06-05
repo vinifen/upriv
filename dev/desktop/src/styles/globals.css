@@ -53,6 +53,21 @@
     box-shadow: 0 16px 48px rgb(0 0 0 / 35%);
   }
 
+  /** Modal body scroll — stable width when scrollbar appears (no layout jump). */
+  .modal-scroll-pane {
+    scrollbar-gutter: stable;
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+
+  .modal-scroll-pane::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  .modal-scroll-pane::-webkit-scrollbar-thumb {
+    border-width: 1px;
+  }
+
   .vault-row {
     transition: background-color 0.2s cubic-bezier(0.4, 0, 0.2, 1);
   }

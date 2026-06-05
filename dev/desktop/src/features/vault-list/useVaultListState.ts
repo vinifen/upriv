@@ -7,15 +7,24 @@ import {
   type VaultListSort,
 } from "./vaultListSort";
 import { DEFAULT_VAULT_LIST_VIEW, type VaultListViewMode } from "./vaultListView";
+import type { VaultSettingsListPatch } from "./vaultSettingsTypes";
 import type { VaultListItem } from "./types";
 import { reorderVaultList, sortVaultsByOrder } from "./vaultOrder";
 
 const DRAG_MIME = "application/x-upriv-vault-id";
 
-export function useVaultListState(initialVaults: VaultListItem[]) {
+export function useVaultListState(
+  initialVaults: VaultListItem[],
+  options?: {
+    initialSort?: VaultListSort;
+    initialViewMode?: VaultListViewMode;
+  },
+) {
   const [vaults, setVaults] = useState(() => sortVaultsByOrder(initialVaults));
-  const [sort, setSort] = useState<VaultListSort>(DEFAULT_VAULT_LIST_SORT);
-  const [viewMode, setViewMode] = useState<VaultListViewMode>(DEFAULT_VAULT_LIST_VIEW);
+  const [sort, setSort] = useState<VaultListSort>(options?.initialSort ?? DEFAULT_VAULT_LIST_SORT);
+  const [viewMode, setViewMode] = useState<VaultListViewMode>(
+    options?.initialViewMode ?? DEFAULT_VAULT_LIST_VIEW,
+  );
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [dragOverId, setDragOverId] = useState<string | null>(null);
 
@@ -90,6 +99,28 @@ export function useVaultListState(initialVaults: VaultListItem[]) {
     );
   }, []);
 
+  const removeVault = useCallback((vaultId: string) => {
+    setVaults((current) => current.filter((vault) => vault.id !== vaultId));
+    setDraggingId((id) => (id === vaultId ? null : id));
+    setDragOverId((id) => (id === vaultId ? null : id));
+  }, []);
+
+  const updateVaultSettings = useCallback((vaultId: string, patch: VaultSettingsListPatch) => {
+    setVaults((current) => {
+      const next = current.map((vault) =>
+        vault.id === vaultId
+          ? {
+              ...vault,
+              displayName: patch.displayName,
+              order: patch.order,
+              note: patch.note,
+            }
+          : vault,
+      );
+      return sortVaultsByOrder(next);
+    });
+  }, []);
+
   return {
     vaults,
     displayVaults,
@@ -102,6 +133,8 @@ export function useVaultListState(initialVaults: VaultListItem[]) {
     dragOverId,
     resetList,
     updateNote,
+    removeVault,
+    updateVaultSettings,
     onDragStart,
     onDragEnd,
     onDragOver,

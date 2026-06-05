@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { I18nProvider } from "@/i18n";
+import { AppSettingsProvider } from "@/features/app-settings";
 
 interface AppProvidersProps {
   children: ReactNode;
@@ -7,5 +7,5 @@ interface AppProvidersProps {
 
 /** Composes global React context providers (i18n, future theme/query). */
 export function AppProviders({ children }: AppProvidersProps) {
-  return <I18nProvider>{children}</I18nProvider>;
+  return <AppSettingsProvider>{children}</AppSettingsProvider>;
 }

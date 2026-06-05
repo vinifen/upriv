@@ -20,8 +20,12 @@ enabled = false
 mode = "keep_last"
 
 [security]
+# Session — password retention (PRD §4); v1 encrypted_dir → session_ram
 mode = "session_ram"
-password_changed_at = "2026-05-28T10:00:00Z"   # set by app on change password; omit until first change
+secure_wipe_workspace = true
+wipe_passes = 1
+wipe_pattern = "random"
+password_changed_at = "2026-05-28T10:00:00Z"
 
 [auto_close]
 enabled = false

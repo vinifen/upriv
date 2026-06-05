@@ -14,6 +14,7 @@ export interface DropdownMenuItem {
   id: string;
   label: string;
   icon?: ReactNode;
+  className?: string;
   onSelect?: () => void;
 }
 
@@ -92,7 +93,7 @@ export function DropdownMenu({ trigger, items, align = "right", label }: Dropdow
               <button
                 type="button"
                 role="menuitem"
-                className={menuItemClass}
+                className={[menuItemClass, item.className].filter(Boolean).join(" ")}
                 onClick={() => {
                   item.onSelect?.();
                   setOpen(false);

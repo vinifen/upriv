@@ -188,7 +188,9 @@ Stored in **`config.toml`** (not `persistence.json`):
 
 **Create new vault (not import):** wizard asks for password, confirm password, optional hint, optional note.
 
-**Change password:** vault settings → `[security]`; requires current + new + confirm. UI warns (**`warning.password_change_backups`**) that files in `backups/` keep the password from when each snapshot was created — only the main archive and future backups use the new password.
+**Change password:** vault settings → **Security**; requires current + new + confirm; works with vault **open or closed** (current password always required). `upriv-core` validates, re-encrypts archive + store in RAM/temp, replaces files atomically. UI warns (**`warning.password_change_backups`**) that files in `backups/` keep the password from when each snapshot was created — only the main archive and future backups use the new password. See SDD §3.2.3.
+
+**Settings UI (v1):** subset of `config.toml` — see SDD §3.2.3a (e.g. no vault `id`/paths in form; `session_ram` fixed; explicit Save/discard on close).
 
 Example (vault 3): `prod/.upriv/vaults/cold-storage/config.toml`.
 

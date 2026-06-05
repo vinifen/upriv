@@ -8,6 +8,8 @@ order = 4
 vault_file = "archive/My Encrypted Notes.7z"
 store_dir = "store"
 backups_dir = "backups"
+password_hint = "hint: childhood street"
+note = "Personal notes and drafts."
 
 [storage]
 mode = "encrypted_dir"
@@ -18,9 +20,14 @@ default_action = "close"
 [backup]
 enabled = true
 mode = "keep_last"
+keep_last = 1
 
 [security]
+# Session — password retention (PRD §4); v1 encrypted_dir → session_ram
 mode = "session_ram"
+secure_wipe_workspace = true
+wipe_passes = 1
+wipe_pattern = "random"
 
 [auto_close]
 enabled = false
@@ -36,6 +43,6 @@ solid = false
 method = "lzma2"
 
 [policy]
-allow_external_editors = true
-disallow_copy_outside_mount = false
+allow_external_editors = false
+disallow_copy_outside_mount = true
 require_unmount_on_sleep = true

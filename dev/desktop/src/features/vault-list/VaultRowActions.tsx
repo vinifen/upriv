@@ -13,9 +13,15 @@ interface VaultRowActionsProps {
   vault: VaultListItem;
   onOpenBackups: (vaultId: string) => void;
   onOpenNote: (vaultId: string) => void;
+  onOpenSettings: (vaultId: string) => void;
 }
 
-export function VaultRowActions({ vault, onOpenBackups, onOpenNote }: VaultRowActionsProps) {
+export function VaultRowActions({
+  vault,
+  onOpenBackups,
+  onOpenNote,
+  onOpenSettings,
+}: VaultRowActionsProps) {
   const { t } = useTranslation();
 
   const moreItems = useMemo(
@@ -42,7 +48,13 @@ export function VaultRowActions({ vault, onOpenBackups, onOpenNote }: VaultRowAc
 
   return (
     <div className="flex items-center gap-1 text-on-surface-variant">
-      <IconButton label={t("action.settings")} {...rowActionProps}>
+      <IconButton
+        label={t("action.settings")}
+        {...rowActionProps}
+        onClick={() => {
+          window.requestAnimationFrame(() => onOpenSettings(vault.id));
+        }}
+      >
         <Icon name="settings" size={20} />
       </IconButton>
       <DropdownMenu

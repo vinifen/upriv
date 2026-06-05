@@ -239,8 +239,8 @@ Agreed pipeline for the first release:
 | RF-23 | Configurable password/session retention modes (see §4) | P1 |
 | RF-24 | Never persist password in plaintext in vault files | P0 |
 | RF-24b | **Password hint** may be stored in plaintext in `config.toml` (user-provided reminder only); UI warns it must not repeat the password | P0 |
-| RF-58 | **Change password** (vault settings / `[security]`): require current password + new password + confirm; re-encrypt main archive and encrypted store | P1 |
-| RF-59 | On change password: **warn** that existing files in `backups/` remain encrypted with the **previous** password(s); only the main archive (and future backups) use the new password | P1 |
+| RF-58 | **Change password** (vault settings / Security UI): require **current** + new + confirm; works with vault **open or closed**; `upriv-core` validates current password, re-encrypts main archive and store (RAM/temp pipeline), atomically replaces files | P1 |
+| RF-59 | On change password: **warn** (`warning.password_change_backups`) that existing files in `backups/` remain encrypted with the **previous** password(s); only the main archive and **future** backups use the new password; optional pre-replace snapshot of old `.7z` into `backups/` | P1 |
 | RF-25 | **Vault config editable at any time** (app UI or edit `config/<id>.toml`) — not a "create and never change" model | P0 |
 | RF-26 | App **reloads** TOML on startup, on vault focus, and when file changes (idempotent reload) | P0 |
 | RF-27 | Changes to `[seven_zip]`, `[backup]`, `[auto_close]`, `[security]` apply on **next** relevant cycle (close/open), with UI warning if vault is open | P0 |
@@ -472,9 +472,11 @@ Opened by **`action.backups`** on vault row.
 
 Opened by **`action.settings`** on vault row.
 
-- Edits **all** vault-specific configuration (`config/<id>.toml` — `[vault]`, `[storage]`, `[backup]`, `[seven_zip]`, `[auto_close]`, `[security]`, etc.). UI mirrors TOML (RF-UI-04).
-- **`[vault]` fields:** `display_name`, optional **`order`** (list display order — numeric; same value as drag-and-drop reorder), optional **`password_hint`**, optional **`note`** (short text, max 256 chars).
-- **`[security]` section:** **`action.change_password`** — current + new + confirm; shows **`warning.password_change_backups`** before confirm.
+- Edits vault `config.toml` via a **subset** of sections (RF-UI-04, SDD §3.2.3a). **Explicit Save** when dirty (with confirm); closing with unsaved edits prompts **discard all and close**.
+- **`[vault]` in UI:** `display_name`, optional **`order`** (same as drag-and-drop reorder), optional **`note`**. **Not shown:** `id`, `vault_file`, `store_dir`, `backups_dir` (system layout; `id` migrates when display name normalizes).
+- **`[security]` in UI:** optional **`password_hint`** (stored in `[vault]` in TOML), **`secure_wipe_workspace`**, **`action.change_password`** (current + new + confirm; **open or closed** vault). **Not shown in v1:** `mode` (fixed `session_ram` for `encrypted_dir`), `wipe_passes`, `wipe_pattern`.
+- **`[seven_zip]` in UI:** `archive_mode`, `encrypt_file_names` only (compression level/method/solid = defaults).
+- **`[policy]` in UI:** `allow_external_editors` and `disallow_copy_outside_mount` as separate radio groups (four combinations).
 - **`modal.settings.danger_zone` section:** **`modal.settings.delete_vault`** — confirmation with text field; user must **type vault name** (`id`) to confirm deletion (removes `.7z`, store, config entries, and backups per policy).
 
 ### 3.7.4 Interface requirements (RF-UI)
@@ -495,6 +497,7 @@ Opened by **`action.settings`** on vault row.
 | RF-UI-12 | Unlock screen may show **`password_hint`** from config when non-empty (never auto-fill password) | P1 |
 | RF-UI-13 | **Reorder vault list:** drag-and-drop rows (press/hold + drag); persist new positions to `[vault] order` in each affected `config.toml` | P1 |
 | RF-UI-14 | Vault settings modal exposes **`order`** field under `[vault]` (alternative to drag-and-drop) | P1 |
+| RF-UI-15 | Vault settings: **Save** only when dirty (with confirm); close/backdrop/Esc with unsaved edits → confirm **discard all and close**; field visibility per SDD §3.2.3a | P1 |
 
 ---
 
@@ -511,6 +514,8 @@ Configurable in `config/<id>.toml` as `security.mode`.
 | 5 — Less secure | `disk_open_close` | `session.enc` to open and close without retyping |
 
 **Recommended default:** `session_ram` (mode 2).
+
+**v1 desktop UI (encrypted_dir):** two choices — **`session_ram`** (recommended) and **ask on open and close** (maps to TOML `always_prompt`; legacy `ram_on_close_only` reads as the same option). Plain mode keeps disk session options separately.
 
 **Global rule:** no mode writes password in plaintext in the vault.
 

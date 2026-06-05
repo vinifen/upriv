@@ -12,6 +12,7 @@ interface VaultListProps {
   dragOverId: string | null;
   onOpenBackups: (vaultId: string) => void;
   onOpenNote: (vaultId: string) => void;
+  onOpenSettings: (vaultId: string) => void;
   onDragStart: (vaultId: string) => (event: React.DragEvent) => void;
   onDragEnd: () => void;
   onDragOver: (vaultId: string) => (event: React.DragEvent) => void;
@@ -27,6 +28,7 @@ export function VaultList({
   dragOverId,
   onOpenBackups,
   onOpenNote,
+  onOpenSettings,
   onDragStart,
   onDragEnd,
   onDragOver,
@@ -53,6 +55,7 @@ export function VaultList({
               vault={vault}
               onOpenBackups={onOpenBackups}
               onOpenNote={onOpenNote}
+              onOpenSettings={onOpenSettings}
             />
           ))}
         </div>
@@ -75,6 +78,7 @@ export function VaultList({
           isDragOver={dragOverId === vault.id && draggingId !== vault.id}
           onOpenBackups={onOpenBackups}
           onOpenNote={onOpenNote}
+          onOpenSettings={onOpenSettings}
           onDragStart={onDragStart}
           onDragEnd={onDragEnd}
           onDragOver={onDragOver}

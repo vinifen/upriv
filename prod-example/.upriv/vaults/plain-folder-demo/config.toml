@@ -21,6 +21,7 @@ enabled = false
 mode = "keep_last"
 
 [security]
+# Session — password retention (PRD §4); plain mode exception
 mode = "disk_open_close"
 secure_wipe_workspace = true
 wipe_passes = 1
