@@ -3,6 +3,7 @@ import { useTranslation } from "@/i18n";
 import type { VaultDisplayStatus } from "@/types";
 import { resolveVaultDisplayStatus } from "@/types";
 import { vaultStatusIconClass, vaultStatusRowClass } from "@/theme";
+import { VaultHiddenIndicator } from "./VaultHiddenIndicator";
 import { VaultLockButton } from "./VaultLockButton";
 import { VaultRowActions } from "./VaultRowActions";
 import { VaultStatusBadge } from "./VaultStatusBadge";
@@ -56,8 +57,9 @@ export function VaultBlockCard({
           <Icon name={statusIconName(status, isOpen)} size={18} />
         </div>
         <div className="min-w-0 flex-1">
-          <h3 className="line-clamp-2 text-sm font-semibold leading-snug text-on-surface sm:text-base">
-            {vault.displayName}
+          <h3 className="flex min-w-0 items-start gap-1.5 text-sm font-semibold leading-snug text-on-surface sm:text-base">
+            <span className="line-clamp-2 min-w-0 flex-1">{vault.displayName}</span>
+            <VaultHiddenIndicator hidden={vault.hidden} size={13} className="mt-0.5" />
           </h3>
           <div className="mt-1.5">
             <VaultStatusBadge status={status} />

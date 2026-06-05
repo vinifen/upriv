@@ -9,12 +9,16 @@ interface AppSettingsContextValue {
   settings: AppSettingsConfig;
   replaceSettings: (next: AppSettingsConfig) => void;
   patchSettings: (patch: AppSettingsPatch) => void;
+  /** Session-only — not saved to settings.toml; resets when the app restarts. */
+  showHiddenVaultsSession: boolean;
+  setShowHiddenVaultsSession: (value: boolean) => void;
 }
 
 const AppSettingsContext = createContext<AppSettingsContextValue | null>(null);
 
 export function AppSettingsProvider({ children }: { children: ReactNode }) {
   const [settings, setSettings] = useState<AppSettingsConfig>(() => getMockAppSettings());
+  const [showHiddenVaultsSession, setShowHiddenVaultsSession] = useState(false);
 
   const replaceSettings = useCallback((next: AppSettingsConfig) => {
     setSettings(normalizeAppSettings(next));
@@ -32,8 +36,14 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const value = useMemo(
-    () => ({ settings, replaceSettings, patchSettings }),
-    [settings, replaceSettings, patchSettings],
+    () => ({
+      settings,
+      replaceSettings,
+      patchSettings,
+      showHiddenVaultsSession,
+      setShowHiddenVaultsSession,
+    }),
+    [settings, replaceSettings, patchSettings, showHiddenVaultsSession],
   );
 
   useEffect(() => {

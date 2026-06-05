@@ -5,7 +5,7 @@ import type { VaultListViewMode } from "@/features/vault-list/vaultListView";
 export type UiTheme = "dark" | "light";
 export type LogLevel = "trace" | "debug" | "info" | "warn" | "error";
 
-export const APP_SETTINGS_SECTIONS = ["appearance", "logging", "behavior"] as const;
+export const APP_SETTINGS_SECTIONS = ["appearance", "logging", "behavior", "hidden_vaults"] as const;
 
 export type AppSettingsSectionId = (typeof APP_SETTINGS_SECTIONS)[number];
 
@@ -18,6 +18,8 @@ export interface AppSettingsConfig {
     vault_list_sort_direction: VaultListSortDirection;
     /** Persisted when the user changes view in the list toolbar (not edited in system settings). */
     vault_list_view: VaultListViewMode;
+    /** TOML: `[ui] always_show_hidden_vaults` */
+    always_show_hidden_vaults: boolean;
   };
   logging: {
     enabled: boolean;

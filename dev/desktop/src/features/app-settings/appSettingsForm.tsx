@@ -1,5 +1,5 @@
 import { useId } from "react";
-import { Button } from "@/components/ui";
+import { Button, Switch } from "@/components/ui";
 import type { LocaleId } from "@/i18n";
 import { useTranslation } from "@/i18n";
 import {
@@ -70,6 +70,74 @@ export function AppSettingsAppearanceSection({ config, onChange }: SectionPatchP
           ))}
         </div>
       </SettingsField>
+    </SettingsFormGrid>
+  );
+}
+
+interface AppSettingsHiddenVaultsSectionProps {
+  alwaysShowHiddenVaults: boolean;
+  onAlwaysShowHiddenVaultsChange: (value: boolean) => void;
+  showHiddenVaultsSession: boolean;
+  onShowHiddenVaultsSessionChange: (value: boolean) => void;
+}
+
+export function AppSettingsHiddenVaultsSection({
+  alwaysShowHiddenVaults,
+  onAlwaysShowHiddenVaultsChange,
+  showHiddenVaultsSession,
+  onShowHiddenVaultsSessionChange,
+}: AppSettingsHiddenVaultsSectionProps) {
+  const { t } = useTranslation();
+  const showHiddenSessionId = useId();
+  const alwaysShowHiddenId = useId();
+
+  return (
+    <SettingsFormGrid>
+      <p className="text-xs leading-relaxed text-on-surface-variant">
+        {t("modal.app_settings.section.hidden_vaults_intro")}
+      </p>
+
+      <label
+        htmlFor={showHiddenSessionId}
+        className="flex cursor-pointer select-none items-center gap-3"
+      >
+        <Switch
+          id={showHiddenSessionId}
+          checked={showHiddenVaultsSession}
+          onChange={onShowHiddenVaultsSessionChange}
+          label={t("modal.app_settings.field.show_hidden_vaults_session")}
+          className="shrink-0"
+        />
+        <span className="min-w-0 flex-1">
+          <span className="block text-sm text-on-surface">
+            {t("modal.app_settings.field.show_hidden_vaults_session")}
+          </span>
+          <span className="mt-1.5 block text-xs leading-relaxed text-on-surface-variant">
+            {t("modal.app_settings.field.show_hidden_vaults_session_help")}
+          </span>
+        </span>
+      </label>
+
+      <label
+        htmlFor={alwaysShowHiddenId}
+        className="flex cursor-pointer select-none items-center gap-3"
+      >
+        <input
+          id={alwaysShowHiddenId}
+          type="checkbox"
+          checked={alwaysShowHiddenVaults}
+          onChange={(e) => onAlwaysShowHiddenVaultsChange(e.target.checked)}
+          className="h-4 w-4 shrink-0 rounded border-outline-variant/50 text-accent focus:ring-accent/50"
+        />
+        <span className="min-w-0 flex-1">
+          <span className="block text-sm text-on-surface">
+            {t("modal.app_settings.field.always_show_hidden_vaults")}
+          </span>
+          <span className="mt-1.5 block text-xs leading-relaxed text-on-surface-variant">
+            {t("modal.app_settings.field.always_show_hidden_vaults_help")}
+          </span>
+        </span>
+      </label>
     </SettingsFormGrid>
   );
 }

@@ -23,6 +23,8 @@ export interface VaultRow {
   order?: number;
   passwordHint?: string;
   canSeal: boolean;
+  /** `[vault] hidden` — omitted from list unless show-hidden is active. */
+  hidden?: boolean;
 }
 
 /** Resolve the badge/row style status from backend fields. */

@@ -45,5 +45,6 @@ export function createEmptyDraft(existingOrders: readonly number[]): CreateVault
       require_unmount_on_sleep: true,
     },
     order: defaultOrderAtEnd(existingOrders),
+    hidden: false,
   };
 }

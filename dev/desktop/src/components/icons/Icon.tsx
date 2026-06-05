@@ -10,6 +10,7 @@ export type IconName =
   | "clock"
   | "download"
   | "encrypted"
+  | "eye-off"
   | "grip-vertical"
   | "help"
   | "lock"
@@ -90,6 +91,19 @@ const paths: Record<IconName, ReactNode> = {
     <>
       <rect x="5" y="11" width="14" height="10" rx="2" stroke="currentColor" strokeWidth="1.75" fill="none" />
       <path d="M8 11V8a4 4 0 0 1 8 0v3" stroke="currentColor" strokeWidth="1.75" fill="none" />
+    </>
+  ),
+  "eye-off": (
+    <>
+      <path
+        d="M10.7 10.7a2.5 2.5 0 0 0 3.5 3.5M6.3 6.3C4.6 7.6 3.3 9.4 2.5 12c1.7 4.2 6 7 9.5 7 1.4 0 2.8-.4 4.1-1.1M9.9 5.1A10.8 10.8 0 0 1 12 5c3.5 0 7.8 2.8 9.5 7-.6 1.5-1.6 2.9-2.8 4"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        fill="none"
+      />
+      <path d="M3 3l18 18" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
     </>
   ),
   "grip-vertical": (

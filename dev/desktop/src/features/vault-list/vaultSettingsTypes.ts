@@ -43,6 +43,7 @@ export interface VaultSectionConfig {
   backups_dir: string;
   password_hint: string;
   note: string;
+  hidden: boolean;
 }
 
 export interface VaultSettingsConfig {
@@ -87,4 +88,5 @@ export interface VaultSettingsListPatch {
   displayName: string;
   order: number;
   note: string;
+  hidden: boolean;
 }

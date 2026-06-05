@@ -7,6 +7,7 @@ import {
   vaultStatusRowClass,
 } from "@/theme";
 import { VaultDragHandle } from "./VaultDragHandle";
+import { VaultHiddenIndicator } from "./VaultHiddenIndicator";
 import { VaultLockButton } from "./VaultLockButton";
 import { VaultRowActions } from "./VaultRowActions";
 import { VaultStatusBadge } from "./VaultStatusBadge";
@@ -106,11 +107,12 @@ export function VaultRow({
             <StatusDotInline status={status} className="col-start-1 row-start-1" />
             <h3
               className={[
-                "col-start-2 row-start-1 truncate font-semibold text-on-surface",
+                "col-start-2 row-start-1 flex min-w-0 items-center gap-1.5 font-semibold text-on-surface",
                 density.title,
               ].join(" ")}
             >
-              {vault.displayName}
+              <span className="truncate">{vault.displayName}</span>
+              <VaultHiddenIndicator hidden={vault.hidden} />
             </h3>
             <div className="col-start-2 row-start-2 flex flex-wrap items-center gap-2">
               <VaultStatusBadge status={status} />

@@ -18,6 +18,7 @@ export function useVaultListState(
   options?: {
     initialSort?: VaultListSort;
     initialViewMode?: VaultListViewMode;
+    showHiddenVaults?: boolean;
   },
 ) {
   const [vaults, setVaults] = useState(() => sortVaultsByOrder(initialVaults));
@@ -28,7 +29,11 @@ export function useVaultListState(
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [dragOverId, setDragOverId] = useState<string | null>(null);
 
-  const displayVaults = useMemo(() => applyVaultListSort(vaults, sort), [vaults, sort]);
+  const showHiddenVaults = options?.showHiddenVaults ?? false;
+  const displayVaults = useMemo(() => {
+    const visible = vaults.filter((vault) => !vault.hidden || showHiddenVaults);
+    return applyVaultListSort(visible, sort);
+  }, [vaults, sort, showHiddenVaults]);
   const canReorder = canReorderVaultList(sort);
 
   const resetList = useCallback(() => {
@@ -114,6 +119,7 @@ export function useVaultListState(
               displayName: patch.displayName,
               order: patch.order,
               note: patch.note,
+              hidden: patch.hidden,
             }
           : vault,
       );

@@ -6,6 +6,7 @@ import { useAppSettingsContext } from "./AppSettingsContext";
 import {
   AppSettingsAppearanceSection,
   AppSettingsBehaviorSection,
+  AppSettingsHiddenVaultsSection,
   AppSettingsLoggingSection,
 } from "./appSettingsForm";
 import {
@@ -25,7 +26,8 @@ interface AppSettingsModalProps {
 
 export function AppSettingsModal({ open, onClose }: AppSettingsModalProps) {
   const { t } = useTranslation();
-  const { settings, replaceSettings } = useAppSettingsContext();
+  const { settings, replaceSettings, showHiddenVaultsSession, setShowHiddenVaultsSession } =
+    useAppSettingsContext();
 
   const [draft, setDraft] = useState<AppSettingsConfig | null>(null);
   const [saveConfirmOpen, setSaveConfirmOpen] = useState(false);
@@ -187,7 +189,13 @@ export function AppSettingsModal({ open, onClose }: AppSettingsModalProps) {
             title={t(`modal.app_settings.section.${sectionId}`)}
             defaultOpen={sectionId === "appearance"}
           >
-            {renderAppSettingsSection(sectionId, formConfig, patchDraft)}
+            {renderAppSettingsSection(
+              sectionId,
+              formConfig,
+              patchDraft,
+              showHiddenVaultsSession,
+              setShowHiddenVaultsSession,
+            )}
           </VaultSettingsSection>
         ))}
       </div>
@@ -202,6 +210,8 @@ function renderAppSettingsSection(
     section: S,
     patch: Partial<AppSettingsConfig[S]>,
   ) => void,
+  showHiddenVaultsSession: boolean,
+  setShowHiddenVaultsSession: (value: boolean) => void,
 ) {
   switch (sectionId) {
     case "appearance":
@@ -223,6 +233,17 @@ function renderAppSettingsSection(
         <AppSettingsBehaviorSection
           config={draft.app}
           onChange={(patch) => patchDraft("app", patch)}
+        />
+      );
+    case "hidden_vaults":
+      return (
+        <AppSettingsHiddenVaultsSection
+          alwaysShowHiddenVaults={draft.ui.always_show_hidden_vaults}
+          onAlwaysShowHiddenVaultsChange={(always_show_hidden_vaults) =>
+            patchDraft("ui", { always_show_hidden_vaults })
+          }
+          showHiddenVaultsSession={showHiddenVaultsSession}
+          onShowHiddenVaultsSessionChange={setShowHiddenVaultsSession}
         />
       );
     default:
