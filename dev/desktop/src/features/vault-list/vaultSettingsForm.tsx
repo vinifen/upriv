@@ -14,7 +14,7 @@ import {
 } from "./vaultSettingsTypes";
 
 export const settingsControlClass =
-  "w-full rounded-lg border-0 bg-surface-container-high px-2.5 py-2 text-sm text-on-surface outline-none ring-0 focus:ring-2 focus:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-60 sm:px-3 sm:py-2.5";
+  "w-full rounded-lg border-0 bg-surface-container-highest px-2.5 py-2 text-sm text-on-surface outline-none ring-0 focus:ring-2 focus:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-60 sm:px-3 sm:py-2.5";
 
 interface SettingsFieldProps {
   label: string;
@@ -145,25 +145,30 @@ interface VaultSettingsCloseSectionProps {
   close: VaultSettingsConfig["close"];
   autoClose: VaultSettingsConfig["auto_close"];
   secureWipe: boolean;
+  requireUnmountOnSleep: boolean;
   onCloseChange: (patch: Partial<VaultSettingsConfig["close"]>) => void;
   onAutoCloseChange: (patch: Partial<VaultSettingsConfig["auto_close"]>) => void;
   onSecureWipeChange: (secureWipe: boolean) => void;
+  onRequireUnmountOnSleepChange: (requireUnmountOnSleep: boolean) => void;
 }
 
 export function VaultSettingsCloseSection({
   close,
   autoClose,
   secureWipe,
+  requireUnmountOnSleep,
   onCloseChange,
   onAutoCloseChange,
   onSecureWipeChange,
+  onRequireUnmountOnSleepChange,
 }: VaultSettingsCloseSectionProps) {
   const { t } = useTranslation();
   const lockActionGroup = useId();
   const enabledId = useId();
   const idleId = useId();
   const warnId = useId();
-  const minimizeId = useId();
+  const exitId = useId();
+  const sleepId = useId();
   const wipeId = useId();
 
   return (
@@ -221,51 +226,70 @@ export function VaultSettingsCloseSection({
         />
         <span className="text-sm text-on-surface">{t("modal.settings.field.auto_close.enabled")}</span>
       </label>
-      <div className="grid gap-4 sm:grid-cols-2">
-        <SettingsField label={t("modal.settings.field.auto_close.idle_minutes")} htmlFor={idleId}>
+      {autoClose.enabled ? (
+        <div className="grid gap-4 sm:grid-cols-2">
+          <SettingsField label={t("modal.settings.field.auto_close.idle_minutes")} htmlFor={idleId}>
+            <input
+              id={idleId}
+              type="number"
+              min={1}
+              max={1440}
+              value={autoClose.idle_minutes}
+              onChange={(e) =>
+                onAutoCloseChange({
+                  idle_minutes: Math.min(1440, Math.max(1, Number.parseInt(e.target.value, 10) || 1)),
+                })
+              }
+              className={[settingsControlClass, "font-mono tabular-nums"].join(" ")}
+            />
+          </SettingsField>
+          <SettingsField label={t("modal.settings.field.auto_close.warn_before_seconds")} htmlFor={warnId}>
+            <input
+              id={warnId}
+              type="number"
+              min={0}
+              max={300}
+              value={autoClose.warn_before_seconds}
+              onChange={(e) =>
+                onAutoCloseChange({
+                  warn_before_seconds: Math.min(300, Math.max(0, Number.parseInt(e.target.value, 10) || 0)),
+                })
+              }
+              className={[settingsControlClass, "font-mono tabular-nums"].join(" ")}
+            />
+          </SettingsField>
+        </div>
+      ) : null}
+      <div className="space-y-1.5">
+        <label className="flex cursor-pointer select-none items-center gap-3">
           <input
-            id={idleId}
-            type="number"
-            min={1}
-            max={1440}
-            disabled={!autoClose.enabled}
-            value={autoClose.idle_minutes}
-            onChange={(e) =>
-              onAutoCloseChange({
-                idle_minutes: Math.min(1440, Math.max(1, Number.parseInt(e.target.value, 10) || 1)),
-              })
-            }
-            className={[settingsControlClass, "font-mono tabular-nums"].join(" ")}
+            id={exitId}
+            type="checkbox"
+            checked={autoClose.close_on_app_exit}
+            onChange={(e) => onAutoCloseChange({ close_on_app_exit: e.target.checked })}
+            className="h-4 w-4 rounded border-outline-variant/50 text-accent focus:ring-accent/50"
           />
-        </SettingsField>
-        <SettingsField label={t("modal.settings.field.auto_close.warn_before_seconds")} htmlFor={warnId}>
-          <input
-            id={warnId}
-            type="number"
-            min={0}
-            max={300}
-            disabled={!autoClose.enabled}
-            value={autoClose.warn_before_seconds}
-            onChange={(e) =>
-              onAutoCloseChange({
-                warn_before_seconds: Math.min(300, Math.max(0, Number.parseInt(e.target.value, 10) || 0)),
-              })
-            }
-            className={[settingsControlClass, "font-mono tabular-nums"].join(" ")}
-          />
-        </SettingsField>
+          <span className="text-sm text-on-surface">{t("modal.settings.field.auto_close.close_on_app_exit")}</span>
+        </label>
+        <p className="pl-7 text-xs leading-relaxed text-on-surface-variant">
+          {t("modal.settings.field.auto_close.close_on_app_exit_help")}
+        </p>
       </div>
-      <label className="flex cursor-pointer select-none items-center gap-3">
-        <input
-          id={minimizeId}
-          type="checkbox"
-          checked={autoClose.close_on_app_minimize}
-          disabled={!autoClose.enabled}
-          onChange={(e) => onAutoCloseChange({ close_on_app_minimize: e.target.checked })}
-          className="h-4 w-4 rounded border-outline-variant/50 text-accent focus:ring-accent/50 disabled:opacity-40"
-        />
-        <span className="text-sm text-on-surface">{t("modal.settings.field.auto_close.close_on_minimize")}</span>
-      </label>
+      <div className="space-y-1.5">
+        <label className="flex cursor-pointer select-none items-center gap-3">
+          <input
+            id={sleepId}
+            type="checkbox"
+            checked={requireUnmountOnSleep}
+            onChange={(e) => onRequireUnmountOnSleepChange(e.target.checked)}
+            className="h-4 w-4 rounded border-outline-variant/50 text-accent focus:ring-accent/50"
+          />
+          <span className="text-sm text-on-surface">{t("modal.settings.field.close.require_unmount_on_sleep")}</span>
+        </label>
+        <p className="pl-7 text-xs leading-relaxed text-on-surface-variant">
+          {t("modal.settings.field.close.require_unmount_on_sleep_help")}
+        </p>
+      </div>
     </SettingsFormGrid>
   );
 }

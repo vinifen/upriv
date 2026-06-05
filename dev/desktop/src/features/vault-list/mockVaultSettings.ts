@@ -36,7 +36,7 @@ const DEFAULTS: VaultSettingsConfig = {
     enabled: false,
     idle_minutes: 15,
     warn_before_seconds: 60,
-    close_on_app_minimize: false,
+    close_on_app_exit: false,
   },
   seven_zip: {
     encrypt_file_names: true,
@@ -93,7 +93,16 @@ const MOCK_BY_VAULT: Record<string, VaultSettingsOverrides> = {
   },
 };
 
+const RUNTIME_VAULT_SETTINGS = new Map<string, VaultSettingsConfig>();
+
+export function registerMockVaultSettings(config: VaultSettingsConfig): void {
+  RUNTIME_VAULT_SETTINGS.set(config.vault.id, structuredClone(config));
+}
+
 export function getMockVaultSettings(vaultId: string): VaultSettingsConfig {
+  const runtime = RUNTIME_VAULT_SETTINGS.get(vaultId);
+  if (runtime) return structuredClone(runtime);
+
   const custom = MOCK_BY_VAULT[vaultId] as VaultSettingsOverrides | undefined;
   const displayName = custom?.vault?.display_name ?? vaultId;
 

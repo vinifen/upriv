@@ -62,7 +62,7 @@ export interface VaultSettingsConfig {
     enabled: boolean;
     idle_minutes: number;
     warn_before_seconds: number;
-    close_on_app_minimize: boolean;
+    close_on_app_exit: boolean;
   };
   seven_zip: {
     encrypt_file_names: boolean;

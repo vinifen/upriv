@@ -33,7 +33,7 @@ wipe_pattern = "random"
 enabled = false
 idle_minutes = 15
 warn_before_seconds = 60
-close_on_app_minimize = false
+close_on_app_exit = false
 
 [seven_zip]
 encrypt_file_names = true
