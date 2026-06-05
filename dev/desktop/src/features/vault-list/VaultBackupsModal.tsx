@@ -4,6 +4,7 @@ import { Button, IconButton, Modal } from "@/components/ui";
 import { formatBytes } from "@/lib/formatBytes";
 import { useTranslation } from "@/i18n";
 import { formatBackupDate } from "./backupFormat";
+import { downloadBackupsZip } from "./downloadBackupsZip";
 import type { VaultBackupEntry } from "./backupTypes";
 import { useVaultBackups } from "./useVaultBackups";
 import type { VaultListItem } from "./types";
@@ -118,6 +119,20 @@ export function VaultBackupsModal({ vault, open, onClose }: VaultBackupsModalPro
     setConfirmText("");
   };
 
+  const handleDownload = () => {
+    const targets = someSelected
+      ? backups.filter((entry) => selected.has(entry.filename))
+      : backups;
+    if (targets.length === 0) return;
+    downloadBackupsZip(targets, t("modal.backup.download_zip_name", { id: vault.id }));
+  };
+
+  const handleDownloadOne = (filename: string) => {
+    const entry = backups.find((item) => item.filename === filename);
+    if (!entry) return;
+    downloadBackupsZip([entry], t("modal.backup.download_zip_name", { id: vault.id }));
+  };
+
   return (
     <Modal
       open={open}
@@ -139,6 +154,7 @@ export function VaultBackupsModal({ vault, open, onClose }: VaultBackupsModalPro
               someSelected={someSelected}
               selectedCount={selected.size}
               onToggleSelectAll={toggleSelectAll}
+              onDownload={handleDownload}
               onDeleteSelected={() => beginDelete(Array.from(selected))}
             />
           ) : null}
@@ -152,6 +168,7 @@ export function VaultBackupsModal({ vault, open, onClose }: VaultBackupsModalPro
                 checked={selected.has(entry.filename)}
                 selectionDisabled={deleteTargets !== null}
                 onToggleSelected={() => toggleSelected(entry.filename)}
+                onDownload={() => handleDownloadOne(entry.filename)}
                 onDelete={() => beginDelete([entry.filename])}
               />
             ))}
@@ -205,6 +222,7 @@ interface BackupListToolbarProps {
   someSelected: boolean;
   selectedCount: number;
   onToggleSelectAll: () => void;
+  onDownload: () => void;
   onDeleteSelected: () => void;
 }
 
@@ -213,13 +231,14 @@ function BackupListToolbar({
   someSelected,
   selectedCount,
   onToggleSelectAll,
+  onDownload,
   onDeleteSelected,
 }: BackupListToolbarProps) {
   const { t } = useTranslation();
   const selectAllId = useId();
 
   return (
-    <div className="mb-2 flex min-h-14 items-center gap-3 pl-4 pr-2 sm:pl-4 sm:pr-3">
+    <div className="mb-2 flex min-h-14 flex-wrap items-center gap-2 pl-4 pr-2 sm:flex-nowrap sm:pl-4 sm:pr-3">
       <label
         htmlFor={selectAllId}
         className="flex min-w-0 flex-1 cursor-pointer select-none items-center gap-3"
@@ -237,11 +256,16 @@ function BackupListToolbar({
         <span className="text-sm text-on-surface-variant">{t("modal.backup.select_all")}</span>
       </label>
 
-      {someSelected ? (
-        <div className="flex shrink-0 items-center gap-1">
+      <div className="flex shrink-0 items-center gap-1 sm:ml-auto">
+        {someSelected ? (
           <span className="pr-1 text-xs tabular-nums text-on-surface-variant">
             {t("modal.backup.selected_count", { count: String(selectedCount) })}
           </span>
+        ) : null}
+        <Button variant="secondary" size="sm" onClick={onDownload}>
+          {someSelected ? t("modal.backup.download_selected") : t("modal.backup.download_all")}
+        </Button>
+        {someSelected ? (
           <IconButton
             label={t("modal.backup.delete_selected")}
             size="row"
@@ -251,8 +275,8 @@ function BackupListToolbar({
           >
             <Icon name="trash" size={18} />
           </IconButton>
-        </div>
-      ) : null}
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -263,6 +287,7 @@ interface BackupRowProps {
   checked: boolean;
   selectionDisabled: boolean;
   onToggleSelected: () => void;
+  onDownload: () => void;
   onDelete: () => void;
 }
 
@@ -272,6 +297,7 @@ function BackupRow({
   checked,
   selectionDisabled,
   onToggleSelected,
+  onDownload,
   onDelete,
 }: BackupRowProps) {
   const { t } = useTranslation();
@@ -315,16 +341,28 @@ function BackupRow({
           <span className="font-mono">{formatBytes(entry.sizeBytes)}</span>
         </p>
       </label>
-      <IconButton
-        label={t("action.delete")}
-        size="row"
-        variant="row-action"
-        disabled={selectionDisabled}
-        className="-mr-1 shrink-0 text-on-surface-variant hover:bg-error-container/20 hover:text-on-error-container"
-        onClick={onDelete}
-      >
-        <Icon name="trash" size={18} />
-      </IconButton>
+      <div className="flex shrink-0 items-center gap-0.5">
+        <IconButton
+          label={t("action.download")}
+          size="row"
+          variant="row-action"
+          disabled={selectionDisabled}
+          className="-mr-1 text-on-surface-variant hover:bg-accent/15 hover:text-accent"
+          onClick={onDownload}
+        >
+          <Icon name="download" size={18} />
+        </IconButton>
+        <IconButton
+          label={t("action.delete")}
+          size="row"
+          variant="row-action"
+          disabled={selectionDisabled}
+          className="-mr-1 text-on-surface-variant hover:bg-error-container/20 hover:text-on-error-container"
+          onClick={onDelete}
+        >
+          <Icon name="trash" size={18} />
+        </IconButton>
+      </div>
     </li>
   );
 }

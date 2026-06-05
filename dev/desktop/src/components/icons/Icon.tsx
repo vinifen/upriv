@@ -8,6 +8,7 @@ export type IconName =
   | "backups"
   | "chevron-down"
   | "clock"
+  | "download"
   | "encrypted"
   | "grip-vertical"
   | "help"
@@ -70,6 +71,19 @@ const paths: Record<IconName, ReactNode> = {
     <>
       <circle cx="12" cy="12" r="8" stroke="currentColor" strokeWidth="1.75" fill="none" />
       <path d="M12 8v4l3 2" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+    </>
+  ),
+  download: (
+    <>
+      <path
+        d="M12 4v10M8 10l4 4 4-4"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        fill="none"
+      />
+      <path d="M5 18h14" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
     </>
   ),
   encrypted: (
