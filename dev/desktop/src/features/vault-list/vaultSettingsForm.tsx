@@ -552,6 +552,8 @@ interface PolicyRadioOptionProps {
   description: string;
   badge?: "recommended" | "less-secure" | "default";
   tone?: "default" | "less-secure";
+  /** Shown below the description while this option is selected. */
+  footer?: ReactNode;
   onSelect: () => void;
 }
 
@@ -563,6 +565,7 @@ export function PolicyRadioOption({
   description,
   badge,
   tone = "default",
+  footer,
   onSelect,
 }: PolicyRadioOptionProps) {
   const { t } = useTranslation();
@@ -572,50 +575,61 @@ export function PolicyRadioOption({
     <label
       htmlFor={inputId}
       className={[
-        "flex cursor-pointer select-none gap-2.5 rounded-lg bg-surface-container p-2.5 transition-colors sm:gap-3 sm:p-3",
+        "block cursor-pointer select-none rounded-lg bg-surface-container p-2.5 transition-colors sm:p-3",
         checked ? "ring-2 ring-accent/50" : "ring-1 ring-outline-variant/25 hover:ring-outline-variant/40",
         tone === "less-secure" && !checked ? "ring-on-error-container/20" : "",
       ]
         .filter(Boolean)
         .join(" ")}
     >
-      <input
-        id={inputId}
-        type="radio"
-        name={groupName}
-        value={value}
-        checked={checked}
-        onChange={onSelect}
-        className="mt-0.5 h-4 w-4 shrink-0 border-outline-variant/50 text-accent focus:ring-accent/50"
-      />
-      <span className="min-w-0">
-        <span className="flex flex-wrap items-center gap-2">
-          <span
-            className={[
-              "text-sm font-medium leading-snug",
-              tone === "less-secure" ? "text-on-error-container" : "text-on-surface",
-            ].join(" ")}
-          >
-            {title}
+      <span className="flex gap-2.5 sm:gap-3">
+        <input
+          id={inputId}
+          type="radio"
+          name={groupName}
+          value={value}
+          checked={checked}
+          onChange={onSelect}
+          className="mt-0.5 h-4 w-4 shrink-0 border-outline-variant/50 text-accent focus:ring-accent/50"
+        />
+        <span className="min-w-0 flex-1">
+          <span className="flex flex-wrap items-center gap-2">
+            <span
+              className={[
+                "text-sm font-medium leading-snug",
+                tone === "less-secure" ? "text-on-error-container" : "text-on-surface",
+              ].join(" ")}
+            >
+              {title}
+            </span>
+            {badge === "recommended" ? (
+              <span className="rounded-md bg-accent/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-accent">
+                {t("modal.settings.badge.recommended")}
+              </span>
+            ) : null}
+            {badge === "default" ? (
+              <span className="rounded-md bg-accent/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-accent">
+                {t("modal.settings.badge.default")}
+              </span>
+            ) : null}
+            {badge === "less-secure" ? (
+              <span className="rounded-md bg-on-error-container/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-on-error-container">
+                {t("modal.settings.badge.less_secure")}
+              </span>
+            ) : null}
           </span>
-          {badge === "recommended" ? (
-            <span className="rounded-md bg-accent/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-accent">
-              {t("modal.settings.badge.recommended")}
-            </span>
-          ) : null}
-          {badge === "default" ? (
-            <span className="rounded-md bg-accent/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-accent">
-              {t("modal.settings.badge.default")}
-            </span>
-          ) : null}
-          {badge === "less-secure" ? (
-            <span className="rounded-md bg-on-error-container/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-on-error-container">
-              {t("modal.settings.badge.less_secure")}
-            </span>
-          ) : null}
+          <span className="mt-1.5 block text-xs leading-relaxed text-on-surface-variant">{description}</span>
         </span>
-        <span className="mt-1.5 block text-xs leading-relaxed text-on-surface-variant">{description}</span>
       </span>
+      {checked && footer ? (
+        <div
+          className="mt-3 pl-6 sm:pl-7"
+          onMouseDown={(event) => event.stopPropagation()}
+          onClick={(event) => event.stopPropagation()}
+        >
+          {footer}
+        </div>
+      ) : null}
     </label>
   );
 }

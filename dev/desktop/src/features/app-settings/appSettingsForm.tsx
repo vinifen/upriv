@@ -131,7 +131,8 @@ export function AppSettingsLoggingSection({ config, onChange }: SectionPatchProp
 
 export function AppSettingsBehaviorSection({ config, onChange }: SectionPatchProps<"app">) {
   const { t } = useTranslation();
-  const autoDetectId = useId();
+  const rootModeGroup = useId();
+  const useAutoDetect = config.auto_detect_vault_root;
 
   return (
     <SettingsFormGrid>
@@ -140,53 +141,67 @@ export function AppSettingsBehaviorSection({ config, onChange }: SectionPatchPro
       </p>
 
       <SettingsField
-        label={t("modal.app_settings.field.upriv_root")}
-        hint={t("modal.app_settings.field.upriv_root_help")}
+        label={t("modal.app_settings.field.upriv_root_mode")}
+        hint={t("modal.app_settings.field.upriv_root_mode_help")}
       >
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-stretch">
-          <input
-            type="text"
-            readOnly
-            value={config.upriv_root_path}
-            placeholder={
-              config.auto_detect_vault_root
-                ? t("modal.app_settings.field.upriv_root_auto_placeholder")
-                : t("modal.app_settings.field.upriv_root_placeholder")
-            }
-            className={[settingsControlClass, "font-mono text-xs sm:min-w-0 sm:flex-1"].join(" ")}
+        <div
+          role="radiogroup"
+          aria-label={t("modal.app_settings.field.upriv_root_mode")}
+          className="grid gap-2"
+        >
+          <PolicyRadioOption
+            groupName={rootModeGroup}
+            value="auto"
+            checked={useAutoDetect}
+            title={t("modal.app_settings.option.upriv_root.auto")}
+            description={t("modal.app_settings.option.upriv_root.auto_desc")}
+            badge="default"
+            onSelect={() => onChange({ auto_detect_vault_root: true, upriv_root_path: "" })}
           />
-          <Button
-            type="button"
-            variant="secondary"
-            size="md"
-            className="w-full shrink-0 sm:w-auto"
-            onClick={() =>
+          <PolicyRadioOption
+            groupName={rootModeGroup}
+            value="fixed"
+            checked={!useAutoDetect}
+            title={t("modal.app_settings.option.upriv_root.fixed")}
+            description={t("modal.app_settings.option.upriv_root.fixed_desc")}
+            onSelect={() =>
               onChange({
-                upriv_root_path: MOCK_UPRIV_ROOT_PATH,
                 auto_detect_vault_root: false,
+                upriv_root_path: config.upriv_root_path,
               })
             }
-          >
-            {t("modal.app_settings.action.choose_folder")}
-          </Button>
-        </div>
-      </SettingsField>
-
-      <SettingsField
-        label={t("modal.app_settings.field.auto_detect_upriv_root")}
-        hint={t("modal.app_settings.field.auto_detect_upriv_root_help")}
-        htmlFor={autoDetectId}
-      >
-        <label className="flex cursor-pointer select-none items-center gap-3">
-          <input
-            id={autoDetectId}
-            type="checkbox"
-            checked={config.auto_detect_vault_root}
-            onChange={(e) => onChange({ auto_detect_vault_root: e.target.checked })}
-            className="h-4 w-4 rounded border-outline-variant/50 text-accent focus:ring-accent/50"
+            footer={
+              <div className="space-y-2">
+                <p className="text-xs leading-relaxed text-on-surface-variant">
+                  {t("modal.app_settings.field.upriv_root_help")}
+                </p>
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-stretch">
+                  <input
+                    type="text"
+                    readOnly
+                    value={config.upriv_root_path}
+                    placeholder={t("modal.app_settings.field.upriv_root_placeholder")}
+                    className={[settingsControlClass, "font-mono text-xs sm:min-w-0 sm:flex-1"].join(" ")}
+                  />
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="md"
+                    className="w-full shrink-0 sm:w-auto"
+                    onClick={() =>
+                      onChange({
+                        auto_detect_vault_root: false,
+                        upriv_root_path: MOCK_UPRIV_ROOT_PATH,
+                      })
+                    }
+                  >
+                    {t("modal.app_settings.action.choose_folder")}
+                  </Button>
+                </div>
+              </div>
+            }
           />
-          <span className="text-sm text-on-surface">{t("modal.app_settings.field.auto_detect_upriv_root_label")}</span>
-        </label>
+        </div>
       </SettingsField>
     </SettingsFormGrid>
   );

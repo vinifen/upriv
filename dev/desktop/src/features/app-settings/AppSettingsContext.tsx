@@ -3,6 +3,7 @@ import { I18nProvider } from "@/i18n";
 import { applyDocumentTheme } from "@/theme";
 import { getMockAppSettings } from "./mockAppSettings";
 import type { AppSettingsConfig, AppSettingsPatch } from "./appSettingsTypes";
+import { normalizeAppSettings } from "./appSettingsTypes";
 
 interface AppSettingsContextValue {
   settings: AppSettingsConfig;
@@ -16,16 +17,18 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
   const [settings, setSettings] = useState<AppSettingsConfig>(() => getMockAppSettings());
 
   const replaceSettings = useCallback((next: AppSettingsConfig) => {
-    setSettings(next);
+    setSettings(normalizeAppSettings(next));
   }, []);
 
   const patchSettings = useCallback((patch: AppSettingsPatch) => {
-    setSettings((current) => ({
-      ...current,
-      ui: patch.ui ? { ...current.ui, ...patch.ui } : current.ui,
-      logging: patch.logging ? { ...current.logging, ...patch.logging } : current.logging,
-      app: patch.app ? { ...current.app, ...patch.app } : current.app,
-    }));
+    setSettings((current) =>
+      normalizeAppSettings({
+        ...current,
+        ui: patch.ui ? { ...current.ui, ...patch.ui } : current.ui,
+        logging: patch.logging ? { ...current.logging, ...patch.logging } : current.logging,
+        app: patch.app ? { ...current.app, ...patch.app } : current.app,
+      }),
+    );
   }, []);
 
   const value = useMemo(

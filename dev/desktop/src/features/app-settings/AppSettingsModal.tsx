@@ -11,6 +11,7 @@ import {
 import {
   APP_SETTINGS_SECTIONS,
   appSettingsEqual,
+  normalizeAppSettings,
   type AppSettingsConfig,
   type AppSettingsSectionId,
 } from "./appSettingsTypes";
@@ -113,7 +114,7 @@ export function AppSettingsModal({ open, onClose }: AppSettingsModalProps) {
 
   const handleConfirmSave = () => {
     if (!draft || !isDirty) return;
-    replaceSettings(draft);
+    replaceSettings(normalizeAppSettings(draft));
     setSavedVisible(true);
     clearTimeout(savedHideRef.current);
     savedHideRef.current = setTimeout(() => setSavedVisible(false), SAVED_INDICATOR_MS);

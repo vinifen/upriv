@@ -41,3 +41,13 @@ export type AppSettingsPatch = {
 export function appSettingsEqual(a: AppSettingsConfig, b: AppSettingsConfig): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }
+
+/** Auto-detect and a fixed path are mutually exclusive. */
+export function normalizeAppSettings(config: AppSettingsConfig): AppSettingsConfig {
+  if (!config.app.auto_detect_vault_root) return config;
+  if (!config.app.upriv_root_path) return config;
+  return {
+    ...config,
+    app: { ...config.app, upriv_root_path: "" },
+  };
+}
