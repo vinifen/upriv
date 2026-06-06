@@ -15,6 +15,9 @@ interface VaultBlockCardProps {
   onOpenNote: (vaultId: string) => void;
   onOpenSettings: (vaultId: string) => void;
   onOpenFileManager: (vault: VaultListItem) => void;
+  onLockVault: (vault: VaultListItem) => void;
+  onUnlockVault: (vault: VaultListItem) => void;
+  onSealVault: (vault: VaultListItem) => void;
 }
 
 function statusIconName(status: VaultDisplayStatus, isOpen: boolean): IconName {
@@ -29,6 +32,9 @@ export function VaultBlockCard({
   onOpenNote,
   onOpenSettings,
   onOpenFileManager,
+  onLockVault,
+  onUnlockVault,
+  onSealVault,
 }: VaultBlockCardProps) {
   const { t } = useTranslation();
   const status = resolveVaultDisplayStatus(vault);
@@ -90,7 +96,13 @@ export function VaultBlockCard({
           onOpenNote={onOpenNote}
           onOpenSettings={onOpenSettings}
         />
-        <VaultLockButton status={status} layout="block" />
+        <VaultLockButton
+          status={status}
+          layout="block"
+          onLock={() => onLockVault(vault)}
+          onUnlock={() => onUnlockVault(vault)}
+          onSeal={() => onSealVault(vault)}
+        />
       </div>
     </article>
   );

@@ -20,7 +20,18 @@ export type PlainSecurityMode = "disk_close" | "disk_open_close";
 export type SecurityMode = EncryptedDirSecurityMode | PlainSecurityMode;
 
 /** Two choices shown in settings UI for encrypted_dir (maps to TOML `always_prompt` or `session_ram`). */
-export type EncryptedDirSecurityUiMode = "session_ram" | "prompt_open_close";
+export const ENCRYPTED_DIR_SECURITY_UI_MODES = ["session_ram", "prompt_open_close"] as const;
+export type EncryptedDirSecurityUiMode = (typeof ENCRYPTED_DIR_SECURITY_UI_MODES)[number];
+
+/** All password-memory choices shown in plain storage mode (includes disk session options). */
+export const PLAIN_SECURITY_UI_MODES = [
+  "session_ram",
+  "prompt_open_close",
+  "disk_close",
+  "disk_open_close",
+] as const;
+
+export type PlainSecurityUiMode = (typeof PLAIN_SECURITY_UI_MODES)[number];
 
 export function encryptedDirSecurityModeToUi(mode: SecurityMode): EncryptedDirSecurityUiMode {
   if (mode === "session_ram") return "session_ram";
@@ -30,6 +41,41 @@ export function encryptedDirSecurityModeToUi(mode: SecurityMode): EncryptedDirSe
 
 export function uiToEncryptedDirSecurityMode(ui: EncryptedDirSecurityUiMode): EncryptedDirSecurityMode {
   return ui === "session_ram" ? "session_ram" : "always_prompt";
+}
+
+export function plainSecurityModeToUi(mode: SecurityMode): PlainSecurityUiMode {
+  if (mode === "disk_open_close") return "disk_open_close";
+  if (mode === "disk_close") return "disk_close";
+  if (mode === "session_ram") return "session_ram";
+  if (mode === "always_prompt" || mode === "ram_on_close_only") return "prompt_open_close";
+  return "session_ram";
+}
+
+export function uiToPlainSecurityMode(ui: PlainSecurityUiMode): SecurityMode {
+  switch (ui) {
+    case "session_ram":
+      return "session_ram";
+    case "prompt_open_close":
+      return "always_prompt";
+    case "disk_close":
+      return "disk_close";
+    case "disk_open_close":
+      return "disk_open_close";
+  }
+}
+
+export function isPlainOnlySecurityMode(mode: SecurityMode): mode is PlainSecurityMode {
+  return mode === "disk_close" || mode === "disk_open_close";
+}
+
+export function normalizeSecurityModeForStorage(
+  storageMode: StorageMode,
+  securityMode: SecurityMode,
+): SecurityMode {
+  if (storageMode === "encrypted_dir" && isPlainOnlySecurityMode(securityMode)) {
+    return "session_ram";
+  }
+  return securityMode;
 }
 export type WipePattern = "random" | "zeros";
 export type SevenZipMethod = "lzma2";

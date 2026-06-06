@@ -10,6 +10,7 @@ export type IconName =
   | "clock"
   | "download"
   | "encrypted"
+  | "eye"
   | "eye-off"
   | "file"
   | "grip-vertical"
@@ -107,6 +108,19 @@ const paths: Record<IconName, ReactNode> = {
         fill="none"
       />
       <path d="M3 3l18 18" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
+    </>
+  ),
+  eye: (
+    <>
+      <path
+        d="M2.5 12s3.5-7 9.5-7 9.5 7 9.5 7-3.5 7-9.5 7-9.5-7-9.5-7z"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        fill="none"
+      />
+      <circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="1.75" fill="none" />
     </>
   ),
   "grip-vertical": (

@@ -10,5 +10,6 @@ export {
 } from "./DropdownPanel";
 export { IconButton, type IconButtonProps } from "./IconButton";
 export { Modal, type ModalProps } from "./Modal";
+export { PasswordInput, type PasswordInputProps } from "./PasswordInput";
 export { StatusDot, type StatusDotProps } from "./StatusDot";
 export { Switch, type SwitchProps } from "./Switch";

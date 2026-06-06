@@ -25,7 +25,6 @@ export interface CreateVaultDraft {
   passwordHint: string;
   passwordValidated: boolean;
   passwordTestFailed: boolean;
-  showPassword: boolean;
   auto_close: VaultSettingsConfig["auto_close"];
   backup: VaultSettingsConfig["backup"];
   seven_zip: Pick<VaultSettingsConfig["seven_zip"], "archive_mode" | "encrypt_file_names">;

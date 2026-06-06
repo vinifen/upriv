@@ -7,6 +7,7 @@ import {
   type VaultListSort,
 } from "./vaultListSort";
 import { DEFAULT_VAULT_LIST_VIEW, type VaultListViewMode } from "./vaultListView";
+import type { VaultPersistence, VaultSession } from "@/types";
 import type { VaultSettingsListPatch } from "./vaultSettingsTypes";
 import type { VaultListItem } from "./types";
 import { reorderVaultList, sortVaultsByOrder } from "./vaultOrder";
@@ -131,6 +132,18 @@ export function useVaultListState(
     setVaults((current) => sortVaultsByOrder([...current, vault]));
   }, []);
 
+  const setVaultRuntimeState = useCallback(
+    (
+      vaultId: string,
+      patch: { session: VaultSession | null; persistence?: VaultPersistence },
+    ) => {
+      setVaults((current) =>
+        current.map((vault) => (vault.id === vaultId ? { ...vault, ...patch } : vault)),
+      );
+    },
+    [],
+  );
+
   return {
     vaults,
     displayVaults,
@@ -145,6 +158,7 @@ export function useVaultListState(
     updateNote,
     removeVault,
     addVault,
+    setVaultRuntimeState,
     updateVaultSettings,
     onDragStart,
     onDragEnd,
