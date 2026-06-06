@@ -26,8 +26,10 @@ const STEPS: CreateVaultStepId[] = ["source", "identity", "password", "general",
 
 function stepButtonClass(isCurrent: boolean): string {
   return [
-    "flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-left transition-colors",
-    isCurrent ? "bg-surface-container" : "bg-surface-container/50 hover:bg-surface-container/80",
+    "flex w-full items-center gap-2.5 rounded-lg border px-3 py-2.5 text-left transition-colors",
+    isCurrent
+      ? "border-2 border-[var(--accent)] bg-surface-container"
+      : "border-outline-variant bg-surface-container/50 hover:bg-surface-container/80",
   ].join(" ");
 }
 

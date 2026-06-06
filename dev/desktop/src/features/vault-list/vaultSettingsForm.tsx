@@ -7,10 +7,20 @@ import {
 } from "@/constants/vault";
 import { useTranslation } from "@/i18n";
 import { VaultChangePasswordPanel } from "./VaultChangePasswordPanel";
-import type { EncryptedDirSecurityUiMode, VaultSettingsConfig } from "./vaultSettingsTypes";
+import type {
+  EncryptedDirSecurityUiMode,
+  PlainSecurityUiMode,
+  SecurityMode,
+  StorageMode,
+  VaultSettingsConfig,
+} from "./vaultSettingsTypes";
 import {
+  ENCRYPTED_DIR_SECURITY_UI_MODES,
   encryptedDirSecurityModeToUi,
+  PLAIN_SECURITY_UI_MODES,
+  plainSecurityModeToUi,
   uiToEncryptedDirSecurityMode,
+  uiToPlainSecurityMode,
 } from "./vaultSettingsTypes";
 
 export const settingsControlClass =
@@ -151,8 +161,8 @@ export function VaultSettingsStorageSection({ config, onChange }: SectionPatchPr
             checked={config.mode === "plain"}
             title={t("modal.settings.option.storage.plain")}
             description={t("modal.settings.option.storage.plain_desc")}
-            badge="less-secure"
-            tone="less-secure"
+            badge="insecure"
+            tone="insecure"
             onSelect={() => onChange({ mode: "plain" })}
           />
         </div>
@@ -370,9 +380,71 @@ interface VaultSettingsSecuritySectionProps extends SectionPatchProps<"security"
   onPasswordHintChange: (passwordHint: string) => void;
 }
 
-const ENCRYPTED_DIR_SECURITY_UI_MODES: EncryptedDirSecurityUiMode[] = ["session_ram", "prompt_open_close"];
+function securityOptionMeta(uiMode: PlainSecurityUiMode | EncryptedDirSecurityUiMode): {
+  badge?: "recommended" | "less-secure" | "insecure" | "default";
+  tone?: "default" | "less-secure" | "insecure";
+} {
+  switch (uiMode) {
+    case "session_ram":
+      return { badge: "recommended" };
+    case "prompt_open_close":
+      return {};
+    case "disk_close":
+      return { badge: "less-secure", tone: "less-secure" };
+    case "disk_open_close":
+      return { badge: "insecure", tone: "insecure" };
+    default:
+      return {};
+  }
+}
 
-const PLAIN_SECURITY_MODES = ["disk_open_close", "disk_close"] as const;
+export interface SecurityModeRadioGroupProps {
+  storageMode: StorageMode;
+  securityMode: SecurityMode;
+  groupName: string;
+  onSelectMode: (mode: SecurityMode) => void;
+}
+
+export function SecurityModeRadioGroup({
+  storageMode,
+  securityMode,
+  groupName,
+  onSelectMode,
+}: SecurityModeRadioGroupProps) {
+  const { t } = useTranslation();
+  const uiModes = storageMode === "plain" ? PLAIN_SECURITY_UI_MODES : ENCRYPTED_DIR_SECURITY_UI_MODES;
+  const selectedUi =
+    storageMode === "plain"
+      ? plainSecurityModeToUi(securityMode)
+      : encryptedDirSecurityModeToUi(securityMode);
+
+  return (
+    <>
+      {uiModes.map((uiMode) => {
+        const meta = securityOptionMeta(uiMode);
+        return (
+          <PolicyRadioOption
+            key={uiMode}
+            groupName={groupName}
+            value={uiMode}
+            checked={selectedUi === uiMode}
+            title={t(`modal.settings.option.security.${uiMode}`)}
+            description={t(`modal.settings.option.security.${uiMode}_desc`)}
+            badge={meta.badge}
+            tone={meta.tone}
+            onSelect={() =>
+              onSelectMode(
+                storageMode === "plain"
+                  ? uiToPlainSecurityMode(uiMode as PlainSecurityUiMode)
+                  : uiToEncryptedDirSecurityMode(uiMode as EncryptedDirSecurityUiMode),
+              )
+            }
+          />
+        );
+      })}
+    </>
+  );
+}
 
 export function VaultSettingsSecuritySection({
   config,
@@ -384,7 +456,6 @@ export function VaultSettingsSecuritySection({
   const { t } = useTranslation();
   const hintId = useId();
   const passwordMemoryGroup = useId();
-  const passwordMemoryUiMode = encryptedDirSecurityModeToUi(config.mode);
 
   return (
     <SettingsFormGrid>
@@ -405,39 +476,23 @@ export function VaultSettingsSecuritySection({
       </SettingsField>
       <SettingsField
         label={t("modal.settings.field.security.mode")}
-        hint={t("modal.settings.field.security.mode_help")}
+        hint={
+          storageMode === "plain"
+            ? t("modal.settings.field.security.mode_help_plain")
+            : t("modal.settings.field.security.mode_help")
+        }
       >
         <div
           role="radiogroup"
           aria-label={t("modal.settings.field.security.mode")}
           className="grid gap-2"
         >
-          {storageMode === "plain"
-            ? PLAIN_SECURITY_MODES.map((mode) => (
-                <PolicyRadioOption
-                  key={mode}
-                  groupName={passwordMemoryGroup}
-                  value={mode}
-                  checked={config.mode === mode}
-                  title={t(`modal.settings.option.security.${mode}`)}
-                  description={t(`modal.settings.option.security.${mode}_desc`)}
-                  badge={mode === "disk_open_close" ? "less-secure" : undefined}
-                  tone={mode === "disk_open_close" ? "less-secure" : "default"}
-                  onSelect={() => onChange({ mode })}
-                />
-              ))
-            : ENCRYPTED_DIR_SECURITY_UI_MODES.map((mode) => (
-                <PolicyRadioOption
-                  key={mode}
-                  groupName={passwordMemoryGroup}
-                  value={mode}
-                  checked={passwordMemoryUiMode === mode}
-                  title={t(`modal.settings.option.security.${mode}`)}
-                  description={t(`modal.settings.option.security.${mode}_desc`)}
-                  badge={mode === "session_ram" ? "recommended" : undefined}
-                  onSelect={() => onChange({ mode: uiToEncryptedDirSecurityMode(mode) })}
-                />
-              ))}
+          <SecurityModeRadioGroup
+            storageMode={storageMode}
+            securityMode={config.mode}
+            groupName={passwordMemoryGroup}
+            onSelectMode={(mode) => onChange({ mode })}
+          />
         </div>
       </SettingsField>
       <VaultChangePasswordPanel />
@@ -594,8 +649,8 @@ interface PolicyRadioOptionProps {
   checked: boolean;
   title: string;
   description: string;
-  badge?: "recommended" | "less-secure" | "default";
-  tone?: "default" | "less-secure";
+  badge?: "recommended" | "less-secure" | "insecure" | "default";
+  tone?: "default" | "less-secure" | "insecure";
   /** Shown below the description while this option is selected. */
   footer?: ReactNode;
   onSelect: () => void;
@@ -614,23 +669,41 @@ export function PolicyRadioOption({
 }: PolicyRadioOptionProps) {
   const { t } = useTranslation();
   const inputId = useId();
+  const isLessSecure = tone === "less-secure";
+  const isInsecure = tone === "insecure";
+  const isRiskTone = isLessSecure || isInsecure;
+
+  const cardBgClass = isInsecure
+    ? "bg-[color-mix(in_srgb,var(--error-container)_18%,var(--surface-container))]"
+    : isLessSecure
+      ? "bg-[color-mix(in_srgb,var(--error-container)_7%,var(--surface-container))]"
+      : "bg-surface-container";
+
+  const cardHoverClass = isInsecure
+    ? "hover:bg-[color-mix(in_srgb,var(--error-container)_26%,var(--surface-container))]"
+    : isLessSecure
+      ? "hover:bg-[color-mix(in_srgb,var(--error-container)_11%,var(--surface-container))]"
+      : "hover:bg-surface-container-highest/60";
+
+  const borderClass = checked
+    ? "border-2 border-[var(--accent)]"
+    : isInsecure
+      ? "border-0"
+      : "border border-outline-variant";
+
+  const radioClass = [
+    "mt-0.5 h-4 w-4 shrink-0 text-accent focus:ring-0 focus-visible:ring-0",
+    isInsecure ? "border-transparent" : "border-outline-variant",
+  ].join(" ");
 
   return (
     <label
       htmlFor={inputId}
       className={[
-        "block cursor-pointer select-none rounded-lg border p-2.5 transition-colors sm:p-3",
-        tone === "less-secure"
-          ? "bg-[color-mix(in_srgb,var(--error-container)_7%,var(--surface-container))]"
-          : "bg-surface-container",
-        checked
-          ? "border-2 border-[var(--accent)]"
-          : [
-              "border-outline-variant",
-              tone === "less-secure"
-                ? "hover:bg-[color-mix(in_srgb,var(--error-container)_11%,var(--surface-container))]"
-                : "hover:bg-surface-container-highest/60",
-            ].join(" "),
+        "block cursor-pointer select-none rounded-lg p-2.5 transition-colors sm:p-3",
+        cardBgClass,
+        borderClass,
+        !checked ? cardHoverClass : "",
       ]
         .filter(Boolean)
         .join(" ")}
@@ -643,14 +716,14 @@ export function PolicyRadioOption({
           value={value}
           checked={checked}
           onChange={onSelect}
-          className={settingsRadioInputClass}
+          className={radioClass}
         />
         <span className="min-w-0 flex-1">
           <span className="flex flex-wrap items-center gap-2">
             <span
               className={[
                 "text-sm font-medium leading-snug",
-                tone === "less-secure" ? "text-on-error-container" : "text-on-surface",
+                isRiskTone ? "text-on-error-container" : "text-on-surface",
               ].join(" ")}
             >
               {title}
@@ -668,6 +741,11 @@ export function PolicyRadioOption({
             {badge === "less-secure" ? (
               <span className="rounded-md bg-on-error-container/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-on-error-container">
                 {t("modal.settings.badge.less_secure")}
+              </span>
+            ) : null}
+            {badge === "insecure" ? (
+              <span className="rounded-md bg-on-error-container/30 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-on-error-container">
+                {t("modal.settings.badge.insecure")}
               </span>
             ) : null}
           </span>

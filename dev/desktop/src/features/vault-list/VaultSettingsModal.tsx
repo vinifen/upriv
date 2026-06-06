@@ -16,7 +16,7 @@ import {
   VaultSettingsVaultSection,
 } from "./vaultSettingsForm";
 import type { VaultSettingsConfig, VaultSettingsListPatch, VaultSettingsSectionId } from "./vaultSettingsTypes";
-import { VAULT_SETTINGS_SECTIONS, vaultSettingsEqual } from "./vaultSettingsTypes";
+import { normalizeSecurityModeForStorage, VAULT_SETTINGS_SECTIONS, vaultSettingsEqual } from "./vaultSettingsTypes";
 
 const SAVED_INDICATOR_MS = 1500;
 
@@ -276,7 +276,15 @@ function renderSettingsSection(
       return (
         <VaultSettingsStorageSection
           config={draft.storage}
-          onChange={(patch) => patchDraft("storage", patch)}
+          onChange={(patch) => {
+            patchDraft("storage", patch);
+            if (patch.mode === "encrypted_dir") {
+              const nextSecurity = normalizeSecurityModeForStorage("encrypted_dir", draft.security.mode);
+              if (nextSecurity !== draft.security.mode) {
+                patchDraft("security", { mode: nextSecurity });
+              }
+            }
+          }}
         />
       );
     case "close":

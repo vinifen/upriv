@@ -1,5 +1,5 @@
 import { useId } from "react";
-import { Button } from "@/components/ui";
+import { Button, PasswordInput } from "@/components/ui";
 import {
   VAULT_DISPLAY_NAME_MAX_LENGTH,
   VAULT_NOTE_MAX_LENGTH,
@@ -10,15 +10,13 @@ import { displayNameFromArchiveFilename } from "@/lib/vaultDisplayName";
 import { VaultSettingsSection } from "@/features/vault-list/VaultSettingsSection";
 import {
   PolicyRadioOption,
+  SecurityModeRadioGroup,
   settingsControlClass,
   SettingsField,
   SettingsFormGrid,
   VaultSettingsBackupSection,
 } from "@/features/vault-list/vaultSettingsForm";
-import {
-  encryptedDirSecurityModeToUi,
-  uiToEncryptedDirSecurityMode,
-} from "@/features/vault-list/vaultSettingsTypes";
+import { normalizeSecurityModeForStorage } from "@/features/vault-list/vaultSettingsTypes";
 import type { CreateVaultDraft, CreateVaultStepId } from "./createVaultTypes";
 import { MOCK_IMPORT_ARCHIVE_PATH } from "./mockImportArchive";
 import { createVaultErrorKey } from "./validationMessages";
@@ -201,41 +199,28 @@ function CreateVaultPasswordStep({
         {isImport ? t("vault.create.password_import_intro") : t("vault.create.password_scratch_intro")}
       </p>
       <SettingsField label={t("vault.create.password")} htmlFor={passwordId}>
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-stretch">
-          <input
-            id={passwordId}
-            type={draft.showPassword ? "text" : "password"}
-            value={draft.password}
-            autoComplete="new-password"
-            onChange={(e) =>
-              onChange({
-                password: e.target.value,
-                passwordValidated: false,
-                passwordTestFailed: false,
-              })
-            }
-            className={[settingsControlClass, "min-w-0 flex-1"].join(" ")}
-          />
-          <Button
-            type="button"
-            variant="ghost"
-            size="md"
-            className="shrink-0 sm:self-stretch"
-            onClick={() => onChange({ showPassword: !draft.showPassword })}
-          >
-            {draft.showPassword ? t("vault.create.action.hide_password") : t("vault.create.action.show_password")}
-          </Button>
-        </div>
+        <PasswordInput
+          id={passwordId}
+          value={draft.password}
+          autoComplete="new-password"
+          onChange={(e) =>
+            onChange({
+              password: e.target.value,
+              passwordValidated: false,
+              passwordTestFailed: false,
+            })
+          }
+          inputClassName={settingsControlClass}
+        />
       </SettingsField>
       {!isImport ? (
         <SettingsField label={t("vault.create.password_confirm")} htmlFor={confirmId}>
-          <input
+          <PasswordInput
             id={confirmId}
-            type={draft.showPassword ? "text" : "password"}
             value={draft.passwordConfirm}
             autoComplete="new-password"
             onChange={(e) => onChange({ passwordConfirm: e.target.value })}
-            className={settingsControlClass}
+            inputClassName={settingsControlClass}
           />
         </SettingsField>
       ) : (
@@ -391,8 +376,6 @@ function CreateVaultAdvancedStep({ draft, onChange }: StepProps) {
   const encryptNamesId = useId();
   const sleepId = useId();
 
-  const securityUi = encryptedDirSecurityModeToUi(draft.security.mode);
-
   return (
     <SettingsFormGrid>
       <p className="text-sm text-on-surface-variant">{t("vault.create.advanced_intro")}</p>
@@ -435,7 +418,15 @@ function CreateVaultAdvancedStep({ draft, onChange }: StepProps) {
                 title={t("modal.settings.option.storage.encrypted_dir")}
                 description={t("modal.settings.option.storage.encrypted_dir_desc")}
                 badge="recommended"
-                onSelect={() => onChange({ storage: { mode: "encrypted_dir" } })}
+                onSelect={() =>
+                  onChange({
+                    storage: { mode: "encrypted_dir" },
+                    security: {
+                      ...draft.security,
+                      mode: normalizeSecurityModeForStorage("encrypted_dir", draft.security.mode),
+                    },
+                  })
+                }
               />
               <PolicyRadioOption
                 groupName={storageGroup}
@@ -443,14 +434,22 @@ function CreateVaultAdvancedStep({ draft, onChange }: StepProps) {
                 checked={draft.storage.mode === "plain"}
                 title={t("modal.settings.option.storage.plain")}
                 description={t("modal.settings.option.storage.plain_desc")}
-                badge="less-secure"
-                tone="less-secure"
-                onSelect={() => onChange({ storage: { mode: "plain" } })}
+                badge="insecure"
+                tone="insecure"
+                onSelect={() =>
+                  onChange({
+                    storage: { mode: "plain" },
+                    security: {
+                      ...draft.security,
+                      mode: normalizeSecurityModeForStorage("plain", draft.security.mode),
+                    },
+                  })
+                }
               />
             </div>
           </SettingsField>
           {draft.storage.mode === "plain" ? (
-            <p className="text-xs text-on-error-container/90">{t("warning.plain_mode")}</p>
+            <p className="text-xs font-medium text-on-error-container">{t("warning.plain_mode")}</p>
           ) : null}
 
           <SettingsField label={t("modal.settings.field.close.default_action")} hint={t("modal.settings.field.close.default_action_help")}>
@@ -488,30 +487,20 @@ function CreateVaultAdvancedStep({ draft, onChange }: StepProps) {
             <span className="text-sm text-on-surface">{t("modal.settings.field.close.secure_wipe")}</span>
           </label>
 
-          <SettingsField label={t("modal.settings.field.security.mode")} hint={t("modal.settings.field.security.mode_help")}>
+          <SettingsField
+            label={t("modal.settings.field.security.mode")}
+            hint={
+              draft.storage.mode === "plain"
+                ? t("modal.settings.field.security.mode_help_plain")
+                : t("modal.settings.field.security.mode_help")
+            }
+          >
             <div role="radiogroup" className="grid gap-2">
-              <PolicyRadioOption
+              <SecurityModeRadioGroup
+                storageMode={draft.storage.mode}
+                securityMode={draft.security.mode}
                 groupName={securityGroup}
-                value="session_ram"
-                checked={securityUi === "session_ram"}
-                title={t("modal.settings.option.security.session_ram")}
-                description={t("modal.settings.option.security.session_ram_desc")}
-                badge="recommended"
-                onSelect={() =>
-                  onChange({ security: { ...draft.security, mode: uiToEncryptedDirSecurityMode("session_ram") } })
-                }
-              />
-              <PolicyRadioOption
-                groupName={securityGroup}
-                value="prompt_open_close"
-                checked={securityUi === "prompt_open_close"}
-                title={t("modal.settings.option.security.prompt_open_close")}
-                description={t("modal.settings.option.security.prompt_open_close_desc")}
-                onSelect={() =>
-                  onChange({
-                    security: { ...draft.security, mode: uiToEncryptedDirSecurityMode("prompt_open_close") },
-                  })
-                }
+                onSelectMode={(mode) => onChange({ security: { ...draft.security, mode } })}
               />
             </div>
           </SettingsField>

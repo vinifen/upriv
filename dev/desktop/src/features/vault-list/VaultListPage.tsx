@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { AppSettingsModal, useAppSettingsContext } from "@/features/app-settings";
 import { CreateVaultWizardModal, type CreateVaultResult } from "@/features/vault-create";
 import { FileManagerLayer, useFileManager } from "@/features/file-manager";
@@ -13,6 +13,13 @@ import { VaultListSectionHeader } from "./VaultListSectionHeader";
 import { VaultBackupsModal } from "./VaultBackupsModal";
 import { VaultNoteModal } from "./VaultNoteModal";
 import { VaultSettingsModal } from "./VaultSettingsModal";
+import { VaultLifecycleModal } from "./VaultLifecycleModal";
+import {
+  clearVaultPasswordInRam,
+  setVaultPasswordInRam,
+} from "./mockVaultSessionPassword";
+import type { VaultLifecycleRequest } from "./vaultLifecycleTypes";
+import type { VaultListItem } from "./types";
 import type { VaultListSort } from "./vaultListSort";
 import type { VaultListViewMode } from "./vaultListView";
 import { useVaultListState } from "./useVaultListState";
@@ -31,6 +38,8 @@ export function VaultListPage() {
   const [logsOpen, setLogsOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [createVaultOpen, setCreateVaultOpen] = useState(false);
+  const [lifecycleRequest, setLifecycleRequest] = useState<VaultLifecycleRequest | null>(null);
+  const [lifecycleSubmitting, setLifecycleSubmitting] = useState(false);
 
   const listDefaults = useMemo(
     () => ({
@@ -57,6 +66,7 @@ export function VaultListPage() {
     updateNote,
     removeVault,
     addVault,
+    setVaultRuntimeState,
     updateVaultSettings,
     onDragStart,
     onDragEnd,
@@ -101,6 +111,18 @@ export function VaultListPage() {
     [vaults, settingsVaultId],
   );
 
+  const lifecycleVault = useMemo(
+    () =>
+      lifecycleRequest ? vaults.find((vault) => vault.id === lifecycleRequest.vaultId) ?? null : null,
+    [lifecycleRequest, vaults],
+  );
+
+  useEffect(() => {
+    for (const vault of vaults) {
+      if (vault.session === "open") setVaultPasswordInRam(vault.id);
+    }
+  }, [vaults]);
+
   const existingVaultIds = useMemo(() => vaults.map((vault) => vault.id), [vaults]);
   const existingOrders = useMemo(
     () => vaults.map((vault) => vault.order ?? 0),
@@ -133,6 +155,49 @@ export function VaultListPage() {
     runRefreshAnimation();
   }, [resetList, runRefreshAnimation]);
 
+  const handleLockVault = useCallback((vault: VaultListItem) => {
+    const intent = vault.storageMode === "plain" ? "seal" : "close";
+    setLifecycleRequest({ vaultId: vault.id, intent });
+  }, []);
+
+  const handleUnlockVault = useCallback((vault: VaultListItem) => {
+    setLifecycleRequest({ vaultId: vault.id, intent: "unlock" });
+  }, []);
+
+  const handleSealVault = useCallback((vault: VaultListItem) => {
+    setLifecycleRequest({ vaultId: vault.id, intent: "seal" });
+  }, []);
+
+  const handleLifecycleConfirm = useCallback(
+    async (_password: string | null) => {
+      if (!lifecycleRequest) return;
+      const { vaultId, intent } = lifecycleRequest;
+
+      setLifecycleSubmitting(true);
+      try {
+        await new Promise((resolve) => setTimeout(resolve, 500));
+
+        if (intent === "unlock") {
+          setVaultRuntimeState(vaultId, { session: "open", persistence: "closed" });
+          setVaultPasswordInRam(vaultId);
+        } else if (intent === "close") {
+          closeFileManager(vaultId);
+          setVaultRuntimeState(vaultId, { session: null, persistence: "closed" });
+          clearVaultPasswordInRam(vaultId);
+        } else {
+          closeFileManager(vaultId);
+          setVaultRuntimeState(vaultId, { session: null, persistence: "sealed" });
+          clearVaultPasswordInRam(vaultId);
+        }
+
+        setLifecycleRequest(null);
+      } finally {
+        setLifecycleSubmitting(false);
+      }
+    },
+    [closeFileManager, lifecycleRequest, setVaultRuntimeState],
+  );
+
   return (
     <div className="flex min-h-screen flex-col bg-background text-on-surface">
       <VaultListHeader
@@ -164,6 +229,9 @@ export function VaultListPage() {
             onOpenNote={setNoteVaultId}
             onOpenSettings={setSettingsVaultId}
             onOpenFileManager={openFromVault}
+            onLockVault={handleLockVault}
+            onUnlockVault={handleUnlockVault}
+            onSealVault={handleSealVault}
             onDragStart={onDragStart}
             onDragEnd={onDragEnd}
             onDragOver={onDragOver}
@@ -172,6 +240,16 @@ export function VaultListPage() {
           />
         </section>
       </main>
+      <VaultLifecycleModal
+        vault={lifecycleVault}
+        intent={lifecycleRequest?.intent ?? null}
+        open={lifecycleRequest !== null}
+        submitting={lifecycleSubmitting}
+        onClose={() => {
+          if (!lifecycleSubmitting) setLifecycleRequest(null);
+        }}
+        onConfirm={handleLifecycleConfirm}
+      />
       <VaultNoteModal
         vault={noteVault}
         open={noteVaultId !== null}

@@ -1,5 +1,9 @@
 import type { CreateVaultDraft } from "./createVaultTypes";
 
+export function createVaultDraftEqual(a: CreateVaultDraft, b: CreateVaultDraft): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
 export function defaultOrderAtEnd(existingOrders: readonly number[]): number {
   if (existingOrders.length === 0) return 1;
   return Math.max(...existingOrders) + 1;
@@ -17,7 +21,6 @@ export function createEmptyDraft(existingOrders: readonly number[]): CreateVault
     passwordHint: "",
     passwordValidated: false,
     passwordTestFailed: false,
-    showPassword: false,
     auto_close: {
       enabled: false,
       idle_minutes: 15,

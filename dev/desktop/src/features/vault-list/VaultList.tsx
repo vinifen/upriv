@@ -15,6 +15,9 @@ interface VaultListProps {
   onOpenNote: (vaultId: string) => void;
   onOpenSettings: (vaultId: string) => void;
   onOpenFileManager: (vault: VaultListItem) => void;
+  onLockVault: (vault: VaultListItem) => void;
+  onUnlockVault: (vault: VaultListItem) => void;
+  onSealVault: (vault: VaultListItem) => void;
   onDragStart: (vaultId: string) => (event: React.DragEvent) => void;
   onDragEnd: () => void;
   onDragOver: (vaultId: string) => (event: React.DragEvent) => void;
@@ -33,6 +36,9 @@ export function VaultList({
   onOpenNote,
   onOpenSettings,
   onOpenFileManager,
+  onLockVault,
+  onUnlockVault,
+  onSealVault,
   onDragStart,
   onDragEnd,
   onDragOver,
@@ -61,6 +67,9 @@ export function VaultList({
               onOpenNote={onOpenNote}
               onOpenSettings={onOpenSettings}
               onOpenFileManager={onOpenFileManager}
+              onLockVault={onLockVault}
+              onUnlockVault={onUnlockVault}
+              onSealVault={onSealVault}
             />
           ))}
         </div>
@@ -85,6 +94,9 @@ export function VaultList({
           onOpenNote={onOpenNote}
           onOpenSettings={onOpenSettings}
           onOpenFileManager={onOpenFileManager}
+          onLockVault={onLockVault}
+          onUnlockVault={onUnlockVault}
+          onSealVault={onSealVault}
           onDragStart={onDragStart}
           onDragEnd={onDragEnd}
           onDragOver={onDragOver}

@@ -24,6 +24,7 @@ export function AppSettingsAppearanceSection({ config, onChange }: SectionPatchP
   const { t } = useTranslation();
   const localeGroup = useId();
   const themeGroup = useId();
+  const dockExpandedId = useId();
 
   return (
     <SettingsFormGrid>
@@ -74,16 +75,19 @@ export function AppSettingsAppearanceSection({ config, onChange }: SectionPatchP
       <SettingsField
         label={t("modal.app_settings.field.file_manager_dock_expanded")}
         hint={t("modal.app_settings.field.file_manager_dock_expanded_help")}
+        htmlFor={dockExpandedId}
       >
-        <label className="flex cursor-pointer items-center justify-between gap-3 rounded-lg bg-surface-container px-3 py-2.5">
+        <label htmlFor={dockExpandedId} className="flex cursor-pointer select-none items-center gap-3">
+          <input
+            id={dockExpandedId}
+            type="checkbox"
+            checked={config.file_manager_dock_expanded}
+            onChange={(e) => onChange({ file_manager_dock_expanded: e.target.checked })}
+            className="h-4 w-4 shrink-0 rounded border-outline-variant/50 text-accent focus:ring-accent/50"
+          />
           <span className="text-sm text-on-surface">
             {t("modal.app_settings.field.file_manager_dock_expanded_label")}
           </span>
-          <Switch
-            checked={config.file_manager_dock_expanded}
-            onChange={(file_manager_dock_expanded) => onChange({ file_manager_dock_expanded })}
-            label={t("modal.app_settings.field.file_manager_dock_expanded")}
-          />
         </label>
       </SettingsField>
     </SettingsFormGrid>

@@ -1,5 +1,5 @@
 import { useId, useState } from "react";
-import { Button } from "@/components/ui";
+import { Button, PasswordInput } from "@/components/ui";
 import { useTranslation } from "@/i18n";
 import { settingsControlClass, SettingsField } from "./vaultSettingsForm";
 
@@ -94,9 +94,8 @@ export function VaultChangePasswordPanel({ onPasswordChanged }: VaultChangePassw
           </p>
 
           <SettingsField label={t("vault.change_password.current")} htmlFor={currentId}>
-            <input
+            <PasswordInput
               id={currentId}
-              type="password"
               value={currentPassword}
               onChange={(e) => {
                 setCurrentPassword(e.target.value);
@@ -104,14 +103,13 @@ export function VaultChangePasswordPanel({ onPasswordChanged }: VaultChangePassw
                 setSuccess(false);
               }}
               autoComplete="current-password"
-              className={settingsControlClass}
+              inputClassName={settingsControlClass}
             />
           </SettingsField>
 
           <SettingsField label={t("vault.change_password.new")} htmlFor={newId}>
-            <input
+            <PasswordInput
               id={newId}
-              type="password"
               value={newPassword}
               onChange={(e) => {
                 setNewPassword(e.target.value);
@@ -119,14 +117,13 @@ export function VaultChangePasswordPanel({ onPasswordChanged }: VaultChangePassw
                 setSuccess(false);
               }}
               autoComplete="new-password"
-              className={settingsControlClass}
+              inputClassName={settingsControlClass}
             />
           </SettingsField>
 
           <SettingsField label={t("vault.change_password.confirm")} htmlFor={confirmId}>
-            <input
+            <PasswordInput
               id={confirmId}
-              type="password"
               value={confirmPassword}
               onChange={(e) => {
                 setConfirmPassword(e.target.value);
@@ -134,7 +131,7 @@ export function VaultChangePasswordPanel({ onPasswordChanged }: VaultChangePassw
                 setSuccess(false);
               }}
               autoComplete="new-password"
-              className={settingsControlClass}
+              inputClassName={settingsControlClass}
             />
           </SettingsField>
 

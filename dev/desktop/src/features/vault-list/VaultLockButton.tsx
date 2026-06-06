@@ -37,9 +37,11 @@ export function VaultLockButton({
   const showSealSplit = !isSealed;
   const label = isOpen ? t("action.lock") : t("action.unlock");
 
-  const surfaceClass = isOpen
-    ? "bg-primary text-on-primary hover:opacity-90"
-    : "bg-surface-container-highest text-on-surface hover:brightness-110";
+  const unlockSurfaceClass = "bg-surface-container-highest text-on-surface hover:brightness-110";
+  const lockSurfaceClass =
+    "bg-[color-mix(in_srgb,var(--primary)_30%,var(--surface-container-highest))] text-on-surface hover:brightness-110";
+
+  const surfaceClass = isOpen ? lockSurfaceClass : unlockSurfaceClass;
 
   const labelClass = "truncate font-mono text-sm font-medium";
 
@@ -101,7 +103,6 @@ export function VaultLockButton({
       className={[
         "relative flex flex-col items-stretch",
         layout === "block" ? "w-full" : "w-36",
-        isOpen ? "shadow-lg shadow-primary/10" : "",
       ].join(" ")}
       onClick={(event) => event.stopPropagation()}
     >
@@ -120,12 +121,7 @@ export function VaultLockButton({
         </button>
         <span
           aria-hidden
-          className="w-px shrink-0 self-stretch"
-          style={{
-            backgroundColor: isOpen
-              ? "var(--split-divider-on-primary)"
-              : "var(--split-divider)",
-          }}
+          className="w-px shrink-0 self-stretch bg-[var(--split-divider)]"
         />
         <button
           type="button"

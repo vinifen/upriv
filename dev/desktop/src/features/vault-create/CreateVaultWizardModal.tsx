@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button, Modal } from "@/components/ui";
 import { useTranslation } from "@/i18n";
 import { buildCreateVaultResult } from "./buildCreateVaultResult";
-import { createEmptyDraft } from "./createVaultDefaults";
+import { createEmptyDraft, createVaultDraftEqual } from "./createVaultDefaults";
 import { CreateVaultStepNav } from "./CreateVaultStepNav";
 import { renderCreateVaultStep } from "./createVaultForm";
 import { mockTestArchivePassword } from "./mockImportArchive";
@@ -35,22 +35,37 @@ export function CreateVaultWizardModal({
   onCreate,
 }: CreateVaultWizardModalProps) {
   const { t } = useTranslation();
+  const [baseline, setBaseline] = useState<CreateVaultDraft>(() => createEmptyDraft(existingOrders));
   const [draft, setDraft] = useState<CreateVaultDraft>(() => createEmptyDraft(existingOrders));
   const [currentStep, setCurrentStep] = useState<CreateVaultStepId>("source");
   const [visitedSteps, setVisitedSteps] = useState<Set<CreateVaultStepId>>(() => new Set(["source"]));
   const [submitAttempted, setSubmitAttempted] = useState(false);
   const [testingPassword, setTestingPassword] = useState(false);
+  const [discardConfirmOpen, setDiscardConfirmOpen] = useState(false);
 
   useEffect(() => {
     if (!open) return;
-    setDraft(createEmptyDraft(existingOrders));
+    const empty = createEmptyDraft(existingOrders);
+    setBaseline(empty);
+    setDraft(empty);
     setCurrentStep("source");
     setVisitedSteps(new Set(["source"]));
     setSubmitAttempted(false);
     setTestingPassword(false);
+    setDiscardConfirmOpen(false);
   }, [open, existingOrders]);
 
+  const isDirty = useMemo(
+    () => !createVaultDraftEqual(draft, baseline),
+    [draft, baseline],
+  );
+
+  const dismissFooterConfirm = useCallback(() => {
+    setDiscardConfirmOpen(false);
+  }, []);
+
   const patchDraft = useCallback((patch: Partial<CreateVaultDraft>) => {
+    setDiscardConfirmOpen(false);
     setDraft((current) => ({ ...current, ...patch }));
   }, []);
 
@@ -75,6 +90,7 @@ export function CreateVaultWizardModal({
   const canCreate = canSubmitCreateVault(draft, existingVaultIds);
 
   const goToStep = (stepId: CreateVaultStepId) => {
+    setDiscardConfirmOpen(false);
     setCurrentStep(stepId);
     setVisitedSteps((current) => new Set(current).add(stepId));
   };
@@ -107,33 +123,70 @@ export function CreateVaultWizardModal({
     setVisitedSteps(new Set(CREATE_VAULT_STEPS));
     if (!canSubmitCreateVault(draft, existingVaultIds)) return;
     onCreate(buildCreateVaultResult(draft, existingVaultIds));
-    onClose();
+    handleClose();
   };
 
   const handleClose = () => {
+    setDiscardConfirmOpen(false);
     setSubmitAttempted(false);
     onClose();
+  };
+
+  const requestClose = () => {
+    if (discardConfirmOpen) {
+      dismissFooterConfirm();
+      return;
+    }
+    if (isDirty) {
+      setDiscardConfirmOpen(true);
+      return;
+    }
+    handleClose();
+  };
+
+  const handleDiscardAndClose = () => {
+    setDraft(baseline);
+    handleClose();
   };
 
   if (!open) return null;
 
   const footer = (
     <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-      <Button variant="ghost" size="md" disabled={isFirstStep} onClick={handleBack}>
-        {t("vault.create.action.back")}
-      </Button>
-      <div className="flex flex-col gap-2 sm:flex-row sm:justify-end [&_button]:w-full sm:[&_button]:w-auto">
-        <Button variant="ghost" size="md" onClick={handleClose}>
-          {t("action.cancel")}
-        </Button>
-        {isLastStep ? (
-          <Button variant="primary" size="md" disabled={!canCreate} onClick={handleCreate}>
-            {t("vault.create.action.create")}
-          </Button>
+      <div className="min-h-[1.25rem] text-sm" aria-live="polite">
+        {discardConfirmOpen ? (
+          <p className="text-on-surface-variant">{t("modal.settings.discard_confirm")}</p>
         ) : (
-          <Button variant="primary" size="md" onClick={handleNext}>
-            {t("vault.create.action.next")}
+          <Button variant="ghost" size="md" disabled={isFirstStep || discardConfirmOpen} onClick={handleBack}>
+            {t("vault.create.action.back")}
           </Button>
+        )}
+      </div>
+      <div className="flex shrink-0 flex-col gap-2 sm:flex-row sm:flex-wrap sm:justify-end [&_button]:w-full sm:[&_button]:w-auto">
+        {discardConfirmOpen ? (
+          <>
+            <Button variant="ghost" size="md" onClick={dismissFooterConfirm}>
+              {t("modal.settings.discard_keep_editing")}
+            </Button>
+            <Button variant="danger" size="md" onClick={handleDiscardAndClose}>
+              {t("modal.settings.discard_confirm_action")}
+            </Button>
+          </>
+        ) : (
+          <>
+            <Button variant="ghost" size="md" onClick={requestClose}>
+              {t("action.cancel")}
+            </Button>
+            {isLastStep ? (
+              <Button variant="primary" size="md" disabled={!canCreate} onClick={handleCreate}>
+                {t("vault.create.action.create")}
+              </Button>
+            ) : (
+              <Button variant="primary" size="md" onClick={handleNext}>
+                {t("vault.create.action.next")}
+              </Button>
+            )}
+          </>
         )}
       </div>
     </div>
@@ -143,11 +196,16 @@ export function CreateVaultWizardModal({
     <Modal
       open={open}
       title={t("vault.create.title")}
-      onClose={handleClose}
+      onClose={requestClose}
       panelClassName="max-w-3xl"
       footer={footer}
     >
-      <div className="max-h-[min(52vh,30rem)] overflow-y-auto p-1 [scrollbar-gutter:stable] sm:max-h-[min(58vh,34rem)]">
+      <div
+        className="max-h-[min(52vh,30rem)] overflow-y-auto p-1 [scrollbar-gutter:stable] sm:max-h-[min(58vh,34rem)]"
+        onPointerDown={() => {
+          if (discardConfirmOpen) dismissFooterConfirm();
+        }}
+      >
         {renderCreateVaultStep(currentStep, {
           draft,
           errors: submitAttempted || visitedSteps.has(currentStep) ? currentErrors : [],
