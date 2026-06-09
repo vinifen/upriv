@@ -64,8 +64,16 @@ export function FileManagerDialogs({ fm }: FileManagerDialogsProps) {
 
       {fm.workspace.toastMessage
         ? createPortal(
-            <div className="pointer-events-none fixed bottom-20 left-1/2 z-[130] max-w-[min(90vw,24rem)] -translate-x-1/2 rounded-xl bg-surface-container-high px-4 py-3 text-center text-sm text-on-surface shadow-modal">
-              {fm.workspace.toastMessage}
+            <div className="pointer-events-auto fixed bottom-20 left-1/2 z-[130] flex max-w-[min(90vw,28rem)] -translate-x-1/2 items-start gap-2 rounded-xl bg-surface-container-high py-3 pl-4 pr-2 text-sm text-on-surface shadow-modal">
+              <p className="min-w-0 flex-1 leading-snug">{fm.workspace.toastMessage}</p>
+              <button
+                type="button"
+                className="shrink-0 rounded-md px-1.5 py-0.5 text-lg leading-none text-on-surface-variant transition-colors hover:bg-surface-container-highest hover:text-on-surface"
+                aria-label={t("action.close")}
+                onClick={fm.dismissToast}
+              >
+                ×
+              </button>
             </div>,
             document.body,
           )

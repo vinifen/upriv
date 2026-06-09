@@ -1,7 +1,19 @@
-import { useId } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import { Button, Switch } from "@/components/ui";
 import type { LocaleId } from "@/i18n";
 import { useTranslation } from "@/i18n";
+import type { VaultListItem } from "@/features/vault-list/types";
+import { resolveVaultDisplayStatus } from "@/types";
+import { vaultStatusI18nKey } from "@/theme/vault-status";
+import {
+  downloadVaultsZip,
+  listVaultsBlockingBulkExport,
+  listVaultsReadyForBulkExport,
+  vaultBlocksBulkExport,
+} from "./vaultBulkExport";
+
+const vaultCheckboxClass =
+  "h-4 w-4 shrink-0 rounded border-outline-variant/50 bg-surface-container-high text-accent focus:ring-accent/50 disabled:cursor-not-allowed disabled:opacity-40";
 import {
   PolicyRadioOption,
   settingsControlClass,
@@ -17,14 +29,13 @@ interface SectionPatchProps<S extends keyof AppSettingsConfig> {
 }
 
 const LOCALES: LocaleId[] = ["en", "pt-BR"];
-const THEMES: UiTheme[] = ["dark", "light"];
+const THEMES: UiTheme[] = ["dark", "neutral", "light"];
 const LOG_LEVELS = ["error", "warn", "info", "debug"] as const satisfies readonly LogLevel[];
 
 export function AppSettingsAppearanceSection({ config, onChange }: SectionPatchProps<"ui">) {
   const { t } = useTranslation();
   const localeGroup = useId();
   const themeGroup = useId();
-  const dockExpandedId = useId();
 
   return (
     <SettingsFormGrid>
@@ -70,25 +81,6 @@ export function AppSettingsAppearanceSection({ config, onChange }: SectionPatchP
             />
           ))}
         </div>
-      </SettingsField>
-
-      <SettingsField
-        label={t("modal.app_settings.field.file_manager_dock_expanded")}
-        hint={t("modal.app_settings.field.file_manager_dock_expanded_help")}
-        htmlFor={dockExpandedId}
-      >
-        <label htmlFor={dockExpandedId} className="flex cursor-pointer select-none items-center gap-3">
-          <input
-            id={dockExpandedId}
-            type="checkbox"
-            checked={config.file_manager_dock_expanded}
-            onChange={(e) => onChange({ file_manager_dock_expanded: e.target.checked })}
-            className="h-4 w-4 shrink-0 rounded border-outline-variant/50 text-accent focus:ring-accent/50"
-          />
-          <span className="text-sm text-on-surface">
-            {t("modal.app_settings.field.file_manager_dock_expanded_label")}
-          </span>
-        </label>
       </SettingsField>
     </SettingsFormGrid>
   );
@@ -159,6 +151,168 @@ export function AppSettingsHiddenVaultsSection({
         </span>
       </label>
     </SettingsFormGrid>
+  );
+}
+
+interface AppSettingsDownloadVaultsSectionProps {
+  vaults: VaultListItem[];
+  /** Resets transient checklist when the system settings modal opens. */
+  modalOpen: boolean;
+}
+
+export function AppSettingsDownloadVaultsSection({
+  vaults,
+  modalOpen,
+}: AppSettingsDownloadVaultsSectionProps) {
+  const { t } = useTranslation();
+  const selectAllId = useId();
+
+  const sortedVaults = useMemo(
+    () => [...vaults].sort((a, b) => a.displayName.localeCompare(b.displayName, undefined, { sensitivity: "base" })),
+    [vaults],
+  );
+  const blockingVaults = useMemo(() => listVaultsBlockingBulkExport(vaults), [vaults]);
+  const readyVaults = useMemo(() => listVaultsReadyForBulkExport(vaults), [vaults]);
+  const readyIds = useMemo(() => readyVaults.map((vault) => vault.id), [readyVaults]);
+
+  const [selected, setSelected] = useState<Set<string>>(() => new Set());
+
+  useEffect(() => {
+    if (!modalOpen) {
+      setSelected(new Set());
+      return;
+    }
+    setSelected(new Set(readyIds));
+  }, [modalOpen, readyIds]);
+
+  const allReadySelected =
+    readyVaults.length > 0 && readyVaults.every((vault) => selected.has(vault.id));
+  const someReadySelected = readyVaults.some((vault) => selected.has(vault.id));
+  const selectedReady = useMemo(
+    () => readyVaults.filter((vault) => selected.has(vault.id)),
+    [readyVaults, selected],
+  );
+  const canDownload = selectedReady.length > 0;
+
+  const toggleVault = (vaultId: string) => {
+    setSelected((current) => {
+      const next = new Set(current);
+      if (next.has(vaultId)) next.delete(vaultId);
+      else next.add(vaultId);
+      return next;
+    });
+  };
+
+  const toggleSelectAllReady = () => {
+    if (allReadySelected) {
+      setSelected(new Set());
+      return;
+    }
+    setSelected(new Set(readyIds));
+  };
+
+  const handleDownload = () => {
+    if (!canDownload) return;
+    const stamp = new Date().toISOString().slice(0, 10);
+    downloadVaultsZip(
+      selectedReady,
+      t("modal.app_settings.download_vaults_zip_name", { date: stamp }),
+    );
+  };
+
+  return (
+    <div className="space-y-2">
+      <p className="text-xs leading-snug text-on-surface-variant">
+        {t("modal.app_settings.section.download_vaults_intro")}
+      </p>
+
+      {blockingVaults.length > 0 ? (
+        <p
+          className="rounded-md bg-error-container/10 px-2 py-1.5 text-[11px] leading-snug text-on-error-container"
+          role="alert"
+        >
+          <span className="font-medium">{t("warning.download_vaults_open_title")}</span>
+          <span className="text-on-error-container/85"> — {t("warning.download_vaults_open_body")}</span>
+        </p>
+      ) : null}
+
+      {vaults.length === 0 ? (
+        <p className="text-xs text-on-surface-variant">{t("modal.app_settings.download_vaults_empty")}</p>
+      ) : (
+        <div className="space-y-0.5">
+          {readyVaults.length > 0 ? (
+            <label
+              htmlFor={selectAllId}
+              className="flex cursor-pointer select-none items-center gap-2.5 py-1"
+            >
+              <input
+                id={selectAllId}
+                type="checkbox"
+                checked={allReadySelected}
+                ref={(node) => {
+                  if (node) node.indeterminate = someReadySelected && !allReadySelected;
+                }}
+                onChange={toggleSelectAllReady}
+                className={vaultCheckboxClass}
+              />
+              <span className="text-xs text-on-surface-variant">{t("modal.app_settings.select_all_vaults")}</span>
+            </label>
+          ) : null}
+
+          <ul className="max-h-[min(13rem,36vh)] space-y-0.5 overflow-y-auto">
+            {sortedVaults.map((vault) => {
+              const blocked = vaultBlocksBulkExport(vault);
+              const checkboxId = `download-vault-${vault.id}`;
+              const status = resolveVaultDisplayStatus(vault);
+
+              return (
+                <li key={vault.id} className={blocked ? "opacity-60" : ""}>
+                  <label
+                    htmlFor={checkboxId}
+                    className={[
+                      "flex cursor-pointer select-none items-center gap-2.5 rounded-md py-1",
+                      blocked ? "cursor-not-allowed" : "hover:bg-surface-container-high/40",
+                    ].join(" ")}
+                  >
+                    <input
+                      id={checkboxId}
+                      type="checkbox"
+                      checked={!blocked && selected.has(vault.id)}
+                      disabled={blocked}
+                      onChange={() => toggleVault(vault.id)}
+                      className={vaultCheckboxClass}
+                    />
+                    <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
+                      <span className="truncate text-xs text-on-surface">{vault.displayName}</span>
+                      {blocked ? (
+                        <span className="shrink-0 text-[10px] text-on-error-container/85">
+                          ({t(vaultStatusI18nKey[status])})
+                        </span>
+                      ) : null}
+                    </span>
+                  </label>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
+
+      <div className="flex flex-wrap items-center gap-2">
+        <Button variant="secondary" size="sm" disabled={!canDownload} onClick={handleDownload}>
+          {selectedReady.length === readyVaults.length && readyVaults.length > 0
+            ? t("modal.app_settings.action.download_all_vaults")
+            : t("modal.app_settings.action.download_vaults_selected")}
+        </Button>
+        {someReadySelected ? (
+          <span className="text-[11px] tabular-nums text-on-surface-variant">
+            {t("modal.app_settings.download_vaults_selected_count", {
+              count: String(selectedReady.length),
+            })}
+          </span>
+        ) : null}
+      </div>
+    </div>
   );
 }
 

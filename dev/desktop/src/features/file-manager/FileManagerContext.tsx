@@ -17,25 +17,32 @@ interface FileManagerState {
   entries: Record<string, FileManagerEntry>;
   order: string[];
   maximizedVaultId: string | null;
+  /** Last vault the user opened or brought to front — used for dock highlight when minimized. */
+  focusedVaultId: string | null;
 }
 
 type FileManagerAction =
   | { type: "open_from_vault"; vault: VaultListItem }
   | { type: "minimize"; vaultId: string }
   | { type: "maximize"; vaultId: string }
-  | { type: "close"; vaultId: string }
+  | { type: "dismiss"; vaultId: string }
+  | { type: "purge_for_vault_close"; vaultId: string }
   | { type: "workspace"; vaultId: string; action: VaultWorkspaceAction };
 
 interface FileManagerContextValue {
   entries: Record<string, FileManagerEntry>;
   entryOrder: readonly string[];
   maximizedVaultId: string | null;
+  focusedVaultId: string | null;
   maximizedEntry: FileManagerEntry | null;
   minimizedEntries: FileManagerEntry[];
   openFromVault: (vault: VaultListItem) => void;
   minimize: (vaultId: string) => void;
   maximize: (vaultId: string) => void;
-  close: (vaultId: string) => void;
+  /** Hide file-manager UI; vault stays open on the list. */
+  dismiss: (vaultId: string) => void;
+  /** Vault closed/sealed/deleted — tear down in-memory file session. */
+  purgeForVaultClose: (vaultId: string) => void;
   dispatchWorkspace: (vaultId: string, action: VaultWorkspaceAction) => void;
 }
 
@@ -45,7 +52,20 @@ const initialState: FileManagerState = {
   entries: {},
   order: [],
   maximizedVaultId: null,
+  focusedVaultId: null,
 };
+
+function removeEntry(state: FileManagerState, vaultId: string): FileManagerState {
+  if (!state.entries[vaultId]) return state;
+  const nextEntries = { ...state.entries };
+  delete nextEntries[vaultId];
+  return {
+    entries: nextEntries,
+    order: state.order.filter((id) => id !== vaultId),
+    maximizedVaultId: state.maximizedVaultId === vaultId ? null : state.maximizedVaultId,
+    focusedVaultId: state.focusedVaultId === vaultId ? null : state.focusedVaultId,
+  };
+}
 
 function minimizeEntry(
   state: FileManagerState,
@@ -82,6 +102,7 @@ function fileManagerReducer(state: FileManagerState, action: FileManagerAction):
         entries: { ...next.entries, [action.vault.id]: entry },
         order: next.order.includes(action.vault.id) ? next.order : [...next.order, action.vault.id],
         maximizedVaultId: action.vault.id,
+        focusedVaultId: action.vault.id,
       };
     }
     case "minimize":
@@ -100,18 +121,14 @@ function fileManagerReducer(state: FileManagerState, action: FileManagerAction):
         ...next,
         entries: { ...next.entries, [action.vaultId]: { ...target, surface: "maximized" } },
         maximizedVaultId: action.vaultId,
+        focusedVaultId: action.vaultId,
       };
     }
-    case "close": {
-      if (!state.entries[action.vaultId]) return state;
+    case "dismiss":
+      return removeEntry(state, action.vaultId);
+    case "purge_for_vault_close": {
       resetVaultFileSession(action.vaultId);
-      const nextEntries = { ...state.entries };
-      delete nextEntries[action.vaultId];
-      return {
-        entries: nextEntries,
-        order: state.order.filter((id) => id !== action.vaultId),
-        maximizedVaultId: state.maximizedVaultId === action.vaultId ? null : state.maximizedVaultId,
-      };
+      return removeEntry(state, action.vaultId);
     }
     case "workspace": {
       const existing = state.entries[action.vaultId];
@@ -147,8 +164,12 @@ export function FileManagerProvider({ children }: { children: ReactNode }) {
     dispatch({ type: "maximize", vaultId });
   }, []);
 
-  const close = useCallback((vaultId: string) => {
-    dispatch({ type: "close", vaultId });
+  const dismiss = useCallback((vaultId: string) => {
+    dispatch({ type: "dismiss", vaultId });
+  }, []);
+
+  const purgeForVaultClose = useCallback((vaultId: string) => {
+    dispatch({ type: "purge_for_vault_close", vaultId });
   }, []);
 
   const dispatchWorkspace = useCallback((vaultId: string, workspaceAction: VaultWorkspaceAction) => {
@@ -165,15 +186,17 @@ export function FileManagerProvider({ children }: { children: ReactNode }) {
       entries: state.entries,
       entryOrder: state.order,
       maximizedVaultId: state.maximizedVaultId,
+      focusedVaultId: state.focusedVaultId,
       maximizedEntry,
       minimizedEntries,
       openFromVault,
       minimize,
       maximize,
-      close,
+      dismiss,
+      purgeForVaultClose,
       dispatchWorkspace,
     };
-  }, [state, openFromVault, minimize, maximize, close, dispatchWorkspace]);
+  }, [state, openFromVault, minimize, maximize, dismiss, purgeForVaultClose, dispatchWorkspace]);
 
   return <FileManagerContext.Provider value={value}>{children}</FileManagerContext.Provider>;
 }

@@ -1,15 +1,23 @@
 import { useId, useState } from "react";
+import { VAULT_PASSWORD_HINT_MAX_LENGTH } from "@/constants/vault";
 import { Button, PasswordInput } from "@/components/ui";
 import { useTranslation } from "@/i18n";
 import { settingsControlClass, SettingsField } from "./vaultSettingsForm";
 
 interface VaultChangePasswordPanelProps {
+  passwordHint: string;
+  onPasswordHintChange: (passwordHint: string) => void;
   /** Mock until Tauri `vault_change_password`. */
   onPasswordChanged?: () => void;
 }
 
-export function VaultChangePasswordPanel({ onPasswordChanged }: VaultChangePasswordPanelProps) {
+export function VaultChangePasswordPanel({
+  passwordHint,
+  onPasswordHintChange,
+  onPasswordChanged,
+}: VaultChangePasswordPanelProps) {
   const { t } = useTranslation();
+  const hintId = useId();
   const currentId = useId();
   const newId = useId();
   const confirmId = useId();
@@ -74,6 +82,24 @@ export function VaultChangePasswordPanel({ onPasswordChanged }: VaultChangePassw
     }
   };
 
+  const hintField = (
+    <SettingsField
+      label={t("modal.settings.password_hint")}
+      htmlFor={hintId}
+      hint={t("modal.settings.field.security.password_hint_help")}
+    >
+      <input
+        id={hintId}
+        type="text"
+        value={passwordHint}
+        maxLength={VAULT_PASSWORD_HINT_MAX_LENGTH}
+        onChange={(e) => onPasswordHintChange(e.target.value)}
+        className={settingsControlClass}
+        autoComplete="off"
+      />
+    </SettingsField>
+  );
+
   return (
     <div className="space-y-3 pt-4">
       <div>
@@ -84,14 +110,19 @@ export function VaultChangePasswordPanel({ onPasswordChanged }: VaultChangePassw
       </div>
 
       {!expanded ? (
-        <Button variant="secondary" size="sm" onClick={handleStart}>
-          {t("modal.settings.change_password")}
-        </Button>
+        <>
+          <Button variant="secondary" size="sm" onClick={handleStart}>
+            {t("modal.settings.change_password")}
+          </Button>
+          {hintField}
+        </>
       ) : (
         <div className="space-y-3 rounded-lg bg-surface-container p-2.5 ring-1 ring-outline-variant/25 sm:p-3">
           <p className="text-xs leading-relaxed text-on-error-container/90">
             {t("warning.password_change_backups")}
           </p>
+
+          {hintField}
 
           <SettingsField label={t("vault.change_password.current")} htmlFor={currentId}>
             <PasswordInput

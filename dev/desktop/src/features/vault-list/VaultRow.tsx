@@ -7,6 +7,7 @@ import {
   vaultStatusRowClass,
 } from "@/theme";
 import { VaultDragHandle } from "./VaultDragHandle";
+import { VaultFileManagerIndicator } from "./VaultFileManagerIndicator";
 import { VaultHiddenIndicator } from "./VaultHiddenIndicator";
 import { VaultLockButton } from "./VaultLockButton";
 import { VaultRowActions } from "./VaultRowActions";
@@ -65,11 +66,13 @@ export function VaultRow({
   const isOpen = status === "open";
   const density =
     viewMode === "blocks" ? vaultRowDensityClass.default : vaultRowDensityClass[viewMode];
+  const rowGap = viewMode === "large" ? "gap-7" : "gap-6";
 
   return (
     <article
       className={[
-        "vault-row flex flex-col items-center justify-between gap-6 overflow-visible rounded-xl px-4 transition-[opacity,box-shadow,background-color] sm:flex-row sm:pl-2 sm:pr-6",
+        "vault-row flex flex-col items-center justify-between overflow-visible rounded-xl px-4 transition-[opacity,box-shadow,background-color] sm:flex-row sm:pl-2 sm:pr-6",
+        rowGap,
         density.article,
         vaultStatusRowClass[status],
         isOpen ? "cursor-pointer" : "",
@@ -119,6 +122,7 @@ export function VaultRow({
               ].join(" ")}
             >
               <span className="truncate">{vault.displayName}</span>
+              <VaultFileManagerIndicator vaultId={vault.id} />
               <VaultHiddenIndicator hidden={vault.hidden} />
             </h3>
             <div className="col-start-2 row-start-2 flex flex-wrap items-center gap-2">

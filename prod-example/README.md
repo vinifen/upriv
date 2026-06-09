@@ -72,7 +72,8 @@ vaults/<id>/                    # <id> = normalized slug (filesystem-safe)
 ├── persistence.json
 ├── archive/<user-name>.7z      # Plan B — user name verbatim (NOT normalized)
 ├── store/
-├── backups/                    # snapshots — normalized names only
+├── backups/                    # standard snapshots — normalized names; rotated per [backup]
+│   └── saves/                # pinned saves — never removed by keep_last
 └── auth/
 ```
 
@@ -89,6 +90,7 @@ vaults/<id>/                    # <id> = normalized slug (filesystem-safe)
 | `display_name` | **No** — verbatim user input | `My Encrypted Notes` |
 | **Main archive** | **No** — `{display_name}.7z` | `archive/My Encrypted Notes.7z` |
 | `backups/*.7z` | **Yes** | `20260528T120000-vault-example-2.7z` |
+| `backups/saves/*.7z` | **Yes** | `20260401T100000-my-encrypted-notes.7z` |
 | `store/`, logs | **Yes** | paths use `vault_id` |
 | **`workspace/`** | **No** | `workspace/{display_name}/` — same as UI |
 
@@ -162,8 +164,15 @@ See **PRD** RF-15b/c/d · **SDD** §3.2.1 · **i18n** `vault.name.*`, `vault.exp
 
 ### Backups (per vault)
 
-- **Example 1:** `[backup] mode = keep_last` — one snapshot `backups/20260528T120000-my-encrypted-notes.7z` (replaced on next close).
-- **Example 2:** `[backup] mode = keep_all` — main archive `archive/Vault ExaMple 2.7z` (user name); backups `20260528T*-vault-example-2.7z` (normalized `id`).
+Two tiers under `backups/`:
+
+| Tier | Path | Retention |
+|------|------|-----------|
+| **Standard** | `backups/{timestamp}-{vault_id}.7z` | Rotated on close per `[backup]` (`keep_last` / `keep_all`) |
+| **Saves** | `backups/saves/{timestamp}-{vault_id}.7z` | Never auto-deleted; user promotes from standard in the backups modal |
+
+- **Example 1 (`my-encrypted-notes`, `keep_last`):** save `backups/saves/20260401T100000-my-encrypted-notes.7z` + standard `20260515T090000-…` and `20260528T120000-…` (oldest standard removed when over limit).
+- **Example 2 (`vault-example-2`, `keep_all`):** save `backups/saves/20260501T080000-vault-example-2.7z` + standard `20260528T*-vault-example-2.7z`; main archive `archive/Vault ExaMple 2.7z` (user name).
 
 ### Auth (example 4 only)
 

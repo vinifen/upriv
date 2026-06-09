@@ -45,41 +45,82 @@
   --log-viewer-bg: #0d1117;
 }
 
+[data-theme="neutral"] {
+  color-scheme: dark;
+
+  /* Mid-tone slate — neutral gray surfaces; accent blue only on interactive states */
+  --background: #282f3e;
+  --surface-container: #353d4e;
+  --surface-container-high: #3f4756;
+  --surface-row-hover: #474f5e;
+  --on-surface: #eaebee;
+  --on-surface-variant: #a4acb8;
+  --outline-variant: #5c6474;
+  --split-divider: rgba(140, 148, 164, 0.44);
+  --split-divider-on-primary: rgba(32, 38, 50, 0.38);
+
+  --scrollbar-thumb: #525a68;
+  --scrollbar-thumb-hover: #656d7a;
+
+  --primary: #c4cad4;
+  --on-primary: #252b38;
+  --surface-container-highest: #505864;
+
+  --accent: #6888dc;
+  --accent-foreground: #0f172a;
+
+  --vault-status-open: #42de9a;
+  --vault-status-closed: #6888dc;
+  --vault-status-sealed: #9aa3b0;
+  --vault-status-recovery: #f0b84a;
+  --vault-open-badge-bg: rgba(66, 222, 154, 0.18);
+  --vault-recovery-badge-bg: rgba(240, 184, 74, 0.2);
+  --vault-open-glow: rgba(66, 222, 154, 0.44);
+
+  --error-container: #a82028;
+  --on-error-container: #ffe8e4;
+
+  --modal-scrim: rgb(32 38 50 / 74%);
+  --modal-shadow: 0 16px 48px rgb(0 0 0 / 34%);
+  --log-viewer-bg: #2e3542;
+}
+
 [data-theme="light"] {
   color-scheme: light;
 
-  --background: #f5f7fb;
-  --surface-container: #ffffff;
-  --surface-container-high: #eceff6;
-  --surface-row-hover: #e3e8f2;
-  --on-surface: #131b2e;
-  --on-surface-variant: #5c667a;
-  --outline-variant: #c5cad6;
-  --split-divider: rgba(92, 102, 122, 0.22);
-  --split-divider-on-primary: rgba(255, 255, 255, 0.35);
+  /* Airy off-white surfaces — lighter canvas and panels, softer interactive tones */
+  --background: #d6dde8;
+  --surface-container: #f0f3f9;
+  --surface-container-high: #e8edf4;
+  --surface-row-hover: #dde4ef;
+  --on-surface: #243048;
+  --on-surface-variant: #566678;
+  --outline-variant: #bcc8d8;
+  --split-divider: rgba(88, 102, 124, 0.24);
+  --split-divider-on-primary: rgba(255, 255, 255, 0.42);
 
-  --scrollbar-thumb: #c5cad6;
-  --scrollbar-thumb-hover: #a8b0c0;
+  --scrollbar-thumb: #c0cad8;
+  --scrollbar-thumb-hover: #aab6c8;
 
-  --primary: #283044;
-  --on-primary: #f5f7fb;
-  --surface-container-highest: #dfe4ef;
+  --primary: #364a62;
+  --on-primary: #f4f7fb;
+  --surface-container-highest: #c8d2e0;
 
-  --accent: #3d5ccc;
+  --accent: #4a62b8;
   --accent-foreground: #ffffff;
 
-  --vault-status-open: #1a9d5c;
-  --vault-status-closed: #3d5ccc;
-  --vault-status-sealed: #6b7280;
-  --vault-status-recovery: #c47d00;
-  --vault-open-badge-bg: rgba(26, 157, 92, 0.12);
-  --vault-recovery-badge-bg: rgba(196, 125, 0, 0.12);
-  --vault-open-glow: rgba(26, 157, 92, 0.35);
+  --vault-status-open: #1f8560;
+  --vault-status-closed: #4a62b8;
+  --vault-status-sealed: #687488;
+  --vault-status-recovery: #a67c0a;
+  --vault-open-badge-bg: rgba(31, 133, 96, 0.14);
+  --vault-recovery-badge-bg: rgba(166, 124, 10, 0.14);
+  --vault-open-glow: rgba(31, 133, 96, 0.2);
 
-  --error-container: #ffdad6;
-  --on-error-container: #93000a;
+  --error-container: #edd8d4;
+  --on-error-container: #721218;
 
-  --modal-scrim: rgb(19 27 46 / 45%);
-  --modal-shadow: 0 16px 48px rgb(19 27 46 / 14%);
-  --log-viewer-bg: #eef1f8;
+  --modal-scrim: rgb(36 48 72 / 32%);
+  --modal-shadow: 0 16px 48px rgb(36 48 72 / 10%);
+  --log-viewer-bg: #d0d8e4;
 }

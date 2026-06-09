@@ -38,6 +38,7 @@ export const HELP_SECTION_BODY_KEYS: Record<HelpSectionId, readonly I18nKey[]> =
   system_settings: [
     "modal.help.body.system_settings.1",
     "modal.help.body.system_settings.2",
+    "modal.help.body.system_settings.3",
   ],
   logs: ["modal.help.body.logs.1", "modal.help.body.logs.2"],
   security: [

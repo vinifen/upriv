@@ -15,8 +15,14 @@ import {
   VaultSettingsStorageSection,
   VaultSettingsVaultSection,
 } from "./vaultSettingsForm";
-import type { VaultSettingsConfig, VaultSettingsListPatch, VaultSettingsSectionId } from "./vaultSettingsTypes";
-import { normalizeSecurityModeForStorage, VAULT_SETTINGS_SECTIONS, vaultSettingsEqual } from "./vaultSettingsTypes";
+import type { VaultSettingsConfig, VaultSettingsListPatch, VaultSettingsSectionId, CloseDefaultAction, StorageMode } from "./vaultSettingsTypes";
+import {
+  normalizeClosePolicyForStorage,
+  patchCloseDefaultAction,
+  patchStorageMode,
+  VAULT_SETTINGS_SECTIONS,
+  vaultSettingsEqual,
+} from "./vaultSettingsTypes";
 
 const SAVED_INDICATOR_MS = 1500;
 
@@ -47,6 +53,7 @@ export function VaultSettingsModal({
   const [deleteConfirm, setDeleteConfirm] = useState("");
   const confirmInputId = useId();
   const savedHideRef = useRef<ReturnType<typeof setTimeout>>();
+  const encryptedClosePreferenceRef = useRef<CloseDefaultAction>("close");
 
   const canConfirmDelete = vault !== null && deleteConfirm.trim() === vault.id;
 
@@ -56,7 +63,13 @@ export function VaultSettingsModal({
   );
 
   useEffect(() => {
-    if (config) setDraft(config);
+    if (config) {
+      const normalized = normalizeClosePolicyForStorage(config);
+      setDraft(normalized);
+      if (config.storage.mode === "encrypted_dir") {
+        encryptedClosePreferenceRef.current = config.close.default_action;
+      }
+    }
   }, [config]);
 
   useEffect(() => {
@@ -81,8 +94,9 @@ export function VaultSettingsModal({
   const persistDraft = useCallback(
     (next: VaultSettingsConfig) => {
       if (!vaultId) return;
-      replaceConfig(next);
-      onVaultSettingsSaved?.(vaultId, vaultSettingsToListPatch(next));
+      const normalized = normalizeClosePolicyForStorage(next);
+      replaceConfig(normalized);
+      onVaultSettingsSaved?.(vaultId, vaultSettingsToListPatch(normalized));
       setSavedVisible(true);
       clearTimeout(savedHideRef.current);
       savedHideRef.current = setTimeout(() => setSavedVisible(false), SAVED_INDICATOR_MS);
@@ -102,14 +116,34 @@ export function VaultSettingsModal({
     ) => {
       setDiscardConfirmOpen(false);
       setSaveConfirmOpen(false);
-      setDraft((current) =>
-        current
-          ? {
-              ...current,
-              [section]: { ...current[section], ...patch },
-            }
-          : current,
-      );
+      setDraft((current) => {
+        if (!current) return current;
+
+        if (section === "storage" && "mode" in patch && typeof patch.mode === "string") {
+          const { config: next, encryptedClosePreference } = patchStorageMode(
+            current,
+            patch.mode as StorageMode,
+            encryptedClosePreferenceRef.current,
+          );
+          encryptedClosePreferenceRef.current = encryptedClosePreference;
+          return next;
+        }
+
+        if (section === "close" && "default_action" in patch && typeof patch.default_action === "string") {
+          const { config: next, encryptedClosePreference } = patchCloseDefaultAction(
+            current,
+            patch.default_action as CloseDefaultAction,
+            encryptedClosePreferenceRef.current,
+          );
+          encryptedClosePreferenceRef.current = encryptedClosePreference;
+          return next;
+        }
+
+        return {
+          ...current,
+          [section]: { ...current[section], ...patch },
+        };
+      });
     },
     [],
   );
@@ -276,20 +310,13 @@ function renderSettingsSection(
       return (
         <VaultSettingsStorageSection
           config={draft.storage}
-          onChange={(patch) => {
-            patchDraft("storage", patch);
-            if (patch.mode === "encrypted_dir") {
-              const nextSecurity = normalizeSecurityModeForStorage("encrypted_dir", draft.security.mode);
-              if (nextSecurity !== draft.security.mode) {
-                patchDraft("security", { mode: nextSecurity });
-              }
-            }
-          }}
+          onChange={(patch) => patchDraft("storage", patch)}
         />
       );
     case "close":
       return (
         <VaultSettingsCloseSection
+          storageMode={draft.storage.mode}
           close={draft.close}
           autoClose={draft.auto_close}
           secureWipe={draft.security.secure_wipe_workspace}

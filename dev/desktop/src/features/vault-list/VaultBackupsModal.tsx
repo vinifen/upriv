@@ -31,7 +31,10 @@ function matchesDeleteConfirmation(
 export function VaultBackupsModal({ vault, open, onClose }: VaultBackupsModalProps) {
   const { locale, t } = useTranslation();
   const vaultId = vault?.id ?? null;
-  const { backups, deleteBackups } = useVaultBackups(vaultId, open);
+  const { backups, deleteBackups, promoteToSave } = useVaultBackups(vaultId, open);
+
+  const savedBackups = useMemo(() => backups.filter((entry) => entry.saved), [backups]);
+  const standardBackups = useMemo(() => backups.filter((entry) => !entry.saved), [backups]);
 
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [deleteTargets, setDeleteTargets] = useState<string[] | null>(null);
@@ -159,20 +162,33 @@ export function VaultBackupsModal({ vault, open, onClose }: VaultBackupsModalPro
             />
           ) : null}
 
-          <ul className="max-h-[50vh] space-y-2 overflow-y-auto">
-            {backups.map((entry) => (
-              <BackupRow
-                key={entry.filename}
-                entry={entry}
-                locale={locale}
-                checked={selected.has(entry.filename)}
-                selectionDisabled={deleteTargets !== null}
-                onToggleSelected={() => toggleSelected(entry.filename)}
-                onDownload={() => handleDownloadOne(entry.filename)}
-                onDelete={() => beginDelete([entry.filename])}
-              />
-            ))}
-          </ul>
+          <div className="max-h-[min(52vh,28rem)] space-y-5 overflow-y-auto pr-0.5">
+            <BackupSection
+              title={t("modal.backup.section.saves")}
+              help={t("modal.backup.section.saves_help")}
+              emptyLabel={t("modal.backup.saves_empty")}
+              entries={savedBackups}
+              locale={locale}
+              selected={selected}
+              selectionDisabled={deleteTargets !== null}
+              onToggleSelected={toggleSelected}
+              onDownload={handleDownloadOne}
+              onDelete={(filename) => beginDelete([filename])}
+            />
+            <BackupSection
+              title={t("modal.backup.section.standard")}
+              help={t("modal.backup.section.standard_help")}
+              emptyLabel={t("modal.backup.standard_empty")}
+              entries={standardBackups}
+              locale={locale}
+              selected={selected}
+              selectionDisabled={deleteTargets !== null}
+              onToggleSelected={toggleSelected}
+              onDownload={handleDownloadOne}
+              onDelete={(filename) => beginDelete([filename])}
+              onPromoteToSave={promoteToSave}
+            />
+          </div>
         </>
       )}
 
@@ -214,6 +230,66 @@ export function VaultBackupsModal({ vault, open, onClose }: VaultBackupsModalPro
         </div>
       ) : null}
     </Modal>
+  );
+}
+
+interface BackupSectionProps {
+  title: string;
+  help: string;
+  emptyLabel: string;
+  entries: VaultBackupEntry[];
+  locale: string;
+  selected: Set<string>;
+  selectionDisabled: boolean;
+  onToggleSelected: (filename: string) => void;
+  onDownload: (filename: string) => void;
+  onDelete: (filename: string) => void;
+  onPromoteToSave?: (filename: string) => void;
+}
+
+function BackupSection({
+  title,
+  help,
+  emptyLabel,
+  entries,
+  locale,
+  selected,
+  selectionDisabled,
+  onToggleSelected,
+  onDownload,
+  onDelete,
+  onPromoteToSave,
+}: BackupSectionProps) {
+  return (
+    <section className="space-y-2">
+      <div>
+        <h3 className="text-sm font-medium text-on-surface">{title}</h3>
+        <p className="mt-0.5 text-xs leading-relaxed text-on-surface-variant">{help}</p>
+      </div>
+      {entries.length === 0 ? (
+        <p className="rounded-xl bg-surface-container px-4 py-6 text-center text-xs text-on-surface-variant">
+          {emptyLabel}
+        </p>
+      ) : (
+        <ul className="space-y-2">
+          {entries.map((entry) => (
+            <BackupRow
+              key={entry.filename}
+              entry={entry}
+              locale={locale}
+              checked={selected.has(entry.filename)}
+              selectionDisabled={selectionDisabled}
+              onToggleSelected={() => onToggleSelected(entry.filename)}
+              onDownload={() => onDownload(entry.filename)}
+              onDelete={() => onDelete(entry.filename)}
+              onPromoteToSave={
+                onPromoteToSave ? () => onPromoteToSave(entry.filename) : undefined
+              }
+            />
+          ))}
+        </ul>
+      )}
+    </section>
   );
 }
 
@@ -289,6 +365,7 @@ interface BackupRowProps {
   onToggleSelected: () => void;
   onDownload: () => void;
   onDelete: () => void;
+  onPromoteToSave?: () => void;
 }
 
 function BackupRow({
@@ -299,6 +376,7 @@ function BackupRow({
   onToggleSelected,
   onDownload,
   onDelete,
+  onPromoteToSave,
 }: BackupRowProps) {
   const { t } = useTranslation();
   const checkboxId = useId();
@@ -332,7 +410,14 @@ function BackupRow({
           selectionDisabled ? "cursor-default" : "cursor-pointer",
         ].join(" ")}
       >
-        <p className="truncate font-mono text-xs text-on-surface sm:text-sm">{entry.filename}</p>
+        <p className="flex min-w-0 items-center gap-2">
+          <span className="truncate font-mono text-xs text-on-surface sm:text-sm">{entry.filename}</span>
+          {entry.saved ? (
+            <span className="shrink-0 rounded-md bg-accent/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-accent">
+              {t("modal.backup.saved_badge")}
+            </span>
+          ) : null}
+        </p>
         <p className="mt-0.5 text-xs text-on-surface-variant">
           {formatBackupDate(entry.createdAt, locale)}
           <span aria-hidden className="mx-1.5">
@@ -342,6 +427,17 @@ function BackupRow({
         </p>
       </label>
       <div className="flex shrink-0 items-center gap-0.5">
+        {onPromoteToSave ? (
+          <Button
+            variant="secondary"
+            size="sm"
+            disabled={selectionDisabled}
+            className="mr-0.5 h-8 shrink-0 px-2 text-xs sm:px-2.5"
+            onClick={onPromoteToSave}
+          >
+            {t("modal.backup.promote_to_save")}
+          </Button>
+        ) : null}
         <IconButton
           label={t("action.download")}
           size="row"

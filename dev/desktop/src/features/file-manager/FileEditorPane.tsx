@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from "react";
 import { useTranslation } from "@/i18n";
 import { fileBaseName } from "./fileTreeUtils";
-import { isVaultFileEditable } from "./mockVaultFileSystem";
+import { isVaultFileEditable, isVaultFileImage, isVaultFileViewable } from "./mockVaultFileSystem";
+import { filesFromDataTransfer, isOsFileDrag } from "./osFileDrop";
 import type { useVaultFileManager } from "./useVaultFileManager";
 
 type FileManagerApi = ReturnType<typeof useVaultFileManager>;
@@ -77,6 +78,60 @@ function EditorWithLineNumbers({ content, fileName, ariaLabel, onChange }: Edito
   );
 }
 
+function ImagePreview({ src, fileName, ariaLabel }: { src: string; fileName: string; ariaLabel: string }) {
+  return (
+    <div className="modal-scroll-pane flex min-h-0 flex-1 items-center justify-center bg-surface-container-high p-4">
+      <img
+        src={src}
+        alt={ariaLabel}
+        draggable={false}
+        className="max-h-full max-w-full object-contain"
+        data-filename={fileName}
+      />
+    </div>
+  );
+}
+
+function ViewerDropZone({ fm, children }: { fm: FileManagerApi; children: ReactNode }) {
+  const [dropActive, setDropActive] = useState(false);
+
+  const handleDragOver = (event: DragEvent) => {
+    if (!isOsFileDrag(event)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+    setDropActive(true);
+  };
+
+  const handleDragLeave = (event: DragEvent) => {
+    if (event.currentTarget.contains(event.relatedTarget as Node)) return;
+    setDropActive(false);
+  };
+
+  const handleDrop = (event: DragEvent) => {
+    if (!isOsFileDrag(event)) return;
+    event.preventDefault();
+    setDropActive(false);
+    void (async () => {
+      const files = await filesFromDataTransfer(event);
+      await fm.importFiles("/", files, { openFirstViewable: true });
+    })();
+  };
+
+  return (
+    <div
+      className={[
+        "flex min-h-0 flex-1 flex-col",
+        dropActive ? "ring-2 ring-inset ring-[var(--accent)]" : "",
+      ].join(" ")}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
+      {children}
+    </div>
+  );
+}
+
 export function FileEditorPane({ fm }: FileEditorPaneProps) {
   const { t } = useTranslation();
   const { workspace, dispatch, saveFile, getEditorContent, vaultId } = fm;
@@ -96,43 +151,62 @@ export function FileEditorPane({ fm }: FileEditorPaneProps) {
 
   if (!activeTabPath) {
     return (
-      <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 bg-surface-container-high px-6 text-center">
-        <p className="font-mono text-[10px] uppercase tracking-widest text-on-surface-variant">
-          {t("modal.file_manager.viewer.empty_kicker")}
-        </p>
-        <p className="max-w-sm text-sm text-on-surface-variant">
-          {t("modal.file_manager.viewer.empty_body")}
-        </p>
-      </div>
+      <ViewerDropZone fm={fm}>
+        <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 bg-surface-container-high px-6 text-center">
+          <p className="font-mono text-[10px] uppercase tracking-widest text-on-surface-variant">
+            {t("modal.file_manager.viewer.empty_kicker")}
+          </p>
+          <p className="max-w-sm text-sm text-on-surface-variant">
+            {t("modal.file_manager.viewer.empty_body")}
+          </p>
+        </div>
+      </ViewerDropZone>
     );
   }
 
-  const editable = isVaultFileEditable(vaultId, activeTabPath);
+  const isImage = isVaultFileImage(vaultId, activeTabPath);
+  const viewable = isVaultFileViewable(vaultId, activeTabPath);
   const content = getEditorContent(activeTabPath);
   const fileName = fileBaseName(activeTabPath);
 
-  if (!editable) {
+  if (isImage && content) {
     return (
-      <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 bg-surface-container-high px-6 text-center">
-        <p className="font-mono text-[10px] uppercase tracking-widest text-on-surface-variant">
-          {t("modal.file_manager.viewer.preview_unavailable_kicker")}
-        </p>
-        <p className="max-w-sm text-sm text-on-surface-variant">
-          {t("modal.file_manager.viewer.preview_unavailable_body", { name: fileName })}
-        </p>
-      </div>
+      <ViewerDropZone fm={fm}>
+        <ImagePreview
+          src={content}
+          fileName={fileName}
+          ariaLabel={t("modal.file_manager.viewer.image_label", { name: fileName })}
+        />
+      </ViewerDropZone>
+    );
+  }
+
+  if (!viewable) {
+    return (
+      <ViewerDropZone fm={fm}>
+        <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 bg-surface-container-high px-6 text-center">
+          <p className="font-mono text-[10px] uppercase tracking-widest text-on-surface-variant">
+            {t("modal.file_manager.viewer.preview_unavailable_kicker")}
+          </p>
+          <p className="max-w-sm text-sm text-on-surface-variant">
+            {t("modal.file_manager.viewer.preview_unavailable_body", { name: fileName })}
+          </p>
+        </div>
+      </ViewerDropZone>
     );
   }
 
   return (
-    <EditorWithLineNumbers
-      content={content}
-      fileName={fileName}
-      ariaLabel={t("modal.file_manager.viewer.editor_label", { name: fileName })}
-      onChange={(next) =>
-        dispatch({ type: "set_editor_draft", path: activeTabPath, content: next })
-      }
-    />
+    <ViewerDropZone fm={fm}>
+      <EditorWithLineNumbers
+        content={content}
+        fileName={fileName}
+        ariaLabel={t("modal.file_manager.viewer.editor_label", { name: fileName })}
+        onChange={(next) =>
+          dispatch({ type: "set_editor_draft", path: activeTabPath, content: next })
+        }
+      />
+    </ViewerDropZone>
   );
 }
 

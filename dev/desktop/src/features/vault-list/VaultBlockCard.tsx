@@ -3,6 +3,7 @@ import { useTranslation } from "@/i18n";
 import type { VaultDisplayStatus } from "@/types";
 import { resolveVaultDisplayStatus } from "@/types";
 import { vaultStatusIconClass, vaultStatusRowClass } from "@/theme";
+import { VaultFileManagerIndicator } from "./VaultFileManagerIndicator";
 import { VaultHiddenIndicator } from "./VaultHiddenIndicator";
 import { VaultLockButton } from "./VaultLockButton";
 import { VaultRowActions } from "./VaultRowActions";
@@ -73,6 +74,7 @@ export function VaultBlockCard({
         <div className="min-w-0 flex-1">
           <h3 className="flex min-w-0 items-start gap-1.5 text-sm font-semibold leading-snug text-on-surface sm:text-base">
             <span className="line-clamp-2 min-w-0 flex-1">{vault.displayName}</span>
+            <VaultFileManagerIndicator vaultId={vault.id} size={13} className="mt-0.5" />
             <VaultHiddenIndicator hidden={vault.hidden} size={13} className="mt-0.5" />
           </h3>
           <div className="mt-1.5">

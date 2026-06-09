@@ -78,7 +78,7 @@ export function VaultList({
     );
   }
 
-  const listGap = viewMode === "compact" ? "space-y-3" : viewMode === "large" ? "space-y-5" : "space-y-4";
+  const listGap = viewMode === "compact" ? "space-y-3" : viewMode === "large" ? "space-y-6" : "space-y-4";
 
   return (
     <div className={`relative overflow-visible ${listGap}`}>

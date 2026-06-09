@@ -1,4 +1,5 @@
 import type { VaultSettingsConfig } from "@/features/vault-list/vaultSettingsTypes";
+import { normalizeClosePolicyForStorage } from "@/features/vault-list/vaultSettingsTypes";
 import { displayNameToVaultId } from "@/lib/vaultDisplayName";
 import type { CreateVaultDraft, CreateVaultResult } from "./createVaultTypes";
 
@@ -9,7 +10,7 @@ export function buildCreateVaultResult(
   const vaultId = displayNameToVaultId(draft.displayName, existingIds);
   const displayName = draft.displayName.trim();
 
-  const settings: VaultSettingsConfig = {
+  const settings: VaultSettingsConfig = normalizeClosePolicyForStorage({
     vault: {
       id: vaultId,
       display_name: displayName,
@@ -39,7 +40,7 @@ export function buildCreateVaultResult(
       method: "lzma2",
     },
     policy: { ...draft.policy },
-  };
+  });
 
   return {
     vaultId,

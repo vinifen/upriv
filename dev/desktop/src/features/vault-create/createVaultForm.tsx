@@ -1,4 +1,4 @@
-import { useId } from "react";
+import { useId, useRef } from "react";
 import { Button, PasswordInput } from "@/components/ui";
 import {
   VAULT_DISPLAY_NAME_MAX_LENGTH,
@@ -16,7 +16,8 @@ import {
   SettingsFormGrid,
   VaultSettingsBackupSection,
 } from "@/features/vault-list/vaultSettingsForm";
-import { normalizeSecurityModeForStorage } from "@/features/vault-list/vaultSettingsTypes";
+import type { CloseDefaultAction } from "@/features/vault-list/vaultSettingsTypes";
+import { transitionStorageModeClose } from "@/features/vault-list/vaultSettingsTypes";
 import type { CreateVaultDraft, CreateVaultStepId } from "./createVaultTypes";
 import { MOCK_IMPORT_ARCHIVE_PATH } from "./mockImportArchive";
 import { createVaultErrorKey } from "./validationMessages";
@@ -87,26 +88,25 @@ function CreateVaultSourceStep({ draft, errors, onChange }: StepProps) {
     });
   };
 
+  const importFilePicker = (
+    <div className="space-y-2">
+      <input
+        type="text"
+        readOnly
+        value={draft.importFileName}
+        placeholder={t("vault.create.import_file_placeholder")}
+        className={[settingsControlClass, "font-mono text-xs"].join(" ")}
+      />
+      <Button type="button" variant="secondary" size="md" onClick={handleImportFile}>
+        {t("vault.create.action.choose_archive")}
+      </Button>
+    </div>
+  );
+
   return (
     <SettingsFormGrid>
       <p className="text-sm text-on-surface-variant">{t("vault.create.source_intro")}</p>
       <div role="radiogroup" aria-label={t("vault.create.source_title")} className="grid gap-2">
-        <PolicyRadioOption
-          groupName={sourceGroup}
-          value="import"
-          checked={draft.source === "import"}
-          title={t("vault.create.option.import")}
-          description={t("vault.create.option.import_desc")}
-          onSelect={() =>
-            onChange({
-              source: "import",
-              password: "",
-              passwordConfirm: "",
-              passwordValidated: false,
-              passwordTestFailed: false,
-            })
-          }
-        />
         <PolicyRadioOption
           groupName={sourceGroup}
           value="scratch"
@@ -124,21 +124,24 @@ function CreateVaultSourceStep({ draft, errors, onChange }: StepProps) {
             })
           }
         />
+        <PolicyRadioOption
+          groupName={sourceGroup}
+          value="import"
+          checked={draft.source === "import"}
+          title={t("vault.create.option.import")}
+          description={t("vault.create.option.import_desc")}
+          footer={importFilePicker}
+          onSelect={() =>
+            onChange({
+              source: "import",
+              password: "",
+              passwordConfirm: "",
+              passwordValidated: false,
+              passwordTestFailed: false,
+            })
+          }
+        />
       </div>
-      {draft.source === "import" ? (
-        <div className="space-y-2 rounded-lg bg-surface-container p-3">
-          <input
-            type="text"
-            readOnly
-            value={draft.importFileName}
-            placeholder={t("vault.create.import_file_placeholder")}
-            className={[settingsControlClass, "font-mono text-xs"].join(" ")}
-          />
-          <Button type="button" variant="secondary" size="md" onClick={handleImportFile}>
-            {t("vault.create.action.choose_archive")}
-          </Button>
-        </div>
-      ) : null}
       <StepErrors errors={errors} />
     </SettingsFormGrid>
   );
@@ -159,10 +162,7 @@ function CreateVaultIdentityStep({ draft, errors, onChange }: StepProps) {
           value={draft.displayName}
           maxLength={VAULT_DISPLAY_NAME_MAX_LENGTH}
           onChange={(e) => onChange({ displayName: e.target.value })}
-          className={[
-            settingsControlClass,
-            errors.length > 0 ? "ring-1 ring-on-error-container/50" : "",
-          ].join(" ")}
+          className={settingsControlClass}
         />
       </SettingsField>
       <SettingsField label={t("vault.create.note")} htmlFor={noteId} hint={t("vault.create.note_help", { max: VAULT_NOTE_MAX_LENGTH })}>
@@ -375,10 +375,30 @@ function CreateVaultAdvancedStep({ draft, onChange }: StepProps) {
   const wipeId = useId();
   const encryptNamesId = useId();
   const sleepId = useId();
+  const encryptedCloseRef = useRef<CloseDefaultAction>(draft.close.default_action);
+
+  const setStorageMode = (mode: CreateVaultDraft["storage"]["mode"]) => {
+    const { close, encryptedClosePreference } = transitionStorageModeClose(
+      draft.storage.mode,
+      draft.close.default_action,
+      mode,
+      encryptedCloseRef.current,
+    );
+    encryptedCloseRef.current = encryptedClosePreference;
+    onChange({ storage: { mode }, close: { default_action: close } });
+  };
+
+  const setCloseDefault = (defaultAction: CloseDefaultAction) => {
+    if (draft.storage.mode === "encrypted_dir") {
+      encryptedCloseRef.current = defaultAction;
+    }
+    onChange({ close: { default_action: defaultAction } });
+  };
 
   return (
     <SettingsFormGrid>
       <p className="text-sm text-on-surface-variant">{t("vault.create.advanced_intro")}</p>
+      <p className="text-sm leading-relaxed text-on-surface-variant">{t("vault.create.settings_editable_later")}</p>
       <VaultSettingsSection title={t("vault.create.advanced_section")} defaultOpen={false}>
         <div className="space-y-4">
           <SettingsField label={t("modal.settings.field.vault.order")} hint={t("modal.settings.field.vault.order_help")} htmlFor={orderId}>
@@ -418,15 +438,7 @@ function CreateVaultAdvancedStep({ draft, onChange }: StepProps) {
                 title={t("modal.settings.option.storage.encrypted_dir")}
                 description={t("modal.settings.option.storage.encrypted_dir_desc")}
                 badge="recommended"
-                onSelect={() =>
-                  onChange({
-                    storage: { mode: "encrypted_dir" },
-                    security: {
-                      ...draft.security,
-                      mode: normalizeSecurityModeForStorage("encrypted_dir", draft.security.mode),
-                    },
-                  })
-                }
+                onSelect={() => setStorageMode("encrypted_dir")}
               />
               <PolicyRadioOption
                 groupName={storageGroup}
@@ -436,43 +448,46 @@ function CreateVaultAdvancedStep({ draft, onChange }: StepProps) {
                 description={t("modal.settings.option.storage.plain_desc")}
                 badge="insecure"
                 tone="insecure"
-                onSelect={() =>
-                  onChange({
-                    storage: { mode: "plain" },
-                    security: {
-                      ...draft.security,
-                      mode: normalizeSecurityModeForStorage("plain", draft.security.mode),
-                    },
-                  })
-                }
+                onSelect={() => setStorageMode("plain")}
               />
             </div>
           </SettingsField>
+          {draft.storage.mode === "encrypted_dir" ? (
+            <p className="text-xs leading-relaxed text-on-error-container/90">
+              {t("warning.encrypted_dir_ram")}
+            </p>
+          ) : null}
           {draft.storage.mode === "plain" ? (
             <p className="text-xs font-medium text-on-error-container">{t("warning.plain_mode")}</p>
           ) : null}
 
-          <SettingsField label={t("modal.settings.field.close.default_action")} hint={t("modal.settings.field.close.default_action_help")}>
-            <div role="radiogroup" className="grid gap-2">
-              <PolicyRadioOption
-                groupName={closeGroup}
-                value="close"
-                checked={draft.close.default_action === "close"}
-                title={t("modal.settings.option.close.close")}
-                description={t("modal.settings.option.close.close_desc")}
-                badge="default"
-                onSelect={() => onChange({ close: { default_action: "close" } })}
-              />
-              <PolicyRadioOption
-                groupName={closeGroup}
-                value="seal"
-                checked={draft.close.default_action === "seal"}
-                title={t("modal.settings.option.close.seal")}
-                description={t("modal.settings.option.close.seal_desc")}
-                onSelect={() => onChange({ close: { default_action: "seal" } })}
-              />
-            </div>
-          </SettingsField>
+          {draft.storage.mode === "plain" ? (
+            <p className="text-xs leading-relaxed text-on-surface-variant">
+              {t("modal.settings.field.close.plain_seal_only")}
+            </p>
+          ) : (
+            <SettingsField label={t("modal.settings.field.close.default_action")} hint={t("modal.settings.field.close.default_action_help")}>
+              <div role="radiogroup" className="grid gap-2">
+                <PolicyRadioOption
+                  groupName={closeGroup}
+                  value="close"
+                  checked={draft.close.default_action === "close"}
+                  title={t("modal.settings.option.close.close")}
+                  description={t("modal.settings.option.close.close_desc")}
+                  badge="default"
+                  onSelect={() => setCloseDefault("close")}
+                />
+                <PolicyRadioOption
+                  groupName={closeGroup}
+                  value="seal"
+                  checked={draft.close.default_action === "seal"}
+                  title={t("modal.settings.option.close.seal")}
+                  description={t("modal.settings.option.close.seal_desc")}
+                  onSelect={() => setCloseDefault("seal")}
+                />
+              </div>
+            </SettingsField>
+          )}
 
           <label className="flex cursor-pointer select-none items-center gap-3">
             <input
@@ -588,7 +603,6 @@ function CreateVaultAdvancedStep({ draft, onChange }: StepProps) {
           </div>
         </div>
       </VaultSettingsSection>
-      <p className="text-xs leading-relaxed text-on-surface-variant">{t("vault.create.settings_editable_later")}</p>
     </SettingsFormGrid>
   );
 }

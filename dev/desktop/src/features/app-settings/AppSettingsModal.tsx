@@ -3,9 +3,11 @@ import { Button, Modal } from "@/components/ui";
 import { useTranslation } from "@/i18n";
 import { VaultSettingsSection } from "@/features/vault-list/VaultSettingsSection";
 import { useAppSettingsContext } from "./AppSettingsContext";
+import type { VaultListItem } from "@/features/vault-list/types";
 import {
   AppSettingsAppearanceSection,
   AppSettingsBehaviorSection,
+  AppSettingsDownloadVaultsSection,
   AppSettingsHiddenVaultsSection,
   AppSettingsLoggingSection,
 } from "./appSettingsForm";
@@ -22,9 +24,10 @@ const SAVED_INDICATOR_MS = 1500;
 interface AppSettingsModalProps {
   open: boolean;
   onClose: () => void;
+  vaults: VaultListItem[];
 }
 
-export function AppSettingsModal({ open, onClose }: AppSettingsModalProps) {
+export function AppSettingsModal({ open, onClose, vaults }: AppSettingsModalProps) {
   const { t } = useTranslation();
   const { settings, replaceSettings, showHiddenVaultsSession, setShowHiddenVaultsSession } =
     useAppSettingsContext();
@@ -195,6 +198,8 @@ export function AppSettingsModal({ open, onClose }: AppSettingsModalProps) {
               patchDraft,
               showHiddenVaultsSession,
               setShowHiddenVaultsSession,
+              vaults,
+              open,
             )}
           </VaultSettingsSection>
         ))}
@@ -212,6 +217,8 @@ function renderAppSettingsSection(
   ) => void,
   showHiddenVaultsSession: boolean,
   setShowHiddenVaultsSession: (value: boolean) => void,
+  vaults: VaultListItem[],
+  modalOpen: boolean,
 ) {
   switch (sectionId) {
     case "appearance":
@@ -246,6 +253,8 @@ function renderAppSettingsSection(
           onShowHiddenVaultsSessionChange={setShowHiddenVaultsSession}
         />
       );
+    case "download_vaults":
+      return <AppSettingsDownloadVaultsSection vaults={vaults} modalOpen={modalOpen} />;
     default:
       return null;
   }

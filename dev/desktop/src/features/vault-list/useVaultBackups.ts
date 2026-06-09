@@ -19,10 +19,22 @@ export function useVaultBackups(vaultId: string | null, open: boolean) {
     [vaultId],
   );
 
+  const promoteToSave = useCallback(
+    (filename: string) => {
+      if (!vaultId) return;
+      setBackups((current) =>
+        current.map((entry) =>
+          entry.filename === filename && !entry.saved ? { ...entry, saved: true } : entry,
+        ),
+      );
+    },
+    [vaultId],
+  );
+
   const resetBackups = useCallback(() => {
     if (!vaultId) return;
     setBackups(getMockBackupsForVault(vaultId));
   }, [vaultId]);
 
-  return { backups, deleteBackups, resetBackups };
+  return { backups, deleteBackups, promoteToSave, resetBackups };
 }

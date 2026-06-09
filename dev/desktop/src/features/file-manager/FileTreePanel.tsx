@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState, type DragEvent, type MouseEvent } from "react";
+import { useEffect, useRef, useState, type ChangeEvent, type DragEvent, type MouseEvent } from "react";
 import { Icon } from "@/components/icons";
 import { useTranslation } from "@/i18n";
 import { getParentPath, isDescendantPath } from "./fileTreeOps";
 import type { FileTreeNode } from "./fileTreeTypes";
-import { joinPath } from "./fileTreeUtils";
+import { findTreeNode, joinPath } from "./fileTreeUtils";
+import { filesFromDataTransfer, filesFromFileInput, isOsFileDrag } from "./osFileDrop";
 import type { useVaultFileManager } from "./useVaultFileManager";
 
 type FileManagerApi = ReturnType<typeof useVaultFileManager>;
@@ -26,8 +27,16 @@ const ICON_COL = "0.875rem";
 const ROW_GRID = `${TWISTIE_COL} ${ICON_COL} minmax(0, 1fr)`;
 const DEPTH_INDENT_PX = 10;
 
+function importTargetPath(fm: FileManagerApi): string {
+  const selected = fm.workspace.selectedPath;
+  if (!selected || selected === "/") return "/";
+  const node = findTreeNode(fm.tree, selected);
+  if (node?.type === "folder") return selected;
+  return getParentPath(selected);
+}
+
 function FileTreeRow({ node, path, depth, fm }: FileTreeRowProps) {
-  const { workspace, dispatch, commitRename, movePath } = fm;
+  const { workspace, dispatch, commitRename, movePath, importFiles } = fm;
   const isFolder = node.type === "folder";
   const isExpanded = isFolder && workspace.expandedPaths.includes(path);
   const isSelected = workspace.selectedPath === path;
@@ -91,7 +100,19 @@ function FileTreeRow({ node, path, depth, fm }: FileTreeRowProps) {
   };
 
   const handleDragOver = (event: DragEvent) => {
+    if (isOsFileDrag(event)) {
+      const targetPath = isFolder ? path : getParentPath(path);
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "copy";
+      if (workspace.dropTargetPath !== targetPath) {
+        dispatch({ type: "set_drag", source: null, target: targetPath });
+        if (targetPath !== "/") dispatch({ type: "expand_folder", path: targetPath });
+      }
+      return;
+    }
+
     if (!isFolder) return;
+
     const source = workspace.dragSourcePath;
     if (!source || source === path || isDescendantPath(source, path)) return;
     event.preventDefault();
@@ -104,6 +125,17 @@ function FileTreeRow({ node, path, depth, fm }: FileTreeRowProps) {
 
   const handleDrop = (event: DragEvent) => {
     event.preventDefault();
+
+    if (isOsFileDrag(event)) {
+      const targetPath = isFolder ? path : getParentPath(path);
+      void (async () => {
+        const files = await filesFromDataTransfer(event);
+        await importFiles(targetPath, files);
+      })();
+      dispatch({ type: "set_drag", source: null, target: null });
+      return;
+    }
+
     const from = workspace.dragSourcePath ?? event.dataTransfer.getData("text/plain");
     if (from && isFolder && !isDescendantPath(from, path)) movePath(from, path);
     dispatch({ type: "set_drag", source: null, target: null });
@@ -128,8 +160,8 @@ function FileTreeRow({ node, path, depth, fm }: FileTreeRowProps) {
         }}
         onDragStart={handleDragStart}
         onDragEnd={handleDragEnd}
-        onDragOver={isFolder ? handleDragOver : undefined}
-        onDrop={isFolder ? handleDrop : undefined}
+        onDragOver={handleDragOver}
+        onDrop={handleDrop}
         onContextMenu={handleContextMenu}
         onPointerDown={handlePointerDown}
         onPointerUp={clearLongPress}
@@ -218,6 +250,8 @@ function FileTreeRoot({ tree, fm }: { tree: FileTreeNode; fm: FileManagerApi }) 
 
 export function FileTreePanel({ fm, splitPercent, layout }: FileTreePanelProps) {
   const { t } = useTranslation();
+  const importFilesInputRef = useRef<HTMLInputElement>(null);
+  const importFolderInputRef = useRef<HTMLInputElement>(null);
   const paneStyle =
     layout === "column"
       ? { height: `${splitPercent}%`, width: "100%" }
@@ -235,6 +269,15 @@ export function FileTreePanel({ fm, splitPercent, layout }: FileTreePanelProps) 
   };
 
   const handleNavDragOver = (event: DragEvent) => {
+    if (isOsFileDrag(event)) {
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "copy";
+      if (fm.workspace.dropTargetPath !== "/") {
+        fm.dispatch({ type: "set_drag", source: null, target: "/" });
+      }
+      return;
+    }
+
     const source = fm.workspace.dragSourcePath;
     if (!source || getParentPath(source) === "/") return;
     event.preventDefault();
@@ -246,12 +289,44 @@ export function FileTreePanel({ fm, splitPercent, layout }: FileTreePanelProps) 
 
   const handleNavDrop = (event: DragEvent) => {
     event.preventDefault();
+
+    if (isOsFileDrag(event)) {
+      void (async () => {
+        const files = await filesFromDataTransfer(event);
+        await fm.importFiles("/", files);
+      })();
+      fm.dispatch({ type: "set_drag", source: null, target: null });
+      return;
+    }
+
     const from = fm.workspace.dragSourcePath ?? event.dataTransfer.getData("text/plain");
     if (from && getParentPath(from) !== "/") fm.movePath(from, "/");
     fm.dispatch({ type: "set_drag", source: null, target: null });
   };
 
   const rootDropActive = fm.workspace.dropTargetPath === "/";
+
+  const openImportFilesPicker = () => {
+    importFilesInputRef.current?.click();
+  };
+
+  const openImportFolderPicker = () => {
+    importFolderInputRef.current?.click();
+  };
+
+  const handleImportFilesChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const files = filesFromFileInput(event.target.files);
+    event.target.value = "";
+    if (files.length === 0) return;
+    void fm.importFiles(importTargetPath(fm), files, { openFirstViewable: true });
+  };
+
+  const handleImportFolderChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const files = filesFromFileInput(event.target.files);
+    event.target.value = "";
+    if (files.length === 0) return;
+    void fm.importFiles(importTargetPath(fm), files, { openFirstViewable: true });
+  };
 
   return (
     <aside
@@ -262,6 +337,27 @@ export function FileTreePanel({ fm, splitPercent, layout }: FileTreePanelProps) 
         <p className="min-w-0 flex-1 font-mono text-[10px] font-medium uppercase tracking-widest text-on-surface-variant">
           {t("modal.file_manager.explorer.title")}
         </p>
+        <input
+          ref={importFilesInputRef}
+          type="file"
+          multiple
+          className="sr-only"
+          aria-hidden
+          tabIndex={-1}
+          onChange={handleImportFilesChange}
+        />
+        <input
+          ref={importFolderInputRef}
+          type="file"
+          multiple
+          className="sr-only"
+          aria-hidden
+          tabIndex={-1}
+          // @ts-expect-error — non-standard directory picker attribute (Chromium, Firefox, Safari)
+          webkitdirectory=""
+          directory=""
+          onChange={handleImportFolderChange}
+        />
         <button
           type="button"
           className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-on-surface-variant transition-colors hover:bg-surface-container-highest hover:text-on-surface"
@@ -279,6 +375,24 @@ export function FileTreePanel({ fm, splitPercent, layout }: FileTreePanelProps) 
           title={t("modal.file_manager.context.new_folder")}
         >
           <Icon name="folder" size={14} />
+        </button>
+        <button
+          type="button"
+          className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-on-surface-variant transition-colors hover:bg-surface-container-highest hover:text-on-surface"
+          onClick={openImportFilesPicker}
+          aria-label={t("modal.file_manager.explorer.import_files")}
+          title={t("modal.file_manager.explorer.import_files")}
+        >
+          <Icon name="arrow-up" size={14} />
+        </button>
+        <button
+          type="button"
+          className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-on-surface-variant transition-colors hover:bg-surface-container-highest hover:text-on-surface"
+          onClick={openImportFolderPicker}
+          aria-label={t("modal.file_manager.explorer.import_folder")}
+          title={t("modal.file_manager.explorer.import_folder")}
+        >
+          <Icon name="archive" size={14} />
         </button>
       </div>
       <nav

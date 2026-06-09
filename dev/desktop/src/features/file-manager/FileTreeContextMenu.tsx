@@ -30,11 +30,10 @@ export function FileTreeContextMenu({ fm, tree }: FileTreeContextMenuProps) {
     close();
     try {
       await navigator.clipboard.writeText(menu.path);
-      fm.dispatch({ type: "set_toast", message: t("modal.file_manager.toast.copied") });
+      fm.showToast(t("modal.file_manager.toast.copied"));
     } catch {
-      fm.dispatch({ type: "set_toast", message: t("modal.file_manager.toast.copy_failed") });
+      fm.showToast(t("modal.file_manager.toast.copy_failed"));
     }
-    window.setTimeout(() => fm.dispatch({ type: "set_toast", message: null }), 2800);
   };
 
   const items: { id: string; label: string; onClick: () => void; danger?: boolean }[] = [];

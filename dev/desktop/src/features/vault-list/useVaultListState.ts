@@ -11,6 +11,14 @@ import type { VaultPersistence, VaultSession } from "@/types";
 import type { VaultSettingsListPatch } from "./vaultSettingsTypes";
 import type { VaultListItem } from "./types";
 import { reorderVaultList, sortVaultsByOrder } from "./vaultOrder";
+import { resolveVaultPasswordHint } from "./vaultPasswordHint";
+
+function seedVaultPasswordHints(vaults: VaultListItem[]): VaultListItem[] {
+  return vaults.map((vault) => {
+    const passwordHint = resolveVaultPasswordHint(vault);
+    return passwordHint ? { ...vault, passwordHint } : vault;
+  });
+}
 
 const DRAG_MIME = "application/x-upriv-vault-id";
 
@@ -22,7 +30,7 @@ export function useVaultListState(
     showHiddenVaults?: boolean;
   },
 ) {
-  const [vaults, setVaults] = useState(() => sortVaultsByOrder(initialVaults));
+  const [vaults, setVaults] = useState(() => sortVaultsByOrder(seedVaultPasswordHints(initialVaults)));
   const [sort, setSort] = useState<VaultListSort>(options?.initialSort ?? DEFAULT_VAULT_LIST_SORT);
   const [viewMode, setViewMode] = useState<VaultListViewMode>(
     options?.initialViewMode ?? DEFAULT_VAULT_LIST_VIEW,
@@ -38,7 +46,7 @@ export function useVaultListState(
   const canReorder = canReorderVaultList(sort);
 
   const resetList = useCallback(() => {
-    setVaults(sortVaultsByOrder(initialVaults));
+    setVaults(sortVaultsByOrder(seedVaultPasswordHints(initialVaults)));
     setDraggingId(null);
     setDragOverId(null);
   }, [initialVaults]);
@@ -121,6 +129,7 @@ export function useVaultListState(
               order: patch.order,
               note: patch.note,
               hidden: patch.hidden,
+              passwordHint: patch.passwordHint,
             }
           : vault,
       );

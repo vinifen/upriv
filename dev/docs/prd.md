@@ -63,7 +63,9 @@ Differentiators vs. manual 7-Zip use:
 
 `plain` flow: `.7z` → extract to `workspace/<id>/` **in plaintext** on the HD → edit → close → new `.7z` + `secure_wipe_workspace`. Less secure (SSD wipe limitations); simpler and more predictable in memory.
 
-The user chooses the mode in `config/<id>.toml` (`storage.mode`); the UI must warn when selecting the exception mode.
+**`encrypted_dir` RAM requirement:** while a vault is **open**, decrypted content is served through the virtual mount and session buffers in **RAM** (encrypted store remains on disk). **Available memory must fit the entire unlocked vault working set** — open, edit, or close may **fail** if RAM is insufficient. The UI must warn when `encrypted_dir` is selected (i18n `warning.encrypted_dir_ram`; Help → Security). Prefer **`plain`** (when available), smaller vaults, or more RAM when hardware cannot meet this limit.
+
+The user chooses the mode in `config/<id>.toml` (`storage.mode`); the UI must warn when selecting the exception mode (`warning.plain_mode`) and when selecting the default secure mode about RAM (`warning.encrypted_dir_ram`).
 
 ### 1.7 Vault states (unified across modes)
 
@@ -209,6 +211,7 @@ Agreed pipeline for the first release:
 | RF-03 | Expose `workspace` to user (button `action.open_folder` → OS file manager) | P0 |
 | RF-04 | Close vault (`encrypted_dir`): unmount `workspace/<id>/`, clear session keys; keep encrypted persistence | P0 |
 | RF-04b | `plain` mode (`.7z` → plaintext workspace → `.7z` + wipe): implement **after v1** for exceptional cases (RAM/large vault); UI with security warning | P1 |
+| RF-04c | (`encrypted_dir`) Require sufficient RAM for the **entire unlocked vault** while open; fail open/edit/close with user-visible error if not; UI **`warning.encrypted_dir_ram`** (RF-UI-17) | P0 |
 | RF-05 | On close: **before** backup or compress, `7z t` on existing `vaults/<id>.7z` with given password — failure aborts everything (prevents closing with password different from opened vault) | P0 |
 | RF-06 | Atomic write: `<id>.7z.new` → test → rename → delete old | P0 |
 | RF-07 | Backup on close: move `vaults/<id>.7z` to `backup/<id>/<timestamp>-<id>.7z` if `[backup] enabled` | P1 |
@@ -258,7 +261,7 @@ Agreed pipeline for the first release:
 | RF-32 | Warning on exit with vault open | P1 |
 | RF-33 | Session security levels (5 modes) — see SDD | P2 |
 | RF-34 | `session.enc` for disk modes (encrypted session key, not password) | P2 |
-| RF-34b | In `encrypted_dir` (most secure mode), **forbid** password/session persistence on HD/SSD (`session.enc`, `quick-auth`) and hide "remember password" option in UI | P0 |
+| RF-34b | `session.enc` (encrypted session key, never plaintext password) allowed in **both** storage modes when user picks `disk_close` or `disk_open_close`; default remains `session_ram`; UI badges less-secure / insecure | P0 |
 | RF-35 | **Auto-close per vault:** `[auto_close]` in `config/<id>.toml` | P1 |
 | RF-36 | Auto-close after `idle_minutes` without activity on open vault | P1 |
 | RF-37 | Activity = app UI + changes in `workspace/<id>/` (virtual filesystem watch) | P1 |
@@ -343,6 +346,8 @@ While vault is **open**, plaintext exists in **session** (RAM / virtual mount). 
 |----------------|-------------------------|
 | No persistent plaintext workspace in vault | OS swap/hibernation |
 | Store `stores/<id>/` always encrypted | External app cache/temp |
+| **File and folder names encrypted in store** (`index/*.enc`, `name_cipher`; opaque `data/` blobs — forensic tools cannot map blobs to logical paths without the password) | Vault package metadata still visible (`display_name`, `.7z` filename, `vault_id` folder) |
+| **`[seven_zip] encrypt_file_names = true` (default)** — names hidden in `.7z` when sealed | User disables archive name encryption (UI warns) |
 | No `session.enc` / remember password on HD | Compromised host (keylogger) |
 | Export `.7z` by stream, not plaintext temp | Last write if power loss during write |
 | `sealed` close + store wipe | Old encrypted version traces on SSD (`closed` state) |
@@ -498,6 +503,26 @@ Opened by **`action.settings`** on vault row.
 | RF-UI-13 | **Reorder vault list:** drag-and-drop rows (press/hold + drag); persist new positions to `[vault] order` in each affected `config.toml` | P1 |
 | RF-UI-14 | Vault settings modal exposes **`order`** field under `[vault]` (alternative to drag-and-drop) | P1 |
 | RF-UI-15 | Vault settings: **Save** only when dirty (with confirm); close/backdrop/Esc with unsaved edits → confirm **discard all and close**; field visibility per SDD §3.2.3a | P1 |
+| RF-UI-16 | Minimized file-manager dock: expand/collapse toggle persists `[ui] file_manager_dock_expanded` on each open/close of the dock list; **not** a System settings field (SDD §3.1) | P1 |
+| RF-UI-17 | **Storage mode warnings:** `warning.encrypted_dir_ram` when `encrypted_dir`; `warning.plain_mode` when `plain`; hide **Close → keep cache** when `plain` (seal-only lock) | P0 |
+| RF-UI-18 | **System settings → Download vaults:** transient checklist of all vaults; select all available; zip selected main `.7z` files; block open/closing/recovery rows; **not** persisted in settings | P1 |
+
+### 3.7.5 File manager — minimized dock
+
+When the user minimizes a per-vault file manager, a **dock** (bottom-right) lists open minimized managers. A single control expands or collapses the chip list. The choice is saved to **`[ui] file_manager_dock_expanded`** in `.upriv/settings.toml` **on each toggle** and restored on the next app session. There is **no** separate “keep dock expanded” option in the System settings modal.
+
+### 3.7.6 System settings — Download vaults
+
+Section in the **System settings** modal, **below Hidden vaults**. Lets the user download selected main vault `.7z` archives as one zip (backup or copy to another drive).
+
+| Rule | Detail |
+|------|--------|
+| **Not persisted** | Checklist selection is session-only in the modal — **not** written to `settings.toml` or vault config |
+| **Eligibility** | Only vaults that are **closed** or **sealed** on disk may be selected (`open` / `closing` / `recovery` disabled — `.7z` may be stale until lock/seal) |
+| **UI** | Flat checklist (same visual pattern as Hidden vaults): select all available, per-vault checkboxes, compact rows, no bordered list panels |
+| **Output** | Zip of `vaults/<id>/archive/<display_name>.7z`; entries `{vault_id}/{display_name}.7z` |
+
+i18n: `modal.app_settings.section.download_vaults*`, `warning.download_vaults_*`. SDD §3.1, §8.2.3a.
 
 ---
 
@@ -515,16 +540,21 @@ Configurable in `config/<id>.toml` as `security.mode`.
 
 **Recommended default:** `session_ram` (mode 2).
 
-**v1 desktop UI (encrypted_dir):** two choices — **`session_ram`** (recommended) and **ask on open and close** (maps to TOML `always_prompt`; legacy `ram_on_close_only` reads as the same option). Plain mode keeps disk session options separately.
+**v1 desktop UI:** same four password-memory choices for **`encrypted_dir`** and **`plain`** — **`session_ram`** (recommended), **ask on open and close** (TOML `always_prompt`; legacy `ram_on_close_only` maps here), **`disk_close`** (less secure), **`disk_open_close`** (insecure). Store and workspace encryption are unchanged; disk modes only affect how the **unlock password** is retained via `auth/<id>/.session.enc`.
 
 **Global rule:** no mode writes password in plaintext in the vault.
 
-**Rule for `encrypted_dir` (mandatory):**
+**Defaults and warnings (`encrypted_dir`):**
 
-- Do not allow disk modes (`disk_close`, `disk_open_close`).
-- Do not create `session.enc` or `.quick-auth`.
-- Do not show save/remember password option in UI for this mode.
-- Session in RAM only (`always_prompt`, `session_ram`, or `ram_on_close_only`).
+- **Default:** `session_ram` — password in RAM until app exit or vault lock.
+- **RAM capacity:** show **`warning.encrypted_dir_ram`** under **Storage** when `storage.mode = encrypted_dir` (vault settings + create-vault advanced step). Same rule in Help → Security (`modal.help.body.security.2`). While open, decrypted vault content lives in RAM; insufficient memory → open/edit/close may fail (no silent spill to plaintext disk).
+- **Disk session modes** are optional user choices (badges less-secure / insecure); `session.enc` holds an **encrypted session key**, not the password string.
+- Encrypted store on disk (`store/`) remains fully encrypted regardless of `security.mode`.
+
+**Warnings (`plain`):**
+
+- Show **`warning.plain_mode`** when `storage.mode = plain`.
+- Hide **Close → keep encrypted cache** in settings; lock always **seals** (no `closed` state). See RF-53c.
 
 ---
 
@@ -611,7 +641,7 @@ Configurable in `config/<id>.toml` as `security.mode`.
 | Encrypted traces / old versions | `full` close + wipe (RF-53); accept in `normal` close |
 | Two PCs on same USB | RF-54 lockfile + warning |
 | 7z on PATH vs bundled | Bundle `7zz` per platform in app/HD |
-| Very large vault | Document limits; multiple vaults; `plain` if insufficient RAM |
+| Very large vault / insufficient RAM | UI documents limits (`warning.encrypted_dir_ram`); split into multiple vaults; `plain` when RAM cannot fit entire unlocked vault (v1.1+) |
 | Android: OTG disconnected with vault open | Recovery; UI warnings |
 | Android: Intent doesn't open folder in some manager | Chooser + document tested apps |
 | Android: storage scope | SAF mandatory |

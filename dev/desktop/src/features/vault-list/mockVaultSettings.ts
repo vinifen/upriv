@@ -136,10 +136,12 @@ export function getMockVaultSettings(vaultId: string): VaultSettingsConfig {
 }
 
 export function vaultSettingsToListPatch(config: VaultSettingsConfig) {
+  const passwordHint = config.vault.password_hint.trim();
   return {
     displayName: config.vault.display_name,
     order: config.vault.order,
     note: config.vault.note,
     hidden: config.vault.hidden,
+    passwordHint: passwordHint || undefined,
   };
 }

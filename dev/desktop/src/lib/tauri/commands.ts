@@ -11,6 +11,7 @@ export const TAURI_COMMANDS = {
   VAULT_DELETE: "vault_delete",
   BACKUP_LIST: "backup_list",
   BACKUP_DELETE: "backup_delete",
+  BACKUP_PROMOTE_SAVE: "backup_promote_save",
 } as const;
 
 export type TauriCommand = (typeof TAURI_COMMANDS)[keyof typeof TAURI_COMMANDS];

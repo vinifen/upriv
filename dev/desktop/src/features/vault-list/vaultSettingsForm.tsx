@@ -1,26 +1,14 @@
 import { useId, type ReactNode } from "react";
 import { Button } from "@/components/ui";
-import {
-  VAULT_DISPLAY_NAME_MAX_LENGTH,
-  VAULT_NOTE_MAX_LENGTH,
-  VAULT_PASSWORD_HINT_MAX_LENGTH,
-} from "@/constants/vault";
+import { VAULT_DISPLAY_NAME_MAX_LENGTH, VAULT_NOTE_MAX_LENGTH } from "@/constants/vault";
 import { useTranslation } from "@/i18n";
 import { VaultChangePasswordPanel } from "./VaultChangePasswordPanel";
-import type {
-  EncryptedDirSecurityUiMode,
-  PlainSecurityUiMode,
-  SecurityMode,
-  StorageMode,
-  VaultSettingsConfig,
-} from "./vaultSettingsTypes";
+import type { SecurityMode, StorageMode, VaultSettingsConfig } from "./vaultSettingsTypes";
 import {
-  ENCRYPTED_DIR_SECURITY_UI_MODES,
-  encryptedDirSecurityModeToUi,
-  PLAIN_SECURITY_UI_MODES,
-  plainSecurityModeToUi,
-  uiToEncryptedDirSecurityMode,
-  uiToPlainSecurityMode,
+  SECURITY_UI_MODES,
+  securityModeToUi,
+  type SecurityUiMode,
+  uiToSecurityMode,
 } from "./vaultSettingsTypes";
 
 export const settingsControlClass =
@@ -28,7 +16,7 @@ export const settingsControlClass =
 
 /** Native radio inside policy cards — accent only when checked (dot), neutral border otherwise. */
 export const settingsRadioInputClass =
-  "mt-0.5 h-4 w-4 shrink-0 border-outline-variant text-accent focus:ring-0 focus-visible:ring-0";
+  "mt-0.5 h-4 w-4 shrink-0 border border-outline-variant text-accent focus:ring-0 focus-visible:ring-0";
 
 interface SettingsFieldProps {
   label: string;
@@ -167,11 +155,17 @@ export function VaultSettingsStorageSection({ config, onChange }: SectionPatchPr
           />
         </div>
       </SettingsField>
+      {config.mode === "encrypted_dir" ? (
+        <p className="text-xs leading-relaxed text-on-error-container/90">
+          {t("warning.encrypted_dir_ram")}
+        </p>
+      ) : null}
     </SettingsFormGrid>
   );
 }
 
 interface VaultSettingsCloseSectionProps {
+  storageMode: StorageMode;
   close: VaultSettingsConfig["close"];
   autoClose: VaultSettingsConfig["auto_close"];
   secureWipe: boolean;
@@ -183,6 +177,7 @@ interface VaultSettingsCloseSectionProps {
 }
 
 export function VaultSettingsCloseSection({
+  storageMode,
   close,
   autoClose,
   secureWipe,
@@ -203,34 +198,40 @@ export function VaultSettingsCloseSection({
 
   return (
     <SettingsFormGrid>
-      <SettingsField
-        label={t("modal.settings.field.close.default_action")}
-        hint={t("modal.settings.field.close.default_action_help")}
-      >
-        <div
-          role="radiogroup"
-          aria-label={t("modal.settings.field.close.default_action")}
-          className="grid gap-2"
+      {storageMode === "plain" ? (
+        <p className="text-xs leading-relaxed text-on-surface-variant">
+          {t("modal.settings.field.close.plain_seal_only")}
+        </p>
+      ) : (
+        <SettingsField
+          label={t("modal.settings.field.close.default_action")}
+          hint={t("modal.settings.field.close.default_action_help")}
         >
-          <PolicyRadioOption
-            groupName={lockActionGroup}
-            value="close"
-            checked={close.default_action === "close"}
-            title={t("modal.settings.option.close.close")}
-            description={t("modal.settings.option.close.close_desc")}
-            badge="recommended"
-            onSelect={() => onCloseChange({ default_action: "close" })}
-          />
-          <PolicyRadioOption
-            groupName={lockActionGroup}
-            value="seal"
-            checked={close.default_action === "seal"}
-            title={t("modal.settings.option.close.seal")}
-            description={t("modal.settings.option.close.seal_desc")}
-            onSelect={() => onCloseChange({ default_action: "seal" })}
-          />
-        </div>
-      </SettingsField>
+          <div
+            role="radiogroup"
+            aria-label={t("modal.settings.field.close.default_action")}
+            className="grid gap-2"
+          >
+            <PolicyRadioOption
+              groupName={lockActionGroup}
+              value="close"
+              checked={close.default_action === "close"}
+              title={t("modal.settings.option.close.close")}
+              description={t("modal.settings.option.close.close_desc")}
+              badge="recommended"
+              onSelect={() => onCloseChange({ default_action: "close" })}
+            />
+            <PolicyRadioOption
+              groupName={lockActionGroup}
+              value="seal"
+              checked={close.default_action === "seal"}
+              title={t("modal.settings.option.close.seal")}
+              description={t("modal.settings.option.close.seal_desc")}
+              onSelect={() => onCloseChange({ default_action: "seal" })}
+            />
+          </div>
+        </SettingsField>
+      )}
 
       <label className="flex cursor-pointer select-none items-center gap-3">
         <input
@@ -342,33 +343,35 @@ export function VaultSettingsBackupSection({ config, onChange }: SectionPatchPro
         />
         <span className="text-sm text-on-surface">{t("modal.settings.field.backup.enabled")}</span>
       </label>
-      <SettingsField label={t("modal.settings.field.backup.mode")} htmlFor={modeId}>
-        <select
-          id={modeId}
-          value={config.mode}
-          disabled={!config.enabled}
-          onChange={(e) => onChange({ mode: e.target.value as VaultSettingsConfig["backup"]["mode"] })}
-          className={settingsControlClass}
-        >
-          <option value="keep_last">{t("modal.settings.option.backup.keep_last")}</option>
-          <option value="keep_all">{t("modal.settings.option.backup.keep_all")}</option>
-        </select>
-      </SettingsField>
-      {config.mode === "keep_last" ? (
-        <SettingsField label={t("modal.settings.field.backup.keep_last")} htmlFor={keepId}>
-          <input
-            id={keepId}
-            type="number"
-            min={1}
-            max={99}
-            disabled={!config.enabled}
-            value={config.keep_last}
-            onChange={(e) =>
-              onChange({ keep_last: Math.min(99, Math.max(1, Number.parseInt(e.target.value, 10) || 1)) })
-            }
-            className={[settingsControlClass, "font-mono tabular-nums"].join(" ")}
-          />
-        </SettingsField>
+      {config.enabled ? (
+        <>
+          <SettingsField label={t("modal.settings.field.backup.mode")} htmlFor={modeId}>
+            <select
+              id={modeId}
+              value={config.mode}
+              onChange={(e) => onChange({ mode: e.target.value as VaultSettingsConfig["backup"]["mode"] })}
+              className={settingsControlClass}
+            >
+              <option value="keep_last">{t("modal.settings.option.backup.keep_last")}</option>
+              <option value="keep_all">{t("modal.settings.option.backup.keep_all")}</option>
+            </select>
+          </SettingsField>
+          {config.mode === "keep_last" ? (
+            <SettingsField label={t("modal.settings.field.backup.keep_last")} htmlFor={keepId}>
+              <input
+                id={keepId}
+                type="number"
+                min={1}
+                max={99}
+                value={config.keep_last}
+                onChange={(e) =>
+                  onChange({ keep_last: Math.min(99, Math.max(1, Number.parseInt(e.target.value, 10) || 1)) })
+                }
+                className={[settingsControlClass, "font-mono tabular-nums"].join(" ")}
+              />
+            </SettingsField>
+          ) : null}
+        </>
       ) : null}
     </SettingsFormGrid>
   );
@@ -380,7 +383,7 @@ interface VaultSettingsSecuritySectionProps extends SectionPatchProps<"security"
   onPasswordHintChange: (passwordHint: string) => void;
 }
 
-function securityOptionMeta(uiMode: PlainSecurityUiMode | EncryptedDirSecurityUiMode): {
+function securityOptionMeta(uiMode: SecurityUiMode): {
   badge?: "recommended" | "less-secure" | "insecure" | "default";
   tone?: "default" | "less-secure" | "insecure";
 } {
@@ -406,21 +409,17 @@ export interface SecurityModeRadioGroupProps {
 }
 
 export function SecurityModeRadioGroup({
-  storageMode,
+  storageMode: _storageMode,
   securityMode,
   groupName,
   onSelectMode,
 }: SecurityModeRadioGroupProps) {
   const { t } = useTranslation();
-  const uiModes = storageMode === "plain" ? PLAIN_SECURITY_UI_MODES : ENCRYPTED_DIR_SECURITY_UI_MODES;
-  const selectedUi =
-    storageMode === "plain"
-      ? plainSecurityModeToUi(securityMode)
-      : encryptedDirSecurityModeToUi(securityMode);
+  const selectedUi = securityModeToUi(securityMode);
 
   return (
     <>
-      {uiModes.map((uiMode) => {
+      {SECURITY_UI_MODES.map((uiMode) => {
         const meta = securityOptionMeta(uiMode);
         return (
           <PolicyRadioOption
@@ -432,13 +431,7 @@ export function SecurityModeRadioGroup({
             description={t(`modal.settings.option.security.${uiMode}_desc`)}
             badge={meta.badge}
             tone={meta.tone}
-            onSelect={() =>
-              onSelectMode(
-                storageMode === "plain"
-                  ? uiToPlainSecurityMode(uiMode as PlainSecurityUiMode)
-                  : uiToEncryptedDirSecurityMode(uiMode as EncryptedDirSecurityUiMode),
-              )
-            }
+            onSelect={() => onSelectMode(uiToSecurityMode(uiMode))}
           />
         );
       })}
@@ -454,26 +447,10 @@ export function VaultSettingsSecuritySection({
   onPasswordHintChange,
 }: VaultSettingsSecuritySectionProps) {
   const { t } = useTranslation();
-  const hintId = useId();
   const passwordMemoryGroup = useId();
 
   return (
     <SettingsFormGrid>
-      <SettingsField
-        label={t("modal.settings.password_hint")}
-        htmlFor={hintId}
-        hint={t("modal.settings.field.security.password_hint_help")}
-      >
-        <input
-          id={hintId}
-          type="text"
-          value={passwordHint}
-          maxLength={VAULT_PASSWORD_HINT_MAX_LENGTH}
-          onChange={(e) => onPasswordHintChange(e.target.value)}
-          className={settingsControlClass}
-          autoComplete="off"
-        />
-      </SettingsField>
       <SettingsField
         label={t("modal.settings.field.security.mode")}
         hint={
@@ -495,7 +472,10 @@ export function VaultSettingsSecuritySection({
           />
         </div>
       </SettingsField>
-      <VaultChangePasswordPanel />
+      <VaultChangePasswordPanel
+        passwordHint={passwordHint}
+        onPasswordHintChange={onPasswordHintChange}
+      />
     </SettingsFormGrid>
   );
 }
@@ -687,14 +667,10 @@ export function PolicyRadioOption({
 
   const borderClass = checked
     ? "border-2 border-[var(--accent)]"
-    : isInsecure
-      ? "border-0"
-      : "border border-outline-variant";
+    : "border border-outline-variant";
 
-  const radioClass = [
-    "mt-0.5 h-4 w-4 shrink-0 text-accent focus:ring-0 focus-visible:ring-0",
-    isInsecure ? "border-transparent" : "border-outline-variant",
-  ].join(" ");
+  const radioClass =
+    "mt-0.5 h-4 w-4 shrink-0 border border-outline-variant text-accent focus:ring-0 focus-visible:ring-0";
 
   return (
     <label
