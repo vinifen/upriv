@@ -26,7 +26,7 @@ import { useVaultListState } from "./useVaultListState";
 
 export function VaultListPage() {
   const { t } = useTranslation();
-  const { openFromVault, close: closeFileManager } = useFileManager();
+  const { openFromVault, purgeForVaultClose } = useFileManager();
   const { settings, patchSettings, showHiddenVaultsSession } = useAppSettingsContext();
   const showHiddenVaults =
     settings.ui.always_show_hidden_vaults || showHiddenVaultsSession;
@@ -181,11 +181,11 @@ export function VaultListPage() {
           setVaultRuntimeState(vaultId, { session: "open", persistence: "closed" });
           setVaultPasswordInRam(vaultId);
         } else if (intent === "close") {
-          closeFileManager(vaultId);
+          purgeForVaultClose(vaultId);
           setVaultRuntimeState(vaultId, { session: null, persistence: "closed" });
           clearVaultPasswordInRam(vaultId);
         } else {
-          closeFileManager(vaultId);
+          purgeForVaultClose(vaultId);
           setVaultRuntimeState(vaultId, { session: null, persistence: "sealed" });
           clearVaultPasswordInRam(vaultId);
         }
@@ -195,7 +195,7 @@ export function VaultListPage() {
         setLifecycleSubmitting(false);
       }
     },
-    [closeFileManager, lifecycleRequest, setVaultRuntimeState],
+    [purgeForVaultClose, lifecycleRequest, setVaultRuntimeState],
   );
 
   return (
@@ -267,12 +267,16 @@ export function VaultListPage() {
         onClose={() => setSettingsVaultId(null)}
         onVaultSettingsSaved={updateVaultSettings}
         onVaultDelete={(vaultId) => {
-          closeFileManager(vaultId);
+          purgeForVaultClose(vaultId);
           removeVault(vaultId);
         }}
       />
       <FileManagerLayer />
-      <AppSettingsModal open={appSettingsOpen} onClose={() => setAppSettingsOpen(false)} />
+      <AppSettingsModal
+        open={appSettingsOpen}
+        vaults={vaults}
+        onClose={() => setAppSettingsOpen(false)}
+      />
       <LogsModal open={logsOpen} onClose={() => setLogsOpen(false)} />
       <HelpModal open={helpOpen} onClose={() => setHelpOpen(false)} />
       <CreateVaultWizardModal

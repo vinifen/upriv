@@ -6,6 +6,8 @@ import {
   requiresPasswordForLifecycle,
   validateMockVaultPassword,
 } from "./mockVaultSessionPassword";
+import { VaultPasswordHintCallout } from "./VaultPasswordHintCallout";
+import { resolveVaultPasswordHint } from "./vaultPasswordHint";
 import { SettingsField } from "./vaultSettingsForm";
 import type { VaultListItem } from "./types";
 import type { VaultLifecycleIntent } from "./vaultLifecycleTypes";
@@ -78,6 +80,7 @@ export function VaultLifecycleModal({
   };
 
   const canSubmit = !submitting && (!requiresPassword || password.length > 0);
+  const passwordHint = resolveVaultPasswordHint(vault);
 
   return (
     <Modal
@@ -117,12 +120,7 @@ export function VaultLifecycleModal({
             </p>
           </>
         ) : null}
-        {intent === "unlock" && vault.passwordHint ? (
-          <p className="text-sm text-on-surface-variant">
-            <span className="font-medium text-on-surface">{t("unlock.password_hint_label")}: </span>
-            {vault.passwordHint}
-          </p>
-        ) : null}
+        {requiresPassword && passwordHint ? <VaultPasswordHintCallout hint={passwordHint} /> : null}
         {requiresPassword ? (
           <SettingsField label={t("unlock.password")} htmlFor={passwordId}>
             <PasswordInput

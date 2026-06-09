@@ -19,28 +19,38 @@ export type EncryptedDirSecurityMode = "always_prompt" | "session_ram" | "ram_on
 export type PlainSecurityMode = "disk_close" | "disk_open_close";
 export type SecurityMode = EncryptedDirSecurityMode | PlainSecurityMode;
 
-/** Two choices shown in settings UI for encrypted_dir (maps to TOML `always_prompt` or `session_ram`). */
-export const ENCRYPTED_DIR_SECURITY_UI_MODES = ["session_ram", "prompt_open_close"] as const;
-export type EncryptedDirSecurityUiMode = (typeof ENCRYPTED_DIR_SECURITY_UI_MODES)[number];
-
-/** All password-memory choices shown in plain storage mode (includes disk session options). */
-export const PLAIN_SECURITY_UI_MODES = [
+/** Password-memory choices in vault settings (encrypted_dir and plain). */
+export const SECURITY_UI_MODES = [
   "session_ram",
   "prompt_open_close",
   "disk_close",
   "disk_open_close",
 ] as const;
 
-export type PlainSecurityUiMode = (typeof PLAIN_SECURITY_UI_MODES)[number];
+export type SecurityUiMode = (typeof SECURITY_UI_MODES)[number];
 
-export function encryptedDirSecurityModeToUi(mode: SecurityMode): EncryptedDirSecurityUiMode {
-  if (mode === "session_ram") return "session_ram";
-  if (mode === "always_prompt" || mode === "ram_on_close_only") return "prompt_open_close";
-  return "session_ram";
+/** @deprecated Use SECURITY_UI_MODES */
+export const ENCRYPTED_DIR_SECURITY_UI_MODES = SECURITY_UI_MODES;
+export type EncryptedDirSecurityUiMode = SecurityUiMode;
+
+/** @deprecated Use SECURITY_UI_MODES */
+export const PLAIN_SECURITY_UI_MODES = SECURITY_UI_MODES;
+export type PlainSecurityUiMode = SecurityUiMode;
+
+export function encryptedDirSecurityModeToUi(mode: SecurityMode): SecurityUiMode {
+  return securityModeToUi(mode);
 }
 
-export function uiToEncryptedDirSecurityMode(ui: EncryptedDirSecurityUiMode): EncryptedDirSecurityMode {
-  return ui === "session_ram" ? "session_ram" : "always_prompt";
+export function uiToEncryptedDirSecurityMode(ui: SecurityUiMode): SecurityMode {
+  return uiToSecurityMode(ui);
+}
+
+export function securityModeToUi(mode: SecurityMode): SecurityUiMode {
+  return plainSecurityModeToUi(mode);
+}
+
+export function uiToSecurityMode(ui: SecurityUiMode): SecurityMode {
+  return uiToPlainSecurityMode(ui);
 }
 
 export function plainSecurityModeToUi(mode: SecurityMode): PlainSecurityUiMode {
@@ -68,14 +78,78 @@ export function isPlainOnlySecurityMode(mode: SecurityMode): mode is PlainSecuri
   return mode === "disk_close" || mode === "disk_open_close";
 }
 
+/** Disk session modes are valid for both storage modes; default remains session_ram. */
 export function normalizeSecurityModeForStorage(
-  storageMode: StorageMode,
+  _storageMode: StorageMode,
   securityMode: SecurityMode,
 ): SecurityMode {
-  if (storageMode === "encrypted_dir" && isPlainOnlySecurityMode(securityMode)) {
-    return "session_ram";
-  }
   return securityMode;
+}
+
+/** Plain storage has no `closed` state — lock always seals. */
+export function normalizeClosePolicyForStorage(config: VaultSettingsConfig): VaultSettingsConfig {
+  if (config.storage.mode !== "plain" || config.close.default_action === "seal") {
+    return config;
+  }
+  return { ...config, close: { default_action: "seal" } };
+}
+
+export function transitionStorageModeClose(
+  fromMode: StorageMode,
+  fromClose: CloseDefaultAction,
+  toMode: StorageMode,
+  encryptedClosePreference: CloseDefaultAction,
+): { close: CloseDefaultAction; encryptedClosePreference: CloseDefaultAction } {
+  if (toMode === fromMode) {
+    return {
+      close: fromClose,
+      encryptedClosePreference: fromMode === "encrypted_dir" ? fromClose : encryptedClosePreference,
+    };
+  }
+
+  if (toMode === "plain") {
+    const savedPreference = fromMode === "encrypted_dir" ? fromClose : encryptedClosePreference;
+    return { close: "seal", encryptedClosePreference: savedPreference };
+  }
+
+  return { close: encryptedClosePreference, encryptedClosePreference };
+}
+
+/** Apply storage mode change while preserving encrypted-dir close preference across plain detours. */
+export function patchStorageMode(
+  config: VaultSettingsConfig,
+  mode: StorageMode,
+  encryptedClosePreference: CloseDefaultAction,
+): { config: VaultSettingsConfig; encryptedClosePreference: CloseDefaultAction } {
+  const { close, encryptedClosePreference: nextPreference } = transitionStorageModeClose(
+    config.storage.mode,
+    config.close.default_action,
+    mode,
+    encryptedClosePreference,
+  );
+
+  const next: VaultSettingsConfig = {
+    ...config,
+    storage: { mode },
+    close: { default_action: close },
+  };
+
+  return {
+    config: normalizeClosePolicyForStorage(next),
+    encryptedClosePreference: nextPreference,
+  };
+}
+
+export function patchCloseDefaultAction(
+  config: VaultSettingsConfig,
+  defaultAction: CloseDefaultAction,
+  encryptedClosePreference: CloseDefaultAction,
+): { config: VaultSettingsConfig; encryptedClosePreference: CloseDefaultAction } {
+  return {
+    config: { ...config, close: { default_action: defaultAction } },
+    encryptedClosePreference:
+      config.storage.mode === "encrypted_dir" ? defaultAction : encryptedClosePreference,
+  };
 }
 export type WipePattern = "random" | "zeros";
 export type SevenZipMethod = "lzma2";
@@ -135,4 +209,5 @@ export interface VaultSettingsListPatch {
   order: number;
   note: string;
   hidden: boolean;
+  passwordHint?: string;
 }

@@ -8,7 +8,7 @@ export interface FileTreeNode {
   children?: FileTreeNode[];
 }
 
-export type MockFileLanguage = "markdown" | "text" | "shell" | "env" | "binary";
+export type MockFileLanguage = "markdown" | "text" | "shell" | "env" | "image" | "binary";
 
 export interface MockFileContent {
   content: string;

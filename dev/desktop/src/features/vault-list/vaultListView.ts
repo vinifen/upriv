@@ -11,7 +11,7 @@ export const vaultRowDensityClass = {
     iconSize: 20 as const,
   },
   large: {
-    article: "py-8",
+    article: "py-10",
     title: "text-xl",
     icon: "h-12 w-12",
     iconSize: 24 as const,

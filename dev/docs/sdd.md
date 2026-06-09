@@ -26,12 +26,12 @@ See PRD §11.1.
 
 0. **v1 Linux only** — first delivery: desktop app on Linux (Tauri + `upriv-core` + FUSE). Vault layout and `.7z` remain portable; Windows/macOS/mobile later (PRD §3.5).
 1. **Vault = folder + contract** — independent of where the executable is installed.
-2. **Two product modes** — `encrypted_dir` (default; **v1**) and `plain` (exception; **v1.1+**, e.g. insufficient RAM). Do not treat the second as “legacy to discard”.
+2. **Two product modes** — `encrypted_dir` (default; **v1**) and `plain` (exception; **v1.1+**, e.g. insufficient RAM). Do not treat the second as “legacy to discard”. In `encrypted_dir`, **available RAM must fit the entire unlocked vault** while open — otherwise open/edit/close fail; UI warns via `warning.encrypted_dir_ram` (PRD §1.6, RF-UI-17).
 3. **Core in Rust** — single `upriv-core` crate for all platforms; shared logic between desktop and mobile (FFI). UI layers (React web, React Native) are **presentation only** — no crypto, disk I/O, or session secrets in JS/TS. See `ARCHITECTURE.md` §2.
 4. **Declarative config** — `.upriv/settings.toml` + per-vault `vaults/<id>/config.toml`; safe defaults if missing.
 5. **Mutable config** — vault options **changeable at any time**; TOML is source of truth; app re-reads before open/close (not “create and lock”).
 6. **Fail safe** — never overwrite `vaults/<id>.7z` without validation; atomic writes.
-7. **Password RAM only (v1)** — forbid `session.enc` / remember password on disk; after reboot, remount with password.
+7. **Password default in RAM (v1)** — default `session_ram`; optional `disk_*` modes write **encrypted** `session.enc` (never plaintext password); after reboot without `session.enc`, remount with password.
 8. **Close = update `.7z`** — logical session content → `7zz` by stream; never pack `.enc` blobs from the store.
 9. **Manifest** — `sync_generation` + hashes align `.7z` and store; recovery without silent overwrite.
 10. **Unified states** — `open` | `closed` | `sealed`; `sealed` = only `.7z` in **both** modes.
@@ -259,6 +259,8 @@ Related: PRD **RF-53**, **RF-53b**.
 
 **Invariant:** in `encrypted_dir`, **never** create persistent regular files in `workspace/<id>/` on the vault volume.
 
+**RAM:** session serves decrypted bytes from RAM; the full unlocked vault working set must fit available memory (see **`warning.encrypted_dir_ram`** and §3.2.2).
+
 ```
 App / Explorer  →  workspace/<id>/nota.txt  (logical path)
                         ↓ FUSE / WinFSP / DocumentProvider
@@ -284,6 +286,36 @@ App / Explorer  →  workspace/<id>/nota.txt  (logical path)
 **Required tests:** write via mount → no plaintext in real `workspace/` → ciphertext present in `stores/<id>/` before vault close.
 
 Related: PRD **RF-49**.
+
+#### 2.4.1 Encrypted store — file and folder names (forensic resistance)
+
+In `encrypted_dir`, **logical paths must not appear in plaintext** under `vaults/<id>/store/` on HD/SSD. Forensic inspection of the store alone must not reveal what each blob represents (e.g. `passwords.txt` vs `photo.jpg`).
+
+**On-disk layout (example):**
+
+```text
+store/
+├── vault.header          # format + KDF params + wrapped key (no cleartext tree)
+├── index/root.idx.enc    # encrypted directory tree (paths + metadata)
+└── data/<hash>/….chunk.enc   # content ciphertext; opaque identifiers only
+```
+
+**Crypto (see `prod-example` `vault.header`):**
+
+| Layer | Cipher | What it protects |
+|-------|--------|------------------|
+| Content blobs | `XChaCha20-Poly1305` (default) | File bytes |
+| Path / name index | `AES-SIV` (`name_cipher`) | File and folder names, tree structure |
+
+**Rules:**
+
+- Never persist logical paths as human-readable filenames under `store/data/`.
+- Index updates are write-through with content (same session key); after `seal` + wipe, neither names nor content remain in the local store.
+- Logical names are visible only in the **virtual mount** while the vault is **open** (session), not as durable plaintext on the vault volume.
+
+**Archive (`.7z`):** `[seven_zip] encrypt_file_names = true` by default — names hidden inside the closed archive too. Disabling it is a deliberate downgrade (UI warning).
+
+Related: PRD §3.3.1, **RF-45**, **RF-49**, **RF-49b**.
 
 ### 2.5 Lockfile
 
@@ -434,6 +466,8 @@ default_vault = "my-encrypted-notes"
 
 [ui]
 locale = "en"
+theme = "dark"
+# file_manager_dock_expanded = false   # optional; see table below
 
 [logging]
 enabled = true
@@ -446,6 +480,33 @@ last_opened_vault = "my-encrypted-notes"
 ```
 
 **Upriv marker:** folder is `<vault-root>` if it contains `.upriv/settings.toml`.
+
+#### `[ui]` — fields and where they are saved (v1 desktop)
+
+| Key | Edited in System settings modal? | When persisted |
+|-----|----------------------------------|----------------|
+| `locale` | Yes (Appearance) | Explicit **Save** in System settings |
+| `theme` | Yes (Appearance) | Explicit **Save** in System settings |
+| `always_show_hidden_vaults` | Yes (Hidden vaults) | Explicit **Save** in System settings |
+| `vault_list_sort`, `vault_list_sort_direction` | No | When user changes sort on the vault list toolbar |
+| `vault_list_view` | No | When user toggles list / block view on the vault list toolbar |
+| `file_manager_dock_expanded` | **No** | When user **expands or collapses** the minimized file-manager dock (bottom-right chip list). Restored on next app launch. Default `false` (collapsed — count button only). |
+
+**Minimized file-manager dock:** after **Minimize** on a file-manager modal, vault chips appear in a floating dock. One control toggles between showing all chips vs. a single collapsed button with the count. That expanded/collapsed choice is written to `[ui] file_manager_dock_expanded` immediately on toggle — not exposed as a checkbox in System settings.
+
+**Download vaults (System settings — action only):** section **below Hidden vaults**. **Not** a `[ui]` key — checklist selection is **transient** (RAM while the modal is open; reset on close). **Does not** require or trigger System settings **Save**.
+
+| Rule | Detail |
+|------|--------|
+| Purpose | Zip selected main archives `vaults/<id>/archive/<display_name>.7z` for backup or moving to another drive |
+| List | All vaults in the current Upriv root, sorted by `display_name` |
+| Select all | `modal.app_settings.select_all_vaults` — toggles only **available** vaults (`closed` / `sealed` on disk) |
+| Blocked rows | `session === open \| closing \| recovery` → checkbox disabled; inline status `(Open)` etc.; `warning.download_vaults_*` callout when any blocked |
+| Download | Button enabled when ≥1 available vault selected; label **all** vs **selected**; zip name `modal.app_settings.download_vaults_zip_name` (`upriv-vaults-{date}.zip`) |
+| Zip layout | `{vault_id}/{display_name}.7z` per entry (avoids display-name collisions) |
+| UI pattern | **Flat checklist** like Hidden vaults — no bordered list cards, no `ring`/`divide` containers; compact rows (`text-xs`), subtle row hover only |
+
+**Desktop mock:** `AppSettingsDownloadVaultsSection`, `vaultBulkExport.ts`; future Tauri: `vault_bulk_export(vault_root, vault_ids)`.
 
 **Working root (UX):** `workspace/` + launchers (`Upriv-windows.exe`, `Upriv-mac`, `Upriv-linux`) and `.upriv/`; documentation in `README.md` at `<vault-root>` root.
 
@@ -464,7 +525,7 @@ vaults/<vault_id>/              # vault_id = normalized slug (filesystem-safe)
 ├── archive/<display_name>.7z   # Plan B — user filename verbatim
 ├── store/                      # encrypted_dir + closed (wiped on seal)
 ├── backups/                    # {timestamp}-{vault_id}.7z (app-generated)
-└── auth/                       # plain + disk_open_close only
+└── auth/                       # disk_close / disk_open_close (any storage.mode)
 ```
 
 **Discovery:** scan `vaults/*/config.toml` on app start.
@@ -543,6 +604,8 @@ mode = "encrypted_dir"          # v1 default
 [close]
 default_action = "close"        # "close" | "seal"
 ```
+
+**RAM capacity (`encrypted_dir`):** decrypted logical content is held in **RAM** while the vault is **open** (virtual mount + session read/write buffers; encrypted `store/` on disk is not a substitute for session memory). **`upriv-core`** must treat insufficient memory as a **hard failure** — open, edit, or close abort with a user-visible error; **never** silently spill plaintext workspace to disk in this mode (RF-49). UI: i18n **`warning.encrypted_dir_ram`** under **Storage** when `mode = encrypted_dir` (vault settings + create wizard); Help → **`modal.help.body.security.2`**. When RAM cannot fit the vault, user should split vaults or choose **`plain`** (v1.1+).
 
 | Value | `7zz` (summary) | Use |
 |-------|-----------------|-----|
@@ -623,10 +686,20 @@ Settings modal edits `config.toml` but **does not mirror every key** — advance
 | TOML section | Shown in UI | Hidden in UI (defaults / system) |
 |--------------|-------------|----------------------------------|
 | `[vault]` | `display_name`, `order`, `note` | `id` (slug — derived/normalized on rename migration), `vault_file`, `store_dir`, `backups_dir` (layout internal; user may relocate **package root** later via onboarding, not per-vault paths) |
-| `[close]` + `[auto_close]` + `[security].secure_wipe_workspace` | **Close** section: default lock action, secure wipe, idle auto-close | — |
-| `[security]` | `password_hint` (UI under **Security**; file still `[vault]`), **`mode` (password in memory — 2 UI options for encrypted_dir)**, **change password** | `secure_wipe_workspace` (UI under **Close**), `wipe_passes`, `wipe_pattern`, `password_changed_at` (set by app) |
+| `[storage]` | `mode` (`encrypted_dir` / `plain`) + contextual warnings | — |
+| `[close]` + `[auto_close]` + `[security].secure_wipe_workspace` | **Close** section: default lock action (hidden when `plain`), secure wipe, idle auto-close | — |
+| `[security]` | `password_hint` (UI under **Security**; file still `[vault]`), **`mode` (password in memory — 4 UI options for encrypted_dir and plain)**, **change password** | `secure_wipe_workspace` (UI under **Close**), `wipe_passes`, `wipe_pattern`, `password_changed_at` (set by app) |
 
-**Password in memory (UI):** `session_ram` **or** ask on open and close (saved as `always_prompt`; `ram_on_close_only` in old configs displays as the same choice and normalizes on save).
+**Password in memory (UI):** `session_ram`, ask on open and close (`always_prompt`; `ram_on_close_only` legacy maps here), `disk_close` (less secure), `disk_open_close` (insecure) — **same list in both** `encrypted_dir` and `plain`. Disk modes use `auth/<id>/.session.enc` (encrypted key blob). Does **not** weaken store or `.7z` encryption.
+
+**Storage mode warnings (UI):**
+
+| `storage.mode` | Warning key | When shown |
+|----------------|-------------|------------|
+| `encrypted_dir` | `warning.encrypted_dir_ram` | Storage section (settings + create wizard); Help → Security |
+| `plain` | `warning.plain_mode` | Storage section; plus hide **Close → keep cache** (seal-only) |
+
+Related: PRD **RF-UI-17**, §1.6.
 | `[seven_zip]` | `archive_mode`, `encrypt_file_names` | `compression_level`, `method`, `solid` (defaults: 5, `lzma2`, `false`) |
 | `[policy]` | `allow_external_editors`, `disallow_copy_outside_mount` (two radio groups) | `require_unmount_on_sleep` |
 
@@ -972,7 +1045,7 @@ Suggested format (v0.1):
 - Derivation: Argon2id(password, salt) → key.
 - Cipher: AES-256-GCM of session key.
 - **Never** store UTF-8 password in `session.enc`.
-- **Secure mode rule:** if `storage.mode = "encrypted_dir"`, `session.enc` and `.quick-auth` are forbidden.
+- **Both storage modes:** `session.enc` allowed when `security.mode` is `disk_close` or `disk_open_close`; forbidden for RAM-only modes. `.quick-auth` never stores plaintext password.
 
 ### 6.3 Mode → behavior matrix
 
@@ -984,11 +1057,12 @@ Suggested format (v0.1):
 | disk_close | prompt; write session.enc | use session.enc | session.enc allows close |
 | disk_open_close | session.enc after first unlock | use session.enc | same |
 
-**Mandatory restriction in secure mode (`encrypted_dir`):**
+**`encrypted_dir` + disk session modes:**
 
-- Allow only `always_prompt`, `session_ram`, `ram_on_close_only`.
-- Block `disk_close` and `disk_open_close` in config validation.
-- UI must not show “remember password” in `encrypted_dir` mode.
+- `disk_close` / `disk_open_close` are **allowed** (user opt-in; UI badges less-secure / insecure).
+- **Default** remains `session_ram`.
+- Store encryption and encrypted file names are **unchanged** — disk modes only affect password/session convenience via `auth/`.
+- Never write UTF-8 password to `session.enc` or settings files.
 
 ---
 
@@ -1182,9 +1256,17 @@ No separate Welcome screen in v1; “Open vault” = `--vault` on first run or a
 #### 8.2.3 Modal — backups
 
 - Title: `modal.backup.title` — `<id>`
+- Two tiers: **Saves** (`backups/saves/*.7z`, never auto-deleted) and **Standard** (rotated per `[backup]`). **Save** on a standard row → `backup_promote_save`.
 - Table/list: columns **Name**, **Date**, **Actions**
 - **Delete:** inline confirmation or second step with `<input>` — placeholder `modal.backup.delete_confirm` + `` `<id>` ``; button disabled until `input === id`.
-- Suggested Tauri commands: `backup_list(id)`, `backup_delete(id, backup_name, confirm_id)`.
+- Suggested Tauri commands: `backup_list(id)`, `backup_delete(id, backup_name, confirm_id)`, `backup_promote_save(id, backup_name)`.
+
+#### 8.2.3a Modal — system settings (Download vaults)
+
+Opened from app menu (**System settings**). Persisted sections use explicit **Save**; **Download vaults** does not.
+
+- Section order (v1 desktop): Appearance → Logging → Behavior → Hidden vaults → **Download vaults**
+- **Download vaults:** checklist of all vaults; see §3.1 table (*Download vaults*). i18n `modal.app_settings.section.download_vaults*`, `warning.download_vaults_*`.
 
 #### 8.2.4 Modal — vault settings
 
@@ -1238,6 +1320,13 @@ fn backup_list(vault_id: String) -> Result<Vec<BackupEntryDto>, String>;
 
 #[tauri::command]
 fn backup_delete(vault_id: String, backup_name: String, confirm_id: String) -> Result<(), String>;
+
+#[tauri::command]
+fn backup_promote_save(vault_id: String, backup_name: String) -> Result<(), String>;
+
+#[tauri::command]
+fn vault_bulk_export(vault_root: String, vault_ids: Vec<String>) -> Result<Vec<u8>, String>;
+// Or stream/save-dialog variant; reads archive/<display_name>.7z per id.
 
 #[tauri::command]
 fn vault_delete(vault_id: String, confirm_id: String) -> Result<(), String>;

@@ -1,14 +1,14 @@
 import { type ReactNode, useEffect, useId } from "react";
 import { createPortal } from "react-dom";
 import { Icon } from "@/components/icons";
-import { Button } from "@/components/ui";
+import { ModalChromeButton } from "@/components/ui";
 import { useTranslation } from "@/i18n";
 
 interface FileManagerModalProps {
   open: boolean;
   title: string;
   onMinimize: () => void;
-  onClose: () => void;
+  onDismiss: () => void;
   children: ReactNode;
 }
 
@@ -16,7 +16,7 @@ export function FileManagerModal({
   open,
   title,
   onMinimize,
-  onClose,
+  onDismiss,
   children,
 }: FileManagerModalProps) {
   const { t } = useTranslation();
@@ -49,47 +49,42 @@ export function FileManagerModal({
         aria-hidden
         onClick={onMinimize}
       />
-      <div className="pointer-events-none relative z-10 flex h-[100dvh] w-full items-stretch justify-center p-0 sm:h-full sm:items-center sm:p-2">
+      <div className="pointer-events-none relative z-10 flex h-[100dvh] w-full items-center justify-center p-0 sm:h-full">
         <div
           role="dialog"
           aria-modal="true"
           aria-labelledby={titleId}
           className={[
-            "pointer-events-auto flex h-full min-h-0 w-full max-w-[min(98vw,96rem)] flex-col overflow-hidden",
+            "pointer-events-auto flex h-full min-h-0 w-full flex-col overflow-hidden",
             "bg-surface-container-high shadow-modal",
-            "rounded-none sm:h-[min(94vh,calc(100vh-1rem))] sm:max-h-[min(94vh,calc(100vh-1rem))] sm:rounded-xl",
+            "rounded-none",
+            "sm:h-[calc(100vh-48px)] sm:max-h-[calc(100vh-48px)] sm:w-[calc(100vw-72px)] sm:max-w-[calc(100vw-72px)] sm:rounded-xl",
           ].join(" ")}
           onMouseDown={(event) => event.stopPropagation()}
           onClick={(event) => event.stopPropagation()}
         >
-          <header className="flex h-10 shrink-0 items-center justify-between gap-2 px-4 sm:px-5">
+          <header className="flex min-h-11 shrink-0 items-center justify-between gap-2 px-4 sm:min-h-12 sm:px-5">
             <h2
               id={titleId}
-              className="min-w-0 flex-1 truncate font-display text-sm font-semibold leading-none text-on-surface"
+              className="min-w-0 flex-1 truncate font-display text-sm font-semibold leading-none text-on-surface sm:text-base"
             >
               {title}
             </h2>
             <div className="flex shrink-0 items-center gap-0.5">
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-7 w-7 px-0"
+              <ModalChromeButton
                 onClick={onMinimize}
                 aria-label={t("modal.file_manager.action.minimize")}
                 title={t("modal.file_manager.action.minimize")}
               >
-                <Icon name="minus" size={16} />
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-7 w-7 px-0 text-base leading-none"
-                onClick={onClose}
-                aria-label={t("modal.file_manager.action.close")}
-                title={t("modal.file_manager.action.close")}
+                <Icon name="minus" size={18} />
+              </ModalChromeButton>
+              <ModalChromeButton
+                onClick={onDismiss}
+                aria-label={t("modal.file_manager.action.dismiss")}
+                title={`${t("modal.file_manager.action.dismiss")}. ${t("modal.file_manager.action.dismiss_help")}`}
               >
                 ×
-              </Button>
+              </ModalChromeButton>
             </div>
           </header>
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden text-body text-on-surface">

@@ -2,10 +2,16 @@ import type { LocaleId } from "@/i18n";
 import type { VaultListSortDirection, VaultListSortMode } from "@/features/vault-list/vaultListSort";
 import type { VaultListViewMode } from "@/features/vault-list/vaultListView";
 
-export type UiTheme = "dark" | "light";
+export type UiTheme = "dark" | "neutral" | "light";
 export type LogLevel = "trace" | "debug" | "info" | "warn" | "error";
 
-export const APP_SETTINGS_SECTIONS = ["appearance", "logging", "behavior", "hidden_vaults"] as const;
+export const APP_SETTINGS_SECTIONS = [
+  "appearance",
+  "logging",
+  "behavior",
+  "hidden_vaults",
+  "download_vaults",
+] as const;
 
 export type AppSettingsSectionId = (typeof APP_SETTINGS_SECTIONS)[number];
 
@@ -20,7 +26,7 @@ export interface AppSettingsConfig {
     vault_list_view: VaultListViewMode;
     /** TOML: `[ui] always_show_hidden_vaults` */
     always_show_hidden_vaults: boolean;
-    /** TOML: `[ui] file_manager_dock_expanded` */
+    /** TOML: `[ui] file_manager_dock_expanded` — updated from the minimized dock toggle, not app settings UI */
     file_manager_dock_expanded: boolean;
   };
   logging: {

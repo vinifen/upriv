@@ -25,13 +25,20 @@ interface VaultFileSession {
 
 const sessions = new Map<string, VaultFileSession>();
 
+const IMAGE_EXTENSIONS = [".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp", ".ico", ".avif"] as const;
+
 function languageFromPath(path: string): MockFileLanguage {
   const lower = path.toLowerCase();
   if (lower.endsWith(".pdf")) return "binary";
+  if (IMAGE_EXTENSIONS.some((ext) => lower.endsWith(ext))) return "image";
   if (lower.endsWith(".md")) return "markdown";
   if (lower.endsWith(".sh")) return "shell";
   if (lower.endsWith(".env") || lower.includes(".env.")) return "env";
   return "text";
+}
+
+export function vaultFileLanguageFromPath(path: string): MockFileLanguage {
+  return languageFromPath(path);
 }
 
 function loadInitialContents(vaultId: string, tree: FileTreeNode): VaultFileSession {
@@ -89,7 +96,19 @@ export function getVaultFileContent(vaultId: string, path: string): MockFileCont
 
 export function isVaultFileEditable(vaultId: string, path: string): boolean {
   const file = getVaultFileContent(vaultId, path);
-  return Boolean(file && file.language !== "binary");
+  if (!file) return false;
+  return file.language !== "binary" && file.language !== "image";
+}
+
+export function isVaultFileViewable(vaultId: string, path: string): boolean {
+  const file = getVaultFileContent(vaultId, path);
+  if (!file) return false;
+  return file.language !== "binary";
+}
+
+export function isVaultFileImage(vaultId: string, path: string): boolean {
+  const file = getVaultFileContent(vaultId, path);
+  return file?.language === "image";
 }
 
 export function setVaultFileContent(vaultId: string, path: string, content: string): number {
@@ -111,6 +130,25 @@ export function createVaultFile(vaultId: string, parentPath: string, baseName: s
   return path;
 }
 
+export function importVaultFile(
+  vaultId: string,
+  parentPath: string,
+  fileName: string,
+  content: string,
+): string | null {
+  const session = ensureSession(vaultId);
+  if (findNode(session.tree, parentPath)?.type !== "folder") return null;
+
+  const names = siblingNames(session.tree, parentPath);
+  const name = uniqueName(names, fileName);
+  session.tree = addChild(session.tree, parentPath, { name, type: "file" });
+  const path = joinPath(parentPath, name);
+  session.contents[path] = content;
+  session.languages[path] = languageFromPath(name);
+  bump(session);
+  return path;
+}
+
 export function createVaultFolder(vaultId: string, parentPath: string, baseName: string): string | null {
   const session = ensureSession(vaultId);
   const names = siblingNames(session.tree, parentPath);
@@ -118,6 +156,30 @@ export function createVaultFolder(vaultId: string, parentPath: string, baseName:
   session.tree = addChild(session.tree, parentPath, { name, type: "folder", children: [] });
   bump(session);
   return joinPath(parentPath, name);
+}
+
+/** Returns existing folder path or creates one with an exact name (for OS imports). */
+export function ensureVaultFolder(
+  vaultId: string,
+  parentPath: string,
+  folderName: string,
+): string | null {
+  const session = ensureSession(vaultId);
+  const parent = findNode(session.tree, parentPath);
+  if (parent?.type !== "folder") return null;
+
+  const existing = parent.children?.find(
+    (child) => child.type === "folder" && child.name === folderName,
+  );
+  if (existing) return joinPath(parentPath, folderName);
+
+  session.tree = addChild(session.tree, parentPath, {
+    name: folderName,
+    type: "folder",
+    children: [],
+  });
+  bump(session);
+  return joinPath(parentPath, folderName);
 }
 
 export function renameVaultPath(vaultId: string, path: string, newName: string): string | null {

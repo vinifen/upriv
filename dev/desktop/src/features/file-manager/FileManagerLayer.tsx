@@ -6,7 +6,10 @@ import { FileManagerWorkspace } from "./FileManagerWorkspace";
 
 export function FileManagerLayer() {
   const { t } = useTranslation();
-  const { maximizedEntry, minimizedEntries, minimize, maximize, close } = useFileManager();
+  const { maximizedEntry, entries, entryOrder, minimize, maximize, dismiss, focusedVaultId } = useFileManager();
+  const openEntries = entryOrder
+    .map((id) => entries[id])
+    .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry));
 
   return (
     <>
@@ -20,16 +23,19 @@ export function FileManagerLayer() {
         onMinimize={() => {
           if (maximizedEntry) minimize(maximizedEntry.vaultId);
         }}
-        onClose={() => {
-          if (maximizedEntry) close(maximizedEntry.vaultId);
+        onDismiss={() => {
+          if (maximizedEntry) dismiss(maximizedEntry.vaultId);
         }}
       >
         {maximizedEntry ? <FileManagerWorkspace entry={maximizedEntry} /> : null}
       </FileManagerModal>
       <FileManagerDock
-        entries={minimizedEntries}
+        entries={openEntries}
+        focusedVaultId={focusedVaultId}
+        maximizedVaultId={maximizedEntry?.vaultId ?? null}
+        onMinimize={minimize}
         onRestore={maximize}
-        onClose={close}
+        onDismiss={dismiss}
       />
     </>
   );

@@ -53,6 +53,12 @@
     box-shadow: var(--modal-shadow);
   }
 
+  /** Inset accent ring for dock chips — outline avoids clobbering shadow-modal. */
+  .dock-entry-selected {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+  }
+
   /** Modal body scroll — stable width when scrollbar appears (no layout jump). */
   .modal-scroll-pane {
     scrollbar-gutter: stable;
