@@ -140,7 +140,7 @@ Agreed pipeline for the first release:
 | 8 | Two PCs on same HD | `runtime/<id>.lock` + warning; simultaneous use remains user responsibility |
 | 9 | `plain` mode | Strong UI warning; wipe on close (documented SSD limits) |
 | 10 | Custom crypto | Standard primitives (Argon2id + AEAD); universality/portability via **`.7z`** |
-| 11 | Old backups | UI: list/view/restore `backup/<id>/*.7z` per vault |
+| 11 | Old backups | UI: list/download/delete; **create new vault from backup** (no in-place restore) |
 
 **Store encryption:** use the most mature and auditable libraries and formats possible (do not reinvent AEAD/KDF). Plan B and backups remain in **7z**.
 
@@ -286,7 +286,7 @@ Agreed pipeline for the first release:
 | RF-53c | On **close** in `encrypted_dir`, UI asks: **`action.close`** (becomes `closed` — encrypted cache + `.7z`, fast reopen) or **`action.seal`** (becomes `sealed` — compact `.7z` only). In `plain`, only **`action.seal`** (no `closed` option) | P0 |
 | RF-54 | **Lockfile** `runtime/<id>.lock` on vault open; refuse second open in another process/PC | P1 |
 | RF-55 | Crypto primitives: Argon2id + AEAD (e.g. XChaCha20-Poly1305); protected names/paths | P0 |
-| RF-56 | **Backups** UI per vault: list `backup/<id>/*.7z`, metadata, restore/replace, open with password | P1 |
+| RF-56 | **Backups** UI per vault: list `backup/<id>/*.7z`, metadata, download, delete, **create new vault from backup** (import wizard — does not replace the source vault) | P1 |
 | RF-57 | **Real states:** `open` only with active session; `closed` only with `sync_generation` + timestamps + integrity hashes; never `archive_hash == store_hash` | P0 |
 
 ### 3.4 `.7z` ↔ store sync (`manifest`)
@@ -471,7 +471,7 @@ Opened by **`action.backups`** on vault row.
 - Lists each file in `backup/<id>/` (name, date, optional size).
 - Each row: **name**, **date**, **`action.delete`** button.
 - **Delete backup:** confirmation with text field — user must **type vault name** (`id`) to enable delete button.
-- Future actions (restore, open with 7-Zip) may join same list; v1 minimum = list + delete with confirmation.
+- Future actions in same list: open with 7-Zip. **No in-place restore** — user creates a **new vault** via import wizard seeded from the backup `.7z`.
 
 ### 3.7.3 Modal — vault settings
 
@@ -497,7 +497,7 @@ Opened by **`action.settings`** on vault row.
 | RF-UI-07 | Row click (outside buttons) opens workspace when `open` | P0 |
 | RF-UI-08 | **`action.seal` dropdown** beside close, only `encrypted_dir` + open vault | P0 |
 | RF-UI-09 | Row buttons do not propagate click to row (stop propagation) | P0 |
-| RF-UI-10 | Transient screens: unlock (password), recovery, closing (progress) overlaid or in modal flow | P0 |
+| RF-UI-10 | Transient screens: unlock (password), recovery, open/close progress overlay (optional **Continue in background**). **One pipeline at a time** — open/close/seal requests are **queued** (FIFO); no cancel mid-`7zz` | P0 |
 | RF-UI-11 | **Create vault** modal/wizard: name, password, confirm password, optional hint, optional note | P0 |
 | RF-UI-12 | Unlock screen may show **`password_hint`** from config when non-empty (never auto-fill password) | P1 |
 | RF-UI-13 | **Reorder vault list:** drag-and-drop rows (press/hold + drag); persist new positions to `[vault] order` in each affected `config.toml` | P1 |

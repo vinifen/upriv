@@ -136,4 +136,16 @@ export const MOCK_VAULTS: VaultListItem[] = [
     lastAccessedAt: "2026-06-02T08:00:00Z",
     note: "Recovery pending — last good entry 2026-05-28.",
   },
+  {
+    id: "plain-folder-demo",
+    displayName: "Plain Folder Demo",
+    persistence: "sealed",
+    session: null,
+    storageMode: "plain",
+    order: 12,
+    canSeal: false,
+    lastAccessedWhen: "1 week ago",
+    lastAccessedAt: "2026-05-26T09:00:00Z",
+    note: "Decrypted-on-disk mode — lock always seals.",
+  },
 ];

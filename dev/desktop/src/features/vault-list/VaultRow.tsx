@@ -1,7 +1,7 @@
 import { Icon, type IconName } from "@/components/icons";
 import { useTranslation } from "@/i18n";
+import { resolveVaultListStatus } from "@/types";
 import type { VaultDisplayStatus } from "@/types";
-import { resolveVaultDisplayStatus } from "@/types";
 import {
   vaultStatusIconClass,
   vaultStatusRowClass,
@@ -18,6 +18,7 @@ import type { VaultListItem } from "./types";
 
 interface VaultRowProps {
   vault: VaultListItem;
+  pipelineOpeningVaultId?: string | null;
   viewMode: VaultListViewMode;
   dragDisabled: boolean;
   isDragging: boolean;
@@ -25,6 +26,8 @@ interface VaultRowProps {
   onOpenBackups: (vaultId: string) => void;
   onOpenNote: (vaultId: string) => void;
   onOpenSettings: (vaultId: string) => void;
+  onExportVault: (vault: VaultListItem) => void;
+  onOpenFolder: (vault: VaultListItem) => void;
   onOpenFileManager: (vault: VaultListItem) => void;
   onLockVault: (vault: VaultListItem) => void;
   onUnlockVault: (vault: VaultListItem) => void;
@@ -44,6 +47,7 @@ function statusIconName(status: VaultDisplayStatus, isOpen: boolean): IconName {
 
 export function VaultRow({
   vault,
+  pipelineOpeningVaultId = null,
   viewMode,
   dragDisabled,
   isDragging,
@@ -51,6 +55,8 @@ export function VaultRow({
   onOpenBackups,
   onOpenNote,
   onOpenSettings,
+  onExportVault,
+  onOpenFolder,
   onOpenFileManager,
   onLockVault,
   onUnlockVault,
@@ -62,7 +68,7 @@ export function VaultRow({
   onDrop,
 }: VaultRowProps) {
   const { t } = useTranslation();
-  const status = resolveVaultDisplayStatus(vault);
+  const status = resolveVaultListStatus(vault, pipelineOpeningVaultId);
   const isOpen = status === "open";
   const density =
     viewMode === "blocks" ? vaultRowDensityClass.default : vaultRowDensityClass[viewMode];
@@ -145,6 +151,9 @@ export function VaultRow({
           onOpenBackups={onOpenBackups}
           onOpenNote={onOpenNote}
           onOpenSettings={onOpenSettings}
+          onExportVault={onExportVault}
+          onOpenFolder={onOpenFolder}
+          onOpenFileManager={onOpenFileManager}
         />
         <VaultLockButton
           status={status}

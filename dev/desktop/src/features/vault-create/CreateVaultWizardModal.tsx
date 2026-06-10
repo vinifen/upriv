@@ -23,6 +23,8 @@ interface CreateVaultWizardModalProps {
   open: boolean;
   existingVaultIds: readonly string[];
   existingOrders: readonly number[];
+  /** Pre-filled draft (e.g. import from a backup row). Skips source step. */
+  initialDraft?: CreateVaultDraft | null;
   onClose: () => void;
   onCreate: (result: CreateVaultResult) => void;
 }
@@ -31,6 +33,7 @@ export function CreateVaultWizardModal({
   open,
   existingVaultIds,
   existingOrders,
+  initialDraft = null,
   onClose,
   onCreate,
 }: CreateVaultWizardModalProps) {
@@ -46,14 +49,15 @@ export function CreateVaultWizardModal({
   useEffect(() => {
     if (!open) return;
     const empty = createEmptyDraft(existingOrders);
-    setBaseline(empty);
-    setDraft(empty);
-    setCurrentStep("source");
-    setVisitedSteps(new Set(["source"]));
+    const starting = initialDraft ?? empty;
+    setBaseline(starting);
+    setDraft(starting);
+    setCurrentStep(initialDraft ? "identity" : "source");
+    setVisitedSteps(initialDraft ? new Set(["source", "identity"]) : new Set(["source"]));
     setSubmitAttempted(false);
     setTestingPassword(false);
     setDiscardConfirmOpen(false);
-  }, [open, existingOrders]);
+  }, [open, existingOrders, initialDraft]);
 
   const isDirty = useMemo(
     () => !createVaultDraftEqual(draft, baseline),

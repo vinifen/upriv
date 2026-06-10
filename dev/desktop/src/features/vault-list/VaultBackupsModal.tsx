@@ -16,6 +16,7 @@ interface VaultBackupsModalProps {
   vault: VaultListItem | null;
   open: boolean;
   onClose: () => void;
+  onCreateVaultFromBackup?: (filename: string) => void;
 }
 
 function matchesDeleteConfirmation(
@@ -28,7 +29,12 @@ function matchesDeleteConfirmation(
   return trimmed.toLowerCase() === `delete ${count}`;
 }
 
-export function VaultBackupsModal({ vault, open, onClose }: VaultBackupsModalProps) {
+export function VaultBackupsModal({
+  vault,
+  open,
+  onClose,
+  onCreateVaultFromBackup,
+}: VaultBackupsModalProps) {
   const { locale, t } = useTranslation();
   const vaultId = vault?.id ?? null;
   const { backups, deleteBackups, promoteToSave } = useVaultBackups(vaultId, open);
@@ -174,6 +180,7 @@ export function VaultBackupsModal({ vault, open, onClose }: VaultBackupsModalPro
               onToggleSelected={toggleSelected}
               onDownload={handleDownloadOne}
               onDelete={(filename) => beginDelete([filename])}
+              onCreateVaultFromBackup={onCreateVaultFromBackup}
             />
             <BackupSection
               title={t("modal.backup.section.standard")}
@@ -186,6 +193,7 @@ export function VaultBackupsModal({ vault, open, onClose }: VaultBackupsModalPro
               onToggleSelected={toggleSelected}
               onDownload={handleDownloadOne}
               onDelete={(filename) => beginDelete([filename])}
+              onCreateVaultFromBackup={onCreateVaultFromBackup}
               onPromoteToSave={promoteToSave}
             />
           </div>
@@ -244,6 +252,7 @@ interface BackupSectionProps {
   onToggleSelected: (filename: string) => void;
   onDownload: (filename: string) => void;
   onDelete: (filename: string) => void;
+  onCreateVaultFromBackup?: (filename: string) => void;
   onPromoteToSave?: (filename: string) => void;
 }
 
@@ -258,6 +267,7 @@ function BackupSection({
   onToggleSelected,
   onDownload,
   onDelete,
+  onCreateVaultFromBackup,
   onPromoteToSave,
 }: BackupSectionProps) {
   return (
@@ -282,6 +292,11 @@ function BackupSection({
               onToggleSelected={() => onToggleSelected(entry.filename)}
               onDownload={() => onDownload(entry.filename)}
               onDelete={() => onDelete(entry.filename)}
+              onCreateVaultFromBackup={
+                onCreateVaultFromBackup
+                  ? () => onCreateVaultFromBackup(entry.filename)
+                  : undefined
+              }
               onPromoteToSave={
                 onPromoteToSave ? () => onPromoteToSave(entry.filename) : undefined
               }
@@ -365,6 +380,7 @@ interface BackupRowProps {
   onToggleSelected: () => void;
   onDownload: () => void;
   onDelete: () => void;
+  onCreateVaultFromBackup?: () => void;
   onPromoteToSave?: () => void;
 }
 
@@ -376,6 +392,7 @@ function BackupRow({
   onToggleSelected,
   onDownload,
   onDelete,
+  onCreateVaultFromBackup,
   onPromoteToSave,
 }: BackupRowProps) {
   const { t } = useTranslation();
@@ -437,6 +454,18 @@ function BackupRow({
           >
             {t("modal.backup.promote_to_save")}
           </Button>
+        ) : null}
+        {onCreateVaultFromBackup ? (
+          <IconButton
+            label={t("action.create_vault_from_backup")}
+            size="row"
+            variant="row-action"
+            disabled={selectionDisabled}
+            className="-mr-1 text-on-surface-variant hover:bg-accent/15 hover:text-accent"
+            onClick={onCreateVaultFromBackup}
+          >
+            <Icon name="add" size={18} />
+          </IconButton>
         ) : null}
         <IconButton
           label={t("action.download")}

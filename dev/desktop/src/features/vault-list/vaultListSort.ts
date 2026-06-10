@@ -16,9 +16,11 @@ export const DEFAULT_VAULT_LIST_SORT: VaultListSort = { mode: "order", direction
 
 const STATE_RANK: Record<VaultDisplayStatus, number> = {
   open: 0,
-  closed: 1,
-  sealed: 2,
-  recovery: 3,
+  opening: 1,
+  closing: 2,
+  closed: 3,
+  sealed: 4,
+  recovery: 5,
 };
 
 function compareName(a: VaultListItem, b: VaultListItem): number {

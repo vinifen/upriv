@@ -13,6 +13,7 @@ export type IconName =
   | "eye"
   | "eye-off"
   | "file"
+  | "file-manager"
   | "grip-vertical"
   | "folder"
   | "help"
@@ -155,6 +156,14 @@ const paths: Record<IconName, ReactNode> = {
         fill="none"
       />
       <path d="M14 4v4h4" stroke="currentColor" strokeWidth="1.75" strokeLinejoin="round" fill="none" />
+    </>
+  ),
+  "file-manager": (
+    <>
+      <rect x="4" y="5" width="16" height="14" rx="2" stroke="currentColor" strokeWidth="1.75" fill="none" />
+      <path d="M10 5v14" stroke="currentColor" strokeWidth="1.75" />
+      <path d="M6 9.5h3M6 12.5h3M6 15.5h2.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      <path d="M12.5 10h6M12.5 14h4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
     </>
   ),
   help: (
