@@ -3,6 +3,7 @@ import { Icon } from "@/components/icons";
 import { menuItemClass, menuPanelClass } from "@/components/ui/menuStyles";
 import { useTranslation } from "@/i18n";
 import type { VaultDisplayStatus } from "@/types";
+import { vaultStatusI18nKey } from "@/theme";
 
 /** Fixed control size — all vault rows (Lock / Unlock / sealed, with or without chevron). */
 const LOCK_CONTROL_CLASS = "h-11 w-36 shrink-0";
@@ -33,8 +34,9 @@ export function VaultLockButton({
   const controlSizeClass = layout === "block" ? "h-10 w-full" : LOCK_CONTROL_CLASS;
 
   const isOpen = status === "open";
+  const pipelineBusy = status === "closing" || status === "opening";
   const isSealed = status === "sealed";
-  const showSealSplit = !isSealed;
+  const showSealSplit = !isSealed && !pipelineBusy;
   const label = isOpen ? t("action.lock") : t("action.unlock");
 
   const unlockSurfaceClass = "bg-surface-container-highest text-on-surface hover:brightness-110";
@@ -76,6 +78,25 @@ export function VaultLockButton({
     setMenuOpen(false);
     onSeal?.();
   };
+
+  if (pipelineBusy) {
+    return (
+      <button
+        type="button"
+        disabled
+        aria-busy="true"
+        className={[
+          controlSizeClass,
+          "cursor-not-allowed rounded-xl opacity-70",
+          unlockSurfaceClass,
+          labelClass,
+        ].join(" ")}
+        onClick={(event) => event.stopPropagation()}
+      >
+        {t(vaultStatusI18nKey[status])}
+      </button>
+    );
+  }
 
   if (!showSealSplit) {
     return (

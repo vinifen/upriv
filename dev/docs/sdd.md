@@ -354,8 +354,8 @@ Related: PRD **RF-52**.
 
 - Entry: **`action.backups`** button on vault row (PRD §3.7.2) → **modal** (not separate page).
 - List `backup/<id>/*.7z`: **name**, **date** (mtime or timestamp in filename), optional size.
-- Each modal row: **`action.delete`** button — active only after user types the vault **`id`** in confirmation field (same pattern as delete vault).
-- Future actions in same list: restore (replace `.7z` + reimport store), open with 7-Zip.
+- Each modal row: **`action.delete`** (confirm with vault `id`), **`action.create_vault_from_backup`** (+ → create-vault wizard with backup path pre-filled), **`action.download`**.
+- **No in-place restore** — backups are snapshots for download or seeding a **new** vault import; the source vault is unchanged.
 - Backups are always `.7z` — direct plan B.
 
 Related: PRD **RF-56**, **RF-UI-05**.
@@ -1250,6 +1250,9 @@ click(Backups|Config)      → stopPropagation; open respective modal
 | **Backups** | Medium modal | 💾 button |
 | **Recovery** | Blocking modal | Detection on startup / listing |
 | **Closing** | Overlay + progress | During `7zz` on close |
+| **Opening** | Overlay + progress | During `7zz` test / decrypt / mount on unlock |
+
+**Open/close/seal pipelines (v1):** one global **FIFO queue** — only one `7zz` (or equivalent) runs at a time; further requests wait. UI may show progress in a blocking overlay first, then **Continue in background** so the list stays usable; queued vaults show `opening` / `closing` on their row until their turn completes. No mid-pipeline cancel (abort would risk inconsistent disk state). Mock desktop UI may run a single slot until `upriv-core` wires the queue.
 
 No separate Welcome screen in v1; “Open vault” = `--vault` on first run or app bar menu item (future).
 

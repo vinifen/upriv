@@ -74,13 +74,22 @@ const MOCK_BY_VAULT: Record<string, VaultSettingsOverrides> = {
     vault: {
       display_name: "Vault ExaMple 2",
       order: 1,
-      password_hint: "",
-      note: "",
+      password_hint: "Example passphrase reminder",
+      note: "Mock demo: unlock with gatefail, then lock to see archive test error.",
       ...vaultPaths("vault-example-2", "Vault ExaMple 2"),
     },
     backup: { enabled: true, mode: "keep_all" },
     auto_close: { enabled: true, idle_minutes: 15 },
     seven_zip: { archive_mode: "compress_encrypt" },
+  },
+  "cold-storage": {
+    vault: {
+      display_name: "Cold Storage",
+      order: 3,
+      password_hint: "Winter project archive",
+      note: "Mock demo: open fails — insufficient RAM.",
+      ...vaultPaths("cold-storage", "Cold Storage"),
+    },
   },
   "finance-2025": {
     vault: {
@@ -92,6 +101,24 @@ const MOCK_BY_VAULT: Record<string, VaultSettingsOverrides> = {
       ...vaultPaths("finance-2025", "Finance 2025"),
     },
     backup: { enabled: true, mode: "keep_last", keep_last: 5 },
+  },
+  "travel-planner": {
+    vault: {
+      display_name: "Travel Planner",
+      order: 10,
+      ...vaultPaths("travel-planner", "Travel Planner"),
+    },
+    auto_close: { enabled: true, idle_minutes: 3, warn_before_seconds: 30 },
+  },
+  "plain-folder-demo": {
+    vault: {
+      display_name: "Plain Folder Demo",
+      order: 12,
+      note: "Plain storage demo vault.",
+      ...vaultPaths("plain-folder-demo", "Plain Folder Demo"),
+    },
+    storage: { mode: "plain" },
+    close: { default_action: "seal" },
   },
   "old-archive": {
     vault: {

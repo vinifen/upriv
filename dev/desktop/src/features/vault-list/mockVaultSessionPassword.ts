@@ -3,14 +3,18 @@ import type { VaultLifecycleIntent } from "./vaultLifecycleTypes";
 import { resolveVaultDisplayStatus } from "@/types";
 
 /** Mock: vault passwords held in session RAM after unlock (until close/seal). */
-const vaultPasswordInRam = new Set<string>();
+const vaultPasswordInRam = new Map<string, string>();
 
 export function hasVaultPasswordInRam(vaultId: string): boolean {
   return vaultPasswordInRam.has(vaultId);
 }
 
-export function setVaultPasswordInRam(vaultId: string): void {
-  vaultPasswordInRam.add(vaultId);
+export function getVaultPasswordInRam(vaultId: string): string | undefined {
+  return vaultPasswordInRam.get(vaultId);
+}
+
+export function setVaultPasswordInRam(vaultId: string, password = "demo"): void {
+  vaultPasswordInRam.set(vaultId, password.trim());
 }
 
 export function clearVaultPasswordInRam(vaultId: string): void {

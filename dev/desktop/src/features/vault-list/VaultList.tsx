@@ -6,6 +6,7 @@ import type { VaultListItem } from "./types";
 
 interface VaultListProps {
   vaults: VaultListItem[];
+  pipelineOpeningVaultId?: string | null;
   allVaultsHidden?: boolean;
   viewMode: VaultListViewMode;
   canReorder: boolean;
@@ -14,6 +15,8 @@ interface VaultListProps {
   onOpenBackups: (vaultId: string) => void;
   onOpenNote: (vaultId: string) => void;
   onOpenSettings: (vaultId: string) => void;
+  onExportVault: (vault: VaultListItem) => void;
+  onOpenFolder: (vault: VaultListItem) => void;
   onOpenFileManager: (vault: VaultListItem) => void;
   onLockVault: (vault: VaultListItem) => void;
   onUnlockVault: (vault: VaultListItem) => void;
@@ -27,6 +30,7 @@ interface VaultListProps {
 
 export function VaultList({
   vaults,
+  pipelineOpeningVaultId = null,
   allVaultsHidden = false,
   viewMode,
   canReorder,
@@ -35,6 +39,8 @@ export function VaultList({
   onOpenBackups,
   onOpenNote,
   onOpenSettings,
+  onExportVault,
+  onOpenFolder,
   onOpenFileManager,
   onLockVault,
   onUnlockVault,
@@ -63,9 +69,12 @@ export function VaultList({
             <VaultBlockCard
               key={vault.id}
               vault={vault}
+              pipelineOpeningVaultId={pipelineOpeningVaultId}
               onOpenBackups={onOpenBackups}
               onOpenNote={onOpenNote}
               onOpenSettings={onOpenSettings}
+              onExportVault={onExportVault}
+              onOpenFolder={onOpenFolder}
               onOpenFileManager={onOpenFileManager}
               onLockVault={onLockVault}
               onUnlockVault={onUnlockVault}
@@ -86,6 +95,7 @@ export function VaultList({
         <VaultRow
           key={vault.id}
           vault={vault}
+          pipelineOpeningVaultId={pipelineOpeningVaultId}
           viewMode={viewMode}
           dragDisabled={!canReorder}
           isDragging={draggingId === vault.id}
@@ -93,6 +103,8 @@ export function VaultList({
           onOpenBackups={onOpenBackups}
           onOpenNote={onOpenNote}
           onOpenSettings={onOpenSettings}
+          onExportVault={onExportVault}
+          onOpenFolder={onOpenFolder}
           onOpenFileManager={onOpenFileManager}
           onLockVault={onLockVault}
           onUnlockVault={onUnlockVault}
