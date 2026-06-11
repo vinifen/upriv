@@ -25,8 +25,7 @@ export function LogsModal({ open, onClose }: LogsModalProps) {
   const [deleteTargets, setDeleteTargets] = useState<string[] | null>(null);
 
   const allFilenames = useMemo(() => files.map((entry) => entry.filename), [files]);
-  const allSelected =
-    files.length > 0 && allFilenames.every((filename) => selected.has(filename));
+  const allSelected = files.length > 0 && allFilenames.every((filename) => selected.has(filename));
   const someSelected = selected.size > 0;
   const activeFile = activeFilename ? getFile(activeFilename) : undefined;
 
@@ -98,10 +97,7 @@ export function LogsModal({ open, onClose }: LogsModalProps) {
   };
 
   const handleDownload = () => {
-    const targets =
-      someSelected
-        ? files.filter((entry) => selected.has(entry.filename))
-        : files;
+    const targets = someSelected ? files.filter((entry) => selected.has(entry.filename)) : files;
     if (targets.length === 0) return;
 
     downloadLogsZip(
@@ -110,9 +106,7 @@ export function LogsModal({ open, onClose }: LogsModalProps) {
     );
   };
 
-  const title = activeFile
-    ? activeFile.filename
-    : t("modal.logs.title");
+  const title = activeFile ? activeFile.filename : t("modal.logs.title");
 
   return (
     <Modal
@@ -182,10 +176,20 @@ export function LogsModal({ open, onClose }: LogsModalProps) {
                   : t("modal.logs.delete_confirm_many", { count: String(deleteTargets.length) })}
               </p>
               <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
-                <Button variant="ghost" size="sm" className="w-full sm:w-auto" onClick={() => setDeleteTargets(null)}>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="w-full sm:w-auto"
+                  onClick={() => setDeleteTargets(null)}
+                >
                   {t("action.cancel")}
                 </Button>
-                <Button variant="danger" size="sm" className="w-full sm:w-auto" onClick={handleConfirmDelete}>
+                <Button
+                  variant="danger"
+                  size="sm"
+                  className="w-full sm:w-auto"
+                  onClick={handleConfirmDelete}
+                >
                   {t("action.delete")}
                 </Button>
               </div>
@@ -313,7 +317,9 @@ function LogFileRow({
         </div>
         <span className="min-w-0 flex-1">
           <span className="flex flex-wrap items-center gap-2">
-            <span className="truncate font-mono text-xs text-on-surface sm:text-sm">{entry.filename}</span>
+            <span className="truncate font-mono text-xs text-on-surface sm:text-sm">
+              {entry.filename}
+            </span>
             {entry.isCurrent ? (
               <span className="rounded-md bg-accent/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-accent">
                 {t("modal.logs.badge.active")}
@@ -349,10 +355,7 @@ function LogFileRow({
 }
 
 function LogFileViewer({ file }: { file: AppLogFile }) {
-  const lines = useMemo(
-    () => file.content.trimEnd().split("\n").map(parseLogLine),
-    [file.content],
-  );
+  const lines = useMemo(() => file.content.trimEnd().split("\n").map(parseLogLine), [file.content]);
 
   return (
     <div className="max-h-[min(70vh,40rem)] overflow-auto rounded-xl bg-[var(--log-viewer-bg)] p-4 ring-1 ring-outline-variant/25 sm:p-5">
@@ -371,15 +374,23 @@ function LogFileViewer({ file }: { file: AppLogFile }) {
 function LogLineCells({ line }: { line: ParsedLogLine }) {
   if (line.level === "UNKNOWN") {
     return (
-      <div className="col-span-5 whitespace-pre-wrap py-0.5 text-on-surface-variant">{line.raw}</div>
+      <div className="col-span-5 whitespace-pre-wrap py-0.5 text-on-surface-variant">
+        {line.raw}
+      </div>
     );
   }
 
   return (
     <>
-      <span className="whitespace-nowrap text-right tabular-nums text-on-surface-variant/80">{line.index}</span>
-      <span className="whitespace-nowrap tabular-nums text-on-surface-variant">{line.timestamp}</span>
-      <span className={`whitespace-nowrap font-semibold ${logLevelClass(line.level)}`}>{line.level}</span>
+      <span className="whitespace-nowrap text-right tabular-nums text-on-surface-variant/80">
+        {line.index}
+      </span>
+      <span className="whitespace-nowrap tabular-nums text-on-surface-variant">
+        {line.timestamp}
+      </span>
+      <span className={`whitespace-nowrap font-semibold ${logLevelClass(line.level)}`}>
+        {line.level}
+      </span>
       <span className="whitespace-nowrap text-on-surface">{line.event}</span>
       <span className="whitespace-nowrap text-on-surface-variant/90">{line.fields}</span>
     </>

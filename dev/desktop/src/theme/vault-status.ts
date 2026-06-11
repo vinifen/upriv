@@ -23,8 +23,7 @@ export const vaultStatusI18nKey = {
 
 /** Tailwind utility classes for row surface styling per status. */
 export const vaultStatusRowClass = {
-  open:
-    "border-l-2 border-vault-open bg-surface-container hover:bg-surface-row-hover [&:has(button:hover)]:bg-surface-container",
+  open: "border-l-2 border-vault-open bg-surface-container hover:bg-surface-row-hover [&:has(button:hover)]:bg-surface-container",
   closed:
     "bg-surface-container hover:bg-surface-row-hover [&:has(button:hover)]:bg-surface-container",
   sealed:

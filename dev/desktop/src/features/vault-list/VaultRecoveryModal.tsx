@@ -47,7 +47,12 @@ export function VaultRecoveryModal({
       footer={
         view === "discard_confirm" ? (
           <div className="flex flex-wrap justify-end gap-2">
-            <Button variant="ghost" size="sm" disabled={submitting} onClick={() => setView("actions")}>
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={submitting}
+              onClick={() => setView("actions")}
+            >
               {t("action.cancel")}
             </Button>
             <Button
@@ -70,7 +75,9 @@ export function VaultRecoveryModal({
     >
       {view === "compare" ? (
         <div className="space-y-3">
-          <p className="text-sm leading-relaxed text-on-surface-variant">{t("recovery.compare_help")}</p>
+          <p className="text-sm leading-relaxed text-on-surface-variant">
+            {t("recovery.compare_help")}
+          </p>
           <dl className="space-y-2 rounded-lg bg-surface-container p-3 font-mono text-xs">
             <div className="flex justify-between gap-3">
               <dt className="text-on-surface-variant">{t("recovery.compare_archive_hash")}</dt>

@@ -40,6 +40,8 @@ export function getMockBackupsForVault(vaultId: string): VaultBackupEntry[] {
 /** Placeholder bytes until Tauri reads real `.7z` files from disk. */
 export function getMockBackupBytes(entry: VaultBackupEntry): Uint8Array {
   const header = `[Upriv mock backup]\n${entry.filename}\n${entry.saved ? "saved\n" : ""}`;
-  const payload = "0".repeat(Math.min(256, Math.max(32, Math.floor((entry.sizeBytes ?? 1024) / 1_000_000))));
+  const payload = "0".repeat(
+    Math.min(256, Math.max(32, Math.floor((entry.sizeBytes ?? 1024) / 1_000_000))),
+  );
   return new TextEncoder().encode(header + payload);
 }

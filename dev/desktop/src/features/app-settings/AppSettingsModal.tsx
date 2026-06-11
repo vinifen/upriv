@@ -70,10 +70,7 @@ export function AppSettingsModal({ open, onClose, vaults }: AppSettingsModalProp
   }, []);
 
   const patchDraft = useCallback(
-    <S extends keyof AppSettingsConfig>(
-      section: S,
-      patch: Partial<AppSettingsConfig[S]>,
-    ) => {
+    <S extends keyof AppSettingsConfig>(section: S, patch: Partial<AppSettingsConfig[S]>) => {
       setDiscardConfirmOpen(false);
       setSaveConfirmOpen(false);
       setDraft((current) =>

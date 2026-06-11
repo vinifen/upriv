@@ -9,7 +9,7 @@ export function sortVaultsByOrder(vaults: VaultListItem[]): VaultListItem[] {
   });
 }
 
-/** Swap the dragged vault with the drop target row; reassign `order` 1…n (local state until config save exists). */
+/** Swap dragged vault with drop target; reassign `order` 1…n (local until config save). */
 export function reorderVaultList(
   vaults: VaultListItem[],
   draggedId: string,

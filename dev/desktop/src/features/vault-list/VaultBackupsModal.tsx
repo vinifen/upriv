@@ -19,11 +19,7 @@ interface VaultBackupsModalProps {
   onCreateVaultFromBackup?: (filename: string) => void;
 }
 
-function matchesDeleteConfirmation(
-  input: string,
-  count: number,
-  vaultId: string,
-): boolean {
+function matchesDeleteConfirmation(input: string, count: number, vaultId: string): boolean {
   const trimmed = input.trim();
   if (count === 1) return trimmed === vaultId;
   return trimmed.toLowerCase() === `delete ${count}`;
@@ -293,13 +289,9 @@ function BackupSection({
               onDownload={() => onDownload(entry.filename)}
               onDelete={() => onDelete(entry.filename)}
               onCreateVaultFromBackup={
-                onCreateVaultFromBackup
-                  ? () => onCreateVaultFromBackup(entry.filename)
-                  : undefined
+                onCreateVaultFromBackup ? () => onCreateVaultFromBackup(entry.filename) : undefined
               }
-              onPromoteToSave={
-                onPromoteToSave ? () => onPromoteToSave(entry.filename) : undefined
-              }
+              onPromoteToSave={onPromoteToSave ? () => onPromoteToSave(entry.filename) : undefined}
             />
           ))}
         </ul>
@@ -428,7 +420,9 @@ function BackupRow({
         ].join(" ")}
       >
         <p className="flex min-w-0 items-center gap-2">
-          <span className="truncate font-mono text-xs text-on-surface sm:text-sm">{entry.filename}</span>
+          <span className="truncate font-mono text-xs text-on-surface sm:text-sm">
+            {entry.filename}
+          </span>
           {entry.saved ? (
             <span className="shrink-0 rounded-md bg-accent/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-accent">
               {t("modal.backup.saved_badge")}

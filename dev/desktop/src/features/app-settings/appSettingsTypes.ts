@@ -1,5 +1,9 @@
+import { LOG_ENTRIES_PER_FILE, normalizeLogKeepLastEntries } from "@/constants/logging";
 import type { LocaleId } from "@/i18n";
-import type { VaultListSortDirection, VaultListSortMode } from "@/features/vault-list/vaultListSort";
+import type {
+  VaultListSortDirection,
+  VaultListSortMode,
+} from "@/features/vault-list/vaultListSort";
 import type { VaultListViewMode } from "@/features/vault-list/vaultListView";
 
 export type UiTheme = "dark" | "neutral" | "light";
@@ -26,13 +30,19 @@ export interface AppSettingsConfig {
     vault_list_view: VaultListViewMode;
     /** TOML: `[ui] always_show_hidden_vaults` */
     always_show_hidden_vaults: boolean;
-    /** TOML: `[ui] file_manager_dock_expanded` — updated from the minimized dock toggle, not app settings UI */
+    /** TOML: `[ui] file_manager_dock_expanded` — from minimized dock toggle, not settings UI */
     file_manager_dock_expanded: boolean;
   };
   logging: {
     enabled: boolean;
     level: LogLevel;
+    /** Lines per rotated log file (fixed at 1000 in v1 UI). */
     entries_per_file: number;
+    /**
+     * Max log lines retained on disk; oldest files removed when exceeded.
+     * `0` = no limit.
+     */
+    keep_last_entries: number;
   };
   app: {
     /** TOML: `[app] auto_detect_vault_root` */
@@ -54,10 +64,18 @@ export function appSettingsEqual(a: AppSettingsConfig, b: AppSettingsConfig): bo
 
 /** Auto-detect and a fixed path are mutually exclusive. */
 export function normalizeAppSettings(config: AppSettingsConfig): AppSettingsConfig {
-  if (!config.app.auto_detect_vault_root) return config;
-  if (!config.app.upriv_root_path) return config;
+  const logging = {
+    ...config.logging,
+    entries_per_file: config.logging.entries_per_file || LOG_ENTRIES_PER_FILE,
+    keep_last_entries: normalizeLogKeepLastEntries(config.logging.keep_last_entries),
+  };
+
+  const normalized: AppSettingsConfig = { ...config, logging };
+
+  if (!normalized.app.auto_detect_vault_root) return normalized;
+  if (!normalized.app.upriv_root_path) return normalized;
   return {
-    ...config,
-    app: { ...config.app, upriv_root_path: "" },
+    ...normalized,
+    app: { ...normalized.app, upriv_root_path: "" },
   };
 }

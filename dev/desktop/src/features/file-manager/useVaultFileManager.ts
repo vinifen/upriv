@@ -4,7 +4,7 @@ import { useTranslation } from "@/i18n";
 import { validateFileName } from "./fileNameValidation";
 import type { FileManagerEntry } from "./fileManagerTypes";
 import { collectFilePaths, getParentPath, siblingNames } from "./fileTreeOps";
-import { fileBaseName, findTreeNode } from "./fileTreeUtils";
+import { fileBaseName, findNode } from "./fileTreeUtils";
 import {
   createVaultFile,
   createVaultFolder,
@@ -111,7 +111,11 @@ export function useVaultFileManager({ entry, dispatch }: UseVaultFileManagerOpti
 
   const createFolder = useCallback(
     (parentPath: string) => {
-      const path = createVaultFolder(vaultId, parentPath, t("modal.file_manager.default.new_folder"));
+      const path = createVaultFolder(
+        vaultId,
+        parentPath,
+        t("modal.file_manager.default.new_folder"),
+      );
       if (!path) return;
       syncTree();
       dispatch({ type: "expand_folder", path: parentPath });
@@ -123,7 +127,8 @@ export function useVaultFileManager({ entry, dispatch }: UseVaultFileManagerOpti
   const nameErrorMessage = useCallback(
     (code: NonNullable<ReturnType<typeof validateFileName>> | "duplicate") => {
       if (code === "duplicate") return t("vault.name.duplicate");
-      if (code === "too_long") return t("vault.name.too_long", { max: VAULT_DISPLAY_NAME_MAX_LENGTH });
+      if (code === "too_long")
+        return t("vault.name.too_long", { max: VAULT_DISPLAY_NAME_MAX_LENGTH });
       return t(`vault.name.${code}`);
     },
     [t],
@@ -143,7 +148,9 @@ export function useVaultFileManager({ entry, dispatch }: UseVaultFileManagerOpti
         return;
       }
       const parent = getParentPath(path);
-      const siblings = siblingNames(getVaultFileTree(vaultId), parent).filter((n) => n !== fileBaseName(path));
+      const siblings = siblingNames(getVaultFileTree(vaultId), parent).filter(
+        (n) => n !== fileBaseName(path),
+      );
       if (siblings.includes(name)) {
         showToast(nameErrorMessage("duplicate"));
         dispatch({ type: "cancel_rename" });
@@ -161,7 +168,7 @@ export function useVaultFileManager({ entry, dispatch }: UseVaultFileManagerOpti
   const requestDelete = useCallback(
     (path: string) => {
       if (path === "/") return;
-      const node = findTreeNode(getVaultFileTree(vaultId), path);
+      const node = findNode(getVaultFileTree(vaultId), path);
       if (!node) return;
       dispatch({
         type: "set_delete_target",
@@ -175,9 +182,11 @@ export function useVaultFileManager({ entry, dispatch }: UseVaultFileManagerOpti
     const target = workspace.deleteTarget;
     if (!target) return;
     const tree = getVaultFileTree(vaultId);
-    const node = findTreeNode(tree, target.path);
+    const node = findNode(tree, target.path);
     const pathsToRemove =
-      node?.type === "folder" ? [...collectFilePaths(node, target.path), target.path] : [target.path];
+      node?.type === "folder"
+        ? [...collectFilePaths(node, target.path), target.path]
+        : [target.path];
     deleteVaultPath(vaultId, target.path);
     syncTree();
     dispatch({ type: "remove_paths", paths: pathsToRemove });
@@ -243,7 +252,9 @@ export function useVaultFileManager({ entry, dispatch }: UseVaultFileManagerOpti
         if (readFailureName) {
           showToast(t("modal.file_manager.toast.import_failed", { name: readFailureName }));
         } else if (skippedInvalid > 0) {
-          showToast(t("modal.file_manager.toast.import_skipped_invalid", { count: skippedInvalid }));
+          showToast(
+            t("modal.file_manager.toast.import_skipped_invalid", { count: skippedInvalid }),
+          );
         }
         return;
       }
@@ -275,6 +286,13 @@ export function useVaultFileManager({ entry, dispatch }: UseVaultFileManagerOpti
     });
   }, [dispatch, workspace]);
 
+  const confirmSaveUnsaved = useCallback(() => {
+    const prompt = workspace.unsavedPrompt;
+    if (!prompt) return;
+    saveFile(prompt.path);
+    dispatch(resolveUnsavedPrompt(workspace, prompt));
+  }, [dispatch, saveFile, workspace]);
+
   return {
     vaultId,
     tree: getVaultFileTree(vaultId),
@@ -293,6 +311,7 @@ export function useVaultFileManager({ entry, dispatch }: UseVaultFileManagerOpti
     showToast,
     dismissToast,
     confirmUnsaved,
+    confirmSaveUnsaved,
     dispatch,
   };
 }

@@ -20,6 +20,13 @@ import {
   SettingsField,
   SettingsFormGrid,
 } from "@/features/vault-list/vaultSettingsForm";
+import {
+  LOG_ENTRIES_PER_FILE,
+  LOG_KEEP_LAST_DEFAULT,
+  LOG_KEEP_LAST_ENTRY_OPTIONS,
+  LOG_KEEP_LAST_UNLIMITED,
+  logFileCountForKeepLast,
+} from "@/constants/logging";
 import { MOCK_UPRIV_ROOT_PATH } from "./mockAppSettings";
 import type { AppSettingsConfig, LogLevel, UiTheme } from "./appSettingsTypes";
 
@@ -47,7 +54,11 @@ export function AppSettingsAppearanceSection({ config, onChange }: SectionPatchP
         label={t("modal.app_settings.field.locale")}
         hint={t("modal.app_settings.field.locale_help")}
       >
-        <div role="radiogroup" aria-label={t("modal.app_settings.field.locale")} className="grid gap-2">
+        <div
+          role="radiogroup"
+          aria-label={t("modal.app_settings.field.locale")}
+          className="grid gap-2"
+        >
           {LOCALES.map((locale) => (
             <PolicyRadioOption
               key={locale}
@@ -67,7 +78,11 @@ export function AppSettingsAppearanceSection({ config, onChange }: SectionPatchP
         label={t("modal.app_settings.field.theme")}
         hint={t("modal.app_settings.field.theme_help")}
       >
-        <div role="radiogroup" aria-label={t("modal.app_settings.field.theme")} className="grid gap-2">
+        <div
+          role="radiogroup"
+          aria-label={t("modal.app_settings.field.theme")}
+          className="grid gap-2"
+        >
           {THEMES.map((theme) => (
             <PolicyRadioOption
               key={theme}
@@ -168,7 +183,10 @@ export function AppSettingsDownloadVaultsSection({
   const selectAllId = useId();
 
   const sortedVaults = useMemo(
-    () => [...vaults].sort((a, b) => a.displayName.localeCompare(b.displayName, undefined, { sensitivity: "base" })),
+    () =>
+      [...vaults].sort((a, b) =>
+        a.displayName.localeCompare(b.displayName, undefined, { sensitivity: "base" }),
+      ),
     [vaults],
   );
   const blockingVaults = useMemo(() => listVaultsBlockingBulkExport(vaults), [vaults]);
@@ -232,12 +250,17 @@ export function AppSettingsDownloadVaultsSection({
           role="alert"
         >
           <span className="font-medium">{t("warning.download_vaults_open_title")}</span>
-          <span className="text-on-error-container/85"> — {t("warning.download_vaults_open_body")}</span>
+          <span className="text-on-error-container/85">
+            {" "}
+            — {t("warning.download_vaults_open_body")}
+          </span>
         </p>
       ) : null}
 
       {vaults.length === 0 ? (
-        <p className="text-xs text-on-surface-variant">{t("modal.app_settings.download_vaults_empty")}</p>
+        <p className="text-xs text-on-surface-variant">
+          {t("modal.app_settings.download_vaults_empty")}
+        </p>
       ) : (
         <div className="space-y-0.5">
           {readyVaults.length > 0 ? (
@@ -255,7 +278,9 @@ export function AppSettingsDownloadVaultsSection({
                 onChange={toggleSelectAllReady}
                 className={vaultCheckboxClass}
               />
-              <span className="text-xs text-on-surface-variant">{t("modal.app_settings.select_all_vaults")}</span>
+              <span className="text-xs text-on-surface-variant">
+                {t("modal.app_settings.select_all_vaults")}
+              </span>
             </label>
           ) : null}
 
@@ -316,10 +341,35 @@ export function AppSettingsDownloadVaultsSection({
   );
 }
 
+function formatLogKeepLastOption(
+  t: ReturnType<typeof useTranslation>["t"],
+  locale: string,
+  entries: number,
+): string {
+  if (entries === LOG_KEEP_LAST_UNLIMITED) {
+    return t("modal.app_settings.option.logging_keep_last.unlimited");
+  }
+  const files = logFileCountForKeepLast(entries);
+  const label = t("modal.app_settings.option.logging_keep_last.entries", {
+    entries: entries.toLocaleString(locale),
+    files: String(files),
+  });
+  if (entries === LOG_KEEP_LAST_DEFAULT) {
+    return `${label} — ${t("modal.settings.badge.default")}`;
+  }
+  return label;
+}
+
 export function AppSettingsLoggingSection({ config, onChange }: SectionPatchProps<"logging">) {
-  const { t } = useTranslation();
+  const { locale, t } = useTranslation();
   const enabledId = useId();
   const levelGroup = useId();
+  const keepLastId = useId();
+
+  const keepLastValue =
+    config.keep_last_entries === LOG_KEEP_LAST_UNLIMITED
+      ? String(LOG_KEEP_LAST_UNLIMITED)
+      : String(config.keep_last_entries);
 
   return (
     <SettingsFormGrid>
@@ -340,7 +390,9 @@ export function AppSettingsLoggingSection({ config, onChange }: SectionPatchProp
             onChange={(e) => onChange({ enabled: e.target.checked })}
             className="h-4 w-4 rounded border-outline-variant/50 text-accent focus:ring-accent/50"
           />
-          <span className="text-sm text-on-surface">{t("modal.app_settings.field.logging_enabled_label")}</span>
+          <span className="text-sm text-on-surface">
+            {t("modal.app_settings.field.logging_enabled_label")}
+          </span>
         </label>
       </SettingsField>
 
@@ -366,6 +418,37 @@ export function AppSettingsLoggingSection({ config, onChange }: SectionPatchProp
             />
           ))}
         </div>
+      </SettingsField>
+
+      <SettingsField
+        label={t("modal.app_settings.field.logging_keep_last")}
+        htmlFor={keepLastId}
+        hint={t("modal.app_settings.field.logging_keep_last_help", {
+          perFile: String(LOG_ENTRIES_PER_FILE),
+        })}
+      >
+        <select
+          id={keepLastId}
+          value={keepLastValue}
+          disabled={!config.enabled}
+          onChange={(e) => {
+            const parsed = Number.parseInt(e.target.value, 10);
+            onChange({
+              keep_last_entries: Number.isNaN(parsed) ? LOG_KEEP_LAST_UNLIMITED : parsed,
+              entries_per_file: LOG_ENTRIES_PER_FILE,
+            });
+          }}
+          className={settingsControlClass}
+        >
+          {LOG_KEEP_LAST_ENTRY_OPTIONS.map((entries) => (
+            <option key={entries} value={entries}>
+              {formatLogKeepLastOption(t, locale, entries)}
+            </option>
+          ))}
+          <option value={LOG_KEEP_LAST_UNLIMITED}>
+            {formatLogKeepLastOption(t, locale, LOG_KEEP_LAST_UNLIMITED)}
+          </option>
+        </select>
       </SettingsField>
     </SettingsFormGrid>
   );
@@ -423,7 +506,10 @@ export function AppSettingsBehaviorSection({ config, onChange }: SectionPatchPro
                     readOnly
                     value={config.upriv_root_path}
                     placeholder={t("modal.app_settings.field.upriv_root_placeholder")}
-                    className={[settingsControlClass, "font-mono text-xs sm:min-w-0 sm:flex-1"].join(" ")}
+                    className={[
+                      settingsControlClass,
+                      "font-mono text-xs sm:min-w-0 sm:flex-1",
+                    ].join(" ")}
                   />
                   <Button
                     type="button"

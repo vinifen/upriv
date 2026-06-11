@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { Button, Modal } from "@/components/ui";
 import { useTranslation } from "@/i18n";
-import { vaultSettingsToListPatch } from "./mockVaultSettings";
+import { registerMockVaultSettings, vaultSettingsToListPatch } from "./mockVaultSettings";
 import { VaultSettingsSection } from "./VaultSettingsSection";
 import type { VaultListItem } from "./types";
 import { useVaultSettings } from "./useVaultSettings";
@@ -15,7 +15,13 @@ import {
   VaultSettingsStorageSection,
   VaultSettingsVaultSection,
 } from "./vaultSettingsForm";
-import type { VaultSettingsConfig, VaultSettingsListPatch, VaultSettingsSectionId, CloseDefaultAction, StorageMode } from "./vaultSettingsTypes";
+import type {
+  VaultSettingsConfig,
+  VaultSettingsListPatch,
+  VaultSettingsSectionId,
+  CloseDefaultAction,
+  StorageMode,
+} from "./vaultSettingsTypes";
 import {
   normalizeClosePolicyForStorage,
   patchCloseDefaultAction,
@@ -96,6 +102,7 @@ export function VaultSettingsModal({
       if (!vaultId) return;
       const normalized = normalizeClosePolicyForStorage(next);
       replaceConfig(normalized);
+      registerMockVaultSettings(normalized);
       onVaultSettingsSaved?.(vaultId, vaultSettingsToListPatch(normalized));
       setSavedVisible(true);
       clearTimeout(savedHideRef.current);
@@ -110,10 +117,7 @@ export function VaultSettingsModal({
   }, []);
 
   const patchDraft = useCallback(
-    <S extends keyof VaultSettingsConfig>(
-      section: S,
-      patch: Partial<VaultSettingsConfig[S]>,
-    ) => {
+    <S extends keyof VaultSettingsConfig>(section: S, patch: Partial<VaultSettingsConfig[S]>) => {
       setDiscardConfirmOpen(false);
       setSaveConfirmOpen(false);
       setDraft((current) => {
@@ -129,7 +133,11 @@ export function VaultSettingsModal({
           return next;
         }
 
-        if (section === "close" && "default_action" in patch && typeof patch.default_action === "string") {
+        if (
+          section === "close" &&
+          "default_action" in patch &&
+          typeof patch.default_action === "string"
+        ) {
           const { config: next, encryptedClosePreference } = patchCloseDefaultAction(
             current,
             patch.default_action as CloseDefaultAction,

@@ -13,9 +13,7 @@ export function vaultArchiveZipEntryPath(vault: VaultRow): string {
 
 /** Open / closing / recovery sessions may have a stale `.7z` on disk. */
 export function vaultBlocksBulkExport(vault: VaultRow): boolean {
-  return (
-    vault.session === "open" || vault.session === "closing" || vault.session === "recovery"
-  );
+  return vault.session === "open" || vault.session === "closing" || vault.session === "recovery";
 }
 
 export function listVaultsBlockingBulkExport(vaults: readonly VaultRow[]): VaultRow[] {

@@ -1,6 +1,9 @@
 import { useId, type ButtonHTMLAttributes } from "react";
 
-export interface SwitchProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, "onChange" | "role"> {
+export interface SwitchProps extends Omit<
+  ButtonHTMLAttributes<HTMLButtonElement>,
+  "onChange" | "role"
+> {
   checked: boolean;
   onChange: (checked: boolean) => void;
   label?: string;

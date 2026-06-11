@@ -1,8 +1,4 @@
-import {
-  HELP_SECTION_BODY_KEYS,
-  helpSectionTitleKey,
-  type HelpSectionId,
-} from "./helpContent";
+import { HELP_SECTION_BODY_KEYS, helpSectionTitleKey, type HelpSectionId } from "./helpContent";
 import type { I18nKey } from "@/i18n";
 
 type Translate = (key: I18nKey) => string;
@@ -21,7 +17,11 @@ export function sectionSearchText(sectionId: HelpSectionId, t: Translate): strin
   ].join("\n");
 }
 
-export function sectionMatchesQuery(sectionId: HelpSectionId, query: string, t: Translate): boolean {
+export function sectionMatchesQuery(
+  sectionId: HelpSectionId,
+  query: string,
+  t: Translate,
+): boolean {
   const normalizedQuery = normalize(query.trim());
   if (!normalizedQuery) return true;
   return normalize(sectionSearchText(sectionId, t)).includes(normalizedQuery);

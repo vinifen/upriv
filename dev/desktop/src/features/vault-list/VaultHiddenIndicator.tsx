@@ -7,7 +7,11 @@ interface VaultHiddenIndicatorProps {
   className?: string;
 }
 
-export function VaultHiddenIndicator({ hidden = false, size = 14, className = "" }: VaultHiddenIndicatorProps) {
+export function VaultHiddenIndicator({
+  hidden = false,
+  size = 14,
+  className = "",
+}: VaultHiddenIndicatorProps) {
   const { t } = useTranslation();
   if (!hidden) return null;
 

@@ -55,7 +55,11 @@ function stepStatusClass(status: CreateVaultStepStatus): string {
   ].join(" ");
 }
 
-export function CreateVaultStepNav({ currentStep, stepStatuses, onSelectStep }: CreateVaultStepNavProps) {
+export function CreateVaultStepNav({
+  currentStep,
+  stepStatuses,
+  onSelectStep,
+}: CreateVaultStepNavProps) {
   const { t } = useTranslation();
 
   return (
@@ -67,13 +71,21 @@ export function CreateVaultStepNav({ currentStep, stepStatuses, onSelectStep }: 
 
           return (
             <li key={stepId} className="w-[8.75rem] shrink-0">
-              <button type="button" onClick={() => onSelectStep(stepId)} className={stepButtonClass(isCurrent)}>
+              <button
+                type="button"
+                onClick={() => onSelectStep(stepId)}
+                className={stepButtonClass(isCurrent)}
+              >
                 <span className={stepBadgeClass(status)} aria-hidden>
                   {index + 1}
                 </span>
                 <span className="min-w-0 flex-1">
-                  <span className="block text-xs font-medium text-on-surface">{t(STEP_LABEL_KEYS[stepId])}</span>
-                  <span className={stepStatusClass(status)}>{t(`vault.create.step_status.${status}`)}</span>
+                  <span className="block text-xs font-medium text-on-surface">
+                    {t(STEP_LABEL_KEYS[stepId])}
+                  </span>
+                  <span className={stepStatusClass(status)}>
+                    {t(`vault.create.step_status.${status}`)}
+                  </span>
                 </span>
               </button>
             </li>
@@ -88,13 +100,21 @@ export function CreateVaultStepNav({ currentStep, stepStatuses, onSelectStep }: 
 
           return (
             <li key={stepId} className="min-w-[7.5rem] flex-1">
-              <button type="button" onClick={() => onSelectStep(stepId)} className={stepButtonClass(isCurrent)}>
+              <button
+                type="button"
+                onClick={() => onSelectStep(stepId)}
+                className={stepButtonClass(isCurrent)}
+              >
                 <span className={stepBadgeClass(status)} aria-hidden>
                   {index + 1}
                 </span>
                 <span className="min-w-0 flex-1">
-                  <span className="block text-xs font-medium text-on-surface">{t(STEP_LABEL_KEYS[stepId])}</span>
-                  <span className={stepStatusClass(status)}>{t(`vault.create.step_status.${status}`)}</span>
+                  <span className="block text-xs font-medium text-on-surface">
+                    {t(STEP_LABEL_KEYS[stepId])}
+                  </span>
+                  <span className={stepStatusClass(status)}>
+                    {t(`vault.create.step_status.${status}`)}
+                  </span>
                 </span>
               </button>
             </li>

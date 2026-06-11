@@ -2,7 +2,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { Icon } from "@/components/icons";
 import { menuItemClass, menuPanelClass } from "@/components/ui/menuStyles";
 import { useTranslation } from "@/i18n";
-import type { VaultDisplayStatus } from "@/types";
+import type { StorageMode, VaultDisplayStatus } from "@/types";
 import { vaultStatusI18nKey } from "@/theme";
 
 /** Fixed control size — all vault rows (Lock / Unlock / sealed, with or without chevron). */
@@ -12,6 +12,8 @@ const LOCK_CHEVRON_CLASS = "flex h-full w-11 shrink-0 items-center justify-cente
 
 interface VaultLockButtonProps {
   status: VaultDisplayStatus;
+  storageMode: StorageMode;
+  canSeal: boolean;
   /** `block` — full-width control for grid cards. */
   layout?: "inline" | "block";
   onLock?: () => void;
@@ -21,6 +23,8 @@ interface VaultLockButtonProps {
 
 export function VaultLockButton({
   status,
+  storageMode,
+  canSeal,
   layout = "inline",
   onLock,
   onUnlock,
@@ -35,8 +39,7 @@ export function VaultLockButton({
 
   const isOpen = status === "open";
   const pipelineBusy = status === "closing" || status === "opening";
-  const isSealed = status === "sealed";
-  const showSealSplit = !isSealed && !pipelineBusy;
+  const showSealSplit = canSeal && isOpen && storageMode === "encrypted_dir" && !pipelineBusy;
   const label = isOpen ? t("action.lock") : t("action.unlock");
 
   const unlockSurfaceClass = "bg-surface-container-highest text-on-surface hover:brightness-110";
@@ -128,10 +131,9 @@ export function VaultLockButton({
       onClick={(event) => event.stopPropagation()}
     >
       <div
-        className={[
-          controlSizeClass,
-          "inline-flex items-stretch overflow-hidden rounded-xl",
-        ].join(" ")}
+        className={[controlSizeClass, "inline-flex items-stretch overflow-hidden rounded-xl"].join(
+          " ",
+        )}
       >
         <button
           type="button"
@@ -140,10 +142,7 @@ export function VaultLockButton({
         >
           <span className="truncate">{label}</span>
         </button>
-        <span
-          aria-hidden
-          className="w-px shrink-0 self-stretch bg-[var(--split-divider)]"
-        />
+        <span aria-hidden className="w-px shrink-0 self-stretch bg-[var(--split-divider)]" />
         <button
           type="button"
           aria-expanded={menuOpen}
@@ -160,7 +159,9 @@ export function VaultLockButton({
           <Icon
             name="chevron-down"
             size={18}
-            className={["transition-transform duration-200", menuOpen ? "rotate-180" : ""].join(" ")}
+            className={["transition-transform duration-200", menuOpen ? "rotate-180" : ""].join(
+              " ",
+            )}
           />
         </button>
       </div>
@@ -170,7 +171,9 @@ export function VaultLockButton({
           id={menuId}
           role="menu"
           aria-label={t("action.seal")}
-          className={["absolute inset-x-0 top-full z-50 mt-1.5 min-w-full", menuPanelClass].join(" ")}
+          className={["absolute inset-x-0 top-full z-50 mt-1.5 min-w-full", menuPanelClass].join(
+            " ",
+          )}
         >
           <button
             type="button"

@@ -6,7 +6,8 @@ import { FileManagerWorkspace } from "./FileManagerWorkspace";
 
 export function FileManagerLayer() {
   const { t } = useTranslation();
-  const { maximizedEntry, entries, entryOrder, minimize, maximize, dismiss, focusedVaultId } = useFileManager();
+  const { maximizedEntry, entries, entryOrder, minimize, maximize, dismiss, focusedVaultId } =
+    useFileManager();
   const openEntries = entryOrder
     .map((id) => entries[id])
     .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry));
@@ -16,9 +17,7 @@ export function FileManagerLayer() {
       <FileManagerModal
         open={maximizedEntry !== null}
         title={
-          maximizedEntry
-            ? t("modal.file_manager.title", { name: maximizedEntry.displayName })
-            : ""
+          maximizedEntry ? t("modal.file_manager.title", { name: maximizedEntry.displayName }) : ""
         }
         onMinimize={() => {
           if (maximizedEntry) minimize(maximizedEntry.vaultId);

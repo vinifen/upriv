@@ -132,7 +132,8 @@ const CONTENTS: Record<string, Record<string, MockFileContent>> = {
     },
     "/scripts/rotate-secrets.sh": {
       language: "shell",
-      content: "#!/usr/bin/env bash\nset -euo pipefail\necho \"Mock rotate — wire to upriv-core later\"\n",
+      content:
+        '#!/usr/bin/env bash\nset -euo pipefail\necho "Mock rotate — wire to upriv-core later"\n',
     },
   },
   "work-documents": {
@@ -156,7 +157,8 @@ const CONTENTS: Record<string, Record<string, MockFileContent>> = {
   "travel-planner": {
     "/itinerary.md": {
       language: "markdown",
-      content: "# Trip — Lisbon\n\n| Day | Plan |\n|-----|------|\n| 1 | Arrive, check-in |\n| 2 | Alfama walk |\n",
+      content:
+        "# Trip — Lisbon\n\n| Day | Plan |\n|-----|------|\n| 1 | Arrive, check-in |\n| 2 | Alfama walk |\n",
     },
     "/bookings/flights.pdf": {
       language: "binary",

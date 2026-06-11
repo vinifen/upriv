@@ -25,7 +25,17 @@ interface VaultFileSession {
 
 const sessions = new Map<string, VaultFileSession>();
 
-const IMAGE_EXTENSIONS = [".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp", ".ico", ".avif"] as const;
+const IMAGE_EXTENSIONS = [
+  ".png",
+  ".jpg",
+  ".jpeg",
+  ".gif",
+  ".webp",
+  ".svg",
+  ".bmp",
+  ".ico",
+  ".avif",
+] as const;
 
 function languageFromPath(path: string): MockFileLanguage {
   const lower = path.toLowerCase();
@@ -118,7 +128,11 @@ export function setVaultFileContent(vaultId: string, path: string, content: stri
   return bump(session);
 }
 
-export function createVaultFile(vaultId: string, parentPath: string, baseName: string): string | null {
+export function createVaultFile(
+  vaultId: string,
+  parentPath: string,
+  baseName: string,
+): string | null {
   const session = ensureSession(vaultId);
   const names = siblingNames(session.tree, parentPath);
   const name = uniqueName(names, baseName);
@@ -149,7 +163,11 @@ export function importVaultFile(
   return path;
 }
 
-export function createVaultFolder(vaultId: string, parentPath: string, baseName: string): string | null {
+export function createVaultFolder(
+  vaultId: string,
+  parentPath: string,
+  baseName: string,
+): string | null {
   const session = ensureSession(vaultId);
   const names = siblingNames(session.tree, parentPath);
   const name = uniqueFolderName(names, baseName);
@@ -208,12 +226,19 @@ export function deleteVaultPath(vaultId: string, path: string): boolean {
   const session = ensureSession(vaultId);
   session.tree = removeNode(session.tree, path);
   session.contents = removeContentPaths(session.contents, path);
-  session.languages = removeContentPaths(session.languages, path) as Record<string, MockFileLanguage>;
+  session.languages = removeContentPaths(session.languages, path) as Record<
+    string,
+    MockFileLanguage
+  >;
   bump(session);
   return true;
 }
 
-export function moveVaultPath(vaultId: string, fromPath: string, toFolderPath: string): string | null {
+export function moveVaultPath(
+  vaultId: string,
+  fromPath: string,
+  toFolderPath: string,
+): string | null {
   if (fromPath === "/" || fromPath === toFolderPath) return null;
   const session = ensureSession(vaultId);
   const node = findNode(session.tree, fromPath);
@@ -231,7 +256,8 @@ export function moveVaultPath(vaultId: string, fromPath: string, toFolderPath: s
   const nextLanguages: Record<string, MockFileLanguage> = {};
   for (const [p, lang] of Object.entries(session.languages)) {
     if (p === fromPath) nextLanguages[newPath] = lang;
-    else if (p.startsWith(`${fromPath}/`)) nextLanguages[`${newPath}${p.slice(fromPath.length)}`] = lang;
+    else if (p.startsWith(`${fromPath}/`))
+      nextLanguages[`${newPath}${p.slice(fromPath.length)}`] = lang;
     else nextLanguages[p] = lang;
   }
   session.languages = nextLanguages;

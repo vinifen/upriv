@@ -10,7 +10,7 @@ export function fileBaseName(path: string): string {
   return parts[parts.length - 1] ?? path;
 }
 
-export function findTreeNode(root: FileTreeNode, path: string): FileTreeNode | null {
+export function findNode(root: FileTreeNode, path: string): FileTreeNode | null {
   if (path === "/") return root;
 
   const segments = path.split("/").filter(Boolean);
@@ -24,6 +24,6 @@ export function findTreeNode(root: FileTreeNode, path: string): FileTreeNode | n
 }
 
 export function isFolderPath(root: FileTreeNode, path: string): boolean {
-  const node = findTreeNode(root, path);
+  const node = findNode(root, path);
   return node?.type === "folder";
 }

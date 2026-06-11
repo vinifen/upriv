@@ -59,10 +59,7 @@ export function VaultSettingsVaultSection({ config, onChange }: VaultSettingsVau
 
   return (
     <SettingsFormGrid>
-      <SettingsField
-        label={t("modal.settings.field.vault.display_name")}
-        htmlFor={displayNameId}
-      >
+      <SettingsField label={t("modal.settings.field.vault.display_name")} htmlFor={displayNameId}>
         <input
           id={displayNameId}
           type="text"
@@ -72,18 +69,28 @@ export function VaultSettingsVaultSection({ config, onChange }: VaultSettingsVau
           className={settingsControlClass}
         />
       </SettingsField>
-      <SettingsField label={t("modal.settings.field.vault.order")} hint={t("modal.settings.field.vault.order_help")} htmlFor={orderId}>
+      <SettingsField
+        label={t("modal.settings.field.vault.order")}
+        hint={t("modal.settings.field.vault.order_help")}
+        htmlFor={orderId}
+      >
         <input
           id={orderId}
           type="number"
           min={0}
           step={1}
           value={config.order}
-          onChange={(e) => onChange({ order: Math.max(0, Number.parseInt(e.target.value, 10) || 0) })}
+          onChange={(e) =>
+            onChange({ order: Math.max(0, Number.parseInt(e.target.value, 10) || 0) })
+          }
           className={[settingsControlClass, "font-mono tabular-nums"].join(" ")}
         />
       </SettingsField>
-      <SettingsField label={t("modal.settings.note")} htmlFor={noteId} hint={t("modal.settings.field.vault.note_help", { max: VAULT_NOTE_MAX_LENGTH })}>
+      <SettingsField
+        label={t("modal.settings.note")}
+        htmlFor={noteId}
+        hint={t("modal.settings.field.vault.note_help", { max: VAULT_NOTE_MAX_LENGTH })}
+      >
         <textarea
           id={noteId}
           value={config.note}
@@ -123,7 +130,9 @@ export function VaultSettingsStorageSection({ config, onChange }: SectionPatchPr
 
   return (
     <SettingsFormGrid>
-      <p className="text-xs leading-relaxed text-on-surface-variant">{t("modal.settings.section.storage_intro")}</p>
+      <p className="text-xs leading-relaxed text-on-surface-variant">
+        {t("modal.settings.section.storage_intro")}
+      </p>
 
       <SettingsField
         label={t("modal.settings.field.storage.mode")}
@@ -192,7 +201,6 @@ export function VaultSettingsCloseSection({
   const enabledId = useId();
   const idleId = useId();
   const warnId = useId();
-  const exitId = useId();
   const sleepId = useId();
   const wipeId = useId();
 
@@ -241,10 +249,14 @@ export function VaultSettingsCloseSection({
           onChange={(e) => onSecureWipeChange(e.target.checked)}
           className="h-4 w-4 rounded border-outline-variant/50 text-accent focus:ring-accent/50"
         />
-        <span className="text-sm text-on-surface">{t("modal.settings.field.close.secure_wipe")}</span>
+        <span className="text-sm text-on-surface">
+          {t("modal.settings.field.close.secure_wipe")}
+        </span>
       </label>
       {!secureWipe ? (
-        <p className="text-xs text-on-error-container/90">{t("modal.settings.field.close.secure_wipe_warn")}</p>
+        <p className="text-xs text-on-error-container/90">
+          {t("modal.settings.field.close.secure_wipe_warn")}
+        </p>
       ) : null}
 
       <label className="flex cursor-pointer select-none items-center gap-3">
@@ -255,7 +267,9 @@ export function VaultSettingsCloseSection({
           onChange={(e) => onAutoCloseChange({ enabled: e.target.checked })}
           className="h-4 w-4 rounded border-outline-variant/50 text-accent focus:ring-accent/50"
         />
-        <span className="text-sm text-on-surface">{t("modal.settings.field.auto_close.enabled")}</span>
+        <span className="text-sm text-on-surface">
+          {t("modal.settings.field.auto_close.enabled")}
+        </span>
       </label>
       {autoClose.enabled ? (
         <div className="grid gap-4 sm:grid-cols-2">
@@ -268,13 +282,19 @@ export function VaultSettingsCloseSection({
               value={autoClose.idle_minutes}
               onChange={(e) =>
                 onAutoCloseChange({
-                  idle_minutes: Math.min(1440, Math.max(1, Number.parseInt(e.target.value, 10) || 1)),
+                  idle_minutes: Math.min(
+                    1440,
+                    Math.max(1, Number.parseInt(e.target.value, 10) || 1),
+                  ),
                 })
               }
               className={[settingsControlClass, "font-mono tabular-nums"].join(" ")}
             />
           </SettingsField>
-          <SettingsField label={t("modal.settings.field.auto_close.warn_before_seconds")} htmlFor={warnId}>
+          <SettingsField
+            label={t("modal.settings.field.auto_close.warn_before_seconds")}
+            htmlFor={warnId}
+          >
             <input
               id={warnId}
               type="number"
@@ -283,7 +303,10 @@ export function VaultSettingsCloseSection({
               value={autoClose.warn_before_seconds}
               onChange={(e) =>
                 onAutoCloseChange({
-                  warn_before_seconds: Math.min(300, Math.max(0, Number.parseInt(e.target.value, 10) || 0)),
+                  warn_before_seconds: Math.min(
+                    300,
+                    Math.max(0, Number.parseInt(e.target.value, 10) || 0),
+                  ),
                 })
               }
               className={[settingsControlClass, "font-mono tabular-nums"].join(" ")}
@@ -294,28 +317,15 @@ export function VaultSettingsCloseSection({
       <div className="space-y-1.5">
         <label className="flex cursor-pointer select-none items-center gap-3">
           <input
-            id={exitId}
-            type="checkbox"
-            checked={autoClose.close_on_app_exit}
-            onChange={(e) => onAutoCloseChange({ close_on_app_exit: e.target.checked })}
-            className="h-4 w-4 rounded border-outline-variant/50 text-accent focus:ring-accent/50"
-          />
-          <span className="text-sm text-on-surface">{t("modal.settings.field.auto_close.close_on_app_exit")}</span>
-        </label>
-        <p className="pl-7 text-xs leading-relaxed text-on-surface-variant">
-          {t("modal.settings.field.auto_close.close_on_app_exit_help")}
-        </p>
-      </div>
-      <div className="space-y-1.5">
-        <label className="flex cursor-pointer select-none items-center gap-3">
-          <input
             id={sleepId}
             type="checkbox"
             checked={requireUnmountOnSleep}
             onChange={(e) => onRequireUnmountOnSleepChange(e.target.checked)}
             className="h-4 w-4 rounded border-outline-variant/50 text-accent focus:ring-accent/50"
           />
-          <span className="text-sm text-on-surface">{t("modal.settings.field.close.require_unmount_on_sleep")}</span>
+          <span className="text-sm text-on-surface">
+            {t("modal.settings.field.close.require_unmount_on_sleep")}
+          </span>
         </label>
         <p className="pl-7 text-xs leading-relaxed text-on-surface-variant">
           {t("modal.settings.field.close.require_unmount_on_sleep_help")}
@@ -349,7 +359,9 @@ export function VaultSettingsBackupSection({ config, onChange }: SectionPatchPro
             <select
               id={modeId}
               value={config.mode}
-              onChange={(e) => onChange({ mode: e.target.value as VaultSettingsConfig["backup"]["mode"] })}
+              onChange={(e) =>
+                onChange({ mode: e.target.value as VaultSettingsConfig["backup"]["mode"] })
+              }
               className={settingsControlClass}
             >
               <option value="keep_last">{t("modal.settings.option.backup.keep_last")}</option>
@@ -364,9 +376,13 @@ export function VaultSettingsBackupSection({ config, onChange }: SectionPatchPro
                 min={1}
                 max={99}
                 value={config.keep_last}
-                onChange={(e) =>
-                  onChange({ keep_last: Math.min(99, Math.max(1, Number.parseInt(e.target.value, 10) || 1)) })
-                }
+                onChange={(e) => {
+                  const keepLast = Math.min(
+                    99,
+                    Math.max(1, Number.parseInt(e.target.value, 10) || 1),
+                  );
+                  onChange({ keep_last: keepLast });
+                }}
                 className={[settingsControlClass, "font-mono tabular-nums"].join(" ")}
               />
             </SettingsField>
@@ -409,7 +425,6 @@ export interface SecurityModeRadioGroupProps {
 }
 
 export function SecurityModeRadioGroup({
-  storageMode: _storageMode,
   securityMode,
   groupName,
   onSelectMode,
@@ -487,7 +502,9 @@ export function VaultSettingsSevenZipSection({ config, onChange }: SectionPatchP
 
   return (
     <SettingsFormGrid>
-      <p className="text-xs leading-relaxed text-on-surface-variant">{t("modal.settings.section.seven_zip_intro")}</p>
+      <p className="text-xs leading-relaxed text-on-surface-variant">
+        {t("modal.settings.section.seven_zip_intro")}
+      </p>
 
       <SettingsField
         label={t("modal.settings.field.seven_zip.archive_mode")}
@@ -531,10 +548,14 @@ export function VaultSettingsSevenZipSection({ config, onChange }: SectionPatchP
             onChange={(e) => onChange({ encrypt_file_names: e.target.checked })}
             className="h-4 w-4 rounded border-outline-variant/50 text-accent focus:ring-accent/50"
           />
-          <span className="text-sm text-on-surface">{t("modal.settings.field.seven_zip.encrypt_file_names_label")}</span>
+          <span className="text-sm text-on-surface">
+            {t("modal.settings.field.seven_zip.encrypt_file_names_label")}
+          </span>
         </label>
         {!config.encrypt_file_names ? (
-          <p className="text-xs text-on-error-container/90">{t("modal.settings.field.seven_zip.encrypt_file_names_off_warn")}</p>
+          <p className="text-xs text-on-error-container/90">
+            {t("modal.settings.field.seven_zip.encrypt_file_names_off_warn")}
+          </p>
         ) : null}
       </SettingsField>
     </SettingsFormGrid>
@@ -612,7 +633,9 @@ export function VaultSettingsPolicySection({ config, onChange }: SectionPatchPro
       </SettingsField>
 
       {config.allow_external_editors ? (
-        <p className="text-xs leading-relaxed text-on-error-container">{t("warning.external_editor")}</p>
+        <p className="text-xs leading-relaxed text-on-error-container">
+          {t("warning.external_editor")}
+        </p>
       ) : null}
       {externalBlockCopy ? (
         <p className="text-xs leading-relaxed text-on-surface-variant">
@@ -665,9 +688,7 @@ export function PolicyRadioOption({
       ? "hover:bg-[color-mix(in_srgb,var(--error-container)_11%,var(--surface-container))]"
       : "hover:bg-surface-container-highest/60";
 
-  const borderClass = checked
-    ? "border-2 border-[var(--accent)]"
-    : "border border-outline-variant";
+  const borderClass = checked ? "border-2 border-[var(--accent)]" : "border border-outline-variant";
 
   const radioClass =
     "mt-0.5 h-4 w-4 shrink-0 border border-outline-variant text-accent focus:ring-0 focus-visible:ring-0";
@@ -725,7 +746,9 @@ export function PolicyRadioOption({
               </span>
             ) : null}
           </span>
-          <span className="mt-1.5 block text-xs leading-relaxed text-on-surface-variant">{description}</span>
+          <span className="mt-1.5 block text-xs leading-relaxed text-on-surface-variant">
+            {description}
+          </span>
         </span>
       </span>
       {checked && footer ? (

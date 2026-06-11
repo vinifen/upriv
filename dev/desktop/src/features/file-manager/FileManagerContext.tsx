@@ -1,11 +1,4 @@
-import {
-  createContext,
-  useCallback,
-  useContext,
-  useMemo,
-  useReducer,
-  type ReactNode,
-} from "react";
+import { createContext, useCallback, useContext, useMemo, useReducer, type ReactNode } from "react";
 import { resolveVaultDisplayStatus } from "@/types";
 import type { VaultListItem } from "@/features/vault-list/types";
 import { createDefaultWorkspaceState } from "./fileTreeTypes";
@@ -67,10 +60,7 @@ function removeEntry(state: FileManagerState, vaultId: string): FileManagerState
   };
 }
 
-function minimizeEntry(
-  state: FileManagerState,
-  vaultId: string,
-): FileManagerState {
+function minimizeEntry(state: FileManagerState, vaultId: string): FileManagerState {
   const existing = state.entries[vaultId];
   if (!existing) return state;
   return {
@@ -172,15 +162,22 @@ export function FileManagerProvider({ children }: { children: ReactNode }) {
     dispatch({ type: "purge_for_vault_close", vaultId });
   }, []);
 
-  const dispatchWorkspace = useCallback((vaultId: string, workspaceAction: VaultWorkspaceAction) => {
-    dispatch({ type: "workspace", vaultId, action: workspaceAction });
-  }, []);
+  const dispatchWorkspace = useCallback(
+    (vaultId: string, workspaceAction: VaultWorkspaceAction) => {
+      dispatch({ type: "workspace", vaultId, action: workspaceAction });
+    },
+    [],
+  );
 
   const value = useMemo(() => {
-    const maximizedEntry = state.maximizedVaultId ? state.entries[state.maximizedVaultId] ?? null : null;
+    const maximizedEntry = state.maximizedVaultId
+      ? (state.entries[state.maximizedVaultId] ?? null)
+      : null;
     const minimizedEntries = state.order
       .map((id) => state.entries[id])
-      .filter((entry): entry is FileManagerEntry => Boolean(entry && entry.surface === "minimized"));
+      .filter((entry): entry is FileManagerEntry =>
+        Boolean(entry && entry.surface === "minimized"),
+      );
 
     return {
       entries: state.entries,

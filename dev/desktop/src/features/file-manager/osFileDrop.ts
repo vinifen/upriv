@@ -13,10 +13,7 @@ type FileSystemEntryLike = {
 };
 
 type FileSystemFileEntryLike = FileSystemEntryLike & {
-  file: (
-    success: (file: File) => void,
-    error?: (error: DOMException) => void,
-  ) => void;
+  file: (success: (file: File) => void, error?: (error: DOMException) => void) => void;
 };
 
 type FileSystemDirectoryEntryLike = FileSystemEntryLike & {
@@ -43,7 +40,9 @@ function entryFromDataTransferItem(item: DataTransferItem): FileSystemEntryLike 
   return webkitEntry ?? null;
 }
 
-function readAllDirectoryEntries(reader: FileSystemDirectoryReaderLike): Promise<FileSystemEntryLike[]> {
+function readAllDirectoryEntries(
+  reader: FileSystemDirectoryReaderLike,
+): Promise<FileSystemEntryLike[]> {
   return new Promise((resolve, reject) => {
     const collected: FileSystemEntryLike[] = [];
 
@@ -72,9 +71,8 @@ async function collectEntryFiles(
 ): Promise<void> {
   if (entry.isFile) {
     const file = await new Promise<File>((resolve, reject) => {
-      (entry as FileSystemFileEntryLike).file(
-        resolve,
-        (error) => reject(error ?? new Error("file read failed")),
+      (entry as FileSystemFileEntryLike).file(resolve, (error) =>
+        reject(error ?? new Error("file read failed")),
       );
     });
     const relativePath = prefix ? `${prefix}/${file.name}` : file.name;

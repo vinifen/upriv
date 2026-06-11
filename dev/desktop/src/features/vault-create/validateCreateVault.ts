@@ -3,7 +3,11 @@ import {
   validateDisplayName,
   type DisplayNameValidationCode,
 } from "@/lib/vaultDisplayName";
-import type { CreateVaultDraft, CreateVaultStepId, CreateVaultStepStatus } from "./createVaultTypes";
+import type {
+  CreateVaultDraft,
+  CreateVaultStepId,
+  CreateVaultStepStatus,
+} from "./createVaultTypes";
 
 export type CreateVaultValidationCode =
   | DisplayNameValidationCode
@@ -84,6 +88,9 @@ export function getCreateVaultStepStatus(
   return "incomplete";
 }
 
-export function canSubmitCreateVault(draft: CreateVaultDraft, existingIds: readonly string[]): boolean {
+export function canSubmitCreateVault(
+  draft: CreateVaultDraft,
+  existingIds: readonly string[],
+): boolean {
   return Object.keys(validateAllCreateVaultSteps(draft, existingIds)).length === 0;
 }

@@ -48,11 +48,7 @@ export function FileManagerWorkspace({ entry }: FileManagerWorkspaceProps) {
         ref={containerRef}
         className="flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-surface-container-high md:flex-row"
       >
-        <FileTreePanel
-          fm={fm}
-          splitPercent={splitPercent}
-          layout={isMobile ? "column" : "row"}
-        />
+        <FileTreePanel fm={fm} splitPercent={splitPercent} layout={isMobile ? "column" : "row"} />
         <PaneResizeHandle axis={isMobile ? "y" : "x"} onDrag={handleSplitDrag} />
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
           <FileManagerTabBar

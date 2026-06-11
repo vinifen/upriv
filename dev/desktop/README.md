@@ -10,7 +10,14 @@ npm install
 npm run dev              # http://localhost:1420 (browser)
 npm run tauri -- dev     # Tauri + WebView
 npm run build            # typecheck + production bundle
+npm run lint             # ESLint
+npm run format           # Prettier (write)
+npm run format:check     # Prettier (check only)
 ```
+
+## Mock demo passwords (prototype only)
+
+Until Tauri wires real crypto, unlock/close modals accept **any non-empty password** except the literal `wrong` (used to simulate failure in the change-password panel). Vaults that start **open** in `MOCK_VAULTS` are pre-seeded with `demo`. Hidden vault **Finance 2025** shows password hint _Q4 spreadsheet_ in the unlock modal (from `mockVaultSettings`).
 
 ## Source layout
 
@@ -20,7 +27,7 @@ src/
 ├── App.tsx                  # Root component (providers + home screen)
 │
 ├── app/                     # App shell: providers, top-level screens
-│   ├── AppProviders.tsx     # i18n and future global context
+│   ├── AppProviders.tsx     # App settings, i18n, file manager context
 │   └── HomeScreen.tsx       # Home / vault list route (placeholder)
 │
 ├── features/                # Feature modules (one folder per flow)
@@ -41,20 +48,20 @@ src/
 
 ### Conventions
 
-| Rule | Where |
-|------|--------|
-| UI copy | `dev/docs/i18n/*.json` via `useTranslation()` — never hardcode sentences |
-| Vault status colors | `theme/vault-status.ts` + CSS vars in `styles/tokens.css` |
-| Tauri commands | `lib/tauri/commands.ts` — names match `src-tauri` |
-| Domain types | `types/` — align with SDD DTOs (`VaultRow`, …) |
-| Feature UI | `features/<name>/` — screen + local hooks; compose `components/ui` |
+| Rule                | Where                                                                    |
+| ------------------- | ------------------------------------------------------------------------ |
+| UI copy             | `dev/docs/i18n/*.json` via `useTranslation()` — never hardcode sentences |
+| Vault status colors | `theme/vault-status.ts` + CSS vars in `styles/tokens.css`                |
+| Tauri commands      | `lib/tauri/commands.ts` — names match `src-tauri`                        |
+| Domain types        | `types/` — align with SDD DTOs (`VaultRow`, …)                           |
+| Feature UI          | `features/<name>/` — screen + local hooks; compose `components/ui`       |
 
 ## Aliases
 
-| Alias | Path |
-|-------|------|
-| `@/*` | `src/*` |
-| `@i18n/*` | `../docs/i18n/*` |
-| `@assets/*` | `assets/*` |
+| Alias       | Path             |
+| ----------- | ---------------- |
+| `@/*`       | `src/*`          |
+| `@i18n/*`   | `../docs/i18n/*` |
+| `@assets/*` | `assets/*`       |
 
 Versions: `../docs/VERSIONS.md`. Product UX: `../docs/prd.md` §3.7, `../docs/sdd.md` §8.2.

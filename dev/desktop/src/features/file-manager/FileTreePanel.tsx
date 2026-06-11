@@ -1,9 +1,16 @@
-import { useEffect, useRef, useState, type ChangeEvent, type DragEvent, type MouseEvent } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type DragEvent,
+  type MouseEvent,
+} from "react";
 import { Icon } from "@/components/icons";
 import { useTranslation } from "@/i18n";
 import { getParentPath, isDescendantPath } from "./fileTreeOps";
 import type { FileTreeNode } from "./fileTreeTypes";
-import { findTreeNode, joinPath } from "./fileTreeUtils";
+import { findNode, joinPath } from "./fileTreeUtils";
 import { filesFromDataTransfer, filesFromFileInput, isOsFileDrag } from "./osFileDrop";
 import type { useVaultFileManager } from "./useVaultFileManager";
 
@@ -30,7 +37,7 @@ const DEPTH_INDENT_PX = 10;
 function importTargetPath(fm: FileManagerApi): string {
   const selected = fm.workspace.selectedPath;
   if (!selected || selected === "/") return "/";
-  const node = findTreeNode(fm.tree, selected);
+  const node = findNode(fm.tree, selected);
   if (node?.type === "folder") return selected;
   return getParentPath(selected);
 }
@@ -210,7 +217,9 @@ function FileTreeRow({ node, path, depth, fm }: FileTreeRowProps) {
             className="min-w-0 w-full rounded bg-surface-container-highest px-1.5 py-0.5 text-xs text-on-surface outline-none ring-1 ring-[var(--accent)]"
           />
         ) : (
-          <span className="block min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">{node.name}</span>
+          <span className="block min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">
+            {node.name}
+          </span>
         )}
       </div>
       {isFolder && isExpanded
@@ -269,6 +278,8 @@ export function FileTreePanel({ fm, splitPercent, layout }: FileTreePanelProps) 
   };
 
   const handleNavDragOver = (event: DragEvent) => {
+    if (event.target !== event.currentTarget) return;
+
     if (isOsFileDrag(event)) {
       event.preventDefault();
       event.dataTransfer.dropEffect = "copy";
@@ -288,6 +299,8 @@ export function FileTreePanel({ fm, splitPercent, layout }: FileTreePanelProps) 
   };
 
   const handleNavDrop = (event: DragEvent) => {
+    if (event.target !== event.currentTarget) return;
+
     event.preventDefault();
 
     if (isOsFileDrag(event)) {

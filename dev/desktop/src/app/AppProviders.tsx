@@ -6,7 +6,7 @@ interface AppProvidersProps {
   children: ReactNode;
 }
 
-/** Composes global React context providers (i18n, future theme/query). */
+/** Composes global React context providers (app settings, theme, i18n, file manager). */
 export function AppProviders({ children }: AppProvidersProps) {
   return (
     <AppSettingsProvider>

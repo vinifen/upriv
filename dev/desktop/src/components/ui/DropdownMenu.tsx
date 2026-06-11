@@ -34,8 +34,7 @@ interface DropdownMenuProps {
 }
 
 /** One step above row hover (`surface-container-high`) so the trigger stays visible. */
-const triggerActiveClass =
-  "bg-surface-container-highest text-on-surface";
+const triggerActiveClass = "bg-surface-container-highest text-on-surface";
 
 export function DropdownMenu({ trigger, items, align = "right", label }: DropdownMenuProps) {
   const [open, setOpen] = useState(false);
@@ -65,7 +64,9 @@ export function DropdownMenu({ trigger, items, align = "right", label }: Dropdow
         "aria-expanded": open,
         "aria-haspopup": "menu" as const,
         "aria-controls": menuId,
-        className: [trigger.props.className, open ? triggerActiveClass : ""].filter(Boolean).join(" "),
+        className: [trigger.props.className, open ? triggerActiveClass : ""]
+          .filter(Boolean)
+          .join(" "),
         onClick: (event: React.MouseEvent) => {
           trigger.props.onClick?.(event);
           event.stopPropagation();
@@ -99,9 +100,7 @@ export function DropdownMenu({ trigger, items, align = "right", label }: Dropdow
                   setOpen(false);
                 }}
               >
-                {item.icon ? (
-                  <span className="text-on-surface-variant">{item.icon}</span>
-                ) : null}
+                {item.icon ? <span className="text-on-surface-variant">{item.icon}</span> : null}
                 {item.label}
               </button>
             </li>

@@ -27,7 +27,12 @@ interface EditorWithLineNumbersProps {
   onChange: (content: string) => void;
 }
 
-function EditorWithLineNumbers({ content, fileName, ariaLabel, onChange }: EditorWithLineNumbersProps) {
+function EditorWithLineNumbers({
+  content,
+  fileName,
+  ariaLabel,
+  onChange,
+}: EditorWithLineNumbersProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const gutterRef = useRef<HTMLDivElement>(null);
 
@@ -78,7 +83,15 @@ function EditorWithLineNumbers({ content, fileName, ariaLabel, onChange }: Edito
   );
 }
 
-function ImagePreview({ src, fileName, ariaLabel }: { src: string; fileName: string; ariaLabel: string }) {
+function ImagePreview({
+  src,
+  fileName,
+  ariaLabel,
+}: {
+  src: string;
+  fileName: string;
+  ariaLabel: string;
+}) {
   return (
     <div className="modal-scroll-pane flex min-h-0 flex-1 items-center justify-center bg-surface-container-high p-4">
       <img

@@ -7,7 +7,7 @@ import {
   type VaultListSort,
 } from "./vaultListSort";
 import { DEFAULT_VAULT_LIST_VIEW, type VaultListViewMode } from "./vaultListView";
-import type { VaultPersistence, VaultSession } from "@/types";
+import { assertPlainVaultInvariant, type VaultPersistence, type VaultSession } from "@/types";
 import type { VaultSettingsListPatch } from "./vaultSettingsTypes";
 import type { VaultListItem } from "./types";
 import { reorderVaultList, sortVaultsByOrder } from "./vaultOrder";
@@ -15,6 +15,7 @@ import { resolveVaultPasswordHint } from "./vaultPasswordHint";
 
 function seedVaultPasswordHints(vaults: VaultListItem[]): VaultListItem[] {
   return vaults.map((vault) => {
+    assertPlainVaultInvariant(vault);
     const passwordHint = resolveVaultPasswordHint(vault);
     return passwordHint ? { ...vault, passwordHint } : vault;
   });
@@ -30,7 +31,9 @@ export function useVaultListState(
     showHiddenVaults?: boolean;
   },
 ) {
-  const [vaults, setVaults] = useState(() => sortVaultsByOrder(seedVaultPasswordHints(initialVaults)));
+  const [vaults, setVaults] = useState(() =>
+    sortVaultsByOrder(seedVaultPasswordHints(initialVaults)),
+  );
   const [sort, setSort] = useState<VaultListSort>(options?.initialSort ?? DEFAULT_VAULT_LIST_SORT);
   const [viewMode, setViewMode] = useState<VaultListViewMode>(
     options?.initialViewMode ?? DEFAULT_VAULT_LIST_VIEW,
@@ -130,6 +133,8 @@ export function useVaultListState(
               note: patch.note,
               hidden: patch.hidden,
               passwordHint: patch.passwordHint,
+              storageMode: patch.storageMode,
+              canSeal: patch.canSeal,
             }
           : vault,
       );
@@ -144,7 +149,13 @@ export function useVaultListState(
   const setVaultRuntimeState = useCallback(
     (
       vaultId: string,
-      patch: { session: VaultSession | null; persistence?: VaultPersistence },
+      patch: {
+        session: VaultSession | null;
+        persistence?: VaultPersistence;
+        canSeal?: boolean;
+        lastAccessedAt?: string;
+        lastAccessedWhen?: string;
+      },
     ) => {
       setVaults((current) =>
         current.map((vault) => (vault.id === vaultId ? { ...vault, ...patch } : vault)),

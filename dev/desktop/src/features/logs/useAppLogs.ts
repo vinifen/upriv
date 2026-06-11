@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { sortLogFilesNewestFirst } from "./logFormat";
 import { getMockLogFiles } from "./mockLogs";
 import type { AppLogFile } from "./logTypes";
 
@@ -7,7 +8,7 @@ export function useAppLogs(open: boolean) {
 
   useEffect(() => {
     if (!open) return;
-    setFiles(getMockLogFiles());
+    setFiles(sortLogFilesNewestFirst(getMockLogFiles()));
   }, [open]);
 
   const deleteFiles = useCallback((filenames: readonly string[]) => {

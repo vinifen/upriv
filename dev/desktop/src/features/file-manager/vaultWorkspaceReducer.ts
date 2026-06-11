@@ -32,11 +32,16 @@ function removeFromList(paths: string[], removeSet: Set<string>): string[] {
   return paths.filter((p) => !removeSet.has(p));
 }
 
-function applyPathMap(state: VaultWorkspaceState, map: Record<string, string>): VaultWorkspaceState {
+function applyPathMap(
+  state: VaultWorkspaceState,
+  map: Record<string, string>,
+): VaultWorkspaceState {
   const openTabs = remapList(state.openTabs, map);
-  const activeTabPath = state.activeTabPath ? map[state.activeTabPath] ?? state.activeTabPath : null;
-  const selectedPath = state.selectedPath ? map[state.selectedPath] ?? state.selectedPath : null;
-  const renamingPath = state.renamingPath ? map[state.renamingPath] ?? null : null;
+  const activeTabPath = state.activeTabPath
+    ? (map[state.activeTabPath] ?? state.activeTabPath)
+    : null;
+  const selectedPath = state.selectedPath ? (map[state.selectedPath] ?? state.selectedPath) : null;
+  const renamingPath = state.renamingPath ? (map[state.renamingPath] ?? null) : null;
   const expandedPaths = remapList(state.expandedPaths, map);
   const editorDrafts: Record<string, string> = {};
   const dirtyPaths: string[] = [];
@@ -71,8 +76,10 @@ function applyPathRemoval(state: VaultWorkspaceState, paths: string[]): VaultWor
     ...state,
     openTabs,
     activeTabPath,
-    selectedPath: state.selectedPath && removeSet.has(state.selectedPath) ? null : state.selectedPath,
-    renamingPath: state.renamingPath && removeSet.has(state.renamingPath) ? null : state.renamingPath,
+    selectedPath:
+      state.selectedPath && removeSet.has(state.selectedPath) ? null : state.selectedPath,
+    renamingPath:
+      state.renamingPath && removeSet.has(state.renamingPath) ? null : state.renamingPath,
     editorDrafts,
     dirtyPaths: state.dirtyPaths.filter((p) => !removeSet.has(p)),
     expandedPaths: state.expandedPaths.filter((p) => !removeSet.has(p)),
@@ -141,7 +148,12 @@ export function vaultWorkspaceReducer(
       };
     }
     case "request_active_tab":
-      return { ...state, activeTabPath: action.path, selectedPath: action.path, unsavedPrompt: null };
+      return {
+        ...state,
+        activeTabPath: action.path,
+        selectedPath: action.path,
+        unsavedPrompt: null,
+      };
     case "set_active_tab":
       return vaultWorkspaceReducer(state, { type: "request_active_tab", path: action.path });
     case "set_tree_split":

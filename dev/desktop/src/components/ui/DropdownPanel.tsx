@@ -74,7 +74,9 @@ export function DropdownPanel({
         "aria-expanded": open,
         "aria-haspopup": "menu" as const,
         "aria-controls": panelId,
-        className: [trigger.props.className, open ? triggerActiveClass : ""].filter(Boolean).join(" "),
+        className: [trigger.props.className, open ? triggerActiveClass : ""]
+          .filter(Boolean)
+          .join(" "),
         onClick: (event: React.MouseEvent) => {
           trigger.props.onClick?.(event);
           event.stopPropagation();

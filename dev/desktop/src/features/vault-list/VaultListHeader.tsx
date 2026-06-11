@@ -58,11 +58,7 @@ export function VaultListHeader({
             onClick={onRefresh}
             disabled={isRefreshing}
           >
-            <Icon
-              name="refresh"
-              size={20}
-              className={isRefreshing ? "animate-spin" : undefined}
-            />
+            <Icon name="refresh" size={20} className={isRefreshing ? "animate-spin" : undefined} />
           </IconButton>
           <Button
             variant="primary"
