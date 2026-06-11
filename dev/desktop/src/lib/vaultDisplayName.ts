@@ -1,5 +1,6 @@
 import { VAULT_DISPLAY_NAME_MAX_LENGTH } from "@/constants/vault";
 
+// eslint-disable-next-line no-control-regex -- vault names must reject ASCII control characters
 const FORBIDDEN_CHARS = /[\\/:*?"<>|\x00-\x1f]/;
 const TRAILING_INVALID = /[ .]$/;
 const WINDOWS_RESERVED = new Set([
@@ -45,7 +46,11 @@ export function validateDisplayName(name: string): DisplayNameValidationCode | n
   if (trimmed.length > VAULT_DISPLAY_NAME_MAX_LENGTH) return "too_long";
   if (FORBIDDEN_CHARS.test(trimmed)) return "invalid_chars";
   if (TRAILING_INVALID.test(trimmed)) return "trailing";
-  const stem = trimmed.replace(/[ .]+$/, "").split(/[\\/]/).pop() ?? trimmed;
+  const stem =
+    trimmed
+      .replace(/[ .]+$/, "")
+      .split(/[\\/]/)
+      .pop() ?? trimmed;
   if (WINDOWS_RESERVED.has(stem.toLowerCase())) return "reserved";
   return null;
 }

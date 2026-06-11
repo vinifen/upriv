@@ -30,9 +30,9 @@ export function VaultNoteModal({ vault, open, onClose, onNoteChange }: VaultNote
 
   useEffect(() => {
     if (!open || !vaultId) return;
-    setDraft(normalizeNote(vault?.note));
+    setDraft(savedNote);
     setSavedVisible(false);
-  }, [open, vaultId]);
+  }, [open, vaultId, savedNote]);
 
   const persistNote = useCallback(
     (note: string) => {

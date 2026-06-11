@@ -115,7 +115,7 @@ export function transitionStorageModeClose(
   return { close: encryptedClosePreference, encryptedClosePreference };
 }
 
-/** Apply storage mode change while preserving encrypted-dir close preference across plain detours. */
+/** Apply storage mode change; preserve encrypted-dir close preference across plain detours. */
 export function patchStorageMode(
   config: VaultSettingsConfig,
   mode: StorageMode,
@@ -210,4 +210,10 @@ export interface VaultSettingsListPatch {
   note: string;
   hidden: boolean;
   passwordHint?: string;
+  storageMode: StorageMode;
+  canSeal: boolean;
+}
+
+export function vaultCanSealFromStorage(storageMode: StorageMode): boolean {
+  return storageMode === "encrypted_dir";
 }

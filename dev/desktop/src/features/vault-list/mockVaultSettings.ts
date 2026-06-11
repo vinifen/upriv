@@ -1,9 +1,10 @@
 import type { VaultSettingsConfig } from "./vaultSettingsTypes";
+import { vaultCanSealFromStorage } from "./vaultSettingsTypes";
 
-function vaultPaths(id: string, displayName: string): Pick<
-  VaultSettingsConfig["vault"],
-  "id" | "vault_file" | "store_dir" | "backups_dir"
-> {
+function vaultPaths(
+  id: string,
+  displayName: string,
+): Pick<VaultSettingsConfig["vault"], "id" | "vault_file" | "store_dir" | "backups_dir"> {
   return {
     id,
     vault_file: `archive/${displayName}.7z`,
@@ -61,9 +62,9 @@ const MOCK_BY_VAULT: Record<string, VaultSettingsOverrides> = {
   "my-encrypted-notes": {
     vault: {
       display_name: "My Encrypted Notes",
-      order: 4,
+      order: 1,
       password_hint: "hint: childhood street",
-      note: "Personal notes and drafts.",
+      note: "Daily scratch pad — sync after laptop backup.",
       ...vaultPaths("my-encrypted-notes", "My Encrypted Notes"),
     },
     backup: { enabled: true, mode: "keep_last", keep_last: 1 },
@@ -73,7 +74,7 @@ const MOCK_BY_VAULT: Record<string, VaultSettingsOverrides> = {
   "vault-example-2": {
     vault: {
       display_name: "Vault ExaMple 2",
-      order: 1,
+      order: 2,
       password_hint: "Example passphrase reminder",
       note: "Mock demo: unlock with gatefail, then lock to see archive test error.",
       ...vaultPaths("vault-example-2", "Vault ExaMple 2"),
@@ -94,7 +95,7 @@ const MOCK_BY_VAULT: Record<string, VaultSettingsOverrides> = {
   "finance-2025": {
     vault: {
       display_name: "Finance 2025",
-      order: 5,
+      order: 7,
       password_hint: "Q4 spreadsheet",
       note: "",
       hidden: true,
@@ -138,6 +139,10 @@ export function registerMockVaultSettings(config: VaultSettingsConfig): void {
   RUNTIME_VAULT_SETTINGS.set(config.vault.id, structuredClone(config));
 }
 
+export function unregisterMockVaultSettings(vaultId: string): void {
+  RUNTIME_VAULT_SETTINGS.delete(vaultId);
+}
+
 export function getMockVaultSettings(vaultId: string): VaultSettingsConfig {
   const runtime = RUNTIME_VAULT_SETTINGS.get(vaultId);
   if (runtime) return structuredClone(runtime);
@@ -164,11 +169,14 @@ export function getMockVaultSettings(vaultId: string): VaultSettingsConfig {
 
 export function vaultSettingsToListPatch(config: VaultSettingsConfig) {
   const passwordHint = config.vault.password_hint.trim();
+  const storageMode = config.storage.mode;
   return {
     displayName: config.vault.display_name,
     order: config.vault.order,
     note: config.vault.note,
     hidden: config.vault.hidden,
     passwordHint: passwordHint || undefined,
+    storageMode,
+    canSeal: vaultCanSealFromStorage(storageMode),
   };
 }

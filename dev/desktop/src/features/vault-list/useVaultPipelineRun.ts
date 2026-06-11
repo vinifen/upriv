@@ -25,58 +25,76 @@ interface StartPipelineOptions {
 
 export function useVaultPipelineRun() {
   const [run, setRun] = useState<VaultPipelineRunState | null>(null);
+  const runRef = useRef<VaultPipelineRunState | null>(null);
   const generationRef = useRef(0);
 
+  const syncRun = useCallback((next: VaultPipelineRunState | null) => {
+    runRef.current = next;
+    setRun(next);
+  }, []);
+
   const start = useCallback(
-    ({ vaultId, kind, stepCount, runPipeline, onComplete, onError }: StartPipelineOptions) => {
+    ({
+      vaultId,
+      kind,
+      stepCount,
+      runPipeline,
+      onComplete,
+      onError,
+    }: StartPipelineOptions): boolean => {
+      if (runRef.current !== null) return false;
+
       const generation = ++generationRef.current;
 
-      setRun({ vaultId, kind, activeStep: 0, stepCount, foreground: true });
+      syncRun({ vaultId, kind, activeStep: 0, stepCount, foreground: true });
 
       void (async () => {
         try {
           await runPipeline(vaultId, (stepIndex) => {
             if (generationRef.current !== generation) return;
-            setRun((current) =>
-              current?.vaultId === vaultId ? { ...current, activeStep: stepIndex } : current,
-            );
+            const current = runRef.current;
+            if (current?.vaultId !== vaultId) return;
+            syncRun({ ...current, activeStep: stepIndex });
           });
 
           if (generationRef.current !== generation) return;
 
-          setRun(null);
+          syncRun(null);
           onComplete();
         } catch (error) {
           if (generationRef.current !== generation) return;
 
-          const errorKey = isMockPipelineError(error)
-            ? error.i18nKey
-            : "error.archive_test_failed";
+          const current = runRef.current;
+          if (current?.vaultId !== vaultId) return;
 
-          setRun((current) =>
-            current?.vaultId === vaultId
-              ? { ...current, foreground: true, errorKey }
-              : current,
-          );
+          const errorKey = isMockPipelineError(error) ? error.i18nKey : "error.archive_test_failed";
+
+          syncRun({ ...current, foreground: true, errorKey });
           onError(errorKey);
         }
       })();
+
+      return true;
     },
-    [],
+    [syncRun],
   );
 
   const dismissFailure = useCallback(() => {
-    setRun(null);
-  }, []);
+    syncRun(null);
+  }, [syncRun]);
 
   const moveToBackground = useCallback(() => {
-    setRun((current) => (current ? { ...current, foreground: false } : null));
-  }, []);
+    const current = runRef.current;
+    if (!current) return;
+    syncRun({ ...current, foreground: false });
+  }, [syncRun]);
 
   const isVaultPipelineBusy = useCallback(
-    (vaultId: string) => run?.vaultId === vaultId,
-    [run],
+    (vaultId: string) => runRef.current?.vaultId === vaultId,
+    [],
   );
+
+  const isRunning = run !== null;
 
   return {
     run,
@@ -84,6 +102,6 @@ export function useVaultPipelineRun() {
     moveToBackground,
     dismissFailure,
     isVaultPipelineBusy,
-    isRunning: run !== null,
+    isRunning,
   };
 }

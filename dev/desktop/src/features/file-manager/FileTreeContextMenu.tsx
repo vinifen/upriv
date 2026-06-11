@@ -1,7 +1,7 @@
 import { createPortal } from "react-dom";
 import { menuItemClass, menuPanelClass } from "@/components/ui/menuStyles";
 import { useTranslation } from "@/i18n";
-import { findTreeNode } from "./fileTreeUtils";
+import { findNode } from "./fileTreeUtils";
 import type { FileTreeNode } from "./fileTreeTypes";
 import type { useVaultFileManager } from "./useVaultFileManager";
 
@@ -17,12 +17,14 @@ export function FileTreeContextMenu({ fm, tree }: FileTreeContextMenuProps) {
   const menu = fm.workspace.contextMenu;
   if (!menu) return null;
 
-  const node = findTreeNode(tree, menu.path);
+  const node = findNode(tree, menu.path);
   if (!node) return null;
 
   const isRoot = menu.path === "/";
   const isFolder = node.type === "folder";
-  const parentForCreate = isFolder ? menu.path : menu.path.slice(0, menu.path.lastIndexOf("/")) || "/";
+  const parentForCreate = isFolder
+    ? menu.path
+    : menu.path.slice(0, menu.path.lastIndexOf("/")) || "/";
 
   const close = () => fm.dispatch({ type: "set_context_menu", menu: null });
 

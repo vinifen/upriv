@@ -15,10 +15,7 @@ export function useVaultSettings(vaultId: string | null, open: boolean) {
   }, []);
 
   const patchSection = useCallback(
-    <S extends VaultSettingsSectionId>(
-      section: S,
-      patch: Partial<VaultSettingsConfig[S]>,
-    ) => {
+    <S extends VaultSettingsSectionId>(section: S, patch: Partial<VaultSettingsConfig[S]>) => {
       setConfig((current) =>
         current
           ? {

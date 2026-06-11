@@ -38,10 +38,14 @@ export function CreateVaultWizardModal({
   onCreate,
 }: CreateVaultWizardModalProps) {
   const { t } = useTranslation();
-  const [baseline, setBaseline] = useState<CreateVaultDraft>(() => createEmptyDraft(existingOrders));
+  const [baseline, setBaseline] = useState<CreateVaultDraft>(() =>
+    createEmptyDraft(existingOrders),
+  );
   const [draft, setDraft] = useState<CreateVaultDraft>(() => createEmptyDraft(existingOrders));
   const [currentStep, setCurrentStep] = useState<CreateVaultStepId>("source");
-  const [visitedSteps, setVisitedSteps] = useState<Set<CreateVaultStepId>>(() => new Set(["source"]));
+  const [visitedSteps, setVisitedSteps] = useState<Set<CreateVaultStepId>>(
+    () => new Set(["source"]),
+  );
   const [submitAttempted, setSubmitAttempted] = useState(false);
   const [testingPassword, setTestingPassword] = useState(false);
   const [discardConfirmOpen, setDiscardConfirmOpen] = useState(false);
@@ -59,10 +63,7 @@ export function CreateVaultWizardModal({
     setDiscardConfirmOpen(false);
   }, [open, existingOrders, initialDraft]);
 
-  const isDirty = useMemo(
-    () => !createVaultDraftEqual(draft, baseline),
-    [draft, baseline],
-  );
+  const isDirty = useMemo(() => !createVaultDraftEqual(draft, baseline), [draft, baseline]);
 
   const dismissFooterConfirm = useCallback(() => {
     setDiscardConfirmOpen(false);
@@ -161,7 +162,12 @@ export function CreateVaultWizardModal({
         {discardConfirmOpen ? (
           <p className="text-on-surface-variant">{t("modal.settings.discard_confirm")}</p>
         ) : (
-          <Button variant="ghost" size="md" disabled={isFirstStep || discardConfirmOpen} onClick={handleBack}>
+          <Button
+            variant="ghost"
+            size="md"
+            disabled={isFirstStep || discardConfirmOpen}
+            onClick={handleBack}
+          >
             {t("vault.create.action.back")}
           </Button>
         )}
@@ -218,7 +224,11 @@ export function CreateVaultWizardModal({
           testingPassword,
         })}
       </div>
-      <CreateVaultStepNav currentStep={currentStep} stepStatuses={stepStatuses} onSelectStep={goToStep} />
+      <CreateVaultStepNav
+        currentStep={currentStep}
+        stepStatuses={stepStatuses}
+        onSelectStep={goToStep}
+      />
     </Modal>
   );
 }

@@ -1,4 +1,12 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
 import { I18nProvider } from "@/i18n";
 import { applyDocumentTheme } from "@/theme";
 import { getMockAppSettings } from "./mockAppSettings";

@@ -165,7 +165,11 @@ function CreateVaultIdentityStep({ draft, errors, onChange }: StepProps) {
           className={settingsControlClass}
         />
       </SettingsField>
-      <SettingsField label={t("vault.create.note")} htmlFor={noteId} hint={t("vault.create.note_help", { max: VAULT_NOTE_MAX_LENGTH })}>
+      <SettingsField
+        label={t("vault.create.note")}
+        htmlFor={noteId}
+        hint={t("vault.create.note_help", { max: VAULT_NOTE_MAX_LENGTH })}
+      >
         <textarea
           id={noteId}
           value={draft.note}
@@ -196,7 +200,9 @@ function CreateVaultPasswordStep({
   return (
     <SettingsFormGrid>
       <p className="text-sm text-on-surface-variant">
-        {isImport ? t("vault.create.password_import_intro") : t("vault.create.password_scratch_intro")}
+        {isImport
+          ? t("vault.create.password_import_intro")
+          : t("vault.create.password_scratch_intro")}
       </p>
       <SettingsField label={t("vault.create.password")} htmlFor={passwordId}>
         <PasswordInput
@@ -232,7 +238,9 @@ function CreateVaultPasswordStep({
             disabled={!draft.password.trim() || testingPassword}
             onClick={onTestImportPassword}
           >
-            {testingPassword ? t("vault.create.action.testing_password") : t("vault.create.action.test_password")}
+            {testingPassword
+              ? t("vault.create.action.testing_password")
+              : t("vault.create.action.test_password")}
           </Button>
           {draft.passwordValidated ? (
             <span className="text-sm text-vault-open">{t("vault.create.password_validated")}</span>
@@ -263,7 +271,6 @@ function CreateVaultGeneralStep({ draft, onChange }: StepProps) {
   const autoCloseId = useId();
   const idleId = useId();
   const warnId = useId();
-  const exitId = useId();
   const archiveGroup = useId();
 
   return (
@@ -275,10 +282,14 @@ function CreateVaultGeneralStep({ draft, onChange }: StepProps) {
           id={autoCloseId}
           type="checkbox"
           checked={draft.auto_close.enabled}
-          onChange={(e) => onChange({ auto_close: { ...draft.auto_close, enabled: e.target.checked } })}
+          onChange={(e) =>
+            onChange({ auto_close: { ...draft.auto_close, enabled: e.target.checked } })
+          }
           className="h-4 w-4 rounded border-outline-variant/50 text-accent focus:ring-accent/50"
         />
-        <span className="text-sm text-on-surface">{t("modal.settings.field.auto_close.enabled")}</span>
+        <span className="text-sm text-on-surface">
+          {t("modal.settings.field.auto_close.enabled")}
+        </span>
       </label>
       {draft.auto_close.enabled ? (
         <div className="grid gap-4 sm:grid-cols-2">
@@ -293,14 +304,20 @@ function CreateVaultGeneralStep({ draft, onChange }: StepProps) {
                 onChange({
                   auto_close: {
                     ...draft.auto_close,
-                    idle_minutes: Math.min(1440, Math.max(1, Number.parseInt(e.target.value, 10) || 1)),
+                    idle_minutes: Math.min(
+                      1440,
+                      Math.max(1, Number.parseInt(e.target.value, 10) || 1),
+                    ),
                   },
                 })
               }
               className={[settingsControlClass, "font-mono tabular-nums"].join(" ")}
             />
           </SettingsField>
-          <SettingsField label={t("modal.settings.field.auto_close.warn_before_seconds")} htmlFor={warnId}>
+          <SettingsField
+            label={t("modal.settings.field.auto_close.warn_before_seconds")}
+            htmlFor={warnId}
+          >
             <input
               id={warnId}
               type="number"
@@ -311,7 +328,10 @@ function CreateVaultGeneralStep({ draft, onChange }: StepProps) {
                 onChange({
                   auto_close: {
                     ...draft.auto_close,
-                    warn_before_seconds: Math.min(300, Math.max(0, Number.parseInt(e.target.value, 10) || 0)),
+                    warn_before_seconds: Math.min(
+                      300,
+                      Math.max(0, Number.parseInt(e.target.value, 10) || 0),
+                    ),
                   },
                 })
               }
@@ -320,25 +340,16 @@ function CreateVaultGeneralStep({ draft, onChange }: StepProps) {
           </SettingsField>
         </div>
       ) : null}
-      <label className="flex cursor-pointer select-none items-center gap-3">
-        <input
-          id={exitId}
-          type="checkbox"
-          checked={draft.auto_close.close_on_app_exit}
-          onChange={(e) =>
-            onChange({ auto_close: { ...draft.auto_close, close_on_app_exit: e.target.checked } })
-          }
-          className="h-4 w-4 rounded border-outline-variant/50 text-accent focus:ring-accent/50"
-        />
-        <span className="text-sm text-on-surface">{t("modal.settings.field.auto_close.close_on_app_exit")}</span>
-      </label>
 
       <VaultSettingsBackupSection
         config={draft.backup}
         onChange={(patch) => onChange({ backup: { ...draft.backup, ...patch } })}
       />
 
-      <SettingsField label={t("modal.settings.field.seven_zip.archive_mode")} hint={t("modal.settings.field.seven_zip.archive_mode_help")}>
+      <SettingsField
+        label={t("modal.settings.field.seven_zip.archive_mode")}
+        hint={t("modal.settings.field.seven_zip.archive_mode_help")}
+      >
         <div role="radiogroup" className="grid gap-2">
           <PolicyRadioOption
             groupName={archiveGroup}
@@ -347,7 +358,9 @@ function CreateVaultGeneralStep({ draft, onChange }: StepProps) {
             title={t("modal.settings.option.seven_zip.encrypt_only")}
             description={t("modal.settings.option.seven_zip.encrypt_only_desc")}
             badge="default"
-            onSelect={() => onChange({ seven_zip: { ...draft.seven_zip, archive_mode: "encrypt_only" } })}
+            onSelect={() =>
+              onChange({ seven_zip: { ...draft.seven_zip, archive_mode: "encrypt_only" } })
+            }
           />
           <PolicyRadioOption
             groupName={archiveGroup}
@@ -355,7 +368,9 @@ function CreateVaultGeneralStep({ draft, onChange }: StepProps) {
             checked={draft.seven_zip.archive_mode === "compress_encrypt"}
             title={t("modal.settings.option.seven_zip.compress_encrypt")}
             description={t("modal.settings.option.seven_zip.compress_encrypt_desc")}
-            onSelect={() => onChange({ seven_zip: { ...draft.seven_zip, archive_mode: "compress_encrypt" } })}
+            onSelect={() =>
+              onChange({ seven_zip: { ...draft.seven_zip, archive_mode: "compress_encrypt" } })
+            }
           />
         </div>
       </SettingsField>
@@ -398,17 +413,25 @@ function CreateVaultAdvancedStep({ draft, onChange }: StepProps) {
   return (
     <SettingsFormGrid>
       <p className="text-sm text-on-surface-variant">{t("vault.create.advanced_intro")}</p>
-      <p className="text-sm leading-relaxed text-on-surface-variant">{t("vault.create.settings_editable_later")}</p>
+      <p className="text-sm leading-relaxed text-on-surface-variant">
+        {t("vault.create.settings_editable_later")}
+      </p>
       <VaultSettingsSection title={t("vault.create.advanced_section")} defaultOpen={false}>
         <div className="space-y-4">
-          <SettingsField label={t("modal.settings.field.vault.order")} hint={t("modal.settings.field.vault.order_help")} htmlFor={orderId}>
+          <SettingsField
+            label={t("modal.settings.field.vault.order")}
+            hint={t("modal.settings.field.vault.order_help")}
+            htmlFor={orderId}
+          >
             <input
               id={orderId}
               type="number"
               min={0}
               step={1}
               value={draft.order}
-              onChange={(e) => onChange({ order: Math.max(0, Number.parseInt(e.target.value, 10) || 0) })}
+              onChange={(e) =>
+                onChange({ order: Math.max(0, Number.parseInt(e.target.value, 10) || 0) })
+              }
               className={[settingsControlClass, "font-mono tabular-nums"].join(" ")}
             />
           </SettingsField>
@@ -422,14 +445,19 @@ function CreateVaultAdvancedStep({ draft, onChange }: StepProps) {
                 onChange={(e) => onChange({ hidden: e.target.checked })}
                 className="h-4 w-4 rounded border-outline-variant/50 text-accent focus:ring-accent/50"
               />
-              <span className="text-sm text-on-surface">{t("modal.settings.field.vault.hidden")}</span>
+              <span className="text-sm text-on-surface">
+                {t("modal.settings.field.vault.hidden")}
+              </span>
             </label>
             <p className="pl-7 text-xs leading-relaxed text-on-surface-variant">
               {t("modal.settings.field.vault.hidden_help")}
             </p>
           </div>
 
-          <SettingsField label={t("modal.settings.field.storage.mode")} hint={t("modal.settings.field.storage.mode_help")}>
+          <SettingsField
+            label={t("modal.settings.field.storage.mode")}
+            hint={t("modal.settings.field.storage.mode_help")}
+          >
             <div role="radiogroup" className="grid gap-2">
               <PolicyRadioOption
                 groupName={storageGroup}
@@ -466,7 +494,10 @@ function CreateVaultAdvancedStep({ draft, onChange }: StepProps) {
               {t("modal.settings.field.close.plain_seal_only")}
             </p>
           ) : (
-            <SettingsField label={t("modal.settings.field.close.default_action")} hint={t("modal.settings.field.close.default_action_help")}>
+            <SettingsField
+              label={t("modal.settings.field.close.default_action")}
+              hint={t("modal.settings.field.close.default_action_help")}
+            >
               <div role="radiogroup" className="grid gap-2">
                 <PolicyRadioOption
                   groupName={closeGroup}
@@ -495,11 +526,15 @@ function CreateVaultAdvancedStep({ draft, onChange }: StepProps) {
               type="checkbox"
               checked={draft.security.secure_wipe_workspace}
               onChange={(e) =>
-                onChange({ security: { ...draft.security, secure_wipe_workspace: e.target.checked } })
+                onChange({
+                  security: { ...draft.security, secure_wipe_workspace: e.target.checked },
+                })
               }
               className="h-4 w-4 rounded border-outline-variant/50 text-accent focus:ring-accent/50"
             />
-            <span className="text-sm text-on-surface">{t("modal.settings.field.close.secure_wipe")}</span>
+            <span className="text-sm text-on-surface">
+              {t("modal.settings.field.close.secure_wipe")}
+            </span>
           </label>
 
           <SettingsField
@@ -520,7 +555,10 @@ function CreateVaultAdvancedStep({ draft, onChange }: StepProps) {
             </div>
           </SettingsField>
 
-          <SettingsField label={t("modal.settings.field.policy.external_editors")} hint={t("modal.settings.field.policy.external_editors_help")}>
+          <SettingsField
+            label={t("modal.settings.field.policy.external_editors")}
+            hint={t("modal.settings.field.policy.external_editors_help")}
+          >
             <div role="radiogroup" className="grid gap-2">
               <PolicyRadioOption
                 groupName={editorsGroup}
@@ -529,7 +567,9 @@ function CreateVaultAdvancedStep({ draft, onChange }: StepProps) {
                 title={t("modal.settings.option.policy.external_editors_no")}
                 description={t("modal.settings.option.policy.external_editors_no_desc")}
                 badge="recommended"
-                onSelect={() => onChange({ policy: { ...draft.policy, allow_external_editors: false } })}
+                onSelect={() =>
+                  onChange({ policy: { ...draft.policy, allow_external_editors: false } })
+                }
               />
               <PolicyRadioOption
                 groupName={editorsGroup}
@@ -539,12 +579,17 @@ function CreateVaultAdvancedStep({ draft, onChange }: StepProps) {
                 description={t("modal.settings.option.policy.external_editors_yes_desc")}
                 badge="less-secure"
                 tone="less-secure"
-                onSelect={() => onChange({ policy: { ...draft.policy, allow_external_editors: true } })}
+                onSelect={() =>
+                  onChange({ policy: { ...draft.policy, allow_external_editors: true } })
+                }
               />
             </div>
           </SettingsField>
 
-          <SettingsField label={t("modal.settings.field.policy.copy_outside")} hint={t("modal.settings.field.policy.copy_outside_help")}>
+          <SettingsField
+            label={t("modal.settings.field.policy.copy_outside")}
+            hint={t("modal.settings.field.policy.copy_outside_help")}
+          >
             <div role="radiogroup" className="grid gap-2">
               <PolicyRadioOption
                 groupName={copyGroup}
@@ -553,7 +598,9 @@ function CreateVaultAdvancedStep({ draft, onChange }: StepProps) {
                 title={t("modal.settings.option.policy.copy_block")}
                 description={t("modal.settings.option.policy.copy_block_desc")}
                 badge="recommended"
-                onSelect={() => onChange({ policy: { ...draft.policy, disallow_copy_outside_mount: true } })}
+                onSelect={() =>
+                  onChange({ policy: { ...draft.policy, disallow_copy_outside_mount: true } })
+                }
               />
               <PolicyRadioOption
                 groupName={copyGroup}
@@ -563,7 +610,9 @@ function CreateVaultAdvancedStep({ draft, onChange }: StepProps) {
                 description={t("modal.settings.option.policy.copy_allow_desc")}
                 badge="less-secure"
                 tone="less-secure"
-                onSelect={() => onChange({ policy: { ...draft.policy, disallow_copy_outside_mount: false } })}
+                onSelect={() =>
+                  onChange({ policy: { ...draft.policy, disallow_copy_outside_mount: false } })
+                }
               />
             </div>
           </SettingsField>
@@ -574,14 +623,20 @@ function CreateVaultAdvancedStep({ draft, onChange }: StepProps) {
               type="checkbox"
               checked={draft.seven_zip.encrypt_file_names}
               onChange={(e) =>
-                onChange({ seven_zip: { ...draft.seven_zip, encrypt_file_names: e.target.checked } })
+                onChange({
+                  seven_zip: { ...draft.seven_zip, encrypt_file_names: e.target.checked },
+                })
               }
               className="h-4 w-4 rounded border-outline-variant/50 text-accent focus:ring-accent/50"
             />
-            <span className="text-sm text-on-surface">{t("modal.settings.field.seven_zip.encrypt_file_names_label")}</span>
+            <span className="text-sm text-on-surface">
+              {t("modal.settings.field.seven_zip.encrypt_file_names_label")}
+            </span>
           </label>
           {!draft.seven_zip.encrypt_file_names ? (
-            <p className="text-xs text-on-error-container/90">{t("modal.settings.field.seven_zip.encrypt_file_names_off_warn")}</p>
+            <p className="text-xs text-on-error-container/90">
+              {t("modal.settings.field.seven_zip.encrypt_file_names_off_warn")}
+            </p>
           ) : null}
 
           <div className="space-y-1.5">
@@ -591,11 +646,15 @@ function CreateVaultAdvancedStep({ draft, onChange }: StepProps) {
                 type="checkbox"
                 checked={draft.policy.require_unmount_on_sleep}
                 onChange={(e) =>
-                  onChange({ policy: { ...draft.policy, require_unmount_on_sleep: e.target.checked } })
+                  onChange({
+                    policy: { ...draft.policy, require_unmount_on_sleep: e.target.checked },
+                  })
                 }
                 className="h-4 w-4 rounded border-outline-variant/50 text-accent focus:ring-accent/50"
               />
-              <span className="text-sm text-on-surface">{t("modal.settings.field.close.require_unmount_on_sleep")}</span>
+              <span className="text-sm text-on-surface">
+                {t("modal.settings.field.close.require_unmount_on_sleep")}
+              </span>
             </label>
             <p className="pl-7 text-xs leading-relaxed text-on-surface-variant">
               {t("modal.settings.field.close.require_unmount_on_sleep_help")}

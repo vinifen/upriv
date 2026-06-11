@@ -9,9 +9,6 @@ export function isTauri(): boolean {
  * Typed wrapper around Tauri `invoke`.
  * Throws if called outside Tauri — use `isTauri()` or feature flags for browser dev.
  */
-export async function tauriInvoke<T>(
-  command: string,
-  args?: Record<string, unknown>,
-): Promise<T> {
+export async function tauriInvoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   return invoke<T>(command, args);
 }

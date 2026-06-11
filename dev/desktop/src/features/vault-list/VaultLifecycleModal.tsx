@@ -59,9 +59,7 @@ export function VaultLifecycleModal({
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
 
-  const requiresPassword = Boolean(
-    vault && intent && requiresPasswordForLifecycle(vault, intent),
-  );
+  const requiresPassword = Boolean(vault && intent && requiresPasswordForLifecycle(vault, intent));
 
   useEffect(() => {
     if (!open) return;

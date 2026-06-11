@@ -65,7 +65,9 @@ export function HelpModal({ open, onClose }: HelpModalProps) {
       </label>
 
       {visibleSections.length === 0 ? (
-        <p className="py-10 text-center text-sm text-on-surface-variant">{t("modal.help.search_empty")}</p>
+        <p className="py-10 text-center text-sm text-on-surface-variant">
+          {t("modal.help.search_empty")}
+        </p>
       ) : (
         <div className="modal-scroll-pane max-h-[min(65vh,36rem)] space-y-1.5 sm:space-y-2">
           {visibleSections.map((section) => (

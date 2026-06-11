@@ -1,17 +1,7 @@
 import type { FileTreeNode } from "./fileTreeTypes";
-import { fileBaseName, joinPath } from "./fileTreeUtils";
+import { fileBaseName, findNode, joinPath } from "./fileTreeUtils";
 
-export function findNode(root: FileTreeNode, path: string): FileTreeNode | null {
-  if (path === "/") return root;
-  const segments = path.split("/").filter(Boolean);
-  let current: FileTreeNode = root;
-  for (const segment of segments) {
-    const next = current.children?.find((child) => child.name === segment);
-    if (!next) return null;
-    current = next;
-  }
-  return current;
-}
+export { findNode } from "./fileTreeUtils";
 
 export function getParentPath(path: string): string {
   if (path === "/") return "/";
@@ -100,7 +90,9 @@ export function moveNode(root: FileTreeNode, fromPath: string, toFolderPath: str
 
 export function collectFilePaths(root: FileTreeNode, base = "/"): string[] {
   if (root.type === "file") return [base];
-  return (root.children ?? []).flatMap((child) => collectFilePaths(child, joinPath(base, child.name)));
+  return (root.children ?? []).flatMap((child) =>
+    collectFilePaths(child, joinPath(base, child.name)),
+  );
 }
 
 export function remapContentPaths(
@@ -121,7 +113,10 @@ export function remapContentPaths(
   return next;
 }
 
-export function removeContentPaths(contents: Record<string, string>, prefix: string): Record<string, string> {
+export function removeContentPaths(
+  contents: Record<string, string>,
+  prefix: string,
+): Record<string, string> {
   const next: Record<string, string> = {};
   for (const [path, value] of Object.entries(contents)) {
     if (path !== prefix && !path.startsWith(`${prefix}/`)) next[path] = value;

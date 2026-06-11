@@ -1,3 +1,4 @@
+import { LOG_ENTRIES_PER_FILE, LOG_KEEP_LAST_DEFAULT } from "@/constants/logging";
 import type { AppSettingsConfig } from "./appSettingsTypes";
 
 export const DEFAULT_APP_SETTINGS: AppSettingsConfig = {
@@ -13,7 +14,8 @@ export const DEFAULT_APP_SETTINGS: AppSettingsConfig = {
   logging: {
     enabled: true,
     level: "info",
-    entries_per_file: 1000,
+    entries_per_file: LOG_ENTRIES_PER_FILE,
+    keep_last_entries: LOG_KEEP_LAST_DEFAULT,
   },
   app: {
     auto_detect_vault_root: true,

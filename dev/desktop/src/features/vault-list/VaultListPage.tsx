@@ -9,14 +9,19 @@ import { HelpModal } from "@/features/help";
 import { LogsModal } from "@/features/logs";
 import { useTranslation } from "@/i18n";
 import type { I18nKey } from "@/i18n/types";
-import { resolveVaultDisplayStatus } from "@/types";
+import { resolveVaultDisplayStatus, resolveVaultListStatus } from "@/types";
 import { CLOSING_PIPELINE_STEPS, runMockClosingPipeline } from "./vaultClosingPipeline";
 import { OPENING_PIPELINE_STEPS, runMockOpeningPipeline } from "./vaultOpeningPipeline";
 import { useVaultPipelineRun } from "./useVaultPipelineRun";
 import { exportVaultArchive } from "./exportVaultArchive";
-import { getMockVaultSettings, registerMockVaultSettings } from "./mockVaultSettings";
+import {
+  getMockVaultSettings,
+  registerMockVaultSettings,
+  unregisterMockVaultSettings,
+} from "./mockVaultSettings";
 import { mockVaultWorkspacePath } from "./mockVaultFolder";
 import { MOCK_VAULTS } from "./mockVaults";
+import { touchVaultLastAccessed } from "./vaultLastAccessed";
 import { VaultList } from "./VaultList";
 import { VaultListHeader, useRefreshState } from "./VaultListHeader";
 import { VaultListSectionHeader } from "./VaultListSectionHeader";
@@ -30,6 +35,7 @@ import { VaultSettingsModal } from "./VaultSettingsModal";
 import { VaultLifecycleModal } from "./VaultLifecycleModal";
 import {
   clearVaultPasswordInRam,
+  seedInitialOpenVaultPasswords,
   setVaultPasswordInRam,
 } from "./mockVaultSessionPassword";
 import type { VaultLifecycleRequest } from "./vaultLifecycleTypes";
@@ -45,8 +51,7 @@ export function VaultListPage() {
   const { t } = useTranslation();
   const { openFromVault, purgeForVaultClose } = useFileManager();
   const { settings, patchSettings, showHiddenVaultsSession } = useAppSettingsContext();
-  const showHiddenVaults =
-    settings.ui.always_show_hidden_vaults || showHiddenVaultsSession;
+  const showHiddenVaults = settings.ui.always_show_hidden_vaults || showHiddenVaultsSession;
   const { isRefreshing, refresh: runRefreshAnimation } = useRefreshState();
   const [noteVaultId, setNoteVaultId] = useState<string | null>(null);
   const [backupVaultId, setBackupVaultId] = useState<string | null>(null);
@@ -73,7 +78,11 @@ export function VaultListPage() {
       },
       initialViewMode: settings.ui.vault_list_view,
     }),
-    [settings.ui.vault_list_sort, settings.ui.vault_list_sort_direction, settings.ui.vault_list_view],
+    [
+      settings.ui.vault_list_sort,
+      settings.ui.vault_list_sort_direction,
+      settings.ui.vault_list_view,
+    ],
   );
 
   const {
@@ -137,7 +146,9 @@ export function VaultListPage() {
 
   const lifecycleVault = useMemo(
     () =>
-      lifecycleRequest ? vaults.find((vault) => vault.id === lifecycleRequest.vaultId) ?? null : null,
+      lifecycleRequest
+        ? (vaults.find((vault) => vault.id === lifecycleRequest.vaultId) ?? null)
+        : null,
     [lifecycleRequest, vaults],
   );
 
@@ -151,19 +162,16 @@ export function VaultListPage() {
     return vaults.find((vault) => vault.id === pipeline.run!.vaultId) ?? null;
   }, [pipeline.run, vaults]);
 
-  const pipelineOpeningVaultId =
-    pipeline.run?.kind === "open" ? pipeline.run.vaultId : null;
+  const pipelineOpeningVaultId = pipeline.run?.kind === "open" ? pipeline.run.vaultId : null;
 
   const pipelineClosingIntent =
-    pipeline.run?.kind === "close" || pipeline.run?.kind === "seal"
-      ? pipeline.run.kind
-      : null;
+    pipeline.run?.kind === "close" || pipeline.run?.kind === "seal" ? pipeline.run.kind : null;
 
   useEffect(() => {
-    for (const vault of vaults) {
-      if (vault.session === "open") setVaultPasswordInRam(vault.id);
-    }
-  }, [vaults]);
+    seedInitialOpenVaultPasswords(
+      MOCK_VAULTS.filter((vault) => vault.session === "open").map((vault) => vault.id),
+    );
+  }, []);
 
   const revertCloseFailure = useCallback(
     (vaultId: string) => {
@@ -179,6 +187,9 @@ export function VaultListPage() {
 
   const handlePipelineError = useCallback(
     (vaultId: string, kind: "open" | "close" | "seal", errorKey: I18nKey) => {
+      const wasBackground = pipelineBackgroundRef.current;
+      pipelineBackgroundRef.current = false;
+
       dismissToast();
       showToast(t(errorKey), 8000);
 
@@ -186,8 +197,7 @@ export function VaultListPage() {
         revertCloseFailure(vaultId);
       }
 
-      if (pipelineBackgroundRef.current) {
-        pipelineBackgroundRef.current = false;
+      if (wasBackground) {
         pipeline.dismissFailure();
       }
     },
@@ -195,10 +205,7 @@ export function VaultListPage() {
   );
 
   const existingVaultIds = useMemo(() => vaults.map((vault) => vault.id), [vaults]);
-  const existingOrders = useMemo(
-    () => vaults.map((vault) => vault.order ?? 0),
-    [vaults],
-  );
+  const existingOrders = useMemo(() => vaults.map((vault) => vault.order ?? 0), [vaults]);
 
   const handleCreateVault = useCallback(
     (result: CreateVaultResult) => {
@@ -224,9 +231,7 @@ export function VaultListPage() {
   const handleCreateVaultFromBackup = useCallback(
     (filename: string) => {
       if (!backupVault) return;
-      setCreateVaultInitialDraft(
-        createDraftFromBackup(filename, backupVault.id, existingOrders),
-      );
+      setCreateVaultInitialDraft(createDraftFromBackup(filename, backupVault.id, existingOrders));
       setBackupVaultId(null);
       setCreateVaultOpen(true);
     },
@@ -249,19 +254,20 @@ export function VaultListPage() {
       setVaultRuntimeState(vaultId, {
         session: "open",
         persistence: vault?.storageMode === "plain" ? "sealed" : "closed",
+        canSeal: vault?.storageMode === "encrypted_dir",
+        ...touchVaultLastAccessed(t("vault.last_accessed.just_now")),
       });
-      setVaultPasswordInRam(vaultId);
     },
-    [setVaultRuntimeState, vaults],
+    [setVaultRuntimeState, t, vaults],
   );
 
   const finishCloseOrSeal = useCallback(
     (vaultId: string, intent: Extract<VaultLifecycleIntent, "close" | "seal">) => {
       purgeForVaultClose(vaultId);
       if (intent === "close") {
-        setVaultRuntimeState(vaultId, { session: null, persistence: "closed" });
+        setVaultRuntimeState(vaultId, { session: null, persistence: "closed", canSeal: false });
       } else {
-        setVaultRuntimeState(vaultId, { session: null, persistence: "sealed" });
+        setVaultRuntimeState(vaultId, { session: null, persistence: "sealed", canSeal: false });
       }
       clearVaultPasswordInRam(vaultId);
     },
@@ -291,7 +297,7 @@ export function VaultListPage() {
 
   const startOpenPipeline = useCallback(
     (vaultId: string) => {
-      if (pipeline.isVaultPipelineBusy(vaultId)) return;
+      if (pipeline.isRunning || pipeline.isVaultPipelineBusy(vaultId)) return;
 
       pipelineBackgroundRef.current = false;
       pipeline.start({
@@ -311,12 +317,12 @@ export function VaultListPage() {
 
   const startClosePipeline = useCallback(
     (vault: VaultListItem, intent: Extract<VaultLifecycleIntent, "close" | "seal">) => {
-      if (pipeline.isVaultPipelineBusy(vault.id)) return;
+      if (pipeline.isRunning || pipeline.isVaultPipelineBusy(vault.id)) return;
 
       pipelineBackgroundRef.current = false;
       setVaultRuntimeState(vault.id, { session: "closing" });
 
-      pipeline.start({
+      const started = pipeline.start({
         vaultId: vault.id,
         kind: intent,
         stepCount: CLOSING_PIPELINE_STEPS.length,
@@ -327,8 +333,19 @@ export function VaultListPage() {
         },
         onError: (errorKey) => handlePipelineError(vault.id, intent, errorKey),
       });
+
+      if (!started) {
+        revertCloseFailure(vault.id);
+      }
     },
-    [finishCloseOrSeal, handlePipelineError, notifyPipelineComplete, pipeline, setVaultRuntimeState],
+    [
+      finishCloseOrSeal,
+      handlePipelineError,
+      notifyPipelineComplete,
+      pipeline,
+      revertCloseFailure,
+      setVaultRuntimeState,
+    ],
   );
 
   const handlePipelineBackground = useCallback(() => {
@@ -350,7 +367,7 @@ export function VaultListPage() {
 
   const handleLockVault = useCallback(
     (vault: VaultListItem) => {
-      if (pipeline.isVaultPipelineBusy(vault.id)) return;
+      if (pipeline.isRunning || pipeline.isVaultPipelineBusy(vault.id)) return;
       const intent = vault.storageMode === "plain" ? "seal" : "close";
       setLifecycleRequest({ vaultId: vault.id, intent });
     },
@@ -359,7 +376,7 @@ export function VaultListPage() {
 
   const handleUnlockVault = useCallback(
     (vault: VaultListItem) => {
-      if (pipeline.isVaultPipelineBusy(vault.id)) return;
+      if (pipeline.isRunning || pipeline.isVaultPipelineBusy(vault.id)) return;
       if (resolveVaultDisplayStatus(vault) === "recovery") {
         setRecoveryVaultId(vault.id);
         return;
@@ -371,7 +388,7 @@ export function VaultListPage() {
 
   const handleSealVault = useCallback(
     (vault: VaultListItem) => {
-      if (pipeline.isVaultPipelineBusy(vault.id)) return;
+      if (pipeline.isRunning || pipeline.isVaultPipelineBusy(vault.id)) return;
       setLifecycleRequest({ vaultId: vault.id, intent: "seal" });
     },
     [pipeline],
@@ -379,6 +396,10 @@ export function VaultListPage() {
 
   const handleExportVault = useCallback(
     (vault: VaultListItem) => {
+      if (resolveVaultListStatus(vault, pipelineOpeningVaultId) === "opening") {
+        showToast(t("vault.export.blocked_opening"));
+        return;
+      }
       if (vaultBlocksBulkExport(vault)) {
         showToast(t("vault.export.blocked_open"));
         return;
@@ -386,7 +407,7 @@ export function VaultListPage() {
       exportVaultArchive(vault);
       showToast(t("vault.export.success", { name: vault.displayName }));
     },
-    [showToast, t],
+    [pipelineOpeningVaultId, showToast, t],
   );
 
   const handleOpenFolder = useCallback(
@@ -398,7 +419,7 @@ export function VaultListPage() {
 
   const handleAutoCloseVault = useCallback(
     (vault: VaultListItem) => {
-      if (pipeline.isVaultPipelineBusy(vault.id)) return;
+      if (pipeline.isRunning || pipeline.isVaultPipelineBusy(vault.id)) return;
       const { close: closeSettings } = getMockVaultSettings(vault.id);
       const intent =
         vault.storageMode === "plain" || closeSettings.default_action === "seal" ? "seal" : "close";
@@ -409,11 +430,24 @@ export function VaultListPage() {
 
   useVaultAutoClose({
     vaults,
+    isPipelineRunning: pipeline.isRunning,
     onWarn: (_vault, secondsLeft) => {
       showToast(t("warning.auto_close_soon", { seconds: String(secondsLeft) }));
     },
     onAutoClose: handleAutoCloseVault,
   });
+
+  const handleNoteChange = useCallback(
+    (vaultId: string, note: string) => {
+      updateNote(vaultId, note);
+      const settings = getMockVaultSettings(vaultId);
+      registerMockVaultSettings({
+        ...settings,
+        vault: { ...settings.vault, note },
+      });
+    },
+    [updateNote],
+  );
 
   const handleLifecycleConfirm = useCallback(
     (password: string | null) => {
@@ -441,6 +475,7 @@ export function VaultListPage() {
       if (action === "use_store") {
         const vaultId = recoveryVaultId;
         setRecoveryVaultId(null);
+        if (pipeline.isRunning) return;
         startOpenPipeline(vaultId);
         return;
       }
@@ -460,7 +495,13 @@ export function VaultListPage() {
         setRecoverySubmitting(false);
       }
     },
-    [purgeForVaultClose, recoveryVaultId, setVaultRuntimeState, startOpenPipeline],
+    [
+      pipeline.isRunning,
+      purgeForVaultClose,
+      recoveryVaultId,
+      setVaultRuntimeState,
+      startOpenPipeline,
+    ],
   );
 
   return (
@@ -484,9 +525,8 @@ export function VaultListPage() {
           <VaultList
             vaults={displayVaults}
             pipelineOpeningVaultId={pipelineOpeningVaultId}
-            allVaultsHidden={
-              displayVaults.length === 0 && vaults.some((vault) => vault.hidden)
-            }
+            pipelineActiveVaultId={pipeline.run?.vaultId ?? null}
+            allVaultsHidden={displayVaults.length === 0 && vaults.some((vault) => vault.hidden)}
             viewMode={viewMode}
             canReorder={canReorder}
             draggingId={draggingId}
@@ -546,7 +586,7 @@ export function VaultListPage() {
         vault={noteVault}
         open={noteVaultId !== null}
         onClose={() => setNoteVaultId(null)}
-        onNoteChange={updateNote}
+        onNoteChange={handleNoteChange}
       />
       <VaultBackupsModal
         vault={backupVault}
@@ -561,6 +601,8 @@ export function VaultListPage() {
         onVaultSettingsSaved={updateVaultSettings}
         onVaultDelete={(vaultId) => {
           purgeForVaultClose(vaultId);
+          clearVaultPasswordInRam(vaultId);
+          unregisterMockVaultSettings(vaultId);
           removeVault(vaultId);
         }}
       />

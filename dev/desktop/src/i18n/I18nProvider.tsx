@@ -1,11 +1,4 @@
-import {
-  useCallback,
-  useContext,
-  useEffect,
-  useMemo,
-  useState,
-  type ReactNode,
-} from "react";
+import { useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { I18nContext, type I18nContextValue } from "./context";
 import { interpolate } from "./interpolate";
 import { DEFAULT_LOCALE, loadLocale } from "./loadLocale";
@@ -16,8 +9,18 @@ interface I18nProviderProps {
   children: ReactNode;
 }
 
+function createFallbackValue(locale: LocaleId): I18nContextValue {
+  const catalog = {} as I18nCatalog;
+  const t = (key: I18nKey, params?: I18nParams): string => interpolate(key, params);
+  return { locale, catalog, t };
+}
+
 export function I18nProvider({ locale = DEFAULT_LOCALE, children }: I18nProviderProps) {
   const [catalog, setCatalog] = useState<I18nCatalog | null>(null);
+
+  useEffect(() => {
+    document.documentElement.lang = locale;
+  }, [locale]);
 
   useEffect(() => {
     let cancelled = false;
@@ -29,8 +32,8 @@ export function I18nProvider({ locale = DEFAULT_LOCALE, children }: I18nProvider
     };
   }, [locale]);
 
-  const value = useMemo<I18nContextValue | null>(() => {
-    if (!catalog) return null;
+  const value = useMemo<I18nContextValue>(() => {
+    if (!catalog) return createFallbackValue(locale);
 
     const t = (key: I18nKey, params?: I18nParams): string => {
       const raw = catalog[key] ?? key;
@@ -39,12 +42,6 @@ export function I18nProvider({ locale = DEFAULT_LOCALE, children }: I18nProvider
 
     return { locale, catalog, t };
   }, [catalog, locale]);
-
-  if (!value) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-background text-on-surface" />
-    );
-  }
 
   return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>;
 }

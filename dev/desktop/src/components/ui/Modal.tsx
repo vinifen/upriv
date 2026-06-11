@@ -107,7 +107,9 @@ export function Modal({
             {children}
           </div>
           {footer ? (
-            <footer className="mt-3 shrink-0 pb-[max(0px,env(safe-area-inset-bottom))] sm:mt-4">{footer}</footer>
+            <footer className="mt-3 shrink-0 pb-[max(0px,env(safe-area-inset-bottom))] sm:mt-4">
+              {footer}
+            </footer>
           ) : null}
         </div>
       </div>

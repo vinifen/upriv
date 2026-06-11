@@ -74,7 +74,10 @@ export function FileManagerDock({
                   <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-surface-container text-accent">
                     <Icon name="folder" size={18} />
                   </span>
-                  <span className="min-w-0 truncate text-sm font-medium text-on-surface" title={entry.displayName}>
+                  <span
+                    className="min-w-0 truncate text-sm font-medium text-on-surface"
+                    title={entry.displayName}
+                  >
                     {entry.displayName}
                   </span>
                 </button>
@@ -101,7 +104,9 @@ export function FileManagerDock({
           "flex items-center rounded-lg bg-surface-container-high shadow-modal transition-colors hover:bg-surface-container",
           expanded ? "w-full min-w-0 gap-2 px-2.5 py-2" : "gap-1.5 px-2 py-1.5",
         ].join(" ")}
-        title={expanded ? t("modal.file_manager.dock.collapse") : t("modal.file_manager.dock.expand")}
+        title={
+          expanded ? t("modal.file_manager.dock.collapse") : t("modal.file_manager.dock.expand")
+        }
       >
         <span className="relative flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-surface-container text-accent">
           <Icon name="folder" size={16} />
@@ -121,7 +126,8 @@ export function FileManagerDock({
           ].join(" ")}
         />
         <span className="sr-only">
-          {expanded ? t("modal.file_manager.dock.collapse") : t("modal.file_manager.dock.expand")} ({entries.length})
+          {expanded ? t("modal.file_manager.dock.collapse") : t("modal.file_manager.dock.expand")} (
+          {entries.length})
         </span>
       </button>
     </div>,

@@ -51,7 +51,12 @@ const paths: Record<IconName, ReactNode> = {
         fill="none"
         strokeLinejoin="round"
       />
-      <path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" stroke="currentColor" strokeWidth="1.75" fill="none" />
+      <path
+        d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        fill="none"
+      />
       <path d="M10 12h4" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
     </>
   ),
@@ -63,20 +68,55 @@ const paths: Record<IconName, ReactNode> = {
         strokeWidth="1.75"
         fill="none"
       />
-      <path d="M12 12v6M9 15l3 3 3-3" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+      <path
+        d="M12 12v6M9 15l3 3 3-3"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
     </>
   ),
   "arrow-up": (
-    <path d="M12 5v14M7 10l5-5 5 5" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+    <path
+      d="M12 5v14M7 10l5-5 5 5"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      fill="none"
+    />
   ),
   "arrow-down": (
-    <path d="M12 5v14M7 14l5 5 5-5" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+    <path
+      d="M12 5v14M7 14l5 5 5-5"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      fill="none"
+    />
   ),
-  "chevron-down": <path d="M6 9l6 6 6-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" fill="none" />,
+  "chevron-down": (
+    <path
+      d="M6 9l6 6 6-6"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      fill="none"
+    />
+  ),
   clock: (
     <>
       <circle cx="12" cy="12" r="8" stroke="currentColor" strokeWidth="1.75" fill="none" />
-      <path d="M12 8v4l3 2" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+      <path
+        d="M12 8v4l3 2"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
     </>
   ),
   download: (
@@ -94,7 +134,16 @@ const paths: Record<IconName, ReactNode> = {
   ),
   encrypted: (
     <>
-      <rect x="5" y="11" width="14" height="10" rx="2" stroke="currentColor" strokeWidth="1.75" fill="none" />
+      <rect
+        x="5"
+        y="11"
+        width="14"
+        height="10"
+        rx="2"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        fill="none"
+      />
       <path d="M8 11V8a4 4 0 0 1 8 0v3" stroke="currentColor" strokeWidth="1.75" fill="none" />
     </>
   ),
@@ -155,36 +204,83 @@ const paths: Record<IconName, ReactNode> = {
         strokeLinejoin="round"
         fill="none"
       />
-      <path d="M14 4v4h4" stroke="currentColor" strokeWidth="1.75" strokeLinejoin="round" fill="none" />
+      <path
+        d="M14 4v4h4"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinejoin="round"
+        fill="none"
+      />
     </>
   ),
   "file-manager": (
     <>
-      <rect x="4" y="5" width="16" height="14" rx="2" stroke="currentColor" strokeWidth="1.75" fill="none" />
+      <rect
+        x="4"
+        y="5"
+        width="16"
+        height="14"
+        rx="2"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        fill="none"
+      />
       <path d="M10 5v14" stroke="currentColor" strokeWidth="1.75" />
-      <path d="M6 9.5h3M6 12.5h3M6 15.5h2.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-      <path d="M12.5 10h6M12.5 14h4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      <path
+        d="M6 9.5h3M6 12.5h3M6 15.5h2.5"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+      />
+      <path
+        d="M12.5 10h6M12.5 14h4"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+      />
     </>
   ),
   help: (
     <>
       <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.75" fill="none" />
-      <path d="M9.5 9.5a2.5 2.5 0 0 1 4.2 1.8c0 2-2.7 2.2-2.7 3.7" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" fill="none" />
+      <path
+        d="M9.5 9.5a2.5 2.5 0 0 1 4.2 1.8c0 2-2.7 2.2-2.7 3.7"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+        fill="none"
+      />
       <circle cx="12" cy="17" r="0.75" fill="currentColor" />
     </>
   ),
-  minus: (
-    <path d="M6 12h12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-  ),
+  minus: <path d="M6 12h12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />,
   lock: (
     <>
-      <rect x="5" y="11" width="14" height="10" rx="2" stroke="currentColor" strokeWidth="1.75" fill="none" />
+      <rect
+        x="5"
+        y="11"
+        width="14"
+        height="10"
+        rx="2"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        fill="none"
+      />
       <path d="M8 11V8a4 4 0 0 1 8 0v3" stroke="currentColor" strokeWidth="1.75" fill="none" />
     </>
   ),
   "lock-open": (
     <>
-      <rect x="5" y="11" width="14" height="10" rx="2" stroke="currentColor" strokeWidth="1.75" fill="none" />
+      <rect
+        x="5"
+        y="11"
+        width="14"
+        height="10"
+        rx="2"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        fill="none"
+      />
       <path d="M8 11V8a4 4 0 0 1 8 0" stroke="currentColor" strokeWidth="1.75" fill="none" />
     </>
   ),
@@ -204,21 +300,59 @@ const paths: Record<IconName, ReactNode> = {
   ),
   note: (
     <>
-      <path d="M7 4h10a2 2 0 0 1 2 2v14l-4-3H7a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z" stroke="currentColor" strokeWidth="1.75" fill="none" strokeLinejoin="round" />
+      <path
+        d="M7 4h10a2 2 0 0 1 2 2v14l-4-3H7a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        fill="none"
+        strokeLinejoin="round"
+      />
       <path d="M11 9h6M11 13h4" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
     </>
   ),
   refresh: (
     <>
-      <path d="M4 12a8 8 0 0 1 13.5-5.7" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" fill="none" />
-      <path d="M20 3v5h-5" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" fill="none" />
-      <path d="M20 12a8 8 0 0 1-13.5 5.7" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" fill="none" />
-      <path d="M4 21v-5h5" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+      <path
+        d="M4 12a8 8 0 0 1 13.5-5.7"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+        fill="none"
+      />
+      <path
+        d="M20 3v5h-5"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        fill="none"
+      />
+      <path
+        d="M20 12a8 8 0 0 1-13.5 5.7"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+        fill="none"
+      />
+      <path
+        d="M4 21v-5h5"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        fill="none"
+      />
     </>
   ),
   seal: (
     <>
-      <path d="M12 3l7 4v5c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V7l7-4z" stroke="currentColor" strokeWidth="1.75" fill="none" strokeLinejoin="round" />
+      <path
+        d="M12 3l7 4v5c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V7l7-4z"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        fill="none"
+        strokeLinejoin="round"
+      />
     </>
   ),
   settings: (
@@ -236,43 +370,132 @@ const paths: Record<IconName, ReactNode> = {
   ),
   terminal: (
     <>
-      <rect x="3" y="5" width="18" height="14" rx="2" stroke="currentColor" strokeWidth="1.75" fill="none" />
-      <path d="M7 10l3 3-3 3M12 16h5" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+      <rect
+        x="3"
+        y="5"
+        width="18"
+        height="14"
+        rx="2"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        fill="none"
+      />
+      <path
+        d="M7 10l3 3-3 3M12 16h5"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
     </>
   ),
   sort: (
     <>
-      <path d="M4 8h8M4 12h6M4 16h4" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
-      <path d="M16 6v12M13 9l3-3 3 3M13 15l3 3 3-3" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+      <path
+        d="M4 8h8M4 12h6M4 16h4"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+      />
+      <path
+        d="M16 6v12M13 9l3-3 3 3M13 15l3 3 3-3"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
     </>
   ),
   "layout-grid": (
     <>
-      <rect x="4" y="4" width="7" height="7" rx="1.5" stroke="currentColor" strokeWidth="1.75" fill="none" />
-      <rect x="13" y="4" width="7" height="7" rx="1.5" stroke="currentColor" strokeWidth="1.75" fill="none" />
-      <rect x="4" y="13" width="7" height="7" rx="1.5" stroke="currentColor" strokeWidth="1.75" fill="none" />
-      <rect x="13" y="13" width="7" height="7" rx="1.5" stroke="currentColor" strokeWidth="1.75" fill="none" />
+      <rect
+        x="4"
+        y="4"
+        width="7"
+        height="7"
+        rx="1.5"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        fill="none"
+      />
+      <rect
+        x="13"
+        y="4"
+        width="7"
+        height="7"
+        rx="1.5"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        fill="none"
+      />
+      <rect
+        x="4"
+        y="13"
+        width="7"
+        height="7"
+        rx="1.5"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        fill="none"
+      />
+      <rect
+        x="13"
+        y="13"
+        width="7"
+        height="7"
+        rx="1.5"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        fill="none"
+      />
     </>
   ),
   "list-rows": (
     <>
-      <path d="M5 7h14M5 12h14M5 17h10" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
+      <path
+        d="M5 7h14M5 12h14M5 17h10"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+      />
     </>
   ),
   "list-rows-loose": (
     <>
-      <path d="M5 6h14M5 12h14M5 18h10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+      <path
+        d="M5 6h14M5 12h14M5 18h10"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+      />
     </>
   ),
   "list-rows-tight": (
     <>
-      <path d="M5 8h14M5 12h14M5 16h10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      <path
+        d="M5 8h14M5 12h14M5 16h10"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+      />
     </>
   ),
   "sort-alpha": (
     <>
-      <path d="M8 6h8M8 10h6M8 14h4" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
-      <path d="M16 6v12M14 8l2-2 2 2" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+      <path
+        d="M8 6h8M8 10h6M8 14h4"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+      />
+      <path
+        d="M16 6v12M14 8l2-2 2 2"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        fill="none"
+      />
     </>
   ),
   "sort-state": (
@@ -280,7 +503,12 @@ const paths: Record<IconName, ReactNode> = {
       <circle cx="8" cy="9" r="2" stroke="currentColor" strokeWidth="1.5" fill="none" />
       <circle cx="16" cy="9" r="2" stroke="currentColor" strokeWidth="1.5" fill="none" />
       <circle cx="12" cy="16" r="2" stroke="currentColor" strokeWidth="1.5" fill="none" />
-      <path d="M9.5 10.5L11 14M14.5 10.5L13 14" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      <path
+        d="M9.5 10.5L11 14M14.5 10.5L13 14"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+      />
     </>
   ),
   trash: (

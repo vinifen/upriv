@@ -13,6 +13,7 @@ import type { VaultListItem } from "./types";
 interface VaultBlockCardProps {
   vault: VaultListItem;
   pipelineOpeningVaultId?: string | null;
+  pipelineActiveVaultId?: string | null;
   onOpenBackups: (vaultId: string) => void;
   onOpenNote: (vaultId: string) => void;
   onOpenSettings: (vaultId: string) => void;
@@ -33,6 +34,7 @@ function statusIconName(status: VaultDisplayStatus, isOpen: boolean): IconName {
 export function VaultBlockCard({
   vault,
   pipelineOpeningVaultId = null,
+  pipelineActiveVaultId = null,
   onOpenBackups,
   onOpenNote,
   onOpenSettings,
@@ -46,6 +48,7 @@ export function VaultBlockCard({
   const { t } = useTranslation();
   const status = resolveVaultListStatus(vault, pipelineOpeningVaultId);
   const isOpen = status === "open";
+  const isPipelineBusy = pipelineActiveVaultId === vault.id;
 
   return (
     <article
@@ -100,6 +103,7 @@ export function VaultBlockCard({
       >
         <VaultRowActions
           vault={vault}
+          disabled={isPipelineBusy}
           onOpenBackups={onOpenBackups}
           onOpenNote={onOpenNote}
           onOpenSettings={onOpenSettings}
@@ -109,6 +113,8 @@ export function VaultBlockCard({
         />
         <VaultLockButton
           status={status}
+          storageMode={vault.storageMode}
+          canSeal={vault.canSeal}
           layout="block"
           onLock={() => onLockVault(vault)}
           onUnlock={() => onUnlockVault(vault)}

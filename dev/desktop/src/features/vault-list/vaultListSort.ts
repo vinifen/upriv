@@ -64,10 +64,7 @@ function sortAscending(vaults: VaultListItem[], mode: VaultListSortMode): VaultL
   }
 }
 
-export function applyVaultListSort(
-  vaults: VaultListItem[],
-  sort: VaultListSort,
-): VaultListItem[] {
+export function applyVaultListSort(vaults: VaultListItem[], sort: VaultListSort): VaultListItem[] {
   const ascending = sortAscending(vaults, sort.mode);
   return sort.direction === "desc" ? [...ascending].reverse() : ascending;
 }

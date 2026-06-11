@@ -7,6 +7,7 @@ import type { VaultListItem } from "./types";
 interface VaultListProps {
   vaults: VaultListItem[];
   pipelineOpeningVaultId?: string | null;
+  pipelineActiveVaultId?: string | null;
   allVaultsHidden?: boolean;
   viewMode: VaultListViewMode;
   canReorder: boolean;
@@ -31,6 +32,7 @@ interface VaultListProps {
 export function VaultList({
   vaults,
   pipelineOpeningVaultId = null,
+  pipelineActiveVaultId = null,
   allVaultsHidden = false,
   viewMode,
   canReorder,
@@ -70,6 +72,7 @@ export function VaultList({
               key={vault.id}
               vault={vault}
               pipelineOpeningVaultId={pipelineOpeningVaultId}
+              pipelineActiveVaultId={pipelineActiveVaultId}
               onOpenBackups={onOpenBackups}
               onOpenNote={onOpenNote}
               onOpenSettings={onOpenSettings}
@@ -87,7 +90,8 @@ export function VaultList({
     );
   }
 
-  const listGap = viewMode === "compact" ? "space-y-3" : viewMode === "large" ? "space-y-6" : "space-y-4";
+  const listGap =
+    viewMode === "compact" ? "space-y-3" : viewMode === "large" ? "space-y-4" : "space-y-4";
 
   return (
     <div className={`relative overflow-visible ${listGap}`}>
@@ -100,6 +104,8 @@ export function VaultList({
           dragDisabled={!canReorder}
           isDragging={draggingId === vault.id}
           isDragOver={dragOverId === vault.id && draggingId !== vault.id}
+          isReorderActive={draggingId !== null}
+          isPipelineBusy={pipelineActiveVaultId === vault.id}
           onOpenBackups={onOpenBackups}
           onOpenNote={onOpenNote}
           onOpenSettings={onOpenSettings}

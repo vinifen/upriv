@@ -2,10 +2,7 @@ import { Icon, type IconName } from "@/components/icons";
 import { useTranslation } from "@/i18n";
 import { resolveVaultListStatus } from "@/types";
 import type { VaultDisplayStatus } from "@/types";
-import {
-  vaultStatusIconClass,
-  vaultStatusRowClass,
-} from "@/theme";
+import { vaultStatusIconClass, vaultStatusRowClass } from "@/theme";
 import { VaultDragHandle } from "./VaultDragHandle";
 import { VaultFileManagerIndicator } from "./VaultFileManagerIndicator";
 import { VaultHiddenIndicator } from "./VaultHiddenIndicator";
@@ -23,6 +20,8 @@ interface VaultRowProps {
   dragDisabled: boolean;
   isDragging: boolean;
   isDragOver: boolean;
+  isReorderActive: boolean;
+  isPipelineBusy: boolean;
   onOpenBackups: (vaultId: string) => void;
   onOpenNote: (vaultId: string) => void;
   onOpenSettings: (vaultId: string) => void;
@@ -52,6 +51,8 @@ export function VaultRow({
   dragDisabled,
   isDragging,
   isDragOver,
+  isReorderActive,
+  isPipelineBusy,
   onOpenBackups,
   onOpenNote,
   onOpenSettings,
@@ -91,7 +92,7 @@ export function VaultRow({
       onDragLeave={onDragLeave(vault.id)}
       onDrop={onDrop(vault.id)}
       onClick={() => {
-        if (isOpen) onOpenFileManager(vault);
+        if (isOpen && !isReorderActive && !isDragging) onOpenFileManager(vault);
       }}
       onKeyDown={(event) => {
         if (isOpen && (event.key === "Enter" || event.key === " ")) {
@@ -101,6 +102,7 @@ export function VaultRow({
       }}
       role={isOpen ? "button" : undefined}
       tabIndex={isOpen ? 0 : undefined}
+      aria-label={isOpen ? t("action.open_upriv") : undefined}
     >
       <div className="flex w-full items-center gap-2 sm:w-auto sm:gap-3">
         <VaultDragHandle
@@ -148,6 +150,7 @@ export function VaultRow({
       >
         <VaultRowActions
           vault={vault}
+          disabled={isPipelineBusy}
           onOpenBackups={onOpenBackups}
           onOpenNote={onOpenNote}
           onOpenSettings={onOpenSettings}
@@ -157,6 +160,8 @@ export function VaultRow({
         />
         <VaultLockButton
           status={status}
+          storageMode={vault.storageMode}
+          canSeal={vault.canSeal}
           onLock={() => onLockVault(vault)}
           onUnlock={() => onUnlockVault(vault)}
           onSeal={() => onSealVault(vault)}

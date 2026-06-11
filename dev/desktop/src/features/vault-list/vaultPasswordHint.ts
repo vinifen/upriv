@@ -1,7 +1,7 @@
 import { getMockVaultSettings } from "./mockVaultSettings";
 import type { VaultListItem } from "./types";
 
-/** Password hint from list row or vault config (mock until `vault_list` returns `password_hint`). */
+/** Password hint from row or vault config (mock until `vault_list` returns `password_hint`). */
 export function resolveVaultPasswordHint(
   vault: Pick<VaultListItem, "id" | "passwordHint">,
 ): string | undefined {

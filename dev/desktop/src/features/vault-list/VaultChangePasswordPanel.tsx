@@ -170,7 +170,9 @@ export function VaultChangePasswordPanel({
             <p className="text-xs text-on-error-container">{t("vault.create.password_mismatch")}</p>
           ) : null}
           {newPassword.length > 0 && newPassword === currentPassword ? (
-            <p className="text-xs text-on-error-container">{t("vault.change_password.same_as_current")}</p>
+            <p className="text-xs text-on-error-container">
+              {t("vault.change_password.same_as_current")}
+            </p>
           ) : null}
           {error ? <p className="text-xs text-on-error-container">{error}</p> : null}
           {success ? (
@@ -181,8 +183,15 @@ export function VaultChangePasswordPanel({
             <Button variant="ghost" size="sm" disabled={submitting} onClick={handleCancel}>
               {t("action.cancel")}
             </Button>
-            <Button variant="primary" size="sm" disabled={!canSubmit} onClick={() => void handleSubmit()}>
-              {submitting ? t("vault.change_password.submitting") : t("vault.change_password.submit")}
+            <Button
+              variant="primary"
+              size="sm"
+              disabled={!canSubmit}
+              onClick={() => void handleSubmit()}
+            >
+              {submitting
+                ? t("vault.change_password.submitting")
+                : t("vault.change_password.submit")}
             </Button>
           </div>
         </div>

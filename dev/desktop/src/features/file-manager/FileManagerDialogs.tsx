@@ -23,7 +23,11 @@ export function FileManagerDialogs({ fm }: FileManagerDialogsProps) {
         panelClassName="max-w-md"
         footer={
           <div className="flex flex-wrap justify-end gap-2">
-            <Button variant="ghost" size="sm" onClick={() => fm.dispatch({ type: "set_delete_target", target: null })}>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => fm.dispatch({ type: "set_delete_target", target: null })}
+            >
               {t("action.cancel")}
             </Button>
             <Button variant="danger" size="sm" onClick={fm.confirmDelete}>
@@ -48,11 +52,18 @@ export function FileManagerDialogs({ fm }: FileManagerDialogsProps) {
         panelClassName="max-w-md"
         footer={
           <div className="flex flex-wrap justify-end gap-2">
-            <Button variant="ghost" size="sm" onClick={() => fm.dispatch({ type: "set_unsaved_prompt", prompt: null })}>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => fm.dispatch({ type: "set_unsaved_prompt", prompt: null })}
+            >
               {t("action.cancel")}
             </Button>
             <Button variant="danger" size="sm" onClick={fm.confirmUnsaved}>
               {t("modal.file_manager.unsaved.discard")}
+            </Button>
+            <Button variant="primary" size="sm" onClick={fm.confirmSaveUnsaved}>
+              {t("modal.file_manager.unsaved.save_and_close")}
             </Button>
           </div>
         }

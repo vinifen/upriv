@@ -42,7 +42,10 @@ export function VaultPipelineOverlay({
     }
 
     setShowBackgroundAction(false);
-    const timer = window.setTimeout(() => setShowBackgroundAction(true), PIPELINE_BACKGROUND_AFTER_MS);
+    const timer = window.setTimeout(
+      () => setShowBackgroundAction(true),
+      PIPELINE_BACKGROUND_AFTER_MS,
+    );
 
     return () => window.clearTimeout(timer);
   }, [open, vault?.id, failed]);

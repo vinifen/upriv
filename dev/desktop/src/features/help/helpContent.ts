@@ -30,10 +30,7 @@ export const HELP_SECTION_BODY_KEYS: Record<HelpSectionId, readonly I18nKey[]> =
     "modal.help.body.open_close.2",
     "modal.help.body.open_close.3",
   ],
-  vault_settings: [
-    "modal.help.body.vault_settings.1",
-    "modal.help.body.vault_settings.2",
-  ],
+  vault_settings: ["modal.help.body.vault_settings.1", "modal.help.body.vault_settings.2"],
   backups: ["modal.help.body.backups.1", "modal.help.body.backups.2"],
   system_settings: [
     "modal.help.body.system_settings.1",
@@ -54,5 +51,7 @@ export function helpSectionTitleKey(sectionId: HelpSectionId): I18nKey {
 }
 
 export function defaultOpenHelpSections(): Set<HelpSectionId> {
-  return new Set(HELP_SECTIONS.filter((section) => section.defaultOpen).map((section) => section.id));
+  return new Set(
+    HELP_SECTIONS.filter((section) => section.defaultOpen).map((section) => section.id),
+  );
 }
