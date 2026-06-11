@@ -25,4 +25,4 @@ See **`dev/docs/LOCALE.md`** for the full policy.
 **Stack:** desktop = React 18 + Vite 6 + Tauri 2.11 + Rust; mobile = Expo SDK 52 + RN 0.76. Pinned versions: **`dev/docs/VERSIONS.md`**.
 
 **Start here:** `dev/README.md` · `dev/docs/prd.md` · `dev/docs/sdd.md` · `dev/docs/ARCHITECTURE.md`  
-**AI agents:** `.agent/AGENT.md` (also `AGENTS.md` at repo root)
+**AI agents:** `.agent/AGENT.md`
