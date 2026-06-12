@@ -1,21 +1,29 @@
 import { useCallback, useEffect, useState } from "react";
-import { sortLogFilesNewestFirst } from "./logFormat";
-import { getMockLogFiles } from "./mockLogs";
-import type { AppLogFile } from "./logTypes";
+import { type AppLogFile, sortLogFilesNewestFirst } from "@upriv/shared";
+import { useLogService } from "@/platform/services";
 
 export function useAppLogs(open: boolean) {
+  const logService = useLogService();
   const [files, setFiles] = useState<AppLogFile[]>([]);
+
+  const reload = useCallback(async () => {
+    const list = await logService.listFiles();
+    setFiles(sortLogFilesNewestFirst(list));
+  }, [logService]);
 
   useEffect(() => {
     if (!open) return;
-    setFiles(sortLogFilesNewestFirst(getMockLogFiles()));
-  }, [open]);
+    void reload();
+  }, [open, reload]);
 
-  const deleteFiles = useCallback((filenames: readonly string[]) => {
-    if (filenames.length === 0) return;
-    const remove = new Set(filenames);
-    setFiles((current) => current.filter((entry) => !remove.has(entry.filename)));
-  }, []);
+  const deleteFiles = useCallback(
+    async (filenames: readonly string[]) => {
+      if (filenames.length === 0) return;
+      await logService.deleteFiles(filenames);
+      await reload();
+    },
+    [logService, reload],
+  );
 
   const getFile = useCallback(
     (filename: string) => files.find((entry) => entry.filename === filename),

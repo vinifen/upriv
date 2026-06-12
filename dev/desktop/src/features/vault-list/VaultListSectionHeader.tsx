@@ -1,8 +1,7 @@
 import { Icon } from "@/components/icons";
 import { Button, DropdownPanel, MenuPanelGroup, MenuPanelOption } from "@/components/ui";
 import { useTranslation } from "@/i18n";
-import type { VaultListSort, VaultListSortDirection, VaultListSortMode } from "./vaultListSort";
-import type { VaultListViewMode } from "./vaultListView";
+import type { VaultListSort, VaultListSortDirection, VaultListSortMode, VaultListViewMode } from "@upriv/shared";
 import { SORT_DIRECTION_ICON, SORT_MODE_ICON, VIEW_MODE_ICON } from "./vaultListToolbarIcons";
 
 const SORT_MODES: VaultListSortMode[] = ["order", "name", "state", "last_accessed"];

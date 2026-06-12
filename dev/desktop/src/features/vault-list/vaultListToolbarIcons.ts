@@ -1,6 +1,5 @@
 import type { IconName } from "@/components/icons";
-import type { VaultListSortDirection, VaultListSortMode } from "./vaultListSort";
-import type { VaultListViewMode } from "./vaultListView";
+import type { VaultListSortDirection, VaultListSortMode, VaultListViewMode } from "@upriv/shared";
 
 export const SORT_MODE_ICON: Record<VaultListSortMode, IconName> = {
   order: "grip-vertical",

@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Modal } from "@/components/ui";
-import { VAULT_NOTE_MAX_LENGTH } from "@/constants/vault";
+import { VAULT_NOTE_MAX_LENGTH, type VaultListItem } from "@upriv/shared";
 import { useTranslation } from "@/i18n";
-import type { VaultListItem } from "./types";
 
 const DEBOUNCE_MS = 400;
 const SAVED_INDICATOR_MS = 1500;

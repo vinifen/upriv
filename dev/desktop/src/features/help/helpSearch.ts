@@ -1,20 +1,14 @@
-import { HELP_SECTION_BODY_KEYS, helpSectionTitleKey, type HelpSectionId } from "./helpContent";
 import type { I18nKey } from "@/i18n";
+import {
+  sectionMatchesQuery as sharedSectionMatchesQuery,
+  sectionSearchText as sharedSectionSearchText,
+  type HelpSectionId,
+} from "@upriv/shared";
 
 type Translate = (key: I18nKey) => string;
 
-function normalize(text: string): string {
-  return text
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/\p{Diacritic}/gu, "");
-}
-
 export function sectionSearchText(sectionId: HelpSectionId, t: Translate): string {
-  return [
-    t(helpSectionTitleKey(sectionId)),
-    ...HELP_SECTION_BODY_KEYS[sectionId].map((key) => t(key)),
-  ].join("\n");
+  return sharedSectionSearchText(sectionId, (key) => t(key as I18nKey));
 }
 
 export function sectionMatchesQuery(
@@ -22,7 +16,5 @@ export function sectionMatchesQuery(
   query: string,
   t: Translate,
 ): boolean {
-  const normalizedQuery = normalize(query.trim());
-  if (!normalizedQuery) return true;
-  return normalize(sectionSearchText(sectionId, t)).includes(normalizedQuery);
+  return sharedSectionMatchesQuery(sectionId, query, (key) => t(key as I18nKey));
 }

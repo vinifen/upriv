@@ -1,5 +1,5 @@
 import { useTranslation } from "@/i18n";
-import type { CreateVaultStepId, CreateVaultStepStatus } from "./createVaultTypes";
+import type { CreateVaultStepId, CreateVaultStepStatus } from "@upriv/shared";
 
 interface CreateVaultStepNavProps {
   currentStep: CreateVaultStepId;

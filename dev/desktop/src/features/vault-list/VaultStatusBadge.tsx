@@ -1,5 +1,5 @@
 import { useTranslation } from "@/i18n";
-import type { VaultDisplayStatus } from "@/types";
+import type { VaultDisplayStatus } from "@upriv/shared";
 import { vaultStatusBadgeClass, vaultStatusI18nKey } from "@/theme";
 
 interface VaultStatusBadgeProps {

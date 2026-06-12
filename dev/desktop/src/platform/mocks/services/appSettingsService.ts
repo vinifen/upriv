@@ -1,0 +1,15 @@
+import type { AppSettingsService } from "@upriv/shared";
+import { DEFAULT_APP_SETTINGS } from "@/platform/mocks/data/appSettings";
+
+let runtimeSettings = structuredClone(DEFAULT_APP_SETTINGS);
+
+/** Prototype app settings — in-memory until Tauri `settings_get` / `settings_save`. */
+export const mockAppSettingsService: AppSettingsService = {
+  async load() {
+    return structuredClone(runtimeSettings);
+  },
+
+  async save(config) {
+    runtimeSettings = structuredClone(config);
+  },
+};

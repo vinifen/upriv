@@ -19,7 +19,6 @@ export type VaultWorkspaceAction =
   | { type: "set_delete_target"; target: VaultWorkspaceState["deleteTarget"] }
   | { type: "set_unsaved_prompt"; prompt: UnsavedPromptAction | null }
   | { type: "set_drag"; source: string | null; target: string | null }
-  | { type: "set_toast"; message: string | null }
   | { type: "remap_paths"; map: Record<string, string> }
   | { type: "remove_paths"; paths: string[] }
   | { type: "discard_unsaved_and"; next: VaultWorkspaceAction };
@@ -189,8 +188,6 @@ export function vaultWorkspaceReducer(
       return { ...state, unsavedPrompt: action.prompt };
     case "set_drag":
       return { ...state, dragSourcePath: action.source, dropTargetPath: action.target };
-    case "set_toast":
-      return { ...state, toastMessage: action.message };
     case "remap_paths":
       return applyPathMap(state, action.map);
     case "remove_paths":

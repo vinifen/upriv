@@ -1,11 +1,9 @@
 import { createPortal } from "react-dom";
 import { menuItemClass, menuPanelClass } from "@/components/ui/menuStyles";
 import { useTranslation } from "@/i18n";
-import { findNode } from "./fileTreeUtils";
+import { findNode } from "@upriv/shared";
 import type { FileTreeNode } from "./fileTreeTypes";
-import type { useVaultFileManager } from "./useVaultFileManager";
-
-type FileManagerApi = ReturnType<typeof useVaultFileManager>;
+import type { FileManagerApi } from "./useVaultFileManager";
 
 interface FileTreeContextMenuProps {
   fm: FileManagerApi;

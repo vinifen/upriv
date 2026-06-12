@@ -8,13 +8,10 @@ import {
 } from "react";
 import { Icon } from "@/components/icons";
 import { useTranslation } from "@/i18n";
-import { getParentPath, isDescendantPath } from "./fileTreeOps";
+import { getParentPath, findNode, isDescendantPath, joinPath } from "@upriv/shared";
 import type { FileTreeNode } from "./fileTreeTypes";
-import { findNode, joinPath } from "./fileTreeUtils";
 import { filesFromDataTransfer, filesFromFileInput, isOsFileDrag } from "./osFileDrop";
-import type { useVaultFileManager } from "./useVaultFileManager";
-
-type FileManagerApi = ReturnType<typeof useVaultFileManager>;
+import type { FileManagerApi } from "./useVaultFileManager";
 
 interface FileTreePanelProps {
   fm: FileManagerApi;

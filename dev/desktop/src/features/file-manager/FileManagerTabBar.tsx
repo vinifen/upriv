@@ -2,7 +2,7 @@ import { Icon } from "@/components/icons";
 import { Button } from "@/components/ui";
 import { useTranslation } from "@/i18n";
 import { isPathDirty } from "./fileTreeTypes";
-import { fileBaseName } from "./fileTreeUtils";
+import { fileBaseName } from "@upriv/shared";
 import type { VaultWorkspaceState } from "./fileTreeTypes";
 import type { VaultWorkspaceAction } from "./vaultWorkspaceReducer";
 

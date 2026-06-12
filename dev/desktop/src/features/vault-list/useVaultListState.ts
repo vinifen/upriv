@@ -1,17 +1,11 @@
 import { useCallback, useMemo, useState } from "react";
-import { VAULT_NOTE_MAX_LENGTH } from "@/constants/vault";
+import { VAULT_NOTE_MAX_LENGTH, DEFAULT_VAULT_LIST_VIEW, type VaultListViewMode, assertPlainVaultInvariant, type VaultPersistence, type VaultSession, type VaultSettingsListPatch, type VaultListItem, reorderVaultList, sortVaultsByOrder, resolveVaultPasswordHint } from "@upriv/shared";
 import {
   applyVaultListSort,
   canReorderVaultList,
   DEFAULT_VAULT_LIST_SORT,
   type VaultListSort,
-} from "./vaultListSort";
-import { DEFAULT_VAULT_LIST_VIEW, type VaultListViewMode } from "./vaultListView";
-import { assertPlainVaultInvariant, type VaultPersistence, type VaultSession } from "@/types";
-import type { VaultSettingsListPatch } from "./vaultSettingsTypes";
-import type { VaultListItem } from "./types";
-import { reorderVaultList, sortVaultsByOrder } from "./vaultOrder";
-import { resolveVaultPasswordHint } from "./vaultPasswordHint";
+} from "@upriv/shared";
 
 function seedVaultPasswordHints(vaults: VaultListItem[]): VaultListItem[] {
   return vaults.map((vault) => {
@@ -29,8 +23,11 @@ export function useVaultListState(
     initialSort?: VaultListSort;
     initialViewMode?: VaultListViewMode;
     showHiddenVaults?: boolean;
+    reloadVaults?: () => Promise<VaultListItem[]>;
   },
 ) {
+  const reloadVaults = options?.reloadVaults;
+  const [isReady, setIsReady] = useState(initialVaults.length > 0);
   const [vaults, setVaults] = useState(() =>
     sortVaultsByOrder(seedVaultPasswordHints(initialVaults)),
   );
@@ -48,11 +45,21 @@ export function useVaultListState(
   }, [vaults, sort, showHiddenVaults]);
   const canReorder = canReorderVaultList(sort);
 
-  const resetList = useCallback(() => {
-    setVaults(sortVaultsByOrder(seedVaultPasswordHints(initialVaults)));
+  const initializeVaults = useCallback((rows: VaultListItem[]) => {
+    setVaults(sortVaultsByOrder(seedVaultPasswordHints(rows)));
+    setIsReady(true);
     setDraggingId(null);
     setDragOverId(null);
-  }, [initialVaults]);
+  }, []);
+
+  const resetList = useCallback(async () => {
+    if (reloadVaults) {
+      const rows = await reloadVaults();
+      initializeVaults(rows);
+      return;
+    }
+    initializeVaults(initialVaults);
+  }, [initialVaults, reloadVaults, initializeVaults]);
 
   const onDragStart = useCallback(
     (vaultId: string) => {
@@ -165,6 +172,8 @@ export function useVaultListState(
   );
 
   return {
+    isReady,
+    initializeVaults,
     vaults,
     displayVaults,
     sort,

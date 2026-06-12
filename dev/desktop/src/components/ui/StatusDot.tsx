@@ -1,4 +1,4 @@
-import type { VaultDisplayStatus } from "@/types";
+import type { VaultDisplayStatus } from "@upriv/shared";
 import { vaultStatusColorVar } from "@/theme";
 
 export interface StatusDotProps {

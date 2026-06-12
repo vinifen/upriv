@@ -2,7 +2,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { Icon } from "@/components/icons";
 import { menuItemClass, menuPanelClass } from "@/components/ui/menuStyles";
 import { useTranslation } from "@/i18n";
-import type { StorageMode, VaultDisplayStatus } from "@/types";
+import type { StorageMode, VaultDisplayStatus } from "@upriv/shared";
 import { vaultStatusI18nKey } from "@/theme";
 
 /** Fixed control size — all vault rows (Lock / Unlock / sealed, with or without chevron). */

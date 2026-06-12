@@ -8,7 +8,7 @@ import { FileManagerTabBar } from "./FileManagerTabBar";
 import { FileTreeContextMenu } from "./FileTreeContextMenu";
 import { FileTreePanel } from "./FileTreePanel";
 import { PaneResizeHandle } from "./PaneResizeHandle";
-import { percentFromPointer, TREE_SPLIT_DEFAULT_PERCENT } from "./treeSplit";
+import { percentFromPointer, TREE_SPLIT_DEFAULT_PERCENT } from "@upriv/shared";
 import { useVaultFileManager } from "./useVaultFileManager";
 
 interface FileManagerWorkspaceProps {

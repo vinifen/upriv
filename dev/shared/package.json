@@ -1,0 +1,14 @@
+{
+  "name": "@upriv/shared",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./domain": "./src/domain/index.ts",
+    "./services": "./src/services/index.ts"
+  },
+  "devDependencies": {
+    "typescript": "5.7.3"
+  }
+}

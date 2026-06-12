@@ -1,14 +1,12 @@
 import { Icon, type IconName } from "@/components/icons";
 import { useTranslation } from "@/i18n";
-import { resolveVaultListStatus } from "@/types";
-import type { VaultDisplayStatus } from "@/types";
+import { resolveVaultListStatus, type VaultDisplayStatus, type VaultListItem } from "@upriv/shared";
 import { vaultStatusIconClass, vaultStatusRowClass } from "@/theme";
 import { VaultFileManagerIndicator } from "./VaultFileManagerIndicator";
 import { VaultHiddenIndicator } from "./VaultHiddenIndicator";
 import { VaultLockButton } from "./VaultLockButton";
 import { VaultRowActions } from "./VaultRowActions";
 import { VaultStatusBadge } from "./VaultStatusBadge";
-import type { VaultListItem } from "./types";
 
 interface VaultBlockCardProps {
   vault: VaultListItem;
