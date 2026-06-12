@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Modal } from "@/components/ui";
 import { useTranslation } from "@/i18n";
-import { VaultSettingsSection } from "@/features/vault-list/VaultSettingsSection";
+import { VaultSettingsSection } from "@/features/vault-settings";
 import { useAppSettingsContext } from "./AppSettingsContext";
-import type { VaultListItem } from "@/features/vault-list/types";
+import type { VaultListItem } from "@upriv/shared";
 import {
   AppSettingsAppearanceSection,
   AppSettingsBehaviorSection,

@@ -1,23 +1,22 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Button, Modal } from "@/components/ui";
-import { useTranslation } from "@/i18n";
-import { buildCreateVaultResult } from "./buildCreateVaultResult";
-import { createEmptyDraft, createVaultDraftEqual } from "./createVaultDefaults";
-import { CreateVaultStepNav } from "./CreateVaultStepNav";
-import { renderCreateVaultStep } from "./createVaultForm";
-import { mockTestArchivePassword } from "./mockImportArchive";
 import {
+  buildCreateVaultResult,
+  canSubmitCreateVault,
+  createEmptyCreateVaultDraft,
+  createVaultDraftEqual,
   CREATE_VAULT_STEPS,
+  getCreateVaultStepStatus,
+  validateCreateVaultStep,
+  type CreateVaultDraft,
   type CreateVaultResult,
   type CreateVaultStepId,
   type CreateVaultStepStatus,
-} from "./createVaultTypes";
-import type { CreateVaultDraft } from "./createVaultTypes";
-import {
-  canSubmitCreateVault,
-  getCreateVaultStepStatus,
-  validateCreateVaultStep,
-} from "./validateCreateVault";
+} from "@upriv/shared";
+import { Button, Modal } from "@/components/ui";
+import { useTranslation } from "@/i18n";
+import { useCreateVaultService } from "@/platform/services";
+import { CreateVaultStepNav } from "./CreateVaultStepNav";
+import { renderCreateVaultStep } from "./createVaultForm";
 
 interface CreateVaultWizardModalProps {
   open: boolean;
@@ -38,10 +37,13 @@ export function CreateVaultWizardModal({
   onCreate,
 }: CreateVaultWizardModalProps) {
   const { t } = useTranslation();
+  const createVaultService = useCreateVaultService();
   const [baseline, setBaseline] = useState<CreateVaultDraft>(() =>
-    createEmptyDraft(existingOrders),
+    createEmptyCreateVaultDraft(existingOrders),
   );
-  const [draft, setDraft] = useState<CreateVaultDraft>(() => createEmptyDraft(existingOrders));
+  const [draft, setDraft] = useState<CreateVaultDraft>(() =>
+    createEmptyCreateVaultDraft(existingOrders),
+  );
   const [currentStep, setCurrentStep] = useState<CreateVaultStepId>("source");
   const [visitedSteps, setVisitedSteps] = useState<Set<CreateVaultStepId>>(
     () => new Set(["source"]),
@@ -52,7 +54,7 @@ export function CreateVaultWizardModal({
 
   useEffect(() => {
     if (!open) return;
-    const empty = createEmptyDraft(existingOrders);
+    const empty = createEmptyCreateVaultDraft(existingOrders);
     const starting = initialDraft ?? empty;
     setBaseline(starting);
     setDraft(starting);
@@ -113,7 +115,7 @@ export function CreateVaultWizardModal({
   const handleTestImportPassword = () => {
     setTestingPassword(true);
     window.setTimeout(() => {
-      const ok = mockTestArchivePassword(draft.password);
+      const ok = createVaultService.testImportArchivePassword(draft.password);
       patchDraft({
         passwordValidated: ok,
         passwordTestFailed: !ok,

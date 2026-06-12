@@ -1,8 +1,7 @@
 import { createContext, useCallback, useContext, useMemo, useReducer, type ReactNode } from "react";
-import { resolveVaultDisplayStatus } from "@/types";
-import type { VaultListItem } from "@/features/vault-list/types";
+import { useVaultFileSystemService } from "@/platform/services";
+import { resolveVaultDisplayStatus, type VaultListItem } from "@upriv/shared";
 import { createDefaultWorkspaceState } from "./fileTreeTypes";
-import { resetVaultFileSession } from "./mockVaultFileSystem";
 import type { FileManagerEntry } from "./fileManagerTypes";
 import { vaultWorkspaceReducer, type VaultWorkspaceAction } from "./vaultWorkspaceReducer";
 
@@ -116,10 +115,8 @@ function fileManagerReducer(state: FileManagerState, action: FileManagerAction):
     }
     case "dismiss":
       return removeEntry(state, action.vaultId);
-    case "purge_for_vault_close": {
-      resetVaultFileSession(action.vaultId);
+    case "purge_for_vault_close":
       return removeEntry(state, action.vaultId);
-    }
     case "workspace": {
       const existing = state.entries[action.vaultId];
       if (!existing) return state;
@@ -140,6 +137,7 @@ function fileManagerReducer(state: FileManagerState, action: FileManagerAction):
 }
 
 export function FileManagerProvider({ children }: { children: ReactNode }) {
+  const fs = useVaultFileSystemService();
   const [state, dispatch] = useReducer(fileManagerReducer, initialState);
 
   const openFromVault = useCallback((vault: VaultListItem) => {
@@ -158,9 +156,13 @@ export function FileManagerProvider({ children }: { children: ReactNode }) {
     dispatch({ type: "dismiss", vaultId });
   }, []);
 
-  const purgeForVaultClose = useCallback((vaultId: string) => {
-    dispatch({ type: "purge_for_vault_close", vaultId });
-  }, []);
+  const purgeForVaultClose = useCallback(
+    (vaultId: string) => {
+      fs.resetSession(vaultId);
+      dispatch({ type: "purge_for_vault_close", vaultId });
+    },
+    [fs],
+  );
 
   const dispatchWorkspace = useCallback(
     (vaultId: string, workspaceAction: VaultWorkspaceAction) => {

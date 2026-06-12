@@ -3,8 +3,7 @@ import { Icon } from "@/components/icons";
 import { DropdownMenu, IconButton } from "@/components/ui";
 import { vaultBlocksBulkExport } from "@/features/app-settings/vaultBulkExport";
 import { useTranslation } from "@/i18n";
-import { resolveVaultDisplayStatus } from "@/types";
-import type { VaultListItem } from "./types";
+import { resolveVaultDisplayStatus, type VaultListItem } from "@upriv/shared";
 
 const rowActionProps = {
   size: "row" as const,

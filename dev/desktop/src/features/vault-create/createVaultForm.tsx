@@ -1,27 +1,26 @@
 import { useId, useRef } from "react";
 import { Button, PasswordInput } from "@/components/ui";
 import {
+  displayNameFromArchiveFilename,
   VAULT_DISPLAY_NAME_MAX_LENGTH,
   VAULT_NOTE_MAX_LENGTH,
   VAULT_PASSWORD_HINT_MAX_LENGTH,
-} from "@/constants/vault";
+} from "@upriv/shared";
+import { useCreateVaultService } from "@/platform/services";
 import { useTranslation } from "@/i18n";
-import { displayNameFromArchiveFilename } from "@/lib/vaultDisplayName";
-import { VaultSettingsSection } from "@/features/vault-list/VaultSettingsSection";
 import {
   PolicyRadioOption,
   SecurityModeRadioGroup,
   settingsControlClass,
   SettingsField,
   SettingsFormGrid,
+  transitionStorageModeClose,
   VaultSettingsBackupSection,
-} from "@/features/vault-list/vaultSettingsForm";
-import type { CloseDefaultAction } from "@/features/vault-list/vaultSettingsTypes";
-import { transitionStorageModeClose } from "@/features/vault-list/vaultSettingsTypes";
-import type { CreateVaultDraft, CreateVaultStepId } from "./createVaultTypes";
-import { MOCK_IMPORT_ARCHIVE_PATH } from "./mockImportArchive";
+  VaultSettingsSection,
+  type CloseDefaultAction,
+} from "@/features/vault-settings";
+import type { CreateVaultDraft, CreateVaultStepId, CreateVaultValidationCode } from "@upriv/shared";
 import { createVaultErrorKey } from "./validationMessages";
-import type { CreateVaultValidationCode } from "./validateCreateVault";
 
 interface StepProps {
   draft: CreateVaultDraft;
@@ -72,14 +71,15 @@ function StepErrors({ errors }: { errors: CreateVaultValidationCode[] }) {
 
 function CreateVaultSourceStep({ draft, errors, onChange }: StepProps) {
   const { t } = useTranslation();
+  const createVaultService = useCreateVaultService();
   const sourceGroup = useId();
 
   const handleImportFile = () => {
-    const fileName = "My Archive.7z";
+    const fileName = createVaultService.getMockImportArchiveFileName();
     onChange({
       source: "import",
       importFileName: fileName,
-      importFilePath: MOCK_IMPORT_ARCHIVE_PATH,
+      importFilePath: createVaultService.getMockImportArchivePath(),
       displayName: displayNameFromArchiveFilename(fileName),
       password: "",
       passwordConfirm: "",

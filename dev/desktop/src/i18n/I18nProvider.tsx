@@ -1,6 +1,6 @@
 import { useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { I18nContext, type I18nContextValue } from "./context";
-import { interpolate } from "./interpolate";
+import { interpolate } from "@upriv/shared";
 import { DEFAULT_LOCALE, loadLocale } from "./loadLocale";
 import type { I18nCatalog, I18nKey, I18nParams, LocaleId } from "./types";
 

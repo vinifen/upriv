@@ -1,4 +1,4 @@
-import { vaultFileLanguageFromPath } from "./mockVaultFileSystem";
+import { vaultFileLanguageFromPath } from "@upriv/shared";
 
 function readAsDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {

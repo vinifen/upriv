@@ -22,16 +22,28 @@ Until Tauri wires real crypto, unlock/close modals accept **any non-empty passwo
 ## Source layout
 
 ```text
+../shared/                   # @upriv/shared — domain types + service interfaces (desktop + mobile)
 src/
 ├── main.tsx                 # Entry — mounts App, loads global styles
 ├── App.tsx                  # Root component (providers + home screen)
 │
 ├── app/                     # App shell: providers, top-level screens
-│   ├── AppProviders.tsx     # App settings, i18n, file manager context
-│   └── HomeScreen.tsx       # Home / vault list route (placeholder)
+│   ├── AppProviders.tsx     # Services, app settings, i18n, file manager
+│   └── HomeScreen.tsx       # Home / vault list route
+│
+├── platform/                # Desktop-only adapters
+│   ├── mocks/               # Prototype data + mock services (delete with Tauri)
+│   │   ├── data/            # Static fixtures (vaults, logs, settings defaults)
+│   │   ├── stores/          # In-memory state (file tree, settings registry)
+│   │   └── services/        # AppServices mock implementations
+│   └── services/            # createServices(), ServicesProvider, hooks
 │
 ├── features/                # Feature modules (one folder per flow)
-│   └── (vault-list, unlock, … — add as screens are built)
+│   ├── vault-list/          # List UI + hooks (useVaultListScreen orchestrates the page)
+│   ├── vault-lifecycle/     # Open/close/seal, recovery, pipeline overlays
+│   ├── vault-settings/      # Vault config.toml forms + VaultSettingsModal
+│   ├── vault-backups/       # Backup list modal + mock backup data
+│   ├── file-manager/, vault-create/, app-settings/, logs/, help/
 │
 ├── components/
 │   ├── ui/                  # Reusable primitives (Button, Modal, StatusDot, …)
@@ -39,7 +51,7 @@ src/
 │
 ├── i18n/                    # Locale loading, context, `useTranslation`
 ├── theme/                   # Design tokens, vault status → color/i18n mapping
-├── types/                   # Shared TS types (VaultRow, statuses, …)
+├── types/                   # Re-exports from @upriv/shared (migration shim)
 ├── constants/               # Product limits (name length, note max, …)
 ├── lib/tauri/               # `invoke` wrapper + command name constants
 ├── hooks/                   # Shared React hooks
@@ -53,7 +65,9 @@ src/
 | UI copy             | `dev/docs/i18n/*.json` via `useTranslation()` — never hardcode sentences |
 | Vault status colors | `theme/vault-status.ts` + CSS vars in `styles/tokens.css`                |
 | Tauri commands      | `lib/tauri/commands.ts` — names match `src-tauri`                        |
-| Domain types        | `types/` — align with SDD DTOs (`VaultRow`, …)                           |
+| Domain types        | `@upriv/shared` (`shared/`) — `VaultRow`, settings, list sort/view |
+| Service layer       | `platform/services/` — factory + React context; mocks in `platform/mocks/` |
+| App layout          | `AppShell` + `VaultListHeader` on the vault list home screen               |
 | Feature UI          | `features/<name>/` — screen + local hooks; compose `components/ui`       |
 
 ## Aliases

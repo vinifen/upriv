@@ -1,5 +1,5 @@
 import { downloadFiles } from "@/lib/downloadZip";
-import type { VaultRow } from "@/types";
+import type { VaultRow } from "@upriv/shared";
 import {
   getMockVaultArchiveBytes,
   vaultArchiveFilename,

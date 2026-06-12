@@ -1,8 +1,7 @@
 import { useTranslation } from "@/i18n";
 import { VaultBlockCard } from "./VaultBlockCard";
 import { VaultRow } from "./VaultRow";
-import type { VaultListViewMode } from "./vaultListView";
-import type { VaultListItem } from "./types";
+import type { VaultListViewMode, VaultListItem } from "@upriv/shared";
 
 interface VaultListProps {
   vaults: VaultListItem[];

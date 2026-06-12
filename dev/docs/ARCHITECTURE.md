@@ -114,15 +114,14 @@ dev/
 ├── mobile/                   # Expo / React Native scaffold
 ├── crates/
 │   └── upriv-core/           # Shared Rust core (placeholder → implementation)
-├── packages/
-│   └── shared/               # TS: types, hooks — future (i18n today: docs/i18n/)
+├── shared/                   # @upriv/shared — TS domain types + service interfaces
 ├── docs/
 │   ├── prd.md
 │   ├── sdd.md
 │   ├── ARCHITECTURE.md
 │   └── i18n/
 ├── Cargo.toml                # Rust workspace (src-tauri + upriv-core)
-└── package.json              # npm workspaces (desktop + mobile)
+└── package.json              # dev scripts only (no root node_modules)
 ```
 
 **Note:** Tauri expects `src-tauri/` as a **sibling** of `desktop/`, not nested under it. Run `npm run tauri:dev` from `dev/` or `npm run tauri -- dev` from `dev/desktop/` (see `dev/desktop/README.md`).
@@ -131,7 +130,7 @@ dev/
 
 ## 5. Code sharing (React web ↔ React Native)
 
-| Shared (`packages/shared/`) | Platform-specific |
+| Shared (`shared/`) | Platform-specific |
 |-----------------------------|-------------------|
 | TypeScript types (`VaultRow`, settings DTOs) | Markup: `<div>` vs `<View>` |
 | i18n keys and loaders | Styling: Tailwind vs StyleSheet / NativeWind |
@@ -197,7 +196,7 @@ See SDD §9.4 for Android SAF flow.
 1. Implement **`dev/crates/upriv-core/`** (crypto, 7z, state machine).
 2. Implement **`VaultStorage`** (desktop `std::fs` first).
 3. Wire Tauri commands in `dev/src-tauri/` to `upriv-core` only (thin `lib.rs`).
-4. Add **`dev/packages/shared/`** — types and hooks (i18n keys stay in `docs/i18n/` until split).
+4. **`dev/shared/`** (`@upriv/shared`) — domain types and service interfaces (i18n keys stay in `docs/i18n/`).
 5. Complete desktop v1 (Linux FUSE, open/close/seal).
 6. **`dev/mobile/`** — native module → `upriv-core` (JNI / UniFFI).
 7. Android: SAF adapter, APK packaging, OTG flows (PRD §3.6).

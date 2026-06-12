@@ -1,11 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from "react";
 import { useTranslation } from "@/i18n";
-import { fileBaseName } from "./fileTreeUtils";
-import { isVaultFileEditable, isVaultFileImage, isVaultFileViewable } from "./mockVaultFileSystem";
+import { fileBaseName } from "@upriv/shared";
 import { filesFromDataTransfer, isOsFileDrag } from "./osFileDrop";
-import type { useVaultFileManager } from "./useVaultFileManager";
-
-type FileManagerApi = ReturnType<typeof useVaultFileManager>;
+import type { FileManagerApi } from "./useVaultFileManager";
 
 interface FileEditorPaneProps {
   fm: FileManagerApi;
@@ -147,7 +144,8 @@ function ViewerDropZone({ fm, children }: { fm: FileManagerApi; children: ReactN
 
 export function FileEditorPane({ fm }: FileEditorPaneProps) {
   const { t } = useTranslation();
-  const { workspace, dispatch, saveFile, getEditorContent, vaultId } = fm;
+  const { workspace, dispatch, saveFile, getEditorContent, isFileEditable, isFileViewable, isFileImage } =
+    fm;
   const activeTabPath = workspace.activeTabPath;
 
   useEffect(() => {
@@ -155,12 +153,12 @@ export function FileEditorPane({ fm }: FileEditorPaneProps) {
     const onKeyDown = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
         event.preventDefault();
-        if (isVaultFileEditable(vaultId, activeTabPath)) saveFile(activeTabPath);
+        if (isFileEditable(activeTabPath)) saveFile(activeTabPath);
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [activeTabPath, saveFile, vaultId]);
+  }, [activeTabPath, isFileEditable, saveFile]);
 
   if (!activeTabPath) {
     return (
@@ -177,8 +175,8 @@ export function FileEditorPane({ fm }: FileEditorPaneProps) {
     );
   }
 
-  const isImage = isVaultFileImage(vaultId, activeTabPath);
-  const viewable = isVaultFileViewable(vaultId, activeTabPath);
+  const isImage = isFileImage(activeTabPath);
+  const viewable = isFileViewable(activeTabPath);
   const content = getEditorContent(activeTabPath);
   const fileName = fileBaseName(activeTabPath);
 
@@ -225,5 +223,5 @@ export function FileEditorPane({ fm }: FileEditorPaneProps) {
 
 /** Whether any open tab has unsaved editable changes (tab bar Save all). */
 export function hasUnsavedEditableTabs(fm: FileManagerApi): boolean {
-  return fm.workspace.dirtyPaths.some((path) => isVaultFileEditable(fm.vaultId, path));
+  return fm.workspace.dirtyPaths.some((path: string) => fm.isFileEditable(path));
 }

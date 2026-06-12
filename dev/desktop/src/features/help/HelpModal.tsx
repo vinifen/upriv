@@ -1,8 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Modal } from "@/components/ui";
 import { useTranslation } from "@/i18n";
-import { VaultSettingsSection } from "@/features/vault-list/VaultSettingsSection";
-import { settingsControlClass } from "@/features/vault-list/vaultSettingsForm";
+import { settingsControlClass, VaultSettingsSection } from "@/features/vault-settings";
 import {
   defaultOpenHelpSections,
   HELP_SECTION_BODY_KEYS,

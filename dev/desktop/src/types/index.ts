@@ -4,9 +4,9 @@ export type {
   VaultPersistence,
   VaultRow,
   VaultSession,
-} from "./vault";
+} from "@upriv/shared";
 export {
   assertPlainVaultInvariant,
   resolveVaultDisplayStatus,
   resolveVaultListStatus,
-} from "./vault";
+} from "@upriv/shared";

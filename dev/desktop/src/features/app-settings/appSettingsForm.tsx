@@ -2,8 +2,7 @@ import { useEffect, useId, useMemo, useState } from "react";
 import { Button, Switch } from "@/components/ui";
 import type { LocaleId } from "@/i18n";
 import { useTranslation } from "@/i18n";
-import type { VaultListItem } from "@/features/vault-list/types";
-import { resolveVaultDisplayStatus } from "@/types";
+import { type VaultListItem, resolveVaultDisplayStatus } from "@upriv/shared";
 import { vaultStatusI18nKey } from "@/theme/vault-status";
 import {
   downloadVaultsZip,
@@ -19,15 +18,15 @@ import {
   settingsControlClass,
   SettingsField,
   SettingsFormGrid,
-} from "@/features/vault-list/vaultSettingsForm";
+} from "@/features/vault-settings";
 import {
   LOG_ENTRIES_PER_FILE,
   LOG_KEEP_LAST_DEFAULT,
   LOG_KEEP_LAST_ENTRY_OPTIONS,
   LOG_KEEP_LAST_UNLIMITED,
   logFileCountForKeepLast,
-} from "@/constants/logging";
-import { MOCK_UPRIV_ROOT_PATH } from "./mockAppSettings";
+} from "@upriv/shared";
+import { MOCK_UPRIV_ROOT_PATH } from "@/platform/mocks/data/appSettings";
 import type { AppSettingsConfig, LogLevel, UiTheme } from "./appSettingsTypes";
 
 interface SectionPatchProps<S extends keyof AppSettingsConfig> {

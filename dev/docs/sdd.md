@@ -1148,7 +1148,7 @@ dev/
 │   └── tauri.conf.json
 ├── mobile/                     # Expo / React Native scaffold
 ├── crates/upriv-core/          # Shared Rust (all platforms)
-├── packages/shared/            # TS: types, hooks — future
+├── shared/                     # @upriv/shared — TS domain + service interfaces
 └── docs/
 ```
 
@@ -1390,7 +1390,7 @@ Upriv.exe --create <path>
 
 **Packaging:** one APK contains RN UI, bridge, `libupriv_core.so`, and `7zz` — not separate apps. **Rejected for mobile:** Tauri Android (experimental). **Superseded:** Flutter (see `ARCHITECTURE.md` ADR-02–04).
 
-**Shared with desktop:** `dev/packages/shared/` (types, hooks, flows) and `dev/docs/i18n/` (strings) — not the same JSX/DOM as `dev/desktop/src/`.
+**Shared with desktop:** `dev/shared/` (`@upriv/shared` — types, service interfaces) and `dev/docs/i18n/` (strings) — not the same JSX/DOM as `dev/desktop/src/`.
 
 ### 9.2 Android — overview
 

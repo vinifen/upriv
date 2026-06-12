@@ -1,19 +1,17 @@
-import { TREE_SPLIT_DEFAULT_PERCENT } from "./treeSplit";
+import { type VaultFileContent, type VaultFileLanguage, TREE_SPLIT_DEFAULT_PERCENT } from "@upriv/shared";
 
-export type FileTreeNodeType = "file" | "folder";
+export type {
+  FileTreeNode,
+  FileTreeNodeType,
+  VaultFileContent,
+  VaultFileLanguage,
+} from "@upriv/shared";
 
-export interface FileTreeNode {
-  name: string;
-  type: FileTreeNodeType;
-  children?: FileTreeNode[];
-}
+/** @deprecated Use VaultFileLanguage from `@upriv/shared` */
+export type MockFileLanguage = VaultFileLanguage;
 
-export type MockFileLanguage = "markdown" | "text" | "shell" | "env" | "image" | "binary";
-
-export interface MockFileContent {
-  content: string;
-  language: MockFileLanguage;
-}
+/** @deprecated Use VaultFileContent from `@upriv/shared` */
+export type MockFileContent = VaultFileContent;
 
 export interface FileContextMenuState {
   x: number;
@@ -44,7 +42,6 @@ export interface VaultWorkspaceState {
   unsavedPrompt: UnsavedPromptAction | null;
   dragSourcePath: string | null;
   dropTargetPath: string | null;
-  toastMessage: string | null;
 }
 
 export function createDefaultWorkspaceState(): VaultWorkspaceState {
@@ -63,7 +60,6 @@ export function createDefaultWorkspaceState(): VaultWorkspaceState {
     unsavedPrompt: null,
     dragSourcePath: null,
     dropTargetPath: null,
-    toastMessage: null,
   };
 }
 

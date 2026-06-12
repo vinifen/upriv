@@ -1,9 +1,8 @@
-# Dependencies
+# Dependencies (per-app: desktop/node_modules, mobile/node_modules — never dev/node_modules)
 node_modules/
 
 # Frontend build
 desktop/dist/
-mobile/node_modules/
 mobile/.expo/
 mobile/dist/
 mobile/web-build/

@@ -1,9 +1,6 @@
-import { createPortal } from "react-dom";
-import { Button, Modal } from "@/components/ui";
+import { Button, Modal, Toast } from "@/components/ui";
 import { useTranslation } from "@/i18n";
-import type { useVaultFileManager } from "./useVaultFileManager";
-
-type FileManagerApi = ReturnType<typeof useVaultFileManager>;
+import type { FileManagerApi } from "./useVaultFileManager";
 
 interface FileManagerDialogsProps {
   fm: FileManagerApi;
@@ -73,22 +70,11 @@ export function FileManagerDialogs({ fm }: FileManagerDialogsProps) {
         </p>
       </Modal>
 
-      {fm.workspace.toastMessage
-        ? createPortal(
-            <div className="pointer-events-auto fixed bottom-20 left-1/2 z-[130] flex max-w-[min(90vw,28rem)] -translate-x-1/2 items-start gap-2 rounded-xl bg-surface-container-high py-3 pl-4 pr-2 text-sm text-on-surface shadow-modal">
-              <p className="min-w-0 flex-1 leading-snug">{fm.workspace.toastMessage}</p>
-              <button
-                type="button"
-                className="shrink-0 rounded-md px-1.5 py-0.5 text-lg leading-none text-on-surface-variant transition-colors hover:bg-surface-container-highest hover:text-on-surface"
-                aria-label={t("action.close")}
-                onClick={fm.dismissToast}
-              >
-                ×
-              </button>
-            </div>,
-            document.body,
-          )
-        : null}
+      <Toast
+        message={fm.toastMessage}
+        onDismiss={fm.dismissToast}
+        className="bottom-20 z-[130]"
+      />
     </>
   );
 }

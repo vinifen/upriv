@@ -1,25 +1,16 @@
 import type { I18nKey } from "@/i18n";
-import type { VaultDisplayStatus } from "@/types";
+import type { VaultDisplayStatus } from "@upriv/shared";
+import {
+  brandColors as sharedBrandColors,
+  vaultStatusColorVar as sharedVaultStatusColorVar,
+  vaultStatusI18nKey as sharedVaultStatusI18nKey,
+} from "@upriv/shared";
 
 /** CSS custom property names — single source for vault row/dot colors (SDD §8.2). */
-export const vaultStatusColorVar = {
-  open: "--vault-status-open",
-  closed: "--vault-status-closed",
-  sealed: "--vault-status-sealed",
-  recovery: "--vault-status-recovery",
-  closing: "--vault-status-closed",
-  opening: "--vault-status-closed",
-} as const satisfies Record<VaultDisplayStatus, string>;
+export const vaultStatusColorVar = sharedVaultStatusColorVar;
 
 /** i18n keys for status labels — maps display status → catalog key. */
-export const vaultStatusI18nKey = {
-  open: "vault.status.open",
-  closed: "vault.status.closed",
-  sealed: "vault.status.sealed",
-  recovery: "vault.status.recovery",
-  closing: "vault.status.closing",
-  opening: "vault.status.opening",
-} as const satisfies Record<VaultDisplayStatus, I18nKey>;
+export const vaultStatusI18nKey = sharedVaultStatusI18nKey as Record<VaultDisplayStatus, I18nKey>;
 
 /** Tailwind utility classes for row surface styling per status. */
 export const vaultStatusRowClass = {
@@ -57,9 +48,4 @@ export const vaultStatusIconClass = {
 } as const satisfies Record<VaultDisplayStatus, string>;
 
 /** Brand wordmark variants (SDD §8.2.1). */
-export const brandColors = {
-  wordmarkWhite: "#FFFFFF",
-  wordmarkBlack: "#000000",
-  wordmarkNavy: "#0B0E1E",
-  iconBg: "#0f172a",
-} as const;
+export const brandColors = sharedBrandColors;

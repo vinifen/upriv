@@ -1,2 +1,2 @@
 export { CreateVaultWizardModal } from "./CreateVaultWizardModal";
-export type { CreateVaultResult } from "./createVaultTypes";
+export type { CreateVaultResult } from "@upriv/shared";

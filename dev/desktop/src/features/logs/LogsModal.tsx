@@ -1,11 +1,10 @@
 import { useEffect, useId, useMemo, useState } from "react";
 import { Icon } from "@/components/icons";
 import { Button, IconButton, Modal } from "@/components/ui";
-import { formatBytes } from "@/lib/formatBytes";
+import { formatBytes, formatLogFileDate, parseLogLine, type AppLogFile, type ParsedLogLine } from "@upriv/shared";
 import { useTranslation } from "@/i18n";
 import { downloadLogsZip } from "./downloadLogsZip";
-import { formatLogFileDate, logLevelClass, parseLogLine } from "./logFormat";
-import type { AppLogFile, ParsedLogLine } from "./logTypes";
+import { logLevelClass } from "./logFormat";
 import { useAppLogs } from "./useAppLogs";
 
 const logCheckboxClass =
@@ -84,7 +83,7 @@ export function LogsModal({ open, onClose }: LogsModalProps) {
 
   const handleConfirmDelete = () => {
     if (!deleteTargets) return;
-    deleteFiles(deleteTargets);
+    void deleteFiles(deleteTargets);
     setSelected((current) => {
       const next = new Set(current);
       for (const filename of deleteTargets) next.delete(filename);
