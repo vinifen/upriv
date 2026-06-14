@@ -5,13 +5,13 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "build": "tsc --noEmit && vite build",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "preview": "vite preview",
-    "tauri": "sh -c 'cd ../src-tauri && npx --prefix ../desktop tauri \"$@\"' --"
+    "tauri": "sh -c 'cd ../../src-tauri && npx --prefix ../apps/desktop tauri \"$@\"' --"
   },
   "dependencies": {
     "@upriv/shared": "file:../shared",
@@ -23,6 +23,7 @@
   "devDependencies": {
     "@eslint/js": "^9.28.0",
     "@tauri-apps/cli": "2.11.2",
+    "@types/node": "22.15.3",
     "@types/react": "18.3.18",
     "@types/react-dom": "18.3.5",
     "@vitejs/plugin-react": "4.4.1",

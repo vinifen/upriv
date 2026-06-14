@@ -86,7 +86,7 @@ One **native executable** per OS/architecture. Bundled inside or beside it:
 - Linux: `dev/src-tauri/target/release/upriv`, AppImage, `.deb`, `.rpm`
 - Windows (cross-compile from Linux): `dev/src-tauri/target/x86_64-pc-windows-msvc/release/upriv.exe`
 
-Build commands: see `dev/README.md` and `dev/desktop/README.md`.
+Build commands: see `dev/README.md` and `dev/apps/desktop/README.md`.
 
 ### 3.2 Mobile (Android)
 
@@ -109,12 +109,13 @@ Development workspace (`dev/`):
 
 ```text
 dev/
-├── desktop/                  # React web UI (Vite)
-├── src-tauri/                # Tauri shell (sibling of desktop/, not inside it)
-├── mobile/                   # Expo / React Native scaffold
+├── apps/
+│   ├── desktop/              # React web UI (Vite)
+│   ├── mobile/               # Expo / React Native scaffold
+│   └── shared/               # @upriv/shared — TS domain types + service interfaces
+├── src-tauri/                # Tauri shell (sibling of apps/, not inside desktop/)
 ├── crates/
 │   └── upriv-core/           # Shared Rust core (placeholder → implementation)
-├── shared/                   # @upriv/shared — TS domain types + service interfaces
 ├── docs/
 │   ├── prd.md
 │   ├── sdd.md
@@ -124,7 +125,7 @@ dev/
 └── package.json              # dev scripts only (no root node_modules)
 ```
 
-**Note:** Tauri expects `src-tauri/` as a **sibling** of `desktop/`, not nested under it. Run `npm run tauri:dev` from `dev/` or `npm run tauri -- dev` from `dev/desktop/` (see `dev/desktop/README.md`).
+**Note:** Tauri expects `src-tauri/` under `dev/` with the web UI at `apps/desktop/`. Run `npm run tauri:dev` from `dev/` or `npm run tauri -- dev` from `dev/apps/desktop/` (see `dev/apps/desktop/README.md`).
 
 ---
 
@@ -139,7 +140,7 @@ dev/
 
 **Same component tree concept** (App → VaultList → VaultRow → modals), **different implementations** per platform (`.tsx` web vs `.native.tsx` or shared props + platform files).
 
-Do **not** expect to copy `dev/desktop/src/App.tsx` verbatim into React Native.
+Do **not** expect to copy `dev/apps/desktop/src/App.tsx` verbatim into React Native.
 
 ---
 
@@ -196,9 +197,9 @@ See SDD §9.4 for Android SAF flow.
 1. Implement **`dev/crates/upriv-core/`** (crypto, 7z, state machine).
 2. Implement **`VaultStorage`** (desktop `std::fs` first).
 3. Wire Tauri commands in `dev/src-tauri/` to `upriv-core` only (thin `lib.rs`).
-4. **`dev/shared/`** (`@upriv/shared`) — domain types and service interfaces (i18n keys stay in `docs/i18n/`).
+4. **`dev/apps/shared/`** (`@upriv/shared`) — domain types and service interfaces (i18n keys stay in `docs/i18n/`).
 5. Complete desktop v1 (Linux FUSE, open/close/seal).
-6. **`dev/mobile/`** — native module → `upriv-core` (JNI / UniFFI).
+6. **`dev/apps/mobile/`** — native module → `upriv-core` (JNI / UniFFI).
 7. Android: SAF adapter, APK packaging, OTG flows (PRD §3.6).
 
 ---

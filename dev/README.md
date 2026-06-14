@@ -6,11 +6,12 @@ Stable, pinned scaffold for the desktop app. **No product features** — only to
 
 ```text
 dev/
+├── apps/
+│   ├── desktop/        # React 18 + Vite 6 + TypeScript + Tailwind 3
+│   ├── mobile/         # Expo SDK 52 + React Native 0.76 (scaffold)
+│   └── shared/         # @upriv/shared — domain types + service interfaces (TS only)
 ├── crates/upriv-core/  # Shared Rust API (all platforms)
-├── desktop/            # React 18 + Vite 6 + TypeScript + Tailwind 3
 ├── src-tauri/          # Tauri 2.11 shell → upriv-core
-├── mobile/             # Expo SDK 52 + React Native 0.76 (scaffold)
-├── shared/             # @upriv/shared — domain types + service interfaces (TS only)
 ├── docs/               # PRD, SDD, ARCHITECTURE, VERSIONS, i18n
 ├── Cargo.toml          # Rust workspace
 ├── .nvmrc              # Node 22.12+ (see docs/VERSIONS.md)
@@ -25,11 +26,11 @@ dev/
 
 ## Node dependencies
 
-**No `npm install` at `dev/` root.** Desktop and mobile are independent frontends — each has its own `node_modules`:
+**No `npm install` at `dev/` root.** Desktop and mobile are independent apps — each has its own `node_modules`:
 
 ```bash
-cd dev/desktop && npm install   # React + Vite + @upriv/shared (file:../shared)
-cd dev/mobile && npm install    # Expo + React Native (add @upriv/shared when wired)
+cd dev/apps/desktop && npm install   # React + Vite + @upriv/shared (file:../shared)
+cd dev/apps/mobile && npm install    # Expo + React Native (add @upriv/shared when wired)
 ```
 
 Do **not** run `npm install` in `dev/` — there is no root `node_modules`.

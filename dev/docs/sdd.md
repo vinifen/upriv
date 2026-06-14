@@ -1142,13 +1142,14 @@ Reference bundle: `prod/` — see `prod/README.md` (`settings.toml`, `vaults/<id
 
 ```text
 dev/
-├── desktop/                    # React web UI (src/)
+├── apps/
+│   ├── desktop/                # React web UI (src/)
+│   ├── mobile/                 # Expo / React Native scaffold
+│   └── shared/                 # @upriv/shared — TS domain + service interfaces
 ├── src-tauri/                  # Tauri shell → thin commands → upriv-core
 │   ├── src/lib.rs
 │   └── tauri.conf.json
-├── mobile/                     # Expo / React Native scaffold
 ├── crates/upriv-core/          # Shared Rust (all platforms)
-├── shared/                     # @upriv/shared — TS domain + service interfaces
 └── docs/
 ```
 
@@ -1220,7 +1221,7 @@ Fixed order in right area: `Backups` → `Config` → `Lock|Unlock` → `▼`.
 | Black | `#000000` | `Upriv-wordmark-black.svg`, `Upriv-wordmark-black.png` | Light backgrounds, print |
 | Navy | `#0B0E1E` | `Upriv-wordmark-navy.svg`, `Upriv-wordmark-navy.png` | Brand wordmark on light/neutral surfaces |
 
-Default in-app header: **white** variant. App icon tile background: `#0f172a` (see `Upriv.svg` / `Upriv-icon.svg`). Dev UI assets: `dev/desktop/assets/`; on a shipped drive: `.upriv/app/assets/` (see `prod/.upriv/app/assets/README.md` for bundle layout only).
+Default in-app header: **white** variant. App icon tile background: `#0f172a` (see `Upriv.svg` / `Upriv-icon.svg`). Dev UI assets: `dev/apps/desktop/assets/`; on a shipped drive: `.upriv/app/assets/` (see `prod/.upriv/app/assets/README.md` for bundle layout only).
 
 **Row interaction**
 
@@ -1390,7 +1391,7 @@ Upriv.exe --create <path>
 
 **Packaging:** one APK contains RN UI, bridge, `libupriv_core.so`, and `7zz` — not separate apps. **Rejected for mobile:** Tauri Android (experimental). **Superseded:** Flutter (see `ARCHITECTURE.md` ADR-02–04).
 
-**Shared with desktop:** `dev/shared/` (`@upriv/shared` — types, service interfaces) and `dev/docs/i18n/` (strings) — not the same JSX/DOM as `dev/desktop/src/`.
+**Shared with desktop:** `dev/apps/shared/` (`@upriv/shared` — types, service interfaces) and `dev/docs/i18n/` (strings) — not the same JSX/DOM as `dev/apps/desktop/src/`.
 
 ### 9.2 Android — overview
 
@@ -1603,7 +1604,7 @@ vault_path = "/media/user/HD/my-vault"
 8. **session.enc** + disk modes (v0.2).
 9. **Windows** Tauri + WinFSP (v1.1).
 10. **macOS** (v1.2).
-11. **React Native Android** (`dev/mobile/`): native module → `upriv-core`; SAF; workspace on HD; open/close; Intent “Open folder”; single APK.
+11. **React Native Android** (`dev/apps/mobile/`): native module → `upriv-core`; SAF; workspace on HD; open/close; Intent “Open folder”; single APK.
 11b. **Auto-close**: timer + FS watch per vault; warning UI.
 12. **React Native iOS**: document picker + same core.
 

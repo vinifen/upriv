@@ -5,7 +5,7 @@ React web UI (Tauri shell). **Presentation only** — vault logic lives in `crat
 ## Run
 
 ```bash
-cd dev/desktop
+cd dev/apps/desktop
 npm install
 npm run dev              # http://localhost:1420 (browser)
 npm run tauri -- dev     # Tauri + WebView
@@ -75,7 +75,7 @@ src/
 | Alias       | Path             |
 | ----------- | ---------------- |
 | `@/*`       | `src/*`          |
-| `@i18n/*`   | `../docs/i18n/*` |
+| `@i18n/*`   | `../../docs/i18n/*` |
 | `@assets/*` | `assets/*`       |
 
-Versions: `../docs/VERSIONS.md`. Product UX: `../docs/prd.md` §3.7, `../docs/sdd.md` §8.2.
+Versions: `../../docs/VERSIONS.md`. Product UX: `../../docs/prd.md` §3.7, `../../docs/sdd.md` §8.2.
