@@ -1,17 +1,19 @@
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
+const root = path.dirname(fileURLToPath(import.meta.url));
 const host = process.env.TAURI_DEV_HOST;
 
 export default defineConfig({
   plugins: [react()],
   resolve: {
     alias: {
-      "@": path.resolve(__dirname, "./src"),
-      "@upriv/shared": path.resolve(__dirname, "../shared/src"),
-      "@i18n": path.resolve(__dirname, "../docs/i18n"),
-      "@assets": path.resolve(__dirname, "./assets"),
+      "@": path.resolve(root, "./src"),
+      "@upriv/shared": path.resolve(root, "../shared/src"),
+      "@i18n": path.resolve(root, "../../docs/i18n"),
+      "@assets": path.resolve(root, "./assets"),
     },
   },
   clearScreen: false,
@@ -37,7 +39,7 @@ export default defineConfig({
         }
       : undefined,
     watch: {
-      ignored: ["../src-tauri/**"],
+      ignored: ["../../src-tauri/**"],
     },
   },
   build: {

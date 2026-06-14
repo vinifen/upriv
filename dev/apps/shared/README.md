@@ -30,7 +30,7 @@ src/
 ```
 
 ```bash
-cd dev/desktop && npm install
+cd dev/apps/desktop && npm install
 ```
 
 ## Desktop-only (not here)
@@ -38,4 +38,4 @@ cd dev/desktop && npm install
 - React components, hooks, modals
 - Tailwind class maps (`logLevelClass`, `vaultStatusRowClass`)
 - Browser download (`downloadZip`), Tauri invoke
-- Mocks (`desktop/src/platform/mocks/`)
+- Mocks (`apps/desktop/src/platform/mocks/`)

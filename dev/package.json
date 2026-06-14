@@ -1,16 +1,16 @@
 {
   "name": "upriv-dev",
   "private": true,
-  "description": "Upriv dev scripts only — install deps in desktop/ and mobile/ separately",
+  "description": "Upriv dev scripts only — install deps in apps/desktop and apps/mobile separately",
   "scripts": {
-    "dev": "npm run dev --prefix desktop",
-    "build": "npm run build --prefix desktop",
-    "tauri": "npm run tauri --prefix desktop",
-    "tauri:dev": "npm run tauri --prefix desktop -- dev",
-    "tauri:build": "npm run tauri --prefix desktop -- build",
-    "mobile:start": "npm run start --prefix mobile",
-    "mobile:android": "npm run android --prefix mobile",
-    "mobile:typecheck": "npm run typecheck --prefix mobile"
+    "dev": "npm run dev --prefix apps/desktop",
+    "build": "npm run build --prefix apps/desktop",
+    "tauri": "npm run tauri --prefix apps/desktop",
+    "tauri:dev": "npm run tauri --prefix apps/desktop -- dev",
+    "tauri:build": "npm run tauri --prefix apps/desktop -- build",
+    "mobile:start": "npm run start --prefix apps/mobile",
+    "mobile:android": "npm run android --prefix apps/mobile",
+    "mobile:typecheck": "npm run typecheck --prefix apps/mobile"
   },
   "engines": {
     "node": ">=22.12.0"

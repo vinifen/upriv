@@ -1,6 +1,6 @@
 # Upriv — mobile (scaffold)
 
-**Expo SDK 52** + **React Native 0.76** + **React 18.3.1** — aligned with `dev/desktop/` for shared TypeScript and i18n keys.
+**Expo SDK 52** + **React Native 0.76** + **React 18.3.1** — aligned with `dev/apps/desktop/` for shared TypeScript and i18n keys.
 
 No vault features, no `upriv-core` native module yet. **Not** Tauri mobile (product uses React Native + Rust FFI).
 
@@ -17,7 +17,7 @@ For day-one UI work you can use **Expo Go** (SDK 52). Custom Rust (`libupriv_cor
 ## Commands
 
 ```bash
-cd dev/mobile
+cd dev/apps/mobile
 npm install
 npm start              # Metro + QR (Expo Go)
 npm run android
@@ -42,6 +42,6 @@ mobile/
 └── metro.config.js       # Watches parent `dev/` for shared i18n
 ```
 
-Shared UI strings: `../docs/i18n/` (same as desktop).
+Shared UI strings: `../../docs/i18n/` (same as desktop).
 
-Versions: `../docs/VERSIONS.md`.
+Versions: `../../docs/VERSIONS.md`.

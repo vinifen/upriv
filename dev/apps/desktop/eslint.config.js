@@ -7,8 +7,20 @@ import tseslint from "typescript-eslint";
 export default tseslint.config(
   { ignores: ["dist"] },
   {
+    extends: [js.configs.recommended, ...tseslint.configs.recommendedTypeChecked],
+    files: ["vite.config.ts"],
+    languageOptions: {
+      ecmaVersion: 2020,
+      parserOptions: {
+        project: ["./tsconfig.node.json"],
+        tsconfigRootDir: import.meta.dirname,
+      },
+    },
+  },
+  {
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
     files: ["**/*.{ts,tsx}"],
+    ignores: ["vite.config.ts"],
     languageOptions: {
       ecmaVersion: 2020,
     },

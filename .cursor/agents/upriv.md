@@ -18,7 +18,8 @@ Use [`dev/docs/ARCHITECTURE.md`](../../dev/docs/ARCHITECTURE.md) for stack/bridg
 
 - Implement vault logic only in **`dev/crates/upriv-core/`** (`upriv_core::`).  
 - **`dev/src-tauri/`** = thin Tauri commands → `upriv_core`.  
-- **`dev/desktop/`** and **`dev/mobile/`** = UI only; call Rust via `invoke` / future native module.  
+- **`dev/apps/desktop/`** and **`dev/apps/mobile/`** = UI only; call Rust via `invoke` / future native module.  
+- **`dev/apps/shared/`** (`@upriv/shared`) = TS domain + service interfaces shared by both apps.
 - Do not contradict PRD/SDD on states, close pipeline, or on-disk layout.  
 - Reference demo bundle: **`prod-example/`** (not a dependency of `dev/`).
 

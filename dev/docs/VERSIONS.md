@@ -12,7 +12,7 @@
 | Rust | **1.94.0** (`rust-toolchain.toml`) | `rustup` installs this channel in `dev/`; Tauri 2.11 MSRV ≥ 1.77.2 |
 | Linux deps | webkit2gtk-4.1, build-essential, … | See Tauri prerequisites |
 
-## Desktop — JavaScript (`dev/desktop/`)
+## Desktop — JavaScript (`dev/apps/desktop/`)
 
 | Package | Version | Role |
 |---------|---------|------|
@@ -35,7 +35,7 @@
 
 No app plugins in the base scaffold (add `tauri-plugin-opener` etc. when needed, pinned to the same Tauri minor).
 
-## Mobile — JavaScript (`dev/mobile/`)
+## Mobile — JavaScript (`dev/apps/mobile/`)
 
 | Package | Version | Role |
 |---------|---------|------|

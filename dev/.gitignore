@@ -1,11 +1,5 @@
-# Dependencies (per-app: desktop/node_modules, mobile/node_modules — never dev/node_modules)
+# Dependencies (never dev/node_modules at dev/ root — each app has its own .gitignore)
 node_modules/
-
-# Frontend build
-desktop/dist/
-mobile/.expo/
-mobile/dist/
-mobile/web-build/
 
 # Rust (workspace + legacy per-crate)
 target/

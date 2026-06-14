@@ -15,9 +15,10 @@ See **`dev/docs/LOCALE.md`** for the full policy.
 
 | Path | Purpose |
 |------|---------|
-| **`dev/desktop/`** | **Desktop UI** — React web (v0.1); see `dev/desktop/README.md` |
+| **`dev/apps/desktop/`** | **Desktop UI** — React web (v0.1); see `dev/apps/desktop/README.md` |
 | **`dev/src-tauri/`** | **Desktop shell** — Tauri 2 + Rust commands |
-| **`dev/mobile/`** | **Mobile UI** — React Native (future) |
+| **`dev/apps/mobile/`** | **Mobile UI** — React Native (future) |
+| **`dev/apps/shared/`** | **@upriv/shared** — TS domain types + service interfaces (desktop + mobile) |
 | **`dev/docs/`** | PRD, SDD, **`ARCHITECTURE.md`**, `LOCALE.md`, `i18n/` |
 | **`dev/crates/upriv-core/`** | **Shared Rust core** (`upriv_core` library) |
 | **`dev/docs/stitch_upriv_vault_manager/`** | **Design baseline only** (Stitch prototype + tokens) — not the final UI |

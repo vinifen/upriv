@@ -31,4 +31,4 @@ Treat everything here as **exploratory**. Colors, copy, spacing, and flows may c
 - Product UX requirements: `dev/docs/prd.md` §3.7.0 (baseline note) · §3.7
 - UI specification & tokens (engineering): `dev/docs/sdd.md` §8.2.0 (baseline note) · §8.2
 - UI strings (mandatory for shipped UI): `dev/docs/i18n/en.json`, `pt-BR.json`
-- Brand assets (dev): `dev/desktop/assets/`
+- Brand assets (dev): `dev/apps/desktop/assets/`
