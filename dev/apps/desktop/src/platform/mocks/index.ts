@@ -2,11 +2,7 @@
 export { DEFAULT_APP_SETTINGS, MOCK_UPRIV_ROOT_PATH } from "./data/appSettings";
 export { MOCK_VAULTS } from "./data/vaults";
 export { getMockLogFile, getMockLogFiles } from "./data/logs";
-export {
-  getMockBackupBytes,
-  getMockBackupsForVault,
-  MOCK_BACKUPS_BY_VAULT,
-} from "./data/backups";
+export { getMockBackupBytes, getMockBackupsForVault, MOCK_BACKUPS_BY_VAULT } from "./data/backups";
 export { getMockVaultArchiveBytes } from "./data/vaultArchive";
 export {
   getMockVaultSettings,

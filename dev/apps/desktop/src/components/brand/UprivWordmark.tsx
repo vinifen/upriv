@@ -1,6 +1,6 @@
 import wordmarkNavy from "@assets/Upriv-wordmark-navy.svg";
 import wordmarkWhite from "@assets/Upriv-wordmark-white.svg";
-import { useAppSettingsContext } from "@/features/app-settings";
+import { useAppSettingsContext } from "@/features/system/settings";
 import { useTranslation } from "@/i18n";
 
 interface UprivWordmarkProps {

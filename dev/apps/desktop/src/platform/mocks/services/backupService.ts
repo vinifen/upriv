@@ -1,8 +1,5 @@
 import type { BackupService, VaultBackupEntry } from "@upriv/shared";
-import {
-  getMockBackupBytes,
-  getMockBackupsForVault,
-} from "@/platform/mocks/data/backups";
+import { getMockBackupBytes, getMockBackupsForVault } from "@/platform/mocks/data/backups";
 
 const runtimeBackups = new Map<string, VaultBackupEntry[]>();
 

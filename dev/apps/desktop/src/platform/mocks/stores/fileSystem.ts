@@ -1,4 +1,11 @@
-import { type FileTreeNode, type VaultFileContent, type VaultFileLanguage, vaultFileLanguageFromPath as languageFromPathShared, fileBaseName, joinPath } from "@upriv/shared";
+import {
+  type FileTreeNode,
+  type VaultFileContent,
+  type VaultFileLanguage,
+  vaultFileLanguageFromPath as languageFromPathShared,
+  fileBaseName,
+  joinPath,
+} from "@upriv/shared";
 import {
   addChild,
   collectFilePaths,

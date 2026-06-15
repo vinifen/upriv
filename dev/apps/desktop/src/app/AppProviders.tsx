@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
-import { AppSettingsProvider } from "@/features/app-settings";
-import { FileManagerProvider } from "@/features/file-manager";
+import { AppSettingsProvider } from "@/features/system/settings";
+import { FileManagerProvider } from "@/features/vaults/file-manager";
 import { createServices, ServicesProvider } from "@/platform/services";
 
 interface AppProvidersProps {

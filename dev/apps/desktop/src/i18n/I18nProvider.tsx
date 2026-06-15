@@ -1,4 +1,11 @@
-import { useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import {
+useCallback,
+useContext,
+useEffect,
+useMemo,
+useState,
+type ReactNode
+} from "react";
 import { I18nContext, type I18nContextValue } from "./context";
 import { interpolate } from "@upriv/shared";
 import { DEFAULT_LOCALE, loadLocale } from "./loadLocale";

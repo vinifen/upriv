@@ -1,4 +1,4 @@
-import { VaultListPage } from "@/features/vault-list";
+import { VaultListPage } from "@/features/vaults/list";
 
 export function HomeScreen() {
   return <VaultListPage />;

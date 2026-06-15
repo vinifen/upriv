@@ -102,6 +102,7 @@ upriv/
 - **Delete cleanup:** `clearVaultPasswordInRam` + `unregisterMockVaultSettings` (refresh intentionally does not reset mocks).
 - **Hidden until wired:** `close_on_app_exit` checkbox removed from settings UI (no Tauri `onCloseRequested` yet).
 - **App settings logging:** `keep_last_entries` select (cadence 1k…1M + unlimited); log file list newest-first.
+- **Feature module boundaries:** each `features/vaults/*` and `features/system/*` folder has one `index.ts` that exports **only symbols used outside that folder**; no nested index barrels. Full rules and API table: [`dev/apps/desktop/README.md`](../dev/apps/desktop/README.md) § Module boundaries (`index.ts`).
 
 Replace mocks with `invoke()` → `upriv-core` before shipping crypto; do not treat JS `Map` passwords as production architecture.
 | **UI mobile** | `dev/apps/mobile/` | Same (future native module) | Same |
