@@ -13,7 +13,7 @@ import { VaultHiddenIndicator } from "./VaultHiddenIndicator";
 import { VaultLockButton } from "./VaultLockButton";
 import { VaultRowActions } from "./VaultRowActions";
 import { VaultStatusBadge } from "./VaultStatusBadge";
-import { vaultRowDensityClass } from "./vaultListView";
+import { vaultRowDensityClass } from "../lib/vaultListView";
 
 interface VaultRowProps {
   vault: VaultListItem;

@@ -1,4 +1,4 @@
-import type { VaultWorkspaceState } from "./fileTreeTypes";
+import type { VaultWorkspaceState } from "./lib/fileTreeTypes";
 
 export type FileManagerSurface = "maximized" | "minimized";
 

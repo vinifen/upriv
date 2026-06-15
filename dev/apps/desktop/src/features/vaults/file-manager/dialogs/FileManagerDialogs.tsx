@@ -1,6 +1,6 @@
 import { Button, Modal, Toast } from "@/components/ui";
 import { useTranslation } from "@/i18n";
-import type { FileManagerApi } from "./hooks/useVaultFileManager";
+import type { FileManagerApi } from "../hooks/useVaultFileManager";
 
 interface FileManagerDialogsProps {
   fm: FileManagerApi;

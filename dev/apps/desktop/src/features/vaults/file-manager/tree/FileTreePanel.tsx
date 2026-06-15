@@ -9,9 +9,9 @@ import {
 import { Icon } from "@/components/icons";
 import { useTranslation } from "@/i18n";
 import { getParentPath, findNode, isDescendantPath, joinPath } from "@upriv/shared";
-import type { FileTreeNode } from "./fileTreeTypes";
-import { filesFromDataTransfer, filesFromFileInput, isOsFileDrag } from "./osFileDrop";
-import type { FileManagerApi } from "./hooks/useVaultFileManager";
+import type { FileTreeNode } from "../lib/fileTreeTypes";
+import { filesFromDataTransfer, filesFromFileInput, isOsFileDrag } from "../lib/osFileDrop";
+import type { FileManagerApi } from "../hooks/useVaultFileManager";
 
 interface FileTreePanelProps {
   fm: FileManagerApi;

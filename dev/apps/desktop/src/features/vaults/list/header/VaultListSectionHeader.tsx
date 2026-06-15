@@ -7,7 +7,7 @@ import type {
   VaultListSortMode,
   VaultListViewMode,
 } from "@upriv/shared";
-import { SORT_DIRECTION_ICON, SORT_MODE_ICON, VIEW_MODE_ICON } from "./vaultListToolbarIcons";
+import { SORT_DIRECTION_ICON, SORT_MODE_ICON, VIEW_MODE_ICON } from "../lib/vaultListToolbarIcons";
 
 const SORT_MODES: VaultListSortMode[] = ["order", "name", "state", "last_accessed"];
 const SORT_DIRECTIONS: VaultListSortDirection[] = ["asc", "desc"];

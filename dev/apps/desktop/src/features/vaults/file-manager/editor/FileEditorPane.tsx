@@ -8,8 +8,8 @@ type ReactNode
 } from "react";
 import { useTranslation } from "@/i18n";
 import { fileBaseName } from "@upriv/shared";
-import { filesFromDataTransfer, isOsFileDrag } from "./osFileDrop";
-import type { FileManagerApi } from "./hooks/useVaultFileManager";
+import { filesFromDataTransfer, isOsFileDrag } from "../lib/osFileDrop";
+import type { FileManagerApi } from "../hooks/useVaultFileManager";
 
 interface FileEditorPaneProps {
   fm: FileManagerApi;

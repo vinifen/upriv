@@ -3,7 +3,7 @@ import { Icon } from "@/components/icons";
 import { IconButton } from "@/components/ui";
 import { useAppSettingsContext } from "@/features/system/settings";
 import { useTranslation } from "@/i18n";
-import type { FileManagerEntry } from "./fileManagerTypes";
+import type { FileManagerEntry } from "../fileManagerTypes";
 
 interface FileManagerDockProps {
   entries: readonly FileManagerEntry[];

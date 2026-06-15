@@ -13,7 +13,7 @@ import { exportVaultArchive, type VaultListLifecycleModals } from "@/features/va
 import { vaultBlocksBulkExport } from "@/features/system/settings";
 import { useFileManager } from "@/features/vaults/file-manager";
 import type { I18nKey } from "@/i18n/types";
-import type { RecoveryAction } from "../VaultRecoveryModal";
+import type { RecoveryAction } from "../modals/VaultRecoveryModal";
 import { useVaultAutoClose } from "./useVaultAutoClose";
 import { useVaultPipelineRun } from "./useVaultPipelineRun";
 

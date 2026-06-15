@@ -40,12 +40,12 @@ src/
 │
 ├── features/                # Feature modules grouped by domain
 │   ├── vaults/
-│   │   ├── list/            # Vault list UI + VaultListPage compositor; hooks/
+│   │   ├── list/            # Vault list UI (header/, row/, modals/, lib/) + VaultListPage
 │   │   ├── create/          # Create-vault wizard
-│   │   ├── lifecycle/       # Open/close/seal, recovery, pipeline overlays
+│   │   ├── lifecycle/       # Open/close/seal (modals/, pipeline/) + VaultLifecycleLayer
 │   │   ├── settings/        # VaultSettingsModal + useVaultSettings
 │   │   ├── backups/         # Backup list modal
-│   │   └── file-manager/    # In-vault file tree + editor
+│   │   └── file-manager/    # File tree + editor (shell/, workspace/, tree/, editor/, lib/)
 │   └── system/
 │       ├── refresh/         # useAppRefresh — reload settings, vaults, lifecycle, file manager
 │       ├── settings/        # App settings modal + context
@@ -59,7 +59,6 @@ src/
 │
 ├── i18n/                    # Locale loading, context, `useTranslation`
 ├── theme/                   # Design tokens, vault status → color/i18n mapping
-├── constants/               # Product limits (name length, note max, …)
 ├── lib/tauri/               # `invoke` wrapper + command name constants
 ├── hooks/                   # Shared React hooks
 └── styles/                  # globals.css, CSS variables, fonts
@@ -96,12 +95,36 @@ Each feature folder under `features/vaults/*` and `features/system/*` has **one*
 
 ```text
 features/vaults/list/
-├── index.ts              ← “what leaves this folder”
-├── VaultList.tsx         ← UI (relative imports only)
-├── VaultListPage.tsx       ← home page compositor
-├── hooks/                ← useVaultListState, useVaultListScreen, …
+├── index.ts                 ← “what leaves this folder”
+├── VaultListPage.tsx        ← home page compositor
 ├── vaultListModalsTypes.ts
-└── exportVaultArchive.ts
+├── exportVaultArchive.ts
+├── hooks/                   ← useVaultListState, useVaultListScreen, …
+├── lib/                     ← vaultListView, vaultListToolbarIcons
+├── header/                  ← VaultListHeader, VaultListSectionHeader
+├── row/                     ← VaultList, VaultRow, VaultBlockCard, …
+└── modals/                  ← VaultNoteModal
+
+features/vaults/file-manager/
+├── index.ts
+├── FileManagerContext.tsx   ← provider + multi-vault session state
+├── FileManagerLayer.tsx     ← modal + dock compositor
+├── fileManagerTypes.ts
+├── hooks/                   ← useVaultFileManager
+├── lib/                     ← fileTreeTypes, vaultWorkspaceReducer, osFileDrop, import helpers
+├── shell/                   ← FileManagerModal, FileManagerDock
+├── workspace/               ← FileManagerWorkspace, PaneResizeHandle
+├── tree/                    ← FileTreePanel, FileTreeContextMenu
+├── editor/                  ← FileEditorPane, FileManagerTabBar
+└── dialogs/                 ← FileManagerDialogs
+
+features/vaults/lifecycle/
+├── index.ts
+├── VaultLifecycleLayer.tsx  ← unlock/close/seal + recovery + pipeline compositor
+├── vaultLifecycleTypes.ts
+├── hooks/                   ← useVaultLifecycleActions, useVaultPipelineRun, useVaultAutoClose
+├── modals/                  ← VaultLifecycleModal, VaultRecoveryModal, VaultPasswordHintCallout
+└── pipeline/                ← VaultPipelineOverlay, VaultOpeningOverlay, VaultClosingOverlay
 ```
 
 **Current public APIs** (maintain this table when adding exports)

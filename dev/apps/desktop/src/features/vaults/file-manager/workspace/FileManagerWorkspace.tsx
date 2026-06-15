@@ -1,15 +1,15 @@
 import { useCallback, useRef } from "react";
 import { useMediaQuery } from "@/lib/useMediaQuery";
-import type { FileManagerEntry } from "./fileManagerTypes";
-import { useFileManager } from "./FileManagerContext";
-import { FileEditorPane, hasUnsavedEditableTabs } from "./FileEditorPane";
-import { FileManagerDialogs } from "./FileManagerDialogs";
-import { FileManagerTabBar } from "./FileManagerTabBar";
-import { FileTreeContextMenu } from "./FileTreeContextMenu";
-import { FileTreePanel } from "./FileTreePanel";
+import type { FileManagerEntry } from "../fileManagerTypes";
+import { useFileManager } from "../FileManagerContext";
+import { FileEditorPane, hasUnsavedEditableTabs } from "../editor/FileEditorPane";
+import { FileManagerDialogs } from "../dialogs/FileManagerDialogs";
+import { FileManagerTabBar } from "../editor/FileManagerTabBar";
+import { FileTreeContextMenu } from "../tree/FileTreeContextMenu";
+import { FileTreePanel } from "../tree/FileTreePanel";
 import { PaneResizeHandle } from "./PaneResizeHandle";
 import { percentFromPointer, TREE_SPLIT_DEFAULT_PERCENT } from "@upriv/shared";
-import { useVaultFileManager } from "./hooks/useVaultFileManager";
+import { useVaultFileManager } from "../hooks/useVaultFileManager";
 
 interface FileManagerWorkspaceProps {
   entry: FileManagerEntry;

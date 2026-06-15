@@ -1,9 +1,9 @@
 import type { I18nKey } from "@/i18n/types";
 import type { VaultLifecycleIntent, VaultListItem } from "@upriv/shared";
-import { VaultClosingOverlay } from "./VaultClosingOverlay";
-import { VaultLifecycleModal } from "./VaultLifecycleModal";
-import { VaultOpeningOverlay } from "./VaultOpeningOverlay";
-import { VaultRecoveryModal, type RecoveryAction } from "./VaultRecoveryModal";
+import { VaultClosingOverlay } from "./pipeline/VaultClosingOverlay";
+import { VaultOpeningOverlay } from "./pipeline/VaultOpeningOverlay";
+import { VaultLifecycleModal } from "./modals/VaultLifecycleModal";
+import { VaultRecoveryModal, type RecoveryAction } from "./modals/VaultRecoveryModal";
 
 interface VaultLifecycleLayerProps {
   lifecycleVault: VaultListItem | null;

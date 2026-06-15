@@ -8,9 +8,9 @@ type ReactNode
 } from "react";
 import { useVaultFileSystemService } from "@/platform/services";
 import { resolveVaultDisplayStatus, type VaultListItem } from "@upriv/shared";
-import { createDefaultWorkspaceState } from "./fileTreeTypes";
+import { createDefaultWorkspaceState } from "./lib/fileTreeTypes";
 import type { FileManagerEntry } from "./fileManagerTypes";
-import { vaultWorkspaceReducer, type VaultWorkspaceAction } from "./vaultWorkspaceReducer";
+import { vaultWorkspaceReducer, type VaultWorkspaceAction } from "./lib/vaultWorkspaceReducer";
 
 interface FileManagerState {
   entries: Record<string, FileManagerEntry>;

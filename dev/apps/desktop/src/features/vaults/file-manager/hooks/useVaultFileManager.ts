@@ -12,11 +12,11 @@ import {
   validateFileName,
 } from "@upriv/shared";
 import type { FileManagerEntry } from "../fileManagerTypes";
-import type { VaultWorkspaceAction } from "../vaultWorkspaceReducer";
-import type { DroppedImportFile } from "../osFileDrop";
-import { foldersToExpandOnImport, resolveImportDestination } from "../vaultImportPaths";
-import { readImportFileContent } from "../vaultFileImport";
-import { resolveUnsavedPrompt } from "../vaultWorkspaceReducer";
+import type { VaultWorkspaceAction } from "../lib/vaultWorkspaceReducer";
+import type { DroppedImportFile } from "../lib/osFileDrop";
+import { foldersToExpandOnImport, resolveImportDestination } from "../lib/vaultImportPaths";
+import { readImportFileContent } from "../lib/vaultFileImport";
+import { resolveUnsavedPrompt } from "../lib/vaultWorkspaceReducer";
 
 interface UseVaultFileManagerOptions {
   entry: FileManagerEntry;

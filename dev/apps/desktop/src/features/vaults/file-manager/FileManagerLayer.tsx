@@ -1,8 +1,8 @@
 import { useTranslation } from "@/i18n";
 import { useFileManager } from "./FileManagerContext";
-import { FileManagerDock } from "./FileManagerDock";
-import { FileManagerModal } from "./FileManagerModal";
-import { FileManagerWorkspace } from "./FileManagerWorkspace";
+import { FileManagerDock } from "./shell/FileManagerDock";
+import { FileManagerModal } from "./shell/FileManagerModal";
+import { FileManagerWorkspace } from "./workspace/FileManagerWorkspace";
 
 export function FileManagerLayer() {
   const { t } = useTranslation();

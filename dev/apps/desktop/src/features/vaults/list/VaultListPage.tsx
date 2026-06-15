@@ -8,10 +8,10 @@ import { VaultLifecycleLayer } from "@/features/vaults/lifecycle";
 import { VaultSettingsModal } from "@/features/vaults/settings";
 import { AppShell } from "@/components/layout";
 import { Toast } from "@/components/ui";
-import { VaultList } from "./VaultList";
-import { VaultListHeader } from "./VaultListHeader";
-import { VaultListSectionHeader } from "./VaultListSectionHeader";
-import { VaultNoteModal } from "./VaultNoteModal";
+import { VaultListHeader } from "./header/VaultListHeader";
+import { VaultListSectionHeader } from "./header/VaultListSectionHeader";
+import { VaultNoteModal } from "./modals/VaultNoteModal";
+import { VaultList } from "./row/VaultList";
 import { useVaultListScreen } from "./hooks/useVaultListScreen";
 
 export function VaultListPage() {
