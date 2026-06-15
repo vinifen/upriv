@@ -3,6 +3,7 @@ import type { I18nKey } from "@/i18n";
 import { Modal } from "@/components/ui";
 import { VaultSettingsSection, settingsControlClass } from "@/components/settings";
 import { useTranslation } from "@/i18n";
+import { getAppVersion, APP_PACKAGE_VERSION } from "@/lib/tauri";
 import {
   defaultOpenHelpSections,
   HELP_SECTION_BODY_KEYS,
@@ -21,6 +22,7 @@ export function HelpModal({ open, onClose }: HelpModalProps) {
   const { t } = useTranslation();
   const [query, setQuery] = useState("");
   const [openSections, setOpenSections] = useState<Set<HelpSectionId>>(defaultOpenHelpSections);
+  const [appVersion, setAppVersion] = useState(APP_PACKAGE_VERSION);
 
   const searching = query.trim().length > 0;
 
@@ -28,7 +30,10 @@ export function HelpModal({ open, onClose }: HelpModalProps) {
     if (!open) {
       setQuery("");
       setOpenSections(defaultOpenHelpSections());
+      setAppVersion(APP_PACKAGE_VERSION);
+      return;
     }
+    void getAppVersion().then(setAppVersion);
   }, [open]);
 
   const visibleSections = useMemo(
@@ -51,7 +56,17 @@ export function HelpModal({ open, onClose }: HelpModalProps) {
   if (!open) return null;
 
   return (
-    <Modal open={open} title={t("modal.help.title")} onClose={onClose} panelClassName="max-w-3xl">
+    <Modal
+      open={open}
+      title={t("modal.help.title")}
+      onClose={onClose}
+      panelClassName="max-w-3xl"
+      footer={
+        <p className="text-center font-mono text-xs text-on-surface-variant/80">
+          {t("modal.help.app_version", { version: appVersion })} · {t("app.credit_author")}
+        </p>
+      }
+    >
       <p className="mb-4 text-sm text-on-surface-variant">{t("modal.help.hint")}</p>
 
       <label className="mb-4 block">

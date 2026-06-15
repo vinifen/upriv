@@ -7,6 +7,7 @@
   "app.menu.system_settings": "System settings",
   "app.menu.view_logs": "View logs",
   "app.menu.help": "Help",
+  "app.credit_author": "by ViniciusFn",
 
   "vault.list.title": "Active vaults",
   "vault.list.subtitle": "Unlock to edit; lock or seal to encrypt again.",
@@ -445,6 +446,7 @@
   "modal.help.hint": "Short guides for Upriv. Search filters sections in the current language.",
   "modal.help.search_placeholder": "Search help…",
   "modal.help.search_empty": "No sections match your search.",
+  "modal.help.app_version": "Upriv {version}",
   "modal.help.section.overview": "Overview",
   "modal.help.section.vault_list": "Vault list",
   "modal.help.section.open_close": "Open, close, and seal",

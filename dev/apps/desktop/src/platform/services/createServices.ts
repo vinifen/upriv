@@ -13,6 +13,10 @@ import { mockServices } from "@/platform/mocks";
  *   contracts (`VaultService`, etc.) already avoid mock prefixes.
  */
 export function createServices(): AppServices {
-  void isTauri();
+  // Browser (`npm run dev`) and Tauri (`npm run tauri:dev`) share mock services until
+  // `src-tauri` handlers replace `platform/mocks/` (see SDD §8.2.6).
+  if (isTauri()) {
+    // IPC smoke test: `app_version` is wired in Rust; vault IPC commands are still TODO.
+  }
   return mockServices;
 }

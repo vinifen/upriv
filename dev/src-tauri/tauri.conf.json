@@ -4,9 +4,9 @@
   "version": "0.1.0",
   "identifier": "com.upriv.desktop",
   "build": {
-    "beforeDevCommand": "npm run dev --prefix ../apps/desktop",
+    "beforeDevCommand": "npm run dev --prefix apps/desktop",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm run build --prefix ../apps/desktop",
+    "beforeBuildCommand": "npm run build --prefix apps/desktop",
     "frontendDist": "../apps/desktop/dist"
   },
   "app": {

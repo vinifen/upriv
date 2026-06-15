@@ -3,6 +3,14 @@ import { fileBaseName, findNode, joinPath } from "./treeUtils";
 
 export { findNode } from "./treeUtils";
 
+function cloneFileTreeNode(node: FileTreeNode): FileTreeNode {
+  return {
+    name: node.name,
+    type: node.type,
+    ...(node.children ? { children: node.children.map(cloneFileTreeNode) } : {}),
+  };
+}
+
 export function getParentPath(path: string): string {
   if (path === "/") return "/";
   const segments = path.split("/").filter(Boolean);
@@ -43,7 +51,7 @@ export function addChild(
   parentPath: string,
   child: FileTreeNode,
 ): FileTreeNode {
-  const next = structuredClone(root);
+  const next = cloneFileTreeNode(root);
   const parent = findNode(next, parentPath);
   if (!parent || parent.type !== "folder") return root;
   parent.children = [...(parent.children ?? []), child];
@@ -52,7 +60,7 @@ export function addChild(
 
 export function removeNode(root: FileTreeNode, path: string): FileTreeNode {
   if (path === "/") return root;
-  const next = structuredClone(root);
+  const next = cloneFileTreeNode(root);
   const parentPath = getParentPath(path);
   const parent = findNode(next, parentPath);
   const name = fileBaseName(path);
@@ -63,7 +71,7 @@ export function removeNode(root: FileTreeNode, path: string): FileTreeNode {
 
 export function renameNode(root: FileTreeNode, path: string, newName: string): FileTreeNode {
   if (path === "/") return root;
-  const next = structuredClone(root);
+  const next = cloneFileTreeNode(root);
   const node = findNode(next, path);
   if (!node) return root;
   node.name = newName;
@@ -84,7 +92,7 @@ export function moveNode(root: FileTreeNode, fromPath: string, toFolderPath: str
   if (targetNames.includes(node.name) && getParentPath(fromPath) !== toFolderPath) return root;
 
   let next = removeNode(root, fromPath);
-  next = addChild(next, toFolderPath, structuredClone(node));
+  next = addChild(next, toFolderPath, cloneFileTreeNode(node));
   return next;
 }
 

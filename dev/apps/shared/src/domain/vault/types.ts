@@ -51,11 +51,16 @@ function isDevEnvironment(): boolean {
   return globalDev === true;
 }
 
+function devWarn(message: string): void {
+  const c = (globalThis as { console?: { warn: (msg: string) => void } }).console;
+  c?.warn(message);
+}
+
 /** Dev-only guard for mock seed rows that violate the plain-storage invariant. */
 export function assertPlainVaultInvariant(row: VaultRow): void {
   if (!isDevEnvironment()) return;
   if (row.storageMode === "plain" && row.persistence === "closed" && row.session !== "open") {
-    console.warn(
+    devWarn(
       `[upriv] plain vault "${row.id}" has persistence "closed" while not open — UI shows sealed.`,
     );
   }

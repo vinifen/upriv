@@ -8,12 +8,27 @@ React web UI (Tauri shell). **Presentation only** — vault logic lives in `crat
 cd dev/apps/desktop
 npm install
 npm run dev              # http://localhost:1420 (browser)
-npm run tauri -- dev     # Tauri + WebView
+npm run tauri -- dev     # Tauri + WebView (mock services — same UI)
 npm run build            # typecheck + production bundle
 npm run lint             # ESLint
 npm run format           # Prettier (write)
 npm run format:check     # Prettier (check only)
 ```
+
+### Desktop binary (Tauri)
+
+From `dev/` (Rust workspace root):
+
+```bash
+cd dev/apps/desktop && npm install
+cd ../.. && npm run tauri:build
+```
+
+Artifacts: `dev/src-tauri/target/release/bundle/` (`.deb`, `.AppImage`, etc. on Linux).
+
+**MVP:** UI runs in the WebView with **mock services** (`platform/mocks/`). Only `app_version` IPC is wired (shown in Help when running as Tauri). Vault handlers in `src-tauri` come next (SDD §8.2.6).
+
+**Linux deps:** [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) (webkit2gtk, etc.).
 
 ## Prototype mocks (temporary)
 
