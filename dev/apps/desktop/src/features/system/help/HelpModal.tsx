@@ -1,15 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
+import type { I18nKey } from "@/i18n";
 import { Modal } from "@/components/ui";
+import { VaultSettingsSection, settingsControlClass } from "@/components/settings";
 import { useTranslation } from "@/i18n";
-import { settingsControlClass, VaultSettingsSection } from "@/components/settings";
 import {
   defaultOpenHelpSections,
   HELP_SECTION_BODY_KEYS,
   HELP_SECTIONS,
   helpSectionTitleKey,
+  sectionMatchesQuery,
   type HelpSectionId,
-} from "./helpContent";
-import { sectionMatchesQuery } from "./helpSearch";
+} from "@upriv/shared";
 
 interface HelpModalProps {
   open: boolean;
@@ -31,7 +32,10 @@ export function HelpModal({ open, onClose }: HelpModalProps) {
   }, [open]);
 
   const visibleSections = useMemo(
-    () => HELP_SECTIONS.filter((section) => sectionMatchesQuery(section.id, query, t)),
+    () =>
+      HELP_SECTIONS.filter((section) =>
+        sectionMatchesQuery(section.id, query, (key) => t(key as I18nKey)),
+      ),
     [query, t],
   );
 
@@ -72,14 +76,14 @@ export function HelpModal({ open, onClose }: HelpModalProps) {
           {visibleSections.map((section) => (
             <VaultSettingsSection
               key={section.id}
-              title={t(helpSectionTitleKey(section.id))}
+              title={t(helpSectionTitleKey(section.id) as I18nKey)}
               open={searching ? true : openSections.has(section.id)}
               onOpenChange={searching ? undefined : (next) => toggleSection(section.id, next)}
             >
               <div className="space-y-3">
                 {HELP_SECTION_BODY_KEYS[section.id].map((bodyKey) => (
                   <p key={bodyKey} className="text-sm leading-relaxed text-on-surface-variant">
-                    {t(bodyKey)}
+                    {t(bodyKey as I18nKey)}
                   </p>
                 ))}
               </div>

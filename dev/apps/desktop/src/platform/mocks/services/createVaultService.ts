@@ -10,11 +10,10 @@ export const mockCreateVaultService: CreateVaultService = {
     return password === MOCK_ARCHIVE_PASSWORD;
   },
 
-  getMockImportArchivePath() {
-    return MOCK_IMPORT_ARCHIVE_PATH;
-  },
-
-  getMockImportArchiveFileName() {
-    return MOCK_IMPORT_ARCHIVE_FILE_NAME;
+  selectImportArchiveForProbe() {
+    return {
+      path: MOCK_IMPORT_ARCHIVE_PATH,
+      fileName: MOCK_IMPORT_ARCHIVE_FILE_NAME,
+    };
   },
 };

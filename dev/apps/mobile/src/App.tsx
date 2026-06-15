@@ -7,9 +7,7 @@ export default function App() {
   return (
     <View style={styles.container}>
       <Text style={styles.title}>{en["app.title"]}</Text>
-      <Text style={styles.subtitle}>
-        Mobile scaffold — no features yet.
-      </Text>
+      <Text style={styles.subtitle}>{en["mobile.scaffold.subtitle"]}</Text>
       <StatusBar style="light" />
     </View>
   );

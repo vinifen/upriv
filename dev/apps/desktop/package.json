@@ -14,7 +14,7 @@
     "tauri": "sh -c 'cd ../../src-tauri && npx --prefix ../apps/desktop tauri \"$@\"' --"
   },
   "dependencies": {
-    "@tauri-apps/api": "2.11.0",
+    "@tauri-apps/api": "2.11.2",
     "@upriv/shared": "file:../shared",
     "fflate": "^0.8.2",
     "react": "18.3.1",

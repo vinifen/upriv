@@ -1,5 +1,5 @@
 import type { AppSettingsService } from "@upriv/shared";
-import { DEFAULT_APP_SETTINGS } from "@/platform/mocks/data/appSettings";
+import { DEFAULT_APP_SETTINGS, MOCK_UPRIV_ROOT_PATH } from "@/platform/mocks/data/appSettings";
 
 let runtimeSettings = structuredClone(DEFAULT_APP_SETTINGS);
 
@@ -11,5 +11,9 @@ export const mockAppSettingsService: AppSettingsService = {
 
   async save(config) {
     runtimeSettings = structuredClone(config);
+  },
+
+  getDefaultRootPathSuggestion() {
+    return MOCK_UPRIV_ROOT_PATH;
   },
 };

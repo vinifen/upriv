@@ -8,7 +8,7 @@ type ReactNode
 } from "react";
 import { useVaultFileSystemService } from "@/platform/services";
 import { resolveVaultDisplayStatus, type VaultListItem } from "@upriv/shared";
-import { createDefaultWorkspaceState } from "./lib/fileTreeTypes";
+import { createDefaultWorkspaceState } from "./lib/fileManagerWorkspaceTypes";
 import type { FileManagerEntry } from "./fileManagerTypes";
 import { vaultWorkspaceReducer, type VaultWorkspaceAction } from "./lib/vaultWorkspaceReducer";
 
@@ -74,7 +74,14 @@ function minimizeEntry(state: FileManagerState, vaultId: string): FileManagerSta
   if (!existing) return state;
   return {
     ...state,
-    entries: { ...state.entries, [vaultId]: { ...existing, surface: "minimized" } },
+    entries: {
+      ...state.entries,
+      [vaultId]: {
+        ...existing,
+        surface: "minimized",
+        workspace: { ...existing.workspace, unsavedPrompt: null },
+      },
+    },
     maximizedVaultId: state.maximizedVaultId === vaultId ? null : state.maximizedVaultId,
   };
 }

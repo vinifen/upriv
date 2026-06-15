@@ -1,7 +1,6 @@
 import type { I18nKey } from "@/i18n";
 import type { VaultDisplayStatus } from "@upriv/shared";
 import {
-  brandColors as sharedBrandColors,
   vaultStatusColorVar as sharedVaultStatusColorVar,
   vaultStatusI18nKey as sharedVaultStatusI18nKey,
 } from "@upriv/shared";
@@ -46,6 +45,3 @@ export const vaultStatusIconClass = {
   closing: "bg-surface-container-highest text-on-surface-variant",
   opening: "bg-surface-container-highest text-on-surface-variant",
 } as const satisfies Record<VaultDisplayStatus, string>;
-
-/** Brand wordmark variants (SDD §8.2.1). */
-export const brandColors = sharedBrandColors;

@@ -9,6 +9,7 @@ import {
   type ParsedLogLine,
 } from "@upriv/shared";
 import { useTranslation } from "@/i18n";
+import { useToast } from "@/hooks/useToast";
 import { downloadLogsZip } from "./downloadLogsZip";
 import { logLevelClass } from "./logFormat";
 import { useAppLogs } from "./hooks/useAppLogs";
@@ -23,6 +24,7 @@ interface LogsModalProps {
 
 export function LogsModal({ open, onClose }: LogsModalProps) {
   const { locale, t } = useTranslation();
+  const { show: showToast } = useToast();
   const { files, deleteFiles, getFile } = useAppLogs(open);
 
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
@@ -30,7 +32,13 @@ export function LogsModal({ open, onClose }: LogsModalProps) {
   const [deleteTargets, setDeleteTargets] = useState<string[] | null>(null);
 
   const allFilenames = useMemo(() => files.map((entry) => entry.filename), [files]);
-  const allSelected = files.length > 0 && allFilenames.every((filename) => selected.has(filename));
+  const selectableFilenames = useMemo(
+    () => files.filter((entry) => !entry.isCurrent).map((entry) => entry.filename),
+    [files],
+  );
+  const allSelected =
+    selectableFilenames.length > 0 &&
+    selectableFilenames.every((filename) => selected.has(filename));
   const someSelected = selected.size > 0;
   const activeFile = activeFilename ? getFile(activeFilename) : undefined;
 
@@ -66,6 +74,8 @@ export function LogsModal({ open, onClose }: LogsModalProps) {
   };
 
   const toggleSelected = (filename: string) => {
+    const entry = files.find((item) => item.filename === filename);
+    if (entry?.isCurrent) return;
     setSelected((current) => {
       const next = new Set(current);
       if (next.has(filename)) next.delete(filename);
@@ -79,26 +89,33 @@ export function LogsModal({ open, onClose }: LogsModalProps) {
       setSelected(new Set());
       return;
     }
-    setSelected(new Set(allFilenames));
+    setSelected(new Set(selectableFilenames));
   };
 
   const beginDelete = (filenames: string[]) => {
-    if (filenames.length === 0) return;
-    setDeleteTargets(filenames);
+    const targets = filenames.filter(
+      (filename) => !files.find((entry) => entry.filename === filename)?.isCurrent,
+    );
+    if (targets.length === 0) return;
+    setDeleteTargets(targets);
   };
 
-  const handleConfirmDelete = () => {
+  const handleConfirmDelete = async () => {
     if (!deleteTargets) return;
-    void deleteFiles(deleteTargets);
-    setSelected((current) => {
-      const next = new Set(current);
-      for (const filename of deleteTargets) next.delete(filename);
-      return next;
-    });
-    if (activeFilename && deleteTargets.includes(activeFilename)) {
-      setActiveFilename(null);
+    try {
+      await deleteFiles(deleteTargets);
+      setSelected((current) => {
+        const next = new Set(current);
+        for (const filename of deleteTargets) next.delete(filename);
+        return next;
+      });
+      if (activeFilename && deleteTargets.includes(activeFilename)) {
+        setActiveFilename(null);
+      }
+      setDeleteTargets(null);
+    } catch {
+      showToast(t("toast.logs_delete_failed"));
     }
-    setDeleteTargets(null);
   };
 
   const handleDownload = () => {
@@ -193,7 +210,9 @@ export function LogsModal({ open, onClose }: LogsModalProps) {
                   variant="danger"
                   size="sm"
                   className="w-full sm:w-auto"
-                  onClick={handleConfirmDelete}
+                  onClick={() => {
+                    void handleConfirmDelete();
+                  }}
                 >
                   {t("action.delete")}
                 </Button>
@@ -307,7 +326,7 @@ function LogFileRow({
         id={checkboxId}
         type="checkbox"
         checked={checked}
-        disabled={selectionDisabled}
+        disabled={selectionDisabled || entry.isCurrent}
         onChange={onToggleSelected}
         className={[logCheckboxClass, "disabled:opacity-40"].join(" ")}
       />
@@ -359,6 +378,7 @@ function LogFileRow({
   );
 }
 
+/** Renders the full log file in the DOM — acceptable for a debug tool; redact before shipping real logs. */
 function LogFileViewer({ file }: { file: AppLogFile }) {
   const lines = useMemo(() => file.content.trimEnd().split("\n").map(parseLogLine), [file.content]);
 

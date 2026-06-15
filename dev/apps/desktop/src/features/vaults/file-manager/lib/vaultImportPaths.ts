@@ -1,7 +1,3 @@
-import { foldersToExpandOnImport, resolveImportDestination } from "@upriv/shared";
-
-export { foldersToExpandOnImport, resolveImportDestination };
-
 /** Browser-only: `File.webkitRelativePath` from folder drag or input. */
 export function relativePathFromImportFile(file: File): string {
   const relative = file.webkitRelativePath?.trim();

@@ -67,6 +67,7 @@ export function VaultSettingsModal({
   const [deleteConfirm, setDeleteConfirm] = useState("");
   const confirmInputId = useId();
   const savedHideRef = useRef<ReturnType<typeof setTimeout>>();
+  const openedForVaultRef = useRef<string | null>(null);
   const encryptedClosePreferenceRef = useRef<CloseDefaultAction>("close");
 
   const canConfirmDelete = vault !== null && deleteConfirm.trim() === vault.id;
@@ -77,18 +78,24 @@ export function VaultSettingsModal({
   );
 
   useEffect(() => {
-    if (config) {
-      const normalized = normalizeClosePolicyForStorage(config);
-      setDraft(normalized);
-      if (config.storage.mode === "encrypted_dir") {
-        encryptedClosePreferenceRef.current = config.close.default_action;
-      }
+    if (!open) return;
+    if (!config || !vaultId) return;
+
+    const isNewSession = openedForVaultRef.current !== vaultId;
+    if (!isNewSession) return;
+
+    openedForVaultRef.current = vaultId;
+    const normalized = normalizeClosePolicyForStorage(config);
+    setDraft(normalized);
+    if (config.storage.mode === "encrypted_dir") {
+      encryptedClosePreferenceRef.current = config.close.default_action;
     }
-  }, [config]);
+  }, [open, vaultId, config]);
 
   useEffect(() => {
     if (!open) {
       setDraft(null);
+      openedForVaultRef.current = null;
       setSaveConfirmOpen(false);
       setDiscardConfirmOpen(false);
       setSavedVisible(false);
@@ -110,6 +117,7 @@ export function VaultSettingsModal({
       if (!vaultId) return;
       const normalized = normalizeClosePolicyForStorage(next);
       replaceConfig(normalized);
+      setDraft(normalized);
       void vaultService.registerSettings(vaultId, normalized);
       onVaultSettingsSaved?.(vaultId, vaultSettingsToListPatch(normalized));
       setSavedVisible(true);

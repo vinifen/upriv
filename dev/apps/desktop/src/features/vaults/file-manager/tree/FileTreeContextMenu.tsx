@@ -2,7 +2,7 @@ import { createPortal } from "react-dom";
 import { menuItemClass, menuPanelClass } from "@/components/ui/menuStyles";
 import { useTranslation } from "@/i18n";
 import { findNode } from "@upriv/shared";
-import type { FileTreeNode } from "../lib/fileTreeTypes";
+import type { FileTreeNode } from "@upriv/shared";
 import type { FileManagerApi } from "../hooks/useVaultFileManager";
 
 interface FileTreeContextMenuProps {

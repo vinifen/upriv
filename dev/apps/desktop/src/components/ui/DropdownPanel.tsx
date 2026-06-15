@@ -165,15 +165,3 @@ export function MenuPanelOption({ selected = false, label, icon, onSelect }: Men
     </li>
   );
 }
-
-interface MenuPanelHintProps {
-  children: ReactNode;
-}
-
-export function MenuPanelHint({ children }: MenuPanelHintProps) {
-  return (
-    <p className="border-t border-outline-variant/15 px-4 py-2.5 text-xs leading-snug text-on-surface-variant">
-      {children}
-    </p>
-  );
-}

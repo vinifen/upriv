@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 import { VAULT_DISPLAY_NAME_MAX_LENGTH } from "@upriv/shared";
 import { useVaultFileSystemService } from "@/platform/services";
 import { useToast } from "@/hooks/useToast";
@@ -14,16 +14,21 @@ import {
 import type { FileManagerEntry } from "../fileManagerTypes";
 import type { VaultWorkspaceAction } from "../lib/vaultWorkspaceReducer";
 import type { DroppedImportFile } from "../lib/osFileDrop";
-import { foldersToExpandOnImport, resolveImportDestination } from "../lib/vaultImportPaths";
+import { foldersToExpandOnImport, resolveImportDestination } from "@upriv/shared";
 import { readImportFileContent } from "../lib/vaultFileImport";
 import { resolveUnsavedPrompt } from "../lib/vaultWorkspaceReducer";
 
 interface UseVaultFileManagerOptions {
   entry: FileManagerEntry;
   dispatch: (action: VaultWorkspaceAction) => void;
+  onDismissConfirmed?: () => void;
 }
 
-export function useVaultFileManager({ entry, dispatch }: UseVaultFileManagerOptions) {
+export function useVaultFileManager({
+  entry,
+  dispatch,
+  onDismissConfirmed,
+}: UseVaultFileManagerOptions) {
   const { t } = useTranslation();
   const fs = useVaultFileSystemService();
   const vaultId = entry.vaultId;
@@ -244,23 +249,67 @@ export function useVaultFileManager({ entry, dispatch }: UseVaultFileManagerOpti
   );
 
   const confirmUnsaved = useCallback(() => {
-    if (!workspace.unsavedPrompt) return;
-    dispatch({
-      type: "discard_unsaved_and",
-      next: resolveUnsavedPrompt(workspace, workspace.unsavedPrompt),
-    });
-  }, [dispatch, workspace]);
+    const prompt = workspace.unsavedPrompt;
+    if (!prompt) return;
+
+    switch (prompt.type) {
+      case "close_tab":
+        dispatch({
+          type: "discard_unsaved_and",
+          next: { type: "close_tab", path: prompt.path },
+        });
+        return;
+      case "switch_tab":
+        dispatch({
+          type: "discard_unsaved_and",
+          next: { type: "request_active_tab", path: prompt.toPath },
+        });
+        return;
+      case "dismiss_workspace":
+        dispatch({
+          type: "discard_unsaved_and",
+          next: { type: "set_unsaved_prompt", prompt: null },
+        });
+        onDismissConfirmed?.();
+        return;
+    }
+  }, [dispatch, onDismissConfirmed, workspace.unsavedPrompt]);
 
   const confirmSaveUnsaved = useCallback(() => {
     const prompt = workspace.unsavedPrompt;
     if (!prompt) return;
-    saveFile(prompt.path);
-    dispatch(resolveUnsavedPrompt(workspace, prompt));
-  }, [dispatch, saveFile, workspace]);
+
+    switch (prompt.type) {
+      case "close_tab":
+        saveFile(prompt.path);
+        dispatch({
+          type: "discard_unsaved_and",
+          next: resolveUnsavedPrompt(workspace, prompt),
+        });
+        return;
+      case "switch_tab":
+        if (workspace.activeTabPath) saveFile(workspace.activeTabPath);
+        dispatch({
+          type: "discard_unsaved_and",
+          next: resolveUnsavedPrompt(workspace, prompt),
+        });
+        return;
+      case "dismiss_workspace":
+        saveAllFiles();
+        dispatch({
+          type: "discard_unsaved_and",
+          next: resolveUnsavedPrompt(workspace, prompt),
+        });
+        onDismissConfirmed?.();
+        return;
+    }
+  }, [dispatch, onDismissConfirmed, saveAllFiles, saveFile, workspace]);
+
+  const tree = useMemo(() => fs.getFileTree(vaultId), [fs, vaultId, workspace.treeRevision]);
 
   return {
     vaultId,
-    tree: fs.getFileTree(vaultId),
+    tree,
     workspace,
     getEditorContent,
     isFileEditable: (path: string) => fs.isFileEditable(vaultId, path),

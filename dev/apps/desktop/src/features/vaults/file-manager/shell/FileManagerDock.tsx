@@ -32,7 +32,7 @@ export function FileManagerDock({
     focusedVaultId ?? maximizedVaultId ?? (entries.length === 1 ? entries[0].vaultId : null);
 
   const toggleExpanded = () => {
-    patchSettings({ ui: { file_manager_dock_expanded: !expanded } });
+    void patchSettings({ ui: { file_manager_dock_expanded: !expanded } });
   };
 
   const handleEntryClick = (vaultId: string) => {

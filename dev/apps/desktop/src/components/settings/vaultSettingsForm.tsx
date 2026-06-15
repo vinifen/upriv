@@ -19,10 +19,6 @@ import {
 export const settingsControlClass =
   "w-full rounded-lg border-0 bg-surface-container-highest px-2.5 py-2 text-sm text-on-surface outline-none ring-0 focus:ring-2 focus:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-60 sm:px-3 sm:py-2.5";
 
-/** Native radio inside policy cards — accent only when checked (dot), neutral border otherwise. */
-export const settingsRadioInputClass =
-  "mt-0.5 h-4 w-4 shrink-0 border border-outline-variant text-accent focus:ring-0 focus-visible:ring-0";
-
 interface SettingsFieldProps {
   label: string;
   hint?: string;
@@ -276,6 +272,11 @@ export function VaultSettingsCloseSection({
           {t("modal.settings.field.auto_close.enabled")}
         </span>
       </label>
+      {storageMode === "plain" && autoClose.enabled ? (
+        <p className="text-xs leading-relaxed text-on-surface-variant">
+          {t("modal.settings.field.auto_close.plain_seals")}
+        </p>
+      ) : null}
       {autoClose.enabled ? (
         <div className="grid gap-4 sm:grid-cols-2">
           <SettingsField label={t("modal.settings.field.auto_close.idle_minutes")} htmlFor={idleId}>

@@ -1,21 +1,4 @@
-import {
-  type VaultFileContent,
-  type VaultFileLanguage,
-  TREE_SPLIT_DEFAULT_PERCENT,
-} from "@upriv/shared";
-
-export type {
-  FileTreeNode,
-  FileTreeNodeType,
-  VaultFileContent,
-  VaultFileLanguage,
-} from "@upriv/shared";
-
-/** @deprecated Use VaultFileLanguage from `@upriv/shared` */
-export type MockFileLanguage = VaultFileLanguage;
-
-/** @deprecated Use VaultFileContent from `@upriv/shared` */
-export type MockFileContent = VaultFileContent;
+import { TREE_SPLIT_DEFAULT_PERCENT } from "@upriv/shared";
 
 export interface FileContextMenuState {
   x: number;
@@ -29,7 +12,10 @@ export interface FileDeleteTarget {
   isFolder: boolean;
 }
 
-export type UnsavedPromptAction = { type: "close_tab"; path: string };
+export type UnsavedPromptAction =
+  | { type: "close_tab"; path: string }
+  | { type: "switch_tab"; toPath: string }
+  | { type: "dismiss_workspace" };
 
 export interface VaultWorkspaceState {
   expandedPaths: string[];
@@ -69,4 +55,8 @@ export function createDefaultWorkspaceState(): VaultWorkspaceState {
 
 export function isPathDirty(state: VaultWorkspaceState, path: string): boolean {
   return state.dirtyPaths.includes(path);
+}
+
+export function hasUnsavedWorkspaceChanges(state: VaultWorkspaceState): boolean {
+  return state.dirtyPaths.length > 0;
 }

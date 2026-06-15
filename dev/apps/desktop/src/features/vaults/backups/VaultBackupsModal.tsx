@@ -9,6 +9,7 @@ import {
   type VaultListItem,
 } from "@upriv/shared";
 import { useTranslation } from "@/i18n";
+import { useToast } from "@/hooks/useToast";
 import { downloadBackupsZip } from "./downloadBackupsZip";
 import { useVaultBackups } from "./hooks/useVaultBackups";
 
@@ -35,9 +36,13 @@ export function VaultBackupsModal({
   onCreateVaultFromBackup,
 }: VaultBackupsModalProps) {
   const { locale, t } = useTranslation();
+  const { show: showToast } = useToast();
   const backupService = useBackupService();
   const vaultId = vault?.id ?? null;
-  const { backups, deleteBackups, promoteToSave } = useVaultBackups(vaultId, open);
+  const { backups, deleteBackups, promoteToSave, isLoading, isBusy, error } = useVaultBackups(
+    vaultId,
+    open,
+  );
 
   const savedBackups = useMemo(() => backups.filter((entry) => entry.saved), [backups]);
   const standardBackups = useMemo(() => backups.filter((entry) => !entry.saved), [backups]);
@@ -118,14 +123,26 @@ export function VaultBackupsModal({
 
   const handleConfirmDelete = () => {
     if (!deleteTargets || !canConfirmDelete) return;
-    void deleteBackups(deleteTargets);
-    setSelected((current) => {
-      const next = new Set(current);
-      for (const filename of deleteTargets) next.delete(filename);
-      return next;
+    const targets = deleteTargets;
+    void deleteBackups(targets)
+      .then(() => {
+        setSelected((current) => {
+          const next = new Set(current);
+          for (const filename of targets) next.delete(filename);
+          return next;
+        });
+        setDeleteTargets(null);
+        setConfirmText("");
+      })
+      .catch(() => {
+        showToast(t("toast.backup_delete_failed"));
+      });
+  };
+
+  const handlePromoteToSave = (filename: string) => {
+    void promoteToSave(filename).catch(() => {
+      showToast(t("toast.backup_promote_failed"));
     });
-    setDeleteTargets(null);
-    setConfirmText("");
   };
 
   const handleDownload = () => {
@@ -159,7 +176,15 @@ export function VaultBackupsModal({
     >
       <p className="mb-4 text-sm text-on-surface-variant">{t("modal.backup.hint")}</p>
 
-      {backups.length === 0 ? (
+      {isLoading ? (
+        <p className="py-10 text-center font-mono text-sm text-on-surface-variant">
+          {t("modal.backup.loading")}
+        </p>
+      ) : error ? (
+        <p className="py-10 text-center text-sm text-on-error-container">
+          {t("modal.backup.load_failed")}
+        </p>
+      ) : backups.length === 0 ? (
         <p className="py-10 text-center font-mono text-sm text-on-surface-variant">
           {t("modal.backup.empty")}
         </p>
@@ -202,7 +227,7 @@ export function VaultBackupsModal({
               onDownload={handleDownloadOne}
               onDelete={(filename) => beginDelete([filename])}
               onCreateVaultFromBackup={onCreateVaultFromBackup}
-              onPromoteToSave={promoteToSave}
+              onPromoteToSave={handlePromoteToSave}
             />
           </div>
         </>
@@ -237,7 +262,7 @@ export function VaultBackupsModal({
             <Button
               variant="danger"
               size="sm"
-              disabled={!canConfirmDelete}
+              disabled={!canConfirmDelete || isBusy}
               onClick={handleConfirmDelete}
             >
               {t("action.delete")}

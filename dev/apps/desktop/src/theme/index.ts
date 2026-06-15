@@ -1,5 +1,4 @@
 export {
-  brandColors,
   vaultStatusBadgeClass,
   vaultStatusColorVar,
   vaultStatusI18nKey,

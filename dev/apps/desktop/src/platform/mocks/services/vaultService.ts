@@ -1,4 +1,5 @@
 import type { VaultListItem, VaultService } from "@upriv/shared";
+import { getMockVaultArchiveBytes } from "@/platform/mocks/data/vaultArchive";
 import { MOCK_VAULTS } from "@/platform/mocks/data/vaults";
 import {
   getMockVaultSettings,
@@ -29,5 +30,9 @@ export const mockVaultService: VaultService = {
 
   async unregisterSettings(vaultId) {
     unregisterMockVaultSettings(vaultId);
+  },
+
+  async getArchiveExportBytes(vault) {
+    return getMockVaultArchiveBytes(vault);
   },
 };

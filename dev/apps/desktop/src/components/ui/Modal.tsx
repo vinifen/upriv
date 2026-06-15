@@ -1,5 +1,6 @@
 import { type ReactNode, useEffect, useId } from "react";
 import { createPortal } from "react-dom";
+import { useTranslation } from "@/i18n";
 import { Button, type ButtonProps } from "./Button";
 
 const modalChromeButtonClass =
@@ -27,6 +28,8 @@ export interface ModalProps {
   headerActions?: ReactNode;
   /** Panel width utility (default `max-w-lg`). */
   panelClassName?: string;
+  /** Stacking above other overlays (default `z-[100]`). */
+  rootClassName?: string;
 }
 
 export function Modal({
@@ -37,7 +40,9 @@ export function Modal({
   footer,
   headerActions,
   panelClassName = "max-w-lg",
+  rootClassName = "z-[100]",
 }: ModalProps) {
+  const { t } = useTranslation();
   const titleId = useId();
 
   useEffect(() => {
@@ -63,7 +68,7 @@ export function Modal({
   if (!open) return null;
 
   return createPortal(
-    <div className="fixed inset-0 z-[100]">
+    <div className={["fixed inset-0", rootClassName].join(" ")}>
       <div
         className="absolute inset-0 bg-[var(--modal-scrim)] backdrop-blur-sm"
         aria-hidden
@@ -93,7 +98,7 @@ export function Modal({
             </h2>
             <div className="flex shrink-0 items-center gap-1">
               {headerActions}
-              <ModalChromeButton onClick={onClose} aria-label="Close">
+              <ModalChromeButton onClick={onClose} aria-label={t("action.close")}>
                 ×
               </ModalChromeButton>
             </div>

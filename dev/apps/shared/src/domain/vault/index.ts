@@ -10,8 +10,12 @@ export {
   resolveVaultDisplayStatus,
   resolveVaultListStatus,
 } from "./types";
-export type { VaultLifecycleIntent } from "./lifecycle";
-export { requiresPasswordForLifecycle } from "./lifecycle";
+export type { VaultLifecycleIntent, VaultLifecycleRequest } from "./lifecycle";
+export {
+  canRunIdleAutoClose,
+  requiresPasswordForLifecycle,
+  resolveIdleAutoCloseIntent,
+} from "./lifecycle";
 export {
   VAULT_DISPLAY_NAME_MAX_LENGTH,
   VAULT_NOTE_MAX_LENGTH,

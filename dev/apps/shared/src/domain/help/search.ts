@@ -1,5 +1,6 @@
 import { HELP_SECTION_BODY_KEYS, helpSectionTitleKey, type HelpSectionId } from "./content";
 
+/** Client-side search over static help copy — keep help content free of real paths/secrets in production. */
 type Translate = (key: string) => string;
 
 function normalize(text: string): string {

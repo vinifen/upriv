@@ -7,10 +7,8 @@ import {
   vaultArchiveZipEntryPath,
   vaultBlocksBulkExport,
 } from "@upriv/shared";
-import { getMockVaultArchiveBytes } from "@/platform/mocks/data/vaultArchive";
 
 export {
-  getMockVaultArchiveBytes,
   listVaultsBlockingBulkExport,
   listVaultsReadyForBulkExport,
   vaultArchiveFilename,
@@ -18,14 +16,19 @@ export {
   vaultBlocksBulkExport,
 };
 
-export function downloadVaultsZip(vaults: readonly VaultRow[], zipFilename: string): void {
+export async function downloadVaultsZip(
+  vaults: readonly VaultRow[],
+  zipFilename: string,
+  getArchiveBytes: (vault: VaultRow) => Promise<Uint8Array>,
+): Promise<void> {
   if (vaults.length === 0) return;
 
-  downloadFilesAsZip(
-    vaults.map((vault) => ({
+  const files = await Promise.all(
+    vaults.map(async (vault) => ({
       filename: vaultArchiveZipEntryPath(vault),
-      data: getMockVaultArchiveBytes(vault),
+      data: await getArchiveBytes(vault),
     })),
-    zipFilename,
   );
+
+  downloadFilesAsZip(files, zipFilename);
 }

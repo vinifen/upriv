@@ -23,7 +23,7 @@ import {
   normalizeAppSettings,
   type AppSettingsConfig,
   type AppSettingsSectionId,
-} from "./appSettingsTypes";
+} from "@upriv/shared";
 
 const SAVED_INDICATOR_MS = 1500;
 
@@ -43,6 +43,7 @@ export function AppSettingsModal({ open, onClose, vaults }: AppSettingsModalProp
   const [discardConfirmOpen, setDiscardConfirmOpen] = useState(false);
   const [savedVisible, setSavedVisible] = useState(false);
   const savedHideRef = useRef<ReturnType<typeof setTimeout>>();
+  const openedSessionRef = useRef(false);
 
   const isDirty = useMemo(
     () => Boolean(draft && !appSettingsEqual(draft, settings)),
@@ -50,11 +51,15 @@ export function AppSettingsModal({ open, onClose, vaults }: AppSettingsModalProp
   );
 
   useEffect(() => {
-    if (open) setDraft(settings);
+    if (!open) return;
+    if (openedSessionRef.current) return;
+    openedSessionRef.current = true;
+    setDraft(settings);
   }, [open, settings]);
 
   useEffect(() => {
     if (!open) {
+      openedSessionRef.current = false;
       setDraft(null);
       setSaveConfirmOpen(false);
       setDiscardConfirmOpen(false);
@@ -122,11 +127,18 @@ export function AppSettingsModal({ open, onClose, vaults }: AppSettingsModalProp
 
   const handleConfirmSave = () => {
     if (!draft || !isDirty) return;
-    replaceSettings(normalizeAppSettings(draft));
-    setSavedVisible(true);
-    clearTimeout(savedHideRef.current);
-    savedHideRef.current = setTimeout(() => setSavedVisible(false), SAVED_INDICATOR_MS);
-    setSaveConfirmOpen(false);
+    const normalized = normalizeAppSettings(draft);
+    void replaceSettings(normalized)
+      .then(() => {
+        setDraft(normalized);
+        setSavedVisible(true);
+        clearTimeout(savedHideRef.current);
+        savedHideRef.current = setTimeout(() => setSavedVisible(false), SAVED_INDICATOR_MS);
+        setSaveConfirmOpen(false);
+      })
+      .catch(() => {
+        setSaveConfirmOpen(false);
+      });
   };
 
   const formConfig = draft ?? settings;

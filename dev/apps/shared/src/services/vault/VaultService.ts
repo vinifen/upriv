@@ -1,5 +1,6 @@
 import type { VaultListItem } from "../../domain/vault-list";
 import type { VaultSettingsConfig } from "../../domain/vault-settings";
+import type { VaultRow } from "../../domain/vault";
 
 /** Vault list and per-vault config access (mock or Tauri). */
 export interface VaultService {
@@ -14,4 +15,7 @@ export interface VaultService {
 
   /** Remove settings on vault delete. */
   unregisterSettings(vaultId: string): Promise<void>;
+
+  /** Export bytes for `{display_name}.7z` (mock or Tauri read). */
+  getArchiveExportBytes(vault: VaultRow): Promise<Uint8Array>;
 }

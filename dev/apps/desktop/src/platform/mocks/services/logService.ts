@@ -18,8 +18,15 @@ export const mockLogService: LogService = {
 
   async deleteFiles(filenames) {
     if (filenames.length === 0) return;
+    const current = files();
+    const blocked = filenames.filter((filename) =>
+      current.some((entry) => entry.filename === filename && entry.isCurrent),
+    );
+    if (blocked.length > 0) {
+      throw new Error("cannot_delete_current_log");
+    }
     const remove = new Set(filenames);
-    runtimeFiles = files().filter((entry) => !remove.has(entry.filename));
+    runtimeFiles = current.filter((entry) => !remove.has(entry.filename));
   },
 
   async getFile(filename) {

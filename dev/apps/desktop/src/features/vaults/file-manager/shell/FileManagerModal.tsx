@@ -9,6 +9,8 @@ interface FileManagerModalProps {
   title: string;
   onMinimize: () => void;
   onDismiss: () => void;
+  /** When true, Escape and backdrop click do not minimize (unsaved dialog is active). */
+  suspendMinimize?: boolean;
   children: ReactNode;
 }
 
@@ -17,6 +19,7 @@ export function FileManagerModal({
   title,
   onMinimize,
   onDismiss,
+  suspendMinimize = false,
   children,
 }: FileManagerModalProps) {
   const { t } = useTranslation();
@@ -25,11 +28,14 @@ export function FileManagerModal({
   useEffect(() => {
     if (!open) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onMinimize();
+      if (event.key === "Escape") {
+        if (suspendMinimize) return;
+        onMinimize();
+      }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [open, onMinimize]);
+  }, [open, onMinimize, suspendMinimize]);
 
   useEffect(() => {
     if (!open) return;
@@ -47,7 +53,7 @@ export function FileManagerModal({
       <div
         className="absolute inset-0 bg-[var(--modal-scrim)] backdrop-blur-sm"
         aria-hidden
-        onClick={onMinimize}
+        onClick={suspendMinimize ? undefined : onMinimize}
       />
       <div className="pointer-events-none relative z-10 flex h-[100dvh] w-full items-center justify-center p-0 sm:h-full">
         <div

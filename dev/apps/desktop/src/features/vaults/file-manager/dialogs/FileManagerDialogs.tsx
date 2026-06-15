@@ -10,6 +10,7 @@ export function FileManagerDialogs({ fm }: FileManagerDialogsProps) {
   const { t } = useTranslation();
   const deleteTarget = fm.workspace.deleteTarget;
   const unsavedPrompt = fm.workspace.unsavedPrompt;
+  const isDismissWorkspacePrompt = unsavedPrompt?.type === "dismiss_workspace";
 
   return (
     <>
@@ -18,6 +19,7 @@ export function FileManagerDialogs({ fm }: FileManagerDialogsProps) {
         title={t("modal.file_manager.delete.title")}
         onClose={() => fm.dispatch({ type: "set_delete_target", target: null })}
         panelClassName="max-w-md"
+        rootClassName="z-[120]"
         footer={
           <div className="flex flex-wrap justify-end gap-2">
             <Button
@@ -47,6 +49,7 @@ export function FileManagerDialogs({ fm }: FileManagerDialogsProps) {
         title={t("modal.file_manager.unsaved.title")}
         onClose={() => fm.dispatch({ type: "set_unsaved_prompt", prompt: null })}
         panelClassName="max-w-md"
+        rootClassName="z-[120]"
         footer={
           <div className="flex flex-wrap justify-end gap-2">
             <Button
@@ -57,16 +60,22 @@ export function FileManagerDialogs({ fm }: FileManagerDialogsProps) {
               {t("action.cancel")}
             </Button>
             <Button variant="danger" size="sm" onClick={fm.confirmUnsaved}>
-              {t("modal.file_manager.unsaved.discard")}
+              {isDismissWorkspacePrompt
+                ? t("modal.file_manager.unsaved.discard_all")
+                : t("modal.file_manager.unsaved.discard")}
             </Button>
             <Button variant="primary" size="sm" onClick={fm.confirmSaveUnsaved}>
-              {t("modal.file_manager.unsaved.save_and_close")}
+              {isDismissWorkspacePrompt
+                ? t("modal.file_manager.unsaved.save_all")
+                : t("modal.file_manager.unsaved.save_and_close")}
             </Button>
           </div>
         }
       >
         <p className="text-sm leading-relaxed text-on-surface-variant">
-          {t("modal.file_manager.unsaved.body")}
+          {isDismissWorkspacePrompt
+            ? t("modal.file_manager.unsaved.workspace_body")
+            : t("modal.file_manager.unsaved.body")}
         </p>
       </Modal>
 

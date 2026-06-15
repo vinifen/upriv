@@ -15,9 +15,11 @@ npm run format           # Prettier (write)
 npm run format:check     # Prettier (check only)
 ```
 
-## Mock demo passwords (prototype only)
+## Prototype mocks (temporary)
 
-Until Tauri wires real crypto, unlock/close modals accept **any non-empty password** except the literal `wrong` (used to simulate failure in the change-password panel). Vaults that start **open** in `MOCK_VAULTS` are pre-seeded with `demo`. Hidden vault **Finance 2025** shows password hint _Q4 spreadsheet_ in the unlock modal (from `mockVaultSettings`).
+`platform/mocks/` backs all services via `createServices()` until Tauri handlers exist. **Future work:** delete that folder and rename remaining `mock*` / `getMock*` / `MOCK_*` symbols to neutral platform names (details in `src/platform/mocks/README.md`).
+
+Until real crypto is wired, unlock/close use prototype validation in `validateMockLifecyclePassword` (min 4 chars; `"wrong"` simulates failure). Hidden vault **Finance 2025** shows password hint _Q4 spreadsheet_ in the unlock modal.
 
 ## Source layout
 
@@ -25,14 +27,13 @@ Until Tauri wires real crypto, unlock/close modals accept **any non-empty passwo
 ../shared/                   # @upriv/shared — domain types + service interfaces (desktop + mobile)
 src/
 ├── main.tsx                 # Entry — mounts App, loads global styles
-├── App.tsx                  # Root component (providers + home screen)
+├── App.tsx                  # Root component (providers + vault list page)
 │
-├── app/                     # App shell: providers, top-level screens
-│   ├── AppProviders.tsx     # Services, app settings, i18n, file manager
-│   └── HomeScreen.tsx       # Home / vault list route
+├── app/                     # App shell: providers
+│   └── AppProviders.tsx     # Services → AppSettings (+ I18n inside) → file manager
 │
 ├── platform/                # Desktop-only adapters
-│   ├── mocks/               # Prototype data + mock services (delete with Tauri)
+│   ├── mocks/               # Prototype data + mock services — remove entirely when Tauri is wired
 │   │   ├── data/            # Static fixtures (vaults, logs, settings defaults)
 │   │   ├── stores/          # In-memory state (file tree, settings registry)
 │   │   └── services/        # AppServices mock implementations
@@ -54,8 +55,12 @@ src/
 │
 ├── components/
 │   ├── ui/                  # Reusable primitives (Button, Modal, StatusDot, …)
+│   ├── icons/               # Icon component + SVG assets
+│   ├── brand/               # UprivWordmark (theme prop from feature layer)
 │   ├── settings/            # Shared settings form kit (sections, fields, password panel)
 │   └── layout/              # AppShell, AppHeader, CenteredPanel
+│
+├── app/index.ts             # Re-exports AppProviders
 │
 ├── i18n/                    # Locale loading, context, `useTranslation`
 ├── theme/                   # Design tokens, vault status → color/i18n mapping
@@ -75,6 +80,7 @@ src/
 | Service layer       | `platform/services/` — factory + React context; mocks in `platform/mocks/`                    |
 | App layout          | `AppShell` + `VaultListHeader` on the vault list home screen                                  |
 | Feature UI          | `features/vaults/*` or `features/system/*`; compose `components/ui` and `components/settings` |
+| Hook naming         | `useVault*` for vault features; `useApp*` for system-wide (`useAppSettingsContext`, `useAppLogs`, `useAppRefresh`) |
 | Feature public API  | Each feature folder has one `index.ts` — see **Module boundaries (`index.ts`)** below         |
 | Import line length  | ESLint `import-newlines/enforce`: max **4** specifiers per line; `max-len` 100 cols           |
 
@@ -111,7 +117,7 @@ features/vaults/file-manager/
 ├── FileManagerLayer.tsx     ← modal + dock compositor
 ├── fileManagerTypes.ts
 ├── hooks/                   ← useVaultFileManager
-├── lib/                     ← fileTreeTypes, vaultWorkspaceReducer, osFileDrop, import helpers
+├── lib/                     ← fileManagerWorkspaceTypes, vaultWorkspaceReducer, osFileDrop, import helpers
 ├── shell/                   ← FileManagerModal, FileManagerDock
 ├── workspace/               ← FileManagerWorkspace, PaneResizeHandle
 ├── tree/                    ← FileTreePanel, FileTreeContextMenu

@@ -32,9 +32,7 @@ export default tseslint.config(
     },
     rules: {
       ...reactHooks.configs.recommended.rules,
-      // Provider + hook co-location (contexts, i18n) is intentional in this codebase.
       "react-refresh/only-export-components": "off",
-      // Break import { a, b, c, … } when more than `items` specifiers (sync max-len with rule below).
       "import-newlines/enforce": ["warn", { items: 4, "max-len": 100, forceSingleLine: true }],
       "max-len": [
         "warn",
@@ -48,5 +46,7 @@ export default tseslint.config(
       ],
     },
   },
+  // Type-aware rules: enabled for vite.config.ts today; extend to src/** when mock services
+  // no longer trigger require-await / no-misused-promises across the prototype layer.
   eslintConfigPrettier,
 );

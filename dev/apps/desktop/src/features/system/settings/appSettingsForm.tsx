@@ -1,8 +1,26 @@
-import { useEffect, useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Button, Switch } from "@/components/ui";
-import type { LocaleId } from "@/i18n";
+import {
+  PolicyRadioOption,
+  settingsControlClass,
+  SettingsField,
+  SettingsFormGrid,
+} from "@/components/settings";
 import { useTranslation } from "@/i18n";
-import { type VaultListItem, resolveVaultDisplayStatus } from "@upriv/shared";
+import {
+  LOG_ENTRIES_PER_FILE,
+  LOG_KEEP_LAST_DEFAULT,
+  LOG_KEEP_LAST_ENTRY_OPTIONS,
+  LOG_KEEP_LAST_UNLIMITED,
+  SUPPORTED_LOCALES,
+  logFileCountForKeepLast,
+  type AppSettingsConfig,
+  type LogLevel,
+  type UiTheme,
+  type VaultListItem,
+  resolveVaultDisplayStatus,
+} from "@upriv/shared";
+import { useAppSettingsService, useVaultService } from "@/platform/services";
 import { vaultStatusI18nKey } from "@/theme/vault-status";
 import {
   downloadVaultsZip,
@@ -13,30 +31,14 @@ import {
 
 const vaultCheckboxClass =
   "h-4 w-4 shrink-0 rounded border-outline-variant/50 bg-surface-container-high text-accent focus:ring-accent/50 disabled:cursor-not-allowed disabled:opacity-40";
-import {
-  PolicyRadioOption,
-  settingsControlClass,
-  SettingsField,
-  SettingsFormGrid,
-} from "@/components/settings";
-import {
-  LOG_ENTRIES_PER_FILE,
-  LOG_KEEP_LAST_DEFAULT,
-  LOG_KEEP_LAST_ENTRY_OPTIONS,
-  LOG_KEEP_LAST_UNLIMITED,
-  logFileCountForKeepLast,
-} from "@upriv/shared";
-import { MOCK_UPRIV_ROOT_PATH } from "@/platform/mocks/data/appSettings";
-import type { AppSettingsConfig, LogLevel, UiTheme } from "./appSettingsTypes";
 
 interface SectionPatchProps<S extends keyof AppSettingsConfig> {
   config: AppSettingsConfig[S];
   onChange: (patch: Partial<AppSettingsConfig[S]>) => void;
 }
 
-const LOCALES: LocaleId[] = ["en", "pt-BR"];
 const THEMES: UiTheme[] = ["dark", "neutral", "light"];
-const LOG_LEVELS = ["error", "warn", "info", "debug"] as const satisfies readonly LogLevel[];
+const LOG_LEVELS = ["error", "warn", "info", "debug", "trace"] as const satisfies readonly LogLevel[];
 
 export function AppSettingsAppearanceSection({ config, onChange }: SectionPatchProps<"ui">) {
   const { t } = useTranslation();
@@ -58,7 +60,7 @@ export function AppSettingsAppearanceSection({ config, onChange }: SectionPatchP
           aria-label={t("modal.app_settings.field.locale")}
           className="grid gap-2"
         >
-          {LOCALES.map((locale) => (
+          {SUPPORTED_LOCALES.map((locale) => (
             <PolicyRadioOption
               key={locale}
               groupName={localeGroup}
@@ -179,6 +181,7 @@ export function AppSettingsDownloadVaultsSection({
   modalOpen,
 }: AppSettingsDownloadVaultsSectionProps) {
   const { t } = useTranslation();
+  const vaultService = useVaultService();
   const selectAllId = useId();
 
   const sortedVaults = useMemo(
@@ -193,13 +196,18 @@ export function AppSettingsDownloadVaultsSection({
   const readyIds = useMemo(() => readyVaults.map((vault) => vault.id), [readyVaults]);
 
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
+  const wasModalOpenRef = useRef(false);
 
   useEffect(() => {
     if (!modalOpen) {
+      wasModalOpenRef.current = false;
       setSelected(new Set());
       return;
     }
-    setSelected(new Set(readyIds));
+    if (!wasModalOpenRef.current) {
+      wasModalOpenRef.current = true;
+      setSelected(new Set(readyIds));
+    }
   }, [modalOpen, readyIds]);
 
   const allReadySelected =
@@ -231,9 +239,10 @@ export function AppSettingsDownloadVaultsSection({
   const handleDownload = () => {
     if (!canDownload) return;
     const stamp = new Date().toISOString().slice(0, 10);
-    downloadVaultsZip(
+    void downloadVaultsZip(
       selectedReady,
       t("modal.app_settings.download_vaults_zip_name", { date: stamp }),
+      (vault) => vaultService.getArchiveExportBytes(vault),
     );
   };
 
@@ -455,6 +464,7 @@ export function AppSettingsLoggingSection({ config, onChange }: SectionPatchProp
 
 export function AppSettingsBehaviorSection({ config, onChange }: SectionPatchProps<"app">) {
   const { t } = useTranslation();
+  const appSettingsService = useAppSettingsService();
   const rootModeGroup = useId();
   const useAutoDetect = config.auto_detect_vault_root;
 
@@ -518,7 +528,7 @@ export function AppSettingsBehaviorSection({ config, onChange }: SectionPatchPro
                     onClick={() =>
                       onChange({
                         auto_detect_vault_root: false,
-                        upriv_root_path: MOCK_UPRIV_ROOT_PATH,
+                        upriv_root_path: appSettingsService.getDefaultRootPathSuggestion(),
                       })
                     }
                   >

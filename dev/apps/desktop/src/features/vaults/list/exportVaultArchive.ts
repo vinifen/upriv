@@ -1,9 +1,13 @@
 import { downloadFiles } from "@/lib/downloadZip";
 import type { VaultRow } from "@upriv/shared";
-import { getMockVaultArchiveBytes, vaultArchiveFilename } from "@/features/system/settings";
+import { vaultArchiveFilename } from "@upriv/shared";
 
-/** Download main archive `{display_name}.7z` (mock until Tauri reads from disk). */
-export function exportVaultArchive(vault: VaultRow): void {
+/** Download main archive `{display_name}.7z`. */
+export async function exportVaultArchive(
+  vault: VaultRow,
+  getArchiveBytes: (vault: VaultRow) => Promise<Uint8Array>,
+): Promise<void> {
   const filename = vaultArchiveFilename(vault);
-  downloadFiles([{ filename, data: getMockVaultArchiveBytes(vault) }], filename);
+  const data = await getArchiveBytes(vault);
+  downloadFiles([{ filename, data }], filename);
 }

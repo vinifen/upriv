@@ -4,7 +4,6 @@ export {
   PolicyRadioOption,
   SecurityModeRadioGroup,
   settingsControlClass,
-  settingsRadioInputClass,
   SettingsField,
   SettingsFormGrid,
   VaultSettingsBackupSection,

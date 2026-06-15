@@ -9,7 +9,7 @@ interface AppProvidersProps {
 
 const appServices = createServices();
 
-/** Composes global React context providers (services, app settings, i18n, file manager). */
+/** Composes global React context providers (services → app settings + i18n → file manager). */
 export function AppProviders({ children }: AppProvidersProps) {
   return (
     <ServicesProvider services={appServices}>

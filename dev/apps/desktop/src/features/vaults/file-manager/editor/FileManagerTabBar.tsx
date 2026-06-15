@@ -1,9 +1,9 @@
 import { Icon } from "@/components/icons";
 import { Button } from "@/components/ui";
 import { useTranslation } from "@/i18n";
-import { isPathDirty } from "../lib/fileTreeTypes";
+import { isPathDirty } from "../lib/fileManagerWorkspaceTypes";
 import { fileBaseName } from "@upriv/shared";
-import type { VaultWorkspaceState } from "../lib/fileTreeTypes";
+import type { VaultWorkspaceState } from "../lib/fileManagerWorkspaceTypes";
 import type { VaultWorkspaceAction } from "../lib/vaultWorkspaceReducer";
 
 interface FileManagerTabBarProps {

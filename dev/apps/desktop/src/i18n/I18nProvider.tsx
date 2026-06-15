@@ -1,10 +1,9 @@
 import {
-useCallback,
-useContext,
-useEffect,
-useMemo,
-useState,
-type ReactNode
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
 } from "react";
 import { I18nContext, type I18nContextValue } from "./context";
 import { interpolate } from "@upriv/shared";
@@ -19,20 +18,20 @@ interface I18nProviderProps {
 function createFallbackValue(locale: LocaleId): I18nContextValue {
   const catalog = {} as I18nCatalog;
   const t = (key: I18nKey, params?: I18nParams): string => interpolate(key, params);
-  return { locale, catalog, t };
+  return { locale, catalog, t, ready: false };
 }
 
 export function I18nProvider({ locale = DEFAULT_LOCALE, children }: I18nProviderProps) {
+  const [activeLocale, setActiveLocale] = useState(locale);
   const [catalog, setCatalog] = useState<I18nCatalog | null>(null);
 
   useEffect(() => {
-    document.documentElement.lang = locale;
-  }, [locale]);
-
-  useEffect(() => {
     let cancelled = false;
-    loadLocale(locale).then((loaded) => {
-      if (!cancelled) setCatalog(loaded);
+    void loadLocale(locale).then((loaded) => {
+      if (cancelled) return;
+      setCatalog(loaded);
+      setActiveLocale(locale);
+      document.documentElement.lang = locale;
     });
     return () => {
       cancelled = true;
@@ -40,15 +39,17 @@ export function I18nProvider({ locale = DEFAULT_LOCALE, children }: I18nProvider
   }, [locale]);
 
   const value = useMemo<I18nContextValue>(() => {
-    if (!catalog) return createFallbackValue(locale);
+    if (!catalog) return createFallbackValue(activeLocale);
 
     const t = (key: I18nKey, params?: I18nParams): string => {
       const raw = catalog[key] ?? key;
       return interpolate(raw, params);
     };
 
-    return { locale, catalog, t };
-  }, [catalog, locale]);
+    return { locale: activeLocale, catalog, t, ready: true };
+  }, [activeLocale, catalog]);
+
+  if (!catalog) return null;
 
   return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>;
 }
@@ -63,12 +64,6 @@ export function useI18n(): I18nContextValue {
 
 /** Shorthand for `useI18n().t`. */
 export function useTranslation() {
-  const { t, locale, catalog } = useI18n();
-  return { t, locale, catalog };
-}
-
-/** Stable callback reference for child components. */
-export function useTranslate() {
-  const { t } = useI18n();
-  return useCallback((key: I18nKey, params?: I18nParams) => t(key, params), [t]);
+  const { t, locale, catalog, ready } = useI18n();
+  return { t, locale, catalog, ready };
 }

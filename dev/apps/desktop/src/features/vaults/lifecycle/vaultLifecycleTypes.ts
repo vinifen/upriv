@@ -1,6 +1,1 @@
-import type { VaultLifecycleIntent } from "@upriv/shared";
-
-export interface VaultLifecycleRequest {
-  vaultId: string;
-  intent: VaultLifecycleIntent;
-}
+export type { VaultLifecycleRequest } from "@upriv/shared";

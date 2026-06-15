@@ -8,6 +8,7 @@ import { VaultLifecycleLayer } from "@/features/vaults/lifecycle";
 import { VaultSettingsModal } from "@/features/vaults/settings";
 import { AppShell } from "@/components/layout";
 import { Toast } from "@/components/ui";
+import { useTranslation } from "@/i18n";
 import { VaultListHeader } from "./header/VaultListHeader";
 import { VaultListSectionHeader } from "./header/VaultListSectionHeader";
 import { VaultNoteModal } from "./modals/VaultNoteModal";
@@ -16,9 +17,17 @@ import { useVaultListScreen } from "./hooks/useVaultListScreen";
 
 export function VaultListPage() {
   const screen = useVaultListScreen();
+  const { t } = useTranslation();
 
   if (!screen.isReady) {
-    return <div className="min-h-screen bg-background" aria-busy="true" />;
+    return (
+      <div
+        className="flex min-h-screen items-center justify-center bg-background font-mono text-sm text-on-surface-variant"
+        aria-busy="true"
+      >
+        {t("vault.list.loading")}
+      </div>
+    );
   }
 
   const {

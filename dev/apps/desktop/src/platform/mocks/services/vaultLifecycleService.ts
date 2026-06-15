@@ -8,8 +8,8 @@ import {
 } from "@upriv/shared";
 import { MOCK_UPRIV_ROOT_PATH } from "@/platform/mocks/data/appSettings";
 
+/** Prototype-only RAM session store — never use as a production security model. */
 const vaultPasswordInRam = new Map<string, string>();
-const seededOpenVaultIds = new Set<string>();
 
 function getPasswordInRam(vaultId: string): string | undefined {
   return vaultPasswordInRam.get(vaultId);
@@ -37,21 +37,6 @@ export const mockVaultLifecycleService: VaultLifecycleService = {
 
   clearPasswordInSession(vaultId) {
     vaultPasswordInRam.delete(vaultId);
-  },
-
-  seedInitialOpenVaultPasswords(openVaultIds) {
-    for (const vaultId of openVaultIds) {
-      if (seededOpenVaultIds.has(vaultId)) continue;
-      if (!vaultPasswordInRam.has(vaultId)) {
-        vaultPasswordInRam.set(vaultId, "demo");
-      }
-      seededOpenVaultIds.add(vaultId);
-    }
-  },
-
-  validatePassword(password) {
-    const trimmed = password.trim();
-    return trimmed.length > 0 && trimmed !== "wrong";
   },
 
   openingStepCount: OPENING_PIPELINE_STEP_COUNT,
@@ -83,3 +68,28 @@ export const mockVaultLifecycleService: VaultLifecycleService = {
     return error.code;
   },
 };
+
+/** Desktop mock helper — not part of the shared service contract. */
+export function validateMockLifecyclePassword(password: string): boolean {
+  const trimmed = password.trim();
+  return trimmed.length >= 4 && trimmed !== "wrong";
+}
+
+/** Desktop mock helper — not part of the shared service contract. */
+export function seedDemoOpenVaultPasswords(
+  openVaultIds: readonly string[],
+  getPasswordHint?: (vaultId: string) => string | undefined,
+): void {
+  for (const vaultId of openVaultIds) {
+    if (vaultPasswordInRam.has(vaultId)) continue;
+    const hint = getPasswordHint?.(vaultId)?.trim();
+    if (hint) {
+      vaultPasswordInRam.set(vaultId, hint);
+    }
+  }
+}
+
+/** @internal Test hook for mock lifecycle password map. */
+export function __clearMockLifecyclePasswordsForTests(): void {
+  vaultPasswordInRam.clear();
+}

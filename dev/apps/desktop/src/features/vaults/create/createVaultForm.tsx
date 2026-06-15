@@ -79,11 +79,12 @@ function CreateVaultSourceStep({ draft, errors, onChange }: StepProps) {
   const sourceGroup = useId();
 
   const handleImportFile = () => {
-    const fileName = createVaultService.getMockImportArchiveFileName();
+    // Prototype: mock service returns a fixed path/password until Tauri file picker + 7zz probe.
+    const { fileName, path } = createVaultService.selectImportArchiveForProbe();
     onChange({
       source: "import",
       importFileName: fileName,
-      importFilePath: createVaultService.getMockImportArchivePath(),
+      importFilePath: path,
       displayName: displayNameFromArchiveFilename(fileName),
       password: "",
       passwordConfirm: "",
@@ -295,6 +296,11 @@ function CreateVaultGeneralStep({ draft, onChange }: StepProps) {
           {t("modal.settings.field.auto_close.enabled")}
         </span>
       </label>
+      {draft.storage.mode === "plain" && draft.auto_close.enabled ? (
+        <p className="text-xs leading-relaxed text-on-surface-variant">
+          {t("modal.settings.field.auto_close.plain_seals")}
+        </p>
+      ) : null}
       {draft.auto_close.enabled ? (
         <div className="grid gap-4 sm:grid-cols-2">
           <SettingsField label={t("modal.settings.field.auto_close.idle_minutes")} htmlFor={idleId}>

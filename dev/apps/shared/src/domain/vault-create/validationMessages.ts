@@ -1,32 +1,23 @@
-import type { CreateVaultValidationCode } from "../vault-create/validate";
+import type { CreateVaultValidationCode } from "./validate";
 
-export function createVaultErrorKey(code: CreateVaultValidationCode): string {
-  switch (code) {
-    case "empty":
-      return "vault.name.empty";
-    case "invalid_chars":
-      return "vault.name.invalid_chars";
-    case "trailing":
-      return "vault.name.trailing";
-    case "reserved":
-      return "vault.name.reserved";
-    case "too_long":
-      return "vault.name.too_long";
-    case "duplicate":
-      return "vault.create.error.duplicate";
-    case "source_missing":
-      return "vault.create.error.source_missing";
-    case "import_file_missing":
-      return "vault.create.error.import_file_missing";
-    case "password_empty":
-      return "vault.create.error.password_empty";
-    case "password_mismatch":
-      return "vault.create.password_mismatch";
-    case "password_not_validated":
-      return "vault.create.error.password_not_validated";
-    case "password_wrong":
-      return "error.wrong_password";
-    default:
-      return "vault.create.error.generic";
-  }
+export const CREATE_VAULT_ERROR_KEYS = {
+  empty: "vault.name.empty",
+  invalid_chars: "vault.name.invalid_chars",
+  trailing: "vault.name.trailing",
+  reserved: "vault.name.reserved",
+  too_long: "vault.name.too_long",
+  duplicate: "vault.create.error.duplicate",
+  source_missing: "vault.create.error.source_missing",
+  import_file_missing: "vault.create.error.import_file_missing",
+  password_empty: "vault.create.error.password_empty",
+  password_mismatch: "vault.create.password_mismatch",
+  password_not_validated: "vault.create.error.password_not_validated",
+  password_wrong: "error.wrong_password",
+} as const satisfies Record<CreateVaultValidationCode, string>;
+
+export type CreateVaultErrorKey =
+  (typeof CREATE_VAULT_ERROR_KEYS)[CreateVaultValidationCode] | "vault.create.error.generic";
+
+export function createVaultErrorKey(code: CreateVaultValidationCode): CreateVaultErrorKey {
+  return CREATE_VAULT_ERROR_KEYS[code] ?? "vault.create.error.generic";
 }

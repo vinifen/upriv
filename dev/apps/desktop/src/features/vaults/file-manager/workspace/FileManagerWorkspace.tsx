@@ -13,9 +13,10 @@ import { useVaultFileManager } from "../hooks/useVaultFileManager";
 
 interface FileManagerWorkspaceProps {
   entry: FileManagerEntry;
+  onDismissConfirmed: () => void;
 }
 
-export function FileManagerWorkspace({ entry }: FileManagerWorkspaceProps) {
+export function FileManagerWorkspace({ entry, onDismissConfirmed }: FileManagerWorkspaceProps) {
   const { dispatchWorkspace } = useFileManager();
   const containerRef = useRef<HTMLDivElement>(null);
   const isMobile = useMediaQuery("(max-width: 767px)");
@@ -23,6 +24,7 @@ export function FileManagerWorkspace({ entry }: FileManagerWorkspaceProps) {
   const fm = useVaultFileManager({
     entry,
     dispatch: (action) => dispatchWorkspace(entry.vaultId, action),
+    onDismissConfirmed,
   });
 
   const handleSplitDrag = useCallback(

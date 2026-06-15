@@ -6,7 +6,7 @@ import type { I18nKey } from "@/i18n/types";
 import type { VaultListItem } from "@upriv/shared";
 
 /** Show escape hatch before mock steps finish — real 7zz can take much longer. */
-export const PIPELINE_BACKGROUND_AFTER_MS = 1500;
+const PIPELINE_BACKGROUND_AFTER_MS = 1500;
 
 interface VaultPipelineOverlayProps {
   vault: VaultListItem | null;

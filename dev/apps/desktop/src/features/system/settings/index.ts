@@ -2,7 +2,10 @@
 export { AppSettingsModal } from "./AppSettingsModal";
 export { AppSettingsProvider, useAppSettingsContext } from "./AppSettingsContext";
 export {
-  getMockVaultArchiveBytes,
+  downloadVaultsZip,
+  listVaultsBlockingBulkExport,
+  listVaultsReadyForBulkExport,
   vaultArchiveFilename,
+  vaultArchiveZipEntryPath,
   vaultBlocksBulkExport,
 } from "./vaultBulkExport";

@@ -4,7 +4,6 @@ export { DropdownMenu, type DropdownMenuItem } from "./DropdownMenu";
 export {
   DropdownPanel,
   MenuPanelGroup,
-  MenuPanelHint,
   MenuPanelOption,
   useDropdownPanelClose,
 } from "./DropdownPanel";

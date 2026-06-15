@@ -9,16 +9,11 @@ export interface VaultLifecycleService {
   setPasswordInSession(vaultId: string, password: string): void;
   clearPasswordInSession(vaultId: string): void;
 
-  /** One-time demo seed for mock rows that start open (does not overwrite unlock passwords). */
-  seedInitialOpenVaultPasswords(openVaultIds: readonly string[]): void;
-
-  /** Validate unlock/close password input until real crypto is wired. */
-  validatePassword(password: string): boolean;
-
   readonly openingStepCount: number;
   readonly closingStepCount: number;
 
   runOpeningPipeline(vaultId: string, onStep: (stepIndex: number) => void): Promise<void>;
+  /** Close and seal share the same pipeline steps; UI intent selects the outcome. */
   runClosingPipeline(vaultId: string, onStep: (stepIndex: number) => void): Promise<void>;
 
   /** Virtual mount path shown until the platform opens the OS file manager. */

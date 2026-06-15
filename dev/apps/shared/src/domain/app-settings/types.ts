@@ -22,6 +22,7 @@ export interface AppSettingsConfig {
     vault_list_sort_direction: VaultListSortDirection;
     vault_list_view: VaultListViewMode;
     always_show_hidden_vaults: boolean;
+    /** Desktop file-manager dock UI — mobile clients may ignore. */
     file_manager_dock_expanded: boolean;
   };
   logging: {

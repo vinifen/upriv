@@ -1,6 +1,6 @@
-/** Create-vault wizard platform hooks (import archive probe, mock paths). */
+/** Create-vault wizard platform hooks (import archive probe). */
 export interface CreateVaultService {
   testImportArchivePassword(password: string): boolean;
-  getMockImportArchivePath(): string;
-  getMockImportArchiveFileName(): string;
+  /** Browser dev placeholder until native file picker is wired. */
+  selectImportArchiveForProbe(): { path: string; fileName: string };
 }

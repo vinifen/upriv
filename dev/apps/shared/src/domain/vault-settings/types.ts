@@ -46,20 +46,21 @@ export function uiToEncryptedDirSecurityMode(ui: SecurityUiMode): SecurityMode {
   return uiToSecurityMode(ui);
 }
 
-export function securityModeToUi(mode: SecurityMode): SecurityUiMode {
-  return plainSecurityModeToUi(mode);
-}
-
 export function uiToSecurityMode(ui: SecurityUiMode): SecurityMode {
   return uiToPlainSecurityMode(ui);
 }
 
-export function plainSecurityModeToUi(mode: SecurityMode): PlainSecurityUiMode {
+export function securityModeToUi(mode: SecurityMode): SecurityUiMode {
   if (mode === "disk_open_close") return "disk_open_close";
   if (mode === "disk_close") return "disk_close";
   if (mode === "session_ram") return "session_ram";
+  // `always_prompt` and `ram_on_close_only` share one UI card until mobile needs a split.
   if (mode === "always_prompt" || mode === "ram_on_close_only") return "prompt_open_close";
   return "session_ram";
+}
+
+export function plainSecurityModeToUi(mode: SecurityMode): PlainSecurityUiMode {
+  return securityModeToUi(mode);
 }
 
 export function uiToPlainSecurityMode(ui: PlainSecurityUiMode): SecurityMode {
@@ -79,11 +80,16 @@ export function isPlainOnlySecurityMode(mode: SecurityMode): mode is PlainSecuri
   return mode === "disk_close" || mode === "disk_open_close";
 }
 
-/** Disk session modes are valid for both storage modes; default remains session_ram. */
+/** Map security mode to a valid choice for the active storage mode. */
 export function normalizeSecurityModeForStorage(
-  _storageMode: StorageMode,
+  storageMode: StorageMode,
   securityMode: SecurityMode,
 ): SecurityMode {
+  if (storageMode === "plain") {
+    if (isPlainOnlySecurityMode(securityMode)) return securityMode;
+    return "disk_close";
+  }
+  if (isPlainOnlySecurityMode(securityMode)) return "session_ram";
   return securityMode;
 }
 

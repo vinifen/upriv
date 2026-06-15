@@ -1,5 +1,4 @@
-import type { CreateVaultDraft, VaultListItem } from "@upriv/shared";
-import type { VaultLifecycleRequest } from "@/features/vaults/lifecycle";
+import type { CreateVaultDraft, VaultLifecycleRequest, VaultListItem } from "@upriv/shared";
 
 /** Modal open/close state wired by `useVaultListModals` and consumed by the list screen. */
 export interface VaultListModalsHandle {

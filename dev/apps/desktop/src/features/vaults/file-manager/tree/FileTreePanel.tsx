@@ -9,7 +9,7 @@ import {
 import { Icon } from "@/components/icons";
 import { useTranslation } from "@/i18n";
 import { getParentPath, findNode, isDescendantPath, joinPath } from "@upriv/shared";
-import type { FileTreeNode } from "../lib/fileTreeTypes";
+import type { FileTreeNode } from "@upriv/shared";
 import { filesFromDataTransfer, filesFromFileInput, isOsFileDrag } from "../lib/osFileDrop";
 import type { FileManagerApi } from "../hooks/useVaultFileManager";
 

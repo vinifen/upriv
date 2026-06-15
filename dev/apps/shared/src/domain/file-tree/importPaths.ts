@@ -1,12 +1,17 @@
-import type { VaultFileSystemService } from "../../services/filesystem/VaultFileSystemService";
 import { validateFileName } from "./fileNameValidation";
 import { joinPath } from "./treeUtils";
+
+export type EnsureFolderFn = (
+  vaultId: string,
+  parentPath: string,
+  folderName: string,
+) => string | null;
 
 export function resolveImportDestination(
   vaultId: string,
   baseParentPath: string,
   relativePath: string,
-  ensureFolder: VaultFileSystemService["ensureFolder"],
+  ensureFolder: EnsureFolderFn,
 ): { parentPath: string; fileName: string } | null {
   const segments = relativePath.split("/").filter(Boolean);
   if (segments.length === 0) return null;

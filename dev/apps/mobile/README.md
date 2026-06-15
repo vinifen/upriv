@@ -1,14 +1,14 @@
 # Upriv — mobile (scaffold)
 
-**Expo SDK 52** + **React Native 0.76** + **React 18.3.1** — aligned with `dev/apps/desktop/` for shared TypeScript and i18n keys.
+**Expo SDK 52** + **React Native 0.76** + **React 18.3.1** — aligned with `dev/apps/desktop/` for shared TypeScript (`@upriv/shared`) and i18n keys.
 
-No vault features, no `upriv-core` native module yet. **Not** Tauri mobile (product uses React Native + Rust FFI).
+No vault UI yet, no `upriv-core` native module. **Not** Tauri mobile (product uses React Native + Rust FFI).
 
 ## Prerequisites
 
 | Tool | Version |
 |------|---------|
-| Node.js | 22 LTS (`../.nvmrc`) |
+| Node.js | 22 LTS (`../../.nvmrc` from repo root) |
 | Android | Android Studio, SDK 35, **JDK 17**, NDK **r27** (when building native) |
 | iOS | Xcode 16+ (macOS only) |
 
@@ -35,13 +35,19 @@ npm run mobile:start
 
 ```text
 mobile/
-├── src/App.tsx           # UI placeholder
+├── src/App.tsx           # UI placeholder (strings from dev/docs/i18n)
 ├── src/native/           # Future JNI / iOS bridge to upriv-core
 ├── assets/               # Expo icons (replace with Upriv brand later)
 ├── app.json              # Expo config (newArchEnabled: false)
-└── metro.config.js       # Watches parent `dev/` for shared i18n
+└── metro.config.js       # Watches dev/apps + dev/docs for shared i18n HMR
 ```
 
-Shared UI strings: `../../docs/i18n/` (same as desktop).
+Shared UI strings: `../../docs/i18n/` (same catalog as desktop).
+
+**Scaffold limitations (post-MVP debt):** no lint/format scripts yet; `react-native-screens` / `safe-area-context` installed but unused; `@i18n/*` tsconfig alias unused (relative JSON import in `App.tsx`).
 
 Versions: `../../docs/VERSIONS.md`.
+
+## React Native architecture
+
+`app.json` sets **`newArchEnabled: false`** (Fabric/TurboModules off), aligned with `.agent/AGENT.md` and `docs/VERSIONS.md` for the current scaffold. Revisit when the mobile MVP starts and native modules (`upriv-core`) land.

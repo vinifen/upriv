@@ -1,9 +1,8 @@
 import { useCallback, useRef, useState } from "react";
-import { isVaultPipelineError } from "@upriv/shared";
+import { isVaultPipelineError, type VaultPipelineKind } from "@upriv/shared";
 import type { I18nKey } from "@/i18n/types";
 
-/** v1 product rule: global FIFO queue — one open/close/seal pipeline at a time (SDD §8.2.2). */
-export type VaultPipelineKind = "open" | "close" | "seal";
+export type { VaultPipelineKind };
 
 export interface VaultPipelineRunState {
   vaultId: string;

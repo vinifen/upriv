@@ -1,6 +1,6 @@
 # Upriv — development workspace
 
-Stable, pinned scaffold for the desktop app. **No product features** — only tooling and layout. Builds verified on Linux (2026-05-31).
+Stable, pinned scaffold for desktop and mobile apps. **Desktop** ships a full mock vault UI (`dev/apps/desktop/`); **mobile** is an Expo scaffold only. Core Rust logic lives in `crates/upriv-core`.
 
 ## Layout
 

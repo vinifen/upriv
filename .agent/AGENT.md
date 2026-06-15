@@ -2,7 +2,7 @@
 
 **Product:** portable encrypted vault manager (universal `.7z` containers).  
 **Repo:** monorepo with `dev/` (implementation), `prod-example/` (static vault layout demo).  
-**Status:** v0.1 scaffold — tooling verified; `upriv-core` is minimal; vault features not implemented yet.
+**Status:** v0.1 — `upriv-core` is minimal; **desktop** has a full mock vault UI (`dev/apps/desktop/`); **mobile** is scaffold-only.
 
 When product behavior, security, or on-disk layout is unclear, **read the canonical docs** (below) before inventing behavior.
 
@@ -92,22 +92,19 @@ upriv/
 | Layer | Path | May do | Must NOT do |
 |-------|------|--------|-------------|
 | **UI desktop** | `dev/apps/desktop/` | Render, i18n, `invoke()` | Crypto, disk I/O, 7zz, vault state on disk |
-
-**Desktop UI prototype (`dev/apps/desktop/`, mock layer):** vault list uses in-memory mocks until Tauri/`upriv-core` wiring. Notable conventions after REVISAO-PROTOTIPAGEM-1 fixes:
-
-- **Pipeline:** `useVaultPipelineRun` enforces SDD §8.2.2 — one open/close/seal at a time (`isRunning`); superseded starts must not leave rows stuck in `"closing"`.
-- **Auto-close:** at most one close per idle tick; warn toast once per vault per idle cycle; respects `isPipelineRunning`.
-- **Session password (mock):** `mockVaultSessionPassword.ts` only — seed once for initially-open demo rows; real unlock password stored on confirm; `requiresPasswordForLifecycle` reads vault `[security].mode`.
-- **Settings ↔ list:** `registerMockVaultSettings` on save; list patch includes `storageMode` / `canSeal`; note edits sync both ways.
-- **Delete cleanup:** `clearVaultPasswordInRam` + `unregisterMockVaultSettings` (refresh intentionally does not reset mocks).
-- **Hidden until wired:** `close_on_app_exit` checkbox removed from settings UI (no Tauri `onCloseRequested` yet).
-- **App settings logging:** `keep_last_entries` select (cadence 1k…1M + unlimited); log file list newest-first.
-- **Feature module boundaries:** each `features/vaults/*` and `features/system/*` folder has one `index.ts` that exports **only symbols used outside that folder**; no nested index barrels. Full rules and API table: [`dev/apps/desktop/README.md`](../dev/apps/desktop/README.md) § Module boundaries (`index.ts`).
-
-Replace mocks with `invoke()` → `upriv-core` before shipping crypto; do not treat JS `Map` passwords as production architecture.
 | **UI mobile** | `dev/apps/mobile/` | Same (future native module) | Same |
 | **Tauri shell** | `dev/src-tauri/` | Window, IPC commands delegating to core | Business logic (keep `lib.rs` thin) |
 | **Core** | `dev/crates/upriv-core/` | Crypto, 7z, paths, state machine, FUSE, recovery | Depend on `tauri` |
+
+**Desktop UI prototype (`dev/apps/desktop/`, mock layer):** vault list, lifecycle, file manager, settings, logs, and help run on in-memory mocks until Tauri/`upriv-core` wiring. Notable conventions:
+
+- **Pipeline:** `useVaultPipelineRun` enforces SDD §8.2.2 — one open/close/seal at a time (`isRunning`).
+- **Auto-close:** at most one close per idle tick; warn toast once per vault per idle cycle; respects `isPipelineRunning`.
+- **Settings ↔ list:** `registerMockVaultSettings` on save; list patch includes `storageMode` / `canSeal`.
+- **Hidden until wired:** `close_on_app_exit` UI not exposed yet (no Tauri `onCloseRequested`).
+- **Feature module boundaries:** each `features/vaults/*` and `features/system/*` folder has one `index.ts` — see [`dev/apps/desktop/README.md`](../dev/apps/desktop/README.md).
+
+Replace mocks with `invoke()` → `upriv-core` before shipping crypto; do not treat JS `Map` passwords as production architecture.
 
 ### Data flow
 

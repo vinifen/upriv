@@ -30,5 +30,5 @@ export function useAppLogs(open: boolean) {
     [files],
   );
 
-  return { files, deleteFiles, getFile };
+  return { files, deleteFiles, getFile, reload };
 }

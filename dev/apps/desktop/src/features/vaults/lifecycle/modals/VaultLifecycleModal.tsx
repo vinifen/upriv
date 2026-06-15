@@ -9,6 +9,7 @@ import {
   type VaultLifecycleIntent,
 } from "@upriv/shared";
 import { useVaultLifecycleService, useVaultService } from "@/platform/services";
+import { validateMockLifecyclePassword } from "@/platform/mocks/services/vaultLifecycleService";
 import { VaultPasswordHintCallout } from "./VaultPasswordHintCallout";
 import { SettingsField } from "@/components/settings";
 
@@ -93,7 +94,7 @@ export function VaultLifecycleModal({
   if (!open || !vault || !intent) return null;
 
   const handleConfirm = () => {
-    if (requiresPassword && !lifecycleService.validatePassword(password)) {
+    if (requiresPassword && !validateMockLifecyclePassword(password)) {
       setError(t("error.wrong_password"));
       return;
     }

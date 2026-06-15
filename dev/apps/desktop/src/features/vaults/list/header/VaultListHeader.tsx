@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { UprivWordmark } from "@/components/brand/UprivWordmark";
 import { Icon } from "@/components/icons";
 import { Button, DropdownMenu, IconButton } from "@/components/ui";
+import { useAppSettingsContext } from "@/features/system/settings";
 import { useTranslation } from "@/i18n";
 
 interface VaultListHeaderProps {
@@ -22,6 +23,7 @@ export function VaultListHeader({
   onNewVault,
 }: VaultListHeaderProps) {
   const { t } = useTranslation();
+  const { settings } = useAppSettingsContext();
 
   const overflowItems = useMemo(
     () => [
@@ -50,7 +52,7 @@ export function VaultListHeader({
   return (
     <header className="sticky top-0 z-40 bg-background/80 backdrop-blur-xl">
       <div className="mx-auto flex max-w-vault-list items-center justify-between px-margin-mobile py-4 md:px-margin-desktop">
-        <UprivWordmark className="h-5 w-auto object-contain md:h-6" />
+        <UprivWordmark theme={settings.ui.theme} className="h-5 w-auto object-contain md:h-6" />
         <div className="flex items-center gap-2">
           <IconButton
             label={t("action.refresh")}
