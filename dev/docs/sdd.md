@@ -24,9 +24,9 @@ See PRD §11.1.
 
 ### 1.1 Principles
 
-0. **v1 Linux only** — first delivery: desktop app on Linux (Tauri + `upriv-core` + FUSE). Vault layout and `.7z` remain portable; Windows/macOS/mobile later (PRD §3.5).
+0. **v1 Linux + Windows** — first delivery: desktop app on Linux and Windows (Tauri + `upriv-core`; FUSE on Linux, WinFsp on Windows). Design the virtual-mount layer as a shared trait from day one. Vault layout and `.7z` remain portable; macOS/mobile later (PRD §3.5).
 1. **Vault = folder + contract** — independent of where the executable is installed.
-2. **Two product modes** — `encrypted_dir` (default; **v1**) and `plain` (exception; **v1.1+**, e.g. insufficient RAM). Do not treat the second as “legacy to discard”. In `encrypted_dir`, **available RAM must fit the entire unlocked vault** while open — otherwise open/edit/close fail; UI warns via `warning.encrypted_dir_ram` (PRD §1.6, RF-UI-17).
+2. **Two product modes** — `encrypted_dir` (default) and `plain` (exception; e.g. insufficient RAM) — **both in v1**. Do not treat `plain` as “legacy to discard”. In `encrypted_dir`, **available RAM must fit the entire unlocked vault** while open — otherwise open/edit/close fail; UI warns via `warning.encrypted_dir_ram` (PRD §1.6, RF-UI-17).
 3. **Core in Rust** — single `upriv-core` crate for all platforms; shared logic between desktop and mobile (FFI). UI layers (React web, React Native) are **presentation only** — no crypto, disk I/O, or session secrets in JS/TS. See `ARCHITECTURE.md` §2.
 4. **Declarative config** — `.upriv/settings.toml` + per-vault `vaults/<id>/config.toml`; safe defaults if missing.
 5. **Mutable config** — vault options **changeable at any time**; TOML is source of truth; app re-reads before open/close (not “create and lock”).
@@ -53,7 +53,7 @@ See PRD §11.1.
 └─────────────────────────────┬───────────────────────────────┘
                               │ spawn / pipe
 ┌─────────────────────────────▼───────────────────────────────┐
-│  encrypted_dir (v1) + plain (v1.1+) + 7zz      │
+│  encrypted_dir + plain (both v1) + 7zz      │
 └─────────────────────────────────────────────────────────────┘
                               │
 ┌─────────────────────────────▼───────────────────────────────┐
@@ -80,7 +80,7 @@ encrypted_dir:
   sealed ──open──► open ──close()──► closed ──seal()──► sealed
      ▲                 └────────seal()───────────────┘
 
-plain (v1.1+):
+plain (v1):
   sealed ──open──► open ──close()──► sealed    (only resting close = sealed)
 ```
 
@@ -137,7 +137,7 @@ Transient: `closing`, `recovery` — do not expose in UI as resting state.
 8. If divergence: UI (`recovery.use_store` / `recovery.reimport_archive`) — RF-48.
 9. If store missing or user chose re-import: materialize from `.7z` (ciphertext only on disk).
 10. Derive key (Argon2id); `SessionHandle` RAM only; apply anti-swap policy where supported.
-11. Mount `workspace/<id>/` **virtual** — **v1: FUSE (Linux)**; WinFSP / SAF in later phases (§2.4).
+11. Mount `workspace/<id>/` **virtual** — **v1: FUSE (Linux) + WinFsp (Windows)**; DocumentProvider (Android) in later phases (§2.4).
 12. Update `runtime/state.json` → `vaults.<id>.session = "open"`.
 
 **close (v1):**
@@ -156,7 +156,7 @@ Transient: `closing`, `recovery` — do not expose in UI as resting state.
 
 **Reopen after reboot:** `open` with manifest; store reflects edits; `.7z` may lag until next successful close.
 
-**open / close (`plain`, v1.1+):** classic flow — `7z t` → extract to plaintext `workspace/<id>/` → edit → on close: gate `7z t`, backup, `SevenZip::create` from `workspace/`, test `.new`, rename, **`secure_wipe_workspace`**, delete folder. Use when RAM cannot support mounted store or user explicitly chooses exception mode.
+**open / close (`plain`, v1):** classic flow — `7z t` → extract to plaintext `workspace/<id>/` → edit → on close: gate `7z t`, backup, `SevenZip::create` from `workspace/`, test `.new`, rename, **`secure_wipe_workspace`**, delete folder. Use when RAM cannot support mounted store or user explicitly chooses exception mode.
 
 ### 2.1 Password validation on close (`7z t` on old vault)
 
@@ -255,7 +255,7 @@ Related: PRD **RF-53**, **RF-53b**.
 
 ### 2.4 Virtual mount (`workspace/`)
 
-**v1:** mount implementation **Linux (FUSE) only**. WinFSP (Windows) and DocumentProvider (Android) in later phases (PRD §3.5).
+**v1:** mount implementation **Linux (FUSE) + Windows (WinFsp)**. DocumentProvider (Android) in later phases (PRD §3.5).
 
 **Invariant:** in `encrypted_dir`, **never** create persistent regular files in `workspace/<id>/` on the vault volume.
 
@@ -599,13 +599,13 @@ method = "lzma2"
 ```toml
 [storage]
 mode = "encrypted_dir"          # v1 default
-# mode = "plain"       # v1.1+ exception: insufficient RAM, very large vault
+# mode = "plain"       # v1 exception: insufficient RAM, very large vault
 
 [close]
 default_action = "close"        # "close" | "seal"
 ```
 
-**RAM capacity (`encrypted_dir`):** decrypted logical content is held in **RAM** while the vault is **open** (virtual mount + session read/write buffers; encrypted `store/` on disk is not a substitute for session memory). **`upriv-core`** must treat insufficient memory as a **hard failure** — open, edit, or close abort with a user-visible error; **never** silently spill plaintext workspace to disk in this mode (RF-49). UI: i18n **`warning.encrypted_dir_ram`** under **Storage** when `mode = encrypted_dir` (vault settings + create wizard); Help → **`modal.help.body.security.2`**. When RAM cannot fit the vault, user should split vaults or choose **`plain`** (v1.1+).
+**RAM capacity (`encrypted_dir`):** decrypted logical content is held in **RAM** while the vault is **open** (virtual mount + session read/write buffers; encrypted `store/` on disk is not a substitute for session memory). **`upriv-core`** must treat insufficient memory as a **hard failure** — open, edit, or close abort with a user-visible error; **never** silently spill plaintext workspace to disk in this mode (RF-49). UI: i18n **`warning.encrypted_dir_ram`** under **Storage** when `mode = encrypted_dir` (vault settings + create wizard); Help → **`modal.help.body.security.2`**. When RAM cannot fit the vault, user should split vaults or choose **`plain`**.
 
 | Value | `7zz` (summary) | Use |
 |-------|-----------------|-----|
@@ -952,7 +952,9 @@ upriv-core/
 ├── seven_zip/    # wrapper 7zz: test, extract, create
 ├── session/      # session.enc, SecurityMode
 ├── recovery/     # detect orphan, UI actions
-└── paths/        # VaultRoot, canonicalize
+├── paths/        # VaultRoot, canonicalize
+├── mount/        # Virtual workspace trait; FUSE (Linux), WinFsp (Windows)
+└── plain/        # Plaintext workspace open/close + secure_wipe (v1)
 ```
 
 ### 4.3 Public interface (Rust)
@@ -1155,7 +1157,7 @@ dev/
 
 ### 8.2 Interface (v1 — specification)
 
-**PRD:** §3.7 (RF-UI requirements). **v1 platform:** Linux + Tauri; **dark** theme; **minimalist** UX.
+**PRD:** §3.7 (RF-UI requirements). **v1 platform:** Linux + Windows + Tauri; **dark** theme; **minimalist** UX.
 
 **i18n:** load `dev/apps/shared/locales/{locale}.json` per `[ui] locale` in `main.toml`. No hardcoded UI sentences in Rust/TS — see `LOCALE.md`.
 
@@ -1364,13 +1366,13 @@ Upriv.exe --vault <path>
 Upriv.exe --create <path>
 ```
 
-**Root launcher** (demo = multi-OS stubs; **v1 production = Linux only**):
+**Root launcher** (demo = multi-OS stubs; **v1 production = Linux + Windows**):
 
 | OS | File | v1 | Behavior |
 |----|------|-----|----------|
 | Linux | `Upriv-linux` | **Yes** | → `.upriv/app/Linux-*/Upriv --vault <root>` |
-| Windows | `Upriv-windows.exe` | No | → `.upriv/app/Windows-*/Upriv.exe` (v1.1+) |
-| macOS | `Upriv-mac` | No | → `.upriv/app/macOS-arm64/Upriv.app` (v1.2+) |
+| Windows | `Upriv-windows.exe` | **Yes** | → `.upriv/app/Windows-*/Upriv.exe` |
+| macOS | `Upriv-mac` | No | → `.upriv/app/macOS-arm64/Upriv.app` (v1.1+) |
 
 ```bat
 "%~dp0.upriv\app\Windows-x64\Upriv.exe" --vault "%~dp0"
@@ -1592,18 +1594,19 @@ vault_path = "/media/user/HD/my-vault"
 
 ## 14. Implementation order (for AI/dev)
 
-**v1 scope:** Linux only (PRD §3.5).
+**v1 scope:** Linux + Windows desktop (PRD §3.5).
 
 1. **`upriv-core`**: config load, paths, `SevenZip` wrapper with temp dir tests.
-2. **FUSE** (Linux): mount `workspace/<id>/` → write-through to `store`.
-3. **open/close** happy path without UI (Linux).
+2. **Virtual mount** (`mount/` trait + platform backends): **FUSE** (Linux) and **WinFsp** (Windows) — `workspace/<id>/` → write-through to `store` (`encrypted_dir` only).
+2b. **`plain/` module**: extract → real `workspace/<id>/` → close from workspace + **`secure_wipe_workspace`** (no virtual mount).
+3. **open/close** happy path without UI — **both** `encrypted_dir` and `plain` (Linux + Windows).
 4. **Recovery** detector + discard.
 5. **`7z t` gate** before write.
-6. **Tauri** minimal (Linux): vault list (§8.2), Lock/Unlock, config/backups modals, row click → workspace.
+6. **Tauri** minimal: vault list (§8.2), Lock/Unlock, config/backups modals, row click → workspace.
 7. **Linux packaging**: bundle `7zz` (`Linux-x64` / `aarch64`), `Upriv-linux`, `hd-bundle` template.
-8. **session.enc** + disk modes (v0.2).
-9. **Windows** Tauri + WinFSP (v1.1).
-10. **macOS** (v1.2).
+8. **Windows packaging**: bundle `7zz` (`Windows-x64`), `Upriv.exe`, WinFsp runtime/deps.
+9. **session.enc** + disk modes (v0.2).
+10. **macOS** (v1.1).
 11. **React Native Android** (`dev/apps/mobile/`): native module → `upriv-core`; SAF; workspace on HD; open/close; Intent “Open folder”; single APK.
 11b. **Auto-close**: timer + FS watch per vault; warning UI.
 12. **React Native iOS**: document picker + same core.
@@ -1620,7 +1623,7 @@ vault_path = "/media/user/HD/my-vault"
 | Desktop UI | React web + Tauri 2 | Stable executables Linux/Win/Mac (x86 + ARM); validated `.exe` + AppImage (2026-05-31) |
 | Mobile UI | React Native | Single APK/IPA; TS structure shared with desktop; not Tauri Android |
 | UI security boundary | Presentation only in JS/TS | Crypto, RAM, disk, 7z in `upriv-core` only |
-| v1 platform | Linux desktop | Reduce surface (FUSE, packaging); portable vault from day one |
+| v1 platform | Linux + Windows desktop | Desktop parity from day one; shared `mount/` trait (FUSE / WinFsp); portable vault format |
 | Config | TOML + defaults | Readable, cross-platform |
 | Password on HD | Only `session.enc` | Never plaintext |
 | Vault location | `--vault` path | HD + system folder |

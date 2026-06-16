@@ -185,8 +185,8 @@ See SDD §9.4 for Android SAF flow.
 | OS | Phase | UI | Mount / workspace | Status |
 |----|-------|-----|-------------------|--------|
 | Linux x86_64 / ARM64 | v1 | Tauri + React | FUSE → encrypted store | In development |
-| Windows x86_64 / ARM64 | v1.1 | Tauri + React | WinFSP or equivalent | `.exe` build validated |
-| macOS | v1.2 | Tauri + React | Platform mount | Planned |
+| Windows x86_64 / ARM64 | v1 | Tauri + React | WinFsp or equivalent | `.exe` build validated |
+| macOS | v1.1 | Tauri + React | Platform mount | Planned |
 | Android | v2 | React Native | SAF; `workspace/` on OTG HD | Planned |
 | iOS | v3 | React Native | Document picker + SAF-like APIs | Planned |
 
@@ -198,7 +198,7 @@ See SDD §9.4 for Android SAF flow.
 2. Implement **`VaultStorage`** (desktop `std::fs` first).
 3. Wire Tauri commands in `dev/src-tauri/` to `upriv-core` only (thin `lib.rs`).
 4. **`dev/apps/shared/`** (`@upriv/shared`) — domain types, service interfaces, and UI locale catalogs (`locales/`).
-5. Complete desktop v1 (Linux FUSE, open/close/seal).
+5. Complete desktop v1 (Linux FUSE + Windows WinFsp, open/close/seal).
 6. **`dev/apps/mobile/`** — native module → `upriv-core` (JNI / UniFFI).
 7. Android: SAF adapter, APK packaging, OTG flows (PRD §3.6).
 

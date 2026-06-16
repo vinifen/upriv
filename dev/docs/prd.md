@@ -16,7 +16,7 @@
 
 Upriv is a **portable vault manager** based on **AES-256 encrypted `.7z`** as the closed/portable container, with a **mountable encrypted store** for live editing without persisting plaintext on the HD/SSD.
 
-**v1 (initial goal):** implement the secure flow (`encrypted_dir`) **on Linux only** (desktop) first. The alternative mode with a plaintext workspace on the HD (`plain`) **will be implemented later** for exceptional cases (e.g. insufficient RAM, very large vault), not discarded. Windows, macOS, and mobile are deferred to later phases (§3.5).
+**v1 (initial goal):** implement **both storage modes** on **Linux and Windows desktop** together (Tauri + `upriv-core`): default **`encrypted_dir`** (FUSE on Linux, WinFsp on Windows) and exception **`plain`** (real plaintext `workspace/` on HD between open and close, with UI warnings and `secure_wipe_workspace`). macOS and mobile are deferred to later phases (§3.5).
 
 The user opens with a password, edits in `workspace/{display_name}/` (virtual mount / RAM), the encrypted store in `.upriv/vaults/<vault_id>/store/` stays on disk, and on app close a new `.7z` is generated in `vaults/<vault_id>/archive/`.
 
@@ -46,24 +46,23 @@ Differentiators vs. manual 7-Zip use:
 
 ### 1.4 Non-goals (v1)
 
-- **Non-Linux clients** — Windows, macOS, Android, and iOS are not in the first release; vault layout and `.7z` remain portable (Plan B on any OS).
+- **Non-desktop clients** — macOS, Android, and iOS are not in the first release; vault layout and `.7z` remain portable (Plan B on any OS).
 - Replace cloud password manager (Bitwarden, etc.) — can **store** exports inside the vault.
 - Full-partition encryption (LUKS/VeraCrypt).
 - Proprietary vault format without export to `.7z`.
 - Monolithic vaults of tens of GB (supported with limitations, not recommended).
 - Replace full-disk encryption at OS/firmware level.
-- Implement `plain` in the **same product** (v1.1+), not as "abandoned legacy" — see §1.6.
 
 ### 1.6 Two storage modes (full product)
 
 | Mode | ID | When to use | v1 |
 |------|-----|-------------|-----|
 | **Secure (default)** | `encrypted_dir` | Normal use; minimize plaintext traces on HD/SSD | **Yes** |
-| **Exception** | `plain` | Insufficient RAM, weak hardware, huge vault, or explicit user fallback | **No** (planned v1.1+) |
+| **Exception** | `plain` | Insufficient RAM, weak hardware, huge vault, or explicit user fallback | **Yes** (UI warning required) |
 
 `plain` flow: `.7z` → extract to `workspace/<id>/` **in plaintext** on the HD → edit → close → new `.7z` + `secure_wipe_workspace`. Less secure (SSD wipe limitations); simpler and more predictable in memory.
 
-**`encrypted_dir` RAM requirement:** while a vault is **open**, decrypted content is served through the virtual mount and session buffers in **RAM** (encrypted store remains on disk). **Available memory must fit the entire unlocked vault working set** — open, edit, or close may **fail** if RAM is insufficient. The UI must warn when `encrypted_dir` is selected (i18n `warning.encrypted_dir_ram`; Help → Security). Prefer **`plain`** (when available), smaller vaults, or more RAM when hardware cannot meet this limit.
+**`encrypted_dir` RAM requirement:** while a vault is **open**, decrypted content is served through the virtual mount and session buffers in **RAM** (encrypted store remains on disk). **Available memory must fit the entire unlocked vault working set** — open, edit, or close may **fail** if RAM is insufficient. The UI must warn when `encrypted_dir` is selected (i18n `warning.encrypted_dir_ram`; Help → Security). Prefer **`plain`**, smaller vaults, or more RAM when hardware cannot meet this limit.
 
 The user chooses the mode in `config/<id>.toml` (`storage.mode`); the UI must warn when selecting the exception mode (`warning.plain_mode`) and when selecting the default secure mode about RAM (`warning.encrypted_dir_ram`).
 
@@ -108,9 +107,9 @@ plain:  sealed ──open──► open ──close──► sealed
 | Only `.7z` (no store); optional `vaults/<id>.meta.json` with `persistence: sealed` | `sealed` |
 | Orphan without lock | `recovery` |
 
-### 1.9 v1 flow (single mode — initial goal)
+### 1.9 v1 flows (both modes)
 
-Agreed pipeline for the first release:
+#### `encrypted_dir` (default)
 
 | Step | What |
 |-------|--------|
@@ -122,7 +121,16 @@ Agreed pipeline for the first release:
 | 6 | **Close:** test `.7z.new` → atomic rename → backup or replace old `.7z` per `[backup]`. |
 | 7 | **Close:** unmount `workspace/<id>/`, zero password/keys in RAM. Action `close` → state **`closed`**; action `seal` → state **`sealed`** (§1.7). |
 
-**Accepted trade-off (v1):** after reboot, the user **must re-enter the password** to mount again. No "remember password" on HD/SSD in this mode.
+#### `plain` (exception)
+
+| Step | What |
+|-------|--------|
+| 1 | **Open:** `7z t` → extract `.7z` to plaintext `workspace/<id>/` on HD. |
+| 2 | **Edit:** user and external apps edit files directly in `workspace/<id>/`. |
+| 3 | **Close:** `7z t` gate → backup (if enabled) → `SevenZip::create` from `workspace/` → test `.7z.new` → atomic rename. |
+| 4 | **Close:** **`secure_wipe_workspace`**, delete `workspace/<id>/` → state **`sealed`** (no `closed` cache). |
+
+**Accepted trade-off (v1):** after reboot, the user **must re-enter the password** to open again. No "remember password" on HD/SSD in default RAM-only session mode.
 
 **Data after reboot:** not lost — the encrypted store in `.upriv/stores/<id>/` already contains changes; only unlock/mount is needed.
 
@@ -210,7 +218,7 @@ Agreed pipeline for the first release:
 | RF-02 | Open vault (`encrypted_dir` default): validate password, mount virtual `workspace/<id>/`, load encrypted store | P0 |
 | RF-03 | Expose `workspace` to user (button `action.open_folder` → OS file manager) | P0 |
 | RF-04 | Close vault (`encrypted_dir`): unmount `workspace/<id>/`, clear session keys; keep encrypted persistence | P0 |
-| RF-04b | `plain` mode (`.7z` → plaintext workspace → `.7z` + wipe): implement **after v1** for exceptional cases (RAM/large vault); UI with security warning | P1 |
+| RF-04b | `plain` mode (`.7z` → plaintext workspace → `.7z` + wipe): exceptional cases (RAM/large vault); UI with **`warning.plain_mode`** | P0 |
 | RF-04c | (`encrypted_dir`) Require sufficient RAM for the **entire unlocked vault** while open; fail open/edit/close with user-visible error if not; UI **`warning.encrypted_dir_ram`** (RF-UI-17) | P0 |
 | RF-05 | On close: **before** backup or compress, `7z t` on existing `vaults/<id>.7z` with given password — failure aborts everything (prevents closing with password different from opened vault) | P0 |
 | RF-06 | Atomic write: `<id>.7z.new` → test → rename → delete old | P0 |
@@ -361,13 +369,12 @@ While vault is **open**, plaintext exists in **session** (RAM / virtual mount). 
 
 | Phase | Platforms | Delivery |
 |------|-------------|---------|
-| **v1 (initial)** | **Linux** (x86_64; ARM64 if needed) | Tauri 2 + Rust + FUSE; virtual mount; embedded `7zz` for Linux |
-| v1.1 | Windows | Tauri + WinFSP (or equivalent) for `session` |
-| v1.2 | macOS | Tauri; virtual mount on macOS |
+| **v1 (initial)** | **Linux + Windows** (x86_64; ARM64 if needed) | Tauri 2 + Rust; virtual mount — **FUSE** (Linux), **WinFsp** (Windows); embedded `7zz` per OS |
+| v1.1 | macOS | Tauri; platform virtual mount |
 | v2 | Android | React Native + `upriv-core` (Rust); OTG vault; single APK; see §3.6 |
 | v3 | iOS | React Native + `upriv-core`; App Store; same vault layout; no APK on HD |
 
-**Note:** **vault format** (`.7z`, `.upriv/`, `manifest`) is cross-platform from the start; only the **Upriv app** in v1 runs on Linux.
+**Note:** **vault format** (`.7z`, `.upriv/`, `manifest`) is cross-platform from the start; the **Upriv desktop app** in v1 ships on **Linux and Windows**.
 
 ### 3.6 Android — specific requirements
 
@@ -612,7 +619,7 @@ Configurable in `config/<id>.toml` as `security.mode`.
 | RNF-03 | Single executable per OS (Tauri); `7zz` as bundled dependency |
 | RNF-04 | UTF-8 config, paths relative to vault root |
 | RNF-05 | Core code in Rust (`upriv-core`); desktop UI React web + Tauri 2; mobile UI React Native + Rust FFI (later phases). UI layers are presentation only — crypto, RAM session, and disk I/O live in Rust. See `ARCHITECTURE.md` |
-| RNF-05b | **v1:** desktop app **Linux only**; vault format and `.7z` portable from the start |
+| RNF-05b | **v1:** desktop app **Linux + Windows**; vault format and `.7z` portable from the start |
 | RNF-06 | License and dependencies compatible with `7zz` distribution |
 
 ---
@@ -641,7 +648,7 @@ Configurable in `config/<id>.toml` as `security.mode`.
 | Encrypted traces / old versions | `full` close + wipe (RF-53); accept in `normal` close |
 | Two PCs on same USB | RF-54 lockfile + warning |
 | 7z on PATH vs bundled | Bundle `7zz` per platform in app/HD |
-| Very large vault / insufficient RAM | UI documents limits (`warning.encrypted_dir_ram`); split into multiple vaults; `plain` when RAM cannot fit entire unlocked vault (v1.1+) |
+| Very large vault / insufficient RAM | UI documents limits (`warning.encrypted_dir_ram`); split into multiple vaults; offer **`plain`** as fallback |
 | Android: OTG disconnected with vault open | Recovery; UI warnings |
 | Android: Intent doesn't open folder in some manager | Chooser + document tested apps |
 | Android: storage scope | SAF mandatory |
@@ -653,8 +660,10 @@ Configurable in `config/<id>.toml` as `security.mode`.
 ## 9. Suggested roadmap
 
 ### MVP (v0.1)
-- **Linux only** (first implementation)
-- **Single v1 flow:** `.7z` → encrypted store → virtual `workspace` → close → new `.7z` (see §1.9)
+- **Linux + Windows desktop** (first implementation)
+- **Both storage modes:** `encrypted_dir` (default) + `plain` (exception; UI warnings + wipe)
+- `encrypted_dir` flow: `.7z` → encrypted store → virtual `workspace` → close → new `.7z` (see §1.9)
+- `plain` flow: `.7z` → plaintext `workspace` → close → new `.7z` + `secure_wipe_workspace`
 - `settings.toml` + defaults
 - Basic recovery + `manifest` (RF-47–48)
 - States `open` / `closed` / `sealed` (RF-53, RF-53b)
@@ -663,14 +672,12 @@ Configurable in `config/<id>.toml` as `security.mode`.
 - Vault list UI + dark theme (RF-UI-01–10; §3.7)
 
 ### v0.2
-- Windows (Tauri + mount)
 - Backup in `backup/<id>/` (`keep_last` / `keep_all`)
-- Exception mode `plain` (insufficient RAM / fallback)
 - 5 security modes + `session.enc` (exception mode only, if applicable)
 - Settings UI
 
 ### v0.3
-- macOS
+- macOS (v1.1)
 
 ### v0.4 — Android
 - React Native + `upriv-core` (native module / FFI); single APK bundles UI, bridge, and `libupriv_core.so`
@@ -718,7 +725,7 @@ Exception mode: **`archive` → `plain` → `archive`** (no `store`).
 | `storage.mode` | Layers used |
 |----------------|----------------|
 | `encrypted_dir` | `archive` + `store` + `session` (v1 default) |
-| `plain` | `archive` + **`plain`** layer (v1.1+) |
+| `plain` | `archive` + **`plain`** layer (v1 exception mode) |
 
 Suggested Rust modules: `upriv_core::archive`, `::store`, `::session`, `::plain`.
 

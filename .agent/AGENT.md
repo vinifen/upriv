@@ -28,7 +28,7 @@ When product behavior, security, or on-disk layout is unclear, **read the canoni
 | Topic | PRD | SDD |
 |-------|-----|-----|
 | Vision, modes (`encrypted_dir` / `plain`), states | §1, §1.6–1.7 | §1, §2 |
-| v1 Linux-only scope | §1.1, §3.5 | §1.1 principle 0, §14 |
+| v1 Linux + Windows scope | §1.1, §3.5 | §1.1 principle 0, §14 |
 | Functional requirements (RF-*) | §3 | §2–§7, §8–§9 |
 | Desktop UX (vault list, modals) | §3.7 | §8.2 |
 | Android (SAF, APK, workspace on HD) | §3.6 | §9 |
@@ -47,8 +47,8 @@ When product behavior, security, or on-disk layout is unclear, **read the canoni
 ## Product summary (do not contradict PRD/SDD)
 
 - **Container:** AES-256 `.7z` per vault; **Plan B** = open archive in any 7-Zip-compatible tool.
-- **Default mode (v1):** `encrypted_dir` — encrypted `store/` on disk; user edits via virtual `workspace/{display_name}/` (FUSE on Linux); **no durable plaintext** on HD in production.
-- **Exception mode (v1.1+):** `plain` — plaintext `workspace/` on HD between open/close; not in v1 initial delivery.
+- **Default mode (v1):** `encrypted_dir` — encrypted `store/` on disk; user edits via virtual `workspace/{display_name}/` (FUSE on Linux, WinFsp on Windows); **no durable plaintext** on HD in production.
+- **Exception mode (v1):** `plain` — plaintext `workspace/` on HD between open/close; UI warnings + `secure_wipe_workspace` on close.
 - **States:** `open` (runtime), `closed` (`encrypted_dir` cache), `sealed` (only `.7z` + config/backups). Misaligned store → **`recovery`**, not silent `closed`.
 - **Close pipeline:** `7z t` on existing archive → stream new `.7z` from logical session content → test → atomic rename; never pack raw `.enc` blobs into the archive.
 - **Passwords:** RAM only in v1; never in `localStorage`, UI config, or logs.
@@ -130,9 +130,10 @@ upriv-core/src/
 ├── session/      # RAM session, security modes
 ├── recovery/
 ├── paths/        # VaultRoot
+├── mount/        # Virtual workspace trait; FUSE (Linux), WinFsp (Windows)
 ├── archive/      # PRD layers
 ├── store/
-├── plain/        # v1.1+
+├── plain/        # Plaintext workspace open/close + secure_wipe (v1)
 └── sync/         # sync_generation, hashes
 ```
 
@@ -180,13 +181,15 @@ Reference tree: **`prod-example/`** (standalone; set `UPRIV_VAULT_ROOT` to test 
 Work in this order unless the user explicitly reprioritizes:
 
 1. `upriv-core`: config load, paths, `SevenZip` wrapper + tests  
-2. FUSE (Linux): `workspace/` → `store/`  
-3. open/close happy path without UI  
+2. Virtual mount (`mount/` trait): **FUSE** (Linux) + **WinFsp** (Windows) — `workspace/` → `store/` (`encrypted_dir`)  
+2b. `plain/` module: real `workspace/` extract → close + `secure_wipe_workspace`  
+3. open/close happy path without UI — **both modes** (Linux + Windows)  
 4. Recovery detector  
 5. `7z t` gate before write  
 6. Tauri minimal UI (vault list, lock/unlock, modals)  
 7. Linux packaging (`7zz`, AppImage/deb template)  
-8. Later: Windows, macOS, RN Android, iOS  
+8. Windows packaging (`7zz`, `.exe`, WinFsp deps)  
+9. Later: macOS, RN Android, iOS  
 
 Current scaffold: step 1 barely started (`app_version` only).
 
@@ -227,13 +230,12 @@ npm run typecheck --prefix apps/mobile
 
 | Phase | Platform | UI | Core delivery |
 |-------|----------|-----|----------------|
-| **v1** | Linux desktop | Tauri + React | `upriv-core` + FUSE |
-| v1.1 | Windows | Tauri + React | WinFSP |
-| v1.2 | macOS | Tauri + React | Platform mount |
+| **v1** | Linux + Windows desktop | Tauri + React | `upriv-core` + FUSE (Linux) / WinFsp (Windows) |
+| v1.1 | macOS | Tauri + React | Platform mount |
 | v2 | Android | React Native | `libupriv_core.so` + SAF |
 | v3 | iOS | React Native | Same core, document picker |
 
-Vault **format** is cross-platform from day one; **v1 app** runs on Linux only.
+Vault **format** is cross-platform from day one; **v1 desktop app** ships on **Linux and Windows**.
 
 ---
 
