@@ -1,6 +1,6 @@
 # SDD — Upriv
 
-**Language:** English (UI copy: `dev/docs/i18n/` — see `LOCALE.md`)
+**Language:** English (UI copy: `dev/apps/shared/locales/` — see `LOCALE.md`)
 
 **Software Design Document**  
 **Version:** 0.2  
@@ -1157,7 +1157,7 @@ dev/
 
 **PRD:** §3.7 (RF-UI requirements). **v1 platform:** Linux + Tauri; **dark** theme; **minimalist** UX.
 
-**i18n:** load `dev/docs/i18n/{locale}.json` per `[ui] locale` in `main.toml`. No hardcoded UI sentences in Rust/TS — see `LOCALE.md`.
+**i18n:** load `dev/apps/shared/locales/{locale}.json` per `[ui] locale` in `main.toml`. No hardcoded UI sentences in Rust/TS — see `LOCALE.md`.
 
 #### 8.2.0 Design baseline (not final UI)
 
@@ -1166,7 +1166,7 @@ dev/
 | Rule | Detail |
 |------|--------|
 | **Not final** | Not production UI; not wired to Tauri or `upriv-core` |
-| **Not authoritative** | Behavior, flows, and copy come from **PRD §3.7**, **this section (§8.2)**, and **`dev/docs/i18n/`** |
+| **Not authoritative** | Behavior, flows, and copy come from **PRD §3.7**, **this section (§8.2)**, and **`dev/apps/shared/locales/`** |
 | **Implementation** | Do not ship `code.html` as the app shell; replace hardcoded strings with i18n keys |
 
 When the baseline and PRD/SDD conflict, **PRD/SDD win**. See `dev/docs/stitch_upriv_vault_manager/README.md`.
@@ -1391,7 +1391,7 @@ Upriv.exe --create <path>
 
 **Packaging:** one APK contains RN UI, bridge, `libupriv_core.so`, and `7zz` — not separate apps. **Rejected for mobile:** Tauri Android (experimental). **Superseded:** Flutter (see `ARCHITECTURE.md` ADR-02–04).
 
-**Shared with desktop:** `dev/apps/shared/` (`@upriv/shared` — types, service interfaces) and `dev/docs/i18n/` (strings) — not the same JSX/DOM as `dev/apps/desktop/src/`.
+**Shared with desktop:** `dev/apps/shared/` (`@upriv/shared` — types, services, locale catalogs) — not the same JSX/DOM as `dev/apps/desktop/src/`.
 
 ### 9.2 Android — overview
 

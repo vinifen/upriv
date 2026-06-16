@@ -1,7 +1,7 @@
 import { StatusBar } from "expo-status-bar";
 import { StyleSheet, Text, View } from "react-native";
 
-import en from "../../../docs/i18n/en.json";
+import en from "../../shared/locales/en.json";
 
 export default function App() {
   return (

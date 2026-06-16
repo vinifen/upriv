@@ -23,9 +23,10 @@ All **non-UI** project text must be in **English**:
 Use **stable keys** and locale files:
 
 ```
-dev/docs/i18n/
+dev/apps/shared/locales/
 ├── en.json      # English (default / fallback)
 ├── pt-BR.json   # Portuguese (Brazil)
+├── es.json      # Spanish
 └── README.md
 ```
 
@@ -41,12 +42,12 @@ User preference (example in `main.toml`):
 
 ```toml
 [ui]
-locale = "en"   # "en" | "pt-BR" | future BCP-47 tags
+locale = "en"   # "en" | "pt-BR" | "es" | future BCP-47 tags
 ```
 
 - Default locale: **`en`**
 - Fallback chain: requested locale → `en` → key string (dev only)
-- Adding a locale = new `dev/docs/i18n/<tag>.json`; no code changes for copy-only updates
+- Adding a locale = new `dev/apps/shared/locales/<tag>.json` + register in `SUPPORTED_LOCALES`; no code changes for copy-only updates beyond that
 
 ### What maps to i18n keys
 
@@ -66,13 +67,14 @@ locale = "en"   # "en" | "pt-BR" | future BCP-47 tags
 
 ## Implementation checklist
 
-- [ ] Tauri/React (or equivalent) loads `dev/docs/i18n/{locale}.json`
+- [ ] Tauri/React loads `dev/apps/shared/locales/{locale}.json` (via `@upriv/shared` `loadLocale`)
 - [ ] No `language = "pt-BR"` as hardcoded UI strings in Rust/TS
 - [ ] Error types: `ErrorCode::WrongPassword` + i18n `error.wrong_password`
 - [ ] CI: reject new Portuguese comments in `crates/` (optional lint later)
 
 ## Related files
 
-- `dev/docs/i18n/en.json` — English UI catalog (reference)
-- `dev/docs/i18n/pt-BR.json` — Portuguese UI catalog
+- `dev/apps/shared/locales/en.json` — English UI catalog (reference)
+- `dev/apps/shared/locales/pt-BR.json` — Portuguese UI catalog
+- `dev/apps/shared/locales/es.json` — Spanish UI catalog
 - `dev/prd.md`, `dev/sdd.md` — English product/engineering docs

@@ -16,7 +16,6 @@
       "@/*": ["src/*"],
       "@upriv/shared": ["../shared/src/index.ts"],
       "@upriv/shared/*": ["../shared/src/*"],
-      "@i18n/*": ["../../docs/i18n/*"],
       "@assets/*": ["./assets/*"]
     },
     "strict": true,
@@ -24,5 +23,5 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src", "../../docs/i18n/*.json"]
+  "include": ["src", "../shared/locales/*.json"]
 }

@@ -213,7 +213,7 @@ npm run typecheck --prefix apps/mobile
 
 ## Coding guardrails
 
-1. **Language:** English for docs, code comments, logs, TOML comments, commit messages. UI text = **i18n keys** in `dev/docs/i18n/*.json` only (`LOCALE.md`).
+1. **Language:** English for docs, code comments, logs, TOML comments, commit messages. UI text = **i18n keys** in `dev/apps/shared/locales/*.json` only (`LOCALE.md`).
 2. **Minimize scope:** Smallest correct change; match existing style; no drive-by refactors.
 3. **Security:** No passwords/secrets in logs, commits, or UI persistence. Use `zeroize` in Rust for sensitive buffers.
 4. **Config:** TOML is source of truth; mutable at runtime; re-read before open/close.

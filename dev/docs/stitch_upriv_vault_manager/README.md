@@ -8,7 +8,7 @@ This folder holds the **starting-point design direction** for the Upriv vault ma
 |---|---|
 | **Purpose** | Visual and interaction **reference** — mood, layout, tokens, component ideas |
 | **Not** | Production UI, implementation spec, or approved final design |
-| **Authority for behavior** | `dev/docs/prd.md` (§3.7.0–3.7), `dev/docs/sdd.md` (§8.2.0–8.2), `dev/docs/i18n/` |
+| **Authority for behavior** | `dev/docs/prd.md` (§3.7.0–3.7), `dev/docs/sdd.md` (§8.2.0–8.2), `dev/apps/shared/locales/` |
 
 Treat everything here as **exploratory**. Colors, copy, spacing, and flows may change before implementation. Engineers and designers should align with PRD/SDD and i18n keys; use this folder only as **inspiration and a shared baseline**.
 
@@ -30,5 +30,5 @@ Treat everything here as **exploratory**. Colors, copy, spacing, and flows may c
 
 - Product UX requirements: `dev/docs/prd.md` §3.7.0 (baseline note) · §3.7
 - UI specification & tokens (engineering): `dev/docs/sdd.md` §8.2.0 (baseline note) · §8.2
-- UI strings (mandatory for shipped UI): `dev/docs/i18n/en.json`, `pt-BR.json`
+- UI strings (mandatory for shipped UI): `dev/apps/shared/locales/en.json`, `pt-BR.json`, `es.json`
 - Brand assets (dev): `dev/apps/desktop/assets/`

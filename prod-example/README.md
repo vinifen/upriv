@@ -317,7 +317,7 @@ Example (file `current-000001-…`):
 
 | Key | Type | Default (demo) | Effect |
 |-----|------|----------------|--------|
-| `locale` | string | `"en"` | UI strings — `dev/docs/i18n/{locale}.json` |
+| `locale` | string | `"en"` | UI strings — `dev/apps/shared/locales/{locale}.json` |
 | `theme` | string | `"dark"` | `"dark"` \| `"light"` |
 | `vault_list_sort` | string | `"order"` | `order` \| `name` \| `state` \| `last_accessed` |
 | `vault_list_sort_direction` | string | `"asc"` | `asc` \| `desc` |
@@ -375,4 +375,4 @@ encrypted_dir: archive → store → session (workspace virtual)
 plain (ex. 4):   archive → workspace literal on HD + auth local
 ```
 
-UI strings: `dev/docs/i18n/`, `dev/docs/LOCALE.md`.
+UI strings: `dev/apps/shared/locales/`, `dev/docs/LOCALE.md`.

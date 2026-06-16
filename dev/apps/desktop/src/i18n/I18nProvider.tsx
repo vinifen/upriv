@@ -6,8 +6,7 @@ import {
   type ReactNode,
 } from "react";
 import { I18nContext, type I18nContextValue } from "./context";
-import { interpolate } from "@upriv/shared";
-import { DEFAULT_LOCALE, loadLocale } from "./loadLocale";
+import { DEFAULT_LOCALE, interpolate, loadLocale } from "@upriv/shared";
 import type { I18nCatalog, I18nKey, I18nParams, LocaleId } from "./types";
 
 interface I18nProviderProps {

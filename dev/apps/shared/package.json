@@ -6,7 +6,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./domain": "./src/domain/index.ts",
-    "./services": "./src/services/index.ts"
+    "./services": "./src/services/index.ts",
+    "./locales/*": "./locales/*"
   },
   "devDependencies": {
     "typescript": "5.7.3"

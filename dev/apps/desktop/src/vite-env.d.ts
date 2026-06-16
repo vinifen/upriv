@@ -5,7 +5,12 @@ declare module "*.svg" {
   export default src;
 }
 
-declare module "@i18n/*.json" {
+declare module "@upriv/shared/locales/*.json" {
+  const value: Record<string, string>;
+  export default value;
+}
+
+declare module "../../locales/*.json" {
   const value: Record<string, string>;
   export default value;
 }

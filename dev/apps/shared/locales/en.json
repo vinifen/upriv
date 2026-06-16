@@ -425,6 +425,8 @@
   "modal.app_settings.option.locale.en_desc": "Default language.",
   "modal.app_settings.option.locale.pt-BR": "Português (Brasil)",
   "modal.app_settings.option.locale.pt-BR_desc": "Brazilian Portuguese UI.",
+  "modal.app_settings.option.locale.es": "Español",
+  "modal.app_settings.option.locale.es_desc": "Spanish UI.",
   "modal.app_settings.option.theme.dark": "Dark",
   "modal.app_settings.option.theme.dark_desc": "Default; matches the designed UI.",
   "modal.app_settings.option.theme.neutral": "Neutral",

@@ -88,7 +88,7 @@ src/
 
 | Rule                | Where                                                                                         |
 | ------------------- | --------------------------------------------------------------------------------------------- |
-| UI copy             | `dev/docs/i18n/*.json` via `useTranslation()` — never hardcode sentences                      |
+| UI copy             | `dev/apps/shared/locales/*.json` via `useTranslation()` — never hardcode sentences              |
 | Vault status colors | `theme/vault-status.ts` + CSS vars in `styles/tokens.css`                                     |
 | Tauri commands      | `lib/tauri/commands.ts` — names match `src-tauri`                                             |
 | Domain types        | `@upriv/shared` (`shared/`) — `VaultRow`, settings, list sort/view                            |
@@ -174,7 +174,7 @@ features/vaults/lifecycle/
 | Alias       | Path                |
 | ----------- | ------------------- |
 | `@/*`       | `src/*`             |
-| `@i18n/*`   | `../../docs/i18n/*` |
+| `@upriv/shared` | `../shared/src` (includes `loadLocale`, locale JSON) |
 | `@assets/*` | `assets/*`          |
 
 Versions: `../../docs/VERSIONS.md`. Product UX: `../../docs/prd.md` §3.7, `../../docs/sdd.md` §8.2.

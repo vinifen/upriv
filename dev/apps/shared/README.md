@@ -19,7 +19,8 @@ src/
 │   ├── vault-create/ # wizard validate, draft helpers
 │   ├── vault-list/   # export rules, password hint, last accessed
 │   └── …
-├── i18n/             # interpolate (no catalog — keys live in dev/docs/i18n/)
+├── i18n/             # interpolate, loadLocale, key types
+├── locales/          # en.json, pt-BR.json, es.json (UI catalog)
 └── services/         # AppServices interfaces (implementations in each app)
 ```
 

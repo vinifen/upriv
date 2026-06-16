@@ -1,6 +1,6 @@
 # PRD — Upriv
 
-**Language:** English (UI copy: `dev/docs/i18n/` — see `LOCALE.md`)
+**Language:** English (UI copy: `dev/apps/shared/locales/` — see `LOCALE.md`)
 
 **Product Requirements Document**  
 **Version:** 0.2  
@@ -404,7 +404,7 @@ While vault is **open**, plaintext exists in **session** (RAM / virtual mount). 
 
 ## 3.7 Desktop interface (UX v1 — Linux)
 
-All visible strings use **i18n keys** in `dev/docs/i18n/{locale}.json` (default `en`, also `pt-BR`). See `LOCALE.md`. Buttons and states below map to keys such as `action.lock`, `vault.status.sealed`.
+All visible strings use **i18n keys** in `dev/apps/shared/locales/{locale}.json` (default `en`, also `pt-BR` and `es`). See `LOCALE.md`. Buttons and states below map to keys such as `action.lock`, `vault.status.sealed`.
 
 General guideline: **simple interface**, **dark theme** by default (`[ui] theme = "dark"` in `main.toml`). No separate welcome screens — on app open, user sees **immediately** the **centered** vault list.
 
@@ -421,7 +421,7 @@ A **visual and interaction baseline** lives in **`dev/docs/stitch_upriv_vault_ma
 | `DESIGN.md` | Extracted tokens and “Calm Security” style notes |
 | `README.md` | Scope, status, and how to use the folder |
 
-**Authority for shipped UI:** requirements in **§3.7** (this document), **SDD §8.2**, and **`dev/docs/i18n/`** (all user-visible copy via keys — see `LOCALE.md`). The baseline may diverge (colors, typography, missing flows, hardcoded English). Gaps in the prototype are expected; implementation must follow PRD/SDD/i18n, not copy `code.html` verbatim.
+**Authority for shipped UI:** requirements in **§3.7** (this document), **SDD §8.2**, and **`dev/apps/shared/locales/`** (all user-visible copy via keys — see `LOCALE.md`). The baseline may diverge (colors, typography, missing flows, hardcoded English). Gaps in the prototype are expected; implementation must follow PRD/SDD/i18n, not copy `code.html` verbatim.
 
 ### 3.7.1 Main screen — vault list
 

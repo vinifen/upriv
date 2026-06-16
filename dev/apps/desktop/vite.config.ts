@@ -12,7 +12,6 @@ export default defineConfig({
     alias: {
       "@": path.resolve(root, "./src"),
       "@upriv/shared": path.resolve(root, "../shared/src"),
-      "@i18n": path.resolve(root, "../../docs/i18n"),
       "@assets": path.resolve(root, "./assets"),
     },
   },

@@ -1,6 +1,6 @@
 # Architecture — Upriv (cross-platform stack)
 
-**Language:** English (UI copy: `dev/docs/i18n/` — see `LOCALE.md`)
+**Language:** English (UI copy: `dev/apps/shared/locales/` — see `LOCALE.md`)
 
 **Version:** 0.2  
 **Date:** 2026-05-31  
@@ -197,7 +197,7 @@ See SDD §9.4 for Android SAF flow.
 1. Implement **`dev/crates/upriv-core/`** (crypto, 7z, state machine).
 2. Implement **`VaultStorage`** (desktop `std::fs` first).
 3. Wire Tauri commands in `dev/src-tauri/` to `upriv-core` only (thin `lib.rs`).
-4. **`dev/apps/shared/`** (`@upriv/shared`) — domain types and service interfaces (i18n keys stay in `docs/i18n/`).
+4. **`dev/apps/shared/`** (`@upriv/shared`) — domain types, service interfaces, and UI locale catalogs (`locales/`).
 5. Complete desktop v1 (Linux FUSE, open/close/seal).
 6. **`dev/apps/mobile/`** — native module → `upriv-core` (JNI / UniFFI).
 7. Android: SAF adapter, APK packaging, OTG flows (PRD §3.6).

@@ -7,7 +7,7 @@
 | Scope | Language |
 |-------|----------|
 | Docs, config, code, logs, bundles | **English** |
-| App UI | **i18n keys** → `dev/docs/i18n/en.json`, `dev/docs/i18n/pt-BR.json` |
+| App UI | **i18n keys** → `dev/apps/shared/locales/en.json`, `pt-BR.json`, `es.json` |
 
 See **`dev/docs/LOCALE.md`** for the full policy.
 

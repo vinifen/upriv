@@ -35,16 +35,16 @@ npm run mobile:start
 
 ```text
 mobile/
-├── src/App.tsx           # UI placeholder (strings from dev/docs/i18n)
+├── src/App.tsx           # UI placeholder (strings from @upriv/shared locales)
 ├── src/native/           # Future JNI / iOS bridge to upriv-core
 ├── assets/               # Expo icons (replace with Upriv brand later)
 ├── app.json              # Expo config (newArchEnabled: false)
 └── metro.config.js       # Watches dev/apps + dev/docs for shared i18n HMR
 ```
 
-Shared UI strings: `../../docs/i18n/` (same catalog as desktop).
+Shared UI strings: `../shared/locales/` (same catalog as desktop via `@upriv/shared`).
 
-**Scaffold limitations (post-MVP debt):** no lint/format scripts yet; `react-native-screens` / `safe-area-context` installed but unused; `@i18n/*` tsconfig alias unused (relative JSON import in `App.tsx`).
+**Scaffold limitations (post-MVP debt):** no lint/format scripts yet; `react-native-screens` / `safe-area-context` installed but unused.
 
 Versions: `../../docs/VERSIONS.md`.
 

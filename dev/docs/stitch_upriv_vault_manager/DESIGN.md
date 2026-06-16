@@ -1,6 +1,6 @@
 # Design baseline — not final
 
-> **This document describes a design direction baseline only.** It was derived from the Stitch prototype in this folder (`code.html`) and is **not** the approved final UI. Product behavior and copy must follow **`dev/docs/prd.md` §3.7.0–3.7**, **`dev/docs/sdd.md` §8.2.0–8.2**, and **`dev/docs/i18n/`**. See **`README.md`** in this folder for scope and usage.
+> **This document describes a design direction baseline only.** It was derived from the Stitch prototype in this folder (`code.html`) and is **not** the approved final UI. Product behavior and copy must follow **`dev/docs/prd.md` §3.7.0–3.7**, **`dev/docs/sdd.md` §8.2.0–8.2**, and **`dev/apps/shared/locales/`**. See **`README.md`** in this folder for scope and usage.
 
 ---
 

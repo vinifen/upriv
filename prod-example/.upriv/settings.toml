@@ -11,7 +11,7 @@ workspace_dir = "workspace"
 default_vault = "my-encrypted-notes"
 
 [ui]
-locale = "en"   # UI: dev/docs/i18n/{locale}.json
+locale = "en"   # UI: dev/apps/shared/locales/{locale}.json
 theme = "dark"
 # Vault list preferences (desktop UI reads/writes when wired to Tauri)
 vault_list_sort = "order"              # order | name | state | last_accessed
