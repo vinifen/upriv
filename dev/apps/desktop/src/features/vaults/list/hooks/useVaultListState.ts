@@ -36,9 +36,11 @@ export function useVaultListState(
     initialViewMode?: VaultListViewMode;
     showHiddenVaults?: boolean;
     reloadVaults?: () => Promise<VaultListItem[]>;
+    onReorder?: (orderedIds: string[]) => void;
   },
 ) {
   const reloadVaults = options?.reloadVaults;
+  const onReorder = options?.onReorder;
   const [isReady, setIsReady] = useState(initialVaults.length > 0);
   const [vaults, setVaults] = useState(() =>
     sortVaultsByOrder(seedVaultPasswordHints(initialVaults)),
@@ -115,13 +117,17 @@ export function useVaultListState(
         event.preventDefault();
         const draggedId = event.dataTransfer.getData(DRAG_MIME) || draggingId;
         if (draggedId && draggedId !== targetId) {
-          setVaults((current) => reorderVaultList(current, draggedId, targetId));
+          setVaults((current) => {
+            const next = reorderVaultList(current, draggedId, targetId);
+            onReorder?.(next.map((vault) => vault.id));
+            return next;
+          });
         }
         setDraggingId(null);
         setDragOverId(null);
       };
     },
-    [canReorder, draggingId],
+    [canReorder, draggingId, onReorder],
   );
 
   const updateNote = useCallback((vaultId: string, note: string) => {

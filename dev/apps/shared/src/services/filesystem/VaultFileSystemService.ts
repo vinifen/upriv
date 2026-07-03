@@ -21,4 +21,13 @@ export interface VaultFileSystemService {
   deletePath(vaultId: string, path: string): boolean;
   movePath(vaultId: string, fromPath: string, toFolderPath: string): string | null;
   languageFromPath(path: string): VaultFileLanguage;
+  /**
+   * Pick a host folder with a native dialog and import it under `parentPath`.
+   * Optional: only platforms with a native picker (Tauri) implement it; the UI
+   * falls back to the browser folder input when absent.
+   */
+  importHostFolder?(
+    vaultId: string,
+    parentPath: string,
+  ): Promise<{ cancelled: boolean; folderName: string | null; fileCount: number }>;
 }

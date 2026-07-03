@@ -1,6 +1,7 @@
 import { Icon, type IconName } from "@/components/icons";
 import { useTranslation } from "@/i18n";
 import {
+  formatLastAccessed,
   resolveVaultListStatus,
   type VaultDisplayStatus,
   type VaultListViewMode,
@@ -70,8 +71,9 @@ export function VaultRow({
   onDragLeave,
   onDrop,
 }: VaultRowProps) {
-  const { t } = useTranslation();
+  const { t, locale } = useTranslation();
   const status = resolveVaultListStatus(vault, pipelineOpeningVaultId);
+  const lastAccessedLabel = formatLastAccessed(vault.lastAccessedAt, locale) || vault.lastAccessedWhen;
   const isOpen = status === "open";
   const density =
     viewMode === "blocks" ? vaultRowDensityClass.default : vaultRowDensityClass[viewMode];
@@ -138,7 +140,7 @@ export function VaultRow({
             <div className="col-start-2 row-start-2 flex flex-wrap items-center gap-2">
               <VaultStatusBadge status={status} />
               <span className="text-xs text-on-surface-variant">
-                {t("vault.last_accessed", { when: vault.lastAccessedWhen })}
+                {t("vault.last_accessed", { when: lastAccessedLabel })}
               </span>
             </div>
           </div>

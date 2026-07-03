@@ -8,6 +8,7 @@
     "tauri": "npm run tauri --prefix apps/desktop",
     "tauri:dev": "npm run tauri --prefix apps/desktop -- dev",
     "tauri:build": "npm run tauri --prefix apps/desktop -- build",
+    "verify:fuse": "bash scripts/verify-fuse-workspace.sh",
     "mobile:start": "npm run start --prefix apps/mobile",
     "mobile:android": "npm run android --prefix apps/mobile",
     "mobile:typecheck": "npm run typecheck --prefix apps/mobile"

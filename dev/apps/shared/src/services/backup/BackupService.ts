@@ -4,5 +4,5 @@ export interface BackupService {
   listBackups(vaultId: string): Promise<VaultBackupEntry[]>;
   deleteBackups(vaultId: string, filenames: readonly string[]): Promise<void>;
   promoteToSave(vaultId: string, filename: string): Promise<void>;
-  getBackupBytes(entry: VaultBackupEntry): Promise<Uint8Array>;
+  getBackupBytes(vaultId: string, entry: VaultBackupEntry): Promise<Uint8Array>;
 }

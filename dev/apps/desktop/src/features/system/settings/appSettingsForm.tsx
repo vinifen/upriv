@@ -525,12 +525,16 @@ export function AppSettingsBehaviorSection({ config, onChange }: SectionPatchPro
                     variant="secondary"
                     size="md"
                     className="w-full shrink-0 sm:w-auto"
-                    onClick={() =>
-                      onChange({
-                        auto_detect_vault_root: false,
-                        upriv_root_path: appSettingsService.getDefaultRootPathSuggestion(),
-                      })
-                    }
+                    onClick={() => {
+                      void appSettingsService.pickVaultRootFolder().then((picked) => {
+                        const path = picked?.trim() || appSettingsService.getDefaultRootPathSuggestion();
+                        if (!path) return;
+                        onChange({
+                          auto_detect_vault_root: false,
+                          upriv_root_path: path,
+                        });
+                      });
+                    }}
                   >
                     {t("modal.app_settings.action.choose_folder")}
                   </Button>

@@ -39,7 +39,10 @@ export function VaultLockButton({
 
   const isOpen = status === "open";
   const pipelineBusy = status === "closing" || status === "opening";
-  const showSealSplit = canSeal && isOpen && storageMode === "encrypted_dir" && !pipelineBusy;
+  // Seal is offered while open, and directly from `closed` (drop the store cache).
+  const canSealNow = isOpen || status === "closed";
+  const showSealSplit =
+    canSeal && canSealNow && storageMode === "encrypted_dir" && !pipelineBusy;
   const label = isOpen ? t("action.lock") : t("action.unlock");
 
   const unlockSurfaceClass = "bg-surface-container-highest text-on-surface hover:brightness-110";

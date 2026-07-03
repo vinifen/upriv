@@ -6,11 +6,17 @@ useMemo,
 useReducer,
 type ReactNode
 } from "react";
+import { Toast } from "@/components/ui";
+import { useToast } from "@/hooks/useToast";
+import { stopWorkspaceWatch, hydrateWorkspace } from "@/platform/tauri/workspaceFsStore";
 import { useVaultFileSystemService } from "@/platform/services";
-import { resolveVaultDisplayStatus, type VaultListItem } from "@upriv/shared";
+import { isTauri } from "@/lib/tauri/invoke";
+import { resolveVaultRootPath } from "@/platform/tauri/vaultRoot";
+import { resolveVaultListStatus, resolveVaultDisplayStatus, type VaultListItem } from "@upriv/shared";
 import { createDefaultWorkspaceState } from "./lib/fileManagerWorkspaceTypes";
 import type { FileManagerEntry } from "./fileManagerTypes";
 import { vaultWorkspaceReducer, type VaultWorkspaceAction } from "./lib/vaultWorkspaceReducer";
+import { useWorkspaceDiskSync } from "./hooks/useWorkspaceDiskSync";
 
 interface FileManagerState {
   entries: Record<string, FileManagerEntry>;
@@ -169,10 +175,30 @@ function fileManagerReducer(state: FileManagerState, action: FileManagerAction):
 export function FileManagerProvider({ children }: { children: ReactNode }) {
   const fs = useVaultFileSystemService();
   const [state, dispatch] = useReducer(fileManagerReducer, initialState);
+  const {
+    message: syncToastMessage,
+    show: showSyncToast,
+    dismiss: dismissSyncToast,
+  } = useToast(4500);
 
-  const openFromVault = useCallback((vault: VaultListItem) => {
-    dispatch({ type: "open_from_vault", vault });
-  }, []);
+  const openFromVault = useCallback(
+    (vault: VaultListItem) => {
+      if (resolveVaultListStatus(vault, null) !== "open") return;
+      dispatch({ type: "open_from_vault", vault });
+
+      if (!isTauri()) return;
+
+      void resolveVaultRootPath()
+        .then((vaultRoot) => hydrateWorkspace(vault.id, vaultRoot))
+        .then((revision) => {
+          dispatch({ type: "workspace", vaultId: vault.id, action: { type: "tree_mutated", revision } });
+        })
+        .catch((error) => {
+          console.error("workspace hydrate failed", error);
+        });
+    },
+    [],
+  );
 
   const minimize = useCallback((vaultId: string) => {
     dispatch({ type: "minimize", vaultId });
@@ -188,6 +214,7 @@ export function FileManagerProvider({ children }: { children: ReactNode }) {
 
   const purgeForVaultClose = useCallback(
     (vaultId: string) => {
+      void stopWorkspaceWatch(vaultId);
       fs.resetSession(vaultId);
       dispatch({ type: "purge_for_vault_close", vaultId });
     },
@@ -202,6 +229,7 @@ export function FileManagerProvider({ children }: { children: ReactNode }) {
       const knownIds = new Set(vaults.map((vault) => vault.id));
       for (const vaultId of state.order) {
         if (!knownIds.has(vaultId) || !openIds.has(vaultId)) {
+          void stopWorkspaceWatch(vaultId);
           fs.resetSession(vaultId);
         }
       }
@@ -216,6 +244,12 @@ export function FileManagerProvider({ children }: { children: ReactNode }) {
     },
     [],
   );
+
+  useWorkspaceDiskSync({
+    entries: state.entries,
+    dispatchWorkspace,
+    onConflictToast: showSyncToast,
+  });
 
   const value = useMemo(() => {
     const maximizedEntry = state.maximizedVaultId
@@ -253,7 +287,16 @@ export function FileManagerProvider({ children }: { children: ReactNode }) {
     dispatchWorkspace,
   ]);
 
-  return <FileManagerContext.Provider value={value}>{children}</FileManagerContext.Provider>;
+  return (
+    <FileManagerContext.Provider value={value}>
+      {children}
+      <Toast
+        message={syncToastMessage}
+        onDismiss={dismissSyncToast}
+        className="bottom-8 z-[130]"
+      />
+    </FileManagerContext.Provider>
+  );
 }
 
 export function useFileManager(): FileManagerContextValue {

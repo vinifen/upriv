@@ -4,6 +4,7 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
+const sharedRoot = path.resolve(root, "../shared");
 const host = process.env.TAURI_DEV_HOST;
 
 export default defineConfig({
@@ -27,6 +28,9 @@ export default defineConfig({
     "TAURI_DEBUG",
   ],
   server: {
+    fs: {
+      allow: [root, sharedRoot],
+    },
     port: 1420,
     strictPort: true,
     host: host || false,

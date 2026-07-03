@@ -16,4 +16,8 @@ export const mockCreateVaultService: CreateVaultService = {
       fileName: MOCK_IMPORT_ARCHIVE_FILE_NAME,
     };
   },
+
+  async createVault(_settings, _password) {
+    // Browser mock — wizard adds the row in memory only.
+  },
 };

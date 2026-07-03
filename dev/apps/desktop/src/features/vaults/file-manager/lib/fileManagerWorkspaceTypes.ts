@@ -32,6 +32,8 @@ export interface VaultWorkspaceState {
   unsavedPrompt: UnsavedPromptAction | null;
   dragSourcePath: string | null;
   dropTargetPath: string | null;
+  /** Paths with unsaved in-app edits that diverged from disk after an external change. */
+  externalConflictPaths: string[];
 }
 
 export function createDefaultWorkspaceState(): VaultWorkspaceState {
@@ -50,6 +52,7 @@ export function createDefaultWorkspaceState(): VaultWorkspaceState {
     unsavedPrompt: null,
     dragSourcePath: null,
     dropTargetPath: null,
+    externalConflictPaths: [],
   };
 }
 

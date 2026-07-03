@@ -1,6 +1,7 @@
 import type { VaultDisplayStatus } from "../vault";
 import { resolveVaultDisplayStatus } from "../vault";
 import type { VaultListItem } from "./types";
+import { parseLastAccessedMs } from "./lastAccessed";
 import { sortVaultsByOrder } from "./order";
 
 export type VaultListSortMode = "order" | "name" | "state" | "last_accessed";
@@ -40,8 +41,7 @@ function compareState(a: VaultListItem, b: VaultListItem): number {
 
 /** Future: max(last_store_write_at, last_close_ok_at) from persistence.json */
 function lastAccessedMs(vault: VaultListItem): number {
-  const parsed = Date.parse(vault.lastAccessedAt);
-  return Number.isFinite(parsed) ? parsed : 0;
+  return parseLastAccessedMs(vault.lastAccessedAt) ?? 0;
 }
 
 function compareLastAccessed(a: VaultListItem, b: VaultListItem): number {

@@ -14,7 +14,10 @@ import {
 } from "@upriv/shared";
 import { Button, Modal } from "@/components/ui";
 import { useTranslation } from "@/i18n";
+import { isTauri } from "@/lib/tauri/invoke";
 import { useCreateVaultService } from "@/platform/services";
+import { isVaultRootNotConfiguredError } from "@/platform/tauri/vaultRoot";
+import { useToast } from "@/hooks/useToast";
 import { CreateVaultStepNav } from "./CreateVaultStepNav";
 import { renderCreateVaultStep } from "./createVaultForm";
 
@@ -38,6 +41,7 @@ export function CreateVaultWizardModal({
 }: CreateVaultWizardModalProps) {
   const { t } = useTranslation();
   const createVaultService = useCreateVaultService();
+  const { show: showToast } = useToast();
   const [baseline, setBaseline] = useState<CreateVaultDraft>(() =>
     createEmptyCreateVaultDraft(existingOrders),
   );
@@ -49,6 +53,7 @@ export function CreateVaultWizardModal({
     () => new Set(["source"]),
   );
   const [submitAttempted, setSubmitAttempted] = useState(false);
+  const [creating, setCreating] = useState(false);
   const [testingPassword, setTestingPassword] = useState(false);
   const [discardConfirmOpen, setDiscardConfirmOpen] = useState(false);
 
@@ -129,8 +134,34 @@ export function CreateVaultWizardModal({
     setSubmitAttempted(true);
     setVisitedSteps(new Set(CREATE_VAULT_STEPS));
     if (!canSubmitCreateVault(draft, existingVaultIds)) return;
-    onCreate(buildCreateVaultResult(draft, existingVaultIds));
-    handleClose();
+
+    const result = buildCreateVaultResult(draft, existingVaultIds);
+    const persistScratch =
+      isTauri() && draft.source === "scratch" && draft.password.trim().length > 0;
+
+    if (!persistScratch) {
+      onCreate(result);
+      handleClose();
+      return;
+    }
+
+    setCreating(true);
+    void createVaultService
+      .createVault(result.settings, draft.password)
+      .then(() => {
+        onCreate(result);
+        handleClose();
+      })
+      .catch((error) => {
+        if (isVaultRootNotConfiguredError(error)) {
+          showToast(t("toast.vault_root_not_configured"));
+          return;
+        }
+        showToast(t("error.vault_create_failed"));
+      })
+      .finally(() => {
+        setCreating(false);
+      });
   };
 
   const handleClose = () => {
@@ -190,7 +221,12 @@ export function CreateVaultWizardModal({
               {t("action.cancel")}
             </Button>
             {isLastStep ? (
-              <Button variant="primary" size="md" disabled={!canCreate} onClick={handleCreate}>
+              <Button
+                variant="primary"
+                size="md"
+                disabled={!canCreate || creating}
+                onClick={handleCreate}
+              >
                 {t("vault.create.action.create")}
               </Button>
             ) : (

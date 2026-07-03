@@ -11,19 +11,21 @@ export const vaultStatusColorVar = sharedVaultStatusColorVar;
 /** i18n keys for status labels — maps display status → catalog key. */
 export const vaultStatusI18nKey = sharedVaultStatusI18nKey as Record<VaultDisplayStatus, I18nKey>;
 
-/** Tailwind utility classes for row surface styling per status. */
+// Left accent is drawn as a `::before` overlay that copies the card's rounded shape but
+// is clipped to a thin left band (`clip-path`). This keeps the curved corner on the left
+// while guaranteeing nothing is painted on the right-hand corners (no stray pixel).
+const accentStripeBase =
+  "relative before:pointer-events-none before:absolute before:inset-0 before:rounded-[inherit] before:border-l-2 before:[clip-path:inset(0_calc(100%-12px)_0_0)] before:content-['']";
+
 export const vaultStatusRowClass = {
-  open: "border-l-2 border-vault-open bg-surface-container hover:bg-surface-row-hover [&:has(button:hover)]:bg-surface-container",
+  open: `${accentStripeBase} before:border-[var(--vault-status-open)] bg-surface-container hover:bg-surface-row-hover [&:has(button:hover)]:bg-surface-container`,
   closed:
     "bg-surface-container hover:bg-surface-row-hover [&:has(button:hover)]:bg-surface-container",
   sealed:
     "bg-surface-container opacity-90 hover:bg-surface-row-hover [&:has(button:hover)]:bg-surface-container",
-  recovery:
-    "border-l-2 border-vault-recovery bg-vault-recovery/10 hover:bg-surface-row-hover [&:has(button:hover)]:bg-surface-container",
-  closing:
-    "border-l-2 border-vault-closed/60 bg-surface-container opacity-95 hover:bg-surface-row-hover [&:has(button:hover)]:bg-surface-container",
-  opening:
-    "border-l-2 border-vault-closed/60 bg-surface-container opacity-95 hover:bg-surface-row-hover [&:has(button:hover)]:bg-surface-container",
+  recovery: `${accentStripeBase} before:border-[var(--vault-status-recovery)] bg-vault-recovery/10 hover:bg-surface-row-hover [&:has(button:hover)]:bg-surface-container`,
+  closing: `${accentStripeBase} before:border-[color-mix(in_srgb,var(--vault-status-closed)_60%,transparent)] bg-surface-container opacity-95 hover:bg-surface-row-hover [&:has(button:hover)]:bg-surface-container`,
+  opening: `${accentStripeBase} before:border-[color-mix(in_srgb,var(--vault-status-closed)_60%,transparent)] bg-surface-container opacity-95 hover:bg-surface-row-hover [&:has(button:hover)]:bg-surface-container`,
 } as const satisfies Record<VaultDisplayStatus, string>;
 
 /** Status badge (uppercase mono chip) per display status. */

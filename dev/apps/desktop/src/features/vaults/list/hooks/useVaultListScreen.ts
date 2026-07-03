@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useVaultService } from "@/platform/services";
 import { useAppSettingsContext } from "@/features/system/settings";
 import { useAppRefresh } from "@/features/system/refresh";
@@ -7,7 +7,12 @@ import { createDraftFromBackup, type VaultListSort, type VaultListViewMode } fro
 import { useFileManager } from "@/features/vaults/file-manager";
 import { useTranslation } from "@/i18n";
 import { useVaultLifecycleActions } from "@/features/vaults/lifecycle";
+import { useAppExitClose } from "@/features/vaults/lifecycle/hooks/useAppExitClose";
+import { useSystemSuspend } from "@/features/vaults/lifecycle/hooks/useSystemSuspend";
 import { useToast } from "@/hooks/useToast";
+import { isTauri } from "@/lib/tauri/invoke";
+import { isVaultRootNotConfiguredError, resolveVaultRootPath } from "@/platform/tauri/vaultRoot";
+import { hydrateOpenVaultWorkspaces } from "@/platform/tauri/workspaceFsStore";
 import { useVaultListState } from "./useVaultListState";
 import { useVaultListModals } from "./useVaultListModals";
 
@@ -15,10 +20,12 @@ export function useVaultListScreen() {
   const { t } = useTranslation();
   const vaultService = useVaultService();
   const { openFromVault, syncWithVaultList, purgeForVaultClose } = useFileManager();
-  const { settings, patchSettings, showHiddenVaultsSession } = useAppSettingsContext();
+  const { settings, isSettingsLoaded, patchSettings, showHiddenVaultsSession } =
+    useAppSettingsContext();
   const showHiddenVaults = settings.ui.always_show_hidden_vaults || showHiddenVaultsSession;
   const { message: toastMessage, show: showToast, dismiss: dismissToast } = useToast();
   const noteSaveGenerationRef = useRef<Map<string, number>>(new Map());
+  const [needsVaultRootSetup, setNeedsVaultRootSetup] = useState(false);
 
   const listDefaults = useMemo(
     () => ({
@@ -37,7 +44,21 @@ export function useVaultListScreen() {
 
   const reloadVaults = useCallback(() => vaultService.listVaults(), [vaultService]);
 
-  const listState = useVaultListState([], { ...listDefaults, showHiddenVaults, reloadVaults });
+  const persistReorder = useCallback(
+    (orderedIds: string[]) => {
+      void vaultService.reorderVaults(orderedIds).catch(() => {
+        showToast(t("error.settings_save_failed"));
+      });
+    },
+    [vaultService, showToast, t],
+  );
+
+  const listState = useVaultListState([], {
+    ...listDefaults,
+    showHiddenVaults,
+    reloadVaults,
+    onReorder: persistReorder,
+  });
 
   const {
     isReady,
@@ -68,17 +89,47 @@ export function useVaultListScreen() {
     onError: () => showToast(t("toast.refresh_failed")),
   });
 
-  useEffect(() => {
-    let cancelled = false;
-    void vaultService.listVaults().then((rows) => {
-      if (cancelled) return;
+  const reloadVaultList = useCallback(() => {
+    return vaultService.listVaults().then((rows) => {
       initializeVaults(rows);
       syncWithVaultList(rows);
+      setNeedsVaultRootSetup(false);
+      if (isTauri() && rows.some((vault) => vault.session === "open")) {
+        void resolveVaultRootPath()
+          .then((vaultRoot) => hydrateOpenVaultWorkspaces(rows, vaultRoot))
+          .catch((error) => {
+            console.error("open vault workspace hydrate failed", error);
+          });
+      }
+      return rows;
     });
+  }, [initializeVaults, syncWithVaultList, vaultService]);
+
+  useEffect(() => {
+    if (!isSettingsLoaded) return;
+
+    let cancelled = false;
+    void reloadVaultList()
+      .catch((error) => {
+        if (cancelled) return;
+        initializeVaults([]);
+        if (isTauri() && isVaultRootNotConfiguredError(error)) {
+          setNeedsVaultRootSetup(true);
+        }
+        showToast(t("toast.vault_list_failed"));
+      });
     return () => {
       cancelled = true;
     };
-  }, [initializeVaults, syncWithVaultList, vaultService]);
+  }, [
+    initializeVaults,
+    isSettingsLoaded,
+    reloadVaultList,
+    settings.app.auto_detect_vault_root,
+    settings.app.upriv_root_path,
+    showToast,
+    t,
+  ]);
 
   const modals = useVaultListModals(vaults);
 
@@ -89,6 +140,27 @@ export function useVaultListScreen() {
     showToast,
     dismissToast,
     t,
+    onVaultListRefresh: async () => {
+      const rows = await vaultService.listVaults();
+      initializeVaults(rows);
+      syncWithVaultList(rows);
+    },
+  });
+
+  useAppExitClose({
+    vaults,
+    isPipelineRunning: lifecycle.pipeline.isRunning,
+    getSettings: lifecycle.getVaultSettingsForLifecycle,
+    hasPasswordInSession: lifecycle.hasPasswordInSession,
+    closeVaultForExit: lifecycle.closeVaultForExit,
+  });
+
+  useSystemSuspend({
+    vaults,
+    isPipelineRunning: lifecycle.pipeline.isRunning,
+    getSettings: lifecycle.getVaultSettingsForLifecycle,
+    hasPasswordInSession: lifecycle.hasPasswordInSession,
+    closeVaultForExit: lifecycle.closeVaultForExit,
   });
 
   const handleSortChange = useCallback(
@@ -117,6 +189,17 @@ export function useVaultListScreen() {
 
   const handleCreateVault = useCallback(
     (result: CreateVaultResult) => {
+      if (isTauri()) {
+        void vaultService
+          .listVaults()
+          .then((rows) => {
+            initializeVaults(rows);
+            syncWithVaultList(rows);
+          })
+          .catch(() => showToast(t("toast.refresh_failed")));
+        return;
+      }
+
       void vaultService
         .registerSettings(result.vaultId, result.settings)
         .catch(() => showToast(t("error.settings_save_failed")));
@@ -135,7 +218,7 @@ export function useVaultListScreen() {
         hidden: result.settings.vault.hidden,
       });
     },
-    [addVault, showToast, t, vaultService],
+    [addVault, initializeVaults, showToast, syncWithVaultList, t, vaultService],
   );
 
   const handleVaultSettingsSaved = useCallback(
@@ -329,6 +412,14 @@ export function useVaultListScreen() {
       initialDraft: modals.createVaultInitialDraft,
       onClose: modals.closeCreateVault,
       onCreate: handleCreateVault,
+    },
+    vaultRootSetup: {
+      open: needsVaultRootSetup,
+      onConfigured: () => {
+        void reloadVaultList().catch(() => {
+          showToast(t("toast.vault_list_failed"));
+        });
+      },
     },
   };
 }

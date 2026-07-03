@@ -151,9 +151,10 @@ export function VaultBackupsModal({
       : backups;
     if (targets.length === 0) return;
     void downloadBackupsZip(
+      vault.id,
       targets,
       t("modal.backup.download_zip_name", { id: vault.id }),
-      (entry) => backupService.getBackupBytes(entry),
+      (vaultId, entry) => backupService.getBackupBytes(vaultId, entry),
     );
   };
 
@@ -161,9 +162,10 @@ export function VaultBackupsModal({
     const entry = backups.find((item) => item.filename === filename);
     if (!entry) return;
     void downloadBackupsZip(
+      vault.id,
       [entry],
       t("modal.backup.download_zip_name", { id: vault.id }),
-      (entry) => backupService.getBackupBytes(entry),
+      (vaultId, row) => backupService.getBackupBytes(vaultId, row),
     );
   };
 

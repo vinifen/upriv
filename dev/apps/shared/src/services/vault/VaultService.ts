@@ -16,6 +16,9 @@ export interface VaultService {
   /** Remove settings on vault delete. */
   unregisterSettings(vaultId: string): Promise<void>;
 
+  /** Persist a new display order (`[vault] order` per config) after drag-and-drop. */
+  reorderVaults(orderedIds: readonly string[]): Promise<void>;
+
   /** Export bytes for `{display_name}.7z` (mock or Tauri read). */
   getArchiveExportBytes(vault: VaultRow): Promise<Uint8Array>;
 }

@@ -13,9 +13,14 @@ import { applyDocumentTheme } from "@/theme";
 import { createDefaultAppSettings, normalizeAppSettings } from "@upriv/shared";
 import type { AppSettingsConfig, AppSettingsPatch } from "@upriv/shared";
 import { useToast } from "@/hooks/useToast";
+import { isTauri } from "@/lib/tauri/invoke";
+import { APP_PACKAGE_VERSION, logEvent } from "@/lib/tauri";
+import { setVaultRootPath, resolveVaultRootPath } from "@/platform/tauri/vaultRoot";
 
 interface AppSettingsContextValue {
   settings: AppSettingsConfig;
+  /** False until the first `AppSettingsService.load()` finishes. */
+  isSettingsLoaded: boolean;
   replaceSettings: (next: AppSettingsConfig) => Promise<void>;
   patchSettings: (patch: AppSettingsPatch) => Promise<void>;
   /** Reload settings.toml (or mock) without persisting. */
@@ -42,14 +47,35 @@ function SettingsPersistErrorToast({ signal }: { signal: number }) {
 export function AppSettingsProvider({ children }: { children: ReactNode }) {
   const appSettingsService = useAppSettingsService();
   const [settings, setSettings] = useState<AppSettingsConfig>(() => createDefaultAppSettings());
+  const [isSettingsLoaded, setIsSettingsLoaded] = useState(false);
   const [showHiddenVaultsSession, setShowHiddenVaultsSession] = useState(false);
   const [persistErrorSignal, setPersistErrorSignal] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
-    void appSettingsService.load().then((loaded) => {
-      if (!cancelled) setSettings(normalizeAppSettings(loaded));
-    });
+    void appSettingsService
+      .load()
+      .then(async (loaded) => {
+        if (cancelled) return;
+        const normalized = normalizeAppSettings(loaded);
+        setSettings(normalized);
+        if (isTauri()) {
+          if (!normalized.app.auto_detect_vault_root) {
+            const manualRoot = normalized.app.upriv_root_path?.trim();
+            setVaultRootPath(manualRoot || null);
+          } else {
+            await resolveVaultRootPath().catch(() => undefined);
+          }
+          void logEvent("info", "app_start", `version=${APP_PACKAGE_VERSION}`);
+        }
+      })
+      .catch((error) => {
+        // Never trap the app on a loading screen — fall back to defaults.
+        console.error("app settings load failed", error);
+      })
+      .finally(() => {
+        if (!cancelled) setIsSettingsLoaded(true);
+      });
     return () => {
       cancelled = true;
     };
@@ -68,6 +94,14 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
     async (next: AppSettingsConfig) => {
       const normalized = normalizeAppSettings(next);
       setSettings(normalized);
+      if (isTauri()) {
+        if (!normalized.app.auto_detect_vault_root) {
+          const manualRoot = normalized.app.upriv_root_path?.trim();
+          setVaultRootPath(manualRoot || null);
+        } else {
+          await resolveVaultRootPath().catch(() => undefined);
+        }
+      }
       try {
         await appSettingsService.save(normalized);
       } catch {
@@ -107,13 +141,21 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
   const value = useMemo(
     () => ({
       settings,
+      isSettingsLoaded,
       replaceSettings,
       patchSettings,
       reloadSettings,
       showHiddenVaultsSession,
       setShowHiddenVaultsSession,
     }),
-    [settings, replaceSettings, patchSettings, reloadSettings, showHiddenVaultsSession],
+    [
+      settings,
+      isSettingsLoaded,
+      replaceSettings,
+      patchSettings,
+      reloadSettings,
+      showHiddenVaultsSession,
+    ],
   );
 
   useEffect(() => {

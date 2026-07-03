@@ -9,3 +9,4 @@ export * from "./vault-create";
 export * from "./vault-lifecycle";
 export * from "./vault-list";
 export * from "./vault-settings";
+export * from "./workspace-sync/types";

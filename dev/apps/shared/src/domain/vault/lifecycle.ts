@@ -36,8 +36,14 @@ export function requiresPasswordForLifecycle(
   intent: VaultLifecycleIntent,
   securityMode: SecurityMode,
   hasPasswordInRam: boolean,
+  hasDiskSession = false,
 ): boolean {
-  if (intent === "unlock") return true;
+  if (intent === "unlock") {
+    if (securityModeToUi(securityMode) === "disk_open_close" && hasDiskSession) {
+      return false;
+    }
+    return true;
+  }
 
   const status = resolveVaultDisplayStatus(vault);
   if (intent === "seal" && status === "closed") return false;

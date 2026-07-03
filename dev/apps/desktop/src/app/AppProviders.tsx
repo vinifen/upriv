@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { AppSettingsProvider } from "@/features/system/settings";
 import { FileManagerProvider } from "@/features/vaults/file-manager";
 import { createServices, ServicesProvider } from "@/platform/services";
+import { AppWindowClose } from "./AppWindowClose";
 
 interface AppProvidersProps {
   children: ReactNode;
@@ -14,6 +15,7 @@ export function AppProviders({ children }: AppProvidersProps) {
   return (
     <ServicesProvider services={appServices}>
       <AppSettingsProvider>
+        <AppWindowClose />
         <FileManagerProvider>{children}</FileManagerProvider>
       </AppSettingsProvider>
     </ServicesProvider>

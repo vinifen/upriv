@@ -16,4 +16,9 @@ export {
   vaultBlocksBulkExport,
 } from "./export";
 export { resolveVaultPasswordHint } from "./passwordHint";
-export { touchVaultLastAccessed } from "./lastAccessed";
+export {
+  formatLastAccessed,
+  normalizeLastAccessedIso,
+  parseLastAccessedMs,
+  touchVaultLastAccessed,
+} from "./lastAccessed";

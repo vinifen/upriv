@@ -1,5 +1,6 @@
 import {
 useEffect,
+useLayoutEffect,
 useMemo,
 useRef,
 useState,
@@ -17,7 +18,7 @@ interface FileEditorPaneProps {
 
 const EDITOR_LINE_CLASS = "font-mono text-sm leading-[1.625rem]";
 const GUTTER_INSET = "0.5rem";
-const GUTTER_TEXT_GAP = "0.25rem";
+const GUTTER_TEXT_GAP = "0.875rem";
 
 function lineCount(content: string): number {
   if (!content) return 1;
@@ -39,6 +40,7 @@ function EditorWithLineNumbers({
 }: EditorWithLineNumbersProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const gutterRef = useRef<HTMLDivElement>(null);
+  const [gutterWidth, setGutterWidth] = useState(0);
 
   const lines = useMemo(() => lineCount(content), [content]);
 
@@ -48,20 +50,25 @@ function EditorWithLineNumbers({
     }
   };
 
-  const gutterWidthCh = Math.max(2, String(lines).length);
+  // The gutter font (9px) and the editor font (14px) differ, so a `ch`-based
+  // width is inconsistent between the two. Measure the rendered gutter instead
+  // and use that exact width to offset the textarea, keeping a stable gap.
+  useLayoutEffect(() => {
+    if (gutterRef.current) setGutterWidth(gutterRef.current.offsetWidth);
+  }, [lines]);
 
   return (
     <div className="relative min-h-0 flex-1 overflow-hidden bg-surface-container-high py-3">
       <div
         ref={gutterRef}
         aria-hidden
-        className="modal-scroll-pane pointer-events-none absolute bottom-3 top-3 overflow-hidden select-none"
-        style={{ left: GUTTER_INSET, width: `${gutterWidthCh}ch` }}
+        className="modal-scroll-pane pointer-events-none absolute bottom-3 top-3 inline-block overflow-hidden select-none text-right"
+        style={{ left: GUTTER_INSET }}
       >
         {Array.from({ length: lines }, (_, index) => (
           <div
             key={index + 1}
-            className="flex h-[1.625rem] items-center justify-end font-mono text-[9px] tabular-nums text-[var(--vault-status-sealed)]"
+            className="h-[1.625rem] font-mono text-[9px] leading-[1.625rem] tabular-nums text-[var(--vault-status-sealed)]"
           >
             {index + 1}
           </div>
@@ -74,7 +81,7 @@ function EditorWithLineNumbers({
         onScroll={syncScroll}
         spellCheck={false}
         style={{
-          paddingLeft: `calc(${GUTTER_INSET} + ${gutterWidthCh}ch + ${GUTTER_TEXT_GAP})`,
+          paddingLeft: `calc(${GUTTER_INSET} + ${gutterWidth}px + ${GUTTER_TEXT_GAP})`,
         }}
         className={[
           "modal-scroll-pane h-full min-h-0 w-full resize-none bg-transparent pr-4 text-on-surface outline-none md:pr-5",

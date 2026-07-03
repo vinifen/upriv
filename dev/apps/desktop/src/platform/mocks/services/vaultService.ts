@@ -32,6 +32,16 @@ export const mockVaultService: VaultService = {
     unregisterMockVaultSettings(vaultId);
   },
 
+  async reorderVaults(orderedIds) {
+    orderedIds.forEach((id, index) => {
+      const settings = getMockVaultSettings(id);
+      registerMockVaultSettings({
+        ...settings,
+        vault: { ...settings.vault, order: index + 1 },
+      });
+    });
+  },
+
   async getArchiveExportBytes(vault) {
     return getMockVaultArchiveBytes(vault);
   },

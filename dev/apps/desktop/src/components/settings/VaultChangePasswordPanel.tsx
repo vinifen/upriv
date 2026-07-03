@@ -7,14 +7,16 @@ import { settingsControlClass, SettingsField } from "./vaultSettingsForm";
 interface VaultChangePasswordPanelProps {
   passwordHint: string;
   onPasswordHintChange: (passwordHint: string) => void;
-  /** Mock until Tauri `vault_change_password`. */
   onPasswordChanged?: () => void;
+  /** Real password change (Tauri → upriv-core). Falls back to a mock when absent. */
+  onChangePassword?: (currentPassword: string, newPassword: string) => Promise<void>;
 }
 
 export function VaultChangePasswordPanel({
   passwordHint,
   onPasswordHintChange,
   onPasswordChanged,
+  onChangePassword,
 }: VaultChangePasswordPanelProps) {
   const { t } = useTranslation();
   const hintId = useId();
@@ -67,16 +69,22 @@ export function VaultChangePasswordPanel({
     setSuccess(false);
     setSubmitting(true);
     try {
-      await new Promise((resolve) => setTimeout(resolve, 700));
-      // Mock: wrong password simulation for demo (any password except "wrong")
-      if (currentPassword === "wrong") {
-        setError(t("error.wrong_password"));
-        return;
+      if (onChangePassword) {
+        await onChangePassword(currentPassword, newPassword);
+      } else {
+        // Mock fallback (browser/dev): any password except "wrong" succeeds.
+        await new Promise((resolve) => setTimeout(resolve, 700));
+        if (currentPassword === "wrong") {
+          setError(t("error.wrong_password"));
+          return;
+        }
       }
       setSuccess(true);
       onPasswordChanged?.();
       resetForm();
       setExpanded(false);
+    } catch {
+      setError(t("error.wrong_password"));
     } finally {
       setSubmitting(false);
     }

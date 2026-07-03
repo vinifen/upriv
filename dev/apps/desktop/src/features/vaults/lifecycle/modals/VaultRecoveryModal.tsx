@@ -2,6 +2,12 @@ import { useEffect, useId, useState } from "react";
 import { Button, Modal } from "@/components/ui";
 import { useTranslation } from "@/i18n";
 import type { VaultListItem } from "@upriv/shared";
+import { isTauri } from "@/lib/tauri/invoke";
+import {
+  assessVaultRecovery,
+  shortHashLabel,
+  type RecoveryInfoDto,
+} from "@/platform/tauri/vaultRecoveryService";
 
 export type RecoveryAction = "use_store" | "reimport_archive" | "compare" | "discard_workspace";
 
@@ -24,17 +30,40 @@ export function VaultRecoveryModal({
   const discardConfirmId = useId();
   const [view, setView] = useState<"actions" | "compare" | "discard_confirm">("actions");
   const [discardText, setDiscardText] = useState("");
+  const [compareInfo, setCompareInfo] = useState<RecoveryInfoDto | null>(null);
 
   useEffect(() => {
     if (!open) {
       setView("actions");
       setDiscardText("");
+      setCompareInfo(null);
     }
+  }, [open, vault?.id]);
+
+  useEffect(() => {
+    if (!open || !vault || !isTauri()) return;
+    let cancelled = false;
+    void assessVaultRecovery(vault.id)
+      .then((info) => {
+        if (!cancelled) setCompareInfo(info);
+      })
+      .catch(() => {
+        if (!cancelled) setCompareInfo(null);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [open, vault?.id]);
 
   if (!open || !vault) return null;
 
   const canConfirmDiscard = discardText.trim() === vault.id;
+  const manifestArchive = compareInfo?.manifestArchiveHash ?? "—";
+  const actualArchive = compareInfo?.actualArchiveHash ?? "—";
+  const manifestStore = compareInfo?.manifestStoreHash ?? "—";
+  const actualStore = compareInfo?.actualStoreHash ?? "—";
+  const archiveMismatch = compareInfo?.archiveHashMismatch ?? false;
+  const storeMismatch = compareInfo?.storeHashMismatch ?? false;
 
   return (
     <Modal
@@ -81,22 +110,40 @@ export function VaultRecoveryModal({
           <dl className="space-y-2 rounded-lg bg-surface-container p-3 font-mono text-xs">
             <div className="flex justify-between gap-3">
               <dt className="text-on-surface-variant">{t("recovery.compare_archive_hash")}</dt>
-              <dd className="truncate text-on-surface">a3f8…9c2e</dd>
+              <dd
+                className={`truncate ${archiveMismatch ? "text-on-error-container" : "text-on-surface"}`}
+              >
+                {shortHashLabel(actualArchive)}
+                {archiveMismatch ? ` ≠ ${shortHashLabel(manifestArchive)}` : ""}
+              </dd>
             </div>
             <div className="flex justify-between gap-3">
               <dt className="text-on-surface-variant">{t("recovery.compare_store_hash")}</dt>
-              <dd className="truncate text-on-error-container">b71d…4f01</dd>
+              <dd
+                className={`truncate ${storeMismatch ? "text-on-error-container" : "text-on-surface"}`}
+              >
+                {shortHashLabel(actualStore)}
+                {storeMismatch ? ` ≠ ${shortHashLabel(manifestStore)}` : ""}
+              </dd>
             </div>
             <div className="flex justify-between gap-3">
               <dt className="text-on-surface-variant">{t("recovery.compare_last_close")}</dt>
-              <dd className="text-on-surface">2026-06-01T18:00:00Z</dd>
+              <dd className="text-on-surface">{compareInfo?.lastCloseOkAt ?? "—"}</dd>
             </div>
             <div className="flex justify-between gap-3">
               <dt className="text-on-surface-variant">{t("recovery.compare_store_write")}</dt>
-              <dd className="text-on-error-container">2026-06-02T08:15:00Z</dd>
+              <dd
+                className={
+                  compareInfo?.storeAheadOfClose ? "text-on-error-container" : "text-on-surface"
+                }
+              >
+                {compareInfo?.lastStoreWriteAt ?? "—"}
+              </dd>
             </div>
           </dl>
-          <p className="text-xs text-on-error-container">{t("recovery.compare_mismatch")}</p>
+          {(compareInfo?.needsRecovery ?? false) ? (
+            <p className="text-xs text-on-error-container">{t("recovery.compare_mismatch")}</p>
+          ) : null}
         </div>
       ) : view === "discard_confirm" ? (
         <div className="space-y-3">
@@ -118,6 +165,9 @@ export function VaultRecoveryModal({
           <p className="text-sm leading-relaxed text-on-surface-variant">
             {t("recovery.hint", { name: vault.displayName })}
           </p>
+          {compareInfo?.orphanWorkspace ? (
+            <p className="text-xs text-on-error-container">{t("recovery.orphan_workspace")}</p>
+          ) : null}
           <div className="grid gap-2">
             <Button
               variant="primary"

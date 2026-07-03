@@ -9,6 +9,7 @@ import {
   type VaultLifecycleIntent,
 } from "@upriv/shared";
 import { useVaultLifecycleService, useVaultService } from "@/platform/services";
+import { isTauri } from "@/lib/tauri/invoke";
 import { validateMockLifecyclePassword } from "@/platform/mocks/services/vaultLifecycleService";
 import { VaultPasswordHintCallout } from "./VaultPasswordHintCallout";
 import { SettingsField } from "@/components/settings";
@@ -69,7 +70,10 @@ export function VaultLifecycleModal({
       return;
     }
     let cancelled = false;
-    void vaultService.getSettings(vault.id).then((settings) => {
+    void Promise.all([
+      vaultService.getSettings(vault.id),
+      lifecycleService.hasDiskSession(vault.id),
+    ]).then(([settings, diskSession]) => {
       if (cancelled || !settings) return;
       setRequiresPassword(
         requiresPasswordForLifecycle(
@@ -77,6 +81,7 @@ export function VaultLifecycleModal({
           intent,
           settings.security.mode,
           lifecycleService.hasPasswordInSession(vault.id),
+          diskSession,
         ),
       );
     });
@@ -94,7 +99,18 @@ export function VaultLifecycleModal({
   if (!open || !vault || !intent) return null;
 
   const handleConfirm = () => {
-    if (requiresPassword && !validateMockLifecyclePassword(password)) {
+    const useRealPassword =
+      isTauri() &&
+      (vault.storageMode === "plain" || vault.storageMode === "encrypted_dir");
+    if (
+      requiresPassword &&
+      !useRealPassword &&
+      !validateMockLifecyclePassword(password)
+    ) {
+      setError(t("error.wrong_password"));
+      return;
+    }
+    if (requiresPassword && useRealPassword && password.trim().length === 0) {
       setError(t("error.wrong_password"));
       return;
     }

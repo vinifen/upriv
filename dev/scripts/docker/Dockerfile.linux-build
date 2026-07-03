@@ -1,0 +1,31 @@
+# Build portable Linux bundles on an older glibc (Ubuntu 22.04 = GLIBC 2.35).
+# AppImages built on Ubuntu 24.04 require GLIBC 2.39 and fail on 22.04/older.
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    curl \
+    git \
+    pkg-config \
+    libwebkit2gtk-4.1-dev \
+    libgtk-3-dev \
+    libayatana-appindicator3-dev \
+    librsvg2-dev \
+    libfuse3-dev \
+    patchelf \
+    file \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Rust — match dev/rust-toolchain.toml (1.94.0) for reproducible builds
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.94.0
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+# Node 22 LTS
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /upriv/dev

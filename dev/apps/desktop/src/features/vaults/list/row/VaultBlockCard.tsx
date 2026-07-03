@@ -1,6 +1,11 @@
 import { Icon, type IconName } from "@/components/icons";
 import { useTranslation } from "@/i18n";
-import { resolveVaultListStatus, type VaultDisplayStatus, type VaultListItem } from "@upriv/shared";
+import {
+  formatLastAccessed,
+  resolveVaultListStatus,
+  type VaultDisplayStatus,
+  type VaultListItem,
+} from "@upriv/shared";
 import { vaultStatusIconClass, vaultStatusRowClass } from "@/theme";
 import { VaultFileManagerIndicator } from "./VaultFileManagerIndicator";
 import { VaultHiddenIndicator } from "./VaultHiddenIndicator";
@@ -43,10 +48,11 @@ export function VaultBlockCard({
   onUnlockVault,
   onSealVault,
 }: VaultBlockCardProps) {
-  const { t } = useTranslation();
+  const { t, locale } = useTranslation();
   const status = resolveVaultListStatus(vault, pipelineOpeningVaultId);
   const isOpen = status === "open";
   const isPipelineBusy = pipelineActiveVaultId === vault.id;
+  const lastAccessedLabel = formatLastAccessed(vault.lastAccessedAt, locale) || vault.lastAccessedWhen;
 
   return (
     <article
@@ -91,7 +97,7 @@ export function VaultBlockCard({
       </div>
 
       <p className="mt-2 text-[11px] leading-snug text-on-surface-variant sm:text-xs">
-        {t("vault.last_accessed", { when: vault.lastAccessedWhen })}
+        {t("vault.last_accessed", { when: lastAccessedLabel })}
       </p>
 
       <div

@@ -2,6 +2,7 @@ import { useCallback, useMemo, useRef } from "react";
 import {
   canRunIdleAutoClose,
   resolveIdleAutoCloseIntent,
+  securityModeToUi,
   type VaultLifecycleIntent,
   type VaultPersistence,
   type VaultSession,
@@ -16,6 +17,9 @@ import { exportVaultArchive } from "@/features/vaults/list";
 import type { VaultListLifecycleModals } from "@/features/vaults/list";
 import { vaultBlocksBulkExport } from "@/features/system/settings";
 import { useFileManager } from "@/features/vaults/file-manager";
+import { TAURI_COMMANDS, tauriInvoke } from "@/lib/tauri";
+import { isTauri } from "@/lib/tauri/invoke";
+import { resolveVaultRecovery } from "@/platform/tauri/vaultRecoveryService";
 import type { I18nKey } from "@/i18n/types";
 import type { RecoveryAction } from "../modals/VaultRecoveryModal";
 import { useVaultAutoClose } from "./useVaultAutoClose";
@@ -37,6 +41,7 @@ interface UseVaultLifecycleActionsOptions {
   showToast: (message: string, durationMs?: number) => void;
   dismissToast: () => void;
   t: (key: I18nKey, params?: Record<string, string>) => string;
+  onVaultListRefresh?: () => Promise<void>;
 }
 
 export function useVaultLifecycleActions({
@@ -46,6 +51,7 @@ export function useVaultLifecycleActions({
   showToast,
   dismissToast,
   t,
+  onVaultListRefresh,
 }: UseVaultLifecycleActionsOptions) {
   const vaultService = useVaultService();
   const lifecycleService = useVaultLifecycleService();
@@ -92,7 +98,9 @@ export function useVaultLifecycleActions({
       pipelineBackgroundRef.current = false;
 
       dismissToast();
-      showToast(t(errorKey), 8000);
+      if (wasBackground) {
+        showToast(t(errorKey), 8000);
+      }
 
       if (kind === "close" || kind === "seal") {
         revertCloseFailure(vaultId);
@@ -121,8 +129,14 @@ export function useVaultLifecycleActions({
   const finishCloseOrSeal = useCallback(
     (vaultId: string, intent: Extract<VaultLifecycleIntent, "close" | "seal">) => {
       purgeForVaultClose(vaultId);
+      const vault = vaultsRef.current.find((item) => item.id === vaultId);
       if (intent === "close") {
-        setVaultRuntimeState(vaultId, { session: null, persistence: "closed", canSeal: false });
+        // A `closed` encrypted_dir vault can still be sealed (drop the store cache).
+        setVaultRuntimeState(vaultId, {
+          session: null,
+          persistence: "closed",
+          canSeal: vault?.storageMode === "encrypted_dir",
+        });
       } else {
         setVaultRuntimeState(vaultId, { session: null, persistence: "sealed", canSeal: false });
       }
@@ -183,7 +197,8 @@ export function useVaultLifecycleActions({
         vaultId: vault.id,
         kind: intent,
         stepCount: lifecycleService.closingStepCount,
-        runPipeline: lifecycleService.runClosingPipeline.bind(lifecycleService),
+        runPipeline: (vaultId, onStep) =>
+          lifecycleService.runClosingPipeline(vaultId, onStep, intent === "seal"),
         onComplete: () => {
           finishCloseOrSeal(vault.id, intent);
           notifyPipelineComplete(vault.id, intent);
@@ -237,13 +252,37 @@ export function useVaultLifecycleActions({
   const handleUnlockVault = useCallback(
     (vault: VaultListItem) => {
       if (pipeline.isRunning || pipeline.isVaultPipelineBusy(vault.id)) return;
-      if (resolveVaultDisplayStatus(vault) === "recovery") {
-        setRecoveryVaultId(vault.id);
-        return;
-      }
-      setLifecycleRequest({ vaultId: vault.id, intent: "unlock" });
+
+      const tryAutoUnlock = async () => {
+        const settings = await vaultService.getSettings(vault.id);
+        if (!settings) {
+          setLifecycleRequest({ vaultId: vault.id, intent: "unlock" });
+          return;
+        }
+
+        if (securityModeToUi(settings.security.mode) === "disk_open_close") {
+          const hasDisk = await lifecycleService.hasDiskSession(vault.id);
+          if (hasDisk) {
+            const started = startOpenPipeline(vault.id);
+            if (!started) showToast(t("toast.pipeline_busy"));
+            return;
+          }
+        }
+
+        setLifecycleRequest({ vaultId: vault.id, intent: "unlock" });
+      };
+
+      void tryAutoUnlock();
     },
-    [pipeline, setLifecycleRequest, setRecoveryVaultId],
+    [
+      lifecycleService,
+      pipeline,
+      setLifecycleRequest,
+      showToast,
+      startOpenPipeline,
+      t,
+      vaultService,
+    ],
   );
 
   const handleSealVault = useCallback(
@@ -277,14 +316,37 @@ export function useVaultLifecycleActions({
 
   const handleOpenFolder = useCallback(
     (vault: VaultListItem) => {
-      showToast(
-        t("toast.open_folder_mock", {
-          path: lifecycleService.resolveWorkspacePath(vault.displayName),
-        }),
-        8000,
-      );
+      const open = async () => {
+        const settings = await vaultService.getSettings(vault.id);
+        if (settings && !settings.policy.allow_external_editors) {
+          showToast(t("error.external_editor_blocked"));
+          return;
+        }
+
+        const path = lifecycleService.resolveWorkspacePath(vault.displayName);
+        if (isTauri()) {
+          const { resolveVaultRootPath } = await import("@/platform/tauri/vaultRoot");
+          const vaultRoot = await resolveVaultRootPath();
+          void tauriInvoke(TAURI_COMMANDS.OPEN_PATH_IN_FILE_MANAGER, {
+            vaultRoot,
+            vaultId: vault.id,
+            path,
+          }).catch(() => {
+            showToast(t("error.open_folder_failed"));
+          });
+          return;
+        }
+        showToast(
+          t("toast.open_folder_mock", {
+            path,
+          }),
+          8000,
+        );
+      };
+
+      void open();
     },
-    [lifecycleService, showToast, t],
+    [lifecycleService, showToast, t, vaultService],
   );
 
   const handleAutoCloseVault = useCallback(
@@ -342,6 +404,11 @@ export function useVaultLifecycleActions({
 
       if (intent === "unlock") {
         if (password) lifecycleService.setPasswordInSession(vaultId, password);
+        if (lifecycleVault && resolveVaultDisplayStatus(lifecycleVault) === "recovery") {
+          setRecoveryVaultId(vaultId);
+          setLifecycleRequest(null);
+          return;
+        }
         const started = startOpenPipeline(vaultId);
         setLifecycleRequest(null);
         if (!started) {
@@ -364,6 +431,7 @@ export function useVaultLifecycleActions({
       lifecycleService,
       lifecycleVault,
       setLifecycleRequest,
+      setRecoveryVaultId,
       showToast,
       startClosePipeline,
       startOpenPipeline,
@@ -375,35 +443,56 @@ export function useVaultLifecycleActions({
     (action: RecoveryAction) => {
       if (!recoveryVaultId || action === "compare") return;
 
-      if (action === "use_store") {
-        const vaultId = recoveryVaultId;
-        setRecoveryVaultId(null);
-        if (!startOpenPipeline(vaultId)) {
-          showToast(t("toast.pipeline_busy"));
-          setRecoveryVaultId(vaultId);
-        }
-        return;
-      }
+      const vaultId = recoveryVaultId;
 
-      setRecoverySubmitting(true);
-      try {
-        if (action === "reimport_archive") {
-          setVaultRuntimeState(recoveryVaultId, { session: null, persistence: "closed" });
-          showToast(t("toast.recovery_prototype"));
-        } else if (action === "discard_workspace") {
-          purgeForVaultClose(recoveryVaultId);
-          setVaultRuntimeState(recoveryVaultId, { session: null, persistence: "sealed" });
-          lifecycleService.clearPasswordInSession(recoveryVaultId);
-          showToast(t("toast.recovery_prototype"));
-        }
+      const runResolve = async () => {
+        setRecoverySubmitting(true);
+        try {
+          if (isTauri()) {
+            const password = lifecycleService.getPasswordInSession(vaultId);
+            if (!password && action !== "discard_workspace") {
+              setLifecycleRequest({ vaultId, intent: "unlock" });
+              return;
+            }
+            await resolveVaultRecovery(vaultId, password ?? "", action);
+            await onVaultListRefresh?.();
+            showToast(t("toast.recovery_success"));
+          } else {
+            if (action === "reimport_archive") {
+              setVaultRuntimeState(vaultId, { session: null, persistence: "closed" });
+            } else if (action === "discard_workspace") {
+              purgeForVaultClose(vaultId);
+              setVaultRuntimeState(vaultId, { session: null, persistence: "sealed" });
+              lifecycleService.clearPasswordInSession(vaultId);
+            }
+            showToast(t("toast.recovery_prototype"));
+          }
 
-        setRecoveryVaultId(null);
-      } finally {
-        setRecoverySubmitting(false);
-      }
+          setRecoveryVaultId(null);
+
+          if (action === "use_store") {
+            if (!startOpenPipeline(vaultId)) {
+              showToast(t("toast.pipeline_busy"));
+            }
+          }
+        } catch {
+          showToast(t("error.archive_test_failed"));
+        } finally {
+          setRecoverySubmitting(false);
+        }
+      };
+
+      void runResolve();
     },
     [
       lifecycleService,
+      onVaultListRefresh,
+      purgeForVaultClose,
+      recoveryVaultId,
+      setLifecycleRequest,
+      setRecoverySubmitting,
+      setRecoveryVaultId,
+      setVaultRuntimeState,
       showToast,
       startOpenPipeline,
       t,
@@ -417,6 +506,51 @@ export function useVaultLifecycleActions({
       void vaultService.unregisterSettings(vaultId);
     },
     [lifecycleService, purgeForVaultClose, vaultService],
+  );
+
+  const closeVaultForExit = useCallback(
+    (vault: VaultListItem, intent: Extract<VaultLifecycleIntent, "close" | "seal">) => {
+      return new Promise<boolean>((resolve) => {
+        if (pipeline.isRunning || pipeline.isVaultPipelineBusy(vault.id)) {
+          resolve(false);
+          return;
+        }
+
+        setVaultRuntimeState(vault.id, { session: "closing" });
+        const started = pipeline.start({
+          vaultId: vault.id,
+          kind: intent,
+          stepCount: lifecycleService.closingStepCount,
+          runPipeline: (vaultId, onStep) =>
+            lifecycleService.runClosingPipeline(vaultId, onStep, intent === "seal"),
+          onComplete: () => {
+            finishCloseOrSeal(vault.id, intent);
+            resolve(true);
+          },
+          onError: () => {
+            revertCloseFailure(vault.id);
+            resolve(false);
+          },
+        });
+
+        if (!started) {
+          revertCloseFailure(vault.id);
+          resolve(false);
+        }
+      });
+    },
+    [
+      finishCloseOrSeal,
+      lifecycleService,
+      pipeline,
+      revertCloseFailure,
+      setVaultRuntimeState,
+    ],
+  );
+
+  const getVaultSettingsForLifecycle = useCallback(
+    (vaultId: string) => vaultService.getSettings(vaultId),
+    [vaultService],
   );
 
   return {
@@ -433,5 +567,8 @@ export function useVaultLifecycleActions({
     handleLifecycleConfirm,
     handleRecoveryAction,
     handleVaultDelete,
+    closeVaultForExit,
+    getVaultSettingsForLifecycle,
+    hasPasswordInSession: lifecycleService.hasPasswordInSession.bind(lifecycleService),
   };
 }

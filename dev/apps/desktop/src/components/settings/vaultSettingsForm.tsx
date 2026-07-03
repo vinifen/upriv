@@ -320,6 +320,20 @@ export function VaultSettingsCloseSection({
           </SettingsField>
         </div>
       ) : null}
+      <label className="flex cursor-pointer select-none items-center gap-3">
+        <input
+          type="checkbox"
+          checked={autoClose.close_on_app_exit}
+          onChange={(e) => onAutoCloseChange({ close_on_app_exit: e.target.checked })}
+          className="h-4 w-4 rounded border-outline-variant/50 text-accent focus:ring-accent/50"
+        />
+        <span className="text-sm text-on-surface">
+          {t("modal.settings.field.auto_close.close_on_app_exit")}
+        </span>
+      </label>
+      <p className="text-xs leading-relaxed text-on-surface-variant">
+        {t("modal.settings.field.auto_close.close_on_app_exit_help")}
+      </p>
       <div className="space-y-1.5">
         <label className="flex cursor-pointer select-none items-center gap-3">
           <input
@@ -403,6 +417,7 @@ interface VaultSettingsSecuritySectionProps extends SectionPatchProps<"security"
   storageMode: VaultSettingsConfig["storage"]["mode"];
   passwordHint: string;
   onPasswordHintChange: (passwordHint: string) => void;
+  onChangePassword?: (currentPassword: string, newPassword: string) => Promise<void>;
 }
 
 function securityOptionMeta(uiMode: SecurityUiMode): {
@@ -466,6 +481,7 @@ export function VaultSettingsSecuritySection({
   storageMode,
   passwordHint,
   onPasswordHintChange,
+  onChangePassword,
 }: VaultSettingsSecuritySectionProps) {
   const { t } = useTranslation();
   const passwordMemoryGroup = useId();
@@ -496,6 +512,7 @@ export function VaultSettingsSecuritySection({
       <VaultChangePasswordPanel
         passwordHint={passwordHint}
         onPasswordHintChange={onPasswordHintChange}
+        onChangePassword={onChangePassword}
       />
     </SettingsFormGrid>
   );

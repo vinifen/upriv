@@ -31,7 +31,7 @@ export const mockBackupService: BackupService = {
     runtimeBackups.set(vaultId, next);
   },
 
-  async getBackupBytes(entry) {
+  async getBackupBytes(_vaultId, entry) {
     return getMockBackupBytes(entry);
   },
 };

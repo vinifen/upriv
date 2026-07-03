@@ -8,6 +8,7 @@ import {
   fileBaseName,
   findNode,
   getParentPath,
+  joinPath,
   siblingNames,
   validateFileName,
 } from "@upriv/shared";
@@ -92,6 +93,26 @@ export function useVaultFileManager({
       dispatch({ type: "start_rename", path });
     },
     [dispatch, fs, syncTree, t, vaultId],
+  );
+
+  const canImportHostFolder = Boolean(fs.importHostFolder);
+
+  const importHostFolder = useCallback(
+    async (parentPath: string): Promise<boolean> => {
+      if (!fs.importHostFolder) return false;
+      const result = await fs.importHostFolder(vaultId, parentPath);
+      if (result.cancelled) return true;
+      syncTree();
+      dispatch({ type: "expand_folder", path: parentPath });
+      if (result.folderName) {
+        const newPath = joinPath(parentPath, result.folderName);
+        dispatch({ type: "expand_folder", path: newPath });
+        dispatch({ type: "select_path", path: newPath });
+      }
+      showToast(t("modal.file_manager.toast.imported", { count: result.fileCount }));
+      return true;
+    },
+    [dispatch, fs, showToast, syncTree, t, vaultId],
   );
 
   const nameErrorMessage = useCallback(
@@ -319,6 +340,8 @@ export function useVaultFileManager({
     saveAllFiles,
     createFile,
     createFolder,
+    canImportHostFolder,
+    importHostFolder,
     commitRename,
     requestDelete,
     confirmDelete,

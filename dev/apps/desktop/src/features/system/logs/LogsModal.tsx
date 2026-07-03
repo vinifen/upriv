@@ -25,10 +25,11 @@ interface LogsModalProps {
 export function LogsModal({ open, onClose }: LogsModalProps) {
   const { locale, t } = useTranslation();
   const { show: showToast } = useToast();
-  const { files, deleteFiles, getFile } = useAppLogs(open);
+  const { files, deleteFiles, getFile, loading, errorKey } = useAppLogs(open);
 
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [activeFilename, setActiveFilename] = useState<string | null>(null);
+  const [activeFile, setActiveFile] = useState<AppLogFile | undefined>();
   const [deleteTargets, setDeleteTargets] = useState<string[] | null>(null);
 
   const allFilenames = useMemo(() => files.map((entry) => entry.filename), [files]);
@@ -40,7 +41,20 @@ export function LogsModal({ open, onClose }: LogsModalProps) {
     selectableFilenames.length > 0 &&
     selectableFilenames.every((filename) => selected.has(filename));
   const someSelected = selected.size > 0;
-  const activeFile = activeFilename ? getFile(activeFilename) : undefined;
+
+  useEffect(() => {
+    if (!activeFilename) {
+      setActiveFile(undefined);
+      return;
+    }
+    let cancelled = false;
+    void getFile(activeFilename).then((file) => {
+      if (!cancelled) setActiveFile(file);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeFilename, getFile]);
 
   useEffect(() => {
     if (!open) {
@@ -156,7 +170,11 @@ export function LogsModal({ open, onClose }: LogsModalProps) {
         <>
           <p className="mb-4 text-sm text-on-surface-variant">{t("modal.logs.hint")}</p>
 
-          {files.length === 0 ? (
+          {loading ? (
+            <p className="py-10 text-center text-sm text-on-surface-variant">{t("modal.logs.loading")}</p>
+          ) : errorKey ? (
+            <p className="py-10 text-center text-sm text-on-error-container">{t(errorKey)}</p>
+          ) : files.length === 0 ? (
             <p className="py-10 text-center font-mono text-sm text-on-surface-variant">
               {t("modal.logs.empty")}
             </p>

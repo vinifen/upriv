@@ -1,4 +1,4 @@
-import { AppSettingsModal } from "@/features/system/settings";
+import { AppSettingsModal, VaultRootSetupModal } from "@/features/system/settings";
 import { VaultBackupsModal } from "@/features/vaults/backups";
 import { CreateVaultWizardModal } from "@/features/vaults/create";
 import { FileManagerLayer } from "@/features/vaults/file-manager";
@@ -42,6 +42,7 @@ export function VaultListPage() {
     logs,
     help,
     createVault,
+    vaultRootSetup,
   } = screen;
 
   return (
@@ -112,6 +113,10 @@ export function VaultListPage() {
         initialDraft={createVault.initialDraft}
         onClose={createVault.onClose}
         onCreate={createVault.onCreate}
+      />
+      <VaultRootSetupModal
+        open={vaultRootSetup.open}
+        onConfigured={vaultRootSetup.onConfigured}
       />
     </AppShell>
   );

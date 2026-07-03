@@ -33,7 +33,7 @@ export const MOCK_VAULTS: VaultListItem[] = [
     session: null,
     storageMode: "encrypted_dir",
     order: 3,
-    canSeal: false,
+    canSeal: true,
     lastAccessedWhen: "14 days ago",
     lastAccessedAt: "2026-05-19T08:00:00Z",
     note: "",

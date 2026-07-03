@@ -26,7 +26,16 @@ cd ../.. && npm run tauri:build
 
 Artifacts: `dev/src-tauri/target/release/bundle/` (`.deb`, `.AppImage`, etc. on Linux).
 
-**MVP:** UI runs in the WebView with **mock services** (`platform/mocks/`). Only `app_version` IPC is wired (shown in Help when running as Tauri). Vault handlers in `src-tauri` come next (SDD §8.2.6).
+**MVP:** UI runs in the WebView with **mock services** for most features (`platform/mocks/`). **Tauri + `upriv-core`:** vault **list** and **`plain` open/close** use real Rust when `UPRIV_VAULT_ROOT` (or System settings → vault folder) points at a valid vault-root. Other modes and services remain mock until wired.
+
+### Real vault-root (Tauri)
+
+```bash
+export UPRIV_VAULT_ROOT="/absolute/path/to/prod-example"
+cd dev && npm run tauri:dev
+```
+
+Unlock **Plain Folder Demo** (`plain-folder-demo`) with the archive password. `encrypted_dir` vaults still use the mock open/close pipeline.
 
 **Linux deps:** [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) (webkit2gtk, etc.).
 

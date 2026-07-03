@@ -1,0 +1,54 @@
+Upriv — Linux (portable)
+
+PROBLEMA COMUM
+  Duplo clique no pendrive (exFAT) mostra:
+  "Could not Display … There is no application installed for 'executable' files"
+  Isso NÃO é falta de biblioteca — o gerenciador de arquivos tentou ABRIR o
+  arquivo em vez de EXECUTAR o programa.
+
+COMO RODAR (escolha uma)
+
+  1) Terminal (mais confiável)
+     cd /caminho/para/a/pasta
+     bash run-linux.sh
+
+  2) AppImage direto
+     chmod +x Upriv_0.1.0_amd64.AppImage
+     ./Upriv_0.1.0_amd64.AppImage
+
+  3) Copiar para a pasta Home primeiro (pendrive exFAT)
+     cp Upriv_0.1.0_amd64.AppImage ~/
+     chmod +x ~/Upriv_0.1.0_amd64.AppImage
+     ~/Upriv_0.1.0_amd64.AppImage
+
+  4) Gerenciador de arquivos
+     Botão direito → Propriedades → "Permitir executar como programa"
+     Depois: botão direito → Executar (não "Abrir com")
+
+REQUISITOS DO SISTEMA (Linux)
+
+  Distro recomendada: Ubuntu 22.04 ou mais novo (ou equivalente).
+
+  O AppImage precisa de glibc compatível com o PC onde foi COMPILADO:
+  - Build na sua máquina (Ubuntu 24.04) → exige GLIBC 2.39 (só Ubuntu 24.04+)
+  - Build portátil (script build-linux-portable.sh, Ubuntu 22.04) → GLIBC 2.35
+    (funciona em Ubuntu 22.04, 24.04, Mint 21+, Debian 12+, Fedora recente)
+
+  Erro "GLIBC_2.xx not found" = PC do usuário é MAIS VELHO que o build.
+  Instalar libfuse NÃO resolve — é versão do sistema operacional.
+
+  Para gerar build compatível com mais PCs (desenvolvedor):
+    ./dev/scripts/build-linux-portable.sh
+  (usa Docker + Ubuntu 22.04; requer docker instalado)
+
+SE O APP ABRIR MAS DER ERRO DE BIBLIOTECA (outros)
+
+  FUSE (cofres criptografados):
+    sudo apt install libfuse3-3
+
+  Distro muito antiga (Ubuntu 20.04 ou anterior):
+    não suportado pelo Tauri 2 / WebKit 4.1 — atualize para 22.04+.
+
+PRIMEIRA VEZ
+  O app pede a pasta Upriv (onde ficam os cofres). Pode escolher uma pasta
+  vazia e clicar em "Configurar Upriv aqui".

@@ -16,4 +16,8 @@ export const mockAppSettingsService: AppSettingsService = {
   getDefaultRootPathSuggestion() {
     return MOCK_UPRIV_ROOT_PATH;
   },
+
+  async pickVaultRootFolder() {
+    return MOCK_UPRIV_ROOT_PATH;
+  },
 };

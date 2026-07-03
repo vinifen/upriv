@@ -12,11 +12,13 @@ import { getParentPath, findNode, isDescendantPath, joinPath } from "@upriv/shar
 import type { FileTreeNode } from "@upriv/shared";
 import { filesFromDataTransfer, filesFromFileInput, isOsFileDrag } from "../lib/osFileDrop";
 import type { FileManagerApi } from "../hooks/useVaultFileManager";
+import { WorkspaceMountBanner } from "./WorkspaceMountBanner";
 
 interface FileTreePanelProps {
   fm: FileManagerApi;
   splitPercent: number;
   layout: "row" | "column";
+  storageMode: string;
 }
 
 interface FileTreeRowProps {
@@ -254,7 +256,7 @@ function FileTreeRoot({ tree, fm }: { tree: FileTreeNode; fm: FileManagerApi }) 
   return <FileTreeRow node={tree} path="/" depth={0} fm={fm} />;
 }
 
-export function FileTreePanel({ fm, splitPercent, layout }: FileTreePanelProps) {
+export function FileTreePanel({ fm, splitPercent, layout, storageMode }: FileTreePanelProps) {
   const { t } = useTranslation();
   const importFilesInputRef = useRef<HTMLInputElement>(null);
   const importFolderInputRef = useRef<HTMLInputElement>(null);
@@ -320,7 +322,11 @@ export function FileTreePanel({ fm, splitPercent, layout }: FileTreePanelProps) 
     importFilesInputRef.current?.click();
   };
 
-  const openImportFolderPicker = () => {
+  const handleImportFolder = () => {
+    if (fm.canImportHostFolder) {
+      void fm.importHostFolder(importTargetPath(fm));
+      return;
+    }
     importFolderInputRef.current?.click();
   };
 
@@ -343,8 +349,8 @@ export function FileTreePanel({ fm, splitPercent, layout }: FileTreePanelProps) 
       style={paneStyle}
       className="flex min-h-0 shrink-0 flex-col overflow-hidden bg-surface-container"
     >
-      <div className="flex shrink-0 items-center gap-1 px-2 pb-1 pt-2">
-        <p className="min-w-0 flex-1 font-mono text-[10px] font-medium uppercase tracking-widest text-on-surface-variant">
+      <div className="flex shrink-0 items-center gap-0.5 px-2 pb-1 pt-2">
+        <p className="min-w-0 flex-1 truncate font-mono text-[10px] font-medium uppercase tracking-widest text-on-surface-variant">
           {t("modal.file_manager.explorer.title")}
         </p>
         <input
@@ -398,13 +404,14 @@ export function FileTreePanel({ fm, splitPercent, layout }: FileTreePanelProps) 
         <button
           type="button"
           className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-on-surface-variant transition-colors hover:bg-surface-container-highest hover:text-on-surface"
-          onClick={openImportFolderPicker}
+          onClick={handleImportFolder}
           aria-label={t("modal.file_manager.explorer.import_folder")}
           title={t("modal.file_manager.explorer.import_folder")}
         >
           <Icon name="archive" size={14} />
         </button>
       </div>
+      <WorkspaceMountBanner vaultId={fm.vaultId} storageMode={storageMode} />
       <nav
         className={[
           "min-h-0 flex-1 overflow-y-auto overscroll-y-contain pb-1.5 pt-0",

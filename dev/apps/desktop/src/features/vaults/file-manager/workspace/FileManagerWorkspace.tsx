@@ -10,6 +10,7 @@ import { FileTreePanel } from "../tree/FileTreePanel";
 import { PaneResizeHandle } from "./PaneResizeHandle";
 import { percentFromPointer, TREE_SPLIT_DEFAULT_PERCENT } from "@upriv/shared";
 import { useVaultFileManager } from "../hooks/useVaultFileManager";
+import { getVaultStorageMode } from "@/platform/tauri/vaultService";
 
 interface FileManagerWorkspaceProps {
   entry: FileManagerEntry;
@@ -43,6 +44,7 @@ export function FileManagerWorkspace({ entry, onDismissConfirmed }: FileManagerW
   );
 
   const splitPercent = entry.workspace.treeSplitPercent ?? TREE_SPLIT_DEFAULT_PERCENT;
+  const storageMode = getVaultStorageMode(entry.vaultId) ?? "encrypted_dir";
 
   return (
     <>
@@ -50,7 +52,12 @@ export function FileManagerWorkspace({ entry, onDismissConfirmed }: FileManagerW
         ref={containerRef}
         className="flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-surface-container-high md:flex-row"
       >
-        <FileTreePanel fm={fm} splitPercent={splitPercent} layout={isMobile ? "column" : "row"} />
+        <FileTreePanel
+          fm={fm}
+          splitPercent={splitPercent}
+          layout={isMobile ? "column" : "row"}
+          storageMode={storageMode}
+        />
         <PaneResizeHandle axis={isMobile ? "y" : "x"} onDrag={handleSplitDrag} />
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
           <FileManagerTabBar

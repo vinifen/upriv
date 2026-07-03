@@ -31,12 +31,20 @@ export const mockVaultLifecycleService: VaultLifecycleService = {
     return vaultPasswordInRam.has(vaultId);
   },
 
+  getPasswordInSession(vaultId) {
+    return vaultPasswordInRam.get(vaultId) ?? null;
+  },
+
   setPasswordInSession(vaultId, password) {
     vaultPasswordInRam.set(vaultId, password.trim());
   },
 
   clearPasswordInSession(vaultId) {
     vaultPasswordInRam.delete(vaultId);
+  },
+
+  async hasDiskSession() {
+    return false;
   },
 
   openingStepCount: OPENING_PIPELINE_STEP_COUNT,
@@ -50,7 +58,7 @@ export const mockVaultLifecycleService: VaultLifecycleService = {
     });
   },
 
-  async runClosingPipeline(vaultId, onStep) {
+  async runClosingPipeline(vaultId, onStep, _seal = false) {
     await runTimedPipeline(CLOSING_PIPELINE_STEP_COUNT, onStep, (stepIndex) => {
       if (stepIndex === 0 && mockCloseGateFails(vaultId)) {
         throw new VaultPipelineError("error.archive_test_failed");

@@ -10,6 +10,8 @@ import { Button, Modal } from "@/components/ui";
 import { useTranslation } from "@/i18n";
 import { vaultSettingsToListPatch, type VaultListItem } from "@upriv/shared";
 import { useVaultService } from "@/platform/services";
+import { isTauri, TAURI_COMMANDS, tauriInvoke } from "@/lib/tauri";
+import { resolveVaultRootPath } from "@/platform/tauri/vaultRoot";
 import {
   VaultSettingsBackupSection,
   VaultSettingsCloseSection,
@@ -71,6 +73,20 @@ export function VaultSettingsModal({
   const encryptedClosePreferenceRef = useRef<CloseDefaultAction>("close");
 
   const canConfirmDelete = vault !== null && deleteConfirm.trim() === vault.id;
+
+  const handleChangePassword = useCallback(
+    async (currentPassword: string, newPassword: string) => {
+      if (!vaultId) throw new Error("no vault selected");
+      const vaultRoot = await resolveVaultRootPath();
+      await tauriInvoke(TAURI_COMMANDS.VAULT_CHANGE_PASSWORD, {
+        vaultRoot,
+        vaultId,
+        currentPassword,
+        newPassword,
+      });
+    },
+    [vaultId],
+  );
 
   const isDirty = useMemo(
     () => Boolean(draft && config && !vaultSettingsEqual(draft, config)),
@@ -281,7 +297,12 @@ export function VaultSettingsModal({
             title={t(`modal.settings.section.${sectionId}`)}
             defaultOpen={sectionId === "vault"}
           >
-            {renderSettingsSection(sectionId, formConfig, patchDraft)}
+            {renderSettingsSection(
+              sectionId,
+              formConfig,
+              patchDraft,
+              isTauri() ? handleChangePassword : undefined,
+            )}
           </VaultSettingsSection>
         ))}
 
@@ -321,6 +342,7 @@ function renderSettingsSection(
     section: S,
     patch: Partial<VaultSettingsConfig[S]>,
   ) => void,
+  onChangePassword?: (currentPassword: string, newPassword: string) => Promise<void>,
 ) {
   switch (sectionId) {
     case "vault":
@@ -370,6 +392,7 @@ function renderSettingsSection(
           passwordHint={draft.vault.password_hint}
           onChange={(patch) => patchDraft("security", patch)}
           onPasswordHintChange={(password_hint) => patchDraft("vault", { password_hint })}
+          onChangePassword={onChangePassword}
         />
       );
     case "seven_zip":

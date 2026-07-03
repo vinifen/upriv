@@ -28,6 +28,8 @@ export type VaultWorkspaceAction =
   | { type: "set_drag"; source: string | null; target: string | null }
   | { type: "remap_paths"; map: Record<string, string> }
   | { type: "remove_paths"; paths: string[] }
+  | { type: "set_external_conflicts"; paths: string[] }
+  | { type: "clear_external_conflict"; path: string }
   | { type: "discard_unsaved_and"; next: VaultWorkspaceAction };
 
 function remapList(paths: string[], map: Record<string, string>): string[] {
@@ -176,9 +178,8 @@ export function vaultWorkspaceReducer(
     }
     case "request_active_tab": {
       if (action.path === state.activeTabPath) return state;
-      if (needsUnsavedPrompt(state, state.activeTabPath)) {
-        return { ...state, unsavedPrompt: { type: "switch_tab", toPath: action.path } };
-      }
+      // Switching tabs preserves unsaved drafts in `editorDrafts`, so there is no
+      // risk of losing edits — activate directly without prompting to save.
       return activateTab(state, action.path);
     }
     case "set_active_tab":
@@ -202,6 +203,7 @@ export function vaultWorkspaceReducer(
         ...state,
         editorDrafts: { ...state.editorDrafts, [action.path]: action.content },
         dirtyPaths: state.dirtyPaths.filter((p) => p !== action.path),
+        externalConflictPaths: state.externalConflictPaths.filter((p) => p !== action.path),
       };
     }
     case "start_rename":
@@ -220,6 +222,15 @@ export function vaultWorkspaceReducer(
       return applyPathMap(state, action.map);
     case "remove_paths":
       return applyPathRemoval(state, action.paths);
+    case "set_external_conflicts": {
+      const merged = new Set([...state.externalConflictPaths, ...action.paths]);
+      return { ...state, externalConflictPaths: [...merged] };
+    }
+    case "clear_external_conflict":
+      return {
+        ...state,
+        externalConflictPaths: state.externalConflictPaths.filter((p) => p !== action.path),
+      };
     case "discard_unsaved_and": {
       const dirtyPath = state.unsavedPrompt?.type === "close_tab" ? state.unsavedPrompt.path : null;
       const dirtyPaths =
