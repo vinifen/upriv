@@ -1,0 +1,11 @@
+{
+  "format_version": 1,
+  "vault_id": "teste1",
+  "display_name": "teste1",
+  "sync_generation": 1,
+  "archive_hash": "sha256:4a926157a9a31276548d811f6561b9bf63d906c6317a67969886cd5d968f85d0",
+  "last_close_ok_at": "1782832345Z",
+  "store_hash": "sha256:8c2fc4eb9494bc35d88f7851e3214a3ef7f36f77b4729555b6a2e5796ca364d2",
+  "last_store_write_at": "1782832345Z",
+  "persistence": "closed"
+}

@@ -1,0 +1,18 @@
+{
+  "format": "upriv-encrypted-dir",
+  "version": 1,
+  "vault_id": "teste2",
+  "kdf": {
+    "algorithm": "argon2id",
+    "salt_b64": "DVt5H6Xam/1cnEyh9etoug==",
+    "memory_kib": 131072,
+    "iterations": 3,
+    "parallelism": 1
+  },
+  "crypto": {
+    "content_cipher": "XChaCha20-Poly1305",
+    "name_cipher": "AES-SIV",
+    "chunk_size": 262144
+  },
+  "wrapped_master_key_b64": "zr0i7UyYCljzXW4EFwhWw8KqOs6mVUHfzUA2fzweeBOHelqiWeKAXdykWqko9ITTN9+gmcJN865nPzbEyz02r9zICYpe2xi1"
+}
