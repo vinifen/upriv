@@ -1,38 +1,39 @@
 # Upriv — desktop UI
 
-React web UI (Tauri shell). **Presentation only** — vault logic lives in `crates/upriv-core`; `src-tauri` delegates via `invoke`.
+React web UI (Electron shell). **Presentation only** — vault logic lives in `crates/upriv-core`; `upriv-daemon` serves RPC to the UI.
 
 ## Run
 
 ```bash
 cd dev/apps/desktop
 npm install
-npm run dev              # http://localhost:1420 (browser)
-npm run tauri -- dev     # Tauri + WebView (mock services — same UI)
+npm run dev              # http://localhost:1420 (browser, mock services)
 npm run build            # typecheck + production bundle
 npm run lint             # ESLint
 npm run format           # Prettier (write)
 npm run format:check     # Prettier (check only)
 ```
 
-### Desktop binary (Tauri)
+### Desktop app (Electron)
 
-From `dev/` (Rust workspace root):
+From `dev/`:
 
 ```bash
 cd dev/apps/desktop && npm install
-cd ../.. && npm run tauri:build
+cd ../electron && npm install
+cd ../.. && npm run electron:dev      # Vite + Electron + upriv-daemon
+cd ../.. && npm run electron:build    # AppImage / installer
 ```
 
-Artifacts: `dev/src-tauri/target/release/bundle/` (`.deb`, `.AppImage`, etc. on Linux).
+Artifacts: `dev/target/release/bundle/electron/` (`.AppImage` on Linux).
 
-**MVP:** UI runs in the WebView with **mock services** (`platform/mocks/`). Only `app_version` IPC is wired (shown in Help when running as Tauri). Vault handlers in `src-tauri` come next (SDD §8.2.6).
+**Linux note:** on Ubuntu 23.10+ the Electron shell uses `--no-sandbox` (AppArmor blocks Chromium user namespaces). Renderer `sandbox: true` still applies. Optional: configure `chrome-sandbox` as root 4755 — see [Electron Linux docs](https://www.electronjs.org/docs/latest/tutorial/sandbox).
 
-**Linux deps:** [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) (webkit2gtk, etc.).
+**MVP:** UI runs with **mock services** (`platform/mocks/`). Only `app_version` RPC is wired (shown in Help when running in Electron). Vault handlers in `upriv-daemon` come next (SDD §8.2.6).
 
 ## Prototype mocks (temporary)
 
-`platform/mocks/` backs all services via `createServices()` until Tauri handlers exist. **Future work:** delete that folder and rename remaining `mock*` / `getMock*` / `MOCK_*` symbols to neutral platform names (details in `src/platform/mocks/README.md`).
+`platform/mocks/` backs all services via `createServices()` until desktop RPC adapters exist. **Future work:** delete that folder and rename remaining `mock*` / `getMock*` / `MOCK_*` symbols to neutral platform names (details in `src/platform/mocks/README.md`).
 
 Until real crypto is wired, unlock/close use prototype validation in `validateMockLifecyclePassword` (min 4 chars; `"wrong"` simulates failure). Hidden vault **Finance 2025** shows password hint _Q4 spreadsheet_ in the unlock modal.
 
@@ -48,7 +49,7 @@ src/
 │   └── AppProviders.tsx     # Services → AppSettings (+ I18n inside) → file manager
 │
 ├── platform/                # Desktop-only adapters
-│   ├── mocks/               # Prototype data + mock services — remove entirely when Tauri is wired
+│   ├── mocks/               # Prototype data + mock services — remove when desktop RPC is wired
 │   │   ├── data/            # Static fixtures (vaults, logs, settings defaults)
 │   │   ├── stores/          # In-memory state (file tree, settings registry)
 │   │   └── services/        # AppServices mock implementations
@@ -79,7 +80,7 @@ src/
 │
 ├── i18n/                    # Locale loading, context, `useTranslation`
 ├── theme/                   # Design tokens, vault status → color/i18n mapping
-├── lib/tauri/               # `invoke` wrapper + command name constants
+├── lib/desktop/             # `desktopInvoke` wrapper + RPC method name constants
 ├── hooks/                   # Shared React hooks
 └── styles/                  # globals.css, CSS variables, fonts
 ```
@@ -90,7 +91,7 @@ src/
 | ------------------- | --------------------------------------------------------------------------------------------- |
 | UI copy             | `dev/apps/shared/locales/*.json` via `useTranslation()` — never hardcode sentences              |
 | Vault status colors | `theme/vault-status.ts` + CSS vars in `styles/tokens.css`                                     |
-| Tauri commands      | `lib/tauri/commands.ts` — names match `src-tauri`                                             |
+| Desktop RPC         | `lib/desktop/commands.ts` — names match `crates/upriv-daemon`                                 |
 | Domain types        | `@upriv/shared` (`shared/`) — `VaultRow`, settings, list sort/view                            |
 | Service layer       | `platform/services/` — factory + React context; mocks in `platform/mocks/`                    |
 | App layout          | `AppShell` + `VaultListHeader` on the vault list home screen                                  |
@@ -105,48 +106,12 @@ Each feature folder under `features/vaults/*` and `features/system/*` has **one*
 
 **Rules**
 
-1. **Export only cross-module symbols** — if a file is imported only by siblings in the same folder (or subfolders), do **not** put it in `index.ts`. Use relative imports internally (`./VaultRow`, `../useVaultListState`, `./hooks/useVaultListScreen`).
+1. **Export only cross-module symbols** — if a file is imported only by siblings in the same folder (or subfolders), do **not** put it in `index.ts`.
 2. **One index per feature folder** — no nested barrels (`hooks/index.ts`, …). Public symbols are listed in the parent `index.ts` when needed outside the feature.
 3. **`hooks/` per feature** — custom hooks live in `<feature>/hooks/` (functions `use*` only). Types use `<feature>Types.ts` or `vaultListModalsTypes.ts` at the feature root, not inside `hooks/`. No `hooks/index.ts`.
 4. **No umbrella index** — there is no `features/vaults/index.ts` or `features/system/index.ts`. Each sub-feature (`list/`, `lifecycle/`, `settings/`, …) owns its boundary.
 5. **Domain types from `@upriv/shared`** — import `VaultListItem`, settings helpers, sort types, etc. from `@upriv/shared`, not re-exported through feature indexes. Feature indexes expose **UI, hooks, and desktop-only adapters** consumed elsewhere.
 6. **Prefer the barrel over deep paths** — outside code imports `@/features/vaults/list`, not `@/features/vaults/list/exportVaultArchive`. If something is used outside, add it to that folder’s `index.ts` and import from there.
-
-**How to read a feature**
-
-```text
-features/vaults/list/
-├── index.ts                 ← “what leaves this folder”
-├── VaultListPage.tsx        ← home page compositor
-├── vaultListModalsTypes.ts
-├── exportVaultArchive.ts
-├── hooks/                   ← useVaultListState, useVaultListScreen, …
-├── lib/                     ← vaultListView, vaultListToolbarIcons
-├── header/                  ← VaultListHeader, VaultListSectionHeader
-├── row/                     ← VaultList, VaultRow, VaultBlockCard, …
-└── modals/                  ← VaultNoteModal
-
-features/vaults/file-manager/
-├── index.ts
-├── FileManagerContext.tsx   ← provider + multi-vault session state
-├── FileManagerLayer.tsx     ← modal + dock compositor
-├── fileManagerTypes.ts
-├── hooks/                   ← useVaultFileManager
-├── lib/                     ← fileManagerWorkspaceTypes, vaultWorkspaceReducer, osFileDrop, import helpers
-├── shell/                   ← FileManagerModal, FileManagerDock
-├── workspace/               ← FileManagerWorkspace, PaneResizeHandle
-├── tree/                    ← FileTreePanel, FileTreeContextMenu
-├── editor/                  ← FileEditorPane, FileManagerTabBar
-└── dialogs/                 ← FileManagerDialogs
-
-features/vaults/lifecycle/
-├── index.ts
-├── VaultLifecycleLayer.tsx  ← unlock/close/seal + recovery + pipeline compositor
-├── vaultLifecycleTypes.ts
-├── hooks/                   ← useVaultLifecycleActions, useVaultPipelineRun, useVaultAutoClose
-├── modals/                  ← VaultLifecycleModal, VaultRecoveryModal, VaultPasswordHintCallout
-└── pipeline/                ← VaultPipelineOverlay, VaultOpeningOverlay, VaultClosingOverlay
-```
 
 **Current public APIs** (maintain this table when adding exports)
 

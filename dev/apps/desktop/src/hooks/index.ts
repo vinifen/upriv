@@ -1,1 +1,1 @@
-export { useIsTauri } from "./useIsTauri";
+export { useIsDesktop } from "./useIsDesktop";

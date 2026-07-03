@@ -7,7 +7,7 @@ import { settingsControlClass, SettingsField } from "./vaultSettingsForm";
 interface VaultChangePasswordPanelProps {
   passwordHint: string;
   onPasswordHintChange: (passwordHint: string) => void;
-  /** Mock until Tauri `vault_change_password`. */
+  /** Mock until `vault_change_password` RPC. */
   onPasswordChanged?: () => void;
 }
 

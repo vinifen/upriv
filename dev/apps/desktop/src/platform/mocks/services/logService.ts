@@ -10,7 +10,7 @@ function files(): AppLogFile[] {
   return runtimeFiles;
 }
 
-/** Prototype log service — in-memory until Tauri reads `.upriv/logs/`. */
+/** Prototype log service — in-memory until desktop reads `.upriv/logs/`. */
 export const mockLogService: LogService = {
   async listFiles() {
     return files().map((entry) => ({ ...entry }));

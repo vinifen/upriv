@@ -1,13 +1,14 @@
 {
   "name": "upriv-dev",
   "private": true,
-  "description": "Upriv dev scripts only — install deps in apps/desktop and apps/mobile separately",
+  "description": "Upriv dev scripts only — install deps in apps/desktop, apps/electron, and apps/mobile separately",
   "scripts": {
     "dev": "npm run dev --prefix apps/desktop",
     "build": "npm run build --prefix apps/desktop",
-    "tauri": "npm run tauri --prefix apps/desktop",
-    "tauri:dev": "npm run tauri --prefix apps/desktop -- dev",
-    "tauri:build": "npm run tauri --prefix apps/desktop -- build",
+    "daemon:build": "cargo build -p upriv-daemon",
+    "daemon:build:release": "cargo build --release -p upriv-daemon",
+    "electron:dev": "npm run daemon:build && npm run dev --prefix apps/electron",
+    "electron:build": "npm run build:electron --prefix apps/desktop && npm run daemon:build:release && npm run dist --prefix apps/electron",
     "mobile:start": "npm run start --prefix apps/mobile",
     "mobile:android": "npm run android --prefix apps/mobile",
     "mobile:typecheck": "npm run typecheck --prefix apps/mobile"

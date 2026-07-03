@@ -3,7 +3,7 @@ import type { VaultPipelineError, VaultPipelineErrorCode } from "../../domain/va
 /** v1 product rule: global FIFO queue — one open/close/seal pipeline at a time (SDD §8.2.2). */
 export type VaultPipelineKind = "open" | "close" | "seal";
 
-/** Vault session password and open/close/seal pipelines (mock or Tauri → upriv-core). */
+/** Vault session password and open/close/seal pipelines (mock or desktop → upriv-core). */
 export interface VaultLifecycleService {
   hasPasswordInSession(vaultId: string): boolean;
   setPasswordInSession(vaultId: string, password: string): void;

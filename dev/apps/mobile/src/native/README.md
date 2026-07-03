@@ -1,6 +1,6 @@
 # Mobile native bridge (future)
 
-`upriv-core` will be linked here — not Tauri (see product architecture).
+`upriv-core` will be linked here via React Native FFI (see product architecture).
 
 | Platform | Bridge |
 |----------|--------|

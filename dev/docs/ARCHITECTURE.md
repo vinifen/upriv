@@ -13,7 +13,7 @@
 
 | Platform | UI | Shell | Core | Deliverable |
 |----------|-----|-------|------|-------------|
-| **Desktop** (Linux, Windows, macOS; x86_64 + ARM64) | React (web) + TypeScript | Tauri 2 | `upriv-core` (Rust) | Single executable per OS (`.exe`, AppImage, `.deb`, `.app`, …) |
+| **Desktop** (Linux, Windows, macOS; x86_64 + ARM64) | React (web) + TypeScript | Electron + `upriv-daemon` | `upriv-core` (Rust) | Single executable per OS (`.exe`, AppImage, `.app`, …) |
 | **Mobile** (Android v2, iOS v3) | React Native + TypeScript | RN native runtime | `upriv-core` (Rust) | Single APK / IPA (Rust as `.so` / static lib inside the package) |
 
 **One Rust core, two UI stacks.** Desktop and mobile share `upriv-core`, i18n keys, types, and business flows — not the same JSX/DOM markup.
@@ -63,7 +63,7 @@ A **bridge** is generated or hand-written glue that lets the UI language call Ru
 
 | Platform | Bridge mechanism |
 |----------|------------------|
-| Desktop (Tauri) | `#[tauri::command]` + `@tauri-apps/api` `invoke()` |
+| Desktop (Electron) | stdio JSON-RPC via `upriv-daemon` + `window.upriv.invoke()` preload |
 | Mobile (React Native) | Native module (JNI on Android, static lib + Obj-C/Swift shim on iOS); e.g. `uniffi` or `react-native-rust` pattern |
 
 The bridge is **code inside the same package** (same `.exe` or same APK) — not a separate app or service.
@@ -76,15 +76,14 @@ The bridge is **code inside the same package** (same `.exe` or same APK) — not
 
 One **native executable** per OS/architecture. Bundled inside or beside it:
 
-- WebView shell (Tauri)
-- Compiled frontend assets (`dist/`)
-- Rust binary + `upriv-core`
+- Chromium shell (Electron)
+- Compiled frontend assets (`renderer-out/` → bundled as `renderer/`)
+- `upriv-daemon` sidecar + `upriv-core`
 - `7zz` for the target triple
 
-**Validated builds (2026-05-31):**
+**Validated builds (2026-07-03):**
 
-- Linux: `dev/src-tauri/target/release/upriv`, AppImage, `.deb`, `.rpm`
-- Windows (cross-compile from Linux): `dev/src-tauri/target/x86_64-pc-windows-msvc/release/upriv.exe`
+- Linux: `dev/target/release/bundle/electron/Upriv-0.1.0.AppImage`
 
 Build commands: see `dev/README.md` and `dev/apps/desktop/README.md`.
 
@@ -111,21 +110,22 @@ Development workspace (`dev/`):
 dev/
 ├── apps/
 │   ├── desktop/              # React web UI (Vite)
+│   ├── electron/             # Electron main/preload + electron-builder
 │   ├── mobile/               # Expo / React Native scaffold
 │   └── shared/               # @upriv/shared — TS domain types + service interfaces
-├── src-tauri/                # Tauri shell (sibling of apps/, not inside desktop/)
 ├── crates/
-│   └── upriv-core/           # Shared Rust core (placeholder → implementation)
+│   ├── upriv-core/           # Shared Rust core
+│   └── upriv-daemon/         # Desktop RPC sidecar → upriv-core
 ├── docs/
 │   ├── prd.md
 │   ├── sdd.md
 │   ├── ARCHITECTURE.md
 │   └── i18n/
-├── Cargo.toml                # Rust workspace (src-tauri + upriv-core)
+├── Cargo.toml                # Rust workspace (upriv-core + upriv-daemon)
 └── package.json              # dev scripts only (no root node_modules)
 ```
 
-**Note:** Tauri expects `src-tauri/` under `dev/` with the web UI at `apps/desktop/`. Run `npm run tauri:dev` from `dev/` or `npm run tauri -- dev` from `dev/apps/desktop/` (see `dev/apps/desktop/README.md`).
+**Note:** Run `npm run electron:dev` from `dev/` (see `dev/apps/desktop/README.md`).
 
 ---
 
@@ -136,7 +136,7 @@ dev/
 | TypeScript types (`VaultRow`, settings DTOs) | Markup: `<div>` vs `<View>` |
 | i18n keys and loaders | Styling: Tailwind vs StyleSheet / NativeWind |
 | State hooks and flow logic | Modals, navigation, gestures |
-| API function signatures (call into Rust) | Tauri `invoke` vs RN native module |
+| API function signatures (call into Rust) | `desktopInvoke` vs RN native module |
 
 **Same component tree concept** (App → VaultList → VaultRow → modals), **different implementations** per platform (`.tsx` web vs `.native.tsx` or shared props + platform files).
 
@@ -167,16 +167,16 @@ See SDD §9.4 for Android SAF flow.
 
 | ID | Decision | Choice | Reason |
 |----|----------|--------|--------|
-| ADR-01 | Desktop UI | React web + Tauri 2 | Stable executables on Linux/Win/Mac (x86 + ARM); already shipping v0.1 |
+| ADR-01 | Desktop UI | React web + Electron | Stable Chromium on Linux/Win/Mac; AppImage validated (2026-07-03) |
 | ADR-02 | Mobile UI | React Native + TypeScript | Close to React mental model; max reuse of TS structure with desktop; one APK with Rust inside |
 | ADR-03 | Mobile UI (rejected) | ~~Flutter~~ | Superseded by ADR-02; team prefers React ecosystem for shared structure |
 | ADR-04 | Mobile shell (rejected) | ~~Tauri Android~~ | Experimental; not acceptable for production vault app |
-| ADR-05 | Desktop UI (rejected) | ~~React Native desktop for Linux~~ | No official stable RN for Linux; Tauri is the solid Linux path |
+| ADR-05 | Desktop UI (rejected) | ~~React Native desktop for Linux~~ | No official stable RN for Linux; Electron is the desktop path |
 | ADR-06 | Core | Single `upriv-core` crate | One implementation of crypto, 7z, states; compile to `.so`/`.dll`/linked exe per target |
 | ADR-07 | Security boundary | UI = presentation; Rust = secrets + I/O | Minimize attack surface in JS; passwords never persisted in UI layer |
 | ADR-08 | Android packaging | Single APK | RN + bridge + `libupriv_core.so` + `7zz` in one installable package |
-| ADR-09 | Desktop packaging | Single executable per OS/arch | Tauri bundle; `7zz` embedded |
-| ADR-10 | RN on Windows/macOS desktop | Not planned | Desktop stays React web + Tauri; avoids Linux gap and duplicate desktop stacks |
+| ADR-09 | Desktop packaging | Single executable per OS/arch | Electron + `upriv-daemon`; `7zz` embedded |
+| ADR-10 | RN on Windows/macOS desktop | Not planned | Desktop stays React web + Electron; avoids duplicate desktop stacks |
 
 ---
 
@@ -184,9 +184,9 @@ See SDD §9.4 for Android SAF flow.
 
 | OS | Phase | UI | Mount / workspace | Status |
 |----|-------|-----|-------------------|--------|
-| Linux x86_64 / ARM64 | v1 | Tauri + React | FUSE → encrypted store | In development |
-| Windows x86_64 / ARM64 | v1 | Tauri + React | WinFsp or equivalent | `.exe` build validated |
-| macOS | v1.1 | Tauri + React | Platform mount | Planned |
+| Linux x86_64 / ARM64 | v1 | Electron + React | FUSE → encrypted store | In development |
+| Windows x86_64 / ARM64 | v1 | Electron + React | WinFsp or equivalent | Planned |
+| macOS | v1.1 | Electron + React | Platform mount | Planned |
 | Android | v2 | React Native | SAF; `workspace/` on OTG HD | Planned |
 | iOS | v3 | React Native | Document picker + SAF-like APIs | Planned |
 
@@ -196,7 +196,7 @@ See SDD §9.4 for Android SAF flow.
 
 1. Implement **`dev/crates/upriv-core/`** (crypto, 7z, state machine).
 2. Implement **`VaultStorage`** (desktop `std::fs` first).
-3. Wire Tauri commands in `dev/src-tauri/` to `upriv-core` only (thin `lib.rs`).
+3. Wire RPC handlers in `dev/crates/upriv-daemon/` to `upriv-core` only (thin `rpc.rs`).
 4. **`dev/apps/shared/`** (`@upriv/shared`) — domain types, service interfaces, and UI locale catalogs (`locales/`).
 5. Complete desktop v1 (Linux FUSE + Windows WinFsp, open/close/seal).
 6. **`dev/apps/mobile/`** — native module → `upriv-core` (JNI / UniFFI).
@@ -206,7 +206,7 @@ See SDD §9.4 for Android SAF flow.
 
 ## 10. References
 
-- [Tauri 2](https://v2.tauri.app/)
+- [Electron](https://www.electronjs.org/)
 - [React Native](https://reactnative.dev/)
 - [uniffi](https://mozilla.github.io/uniffi-rs/) (candidate for RN ↔ Rust)
 - PRD §3.5–3.6, SDD §4, §8, §9

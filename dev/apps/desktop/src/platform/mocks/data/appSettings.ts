@@ -22,7 +22,7 @@ export const DEFAULT_APP_SETTINGS: AppSettingsConfig = {
   },
 };
 
-/** Mock path used by “Choose folder” until Tauri folder picker is wired. */
+/** Mock path used by “Choose folder” until native folder picker is wired. */
 export const MOCK_UPRIV_ROOT_PATH = "/home/user/Documents/Upriv";
 
 /** @internal Used by mockAppSettingsService only. */

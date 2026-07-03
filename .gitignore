@@ -4,5 +4,6 @@ Thumbs.db
 
 # Env
 .env
-.env.*
+
 REVISAO*
+temp/

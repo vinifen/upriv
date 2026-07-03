@@ -24,7 +24,7 @@ See PRD §11.1.
 
 ### 1.1 Principles
 
-0. **v1 Linux + Windows** — first delivery: desktop app on Linux and Windows (Tauri + `upriv-core`; FUSE on Linux, WinFsp on Windows). Design the virtual-mount layer as a shared trait from day one. Vault layout and `.7z` remain portable; macOS/mobile later (PRD §3.5).
+0. **v1 Linux + Windows** — first delivery: desktop app on Linux and Windows (Electron + `upriv-daemon` + `upriv-core`; FUSE on Linux, WinFsp on Windows). Design the virtual-mount layer as a shared trait from day one. Vault layout and `.7z` remain portable; macOS/mobile later (PRD §3.5).
 1. **Vault = folder + contract** — independent of where the executable is installed.
 2. **Two product modes** — `encrypted_dir` (default) and `plain` (exception; e.g. insufficient RAM) — **both in v1**. Do not treat `plain` as “legacy to discard”. In `encrypted_dir`, **available RAM must fit the entire unlocked vault** while open — otherwise open/edit/close fail; UI warns via `warning.encrypted_dir_ram` (PRD §1.6, RF-UI-17).
 3. **Core in Rust** — single `upriv-core` crate for all platforms; shared logic between desktop and mobile (FFI). UI layers (React web, React Native) are **presentation only** — no crypto, disk I/O, or session secrets in JS/TS. See `ARCHITECTURE.md` §2.
@@ -44,9 +44,9 @@ See PRD §11.1.
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                     UI Layer                                 │
-│  Tauri 2 + React web (desktop)        │  React Native (mobile) │
+│  Electron + React web (desktop)       │  React Native (mobile) │
 └─────────────────────────────┬───────────────────────────────┘
-                              │ invoke (Tauri) / native module (RN)
+                              │ RPC (upriv-daemon) / native module (RN)
 ┌─────────────────────────────▼───────────────────────────────┐
 │                     upriv-core (Rust)                        │
 │  VaultManager │ Config │ Session │ Recovery │ SevenZip       │
@@ -506,7 +506,7 @@ last_opened_vault = "my-encrypted-notes"
 | Zip layout | `{vault_id}/{display_name}.7z` per entry (avoids display-name collisions) |
 | UI pattern | **Flat checklist** like Hidden vaults — no bordered list cards, no `ring`/`divide` containers; compact rows (`text-xs`), subtle row hover only |
 
-**Desktop mock:** `AppSettingsDownloadVaultsSection`, `vaultBulkExport.ts`; future Tauri: `vault_bulk_export(vault_root, vault_ids)`.
+**Desktop mock:** `AppSettingsDownloadVaultsSection`, `vaultBulkExport.ts`; future RPC: `vault_bulk_export(vault_root, vault_ids)`.
 
 **Working root (UX):** `workspace/` + launchers (`Upriv-windows.exe`, `Upriv-mac`, `Upriv-linux`) and `.upriv/`; documentation in `README.md` at `<vault-root>` root.
 
@@ -675,7 +675,7 @@ password_changed_at = "2026-05-30T18:00:00Z"   # omitted or empty until first ch
 
 Backups opened via Plan B or Upriv backups modal still require the **password active when that backup was taken**. Document in vault settings and backups modal footer.
 
-**Desktop UI (v1, implemented in mock):** expandable panel under Security — `vault.change_password.*`, `warning.password_change_backups`, `modal.settings.change_password_help`. Submit calls Tauri `vault_change_password` when wired.
+**Desktop UI (v1, implemented in mock):** expandable panel under Security — `vault.change_password.*`, `warning.password_change_backups`, `modal.settings.change_password_help`. Submit calls `vault_change_password` RPC when wired.
 
 Related: PRD **RF-58**, **RF-59**; i18n `vault.change_password.*`, `warning.password_change_backups`.
 
@@ -845,7 +845,7 @@ struct AutoCloseHandle {
     deadline: Instant,
 }
 
-// Tauri: tokio interval 30s or notify + debounce on watcher
+// Desktop daemon: tokio interval 30s or notify + debounce on watcher
 fn tick_auto_close(mgr: &mut VaultManager) {
     for c in mgr.open_vaults() {
         if !c.auto_close.enabled { continue; }
@@ -978,7 +978,7 @@ impl VaultManager {
 }
 ```
 
-Exposed to desktop via Tauri `#[tauri::command]` and to mobile via React Native native module (JNI / iOS static lib). See `ARCHITECTURE.md` §2.3.
+Exposed to desktop via `upriv-daemon` stdio JSON-RPC and to mobile via React Native native module (JNI / iOS static lib). See `ARCHITECTURE.md` §2.3.
 
 ---
 
@@ -1136,7 +1136,7 @@ Reference bundle: `prod/` — see `prod/README.md` (`settings.toml`, `vaults/<id
 
 ---
 
-## 8. Desktop UI (Tauri 2)
+## 8. Desktop UI (Electron)
 
 ### 8.1 Project structure
 
@@ -1147,17 +1147,17 @@ dev/
 ├── apps/
 │   ├── desktop/                # React web UI (src/)
 │   ├── mobile/                 # Expo / React Native scaffold
+│   ├── electron/               # Electron shell (main/preload)
 │   └── shared/                 # @upriv/shared — TS domain + service interfaces
-├── src-tauri/                  # Tauri shell → thin commands → upriv-core
-│   ├── src/lib.rs
-│   └── tauri.conf.json
-├── crates/upriv-core/          # Shared Rust (all platforms)
+├── crates/
+│   ├── upriv-core/             # Shared Rust (all platforms)
+│   └── upriv-daemon/           # Desktop RPC → upriv-core
 └── docs/
 ```
 
 ### 8.2 Interface (v1 — specification)
 
-**PRD:** §3.7 (RF-UI requirements). **v1 platform:** Linux + Windows + Tauri; **dark** theme; **minimalist** UX.
+**PRD:** §3.7 (RF-UI requirements). **v1 platform:** Linux + Windows + Electron; **dark** theme; **minimalist** UX.
 
 **i18n:** load `dev/apps/shared/locales/{locale}.json` per `[ui] locale` in `main.toml`. No hardcoded UI sentences in Rust/TS — see `LOCALE.md`.
 
@@ -1167,7 +1167,7 @@ dev/
 
 | Rule | Detail |
 |------|--------|
-| **Not final** | Not production UI; not wired to Tauri or `upriv-core` |
+| **Not final** | Not production UI; not wired to Electron/`upriv-core` |
 | **Not authoritative** | Behavior, flows, and copy come from **PRD §3.7**, **this section (§8.2)**, and **`dev/apps/shared/locales/`** |
 | **Implementation** | Do not ship `code.html` as the app shell; replace hardcoded strings with i18n keys |
 
@@ -1265,7 +1265,7 @@ No separate Welcome screen in v1; “Open vault” = `--vault` on first run or a
 - Two tiers: **Saves** (`backups/saves/*.7z`, never auto-deleted) and **Standard** (rotated per `[backup]`). **Save** on a standard row → `backup_promote_save`.
 - Table/list: columns **Name**, **Date**, **Actions**
 - **Delete:** inline confirmation or second step with `<input>` — placeholder `modal.backup.delete_confirm` + `` `<id>` ``; button disabled until `input === id`.
-- Suggested Tauri commands: `backup_list(id)`, `backup_delete(id, backup_name, confirm_id)`, `backup_promote_save(id, backup_name)`.
+- Suggested RPC methods: `backup_list(id)`, `backup_delete(id, backup_name, confirm_id)`, `backup_promote_save(id, backup_name)`.
 
 #### 8.2.3a Modal — system settings (Download vaults)
 
@@ -1309,53 +1309,32 @@ ui/
 --brand-icon-bg:        #0f172a;
 ```
 
-#### 8.2.6 Tauri commands (UI)
+#### 8.2.6 Desktop RPC methods (UI)
 
 In addition to §8.3:
 
 ```rust
-#[tauri::command]
+// upriv-daemon/src/rpc.rs — method names exposed to the UI
 fn vault_list(vault_root: String) -> Result<Vec<VaultRowDto>, String>;
-
-#[tauri::command]
 fn vault_reorder(vault_root: String, ordered_ids: Vec<String>) -> Result<(), String>;
 // Accepts full list of vault ids in new display order; rewrites [vault] order on each config.toml (atomic).
-
-#[tauri::command]
 fn backup_list(vault_id: String) -> Result<Vec<BackupEntryDto>, String>;
-
-#[tauri::command]
 fn backup_delete(vault_id: String, backup_name: String, confirm_id: String) -> Result<(), String>;
-
-#[tauri::command]
 fn backup_promote_save(vault_id: String, backup_name: String) -> Result<(), String>;
-
-#[tauri::command]
 fn vault_bulk_export(vault_root: String, vault_ids: Vec<String>) -> Result<Vec<u8>, String>;
 // Or stream/save-dialog variant; reads archive/<display_name>.7z per id.
-
-#[tauri::command]
 fn vault_delete(vault_id: String, confirm_id: String) -> Result<(), String>;
-
-#[tauri::command]
 fn vault_seal(vault_id: String, password: String) -> Result<(), String>;
 ```
 
 `VaultRowDto`: `{ id, display_name, persistence, storage_mode, status_color, can_seal }`.
 
-### 8.3 Tauri commands
+### 8.3 Desktop RPC methods (lifecycle)
 
 ```rust
-#[tauri::command]
 fn vault_open(vault_path: String, password: String) -> Result<(), String>;
-
-#[tauri::command]
 fn vault_close(vault_path: String, password: Option<String>) -> Result<(), String>;
-
-#[tauri::command]
 fn vault_open_workspace(vault_path: String) -> Result<(), String>;  // xdg-open / explorer
-
-#[tauri::command]
 fn vault_status(vault_path: String) -> Result<VaultStatusDto, String>;
 ```
 
@@ -1602,7 +1581,7 @@ vault_path = "/media/user/HD/my-vault"
 3. **open/close** happy path without UI — **both** `encrypted_dir` and `plain` (Linux + Windows).
 4. **Recovery** detector + discard.
 5. **`7z t` gate** before write.
-6. **Tauri** minimal: vault list (§8.2), Lock/Unlock, config/backups modals, row click → workspace.
+6. **Electron** minimal: vault list (§8.2), Lock/Unlock, config/backups modals, row click → workspace.
 7. **Linux packaging**: bundle `7zz` (`Linux-x64` / `aarch64`), `Upriv-linux`, `hd-bundle` template.
 8. **Windows packaging**: bundle `7zz` (`Windows-x64`), `Upriv.exe`, WinFsp runtime/deps.
 9. **session.enc** + disk modes (v0.2).
@@ -1619,9 +1598,9 @@ vault_path = "/media/user/HD/my-vault"
 |----------|--------|--------|
 | Container | `.7z` AES-256 | Universality, plan B |
 | vs own format v1 | No | Time, trust in 7z |
-| Core language | Rust | Security, FFI, Tauri |
-| Desktop UI | React web + Tauri 2 | Stable executables Linux/Win/Mac (x86 + ARM); validated `.exe` + AppImage (2026-05-31) |
-| Mobile UI | React Native | Single APK/IPA; TS structure shared with desktop; not Tauri Android |
+| Core language | Rust | Security, FFI, desktop daemon |
+| Desktop UI | React web + Electron | Stable executables Linux/Win/Mac (x86 + ARM); AppImage validated (2026-07-03) |
+| Mobile UI | React Native | Single APK/IPA; TS structure shared with desktop |
 | UI security boundary | Presentation only in JS/TS | Crypto, RAM, disk, 7z in `upriv-core` only |
 | v1 platform | Linux + Windows desktop | Desktop parity from day one; shared `mount/` trait (FUSE / WinFsp); portable vault format |
 | Config | TOML + defaults | Readable, cross-platform |
@@ -1640,7 +1619,7 @@ vault_path = "/media/user/HD/my-vault"
 ## 16. Technical references
 
 - [7-Zip command line](https://sevenzip.osdn.jp/chm/cmdline/index.htm)
-- [Tauri 2](https://v2.tauri.app/)
+- [Electron](https://www.electronjs.org/)
 - [React Native](https://reactnative.dev/)
 - `ARCHITECTURE.md` in this repository (cross-platform stack, ADRs)
 - PRD.md in this repository

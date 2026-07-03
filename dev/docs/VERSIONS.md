@@ -1,18 +1,17 @@
 # Pinned toolchain — `dev/` (stability-first)
 
-**Policy:** exact versions in `package.json` / `Cargo.toml`; refresh only after testing desktop (`npm run build`, `npm run tauri -- build`) and mobile (`npm run typecheck`, `expo start`). Product specs: `dev/docs/` (`prd.md`, `sdd.md`, `ARCHITECTURE.md`).
+**Policy:** exact versions in `package.json` / `Cargo.toml`; refresh only after testing desktop (`npm run build`, `npm run electron:build`) and mobile (`npm run typecheck`, `expo start`). Product specs: `dev/docs/` (`prd.md`, `sdd.md`, `ARCHITECTURE.md`).
 
-**Last reviewed:** 2026-06-01 (Rust pin)
+**Last reviewed:** 2026-07-03 (Electron desktop shell)
 
 ## System
 
 | Tool | Version | Notes |
 |------|---------|--------|
-| Node.js | **22.12+** (`.nvmrc`: `22.12.0`) | Matches `engines` in `mobile/package.json` and [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) |
-| Rust | **1.94.0** (`rust-toolchain.toml`) | `rustup` installs this channel in `dev/`; Tauri 2.11 MSRV ≥ 1.77.2 |
-| Linux deps | webkit2gtk-4.1, build-essential, … | See Tauri prerequisites |
+| Node.js | **22.12+** (`.nvmrc`: `22.12.0`) | Matches `engines` in `mobile/package.json` |
+| Rust | **1.94.0** (`rust-toolchain.toml`) | `rustup` installs this channel in `dev/` |
 
-## Desktop — JavaScript (`dev/apps/desktop/`)
+## Desktop — JavaScript (`dev/apps/desktop/` + `dev/apps/electron/`)
 
 | Package | Version | Role |
 |---------|---------|------|
@@ -23,17 +22,15 @@
 | `tailwindcss` | **3.4.17** | Styling (v3 = long-term docs/tooling) |
 | `postcss` | **8.4.49** | CSS pipeline |
 | `autoprefixer` | **10.4.21** | CSS pipeline |
-| `@tauri-apps/api` | **2.11.0** | Latest npm publish for the 2.11 line (no `2.11.1`/`2.11.2` on npm) |
-| `@tauri-apps/cli` | **2.11.2** | Build/dev CLI (can be patch ahead of `api`) |
+| `electron` | **34.5.8** | Desktop shell (Chromium) |
+| `electron-builder` | **25.1.8** | AppImage / NSIS / DMG packaging |
 
-## Desktop — Rust (`dev/src-tauri/`)
+## Desktop — Rust (`dev/crates/`)
 
 | Crate | Version | Role |
 |-------|---------|------|
-| `tauri` | **=2.11.2** | Shell |
-| `tauri-build` | **=2.6.2** | Build script (pairs with Tauri 2.11) |
-
-No app plugins in the base scaffold (add `tauri-plugin-opener` etc. when needed, pinned to the same Tauri minor).
+| `upriv-core` | workspace | Product logic |
+| `upriv-daemon` | workspace | stdio JSON-RPC sidecar for Electron (no TCP port) |
 
 ## Mobile — JavaScript (`dev/apps/mobile/`)
 
@@ -52,7 +49,7 @@ No app plugins in the base scaffold (add `tauri-plugin-opener` etc. when needed,
 
 **Expo config:** `newArchEnabled: false` in `app.json` until `upriv-core` native module is tested on New Architecture.
 
-**Not used:** Tauri Android (product ADR), Expo SDK 53+ / RN 0.79 / React 19 on mobile (kept for a later coordinated upgrade with desktop).
+**Not used:** Expo SDK 53+ / RN 0.79 / React 19 on mobile (kept for a later coordinated upgrade with desktop).
 
 ## Future (not in scaffold)
 
@@ -66,8 +63,7 @@ No app plugins in the base scaffold (add `tauri-plugin-opener` etc. when needed,
 
 | Choice | Rationale |
 |--------|-----------|
-| Tauri **2.11.x** (`api` 2.11.0, `cli`/crate 2.11.2) | Official releases: npm `api` stops at 2.11.0; `cli` and Rust crate ship 2.11.2 — same **minor**, safe together |
-| Tauri **2.11** vs 2.10.x | 2.10.x can pull mismatched `tauri-runtime` on fresh `cargo build` |
+| Electron **34.x** | Stable Chromium; pinned for reproducible AppImage builds |
 | React **18** not 19 | Broader library compatibility for a long-lived product |
 | Vite **6** not 7 | `@vitejs/plugin-react` 4.x targets Vite 4–6; v6 drops Vite 7 |
 | Tailwind **3** not 4 | Stable PostCSS workflow; upgrade to v4 when UI work starts |

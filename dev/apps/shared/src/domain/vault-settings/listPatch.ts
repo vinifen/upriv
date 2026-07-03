@@ -1,7 +1,7 @@
 import type { VaultSettingsConfig } from "./types";
 import { vaultCanSealFromStorage } from "./types";
 
-/** List fields synced from `[vault]` on save (mock until Tauri `config_save`). */
+/** List fields synced from `[vault]` on save (mock until `vault_config_save` RPC). */
 export function vaultSettingsToListPatch(config: VaultSettingsConfig) {
   const passwordHint = config.vault.password_hint.trim();
   const storageMode = config.storage.mode;

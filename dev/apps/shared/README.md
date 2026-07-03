@@ -38,5 +38,5 @@ cd dev/apps/desktop && npm install
 
 - React components, hooks, modals
 - Tailwind class maps (`logLevelClass`, `vaultStatusRowClass`)
-- Browser download (`downloadZip`), Tauri invoke
+- Browser download (`downloadZip`), desktop RPC
 - Mocks (`apps/desktop/src/platform/mocks/`)

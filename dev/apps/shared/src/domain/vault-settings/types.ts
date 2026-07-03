@@ -210,7 +210,7 @@ export function vaultSettingsEqual(a: VaultSettingsConfig, b: VaultSettingsConfi
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
-/** List fields synced from `[vault]` on save (mock until Tauri `config_save`). */
+/** List fields synced from `[vault]` on save (mock until `vault_config_save` RPC). */
 export interface VaultSettingsListPatch {
   displayName: string;
   order: number;

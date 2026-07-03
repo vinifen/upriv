@@ -4,17 +4,16 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "dev": "vite --configLoader native",
+    "build": "tsc --noEmit && vite build --configLoader native",
+    "build:electron": "ELECTRON=true tsc --noEmit && ELECTRON=true vite build --configLoader native",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "preview": "vite preview",
-    "tauri": "sh -c 'cd ../../src-tauri && npx --prefix ../apps/desktop tauri \"$@\"' --"
+    "preview": "vite preview"
   },
   "dependencies": {
-    "@tauri-apps/api": "2.11.2",
     "@upriv/shared": "file:../shared",
     "fflate": "^0.8.2",
     "react": "18.3.1",
@@ -22,7 +21,6 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.28.0",
-    "@tauri-apps/cli": "2.11.2",
     "@types/node": "22.15.3",
     "@types/react": "18.3.18",
     "@types/react-dom": "18.3.5",

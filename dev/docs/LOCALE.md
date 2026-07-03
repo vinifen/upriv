@@ -67,7 +67,7 @@ locale = "en"   # "en" | "pt-BR" | "es" | future BCP-47 tags
 
 ## Implementation checklist
 
-- [ ] Tauri/React loads `dev/apps/shared/locales/{locale}.json` (via `@upriv/shared` `loadLocale`)
+- [ ] Desktop/React loads `dev/apps/shared/locales/{locale}.json` (via `@upriv/shared` `loadLocale`)
 - [ ] No `language = "pt-BR"` as hardcoded UI strings in Rust/TS
 - [ ] Error types: `ErrorCode::WrongPassword` + i18n `error.wrong_password`
 - [ ] CI: reject new Portuguese comments in `crates/` (optional lint later)

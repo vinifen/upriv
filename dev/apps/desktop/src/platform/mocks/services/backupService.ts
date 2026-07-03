@@ -11,7 +11,7 @@ function backupsForVault(vaultId: string): VaultBackupEntry[] {
   return structuredClone(seed);
 }
 
-/** Prototype backup service — in-memory until Tauri `backup_*` commands. */
+/** Prototype backup service — in-memory until `backup_*` RPC. */
 export const mockBackupService: BackupService = {
   async listBackups(vaultId) {
     return backupsForVault(vaultId);

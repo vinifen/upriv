@@ -14,8 +14,8 @@ When product behavior, security, or on-disk layout is unclear, **read the canoni
 |----------|------|------|
 | 1 | [`dev/docs/prd.md`](../dev/docs/prd.md) | **What** to build — requirements, UX, vault states, Android rules, non-goals |
 | 2 | [`dev/docs/sdd.md`](../dev/docs/sdd.md) | **How** to build — state machine, TOML layout, `upriv-core` modules, 7z, FUSE, tests, implementation order |
-| 3 | [`dev/docs/ARCHITECTURE.md`](../dev/docs/ARCHITECTURE.md) | **Stack** — React/Tauri/RN, `upriv-core`, bridges, ADRs, platform matrix |
-| 4 | [`dev/docs/VERSIONS.md`](../dev/docs/VERSIONS.md) | Pinned toolchains (Node, Rust, Tauri, Expo) |
+| 3 | [`dev/docs/ARCHITECTURE.md`](../dev/docs/ARCHITECTURE.md) | **Stack** — React/Electron/RN, `upriv-core`, bridges, ADRs, platform matrix |
+| 4 | [`dev/docs/VERSIONS.md`](../dev/docs/VERSIONS.md) | Pinned toolchains (Node, Rust, Electron, Expo) |
 | 5 | [`dev/docs/LOCALE.md`](../dev/docs/LOCALE.md) | English for code/docs; UI via i18n keys only |
 | 6 | [`prod-example/README.md`](../prod-example/README.md) | On-disk vault bundle contract (reference, not built from `dev/`) |
 
@@ -63,17 +63,18 @@ upriv/
 ├── prod-example/           # Static demo vault-root (no build link to dev/)
 ├── README.md
 └── dev/
-    ├── Cargo.toml          # Rust workspace: upriv-core + src-tauri
+    ├── Cargo.toml          # Rust workspace: upriv-core + upriv-daemon
     ├── Cargo.lock
     ├── rust-toolchain.toml # Rust 1.94.0 (pinned)
     ├── .nvmrc              # Node 22.12.0
     ├── apps/
     │   ├── desktop/        # React 18 + Vite 6 + Tailwind 3 (presentation)
+    │   ├── electron/       # Electron shell (main/preload)
     │   ├── mobile/         # Expo 52 + RN 0.76 scaffold (presentation; no Rust bridge yet)
     │   └── shared/         # @upriv/shared — TS domain + service interfaces
     ├── crates/
-    │   └── upriv-core/     # ALL product Rust logic (API: upriv_core::)
-    ├── src-tauri/          # Tauri shell ONLY — thin #[tauri::command] → upriv-core
+    │   ├── upriv-core/     # ALL product Rust logic (API: upriv_core::)
+    │   └── upriv-daemon/   # Desktop RPC sidecar ONLY — thin stdio JSON-RPC → upriv-core
     └── docs/
         ├── prd.md
         ├── sdd.md
@@ -91,33 +92,34 @@ upriv/
 
 | Layer | Path | May do | Must NOT do |
 |-------|------|--------|-------------|
-| **UI desktop** | `dev/apps/desktop/` | Render, i18n, `invoke()` | Crypto, disk I/O, 7zz, vault state on disk |
+| **UI desktop** | `dev/apps/desktop/` | Render, i18n, `desktopInvoke()` | Crypto, disk I/O, 7zz, vault state on disk |
 | **UI mobile** | `dev/apps/mobile/` | Same (future native module) | Same |
-| **Tauri shell** | `dev/src-tauri/` | Window, IPC commands delegating to core | Business logic (keep `lib.rs` thin) |
-| **Core** | `dev/crates/upriv-core/` | Crypto, 7z, paths, state machine, FUSE, recovery | Depend on `tauri` |
+| **Electron shell** | `dev/apps/electron/` | Window, spawn daemon, IPC preload | Business logic |
+| **Desktop RPC** | `dev/crates/upriv-daemon/` | stdio JSON-RPC delegating to core | Business logic (keep `rpc.rs` thin) |
+| **Core** | `dev/crates/upriv-core/` | Crypto, 7z, paths, state machine, FUSE, recovery | Depend on Electron |
 
-**Desktop UI prototype (`dev/apps/desktop/`, mock layer):** vault list, lifecycle, file manager, settings, logs, and help run on in-memory mocks until Tauri/`upriv-core` wiring. Notable conventions:
+**Desktop UI prototype (`dev/apps/desktop/`, mock layer):** vault list, lifecycle, file manager, settings, logs, and help run on in-memory mocks until `upriv-daemon`/`upriv-core` wiring. Notable conventions:
 
 - **Pipeline:** `useVaultPipelineRun` enforces SDD §8.2.2 — one open/close/seal at a time (`isRunning`).
 - **Auto-close:** at most one close per idle tick; warn toast once per vault per idle cycle; respects `isPipelineRunning`.
 - **Settings ↔ list:** `registerMockVaultSettings` on save; list patch includes `storageMode` / `canSeal`.
-- **Hidden until wired:** `close_on_app_exit` UI not exposed yet (no Tauri `onCloseRequested`).
+- **Hidden until wired:** `close_on_app_exit` UI not exposed yet (no Electron `before-quit` handler in UI).
 - **Feature module boundaries:** each `features/vaults/*` and `features/system/*` folder has one `index.ts` — see [`dev/apps/desktop/README.md`](../dev/apps/desktop/README.md).
 
-Replace mocks with `invoke()` → `upriv-core` before shipping crypto; do not treat JS `Map` passwords as production architecture.
+Replace mocks with `desktopInvoke()` → `upriv-daemon` → `upriv-core` before shipping crypto; do not treat JS `Map` passwords as production architecture.
 
 ### Data flow
 
 ```text
-Desktop:  React ──invoke──► src-tauri ──► upriv_core::*
+Desktop:  React ──desktopInvoke──► upriv-daemon ──► upriv_core::*
 Mobile:   RN     ──JNI/FFI──► libupriv_core.so ──► upriv_core::*   (v2+)
 ```
 
 ### Rust workspace
 
-- Build from `dev/`: `cargo build -p upriv`, `cargo test -p upriv-core`.
+- Build from `dev/`: `cargo build -p upriv-daemon`, `cargo test -p upriv-core`.
 - Artifacts go to **`dev/target/`** only — **never commit** `target/`, `node_modules/`, `dist/`, `.expo/`.
-- `src-tauri/src/main.rs` is entry only (`upriv_lib::run()`); do not add vault logic there.
+- `upriv-daemon/src/main.rs` is entry only; do not add vault logic there — use `upriv-core`.
 
 ### Planned `upriv-core` modules (SDD §4.2)
 
@@ -147,11 +149,11 @@ upriv-core/src/
 | Rust | **1.94.0** (`rust-toolchain.toml`) |
 | React (desktop + mobile) | 18.3.1 |
 | Vite | 6.3.5 |
-| Tauri | 2.11.2 (crate/cli); `@tauri-apps/api` 2.11.0 |
+| Electron | 34.5.8; `electron-builder` 25.1.8 |
 | Expo / RN | 52.0.49 / 0.76.9 |
 | Mobile New Arch | `newArchEnabled: false` until native Rust bridge is tested |
 
-Do not use floating `^` on Tauri or React without re-validating builds.
+Do not use floating `^` on Electron or React without re-validating builds.
 
 ---
 
@@ -186,8 +188,8 @@ Work in this order unless the user explicitly reprioritizes:
 3. open/close happy path without UI — **both modes** (Linux + Windows)  
 4. Recovery detector  
 5. `7z t` gate before write  
-6. Tauri minimal UI (vault list, lock/unlock, modals)  
-7. Linux packaging (`7zz`, AppImage/deb template)  
+6. Electron minimal UI (vault list, lock/unlock, modals)  
+7. Linux packaging (`7zz`, AppImage via electron-builder)  
 8. Windows packaging (`7zz`, `.exe`, WinFsp deps)  
 9. Later: macOS, RN Android, iOS  
 
@@ -201,10 +203,11 @@ Current scaffold: step 1 barely started (`app_version` only).
 # From dev/
 nvm use
 npm install --prefix apps/desktop
+npm install --prefix apps/electron
 npm run dev --prefix apps/desktop          # Vite http://localhost:1420
-npm run tauri --prefix apps/desktop dev  # Desktop shell
+npm run electron:dev                       # Electron + upriv-daemon
 cargo test -p upriv-core
-cargo build -p upriv --release
+cargo build -p upriv-daemon --release
 
 # Mobile
 npm install --prefix apps/mobile
@@ -230,8 +233,8 @@ npm run typecheck --prefix apps/mobile
 
 | Phase | Platform | UI | Core delivery |
 |-------|----------|-----|----------------|
-| **v1** | Linux + Windows desktop | Tauri + React | `upriv-core` + FUSE (Linux) / WinFsp (Windows) |
-| v1.1 | macOS | Tauri + React | Platform mount |
+| **v1** | Linux + Windows desktop | Electron + React | `upriv-core` + FUSE (Linux) / WinFsp (Windows) |
+| v1.1 | macOS | Electron + React | Platform mount |
 | v2 | Android | React Native | `libupriv_core.so` + SAF |
 | v3 | iOS | React Native | Same core, document picker |
 
@@ -241,14 +244,14 @@ Vault **format** is cross-platform from day one; **v1 desktop app** ships on **L
 
 ## Mobile packaging (future)
 
-One **APK** = JS bundle + RN runtime + **`libupriv_core.so`** + `7zz` + JNI bridge. Not Tauri on Android. Expo Go does **not** load custom Rust; need dev build when bridge exists.
+One **APK** = JS bundle + RN runtime + **`libupriv_core.so`** + `7zz` + JNI bridge. Mobile uses React Native, not Electron. Expo Go does **not** load custom Rust; need dev build when bridge exists.
 
 ---
 
 ## What agents should avoid
 
-- Implementing vault/crypto in `apps/desktop/` or `src-tauri/` instead of `upriv-core`
-- Adding `tauri` as a dependency of `upriv-core`
+- Implementing vault/crypto in `apps/desktop/` or `upriv-daemon/` instead of `upriv-core`
+- Adding Electron or HTTP server deps to `upriv-core`
 - Hardcoding Portuguese/English UI strings in TS/Rust
 - Treating `workspace/` as a normal data folder in `encrypted_dir` (virtual mount)
 - Comparing `archive_hash` with `store_hash` for sync (use `sync_generation`)

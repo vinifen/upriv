@@ -13,7 +13,7 @@ default_vault = "my-encrypted-notes"
 [ui]
 locale = "en"   # UI: dev/apps/shared/locales/{locale}.json
 theme = "dark"
-# Vault list preferences (desktop UI reads/writes when wired to Tauri)
+# Vault list preferences (desktop UI reads/writes when wired to upriv-daemon)
 vault_list_sort = "order"              # order | name | state | last_accessed
 vault_list_sort_direction = "asc"      # asc | desc
 vault_list_view = "default"            # default | large | compact | blocks

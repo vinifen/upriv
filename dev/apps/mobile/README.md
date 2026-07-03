@@ -2,7 +2,7 @@
 
 **Expo SDK 52** + **React Native 0.76** + **React 18.3.1** — aligned with `dev/apps/desktop/` for shared TypeScript (`@upriv/shared`) and i18n keys.
 
-No vault UI yet, no `upriv-core` native module. **Not** Tauri mobile (product uses React Native + Rust FFI).
+No vault UI yet, no `upriv-core` native module. Mobile uses React Native + Rust FFI (not Electron).
 
 ## Prerequisites
 

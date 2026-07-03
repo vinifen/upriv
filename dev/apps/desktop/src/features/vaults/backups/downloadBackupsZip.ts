@@ -1,7 +1,7 @@
 import type { VaultBackupEntry } from "@upriv/shared";
 import { downloadFiles } from "@/lib/downloadZip";
 
-/** Download selected backups as a zip (mock bytes until Tauri reads real `.7z`). */
+/** Download selected backups as a zip (mock bytes until desktop reads real `.7z`). */
 export async function downloadBackupsZip(
   entries: readonly VaultBackupEntry[],
   zipName: string,

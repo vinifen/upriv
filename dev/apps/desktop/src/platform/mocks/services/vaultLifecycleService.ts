@@ -25,7 +25,7 @@ function mockCloseGateFails(vaultId: string): boolean {
   return getPasswordInRam(vaultId) === "gatefail";
 }
 
-/** Prototype lifecycle service — RAM password map and timed pipelines until Tauri wiring. */
+/** Prototype lifecycle service — RAM password map and timed pipelines until desktop wiring. */
 export const mockVaultLifecycleService: VaultLifecycleService = {
   hasPasswordInSession(vaultId) {
     return vaultPasswordInRam.has(vaultId);

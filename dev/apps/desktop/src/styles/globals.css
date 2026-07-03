@@ -22,7 +22,7 @@
     @apply min-h-screen;
   }
 
-  /* WebKit (Tauri WebView, Chrome) — slim thumb, no bright track */
+  /* Chromium scrollbar styling — slim thumb, no bright track */
   *::-webkit-scrollbar {
     width: 8px;
     height: 8px;

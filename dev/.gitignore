@@ -1,12 +1,8 @@
 # Dependencies (never dev/node_modules at dev/ root — each app has its own .gitignore)
 node_modules/
 
-# Rust (workspace + legacy per-crate)
+# Rust workspace
 target/
-src-tauri/target/
-
-# Tauri generated (regenerated on build)
-src-tauri/gen/
 
 # Logs / OS
 *.log
@@ -16,3 +12,6 @@ Thumbs.db
 # Env (never commit secrets)
 .env
 .env.*
+
+# Temp
+temp/

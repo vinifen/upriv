@@ -16,7 +16,7 @@
 
 Upriv is a **portable vault manager** based on **AES-256 encrypted `.7z`** as the closed/portable container, with a **mountable encrypted store** for live editing without persisting plaintext on the HD/SSD.
 
-**v1 (initial goal):** implement **both storage modes** on **Linux and Windows desktop** together (Tauri + `upriv-core`): default **`encrypted_dir`** (FUSE on Linux, WinFsp on Windows) and exception **`plain`** (real plaintext `workspace/` on HD between open and close, with UI warnings and `secure_wipe_workspace`). macOS and mobile are deferred to later phases (§3.5).
+**v1 (initial goal):** implement **both storage modes** on **Linux and Windows desktop** together (Electron + `upriv-daemon` + `upriv-core`): default **`encrypted_dir`** (FUSE on Linux, WinFsp on Windows) and exception **`plain`** (real plaintext `workspace/` on HD between open and close, with UI warnings and `secure_wipe_workspace`). macOS and mobile are deferred to later phases (§3.5).
 
 The user opens with a password, edits in `workspace/{display_name}/` (virtual mount / RAM), the encrypted store in `.upriv/vaults/<vault_id>/store/` stays on disk, and on app close a new `.7z` is generated in `vaults/<vault_id>/archive/`.
 
@@ -369,8 +369,8 @@ While vault is **open**, plaintext exists in **session** (RAM / virtual mount). 
 
 | Phase | Platforms | Delivery |
 |------|-------------|---------|
-| **v1 (initial)** | **Linux + Windows** (x86_64; ARM64 if needed) | Tauri 2 + Rust; virtual mount — **FUSE** (Linux), **WinFsp** (Windows); embedded `7zz` per OS |
-| v1.1 | macOS | Tauri; platform virtual mount |
+| **v1 (initial)** | **Linux + Windows** (x86_64; ARM64 if needed) | Electron + Rust; virtual mount — **FUSE** (Linux), **WinFsp** (Windows); embedded `7zz` per OS |
+| v1.1 | macOS | Electron; platform virtual mount |
 | v2 | Android | React Native + `upriv-core` (Rust); OTG vault; single APK; see §3.6 |
 | v3 | iOS | React Native + `upriv-core`; App Store; same vault layout; no APK on HD |
 
@@ -616,9 +616,9 @@ Configurable in `config/<id>.toml` as `security.mode`.
 |----|-----------|
 | RNF-01 | Typical vault (passwords/docs): open/close in seconds to a few minutes |
 | RNF-02 | Comfortable size per vault: up to ~1 GB uncompressed; up to ~3 GB with care on desktop |
-| RNF-03 | Single executable per OS (Tauri); `7zz` as bundled dependency |
+| RNF-03 | Single executable per OS (Electron); `7zz` as bundled dependency |
 | RNF-04 | UTF-8 config, paths relative to vault root |
-| RNF-05 | Core code in Rust (`upriv-core`); desktop UI React web + Tauri 2; mobile UI React Native + Rust FFI (later phases). UI layers are presentation only — crypto, RAM session, and disk I/O live in Rust. See `ARCHITECTURE.md` |
+| RNF-05 | Core code in Rust (`upriv-core`); desktop UI React web + Electron; mobile UI React Native + Rust FFI (later phases). UI layers are presentation only — crypto, RAM session, and disk I/O live in Rust. See `ARCHITECTURE.md` |
 | RNF-05b | **v1:** desktop app **Linux + Windows**; vault format and `.7z` portable from the start |
 | RNF-06 | License and dependencies compatible with `7zz` distribution |
 

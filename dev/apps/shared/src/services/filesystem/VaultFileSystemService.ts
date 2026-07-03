@@ -1,7 +1,7 @@
 import type { FileTreeNode, VaultFileContent, VaultFileLanguage } from "../../domain/file-tree";
 
 /**
- * Open-vault workspace file tree (mock in-memory today; mount/FUSE via Tauri later).
+ * Open-vault workspace file tree (mock in-memory today; mount/FUSE via desktop later).
  * Sync API — operations run against the active session while a vault is open.
  */
 export interface VaultFileSystemService {

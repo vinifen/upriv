@@ -3,7 +3,7 @@ import type { I18nKey } from "@/i18n";
 import { Modal } from "@/components/ui";
 import { VaultSettingsSection, settingsControlClass } from "@/components/settings";
 import { useTranslation } from "@/i18n";
-import { getAppVersion, APP_PACKAGE_VERSION } from "@/lib/tauri";
+import { getAppVersion, APP_PACKAGE_VERSION } from "@/lib/desktop";
 import {
   defaultOpenHelpSections,
   HELP_SECTION_BODY_KEYS,

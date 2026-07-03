@@ -23,5 +23,5 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src", "../shared/locales/*.json"]
+  "include": ["src", "../shared/locales/*.json", "src/global.d.ts"]
 }

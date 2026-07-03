@@ -14,7 +14,7 @@ function enrichPasswordHint(vault: VaultListItem): VaultListItem {
   return fromConfig ? { ...vault, passwordHint: fromConfig } : vault;
 }
 
-/** Prototype vault service — delegates to in-memory mocks until Tauri wiring. */
+/** Prototype vault service — delegates to in-memory mocks until desktop wiring. */
 export const mockVaultService: VaultService = {
   async listVaults() {
     return structuredClone(MOCK_VAULTS).map(enrichPasswordHint);

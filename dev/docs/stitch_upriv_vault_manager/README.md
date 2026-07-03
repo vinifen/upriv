@@ -16,7 +16,7 @@ Treat everything here as **exploratory**. Colors, copy, spacing, and flows may c
 
 | File | Role |
 |------|------|
-| **`code.html`** | Static HTML prototype (Tailwind) — vault list, row states, modals sketch. Open in a browser for a quick visual preview. **Not** wired to Tauri or upriv-core. |
+| **`code.html`** | Static HTML prototype (Tailwind) — vault list, row states, modals sketch. Open in a browser for a quick visual preview. **Not** wired to Electron or upriv-core. |
 | **`DESIGN.md`** | Design system notes extracted from the prototype: palette, typography, spacing, component patterns (“Calm Security”). |
 | **`screen.png`** | Screenshot of the prototype (when present) — same non-final reference as `code.html`. |
 

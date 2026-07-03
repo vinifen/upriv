@@ -36,7 +36,7 @@ export function getMockBackupsForVault(vaultId: string): VaultBackupEntry[] {
   return [...list].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
 }
 
-/** Placeholder bytes until Tauri reads real `.7z` files from disk. */
+/** Placeholder bytes until desktop reads real `.7z` files from disk. */
 export function getMockBackupBytes(entry: VaultBackupEntry): Uint8Array {
   const header = `[Upriv mock backup]\n${entry.filename}\n${entry.saved ? "saved\n" : ""}`;
   const payload = "0".repeat(
