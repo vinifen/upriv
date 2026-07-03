@@ -1,0 +1,45 @@
+[vault]
+id = "teste1"
+display_name = "teste1"
+order = 2
+vault_file = "archive/teste1.7z"
+store_dir = "store"
+backups_dir = "backups"
+password_hint = "teste1"
+note = "teste1"
+hidden = false
+
+[storage]
+mode = "encrypted_dir"
+
+[close]
+default_action = "close"
+
+[backup]
+enabled = false
+mode = "keep_last"
+keep_last = 1
+
+[security]
+mode = "session_ram"
+secure_wipe_workspace = true
+wipe_passes = 1
+wipe_pattern = "random"
+
+[auto_close]
+enabled = false
+idle_minutes = 15
+warn_before_seconds = 60
+close_on_app_exit = false
+
+[seven_zip]
+encrypt_file_names = true
+archive_mode = "encrypt_only"
+compression_level = 5
+solid = false
+method = "lzma2"
+
+[policy]
+allow_external_editors = false
+disallow_copy_outside_mount = true
+require_unmount_on_sleep = true
