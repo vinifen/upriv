@@ -3,6 +3,7 @@ import type { AppLogFile } from "./types";
 import type { ParsedLogLevel, ParsedLogLine } from "./parsed";
 
 const LOG_LINE_RE = /^(\d{4})\s+(\S+)\s+(TRACE|DEBUG|INFO|WARN|ERROR)\s+(\S+)(?:\s+(.*))?$/;
+// Line index is 4 digits (0001–1000) — matches Rust writer cap in `LogConfig::effective_entries_per_file`.
 
 /** Parse `000001-20260529120000.log` or `current-000002-20260529200000.log` → ISO UTC. */
 export function logCreatedAtFromFilename(filename: string): string | null {

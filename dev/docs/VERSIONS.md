@@ -2,6 +2,8 @@
 
 **Policy:** exact versions in `package.json` / `Cargo.toml`; refresh only after testing desktop (`npm run build`, `npm run electron:build`) and mobile (`npm run typecheck`, `expo start`). Product specs: `dev/docs/` (`prd.md`, `sdd.md`, `ARCHITECTURE.md`).
 
+**Product version:** edit **`dev/VERSION`** only, then run `npm run sync-version --prefix dev` (or `build` / `electron:build`, which sync automatically). CI runs `scripts/check-version.mjs` via `./run lint` to catch drift.
+
 **Last reviewed:** 2026-07-03 (Electron desktop shell)
 
 ## System
@@ -10,6 +12,7 @@
 |------|---------|--------|
 | Node.js | **22.12+** (`.nvmrc`: `22.12.0`) | Matches `engines` in `mobile/package.json` |
 | Rust | **1.94.0** (`rust-toolchain.toml`) | `rustup` installs this channel in `dev/` |
+| `workspace.package.rust-version` | **1.94.0** (`Cargo.toml`) | MSRV field — keep aligned with toolchain |
 
 ## Desktop — JavaScript (`dev/apps/desktop/` + `dev/apps/electron/`)
 

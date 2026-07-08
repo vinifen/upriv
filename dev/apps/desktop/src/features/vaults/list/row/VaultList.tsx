@@ -3,10 +3,15 @@ import { VaultBlockCard } from "./VaultBlockCard";
 import { VaultRow } from "./VaultRow";
 import type { VaultListViewMode, VaultListItem } from "@upriv/shared";
 
+export interface VaultPipelineListStatus {
+  openingVaultIds?: readonly string[];
+  closingVaultIds?: readonly string[];
+}
+
 interface VaultListProps {
   vaults: VaultListItem[];
-  pipelineOpeningVaultId?: string | null;
-  pipelineActiveVaultId?: string | null;
+  pipelineListStatus?: VaultPipelineListStatus;
+  isVaultPipelineBusy?: (vaultId: string) => boolean;
   allVaultsHidden?: boolean;
   viewMode: VaultListViewMode;
   canReorder: boolean;
@@ -30,8 +35,8 @@ interface VaultListProps {
 
 export function VaultList({
   vaults,
-  pipelineOpeningVaultId = null,
-  pipelineActiveVaultId = null,
+  pipelineListStatus = {},
+  isVaultPipelineBusy = () => false,
   allVaultsHidden = false,
   viewMode,
   canReorder,
@@ -70,8 +75,8 @@ export function VaultList({
             <VaultBlockCard
               key={vault.id}
               vault={vault}
-              pipelineOpeningVaultId={pipelineOpeningVaultId}
-              pipelineActiveVaultId={pipelineActiveVaultId}
+              pipelineListStatus={pipelineListStatus}
+              isPipelineBusy={isVaultPipelineBusy(vault.id)}
               onOpenBackups={onOpenBackups}
               onOpenNote={onOpenNote}
               onOpenSettings={onOpenSettings}
@@ -98,13 +103,13 @@ export function VaultList({
         <VaultRow
           key={vault.id}
           vault={vault}
-          pipelineOpeningVaultId={pipelineOpeningVaultId}
+          pipelineListStatus={pipelineListStatus}
           viewMode={viewMode}
           dragDisabled={!canReorder}
           isDragging={draggingId === vault.id}
           isDragOver={dragOverId === vault.id && draggingId !== vault.id}
           isReorderActive={draggingId !== null}
-          isPipelineBusy={pipelineActiveVaultId === vault.id}
+          isPipelineBusy={isVaultPipelineBusy(vault.id)}
           onOpenBackups={onOpenBackups}
           onOpenNote={onOpenNote}
           onOpenSettings={onOpenSettings}

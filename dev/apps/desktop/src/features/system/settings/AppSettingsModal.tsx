@@ -1,15 +1,18 @@
-import {
-useCallback,
-useEffect,
-useMemo,
-useRef,
-useState
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Modal } from "@/components/ui";
 import { useTranslation } from "@/i18n";
 import { VaultSettingsSection } from "@/components/settings";
+import { useErrorToast } from "@/hooks/useErrorToast";
 import { useAppSettingsContext } from "./AppSettingsContext";
 import type { VaultListItem } from "@upriv/shared";
+import {
+  APP_SETTINGS_ERROR_I18N_KEYS,
+  APP_SETTINGS_SECTIONS,
+  appSettingsEqual,
+  normalizeAppSettings,
+  type AppSettingsConfig,
+  type AppSettingsSectionId,
+} from "@upriv/shared";
 import {
   AppSettingsAppearanceSection,
   AppSettingsBehaviorSection,
@@ -17,13 +20,6 @@ import {
   AppSettingsHiddenVaultsSection,
   AppSettingsLoggingSection,
 } from "./appSettingsForm";
-import {
-  APP_SETTINGS_SECTIONS,
-  appSettingsEqual,
-  normalizeAppSettings,
-  type AppSettingsConfig,
-  type AppSettingsSectionId,
-} from "@upriv/shared";
 
 const SAVED_INDICATOR_MS = 1500;
 
@@ -35,6 +31,7 @@ interface AppSettingsModalProps {
 
 export function AppSettingsModal({ open, onClose, vaults }: AppSettingsModalProps) {
   const { t } = useTranslation();
+  const { showError } = useErrorToast();
   const { settings, replaceSettings, showHiddenVaultsSession, setShowHiddenVaultsSession } =
     useAppSettingsContext();
 
@@ -136,8 +133,9 @@ export function AppSettingsModal({ open, onClose, vaults }: AppSettingsModalProp
         savedHideRef.current = setTimeout(() => setSavedVisible(false), SAVED_INDICATOR_MS);
         setSaveConfirmOpen(false);
       })
-      .catch(() => {
+      .catch((error) => {
         setSaveConfirmOpen(false);
+        showError(error, APP_SETTINGS_ERROR_I18N_KEYS.SAVE_FAILED);
       });
   };
 

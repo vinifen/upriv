@@ -103,7 +103,7 @@ upriv/
 - **Pipeline:** `useVaultPipelineRun` enforces SDD §8.2.2 — one open/close/seal at a time (`isRunning`).
 - **Auto-close:** at most one close per idle tick; warn toast once per vault per idle cycle; respects `isPipelineRunning`.
 - **Settings ↔ list:** `registerMockVaultSettings` on save; list patch includes `storageMode` / `canSeal`.
-- **Hidden until wired:** `close_on_app_exit` UI not exposed yet (no Electron `before-quit` handler in UI).
+- **Hidden until wired:** `close_on_app_exit` UI not exposed yet (`before-quit` runs daemon shutdown; vault `close_all` RPC still TODO).
 - **Feature module boundaries:** each `features/vaults/*` and `features/system/*` folder has one `index.ts` — see [`dev/apps/desktop/README.md`](../dev/apps/desktop/README.md).
 
 Replace mocks with `desktopInvoke()` → `upriv-daemon` → `upriv-core` before shipping crypto; do not treat JS `Map` passwords as production architecture.
@@ -117,7 +117,7 @@ Mobile:   RN     ──JNI/FFI──► libupriv_core.so ──► upriv_core::*
 
 ### Rust workspace
 
-- Build from `dev/`: `cargo build -p upriv-daemon`, `cargo test -p upriv-core`.
+- Build from `dev/`: `cargo build -p upriv-daemon`, `cargo test -p upriv-core`, `npm run rust:lint` (rustfmt + clippy).
 - Artifacts go to **`dev/target/`** only — **never commit** `target/`, `node_modules/`, `dist/`, `.expo/`.
 - `upriv-daemon/src/main.rs` is entry only; do not add vault logic there — use `upriv-core`.
 
@@ -207,6 +207,12 @@ npm install --prefix apps/electron
 npm run dev --prefix apps/desktop          # Vite http://localhost:1420
 npm run electron:dev                       # Electron + upriv-daemon
 cargo test -p upriv-core
+npm run rust:lint                          # rustfmt --check + clippy
+npm run rust:fix                           # rustfmt + clippy --fix
+./run lint                                 # all linters (TS + Rust)
+./run lint-fix                             # auto-fix where supported
+./run test                                 # cargo test --workspace
+./run check                                # lint + test
 cargo build -p upriv-daemon --release
 
 # Mobile
@@ -245,6 +251,37 @@ Vault **format** is cross-platform from day one; **v1 desktop app** ships on **L
 ## Mobile packaging (future)
 
 One **APK** = JS bundle + RN runtime + **`libupriv_core.so`** + `7zz` + JNI bridge. Mobile uses React Native, not Electron. Expo Go does **not** load custom Rust; need dev build when bridge exists.
+
+---
+
+## Desktop shell hardening — agent mindset
+
+Upriv is an **offline desktop app**: valuable data lives on the **client’s PC**, not on Upriv servers. Shell controls (allowlist, CSP, stdio, graceful shutdown) are **not** “bank-grade remote security” — they are **product engineering** for boundaries, stability, and predictable development.
+
+**Why keep them (default: keep, do not strip without reason):**
+
+| Mechanism | Primary benefit | Not the main goal |
+|-----------|-----------------|-------------------|
+| stdio NDJSON (no TCP) | No open port; simple cross-platform transport | Blocking remote hackers |
+| IPC routing | Electron forwards to daemon; **`rpc.rs` match** is the method gate | Paranoid XSS defense |
+| `SHELL_COMMANDS` vs `DAEMON_COMMANDS` | Clear split: Electron vs Rust responsibilities | — |
+| `app_shutdown` + `before-quit` | **Stability** — clean daemon exit, future vault flush | — |
+| Single-instance lock | One app / one daemon — no lockfile fights | — |
+| Structured RPC errors `{ code, message }` | UI/i18n consistency | — |
+| CSP (production only) | Extra renderer boundary; low cost | Required in dev (Vite breaks) |
+| `contextIsolation` + preload | Standard Electron — renderer cannot touch Node/fs | Optional extra |
+
+**Real vault security** lives in **`upriv-core`**: crypto, RAM session, lockfiles, wipe, 7z gate. The shell must not implement vault logic — only enforce **clear edges** between React, Electron main, and `upriv-daemon`.
+
+**When adding RPCs:** add core op names to `@upriv/shared` `CORE_RPC_COMMANDS`, daemon-only ops to `DESKTOP_ONLY_RPC_COMMANDS`, handler in `rpc.rs`, helper in `lib/rpc.ts`. Shell-only ops (`app_exit`) go in `SHELL_ONLY_RPC_COMMANDS` / Electron `main.ts` — never `rpc.rs`.
+
+**When adding errors:** User-visible → `<domain>/errorMessages.ts` (or grouped files under a subfolder per §4.1). Domain `index.ts` re-exports only symbols used outside. See `ARCHITECTURE.md` §2.4.
+
+**Do not assume** every hardening layer is mandatory for “security compliance.” **Do assume** removing allowlist/stdio/shutdown without replacement will hurt **maintainability and stability** as vault features land.
+
+**Performance / universality:** these checks are negligible (Set lookups, headers). They do **not** block Linux/Windows/macOS or Android (JNI uses a different bridge, same RPC **contract**).
+
+Details: [`dev/docs/ARCHITECTURE.md`](../dev/docs/ARCHITECTURE.md) §2.4.
 
 ---
 

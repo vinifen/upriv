@@ -9,7 +9,7 @@ import { useVaultLifecycleService, useVaultService } from "@/platform/services";
 
 interface UseVaultAutoCloseOptions {
   vaults: VaultListItem[];
-  isPipelineRunning: boolean;
+  isVaultPipelineBusy: (vaultId: string) => boolean;
   onWarn: (vault: VaultListItem, secondsLeft: number) => void;
   onAutoCloseBlocked: (vault: VaultListItem) => void;
   onAutoClose: (vault: VaultListItem, settings: VaultSettingsConfig) => boolean;
@@ -23,7 +23,7 @@ interface UseVaultAutoCloseOptions {
  */
 export function useVaultAutoClose({
   vaults,
-  isPipelineRunning,
+  isVaultPipelineBusy,
   onWarn,
   onAutoCloseBlocked,
   onAutoClose,
@@ -104,7 +104,10 @@ export function useVaultAutoClose({
         const secondsLeft = Math.ceil(limitSeconds - idleSeconds);
 
         if (idleSeconds >= limitSeconds) {
-          if (isPipelineRunning || closedOne || closedVaultIdsRef.current.has(vault.id)) continue;
+          // Only skip when *this* vault is mid-pipeline; a pipeline on another
+          // vault must not block auto-close of the rest (M-12).
+          if (isVaultPipelineBusy(vault.id) || closedOne || closedVaultIdsRef.current.has(vault.id))
+            continue;
           warnedRef.current.delete(vault.id);
 
           if (!canRun) {
@@ -123,11 +126,7 @@ export function useVaultAutoClose({
           continue;
         }
 
-        if (
-          idleSeconds >= warnAt &&
-          secondsLeft > 0 &&
-          !warnedRef.current.has(vault.id)
-        ) {
+        if (idleSeconds >= warnAt && secondsLeft > 0 && !warnedRef.current.has(vault.id)) {
           warnedRef.current.add(vault.id);
           onWarn(vault, secondsLeft);
         }
@@ -136,12 +135,5 @@ export function useVaultAutoClose({
 
     const id = window.setInterval(tick, 1000);
     return () => window.clearInterval(id);
-  }, [
-    vaults,
-    isPipelineRunning,
-    lifecycleService,
-    onAutoClose,
-    onAutoCloseBlocked,
-    onWarn,
-  ]);
+  }, [vaults, isVaultPipelineBusy, lifecycleService, onAutoClose, onAutoCloseBlocked, onWarn]);
 }

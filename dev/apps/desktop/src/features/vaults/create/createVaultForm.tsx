@@ -24,7 +24,7 @@ import type {
   CreateVaultValidationCode,
 } from "@upriv/shared";
 import { transitionStorageModeClose } from "@upriv/shared";
-import { createVaultErrorKey } from "./validationMessages";
+import { createVaultErrorI18nKey } from "@/lib/errorMessages";
 
 interface StepProps {
   draft: CreateVaultDraft;
@@ -64,7 +64,7 @@ function StepErrors({ errors }: { errors: CreateVaultValidationCode[] }) {
       {errors.map((code) => (
         <li key={code}>
           {t(
-            createVaultErrorKey(code),
+            createVaultErrorI18nKey(code),
             code === "too_long" ? { max: VAULT_DISPLAY_NAME_MAX_LENGTH } : undefined,
           )}
         </li>

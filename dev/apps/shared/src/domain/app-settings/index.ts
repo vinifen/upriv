@@ -17,4 +17,4 @@ export {
   normalizeLogKeepLastEntries,
 } from "./logging";
 export { createDefaultAppSettings, normalizeAppSettings } from "./normalize";
-export { UI_SETTINGS_KEYS } from "./ui-settings-keys";
+export { APP_SETTINGS_ERROR_I18N_KEYS, appSettingsErrorI18nKey } from "./errorMessages";

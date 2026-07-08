@@ -1,6 +1,6 @@
 {
   "name": "upriv-mobile",
-  "version": "0.1.0",
+  "version": "0.1.0-beta",
   "private": true,
   "main": "index.ts",
   "scripts": {

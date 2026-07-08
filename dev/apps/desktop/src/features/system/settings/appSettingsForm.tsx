@@ -38,7 +38,13 @@ interface SectionPatchProps<S extends keyof AppSettingsConfig> {
 }
 
 const THEMES: UiTheme[] = ["dark", "neutral", "light"];
-const LOG_LEVELS = ["error", "warn", "info", "debug", "trace"] as const satisfies readonly LogLevel[];
+const LOG_LEVELS = [
+  "error",
+  "warn",
+  "info",
+  "debug",
+  "trace",
+] as const satisfies readonly LogLevel[];
 
 export function AppSettingsAppearanceSection({ config, onChange }: SectionPatchProps<"ui">) {
   const { t } = useTranslation();

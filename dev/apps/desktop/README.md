@@ -8,6 +8,7 @@ React web UI (Electron shell). **Presentation only** — vault logic lives in `c
 cd dev/apps/desktop
 npm install
 npm run dev              # http://localhost:1420 (browser, mock services)
+npm run preview          # browser-only preview of `dist/` — not Electron; use `npm run electron:dev`
 npm run build            # typecheck + production bundle
 npm run lint             # ESLint
 npm run format           # Prettier (write)
@@ -80,27 +81,29 @@ src/
 │
 ├── i18n/                    # Locale loading, context, `useTranslation`
 ├── theme/                   # Design tokens, vault status → color/i18n mapping
-├── lib/desktop/             # `desktopInvoke` wrapper + RPC method name constants
+├── lib/                     # shell bridge (invoke, rpc, commands) + utilities
 ├── hooks/                   # Shared React hooks
 └── styles/                  # globals.css, CSS variables, fonts
 ```
 
 ### Conventions
 
-| Rule                | Where                                                                                         |
-| ------------------- | --------------------------------------------------------------------------------------------- |
-| UI copy             | `dev/apps/shared/locales/*.json` via `useTranslation()` — never hardcode sentences              |
-| Vault status colors | `theme/vault-status.ts` + CSS vars in `styles/tokens.css`                                     |
-| Desktop RPC         | `lib/desktop/commands.ts` — names match `crates/upriv-daemon`                                 |
-| Domain types        | `@upriv/shared` (`shared/`) — `VaultRow`, settings, list sort/view                            |
-| Service layer       | `platform/services/` — factory + React context; mocks in `platform/mocks/`                    |
-| App layout          | `AppShell` + `VaultListHeader` on the vault list home screen                                  |
-| Feature UI          | `features/vaults/*` or `features/system/*`; compose `components/ui` and `components/settings` |
+| Rule                | Where                                                                                                              |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| UI copy             | `dev/apps/shared/locales/*.json` via `useTranslation()` — never hardcode sentences                                 |
+| Vault status colors | `theme/vault-status.ts` + CSS vars in `styles/tokens.css`                                                          |
+| Desktop RPC         | `lib/commands.ts` — names match `crates/upriv-daemon`                                                              |
+| Domain types        | `@upriv/shared` (`shared/`) — `VaultRow`, settings, list sort/view                                                 |
+| Service layer       | `platform/services/` — factory + React context; mocks in `platform/mocks/`                                         |
+| App layout          | `AppShell` + `VaultListHeader` on the vault list home screen                                                       |
+| Feature UI          | `features/vaults/*` or `features/system/*`; compose `components/ui` and `components/settings`                      |
 | Hook naming         | `useVault*` for vault features; `useApp*` for system-wide (`useAppSettingsContext`, `useAppLogs`, `useAppRefresh`) |
-| Feature public API  | Each feature folder has one `index.ts` — see **Module boundaries (`index.ts`)** below         |
-| Import line length  | ESLint `import-newlines/enforce`: max **4** specifiers per line; `max-len` 100 cols           |
+| Feature public API  | Each feature folder has one `index.ts` — see **Module boundaries (`index.ts`)** below                              |
+| Import line length  | ESLint `import-newlines/enforce`: max **7** specifiers per line; `max-len` 100 cols                                |
 
 ### Module boundaries (`index.ts`)
+
+Folder layout (when to add subfolders vs flat files): `dev/docs/ARCHITECTURE.md` §4.1.
 
 Each feature folder under `features/vaults/*` and `features/system/*` has **one** `index.ts`. That file is the **public API** of the folder: it lists exactly what other modules may import from outside.
 
@@ -136,10 +139,10 @@ Each feature folder under `features/vaults/*` and `features/system/*` has **one*
 
 ## Aliases
 
-| Alias       | Path                |
-| ----------- | ------------------- |
-| `@/*`       | `src/*`             |
+| Alias           | Path                                                 |
+| --------------- | ---------------------------------------------------- |
+| `@/*`           | `src/*`                                              |
 | `@upriv/shared` | `../shared/src` (includes `loadLocale`, locale JSON) |
-| `@assets/*` | `assets/*`          |
+| `@assets/*`     | `assets/*`                                           |
 
 Versions: `../../docs/VERSIONS.md`. Product UX: `../../docs/prd.md` §3.7, `../../docs/sdd.md` §8.2.

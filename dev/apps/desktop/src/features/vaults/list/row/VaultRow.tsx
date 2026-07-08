@@ -6,6 +6,7 @@ import {
   type VaultListViewMode,
   type VaultListItem,
 } from "@upriv/shared";
+import type { VaultPipelineListStatus } from "./VaultList";
 import { vaultStatusIconClass, vaultStatusRowClass } from "@/theme";
 import { VaultDragHandle } from "./VaultDragHandle";
 import { VaultFileManagerIndicator } from "./VaultFileManagerIndicator";
@@ -17,7 +18,7 @@ import { vaultRowDensityClass } from "../lib/vaultListView";
 
 interface VaultRowProps {
   vault: VaultListItem;
-  pipelineOpeningVaultId?: string | null;
+  pipelineListStatus?: VaultPipelineListStatus;
   viewMode: VaultListViewMode;
   dragDisabled: boolean;
   isDragging: boolean;
@@ -48,7 +49,7 @@ function statusIconName(status: VaultDisplayStatus, isOpen: boolean): IconName {
 
 export function VaultRow({
   vault,
-  pipelineOpeningVaultId = null,
+  pipelineListStatus = {},
   viewMode,
   dragDisabled,
   isDragging,
@@ -71,7 +72,7 @@ export function VaultRow({
   onDrop,
 }: VaultRowProps) {
   const { t } = useTranslation();
-  const status = resolveVaultListStatus(vault, pipelineOpeningVaultId);
+  const status = resolveVaultListStatus(vault, pipelineListStatus);
   const isOpen = status === "open";
   const density =
     viewMode === "blocks" ? vaultRowDensityClass.default : vaultRowDensityClass[viewMode];

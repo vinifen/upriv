@@ -105,7 +105,10 @@ function activateTab(state: VaultWorkspaceState, path: string): VaultWorkspaceSt
   };
 }
 
-function discardDirtyPaths(state: VaultWorkspaceState, paths: readonly string[]): VaultWorkspaceState {
+function discardDirtyPaths(
+  state: VaultWorkspaceState,
+  paths: readonly string[],
+): VaultWorkspaceState {
   const removeSet = new Set(paths);
   const editorDrafts = { ...state.editorDrafts };
   for (const path of paths) delete editorDrafts[path];

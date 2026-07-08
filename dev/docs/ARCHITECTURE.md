@@ -68,6 +68,71 @@ A **bridge** is generated or hand-written glue that lets the UI language call Ru
 
 The bridge is **code inside the same package** (same `.exe` or same APK) — not a separate app or service.
 
+### 2.4 Desktop security model (Electron)
+
+| Layer | Control |
+|-------|---------|
+| Renderer | `contextIsolation`, `sandbox: true`, no `nodeIntegration`; CSP in production (`default-src 'self'`) |
+| Preload | Exposes only `invoke` + `onEvent` — no raw `ipcRenderer` |
+| Main process | **`app_exit` only** — everything else forwarded to daemon; `rpc.rs` rejects unknown methods |
+| `upriv-daemon` | Child process; **stdio pipes only** (no TCP port); env whitelist (`PATH`, `HOME`, `LANG`, `XDG_*`); graceful `app_shutdown` before SIGTERM |
+| Linux shell | `--no-sandbox` on Chromium process (AppArmor); renderer sandbox remains enabled |
+
+Vault crypto and disk I/O never run in the renderer. When vault RPCs ship, passwords pass main → daemon → `upriv-core` only.
+
+#### Desktop bridge glossary
+
+| Name | Layer | Meaning |
+|------|-------|---------|
+| `window.upriv.invoke()` | Preload → renderer | Raw IPC entry exposed by `contextBridge` |
+| `desktopInvokeRaw()` | React (`lib/invoke.ts`) | IPC wrapper with timeout; throws `RpcError` |
+| `rpcAppVersion()` / `rpcAppShutdown()` | React (`lib/rpc.ts`) | Per-method helpers with response validation |
+| `CORE_RPC_COMMANDS` | `@upriv/shared` | Rust ops — desktop + mobile (`app_version`, future `vault_*`) |
+| `DESKTOP_ONLY_RPC_COMMANDS` | `@upriv/shared` | Daemon ops — Electron only (`app_shutdown`); not mobile JNI |
+| `SHELL_ONLY_RPC_COMMANDS` | `@upriv/shared` | Main process only (`app_exit`); never sent to daemon |
+| `lib/commands.ts` | Desktop | Re-exports shared enums as `DAEMON_COMMANDS` / `SHELL_COMMANDS` |
+| `RpcErrorBody` / `RpcError` | `@upriv/shared` (`core-rpc/errors.ts`) | Wire envelope + protocol codes |
+| `VAULT_ERROR_CODES` | `@upriv/shared` (`vault/errors/codes.ts`) | upriv-core domain wire codes (`snake_case`) |
+| `VAULT_ERROR_I18N_KEYS` / `vaultErrorI18nKey()` | `@upriv/shared` (`vault/errors/messages.ts`) | User UI: vault wire code → i18n |
+| `errorDisplayI18nKey()` | `@upriv/shared` (`domain/errors/`) | Shared UI mapper (pipeline + vault wire codes only) |
+| `desktopErrorI18nKey()` / `useErrorToast().showError` | Desktop (`lib/errorMessages.ts`, `hooks/useErrorToast.ts`) | Desktop UI mapper (+ bridge i18n) |
+| `VaultPipelineError` | `@upriv/shared` (`vault-lifecycle/errors/codes.ts`) | Client pipeline wire codes |
+| `lib/errors.ts` | Desktop | `BRIDGE_ERROR_CODES` only (not a merged product catalog) |
+
+#### Error catalog rules
+
+**Two layers — do not mix:**
+
+| Layer | Language | Where | Shown to user? |
+|-------|----------|-------|----------------|
+| **Below client** (upriv-core, daemon, bridge) | English `message` + machine `code` | Rust, `rpc.rs`, `invoke.ts` throws | No — logs and dev only |
+| **Client UI** | i18n keys → `locales/*.json` | domain `errorMessages.ts` or `vault/errors/messages.ts` | Yes — toasts, modals, forms |
+
+User-facing surfaces **must** use `useErrorToast().showError` / `desktopErrorI18nKey()` (desktop) or `errorDisplayI18nKey()` (shared/mobile) / domain `*ErrorI18nKey()` — **never** raw `error.message`.
+
+Errors are **not** centralized. Each origin owns its map:
+
+| Origin | Wire codes | i18n map |
+|--------|------------|----------|
+| upriv-core / daemon | `vault/errors/codes.ts` | `vault/errors/messages.ts` |
+| Desktop bridge | `desktop/lib/errors.ts` | `desktop/lib/errorMessages.ts` |
+| Form validation | `vault-create/validate.ts` | `vault-create/errorMessages.ts` |
+| Lifecycle pipeline (client) | `vault-lifecycle/errors/codes.ts` | `vault-lifecycle/errors/messages.ts` |
+
+**Lifecycle pipeline timeouts:** IPC/daemon RPC use ~30s defaults (`invoke.ts`, `daemon.ts`) — enough for `app_version`, not for `7zz`. Per-vault open/close timeouts and subprocess kill **must** live in `upriv-core` when vault RPC lands; see SDD §8.2.2 (*Pipeline — erros e anti-travamento*).
+
+| App settings (client) | — | `app-settings/errorMessages.ts` |
+| File rename (client) | `file-tree/fileNameValidation.ts` | `file-tree/errorMessages.ts` |
+| RPC protocol (`unknown_method`, …) | `core-rpc/errors.ts` | none — log English only |
+
+**When adding a user-visible Rust error:** `upriv-core` + `VAULT_ERROR_CODES` + `VAULT_ERROR_I18N_KEYS` + `locales/*.json`.
+
+**When adding a client-only user error:** `<domain>/errorMessages.ts` or `<domain>/errors/` when wire + i18n (2+ files) — do not add to `VAULT_ERROR_CODES`.
+
+Bridge/protocol `RpcError`s are mapped in `desktopErrorI18nKey()` (`BRIDGE_ERROR_CODES`), not `errorDisplayI18nKey()`.
+
+**Agent mindset:** these controls prioritize **boundaries, stability, and dev predictability** over “server-style” threat models — see [`.agent/AGENT.md`](../../.agent/AGENT.md) § Desktop shell hardening.
+
 ---
 
 ## 3. Packaging model
@@ -84,6 +149,8 @@ One **native executable** per OS/architecture. Bundled inside or beside it:
 **Validated builds (2026-07-03):**
 
 - Linux: `dev/target/release/bundle/electron/Upriv-0.1.0.AppImage`
+
+**Current scaffold (not yet bundled):** per-target `7zz` binary in `extraResources` — add when vault archive RPC lands in `upriv-core`.
 
 Build commands: see `dev/README.md` and `dev/apps/desktop/README.md`.
 
@@ -126,6 +193,25 @@ dev/
 ```
 
 **Note:** Run `npm run electron:dev` from `dev/` (see `dev/apps/desktop/README.md`).
+
+### 4.1 Module layout (folders & barrels)
+
+Same rules across `@upriv/shared` domains, desktop features, and similar modules.
+
+**Subfolders** — add `<module>/<concern>/` only when:
+
+- **2+ files** share one concern, or
+- a **semantic boundary** that will grow (not a single file “for organization”)
+
+Otherwise keep files at the module root.
+
+| Layer | Flat (typical) | Subfolder (when warranted) |
+|-------|----------------|----------------------------|
+| `@upriv/shared` domain | `file-tree/errorMessages.ts`, `vault-create/errorMessages.ts` | `vault/errors/`, `vault-lifecycle/errors/` (codes + messages) |
+| Desktop features | `create/errorMessages.ts` | `file-manager/`, `lifecycle/hooks/` |
+| Top-level domain module | `core-rpc/errors.ts`, `format/bytes.ts` | `domain/errors/` (cross-cutting module) |
+
+**Barrels (`index.ts`)** — one per domain or feature folder; export **only symbols used outside** that module. No nested barrels in subfolders — internal code imports concrete paths (e.g. `vault/errors/messages.ts`). Desktop feature boundaries: `dev/apps/desktop/README.md` § Module boundaries.
 
 ---
 

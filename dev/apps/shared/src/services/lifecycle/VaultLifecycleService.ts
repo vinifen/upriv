@@ -19,6 +19,9 @@ export interface VaultLifecycleService {
   /** Virtual mount path shown until the platform opens the OS file manager. */
   resolveWorkspacePath(displayName: string): string;
 
+  /** Pre-flight password check before starting a lifecycle pipeline (mock or RPC-backed). */
+  validateLifecyclePassword(password: string): boolean;
+
   isPipelineError(error: unknown): error is VaultPipelineError;
   pipelineErrorCode(error: VaultPipelineError): VaultPipelineErrorCode;
 }

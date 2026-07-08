@@ -41,7 +41,21 @@ Do **not** run `npm install` in `dev/` — there is no root `node_modules`.
 
 ```bash
 cd dev
+./run help                 # list all run commands
+./run lint                 # all linters (Rust, tsc, eslint, prettier)
+./run lint-fix             # auto-fix (rustfmt, clippy --fix, eslint --fix, prettier)
+./run test                 # cargo test --workspace
+./run check                # lint + test
+
+# Same via npm:
+npm run lint
+npm run lint:fix
+npm run test
+npm run check
+
 cargo test -p upriv-core   # Rust core only
+npm run rust:lint          # Rust only: rustfmt --check + clippy
+npm run rust:fix           # Rust only: apply rustfmt + clippy --fix
 
 # Browser only (mock services)
 npm run dev
@@ -64,3 +78,12 @@ See **`docs/VERSIONS.md`**. Do not use floating `^` on Electron or React without
 ## Product documentation
 
 Architecture and requirements: **`docs/`** (`ARCHITECTURE.md`, `prd.md`, `sdd.md`).
+
+## Linux troubleshooting (AppImage)
+
+| Symptom | Likely cause | Fix |
+|---------|----------------|-----|
+| AppImage won't start / sandbox error | Chromium sandbox vs AppArmor | AppImage uses `--no-sandbox` on the shell process (see `electron/package.json` `executableArgs`); renderer sandbox stays on |
+| `upriv-daemon not found` | Release binary missing before pack | Run `npm run daemon:build:release` or full `npm run electron:build` |
+| Blank window on first `electron:dev` | Vite still compiling | Wait for port 1420 or reload once |
+| FUSE / vault mount (future) | User not in `fuse` group | `sudo usermod -aG fuse $USER` then re-login — required when encrypted vault workspace mounts land in `upriv-core` |

@@ -1,7 +1,12 @@
 import { useId, useState } from "react";
-import { VAULT_PASSWORD_HINT_MAX_LENGTH } from "@upriv/shared";
+import {
+  requireVaultErrorI18nKey,
+  VAULT_ERROR_CODES,
+  VAULT_PASSWORD_HINT_MAX_LENGTH,
+} from "@upriv/shared";
 import { Button, PasswordInput } from "@/components/ui";
 import { useTranslation } from "@/i18n";
+import { createVaultErrorI18nKey } from "@/lib/errorMessages";
 import { settingsControlClass, SettingsField } from "./vaultSettingsForm";
 
 interface VaultChangePasswordPanelProps {
@@ -60,7 +65,7 @@ export function VaultChangePasswordPanel({
   const handleSubmit = async () => {
     if (!canSubmit) return;
     if (newPassword !== confirmPassword) {
-      setError(t("vault.create.password_mismatch"));
+      setError(t(createVaultErrorI18nKey("password_mismatch")));
       return;
     }
     setError(null);
@@ -70,7 +75,7 @@ export function VaultChangePasswordPanel({
       await new Promise((resolve) => setTimeout(resolve, 700));
       // Mock: wrong password simulation for demo (any password except "wrong")
       if (currentPassword === "wrong") {
-        setError(t("error.wrong_password"));
+        setError(t(requireVaultErrorI18nKey(VAULT_ERROR_CODES.WRONG_PASSWORD)));
         return;
       }
       setSuccess(true);
@@ -167,7 +172,9 @@ export function VaultChangePasswordPanel({
           </SettingsField>
 
           {confirmPassword.length > 0 && !passwordsMatch ? (
-            <p className="text-xs text-on-error-container">{t("vault.create.password_mismatch")}</p>
+            <p className="text-xs text-on-error-container">
+              {t(createVaultErrorI18nKey("password_mismatch"))}
+            </p>
           ) : null}
           {newPassword.length > 0 && newPassword === currentPassword ? (
             <p className="text-xs text-on-error-container">

@@ -1,6 +1,7 @@
 import {
   CLOSING_PIPELINE_STEP_COUNT,
   OPENING_PIPELINE_STEP_COUNT,
+  VAULT_PIPELINE_ERROR_CODES,
   VaultPipelineError,
   isVaultPipelineError,
   runTimedPipeline,
@@ -45,7 +46,7 @@ export const mockVaultLifecycleService: VaultLifecycleService = {
   async runOpeningPipeline(vaultId, onStep) {
     await runTimedPipeline(OPENING_PIPELINE_STEP_COUNT, onStep, (stepIndex) => {
       if (stepIndex === 2 && mockOpenRamFails(vaultId)) {
-        throw new VaultPipelineError("error.insufficient_ram");
+        throw new VaultPipelineError(VAULT_PIPELINE_ERROR_CODES.INSUFFICIENT_RAM);
       }
     });
   },
@@ -53,13 +54,18 @@ export const mockVaultLifecycleService: VaultLifecycleService = {
   async runClosingPipeline(vaultId, onStep) {
     await runTimedPipeline(CLOSING_PIPELINE_STEP_COUNT, onStep, (stepIndex) => {
       if (stepIndex === 0 && mockCloseGateFails(vaultId)) {
-        throw new VaultPipelineError("error.archive_test_failed");
+        throw new VaultPipelineError(VAULT_PIPELINE_ERROR_CODES.ARCHIVE_TEST_FAILED);
       }
     });
   },
 
   resolveWorkspacePath(displayName) {
     return `${MOCK_UPRIV_ROOT_PATH}/workspace/${displayName}`;
+  },
+
+  validateLifecyclePassword(password) {
+    const trimmed = password.trim();
+    return trimmed.length >= 4 && trimmed !== "wrong";
   },
 
   isPipelineError: isVaultPipelineError,
@@ -87,9 +93,4 @@ export function seedDemoOpenVaultPasswords(
       vaultPasswordInRam.set(vaultId, hint);
     }
   }
-}
-
-/** @internal Test hook for mock lifecycle password map. */
-export function __clearMockLifecyclePasswordsForTests(): void {
-  vaultPasswordInRam.clear();
 }

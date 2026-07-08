@@ -6,10 +6,12 @@ import reactRefresh from "eslint-plugin-react-refresh";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-  { ignores: ["dist"] },
+  {
+    ignores: ["dist", "renderer-out", ".vite-cache", "node_modules"],
+  },
   {
     extends: [js.configs.recommended, ...tseslint.configs.recommendedTypeChecked],
-    files: ["vite.config.ts"],
+    files: ["vite.config.mjs"],
     languageOptions: {
       ecmaVersion: 2020,
       parserOptions: {
@@ -21,7 +23,7 @@ export default tseslint.config(
   {
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
     files: ["**/*.{ts,tsx}"],
-    ignores: ["vite.config.ts"],
+    ignores: ["vite.config.mjs"],
     languageOptions: {
       ecmaVersion: 2020,
     },
@@ -33,7 +35,7 @@ export default tseslint.config(
     rules: {
       ...reactHooks.configs.recommended.rules,
       "react-refresh/only-export-components": "off",
-      "import-newlines/enforce": ["warn", { items: 4, "max-len": 100, forceSingleLine: true }],
+      "import-newlines/enforce": ["warn", { items: 7, "max-len": 100, forceSingleLine: true }],
       "max-len": [
         "warn",
         {
@@ -46,7 +48,5 @@ export default tseslint.config(
       ],
     },
   },
-  // Type-aware rules: enabled for vite.config.ts today; extend to src/** when mock services
-  // no longer trigger require-await / no-misused-promises across the prototype layer.
   eslintConfigPrettier,
 );

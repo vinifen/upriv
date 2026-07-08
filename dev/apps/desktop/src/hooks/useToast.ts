@@ -1,8 +1,8 @@
 import { useCallback, useRef, useState } from "react";
 
-const DEFAULT_MS = 5000;
+export const TOAST_DEFAULT_MS = 5000;
 
-export function useToast(defaultMs = DEFAULT_MS) {
+export function useToast(defaultMs = TOAST_DEFAULT_MS) {
   const [message, setMessage] = useState<string | null>(null);
   const timerRef = useRef<number | null>(null);
 

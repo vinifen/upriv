@@ -66,11 +66,20 @@ export function assertPlainVaultInvariant(row: VaultRow): void {
   }
 }
 
-/** List row status including in-flight open pipeline (runtime only). */
+/** Whether the vault should have an active file-manager workspace. */
+export function isVaultFileManagerEligible(row: VaultRow): boolean {
+  return resolveVaultDisplayStatus(row) === "open";
+}
+
+/** List row status including in-flight or queued open/close pipelines (runtime only). */
 export function resolveVaultListStatus(
   row: VaultRow,
-  pipelineOpeningVaultId: string | null,
+  pipeline: {
+    openingVaultIds?: readonly string[];
+    closingVaultIds?: readonly string[];
+  } = {},
 ): VaultDisplayStatus {
-  if (pipelineOpeningVaultId === row.id) return "opening";
+  if (pipeline.openingVaultIds?.includes(row.id)) return "opening";
+  if (pipeline.closingVaultIds?.includes(row.id)) return "closing";
   return resolveVaultDisplayStatus(row);
 }

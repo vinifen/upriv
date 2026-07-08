@@ -3,11 +3,17 @@ import { useVaultService } from "@/platform/services";
 import { useAppSettingsContext } from "@/features/system/settings";
 import { useAppRefresh } from "@/features/system/refresh";
 import type { CreateVaultResult } from "@upriv/shared";
-import { createDraftFromBackup, type VaultListSort, type VaultListViewMode } from "@upriv/shared";
+import {
+  APP_SETTINGS_ERROR_I18N_KEYS,
+  createDraftFromBackup,
+  type VaultListSort,
+  type VaultListViewMode,
+} from "@upriv/shared";
 import { useFileManager } from "@/features/vaults/file-manager";
 import { useTranslation } from "@/i18n";
 import { useVaultLifecycleActions } from "@/features/vaults/lifecycle";
-import { useToast } from "@/hooks/useToast";
+import { useErrorToast } from "@/hooks/useErrorToast";
+import { useDaemonReady } from "@/lib/useDaemonReady";
 import { useVaultListState } from "./useVaultListState";
 import { useVaultListModals } from "./useVaultListModals";
 
@@ -17,7 +23,13 @@ export function useVaultListScreen() {
   const { openFromVault, syncWithVaultList, purgeForVaultClose } = useFileManager();
   const { settings, patchSettings, showHiddenVaultsSession } = useAppSettingsContext();
   const showHiddenVaults = settings.ui.always_show_hidden_vaults || showHiddenVaultsSession;
-  const { message: toastMessage, show: showToast, dismiss: dismissToast } = useToast();
+  const {
+    message: toastMessage,
+    show: showToast,
+    showError,
+    dismiss: dismissToast,
+  } = useErrorToast();
+  const daemonReady = useDaemonReady();
   const noteSaveGenerationRef = useRef<Map<string, number>>(new Map());
 
   const listDefaults = useMemo(
@@ -65,20 +77,26 @@ export function useVaultListScreen() {
 
   const { isRefreshing, refresh } = useAppRefresh({
     applyVaultList: initializeVaults,
-    onError: () => showToast(t("toast.refresh_failed")),
+    onError: (error) => showError(error, "toast.refresh_failed"),
   });
 
   useEffect(() => {
     let cancelled = false;
-    void vaultService.listVaults().then((rows) => {
-      if (cancelled) return;
-      initializeVaults(rows);
-      syncWithVaultList(rows);
-    });
+    void vaultService
+      .listVaults()
+      .then((rows) => {
+        if (cancelled) return;
+        initializeVaults(rows);
+        syncWithVaultList(rows);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        showError(error, "toast.refresh_failed");
+      });
     return () => {
       cancelled = true;
     };
-  }, [initializeVaults, syncWithVaultList, vaultService]);
+  }, [initializeVaults, showError, syncWithVaultList, vaultService]);
 
   const modals = useVaultListModals(vaults);
 
@@ -87,6 +105,7 @@ export function useVaultListScreen() {
     setVaultRuntimeState,
     modals,
     showToast,
+    showError,
     dismissToast,
     t,
   });
@@ -119,7 +138,7 @@ export function useVaultListScreen() {
     (result: CreateVaultResult) => {
       void vaultService
         .registerSettings(result.vaultId, result.settings)
-        .catch(() => showToast(t("error.settings_save_failed")));
+        .catch((error) => showError(error, APP_SETTINGS_ERROR_I18N_KEYS.SAVE_FAILED));
       addVault({
         id: result.vaultId,
         displayName: result.displayName,
@@ -135,7 +154,7 @@ export function useVaultListScreen() {
         hidden: result.settings.vault.hidden,
       });
     },
-    [addVault, showToast, t, vaultService],
+    [addVault, showError, t, vaultService],
   );
 
   const handleVaultSettingsSaved = useCallback(
@@ -182,26 +201,26 @@ export function useVaultListScreen() {
             ...settings,
             vault: { ...settings.vault, note },
           })
-          .catch(() => {
+          .catch((error) => {
             if (noteSaveGenerationRef.current.get(vaultId) !== nextGeneration) return;
-            showToast(t("error.settings_save_failed"));
+            showError(error, APP_SETTINGS_ERROR_I18N_KEYS.SAVE_FAILED);
           });
       });
     },
-    [showToast, t, updateNote, vaultService],
+    [showError, updateNote, vaultService],
   );
 
   const handleVaultDelete = useCallback(
     async (vaultId: string) => {
-      if (lifecycle.pipeline.isRunning || lifecycle.pipeline.isVaultPipelineBusy(vaultId)) {
+      if (lifecycle.pipeline.isVaultPipelineBusy(vaultId)) {
         showToast(t("toast.pipeline_busy"));
         return;
       }
 
       try {
         await vaultService.unregisterSettings(vaultId);
-      } catch {
-        showToast(t("error.settings_save_failed"));
+      } catch (error) {
+        showError(error, APP_SETTINGS_ERROR_I18N_KEYS.SAVE_FAILED);
         return;
       }
 
@@ -217,11 +236,11 @@ export function useVaultListScreen() {
         modals.setRecoveryVaultId(null);
       }
     },
-    [lifecycle, modals, removeVault, showToast, t, vaultService],
+    [lifecycle, modals, removeVault, showError, showToast, t, vaultService],
   );
 
   return {
-    isReady,
+    isReady: isReady && daemonReady,
     openFromVault,
     header: {
       onRefresh: () => {
@@ -240,8 +259,8 @@ export function useVaultListScreen() {
       onSortChange: handleSortChange,
       viewMode,
       onViewModeChange: handleViewModeChange,
-      pipelineOpeningVaultId: lifecycle.pipelineOpeningVaultId,
-      pipelineActiveVaultId: lifecycle.pipeline.run?.vaultId ?? null,
+      pipelineListStatus: lifecycle.pipelineListStatus,
+      isVaultPipelineBusy: lifecycle.pipeline.isVaultPipelineBusy,
       allVaultsHidden: displayVaults.length === 0 && vaults.some((vault) => vault.hidden),
       canReorder,
       draggingId,

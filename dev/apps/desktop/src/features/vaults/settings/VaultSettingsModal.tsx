@@ -1,13 +1,7 @@
-import {
-useCallback,
-useEffect,
-useId,
-useMemo,
-useRef,
-useState
-} from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { Button, Modal } from "@/components/ui";
 import { useTranslation } from "@/i18n";
+import { useErrorToast } from "@/hooks/useErrorToast";
 import { vaultSettingsToListPatch, type VaultListItem } from "@upriv/shared";
 import { useVaultService } from "@/platform/services";
 import {
@@ -55,6 +49,7 @@ export function VaultSettingsModal({
   onVaultDelete,
 }: VaultSettingsModalProps) {
   const { t } = useTranslation();
+  const { showError } = useErrorToast();
   const vaultService = useVaultService();
   const vaultId = vault?.id ?? null;
   const { config, replaceConfig } = useVaultSettings(vaultId, open);
@@ -113,18 +108,22 @@ export function VaultSettingsModal({
   }, []);
 
   const persistDraft = useCallback(
-    (next: VaultSettingsConfig) => {
+    async (next: VaultSettingsConfig) => {
       if (!vaultId) return;
       const normalized = normalizeClosePolicyForStorage(next);
-      replaceConfig(normalized);
-      setDraft(normalized);
-      void vaultService.registerSettings(vaultId, normalized);
-      onVaultSettingsSaved?.(vaultId, vaultSettingsToListPatch(normalized));
-      setSavedVisible(true);
-      clearTimeout(savedHideRef.current);
-      savedHideRef.current = setTimeout(() => setSavedVisible(false), SAVED_INDICATOR_MS);
+      try {
+        await vaultService.registerSettings(vaultId, normalized);
+        replaceConfig(normalized);
+        setDraft(normalized);
+        onVaultSettingsSaved?.(vaultId, vaultSettingsToListPatch(normalized));
+        setSavedVisible(true);
+        clearTimeout(savedHideRef.current);
+        savedHideRef.current = setTimeout(() => setSavedVisible(false), SAVED_INDICATOR_MS);
+      } catch (error) {
+        showError(error, "error.settings_save_failed");
+      }
     },
-    [vaultId, replaceConfig, onVaultSettingsSaved, vaultService],
+    [vaultId, replaceConfig, onVaultSettingsSaved, showError, vaultService],
   );
 
   const dismissFooterConfirm = useCallback(() => {
@@ -205,8 +204,7 @@ export function VaultSettingsModal({
 
   const handleConfirmSave = () => {
     if (!draft || !isDirty) return;
-    persistDraft(draft);
-    setSaveConfirmOpen(false);
+    void persistDraft(draft).then(() => setSaveConfirmOpen(false));
   };
 
   const handleConfirmDelete = () => {

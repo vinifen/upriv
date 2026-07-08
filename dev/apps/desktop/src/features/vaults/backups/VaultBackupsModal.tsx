@@ -9,7 +9,7 @@ import {
   type VaultListItem,
 } from "@upriv/shared";
 import { useTranslation } from "@/i18n";
-import { useToast } from "@/hooks/useToast";
+import { useErrorToast } from "@/hooks/useErrorToast";
 import { downloadBackupsZip } from "./downloadBackupsZip";
 import { useVaultBackups } from "./hooks/useVaultBackups";
 
@@ -36,7 +36,7 @@ export function VaultBackupsModal({
   onCreateVaultFromBackup,
 }: VaultBackupsModalProps) {
   const { locale, t } = useTranslation();
-  const { show: showToast } = useToast();
+  const { showError, errorText } = useErrorToast();
   const backupService = useBackupService();
   const vaultId = vault?.id ?? null;
   const { backups, deleteBackups, promoteToSave, isLoading, isBusy, error } = useVaultBackups(
@@ -134,14 +134,14 @@ export function VaultBackupsModal({
         setDeleteTargets(null);
         setConfirmText("");
       })
-      .catch(() => {
-        showToast(t("toast.backup_delete_failed"));
+      .catch((err) => {
+        showError(err, "toast.backup_delete_failed");
       });
   };
 
   const handlePromoteToSave = (filename: string) => {
-    void promoteToSave(filename).catch(() => {
-      showToast(t("toast.backup_promote_failed"));
+    void promoteToSave(filename).catch((err) => {
+      showError(err, "toast.backup_promote_failed");
     });
   };
 
@@ -182,7 +182,7 @@ export function VaultBackupsModal({
         </p>
       ) : error ? (
         <p className="py-10 text-center text-sm text-on-error-container">
-          {t("modal.backup.load_failed")}
+          {errorText(error, "modal.backup.load_failed")}
         </p>
       ) : backups.length === 0 ? (
         <p className="py-10 text-center font-mono text-sm text-on-surface-variant">

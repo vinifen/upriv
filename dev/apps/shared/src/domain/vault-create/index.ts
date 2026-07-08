@@ -13,7 +13,10 @@ export {
   vaultIdForCreateDraft,
   type CreateVaultValidationCode,
 } from "./validate";
-export { createVaultErrorKey, type CreateVaultErrorKey } from "./validationMessages";
+export {
+  createVaultErrorI18nKey,
+  type CreateVaultErrorI18nKey,
+} from "./errorMessages";
 export {
   CREATE_VAULT_STEPS,
   type CreateVaultDraft,

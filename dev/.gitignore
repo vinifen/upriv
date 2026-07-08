@@ -13,5 +13,8 @@ Thumbs.db
 .env
 .env.*
 
+# Electron build output (each app also has local .gitignore)
+apps/electron/dist/
+
 # Temp
 temp/

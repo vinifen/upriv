@@ -1,20 +1,23 @@
 import { useCallback, useMemo } from "react";
-import { VAULT_DISPLAY_NAME_MAX_LENGTH } from "@upriv/shared";
-import { useVaultFileSystemService } from "@/platform/services";
-import { useToast } from "@/hooks/useToast";
-import { useTranslation } from "@/i18n";
 import {
   collectFilePaths,
   fileBaseName,
+  fileNameErrorI18nKey,
   findNode,
+  foldersToExpandOnImport,
   getParentPath,
+  resolveImportDestination,
   siblingNames,
   validateFileName,
+  VAULT_DISPLAY_NAME_MAX_LENGTH,
+  type FileNameErrorCode,
 } from "@upriv/shared";
+import { useVaultFileSystemService } from "@/platform/services";
+import { useToast } from "@/hooks/useToast";
+import { useTranslation } from "@/i18n";
 import type { FileManagerEntry } from "../fileManagerTypes";
 import type { VaultWorkspaceAction } from "../lib/vaultWorkspaceReducer";
 import type { DroppedImportFile } from "../lib/osFileDrop";
-import { foldersToExpandOnImport, resolveImportDestination } from "@upriv/shared";
 import { readImportFileContent } from "../lib/vaultFileImport";
 import { resolveUnsavedPrompt } from "../lib/vaultWorkspaceReducer";
 
@@ -95,11 +98,10 @@ export function useVaultFileManager({
   );
 
   const nameErrorMessage = useCallback(
-    (code: NonNullable<ReturnType<typeof validateFileName>> | "duplicate") => {
-      if (code === "duplicate") return t("vault.name.duplicate");
-      if (code === "too_long")
-        return t("vault.name.too_long", { max: VAULT_DISPLAY_NAME_MAX_LENGTH });
-      return t(`vault.name.${code}`);
+    (code: FileNameErrorCode) => {
+      const key = fileNameErrorI18nKey(code);
+      if (code === "too_long") return t(key, { max: VAULT_DISPLAY_NAME_MAX_LENGTH });
+      return t(key);
     },
     [t],
   );
@@ -305,7 +307,7 @@ export function useVaultFileManager({
     }
   }, [dispatch, onDismissConfirmed, saveAllFiles, saveFile, workspace]);
 
-  const tree = useMemo(() => fs.getFileTree(vaultId), [fs, vaultId, workspace.treeRevision]);
+  const tree = useMemo(() => fs.getFileTree(vaultId), [fs, vaultId]);
 
   return {
     vaultId,

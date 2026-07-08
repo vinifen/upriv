@@ -1,0 +1,192 @@
+#!/usr/bin/env bash
+# Dev workspace runner — lint, auto-fix, tests, and combined checks.
+# Usage: ./run lint | lint-fix | test | check
+set -uo pipefail
+
+DEV_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$DEV_ROOT"
+
+FAILED=0
+
+usage() {
+  cat <<'EOF'
+Upriv dev workspace runner (run from dev/)
+
+Usage:
+  ./run <command>
+  npm run <command>          # lint, lint:fix, test, check, help
+
+Commands:
+  help       Show this help
+  lint       Run all linters (continues on failure; exit 1 if any step failed)
+  lint-fix   Apply auto-fixes (continues on failure; exit 1 if any step failed)
+  test       Run all code tests
+  check      lint + test
+
+What each command runs:
+
+  lint
+    • Version:  check-version.mjs (VERSION vs manifests)
+    • Rust:     rustfmt --check, clippy (-D warnings)
+    • Shared:   tsc --noEmit (via desktop toolchain)
+    • Desktop:  tsc, eslint, prettier --check
+    • Electron: tsc
+    • Mobile:   tsc
+
+  lint-fix
+    • Rust:     rustfmt, clippy --fix
+    • Desktop:  eslint --fix, prettier --write
+    • TypeScript: tsc --noEmit (shared, desktop, electron, mobile)
+
+  test
+    • Rust:     cargo test --workspace
+
+  check
+    • All lint steps, then all test steps
+
+Rust-only (npm):
+  npm run rust:lint    check fmt + clippy
+  npm run rust:fix     apply fmt + clippy --fix
+
+Notes:
+  • Requires node_modules in apps/desktop, apps/electron, apps/mobile
+  • Install: npm install --prefix apps/<app>
+  • Desktop eslint: max-len and import-newlines are "warn" in config but
+    `npm run lint` uses --max-warnings 0, so they fail CI like errors.
+
+Examples:
+  ./run help
+  ./run lint
+  ./run lint-fix
+  ./run test
+  ./run check
+EOF
+}
+
+cmd_help() {
+  usage
+  exit 0
+}
+
+step() {
+  local label="$1"
+  shift
+  echo ""
+  echo "==> $label"
+  if "$@"; then
+    echo "OK  $label"
+  else
+    echo "FAIL $label" >&2
+    FAILED=1
+  fi
+}
+
+require_node_modules() {
+  local app="$1"
+  if [[ ! -d "$DEV_ROOT/apps/$app/node_modules" ]]; then
+    echo "Missing apps/$app/node_modules — run: npm install --prefix apps/$app" >&2
+    return 1
+  fi
+}
+
+run_tsc() {
+  local app="$1"
+  if [[ "$app" == "shared" ]]; then
+    require_node_modules desktop || return 1
+    (cd "apps/shared" && npx --prefix ../desktop tsc --noEmit)
+    return
+  fi
+  require_node_modules "$app" || return 1
+  (cd "apps/$app" && npx tsc --noEmit)
+}
+
+finish() {
+  echo ""
+  if [[ "$FAILED" -ne 0 ]]; then
+    echo "$1 finished with failures." >&2
+    exit 1
+  fi
+  echo "$1 passed."
+}
+
+lint_steps() {
+  step "Version (check-version.mjs)" node scripts/check-version.mjs
+  step "Rust (rustfmt + clippy)" npm run rust:lint
+  step "Shared (tsc)" run_tsc shared
+  step "Desktop (tsc)" run_tsc desktop
+  if require_node_modules desktop; then
+    step "Desktop (eslint)" npm run lint --prefix apps/desktop
+    step "Desktop (prettier)" npm run format:check --prefix apps/desktop
+  else
+    step "Desktop (eslint)" false
+    step "Desktop (prettier)" false
+  fi
+  step "Electron (tsc)" run_tsc electron
+  step "Mobile (tsc)" run_tsc mobile
+}
+
+lint_fix_steps() {
+  step "Rust (rustfmt + clippy --fix)" npm run rust:fix
+  if require_node_modules desktop; then
+    step "Desktop (prettier --write)" npm run format --prefix apps/desktop
+    step "Desktop (eslint --fix)" npm run lint:fix --prefix apps/desktop
+  else
+    step "Desktop (prettier --write)" false
+    step "Desktop (eslint --fix)" false
+  fi
+  step "Shared (tsc)" run_tsc shared
+  step "Desktop (tsc)" run_tsc desktop
+  step "Electron (tsc)" run_tsc electron
+  step "Mobile (tsc)" run_tsc mobile
+}
+
+test_steps() {
+  step "Rust (cargo test --workspace)" cargo test --workspace
+}
+
+cmd_lint() {
+  FAILED=0
+  lint_steps
+  finish "Lint"
+}
+
+cmd_lint_fix() {
+  FAILED=0
+  lint_fix_steps
+  finish "Lint-fix"
+}
+
+cmd_test() {
+  FAILED=0
+  test_steps
+  finish "Tests"
+}
+
+cmd_check() {
+  FAILED=0
+  lint_steps
+  test_steps
+  finish "Check"
+}
+
+main() {
+  local cmd="${1:-}"
+  case "$cmd" in
+    lint) cmd_lint ;;
+    lint-fix | lint:fix) cmd_lint_fix ;;
+    test) cmd_test ;;
+    check) cmd_check ;;
+    help | -h | --help) cmd_help ;;
+    "")
+      usage
+      exit 1
+      ;;
+    *)
+      echo "Unknown command: $cmd" >&2
+      usage
+      exit 1
+      ;;
+  esac
+}
+
+main "$@"

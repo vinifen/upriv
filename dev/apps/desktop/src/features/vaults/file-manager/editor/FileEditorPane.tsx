@@ -1,11 +1,4 @@
-import {
-useEffect,
-useMemo,
-useRef,
-useState,
-type DragEvent,
-type ReactNode
-} from "react";
+import { useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from "react";
 import { useTranslation } from "@/i18n";
 import { fileBaseName } from "@upriv/shared";
 import { filesFromDataTransfer, isOsFileDrag } from "../lib/osFileDrop";

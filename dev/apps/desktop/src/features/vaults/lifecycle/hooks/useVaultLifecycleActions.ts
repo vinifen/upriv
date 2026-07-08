@@ -15,7 +15,7 @@ import { useVaultLifecycleService, useVaultService } from "@/platform/services";
 import { exportVaultArchive } from "@/features/vaults/list";
 import type { VaultListLifecycleModals } from "@/features/vaults/list";
 import { vaultBlocksBulkExport } from "@/features/system/settings";
-import { useFileManager } from "@/features/vaults/file-manager";
+import { hasUnsavedWorkspaceChanges, useFileManager } from "@/features/vaults/file-manager";
 import type { I18nKey } from "@/i18n/types";
 import type { RecoveryAction } from "../modals/VaultRecoveryModal";
 import { useVaultAutoClose } from "./useVaultAutoClose";
@@ -35,6 +35,7 @@ interface UseVaultLifecycleActionsOptions {
   ) => void;
   modals: VaultListLifecycleModals;
   showToast: (message: string, durationMs?: number) => void;
+  showError: (error: unknown, fallback: I18nKey) => void;
   dismissToast: () => void;
   t: (key: I18nKey, params?: Record<string, string>) => string;
 }
@@ -44,12 +45,13 @@ export function useVaultLifecycleActions({
   setVaultRuntimeState,
   modals,
   showToast,
+  showError,
   dismissToast,
   t,
 }: UseVaultLifecycleActionsOptions) {
   const vaultService = useVaultService();
   const lifecycleService = useVaultLifecycleService();
-  const { purgeForVaultClose } = useFileManager();
+  const { purgeForVaultClose, entries, maximize, dispatchWorkspace } = useFileManager();
   const pipeline = useVaultPipelineRun();
   const pipelineBackgroundRef = useRef(false);
   const vaultsRef = useRef(vaults);
@@ -69,7 +71,13 @@ export function useVaultLifecycleActions({
     return vaults.find((vault) => vault.id === pipeline.run!.vaultId) ?? null;
   }, [pipeline.run, vaults]);
 
-  const pipelineOpeningVaultId = pipeline.run?.kind === "open" ? pipeline.run.vaultId : null;
+  const pipelineListStatus = useMemo(
+    () => ({
+      openingVaultIds: pipeline.openingVaultIds,
+      closingVaultIds: pipeline.closingVaultIds,
+    }),
+    [pipeline.closingVaultIds, pipeline.openingVaultIds],
+  );
 
   const pipelineClosingIntent =
     pipeline.run?.kind === "close" || pipeline.run?.kind === "seal" ? pipeline.run.kind : null;
@@ -87,12 +95,12 @@ export function useVaultLifecycleActions({
   );
 
   const handlePipelineError = useCallback(
-    (vaultId: string, kind: "open" | "close" | "seal", errorKey: I18nKey) => {
+    (vaultId: string, kind: "open" | "close" | "seal", errorI18nKey: I18nKey) => {
       const wasBackground = pipelineBackgroundRef.current;
       pipelineBackgroundRef.current = false;
 
       dismissToast();
-      showToast(t(errorKey), 8000);
+      showToast(t(errorI18nKey), 8000);
 
       if (kind === "close" || kind === "seal") {
         revertCloseFailure(vaultId);
@@ -154,7 +162,7 @@ export function useVaultLifecycleActions({
 
   const startOpenPipeline = useCallback(
     (vaultId: string): boolean => {
-      if (pipeline.isRunning || pipeline.isVaultPipelineBusy(vaultId)) return false;
+      if (pipeline.isVaultPipelineBusy(vaultId)) return false;
 
       pipelineBackgroundRef.current = false;
       return pipeline.start({
@@ -166,20 +174,39 @@ export function useVaultLifecycleActions({
           finishOpenVault(vaultId);
           notifyPipelineComplete(vaultId, "open");
         },
-        onError: (errorKey) => handlePipelineError(vaultId, "open", errorKey),
+        onError: (errorI18nKey) => handlePipelineError(vaultId, "open", errorI18nKey),
       });
     },
     [finishOpenVault, handlePipelineError, lifecycleService, notifyPipelineComplete, pipeline],
   );
 
+  // C-01: closing/sealing purges the workspace. Never discard unsaved drafts
+  // silently — surface the file-manager unsaved prompt and block the close.
+  const promptUnsavedBeforeClose = useCallback(
+    (vaultId: string): boolean => {
+      const entry = entries[vaultId];
+      if (!entry || !hasUnsavedWorkspaceChanges(entry.workspace)) return false;
+      maximize(vaultId);
+      if (entry.workspace.unsavedPrompt?.type !== "dismiss_workspace") {
+        dispatchWorkspace(vaultId, {
+          type: "set_unsaved_prompt",
+          prompt: { type: "dismiss_workspace" },
+        });
+      }
+      return true;
+    },
+    [dispatchWorkspace, entries, maximize],
+  );
+
   const startClosePipeline = useCallback(
     (vault: VaultListItem, intent: Extract<VaultLifecycleIntent, "close" | "seal">): boolean => {
-      if (pipeline.isRunning || pipeline.isVaultPipelineBusy(vault.id)) return false;
+      if (pipeline.isVaultPipelineBusy(vault.id)) return false;
+      if (promptUnsavedBeforeClose(vault.id)) return false;
 
       pipelineBackgroundRef.current = false;
       setVaultRuntimeState(vault.id, { session: "closing" });
 
-      const started = pipeline.start({
+      return pipeline.start({
         vaultId: vault.id,
         kind: intent,
         stepCount: lifecycleService.closingStepCount,
@@ -188,22 +215,16 @@ export function useVaultLifecycleActions({
           finishCloseOrSeal(vault.id, intent);
           notifyPipelineComplete(vault.id, intent);
         },
-        onError: (errorKey) => handlePipelineError(vault.id, intent, errorKey),
+        onError: (errorI18nKey) => handlePipelineError(vault.id, intent, errorI18nKey),
       });
-
-      if (!started) {
-        revertCloseFailure(vault.id);
-      }
-
-      return started;
     },
     [
       finishCloseOrSeal,
       handlePipelineError,
       notifyPipelineComplete,
       pipeline,
+      promptUnsavedBeforeClose,
       lifecycleService,
-      revertCloseFailure,
       setVaultRuntimeState,
     ],
   );
@@ -227,7 +248,7 @@ export function useVaultLifecycleActions({
 
   const handleLockVault = useCallback(
     (vault: VaultListItem) => {
-      if (pipeline.isRunning || pipeline.isVaultPipelineBusy(vault.id)) return;
+      if (pipeline.isVaultPipelineBusy(vault.id)) return;
       const intent = vault.storageMode === "plain" ? "seal" : "close";
       setLifecycleRequest({ vaultId: vault.id, intent });
     },
@@ -236,7 +257,7 @@ export function useVaultLifecycleActions({
 
   const handleUnlockVault = useCallback(
     (vault: VaultListItem) => {
-      if (pipeline.isRunning || pipeline.isVaultPipelineBusy(vault.id)) return;
+      if (pipeline.isVaultPipelineBusy(vault.id)) return;
       if (resolveVaultDisplayStatus(vault) === "recovery") {
         setRecoveryVaultId(vault.id);
         return;
@@ -248,7 +269,7 @@ export function useVaultLifecycleActions({
 
   const handleSealVault = useCallback(
     (vault: VaultListItem) => {
-      if (pipeline.isRunning || pipeline.isVaultPipelineBusy(vault.id)) return;
+      if (pipeline.isVaultPipelineBusy(vault.id)) return;
       setLifecycleRequest({ vaultId: vault.id, intent: "seal" });
     },
     [pipeline, setLifecycleRequest],
@@ -256,7 +277,8 @@ export function useVaultLifecycleActions({
 
   const handleExportVault = useCallback(
     (vault: VaultListItem) => {
-      if (resolveVaultListStatus(vault, pipelineOpeningVaultId) === "opening") {
+      const listStatus = resolveVaultListStatus(vault, pipelineListStatus);
+      if (listStatus === "opening" || listStatus === "closing") {
         showToast(t("vault.export.blocked_opening"));
         return;
       }
@@ -268,11 +290,11 @@ export function useVaultLifecycleActions({
         .then(() => {
           showToast(t("vault.export.success", { name: vault.displayName }));
         })
-        .catch(() => {
-          showToast(t("vault.export.failed"));
+        .catch((error) => {
+          showError(error, "vault.export.failed");
         });
     },
-    [pipelineOpeningVaultId, showToast, t, vaultService],
+    [pipelineListStatus, showError, showToast, t, vaultService],
   );
 
   const handleOpenFolder = useCallback(
@@ -289,7 +311,7 @@ export function useVaultLifecycleActions({
 
   const handleAutoCloseVault = useCallback(
     (vault: VaultListItem, settings: VaultSettingsConfig): boolean => {
-      if (pipeline.isRunning || pipeline.isVaultPipelineBusy(vault.id)) return false;
+      if (pipeline.isVaultPipelineBusy(vault.id)) return false;
       const hasPasswordInRam = lifecycleService.hasPasswordInSession(vault.id);
       if (
         !canRunIdleAutoClose(
@@ -329,7 +351,7 @@ export function useVaultLifecycleActions({
 
   useVaultAutoClose({
     vaults,
-    isPipelineRunning: pipeline.isRunning,
+    isVaultPipelineBusy: pipeline.isVaultPipelineBusy,
     onWarn: handleAutoCloseWarn,
     onAutoCloseBlocked: handleAutoCloseBlocked,
     onAutoClose: handleAutoCloseVault,
@@ -345,6 +367,8 @@ export function useVaultLifecycleActions({
         const started = startOpenPipeline(vaultId);
         setLifecycleRequest(null);
         if (!started) {
+          // M-11: pipeline busy — don't leave the password sitting in session.
+          lifecycleService.clearPasswordInSession(vaultId);
           showToast(t("toast.pipeline_busy"));
           setLifecycleRequest({ vaultId, intent: "unlock" });
         }
@@ -355,14 +379,20 @@ export function useVaultLifecycleActions({
       const started = startClosePipeline(lifecycleVault, intent);
       setLifecycleRequest(null);
       if (!started) {
-        showToast(t("toast.pipeline_busy"));
-        setLifecycleRequest({ vaultId, intent });
+        // Only "pipeline busy" reopens the dialog; an unsaved-changes block has
+        // already surfaced its own prompt via startClosePipeline.
+        if (pipeline.isVaultPipelineBusy(vaultId)) {
+          lifecycleService.clearPasswordInSession(vaultId);
+          showToast(t("toast.pipeline_busy"));
+          setLifecycleRequest({ vaultId, intent });
+        }
       }
     },
     [
       lifecycleRequest,
       lifecycleService,
       lifecycleVault,
+      pipeline,
       setLifecycleRequest,
       showToast,
       startClosePipeline,
@@ -404,6 +434,11 @@ export function useVaultLifecycleActions({
     },
     [
       lifecycleService,
+      purgeForVaultClose,
+      recoveryVaultId,
+      setRecoverySubmitting,
+      setRecoveryVaultId,
+      setVaultRuntimeState,
       showToast,
       startOpenPipeline,
       t,
@@ -422,7 +457,7 @@ export function useVaultLifecycleActions({
   return {
     pipeline,
     pipelineVault,
-    pipelineOpeningVaultId,
+    pipelineListStatus,
     pipelineClosingIntent,
     handlePipelineBackground,
     handleLockVault,

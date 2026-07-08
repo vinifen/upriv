@@ -110,7 +110,7 @@
   "vault.create.password_hint_help": "Un recordatorio breve para ti — no repitas la contraseña aquí.",
   "vault.create.note": "Nota (opcional)",
   "vault.create.note_help": "Anotación breve para esta bóveda (máx. {max} caracteres).",
-  "vault.create.password_mismatch": "Las contraseñas no coinciden.",
+  "vault.create.error.password_mismatch": "Las contraseñas no coinciden.",
 
   "vault.change_password.title": "Cambiar contraseña",
   "vault.change_password.current": "Contraseña actual",
@@ -519,6 +519,9 @@
   "error.vault_already_open": "La bóveda ya está abierta (bloqueo activo)",
   "error.archive_test_failed": "La prueba del archivo falló — cierre cancelado",
   "error.sync_mismatch": "El archivo y el almacén cifrado están desincronizados",
+  "error.unexpected": "Algo salió mal. Inténtalo de nuevo.",
+  "error.service_unavailable": "No se pudo conectar con el servicio del cofre. Inténtalo de nuevo.",
+  "error.operation_timed_out": "La operación tardó demasiado. Inténtalo de nuevo.",
 
   "empty.no_vaults": "Ninguna bóveda configurada",
   "empty.vaults_all_hidden": "Todas las bóvedas están ocultas — muestra las bóvedas ocultas en la configuración del sistema",

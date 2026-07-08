@@ -110,7 +110,7 @@
   "vault.create.password_hint_help": "Um lembrete curto para você — não repita a senha aqui.",
   "vault.create.note": "Anotação (opcional)",
   "vault.create.note_help": "Anotação curta deste cofre (máx. {max} caracteres).",
-  "vault.create.password_mismatch": "As senhas não coincidem.",
+  "vault.create.error.password_mismatch": "As senhas não coincidem.",
 
   "vault.change_password.title": "Alterar senha",
   "vault.change_password.current": "Senha atual",
@@ -519,6 +519,9 @@
   "error.vault_already_open": "Cofre já está aberto (lock ativo)",
   "error.archive_test_failed": "Teste do arquivo falhou — fechamento cancelado",
   "error.sync_mismatch": "Arquivo .7z e repositório cifrado estão dessincronizados",
+  "error.unexpected": "Algo deu errado. Tente novamente.",
+  "error.service_unavailable": "Não foi possível conectar ao serviço do cofre. Tente novamente.",
+  "error.operation_timed_out": "A operação expirou. Tente novamente.",
 
   "empty.no_vaults": "Nenhum cofre configurado",
   "empty.vaults_all_hidden": "Todos os cofres estão ocultos — mostre cofres ocultos nas configurações do sistema",

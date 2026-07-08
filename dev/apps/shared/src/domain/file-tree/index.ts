@@ -5,7 +5,11 @@ export type {
   VaultFileLanguage,
 } from "./types";
 export { vaultFileLanguageFromPath } from "./language";
-export { validateFileName, type FileNameValidationCode } from "./fileNameValidation";
+export { validateFileName } from "./fileNameValidation";
+export {
+  fileNameErrorI18nKey,
+  type FileNameErrorCode,
+} from "./errorMessages";
 export { joinPath, fileBaseName, findNode, isFolderPath } from "./treeUtils";
 export {
   getParentPath,

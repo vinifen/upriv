@@ -110,7 +110,7 @@
   "vault.create.password_hint_help": "A short reminder for you — do not repeat the password here.",
   "vault.create.note": "Note (optional)",
   "vault.create.note_help": "Short annotation for this vault (max {max} characters).",
-  "vault.create.password_mismatch": "Passwords do not match.",
+  "vault.create.error.password_mismatch": "Passwords do not match.",
 
   "vault.change_password.title": "Change password",
   "vault.change_password.current": "Current password",
@@ -519,6 +519,9 @@
   "error.vault_already_open": "Vault is already open (lock held)",
   "error.archive_test_failed": "Archive test failed — close aborted",
   "error.sync_mismatch": "Archive and encrypted store are out of sync",
+  "error.unexpected": "Something went wrong. Try again.",
+  "error.service_unavailable": "Could not reach the vault service. Try again.",
+  "error.operation_timed_out": "The operation timed out. Try again.",
 
   "empty.no_vaults": "No vaults configured",
   "empty.vaults_all_hidden": "All vaults are hidden — show hidden vaults in system settings",

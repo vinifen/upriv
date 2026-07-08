@@ -54,8 +54,8 @@ export function VaultListPage() {
       />
       <VaultList
         vaults={list.displayVaults}
-        pipelineOpeningVaultId={list.pipelineOpeningVaultId}
-        pipelineActiveVaultId={list.pipelineActiveVaultId}
+        pipelineListStatus={list.pipelineListStatus}
+        isVaultPipelineBusy={list.isVaultPipelineBusy}
         allVaultsHidden={list.allVaultsHidden}
         viewMode={list.viewMode}
         canReorder={list.canReorder}

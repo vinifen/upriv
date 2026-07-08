@@ -1,6 +1,7 @@
 import { Icon, type IconName } from "@/components/icons";
 import { useTranslation } from "@/i18n";
 import { resolveVaultListStatus, type VaultDisplayStatus, type VaultListItem } from "@upriv/shared";
+import type { VaultPipelineListStatus } from "./VaultList";
 import { vaultStatusIconClass, vaultStatusRowClass } from "@/theme";
 import { VaultFileManagerIndicator } from "./VaultFileManagerIndicator";
 import { VaultHiddenIndicator } from "./VaultHiddenIndicator";
@@ -10,8 +11,8 @@ import { VaultStatusBadge } from "./VaultStatusBadge";
 
 interface VaultBlockCardProps {
   vault: VaultListItem;
-  pipelineOpeningVaultId?: string | null;
-  pipelineActiveVaultId?: string | null;
+  pipelineListStatus?: VaultPipelineListStatus;
+  isPipelineBusy?: boolean;
   onOpenBackups: (vaultId: string) => void;
   onOpenNote: (vaultId: string) => void;
   onOpenSettings: (vaultId: string) => void;
@@ -31,8 +32,8 @@ function statusIconName(status: VaultDisplayStatus, isOpen: boolean): IconName {
 
 export function VaultBlockCard({
   vault,
-  pipelineOpeningVaultId = null,
-  pipelineActiveVaultId = null,
+  pipelineListStatus = {},
+  isPipelineBusy = false,
   onOpenBackups,
   onOpenNote,
   onOpenSettings,
@@ -44,9 +45,8 @@ export function VaultBlockCard({
   onSealVault,
 }: VaultBlockCardProps) {
   const { t } = useTranslation();
-  const status = resolveVaultListStatus(vault, pipelineOpeningVaultId);
+  const status = resolveVaultListStatus(vault, pipelineListStatus);
   const isOpen = status === "open";
-  const isPipelineBusy = pipelineActiveVaultId === vault.id;
 
   return (
     <article

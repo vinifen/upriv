@@ -1,8 +1,12 @@
-import { validateDisplayName } from "../vault/displayName";
+import { validateDisplayName, type DisplayNameValidationCode } from "../vault/displayName";
 
-export type FileNameValidationCode = ReturnType<typeof validateDisplayName>;
+export type FileNameValidationResult =
+  | DisplayNameValidationCode
+  | "empty"
+  | "invalid_chars"
+  | null;
 
-export function validateFileName(name: string): FileNameValidationCode | null {
+export function validateFileName(name: string): FileNameValidationResult {
   const trimmed = name.trim();
   if (!trimmed) return "empty";
   if (trimmed === "." || trimmed === "..") return "invalid_chars";

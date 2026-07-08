@@ -7,6 +7,7 @@ export type {
 } from "./types";
 export {
   assertPlainVaultInvariant,
+  isVaultFileManagerEligible,
   resolveVaultDisplayStatus,
   resolveVaultListStatus,
 } from "./types";
@@ -32,3 +33,8 @@ export {
   vaultStatusColorVar,
   vaultStatusI18nKey,
 } from "./statusTokens";
+/** Rust wire codes + UI i18n. Name maps live in `errors/nameMessages.ts` (internal to this domain). */
+export { VAULT_ERROR_CODES } from "./errors/codes";
+export type { VaultErrorCode } from "./errors/codes";
+export { requireVaultErrorI18nKey, vaultErrorI18nKey } from "./errors/messages";
+export type { VaultErrorI18nKey } from "./errors/messages";

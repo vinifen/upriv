@@ -1,5 +1,7 @@
 /// <reference types="vite/client" />
 
+declare const __UPRIV_APP_VERSION__: string;
+
 declare module "*.svg" {
   const src: string;
   export default src;

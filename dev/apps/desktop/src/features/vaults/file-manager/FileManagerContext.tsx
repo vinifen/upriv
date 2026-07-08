@@ -1,13 +1,6 @@
-import {
-createContext,
-useCallback,
-useContext,
-useMemo,
-useReducer,
-type ReactNode
-} from "react";
+import { createContext, useCallback, useContext, useMemo, useReducer, type ReactNode } from "react";
 import { useVaultFileSystemService } from "@/platform/services";
-import { resolveVaultDisplayStatus, type VaultListItem } from "@upriv/shared";
+import { isVaultFileManagerEligible, type VaultListItem } from "@upriv/shared";
 import { createDefaultWorkspaceState } from "./lib/fileManagerWorkspaceTypes";
 import type { FileManagerEntry } from "./fileManagerTypes";
 import { vaultWorkspaceReducer, type VaultWorkspaceAction } from "./lib/vaultWorkspaceReducer";
@@ -89,7 +82,7 @@ function minimizeEntry(state: FileManagerState, vaultId: string): FileManagerSta
 function fileManagerReducer(state: FileManagerState, action: FileManagerAction): FileManagerState {
   switch (action.type) {
     case "open_from_vault": {
-      if (resolveVaultDisplayStatus(action.vault) !== "open") return state;
+      if (!isVaultFileManagerEligible(action.vault)) return state;
 
       let next = state;
       if (state.maximizedVaultId && state.maximizedVaultId !== action.vault.id) {
@@ -136,7 +129,7 @@ function fileManagerReducer(state: FileManagerState, action: FileManagerAction):
       return removeEntry(state, action.vaultId);
     case "sync_with_vault_list": {
       const openIds = new Set(
-        action.vaults.filter((vault) => vault.session === "open").map((vault) => vault.id),
+        action.vaults.filter((vault) => isVaultFileManagerEligible(vault)).map((vault) => vault.id),
       );
       const knownIds = new Set(action.vaults.map((vault) => vault.id));
       let next = state;

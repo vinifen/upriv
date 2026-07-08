@@ -4,12 +4,13 @@ import { useTranslation } from "@/i18n";
 import type { I18nKey } from "@/i18n/types";
 import {
   requiresPasswordForLifecycle,
+  requireVaultErrorI18nKey,
   resolveVaultPasswordHint,
+  VAULT_ERROR_CODES,
   type VaultListItem,
   type VaultLifecycleIntent,
 } from "@upriv/shared";
 import { useVaultLifecycleService, useVaultService } from "@/platform/services";
-import { validateMockLifecyclePassword } from "@/platform/mocks/services/vaultLifecycleService";
 import { VaultPasswordHintCallout } from "./VaultPasswordHintCallout";
 import { SettingsField } from "@/components/settings";
 
@@ -94,8 +95,8 @@ export function VaultLifecycleModal({
   if (!open || !vault || !intent) return null;
 
   const handleConfirm = () => {
-    if (requiresPassword && !validateMockLifecyclePassword(password)) {
-      setError(t("error.wrong_password"));
+    if (requiresPassword && !lifecycleService.validateLifecyclePassword(password)) {
+      setError(t(requireVaultErrorI18nKey(VAULT_ERROR_CODES.WRONG_PASSWORD)));
       return;
     }
     onConfirm(requiresPassword ? password : null);

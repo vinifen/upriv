@@ -3,7 +3,7 @@ import type { I18nKey } from "@/i18n";
 import { Modal } from "@/components/ui";
 import { VaultSettingsSection, settingsControlClass } from "@/components/settings";
 import { useTranslation } from "@/i18n";
-import { getAppVersion, APP_PACKAGE_VERSION } from "@/lib/desktop";
+import { APP_VERSION, getAppVersion, getSessionAppVersion } from "@/lib";
 import {
   defaultOpenHelpSections,
   HELP_SECTION_BODY_KEYS,
@@ -18,11 +18,15 @@ interface HelpModalProps {
   onClose: () => void;
 }
 
+function initialVersionLabel(): string {
+  return getSessionAppVersion()?.version ?? APP_VERSION;
+}
+
 export function HelpModal({ open, onClose }: HelpModalProps) {
   const { t } = useTranslation();
   const [query, setQuery] = useState("");
   const [openSections, setOpenSections] = useState<Set<HelpSectionId>>(defaultOpenHelpSections);
-  const [appVersion, setAppVersion] = useState(APP_PACKAGE_VERSION);
+  const [appVersion, setAppVersion] = useState(initialVersionLabel);
 
   const searching = query.trim().length > 0;
 
@@ -30,10 +34,9 @@ export function HelpModal({ open, onClose }: HelpModalProps) {
     if (!open) {
       setQuery("");
       setOpenSections(defaultOpenHelpSections());
-      setAppVersion(APP_PACKAGE_VERSION);
       return;
     }
-    void getAppVersion().then(setAppVersion);
+    void getAppVersion().then(({ version }) => setAppVersion(version));
   }, [open]);
 
   const visibleSections = useMemo(

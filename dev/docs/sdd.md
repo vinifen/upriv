@@ -1255,7 +1255,28 @@ click(Backups|Config)      → stopPropagation; open respective modal
 | **Closing** | Overlay + progress | During `7zz` on close |
 | **Opening** | Overlay + progress | During `7zz` test / decrypt / mount on unlock |
 
-**Open/close/seal pipelines (v1):** one global **FIFO queue** — only one `7zz` (or equivalent) runs at a time; further requests wait. UI may show progress in a blocking overlay first, then **Continue in background** so the list stays usable; queued vaults show `opening` / `closing` on their row until their turn completes. No mid-pipeline cancel (abort would risk inconsistent disk state). Mock desktop UI may run a single slot until `upriv-core` wires the queue.
+**Open/close/seal pipelines (v1):** one global **FIFO queue** — only one `7zz` (or equivalent) runs at a time; further requests wait. UI may show progress in a blocking overlay first, then **Continue in background** so the list stays usable; queued vaults show `opening` / `closing` on their row until their turn completes. No mid-pipeline cancel (abort would risk inconsistent disk state). Desktop UI implements the FIFO queue in `useVaultPipelineRun`; pipeline steps are still **mock** until `upriv-core` vault RPCs land.
+
+**Pipeline — erros e anti-travamento (pendente ao wirear `upriv-core`):**
+
+| Área | Já existe (mock / infra) | Falta quando for `7zz` real |
+|------|--------------------------|------------------------------|
+| **Fila FIFO** | `useVaultPipelineRun` — enfileira, status `opening`/`closing` na lista | RPC `vault_open` / `vault_close` / `vault_seal` no daemon; progresso por passo vindo do Rust |
+| **Erros user-facing** | `VaultPipelineError` + i18n; overlay + toast; `revertCloseFailure` no close | Espelhar códigos Rust em `VAULT_ERROR_CODES` + `vault-lifecycle/errors/codes.ts`; erros reais (`wrong_password`, `archive_test_failed`, …) |
+| **Sem cancel no meio** | SDD + PRD RF-UI-10 | Manter — abort mid-`7zz` arrisca disco inconsistente |
+| **Cancel na fila** | Não implementado (v1) | Opcional futuro: remover job **antes** de iniciar `7zz`; limpar senha em RAM |
+| **Timeout IPC** | `desktopInvokeRaw` 30s; `daemonRpc` 30s; spawn daemon 10s | **Timeout por operação de vault** no `upriv-core` (open/close podem levar minutos — valor TBD, ex. 30–60 min) |
+| **Kill subprocesso** | `stopDaemon` mata o processo inteiro | Se `7zz` travar: matar **só** o child, devolver `RpcError` estruturado, liberar slot da fila |
+| **Estado após falha** | Close mock reverte `session` | Wrong password / timeout no close **não alteram** `vaults/<id>.7z` (PRD); limpar temp/workspace conforme regra atômica (`.7z.new` → rename) |
+| **Fila após erro** | `dismissFailure()` segue para o próximo | Garantir que timeout/kill no Rust também completa o job com erro (não deixa slot ocupado para sempre) |
+
+**Checklist implementação (um PR por camada ou PR único coordenado):**
+
+1. **Rust:** spawn `7zz` com timeout configurável; códigos de erro estáveis; nunca deixar `.7z` / workspace em estado ambíguo.
+2. **Daemon:** handlers RPC de lifecycle; repassar progresso (evento ou polling) se overlay precisar de passos reais.
+3. **Shared:** `VAULT_ERROR_CODES` deixa de ser `planned`; sync com `rpc.rs`.
+4. **Desktop:** `createDesktopServices()` delega `runOpeningPipeline` / `runClosingPipeline` ao RPC (substituir `runTimedPipeline` mock).
+5. **Testes:** integração stdio com pipeline que falha (senha errada, timeout simulado); UI não fica `opening`/`closing` eternamente.
 
 No separate Welcome screen in v1; “Open vault” = `--vault` on first run or app bar menu item (future).
 
@@ -1310,6 +1331,8 @@ ui/
 ```
 
 #### 8.2.6 Desktop RPC methods (UI)
+
+**Transport (v0.1+):** React calls `desktopInvoke(method, params)` → Electron main → **stdio NDJSON** → `upriv-daemon` → `upriv_core`. No HTTP, no Tauri `invoke`. Errors: `{ code, message, details? }`. Shell-only: `app_exit`. See `dev/apps/desktop/src/lib/commands.ts` and SDD §8.3.
 
 In addition to §8.3:
 

@@ -3,7 +3,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { app } from "electron";
 
+/** Keep in sync with `@upriv/shared` `RpcErrorBody` (`core-rpc/errors.ts`). */
+type RpcErrorBody = { code: string; message: string; details?: unknown };
+
 const STARTUP_TIMEOUT_MS = 10_000;
+const DEFAULT_RPC_TIMEOUT_MS = 30_000;
+const SHUTDOWN_TIMEOUT_MS = 5_000;
+const SHUTDOWN_METHOD = "app_shutdown";
 
 type WireOutReady = { type: "ready" };
 type WireOutResponse = {
@@ -11,7 +17,7 @@ type WireOutResponse = {
   id: number;
   ok: boolean;
   result?: unknown;
-  error?: string;
+  error?: RpcErrorBody;
 };
 type WireOutEvent = { type: "event"; name: string; payload: unknown };
 type WireOutMessage = WireOutReady | WireOutResponse | WireOutEvent;
@@ -19,6 +25,7 @@ type WireOutMessage = WireOutReady | WireOutResponse | WireOutEvent;
 type PendingRequest = {
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
 };
 
 export interface DaemonConnection {
@@ -26,6 +33,15 @@ export interface DaemonConnection {
   nextRequestId: number;
   pending: Map<number, PendingRequest>;
   eventListeners: Set<(name: string, payload: unknown) => void>;
+  alive: boolean;
+  /** Serializes stdin writes so concurrent RPCs never interleave NDJSON. */
+  writeChain: Promise<void>;
+}
+
+let exitAfterReadyHandler: (() => void) | null = null;
+
+export function setDaemonExitHandler(handler: (() => void) | null): void {
+  exitAfterReadyHandler = handler;
 }
 
 export function resolveDaemonBinary(): string {
@@ -39,18 +55,41 @@ export function resolveDaemonBinary(): string {
   return path.join(__dirname, "../../../target/release/upriv-daemon");
 }
 
-function writeRequest(
-  connection: DaemonConnection,
-  id: number,
-  method: string,
-  params: Record<string, unknown>,
-): void {
-  const stdin = connection.process.stdin;
-  if (!stdin?.writable) {
-    throw new Error("upriv-daemon stdin is not writable");
+function daemonEnv(): NodeJS.ProcessEnv {
+  const keys = ["PATH", "HOME", "USER", "LANG", "LC_ALL", "TMPDIR", "TEMP", "TMP"] as const;
+  const env: NodeJS.ProcessEnv = {};
+  for (const key of keys) {
+    const value = process.env[key];
+    if (value !== undefined) env[key] = value;
   }
-  const line = JSON.stringify({ type: "request", id, method, params });
-  stdin.write(`${line}\n`);
+  if (process.platform === "linux" || process.platform === "darwin") {
+    for (const key of ["XDG_RUNTIME_DIR", "XDG_CONFIG_HOME", "XDG_DATA_HOME"] as const) {
+      const value = process.env[key];
+      if (value !== undefined) env[key] = value;
+    }
+  }
+  return env;
+}
+
+function formatRpcError(error: RpcErrorBody | undefined, fallback: string): string {
+  if (!error) return fallback;
+  // Keep in sync with `DAEMON_ERROR_MESSAGE_RE` in `apps/desktop/src/lib/invoke.ts`.
+  return `${error.code}: ${error.message}`;
+}
+
+/** Write one NDJSON line, resolving once flushed (respects backpressure). */
+function writeLine(connection: DaemonConnection, line: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const stdin = connection.process.stdin;
+    if (!stdin?.writable) {
+      reject(new Error("upriv-daemon stdin is not writable"));
+      return;
+    }
+    stdin.write(`${line}\n`, (error) => {
+      if (error) reject(error);
+      else resolve();
+    });
+  });
 }
 
 function dispatchWireMessage(connection: DaemonConnection, message: WireOutMessage): void {
@@ -61,11 +100,12 @@ function dispatchWireMessage(connection: DaemonConnection, message: WireOutMessa
   if (message.type === "response") {
     const pending = connection.pending.get(message.id);
     if (!pending) return;
+    clearTimeout(pending.timer);
     connection.pending.delete(message.id);
     if (message.ok) {
       pending.resolve(message.result);
     } else {
-      pending.reject(new Error(message.error ?? "daemon RPC failed"));
+      pending.reject(new Error(formatRpcError(message.error, "daemon RPC failed")));
     }
     return;
   }
@@ -77,9 +117,17 @@ function dispatchWireMessage(connection: DaemonConnection, message: WireOutMessa
 
 function rejectAllPending(connection: DaemonConnection, error: Error): void {
   for (const pending of connection.pending.values()) {
+    clearTimeout(pending.timer);
     pending.reject(error);
   }
   connection.pending.clear();
+}
+
+function markDaemonDead(connection: DaemonConnection, error: Error): void {
+  if (!connection.alive) return;
+  connection.alive = false;
+  rejectAllPending(connection, error);
+  exitAfterReadyHandler?.();
 }
 
 export async function startDaemon(): Promise<DaemonConnection> {
@@ -92,7 +140,7 @@ export async function startDaemon(): Promise<DaemonConnection> {
 
   const child = spawn(binary, [], {
     stdio: ["pipe", "pipe", "pipe"],
-    env: { ...process.env },
+    env: daemonEnv(),
   });
 
   const connection: DaemonConnection = {
@@ -100,6 +148,8 @@ export async function startDaemon(): Promise<DaemonConnection> {
     nextRequestId: 1,
     pending: new Map(),
     eventListeners: new Set(),
+    alive: true,
+    writeChain: Promise.resolve(),
   };
 
   let buffer = "";
@@ -112,6 +162,7 @@ export async function startDaemon(): Promise<DaemonConnection> {
       if (settled) return;
       settled = true;
       if (startupTimeout) clearTimeout(startupTimeout);
+      connection.alive = false;
       rejectAllPending(connection, error);
       child.kill();
       reject(error);
@@ -156,10 +207,11 @@ export async function startDaemon(): Promise<DaemonConnection> {
     child.on("error", fail);
     child.on("exit", (code) => {
       const error = new Error(`upriv-daemon exited (code ${code ?? "?"})`);
-      rejectAllPending(connection, error);
       if (!settled) {
         fail(error);
+        return;
       }
+      markDaemonDead(connection, error);
     });
 
     startupTimeout = setTimeout(
@@ -169,26 +221,61 @@ export async function startDaemon(): Promise<DaemonConnection> {
   });
 }
 
-export function stopDaemon(connection: DaemonConnection | null): void {
-  if (!connection) return;
+export async function stopDaemon(connection: DaemonConnection | null): Promise<void> {
+  if (!connection?.alive) return;
+
+  try {
+    await daemonRpc(connection, SHUTDOWN_METHOD, {}, SHUTDOWN_TIMEOUT_MS);
+  } catch {
+    // Daemon may already be stopping.
+  }
+
   rejectAllPending(connection, new Error("upriv-daemon stopped"));
-  connection.process.kill();
+  connection.alive = false;
+
+  if (connection.process.exitCode === null && !connection.process.killed) {
+    connection.process.kill("SIGTERM");
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(() => {
+        if (connection.process.exitCode === null && !connection.process.killed) {
+          connection.process.kill("SIGKILL");
+        }
+        resolve();
+      }, 2_000);
+      connection.process.once("exit", () => {
+        clearTimeout(timer);
+        resolve();
+      });
+    });
+  }
 }
 
 export async function daemonRpc<T>(
   connection: DaemonConnection,
   method: string,
   params: Record<string, unknown> = {},
+  timeoutMs = DEFAULT_RPC_TIMEOUT_MS,
 ): Promise<T> {
+  if (!connection.alive) {
+    throw new Error("upriv-daemon is not running");
+  }
+
   const id = connection.nextRequestId++;
   const result = await new Promise<unknown>((resolve, reject) => {
-    connection.pending.set(id, { resolve, reject });
-    try {
-      writeRequest(connection, id, method, params);
-    } catch (error) {
+    const timer = setTimeout(() => {
       connection.pending.delete(id);
-      reject(error);
-    }
+      reject(new Error(`daemon RPC timeout: ${method}`));
+    }, timeoutMs);
+
+    connection.pending.set(id, { resolve, reject, timer });
+    const line = JSON.stringify({ type: "request", id, method, params });
+    connection.writeChain = connection.writeChain
+      .then(() => writeLine(connection, line))
+      .catch((error: unknown) => {
+        clearTimeout(timer);
+        connection.pending.delete(id);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      });
   });
 
   return result as T;
