@@ -5,15 +5,16 @@ description: Upriv vault manager — Rust upriv-core, Electron desktop, Expo mob
 
 # Upriv agent
 
-Read **[`.agent/AGENT.md`](../../.agent/AGENT.md)** first — canonical product rules, layout, guardrails, and desktop shell mindset. Do not duplicate long command lists here.
+Read **[`.agent/AGENT.md`](../../.agent/AGENT.md)** first — canonical product rules, layout, guardrails, **current phase**, and **`temp/` legacy reference** (research only). Do not duplicate long command lists here.
 
 ## Stack (quick)
 
-- **`dev/crates/upriv-core/`** — vault/crypto logic
+- **`dev/crates/upriv-core/`** — vault/crypto logic (**minimal today — start here**)
 - **`dev/crates/upriv-daemon/`** — desktop stdio JSON-RPC → `upriv-core`
 - **`dev/apps/electron/`** — Electron shell
-- **`dev/apps/desktop/`** — React UI
+- **`dev/apps/desktop/`** — React UI (**mocks** until RPC wire-up)
 - **`dev/apps/mobile/`** — Expo scaffold
+- **`temp/upriv/`** — optional old Tauri tree (gitignored); research only — see `.agent/AGENT.md`
 
 ## Commands
 

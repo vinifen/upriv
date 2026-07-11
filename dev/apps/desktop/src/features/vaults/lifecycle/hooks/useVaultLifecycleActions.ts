@@ -56,6 +56,7 @@ export function useVaultLifecycleActions({
   const pipelineBackgroundRef = useRef(false);
   const vaultsRef = useRef(vaults);
   vaultsRef.current = vaults;
+  const closeStartedWhileOpenRef = useRef(new Map<string, boolean>());
 
   const {
     setLifecycleRequest,
@@ -86,10 +87,16 @@ export function useVaultLifecycleActions({
     (vaultId: string) => {
       const vault = vaultsRef.current.find((item) => item.id === vaultId);
       if (!vault) return;
-      setVaultRuntimeState(vaultId, {
-        session: "open",
-        persistence: vault.storageMode === "plain" ? "sealed" : "closed",
-      });
+      const wasOpen = closeStartedWhileOpenRef.current.get(vaultId) ?? false;
+      closeStartedWhileOpenRef.current.delete(vaultId);
+      if (wasOpen) {
+        setVaultRuntimeState(vaultId, {
+          session: "open",
+          persistence: vault.storageMode === "plain" ? "sealed" : "closed",
+        });
+        return;
+      }
+      setVaultRuntimeState(vaultId, { session: null, persistence: "closed" });
     },
     [setVaultRuntimeState],
   );
@@ -119,7 +126,6 @@ export function useVaultLifecycleActions({
       setVaultRuntimeState(vaultId, {
         session: "open",
         persistence: vault?.storageMode === "plain" ? "sealed" : "closed",
-        canSeal: vault?.storageMode === "encrypted_dir",
         ...touchVaultLastAccessed(t("vault.last_accessed.just_now")),
       });
     },
@@ -130,9 +136,9 @@ export function useVaultLifecycleActions({
     (vaultId: string, intent: Extract<VaultLifecycleIntent, "close" | "seal">) => {
       purgeForVaultClose(vaultId);
       if (intent === "close") {
-        setVaultRuntimeState(vaultId, { session: null, persistence: "closed", canSeal: false });
+        setVaultRuntimeState(vaultId, { session: null, persistence: "closed" });
       } else {
-        setVaultRuntimeState(vaultId, { session: null, persistence: "sealed", canSeal: false });
+        setVaultRuntimeState(vaultId, { session: null, persistence: "sealed" });
       }
       lifecycleService.clearPasswordInSession(vaultId);
     },
@@ -203,6 +209,9 @@ export function useVaultLifecycleActions({
       if (pipeline.isVaultPipelineBusy(vault.id)) return false;
       if (promptUnsavedBeforeClose(vault.id)) return false;
 
+      const wasOpen = resolveVaultDisplayStatus(vault) === "open";
+      closeStartedWhileOpenRef.current.set(vault.id, wasOpen);
+
       pipelineBackgroundRef.current = false;
       setVaultRuntimeState(vault.id, { session: "closing" });
 
@@ -212,6 +221,7 @@ export function useVaultLifecycleActions({
         stepCount: lifecycleService.closingStepCount,
         runPipeline: lifecycleService.runClosingPipeline.bind(lifecycleService),
         onComplete: () => {
+          closeStartedWhileOpenRef.current.delete(vault.id);
           finishCloseOrSeal(vault.id, intent);
           notifyPipelineComplete(vault.id, intent);
         },

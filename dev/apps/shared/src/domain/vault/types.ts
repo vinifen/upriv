@@ -66,6 +66,17 @@ export function assertPlainVaultInvariant(row: VaultRow): void {
   }
 }
 
+/**
+ * Whether the row may show the seal split control.
+ * `encrypted_dir` only — while open or resting `closed` (seal without reopening).
+ */
+export function resolveVaultCanSeal(row: VaultRow): boolean {
+  if (row.storageMode !== "encrypted_dir") return false;
+  if (row.session === "recovery" || row.session === "closing") return false;
+  if (row.session === "open") return true;
+  return row.persistence === "closed";
+}
+
 /** Whether the vault should have an active file-manager workspace. */
 export function isVaultFileManagerEligible(row: VaultRow): boolean {
   return resolveVaultDisplayStatus(row) === "open";

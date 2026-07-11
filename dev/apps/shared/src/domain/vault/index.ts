@@ -8,6 +8,7 @@ export type {
 export {
   assertPlainVaultInvariant,
   isVaultFileManagerEligible,
+  resolveVaultCanSeal,
   resolveVaultDisplayStatus,
   resolveVaultListStatus,
 } from "./types";

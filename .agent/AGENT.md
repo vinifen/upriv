@@ -2,9 +2,56 @@
 
 **Product:** portable encrypted vault manager (universal `.7z` containers).  
 **Repo:** monorepo with `dev/` (implementation), `prod-example/` (static vault layout demo).  
-**Status:** v0.1 — `upriv-core` is minimal; **desktop** has a full mock vault UI (`dev/apps/desktop/`); **mobile** is scaffold-only.
+**Status:** v0.1 — **Electron desktop shell + full mock UI**; **`upriv-core` minimal** (logging, time, `app_version` only). Next milestone: **vault logic in Rust** (`vault_list` → open/close pipeline).
 
 When product behavior, security, or on-disk layout is unclear, **read the canonical docs** (below) before inventing behavior.
+
+---
+
+## Current development phase (read this first)
+
+We are **past the Tauri → Electron migration** and **past UI/lifecycle scaffolding**. The desktop app is usable end-to-end **on mocks**; real vault I/O does not exist yet in the active codebase.
+
+| Layer | State in `dev/` (active) |
+|-------|---------------------------|
+| **React UI** | Vault list, lifecycle FIFO queue, file-manager, settings, i18n errors — **mock services** |
+| **Electron** | Shell, preload, daemon spawn, IPC timeouts, packaging scaffold |
+| **upriv-daemon** | stdio JSON-RPC — `app_version`, `app_shutdown` only |
+| **upriv-core** | `logging`, `time`, `app_version()` — **no vault/crypto/7zz yet** |
+| **Integration** | `createServices()` → `mockServices` until Rust RPCs land |
+
+**What to build next (default order):**
+
+1. `upriv-core`: config/paths, `vault_list`, domain errors (`wrong_password`, …)  
+2. `rpc.rs` + `CORE_RPC_COMMANDS` + `lib/rpc.ts` for each handler  
+3. `platform/desktop/` adapters replacing mocks (one RPC at a time)  
+4. Open/close/seal pipeline with `7zz` (timeouts/kill in Rust — see SDD §8.2.2)  
+5. Mount (FUSE / WinFsp) and remaining RPCs from SDD §8.2–8.3  
+
+**Do not** re-implement vault logic in TypeScript or duplicate crypto in `upriv-daemon` — only `upriv-core`.
+
+---
+
+## Legacy reference: `temp/upriv/` (local, gitignored)
+
+The repo may contain **`temp/upriv/`** on disk — a **frozen snapshot of an older Tauri-based tree** (pre–Electron migration). It is listed in `.gitignore` and is **not** part of the active build or CI.
+
+| Aspect | `temp/upriv/` (legacy) | `dev/` (active) |
+|--------|------------------------|-----------------|
+| Desktop shell | Tauri 2 (`src-tauri/`) | Electron + `upriv-daemon` |
+| `upriv-core` | Large — vault, crypto, `seven_zip`, mount, session, … | Minimal scaffold |
+| UI wiring | Often **real** Tauri commands | **Mocks** until RPC port |
+| Code quality | Grew fast; **inconsistent, shortcuts, debt** | Intentional boundaries, reviews, typed errors |
+
+**How agents may use `temp/`:**
+
+- **OK:** Read for **ideas**, flow order, edge cases, “how did we solve X before?”, test data shapes, 7z integration sketches.  
+- **OK:** Compare on-disk layout against `prod-example/` and SDD.  
+- **Not OK:** Copy-paste modules into `dev/` without re-reading PRD/SDD/`ARCHITECTURE.md`.  
+- **Not OK:** Treat Tauri command names, folder layout, or error handling as the contract — **active contract is `dev/` + docs**.  
+- **Not OK:** Assume temp behavior matches current product rules (FIFO, i18n errors, Electron bridge, session rules may differ).
+
+When temp and canonical docs conflict, **`dev/docs/` wins**. When porting an idea from temp, **rewrite** into the current architecture (stdio RPC, `@upriv/shared` types, domain error maps).
 
 ---
 
@@ -60,6 +107,7 @@ When product behavior, security, or on-disk layout is unclear, **read the canoni
 ```text
 upriv/
 ├── .agent/                 # This file — AI project context
+├── temp/                   # Optional local snapshot (gitignored) — see § Legacy reference
 ├── prod-example/           # Static demo vault-root (no build link to dev/)
 ├── README.md
 └── dev/
@@ -193,7 +241,7 @@ Work in this order unless the user explicitly reprioritizes:
 8. Windows packaging (`7zz`, `.exe`, WinFsp deps)  
 9. Later: macOS, RN Android, iOS  
 
-Current scaffold: step 1 barely started (`app_version` only).
+Current scaffold: **UI + Electron shell done on mocks**; **Rust vault step 1** (`config`, `vault_list`, errors) is the active milestone — see § Current development phase.
 
 ---
 

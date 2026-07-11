@@ -1,6 +1,11 @@
 import { Icon, type IconName } from "@/components/icons";
 import { useTranslation } from "@/i18n";
-import { resolveVaultListStatus, type VaultDisplayStatus, type VaultListItem } from "@upriv/shared";
+import {
+  resolveVaultCanSeal,
+  resolveVaultListStatus,
+  type VaultDisplayStatus,
+  type VaultListItem,
+} from "@upriv/shared";
 import type { VaultPipelineListStatus } from "./VaultList";
 import { vaultStatusIconClass, vaultStatusRowClass } from "@/theme";
 import { VaultFileManagerIndicator } from "./VaultFileManagerIndicator";
@@ -112,7 +117,7 @@ export function VaultBlockCard({
         <VaultLockButton
           status={status}
           storageMode={vault.storageMode}
-          canSeal={vault.canSeal}
+          canSeal={resolveVaultCanSeal(vault)}
           layout="block"
           onLock={() => onLockVault(vault)}
           onUnlock={() => onUnlockVault(vault)}

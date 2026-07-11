@@ -1,6 +1,7 @@
 import { Icon, type IconName } from "@/components/icons";
 import { useTranslation } from "@/i18n";
 import {
+  resolveVaultCanSeal,
   resolveVaultListStatus,
   type VaultDisplayStatus,
   type VaultListViewMode,
@@ -164,7 +165,7 @@ export function VaultRow({
         <VaultLockButton
           status={status}
           storageMode={vault.storageMode}
-          canSeal={vault.canSeal}
+          canSeal={resolveVaultCanSeal(vault)}
           onLock={() => onLockVault(vault)}
           onUnlock={() => onUnlockVault(vault)}
           onSeal={() => onSealVault(vault)}
