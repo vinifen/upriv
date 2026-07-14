@@ -82,7 +82,9 @@ function setWorkspaceCargoVersion() {
   }
 
   const nextSection = section.replace(versionLine, `version = "${version}"`);
-  const next = content.replace(sectionMatch[0], `[workspace.package]${nextSection}`);
+  // Always keep a newline after the table header (TOML requires it).
+  const body = nextSection.startsWith("\n") ? nextSection : `\n${nextSection}`;
+  const next = content.replace(sectionMatch[0], `[workspace.package]${body}`);
   if (next === content) return false;
   fs.writeFileSync(filePath, next);
   console.log(`updated ${relativePath}`);

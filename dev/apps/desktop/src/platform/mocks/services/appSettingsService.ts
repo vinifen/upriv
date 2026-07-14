@@ -3,7 +3,7 @@ import { DEFAULT_APP_SETTINGS, MOCK_UPRIV_ROOT_PATH } from "@/platform/mocks/dat
 
 let runtimeSettings = structuredClone(DEFAULT_APP_SETTINGS);
 
-/** Prototype app settings — in-memory until `app_settings_get` / `app_settings_save` RPC. */
+/** Prototype app settings — in-memory for browser. Desktop uses daemon RPC. */
 export const mockAppSettingsService: AppSettingsService = {
   async load() {
     return structuredClone(runtimeSettings);

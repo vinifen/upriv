@@ -152,12 +152,37 @@ ipcMain.handle(
       return null;
     }
 
+    if (method === "pick_directory") {
+      const defaultPath =
+        typeof params?.defaultPath === "string" && params.defaultPath.trim()
+          ? params.defaultPath.trim()
+          : undefined;
+      const title =
+        typeof params?.title === "string" && params.title.trim()
+          ? params.title.trim()
+          : undefined;
+      const options: Electron.OpenDialogOptions = {
+        properties: ["openDirectory", "createDirectory"],
+        ...(title ? { title } : {}),
+        ...(defaultPath ? { defaultPath } : {}),
+      };
+      const result = mainWindow
+        ? await dialog.showOpenDialog(mainWindow, options)
+        : await dialog.showOpenDialog(options);
+      if (result.canceled || result.filePaths.length === 0) {
+        return null;
+      }
+      return result.filePaths[0];
+    }
+
     const activeDaemon = await ensureDaemon();
     return daemonRpc(activeDaemon, method, params);
   },
 );
 
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
+// Single-instance is the concurrency guard for vault-root mutations (setup / alias write).
+// A second process only focuses the existing window — it does not run another daemon setup.
 if (!gotSingleInstanceLock) {
   app.quit();
 } else {

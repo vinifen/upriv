@@ -11,4 +11,5 @@ export * from "./vault";
 export * from "./vault-create";
 export * from "./vault-lifecycle";
 export * from "./vault-list";
+export * from "./vault-root";
 export * from "./vault-settings";

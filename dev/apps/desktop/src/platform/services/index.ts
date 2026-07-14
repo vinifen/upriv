@@ -8,5 +8,6 @@ export {
   useServices,
   useVaultFileSystemService,
   useVaultLifecycleService,
+  useVaultRootService,
   useVaultService,
 } from "./ServicesContext";

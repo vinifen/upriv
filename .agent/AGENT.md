@@ -2,7 +2,7 @@
 
 **Product:** portable encrypted vault manager (universal `.7z` containers).  
 **Repo:** monorepo with `dev/` (implementation), `prod-example/` (static vault layout demo).  
-**Status:** v0.1 — **Electron desktop shell + full mock UI**; **`upriv-core` minimal** (logging, time, `app_version` only). Next milestone: **vault logic in Rust** (`vault_list` → open/close pipeline).
+**Status:** v0.1 — **Electron desktop shell**; **vault-root + app settings live** via daemon; vault list / open-close still mock. Next milestone: **`vault_list` → open/close pipeline** in Rust.
 
 When product behavior, security, or on-disk layout is unclear, **read the canonical docs** (below) before inventing behavior.
 
@@ -10,25 +10,26 @@ When product behavior, security, or on-disk layout is unclear, **read the canoni
 
 ## Current development phase (read this first)
 
-We are **past the Tauri → Electron migration** and **past UI/lifecycle scaffolding**. The desktop app is usable end-to-end **on mocks**; real vault I/O does not exist yet in the active codebase.
+We are **past the Tauri → Electron migration** and **past UI/lifecycle scaffolding**. Vault-root discovery/setup and settings persistence talk to **`upriv-daemon`**; vault I/O (list/open/mount) is still mock.
 
 | Layer | State in `dev/` (active) |
 |-------|---------------------------|
-| **React UI** | Vault list, lifecycle FIFO queue, file-manager, settings, i18n errors — **mock services** |
+| **React UI** | Vault list / lifecycle / file-manager still **mock**; settings + **`VaultRootGate`** / setup / repair use live vault-root + app-settings services |
 | **Electron** | Shell, preload, daemon spawn, IPC timeouts, packaging scaffold |
-| **upriv-daemon** | stdio JSON-RPC — `app_version`, `app_shutdown` only |
-| **upriv-core** | `logging`, `time`, `app_version()` — **no vault/crypto/7zz yet** |
-| **Integration** | `createServices()` → `mockServices` until Rust RPCs land |
+| **upriv-daemon** | stdio JSON-RPC — `app_version`, `app_shutdown`, `app_settings_*`, `vault_root_*` (resolve/setup/alias/nearby/inspect), `pick_directory` |
+| **upriv-core** | `logging`, `time`, `app_version()`, **`paths/`** (resolve, init, settings.toml, alias) — **no vault/crypto/7zz yet** |
+| **Integration** | `createDesktopServices()` → live `vaultRoot` + `appSettings`; other services mock until their RPCs land |
 
 **What to build next (default order):**
 
-1. `upriv-core`: config/paths, `vault_list`, domain errors (`wrong_password`, …)  
-2. `rpc.rs` + `CORE_RPC_COMMANDS` + `lib/rpc.ts` for each handler  
-3. `platform/desktop/` adapters replacing mocks (one RPC at a time)  
+1. `upriv-core`: `vault_list`, domain errors (`wrong_password`, …) — vault-root/paths already landed  
+2. `rpc.rs` + `CORE_RPC_COMMANDS` + `lib/rpc.ts` for each new handler  
+3. `platform/desktop/` adapters replacing remaining mocks (one RPC at a time)  
 4. Open/close/seal pipeline with `7zz` (timeouts/kill in Rust — see SDD §8.2.2)  
 5. Mount (FUSE / WinFsp) and remaining RPCs from SDD §8.2–8.3  
 
-**Do not** re-implement vault logic in TypeScript or duplicate crypto in `upriv-daemon` — only `upriv-core`.
+**Do not** re-implement vault logic in TypeScript or duplicate crypto in `upriv-daemon` — only `upriv-core`.  
+**Do not** reimplement vault-root resolution in TS — use existing `vault_root_*` RPCs / `VaultRootService`.
 
 ---
 
@@ -223,6 +224,22 @@ Marker: **`.upriv/settings.toml`** at vault-root. Per-vault: **`vaults/<vault_id
 Reference tree: **`prod-example/`** (standalone; set `UPRIV_VAULT_ROOT` to test desktop against it).
 
 **Naming:** `vault_id` normalized; `display_name` and main `.7z` keep user spelling (see `prod-example/README.md` forbidden-character rules).
+
+### Vault-root discovery (launch)
+
+Order in `upriv-core` `paths::resolve_vault_root`:
+
+1. Explicit path (`--vault` / `UPRIV_VAULT_ROOT` / caller) when valid  
+2. **Fixed mode** (`auto_detect = false`): read **`.upriv-root`** beside the binary (one-line absolute path). Alias exists **only** in this mode.  
+3. **Auto mode** (default): search from nearby anchor then cwd; **ignore** alias  
+4. Nothing found → UI setup modal: create default structure nearby (no alias) **or** choose another folder (write/rewrite `.upriv-root`). Switching back to auto **clears** the alias; changing the fixed path **rewrites** it.
+
+**Nearby anchor:**
+
+| Launch | App home (create nearby + `.upriv-root`) |
+|--------|------------------------------------------|
+| `npm run electron:dev` | `dev/` via `UPRIV_NEARBY_ANCHOR` → **`dev/.upriv/`** and **`dev/.upriv-root`** |
+| Packaged `.exe` / AppImage | Directory of the binary (env unset) |
 
 ---
 

@@ -55,8 +55,29 @@ export function resolveDaemonBinary(): string {
   return path.join(__dirname, "../../../target/release/upriv-daemon");
 }
 
+/** Dev workspace (`…/upriv/dev`) — Electron `dist/` → `../../..`. */
+export function resolveDevNearbyAnchor(): string {
+  return path.resolve(__dirname, "../../..");
+}
+
 function daemonEnv(): NodeJS.ProcessEnv {
-  const keys = ["PATH", "HOME", "USER", "LANG", "LC_ALL", "TMPDIR", "TEMP", "TMP"] as const;
+  const keys = [
+    "PATH",
+    "HOME",
+    "USER",
+    "LANG",
+    "LC_ALL",
+    "TMPDIR",
+    "TEMP",
+    "TMP",
+    "UPRIV_VAULT_ROOT",
+    "UPRIV_NEARBY_ANCHOR",
+    "UPRIV_DEV",
+    // AppImageKit — portable root is beside the .AppImage file, not the FUSE mount.
+    "APPIMAGE",
+    "APPDIR",
+    "OWD",
+  ] as const;
   const env: NodeJS.ProcessEnv = {};
   for (const key of keys) {
     const value = process.env[key];
@@ -66,6 +87,33 @@ function daemonEnv(): NodeJS.ProcessEnv {
     for (const key of ["XDG_RUNTIME_DIR", "XDG_CONFIG_HOME", "XDG_DATA_HOME"] as const) {
       const value = process.env[key];
       if (value !== undefined) env[key] = value;
+    }
+  }
+
+  const isDev = process.argv.includes("--dev") || process.env.UPRIV_DEV === "1";
+  if (!app.isPackaged) {
+    // Unpackaged (dev or `electron .`): always pin app home so resolve is strict
+    // and cannot walk into `prod-example/` or other sibling trees.
+    if (isDev) {
+      env.UPRIV_DEV = "1";
+    }
+    if (!env.UPRIV_NEARBY_ANCHOR) {
+      env.UPRIV_NEARBY_ANCHOR = resolveDevNearbyAnchor();
+    }
+  } else if (!env.UPRIV_NEARBY_ANCHOR) {
+    // Linux AppImage: `$APPIMAGE` is the real file on disk; `current_exe` is under /tmp/.mount_*.
+    const appImage = process.env.APPIMAGE;
+    if (appImage) {
+      env.UPRIV_NEARBY_ANCHOR = path.dirname(appImage);
+    } else {
+      // Portable / installed: folder beside the executable (or beside the .app on macOS).
+      const exe = app.getPath("exe");
+      if (process.platform === "darwin" && exe.includes(".app/Contents/MacOS")) {
+        // …/Upriv.app/Contents/MacOS/Upriv → directory that contains Upriv.app
+        env.UPRIV_NEARBY_ANCHOR = path.resolve(path.dirname(exe), "../../..");
+      } else {
+        env.UPRIV_NEARBY_ANCHOR = path.dirname(exe);
+      }
     }
   }
   return env;

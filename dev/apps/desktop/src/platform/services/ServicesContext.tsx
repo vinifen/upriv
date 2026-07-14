@@ -47,3 +47,7 @@ export function useVaultLifecycleService(): AppServices["lifecycle"] {
 export function useCreateVaultService(): AppServices["createVault"] {
   return useServices().createVault;
 }
+
+export function useVaultRootService(): AppServices["vaultRoot"] {
+  return useServices().vaultRoot;
+}

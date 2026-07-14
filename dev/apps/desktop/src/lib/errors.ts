@@ -9,6 +9,8 @@ import {
 /** Desktop bridge / shell errors (not returned by Rust). */
 export const BRIDGE_ERROR_CODES = {
   DAEMON_UNAVAILABLE: "daemon_unavailable",
+  /** IPC/preload/serialization failure — daemon may still be up. */
+  BRIDGE_INVOKE_FAILED: "bridge_invoke_failed",
   RPC_TIMEOUT: "rpc_timeout",
   INVALID_RESPONSE: "invalid_response",
   SHELL_UNAVAILABLE: "shell_unavailable",
@@ -18,10 +20,4 @@ export type BridgeErrorCode = (typeof BRIDGE_ERROR_CODES)[keyof typeof BRIDGE_ER
 
 export type { RpcErrorBody } from "@upriv/shared";
 
-export {
-  RPC_PROTOCOL_ERROR_CODES,
-  isRpcError,
-  isRpcErrorBody,
-  parseRpcErrorBody,
-  RpcError,
-};
+export { RPC_PROTOCOL_ERROR_CODES, isRpcError, isRpcErrorBody, parseRpcErrorBody, RpcError };

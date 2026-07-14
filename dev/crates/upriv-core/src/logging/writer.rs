@@ -5,8 +5,8 @@ use std::sync::Mutex;
 
 use super::config::LogConfig;
 use super::format::format_log_line;
-use crate::time::{utc_filename_stamp, utc_timestamp_iso_millis};
 use super::LogLevel;
+use crate::time::{utc_filename_stamp, utc_timestamp_iso_millis};
 
 struct ActiveFile {
     path: PathBuf,
@@ -110,10 +110,7 @@ impl Logger {
             *guard = Some(open_or_create_active(&self.config)?);
         }
 
-        let should_rotate = guard
-            .as_ref()
-            .expect("active log file")
-            .line_index
+        let should_rotate = guard.as_ref().expect("active log file").line_index
             >= self.config.effective_entries_per_file();
         if should_rotate {
             rotate_active(&self.config, guard)?;
@@ -166,10 +163,7 @@ fn try_resume_current(config: &LogConfig) -> io::Result<Option<ActiveFile>> {
     candidates.sort_by_key(|(seq, _)| *seq);
     let (seq, path) = candidates.pop().expect("candidates is non-empty");
     for (_, stale) in candidates {
-        eprintln!(
-            "upriv-core: archiving stale active log {}",
-            stale.display()
-        );
+        eprintln!("upriv-core: archiving stale active log {}", stale.display());
         let archived = archive_current_path(&stale);
         fs::rename(&stale, &archived)?;
     }
@@ -353,9 +347,9 @@ mod tests {
             .map(|entry| entry.file_name().to_string_lossy().into_owned())
             .collect();
 
-        assert!(names.iter().any(|name| {
-            !name.starts_with("current-") && name.ends_with(".log")
-        }));
+        assert!(names
+            .iter()
+            .any(|name| { !name.starts_with("current-") && name.ends_with(".log") }));
         assert!(names.iter().any(|name| name.starts_with("current-000002-")));
         let _ = fs::remove_dir_all(&dir);
     }
@@ -379,12 +373,7 @@ mod tests {
         let current = fs::read_dir(&dir)
             .expect("read")
             .filter_map(|entry| entry.ok())
-            .find(|entry| {
-                entry
-                    .file_name()
-                    .to_string_lossy()
-                    .starts_with("current-")
-            })
+            .find(|entry| entry.file_name().to_string_lossy().starts_with("current-"))
             .expect("current file");
         let content = fs::read_to_string(current.path()).expect("read");
         assert!(!content.contains("skipped"));
@@ -408,7 +397,12 @@ mod tests {
         let logger = Logger::open(LogConfig::disabled(dir.clone())).expect("open");
         logger.info("ignored", &[]);
         logger.flush();
-        assert!(!dir.exists() || fs::read_dir(&dir).map(|mut d| d.next().is_none()).unwrap_or(true));
+        assert!(
+            !dir.exists()
+                || fs::read_dir(&dir)
+                    .map(|mut d| d.next().is_none())
+                    .unwrap_or(true)
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -492,7 +486,11 @@ mod tests {
             .map(|entry| entry.file_name().to_string_lossy().into_owned())
             .filter(|name| name.starts_with("current-"))
             .collect();
-        assert_eq!(current.len(), 1, "expected a single active file, got {current:?}");
+        assert_eq!(
+            current.len(),
+            1,
+            "expected a single active file, got {current:?}"
+        );
         assert!(current[0].starts_with("current-000002-"));
         // The lower-seq file must have been archived, not deleted.
         assert!(dir.join("000001-20260101000000.log").exists());

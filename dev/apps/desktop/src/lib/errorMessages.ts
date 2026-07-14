@@ -9,6 +9,7 @@ import { BRIDGE_ERROR_CODES, type BridgeErrorCode } from "./errors";
 /** User-facing: maps desktop bridge wire codes → i18n keys. Keep in sync with `locales/*.json`. */
 export const BRIDGE_ERROR_I18N_KEYS = {
   [BRIDGE_ERROR_CODES.DAEMON_UNAVAILABLE]: "error.service_unavailable",
+  [BRIDGE_ERROR_CODES.BRIDGE_INVOKE_FAILED]: "error.bridge_invoke_failed",
   [BRIDGE_ERROR_CODES.RPC_TIMEOUT]: "error.operation_timed_out",
   [BRIDGE_ERROR_CODES.INVALID_RESPONSE]: "error.unexpected",
   [BRIDGE_ERROR_CODES.SHELL_UNAVAILABLE]: "error.service_unavailable",

@@ -32,7 +32,15 @@ export interface AppSettingsConfig {
     keep_last_entries: number;
   };
   app: {
+    /**
+     * Wire/UI only — derived from app-home `.upriv-root` (`status=active` → false).
+     * Not persisted in `settings.toml`.
+     */
     auto_detect_vault_root: boolean;
+    /**
+     * Wire/UI only — from `.upriv-root` when fixed; empty when auto.
+     * Not persisted in `settings.toml`.
+     */
     upriv_root_path: string;
   };
 }

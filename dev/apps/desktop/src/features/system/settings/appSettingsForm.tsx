@@ -13,6 +13,7 @@ import {
   LOG_KEEP_LAST_ENTRY_OPTIONS,
   LOG_KEEP_LAST_UNLIMITED,
   SUPPORTED_LOCALES,
+  VAULT_ROOT_ALIAS_FILE,
   logFileCountForKeepLast,
   type AppSettingsConfig,
   type LogLevel,
@@ -20,7 +21,7 @@ import {
   type VaultListItem,
   resolveVaultDisplayStatus,
 } from "@upriv/shared";
-import { useAppSettingsService, useVaultService } from "@/platform/services";
+import { useAppSettingsService, useVaultRootService, useVaultService } from "@/platform/services";
 import { vaultStatusI18nKey } from "@/theme/vault-status";
 import {
   downloadVaultsZip,
@@ -468,11 +469,27 @@ export function AppSettingsLoggingSection({ config, onChange }: SectionPatchProp
   );
 }
 
-export function AppSettingsBehaviorSection({ config, onChange }: SectionPatchProps<"app">) {
+export function AppSettingsBehaviorSection({
+  config,
+  onChange,
+  autoSwitchWarning = null,
+  fixedPathLoading = false,
+  onFixedPathLoadingChange,
+  nearbyUnreadable = false,
+  onRetryNearbyStatus,
+}: SectionPatchProps<"app"> & {
+  autoSwitchWarning?: "create" | "replace" | null;
+  fixedPathLoading?: boolean;
+  onFixedPathLoadingChange?: (loading: boolean) => void;
+  nearbyUnreadable?: boolean;
+  onRetryNearbyStatus?: () => void;
+}) {
   const { t } = useTranslation();
   const appSettingsService = useAppSettingsService();
+  const vaultRootService = useVaultRootService();
   const rootModeGroup = useId();
   const useAutoDetect = config.auto_detect_vault_root;
+  const aliasLoadGen = useRef(0);
 
   return (
     <SettingsFormGrid>
@@ -496,25 +513,96 @@ export function AppSettingsBehaviorSection({ config, onChange }: SectionPatchPro
             title={t("modal.app_settings.option.upriv_root.auto")}
             description={t("modal.app_settings.option.upriv_root.auto_desc")}
             badge="default"
-            onSelect={() => onChange({ auto_detect_vault_root: true, upriv_root_path: "" })}
+            onSelect={() => {
+              aliasLoadGen.current += 1;
+              onFixedPathLoadingChange?.(false);
+              onChange({ auto_detect_vault_root: true, upriv_root_path: "" });
+            }}
+            footer={
+              autoSwitchWarning && useAutoDetect ? (
+                <p
+                  className="rounded-md bg-surface-container px-3 py-2 text-xs leading-relaxed text-on-surface"
+                  role="status"
+                >
+                  {autoSwitchWarning === "replace"
+                    ? t("modal.app_settings.upriv_root.switch_auto_replace_notice", {
+                        file: VAULT_ROOT_ALIAS_FILE,
+                      })
+                    : t("modal.app_settings.upriv_root.switch_auto_create_notice", {
+                        file: VAULT_ROOT_ALIAS_FILE,
+                      })}
+                </p>
+              ) : null
+            }
           />
           <PolicyRadioOption
             groupName={rootModeGroup}
             value="fixed"
             checked={!useAutoDetect}
             title={t("modal.app_settings.option.upriv_root.fixed")}
-            description={t("modal.app_settings.option.upriv_root.fixed_desc")}
-            onSelect={() =>
-              onChange({
-                auto_detect_vault_root: false,
-                upriv_root_path: config.upriv_root_path,
-              })
-            }
+            description={t("modal.app_settings.option.upriv_root.fixed_desc", {
+              file: VAULT_ROOT_ALIAS_FILE,
+            })}
+            onSelect={() => {
+              const current = config.upriv_root_path.trim();
+              if (current) {
+                onChange({ auto_detect_vault_root: false, upriv_root_path: current });
+                return;
+              }
+              const gen = ++aliasLoadGen.current;
+              onFixedPathLoadingChange?.(true);
+              onChange({ auto_detect_vault_root: false, upriv_root_path: "" });
+              void vaultRootService
+                .readAlias()
+                .then((alias) => {
+                  if (gen !== aliasLoadGen.current) return;
+                  onChange({
+                    auto_detect_vault_root: false,
+                    upriv_root_path: alias?.path.trim() || "",
+                  });
+                })
+                .finally(() => {
+                  if (gen !== aliasLoadGen.current) return;
+                  onFixedPathLoadingChange?.(false);
+                });
+            }}
             footer={
               <div className="space-y-2">
                 <p className="text-xs leading-relaxed text-on-surface-variant">
                   {t("modal.app_settings.field.upriv_root_help")}
                 </p>
+                {nearbyUnreadable && useAutoDetect ? (
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                    <p
+                      className="rounded-md bg-error-container/10 px-3 py-2 text-xs leading-relaxed text-on-error-container"
+                      role="alert"
+                    >
+                      {t("modal.vault_root_setup.error_io")}
+                    </p>
+                    {onRetryNearbyStatus ? (
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        size="md"
+                        className="w-full shrink-0 sm:w-auto"
+                        onClick={onRetryNearbyStatus}
+                      >
+                        {t("action.retry")}
+                      </Button>
+                    ) : null}
+                  </div>
+                ) : null}
+                {config.upriv_root_path.trim() ? (
+                  <p className="text-xs leading-relaxed text-on-surface-variant">
+                    {t("modal.app_settings.field.upriv_root_remembered", {
+                      file: VAULT_ROOT_ALIAS_FILE,
+                    })}
+                  </p>
+                ) : fixedPathLoading ? (
+                  <p className="text-xs leading-relaxed text-on-surface-variant" role="status">
+                    {t("modal.app_settings.field.upriv_root_loading")}
+                  </p>
+                ) : null}
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-stretch">
                   <input
                     type="text"
@@ -531,12 +619,30 @@ export function AppSettingsBehaviorSection({ config, onChange }: SectionPatchPro
                     variant="secondary"
                     size="md"
                     className="w-full shrink-0 sm:w-auto"
-                    onClick={() =>
-                      onChange({
-                        auto_detect_vault_root: false,
-                        upriv_root_path: appSettingsService.getDefaultRootPathSuggestion(),
-                      })
-                    }
+                    disabled={fixedPathLoading}
+                    onClick={() => {
+                      const suggested = config.upriv_root_path.trim();
+                      void (
+                        suggested
+                          ? Promise.resolve(suggested)
+                          : vaultRootService.readAlias().then((alias) => alias?.path.trim() || "")
+                      ).then((defaultPath) =>
+                        vaultRootService
+                          .pickFolder(
+                            defaultPath || null,
+                            t("modal.vault_root_setup.pick_folder_title"),
+                          )
+                          .then((picked) => {
+                            onChange({
+                              auto_detect_vault_root: false,
+                              upriv_root_path:
+                                picked?.trim() ||
+                                defaultPath ||
+                                appSettingsService.getDefaultRootPathSuggestion(),
+                            });
+                          }),
+                      );
+                    }}
                   >
                     {t("modal.app_settings.action.choose_folder")}
                   </Button>

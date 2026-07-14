@@ -1,7 +1,9 @@
 import { BRIDGE_ERROR_CODES, RpcError, isRpcError } from "./errors";
 
-/** Matches `formatRpcError` in `apps/electron/src/daemon.ts` (`code: message`). */
-const DAEMON_ERROR_MESSAGE_RE = /^([a-z][a-z0-9_]*): (.+)$/;
+/** Matches `formatRpcError` in `apps/electron/src/daemon.ts` (`code: message`).
+ * Electron wraps IPC failures as `Error invoking remote method '…': Error: code: message`.
+ * Message may be multiline (e.g. TOML parse errors) — use `[\s\S]` not `.`. */
+const DAEMON_ERROR_MESSAGE_RE = /\b([a-z][a-z0-9_]*): ([\s\S]+)$/;
 
 /** True when the renderer has a working Electron preload bridge (`window.upriv.invoke`). */
 export function isElectronRenderer(): boolean {
@@ -26,6 +28,17 @@ const METHOD_TIMEOUT_MS: Partial<Record<string, number>> = {
   app_shutdown: 5_000,
   app_version: 10_000,
   app_exit: 15_000,
+  app_settings_get: 15_000,
+  app_settings_save: 30_000,
+  pick_directory: 120_000,
+  vault_root_resolve: 15_000,
+  vault_root_setup_nearby: 30_000,
+  vault_root_setup_path: 30_000,
+  vault_root_read_alias: 10_000,
+  vault_root_rewrite_alias: 10_000,
+  vault_root_deactivate_alias: 10_000,
+  vault_root_nearby_status: 10_000,
+  vault_root_inspect_path: 10_000,
 };
 
 function parseInvokeFailure(error: unknown): RpcError {
@@ -36,10 +49,11 @@ function parseInvokeFailure(error: unknown): RpcError {
     if (match) {
       return new RpcError(match[1], match[2]);
     }
-    return new RpcError(BRIDGE_ERROR_CODES.DAEMON_UNAVAILABLE, error.message);
+    // Electron/preload/serialize — not the same as "daemon process down".
+    return new RpcError(BRIDGE_ERROR_CODES.BRIDGE_INVOKE_FAILED, error.message);
   }
 
-  return new RpcError(BRIDGE_ERROR_CODES.DAEMON_UNAVAILABLE, String(error));
+  return new RpcError(BRIDGE_ERROR_CODES.BRIDGE_INVOKE_FAILED, String(error));
 }
 
 /**

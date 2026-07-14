@@ -1,4 +1,8 @@
-export { CORE_RPC_COMMANDS, DESKTOP_ONLY_RPC_COMMANDS, SHELL_ONLY_RPC_COMMANDS } from "./commands";
+export {
+  CORE_RPC_COMMANDS,
+  DESKTOP_ONLY_RPC_COMMANDS,
+  SHELL_ONLY_RPC_COMMANDS,
+} from "./commands";
 export type {
   CoreRpcCommand,
   DesktopOnlyRpcCommand,

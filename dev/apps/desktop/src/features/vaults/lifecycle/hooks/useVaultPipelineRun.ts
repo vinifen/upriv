@@ -140,8 +140,7 @@ export function useVaultPipelineRun() {
 
   const isVaultPipelineBusy = useCallback((vaultId: string) => {
     return (
-      runRef.current?.vaultId === vaultId ||
-      queueRef.current.some((job) => job.vaultId === vaultId)
+      runRef.current?.vaultId === vaultId || queueRef.current.some((job) => job.vaultId === vaultId)
     );
   }, []);
 

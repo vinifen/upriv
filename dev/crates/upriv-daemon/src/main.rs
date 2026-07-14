@@ -62,6 +62,22 @@ fn run() -> io::Result<()> {
         payload: json!({ "version": upriv_core::app_version() }),
     })?;
 
+    match upriv_core::app_home_dir() {
+        Ok(home) => {
+            let nearby = upriv_core::setup_nearby_anchor()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|_| home.display().to_string());
+            eprintln!(
+                "[upriv-daemon] startup app_home={} nearby_anchor={}",
+                home.display(),
+                nearby
+            );
+        }
+        Err(error) => {
+            eprintln!("[upriv-daemon] startup: could not resolve app_home: {error}");
+        }
+    }
+
     let stdin = io::stdin();
     for line in stdin.lock().lines() {
         let line = match line {
@@ -93,7 +109,10 @@ fn run() -> io::Result<()> {
             Err(error) => {
                 eprintln!("[upriv-daemon] invalid request JSON: {error}");
                 if let Some(id) = extract_request_id(trimmed) {
-                    write_out(&invalid_request(id, format!("invalid request JSON: {error}")))?;
+                    write_out(&invalid_request(
+                        id,
+                        format!("invalid request JSON: {error}"),
+                    ))?;
                 }
                 continue;
             }

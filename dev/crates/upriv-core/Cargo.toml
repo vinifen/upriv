@@ -10,3 +10,11 @@ rust-version.workspace = true
 name = "upriv_core"
 path = "src/lib.rs"
 crate-type = ["rlib", "cdylib", "staticlib"]
+
+[dependencies]
+serde = { version = "=1.0.228", features = ["derive"] }
+thiserror = "2"
+toml = "0.8"
+
+[dev-dependencies]
+tempfile = "3"

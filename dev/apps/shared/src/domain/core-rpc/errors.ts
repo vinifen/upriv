@@ -27,8 +27,17 @@ export const RPC_PROTOCOL_ERROR_CODES = {
 export type RpcProtocolErrorCode =
   (typeof RPC_PROTOCOL_ERROR_CODES)[keyof typeof RPC_PROTOCOL_ERROR_CODES];
 
+/**
+ * Duck-typed: Vite may load `@upriv/shared` more than once, so `instanceof RpcError` is unreliable.
+ */
 export function isRpcError(error: unknown): error is RpcError {
-  return error instanceof RpcError;
+  if (typeof error !== "object" || error === null) return false;
+  const record = error as { name?: unknown; code?: unknown; message?: unknown };
+  return (
+    record.name === "RpcError" &&
+    typeof record.code === "string" &&
+    typeof record.message === "string"
+  );
 }
 
 export function isRpcErrorBody(value: unknown): value is RpcErrorBody {

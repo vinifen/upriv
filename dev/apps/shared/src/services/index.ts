@@ -8,4 +8,6 @@ export type {
 } from "./lifecycle/VaultLifecycleService";
 export type { LogService } from "./logs/LogService";
 export type { VaultService } from "./vault/VaultService";
+export type { VaultRootService } from "./vault-root/VaultRootService";
+export type { IncompleteReplacePolicy } from "../domain/vault-root";
 export type { AppServices } from "./types";
