@@ -11,8 +11,9 @@ import type {
  * Desktop → daemon RPC; browser → mock.
  *
  * Disk-mutating methods (`setupNearby`, `setupAtPath`, `rewriteAlias`, `deactivateAlias`)
- * should only be called from `AppSettingsContext`, `VaultRootSetupModal`, or
- * `VaultRootRepairModal` — not from arbitrary UI — to avoid duplicate side effects.
+ * should only be called from `AppSettingsContext`, `VaultRootSetupModal`,
+ * `VaultRootRepairModal`, or `VaultRootAliasRecoveryModal` — not from arbitrary UI —
+ * to avoid duplicate side effects.
  */
 export type { IncompleteReplacePolicy };
 

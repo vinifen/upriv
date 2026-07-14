@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useId, useState } from "react";
 import { Button, Modal } from "@/components/ui";
+import { PolicyRadioOption, settingsControlClass } from "@/components/settings";
 import { useTranslation } from "@/i18n";
 import {
   SUPPORTED_LOCALES,
@@ -20,13 +21,15 @@ interface VaultRootSetupModalProps {
   onConfigured: () => void;
 }
 
-type Step = "choose" | "other_path" | "repair" | "confirm_delete";
+type Mode = "auto" | "fixed";
+type Step = "choose" | "repair" | "confirm_delete";
 
 /**
  * Blocking first-run when no vault-root is found.
- * - Nearby: create default `.upriv/` next to the app (auto-detect).
- * - Other path: initialize if needed + write active `.upriv-root` alias.
- * - Incomplete `.upriv/` at chosen path → rename (recommended) or delete (+ confirm).
+ * Choose mode with radios (same pattern as Settings), then Continue:
+ * - Auto: create default `.upriv/` next to the app.
+ * - Fixed: initialize if needed + write active `.upriv-root` alias.
+ * Incomplete `.upriv/` → rename (recommended) or delete (+ confirm).
  */
 export function VaultRootSetupModal({
   open,
@@ -38,14 +41,20 @@ export function VaultRootSetupModal({
   const vaultRoot = useVaultRootService();
   const appSettingsService = useAppSettingsService();
   const { settings, patchSettings } = useAppSettingsContext();
+  const rootModeGroup = useId();
   const [step, setStep] = useState<Step>("choose");
+  const [mode, setMode] = useState<Mode>("auto");
+  const [repairPolicy, setRepairPolicy] = useState<IncompleteReplacePolicy>("rename");
   const [pathInput, setPathInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const repairPolicyGroup = useId();
 
   useEffect(() => {
     if (!open) return;
     setStep("choose");
+    setMode("auto");
+    setRepairPolicy("rename");
     setPathInput("");
     setBusy(false);
     setError(null);
@@ -60,12 +69,12 @@ export function VaultRootSetupModal({
   );
 
   const finish = useCallback(
-    async (rootPath: string, mode: "auto" | "fixed") => {
+    async (rootPath: string, nextMode: Mode) => {
       const saved = await patchSettings(
         {
           app: {
-            auto_detect_vault_root: mode === "auto",
-            upriv_root_path: mode === "fixed" ? rootPath : "",
+            auto_detect_vault_root: nextMode === "auto",
+            upriv_root_path: nextMode === "fixed" ? rootPath : "",
           },
         },
         { vaultRootAlreadyApplied: true },
@@ -86,16 +95,17 @@ export function VaultRootSetupModal({
       .then(async ({ rootPath }) => {
         await finish(rootPath, "auto");
       })
-      .catch((error) => {
-        if (isRpcError(error) && error.code === VAULT_ROOT_ERROR_CODES.INCOMPLETE) {
+      .catch((caught) => {
+        if (isRpcError(caught) && caught.code === VAULT_ROOT_ERROR_CODES.INCOMPLETE) {
           // Nearby incomplete should normally be handled by VaultRootRepairModal;
           // surface repair for this edge case.
           setPathInput(nearbyAnchor);
+          setMode("auto");
           setStep("repair");
           setError(null);
           return;
         }
-        setError(t(desktopErrorI18nKey(error, "modal.vault_root_setup.error_init")));
+        setError(t(desktopErrorI18nKey(caught, "modal.vault_root_setup.error_init")));
       })
       .finally(() => {
         setBusy(false);
@@ -109,12 +119,12 @@ export function VaultRootSetupModal({
       .pickFolder(pathInput.trim() || null, t("modal.vault_root_setup.pick_folder_title"))
       .then((picked) => {
         if (picked) setPathInput(picked);
-        else if (!pathInput) {
+        else if (!pathInput.trim()) {
           setPathInput(appSettingsService.getDefaultRootPathSuggestion());
         }
       })
-      .catch((error) => {
-        setError(t(desktopErrorI18nKey(error, "modal.vault_root_setup.error_pick")));
+      .catch((caught) => {
+        setError(t(desktopErrorI18nKey(caught, "modal.vault_root_setup.error_pick")));
       })
       .finally(() => {
         setBusy(false);
@@ -134,17 +144,18 @@ export function VaultRootSetupModal({
           setStep("choose");
           await finish(rootPath, "fixed");
         })
-        .catch((error) => {
+        .catch((caught) => {
           if (
             !options?.replaceIncomplete &&
-            isRpcError(error) &&
-            error.code === VAULT_ROOT_ERROR_CODES.INCOMPLETE
+            isRpcError(caught) &&
+            caught.code === VAULT_ROOT_ERROR_CODES.INCOMPLETE
           ) {
+            setMode("fixed");
             setStep("repair");
             setError(null);
             return;
           }
-          setError(t(desktopErrorI18nKey(error, "modal.vault_root_setup.error_init")));
+          setError(t(desktopErrorI18nKey(caught, "modal.vault_root_setup.error_init")));
         })
         .finally(() => {
           setBusy(false);
@@ -153,14 +164,18 @@ export function VaultRootSetupModal({
     [finish, settings.ui.locale, t, vaultRoot],
   );
 
-  const handleConfirmOtherPath = useCallback(() => {
+  const handleContinue = useCallback(() => {
+    if (mode === "auto") {
+      handleCreateNearby();
+      return;
+    }
     const path = pathInput.trim();
     if (!path) {
       setError(t("modal.vault_root_setup.error_path_required"));
       return;
     }
     runSetupAtPath(path);
-  }, [pathInput, runSetupAtPath, t]);
+  }, [handleCreateNearby, mode, pathInput, runSetupAtPath, t]);
 
   const applyRepair = useCallback(
     (policy: IncompleteReplacePolicy) => {
@@ -169,40 +184,59 @@ export function VaultRootSetupModal({
         setError(t("modal.vault_root_setup.error_path_required"));
         return;
       }
+      if (mode === "auto") {
+        // Nearby incomplete edge: replace at anchor via setupNearby policy.
+        setBusy(true);
+        setError(null);
+        void vaultRoot
+          .setupNearby({
+            replaceIncomplete: true,
+            replacePolicy: policy,
+            locale: settings.ui.locale,
+          })
+          .then(async ({ rootPath }) => {
+            setStep("choose");
+            await finish(rootPath, "auto");
+          })
+          .catch((caught) => {
+            setError(t(desktopErrorI18nKey(caught, "modal.vault_root_setup.error_init")));
+          })
+          .finally(() => setBusy(false));
+        return;
+      }
       runSetupAtPath(path, { replaceIncomplete: true, replacePolicy: policy });
     },
-    [pathInput, runSetupAtPath, t],
+    [finish, mode, pathInput, runSetupAtPath, settings.ui.locale, t, vaultRoot],
   );
+
+  const handleRepairContinue = useCallback(() => {
+    if (repairPolicy === "delete") {
+      setError(null);
+      setStep("confirm_delete");
+      return;
+    }
+    applyRepair("rename");
+  }, [applyRepair, repairPolicy]);
 
   if (!open) return null;
 
+  const continueDisabled =
+    busy || (mode === "fixed" && !pathInput.trim() && step === "choose");
+
   const footer =
     step === "choose" ? (
-      <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
-        <Button
-          variant="secondary"
-          size="md"
-          disabled={busy}
-          className="w-full sm:w-auto"
-          onClick={() => {
-            setStep("other_path");
-            setError(null);
-            setPathInput("");
-          }}
-        >
-          {t("modal.vault_root_setup.choose_other")}
-        </Button>
+      <div className="flex justify-end">
         <Button
           variant="primary"
           size="md"
-          disabled={busy}
+          disabled={continueDisabled}
           className="w-full sm:w-auto"
-          onClick={handleCreateNearby}
+          onClick={handleContinue}
         >
-          {t("modal.vault_root_setup.create_nearby")}
+          {t("action.continue")}
         </Button>
       </div>
-    ) : step === "other_path" ? (
+    ) : step === "repair" ? (
       <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
         <Button
           variant="ghost"
@@ -217,58 +251,13 @@ export function VaultRootSetupModal({
           {t("action.back")}
         </Button>
         <Button
-          variant="secondary"
-          size="md"
-          disabled={busy}
-          className="w-full sm:w-auto"
-          onClick={handlePickFolder}
-        >
-          {t("modal.vault_root_setup.browse")}
-        </Button>
-        <Button
-          variant="primary"
-          size="md"
-          disabled={busy || !pathInput.trim()}
-          className="w-full sm:w-auto"
-          onClick={handleConfirmOtherPath}
-        >
-          {t("modal.vault_root_setup.use_this_folder")}
-        </Button>
-      </div>
-    ) : step === "repair" ? (
-      <div className="flex flex-col gap-2">
-        <Button
           variant="primary"
           size="md"
           disabled={busy}
-          className="w-full"
-          onClick={() => applyRepair("rename")}
+          className="w-full sm:w-auto"
+          onClick={handleRepairContinue}
         >
-          {t("modal.vault_root_repair.action_rename_recommended")}
-        </Button>
-        <Button
-          variant="danger"
-          size="md"
-          disabled={busy}
-          className="w-full"
-          onClick={() => {
-            setError(null);
-            setStep("confirm_delete");
-          }}
-        >
-          {t("modal.vault_root_repair.action_delete")}
-        </Button>
-        <Button
-          variant="ghost"
-          size="md"
-          disabled={busy}
-          className="w-full"
-          onClick={() => {
-            setStep("other_path");
-            setError(null);
-          }}
-        >
-          {t("action.back")}
+          {t("action.continue")}
         </Button>
       </div>
     ) : (
@@ -314,7 +303,7 @@ export function VaultRootSetupModal({
       footer={footer}
       rootClassName="z-[200]"
       headerActions={
-        step === "choose" || step === "other_path" || step === "repair" ? (
+        step === "choose" || step === "repair" ? (
           <label className="flex items-center gap-1.5">
             <span className="sr-only">{t("modal.app_settings.field.locale")}</span>
             <select
@@ -338,51 +327,134 @@ export function VaultRootSetupModal({
         {step === "choose" ? (
           <>
             <p>{t("modal.vault_root_setup.body")}</p>
-            <p className="break-all rounded-md bg-surface-container px-3 py-2 font-mono text-xs text-on-surface">
-              {nearbyAnchor}
-            </p>
-            <p>{t("modal.vault_root_setup.create_nearby_hint")}</p>
-            <p>{t("modal.vault_root_setup.choose_other_hint")}</p>
-          </>
-        ) : step === "other_path" ? (
-          <>
-            <p>{t("modal.vault_root_setup.other_path_body")}</p>
-            <p>
-              {t("modal.vault_root_setup.alias_notice", {
-                file: VAULT_ROOT_ALIAS_FILE,
-                aliasPath,
-              })}
-            </p>
-            <label className="block space-y-1.5">
-              <span className="text-xs font-medium text-on-surface">
-                {t("modal.vault_root_setup.path_label")}
-              </span>
-              <input
-                type="text"
-                value={pathInput}
-                disabled={busy}
-                aria-invalid={error ? true : undefined}
-                onChange={(event) => {
-                  setPathInput(event.target.value);
+            <div
+              role="radiogroup"
+              aria-label={t("modal.app_settings.field.upriv_root_mode")}
+              className="grid gap-2"
+            >
+              <PolicyRadioOption
+                groupName={rootModeGroup}
+                value="auto"
+                checked={mode === "auto"}
+                title={t("modal.app_settings.option.upriv_root.auto")}
+                description={t("modal.app_settings.option.upriv_root.auto_desc")}
+                badge="default"
+                onSelect={() => {
+                  setMode("auto");
                   setError(null);
                 }}
-                placeholder={t("modal.vault_root_setup.path_placeholder")}
-                className="w-full rounded-lg border border-transparent bg-surface-container-highest px-3 py-2 font-mono text-xs text-on-surface outline-none focus:border-[var(--accent)]"
+                footer={
+                  mode === "auto" ? (
+                    <p className="break-all rounded-md bg-surface-container-highest px-3 py-2 font-mono text-xs text-on-surface">
+                      {nearbyAnchor}
+                    </p>
+                  ) : null
+                }
               />
-            </label>
+              <PolicyRadioOption
+                groupName={rootModeGroup}
+                value="fixed"
+                checked={mode === "fixed"}
+                title={t("modal.app_settings.option.upriv_root.fixed")}
+                description={t("modal.app_settings.option.upriv_root.fixed_desc", {
+                  file: VAULT_ROOT_ALIAS_FILE,
+                })}
+                onSelect={() => {
+                  setMode("fixed");
+                  setError(null);
+                }}
+                footer={
+                  mode === "fixed" ? (
+                    <div className="space-y-2">
+                      <p className="text-xs leading-relaxed text-on-surface-variant">
+                        {t("modal.vault_root_setup.alias_notice", {
+                          file: VAULT_ROOT_ALIAS_FILE,
+                          aliasPath,
+                        })}
+                      </p>
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-stretch">
+                        <input
+                          type="text"
+                          readOnly
+                          value={pathInput}
+                          placeholder={t("modal.vault_root_setup.path_placeholder")}
+                          aria-invalid={error ? true : undefined}
+                          className={[
+                            settingsControlClass,
+                            "font-mono text-xs sm:min-w-0 sm:flex-1",
+                          ].join(" ")}
+                        />
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          size="md"
+                          className="w-full shrink-0 sm:w-auto"
+                          disabled={busy}
+                          onClick={handlePickFolder}
+                        >
+                          {t("modal.app_settings.action.choose_folder")}
+                        </Button>
+                      </div>
+                    </div>
+                  ) : null
+                }
+              />
+            </div>
           </>
         ) : step === "repair" ? (
           <>
-            <p>{t("modal.vault_root_repair.body")}</p>
+            <p>
+              {t(
+                mode === "fixed"
+                  ? "modal.vault_root_repair.body_fixed"
+                  : "modal.vault_root_repair.body",
+              )}
+            </p>
             <p className="break-all rounded-md bg-surface-container px-3 py-2 font-mono text-xs text-on-surface">
               {pathInput.trim()}
             </p>
-            <p>{t("modal.vault_root_repair.rename_hint")}</p>
-            <p>{t("modal.vault_root_repair.delete_hint")}</p>
-            <p>{t("modal.vault_root_repair.inspect_hint")}</p>
+            <div
+              role="radiogroup"
+              aria-label={t("modal.vault_root_repair.title")}
+              className="grid gap-2"
+            >
+              <PolicyRadioOption
+                groupName={repairPolicyGroup}
+                value="rename"
+                checked={repairPolicy === "rename"}
+                title={t("modal.vault_root_repair.option_rename")}
+                description={t("modal.vault_root_repair.rename_hint")}
+                badge="default"
+                onSelect={() => {
+                  setRepairPolicy("rename");
+                  setError(null);
+                }}
+              />
+              <PolicyRadioOption
+                groupName={repairPolicyGroup}
+                value="delete"
+                checked={repairPolicy === "delete"}
+                title={t("modal.vault_root_repair.option_delete")}
+                description={t("modal.vault_root_repair.delete_hint")}
+                tone="less-secure"
+                onSelect={() => {
+                  setRepairPolicy("delete");
+                  setError(null);
+                }}
+              />
+            </div>
+            <p className="text-xs leading-relaxed text-on-surface-variant">
+              {t("modal.vault_root_repair.inspect_hint")}
+            </p>
           </>
         ) : (
-          <p role="alert">{t("modal.vault_root_repair.confirm_delete_body")}</p>
+          <p role="alert">
+            {t(
+              mode === "fixed"
+                ? "modal.vault_root_repair.confirm_delete_body_fixed"
+                : "modal.vault_root_repair.confirm_delete_body",
+            )}
+          </p>
         )}
         {busy ? (
           <p className="sr-only" role="status" aria-live="polite">

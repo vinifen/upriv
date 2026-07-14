@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::error::{Result, UprivError};
-use crate::paths::{is_vault_root_marker, VaultRoot, VAULT_ROOT_SETTINGS_REL};
+use crate::paths::{VaultRoot, VAULT_ROOT_SETTINGS_REL};
 use crate::time::utc_filename_stamp;
 
 /// Default `.upriv/settings.toml` for a newly initialized root.
@@ -48,12 +48,6 @@ struct SettingsTomlRequired {
 #[derive(Debug, serde::Deserialize)]
 struct PackageTomlRequired {
     vaults_dir: String,
-}
-
-/// True when `dir` already has a usable Upriv marker (does not repair anything).
-#[inline]
-pub fn has_vault_root_marker(dir: impl AsRef<Path>) -> bool {
-    is_vault_root_marker(dir)
 }
 
 /// Validate an existing `.upriv/` tree. Does not create or overwrite files.

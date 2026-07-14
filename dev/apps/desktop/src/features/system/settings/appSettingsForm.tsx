@@ -16,6 +16,7 @@ import {
   VAULT_ROOT_ALIAS_FILE,
   logFileCountForKeepLast,
   type AppSettingsConfig,
+  type IncompleteReplacePolicy,
   type LogLevel,
   type UiTheme,
   type VaultListItem,
@@ -29,6 +30,12 @@ import {
   listVaultsReadyForBulkExport,
   vaultBlocksBulkExport,
 } from "./vaultBulkExport";
+import {
+  isVaultRootDraftDirty,
+  vaultRootGateFromState,
+  type VaultRootDiskStatus,
+  type VaultRootSettingsGate,
+} from "./vaultRootSettingsIntent";
 
 const vaultCheckboxClass =
   "h-4 w-4 shrink-0 rounded border-outline-variant/50 bg-surface-container-high text-accent focus:ring-accent/50 disabled:cursor-not-allowed disabled:opacity-40";
@@ -472,24 +479,179 @@ export function AppSettingsLoggingSection({ config, onChange }: SectionPatchProp
 export function AppSettingsBehaviorSection({
   config,
   onChange,
-  autoSwitchWarning = null,
-  fixedPathLoading = false,
-  onFixedPathLoadingChange,
-  nearbyUnreadable = false,
-  onRetryNearbyStatus,
+  savedAutoDetect,
+  savedRootPath,
+  onVaultRootGateChange,
 }: SectionPatchProps<"app"> & {
-  autoSwitchWarning?: "create" | "replace" | null;
-  fixedPathLoading?: boolean;
-  onFixedPathLoadingChange?: (loading: boolean) => void;
-  nearbyUnreadable?: boolean;
-  onRetryNearbyStatus?: () => void;
+  savedAutoDetect: boolean;
+  savedRootPath: string;
+  onVaultRootGateChange: (gate: VaultRootSettingsGate) => void;
 }) {
   const { t } = useTranslation();
   const appSettingsService = useAppSettingsService();
   const vaultRootService = useVaultRootService();
   const rootModeGroup = useId();
+  const repairPolicyGroup = useId();
   const useAutoDetect = config.auto_detect_vault_root;
   const aliasLoadGen = useRef(0);
+  const checkGen = useRef(0);
+
+  const [disk, setDisk] = useState<VaultRootDiskStatus>("ready");
+  const [replacePolicy, setReplacePolicy] = useState<IncompleteReplacePolicy | null>(null);
+  const [fixedPathLoading, setFixedPathLoading] = useState(false);
+
+  const dirty = isVaultRootDraftDirty(
+    config.auto_detect_vault_root,
+    config.upriv_root_path,
+    savedAutoDetect,
+    savedRootPath,
+  );
+  const vaultRootGate = vaultRootGateFromState({ dirty, disk, replacePolicy });
+
+  // Keep parent Save gate in sync (draft-only policies until Save).
+  useEffect(() => {
+    onVaultRootGateChange(vaultRootGateFromState({ dirty, disk, replacePolicy }));
+  }, [dirty, disk, onVaultRootGateChange, replacePolicy]);
+
+  // Validate current mode/path whenever the dirty vault-root draft changes.
+  useEffect(() => {
+    if (!dirty) {
+      setDisk("ready");
+      setReplacePolicy(null);
+      return;
+    }
+
+    const gen = ++checkGen.current;
+    setReplacePolicy(null);
+
+    if (config.auto_detect_vault_root) {
+      setDisk("checking");
+      void vaultRootService
+        .nearbyStatus()
+        .then((result) => {
+          if (gen !== checkGen.current) return;
+          if (result.status === "incomplete") setDisk("incomplete");
+          else if (result.status === "unreadable") setDisk("unreadable");
+          else if (result.status === "absent") setDisk("will_create");
+          else setDisk("ready");
+        })
+        .catch(() => {
+          if (gen !== checkGen.current) return;
+          setDisk("unreadable");
+        });
+      return;
+    }
+
+    const path = config.upriv_root_path.trim();
+    if (!path) {
+      setDisk(fixedPathLoading ? "checking" : "needs_folder");
+      return;
+    }
+
+    setDisk("checking");
+    void vaultRootService
+      .inspectAtPath(path)
+      .then((result) => {
+        if (gen !== checkGen.current) return;
+        if (result.status === "incomplete") setDisk("incomplete");
+        else if (result.status === "unreadable") setDisk("unreadable");
+        else setDisk("ready");
+      })
+      .catch(() => {
+        if (gen !== checkGen.current) return;
+        setDisk("unreadable");
+      });
+  }, [
+    config.auto_detect_vault_root,
+    config.upriv_root_path,
+    dirty,
+    fixedPathLoading,
+    vaultRootService,
+  ]);
+
+  const retryDiskCheck = () => {
+    // Bump generation by re-setting path/auto through a no-op disk reset.
+    setDisk("checking");
+    setReplacePolicy(null);
+    checkGen.current += 1;
+    const gen = checkGen.current;
+    if (config.auto_detect_vault_root) {
+      void vaultRootService
+        .nearbyStatus()
+        .then((result) => {
+          if (gen !== checkGen.current) return;
+          if (result.status === "incomplete") setDisk("incomplete");
+          else if (result.status === "unreadable") setDisk("unreadable");
+          else if (result.status === "absent") setDisk("will_create");
+          else setDisk("ready");
+        })
+        .catch(() => {
+          if (gen !== checkGen.current) return;
+          setDisk("unreadable");
+        });
+      return;
+    }
+    const path = config.upriv_root_path.trim();
+    if (!path) {
+      setDisk("needs_folder");
+      return;
+    }
+    void vaultRootService
+      .inspectAtPath(path)
+      .then((result) => {
+        if (gen !== checkGen.current) return;
+        if (result.status === "incomplete") setDisk("incomplete");
+        else if (result.status === "unreadable") setDisk("unreadable");
+        else setDisk("ready");
+      })
+      .catch(() => {
+        if (gen !== checkGen.current) return;
+        setDisk("unreadable");
+      });
+  };
+
+  const showAutoExtras = useAutoDetect && dirty;
+  const showFixedExtras = !useAutoDetect;
+
+  const incompletePanel =
+    dirty && disk === "incomplete" ? (
+      <div className="space-y-2">
+        <p className="text-xs leading-relaxed text-on-surface" role="status">
+          {t(
+            useAutoDetect
+              ? "modal.app_settings.upriv_root.switch_auto_replace_notice"
+              : "modal.app_settings.save_confirm_fixed_incomplete",
+            useAutoDetect
+              ? { file: VAULT_ROOT_ALIAS_FILE }
+              : { path: config.upriv_root_path.trim() || "…" },
+          )}
+        </p>
+        <div
+          role="radiogroup"
+          aria-label={t("modal.vault_root_repair.title")}
+          className="grid gap-2"
+        >
+          <PolicyRadioOption
+            groupName={repairPolicyGroup}
+            value="rename"
+            checked={replacePolicy === "rename"}
+            title={t("modal.vault_root_repair.option_rename")}
+            description={t("modal.vault_root_repair.rename_hint")}
+            badge="default"
+            onSelect={() => setReplacePolicy("rename")}
+          />
+          <PolicyRadioOption
+            groupName={repairPolicyGroup}
+            value="delete"
+            checked={replacePolicy === "delete"}
+            title={t("modal.vault_root_repair.option_delete")}
+            description={t("modal.vault_root_repair.delete_hint")}
+            tone="less-secure"
+            onSelect={() => setReplacePolicy("delete")}
+          />
+        </div>
+      </div>
+    ) : null;
 
   return (
     <SettingsFormGrid>
@@ -510,28 +672,55 @@ export function AppSettingsBehaviorSection({
             groupName={rootModeGroup}
             value="auto"
             checked={useAutoDetect}
+            attention={useAutoDetect && vaultRootGate.blocksSave}
             title={t("modal.app_settings.option.upriv_root.auto")}
             description={t("modal.app_settings.option.upriv_root.auto_desc")}
             badge="default"
             onSelect={() => {
               aliasLoadGen.current += 1;
-              onFixedPathLoadingChange?.(false);
+              setFixedPathLoading(false);
+              setReplacePolicy(null);
               onChange({ auto_detect_vault_root: true, upriv_root_path: "" });
             }}
             footer={
-              autoSwitchWarning && useAutoDetect ? (
-                <p
-                  className="rounded-md bg-surface-container px-3 py-2 text-xs leading-relaxed text-on-surface"
-                  role="status"
-                >
-                  {autoSwitchWarning === "replace"
-                    ? t("modal.app_settings.upriv_root.switch_auto_replace_notice", {
-                        file: VAULT_ROOT_ALIAS_FILE,
-                      })
-                    : t("modal.app_settings.upriv_root.switch_auto_create_notice", {
+              showAutoExtras ? (
+                <div className="space-y-2">
+                  {disk === "checking" ? (
+                    <p className="text-xs leading-relaxed text-on-surface-variant" role="status">
+                      {t("modal.app_settings.field.upriv_root_loading")}
+                    </p>
+                  ) : null}
+                  {disk === "will_create" ? (
+                    <p
+                      className="rounded-md bg-surface-container px-3 py-2 text-xs leading-relaxed text-on-surface"
+                      role="status"
+                    >
+                      {t("modal.app_settings.upriv_root.switch_auto_create_notice", {
                         file: VAULT_ROOT_ALIAS_FILE,
                       })}
-                </p>
+                    </p>
+                  ) : null}
+                  {disk === "unreadable" ? (
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                      <p
+                        className="rounded-md bg-error-container/10 px-3 py-2 text-xs leading-relaxed text-on-error-container"
+                        role="alert"
+                      >
+                        {t("modal.vault_root_setup.error_io")}
+                      </p>
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        size="md"
+                        className="w-full shrink-0 sm:w-auto"
+                        onClick={retryDiskCheck}
+                      >
+                        {t("action.retry")}
+                      </Button>
+                    </div>
+                  ) : null}
+                  {incompletePanel}
+                </div>
               ) : null
             }
           />
@@ -539,18 +728,20 @@ export function AppSettingsBehaviorSection({
             groupName={rootModeGroup}
             value="fixed"
             checked={!useAutoDetect}
+            attention={!useAutoDetect && vaultRootGate.blocksSave}
             title={t("modal.app_settings.option.upriv_root.fixed")}
             description={t("modal.app_settings.option.upriv_root.fixed_desc", {
               file: VAULT_ROOT_ALIAS_FILE,
             })}
             onSelect={() => {
               const current = config.upriv_root_path.trim();
+              setReplacePolicy(null);
               if (current) {
                 onChange({ auto_detect_vault_root: false, upriv_root_path: current });
                 return;
               }
               const gen = ++aliasLoadGen.current;
-              onFixedPathLoadingChange?.(true);
+              setFixedPathLoading(true);
               onChange({ auto_detect_vault_root: false, upriv_root_path: "" });
               void vaultRootService
                 .readAlias()
@@ -563,91 +754,98 @@ export function AppSettingsBehaviorSection({
                 })
                 .finally(() => {
                   if (gen !== aliasLoadGen.current) return;
-                  onFixedPathLoadingChange?.(false);
+                  setFixedPathLoading(false);
                 });
             }}
             footer={
-              <div className="space-y-2">
-                <p className="text-xs leading-relaxed text-on-surface-variant">
-                  {t("modal.app_settings.field.upriv_root_help")}
-                </p>
-                {nearbyUnreadable && useAutoDetect ? (
-                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                    <p
-                      className="rounded-md bg-error-container/10 px-3 py-2 text-xs leading-relaxed text-on-error-container"
-                      role="alert"
-                    >
-                      {t("modal.vault_root_setup.error_io")}
+              showFixedExtras ? (
+                <div className="space-y-2">
+                  <p className="text-xs leading-relaxed text-on-surface-variant">
+                    {t("modal.app_settings.field.upriv_root_help")}
+                  </p>
+                  {config.upriv_root_path.trim() ? (
+                    <p className="text-xs leading-relaxed text-on-surface-variant">
+                      {t("modal.app_settings.field.upriv_root_remembered", {
+                        file: VAULT_ROOT_ALIAS_FILE,
+                      })}
                     </p>
-                    {onRetryNearbyStatus ? (
+                  ) : fixedPathLoading || disk === "checking" ? (
+                    <p className="text-xs leading-relaxed text-on-surface-variant" role="status">
+                      {t("modal.app_settings.field.upriv_root_loading")}
+                    </p>
+                  ) : null}
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-stretch">
+                    <input
+                      type="text"
+                      readOnly
+                      value={config.upriv_root_path}
+                      placeholder={t("modal.app_settings.field.upriv_root_placeholder")}
+                      className={[
+                        settingsControlClass,
+                        "font-mono text-xs sm:min-w-0 sm:flex-1",
+                      ].join(" ")}
+                    />
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="md"
+                      className="w-full shrink-0 sm:w-auto"
+                      disabled={fixedPathLoading}
+                      onClick={() => {
+                        const suggested = config.upriv_root_path.trim();
+                        setReplacePolicy(null);
+                        void (
+                          suggested
+                            ? Promise.resolve(suggested)
+                            : vaultRootService.readAlias().then((alias) => alias?.path.trim() || "")
+                        ).then((defaultPath) =>
+                          vaultRootService
+                            .pickFolder(
+                              defaultPath || null,
+                              t("modal.vault_root_setup.pick_folder_title"),
+                            )
+                            .then((picked) => {
+                              onChange({
+                                auto_detect_vault_root: false,
+                                upriv_root_path:
+                                  picked?.trim() ||
+                                  defaultPath ||
+                                  appSettingsService.getDefaultRootPathSuggestion(),
+                              });
+                            }),
+                        );
+                      }}
+                    >
+                      {t("modal.app_settings.action.choose_folder")}
+                    </Button>
+                  </div>
+                  {disk === "unreadable" ? (
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                      <p
+                        className="rounded-md bg-error-container/10 px-3 py-2 text-xs leading-relaxed text-on-error-container"
+                        role="alert"
+                      >
+                        {t("modal.vault_root_setup.error_io")}
+                      </p>
                       <Button
                         type="button"
                         variant="secondary"
                         size="md"
                         className="w-full shrink-0 sm:w-auto"
-                        onClick={onRetryNearbyStatus}
+                        onClick={retryDiskCheck}
                       >
                         {t("action.retry")}
                       </Button>
-                    ) : null}
-                  </div>
-                ) : null}
-                {config.upriv_root_path.trim() ? (
-                  <p className="text-xs leading-relaxed text-on-surface-variant">
-                    {t("modal.app_settings.field.upriv_root_remembered", {
-                      file: VAULT_ROOT_ALIAS_FILE,
-                    })}
-                  </p>
-                ) : fixedPathLoading ? (
-                  <p className="text-xs leading-relaxed text-on-surface-variant" role="status">
-                    {t("modal.app_settings.field.upriv_root_loading")}
-                  </p>
-                ) : null}
-                <div className="flex flex-col gap-2 sm:flex-row sm:items-stretch">
-                  <input
-                    type="text"
-                    readOnly
-                    value={config.upriv_root_path}
-                    placeholder={t("modal.app_settings.field.upriv_root_placeholder")}
-                    className={[
-                      settingsControlClass,
-                      "font-mono text-xs sm:min-w-0 sm:flex-1",
-                    ].join(" ")}
-                  />
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    size="md"
-                    className="w-full shrink-0 sm:w-auto"
-                    disabled={fixedPathLoading}
-                    onClick={() => {
-                      const suggested = config.upriv_root_path.trim();
-                      void (
-                        suggested
-                          ? Promise.resolve(suggested)
-                          : vaultRootService.readAlias().then((alias) => alias?.path.trim() || "")
-                      ).then((defaultPath) =>
-                        vaultRootService
-                          .pickFolder(
-                            defaultPath || null,
-                            t("modal.vault_root_setup.pick_folder_title"),
-                          )
-                          .then((picked) => {
-                            onChange({
-                              auto_detect_vault_root: false,
-                              upriv_root_path:
-                                picked?.trim() ||
-                                defaultPath ||
-                                appSettingsService.getDefaultRootPathSuggestion(),
-                            });
-                          }),
-                      );
-                    }}
-                  >
-                    {t("modal.app_settings.action.choose_folder")}
-                  </Button>
+                    </div>
+                  ) : null}
+                  {disk === "needs_folder" ? (
+                    <p className="text-xs leading-relaxed text-on-surface-variant" role="status">
+                      {t("modal.vault_root_setup.error_path_required")}
+                    </p>
+                  ) : null}
+                  {incompletePanel}
                 </div>
-              </div>
+              ) : null
             }
           />
         </div>

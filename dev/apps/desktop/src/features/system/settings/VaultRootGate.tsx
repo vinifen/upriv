@@ -2,9 +2,10 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import { Button, Modal } from "@/components/ui";
 import { useTranslation } from "@/i18n";
 import { desktopErrorI18nKey } from "@/lib/errorMessages";
-import { useAppSettingsContext } from "@/features/system/settings";
+import { useAppSettingsContext } from "./AppSettingsContext";
 import { useVaultRootService } from "@/platform/services";
-import { VAULT_ROOT_ALIAS_FILE, VAULT_ROOT_ERROR_CODES, isRpcError } from "@upriv/shared";
+import { VAULT_ROOT_ERROR_CODES, isRpcError } from "@upriv/shared";
+import { VaultRootAliasRecoveryModal } from "./VaultRootAliasRecoveryModal";
 import { VaultRootRepairModal } from "./VaultRootRepairModal";
 import { VaultRootSetupModal } from "./VaultRootSetupModal";
 
@@ -26,13 +27,12 @@ type RepairState = { targetPath: string; mode: "nearby" | "fixed" };
 export function VaultRootGate({ children }: VaultRootGateProps) {
   const { t } = useTranslation();
   const vaultRoot = useVaultRootService();
-  const { settings, settingsReady, vaultRootEpoch, patchSettings } = useAppSettingsContext();
+  const { settings, settingsReady, vaultRootEpoch } = useAppSettingsContext();
   const [ready, setReady] = useState(false);
   const [setup, setSetup] = useState<{ nearbyAnchor: string; aliasPath: string } | null>(null);
   const [repair, setRepair] = useState<RepairState | null>(null);
   const [aliasInvalidPath, setAliasInvalidPath] = useState<string | null>(null);
   const [resolveError, setResolveError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
   const resolveGen = useRef(0);
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
@@ -204,70 +204,6 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
     runResolve();
   };
 
-  const handleAliasInvalidAuto = () => {
-    setBusy(true);
-    void (async () => {
-      // Same intent as settings "switch to auto": ensure nearby root exists, then leave fixed mode.
-      // Do not only deactivate + re-resolve — that dumps the user on the first-run setup screen.
-      const nearby = await vaultRoot.nearbyStatus();
-      if (nearby.status === "incomplete") {
-        setAliasInvalidPath(null);
-        setResolveError(null);
-        setSetup(null);
-        setRepair({ targetPath: nearby.nearbyAnchor, mode: "nearby" });
-        return;
-      }
-      if (nearby.status === "unreadable") {
-        throw new Error("io_error: nearby .upriv is unreadable");
-      }
-      await vaultRoot.setupNearby({ locale: settings.ui.locale });
-      const saved = await patchSettings(
-        {
-          app: {
-            auto_detect_vault_root: true,
-            upriv_root_path: "",
-          },
-        },
-        { vaultRootAlreadyApplied: true },
-      );
-      if (!saved) throw new Error("settings_save_failed");
-      clearBlocking();
-    })()
-      .catch((error) => {
-        setResolveError(t(desktopErrorI18nKey(error, "modal.vault_root_setup.error_init")));
-        setAliasInvalidPath(null);
-      })
-      .finally(() => setBusy(false));
-  };
-
-  const handleAliasInvalidPick = () => {
-    setBusy(true);
-    void vaultRoot
-      .pickFolder(aliasInvalidPath || null, t("modal.vault_root_setup.pick_folder_title"))
-      .then(async (picked) => {
-        if (!picked?.trim()) return;
-        const { rootPath } = await vaultRoot.setupAtPath(picked.trim(), {
-          locale: settings.ui.locale,
-        });
-        const saved = await patchSettings(
-          {
-            app: {
-              auto_detect_vault_root: false,
-              upriv_root_path: rootPath,
-            },
-          },
-          { vaultRootAlreadyApplied: true },
-        );
-        if (!saved) throw new Error("settings_save_failed");
-        clearBlocking();
-      })
-      .catch((error) => {
-        setResolveError(t(desktopErrorI18nKey(error, "modal.vault_root_setup.error_pick")));
-        setAliasInvalidPath(null);
-      })
-      .finally(() => setBusy(false));
-  };
-
   const blocking = !ready;
 
   return (
@@ -292,43 +228,17 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
         aliasPath={setup?.aliasPath ?? ""}
         onConfigured={() => clearBlocking()}
       />
-      {aliasInvalidPath !== null && resolveError === null ? (
-        <Modal
-          open
-          title={t("modal.vault_root_setup.title")}
-          onClose={() => undefined}
-          dismissible={false}
-          panelClassName="max-w-lg"
-          rootClassName="z-[200]"
-          footer={
-            <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:justify-end">
-              <Button
-                variant="secondary"
-                size="md"
-                disabled={busy}
-                onClick={handleAliasInvalidAuto}
-              >
-                {t("modal.vault_root_setup.action_switch_auto")}
-              </Button>
-              <Button variant="primary" size="md" disabled={busy} onClick={handleAliasInvalidPick}>
-                {t("modal.vault_root_setup.action_choose_folder")}
-              </Button>
-            </div>
-          }
-        >
-          <div className="space-y-3 text-sm leading-relaxed text-on-surface-variant">
-            <p role="alert">{t("modal.vault_root_setup.error_alias_invalid")}</p>
-            {aliasInvalidPath ? (
-              <p className="font-mono text-xs break-all text-on-surface">
-                {t("modal.vault_root_setup.alias_invalid_path", {
-                  path: aliasInvalidPath,
-                  file: VAULT_ROOT_ALIAS_FILE,
-                })}
-              </p>
-            ) : null}
-          </div>
-        </Modal>
-      ) : null}
+      <VaultRootAliasRecoveryModal
+        open={aliasInvalidPath !== null && resolveError === null}
+        rememberedPath={aliasInvalidPath ?? ""}
+        onRecovered={() => clearBlocking()}
+        onNearbyIncomplete={(nearbyAnchor) => {
+          setAliasInvalidPath(null);
+          setResolveError(null);
+          setSetup(null);
+          setRepair({ targetPath: nearbyAnchor, mode: "nearby" });
+        }}
+      />
       {resolveError ? (
         <Modal
           open

@@ -660,6 +660,11 @@ interface PolicyRadioOptionProps {
   description: string;
   badge?: "recommended" | "less-secure" | "insecure" | "default";
   tone?: "default" | "less-secure" | "insecure";
+  /**
+   * Yellow/amber border while this option still needs follow-up config
+   * (e.g. vault-root incomplete policy). Overrides the accent border when checked.
+   */
+  attention?: boolean;
   /** Shown below the description while this option is selected. */
   footer?: ReactNode;
   onSelect: () => void;
@@ -673,6 +678,7 @@ export function PolicyRadioOption({
   description,
   badge,
   tone = "default",
+  attention = false,
   footer,
   onSelect,
 }: PolicyRadioOptionProps) {
@@ -694,7 +700,11 @@ export function PolicyRadioOption({
       ? "hover:bg-[color-mix(in_srgb,var(--error-container)_11%,var(--surface-container))]"
       : "hover:bg-surface-container-highest/60";
 
-  const borderClass = checked ? "border-2 border-[var(--accent)]" : "border border-outline-variant";
+  const borderClass = checked
+    ? attention
+      ? "border-2 border-[var(--vault-status-recovery)]"
+      : "border-2 border-[var(--accent)]"
+    : "border border-outline-variant";
 
   const radioClass =
     "mt-0.5 h-4 w-4 shrink-0 border border-outline-variant text-accent focus:ring-0 focus-visible:ring-0";

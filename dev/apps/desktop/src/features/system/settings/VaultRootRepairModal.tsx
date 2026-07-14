@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useId, useState } from "react";
 import { Button, Modal } from "@/components/ui";
+import { PolicyRadioOption } from "@/components/settings";
 import { useTranslation } from "@/i18n";
 import { SUPPORTED_LOCALES, type IncompleteReplacePolicy, type LocaleId } from "@upriv/shared";
 import { useVaultRootService } from "@/platform/services";
@@ -19,11 +20,11 @@ interface VaultRootRepairModalProps {
 }
 
 type Step = "choose" | "confirm_delete";
+type PolicyChoice = IncompleteReplacePolicy;
 
 /**
  * Blocking when a chosen vault-root has incomplete/corrupt `.upriv/`.
- * Rename (recommended) keeps the broken tree as `.upriv-invalidated-*`;
- * delete requires a second confirmation (vaults/settings lost).
+ * Radios + Continue: rename (recommended) or delete (+ confirm).
  */
 export function VaultRootRepairModal({
   open,
@@ -34,13 +35,16 @@ export function VaultRootRepairModal({
   const { t } = useTranslation();
   const vaultRoot = useVaultRootService();
   const { settings, patchSettings } = useAppSettingsContext();
+  const policyGroup = useId();
   const [step, setStep] = useState<Step>("choose");
+  const [policy, setPolicy] = useState<PolicyChoice>("rename");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) return;
     setStep("choose");
+    setPolicy("rename");
     setBusy(false);
     setError(null);
   }, [open, targetPath, mode]);
@@ -54,19 +58,19 @@ export function VaultRootRepairModal({
   );
 
   const applyRepair = useCallback(
-    (policy: IncompleteReplacePolicy) => {
+    (nextPolicy: IncompleteReplacePolicy) => {
       setBusy(true);
       setError(null);
       const run =
         mode === "nearby"
           ? vaultRoot.setupNearby({
               replaceIncomplete: true,
-              replacePolicy: policy,
+              replacePolicy: nextPolicy,
               locale: settings.ui.locale,
             })
           : vaultRoot.setupAtPath(targetPath, {
               replaceIncomplete: true,
-              replacePolicy: policy,
+              replacePolicy: nextPolicy,
               locale: settings.ui.locale,
             });
 
@@ -97,31 +101,28 @@ export function VaultRootRepairModal({
     [mode, onRepaired, patchSettings, settings.ui.locale, t, targetPath, vaultRoot],
   );
 
+  const handleContinue = useCallback(() => {
+    if (policy === "delete") {
+      setError(null);
+      setStep("confirm_delete");
+      return;
+    }
+    applyRepair("rename");
+  }, [applyRepair, policy]);
+
   if (!open) return null;
 
   const footer =
     step === "choose" ? (
-      <div className="flex flex-col gap-2">
+      <div className="flex justify-end">
         <Button
           variant="primary"
           size="md"
           disabled={busy}
-          className="w-full"
-          onClick={() => applyRepair("rename")}
+          className="w-full sm:w-auto"
+          onClick={handleContinue}
         >
-          {t("modal.vault_root_repair.action_rename_recommended")}
-        </Button>
-        <Button
-          variant="danger"
-          size="md"
-          disabled={busy}
-          className="w-full"
-          onClick={() => {
-            setError(null);
-            setStep("confirm_delete");
-          }}
-        >
-          {t("modal.vault_root_repair.action_delete")}
+          {t("action.continue")}
         </Button>
       </div>
     ) : (
@@ -197,9 +198,39 @@ export function VaultRootRepairModal({
             <p className="break-all rounded-md bg-surface-container px-3 py-2 font-mono text-xs text-on-surface">
               {targetPath}
             </p>
-            <p>{t("modal.vault_root_repair.rename_hint")}</p>
-            <p>{t("modal.vault_root_repair.delete_hint")}</p>
-            <p>{t("modal.vault_root_repair.inspect_hint")}</p>
+            <div
+              role="radiogroup"
+              aria-label={t("modal.vault_root_repair.title")}
+              className="grid gap-2"
+            >
+              <PolicyRadioOption
+                groupName={policyGroup}
+                value="rename"
+                checked={policy === "rename"}
+                title={t("modal.vault_root_repair.option_rename")}
+                description={t("modal.vault_root_repair.rename_hint")}
+                badge="default"
+                onSelect={() => {
+                  setPolicy("rename");
+                  setError(null);
+                }}
+              />
+              <PolicyRadioOption
+                groupName={policyGroup}
+                value="delete"
+                checked={policy === "delete"}
+                title={t("modal.vault_root_repair.option_delete")}
+                description={t("modal.vault_root_repair.delete_hint")}
+                tone="less-secure"
+                onSelect={() => {
+                  setPolicy("delete");
+                  setError(null);
+                }}
+              />
+            </div>
+            <p className="text-xs leading-relaxed text-on-surface-variant">
+              {t("modal.vault_root_repair.inspect_hint")}
+            </p>
           </>
         ) : (
           <p role="alert">
@@ -210,6 +241,11 @@ export function VaultRootRepairModal({
             )}
           </p>
         )}
+        {busy ? (
+          <p className="sr-only" role="status" aria-live="polite">
+            {t("modal.vault_root_setup.busy")}
+          </p>
+        ) : null}
         {error ? (
           <p
             className="rounded-md bg-error-container/10 px-3 py-2 text-sm text-on-error-container"

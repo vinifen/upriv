@@ -20,6 +20,7 @@ apps/electron/dist/
 .upriv/
 workspace/
 .upriv-root
+.upriv-invalidated-*
 
 # Temp
 temp/

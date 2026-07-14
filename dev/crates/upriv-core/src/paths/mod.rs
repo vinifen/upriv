@@ -13,10 +13,10 @@ mod resolve;
 mod settings;
 
 pub use init::{
-    has_vault_root_marker, initialize_vault_root, inspect_vault_root_at,
-    open_or_initialize_vault_root, open_or_initialize_vault_root_with_options,
-    open_or_initialize_vault_root_with_policy, rename_incomplete_upriv,
-    validate_existing_vault_root, IncompleteReplacePolicy, NearbyVaultRootStatus,
+    initialize_vault_root, inspect_vault_root_at, open_or_initialize_vault_root,
+    open_or_initialize_vault_root_with_options, open_or_initialize_vault_root_with_policy,
+    rename_incomplete_upriv, validate_existing_vault_root, IncompleteReplacePolicy,
+    NearbyVaultRootStatus,
 };
 pub use resolve::{
     app_home_dir, binary_dir, deactivate_vault_root_alias, deactivate_vault_root_alias_everywhere,
