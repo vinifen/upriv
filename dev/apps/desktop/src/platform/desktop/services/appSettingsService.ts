@@ -1,4 +1,9 @@
-import type { AppSettingsConfig, AppSettingsService } from "@upriv/shared";
+import type {
+  AppSettingsConfig,
+  AppSettingsLoadResult,
+  AppSettingsSaveOptions,
+  AppSettingsService,
+} from "@upriv/shared";
 import { createDefaultAppSettings, normalizeAppSettings } from "@upriv/shared";
 import { rpcAppSettingsGet, rpcAppSettingsSave } from "@/lib/rpc";
 
@@ -9,13 +14,20 @@ import { rpcAppSettingsGet, rpcAppSettingsSave } from "@/lib/rpc";
  * Before a vault-root exists, save is a no-op on disk (`wrote: false`) — UI keeps in-memory state.
  */
 export const desktopAppSettingsService: AppSettingsService = {
-  async load() {
+  async load(): Promise<AppSettingsLoadResult> {
     const result = await rpcAppSettingsGet();
-    return normalizeAppSettings(result.settings);
+    return {
+      settings: normalizeAppSettings(result.settings),
+      onDisk: result.onDisk,
+      rootPath: result.rootPath,
+    };
   },
 
-  async save(config) {
-    await rpcAppSettingsSave(normalizeAppSettings(config));
+  async save(config, options?: AppSettingsSaveOptions) {
+    const { wrote } = await rpcAppSettingsSave(normalizeAppSettings(config), {
+      syncAlias: options?.syncAlias,
+    });
+    return wrote;
   },
 
   getDefaultRootPathSuggestion() {

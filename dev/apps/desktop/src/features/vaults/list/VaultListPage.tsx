@@ -42,40 +42,61 @@ export function VaultListPage() {
     logs,
     help,
     createVault,
+    archiveDrop,
   } = screen;
 
   return (
     <AppShell header={<VaultListHeader {...header} />} contentClassName="max-w-vault-list">
-      <VaultListSectionHeader
-        sort={list.sort}
-        onSortChange={list.onSortChange}
-        viewMode={list.viewMode}
-        onViewModeChange={list.onViewModeChange}
-      />
-      <VaultList
-        vaults={list.displayVaults}
-        pipelineListStatus={list.pipelineListStatus}
-        isVaultPipelineBusy={list.isVaultPipelineBusy}
-        allVaultsHidden={list.allVaultsHidden}
-        viewMode={list.viewMode}
-        canReorder={list.canReorder}
-        draggingId={list.draggingId}
-        dragOverId={list.dragOverId}
-        onOpenBackups={list.onOpenBackups}
-        onOpenNote={list.onOpenNote}
-        onOpenSettings={list.onOpenSettings}
-        onExportVault={list.onExportVault}
-        onOpenFolder={list.onOpenFolder}
-        onOpenFileManager={screen.openFromVault}
-        onLockVault={list.onLockVault}
-        onUnlockVault={list.onUnlockVault}
-        onSealVault={list.onSealVault}
-        onDragStart={list.onDragStart}
-        onDragEnd={list.onDragEnd}
-        onDragOver={list.onDragOver}
-        onDragLeave={list.onDragLeave}
-        onDrop={list.onDrop}
-      />
+      <div
+        className="relative min-h-[min(28rem,70vh)]"
+        onDragEnter={archiveDrop.onDragEnter}
+        onDragOver={archiveDrop.onDragOver}
+        onDragLeave={archiveDrop.onDragLeave}
+        onDrop={archiveDrop.onDrop}
+      >
+        <VaultListSectionHeader
+          sort={list.sort}
+          onSortChange={list.onSortChange}
+          viewMode={list.viewMode}
+          onViewModeChange={list.onViewModeChange}
+        />
+        <VaultList
+          vaults={list.displayVaults}
+          pipelineListStatus={list.pipelineListStatus}
+          isVaultPipelineBusy={list.isVaultPipelineBusy}
+          allVaultsHidden={list.allVaultsHidden}
+          viewMode={list.viewMode}
+          canReorder={list.canReorder}
+          draggingId={list.draggingId}
+          dragOverId={list.dragOverId}
+          onCreateFromScratch={list.onCreateFromScratch}
+          onImportArchive={list.onImportArchive}
+          onOpenBackups={list.onOpenBackups}
+          onOpenNote={list.onOpenNote}
+          onOpenSettings={list.onOpenSettings}
+          onExportVault={list.onExportVault}
+          onOpenFolder={list.onOpenFolder}
+          onOpenFileManager={screen.openFromVault}
+          onLockVault={list.onLockVault}
+          onUnlockVault={list.onUnlockVault}
+          onSealVault={list.onSealVault}
+          onDragStart={list.onDragStart}
+          onDragEnd={list.onDragEnd}
+          onDragOver={list.onDragOver}
+          onDragLeave={list.onDragLeave}
+          onDrop={list.onDrop}
+        />
+        {archiveDrop.isArchiveDropActive ? (
+          <div
+            className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-2xl border-2 border-dashed border-primary/60 bg-primary/10 backdrop-blur-[1px]"
+            aria-hidden
+          >
+            <p className="px-4 text-center font-mono text-sm uppercase tracking-widest text-primary">
+              {t("empty.drop_archive_overlay")}
+            </p>
+          </div>
+        ) : null}
+      </div>
       <VaultLifecycleLayer {...lifecycle} />
       <Toast message={toast.message} onDismiss={toast.onDismiss} />
       <VaultNoteModal
@@ -110,6 +131,7 @@ export function VaultListPage() {
         existingVaultIds={createVault.existingVaultIds}
         existingOrders={createVault.existingOrders}
         initialDraft={createVault.initialDraft}
+        initialStep={createVault.initialStep}
         onClose={createVault.onClose}
         onCreate={createVault.onCreate}
       />

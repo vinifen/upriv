@@ -33,10 +33,10 @@ level = "info"
 entries_per_file = 1000
 
 [app]
-# Vault-root mode (auto vs fixed) is NOT configured in this file.
+# Vault-root mode (nearby vs custom) is NOT configured in this file.
 # It lives in the app-home `.upriv-root` alias:
-#   missing or status=inactive → auto-detect nearby
-#   status=active + path → fixed vault-root
+#   missing or status=inactive → nearby mode
+#   status=active + path → custom vault-root
 "#;
 
 /// Minimal TOML shape required for a usable vault-root marker.
@@ -161,7 +161,11 @@ pub enum IncompleteReplacePolicy {
 }
 
 /// Like [`open_or_initialize_vault_root`], but when `replace_incomplete` is true and
-/// `.upriv` is broken, dispose of it per `policy` and create a fresh default layout.
+/// `.upriv` is broken, dispose of it and create a fresh default layout.
+///
+/// **Safety:** `replace_incomplete = true` uses [`IncompleteReplacePolicy::Rename`]
+/// (not Delete). Prefer [`open_or_initialize_vault_root_with_policy`] when the UI
+/// must choose rename vs delete explicitly.
 pub fn open_or_initialize_vault_root_with_options(
     dir: impl AsRef<Path>,
     replace_incomplete: bool,
@@ -169,7 +173,7 @@ pub fn open_or_initialize_vault_root_with_options(
     open_or_initialize_vault_root_with_policy(
         dir,
         if replace_incomplete {
-            Some(IncompleteReplacePolicy::Delete)
+            Some(IncompleteReplacePolicy::Rename)
         } else {
             None
         },
@@ -204,19 +208,11 @@ pub fn open_or_initialize_vault_root_with_policy(
             if upriv.exists() {
                 match policy {
                     IncompleteReplacePolicy::Delete => {
-                        // Refuse to recursively delete if `.upriv` itself is a symlink
-                        // (could escape the vault-root). `workspace/` is intentionally
-                        // left in place — only the broken `.upriv/` tree is removed.
-                        if upriv
-                            .symlink_metadata()
-                            .map(|m| m.file_type().is_symlink())
-                            .unwrap_or(false)
-                        {
-                            return Err(UprivError::Io(std::io::Error::new(
-                                std::io::ErrorKind::InvalidInput,
-                                "refusing to delete .upriv: path is a symbolic link",
-                            )));
-                        }
+                        // Refuse to recursively delete if `.upriv` or any entry under it
+                        // is a symlink (could escape the vault-root). Prefer Rename.
+                        // `workspace/` is intentionally left in place — only the broken
+                        // `.upriv/` tree is removed when safe.
+                        refuse_delete_if_symlinks_under(&upriv)?;
                         std::fs::remove_dir_all(&upriv)?;
                     }
                     IncompleteReplacePolicy::Rename => {
@@ -227,6 +223,41 @@ pub fn open_or_initialize_vault_root_with_policy(
             initialize_vault_root(dir)
         }
     }
+}
+
+/// Walk `upriv` with `symlink_metadata` (do not follow links). Refuse Delete when
+/// `.upriv` itself or any nested entry is a symlink — use Rename instead.
+fn refuse_delete_if_symlinks_under(upriv: &Path) -> Result<()> {
+    let meta = std::fs::symlink_metadata(upriv).map_err(UprivError::from)?;
+    if meta.file_type().is_symlink() {
+        return Err(UprivError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "refusing to delete .upriv: path is a symbolic link (use Rename)",
+        )));
+    }
+    if !meta.is_dir() {
+        return Ok(());
+    }
+    walk_refuse_symlinks(upriv)
+}
+
+fn walk_refuse_symlinks(dir: &Path) -> Result<()> {
+    let entries = std::fs::read_dir(dir)?;
+    for entry in entries {
+        let entry = entry.map_err(UprivError::from)?;
+        let path = entry.path();
+        let meta = std::fs::symlink_metadata(&path).map_err(UprivError::from)?;
+        if meta.file_type().is_symlink() {
+            return Err(UprivError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "refusing to delete .upriv: tree contains a symbolic link (use Rename)",
+            )));
+        }
+        if meta.is_dir() {
+            walk_refuse_symlinks(&path)?;
+        }
+    }
+    Ok(())
 }
 
 /// Rename `.upriv` → `.upriv-invalidated-<stamp>`; if that name exists, append `-<stamp>` again.
@@ -243,8 +274,20 @@ pub fn rename_incomplete_upriv(upriv: &Path) -> Result<PathBuf> {
         name = format!("{name}-{stamp}");
         dest = parent.join(&name);
     }
-    std::fs::rename(upriv, &dest)?;
-    Ok(dest)
+    match std::fs::rename(upriv, &dest) {
+        Ok(()) => Ok(dest),
+        Err(error)
+            if error.kind() == std::io::ErrorKind::CrossesDevices
+                || error.raw_os_error() == Some(18) =>
+        {
+            // EXDEV — rename across filesystems is not supported for Incomplete repair.
+            Err(UprivError::Io(std::io::Error::new(
+                std::io::ErrorKind::CrossesDevices,
+                "cannot rename incomplete .upriv across filesystems; use Delete policy instead",
+            )))
+        }
+        Err(error) => Err(error.into()),
+    }
 }
 
 /// Create the standard Upriv layout in `dir` and return the opened [`VaultRoot`].
@@ -257,10 +300,7 @@ pub fn initialize_vault_root(dir: impl AsRef<Path>) -> Result<VaultRoot> {
 
     let settings_path = dir.join(VAULT_ROOT_SETTINGS_REL);
     if !settings_path.is_file() {
-        if let Some(parent) = settings_path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(&settings_path, DEFAULT_SETTINGS_TOML)?;
+        crate::paths::write_bytes_atomic(&settings_path, DEFAULT_SETTINGS_TOML.as_bytes())?;
     }
 
     ensure_standard_dirs(dir)?;
@@ -388,17 +428,78 @@ vaults_dir = ".upriv/vaults"
     }
 
     #[test]
-    fn replace_incomplete_removes_and_recreates() {
+    fn replace_incomplete_options_renames_and_recreates() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(dir.path().join(".upriv")).unwrap();
+        let upriv = dir.path().join(".upriv");
+        std::fs::create_dir_all(&upriv).unwrap();
+        std::fs::write(upriv.join("keep-me.txt"), b"data").unwrap();
         assert!(matches!(
             open_or_initialize_vault_root(dir.path()).unwrap_err(),
             UprivError::VaultRootIncomplete { .. }
         ));
+        // `with_options(true)` → Rename (safer than Delete).
         let root = open_or_initialize_vault_root_with_options(dir.path(), true).unwrap();
         assert!(is_vault_root_marker(root.root()));
         assert!(root.settings_path().is_file());
+        let backups: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.starts_with(".upriv-invalidated-"))
+            .collect();
+        assert_eq!(backups.len(), 1);
+        assert!(dir.path().join(&backups[0]).join("keep-me.txt").is_file());
+    }
+
+    #[test]
+    fn replace_incomplete_delete_refuses_inner_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let upriv = dir.path().join(".upriv");
+        std::fs::create_dir_all(&upriv).unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(outside.path(), upriv.join("escape")).unwrap();
+            let err = open_or_initialize_vault_root_with_policy(
+                dir.path(),
+                Some(IncompleteReplacePolicy::Delete),
+            )
+            .unwrap_err();
+            assert!(matches!(err, UprivError::Io(_)));
+            assert!(upriv.exists());
+            // Rename still works.
+            let root = open_or_initialize_vault_root_with_policy(
+                dir.path(),
+                Some(IncompleteReplacePolicy::Rename),
+            )
+            .unwrap();
+            assert!(is_vault_root_marker(root.root()));
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (upriv, outside);
+        }
+    }
+
+    #[test]
+    fn replace_incomplete_delete_removes_and_recreates() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".upriv")).unwrap();
+        let root = open_or_initialize_vault_root_with_policy(
+            dir.path(),
+            Some(IncompleteReplacePolicy::Delete),
+        )
+        .unwrap();
+        assert!(is_vault_root_marker(root.root()));
+        assert!(root.settings_path().is_file());
         assert!(!dir.path().join(".upriv-invalidated").exists());
+        let backups: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.starts_with(".upriv-invalidated-"))
+            .collect();
+        assert!(backups.is_empty());
     }
 
     #[test]

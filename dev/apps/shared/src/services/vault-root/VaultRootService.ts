@@ -5,22 +5,22 @@ import type {
   VaultRootInspectResult,
   VaultRootResolveResult,
 } from "../../domain/vault-root";
+import type { VaultRootMode } from "../../domain/app-settings";
 
 /**
  * Locate / create the Upriv vault-root (folder that contains `.upriv/`).
  * Desktop → daemon RPC; browser → mock.
  *
- * Disk-mutating methods (`setupNearby`, `setupAtPath`, `rewriteAlias`, `deactivateAlias`)
- * should only be called from `AppSettingsContext`, `VaultRootSetupModal`,
- * `VaultRootRepairModal`, or `VaultRootAliasRecoveryModal` — not from arbitrary UI —
- * to avoid duplicate side effects.
+ * Disk-mutating methods (`setupNearby`, `setupAtPath`) should only be called from
+ * `AppSettingsContext`, `VaultRootSetupModal`, `VaultRootRepairModal`, or
+ * `VaultRootAliasRecoveryModal` — not from arbitrary UI — to avoid duplicate side effects.
+ * Alias sync on settings save uses `app_settings_save` (`syncAlias`); there is no
+ * separate rewrite/deactivate RPC on this service.
  */
-export type { IncompleteReplacePolicy };
-
 export interface VaultRootService {
-  /** Resolve using current app settings (`auto_detect` / fixed path) + env/CLI when wired. */
+  /** Resolve using current app settings (`vault_root_mode` / custom path) + env/CLI when wired. */
   resolve(options?: {
-    autoDetect?: boolean;
+    vaultRootMode?: VaultRootMode;
     explicitPath?: string | null;
     /** Debug-only; honored by daemon only when `UPRIV_DEV` is set. */
     binaryDir?: string | null;
@@ -28,7 +28,7 @@ export interface VaultRootService {
 
   /**
    * Create default `.upriv/` beside the app (nearby anchor), deactivate `.upriv-root`
-   * if it exists (path kept), and switch to auto-detect mode.
+   * if it exists (path kept), and switch to nearby mode.
    * When replacing incomplete: `delete` removes `.upriv/`; `rename` keeps it as
    * `.upriv-invalidated-<timestamp>`.
    * `locale` is written into the new root's `settings.toml` `[ui].locale` when creating.
@@ -41,7 +41,7 @@ export interface VaultRootService {
 
   /**
    * Use `path` as vault-root (initialize if missing marker), write **active**
-   * `.upriv-root` alias, and switch to fixed-path mode (alias wins over local `.upriv`).
+   * `.upriv-root` alias, and switch to custom-path mode (alias wins over local `.upriv`).
    * `path` must be absolute.
    * When replacing incomplete: same policies as `setupNearby`.
    */
@@ -53,18 +53,6 @@ export interface VaultRootService {
       locale?: string | null;
     },
   ): Promise<{ rootPath: string; aliasPath: string }>;
-
-  /**
-   * Fixed mode: rewrite `.upriv-root` to `path` as active.
-   * Requires an existing valid vault-root marker (does not create `.upriv/`).
-   * Settings save uses {@link setupAtPath} instead (create-or-open + alias).
-   */
-  rewriteAlias(path: string): Promise<void>;
-
-  /**
-   * Switch to auto-nearby: mark `.upriv-root` inactive (path kept; file not deleted).
-   */
-  deactivateAlias(): Promise<void>;
 
   /** Read remembered `.upriv-root` path (active or inactive). Missing file → `null`. */
   readAlias(): Promise<VaultRootAliasInfo | null>;

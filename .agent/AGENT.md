@@ -229,17 +229,17 @@ Reference tree: **`prod-example/`** (standalone; set `UPRIV_VAULT_ROOT` to test 
 
 Order in `upriv-core` `paths::resolve_vault_root`:
 
-1. Explicit path (`--vault` / `UPRIV_VAULT_ROOT` / caller) when valid  
-2. **Fixed mode** (`auto_detect = false`): read **`.upriv-root`** beside the binary (one-line absolute path). Alias exists **only** in this mode.  
-3. **Auto mode** (default): search from nearby anchor then cwd; **ignore** alias  
-4. Nothing found → UI setup modal: create default structure nearby (no alias) **or** choose another folder (write/rewrite `.upriv-root`). Switching back to auto **clears** the alias; changing the fixed path **rewrites** it.
+1. Explicit path (`--vault` / `UPRIV_VAULT_ROOT` / caller) when valid — **overrides** wire `vault_root_mode` / path  
+2. **Custom mode** (`vault_root_mode = custom`): read **active** `.upriv-root` beside the app home. Alias exists **only** in this mode; inactive alias → NeedsSetup.  
+3. **Nearby mode** (default): search from nearby anchor then cwd; **ignore** alias  
+4. Nothing found → UI setup modal: create default structure nearby (no alias) **or** choose another folder (write/rewrite `.upriv-root`). Switching back to nearby **deactivates** the alias (`status=inactive`, path kept — file is not deleted); changing the custom path **rewrites** it.
 
 **Nearby anchor:**
 
 | Launch | App home (create nearby + `.upriv-root`) |
 |--------|------------------------------------------|
 | `npm run electron:dev` | `dev/` via `UPRIV_NEARBY_ANCHOR` → **`dev/.upriv/`** and **`dev/.upriv-root`** |
-| Packaged `.exe` / AppImage | Directory of the binary (env unset) |
+| Packaged `.exe` / AppImage | Directory of the binary (`UPRIV_NEARBY_ANCHOR` **always** set by Electron to that folder — nearby search is strict) |
 
 ---
 
@@ -259,6 +259,8 @@ Work in this order unless the user explicitly reprioritizes:
 9. Later: macOS, RN Android, iOS  
 
 Current scaffold: **UI + Electron shell done on mocks**; **Rust vault step 1** (`config`, `vault_list`, errors) is the active milestone — see § Current development phase.
+
+**Deferred (vault list UX already stubbed):** OS `.7z` drop / import opens the create wizard with Import pre-filled (name + Electron `File.path` when present). Still needed: native archive picker, daemon copy into vault-root, real `7zz` password probe (replace mock `selectImportArchiveForProbe`).
 
 ---
 

@@ -1,4 +1,6 @@
-//! Resolve vault-root on launch: explicit → alias (fixed) → nearby (auto).
+//! Resolve vault-root on launch: explicit → (custom: active alias) → (nearby: nearby only).
+//!
+//! `UPRIV_VAULT_ROOT` (or caller `explicit`) always wins over wire mode/path.
 //!
 //! Alias file (`.upriv-root`) lives in the **app home**:
 //! - **Prod / AppImage:** directory of `$APPIMAGE` / portable install
@@ -6,14 +8,28 @@
 //!   place as “create structure here”, so the simulation stays consistent
 //!
 //! The file is created only when the user picks another folder. Switching back
-//! to auto-nearby **deactivates** it (keeps the path); it is not deleted.
-//! `status=active` → fixed path in use; `status=inactive` → nearby / auto in use.
-//! When `auto_detect=true`, nearby wins and an active alias is ignored (settings are source of truth).
+//! to nearby **deactivates** it (keeps the path); it is not deleted.
+//! `status=active` → custom path in use; `status=inactive` → nearby mode.
+//! When mode is [`VaultRootMode::Nearby`], nearby wins and an active alias is
+//! ignored (settings are source of truth).
 
 use std::path::{Path, PathBuf};
 
+use serde::{Deserialize, Serialize};
+
 use crate::error::{Result, UprivError};
 use crate::paths::{is_vault_root_marker, VaultRoot};
+
+/// How the app locates the vault-root (wire: `"nearby"` | `"custom"`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum VaultRootMode {
+    /// Create/use `.upriv/` beside the app; active alias is ignored.
+    #[default]
+    Nearby,
+    /// Use the absolute path stored in `.upriv-root` (alias).
+    Custom,
+}
 
 /// Dotfile in the app home — path pointer to a vault-root (not a vault itself).
 pub const VAULT_ROOT_ALIAS_FILE: &str = ".upriv-root";
@@ -28,7 +44,7 @@ const NEARBY_MAX_DEPTH: usize = 8;
 pub struct VaultRootAlias {
     /// Absolute path to the folder that contains `.upriv/settings.toml`.
     pub path: PathBuf,
-    /// `true` = fixed-path mode uses this path; `false` = remembered but unused.
+    /// `true` = custom mode uses this path; `false` = remembered but unused.
     pub active: bool,
 }
 
@@ -37,9 +53,9 @@ pub struct VaultRootAlias {
 pub enum VaultRootSource {
     /// `--vault`, `UPRIV_VAULT_ROOT`, or an explicit path from the caller.
     Explicit,
-    /// `.upriv-root` in the app home (fixed-path / active alias).
+    /// `.upriv-root` in the app home (custom-path / active alias).
     Alias,
-    /// Marker found at/near the app home (auto-detect).
+    /// Marker found at/near the app home (nearby mode).
     Nearby,
 }
 
@@ -64,9 +80,9 @@ pub enum ResolveVaultRoot {
 pub struct ResolveVaultRootOptions {
     /// Highest priority: CLI / env / caller override.
     pub explicit: Option<PathBuf>,
-    /// When `true` (default): search nearby only (active `.upriv-root` is ignored).
-    /// When `false`: use `.upriv-root` path (fixed mode), ignoring nearby.
-    pub auto_detect: bool,
+    /// [`VaultRootMode::Nearby`] (default): search nearby only (active `.upriv-root` is ignored).
+    /// [`VaultRootMode::Custom`]: use `.upriv-root` path, ignoring nearby.
+    pub mode: VaultRootMode,
     /// Directory that contains the executable (tests inject a temp dir).
     /// When set, becomes the app home (alias + nearby) and env override is ignored.
     pub binary_dir: Option<PathBuf>,
@@ -118,9 +134,9 @@ fn alias_file_contents(path: &Path, active: bool) -> Result<String> {
     let path_str = path_as_alias_line(path)?;
     let status = if active { "active" } else { "inactive" };
     let status_note = if active {
-        "fixed-path mode — this path is the vault-root (nearby `.upriv` is ignored)."
+        "custom mode — this path is the vault-root (nearby `.upriv` is ignored)."
     } else {
-        "not in use — auto-detect / nearby `.upriv` is active; path kept if you switch back."
+        "not in use — nearby mode is active; path kept if you switch back."
     };
     Ok(format!(
         "\
@@ -136,8 +152,14 @@ status={status}
     ))
 }
 
-/// UTF-8 path for the alias file line — rejects non-UTF-8 and newlines.
+/// UTF-8 path for the alias file line — rejects non-UTF-8, newlines, and relative paths.
 fn path_as_alias_line(path: &Path) -> Result<String> {
+    if !path.is_absolute() {
+        return Err(UprivError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "vault-root path must be absolute",
+        )));
+    }
     let Some(s) = path.to_str() else {
         return Err(UprivError::Io(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
@@ -157,13 +179,15 @@ fn path_as_alias_line(path: &Path) -> Result<String> {
 ///
 /// Lines starting with `#` are comments. `status=active|inactive` sets the flag
 /// (default **active** when omitted — legacy files). First other non-empty line
-/// is the absolute vault-root path.
+/// is the absolute vault-root path. File present without a valid absolute path
+/// line → [`UprivError::VaultRootAliasInvalid`].
 pub fn read_vault_root_alias(home: impl AsRef<Path>) -> Result<Option<VaultRootAlias>> {
     let path = vault_root_alias_path(home);
-    if !path.is_file() {
-        return Ok(None);
-    }
-    let raw = std::fs::read_to_string(&path)?;
+    let raw = match std::fs::read_to_string(&path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
     let mut active = true;
     let mut saw_status = false;
     let mut target: Option<PathBuf> = None;
@@ -178,7 +202,7 @@ pub fn read_vault_root_alias(home: impl AsRef<Path>) -> Result<Option<VaultRootA
                 "active" => true,
                 "inactive" => false,
                 other => {
-                    // Unknown value must not silently re-enable fixed mode (typo → inactive).
+                    // Unknown value must not silently re-enable custom mode (typo → inactive).
                     eprintln!(
                         "upriv-core: .upriv-root has unknown status={other:?}; treating as inactive"
                     );
@@ -192,8 +216,11 @@ pub fn read_vault_root_alias(home: impl AsRef<Path>) -> Result<Option<VaultRootA
         }
     }
     let Some(target) = target else {
-        return Ok(None);
+        return Err(UprivError::VaultRootAliasInvalid(path));
     };
+    if !target.is_absolute() {
+        return Err(UprivError::VaultRootAliasInvalid(path));
+    }
     Ok(Some(VaultRootAlias {
         path: target,
         active: if saw_status { active } else { true },
@@ -203,32 +230,17 @@ pub fn read_vault_root_alias(home: impl AsRef<Path>) -> Result<Option<VaultRootA
 /// Atomically write `.upriv-root` (temp + `sync_all` + rename) so a crash cannot
 /// leave a 0-byte alias that the next launch treats as missing.
 fn write_alias_file_atomic(alias_path: &Path, contents: &str) -> Result<()> {
-    use std::io::Write;
-    if let Some(parent) = alias_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let nonce = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let tmp = alias_path.with_extension(format!("tmp.{}.{}", std::process::id(), nonce));
-    {
-        let mut file = std::fs::File::create(&tmp)?;
-        file.write_all(contents.as_bytes())?;
-        file.sync_all()?;
-    }
-    std::fs::rename(&tmp, alias_path)?;
-    Ok(())
+    crate::paths::write_bytes_atomic(alias_path, contents.as_bytes())
 }
 
-/// Write / rewrite the alias as **active** (fixed-path mode). `target` must be a vault-root.
+/// Write / rewrite the alias as **active** (custom mode). `target` must be a vault-root.
 pub fn write_vault_root_alias(home: impl AsRef<Path>, target: impl AsRef<Path>) -> Result<()> {
     let root = VaultRoot::discover(target.as_ref())?;
     let alias = vault_root_alias_path(home);
     write_alias_file_atomic(&alias, &alias_file_contents(root.root(), true)?)
 }
 
-/// Mark an existing alias **inactive** (auto-nearby in use). Keeps the path.
+/// Mark an existing alias **inactive** (nearby mode in use). Keeps the path.
 /// Missing file is OK (never created).
 pub fn deactivate_vault_root_alias(home: impl AsRef<Path>) -> Result<()> {
     let home = home.as_ref();
@@ -251,29 +263,6 @@ pub fn deactivate_vault_root_alias_everywhere() -> Result<()> {
                     bin.display()
                 );
             }
-        }
-    }
-    Ok(())
-}
-
-/// Delete the alias file permanently. Prefer [`deactivate_vault_root_alias`] for
-/// switching to auto (keeps the remembered path). This removes the file entirely.
-pub fn delete_vault_root_alias(home: impl AsRef<Path>) -> Result<()> {
-    let alias = vault_root_alias_path(home);
-    match std::fs::remove_file(&alias) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error.into()),
-    }
-}
-
-/// Delete alias in app home and, if different, beside the real binary.
-pub fn delete_vault_root_alias_everywhere() -> Result<()> {
-    let home = app_home_dir()?;
-    delete_vault_root_alias(&home)?;
-    if let Ok(bin) = binary_dir() {
-        if bin != home {
-            let _ = delete_vault_root_alias(bin);
         }
     }
     Ok(())
@@ -312,7 +301,7 @@ pub fn discover_vault_root_near(start: impl AsRef<Path>) -> Option<PathBuf> {
 }
 
 /// Open a nearby candidate: preserve Incomplete / permission Io; absence → `Ok(None)`.
-fn open_nearby_candidate(path: &Path) -> Result<Option<VaultRoot>> {
+pub(crate) fn open_nearby_candidate(path: &Path) -> Result<Option<VaultRoot>> {
     match VaultRoot::discover(path) {
         Ok(root) => Ok(Some(root)),
         Err(error @ UprivError::VaultRootIncomplete { .. }) => Err(error),
@@ -347,7 +336,8 @@ fn resolve_app_home(options: &ResolveVaultRootOptions) -> Result<PathBuf> {
 
 /// Resolve the vault-root for app launch.
 ///
-/// Order: explicit → fixed alias → nearby (auto). See crate README for strict/loose.
+/// Order: explicit (`UPRIV_VAULT_ROOT` / caller) → (custom: active alias) →
+/// (nearby: nearby only). See crate README for strict/loose.
 pub fn resolve_vault_root(options: ResolveVaultRootOptions) -> Result<ResolveVaultRoot> {
     let app_home = resolve_app_home(&options)?;
     let nearby_anchor = app_home.clone();
@@ -363,7 +353,7 @@ pub fn resolve_vault_root(options: ResolveVaultRootOptions) -> Result<ResolveVau
         });
     }
 
-    if !options.auto_detect {
+    if options.mode == VaultRootMode::Custom {
         return match try_open_alias(&app_home)? {
             Some(root) => Ok(ResolveVaultRoot::Found {
                 root,
@@ -376,7 +366,7 @@ pub fn resolve_vault_root(options: ResolveVaultRootOptions) -> Result<ResolveVau
         };
     }
 
-    // Auto: nearby only. Strict when `UPRIV_NEARBY_ANCHOR` is set (exact folder).
+    // Nearby mode only. Strict when `UPRIV_NEARBY_ANCHOR` is set (exact folder).
     let mut starts = vec![nearby_anchor.clone()];
     if options.binary_dir.is_none() {
         if let Ok(cwd) = std::env::current_dir() {
@@ -409,11 +399,16 @@ pub fn resolve_vault_root(options: ResolveVaultRootOptions) -> Result<ResolveVau
         }
         if let Some(found) = discover_vault_root_near(&start) {
             if found != start {
-                if let Some(root) = open_nearby_candidate(&found)? {
-                    return Ok(ResolveVaultRoot::Found {
-                        root,
-                        source: VaultRootSource::Nearby,
-                    });
+                // Sibling with Incomplete/corrupt marker must not abort nearby search.
+                match open_nearby_candidate(&found) {
+                    Ok(Some(root)) => {
+                        return Ok(ResolveVaultRoot::Found {
+                            root,
+                            source: VaultRootSource::Nearby,
+                        });
+                    }
+                    Ok(None) | Err(UprivError::VaultRootIncomplete { .. }) => {}
+                    Err(error) => return Err(error),
                 }
             }
         }
@@ -449,7 +444,7 @@ mod starts_order_tests {
         std::env::set_current_dir(cwd_root.path()).unwrap();
         let resolved = resolve_vault_root(ResolveVaultRootOptions {
             explicit: None,
-            auto_detect: true,
+            mode: VaultRootMode::Nearby,
             binary_dir: None,
         });
         let _ = std::env::set_current_dir(prev_cwd);
@@ -473,6 +468,11 @@ fn try_open_alias(app_home: &Path) -> Result<Option<VaultRoot>> {
     let Some(alias) = read_vault_root_alias(app_home)? else {
         return Ok(None);
     };
+    // Custom mode requires an *active* alias. Inactive = remembered path only
+    // (nearby in use) → treat as no alias for resolve (NeedsSetup).
+    if !alias.active {
+        return Ok(None);
+    }
     match VaultRoot::discover(&alias.path) {
         Ok(root) => Ok(Some(root)),
         Err(error @ UprivError::VaultRootIncomplete { .. }) => Err(error),
@@ -486,10 +486,11 @@ fn try_open_alias(app_home: &Path) -> Result<Option<VaultRoot>> {
 
 /// Preferred folder for “create structure here” / auto search / alias home.
 /// Electron `--dev` sets `UPRIV_NEARBY_ANCHOR` to `upriv/dev/`.
+/// Relative values are ignored (must be absolute).
 pub fn env_nearby_anchor() -> Option<PathBuf> {
     std::env::var_os("UPRIV_NEARBY_ANCHOR").and_then(|value| {
         let path = PathBuf::from(value);
-        if path.as_os_str().is_empty() {
+        if path.as_os_str().is_empty() || !path.is_absolute() {
             None
         } else {
             Some(path)
@@ -500,7 +501,7 @@ pub fn env_nearby_anchor() -> Option<PathBuf> {
 fn env_vault_root_explicit() -> Option<PathBuf> {
     std::env::var_os("UPRIV_VAULT_ROOT").and_then(|value| {
         let path = PathBuf::from(value);
-        if path.as_os_str().is_empty() {
+        if path.as_os_str().is_empty() || !path.is_absolute() {
             None
         } else {
             Some(path)
@@ -520,7 +521,7 @@ mod tests {
     use crate::paths::ENV_LOCK;
 
     #[test]
-    fn auto_finds_nearby_root() {
+    fn nearby_finds_nearby_root() {
         let dir = tempfile::tempdir().unwrap();
         let root = initialize_vault_root(dir.path()).unwrap();
         let nested = dir.path().join("bin");
@@ -528,7 +529,7 @@ mod tests {
 
         let resolved = resolve_vault_root(ResolveVaultRootOptions {
             explicit: None,
-            auto_detect: true,
+            mode: VaultRootMode::Nearby,
             binary_dir: Some(nested),
         })
         .unwrap();
@@ -546,7 +547,7 @@ mod tests {
     }
 
     #[test]
-    fn auto_prefers_nearby_over_active_alias() {
+    fn nearby_prefers_nearby_over_active_alias() {
         let nearby = tempfile::tempdir().unwrap();
         let elsewhere = tempfile::tempdir().unwrap();
         let nearby_root = initialize_vault_root(nearby.path()).unwrap();
@@ -557,7 +558,7 @@ mod tests {
 
         let resolved = resolve_vault_root(ResolveVaultRootOptions {
             explicit: None,
-            auto_detect: true,
+            mode: VaultRootMode::Nearby,
             binary_dir: Some(bin),
         })
         .unwrap();
@@ -571,7 +572,7 @@ mod tests {
     }
 
     #[test]
-    fn auto_uses_nearby_when_alias_inactive() {
+    fn nearby_uses_nearby_when_alias_inactive() {
         let nearby = tempfile::tempdir().unwrap();
         let elsewhere = tempfile::tempdir().unwrap();
         let nearby_root = initialize_vault_root(nearby.path()).unwrap();
@@ -581,7 +582,7 @@ mod tests {
 
         let resolved = resolve_vault_root(ResolveVaultRootOptions {
             explicit: None,
-            auto_detect: true,
+            mode: VaultRootMode::Nearby,
             binary_dir: Some(nearby.path().to_path_buf()),
         })
         .unwrap();
@@ -595,7 +596,7 @@ mod tests {
     }
 
     #[test]
-    fn auto_ignores_active_alias_when_nearby_missing() {
+    fn nearby_ignores_active_alias_when_nearby_missing() {
         let home = tempfile::tempdir().unwrap();
         let elsewhere = tempfile::tempdir().unwrap();
         initialize_vault_root(elsewhere.path()).unwrap();
@@ -603,7 +604,7 @@ mod tests {
 
         let resolved = resolve_vault_root(ResolveVaultRootOptions {
             explicit: None,
-            auto_detect: true,
+            mode: VaultRootMode::Nearby,
             binary_dir: Some(home.path().to_path_buf()),
         })
         .unwrap();
@@ -611,7 +612,7 @@ mod tests {
     }
 
     #[test]
-    fn auto_ignores_inactive_alias() {
+    fn nearby_ignores_inactive_alias() {
         let home = tempfile::tempdir().unwrap();
         let elsewhere = tempfile::tempdir().unwrap();
         initialize_vault_root(elsewhere.path()).unwrap();
@@ -620,7 +621,7 @@ mod tests {
 
         let resolved = resolve_vault_root(ResolveVaultRootOptions {
             explicit: None,
-            auto_detect: true,
+            mode: VaultRootMode::Nearby,
             binary_dir: Some(home.path().to_path_buf()),
         })
         .unwrap();
@@ -637,7 +638,7 @@ mod tests {
         let missing = bin.path().join("no-root-here");
         let err = resolve_vault_root(ResolveVaultRootOptions {
             explicit: Some(missing.clone()),
-            auto_detect: true,
+            mode: VaultRootMode::Nearby,
             binary_dir: Some(bin.path().to_path_buf()),
         })
         .unwrap_err();
@@ -645,7 +646,7 @@ mod tests {
     }
 
     #[test]
-    fn fixed_mode_incomplete_alias_errors_incomplete() {
+    fn custom_mode_incomplete_alias_errors_incomplete() {
         let home = tempfile::tempdir().unwrap();
         let elsewhere = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(elsewhere.path().join(".upriv")).unwrap();
@@ -663,7 +664,7 @@ mod tests {
 
         let err = resolve_vault_root(ResolveVaultRootOptions {
             explicit: None,
-            auto_detect: false,
+            mode: VaultRootMode::Custom,
             binary_dir: Some(home.path().to_path_buf()),
         })
         .unwrap_err();
@@ -679,7 +680,7 @@ mod tests {
 
         let err = resolve_vault_root(ResolveVaultRootOptions {
             explicit: Some(broken.path().to_path_buf()),
-            auto_detect: true,
+            mode: VaultRootMode::Nearby,
             binary_dir: Some(bin.path().to_path_buf()),
         })
         .unwrap_err();
@@ -687,7 +688,7 @@ mod tests {
     }
 
     #[test]
-    fn fixed_mode_invalid_alias_errors() {
+    fn custom_mode_invalid_alias_errors() {
         let home = tempfile::tempdir().unwrap();
         let missing = home.path().join("gone");
         std::fs::write(
@@ -697,7 +698,7 @@ mod tests {
         .unwrap();
         let err = resolve_vault_root(ResolveVaultRootOptions {
             explicit: None,
-            auto_detect: false,
+            mode: VaultRootMode::Custom,
             binary_dir: Some(home.path().to_path_buf()),
         })
         .unwrap_err();
@@ -705,7 +706,7 @@ mod tests {
     }
 
     #[test]
-    fn fixed_mode_uses_alias_over_nearby() {
+    fn custom_mode_uses_alias_over_nearby() {
         let home = tempfile::tempdir().unwrap();
         let elsewhere = tempfile::tempdir().unwrap();
         initialize_vault_root(home.path()).unwrap();
@@ -714,7 +715,7 @@ mod tests {
 
         let resolved = resolve_vault_root(ResolveVaultRootOptions {
             explicit: None,
-            auto_detect: false,
+            mode: VaultRootMode::Custom,
             binary_dir: Some(home.path().to_path_buf()),
         })
         .unwrap();
@@ -725,6 +726,26 @@ mod tests {
             }
             _ => panic!("expected active alias over local .upriv"),
         }
+    }
+
+    #[test]
+    fn custom_mode_inactive_alias_needs_setup() {
+        let home = tempfile::tempdir().unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        initialize_vault_root(elsewhere.path()).unwrap();
+        write_vault_root_alias(home.path(), elsewhere.path()).unwrap();
+        deactivate_vault_root_alias(home.path()).unwrap();
+
+        let resolved = resolve_vault_root(ResolveVaultRootOptions {
+            explicit: None,
+            mode: VaultRootMode::Custom,
+            binary_dir: Some(home.path().to_path_buf()),
+        })
+        .unwrap();
+        assert!(
+            matches!(resolved, ResolveVaultRoot::NeedsSetup { .. }),
+            "inactive alias must not open under custom mode"
+        );
     }
 
     #[test]
@@ -761,7 +782,7 @@ mod tests {
     }
 
     #[test]
-    fn fixed_mode_uses_and_rewrites_alias() {
+    fn custom_mode_uses_and_rewrites_alias() {
         let bin = tempfile::tempdir().unwrap();
         let first = tempfile::tempdir().unwrap();
         let second = tempfile::tempdir().unwrap();
@@ -771,7 +792,7 @@ mod tests {
         write_vault_root_alias(bin.path(), first.path()).unwrap();
         let resolved = resolve_vault_root(ResolveVaultRootOptions {
             explicit: None,
-            auto_detect: false,
+            mode: VaultRootMode::Custom,
             binary_dir: Some(bin.path().to_path_buf()),
         })
         .unwrap();
@@ -786,7 +807,7 @@ mod tests {
         write_vault_root_alias(bin.path(), second.path()).unwrap();
         let again = resolve_vault_root(ResolveVaultRootOptions {
             explicit: None,
-            auto_detect: false,
+            mode: VaultRootMode::Custom,
             binary_dir: Some(bin.path().to_path_buf()),
         })
         .unwrap();
@@ -797,7 +818,7 @@ mod tests {
             _ => panic!("expected rewritten alias"),
         }
 
-        delete_vault_root_alias(bin.path()).unwrap();
+        std::fs::remove_file(vault_root_alias_path(bin.path())).unwrap();
         assert!(!vault_root_alias_path(bin.path()).is_file());
     }
 
@@ -812,7 +833,7 @@ mod tests {
 
         let resolved = resolve_vault_root(ResolveVaultRootOptions {
             explicit: Some(b.path().to_path_buf()),
-            auto_detect: false,
+            mode: VaultRootMode::Custom,
             binary_dir: Some(bin.path().to_path_buf()),
         })
         .unwrap();

@@ -18,6 +18,7 @@ import {
   DEFAULT_VAULT_LIST_SORT,
   type VaultListSort,
 } from "@upriv/shared";
+import { isOsFileDrag } from "@/features/vaults/file-manager/lib/osFileDrop";
 
 function seedVaultPasswordHints(vaults: VaultListItem[]): VaultListItem[] {
   return vaults.map((vault) => {
@@ -93,7 +94,7 @@ export function useVaultListState(
   const onDragOver = useCallback(
     (vaultId: string) => {
       return (event: React.DragEvent) => {
-        if (!canReorder) return;
+        if (!canReorder || isOsFileDrag(event)) return;
         event.preventDefault();
         event.dataTransfer.dropEffect = "move";
         setDragOverId(vaultId);
@@ -111,7 +112,7 @@ export function useVaultListState(
   const onDrop = useCallback(
     (targetId: string) => {
       return (event: React.DragEvent) => {
-        if (!canReorder) return;
+        if (!canReorder || isOsFileDrag(event)) return;
         event.preventDefault();
         const draggedId = event.dataTransfer.getData(DRAG_MIME) || draggingId;
         if (draggedId && draggedId !== targetId) {

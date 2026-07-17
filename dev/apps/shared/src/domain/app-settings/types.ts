@@ -4,6 +4,9 @@ export type LocaleId = "en" | "pt-BR" | "es";
 export type UiTheme = "dark" | "neutral" | "light";
 export type LogLevel = "trace" | "debug" | "info" | "warn" | "error";
 
+/** How the app locates the vault-root: beside the app, or a custom absolute path. */
+export type VaultRootMode = "nearby" | "custom";
+
 export const APP_SETTINGS_SECTIONS = [
   "appearance",
   "logging",
@@ -33,12 +36,12 @@ export interface AppSettingsConfig {
   };
   app: {
     /**
-     * Wire/UI only — derived from app-home `.upriv-root` (`status=active` → false).
+     * Wire/UI only — derived from app-home `.upriv-root` (`status=active` → `"custom"`).
      * Not persisted in `settings.toml`.
      */
-    auto_detect_vault_root: boolean;
+    vault_root_mode: VaultRootMode;
     /**
-     * Wire/UI only — from `.upriv-root` when fixed; empty when auto.
+     * Wire/UI only — from `.upriv-root` when custom; empty when nearby.
      * Not persisted in `settings.toml`.
      */
     upriv_root_path: string;

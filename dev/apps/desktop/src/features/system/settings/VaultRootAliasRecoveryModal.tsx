@@ -1,8 +1,16 @@
-import { useCallback, useEffect, useId, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Button, Modal } from "@/components/ui";
 import { PolicyRadioOption, settingsControlClass } from "@/components/settings";
 import { useTranslation } from "@/i18n";
-import { SUPPORTED_LOCALES, VAULT_ROOT_ALIAS_FILE, type LocaleId } from "@upriv/shared";
+import {
+  SUPPORTED_LOCALES,
+  VAULT_ROOT_ALIAS_FILE,
+  VAULT_ROOT_ERROR_CODES,
+  RpcError,
+  isRpcError,
+  type LocaleId,
+  type VaultRootMode,
+} from "@upriv/shared";
 import { useAppSettingsService, useVaultRootService } from "@/platform/services";
 import { useAppSettingsContext } from "./AppSettingsContext";
 import { desktopErrorI18nKey } from "@/lib/errorMessages";
@@ -12,14 +20,26 @@ interface VaultRootAliasRecoveryModalProps {
   /** Path remembered in `.upriv-root` (may be empty). */
   rememberedPath: string;
   onRecovered: () => void;
-  /** Nearby incomplete while switching to auto — hand off to Gate repair. */
+  /** Nearby incomplete while switching to nearby mode — hand off to Gate repair. */
   onNearbyIncomplete: (nearbyAnchor: string) => void;
+  /** Custom-path incomplete — hand off to Gate repair. */
+  onCustomIncomplete: (path: string) => void;
 }
 
-type Mode = "auto" | "fixed";
+function isIncompleteError(error: unknown): boolean {
+  if (isRpcError(error) && error.code === VAULT_ROOT_ERROR_CODES.INCOMPLETE) return true;
+  if (error instanceof Error) {
+    return (
+      error.message === VAULT_ROOT_ERROR_CODES.INCOMPLETE ||
+      error.message.startsWith(`${VAULT_ROOT_ERROR_CODES.INCOMPLETE}:`) ||
+      error.message.includes(`${VAULT_ROOT_ERROR_CODES.INCOMPLETE}:`)
+    );
+  }
+  return false;
+}
 
 /**
- * Blocking when fixed alias / path is invalid or missing.
+ * Blocking when custom alias / path is invalid or missing.
  * Radios + Continue (same pattern as first-run setup and settings).
  */
 export function VaultRootAliasRecoveryModal({
@@ -27,23 +47,28 @@ export function VaultRootAliasRecoveryModal({
   rememberedPath,
   onRecovered,
   onNearbyIncomplete,
+  onCustomIncomplete,
 }: VaultRootAliasRecoveryModalProps) {
   const { t } = useTranslation();
   const vaultRoot = useVaultRootService();
   const appSettingsService = useAppSettingsService();
   const { settings, patchSettings } = useAppSettingsContext();
   const rootModeGroup = useId();
-  const [mode, setMode] = useState<Mode>("auto");
+  const [mode, setMode] = useState<VaultRootMode>("nearby");
   const [pathInput, setPathInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const submitLock = useRef(false);
+  const diskApplied = useRef<{ rootPath: string; mode: VaultRootMode } | null>(null);
 
   useEffect(() => {
     if (!open) return;
-    setMode("auto");
+    setMode("nearby");
     setPathInput(rememberedPath.trim());
     setBusy(false);
     setError(null);
+    submitLock.current = false;
+    diskApplied.current = null;
   }, [open, rememberedPath]);
 
   const handleLocaleChange = useCallback(
@@ -65,9 +90,7 @@ export function VaultRootAliasRecoveryModal({
       .then((picked) => {
         if (picked) setPathInput(picked);
         else if (!pathInput.trim()) {
-          setPathInput(
-            rememberedPath.trim() || appSettingsService.getDefaultRootPathSuggestion(),
-          );
+          setPathInput(rememberedPath.trim() || appSettingsService.getDefaultRootPathSuggestion());
         }
       })
       .catch((caught) => {
@@ -77,23 +100,28 @@ export function VaultRootAliasRecoveryModal({
   }, [appSettingsService, pathInput, rememberedPath, t, vaultRoot]);
 
   const handleContinue = useCallback(() => {
+    if (submitLock.current) return;
+    submitLock.current = true;
     setBusy(true);
     setError(null);
     void (async () => {
-      if (mode === "auto") {
-        const nearby = await vaultRoot.nearbyStatus();
-        if (nearby.status === "incomplete") {
-          onNearbyIncomplete(nearby.nearbyAnchor);
-          return;
+      if (mode === "nearby") {
+        if (!diskApplied.current) {
+          const nearby = await vaultRoot.nearbyStatus();
+          if (nearby.status === "incomplete") {
+            onNearbyIncomplete(nearby.nearbyAnchor);
+            return;
+          }
+          if (nearby.status === "unreadable") {
+            throw new RpcError(VAULT_ROOT_ERROR_CODES.IO_ERROR, "nearby .upriv is unreadable");
+          }
+          const { rootPath } = await vaultRoot.setupNearby({ locale: settings.ui.locale });
+          diskApplied.current = { rootPath, mode: "nearby" };
         }
-        if (nearby.status === "unreadable") {
-          throw new Error("io_error: nearby .upriv is unreadable");
-        }
-        await vaultRoot.setupNearby({ locale: settings.ui.locale });
         const saved = await patchSettings(
           {
             app: {
-              auto_detect_vault_root: true,
+              vault_root_mode: "nearby",
               upriv_root_path: "",
             },
           },
@@ -105,18 +133,58 @@ export function VaultRootAliasRecoveryModal({
       }
 
       const path = pathInput.trim();
-      if (!path) {
+      if (!path && !diskApplied.current) {
         setError(t("modal.vault_root_setup.error_path_required"));
         return;
       }
-      const { rootPath } = await vaultRoot.setupAtPath(path, {
-        locale: settings.ui.locale,
-      });
+
+      if (!diskApplied.current) {
+        try {
+          const inspected = await vaultRoot.inspectAtPath(path);
+          if (inspected.status === "incomplete") {
+            onCustomIncomplete(path);
+            return;
+          }
+        } catch (caught) {
+          if (isIncompleteError(caught)) {
+            onCustomIncomplete(path);
+            return;
+          }
+          // Inspect I/O — still try setup; Incomplete from setup is handled below.
+        }
+        try {
+          const { rootPath } = await vaultRoot.setupAtPath(path, {
+            locale: settings.ui.locale,
+          });
+          diskApplied.current = { rootPath, mode: "custom" };
+          const saved = await patchSettings(
+            {
+              app: {
+                vault_root_mode: "custom",
+                upriv_root_path: rootPath,
+              },
+            },
+            { vaultRootAlreadyApplied: true },
+          );
+          if (!saved) throw new Error("settings_save_failed");
+          onRecovered();
+          return;
+        } catch (caught) {
+          if (isIncompleteError(caught)) {
+            onCustomIncomplete(path);
+            return;
+          }
+          throw caught;
+        }
+      }
+
+      // Disk already applied — retry settings save with canonical rootPath.
+      const applied = diskApplied.current;
       const saved = await patchSettings(
         {
           app: {
-            auto_detect_vault_root: false,
-            upriv_root_path: rootPath,
+            vault_root_mode: applied.mode,
+            upriv_root_path: applied.mode === "custom" ? applied.rootPath : "",
           },
         },
         { vaultRootAlreadyApplied: true },
@@ -125,15 +193,15 @@ export function VaultRootAliasRecoveryModal({
       onRecovered();
     })()
       .catch((caught) => {
-        const key =
-          mode === "fixed"
-            ? "modal.vault_root_setup.error_pick"
-            : "modal.vault_root_setup.error_init";
-        setError(t(desktopErrorI18nKey(caught, key)));
+        setError(t(desktopErrorI18nKey(caught, "modal.vault_root_setup.error_init")));
       })
-      .finally(() => setBusy(false));
+      .finally(() => {
+        submitLock.current = false;
+        setBusy(false);
+      });
   }, [
     mode,
+    onCustomIncomplete,
     onNearbyIncomplete,
     onRecovered,
     patchSettings,
@@ -145,7 +213,7 @@ export function VaultRootAliasRecoveryModal({
 
   if (!open) return null;
 
-  const continueDisabled = busy || (mode === "fixed" && !pathInput.trim());
+  const continueDisabled = busy || (mode === "custom" && !pathInput.trim());
 
   return (
     <Modal
@@ -204,33 +272,33 @@ export function VaultRootAliasRecoveryModal({
         >
           <PolicyRadioOption
             groupName={rootModeGroup}
-            value="auto"
-            checked={mode === "auto"}
-            title={t("modal.app_settings.option.upriv_root.auto")}
-            description={t("modal.vault_root_setup.recovery_auto_desc")}
+            value="nearby"
+            checked={mode === "nearby"}
+            title={t("modal.app_settings.option.upriv_root.nearby")}
+            description={t("modal.vault_root_setup.recovery_nearby_desc")}
             badge="default"
             onSelect={() => {
-              setMode("auto");
+              setMode("nearby");
               setError(null);
             }}
           />
           <PolicyRadioOption
             groupName={rootModeGroup}
-            value="fixed"
-            checked={mode === "fixed"}
-            title={t("modal.app_settings.option.upriv_root.fixed")}
-            description={t("modal.app_settings.option.upriv_root.fixed_desc", {
+            value="custom"
+            checked={mode === "custom"}
+            title={t("modal.app_settings.option.upriv_root.custom")}
+            description={t("modal.app_settings.option.upriv_root.custom_desc", {
               file: VAULT_ROOT_ALIAS_FILE,
             })}
             onSelect={() => {
-              setMode("fixed");
+              setMode("custom");
               setError(null);
               if (!pathInput.trim() && rememberedPath.trim()) {
                 setPathInput(rememberedPath.trim());
               }
             }}
             footer={
-              mode === "fixed" ? (
+              mode === "custom" ? (
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-stretch">
                   <input
                     type="text"

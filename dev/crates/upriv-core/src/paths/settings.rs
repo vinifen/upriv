@@ -2,7 +2,7 @@
 //!
 //! Vault-root **mode and path are not stored in TOML**. They live in the app-home
 //! `.upriv-root` alias (`status=active|inactive` + path). The wire/`AppSettings`
-//! fields `auto_detect_vault_root` and `upriv_root_path` are derived on load and
+//! fields `vault_root_mode` and `upriv_root_path` are derived on load and
 //! drive alias updates on save.
 
 use std::path::{Path, PathBuf};
@@ -13,7 +13,7 @@ use crate::error::{Result, UprivError};
 use crate::paths::{
     app_home_dir, deactivate_vault_root_alias_everywhere, discover_vault_root_near,
     env_nearby_anchor, read_vault_root_alias, setup_nearby_anchor, write_vault_root_alias,
-    VaultRoot, VAULT_ROOT_SETTINGS_REL,
+    VaultRoot, VaultRootMode, VAULT_ROOT_SETTINGS_REL,
 };
 
 /// In-memory app settings matching the TS `AppSettingsConfig` wire shape (snake_case JSON).
@@ -45,9 +45,9 @@ pub struct LoggingSettings {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AppSectionSettings {
-    /// Derived from `.upriv-root` (`status=active` → false). Not written to TOML.
-    pub auto_detect_vault_root: bool,
-    /// Derived from `.upriv-root` when fixed; empty when auto. Not written to TOML.
+    /// Derived from `.upriv-root` (`status=active` → [`VaultRootMode::Custom`]). Not written to TOML.
+    pub vault_root_mode: VaultRootMode,
+    /// Derived from `.upriv-root` when custom; empty when nearby. Not written to TOML.
     #[serde(default)]
     pub upriv_root_path: String,
 }
@@ -187,8 +187,8 @@ fn default_keep() -> u32 {
 
 #[derive(Debug, Default, Deserialize, Serialize)]
 struct AppToml {
-    /// Other `[app]` keys (e.g. `last_opened_vault`). Legacy `auto_detect_vault_root`
-    /// in old files is ignored by serde (unknown field) — mode is `.upriv-root` only.
+    /// Other `[app]` keys (e.g. `last_opened_vault`). Unknown historical keys
+    /// in old TOML are ignored by serde — vault-root mode is `.upriv-root` only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     last_opened_vault: Option<String>,
 }
@@ -212,7 +212,7 @@ impl Default for AppSettings {
                 keep_last_entries: default_keep(),
             },
             app: AppSectionSettings {
-                auto_detect_vault_root: true,
+                vault_root_mode: VaultRootMode::Nearby,
                 upriv_root_path: String::new(),
             },
         }
@@ -223,7 +223,7 @@ impl Default for AppSettings {
 ///
 /// When `.upriv-root` is **active**, a failed open is returned as an error (no nearby
 /// fallback) so settings load/save cannot silently use a different root while the UI
-/// still shows fixed mode.
+/// still shows custom mode.
 pub fn discover_bootstrap_root() -> Result<Option<VaultRoot>> {
     let home = app_home_dir()?;
     if let Some(alias) = read_vault_root_alias(&home)? {
@@ -238,16 +238,16 @@ pub fn discover_bootstrap_root() -> Result<Option<VaultRoot>> {
     }
 
     if env_nearby_anchor().is_some() {
-        return Ok(VaultRoot::discover(&home).ok());
+        return crate::paths::resolve::open_nearby_candidate(&home);
     }
 
     if let Some(found) = discover_vault_root_near(&home) {
-        return Ok(VaultRoot::discover(&found).ok());
+        return crate::paths::resolve::open_nearby_candidate(&found);
     }
     if let Ok(cwd) = std::env::current_dir() {
         if cwd != home {
             if let Some(found) = discover_vault_root_near(&cwd) {
-                return Ok(VaultRoot::discover(&found).ok());
+                return crate::paths::resolve::open_nearby_candidate(&found);
             }
         }
     }
@@ -258,7 +258,7 @@ pub fn discover_bootstrap_root() -> Result<Option<VaultRoot>> {
 /// Always merge vault-root mode from `.upriv-root` (even when no readable root yet).
 ///
 /// Active alias that fails to open → defaults + alias-derived wire fields (`on_disk: false`)
-/// so the UI can still show fixed mode / Gate alias-invalid without falling back to nearby TOML.
+/// so the UI can still show custom mode / Gate alias-invalid without falling back to nearby TOML.
 pub fn load_app_settings() -> Result<LoadedAppSettings> {
     match discover_bootstrap_root() {
         Ok(Some(root)) => load_app_settings_at(root.root()),
@@ -288,9 +288,9 @@ pub fn load_app_settings() -> Result<LoadedAppSettings> {
     }
 }
 
-/// Apply `.upriv-root` → wire `auto_detect_vault_root` / `upriv_root_path`.
+/// Apply `.upriv-root` → wire `vault_root_mode` / `upriv_root_path`.
 fn apply_alias_to_app_settings(settings: &mut AppSettings) {
-    settings.app.auto_detect_vault_root = true;
+    settings.app.vault_root_mode = VaultRootMode::Nearby;
     settings.app.upriv_root_path.clear();
     let Ok(home) = app_home_dir() else {
         return;
@@ -299,13 +299,13 @@ fn apply_alias_to_app_settings(settings: &mut AppSettings) {
         return;
     };
     if alias.active {
-        settings.app.auto_detect_vault_root = false;
+        settings.app.vault_root_mode = VaultRootMode::Custom;
         match alias.path.to_str() {
             Some(s) if !s.contains('\n') && !s.contains('\r') => {
                 settings.app.upriv_root_path = s.to_string();
             }
             _ => {
-                // Keep fixed mode but leave path empty — UI must re-pick (non-UTF-8 / newline).
+                // Keep custom mode but leave path empty — UI must re-pick (non-UTF-8 / newline).
                 settings.app.upriv_root_path.clear();
             }
         }
@@ -341,7 +341,7 @@ pub fn load_app_settings_at(root: &Path) -> Result<LoadedAppSettings> {
             keep_last_entries: parsed.logging.keep_last_entries,
         },
         app: AppSectionSettings {
-            auto_detect_vault_root: true,
+            vault_root_mode: VaultRootMode::Nearby,
             upriv_root_path: String::new(),
         },
     };
@@ -423,40 +423,38 @@ fn write_settings_toml_only(root: &Path, settings: &AppSettings) -> Result<()> {
     })?;
     let header = "# Upriv marker + app settings (vault-root directory)\n\n";
     let footer = "\
-# Vault-root mode (auto vs fixed) is NOT configured in this file.
+# Vault-root mode (nearby vs custom) is NOT configured in this file.
 # It lives in the app-home `.upriv-root` alias:
-#   missing or status=inactive → auto-detect nearby
-#   status=active + path → fixed vault-root
+#   missing or status=inactive → nearby mode
+#   status=active + path → custom vault-root
 ";
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
     let contents = format!("{header}{body}\n{footer}");
-    let nonce = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let tmp = path.with_extension(format!("toml.tmp.{}.{}", std::process::id(), nonce));
-    {
-        use std::io::Write;
-        let mut file = std::fs::File::create(&tmp)?;
-        file.write_all(contents.as_bytes())?;
-        file.sync_all()?;
-    }
-    std::fs::rename(&tmp, &path)?;
-    Ok(())
+    crate::paths::write_bytes_atomic(&path, contents.as_bytes())
 }
 
 /// Write settings.toml at `root` and sync `.upriv-root` from wire `app` fields.
 pub fn save_app_settings(root: &Path, settings: &AppSettings) -> Result<()> {
+    save_app_settings_with_alias_sync(root, settings, true)
+}
+
+/// Write settings.toml at `root`. When `sync_alias` is true, also align `.upriv-root`
+/// from wire `app` fields. Pass `false` when the caller already mutated the alias
+/// via setup/deactivate (single writer).
+pub fn save_app_settings_with_alias_sync(
+    root: &Path,
+    settings: &AppSettings,
+    sync_alias: bool,
+) -> Result<()> {
     write_settings_toml_only(root, settings)?;
-    sync_alias_with_app_settings(settings)?;
+    if sync_alias {
+        sync_alias_with_app_settings(settings)?;
+    }
     Ok(())
 }
 
-/// Align `.upriv-root` with settings: auto → deactivate; fixed → write active alias.
+/// Align `.upriv-root` with settings: nearby → deactivate; custom → write active alias.
 pub fn sync_alias_with_app_settings(settings: &AppSettings) -> Result<()> {
-    if settings.app.auto_detect_vault_root {
+    if settings.app.vault_root_mode == VaultRootMode::Nearby {
         deactivate_vault_root_alias_everywhere()?;
         return Ok(());
     }
@@ -464,7 +462,7 @@ pub fn sync_alias_with_app_settings(settings: &AppSettings) -> Result<()> {
     if path.is_empty() {
         return Err(UprivError::Io(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
-            "fixed vault-root mode requires a non-empty upriv_root_path",
+            "custom vault-root mode requires a non-empty upriv_root_path",
         )));
     }
     let home = app_home_dir()?;
@@ -475,10 +473,21 @@ pub fn sync_alias_with_app_settings(settings: &AppSettings) -> Result<()> {
 /// Save when a writable vault-root exists for the **desired** mode; else `Ok(false)`.
 ///
 /// Target is chosen from the payload (not from the current active alias):
-/// - fixed → `upriv_root_path` (must already be a valid root)
-/// - auto → nearby anchor only (where `setup_nearby` creates); never the old fixed root
+/// - custom → `upriv_root_path` (must already be a valid root)
+/// - nearby → nearby anchor only (where `setup_nearby` creates); never the old custom root
+///
+/// `sync_alias` defaults to true via [`save_app_settings_session`]; pass false when
+/// vault-root setup already wrote/deactivated the alias.
 pub fn save_app_settings_session(settings: &AppSettings) -> Result<bool> {
-    let target = if !settings.app.auto_detect_vault_root {
+    save_app_settings_session_with_alias_sync(settings, true)
+}
+
+/// Like [`save_app_settings_session`], with explicit alias-sync control.
+pub fn save_app_settings_session_with_alias_sync(
+    settings: &AppSettings,
+    sync_alias: bool,
+) -> Result<bool> {
+    let target = if settings.app.vault_root_mode == VaultRootMode::Custom {
         let path = settings.app.upriv_root_path.trim();
         if path.is_empty() {
             return Ok(false);
@@ -486,16 +495,17 @@ pub fn save_app_settings_session(settings: &AppSettings) -> Result<bool> {
         PathBuf::from(path)
     } else {
         let anchor = setup_nearby_anchor()?;
-        match VaultRoot::discover(&anchor) {
-            Ok(root) => root.root().to_path_buf(),
-            Err(_) => return Ok(false),
+        match crate::paths::resolve::open_nearby_candidate(&anchor)? {
+            Some(root) => root.root().to_path_buf(),
+            None => return Ok(false),
         }
     };
 
-    if VaultRoot::discover(&target).is_err() {
-        return Ok(false);
+    match crate::paths::resolve::open_nearby_candidate(&target)? {
+        Some(_) => {}
+        None => return Ok(false),
     }
-    save_app_settings(&target, settings)?;
+    save_app_settings_with_alias_sync(&target, settings, sync_alias)?;
     Ok(true)
 }
 
@@ -515,26 +525,26 @@ mod tests {
         initialize_vault_root(dir.path()).unwrap();
         let mut settings = AppSettings::default();
         settings.ui.locale = "pt-BR".into();
-        settings.app.auto_detect_vault_root = true;
+        settings.app.vault_root_mode = VaultRootMode::Nearby;
         save_app_settings(dir.path(), &settings).unwrap();
 
         let raw = std::fs::read_to_string(dir.path().join(".upriv/settings.toml")).unwrap();
         assert!(
-            !raw.contains("auto_detect_vault_root"),
-            "mode must not be persisted in settings.toml"
+            !raw.contains("vault_root_mode") && !raw.contains("upriv_root_path"),
+            "mode/path must not be persisted in settings.toml"
         );
         assert!(raw.contains(".upriv-root"));
 
         let loaded = load_app_settings_at(dir.path()).unwrap();
         assert_eq!(loaded.settings.ui.locale, "pt-BR");
-        assert!(loaded.settings.app.auto_detect_vault_root);
+        assert_eq!(loaded.settings.app.vault_root_mode, VaultRootMode::Nearby);
         assert!(loaded.on_disk);
 
         std::env::remove_var("UPRIV_NEARBY_ANCHOR");
     }
 
     #[test]
-    fn save_fixed_writes_active_alias() {
+    fn save_custom_writes_active_alias() {
         let _guard = ENV_LOCK.lock().unwrap();
         let home = tempfile::tempdir().unwrap();
         let root = tempfile::tempdir().unwrap();
@@ -543,7 +553,7 @@ mod tests {
         std::env::set_var("UPRIV_NEARBY_ANCHOR", home.path());
 
         let mut settings = AppSettings::default();
-        settings.app.auto_detect_vault_root = false;
+        settings.app.vault_root_mode = VaultRootMode::Custom;
         settings.app.upriv_root_path = root.path().to_string_lossy().into_owned();
         save_app_settings(root.path(), &settings).unwrap();
 
@@ -552,9 +562,9 @@ mod tests {
         assert_eq!(alias.path, root.path().canonicalize().unwrap());
 
         let raw = std::fs::read_to_string(root.path().join(".upriv/settings.toml")).unwrap();
-        assert!(!raw.contains("auto_detect_vault_root"));
+        assert!(!raw.contains("vault_root_mode") && !raw.contains("upriv_root_path"));
 
-        settings.app.auto_detect_vault_root = true;
+        settings.app.vault_root_mode = VaultRootMode::Nearby;
         settings.app.upriv_root_path.clear();
         save_app_settings(root.path(), &settings).unwrap();
         let alias = read_vault_root_alias(home.path()).unwrap().unwrap();
@@ -573,7 +583,7 @@ mod tests {
         std::env::remove_var("APPIMAGE");
         std::env::set_var("UPRIV_NEARBY_ANCHOR", home.path());
 
-        // Legacy TOML may still claim auto=true while alias is active — alias wins.
+        // Unknown `[app]` keys must not override `.upriv-root` (alias wins).
         let settings_path = root.path().join(".upriv/settings.toml");
         std::fs::write(
             &settings_path,
@@ -589,13 +599,13 @@ locale = "en"
 enabled = true
 
 [app]
-auto_detect_vault_root = true
+obsolete_vault_root_flag = true
 "#,
         )
         .unwrap();
 
         let loaded = load_app_settings_at(root.path()).unwrap();
-        assert!(!loaded.settings.app.auto_detect_vault_root);
+        assert_eq!(loaded.settings.app.vault_root_mode, VaultRootMode::Custom);
         assert_eq!(
             loaded.settings.app.upriv_root_path,
             root.path().canonicalize().unwrap().to_string_lossy()
@@ -609,12 +619,12 @@ auto_detect_vault_root = true
         let _guard = ENV_LOCK.lock().unwrap();
         let home = tempfile::tempdir().unwrap();
         let nearby = tempfile::tempdir().unwrap();
-        let missing = home.path().join("gone-fixed");
+        let missing = home.path().join("gone-custom");
         initialize_vault_root(nearby.path()).unwrap();
         let alias_path = home.path().join(".upriv-root");
         std::fs::write(
             &alias_path,
-            format!("status=active\npath={}\n", missing.display()),
+            format!("status=active\n{}\n", missing.display()),
         )
         .unwrap();
         std::env::remove_var("APPIMAGE");
@@ -635,26 +645,26 @@ auto_detect_vault_root = true
 
         let loaded = load_app_settings().unwrap();
         assert!(!loaded.on_disk);
-        assert!(!loaded.settings.app.auto_detect_vault_root);
-        assert!(loaded.settings.app.upriv_root_path.contains("gone-fixed"));
+        assert_eq!(loaded.settings.app.vault_root_mode, VaultRootMode::Custom);
+        assert!(loaded.settings.app.upriv_root_path.contains("gone-custom"));
 
         std::env::remove_var("UPRIV_NEARBY_ANCHOR");
         let _ = nearby;
     }
 
     #[test]
-    fn save_session_auto_writes_nearby_not_old_fixed() {
+    fn save_session_nearby_writes_nearby_not_old_custom() {
         let _guard = ENV_LOCK.lock().unwrap();
         let home = tempfile::tempdir().unwrap();
-        let fixed = tempfile::tempdir().unwrap();
+        let custom = tempfile::tempdir().unwrap();
         initialize_vault_root(home.path()).unwrap();
-        initialize_vault_root(fixed.path()).unwrap();
-        write_vault_root_alias(home.path(), fixed.path()).unwrap();
+        initialize_vault_root(custom.path()).unwrap();
+        write_vault_root_alias(home.path(), custom.path()).unwrap();
         std::env::remove_var("APPIMAGE");
         std::env::set_var("UPRIV_NEARBY_ANCHOR", home.path());
 
         std::fs::write(
-            fixed.path().join(".upriv/settings.toml"),
+            custom.path().join(".upriv/settings.toml"),
             r#"
 [package]
 version = 1
@@ -669,14 +679,15 @@ enabled = true
 
         let mut settings = AppSettings::default();
         settings.ui.locale = "pt-BR".into();
-        settings.app.auto_detect_vault_root = true;
+        settings.app.vault_root_mode = VaultRootMode::Nearby;
         settings.app.upriv_root_path.clear();
         assert!(save_app_settings_session(&settings).unwrap());
 
         let nearby_raw = std::fs::read_to_string(home.path().join(".upriv/settings.toml")).unwrap();
         assert!(nearby_raw.contains("pt-BR"));
-        let fixed_raw = std::fs::read_to_string(fixed.path().join(".upriv/settings.toml")).unwrap();
-        assert!(!fixed_raw.contains("pt-BR"));
+        let custom_raw =
+            std::fs::read_to_string(custom.path().join(".upriv/settings.toml")).unwrap();
+        assert!(!custom_raw.contains("pt-BR"));
 
         std::env::remove_var("UPRIV_NEARBY_ANCHOR");
     }

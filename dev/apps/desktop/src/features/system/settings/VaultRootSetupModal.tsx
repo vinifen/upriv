@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Button, Modal } from "@/components/ui";
 import { PolicyRadioOption, settingsControlClass } from "@/components/settings";
 import { useTranslation } from "@/i18n";
@@ -9,6 +9,7 @@ import {
   isRpcError,
   type IncompleteReplacePolicy,
   type LocaleId,
+  type VaultRootMode,
 } from "@upriv/shared";
 import { useAppSettingsService, useVaultRootService } from "@/platform/services";
 import { useAppSettingsContext } from "./AppSettingsContext";
@@ -21,14 +22,13 @@ interface VaultRootSetupModalProps {
   onConfigured: () => void;
 }
 
-type Mode = "auto" | "fixed";
 type Step = "choose" | "repair" | "confirm_delete";
 
 /**
  * Blocking first-run when no vault-root is found.
  * Choose mode with radios (same pattern as Settings), then Continue:
- * - Auto: create default `.upriv/` next to the app.
- * - Fixed: initialize if needed + write active `.upriv-root` alias.
+ * - Nearby: create default `.upriv/` next to the app.
+ * - Custom: initialize if needed + write active `.upriv-root` alias.
  * Incomplete `.upriv/` → rename (recommended) or delete (+ confirm).
  */
 export function VaultRootSetupModal({
@@ -43,21 +43,25 @@ export function VaultRootSetupModal({
   const { settings, patchSettings } = useAppSettingsContext();
   const rootModeGroup = useId();
   const [step, setStep] = useState<Step>("choose");
-  const [mode, setMode] = useState<Mode>("auto");
+  const [mode, setMode] = useState<VaultRootMode>("nearby");
   const [repairPolicy, setRepairPolicy] = useState<IncompleteReplacePolicy>("rename");
   const [pathInput, setPathInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const repairPolicyGroup = useId();
+  const submitLock = useRef(false);
+  const diskApplied = useRef<{ rootPath: string; mode: VaultRootMode } | null>(null);
 
   useEffect(() => {
     if (!open) return;
     setStep("choose");
-    setMode("auto");
+    setMode("nearby");
     setRepairPolicy("rename");
     setPathInput("");
     setBusy(false);
     setError(null);
+    submitLock.current = false;
+    diskApplied.current = null;
   }, [open]);
 
   const handleLocaleChange = useCallback(
@@ -69,12 +73,13 @@ export function VaultRootSetupModal({
   );
 
   const finish = useCallback(
-    async (rootPath: string, nextMode: Mode) => {
+    async (rootPath: string, nextMode: VaultRootMode) => {
+      diskApplied.current = { rootPath, mode: nextMode };
       const saved = await patchSettings(
         {
           app: {
-            auto_detect_vault_root: nextMode === "auto",
-            upriv_root_path: nextMode === "fixed" ? rootPath : "",
+            vault_root_mode: nextMode,
+            upriv_root_path: nextMode === "custom" ? rootPath : "",
           },
         },
         { vaultRootAlreadyApplied: true },
@@ -88,19 +93,24 @@ export function VaultRootSetupModal({
   );
 
   const handleCreateNearby = useCallback(() => {
+    if (submitLock.current) return;
+    submitLock.current = true;
     setBusy(true);
     setError(null);
-    void vaultRoot
-      .setupNearby({ locale: settings.ui.locale })
-      .then(async ({ rootPath }) => {
-        await finish(rootPath, "auto");
-      })
+    void (async () => {
+      if (diskApplied.current?.mode === "nearby") {
+        await finish(diskApplied.current.rootPath, "nearby");
+        return;
+      }
+      const { rootPath } = await vaultRoot.setupNearby({ locale: settings.ui.locale });
+      await finish(rootPath, "nearby");
+    })()
       .catch((caught) => {
         if (isRpcError(caught) && caught.code === VAULT_ROOT_ERROR_CODES.INCOMPLETE) {
           // Nearby incomplete should normally be handled by VaultRootRepairModal;
           // surface repair for this edge case.
           setPathInput(nearbyAnchor);
-          setMode("auto");
+          setMode("nearby");
           setStep("repair");
           setError(null);
           return;
@@ -108,6 +118,7 @@ export function VaultRootSetupModal({
         setError(t(desktopErrorI18nKey(caught, "modal.vault_root_setup.error_init")));
       })
       .finally(() => {
+        submitLock.current = false;
         setBusy(false);
       });
   }, [finish, nearbyAnchor, settings.ui.locale, t, vaultRoot]);
@@ -136,21 +147,30 @@ export function VaultRootSetupModal({
       path: string,
       options?: { replaceIncomplete?: boolean; replacePolicy?: IncompleteReplacePolicy },
     ) => {
+      if (submitLock.current) return;
+      submitLock.current = true;
       setBusy(true);
       setError(null);
-      void vaultRoot
-        .setupAtPath(path, { ...options, locale: settings.ui.locale })
-        .then(async ({ rootPath }) => {
+      void (async () => {
+        if (diskApplied.current?.mode === "custom" && !options?.replaceIncomplete) {
           setStep("choose");
-          await finish(rootPath, "fixed");
-        })
+          await finish(diskApplied.current.rootPath, "custom");
+          return;
+        }
+        const { rootPath } = await vaultRoot.setupAtPath(path, {
+          ...options,
+          locale: settings.ui.locale,
+        });
+        setStep("choose");
+        await finish(rootPath, "custom");
+      })()
         .catch((caught) => {
           if (
             !options?.replaceIncomplete &&
             isRpcError(caught) &&
             caught.code === VAULT_ROOT_ERROR_CODES.INCOMPLETE
           ) {
-            setMode("fixed");
+            setMode("custom");
             setStep("repair");
             setError(null);
             return;
@@ -158,6 +178,7 @@ export function VaultRootSetupModal({
           setError(t(desktopErrorI18nKey(caught, "modal.vault_root_setup.error_init")));
         })
         .finally(() => {
+          submitLock.current = false;
           setBusy(false);
         });
     },
@@ -165,7 +186,7 @@ export function VaultRootSetupModal({
   );
 
   const handleContinue = useCallback(() => {
-    if (mode === "auto") {
+    if (mode === "nearby") {
       handleCreateNearby();
       return;
     }
@@ -184,24 +205,33 @@ export function VaultRootSetupModal({
         setError(t("modal.vault_root_setup.error_path_required"));
         return;
       }
-      if (mode === "auto") {
+      if (mode === "nearby") {
+        if (submitLock.current) return;
+        submitLock.current = true;
         // Nearby incomplete edge: replace at anchor via setupNearby policy.
         setBusy(true);
         setError(null);
-        void vaultRoot
-          .setupNearby({
+        void (async () => {
+          if (diskApplied.current?.mode === "nearby") {
+            setStep("choose");
+            await finish(diskApplied.current.rootPath, "nearby");
+            return;
+          }
+          const { rootPath } = await vaultRoot.setupNearby({
             replaceIncomplete: true,
             replacePolicy: policy,
             locale: settings.ui.locale,
-          })
-          .then(async ({ rootPath }) => {
-            setStep("choose");
-            await finish(rootPath, "auto");
-          })
+          });
+          setStep("choose");
+          await finish(rootPath, "nearby");
+        })()
           .catch((caught) => {
             setError(t(desktopErrorI18nKey(caught, "modal.vault_root_setup.error_init")));
           })
-          .finally(() => setBusy(false));
+          .finally(() => {
+            submitLock.current = false;
+            setBusy(false);
+          });
         return;
       }
       runSetupAtPath(path, { replaceIncomplete: true, replacePolicy: policy });
@@ -220,8 +250,7 @@ export function VaultRootSetupModal({
 
   if (!open) return null;
 
-  const continueDisabled =
-    busy || (mode === "fixed" && !pathInput.trim() && step === "choose");
+  const continueDisabled = busy || (mode === "custom" && !pathInput.trim() && step === "choose");
 
   const footer =
     step === "choose" ? (
@@ -334,17 +363,17 @@ export function VaultRootSetupModal({
             >
               <PolicyRadioOption
                 groupName={rootModeGroup}
-                value="auto"
-                checked={mode === "auto"}
-                title={t("modal.app_settings.option.upriv_root.auto")}
-                description={t("modal.app_settings.option.upriv_root.auto_desc")}
+                value="nearby"
+                checked={mode === "nearby"}
+                title={t("modal.app_settings.option.upriv_root.nearby")}
+                description={t("modal.app_settings.option.upriv_root.nearby_desc")}
                 badge="default"
                 onSelect={() => {
-                  setMode("auto");
+                  setMode("nearby");
                   setError(null);
                 }}
                 footer={
-                  mode === "auto" ? (
+                  mode === "nearby" ? (
                     <p className="break-all rounded-md bg-surface-container-highest px-3 py-2 font-mono text-xs text-on-surface">
                       {nearbyAnchor}
                     </p>
@@ -353,18 +382,18 @@ export function VaultRootSetupModal({
               />
               <PolicyRadioOption
                 groupName={rootModeGroup}
-                value="fixed"
-                checked={mode === "fixed"}
-                title={t("modal.app_settings.option.upriv_root.fixed")}
-                description={t("modal.app_settings.option.upriv_root.fixed_desc", {
+                value="custom"
+                checked={mode === "custom"}
+                title={t("modal.app_settings.option.upriv_root.custom")}
+                description={t("modal.app_settings.option.upriv_root.custom_desc", {
                   file: VAULT_ROOT_ALIAS_FILE,
                 })}
                 onSelect={() => {
-                  setMode("fixed");
+                  setMode("custom");
                   setError(null);
                 }}
                 footer={
-                  mode === "fixed" ? (
+                  mode === "custom" ? (
                     <div className="space-y-2">
                       <p className="text-xs leading-relaxed text-on-surface-variant">
                         {t("modal.vault_root_setup.alias_notice", {
@@ -405,8 +434,8 @@ export function VaultRootSetupModal({
           <>
             <p>
               {t(
-                mode === "fixed"
-                  ? "modal.vault_root_repair.body_fixed"
+                mode === "custom"
+                  ? "modal.vault_root_repair.body_custom"
                   : "modal.vault_root_repair.body",
               )}
             </p>
@@ -450,8 +479,8 @@ export function VaultRootSetupModal({
         ) : (
           <p role="alert">
             {t(
-              mode === "fixed"
-                ? "modal.vault_root_repair.confirm_delete_body_fixed"
+              mode === "custom"
+                ? "modal.vault_root_repair.confirm_delete_body_custom"
                 : "modal.vault_root_repair.confirm_delete_body",
             )}
           </p>

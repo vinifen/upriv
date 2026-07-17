@@ -1,12 +1,10 @@
 import type { VaultRootService } from "@upriv/shared";
 import {
   rpcPickDirectory,
-  rpcVaultRootDeactivateAlias,
   rpcVaultRootInspectPath,
   rpcVaultRootNearbyStatus,
   rpcVaultRootReadAlias,
   rpcVaultRootResolve,
-  rpcVaultRootRewriteAlias,
   rpcVaultRootSetupNearby,
   rpcVaultRootSetupPath,
 } from "@/lib/rpc";
@@ -23,14 +21,6 @@ export const desktopVaultRootService: VaultRootService = {
 
   setupAtPath(path, options) {
     return rpcVaultRootSetupPath(path, options);
-  },
-
-  rewriteAlias(path) {
-    return rpcVaultRootRewriteAlias(path);
-  },
-
-  deactivateAlias() {
-    return rpcVaultRootDeactivateAlias();
   },
 
   readAlias() {

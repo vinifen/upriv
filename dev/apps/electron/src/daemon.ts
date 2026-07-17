@@ -312,7 +312,7 @@ export async function daemonRpc<T>(
   const result = await new Promise<unknown>((resolve, reject) => {
     const timer = setTimeout(() => {
       connection.pending.delete(id);
-      reject(new Error(`daemon RPC timeout: ${method}`));
+      reject(new Error(`rpc_timeout: daemon RPC timeout: ${method}`));
     }, timeoutMs);
 
     connection.pending.set(id, { resolve, reject, timer });

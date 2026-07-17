@@ -8,9 +8,10 @@ use serde_json::{json, Value};
 use upriv_core::{
     app_home_dir, apply_setup_ui_locale, deactivate_vault_root_alias_everywhere,
     inspect_vault_root_at, load_app_settings, open_or_initialize_vault_root_with_policy,
-    read_vault_root_alias, resolve_vault_root, save_app_settings_session, write_vault_root_alias,
-    AppSettings, IncompleteReplacePolicy, NearbyVaultRootStatus, ResolveVaultRoot,
-    ResolveVaultRootOptions, VaultRootSource, VAULT_ROOT_ALIAS_FILE,
+    read_vault_root_alias, resolve_vault_root, save_app_settings_session_with_alias_sync,
+    write_vault_root_alias, AppSettings, IncompleteReplacePolicy, NearbyVaultRootStatus,
+    ResolveVaultRoot, ResolveVaultRootOptions, VaultRootMode, VaultRootSource,
+    VAULT_ROOT_ALIAS_FILE,
 };
 
 #[derive(Debug, Deserialize)]
@@ -40,17 +41,13 @@ pub struct RpcResponse {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ResolveParams {
-    #[serde(default = "default_true")]
-    auto_detect: bool,
+    #[serde(default)]
+    vault_root_mode: VaultRootMode,
     #[serde(default)]
     explicit_path: Option<String>,
-    /// Debug-only alternate app home (`UPRIV_DEV` must be set); ignored otherwise.
+    /// Debug-only alternate app home (`UPRIV_DEV` must be set); rejected otherwise.
     #[serde(default)]
     binary_dir: Option<String>,
-}
-
-fn default_true() -> bool {
-    true
 }
 
 #[derive(Debug, Deserialize)]
@@ -70,7 +67,8 @@ struct PathParams {
 struct SetupNearbyParams {
     #[serde(default)]
     replace_incomplete: bool,
-    /// `"delete"` | `"rename"` — used when `replace_incomplete` is true (default delete).
+    /// `"delete"` | `"rename"` — **required** when `replace_incomplete` is true
+    /// (no daemon default; UI/TS must pass policy explicitly).
     #[serde(default)]
     replace_policy: Option<String>,
     #[serde(default)]
@@ -86,8 +84,6 @@ pub fn handle_rpc(req: RpcRequest) -> RpcResponse {
         "vault_root_resolve" => vault_root_resolve(req.params),
         "vault_root_setup_nearby" => vault_root_setup_nearby(req.params),
         "vault_root_setup_path" => vault_root_setup_path(req.params),
-        "vault_root_rewrite_alias" => vault_root_rewrite_alias(req.params),
-        "vault_root_deactivate_alias" => vault_root_deactivate_alias(),
         "vault_root_read_alias" => vault_root_read_alias(),
         "vault_root_nearby_status" => vault_root_nearby_status(),
         "vault_root_inspect_path" => vault_root_inspect_path(req.params),
@@ -107,20 +103,35 @@ fn vault_root_resolve(params: Value) -> RpcResponse {
         Ok(value) => value,
         Err(error) => return err("invalid_request", error.to_string()),
     };
-    let binary_dir = if std::env::var_os("UPRIV_DEV").is_some() {
-        parsed
-            .binary_dir
-            .filter(|s| !s.trim().is_empty())
-            .map(PathBuf::from)
-    } else {
-        None
+    let binary_dir = match (std::env::var_os("UPRIV_DEV").is_some(), parsed.binary_dir) {
+        (_, None) => None,
+        (true, Some(dir)) => {
+            let trimmed = dir.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(PathBuf::from(trimmed))
+            }
+        }
+        (false, Some(_)) => {
+            return err(
+                "invalid_request",
+                "binaryDir is only allowed when UPRIV_DEV is set".into(),
+            );
+        }
     };
     let options = ResolveVaultRootOptions {
-        explicit: parsed
-            .explicit_path
-            .filter(|s| !s.trim().is_empty())
-            .map(PathBuf::from),
-        auto_detect: parsed.auto_detect,
+        explicit: match parsed.explicit_path.filter(|s| !s.trim().is_empty()) {
+            Some(path) => {
+                let path = PathBuf::from(path);
+                if let Err(response) = require_absolute_path(&path) {
+                    return response;
+                }
+                Some(path)
+            }
+            None => None,
+        },
+        mode: parsed.vault_root_mode,
         binary_dir,
     };
     match resolve_vault_root(options) {
@@ -197,12 +208,18 @@ fn vault_root_setup_nearby(params: Value) -> RpcResponse {
     let result = open_or_initialize_vault_root_with_policy(&anchor, replace);
     match result {
         Ok(root) => {
-            // Alias/deactivate first so a locale failure does not leave active fixed alias.
+            // Partial-failure / retry-safe contract: init may succeed before later
+            // steps. If deactivate fails, `.upriv/` may already exist at the anchor —
+            // UI should retry deactivate / re-enter setup (no automatic rollback).
+            // Locale is best-effort here; `app_settings_save` in modal `finish()`
+            // applies it again — do not fail the whole RPC after root+alias OK.
             if let Err(error) = deactivate_vault_root_alias_everywhere() {
                 return map_core_err(error);
             }
             if let Err(error) = apply_setup_ui_locale(root.root(), parsed.locale.as_deref()) {
-                eprintln!("upriv-daemon: setup_nearby locale apply failed: {error}");
+                eprintln!(
+                    "vault_root_setup_nearby: apply_setup_ui_locale failed (root ok): {error}"
+                );
             }
             match path_utf8(root.root()) {
                 Ok(root_path) => ok(json!({ "rootPath": root_path })),
@@ -293,11 +310,15 @@ fn vault_root_setup_path(params: Value) -> RpcResponse {
         Ok(dir) => dir,
         Err(error) => return map_core_err(error),
     };
+    // Partial-failure / retry-safe contract: root may already exist if later steps
+    // fail. If alias write fails, `.upriv/` may already exist at `path` — UI should
+    // retry alias write / re-enter setup (no automatic rollback). Locale is
+    // best-effort; modal `finish()` re-applies via `app_settings_save`.
     if let Err(error) = write_vault_root_alias(&home, root.root()) {
         return map_core_err(error);
     }
     if let Err(error) = apply_setup_ui_locale(root.root(), parsed.locale.as_deref()) {
-        eprintln!("upriv-daemon: setup_path locale apply failed: {error}");
+        eprintln!("vault_root_setup_path: apply_setup_ui_locale failed (root+alias ok): {error}");
     }
     let alias_path = home.join(VAULT_ROOT_ALIAS_FILE);
     let root_path = match path_utf8(root.root()) {
@@ -312,32 +333,6 @@ fn vault_root_setup_path(params: Value) -> RpcResponse {
         "rootPath": root_path,
         "aliasPath": alias,
     }))
-}
-
-fn vault_root_rewrite_alias(params: Value) -> RpcResponse {
-    let parsed: PathParams = match serde_json::from_value(params) {
-        Ok(value) => value,
-        Err(error) => return err("invalid_request", error.to_string()),
-    };
-    let path = PathBuf::from(parsed.path.trim());
-    if let Err(response) = require_absolute_path(&path) {
-        return response;
-    }
-    let home = match upriv_core::app_home_dir() {
-        Ok(dir) => dir,
-        Err(error) => return map_core_err(error),
-    };
-    match write_vault_root_alias(&home, &path) {
-        Ok(()) => ok(json!(null)),
-        Err(error) => map_core_err(error),
-    }
-}
-
-fn vault_root_deactivate_alias() -> RpcResponse {
-    match deactivate_vault_root_alias_everywhere() {
-        Ok(()) => ok(json!(null)),
-        Err(error) => map_core_err(error),
-    }
 }
 
 fn vault_root_read_alias() -> RpcResponse {
@@ -378,13 +373,28 @@ fn app_settings_get() -> RpcResponse {
     }
 }
 
+#[derive(Debug, Deserialize)]
+struct AppSettingsSaveParams {
+    /// Flattened wire `AppSettings` (snake_case nested keys: `ui`, `logging`, `app`).
+    #[serde(flatten)]
+    settings: AppSettings,
+    /// When false, write TOML only (caller already mutated `.upriv-root`). Default true.
+    #[serde(default = "default_sync_alias", rename = "syncAlias")]
+    sync_alias: bool,
+}
+
+fn default_sync_alias() -> bool {
+    true
+}
+
 fn app_settings_save(params: Value) -> RpcResponse {
-    let settings: AppSettings = match serde_json::from_value(params) {
+    let parsed: AppSettingsSaveParams = match serde_json::from_value(params) {
         Ok(value) => value,
         Err(error) => return err("invalid_request", error.to_string()),
     };
-    // Reject relative fixed paths the same way as setup_path.
-    if !settings.app.auto_detect_vault_root {
+    let settings = parsed.settings;
+    // Reject relative custom paths the same way as setup_path.
+    if settings.app.vault_root_mode == VaultRootMode::Custom {
         let path = settings.app.upriv_root_path.trim();
         if !path.is_empty() {
             if let Err(response) = require_absolute_path(Path::new(path)) {
@@ -392,7 +402,7 @@ fn app_settings_save(params: Value) -> RpcResponse {
             }
         }
     }
-    match save_app_settings_session(&settings) {
+    match save_app_settings_session_with_alias_sync(&settings, parsed.sync_alias) {
         Ok(wrote) => ok(json!({ "wrote": wrote })),
         Err(error) => map_core_err(error),
     }
@@ -459,8 +469,6 @@ mod contract_tests {
         "vault_root_resolve",
         "vault_root_setup_nearby",
         "vault_root_setup_path",
-        "vault_root_rewrite_alias",
-        "vault_root_deactivate_alias",
         "vault_root_read_alias",
         "vault_root_nearby_status",
         "vault_root_inspect_path",

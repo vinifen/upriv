@@ -5,7 +5,10 @@ import { useAppRefresh } from "@/features/system/refresh";
 import type { CreateVaultResult } from "@upriv/shared";
 import {
   APP_SETTINGS_ERROR_I18N_KEYS,
+  createDraftForImportSource,
+  createDraftForScratchSource,
   createDraftFromBackup,
+  createDraftFromImportArchive,
   type VaultListSort,
   type VaultListViewMode,
 } from "@upriv/shared";
@@ -16,11 +19,13 @@ import { useErrorToast } from "@/hooks/useErrorToast";
 import { useDaemonReady } from "@/lib/useDaemonReady";
 import { useVaultListState } from "./useVaultListState";
 import { useVaultListModals } from "./useVaultListModals";
+import { useVaultArchiveDrop } from "./useVaultArchiveDrop";
 
 export function useVaultListScreen() {
   const { t } = useTranslation();
   const vaultService = useVaultService();
-  const { openFromVault, syncWithVaultList, purgeForVaultClose } = useFileManager();
+  const { openFromVault, syncWithVaultList, purgeForVaultClose, maximizedVaultId } =
+    useFileManager();
   const { settings, patchSettings, showHiddenVaultsSession } = useAppSettingsContext();
   const showHiddenVaults = settings.ui.always_show_hidden_vaults || showHiddenVaultsSession;
   const {
@@ -182,11 +187,63 @@ export function useVaultListScreen() {
       modals.setCreateVaultInitialDraft(
         createDraftFromBackup(filename, modals.backupVault.id, existingOrders),
       );
+      modals.setCreateVaultInitialStep(null);
       modals.setBackupVaultId(null);
       modals.setCreateVaultOpen(true);
     },
     [existingOrders, modals],
   );
+
+  const openCreateVaultWithDraft = useCallback(
+    (draft: ReturnType<typeof createDraftFromImportArchive>, step: "source" | null = "source") => {
+      modals.setCreateVaultInitialDraft(draft);
+      modals.setCreateVaultInitialStep(step);
+      modals.setCreateVaultOpen(true);
+    },
+    [modals],
+  );
+
+  const handleCreateFromScratch = useCallback(() => {
+    openCreateVaultWithDraft(createDraftForScratchSource(existingOrders), "source");
+  }, [existingOrders, openCreateVaultWithDraft]);
+
+  const handleImportArchive = useCallback(() => {
+    openCreateVaultWithDraft(createDraftForImportSource(existingOrders), "source");
+  }, [existingOrders, openCreateVaultWithDraft]);
+
+  const handleDroppedSevenZip = useCallback(
+    (file: File, absolutePath?: string) => {
+      openCreateVaultWithDraft(
+        createDraftFromImportArchive(file.name, existingOrders, { filePath: absolutePath }),
+        "source",
+      );
+    },
+    [existingOrders, openCreateVaultWithDraft],
+  );
+
+  const handleRejectNonSevenZipDrop = useCallback(() => {
+    showToast(t("empty.drop_archive_rejected"));
+  }, [showToast, t]);
+
+  const blockingUiOpen = Boolean(
+    modals.createVaultOpen ||
+    modals.appSettingsOpen ||
+    modals.logsOpen ||
+    modals.helpOpen ||
+    modals.noteVaultId ||
+    modals.backupVaultId ||
+    modals.settingsVaultId ||
+    modals.lifecycleRequest ||
+    modals.recoveryVaultId ||
+    maximizedVaultId ||
+    lifecycle.pipeline.run?.foreground,
+  );
+
+  const archiveDrop = useVaultArchiveDrop({
+    enabled: !blockingUiOpen,
+    onAcceptSevenZip: handleDroppedSevenZip,
+    onRejectNonSevenZip: handleRejectNonSevenZipDrop,
+  });
 
   const handleNoteChange = useCallback(
     (vaultId: string, note: string) => {
@@ -250,7 +307,11 @@ export function useVaultListScreen() {
       onOpenSystemSettings: () => modals.setAppSettingsOpen(true),
       onViewLogs: () => modals.setLogsOpen(true),
       onOpenHelp: () => modals.setHelpOpen(true),
-      onNewVault: () => modals.setCreateVaultOpen(true),
+      onNewVault: () => {
+        modals.setCreateVaultInitialDraft(null);
+        modals.setCreateVaultInitialStep(null);
+        modals.setCreateVaultOpen(true);
+      },
     },
     list: {
       vaults,
@@ -265,6 +326,8 @@ export function useVaultListScreen() {
       canReorder,
       draggingId,
       dragOverId,
+      onCreateFromScratch: handleCreateFromScratch,
+      onImportArchive: handleImportArchive,
       onOpenBackups: modals.setBackupVaultId,
       onOpenNote: modals.setNoteVaultId,
       onOpenSettings: modals.setSettingsVaultId,
@@ -279,6 +342,7 @@ export function useVaultListScreen() {
       onDragLeave,
       onDrop,
     },
+    archiveDrop,
     lifecycle: {
       lifecycleVault: modals.lifecycleVault,
       lifecycleIntent: modals.lifecycleRequest?.intent ?? null,
@@ -346,6 +410,7 @@ export function useVaultListScreen() {
       existingVaultIds,
       existingOrders,
       initialDraft: modals.createVaultInitialDraft,
+      initialStep: modals.createVaultInitialStep,
       onClose: modals.closeCreateVault,
       onCreate: handleCreateVault,
     },

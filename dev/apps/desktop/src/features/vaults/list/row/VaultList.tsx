@@ -1,5 +1,5 @@
-import { useTranslation } from "@/i18n";
 import { VaultBlockCard } from "./VaultBlockCard";
+import { VaultListEmptyState } from "./VaultListEmptyState";
 import { VaultRow } from "./VaultRow";
 import type { VaultListViewMode, VaultListItem } from "@upriv/shared";
 
@@ -17,6 +17,8 @@ interface VaultListProps {
   canReorder: boolean;
   draggingId: string | null;
   dragOverId: string | null;
+  onCreateFromScratch: () => void;
+  onImportArchive: () => void;
   onOpenBackups: (vaultId: string) => void;
   onOpenNote: (vaultId: string) => void;
   onOpenSettings: (vaultId: string) => void;
@@ -42,6 +44,8 @@ export function VaultList({
   canReorder,
   draggingId,
   dragOverId,
+  onCreateFromScratch,
+  onImportArchive,
   onOpenBackups,
   onOpenNote,
   onOpenSettings,
@@ -57,13 +61,13 @@ export function VaultList({
   onDragLeave,
   onDrop,
 }: VaultListProps) {
-  const { t } = useTranslation();
-
   if (vaults.length === 0) {
     return (
-      <p className="py-16 text-center font-mono text-sm uppercase tracking-widest text-on-surface-variant">
-        {allVaultsHidden ? t("empty.vaults_all_hidden") : t("empty.no_vaults")}
-      </p>
+      <VaultListEmptyState
+        allVaultsHidden={allVaultsHidden}
+        onCreateFromScratch={onCreateFromScratch}
+        onImportArchive={onImportArchive}
+      />
     );
   }
 

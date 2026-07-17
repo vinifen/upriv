@@ -30,7 +30,7 @@ Artifacts: `dev/target/release/bundle/electron/` (`.AppImage` on Linux).
 
 **Linux note:** on Ubuntu 23.10+ the Electron shell uses `--no-sandbox` (AppArmor blocks Chromium user namespaces). Renderer `sandbox: true` still applies. Optional: configure `chrome-sandbox` as root 4755 — see [Electron Linux docs](https://www.electronjs.org/docs/latest/tutorial/sandbox).
 
-**MVP:** UI runs with **mock services** (`platform/mocks/`). Only `app_version` RPC is wired (shown in Help when running in Electron). Vault handlers in `upriv-daemon` come next (SDD §8.2.6).
+**MVP:** Settings + **`VaultRootGate`** (setup / repair / alias recovery) talk to live `app_settings_*` and `vault_root_*` RPCs via `platform/desktop/`. Vault list, open/close, file manager, and most other services still use **mock** data until their RPCs land (SDD §8.2.6).
 
 ## Prototype mocks (temporary)
 

@@ -1,12 +1,12 @@
 //! Vault-root path contract (PRD §5 / SDD §3 / `prod-example/README.md`).
 //!
 //! - [`VaultRoot`] — paths under an opened root  
-//! - [`resolve_vault_root`] — launch discovery (explicit → alias → nearby)  
+//! - [`resolve_vault_root`] — launch discovery (explicit → custom active alias → nearby)  
 //! - [`initialize_vault_root`] — create default `.upriv/` layout  
 //! - [`load_app_settings`] / [`save_app_settings`] — `.upriv/settings.toml`
 //!
 //! Alias (`.upriv-root` in app home) is created only for “another folder”.
-//! Auto-detect ignores active alias (settings are source of truth) and deactivates it on save.
+//! Nearby mode ignores active alias (settings are source of truth) and deactivates it on save.
 
 mod init;
 mod resolve;
@@ -20,14 +20,14 @@ pub use init::{
 };
 pub use resolve::{
     app_home_dir, binary_dir, deactivate_vault_root_alias, deactivate_vault_root_alias_everywhere,
-    delete_vault_root_alias, delete_vault_root_alias_everywhere, discover_vault_root_near,
-    env_nearby_anchor, read_vault_root_alias, resolve_vault_root, setup_nearby_anchor,
-    vault_root_alias_path, write_vault_root_alias, ResolveVaultRoot, ResolveVaultRootOptions,
-    VaultRootAlias, VaultRootSource, VAULT_ROOT_ALIAS_FILE,
+    discover_vault_root_near, env_nearby_anchor, read_vault_root_alias, resolve_vault_root,
+    setup_nearby_anchor, vault_root_alias_path, write_vault_root_alias, ResolveVaultRoot,
+    ResolveVaultRootOptions, VaultRootAlias, VaultRootMode, VaultRootSource, VAULT_ROOT_ALIAS_FILE,
 };
 pub use settings::{
     apply_setup_ui_locale, discover_bootstrap_root, load_app_settings, load_app_settings_at,
-    save_app_settings, save_app_settings_session, sync_alias_with_app_settings, AppSectionSettings,
+    save_app_settings, save_app_settings_session, save_app_settings_session_with_alias_sync,
+    save_app_settings_with_alias_sync, sync_alias_with_app_settings, AppSectionSettings,
     AppSettings, LoadedAppSettings, LoggingSettings, UiSettings,
 };
 
@@ -48,6 +48,39 @@ const LOGS_DIR_REL: &str = ".upriv/logs";
 const APP_DIR_REL: &str = ".upriv/app";
 const WORKSPACE_DIR_REL: &str = "workspace";
 const RUNTIME_DIR_REL: &str = ".upriv/runtime";
+
+/// Atomically write `bytes` to `path` (temp + `sync_all` + rename).
+/// On failure, best-effort removes the temp file.
+/// After rename, best-effort fsync of the parent directory on Unix.
+pub(crate) fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    use std::io::Write;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let tmp = path.with_extension(format!("tmp.{}.{}", std::process::id(), nonce));
+    let result = (|| -> Result<()> {
+        let mut file = std::fs::File::create(&tmp)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        std::fs::rename(&tmp, path)?;
+        // Best-effort: persist the directory entry after rename (Unix).
+        #[cfg(unix)]
+        if let Some(parent) = path.parent() {
+            if let Ok(dir) = std::fs::File::open(parent) {
+                let _ = dir.sync_all();
+            }
+        }
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result
+}
 
 /// True when `path` contains the Upriv vault-root marker (`.upriv/settings.toml`).
 pub fn is_vault_root_marker(path: impl AsRef<Path>) -> bool {

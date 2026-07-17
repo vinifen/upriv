@@ -20,13 +20,13 @@ export function createDefaultAppSettings(): AppSettingsConfig {
       keep_last_entries: LOG_KEEP_LAST_DEFAULT,
     },
     app: {
-      auto_detect_vault_root: true,
+      vault_root_mode: "nearby",
       upriv_root_path: "",
     },
   };
 }
 
-/** Auto-detect and a fixed path are mutually exclusive. */
+/** Nearby mode and a custom path are mutually exclusive. */
 export function normalizeAppSettings(config: AppSettingsConfig): AppSettingsConfig {
   const logging = {
     ...config.logging,
@@ -36,7 +36,7 @@ export function normalizeAppSettings(config: AppSettingsConfig): AppSettingsConf
 
   const normalized: AppSettingsConfig = { ...config, logging };
 
-  if (!normalized.app.auto_detect_vault_root) return normalized;
+  if (normalized.app.vault_root_mode !== "nearby") return normalized;
   if (!normalized.app.upriv_root_path) return normalized;
   return {
     ...normalized,

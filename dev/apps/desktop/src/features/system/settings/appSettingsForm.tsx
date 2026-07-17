@@ -20,9 +20,10 @@ import {
   type LogLevel,
   type UiTheme,
   type VaultListItem,
+  type VaultRootMode,
   resolveVaultDisplayStatus,
 } from "@upriv/shared";
-import { useAppSettingsService, useVaultRootService, useVaultService } from "@/platform/services";
+import { useVaultRootService, useVaultService } from "@/platform/services";
 import { vaultStatusI18nKey } from "@/theme/vault-status";
 import {
   downloadVaultsZip,
@@ -479,31 +480,35 @@ export function AppSettingsLoggingSection({ config, onChange }: SectionPatchProp
 export function AppSettingsBehaviorSection({
   config,
   onChange,
-  savedAutoDetect,
+  savedVaultRootMode,
   savedRootPath,
   onVaultRootGateChange,
 }: SectionPatchProps<"app"> & {
-  savedAutoDetect: boolean;
+  savedVaultRootMode: VaultRootMode;
   savedRootPath: string;
   onVaultRootGateChange: (gate: VaultRootSettingsGate) => void;
 }) {
   const { t } = useTranslation();
-  const appSettingsService = useAppSettingsService();
   const vaultRootService = useVaultRootService();
   const rootModeGroup = useId();
   const repairPolicyGroup = useId();
-  const useAutoDetect = config.auto_detect_vault_root;
+  const useNearby = config.vault_root_mode === "nearby";
   const aliasLoadGen = useRef(0);
   const checkGen = useRef(0);
+  const draftIdentityRef = useRef({
+    mode: config.vault_root_mode,
+    path: config.upriv_root_path,
+  });
+  const draftCustomPathRef = useRef("");
 
   const [disk, setDisk] = useState<VaultRootDiskStatus>("ready");
   const [replacePolicy, setReplacePolicy] = useState<IncompleteReplacePolicy | null>(null);
-  const [fixedPathLoading, setFixedPathLoading] = useState(false);
+  const [customPathLoading, setCustomPathLoading] = useState(false);
 
   const dirty = isVaultRootDraftDirty(
-    config.auto_detect_vault_root,
+    config.vault_root_mode,
     config.upriv_root_path,
-    savedAutoDetect,
+    savedVaultRootMode,
     savedRootPath,
   );
   const vaultRootGate = vaultRootGateFromState({ dirty, disk, replacePolicy });
@@ -518,13 +523,28 @@ export function AppSettingsBehaviorSection({
     if (!dirty) {
       setDisk("ready");
       setReplacePolicy(null);
+      draftIdentityRef.current = {
+        mode: config.vault_root_mode,
+        path: config.upriv_root_path,
+      };
       return;
     }
 
-    const gen = ++checkGen.current;
-    setReplacePolicy(null);
+    const identityChanged =
+      draftIdentityRef.current.mode !== config.vault_root_mode ||
+      draftIdentityRef.current.path !== config.upriv_root_path;
+    draftIdentityRef.current = {
+      mode: config.vault_root_mode,
+      path: config.upriv_root_path,
+    };
+    // Clear replace policy only when mode/path identity changes (not on every disk recheck).
+    if (identityChanged) {
+      setReplacePolicy(null);
+    }
 
-    if (config.auto_detect_vault_root) {
+    const gen = ++checkGen.current;
+
+    if (config.vault_root_mode === "nearby") {
       setDisk("checking");
       void vaultRootService
         .nearbyStatus()
@@ -544,7 +564,7 @@ export function AppSettingsBehaviorSection({
 
     const path = config.upriv_root_path.trim();
     if (!path) {
-      setDisk(fixedPathLoading ? "checking" : "needs_folder");
+      setDisk(customPathLoading ? "checking" : "needs_folder");
       return;
     }
 
@@ -555,27 +575,21 @@ export function AppSettingsBehaviorSection({
         if (gen !== checkGen.current) return;
         if (result.status === "incomplete") setDisk("incomplete");
         else if (result.status === "unreadable") setDisk("unreadable");
+        else if (result.status === "absent") setDisk("will_create");
         else setDisk("ready");
       })
       .catch(() => {
         if (gen !== checkGen.current) return;
         setDisk("unreadable");
       });
-  }, [
-    config.auto_detect_vault_root,
-    config.upriv_root_path,
-    dirty,
-    fixedPathLoading,
-    vaultRootService,
-  ]);
+  }, [config.vault_root_mode, config.upriv_root_path, dirty, customPathLoading, vaultRootService]);
 
   const retryDiskCheck = () => {
-    // Bump generation by re-setting path/auto through a no-op disk reset.
+    // Retry must not clear the user's rename/delete choice.
     setDisk("checking");
-    setReplacePolicy(null);
     checkGen.current += 1;
     const gen = checkGen.current;
-    if (config.auto_detect_vault_root) {
+    if (config.vault_root_mode === "nearby") {
       void vaultRootService
         .nearbyStatus()
         .then((result) => {
@@ -602,6 +616,7 @@ export function AppSettingsBehaviorSection({
         if (gen !== checkGen.current) return;
         if (result.status === "incomplete") setDisk("incomplete");
         else if (result.status === "unreadable") setDisk("unreadable");
+        else if (result.status === "absent") setDisk("will_create");
         else setDisk("ready");
       })
       .catch(() => {
@@ -610,18 +625,18 @@ export function AppSettingsBehaviorSection({
       });
   };
 
-  const showAutoExtras = useAutoDetect && dirty;
-  const showFixedExtras = !useAutoDetect;
+  const showNearbyExtras = useNearby && dirty;
+  const showCustomExtras = !useNearby;
 
   const incompletePanel =
     dirty && disk === "incomplete" ? (
       <div className="space-y-2">
         <p className="text-xs leading-relaxed text-on-surface" role="status">
           {t(
-            useAutoDetect
-              ? "modal.app_settings.upriv_root.switch_auto_replace_notice"
-              : "modal.app_settings.save_confirm_fixed_incomplete",
-            useAutoDetect
+            useNearby
+              ? "modal.app_settings.upriv_root.switch_nearby_replace_notice"
+              : "modal.app_settings.save_confirm_custom_incomplete",
+            useNearby
               ? { file: VAULT_ROOT_ALIAS_FILE }
               : { path: config.upriv_root_path.trim() || "…" },
           )}
@@ -670,20 +685,22 @@ export function AppSettingsBehaviorSection({
         >
           <PolicyRadioOption
             groupName={rootModeGroup}
-            value="auto"
-            checked={useAutoDetect}
-            attention={useAutoDetect && vaultRootGate.blocksSave}
-            title={t("modal.app_settings.option.upriv_root.auto")}
-            description={t("modal.app_settings.option.upriv_root.auto_desc")}
+            value="nearby"
+            checked={useNearby}
+            attention={useNearby && vaultRootGate.blocksSave}
+            title={t("modal.app_settings.option.upriv_root.nearby")}
+            description={t("modal.app_settings.option.upriv_root.nearby_desc")}
             badge="default"
             onSelect={() => {
               aliasLoadGen.current += 1;
-              setFixedPathLoading(false);
+              setCustomPathLoading(false);
               setReplacePolicy(null);
-              onChange({ auto_detect_vault_root: true, upriv_root_path: "" });
+              const current = config.upriv_root_path.trim();
+              if (current) draftCustomPathRef.current = current;
+              onChange({ vault_root_mode: "nearby", upriv_root_path: "" });
             }}
             footer={
-              showAutoExtras ? (
+              showNearbyExtras ? (
                 <div className="space-y-2">
                   {disk === "checking" ? (
                     <p className="text-xs leading-relaxed text-on-surface-variant" role="status">
@@ -695,7 +712,7 @@ export function AppSettingsBehaviorSection({
                       className="rounded-md bg-surface-container px-3 py-2 text-xs leading-relaxed text-on-surface"
                       role="status"
                     >
-                      {t("modal.app_settings.upriv_root.switch_auto_create_notice", {
+                      {t("modal.app_settings.upriv_root.switch_nearby_create_notice", {
                         file: VAULT_ROOT_ALIAS_FILE,
                       })}
                     </p>
@@ -726,39 +743,44 @@ export function AppSettingsBehaviorSection({
           />
           <PolicyRadioOption
             groupName={rootModeGroup}
-            value="fixed"
-            checked={!useAutoDetect}
-            attention={!useAutoDetect && vaultRootGate.blocksSave}
-            title={t("modal.app_settings.option.upriv_root.fixed")}
-            description={t("modal.app_settings.option.upriv_root.fixed_desc", {
+            value="custom"
+            checked={!useNearby}
+            attention={!useNearby && vaultRootGate.blocksSave}
+            title={t("modal.app_settings.option.upriv_root.custom")}
+            description={t("modal.app_settings.option.upriv_root.custom_desc", {
               file: VAULT_ROOT_ALIAS_FILE,
             })}
             onSelect={() => {
               const current = config.upriv_root_path.trim();
               setReplacePolicy(null);
               if (current) {
-                onChange({ auto_detect_vault_root: false, upriv_root_path: current });
+                onChange({ vault_root_mode: "custom", upriv_root_path: current });
+                return;
+              }
+              const stashed = draftCustomPathRef.current.trim();
+              if (stashed) {
+                onChange({ vault_root_mode: "custom", upriv_root_path: stashed });
                 return;
               }
               const gen = ++aliasLoadGen.current;
-              setFixedPathLoading(true);
-              onChange({ auto_detect_vault_root: false, upriv_root_path: "" });
+              setCustomPathLoading(true);
+              onChange({ vault_root_mode: "custom", upriv_root_path: "" });
               void vaultRootService
                 .readAlias()
                 .then((alias) => {
                   if (gen !== aliasLoadGen.current) return;
                   onChange({
-                    auto_detect_vault_root: false,
+                    vault_root_mode: "custom",
                     upriv_root_path: alias?.path.trim() || "",
                   });
                 })
                 .finally(() => {
                   if (gen !== aliasLoadGen.current) return;
-                  setFixedPathLoading(false);
+                  setCustomPathLoading(false);
                 });
             }}
             footer={
-              showFixedExtras ? (
+              showCustomExtras ? (
                 <div className="space-y-2">
                   <p className="text-xs leading-relaxed text-on-surface-variant">
                     {t("modal.app_settings.field.upriv_root_help")}
@@ -769,7 +791,7 @@ export function AppSettingsBehaviorSection({
                         file: VAULT_ROOT_ALIAS_FILE,
                       })}
                     </p>
-                  ) : fixedPathLoading || disk === "checking" ? (
+                  ) : customPathLoading || disk === "checking" ? (
                     <p className="text-xs leading-relaxed text-on-surface-variant" role="status">
                       {t("modal.app_settings.field.upriv_root_loading")}
                     </p>
@@ -790,7 +812,7 @@ export function AppSettingsBehaviorSection({
                       variant="secondary"
                       size="md"
                       className="w-full shrink-0 sm:w-auto"
-                      disabled={fixedPathLoading}
+                      disabled={customPathLoading}
                       onClick={() => {
                         const suggested = config.upriv_root_path.trim();
                         setReplacePolicy(null);
@@ -805,12 +827,10 @@ export function AppSettingsBehaviorSection({
                               t("modal.vault_root_setup.pick_folder_title"),
                             )
                             .then((picked) => {
+                              if (!picked?.trim()) return;
                               onChange({
-                                auto_detect_vault_root: false,
-                                upriv_root_path:
-                                  picked?.trim() ||
-                                  defaultPath ||
-                                  appSettingsService.getDefaultRootPathSuggestion(),
+                                vault_root_mode: "custom",
+                                upriv_root_path: picked.trim(),
                               });
                             }),
                         );

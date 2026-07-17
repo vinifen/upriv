@@ -22,8 +22,13 @@ interface CreateVaultWizardModalProps {
   open: boolean;
   existingVaultIds: readonly string[];
   existingOrders: readonly number[];
-  /** Pre-filled draft (e.g. import from a backup row). Skips source step. */
+  /** Pre-filled draft (e.g. import from a backup row or OS `.7z` drop). */
   initialDraft?: CreateVaultDraft | null;
+  /**
+   * Step to open on. Default: `identity` when `initialDraft` is set (backup flow),
+   * otherwise `source`. Pass `source` for drops so Import + file stay visible.
+   */
+  initialStep?: CreateVaultStepId | null;
   onClose: () => void;
   onCreate: (result: CreateVaultResult) => void;
 }
@@ -33,6 +38,7 @@ export function CreateVaultWizardModal({
   existingVaultIds,
   existingOrders,
   initialDraft = null,
+  initialStep = null,
   onClose,
   onCreate,
 }: CreateVaultWizardModalProps) {
@@ -56,14 +62,15 @@ export function CreateVaultWizardModal({
     if (!open) return;
     const empty = createEmptyCreateVaultDraft(existingOrders);
     const starting = initialDraft ?? empty;
+    const step = initialStep ?? (initialDraft ? "identity" : "source");
     setBaseline(starting);
     setDraft(starting);
-    setCurrentStep(initialDraft ? "identity" : "source");
-    setVisitedSteps(initialDraft ? new Set(["source", "identity"]) : new Set(["source"]));
+    setCurrentStep(step);
+    setVisitedSteps(step === "source" ? new Set(["source"]) : new Set(["source", "identity"]));
     setSubmitAttempted(false);
     setTestingPassword(false);
     setDiscardConfirmOpen(false);
-  }, [open, existingOrders, initialDraft]);
+  }, [open, existingOrders, initialDraft, initialStep]);
 
   const isDirty = useMemo(() => !createVaultDraftEqual(draft, baseline), [draft, baseline]);
 

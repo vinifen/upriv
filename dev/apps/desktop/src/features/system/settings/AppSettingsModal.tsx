@@ -142,8 +142,12 @@ export function AppSettingsModal({ open, onClose, vaults }: AppSettingsModalProp
     setSaveConfirmOpen(true);
   };
 
+  const commitSaveLock = useRef(false);
+
   const commitSave = () => {
     if (!draft || !isDirty || saveBusy || vaultRootGate.blocksSave) return;
+    if (commitSaveLock.current) return;
+    commitSaveLock.current = true;
     const normalized = normalizeAppSettings(draft);
     setSaveBusy(true);
     void replaceSettings(
@@ -162,7 +166,10 @@ export function AppSettingsModal({ open, onClose, vaults }: AppSettingsModalProp
         setSaveConfirmOpen(false);
         showError(error, APP_SETTINGS_ERROR_I18N_KEYS.SAVE_FAILED);
       })
-      .finally(() => setSaveBusy(false));
+      .finally(() => {
+        commitSaveLock.current = false;
+        setSaveBusy(false);
+      });
   };
 
   const formConfig = draft ?? settings;
@@ -291,7 +298,7 @@ function renderAppSettingsSection(
         <AppSettingsBehaviorSection
           config={draft.app}
           onChange={(patch) => patchDraft("app", patch)}
-          savedAutoDetect={saved.app.auto_detect_vault_root}
+          savedVaultRootMode={saved.app.vault_root_mode}
           savedRootPath={saved.app.upriv_root_path}
           onVaultRootGateChange={onVaultRootGateChange}
         />

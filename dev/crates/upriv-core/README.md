@@ -24,21 +24,23 @@ Next: `config/` (TOML load) → `vault_list` RPC.
 ## Vault-root resolve
 
 ```rust
-use upriv_core::{resolve_vault_root, ResolveVaultRootOptions, ResolveVaultRoot};
+use upriv_core::{resolve_vault_root, ResolveVaultRootOptions, ResolveVaultRoot, VaultRootMode};
 
 let outcome = resolve_vault_root(ResolveVaultRootOptions {
     explicit: None,
-    auto_detect: true,
+    mode: VaultRootMode::Nearby,
     binary_dir: None,
 })?;
 ```
 
 Order (see `paths/resolve.rs`):
 
-1. **Explicit** path / `UPRIV_VAULT_ROOT` — must be valid or error  
-2. **Fixed** (`auto_detect=false`): open remembered `.upriv-root` path (active or inactive)  
-3. **Auto** (`auto_detect=true`): search nearby from app home (then cwd); **active alias is ignored**  
+1. **Explicit** path / `UPRIV_VAULT_ROOT` — always wins over wire mode/path; must be valid or error  
+2. **Custom** (`VaultRootMode::Custom`): open **active** `.upriv-root` path only (inactive → NeedsSetup)  
+3. **Nearby** (`VaultRootMode::Nearby`): search nearby from app home (then cwd); **active alias is ignored**  
 4. **NeedsSetup** — UI offers create-nearby vs choose-path (+ alias)
+
+`UPRIV_VAULT_ROOT` overrides Settings mode/path for the whole process; the desktop Gate shows a dismissible notice when resolve `source` is `explicit` and Settings disagree.
 
 **Nearby search strictness** (see `resolve_vault_root` / Electron `daemon.ts`):
 
@@ -53,13 +55,13 @@ Strict is tied to the **env being set**, not to a separate “dev flag”. Packa
 
 | File state | Meaning |
 |------------|---------|
-| Missing | Auto-detect nearby (no fixed path remembered) |
-| `status=inactive` + path | Auto in use; path kept for switching back to fixed |
-| `status=active` + path | Fixed vault-root (when settings say fixed) |
+| Missing | Nearby mode (no custom path remembered) |
+| `status=inactive` + path | Nearby in use; path kept for switching back to custom |
+| `status=active` + path | Custom vault-root (when settings say custom) |
 
-- Switching to auto **deactivates** the alias (keeps path); fixed reactivates / rewrites it  
+- Switching to nearby **deactivates** the alias (keeps path); custom reactivates / rewrites it  
 - File is created only when the user first chooses another folder  
-- Prefer `deactivate_vault_root_alias` over `delete_vault_root_alias` for mode switches  
+- Prefer `deactivate_vault_root_alias` for mode switches (delete helpers are crate-internal)  
 
 ## Logging
 

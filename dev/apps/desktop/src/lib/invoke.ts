@@ -24,19 +24,18 @@ export function isDesktop(): boolean {
 
 const DEFAULT_INVOKE_TIMEOUT_MS = 30_000;
 
+/** Per-method renderer timeout. `0` = no timeout (native dialogs must not be raced). */
 const METHOD_TIMEOUT_MS: Partial<Record<string, number>> = {
   app_shutdown: 5_000,
   app_version: 10_000,
   app_exit: 15_000,
   app_settings_get: 15_000,
   app_settings_save: 30_000,
-  pick_directory: 120_000,
+  pick_directory: 0,
   vault_root_resolve: 15_000,
   vault_root_setup_nearby: 30_000,
   vault_root_setup_path: 30_000,
   vault_root_read_alias: 10_000,
-  vault_root_rewrite_alias: 10_000,
-  vault_root_deactivate_alias: 10_000,
   vault_root_nearby_status: 10_000,
   vault_root_inspect_path: 10_000,
 };
@@ -47,7 +46,9 @@ function parseInvokeFailure(error: unknown): RpcError {
   if (error instanceof Error) {
     const match = DAEMON_ERROR_MESSAGE_RE.exec(error.message);
     if (match) {
-      return new RpcError(match[1], match[2]);
+      // Electron main used to emit `timeout:`; map to `rpc_timeout` for i18n.
+      const code = match[1] === "timeout" ? BRIDGE_ERROR_CODES.RPC_TIMEOUT : match[1];
+      return new RpcError(code, match[2]);
     }
     // Electron/preload/serialize — not the same as "daemon process down".
     return new RpcError(BRIDGE_ERROR_CODES.BRIDGE_INVOKE_FAILED, error.message);
@@ -59,6 +60,7 @@ function parseInvokeFailure(error: unknown): RpcError {
 /**
  * Low-level IPC invoke with timeout. Prefer typed helpers in `./rpc.ts`.
  * Unknown daemon methods are rejected by `upriv-daemon` (`rpc.rs`).
+ * Pass `timeoutMs: 0` (or set the method map to `0`) to wait indefinitely.
  * @throws {RpcError}
  */
 export async function desktopInvokeRaw(
@@ -78,8 +80,16 @@ export async function desktopInvokeRaw(
     throw new RpcError(BRIDGE_ERROR_CODES.SHELL_UNAVAILABLE, "window.upriv is unavailable");
   }
 
-  let timer: ReturnType<typeof setTimeout> | undefined;
   const invocation = api.invoke(method, params ?? {});
+  if (timeoutMs <= 0) {
+    try {
+      return await invocation;
+    } catch (error) {
+      throw parseInvokeFailure(error);
+    }
+  }
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
   // On timeout we reject below; make sure a late daemon resolution/rejection is
   // dropped quietly instead of surfacing as an unhandled promise rejection.
   invocation.catch(() => undefined);

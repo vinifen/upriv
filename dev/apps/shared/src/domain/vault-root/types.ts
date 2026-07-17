@@ -20,7 +20,7 @@ export type VaultRootAliasInfo = {
   active: boolean;
 };
 
-/** Nearby `.upriv/` beside the app (auto-detect target). */
+/** Nearby `.upriv/` beside the app (nearby-mode target). */
 export type NearbyVaultRootStatus = "absent" | "valid" | "incomplete" | "unreadable";
 
 export type NearbyVaultRootStatusResult = {

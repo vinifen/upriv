@@ -5,6 +5,7 @@ export type {
   LocaleId,
   LogLevel,
   UiTheme,
+  VaultRootMode,
 } from "./types";
 export { APP_SETTINGS_SECTIONS, appSettingsEqual } from "./types";
 export { DEFAULT_LOCALE, SUPPORTED_LOCALES } from "./locales";

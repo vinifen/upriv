@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import type { CreateVaultDraft, VaultListItem } from "@upriv/shared";
+import type { CreateVaultDraft, CreateVaultStepId, VaultListItem } from "@upriv/shared";
 import type { VaultLifecycleRequest } from "@/features/vaults/lifecycle";
 import type { VaultListModalsHandle } from "../vaultListModalsTypes";
 
@@ -12,6 +12,9 @@ export function useVaultListModals(vaults: VaultListItem[]): VaultListModalsHand
   const [helpOpen, setHelpOpen] = useState(false);
   const [createVaultOpen, setCreateVaultOpen] = useState(false);
   const [createVaultInitialDraft, setCreateVaultInitialDraft] = useState<CreateVaultDraft | null>(
+    null,
+  );
+  const [createVaultInitialStep, setCreateVaultInitialStep] = useState<CreateVaultStepId | null>(
     null,
   );
   const [lifecycleRequest, setLifecycleRequest] = useState<VaultLifecycleRequest | null>(null);
@@ -49,6 +52,7 @@ export function useVaultListModals(vaults: VaultListItem[]): VaultListModalsHand
   const closeCreateVault = () => {
     setCreateVaultOpen(false);
     setCreateVaultInitialDraft(null);
+    setCreateVaultInitialStep(null);
   };
 
   return {
@@ -71,6 +75,8 @@ export function useVaultListModals(vaults: VaultListItem[]): VaultListModalsHand
     setCreateVaultOpen,
     createVaultInitialDraft,
     setCreateVaultInitialDraft,
+    createVaultInitialStep,
+    setCreateVaultInitialStep,
     closeCreateVault,
     lifecycleRequest,
     setLifecycleRequest,

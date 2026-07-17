@@ -1,21 +1,26 @@
-import { useCallback, useEffect, useId, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Button, Modal } from "@/components/ui";
 import { PolicyRadioOption } from "@/components/settings";
 import { useTranslation } from "@/i18n";
-import { SUPPORTED_LOCALES, type IncompleteReplacePolicy, type LocaleId } from "@upriv/shared";
+import {
+  SUPPORTED_LOCALES,
+  type IncompleteReplacePolicy,
+  type LocaleId,
+  type VaultRootMode,
+} from "@upriv/shared";
 import { useVaultRootService } from "@/platform/services";
 import { useAppSettingsContext } from "./AppSettingsContext";
 import { desktopErrorI18nKey } from "@/lib/errorMessages";
 
 interface VaultRootRepairModalProps {
   open: boolean;
-  /** Folder that contains the broken `.upriv/` (nearby anchor or fixed path). */
+  /** Folder that contains the broken `.upriv/` (nearby anchor or custom path). */
   targetPath: string;
   /**
-   * `nearby` → setupNearby + switch to auto.
-   * `fixed` → setupAtPath + keep fixed alias at `targetPath`.
+   * `nearby` → setupNearby + switch to nearby mode.
+   * `custom` → setupAtPath + keep active alias at `targetPath`.
    */
-  mode: "nearby" | "fixed";
+  mode: VaultRootMode;
   onRepaired: () => void;
 }
 
@@ -40,6 +45,8 @@ export function VaultRootRepairModal({
   const [policy, setPolicy] = useState<PolicyChoice>("rename");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const submitLock = useRef(false);
+  const diskAppliedRoot = useRef<string | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -47,6 +54,8 @@ export function VaultRootRepairModal({
     setPolicy("rename");
     setBusy(false);
     setError(null);
+    submitLock.current = false;
+    diskAppliedRoot.current = null;
   }, [open, targetPath, mode]);
 
   const handleLocaleChange = useCallback(
@@ -59,42 +68,49 @@ export function VaultRootRepairModal({
 
   const applyRepair = useCallback(
     (nextPolicy: IncompleteReplacePolicy) => {
+      if (submitLock.current) return;
+      submitLock.current = true;
       setBusy(true);
       setError(null);
-      const run =
-        mode === "nearby"
-          ? vaultRoot.setupNearby({
-              replaceIncomplete: true,
-              replacePolicy: nextPolicy,
-              locale: settings.ui.locale,
-            })
-          : vaultRoot.setupAtPath(targetPath, {
-              replaceIncomplete: true,
-              replacePolicy: nextPolicy,
-              locale: settings.ui.locale,
-            });
 
-      void run
-        .then(async ({ rootPath }) => {
-          const saved = await patchSettings(
-            {
-              app: {
-                auto_detect_vault_root: mode === "nearby",
-                upriv_root_path: mode === "fixed" ? rootPath : "",
-              },
+      void (async () => {
+        let rootPath = diskAppliedRoot.current;
+        if (!rootPath) {
+          const result =
+            mode === "nearby"
+              ? await vaultRoot.setupNearby({
+                  replaceIncomplete: true,
+                  replacePolicy: nextPolicy,
+                  locale: settings.ui.locale,
+                })
+              : await vaultRoot.setupAtPath(targetPath, {
+                  replaceIncomplete: true,
+                  replacePolicy: nextPolicy,
+                  locale: settings.ui.locale,
+                });
+          rootPath = result.rootPath;
+          diskAppliedRoot.current = rootPath;
+        }
+        const saved = await patchSettings(
+          {
+            app: {
+              vault_root_mode: mode,
+              upriv_root_path: mode === "custom" ? rootPath : "",
             },
-            { vaultRootAlreadyApplied: true },
-          );
-          if (!saved) {
-            throw new Error("settings_save_failed");
-          }
-          setStep("choose");
-          onRepaired();
-        })
+          },
+          { vaultRootAlreadyApplied: true },
+        );
+        if (!saved) {
+          throw new Error("settings_save_failed");
+        }
+        setStep("choose");
+        onRepaired();
+      })()
         .catch((err) => {
           setError(t(desktopErrorI18nKey(err, "modal.vault_root_setup.error_init")));
         })
         .finally(() => {
+          submitLock.current = false;
           setBusy(false);
         });
     },
@@ -190,8 +206,8 @@ export function VaultRootRepairModal({
           <>
             <p>
               {t(
-                mode === "fixed"
-                  ? "modal.vault_root_repair.body_fixed"
+                mode === "custom"
+                  ? "modal.vault_root_repair.body_custom"
                   : "modal.vault_root_repair.body",
               )}
             </p>
@@ -235,8 +251,8 @@ export function VaultRootRepairModal({
         ) : (
           <p role="alert">
             {t(
-              mode === "fixed"
-                ? "modal.vault_root_repair.confirm_delete_body_fixed"
+              mode === "custom"
+                ? "modal.vault_root_repair.confirm_delete_body_custom"
                 : "modal.vault_root_repair.confirm_delete_body",
             )}
           </p>

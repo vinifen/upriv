@@ -9,6 +9,9 @@ const modalChromeButtonClass =
 const FOCUSABLE_SELECTOR =
   'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
+/** Nested modals share one body overflow lock — restore only when the last closes. */
+let openModalCount = 0;
+
 /** Header chrome control (close, minimize) — shared sizing across modals. */
 export function ModalChromeButton({ className = "", ...props }: ButtonProps) {
   return (
@@ -63,10 +66,13 @@ export function Modal({
 
   useEffect(() => {
     if (!open) return;
-    const prev = document.body.style.overflow;
+    openModalCount += 1;
     document.body.style.overflow = "hidden";
     return () => {
-      document.body.style.overflow = prev;
+      openModalCount = Math.max(0, openModalCount - 1);
+      if (openModalCount === 0) {
+        document.body.style.overflow = "";
+      }
     };
   }, [open]);
 

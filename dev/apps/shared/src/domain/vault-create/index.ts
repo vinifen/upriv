@@ -1,6 +1,11 @@
 export { buildCreateVaultResult } from "./buildResult";
 export { createDraftFromBackup } from "./createDraftFromBackup";
 export {
+  createDraftForImportSource,
+  createDraftForScratchSource,
+  createDraftFromImportArchive,
+} from "./createDraftFromImportArchive";
+export {
   createEmptyCreateVaultDraft,
   createVaultDraftEqual,
   defaultOrderAtEnd,

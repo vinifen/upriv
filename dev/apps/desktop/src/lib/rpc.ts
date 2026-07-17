@@ -7,6 +7,7 @@ import type {
   NearbyVaultRootStatusResult,
   VaultRootAliasInfo,
   VaultRootInspectResult,
+  VaultRootMode,
   VaultRootResolveResult,
   VaultRootSource,
 } from "@upriv/shared";
@@ -133,11 +134,15 @@ export async function rpcAppSettingsGet(): Promise<{
   };
 }
 
-export async function rpcAppSettingsSave(settings: AppSettingsConfig): Promise<{ wrote: boolean }> {
-  const raw = await desktopInvokeRaw(
-    DAEMON_COMMANDS.APP_SETTINGS_SAVE,
-    settings as unknown as Record<string, unknown>,
-  );
+export async function rpcAppSettingsSave(
+  settings: AppSettingsConfig,
+  options?: { syncAlias?: boolean },
+): Promise<{ wrote: boolean }> {
+  const raw = await desktopInvokeRaw(DAEMON_COMMANDS.APP_SETTINGS_SAVE, {
+    ...(settings as unknown as Record<string, unknown>),
+    // Default true — omit only when vault-root setup already synced the alias.
+    syncAlias: options?.syncAlias ?? true,
+  });
   if (
     typeof raw !== "object" ||
     raw === null ||
@@ -153,12 +158,12 @@ export async function rpcAppSettingsSave(settings: AppSettingsConfig): Promise<{
 }
 
 export async function rpcVaultRootResolve(options?: {
-  autoDetect?: boolean;
+  vaultRootMode?: VaultRootMode;
   explicitPath?: string | null;
   binaryDir?: string | null;
 }): Promise<VaultRootResolveResult> {
   const raw = await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_ROOT_RESOLVE, {
-    autoDetect: options?.autoDetect ?? true,
+    vaultRootMode: options?.vaultRootMode ?? "nearby",
     explicitPath: options?.explicitPath ?? null,
     binaryDir: options?.binaryDir ?? null,
   });
@@ -171,12 +176,15 @@ export async function rpcVaultRootSetupNearby(options?: {
   locale?: string | null;
 }): Promise<{ rootPath: string }> {
   const replaceIncomplete = options?.replaceIncomplete ?? false;
+  if (replaceIncomplete && options?.replacePolicy == null) {
+    throw new RpcError(
+      BRIDGE_ERROR_CODES.INVALID_RESPONSE,
+      "replacePolicy is required when replaceIncomplete is true",
+    );
+  }
   const raw = await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_ROOT_SETUP_NEARBY, {
     replaceIncomplete,
-    // Required by daemon when replaceIncomplete; default rename (safer than delete).
-    ...(replaceIncomplete
-      ? { replacePolicy: options?.replacePolicy ?? "rename" }
-      : { replacePolicy: options?.replacePolicy ?? null }),
+    replacePolicy: options?.replacePolicy ?? null,
     locale: options?.locale ?? null,
   });
   if (
@@ -202,12 +210,16 @@ export async function rpcVaultRootSetupPath(
   },
 ): Promise<{ rootPath: string; aliasPath: string }> {
   const replaceIncomplete = options?.replaceIncomplete ?? false;
+  if (replaceIncomplete && options?.replacePolicy == null) {
+    throw new RpcError(
+      BRIDGE_ERROR_CODES.INVALID_RESPONSE,
+      "replacePolicy is required when replaceIncomplete is true",
+    );
+  }
   const raw = await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_ROOT_SETUP_PATH, {
     path,
     replaceIncomplete,
-    ...(replaceIncomplete
-      ? { replacePolicy: options?.replacePolicy ?? "rename" }
-      : { replacePolicy: options?.replacePolicy ?? null }),
+    replacePolicy: options?.replacePolicy ?? null,
     locale: options?.locale ?? null,
   });
   if (
@@ -226,14 +238,6 @@ export async function rpcVaultRootSetupPath(
     rootPath: (raw as { rootPath: string }).rootPath,
     aliasPath: (raw as { aliasPath: string }).aliasPath,
   };
-}
-
-export async function rpcVaultRootRewriteAlias(path: string): Promise<void> {
-  await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_ROOT_REWRITE_ALIAS, { path });
-}
-
-export async function rpcVaultRootDeactivateAlias(): Promise<void> {
-  await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_ROOT_DEACTIVATE_ALIAS);
 }
 
 export async function rpcVaultRootReadAlias(): Promise<VaultRootAliasInfo | null> {

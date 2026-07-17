@@ -20,6 +20,12 @@
  *    every rich-field gate — no per-field confirm steps, no inline “this will
  *    delete now” buttons.
  *
+ * **Gate vs Settings confirmation severity:** `VaultRootGate` (setup/repair)
+ * confirms destructive delete immediately (inline confirm step) because it
+ * mutates disk on Continue. Settings keeps delete/rename/create notes in
+ * `saveConfirmNotes` and only applies them on Save — intentional: draft until
+ * Save, Gate acts now.
+ *
  * When adding another rich setting later, give it a similar gate +
  * `blocksSave` / `saveConfirmNotes` to `AppSettingsModal`.
  */
@@ -30,8 +36,8 @@ import type { I18nKey, IncompleteReplacePolicy } from "@upriv/shared";
 export type VaultRootDiskStatus =
   | "checking"
   | "ready"
-  | /** Auto + no nearby `.upriv` yet — Save will create it. */
-  "will_create"
+  /** Nearby or custom with no `.upriv` yet — Save will create it. */
+  | "will_create"
   | "incomplete"
   | "unreadable"
   | "needs_folder";
@@ -72,12 +78,12 @@ export function collectAppSettingsSaveConfirmNotes(
 }
 
 export function isVaultRootDraftDirty(
-  draftAuto: boolean,
+  draftMode: string,
   draftPath: string,
-  savedAuto: boolean,
+  savedMode: string,
   savedPath: string,
 ): boolean {
-  return draftAuto !== savedAuto || draftPath.trim() !== savedPath.trim();
+  return draftMode !== savedMode || draftPath.trim() !== savedPath.trim();
 }
 
 export function vaultRootGateFromState(args: {
@@ -100,10 +106,20 @@ export function vaultRootGateFromState(args: {
       saveConfirmNotes:
         replacePolicy === "delete"
           ? (["modal.app_settings.save_confirm_note.vault_root_delete"] as const)
-          : undefined,
+          : replacePolicy === "rename"
+            ? (["modal.app_settings.save_confirm_note.vault_root_rename"] as const)
+            : undefined,
     };
   }
-  // ready | will_create
+  if (disk === "will_create") {
+    return {
+      blocksSave: false,
+      disk,
+      replacePolicy: undefined,
+      saveConfirmNotes: ["modal.app_settings.save_confirm_note.vault_root_create"] as const,
+    };
+  }
+  // ready
   return {
     blocksSave: false,
     disk,

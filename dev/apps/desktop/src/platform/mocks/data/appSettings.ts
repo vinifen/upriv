@@ -17,7 +17,7 @@ export const DEFAULT_APP_SETTINGS: AppSettingsConfig = {
     keep_last_entries: LOG_KEEP_LAST_DEFAULT,
   },
   app: {
-    auto_detect_vault_root: true,
+    vault_root_mode: "nearby",
     upriv_root_path: "",
   },
 };

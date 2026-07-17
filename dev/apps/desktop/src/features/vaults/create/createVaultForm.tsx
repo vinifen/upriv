@@ -79,7 +79,7 @@ function CreateVaultSourceStep({ draft, errors, onChange }: StepProps) {
   const sourceGroup = useId();
 
   const handleImportFile = () => {
-    // Prototype: mock service returns a fixed path/password until native file picker + 7zz probe.
+    // Prototype: mock service returns a hardcoded path/password until native file picker + 7zz probe.
     const { fileName, path } = createVaultService.selectImportArchiveForProbe();
     onChange({
       source: "import",

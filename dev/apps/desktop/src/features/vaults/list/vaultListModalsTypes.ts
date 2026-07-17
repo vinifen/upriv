@@ -1,4 +1,9 @@
-import type { CreateVaultDraft, VaultLifecycleRequest, VaultListItem } from "@upriv/shared";
+import type {
+  CreateVaultDraft,
+  CreateVaultStepId,
+  VaultLifecycleRequest,
+  VaultListItem,
+} from "@upriv/shared";
 
 /** Modal open/close state wired by `useVaultListModals` and consumed by the list screen. */
 export interface VaultListModalsHandle {
@@ -21,6 +26,9 @@ export interface VaultListModalsHandle {
   setCreateVaultOpen: (open: boolean) => void;
   createVaultInitialDraft: CreateVaultDraft | null;
   setCreateVaultInitialDraft: (draft: CreateVaultDraft | null) => void;
+  /** When set with an initial draft, wizard opens on this step (else backup skips to identity). */
+  createVaultInitialStep: CreateVaultStepId | null;
+  setCreateVaultInitialStep: (step: CreateVaultStepId | null) => void;
   closeCreateVault: () => void;
   lifecycleRequest: VaultLifecycleRequest | null;
   setLifecycleRequest: (request: VaultLifecycleRequest | null) => void;

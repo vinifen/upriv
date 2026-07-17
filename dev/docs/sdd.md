@@ -475,16 +475,16 @@ level = "info"
 entries_per_file = 1000
 
 [app]
-# Vault-root mode (auto vs fixed) is NOT configured here.
+# Vault-root mode (nearby vs custom) is NOT configured here.
 # It lives in the app-home `.upriv-root` alias:
-#   missing or status=inactive → auto-detect nearby
-#   status=active + path → fixed vault-root
+#   missing or status=inactive → nearby mode
+#   status=active + path → custom vault-root
 last_opened_vault = "my-encrypted-notes"
 ```
 
 **Upriv marker:** folder is `<vault-root>` if it contains `.upriv/settings.toml`.
 
-**Vault-root location:** `auto_detect_vault_root` / fixed path are **not** `[app]` keys. They are derived from the app-home `.upriv-root` file and exposed on the settings RPC wire for the UI only.
+**Vault-root location:** `vault_root_mode` / custom path are **not** `[app]` keys in TOML (stripped on write). They are derived from the app-home `.upriv-root` file and exposed on the settings RPC wire as `app.*` fields for the UI only. (Obsolete boolean mode fields in old TOML are ignored.)
 
 #### `[ui]` — fields and where they are saved (v1 desktop)
 
