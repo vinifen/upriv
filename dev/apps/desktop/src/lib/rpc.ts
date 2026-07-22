@@ -4,12 +4,13 @@ import { desktopInvokeRaw } from "./invoke";
 import { parseAppVersionResult, type AppVersionResult } from "./types";
 import type {
   AppSettingsConfig,
-  NearbyVaultRootStatusResult,
+  AppDistribution,
+  DefaultRootStatusResult,
   VaultRootAliasInfo,
   VaultRootInspectResult,
   VaultRootMode,
   VaultRootResolveResult,
-  VaultRootSource,
+  VaultRootResolveSource,
 } from "@upriv/shared";
 import { normalizeAppSettings } from "@upriv/shared";
 
@@ -54,8 +55,13 @@ export async function rpcPickDirectory(
   return raw;
 }
 
-function isVaultRootSource(value: unknown): value is VaultRootSource {
-  return value === "explicit" || value === "alias" || value === "nearby";
+function normalizeVaultRootSource(value: unknown): VaultRootResolveSource | null {
+  if (value === "explicit" || value === "custom_root" || value === "default_root") return value;
+  return null;
+}
+
+function isAppDistribution(value: unknown): value is AppDistribution {
+  return value === "portable" || value === "installed" || value === "dev";
 }
 
 function parseVaultRootResolve(raw: unknown): VaultRootResolveResult {
@@ -68,7 +74,8 @@ function parseVaultRootResolve(raw: unknown): VaultRootResolveResult {
   }
   const record = raw as Record<string, unknown>;
   if (record.status === "found") {
-    if (typeof record.rootPath !== "string" || !isVaultRootSource(record.source)) {
+    const source = normalizeVaultRootSource(record.source);
+    if (typeof record.rootPath !== "string" || source == null) {
       throw new RpcError(
         BRIDGE_ERROR_CODES.INVALID_RESPONSE,
         "vault_root_resolve: invalid found payload",
@@ -78,11 +85,17 @@ function parseVaultRootResolve(raw: unknown): VaultRootResolveResult {
     return {
       status: "found",
       rootPath: record.rootPath,
-      source: record.source,
+      source,
     };
   }
   if (record.status === "needs_setup") {
-    if (typeof record.aliasPath !== "string" || typeof record.nearbyAnchor !== "string") {
+    const defaultRootAnchor =
+      typeof record.defaultRootAnchor === "string" ? record.defaultRootAnchor : null;
+    if (
+      typeof record.aliasPath !== "string" ||
+      defaultRootAnchor == null ||
+      !isAppDistribution(record.distribution)
+    ) {
       throw new RpcError(
         BRIDGE_ERROR_CODES.INVALID_RESPONSE,
         "vault_root_resolve: invalid needs_setup payload",
@@ -92,7 +105,8 @@ function parseVaultRootResolve(raw: unknown): VaultRootResolveResult {
     return {
       status: "needs_setup",
       aliasPath: record.aliasPath,
-      nearbyAnchor: record.nearbyAnchor,
+      defaultRootAnchor,
+      distribution: record.distribution,
     };
   }
   throw new RpcError(
@@ -139,7 +153,7 @@ export async function rpcAppSettingsSave(
   options?: { syncAlias?: boolean },
 ): Promise<{ wrote: boolean }> {
   const raw = await desktopInvokeRaw(DAEMON_COMMANDS.APP_SETTINGS_SAVE, {
-    ...(settings as unknown as Record<string, unknown>),
+    settings,
     // Default true — omit only when vault-root setup already synced the alias.
     syncAlias: options?.syncAlias ?? true,
   });
@@ -163,14 +177,14 @@ export async function rpcVaultRootResolve(options?: {
   binaryDir?: string | null;
 }): Promise<VaultRootResolveResult> {
   const raw = await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_ROOT_RESOLVE, {
-    vaultRootMode: options?.vaultRootMode ?? "nearby",
+    vaultRootMode: options?.vaultRootMode ?? "default_root",
     explicitPath: options?.explicitPath ?? null,
     binaryDir: options?.binaryDir ?? null,
   });
   return parseVaultRootResolve(raw);
 }
 
-export async function rpcVaultRootSetupNearby(options?: {
+export async function rpcVaultRootSetupDefaultRoot(options?: {
   replaceIncomplete?: boolean;
   replacePolicy?: "delete" | "rename";
   locale?: string | null;
@@ -182,7 +196,7 @@ export async function rpcVaultRootSetupNearby(options?: {
       "replacePolicy is required when replaceIncomplete is true",
     );
   }
-  const raw = await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_ROOT_SETUP_NEARBY, {
+  const raw = await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_ROOT_SETUP_DEFAULT_ROOT, {
     replaceIncomplete,
     replacePolicy: options?.replacePolicy ?? null,
     locale: options?.locale ?? null,
@@ -194,7 +208,7 @@ export async function rpcVaultRootSetupNearby(options?: {
   ) {
     throw new RpcError(
       BRIDGE_ERROR_CODES.INVALID_RESPONSE,
-      "vault_root_setup_nearby: expected { rootPath }",
+      "vault_root_setup_default_root: expected { rootPath }",
       raw,
     );
   }
@@ -260,16 +274,32 @@ export async function rpcVaultRootReadAlias(): Promise<VaultRootAliasInfo | null
   };
 }
 
-export async function rpcVaultRootNearbyStatus(): Promise<NearbyVaultRootStatusResult> {
-  const raw = await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_ROOT_NEARBY_STATUS);
+export async function rpcVaultRootSuggestedCustomPath(): Promise<string> {
+  const raw = await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_ROOT_SUGGESTED_CUSTOM_PATH);
   if (
     typeof raw !== "object" ||
     raw === null ||
-    typeof (raw as { nearbyAnchor?: unknown }).nearbyAnchor !== "string"
+    typeof (raw as { path?: unknown }).path !== "string"
   ) {
     throw new RpcError(
       BRIDGE_ERROR_CODES.INVALID_RESPONSE,
-      "vault_root_nearby_status: expected { status, nearbyAnchor }",
+      "vault_root_suggested_custom_path: expected { path }",
+      raw,
+    );
+  }
+  return (raw as { path: string }).path;
+}
+
+export async function rpcVaultRootDefaultRootStatus(): Promise<DefaultRootStatusResult> {
+  const raw = await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_ROOT_DEFAULT_ROOT_STATUS);
+  if (
+    typeof raw !== "object" ||
+    raw === null ||
+    typeof (raw as { defaultRootAnchor?: unknown }).defaultRootAnchor !== "string"
+  ) {
+    throw new RpcError(
+      BRIDGE_ERROR_CODES.INVALID_RESPONSE,
+      "vault_root_default_root_status: expected { status, defaultRootAnchor }",
       raw,
     );
   }
@@ -282,13 +312,13 @@ export async function rpcVaultRootNearbyStatus(): Promise<NearbyVaultRootStatusR
   ) {
     throw new RpcError(
       BRIDGE_ERROR_CODES.INVALID_RESPONSE,
-      "vault_root_nearby_status: invalid status",
+      "vault_root_default_root_status: invalid status",
       raw,
     );
   }
   return {
     status,
-    nearbyAnchor: (raw as { nearbyAnchor: string }).nearbyAnchor,
+    defaultRootAnchor: (raw as { defaultRootAnchor: string }).defaultRootAnchor,
   };
 }
 

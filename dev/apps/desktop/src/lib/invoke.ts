@@ -33,10 +33,12 @@ const METHOD_TIMEOUT_MS: Partial<Record<string, number>> = {
   app_settings_save: 30_000,
   pick_directory: 0,
   vault_root_resolve: 15_000,
-  vault_root_setup_nearby: 30_000,
-  vault_root_setup_path: 30_000,
+  // Large `.upriv/` rename/delete on slow disks can take minutes; keep a high ceiling
+  // and map timeouts to vault-root-specific i18n (see errorMessages / locales).
+  vault_root_setup_default_root: 600_000,
+  vault_root_setup_path: 600_000,
   vault_root_read_alias: 10_000,
-  vault_root_nearby_status: 10_000,
+  vault_root_default_root_status: 10_000,
   vault_root_inspect_path: 10_000,
 };
 

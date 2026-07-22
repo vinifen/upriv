@@ -4,6 +4,8 @@ import { Modal } from "@/components/ui";
 import { VaultSettingsSection, settingsControlClass } from "@/components/settings";
 import { useTranslation } from "@/i18n";
 import { APP_VERSION, getAppVersion, getSessionAppVersion } from "@/lib";
+import { useDesktopEvent } from "@/lib/useDesktopEvent";
+import type { AppDistribution } from "@upriv/shared";
 import {
   defaultOpenHelpSections,
   HELP_SECTION_BODY_KEYS,
@@ -18,8 +20,22 @@ interface HelpModalProps {
   onClose: () => void;
 }
 
+const DISTRIBUTION_LABEL_KEYS: Record<AppDistribution, I18nKey> = {
+  portable: "modal.help.distribution.portable",
+  installed: "modal.help.distribution.installed",
+  dev: "modal.help.distribution.dev",
+};
+
+function distributionLabelKey(distribution: AppDistribution): I18nKey {
+  return DISTRIBUTION_LABEL_KEYS[distribution] ?? "modal.help.distribution.portable";
+}
+
 function initialVersionLabel(): string {
   return getSessionAppVersion()?.version ?? APP_VERSION;
+}
+
+function initialDistribution(): AppDistribution | null {
+  return getSessionAppVersion()?.distribution ?? null;
 }
 
 export function HelpModal({ open, onClose }: HelpModalProps) {
@@ -27,8 +43,18 @@ export function HelpModal({ open, onClose }: HelpModalProps) {
   const [query, setQuery] = useState("");
   const [openSections, setOpenSections] = useState<Set<HelpSectionId>>(defaultOpenHelpSections);
   const [appVersion, setAppVersion] = useState(initialVersionLabel);
+  const [versionOffline, setVersionOffline] = useState(false);
+  const [distribution, setDistribution] = useState<AppDistribution | null>(initialDistribution);
 
   const searching = query.trim().length > 0;
+
+  const refreshVersion = () => {
+    void getAppVersion().then((info) => {
+      setAppVersion(info.version);
+      setVersionOffline(Boolean(info.offline));
+      setDistribution(info.distribution ?? null);
+    });
+  };
 
   useEffect(() => {
     if (!open) {
@@ -36,8 +62,13 @@ export function HelpModal({ open, onClose }: HelpModalProps) {
       setOpenSections(defaultOpenHelpSections());
       return;
     }
-    void getAppVersion().then(({ version }) => setAppVersion(version));
+    refreshVersion();
   }, [open]);
+
+  // If the modal stays open across a daemon reconnect, refresh footer labels.
+  useDesktopEvent("daemon_ready", () => {
+    if (open) refreshVersion();
+  });
 
   const visibleSections = useMemo(
     () =>
@@ -58,6 +89,16 @@ export function HelpModal({ open, onClose }: HelpModalProps) {
 
   if (!open) return null;
 
+  const versionCredit = (
+    <>
+      {distribution ? <>{t(distributionLabelKey(distribution))} · </> : null}
+      {t(versionOffline ? "modal.help.app_version_offline" : "modal.help.app_version", {
+        version: appVersion,
+      })}{" "}
+      · {t("app.credit_author")}
+    </>
+  );
+
   return (
     <Modal
       open={open}
@@ -65,9 +106,7 @@ export function HelpModal({ open, onClose }: HelpModalProps) {
       onClose={onClose}
       panelClassName="max-w-3xl"
       footer={
-        <p className="text-center font-mono text-xs text-on-surface-variant/80">
-          {t("modal.help.app_version", { version: appVersion })} · {t("app.credit_author")}
-        </p>
+        <p className="text-center font-mono text-xs text-on-surface-variant/80">{versionCredit}</p>
       }
     >
       <p className="mb-4 text-sm text-on-surface-variant">{t("modal.help.hint")}</p>
@@ -90,7 +129,7 @@ export function HelpModal({ open, onClose }: HelpModalProps) {
           {t("modal.help.search_empty")}
         </p>
       ) : (
-        <div className="modal-scroll-pane max-h-[min(65vh,36rem)] space-y-1.5 sm:space-y-2">
+        <div className="space-y-1.5 sm:space-y-2">
           {visibleSections.map((section) => (
             <VaultSettingsSection
               key={section.id}

@@ -17,13 +17,14 @@ export const DEFAULT_APP_SETTINGS: AppSettingsConfig = {
     keep_last_entries: LOG_KEEP_LAST_DEFAULT,
   },
   app: {
-    vault_root_mode: "nearby",
+    vault_root_mode: "default_root",
     upriv_root_path: "",
   },
 };
 
-/** Mock path used by “Choose folder” until native folder picker is wired. */
-export const MOCK_UPRIV_ROOT_PATH = "/home/user/Documents/Upriv";
+/** Mock path used by “Choose folder” until native folder picker is wired.
+ * Platform-neutral placeholder (not a real OS path). */
+export const MOCK_UPRIV_ROOT_PATH = "Documents/Upriv";
 
 /** @internal Used by mockAppSettingsService only. */
 export function getMockAppSettings(): AppSettingsConfig {

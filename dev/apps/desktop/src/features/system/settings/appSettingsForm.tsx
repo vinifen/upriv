@@ -15,6 +15,7 @@ import {
   SUPPORTED_LOCALES,
   VAULT_ROOT_ALIAS_FILE,
   logFileCountForKeepLast,
+  type AppDistribution,
   type AppSettingsConfig,
   type IncompleteReplacePolicy,
   type LogLevel,
@@ -24,6 +25,7 @@ import {
   resolveVaultDisplayStatus,
 } from "@upriv/shared";
 import { useVaultRootService, useVaultService } from "@/platform/services";
+import { getAppVersion, getSessionAppVersion } from "@/lib/appVersion";
 import { vaultStatusI18nKey } from "@/theme/vault-status";
 import {
   downloadVaultsZip,
@@ -492,7 +494,7 @@ export function AppSettingsBehaviorSection({
   const vaultRootService = useVaultRootService();
   const rootModeGroup = useId();
   const repairPolicyGroup = useId();
-  const useNearby = config.vault_root_mode === "nearby";
+  const useDefaultRoot = config.vault_root_mode === "default_root";
   const aliasLoadGen = useRef(0);
   const checkGen = useRef(0);
   const draftIdentityRef = useRef({
@@ -504,6 +506,46 @@ export function AppSettingsBehaviorSection({
   const [disk, setDisk] = useState<VaultRootDiskStatus>("ready");
   const [replacePolicy, setReplacePolicy] = useState<IncompleteReplacePolicy | null>(null);
   const [customPathLoading, setCustomPathLoading] = useState(false);
+  const [defaultRootAnchor, setDefaultRootAnchor] = useState("");
+  const [distribution, setDistribution] = useState<AppDistribution>(
+    () => getSessionAppVersion()?.distribution ?? "portable",
+  );
+
+  // Packaging mode for distribution-aware Behavior copy (same keys as Setup).
+  useEffect(() => {
+    let cancelled = false;
+    void getAppVersion().then((info) => {
+      if (!cancelled && info.distribution) setDistribution(info.distribution);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Resolve the default_root path for display (installed → XDG/LocalAppData, …).
+  useEffect(() => {
+    let cancelled = false;
+    void vaultRootService
+      .defaultRootStatus()
+      .then((result) => {
+        if (!cancelled) setDefaultRootAnchor(result.defaultRootAnchor);
+      })
+      .catch(() => {
+        if (!cancelled) setDefaultRootAnchor("");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [vaultRootService]);
+
+  const defaultRootTitleKey =
+    distribution === "installed"
+      ? "modal.app_settings.option.upriv_root.default_root_installed"
+      : "modal.app_settings.option.upriv_root.default_root";
+  const defaultRootDescKey =
+    distribution === "installed"
+      ? "modal.app_settings.option.upriv_root.default_root_desc_installed"
+      : "modal.app_settings.option.upriv_root.default_root_desc";
 
   const dirty = isVaultRootDraftDirty(
     config.vault_root_mode,
@@ -544,12 +586,13 @@ export function AppSettingsBehaviorSection({
 
     const gen = ++checkGen.current;
 
-    if (config.vault_root_mode === "nearby") {
+    if (config.vault_root_mode === "default_root") {
       setDisk("checking");
       void vaultRootService
-        .nearbyStatus()
+        .defaultRootStatus()
         .then((result) => {
           if (gen !== checkGen.current) return;
+          setDefaultRootAnchor(result.defaultRootAnchor);
           if (result.status === "incomplete") setDisk("incomplete");
           else if (result.status === "unreadable") setDisk("unreadable");
           else if (result.status === "absent") setDisk("will_create");
@@ -589,11 +632,12 @@ export function AppSettingsBehaviorSection({
     setDisk("checking");
     checkGen.current += 1;
     const gen = checkGen.current;
-    if (config.vault_root_mode === "nearby") {
+    if (config.vault_root_mode === "default_root") {
       void vaultRootService
-        .nearbyStatus()
+        .defaultRootStatus()
         .then((result) => {
           if (gen !== checkGen.current) return;
+          setDefaultRootAnchor(result.defaultRootAnchor);
           if (result.status === "incomplete") setDisk("incomplete");
           else if (result.status === "unreadable") setDisk("unreadable");
           else if (result.status === "absent") setDisk("will_create");
@@ -625,18 +669,18 @@ export function AppSettingsBehaviorSection({
       });
   };
 
-  const showNearbyExtras = useNearby && dirty;
-  const showCustomExtras = !useNearby;
+  const showDefaultRootExtras = useDefaultRoot && dirty;
+  const showCustomExtras = !useDefaultRoot;
 
   const incompletePanel =
     dirty && disk === "incomplete" ? (
       <div className="space-y-2">
         <p className="text-xs leading-relaxed text-on-surface" role="status">
           {t(
-            useNearby
-              ? "modal.app_settings.upriv_root.switch_nearby_replace_notice"
+            useDefaultRoot
+              ? "modal.app_settings.upriv_root.switch_default_root_replace_notice"
               : "modal.app_settings.save_confirm_custom_incomplete",
-            useNearby
+            useDefaultRoot
               ? { file: VAULT_ROOT_ALIAS_FILE }
               : { path: config.upriv_root_path.trim() || "…" },
           )}
@@ -685,11 +729,11 @@ export function AppSettingsBehaviorSection({
         >
           <PolicyRadioOption
             groupName={rootModeGroup}
-            value="nearby"
-            checked={useNearby}
-            attention={useNearby && vaultRootGate.blocksSave}
-            title={t("modal.app_settings.option.upriv_root.nearby")}
-            description={t("modal.app_settings.option.upriv_root.nearby_desc")}
+            value="default_root"
+            checked={useDefaultRoot}
+            attention={useDefaultRoot && vaultRootGate.blocksSave}
+            title={t(defaultRootTitleKey)}
+            description={t(defaultRootDescKey)}
             badge="default"
             onSelect={() => {
               aliasLoadGen.current += 1;
@@ -697,80 +741,93 @@ export function AppSettingsBehaviorSection({
               setReplacePolicy(null);
               const current = config.upriv_root_path.trim();
               if (current) draftCustomPathRef.current = current;
-              onChange({ vault_root_mode: "nearby", upriv_root_path: "" });
+              onChange({ vault_root_mode: "default_root", upriv_root_path: "" });
             }}
             footer={
-              showNearbyExtras ? (
+              useDefaultRoot ? (
                 <div className="space-y-2">
-                  {disk === "checking" ? (
+                  {defaultRootAnchor ? (
+                    <p className="break-all rounded-md bg-surface-container-highest px-3 py-2 font-mono text-xs text-on-surface">
+                      {defaultRootAnchor}
+                    </p>
+                  ) : (
                     <p className="text-xs leading-relaxed text-on-surface-variant" role="status">
                       {t("modal.app_settings.field.upriv_root_loading")}
                     </p>
+                  )}
+                  {showDefaultRootExtras ? (
+                    <>
+                      {disk === "checking" ? (
+                        <p className="text-xs leading-relaxed text-on-surface-variant" role="status">
+                          {t("modal.app_settings.field.upriv_root_loading")}
+                        </p>
+                      ) : null}
+                      {disk === "will_create" ? (
+                        <p
+                          className="rounded-md bg-surface-container px-3 py-2 text-xs leading-relaxed text-on-surface"
+                          role="status"
+                        >
+                          {t("modal.app_settings.upriv_root.switch_default_root_create_notice", {
+                            file: VAULT_ROOT_ALIAS_FILE,
+                          })}
+                        </p>
+                      ) : null}
+                      {disk === "unreadable" ? (
+                        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                          <p
+                            className="rounded-md bg-error-container/10 px-3 py-2 text-xs leading-relaxed text-on-error-container"
+                            role="alert"
+                          >
+                            {t("modal.vault_root_setup.error_io")}
+                          </p>
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            size="md"
+                            className="w-full shrink-0 sm:w-auto"
+                            onClick={retryDiskCheck}
+                          >
+                            {t("action.retry")}
+                          </Button>
+                        </div>
+                      ) : null}
+                      {incompletePanel}
+                    </>
                   ) : null}
-                  {disk === "will_create" ? (
-                    <p
-                      className="rounded-md bg-surface-container px-3 py-2 text-xs leading-relaxed text-on-surface"
-                      role="status"
-                    >
-                      {t("modal.app_settings.upriv_root.switch_nearby_create_notice", {
-                        file: VAULT_ROOT_ALIAS_FILE,
-                      })}
-                    </p>
-                  ) : null}
-                  {disk === "unreadable" ? (
-                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                      <p
-                        className="rounded-md bg-error-container/10 px-3 py-2 text-xs leading-relaxed text-on-error-container"
-                        role="alert"
-                      >
-                        {t("modal.vault_root_setup.error_io")}
-                      </p>
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        size="md"
-                        className="w-full shrink-0 sm:w-auto"
-                        onClick={retryDiskCheck}
-                      >
-                        {t("action.retry")}
-                      </Button>
-                    </div>
-                  ) : null}
-                  {incompletePanel}
                 </div>
               ) : null
             }
           />
           <PolicyRadioOption
             groupName={rootModeGroup}
-            value="custom"
-            checked={!useNearby}
-            attention={!useNearby && vaultRootGate.blocksSave}
-            title={t("modal.app_settings.option.upriv_root.custom")}
-            description={t("modal.app_settings.option.upriv_root.custom_desc", {
+            value="custom_root"
+            checked={!useDefaultRoot}
+            attention={!useDefaultRoot && vaultRootGate.blocksSave}
+            title={t("modal.app_settings.option.upriv_root.custom_root")}
+            description={t("modal.app_settings.option.upriv_root.custom_root_desc", {
               file: VAULT_ROOT_ALIAS_FILE,
             })}
             onSelect={() => {
               const current = config.upriv_root_path.trim();
               setReplacePolicy(null);
               if (current) {
-                onChange({ vault_root_mode: "custom", upriv_root_path: current });
+                onChange({ vault_root_mode: "custom_root", upriv_root_path: current });
                 return;
               }
               const stashed = draftCustomPathRef.current.trim();
               if (stashed) {
-                onChange({ vault_root_mode: "custom", upriv_root_path: stashed });
+                onChange({ vault_root_mode: "custom_root", upriv_root_path: stashed });
                 return;
               }
               const gen = ++aliasLoadGen.current;
               setCustomPathLoading(true);
-              onChange({ vault_root_mode: "custom", upriv_root_path: "" });
+              onChange({ vault_root_mode: "custom_root", upriv_root_path: "" });
               void vaultRootService
                 .readAlias()
                 .then((alias) => {
                   if (gen !== aliasLoadGen.current) return;
                   onChange({
-                    vault_root_mode: "custom",
+                    vault_root_mode: "custom_root",
                     upriv_root_path: alias?.path.trim() || "",
                   });
                 })
@@ -816,24 +873,21 @@ export function AppSettingsBehaviorSection({
                       onClick={() => {
                         const suggested = config.upriv_root_path.trim();
                         setReplacePolicy(null);
-                        void (
-                          suggested
-                            ? Promise.resolve(suggested)
-                            : vaultRootService.readAlias().then((alias) => alias?.path.trim() || "")
-                        ).then((defaultPath) =>
-                          vaultRootService
-                            .pickFolder(
-                              defaultPath || null,
-                              t("modal.vault_root_setup.pick_folder_title"),
-                            )
-                            .then((picked) => {
-                              if (!picked?.trim()) return;
-                              onChange({
-                                vault_root_mode: "custom",
-                                upriv_root_path: picked.trim(),
-                              });
-                            }),
-                        );
+                        void (async () => {
+                          const defaultPath = suggested
+                            ? suggested
+                            : (await vaultRootService.readAlias().then((alias) => alias?.path.trim() || "").catch(() => "")) ||
+                              (await vaultRootService.suggestedCustomRootPath().catch(() => ""));
+                          const picked = await vaultRootService.pickFolder(
+                            defaultPath || null,
+                            t("modal.vault_root_setup.pick_folder_title"),
+                          );
+                          if (!picked?.trim()) return;
+                          onChange({
+                            vault_root_mode: "custom_root",
+                            upriv_root_path: picked.trim(),
+                          });
+                        })();
                       }}
                     >
                       {t("modal.app_settings.action.choose_folder")}

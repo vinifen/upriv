@@ -3,6 +3,7 @@
 | File | Purpose |
 |------|---------|
 | **[`AGENT.md`](AGENT.md)** | Full project context for coding agents (stack, rules, PRD/SDD map, commands) |
+| **[`SECURITY-PLAINTEXT.md`](SECURITY-PLAINTEXT.md)** | **Ship blocker** — no durable plaintext on disk in `encrypted_dir`; what not to port from `temp/` |
 
 **Canonical product specs** (always prefer over this summary when details matter):
 

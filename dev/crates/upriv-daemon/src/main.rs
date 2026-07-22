@@ -56,6 +56,9 @@ fn main() {
 }
 
 fn run() -> io::Result<()> {
+    // Pin distribution once after spawn env is in place (Electron sets UPRIV_*).
+    let _ = upriv_core::init_app_distribution();
+
     write_out(&WireOut::Ready)?;
     write_out(&WireOut::Event {
         name: "daemon_ready".to_string(),
@@ -64,13 +67,13 @@ fn run() -> io::Result<()> {
 
     match upriv_core::app_home_dir() {
         Ok(home) => {
-            let nearby = upriv_core::setup_nearby_anchor()
+            let default_root = upriv_core::setup_default_root_anchor()
                 .map(|p| p.display().to_string())
                 .unwrap_or_else(|_| home.display().to_string());
             eprintln!(
-                "[upriv-daemon] startup app_home={} nearby_anchor={}",
+                "[upriv-daemon] startup app_home={} default_root_anchor={}",
                 home.display(),
-                nearby
+                default_root
             );
         }
         Err(error) => {

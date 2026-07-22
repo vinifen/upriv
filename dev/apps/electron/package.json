@@ -3,6 +3,8 @@
   "private": true,
   "version": "0.1.0-beta",
   "description": "Upriv desktop shell (Electron)",
+  "homepage": "https://github.com/vinifen/upriv",
+  "author": "ViniciusFn <https://github.com/vinifen>",
   "main": "dist/main.js",
   "type": "commonjs",
   "engines": {
@@ -14,7 +16,9 @@
     "dev": "concurrently -k \"npm run dev --prefix ../desktop\" \"wait-on -t 30000 http-get://127.0.0.1:1420 && npm run build:main && electron . --dev --no-sandbox\"",
     "start": "npm run build:main && electron . --no-sandbox",
     "pack": "npm run build:main && electron-builder --dir",
-    "dist": "npm run build:main && electron-builder"
+    "dist": "npm run build:main && electron-builder",
+    "dist:linux": "npm run build:main && electron-builder --linux deb AppImage",
+    "dist:win": "npm run build:main && electron-builder --win nsis portable"
   },
   "devDependencies": {
     "@types/node": "22.15.3",
@@ -28,6 +32,7 @@
     "appId": "com.upriv.desktop",
     "productName": "Upriv",
     "icon": "build/icons/icon.png",
+    "afterPack": "./scripts/afterPack-linux-nosandbox.cjs",
     "directories": {
       "output": "../../target/release/bundle/electron"
     },
@@ -44,29 +49,50 @@
     ],
     "extraResources": [
       {
-        "from": "../../target/release/upriv-daemon",
-        "to": "bin/upriv-daemon"
+        "from": "../../target/release",
+        "to": "bin",
+        "filter": [
+          "upriv-daemon",
+          "upriv-daemon.exe"
+        ]
       }
     ],
     "linux": {
       "target": [
-        "AppImage"
+        "AppImage",
+        "deb"
       ],
       "category": "Utility",
-      "executableArgs": [
-        "--no-sandbox"
-      ]
+      "maintainer": "Upriv <upriv@users.noreply.github.com>",
+      "icon": "build/icons",
+      "artifactName": "${productName}-${version}-${os}-${arch}.${ext}"
+    },
+    "deb": {
+      "afterInstall": "build/linux/afterInstall.tpl"
     },
     "win": {
       "target": [
-        "nsis"
-      ]
+        "nsis",
+        "portable"
+      ],
+      "icon": "build/icons/icon.png",
+      "artifactName": "${productName}-${version}-${os}-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "${productName}-${version}-setup-${arch}.${ext}"
+    },
+    "portable": {
+      "artifactName": "${productName}-${version}-portable-${arch}.${ext}"
     },
     "mac": {
       "target": [
         "dmg"
       ],
-      "category": "public.app-category.productivity"
+      "category": "public.app-category.productivity",
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false
     }
   }
 }

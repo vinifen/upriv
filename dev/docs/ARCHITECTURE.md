@@ -148,7 +148,7 @@ One **native executable** per OS/architecture. Bundled inside or beside it:
 
 **Validated builds (2026-07-03):**
 
-- Linux: `dev/target/release/bundle/electron/Upriv-0.1.0.AppImage`
+- Linux: `dev/target/release/bundle/electron/Upriv-*.AppImage` (portable), `upriv-electron_*.deb` (system install)
 
 **Current scaffold (not yet bundled):** per-target `7zz` binary in `extraResources` — add when vault archive RPC lands in `upriv-core`.
 

@@ -19,8 +19,4 @@ export const mockAppSettingsService: AppSettingsService = {
     settingsOnDisk = true;
     return true;
   },
-
-  getDefaultRootPathSuggestion() {
-    return MOCK_UPRIV_ROOT_PATH;
-  },
 };

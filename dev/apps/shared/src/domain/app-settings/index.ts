@@ -17,5 +17,5 @@ export {
   logFileCountForKeepLast,
   normalizeLogKeepLastEntries,
 } from "./logging";
-export { createDefaultAppSettings, normalizeAppSettings } from "./normalize";
+export { createDefaultAppSettings, normalizeAppSettings, normalizeVaultRootMode } from "./normalize";
 export { APP_SETTINGS_ERROR_I18N_KEYS, appSettingsErrorI18nKey } from "./errorMessages";

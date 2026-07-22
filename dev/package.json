@@ -20,7 +20,9 @@
     "check": "./run check",
     "help": "./run help",
     "electron:dev": "npm run daemon:build && npm run dev --prefix apps/electron",
-    "electron:build": "node scripts/sync-version.mjs && npm run build:electron --prefix apps/desktop && npm run daemon:build:release && npm run dist --prefix apps/electron",
+    "electron:build": "node scripts/sync-version.mjs && npm run build:electron --prefix apps/desktop && npm run daemon:build:release && npm run dist:linux --prefix apps/electron",
+    "electron:build:linux": "npm run electron:build",
+    "electron:build:win": "node scripts/sync-version.mjs && npm run build:electron --prefix apps/desktop && npm run daemon:build:release && npm run dist:win --prefix apps/electron",
     "mobile:start": "npm run start --prefix apps/mobile",
     "mobile:android": "npm run android --prefix apps/mobile",
     "mobile:typecheck": "npm run typecheck --prefix apps/mobile"

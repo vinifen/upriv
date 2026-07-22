@@ -15,7 +15,9 @@ npm run start        # production renderer path (after electron:build from dev/)
 npm run dist         # electron-builder (run from dev/: npm run electron:build)
 ```
 
-From `dev/`: `npm run electron:dev` / `npm run electron:build`.
+From `dev/`: `npm run electron:dev` / `npm run electron:build` (Linux `.deb` + AppImage).
+
+Windows (on a Windows host): `npm run electron:build:win` → NSIS setup + portable `.exe`.
 
 ## Module system
 
@@ -36,11 +38,16 @@ The renderer talks to main only through **`window.upriv`** (preload bridge), not
 
 ## Linux `--no-sandbox`
 
-`package.json` passes `--no-sandbox` to Chromium in dev (`npm run dev`, `npm start`) and in packaged Linux builds (`linux.executableArgs` for AppImage).
+Chromium’s OS SUID sandbox often fails under AppArmor / AppImage (`setuid_sandbox_host.cc`).
 
-**Why:** On some Linux setups (AppArmor, unprivileged user namespaces disabled), Electron fails to start without it.
+- **Dev only:** `npm run dev` / `npm start` pass `--no-sandbox` on the CLI. That is **not** the production policy.
+- **Packaged Linux:** `afterPack` renames the Electron binary to `*.bin` and installs a bash wrapper for **all** linux-unpacked trees (AppImage and `.deb` share that tree). The wrapper adds `--no-sandbox` **only when `$APPIMAGE` names an existing file**. `.deb` keeps the real chrome-sandbox. `main.ts` mirrors the same file check (spoofed `APPIMAGE=1` does not disable sandbox).
+- **macOS DMG:** experimental scaffold — **not notarized**; Gatekeeper will reject unsigned builds until signing is added. Packaged macOS always uses `installed` (Application Support), never portable-beside-`.app`.
+- **Windows portable:** Electron uses `PORTABLE_EXECUTABLE_DIR` when set so data stays beside the stable `.exe`, not under `%TEMP%` extract.
+- Do **not** put `executableArgs: ["--no-sandbox"]` in `package.json` — that forced no-sandbox onto `.deb` as well.
+- **Renderer** `webPreferences.sandbox: true` stays on.
 
-**Trade-off:** Disables Chromium’s OS-level sandbox — acceptable for local dev; for production Linux builds, document the choice and prefer environment detection when Electron supports it without breaking CI/AppImage smoke tests.
+**Trade-off:** AppImage disables Chromium’s OS-level sandbox so the app can start on locked-down Ubuntu; `.deb` keeps it when the kernel allows.
 
 **Not used on Windows/macOS** packaged targets in the current `electron-builder` config.
 

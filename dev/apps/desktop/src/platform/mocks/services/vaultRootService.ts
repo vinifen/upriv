@@ -29,13 +29,13 @@ function mockAliasFilePath(): string {
   return `${MOCK_UPRIV_ROOT_PATH}/bin/${VAULT_ROOT_ALIAS_FILE}`;
 }
 
-function mockNearbyAnchor(): string {
+function mockDefaultRootAnchor(): string {
   return `${MOCK_UPRIV_ROOT_PATH}/bin`;
 }
 
 export const mockVaultRootService: VaultRootService = {
   async resolve(options = {}) {
-    const vaultRootMode: VaultRootMode = options.vaultRootMode ?? "nearby";
+    const vaultRootMode: VaultRootMode = options.vaultRootMode ?? "default_root";
     // Devtools / rare override only — Gate must not send the settings path here.
     const explicit = options.explicitPath?.trim();
     if (explicit) {
@@ -46,30 +46,32 @@ export const mockVaultRootService: VaultRootService = {
       return {
         status: "needs_setup",
         aliasPath: mockAliasFilePath(),
-        nearbyAnchor: mockNearbyAnchor(),
+        defaultRootAnchor: mockDefaultRootAnchor(),
+        distribution: "portable",
       };
     }
 
-    if (vaultRootMode === "custom") {
+    if (vaultRootMode === "custom_root") {
       const path = runtimeState.aliasPath?.trim() || runtimeState.rootPath;
       if (!path || !runtimeState.aliasActive) {
         return {
           status: "needs_setup",
           aliasPath: mockAliasFilePath(),
-          nearbyAnchor: mockNearbyAnchor(),
+          defaultRootAnchor: mockDefaultRootAnchor(),
+          distribution: "portable",
         };
       }
-      return { status: "found", rootPath: path, source: "alias" };
+      return { status: "found", rootPath: path, source: "custom_root" };
     }
 
     return {
       status: "found",
       rootPath: runtimeState.rootPath || MOCK_UPRIV_ROOT_PATH,
-      source: "nearby",
+      source: "default_root",
     };
   },
 
-  async setupNearby() {
+  async setupDefaultRoot() {
     const previous = runtimeState;
     const rootPath = MOCK_UPRIV_ROOT_PATH;
     runtimeState = {
@@ -98,11 +100,11 @@ export const mockVaultRootService: VaultRootService = {
     return { path, active: runtimeState?.aliasActive === true };
   },
 
-  async nearbyStatus() {
+  async defaultRootStatus() {
     if (!runtimeState?.configured) {
-      return { status: "absent" as const, nearbyAnchor: mockNearbyAnchor() };
+      return { status: "absent" as const, defaultRootAnchor: mockDefaultRootAnchor() };
     }
-    return { status: "valid" as const, nearbyAnchor: mockNearbyAnchor() };
+    return { status: "valid" as const, defaultRootAnchor: mockDefaultRootAnchor() };
   },
 
   async inspectAtPath(path) {
@@ -111,6 +113,10 @@ export const mockVaultRootService: VaultRootService = {
       status: trimmed ? ("valid" as const) : ("absent" as const),
       path: trimmed || MOCK_UPRIV_ROOT_PATH,
     };
+  },
+
+  async suggestedCustomRootPath() {
+    return MOCK_UPRIV_ROOT_PATH;
   },
 
   async pickFolder(defaultPath) {

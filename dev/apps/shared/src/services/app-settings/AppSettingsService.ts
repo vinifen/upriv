@@ -12,7 +12,7 @@ export interface AppSettingsLoadResult {
 export interface AppSettingsSaveOptions {
   /**
    * When false, daemon writes TOML only (skip `.upriv-root` sync).
-   * Pass false after `setupNearby` / `setupAtPath` / deactivate already applied the alias.
+   * Pass false after `setupDefaultRoot` / `setupAtPath` / deactivate already applied the alias.
    * Default true for back-compat.
    */
   syncAlias?: boolean;
@@ -21,6 +21,4 @@ export interface AppSettingsSaveOptions {
 export interface AppSettingsService {
   load(): Promise<AppSettingsLoadResult>;
   save(config: AppSettingsConfig, options?: AppSettingsSaveOptions): Promise<boolean>;
-  /** Suggested path when native folder picker is unavailable (browser dev). */
-  getDefaultRootPathSuggestion(): string;
 }

@@ -45,19 +45,105 @@ export function setDaemonExitHandler(handler: (() => void) | null): void {
 }
 
 export function resolveDaemonBinary(): string {
+  const binName = process.platform === "win32" ? "upriv-daemon.exe" : "upriv-daemon";
   if (app.isPackaged) {
-    return path.join(process.resourcesPath, "bin", "upriv-daemon");
+    return path.join(process.resourcesPath, "bin", binName);
   }
-  const devBinary = path.join(__dirname, "../../../target/debug/upriv-daemon");
+  const devBinary = path.join(__dirname, "../../../target/debug", binName);
   if (fs.existsSync(devBinary)) {
     return devBinary;
   }
-  return path.join(__dirname, "../../../target/release/upriv-daemon");
+  return path.join(__dirname, "../../../target/release", binName);
 }
 
 /** Dev workspace (`…/upriv/dev`) — Electron `dist/` → `../../..`. */
-export function resolveDevNearbyAnchor(): string {
-  return path.resolve(__dirname, "../../..");
+export function resolveDevDefaultRootAnchor(): string {
+  const anchor = path.resolve(__dirname, "../../..");
+  if (!fs.existsSync(anchor)) {
+    console.warn(
+      `[upriv-daemon] UPRIV_DEFAULT_ROOT_ANCHOR candidate missing: ${anchor} (check tsc outDir layout)`,
+    );
+  }
+  return anchor;
+}
+
+/** Best-effort remove leftover `.upriv-write-probe-*` (e.g. after kill -9 mid-probe). */
+function cleanupWriteProbes(dir: string): void {
+  try {
+    if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) return;
+    for (const name of fs.readdirSync(dir)) {
+      if (!name.startsWith(".upriv-write-probe-")) continue;
+      try {
+        fs.unlinkSync(path.join(dir, name));
+      } catch {
+        // ignore
+      }
+    }
+  } catch {
+    // ignore
+  }
+}
+
+/** True when we can create a file in `dir` (not just `W_OK` — covers `/opt` etc.). */
+function isDirWritable(dir: string): boolean {
+  let probe: string | undefined;
+  try {
+    if (!fs.existsSync(dir)) return false;
+    probe = path.join(dir, `.upriv-write-probe-${process.pid}-${Date.now()}`);
+    fs.writeFileSync(probe, "");
+    return true;
+  } catch {
+    return false;
+  } finally {
+    if (probe) {
+      try {
+        fs.unlinkSync(probe);
+      } catch {
+        // Leftovers cleaned by cleanupWriteProbes on next start.
+      }
+    }
+  }
+}
+
+/** True when `$APPIMAGE` names an existing file (AppImageKit). Spoofed values ignored. */
+function isRealAppImageEnv(): boolean {
+  const appImage = process.env.APPIMAGE;
+  if (!appImage) return false;
+  try {
+    return fs.existsSync(appImage) && fs.statSync(appImage).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * User-owned app home when the install/portable folder is not writable
+ * (`.deb` → `/opt`, Program Files, etc.).
+ */
+export function resolveUserDataAppHome(): string {
+  if (process.platform === "win32") {
+    const local = process.env.LOCALAPPDATA;
+    if (local) return path.join(local, "Upriv");
+    return app.getPath("userData");
+  }
+  if (process.platform === "darwin") {
+    const home = process.env.HOME;
+    if (home) return path.join(home, "Library", "Application Support", "Upriv");
+    return app.getPath("userData");
+  }
+  const xdg = process.env.XDG_DATA_HOME;
+  if (xdg) return path.join(xdg, "upriv");
+  const home = process.env.HOME;
+  if (home) return path.join(home, ".local", "share", "upriv");
+  return app.getPath("userData");
+}
+
+/** Prefer portable/install dir when writable; else XDG / LocalAppData / Application Support.
+ * Path-only — does not create the directory (Rust creates on first alias/settings write).
+ */
+function resolveWritableAppHome(candidate: string): string {
+  if (isDirWritable(candidate)) return candidate;
+  return resolveUserDataAppHome();
 }
 
 function daemonEnv(): NodeJS.ProcessEnv {
@@ -65,29 +151,63 @@ function daemonEnv(): NodeJS.ProcessEnv {
     "PATH",
     "HOME",
     "USER",
+    "USERNAME",
     "LANG",
     "LC_ALL",
     "TMPDIR",
     "TEMP",
     "TMP",
     "UPRIV_VAULT_ROOT",
-    "UPRIV_NEARBY_ANCHOR",
+    "UPRIV_DEFAULT_ROOT_ANCHOR",
+    "UPRIV_DISTRIBUTION",
     "UPRIV_DEV",
     // AppImageKit — portable root is beside the .AppImage file, not the FUSE mount.
     "APPIMAGE",
     "APPDIR",
     "OWD",
+    // electron-builder Windows portable — stable dir of the .exe (not %TEMP% extract).
+    "PORTABLE_EXECUTABLE_DIR",
+    "PORTABLE_EXECUTABLE_FILE",
   ] as const;
   const env: NodeJS.ProcessEnv = {};
   for (const key of keys) {
     const value = process.env[key];
     if (value !== undefined) env[key] = value;
   }
-  if (process.platform === "linux" || process.platform === "darwin") {
-    for (const key of ["XDG_RUNTIME_DIR", "XDG_CONFIG_HOME", "XDG_DATA_HOME"] as const) {
+
+  if (process.platform === "win32") {
+    for (const key of [
+      "SYSTEMROOT",
+      "WINDIR",
+      "LOCALAPPDATA",
+      "USERPROFILE",
+      "APPDATA",
+      "COMSPEC",
+      "PATHEXT",
+      "ProgramData",
+      "COMPUTERNAME",
+    ] as const) {
       const value = process.env[key];
       if (value !== undefined) env[key] = value;
     }
+  }
+
+  if (process.platform === "linux" || process.platform === "darwin") {
+    for (const key of [
+      "XDG_RUNTIME_DIR",
+      "XDG_CONFIG_HOME",
+      "XDG_DATA_HOME",
+      "XDG_DOCUMENTS_DIR",
+    ] as const) {
+      const value = process.env[key];
+      if (value !== undefined) env[key] = value;
+    }
+  }
+  if (process.platform === "linux" && process.env.LD_LIBRARY_PATH !== undefined) {
+    env.LD_LIBRARY_PATH = process.env.LD_LIBRARY_PATH;
+  }
+  if (process.platform === "darwin" && process.env.DYLD_LIBRARY_PATH !== undefined) {
+    env.DYLD_LIBRARY_PATH = process.env.DYLD_LIBRARY_PATH;
   }
 
   const isDev = process.argv.includes("--dev") || process.env.UPRIV_DEV === "1";
@@ -97,24 +217,47 @@ function daemonEnv(): NodeJS.ProcessEnv {
     if (isDev) {
       env.UPRIV_DEV = "1";
     }
-    if (!env.UPRIV_NEARBY_ANCHOR) {
-      env.UPRIV_NEARBY_ANCHOR = resolveDevNearbyAnchor();
+    env.UPRIV_DISTRIBUTION = "dev";
+    if (!env.UPRIV_DEFAULT_ROOT_ANCHOR) {
+      env.UPRIV_DEFAULT_ROOT_ANCHOR = resolveDevDefaultRootAnchor();
     }
-  } else if (!env.UPRIV_NEARBY_ANCHOR) {
-    // Linux AppImage: `$APPIMAGE` is the real file on disk; `current_exe` is under /tmp/.mount_*.
-    const appImage = process.env.APPIMAGE;
-    if (appImage) {
-      env.UPRIV_NEARBY_ANCHOR = path.dirname(appImage);
+  } else if (!env.UPRIV_DEFAULT_ROOT_ANCHOR) {
+    // App home owns `.upriv-root` and is the default_root create target for every
+    // distribution. Distribution only affects UI copy and resolve strictness.
+
+    // macOS packaged: always installed (Application Support). No portable-beside-.app.
+    if (process.platform === "darwin") {
+      env.UPRIV_DISTRIBUTION = "installed";
+      env.UPRIV_DEFAULT_ROOT_ANCHOR = resolveUserDataAppHome();
+      cleanupWriteProbes(env.UPRIV_DEFAULT_ROOT_ANCHOR);
     } else {
-      // Portable / installed: folder beside the executable (or beside the .app on macOS).
-      const exe = app.getPath("exe");
-      if (process.platform === "darwin" && exe.includes(".app/Contents/MacOS")) {
-        // …/Upriv.app/Contents/MacOS/Upriv → directory that contains Upriv.app
-        env.UPRIV_NEARBY_ANCHOR = path.resolve(path.dirname(exe), "../../..");
+      let candidate: string;
+      const portableDir = process.env.PORTABLE_EXECUTABLE_DIR?.trim();
+      if (process.platform === "win32" && portableDir) {
+        // electron-builder portable: exe may run from %TEMP%; this env is the stable folder.
+        candidate = portableDir;
+      } else if (isRealAppImageEnv()) {
+        // `$APPIMAGE` is the real file on disk; `current_exe` is under /tmp/.mount_*.
+        candidate = path.dirname(process.env.APPIMAGE as string);
       } else {
-        env.UPRIV_NEARBY_ANCHOR = path.dirname(exe);
+        candidate = path.dirname(app.getPath("exe"));
       }
+      cleanupWriteProbes(candidate);
+      // Product default is portable when the install/portable folder is writable
+      // (USB / external HD). Read-only installs (Program Files, /opt) → installed.
+      env.UPRIV_DISTRIBUTION = isDirWritable(candidate) ? "portable" : "installed";
+      env.UPRIV_DEFAULT_ROOT_ANCHOR = resolveWritableAppHome(candidate);
+      cleanupWriteProbes(env.UPRIV_DEFAULT_ROOT_ANCHOR);
     }
+  } else if (!env.UPRIV_DISTRIBUTION) {
+    // Anchor already set (CI / launcher) without an explicit distribution.
+    // Portable is the product default (USB/HD-first). Only mark installed when the
+    // anchor already matches the OS user-data home (installed-like layout).
+    const userData = resolveUserDataAppHome();
+    const anchor = path.resolve(env.UPRIV_DEFAULT_ROOT_ANCHOR);
+    env.UPRIV_DISTRIBUTION =
+      anchor === path.resolve(userData) ? "installed" : "portable";
+    cleanupWriteProbes(env.UPRIV_DEFAULT_ROOT_ANCHOR);
   }
   return env;
 }

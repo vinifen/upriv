@@ -31,12 +31,13 @@ file_manager_dock_expanded = false
 enabled = true
 level = "info"
 entries_per_file = 1000
+keep_last_entries = 10000
 
 [app]
-# Vault-root mode (nearby vs custom) is NOT configured in this file.
+# Vault-root mode (`default_root` vs `custom_root`) is NOT configured in this file.
 # It lives in the app-home `.upriv-root` alias:
-#   missing or status=inactive → nearby mode
-#   status=active + path → custom vault-root
+#   missing or status=inactive → default_root mode
+#   status=active + path → custom_root
 "#;
 
 /// Minimal TOML shape required for a usable vault-root marker.
@@ -126,7 +127,7 @@ pub fn open_or_initialize_vault_root(dir: impl AsRef<Path>) -> Result<VaultRoot>
 
 /// Status of `.upriv/` at `dir` (does not create or repair).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NearbyVaultRootStatus {
+pub enum VaultRootDirStatus {
     /// No `.upriv` directory.
     Absent,
     /// Marker + required settings present.
@@ -137,21 +138,21 @@ pub enum NearbyVaultRootStatus {
     Unreadable,
 }
 
-/// Inspect whether `dir` already has a usable nearby vault-root.
-pub fn inspect_vault_root_at(dir: impl AsRef<Path>) -> NearbyVaultRootStatus {
+/// Inspect whether `dir` already has a usable default_root vault-root.
+pub fn inspect_vault_root_at(dir: impl AsRef<Path>) -> VaultRootDirStatus {
     let dir = dir.as_ref();
     let upriv = dir.join(".upriv");
     if !upriv.exists() {
-        return NearbyVaultRootStatus::Absent;
+        return VaultRootDirStatus::Absent;
     }
     match validate_existing_vault_root(dir) {
-        Ok(()) => NearbyVaultRootStatus::Valid,
-        Err(UprivError::Io(_)) => NearbyVaultRootStatus::Unreadable,
-        Err(_) => NearbyVaultRootStatus::Incomplete,
+        Ok(()) => VaultRootDirStatus::Valid,
+        Err(UprivError::Io(_)) => VaultRootDirStatus::Unreadable,
+        Err(_) => VaultRootDirStatus::Incomplete,
     }
 }
 
-/// How to dispose of a broken nearby `.upriv/` before creating a fresh one.
+/// How to dispose of a broken default_root `.upriv/` before creating a fresh one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IncompleteReplacePolicy {
     /// Delete `.upriv/` permanently, then create a fresh layout.
@@ -189,17 +190,17 @@ pub fn open_or_initialize_vault_root_with_policy(
     let dir = dir.as_ref();
 
     match inspect_vault_root_at(dir) {
-        NearbyVaultRootStatus::Valid => {
+        VaultRootDirStatus::Valid => {
             ensure_standard_dirs(dir)?;
             VaultRoot::discover(dir)
         }
-        NearbyVaultRootStatus::Absent => initialize_vault_root(dir),
-        NearbyVaultRootStatus::Unreadable => {
+        VaultRootDirStatus::Absent => initialize_vault_root(dir),
+        VaultRootDirStatus::Unreadable => {
             // Surface the underlying I/O error (do not offer replace as if corrupt).
             validate_existing_vault_root(dir)?;
             unreachable!("inspect_vault_root_at reported Unreadable");
         }
-        NearbyVaultRootStatus::Incomplete => {
+        VaultRootDirStatus::Incomplete => {
             let Some(policy) = replace else {
                 validate_existing_vault_root(dir)?;
                 unreachable!("inspect_vault_root_at reported Incomplete");
@@ -387,7 +388,7 @@ vaults_dir = ".upriv/vaults"
         assert!(matches!(err, UprivError::VaultRootIncomplete { .. }));
         assert_eq!(
             inspect_vault_root_at(dir.path()),
-            NearbyVaultRootStatus::Incomplete
+            VaultRootDirStatus::Incomplete
         );
         assert!(VaultRoot::discover(dir.path()).is_err());
     }
@@ -411,19 +412,16 @@ vaults_dir = ".upriv/vaults"
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(
             inspect_vault_root_at(dir.path()),
-            NearbyVaultRootStatus::Absent
+            VaultRootDirStatus::Absent
         );
         initialize_vault_root(dir.path()).unwrap();
-        assert_eq!(
-            inspect_vault_root_at(dir.path()),
-            NearbyVaultRootStatus::Valid
-        );
+        assert_eq!(inspect_vault_root_at(dir.path()), VaultRootDirStatus::Valid);
 
         let broken = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(broken.path().join(".upriv")).unwrap();
         assert_eq!(
             inspect_vault_root_at(broken.path()),
-            NearbyVaultRootStatus::Incomplete
+            VaultRootDirStatus::Incomplete
         );
     }
 

@@ -8,11 +8,12 @@ export const CORE_RPC_COMMANDS = {
   APP_SETTINGS_GET: "app_settings_get",
   APP_SETTINGS_SAVE: "app_settings_save",
   VAULT_ROOT_RESOLVE: "vault_root_resolve",
-  VAULT_ROOT_SETUP_NEARBY: "vault_root_setup_nearby",
+  VAULT_ROOT_SETUP_DEFAULT_ROOT: "vault_root_setup_default_root",
   VAULT_ROOT_SETUP_PATH: "vault_root_setup_path",
   VAULT_ROOT_READ_ALIAS: "vault_root_read_alias",
-  VAULT_ROOT_NEARBY_STATUS: "vault_root_nearby_status",
+  VAULT_ROOT_DEFAULT_ROOT_STATUS: "vault_root_default_root_status",
   VAULT_ROOT_INSPECT_PATH: "vault_root_inspect_path",
+  VAULT_ROOT_SUGGESTED_CUSTOM_PATH: "vault_root_suggested_custom_path",
 } as const;
 
 /**

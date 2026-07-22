@@ -25,11 +25,20 @@ function bridgeErrorI18nKey(code: string): BridgeErrorI18nKey | null {
 /**
  * Desktop UI: caught error → i18n key (shared domain + bridge).
  * Use `fallback` when the error is internal or unknown (e.g. `unknown_method`).
+ * Vault-root setup timeouts use a dedicated message (operations can take minutes).
  */
 export function desktopErrorI18nKey(
   error: unknown,
   fallback: I18nKey = "error.unexpected",
 ): I18nKey {
+  if (
+    isRpcError(error) &&
+    error.code === BRIDGE_ERROR_CODES.RPC_TIMEOUT &&
+    (fallback === "modal.vault_root_setup.error_init" ||
+      fallback.startsWith("modal.vault_root_setup."))
+  ) {
+    return "modal.vault_root_setup.error_timeout";
+  }
   const key =
     errorDisplayI18nKey(error) ?? (isRpcError(error) ? bridgeErrorI18nKey(error.code) : null);
   return key ?? fallback;

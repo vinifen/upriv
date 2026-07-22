@@ -4,7 +4,13 @@ import { useTranslation } from "@/i18n";
 import { desktopErrorI18nKey } from "@/lib/errorMessages";
 import { useAppSettingsContext } from "./AppSettingsContext";
 import { useVaultRootService } from "@/platform/services";
-import { VAULT_ROOT_ERROR_CODES, isRpcError, type VaultRootMode } from "@upriv/shared";
+import {
+  VAULT_ROOT_ERROR_CODES,
+  isRpcError,
+  type AppDistribution,
+  type VaultRootMode,
+  type VaultRootPresentationState,
+} from "@upriv/shared";
 import { VaultRootAliasRecoveryModal } from "./VaultRootAliasRecoveryModal";
 import { VaultRootRepairModal } from "./VaultRootRepairModal";
 import { VaultRootSetupModal } from "./VaultRootSetupModal";
@@ -17,11 +23,11 @@ type RepairState = { targetPath: string; mode: VaultRootMode };
 
 /**
  * Resolves vault-root on launch. Blocks with setup/repair UI until a root exists.
- * Incomplete nearby or custom `.upriv/` → repair modal (rename recommended / delete).
+ * Incomplete default_root or custom `.upriv/` → repair modal (rename recommended / delete).
  * Invalid active alias (e.g. unmounted drive) → dedicated recovery UI.
  *
  * Always resolves with `explicitPath: null` so env/CLI overrides stay in Rust only.
- * Custom mode uses `vaultRootMode` + alias; wire/alias paths are for UX inspect only.
+ * `custom_root` mode uses `vaultRootMode` + alias; wire/alias paths are for UX inspect only.
  *
  * Children stay mounted (pointer-events blocked while not ready) so providers keep state.
  * Re-resolves when settings become ready and when `vaultRootEpoch` bumps.
@@ -32,13 +38,20 @@ type RepairState = { targetPath: string; mode: VaultRootMode };
  */
 export function VaultRootGate({ children }: VaultRootGateProps) {
   const { t } = useTranslation();
+  const tRef = useRef(t);
+  tRef.current = t;
   const vaultRoot = useVaultRootService();
   const { settings, settingsReady, vaultRootEpoch } = useAppSettingsContext();
   const [ready, setReady] = useState(false);
   const [applying, setApplying] = useState(false);
-  const [setup, setSetup] = useState<{ nearbyAnchor: string; aliasPath: string } | null>(null);
+  const [setup, setSetup] = useState<{
+    presentation: VaultRootPresentationState;
+    distribution: AppDistribution;
+  } | null>(null);
   const [repair, setRepair] = useState<RepairState | null>(null);
   const [aliasInvalidPath, setAliasInvalidPath] = useState<string | null>(null);
+  const [recoveryPresentation, setRecoveryPresentation] =
+    useState<VaultRootPresentationState | null>(null);
   const [resolveError, setResolveError] = useState<string | null>(null);
   /** Non-blocking notice when env/CLI sets an explicit vault-root override. */
   const [envOverridePath, setEnvOverridePath] = useState<string | null>(null);
@@ -48,18 +61,20 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
   const readyRef = useRef(ready);
   readyRef.current = ready;
   const prevEpochRef = useRef(vaultRootEpoch);
+  /** One retry when needs_setup but defaultRootStatus reports valid (M8). */
+  const validDefaultRootRetryRef = useRef(false);
 
   const runResolve = useCallback(() => {
     if (!settingsReady) return;
     const gen = ++resolveGen.current;
     const app = settingsRef.current.app;
     // Display / inspect only — never passed as resolve `explicitPath`.
-    let wireOrAliasPath = app.vault_root_mode === "custom" ? app.upriv_root_path.trim() : "";
+    let wireOrAliasPath = app.vault_root_mode === "custom_root" ? app.upriv_root_path.trim() : "";
 
     void (async () => {
-      // Custom mode with empty wire path: recover from active alias for UX
+      // `custom_root` mode with empty wire path: recover from active alias for UX
       // (setAliasInvalidPath / fill path for inspect) — do not inject into resolve.
-      if (app.vault_root_mode === "custom" && !wireOrAliasPath) {
+      if (app.vault_root_mode === "custom_root" && !wireOrAliasPath) {
         try {
           const alias = await vaultRoot.readAlias();
           if (gen !== resolveGen.current) return;
@@ -72,6 +87,12 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
             setResolveError(null);
             setApplying(false);
             setAliasInvalidPath(alias.path.trim() || "");
+            setRecoveryPresentation({
+              mode: app.vault_root_mode,
+              defaultRootAnchor: "",
+              aliasPath: "",
+              rememberedAliasTarget: alias.path.trim() || null,
+            });
             setReady(false);
             return;
           }
@@ -87,6 +108,7 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
         });
         if (gen !== resolveGen.current) return;
         if (result.status === "found") {
+          validDefaultRootRetryRef.current = false;
           setSetup(null);
           setRepair(null);
           setAliasInvalidPath(null);
@@ -99,12 +121,12 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
         }
 
         // Custom needs_setup: inspect wire/alias path for incomplete/unreadable.
-        if (app.vault_root_mode === "custom" && wireOrAliasPath) {
+        if (app.vault_root_mode === "custom_root" && wireOrAliasPath) {
           try {
             const inspected = await vaultRoot.inspectAtPath(wireOrAliasPath);
             if (gen !== resolveGen.current) return;
             if (inspected.status === "incomplete") {
-              setRepair({ targetPath: wireOrAliasPath, mode: "custom" });
+              setRepair({ targetPath: wireOrAliasPath, mode: "custom_root" });
               setSetup(null);
               setAliasInvalidPath(null);
               setResolveError(null);
@@ -118,6 +140,12 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
               setResolveError(null);
               setApplying(false);
               setAliasInvalidPath(wireOrAliasPath);
+              setRecoveryPresentation({
+                mode: app.vault_root_mode,
+                defaultRootAnchor: "",
+                aliasPath: "",
+                rememberedAliasTarget: wireOrAliasPath || null,
+              });
               setReady(false);
               return;
             }
@@ -128,17 +156,23 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
             setResolveError(null);
             setApplying(false);
             setAliasInvalidPath(wireOrAliasPath);
+            setRecoveryPresentation({
+              mode: app.vault_root_mode,
+              defaultRootAnchor: "",
+              aliasPath: "",
+              rememberedAliasTarget: wireOrAliasPath || null,
+            });
             setReady(false);
             return;
           }
         }
 
-        // Nearby / no custom path: broken nearby `.upriv` → repair before first-run setup.
+        // Default-root / no custom path: broken default_root `.upriv` → repair before first-run setup.
         try {
-          const nearby = await vaultRoot.nearbyStatus();
+          const defaultRoot = await vaultRoot.defaultRootStatus();
           if (gen !== resolveGen.current) return;
-          if (nearby.status === "incomplete") {
-            setRepair({ targetPath: nearby.nearbyAnchor, mode: "nearby" });
+          if (defaultRoot.status === "incomplete") {
+            setRepair({ targetPath: defaultRoot.defaultRootAnchor, mode: "default_root" });
             setSetup(null);
             setAliasInvalidPath(null);
             setResolveError(null);
@@ -146,13 +180,48 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
             setReady(false);
             return;
           }
-          if (nearby.status === "unreadable") {
+          if (defaultRoot.status === "unreadable") {
             setSetup(null);
             setRepair(null);
             setResolveError(null);
             setApplying(false);
-            setAliasInvalidPath(nearby.nearbyAnchor.trim() || "");
+            setAliasInvalidPath(defaultRoot.defaultRootAnchor.trim() || "");
+            setRecoveryPresentation({
+              mode: app.vault_root_mode,
+              defaultRootAnchor: defaultRoot.defaultRootAnchor,
+              aliasPath: "",
+              rememberedAliasTarget: defaultRoot.defaultRootAnchor.trim() || null,
+            });
             setReady(false);
+            return;
+          }
+          if (defaultRoot.status === "valid") {
+            // needs_setup + valid default root is inconsistent — retry resolve once (M8).
+            if (!validDefaultRootRetryRef.current) {
+              validDefaultRootRetryRef.current = true;
+              const retry = await vaultRoot.resolve({
+                vaultRootMode: app.vault_root_mode,
+                explicitPath: null,
+              });
+              if (gen !== resolveGen.current) return;
+              if (retry.status === "found") {
+                validDefaultRootRetryRef.current = false;
+                setSetup(null);
+                setRepair(null);
+                setAliasInvalidPath(null);
+                setResolveError(null);
+                setApplying(false);
+                setReady(true);
+                setEnvOverridePath(retry.source === "explicit" ? retry.rootPath : null);
+                return;
+              }
+            }
+            setSetup(null);
+            setRepair(null);
+            setAliasInvalidPath(null);
+            setApplying(false);
+            setReady(false);
+            setResolveError(tRef.current("error.service_unavailable"));
             return;
           }
         } catch {
@@ -162,18 +231,39 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
           setResolveError(null);
           setApplying(false);
           setAliasInvalidPath("");
+          setRecoveryPresentation({
+            mode: app.vault_root_mode,
+            defaultRootAnchor: "",
+            aliasPath: "",
+            rememberedAliasTarget: null,
+          });
           setReady(false);
           return;
         }
 
+        validDefaultRootRetryRef.current = false;
         if (gen !== resolveGen.current) return;
         setRepair(null);
         setAliasInvalidPath(null);
+        setRecoveryPresentation(null);
         setResolveError(null);
         setApplying(false);
+        let rememberedAliasTarget: string | null = null;
+        try {
+          const alias = await vaultRoot.readAlias();
+          if (alias?.path.trim()) rememberedAliasTarget = alias.path.trim();
+        } catch {
+          // Optional enrichment for Setup labels.
+        }
+        if (gen !== resolveGen.current) return;
         setSetup({
-          nearbyAnchor: result.nearbyAnchor,
-          aliasPath: result.aliasPath,
+          presentation: {
+            mode: app.vault_root_mode,
+            defaultRootAnchor: result.defaultRootAnchor,
+            aliasPath: result.aliasPath,
+            rememberedAliasTarget,
+          },
+          distribution: result.distribution,
         });
         setReady(false);
       } catch (error) {
@@ -197,6 +287,12 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
           setResolveError(null);
           setApplying(false);
           setAliasInvalidPath(remembered || "");
+          setRecoveryPresentation({
+            mode: app.vault_root_mode,
+            defaultRootAnchor: "",
+            aliasPath: "",
+            rememberedAliasTarget: remembered || null,
+          });
           setReady(false);
           return;
         }
@@ -205,21 +301,23 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
         const incomplete = isRpcError(error) && error.code === VAULT_ROOT_ERROR_CODES.INCOMPLETE;
         if (incomplete) {
           if (wireOrAliasPath) {
-            setRepair({ targetPath: wireOrAliasPath, mode: "custom" });
+            setRepair({ targetPath: wireOrAliasPath, mode: "custom_root" });
             setSetup(null);
             setAliasInvalidPath(null);
+            setRecoveryPresentation(null);
             setResolveError(null);
             setApplying(false);
             setReady(false);
             return;
           }
           try {
-            const nearby = await vaultRoot.nearbyStatus();
+            const defaultRoot = await vaultRoot.defaultRootStatus();
             if (gen !== resolveGen.current) return;
-            if (nearby.status === "incomplete") {
-              setRepair({ targetPath: nearby.nearbyAnchor, mode: "nearby" });
+            if (defaultRoot.status === "incomplete") {
+              setRepair({ targetPath: defaultRoot.defaultRootAnchor, mode: "default_root" });
               setSetup(null);
               setAliasInvalidPath(null);
+              setRecoveryPresentation(null);
               setResolveError(null);
               setApplying(false);
               setReady(false);
@@ -245,6 +343,12 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
           setResolveError(null);
           setApplying(false);
           setAliasInvalidPath(remembered || "");
+          setRecoveryPresentation({
+            mode: app.vault_root_mode,
+            defaultRootAnchor: "",
+            aliasPath: "",
+            rememberedAliasTarget: remembered || null,
+          });
           setReady(false);
           return;
         }
@@ -252,12 +356,13 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
         setSetup(null);
         setRepair(null);
         setAliasInvalidPath(null);
+        setRecoveryPresentation(null);
         setApplying(false);
         setReady(false);
-        setResolveError(t(desktopErrorI18nKey(error, "error.service_unavailable")));
+        setResolveError(tRef.current(desktopErrorI18nKey(error, "error.service_unavailable")));
       }
     })();
-  }, [settingsReady, t, vaultRoot]);
+  }, [settingsReady, vaultRoot]);
 
   useEffect(() => {
     if (vaultRootEpoch !== prevEpochRef.current) {
@@ -274,6 +379,7 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
     setSetup(null);
     setRepair(null);
     setAliasInvalidPath(null);
+    setRecoveryPresentation(null);
     setResolveError(null);
     setApplying(true);
     setReady(false);
@@ -308,7 +414,7 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
           settingsReady && repair !== null && resolveError === null && aliasInvalidPath === null
         }
         targetPath={repair?.targetPath ?? ""}
-        mode={repair?.mode ?? "nearby"}
+        mode={repair?.mode ?? "default_root"}
         onRepaired={() => clearBlocking()}
       />
       <VaultRootSetupModal
@@ -319,25 +425,41 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
           resolveError === null &&
           aliasInvalidPath === null
         }
-        nearbyAnchor={setup?.nearbyAnchor ?? ""}
-        aliasPath={setup?.aliasPath ?? ""}
+        presentation={
+          setup?.presentation ?? {
+            mode: "default_root",
+            defaultRootAnchor: "",
+            aliasPath: "",
+            rememberedAliasTarget: null,
+          }
+        }
+        distribution={setup?.distribution ?? "portable"}
         onConfigured={() => clearBlocking()}
       />
       <VaultRootAliasRecoveryModal
         open={settingsReady && aliasInvalidPath !== null && resolveError === null}
-        rememberedPath={aliasInvalidPath ?? ""}
+        presentation={
+          recoveryPresentation ?? {
+            mode: settings.app.vault_root_mode,
+            defaultRootAnchor: "",
+            aliasPath: "",
+            rememberedAliasTarget: aliasInvalidPath,
+          }
+        }
         onRecovered={() => clearBlocking()}
-        onNearbyIncomplete={(nearbyAnchor) => {
+        onDefaultRootIncomplete={(defaultRootAnchor) => {
           setAliasInvalidPath(null);
+          setRecoveryPresentation(null);
           setResolveError(null);
           setSetup(null);
-          setRepair({ targetPath: nearbyAnchor, mode: "nearby" });
+          setRepair({ targetPath: defaultRootAnchor, mode: "default_root" });
         }}
         onCustomIncomplete={(path) => {
           setAliasInvalidPath(null);
+          setRecoveryPresentation(null);
           setResolveError(null);
           setSetup(null);
-          setRepair({ targetPath: path, mode: "custom" });
+          setRepair({ targetPath: path, mode: "custom_root" });
         }}
       />
       {showLoadingSettings ? (

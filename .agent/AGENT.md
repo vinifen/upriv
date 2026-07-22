@@ -8,6 +8,22 @@ When product behavior, security, or on-disk layout is unclear, **read the canoni
 
 ---
 
+## CRITICAL — no durable plaintext on disk (`encrypted_dir`)
+
+**Read before any vault open/close/mount/7z/store work:** [`SECURITY-PLAINTEXT.md`](SECURITY-PLAINTEXT.md).
+
+| Fact | Detail |
+|------|--------|
+| **Product promise** | Default mode never leaves decrypted vault files on HD/SSD (PRD RF-45, RF-49; SDD §2.6). |
+| **`dev/` today** | No vault crypto yet — invariant is **specified, not enforceable**. Disk I/O is settings/paths/logs only. |
+| **`temp/upriv/` legacy** | FUSE session OK; **close/materialize/password/recovery write full plaintext trees to OS tempfile** via `export_logical_tree` + `create_from_dir`. **Do not port that pattern.** |
+| **Ship blocker** | Real open/close must stream logical content into `.7z` (or tmpfs+noswap+wipe only). No `DevPlaintext` in user builds. No `7zz -p` on argv. |
+| **Exception** | `plain` mode may use real `workspace/` plaintext **with** UI warning + wipe — never confuse with default mode. |
+
+**Agent rule:** if implementing archive rebuild and the easy path is “extract/export to tempfile then `7zz a`”, **stop** — that violates the core trust claim. See checklist in `SECURITY-PLAINTEXT.md`.
+
+---
+
 ## Current development phase (read this first)
 
 We are **past the Tauri → Electron migration** and **past UI/lifecycle scaffolding**. Vault-root discovery/setup and settings persistence talk to **`upriv-daemon`**; vault I/O (list/open/mount) is still mock.
@@ -16,8 +32,8 @@ We are **past the Tauri → Electron migration** and **past UI/lifecycle scaffol
 |-------|---------------------------|
 | **React UI** | Vault list / lifecycle / file-manager still **mock**; settings + **`VaultRootGate`** / setup / repair use live vault-root + app-settings services |
 | **Electron** | Shell, preload, daemon spawn, IPC timeouts, packaging scaffold |
-| **upriv-daemon** | stdio JSON-RPC — `app_version`, `app_shutdown`, `app_settings_*`, `vault_root_*` (resolve/setup/alias/nearby/inspect), `pick_directory` |
-| **upriv-core** | `logging`, `time`, `app_version()`, **`paths/`** (resolve, init, settings.toml, alias) — **no vault/crypto/7zz yet** |
+| **upriv-daemon** | stdio JSON-RPC — `app_version`, `app_shutdown`, `app_settings_*`, `vault_root_*` (resolve/setup/alias/default_root/inspect), `pick_directory` |
+| **upriv-core** | `logging`, `time`, `app_version()`, **`paths/`**, **`config/`** (app settings + vault `config.toml`), **`vault/`** list stub — **no open/close/crypto/7zz yet** |
 | **Integration** | `createDesktopServices()` → live `vaultRoot` + `appSettings`; other services mock until their RPCs land |
 
 **What to build next (default order):**
@@ -48,7 +64,9 @@ The repo may contain **`temp/upriv/`** on disk — a **frozen snapshot of an old
 
 - **OK:** Read for **ideas**, flow order, edge cases, “how did we solve X before?”, test data shapes, 7z integration sketches.  
 - **OK:** Compare on-disk layout against `prod-example/` and SDD.  
+- **OK:** Study FUSE ↔ encrypted store I/O as a reference for RAM-side decrypt (not for close/export).  
 - **Not OK:** Copy-paste modules into `dev/` without re-reading PRD/SDD/`ARCHITECTURE.md`.  
+- **Not OK:** Port `finalize_close` / `materialize_store_from_archive` / change-password **tempfile + `export_logical_tree` + `create_from_dir`** — that spills full plaintext trees to OS temp (see [`SECURITY-PLAINTEXT.md`](SECURITY-PLAINTEXT.md)).  
 - **Not OK:** Treat Tauri command names, folder layout, or error handling as the contract — **active contract is `dev/` + docs**.  
 - **Not OK:** Assume temp behavior matches current product rules (FIFO, i18n errors, Electron bridge, session rules may differ).
 
@@ -60,6 +78,7 @@ When temp and canonical docs conflict, **`dev/docs/` wins**. When porting an ide
 
 | Priority | File | Role |
 |----------|------|------|
+| 0 | [`SECURITY-PLAINTEXT.md`](SECURITY-PLAINTEXT.md) | **Ship blocker** — no durable plaintext in `encrypted_dir`; anti-patterns from `temp/` |
 | 1 | [`dev/docs/prd.md`](../dev/docs/prd.md) | **What** to build — requirements, UX, vault states, Android rules, non-goals |
 | 2 | [`dev/docs/sdd.md`](../dev/docs/sdd.md) | **How** to build — state machine, TOML layout, `upriv-core` modules, 7z, FUSE, tests, implementation order |
 | 3 | [`dev/docs/ARCHITECTURE.md`](../dev/docs/ARCHITECTURE.md) | **Stack** — React/Electron/RN, `upriv-core`, bridges, ADRs, platform matrix |
@@ -175,8 +194,8 @@ Mobile:   RN     ──JNI/FFI──► libupriv_core.so ──► upriv_core::*
 ```text
 upriv-core/src/
 ├── lib.rs
-├── config/       # settings.toml, vaults/*/config.toml
-├── vault/        # VaultManager: open, close, status
+├── config/       # app settings.toml + vaults/*/config.toml (load)
+├── vault/        # list stub; open/close/recovery next
 ├── seven_zip/    # 7zz wrapper
 ├── session/      # RAM session, security modes
 ├── recovery/
@@ -230,16 +249,23 @@ Reference tree: **`prod-example/`** (standalone; set `UPRIV_VAULT_ROOT` to test 
 Order in `upriv-core` `paths::resolve_vault_root`:
 
 1. Explicit path (`--vault` / `UPRIV_VAULT_ROOT` / caller) when valid — **overrides** wire `vault_root_mode` / path  
-2. **Custom mode** (`vault_root_mode = custom`): read **active** `.upriv-root` beside the app home. Alias exists **only** in this mode; inactive alias → NeedsSetup.  
-3. **Nearby mode** (default): search from nearby anchor then cwd; **ignore** alias  
-4. Nothing found → UI setup modal: create default structure nearby (no alias) **or** choose another folder (write/rewrite `.upriv-root`). Switching back to nearby **deactivates** the alias (`status=inactive`, path kept — file is not deleted); changing the custom path **rewrites** it.
+2. **`custom_root` mode** (`vault_root_mode = custom_root`): read **active** `.upriv-root` in the app home. Alias exists **only** in this mode; inactive alias → NeedsSetup.  
+3. **`default_root` mode** (default): search from `default_root` anchor then cwd; **ignore** alias  
+4. Nothing found → UI setup modal: create default structure at the `default_root` (no alias) **or** choose another folder (write/rewrite `.upriv-root`). Switching back to `default_root` **deactivates** the alias (`status=inactive`, path kept — file is not deleted); changing the custom path **rewrites** it.
 
-**Nearby anchor:**
+**`default_root` anchor:**
 
-| Launch | App home (create nearby + `.upriv-root`) |
-|--------|------------------------------------------|
-| `npm run electron:dev` | `dev/` via `UPRIV_NEARBY_ANCHOR` → **`dev/.upriv/`** and **`dev/.upriv-root`** |
-| Packaged `.exe` / AppImage | Directory of the binary (`UPRIV_NEARBY_ANCHOR` **always** set by Electron to that folder — nearby search is strict) |
+| Launch | Distribution | App home (`.upriv-root`) | Default vault folder (`default_root`) |
+|--------|--------------|--------------------------|----------------------------------------|
+| `npm run electron:dev` | `dev` | `dev/` via `UPRIV_DEFAULT_ROOT_ANCHOR` | Same as app home |
+| Packaged AppImage / portable exe | `portable` | Beside binary / `$APPIMAGE` | Same as app home |
+| Packaged system install (`.deb`, NSIS, macOS DMG, …) | `installed` | User data (`~/.local/share/upriv`, …) | Same as app home |
+
+**Portable packaging exists only on Linux (AppImage) and Windows (portable exe).** macOS is always `installed` (Application Support). Android (later) has no portable mode — app sandbox / SAF only. See `dev/README.md` packaging matrix.
+
+Electron sets `UPRIV_DISTRIBUTION` + `UPRIV_DEFAULT_ROOT_ANCHOR`. First-run UI defaults to **`default_root`** for all distributions (beside the app when portable; user data dir when installed). `custom_root` mode still writes `.upriv-root` in app home. Rust `suggested_vault_root()` (`~/Documents/Upriv`) is exposed as daemon RPC `vault_root_suggested_custom_path` for the custom folder picker. Packaged **macOS is always `installed`**. **Portable remains the product default** when only an anchor is set (USB/HD-first), unless the anchor already matches the OS user-data home.
+
+`prod-example/` is the **layout reference** only — it is **not** auto-discovered by `electron:dev` (strict `UPRIV_DEFAULT_ROOT_ANCHOR=dev/`). Point at it with `UPRIV_VAULT_ROOT=…/prod-example` when you need that tree.
 
 ---
 
@@ -247,10 +273,11 @@ Order in `upriv-core` `paths::resolve_vault_root`:
 
 Work in this order unless the user explicitly reprioritizes:
 
-1. `upriv-core`: config load, paths, `SevenZip` wrapper + tests  
+1. `upriv-core`: config load, paths, `SevenZip` wrapper + tests — **include `create_from_logical` / stream path; do not ship directory-only close that needs plaintext staging** (RF-45)  
 2. Virtual mount (`mount/` trait): **FUSE** (Linux) + **WinFsp** (Windows) — `workspace/` → `store/` (`encrypted_dir`)  
 2b. `plain/` module: real `workspace/` extract → close + `secure_wipe_workspace`  
-3. open/close happy path without UI — **both modes** (Linux + Windows)  
+3. open/close happy path without UI — **both modes** (Linux + Windows); **RF-49/RF-45 tests are part of “done” for encrypted_dir close** — see [`SECURITY-PLAINTEXT.md`](SECURITY-PLAINTEXT.md)  
+
 4. Recovery detector  
 5. `7z t` gate before write  
 6. Electron minimal UI (vault list, lock/unlock, modals)  

@@ -475,10 +475,10 @@ level = "info"
 entries_per_file = 1000
 
 [app]
-# Vault-root mode (nearby vs custom) is NOT configured here.
+# Vault-root mode (`default_root` vs `custom_root`) is NOT configured here.
 # It lives in the app-home `.upriv-root` alias:
-#   missing or status=inactive → nearby mode
-#   status=active + path → custom vault-root
+#   missing or status=inactive → default_root mode
+#   status=active + path → custom_root
 last_opened_vault = "my-encrypted-notes"
 ```
 

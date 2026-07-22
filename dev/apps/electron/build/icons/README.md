@@ -1,9 +1,15 @@
 # Electron app icons
 
-Raster `icon.png` (512×512) and SVG sources copied from brand assets (`prod-example/.upriv/app/assets/`).
+Raster sources for `electron-builder` (AppImage + `.deb` + window icon).
 
-Used by `electron-builder` via `"icon": "build/icons/icon.png"` in `package.json`.
+| File | Role |
+|------|------|
+| `icon.png` | 512×512 master (also used as fallback) |
+| `16x16.png` … `512x512.png` | Linux hicolor theme sizes (menu / dock / launcher) |
+| `Upriv.svg` / `Upriv-icon.svg` | Vector sources |
+
+Copied from brand assets (`prod-example/.upriv/app/assets/`). Do not reference `prod-example/` at runtime.
+
+**Linux `.deb`:** installs under `/usr/share/icons/hicolor/<size>/apps/upriv-electron.png` and refreshes the icon cache in `afterInstall`.
 
 **Version control:** `build/icons/` is tracked in git (only `apps/electron/dist/` is gitignored).
-
-Do not reference `prod-example/` at runtime — these files are bundled into the desktop shell only.

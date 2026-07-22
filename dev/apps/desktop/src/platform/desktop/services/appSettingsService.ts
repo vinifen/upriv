@@ -4,7 +4,7 @@ import type {
   AppSettingsSaveOptions,
   AppSettingsService,
 } from "@upriv/shared";
-import { createDefaultAppSettings, normalizeAppSettings } from "@upriv/shared";
+import { normalizeAppSettings } from "@upriv/shared";
 import { rpcAppSettingsGet, rpcAppSettingsSave } from "@/lib/rpc";
 
 /**
@@ -28,10 +28,6 @@ export const desktopAppSettingsService: AppSettingsService = {
       syncAlias: options?.syncAlias,
     });
     return wrote;
-  },
-
-  getDefaultRootPathSuggestion() {
-    return createDefaultAppSettings().app.upriv_root_path || "";
   },
 };
 

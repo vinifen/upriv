@@ -36,7 +36,7 @@ import type { I18nKey, IncompleteReplacePolicy } from "@upriv/shared";
 export type VaultRootDiskStatus =
   | "checking"
   | "ready"
-  /** Nearby or custom with no `.upriv` yet — Save will create it. */
+  /** Default_root or custom_root with no `.upriv` yet — Save will create it. */
   | "will_create"
   | "incomplete"
   | "unreadable"

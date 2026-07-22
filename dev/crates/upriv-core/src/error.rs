@@ -19,6 +19,14 @@ pub enum UprivError {
     #[error("vault root alias invalid: {0}")]
     VaultRootAliasInvalid(PathBuf),
 
+    /// No vault directory / id under the vault-root.
+    #[error("vault not found: {0}")]
+    VaultNotFound(PathBuf),
+
+    /// `vaults/<id>/config.toml` missing or invalid.
+    #[error("vault config invalid at {path}: {detail}")]
+    VaultConfigInvalid { path: PathBuf, detail: String },
+
     #[error(transparent)]
     Io(#[from] std::io::Error),
 }

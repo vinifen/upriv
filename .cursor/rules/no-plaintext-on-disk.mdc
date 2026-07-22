@@ -1,0 +1,24 @@
+---
+description: Ship-blocking invariant — encrypted_dir must never spill decrypted vault files to disk; do not port temp/ tempfile staging.
+alwaysApply: true
+---
+
+# No durable plaintext (`encrypted_dir`)
+
+## Hard rule
+
+In default mode `encrypted_dir`, **never** write or read decrypted vault file trees on ordinary disk (`/tmp`, `%TEMP%`, vault `workspace/`, crash staging). Decrypt only in RAM / mount buffers; persist only ciphertext in `stores/`. Close must **stream** logical content into `.7z` (PRD RF-45/RF-49, SDD §2.6).
+
+`plain` mode may use real plaintext `workspace/` **only** with UI warning + wipe on close.
+
+## Do not port from `temp/upriv/`
+
+Legacy `finalize_close` / `materialize_store_from_archive` / change-password use `tempfile` + `export_logical_tree` + `create_from_dir` — **full plaintext trees on OS temp**. That pattern is **forbidden** in `dev/`.
+
+Also ban: `DevPlaintext` dump-to-workspace; `7zz -p` on argv.
+
+## When implementing vault I/O
+
+Prefer `create_from_logical` / pipe. If a directory is unavoidable: tmpfs+noswap + RAII wipe only. Add RF-49 tests. Fail closed on mount/RAM failure — never silent spill.
+
+Full detail: [`.agent/SECURITY-PLAINTEXT.md`](../../.agent/SECURITY-PLAINTEXT.md).

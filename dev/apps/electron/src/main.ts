@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import {
   app,
@@ -20,6 +21,34 @@ const isDev =
   process.argv.includes("--dev") || process.env.UPRIV_DEV === "1";
 /** Open detached DevTools in dev; pass `--no-devtools` to skip. */
 const openDevTools = isDev && !process.argv.includes("--no-devtools");
+
+/**
+ * Linux AppImage FUSE (`nosuid`) breaks Chromium's SUID sandbox
+ * (`setuid_sandbox_host.cc` → Trace/breakpoint trap under `/tmp/.mount_Upriv-*`).
+ * Packaged AppImage also wraps the binary in `afterPack` so `--no-sandbox` is on
+ * argv *before* Chromium starts when `$APPIMAGE` names a real file.
+ * `.deb` installs keep the real sandbox (wrapper does not pass --no-sandbox).
+ * Renderer `webPreferences.sandbox` stays enabled.
+ *
+ * Require `$APPIMAGE` to be an existing file (same as Rust) so a spoofed
+ * `APPIMAGE=1` on a `.deb` install does not disable sandbox. Real AppImageKit
+ * always points at the AppImage path on disk.
+ */
+function isRealAppImageEnv(): boolean {
+  const appImage = process.env.APPIMAGE;
+  if (!appImage) return false;
+  try {
+    return fs.existsSync(appImage) && fs.statSync(appImage).isFile();
+  } catch {
+    return false;
+  }
+}
+
+if (isRealAppImageEnv()) {
+  process.env.ELECTRON_DISABLE_SANDBOX = "1";
+  app.commandLine.appendSwitch("no-sandbox");
+  app.commandLine.appendSwitch("disable-setuid-sandbox");
+}
 
 let mainWindow: BrowserWindow | null = null;
 let daemon: DaemonConnection | null = null;
@@ -75,6 +104,8 @@ async function ensureDaemon(): Promise<DaemonConnection> {
     daemon = connection;
     setDaemonExitHandler(() => {
       daemon = null;
+      // Notify renderer so version cache can clear before we force-quit (B9).
+      mainWindow?.webContents.send("upriv-event", "daemon_exited", null);
       dialog.showErrorBox(
         "Upriv",
         "The vault backend stopped unexpectedly. The app will close.",

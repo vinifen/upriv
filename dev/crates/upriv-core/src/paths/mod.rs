@@ -1,35 +1,40 @@
 //! Vault-root path contract (PRD §5 / SDD §3 / `prod-example/README.md`).
 //!
 //! - [`VaultRoot`] — paths under an opened root  
-//! - [`resolve_vault_root`] — launch discovery (explicit → custom active alias → nearby)  
+//! - [`resolve_vault_root`] — launch discovery (explicit → `custom_root` active alias → `default_root`)  
 //! - [`initialize_vault_root`] — create default `.upriv/` layout  
-//! - [`load_app_settings`] / [`save_app_settings`] — `.upriv/settings.toml`
 //!
+//! App settings TOML (`.upriv/settings.toml`) lives in [`crate::config`].
 //! Alias (`.upriv-root` in app home) is created only for “another folder”.
-//! Nearby mode ignores active alias (settings are source of truth) and deactivates it on save.
+//! Default-root mode ignores an active alias (alias file is the on-disk source of truth for
+//! mode/path — not `settings.toml`) and deactivates it on save.
 
+mod distribution;
+pub(crate) mod fs_env;
 mod init;
 mod resolve;
-mod settings;
 
+pub use distribution::{
+    default_vault_root_anchor, default_vault_root_anchor_for, detect_app_distribution,
+    distribution_str, env_app_distribution, infer_app_distribution, init_app_distribution,
+    suggested_vault_root, AppDistribution, ENV_DISTRIBUTION,
+};
+pub use fs_env::env_default_root_anchor;
 pub use init::{
     initialize_vault_root, inspect_vault_root_at, open_or_initialize_vault_root,
     open_or_initialize_vault_root_with_options, open_or_initialize_vault_root_with_policy,
     rename_incomplete_upriv, validate_existing_vault_root, IncompleteReplacePolicy,
-    NearbyVaultRootStatus,
+    VaultRootDirStatus,
 };
 pub use resolve::{
-    app_home_dir, binary_dir, deactivate_vault_root_alias, deactivate_vault_root_alias_everywhere,
-    discover_vault_root_near, env_nearby_anchor, read_vault_root_alias, resolve_vault_root,
-    setup_nearby_anchor, vault_root_alias_path, write_vault_root_alias, ResolveVaultRoot,
+    app_home_dir, binary_dir, deactivate_vault_root_alias_everywhere, discover_vault_root_upward,
+    read_vault_root_alias, resolve_vault_root, setup_default_root_anchor, vault_root_alias_path,
+    write_vault_root_alias, write_vault_root_alias_for_root, ResolveVaultRoot,
     ResolveVaultRootOptions, VaultRootAlias, VaultRootMode, VaultRootSource, VAULT_ROOT_ALIAS_FILE,
 };
-pub use settings::{
-    apply_setup_ui_locale, discover_bootstrap_root, load_app_settings, load_app_settings_at,
-    save_app_settings, save_app_settings_session, save_app_settings_session_with_alias_sync,
-    save_app_settings_with_alias_sync, sync_alias_with_app_settings, AppSectionSettings,
-    AppSettings, LoadedAppSettings, LoggingSettings, UiSettings,
-};
+
+/// Crate-internal: validate/open a default_root candidate path (used by `config::app_settings`).
+pub(crate) use resolve::open_default_root_candidate;
 
 use std::path::{Path, PathBuf};
 
@@ -37,6 +42,40 @@ use crate::error::{Result, UprivError};
 
 #[cfg(test)]
 pub(crate) static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Restores env vars on drop (panic-safe) for path/distribution tests.
+#[cfg(test)]
+pub(crate) struct EnvGuard {
+    keys: Vec<&'static str>,
+    previous: Vec<(String, Option<std::ffi::OsString>)>,
+}
+
+#[cfg(test)]
+impl EnvGuard {
+    pub fn capture(keys: &[&'static str]) -> Self {
+        let previous = keys
+            .iter()
+            .map(|k| ((*k).to_string(), std::env::var_os(k)))
+            .collect();
+        Self {
+            keys: keys.to_vec(),
+            previous,
+        }
+    }
+}
+
+#[cfg(test)]
+impl Drop for EnvGuard {
+    fn drop(&mut self) {
+        for (key, value) in self.previous.drain(..) {
+            match value {
+                Some(v) => std::env::set_var(&key, v),
+                None => std::env::remove_var(&key),
+            }
+        }
+        let _ = &self.keys;
+    }
+}
 
 /// Marker file that identifies a Upriv vault-root directory.
 pub const VAULT_ROOT_SETTINGS_REL: &str = ".upriv/settings.toml";
@@ -96,7 +135,7 @@ pub struct VaultRoot {
 impl VaultRoot {
     /// Open an existing vault-root (must contain a **valid** `.upriv/settings.toml`).
     ///
-    /// Uses the same rules as inspect/nearby: missing `.upriv` → NotFound;
+    /// Uses the same rules as inspect/default_root: missing `.upriv` → NotFound;
     /// `.upriv` present but broken/empty → Incomplete (not NotFound).
     pub fn discover(path: impl AsRef<Path>) -> Result<Self> {
         let root = path.as_ref().canonicalize().map_err(UprivError::from)?;
@@ -177,7 +216,8 @@ impl VaultRoot {
     }
 }
 
-/// Reject `..`, empty, and path separators so joins cannot escape the vault-root.
+/// Reject `..`, empty, separators, Windows reserved names / illegal chars, and controls
+/// so joins cannot escape the vault-root or create invalid OS paths.
 fn sanitize_path_component(name: &str) -> &str {
     let trimmed = name.trim();
     if trimmed.is_empty()
@@ -185,11 +225,51 @@ fn sanitize_path_component(name: &str) -> &str {
         || trimmed == ".."
         || trimmed.contains('/')
         || trimmed.contains('\\')
+        || trimmed.contains('<')
+        || trimmed.contains('>')
+        || trimmed.contains(':')
+        || trimmed.contains('"')
+        || trimmed.contains('|')
+        || trimmed.contains('?')
+        || trimmed.contains('*')
+        || trimmed.chars().any(|c| c.is_control())
+        || is_windows_reserved_device_name(trimmed)
     {
         "_"
     } else {
         trimmed
     }
+}
+
+/// Windows device names (`CON`, `NUL`, `COM1`, …) including `name.ext` forms.
+fn is_windows_reserved_device_name(name: &str) -> bool {
+    let stem = name.split('.').next().unwrap_or(name);
+    let upper = stem.to_ascii_uppercase();
+    matches!(
+        upper.as_str(),
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
+    )
 }
 
 #[cfg(test)]
@@ -236,5 +316,14 @@ mod tests {
             root.workspace_vault_dir("My Encrypted Notes"),
             PathBuf::from("/tmp/fake-root/workspace/My Encrypted Notes")
         );
+    }
+
+    #[test]
+    fn sanitize_rejects_windows_reserved_and_illegal() {
+        assert_eq!(sanitize_path_component("CON"), "_");
+        assert_eq!(sanitize_path_component("nul.txt"), "_");
+        assert_eq!(sanitize_path_component("a:b"), "_");
+        assert_eq!(sanitize_path_component("a*b"), "_");
+        assert_eq!(sanitize_path_component("ok-name"), "ok-name");
     }
 }

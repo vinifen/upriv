@@ -14,11 +14,11 @@ import { desktopErrorI18nKey } from "@/lib/errorMessages";
 
 interface VaultRootRepairModalProps {
   open: boolean;
-  /** Folder that contains the broken `.upriv/` (nearby anchor or custom path). */
+  /** Folder that contains the broken `.upriv/` (default_root anchor or custom path). */
   targetPath: string;
   /**
-   * `nearby` → setupNearby + switch to nearby mode.
-   * `custom` → setupAtPath + keep active alias at `targetPath`.
+   * `default_root` → setupDefaultRoot + switch to default-root mode.
+   * `custom_root` → setupAtPath + keep active alias at `targetPath`.
    */
   mode: VaultRootMode;
   onRepaired: () => void;
@@ -61,6 +61,7 @@ export function VaultRootRepairModal({
   const handleLocaleChange = useCallback(
     (locale: LocaleId) => {
       if (locale === settings.ui.locale) return;
+      // Before a writable vault-root exists, Context keeps this in memory only.
       void patchSettings({ ui: { locale } });
     },
     [patchSettings, settings.ui.locale],
@@ -76,26 +77,38 @@ export function VaultRootRepairModal({
       void (async () => {
         let rootPath = diskAppliedRoot.current;
         if (!rootPath) {
-          const result =
-            mode === "nearby"
-              ? await vaultRoot.setupNearby({
-                  replaceIncomplete: true,
-                  replacePolicy: nextPolicy,
-                  locale: settings.ui.locale,
-                })
-              : await vaultRoot.setupAtPath(targetPath, {
-                  replaceIncomplete: true,
-                  replacePolicy: nextPolicy,
-                  locale: settings.ui.locale,
-                });
-          rootPath = result.rootPath;
+          if (mode === "default_root") {
+            // setupDefaultRoot has no anchor param — Gate targetPath must match the daemon
+            // setup_default_root_anchor (cosmetic display otherwise). Assert before mutating.
+            const status = await vaultRoot.defaultRootStatus();
+            const anchor = status.defaultRootAnchor.trim();
+            const expected = targetPath.trim();
+            if (anchor && expected && anchor !== expected) {
+              throw new Error(
+                `default_root repair targetPath (${expected}) != setup anchor (${anchor})`,
+              );
+            }
+            const result = await vaultRoot.setupDefaultRoot({
+              replaceIncomplete: true,
+              replacePolicy: nextPolicy,
+              locale: settings.ui.locale,
+            });
+            rootPath = result.rootPath;
+          } else {
+            const result = await vaultRoot.setupAtPath(targetPath, {
+              replaceIncomplete: true,
+              replacePolicy: nextPolicy,
+              locale: settings.ui.locale,
+            });
+            rootPath = result.rootPath;
+          }
           diskAppliedRoot.current = rootPath;
         }
         const saved = await patchSettings(
           {
             app: {
               vault_root_mode: mode,
-              upriv_root_path: mode === "custom" ? rootPath : "",
+              upriv_root_path: mode === "custom_root" ? rootPath : "",
             },
           },
           { vaultRootAlreadyApplied: true },
@@ -206,7 +219,7 @@ export function VaultRootRepairModal({
           <>
             <p>
               {t(
-                mode === "custom"
+                mode === "custom_root"
                   ? "modal.vault_root_repair.body_custom"
                   : "modal.vault_root_repair.body",
               )}
@@ -251,7 +264,7 @@ export function VaultRootRepairModal({
         ) : (
           <p role="alert">
             {t(
-              mode === "custom"
+              mode === "custom_root"
                 ? "modal.vault_root_repair.confirm_delete_body_custom"
                 : "modal.vault_root_repair.confirm_delete_body",
             )}

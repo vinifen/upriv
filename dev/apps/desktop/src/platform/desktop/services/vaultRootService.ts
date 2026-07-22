@@ -2,11 +2,12 @@ import type { VaultRootService } from "@upriv/shared";
 import {
   rpcPickDirectory,
   rpcVaultRootInspectPath,
-  rpcVaultRootNearbyStatus,
+  rpcVaultRootDefaultRootStatus,
   rpcVaultRootReadAlias,
   rpcVaultRootResolve,
-  rpcVaultRootSetupNearby,
+  rpcVaultRootSetupDefaultRoot,
   rpcVaultRootSetupPath,
+  rpcVaultRootSuggestedCustomPath,
 } from "@/lib/rpc";
 
 /** Electron → upriv-daemon vault-root RPCs (+ shell folder picker). */
@@ -15,8 +16,8 @@ export const desktopVaultRootService: VaultRootService = {
     return rpcVaultRootResolve(options);
   },
 
-  setupNearby(options) {
-    return rpcVaultRootSetupNearby(options);
+  setupDefaultRoot(options) {
+    return rpcVaultRootSetupDefaultRoot(options);
   },
 
   setupAtPath(path, options) {
@@ -27,12 +28,16 @@ export const desktopVaultRootService: VaultRootService = {
     return rpcVaultRootReadAlias();
   },
 
-  nearbyStatus() {
-    return rpcVaultRootNearbyStatus();
+  defaultRootStatus() {
+    return rpcVaultRootDefaultRootStatus();
   },
 
   inspectAtPath(path) {
     return rpcVaultRootInspectPath(path);
+  },
+
+  suggestedCustomRootPath() {
+    return rpcVaultRootSuggestedCustomPath();
   },
 
   pickFolder(defaultPath, title) {

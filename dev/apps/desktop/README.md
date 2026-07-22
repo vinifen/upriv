@@ -26,7 +26,7 @@ cd ../.. && npm run electron:dev      # Vite + Electron + upriv-daemon
 cd ../.. && npm run electron:build    # AppImage / installer
 ```
 
-Artifacts: `dev/target/release/bundle/electron/` (`.AppImage` on Linux).
+Artifacts: `dev/target/release/bundle/electron/` (`.deb` + `.AppImage` on Linux). Prefer **`.deb`** for Ubuntu (double-click install, no FUSE).
 
 **Linux note:** on Ubuntu 23.10+ the Electron shell uses `--no-sandbox` (AppArmor blocks Chromium user namespaces). Renderer `sandbox: true` still applies. Optional: configure `chrome-sandbox` as root 4755 — see [Electron Linux docs](https://www.electronjs.org/docs/latest/tutorial/sandbox).
 
@@ -50,6 +50,7 @@ src/
 │   └── AppProviders.tsx     # Services → AppSettings (+ I18n inside) → file manager
 │
 ├── platform/                # Desktop-only adapters
+│   ├── desktop/             # Live RPC adapters (vaultRoot, appSettings, …)
 │   ├── mocks/               # Prototype data + mock services — remove when desktop RPC is wired
 │   │   ├── data/            # Static fixtures (vaults, logs, settings defaults)
 │   │   ├── stores/          # In-memory state (file tree, settings registry)
@@ -66,7 +67,7 @@ src/
 │   │   └── file-manager/    # File tree + editor (shell/, workspace/, tree/, editor/, lib/)
 │   └── system/
 │       ├── refresh/         # useAppRefresh — reload settings, vaults, lifecycle, file manager
-│       ├── settings/        # App settings modal + context
+│       ├── settings/        # App settings + VaultRootGate / setup / repair / alias recovery
 │       ├── logs/            # App log viewer
 │       └── help/            # Help modal + search
 │
@@ -118,18 +119,18 @@ Each feature folder under `features/vaults/*` and `features/system/*` has **one*
 
 **Current public APIs** (maintain this table when adding exports)
 
-| Module                 | Import path                      | Exports                                                                                                    |
-| ---------------------- | -------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| `vaults/list/`         | `@/features/vaults/list`         | `VaultListPage`, `exportVaultArchive`, `VaultListLifecycleModals`                                          |
-| `vaults/lifecycle/`    | `@/features/vaults/lifecycle`    | `VaultLifecycleLayer`, `useVaultLifecycleActions`, `VaultLifecycleRequest`                                 |
-| `vaults/settings/`     | `@/features/vaults/settings`     | `VaultSettingsModal`                                                                                       |
-| `vaults/create/`       | `@/features/vaults/create`       | `CreateVaultWizardModal`, `CreateVaultResult`                                                              |
-| `vaults/backups/`      | `@/features/vaults/backups`      | `VaultBackupsModal`                                                                                        |
-| `vaults/file-manager/` | `@/features/vaults/file-manager` | `FileManagerProvider`, `useFileManager`, `FileManagerLayer`                                                |
-| `system/settings/`     | `@/features/system/settings`     | `AppSettingsModal`, `AppSettingsProvider`, `useAppSettingsContext`, bulk-export helpers used by vault list |
-| `system/refresh/`      | `@/features/system/refresh`      | `useAppRefresh`                                                                                            |
-| `system/logs/`         | `@/features/system/logs`         | `LogsModal`                                                                                                |
-| `system/help/`         | `@/features/system/help`         | `HelpModal`                                                                                                |
+| Module                 | Import path                      | Exports                                                                                                  |
+| ---------------------- | -------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `vaults/list/`         | `@/features/vaults/list`         | `VaultListPage`, `exportVaultArchive`, `VaultListLifecycleModals`                                        |
+| `vaults/lifecycle/`    | `@/features/vaults/lifecycle`    | `VaultLifecycleLayer`, `useVaultLifecycleActions`, `VaultLifecycleRequest`                               |
+| `vaults/settings/`     | `@/features/vaults/settings`     | `VaultSettingsModal`                                                                                     |
+| `vaults/create/`       | `@/features/vaults/create`       | `CreateVaultWizardModal`, `CreateVaultResult`                                                            |
+| `vaults/backups/`      | `@/features/vaults/backups`      | `VaultBackupsModal`                                                                                      |
+| `vaults/file-manager/` | `@/features/vaults/file-manager` | `FileManagerProvider`, `useFileManager`, `FileManagerLayer`                                              |
+| `system/settings/`     | `@/features/system/settings`     | `AppSettingsModal`, `AppSettingsProvider`, `useAppSettingsContext`, `VaultRootGate`, bulk-export helpers |
+| `system/refresh/`      | `@/features/system/refresh`      | `useAppRefresh`                                                                                          |
+| `system/logs/`         | `@/features/system/logs`         | `LogsModal`                                                                                              |
+| `system/help/`         | `@/features/system/help`         | `HelpModal`                                                                                              |
 
 **When adding code**
 

@@ -1,11 +1,13 @@
 export type {
+  AppDistribution,
   IncompleteReplacePolicy,
-  NearbyVaultRootStatus,
-  NearbyVaultRootStatusResult,
+  VaultRootDirStatus,
+  DefaultRootStatusResult,
   VaultRootAliasInfo,
   VaultRootInspectResult,
+  VaultRootPresentationState,
   VaultRootResolveResult,
-  VaultRootSource,
+  VaultRootResolveSource,
 } from "./types";
 export { VAULT_ROOT_ALIAS_FILE } from "./types";
 export { VAULT_ROOT_ERROR_CODES, isVaultRootErrorCode } from "./errors";

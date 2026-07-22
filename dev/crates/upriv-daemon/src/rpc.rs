@@ -9,8 +9,8 @@ use upriv_core::{
     app_home_dir, apply_setup_ui_locale, deactivate_vault_root_alias_everywhere,
     inspect_vault_root_at, load_app_settings, open_or_initialize_vault_root_with_policy,
     read_vault_root_alias, resolve_vault_root, save_app_settings_session_with_alias_sync,
-    write_vault_root_alias, AppSettings, IncompleteReplacePolicy, NearbyVaultRootStatus,
-    ResolveVaultRoot, ResolveVaultRootOptions, VaultRootMode, VaultRootSource,
+    suggested_vault_root, write_vault_root_alias, AppSettings, IncompleteReplacePolicy,
+    ResolveVaultRoot, ResolveVaultRootOptions, VaultRootDirStatus, VaultRootMode, VaultRootSource,
     VAULT_ROOT_ALIAS_FILE,
 };
 
@@ -39,7 +39,7 @@ pub struct RpcResponse {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ResolveParams {
     #[serde(default)]
     vault_root_mode: VaultRootMode,
@@ -51,7 +51,7 @@ struct ResolveParams {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct PathParams {
     path: String,
     #[serde(default)]
@@ -63,8 +63,8 @@ struct PathParams {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct SetupNearbyParams {
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SetupDefaultRootParams {
     #[serde(default)]
     replace_incomplete: bool,
     /// `"delete"` | `"rename"` — **required** when `replace_incomplete` is true
@@ -77,16 +77,20 @@ struct SetupNearbyParams {
 
 pub fn handle_rpc(req: RpcRequest) -> RpcResponse {
     match req.method.as_str() {
-        "app_version" => ok(json!({ "version": upriv_core::app_version() })),
+        "app_version" => ok(json!({
+            "version": upriv_core::app_version(),
+            "distribution": upriv_core::distribution_str(upriv_core::detect_app_distribution()),
+        })),
         "app_shutdown" => ok(json!(null)),
         "app_settings_get" => app_settings_get(),
         "app_settings_save" => app_settings_save(req.params),
         "vault_root_resolve" => vault_root_resolve(req.params),
-        "vault_root_setup_nearby" => vault_root_setup_nearby(req.params),
+        "vault_root_setup_default_root" => vault_root_setup_default_root(req.params),
         "vault_root_setup_path" => vault_root_setup_path(req.params),
         "vault_root_read_alias" => vault_root_read_alias(),
-        "vault_root_nearby_status" => vault_root_nearby_status(),
+        "vault_root_default_root_status" => vault_root_default_root_status(),
         "vault_root_inspect_path" => vault_root_inspect_path(req.params),
+        "vault_root_suggested_custom_path" => vault_root_suggested_custom_path(),
         other => err("unknown_method", format!("unknown method: {other}")),
     }
 }
@@ -148,20 +152,22 @@ fn vault_root_resolve(params: Value) -> RpcResponse {
         }
         Ok(ResolveVaultRoot::NeedsSetup {
             alias_path,
-            nearby_anchor,
+            default_root_anchor,
+            distribution,
         }) => {
             let alias = match path_utf8(&alias_path) {
                 Ok(p) => p,
                 Err(response) => return response,
             };
-            let nearby = match path_utf8(&nearby_anchor) {
+            let default_root = match path_utf8(&default_root_anchor) {
                 Ok(p) => p,
                 Err(response) => return response,
             };
             ok(json!({
                 "status": "needs_setup",
                 "aliasPath": alias,
-                "nearbyAnchor": nearby,
+                "defaultRootAnchor": default_root,
+                "distribution": upriv_core::distribution_str(distribution),
             }))
         }
         Err(error) => map_core_err(error),
@@ -189,8 +195,8 @@ fn parse_replace_policy_flag(
     }
 }
 
-fn vault_root_setup_nearby(params: Value) -> RpcResponse {
-    let parsed: SetupNearbyParams = match serde_json::from_value(params) {
+fn vault_root_setup_default_root(params: Value) -> RpcResponse {
+    let parsed: SetupDefaultRootParams = match serde_json::from_value(params) {
         Ok(value) => value,
         Err(error) => return err("invalid_request", error.to_string()),
     };
@@ -201,7 +207,7 @@ fn vault_root_setup_nearby(params: Value) -> RpcResponse {
         Ok(policy) => policy,
         Err(response) => return response,
     };
-    let anchor = match upriv_core::setup_nearby_anchor() {
+    let anchor = match upriv_core::setup_default_root_anchor() {
         Ok(path) => path,
         Err(error) => return map_core_err(error),
     };
@@ -218,7 +224,7 @@ fn vault_root_setup_nearby(params: Value) -> RpcResponse {
             }
             if let Err(error) = apply_setup_ui_locale(root.root(), parsed.locale.as_deref()) {
                 eprintln!(
-                    "vault_root_setup_nearby: apply_setup_ui_locale failed (root ok): {error}"
+                    "vault_root_setup_default_root: apply_setup_ui_locale failed (root ok): {error}"
                 );
             }
             match path_utf8(root.root()) {
@@ -230,27 +236,27 @@ fn vault_root_setup_nearby(params: Value) -> RpcResponse {
     }
 }
 
-fn vault_root_status_str(status: NearbyVaultRootStatus) -> &'static str {
+fn vault_root_status_str(status: VaultRootDirStatus) -> &'static str {
     match status {
-        NearbyVaultRootStatus::Absent => "absent",
-        NearbyVaultRootStatus::Valid => "valid",
-        NearbyVaultRootStatus::Incomplete => "incomplete",
-        NearbyVaultRootStatus::Unreadable => "unreadable",
+        VaultRootDirStatus::Absent => "absent",
+        VaultRootDirStatus::Valid => "valid",
+        VaultRootDirStatus::Incomplete => "incomplete",
+        VaultRootDirStatus::Unreadable => "unreadable",
     }
 }
 
-fn vault_root_nearby_status() -> RpcResponse {
-    let anchor = match upriv_core::setup_nearby_anchor() {
+fn vault_root_default_root_status() -> RpcResponse {
+    let anchor = match upriv_core::setup_default_root_anchor() {
         Ok(path) => path,
         Err(error) => return map_core_err(error),
     };
-    let nearby_anchor = match path_utf8(&anchor) {
+    let default_root_anchor = match path_utf8(&anchor) {
         Ok(p) => p,
         Err(response) => return response,
     };
     ok(json!({
         "status": vault_root_status_str(inspect_vault_root_at(&anchor)),
-        "nearbyAnchor": nearby_anchor,
+        "defaultRootAnchor": default_root_anchor,
     }))
 }
 
@@ -271,6 +277,16 @@ fn vault_root_inspect_path(params: Value) -> RpcResponse {
         "status": vault_root_status_str(inspect_vault_root_at(&path)),
         "path": path_str,
     }))
+}
+
+fn vault_root_suggested_custom_path() -> RpcResponse {
+    match suggested_vault_root() {
+        Ok(path) => match path_utf8(&path) {
+            Ok(path) => ok(json!({ "path": path })),
+            Err(response) => response,
+        },
+        Err(error) => map_core_err(error),
+    }
 }
 
 fn require_absolute_path(path: &Path) -> Result<(), RpcResponse> {
@@ -374,11 +390,12 @@ fn app_settings_get() -> RpcResponse {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct AppSettingsSaveParams {
-    /// Flattened wire `AppSettings` (snake_case nested keys: `ui`, `logging`, `app`).
-    #[serde(flatten)]
+    /// Nested `AppSettings` (snake_case sections: `ui`, `logging`, `app`).
     settings: AppSettings,
     /// When false, write TOML only (caller already mutated `.upriv-root`). Default true.
+    /// Wire name is camelCase `syncAlias` only — `sync_alias` is rejected by deny_unknown_fields.
     #[serde(default = "default_sync_alias", rename = "syncAlias")]
     sync_alias: bool,
 }
@@ -394,12 +411,16 @@ fn app_settings_save(params: Value) -> RpcResponse {
     };
     let settings = parsed.settings;
     // Reject relative custom paths the same way as setup_path.
-    if settings.app.vault_root_mode == VaultRootMode::Custom {
+    if settings.app.vault_root_mode == VaultRootMode::CustomRoot {
         let path = settings.app.upriv_root_path.trim();
-        if !path.is_empty() {
-            if let Err(response) = require_absolute_path(Path::new(path)) {
-                return response;
-            }
+        if path.is_empty() {
+            return err(
+                "invalid_request",
+                "custom_root mode requires a non-empty upriv_root_path".into(),
+            );
+        }
+        if let Err(response) = require_absolute_path(Path::new(path)) {
+            return response;
         }
     }
     match save_app_settings_session_with_alias_sync(&settings, parsed.sync_alias) {
@@ -411,8 +432,8 @@ fn app_settings_save(params: Value) -> RpcResponse {
 fn source_str(source: VaultRootSource) -> &'static str {
     match source {
         VaultRootSource::Explicit => "explicit",
-        VaultRootSource::Alias => "alias",
-        VaultRootSource::Nearby => "nearby",
+        VaultRootSource::CustomRoot => "custom_root",
+        VaultRootSource::DefaultRoot => "default_root",
     }
 }
 
@@ -424,6 +445,10 @@ fn map_core_err(error: upriv_core::UprivError) -> RpcResponse {
         }
         upriv_core::UprivError::VaultRootAliasInvalid(p) => {
             ("vault_root_alias_invalid", Some(p.as_path()))
+        }
+        upriv_core::UprivError::VaultNotFound(p) => ("vault_not_found", Some(p.as_path())),
+        upriv_core::UprivError::VaultConfigInvalid { path, .. } => {
+            ("vault_config_invalid", Some(path.as_path()))
         }
         upriv_core::UprivError::Io(_) => ("io_error", None),
     };
@@ -467,11 +492,12 @@ mod contract_tests {
         "app_settings_get",
         "app_settings_save",
         "vault_root_resolve",
-        "vault_root_setup_nearby",
+        "vault_root_setup_default_root",
         "vault_root_setup_path",
         "vault_root_read_alias",
-        "vault_root_nearby_status",
+        "vault_root_default_root_status",
         "vault_root_inspect_path",
+        "vault_root_suggested_custom_path",
     ];
 
     #[test]

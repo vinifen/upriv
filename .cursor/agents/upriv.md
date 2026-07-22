@@ -7,6 +7,8 @@ description: Upriv vault manager — Rust upriv-core, Electron desktop, Expo mob
 
 Read **[`.agent/AGENT.md`](../../.agent/AGENT.md)** first — canonical product rules, layout, guardrails, **current phase**, and **`temp/` legacy reference** (research only). Do not duplicate long command lists here.
 
+**Security ship blocker:** [`.agent/SECURITY-PLAINTEXT.md`](../../.agent/SECURITY-PLAINTEXT.md) — `encrypted_dir` must never spill decrypted vault trees to disk; do **not** port `temp/` tempfile + `export_logical_tree` close/export.
+
 ## Stack (quick)
 
 - **`dev/crates/upriv-core/`** — vault/crypto logic (**minimal today — start here**)

@@ -25,10 +25,10 @@ import { desktopErrorI18nKey } from "@/lib/errorMessages";
 import type { I18nKey } from "@/i18n";
 
 interface PersistOptions {
-  /** When incomplete `.upriv/` must be replaced (nearby or custom path). */
+  /** When incomplete `.upriv/` must be replaced (default_root or custom path). */
   replacePolicy?: IncompleteReplacePolicy;
   /**
-   * UI already ran `setupNearby` / `setupAtPath`.
+   * UI already ran `setupDefaultRoot` / `setupAtPath`.
    * Persist only settings.toml — do not re-sync alias (single writer).
    */
   vaultRootAlreadyApplied?: boolean;
@@ -94,11 +94,16 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
   const [persistErrorSignal, setPersistErrorSignal] = useState(0);
   const [persistError, setPersistError] = useState<unknown>(null);
   const settingsRef = useRef(settings);
+  const settingsOnDiskRef = useRef(settingsOnDisk);
   const persistChainRef = useRef(Promise.resolve());
 
   useEffect(() => {
     settingsRef.current = settings;
   }, [settings]);
+
+  useEffect(() => {
+    settingsOnDiskRef.current = settingsOnDisk;
+  }, [settingsOnDisk]);
 
   useEffect(() => {
     let cancelled = false;
@@ -113,36 +118,13 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
           setSettingsReady(true);
         }
       })
-      .catch(async () => {
+      .catch(async (loadError) => {
         if (import.meta.env.DEV) {
-          console.error("app_settings load failed");
+          console.error("app_settings load failed", loadError);
         }
         if (cancelled) return;
-        // Prefer recovering from an active alias over forcing nearby defaults.
-        try {
-          const alias = await vaultRootService.readAlias();
-          if (alias?.active && alias.path.trim()) {
-            const defaults = createDefaultAppSettings();
-            const recovered = normalizeAppSettings({
-              ...defaults,
-              app: {
-                ...defaults.app,
-                vault_root_mode: "custom",
-                upriv_root_path: alias.path.trim(),
-              },
-            });
-            settingsRef.current = recovered;
-            setSettings(recovered);
-            setSettingsOnDisk(false);
-            setSettingsReady(true);
-            return;
-          }
-        } catch {
-          if (import.meta.env.DEV) {
-            console.error("alias recovery after settings load failed");
-          }
-        }
-        // No recoverable alias — first-run nearby defaults.
+        // Hard RPC/I/O failure: do not silently recover via alias (M11).
+        // Soft `onDisk: false` with defaults is only for a successful load of bootstrap defaults.
         const defaults = createDefaultAppSettings();
         settingsRef.current = defaults;
         setSettings(defaults);
@@ -152,7 +134,7 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [appSettingsService, vaultRootService]);
+  }, [appSettingsService]);
 
   const reloadSettings = useCallback(async () => {
     const loaded = await appSettingsService.load();
@@ -185,22 +167,51 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
         previous.app.upriv_root_path !== normalized.app.upriv_root_path;
 
       try {
+        if (
+          normalized.app.vault_root_mode === "custom_root" &&
+          !normalized.app.upriv_root_path.trim()
+        ) {
+          throw new RpcError(
+            "invalid_request",
+            "custom_root mode requires a non-empty upriv_root_path",
+          );
+        }
         // Apply vault-root on disk *before* flipping settings — unless the caller
-        // (Setup/Repair Gate) already did setupNearby/setupAtPath (single writer).
+        // (Setup/Repair Gate) already did setupDefaultRoot/setupAtPath (single writer).
         const needsVaultRootMutation =
           (rootModeChanged || options?.replacePolicy != null) && !options?.vaultRootAlreadyApplied;
+
+        // Bootstrap / broken alias: no writable `.upriv/settings.toml` yet (`onDisk: false`).
+        // Keep UI prefs (locale, theme, …) in memory only; setup* + finish() write them
+        // when a root is created (`apply_setup_ui_locale` / save after vaultRootAlreadyApplied).
+        if (
+          !settingsOnDiskRef.current &&
+          !needsVaultRootMutation &&
+          !options?.vaultRootAlreadyApplied
+        ) {
+          settingsRef.current = normalized;
+          setSettings(normalized);
+          return;
+        }
+
         if (needsVaultRootMutation) {
-          if (normalized.app.vault_root_mode === "nearby") {
-            // Inspect nearby before mutating. setupNearby deactivates the alias after init.
-            const nearby = await vaultRootService.nearbyStatus();
-            if (nearby.status === "unreadable") {
-              throw new RpcError(VAULT_ROOT_ERROR_CODES.IO_ERROR, "nearby .upriv is unreadable");
+          if (normalized.app.vault_root_mode === "default_root") {
+            // Inspect default_root before mutating. setupDefaultRoot deactivates the alias after init.
+            const defaultRoot = await vaultRootService.defaultRootStatus();
+            if (defaultRoot.status === "unreadable") {
+              throw new RpcError(
+                VAULT_ROOT_ERROR_CODES.IO_ERROR,
+                "default_root .upriv is unreadable",
+              );
             }
             // Never replace incomplete without an explicit UI policy (rename | delete).
-            if (nearby.status === "incomplete" && options?.replacePolicy == null) {
-              throw new RpcError(VAULT_ROOT_ERROR_CODES.INCOMPLETE, "nearby .upriv is incomplete");
+            if (defaultRoot.status === "incomplete" && options?.replacePolicy == null) {
+              throw new RpcError(
+                VAULT_ROOT_ERROR_CODES.INCOMPLETE,
+                "default_root .upriv is incomplete",
+              );
             }
-            await vaultRootService.setupNearby({
+            await vaultRootService.setupDefaultRoot({
               replaceIncomplete: options?.replacePolicy != null,
               replacePolicy: options?.replacePolicy,
               locale: normalized.ui.locale,
@@ -209,13 +220,11 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
             const path = normalized.app.upriv_root_path.trim();
             // setupAtPath: create `.upriv/` if missing, then write active alias.
             // Incomplete `.upriv/` requires replacePolicy from the UI (rename | delete).
-            if (path) {
-              await vaultRootService.setupAtPath(path, {
-                replaceIncomplete: options?.replacePolicy != null,
-                replacePolicy: options?.replacePolicy,
-                locale: normalized.ui.locale,
-              });
-            }
+            await vaultRootService.setupAtPath(path, {
+              replaceIncomplete: options?.replacePolicy != null,
+              replacePolicy: options?.replacePolicy,
+              locale: normalized.ui.locale,
+            });
           }
         }
         // Skip alias sync when setup/deactivate already applied (or we just mutated via setup*).
