@@ -15,6 +15,7 @@ Thumbs.db
 
 # Electron build output (each app also has local .gitignore)
 apps/electron/dist/
+apps/electron/build/tools/
 
 # Local vault-root created by `electron:dev` (app home = this `dev/` folder)
 .upriv/

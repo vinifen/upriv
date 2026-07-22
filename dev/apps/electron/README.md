@@ -17,7 +17,8 @@ npm run dist         # electron-builder (run from dev/: npm run electron:build)
 
 From `dev/`: `npm run electron:dev` / `npm run electron:build` (Linux `.deb` + AppImage).
 
-Windows (on a Windows host): `npm run electron:build:win` → NSIS setup + portable `.exe`.
+Windows (on a Windows host): `npm run electron:build:win` → NSIS setup + portable `.exe`.  
+Step-by-step (MSVC, icons, pitfalls): [`docs/WINDOWS-BUILD.md`](../../docs/WINDOWS-BUILD.md).
 
 ## Module system
 

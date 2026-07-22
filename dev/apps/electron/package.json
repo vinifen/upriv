@@ -32,7 +32,7 @@
     "appId": "com.upriv.desktop",
     "productName": "Upriv",
     "icon": "build/icons/icon.png",
-    "afterPack": "./scripts/afterPack-linux-nosandbox.cjs",
+    "afterPack": "./scripts/afterPack.cjs",
     "directories": {
       "output": "../../target/release/bundle/electron"
     },
@@ -55,6 +55,14 @@
           "upriv-daemon",
           "upriv-daemon.exe"
         ]
+      },
+      {
+        "from": "build/icons/icon.ico",
+        "to": "icons/icon.ico"
+      },
+      {
+        "from": "build/icons/icon.png",
+        "to": "icons/icon.png"
       }
     ],
     "linux": {
@@ -75,12 +83,16 @@
         "nsis",
         "portable"
       ],
-      "icon": "build/icons/icon.png",
-      "artifactName": "${productName}-${version}-${os}-${arch}.${ext}"
+      "icon": "build/icons/icon.ico",
+      "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
+      "signAndEditExecutable": false
     },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
+      "installerIcon": "build/icons/icon.ico",
+      "uninstallerIcon": "build/icons/icon.ico",
+      "installerHeaderIcon": "build/icons/icon.ico",
       "artifactName": "${productName}-${version}-setup-${arch}.${ext}"
     },
     "portable": {

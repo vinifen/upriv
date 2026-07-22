@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite --configLoader native",
     "build": "tsc --noEmit && vite build --configLoader native",
-    "build:electron": "ELECTRON=true tsc --noEmit && ELECTRON=true vite build --configLoader native",
+    "build:electron": "node ./scripts/build-electron.mjs",
     "lint": "eslint . --max-warnings 0",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",

@@ -6,6 +6,7 @@ import {
   dialog,
   ipcMain,
   Menu,
+  nativeImage,
   session,
 } from "electron";
 import {
@@ -55,6 +56,26 @@ let daemon: DaemonConnection | null = null;
 let daemonStarting: Promise<DaemonConnection> | null = null;
 let stopEvents: (() => void) | null = null;
 let quitting = false;
+
+/** Window / taskbar icon while running (Explorer/Start still need .exe resources). */
+function resolveWindowIcon(): string | undefined {
+  const candidates = [
+    path.join(process.resourcesPath, "icons/icon.ico"),
+    path.join(process.resourcesPath, "icons/icon.png"),
+    path.join(__dirname, "../build/icons/icon.ico"),
+    path.join(__dirname, "../build/icons/icon.png"),
+    path.join(__dirname, "../renderer/Upriv-icon.png"),
+    path.join(__dirname, "../../desktop/public/Upriv-icon.png"),
+  ];
+  for (const candidate of candidates) {
+    try {
+      if (fs.existsSync(candidate)) return candidate;
+    } catch {
+      /* ignore */
+    }
+  }
+  return undefined;
+}
 
 function applyProductionCsp(): void {
   if (isDev) return;
@@ -144,12 +165,18 @@ async function gracefulShutdown(exitCode = 0): Promise<void> {
 async function createWindow(): Promise<void> {
   await ensureDaemon();
 
+  const iconPath = resolveWindowIcon();
+  const iconImage = iconPath ? nativeImage.createFromPath(iconPath) : undefined;
+  const icon =
+    iconImage && !iconImage.isEmpty() ? iconImage : iconPath;
+
   mainWindow = new BrowserWindow({
     width: 960,
     height: 720,
     minWidth: 640,
     minHeight: 480,
     title: "Upriv",
+    ...(icon ? { icon } : {}),
     autoHideMenuBar: !isDev,
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
@@ -158,6 +185,19 @@ async function createWindow(): Promise<void> {
       sandbox: true,
     },
   });
+
+  // Windows taskbar / jump-list: pin relaunch to our icon, not Electron defaults.
+  if (process.platform === "win32" && iconPath) {
+    mainWindow.setAppDetails({
+      appId: "com.upriv.desktop",
+      appIconPath: iconPath,
+      appIconIndex: 0,
+      relaunchDisplayName: "Upriv",
+    });
+    if (iconImage && !iconImage.isEmpty()) {
+      mainWindow.setIcon(iconImage);
+    }
+  }
 
   hardenProductionWindow(mainWindow);
 
@@ -226,6 +266,9 @@ if (!gotSingleInstanceLock) {
 
 app.whenReady().then(() => {
   if (!gotSingleInstanceLock) return;
+  if (process.platform === "win32") {
+    app.setAppUserModelId("com.upriv.desktop");
+  }
   applyProductionCsp();
   Menu.setApplicationMenu(isDev ? null : buildApplicationMenu());
   void createWindow().catch((error) => {

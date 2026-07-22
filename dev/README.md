@@ -115,11 +115,13 @@ Artifacts: `dev/target/release/bundle/electron/` — e.g. `Upriv-0.1.0-beta-linu
 
 | Artifact | Best for | Notes |
 |----------|----------|--------|
-| **NSIS setup** (`*-setup-*.exe`) | Installed | Program Files; data under `%LOCALAPPDATA%\Upriv` (`installed`). |
+| **NSIS setup** (`*-setup-*.exe`) | Installed | Per-user default: `%LOCALAPPDATA%\Programs\Upriv`; data under `%LOCALAPPDATA%\Upriv` (`installed`). |
 | **Portable** (`*-portable-*.exe`) | USB / no install | Data beside the exe when that folder is writable (`portable`). |
 
-Build **on Windows** (Rust MSVC or GNU toolchain + Node): `npm run electron:build:win`.  
-Cross-building Windows installers from Linux needs Wine + a Windows Rust target (`upriv-daemon.exe`) — not set up by default on this Linux workspace.
+Build **on Windows** (Node 22 + Rust + VS Build Tools / MSVC, then `npm run electron:build:win`).  
+Cross-building Windows installers from Linux needs Wine + a Windows Rust target — **not** set up by default on the Linux workspace.
+
+**Full walkthrough** (prerequisites, vcvars, icon embed, troubleshooting, CI/VM notes): **[`docs/WINDOWS-BUILD.md`](docs/WINDOWS-BUILD.md)**.
 
 Artifacts land in the same folder: `dev/target/release/bundle/electron/`.
 

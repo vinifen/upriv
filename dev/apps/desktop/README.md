@@ -23,10 +23,11 @@ From `dev/`:
 cd dev/apps/desktop && npm install
 cd ../electron && npm install
 cd ../.. && npm run electron:dev      # Vite + Electron + upriv-daemon
-cd ../.. && npm run electron:build    # AppImage / installer
+cd ../.. && npm run electron:build    # Linux: .deb + AppImage
+cd ../.. && npm run electron:build:win  # Windows host: NSIS + portable (see docs/WINDOWS-BUILD.md)
 ```
 
-Artifacts: `dev/target/release/bundle/electron/` (`.deb` + `.AppImage` on Linux). Prefer **`.deb`** for Ubuntu (double-click install, no FUSE).
+Artifacts: `dev/target/release/bundle/electron/`. On Linux: `.deb` + `.AppImage` (prefer **`.deb`** on Ubuntu). On Windows: `*-setup-*.exe` + `*-portable-*.exe` — full guide: [`docs/WINDOWS-BUILD.md`](../../docs/WINDOWS-BUILD.md).
 
 **Linux note:** on Ubuntu 23.10+ the Electron shell uses `--no-sandbox` (AppArmor blocks Chromium user namespaces). Renderer `sandbox: true` still applies. Optional: configure `chrome-sandbox` as root 4755 — see [Electron Linux docs](https://www.electronjs.org/docs/latest/tutorial/sandbox).
 
@@ -44,7 +45,7 @@ Until real crypto is wired, unlock/close use prototype validation in `validateMo
 ../shared/                   # @upriv/shared — domain types + service interfaces (desktop + mobile)
 src/
 ├── main.tsx                 # Entry — mounts App, loads global styles
-├── App.tsx                  # Root component (providers + vault list page)
+├── RootApp.tsx              # Root component (providers + vault list page)
 │
 ├── app/                     # App shell: providers
 │   └── AppProviders.tsx     # Services → AppSettings (+ I18n inside) → file manager

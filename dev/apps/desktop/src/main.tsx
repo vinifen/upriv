@@ -1,6 +1,6 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import App from "./App";
+import App from "./RootApp";
 import "@/styles/globals.css";
 
 // Theme is applied once by AppSettingsProvider (single source: mock settings state).
