@@ -15,6 +15,8 @@ import {
 import { useVaultRootService } from "@/platform/services";
 import { useAppSettingsContext } from "./AppSettingsContext";
 import { desktopErrorI18nKey } from "@/lib/errorMessages";
+import { VaultRootConfirmFooter } from "./VaultRootConfirmFooter";
+import type { VaultRootDiskStatus } from "./vaultRootSettingsIntent";
 
 /** Trim + strip trailing separators for diskApplied path equality. */
 function samePathKey(a: string, b: string): boolean {
@@ -46,7 +48,7 @@ function isIncompleteError(error: unknown): boolean {
 
 /**
  * Blocking when custom alias / path is invalid or missing.
- * Radios + Continue (same pattern as first-run setup and settings).
+ * Radios + Continue (same pattern as first-run setup and Data folder).
  */
 export function VaultRootAliasRecoveryModal({
   open,
@@ -63,9 +65,15 @@ export function VaultRootAliasRecoveryModal({
   const [pathInput, setPathInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [customDisk, setCustomDisk] = useState<VaultRootDiskStatus>("needs_folder");
   const submitLock = useRef(false);
   const diskApplied = useRef<{ rootPath: string; mode: VaultRootMode } | null>(null);
+  const customCheckGen = useRef(0);
   const rememberedPath = presentation.rememberedAliasTarget ?? "";
+  const [defaultRootAnchor, setDefaultRootAnchor] = useState(() =>
+    presentation.defaultRootAnchor.trim(),
+  );
 
   useEffect(() => {
     if (!open) return;
@@ -73,9 +81,27 @@ export function VaultRootAliasRecoveryModal({
     setPathInput(rememberedPath.trim());
     setBusy(false);
     setError(null);
+    setConfirmOpen(false);
+    setCustomDisk(rememberedPath.trim() ? "checking" : "needs_folder");
     submitLock.current = false;
     diskApplied.current = null;
-  }, [open, rememberedPath, presentation.mode]);
+    setDefaultRootAnchor(presentation.defaultRootAnchor.trim());
+
+    let cancelled = false;
+    void vaultRoot
+      .defaultRootStatus()
+      .then((result) => {
+        if (!cancelled && result.defaultRootAnchor.trim()) {
+          setDefaultRootAnchor(result.defaultRootAnchor.trim());
+        }
+      })
+      .catch(() => {
+        // Keep presentation anchor if any.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, rememberedPath, presentation.mode, presentation.defaultRootAnchor, vaultRoot]);
 
   // Invalidate diskApplied when the user picks a different custom path (C1).
   useEffect(() => {
@@ -85,6 +111,39 @@ export function VaultRootAliasRecoveryModal({
       diskApplied.current = null;
     }
   }, [pathInput]);
+
+  // Live inspect for custom path (parity with Setup / Data folder).
+  useEffect(() => {
+    if (!open || mode !== "custom_root") {
+      setCustomDisk("ready");
+      return;
+    }
+    const path = pathInput.trim();
+    const gen = ++customCheckGen.current;
+    if (!path) {
+      setCustomDisk("needs_folder");
+      return;
+    }
+    setCustomDisk("checking");
+    void vaultRoot
+      .inspectAtPath(path)
+      .then((result) => {
+        if (gen !== customCheckGen.current) return;
+        if (result.status === "incomplete") setCustomDisk("incomplete");
+        else if (result.status === "unreadable") setCustomDisk("unreadable");
+        else if (result.status === "absent") setCustomDisk("will_create");
+        else setCustomDisk("ready");
+      })
+      .catch(() => {
+        if (gen !== customCheckGen.current) return;
+        setCustomDisk("unreadable");
+      });
+  }, [open, mode, pathInput, vaultRoot]);
+
+  // Changing the draft dismisses footer confirm (two-step Continue pattern).
+  useEffect(() => {
+    setConfirmOpen(false);
+  }, [mode, pathInput, customDisk]);
 
   const handleLocaleChange = useCallback(
     (locale: LocaleId) => {
@@ -100,9 +159,7 @@ export function VaultRootAliasRecoveryModal({
     setError(null);
     void (async () => {
       const remembered = pathInput.trim() || rememberedPath.trim();
-      const suggested =
-        remembered ||
-        (await vaultRoot.suggestedCustomRootPath().catch(() => ""));
+      const suggested = remembered || (await vaultRoot.suggestedCustomRootPath().catch(() => ""));
       const picked = await vaultRoot.pickFolder(
         suggested || null,
         t("modal.vault_root_setup.pick_folder_title"),
@@ -115,7 +172,8 @@ export function VaultRootAliasRecoveryModal({
       .finally(() => setBusy(false));
   }, [pathInput, rememberedPath, t, vaultRoot]);
 
-  const handleContinue = useCallback(() => {
+  const commitContinue = useCallback(() => {
+    // UI primary = Continue (Alias Recovery gate — not Apply).
     if (submitLock.current) return;
     submitLock.current = true;
     setBusy(true);
@@ -135,7 +193,9 @@ export function VaultRootAliasRecoveryModal({
             );
           }
           try {
-            const { rootPath } = await vaultRoot.setupDefaultRoot({ locale: settings.ui.locale });
+            const { rootPath } = await vaultRoot.setupDefaultRoot({
+              bootstrap: { locale: settings.ui.locale },
+            });
             diskApplied.current = { rootPath, mode: "default_root" };
           } catch (caught) {
             if (isIncompleteError(caught)) {
@@ -186,7 +246,7 @@ export function VaultRootAliasRecoveryModal({
         }
         try {
           const { rootPath } = await vaultRoot.setupAtPath(path, {
-            locale: settings.ui.locale,
+            bootstrap: { locale: settings.ui.locale },
           });
           diskApplied.current = { rootPath, mode: "custom_root" };
           const saved = await patchSettings(
@@ -243,9 +303,18 @@ export function VaultRootAliasRecoveryModal({
     vaultRoot,
   ]);
 
-  if (!open) return null;
+  const blocked =
+    (mode === "custom_root" && !pathInput.trim()) ||
+    (mode === "custom_root" &&
+      (customDisk === "checking" || customDisk === "unreadable" || customDisk === "needs_folder"));
 
-  const continueDisabled = busy || (mode === "custom_root" && !pathInput.trim());
+  // UI primary = Continue
+  const requestContinue = useCallback(() => {
+    if (busy || blocked || confirmOpen) return;
+    setConfirmOpen(true);
+  }, [blocked, busy, confirmOpen]);
+
+  if (!open) return null;
 
   return (
     <Modal
@@ -274,20 +343,23 @@ export function VaultRootAliasRecoveryModal({
         </label>
       }
       footer={
-        <div className="flex justify-end">
-          <Button
-            variant="primary"
-            size="md"
-            disabled={continueDisabled}
-            className="w-full sm:w-auto"
-            onClick={handleContinue}
-          >
-            {t("action.continue")}
-          </Button>
-        </div>
+        <VaultRootConfirmFooter
+          busy={busy}
+          blocked={blocked}
+          confirmOpen={confirmOpen}
+          noteKeys={undefined}
+          onRequestPrimary={requestContinue}
+          onConfirmPrimary={commitContinue}
+          onCancelConfirm={() => setConfirmOpen(false)}
+        />
       }
     >
-      <div className="space-y-3 text-sm leading-relaxed text-on-surface-variant">
+      <div
+        className="space-y-3 text-sm leading-relaxed text-on-surface-variant"
+        onPointerDown={() => {
+          if (confirmOpen) setConfirmOpen(false);
+        }}
+      >
         <p role="alert">{t("modal.vault_root_setup.error_alias_invalid")}</p>
         {rememberedPath.trim() ? (
           <p className="font-mono text-xs break-all text-on-surface">
@@ -313,6 +385,19 @@ export function VaultRootAliasRecoveryModal({
               setMode("default_root");
               setError(null);
             }}
+            footer={
+              mode === "default_root" ? (
+                defaultRootAnchor ? (
+                  <p className="break-all rounded-md bg-surface-container-highest px-3 py-2 font-mono text-xs text-on-surface">
+                    {defaultRootAnchor}
+                  </p>
+                ) : (
+                  <p className="text-xs leading-relaxed text-on-surface-variant" role="status">
+                    {t("modal.app_settings.field.upriv_root_loading")}
+                  </p>
+                )
+              ) : null
+            }
           />
           <PolicyRadioOption
             groupName={rootModeGroup}
@@ -331,28 +416,61 @@ export function VaultRootAliasRecoveryModal({
             }}
             footer={
               mode === "custom_root" ? (
-                <div className="flex flex-col gap-2 sm:flex-row sm:items-stretch">
-                  <input
-                    type="text"
-                    readOnly
-                    value={pathInput}
-                    placeholder={t("modal.vault_root_setup.path_placeholder")}
-                    aria-invalid={error ? true : undefined}
-                    className={[
-                      settingsControlClass,
-                      "cursor-not-allowed opacity-90 font-mono text-xs sm:min-w-0 sm:flex-1",
-                    ].join(" ")}
-                  />
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    size="md"
-                    className="w-full shrink-0 sm:w-auto"
-                    disabled={busy}
-                    onClick={handlePickFolder}
-                  >
-                    {t("modal.app_settings.action.choose_folder")}
-                  </Button>
+                <div className="space-y-2">
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-stretch">
+                    <input
+                      type="text"
+                      readOnly
+                      value={pathInput}
+                      placeholder={t("modal.vault_root_setup.path_placeholder")}
+                      aria-invalid={error ? true : undefined}
+                      className={[
+                        settingsControlClass,
+                        "cursor-not-allowed opacity-90 font-mono text-xs sm:min-w-0 sm:flex-1",
+                      ].join(" ")}
+                    />
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="md"
+                      className="w-full shrink-0 sm:w-auto"
+                      disabled={busy}
+                      onClick={handlePickFolder}
+                    >
+                      {t("modal.app_settings.action.choose_folder")}
+                    </Button>
+                  </div>
+                  {customDisk === "checking" ? (
+                    <p className="text-xs leading-relaxed text-on-surface-variant" role="status">
+                      {t("modal.app_settings.field.upriv_root_loading")}
+                    </p>
+                  ) : null}
+                  {customDisk === "will_create" ? (
+                    <p
+                      className="rounded-md bg-surface-container px-3 py-2 text-xs leading-relaxed text-on-surface"
+                      role="status"
+                    >
+                      {t("modal.vault_root_gate.continue_confirm_note.create")}
+                    </p>
+                  ) : null}
+                  {customDisk === "incomplete" ? (
+                    <p
+                      className="rounded-md bg-surface-container px-3 py-2 text-xs leading-relaxed text-on-surface"
+                      role="status"
+                    >
+                      {t("modal.app_settings.continue_confirm_custom_incomplete", {
+                        path: pathInput.trim() || "…",
+                      })}
+                    </p>
+                  ) : null}
+                  {customDisk === "unreadable" ? (
+                    <p
+                      className="rounded-md bg-error-container/10 px-3 py-2 text-xs leading-relaxed text-on-error-container"
+                      role="alert"
+                    >
+                      {t("modal.vault_root_setup.error_io")}
+                    </p>
+                  ) : null}
                 </div>
               ) : null
             }

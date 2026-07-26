@@ -6,12 +6,12 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use upriv_core::{
-    app_home_dir, apply_setup_ui_locale, deactivate_vault_root_alias_everywhere,
-    inspect_vault_root_at, load_app_settings, open_or_initialize_vault_root_with_policy,
-    read_vault_root_alias, resolve_vault_root, save_app_settings_session_with_alias_sync,
-    suggested_vault_root, write_vault_root_alias, AppSettings, IncompleteReplacePolicy,
-    ResolveVaultRoot, ResolveVaultRootOptions, VaultRootDirStatus, VaultRootMode, VaultRootSource,
-    VAULT_ROOT_ALIAS_FILE,
+    app_home_dir, deactivate_vault_root_alias_everywhere, inspect_vault_root_at, load_app_settings,
+    open_or_initialize_vault_root_with_policy_and_bootstrap, read_vault_root_alias,
+    resolve_vault_root, save_app_settings_session_with_alias_sync, suggested_vault_root,
+    write_vault_root_alias_for_root, AppSettings, IncompleteReplacePolicy, ResolveVaultRoot,
+    ResolveVaultRootOptions, VaultRootBootstrapPrefs, VaultRootDirStatus, VaultRootMode,
+    VaultRootSource, VAULT_ROOT_ALIAS_FILE,
 };
 
 #[derive(Debug, Deserialize)]
@@ -50,6 +50,19 @@ struct ResolveParams {
     binary_dir: Option<String>,
 }
 
+/// Bootstrap UI prefs applied only when creating a new `.upriv/`.
+///
+/// Wire nests these under `bootstrap` (camelCase) so future pre-root UI prefs
+/// (theme selector on Gate, high-contrast, etc.) can extend this bag without
+/// renaming setup RPC params again. Selecting an already-valid root ignores
+/// this object entirely — see AGENT.md § "Selecting an existing `.upriv`".
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct BootstrapPrefsParams {
+    #[serde(default)]
+    locale: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct PathParams {
@@ -59,7 +72,7 @@ struct PathParams {
     #[serde(default)]
     replace_policy: Option<String>,
     #[serde(default)]
-    locale: Option<String>,
+    bootstrap: Option<BootstrapPrefsParams>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -72,7 +85,7 @@ struct SetupDefaultRootParams {
     #[serde(default)]
     replace_policy: Option<String>,
     #[serde(default)]
-    locale: Option<String>,
+    bootstrap: Option<BootstrapPrefsParams>,
 }
 
 pub fn handle_rpc(req: RpcRequest) -> RpcResponse {
@@ -195,6 +208,56 @@ fn parse_replace_policy_flag(
     }
 }
 
+/// Validate the wire `bootstrap.locale` and require a non-empty value.
+///
+/// Used **before** any disk mutation when the setup RPC will create a new
+/// `.upriv/` — so a missing locale cannot leave a freshly created root stuck
+/// on the built-in `"en"` default (fixes review A2/A3: no retry window where
+/// `.upriv/` exists but `settings.toml` still says `"en"`).
+fn require_bootstrap_locale(
+    bootstrap: Option<&BootstrapPrefsParams>,
+) -> Result<String, RpcResponse> {
+    let locale = bootstrap
+        .and_then(|prefs| prefs.locale.as_deref())
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    match locale {
+        Some(value) => Ok(value.to_string()),
+        None => {
+            eprintln!("upriv-daemon: bootstrap.locale is required when creating a new vault-root");
+            Err(err(
+                "invalid_request",
+                "bootstrap.locale is required when creating a new vault-root".into(),
+            ))
+        }
+    }
+}
+
+/// Resolve wire `bootstrap` prefs for an `open_or_initialize_*` call.
+///
+/// Pre-inspects `dir` **before** touching disk:
+/// - Valid → `Ok(None)`. Bootstrap prefs are silently ignored (AGENT.md
+///   contract: selecting an existing `.upriv` must not rewrite its
+///   `settings.toml`).
+/// - Absent / Incomplete / Unreadable → require a non-empty `bootstrap.locale`
+///   and return `Some(VaultRootBootstrapPrefs { locale: Some(..) })` so the
+///   init call writes `[ui].locale` atomically as part of the first (and only)
+///   `settings.toml` write.
+fn bootstrap_prefs_for_dir(
+    dir: &Path,
+    bootstrap: Option<&BootstrapPrefsParams>,
+) -> Result<Option<VaultRootBootstrapPrefs>, RpcResponse> {
+    match inspect_vault_root_at(dir) {
+        VaultRootDirStatus::Valid => Ok(None),
+        _ => {
+            let locale = require_bootstrap_locale(bootstrap)?;
+            Ok(Some(VaultRootBootstrapPrefs {
+                locale: Some(locale),
+            }))
+        }
+    }
+}
+
 fn vault_root_setup_default_root(params: Value) -> RpcResponse {
     let parsed: SetupDefaultRootParams = match serde_json::from_value(params) {
         Ok(value) => value,
@@ -211,28 +274,34 @@ fn vault_root_setup_default_root(params: Value) -> RpcResponse {
         Ok(path) => path,
         Err(error) => return map_core_err(error),
     };
-    let result = open_or_initialize_vault_root_with_policy(&anchor, replace);
-    match result {
-        Ok(root) => {
-            // Partial-failure / retry-safe contract: init may succeed before later
-            // steps. If deactivate fails, `.upriv/` may already exist at the anchor —
-            // UI should retry deactivate / re-enter setup (no automatic rollback).
-            // Locale is best-effort here; `app_settings_save` in modal `finish()`
-            // applies it again — do not fail the whole RPC after root+alias OK.
-            if let Err(error) = deactivate_vault_root_alias_everywhere() {
-                return map_core_err(error);
-            }
-            if let Err(error) = apply_setup_ui_locale(root.root(), parsed.locale.as_deref()) {
-                eprintln!(
-                    "vault_root_setup_default_root: apply_setup_ui_locale failed (root ok): {error}"
-                );
-            }
-            match path_utf8(root.root()) {
-                Ok(root_path) => ok(json!({ "rootPath": root_path })),
-                Err(response) => response,
-            }
-        }
-        Err(error) => map_core_err(error),
+    // Pre-validate bootstrap prefs BEFORE any disk mutation when we will create.
+    // Selecting an existing Valid root does not require bootstrap prefs.
+    let prefs = match bootstrap_prefs_for_dir(&anchor, parsed.bootstrap.as_ref()) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    // Init writes `[ui].locale` atomically as part of the first (and only)
+    // settings.toml write when creating — no separate post-create stamp step
+    // exists here anymore (A2/A3). Retry after a later step fails will find
+    // a Valid `.upriv/` with the correct locale already on disk.
+    let opened = match open_or_initialize_vault_root_with_policy_and_bootstrap(
+        &anchor,
+        replace,
+        prefs.as_ref(),
+    ) {
+        Ok(opened) => opened,
+        Err(error) => return map_core_err(error),
+    };
+    let root = opened.root;
+    // Partial-failure / retry-safe contract: init may succeed before deactivate.
+    // If deactivate fails, `.upriv/` at the anchor is already correctly stamped —
+    // UI should retry deactivate / re-enter setup (no automatic rollback).
+    if let Err(error) = deactivate_vault_root_alias_everywhere() {
+        return map_core_err(error);
+    }
+    match path_utf8(root.root()) {
+        Ok(root_path) => ok(json!({ "rootPath": root_path })),
+        Err(response) => response,
     }
 }
 
@@ -318,23 +387,30 @@ fn vault_root_setup_path(params: Value) -> RpcResponse {
         Ok(policy) => policy,
         Err(response) => return response,
     };
-    let root = match open_or_initialize_vault_root_with_policy(&path, replace) {
-        Ok(root) => root,
+    // Pre-validate bootstrap prefs BEFORE any disk mutation when we will create.
+    // Selecting an existing Valid root does not require bootstrap prefs.
+    let prefs = match bootstrap_prefs_for_dir(&path, parsed.bootstrap.as_ref()) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    // Init writes `[ui].locale` atomically on create — no separate stamp step
+    // (A2/A3). If alias write fails, `.upriv/` at `path` already carries the
+    // correct locale, so retrying setup is safe.
+    let opened = match open_or_initialize_vault_root_with_policy_and_bootstrap(
+        &path,
+        replace,
+        prefs.as_ref(),
+    ) {
+        Ok(opened) => opened,
         Err(error) => return map_core_err(error),
     };
+    let root = opened.root;
     let home = match upriv_core::app_home_dir() {
         Ok(dir) => dir,
         Err(error) => return map_core_err(error),
     };
-    // Partial-failure / retry-safe contract: root may already exist if later steps
-    // fail. If alias write fails, `.upriv/` may already exist at `path` — UI should
-    // retry alias write / re-enter setup (no automatic rollback). Locale is
-    // best-effort; modal `finish()` re-applies via `app_settings_save`.
-    if let Err(error) = write_vault_root_alias(&home, root.root()) {
+    if let Err(error) = write_vault_root_alias_for_root(&home, &root) {
         return map_core_err(error);
-    }
-    if let Err(error) = apply_setup_ui_locale(root.root(), parsed.locale.as_deref()) {
-        eprintln!("vault_root_setup_path: apply_setup_ui_locale failed (root+alias ok): {error}");
     }
     let alias_path = home.join(VAULT_ROOT_ALIAS_FILE);
     let root_path = match path_utf8(root.root()) {
@@ -526,5 +602,78 @@ mod contract_tests {
             response.error.as_ref().map(|e| e.code.as_str()),
             Some("unknown_method")
         );
+    }
+
+    fn bootstrap(locale: Option<&str>) -> BootstrapPrefsParams {
+        BootstrapPrefsParams {
+            locale: locale.map(|s| s.to_string()),
+        }
+    }
+
+    #[test]
+    fn require_bootstrap_locale_rejects_missing_empty_and_whitespace() {
+        assert!(require_bootstrap_locale(None).is_err());
+        assert!(require_bootstrap_locale(Some(&bootstrap(None))).is_err());
+        assert!(require_bootstrap_locale(Some(&bootstrap(Some("")))).is_err());
+        assert!(require_bootstrap_locale(Some(&bootstrap(Some("   ")))).is_err());
+        assert_eq!(
+            require_bootstrap_locale(Some(&bootstrap(Some("pt-BR")))).unwrap(),
+            "pt-BR"
+        );
+        assert_eq!(
+            require_bootstrap_locale(Some(&bootstrap(Some("  es  ")))).unwrap(),
+            "es"
+        );
+    }
+
+    /// A2/A3 create path: absent `.upriv/` at target → bootstrap.locale required before disk.
+    #[test]
+    fn bootstrap_prefs_for_dir_requires_locale_when_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(
+            inspect_vault_root_at(dir.path()),
+            VaultRootDirStatus::Absent
+        );
+        let err = bootstrap_prefs_for_dir(dir.path(), None).unwrap_err();
+        assert_eq!(
+            err.error.as_ref().map(|e| e.code.as_str()),
+            Some("invalid_request")
+        );
+        let prefs = bootstrap_prefs_for_dir(dir.path(), Some(&bootstrap(Some("pt-BR"))))
+            .unwrap()
+            .expect("bootstrap prefs when creating");
+        assert_eq!(prefs.locale.as_deref(), Some("pt-BR"));
+    }
+
+    /// AGENT.md contract: selecting a Valid existing root must not require
+    /// bootstrap prefs (settings.toml is not rewritten on this path).
+    #[test]
+    fn bootstrap_prefs_for_dir_none_when_valid() {
+        let dir = tempfile::tempdir().unwrap();
+        upriv_core::initialize_vault_root(dir.path()).unwrap();
+        assert_eq!(inspect_vault_root_at(dir.path()), VaultRootDirStatus::Valid);
+        assert!(bootstrap_prefs_for_dir(dir.path(), None).unwrap().is_none());
+        assert!(
+            bootstrap_prefs_for_dir(dir.path(), Some(&bootstrap(Some("pt-BR"))))
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    /// A2/A3 create path: incomplete `.upriv/` at target → bootstrap.locale
+    /// still required before disk (incomplete→replace path also creates).
+    #[test]
+    fn bootstrap_prefs_for_dir_requires_locale_when_incomplete() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".upriv")).unwrap();
+        assert_eq!(
+            inspect_vault_root_at(dir.path()),
+            VaultRootDirStatus::Incomplete
+        );
+        assert!(bootstrap_prefs_for_dir(dir.path(), None).is_err());
+        let prefs = bootstrap_prefs_for_dir(dir.path(), Some(&bootstrap(Some("es"))))
+            .unwrap()
+            .expect("bootstrap prefs on incomplete→replace");
+        assert_eq!(prefs.locale.as_deref(), Some("es"));
     }
 }

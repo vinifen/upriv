@@ -21,10 +21,12 @@ pub use distribution::{
 };
 pub use fs_env::env_default_root_anchor;
 pub use init::{
-    initialize_vault_root, inspect_vault_root_at, open_or_initialize_vault_root,
-    open_or_initialize_vault_root_with_options, open_or_initialize_vault_root_with_policy,
-    rename_incomplete_upriv, validate_existing_vault_root, IncompleteReplacePolicy,
-    VaultRootDirStatus,
+    initialize_vault_root, initialize_vault_root_with_bootstrap, inspect_vault_root_at,
+    open_or_initialize_vault_root, open_or_initialize_vault_root_with_options,
+    open_or_initialize_vault_root_with_policy,
+    open_or_initialize_vault_root_with_policy_and_bootstrap, rename_incomplete_upriv,
+    validate_existing_vault_root, IncompleteReplacePolicy, OpenedVaultRoot,
+    VaultRootBootstrapPrefs, VaultRootDirStatus,
 };
 pub use resolve::{
     app_home_dir, binary_dir, deactivate_vault_root_alias_everywhere, discover_vault_root_upward,

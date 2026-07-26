@@ -70,4 +70,25 @@ export type VaultRootInspectResult = {
 /** How to replace an incomplete `.upriv/` when the UI confirms repair. */
 export type IncompleteReplacePolicy = "delete" | "rename";
 
+/**
+ * Bootstrap UI prefs applied **only when creating** a new `.upriv/` (absent
+ * init or incomplete→replace). Selecting an already-valid vault-root ignores
+ * this bag — see AGENT.md § "Selecting an existing `.upriv`".
+ *
+ * Today the only pre-root pref is UI locale. Future pre-root UI prefs (theme
+ * selector on Gate, high-contrast, etc.) extend this bag without renaming the
+ * `setupDefaultRoot` / `setupAtPath` service methods again.
+ *
+ * Nested under `bootstrap` on the daemon wire (never a top-level peer of
+ * `path` / `replaceIncomplete`).
+ */
+export type VaultRootBootstrapPrefs = {
+  /**
+   * UI locale (`en` | `pt-BR` | `es`). `null` / empty / whitespace-only →
+   * daemon falls back to the built-in `"en"` default on create. Required
+   * (non-empty) when the target folder does not yet contain a Valid `.upriv/`.
+   */
+  locale?: string | null;
+};
+
 export const VAULT_ROOT_ALIAS_FILE = ".upriv-root";

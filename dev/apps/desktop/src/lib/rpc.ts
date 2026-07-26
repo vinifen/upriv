@@ -7,6 +7,7 @@ import type {
   AppDistribution,
   DefaultRootStatusResult,
   VaultRootAliasInfo,
+  VaultRootBootstrapPrefs,
   VaultRootInspectResult,
   VaultRootMode,
   VaultRootResolveResult,
@@ -187,7 +188,7 @@ export async function rpcVaultRootResolve(options?: {
 export async function rpcVaultRootSetupDefaultRoot(options?: {
   replaceIncomplete?: boolean;
   replacePolicy?: "delete" | "rename";
-  locale?: string | null;
+  bootstrap?: VaultRootBootstrapPrefs | null;
 }): Promise<{ rootPath: string }> {
   const replaceIncomplete = options?.replaceIncomplete ?? false;
   if (replaceIncomplete && options?.replacePolicy == null) {
@@ -199,7 +200,7 @@ export async function rpcVaultRootSetupDefaultRoot(options?: {
   const raw = await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_ROOT_SETUP_DEFAULT_ROOT, {
     replaceIncomplete,
     replacePolicy: options?.replacePolicy ?? null,
-    locale: options?.locale ?? null,
+    bootstrap: options?.bootstrap ?? null,
   });
   if (
     typeof raw !== "object" ||
@@ -220,7 +221,7 @@ export async function rpcVaultRootSetupPath(
   options?: {
     replaceIncomplete?: boolean;
     replacePolicy?: "delete" | "rename";
-    locale?: string | null;
+    bootstrap?: VaultRootBootstrapPrefs | null;
   },
 ): Promise<{ rootPath: string; aliasPath: string }> {
   const replaceIncomplete = options?.replaceIncomplete ?? false;
@@ -234,7 +235,7 @@ export async function rpcVaultRootSetupPath(
     path,
     replaceIncomplete,
     replacePolicy: options?.replacePolicy ?? null,
-    locale: options?.locale ?? null,
+    bootstrap: options?.bootstrap ?? null,
   });
   if (
     typeof raw !== "object" ||

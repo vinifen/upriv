@@ -8,6 +8,7 @@ import {
   APP_SETTINGS_ERROR_I18N_KEYS,
   APP_SETTINGS_SECTIONS,
   appSettingsEqual,
+  isRpcError,
   normalizeAppSettings,
   type AppSettingsConfig,
   type AppSettingsSectionId,
@@ -15,16 +16,10 @@ import {
 } from "@upriv/shared";
 import {
   AppSettingsAppearanceSection,
-  AppSettingsBehaviorSection,
   AppSettingsDownloadVaultsSection,
   AppSettingsHiddenVaultsSection,
   AppSettingsLoggingSection,
 } from "./appSettingsForm";
-import {
-  collectAppSettingsSaveConfirmNotes,
-  VAULT_ROOT_GATE_IDLE,
-  type VaultRootSettingsGate,
-} from "./vaultRootSettingsIntent";
 
 const SAVED_INDICATOR_MS = 1500;
 
@@ -32,14 +27,15 @@ interface AppSettingsModalProps {
   open: boolean;
   onClose: () => void;
   vaults: VaultListItem[];
+  /** Report unsaved draft so the list shell can refuse opening Data folder. */
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
 /**
- * System settings editor. Rich fields (vault-root) resolve extras under their
- * controls and report a save-gate — see `vaultRootSettingsIntent.ts`.
- * Modal footer is only discard / generic save confirm — not a repair wizard.
+ * System settings for the **active** vault-root (appearance, logging, …).
+ * Data-folder switch lives in `VaultRootDataFolderModal` (⋯ menu) — separate context.
  */
-export function AppSettingsModal({ open, onClose, vaults }: AppSettingsModalProps) {
+export function AppSettingsModal({ open, onClose, vaults, onDirtyChange }: AppSettingsModalProps) {
   const { t } = useTranslation();
   const { showError } = useErrorToast();
   const { settings, replaceSettings, showHiddenVaultsSession, setShowHiddenVaultsSession } =
@@ -50,26 +46,41 @@ export function AppSettingsModal({ open, onClose, vaults }: AppSettingsModalProp
   const [discardConfirmOpen, setDiscardConfirmOpen] = useState(false);
   const [savedVisible, setSavedVisible] = useState(false);
   const [saveBusy, setSaveBusy] = useState(false);
-  const [vaultRootGate, setVaultRootGate] = useState<VaultRootSettingsGate>(VAULT_ROOT_GATE_IDLE);
   const savedHideRef = useRef<ReturnType<typeof setTimeout>>();
   const openedSessionRef = useRef(false);
 
-  const onVaultRootGateChange = useCallback((gate: VaultRootSettingsGate) => {
-    setVaultRootGate(gate);
-  }, []);
+  const isDirty = useMemo(() => {
+    if (!draft) return false;
+    // Ignores wire `app` (Data folder owns vault-root) — see `appSettingsEqual`.
+    return !appSettingsEqual(draft, settings);
+  }, [draft, settings]);
 
-  const isDirty = useMemo(
-    () => Boolean(draft && !appSettingsEqual(draft, settings)),
-    [draft, settings],
-  );
+  useEffect(() => {
+    onDirtyChange?.(open && isDirty);
+    return () => onDirtyChange?.(false);
+  }, [isDirty, onDirtyChange, open]);
 
   useEffect(() => {
     if (!open) return;
     if (openedSessionRef.current) return;
     openedSessionRef.current = true;
     setDraft(settings);
-    setVaultRootGate(VAULT_ROOT_GATE_IDLE);
   }, [open, settings]);
+
+  // Keep draft.app aligned with live Context so Save never sends a stale vault-root.
+  useEffect(() => {
+    if (!open) return;
+    setDraft((current) => {
+      if (!current) return current;
+      if (
+        current.app.vault_root_mode === settings.app.vault_root_mode &&
+        current.app.upriv_root_path === settings.app.upriv_root_path
+      ) {
+        return current;
+      }
+      return { ...current, app: { ...settings.app } };
+    });
+  }, [open, settings.app, settings.app.upriv_root_path, settings.app.vault_root_mode]);
 
   useEffect(() => {
     if (!open) {
@@ -78,7 +89,6 @@ export function AppSettingsModal({ open, onClose, vaults }: AppSettingsModalProp
       setSaveConfirmOpen(false);
       setDiscardConfirmOpen(false);
       setSavedVisible(false);
-      setVaultRootGate(VAULT_ROOT_GATE_IDLE);
     }
   }, [open]);
 
@@ -137,7 +147,7 @@ export function AppSettingsModal({ open, onClose, vaults }: AppSettingsModalProp
   };
 
   const handleSaveClick = () => {
-    if (!isDirty || !draft || saveBusy || vaultRootGate.blocksSave) return;
+    if (!isDirty || !draft || saveBusy) return;
     dismissFooterConfirm();
     setSaveConfirmOpen(true);
   };
@@ -145,26 +155,30 @@ export function AppSettingsModal({ open, onClose, vaults }: AppSettingsModalProp
   const commitSaveLock = useRef(false);
 
   const commitSave = () => {
-    if (!draft || !isDirty || saveBusy || vaultRootGate.blocksSave) return;
+    if (!draft || !isDirty || saveBusy) return;
     if (commitSaveLock.current) return;
     commitSaveLock.current = true;
-    const normalized = normalizeAppSettings(draft);
+    // Never persist draft vault-root wire fields — Data folder owns those mutations.
+    const normalized = normalizeAppSettings({
+      ...draft,
+      app: { ...settings.app },
+    });
     setSaveBusy(true);
-    void replaceSettings(
-      normalized,
-      vaultRootGate.replacePolicy ? { replacePolicy: vaultRootGate.replacePolicy } : undefined,
-    )
+    void replaceSettings(normalized)
       .then(() => {
         setDraft(normalized);
         setSavedVisible(true);
         clearTimeout(savedHideRef.current);
         savedHideRef.current = setTimeout(() => setSavedVisible(false), SAVED_INDICATOR_MS);
         setSaveConfirmOpen(false);
-        setVaultRootGate(VAULT_ROOT_GATE_IDLE);
       })
       .catch((error) => {
         setSaveConfirmOpen(false);
-        showError(error, APP_SETTINGS_ERROR_I18N_KEYS.SAVE_FAILED);
+        const fallback =
+          isRpcError(error) && error.code === "invalid_request"
+            ? APP_SETTINGS_ERROR_I18N_KEYS.INVALID_REQUEST
+            : APP_SETTINGS_ERROR_I18N_KEYS.SAVE_FAILED;
+        showError(error, fallback);
       })
       .finally(() => {
         commitSaveLock.current = false;
@@ -173,53 +187,48 @@ export function AppSettingsModal({ open, onClose, vaults }: AppSettingsModalProp
   };
 
   const formConfig = draft ?? settings;
-  const saveBlocked = !isDirty || saveBusy || saveConfirmOpen || vaultRootGate.blocksSave;
-  // Each rich-field gate can append notes; footer stays one generic confirm + list.
-  const saveConfirmNotes = collectAppSettingsSaveConfirmNotes([vaultRootGate]);
+  const saveBlocked = !isDirty || saveBusy || saveConfirmOpen;
 
   if (!open || !formConfig) return null;
 
   const footer = (
     <div className="flex flex-col gap-3">
-      <div className="min-h-[1.25rem] text-sm" aria-live="polite">
+      <div className="text-sm" aria-live="polite">
         {discardConfirmOpen ? (
           <p className="text-on-surface-variant">{t("modal.settings.discard_confirm")}</p>
         ) : saveConfirmOpen ? (
-          <div className="space-y-1.5 text-on-surface-variant">
-            <p>{t("modal.app_settings.save_confirm")}</p>
-            {saveConfirmNotes.map((key) => (
-              <p key={key} className="text-on-error-container">
-                {t(key)}
-              </p>
-            ))}
-          </div>
+          <p className="text-on-surface-variant">{t("modal.app_settings.save_confirm")}</p>
         ) : savedVisible ? (
           <p className="text-vault-open">{t("modal.settings.saved")}</p>
         ) : null}
       </div>
-      <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:justify-end [&_button]:w-full sm:[&_button]:w-auto">
+      <div className="flex flex-col gap-2 sm:flex-row-reverse sm:flex-wrap sm:justify-start [&_button]:w-full sm:[&_button]:w-auto">
         {discardConfirmOpen ? (
           <>
-            <Button variant="ghost" size="md" onClick={dismissFooterConfirm}>
-              {t("modal.settings.discard_keep_editing")}
-            </Button>
             <Button variant="danger" size="md" onClick={handleDiscardAndClose}>
               {t("modal.settings.discard_confirm_action")}
             </Button>
+            <Button variant="ghost" size="md" onClick={dismissFooterConfirm}>
+              {t("modal.settings.discard_keep_editing")}
+            </Button>
           </>
-        ) : saveConfirmOpen ? (
+        ) : (
           <>
-            <Button variant="ghost" size="md" disabled={saveBusy} onClick={dismissFooterConfirm}>
-              {t("modal.settings.save_cancel")}
+            <Button
+              variant="primary"
+              size="md"
+              disabled={saveConfirmOpen ? saveBusy : saveBlocked}
+              onClick={saveConfirmOpen ? commitSave : handleSaveClick}
+            >
+              {saveConfirmOpen ? t("modal.settings.save_confirm_action") : t("modal.settings.save")}
             </Button>
-            <Button variant="primary" size="md" disabled={saveBusy} onClick={commitSave}>
-              {t("modal.settings.save_confirm_action")}
-            </Button>
+            {saveConfirmOpen ? (
+              <Button variant="ghost" size="md" disabled={saveBusy} onClick={dismissFooterConfirm}>
+                {t("modal.settings.save_cancel")}
+              </Button>
+            ) : null}
           </>
-        ) : null}
-        <Button variant="primary" size="md" disabled={saveBlocked} onClick={handleSaveClick}>
-          {t("modal.settings.save")}
-        </Button>
+        )}
       </div>
     </div>
   );
@@ -249,13 +258,11 @@ export function AppSettingsModal({ open, onClose, vaults }: AppSettingsModalProp
             {renderAppSettingsSection(
               sectionId,
               formConfig,
-              settings,
               patchDraft,
               showHiddenVaultsSession,
               setShowHiddenVaultsSession,
               vaults,
               open,
-              onVaultRootGateChange,
             )}
           </VaultSettingsSection>
         ))}
@@ -267,7 +274,6 @@ export function AppSettingsModal({ open, onClose, vaults }: AppSettingsModalProp
 function renderAppSettingsSection(
   sectionId: AppSettingsSectionId,
   draft: AppSettingsConfig,
-  saved: AppSettingsConfig,
   patchDraft: <S extends keyof AppSettingsConfig>(
     section: S,
     patch: Partial<AppSettingsConfig[S]>,
@@ -276,7 +282,6 @@ function renderAppSettingsSection(
   setShowHiddenVaultsSession: (value: boolean) => void,
   vaults: VaultListItem[],
   modalOpen: boolean,
-  onVaultRootGateChange: (gate: VaultRootSettingsGate) => void,
 ) {
   switch (sectionId) {
     case "appearance":
@@ -291,16 +296,6 @@ function renderAppSettingsSection(
         <AppSettingsLoggingSection
           config={draft.logging}
           onChange={(patch) => patchDraft("logging", patch)}
-        />
-      );
-    case "behavior":
-      return (
-        <AppSettingsBehaviorSection
-          config={draft.app}
-          onChange={(patch) => patchDraft("app", patch)}
-          savedVaultRootMode={saved.app.vault_root_mode}
-          savedRootPath={saved.app.upriv_root_path}
-          onVaultRootGateChange={onVaultRootGateChange}
         />
       );
     case "hidden_vaults":

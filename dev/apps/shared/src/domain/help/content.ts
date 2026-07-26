@@ -5,6 +5,7 @@ export const HELP_SECTIONS = [
   { id: "vault_settings", defaultOpen: false },
   { id: "backups", defaultOpen: false },
   { id: "system_settings", defaultOpen: false },
+  { id: "data_folder", defaultOpen: false },
   { id: "logs", defaultOpen: false },
   { id: "security", defaultOpen: false },
   { id: "recovery", defaultOpen: false },
@@ -33,8 +34,8 @@ export const HELP_SECTION_BODY_KEYS: Record<HelpSectionId, readonly string[]> = 
   system_settings: [
     "modal.help.body.system_settings.1",
     "modal.help.body.system_settings.2",
-    "modal.help.body.system_settings.3",
   ],
+  data_folder: ["modal.help.body.data_folder.1"],
   logs: ["modal.help.body.logs.1", "modal.help.body.logs.2"],
   security: [
     "modal.help.body.security.1",

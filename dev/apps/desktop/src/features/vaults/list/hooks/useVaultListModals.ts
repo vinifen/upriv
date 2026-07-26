@@ -8,6 +8,7 @@ export function useVaultListModals(vaults: VaultListItem[]): VaultListModalsHand
   const [backupVaultId, setBackupVaultId] = useState<string | null>(null);
   const [settingsVaultId, setSettingsVaultId] = useState<string | null>(null);
   const [appSettingsOpen, setAppSettingsOpen] = useState(false);
+  const [dataFolderOpen, setDataFolderOpen] = useState(false);
   const [logsOpen, setLogsOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [createVaultOpen, setCreateVaultOpen] = useState(false);
@@ -55,6 +56,24 @@ export function useVaultListModals(vaults: VaultListItem[]): VaultListModalsHand
     setCreateVaultInitialStep(null);
   };
 
+  // System Settings and Data folder are mutually exclusive surfaces.
+  // Opening one while the other has unsaved edits is refused (toast via screen).
+  const [appSettingsDirty, setAppSettingsDirty] = useState(false);
+  const [dataFolderDirty, setDataFolderDirty] = useState(false);
+
+  const setAppSettingsOpenExclusive = (open: boolean): boolean => {
+    if (open && dataFolderDirty) return false;
+    if (open) setDataFolderOpen(false);
+    setAppSettingsOpen(open);
+    return true;
+  };
+  const setDataFolderOpenExclusive = (open: boolean): boolean => {
+    if (open && appSettingsDirty) return false;
+    if (open) setAppSettingsOpen(false);
+    setDataFolderOpen(open);
+    return true;
+  };
+
   return {
     noteVaultId,
     setNoteVaultId,
@@ -66,7 +85,11 @@ export function useVaultListModals(vaults: VaultListItem[]): VaultListModalsHand
     setSettingsVaultId,
     settingsVault,
     appSettingsOpen,
-    setAppSettingsOpen,
+    setAppSettingsOpen: setAppSettingsOpenExclusive,
+    setAppSettingsDirty,
+    dataFolderOpen,
+    setDataFolderOpen: setDataFolderOpenExclusive,
+    setDataFolderDirty,
     logsOpen,
     setLogsOpen,
     helpOpen,

@@ -11,40 +11,20 @@ import {
 import { useAppSettingsService } from "@/platform/services";
 import { I18nProvider, useTranslation } from "@/i18n";
 import { applyDocumentTheme } from "@/theme";
-import {
-  createDefaultAppSettings,
-  normalizeAppSettings,
-  RpcError,
-  VAULT_ROOT_ERROR_CODES,
-  isRpcError,
-} from "@upriv/shared";
-import type { AppSettingsConfig, AppSettingsPatch, IncompleteReplacePolicy } from "@upriv/shared";
+import { createDefaultAppSettings, normalizeAppSettings, RpcError } from "@upriv/shared";
+import type { AppSettingsConfig, AppSettingsPatch } from "@upriv/shared";
 import { useToast } from "@/hooks/useToast";
-import { useVaultRootService } from "@/platform/services";
 import { desktopErrorI18nKey } from "@/lib/errorMessages";
 import type { I18nKey } from "@/i18n";
 
 interface PersistOptions {
-  /** When incomplete `.upriv/` must be replaced (default_root or custom path). */
-  replacePolicy?: IncompleteReplacePolicy;
   /**
-   * UI already ran `setupDefaultRoot` / `setupAtPath`.
-   * Persist only settings.toml — do not re-sync alias (single writer).
+   * Caller already ran `setupDefaultRoot` / `setupAtPath` (Data folder / Setup /
+   * Repair / Recovery). Reload that root’s `settings.toml` — do not overwrite it
+   * with the previous session’s in-memory UI prefs. Vault-root disk mutations are
+   * modal-owned; Context never calls setup*.
    */
   vaultRootAlreadyApplied?: boolean;
-}
-
-function isVaultRootIncomplete(error: unknown): boolean {
-  if (isRpcError(error) && error.code === VAULT_ROOT_ERROR_CODES.INCOMPLETE) return true;
-  // Fallback when IPC Error was not re-wrapped as RpcError (Electron prefixes the message).
-  if (error instanceof Error) {
-    return (
-      error.message === VAULT_ROOT_ERROR_CODES.INCOMPLETE ||
-      error.message.startsWith(`${VAULT_ROOT_ERROR_CODES.INCOMPLETE}:`) ||
-      error.message.includes(`${VAULT_ROOT_ERROR_CODES.INCOMPLETE}:`)
-    );
-  }
-  return false;
 }
 
 interface AppSettingsContextValue {
@@ -85,7 +65,6 @@ function SettingsPersistErrorToast({ signal, error }: { signal: number; error: u
 
 export function AppSettingsProvider({ children }: { children: ReactNode }) {
   const appSettingsService = useAppSettingsService();
-  const vaultRootService = useVaultRootService();
   const [settings, setSettings] = useState<AppSettingsConfig>(() => createDefaultAppSettings());
   const [settingsReady, setSettingsReady] = useState(false);
   const [settingsOnDisk, setSettingsOnDisk] = useState(false);
@@ -176,85 +155,51 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
             "custom_root mode requires a non-empty upriv_root_path",
           );
         }
-        // Apply vault-root on disk *before* flipping settings — unless the caller
-        // (Setup/Repair Gate) already did setupDefaultRoot/setupAtPath (single writer).
-        const needsVaultRootMutation =
-          (rootModeChanged || options?.replacePolicy != null) && !options?.vaultRootAlreadyApplied;
+
+        // Vault-root disk changes belong to Data folder / Gate modals (setup* first).
+        // After setup*, callers pass vaultRootAlreadyApplied and we only reload.
+        if (rootModeChanged && !options?.vaultRootAlreadyApplied) {
+          throw new RpcError(
+            "invalid_request",
+            "vault-root mode/path changes require setup* then vaultRootAlreadyApplied",
+          );
+        }
 
         // Bootstrap / broken alias: no writable `.upriv/settings.toml` yet (`onDisk: false`).
-        // Keep UI prefs (locale, theme, …) in memory only; setup* + finish() write them
-        // when a root is created (`apply_setup_ui_locale` / save after vaultRootAlreadyApplied).
-        if (
-          !settingsOnDiskRef.current &&
-          !needsVaultRootMutation &&
-          !options?.vaultRootAlreadyApplied
-        ) {
+        // Keep UI prefs (locale, theme, …) in memory only until a root exists; creating a
+        // new root stamps locale via setup*, then we reload that root’s TOML.
+        if (!settingsOnDiskRef.current && !options?.vaultRootAlreadyApplied) {
           settingsRef.current = normalized;
           setSettings(normalized);
           return;
         }
 
-        if (needsVaultRootMutation) {
-          if (normalized.app.vault_root_mode === "default_root") {
-            // Inspect default_root before mutating. setupDefaultRoot deactivates the alias after init.
-            const defaultRoot = await vaultRootService.defaultRootStatus();
-            if (defaultRoot.status === "unreadable") {
-              throw new RpcError(
-                VAULT_ROOT_ERROR_CODES.IO_ERROR,
-                "default_root .upriv is unreadable",
-              );
-            }
-            // Never replace incomplete without an explicit UI policy (rename | delete).
-            if (defaultRoot.status === "incomplete" && options?.replacePolicy == null) {
-              throw new RpcError(
-                VAULT_ROOT_ERROR_CODES.INCOMPLETE,
-                "default_root .upriv is incomplete",
-              );
-            }
-            await vaultRootService.setupDefaultRoot({
-              replaceIncomplete: options?.replacePolicy != null,
-              replacePolicy: options?.replacePolicy,
-              locale: normalized.ui.locale,
-            });
-          } else {
-            const path = normalized.app.upriv_root_path.trim();
-            // setupAtPath: create `.upriv/` if missing, then write active alias.
-            // Incomplete `.upriv/` requires replacePolicy from the UI (rename | delete).
-            await vaultRootService.setupAtPath(path, {
-              replaceIncomplete: options?.replacePolicy != null,
-              replacePolicy: options?.replacePolicy,
-              locale: normalized.ui.locale,
-            });
-          }
+        // After switching/creating a vault-root, adopt THAT root’s settings.toml.
+        // Never write the previous session’s theme/locale into a selected existing folder.
+        if (options?.vaultRootAlreadyApplied) {
+          await reloadSettings();
+          setVaultRootEpoch((n) => n + 1);
+          return;
         }
-        // Skip alias sync when setup/deactivate already applied (or we just mutated via setup*).
-        const syncAlias = !(options?.vaultRootAlreadyApplied || needsVaultRootMutation);
-        const wrote = await appSettingsService.save(normalized, { syncAlias });
-        if (
-          !wrote &&
-          (needsVaultRootMutation || options?.vaultRootAlreadyApplied || rootModeChanged)
-        ) {
-          throw new RpcError("settings_save_failed", "settings save did not write to disk");
-        }
+
+        const wrote = await appSettingsService.save(normalized, { syncAlias: true });
         settingsRef.current = normalized;
         setSettings(normalized);
         if (wrote) {
           setSettingsOnDisk(true);
         }
-        if (rootModeChanged || options?.replacePolicy != null || options?.vaultRootAlreadyApplied) {
-          setVaultRootEpoch((n) => n + 1);
-        }
       } catch (error) {
-        // Disk may already match the new mode (Setup/Repair) — keep in-memory settings
-        // aligned with disk; do not bump epoch or reload until save succeeds.
+        // Disk/alias may already match the new root (Gate / Data folder setup).
+        // Prefer adopting that root’s TOML over keeping previous-session memory.
         if (options?.vaultRootAlreadyApplied) {
-          settingsRef.current = normalized;
-          setSettings(normalized);
+          try {
+            await reloadSettings();
+          } catch {
+            // Fall through to toast; caller still sees the original error.
+          }
+          // Setup may already have changed the on-disk root — always re-resolve Gate.
+          setVaultRootEpoch((n) => n + 1);
           notifyPersistFailed(error);
-          throw error;
-        }
-        // Let the settings modal offer rename/delete when the chosen folder is incomplete.
-        if (isVaultRootIncomplete(error) && options?.replacePolicy == null) {
           throw error;
         }
         await reloadSettings();
@@ -263,7 +208,7 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
         throw error;
       }
     },
-    [appSettingsService, notifyPersistFailed, reloadSettings, vaultRootService],
+    [appSettingsService, notifyPersistFailed, reloadSettings],
   );
 
   const replaceSettings = useCallback(

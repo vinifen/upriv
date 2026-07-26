@@ -1,6 +1,7 @@
 export type {
   AppDistribution,
   IncompleteReplacePolicy,
+  VaultRootBootstrapPrefs,
   VaultRootDirStatus,
   DefaultRootStatusResult,
   VaultRootAliasInfo,

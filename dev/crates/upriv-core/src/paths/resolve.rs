@@ -311,9 +311,7 @@ pub fn read_vault_root_alias(home: impl AsRef<Path>) -> Result<Option<VaultRootA
         // Best-effort heal; still return inactive even if the rewrite fails.
         if let Ok(contents) = alias_file_contents(&target, false) {
             if let Err(error) = write_alias_file_atomic(&path, &contents) {
-                eprintln!(
-                    "upriv-core: failed to rewrite .upriv-root as inactive: {error}"
-                );
+                eprintln!("upriv-core: failed to rewrite .upriv-root as inactive: {error}");
             }
         }
     }

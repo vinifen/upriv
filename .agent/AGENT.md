@@ -267,6 +267,12 @@ Electron sets `UPRIV_DISTRIBUTION` + `UPRIV_DEFAULT_ROOT_ANCHOR`. First-run UI d
 
 `prod-example/` is the **layout reference** only — it is **not** auto-discovered by `electron:dev` (strict `UPRIV_DEFAULT_ROOT_ANCHOR=dev/`). Point at it with `UPRIV_VAULT_ROOT=…/prod-example` when you need that tree.
 
+### Selecting an existing `.upriv`
+
+When selecting an already-valid vault-root, **do not change** that folder’s `.upriv/settings.toml` — only update the alias (or deactivate it) and reload UI prefs from disk.
+
+Pre-root UI prefs are carried by the **bootstrap prefs bag** — a named payload distinct from the vault-root directory: `VaultRootBootstrapPrefs` in Rust (`upriv-core`) and TS (`@upriv/shared`), nested under `bootstrap` on the daemon wire (never a top-level peer of `path` / `replaceIncomplete`). Today the only pre-root pref is UI locale (Gate selector); future entries (theme, high-contrast, etc.) extend the same bag without renaming setup APIs. Bootstrap prefs seed the new `settings.toml` **only when creating** a new `.upriv` (or incomplete→replace) — the daemon ignores them on a Valid target so opening never rewrites another vault-root's UI prefs. **System settings** Save edits the **active** root only; switch/create data folder via the vault-list **⋯ → Data folder** modal (not inside System settings).
+
 ---
 
 ## v1 implementation order (SDD §14)

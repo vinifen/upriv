@@ -1,4 +1,4 @@
-import { AppSettingsModal } from "@/features/system/settings";
+import { AppSettingsModal, VaultRootDataFolderModal } from "@/features/system/settings";
 import { VaultBackupsModal } from "@/features/vaults/backups";
 import { CreateVaultWizardModal } from "@/features/vaults/create";
 import { FileManagerLayer } from "@/features/vaults/file-manager";
@@ -39,6 +39,7 @@ export function VaultListPage() {
     backups,
     settings,
     appSettings,
+    dataFolder,
     logs,
     help,
     createVault,
@@ -123,6 +124,12 @@ export function VaultListPage() {
         open={appSettings.open}
         vaults={appSettings.vaults}
         onClose={appSettings.onClose}
+        onDirtyChange={appSettings.onDirtyChange}
+      />
+      <VaultRootDataFolderModal
+        open={dataFolder.open}
+        onClose={dataFolder.onClose}
+        onDirtyChange={dataFolder.onDirtyChange}
       />
       <LogsModal open={logs.open} onClose={logs.onClose} />
       <HelpModal open={help.open} onClose={help.onClose} />

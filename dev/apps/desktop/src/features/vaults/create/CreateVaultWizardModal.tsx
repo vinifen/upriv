@@ -167,19 +167,19 @@ export function CreateVaultWizardModal({
 
   const footer = (
     <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-      <div className="min-h-[1.25rem] text-sm" aria-live="polite">
-        {discardConfirmOpen ? (
-          <p className="text-on-surface-variant">{t("modal.settings.discard_confirm")}</p>
-        ) : (
-          <Button
-            variant="ghost"
-            size="md"
-            disabled={isFirstStep || discardConfirmOpen}
-            onClick={handleBack}
-          >
-            {t("vault.create.action.back")}
-          </Button>
-        )}
+      <div className="sm:min-w-0 sm:flex-1">
+        <div className="text-sm" aria-live="polite">
+          {discardConfirmOpen ? (
+            <p className="text-on-surface-variant">{t("modal.settings.discard_confirm")}</p>
+          ) : null}
+        </div>
+        {!discardConfirmOpen ? (
+          <div className="flex min-h-10 items-center">
+            <Button variant="ghost" size="md" disabled={isFirstStep} onClick={handleBack}>
+              {t("vault.create.action.back")}
+            </Button>
+          </div>
+        ) : null}
       </div>
       <div className="flex shrink-0 flex-col gap-2 sm:flex-row sm:flex-wrap sm:justify-end [&_button]:w-full sm:[&_button]:w-auto">
         {discardConfirmOpen ? (

@@ -17,7 +17,13 @@ export interface VaultListModalsHandle {
   setSettingsVaultId: (id: string | null) => void;
   settingsVault: VaultListItem | null;
   appSettingsOpen: boolean;
-  setAppSettingsOpen: (open: boolean) => void;
+  /** Returns false when Data folder has unsaved edits (caller should toast). */
+  setAppSettingsOpen: (open: boolean) => boolean;
+  setAppSettingsDirty: (dirty: boolean) => void;
+  dataFolderOpen: boolean;
+  /** Returns false when System Settings has unsaved edits (caller should toast). */
+  setDataFolderOpen: (open: boolean) => boolean;
+  setDataFolderDirty: (dirty: boolean) => void;
   logsOpen: boolean;
   setLogsOpen: (open: boolean) => void;
   helpOpen: boolean;

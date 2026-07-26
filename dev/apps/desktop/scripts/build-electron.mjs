@@ -26,8 +26,4 @@ function runNodeScript(scriptRel, args) {
 }
 
 runNodeScript(path.join("typescript", "bin", "tsc"), ["--noEmit"]);
-runNodeScript(path.join("vite", "bin", "vite.js"), [
-  "build",
-  "--configLoader",
-  "native",
-]);
+runNodeScript(path.join("vite", "bin", "vite.js"), ["build", "--configLoader", "native"]);

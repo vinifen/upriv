@@ -9,6 +9,7 @@ interface VaultListHeaderProps {
   onRefresh?: () => void;
   isRefreshing?: boolean;
   onOpenSystemSettings?: () => void;
+  onOpenDataFolder?: () => void;
   onViewLogs?: () => void;
   onOpenHelp?: () => void;
   onNewVault?: () => void;
@@ -18,6 +19,7 @@ export function VaultListHeader({
   onRefresh,
   isRefreshing = false,
   onOpenSystemSettings,
+  onOpenDataFolder,
   onViewLogs,
   onOpenHelp,
   onNewVault,
@@ -34,6 +36,12 @@ export function VaultListHeader({
         onSelect: onOpenSystemSettings,
       },
       {
+        id: "data-folder",
+        label: t("app.menu.data_folder"),
+        icon: <Icon name="folder" size={18} />,
+        onSelect: onOpenDataFolder,
+      },
+      {
         id: "view-logs",
         label: t("app.menu.view_logs"),
         icon: <Icon name="terminal" size={18} />,
@@ -46,7 +54,7 @@ export function VaultListHeader({
         onSelect: onOpenHelp,
       },
     ],
-    [t, onOpenSystemSettings, onViewLogs, onOpenHelp],
+    [t, onOpenSystemSettings, onOpenDataFolder, onViewLogs, onOpenHelp],
   );
 
   return (

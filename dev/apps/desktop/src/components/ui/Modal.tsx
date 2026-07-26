@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useId, useRef } from "react";
+import { type ReactNode, useEffect, useId, useLayoutEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "@/i18n";
 import { Button, type ButtonProps } from "./Button";
@@ -76,7 +76,9 @@ export function Modal({
     };
   }, [open]);
 
-  // Autofocus first control + Tab cycle inside the dialog (blocking setup/repair included).
+  // Focus the dialog once on open + Tab cycle. Do not steal focus on every
+  // children/footer/headerActions change (locale <select>). When a focused
+  // control unmounts (focus leaves the panel), restore focus to the panel.
   useEffect(() => {
     if (!open) return;
     const panel = panelRef.current;
@@ -87,8 +89,7 @@ export function Modal({
         (el) => !el.hasAttribute("disabled") && el.tabIndex !== -1,
       );
 
-    const initial = focusables()[0];
-    initial?.focus();
+    panel.focus({ preventScroll: true });
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Tab") return;
@@ -97,20 +98,65 @@ export function Modal({
       const first = items[0];
       const last = items[items.length - 1];
       const active = document.activeElement as HTMLElement | null;
+      // Panel itself is focusable (tabIndex=-1) for initial focus — treat as outside the cycle.
+      const onPanelChrome = active === panel || !panel.contains(active);
       if (event.shiftKey) {
-        if (active === first || !panel.contains(active)) {
+        if (active === first || onPanelChrome) {
           event.preventDefault();
           last.focus();
         }
-      } else if (active === last || !panel.contains(active)) {
+      } else if (active === last || onPanelChrome) {
         event.preventDefault();
         first.focus();
       }
     };
 
+    // Recover when focus escapes the dialog (e.g. Continue unmounted mid-step).
+    // Ignore focus moving into another portaled UI (native <select> listbox).
+    const recoverIfFocusLeft = () => {
+      const active = document.activeElement;
+      if (active instanceof Node && panel.contains(active)) return;
+      if (active instanceof Element) {
+        const role = active.getAttribute("role");
+        if (role === "listbox" || role === "option") return;
+      }
+      panel.focus({ preventScroll: true });
+    };
+
+    const onFocusIn = (event: FocusEvent) => {
+      const next = event.target;
+      if (next instanceof Node && panel.contains(next)) return;
+      // Focus moved elsewhere in the document — schedule recovery after the
+      // current unmount/remount settles (locale select keeps focus on itself).
+      queueMicrotask(recoverIfFocusLeft);
+    };
+
+    const observer = new MutationObserver(() => {
+      const active = document.activeElement;
+      if (active instanceof Node && panel.contains(active)) return;
+      if (active === document.body || active === document.documentElement || active == null) {
+        panel.focus({ preventScroll: true });
+      }
+    });
+    observer.observe(panel, { childList: true, subtree: true });
+
     panel.addEventListener("keydown", onKeyDown);
-    return () => panel.removeEventListener("keydown", onKeyDown);
-  }, [open, children, footer, headerActions]);
+    document.addEventListener("focusin", onFocusIn);
+    return () => {
+      panel.removeEventListener("keydown", onKeyDown);
+      document.removeEventListener("focusin", onFocusIn);
+      observer.disconnect();
+    };
+  }, [open]);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    const panel = panelRef.current;
+    if (!panel) return;
+    const active = document.activeElement;
+    if (active instanceof Node && panel.contains(active)) return;
+    panel.focus({ preventScroll: true });
+  }, [open]);
 
   const scrollFooterLayout = Boolean(footer);
 
@@ -129,10 +175,12 @@ export function Modal({
           role="dialog"
           aria-modal="true"
           aria-labelledby={titleId}
+          tabIndex={-1}
           className={[
-            "pointer-events-auto flex w-full max-h-[min(92dvh,calc(100dvh-1.5rem))] flex-col overflow-hidden bg-surface-container-high shadow-modal",
+            "pointer-events-auto flex h-fit w-full max-h-[min(92dvh,calc(100dvh-1.5rem))] flex-col overflow-hidden bg-surface-container-high shadow-modal",
             "rounded-xl",
             "p-4 sm:p-6",
+            "outline-none",
             scrollFooterLayout ? "min-h-0 sm:max-h-[min(92vh,calc(100vh-2rem))]" : "",
             panelClassName,
           ].join(" ")}
@@ -157,8 +205,10 @@ export function Modal({
           </header>
           <div
             className={[
-              "modal-scroll-pane min-h-0 text-body text-on-surface",
-              scrollFooterLayout ? "flex-1" : "overflow-y-auto",
+              "modal-scroll-pane min-h-0 text-body text-on-surface overflow-y-auto",
+              // Grow to fill space under max-height so long forms scroll with a sticky footer.
+              // Short modals still size to content (panel height is auto + max-h, not forced).
+              scrollFooterLayout ? "flex-1" : "",
             ].join(" ")}
           >
             {children}

@@ -2,6 +2,7 @@ import type {
   IncompleteReplacePolicy,
   DefaultRootStatusResult,
   VaultRootAliasInfo,
+  VaultRootBootstrapPrefs,
   VaultRootInspectResult,
   VaultRootResolveResult,
 } from "../../domain/vault-root";
@@ -12,13 +13,20 @@ import type { VaultRootMode } from "../../domain/app-settings";
  * Desktop → daemon RPC; browser → mock.
  *
  * Disk-mutating methods (`setupDefaultRoot`, `setupAtPath`) should only be called from
- * `AppSettingsContext`, `VaultRootSetupModal`, `VaultRootRepairModal`, or
- * `VaultRootAliasRecoveryModal` — not from arbitrary UI — to avoid duplicate side effects.
+ * `VaultRootDataFolderModal`, `VaultRootSetupModal`, `VaultRootRepairModal`, or
+ * `VaultRootAliasRecoveryModal` — not from arbitrary UI or `AppSettingsContext` — to
+ * avoid duplicate side effects. After setup*, Context only reloads via
+ * `vaultRootAlreadyApplied`.
  * Alias sync on settings save uses `app_settings_save` (`syncAlias`); there is no
  * separate rewrite/deactivate RPC on this service.
  *
- * **Locale:** every `setup*` call site must pass `settings.ui.locale` (or the pending
- * in-memory locale) so a new root’s `settings.toml` is not stuck on the English default.
+ * **Bootstrap prefs bag:** pre-root UI prefs applied only when creating a new
+ * `.upriv/` (absent init or incomplete→replace). Today the only such pref is
+ * `locale` (Gate selector), but future entries (theme, high-contrast, etc.)
+ * extend the same [`VaultRootBootstrapPrefs`] bag without renaming these
+ * service methods again. Selecting an already-valid vault-root ignores
+ * `bootstrap` entirely — the daemon never rewrites that folder's
+ * `[ui]` / `settings.toml`.
  */
 export interface VaultRootService {
   /** Resolve using current app settings (`vault_root_mode` / custom path) + env/CLI when wired. */
@@ -34,12 +42,14 @@ export interface VaultRootService {
    * if it exists (path kept), and switch to default-root mode.
    * When replacing incomplete: `delete` removes `.upriv/`; `rename` keeps it as
    * `.upriv-invalidated-<timestamp>`.
-   * `locale` is written into the new root's `settings.toml` `[ui].locale` when creating.
+   * `bootstrap` seeds the new root's `settings.toml` (today `[ui].locale`).
+   * Required (non-empty `bootstrap.locale`) when the target does not yet
+   * contain a Valid `.upriv/`.
    */
   setupDefaultRoot(options?: {
     replaceIncomplete?: boolean;
     replacePolicy?: IncompleteReplacePolicy;
-    locale?: string | null;
+    bootstrap?: VaultRootBootstrapPrefs | null;
   }): Promise<{ rootPath: string }>;
 
   /**
@@ -47,13 +57,15 @@ export interface VaultRootService {
    * `.upriv-root` alias, and switch to custom-path mode (alias wins over local `.upriv`).
    * `path` must be absolute.
    * When replacing incomplete: same policies as `setupDefaultRoot`.
+   * `bootstrap` seeds the new root's `settings.toml` on create — see
+   * `setupDefaultRoot` for the same contract.
    */
   setupAtPath(
     path: string,
     options?: {
       replaceIncomplete?: boolean;
       replacePolicy?: IncompleteReplacePolicy;
-      locale?: string | null;
+      bootstrap?: VaultRootBootstrapPrefs | null;
     },
   ): Promise<{ rootPath: string; aliasPath: string }>;
 

@@ -228,6 +228,7 @@ export function useVaultListScreen() {
   const blockingUiOpen = Boolean(
     modals.createVaultOpen ||
     modals.appSettingsOpen ||
+    modals.dataFolderOpen ||
     modals.logsOpen ||
     modals.helpOpen ||
     modals.noteVaultId ||
@@ -304,7 +305,16 @@ export function useVaultListScreen() {
         void refresh();
       },
       isRefreshing,
-      onOpenSystemSettings: () => modals.setAppSettingsOpen(true),
+      onOpenSystemSettings: () => {
+        if (!modals.setAppSettingsOpen(true)) {
+          showToast(t("toast.settings_surface_blocked_dirty"));
+        }
+      },
+      onOpenDataFolder: () => {
+        if (!modals.setDataFolderOpen(true)) {
+          showToast(t("toast.data_folder_blocked_dirty"));
+        }
+      },
       onViewLogs: () => modals.setLogsOpen(true),
       onOpenHelp: () => modals.setHelpOpen(true),
       onNewVault: () => {
@@ -395,7 +405,17 @@ export function useVaultListScreen() {
     appSettings: {
       open: modals.appSettingsOpen,
       vaults,
-      onClose: () => modals.setAppSettingsOpen(false),
+      onClose: () => {
+        void modals.setAppSettingsOpen(false);
+      },
+      onDirtyChange: modals.setAppSettingsDirty,
+    },
+    dataFolder: {
+      open: modals.dataFolderOpen,
+      onClose: () => {
+        void modals.setDataFolderOpen(false);
+      },
+      onDirtyChange: modals.setDataFolderDirty,
     },
     logs: {
       open: modals.logsOpen,

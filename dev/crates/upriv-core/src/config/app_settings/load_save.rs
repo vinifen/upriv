@@ -154,21 +154,6 @@ pub fn load_app_settings_at(root: &Path) -> Result<LoadedAppSettings> {
     })
 }
 
-/// After first-run setup, set `[ui].locale` on the new root without changing other fields.
-/// Does not sync `.upriv-root` (caller already wrote/deactivated the alias).
-pub fn apply_setup_ui_locale(root: &Path, locale: Option<&str>) -> Result<()> {
-    let Some(locale) = locale.map(str::trim).filter(|s| !s.is_empty()) else {
-        return Ok(());
-    };
-    let mut loaded = load_app_settings_at(root)?;
-    if loaded.settings.ui.locale == locale {
-        return Ok(());
-    }
-    loaded.settings.ui.locale = locale.to_string();
-    // Write TOML only — skip alias sync (setup RPCs already set alias state).
-    write_settings_toml_only(root, &loaded.settings)
-}
-
 /// Write settings.toml at `root` and sync `.upriv-root` from wire `app` fields.
 pub fn save_app_settings(root: &Path, settings: &AppSettings) -> Result<()> {
     save_app_settings_with_alias_sync(root, settings, true)

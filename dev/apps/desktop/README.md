@@ -120,18 +120,18 @@ Each feature folder under `features/vaults/*` and `features/system/*` has **one*
 
 **Current public APIs** (maintain this table when adding exports)
 
-| Module                 | Import path                      | Exports                                                                                                  |
-| ---------------------- | -------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| `vaults/list/`         | `@/features/vaults/list`         | `VaultListPage`, `exportVaultArchive`, `VaultListLifecycleModals`                                        |
-| `vaults/lifecycle/`    | `@/features/vaults/lifecycle`    | `VaultLifecycleLayer`, `useVaultLifecycleActions`, `VaultLifecycleRequest`                               |
-| `vaults/settings/`     | `@/features/vaults/settings`     | `VaultSettingsModal`                                                                                     |
-| `vaults/create/`       | `@/features/vaults/create`       | `CreateVaultWizardModal`, `CreateVaultResult`                                                            |
-| `vaults/backups/`      | `@/features/vaults/backups`      | `VaultBackupsModal`                                                                                      |
-| `vaults/file-manager/` | `@/features/vaults/file-manager` | `FileManagerProvider`, `useFileManager`, `FileManagerLayer`                                              |
-| `system/settings/`     | `@/features/system/settings`     | `AppSettingsModal`, `AppSettingsProvider`, `useAppSettingsContext`, `VaultRootGate`, bulk-export helpers |
-| `system/refresh/`      | `@/features/system/refresh`      | `useAppRefresh`                                                                                          |
-| `system/logs/`         | `@/features/system/logs`         | `LogsModal`                                                                                              |
-| `system/help/`         | `@/features/system/help`         | `HelpModal`                                                                                              |
+| Module                 | Import path                      | Exports                                                                                                                              |
+| ---------------------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `vaults/list/`         | `@/features/vaults/list`         | `VaultListPage`, `exportVaultArchive`, `VaultListLifecycleModals`                                                                    |
+| `vaults/lifecycle/`    | `@/features/vaults/lifecycle`    | `VaultLifecycleLayer`, `useVaultLifecycleActions`, `VaultLifecycleRequest`                                                           |
+| `vaults/settings/`     | `@/features/vaults/settings`     | `VaultSettingsModal`                                                                                                                 |
+| `vaults/create/`       | `@/features/vaults/create`       | `CreateVaultWizardModal`, `CreateVaultResult`                                                                                        |
+| `vaults/backups/`      | `@/features/vaults/backups`      | `VaultBackupsModal`                                                                                                                  |
+| `vaults/file-manager/` | `@/features/vaults/file-manager` | `FileManagerProvider`, `useFileManager`, `FileManagerLayer`                                                                          |
+| `system/settings/`     | `@/features/system/settings`     | `AppSettingsModal`, `AppSettingsProvider`, `useAppSettingsContext`, `VaultRootGate`, `VaultRootDataFolderModal`, bulk-export helpers |
+| `system/refresh/`      | `@/features/system/refresh`      | `useAppRefresh`                                                                                                                      |
+| `system/logs/`         | `@/features/system/logs`         | `LogsModal`                                                                                                                          |
+| `system/help/`         | `@/features/system/help`         | `HelpModal`                                                                                                                          |
 
 **When adding code**
 

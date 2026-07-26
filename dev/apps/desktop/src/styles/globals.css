@@ -64,6 +64,8 @@
     scrollbar-gutter: stable;
     overflow-x: hidden;
     overflow-y: auto;
+    /* Room for focus rings on full-width controls (clipped by overflow otherwise). */
+    padding-inline: 2px;
   }
 
   .modal-scroll-pane::-webkit-scrollbar {

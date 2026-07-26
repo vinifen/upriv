@@ -1,81 +1,51 @@
 /**
- * Settings “rich field” pattern (vault-root is the first case).
+ * Vault-root draft gate (Data folder Apply / Setup·Repair·Recovery Continue).
  *
- * Problem: if every special config waits until Save to ask follow-up questions,
- * the modal footer becomes a serial wizard (vault repair → next field → …).
- *
- * Rule for rich fields:
+ * Rich-field pattern:
  * 1. Validate as soon as the user changes the control (radio, folder pick, …).
- * 2. Render extra choices under that option — not in a global Save queue.
- * 3. Keep side-effects in draft until Save (inspect / choose policy only;
- *    disk mutations happen in `replaceSettings` / Context).
- * 4. Block Save only while **that field is dirty and unresolved**.
- *    Unrelated dirty fields (locale, theme) stay saveable if this field was
- *    reverted to the last saved values (or never changed).
+ * 2. Render extra choices under that option — not as a separate modal step.
+ * 3. Keep side-effects in draft until the confirm step (inspect / choose policy only;
+ *    disk mutations happen in the modal via `setup*` then Context reload).
+ * 4. Block the primary action only while **that field is dirty and unresolved**.
  * 5. Switching away from an option discards its pending extra choices.
  * 6. Mark the unresolved option with `PolicyRadioOption` `attention` (amber
- *    border) while `blocksSave` is true so the user sees what still needs input.
- * 7. Side-effect reminders for Save go in `saveConfirmNotes` (i18n keys).
- *    The footer always shows the generic confirm, then appends every note from
- *    every rich-field gate — no per-field confirm steps, no inline “this will
- *    delete now” buttons.
+ *    border) while `blocksPrimary` is true.
+ * 7. Side-effect reminders go in `confirmNotes` (i18n keys) for
+ *    `VaultRootConfirmFooter` — wording follows `primaryAction`.
  *
- * **Gate vs Settings confirmation severity:** `VaultRootGate` (setup/repair)
- * confirms destructive delete immediately (inline confirm step) because it
- * mutates disk on Continue. Settings keeps delete/rename/create notes in
- * `saveConfirmNotes` and only applies them on Save — intentional: draft until
- * Save, Gate acts now.
- *
- * When adding another rich setting later, give it a similar gate +
- * `blocksSave` / `saveConfirmNotes` to `AppSettingsModal`.
+ * System Settings no longer hosts vault-root mode/path — that lives in
+ * `VaultRootDataFolderModal` (⋯ → Data folder).
  */
 
 import type { I18nKey, IncompleteReplacePolicy } from "@upriv/shared";
+
+/** Continue (blocking gates) vs Apply (Data folder). */
+export type VaultRootConfirmAction = "continue" | "apply";
 
 /** Disk check outcome for the current draft vault-root mode/path. */
 export type VaultRootDiskStatus =
   | "checking"
   | "ready"
-  /** Default_root or custom_root with no `.upriv` yet — Save will create it. */
+  /** Default_root or custom_root with no `.upriv` yet — confirm will create it. */
   | "will_create"
   | "incomplete"
   | "unreadable"
   | "needs_folder";
 
-/**
- * Shared slice every rich-field gate should expose to the settings modal.
- * Compose notes from multiple gates via `collectAppSettingsSaveConfirmNotes`.
- */
-export interface AppSettingsRichFieldGate {
-  blocksSave: boolean;
-  /** i18n keys listed under the generic Save confirm while this field applies. */
-  saveConfirmNotes?: readonly I18nKey[];
-}
-
-export interface VaultRootSettingsGate extends AppSettingsRichFieldGate {
-  /** Set when incomplete `.upriv/` must be replaced on Save. */
+export interface VaultRootSettingsGate {
+  /** True while the primary action must stay disabled (unresolved draft). */
+  blocksPrimary: boolean;
+  /** i18n keys listed under the confirm step while this draft applies. */
+  confirmNotes?: readonly I18nKey[];
+  /** Set when incomplete `.upriv/` must be replaced on confirm. */
   replacePolicy?: IncompleteReplacePolicy;
   disk: VaultRootDiskStatus;
 }
 
 export const VAULT_ROOT_GATE_IDLE: VaultRootSettingsGate = {
-  blocksSave: false,
+  blocksPrimary: false,
   disk: "ready",
 };
-
-/** Flatten notes from all rich-field gates (order = footer display order). */
-export function collectAppSettingsSaveConfirmNotes(
-  gates: readonly AppSettingsRichFieldGate[],
-): I18nKey[] {
-  const notes: I18nKey[] = [];
-  for (const gate of gates) {
-    if (!gate.saveConfirmNotes) continue;
-    for (const key of gate.saveConfirmNotes) {
-      if (!notes.includes(key)) notes.push(key);
-    }
-  }
-  return notes;
-}
 
 export function isVaultRootDraftDirty(
   draftMode: string,
@@ -86,42 +56,59 @@ export function isVaultRootDraftDirty(
   return draftMode !== savedMode || draftPath.trim() !== savedPath.trim();
 }
 
+function confirmNoteKeys(
+  primaryAction: VaultRootConfirmAction,
+  kind: "delete" | "rename" | "create",
+): I18nKey {
+  if (primaryAction === "apply") {
+    return `modal.data_folder.apply_confirm_note.${kind}`;
+  }
+  return `modal.vault_root_gate.continue_confirm_note.${kind}`;
+}
+
+/** Confirm-step notes for an incomplete replace policy (Repair / gates). */
+export function confirmNotesForReplacePolicy(
+  policy: IncompleteReplacePolicy | null | undefined,
+  primaryAction: VaultRootConfirmAction = "continue",
+): readonly I18nKey[] | undefined {
+  if (policy === "delete") return [confirmNoteKeys(primaryAction, "delete")] as const;
+  if (policy === "rename") return [confirmNoteKeys(primaryAction, "rename")] as const;
+  return undefined;
+}
+
 export function vaultRootGateFromState(args: {
   dirty: boolean;
   disk: VaultRootDiskStatus;
   replacePolicy: IncompleteReplacePolicy | null;
+  /** @default "continue" */
+  primaryAction?: VaultRootConfirmAction;
 }): VaultRootSettingsGate {
-  const { dirty, disk, replacePolicy } = args;
+  const { dirty, disk, replacePolicy, primaryAction = "continue" } = args;
   if (!dirty) {
-    return { blocksSave: false, disk: "ready" };
+    return { blocksPrimary: false, disk: "ready" };
   }
   if (disk === "checking" || disk === "unreadable" || disk === "needs_folder") {
-    return { blocksSave: true, disk };
+    return { blocksPrimary: true, disk };
   }
   if (disk === "incomplete") {
     return {
-      blocksSave: replacePolicy == null,
+      blocksPrimary: replacePolicy == null,
       disk,
       replacePolicy: replacePolicy ?? undefined,
-      saveConfirmNotes:
-        replacePolicy === "delete"
-          ? (["modal.app_settings.save_confirm_note.vault_root_delete"] as const)
-          : replacePolicy === "rename"
-            ? (["modal.app_settings.save_confirm_note.vault_root_rename"] as const)
-            : undefined,
+      confirmNotes: confirmNotesForReplacePolicy(replacePolicy, primaryAction),
     };
   }
   if (disk === "will_create") {
     return {
-      blocksSave: false,
+      blocksPrimary: false,
       disk,
       replacePolicy: undefined,
-      saveConfirmNotes: ["modal.app_settings.save_confirm_note.vault_root_create"] as const,
+      confirmNotes: [confirmNoteKeys(primaryAction, "create")] as const,
     };
   }
   // ready
   return {
-    blocksSave: false,
+    blocksPrimary: false,
     disk,
     replacePolicy: undefined,
   };

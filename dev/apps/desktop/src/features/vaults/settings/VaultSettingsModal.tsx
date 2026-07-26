@@ -218,7 +218,7 @@ export function VaultSettingsModal({
 
   const footer = (
     <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-      <div className="min-h-[1.25rem] text-sm" aria-live="polite">
+      <div className="text-sm sm:min-w-0 sm:flex-1" aria-live="polite">
         {discardConfirmOpen ? (
           <p className="text-on-surface-variant">{t("modal.settings.discard_confirm")}</p>
         ) : saveConfirmOpen ? (
@@ -227,34 +227,33 @@ export function VaultSettingsModal({
           <p className="text-vault-open">{t("modal.settings.saved")}</p>
         ) : null}
       </div>
-      <div className="flex shrink-0 flex-col gap-2 sm:flex-row sm:flex-wrap sm:justify-end [&_button]:w-full sm:[&_button]:w-auto">
+      <div className="flex shrink-0 flex-col gap-2 sm:flex-row-reverse sm:flex-wrap sm:justify-start [&_button]:w-full sm:[&_button]:w-auto">
         {discardConfirmOpen ? (
           <>
-            <Button variant="ghost" size="md" onClick={dismissFooterConfirm}>
-              {t("modal.settings.discard_keep_editing")}
-            </Button>
             <Button variant="danger" size="md" onClick={handleDiscardAndClose}>
               {t("modal.settings.discard_confirm_action")}
             </Button>
-          </>
-        ) : saveConfirmOpen ? (
-          <>
             <Button variant="ghost" size="md" onClick={dismissFooterConfirm}>
-              {t("modal.settings.save_cancel")}
-            </Button>
-            <Button variant="primary" size="md" onClick={handleConfirmSave}>
-              {t("modal.settings.save_confirm_action")}
+              {t("modal.settings.discard_keep_editing")}
             </Button>
           </>
-        ) : null}
-        <Button
-          variant="primary"
-          size="md"
-          disabled={!isDirty || saveConfirmOpen}
-          onClick={handleSaveClick}
-        >
-          {t("modal.settings.save")}
-        </Button>
+        ) : (
+          <>
+            <Button
+              variant="primary"
+              size="md"
+              disabled={!isDirty}
+              onClick={saveConfirmOpen ? handleConfirmSave : handleSaveClick}
+            >
+              {saveConfirmOpen ? t("modal.settings.save_confirm_action") : t("modal.settings.save")}
+            </Button>
+            {saveConfirmOpen ? (
+              <Button variant="ghost" size="md" onClick={dismissFooterConfirm}>
+                {t("modal.settings.save_cancel")}
+              </Button>
+            ) : null}
+          </>
+        )}
       </div>
     </div>
   );

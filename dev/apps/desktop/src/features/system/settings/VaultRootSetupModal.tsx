@@ -1,6 +1,5 @@
-import { useCallback, useEffect, useId, useRef, useState } from "react";
-import { Button, Modal } from "@/components/ui";
-import { PolicyRadioOption, settingsControlClass } from "@/components/settings";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Modal } from "@/components/ui";
 import { useTranslation } from "@/i18n";
 import {
   SUPPORTED_LOCALES,
@@ -8,7 +7,6 @@ import {
   VAULT_ROOT_ERROR_CODES,
   isRpcError,
   type AppDistribution,
-  type IncompleteReplacePolicy,
   type LocaleId,
   type VaultRootMode,
   type VaultRootPresentationState,
@@ -16,6 +14,9 @@ import {
 import { useVaultRootService } from "@/platform/services";
 import { useAppSettingsContext } from "./AppSettingsContext";
 import { desktopErrorI18nKey } from "@/lib/errorMessages";
+import { VaultRootConfirmFooter } from "./VaultRootConfirmFooter";
+import { VaultRootLocationSection } from "./VaultRootLocationSection";
+import { VAULT_ROOT_GATE_IDLE, type VaultRootSettingsGate } from "./vaultRootSettingsIntent";
 
 /** Trim + strip trailing separators for diskApplied path equality. */
 function samePathKey(a: string, b: string): boolean {
@@ -31,14 +32,9 @@ interface VaultRootSetupModalProps {
   onConfigured: () => void;
 }
 
-type Step = "choose" | "repair" | "confirm_delete";
-
 /**
  * Blocking first-run when no vault-root is found.
- * Choose mode with radios (same pattern as Settings), then Continue:
- * - Default data folder: create default `.upriv/` at the default_root anchor (app home).
- * - Custom: initialize if needed + write active `.upriv-root` alias.
- * Incomplete `.upriv/` → rename (recommended) or delete (+ confirm).
+ * Reuses `VaultRootLocationSection` (same inspect / incomplete UX as Data folder).
  */
 export function VaultRootSetupModal({
   open,
@@ -48,58 +44,60 @@ export function VaultRootSetupModal({
 }: VaultRootSetupModalProps) {
   const { t } = useTranslation();
   const vaultRoot = useVaultRootService();
-  const defaultRootAnchor = presentation.defaultRootAnchor;
   const aliasPath = presentation.aliasPath;
   const { settings, patchSettings } = useAppSettingsContext();
-  const rootModeGroup = useId();
-  const [step, setStep] = useState<Step>("choose");
   const [mode, setMode] = useState<VaultRootMode>("default_root");
-  const [repairPolicy, setRepairPolicy] = useState<IncompleteReplacePolicy>("rename");
-  const [pathInput, setPathInput] = useState("");
-  /** Path from `.upriv-root` (active or inactive) — same prefill as Settings custom_root mode. */
-  const [aliasRememberedPath, setAliasRememberedPath] = useState("");
+  const [path, setPath] = useState("");
+  const [gate, setGate] = useState<VaultRootSettingsGate>(VAULT_ROOT_GATE_IDLE);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const repairPolicyGroup = useId();
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [inspectNonce, setInspectNonce] = useState(0);
   const submitLock = useRef(false);
   const diskApplied = useRef<{ rootPath: string; mode: VaultRootMode } | null>(null);
-  const aliasLoadGen = useRef(0);
+  const gateRef = useRef(gate);
+  gateRef.current = gate;
+
+  const openedSessionRef = useRef(false);
 
   useEffect(() => {
-    if (!open) return;
-    setStep("choose");
+    if (!open) {
+      openedSessionRef.current = false;
+      return;
+    }
+    if (openedSessionRef.current) return;
+    openedSessionRef.current = true;
     setMode("default_root");
-    setRepairPolicy("rename");
-    setPathInput("");
-    setAliasRememberedPath("");
+    setPath("");
+    setGate(VAULT_ROOT_GATE_IDLE);
     setBusy(false);
     setError(null);
+    setConfirmOpen(false);
+    setInspectNonce(0);
     submitLock.current = false;
     diskApplied.current = null;
+  }, [open]);
 
-    const gen = ++aliasLoadGen.current;
-    const fromSettings = settings.app.upriv_root_path.trim();
-    if (fromSettings) {
-      setAliasRememberedPath(fromSettings);
-    }
-    void vaultRoot
-      .readAlias()
-      .then((alias) => {
-        if (gen !== aliasLoadGen.current) return;
-        const path = alias?.path.trim() || "";
-        if (path) setAliasRememberedPath(path);
-      })
-      .catch(() => {
-        // Keep settings path if any.
-      });
-    // Prefill only when the modal opens — not on every settings tick.
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: open edge
-  }, [open, distribution, defaultRootAnchor]);
+  useEffect(() => {
+    setConfirmOpen(false);
+  }, [mode, path, gate.replacePolicy, gate.disk]);
+
+  const onVaultRootGateChange = useCallback((next: VaultRootSettingsGate) => {
+    setGate(next);
+  }, []);
+
+  const onDraftChange = useCallback(
+    (patch: { vault_root_mode?: VaultRootMode; upriv_root_path?: string }) => {
+      if (patch.vault_root_mode != null) setMode(patch.vault_root_mode);
+      if (patch.upriv_root_path != null) setPath(patch.upriv_root_path);
+      setError(null);
+    },
+    [],
+  );
 
   const handleLocaleChange = useCallback(
     (locale: LocaleId) => {
       if (locale === settings.ui.locale) return;
-      // Before a writable vault-root exists, Context keeps this in memory only.
       void patchSettings({ ui: { locale } });
     },
     [patchSettings, settings.ui.locale],
@@ -125,99 +123,37 @@ export function VaultRootSetupModal({
     [onConfigured, patchSettings],
   );
 
-  const handleCreateDefaultRoot = useCallback(() => {
-    if (submitLock.current) return;
-    submitLock.current = true;
-    setBusy(true);
-    setError(null);
-    void (async () => {
-      if (diskApplied.current?.mode === "default_root") {
-        await finish(diskApplied.current.rootPath, "default_root");
-        return;
-      }
-      const { rootPath } = await vaultRoot.setupDefaultRoot({ locale: settings.ui.locale });
-      await finish(rootPath, "default_root");
-    })()
-      .catch((caught) => {
-        if (isRpcError(caught) && caught.code === VAULT_ROOT_ERROR_CODES.INCOMPLETE) {
-          // Default-root incomplete should normally be handled by VaultRootRepairModal;
-          // surface repair for this edge case.
-          setPathInput(defaultRootAnchor);
-          setMode("default_root");
-          setStep("repair");
-          setError(null);
-          return;
-        }
-        setError(t(desktopErrorI18nKey(caught, "modal.vault_root_setup.error_init")));
-      })
-      .finally(() => {
-        submitLock.current = false;
-        setBusy(false);
-      });
-  }, [finish, defaultRootAnchor, settings.ui.locale, t, vaultRoot]);
+  // UI primary = Continue (blocking first-run Setup — not Apply).
+  const requestContinue = useCallback(() => {
+    const current = gateRef.current;
+    if (busy || current.blocksPrimary || confirmOpen) return;
+    setConfirmOpen(true);
+  }, [busy, confirmOpen]);
 
-  const handlePickFolder = useCallback(() => {
-    setBusy(true);
-    setError(null);
-    void (async () => {
-      const remembered = pathInput.trim() || aliasRememberedPath.trim();
-      const suggested =
-        remembered ||
-        (await vaultRoot.suggestedCustomRootPath().catch(() => ""));
-      const picked = await vaultRoot.pickFolder(
-        suggested || null,
-        t("modal.vault_root_setup.pick_folder_title"),
-      );
-      // Only fill when the user confirmed a folder — cancel must not inject a suggestion.
-      if (picked) setPathInput(picked);
-    })()
-      .catch((caught) => {
-        setError(t(desktopErrorI18nKey(caught, "modal.vault_root_setup.error_pick")));
-      })
-      .finally(() => {
-        setBusy(false);
-      });
-  }, [aliasRememberedPath, pathInput, t, vaultRoot]);
+  // UI primary = Continue
+  const commitContinue = useCallback(() => {
+    const current = gateRef.current;
+    if (current.blocksPrimary || busy || submitLock.current) return;
 
-  const runSetupAtPath = useCallback(
-    (
-      path: string,
-      options?: { replaceIncomplete?: boolean; replacePolicy?: IncompleteReplacePolicy },
-    ) => {
-      if (submitLock.current) return;
+    if (mode === "default_root") {
       submitLock.current = true;
       setBusy(true);
       setError(null);
       void (async () => {
-        const applied = diskApplied.current;
-        // Never reuse a prior disk apply for a different folder (C1).
-        if (
-          applied?.mode === "custom_root" &&
-          !options?.replaceIncomplete &&
-          samePathKey(applied.rootPath, path)
-        ) {
-          setStep("choose");
-          await finish(applied.rootPath, "custom_root");
+        if (diskApplied.current?.mode === "default_root") {
+          await finish(diskApplied.current.rootPath, "default_root");
           return;
         }
-        if (applied && !samePathKey(applied.rootPath, path)) {
-          diskApplied.current = null;
-        }
-        const { rootPath } = await vaultRoot.setupAtPath(path, {
-          ...options,
-          locale: settings.ui.locale,
+        const { rootPath } = await vaultRoot.setupDefaultRoot({
+          replaceIncomplete: current.replacePolicy != null,
+          replacePolicy: current.replacePolicy,
+          bootstrap: { locale: settings.ui.locale },
         });
-        setStep("choose");
-        await finish(rootPath, "custom_root");
+        await finish(rootPath, "default_root");
       })()
         .catch((caught) => {
-          if (
-            !options?.replaceIncomplete &&
-            isRpcError(caught) &&
-            caught.code === VAULT_ROOT_ERROR_CODES.INCOMPLETE
-          ) {
-            setMode("custom_root");
-            setStep("repair");
+          if (isRpcError(caught) && caught.code === VAULT_ROOT_ERROR_CODES.INCOMPLETE) {
+            setInspectNonce((n) => n + 1);
             setError(null);
             return;
           }
@@ -227,72 +163,56 @@ export function VaultRootSetupModal({
           submitLock.current = false;
           setBusy(false);
         });
-    },
-    [finish, settings.ui.locale, t, vaultRoot],
-  );
-
-  const handleContinue = useCallback(() => {
-    if (mode === "default_root") {
-      handleCreateDefaultRoot();
       return;
     }
-    const path = pathInput.trim();
-    if (!path) {
+
+    const nextPath = path.trim();
+    if (!nextPath) {
+      setConfirmOpen(false);
       setError(t("modal.vault_root_setup.error_path_required"));
       return;
     }
-    runSetupAtPath(path);
-  }, [handleCreateDefaultRoot, mode, pathInput, runSetupAtPath, t]);
 
-  const applyRepair = useCallback(
-    (policy: IncompleteReplacePolicy) => {
-      const path = pathInput.trim();
-      if (!path) {
-        setError(t("modal.vault_root_setup.error_path_required"));
+    submitLock.current = true;
+    setBusy(true);
+    setError(null);
+    void (async () => {
+      const applied = diskApplied.current;
+      if (
+        applied?.mode === "custom_root" &&
+        current.replacePolicy == null &&
+        samePathKey(applied.rootPath, nextPath)
+      ) {
+        await finish(applied.rootPath, "custom_root");
         return;
       }
-      if (mode === "default_root") {
-        if (submitLock.current) return;
-        submitLock.current = true;
-        // Default-root incomplete edge: replace at anchor via setupDefaultRoot policy.
-        setBusy(true);
-        setError(null);
-        void (async () => {
-          if (diskApplied.current?.mode === "default_root") {
-            setStep("choose");
-            await finish(diskApplied.current.rootPath, "default_root");
-            return;
-          }
-          const { rootPath } = await vaultRoot.setupDefaultRoot({
-            replaceIncomplete: true,
-            replacePolicy: policy,
-            locale: settings.ui.locale,
-          });
-          setStep("choose");
-          await finish(rootPath, "default_root");
-        })()
-          .catch((caught) => {
-            setError(t(desktopErrorI18nKey(caught, "modal.vault_root_setup.error_init")));
-          })
-          .finally(() => {
-            submitLock.current = false;
-            setBusy(false);
-          });
-        return;
+      if (applied && !samePathKey(applied.rootPath, nextPath)) {
+        diskApplied.current = null;
       }
-      runSetupAtPath(path, { replaceIncomplete: true, replacePolicy: policy });
-    },
-    [finish, mode, pathInput, runSetupAtPath, settings.ui.locale, t, vaultRoot],
-  );
-
-  const handleRepairContinue = useCallback(() => {
-    if (repairPolicy === "delete") {
-      setError(null);
-      setStep("confirm_delete");
-      return;
-    }
-    applyRepair("rename");
-  }, [applyRepair, repairPolicy]);
+      const { rootPath } = await vaultRoot.setupAtPath(nextPath, {
+        replaceIncomplete: current.replacePolicy != null,
+        replacePolicy: current.replacePolicy,
+        bootstrap: { locale: settings.ui.locale },
+      });
+      await finish(rootPath, "custom_root");
+    })()
+      .catch((caught) => {
+        if (
+          current.replacePolicy == null &&
+          isRpcError(caught) &&
+          caught.code === VAULT_ROOT_ERROR_CODES.INCOMPLETE
+        ) {
+          setInspectNonce((n) => n + 1);
+          setError(null);
+          return;
+        }
+        setError(t(desktopErrorI18nKey(caught, "modal.vault_root_setup.error_init")));
+      })
+      .finally(() => {
+        submitLock.current = false;
+        setBusy(false);
+      });
+  }, [busy, finish, mode, path, settings.ui.locale, t, vaultRoot]);
 
   const setupBodyKey =
     distribution === "installed"
@@ -301,270 +221,84 @@ export function VaultRootSetupModal({
         ? "modal.vault_root_setup.body_dev"
         : "modal.vault_root_setup.body_portable";
 
-  const defaultRootTitleKey =
-    distribution === "installed"
-      ? "modal.app_settings.option.upriv_root.default_root_installed"
-      : "modal.app_settings.option.upriv_root.default_root";
-
-  const defaultRootDescKey =
-    distribution === "installed"
-      ? "modal.app_settings.option.upriv_root.default_root_desc_installed"
-      : "modal.app_settings.option.upriv_root.default_root_desc";
-
   if (!open) return null;
-
-  const continueDisabled =
-    busy || (mode === "custom_root" && !pathInput.trim() && step === "choose");
-
-  const footer =
-    step === "choose" ? (
-      <div className="flex justify-end">
-        <Button
-          variant="primary"
-          size="md"
-          disabled={continueDisabled}
-          className="w-full sm:w-auto"
-          onClick={handleContinue}
-        >
-          {t("action.continue")}
-        </Button>
-      </div>
-    ) : step === "repair" ? (
-      <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
-        <Button
-          variant="ghost"
-          size="md"
-          disabled={busy}
-          className="w-full sm:w-auto"
-          onClick={() => {
-            setStep("choose");
-            setError(null);
-          }}
-        >
-          {t("action.back")}
-        </Button>
-        <Button
-          variant="primary"
-          size="md"
-          disabled={busy}
-          className="w-full sm:w-auto"
-          onClick={handleRepairContinue}
-        >
-          {t("action.continue")}
-        </Button>
-      </div>
-    ) : (
-      <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
-        <Button
-          variant="ghost"
-          size="md"
-          disabled={busy}
-          className="w-full sm:w-auto"
-          onClick={() => {
-            setStep("repair");
-            setError(null);
-          }}
-        >
-          {t("action.back")}
-        </Button>
-        <Button
-          variant="danger"
-          size="md"
-          disabled={busy}
-          className="w-full sm:w-auto"
-          onClick={() => applyRepair("delete")}
-        >
-          {t("modal.vault_root_repair.confirm_delete_action")}
-        </Button>
-      </div>
-    );
-
-  const title =
-    step === "confirm_delete"
-      ? t("modal.vault_root_repair.confirm_delete_title")
-      : step === "repair"
-        ? t("modal.vault_root_repair.title")
-        : t("modal.vault_root_setup.title");
 
   return (
     <Modal
       open={open}
-      title={title}
+      title={t("modal.vault_root_setup.title")}
       onClose={() => undefined}
       dismissible={false}
       panelClassName="max-w-lg"
-      footer={footer}
+      footer={
+        <VaultRootConfirmFooter
+          busy={busy}
+          blocked={gate.blocksPrimary}
+          confirmOpen={confirmOpen}
+          noteKeys={gate.confirmNotes}
+          confirmDanger={gate.replacePolicy === "delete"}
+          onRequestPrimary={requestContinue}
+          onConfirmPrimary={commitContinue}
+          onCancelConfirm={() => setConfirmOpen(false)}
+        />
+      }
       rootClassName="z-[200]"
       headerActions={
-        step === "choose" || step === "repair" ? (
-          <label className="flex items-center gap-1.5">
-            <span className="sr-only">{t("modal.app_settings.field.locale")}</span>
-            <select
-              value={settings.ui.locale}
-              disabled={busy}
-              aria-label={t("modal.app_settings.field.locale")}
-              onChange={(event) => handleLocaleChange(event.target.value as LocaleId)}
-              className="h-9 max-w-[9.5rem] rounded-lg border border-transparent bg-surface-container-highest px-2 text-xs text-on-surface outline-none focus:border-[var(--accent)] disabled:opacity-60 sm:h-10 sm:max-w-[11rem] sm:text-sm"
-            >
-              {SUPPORTED_LOCALES.map((locale) => (
-                <option key={locale} value={locale}>
-                  {t(`modal.app_settings.option.locale.${locale}`)}
-                </option>
-              ))}
-            </select>
-          </label>
-        ) : null
+        <label className="flex items-center gap-1.5">
+          <span className="sr-only">{t("modal.app_settings.field.locale")}</span>
+          <select
+            value={settings.ui.locale}
+            disabled={busy}
+            aria-label={t("modal.app_settings.field.locale")}
+            onChange={(event) => handleLocaleChange(event.target.value as LocaleId)}
+            className="h-9 max-w-[9.5rem] rounded-lg border border-transparent bg-surface-container-highest px-2 text-xs text-on-surface outline-none focus:border-[var(--accent)] disabled:opacity-60 sm:h-10 sm:max-w-[11rem] sm:text-sm"
+          >
+            {SUPPORTED_LOCALES.map((locale) => (
+              <option key={locale} value={locale}>
+                {t(`modal.app_settings.option.locale.${locale}`)}
+              </option>
+            ))}
+          </select>
+        </label>
       }
     >
-      <div className="space-y-3 text-sm leading-relaxed text-on-surface-variant">
-        {step === "choose" ? (
-          <>
-            <p>{t(setupBodyKey)}</p>
-            <div
-              role="radiogroup"
-              aria-label={t("modal.app_settings.field.upriv_root_mode")}
-              className="grid gap-2"
-            >
-              <PolicyRadioOption
-                groupName={rootModeGroup}
-                value="default_root"
-                checked={mode === "default_root"}
-                title={t(defaultRootTitleKey)}
-                description={t(defaultRootDescKey)}
-                badge="default"
-                onSelect={() => {
-                  setMode("default_root");
-                  setError(null);
-                }}
-                footer={
-                  mode === "default_root" ? (
-                    <p className="break-all rounded-md bg-surface-container-highest px-3 py-2 font-mono text-xs text-on-surface">
-                      {defaultRootAnchor}
-                    </p>
-                  ) : null
-                }
-              />
-              <PolicyRadioOption
-                groupName={rootModeGroup}
-                value="custom_root"
-                checked={mode === "custom_root"}
-                title={t("modal.app_settings.option.upriv_root.custom_root")}
-                description={t("modal.app_settings.option.upriv_root.custom_root_desc", {
-                  file: VAULT_ROOT_ALIAS_FILE,
-                })}
-                onSelect={() => {
-                  setMode("custom_root");
-                  setError(null);
-                  setPathInput((current) => {
-                    const trimmed = current.trim();
-                    if (trimmed) return trimmed;
-                    return aliasRememberedPath.trim();
-                  });
-                }}
-                footer={
-                  mode === "custom_root" ? (
-                    <div className="space-y-2">
-                      <p className="text-xs leading-relaxed text-on-surface-variant">
-                        {t("modal.vault_root_setup.alias_notice", {
-                          file: VAULT_ROOT_ALIAS_FILE,
-                          aliasPath,
-                        })}
-                      </p>
-                      <div className="flex flex-col gap-2 sm:flex-row sm:items-stretch">
-                        <input
-                          type="text"
-                          readOnly
-                          value={pathInput}
-                          placeholder={t("modal.vault_root_setup.path_placeholder")}
-                          aria-invalid={error ? true : undefined}
-                          className={[
-                            settingsControlClass,
-                            "cursor-not-allowed opacity-90 font-mono text-xs sm:min-w-0 sm:flex-1",
-                          ].join(" ")}
-                        />
-                        <Button
-                          type="button"
-                          variant="secondary"
-                          size="md"
-                          className="w-full shrink-0 sm:w-auto"
-                          disabled={busy}
-                          onClick={handlePickFolder}
-                        >
-                          {t("modal.app_settings.action.choose_folder")}
-                        </Button>
-                      </div>
-                    </div>
-                  ) : null
-                }
-              />
-            </div>
-          </>
-        ) : step === "repair" ? (
-          <>
-            <p>
-              {t(
-                mode === "custom_root"
-                  ? "modal.vault_root_repair.body_custom"
-                  : "modal.vault_root_repair.body",
-              )}
-            </p>
-            <p className="break-all rounded-md bg-surface-container px-3 py-2 font-mono text-xs text-on-surface">
-              {pathInput.trim()}
-            </p>
-            <div
-              role="radiogroup"
-              aria-label={t("modal.vault_root_repair.title")}
-              className="grid gap-2"
-            >
-              <PolicyRadioOption
-                groupName={repairPolicyGroup}
-                value="rename"
-                checked={repairPolicy === "rename"}
-                title={t("modal.vault_root_repair.option_rename")}
-                description={t("modal.vault_root_repair.rename_hint")}
-                badge="default"
-                onSelect={() => {
-                  setRepairPolicy("rename");
-                  setError(null);
-                }}
-              />
-              <PolicyRadioOption
-                groupName={repairPolicyGroup}
-                value="delete"
-                checked={repairPolicy === "delete"}
-                title={t("modal.vault_root_repair.option_delete")}
-                description={t("modal.vault_root_repair.delete_hint")}
-                tone="less-secure"
-                onSelect={() => {
-                  setRepairPolicy("delete");
-                  setError(null);
-                }}
-              />
-            </div>
+      <div
+        className="space-y-3 text-sm leading-relaxed text-on-surface-variant"
+        onPointerDown={() => {
+          if (confirmOpen) setConfirmOpen(false);
+        }}
+      >
+        <p>{t(setupBodyKey)}</p>
+        <VaultRootLocationSection
+          config={{ vault_root_mode: mode, upriv_root_path: path }}
+          onChange={onDraftChange}
+          savedVaultRootMode="default_root"
+          savedRootPath=""
+          forceDirty
+          primaryAction="continue"
+          controlsDisabled={busy}
+          inspectNonce={inspectNonce}
+          onVaultRootGateChange={onVaultRootGateChange}
+          customRootNotice={
             <p className="text-xs leading-relaxed text-on-surface-variant">
-              {t("modal.vault_root_repair.inspect_hint")}
+              {t("modal.vault_root_setup.alias_notice", {
+                file: VAULT_ROOT_ALIAS_FILE,
+                aliasPath,
+              })}
             </p>
-          </>
-        ) : (
-          <p role="alert">
-            {t(
-              mode === "custom_root"
-                ? "modal.vault_root_repair.confirm_delete_body_custom"
-                : "modal.vault_root_repair.confirm_delete_body",
-            )}
-          </p>
-        )}
-        {busy ? (
-          <p className="sr-only" role="status" aria-live="polite">
-            {t("modal.vault_root_setup.busy")}
-          </p>
-        ) : null}
+          }
+        />
         {error ? (
           <p
             className="rounded-md bg-error-container/10 px-3 py-2 text-sm text-on-error-container"
             role="alert"
           >
             {error}
+          </p>
+        ) : null}
+        {busy ? (
+          <p className="sr-only" role="status" aria-live="polite">
+            {t("modal.vault_root_setup.busy")}
           </p>
         ) : null}
       </div>
