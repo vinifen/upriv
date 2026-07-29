@@ -42,7 +42,8 @@ const METHOD_TIMEOUT_MS: Partial<Record<string, number>> = {
   vault_root_inspect_path: 10_000,
 };
 
-function parseInvokeFailure(error: unknown): RpcError {
+/** Normalize Electron/preload invoke failures into `RpcError` (wire `code: message`). */
+export function parseInvokeFailure(error: unknown): RpcError {
   if (isRpcError(error)) return error;
 
   if (error instanceof Error) {

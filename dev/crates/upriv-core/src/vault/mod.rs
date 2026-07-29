@@ -120,6 +120,30 @@ mod tests {
         );
         assert!(entries.iter().any(|e| e.id == "my-encrypted-notes"));
         assert!(entries.iter().any(|e| e.id == "plain-folder-demo"));
+        assert!(entries.iter().any(|e| e.id == "store-only-demo"));
+        assert!(entries.iter().any(|e| e.id == "ram-only-demo"));
+        assert!(entries.iter().any(|e| e.id == "plain-only-demo"));
+        assert_eq!(
+            entries
+                .iter()
+                .find(|e| e.id == "store-only-demo")
+                .map(|e| e.storage_mode),
+            Some(VaultStorageMode::StoreOnly)
+        );
+        assert_eq!(
+            entries
+                .iter()
+                .find(|e| e.id == "ram-only-demo")
+                .map(|e| e.storage_mode),
+            Some(VaultStorageMode::RamOnly)
+        );
+        assert_eq!(
+            entries
+                .iter()
+                .find(|e| e.id == "plain-only-demo")
+                .map(|e| e.storage_mode),
+            Some(VaultStorageMode::PlainOnly)
+        );
         // Sorted by order
         for window in entries.windows(2) {
             assert!(

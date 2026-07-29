@@ -23,7 +23,7 @@ mode = "keep_last"
 keep_last = 1
 
 [security]
-# Session — password retention (PRD §4); v1 encrypted_dir → session_ram
+# Session — password retention (PRD §4); default session_ram (all storage modes)
 mode = "session_ram"
 secure_wipe_workspace = true
 wipe_passes = 1

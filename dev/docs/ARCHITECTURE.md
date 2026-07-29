@@ -213,6 +213,8 @@ Otherwise keep files at the module root.
 
 **Barrels (`index.ts`)** — one per domain or feature folder; export **only symbols used outside** that module. No nested barrels in subfolders — internal code imports concrete paths (e.g. `vault/errors/messages.ts`). Desktop feature boundaries: `dev/apps/desktop/README.md` § Module boundaries.
 
+**Domain test helpers — `*.shared.ts`:** name a file `*.shared.ts` under `<module>/tests/` when its exports are imported by **another** domain’s tests (and optionally also by this module). Example: `vault/tests/fixtures.shared.ts` → `vaultRowFixture` used by `vault-list`. Do **not** put same-module-only helpers in `*.shared.ts` (use `fixtures.ts`). Do **not** re-export test helpers from the domain production barrel (`vault/index.ts`). No `tests/index.ts`.
+
 ---
 
 ## 5. Code sharing (React web ↔ React Native)

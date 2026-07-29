@@ -1,6 +1,10 @@
 # Dependencies (never dev/node_modules at dev/ root — each app has its own .gitignore)
 node_modules/
 
+# Vite / Vitest local caches
+.vite-cache/
+.vitest-cache/
+
 # Rust workspace
 target/
 

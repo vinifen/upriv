@@ -24,9 +24,10 @@ import type {
   StorageMode,
 } from "@upriv/shared";
 import {
-  normalizeClosePolicyForStorage,
+  normalizeVaultSettingsConfig,
   patchCloseDefaultAction,
   patchStorageMode,
+  storageModeHasClosedCache,
   VAULT_SETTINGS_SECTIONS,
   vaultSettingsEqual,
 } from "@upriv/shared";
@@ -67,9 +68,11 @@ export function VaultSettingsModal({
 
   const canConfirmDelete = vault !== null && deleteConfirm.trim() === vault.id;
 
+  const baseline = useMemo(() => (config ? normalizeVaultSettingsConfig(config) : null), [config]);
+
   const isDirty = useMemo(
-    () => Boolean(draft && config && !vaultSettingsEqual(draft, config)),
-    [draft, config],
+    () => Boolean(draft && baseline && !vaultSettingsEqual(draft, baseline)),
+    [draft, baseline],
   );
 
   useEffect(() => {
@@ -80,9 +83,8 @@ export function VaultSettingsModal({
     if (!isNewSession) return;
 
     openedForVaultRef.current = vaultId;
-    const normalized = normalizeClosePolicyForStorage(config);
-    setDraft(normalized);
-    if (config.storage.mode === "encrypted_dir") {
+    setDraft(normalizeVaultSettingsConfig(config));
+    if (storageModeHasClosedCache(config.storage.mode)) {
       encryptedClosePreferenceRef.current = config.close.default_action;
     }
   }, [open, vaultId, config]);
@@ -110,7 +112,7 @@ export function VaultSettingsModal({
   const persistDraft = useCallback(
     async (next: VaultSettingsConfig) => {
       if (!vaultId) return;
-      const normalized = normalizeClosePolicyForStorage(next);
+      const normalized = normalizeVaultSettingsConfig(next);
       try {
         await vaultService.registerSettings(vaultId, normalized);
         replaceConfig(normalized);
@@ -139,6 +141,7 @@ export function VaultSettingsModal({
         if (!current) return current;
 
         if (section === "storage" && "mode" in patch && typeof patch.mode === "string") {
+          if (vault?.session === "open") return current;
           const { config: next, encryptedClosePreference } = patchStorageMode(
             current,
             patch.mode as StorageMode,
@@ -168,7 +171,7 @@ export function VaultSettingsModal({
         };
       });
     },
-    [],
+    [vault?.session],
   );
 
   const handleClose = () => {
@@ -192,7 +195,7 @@ export function VaultSettingsModal({
   };
 
   const handleDiscardAndClose = () => {
-    if (config) setDraft(config);
+    if (baseline) setDraft(baseline);
     handleClose();
   };
 
@@ -278,7 +281,7 @@ export function VaultSettingsModal({
             title={t(`modal.settings.section.${sectionId}`)}
             defaultOpen={sectionId === "vault"}
           >
-            {renderSettingsSection(sectionId, formConfig, patchDraft)}
+            {renderSettingsSection(sectionId, formConfig, patchDraft, vault.session === "open")}
           </VaultSettingsSection>
         ))}
 
@@ -318,6 +321,7 @@ function renderSettingsSection(
     section: S,
     patch: Partial<VaultSettingsConfig[S]>,
   ) => void,
+  storageModeLocked: boolean,
 ) {
   switch (sectionId) {
     case "vault":
@@ -331,6 +335,7 @@ function renderSettingsSection(
       return (
         <VaultSettingsStorageSection
           config={draft.storage}
+          storageModeLocked={storageModeLocked}
           onChange={(patch) => patchDraft("storage", patch)}
         />
       );

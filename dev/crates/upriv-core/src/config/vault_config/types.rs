@@ -3,12 +3,21 @@
 use serde::{Deserialize, Serialize};
 
 /// Storage mode from `[storage] mode` (TS `StorageMode`).
+///
+/// - `encrypted_dir` — encrypted store + virtual mount (default; optional `closed` cache)
+/// - `store_only` — encrypted store primary; `.7z` on seal/export
+/// - `ram_only` — `.7z` + RAM only; lock always seals
+/// - `plain` — plaintext workspace + `.7z` while open; lock always seals
+/// - `plain_only` — plaintext workspace only while open; lock always seals
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum VaultStorageMode {
     #[default]
     EncryptedDir,
     Plain,
+    PlainOnly,
+    RamOnly,
+    StoreOnly,
 }
 
 /// `[vault]` identity section (required for a listable vault).

@@ -1,20 +1,22 @@
 import { useId, type ReactNode } from "react";
 import { Button } from "@/components/ui";
 import {
+  COMPRESSION_PRESETS,
   VAULT_DISPLAY_NAME_MAX_LENGTH,
   VAULT_NOTE_MAX_LENGTH,
+  compressionPresetFromSevenZip,
+  securityUiModesForStorage,
+  sevenZipPatchFromCompressionPreset,
+  storageModeIsPlaintext,
+  storageModeSealOnly,
+  type CompressionPreset,
   type SecurityMode,
   type StorageMode,
   type VaultSettingsConfig,
 } from "@upriv/shared";
 import { useTranslation } from "@/i18n";
 import { VaultChangePasswordPanel } from "./VaultChangePasswordPanel";
-import {
-  SECURITY_UI_MODES,
-  securityModeToUi,
-  type SecurityUiMode,
-  uiToSecurityMode,
-} from "@upriv/shared";
+import { securityModeToUi, type SecurityUiMode, uiToSecurityMode } from "@upriv/shared";
 
 export const settingsControlClass =
   "w-full rounded-lg border-0 bg-surface-container-highest px-2.5 py-2 text-sm text-on-surface outline-none ring-0 focus:ring-2 focus:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-60 sm:px-3 sm:py-2.5";
@@ -125,7 +127,15 @@ interface SectionPatchProps<S extends keyof VaultSettingsConfig> {
   onChange: (patch: Partial<VaultSettingsConfig[S]>) => void;
 }
 
-export function VaultSettingsStorageSection({ config, onChange }: SectionPatchProps<"storage">) {
+interface VaultSettingsStorageSectionProps extends SectionPatchProps<"storage"> {
+  storageModeLocked?: boolean;
+}
+
+export function VaultSettingsStorageSection({
+  config,
+  onChange,
+  storageModeLocked = false,
+}: VaultSettingsStorageSectionProps) {
   const { t } = useTranslation();
   const storageModeGroup = useId();
 
@@ -139,6 +149,11 @@ export function VaultSettingsStorageSection({ config, onChange }: SectionPatchPr
         label={t("modal.settings.field.storage.mode")}
         hint={t("modal.settings.field.storage.mode_help")}
       >
+        {storageModeLocked ? (
+          <p className="text-xs leading-relaxed text-on-surface-variant">
+            {t("modal.settings.field.storage.mode_locked")}
+          </p>
+        ) : null}
         <div
           role="radiogroup"
           aria-label={t("modal.settings.field.storage.mode")}
@@ -148,6 +163,7 @@ export function VaultSettingsStorageSection({ config, onChange }: SectionPatchPr
             groupName={storageModeGroup}
             value="encrypted_dir"
             checked={config.mode === "encrypted_dir"}
+            disabled={storageModeLocked}
             title={t("modal.settings.option.storage.encrypted_dir")}
             description={t("modal.settings.option.storage.encrypted_dir_desc")}
             badge="recommended"
@@ -155,13 +171,45 @@ export function VaultSettingsStorageSection({ config, onChange }: SectionPatchPr
           />
           <PolicyRadioOption
             groupName={storageModeGroup}
+            value="store_only"
+            checked={config.mode === "store_only"}
+            disabled={storageModeLocked}
+            title={t("modal.settings.option.storage.store_only")}
+            description={t("modal.settings.option.storage.store_only_desc")}
+            onSelect={() => onChange({ mode: "store_only" })}
+          />
+          <PolicyRadioOption
+            groupName={storageModeGroup}
+            value="ram_only"
+            checked={config.mode === "ram_only"}
+            disabled={storageModeLocked}
+            title={t("modal.settings.option.storage.ram_only")}
+            description={t("modal.settings.option.storage.ram_only_desc")}
+            badge="less-secure"
+            tone="less-secure"
+            onSelect={() => onChange({ mode: "ram_only" })}
+          />
+          <PolicyRadioOption
+            groupName={storageModeGroup}
             value="plain"
             checked={config.mode === "plain"}
+            disabled={storageModeLocked}
             title={t("modal.settings.option.storage.plain")}
             description={t("modal.settings.option.storage.plain_desc")}
             badge="insecure"
             tone="insecure"
             onSelect={() => onChange({ mode: "plain" })}
+          />
+          <PolicyRadioOption
+            groupName={storageModeGroup}
+            value="plain_only"
+            checked={config.mode === "plain_only"}
+            disabled={storageModeLocked}
+            title={t("modal.settings.option.storage.plain_only")}
+            description={t("modal.settings.option.storage.plain_only_desc")}
+            badge="insecure"
+            tone="insecure"
+            onSelect={() => onChange({ mode: "plain_only" })}
           />
         </div>
       </SettingsField>
@@ -169,6 +217,22 @@ export function VaultSettingsStorageSection({ config, onChange }: SectionPatchPr
         <p className="text-xs leading-relaxed text-on-error-container/90">
           {t("warning.encrypted_dir_ram")}
         </p>
+      ) : null}
+      {config.mode === "ram_only" ? (
+        <p className="text-xs leading-relaxed text-on-error-container/90">
+          {t("warning.ram_only")}
+        </p>
+      ) : null}
+      {config.mode === "store_only" ? (
+        <p className="text-xs leading-relaxed text-on-error-container/90">
+          {t("warning.store_only")}
+        </p>
+      ) : null}
+      {config.mode === "plain" ? (
+        <p className="text-xs font-medium text-on-error-container">{t("warning.plain_mode")}</p>
+      ) : null}
+      {config.mode === "plain_only" ? (
+        <p className="text-xs font-medium text-on-error-container">{t("warning.plain_only")}</p>
       ) : null}
     </SettingsFormGrid>
   );
@@ -207,14 +271,24 @@ export function VaultSettingsCloseSection({
 
   return (
     <SettingsFormGrid>
-      {storageMode === "plain" ? (
+      {storageModeSealOnly(storageMode) ? (
         <p className="text-xs leading-relaxed text-on-surface-variant">
-          {t("modal.settings.field.close.plain_seal_only")}
+          {t(
+            storageMode === "ram_only"
+              ? "modal.settings.field.close.ram_seal_only"
+              : storageMode === "plain_only"
+                ? "modal.settings.field.close.plain_only_seal_only"
+                : "modal.settings.field.close.plain_seal_only",
+          )}
         </p>
       ) : (
         <SettingsField
           label={t("modal.settings.field.close.default_action")}
-          hint={t("modal.settings.field.close.default_action_help")}
+          hint={t(
+            storageMode === "store_only"
+              ? "modal.settings.field.close.default_action_help_store_only"
+              : "modal.settings.field.close.default_action_help",
+          )}
         >
           <div
             role="radiogroup"
@@ -225,8 +299,16 @@ export function VaultSettingsCloseSection({
               groupName={lockActionGroup}
               value="close"
               checked={close.default_action === "close"}
-              title={t("modal.settings.option.close.close")}
-              description={t("modal.settings.option.close.close_desc")}
+              title={t(
+                storageMode === "store_only"
+                  ? "modal.settings.option.close.close_store_only"
+                  : "modal.settings.option.close.close",
+              )}
+              description={t(
+                storageMode === "store_only"
+                  ? "modal.settings.option.close.close_store_only_desc"
+                  : "modal.settings.option.close.close_desc",
+              )}
               badge="recommended"
               onSelect={() => onCloseChange({ default_action: "close" })}
             />
@@ -235,7 +317,11 @@ export function VaultSettingsCloseSection({
               value="seal"
               checked={close.default_action === "seal"}
               title={t("modal.settings.option.close.seal")}
-              description={t("modal.settings.option.close.seal_desc")}
+              description={t(
+                storageMode === "store_only"
+                  ? "modal.settings.option.close.seal_store_only_desc"
+                  : "modal.settings.option.close.seal_desc",
+              )}
               onSelect={() => onCloseChange({ default_action: "seal" })}
             />
           </div>
@@ -272,7 +358,7 @@ export function VaultSettingsCloseSection({
           {t("modal.settings.field.auto_close.enabled")}
         </span>
       </label>
-      {storageMode === "plain" && autoClose.enabled ? (
+      {storageModeSealOnly(storageMode) && autoClose.enabled ? (
         <p className="text-xs leading-relaxed text-on-surface-variant">
           {t("modal.settings.field.auto_close.plain_seals")}
         </p>
@@ -431,16 +517,18 @@ export interface SecurityModeRadioGroupProps {
 }
 
 export function SecurityModeRadioGroup({
+  storageMode,
   securityMode,
   groupName,
   onSelectMode,
 }: SecurityModeRadioGroupProps) {
   const { t } = useTranslation();
   const selectedUi = securityModeToUi(securityMode);
+  const modes = securityUiModesForStorage(storageMode);
 
   return (
     <>
-      {SECURITY_UI_MODES.map((uiMode) => {
+      {modes.map((uiMode) => {
         const meta = securityOptionMeta(uiMode);
         return (
           <PolicyRadioOption
@@ -475,7 +563,7 @@ export function VaultSettingsSecuritySection({
       <SettingsField
         label={t("modal.settings.field.security.mode")}
         hint={
-          storageMode === "plain"
+          storageModeIsPlaintext(storageMode)
             ? t("modal.settings.field.security.mode_help_plain")
             : t("modal.settings.field.security.mode_help")
         }
@@ -503,8 +591,13 @@ export function VaultSettingsSecuritySection({
 
 export function VaultSettingsSevenZipSection({ config, onChange }: SectionPatchProps<"seven_zip">) {
   const { t } = useTranslation();
-  const archiveModeGroup = useId();
+  const compressionGroup = useId();
   const encryptId = useId();
+  const preset = compressionPresetFromSevenZip(config);
+
+  const setPreset = (next: CompressionPreset) => {
+    onChange(sevenZipPatchFromCompressionPreset(next));
+  };
 
   return (
     <SettingsFormGrid>
@@ -513,31 +606,26 @@ export function VaultSettingsSevenZipSection({ config, onChange }: SectionPatchP
       </p>
 
       <SettingsField
-        label={t("modal.settings.field.seven_zip.archive_mode")}
-        hint={t("modal.settings.field.seven_zip.archive_mode_help")}
+        label={t("modal.settings.field.seven_zip.compression")}
+        hint={t("modal.settings.field.seven_zip.compression_help")}
       >
         <div
           role="radiogroup"
-          aria-label={t("modal.settings.field.seven_zip.archive_mode")}
+          aria-label={t("modal.settings.field.seven_zip.compression")}
           className="grid gap-2"
         >
-          <PolicyRadioOption
-            groupName={archiveModeGroup}
-            value="encrypt_only"
-            checked={config.archive_mode === "encrypt_only"}
-            title={t("modal.settings.option.seven_zip.encrypt_only")}
-            description={t("modal.settings.option.seven_zip.encrypt_only_desc")}
-            badge="recommended"
-            onSelect={() => onChange({ archive_mode: "encrypt_only" })}
-          />
-          <PolicyRadioOption
-            groupName={archiveModeGroup}
-            value="compress_encrypt"
-            checked={config.archive_mode === "compress_encrypt"}
-            title={t("modal.settings.option.seven_zip.compress_encrypt")}
-            description={t("modal.settings.option.seven_zip.compress_encrypt_desc")}
-            onSelect={() => onChange({ archive_mode: "compress_encrypt" })}
-          />
+          {COMPRESSION_PRESETS.map((value) => (
+            <PolicyRadioOption
+              key={value}
+              groupName={compressionGroup}
+              value={value}
+              checked={preset === value}
+              title={t(`modal.settings.option.seven_zip.compression.${value}`)}
+              description={t(`modal.settings.option.seven_zip.compression.${value}_desc`)}
+              badge={value === "none" ? "recommended" : undefined}
+              onSelect={() => setPreset(value)}
+            />
+          ))}
         </div>
       </SettingsField>
 
@@ -658,6 +746,7 @@ interface PolicyRadioOptionProps {
   checked: boolean;
   title: string;
   description: string;
+  disabled?: boolean;
   badge?: "recommended" | "less-secure" | "insecure" | "default";
   tone?: "default" | "less-secure" | "insecure";
   /**
@@ -676,6 +765,7 @@ export function PolicyRadioOption({
   checked,
   title,
   description,
+  disabled = false,
   badge,
   tone = "default",
   attention = false,
@@ -713,10 +803,11 @@ export function PolicyRadioOption({
     <label
       htmlFor={inputId}
       className={[
-        "block cursor-pointer select-none rounded-lg p-2.5 transition-colors sm:p-3",
+        "block select-none rounded-lg p-2.5 transition-colors sm:p-3",
+        disabled ? "cursor-not-allowed opacity-60" : "cursor-pointer",
         cardBgClass,
         borderClass,
-        !checked ? cardHoverClass : "",
+        !checked && !disabled ? cardHoverClass : "",
       ]
         .filter(Boolean)
         .join(" ")}
@@ -728,7 +819,10 @@ export function PolicyRadioOption({
           name={groupName}
           value={value}
           checked={checked}
-          onChange={onSelect}
+          disabled={disabled}
+          onChange={() => {
+            if (!disabled) onSelect();
+          }}
           className={radioClass}
         />
         <span className="min-w-0 flex-1">

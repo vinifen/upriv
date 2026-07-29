@@ -22,8 +22,18 @@ import type {
   CreateVaultDraft,
   CreateVaultStepId,
   CreateVaultValidationCode,
+  CompressionPreset,
 } from "@upriv/shared";
-import { transitionStorageModeClose } from "@upriv/shared";
+import {
+  COMPRESSION_PRESETS,
+  compressionPresetFromSevenZip,
+  normalizeSecurityModeForStorage,
+  sevenZipPatchFromCompressionPreset,
+  storageModeHasClosedCache,
+  storageModeIsPlaintext,
+  storageModeSealOnly,
+  transitionStorageModeClose,
+} from "@upriv/shared";
 import { createVaultErrorI18nKey } from "@/lib/errorMessages";
 
 interface StepProps {
@@ -296,7 +306,7 @@ function CreateVaultGeneralStep({ draft, onChange }: StepProps) {
           {t("modal.settings.field.auto_close.enabled")}
         </span>
       </label>
-      {draft.storage.mode === "plain" && draft.auto_close.enabled ? (
+      {storageModeSealOnly(draft.storage.mode) && draft.auto_close.enabled ? (
         <p className="text-xs leading-relaxed text-on-surface-variant">
           {t("modal.settings.field.auto_close.plain_seals")}
         </p>
@@ -357,31 +367,28 @@ function CreateVaultGeneralStep({ draft, onChange }: StepProps) {
       />
 
       <SettingsField
-        label={t("modal.settings.field.seven_zip.archive_mode")}
-        hint={t("modal.settings.field.seven_zip.archive_mode_help")}
+        label={t("modal.settings.field.seven_zip.compression")}
+        hint={t("modal.settings.field.seven_zip.compression_help")}
       >
         <div role="radiogroup" className="grid gap-2">
-          <PolicyRadioOption
-            groupName={archiveGroup}
-            value="encrypt_only"
-            checked={draft.seven_zip.archive_mode === "encrypt_only"}
-            title={t("modal.settings.option.seven_zip.encrypt_only")}
-            description={t("modal.settings.option.seven_zip.encrypt_only_desc")}
-            badge="default"
-            onSelect={() =>
-              onChange({ seven_zip: { ...draft.seven_zip, archive_mode: "encrypt_only" } })
-            }
-          />
-          <PolicyRadioOption
-            groupName={archiveGroup}
-            value="compress_encrypt"
-            checked={draft.seven_zip.archive_mode === "compress_encrypt"}
-            title={t("modal.settings.option.seven_zip.compress_encrypt")}
-            description={t("modal.settings.option.seven_zip.compress_encrypt_desc")}
-            onSelect={() =>
-              onChange({ seven_zip: { ...draft.seven_zip, archive_mode: "compress_encrypt" } })
-            }
-          />
+          {COMPRESSION_PRESETS.map((value) => {
+            const preset = compressionPresetFromSevenZip(draft.seven_zip);
+            return (
+              <PolicyRadioOption
+                key={value}
+                groupName={archiveGroup}
+                value={value}
+                checked={preset === value}
+                title={t(`modal.settings.option.seven_zip.compression.${value}`)}
+                description={t(`modal.settings.option.seven_zip.compression.${value}_desc`)}
+                badge={value === "none" ? "default" : undefined}
+                onSelect={() => {
+                  const patch = sevenZipPatchFromCompressionPreset(value as CompressionPreset);
+                  onChange({ seven_zip: { ...draft.seven_zip, ...patch } });
+                }}
+              />
+            );
+          })}
         </div>
       </SettingsField>
     </SettingsFormGrid>
@@ -410,11 +417,18 @@ function CreateVaultAdvancedStep({ draft, onChange }: StepProps) {
       encryptedCloseRef.current,
     );
     encryptedCloseRef.current = encryptedClosePreference;
-    onChange({ storage: { mode }, close: { default_action: close } });
+    onChange({
+      storage: { mode },
+      close: { default_action: close },
+      security: {
+        ...draft.security,
+        mode: normalizeSecurityModeForStorage(mode, draft.security.mode),
+      },
+    });
   };
 
   const setCloseDefault = (defaultAction: CloseDefaultAction) => {
-    if (draft.storage.mode === "encrypted_dir") {
+    if (storageModeHasClosedCache(draft.storage.mode)) {
       encryptedCloseRef.current = defaultAction;
     }
     onChange({ close: { default_action: defaultAction } });
@@ -480,6 +494,24 @@ function CreateVaultAdvancedStep({ draft, onChange }: StepProps) {
               />
               <PolicyRadioOption
                 groupName={storageGroup}
+                value="store_only"
+                checked={draft.storage.mode === "store_only"}
+                title={t("modal.settings.option.storage.store_only")}
+                description={t("modal.settings.option.storage.store_only_desc")}
+                onSelect={() => setStorageMode("store_only")}
+              />
+              <PolicyRadioOption
+                groupName={storageGroup}
+                value="ram_only"
+                checked={draft.storage.mode === "ram_only"}
+                title={t("modal.settings.option.storage.ram_only")}
+                description={t("modal.settings.option.storage.ram_only_desc")}
+                badge="less-secure"
+                tone="less-secure"
+                onSelect={() => setStorageMode("ram_only")}
+              />
+              <PolicyRadioOption
+                groupName={storageGroup}
                 value="plain"
                 checked={draft.storage.mode === "plain"}
                 title={t("modal.settings.option.storage.plain")}
@@ -488,6 +520,16 @@ function CreateVaultAdvancedStep({ draft, onChange }: StepProps) {
                 tone="insecure"
                 onSelect={() => setStorageMode("plain")}
               />
+              <PolicyRadioOption
+                groupName={storageGroup}
+                value="plain_only"
+                checked={draft.storage.mode === "plain_only"}
+                title={t("modal.settings.option.storage.plain_only")}
+                description={t("modal.settings.option.storage.plain_only_desc")}
+                badge="insecure"
+                tone="insecure"
+                onSelect={() => setStorageMode("plain_only")}
+              />
             </div>
           </SettingsField>
           {draft.storage.mode === "encrypted_dir" ? (
@@ -495,27 +537,64 @@ function CreateVaultAdvancedStep({ draft, onChange }: StepProps) {
               {t("warning.encrypted_dir_ram")}
             </p>
           ) : null}
+          {draft.storage.mode === "ram_only" ? (
+            <p className="text-xs leading-relaxed text-on-error-container/90">
+              {t("warning.ram_only")}
+            </p>
+          ) : null}
+          {draft.storage.mode === "store_only" ? (
+            <p className="text-xs leading-relaxed text-on-error-container/90">
+              {t("warning.store_only")}
+            </p>
+          ) : null}
           {draft.storage.mode === "plain" ? (
             <p className="text-xs font-medium text-on-error-container">{t("warning.plain_mode")}</p>
           ) : null}
+          {draft.storage.mode === "plain_only" ? (
+            <p className="text-xs font-medium text-on-error-container">{t("warning.plain_only")}</p>
+          ) : null}
 
-          {draft.storage.mode === "plain" ? (
+          {storageModeSealOnly(draft.storage.mode) && draft.auto_close.enabled ? (
             <p className="text-xs leading-relaxed text-on-surface-variant">
-              {t("modal.settings.field.close.plain_seal_only")}
+              {t("modal.settings.field.auto_close.plain_seals")}
+            </p>
+          ) : null}
+
+          {storageModeSealOnly(draft.storage.mode) ? (
+            <p className="text-xs leading-relaxed text-on-surface-variant">
+              {t(
+                draft.storage.mode === "ram_only"
+                  ? "modal.settings.field.close.ram_seal_only"
+                  : draft.storage.mode === "plain_only"
+                    ? "modal.settings.field.close.plain_only_seal_only"
+                    : "modal.settings.field.close.plain_seal_only",
+              )}
             </p>
           ) : (
             <SettingsField
               label={t("modal.settings.field.close.default_action")}
-              hint={t("modal.settings.field.close.default_action_help")}
+              hint={t(
+                draft.storage.mode === "store_only"
+                  ? "modal.settings.field.close.default_action_help_store_only"
+                  : "modal.settings.field.close.default_action_help",
+              )}
             >
               <div role="radiogroup" className="grid gap-2">
                 <PolicyRadioOption
                   groupName={closeGroup}
                   value="close"
                   checked={draft.close.default_action === "close"}
-                  title={t("modal.settings.option.close.close")}
-                  description={t("modal.settings.option.close.close_desc")}
-                  badge="default"
+                  title={t(
+                    draft.storage.mode === "store_only"
+                      ? "modal.settings.option.close.close_store_only"
+                      : "modal.settings.option.close.close",
+                  )}
+                  description={t(
+                    draft.storage.mode === "store_only"
+                      ? "modal.settings.option.close.close_store_only_desc"
+                      : "modal.settings.option.close.close_desc",
+                  )}
+                  badge="recommended"
                   onSelect={() => setCloseDefault("close")}
                 />
                 <PolicyRadioOption
@@ -523,7 +602,11 @@ function CreateVaultAdvancedStep({ draft, onChange }: StepProps) {
                   value="seal"
                   checked={draft.close.default_action === "seal"}
                   title={t("modal.settings.option.close.seal")}
-                  description={t("modal.settings.option.close.seal_desc")}
+                  description={t(
+                    draft.storage.mode === "store_only"
+                      ? "modal.settings.option.close.seal_store_only_desc"
+                      : "modal.settings.option.close.seal_desc",
+                  )}
                   onSelect={() => setCloseDefault("seal")}
                 />
               </div>
@@ -550,7 +633,7 @@ function CreateVaultAdvancedStep({ draft, onChange }: StepProps) {
           <SettingsField
             label={t("modal.settings.field.security.mode")}
             hint={
-              draft.storage.mode === "plain"
+              storageModeIsPlaintext(draft.storage.mode)
                 ? t("modal.settings.field.security.mode_help_plain")
                 : t("modal.settings.field.security.mode_help")
             }

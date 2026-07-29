@@ -2,4 +2,5 @@ node_modules/
 dist/
 renderer-out/
 .vite-cache/
+.vitest-cache/
 *.tsbuildinfo

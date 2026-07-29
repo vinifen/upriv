@@ -94,7 +94,7 @@ When temp and canonical docs conflict, **`dev/docs/` wins**. When porting an ide
 
 | Topic | PRD | SDD |
 |-------|-----|-----|
-| Vision, modes (`encrypted_dir` / `plain`), states | §1, §1.6–1.7 | §1, §2 |
+| Vision, modes (`encrypted_dir` / `store_only` / `ram_only` / `plain` / `plain_only`), states | §1, §1.6–1.7 | §1, §2 |
 | v1 Linux + Windows scope | §1.1, §3.5 | §1.1 principle 0, §14 |
 | Functional requirements (RF-*) | §3 | §2–§7, §8–§9 |
 | Desktop UX (vault list, modals) | §3.7 | §8.2 |
@@ -115,10 +115,11 @@ When temp and canonical docs conflict, **`dev/docs/` wins**. When porting an ide
 
 - **Container:** AES-256 `.7z` per vault; **Plan B** = open archive in any 7-Zip-compatible tool.
 - **Default mode (v1):** `encrypted_dir` — encrypted `store/` on disk; user edits via virtual `workspace/{display_name}/` (FUSE on Linux, WinFsp on Windows); **no durable plaintext** on HD in production.
-- **Exception mode (v1):** `plain` — plaintext `workspace/` on HD between open/close; UI warnings + `secure_wipe_workspace` on close.
-- **States:** `open` (runtime), `closed` (`encrypted_dir` cache), `sealed` (only `.7z` + config/backups). Misaligned store → **`recovery`**, not silent `closed`.
+- **Also in UI (v1):** `store_only`, `ram_only`, `plain` (open: workspace + `.7z`; seal-only), `plain_only` (open: workspace only; seal-only).
+- **States:** `open` (runtime), `closed` (closed-cache modes), `sealed` (only `.7z` + config/backups). Misaligned store → **`recovery`**, not silent `closed`.
+- **Compression UI:** presets none/low/medium/high → `[seven_zip] archive_mode` + `compression_level`.
 - **Close pipeline:** `7z t` on existing archive → stream new `.7z` from logical session content → test → atomic rename; never pack raw `.enc` blobs into the archive.
-- **Passwords:** RAM only in v1; never in `localStorage`, UI config, or logs.
+- **Passwords:** RAM only in v1 default; never in `localStorage`, UI config, or logs.
 
 ---
 

@@ -7,6 +7,7 @@ import {
   type VaultSession,
   resolveVaultDisplayStatus,
   resolveVaultListStatus,
+  storageModeSealOnly,
   touchVaultLastAccessed,
   type VaultListItem,
   type VaultSettingsConfig,
@@ -92,7 +93,7 @@ export function useVaultLifecycleActions({
       if (wasOpen) {
         setVaultRuntimeState(vaultId, {
           session: "open",
-          persistence: vault.storageMode === "plain" ? "sealed" : "closed",
+          persistence: storageModeSealOnly(vault.storageMode) ? "sealed" : "closed",
         });
         return;
       }
@@ -125,7 +126,7 @@ export function useVaultLifecycleActions({
       const vault = vaults.find((item) => item.id === vaultId);
       setVaultRuntimeState(vaultId, {
         session: "open",
-        persistence: vault?.storageMode === "plain" ? "sealed" : "closed",
+        persistence: vault && storageModeSealOnly(vault.storageMode) ? "sealed" : "closed",
         ...touchVaultLastAccessed(t("vault.last_accessed.just_now")),
       });
     },
@@ -259,7 +260,7 @@ export function useVaultLifecycleActions({
   const handleLockVault = useCallback(
     (vault: VaultListItem) => {
       if (pipeline.isVaultPipelineBusy(vault.id)) return;
-      const intent = vault.storageMode === "plain" ? "seal" : "close";
+      const intent = storageModeSealOnly(vault.storageMode) ? "seal" : "close";
       setLifecycleRequest({ vaultId: vault.id, intent });
     },
     [pipeline, setLifecycleRequest],

@@ -35,6 +35,7 @@ export function createEmptyCreateVaultDraft(existingOrders: readonly number[]): 
     seven_zip: {
       archive_mode: "encrypt_only",
       encrypt_file_names: true,
+      compression_level: 0,
     },
     storage: { mode: "encrypted_dir" },
     close: { default_action: "close" },

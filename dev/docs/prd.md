@@ -53,38 +53,45 @@ Differentiators vs. manual 7-Zip use:
 - Monolithic vaults of tens of GB (supported with limitations, not recommended).
 - Replace full-disk encryption at OS/firmware level.
 
-### 1.6 Two storage modes (full product)
+### 1.6 Storage modes (full product)
 
-| Mode | ID | When to use | v1 |
-|------|-----|-------------|-----|
-| **Secure (default)** | `encrypted_dir` | Normal use; minimize plaintext traces on HD/SSD | **Yes** |
-| **Exception** | `plain` | Insufficient RAM, weak hardware, huge vault, or explicit user fallback | **Yes** (UI warning required) |
+| Mode | ID | When to use | Close behavior | v1 UI |
+|------|-----|-------------|----------------|-------|
+| **Secure (default)** | `encrypted_dir` | Normal use; encrypted store + virtual mount; optional `closed` cache | Close → `closed` or Seal → `sealed` | **Yes** |
+| **Store primary** | `store_only` | Prefer encrypted store as source of truth; `.7z` mainly on seal/export (less Plan B while open) | Close → `closed` or Seal → `sealed` | **Yes** (UI + docs; core wiring iteratively) |
+| **RAM session** | `ram_only` | No encrypted store on disk; only `.7z` between sessions; needs full vault in RAM | Always seal (volatile edits) | **Yes** (UI + docs; core wiring iteratively) |
+| **Exception (seal on lock)** | `plain` | Large vaults/files; while open: plaintext **+** `.7z`; lock always seals | Always seal → only `.7z` | **Yes** (UI warning required) |
+| **Exception (no archive while open)** | `plain_only` | Very large vaults; while open: **plaintext only** (no `.7z`); lock always seals | Always seal → only `.7z` | **Yes** (UI + docs; core wiring iteratively) |
 
-`plain` flow: `.7z` → extract to `workspace/<id>/` **in plaintext** on the HD → edit → close → new `.7z` + `secure_wipe_workspace`. Less secure (SSD wipe limitations); simpler and more predictable in memory.
+`plain` flow: open keeps plaintext `workspace/<id>/` **and** the existing `.7z` → edit → seal → new `.7z` + `secure_wipe_workspace`. `plain_only` is the same seal path but **removes / does not keep** `.7z` while open (no Plan B until seal). Less secure (SSD wipe limitations); simpler and more predictable in memory than encrypted modes for large content.
 
-**`encrypted_dir` RAM requirement:** while a vault is **open**, decrypted content is served through the virtual mount and session buffers in **RAM** (encrypted store remains on disk). **Available memory must fit the entire unlocked vault working set** — open, edit, or close may **fail** if RAM is insufficient. The UI must warn when `encrypted_dir` is selected (i18n `warning.encrypted_dir_ram`; Help → Security). Prefer **`plain`**, smaller vaults, or more RAM when hardware cannot meet this limit.
+**`encrypted_dir` / `ram_only` RAM requirement:** while a vault is **open**, decrypted content is served through the virtual mount and/or session buffers in **RAM**. **Available memory must fit the entire unlocked vault working set** — open, edit, or close may **fail** if RAM is insufficient. UI warns via `warning.encrypted_dir_ram` / `warning.ram_only`. Prefer **`store_only`**, **`plain`**, **`plain_only`**, smaller vaults, or more RAM when hardware cannot meet this limit.
 
-The user chooses the mode in `config/<id>.toml` (`storage.mode`); the UI must warn when selecting the exception mode (`warning.plain_mode`) and when selecting the default secure mode about RAM (`warning.encrypted_dir_ram`).
+The user chooses the mode in `config/<id>.toml` (`storage.mode`); UI warnings: `warning.encrypted_dir_ram`, `warning.store_only`, `warning.ram_only`, `warning.plain_mode`, `warning.plain_only`. **Plain-on-disk modes (`plain`, `plain_only`) are the recommended fallback for large vaults or big files** when `encrypted_dir` / `ram_only` need too much RAM or when avoiding `.7z` duplication while open matters (`plain_only`).
+
+**Helpers (shared domain):** `storageModeHasClosedCache` = `encrypted_dir` \| `store_only`; `storageModeSealOnly` = `plain` \| `plain_only` \| `ram_only`; `storageModeIsPlaintext` = `plain` \| `plain_only`.
 
 ### 1.7 Vault states (unified across modes)
 
-**Rule:** **persisted state** depends on what exists on disk, not on `storage.mode`. When **only `.7z` exists**, both modes have the **same** state.
+**Rule:** **persisted state** depends on what exists on disk, not on `storage.mode`. When **only `.7z` exists**, all modes share the **same** state: **`sealed`**.
 
-| State (ID) | UI (i18n) | What exists on HD | `encrypted_dir` | `plain` |
-|-------------|---------|-------------------|-----------------|------------------|
-| **`open`** | `vault.status.open` | `.7z` + active working data | encrypted store + virtual mount | `workspace/` in plaintext |
-| **`closed`** | `vault.status.closed` | `.7z` + **encrypted local cache** | `stores/<id>/` kept | *not applicable* |
-| **`sealed`** | `vault.status.sealed` | **Only** `.7z` (+ backups, config) | after sealed close (wipe store) | after normal close (wipe workspace) |
+| State (ID) | UI (i18n) | What exists on HD | Closed-cache (`encrypted_dir` / `store_only`) | Seal-only (`plain` / `plain_only` / `ram_only`) |
+|-------------|---------|-------------------|-----------------------------------------------|--------------------------------------------------|
+| **`open`** | `vault.status.open` | working data (+ optional `.7z`) | encrypted store + virtual mount | `plain`: workspace + `.7z`; `plain_only`: workspace only; `ram_only`: RAM |
+| **`closed`** | `vault.status.closed` | `.7z` + encrypted local cache | `stores/<id>/` kept | *not applicable* |
+| **`sealed`** | `vault.status.sealed` | **Only** `.7z` (+ backups, config) | after seal (wipe store) | after lock/seal |
 
 ```text
-encrypted_dir:   sealed ──open──► open ──close──► closed ──seal──► sealed
+encrypted_dir / store_only:
+  sealed ──open──► open ──close──► closed ──seal──► sealed
                       ▲                    └──seal (direct)──┘
 
-plain:  sealed ──open──► open ──close──► sealed
+plain / plain_only / ram_only:
+  sealed ──open──► open ──seal──► sealed
 ```
 
-- **`closed`** exists **only** in `encrypted_dir` (fast reopen without re-importing from `.7z`).
-- **`sealed`** is **the same in both modes**: maximum portability, direct Plan B; reopen materializes again.
+- **`closed`** exists when `storageModeHasClosedCache` (`encrypted_dir`, `store_only`).
+- **`sealed`** is the portable resting state (Plan B `.7z`); reopen materializes again.
 - Implementation transients: `closing`, `recovery` (not "at rest" UI states).
 
 **"Real" states (not just folder presence):**
@@ -121,18 +128,42 @@ plain:  sealed ──open──► open ──close──► sealed
 | 6 | **Close:** test `.7z.new` → atomic rename → backup or replace old `.7z` per `[backup]`. |
 | 7 | **Close:** unmount `workspace/<id>/`, zero password/keys in RAM. Action `close` → state **`closed`**; action `seal` → state **`sealed`** (§1.7). |
 
-#### `plain` (exception)
+#### `plain` (exception — seal on lock; open = plain + `.7z`)
 
 | Step | What |
 |-------|--------|
-| 1 | **Open:** `7z t` → extract `.7z` to plaintext `workspace/<id>/` on HD. |
+| 1 | **Open:** `7z t` → extract `.7z` to plaintext `workspace/<id>/` on HD; **keep** the `.7z` on disk (Plan B while open). |
 | 2 | **Edit:** user and external apps edit files directly in `workspace/<id>/`. |
-| 3 | **Close:** `7z t` gate → backup (if enabled) → `SevenZip::create` from `workspace/` → test `.7z.new` → atomic rename. |
-| 4 | **Close:** **`secure_wipe_workspace`**, delete `workspace/<id>/` → state **`sealed`** (no `closed` cache). |
+| 3 | **Seal:** `7z t` gate → backup (if enabled) → `SevenZip::create` from `workspace/` → test `.7z.new` → atomic rename. |
+| 4 | **Seal:** **`secure_wipe_workspace`**, delete `workspace/<id>/` → state **`sealed`** (only `.7z`). |
+
+#### `plain_only` (exception — seal on lock; open = plain only)
+
+| Step | What |
+|-------|--------|
+| 1 | **Open:** extract/materialize plaintext `workspace/<id>/`; **do not keep** a resting `.7z` while open (remove or relocate after extract as policy). |
+| 2 | **Edit:** direct file access; files remain unencrypted on disk; no Plan B until seal. |
+| 3 | **Seal:** write portable `.7z` from workspace → wipe workspace → **`sealed`**. |
+
+#### `store_only` (store primary)
+
+| Step | What |
+|-------|--------|
+| 1 | **Open:** unlock encrypted `stores/<id>/` (`.7z` may be stale or absent until seal). |
+| 2 | **Session:** edit via virtual mount → store (same anti-plaintext rules as `encrypted_dir`). |
+| 3 | **Close:** keep store → **`closed`**; optional **seal** writes portable `.7z` (Plan B) and may wipe store. |
+
+#### `ram_only` (RAM session)
+
+| Step | What |
+|-------|--------|
+| 1 | **Open:** load `.7z` into a RAM session (no durable encrypted store). |
+| 2 | **Edit:** all working data in RAM; crash/power loss loses unsealed edits. |
+| 3 | **Lock:** always **seal** → write `.7z` → wipe session → **`sealed`**. |
 
 **Accepted trade-off (v1):** after reboot, the user **must re-enter the password** to open again. No "remember password" on HD/SSD in default RAM-only session mode.
 
-**Data after reboot:** not lost — the encrypted store in `.upriv/stores/<id>/` already contains changes; only unlock/mount is needed.
+**Data after reboot (`encrypted_dir` / `store_only` closed):** not lost — the encrypted store already contains changes; only unlock/mount is needed. **`ram_only` / `plain` / `plain_only`:** only what was last sealed into `.7z` survives.
 
 ### 1.8 Technical mitigations (architecture)
 
@@ -218,7 +249,10 @@ plain:  sealed ──open──► open ──close──► sealed
 | RF-02 | Open vault (`encrypted_dir` default): validate password, mount virtual `workspace/<id>/`, load encrypted store | P0 |
 | RF-03 | Expose `workspace` to user (button `action.open_folder` → OS file manager) | P0 |
 | RF-04 | Close vault (`encrypted_dir`): unmount `workspace/<id>/`, clear session keys; keep encrypted persistence | P0 |
-| RF-04b | `plain` mode (`.7z` → plaintext workspace → `.7z` + wipe): exceptional cases (RAM/large vault); UI with **`warning.plain_mode`** | P0 |
+| RF-04b | `plain` mode (`.7z` → plaintext workspace → `.7z` + wipe on lock): exceptional cases; UI **`warning.plain_mode`** | P0 |
+| RF-04f | `plain_only` mode: while open plaintext only (no `.7z`); lock always seals → only `.7z`; UI **`warning.plain_only`** | P1 |
+| RF-04d | `store_only` mode: encrypted store is primary; optional portable `.7z` on seal/export; UI **`warning.store_only`**; close/seal like closed-cache | P1 |
+| RF-04e | `ram_only` mode: `.7z` + RAM session only (no durable store); lock always seals; UI **`warning.ram_only`**; insufficient RAM fails closed | P1 |
 | RF-04c | (`encrypted_dir`) Require sufficient RAM for the **entire unlocked vault** while open; fail open/edit/close with user-visible error if not; UI **`warning.encrypted_dir_ram`** (RF-UI-17) | P0 |
 | RF-05 | On close: **before** backup or compress, `7z t` on existing `vaults/<id>.7z` with given password — failure aborts everything (prevents closing with password different from opened vault) | P0 |
 | RF-06 | Atomic write: `<id>.7z.new` → test → rename → delete old | P0 |
@@ -265,7 +299,7 @@ plain:  sealed ──open──► open ──close──► sealed
 |----|-----------|------------|
 | RF-30 | Password in RAM during session (default mode); zero on close | P0 |
 | RF-31 | Conservative 7z parameters in both modes: `-mhe=on`, AES-256, `-ms=off` | P0 |
-| RF-31b | Per vault: `archive_mode` — **default `encrypt_only`**; optional `compress_encrypt` | P1 |
+| RF-31b | Per vault: compression on close — UI presets **none / low / medium / high** mapping to `archive_mode` + `compression_level` (`encrypt_only`+0 / `compress_encrypt`+1/5/9); **default none (`encrypt_only`)** | P1 |
 | RF-32 | Warning on exit with vault open | P1 |
 | RF-33 | Session security levels (5 modes) — see SDD | P2 |
 | RF-34 | `session.enc` for disk modes (encrypted session key, not password) | P2 |
@@ -289,9 +323,9 @@ plain:  sealed ──open──► open ──close──► sealed
 | RF-50 | Export `.7z`: mitigate `7zz` temp (stream, temp in `tmpfs` if available, post-export cleanup) | P1 |
 | RF-51 | **Minimize swap** of session data buffers (`mlock` / per-OS policies where supported) | P1 |
 | RF-52 | **External editor policy:** allow editing via mount; warn temp-outside-vault risk; option to restrict to integrated editor | P1 |
-| RF-53 | **`encrypted_dir` close:** `close` → **`closed`**; `seal` → **`sealed`** (wipe store). **`plain` close:** only `seal` → **`sealed`** | P0 |
+| RF-53 | **Closed-cache modes** (`encrypted_dir`, `store_only`): `close` → **`closed`**; `seal` → **`sealed`**. **Seal-only modes** (`plain`, `plain_only`, `ram_only`): lock always → **`sealed`** | P0 |
 | RF-53b | **`manifest` / `vaults/<id>.meta.json`:** `persistence: "closed" \| "sealed"` only (never `open`). **`state.json`:** `session: "open" \| "closing" \| "recovery"`. UI `vault.status.open` = runtime only | P0 |
-| RF-53c | On **close** in `encrypted_dir`, UI asks: **`action.close`** (becomes `closed` — encrypted cache + `.7z`, fast reopen) or **`action.seal`** (becomes `sealed` — compact `.7z` only). In `plain`, only **`action.seal`** (no `closed` option) | P0 |
+| RF-53c | On **close** in closed-cache modes, UI asks: **`action.close`** → `closed` or **`action.seal`** → `sealed`. In seal-only modes (`plain`, `plain_only`, `ram_only`), only **`action.seal`** (no `closed` option) | P0 |
 | RF-54 | **Lockfile** `runtime/<id>.lock` on vault open; refuse second open in another process/PC | P1 |
 | RF-55 | Crypto primitives: Argon2id + AEAD (e.g. XChaCha20-Poly1305); protected names/paths | P0 |
 | RF-56 | **Backups** UI per vault: list `backup/<id>/*.7z`, metadata, download, delete, **create new vault from backup** (import wizard — does not replace the source vault) | P1 |
@@ -453,7 +487,7 @@ Drag must not trigger row click (open workspace) or action buttons — use a ded
 1. **`action.backups`** — opens vault backup list modal.
 2. **`action.settings`** — opens modal with all vault-specific settings (includes delete vault; see §3.7.3).
 3. **`action.lock` / `action.unlock`** — **larger, more prominent** button (primary visual of row). `action.unlock` when closed/sealed; `action.lock` when open (starts close).
-4. **`action.seal` (dropdown)** — only when `storage.mode = encrypted_dir` and vault **open**: **down arrow** icon attached to close button, opens menu with **`action.seal`** option (in addition to normal close **`action.close`** → `closed` state). In `plain`, do not show this control (seal only on close).
+4. **`action.seal` (dropdown)** — only when vault **open** and `storageModeHasClosedCache` (`encrypted_dir`, `store_only`): **down arrow** on the lock button with **`action.seal`**. Seal-only modes (`plain`, `plain_only`, `ram_only`) do not show this control (lock always seals).
 
 **Row click (outside buttons):**
 
@@ -486,8 +520,8 @@ Opened by **`action.settings`** on vault row.
 
 - Edits vault `config.toml` via a **subset** of sections (RF-UI-04, SDD §3.2.3a). **Explicit Save** when dirty (with confirm); closing with unsaved edits prompts **discard all and close**.
 - **`[vault]` in UI:** `display_name`, optional **`order`** (same as drag-and-drop reorder), optional **`note`**. **Not shown:** `id`, `vault_file`, `store_dir`, `backups_dir` (system layout; `id` migrates when display name normalizes).
-- **`[security]` in UI:** optional **`password_hint`** (stored in `[vault]` in TOML), **`secure_wipe_workspace`**, **`action.change_password`** (current + new + confirm; **open or closed** vault). **Not shown in v1:** `mode` (fixed `session_ram` for `encrypted_dir`), `wipe_passes`, `wipe_pattern`.
-- **`[seven_zip]` in UI:** `archive_mode`, `encrypt_file_names` only (compression level/method/solid = defaults).
+- **`[security]` in UI:** optional **`password_hint`** (stored in `[vault]` in TOML), **`mode`** (password-memory — same four choices for all storage modes; see §4), **`action.change_password`** (current + new + confirm; **open or closed** vault). **`secure_wipe_workspace`** is edited under the **Close** section. **Not shown in v1:** `wipe_passes`, `wipe_pattern`.
+- **`[seven_zip]` in UI:** compression preset (**none / low / medium / high**) + `encrypt_file_names` (`method`/`solid` = defaults; level derived from preset).
 - **`[policy]` in UI:** `allow_external_editors` and `disallow_copy_outside_mount` as separate radio groups (four combinations).
 - **`modal.settings.danger_zone` section:** **`modal.settings.delete_vault`** — confirmation with text field; user must **type vault name** (`id`) to confirm deletion (removes `.7z`, store, config entries, and backups per policy).
 
@@ -502,7 +536,7 @@ Opened by **`action.settings`** on vault row.
 | RF-UI-05 | Backups modal; delete backup only after typing vault `id` | P0 |
 | RF-UI-06 | Prominent Lock/Unlock button (larger visual weight than others) | P0 |
 | RF-UI-07 | Row click (outside buttons) opens workspace when `open` | P0 |
-| RF-UI-08 | **`action.seal` dropdown** beside close, only `encrypted_dir` + open vault | P0 |
+| RF-UI-08 | **`action.seal` dropdown** beside close when vault **open** and `storageModeHasClosedCache` (`encrypted_dir`, `store_only`) | P0 |
 | RF-UI-09 | Row buttons do not propagate click to row (stop propagation) | P0 |
 | RF-UI-10 | Transient screens: unlock (password), recovery, open/close progress overlay (optional **Continue in background**). **One pipeline at a time** — open/close/seal requests are **queued** (FIFO); no cancel mid-`7zz` | P0 |
 | RF-UI-11 | **Create vault** modal/wizard: name, password, confirm password, optional hint, optional note | P0 |
@@ -511,7 +545,7 @@ Opened by **`action.settings`** on vault row.
 | RF-UI-14 | Vault settings modal exposes **`order`** field under `[vault]` (alternative to drag-and-drop) | P1 |
 | RF-UI-15 | Vault settings: **Save** only when dirty (with confirm); close/backdrop/Esc with unsaved edits → confirm **discard all and close**; field visibility per SDD §3.2.3a | P1 |
 | RF-UI-16 | Minimized file-manager dock: expand/collapse toggle persists `[ui] file_manager_dock_expanded` on each open/close of the dock list; **not** a System settings field (SDD §3.1) | P1 |
-| RF-UI-17 | **Storage mode warnings:** `warning.encrypted_dir_ram` when `encrypted_dir`; `warning.plain_mode` when `plain`; hide **Close → keep cache** when `plain` (seal-only lock) | P0 |
+| RF-UI-17 | **Storage mode warnings:** `warning.encrypted_dir_ram` / `warning.store_only` / `warning.ram_only` / `warning.plain_mode` / `warning.plain_only`; hide **Close → keep cache** when `storageModeSealOnly` (`plain`, `plain_only`, `ram_only`) | P0 |
 | RF-UI-18 | **System settings → Download vaults:** transient checklist of all vaults; select all available; zip selected main `.7z` files; block open/closing/recovery rows; **not** persisted in settings | P1 |
 
 ### 3.7.5 File manager — minimized dock
@@ -547,20 +581,22 @@ Configurable in `config/<id>.toml` as `security.mode`.
 
 **Recommended default:** `session_ram` (mode 2).
 
-**v1 desktop UI:** same four password-memory choices for **`encrypted_dir`** and **`plain`** — **`session_ram`** (recommended), **ask on open and close** (TOML `always_prompt`; legacy `ram_on_close_only` maps here), **`disk_close`** (less secure), **`disk_open_close`** (insecure). Store and workspace encryption are unchanged; disk modes only affect how the **unlock password** is retained via `auth/<id>/.session.enc`.
+**v1 desktop UI:** same four password-memory choices for **all storage modes** — **`session_ram`** (recommended), **ask on open and close** (TOML `always_prompt`; legacy `ram_on_close_only` maps here), **`disk_close`** (less secure), **`disk_open_close`** (insecure). Store and workspace encryption are unchanged; disk modes only affect how the **unlock password** is retained via `auth/<id>/.session.enc`.
 
 **Global rule:** no mode writes password in plaintext in the vault.
 
-**Defaults and warnings (`encrypted_dir`):**
+**Defaults and warnings (closed-cache / RAM modes):**
 
 - **Default:** `session_ram` — password in RAM until app exit or vault lock.
-- **RAM capacity:** show **`warning.encrypted_dir_ram`** under **Storage** when `storage.mode = encrypted_dir` (vault settings + create-vault advanced step). Same rule in Help → Security (`modal.help.body.security.2`). While open, decrypted vault content lives in RAM; insufficient memory → open/edit/close may fail (no silent spill to plaintext disk).
+- **RAM capacity:** show **`warning.encrypted_dir_ram`** when `encrypted_dir`, **`warning.ram_only`** when `ram_only` (settings + create wizard). Help → Security (`modal.help.body.security.2`). Insufficient memory → open/edit/close may fail (no silent spill to plaintext disk in non-`plain` modes).
+- **`store_only`:** show **`warning.store_only`** (Plan B `.7z` may be missing until seal).
+- **`plain_only`:** show **`warning.plain_only`** (no `.7z` while open; seal-only lock).
 - **Disk session modes** are optional user choices (badges less-secure / insecure); `session.enc` holds an **encrypted session key**, not the password string.
 - Encrypted store on disk (`store/`) remains fully encrypted regardless of `security.mode`.
 
-**Warnings (`plain`):**
+**Warnings (seal-only / plain):**
 
-- Show **`warning.plain_mode`** when `storage.mode = plain`.
+- Show **`warning.plain_mode`** when `storage.mode = plain`; **`warning.ram_only`** when `ram_only`; **`warning.plain_only`** when `plain_only`.
 - Hide **Close → keep encrypted cache** in settings; lock always **seals** (no `closed` state). See RF-53c.
 
 ---
@@ -648,11 +684,11 @@ Configurable in `config/<id>.toml` as `security.mode`.
 | Encrypted traces / old versions | `full` close + wipe (RF-53); accept in `normal` close |
 | Two PCs on same USB | RF-54 lockfile + warning |
 | 7z on PATH vs bundled | Bundle `7zz` per platform in app/HD |
-| Very large vault / insufficient RAM | UI documents limits (`warning.encrypted_dir_ram`); split into multiple vaults; offer **`plain`** as fallback |
+| Very large vault / insufficient RAM | UI documents limits (`warning.encrypted_dir_ram` / `warning.ram_only`); split vaults; offer **`store_only`**, **`plain`**, or **`plain_only`** (recommended for large on-disk files) |
 | Android: OTG disconnected with vault open | Recovery; UI warnings |
 | Android: Intent doesn't open folder in some manager | Chooser + document tested apps |
 | Android: storage scope | SAF mandatory |
-| `plain` mode | Warning + `secure_wipe_workspace` (RF-41–44); no SSD guarantee |
+| `plain` / `plain_only` / `ram_only` | Warnings + wipe / seal rules; no SSD guarantee for plain wipe |
 | Accumulated backups | RF-56 UI; `keep_last` policy / delete old |
 
 ---
@@ -661,9 +697,10 @@ Configurable in `config/<id>.toml` as `security.mode`.
 
 ### MVP (v0.1)
 - **Linux + Windows desktop** (first implementation)
-- **Both storage modes:** `encrypted_dir` (default) + `plain` (exception; UI warnings + wipe)
+- **Storage modes (UI):** `encrypted_dir` (default), `store_only`, `ram_only`, `plain`, `plain_only` — warnings + close/seal rules per §1.6–1.9 (core open/close for new modes refined iteratively)
 - `encrypted_dir` flow: `.7z` → encrypted store → virtual `workspace` → close → new `.7z` (see §1.9)
 - `plain` flow: `.7z` → plaintext `workspace` → close → new `.7z` + `secure_wipe_workspace`
+- Compression presets on close (none/low/medium/high → RF-31b)
 - `settings.toml` + defaults
 - Basic recovery + `manifest` (RF-47–48)
 - States `open` / `closed` / `sealed` (RF-53, RF-53b)

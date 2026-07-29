@@ -1,7 +1,7 @@
 import type { VaultRow, StorageMode } from "./types";
-import { resolveVaultDisplayStatus } from "./types";
-import type { CloseDefaultAction, SecurityMode } from "../vault-settings";
-import { securityModeToUi } from "../vault-settings";
+import { resolveVaultDisplayStatus, storageModeSealOnly } from "./types";
+import type { CloseDefaultAction, SecurityMode } from "../vault-settings/types";
+import { securityModeToUi } from "../vault-settings/types";
 
 export type VaultLifecycleIntent = "unlock" | "close" | "seal";
 
@@ -10,12 +10,12 @@ export interface VaultLifecycleRequest {
   intent: VaultLifecycleIntent;
 }
 
-/** Idle timeout action — plain vaults always seal; encrypted_dir follows close default. */
+/** Idle timeout action — seal-only modes always seal; others follow close default. */
 export function resolveIdleAutoCloseIntent(
   storageMode: StorageMode,
   closeDefaultAction: CloseDefaultAction,
 ): Extract<VaultLifecycleIntent, "close" | "seal"> {
-  return storageMode === "plain" || closeDefaultAction === "seal" ? "seal" : "close";
+  return storageModeSealOnly(storageMode) || closeDefaultAction === "seal" ? "seal" : "close";
 }
 
 /** Whether idle auto-close/seal can run without prompting the user for a password. */

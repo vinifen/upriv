@@ -3,6 +3,7 @@ import { Icon } from "@/components/icons";
 import { menuItemClass, menuPanelClass } from "@/components/ui/menuStyles";
 import { useTranslation } from "@/i18n";
 import type { StorageMode, VaultDisplayStatus } from "@upriv/shared";
+import { storageModeHasClosedCache } from "@upriv/shared";
 import { vaultStatusI18nKey } from "@/theme";
 
 /** Fixed control size — all vault rows (Lock / Unlock / sealed, with or without chevron). */
@@ -39,8 +40,8 @@ export function VaultLockButton({
 
   const isOpen = status === "open";
   const pipelineBusy = status === "closing" || status === "opening";
-  // Split: Lock + Seal when open; Unlock + Seal when closed (encrypted_dir).
-  const showSealSplit = canSeal && storageMode === "encrypted_dir" && !pipelineBusy;
+  // Split: Lock + Seal when open; Unlock + Seal when closed (modes with closed cache).
+  const showSealSplit = canSeal && storageModeHasClosedCache(storageMode) && !pipelineBusy;
   const label = isOpen ? t("action.lock") : t("action.unlock");
 
   const unlockSurfaceClass = "bg-surface-container-highest text-on-surface hover:brightness-110";

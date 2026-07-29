@@ -1,0 +1,43 @@
+# Vault config — storage, security, backup, 7z, policies (static; survives seal)
+# Demo — plain_only: plaintext workspace while open (no .7z until seal); lock always seals
+
+[vault]
+id = "plain-only-demo"
+display_name = "Plain Only Demo"
+order = 15
+vault_file = "archive/Plain Only Demo.7z"
+note = "Plaintext while open; no .7z until seal."
+
+[storage]
+mode = "plain_only"
+
+[close]
+default_action = "seal"
+
+[backup]
+enabled = false
+mode = "keep_last"
+
+[security]
+mode = "session_ram"
+secure_wipe_workspace = true
+wipe_passes = 1
+wipe_pattern = "random"
+
+[auto_close]
+enabled = false
+idle_minutes = 15
+warn_before_seconds = 60
+close_on_app_exit = false
+
+[seven_zip]
+encrypt_file_names = true
+archive_mode = "encrypt_only"
+compression_level = 0
+solid = false
+method = "lzma2"
+
+[policy]
+allow_external_editors = true
+disallow_copy_outside_mount = false
+require_unmount_on_sleep = false

@@ -9,6 +9,7 @@ import {
   createDraftForScratchSource,
   createDraftFromBackup,
   createDraftFromImportArchive,
+  storageModeSealOnly,
   type VaultListSort,
   type VaultListViewMode,
 } from "@upriv/shared";
@@ -171,7 +172,7 @@ export function useVaultListScreen() {
         if (previous.session === "open") {
           setVaultRuntimeState(vaultId, {
             session: null,
-            persistence: "closed",
+            persistence: storageModeSealOnly(patch.storageMode) ? "sealed" : "closed",
             canSeal: patch.canSeal,
           });
           showToast(t("warning.storage_mode_requires_close"));

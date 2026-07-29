@@ -6,11 +6,15 @@ export type {
   VaultSession,
 } from "./types";
 export {
+  STORAGE_MODES,
   assertPlainVaultInvariant,
   isVaultFileManagerEligible,
   resolveVaultCanSeal,
   resolveVaultDisplayStatus,
   resolveVaultListStatus,
+  storageModeHasClosedCache,
+  storageModeIsPlaintext,
+  storageModeSealOnly,
 } from "./types";
 export type { VaultLifecycleIntent, VaultLifecycleRequest } from "./lifecycle";
 export {
@@ -35,7 +39,7 @@ export {
   vaultStatusI18nKey,
 } from "./statusTokens";
 /** Rust wire codes + UI i18n. Name maps live in `errors/nameMessages.ts` (internal to this domain). */
-export { VAULT_ERROR_CODES } from "./errors/codes";
+export { isVaultErrorCode, VAULT_ERROR_CODES } from "./errors/codes";
 export type { VaultErrorCode } from "./errors/codes";
 export { requireVaultErrorI18nKey, vaultErrorI18nKey } from "./errors/messages";
 export type { VaultErrorI18nKey } from "./errors/messages";

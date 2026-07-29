@@ -4,8 +4,44 @@ export type VaultPersistence = "closed" | "sealed";
 /** Runtime session state while the app is running. */
 export type VaultSession = "open" | "closing" | "recovery";
 
-/** Storage mode from `config.toml` → `[storage] mode`. */
-export type StorageMode = "encrypted_dir" | "plain";
+/**
+ * Storage mode from `config.toml` → `[storage] mode`.
+ *
+ * - `encrypted_dir` — encrypted store on disk + virtual mount (default; optional `closed` cache)
+ * - `store_only` — encrypted store is primary; `.7z` on seal/export (less Plan B while open)
+ * - `ram_only` — `.7z` + RAM session only; no store; lock always seals (volatile edits)
+ * - `plain` — while open: plaintext workspace **+** `.7z` on disk; lock always seals → only `.7z`
+ * - `plain_only` — while open: plaintext workspace only (no `.7z`); lock always seals → only `.7z`
+ */
+export type StorageMode =
+  | "encrypted_dir"
+  | "plain"
+  | "plain_only"
+  | "ram_only"
+  | "store_only";
+
+export const STORAGE_MODES = [
+  "encrypted_dir",
+  "store_only",
+  "ram_only",
+  "plain",
+  "plain_only",
+] as const satisfies readonly StorageMode[];
+
+/** Modes that can keep an on-disk cache between sessions (`closed`). */
+export function storageModeHasClosedCache(mode: StorageMode): boolean {
+  return mode === "encrypted_dir" || mode === "store_only";
+}
+
+/** Modes where lock always seals (no `closed` persistence). */
+export function storageModeSealOnly(mode: StorageMode): boolean {
+  return mode === "plain" || mode === "plain_only" || mode === "ram_only";
+}
+
+/** Modes that persist decrypted file bytes on the vault volume while open. */
+export function storageModeIsPlaintext(mode: StorageMode): boolean {
+  return mode === "plain" || mode === "plain_only";
+}
 
 /**
  * Unified display status for list rows (PRD §1.7, SDD §8.2).
@@ -30,14 +66,14 @@ export interface VaultRow {
 /**
  * Resolve the badge/row style status from backend fields.
  *
- * Invariant: `plain` vaults never persist `persistence: "closed"` — not-open is always
- * `sealed` (PRD RF-53). A malformed DTO with `plain` + `closed` still renders as sealed.
+ * Invariant: seal-only modes (`plain`, `plain_only`, `ram_only`) never persist `persistence: "closed"` —
+ * not-open is always `sealed` (PRD RF-53). A malformed DTO still renders as sealed.
  */
 export function resolveVaultDisplayStatus(row: VaultRow): VaultDisplayStatus {
   if (row.session === "recovery") return "recovery";
   if (row.session === "closing") return "closing";
   if (row.session === "open") return "open";
-  if (row.storageMode === "plain") return "sealed";
+  if (storageModeSealOnly(row.storageMode)) return "sealed";
   return row.persistence === "sealed" ? "sealed" : "closed";
 }
 
@@ -59,19 +95,23 @@ function devWarn(message: string): void {
 /** Dev-only guard for mock seed rows that violate the plain-storage invariant. */
 export function assertPlainVaultInvariant(row: VaultRow): void {
   if (!isDevEnvironment()) return;
-  if (row.storageMode === "plain" && row.persistence === "closed" && row.session !== "open") {
+  if (
+    storageModeSealOnly(row.storageMode) &&
+    row.persistence === "closed" &&
+    row.session !== "open"
+  ) {
     devWarn(
-      `[upriv] plain vault "${row.id}" has persistence "closed" while not open — UI shows sealed.`,
+      `[upriv] seal-only vault "${row.id}" (${row.storageMode}) has persistence "closed" while not open — UI shows sealed.`,
     );
   }
 }
 
 /**
  * Whether the row may show the seal split control.
- * `encrypted_dir` only — while open or resting `closed` (seal without reopening).
+ * Modes with a closed cache (`encrypted_dir`, `store_only`) — while open or resting `closed`.
  */
 export function resolveVaultCanSeal(row: VaultRow): boolean {
-  if (row.storageMode !== "encrypted_dir") return false;
+  if (!storageModeHasClosedCache(row.storageMode)) return false;
   if (row.session === "recovery" || row.session === "closing") return false;
   if (row.session === "open") return true;
   return row.persistence === "closed";

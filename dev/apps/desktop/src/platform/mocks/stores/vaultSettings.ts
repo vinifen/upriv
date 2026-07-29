@@ -42,7 +42,7 @@ const DEFAULTS: VaultSettingsConfig = {
   seven_zip: {
     encrypt_file_names: true,
     archive_mode: "encrypt_only",
-    compression_level: 5,
+    compression_level: 0,
     solid: false,
     method: "lzma2",
   },
@@ -80,7 +80,7 @@ const MOCK_BY_VAULT: Record<string, VaultSettingsOverrides> = {
     },
     backup: { enabled: true, mode: "keep_all" },
     auto_close: { enabled: true, idle_minutes: 15 },
-    seven_zip: { archive_mode: "compress_encrypt" },
+    seven_zip: { archive_mode: "compress_encrypt", compression_level: 5 },
   },
   "cold-storage": {
     vault: {
@@ -118,6 +118,36 @@ const MOCK_BY_VAULT: Record<string, VaultSettingsOverrides> = {
       ...vaultPaths("plain-folder-demo", "Plain Folder Demo"),
     },
     storage: { mode: "plain" },
+    close: { default_action: "seal" },
+  },
+  "store-only-demo": {
+    vault: {
+      display_name: "Store Only Demo",
+      order: 13,
+      note: "Encrypted store primary; .7z on seal.",
+      ...vaultPaths("store-only-demo", "Store Only Demo"),
+    },
+    storage: { mode: "store_only" },
+    close: { default_action: "close" },
+  },
+  "ram-only-demo": {
+    vault: {
+      display_name: "RAM Only Demo",
+      order: 14,
+      note: "Volatile RAM session; lock always seals.",
+      ...vaultPaths("ram-only-demo", "RAM Only Demo"),
+    },
+    storage: { mode: "ram_only" },
+    close: { default_action: "seal" },
+  },
+  "plain-only-demo": {
+    vault: {
+      display_name: "Plain Only Demo",
+      order: 15,
+      note: "Plaintext while open; no .7z until seal.",
+      ...vaultPaths("plain-only-demo", "Plain Only Demo"),
+    },
+    storage: { mode: "plain_only" },
     close: { default_action: "seal" },
   },
   "old-archive": {

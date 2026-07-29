@@ -1,4 +1,4 @@
-import { normalizeClosePolicyForStorage } from "../vault-settings";
+import { normalizeVaultSettingsConfig } from "../vault-settings";
 import { displayNameToVaultId } from "../vault/displayName";
 import type { CreateVaultDraft, CreateVaultResult } from "./types";
 
@@ -9,7 +9,7 @@ export function buildCreateVaultResult(
   const vaultId = displayNameToVaultId(draft.displayName, existingIds);
   const displayName = draft.displayName.trim();
 
-  const settings = normalizeClosePolicyForStorage({
+  const settings = normalizeVaultSettingsConfig({
     vault: {
       id: vaultId,
       display_name: displayName,
@@ -34,7 +34,7 @@ export function buildCreateVaultResult(
     seven_zip: {
       encrypt_file_names: draft.seven_zip.encrypt_file_names,
       archive_mode: draft.seven_zip.archive_mode,
-      compression_level: 5,
+      compression_level: draft.seven_zip.compression_level,
       solid: false,
       method: "lzma2",
     },
@@ -47,7 +47,7 @@ export function buildCreateVaultResult(
     note: draft.note.trim(),
     passwordHint: draft.passwordHint.trim(),
     order: draft.order,
-    storageMode: draft.storage.mode,
+    storageMode: settings.storage.mode,
     settings,
   };
 }

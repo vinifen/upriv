@@ -38,7 +38,10 @@ Same word **config**, different **folder** — no collision. Discovery: scan `va
     ├── my-encrypted-notes/   # display: My Encrypted Notes — closed, open in state.json
     ├── vault-example-2/      # display: Vault ExaMple 2 — sealed
     ├── cold-storage/         # display: Cold Storage — sealed
-    └── plain-folder-demo/    # display: Plain Folder Demo — plain + auth/
+    ├── plain-folder-demo/    # display: Plain Folder Demo — plain + auth/
+    ├── store-only-demo/      # display: Store Only Demo — store_only (closed)
+    ├── ram-only-demo/        # display: RAM Only Demo — ram_only (sealed)
+    └── plain-only-demo/      # display: Plain Only Demo — plain_only (sealed)
 ```
 
 ## `state.json` vs per-vault `persistence.json`

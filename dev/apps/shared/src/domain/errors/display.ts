@@ -2,8 +2,7 @@ import type { I18nKey } from "../../i18n/catalog";
 import { isRpcError } from "../core-rpc/errors";
 import { isVaultPipelineError } from "../vault-lifecycle/errors/codes";
 import { vaultPipelineErrorI18nKey } from "../vault-lifecycle/errors/messages";
-import { isVaultErrorCode } from "../vault/errors/codes";
-import { vaultErrorI18nKey } from "../vault/errors/messages";
+import { isVaultErrorCode, vaultErrorI18nKey } from "../vault";
 import { isVaultRootErrorCode } from "../vault-root/errors";
 import { vaultRootErrorI18nKey } from "../vault-root/messages";
 

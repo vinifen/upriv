@@ -1,0 +1,10 @@
+{
+  "format_version": 1,
+  "vault_id": "plain-only-demo",
+  "display_name": "Plain Only Demo",
+  "sync_generation": 1,
+  "archive_hash": "sha256:demo-plain-only-archive",
+  "last_close_ok_at": "2026-05-31T08:00:00Z",
+  "sealed_at": "2026-05-31T08:00:00Z",
+  "persistence": "sealed"
+}

@@ -27,7 +27,10 @@ export interface CreateVaultDraft {
   passwordTestFailed: boolean;
   auto_close: VaultSettingsConfig["auto_close"];
   backup: VaultSettingsConfig["backup"];
-  seven_zip: Pick<VaultSettingsConfig["seven_zip"], "archive_mode" | "encrypt_file_names">;
+  seven_zip: Pick<
+    VaultSettingsConfig["seven_zip"],
+    "archive_mode" | "encrypt_file_names" | "compression_level"
+  >;
   storage: VaultSettingsConfig["storage"];
   close: VaultSettingsConfig["close"];
   security: Pick<VaultSettingsConfig["security"], "mode" | "secure_wipe_workspace">;

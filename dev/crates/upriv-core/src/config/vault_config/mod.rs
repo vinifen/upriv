@@ -101,6 +101,21 @@ mod tests {
     }
 
     #[test]
+    fn loads_prod_example_new_storage_modes() {
+        let cases = [
+            ("store-only-demo", VaultStorageMode::StoreOnly),
+            ("ram-only-demo", VaultStorageMode::RamOnly),
+            ("plain-only-demo", VaultStorageMode::PlainOnly),
+        ];
+        for (id, expected) in cases {
+            let dir = prod_example_root().join(".upriv/vaults").join(id);
+            let cfg = load_vault_config(&dir).unwrap_or_else(|e| panic!("{id}: {e}"));
+            assert_eq!(cfg.id(), id);
+            assert_eq!(cfg.storage_mode(), expected, "{id}");
+        }
+    }
+
+    #[test]
     fn missing_config_is_invalid() {
         let dir = tempfile::tempdir().unwrap();
         let err = load_vault_config(dir.path()).unwrap_err();
@@ -149,5 +164,70 @@ display_name = "Case mismatch"
         .unwrap();
         let err = load_vault_config(&vault_dir).unwrap_err();
         assert!(matches!(err, UprivError::VaultConfigInvalid { .. }));
+    }
+
+    #[test]
+    fn storage_mode_deserializes_all_variants() {
+        use super::VaultStorageMode;
+
+        let cases = [
+            ("encrypted_dir", VaultStorageMode::EncryptedDir),
+            ("store_only", VaultStorageMode::StoreOnly),
+            ("ram_only", VaultStorageMode::RamOnly),
+            ("plain", VaultStorageMode::Plain),
+            ("plain_only", VaultStorageMode::PlainOnly),
+        ];
+
+        for (mode_str, expected) in cases {
+            let section: VaultStorageSection =
+                toml::from_str(&format!("mode = \"{mode_str}\"")).expect("storage section");
+            assert_eq!(section.mode, expected, "mode {mode_str}");
+        }
+    }
+
+    #[test]
+    fn storage_mode_serializes_all_variants_snake_case() {
+        use super::VaultStorageMode;
+
+        let cases = [
+            (VaultStorageMode::EncryptedDir, "encrypted_dir"),
+            (VaultStorageMode::StoreOnly, "store_only"),
+            (VaultStorageMode::RamOnly, "ram_only"),
+            (VaultStorageMode::Plain, "plain"),
+            (VaultStorageMode::PlainOnly, "plain_only"),
+        ];
+
+        for (mode, expected) in cases {
+            let section = VaultStorageSection { mode };
+            let raw = toml::to_string(&section).expect("serialize storage");
+            assert!(
+                raw.contains(expected),
+                "expected {expected} in TOML, got: {raw}"
+            );
+        }
+    }
+
+    #[test]
+    fn missing_storage_section_defaults_to_encrypted_dir() {
+        let cfg: VaultConfig = toml::from_str(
+            r#"
+[vault]
+id = "x"
+display_name = "X"
+"#,
+        )
+        .expect("minimal config");
+        assert_eq!(cfg.storage_mode(), VaultStorageMode::EncryptedDir);
+    }
+
+    #[test]
+    fn unknown_storage_mode_is_rejected() {
+        let err = toml::from_str::<VaultStorageSection>("mode = \"future_mode\"")
+            .expect_err("unknown mode must fail");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("future_mode") || msg.contains("unknown") || msg.contains("did not match"),
+            "unexpected error: {msg}"
+        );
     }
 }

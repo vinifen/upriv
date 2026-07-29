@@ -40,6 +40,8 @@ What each command runs:
 
   test
     • Rust:     cargo test --workspace
+    • Shared:   vitest
+    • Desktop:  vitest
 
   check
     • All lint steps, then all test steps
@@ -142,6 +144,16 @@ lint_fix_steps() {
 
 test_steps() {
   step "Rust (cargo test --workspace)" cargo test --workspace
+  if require_node_modules shared; then
+    step "Shared (vitest)" npm test --prefix apps/shared
+  else
+    step "Shared (vitest)" false
+  fi
+  if require_node_modules desktop; then
+    step "Desktop (vitest)" npm test --prefix apps/desktop
+  else
+    step "Desktop (vitest)" false
+  fi
 }
 
 cmd_lint() {
