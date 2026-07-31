@@ -11,8 +11,6 @@ export function logLevelClass(level: ParsedLogLine["level"]): string {
       return "text-accent";
     case "DEBUG":
       return "text-on-surface-variant";
-    case "TRACE":
-      return "text-on-surface-variant/70";
     default:
       return "text-on-surface";
   }

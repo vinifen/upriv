@@ -132,5 +132,6 @@ fn run() -> io::Result<()> {
         }
     }
 
+    upriv_core::logging::flush_logging_session();
     Ok(())
 }

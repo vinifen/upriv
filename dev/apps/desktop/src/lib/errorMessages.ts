@@ -31,6 +31,9 @@ export function desktopErrorI18nKey(
   error: unknown,
   fallback: I18nKey = "error.unexpected",
 ): I18nKey {
+  if (isRpcError(error) && error.code === "log_file_too_large") {
+    return "toast.logs_file_too_large";
+  }
   if (
     isRpcError(error) &&
     error.code === BRIDGE_ERROR_CODES.RPC_TIMEOUT &&

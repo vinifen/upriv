@@ -7,3 +7,4 @@ export {
   parseLogLine,
   sortLogFilesNewestFirst,
 } from "./format";
+export { parseAppLogFile } from "./parse";

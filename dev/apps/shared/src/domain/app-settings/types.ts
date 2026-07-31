@@ -2,7 +2,8 @@ import type { VaultListSortDirection, VaultListSortMode, VaultListViewMode } fro
 
 export type LocaleId = "en" | "pt-BR" | "es";
 export type UiTheme = "dark" | "neutral" | "light";
-export type LogLevel = "trace" | "debug" | "info" | "warn" | "error";
+/** Same four values as `LOG_LEVEL_PRESETS` / Rust `LogLevel` filter. */
+export type LogLevel = "error" | "warn" | "info" | "debug";
 
 /** How the app locates the vault-root: `default_root` (distribution default) or `custom_root` (absolute path via `.upriv-root`). */
 export type VaultRootMode = "default_root" | "custom_root";

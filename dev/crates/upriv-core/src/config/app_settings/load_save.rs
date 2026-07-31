@@ -135,7 +135,9 @@ pub fn load_app_settings_at(root: &Path) -> Result<LoadedAppSettings> {
         },
         logging: LoggingSettings {
             enabled: parsed.logging.enabled,
-            level: parsed.logging.level,
+            level: crate::logging::LogLevel::parse_filter(&parsed.logging.level)
+                .filter_str()
+                .to_string(),
             entries_per_file: parsed.logging.entries_per_file,
             keep_last_entries: parsed.logging.keep_last_entries,
         },
@@ -196,11 +198,17 @@ pub fn sync_alias_with_app_settings(settings: &AppSettings) -> Result<()> {
     Ok(())
 }
 
-/// Save when a writable vault-root exists for the **desired** mode; else `Ok(false)`.
+/// Save when a writable vault-root exists for the **desired** mode.
 ///
 /// Target is chosen from the payload (not from the current active alias):
 /// - custom → `upriv_root_path` (must already be a valid root)
 /// - default_root → default_root anchor only (where `setup_default_root` creates); never the old custom root
+///
+/// Returns:
+/// - `Ok(true)` — wrote `settings.toml` (and synced alias when requested)
+/// - `Ok(false)` — **only** custom_root with empty `upriv_root_path` (bootstrap; nothing to write)
+/// - `Err(VaultRootNotFound)` — target has no valid marker (mid-session missing `.upriv`)
+/// - `Err(VaultRootIncomplete)` — target `.upriv` present but corrupt
 ///
 /// `sync_alias` defaults to true via [`save_app_settings_session`]; pass false when
 /// vault-root setup already wrote/deactivated the alias.
@@ -216,20 +224,21 @@ pub fn save_app_settings_session_with_alias_sync(
     let target = if settings.app.vault_root_mode == VaultRootMode::CustomRoot {
         let path = settings.app.upriv_root_path.trim();
         if path.is_empty() {
+            // Bootstrap only: custom mode without a path yet — nothing to write.
             return Ok(false);
         }
         PathBuf::from(path)
     } else {
-        let anchor = setup_default_root_anchor()?;
-        match crate::paths::open_default_root_candidate(&anchor)? {
-            Some(root) => root.root().to_path_buf(),
-            None => return Ok(false),
-        }
+        setup_default_root_anchor()?
     };
 
     match crate::paths::open_default_root_candidate(&target)? {
         Some(_) => {}
-        None => return Ok(false),
+        None => {
+            return Err(UprivError::VaultRootNotFound(
+                target.join(VAULT_ROOT_SETTINGS_REL),
+            ));
+        }
     }
     save_app_settings_with_alias_sync(&target, settings, sync_alias)?;
     Ok(true)
@@ -268,6 +277,37 @@ mod tests {
             VaultRootMode::DefaultRoot
         );
         assert!(loaded.on_disk);
+
+        std::env::remove_var("UPRIV_DEFAULT_ROOT_ANCHOR");
+    }
+
+    #[test]
+    fn load_and_save_normalize_logging_level_preset() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        std::env::remove_var("APPIMAGE");
+        std::env::set_var("UPRIV_DEFAULT_ROOT_ANCHOR", home.path());
+
+        let dir = tempfile::tempdir().unwrap();
+        initialize_vault_root(dir.path()).unwrap();
+        let settings_path = dir.path().join(".upriv/settings.toml");
+        let mut raw = std::fs::read_to_string(&settings_path).unwrap();
+        raw = raw.replace("level = \"info\"", "level = \"ERROR\"");
+        if !raw.contains("level = \"ERROR\"") {
+            // Fresh default may use different formatting — force a logging section.
+            raw.push_str("\n[logging]\nenabled = true\nlevel = \"ERROR\"\nentries_per_file = 1000\nkeep_last_entries = 10000\n");
+        }
+        std::fs::write(&settings_path, raw).unwrap();
+
+        let loaded = load_app_settings_at(dir.path()).unwrap();
+        assert_eq!(loaded.settings.logging.level, "error");
+
+        save_app_settings(dir.path(), &loaded.settings).unwrap();
+        let persisted = std::fs::read_to_string(&settings_path).unwrap();
+        assert!(
+            persisted.contains("level = \"error\""),
+            "persisted={persisted}"
+        );
 
         std::env::remove_var("UPRIV_DEFAULT_ROOT_ANCHOR");
     }
@@ -424,6 +464,45 @@ enabled = true
         let custom_raw =
             std::fs::read_to_string(custom.path().join(".upriv/settings.toml")).unwrap();
         assert!(!custom_raw.contains("pt-BR"));
+
+        std::env::remove_var("UPRIV_DEFAULT_ROOT_ANCHOR");
+    }
+
+    #[test]
+    fn save_session_missing_upriv_returns_not_found() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        std::env::remove_var("APPIMAGE");
+        std::env::set_var("UPRIV_DEFAULT_ROOT_ANCHOR", home.path());
+        initialize_vault_root(home.path()).unwrap();
+
+        let mut settings = AppSettings::default();
+        settings.ui.locale = "en".into();
+        settings.app.vault_root_mode = VaultRootMode::DefaultRoot;
+        assert!(save_app_settings_session(&settings).unwrap());
+
+        std::fs::remove_dir_all(home.path().join(".upriv")).unwrap();
+
+        let err = save_app_settings_session(&settings).unwrap_err();
+        assert!(
+            matches!(err, UprivError::VaultRootNotFound(_)),
+            "expected VaultRootNotFound after deleting .upriv, got {err:?}"
+        );
+
+        std::env::remove_var("UPRIV_DEFAULT_ROOT_ANCHOR");
+    }
+
+    #[test]
+    fn save_session_empty_custom_path_is_soft_false() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        std::env::remove_var("APPIMAGE");
+        std::env::set_var("UPRIV_DEFAULT_ROOT_ANCHOR", home.path());
+
+        let mut settings = AppSettings::default();
+        settings.app.vault_root_mode = VaultRootMode::CustomRoot;
+        settings.app.upriv_root_path.clear();
+        assert!(!save_app_settings_session(&settings).unwrap());
 
         std::env::remove_var("UPRIV_DEFAULT_ROOT_ANCHOR");
     }

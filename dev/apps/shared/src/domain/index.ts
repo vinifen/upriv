@@ -6,6 +6,7 @@ export * from "./backups";
 export * from "./file-tree";
 export * from "./format";
 export * from "./help";
+export * from "./loading";
 export * from "./logs";
 export * from "./vault";
 export * from "./vault-create";

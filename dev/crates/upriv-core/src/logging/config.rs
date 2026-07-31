@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use super::LogLevel;
+use crate::config::LoggingSettings;
 
 /// App logging settings — mirrors `[logging]` + `logs_dir` from `.upriv/settings.toml`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,6 +22,21 @@ impl LogConfig {
             min_level: LogLevel::Info,
             entries_per_file: 1000,
             keep_last_entries: 10_000,
+            logs_dir: logs_dir.into(),
+        }
+    }
+
+    /// Build from `[logging]` settings + resolved `.upriv/logs` path.
+    ///
+    /// `[logging].level` uses the four UI presets (`error` / `warn` / `info` / `debug`)
+    /// via [`LogLevel::parse_filter`].
+    pub fn from_settings(settings: &LoggingSettings, logs_dir: impl Into<PathBuf>) -> Self {
+        let min_level = LogLevel::parse_filter(&settings.level);
+        Self {
+            enabled: settings.enabled,
+            min_level,
+            entries_per_file: settings.entries_per_file,
+            keep_last_entries: settings.keep_last_entries,
             logs_dir: logs_dir.into(),
         }
     }

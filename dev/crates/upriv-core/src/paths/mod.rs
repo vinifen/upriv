@@ -93,10 +93,28 @@ const RUNTIME_DIR_REL: &str = ".upriv/runtime";
 /// Atomically write `bytes` to `path` (temp + `sync_all` + rename).
 /// On failure, best-effort removes the temp file.
 /// After rename, best-effort fsync of the parent directory on Unix.
+///
+/// Creates missing parent directories. Prefer
+/// [`write_bytes_atomic_existing_parent`] for vault-root `settings.toml` so a
+/// deleted `.upriv` is not silently recreated mid-session.
 pub(crate) fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    write_bytes_atomic_inner(path, bytes, true)
+}
+
+/// Like [`write_bytes_atomic`], but fails if the parent directory is missing
+/// (does **not** `create_dir_all`).
+pub(crate) fn write_bytes_atomic_existing_parent(path: &Path, bytes: &[u8]) -> Result<()> {
+    write_bytes_atomic_inner(path, bytes, false)
+}
+
+fn write_bytes_atomic_inner(path: &Path, bytes: &[u8], create_parents: bool) -> Result<()> {
     use std::io::Write;
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+        if create_parents {
+            std::fs::create_dir_all(parent)?;
+        } else if !parent.is_dir() {
+            return Err(UprivError::VaultRootNotFound(path.to_path_buf()));
+        }
     }
     let nonce = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { Button, Modal } from "@/components/ui";
+import { Button, LoadingBudgetHint, Modal } from "@/components/ui";
+import { useLoadingBudget } from "@/hooks/useLoadingBudget";
 import { useTranslation } from "@/i18n";
 import { desktopErrorI18nKey } from "@/lib/errorMessages";
 import { useAppSettingsContext } from "./AppSettingsContext";
 import { useVaultRootService } from "@/platform/services";
 import {
+  LOADING_BUDGET_MS,
   VAULT_ROOT_ERROR_CODES,
   isRpcError,
   type AppDistribution,
@@ -41,7 +43,7 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
   const tRef = useRef(t);
   tRef.current = t;
   const vaultRoot = useVaultRootService();
-  const { settings, settingsReady, vaultRootEpoch } = useAppSettingsContext();
+  const { settings, settingsReady, vaultRootEpoch, reloadSettings } = useAppSettingsContext();
   const [ready, setReady] = useState(false);
   const [applying, setApplying] = useState(false);
   const [setup, setSetup] = useState<{
@@ -55,6 +57,7 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
   const [resolveError, setResolveError] = useState<string | null>(null);
   /** Non-blocking notice when env/CLI sets an explicit vault-root override. */
   const [envOverridePath, setEnvOverridePath] = useState<string | null>(null);
+  const [settingsLoadTimedOut, setSettingsLoadTimedOut] = useState(false);
   const resolveGen = useRef(0);
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
@@ -364,16 +367,23 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
     })();
   }, [settingsReady, vaultRoot]);
 
+  // Resolve when settings become ready or vault-root epoch bumps — not when
+  // `runResolve` identity changes (avoids duplicate DEBUG resolve probes).
+  const runResolveRef = useRef(runResolve);
+  runResolveRef.current = runResolve;
+
   useEffect(() => {
     if (vaultRootEpoch !== prevEpochRef.current) {
       prevEpochRef.current = vaultRootEpoch;
       // Soft-block children on the previous root while re-resolve runs after a mutation.
       if (readyRef.current) {
         setApplying(true);
+        setReady(false);
       }
     }
-    runResolve();
-  }, [settingsReady, vaultRootEpoch, runResolve]);
+    if (!settingsReady) return;
+    runResolveRef.current();
+  }, [settingsReady, vaultRootEpoch]);
 
   const clearBlocking = () => {
     setSetup(null);
@@ -386,7 +396,7 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
     runResolve();
   };
 
-  const blocking = !ready || !settingsReady;
+  const blocking = !ready || !settingsReady || applying;
   const showLoadingSettings =
     !settingsReady &&
     setup === null &&
@@ -400,6 +410,37 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
     repair === null &&
     aliasInvalidPath === null &&
     resolveError === null;
+
+  const settingsBudget = useLoadingBudget(
+    showLoadingSettings && !settingsLoadTimedOut,
+    LOADING_BUDGET_MS.settingsLoad,
+  );
+  const applyingBudget = useLoadingBudget(showApplying, LOADING_BUDGET_MS.vaultRootResolve);
+
+  useEffect(() => {
+    if (!settingsBudget.timedOut || !showLoadingSettings) return;
+    setSettingsLoadTimedOut(true);
+  }, [settingsBudget.timedOut, showLoadingSettings]);
+
+  useEffect(() => {
+    if (settingsReady) setSettingsLoadTimedOut(false);
+  }, [settingsReady]);
+
+  useEffect(() => {
+    if (!applyingBudget.timedOut || !showApplying) return;
+    // Invalidate in-flight `runResolve` so a late success cannot setReady after timeout.
+    resolveGen.current += 1;
+    setApplying(false);
+    setReady(false);
+    setResolveError(tRef.current("modal.vault_root_setup.error_timeout"));
+  }, [applyingBudget.timedOut, showApplying]);
+
+  const retrySettingsLoad = () => {
+    setSettingsLoadTimedOut(false);
+    void reloadSettings().catch(() => {
+      setSettingsLoadTimedOut(true);
+    });
+  };
 
   return (
     <>
@@ -462,7 +503,7 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
           setRepair({ targetPath: path, mode: "custom_root" });
         }}
       />
-      {showLoadingSettings ? (
+      {showLoadingSettings && (settingsBudget.visible || settingsLoadTimedOut) ? (
         <Modal
           open
           title={t("modal.vault_root_setup.title")}
@@ -470,13 +511,30 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
           dismissible={false}
           panelClassName="max-w-lg"
           rootClassName="z-[200]"
+          footer={
+            settingsLoadTimedOut ? (
+              <div className="flex justify-end">
+                <Button variant="primary" size="md" onClick={retrySettingsLoad}>
+                  {t("action.retry")}
+                </Button>
+              </div>
+            ) : undefined
+          }
         >
           <p className="text-sm leading-relaxed text-on-surface-variant" role="status">
-            {t("modal.vault_root_setup.loading_settings")}
+            {settingsLoadTimedOut
+              ? t("loading.timed_out")
+              : t("modal.vault_root_setup.loading_settings")}
           </p>
+          {!settingsLoadTimedOut ? (
+            <LoadingBudgetHint
+              budgetMs={settingsBudget.budgetMs}
+              remainingMs={settingsBudget.remainingMs}
+            />
+          ) : null}
         </Modal>
       ) : null}
-      {showApplying ? (
+      {showApplying && applyingBudget.visible ? (
         <Modal
           open
           title={t("modal.vault_root_setup.title")}
@@ -488,6 +546,10 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
           <p className="text-sm leading-relaxed text-on-surface-variant" role="status">
             {t("modal.vault_root_setup.busy")}
           </p>
+          <LoadingBudgetHint
+            budgetMs={applyingBudget.budgetMs}
+            remainingMs={applyingBudget.remainingMs}
+          />
         </Modal>
       ) : null}
       {envOverridePath && ready && settingsReady ? (

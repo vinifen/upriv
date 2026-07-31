@@ -68,9 +68,18 @@ pub(crate) fn list_vault_entries(root: &VaultRoot) -> Result<Vec<VaultListEntry>
             }
             Err(error) => {
                 skipped += 1;
+                let id = vault_dir
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("?");
                 eprintln!(
                     "upriv-core: skipping vault dir {}: {error}",
                     vault_dir.display()
+                );
+                crate::logging::log_event(
+                    crate::logging::LogLevel::Warn,
+                    "vault_skipped",
+                    &[("id", id)],
                 );
             }
         }

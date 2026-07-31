@@ -237,3 +237,144 @@ fn stdio_app_settings_save_wrote_true_roundtrip() {
     child.kill().expect("kill daemon");
     child.wait().expect("wait on daemon");
 }
+
+#[test]
+fn stdio_log_list_get_delete_roundtrip() {
+    let root = tempfile::tempdir().expect("tempdir");
+    upriv_core::initialize_vault_root(root.path()).expect("initialize vault root");
+    let anchor = root.path().to_str().expect("utf8 path");
+
+    let mut child = spawn_daemon_with_env(&[
+        ("UPRIV_DEFAULT_ROOT_ANCHOR", anchor),
+        ("UPRIV_DISTRIBUTION", "portable"),
+    ]);
+    let mut stdout = std::io::BufReader::new(child.stdout.take().expect("stdout"));
+    let mut stdin = child.stdin.take().expect("stdin");
+
+    let _ready = read_line(&mut stdout);
+    let _event = read_line(&mut stdout);
+
+    // Persist settings + open logging session (emits settings_save / app_start).
+    writeln!(
+        stdin,
+        r#"{{"type":"request","id":20,"method":"app_settings_save","params":{{"settings":{{"ui":{{"locale":"en","theme":"dark","vault_list_sort":"order","vault_list_sort_direction":"asc","vault_list_view":"default","always_show_hidden_vaults":false,"file_manager_dock_expanded":false}},"logging":{{"enabled":true,"level":"info","entries_per_file":1000,"keep_last_entries":10000}},"app":{{"vault_root_mode":"default_root","upriv_root_path":""}}}},"syncAlias":false}}}}"#
+    )
+    .expect("write request");
+    stdin.flush().expect("flush stdin");
+    let save: serde_json::Value =
+        serde_json::from_str(&read_line(&mut stdout)).expect("parse save");
+    assert_eq!(save["ok"], true, "save={save}");
+    assert_eq!(save["result"]["wrote"], true);
+
+    writeln!(
+        stdin,
+        r#"{{"type":"request","id":21,"method":"log_list","params":{{}}}}"#
+    )
+    .expect("write request");
+    stdin.flush().expect("flush stdin");
+    let list: serde_json::Value =
+        serde_json::from_str(&read_line(&mut stdout)).expect("parse list");
+    assert_eq!(list["ok"], true, "list={list}");
+    let files = list["result"]["files"].as_array().expect("files array");
+    assert!(
+        !files.is_empty(),
+        "expected at least one log file after settings_save"
+    );
+    let filename = files[0]["filename"].as_str().expect("filename").to_string();
+    assert!(filename.ends_with(".log"));
+    assert!(
+        files.iter().any(|f| f["isCurrent"] == true),
+        "expected a current-* file in list"
+    );
+
+    writeln!(
+        stdin,
+        r#"{{"type":"request","id":22,"method":"log_get","params":{{"filename":"{filename}"}}}}"#
+    )
+    .expect("write request");
+    stdin.flush().expect("flush stdin");
+    let get: serde_json::Value = serde_json::from_str(&read_line(&mut stdout)).expect("parse get");
+    assert_eq!(get["ok"], true, "get={get}");
+    let content = get["result"]["file"]["content"].as_str().expect("content");
+    assert!(
+        content.contains("settings_save") || content.contains("app_start"),
+        "content={content}"
+    );
+
+    writeln!(
+        stdin,
+        r#"{{"type":"request","id":23,"method":"log_delete","params":{{"filenames":["{filename}"]}}}}"#
+    )
+    .expect("write request");
+    stdin.flush().expect("flush stdin");
+    let delete: serde_json::Value =
+        serde_json::from_str(&read_line(&mut stdout)).expect("parse delete");
+    assert_eq!(delete["ok"], true, "delete={delete}");
+
+    writeln!(
+        stdin,
+        r#"{{"type":"request","id":24,"method":"log_delete","params":{{"filenames":["../escape.log"]}}}}"#
+    )
+    .expect("write request");
+    stdin.flush().expect("flush stdin");
+    let bad: serde_json::Value =
+        serde_json::from_str(&read_line(&mut stdout)).expect("parse bad delete");
+    assert_eq!(bad["ok"], false);
+    assert_eq!(bad["error"]["code"], "invalid_request");
+
+    child.kill().expect("kill daemon");
+    child.wait().expect("wait on daemon");
+}
+
+#[test]
+fn stdio_log_list_mid_session_missing_root_is_not_found() {
+    let root = tempfile::tempdir().expect("tempdir");
+    upriv_core::initialize_vault_root(root.path()).expect("initialize vault root");
+    let anchor = root.path().to_str().expect("utf8 path");
+
+    let mut child = spawn_daemon_with_env(&[
+        ("UPRIV_DEFAULT_ROOT_ANCHOR", anchor),
+        ("UPRIV_DISTRIBUTION", "portable"),
+    ]);
+    let mut stdout = std::io::BufReader::new(child.stdout.take().expect("stdout"));
+    let mut stdin = child.stdin.take().expect("stdin");
+
+    let _ready = read_line(&mut stdout);
+    let _event = read_line(&mut stdout);
+
+    writeln!(
+        stdin,
+        r#"{{"type":"request","id":30,"method":"app_settings_save","params":{{"settings":{{"ui":{{"locale":"en","theme":"dark","vault_list_sort":"order","vault_list_sort_direction":"asc","vault_list_view":"default","always_show_hidden_vaults":false,"file_manager_dock_expanded":false}},"logging":{{"enabled":true,"level":"info","entries_per_file":1000,"keep_last_entries":10000}},"app":{{"vault_root_mode":"default_root","upriv_root_path":""}}}},"syncAlias":false}}}}"#
+    )
+    .expect("write request");
+    stdin.flush().expect("flush stdin");
+    let save: serde_json::Value =
+        serde_json::from_str(&read_line(&mut stdout)).expect("parse save");
+    assert_eq!(save["ok"], true, "save={save}");
+
+    writeln!(
+        stdin,
+        r#"{{"type":"request","id":31,"method":"vault_root_resolve","params":{{}}}}"#
+    )
+    .expect("write request");
+    stdin.flush().expect("flush stdin");
+    let resolve: serde_json::Value =
+        serde_json::from_str(&read_line(&mut stdout)).expect("parse resolve");
+    assert_eq!(resolve["ok"], true, "resolve={resolve}");
+
+    std::fs::remove_dir_all(root.path().join(".upriv")).expect("remove .upriv");
+
+    writeln!(
+        stdin,
+        r#"{{"type":"request","id":32,"method":"log_list","params":{{}}}}"#
+    )
+    .expect("write request");
+    stdin.flush().expect("flush stdin");
+    let list: serde_json::Value =
+        serde_json::from_str(&read_line(&mut stdout)).expect("parse list");
+    assert_eq!(list["ok"], false, "list={list}");
+    assert_eq!(list["error"]["code"], "vault_root_not_found");
+
+    child.kill().expect("kill daemon");
+    child.wait().expect("wait on daemon");
+}

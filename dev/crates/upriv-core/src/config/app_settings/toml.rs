@@ -189,7 +189,9 @@ pub(super) fn write_settings_toml_only(root: &Path, settings: &AppSettings) -> R
         },
         logging: LoggingToml {
             enabled: settings.logging.enabled,
-            level: settings.logging.level.clone(),
+            level: crate::logging::LogLevel::parse_filter(&settings.logging.level)
+                .filter_str()
+                .to_string(),
             entries_per_file: settings.logging.entries_per_file,
             keep_last_entries: settings.logging.keep_last_entries,
         },
@@ -209,5 +211,11 @@ pub(super) fn write_settings_toml_only(root: &Path, settings: &AppSettings) -> R
 #   status=active + path → custom_root
 ";
     let contents = format!("{header}{body}\n{footer}");
-    crate::paths::write_bytes_atomic(&path, contents.as_bytes())
+    // Mid-session: if `.upriv` was deleted, fail — never recreate it via create_dir_all.
+    // First-time init already created `.upriv/` before this write (settings may not exist yet).
+    let upriv = root.join(".upriv");
+    if !upriv.is_dir() {
+        return Err(UprivError::VaultRootNotFound(path.clone()));
+    }
+    crate::paths::write_bytes_atomic_existing_parent(&path, contents.as_bytes())
 }

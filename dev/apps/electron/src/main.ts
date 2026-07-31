@@ -217,7 +217,12 @@ async function createWindow(): Promise<void> {
 
 ipcMain.handle(
   "upriv-invoke",
-  async (_event, method: string, params: Record<string, unknown>) => {
+  async (
+    _event,
+    method: string,
+    params: Record<string, unknown>,
+    timeoutMs?: number,
+  ) => {
     if (method === "app_exit") {
       await gracefulShutdown(0);
       return null;
@@ -247,7 +252,9 @@ ipcMain.handle(
     }
 
     const activeDaemon = await ensureDaemon();
-    return daemonRpc(activeDaemon, method, params);
+    const rpcTimeoutMs =
+      typeof timeoutMs === "number" && Number.isFinite(timeoutMs) ? timeoutMs : undefined;
+    return daemonRpc(activeDaemon, method, params, rpcTimeoutMs);
   },
 );
 

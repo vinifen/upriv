@@ -291,6 +291,11 @@ pub fn read_vault_root_alias(home: impl AsRef<Path>) -> Result<Option<VaultRootA
                     eprintln!(
                         "upriv-core: .upriv-root has unknown status={other:?}; rewriting as inactive"
                     );
+                    crate::logging::log_event(
+                        crate::logging::LogLevel::Warn,
+                        "vault_root_alias_healed",
+                        &[("reason", "unknown_status")],
+                    );
                     normalize_unknown_status = true;
                     false
                 }
@@ -375,6 +380,11 @@ pub fn deactivate_vault_root_alias_everywhere() -> Result<()> {
                 eprintln!(
                     "upriv-core: failed to deactivate stale .upriv-root beside binary {}: {error}",
                     bin.display()
+                );
+                crate::logging::log_event(
+                    crate::logging::LogLevel::Warn,
+                    "vault_root_alias_deactivate_failed",
+                    &[("scope", "beside_binary")],
                 );
             }
         }

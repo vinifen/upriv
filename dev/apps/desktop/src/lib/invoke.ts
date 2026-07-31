@@ -1,4 +1,5 @@
 import { BRIDGE_ERROR_CODES, RpcError, isRpcError } from "./errors";
+import { LOADING_BUDGET_MS } from "@upriv/shared";
 
 /** Matches `formatRpcError` in `apps/electron/src/daemon.ts` (`code: message`).
  * Electron wraps IPC failures as `Error invoking remote method '…': Error: code: message`.
@@ -24,22 +25,29 @@ export function isDesktop(): boolean {
 
 const DEFAULT_INVOKE_TIMEOUT_MS = 30_000;
 
-/** Per-method renderer timeout. `0` = no timeout (native dialogs must not be raced). */
-const METHOD_TIMEOUT_MS: Partial<Record<string, number>> = {
+/**
+ * Per-method renderer + Electron main timeout. `0` = no timeout (native dialogs).
+ * Keep in sync with `LOADING_BUDGET_MS` for user-visible waits.
+ * Passed through preload so main `daemonRpc` does not clamp to 30s.
+ */
+export const METHOD_TIMEOUT_MS: Partial<Record<string, number>> = {
   app_shutdown: 5_000,
   app_version: 10_000,
   app_exit: 15_000,
-  app_settings_get: 15_000,
+  app_settings_get: LOADING_BUDGET_MS.settingsLoad,
   app_settings_save: 30_000,
   pick_directory: 0,
-  vault_root_resolve: 15_000,
+  vault_root_resolve: LOADING_BUDGET_MS.vaultRootResolve,
   // Large `.upriv/` rename/delete on slow disks can take minutes; keep a high ceiling
   // and map timeouts to vault-root-specific i18n (see errorMessages / locales).
-  vault_root_setup_default_root: 600_000,
-  vault_root_setup_path: 600_000,
+  vault_root_setup_default_root: LOADING_BUDGET_MS.vaultRoot,
+  vault_root_setup_path: LOADING_BUDGET_MS.vaultRoot,
   vault_root_read_alias: 10_000,
   vault_root_default_root_status: 10_000,
   vault_root_inspect_path: 10_000,
+  log_list: LOADING_BUDGET_MS.logs,
+  log_get: LOADING_BUDGET_MS.logs,
+  log_delete: LOADING_BUDGET_MS.logs,
 };
 
 /** Normalize Electron/preload invoke failures into `RpcError` (wire `code: message`). */
@@ -83,7 +91,8 @@ export async function desktopInvokeRaw(
     throw new RpcError(BRIDGE_ERROR_CODES.SHELL_UNAVAILABLE, "window.upriv is unavailable");
   }
 
-  const invocation = api.invoke(method, params ?? {});
+  // Pass timeout to Electron main so `daemonRpc` matches the renderer budget.
+  const invocation = api.invoke(method, params ?? {}, timeoutMs);
   if (timeoutMs <= 0) {
     try {
       return await invocation;

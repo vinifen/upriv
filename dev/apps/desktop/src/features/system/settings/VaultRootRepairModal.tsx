@@ -78,6 +78,7 @@ export function VaultRootRepairModal({
   );
   const [confirmOpen, setConfirmOpen] = useState(false);
   const submitLock = useRef(false);
+  const busyGen = useRef(0);
   const diskApplied = useRef<DiskApplied | null>(null);
   const otherCheckGen = useRef(0);
 
@@ -87,6 +88,7 @@ export function VaultRootRepairModal({
     setBusy(false);
     setError(null);
     submitLock.current = false;
+    busyGen.current += 1;
     diskApplied.current = null;
     setOtherPath("");
     setOtherDisk("needs_folder");
@@ -144,7 +146,7 @@ export function VaultRootRepairModal({
   );
 
   const finishWithRoot = useCallback(
-    async (rootPath: string, nextMode: VaultRootMode) => {
+    async (rootPath: string, nextMode: VaultRootMode, gen: number) => {
       const saved = await patchSettings(
         {
           app: {
@@ -154,6 +156,7 @@ export function VaultRootRepairModal({
         },
         { vaultRootAlreadyApplied: true },
       );
+      if (gen !== busyGen.current) return;
       if (!saved) {
         throw new Error("settings_save_failed");
       }
@@ -165,6 +168,7 @@ export function VaultRootRepairModal({
   const applyRepairCurrent = useCallback(
     (nextPolicy: IncompleteReplacePolicy) => {
       if (submitLock.current) return;
+      const gen = ++busyGen.current;
       submitLock.current = true;
       setBusy(true);
       setError(null);
@@ -177,13 +181,15 @@ export function VaultRootRepairModal({
           cached.replacePolicy === nextPolicy &&
           samePathKey(cached.path, targetPath)
         ) {
-          await finishWithRoot(cached.rootPath, mode);
+          if (gen !== busyGen.current) return;
+          await finishWithRoot(cached.rootPath, mode, gen);
           return;
         }
 
         let rootPath: string;
         if (mode === "default_root") {
           const status = await vaultRoot.defaultRootStatus();
+          if (gen !== busyGen.current) return;
           const anchor = status.defaultRootAnchor.trim();
           const expected = targetPath.trim();
           if (anchor && expected && anchor !== expected) {
@@ -205,6 +211,7 @@ export function VaultRootRepairModal({
           });
           rootPath = result.rootPath;
         }
+        if (gen !== busyGen.current) return;
         diskApplied.current = {
           rootPath,
           source: "current",
@@ -212,12 +219,14 @@ export function VaultRootRepairModal({
           path: targetPath.trim(),
           replacePolicy: nextPolicy,
         };
-        await finishWithRoot(rootPath, mode);
+        await finishWithRoot(rootPath, mode, gen);
       })()
         .catch((err) => {
+          if (gen !== busyGen.current) return;
           setError(t(desktopErrorI18nKey(err, "modal.vault_root_setup.error_init")));
         })
         .finally(() => {
+          if (gen !== busyGen.current) return;
           submitLock.current = false;
           setBusy(false);
         });
@@ -256,6 +265,7 @@ export function VaultRootRepairModal({
     }
     if (otherGate.blocksPrimary) return;
 
+    const gen = ++busyGen.current;
     submitLock.current = true;
     setBusy(true);
     setError(null);
@@ -267,7 +277,8 @@ export function VaultRootRepairModal({
         cached.replacePolicy === (otherReplacePolicy ?? null) &&
         samePathKey(cached.path, path)
       ) {
-        await finishWithRoot(cached.rootPath, "custom_root");
+        if (gen !== busyGen.current) return;
+        await finishWithRoot(cached.rootPath, "custom_root", gen);
         return;
       }
 
@@ -276,6 +287,7 @@ export function VaultRootRepairModal({
         replacePolicy: otherReplacePolicy ?? undefined,
         bootstrap: { locale: settings.ui.locale },
       });
+      if (gen !== busyGen.current) return;
       diskApplied.current = {
         rootPath,
         source: "other",
@@ -283,12 +295,14 @@ export function VaultRootRepairModal({
         path,
         replacePolicy: otherReplacePolicy ?? null,
       };
-      await finishWithRoot(rootPath, "custom_root");
+      await finishWithRoot(rootPath, "custom_root", gen);
     })()
       .catch((err) => {
+        if (gen !== busyGen.current) return;
         setError(t(desktopErrorI18nKey(err, "modal.vault_root_setup.error_init")));
       })
       .finally(() => {
+        if (gen !== busyGen.current) return;
         submitLock.current = false;
         setBusy(false);
       });
@@ -349,6 +363,13 @@ export function VaultRootRepairModal({
           onRequestPrimary={requestContinue}
           onConfirmPrimary={commitContinue}
           onCancelConfirm={() => setConfirmOpen(false)}
+          onBusyTimeout={() => {
+            busyGen.current += 1;
+            submitLock.current = false;
+            setBusy(false);
+            setConfirmOpen(false);
+            setError(t("loading.timed_out"));
+          }}
         />
       }
       rootClassName="z-[200]"

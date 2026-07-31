@@ -56,6 +56,7 @@ Chromium’s OS SUID sandbox often fails under AppArmor / AppImage (`setuid_sand
 
 Method name constants: **`apps/desktop/src/lib/commands.ts`** (React). Execution gate: **`crates/upriv-daemon/src/rpc.rs`**. Electron main only special-cases `app_exit`.
 
+Logs (daemon): `log_list` / `log_get` / `log_delete` — no Electron allowlist; all methods go to the daemon.
 ## Layout
 
 ```text

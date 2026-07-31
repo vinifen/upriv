@@ -3,6 +3,7 @@ import { isVaultErrorCode, type VaultErrorCode } from "./codes";
 
 /** User-facing: maps upriv-core wire codes → i18n keys. Keep in sync with `locales/*.json`. */
 export const VAULT_ERROR_I18N_KEYS = {
+  vault_not_found: "error.vault_not_found",
   wrong_password: "error.wrong_password",
   vault_already_open: "error.vault_already_open",
   sync_mismatch: "error.sync_mismatch",

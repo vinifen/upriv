@@ -7,7 +7,7 @@ describe("logLevelClass", () => {
     ["WARN", "text-vault-recovery"],
     ["INFO", "text-accent"],
     ["DEBUG", "text-on-surface-variant"],
-    ["TRACE", "text-on-surface-variant/70"],
+    ["UNKNOWN", "text-on-surface"],
   ] as const)("%s → %s", (level, expected) => {
     expect(logLevelClass(level)).toBe(expected);
   });

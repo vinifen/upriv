@@ -1,0 +1,34 @@
+---
+description: Every blocking UI load must use a finite budget and show remaining time — never infinite spinners.
+alwaysApply: true
+---
+
+# Finite loading budgets (visible to the user)
+
+## Hard rule
+
+Every **blocking** loading / busy / applying overlay in the desktop (and later mobile) UI must:
+
+1. Use a **finite** timeout from `LOADING_BUDGET_MS` in `@upriv/shared` (`domain/loading/budget.ts`) — keep Electron invoke timeouts in sync for the same operation.
+2. **Show** the budget to the user (`LoadingBudgetHint` + `useLoadingBudget`): max duration **and** countdown remaining, so the wait never looks endless.
+3. Delay first paint with `LOADING_APPEAR_DELAY_MS` (1s) via `useLoadingBudget().visible` — fast ops must not flash a spinner. Budget/timeout still count from when the op started.
+4. On timeout: **clear** the spinner / applying state and offer **retry** (or a clear error). Never leave `applying` / `busy` stuck forever.
+5. Electron **main** must honor the same map: renderer passes `METHOD_TIMEOUT_MS[method]` through preload into `daemonRpc` (never leave main at a blanket 30s for long vault-root ops).
+
+## Budgets (current)
+
+| Key | Default | Use |
+|-----|---------|-----|
+| `vaultRoot` | 10 min | Data-folder setup / Repair / ConfirmFooter busy |
+| `vaultRootResolve` | 1 min | Gate applying while waiting on `vault_root_resolve` |
+| `settingsLoad` | 1 min | First settings load overlay |
+| `logs` | 1 min | Logs list / viewer |
+| `default` | 2 min | Generic modal / list work |
+
+Prefer a larger budget over an infinite wait. “Massive” is OK; infinite is not.
+
+## Do not
+
+- Ship a full-screen or modal spinner with no remaining-time copy.
+- Soft-block the Gate (`applying`) without a budget + timeout recovery.
+- Invent ad-hoc `setTimeout` budgets in feature code — extend `LOADING_BUDGET_MS` instead.

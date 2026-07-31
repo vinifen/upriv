@@ -335,8 +335,9 @@ Example (file `current-000001-…`):
 | Key | Type | Default (demo) | Effect |
 |-----|------|----------------|--------|
 | `enabled` | bool | `true` | `false` = logging **off** — no new lines, no rotation, no `current-*.log` created |
-| `level` | string | `"info"` | Only write events at this level or higher (`trace` … `error`) |
+| `level` | string | `"info"` | Only write events at this level or higher (`error` \| `warn` \| `info` \| `debug`). Unknown values normalize to `info`. |
 | `entries_per_file` | u16 | `1000` | Lines per file before rotate (1–1000 index per file) |
+| `keep_last_entries` | u32 | `10000` | Retain about this many lines across **archived** files (`0` = unlimited). The active `current-*` can add up to `entries_per_file` more. |
 
 Paths: `logs_dir = ".upriv/logs"` in `[package]`.
 
@@ -363,13 +364,16 @@ Only `WARN` and `ERROR` lines are written; rotation unchanged.
 enabled = true
 level = "debug"
 entries_per_file = 1000
+keep_last_entries = 10000
 ```
 
 Full detail for development.
 
-On app start: read `[logging]` before opening the log writer. If `enabled = false`, skip `logs/` entirely (optional: stderr in dev builds only — not part of this bundle spec).
+On app start: read `[logging]` before opening the log writer. If `enabled = false`, skip creating a `current-*` (existing files remain). Settings Save **hot-reloads** the live writer via `ensure_logging_session` / `install_logging_at` (level and retention apply on the next write; may emit `logging_reconfigure`). The Logs UI always re-reads the folder when opened.
 
-Implementation (Rust): `tracing` + custom writer; respect `enabled` and `LevelFilter::from_str(level)`; track index, `seq`, rename on rotate.
+**Disk surprises:** the UI lists every `*.log` in the folder (including renamed/odd files). The writer only appends to a canonical `current-{seq}-{stamp}.log`; if the active file is missing/renamed/deleted, the next write creates a new `current-*`. Deleting the active file via UI is allowed.
+
+Implementation (Rust): custom `Logger` writer + `log_event`; respect `enabled` and level filter; track index, `seq`, rename on rotate. RPC: `log_list` (metadata), `log_get` (one file), `log_delete`.
 
 ## Layers
 

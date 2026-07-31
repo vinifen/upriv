@@ -32,9 +32,9 @@ We are **past the Tauri → Electron migration** and **past UI/lifecycle scaffol
 |-------|---------------------------|
 | **React UI** | Vault list / lifecycle / file-manager still **mock**; settings + **`VaultRootGate`** / setup / repair use live vault-root + app-settings services |
 | **Electron** | Shell, preload, daemon spawn, IPC timeouts, packaging scaffold |
-| **upriv-daemon** | stdio JSON-RPC — `app_version`, `app_shutdown`, `app_settings_*`, `vault_root_*` (resolve/setup/alias/default_root/inspect), `pick_directory` |
-| **upriv-core** | `logging`, `time`, `app_version()`, **`paths/`**, **`config/`** (app settings + vault `config.toml`), **`vault/`** list stub — **no open/close/crypto/7zz yet** |
-| **Integration** | `createDesktopServices()` → live `vaultRoot` + `appSettings`; other services mock until their RPCs land |
+| **upriv-daemon** | stdio JSON-RPC — `app_version`, `app_shutdown`, `app_settings_*`, `log_*`, `vault_root_*` (resolve/setup/alias/default_root/inspect), `pick_directory` |
+| **upriv-core** | `logging` (`Logger` / `log_event` + list/get/delete), `time`, `app_version()`, **`paths/`**, **`config/`** (app settings + vault `config.toml`), **`vault/`** list stub — **no open/close/crypto/7zz yet** |
+| **Integration** | `createDesktopServices()` → live `vaultRoot` + `appSettings` + `logs`; other services mock until their RPCs land |
 
 **What to build next (default order):**
 
@@ -45,7 +45,33 @@ We are **past the Tauri → Electron migration** and **past UI/lifecycle scaffol
 5. Mount (FUSE / WinFsp) and remaining RPCs from SDD §8.2–8.3  
 
 **Do not** re-implement vault logic in TypeScript or duplicate crypto in `upriv-daemon` — only `upriv-core`.  
-**Do not** reimplement vault-root resolution in TS — use existing `vault_root_*` RPCs / `VaultRootService`.
+**Do not** reimplement vault-root resolution in TS — use existing `vault_root_*` RPCs / `VaultRootService`.  
+**Do not** ship infinite loading overlays — every blocking busy/applying UI uses `LOADING_BUDGET_MS` + visible countdown (`LoadingBudgetHint` / `useLoadingBudget`); on timeout clear state and offer retry. See `.cursor/rules/finite-loading-budgets.mdc`.
+
+**Logging notes:** `log_event` is lazy — with no vault-root yet it does not write under `.upriv/logs/` (stderr/`eprintln` only). If `.upriv` is deleted while a logger was open, the session is cleared and the writer **refuses** to recreate `.upriv` without `settings.toml` (so NeedsSetup / repair can run). `VaultRootGate` may still emit a second `vault_root_resolve` DEBUG line under React Strict Mode in development; production should see one probe per settings-ready / epoch bump.
+
+### Mid-session integrity (fail loud)
+
+After Gate is **ready** / `settingsOnDisk`, I/O that assumes a valid contentor must not soft-succeed if that contentor is gone or corrupt.
+
+| Case | Meaning | Wire | UI |
+|------|---------|------|-----|
+| **A** | `.upriv` corrupt / incomplete | `vault_root_incomplete` | Toast + bump `vaultRootEpoch` → Gate Repair |
+| **B** | `.upriv` missing | `vault_root_not_found` | Toast + bump epoch → Gate Setup / Recovery |
+| **C** | Root OK; `vaults/<id>` gone | `vault_not_found` | Toast + invalidate that vault session — **do not** reopen Gate |
+
+**Settings save:** missing/corrupt target → `Err` (not `wrote: false`). Soft `wrote: false` only for empty `custom_root` path (bootstrap). Pre-root UI (`onDisk: false`) keeps prefs in memory without requiring a disk write.
+
+**Taxonomy is layered / extensible** — A/B/C are the presence spine, not a closed set:
+
+| Layer | Examples | UI |
+|-------|----------|-----|
+| Vault-root | A, B, `alias_invalid`, marker I/O | Gate / Recovery |
+| Vault | C, `vault_config_invalid`, archive/store broken | That vault |
+| Session/ops | `wrong_password`, already open, RAM, mount | Op toast |
+| Transport | disk full, permission | `io_error` |
+
+Rule: *I/O that assumed X valid → if X is gone/corrupt, typed Err of X’s layer — never silent `wrote: false` after ready.*
 
 ---
 
@@ -167,7 +193,7 @@ upriv/
 | **Desktop RPC** | `dev/crates/upriv-daemon/` | stdio JSON-RPC delegating to core | Business logic (keep `rpc.rs` thin) |
 | **Core** | `dev/crates/upriv-core/` | Crypto, 7z, paths, state machine, FUSE, recovery | Depend on Electron |
 
-**Desktop UI prototype (`dev/apps/desktop/`, mock layer):** vault list, lifecycle, file manager, settings, logs, and help run on in-memory mocks until `upriv-daemon`/`upriv-core` wiring. Notable conventions:
+**Desktop UI prototype (`dev/apps/desktop/`, mock layer):** vault list, lifecycle, file manager, settings, and help run on in-memory mocks until `upriv-daemon`/`upriv-core` wiring. **Logs** use live `log_*` RPC when desktop. Notable conventions:
 
 - **Pipeline:** `useVaultPipelineRun` enforces SDD §8.2.2 — one open/close/seal at a time (`isRunning`).
 - **Auto-close:** at most one close per idle tick; warn toast once per vault per idle cycle; respects `isPipelineRunning`.

@@ -43,6 +43,7 @@ export function VaultRootDataFolderModal({
   const [appliedVisible, setAppliedVisible] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const submitLock = useRef(false);
+  const busyGen = useRef(0);
   const openedRef = useRef(false);
   const appliedHideRef = useRef<ReturnType<typeof setTimeout>>();
   const gateRef = useRef(gate);
@@ -72,6 +73,7 @@ export function VaultRootDataFolderModal({
       setAppliedVisible(false);
       setError(null);
       submitLock.current = false;
+      busyGen.current += 1;
       clearTimeout(appliedHideRef.current);
       return;
     }
@@ -163,6 +165,7 @@ export function VaultRootDataFolderModal({
       setError(t("modal.vault_root_setup.error_init"));
       return;
     }
+    const gen = ++busyGen.current;
     submitLock.current = true;
     setBusy(true);
     setError(null);
@@ -188,6 +191,7 @@ export function VaultRootDataFolderModal({
           bootstrap: { locale: settings.ui.locale },
         });
       }
+      if (gen !== busyGen.current) return;
 
       const saved = await patchSettings(
         {
@@ -198,6 +202,7 @@ export function VaultRootDataFolderModal({
         },
         { vaultRootAlreadyApplied: true },
       );
+      if (gen !== busyGen.current) return;
       if (!saved) {
         throw new Error("settings_save_failed");
       }
@@ -205,14 +210,17 @@ export function VaultRootDataFolderModal({
       setAppliedVisible(true);
       clearTimeout(appliedHideRef.current);
       appliedHideRef.current = setTimeout(() => {
+        if (gen !== busyGen.current) return;
         setAppliedVisible(false);
         onClose();
       }, APPLIED_INDICATOR_MS);
     })()
       .catch((err) => {
+        if (gen !== busyGen.current) return;
         setError(t(desktopErrorI18nKey(err, "modal.vault_root_setup.error_init")));
       })
       .finally(() => {
+        if (gen !== busyGen.current) return;
         submitLock.current = false;
         setBusy(false);
       });
@@ -257,6 +265,13 @@ export function VaultRootDataFolderModal({
       onRequestPrimary={requestApply}
       onConfirmPrimary={commitApply}
       onCancelConfirm={() => setConfirmOpen(false)}
+      onBusyTimeout={() => {
+        busyGen.current += 1;
+        submitLock.current = false;
+        setBusy(false);
+        setConfirmOpen(false);
+        setError(t("loading.timed_out"));
+      }}
     />
   );
 

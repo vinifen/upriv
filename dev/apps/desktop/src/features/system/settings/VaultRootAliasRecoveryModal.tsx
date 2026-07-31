@@ -68,6 +68,7 @@ export function VaultRootAliasRecoveryModal({
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [customDisk, setCustomDisk] = useState<VaultRootDiskStatus>("needs_folder");
   const submitLock = useRef(false);
+  const busyGen = useRef(0);
   const diskApplied = useRef<{ rootPath: string; mode: VaultRootMode } | null>(null);
   const customCheckGen = useRef(0);
   const rememberedPath = presentation.rememberedAliasTarget ?? "";
@@ -84,6 +85,7 @@ export function VaultRootAliasRecoveryModal({
     setConfirmOpen(false);
     setCustomDisk(rememberedPath.trim() ? "checking" : "needs_folder");
     submitLock.current = false;
+    busyGen.current += 1;
     diskApplied.current = null;
     setDefaultRootAnchor(presentation.defaultRootAnchor.trim());
 
@@ -175,6 +177,7 @@ export function VaultRootAliasRecoveryModal({
   const commitContinue = useCallback(() => {
     // UI primary = Continue (Alias Recovery gate — not Apply).
     if (submitLock.current) return;
+    const gen = ++busyGen.current;
     submitLock.current = true;
     setBusy(true);
     setError(null);
@@ -182,6 +185,7 @@ export function VaultRootAliasRecoveryModal({
       if (mode === "default_root") {
         if (!diskApplied.current || diskApplied.current.mode !== "default_root") {
           const defaultRoot = await vaultRoot.defaultRootStatus();
+          if (gen !== busyGen.current) return;
           if (defaultRoot.status === "incomplete") {
             onDefaultRootIncomplete(defaultRoot.defaultRootAnchor);
             return;
@@ -196,8 +200,10 @@ export function VaultRootAliasRecoveryModal({
             const { rootPath } = await vaultRoot.setupDefaultRoot({
               bootstrap: { locale: settings.ui.locale },
             });
+            if (gen !== busyGen.current) return;
             diskApplied.current = { rootPath, mode: "default_root" };
           } catch (caught) {
+            if (gen !== busyGen.current) return;
             if (isIncompleteError(caught)) {
               onDefaultRootIncomplete(defaultRoot.defaultRootAnchor);
               return;
@@ -205,6 +211,7 @@ export function VaultRootAliasRecoveryModal({
             throw caught;
           }
         }
+        if (gen !== busyGen.current) return;
         const saved = await patchSettings(
           {
             app: {
@@ -214,6 +221,7 @@ export function VaultRootAliasRecoveryModal({
           },
           { vaultRootAlreadyApplied: true },
         );
+        if (gen !== busyGen.current) return;
         if (!saved) throw new Error("settings_save_failed");
         onRecovered();
         return;
@@ -233,11 +241,13 @@ export function VaultRootAliasRecoveryModal({
         diskApplied.current = null;
         try {
           const inspected = await vaultRoot.inspectAtPath(path);
+          if (gen !== busyGen.current) return;
           if (inspected.status === "incomplete") {
             onCustomIncomplete(path);
             return;
           }
         } catch (caught) {
+          if (gen !== busyGen.current) return;
           if (isIncompleteError(caught)) {
             onCustomIncomplete(path);
             return;
@@ -248,6 +258,7 @@ export function VaultRootAliasRecoveryModal({
           const { rootPath } = await vaultRoot.setupAtPath(path, {
             bootstrap: { locale: settings.ui.locale },
           });
+          if (gen !== busyGen.current) return;
           diskApplied.current = { rootPath, mode: "custom_root" };
           const saved = await patchSettings(
             {
@@ -258,10 +269,12 @@ export function VaultRootAliasRecoveryModal({
             },
             { vaultRootAlreadyApplied: true },
           );
+          if (gen !== busyGen.current) return;
           if (!saved) throw new Error("settings_save_failed");
           onRecovered();
           return;
         } catch (caught) {
+          if (gen !== busyGen.current) return;
           if (isIncompleteError(caught)) {
             onCustomIncomplete(path);
             return;
@@ -281,13 +294,16 @@ export function VaultRootAliasRecoveryModal({
         },
         { vaultRootAlreadyApplied: true },
       );
+      if (gen !== busyGen.current) return;
       if (!saved) throw new Error("settings_save_failed");
       onRecovered();
     })()
       .catch((caught) => {
+        if (gen !== busyGen.current) return;
         setError(t(desktopErrorI18nKey(caught, "modal.vault_root_setup.error_init")));
       })
       .finally(() => {
+        if (gen !== busyGen.current) return;
         submitLock.current = false;
         setBusy(false);
       });
@@ -351,6 +367,13 @@ export function VaultRootAliasRecoveryModal({
           onRequestPrimary={requestContinue}
           onConfirmPrimary={commitContinue}
           onCancelConfirm={() => setConfirmOpen(false)}
+          onBusyTimeout={() => {
+            busyGen.current += 1;
+            submitLock.current = false;
+            setBusy(false);
+            setConfirmOpen(false);
+            setError(t("loading.timed_out"));
+          }}
         />
       }
     >

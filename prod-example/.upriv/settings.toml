@@ -22,8 +22,9 @@ file_manager_dock_expanded = false   # minimized file managers: show all chips v
 
 [logging]
 enabled = true
-level = "info"                    # trace | debug | info | warn | error
+level = "info"                    # error | warn | info | debug
 entries_per_file = 1000
+keep_last_entries = 10000         # 0 = unlimited; prune archived files by line budget
 
 [app]
 # Vault-root mode (nearby vs custom) is NOT configured here.

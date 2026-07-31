@@ -11,10 +11,17 @@ import {
 import { useAppSettingsService } from "@/platform/services";
 import { I18nProvider, useTranslation } from "@/i18n";
 import { applyDocumentTheme } from "@/theme";
-import { createDefaultAppSettings, normalizeAppSettings, RpcError } from "@upriv/shared";
+import {
+  createDefaultAppSettings,
+  normalizeAppSettings,
+  RpcError,
+  isRpcError,
+  isVaultRootErrorCode,
+} from "@upriv/shared";
 import type { AppSettingsConfig, AppSettingsPatch } from "@upriv/shared";
 import { useToast } from "@/hooks/useToast";
 import { desktopErrorI18nKey } from "@/lib/errorMessages";
+import { Toast } from "@/components/ui";
 import type { I18nKey } from "@/i18n";
 
 interface PersistOptions {
@@ -34,8 +41,8 @@ interface AppSettingsContextValue {
   /** True when the last load came from on-disk settings.toml (not bootstrap defaults). */
   settingsOnDisk: boolean;
   /**
-   * Bumped after a successful vault-root mode/path persist.
-   * `VaultRootGate` re-resolves on this (not on every unrelated settings patch).
+   * Bumped after vault-root setup/repair/recovery **or** mid-session root integrity
+   * failure on persist — `VaultRootGate` re-resolves on this.
    */
   vaultRootEpoch: number;
   replaceSettings: (next: AppSettingsConfig, options?: PersistOptions) => Promise<void>;
@@ -43,6 +50,11 @@ interface AppSettingsContextValue {
   patchSettings: (patch: AppSettingsPatch, options?: PersistOptions) => Promise<boolean>;
   /** Reload settings.toml (or defaults) without persisting. */
   reloadSettings: () => Promise<void>;
+  /**
+   * Mid-session vault-root A/B failure outside Settings save (e.g. Logs list):
+   * bump Gate epoch, reload settings, toast. Caller closes its own modal.
+   */
+  reportVaultRootIntegrityFailure: (error: unknown) => Promise<void>;
   /** Session-only — not saved to settings.toml; resets when the app restarts. */
   showHiddenVaultsSession: boolean;
   setShowHiddenVaultsSession: (value: boolean) => void;
@@ -52,7 +64,7 @@ const AppSettingsContext = createContext<AppSettingsContextValue | null>(null);
 
 function SettingsPersistErrorToast({ signal, error }: { signal: number; error: unknown }) {
   const { t } = useTranslation();
-  const { show: showToast } = useToast();
+  const { message, show: showToast, dismiss } = useToast();
 
   useEffect(() => {
     if (signal === 0) return;
@@ -60,7 +72,7 @@ function SettingsPersistErrorToast({ signal, error }: { signal: number; error: u
     showToast(t(key));
   }, [error, showToast, signal, t]);
 
-  return null;
+  return <Toast message={message} onDismiss={dismiss} className="z-[220]" />;
 }
 
 export function AppSettingsProvider({ children }: { children: ReactNode }) {
@@ -121,12 +133,28 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
     settingsRef.current = normalized;
     setSettings(normalized);
     setSettingsOnDisk(loaded.onDisk);
+    setSettingsReady(true);
   }, [appSettingsService]);
 
   const notifyPersistFailed = useCallback((error: unknown) => {
     setPersistError(error);
     setPersistErrorSignal((count) => count + 1);
   }, []);
+
+  const reportVaultRootIntegrityFailure = useCallback(
+    async (error: unknown) => {
+      if (isRpcError(error) && isVaultRootErrorCode(error.code)) {
+        setVaultRootEpoch((n) => n + 1);
+      }
+      try {
+        await reloadSettings();
+      } catch {
+        // Keep previous memory if reload also fails; still toast the original error.
+      }
+      notifyPersistFailed(error);
+    },
+    [notifyPersistFailed, reloadSettings],
+  );
 
   const enqueuePersist = useCallback(<T,>(task: () => Promise<T>): Promise<T> => {
     const queued = persistChainRef.current.then(task, task);
@@ -183,11 +211,22 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
         }
 
         const wrote = await appSettingsService.save(normalized, { syncAlias: true });
+        if (!wrote) {
+          // Soft `wrote: false` is only empty custom path bootstrap. After onDisk,
+          // treat as integrity failure (safety net if daemon regresses to soft miss).
+          if (settingsOnDiskRef.current) {
+            throw new RpcError(
+              "vault_root_not_found",
+              "settings save did not write: vault-root missing",
+            );
+          }
+          settingsRef.current = normalized;
+          setSettings(normalized);
+          return;
+        }
         settingsRef.current = normalized;
         setSettings(normalized);
-        if (wrote) {
-          setSettingsOnDisk(true);
-        }
+        setSettingsOnDisk(true);
       } catch (error) {
         // Disk/alias may already match the new root (Gate / Data folder setup).
         // Prefer adopting that root’s TOML over keeping previous-session memory.
@@ -202,7 +241,16 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
           notifyPersistFailed(error);
           throw error;
         }
-        await reloadSettings();
+        const rootIntegrity = isRpcError(error) && isVaultRootErrorCode(error.code);
+        if (rootIntegrity) {
+          // Gate first — then reload so Settings sees onDisk:false and dismisses.
+          setVaultRootEpoch((n) => n + 1);
+        }
+        try {
+          await reloadSettings();
+        } catch {
+          // Keep previous memory if reload also fails; still toast the original error.
+        }
         notifyPersistFailed(error);
         // Preserve RpcError codes for UI mapping (do not collapse to settings_save_failed).
         throw error;
@@ -249,6 +297,7 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
       replaceSettings,
       patchSettings,
       reloadSettings,
+      reportVaultRootIntegrityFailure,
       showHiddenVaultsSession,
       setShowHiddenVaultsSession,
     }),
@@ -260,6 +309,7 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
       replaceSettings,
       patchSettings,
       reloadSettings,
+      reportVaultRootIntegrityFailure,
       showHiddenVaultsSession,
     ],
   );

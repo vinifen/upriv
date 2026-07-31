@@ -9,6 +9,7 @@ import {
   APP_SETTINGS_SECTIONS,
   appSettingsEqual,
   isRpcError,
+  isVaultRootErrorCode,
   normalizeAppSettings,
   type AppSettingsConfig,
   type AppSettingsSectionId,
@@ -38,8 +39,13 @@ interface AppSettingsModalProps {
 export function AppSettingsModal({ open, onClose, vaults, onDirtyChange }: AppSettingsModalProps) {
   const { t } = useTranslation();
   const { showError } = useErrorToast();
-  const { settings, replaceSettings, showHiddenVaultsSession, setShowHiddenVaultsSession } =
-    useAppSettingsContext();
+  const {
+    settings,
+    replaceSettings,
+    showHiddenVaultsSession,
+    setShowHiddenVaultsSession,
+    settingsOnDisk,
+  } = useAppSettingsContext();
 
   const [draft, setDraft] = useState<AppSettingsConfig | null>(null);
   const [saveConfirmOpen, setSaveConfirmOpen] = useState(false);
@@ -129,6 +135,23 @@ export function AppSettingsModal({ open, onClose, vaults, onDirtyChange }: AppSe
     onClose();
   };
 
+  // Mid-session root loss: Gate reopens Setup/Repair — do not leave settings on top.
+  // Only close on true→false (had on-disk this session). Bootstrap / failed first load
+  // keep `settingsOnDisk === false` and must not auto-dismiss an open modal.
+  const hadOnDiskRef = useRef(false);
+  useEffect(() => {
+    if (settingsOnDisk) hadOnDiskRef.current = true;
+  }, [settingsOnDisk]);
+
+  useEffect(() => {
+    if (!open || settingsOnDisk || !hadOnDiskRef.current) return;
+    setDraft(null);
+    setSaveBusy(false);
+    setSaveConfirmOpen(false);
+    setDiscardConfirmOpen(false);
+    onClose();
+  }, [open, settingsOnDisk, onClose]);
+
   const requestClose = () => {
     if (discardConfirmOpen || saveConfirmOpen) {
       dismissFooterConfirm();
@@ -174,6 +197,12 @@ export function AppSettingsModal({ open, onClose, vaults, onDirtyChange }: AppSe
       })
       .catch((error) => {
         setSaveConfirmOpen(false);
+        if (isRpcError(error) && isVaultRootErrorCode(error.code)) {
+          // Context already toasted + bumped Gate epoch; dismiss so Setup/Repair is usable.
+          setDraft(settings);
+          handleClose();
+          return;
+        }
         const fallback =
           isRpcError(error) && error.code === "invalid_request"
             ? APP_SETTINGS_ERROR_I18N_KEYS.INVALID_REQUEST

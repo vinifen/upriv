@@ -1,6 +1,7 @@
 import type { AppServices, VaultService } from "@upriv/shared";
 import { mockServices } from "@/platform/mocks";
 import { desktopAppSettingsService } from "./services/appSettingsService";
+import { desktopLogService } from "./services/logService";
 import { desktopVaultRootService } from "./services/vaultRootService";
 
 /**
@@ -18,14 +19,15 @@ const desktopVaultService: VaultService = {
 };
 
 /**
- * Desktop adapters → upriv-daemon. Vault-root + app settings are live; other
- * services stay mock until their RPCs are ported.
+ * Desktop adapters → upriv-daemon. Vault-root + app settings + logs are live;
+ * other services stay mock until their RPCs are ported.
  */
 export function createDesktopServices(): AppServices {
   return {
     ...mockServices,
     vaultRoot: desktopVaultRootService,
     appSettings: desktopAppSettingsService,
+    logs: desktopLogService,
     vault: desktopVaultService,
   };
 }

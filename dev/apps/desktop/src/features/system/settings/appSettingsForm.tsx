@@ -12,10 +12,10 @@ import {
   LOG_KEEP_LAST_DEFAULT,
   LOG_KEEP_LAST_ENTRY_OPTIONS,
   LOG_KEEP_LAST_UNLIMITED,
+  LOG_LEVEL_PRESETS,
   SUPPORTED_LOCALES,
   logFileCountForKeepLast,
   type AppSettingsConfig,
-  type LogLevel,
   type UiTheme,
   type VaultListItem,
   resolveVaultDisplayStatus,
@@ -38,13 +38,6 @@ interface SectionPatchProps<S extends keyof AppSettingsConfig> {
 }
 
 const THEMES: UiTheme[] = ["dark", "neutral", "light"];
-const LOG_LEVELS = [
-  "error",
-  "warn",
-  "info",
-  "debug",
-  "trace",
-] as const satisfies readonly LogLevel[];
 
 export function AppSettingsAppearanceSection({ config, onChange }: SectionPatchProps<"ui">) {
   const { t } = useTranslation();
@@ -419,7 +412,7 @@ export function AppSettingsLoggingSection({ config, onChange }: SectionPatchProp
           aria-label={t("modal.app_settings.field.logging_level")}
           className="grid gap-2"
         >
-          {LOG_LEVELS.map((level) => (
+          {LOG_LEVEL_PRESETS.map((level) => (
             <PolicyRadioOption
               key={level}
               groupName={levelGroup}

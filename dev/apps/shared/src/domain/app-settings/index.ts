@@ -14,8 +14,11 @@ export {
   LOG_KEEP_LAST_DEFAULT,
   LOG_KEEP_LAST_ENTRY_OPTIONS,
   LOG_KEEP_LAST_UNLIMITED,
+  LOG_LEVEL_PRESETS,
   logFileCountForKeepLast,
   normalizeLogKeepLastEntries,
+  normalizeLogLevel,
+  type LogLevelPreset,
 } from "./logging";
 export { createDefaultAppSettings, normalizeAppSettings, normalizeVaultRootMode } from "./normalize";
 export { APP_SETTINGS_ERROR_I18N_KEYS, appSettingsErrorI18nKey } from "./errorMessages";

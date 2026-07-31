@@ -5,6 +5,7 @@ import { parseAppVersionResult, type AppVersionResult } from "./types";
 import type {
   AppSettingsConfig,
   AppDistribution,
+  AppLogFile,
   DefaultRootStatusResult,
   VaultRootAliasInfo,
   VaultRootBootstrapPrefs,
@@ -13,7 +14,7 @@ import type {
   VaultRootResolveResult,
   VaultRootResolveSource,
 } from "@upriv/shared";
-import { normalizeAppSettings } from "@upriv/shared";
+import { normalizeAppSettings, parseAppLogFile } from "@upriv/shared";
 
 /** Fetch product version from upriv-daemon. */
 export async function rpcAppVersion(): Promise<AppVersionResult> {
@@ -353,4 +354,45 @@ export async function rpcVaultRootInspectPath(path: string): Promise<VaultRootIn
     status,
     path: (raw as { path: string }).path,
   };
+}
+
+function parseAppLogFileOrThrow(raw: unknown): AppLogFile {
+  try {
+    return parseAppLogFile(raw);
+  } catch (error) {
+    throw new RpcError(
+      BRIDGE_ERROR_CODES.INVALID_RESPONSE,
+      error instanceof Error ? error.message : "log file: invalid shape",
+      raw,
+    );
+  }
+}
+
+/** List `.upriv/logs/*.log` metadata (content empty until `log_get`). */
+export async function rpcLogList(): Promise<AppLogFile[]> {
+  const raw = await desktopInvokeRaw(DAEMON_COMMANDS.LOG_LIST);
+  if (
+    typeof raw !== "object" ||
+    raw === null ||
+    !Array.isArray((raw as { files?: unknown }).files)
+  ) {
+    throw new RpcError(BRIDGE_ERROR_CODES.INVALID_RESPONSE, "log_list: expected { files }", raw);
+  }
+  return (raw as { files: unknown[] }).files.map(parseAppLogFileOrThrow);
+}
+
+/** Read one log file including content. */
+export async function rpcLogGet(filename: string): Promise<AppLogFile | undefined> {
+  const raw = await desktopInvokeRaw(DAEMON_COMMANDS.LOG_GET, { filename });
+  if (typeof raw !== "object" || raw === null) {
+    throw new RpcError(BRIDGE_ERROR_CODES.INVALID_RESPONSE, "log_get: expected object", raw);
+  }
+  const file = (raw as { file?: unknown }).file;
+  if (file === null || file === undefined) return undefined;
+  return parseAppLogFileOrThrow(file);
+}
+
+/** Delete log files by basename (active `current-*` allowed). */
+export async function rpcLogDelete(filenames: readonly string[]): Promise<void> {
+  await desktopInvokeRaw(DAEMON_COMMANDS.LOG_DELETE, { filenames: [...filenames] });
 }

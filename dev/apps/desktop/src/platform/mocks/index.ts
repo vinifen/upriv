@@ -14,7 +14,7 @@ import { mockVaultLifecycleService } from "./services/vaultLifecycleService";
 import { mockVaultRootService } from "./services/vaultRootService";
 import { mockVaultService } from "./services/vaultService";
 
-/** All mock services — swap for desktop adapters in `createServices()`. */
+/** Remaining mocks — logs stay in-memory (no Electron bridge in browser). */
 export const mockServices: AppServices = {
   vault: mockVaultService,
   vaultRoot: mockVaultRootService,

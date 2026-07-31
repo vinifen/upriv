@@ -13,3 +13,4 @@ export { PasswordInput, type PasswordInputProps } from "./PasswordInput";
 export { StatusDot, type StatusDotProps } from "./StatusDot";
 export { Switch, type SwitchProps } from "./Switch";
 export { Toast, type ToastProps } from "./Toast";
+export { LoadingBudgetHint } from "./LoadingBudgetHint";

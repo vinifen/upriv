@@ -5,6 +5,7 @@ use std::sync::Mutex;
 
 use super::config::LogConfig;
 use super::format::format_log_line;
+use super::names::{parse_archived_log_name, parse_current_log_name};
 use super::LogLevel;
 use crate::time::{utc_filename_stamp, utc_timestamp_iso_millis};
 
@@ -22,16 +23,14 @@ pub struct Logger {
 }
 
 impl Logger {
-    /// Open or resume the active `current-*.log` under `config.logs_dir`.
+    /// Open a logger for `config.logs_dir`.
+    ///
+    /// Does **not** create files until the first successful [`log`] (lazy).
     pub fn open(config: LogConfig) -> io::Result<Self> {
-        let logger = Self {
+        Ok(Self {
             config,
             inner: Mutex::new(None),
-        };
-        if logger.config.enabled {
-            logger.ensure_active()?;
-        }
-        Ok(logger)
+        })
     }
 
     pub fn config(&self) -> &LogConfig {
@@ -48,10 +47,6 @@ impl Logger {
         }
     }
 
-    pub fn trace(&self, event: &str, fields: &[(&str, &str)]) {
-        self.log(LogLevel::Trace, event, fields);
-    }
-
     pub fn debug(&self, event: &str, fields: &[(&str, &str)]) {
         self.log(LogLevel::Debug, event, fields);
     }
@@ -66,6 +61,24 @@ impl Logger {
 
     pub fn error(&self, event: &str, fields: &[(&str, &str)]) {
         self.log(LogLevel::Error, event, fields);
+    }
+
+    /// Drop the active file handle if it matches `filename` (basename).
+    ///
+    /// Required before deleting the live `current-*` so writes do not continue
+    /// on an unlinked inode; the next [`log`] recreates a canonical current.
+    pub fn release_active_named(&self, filename: &str) {
+        let mut guard = self.lock_inner();
+        let should_release = guard
+            .as_ref()
+            .and_then(|active| active.path.file_name())
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name == filename);
+        if should_release {
+            if let Some(mut active) = guard.take() {
+                let _ = active.writer.flush();
+            }
+        }
     }
 
     /// Flush buffered lines to disk. Call on graceful shutdown; lines are
@@ -88,17 +101,6 @@ impl Logger {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    fn ensure_active(&self) -> io::Result<()> {
-        let mut guard = self.lock_inner();
-        if guard.is_some() {
-            return Ok(());
-        }
-        fs::create_dir_all(&self.config.logs_dir)?;
-        let active = open_or_create_active(&self.config)?;
-        *guard = Some(active);
-        Ok(())
-    }
-
     fn write_line_locked(
         &self,
         guard: &mut Option<ActiveFile>,
@@ -106,7 +108,15 @@ impl Logger {
         event: &str,
         fields: &[(&str, &str)],
     ) -> io::Result<()> {
+        // External rename/delete: drop stale handle so we open/create a real current.
+        if let Some(active) = guard.as_ref() {
+            if !active.path.exists() {
+                *guard = None;
+            }
+        }
+
         if guard.is_none() {
+            ensure_logs_dir(&self.config.logs_dir)?;
             *guard = Some(open_or_create_active(&self.config)?);
         }
 
@@ -120,8 +130,26 @@ impl Logger {
         active.line_index += 1;
         let timestamp = utc_timestamp_iso_millis();
         let line = format_log_line(active.line_index, &timestamp, level, event, fields);
-        writeln!(active.writer, "{line}")?;
-        Ok(())
+        match writeln!(active.writer, "{line}") {
+            Ok(()) => {
+                // Flush each line so the Logs UI sees events immediately (low volume).
+                let _ = active.writer.flush();
+                Ok(())
+            }
+            Err(error) => {
+                // Fail-soft recovery: drop handle and recreate once.
+                *guard = None;
+                ensure_logs_dir(&self.config.logs_dir)?;
+                *guard = Some(open_or_create_active(&self.config)?);
+                let active = guard.as_mut().expect("active log file after recover");
+                active.line_index += 1;
+                let timestamp = utc_timestamp_iso_millis();
+                let line = format_log_line(active.line_index, &timestamp, level, event, fields);
+                writeln!(active.writer, "{line}").map_err(|_| error)?;
+                let _ = active.writer.flush();
+                Ok(())
+            }
+        }
     }
 }
 
@@ -129,6 +157,41 @@ impl Drop for Logger {
     fn drop(&mut self) {
         self.flush();
     }
+}
+
+/// Create `logs_dir` only when safe.
+///
+/// Under a product path `…/.upriv/logs`, require a **valid** vault-root marker and
+/// create only the `logs` leaf — never `mkdir` a missing `.upriv` (that would
+/// resurrect an Incomplete tree and skip NeedsSetup / repair).
+/// Bare test dirs (parent not named `.upriv`) may still use `create_dir_all`.
+fn ensure_logs_dir(logs_dir: &Path) -> io::Result<()> {
+    if let Some(upriv) = logs_dir.parent() {
+        if upriv.file_name().is_some_and(|name| name == ".upriv") {
+            let Some(root) = upriv.parent() else {
+                return Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    "refusing to create logs: .upriv has no parent",
+                ));
+            };
+            crate::paths::validate_existing_vault_root(root).map_err(|error| {
+                io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("refusing to create logs: {error}"),
+                )
+            })?;
+            if logs_dir.is_dir() {
+                return Ok(());
+            }
+            // Leaf only — do not create `.upriv` if it vanished after validate.
+            return match fs::create_dir(logs_dir) {
+                Ok(()) => Ok(()),
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Ok(()),
+                Err(error) => Err(error),
+            };
+        }
+    }
+    fs::create_dir_all(logs_dir)
 }
 
 fn open_or_create_active(config: &LogConfig) -> io::Result<ActiveFile> {
@@ -147,7 +210,7 @@ fn try_resume_current(config: &LogConfig) -> io::Result<Option<ActiveFile>> {
         let Some(filename) = name.to_str() else {
             continue;
         };
-        if let Some((seq, _stamp)) = parse_current_filename(filename) {
+        if let Some((seq, _stamp)) = parse_current_log_name(filename) {
             candidates.push((seq, entry.path()));
         }
     }
@@ -203,9 +266,51 @@ fn rotate_active(config: &LogConfig, guard: &mut Option<ActiveFile>) -> io::Resu
 
     let archived = archive_current_path(&active.path);
     fs::rename(&active.path, &archived)?;
-    prune_old_files(config)?;
-    *guard = Some(create_active_file(config, active.seq + 1, 0)?);
-    Ok(())
+    if let Err(err) = prune_old_files(config) {
+        eprintln!("upriv-core: prune after rotate failed: {err}");
+    }
+
+    match create_active_file(config, active.seq + 1, 0) {
+        Ok(next) => {
+            *guard = Some(next);
+            Ok(())
+        }
+        Err(err) => {
+            // Roll archive back to `current-*` so the writer keeps a live handle.
+            if let Err(rollback_err) = fs::rename(&archived, &active.path) {
+                eprintln!(
+                    "upriv-core: rotate create failed ({err}); rollback also failed ({rollback_err})"
+                );
+                *guard = None;
+                return Err(err);
+            }
+            match OpenOptions::new().append(true).open(&active.path) {
+                Ok(file) => {
+                    // Re-count lines — do not invent threshold-1 (desync + lost lines).
+                    let line_index = count_lines(&active.path).unwrap_or(active.line_index);
+                    *guard = Some(ActiveFile {
+                        path: active.path,
+                        seq: active.seq,
+                        line_index,
+                        writer: BufWriter::new(file),
+                    });
+                    // Fail soft: keep appending to this (possibly over-threshold) file
+                    // instead of dropping the line that triggered rotate.
+                    eprintln!(
+                        "upriv-core: rotate create failed ({err}); continuing on rolled-back current"
+                    );
+                    Ok(())
+                }
+                Err(reopen_err) => {
+                    eprintln!(
+                        "upriv-core: rotate create failed ({err}); reopen after rollback failed ({reopen_err})"
+                    );
+                    *guard = None;
+                    Err(err)
+                }
+            }
+        }
+    }
 }
 
 fn archive_current_path(current: &Path) -> PathBuf {
@@ -225,23 +330,6 @@ fn archive_current_path(current: &Path) -> PathBuf {
     current.with_file_name(archived_name)
 }
 
-fn parse_current_filename(filename: &str) -> Option<(u32, &str)> {
-    // `current-NNNN-YYYYMMDDHHmmss.log` — stamp has no extra dashes (see `time::filename_stamp`).
-    let rest = filename.strip_prefix("current-")?;
-    let (seq_part, stamp_part) = rest.split_once('-')?;
-    if !stamp_part.ends_with(".log") {
-        return None;
-    }
-    let seq = seq_part.parse().ok()?;
-    Some((seq, stamp_part))
-}
-
-fn parse_archived_filename(filename: &str) -> Option<u32> {
-    let rest = filename.strip_suffix(".log")?;
-    let (seq_part, _) = rest.split_once('-')?;
-    seq_part.parse().ok()
-}
-
 fn next_sequence_number(logs_dir: &Path) -> io::Result<u32> {
     let mut max_seq = 0_u32;
     if logs_dir.is_dir() {
@@ -250,9 +338,9 @@ fn next_sequence_number(logs_dir: &Path) -> io::Result<u32> {
             let Some(name) = entry.file_name().to_str().map(str::to_string) else {
                 continue;
             };
-            if let Some((seq, _)) = parse_current_filename(&name) {
+            if let Some((seq, _)) = parse_current_log_name(&name) {
                 max_seq = max_seq.max(seq);
-            } else if let Some(seq) = parse_archived_filename(&name) {
+            } else if let Some((seq, _)) = parse_archived_log_name(&name) {
                 max_seq = max_seq.max(seq);
             }
         }
@@ -276,12 +364,11 @@ fn prune_old_files(config: &LogConfig) -> io::Result<()> {
         return Ok(());
     }
 
-    // Reserve capacity for one full active file so the on-disk total
-    // (archived + the current file that will keep growing) stays within
-    // `keep_last_entries` instead of overshooting by up to `entries_per_file`.
-    let budget = config
-        .keep_last_entries
-        .saturating_sub(config.effective_entries_per_file());
+    // Budget applies to **archived** files only (current is excluded from the sum).
+    // Total on disk may temporarily reach keep_last + current growth (≤ entries_per_file).
+    // Do **not** subtract entries_per_file here — that made keep_last == entries_per_file
+    // delete every archive on the first rotation (effective retention ≈ 0).
+    let budget = config.keep_last_entries;
 
     let mut archived: Vec<(u32, PathBuf, u32)> = Vec::new();
     for entry in fs::read_dir(&config.logs_dir)? {
@@ -292,10 +379,16 @@ fn prune_old_files(config: &LogConfig) -> io::Result<()> {
         if name.starts_with("current-") {
             continue;
         }
-        let Some(seq) = parse_archived_filename(&name) else {
+        let Some((seq, _)) = parse_archived_log_name(&name) else {
             continue;
         };
-        let lines = count_lines(&entry.path())?;
+        let lines = match count_lines(&entry.path()) {
+            Ok(n) => n,
+            Err(err) => {
+                eprintln!("upriv-core: prune skip {}: {err}", entry.path().display());
+                continue;
+            }
+        };
         archived.push((seq, entry.path(), lines));
     }
 
@@ -330,7 +423,7 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         let config = LogConfig {
             enabled: true,
-            min_level: LogLevel::Trace,
+            min_level: LogLevel::Debug,
             entries_per_file: 2,
             keep_last_entries: 0,
             logs_dir: dir.clone(),
@@ -407,12 +500,33 @@ mod tests {
     }
 
     #[test]
+    fn enabled_open_without_log_creates_no_files() {
+        let dir = temp_logs_dir();
+        let _ = fs::remove_dir_all(&dir);
+        let config = LogConfig {
+            enabled: true,
+            min_level: LogLevel::Debug,
+            entries_per_file: 100,
+            keep_last_entries: 0,
+            logs_dir: dir.clone(),
+        };
+        let _logger = Logger::open(config).expect("open");
+        assert!(
+            !dir.exists()
+                || fs::read_dir(&dir)
+                    .map(|mut d| d.next().is_none())
+                    .unwrap_or(true)
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn zero_entries_per_file_does_not_rotate_every_line() {
         let dir = temp_logs_dir();
         let _ = fs::remove_dir_all(&dir);
         let config = LogConfig {
             enabled: true,
-            min_level: LogLevel::Trace,
+            min_level: LogLevel::Debug,
             entries_per_file: 0,
             keep_last_entries: 0,
             logs_dir: dir.clone(),
@@ -435,7 +549,7 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         let config = LogConfig {
             enabled: true,
-            min_level: LogLevel::Trace,
+            min_level: LogLevel::Debug,
             entries_per_file: 1,
             keep_last_entries: 2,
             logs_dir: dir.clone(),
@@ -446,8 +560,8 @@ mod tests {
         }
         logger.flush();
 
-        // budget = keep_last_entries - effective_entries_per_file = 2 - 1 = 1,
-        // so at most one archived line should survive.
+        // budget = keep_last_entries (archived only) = 2,
+        // so at most two archived lines should survive.
         let archived = archived_names(&dir);
         let total: usize = archived
             .iter()
@@ -456,7 +570,40 @@ mod tests {
                 count_lines(&path).expect("count") as usize
             })
             .sum();
-        assert!(total <= 1, "archived retained {total} lines, expected <= 1");
+        assert!(total <= 2, "archived retained {total} lines, expected <= 2");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn prune_keeps_archive_when_keep_last_equals_entries_per_file() {
+        let dir = temp_logs_dir();
+        let _ = fs::remove_dir_all(&dir);
+        let config = LogConfig {
+            enabled: true,
+            min_level: LogLevel::Debug,
+            entries_per_file: 2,
+            keep_last_entries: 2,
+            logs_dir: dir.clone(),
+        };
+        let logger = Logger::open(config).expect("open");
+        for index in 0..6 {
+            logger.info("entry", &[("n", &index.to_string())]);
+        }
+        logger.flush();
+
+        let archived = archived_names(&dir);
+        assert!(
+            !archived.is_empty(),
+            "expected at least one archived file when keep_last == entries_per_file"
+        );
+        let total: usize = archived
+            .iter()
+            .map(|name| {
+                let path = dir.join(name);
+                count_lines(&path).expect("count") as usize
+            })
+            .sum();
+        assert!(total <= 2, "archived retained {total} lines, expected <= 2");
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -471,7 +618,7 @@ mod tests {
 
         let config = LogConfig {
             enabled: true,
-            min_level: LogLevel::Trace,
+            min_level: LogLevel::Debug,
             entries_per_file: 100,
             keep_last_entries: 0,
             logs_dir: dir.clone(),
@@ -498,15 +645,100 @@ mod tests {
     }
 
     #[test]
+    fn recreate_current_after_active_deleted() {
+        let dir = temp_logs_dir();
+        let _ = fs::remove_dir_all(&dir);
+        let config = LogConfig {
+            enabled: true,
+            min_level: LogLevel::Debug,
+            entries_per_file: 100,
+            keep_last_entries: 0,
+            logs_dir: dir.clone(),
+        };
+        let logger = Logger::open(config).expect("open");
+        logger.info("before", &[]);
+        logger.flush();
+
+        let current_name = fs::read_dir(&dir)
+            .expect("read")
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .find(|name| name.starts_with("current-"))
+            .expect("current");
+        logger.release_active_named(&current_name);
+        fs::remove_file(dir.join(&current_name)).expect("delete");
+
+        logger.info("after_delete", &[]);
+        logger.flush();
+
+        let currents: Vec<_> = fs::read_dir(&dir)
+            .expect("read")
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with("current-"))
+            .collect();
+        assert_eq!(currents.len(), 1);
+        let content = fs::read_to_string(dir.join(&currents[0])).expect("read");
+        assert!(content.contains("after_delete"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn effective_entries_per_file_never_exceeds_four_digit_index() {
         let dir = temp_logs_dir();
         let config = LogConfig {
             enabled: true,
-            min_level: LogLevel::Trace,
+            min_level: LogLevel::Debug,
             entries_per_file: 50_000,
             keep_last_entries: 0,
             logs_dir: dir,
         };
         assert_eq!(config.effective_entries_per_file(), 1000);
+    }
+
+    #[test]
+    fn refuse_to_recreate_upriv_without_settings() {
+        let root = temp_logs_dir();
+        let logs = PathBuf::from(&root).join(".upriv").join("logs");
+        let logger = Logger::open(LogConfig {
+            enabled: true,
+            min_level: LogLevel::Debug,
+            entries_per_file: 1000,
+            keep_last_entries: 0,
+            logs_dir: logs,
+        })
+        .expect("open");
+        logger.info("should_not_create_upriv", &[]);
+        logger.flush();
+        assert!(
+            !PathBuf::from(&root).join(".upriv").exists(),
+            "logging must not mkdir .upriv when settings.toml is missing"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn creates_logs_under_existing_valid_upriv() {
+        let root = temp_logs_dir();
+        let upriv = PathBuf::from(&root).join(".upriv");
+        fs::create_dir_all(&upriv).expect("mkdir .upriv");
+        fs::write(
+            upriv.join("settings.toml"),
+            "[package]\nversion = 1\nvaults_dir = \".upriv/vaults\"\n",
+        )
+        .expect("settings");
+        let logs = upriv.join("logs");
+        let logger = Logger::open(LogConfig {
+            enabled: true,
+            min_level: LogLevel::Debug,
+            entries_per_file: 1000,
+            keep_last_entries: 0,
+            logs_dir: logs.clone(),
+        })
+        .expect("open");
+        logger.info("ok", &[]);
+        logger.flush();
+        assert!(logs.is_dir());
+        let _ = fs::remove_dir_all(&root);
     }
 }

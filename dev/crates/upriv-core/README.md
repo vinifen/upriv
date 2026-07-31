@@ -77,14 +77,25 @@ Installed default_root search does **not** walk cwd/parents — only the app-hom
 
 ## Logging
 
-Structured app logs live in **`logging/`** — writes `.upriv/logs/` only from Rust (React reads via `LogService`).
+Structured app logs via **`log_event` / `Logger`** under `.upriv/logs/` (React reads via `LogService` / RPC).
 
 ```rust
-use upriv_core::logging::{LogConfig, Logger};
-use upriv_core::{app_version, utc_timestamp_iso_millis};
+use upriv_core::logging::{ensure_logging_session, log_event, LogConfig, LogLevel, Logger};
+use upriv_core::app_version;
 
+// Product call sites (daemon / core):
+log_event(
+    LogLevel::Info,
+    "app_start",
+    &[("version", app_version())],
+);
+
+// Or direct writer (tests / bootstrap):
 let config = LogConfig::new("/path/to/.upriv/logs");
 let log = Logger::open(config)?;
 log.info("app_start", &[("version", app_version())]);
-let _ = utc_timestamp_iso_millis();
+
+let _ = ensure_logging_session(); // daemon: open session from settings + vault-root
 ```
+
+RPC: `log_list` (metadata), `log_get` (one file + content), `log_delete` (active `current-*` allowed).

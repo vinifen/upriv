@@ -25,7 +25,8 @@ type WireOutMessage = WireOutReady | WireOutResponse | WireOutEvent;
 type PendingRequest = {
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
-  timer: ReturnType<typeof setTimeout>;
+  /** `null` when `timeoutMs <= 0` (no deadline). */
+  timer: ReturnType<typeof setTimeout> | null;
 };
 
 export interface DaemonConnection {
@@ -291,7 +292,7 @@ function dispatchWireMessage(connection: DaemonConnection, message: WireOutMessa
   if (message.type === "response") {
     const pending = connection.pending.get(message.id);
     if (!pending) return;
-    clearTimeout(pending.timer);
+    if (pending.timer != null) clearTimeout(pending.timer);
     connection.pending.delete(message.id);
     if (message.ok) {
       pending.resolve(message.result);
@@ -308,7 +309,7 @@ function dispatchWireMessage(connection: DaemonConnection, message: WireOutMessa
 
 function rejectAllPending(connection: DaemonConnection, error: Error): void {
   for (const pending of connection.pending.values()) {
-    clearTimeout(pending.timer);
+    if (pending.timer != null) clearTimeout(pending.timer);
     pending.reject(error);
   }
   connection.pending.clear();
@@ -453,17 +454,21 @@ export async function daemonRpc<T>(
 
   const id = connection.nextRequestId++;
   const result = await new Promise<unknown>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      connection.pending.delete(id);
-      reject(new Error(`rpc_timeout: daemon RPC timeout: ${method}`));
-    }, timeoutMs);
+    // `timeoutMs <= 0` = no deadline (same contract as renderer `invoke`).
+    const timer =
+      timeoutMs > 0
+        ? setTimeout(() => {
+            connection.pending.delete(id);
+            reject(new Error(`rpc_timeout: daemon RPC timeout: ${method}`));
+          }, timeoutMs)
+        : null;
 
     connection.pending.set(id, { resolve, reject, timer });
     const line = JSON.stringify({ type: "request", id, method, params });
     connection.writeChain = connection.writeChain
       .then(() => writeLine(connection, line))
       .catch((error: unknown) => {
-        clearTimeout(timer);
+        if (timer != null) clearTimeout(timer);
         connection.pending.delete(id);
         reject(error instanceof Error ? error : new Error(String(error)));
       });

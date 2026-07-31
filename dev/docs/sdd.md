@@ -474,6 +474,7 @@ theme = "dark"
 enabled = true
 level = "info"
 entries_per_file = 1000
+keep_last_entries = 10000
 
 [app]
 # Vault-root mode (`default_root` vs `custom_root`) is NOT configured here.
@@ -960,7 +961,7 @@ If a vault folder exists without `.upriv/settings.toml` → **Import vault** wiz
 | `argon2` or `scrypt` | Derive key for `session.enc` |
 | `aes-gcm`, `rand` | Encrypt session blob |
 | `anyhow`, `thiserror` | Errors |
-| `tracing` | Logs (no password) |
+| *(logging)* | Structured `.upriv/logs/` via `logging::Logger` / `log_event` (no passwords) |
 | `directories` | App config (`last_vault`) outside vault |
 
 ### 4.2 Modules
@@ -968,7 +969,8 @@ If a vault folder exists without `.upriv/settings.toml` → **Import vault** wiz
 ```
 upriv-core/
 ├── lib.rs
-├── config/       # load main.toml, vaults/*.toml, defaults
+├── config/       # load main.toml, vaults/*.toml, defaults; settings.toml [ui] / [logging]
+├── logging/      # Logger / log_event → `.upriv/logs/`; session, store, writer; RPC log_*
 ├── vault/        # VaultManager: open, close, status
 ├── seven_zip/    # wrapper 7zz: test, extract, create
 ├── session/      # session.enc, SecurityMode
@@ -1369,9 +1371,13 @@ fn vault_bulk_export(vault_root: String, vault_ids: Vec<String>) -> Result<Vec<u
 // Or stream/save-dialog variant; reads archive/<display_name>.7z per id.
 fn vault_delete(vault_id: String, confirm_id: String) -> Result<(), String>;
 fn vault_seal(vault_id: String, password: String) -> Result<(), String>;
+fn log_list() -> Result<Vec<LogFileDto>, String>;           // metadata only
+fn log_get(filename: String) -> Result<Option<LogFileDto>, String>; // includes content
+fn log_delete(filenames: Vec<String>) -> Result<(), String>; // active current-* allowed
 ```
 
 `VaultRowDto`: `{ id, display_name, persistence, storage_mode, status_color, can_seal }`.
+`LogFileDto`: `{ filename, seq, isCurrent, createdAt, sizeBytes, lineCount, content? }`.
 
 ### 8.3 Desktop RPC methods (lifecycle)
 

@@ -6,11 +6,11 @@ Desktop adapters in [`../desktop/`](../desktop/) + `upriv-daemon` + `upriv-core`
 When wiring desktop RPC, drop this folder and/or rename to neutral names (`createServices` exports,
 service interfaces in `@upriv/shared`).
 
-| Folder      | Role                                                                        |
-| ----------- | --------------------------------------------------------------------------- |
-| `data/`     | Static fixtures — vault rows, log files, backup lists, default app settings |
-| `stores/`   | Mutable in-memory state — settings registry, file tree sessions             |
-| `services/` | `AppServices` mock implementations                                          |
+| Folder      | Role                                                             |
+| ----------- | ---------------------------------------------------------------- |
+| `data/`     | Static fixtures — vault rows, backup lists, default app settings |
+| `stores/`   | Mutable in-memory state — settings registry, file tree sessions  |
+| `services/` | `AppServices` mock implementations                               |
 
 Entry point: `index.ts` exports **`mockServices` only**. Import mock data/stores/services via relative paths inside this folder — do not re-export store primitives from the barrel.
 

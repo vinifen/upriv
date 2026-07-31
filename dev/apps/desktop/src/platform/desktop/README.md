@@ -4,12 +4,13 @@ Real `AppServices` implementations that call `upriv-daemon` via `desktopInvokeRa
 
 ## Live vs mock
 
-| Service                                               | Desktop (`isDesktop()`)                             | Browser          |
-| ----------------------------------------------------- | --------------------------------------------------- | ---------------- |
-| `vaultRoot`                                           | **Live** — `vault_root_*` RPCs + `pick_directory`   | mock (in-memory) |
-| `appSettings`                                         | **Live** — `app_settings_get` / `app_settings_save` | mock             |
-| `vault`                                               | Stub empty `listVaults()` until `vault_list` RPC    | mock rows        |
-| backups / logs / filesystem / lifecycle / createVault | mock                                                | mock             |
+| Service                                        | Desktop (`isDesktop()`)                             | Browser                                        |
+| ---------------------------------------------- | --------------------------------------------------- | ---------------------------------------------- |
+| `vaultRoot`                                    | **Live** — `vault_root_*` RPCs + `pick_directory`   | mock (in-memory)                               |
+| `appSettings`                                  | **Live** — `app_settings_get` / `app_settings_save` | mock                                           |
+| `logs`                                         | **Live** — `log_list` / `log_get` / `log_delete`    | **Live** (same adapter; needs Electron bridge) |
+| `vault`                                        | Stub empty `listVaults()` until `vault_list` RPC    | mock rows                                      |
+| backups / filesystem / lifecycle / createVault | mock                                                | mock                                           |
 
 `createServices()`:
 
@@ -26,6 +27,7 @@ platform/desktop/
 ├── createDesktopServices.ts
 └── services/
     ├── appSettingsService.ts
+    ├── logService.ts
     └── vaultRootService.ts
 ```
 

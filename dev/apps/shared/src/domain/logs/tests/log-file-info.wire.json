@@ -1,0 +1,10 @@
+{
+  "filename": "current-000001-20260101120000.log",
+  "seq": 1,
+  "isCurrent": true,
+  "createdAt": "2026-01-01T12:00:00.000Z",
+  "sizeBytes": 42,
+  "lineCount": 3,
+  "lineCountExact": true,
+  "content": ""
+}

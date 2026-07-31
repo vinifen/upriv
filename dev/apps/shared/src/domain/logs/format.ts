@@ -2,17 +2,17 @@ import { formatIsoDate } from "../format/datetime";
 import type { AppLogFile } from "./types";
 import type { ParsedLogLevel, ParsedLogLine } from "./parsed";
 
-const LOG_LINE_RE = /^(\d{4})\s+(\S+)\s+(TRACE|DEBUG|INFO|WARN|ERROR)\s+(\S+)(?:\s+(.*))?$/;
+const LOG_LINE_RE = /^(\d{4})\s+(\S+)\s+(DEBUG|INFO|WARN|ERROR)\s+(\S+)(?:\s+(.*))?$/;
 // Line index is 4 digits (0001–1000) — matches Rust writer cap in `LogConfig::effective_entries_per_file`.
 
-/** Parse `000001-20260529120000.log` or `current-000002-20260529200000.log` → ISO UTC. */
+/** Parse `000001-20260529120000.log` or `current-000002-20260529200000.log` → ISO UTC (`.000Z`). */
 export function logCreatedAtFromFilename(filename: string): string | null {
   const match = filename.match(
     /(?:current-)?\d{6}-(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})\.log$/,
   );
   if (!match) return null;
   const [, y, mo, d, h, mi, s] = match;
-  return `${y}-${mo}-${d}T${h}:${mi}:${s}Z`;
+  return `${y}-${mo}-${d}T${h}:${mi}:${s}.000Z`;
 }
 
 export function formatLogFileDate(iso: string, locale: string): string {
@@ -50,7 +50,8 @@ export function compareLogFilesNewestFirst(a: AppLogFile, b: AppLogFile): number
   const ta = Date.parse(a.createdAt);
   const tb = Date.parse(b.createdAt);
   if (Number.isFinite(ta) && Number.isFinite(tb) && ta !== tb) return tb - ta;
-  return b.seq - a.seq;
+  if (a.seq !== b.seq) return b.seq - a.seq;
+  return a.filename.localeCompare(b.filename);
 }
 
 export function sortLogFilesNewestFirst(files: readonly AppLogFile[]): AppLogFile[] {

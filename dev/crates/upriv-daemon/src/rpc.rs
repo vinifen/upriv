@@ -5,6 +5,12 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use upriv_core::logging::{
+    clear_logging_session, delete_session_log_files, ensure_logging_session,
+    list_session_log_files, log_app_start, log_event, log_vault_root_entered,
+    log_vault_root_leaving_on, log_vault_root_ready, read_session_log_file, session_logger,
+    LogLevel, Logger,
+};
 use upriv_core::{
     app_home_dir, deactivate_vault_root_alias_everywhere, inspect_vault_root_at, load_app_settings,
     open_or_initialize_vault_root_with_policy_and_bootstrap, read_vault_root_alias,
@@ -104,6 +110,9 @@ pub fn handle_rpc(req: RpcRequest) -> RpcResponse {
         "vault_root_default_root_status" => vault_root_default_root_status(),
         "vault_root_inspect_path" => vault_root_inspect_path(req.params),
         "vault_root_suggested_custom_path" => vault_root_suggested_custom_path(),
+        "log_list" => log_list(),
+        "log_get" => log_get(req.params),
+        "log_delete" => log_delete(req.params),
         other => err("unknown_method", format!("unknown method: {other}")),
     }
 }
@@ -157,10 +166,19 @@ fn vault_root_resolve(params: Value) -> RpcResponse {
                 Ok(p) => p,
                 Err(response) => return response,
             };
+            let source = source_str(source);
+            log_app_start("vault_root_resolve");
+            log_vault_root_ready(source, &root_path);
+            // Probe can run more than once on Gate launch — keep at DEBUG.
+            log_event(
+                LogLevel::Debug,
+                "vault_root_resolve",
+                &[("status", "found"), ("source", source)],
+            );
             ok(json!({
                 "status": "found",
                 "rootPath": root_path,
-                "source": source_str(source),
+                "source": source,
             }))
         }
         Ok(ResolveVaultRoot::NeedsSetup {
@@ -176,6 +194,8 @@ fn vault_root_resolve(params: Value) -> RpcResponse {
                 Ok(p) => p,
                 Err(response) => return response,
             };
+            // No vault-root yet — drop any stale writer so it cannot recreate `.upriv/logs`.
+            clear_logging_session();
             ok(json!({
                 "status": "needs_setup",
                 "aliasPath": alias,
@@ -183,7 +203,17 @@ fn vault_root_resolve(params: Value) -> RpcResponse {
                 "distribution": upriv_core::distribution_str(distribution),
             }))
         }
-        Err(error) => map_core_err(error),
+        Err(error) => {
+            match &error {
+                upriv_core::UprivError::VaultRootIncomplete { .. }
+                | upriv_core::UprivError::VaultRootNotFound(_)
+                | upriv_core::UprivError::VaultRootAliasInvalid(_) => {
+                    clear_logging_session();
+                }
+                _ => {}
+            }
+            map_core_err(error)
+        }
     }
 }
 
@@ -274,6 +304,12 @@ fn vault_root_setup_default_root(params: Value) -> RpcResponse {
         Ok(path) => path,
         Err(error) => return map_core_err(error),
     };
+    if let Err(response) = path_utf8(&anchor) {
+        return response;
+    }
+    let from_path = current_root_path_for_log();
+    let prev_logger = session_logger();
+
     // Pre-validate bootstrap prefs BEFORE any disk mutation when we will create.
     // Selecting an existing Valid root does not require bootstrap prefs.
     let prefs = match bootstrap_prefs_for_dir(&anchor, parsed.bootstrap.as_ref()) {
@@ -284,6 +320,7 @@ fn vault_root_setup_default_root(params: Value) -> RpcResponse {
     // settings.toml write when creating — no separate post-create stamp step
     // exists here anymore (A2/A3). Retry after a later step fails will find
     // a Valid `.upriv/` with the correct locale already on disk.
+    let prior_status = inspect_vault_root_at(&anchor);
     let opened = match open_or_initialize_vault_root_with_policy_and_bootstrap(
         &anchor,
         replace,
@@ -300,7 +337,23 @@ fn vault_root_setup_default_root(params: Value) -> RpcResponse {
         return map_core_err(error);
     }
     match path_utf8(root.root()) {
-        Ok(root_path) => ok(json!({ "rootPath": root_path })),
+        Ok(root_path) => {
+            leave_then_reopen_logging(
+                prev_logger.as_deref(),
+                from_path.as_deref(),
+                &root_path,
+                "default_root",
+            );
+            log_vault_root_setup(
+                "default_root",
+                opened.created,
+                prior_status,
+                replace,
+                &root_path,
+                from_path.as_deref(),
+            );
+            ok(json!({ "rootPath": root_path }))
+        }
         Err(response) => response,
     }
 }
@@ -387,6 +440,9 @@ fn vault_root_setup_path(params: Value) -> RpcResponse {
         Ok(policy) => policy,
         Err(response) => return response,
     };
+    let from_path = current_root_path_for_log();
+    let prev_logger = session_logger();
+
     // Pre-validate bootstrap prefs BEFORE any disk mutation when we will create.
     // Selecting an existing Valid root does not require bootstrap prefs.
     let prefs = match bootstrap_prefs_for_dir(&path, parsed.bootstrap.as_ref()) {
@@ -396,6 +452,7 @@ fn vault_root_setup_path(params: Value) -> RpcResponse {
     // Init writes `[ui].locale` atomically on create — no separate stamp step
     // (A2/A3). If alias write fails, `.upriv/` at `path` already carries the
     // correct locale, so retrying setup is safe.
+    let prior_status = inspect_vault_root_at(&path);
     let opened = match open_or_initialize_vault_root_with_policy_and_bootstrap(
         &path,
         replace,
@@ -421,6 +478,20 @@ fn vault_root_setup_path(params: Value) -> RpcResponse {
         Ok(p) => p,
         Err(response) => return response,
     };
+    leave_then_reopen_logging(
+        prev_logger.as_deref(),
+        from_path.as_deref(),
+        &root_path,
+        "custom_root",
+    );
+    log_vault_root_setup(
+        "custom_root",
+        opened.created,
+        prior_status,
+        replace,
+        &root_path,
+        from_path.as_deref(),
+    );
     ok(json!({
         "rootPath": root_path,
         "aliasPath": alias,
@@ -455,6 +526,7 @@ fn app_settings_get() -> RpcResponse {
                 },
                 None => None,
             };
+            // Logging session opens lazily on the first `log_event` (e.g. settings_save).
             ok(json!({
                 "settings": loaded.settings,
                 "rootPath": root_path,
@@ -462,6 +534,120 @@ fn app_settings_get() -> RpcResponse {
             }))
         }
         Err(error) => map_core_err(error),
+    }
+}
+
+fn log_list() -> RpcResponse {
+    match list_session_log_files() {
+        Ok(files) => ok(json!({ "files": files })),
+        Err(error) => map_core_err(error),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct LogFilenameParams {
+    filename: String,
+}
+
+fn log_get(params: Value) -> RpcResponse {
+    let parsed: LogFilenameParams = match serde_json::from_value(params) {
+        Ok(value) => value,
+        Err(error) => return err("invalid_request", error.to_string()),
+    };
+    let filename = parsed.filename.trim();
+    if filename.is_empty() {
+        return err("invalid_request", "filename is required".into());
+    }
+    match read_session_log_file(filename) {
+        Ok(Some(file)) => ok(json!({ "file": file })),
+        Ok(None) => ok(json!({ "file": Value::Null })),
+        Err(upriv_core::UprivError::Io(error))
+            if error.kind() == std::io::ErrorKind::InvalidData =>
+        {
+            let message = error.to_string();
+            if message.starts_with("log_file_too_large") {
+                err("log_file_too_large", message)
+            } else {
+                err("invalid_request", message)
+            }
+        }
+        Err(error) => map_core_err(error),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct LogDeleteParams {
+    filenames: Vec<String>,
+}
+
+fn log_delete(params: Value) -> RpcResponse {
+    let parsed: LogDeleteParams = match serde_json::from_value(params) {
+        Ok(value) => value,
+        Err(error) => return err("invalid_request", error.to_string()),
+    };
+    match delete_session_log_files(&parsed.filenames) {
+        Ok(()) => {
+            let deleted_active = parsed
+                .filenames
+                .iter()
+                .any(|name| name.starts_with("current-"));
+            // Do not `log_event` after deleting the live `current-*` — that would
+            // reopen the writer and recreate an empty active file immediately.
+            if !deleted_active {
+                let count = parsed.filenames.len().to_string();
+                log_event(LogLevel::Info, "logs_deleted", &[("count", count.as_str())]);
+            } else {
+                eprintln!(
+                    "[upriv-daemon] deleted {} log file(s) including active current-*",
+                    parsed.filenames.len()
+                );
+            }
+            ok(json!(null))
+        }
+        Err(upriv_core::UprivError::Io(error))
+            if error.kind() == std::io::ErrorKind::InvalidInput =>
+        {
+            let touched_active = parsed
+                .filenames
+                .iter()
+                .any(|name| name.starts_with("current-"));
+            // Do not `log_event` after releasing `current-*` — that recreates the active file.
+            if !touched_active {
+                log_event(
+                    LogLevel::Warn,
+                    "logs_delete_failed",
+                    &[("reason", "invalid_request")],
+                );
+            } else {
+                eprintln!(
+                    "[upriv-daemon] logs_delete_failed (invalid_request) after touching current-*"
+                );
+            }
+            err("invalid_request", error.to_string())
+        }
+        Err(
+            error @ (upriv_core::UprivError::VaultRootNotFound(_)
+            | upriv_core::UprivError::VaultRootIncomplete { .. }
+            | upriv_core::UprivError::VaultRootAliasInvalid(_)),
+        ) => map_core_err(error),
+        Err(error) => {
+            let touched_active = parsed
+                .filenames
+                .iter()
+                .any(|name| name.starts_with("current-"));
+            if !touched_active {
+                log_event(
+                    LogLevel::Error,
+                    "logs_delete_failed",
+                    &[("reason", "io_error")],
+                );
+            } else {
+                eprintln!("[upriv-daemon] logs_delete_failed (io_error) after touching current-*");
+            }
+            map_core_err(error)
+        }
     }
 }
 
@@ -499,9 +685,63 @@ fn app_settings_save(params: Value) -> RpcResponse {
             return response;
         }
     }
+    let from_path = current_root_path_for_log();
+    let prev_logger = session_logger();
+    let to_path = intended_root_path_for_settings(&settings);
+    let mode = match settings.app.vault_root_mode {
+        VaultRootMode::CustomRoot => "custom_root",
+        VaultRootMode::DefaultRoot => "default_root",
+    };
+    let switched = match (from_path.as_deref(), to_path.as_deref()) {
+        (Some(from), Some(to)) => !root_paths_equal(from, to),
+        _ => false,
+    };
+
     match save_app_settings_session_with_alias_sync(&settings, parsed.sync_alias) {
-        Ok(wrote) => ok(json!({ "wrote": wrote })),
-        Err(error) => map_core_err(error),
+        Ok(wrote) => {
+            // Only leave/enter when the save actually moved the active root.
+            // `Ok(false)` is only empty custom_root path (bootstrap); missing/corrupt
+            // target is `Err` (`vault_root_not_found` / `incomplete`) — do not treat as soft success.
+            if wrote && switched {
+                // `switched` is only true when both paths are Some and distinct.
+                let from = from_path.as_deref().expect("switched implies from_path");
+                let to = to_path.as_deref().expect("switched implies to_path");
+                leave_then_reopen_logging(prev_logger.as_deref(), Some(from), to, mode);
+                log_vault_root_entered(from, to, mode);
+            } else {
+                // Re-open writer so `[logging]` / vault-root changes apply immediately.
+                let _ = ensure_logging_session();
+            }
+            let wrote_str = if wrote { "true" } else { "false" };
+            log_event(
+                LogLevel::Info,
+                "settings_save",
+                &[
+                    ("wrote", wrote_str),
+                    ("locale", settings.ui.locale.as_str()),
+                    ("theme", settings.ui.theme.as_str()),
+                    (
+                        "log_enabled",
+                        if settings.logging.enabled {
+                            "true"
+                        } else {
+                            "false"
+                        },
+                    ),
+                    ("log_level", settings.logging.level.as_str()),
+                ],
+            );
+            ok(json!({ "wrote": wrote }))
+        }
+        Err(error) => {
+            let message = error.to_string();
+            log_event(
+                LogLevel::Error,
+                "settings_save_failed",
+                &[("error", truncate_log_msg(&message))],
+            );
+            map_core_err_response(error, false)
+        }
     }
 }
 
@@ -513,7 +753,120 @@ fn source_str(source: VaultRootSource) -> &'static str {
     }
 }
 
+fn replace_policy_str(policy: IncompleteReplacePolicy) -> &'static str {
+    match policy {
+        IncompleteReplacePolicy::Rename => "rename",
+        IncompleteReplacePolicy::Delete => "delete",
+    }
+}
+
+fn truncate_log_msg(message: &str) -> &str {
+    const MAX: usize = 160;
+    if message.len() <= MAX {
+        message
+    } else {
+        // Byte index may land mid-codepoint — snap to a char boundary.
+        let end = floor_char_boundary(message, MAX);
+        &message[..end]
+    }
+}
+
+/// Largest index `<= max` that is a char boundary (Rust 1.73+ has `str::floor_char_boundary`).
+fn floor_char_boundary(s: &str, mut max: usize) -> usize {
+    if max >= s.len() {
+        return s.len();
+    }
+    while max > 0 && !s.is_char_boundary(max) {
+        max -= 1;
+    }
+    max
+}
+
+fn current_root_path_for_log() -> Option<String> {
+    let loaded = load_app_settings().ok()?;
+    let root = loaded.root_path?;
+    root.to_str().map(str::to_string)
+}
+
+fn intended_root_path_for_settings(settings: &AppSettings) -> Option<String> {
+    if settings.app.vault_root_mode == VaultRootMode::CustomRoot {
+        let path = settings.app.upriv_root_path.trim();
+        if path.is_empty() {
+            return None;
+        }
+        return Some(path.to_string());
+    }
+    let anchor = upriv_core::setup_default_root_anchor().ok()?;
+    anchor.to_str().map(str::to_string)
+}
+
+fn root_paths_equal(a: &str, b: &str) -> bool {
+    if a == b {
+        return true;
+    }
+    let pa = Path::new(a);
+    let pb = Path::new(b);
+    match (pa.canonicalize(), pb.canonicalize()) {
+        (Ok(ca), Ok(cb)) => ca == cb,
+        _ => false,
+    }
+}
+
+fn leave_then_reopen_logging(
+    prev_logger: Option<&Logger>,
+    from: Option<&str>,
+    to: &str,
+    mode: &str,
+) {
+    if let (Some(logger), Some(from)) = (prev_logger, from) {
+        if !root_paths_equal(from, to) {
+            log_vault_root_leaving_on(logger, from, to, mode);
+        }
+    }
+    let _ = ensure_logging_session();
+}
+
+fn log_vault_root_setup(
+    mode: &str,
+    created: bool,
+    prior_status: VaultRootDirStatus,
+    replace: Option<IncompleteReplacePolicy>,
+    root_path: &str,
+    from_path: Option<&str>,
+) {
+    if prior_status == VaultRootDirStatus::Incomplete {
+        if let Some(policy) = replace {
+            log_event(
+                LogLevel::Warn,
+                "vault_root_replace_incomplete",
+                &[("policy", replace_policy_str(policy)), ("mode", mode)],
+            );
+        }
+    }
+    log_app_start("vault_root_setup");
+    if let Some(from) = from_path.filter(|from| !root_paths_equal(from, root_path)) {
+        // Entered writes on the new root (session already points there after setup).
+        log_vault_root_entered(from, root_path, mode);
+    } else {
+        log_vault_root_ready(mode, root_path);
+    }
+    log_event(
+        LogLevel::Info,
+        "vault_root_setup",
+        &[
+            ("mode", mode),
+            ("created", if created { "true" } else { "false" }),
+            ("prior", vault_root_status_str(prior_status)),
+            ("path", root_path),
+        ],
+    );
+}
+
 fn map_core_err(error: upriv_core::UprivError) -> RpcResponse {
+    map_core_err_response(error, true)
+}
+
+fn map_core_err_response(error: upriv_core::UprivError, emit_log: bool) -> RpcResponse {
     let (code, path) = match &error {
         upriv_core::UprivError::VaultRootNotFound(p) => ("vault_root_not_found", Some(p.as_path())),
         upriv_core::UprivError::VaultRootIncomplete { path, .. } => {
@@ -528,8 +881,20 @@ fn map_core_err(error: upriv_core::UprivError) -> RpcResponse {
         }
         upriv_core::UprivError::Io(_) => ("io_error", None),
     };
+    let message = error.to_string();
+    if emit_log {
+        let level = match code {
+            "vault_root_incomplete" => LogLevel::Warn,
+            _ => LogLevel::Error,
+        };
+        log_event(
+            level,
+            "rpc_error",
+            &[("code", code), ("message", truncate_log_msg(&message))],
+        );
+    }
     let details = path.and_then(|p| p.to_str().map(|s| json!({ "path": s })));
-    err_with_details(code, error.to_string(), details)
+    err_with_details(code, message, details)
 }
 
 fn ok(result: Value) -> RpcResponse {
@@ -574,6 +939,9 @@ mod contract_tests {
         "vault_root_default_root_status",
         "vault_root_inspect_path",
         "vault_root_suggested_custom_path",
+        "log_list",
+        "log_get",
+        "log_delete",
     ];
 
     #[test]

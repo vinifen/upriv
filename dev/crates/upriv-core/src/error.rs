@@ -19,7 +19,8 @@ pub enum UprivError {
     #[error("vault root alias invalid: {0}")]
     VaultRootAliasInvalid(PathBuf),
 
-    /// No vault directory / id under the vault-root.
+    /// No vault directory / id under the vault-root (vault layer — not Gate).
+    /// Mid-session: toast + invalidate that vault session; do not reopen VaultRootGate.
     #[error("vault not found: {0}")]
     VaultNotFound(PathBuf),
 

@@ -1,10 +1,10 @@
-import { LOG_ENTRIES_PER_FILE, LOG_KEEP_LAST_DEFAULT, normalizeLogKeepLastEntries } from "./logging";
+import { LOG_ENTRIES_PER_FILE, LOG_KEEP_LAST_DEFAULT, normalizeLogKeepLastEntries, normalizeLogLevel } from "./logging";
 import type { AppSettingsConfig, VaultRootMode } from "./types";
 
 /** Normalize wire/UI vault-root mode (`"default_root"` | `"custom_root"` only). */
 export function normalizeVaultRootMode(mode: unknown): VaultRootMode {
   if (mode === "custom_root" || mode === "default_root") return mode;
-  // Unknown tokens (including removed legacy names) fail closed to default_root.
+  // Unknown tokens fail closed to default_root.
   return "default_root";
 }
 
@@ -37,6 +37,9 @@ export function createDefaultAppSettings(): AppSettingsConfig {
 export function normalizeAppSettings(config: AppSettingsConfig): AppSettingsConfig {
   const logging = {
     ...config.logging,
+    level: normalizeLogLevel(
+      typeof config.logging.level === "string" ? config.logging.level : undefined,
+    ),
     entries_per_file: config.logging.entries_per_file || LOG_ENTRIES_PER_FILE,
     keep_last_entries: normalizeLogKeepLastEntries(config.logging.keep_last_entries),
   };
