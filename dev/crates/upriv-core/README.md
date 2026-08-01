@@ -77,7 +77,7 @@ Installed default_root search does **not** walk cwd/parents — only the app-hom
 
 ## Logging
 
-Structured app logs via **`log_event` / `Logger`** under `.upriv/logs/` (React reads via `LogService` / RPC).
+Structured **app** logs via **`log_event` / `Logger`** under `.upriv/logs/` (React reads via `LogService` / RPC). Format/names: `prod-example/README.md` § Logs. Mid-session integrity: `.agent/AGENT.md`.
 
 ```rust
 use upriv_core::logging::{ensure_logging_session, log_event, LogConfig, LogLevel, Logger};
@@ -99,3 +99,6 @@ let _ = ensure_logging_session(); // daemon: open session from settings + vault-
 ```
 
 RPC: `log_list` (metadata), `log_get` (one file + content), `log_delete` (active `current-*` allowed).
+
+- Soft empty list only **true bootstrap** (no root yet this process). After `vault_root_ready`, missing/corrupt `.upriv` → typed `VaultRootNotFound` / `Incomplete` (not `Ok([])`).
+- Session clears on NeedsSetup / invalid root; `ensure_logs_dir` never recreates a missing `.upriv` (leaf `logs` only after validate). See `logging/session.rs` + `writer.rs`.

@@ -46,9 +46,17 @@ We are **past the Tauri → Electron migration** and **past UI/lifecycle scaffol
 
 **Do not** re-implement vault logic in TypeScript or duplicate crypto in `upriv-daemon` — only `upriv-core`.  
 **Do not** reimplement vault-root resolution in TS — use existing `vault_root_*` RPCs / `VaultRootService`.  
-**Do not** ship infinite loading overlays — every blocking busy/applying UI uses `LOADING_BUDGET_MS` + visible countdown (`LoadingBudgetHint` / `useLoadingBudget`); on timeout clear state and offer retry. See `.cursor/rules/finite-loading-budgets.mdc`.
+**Do not** ship infinite loading overlays — every blocking busy/applying UI uses `LOADING_BUDGET_MS` + visible countdown (`LoadingBudgetHint` / `useLoadingBudget`); on timeout clear state, bump generation tokens (`busyGen` / `resolveGen`), and offer retry. See `.cursor/rules/finite-loading-budgets.mdc`.
 
-**Logging notes:** `log_event` is lazy — with no vault-root yet it does not write under `.upriv/logs/` (stderr/`eprintln` only). If `.upriv` is deleted while a logger was open, the session is cleared and the writer **refuses** to recreate `.upriv` without `settings.toml` (so NeedsSetup / repair can run). `VaultRootGate` may still emit a second `vault_root_resolve` DEBUG line under React Strict Mode in development; production should see one probe per settings-ready / epoch bump.
+**Logging notes** (app `.log` under `.upriv/logs/` — not vault plaintext; never dump vault trees into logs or OS temp for export):
+
+- **Format / rotation / names:** canonical contract in [`prod-example/README.md`](../prod-example/README.md) § Logs; keep Rust `logging/format.rs` and `@upriv/shared` `domain/logs/format.ts` in sync.
+- **`log_event` is lazy:** with no vault-root yet it does not write under `.upriv/logs/` (stderr/`eprintln` only).
+- **Session clear:** NeedsSetup / incomplete / missing root clears the process logger so a stale writer cannot `mkdir` a fake `.upriv/logs`.
+- **`ensure_logs_dir`:** never recreate a missing `.upriv`; only create the `logs` leaf after `validate_existing_vault_root`.
+- **`log_list` / `log_get` / `log_delete`:** soft empty / soft no-op **only** true pre-ready bootstrap. After `vault_root_ready` this process, missing/corrupt root → typed A/B (`vault_root_not_found` / `incomplete` / alias), **not** `Ok([])` (that would look like “no log files”).
+- Contrast with **settings save:** soft `wrote: false` only for empty `custom_root` bootstrap; mid-session miss is `Err`. Same integrity spine.
+- `VaultRootGate` may emit a second `vault_root_resolve` DEBUG line under React Strict Mode in development; production should see one probe per settings-ready / epoch bump.
 
 ### Mid-session integrity (fail loud)
 
@@ -60,7 +68,11 @@ After Gate is **ready** / `settingsOnDisk`, I/O that assumes a valid contentor m
 | **B** | `.upriv` missing | `vault_root_not_found` | Toast + bump epoch → Gate Setup / Recovery |
 | **C** | Root OK; `vaults/<id>` gone | `vault_not_found` | Toast + invalidate that vault session — **do not** reopen Gate |
 
+**UI helper:** `reportVaultRootIntegrityFailure` in `AppSettingsContext` — bump `vaultRootEpoch`, reload settings, toast (vault-root i18n keys). Callers today: settings persist failure + **Logs** list (`LogsModal` reports then closes — never show “empty logs” for A/B).
+
 **Settings save:** missing/corrupt target → `Err` (not `wrote: false`). Soft `wrote: false` only for empty `custom_root` path (bootstrap). Pre-root UI (`onDisk: false`) keeps prefs in memory without requiring a disk write.
+
+**Case C** wire/type is reserved; vault open/list RPCs are still stub — do not invent Gate reopen for vault-layer errors when those land.
 
 **Taxonomy is layered / extensible** — A/B/C are the presence spine, not a closed set:
 

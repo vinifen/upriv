@@ -12,8 +12,9 @@ Every **blocking** loading / busy / applying overlay in the desktop (and later m
 1. Use a **finite** timeout from `LOADING_BUDGET_MS` in `@upriv/shared` (`domain/loading/budget.ts`) — keep Electron invoke timeouts in sync for the same operation.
 2. **Show** the budget to the user (`LoadingBudgetHint` + `useLoadingBudget`): max duration **and** countdown remaining, so the wait never looks endless.
 3. Delay first paint with `LOADING_APPEAR_DELAY_MS` (1s) via `useLoadingBudget().visible` — fast ops must not flash a spinner. Budget/timeout still count from when the op started.
-4. On timeout: **clear** the spinner / applying state and offer **retry** (or a clear error). Never leave `applying` / `busy` stuck forever.
-5. Electron **main** must honor the same map: renderer passes `METHOD_TIMEOUT_MS[method]` through preload into `daemonRpc` (never leave main at a blanket 30s for long vault-root ops).
+4. On timeout: **clear** the spinner / applying / `busy` state and offer **retry** (or a clear error). Never leave `applying` / `busy` stuck forever.
+5. Also **invalidate** the in-flight attempt: bump a generation token (`busyGen` on Setup / Repair / Data folder / Alias recovery; `resolveGen` on Gate applying) so a late RPC success cannot re-apply root / `setReady` / clear the timeout error.
+6. Electron **main** must honor the same map: renderer passes `METHOD_TIMEOUT_MS[method]` from `dev/apps/desktop/src/lib/invoke.ts` through preload into `daemonRpc` (unmapped methods fall back to 30s — do not leave long vault-root ops on that default).
 
 ## Budgets (current)
 
@@ -25,10 +26,17 @@ Every **blocking** loading / busy / applying overlay in the desktop (and later m
 | `logs` | 1 min | Logs list / viewer |
 | `default` | 2 min | Generic modal / list work |
 
+Do **not** swap `vaultRoot` and `vaultRootResolve` — setup/repair can be huge; resolve probe must fail sooner.
+
 Prefer a larger budget over an infinite wait. “Massive” is OK; infinite is not.
+
+## `timeoutMs: 0`
+
+Contract (renderer `invoke` + Electron `daemonRpc`): `timeoutMs <= 0` means **no deadline**. Use only for native dialogs that wait on the user (e.g. `pick_directory`). Never use `0` for vault-root busy / applying overlays — those must stay on `LOADING_BUDGET_MS`.
 
 ## Do not
 
 - Ship a full-screen or modal spinner with no remaining-time copy.
-- Soft-block the Gate (`applying`) without a budget + timeout recovery.
+- Soft-block the Gate (`applying`) without a budget + timeout recovery + `resolveGen` bump.
+- Clear `busy` on timeout without bumping `busyGen` (late success would still run UI side effects).
 - Invent ad-hoc `setTimeout` budgets in feature code — extend `LOADING_BUDGET_MS` instead.
