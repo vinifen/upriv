@@ -1,5 +1,6 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useId, useRef, useState } from "react";
 import { Icon } from "@/components/icons";
+import { AnchoredPopover } from "@/components/ui/AnchoredPopover";
 import { menuItemClass, menuPanelClass } from "@/components/ui/menuStyles";
 import { useTranslation } from "@/i18n";
 import type { StorageMode, VaultDisplayStatus } from "@upriv/shared";
@@ -51,24 +52,6 @@ export function VaultLockButton({
   const surfaceClass = isOpen ? lockSurfaceClass : unlockSurfaceClass;
 
   const labelClass = "truncate font-mono text-sm font-medium";
-
-  useEffect(() => {
-    if (!menuOpen) return;
-    const onPointerDown = (event: MouseEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) {
-        setMenuOpen(false);
-      }
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setMenuOpen(false);
-    };
-    document.addEventListener("mousedown", onPointerDown);
-    document.addEventListener("keydown", onKeyDown);
-    return () => {
-      document.removeEventListener("mousedown", onPointerDown);
-      document.removeEventListener("keydown", onKeyDown);
-    };
-  }, [menuOpen]);
 
   const handleMainAction = () => {
     setMenuOpen(false);
@@ -168,26 +151,26 @@ export function VaultLockButton({
         </button>
       </div>
 
-      {menuOpen ? (
-        <div
-          id={menuId}
-          role="menu"
-          aria-label={t("action.seal")}
-          className={["absolute inset-x-0 top-full z-50 mt-1.5 min-w-full", menuPanelClass].join(
-            " ",
-          )}
+      <AnchoredPopover
+        open={menuOpen}
+        onClose={() => setMenuOpen(false)}
+        triggerRef={rootRef}
+        matchTriggerWidth
+        id={menuId}
+        role="menu"
+        aria-label={t("action.seal")}
+        className={menuPanelClass}
+      >
+        <button
+          type="button"
+          role="menuitem"
+          className={[menuItemClass, "justify-center px-5"].join(" ")}
+          onClick={handleSeal}
         >
-          <button
-            type="button"
-            role="menuitem"
-            className={[menuItemClass, "justify-center px-5"].join(" ")}
-            onClick={handleSeal}
-          >
-            <Icon name="seal" size={18} />
-            {t("action.seal")}
-          </button>
-        </div>
-      ) : null}
+          <Icon name="seal" size={18} />
+          {t("action.seal")}
+        </button>
+      </AnchoredPopover>
     </div>
   );
 }

@@ -24,6 +24,10 @@ export function useVaultService(): AppServices["vault"] {
   return useServices().vault;
 }
 
+export function useVaultGroupService(): AppServices["vaultGroups"] {
+  return useServices().vaultGroups;
+}
+
 export function useAppSettingsService(): AppServices["appSettings"] {
   return useServices().appSettings;
 }

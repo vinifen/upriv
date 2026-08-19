@@ -7,6 +7,8 @@ export const VAULT_ERROR_I18N_KEYS = {
   wrong_password: "error.wrong_password",
   vault_already_open: "error.vault_already_open",
   sync_mismatch: "error.sync_mismatch",
+  vault_groups_invalid: "error.vault_groups_invalid",
+  vault_group_not_found: "error.vault_group_not_found",
 } as const satisfies Record<VaultErrorCode, I18nKey>;
 
 export type VaultErrorI18nKey = (typeof VAULT_ERROR_I18N_KEYS)[VaultErrorCode];

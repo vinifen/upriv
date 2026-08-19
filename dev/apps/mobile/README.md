@@ -1,53 +1,36 @@
-# Upriv — mobile (scaffold)
+# upriv-mobile (Expo 52)
 
-**Expo SDK 52** + **React Native 0.76** + **React 18.3.1** — aligned with `dev/apps/desktop/` for shared TypeScript (`@upriv/shared`) and i18n keys.
+React Native shell for Upriv. Shares `@upriv/shared` (types, i18n, budgets, `AppServices`).
 
-No vault UI yet, no `upriv-core` native module. Mobile uses React Native + Rust FFI (not Electron).
+## Status
 
-## Prerequisites
+- **Mocks only** via `createMobileServices()` — no Rust/JNI yet (Expo Go OK).
+- Visual language mirrors desktop tokens (`#081425` background, accent `#6b8cff`).
+- Shipped so far: AppProviders → Gate → vault list + System settings / Logs / Help.
+- Vault create / lifecycle / file-manager: stubs in services; UI screens still to port.
 
-| Tool | Version |
-|------|---------|
-| Node.js | 22 LTS (`../../.nvmrc` from repo root) |
-| Android | Android Studio, SDK 35, **JDK 17**, NDK **r27** (when building native) |
-| iOS | Xcode 16+ (macOS only) |
+Paths in mocks use `content://upriv.mock/...` (SAF-shaped), not desktop filesystem paths.
 
-For day-one UI work you can use **Expo Go** (SDK 52). Custom Rust (`libupriv_core.so`) will require a **development build** later.
-
-## Commands
+## Run
 
 ```bash
 cd dev/apps/mobile
 npm install
-npm start              # Metro + QR (Expo Go)
-npm run android
-npm run ios            # macOS + Xcode
+npm start          # Expo Go
 npm run typecheck
-```
-
-From `dev/` root:
-
-```bash
-npm run mobile:start
 ```
 
 ## Layout
 
-```text
-mobile/
-├── src/App.tsx           # UI placeholder (strings from @upriv/shared locales)
-├── src/native/           # Future JNI / iOS bridge to upriv-core
-├── assets/               # Expo icons (replace with Upriv brand later)
-├── app.json              # Expo config (newArchEnabled: false)
-└── metro.config.js       # Watches dev/apps + dev/docs for shared i18n HMR
 ```
-
-Shared UI strings: `../shared/locales/` (same catalog as desktop via `@upriv/shared`).
-
-**Scaffold limitations (post-MVP debt):** no lint/format scripts yet; `react-native-screens` / `safe-area-context` installed but unused.
-
-Versions: `../../docs/VERSIONS.md`.
-
-## React Native architecture
-
-`app.json` sets **`newArchEnabled: false`** (Fabric/TurboModules off), aligned with `.agent/AGENT.md` and `docs/VERSIONS.md` for the current scaffold. Revisit when the mobile MVP starts and native modules (`upriv-core`) land.
+src/
+  providers/AppProviders.tsx
+  components/ui/     # Button, Modal, Toast, LoadingBudgetHint
+  features/
+    system/settings/ # Gate, Setup, AppSettings
+    system/logs/
+    system/help/
+    vaults/list/
+  platform/mocks/    # AppServices in-memory
+  theme/tokens.ts    # desktop CSS variable parity
+```

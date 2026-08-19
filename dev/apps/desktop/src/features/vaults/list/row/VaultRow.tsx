@@ -29,17 +29,18 @@ interface VaultRowProps {
   onOpenBackups: (vaultId: string) => void;
   onOpenNote: (vaultId: string) => void;
   onOpenSettings: (vaultId: string) => void;
+  onOpenGroupAssignment: (vaultId: string) => void;
   onExportVault: (vault: VaultListItem) => void;
   onOpenFolder: (vault: VaultListItem) => void;
   onOpenFileManager: (vault: VaultListItem) => void;
   onLockVault: (vault: VaultListItem) => void;
   onUnlockVault: (vault: VaultListItem) => void;
   onSealVault: (vault: VaultListItem) => void;
-  onDragStart: (vaultId: string) => (event: React.DragEvent) => void;
+  onDragStart: (event: React.DragEvent) => void;
   onDragEnd: () => void;
-  onDragOver: (vaultId: string) => (event: React.DragEvent) => void;
-  onDragLeave: (vaultId: string) => () => void;
-  onDrop: (vaultId: string) => (event: React.DragEvent) => void;
+  onDragOver: (event: React.DragEvent) => void;
+  onDragLeave: () => void;
+  onDrop: (event: React.DragEvent) => void;
 }
 
 function statusIconName(status: VaultDisplayStatus, isOpen: boolean): IconName {
@@ -60,6 +61,7 @@ export function VaultRow({
   onOpenBackups,
   onOpenNote,
   onOpenSettings,
+  onOpenGroupAssignment,
   onExportVault,
   onOpenFolder,
   onOpenFileManager,
@@ -82,7 +84,7 @@ export function VaultRow({
   return (
     <article
       className={[
-        "vault-row flex flex-col items-center justify-between overflow-visible rounded-xl px-4 transition-[opacity,box-shadow,background-color] sm:flex-row sm:pl-2 sm:pr-6",
+        "vault-row relative z-0 flex flex-col items-center justify-between overflow-visible rounded-xl px-4 transition-[opacity,box-shadow,background-color] sm:flex-row sm:pl-2 sm:pr-6",
         rowGap,
         density.article,
         vaultStatusRowClass[status],
@@ -92,9 +94,9 @@ export function VaultRow({
       ]
         .filter(Boolean)
         .join(" ")}
-      onDragOver={onDragOver(vault.id)}
-      onDragLeave={onDragLeave(vault.id)}
-      onDrop={onDrop(vault.id)}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
       onClick={() => {
         if (isOpen && !isReorderActive && !isDragging) onOpenFileManager(vault);
       }}
@@ -110,7 +112,6 @@ export function VaultRow({
     >
       <div className="flex w-full items-center gap-2 sm:w-auto sm:gap-3">
         <VaultDragHandle
-          vaultId={vault.id}
           disabled={dragDisabled}
           onDragStart={onDragStart}
           onDragEnd={onDragEnd}
@@ -158,6 +159,7 @@ export function VaultRow({
           onOpenBackups={onOpenBackups}
           onOpenNote={onOpenNote}
           onOpenSettings={onOpenSettings}
+          onOpenGroupAssignment={onOpenGroupAssignment}
           onExportVault={onExportVault}
           onOpenFolder={onOpenFolder}
           onOpenFileManager={onOpenFileManager}

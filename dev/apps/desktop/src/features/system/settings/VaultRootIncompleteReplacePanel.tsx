@@ -1,8 +1,11 @@
 import { useId } from "react";
 import { PolicyRadioOption } from "@/components/settings";
 import { useTranslation } from "@/i18n";
-import { VAULT_ROOT_ALIAS_FILE, type IncompleteReplacePolicy } from "@upriv/shared";
-import type { VaultRootConfirmAction } from "./vaultRootSettingsIntent";
+import {
+  VAULT_ROOT_ALIAS_FILE,
+  type IncompleteReplacePolicy,
+  type VaultRootConfirmAction,
+} from "@upriv/shared";
 
 type IncompleteContext = { kind: "default_root" } | { kind: "custom_root"; path: string };
 

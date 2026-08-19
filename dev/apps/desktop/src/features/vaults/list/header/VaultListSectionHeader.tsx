@@ -9,11 +9,12 @@ import type {
 } from "@upriv/shared";
 import { SORT_DIRECTION_ICON, SORT_MODE_ICON, VIEW_MODE_ICON } from "../lib/vaultListToolbarIcons";
 
-const SORT_MODES: VaultListSortMode[] = ["order", "name", "state", "last_accessed"];
+const SORT_MODES: VaultListSortMode[] = ["order", "name", "state", "last_accessed", "groups"];
 const SORT_DIRECTIONS: VaultListSortDirection[] = ["asc", "desc"];
 const VIEW_MODES: VaultListViewMode[] = ["default", "large", "compact", "blocks"];
 
-const toolbarButtonClass = "rounded-xl px-3";
+/** Same outer box as header ⋮ / Button `md` (`h-10`) — bordered secondary chrome. */
+const toolbarButtonClass = "h-10 min-h-10 rounded-xl px-3";
 
 interface VaultListSectionHeaderProps {
   sort: VaultListSort;
@@ -22,6 +23,7 @@ interface VaultListSectionHeaderProps {
   onViewModeChange: (viewMode: VaultListViewMode) => void;
 }
 
+/** Section row: title left, sort/view filters right (shared layout with mobile). */
 export function VaultListSectionHeader({
   sort,
   onSortChange,
@@ -35,14 +37,19 @@ export function VaultListSectionHeader({
   const viewLabel = t(`vault.list.view.mode.${viewMode}`);
 
   return (
-    <div className="mb-10 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-      <div className="text-center sm:text-left">
-        <h1 className="font-display text-2xl font-semibold tracking-tight text-on-surface md:text-3xl">
+    <div className="mb-6 flex h-10 items-center justify-between gap-3">
+      <div className="flex h-10 min-w-0 items-center gap-2.5">
+        <Icon
+          name="encrypted"
+          size={22}
+          className="shrink-0 text-on-surface-variant"
+          aria-hidden
+        />
+        <h1 className="min-w-0 font-display text-xl font-semibold leading-none tracking-tight text-on-surface sm:text-2xl">
           {t("vault.list.title")}
         </h1>
-        <p className="mt-1 text-sm text-on-surface-variant">{t("vault.list.subtitle")}</p>
       </div>
-      <div className="flex shrink-0 items-center justify-center gap-2 sm:justify-end">
+      <div className="flex h-10 shrink-0 items-center gap-2">
         <DropdownPanel
           label={t("vault.list.sort.title")}
           align="right"

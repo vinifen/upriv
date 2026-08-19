@@ -131,6 +131,7 @@ pub fn load_app_settings_at(root: &Path) -> Result<LoadedAppSettings> {
             vault_list_sort_direction: parsed.ui.vault_list_sort_direction,
             vault_list_view: parsed.ui.vault_list_view,
             always_show_hidden_vaults: parsed.ui.always_show_hidden_vaults,
+            allow_drag_vault_into_group: parsed.ui.allow_drag_vault_into_group,
             file_manager_dock_expanded: parsed.ui.file_manager_dock_expanded,
         },
         logging: LoggingSettings {

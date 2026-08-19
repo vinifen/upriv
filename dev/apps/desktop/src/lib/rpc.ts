@@ -4,17 +4,27 @@ import { desktopInvokeRaw } from "./invoke";
 import { parseAppVersionResult, type AppVersionResult } from "./types";
 import type {
   AppSettingsConfig,
-  AppDistribution,
   AppLogFile,
   DefaultRootStatusResult,
+  VaultGroup,
+  VaultGroupCreateInput,
+  VaultGroupListResult,
+  VaultGroupUpdateInput,
   VaultRootAliasInfo,
   VaultRootBootstrapPrefs,
   VaultRootInspectResult,
   VaultRootMode,
   VaultRootResolveResult,
-  VaultRootResolveSource,
 } from "@upriv/shared";
-import { normalizeAppSettings, parseAppLogFile } from "@upriv/shared";
+import {
+  normalizeAppSettings,
+  parseAppLogFile,
+  parseDefaultRootStatus,
+  parseVaultGroupListResult,
+  parseVaultGroupWire,
+  parseVaultRootInspect,
+  parseVaultRootResolve,
+} from "@upriv/shared";
 
 /** Fetch product version from upriv-daemon. */
 export async function rpcAppVersion(): Promise<AppVersionResult> {
@@ -55,67 +65,6 @@ export async function rpcPickDirectory(
     );
   }
   return raw;
-}
-
-function normalizeVaultRootSource(value: unknown): VaultRootResolveSource | null {
-  if (value === "explicit" || value === "custom_root" || value === "default_root") return value;
-  return null;
-}
-
-function isAppDistribution(value: unknown): value is AppDistribution {
-  return value === "portable" || value === "installed" || value === "dev";
-}
-
-function parseVaultRootResolve(raw: unknown): VaultRootResolveResult {
-  if (typeof raw !== "object" || raw === null) {
-    throw new RpcError(
-      BRIDGE_ERROR_CODES.INVALID_RESPONSE,
-      "vault_root_resolve: expected object",
-      raw,
-    );
-  }
-  const record = raw as Record<string, unknown>;
-  if (record.status === "found") {
-    const source = normalizeVaultRootSource(record.source);
-    if (typeof record.rootPath !== "string" || source == null) {
-      throw new RpcError(
-        BRIDGE_ERROR_CODES.INVALID_RESPONSE,
-        "vault_root_resolve: invalid found payload",
-        raw,
-      );
-    }
-    return {
-      status: "found",
-      rootPath: record.rootPath,
-      source,
-    };
-  }
-  if (record.status === "needs_setup") {
-    const defaultRootAnchor =
-      typeof record.defaultRootAnchor === "string" ? record.defaultRootAnchor : null;
-    if (
-      typeof record.aliasPath !== "string" ||
-      defaultRootAnchor == null ||
-      !isAppDistribution(record.distribution)
-    ) {
-      throw new RpcError(
-        BRIDGE_ERROR_CODES.INVALID_RESPONSE,
-        "vault_root_resolve: invalid needs_setup payload",
-        raw,
-      );
-    }
-    return {
-      status: "needs_setup",
-      aliasPath: record.aliasPath,
-      defaultRootAnchor,
-      distribution: record.distribution,
-    };
-  }
-  throw new RpcError(
-    BRIDGE_ERROR_CODES.INVALID_RESPONSE,
-    "vault_root_resolve: unknown status",
-    raw,
-  );
 }
 
 function parseAppSettingsConfig(raw: unknown): AppSettingsConfig {
@@ -256,6 +205,10 @@ export async function rpcVaultRootSetupPath(
   };
 }
 
+export async function rpcVaultRootDeactivateAlias(): Promise<void> {
+  await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_ROOT_DEACTIVATE_ALIAS);
+}
+
 export async function rpcVaultRootReadAlias(): Promise<VaultRootAliasInfo | null> {
   const raw = await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_ROOT_READ_ALIAS);
   if (raw === null || raw === undefined) return null;
@@ -293,67 +246,13 @@ export async function rpcVaultRootSuggestedCustomPath(): Promise<string> {
 }
 
 export async function rpcVaultRootDefaultRootStatus(): Promise<DefaultRootStatusResult> {
-  const raw = await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_ROOT_DEFAULT_ROOT_STATUS);
-  if (
-    typeof raw !== "object" ||
-    raw === null ||
-    typeof (raw as { defaultRootAnchor?: unknown }).defaultRootAnchor !== "string"
-  ) {
-    throw new RpcError(
-      BRIDGE_ERROR_CODES.INVALID_RESPONSE,
-      "vault_root_default_root_status: expected { status, defaultRootAnchor }",
-      raw,
-    );
-  }
-  const status = (raw as { status?: unknown }).status;
-  if (
-    status !== "absent" &&
-    status !== "valid" &&
-    status !== "incomplete" &&
-    status !== "unreadable"
-  ) {
-    throw new RpcError(
-      BRIDGE_ERROR_CODES.INVALID_RESPONSE,
-      "vault_root_default_root_status: invalid status",
-      raw,
-    );
-  }
-  return {
-    status,
-    defaultRootAnchor: (raw as { defaultRootAnchor: string }).defaultRootAnchor,
-  };
+  return parseDefaultRootStatus(await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_ROOT_DEFAULT_ROOT_STATUS));
 }
 
 export async function rpcVaultRootInspectPath(path: string): Promise<VaultRootInspectResult> {
-  const raw = await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_ROOT_INSPECT_PATH, { path });
-  if (
-    typeof raw !== "object" ||
-    raw === null ||
-    typeof (raw as { path?: unknown }).path !== "string"
-  ) {
-    throw new RpcError(
-      BRIDGE_ERROR_CODES.INVALID_RESPONSE,
-      "vault_root_inspect_path: expected { status, path }",
-      raw,
-    );
-  }
-  const status = (raw as { status?: unknown }).status;
-  if (
-    status !== "absent" &&
-    status !== "valid" &&
-    status !== "incomplete" &&
-    status !== "unreadable"
-  ) {
-    throw new RpcError(
-      BRIDGE_ERROR_CODES.INVALID_RESPONSE,
-      "vault_root_inspect_path: invalid status",
-      raw,
-    );
-  }
-  return {
-    status,
-    path: (raw as { path: string }).path,
-  };
+  return parseVaultRootInspect(
+    await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_ROOT_INSPECT_PATH, { path }),
+  );
 }
 
 function parseAppLogFileOrThrow(raw: unknown): AppLogFile {
@@ -395,4 +294,107 @@ export async function rpcLogGet(filename: string): Promise<AppLogFile | undefine
 /** Delete log files by basename (active `current-*` allowed). */
 export async function rpcLogDelete(filenames: readonly string[]): Promise<void> {
   await desktopInvokeRaw(DAEMON_COMMANDS.LOG_DELETE, { filenames: [...filenames] });
+}
+
+/** Append allowlisted session log event (`vault_hidden` has no name fields). */
+export async function rpcLogEvent(event: "vault_hidden"): Promise<void> {
+  await desktopInvokeRaw(DAEMON_COMMANDS.LOG_EVENT, { event });
+}
+
+export async function rpcVaultGroupList(): Promise<VaultGroupListResult> {
+  const raw = await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_GROUP_LIST);
+  return parseVaultGroupListResult(raw);
+}
+
+export async function rpcVaultGroupCreate(input: VaultGroupCreateInput): Promise<VaultGroup> {
+  const raw = await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_GROUP_CREATE, {
+    id: input.id,
+    displayName: input.displayName,
+    groupedVaults: input.groupedVaults ?? [],
+    groupedVaultSort: input.groupedVaultSort,
+    groupedVaultSortDirection: input.groupedVaultSortDirection,
+  });
+  if (typeof raw !== "object" || raw === null) {
+    throw new RpcError(BRIDGE_ERROR_CODES.INVALID_RESPONSE, "vault_group_create: expected object", raw);
+  }
+  return parseVaultGroupWire((raw as { group?: unknown }).group);
+}
+
+export async function rpcVaultGroupUpdate(input: VaultGroupUpdateInput): Promise<VaultGroup> {
+  const raw = await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_GROUP_UPDATE, {
+    id: input.id,
+    displayName: input.displayName,
+    collapsed: input.collapsed,
+    order: input.order,
+    groupedVaults: input.groupedVaults,
+    groupedVaultSort: input.groupedVaultSort,
+    groupedVaultSortDirection: input.groupedVaultSortDirection,
+  });
+  if (typeof raw !== "object" || raw === null) {
+    throw new RpcError(BRIDGE_ERROR_CODES.INVALID_RESPONSE, "vault_group_update: expected object", raw);
+  }
+  return parseVaultGroupWire((raw as { group?: unknown }).group);
+}
+
+export async function rpcVaultGroupDelete(id: string): Promise<void> {
+  await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_GROUP_DELETE, { id });
+}
+
+export async function rpcVaultGroupSetCollapsed(
+  id: string,
+  collapsed: boolean,
+): Promise<VaultGroup> {
+  const raw = await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_GROUP_SET_COLLAPSED, { id, collapsed });
+  if (typeof raw !== "object" || raw === null) {
+    throw new RpcError(
+      BRIDGE_ERROR_CODES.INVALID_RESPONSE,
+      "vault_group_set_collapsed: expected object",
+      raw,
+    );
+  }
+  return parseVaultGroupWire((raw as { group?: unknown }).group);
+}
+
+export async function rpcVaultGroupReorderGroupedVaults(
+  id: string,
+  groupedVaults: string[],
+): Promise<VaultGroup> {
+  const raw = await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_GROUP_REORDER_GROUPED_VAULTS, {
+    id,
+    groupedVaults,
+  });
+  if (typeof raw !== "object" || raw === null) {
+    throw new RpcError(
+      BRIDGE_ERROR_CODES.INVALID_RESPONSE,
+      "vault_group_reorder_grouped_vaults: expected object",
+      raw,
+    );
+  }
+  return parseVaultGroupWire((raw as { group?: unknown }).group);
+}
+
+export async function rpcVaultGroupReorder(
+  orders: { id: string; order: number }[],
+): Promise<VaultGroup[]> {
+  const raw = await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_GROUP_REORDER, { orders });
+  if (typeof raw !== "object" || raw === null) {
+    throw new RpcError(
+      BRIDGE_ERROR_CODES.INVALID_RESPONSE,
+      "vault_group_reorder: expected object",
+      raw,
+    );
+  }
+  const groups = (raw as { groups?: unknown }).groups;
+  if (!Array.isArray(groups)) {
+    throw new RpcError(
+      BRIDGE_ERROR_CODES.INVALID_RESPONSE,
+      "vault_group_reorder: expected groups array",
+      raw,
+    );
+  }
+  return groups.map(parseVaultGroupWire);
+}
+
+export async function rpcVaultGroupRepair(): Promise<void> {
+  await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_GROUP_REPAIR);
 }

@@ -64,6 +64,7 @@ export function VaultListHeader({
         <div className="flex items-center gap-2">
           <IconButton
             label={t("action.refresh")}
+            size="md"
             className="rounded-xl"
             onClick={onRefresh}
             disabled={isRefreshing}
@@ -82,7 +83,11 @@ export function VaultListHeader({
           <DropdownMenu
             label={t("app.menu.more")}
             trigger={
-              <IconButton label={t("app.menu.more")} className="rounded-xl">
+              <IconButton
+                label={t("app.menu.more")}
+                size="md"
+                className="w-[2.875rem] border border-outline-variant bg-transparent hover:bg-surface-container-high"
+              >
                 <Icon name="more-vertical" size={20} />
               </IconButton>
             }

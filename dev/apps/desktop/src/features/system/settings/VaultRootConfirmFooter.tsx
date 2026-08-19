@@ -1,10 +1,9 @@
 import { useEffect, useRef } from "react";
-import type { I18nKey } from "@upriv/shared";
+import type { I18nKey, VaultRootConfirmAction } from "@upriv/shared";
 import { LOADING_BUDGET_MS } from "@upriv/shared";
 import { Button, LoadingBudgetHint } from "@/components/ui";
 import { useLoadingBudget } from "@/hooks/useLoadingBudget";
 import { useTranslation } from "@/i18n";
-import type { VaultRootConfirmAction } from "./vaultRootSettingsIntent";
 
 interface VaultRootConfirmFooterProps {
   busy: boolean;

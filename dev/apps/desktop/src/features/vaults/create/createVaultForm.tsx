@@ -23,13 +23,16 @@ import type {
   CreateVaultStepId,
   CreateVaultValidationCode,
   CompressionPreset,
+  VaultGroup,
 } from "@upriv/shared";
 import {
   COMPRESSION_PRESETS,
   compressionPresetFromSevenZip,
   normalizeSecurityModeForStorage,
   sevenZipPatchFromCompressionPreset,
-  storageModeHasClosedCache,
+  storageModeCanSeal,
+  storageModeCloseOnly,
+  storageModeHasPortableArchive,
   storageModeIsPlaintext,
   storageModeSealOnly,
   transitionStorageModeClose,
@@ -40,6 +43,8 @@ interface StepProps {
   draft: CreateVaultDraft;
   errors: CreateVaultValidationCode[];
   onChange: (patch: Partial<CreateVaultDraft>) => void;
+  /** Existing groups for deferred assignment on the General step. */
+  groups?: readonly VaultGroup[];
 }
 
 export function renderCreateVaultStep(
@@ -75,7 +80,9 @@ function StepErrors({ errors }: { errors: CreateVaultValidationCode[] }) {
         <li key={code}>
           {t(
             createVaultErrorI18nKey(code),
-            code === "too_long" ? { max: VAULT_DISPLAY_NAME_MAX_LENGTH } : undefined,
+            code === "too_long" || code === "group_name_too_long"
+              ? { max: VAULT_DISPLAY_NAME_MAX_LENGTH }
+              : undefined,
           )}
         </li>
       ))}
@@ -281,12 +288,15 @@ function CreateVaultPasswordStep({
   );
 }
 
-function CreateVaultGeneralStep({ draft, onChange }: StepProps) {
+function CreateVaultGeneralStep({ draft, errors, onChange, groups = [] }: StepProps) {
   const { t } = useTranslation();
   const autoCloseId = useId();
   const idleId = useId();
   const warnId = useId();
   const archiveGroup = useId();
+  const groupNameId = useId();
+  const groupErrors = errors.filter((code) => code.startsWith("group_"));
+  const creatingGroup = Boolean(draft.groupName.trim());
 
   return (
     <SettingsFormGrid>
@@ -361,36 +371,92 @@ function CreateVaultGeneralStep({ draft, onChange }: StepProps) {
         </div>
       ) : null}
 
-      <VaultSettingsBackupSection
-        config={draft.backup}
-        onChange={(patch) => onChange({ backup: { ...draft.backup, ...patch } })}
-      />
+      {storageModeHasPortableArchive(draft.storage.mode) ? (
+        <>
+          <VaultSettingsBackupSection
+            config={draft.backup}
+            onChange={(patch) => onChange({ backup: { ...draft.backup, ...patch } })}
+          />
 
-      <SettingsField
-        label={t("modal.settings.field.seven_zip.compression")}
-        hint={t("modal.settings.field.seven_zip.compression_help")}
-      >
-        <div role="radiogroup" className="grid gap-2">
-          {COMPRESSION_PRESETS.map((value) => {
-            const preset = compressionPresetFromSevenZip(draft.seven_zip);
-            return (
-              <PolicyRadioOption
-                key={value}
-                groupName={archiveGroup}
-                value={value}
-                checked={preset === value}
-                title={t(`modal.settings.option.seven_zip.compression.${value}`)}
-                description={t(`modal.settings.option.seven_zip.compression.${value}_desc`)}
-                badge={value === "none" ? "default" : undefined}
-                onSelect={() => {
-                  const patch = sevenZipPatchFromCompressionPreset(value as CompressionPreset);
-                  onChange({ seven_zip: { ...draft.seven_zip, ...patch } });
-                }}
-              />
-            );
-          })}
-        </div>
-      </SettingsField>
+          <SettingsField
+            label={t("modal.settings.field.seven_zip.compression")}
+            hint={t("modal.settings.field.seven_zip.compression_help")}
+          >
+            <div role="radiogroup" className="grid gap-2">
+              {COMPRESSION_PRESETS.map((value) => {
+                const preset = compressionPresetFromSevenZip(draft.seven_zip);
+                return (
+                  <PolicyRadioOption
+                    key={value}
+                    groupName={archiveGroup}
+                    value={value}
+                    checked={preset === value}
+                    title={t(`modal.settings.option.seven_zip.compression.${value}`)}
+                    description={t(`modal.settings.option.seven_zip.compression.${value}_desc`)}
+                    badge={value === "none" ? "default" : undefined}
+                    onSelect={() => {
+                      const patch = sevenZipPatchFromCompressionPreset(value as CompressionPreset);
+                      onChange({ seven_zip: { ...draft.seven_zip, ...patch } });
+                    }}
+                  />
+                );
+              })}
+            </div>
+          </SettingsField>
+        </>
+      ) : null}
+
+      <div className="space-y-3">
+        <p className="text-sm text-on-surface-variant">{t("vault.create.group_intro")}</p>
+        <SettingsField label={t("vault.group.assignment.section")}>
+          <select
+            className={settingsControlClass}
+            value={draft.groupMode === "existing" ? draft.groupId : ""}
+            disabled={creatingGroup}
+            onChange={(event) => {
+              const nextId = event.target.value;
+              if (!nextId) {
+                onChange({ groupMode: "none", groupId: "", groupName: "" });
+                return;
+              }
+              onChange({ groupMode: "existing", groupId: nextId, groupName: "" });
+            }}
+          >
+            <option value="">{t("vault.group.assignment.ungrouped")}</option>
+            {groups.map((group) => (
+              <option key={group.id} value={group.id}>
+                {group.displayName}
+              </option>
+            ))}
+          </select>
+        </SettingsField>
+        <SettingsField
+          label={t("modal.settings.field.group.new_name")}
+          htmlFor={groupNameId}
+          hint={t("vault.create.group_create_help")}
+        >
+          <input
+            id={groupNameId}
+            type="text"
+            value={draft.groupName}
+            maxLength={VAULT_DISPLAY_NAME_MAX_LENGTH}
+            onChange={(e) => {
+              const groupName = e.target.value;
+              if (groupName.trim()) {
+                onChange({ groupMode: "create", groupName });
+                return;
+              }
+              onChange({
+                groupMode: draft.groupId ? "existing" : "none",
+                groupName: "",
+              });
+            }}
+            className={settingsControlClass}
+            placeholder={t("vault.group.create.name_label")}
+          />
+        </SettingsField>
+        <StepErrors errors={groupErrors} />
+      </div>
     </SettingsFormGrid>
   );
 }
@@ -424,11 +490,12 @@ function CreateVaultAdvancedStep({ draft, onChange }: StepProps) {
         ...draft.security,
         mode: normalizeSecurityModeForStorage(mode, draft.security.mode),
       },
+      ...(storageModeCloseOnly(mode) ? { backup: { ...draft.backup, enabled: false } } : {}),
     });
   };
 
   const setCloseDefault = (defaultAction: CloseDefaultAction) => {
-    if (storageModeHasClosedCache(draft.storage.mode)) {
+    if (storageModeCanSeal(draft.storage.mode)) {
       encryptedCloseRef.current = defaultAction;
     }
     onChange({ close: { default_action: defaultAction } });
@@ -502,6 +569,25 @@ function CreateVaultAdvancedStep({ draft, onChange }: StepProps) {
               />
               <PolicyRadioOption
                 groupName={storageGroup}
+                value="upriv_only"
+                checked={draft.storage.mode === "upriv_only"}
+                title={t("modal.settings.option.storage.upriv_only")}
+                description={t("modal.settings.option.storage.upriv_only_desc")}
+                badge="more-secure"
+                onSelect={() => setStorageMode("upriv_only")}
+              />
+              <PolicyRadioOption
+                groupName={storageGroup}
+                value="upriv_plain"
+                checked={draft.storage.mode === "upriv_plain"}
+                title={t("modal.settings.option.storage.upriv_plain")}
+                description={t("modal.settings.option.storage.upriv_plain_desc")}
+                badge="insecure"
+                tone="insecure"
+                onSelect={() => setStorageMode("upriv_plain")}
+              />
+              <PolicyRadioOption
+                groupName={storageGroup}
                 value="ram_only"
                 checked={draft.storage.mode === "ram_only"}
                 title={t("modal.settings.option.storage.ram_only")}
@@ -547,6 +633,14 @@ function CreateVaultAdvancedStep({ draft, onChange }: StepProps) {
               {t("warning.store_only")}
             </p>
           ) : null}
+          {draft.storage.mode === "upriv_only" ? (
+            <p className="text-xs leading-relaxed text-on-error-container/90">
+              {t("warning.upriv_only")}
+            </p>
+          ) : null}
+          {draft.storage.mode === "upriv_plain" ? (
+            <p className="text-xs font-medium text-on-error-container">{t("warning.upriv_plain")}</p>
+          ) : null}
           {draft.storage.mode === "plain" ? (
             <p className="text-xs font-medium text-on-error-container">{t("warning.plain_mode")}</p>
           ) : null}
@@ -568,6 +662,14 @@ function CreateVaultAdvancedStep({ draft, onChange }: StepProps) {
                   : draft.storage.mode === "plain_only"
                     ? "modal.settings.field.close.plain_only_seal_only"
                     : "modal.settings.field.close.plain_seal_only",
+              )}
+            </p>
+          ) : storageModeCloseOnly(draft.storage.mode) ? (
+            <p className="text-xs leading-relaxed text-on-surface-variant">
+              {t(
+                draft.storage.mode === "upriv_plain"
+                  ? "modal.settings.field.close.upriv_plain_close_only"
+                  : "modal.settings.field.close.upriv_only_close_only",
               )}
             </p>
           ) : (
@@ -710,26 +812,30 @@ function CreateVaultAdvancedStep({ draft, onChange }: StepProps) {
             </div>
           </SettingsField>
 
-          <label className="flex cursor-pointer select-none items-center gap-3">
-            <input
-              id={encryptNamesId}
-              type="checkbox"
-              checked={draft.seven_zip.encrypt_file_names}
-              onChange={(e) =>
-                onChange({
-                  seven_zip: { ...draft.seven_zip, encrypt_file_names: e.target.checked },
-                })
-              }
-              className="h-4 w-4 rounded border-outline-variant/50 text-accent focus:ring-accent/50"
-            />
-            <span className="text-sm text-on-surface">
-              {t("modal.settings.field.seven_zip.encrypt_file_names_label")}
-            </span>
-          </label>
-          {!draft.seven_zip.encrypt_file_names ? (
-            <p className="text-xs text-on-error-container/90">
-              {t("modal.settings.field.seven_zip.encrypt_file_names_off_warn")}
-            </p>
+          {storageModeHasPortableArchive(draft.storage.mode) ? (
+            <>
+              <label className="flex cursor-pointer select-none items-center gap-3">
+                <input
+                  id={encryptNamesId}
+                  type="checkbox"
+                  checked={draft.seven_zip.encrypt_file_names}
+                  onChange={(e) =>
+                    onChange({
+                      seven_zip: { ...draft.seven_zip, encrypt_file_names: e.target.checked },
+                    })
+                  }
+                  className="h-4 w-4 rounded border-outline-variant/50 text-accent focus:ring-accent/50"
+                />
+                <span className="text-sm text-on-surface">
+                  {t("modal.settings.field.seven_zip.encrypt_file_names_label")}
+                </span>
+              </label>
+              {!draft.seven_zip.encrypt_file_names ? (
+                <p className="text-xs text-on-error-container/90">
+                  {t("modal.settings.field.seven_zip.encrypt_file_names_off_warn")}
+                </p>
+              ) : null}
+            </>
           ) : null}
 
           <div className="space-y-1.5">

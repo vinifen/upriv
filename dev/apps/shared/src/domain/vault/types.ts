@@ -9,6 +9,8 @@ export type VaultSession = "open" | "closing" | "recovery";
  *
  * - `encrypted_dir` — encrypted store on disk + virtual mount (default; optional `closed` cache)
  * - `store_only` — encrypted store is primary; `.7z` on seal/export (less Plan B while open)
+ * - `upriv_only` — encrypted store only; no `.7z`, no seal (opens only in Upriv; virtual mount)
+ * - `upriv_plain` — same closed store (no `.7z`); while open: plaintext workspace on disk
  * - `ram_only` — `.7z` + RAM session only; no store; lock always seals (volatile edits)
  * - `plain` — while open: plaintext workspace **+** `.7z` on disk; lock always seals → only `.7z`
  * - `plain_only` — while open: plaintext workspace only (no `.7z`); lock always seals → only `.7z`
@@ -18,18 +20,37 @@ export type StorageMode =
   | "plain"
   | "plain_only"
   | "ram_only"
-  | "store_only";
+  | "store_only"
+  | "upriv_only"
+  | "upriv_plain";
 
 export const STORAGE_MODES = [
   "encrypted_dir",
   "store_only",
+  "upriv_only",
+  "upriv_plain",
   "ram_only",
   "plain",
   "plain_only",
 ] as const satisfies readonly StorageMode[];
 
+/** Modes where lock always closes the store and never seals (no `.7z`). */
+export function storageModeCloseOnly(mode: StorageMode): boolean {
+  return mode === "upriv_only" || mode === "upriv_plain";
+}
+
 /** Modes that can keep an on-disk cache between sessions (`closed`). */
 export function storageModeHasClosedCache(mode: StorageMode): boolean {
+  return mode === "encrypted_dir" || mode === "store_only" || storageModeCloseOnly(mode);
+}
+
+/** Modes that may write / keep a portable `.7z` (Plan B). */
+export function storageModeHasPortableArchive(mode: StorageMode): boolean {
+  return !storageModeCloseOnly(mode);
+}
+
+/** Modes that expose Seal (closed-cache **and** a portable archive). */
+export function storageModeCanSeal(mode: StorageMode): boolean {
   return mode === "encrypted_dir" || mode === "store_only";
 }
 
@@ -40,7 +61,7 @@ export function storageModeSealOnly(mode: StorageMode): boolean {
 
 /** Modes that persist decrypted file bytes on the vault volume while open. */
 export function storageModeIsPlaintext(mode: StorageMode): boolean {
-  return mode === "plain" || mode === "plain_only";
+  return mode === "plain" || mode === "plain_only" || mode === "upriv_plain";
 }
 
 /**
@@ -59,7 +80,7 @@ export interface VaultRow {
   order?: number;
   passwordHint?: string;
   canSeal: boolean;
-  /** `[vault] hidden` — omitted from list unless show-hidden is active. */
+  /** `[vault] hidden` — omitted from list, pickers, and download unless show-hidden is active. */
   hidden?: boolean;
 }
 
@@ -78,13 +99,17 @@ export function resolveVaultDisplayStatus(row: VaultRow): VaultDisplayStatus {
 }
 
 function isDevEnvironment(): boolean {
-  if (typeof import.meta !== "undefined") {
-    const env = (import.meta as { env?: { DEV?: boolean } }).env;
-    if (env?.DEV === true) return true;
-    if (env?.DEV === false) return false;
-  }
+  // Prefer RN `__DEV__`. Avoid bare `import.meta` — Hermes rejects it at parse time
+  // even inside `typeof` guards (breaks Android release embed).
+  // Avoid bare `process` — shared has no Node types (browser / RN / Electron renderer).
   const globalDev = (globalThis as { __DEV__?: boolean }).__DEV__;
-  return globalDev === true;
+  if (typeof globalDev === "boolean") return globalDev;
+  const nodeEnv = (globalThis as { process?: { env?: { NODE_ENV?: string } } }).process?.env
+    ?.NODE_ENV;
+  if (typeof nodeEnv === "string") {
+    return nodeEnv !== "production";
+  }
+  return false;
 }
 
 function devWarn(message: string): void {
@@ -108,10 +133,10 @@ export function assertPlainVaultInvariant(row: VaultRow): void {
 
 /**
  * Whether the row may show the seal split control.
- * Modes with a closed cache (`encrypted_dir`, `store_only`) — while open or resting `closed`.
+ * Closed-cache modes that still have a portable `.7z` (`encrypted_dir`, `store_only`).
  */
 export function resolveVaultCanSeal(row: VaultRow): boolean {
-  if (!storageModeHasClosedCache(row.storageMode)) return false;
+  if (!storageModeCanSeal(row.storageMode)) return false;
   if (row.session === "recovery" || row.session === "closing") return false;
   if (row.session === "open") return true;
   return row.persistence === "closed";

@@ -27,6 +27,18 @@ describe("transitionStorageModeClose", () => {
       transitionStorageModeClose("plain", "seal", "ram_only", "close"),
     ).toEqual({ close: "seal", encryptedClosePreference: "close" });
   });
+
+  it("forces close when entering close-only mode and keeps seal preference", () => {
+    expect(
+      transitionStorageModeClose("encrypted_dir", "seal", "upriv_plain", "close"),
+    ).toEqual({ close: "close", encryptedClosePreference: "seal" });
+  });
+
+  it("restores seal preference when leaving Upriv-only for encrypted_dir", () => {
+    expect(
+      transitionStorageModeClose("upriv_only", "close", "encrypted_dir", "seal"),
+    ).toEqual({ close: "seal", encryptedClosePreference: "seal" });
+  });
 });
 
 describe("patchStorageMode", () => {

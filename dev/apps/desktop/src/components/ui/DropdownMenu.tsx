@@ -3,11 +3,11 @@ import {
   isValidElement,
   type ReactElement,
   type ReactNode,
-  useEffect,
   useId,
   useRef,
   useState,
 } from "react";
+import { AnchoredPopover } from "./AnchoredPopover";
 import { menuItemClass, menuPanelClass } from "./menuStyles";
 
 export interface DropdownMenuItem {
@@ -38,26 +38,8 @@ const triggerActiveClass = "bg-surface-container-highest text-on-surface";
 
 export function DropdownMenu({ trigger, items, align = "right", label }: DropdownMenuProps) {
   const [open, setOpen] = useState(false);
-  const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLDivElement>(null);
   const menuId = useId();
-
-  useEffect(() => {
-    if (!open) return;
-    const onPointerDown = (event: MouseEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) {
-        setOpen(false);
-      }
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
-    };
-    document.addEventListener("mousedown", onPointerDown);
-    document.addEventListener("keydown", onKeyDown);
-    return () => {
-      document.removeEventListener("mousedown", onPointerDown);
-      document.removeEventListener("keydown", onKeyDown);
-    };
-  }, [open]);
 
   const enhancedTrigger = isValidElement(trigger)
     ? cloneElement(trigger, {
@@ -76,19 +58,19 @@ export function DropdownMenu({ trigger, items, align = "right", label }: Dropdow
     : trigger;
 
   return (
-    <div ref={rootRef} className="relative">
+    <div ref={triggerRef} className="relative">
       {enhancedTrigger}
-      {open ? (
-        <ul
-          id={menuId}
-          role="menu"
-          aria-label={label}
-          className={[
-            "absolute z-50 mt-2 min-w-[12rem]",
-            menuPanelClass,
-            align === "right" ? "right-0" : "left-0",
-          ].join(" ")}
-        >
+      <AnchoredPopover
+        open={open}
+        onClose={() => setOpen(false)}
+        triggerRef={triggerRef}
+        align={align}
+        id={menuId}
+        role="menu"
+        aria-label={label}
+        className={["min-w-[12rem]", menuPanelClass].join(" ")}
+      >
+        <ul>
           {items.map((item) => (
             <li key={item.id} role="none">
               <button
@@ -106,7 +88,7 @@ export function DropdownMenu({ trigger, items, align = "right", label }: Dropdow
             </li>
           ))}
         </ul>
-      ) : null}
+      </AnchoredPopover>
     </div>
   );
 }

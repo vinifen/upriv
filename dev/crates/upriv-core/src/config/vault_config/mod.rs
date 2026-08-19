@@ -173,6 +173,8 @@ display_name = "Case mismatch"
         let cases = [
             ("encrypted_dir", VaultStorageMode::EncryptedDir),
             ("store_only", VaultStorageMode::StoreOnly),
+            ("upriv_only", VaultStorageMode::UprivOnly),
+            ("upriv_plain", VaultStorageMode::UprivPlain),
             ("ram_only", VaultStorageMode::RamOnly),
             ("plain", VaultStorageMode::Plain),
             ("plain_only", VaultStorageMode::PlainOnly),
@@ -192,6 +194,8 @@ display_name = "Case mismatch"
         let cases = [
             (VaultStorageMode::EncryptedDir, "encrypted_dir"),
             (VaultStorageMode::StoreOnly, "store_only"),
+            (VaultStorageMode::UprivOnly, "upriv_only"),
+            (VaultStorageMode::UprivPlain, "upriv_plain"),
             (VaultStorageMode::RamOnly, "ram_only"),
             (VaultStorageMode::Plain, "plain"),
             (VaultStorageMode::PlainOnly, "plain_only"),

@@ -1,4 +1,10 @@
-// Daemon RPC methods — keep in sync with @upriv/shared `CORE_RPC_COMMANDS` + `DESKTOP_ONLY_RPC_COMMANDS`.
+//! Shared RPC method handlers — keep in sync with `@upriv/shared`
+//! `CORE_RPC_COMMANDS` + `DESKTOP_ONLY_RPC_COMMANDS`. Protocol error codes —
+//! keep in sync with `@upriv/shared` `RPC_PROTOCOL_ERROR_CODES`.
+//!
+//! Desktop: `upriv-daemon` wraps this over stdio NDJSON.
+//! Mobile: `upriv-ffi` exposes the same dispatch via UniFFI `invoke`.
+
 // Protocol error codes — keep in sync with @upriv/shared `RPC_PROTOCOL_ERROR_CODES`.
 
 use std::path::{Path, PathBuf};
@@ -12,12 +18,15 @@ use upriv_core::logging::{
     LogLevel, Logger,
 };
 use upriv_core::{
-    app_home_dir, deactivate_vault_root_alias_everywhere, inspect_vault_root_at, load_app_settings,
-    open_or_initialize_vault_root_with_policy_and_bootstrap, read_vault_root_alias,
-    resolve_vault_root, save_app_settings_session_with_alias_sync, suggested_vault_root,
-    write_vault_root_alias_for_root, AppSettings, IncompleteReplacePolicy, ResolveVaultRoot,
-    ResolveVaultRootOptions, VaultRootBootstrapPrefs, VaultRootDirStatus, VaultRootMode,
-    VaultRootSource, VAULT_ROOT_ALIAS_FILE,
+    app_home_dir, create_vault_group_with_sort, deactivate_vault_root_alias_everywhere,
+    delete_vault_group, discover_bootstrap_root, inspect_vault_root_at, known_vault_ids,
+    load_app_settings, load_vault_groups, open_or_initialize_vault_root_with_policy_and_bootstrap,
+    parse_settings_toml_str, read_vault_root_alias, reorder_vault_group_grouped_vaults,
+    reorder_vault_groups, repair_vault_groups, resolve_vault_root,
+    save_app_settings_session_with_alias_sync, serialize_settings_toml_str, suggested_vault_root,
+    update_vault_group, write_vault_root_alias_for_root, AppSettings, IncompleteReplacePolicy,
+    ResolveVaultRoot, ResolveVaultRootOptions, VaultGroup, VaultRootBootstrapPrefs,
+    VaultRootDirStatus, VaultRootMode, VaultRootSource, VAULT_ROOT_ALIAS_FILE,
 };
 
 #[derive(Debug, Deserialize)]
@@ -103,9 +112,12 @@ pub fn handle_rpc(req: RpcRequest) -> RpcResponse {
         "app_shutdown" => ok(json!(null)),
         "app_settings_get" => app_settings_get(),
         "app_settings_save" => app_settings_save(req.params),
+        "app_settings_parse_toml" => app_settings_parse_toml(req.params),
+        "app_settings_serialize_toml" => app_settings_serialize_toml(req.params),
         "vault_root_resolve" => vault_root_resolve(req.params),
         "vault_root_setup_default_root" => vault_root_setup_default_root(req.params),
         "vault_root_setup_path" => vault_root_setup_path(req.params),
+        "vault_root_deactivate_alias" => vault_root_deactivate_alias(),
         "vault_root_read_alias" => vault_root_read_alias(),
         "vault_root_default_root_status" => vault_root_default_root_status(),
         "vault_root_inspect_path" => vault_root_inspect_path(req.params),
@@ -113,6 +125,15 @@ pub fn handle_rpc(req: RpcRequest) -> RpcResponse {
         "log_list" => log_list(),
         "log_get" => log_get(req.params),
         "log_delete" => log_delete(req.params),
+        "log_event" => log_append_event(req.params),
+        "vault_group_list" => vault_group_list(),
+        "vault_group_create" => vault_group_create(req.params),
+        "vault_group_update" => vault_group_update(req.params),
+        "vault_group_delete" => vault_group_delete(req.params),
+        "vault_group_set_collapsed" => vault_group_set_collapsed(req.params),
+        "vault_group_reorder" => vault_group_reorder(req.params),
+        "vault_group_reorder_grouped_vaults" => vault_group_reorder_grouped_vaults(req.params),
+        "vault_group_repair" => vault_group_repair(),
         other => err("unknown_method", format!("unknown method: {other}")),
     }
 }
@@ -254,7 +275,7 @@ fn require_bootstrap_locale(
     match locale {
         Some(value) => Ok(value.to_string()),
         None => {
-            eprintln!("upriv-daemon: bootstrap.locale is required when creating a new vault-root");
+            eprintln!("upriv-rpc: bootstrap.locale is required when creating a new vault-root");
             Err(err(
                 "invalid_request",
                 "bootstrap.locale is required when creating a new vault-root".into(),
@@ -411,6 +432,14 @@ fn vault_root_suggested_custom_path() -> RpcResponse {
     }
 }
 
+/// Deactivate `.upriv-root` aliases only. Does not create, open, or require a vault-root.
+fn vault_root_deactivate_alias() -> RpcResponse {
+    match deactivate_vault_root_alias_everywhere() {
+        Ok(()) => ok(json!(null)),
+        Err(error) => map_core_err(error),
+    }
+}
+
 fn require_absolute_path(path: &Path) -> Result<(), RpcResponse> {
     if path.as_os_str().is_empty() {
         return Err(err("invalid_request", "path is required".into()));
@@ -546,6 +575,27 @@ fn log_list() -> RpcResponse {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct LogEventParams {
+    event: String,
+}
+
+/// Allowlisted UI events. `vault_hidden` records no vault id or display name.
+fn log_append_event(params: Value) -> RpcResponse {
+    let parsed: LogEventParams = match serde_json::from_value(params) {
+        Ok(value) => value,
+        Err(error) => return err("invalid_request", error.to_string()),
+    };
+    match parsed.event.as_str() {
+        "vault_hidden" => {
+            log_event(LogLevel::Info, "vault_hidden", &[]);
+            ok(json!(null))
+        }
+        _ => err("invalid_request", "event is not allowed".into()),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct LogFilenameParams {
     filename: String,
 }
@@ -600,7 +650,7 @@ fn log_delete(params: Value) -> RpcResponse {
                 log_event(LogLevel::Info, "logs_deleted", &[("count", count.as_str())]);
             } else {
                 eprintln!(
-                    "[upriv-daemon] deleted {} log file(s) including active current-*",
+                    "[upriv-rpc] deleted {} log file(s) including active current-*",
                     parsed.filenames.len()
                 );
             }
@@ -622,7 +672,7 @@ fn log_delete(params: Value) -> RpcResponse {
                 );
             } else {
                 eprintln!(
-                    "[upriv-daemon] logs_delete_failed (invalid_request) after touching current-*"
+                    "[upriv-rpc] logs_delete_failed (invalid_request) after touching current-*"
                 );
             }
             err("invalid_request", error.to_string())
@@ -644,10 +694,317 @@ fn log_delete(params: Value) -> RpcResponse {
                     &[("reason", "io_error")],
                 );
             } else {
-                eprintln!("[upriv-daemon] logs_delete_failed (io_error) after touching current-*");
+                eprintln!("[upriv-rpc] logs_delete_failed (io_error) after touching current-*");
             }
             map_core_err(error)
         }
+    }
+}
+
+fn require_vault_root() -> Result<upriv_core::VaultRoot, RpcResponse> {
+    match discover_bootstrap_root() {
+        Ok(Some(root)) => Ok(root),
+        Ok(None) => Err(err(
+            "vault_root_not_found",
+            "no vault-root available for vault groups".into(),
+        )),
+        Err(error) => Err(map_core_err(error)),
+    }
+}
+
+fn group_to_json(group: &VaultGroup) -> Value {
+    json!({
+        "id": group.id,
+        "displayName": group.display_name,
+        "order": group.order,
+        "collapsed": group.collapsed,
+        "groupedVaults": group.grouped_vaults,
+        "groupedVaultSort": group.grouped_vault_sort,
+        "groupedVaultSortDirection": group.grouped_vault_sort_direction,
+    })
+}
+
+fn vault_group_list() -> RpcResponse {
+    let root = match require_vault_root() {
+        Ok(root) => root,
+        Err(response) => return response,
+    };
+    let known = match known_vault_ids(&root) {
+        Ok(ids) => ids,
+        Err(error) => return map_core_err(error),
+    };
+    match load_vault_groups(&root, &known) {
+        Ok(loaded) => ok(json!({
+            "groups": loaded.groups.iter().map(group_to_json).collect::<Vec<_>>(),
+            "droppedOrphans": loaded.dropped_orphans,
+            "droppedDuplicateAssignments": loaded.dropped_duplicate_assignments,
+            // Dual membership is soft-dropped on list but still on disk until mutate
+            // heals it — surface repair so the UI is not stuck without a banner.
+            "invalid": loaded.dropped_duplicate_assignments > 0,
+        })),
+        Err(upriv_core::UprivError::VaultGroupsInvalid { .. }) => ok(json!({
+            "groups": [],
+            "droppedOrphans": 0,
+            "droppedDuplicateAssignments": 0,
+            "invalid": true,
+        })),
+        Err(error) => map_core_err(error),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct VaultGroupCreateParams {
+    id: String,
+    display_name: String,
+    #[serde(default)]
+    grouped_vaults: Option<Vec<String>>,
+    /// Legacy wire key — prefer `grouped_vaults` when both present.
+    #[serde(default)]
+    members: Option<Vec<String>>,
+    #[serde(default)]
+    grouped_vault_sort: Option<String>,
+    #[serde(default)]
+    grouped_vault_sort_direction: Option<String>,
+}
+
+fn vault_group_create(params: Value) -> RpcResponse {
+    let parsed: VaultGroupCreateParams = match serde_json::from_value(params) {
+        Ok(value) => value,
+        Err(error) => return err("invalid_request", error.to_string()),
+    };
+    let root = match require_vault_root() {
+        Ok(root) => root,
+        Err(response) => return response,
+    };
+    let grouped_vaults = parsed.grouped_vaults.or(parsed.members).unwrap_or_default();
+    match create_vault_group_with_sort(
+        &root,
+        &parsed.id,
+        &parsed.display_name,
+        &grouped_vaults,
+        parsed.grouped_vault_sort.as_deref(),
+        parsed.grouped_vault_sort_direction.as_deref(),
+    ) {
+        Ok(group) => {
+            log_event(
+                LogLevel::Info,
+                "vault_group_created",
+                &[("id", group.id.as_str())],
+            );
+            ok(json!({ "group": group_to_json(&group) }))
+        }
+        Err(error) => map_core_err(error),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct VaultGroupUpdateParams {
+    id: String,
+    #[serde(default)]
+    display_name: Option<String>,
+    #[serde(default)]
+    collapsed: Option<bool>,
+    #[serde(default)]
+    order: Option<i64>,
+    #[serde(default)]
+    grouped_vaults: Option<Vec<String>>,
+    /// Legacy wire key — prefer `grouped_vaults` when both present.
+    #[serde(default)]
+    members: Option<Vec<String>>,
+    #[serde(default)]
+    grouped_vault_sort: Option<String>,
+    #[serde(default)]
+    member_sort: Option<String>,
+    #[serde(default)]
+    grouped_vault_sort_direction: Option<String>,
+    #[serde(default)]
+    member_sort_direction: Option<String>,
+}
+
+fn vault_group_update(params: Value) -> RpcResponse {
+    let parsed: VaultGroupUpdateParams = match serde_json::from_value(params) {
+        Ok(value) => value,
+        Err(error) => return err("invalid_request", error.to_string()),
+    };
+    let root = match require_vault_root() {
+        Ok(root) => root,
+        Err(response) => return response,
+    };
+    let grouped_vaults = parsed.grouped_vaults.or(parsed.members);
+    let grouped_vault_sort = parsed.grouped_vault_sort.or(parsed.member_sort);
+    let grouped_vault_sort_direction = parsed
+        .grouped_vault_sort_direction
+        .or(parsed.member_sort_direction);
+    match update_vault_group(
+        &root,
+        &parsed.id,
+        parsed.display_name.as_deref(),
+        parsed.collapsed,
+        parsed.order,
+        grouped_vaults.as_deref(),
+        grouped_vault_sort.as_deref(),
+        grouped_vault_sort_direction.as_deref(),
+    ) {
+        Ok(group) => {
+            log_event(
+                LogLevel::Info,
+                "vault_group_updated",
+                &[("id", group.id.as_str())],
+            );
+            ok(json!({ "group": group_to_json(&group) }))
+        }
+        Err(error) => map_core_err(error),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct VaultGroupIdParams {
+    id: String,
+}
+
+fn vault_group_delete(params: Value) -> RpcResponse {
+    let parsed: VaultGroupIdParams = match serde_json::from_value(params) {
+        Ok(value) => value,
+        Err(error) => return err("invalid_request", error.to_string()),
+    };
+    let root = match require_vault_root() {
+        Ok(root) => root,
+        Err(response) => return response,
+    };
+    match delete_vault_group(&root, &parsed.id) {
+        Ok(Some(_)) => {
+            log_event(
+                LogLevel::Info,
+                "vault_group_deleted",
+                &[("id", parsed.id.as_str())],
+            );
+            ok(json!(null))
+        }
+        Ok(None) => err(
+            "vault_group_not_found",
+            format!("group not found: {}", parsed.id),
+        ),
+        Err(error) => map_core_err(error),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct VaultGroupCollapsedParams {
+    id: String,
+    collapsed: bool,
+}
+
+fn vault_group_set_collapsed(params: Value) -> RpcResponse {
+    let parsed: VaultGroupCollapsedParams = match serde_json::from_value(params) {
+        Ok(value) => value,
+        Err(error) => return err("invalid_request", error.to_string()),
+    };
+    let root = match require_vault_root() {
+        Ok(root) => root,
+        Err(response) => return response,
+    };
+    match update_vault_group(
+        &root,
+        &parsed.id,
+        None,
+        Some(parsed.collapsed),
+        None,
+        None,
+        None,
+        None,
+    ) {
+        Ok(group) => ok(json!({ "group": group_to_json(&group) })),
+        Err(error) => map_core_err(error),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct VaultGroupOrderEntry {
+    id: String,
+    order: i64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct VaultGroupReorderParams {
+    orders: Vec<VaultGroupOrderEntry>,
+}
+
+fn vault_group_reorder(params: Value) -> RpcResponse {
+    let parsed: VaultGroupReorderParams = match serde_json::from_value(params) {
+        Ok(value) => value,
+        Err(error) => return err("invalid_request", error.to_string()),
+    };
+    let root = match require_vault_root() {
+        Ok(root) => root,
+        Err(response) => return response,
+    };
+    let orders: Vec<(String, i64)> = parsed
+        .orders
+        .into_iter()
+        .map(|entry| (entry.id, entry.order))
+        .collect();
+    match reorder_vault_groups(&root, &orders) {
+        Ok(groups) => {
+            log_event(LogLevel::Info, "vault_groups_reordered", &[]);
+            ok(json!({
+                "groups": groups.iter().map(group_to_json).collect::<Vec<_>>(),
+            }))
+        }
+        Err(error) => map_core_err(error),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct VaultGroupReorderGroupedVaultsParams {
+    id: String,
+    #[serde(default)]
+    grouped_vaults: Option<Vec<String>>,
+    /// Legacy wire key — prefer `grouped_vaults` when both present.
+    #[serde(default)]
+    members: Option<Vec<String>>,
+}
+
+fn vault_group_reorder_grouped_vaults(params: Value) -> RpcResponse {
+    let parsed: VaultGroupReorderGroupedVaultsParams = match serde_json::from_value(params) {
+        Ok(value) => value,
+        Err(error) => return err("invalid_request", error.to_string()),
+    };
+    let root = match require_vault_root() {
+        Ok(root) => root,
+        Err(response) => return response,
+    };
+    let grouped_vaults = parsed.grouped_vaults.or(parsed.members).unwrap_or_default();
+    match reorder_vault_group_grouped_vaults(&root, &parsed.id, &grouped_vaults) {
+        Ok(group) => {
+            log_event(
+                LogLevel::Info,
+                "vault_group_grouped_vaults_reordered",
+                &[("id", group.id.as_str())],
+            );
+            ok(json!({ "group": group_to_json(&group) }))
+        }
+        Err(error) => map_core_err(error),
+    }
+}
+
+fn vault_group_repair() -> RpcResponse {
+    let root = match require_vault_root() {
+        Ok(root) => root,
+        Err(response) => return response,
+    };
+    match repair_vault_groups(&root) {
+        Ok(()) => {
+            log_event(LogLevel::Warn, "vault_groups_repaired", &[]);
+            ok(json!(null))
+        }
+        Err(error) => map_core_err(error),
     }
 }
 
@@ -742,6 +1099,50 @@ fn app_settings_save(params: Value) -> RpcResponse {
             );
             map_core_err_response(error, false)
         }
+    }
+}
+
+/// Params for `app_settings_parse_toml` — RAM-only TOML parse.
+///
+/// Mobile SAF flow calls this after reading `.upriv/settings.toml` bytes via
+/// the Android DocumentFile bridge, so wire settings hydration stays identical
+/// on desktop (Rust disk read) and SAF (Kotlin bridge read → Rust parse).
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ParseSettingsTomlParams {
+    toml: String,
+}
+
+fn app_settings_parse_toml(params: Value) -> RpcResponse {
+    let parsed: ParseSettingsTomlParams = match serde_json::from_value(params) {
+        Ok(value) => value,
+        Err(error) => return err("invalid_request", error.to_string()),
+    };
+    match parse_settings_toml_str(&parsed.toml) {
+        Ok(settings) => ok(json!({ "settings": settings })),
+        Err(error) => map_core_err(error),
+    }
+}
+
+/// Params for `app_settings_serialize_toml` — RAM-only TOML serialization
+/// preserving `[package]` and `[app].last_opened_vault` from `previous` when
+/// provided (mirrors `write_settings_toml_only`).
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SerializeSettingsTomlParams {
+    settings: AppSettings,
+    #[serde(default)]
+    previous: Option<String>,
+}
+
+fn app_settings_serialize_toml(params: Value) -> RpcResponse {
+    let parsed: SerializeSettingsTomlParams = match serde_json::from_value(params) {
+        Ok(value) => value,
+        Err(error) => return err("invalid_request", error.to_string()),
+    };
+    match serialize_settings_toml_str(&parsed.settings, parsed.previous.as_deref()) {
+        Ok(body) => ok(json!({ "toml": body })),
+        Err(error) => map_core_err(error),
     }
 }
 
@@ -879,6 +1280,10 @@ fn map_core_err_response(error: upriv_core::UprivError, emit_log: bool) -> RpcRe
         upriv_core::UprivError::VaultConfigInvalid { path, .. } => {
             ("vault_config_invalid", Some(path.as_path()))
         }
+        upriv_core::UprivError::VaultGroupsInvalid { path, .. } => {
+            ("vault_groups_invalid", Some(path.as_path()))
+        }
+        upriv_core::UprivError::VaultGroupNotFound(_) => ("vault_group_not_found", None),
         upriv_core::UprivError::Io(_) => ("io_error", None),
     };
     let message = error.to_string();
@@ -932,9 +1337,12 @@ mod contract_tests {
         "app_shutdown",
         "app_settings_get",
         "app_settings_save",
+        "app_settings_parse_toml",
+        "app_settings_serialize_toml",
         "vault_root_resolve",
         "vault_root_setup_default_root",
         "vault_root_setup_path",
+        "vault_root_deactivate_alias",
         "vault_root_read_alias",
         "vault_root_default_root_status",
         "vault_root_inspect_path",
@@ -942,6 +1350,15 @@ mod contract_tests {
         "log_list",
         "log_get",
         "log_delete",
+        "log_event",
+        "vault_group_list",
+        "vault_group_create",
+        "vault_group_update",
+        "vault_group_delete",
+        "vault_group_set_collapsed",
+        "vault_group_reorder",
+        "vault_group_reorder_grouped_vaults",
+        "vault_group_repair",
     ];
 
     #[test]
@@ -969,6 +1386,33 @@ mod contract_tests {
         assert_eq!(
             response.error.as_ref().map(|e| e.code.as_str()),
             Some("unknown_method")
+        );
+    }
+
+    #[test]
+    fn log_event_vault_hidden_has_no_name_fields() {
+        let ok_response = handle_rpc(RpcRequest {
+            method: "log_event".into(),
+            params: json!({ "event": "vault_hidden" }),
+        });
+        assert!(ok_response.ok, "{ok_response:?}");
+
+        let other = handle_rpc(RpcRequest {
+            method: "log_event".into(),
+            params: json!({ "event": "app_start" }),
+        });
+        assert_eq!(
+            other.error.as_ref().map(|e| e.code.as_str()),
+            Some("invalid_request")
+        );
+
+        let with_name = handle_rpc(RpcRequest {
+            method: "log_event".into(),
+            params: json!({ "event": "vault_hidden", "name": "Secret" }),
+        });
+        assert_eq!(
+            with_name.error.as_ref().map(|e| e.code.as_str()),
+            Some("invalid_request")
         );
     }
 

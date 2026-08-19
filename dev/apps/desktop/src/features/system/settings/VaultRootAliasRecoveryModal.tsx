@@ -9,6 +9,7 @@ import {
   RpcError,
   isRpcError,
   type LocaleId,
+  type VaultRootDiskStatus,
   type VaultRootMode,
   type VaultRootPresentationState,
 } from "@upriv/shared";
@@ -16,7 +17,6 @@ import { useVaultRootService } from "@/platform/services";
 import { useAppSettingsContext } from "./AppSettingsContext";
 import { desktopErrorI18nKey } from "@/lib/errorMessages";
 import { VaultRootConfirmFooter } from "./VaultRootConfirmFooter";
-import type { VaultRootDiskStatus } from "./vaultRootSettingsIntent";
 
 /** Trim + strip trailing separators for diskApplied path equality. */
 function samePathKey(a: string, b: string): boolean {
@@ -133,6 +133,7 @@ export function VaultRootAliasRecoveryModal({
         if (gen !== customCheckGen.current) return;
         if (result.status === "incomplete") setCustomDisk("incomplete");
         else if (result.status === "unreadable") setCustomDisk("unreadable");
+        else if (result.status === "unauthorized") setCustomDisk("unauthorized");
         else if (result.status === "absent") setCustomDisk("will_create");
         else setCustomDisk("ready");
       })

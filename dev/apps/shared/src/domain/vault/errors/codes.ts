@@ -1,5 +1,5 @@
 /**
- * Planned vault wire codes — not yet all implemented in upriv-daemon `rpc.rs`.
+ * Planned vault wire codes — not yet all implemented in `upriv-rpc`.
  * Add Rust handlers and locales in the same PR when porting vault RPCs.
  *
  * Mid-session integrity (vault layer): `vault_not_found` when the root is valid
@@ -12,6 +12,9 @@ export const VAULT_ERROR_CODES = {
   WRONG_PASSWORD: "wrong_password",
   VAULT_ALREADY_OPEN: "vault_already_open",
   SYNC_MISMATCH: "sync_mismatch",
+  /** Corrupt `.upriv/vault_groups.toml` (list soft-fails with `invalid: true`; mutations may Err). */
+  GROUPS_INVALID: "vault_groups_invalid",
+  GROUP_NOT_FOUND: "vault_group_not_found",
 } as const;
 
 export type VaultErrorCode = (typeof VAULT_ERROR_CODES)[keyof typeof VAULT_ERROR_CODES];

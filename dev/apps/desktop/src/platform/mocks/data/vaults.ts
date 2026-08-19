@@ -161,6 +161,30 @@ export const MOCK_VAULTS: VaultListItem[] = [
     note: "Encrypted store primary; seal builds .7z.",
   },
   {
+    id: "upriv-only-demo",
+    displayName: "Upriv Only Demo",
+    persistence: "closed",
+    session: null,
+    storageMode: "upriv_only",
+    order: 16,
+    canSeal: false,
+    lastAccessedWhen: "4 days ago",
+    lastAccessedAt: "2026-05-29T09:00:00Z",
+    note: "Encrypted store only — no .7z, no seal.",
+  },
+  {
+    id: "upriv-plain-demo",
+    displayName: "Upriv Plain Demo",
+    persistence: "closed",
+    session: null,
+    storageMode: "upriv_plain",
+    order: 17,
+    canSeal: false,
+    lastAccessedWhen: "5 days ago",
+    lastAccessedAt: "2026-05-28T09:00:00Z",
+    note: "Upriv store when closed; plaintext folder while open.",
+  },
+  {
     id: "ram-only-demo",
     displayName: "RAM Only Demo",
     persistence: "sealed",
@@ -185,3 +209,23 @@ export const MOCK_VAULTS: VaultListItem[] = [
     note: "Plaintext while open; no .7z until seal.",
   },
 ];
+
+/** Wizard-created vaults live in React state, not `MOCK_VAULTS`. */
+const extraMockVaultIds = new Set<string>();
+
+export function registerMockVaultId(id: string): void {
+  const trimmed = id.trim();
+  if (trimmed) extraMockVaultIds.add(trimmed);
+}
+
+export function unregisterMockVaultId(id: string): void {
+  extraMockVaultIds.delete(id.trim());
+}
+
+export function knownMockVaultIds(): Set<string> {
+  return new Set([...MOCK_VAULTS.map((vault) => vault.id), ...extraMockVaultIds]);
+}
+
+export function resetMockVaultIds(): void {
+  extraMockVaultIds.clear();
+}

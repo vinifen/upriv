@@ -2,11 +2,13 @@
   "extends": "./node_modules/expo/tsconfig.base.json",
   "compilerOptions": {
     "strict": true,
-    "baseUrl": ".",
+    "module": "esnext",
+    "moduleResolution": "bundler",
     "paths": {
-      "@/*": ["src/*"],
+      "@/*": ["./src/*"],
       "@upriv/shared": ["../shared/src/index.ts"],
-      "@upriv/shared/*": ["../shared/src/*"]
+      "@upriv/shared/*": ["../shared/src/*"],
+      "upriv-core": ["./modules/upriv-core/src/index.ts"]
     },
     "resolveJsonModule": true
   },

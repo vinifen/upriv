@@ -3,19 +3,25 @@
     "name": "Upriv",
     "slug": "upriv-mobile",
     "version": "0.1.0-beta",
-    "orientation": "portrait",
+    "orientation": "default",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
     "newArchEnabled": false,
     "scheme": "upriv",
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0f172a"
+    },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.upriv.mobile"
+      "bundleIdentifier": "com.upriv.mobile",
+      "icon": "./assets/icon.png"
     },
     "android": {
       "package": "com.upriv.mobile",
       "adaptiveIcon": {
-        "backgroundColor": "#081425",
+        "backgroundColor": "#0f172a",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
@@ -24,6 +30,6 @@
     "web": {
       "favicon": "./assets/favicon.png"
     },
-    "plugins": []
+    "plugins": ["expo-asset", "expo-font", "expo-dev-client"]
   }
 }

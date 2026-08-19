@@ -14,5 +14,6 @@ export {
   VaultSettingsSevenZipSection,
   VaultSettingsStorageSection,
   VaultSettingsVaultSection,
+  VaultSettingsGroupSection,
 } from "./vaultSettingsForm";
 export type { SecurityModeRadioGroupProps } from "./vaultSettingsForm";

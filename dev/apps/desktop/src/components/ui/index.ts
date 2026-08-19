@@ -1,3 +1,4 @@
+export { AnchoredPopover } from "./AnchoredPopover";
 export { menuItemClass, menuPanelClass } from "./menuStyles";
 export { Button, type ButtonProps } from "./Button";
 export { DropdownMenu, type DropdownMenuItem } from "./DropdownMenu";

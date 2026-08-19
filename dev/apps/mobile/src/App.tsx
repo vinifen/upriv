@@ -1,35 +1,49 @@
+import "react-native-gesture-handler";
 import { StatusBar } from "expo-status-bar";
-import { StyleSheet, Text, View } from "react-native";
+import { NavigationContainer, DarkTheme, DefaultTheme } from "@react-navigation/native";
+import { createNativeStackNavigator } from "@react-navigation/native-stack";
+import { SafeAreaProvider } from "react-native-safe-area-context";
+import { AppProviders } from "@/providers/AppProviders";
+import { VaultListScreen } from "@/features/vaults/list/VaultListScreen";
+import { useTheme } from "@/theme";
 
-import en from "../../shared/locales/en.json";
+export type RootStackParamList = {
+  VaultList: undefined;
+};
 
-export default function App() {
+const Stack = createNativeStackNavigator<RootStackParamList>();
+
+function ThemedNavigation() {
+  const { colors, theme, statusBarStyle } = useTheme();
+  const base = theme === "light" ? DefaultTheme : DarkTheme;
+  const navTheme = {
+    ...base,
+    colors: {
+      ...base.colors,
+      background: colors.background,
+      card: colors.surfaceContainer,
+      text: colors.onSurface,
+      border: colors.outlineVariant,
+      primary: colors.accent,
+    },
+  };
+
   return (
-    <View style={styles.container}>
-      <Text style={styles.title}>{en["app.title"]}</Text>
-      <Text style={styles.subtitle}>{en["mobile.scaffold.subtitle"]}</Text>
-      <StatusBar style="light" />
-    </View>
+    <NavigationContainer theme={navTheme}>
+      <StatusBar style={statusBarStyle} />
+      <Stack.Navigator screenOptions={{ headerShown: false }}>
+        <Stack.Screen name="VaultList" component={VaultListScreen} />
+      </Stack.Navigator>
+    </NavigationContainer>
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: "#081425",
-    alignItems: "center",
-    justifyContent: "center",
-    padding: 24,
-  },
-  title: {
-    color: "#d8e3fb",
-    fontSize: 22,
-    fontWeight: "600",
-  },
-  subtitle: {
-    marginTop: 8,
-    color: "#909097",
-    fontSize: 14,
-    textAlign: "center",
-  },
-});
+export default function App() {
+  return (
+    <SafeAreaProvider>
+      <AppProviders>
+        <ThemedNavigation />
+      </AppProviders>
+    </SafeAreaProvider>
+  );
+}

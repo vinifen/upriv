@@ -1,6 +1,7 @@
 import type {
   CreateVaultDraft,
   CreateVaultStepId,
+  VaultGroup,
   VaultLifecycleRequest,
   VaultListItem,
 } from "@upriv/shared";
@@ -16,6 +17,13 @@ export interface VaultListModalsHandle {
   settingsVaultId: string | null;
   setSettingsVaultId: (id: string | null) => void;
   settingsVault: VaultListItem | null;
+  /** Vault whose ⋮ → Group assignment modal is open. */
+  groupAssignmentVaultId: string | null;
+  setGroupAssignmentVaultId: (id: string | null) => void;
+  groupAssignmentVault: VaultListItem | null;
+  settingsGroupId: string | null;
+  setSettingsGroupId: (id: string | null) => void;
+  settingsGroup: VaultGroup | null;
   appSettingsOpen: boolean;
   /** Returns false when Data folder has unsaved edits (caller should toast). */
   setAppSettingsOpen: (open: boolean) => boolean;

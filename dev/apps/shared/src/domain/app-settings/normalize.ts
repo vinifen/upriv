@@ -18,6 +18,7 @@ export function createDefaultAppSettings(): AppSettingsConfig {
       vault_list_sort_direction: "asc",
       vault_list_view: "default",
       always_show_hidden_vaults: false,
+      allow_drag_vault_into_group: true,
       file_manager_dock_expanded: false,
     },
     logging: {
@@ -46,6 +47,10 @@ export function normalizeAppSettings(config: AppSettingsConfig): AppSettingsConf
 
   const normalized: AppSettingsConfig = {
     ...config,
+    ui: {
+      ...config.ui,
+      allow_drag_vault_into_group: config.ui.allow_drag_vault_into_group !== false,
+    },
     logging,
     app: {
       ...config.app,

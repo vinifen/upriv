@@ -130,6 +130,28 @@ const MOCK_BY_VAULT: Record<string, VaultSettingsOverrides> = {
     storage: { mode: "store_only" },
     close: { default_action: "close" },
   },
+  "upriv-only-demo": {
+    vault: {
+      display_name: "Upriv Only Demo",
+      order: 16,
+      note: "Encrypted store only; no .7z, no seal.",
+      ...vaultPaths("upriv-only-demo", "Upriv Only Demo"),
+    },
+    storage: { mode: "upriv_only" },
+    close: { default_action: "close" },
+    backup: { enabled: false, mode: "keep_last", keep_last: 1 },
+  },
+  "upriv-plain-demo": {
+    vault: {
+      display_name: "Upriv Plain Demo",
+      order: 17,
+      note: "Upriv store when closed; plaintext folder while open.",
+      ...vaultPaths("upriv-plain-demo", "Upriv Plain Demo"),
+    },
+    storage: { mode: "upriv_plain" },
+    close: { default_action: "close" },
+    backup: { enabled: false, mode: "keep_last", keep_last: 1 },
+  },
   "ram-only-demo": {
     vault: {
       display_name: "RAM Only Demo",

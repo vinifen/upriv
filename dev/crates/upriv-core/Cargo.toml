@@ -9,7 +9,7 @@ rust-version.workspace = true
 [lib]
 name = "upriv_core"
 path = "src/lib.rs"
-crate-type = ["rlib", "cdylib", "staticlib"]
+crate-type = ["rlib"]
 
 [dependencies]
 serde = { version = "=1.0.228", features = ["derive"] }

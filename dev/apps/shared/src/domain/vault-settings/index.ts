@@ -31,5 +31,6 @@ export {
   VAULT_SETTINGS_SECTIONS,
   vaultCanSealFromStorage,
   vaultSettingsEqual,
+  vaultSettingsSectionsForStorage,
 } from "./types";
 export { vaultSettingsToListPatch } from "./listPatch";

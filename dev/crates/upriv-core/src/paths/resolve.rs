@@ -613,7 +613,9 @@ fn try_open_alias(app_home: &Path) -> Result<Option<VaultRoot>> {
         Err(UprivError::VaultRootNotFound(_))
         | Err(UprivError::VaultRootAliasInvalid(_))
         | Err(UprivError::VaultNotFound(_))
-        | Err(UprivError::VaultConfigInvalid { .. }) => {
+        | Err(UprivError::VaultConfigInvalid { .. })
+        | Err(UprivError::VaultGroupsInvalid { .. })
+        | Err(UprivError::VaultGroupNotFound(_)) => {
             Err(UprivError::VaultRootAliasInvalid(alias.path))
         }
     }

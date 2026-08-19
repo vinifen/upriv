@@ -64,7 +64,7 @@ A **bridge** is generated or hand-written glue that lets the UI language call Ru
 | Platform | Bridge mechanism |
 |----------|------------------|
 | Desktop (Electron) | stdio JSON-RPC via `upriv-daemon` + `window.upriv.invoke()` preload |
-| Mobile (React Native) | Native module (JNI on Android, static lib + Obj-C/Swift shim on iOS); e.g. `uniffi` or `react-native-rust` pattern |
+| Mobile (React Native) | UniFFI → Expo module `UprivCore` → `libupriv_ffi.so` (Android) / staticlib (iOS); same `upriv-rpc` handlers as the daemon |
 
 The bridge is **code inside the same package** (same `.exe` or same APK) — not a separate app or service.
 
@@ -74,7 +74,7 @@ The bridge is **code inside the same package** (same `.exe` or same APK) — not
 |-------|---------|
 | Renderer | `contextIsolation`, `sandbox: true`, no `nodeIntegration`; CSP in production (`default-src 'self'`) |
 | Preload | Exposes only `invoke` + `onEvent` — no raw `ipcRenderer` |
-| Main process | **`app_exit` only** — everything else forwarded to daemon; `rpc.rs` rejects unknown methods |
+| Main process | **`app_exit` only** — everything else forwarded to daemon; `upriv-rpc` rejects unknown methods |
 | `upriv-daemon` | Child process; **stdio pipes only** (no TCP port); env whitelist (`PATH`, `HOME`, `LANG`, `XDG_*`); graceful `app_shutdown` before SIGTERM |
 | Linux shell | `--no-sandbox` on Chromium process (AppArmor); renderer sandbox remains enabled |
 
@@ -105,7 +105,7 @@ Vault crypto and disk I/O never run in the renderer. When vault RPCs ship, passw
 
 | Layer | Language | Where | Shown to user? |
 |-------|----------|-------|----------------|
-| **Below client** (upriv-core, daemon, bridge) | English `message` + machine `code` | Rust, `rpc.rs`, `invoke.ts` throws | No — logs and dev only |
+| **Below client** (upriv-core, upriv-rpc, bridge) | English `message` + machine `code` | Rust, `upriv-rpc`, `invoke.ts` throws | No — logs and dev only |
 | **Client UI** | i18n keys → `locales/*.json` | domain `errorMessages.ts` or `vault/errors/messages.ts` | Yes — toasts, modals, forms |
 
 User-facing surfaces **must** use `useErrorToast().showError` / `desktopErrorI18nKey()` (desktop) or `errorDisplayI18nKey()` (shared/mobile) / domain `*ErrorI18nKey()` — **never** raw `error.message`.
@@ -159,8 +159,8 @@ Build commands: see `dev/README.md` and `dev/apps/desktop/README.md`.
 **One APK** contains everything:
 
 - React Native (JS bundle + native views)
-- Bridge (native module)
-- `libupriv_core.so` (ARM64)
+- Bridge (Expo module + UniFFI)
+- `libupriv_ffi.so` (arm64-v8a / armeabi-v7a / x86_64) — links `upriv-rpc` + `upriv-core` as rlibs
 - `7zz` (`arm64-v8a`, `jniLibs` or assets)
 
 There is **no standalone `.exe` on Android** — the user installs one app icon; Rust is a native library inside the APK.
@@ -178,17 +178,19 @@ dev/
 ├── apps/
 │   ├── desktop/              # React web UI (Vite)
 │   ├── electron/             # Electron main/preload + electron-builder
-│   ├── mobile/               # Expo / React Native scaffold
+│   ├── mobile/               # Expo / React Native + UniFFI Expo module
 │   └── shared/               # @upriv/shared — TS domain types + service interfaces
 ├── crates/
-│   ├── upriv-core/           # Shared Rust core
-│   └── upriv-daemon/         # Desktop RPC sidecar → upriv-core
+│   ├── upriv-core/           # Shared Rust core (rlib)
+│   ├── upriv-rpc/            # Shared CORE RPC handlers (daemon + FFI)
+│   ├── upriv-daemon/         # Desktop stdio NDJSON sidecar → upriv-rpc
+│   └── upriv-ffi/            # Mobile UniFFI (`libupriv_ffi.so` / staticlib)
 ├── docs/
 │   ├── prd.md
 │   ├── sdd.md
 │   ├── ARCHITECTURE.md
 │   └── i18n/
-├── Cargo.toml                # Rust workspace (upriv-core + upriv-daemon)
+├── Cargo.toml                # Rust workspace
 └── package.json              # dev scripts only (no root node_modules)
 ```
 
@@ -262,7 +264,7 @@ See SDD §9.4 for Android SAF flow.
 | ADR-05 | Desktop UI (rejected) | ~~React Native desktop for Linux~~ | No official stable RN for Linux; Electron is the desktop path |
 | ADR-06 | Core | Single `upriv-core` crate | One implementation of crypto, 7z, states; compile to `.so`/`.dll`/linked exe per target |
 | ADR-07 | Security boundary | UI = presentation; Rust = secrets + I/O | Minimize attack surface in JS; passwords never persisted in UI layer |
-| ADR-08 | Android packaging | Single APK | RN + bridge + `libupriv_core.so` + `7zz` in one installable package |
+| ADR-08 | Android packaging | Single APK | RN + UniFFI bridge + `libupriv_ffi.so` + `7zz` in one installable package |
 | ADR-09 | Desktop packaging | Single executable per OS/arch | Electron + `upriv-daemon`; `7zz` embedded |
 | ADR-10 | RN on Windows/macOS desktop | Not planned | Desktop stays React web + Electron; avoids duplicate desktop stacks |
 
@@ -284,7 +286,7 @@ See SDD §9.4 for Android SAF flow.
 
 1. Implement **`dev/crates/upriv-core/`** (crypto, 7z, state machine).
 2. Implement **`VaultStorage`** (desktop `std::fs` first).
-3. Wire RPC handlers in `dev/crates/upriv-daemon/` to `upriv-core` only (thin `rpc.rs`).
+3. Wire RPC handlers in `upriv-rpc` (shared by `upriv-daemon` + `upriv-ffi`) to `upriv-core` only.
 4. **`dev/apps/shared/`** (`@upriv/shared`) — domain types, service interfaces, and UI locale catalogs (`locales/`).
 5. Complete desktop v1 (Linux FUSE + Windows WinFsp, open/close/seal).
 6. **`dev/apps/mobile/`** — native module → `upriv-core` (JNI / UniFFI).

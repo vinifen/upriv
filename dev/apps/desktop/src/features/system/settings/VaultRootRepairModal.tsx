@@ -4,8 +4,11 @@ import { PolicyRadioOption, settingsControlClass } from "@/components/settings";
 import { useTranslation } from "@/i18n";
 import {
   SUPPORTED_LOCALES,
+  confirmNotesForReplacePolicy,
+  vaultRootGateFromState,
   type IncompleteReplacePolicy,
   type LocaleId,
+  type VaultRootDiskStatus,
   type VaultRootMode,
 } from "@upriv/shared";
 import { useVaultRootService } from "@/platform/services";
@@ -13,11 +16,6 @@ import { useAppSettingsContext } from "./AppSettingsContext";
 import { desktopErrorI18nKey } from "@/lib/errorMessages";
 import { VaultRootIncompleteReplacePanel } from "./VaultRootIncompleteReplacePanel";
 import { VaultRootConfirmFooter } from "./VaultRootConfirmFooter";
-import {
-  confirmNotesForReplacePolicy,
-  vaultRootGateFromState,
-  type VaultRootDiskStatus,
-} from "./vaultRootSettingsIntent";
 
 interface VaultRootRepairModalProps {
   open: boolean;
@@ -122,6 +120,7 @@ export function VaultRootRepairModal({
         if (gen !== otherCheckGen.current) return;
         if (result.status === "incomplete") setOtherDisk("incomplete");
         else if (result.status === "unreadable") setOtherDisk("unreadable");
+        else if (result.status === "unauthorized") setOtherDisk("unauthorized");
         else if (result.status === "absent") setOtherDisk("will_create");
         else setOtherDisk("ready");
       })

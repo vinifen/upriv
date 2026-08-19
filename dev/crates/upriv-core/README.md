@@ -1,6 +1,6 @@
 # upriv-core
 
-Shared Rust library for Upriv. All vault logic lives here; `upriv-daemon` (desktop) and mobile bridges are thin adapters.
+Shared Rust library for Upriv. All vault logic lives here; `upriv-daemon` / `upriv-ffi` are thin adapters over **`upriv-rpc`** (same CORE handlers).
 
 ```bash
 cd dev

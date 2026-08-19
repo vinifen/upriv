@@ -12,7 +12,10 @@ export {
   resolveVaultCanSeal,
   resolveVaultDisplayStatus,
   resolveVaultListStatus,
+  storageModeCanSeal,
+  storageModeCloseOnly,
   storageModeHasClosedCache,
+  storageModeHasPortableArchive,
   storageModeIsPlaintext,
   storageModeSealOnly,
 } from "./types";
@@ -33,12 +36,14 @@ export {
   validateDisplayName,
   type DisplayNameValidationCode,
 } from "./displayName";
+export { displayNameErrorI18nKey, DISPLAY_NAME_ERROR_I18N_KEYS } from "./errors/nameMessages";
+export type { DisplayNameErrorI18nKey } from "./errors/nameMessages";
 export {
   brandColors,
   vaultStatusColorVar,
   vaultStatusI18nKey,
 } from "./statusTokens";
-/** Rust wire codes + UI i18n. Name maps live in `errors/nameMessages.ts` (internal to this domain). */
+/** Rust wire codes + UI i18n. */
 export { isVaultErrorCode, VAULT_ERROR_CODES } from "./errors/codes";
 export type { VaultErrorCode } from "./errors/codes";
 export { requireVaultErrorI18nKey, vaultErrorI18nKey } from "./errors/messages";

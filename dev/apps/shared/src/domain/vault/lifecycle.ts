@@ -1,5 +1,5 @@
 import type { VaultRow, StorageMode } from "./types";
-import { resolveVaultDisplayStatus, storageModeSealOnly } from "./types";
+import { resolveVaultDisplayStatus, storageModeCloseOnly, storageModeSealOnly } from "./types";
 import type { CloseDefaultAction, SecurityMode } from "../vault-settings/types";
 import { securityModeToUi } from "../vault-settings/types";
 
@@ -10,11 +10,12 @@ export interface VaultLifecycleRequest {
   intent: VaultLifecycleIntent;
 }
 
-/** Idle timeout action — seal-only modes always seal; others follow close default. */
+/** Idle timeout action — seal-only always seals; Upriv-only always closes; others follow close default. */
 export function resolveIdleAutoCloseIntent(
   storageMode: StorageMode,
   closeDefaultAction: CloseDefaultAction,
 ): Extract<VaultLifecycleIntent, "close" | "seal"> {
+  if (storageModeCloseOnly(storageMode)) return "close";
   return storageModeSealOnly(storageMode) || closeDefaultAction === "seal" ? "seal" : "close";
 }
 

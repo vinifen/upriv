@@ -3,15 +3,13 @@
 //! Speaks newline-delimited JSON over stdin/stdout (no TCP port). The Electron
 //! main process spawns this binary with piped stdio and proxies renderer calls.
 
-mod rpc;
 mod wire;
 
 use std::io::{self, BufRead, Write};
 
 use serde_json::json;
+use upriv_rpc::RpcErrorBody;
 use wire::{handle_request, RequestOutcome, WireIn, WireOut};
-
-use crate::rpc::RpcErrorBody;
 
 /// Reject absurdly large request lines before parsing them.
 ///

@@ -8,16 +8,14 @@
  *    disk mutations happen in the modal via `setup*` then Context reload).
  * 4. Block the primary action only while **that field is dirty and unresolved**.
  * 5. Switching away from an option discards its pending extra choices.
- * 6. Mark the unresolved option with `PolicyRadioOption` `attention` (amber
- *    border) while `blocksPrimary` is true.
+ * 6. Mark the unresolved option with `PolicyRadioOption` `attention` while
+ *    `blocksPrimary` is true.
  * 7. Side-effect reminders go in `confirmNotes` (i18n keys) for
  *    `VaultRootConfirmFooter` — wording follows `primaryAction`.
- *
- * System Settings no longer hosts vault-root mode/path — that lives in
- * `VaultRootDataFolderModal` (⋯ → Data folder).
  */
 
-import type { I18nKey, IncompleteReplacePolicy } from "@upriv/shared";
+import type { I18nKey } from "../../i18n/catalog";
+import type { IncompleteReplacePolicy } from "./types";
 
 /** Continue (blocking gates) vs Apply (Data folder). */
 export type VaultRootConfirmAction = "continue" | "apply";
@@ -30,6 +28,8 @@ export type VaultRootDiskStatus =
   | "will_create"
   | "incomplete"
   | "unreadable"
+  /** SAF permission gone — user must re-pick the folder. */
+  | "unauthorized"
   | "needs_folder";
 
 export interface VaultRootSettingsGate {
@@ -87,7 +87,7 @@ export function vaultRootGateFromState(args: {
   if (!dirty) {
     return { blocksPrimary: false, disk: "ready" };
   }
-  if (disk === "checking" || disk === "unreadable" || disk === "needs_folder") {
+  if (disk === "checking" || disk === "unreadable" || disk === "unauthorized" || disk === "needs_folder") {
     return { blocksPrimary: true, disk };
   }
   if (disk === "incomplete") {
@@ -106,7 +106,6 @@ export function vaultRootGateFromState(args: {
       confirmNotes: [confirmNoteKeys(primaryAction, "create")] as const,
     };
   }
-  // ready
   return {
     blocksPrimary: false,
     disk,

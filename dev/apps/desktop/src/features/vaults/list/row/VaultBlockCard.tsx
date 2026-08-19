@@ -21,6 +21,7 @@ interface VaultBlockCardProps {
   onOpenBackups: (vaultId: string) => void;
   onOpenNote: (vaultId: string) => void;
   onOpenSettings: (vaultId: string) => void;
+  onOpenGroupAssignment: (vaultId: string) => void;
   onExportVault: (vault: VaultListItem) => void;
   onOpenFolder: (vault: VaultListItem) => void;
   onOpenFileManager: (vault: VaultListItem) => void;
@@ -42,6 +43,7 @@ export function VaultBlockCard({
   onOpenBackups,
   onOpenNote,
   onOpenSettings,
+  onOpenGroupAssignment,
   onExportVault,
   onOpenFolder,
   onOpenFileManager,
@@ -110,6 +112,7 @@ export function VaultBlockCard({
           onOpenBackups={onOpenBackups}
           onOpenNote={onOpenNote}
           onOpenSettings={onOpenSettings}
+          onOpenGroupAssignment={onOpenGroupAssignment}
           onExportVault={onExportVault}
           onOpenFolder={onOpenFolder}
           onOpenFileManager={onOpenFileManager}

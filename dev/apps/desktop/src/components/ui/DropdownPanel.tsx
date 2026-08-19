@@ -6,11 +6,11 @@ import {
   type ReactNode,
   useCallback,
   useContext,
-  useEffect,
   useId,
   useRef,
   useState,
 } from "react";
+import { AnchoredPopover } from "./AnchoredPopover";
 import { menuGroupLabelClass, menuPanelClass, menuPanelOptionClass } from "./menuStyles";
 
 type DropdownTriggerProps = {
@@ -47,27 +47,9 @@ export function DropdownPanel({
   children,
 }: DropdownPanelProps) {
   const [open, setOpen] = useState(false);
-  const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLDivElement>(null);
   const panelId = useId();
   const close = useCallback(() => setOpen(false), []);
-
-  useEffect(() => {
-    if (!open) return;
-    const onPointerDown = (event: MouseEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) {
-        setOpen(false);
-      }
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
-    };
-    document.addEventListener("mousedown", onPointerDown);
-    document.addEventListener("keydown", onKeyDown);
-    return () => {
-      document.removeEventListener("mousedown", onPointerDown);
-      document.removeEventListener("keydown", onKeyDown);
-    };
-  }, [open]);
 
   const enhancedTrigger = isValidElement(trigger)
     ? cloneElement(trigger, {
@@ -86,23 +68,21 @@ export function DropdownPanel({
     : trigger;
 
   return (
-    <div ref={rootRef} className="relative">
+    <div ref={triggerRef} className="relative">
       {enhancedTrigger}
-      {open ? (
-        <div
-          id={panelId}
-          role="menu"
-          aria-label={label}
-          style={{ minWidth }}
-          className={[
-            "absolute z-50 mt-2 py-1",
-            menuPanelClass,
-            align === "right" ? "right-0" : "left-0",
-          ].join(" ")}
-        >
-          <PanelCloseContext.Provider value={close}>{children}</PanelCloseContext.Provider>
-        </div>
-      ) : null}
+      <AnchoredPopover
+        open={open}
+        onClose={close}
+        triggerRef={triggerRef}
+        align={align}
+        id={panelId}
+        role="menu"
+        aria-label={label}
+        style={{ minWidth }}
+        className={["py-1", menuPanelClass].join(" ")}
+      >
+        <PanelCloseContext.Provider value={close}>{children}</PanelCloseContext.Provider>
+      </AnchoredPopover>
     </div>
   );
 }

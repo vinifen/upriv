@@ -38,6 +38,11 @@ export interface ModalProps {
   rootClassName?: string;
   /** When false, hide close control and ignore Escape / backdrop click (blocking flows). */
   dismissible?: boolean;
+  /**
+   * When false, children are not wrapped in a scroll pane — caller owns scroll
+   * (e.g. create-vault step body + sticky step nav). Mobile `bodyScroll` parity.
+   */
+  bodyScroll?: boolean;
 }
 
 export function Modal({
@@ -50,6 +55,7 @@ export function Modal({
   panelClassName = "max-w-lg",
   rootClassName = "z-[100]",
   dismissible = true,
+  bodyScroll = true,
 }: ModalProps) {
   const { t } = useTranslation();
   const titleId = useId();
@@ -162,6 +168,20 @@ export function Modal({
 
   if (!open) return null;
 
+  const bodyClass = bodyScroll
+    ? [
+        "modal-scroll-pane min-h-0 text-body text-on-surface overflow-y-auto",
+        scrollFooterLayout ? "flex-1" : "",
+      ]
+        .filter(Boolean)
+        .join(" ")
+    : [
+        "flex min-h-0 flex-col text-body text-on-surface overflow-hidden",
+        scrollFooterLayout ? "flex-1" : "",
+      ]
+        .filter(Boolean)
+        .join(" ");
+
   return createPortal(
     <div className={["fixed inset-0", rootClassName].join(" ")}>
       <div
@@ -177,11 +197,12 @@ export function Modal({
           aria-labelledby={titleId}
           tabIndex={-1}
           className={[
-            "pointer-events-auto flex h-fit w-full max-h-[min(92dvh,calc(100dvh-1.5rem))] flex-col overflow-hidden bg-surface-container-high shadow-modal",
+            // Keep in sync with mobile `MODAL_MAX_HEIGHT_RATIO` (~0.88 of viewport).
+            "pointer-events-auto flex h-fit w-full max-h-[min(88dvh,calc(100dvh-2rem))] flex-col overflow-hidden bg-surface-container-high shadow-modal",
             "rounded-xl",
             "p-4 sm:p-6",
             "outline-none",
-            scrollFooterLayout ? "min-h-0 sm:max-h-[min(92vh,calc(100vh-2rem))]" : "",
+            scrollFooterLayout ? "min-h-0 sm:max-h-[min(88vh,calc(100vh-2.5rem))]" : "",
             panelClassName,
           ].join(" ")}
           onMouseDown={(event) => event.stopPropagation()}
@@ -203,16 +224,7 @@ export function Modal({
               ) : null}
             </div>
           </header>
-          <div
-            className={[
-              "modal-scroll-pane min-h-0 text-body text-on-surface overflow-y-auto",
-              // Grow to fill space under max-height so long forms scroll with a sticky footer.
-              // Short modals still size to content (panel height is auto + max-h, not forced).
-              scrollFooterLayout ? "flex-1" : "",
-            ].join(" ")}
-          >
-            {children}
-          </div>
+          <div className={bodyClass}>{children}</div>
           {footer ? (
             <footer className="mt-3 shrink-0 pb-[max(0px,env(safe-area-inset-bottom))] sm:mt-4">
               {footer}

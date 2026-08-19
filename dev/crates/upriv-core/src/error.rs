@@ -28,6 +28,14 @@ pub enum UprivError {
     #[error("vault config invalid at {path}: {detail}")]
     VaultConfigInvalid { path: PathBuf, detail: String },
 
+    /// `.upriv/vault_groups.toml` missing schema / unreadable (groups layer only — not Gate).
+    #[error("vault groups invalid at {path}: {detail}")]
+    VaultGroupsInvalid { path: PathBuf, detail: String },
+
+    /// Named group is gone (groups layer — not a corrupt file).
+    #[error("vault group not found: {0}")]
+    VaultGroupNotFound(String),
+
     #[error(transparent)]
     Io(#[from] std::io::Error),
 }

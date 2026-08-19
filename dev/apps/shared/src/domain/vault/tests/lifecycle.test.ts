@@ -14,6 +14,10 @@ describe("resolveIdleAutoCloseIntent", () => {
     ["store_only", "close", "close"],
     ["store_only", "seal", "seal"],
     ["encrypted_dir", "seal", "seal"],
+    ["upriv_only", "seal", "close"],
+    ["upriv_only", "close", "close"],
+    ["upriv_plain", "seal", "close"],
+    ["upriv_plain", "close", "close"],
   ] as const)("%s + close=%s → %s", (storageMode, closeDefault, expected) => {
     expect(resolveIdleAutoCloseIntent(storageMode, closeDefault)).toBe(expected);
   });

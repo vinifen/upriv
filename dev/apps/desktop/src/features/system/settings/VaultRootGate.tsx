@@ -23,6 +23,15 @@ interface VaultRootGateProps {
 
 type RepairState = { targetPath: string; mode: VaultRootMode };
 
+/** `RpcError` vault-root details often carry `{ path }`. */
+function pathFromRpcError(error: unknown): string {
+  if (!isRpcError(error) || error.details == null || typeof error.details !== "object") {
+    return "";
+  }
+  const path = (error.details as { path?: unknown }).path;
+  return typeof path === "string" ? path.trim() : "";
+}
+
 /**
  * Resolves vault-root on launch. Blocks with setup/repair UI until a root exists.
  * Incomplete default_root or custom `.upriv/` → repair modal (rename recommended / delete).
@@ -303,8 +312,18 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
         // Incomplete from resolve: use known path directly (no redundant inspect).
         const incomplete = isRpcError(error) && error.code === VAULT_ROOT_ERROR_CODES.INCOMPLETE;
         if (incomplete) {
-          if (wireOrAliasPath) {
-            setRepair({ targetPath: wireOrAliasPath, mode: "custom_root" });
+          let repairPath = wireOrAliasPath || pathFromRpcError(error);
+          if (!repairPath) {
+            try {
+              const alias = await vaultRoot.readAlias();
+              if (alias?.path.trim()) repairPath = alias.path.trim();
+            } catch {
+              // Fall through.
+            }
+          }
+          if (gen !== resolveGen.current) return;
+          if (repairPath) {
+            setRepair({ targetPath: repairPath, mode: "custom_root" });
             setSetup(null);
             setAliasInvalidPath(null);
             setRecoveryPresentation(null);

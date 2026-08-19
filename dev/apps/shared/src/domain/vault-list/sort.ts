@@ -3,7 +3,12 @@ import { resolveVaultDisplayStatus } from "../vault";
 import type { VaultListItem } from "./types";
 import { sortVaultsByOrder } from "./order";
 
-export type VaultListSortMode = "order" | "name" | "state" | "last_accessed";
+/** Global vault-list sort (root rows: ungrouped vaults + groups). */
+export type VaultListSortMode = "order" | "name" | "state" | "last_accessed" | "groups";
+
+/** In-group vault sort — same as global except `groups` (N/A inside a group). */
+export type GroupedVaultSortMode = "order" | "name" | "state" | "last_accessed";
+
 export type VaultListSortDirection = "asc" | "desc";
 
 export interface VaultListSort {
@@ -11,8 +16,26 @@ export interface VaultListSort {
   direction: VaultListSortDirection;
 }
 
-/** Matches future `[ui] vault_list_sort` in settings.toml */
+export interface GroupedVaultSort {
+  mode: GroupedVaultSortMode;
+  direction: VaultListSortDirection;
+}
+
+/** Matches `[ui] vault_list_sort` in settings.toml */
 export const DEFAULT_VAULT_LIST_SORT: VaultListSort = { mode: "order", direction: "asc" };
+
+/** Default in-group order follows `groupedVaults[]` array order. */
+export const DEFAULT_GROUPED_VAULT_SORT: GroupedVaultSort = {
+  mode: "order",
+  direction: "asc",
+};
+
+export const GROUPED_VAULT_SORT_MODES: GroupedVaultSortMode[] = [
+  "order",
+  "name",
+  "state",
+  "last_accessed",
+];
 
 const STATE_RANK: Record<VaultDisplayStatus, number> = {
   open: 0,
@@ -56,6 +79,8 @@ function sortAscending(vaults: VaultListItem[], mode: VaultListSortMode): VaultL
     case "order":
       return sortVaultsByOrder(list);
     case "name":
+    case "groups":
+      // Flat lists have no group rows — `groups` falls back to name.
       return list.sort(compareName);
     case "state":
       return list.sort(compareState);
@@ -69,7 +94,28 @@ export function applyVaultListSort(vaults: VaultListItem[], sort: VaultListSort)
   return sort.direction === "desc" ? [...ascending].reverse() : ascending;
 }
 
+/**
+ * Sort vaults inside a group.
+ * `order` uses the `groupedVaults[]` array order (not vault.order).
+ */
+export function applyGroupedVaultSort(
+  vaultsInGroupOrder: VaultListItem[],
+  sort: GroupedVaultSort,
+): VaultListItem[] {
+  if (sort.mode === "order") {
+    return sort.direction === "desc"
+      ? [...vaultsInGroupOrder].reverse()
+      : vaultsInGroupOrder;
+  }
+  return applyVaultListSort(vaultsInGroupOrder, sort);
+}
+
 /** Drag reorder only when list follows config `order` ascending (PRD §3.7.1). */
 export function canReorderVaultList(sort: VaultListSort): boolean {
+  return sort.mode === "order" && sort.direction === "asc";
+}
+
+/** In-group drag reorder only when grouped-vault sort is `order` ascending. */
+export function canReorderGroupedVaults(sort: GroupedVaultSort): boolean {
   return sort.mode === "order" && sort.direction === "asc";
 }

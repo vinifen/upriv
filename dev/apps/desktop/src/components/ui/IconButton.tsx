@@ -1,6 +1,6 @@
 import { type ButtonHTMLAttributes, forwardRef } from "react";
 
-type IconButtonSize = "sm" | "row";
+type IconButtonSize = "sm" | "md" | "row";
 /** `row-action` = vault row icons; hover uses a step above row hover so it stays visible. */
 type IconButtonVariant = "default" | "ghost" | "row-action";
 
@@ -12,6 +12,8 @@ export interface IconButtonProps extends ButtonHTMLAttributes<HTMLButtonElement>
 
 const sizeClass: Record<IconButtonSize, string> = {
   sm: "h-9 w-9 rounded-md",
+  /** Match Button `size="md"` (`h-10`) — header ⋮ / toolbar chrome. */
+  md: "h-10 w-10 min-h-10 min-w-10 rounded-xl",
   row: "h-11 min-h-11 w-11 min-w-11 rounded-xl",
 };
 

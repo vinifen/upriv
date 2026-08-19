@@ -1,6 +1,22 @@
 import { normalizeVaultSettingsConfig } from "../vault-settings";
 import { displayNameToVaultId } from "../vault/displayName";
-import type { CreateVaultDraft, CreateVaultResult } from "./types";
+import type {
+  CreateVaultDraft,
+  CreateVaultGroupAssignment,
+  CreateVaultResult,
+} from "./types";
+
+export function resolveCreateVaultGroupAssignment(
+  draft: CreateVaultDraft,
+): CreateVaultGroupAssignment {
+  if (draft.groupMode === "create") {
+    return { kind: "create", displayName: draft.groupName.trim() };
+  }
+  if (draft.groupMode === "existing" && draft.groupId.trim()) {
+    return { kind: "existing", groupId: draft.groupId.trim() };
+  }
+  return { kind: "none" };
+}
 
 export function buildCreateVaultResult(
   draft: CreateVaultDraft,
@@ -49,5 +65,6 @@ export function buildCreateVaultResult(
     order: draft.order,
     storageMode: settings.storage.mode,
     settings,
+    groupAssignment: resolveCreateVaultGroupAssignment(draft),
   };
 }

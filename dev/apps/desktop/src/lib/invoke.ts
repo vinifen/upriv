@@ -42,12 +42,22 @@ export const METHOD_TIMEOUT_MS: Partial<Record<string, number>> = {
   // and map timeouts to vault-root-specific i18n (see errorMessages / locales).
   vault_root_setup_default_root: LOADING_BUDGET_MS.vaultRoot,
   vault_root_setup_path: LOADING_BUDGET_MS.vaultRoot,
+  vault_root_deactivate_alias: 10_000,
   vault_root_read_alias: 10_000,
   vault_root_default_root_status: 10_000,
   vault_root_inspect_path: 10_000,
   log_list: LOADING_BUDGET_MS.logs,
   log_get: LOADING_BUDGET_MS.logs,
   log_delete: LOADING_BUDGET_MS.logs,
+  log_event: LOADING_BUDGET_MS.logs,
+  vault_group_list: LOADING_BUDGET_MS.default,
+  vault_group_create: LOADING_BUDGET_MS.default,
+  vault_group_update: LOADING_BUDGET_MS.default,
+  vault_group_delete: LOADING_BUDGET_MS.default,
+  vault_group_set_collapsed: LOADING_BUDGET_MS.default,
+  vault_group_reorder: LOADING_BUDGET_MS.default,
+  vault_group_reorder_grouped_vaults: LOADING_BUDGET_MS.default,
+  vault_group_repair: LOADING_BUDGET_MS.default,
 };
 
 /** Normalize Electron/preload invoke failures into `RpcError` (wire `code: message`). */
@@ -70,7 +80,7 @@ export function parseInvokeFailure(error: unknown): RpcError {
 
 /**
  * Low-level IPC invoke with timeout. Prefer typed helpers in `./rpc.ts`.
- * Unknown daemon methods are rejected by `upriv-daemon` (`rpc.rs`).
+ * Unknown daemon methods are rejected by `upriv-rpc` (via `upriv-daemon`).
  * Pass `timeoutMs: 0` (or set the method map to `0`) to wait indefinitely.
  * @throws {RpcError}
  */

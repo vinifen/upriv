@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 ///
 /// - `encrypted_dir` — encrypted store + virtual mount (default; optional `closed` cache)
 /// - `store_only` — encrypted store primary; `.7z` on seal/export
+/// - `upriv_only` — encrypted store only; no `.7z`, no seal (opens only in Upriv)
+/// - `upriv_plain` — encrypted store only; plaintext workspace while open; no `.7z`, no seal
 /// - `ram_only` — `.7z` + RAM only; lock always seals
 /// - `plain` — plaintext workspace + `.7z` while open; lock always seals
 /// - `plain_only` — plaintext workspace only while open; lock always seals
@@ -18,6 +20,8 @@ pub enum VaultStorageMode {
     PlainOnly,
     RamOnly,
     StoreOnly,
+    UprivOnly,
+    UprivPlain,
 }
 
 /// `[vault]` identity section (required for a listable vault).

@@ -3,7 +3,7 @@ import {
   confirmNotesForReplacePolicy,
   isVaultRootDraftDirty,
   vaultRootGateFromState,
-} from "../vaultRootSettingsIntent";
+} from "../settingsIntent";
 
 describe("isVaultRootDraftDirty", () => {
   it("detects mode or path changes", () => {

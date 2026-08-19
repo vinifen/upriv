@@ -10,6 +10,7 @@ import { mockBackupService } from "./services/backupService";
 import { mockCreateVaultService } from "./services/createVaultService";
 import { mockLogService } from "./services/logService";
 import { mockVaultFileSystemService } from "./services/vaultFileSystemService";
+import { mockVaultGroupService } from "./services/vaultGroupService";
 import { mockVaultLifecycleService } from "./services/vaultLifecycleService";
 import { mockVaultRootService } from "./services/vaultRootService";
 import { mockVaultService } from "./services/vaultService";
@@ -17,6 +18,7 @@ import { mockVaultService } from "./services/vaultService";
 /** Remaining mocks — logs stay in-memory (no Electron bridge in browser). */
 export const mockServices: AppServices = {
   vault: mockVaultService,
+  vaultGroups: mockVaultGroupService,
   vaultRoot: mockVaultRootService,
   appSettings: mockAppSettingsService,
   backups: mockBackupService,

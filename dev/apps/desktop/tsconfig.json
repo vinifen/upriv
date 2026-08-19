@@ -11,9 +11,8 @@
     "isolatedModules": true,
     "noEmit": true,
     "jsx": "react-jsx",
-    "baseUrl": ".",
     "paths": {
-      "@/*": ["src/*"],
+      "@/*": ["./src/*"],
       "@upriv/shared": ["../shared/src/index.ts"],
       "@upriv/shared/*": ["../shared/src/*"],
       "@assets/*": ["./assets/*"]

@@ -8,8 +8,11 @@ const sharedRoot = path.resolve(appsRoot, "shared");
 /** @type {import('expo/metro-config').MetroConfig} */
 const config = getDefaultConfig(projectRoot);
 
-// Watch shared package (including `locales/`) for HMR when strings change.
 config.watchFolders = [sharedRoot];
 config.resolver.nodeModulesPaths = [path.resolve(projectRoot, "node_modules")];
+config.resolver.unstable_enablePackageExports = true;
+config.resolver.extraNodeModules = {
+  "@upriv/shared": sharedRoot,
+};
 
 module.exports = config;

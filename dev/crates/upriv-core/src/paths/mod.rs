@@ -262,7 +262,7 @@ fn sanitize_path_component(name: &str) -> &str {
 }
 
 /// Windows device names (`CON`, `NUL`, `COM1`, …) including `name.ext` forms.
-fn is_windows_reserved_device_name(name: &str) -> bool {
+pub(crate) fn is_windows_reserved_device_name(name: &str) -> bool {
     let stem = name.split('.').next().unwrap_or(name);
     let upper = stem.to_ascii_uppercase();
     matches!(
@@ -290,6 +290,24 @@ fn is_windows_reserved_device_name(name: &str) -> bool {
             | "LPT8"
             | "LPT9"
     )
+}
+
+/// Vault / group slug ids (TS `displayNameToVaultId`): `[a-z0-9-]+`, 1–64,
+/// no leading/trailing hyphen, not a Windows reserved device name.
+pub(crate) fn slug_id_is_valid(id: &str) -> bool {
+    if id.is_empty() || id.len() > 64 {
+        return false;
+    }
+    if id.starts_with('-') || id.ends_with('-') {
+        return false;
+    }
+    if !id
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+    {
+        return false;
+    }
+    !is_windows_reserved_device_name(id)
 }
 
 #[cfg(test)]
@@ -345,5 +363,16 @@ mod tests {
         assert_eq!(sanitize_path_component("a:b"), "_");
         assert_eq!(sanitize_path_component("a*b"), "_");
         assert_eq!(sanitize_path_component("ok-name"), "ok-name");
+    }
+
+    #[test]
+    fn slug_id_matches_vault_and_group_rules() {
+        assert!(slug_id_is_valid("work"));
+        assert!(slug_id_is_valid("my-encrypted-notes"));
+        assert!(!slug_id_is_valid(""));
+        assert!(!slug_id_is_valid("Foo Bar"));
+        assert!(!slug_id_is_valid("-work"));
+        assert!(!slug_id_is_valid("CON"));
+        assert!(!slug_id_is_valid("aux"));
     }
 }

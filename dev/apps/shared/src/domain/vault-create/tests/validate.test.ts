@@ -54,6 +54,37 @@ describe("validateCreateVaultStep", () => {
       ),
     ).toContain("password_not_validated");
   });
+
+  it("requires a group id when assigning to an existing group", () => {
+    expect(
+      validateCreateVaultStep(
+        "general",
+        createVaultDraftFixture([], { groupMode: "existing", groupId: "" }),
+        [],
+      ),
+    ).toContain("group_missing");
+  });
+
+  it("rejects a stale existing group id", () => {
+    expect(
+      validateCreateVaultStep(
+        "general",
+        createVaultDraftFixture([], { groupMode: "existing", groupId: "gone" }),
+        [],
+        ["work"],
+      ),
+    ).toContain("group_missing");
+  });
+
+  it("requires a group name when creating a group on finalize", () => {
+    expect(
+      validateCreateVaultStep(
+        "general",
+        createVaultDraftFixture([], { groupMode: "create", groupName: "" }),
+        [],
+      ),
+    ).toContain("group_name_empty");
+  });
 });
 
 describe("canSubmitCreateVault", () => {

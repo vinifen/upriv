@@ -6,5 +6,6 @@ export const UI_SETTINGS_KEYS = {
   vaultListSortDirection: "vault_list_sort_direction",
   vaultListView: "vault_list_view",
   alwaysShowHiddenVaults: "always_show_hidden_vaults",
+  allowDragVaultIntoGroup: "allow_drag_vault_into_group",
   fileManagerDockExpanded: "file_manager_dock_expanded",
 } as const;

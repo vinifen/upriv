@@ -3,7 +3,7 @@ import { Icon } from "@/components/icons";
 import { DropdownMenu, IconButton } from "@/components/ui";
 import { vaultBlocksBulkExport } from "@/features/system/settings";
 import { useTranslation } from "@/i18n";
-import { resolveVaultDisplayStatus, type VaultListItem } from "@upriv/shared";
+import { resolveVaultDisplayStatus, storageModeHasPortableArchive, type VaultListItem } from "@upriv/shared";
 
 const rowActionProps = {
   size: "row" as const,
@@ -16,6 +16,7 @@ interface VaultRowActionsProps {
   onOpenBackups: (vaultId: string) => void;
   onOpenNote: (vaultId: string) => void;
   onOpenSettings: (vaultId: string) => void;
+  onOpenGroupAssignment: (vaultId: string) => void;
   onExportVault: (vault: VaultListItem) => void;
   onOpenFolder: (vault: VaultListItem) => void;
   onOpenFileManager: (vault: VaultListItem) => void;
@@ -27,6 +28,7 @@ export function VaultRowActions({
   onOpenBackups,
   onOpenNote,
   onOpenSettings,
+  onOpenGroupAssignment,
   onExportVault,
   onOpenFolder,
   onOpenFileManager,
@@ -34,6 +36,7 @@ export function VaultRowActions({
   const { t } = useTranslation();
   const isOpen = resolveVaultDisplayStatus(vault) === "open";
   const canExport = !vaultBlocksBulkExport(vault);
+  const hasPortableArchive = storageModeHasPortableArchive(vault.storageMode);
 
   const moreItems = useMemo(
     () => [
@@ -68,14 +71,18 @@ export function VaultRowActions({
               },
             ]
           : []),
-      {
-        id: "backups",
-        label: t("action.backups"),
-        icon: <Icon name="archive" size={18} />,
-        onSelect: () => {
-          window.requestAnimationFrame(() => onOpenBackups(vault.id));
-        },
-      },
+      ...(hasPortableArchive
+        ? [
+            {
+              id: "backups",
+              label: t("action.backups"),
+              icon: <Icon name="archive" size={18} />,
+              onSelect: () => {
+                window.requestAnimationFrame(() => onOpenBackups(vault.id));
+              },
+            },
+          ]
+        : []),
       {
         id: "note",
         label: t("action.note"),
@@ -84,14 +91,24 @@ export function VaultRowActions({
           window.requestAnimationFrame(() => onOpenNote(vault.id));
         },
       },
+      {
+        id: "group",
+        label: t("vault.group.assignment.menu"),
+        icon: <Icon name="folder" size={18} />,
+        onSelect: () => {
+          window.requestAnimationFrame(() => onOpenGroupAssignment(vault.id));
+        },
+      },
     ],
     [
       canExport,
+      hasPortableArchive,
       isOpen,
       onExportVault,
       onOpenBackups,
       onOpenFileManager,
       onOpenFolder,
+      onOpenGroupAssignment,
       onOpenNote,
       t,
       vault,

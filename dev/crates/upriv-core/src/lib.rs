@@ -12,11 +12,16 @@ pub mod time;
 pub mod vault;
 
 pub use config::{
-    discover_bootstrap_root, load_app_settings, load_app_settings_at, load_vault_config,
-    save_app_settings, save_app_settings_session, save_app_settings_session_with_alias_sync,
-    save_app_settings_with_alias_sync, sync_alias_with_app_settings, vault_config_path,
-    AppSectionSettings, AppSettings, LoadedAppSettings, LoggingSettings, UiSettings, VaultConfig,
-    VaultIdentitySection, VaultStorageMode, VaultStorageSection,
+    create_vault_group, create_vault_group_with_sort, delete_vault_group, discover_bootstrap_root,
+    known_vault_ids, load_app_settings, load_app_settings_at, load_vault_config, load_vault_groups,
+    parse_settings_toml_str, parse_vault_groups_toml_str, reorder_vault_group_grouped_vaults,
+    reorder_vault_groups, repair_vault_groups, save_app_settings, save_app_settings_session,
+    save_app_settings_session_with_alias_sync, save_app_settings_with_alias_sync,
+    save_vault_groups, serialize_settings_toml_str, serialize_vault_groups,
+    sync_alias_with_app_settings, update_vault_group, vault_config_path, vault_groups_path,
+    AppSectionSettings, AppSettings, LoadedAppSettings, LoadedVaultGroups, LoggingSettings,
+    UiSettings, VaultConfig, VaultGroup, VaultGroupsFile, VaultIdentitySection, VaultStorageMode,
+    VaultStorageSection, VAULT_GROUPS_FILE_NAME,
 };
 pub use error::{Result, UprivError};
 pub use paths::{

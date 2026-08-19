@@ -17,19 +17,17 @@ import {
 import { useTranslation } from "@/i18n";
 import {
   VAULT_ROOT_ALIAS_FILE,
+  isVaultRootDraftDirty,
+  vaultRootGateFromState,
   type AppDistribution,
   type AppSettingsConfig,
   type IncompleteReplacePolicy,
+  type VaultRootDiskStatus,
   type VaultRootMode,
+  type VaultRootSettingsGate,
 } from "@upriv/shared";
 import { useVaultRootService } from "@/platform/services";
 import { getAppVersion, getSessionAppVersion } from "@/lib/appVersion";
-import {
-  isVaultRootDraftDirty,
-  vaultRootGateFromState,
-  type VaultRootDiskStatus,
-  type VaultRootSettingsGate,
-} from "./vaultRootSettingsIntent";
 import { VaultRootIncompleteReplacePanel } from "./VaultRootIncompleteReplacePanel";
 
 interface VaultRootLocationSectionProps {
@@ -171,6 +169,7 @@ export function VaultRootLocationSection({
           setDefaultRootAnchor(result.defaultRootAnchor);
           if (result.status === "incomplete") setDisk("incomplete");
           else if (result.status === "unreadable") setDisk("unreadable");
+          else if (result.status === "unauthorized") setDisk("unauthorized");
           else if (result.status === "absent") setDisk("will_create");
           else setDisk("ready");
         })
@@ -194,6 +193,7 @@ export function VaultRootLocationSection({
         if (gen !== checkGen.current) return;
         if (result.status === "incomplete") setDisk("incomplete");
         else if (result.status === "unreadable") setDisk("unreadable");
+        else if (result.status === "unauthorized") setDisk("unauthorized");
         else if (result.status === "absent") setDisk("will_create");
         else setDisk("ready");
       })
@@ -222,6 +222,7 @@ export function VaultRootLocationSection({
           setDefaultRootAnchor(result.defaultRootAnchor);
           if (result.status === "incomplete") setDisk("incomplete");
           else if (result.status === "unreadable") setDisk("unreadable");
+          else if (result.status === "unauthorized") setDisk("unauthorized");
           else if (result.status === "absent") setDisk("will_create");
           else setDisk("ready");
         })
@@ -242,6 +243,7 @@ export function VaultRootLocationSection({
         if (gen !== checkGen.current) return;
         if (result.status === "incomplete") setDisk("incomplete");
         else if (result.status === "unreadable") setDisk("unreadable");
+        else if (result.status === "unauthorized") setDisk("unauthorized");
         else if (result.status === "absent") setDisk("will_create");
         else setDisk("ready");
       })
@@ -334,13 +336,17 @@ export function VaultRootLocationSection({
                           )}
                         </p>
                       ) : null}
-                      {disk === "unreadable" ? (
+                      {disk === "unreadable" || disk === "unauthorized" ? (
                         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                           <p
                             className="rounded-md bg-error-container/10 px-3 py-2 text-xs leading-relaxed text-on-error-container"
                             role="alert"
                           >
-                            {t("modal.vault_root_setup.error_io")}
+                            {t(
+                              disk === "unauthorized"
+                                ? "modal.vault_root_setup.error_saf_unauthorized"
+                                : "modal.vault_root_setup.error_io",
+                            )}
                           </p>
                           <Button
                             type="button"
@@ -467,13 +473,17 @@ export function VaultRootLocationSection({
                       {t("modal.app_settings.action.choose_folder")}
                     </Button>
                   </div>
-                  {disk === "unreadable" ? (
+                  {disk === "unreadable" || disk === "unauthorized" ? (
                     <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                       <p
                         className="rounded-md bg-error-container/10 px-3 py-2 text-xs leading-relaxed text-on-error-container"
                         role="alert"
                       >
-                        {t("modal.vault_root_setup.error_io")}
+                        {t(
+                          disk === "unauthorized"
+                            ? "modal.vault_root_setup.error_saf_unauthorized"
+                            : "modal.vault_root_setup.error_io",
+                        )}
                       </p>
                       <Button
                         type="button"

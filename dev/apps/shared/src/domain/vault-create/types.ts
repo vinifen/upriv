@@ -14,6 +14,14 @@ export type CreateVaultStepId = (typeof CREATE_VAULT_STEPS)[number];
 
 export type CreateVaultStepStatus = "ready" | "incomplete" | "error";
 
+/** How the new vault joins a group — applied only on Create (not while drafting). */
+export type CreateVaultGroupMode = "none" | "existing" | "create";
+
+export type CreateVaultGroupAssignment =
+  | { kind: "none" }
+  | { kind: "existing"; groupId: string }
+  | { kind: "create"; displayName: string };
+
 export interface CreateVaultDraft {
   source: CreateVaultSource | null;
   importFileName: string;
@@ -37,6 +45,12 @@ export interface CreateVaultDraft {
   policy: VaultSettingsConfig["policy"];
   order: number;
   hidden: boolean;
+  /** Deferred group membership — applied when the vault is created. */
+  groupMode: CreateVaultGroupMode;
+  /** Target when `groupMode === "existing"`. */
+  groupId: string;
+  /** New group name when `groupMode === "create"`. */
+  groupName: string;
 }
 
 export interface CreateVaultResult {
@@ -47,4 +61,5 @@ export interface CreateVaultResult {
   order: number;
   storageMode: VaultSettingsConfig["storage"]["mode"];
   settings: VaultSettingsConfig;
+  groupAssignment: CreateVaultGroupAssignment;
 }

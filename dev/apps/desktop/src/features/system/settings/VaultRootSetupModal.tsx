@@ -5,18 +5,19 @@ import {
   SUPPORTED_LOCALES,
   VAULT_ROOT_ALIAS_FILE,
   VAULT_ROOT_ERROR_CODES,
+  VAULT_ROOT_GATE_IDLE,
   isRpcError,
   type AppDistribution,
   type LocaleId,
   type VaultRootMode,
   type VaultRootPresentationState,
+  type VaultRootSettingsGate,
 } from "@upriv/shared";
 import { useVaultRootService } from "@/platform/services";
 import { useAppSettingsContext } from "./AppSettingsContext";
 import { desktopErrorI18nKey } from "@/lib/errorMessages";
 import { VaultRootConfirmFooter } from "./VaultRootConfirmFooter";
 import { VaultRootLocationSection } from "./VaultRootLocationSection";
-import { VAULT_ROOT_GATE_IDLE, type VaultRootSettingsGate } from "./vaultRootSettingsIntent";
 
 /** Trim + strip trailing separators for diskApplied path equality. */
 function samePathKey(a: string, b: string): boolean {

@@ -1,4 +1,4 @@
-export { buildCreateVaultResult } from "./buildResult";
+export { buildCreateVaultResult, resolveCreateVaultGroupAssignment } from "./buildResult";
 export { createDraftFromBackup } from "./createDraftFromBackup";
 export {
   createDraftForImportSource,
@@ -25,6 +25,8 @@ export {
 export {
   CREATE_VAULT_STEPS,
   type CreateVaultDraft,
+  type CreateVaultGroupAssignment,
+  type CreateVaultGroupMode,
   type CreateVaultResult,
   type CreateVaultSource,
   type CreateVaultStepId,

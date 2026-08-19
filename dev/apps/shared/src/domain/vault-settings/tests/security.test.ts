@@ -33,7 +33,15 @@ describe("normalizeSecurityModeForStorage", () => {
 
 describe("securityUiModesForStorage", () => {
   it("shows all four options for every storage mode", () => {
-    for (const mode of ["encrypted_dir", "store_only", "ram_only", "plain", "plain_only"] as const) {
+    for (const mode of [
+      "encrypted_dir",
+      "store_only",
+      "upriv_only",
+      "upriv_plain",
+      "ram_only",
+      "plain",
+      "plain_only",
+    ] as const) {
       expect(securityUiModesForStorage(mode)).toEqual([
         "session_ram",
         "prompt_open_close",

@@ -4,7 +4,7 @@
 
 **Product version:** edit **`dev/VERSION`** only, then run `npm run sync-version --prefix dev` (or `build` / `electron:build`, which sync automatically). CI runs `scripts/check-version.mjs` via `./run lint` to catch drift.
 
-**Last reviewed:** 2026-07-03 (Electron desktop shell)
+**Last reviewed:** 2026-08-07 (Android SAF vault-root — Kotlin DocumentFile bridge + RAM-only TOML RPCs; full Rust `VaultStorage` trait deferred)
 
 ## System
 
@@ -32,8 +32,10 @@
 
 | Crate | Version | Role |
 |-------|---------|------|
-| `upriv-core` | workspace | Product logic |
+| `upriv-core` | workspace | Product logic (**rlib** — linked into daemon / `upriv-ffi`, not shipped as its own `.so`) |
+| `upriv-rpc` | workspace | Shared CORE RPC handlers (daemon + ffi) |
 | `upriv-daemon` | workspace | stdio JSON-RPC sidecar for Electron (no TCP port) |
+| `upriv-ffi` | workspace | UniFFI cdylib for mobile (`libupriv_ffi.so`) |
 
 ## Mobile — JavaScript (`dev/apps/mobile/`)
 
@@ -42,6 +44,8 @@
 | `expo` | **52.0.49** | SDK (mature line; last 52.x patch) |
 | `react` | **18.3.1** | Same major as desktop |
 | `react-native` | **0.76.9** | Default RN for Expo SDK 52 |
+| `expo-dev-client` | **~5.0.20** | Custom native module / `libupriv_ffi.so` (not Expo Go) |
+| `upriv-core` (local Expo module) | `file:./modules/upriv-core` | UniFFI Kotlin → `invoke` / `appVersion` |
 | `expo-status-bar` | **2.0.1** | Status bar API |
 | `react-native-safe-area-context` | **4.12.0** | Safe areas |
 | `react-native-screens` | **4.4.0** | Native screen primitives |
@@ -58,9 +62,8 @@
 
 | Stack | Suggested pin | When |
 |-------|---------------|------|
-| `upriv-core` (Rust) | `argon2` 0.5, `zeroize` 1.8, … | `crates/upriv-core/` + `mobile/src/native/` |
-| `expo-dev-client` | SDK 52 line | Before JNI / UniFFI bridge |
-| `7zz` | 24.09+ ARM64 | APK `jniLibs` |
+| `7zz` | 24.09+ ARM64 | APK `jniLibs` alongside `libupriv_ffi.so` |
+| iOS UniFFI staticlib | same `upriv-ffi` | After Android path is proven |
 
 ## Why not “latest”?
 

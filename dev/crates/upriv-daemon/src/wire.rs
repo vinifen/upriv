@@ -1,9 +1,9 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::rpc::{handle_rpc, RpcErrorBody, RpcRequest};
+use upriv_rpc::{handle_rpc, RpcErrorBody, RpcRequest};
 
-/// Stdio transport envelope (`type: "request"`). Fields map 1:1 to `RpcRequest` in `rpc.rs`.
+/// Stdio transport envelope (`type: "request"`). Fields map 1:1 to `RpcRequest` in `upriv-rpc`.
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum WireIn {

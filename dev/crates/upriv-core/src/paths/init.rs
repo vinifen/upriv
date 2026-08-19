@@ -30,6 +30,7 @@ vault_list_sort = "order"
 vault_list_sort_direction = "asc"
 vault_list_view = "default"
 always_show_hidden_vaults = false
+allow_drag_vault_into_group = true
 file_manager_dock_expanded = false
 
 [logging]

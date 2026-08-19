@@ -7,17 +7,22 @@ import { useAppSettingsContext } from "./AppSettingsContext";
 import {
   APP_SETTINGS_ERROR_I18N_KEYS,
   APP_SETTINGS_SECTIONS,
+  VAULT_DISPLAY_NAME_MAX_LENGTH,
   appSettingsEqual,
+  displayNameErrorI18nKey,
   isRpcError,
   isVaultRootErrorCode,
   normalizeAppSettings,
+  validateDisplayName,
   type AppSettingsConfig,
   type AppSettingsSectionId,
+  type VaultGroup,
   type VaultListItem,
 } from "@upriv/shared";
 import {
   AppSettingsAppearanceSection,
   AppSettingsDownloadVaultsSection,
+  AppSettingsGroupsSection,
   AppSettingsHiddenVaultsSection,
   AppSettingsLoggingSection,
 } from "./appSettingsForm";
@@ -28,6 +33,9 @@ interface AppSettingsModalProps {
   open: boolean;
   onClose: () => void;
   vaults: VaultListItem[];
+  groups?: VaultGroup[];
+  includeHidden?: boolean;
+  onCreateGroup?: (displayName: string, groupedVaultIds: string[]) => Promise<void> | void;
   /** Report unsaved draft so the list shell can refuse opening Data folder. */
   onDirtyChange?: (dirty: boolean) => void;
 }
@@ -36,7 +44,15 @@ interface AppSettingsModalProps {
  * System settings for the **active** vault-root (appearance, logging, …).
  * Data-folder switch lives in `VaultRootDataFolderModal` (⋯ menu) — separate context.
  */
-export function AppSettingsModal({ open, onClose, vaults, onDirtyChange }: AppSettingsModalProps) {
+export function AppSettingsModal({
+  open,
+  onClose,
+  vaults,
+  groups = [],
+  includeHidden = false,
+  onCreateGroup,
+  onDirtyChange,
+}: AppSettingsModalProps) {
   const { t } = useTranslation();
   const { showError } = useErrorToast();
   const {
@@ -52,14 +68,17 @@ export function AppSettingsModal({ open, onClose, vaults, onDirtyChange }: AppSe
   const [discardConfirmOpen, setDiscardConfirmOpen] = useState(false);
   const [savedVisible, setSavedVisible] = useState(false);
   const [saveBusy, setSaveBusy] = useState(false);
+  const [newGroupName, setNewGroupName] = useState("");
+  const [groupedVaultIds, setGroupedVaultIds] = useState<string[]>([]);
+  const [groupNameError, setGroupNameError] = useState<string | null>(null);
   const savedHideRef = useRef<ReturnType<typeof setTimeout>>();
   const openedSessionRef = useRef(false);
 
+  const pendingGroupName = newGroupName.trim();
   const isDirty = useMemo(() => {
-    if (!draft) return false;
-    // Ignores wire `app` (Data folder owns vault-root) — see `appSettingsEqual`.
-    return !appSettingsEqual(draft, settings);
-  }, [draft, settings]);
+    const settingsDirty = Boolean(draft && !appSettingsEqual(draft, settings));
+    return settingsDirty || pendingGroupName.length > 0;
+  }, [draft, pendingGroupName, settings]);
 
   useEffect(() => {
     onDirtyChange?.(open && isDirty);
@@ -71,6 +90,9 @@ export function AppSettingsModal({ open, onClose, vaults, onDirtyChange }: AppSe
     if (openedSessionRef.current) return;
     openedSessionRef.current = true;
     setDraft(settings);
+    setNewGroupName("");
+    setGroupedVaultIds([]);
+    setGroupNameError(null);
   }, [open, settings]);
 
   // Keep draft.app aligned with live Context so Save never sends a stale vault-root.
@@ -92,6 +114,9 @@ export function AppSettingsModal({ open, onClose, vaults, onDirtyChange }: AppSe
     if (!open) {
       openedSessionRef.current = false;
       setDraft(null);
+      setNewGroupName("");
+      setGroupedVaultIds([]);
+      setGroupNameError(null);
       setSaveConfirmOpen(false);
       setDiscardConfirmOpen(false);
       setSavedVisible(false);
@@ -166,11 +191,29 @@ export function AppSettingsModal({ open, onClose, vaults, onDirtyChange }: AppSe
 
   const handleDiscardAndClose = () => {
     setDraft(settings);
+    setNewGroupName("");
+    setGroupedVaultIds([]);
+    setGroupNameError(null);
     handleClose();
   };
 
   const handleSaveClick = () => {
     if (!isDirty || !draft || saveBusy) return;
+    if (pendingGroupName) {
+      const validation = validateDisplayName(pendingGroupName);
+      if (validation) {
+        setGroupNameError(
+          t(
+            displayNameErrorI18nKey(validation),
+            validation === "too_long"
+              ? { max: String(VAULT_DISPLAY_NAME_MAX_LENGTH) }
+              : undefined,
+          ),
+        );
+        return;
+      }
+    }
+    setGroupNameError(null);
     dismissFooterConfirm();
     setSaveConfirmOpen(true);
   };
@@ -187,15 +230,22 @@ export function AppSettingsModal({ open, onClose, vaults, onDirtyChange }: AppSe
       app: { ...settings.app },
     });
     setSaveBusy(true);
-    void replaceSettings(normalized)
-      .then(() => {
-        setDraft(normalized);
+    void (async () => {
+      try {
+        if (draft && !appSettingsEqual(draft, settings)) {
+          await replaceSettings(normalized);
+          setDraft(normalized);
+        }
+        if (pendingGroupName) {
+          await onCreateGroup?.(pendingGroupName, groupedVaultIds);
+          setNewGroupName("");
+          setGroupedVaultIds([]);
+        }
         setSavedVisible(true);
         clearTimeout(savedHideRef.current);
         savedHideRef.current = setTimeout(() => setSavedVisible(false), SAVED_INDICATOR_MS);
         setSaveConfirmOpen(false);
-      })
-      .catch((error) => {
+      } catch (error) {
         setSaveConfirmOpen(false);
         if (isRpcError(error) && isVaultRootErrorCode(error.code)) {
           // Context already toasted + bumped Gate epoch; dismiss so Setup/Repair is usable.
@@ -208,11 +258,11 @@ export function AppSettingsModal({ open, onClose, vaults, onDirtyChange }: AppSe
             ? APP_SETTINGS_ERROR_I18N_KEYS.INVALID_REQUEST
             : APP_SETTINGS_ERROR_I18N_KEYS.SAVE_FAILED;
         showError(error, fallback);
-      })
-      .finally(() => {
+      } finally {
         commitSaveLock.current = false;
         setSaveBusy(false);
-      });
+      }
+    })();
   };
 
   const formConfig = draft ?? settings;
@@ -292,6 +342,28 @@ export function AppSettingsModal({ open, onClose, vaults, onDirtyChange }: AppSe
               setShowHiddenVaultsSession,
               vaults,
               open,
+              {
+                groups,
+                includeHidden,
+                newGroupName,
+                groupedVaultIds,
+                nameError: groupNameError,
+                onNewGroupNameChange: (name) => {
+                  setNewGroupName(name);
+                  setGroupNameError(null);
+                  setSaveConfirmOpen(false);
+                  setDiscardConfirmOpen(false);
+                },
+                onToggleGroupedVault: (vaultId) => {
+                  setGroupedVaultIds((current) =>
+                    current.includes(vaultId)
+                      ? current.filter((id) => id !== vaultId)
+                      : [...current, vaultId],
+                  );
+                  setSaveConfirmOpen(false);
+                  setDiscardConfirmOpen(false);
+                },
+              },
             )}
           </VaultSettingsSection>
         ))}
@@ -311,6 +383,15 @@ function renderAppSettingsSection(
   setShowHiddenVaultsSession: (value: boolean) => void,
   vaults: VaultListItem[],
   modalOpen: boolean,
+  groupsDraft: {
+    groups: VaultGroup[];
+    includeHidden: boolean;
+    newGroupName: string;
+    groupedVaultIds: string[];
+    nameError: string | null;
+    onNewGroupNameChange: (name: string) => void;
+    onToggleGroupedVault: (vaultId: string) => void;
+  },
 ) {
   switch (sectionId) {
     case "appearance":
@@ -318,6 +399,21 @@ function renderAppSettingsSection(
         <AppSettingsAppearanceSection
           config={draft.ui}
           onChange={(patch) => patchDraft("ui", patch)}
+        />
+      );
+    case "groups":
+      return (
+        <AppSettingsGroupsSection
+          config={draft.ui}
+          onChange={(patch) => patchDraft("ui", patch)}
+          vaults={vaults}
+          groups={groupsDraft.groups}
+          includeHidden={groupsDraft.includeHidden}
+          newGroupName={groupsDraft.newGroupName}
+          groupedVaultIds={groupsDraft.groupedVaultIds}
+          nameError={groupsDraft.nameError}
+          onNewGroupNameChange={groupsDraft.onNewGroupNameChange}
+          onToggleGroupedVault={groupsDraft.onToggleGroupedVault}
         />
       );
     case "logging":

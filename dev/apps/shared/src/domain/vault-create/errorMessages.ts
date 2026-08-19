@@ -12,6 +12,10 @@ export const CREATE_VAULT_ERROR_I18N_KEYS = {
   password_mismatch: "vault.create.error.password_mismatch",
   password_not_validated: "vault.create.error.password_not_validated",
   password_wrong: "error.wrong_password",
+  group_missing: "vault.create.error.group_missing",
+  group_name_empty: "vault.create.error.group_name_empty",
+  group_name_too_long: "vault.create.error.group_name_too_long",
+  group_name_invalid: "vault.create.error.group_name_invalid",
 } as const satisfies Record<CreateVaultValidationCode, I18nKey>;
 
 export type CreateVaultErrorI18nKey =

@@ -13,7 +13,11 @@ export type CreateVaultValidationCode =
   | "password_empty"
   | "password_mismatch"
   | "password_not_validated"
-  | "password_wrong";
+  | "password_wrong"
+  | "group_missing"
+  | "group_name_empty"
+  | "group_name_too_long"
+  | "group_name_invalid";
 
 export function vaultIdForCreateDraft(
   draft: CreateVaultDraft,
@@ -26,6 +30,8 @@ export function validateCreateVaultStep(
   stepId: CreateVaultStepId,
   draft: CreateVaultDraft,
   existingIds: readonly string[],
+  /** When set, `existing` group assignment must reference a live group id. */
+  knownGroupIds: readonly string[] = [],
 ): CreateVaultValidationCode[] {
   switch (stepId) {
     case "source": {
@@ -54,7 +60,22 @@ export function validateCreateVaultStep(
       }
       return errors;
     }
-    case "general":
+    case "general": {
+      const errors: CreateVaultValidationCode[] = [];
+      if (draft.groupMode === "existing") {
+        const groupId = draft.groupId.trim();
+        if (!groupId || !knownGroupIds.includes(groupId)) {
+          errors.push("group_missing");
+        }
+      }
+      if (draft.groupMode === "create") {
+        const nameError = validateDisplayName(draft.groupName);
+        if (nameError === "empty") errors.push("group_name_empty");
+        else if (nameError === "too_long") errors.push("group_name_too_long");
+        else if (nameError) errors.push("group_name_invalid");
+      }
+      return errors;
+    }
     case "advanced":
       return [];
     default:
@@ -65,10 +86,11 @@ export function validateCreateVaultStep(
 export function validateAllCreateVaultSteps(
   draft: CreateVaultDraft,
   existingIds: readonly string[],
+  knownGroupIds: readonly string[] = [],
 ): Partial<Record<CreateVaultStepId, CreateVaultValidationCode[]>> {
   const result: Partial<Record<CreateVaultStepId, CreateVaultValidationCode[]>> = {};
   for (const stepId of ["source", "identity", "password", "general", "advanced"] as const) {
-    const errors = validateCreateVaultStep(stepId, draft, existingIds);
+    const errors = validateCreateVaultStep(stepId, draft, existingIds, knownGroupIds);
     if (errors.length > 0) result[stepId] = errors;
   }
   return result;
@@ -80,8 +102,9 @@ export function getCreateVaultStepStatus(
   existingIds: readonly string[],
   visitedSteps: ReadonlySet<CreateVaultStepId>,
   submitAttempted: boolean,
+  knownGroupIds: readonly string[] = [],
 ): CreateVaultStepStatus {
-  const errors = validateCreateVaultStep(stepId, draft, existingIds);
+  const errors = validateCreateVaultStep(stepId, draft, existingIds, knownGroupIds);
   if (errors.length === 0) return "ready";
   if (submitAttempted || visitedSteps.has(stepId)) return "error";
   return "incomplete";
@@ -90,6 +113,7 @@ export function getCreateVaultStepStatus(
 export function canSubmitCreateVault(
   draft: CreateVaultDraft,
   existingIds: readonly string[],
+  knownGroupIds: readonly string[] = [],
 ): boolean {
-  return Object.keys(validateAllCreateVaultSteps(draft, existingIds)).length === 0;
+  return Object.keys(validateAllCreateVaultSteps(draft, existingIds, knownGroupIds)).length === 0;
 }

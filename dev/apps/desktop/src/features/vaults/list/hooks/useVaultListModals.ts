@@ -1,12 +1,17 @@
 import { useMemo, useState } from "react";
-import type { CreateVaultDraft, CreateVaultStepId, VaultListItem } from "@upriv/shared";
+import type { CreateVaultDraft, CreateVaultStepId, VaultGroup, VaultListItem } from "@upriv/shared";
 import type { VaultLifecycleRequest } from "@/features/vaults/lifecycle";
 import type { VaultListModalsHandle } from "../vaultListModalsTypes";
 
-export function useVaultListModals(vaults: VaultListItem[]): VaultListModalsHandle {
+export function useVaultListModals(
+  vaults: VaultListItem[],
+  groups: VaultGroup[] = [],
+): VaultListModalsHandle {
   const [noteVaultId, setNoteVaultId] = useState<string | null>(null);
   const [backupVaultId, setBackupVaultId] = useState<string | null>(null);
   const [settingsVaultId, setSettingsVaultId] = useState<string | null>(null);
+  const [groupAssignmentVaultId, setGroupAssignmentVaultId] = useState<string | null>(null);
+  const [settingsGroupId, setSettingsGroupId] = useState<string | null>(null);
   const [appSettingsOpen, setAppSettingsOpen] = useState(false);
   const [dataFolderOpen, setDataFolderOpen] = useState(false);
   const [logsOpen, setLogsOpen] = useState(false);
@@ -37,6 +42,16 @@ export function useVaultListModals(vaults: VaultListItem[]): VaultListModalsHand
     [vaults, settingsVaultId],
   );
 
+  const groupAssignmentVault = useMemo(
+    () => vaults.find((vault) => vault.id === groupAssignmentVaultId) ?? null,
+    [vaults, groupAssignmentVaultId],
+  );
+
+  const settingsGroup = useMemo(
+    () => groups.find((group) => group.id === settingsGroupId) ?? null,
+    [groups, settingsGroupId],
+  );
+
   const lifecycleVault = useMemo(
     () =>
       lifecycleRequest
@@ -56,8 +71,6 @@ export function useVaultListModals(vaults: VaultListItem[]): VaultListModalsHand
     setCreateVaultInitialStep(null);
   };
 
-  // System Settings and Data folder are mutually exclusive surfaces.
-  // Opening one while the other has unsaved edits is refused (toast via screen).
   const [appSettingsDirty, setAppSettingsDirty] = useState(false);
   const [dataFolderDirty, setDataFolderDirty] = useState(false);
 
@@ -84,6 +97,12 @@ export function useVaultListModals(vaults: VaultListItem[]): VaultListModalsHand
     settingsVaultId,
     setSettingsVaultId,
     settingsVault,
+    groupAssignmentVaultId,
+    setGroupAssignmentVaultId,
+    groupAssignmentVault,
+    settingsGroupId,
+    setSettingsGroupId,
+    settingsGroup,
     appSettingsOpen,
     setAppSettingsOpen: setAppSettingsOpenExclusive,
     setAppSettingsDirty,

@@ -35,4 +35,10 @@ describe("vaultSettingsToListPatch", () => {
       false,
     );
   });
+
+  it("canSeal is false for close-only storage", () => {
+    expect(
+      vaultSettingsToListPatch(vaultSettingsFixture({ storageMode: "upriv_plain" })).canSeal,
+    ).toBe(false);
+  });
 });

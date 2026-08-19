@@ -10,6 +10,7 @@ export type VaultRootMode = "default_root" | "custom_root";
 
 export const APP_SETTINGS_SECTIONS = [
   "appearance",
+  "groups",
   "logging",
   "hidden_vaults",
   "download_vaults",
@@ -25,6 +26,12 @@ export interface AppSettingsConfig {
     vault_list_sort_direction: VaultListSortDirection;
     vault_list_view: VaultListViewMode;
     always_show_hidden_vaults: boolean;
+    /**
+     * When true, dropping a vault onto a group assigns it, and dropping a grouped
+     * vault onto the list (or an ungrouped vault) removes it from the group.
+     * In-group reorder is independent.
+     */
+    allow_drag_vault_into_group: boolean;
     /** Desktop file-manager dock UI — mobile clients may ignore. */
     file_manager_dock_expanded: boolean;
   };
@@ -64,6 +71,7 @@ export function appSettingsEqual(a: AppSettingsConfig, b: AppSettingsConfig): bo
     a.ui.vault_list_sort_direction === b.ui.vault_list_sort_direction &&
     a.ui.vault_list_view === b.ui.vault_list_view &&
     a.ui.always_show_hidden_vaults === b.ui.always_show_hidden_vaults &&
+    a.ui.allow_drag_vault_into_group === b.ui.allow_drag_vault_into_group &&
     a.ui.file_manager_dock_expanded === b.ui.file_manager_dock_expanded &&
     a.logging.enabled === b.logging.enabled &&
     a.logging.level === b.logging.level &&

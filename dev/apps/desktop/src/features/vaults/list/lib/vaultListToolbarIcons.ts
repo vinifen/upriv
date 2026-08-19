@@ -6,6 +6,7 @@ export const SORT_MODE_ICON: Record<VaultListSortMode, IconName> = {
   name: "sort-alpha",
   state: "sort-state",
   last_accessed: "clock",
+  groups: "folder",
 };
 
 export const SORT_DIRECTION_ICON: Record<VaultListSortDirection, IconName> = {

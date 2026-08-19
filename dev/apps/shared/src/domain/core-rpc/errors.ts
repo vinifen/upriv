@@ -1,4 +1,4 @@
-/** Wire error envelope from upriv-daemon (`rpc.rs` → `RpcResponse.error`). */
+/** Wire error envelope from `upriv-rpc` (`RpcResponse.error`) via daemon or FFI. */
 export interface RpcErrorBody {
   code: string;
   /** English — for logs and dev. UI must map `code` via domain error message maps (e.g. `vault/errors/messages.ts`). */
@@ -19,9 +19,18 @@ export class RpcError extends Error {
   }
 }
 
-/** RPC routing / wire errors from upriv-daemon. Keep in sync with `rpc.rs`. */
+/**
+ * RPC routing / wire errors from `upriv-rpc` and `upriv-ffi::invoke`.
+ * Keep in sync with `handle_rpc` and the FFI envelope fallbacks.
+ *
+ * FFI invalid params JSON and envelope serialize failure use `invalid_request`
+ * (static fallback — no interpolated message). `unknown_method` comes from
+ * `handle_rpc`. Client-side parse failures use `invalid_response` (not a
+ * protocol code).
+ */
 export const RPC_PROTOCOL_ERROR_CODES = {
   UNKNOWN_METHOD: "unknown_method",
+  INVALID_REQUEST: "invalid_request",
 } as const;
 
 export type RpcProtocolErrorCode =

@@ -1,8 +1,8 @@
 import type { AppLogFile, LogService } from "@upriv/shared";
-import { rpcLogDelete, rpcLogGet, rpcLogList } from "@/lib/rpc";
+import { rpcLogDelete, rpcLogEvent, rpcLogGet, rpcLogList } from "@/lib/rpc";
 
 /**
- * Desktop → daemon `log_list` / `log_get` / `log_delete`.
+ * Desktop → daemon `log_list` / `log_get` / `log_delete` / `log_event`.
  * Reads `.upriv/logs/` via Rust only (metadata list + on-demand content).
  */
 export const desktopLogService: LogService = {
@@ -17,5 +17,9 @@ export const desktopLogService: LogService = {
 
   async getFile(filename) {
     return rpcLogGet(filename);
+  },
+
+  async recordVaultHidden() {
+    await rpcLogEvent("vault_hidden");
   },
 };

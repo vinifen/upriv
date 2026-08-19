@@ -50,5 +50,8 @@ export function createEmptyCreateVaultDraft(existingOrders: readonly number[]): 
     },
     order: defaultOrderAtEnd(existingOrders),
     hidden: false,
+    groupMode: "none",
+    groupId: "",
+    groupName: "",
   };
 }

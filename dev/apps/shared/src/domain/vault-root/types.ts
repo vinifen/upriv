@@ -54,7 +54,13 @@ export type VaultRootAliasInfo = {
 };
 
 /** Status of `.upriv/` at the default-root anchor. */
-export type VaultRootDirStatus = "absent" | "valid" | "incomplete" | "unreadable";
+export type VaultRootDirStatus =
+  | "absent"
+  | "valid"
+  | "incomplete"
+  | "unreadable"
+  /** SAF tree permission revoked — re-pick required (Android). */
+  | "unauthorized";
 
 export type DefaultRootStatusResult = {
   status: VaultRootDirStatus;

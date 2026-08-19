@@ -1,4 +1,4 @@
-import type { VaultRow } from "../vault/types";
+import { storageModeHasPortableArchive, type VaultRow } from "../vault/types";
 
 /** Main archive name under `vaults/<id>/archive/` (Plan B — display name verbatim). */
 export function vaultArchiveFilename(vault: Pick<VaultRow, "displayName">): string {
@@ -10,13 +10,19 @@ export function vaultArchiveZipEntryPath(vault: VaultRow): string {
   return `${vault.id}/${vaultArchiveFilename(vault)}`;
 }
 
-/** Open / closing / recovery sessions may have a stale `.7z` on disk. */
+/** No portable `.7z` (Upriv-only) or an in-flight session that may leave a stale archive. */
 export function vaultBlocksBulkExport(vault: VaultRow): boolean {
+  if (!storageModeHasPortableArchive(vault.storageMode)) return true;
   return vault.session === "open" || vault.session === "closing" || vault.session === "recovery";
 }
 
+/** Open / closing / recovery vaults that still have a `.7z` to export after lock. */
 export function listVaultsBlockingBulkExport(vaults: readonly VaultRow[]): VaultRow[] {
-  return vaults.filter(vaultBlocksBulkExport);
+  return vaults.filter(
+    (vault) =>
+      storageModeHasPortableArchive(vault.storageMode) &&
+      (vault.session === "open" || vault.session === "closing" || vault.session === "recovery"),
+  );
 }
 
 export function listVaultsReadyForBulkExport(vaults: readonly VaultRow[]): VaultRow[] {

@@ -7,11 +7,13 @@ import {
   compressionPresetFromSevenZip,
   securityUiModesForStorage,
   sevenZipPatchFromCompressionPreset,
+  storageModeCloseOnly,
   storageModeIsPlaintext,
   storageModeSealOnly,
   type CompressionPreset,
   type SecurityMode,
   type StorageMode,
+  type VaultGroup,
   type VaultSettingsConfig,
 } from "@upriv/shared";
 import { useTranslation } from "@/i18n";
@@ -180,6 +182,27 @@ export function VaultSettingsStorageSection({
           />
           <PolicyRadioOption
             groupName={storageModeGroup}
+            value="upriv_only"
+            checked={config.mode === "upriv_only"}
+            disabled={storageModeLocked}
+            title={t("modal.settings.option.storage.upriv_only")}
+            description={t("modal.settings.option.storage.upriv_only_desc")}
+            badge="more-secure"
+            onSelect={() => onChange({ mode: "upriv_only" })}
+          />
+          <PolicyRadioOption
+            groupName={storageModeGroup}
+            value="upriv_plain"
+            checked={config.mode === "upriv_plain"}
+            disabled={storageModeLocked}
+            title={t("modal.settings.option.storage.upriv_plain")}
+            description={t("modal.settings.option.storage.upriv_plain_desc")}
+            badge="insecure"
+            tone="insecure"
+            onSelect={() => onChange({ mode: "upriv_plain" })}
+          />
+          <PolicyRadioOption
+            groupName={storageModeGroup}
             value="ram_only"
             checked={config.mode === "ram_only"}
             disabled={storageModeLocked}
@@ -227,6 +250,14 @@ export function VaultSettingsStorageSection({
         <p className="text-xs leading-relaxed text-on-error-container/90">
           {t("warning.store_only")}
         </p>
+      ) : null}
+      {config.mode === "upriv_only" ? (
+        <p className="text-xs leading-relaxed text-on-error-container/90">
+          {t("warning.upriv_only")}
+        </p>
+      ) : null}
+      {config.mode === "upriv_plain" ? (
+        <p className="text-xs font-medium text-on-error-container">{t("warning.upriv_plain")}</p>
       ) : null}
       {config.mode === "plain" ? (
         <p className="text-xs font-medium text-on-error-container">{t("warning.plain_mode")}</p>
@@ -279,6 +310,14 @@ export function VaultSettingsCloseSection({
               : storageMode === "plain_only"
                 ? "modal.settings.field.close.plain_only_seal_only"
                 : "modal.settings.field.close.plain_seal_only",
+          )}
+        </p>
+      ) : storageModeCloseOnly(storageMode) ? (
+        <p className="text-xs leading-relaxed text-on-surface-variant">
+          {t(
+            storageMode === "upriv_plain"
+              ? "modal.settings.field.close.upriv_plain_close_only"
+              : "modal.settings.field.close.upriv_only_close_only",
           )}
         </p>
       ) : (
@@ -740,6 +779,64 @@ export function VaultSettingsPolicySection({ config, onChange }: SectionPatchPro
   );
 }
 
+interface VaultSettingsGroupSectionProps {
+  groups: readonly VaultGroup[];
+  selectedGroupId: string;
+  newGroupName: string;
+  onSelectedGroupIdChange: (groupId: string) => void;
+  onNewGroupNameChange: (name: string) => void;
+}
+
+export function VaultSettingsGroupSection({
+  groups,
+  selectedGroupId,
+  newGroupName,
+  onSelectedGroupIdChange,
+  onNewGroupNameChange,
+}: VaultSettingsGroupSectionProps) {
+  const { t } = useTranslation();
+  const nameId = useId();
+  const creating = Boolean(newGroupName.trim());
+
+  return (
+    <SettingsFormGrid>
+      <p className="text-xs leading-relaxed text-on-surface-variant">
+        {t("modal.settings.field.group.new_name_help")}
+      </p>
+      <SettingsField label={t("vault.group.assignment.section")}>
+        <select
+          className={settingsControlClass}
+          value={creating ? "" : selectedGroupId}
+          disabled={creating}
+          onChange={(event) => onSelectedGroupIdChange(event.target.value)}
+        >
+          <option value="">{t("vault.group.assignment.ungrouped")}</option>
+          {groups.map((group) => (
+            <option key={group.id} value={group.id}>
+              {group.displayName}
+            </option>
+          ))}
+        </select>
+      </SettingsField>
+      <SettingsField
+        label={t("modal.settings.field.group.new_name")}
+        htmlFor={nameId}
+        hint={t("vault.create.group_create_help")}
+      >
+        <input
+          id={nameId}
+          type="text"
+          value={newGroupName}
+          maxLength={VAULT_DISPLAY_NAME_MAX_LENGTH}
+          onChange={(event) => onNewGroupNameChange(event.target.value)}
+          className={settingsControlClass}
+          placeholder={t("vault.group.create.name_label")}
+        />
+      </SettingsField>
+    </SettingsFormGrid>
+  );
+}
+
 interface PolicyRadioOptionProps {
   groupName: string;
   value: string;
@@ -747,7 +844,7 @@ interface PolicyRadioOptionProps {
   title: string;
   description: string;
   disabled?: boolean;
-  badge?: "recommended" | "less-secure" | "insecure" | "default";
+  badge?: "recommended" | "less-secure" | "insecure" | "default" | "more-secure";
   tone?: "default" | "less-secure" | "insecure";
   /**
    * Yellow/amber border while this option still needs follow-up config
@@ -838,6 +935,11 @@ export function PolicyRadioOption({
             {badge === "recommended" ? (
               <span className="rounded-md bg-accent/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-accent">
                 {t("modal.settings.badge.recommended")}
+              </span>
+            ) : null}
+            {badge === "more-secure" ? (
+              <span className="rounded-md bg-[color-mix(in_srgb,var(--vault-status-open)_20%,transparent)] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-vault-open">
+                {t("modal.settings.badge.more_secure")}
               </span>
             ) : null}
             {badge === "default" ? (

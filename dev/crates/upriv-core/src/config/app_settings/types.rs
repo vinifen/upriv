@@ -11,6 +11,10 @@ use super::toml::{
     default_sort_dir, default_theme, default_view,
 };
 
+fn default_true() -> bool {
+    true
+}
+
 /// In-memory app settings matching the TS `AppSettingsConfig` wire shape (snake_case JSON).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AppSettings {
@@ -27,6 +31,9 @@ pub struct UiSettings {
     pub vault_list_sort_direction: String,
     pub vault_list_view: String,
     pub always_show_hidden_vaults: bool,
+    /// Dropping a vault onto a group assigns it. Default true; missing TOML/JSON → true.
+    #[serde(default = "default_true")]
+    pub allow_drag_vault_into_group: bool,
     pub file_manager_dock_expanded: bool,
 }
 
@@ -65,6 +72,7 @@ impl Default for AppSettings {
                 vault_list_sort_direction: default_sort_dir(),
                 vault_list_view: default_view(),
                 always_show_hidden_vaults: false,
+                allow_drag_vault_into_group: true,
                 file_manager_dock_expanded: false,
             },
             logging: LoggingSettings {

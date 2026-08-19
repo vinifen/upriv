@@ -2,14 +2,12 @@ import { Icon } from "@/components/icons";
 import { useTranslation } from "@/i18n";
 
 interface VaultDragHandleProps {
-  vaultId: string;
   disabled?: boolean;
-  onDragStart: (vaultId: string) => (event: React.DragEvent) => void;
+  onDragStart: (event: React.DragEvent) => void;
   onDragEnd: () => void;
 }
 
 export function VaultDragHandle({
-  vaultId,
   disabled = false,
   onDragStart,
   onDragEnd,
@@ -31,7 +29,7 @@ export function VaultDragHandle({
           : "cursor-grab hover:bg-surface-container-highest hover:text-on-surface active:cursor-grabbing",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-background",
       ].join(" ")}
-      onDragStart={disabled ? undefined : onDragStart(vaultId)}
+      onDragStart={disabled ? undefined : onDragStart}
       onDragEnd={onDragEnd}
       onClick={(event) => event.stopPropagation()}
       onMouseDown={(event) => event.stopPropagation()}

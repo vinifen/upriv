@@ -48,6 +48,16 @@ describe("resolveVaultDisplayStatus", () => {
         vaultRowFixture({ storageMode: "store_only", session: null, persistence: "sealed" }),
       ),
     ).toBe("sealed");
+    expect(
+      resolveVaultDisplayStatus(
+        vaultRowFixture({ storageMode: "upriv_only", session: null, persistence: "closed" }),
+      ),
+    ).toBe("closed");
+    expect(
+      resolveVaultDisplayStatus(
+        vaultRowFixture({ storageMode: "upriv_plain", session: null, persistence: "closed" }),
+      ),
+    ).toBe("closed");
   });
 });
 
@@ -74,6 +84,24 @@ describe("resolveVaultCanSeal", () => {
     expect(
       resolveVaultCanSeal(
         vaultRowFixture({ storageMode: "plain_only", session: "open", canSeal: true }),
+      ),
+    ).toBe(false);
+  });
+
+  it("never allows seal split for close-only storage", () => {
+    expect(
+      resolveVaultCanSeal(
+        vaultRowFixture({ storageMode: "upriv_only", session: "open", persistence: "closed" }),
+      ),
+    ).toBe(false);
+    expect(
+      resolveVaultCanSeal(
+        vaultRowFixture({ storageMode: "upriv_plain", session: "open", persistence: "closed" }),
+      ),
+    ).toBe(false);
+    expect(
+      resolveVaultCanSeal(
+        vaultRowFixture({ storageMode: "upriv_only", session: null, persistence: "closed" }),
       ),
     ).toBe(false);
   });

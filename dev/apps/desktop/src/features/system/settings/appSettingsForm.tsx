@@ -14,14 +14,18 @@ import {
   LOG_KEEP_LAST_UNLIMITED,
   LOG_LEVEL_PRESETS,
   SUPPORTED_LOCALES,
+  VAULT_DISPLAY_NAME_MAX_LENGTH,
   logFileCountForKeepLast,
   type AppSettingsConfig,
   type UiTheme,
+  type VaultGroup,
   type VaultListItem,
   resolveVaultDisplayStatus,
+  storageModeHasPortableArchive,
 } from "@upriv/shared";
 import { useVaultService } from "@/platform/services";
 import { vaultStatusI18nKey } from "@/theme/vault-status";
+import { GroupedVaultPicker } from "@/features/vaults/list/modals/GroupedVaultPicker";
 import {
   downloadVaultsZip,
   listVaultsBlockingBulkExport,
@@ -97,6 +101,98 @@ export function AppSettingsAppearanceSection({ config, onChange }: SectionPatchP
           ))}
         </div>
       </SettingsField>
+    </SettingsFormGrid>
+  );
+}
+
+interface AppSettingsGroupsSectionProps {
+  config: AppSettingsConfig["ui"];
+  onChange: (patch: Partial<AppSettingsConfig["ui"]>) => void;
+  vaults: VaultListItem[];
+  groups: VaultGroup[];
+  includeHidden?: boolean;
+  newGroupName: string;
+  groupedVaultIds: string[];
+  nameError: string | null;
+  onNewGroupNameChange: (name: string) => void;
+  onToggleGroupedVault: (vaultId: string) => void;
+}
+
+export function AppSettingsGroupsSection({
+  config,
+  onChange,
+  vaults,
+  groups,
+  includeHidden = false,
+  newGroupName,
+  groupedVaultIds,
+  nameError,
+  onNewGroupNameChange,
+  onToggleGroupedVault,
+}: AppSettingsGroupsSectionProps) {
+  const { t } = useTranslation();
+  const allowDragIntoGroupId = useId();
+  const nameId = useId();
+
+  return (
+    <SettingsFormGrid>
+      <p className="text-xs leading-relaxed text-on-surface-variant">
+        {t("modal.app_settings.section.groups_intro")}
+      </p>
+
+      <label
+        htmlFor={allowDragIntoGroupId}
+        className="flex cursor-pointer select-none items-center gap-3"
+      >
+        <Switch
+          id={allowDragIntoGroupId}
+          checked={config.allow_drag_vault_into_group}
+          onChange={(allow_drag_vault_into_group) => onChange({ allow_drag_vault_into_group })}
+          label={t("modal.app_settings.field.allow_drag_vault_into_group")}
+          className="shrink-0"
+        />
+        <span className="min-w-0 flex-1">
+          <span className="block text-sm text-on-surface">
+            {t("modal.app_settings.field.allow_drag_vault_into_group")}
+          </span>
+          <span className="mt-1.5 block text-xs leading-relaxed text-on-surface-variant">
+            {t("modal.app_settings.field.allow_drag_vault_into_group_help")}
+          </span>
+        </span>
+      </label>
+
+      <SettingsField
+        label={t("modal.app_settings.field.new_group_name")}
+        htmlFor={nameId}
+        hint={t("modal.app_settings.field.new_group_name_help")}
+      >
+        <input
+          id={nameId}
+          type="text"
+          value={newGroupName}
+          maxLength={VAULT_DISPLAY_NAME_MAX_LENGTH}
+          onChange={(event) => onNewGroupNameChange(event.target.value)}
+          className={settingsControlClass}
+          placeholder={t("vault.group.create.name_label")}
+        />
+      </SettingsField>
+      {nameError ? <p className="text-sm text-on-error-container">{nameError}</p> : null}
+
+      <div className="space-y-2">
+        <p className="font-mono text-xs uppercase tracking-wide text-on-surface-variant">
+          {t("vault.group.create.grouped_vaults")}
+        </p>
+        <p className="text-xs leading-relaxed text-on-surface-variant">
+          {t("vault.group.create.grouped_vaults_help")}
+        </p>
+        <GroupedVaultPicker
+          vaults={vaults}
+          groups={groups}
+          includeHidden={includeHidden}
+          selectedIds={groupedVaultIds}
+          onToggle={onToggleGroupedVault}
+        />
+      </div>
     </SettingsFormGrid>
   );
 }
@@ -185,9 +281,11 @@ export function AppSettingsDownloadVaultsSection({
 
   const sortedVaults = useMemo(
     () =>
-      [...vaults].sort((a, b) =>
-        a.displayName.localeCompare(b.displayName, undefined, { sensitivity: "base" }),
-      ),
+      [...vaults]
+        .filter((vault) => storageModeHasPortableArchive(vault.storageMode))
+        .sort((a, b) =>
+          a.displayName.localeCompare(b.displayName, undefined, { sensitivity: "base" }),
+        ),
     [vaults],
   );
   const blockingVaults = useMemo(() => listVaultsBlockingBulkExport(vaults), [vaults]);

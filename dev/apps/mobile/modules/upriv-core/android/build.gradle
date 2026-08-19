@@ -1,0 +1,48 @@
+apply plugin: 'com.android.library'
+apply plugin: 'kotlin-android'
+
+group = 'expo.modules.uprivcore'
+version = '0.1.0'
+
+android {
+  namespace "expo.modules.uprivcore"
+  compileSdkVersion safeExtGet("compileSdkVersion", 35)
+
+  defaultConfig {
+    minSdkVersion safeExtGet("minSdkVersion", 24)
+    targetSdkVersion safeExtGet("targetSdkVersion", 34)
+    versionCode 1
+    versionName "0.1.0"
+  }
+
+  lintOptions {
+    abortOnError false
+  }
+
+  sourceSets {
+    main {
+      jniLibs.srcDirs = ['src/main/jniLibs']
+    }
+  }
+}
+
+repositories {
+  mavenCentral()
+}
+
+dependencies {
+  implementation project(':expo-modules-core')
+  implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk7:${getKotlinVersion()}"
+  // UniFFI Kotlin bindings load libupriv_ffi.so via JNA.
+  implementation "net.java.dev.jna:jna:5.14.0@aar"
+  // SAF DocumentFile helpers for content:// vault-root trees.
+  implementation "androidx.documentfile:documentfile:1.0.1"
+}
+
+def safeExtGet(prop, fallback) {
+  rootProject.ext.has(prop) ? rootProject.ext.get(prop) : fallback
+}
+
+def getKotlinVersion() {
+  rootProject.ext.has("kotlinVersion") ? rootProject.ext.get("kotlinVersion") : "1.9.25"
+}

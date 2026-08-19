@@ -20,5 +20,28 @@ describe("buildCreateVaultResult", () => {
     expect(result.settings.close.default_action).toBe("seal");
     expect(result.settings.security.mode).toBe("session_ram");
     expect(result.settings.vault.order).toBe(3);
+    expect(result.groupAssignment).toEqual({ kind: "none" });
+  });
+
+  it("carries deferred existing-group assignment", () => {
+    const result = buildCreateVaultResult(
+      createVaultDraftFixture([], {
+        groupMode: "existing",
+        groupId: "work",
+      }),
+      [],
+    );
+    expect(result.groupAssignment).toEqual({ kind: "existing", groupId: "work" });
+  });
+
+  it("carries deferred create-group assignment", () => {
+    const result = buildCreateVaultResult(
+      createVaultDraftFixture([], {
+        groupMode: "create",
+        groupName: "  Travel  ",
+      }),
+      [],
+    );
+    expect(result.groupAssignment).toEqual({ kind: "create", displayName: "Travel" });
   });
 });

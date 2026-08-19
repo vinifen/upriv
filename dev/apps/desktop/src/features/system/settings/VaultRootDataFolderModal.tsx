@@ -1,16 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Modal } from "@/components/ui";
 import { useTranslation } from "@/i18n";
-import type { VaultRootMode } from "@upriv/shared";
+import {
+  isVaultRootDraftDirty,
+  VAULT_ROOT_GATE_IDLE,
+  type VaultRootMode,
+  type VaultRootSettingsGate,
+} from "@upriv/shared";
 import { useVaultRootService } from "@/platform/services";
 import { useAppSettingsContext } from "./AppSettingsContext";
 import { VaultRootLocationSection } from "./VaultRootLocationSection";
 import { VaultRootConfirmFooter } from "./VaultRootConfirmFooter";
-import {
-  isVaultRootDraftDirty,
-  VAULT_ROOT_GATE_IDLE,
-  type VaultRootSettingsGate,
-} from "./vaultRootSettingsIntent";
 import { desktopErrorI18nKey } from "@/lib/errorMessages";
 
 const APPLIED_INDICATOR_MS = 900;

@@ -7,11 +7,14 @@ import { LogsModal } from "@/features/system/logs";
 import { VaultLifecycleLayer } from "@/features/vaults/lifecycle";
 import { VaultSettingsModal } from "@/features/vaults/settings";
 import { AppShell } from "@/components/layout";
-import { Toast } from "@/components/ui";
+import { Button, Toast } from "@/components/ui";
 import { useTranslation } from "@/i18n";
 import { VaultListHeader } from "./header/VaultListHeader";
 import { VaultListSectionHeader } from "./header/VaultListSectionHeader";
+import { VaultGroupAssignmentModal } from "./modals/VaultGroupAssignmentModal";
+import { VaultGroupSettingsModal } from "./modals/VaultGroupSettingsModal";
 import { VaultNoteModal } from "./modals/VaultNoteModal";
+import { VaultGroupsInvalidBanner } from "./VaultGroupsInvalidBanner";
 import { VaultList } from "./row/VaultList";
 import { useVaultListScreen } from "./hooks/useVaultListScreen";
 
@@ -38,6 +41,8 @@ export function VaultListPage() {
     note,
     backups,
     settings,
+    groupAssignment,
+    groupSettings,
     appSettings,
     dataFolder,
     logs,
@@ -55,6 +60,29 @@ export function VaultListPage() {
         onDragLeave={archiveDrop.onDragLeave}
         onDrop={archiveDrop.onDrop}
       >
+        {list.groupsSanitizeNotice ? (
+          <div
+            className="mb-4 flex flex-col gap-3 rounded-xl border border-outline-variant/50 bg-surface-container px-4 py-3 sm:flex-row sm:items-center sm:justify-between"
+            role="status"
+          >
+            <p className="text-sm text-on-surface-variant">
+              {t("vault.group.sanitize_notice", {
+                orphans: String(list.groupsSanitizeNotice.orphans),
+                duplicates: String(list.groupsSanitizeNotice.duplicates),
+              })}
+            </p>
+            <Button variant="ghost" size="sm" onClick={list.onDismissGroupsSanitizeNotice}>
+              {t("vault.group.dismiss")}
+            </Button>
+          </div>
+        ) : null}
+        <VaultGroupsInvalidBanner
+          visible={list.groupsInvalid}
+          busy={list.groupsRepairBusy}
+          budget={list.groupsRepairBudget}
+          onRepair={list.onRepairGroups}
+          onDismiss={list.onDismissGroupsInvalid}
+        />
         <VaultListSectionHeader
           sort={list.sort}
           onSortChange={list.onSortChange}
@@ -62,12 +90,13 @@ export function VaultListPage() {
           onViewModeChange={list.onViewModeChange}
         />
         <VaultList
-          vaults={list.displayVaults}
+          rows={list.displayRows}
           pipelineListStatus={list.pipelineListStatus}
           isVaultPipelineBusy={list.isVaultPipelineBusy}
           allVaultsHidden={list.allVaultsHidden}
           viewMode={list.viewMode}
           canReorder={list.canReorder}
+          allowDragVaultIntoGroup={list.allowDragVaultIntoGroup}
           draggingId={list.draggingId}
           dragOverId={list.dragOverId}
           onCreateFromScratch={list.onCreateFromScratch}
@@ -75,17 +104,25 @@ export function VaultListPage() {
           onOpenBackups={list.onOpenBackups}
           onOpenNote={list.onOpenNote}
           onOpenSettings={list.onOpenSettings}
+          onOpenGroupAssignment={list.onOpenGroupAssignment}
+          onOpenGroupSettings={list.onOpenGroupSettings}
+          onToggleGroupCollapsed={list.onToggleGroupCollapsed}
           onExportVault={list.onExportVault}
           onOpenFolder={list.onOpenFolder}
           onOpenFileManager={screen.openFromVault}
           onLockVault={list.onLockVault}
           onUnlockVault={list.onUnlockVault}
           onSealVault={list.onSealVault}
-          onDragStart={list.onDragStart}
+          onRootDragStart={list.onRootDragStart}
+          onRootDragOver={list.onRootDragOver}
+          onRootDrop={list.onRootDrop}
+          onUngroupDragOver={list.onUngroupDragOver}
+          onUngroupDrop={list.onUngroupDrop}
+          onMemberDragStart={list.onMemberDragStart}
+          onMemberDragOver={list.onMemberDragOver}
+          onMemberDrop={list.onMemberDrop}
           onDragEnd={list.onDragEnd}
-          onDragOver={list.onDragOver}
           onDragLeave={list.onDragLeave}
-          onDrop={list.onDrop}
         />
         {archiveDrop.isArchiveDropActive ? (
           <div
@@ -118,11 +155,33 @@ export function VaultListPage() {
         onClose={settings.onClose}
         onVaultSettingsSaved={settings.onVaultSettingsSaved}
         onVaultDelete={settings.onVaultDelete}
+        groups={settings.groups}
+        onCommitGroupAssignment={settings.onCommitGroupAssignment}
+      />
+      <VaultGroupAssignmentModal
+        vault={groupAssignment.vault}
+        groups={groupAssignment.groups}
+        open={groupAssignment.open}
+        onClose={groupAssignment.onClose}
+        onAssign={groupAssignment.onAssign}
+      />
+      <VaultGroupSettingsModal
+        group={groupSettings.group}
+        vaults={groupSettings.vaults}
+        groups={groupSettings.groups}
+        includeHidden={groupSettings.includeHidden}
+        open={groupSettings.open}
+        onClose={groupSettings.onClose}
+        onSave={groupSettings.onSave}
+        onDelete={groupSettings.onDelete}
       />
       <FileManagerLayer />
       <AppSettingsModal
         open={appSettings.open}
         vaults={appSettings.vaults}
+        groups={appSettings.groups}
+        includeHidden={appSettings.includeHidden}
+        onCreateGroup={appSettings.onCreateGroup}
         onClose={appSettings.onClose}
         onDirtyChange={appSettings.onDirtyChange}
       />
@@ -137,6 +196,7 @@ export function VaultListPage() {
         open={createVault.open}
         existingVaultIds={createVault.existingVaultIds}
         existingOrders={createVault.existingOrders}
+        groups={createVault.groups}
         initialDraft={createVault.initialDraft}
         initialStep={createVault.initialStep}
         onClose={createVault.onClose}

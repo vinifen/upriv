@@ -1,6 +1,8 @@
 import type { StorageMode } from "../vault/types";
 import {
-  storageModeHasClosedCache,
+  storageModeCanSeal,
+  storageModeCloseOnly,
+  storageModeHasPortableArchive,
   storageModeSealOnly,
 } from "../vault/types";
 
@@ -16,6 +18,14 @@ export const VAULT_SETTINGS_SECTIONS = [
 ] as const;
 
 export type VaultSettingsSectionId = (typeof VAULT_SETTINGS_SECTIONS)[number];
+
+/** Hide `.7z` sections when the storage mode has no portable archive. */
+export function vaultSettingsSectionsForStorage(
+  mode: StorageMode,
+): readonly VaultSettingsSectionId[] {
+  if (storageModeHasPortableArchive(mode)) return VAULT_SETTINGS_SECTIONS;
+  return VAULT_SETTINGS_SECTIONS.filter((id) => id !== "seven_zip" && id !== "backup");
+}
 
 export type CloseDefaultAction = "close" | "seal";
 export type BackupMode = "keep_last" | "keep_all";
@@ -137,24 +147,33 @@ export function sevenZipPatchFromCompressionPreset(
   }
 }
 
-/** Seal-only modes have no `closed` state — lock always seals. */
+/** Seal-only modes always seal; Upriv-only always closes (no `.7z`). */
 export function normalizeClosePolicyForStorage(config: VaultSettingsConfig): VaultSettingsConfig {
+  if (storageModeCloseOnly(config.storage.mode)) {
+    if (config.close.default_action === "close") return config;
+    return { ...config, close: { default_action: "close" } };
+  }
   if (!storageModeSealOnly(config.storage.mode) || config.close.default_action === "seal") {
     return config;
   }
   return { ...config, close: { default_action: "seal" } };
 }
 
-/** Normalize close policy, security mode, and seven_zip fields for the active storage mode. */
+/** Normalize close policy, security mode, seven_zip, and backup for the active storage mode. */
 export function normalizeVaultSettingsConfig(config: VaultSettingsConfig): VaultSettingsConfig {
   const withClose = normalizeClosePolicyForStorage(config);
+  const withBackup = storageModeHasPortableArchive(withClose.storage.mode)
+    ? withClose
+    : withClose.backup.enabled
+      ? { ...withClose, backup: { ...withClose.backup, enabled: false } }
+      : withClose;
   return {
-    ...withClose,
+    ...withBackup,
     security: {
-      ...withClose.security,
-      mode: normalizeSecurityModeForStorage(withClose.storage.mode, withClose.security.mode),
+      ...withBackup.security,
+      mode: normalizeSecurityModeForStorage(withBackup.storage.mode, withBackup.security.mode),
     },
-    seven_zip: normalizeSevenZipSection(withClose.seven_zip),
+    seven_zip: normalizeSevenZipSection(withBackup.seven_zip),
   };
 }
 
@@ -167,17 +186,24 @@ export function transitionStorageModeClose(
   if (toMode === fromMode) {
     return {
       close: fromClose,
-      encryptedClosePreference: storageModeHasClosedCache(fromMode)
+      encryptedClosePreference: storageModeCanSeal(fromMode)
         ? fromClose
         : encryptedClosePreference,
     };
   }
 
   if (storageModeSealOnly(toMode)) {
-    const savedPreference = storageModeHasClosedCache(fromMode)
+    const savedPreference = storageModeCanSeal(fromMode)
       ? fromClose
       : encryptedClosePreference;
     return { close: "seal", encryptedClosePreference: savedPreference };
+  }
+
+  if (storageModeCloseOnly(toMode)) {
+    const savedPreference = storageModeCanSeal(fromMode)
+      ? fromClose
+      : encryptedClosePreference;
+    return { close: "close", encryptedClosePreference: savedPreference };
   }
 
   return { close: encryptedClosePreference, encryptedClosePreference };
@@ -207,7 +233,7 @@ export function patchStorageMode(
   };
 
   return {
-    config: normalizeClosePolicyForStorage(next),
+    config: normalizeVaultSettingsConfig(next),
     encryptedClosePreference: nextPreference,
   };
 }
@@ -217,11 +243,14 @@ export function patchCloseDefaultAction(
   defaultAction: CloseDefaultAction,
   encryptedClosePreference: CloseDefaultAction,
 ): { config: VaultSettingsConfig; encryptedClosePreference: CloseDefaultAction } {
-  const nextAction =
-    storageModeSealOnly(config.storage.mode) && defaultAction === "close" ? "seal" : defaultAction;
+  const nextAction = storageModeCloseOnly(config.storage.mode)
+    ? "close"
+    : storageModeSealOnly(config.storage.mode) && defaultAction === "close"
+      ? "seal"
+      : defaultAction;
   return {
     config: { ...config, close: { default_action: nextAction } },
-    encryptedClosePreference: storageModeHasClosedCache(config.storage.mode)
+    encryptedClosePreference: storageModeCanSeal(config.storage.mode)
       ? nextAction
       : encryptedClosePreference,
   };
@@ -290,5 +319,5 @@ export interface VaultSettingsListPatch {
 }
 
 export function vaultCanSealFromStorage(storageMode: StorageMode): boolean {
-  return storageModeHasClosedCache(storageMode);
+  return storageModeCanSeal(storageMode);
 }

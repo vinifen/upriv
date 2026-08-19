@@ -11,6 +11,7 @@ import {
   type CreateVaultResult,
   type CreateVaultStepId,
   type CreateVaultStepStatus,
+  type VaultGroup,
 } from "@upriv/shared";
 import { Button, Modal } from "@/components/ui";
 import { useTranslation } from "@/i18n";
@@ -22,6 +23,8 @@ interface CreateVaultWizardModalProps {
   open: boolean;
   existingVaultIds: readonly string[];
   existingOrders: readonly number[];
+  /** Groups available for deferred membership on the General step. */
+  groups?: readonly VaultGroup[];
   /** Pre-filled draft (e.g. import from a backup row or OS `.7z` drop). */
   initialDraft?: CreateVaultDraft | null;
   /**
@@ -37,6 +40,7 @@ export function CreateVaultWizardModal({
   open,
   existingVaultIds,
   existingOrders,
+  groups = [],
   initialDraft = null,
   initialStep = null,
   onClose,
@@ -83,6 +87,8 @@ export function CreateVaultWizardModal({
     setDraft((current) => ({ ...current, ...patch }));
   }, []);
 
+  const knownGroupIds = useMemo(() => groups.map((group) => group.id), [groups]);
+
   const stepStatuses = useMemo(() => {
     const statuses = {} as Record<CreateVaultStepId, CreateVaultStepStatus>;
     for (const stepId of CREATE_VAULT_STEPS) {
@@ -92,16 +98,22 @@ export function CreateVaultWizardModal({
         existingVaultIds,
         visitedSteps,
         submitAttempted,
+        knownGroupIds,
       );
     }
     return statuses;
-  }, [draft, existingVaultIds, visitedSteps, submitAttempted]);
+  }, [draft, existingVaultIds, knownGroupIds, visitedSteps, submitAttempted]);
 
   const currentStepIndex = CREATE_VAULT_STEPS.indexOf(currentStep);
   const isFirstStep = currentStepIndex === 0;
   const isLastStep = currentStepIndex === CREATE_VAULT_STEPS.length - 1;
-  const currentErrors = validateCreateVaultStep(currentStep, draft, existingVaultIds);
-  const canCreate = canSubmitCreateVault(draft, existingVaultIds);
+  const currentErrors = validateCreateVaultStep(
+    currentStep,
+    draft,
+    existingVaultIds,
+    knownGroupIds,
+  );
+  const canCreate = canSubmitCreateVault(draft, existingVaultIds, knownGroupIds);
 
   const goToStep = (stepId: CreateVaultStepId) => {
     setDiscardConfirmOpen(false);
@@ -135,7 +147,7 @@ export function CreateVaultWizardModal({
   const handleCreate = () => {
     setSubmitAttempted(true);
     setVisitedSteps(new Set(CREATE_VAULT_STEPS));
-    if (!canSubmitCreateVault(draft, existingVaultIds)) return;
+    if (!canSubmitCreateVault(draft, existingVaultIds, knownGroupIds)) return;
     onCreate(buildCreateVaultResult(draft, existingVaultIds));
     handleClose();
   };
@@ -217,27 +229,31 @@ export function CreateVaultWizardModal({
       title={t("vault.create.title")}
       onClose={requestClose}
       panelClassName="max-w-3xl"
+      bodyScroll={false}
       footer={footer}
     >
-      <div
-        className="max-h-[min(52vh,30rem)] overflow-y-auto p-1 [scrollbar-gutter:stable] sm:max-h-[min(58vh,34rem)]"
-        onPointerDown={() => {
-          if (discardConfirmOpen) dismissFooterConfirm();
-        }}
-      >
-        {renderCreateVaultStep(currentStep, {
-          draft,
-          errors: submitAttempted || visitedSteps.has(currentStep) ? currentErrors : [],
-          onChange: patchDraft,
-          onTestImportPassword: handleTestImportPassword,
-          testingPassword,
-        })}
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <div
+          className="min-h-0 flex-1 overflow-y-auto p-1 [scrollbar-gutter:stable]"
+          onPointerDown={() => {
+            if (discardConfirmOpen) dismissFooterConfirm();
+          }}
+        >
+          {renderCreateVaultStep(currentStep, {
+            draft,
+            errors: submitAttempted || visitedSteps.has(currentStep) ? currentErrors : [],
+            onChange: patchDraft,
+            groups,
+            onTestImportPassword: handleTestImportPassword,
+            testingPassword,
+          })}
+        </div>
+        <CreateVaultStepNav
+          currentStep={currentStep}
+          stepStatuses={stepStatuses}
+          onSelectStep={goToStep}
+        />
       </div>
-      <CreateVaultStepNav
-        currentStep={currentStep}
-        stepStatuses={stepStatuses}
-        onSelectStep={goToStep}
-      />
     </Modal>
   );
 }

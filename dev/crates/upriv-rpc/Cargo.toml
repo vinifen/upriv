@@ -1,0 +1,15 @@
+[package]
+name = "upriv-rpc"
+version.workspace = true
+description = "Shared JSON-RPC method handlers for upriv-daemon and upriv-ffi (mobile)"
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+serde = { version = "=1.0.228", features = ["derive"] }
+serde_json = "=1.0.150"
+upriv-core = { path = "../upriv-core" }
+
+[dev-dependencies]
+tempfile = "3"

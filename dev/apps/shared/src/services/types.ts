@@ -5,11 +5,13 @@ import type { VaultFileSystemService } from "./filesystem/VaultFileSystemService
 import type { VaultLifecycleService } from "./lifecycle/VaultLifecycleService";
 import type { LogService } from "./logs/LogService";
 import type { VaultService } from "./vault/VaultService";
+import type { VaultGroupService } from "./vault-groups/VaultGroupService";
 import type { VaultRootService } from "./vault-root/VaultRootService";
 
 /** Application service layer — platform selects mock vs native implementations. */
 export interface AppServices {
   vault: VaultService;
+  vaultGroups: VaultGroupService;
   /**
    * Vault-root discovery/setup. Mutating calls belong in settings / gate flows
    * (see `VaultRootService` JSDoc).

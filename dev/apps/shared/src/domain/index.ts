@@ -10,6 +10,7 @@ export * from "./loading";
 export * from "./logs";
 export * from "./vault";
 export * from "./vault-create";
+export * from "./vault-groups";
 export * from "./vault-lifecycle";
 export * from "./vault-list";
 export * from "./vault-root";

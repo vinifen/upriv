@@ -31,11 +31,12 @@ What each command runs:
     • Shared:   tsc --noEmit (via desktop toolchain)
     • Desktop:  tsc, eslint, prettier --check
     • Electron: tsc
-    • Mobile:   tsc
+    • Mobile:   tsc, eslint, prettier --check
 
   lint-fix
     • Rust:     rustfmt, clippy --fix
     • Desktop:  eslint --fix, prettier --write
+    • Mobile:   eslint --fix, prettier --write
     • TypeScript: tsc --noEmit (shared, desktop, electron, mobile)
 
   test
@@ -125,6 +126,13 @@ lint_steps() {
   fi
   step "Electron (tsc)" run_tsc electron
   step "Mobile (tsc)" run_tsc mobile
+  if require_node_modules mobile; then
+    step "Mobile (eslint)" npm run lint --prefix apps/mobile
+    step "Mobile (prettier)" npm run format:check --prefix apps/mobile
+  else
+    step "Mobile (eslint)" false
+    step "Mobile (prettier)" false
+  fi
 }
 
 lint_fix_steps() {
@@ -135,6 +143,13 @@ lint_fix_steps() {
   else
     step "Desktop (prettier --write)" false
     step "Desktop (eslint --fix)" false
+  fi
+  if require_node_modules mobile; then
+    step "Mobile (prettier --write)" npm run format --prefix apps/mobile
+    step "Mobile (eslint --fix)" npm run lint:fix --prefix apps/mobile
+  else
+    step "Mobile (prettier --write)" false
+    step "Mobile (eslint --fix)" false
   fi
   step "Shared (tsc)" run_tsc shared
   step "Desktop (tsc)" run_tsc desktop

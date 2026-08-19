@@ -26,7 +26,7 @@ See PRD §11.1.
 
 0. **v1 Linux + Windows** — first delivery: desktop app on Linux and Windows (Electron + `upriv-daemon` + `upriv-core`; FUSE on Linux, WinFsp on Windows). Design the virtual-mount layer as a shared trait from day one. Vault layout and `.7z` remain portable; macOS/mobile later (PRD §3.5).
 1. **Vault = folder + contract** — independent of where the executable is installed.
-2. **Five storage modes** — `encrypted_dir` (default), `store_only`, `ram_only`, `plain`, `plain_only` — UI + domain in v1; core paths refined iteratively. Closed-cache: `encrypted_dir` \| `store_only`. Seal-only: `plain` \| `plain_only` \| `ram_only`. While open: `plain` keeps workspace + `.7z`; `plain_only` keeps workspace only.
+2. **Seven storage modes** — `encrypted_dir` (default), `store_only`, `upriv_only`, `upriv_plain`, `ram_only`, `plain`, `plain_only` — UI + domain in v1; core paths refined iteratively. Closed-cache: `encrypted_dir` \| `store_only` \| `upriv_only` \| `upriv_plain`. Seal: `encrypted_dir` \| `store_only` only. Close-only (no `.7z`): `upriv_only` \| `upriv_plain`. Seal-only: `plain` \| `plain_only` \| `ram_only`. While open: `plain` keeps workspace + `.7z`; `plain_only` / `upriv_plain` keep workspace only (`upriv_plain` persists to store on close).
 3. **Core in Rust** — single `upriv-core` crate for all platforms; shared logic between desktop and mobile (FFI). UI layers (React web, React Native) are **presentation only** — no crypto, disk I/O, or session secrets in JS/TS. See `ARCHITECTURE.md` §2.
 4. **Declarative config** — `.upriv/settings.toml` + per-vault `vaults/<id>/config.toml`; safe defaults if missing.
 5. **Mutable config** — vault options **changeable at any time**; TOML is source of truth; app re-reads before open/close (not “create and lock”).
@@ -34,7 +34,7 @@ See PRD §11.1.
 7. **Password default in RAM (v1)** — default `session_ram`; optional `disk_*` modes write **encrypted** `session.enc` (never plaintext password); after reboot without `session.enc`, remount with password.
 8. **Close = update `.7z`** — logical session content → `7zz` by stream; never pack `.enc` blobs from the store.
 9. **Manifest** — `sync_generation` + hashes align `.7z` and store; recovery without silent overwrite.
-10. **Unified states** — `open` | `closed` | `sealed`; `sealed` = only `.7z` in **both** modes.
+10. **Unified states** — `open` | `closed` | `sealed`; `sealed` = only `.7z` when a portable archive exists. Close-only (`upriv_only`, `upriv_plain`) rest as `closed` (store, no `.7z`).
 11. **Virtual mount** — `workspace/` is not a data folder; I/O goes to encrypted `stores/<id>/`.
 12. **Lockfile** — one open per vault at a time.
 13. **Crypto standard** — Argon2id + AEAD; portability via 7z.
@@ -53,7 +53,7 @@ See PRD §11.1.
 └─────────────────────────────┬───────────────────────────────┘
                               │ spawn / pipe
 ┌─────────────────────────────▼───────────────────────────────┐
-│  storage modes + 7zz (encrypted_dir / store_only / ram_only / plain) │
+│  storage modes + 7zz (encrypted_dir / store_only / upriv_only / upriv_plain / ram_only / plain) │
 └─────────────────────────────────────────────────────────────┘
                               │
 ┌─────────────────────────────▼───────────────────────────────┐
@@ -67,18 +67,23 @@ See PRD §11.1.
 
 ### 2.0 Persisted states (unified — PRD §1.7)
 
-**Central rule:** when **only `vaults/<id>.7z` exists**, all storage modes share the **same** state: **`sealed`**.
+**Central rule:** when **only `vaults/<id>.7z` exists**, modes with a portable archive share the **same** state: **`sealed`**. **Close-only modes never write a `.7z`** — resting state is **`closed`** (encrypted store only).
 
 | `persistence` | UI (i18n) | Disk | Modes |
 |---------------|-----------|------|-------|
-| `open` | `vault.status.open` | `.7z` + active work | all |
-| `closed` | `vault.status.closed` | `.7z` + encrypted `stores/<id>/` | `encrypted_dir`, `store_only` |
-| `sealed` | `vault.status.sealed` | **only** `.7z` | all (`seal`, or seal-only lock) |
+| `open` | `vault.status.open` | `.7z` + active work | all (`upriv_only`: store + mount; `upriv_plain`: plaintext workspace + store) |
+| `closed` | `vault.status.closed` | encrypted `stores/<id>/` (+ `.7z` except close-only) | `encrypted_dir`, `store_only`, `upriv_only`, `upriv_plain` |
+| `sealed` | `vault.status.sealed` | **only** `.7z` | all with a portable archive (`seal`, or seal-only lock) |
 
 ```text
 encrypted_dir / store_only:
   sealed ──open──► open ──close()──► closed ──seal()──► sealed
      ▲                 └────────seal()───────────────┘
+
+upriv_only / upriv_plain:
+  closed ──open──► open ──close()──► closed
+  # never writes .7z; seal is not available
+  # upriv_plain open: plaintext workspace (wipe on close)
 
 plain / plain_only / ram_only:
   sealed ──open──► open ──seal()──► sealed
@@ -89,7 +94,7 @@ plain / plain_only / ram_only:
 
 | Action | `storage.mode` | Resulting `persistence` |
 |--------|----------------|-------------------------|
-| `close` | `encrypted_dir`, `store_only` | `closed` |
+| `close` | `encrypted_dir`, `store_only`, `upriv_only`, `upriv_plain` | `closed` |
 | `seal` | `encrypted_dir`, `store_only` | `sealed` |
 | `seal` | `plain`, `plain_only`, `ram_only` | `sealed` (wipe workspace or RAM session) |
 
@@ -238,10 +243,10 @@ Config in `config/<id>.toml` (default action in UI):
 default_action = "close"   # "close" | "seal"  — "close" only in closed-cache modes
 ```
 
-| Action | Closed-cache (`encrypted_dir` / `store_only`) | Seal-only (`plain` / `plain_only` / `ram_only`) |
-|--------|----------------------------------------------|----------------------------------|
-| `close` | `closed` | *not available* (destination = `sealed`) |
-| `seal` | `sealed` | `sealed` |
+| Action | Closed-cache (`encrypted_dir` / `store_only`) | Close-only (`upriv_only` / `upriv_plain`) | Seal-only (`plain` / `plain_only` / `ram_only`) |
+|--------|----------------------------------------------|-------------------------------------------|----------------------------------|
+| `close` | `closed` | `closed` (store only; no `.7z`; `upriv_plain` wipes workspace) | *not available* (destination = `sealed`) |
+| `seal` | `sealed` | *not available* | `sealed` |
 
 **Close dialog (closed-cache modes, RF-53c):**
 
@@ -250,7 +255,7 @@ default_action = "close"   # "close" | "seal"  — "close" only in closed-cache 
 | **`action.close`** | `close` | `closed` | `close.dialog.close_hint` |
 | **`action.seal`** | `seal` | `sealed` | `close.dialog.seal_hint` |
 
-`seal` requires extra confirmation (`close.dialog.seal_confirm`). In seal-only modes, single **`action.seal`** / lock → `sealed` (same UI label `vault.status.sealed`).
+`seal` requires extra confirmation (`close.dialog.seal_confirm`). In seal-only modes, single **`action.seal`** / lock → `sealed` (same UI label `vault.status.sealed`). In close-only modes (`upriv_only`, `upriv_plain`), lock is always **`action.close`** — Seal is hidden.
 
 Related: PRD **RF-53**, **RF-53b**.
 
@@ -614,17 +619,19 @@ method = "lzma2"
 
 ```toml
 [storage]
-mode = "encrypted_dir"   # encrypted_dir | store_only | ram_only | plain | plain_only
-# store_only  — encrypted store primary; .7z on seal/export
-# ram_only    — .7z + RAM session; always seal
-# plain       — open: plaintext + .7z; lock always seals
-# plain_only  — open: plaintext only (no .7z); lock always seals
+mode = "encrypted_dir"   # encrypted_dir | store_only | upriv_only | upriv_plain | ram_only | plain | plain_only
+# store_only   — encrypted store primary; .7z on seal/export
+# upriv_only   — encrypted store only; no .7z, no seal (opens only in Upriv)
+# upriv_plain  — same closed store; plaintext workspace while open; lock closes + wipe
+# ram_only     — .7z + RAM session; always seal
+# plain        — open: plaintext + .7z; lock always seals
+# plain_only   — open: plaintext only (no .7z); lock always seals
 
 [close]
 default_action = "close"        # "close" | "seal" (close only if closed-cache mode)
 ```
 
-**RAM capacity (`encrypted_dir` / `ram_only`):** decrypted logical content is held in **RAM** while the vault is **open**. **`upriv-core`** must treat insufficient memory as a **hard failure** — open, edit, or close abort with a user-visible error; **never** silently spill plaintext workspace to disk in non-plaintext modes (RF-49). UI: **`warning.encrypted_dir_ram`**, **`warning.ram_only`**, **`warning.store_only`**, **`warning.plain_mode`**, **`warning.plain_only`**. When RAM cannot fit the vault, user should split vaults or choose **`store_only`** / **`plain`** / **`plain_only`**.
+**RAM capacity (`encrypted_dir` / `ram_only`):** decrypted logical content is held in **RAM** while the vault is **open**. **`upriv-core`** must treat insufficient memory as a **hard failure** — open, edit, or close abort with a user-visible error; **never** silently spill plaintext workspace to disk in non-plaintext modes (RF-49). UI: **`warning.encrypted_dir_ram`**, **`warning.ram_only`**, **`warning.store_only`**, **`warning.upriv_only`**, **`warning.upriv_plain`**, **`warning.plain_mode`**, **`warning.plain_only`**. When RAM cannot fit the vault, user should split vaults or choose **`store_only`** / **`upriv_plain`** / **`plain`** / **`plain_only`**.
 
 | Value | `7zz` (summary) | Use |
 |-------|-----------------|-----|
@@ -705,7 +712,7 @@ Settings modal edits `config.toml` but **does not mirror every key** — advance
 | TOML section | Shown in UI | Hidden in UI (defaults / system) |
 |--------------|-------------|----------------------------------|
 | `[vault]` | `display_name`, `order`, `note` | `id` (slug — derived/normalized on rename migration), `vault_file`, `store_dir`, `backups_dir` (layout internal; user may relocate **package root** later via onboarding, not per-vault paths) |
-| `[storage]` | `mode` (`encrypted_dir` / `store_only` / `ram_only` / `plain` / `plain_only`) + contextual warnings | — |
+| `[storage]` | `mode` (`encrypted_dir` / `store_only` / `upriv_only` / `upriv_plain` / `ram_only` / `plain` / `plain_only`) + contextual warnings | — |
 | `[close]` + `[auto_close]` + `[security].secure_wipe_workspace` | **Close** section: default lock action (hidden when seal-only), secure wipe, idle auto-close | — |
 | `[security]` | `password_hint` (UI under **Security**; file still `[vault]`), **`mode` (password in memory — 4 UI options for all storage modes)**, **change password** | `secure_wipe_workspace` (UI under **Close**), `wipe_passes`, `wipe_pattern`, `password_changed_at` (set by app) |
 
@@ -717,6 +724,8 @@ Settings modal edits `config.toml` but **does not mirror every key** — advance
 |----------------|-------------|------------|
 | `encrypted_dir` | `warning.encrypted_dir_ram` | Storage section (settings + create wizard); Help → Security |
 | `store_only` | `warning.store_only` | Storage section |
+| `upriv_only` | `warning.upriv_only` | Storage section; hide Seal, `[backup]`, `[seven_zip]`; badge **More secure** |
+| `upriv_plain` | `warning.upriv_plain` | Storage section; hide Seal, `[backup]`, `[seven_zip]`; badge **Insecure**; plaintext while open |
 | `ram_only` | `warning.ram_only` | Storage section; hide **Close → keep cache** (seal-only) |
 | `plain` | `warning.plain_mode` | Storage section; hide **Close → keep cache** (seal-only); open = plain + `.7z`; suited for **large vaults/files** |
 | `plain_only` | `warning.plain_mode` + `warning.plain_only` | Storage section; seal-only; open = plain only (no `.7z`); suited for **very large** content |
@@ -1297,7 +1306,7 @@ click(Backups|Config)      → stopPropagation; open respective modal
 
 1. **Rust:** spawn `7zz` com timeout configurável; códigos de erro estáveis; nunca deixar `.7z` / workspace em estado ambíguo.
 2. **Daemon:** handlers RPC de lifecycle; repassar progresso (evento ou polling) se overlay precisar de passos reais.
-3. **Shared:** `VAULT_ERROR_CODES` deixa de ser `planned`; sync com `rpc.rs`.
+3. **Shared:** `VAULT_ERROR_CODES` deixa de ser `planned`; sync com `upriv-rpc`.
 4. **Desktop:** `createDesktopServices()` delega `runOpeningPipeline` / `runClosingPipeline` ao RPC (substituir `runTimedPipeline` mock).
 5. **Testes:** integração stdio com pipeline que falha (senha errada, timeout simulado); UI não fica `opening`/`closing` eternamente.
 
@@ -1355,12 +1364,12 @@ ui/
 
 #### 8.2.6 Desktop RPC methods (UI)
 
-**Transport (v0.1+):** React calls `desktopInvoke(method, params)` → Electron main → **stdio NDJSON** → `upriv-daemon` → `upriv_core`. No HTTP, no Tauri `invoke`. Errors: `{ code, message, details? }`. Shell-only: `app_exit`. See `dev/apps/desktop/src/lib/commands.ts` and SDD §8.3.
+**Transport (v0.1+):** React calls `desktopInvoke(method, params)` → Electron main → **stdio NDJSON** → `upriv-daemon` → `upriv-rpc` → `upriv_core`. No HTTP, no Tauri `invoke`. Errors: `{ code, message, details? }`. Shell-only: `app_exit`. See `@upriv/shared` `CORE_RPC_COMMANDS` and SDD §8.3.
 
 In addition to §8.3:
 
 ```rust
-// upriv-daemon/src/rpc.rs — method names exposed to the UI
+// upriv-rpc — method names exposed to the UI (daemon + FFI)
 fn vault_list(vault_root: String) -> Result<Vec<VaultRowDto>, String>;
 fn vault_reorder(vault_root: String, ordered_ids: Vec<String>) -> Result<(), String>;
 // Accepts full list of vault ids in new display order; rewrites [vault] order on each config.toml (atomic).
@@ -1420,7 +1429,7 @@ Upriv.exe --create <path>
 | Core | `upriv-core` (same crate as desktop; compiled per target) |
 | 7z | `7zz` ARM64 embedded in APK/IPA (`jniLibs` / assets) |
 
-**Packaging:** one APK contains RN UI, bridge, `libupriv_core.so`, and `7zz` — not separate apps. **Rejected for mobile:** Tauri Android (experimental). **Superseded:** Flutter (see `ARCHITECTURE.md` ADR-02–04).
+**Packaging:** one APK contains RN UI, UniFFI bridge, `libupriv_ffi.so`, and `7zz` — not separate apps. **Rejected for mobile:** Tauri Android (experimental). **Superseded:** Flutter (see `ARCHITECTURE.md` ADR-02–04).
 
 **Shared with desktop:** `dev/apps/shared/` (`@upriv/shared` — types, services, locale catalogs) — not the same JSX/DOM as `dev/apps/desktop/src/`.
 
