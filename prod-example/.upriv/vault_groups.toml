@@ -1,0 +1,19 @@
+# Optional vault list organization (not a vault). See prod-example/README.md.
+
+[[group]]
+id = "demos"
+display_name = "Demos"
+order = 10
+collapsed = false
+grouped_vault_sort = "order"
+grouped_vault_sort_direction = "asc"
+grouped_vaults = ["plain-folder-demo", "store-only-demo", "ram-only-demo", "plain-only-demo"]
+
+[[group]]
+id = "archives"
+display_name = "Archives"
+order = 20
+collapsed = true
+grouped_vault_sort = "order"
+grouped_vault_sort_direction = "asc"
+grouped_vaults = ["cold-storage"]

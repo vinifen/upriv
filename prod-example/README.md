@@ -23,6 +23,7 @@ Same word **config**, different **folder** — no collision. Discovery: scan `va
 |------|----------|
 | **`.upriv/settings.toml`** | App marker, paths, UI, logging |
 | **`.upriv/state.json`** | Open sessions only (volatile; cleared on quit) |
+| **`.upriv/vault_groups.toml`** | Optional vault list groups (`[[group]]` id, display_name, order, collapsed, grouped_vaults[]) |
 | **`.upriv/vaults/<id>/`** | Per vault: `config.toml`, `persistence.json`, `archive/`, `store/`, `backups/`, `auth/` |
 | **`.upriv/logs/`** | App logs (`.log`, 1000 lines per file; see § Logs) |
 | **`.upriv/app/`** | Platform binaries + brand assets |
@@ -32,6 +33,7 @@ Same word **config**, different **folder** — no collision. Discovery: scan `va
 .upriv/
 ├── settings.toml
 ├── state.json
+├── vault_groups.toml
 ├── logs/
 ├── app/
 └── vaults/
@@ -43,6 +45,10 @@ Same word **config**, different **folder** — no collision. Discovery: scan `va
     ├── ram-only-demo/        # display: RAM Only Demo — ram_only (sealed)
     └── plain-only-demo/      # display: Plain Only Demo — plain_only (sealed)
 ```
+
+### Vault groups (`vault_groups.toml`)
+
+Optional organization for the vault list. Hierarchy is never flattened: the root shows ungrouped vaults plus group rows; grouped vaults appear only under an expanded group. Sort applies to the root only; in-group order follows `grouped_vaults[]`. Group assignment is edited in settings (not by dragging between groups). A corrupt file surfaces a Repair/Dismiss banner on the vault list (not the vault-root Gate). Empty groups are allowed.
 
 ## `state.json` vs per-vault `persistence.json`
 

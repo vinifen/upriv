@@ -9,7 +9,7 @@ alwaysApply: true
 
 In default mode `encrypted_dir`, **never** write or read decrypted vault file trees on ordinary disk (`/tmp`, `%TEMP%`, vault `workspace/`, crash staging). Decrypt only in RAM / mount buffers; persist only ciphertext in `stores/`. Close must **stream** logical content into `.7z` (PRD RF-45/RF-49, SDD §2.6).
 
-`plain` mode may use real plaintext `workspace/` **only** with UI warning + wipe on close.
+`plain` / `plain_only` / `upriv_plain` may use real plaintext `workspace/` **only** with UI warning + wipe on close.
 
 ## Do not port from `temp/upriv/`
 

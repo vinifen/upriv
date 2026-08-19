@@ -18,7 +18,7 @@ When product behavior, security, or on-disk layout is unclear, **read the canoni
 | **`dev/` today** | No vault crypto yet — invariant is **specified, not enforceable**. Disk I/O is settings/paths/logs only. |
 | **`temp/upriv/` legacy** | FUSE session OK; **close/materialize/password/recovery write full plaintext trees to OS tempfile** via `export_logical_tree` + `create_from_dir`. **Do not port that pattern.** |
 | **Ship blocker** | Real open/close must stream logical content into `.7z` (or tmpfs+noswap+wipe only). No `DevPlaintext` in user builds. No `7zz -p` on argv. |
-| **Exception** | `plain` mode may use real `workspace/` plaintext **with** UI warning + wipe — never confuse with default mode. |
+| **Exception** | `plain` / `plain_only` / `upriv_plain` may use real `workspace/` plaintext **with** UI warning + wipe — never confuse with default mode. |
 
 **Agent rule:** if implementing archive rebuild and the easy path is “extract/export to tempfile then `7zz a`”, **stop** — that violates the core trust claim. See checklist in `SECURITY-PLAINTEXT.md`.
 
@@ -31,20 +31,22 @@ We are **past the Tauri → Electron migration** and **past UI/lifecycle scaffol
 | Layer | State in `dev/` (active) |
 |-------|---------------------------|
 | **React UI** | Vault list / lifecycle / file-manager still **mock**; settings + **`VaultRootGate`** / setup / repair use live vault-root + app-settings services |
+| **Mobile UI** | Expo RN: Gate + list + lifecycle/settings/backups/FM; **Expo Go = mocks**; **dev-client = `upriv-ffi`** for vault-root/settings/logs |
 | **Electron** | Shell, preload, daemon spawn, IPC timeouts, packaging scaffold |
-| **upriv-daemon** | stdio JSON-RPC — `app_version`, `app_shutdown`, `app_settings_*`, `log_*`, `vault_root_*` (resolve/setup/alias/default_root/inspect), `pick_directory` |
+| **upriv-rpc / upriv-ffi** | Shared CORE RPC handlers; UniFFI `invoke` + Expo module `modules/upriv-core` |
+| **upriv-daemon** | stdio JSON-RPC — thin wrapper over `upriv-rpc` (same handlers as mobile) |
 | **upriv-core** | `logging` (`Logger` / `log_event` + list/get/delete), `time`, `app_version()`, **`paths/`**, **`config/`** (app settings + vault `config.toml`), **`vault/`** list stub — **no open/close/crypto/7zz yet** |
-| **Integration** | `createDesktopServices()` → live `vaultRoot` + `appSettings` + `logs`; other services mock until their RPCs land |
+| **Integration** | Desktop: `createDesktopServices()` → live root/settings/logs; Mobile: `createServices()` → native if bridge linked, else mocks |
 
 **What to build next (default order):**
 
 1. `upriv-core`: `vault_list`, domain errors (`wrong_password`, …) — vault-root/paths already landed  
-2. `rpc.rs` + `CORE_RPC_COMMANDS` + `lib/rpc.ts` for each new handler  
+2. `upriv-rpc` + `CORE_RPC_COMMANDS` + `lib/rpc.ts` for each new handler  
 3. `platform/desktop/` adapters replacing remaining mocks (one RPC at a time)  
 4. Open/close/seal pipeline with `7zz` (timeouts/kill in Rust — see SDD §8.2.2)  
 5. Mount (FUSE / WinFsp) and remaining RPCs from SDD §8.2–8.3  
 
-**Do not** re-implement vault logic in TypeScript or duplicate crypto in `upriv-daemon` — only `upriv-core`.  
+**Do not** re-implement vault logic in TypeScript or duplicate crypto in `upriv-daemon` / `upriv-ffi` — only `upriv-core`.  
 **Do not** reimplement vault-root resolution in TS — use existing `vault_root_*` RPCs / `VaultRootService`.  
 **Do not** ship infinite loading overlays — every blocking busy/applying UI uses `LOADING_BUDGET_MS` + visible countdown (`LoadingBudgetHint` / `useLoadingBudget`); on timeout clear state, bump generation tokens (`busyGen` / `resolveGen`), and offer retry. See `.cursor/rules/finite-loading-budgets.mdc`.
 
@@ -132,7 +134,7 @@ When temp and canonical docs conflict, **`dev/docs/` wins**. When porting an ide
 
 | Topic | PRD | SDD |
 |-------|-----|-----|
-| Vision, modes (`encrypted_dir` / `store_only` / `ram_only` / `plain` / `plain_only`), states | §1, §1.6–1.7 | §1, §2 |
+| Vision, modes (`encrypted_dir` / `store_only` / `upriv_only` / `upriv_plain` / `ram_only` / `plain` / `plain_only`), states | §1, §1.6–1.7 | §1, §2 |
 | v1 Linux + Windows scope | §1.1, §3.5 | §1.1 principle 0, §14 |
 | Functional requirements (RF-*) | §3 | §2–§7, §8–§9 |
 | Desktop UX (vault list, modals) | §3.7 | §8.2 |
@@ -153,7 +155,7 @@ When temp and canonical docs conflict, **`dev/docs/` wins**. When porting an ide
 
 - **Container:** AES-256 `.7z` per vault; **Plan B** = open archive in any 7-Zip-compatible tool.
 - **Default mode (v1):** `encrypted_dir` — encrypted `store/` on disk; user edits via virtual `workspace/{display_name}/` (FUSE on Linux, WinFsp on Windows); **no durable plaintext** on HD in production.
-- **Also in UI (v1):** `store_only`, `ram_only`, `plain` (open: workspace + `.7z`; seal-only), `plain_only` (open: workspace only; seal-only).
+- **Also in UI (v1):** `store_only`, `upriv_only` (store only; no `.7z` / no seal; **More secure** badge), `upriv_plain` (same closed store; plaintext workspace while open; **Insecure** badge), `ram_only`, `plain` (open: workspace + `.7z`; seal-only), `plain_only` (open: workspace only; seal-only).
 - **States:** `open` (runtime), `closed` (closed-cache modes), `sealed` (only `.7z` + config/backups). Misaligned store → **`recovery`**, not silent `closed`.
 - **Compression UI:** presets none/low/medium/high → `[seven_zip] archive_mode` + `compression_level`.
 - **Close pipeline:** `7z t` on existing archive → stream new `.7z` from logical session content → test → atomic rename; never pack raw `.enc` blobs into the archive.
@@ -170,18 +172,20 @@ upriv/
 ├── prod-example/           # Static demo vault-root (no build link to dev/)
 ├── README.md
 └── dev/
-    ├── Cargo.toml          # Rust workspace: upriv-core + upriv-daemon
+    ├── Cargo.toml          # Rust workspace: upriv-core + upriv-rpc + upriv-daemon + upriv-ffi
     ├── Cargo.lock
     ├── rust-toolchain.toml # Rust 1.94.0 (pinned)
     ├── .nvmrc              # Node 22.12.0
     ├── apps/
     │   ├── desktop/        # React 18 + Vite 6 + Tailwind 3 (presentation)
     │   ├── electron/       # Electron shell (main/preload)
-    │   ├── mobile/         # Expo 52 + RN 0.76 scaffold (presentation; no Rust bridge yet)
+    │   ├── mobile/         # Expo 52 + RN 0.76 — mocks in Expo Go; `upriv-ffi` UniFFI + `modules/upriv-core` for dev-client
     │   └── shared/         # @upriv/shared — TS domain + service interfaces
     ├── crates/
     │   ├── upriv-core/     # ALL product Rust logic (API: upriv_core::)
-    │   └── upriv-daemon/   # Desktop RPC sidecar ONLY — thin stdio JSON-RPC → upriv-core
+    │   ├── upriv-rpc/      # Shared CORE RPC handlers (daemon + ffi)
+    │   ├── upriv-daemon/   # Desktop stdio sidecar → upriv-rpc
+    │   └── upriv-ffi/      # UniFFI cdylib for mobile (libupriv_ffi.so)
     └── docs/
         ├── prd.md
         ├── sdd.md
@@ -200,9 +204,11 @@ upriv/
 | Layer | Path | May do | Must NOT do |
 |-------|------|--------|-------------|
 | **UI desktop** | `dev/apps/desktop/` | Render, i18n, `desktopInvoke()` | Crypto, disk I/O, 7zz, vault state on disk |
-| **UI mobile** | `dev/apps/mobile/` | Same (future native module) | Same |
+| **UI mobile** | `dev/apps/mobile/` | Same; native via `upriv-ffi` when linked | Same |
 | **Electron shell** | `dev/apps/electron/` | Window, spawn daemon, IPC preload | Business logic |
-| **Desktop RPC** | `dev/crates/upriv-daemon/` | stdio JSON-RPC delegating to core | Business logic (keep `rpc.rs` thin) |
+| **Desktop RPC** | `dev/crates/upriv-daemon/` | stdio NDJSON → `upriv-rpc` | Business logic |
+| **Shared RPC** | `dev/crates/upriv-rpc/` | CORE method handlers | Electron/RN specifics |
+| **Mobile FFI** | `dev/crates/upriv-ffi/` | UniFFI `invoke` / `app_version` | UI |
 | **Core** | `dev/crates/upriv-core/` | Crypto, 7z, paths, state machine, FUSE, recovery | Depend on Electron |
 
 **Desktop UI prototype (`dev/apps/desktop/`, mock layer):** vault list, lifecycle, file manager, settings, and help run on in-memory mocks until `upriv-daemon`/`upriv-core` wiring. **Logs** use live `log_*` RPC when desktop. Notable conventions:
@@ -218,7 +224,8 @@ Replace mocks with `desktopInvoke()` → `upriv-daemon` → `upriv-core` before 
 ### Data flow
 
 ```text
-Desktop:  React ──desktopInvoke──► upriv-daemon ──► upriv_core::*
+Desktop:  React ──desktopInvoke──► upriv-daemon ──► upriv_rpc ──► upriv_core::*
+Mobile:   RN ──UprivCore──► libupriv_ffi.so ──► upriv_ffi::invoke ──► upriv_rpc ──► upriv_core::*
 Mobile:   RN     ──JNI/FFI──► libupriv_core.so ──► upriv_core::*   (v2+)
 ```
 
@@ -390,6 +397,17 @@ Vault **format** is cross-platform from day one; **v1 desktop app** ships on **L
 ## Mobile packaging (future)
 
 One **APK** = JS bundle + RN runtime + **`libupriv_core.so`** + `7zz` + JNI bridge. Mobile uses React Native, not Electron. Expo Go does **not** load custom Rust; need dev build when bridge exists.
+
+### Android SAF vault-root (custom_root, `content://`)
+
+Rust `paths::` uses `std::fs::Path` — SAF `content://` URIs are handled **outside** the core via a pragmatic Kotlin bridge (SDD §9.4, ARCHITECTURE §6 — the full `VaultStorage` trait migration is deferred).
+
+- **Persist:** the Expo picker (`pickVaultRootFolder`) already calls SAF with persistable access; native module `saf_persist_permission` takes the `takePersistableUriPermission` grant, and the active URI is stored in Android `SharedPreferences` (`SafPrefs`) — **not** in `.upriv-root` (which is `PathBuf`-only). Custom-mode `content://` short-circuits the Rust alias.
+- **`.upriv/` I/O:** `SafVaultRoot.kt` (`DocumentsContract` + `DocumentFile`) creates the `.upriv/{vaults,logs,app,runtime}` skeleton + `settings.toml` under the SAF tree. Read/write of `settings.toml` streams bytes only — no OS temp / no plaintext staging.
+- **TOML semantics:** stay in Rust via two RAM-only RPCs — `app_settings_parse_toml` / `app_settings_serialize_toml` (in `upriv-core::config::app_settings`, wired in `upriv-rpc`). Kotlin moves bytes, Rust owns schema + `[package]` / `last_opened_vault` preservation.
+- **Service adapter:** `createNativeServices` wraps `VaultRootService` / `AppSettingsService` so SAF-active mode calls the Kotlin bridge, otherwise falls back to the existing Rust RPCs. Default-root and non-SAF filesystem paths behave exactly as before.
+- **UI:** `VaultRootDataFolderModal` Apply now accepts `content://`; the previous `error_saf_not_ready` block is gone and replaced with a neutral `saf_notice` hint.
+- **Still not SAF-backed:** vault open/close/mount (`encrypted_dir` FUSE / archive) — those layers do not exist yet in `dev/`. USB OTG / Documents work today for **setup + resolve + settings**; when vault I/O lands it must either mount via SAF-aware storage or route through a proper `VaultStorage` implementation. Do **not** introduce a “copy SAF tree to filesDir” shortcut — that would spill plaintext.
 
 ---
 

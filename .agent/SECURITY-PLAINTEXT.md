@@ -3,7 +3,7 @@
 **Audience:** coding agents and humans implementing vault open/close/mount/7z.  
 **Status:** ship-blocking invariant for the default product mode.  
 **Canonical requirements:** PRD **RF-45**, **RF-49**, **RF-49b**, **RF-50**; SDD **§2.4**, **§2.6**.  
-**Product exception:** `storage.mode = plain` may write plaintext under `workspace/` **only** with UI `warning.plain_mode` and close wipe (`secure_wipe_workspace`).
+**Product exception:** `storage.mode = plain`, `plain_only`, or `upriv_plain` may write plaintext under `workspace/` **only** with the matching UI warning and close wipe (`secure_wipe_workspace`).
 
 ---
 
@@ -12,7 +12,7 @@
 In **`encrypted_dir`** (default):
 
 1. **Never** write decrypted vault file bytes to ordinary disk (vault volume, `/tmp`, `%TEMP%`, crash staging dirs, etc.).
-2. **Never** read vault content from a durable plaintext tree on disk (except intentional `plain` mode).
+2. **Never** read vault content from a durable plaintext tree on disk (except intentional plaintext-on-disk modes: `plain`, `plain_only`, `upriv_plain`).
 3. While open: decrypt only into **RAM / FUSE–WinFsp reply buffers**; persist only **ciphertext** in `stores/<id>/` (write-through).
 4. On close/seal: build `.7z` from **logical content stream** — do **not** pack `.enc` blobs; do **not** materialize a full plaintext tree for `7zz`.
 5. If `7zz` absolutely requires a directory: **only** tmpfs (or equivalent) with **noswap** where available, RAII delete + secure wipe, **never** use real `workspace/` as staging (SDD §2.6).
@@ -66,7 +66,7 @@ When implementing `seven_zip` + close pipeline:
 |------|----------|
 | FUSE/WinFsp buffers / process RAM while vault open | Yes (document swap/hibernation limits — RF-51) |
 | Encrypted `store/` + sealed `.7z` on disk | Yes |
-| `plain` mode `workspace/` while open + wipe on close | Yes, with UI warning |
+| `plain` / `plain_only` / `upriv_plain` mode `workspace/` while open + wipe on close | Yes, with UI warning |
 | OS tempfile / vault `workspace/` full decrypted tree in `encrypted_dir` | **No — ship blocker** |
 | External editor caches/thumbnails outside mount | Document (RF-52); do not claim absolute zero OS side effects |
 
