@@ -20,7 +20,7 @@ See `dev/docs/ARCHITECTURE.md` and `dev/docs/sdd.md` §4.
 | `config/app_settings` | **App** `.upriv/settings.toml` load/save (system prefs) |
 | `config/vault_config` | **Per-vault** `vaults/<id>/config.toml` load (list stub) |
 | `vault/` | `list_vault_entries` scan (**crate-internal** until `vault_list` RPC) |
-| `app_version()` | From `dev/VERSION` via `build.rs` |
+| `app_version()` | From repo-root `VERSION` via `build.rs` |
 
 Next: `vault_list` RPC → open/close pipeline.
 

@@ -1,5 +1,10 @@
+import {
+  clearMockVaultUnlockPreset,
+  getMockVaultUnlockPreset,
+  setMockVaultUnlockPreset,
+} from "@upriv/shared/testing";
 import type { VaultListItem, VaultService } from "@upriv/shared";
-import { getMockVaultArchiveBytes } from "@/platform/mocks/data/vaultArchive";
+import { mockVaultExportBytes } from "@upriv/shared/testing";
 import { MOCK_VAULTS } from "@/platform/mocks/data/vaults";
 import {
   getMockVaultSettings,
@@ -14,10 +19,19 @@ function enrichPasswordHint(vault: VaultListItem): VaultListItem {
   return fromConfig ? { ...vault, passwordHint: fromConfig } : vault;
 }
 
+function listVaultWithPersistedOrder(vault: VaultListItem): VaultListItem {
+  const settings = getMockVaultSettings(vault.id);
+  return enrichPasswordHint({
+    ...vault,
+    order: settings.vault.order,
+    hidden: settings.vault.hidden,
+  });
+}
+
 /** Prototype vault service — delegates to in-memory mocks until desktop wiring. */
 export const mockVaultService: VaultService = {
   async listVaults() {
-    return structuredClone(MOCK_VAULTS).map(enrichPasswordHint);
+    return structuredClone(MOCK_VAULTS).map(listVaultWithPersistedOrder);
   },
 
   async getSettings(vaultId) {
@@ -30,9 +44,18 @@ export const mockVaultService: VaultService = {
 
   async unregisterSettings(vaultId) {
     unregisterMockVaultSettings(vaultId);
+    clearMockVaultUnlockPreset(vaultId);
   },
 
-  async getArchiveExportBytes(vault) {
-    return getMockVaultArchiveBytes(vault);
+  async getUnlockPreset(vaultId) {
+    return getMockVaultUnlockPreset(vaultId);
+  },
+
+  async setUnlockPreset(vaultId, preset) {
+    setMockVaultUnlockPreset(vaultId, preset);
+  },
+
+  async getExportBytes(vault, request) {
+    return mockVaultExportBytes(vault, request);
   },
 };

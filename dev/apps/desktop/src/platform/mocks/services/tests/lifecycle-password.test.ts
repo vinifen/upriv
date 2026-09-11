@@ -10,8 +10,10 @@ describe("validateMockLifecyclePassword", () => {
     ["pass", true],
     ["abcd", true],
     ["  abcd  ", true],
+    ["  ab", false],
     ["abc", false],
     ["", false],
+    ["   ", false],
     ["wrong", false],
     ["  wrong  ", false],
   ])("%j → %s", (password, expected) => {

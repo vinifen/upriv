@@ -7,6 +7,7 @@ import type { LogService } from "./logs/LogService";
 import type { VaultService } from "./vault/VaultService";
 import type { VaultGroupService } from "./vault-groups/VaultGroupService";
 import type { VaultRootService } from "./vault-root/VaultRootService";
+import type { VaultSecurityService } from "./vault-security/VaultSecurityService";
 
 /** Application service layer — platform selects mock vs native implementations. */
 export interface AppServices {
@@ -23,4 +24,6 @@ export interface AppServices {
   filesystem: VaultFileSystemService;
   lifecycle: VaultLifecycleService;
   createVault: CreateVaultService;
+  /** Password / KDF rewrap — the only place a password is ever verified. */
+  vaultSecurity: VaultSecurityService;
 }

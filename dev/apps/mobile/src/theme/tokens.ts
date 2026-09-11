@@ -1,133 +1,57 @@
-import type { UiTheme } from "@upriv/shared";
+import {
+  CONTROL_HEIGHT_MD,
+  CONTROL_WIDTH_CHROME,
+  MAX_WIDTH_CONTENT,
+  MAX_WIDTH_VAULT_LIST,
+  MODAL_MAX_HEIGHT_RATIO,
+  MODAL_WIZARD_BODY_MAX_HEIGHT_RATIO,
+  RADII,
+  SPACING,
+  TOUCH_MIN,
+  hexWithAlpha,
+  mixHex,
+  colorsForTheme,
+  type ThemePalette,
+  type UiTheme,
+} from "@upriv/shared";
 
 /**
- * Design tokens mirrored from desktop `styles/tokens.css`.
+ * Platform helpers on top of `@upriv/shared` `domain/theme`.
  * Use `colorsForTheme()` / `useTheme()` — do not hardcode a single theme in screens.
  */
-export type ThemeColors = {
-  background: string;
-  surfaceContainer: string;
-  /** Muted sheet under group boxes (desktop `surface-container-low`). */
-  surfaceContainerLow: string;
-  surfaceContainerHigh: string;
-  surfaceRowHover: string;
-  surfaceContainerHighest: string;
-  onSurface: string;
-  onSurfaceVariant: string;
-  outlineVariant: string;
-  primary: string;
-  onPrimary: string;
-  accent: string;
-  accentForeground: string;
-  vaultStatusOpen: string;
-  vaultStatusClosed: string;
-  vaultStatusSealed: string;
-  vaultStatusRecovery: string;
-  errorContainer: string;
-  onErrorContainer: string;
-  modalScrim: string;
-  logViewerBg: string;
+export type ThemeColors = ThemePalette;
+
+export {
+  CONTROL_HEIGHT_MD,
+  CONTROL_WIDTH_CHROME,
+  MAX_WIDTH_CONTENT,
+  MAX_WIDTH_VAULT_LIST,
+  MODAL_MAX_HEIGHT_RATIO,
+  MODAL_WIZARD_BODY_MAX_HEIGHT_RATIO,
+  colorsForTheme,
+  hexWithAlpha,
+  mixHex,
 };
 
-const DARK: ThemeColors = {
-  background: "#081425",
-  surfaceContainer: "#152031",
-  surfaceContainerLow: "#0e1828",
-  surfaceContainerHigh: "#1f2a3c",
-  surfaceRowHover: "#1c2839",
-  surfaceContainerHighest: "#2a3548",
-  onSurface: "#d8e3fb",
-  onSurfaceVariant: "#c6c6cd",
-  outlineVariant: "#45464d",
-  primary: "#bec6e0",
-  onPrimary: "#283044",
-  accent: "#6b8cff",
-  accentForeground: "#0f172a",
-  vaultStatusOpen: "#3dd68c",
-  vaultStatusClosed: "#6b8cff",
-  vaultStatusSealed: "#8b8b8b",
-  vaultStatusRecovery: "#f5a623",
-  errorContainer: "#93000a",
-  onErrorContainer: "#ffdad6",
-  modalScrim: "rgba(8, 20, 37, 0.8)",
-  logViewerBg: "#0d1117",
-};
+export const spacing = SPACING;
+export const radii = RADII;
+export const touchMin = TOUCH_MIN;
 
-const NEUTRAL: ThemeColors = {
-  background: "#282f3e",
-  surfaceContainer: "#353d4e",
-  surfaceContainerLow: "#2e3544",
-  surfaceContainerHigh: "#3f4756",
-  surfaceRowHover: "#474f5e",
-  surfaceContainerHighest: "#505864",
-  onSurface: "#eaebee",
-  onSurfaceVariant: "#a4acb8",
-  outlineVariant: "#5c6474",
-  primary: "#c4cad4",
-  onPrimary: "#252b38",
-  accent: "#6888dc",
-  accentForeground: "#0f172a",
-  vaultStatusOpen: "#42de9a",
-  vaultStatusClosed: "#6888dc",
-  vaultStatusSealed: "#9aa3b0",
-  vaultStatusRecovery: "#f0b84a",
-  errorContainer: "#a82028",
-  onErrorContainer: "#ffe8e4",
-  modalScrim: "rgba(32, 38, 50, 0.74)",
-  logViewerBg: "#2e3542",
-};
-
-const LIGHT: ThemeColors = {
-  background: "#d6dde8",
-  surfaceContainer: "#f0f3f9",
-  surfaceContainerLow: "#e4eaf3",
-  surfaceContainerHigh: "#e8edf4",
-  surfaceRowHover: "#dde4ef",
-  surfaceContainerHighest: "#c8d2e0",
-  onSurface: "#243048",
-  onSurfaceVariant: "#566678",
-  outlineVariant: "#bcc8d8",
-  primary: "#364a62",
-  onPrimary: "#f4f7fb",
-  accent: "#4a62b8",
-  accentForeground: "#ffffff",
-  vaultStatusOpen: "#1f8560",
-  vaultStatusClosed: "#4a62b8",
-  vaultStatusSealed: "#687488",
-  vaultStatusRecovery: "#a67c0a",
-  errorContainer: "#edd8d4",
-  onErrorContainer: "#721218",
-  modalScrim: "rgba(36, 48, 72, 0.32)",
-  logViewerBg: "#d0d8e4",
-};
-
-export const THEME_COLORS: Record<UiTheme, ThemeColors> = {
-  dark: DARK,
-  neutral: NEUTRAL,
-  light: LIGHT,
-};
-
-export function colorsForTheme(theme: UiTheme): ThemeColors {
-  return THEME_COLORS[theme] ?? DARK;
+/** `accent/40`-style overlays from a hex token — result is `#RRGGBBAA`. */
+export function colorAlpha(hex: string, alpha: number): string {
+  return hexWithAlpha(hex, alpha);
 }
 
-/** @deprecated Prefer `useTheme().colors` — static dark fallback for legacy imports. */
-export const colors = DARK;
-
-export const spacing = {
-  xs: 4,
-  sm: 8,
-  md: 12,
-  lg: 16,
-  xl: 24,
-  xxl: 32,
-} as const;
-
-export const radii = {
-  sm: 8,
-  md: 12,
-  lg: 16,
-} as const;
+/**
+ * Desktop `settingsControlClass`: `ring-0` idle, `focus:ring-2 focus:ring-accent/40`.
+ * Idle border matches the fill so the 2px slot does not show a hairline or jump on focus.
+ */
+export function controlFocusRing(accent: string, fill: string, focused: boolean) {
+  return {
+    borderWidth: 2 as const,
+    borderColor: focused ? hexWithAlpha(accent, 0.4) : fill,
+  };
+}
 
 export function typographyForColors(c: ThemeColors) {
   return {
@@ -140,27 +64,38 @@ export function typographyForColors(c: ThemeColors) {
   };
 }
 
-/** @deprecated Prefer `useTheme().typography` */
-export const typography = typographyForColors(DARK);
+/**
+ * RN elevation objects for heavy surfaces (vault rows, dialogs).
+ * Settings accordion cards use `settingsSectionBoxShadow(theme)` (CSS `boxShadow`,
+ * New Architecture) — same soft shape as desktop, slightly stronger on mobile only.
+ */
+export const vaultRowShadow = {
+  shadowColor: "#000",
+  shadowOffset: { width: 0, height: 8 },
+  shadowOpacity: 0.32,
+  shadowRadius: 18,
+  elevation: 5,
+} as const;
 
-/** Minimum touch target (pt). */
-export const touchMin = 44;
-
-/** Desktop `h-10` — primary/secondary control height (header, toolbar filters). */
-export const CONTROL_HEIGHT_MD = 40;
+/** Dialog panel elevation. Same caveat as `vaultRowShadow`. */
+export const modalShadow = {
+  shadowColor: "#000",
+  shadowOffset: { width: 0, height: 8 },
+  shadowOpacity: 0.22,
+  shadowRadius: 16,
+  elevation: 8,
+} as const;
 
 /**
- * Modal vertical budget — desktop uses ~92dvh; keep one ratio for all mobile dialogs.
- * Frame safe-area padding is applied on top of this.
+ * Mobile settings/help section cards only. Keeps desktop `0 6px 12px -8px` geometry;
+ * opacity is bumped vs shared `settingsSectionShadow` so cards read clearer on phone.
  */
-export const MODAL_MAX_HEIGHT_RATIO = 0.88;
-
-/** Create-vault step pane inside the dialog (desktop ~72–76vh / 40–44rem). */
-export const MODAL_WIZARD_BODY_MAX_HEIGHT_RATIO = 0.66;
-
-/**
- * Centered content columns — desktop Tailwind `max-w-content` / `max-w-vault-list`.
- * On tablets / landscape, content stops hugging the extreme edges.
- */
-export const MAX_WIDTH_CONTENT = 1200;
-export const MAX_WIDTH_VAULT_LIST = 900;
+export function settingsSectionBoxShadow(theme: UiTheme): string {
+  if (theme === "light") {
+    return `0 6px 12px -8px ${hexWithAlpha("#243048", 0.18)}`;
+  }
+  if (theme === "neutral") {
+    return `0 6px 12px -8px ${hexWithAlpha("#000000", 0.32)}`;
+  }
+  return `0 6px 12px -8px ${hexWithAlpha("#000000", 0.38)}`;
+}

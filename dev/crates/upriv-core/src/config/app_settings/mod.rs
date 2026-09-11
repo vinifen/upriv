@@ -17,4 +17,7 @@ pub use load_save::{
     save_app_settings_with_alias_sync, sync_alias_with_app_settings,
 };
 pub use toml::{parse_settings_toml_str, serialize_settings_toml_str};
-pub use types::{AppSectionSettings, AppSettings, LoadedAppSettings, LoggingSettings, UiSettings};
+pub use types::{
+    AppSectionSettings, AppSettings, LoadedAppSettings, LoggingSettings, UiSettings,
+    WorkspaceSettings,
+};

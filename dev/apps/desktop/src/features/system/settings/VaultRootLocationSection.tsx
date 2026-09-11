@@ -27,6 +27,7 @@ import {
   type VaultRootSettingsGate,
 } from "@upriv/shared";
 import { useVaultRootService } from "@/platform/services";
+import { useErrorToast } from "@/hooks/useErrorToast";
 import { getAppVersion, getSessionAppVersion } from "@/lib/appVersion";
 import { VaultRootIncompleteReplacePanel } from "./VaultRootIncompleteReplacePanel";
 
@@ -64,6 +65,7 @@ export function VaultRootLocationSection({
   inspectNonce = 0,
 }: VaultRootLocationSectionProps) {
   const { t } = useTranslation();
+  const { showError } = useErrorToast();
   const vaultRootService = useVaultRootService();
   const rootModeGroup = useId();
   const repairPolicyGroup = useId();
@@ -300,71 +302,66 @@ export function VaultRootLocationSection({
               onChange({ vault_root_mode: "default_root", upriv_root_path: "" });
             }}
             footer={
-              useDefaultRoot ? (
-                <div className="space-y-2">
-                  {defaultRootAnchor ? (
-                    <p className="break-all rounded-md bg-surface-container-highest px-3 py-2 font-mono text-xs text-on-surface">
-                      {defaultRootAnchor}
-                    </p>
-                  ) : (
-                    <p className="text-xs leading-relaxed text-on-surface-variant" role="status">
-                      {t("modal.app_settings.field.upriv_root_loading")}
-                    </p>
-                  )}
-                  {showDefaultRootExtras ? (
-                    <>
-                      {disk === "checking" ? (
+              <div className="space-y-2">
+                {defaultRootAnchor ? (
+                  <p className="break-all rounded-md bg-surface-container-highest px-3 py-2 font-mono text-xs text-on-surface">
+                    {defaultRootAnchor}
+                  </p>
+                ) : (
+                  <p className="text-xs leading-relaxed text-on-surface-variant" role="status">
+                    {t("modal.app_settings.field.upriv_root_loading")}
+                  </p>
+                )}
+                {showDefaultRootExtras ? (
+                  <>
+                    {disk === "checking" ? (
+                      <p className="text-xs leading-relaxed text-on-surface-variant" role="status">
+                        {t("modal.app_settings.field.upriv_root_loading")}
+                      </p>
+                    ) : null}
+                    {disk === "will_create" ? (
+                      <p
+                        className="rounded-md bg-surface-container px-3 py-2 text-xs leading-relaxed text-on-surface"
+                        role="status"
+                      >
+                        {t(
+                          primaryAction === "apply"
+                            ? "modal.app_settings.upriv_root.switch_default_root_create_notice_apply"
+                            : "modal.app_settings.upriv_root.switch_default_root_create_notice_continue",
+                          {
+                            file: VAULT_ROOT_ALIAS_FILE,
+                          },
+                        )}
+                      </p>
+                    ) : null}
+                    {disk === "unreadable" || disk === "unauthorized" ? (
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                         <p
-                          className="text-xs leading-relaxed text-on-surface-variant"
-                          role="status"
-                        >
-                          {t("modal.app_settings.field.upriv_root_loading")}
-                        </p>
-                      ) : null}
-                      {disk === "will_create" ? (
-                        <p
-                          className="rounded-md bg-surface-container px-3 py-2 text-xs leading-relaxed text-on-surface"
-                          role="status"
+                          className="rounded-md bg-error-container/10 px-3 py-2 text-xs leading-relaxed text-on-error-container"
+                          role="alert"
                         >
                           {t(
-                            primaryAction === "apply"
-                              ? "modal.app_settings.upriv_root.switch_default_root_create_notice_apply"
-                              : "modal.app_settings.upriv_root.switch_default_root_create_notice_continue",
-                            {
-                              file: VAULT_ROOT_ALIAS_FILE,
-                            },
+                            disk === "unauthorized"
+                              ? "modal.vault_root_setup.error_saf_unauthorized"
+                              : "modal.vault_root_setup.error_io",
                           )}
                         </p>
-                      ) : null}
-                      {disk === "unreadable" || disk === "unauthorized" ? (
-                        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                          <p
-                            className="rounded-md bg-error-container/10 px-3 py-2 text-xs leading-relaxed text-on-error-container"
-                            role="alert"
-                          >
-                            {t(
-                              disk === "unauthorized"
-                                ? "modal.vault_root_setup.error_saf_unauthorized"
-                                : "modal.vault_root_setup.error_io",
-                            )}
-                          </p>
-                          <Button
-                            type="button"
-                            variant="secondary"
-                            size="md"
-                            className="w-full shrink-0 sm:w-auto"
-                            disabled={controlsDisabled}
-                            onClick={retryDiskCheck}
-                          >
-                            {t("action.retry")}
-                          </Button>
-                        </div>
-                      ) : null}
-                      {incompletePanel}
-                    </>
-                  ) : null}
-                </div>
-              ) : null
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          size="md"
+                          className="w-full shrink-0 sm:w-auto"
+                          disabled={controlsDisabled}
+                          onClick={retryDiskCheck}
+                        >
+                          {t("action.retry")}
+                        </Button>
+                      </div>
+                    ) : null}
+                    {incompletePanel}
+                  </>
+                ) : null}
+              </div>
             }
           />
           <PolicyRadioOption
@@ -401,56 +398,59 @@ export function VaultRootLocationSection({
                     upriv_root_path: alias?.path.trim() || "",
                   });
                 })
+                .catch((error) => {
+                  if (gen !== aliasLoadGen.current) return;
+                  showError(error, "error.unexpected");
+                })
                 .finally(() => {
                   if (gen !== aliasLoadGen.current) return;
                   setCustomPathLoading(false);
                 });
             }}
             footer={
-              showCustomExtras ? (
-                <div className="space-y-2">
-                  {customRootNotice ?? (
-                    <>
+              <div className="space-y-2">
+                {customRootNotice ?? (
+                  <p className="text-xs leading-relaxed text-on-surface-variant">
+                    {t("modal.app_settings.field.upriv_root_help")}
+                  </p>
+                )}
+                {showCustomExtras && !customRootNotice ? (
+                  <>
+                    {config.upriv_root_path.trim() ? (
                       <p className="text-xs leading-relaxed text-on-surface-variant">
-                        {t("modal.app_settings.field.upriv_root_help")}
+                        {t("modal.app_settings.field.upriv_root_remembered", {
+                          file: VAULT_ROOT_ALIAS_FILE,
+                        })}
                       </p>
-                      {config.upriv_root_path.trim() ? (
-                        <p className="text-xs leading-relaxed text-on-surface-variant">
-                          {t("modal.app_settings.field.upriv_root_remembered", {
-                            file: VAULT_ROOT_ALIAS_FILE,
-                          })}
-                        </p>
-                      ) : customPathLoading || disk === "checking" ? (
-                        <p
-                          className="text-xs leading-relaxed text-on-surface-variant"
-                          role="status"
-                        >
-                          {t("modal.app_settings.field.upriv_root_loading")}
-                        </p>
-                      ) : null}
-                    </>
-                  )}
-                  <div className="flex flex-col gap-2 sm:flex-row sm:items-stretch">
-                    <input
-                      type="text"
-                      readOnly
-                      value={config.upriv_root_path}
-                      placeholder={t("modal.app_settings.field.upriv_root_placeholder")}
-                      className={[
-                        settingsControlClass,
-                        "font-mono text-xs sm:min-w-0 sm:flex-1",
-                      ].join(" ")}
-                    />
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      size="md"
-                      className="w-full shrink-0 sm:w-auto"
-                      disabled={customPathLoading || controlsDisabled}
-                      onClick={() => {
-                        const suggested = config.upriv_root_path.trim();
-                        setReplacePolicy(null);
-                        void (async () => {
+                    ) : customPathLoading || disk === "checking" ? (
+                      <p className="text-xs leading-relaxed text-on-surface-variant" role="status">
+                        {t("modal.app_settings.field.upriv_root_loading")}
+                      </p>
+                    ) : null}
+                  </>
+                ) : null}
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-stretch">
+                  <input
+                    type="text"
+                    readOnly
+                    value={config.upriv_root_path}
+                    placeholder={t("modal.app_settings.field.upriv_root_placeholder")}
+                    className={[
+                      settingsControlClass,
+                      "font-mono text-xs sm:min-w-0 sm:flex-1",
+                    ].join(" ")}
+                  />
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="md"
+                    className="w-full shrink-0 sm:w-auto"
+                    disabled={customPathLoading || controlsDisabled}
+                    onClick={() => {
+                      const suggested = config.upriv_root_path.trim();
+                      setReplacePolicy(null);
+                      void (async () => {
+                        try {
                           const defaultPath = suggested
                             ? suggested
                             : (await vaultRootService
@@ -467,44 +467,46 @@ export function VaultRootLocationSection({
                             vault_root_mode: "custom_root",
                             upriv_root_path: picked.trim(),
                           });
-                        })();
-                      }}
+                        } catch (error) {
+                          showError(error, "error.unexpected");
+                        }
+                      })();
+                    }}
+                  >
+                    {t("modal.app_settings.action.choose_folder")}
+                  </Button>
+                </div>
+                {showCustomExtras && (disk === "unreadable" || disk === "unauthorized") ? (
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                    <p
+                      className="rounded-md bg-error-container/10 px-3 py-2 text-xs leading-relaxed text-on-error-container"
+                      role="alert"
                     >
-                      {t("modal.app_settings.action.choose_folder")}
+                      {t(
+                        disk === "unauthorized"
+                          ? "modal.vault_root_setup.error_saf_unauthorized"
+                          : "modal.vault_root_setup.error_io",
+                      )}
+                    </p>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="md"
+                      className="w-full shrink-0 sm:w-auto"
+                      disabled={controlsDisabled}
+                      onClick={retryDiskCheck}
+                    >
+                      {t("action.retry")}
                     </Button>
                   </div>
-                  {disk === "unreadable" || disk === "unauthorized" ? (
-                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                      <p
-                        className="rounded-md bg-error-container/10 px-3 py-2 text-xs leading-relaxed text-on-error-container"
-                        role="alert"
-                      >
-                        {t(
-                          disk === "unauthorized"
-                            ? "modal.vault_root_setup.error_saf_unauthorized"
-                            : "modal.vault_root_setup.error_io",
-                        )}
-                      </p>
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        size="md"
-                        className="w-full shrink-0 sm:w-auto"
-                        disabled={controlsDisabled}
-                        onClick={retryDiskCheck}
-                      >
-                        {t("action.retry")}
-                      </Button>
-                    </div>
-                  ) : null}
-                  {disk === "needs_folder" ? (
-                    <p className="text-xs leading-relaxed text-on-surface-variant" role="status">
-                      {t("modal.vault_root_setup.error_path_required")}
-                    </p>
-                  ) : null}
-                  {incompletePanel}
-                </div>
-              ) : null
+                ) : null}
+                {showCustomExtras && disk === "needs_folder" ? (
+                  <p className="text-xs leading-relaxed text-on-surface-variant" role="status">
+                    {t("modal.vault_root_setup.error_path_required")}
+                  </p>
+                ) : null}
+                {showCustomExtras ? incompletePanel : null}
+              </div>
             }
           />
         </div>

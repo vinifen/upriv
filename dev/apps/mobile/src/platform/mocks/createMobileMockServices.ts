@@ -4,9 +4,12 @@ import {
   VAULT_PIPELINE_ERROR_CODES,
   VaultPipelineError,
   createDefaultAppSettings,
-  createMockVaultGroupService,
+  isMockLifecyclePasswordValid,
+  isRpcError,
   isVaultPipelineError,
+  resolveVaultMountPoint,
   runTimedPipeline,
+  WORKSPACE_PATH_DEFAULT,
   type AppLogFile,
   type AppServices,
   type AppSettingsLoadResult,
@@ -15,12 +18,10 @@ import {
   type VaultRootMode,
   type VaultSettingsConfig,
 } from "@upriv/shared";
-import { MOCK_VAULTS, knownMockVaultIds } from "./data/vaults";
-import { MOCK_VAULT_GROUPS } from "./data/vaultGroups";
-import { MOCK_ALIAS_URI, MOCK_DEFAULT_ANCHOR, MOCK_VAULT_ROOT_URI } from "./data/paths";
 import {
-  createVaultFolder,
+  cloneJson,
   createVaultFile,
+  createVaultFolder,
   deleteVaultPath,
   ensureVaultFolder,
   getVaultFileContent,
@@ -35,7 +36,17 @@ import {
   resetVaultFileSession,
   setVaultFileContent,
   vaultFileLanguageFromPath,
-} from "./stores/fileSystem";
+  clearMockVaultUnlockPreset,
+  createMockVaultGroupService,
+  createMockVaultSecurityService,
+  getMockVaultUnlockPreset,
+  mockVaultExportBytes,
+  recordMockVaultOpened,
+  setMockVaultUnlockPreset,
+} from "@upriv/shared/testing";
+import { MOCK_VAULTS, knownMockVaultIds } from "./data/vaults";
+import { MOCK_VAULT_GROUPS } from "./data/vaultGroups";
+import { MOCK_ALIAS_URI, MOCK_DEFAULT_ANCHOR, MOCK_VAULT_ROOT_URI } from "./data/paths";
 import {
   getMockVaultSettings,
   registerMockVaultSettings,
@@ -49,6 +60,9 @@ interface MockVaultRootState {
   aliasActive: boolean;
 }
 
+/** Stands in for the upriv-core header probe round-trip. */
+const MOCK_IMPORT_PASSWORD_TEST_MS = 400;
+
 /** Pre-seeded so Expo Go lands on the vault list; Gate still re-resolves. */
 let runtimeRoot: MockVaultRootState = {
   configured: true,
@@ -58,13 +72,31 @@ let runtimeRoot: MockVaultRootState = {
 };
 
 let runtimeSettings = createDefaultAppSettings();
+runtimeSettings = {
+  ...runtimeSettings,
+  app: { ...runtimeSettings.app, last_opened_vault: "my-encrypted-notes" },
+};
 let settingsOnDisk = true;
 
 const vaultPasswordInRam = new Map<string, string>();
 
+function setMockVaultsHidden(vaultIds: readonly string[], hidden: boolean) {
+  for (const id of vaultIds) {
+    const settings = getMockVaultSettings(id);
+    if (settings.vault.hidden === hidden) continue;
+    registerMockVaultSettings({
+      ...settings,
+      vault: { ...settings.vault, hidden },
+    });
+  }
+}
+
 const mockGroups = createMockVaultGroupService({
   getKnownVaultIds: () => knownMockVaultIds(),
   initialGroups: MOCK_VAULT_GROUPS,
+  hideVaults: (ids) => setMockVaultsHidden(ids, true),
+  unhideVaults: (ids) => setMockVaultsHidden(ids, false),
+  onGroupHidden: () => appendMockLogEvent("vault_group_hidden"),
 });
 
 function mockOpenRamFails(vaultId: string): boolean {
@@ -78,12 +110,12 @@ function mockCloseGateFails(vaultId: string): boolean {
 const MOCK_BACKUPS: Record<string, VaultBackupEntry[]> = {
   "my-encrypted-notes": [
     {
-      filename: "My Encrypted Notes-20260601-120000.7z",
+      stamp: "20260601T120000",
       createdAt: "2026-06-01T12:00:00.000Z",
       sizeBytes: 128_000,
     },
     {
-      filename: "My Encrypted Notes-20260520-090000.7z",
+      stamp: "20260520T090000",
       createdAt: "2026-05-20T09:00:00.000Z",
       sizeBytes: 120_000,
       saved: true,
@@ -91,25 +123,56 @@ const MOCK_BACKUPS: Record<string, VaultBackupEntry[]> = {
   ],
   "work-documents": [
     {
-      filename: "Work Documents-20260602-080000.7z",
+      stamp: "20260602T080000",
       createdAt: "2026-06-02T08:00:00.000Z",
       sizeBytes: 256_000,
     },
   ],
 };
 
+const MOCK_LOG_CURRENT = [
+  "0001 2026-06-02T12:00:00.000Z INFO  app_start          version=0.1.0-beta source=mobile_mock",
+  "0002 2026-06-02T12:00:01.120Z DEBUG vault_root_resolve status=ready",
+  "0003 2026-06-02T12:00:02.400Z INFO  vault_list         count=4",
+  "0004 2026-06-02T12:01:10.000Z WARN  unlock_failed      vault=work-documents",
+].join("\n");
+
+const MOCK_LOG_ROTATED = [
+  "0001 2026-06-01T09:00:00.000Z INFO  app_start          version=0.1.0-beta",
+  "0002 2026-06-01T09:00:04.000Z INFO  settings_save      wrote=true",
+].join("\n");
+
 const MOCK_LOGS: AppLogFile[] = [
   {
-    filename: "current-20260602120000.log",
-    seq: 0,
+    filename: "current-000002-20260602120000.log",
+    seq: 2,
     isCurrent: true,
     createdAt: "2026-06-02T12:00:00.000Z",
-    sizeBytes: 420,
-    lineCount: 12,
+    sizeBytes: MOCK_LOG_CURRENT.length,
+    lineCount: 4,
     lineCountExact: true,
-    content: "INFO 0001 2026-06-02T12:00:00.000Z app_start version=0.1.0-beta source=mobile_mock\n",
+    content: `${MOCK_LOG_CURRENT}\n`,
+  },
+  {
+    filename: "000001-20260601090000.log",
+    seq: 1,
+    isCurrent: false,
+    createdAt: "2026-06-01T09:00:00.000Z",
+    sizeBytes: MOCK_LOG_ROTATED.length,
+    lineCount: 2,
+    lineCountExact: true,
+    content: `${MOCK_LOG_ROTATED}\n`,
   },
 ];
+
+function appendMockLogEvent(event: string) {
+  const file = MOCK_LOGS.find((entry) => entry.isCurrent) ?? MOCK_LOGS[0];
+  if (!file) return;
+  const nextIndex = String(file.lineCount + 1).padStart(4, "0");
+  file.content += `${nextIndex} ${new Date().toISOString()} INFO  ${event.padEnd(20)} \n`;
+  file.lineCount += 1;
+  file.sizeBytes = file.content.length;
+}
 
 /**
  * In-memory AppServices for Expo Go until the native Rust bridge lands.
@@ -119,7 +182,14 @@ export function createMobileMockServices(): AppServices {
   return {
     vault: {
       async listVaults() {
-        return MOCK_VAULTS.map((v) => ({ ...v }));
+        return MOCK_VAULTS.map((v) => {
+          const settings = getMockVaultSettings(v.id);
+          return {
+            ...v,
+            order: settings.vault.order,
+            hidden: settings.vault.hidden,
+          };
+        });
       },
       async getSettings(vaultId) {
         return getMockVaultSettings(vaultId);
@@ -129,9 +199,16 @@ export function createMobileMockServices(): AppServices {
       },
       async unregisterSettings(vaultId) {
         unregisterMockVaultSettings(vaultId);
+        clearMockVaultUnlockPreset(vaultId);
       },
-      async getArchiveExportBytes() {
-        return new Uint8Array([0x37, 0x7a]);
+      async getUnlockPreset(vaultId) {
+        return getMockVaultUnlockPreset(vaultId);
+      },
+      async setUnlockPreset(vaultId, preset) {
+        setMockVaultUnlockPreset(vaultId, preset);
+      },
+      async getExportBytes(vault, request) {
+        return mockVaultExportBytes(vault, request);
       },
     },
 
@@ -230,7 +307,10 @@ export function createMobileMockServices(): AppServices {
           const { pickVaultRootFolder } = await import("@/platform/native/pickVaultRootFolder");
           const picked = await pickVaultRootFolder(defaultPath);
           if (picked) return picked;
-        } catch {
+        } catch (error) {
+          if (isRpcError(error) && error.code === "unsupported_platform") {
+            throw error;
+          }
           /* fall through to stub */
         }
         return `${MOCK_DEFAULT_ANCHOR}/picked-${Date.now()}`;
@@ -240,13 +320,13 @@ export function createMobileMockServices(): AppServices {
     appSettings: {
       async load(): Promise<AppSettingsLoadResult> {
         return {
-          settings: structuredClone(runtimeSettings),
+          settings: cloneJson(runtimeSettings),
           onDisk: settingsOnDisk,
           rootPath: settingsOnDisk ? runtimeRoot.rootPath : null,
         };
       },
       async save(config) {
-        runtimeSettings = structuredClone(config);
+        runtimeSettings = cloneJson(config);
         settingsOnDisk = true;
         return true;
       },
@@ -256,21 +336,22 @@ export function createMobileMockServices(): AppServices {
       async listBackups(vaultId) {
         return (MOCK_BACKUPS[vaultId] ?? []).map((b) => ({ ...b }));
       },
-      async deleteBackups(vaultId, filenames) {
+      async deleteBackups(vaultId, stamps) {
         const list = MOCK_BACKUPS[vaultId];
         if (!list) return;
-        const set = new Set(filenames);
-        MOCK_BACKUPS[vaultId] = list.filter((b) => !set.has(b.filename));
+        const set = new Set(stamps);
+        MOCK_BACKUPS[vaultId] = list.filter((b) => !set.has(b.stamp));
       },
-      async promoteToSave(vaultId, filename) {
+      async promoteToSave(vaultId, stamp) {
         const list = MOCK_BACKUPS[vaultId];
         if (!list) return;
         for (const entry of list) {
-          if (entry.filename === filename) entry.saved = true;
+          if (entry.stamp === stamp) entry.saved = true;
         }
       },
-      async getBackupBytes() {
-        return new Uint8Array([0x37, 0x7a]);
+      async getBackupBytes(entry) {
+        const header = `[Upriv mock backup]\n${entry.stamp}\n${entry.saved ? "saved\n" : ""}`;
+        return new TextEncoder().encode(header);
       },
     },
 
@@ -288,12 +369,10 @@ export function createMobileMockServices(): AppServices {
         return MOCK_LOGS.find((f) => f.filename === filename);
       },
       async recordVaultHidden() {
-        const file = MOCK_LOGS.find((entry) => entry.isCurrent) ?? MOCK_LOGS[0];
-        if (!file) return;
-        const nextIndex = String(file.lineCount + 1).padStart(4, "0");
-        file.content += `${nextIndex} ${new Date().toISOString()} INFO  vault_hidden          \n`;
-        file.lineCount += 1;
-        file.sizeBytes = file.content.length;
+        appendMockLogEvent("vault_hidden");
+      },
+      async recordVaultGroupHidden() {
+        appendMockLogEvent("vault_group_hidden");
       },
     },
 
@@ -353,7 +432,7 @@ export function createMobileMockServices(): AppServices {
         return vaultPasswordInRam.has(vaultId);
       },
       setPasswordInSession(vaultId, password) {
-        vaultPasswordInRam.set(vaultId, password.trim());
+        vaultPasswordInRam.set(vaultId, password);
       },
       clearPasswordInSession(vaultId) {
         vaultPasswordInRam.delete(vaultId);
@@ -366,20 +445,26 @@ export function createMobileMockServices(): AppServices {
             throw new VaultPipelineError(VAULT_PIPELINE_ERROR_CODES.INSUFFICIENT_RAM);
           }
         });
+        recordMockVaultOpened(vaultId);
       },
       async runClosingPipeline(vaultId, onStep) {
         await runTimedPipeline(CLOSING_PIPELINE_STEP_COUNT, onStep, (stepIndex) => {
           if (stepIndex === 0 && mockCloseGateFails(vaultId)) {
-            throw new VaultPipelineError(VAULT_PIPELINE_ERROR_CODES.ARCHIVE_TEST_FAILED);
+            throw new VaultPipelineError(VAULT_PIPELINE_ERROR_CODES.HEADER_TEST_FAILED);
           }
         });
       },
-      resolveWorkspacePath(displayName) {
-        return `content://upriv.mock/workspace/${encodeURIComponent(displayName)}`;
+      resolveWorkspacePath(displayName, options) {
+        return (
+          resolveVaultMountPoint(
+            options?.globalWorkspacePath ?? runtimeSettings.workspace.path,
+            options?.mountWorkspacePath ?? WORKSPACE_PATH_DEFAULT,
+            displayName,
+          ) ?? ""
+        );
       },
       validateLifecyclePassword(password) {
-        const trimmed = password.trim();
-        return trimmed.length >= 4 && trimmed !== "wrong";
+        return isMockLifecyclePasswordValid(password);
       },
       isPipelineError(error: unknown): error is VaultPipelineErrorType {
         return isVaultPipelineError(error);
@@ -389,14 +474,17 @@ export function createMobileMockServices(): AppServices {
       },
     },
 
+    vaultSecurity: createMockVaultSecurityService(),
+
     createVault: {
-      testImportArchivePassword(password) {
+      async testImportPackagePassword(password) {
+        await new Promise((resolve) => setTimeout(resolve, MOCK_IMPORT_PASSWORD_TEST_MS));
         return password.length > 0;
       },
-      selectImportArchiveForProbe() {
+      selectImportPackageForProbe() {
         return {
-          path: "content://upriv.mock/import/demo.7z",
-          fileName: "demo.7z",
+          path: "content://upriv.mock/import/demo.zip",
+          fileName: "demo.zip",
         };
       },
     },

@@ -7,8 +7,9 @@ import react from "@vitejs/plugin-react";
 const root = path.dirname(fileURLToPath(import.meta.url));
 const sharedRoot = path.resolve(root, "../shared");
 const devRoot = path.resolve(root, "../..");
+const repoRoot = path.resolve(devRoot, "..");
 const isElectronBuild = process.env.ELECTRON === "true";
-const appVersion = fs.readFileSync(path.join(devRoot, "VERSION"), "utf8").trim();
+const appVersion = fs.readFileSync(path.join(repoRoot, "VERSION"), "utf8").trim();
 
 export default defineConfig({
   cacheDir: path.resolve(root, ".vite-cache"),
@@ -17,8 +18,11 @@ export default defineConfig({
     __UPRIV_APP_VERSION__: JSON.stringify(appVersion),
   },
   resolve: {
+    dedupe: ["react", "react-dom"],
     alias: {
       "@": path.resolve(root, "./src"),
+      "@upriv/shared/react": path.resolve(root, "../shared/src/react/index.ts"),
+      "@upriv/shared/testing": path.resolve(root, "../shared/src/testing/index.ts"),
       "@upriv/shared": path.resolve(root, "../shared/src"),
       "@assets": path.resolve(root, "./assets"),
     },

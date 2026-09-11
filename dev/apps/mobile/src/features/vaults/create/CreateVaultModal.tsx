@@ -1,27 +1,24 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { ScrollView, StyleSheet, Text, useWindowDimensions, View } from "react-native";
+import { useEffect, useMemo, useState } from "react";
+import { ScrollView, StyleSheet, Text, useWindowDimensions } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import {
-  buildCreateVaultResult,
-  canSubmitCreateVault,
-  createEmptyCreateVaultDraft,
-  createVaultDraftEqual,
-  CREATE_VAULT_STEPS,
-  getCreateVaultStepStatus,
-  validateCreateVaultStep,
+  NO_VAULT_GROUPS,
+  vaultRootPathForWorkspaceValidation,
   type CreateVaultDraft,
   type CreateVaultResult,
   type CreateVaultStepId,
-  type CreateVaultStepStatus,
   type VaultGroup,
 } from "@upriv/shared";
-import { useCreateVaultService } from "@/platform/services";
+import { useAppSettingsContext } from "@/features/system/settings";
+import { useCreateVaultService, useVaultRootService } from "@/platform/services";
 import { useTranslation } from "@/i18n";
 import { useTheme } from "@/theme";
 import { MODAL_MAX_HEIGHT_RATIO, spacing } from "@/theme/tokens";
-import { Button, Modal } from "@/components/ui";
+import { Button, Modal, ModalFooterNav, modalFooterConfirmBtnStyle } from "@/components/ui";
+import { useTapNotPan } from "@/components/ui/ScrimDismiss";
 import { CreateVaultStepNav } from "./CreateVaultStepNav";
 import { renderCreateVaultStep } from "./createVaultSteps";
+import { useCreateVaultWizard } from "@upriv/shared/react";
 
 interface CreateVaultModalProps {
   open: boolean;
@@ -34,13 +31,13 @@ interface CreateVaultModalProps {
   onCreate: (result: CreateVaultResult) => void;
 }
 
-/** Create-vault wizard — desktop `CreateVaultWizardModal` structure parity. */
+/** Create-vault wizard — same step flow as desktop `CreateVaultModal`. */
 export function CreateVaultModal({
   open,
   onClose,
   existingVaultIds,
   existingOrders,
-  groups = [],
+  groups = NO_VAULT_GROUPS,
   initialDraft = null,
   initialStep = null,
   onCreate,
@@ -50,10 +47,43 @@ export function CreateVaultModal({
   const insets = useSafeAreaInsets();
   const { height: windowHeight } = useWindowDimensions();
   const createVaultService = useCreateVaultService();
-  /**
-   * Cap the step pane against remaining dialog height (header + step nav + footer),
-   * not raw window height — avoids clipping chrome on short phones.
-   */
+  const { settings: appSettings, showHiddenVaultsSession } = useAppSettingsContext();
+  const vaultRootService = useVaultRootService();
+  const [resolvedRootPath, setResolvedRootPath] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open) {
+      setResolvedRootPath(null);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const resolved = await vaultRootService.resolve({
+          vaultRootMode: appSettings.app.vault_root_mode,
+        });
+        if (cancelled) return;
+        if (resolved.status === "found") {
+          setResolvedRootPath(resolved.rootPath);
+        } else {
+          setResolvedRootPath(resolved.defaultRootAnchor);
+        }
+      } catch {
+        if (!cancelled) setResolvedRootPath(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, appSettings.app.vault_root_mode, vaultRootService]);
+
+  const vaultRootPath = vaultRootPathForWorkspaceValidation(
+    appSettings.app.vault_root_mode,
+    appSettings.app.upriv_root_path,
+    resolvedRootPath,
+  );
+  const includeHidden = appSettings.ui.always_show_hidden_vaults || showHiddenVaultsSession;
+
   const stepPaneMaxHeight = useMemo(() => {
     const framePadTop = Math.max(insets.top, spacing.md);
     const framePadBottom = Math.max(insets.bottom, spacing.md);
@@ -61,172 +91,90 @@ export function CreateVaultModal({
       240,
       Math.round(windowHeight * MODAL_MAX_HEIGHT_RATIO) - framePadTop - framePadBottom,
     );
-    const chromeReserve = 52 /* title */ + 56 /* step nav */ + 72 /* footer */;
+    const chromeReserve = 52 + 56 + 72;
     return Math.max(120, Math.min(dialogMaxHeight - chromeReserve, 680));
   }, [insets.bottom, insets.top, windowHeight]);
-  const [baseline, setBaseline] = useState<CreateVaultDraft>(() =>
-    createEmptyCreateVaultDraft(existingOrders),
-  );
-  const [draft, setDraft] = useState<CreateVaultDraft>(() =>
-    createEmptyCreateVaultDraft(existingOrders),
-  );
-  const [currentStep, setCurrentStep] = useState<CreateVaultStepId>("source");
-  const [visitedSteps, setVisitedSteps] = useState<Set<CreateVaultStepId>>(
-    () => new Set(["source"]),
-  );
-  const [submitAttempted, setSubmitAttempted] = useState(false);
-  const [testingPassword, setTestingPassword] = useState(false);
-  const [discardConfirmOpen, setDiscardConfirmOpen] = useState(false);
 
-  useEffect(() => {
-    if (!open) return;
-    const empty = createEmptyCreateVaultDraft(existingOrders);
-    const starting = initialDraft ?? empty;
-    const step = initialStep ?? (initialDraft ? "identity" : "source");
-    setBaseline(starting);
-    setDraft(starting);
-    setCurrentStep(step);
-    setVisitedSteps(step === "source" ? new Set(["source"]) : new Set(["source", "identity"]));
-    setSubmitAttempted(false);
-    setTestingPassword(false);
-    setDiscardConfirmOpen(false);
-  }, [open, existingOrders, initialDraft, initialStep]);
-
-  const isDirty = useMemo(() => !createVaultDraftEqual(draft, baseline), [draft, baseline]);
-
-  const dismissFooterConfirm = useCallback(() => {
-    setDiscardConfirmOpen(false);
-  }, []);
-
-  const patchDraft = useCallback((patch: Partial<CreateVaultDraft>) => {
-    setDiscardConfirmOpen(false);
-    setDraft((current) => ({ ...current, ...patch }));
-  }, []);
-
-  const knownGroupIds = useMemo(() => groups.map((group) => group.id), [groups]);
-
-  const stepStatuses = useMemo(() => {
-    const statuses = {} as Record<CreateVaultStepId, CreateVaultStepStatus>;
-    for (const stepId of CREATE_VAULT_STEPS) {
-      statuses[stepId] = getCreateVaultStepStatus(
-        stepId,
-        draft,
-        existingVaultIds,
-        visitedSteps,
-        submitAttempted,
-        knownGroupIds,
-      );
-    }
-    return statuses;
-  }, [draft, existingVaultIds, knownGroupIds, visitedSteps, submitAttempted]);
-
-  const currentStepIndex = CREATE_VAULT_STEPS.indexOf(currentStep);
-  const isFirstStep = currentStepIndex === 0;
-  const isLastStep = currentStepIndex === CREATE_VAULT_STEPS.length - 1;
-  const currentErrors = validateCreateVaultStep(
-    currentStep,
-    draft,
+  const wizard = useCreateVaultWizard({
+    open,
     existingVaultIds,
-    knownGroupIds,
-  );
-  const canCreate = canSubmitCreateVault(draft, existingVaultIds, knownGroupIds);
+    existingOrders,
+    groups,
+    vaultRootPath,
+    initialDraft,
+    initialStep,
+    onCreate,
+    onClose,
+    testImportPassword: (password) => createVaultService.testImportPackagePassword(password),
+  });
 
-  const goToStep = (stepId: CreateVaultStepId) => {
-    setDiscardConfirmOpen(false);
-    setCurrentStep(stepId);
-    setVisitedSteps((current) => new Set(current).add(stepId));
-  };
-
-  const handleBack = () => {
-    if (isFirstStep) return;
-    goToStep(CREATE_VAULT_STEPS[currentStepIndex - 1]);
-  };
-
-  /** Desktop advances even with step errors (errors show when visited). */
-  const handleNext = () => {
-    setVisitedSteps((current) => new Set(current).add(currentStep));
-    if (!isLastStep) goToStep(CREATE_VAULT_STEPS[currentStepIndex + 1]);
-  };
-
-  const handleTestImportPassword = () => {
-    setTestingPassword(true);
-    setTimeout(() => {
-      const ok = createVaultService.testImportArchivePassword(draft.password);
-      patchDraft({
-        passwordValidated: ok,
-        passwordTestFailed: !ok,
-      });
-      setTestingPassword(false);
-      setVisitedSteps((current) => new Set(current).add("password"));
-    }, 400);
-  };
-
-  const handleClose = () => {
-    setDiscardConfirmOpen(false);
-    setSubmitAttempted(false);
-    onClose();
-  };
-
-  const requestClose = () => {
-    if (discardConfirmOpen) {
-      dismissFooterConfirm();
-      return;
-    }
-    if (isDirty) {
-      setDiscardConfirmOpen(true);
-      return;
-    }
-    handleClose();
-  };
-
-  const handleDiscardAndClose = () => {
-    setDraft(baseline);
-    handleClose();
-  };
-
-  const handleCreate = () => {
-    setSubmitAttempted(true);
-    setVisitedSteps(new Set(CREATE_VAULT_STEPS));
-    if (!canSubmitCreateVault(draft, existingVaultIds, knownGroupIds)) return;
-    onCreate(buildCreateVaultResult(draft, existingVaultIds));
-    handleClose();
-  };
+  const {
+    draft,
+    currentStep,
+    stepStatuses,
+    inlineErrors,
+    isFirstStep,
+    isLastStep,
+    canCreate,
+    discardConfirmOpen,
+    testingPassword,
+    patchDraft,
+    goToStep,
+    handleBack,
+    handleNext,
+    handleCreate,
+    handleTestImportPassword,
+    requestClose,
+    handleDiscardAndClose,
+    dismissFooterConfirm,
+    stepFocus,
+  } = wizard;
+  const dismissConfirmOnBodyTap = useTapNotPan(dismissFooterConfirm, discardConfirmOpen);
 
   const footer = (
-    <View style={styles.footer}>
-      <View style={styles.footerLeft}>
-        {discardConfirmOpen ? (
+    <ModalFooterNav
+      leading={
+        discardConfirmOpen ? (
           <Text style={typography.bodyMuted}>{t("modal.settings.discard_confirm")}</Text>
         ) : (
           <Button
             variant="ghost"
             label={t("vault.create.action.back")}
+            style={modalFooterConfirmBtnStyle}
             disabled={isFirstStep}
             onPress={handleBack}
           />
-        )}
-      </View>
-      <View style={styles.footerRight}>
-        {discardConfirmOpen ? (
+        )
+      }
+      trailing={
+        discardConfirmOpen ? (
           <>
             <Button
               variant="ghost"
               label={t("modal.settings.discard_keep_editing")}
+              style={modalFooterConfirmBtnStyle}
               onPress={dismissFooterConfirm}
             />
             <Button
               variant="danger"
               label={t("modal.settings.discard_confirm_action")}
+              style={modalFooterConfirmBtnStyle}
               onPress={handleDiscardAndClose}
             />
           </>
         ) : (
           <>
-            <Button variant="ghost" label={t("action.cancel")} onPress={requestClose} />
+            <Button
+              variant="ghost"
+              label={t("action.cancel")}
+              style={modalFooterConfirmBtnStyle}
+              onPress={requestClose}
+            />
             {isLastStep ? (
               <Button
                 variant="primary"
                 label={t("vault.create.action.create")}
+                style={modalFooterConfirmBtnStyle}
                 disabled={!canCreate}
                 onPress={handleCreate}
               />
@@ -234,65 +182,56 @@ export function CreateVaultModal({
               <Button
                 variant="primary"
                 label={t("vault.create.action.next")}
+                style={modalFooterConfirmBtnStyle}
                 onPress={handleNext}
               />
             )}
           </>
-        )}
-      </View>
-    </View>
+        )
+      }
+    />
   );
 
   return (
     <Modal
       open={open}
       title={t("vault.create.title")}
+      titleIcon="add"
       onClose={requestClose}
       panelClassName="max-w-3xl"
       bodyScroll={false}
       footer={footer}
     >
-      <ScrollView
-        style={{ maxHeight: stepPaneMaxHeight }}
-        contentContainerStyle={styles.body}
-        keyboardShouldPersistTaps="handled"
-        nestedScrollEnabled
-        showsVerticalScrollIndicator
-        onScrollBeginDrag={discardConfirmOpen ? dismissFooterConfirm : undefined}
-      >
-        {renderCreateVaultStep(currentStep, {
-          draft,
-          errors: submitAttempted || visitedSteps.has(currentStep) ? currentErrors : [],
-          onChange: patchDraft,
-          groups,
-          onTestImportPassword: handleTestImportPassword,
-          testingPassword,
-        })}
-      </ScrollView>
       <CreateVaultStepNav
         currentStep={currentStep}
         stepStatuses={stepStatuses}
         onSelectStep={goToStep}
       />
+      <ScrollView
+        style={{ maxHeight: stepPaneMaxHeight }}
+        contentContainerStyle={styles.body}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="none"
+        nestedScrollEnabled
+        showsVerticalScrollIndicator
+        {...dismissConfirmOnBodyTap}
+      >
+        {renderCreateVaultStep(currentStep, {
+          draft,
+          errors: inlineErrors,
+          onChange: patchDraft,
+          groups,
+          includeHidden,
+          vaultRootPath,
+          onTestImportPassword: handleTestImportPassword,
+          testingPassword,
+          ...stepFocus,
+        })}
+      </ScrollView>
     </Modal>
   );
 }
 
 const styles = StyleSheet.create({
   body: { gap: spacing.md, paddingBottom: spacing.sm },
-  footer: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: spacing.md,
-  },
-  footerLeft: { flexGrow: 1, flexShrink: 1, minWidth: 120 },
-  footerRight: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: spacing.sm,
-    justifyContent: "flex-end",
-    flexShrink: 0,
-  },
 });

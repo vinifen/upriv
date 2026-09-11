@@ -16,8 +16,11 @@ export function parseAppLogFile(raw: unknown): AppLogFile {
     typeof record.createdAt !== "string" ||
     typeof record.sizeBytes !== "number" ||
     !Number.isFinite(record.sizeBytes) ||
+    record.sizeBytes < 0 ||
     typeof record.lineCount !== "number" ||
     !Number.isFinite(record.lineCount) ||
+    !Number.isInteger(record.lineCount) ||
+    record.lineCount < 0 ||
     typeof record.lineCountExact !== "boolean"
   ) {
     throw new Error("log file: invalid shape");

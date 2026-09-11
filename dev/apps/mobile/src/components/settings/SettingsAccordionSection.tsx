@@ -2,11 +2,14 @@ import { useState, type ReactNode } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { Icon } from "@/components/icons";
 import { useTheme } from "@/theme";
-import { radii, spacing } from "@/theme/tokens";
+import { radii, settingsSectionBoxShadow, spacing } from "@/theme/tokens";
 
 interface SettingsAccordionSectionProps {
   title: string;
   defaultOpen?: boolean;
+  /** When set, expansion is controlled by the parent (desktop `VaultSettingsSection` parity). */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
   tone?: "default" | "danger";
   children: ReactNode;
 }
@@ -15,11 +18,21 @@ interface SettingsAccordionSectionProps {
 export function SettingsAccordionSection({
   title,
   defaultOpen = false,
+  open: openProp,
+  onOpenChange,
   tone = "default",
   children,
 }: SettingsAccordionSectionProps) {
-  const { colors, typography } = useTheme();
-  const [open, setOpen] = useState(defaultOpen);
+  const { colors, typography, theme } = useTheme();
+  const [internalOpen, setInternalOpen] = useState(defaultOpen);
+  const isControlled = openProp !== undefined;
+  const open = isControlled ? openProp : internalOpen;
+
+  const toggle = () => {
+    const next = !open;
+    if (!isControlled) setInternalOpen(next);
+    onOpenChange?.(next);
+  };
 
   return (
     <View
@@ -27,12 +40,13 @@ export function SettingsAccordionSection({
         styles.card,
         {
           backgroundColor: colors.surfaceContainer,
-          borderColor: colors.outlineVariant,
+          // Soft desktop-shaped shadow; opacity bumped for mobile only (see tokens).
+          boxShadow: settingsSectionBoxShadow(theme),
         },
       ]}
     >
       <Pressable
-        onPress={() => setOpen((current) => !current)}
+        onPress={toggle}
         style={styles.header}
         accessibilityRole="button"
         accessibilityState={{ expanded: open }}
@@ -62,8 +76,7 @@ export function SettingsAccordionSection({
 const styles = StyleSheet.create({
   card: {
     borderRadius: radii.md,
-    borderWidth: 1,
-    overflow: "hidden",
+    overflow: "visible",
   },
   header: {
     flexDirection: "row",

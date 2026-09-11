@@ -15,9 +15,7 @@ export const vaultStatusI18nKey = sharedVaultStatusI18nKey as Record<VaultDispla
 export const vaultStatusRowClass = {
   open: "border-l-2 border-vault-open bg-surface-container hover:bg-surface-row-hover [&:has(button:hover)]:bg-surface-container",
   closed:
-    "bg-surface-container hover:bg-surface-row-hover [&:has(button:hover)]:bg-surface-container",
-  sealed:
-    "bg-surface-container opacity-90 hover:bg-surface-row-hover [&:has(button:hover)]:bg-surface-container",
+    "border-l-2 border-transparent bg-surface-container hover:bg-surface-row-hover [&:has(button:hover)]:bg-surface-container",
   recovery:
     "border-l-2 border-vault-recovery bg-vault-recovery/10 hover:bg-surface-row-hover [&:has(button:hover)]:bg-surface-container",
   closing:
@@ -30,7 +28,6 @@ export const vaultStatusRowClass = {
 export const vaultStatusBadgeClass = {
   open: "bg-[var(--vault-open-badge-bg)] text-vault-open",
   closed: "bg-surface-container-highest text-on-surface-variant",
-  sealed: "bg-surface-container-highest text-on-surface-variant",
   recovery: "bg-[var(--vault-recovery-badge-bg)] text-vault-recovery",
   closing: "bg-surface-container-highest text-on-surface-variant animate-pulse",
   opening: "bg-surface-container-highest text-on-surface-variant animate-pulse",
@@ -38,10 +35,9 @@ export const vaultStatusBadgeClass = {
 
 /** Leading circle icon tint on vault row. */
 export const vaultStatusIconClass = {
-  open: "bg-vault-open/10 text-vault-open",
+  open: "bg-[var(--vault-open-icon-bg)] text-vault-open",
   closed: "bg-surface-container-highest text-on-surface-variant",
-  sealed: "bg-surface-container-highest text-on-surface-variant",
-  recovery: "bg-vault-recovery/15 text-vault-recovery",
+  recovery: "bg-[var(--vault-recovery-icon-bg)] text-vault-recovery",
   closing: "bg-surface-container-highest text-on-surface-variant",
   opening: "bg-surface-container-highest text-on-surface-variant",
 } as const satisfies Record<VaultDisplayStatus, string>;

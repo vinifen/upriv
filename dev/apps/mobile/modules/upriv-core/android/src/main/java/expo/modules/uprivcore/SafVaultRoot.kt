@@ -14,18 +14,19 @@ import androidx.documentfile.provider.DocumentFile
  * `ACTION_OPEN_DOCUMENT_TREE` are `content://` URIs and live here instead
  * (DocumentFile + ContentResolver). See SDD §9.4 / ARCHITECTURE §6.
  *
- * Marker directory: prefer `.upriv/` (desktop parity). Some OEM document
- * providers reject leading-dot display names — we fall back to `upriv/` and
- * accept either on inspect/read/write.
+ * Marker directory: `.upriv/` only (desktop parity). If the provider rejects a
+ * leading-dot name, setup fails — never create or accept `upriv/` without the
+ * dot (that volume would look empty on Linux/Windows).
+ *
+ * `[ui]` / `[logging]` defaults in [DEFAULT_SETTINGS_TOML_TEMPLATE] must match
+ * `serialize_settings_toml_str` in upriv-core (Rust owns the schema). The
+ * crate test `kotlin_saf_template_matches_core_defaults` fails if they drift.
  */
 internal object SafVaultRoot {
   private const val TAG = "UprivSaf"
 
   const val UPRIV_DIR = ".upriv"
-  /** Fallback when the provider refuses a leading-dot folder name. */
-  const val UPRIV_DIR_FALLBACK = "upriv"
   const val SETTINGS_FILE = "settings.toml"
-  const val WORKSPACE_DIR = "workspace"
 
   private val UPRIV_CHILD_DIRS = listOf("vaults", "logs", "app", "runtime")
   private const val DEFAULT_LOCALE = "en"
@@ -39,16 +40,27 @@ vaults_dir = ".upriv/vaults"
 state_file = ".upriv/state.json"
 logs_dir = ".upriv/logs"
 app_dir = ".upriv/app"
-workspace_dir = "workspace"
+# List groups (optional): .upriv/vault_groups.toml — missing file = no groups.
 
 [ui]
 locale = "__LOCALE__"
 theme = "dark"
+show_header_more_button = true
+file_manager_dock_expanded = false
+always_show_hidden_vaults = false
 vault_list_sort = "order"
 vault_list_sort_direction = "asc"
 vault_list_view = "default"
-always_show_hidden_vaults = false
-file_manager_dock_expanded = false
+vault_list_search = ""
+vault_list_show_drag = true
+vault_list_allow_drag_into_group = true
+vault_list_show_create_button = true
+vault_list_show_search_button = true
+vault_list_show_sort_button = true
+vault_list_show_view_button = true
+vault_list_show_vault_more_button = true
+vault_list_show_vault_settings_button = true
+vault_list_show_group_settings_button = true
 
 [logging]
 enabled = true
@@ -57,6 +69,13 @@ entries_per_file = 1000
 keep_last_entries = 10000
 
 [app]
+last_opened_vault = ""
+# Vault-root mode (`default_root` | `custom_root`): app-home `.upriv-root`, not here.
+# Missing/inactive → default_root; active + path → custom_root.
+
+[workspace]
+# Absolute path for the default mount parent (open vaults). Empty = unset — no folder created.
+path = ""
 """
 
   enum class Status {
@@ -149,13 +168,11 @@ keep_last_entries = 10000
     return DocumentFile.fromSingleUri(context, uri)
   }
 
-  /** Find `.upriv` or fallback `upriv` under the tree root. */
+  /** Find `.upriv` under the tree root. Leading-dot names often skip `findFile`. */
   private fun findUprivDir(context: Context, tree: DocumentFile, treeUri: String): DocumentFile? {
     tree.findFile(UPRIV_DIR)?.takeIf { it.isDirectory }?.let { return it }
-    tree.findFile(UPRIV_DIR_FALLBACK)?.takeIf { it.isDirectory }?.let { return it }
     // fromSingleUri.isDirectory is often false for tree children — trust the query.
-    childByDocumentId(context, treeUri, UPRIV_DIR)?.let { return it }
-    return childByDocumentId(context, treeUri, UPRIV_DIR_FALLBACK)
+    return childByDocumentId(context, treeUri, UPRIV_DIR)
   }
 
   private fun findSettingsFile(
@@ -167,8 +184,6 @@ keep_last_entries = 10000
     val dirName = upriv.name ?: UPRIV_DIR
     return childByDocumentId(context, treeUri, "$dirName/$SETTINGS_FILE")?.takeIf { !it.isDirectory }
       ?: childByDocumentId(context, treeUri, "$UPRIV_DIR/$SETTINGS_FILE")?.takeIf { !it.isDirectory }
-      ?: childByDocumentId(context, treeUri, "$UPRIV_DIR_FALLBACK/$SETTINGS_FILE")
-        ?.takeIf { !it.isDirectory }
   }
 
   /**
@@ -198,22 +213,20 @@ keep_last_entries = 10000
   }
 
   /**
-   * Create `.upriv/` (or `upriv/` fallback). Media trees (Music, DCIM, …) often
-   * reject a leading-dot name — try the un-dotted fallback before failing.
+   * Create `.upriv/`. Media trees (Music, DCIM, …) often reject a leading-dot
+   * name — fail closed rather than a second marker name the desktop cannot see.
    */
   private fun createUprivDir(context: Context, tree: DocumentFile, treeUri: String): DocumentFile {
     findUprivDir(context, tree, treeUri)?.let { return it }
 
-    for (name in listOf(UPRIV_DIR, UPRIV_DIR_FALLBACK)) {
-      createChildDirectory(context, tree, name)?.let { return it }
-    }
+    createChildDirectory(context, tree, UPRIV_DIR)?.let { return it }
 
     // Create reported failure but the folder may already exist (hidden listing).
     findUprivDir(context, tree, treeUri)?.let { return it }
 
     throw SafException(
       "saf_create_failed",
-      "cannot create .upriv/ (or upriv/) under the chosen folder",
+      "cannot create .upriv/ under the chosen folder",
     )
   }
 
@@ -314,7 +327,16 @@ keep_last_entries = 10000
     when (policy) {
       "", "null" -> {
         if (hasNonEmptySettings) {
-          // Idempotent: selecting an already-seeded tree is a no-op here.
+          // Idempotent: selecting an already-seeded tree still guarantees
+          // `.upriv/{vaults,logs,app,runtime}` exists.
+          val marker = upriv?.takeIf { it.exists() && it.isDirectory } ?: createUprivDir(context, tree, treeUri)
+          UPRIV_CHILD_DIRS.forEach { name ->
+            val existing = marker.findFile(name)
+            if (existing == null || !existing.isDirectory) {
+              createChildDirectory(context, marker, name)
+                ?: Log.w(TAG, "could not create .upriv/$name")
+            }
+          }
           return
         }
       }
@@ -345,10 +367,7 @@ keep_last_entries = 10000
           ?: Log.w(TAG, "could not create .upriv/$name")
       }
     }
-    if (tree.findFile(WORKSPACE_DIR)?.isDirectory != true) {
-      createChildDirectory(context, tree, WORKSPACE_DIR)
-        ?: Log.w(TAG, "could not create workspace/")
-    }
+    // Do not auto-create a top-level workspace/ — mount parent is user-configured.
 
     val toml = settingsTomlOverride ?: buildDefaultSettingsToml(locale)
     val settingsFile = findSettingsFile(context, treeUri, marker)

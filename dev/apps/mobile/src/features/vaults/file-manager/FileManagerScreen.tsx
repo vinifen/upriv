@@ -15,6 +15,7 @@ import type { FileTreeNode, VaultListItem } from "@upriv/shared";
 import { useVaultFileSystemService } from "@/platform/services";
 import { useTranslation } from "@/i18n";
 import { Button } from "@/components/ui";
+import { Icon } from "@/components/icons";
 import { useTheme } from "@/theme";
 import { radii, spacing, touchMin } from "@/theme/tokens";
 
@@ -92,12 +93,34 @@ export function FileManagerScreen({ vault, open, onClose }: FileManagerScreenPro
     setView("editor");
   };
 
-  const save = () => {
+  const save = useCallback(() => {
     if (!vault || !selectedPath) return;
     fs.setFileContent(vault.id, selectedPath, content);
     setDirty(false);
     bump();
-  };
+  }, [bump, content, fs, selectedPath, vault]);
+
+  const closeWithUnsavedPrompt = useCallback(() => {
+    if (!dirty) {
+      onClose();
+      return;
+    }
+    Alert.alert(t("modal.file_manager.unsaved.title"), t("modal.file_manager.unsaved.body"), [
+      { text: t("action.cancel"), style: "cancel" },
+      {
+        text: t("modal.file_manager.unsaved.discard"),
+        style: "destructive",
+        onPress: onClose,
+      },
+      {
+        text: t("modal.file_manager.unsaved.save_and_close"),
+        onPress: () => {
+          save();
+          onClose();
+        },
+      },
+    ]);
+  }, [dirty, onClose, save, t]);
 
   const createFile = () => {
     if (!vault) return;
@@ -159,7 +182,7 @@ export function FileManagerScreen({ vault, open, onClose }: FileManagerScreenPro
   if (!open || !vault) return null;
 
   return (
-    <RnModal visible={open} animationType="slide" onRequestClose={onClose}>
+    <RnModal visible={open} animationType="slide" onRequestClose={closeWithUnsavedPrompt}>
       <View
         style={[
           styles.root,
@@ -180,17 +203,51 @@ export function FileManagerScreen({ vault, open, onClose }: FileManagerScreenPro
           ]}
         >
           {view === "editor" ? (
-            <Pressable onPress={() => setView("tree")} style={styles.headerBtn}>
-              <Text style={[typography.body, { color: colors.accent }]}>
-                {t("modal.file_manager.mobile.back_to_tree")}
+            <>
+              <Pressable onPress={() => setView("tree")} style={styles.headerBtn}>
+                <Text style={[typography.body, { color: colors.accent }]}>
+                  {t("modal.file_manager.mobile.back_to_tree")}
+                </Text>
+              </Pressable>
+              <Text
+                style={[
+                  typography.headline,
+                  styles.headerContext,
+                  { color: colors.onSurfaceVariant, fontWeight: "500" },
+                ]}
+                numberOfLines={1}
+              >
+                {vault.displayName}
               </Text>
-            </Pressable>
+            </>
           ) : (
-            <Text style={[typography.headline, { flex: 1 }]} numberOfLines={1}>
-              {t("modal.file_manager.title", { name: vault.displayName })}
-            </Text>
+            <View style={styles.headerLeading}>
+              <Icon name="file-manager" size={16} color={colors.onSurfaceVariant} />
+              <Text
+                style={[typography.headline, styles.headerTitle, styles.headerType]}
+                numberOfLines={1}
+              >
+                {t("modal.file_manager.title")}
+              </Text>
+              <Text
+                style={[styles.headerSeparator, { color: colors.onSurfaceVariant }]}
+                accessible={false}
+              >
+                —
+              </Text>
+              <Text
+                style={[styles.headerContext, { color: colors.onSurfaceVariant }]}
+                numberOfLines={1}
+              >
+                {vault.displayName}
+              </Text>
+            </View>
           )}
-          <Pressable onPress={onClose} style={styles.headerBtn} accessibilityRole="button">
+          <Pressable
+            onPress={closeWithUnsavedPrompt}
+            style={styles.headerBtn}
+            accessibilityRole="button"
+          >
             <Text style={[typography.body, { color: colors.accent }]}>✕</Text>
           </Pressable>
         </View>
@@ -214,6 +271,8 @@ export function FileManagerScreen({ vault, open, onClose }: FileManagerScreenPro
               data={entries}
               keyExtractor={(item) => item.path}
               renderItem={renderItem}
+              keyboardShouldPersistTaps="handled"
+              keyboardDismissMode="none"
               ListEmptyComponent={
                 <Text style={[typography.bodyMuted, styles.empty]}>
                   {t("modal.file_manager.viewer.empty_body")}
@@ -230,22 +289,25 @@ export function FileManagerScreen({ vault, open, onClose }: FileManagerScreenPro
             {selectedPath && fs.isFileEditable(vault.id, selectedPath) ? (
               <>
                 <TextInput
+                  collapsable={false}
                   value={content}
                   onChangeText={(next) => {
                     setContent(next);
                     setDirty(true);
                   }}
                   multiline
+                  blurOnSubmit={false}
+                  importantForAutofill="no"
                   style={[
                     styles.editor,
                     typography.body,
                     {
                       backgroundColor: colors.surfaceContainer,
-                      borderColor: colors.outlineVariant,
                       color: colors.onSurface,
                     },
                   ]}
                   textAlignVertical="top"
+                  underlineColorAndroid="transparent"
                 />
                 <View style={[styles.toolbar, { borderBottomColor: colors.outlineVariant }]}>
                   <Button
@@ -281,6 +343,34 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
   },
   headerBtn: { minHeight: touchMin, justifyContent: "center", paddingHorizontal: spacing.sm },
+  headerLeading: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+  },
+  headerType: {
+    includeFontPadding: false,
+    textAlignVertical: "center",
+    lineHeight: 18,
+  },
+  headerTitle: { flexShrink: 0 },
+  headerSeparator: {
+    flexShrink: 0,
+    fontSize: 14,
+    lineHeight: 18,
+    includeFontPadding: false,
+    textAlignVertical: "center",
+  },
+  headerContext: {
+    flexShrink: 1,
+    minWidth: 0,
+    fontSize: 14,
+    lineHeight: 18,
+    includeFontPadding: false,
+    textAlignVertical: "center",
+  },
   toolbar: {
     flexDirection: "row",
     flexWrap: "wrap",
@@ -302,7 +392,6 @@ const styles = StyleSheet.create({
   editor: {
     flex: 1,
     borderRadius: radii.md,
-    borderWidth: 1,
     padding: spacing.md,
     fontFamily: "monospace",
   },

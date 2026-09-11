@@ -22,4 +22,7 @@ export const desktopLogService: LogService = {
   async recordVaultHidden() {
     await rpcLogEvent("vault_hidden");
   },
+  async recordVaultGroupHidden() {
+    await rpcLogEvent("vault_group_hidden");
+  },
 };

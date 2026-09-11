@@ -5,6 +5,7 @@ describe("formatBytes", () => {
   it.each([
     [undefined, "—"],
     [Number.NaN, "—"],
+    [-1, "—"],
     [512, "512 B"],
     [2048, "2.0 KB"],
     [5 * 1024 * 1024, "5.0 MB"],

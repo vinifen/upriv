@@ -11,15 +11,25 @@ export type {
   VaultRootResolveSource,
 } from "./types";
 export { VAULT_ROOT_ALIAS_FILE } from "./types";
-export { VAULT_ROOT_ERROR_CODES, isVaultRootErrorCode } from "./errors";
-export type { VaultRootErrorCode } from "./errors";
+export {
+  isSafContentUri,
+  vaultRootContentorPath,
+  vaultRootLogsDisplayPath,
+  vaultRootUprivDisplayPath,
+  vaultStoreDisplayPaths,
+} from "./paths";
+export {
+  VAULT_ROOT_ERROR_CODES,
+  isVaultRootErrorCode,
+  isVaultRootGoneError,
+  shouldBumpVaultRootEpoch,
+  vaultRootGoneRpcError,
+} from "./errors";
+export type { VaultRootErrorCode, VaultRootIntegrityCode } from "./errors";
 export { VAULT_ROOT_ERROR_I18N_KEYS, vaultRootErrorI18nKey } from "./messages";
 export type { VaultRootErrorI18nKey } from "./messages";
-export {
-  parseDefaultRootStatus,
-  parseVaultRootInspect,
-  parseVaultRootResolve,
-} from "./parse";
+export { sameVaultRootPath, vaultRootPathKey } from "./pathKey";
+export { parseDefaultRootStatus, parseVaultRootInspect, parseVaultRootResolve } from "./parse";
 export {
   VAULT_ROOT_GATE_IDLE,
   confirmNotesForReplacePolicy,

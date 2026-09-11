@@ -13,7 +13,7 @@ import {
   type FileNameErrorCode,
 } from "@upriv/shared";
 import { useVaultFileSystemService } from "@/platform/services";
-import { useToast } from "@/hooks/useToast";
+import { useToast } from "@upriv/shared/react";
 import { useTranslation } from "@/i18n";
 import type { FileManagerEntry } from "../fileManagerTypes";
 import type { VaultWorkspaceAction } from "../lib/vaultWorkspaceReducer";

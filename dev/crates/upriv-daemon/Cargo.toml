@@ -3,6 +3,7 @@ name = "upriv-daemon"
 version.workspace = true
 description = "Upriv desktop backend — stdio JSON-RPC bridge to upriv-core (Electron sidecar)"
 authors.workspace = true
+license.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 

@@ -1,4 +1,5 @@
-import { resolveVaultDisplayStatus, type VaultDisplayStatus } from "../vault";
+import { resolveVaultDisplayStatus } from "../vault";
+import { compareDisplayName, lastAccessedMs, STATE_RANK } from "../vault-list/compare";
 import {
   applyGroupedVaultSort,
   applyVaultListSort,
@@ -14,26 +15,8 @@ export type VaultListRootRow =
   | { kind: "vault"; vault: VaultListItem }
   | { kind: "group"; group: VaultGroup; groupedVaults: VaultListItem[]; hiddenVaultCount: number };
 
-const STATE_RANK: Record<VaultDisplayStatus, number> = {
-  open: 0,
-  opening: 1,
-  closing: 2,
-  closed: 3,
-  sealed: 4,
-  recovery: 5,
-};
-
 function compareName(a: string, b: string): number {
-  const aFirst = (a[0] ?? "").toLowerCase();
-  const bFirst = (b[0] ?? "").toLowerCase();
-  const byFirst = aFirst.localeCompare(bFirst);
-  if (byFirst !== 0) return byFirst;
-  return a.localeCompare(b, undefined, { sensitivity: "base" });
-}
-
-function lastAccessedMs(vault: VaultListItem): number {
-  const parsed = Date.parse(vault.lastAccessedAt);
-  return Number.isFinite(parsed) ? parsed : 0;
+  return compareDisplayName(a, b);
 }
 
 function groupLastAccessedMs(groupedVaults: VaultListItem[]): number {
@@ -68,7 +51,11 @@ function rootSortKey(row: VaultListRootRow, mode: VaultListSortMode): number | s
   }
 }
 
-function compareRootRows(a: VaultListRootRow, b: VaultListRootRow, mode: VaultListSortMode): number {
+function compareRootRows(
+  a: VaultListRootRow,
+  b: VaultListRootRow,
+  mode: VaultListSortMode,
+): number {
   if (mode === "groups") {
     // Groups first, then ungrouped vaults; within each kind sort by name.
     if (a.kind !== b.kind) {
@@ -113,8 +100,10 @@ export type VaultListHierarchyOptions = {
  * First group in `groups` wins when a vault id appears in more than one list
  * (matches Rust `sanitize_vault_groups`).
  * Global sort applies to root rows only; in-group order uses each group's groupedVaultSort.
- * Hidden vaults are omitted from rows unless `showHiddenVaults`. `hiddenVaultCount`
- * is internal (UI must not show a hidden tally — that would leak their presence).
+ * Hidden vaults are omitted from rows unless `showHiddenVaults`. Hidden groups
+ * omit the whole row (members stay claimed so they do not appear ungrouped).
+ * `hiddenVaultCount` is internal (UI must not show a hidden tally — that would
+ * leak their presence).
  */
 export function applyVaultListHierarchySort(
   vaults: VaultListItem[],
@@ -126,7 +115,8 @@ export function applyVaultListHierarchySort(
   const byId = new Map(vaults.map((v) => [v.id, v]));
   const claimed = new Set<string>();
 
-  const groupRows: VaultListRootRow[] = groups.map((group) => {
+  const groupRows: VaultListRootRow[] = [];
+  for (const group of groups) {
     const inGroupOrder: VaultListItem[] = [];
     let hiddenVaultCount = 0;
     for (const id of group.groupedVaults) {
@@ -140,13 +130,16 @@ export function applyVaultListHierarchySort(
       }
       inGroupOrder.push(vault);
     }
-    return {
+    if (group.hidden && !showHidden) {
+      continue;
+    }
+    groupRows.push({
       kind: "group",
       group,
       groupedVaults: applyGroupedVaultSort(inGroupOrder, groupedVaultSortOf(group)),
       hiddenVaultCount,
-    };
-  });
+    });
+  }
 
   const ungrouped = vaults.filter((v) => !claimed.has(v.id) && (showHidden || !v.hidden));
   // Keep ungrouped vault order consistent with flat sort helpers for the vault subset.
@@ -164,21 +157,35 @@ export function applyVaultListHierarchySort(
   return sort.direction === "desc" ? ascending.reverse() : ascending;
 }
 
-/** Flat list of vaults currently shown (root ungrouped + vaults of expanded groups). */
-export function flattenVisibleHierarchyRows(
+function vaultListNameMatches(name: string, query: string): boolean {
+  const needle = query.trim().toLocaleLowerCase();
+  if (!needle) return true;
+  return name.toLocaleLowerCase().includes(needle);
+}
+
+/**
+ * Filter root rows by display name: ungrouped vaults, group names, and vaults
+ * inside groups. Empty/whitespace query is a no-op. Collapse state is unchanged
+ * so the user can still open and close groups while searching.
+ */
+export function filterVaultListRowsBySearch(
   rows: VaultListRootRow[],
-  options?: { includeCollapsedGroupedVaults?: boolean },
-): VaultListItem[] {
-  const includeCollapsed = options?.includeCollapsedGroupedVaults ?? false;
-  const out: VaultListItem[] = [];
+  query: string,
+): VaultListRootRow[] {
+  const needle = query.trim();
+  if (!needle) return rows;
+  const out: VaultListRootRow[] = [];
   for (const row of rows) {
     if (row.kind === "vault") {
-      out.push(row.vault);
+      if (vaultListNameMatches(row.vault.displayName, needle)) out.push(row);
       continue;
     }
-    if (!row.group.collapsed || includeCollapsed) {
-      out.push(...row.groupedVaults);
-    }
+    const groupMatches = vaultListNameMatches(row.group.displayName, needle);
+    const matchingVaults = groupMatches
+      ? row.groupedVaults
+      : row.groupedVaults.filter((vault) => vaultListNameMatches(vault.displayName, needle));
+    if (!groupMatches && matchingVaults.length === 0) continue;
+    out.push({ ...row, groupedVaults: matchingVaults });
   }
   return out;
 }

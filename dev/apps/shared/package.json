@@ -2,17 +2,26 @@
   "name": "@upriv/shared",
   "version": "0.1.0-beta",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "scripts": {
-    "test": "vitest run"
+    "test": "vitest run",
+    "lint": "node ../../js-lint/bin/run.mjs eslint . --max-warnings 0",
+    "lint:fix": "node ../../js-lint/bin/run.mjs eslint . --fix",
+    "format": "node ../../js-lint/bin/run.mjs prettier --write .",
+    "format:check": "node ../../js-lint/bin/run.mjs prettier --check ."
   },
   "exports": {
     ".": "./src/index.ts",
     "./domain": "./src/domain/index.ts",
+    "./react": "./src/react/index.ts",
     "./services": "./src/services/index.ts",
+    "./testing": "./src/testing/index.ts",
     "./locales/*": "./locales/*"
   },
   "devDependencies": {
+    "@types/react": "18.3.18",
+    "eslint-plugin-react-hooks": "^5.2.0",
     "typescript": "5.7.3",
     "vitest": "^3.2.4"
   }

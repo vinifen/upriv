@@ -8,6 +8,7 @@ import {
 } from "react";
 import { Icon } from "@/components/icons";
 import { useTranslation } from "@/i18n";
+import { useErrorToast } from "@/hooks/useErrorToast";
 import { getParentPath, findNode, isDescendantPath, joinPath } from "@upriv/shared";
 import type { FileTreeNode } from "@upriv/shared";
 import { filesFromDataTransfer, filesFromFileInput, isOsFileDrag } from "../lib/osFileDrop";
@@ -40,6 +41,7 @@ function importTargetPath(fm: FileManagerApi): string {
 }
 
 function FileTreeRow({ node, path, depth, fm }: FileTreeRowProps) {
+  const { showError } = useErrorToast();
   const { workspace, dispatch, commitRename, movePath, importFiles } = fm;
   const isFolder = node.type === "folder";
   const isExpanded = isFolder && workspace.expandedPaths.includes(path);
@@ -89,6 +91,15 @@ function FileTreeRow({ node, path, depth, fm }: FileTreeRowProps) {
     }
   };
 
+  useEffect(() => {
+    return () => {
+      if (longPressRef.current) {
+        window.clearTimeout(longPressRef.current);
+        longPressRef.current = null;
+      }
+    };
+  }, []);
+
   const handleDragStart = (event: DragEvent) => {
     if (isRoot) {
       event.preventDefault();
@@ -133,8 +144,12 @@ function FileTreeRow({ node, path, depth, fm }: FileTreeRowProps) {
     if (isOsFileDrag(event)) {
       const targetPath = isFolder ? path : getParentPath(path);
       void (async () => {
-        const files = await filesFromDataTransfer(event);
-        await importFiles(targetPath, files);
+        try {
+          const files = await filesFromDataTransfer(event);
+          await importFiles(targetPath, files);
+        } catch (error) {
+          showError(error, "error.unexpected");
+        }
       })();
       dispatch({ type: "set_drag", source: null, target: null });
       return;
@@ -256,6 +271,7 @@ function FileTreeRoot({ tree, fm }: { tree: FileTreeNode; fm: FileManagerApi }) 
 
 export function FileTreePanel({ fm, splitPercent, layout }: FileTreePanelProps) {
   const { t } = useTranslation();
+  const { showError } = useErrorToast();
   const importFilesInputRef = useRef<HTMLInputElement>(null);
   const importFolderInputRef = useRef<HTMLInputElement>(null);
   const paneStyle =
@@ -302,8 +318,12 @@ export function FileTreePanel({ fm, splitPercent, layout }: FileTreePanelProps) 
 
     if (isOsFileDrag(event)) {
       void (async () => {
-        const files = await filesFromDataTransfer(event);
-        await fm.importFiles("/", files);
+        try {
+          const files = await filesFromDataTransfer(event);
+          await fm.importFiles("/", files);
+        } catch (error) {
+          showError(error, "error.unexpected");
+        }
       })();
       fm.dispatch({ type: "set_drag", source: null, target: null });
       return;

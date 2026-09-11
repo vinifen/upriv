@@ -2,6 +2,7 @@
   "name": "upriv-mobile",
   "version": "0.1.0-beta",
   "private": true,
+  "license": "MIT",
   "main": "index.ts",
   "scripts": {
     "start": "expo start",
@@ -10,23 +11,27 @@
     "android:native": "expo run:android",
     "prebuild": "expo prebuild",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint . --max-warnings 0",
-    "lint:fix": "eslint . --fix",
-    "format": "prettier --write .",
-    "format:check": "prettier --check .",
+    "test": "vitest run",
+    "lint": "node ../../js-lint/bin/run.mjs eslint . --max-warnings 0",
+    "lint:fix": "node ../../js-lint/bin/run.mjs eslint . --fix",
+    "format": "node ../../js-lint/bin/run.mjs prettier --write .",
+    "format:check": "node ../../js-lint/bin/run.mjs prettier --check .",
     "build:ffi": "bash ../../scripts/build-android-ffi.sh"
   },
   "dependencies": {
     "@react-navigation/native": "^7.3.14",
     "@react-navigation/native-stack": "^7.18.6",
     "@upriv/shared": "file:../shared",
+    "base64-js": "^1.5.1",
     "expo": "52.0.49",
     "expo-asset": "~11.0.5",
     "expo-constants": "~17.0.8",
     "expo-dev-client": "~5.0.20",
     "expo-file-system": "~18.0.12",
     "expo-font": "~13.0.4",
+    "expo-sharing": "~13.0.1",
     "expo-status-bar": "2.0.1",
+    "fflate": "^0.8.3",
     "react": "18.3.1",
     "react-native": "0.76.9",
     "react-native-gesture-handler": "~2.20.2",
@@ -37,17 +42,12 @@
   },
   "devDependencies": {
     "@babel/core": "7.26.10",
-    "@eslint/js": "^9.39.5",
     "@types/react": "18.3.18",
     "babel-plugin-module-resolver": "^5.0.3",
     "babel-preset-expo": "12.0.12",
-    "eslint": "^9.39.5",
-    "eslint-config-prettier": "^10.1.8",
-    "eslint-plugin-import-newlines": "^1.4.1",
     "eslint-plugin-react-hooks": "^5.2.0",
-    "prettier": "^3.9.6",
     "typescript": "5.7.3",
-    "typescript-eslint": "^8.66.0"
+    "vitest": "^3.2.4"
   },
   "engines": {
     "node": ">=22.12.0"

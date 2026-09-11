@@ -6,6 +6,7 @@
 mod wire;
 
 use std::io::{self, BufRead, Write};
+use std::panic::{self, AssertUnwindSafe};
 
 use serde_json::json;
 use upriv_rpc::RpcErrorBody;
@@ -54,6 +55,9 @@ fn main() {
 }
 
 fn run() -> io::Result<()> {
+    panic::set_hook(Box::new(|info| {
+        eprintln!("[upriv-daemon] panic: {info}");
+    }));
     // Pin distribution once after spawn env is in place (Electron sets UPRIV_*).
     let _ = upriv_core::init_app_distribution();
 
@@ -120,13 +124,29 @@ fn run() -> io::Result<()> {
         };
 
         match inbound {
-            WireIn::Request { id, method, params } => match handle_request(id, method, params) {
-                RequestOutcome::Continue(response) => write_out(&response)?,
-                RequestOutcome::Shutdown(response) => {
-                    write_out(&response)?;
-                    break;
+            WireIn::Request { id, method, params } => {
+                let outcome =
+                    panic::catch_unwind(AssertUnwindSafe(|| handle_request(id, method, params)))
+                        .unwrap_or_else(|_| {
+                            RequestOutcome::Continue(WireOut::Response {
+                                id,
+                                ok: false,
+                                result: None,
+                                error: Some(RpcErrorBody {
+                                    code: "internal_error".into(),
+                                    message: "internal error while handling request".into(),
+                                    details: None,
+                                }),
+                            })
+                        });
+                match outcome {
+                    RequestOutcome::Continue(response) => write_out(&response)?,
+                    RequestOutcome::Shutdown(response) => {
+                        write_out(&response)?;
+                        break;
+                    }
                 }
-            },
+            }
         }
     }
 

@@ -1,3 +1,4 @@
+import type { I18nKey } from "../../i18n/catalog";
 import type { VaultGroup } from "./types";
 import type { VaultListItem } from "../vault-list/types";
 
@@ -43,4 +44,17 @@ export function buildGroupedVaultPickerItems(options: {
       vault,
       otherGroup: otherByVaultId.get(vault.id) ?? null,
     }));
+}
+
+/** First select row: leave/unassign. `danger` when the vault already has a group. */
+export function groupAssignmentClearOption(
+  selectedGroupId: string,
+  t: (key: I18nKey) => string,
+): { value: ""; label: string; tone: "muted" | "danger" } {
+  const assigned = selectedGroupId.trim().length > 0;
+  return {
+    value: "",
+    label: t(assigned ? "vault.group.assignment.remove" : "vault.group.assignment.none"),
+    tone: assigned ? "danger" : "muted",
+  };
 }

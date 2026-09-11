@@ -1,25 +1,34 @@
-import { useCallback, useMemo, useRef } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import {
   CLOSING_PIPELINE_STEPS,
   OPENING_PIPELINE_STEPS,
-  storageModeSealOnly,
+  needsWorkspaceSetupOnOpen,
+  requiresCloseDialog,
   touchVaultLastAccessed,
+  WORKSPACE_PATH_DEFAULT,
+  shouldBumpVaultRootEpoch,
   type VaultLifecycleIntent,
   type VaultLifecycleRequest,
   type VaultListItem,
-  type VaultPersistence,
+  type VaultPipelineKind,
   type VaultSession,
+  type VaultSettingsConfig,
 } from "@upriv/shared";
-import { useVaultLifecycleService } from "@/platform/services";
+import { useAppSettingsContext } from "@/features/system/settings";
 import { useTranslation, type I18nKey } from "@/i18n";
-import { useVaultPipelineRun } from "./useVaultPipelineRun";
+import { mobileErrorI18nKey } from "@/lib/errorMessages";
+import {
+  useVaultLifecycleService,
+  useVaultRootService,
+  useVaultService,
+} from "@/platform/services";
+import { useVaultPipelineRun } from "@upriv/shared/react";
+import type { VaultPipelinePresentation } from "@upriv/shared/react";
 
 export type SetVaultRuntimeState = (
   vaultId: string,
   patch: {
     session: VaultSession | null;
-    persistence?: VaultPersistence;
-    canSeal?: boolean;
     lastAccessedAt?: string;
     lastAccessedWhen?: string;
   },
@@ -43,13 +52,19 @@ export function useVaultLifecycle({
   dismissToast,
 }: UseVaultLifecycleOptions) {
   const { t } = useTranslation();
+  const { settings, patchSettings, getSettingsSnapshot, reportVaultRootIntegrityFailure } =
+    useAppSettingsContext();
   const lifecycleService = useVaultLifecycleService();
-  const pipeline = useVaultPipelineRun();
+  const vaultService = useVaultService();
+  const vaultRootService = useVaultRootService();
+  const pipeline = useVaultPipelineRun(mobileErrorI18nKey);
   const pipelineBackgroundRef = useRef(false);
   const vaultsRef = useRef(vaults);
   vaultsRef.current = vaults;
   const closeStartedWhileOpenRef = useRef(new Map<string, boolean>());
   const submittingRef = useRef(false);
+  const [workspaceSetupVaultId, setWorkspaceSetupVaultId] = useState<string | null>(null);
+  const [workspaceSetupRootPath, setWorkspaceSetupRootPath] = useState("");
 
   const lifecycleVault = useMemo(() => {
     if (!lifecycleRequest) return null;
@@ -68,24 +83,21 @@ export function useVaultLifecycle({
       const wasOpen = closeStartedWhileOpenRef.current.get(vaultId) ?? false;
       closeStartedWhileOpenRef.current.delete(vaultId);
       if (wasOpen) {
-        setVaultRuntimeState(vaultId, {
-          session: "open",
-          persistence: storageModeSealOnly(vault.storageMode) ? "sealed" : "closed",
-        });
+        setVaultRuntimeState(vaultId, { session: "open" });
         return;
       }
-      setVaultRuntimeState(vaultId, { session: null, persistence: "closed" });
+      setVaultRuntimeState(vaultId, { session: null });
     },
     [setVaultRuntimeState],
   );
 
   const handlePipelineError = useCallback(
-    (vaultId: string, kind: "open" | "close" | "seal", errorI18nKey: I18nKey) => {
+    (vaultId: string, kind: VaultPipelineKind, errorI18nKey: I18nKey) => {
       const wasBackground = pipelineBackgroundRef.current;
       pipelineBackgroundRef.current = false;
       dismissToast();
       showToast(t(errorI18nKey), 8000);
-      if (kind === "close" || kind === "seal") {
+      if (kind === "close") {
         revertCloseFailure(vaultId);
       }
       if (wasBackground) {
@@ -97,23 +109,20 @@ export function useVaultLifecycle({
 
   const finishOpenVault = useCallback(
     (vaultId: string) => {
-      const vault = vaultsRef.current.find((item) => item.id === vaultId);
       setVaultRuntimeState(vaultId, {
         session: "open",
-        persistence: vault && storageModeSealOnly(vault.storageMode) ? "sealed" : "closed",
         ...touchVaultLastAccessed(t("vault.last_accessed.just_now")),
       });
+      if (settings.app.last_opened_vault !== vaultId) {
+        void patchSettings({ app: { last_opened_vault: vaultId } });
+      }
     },
-    [setVaultRuntimeState, t],
+    [patchSettings, setVaultRuntimeState, settings.app.last_opened_vault, t],
   );
 
-  const finishCloseOrSeal = useCallback(
-    (vaultId: string, intent: Extract<VaultLifecycleIntent, "close" | "seal">) => {
-      if (intent === "close") {
-        setVaultRuntimeState(vaultId, { session: null, persistence: "closed" });
-      } else {
-        setVaultRuntimeState(vaultId, { session: null, persistence: "sealed" });
-      }
+  const finishClose = useCallback(
+    (vaultId: string) => {
+      setVaultRuntimeState(vaultId, { session: null });
       lifecycleService.clearPasswordInSession(vaultId);
       closeStartedWhileOpenRef.current.delete(vaultId);
     },
@@ -121,17 +130,13 @@ export function useVaultLifecycle({
   );
 
   const notifyPipelineComplete = useCallback(
-    (vaultId: string, kind: "open" | "close" | "seal") => {
+    (vaultId: string, kind: VaultPipelineKind) => {
       dismissToast();
       if (!pipelineBackgroundRef.current) return;
       const vault = vaultsRef.current.find((item) => item.id === vaultId);
       if (!vault) return;
       const key =
-        kind === "open"
-          ? "toast.pipeline_complete_open"
-          : kind === "seal"
-            ? "toast.pipeline_complete_seal"
-            : "toast.pipeline_complete_close";
+        kind === "open" ? "toast.pipeline_complete_open" : "toast.pipeline_complete_close";
       showToast(t(key, { name: vault.displayName }));
       pipelineBackgroundRef.current = false;
     },
@@ -139,12 +144,21 @@ export function useVaultLifecycle({
   );
 
   const startOpenPipeline = useCallback(
-    (vaultId: string): boolean => {
-      pipelineBackgroundRef.current = false;
+    (vaultId: string, presentation: VaultPipelinePresentation = "foreground"): boolean => {
+      if (pipeline.isVaultPipelineBusy(vaultId)) return false;
+      const inBackground = presentation === "background";
+      pipelineBackgroundRef.current = inBackground;
+      if (inBackground) {
+        const vault = vaultsRef.current.find((item) => item.id === vaultId);
+        if (vault) {
+          showToast(t("toast.pipeline_background_open", { name: vault.displayName }), 0);
+        }
+      }
       return pipeline.start({
         vaultId,
         kind: "open",
         stepCount: lifecycleService.openingStepCount,
+        presentation,
         runPipeline: lifecycleService.runOpeningPipeline.bind(lifecycleService),
         onComplete: () => {
           finishOpenVault(vaultId);
@@ -153,47 +167,163 @@ export function useVaultLifecycle({
         onError: (errorI18nKey) => handlePipelineError(vaultId, "open", errorI18nKey),
       });
     },
-    [finishOpenVault, handlePipelineError, lifecycleService, notifyPipelineComplete, pipeline],
+    [
+      finishOpenVault,
+      handlePipelineError,
+      lifecycleService,
+      notifyPipelineComplete,
+      pipeline,
+      showToast,
+      t,
+    ],
   );
 
   const startClosePipeline = useCallback(
-    (vaultId: string, intent: Extract<VaultLifecycleIntent, "close" | "seal">): boolean => {
+    (vaultId: string, presentation: VaultPipelinePresentation = "foreground"): boolean => {
+      if (pipeline.isVaultPipelineBusy(vaultId)) return false;
       const vault = vaultsRef.current.find((item) => item.id === vaultId);
       closeStartedWhileOpenRef.current.set(vaultId, vault?.session === "open");
-      setVaultRuntimeState(vaultId, {
-        session: null,
-        persistence: intent === "seal" ? "sealed" : "closed",
-      });
-      pipelineBackgroundRef.current = false;
-      return pipeline.start({
+      const inBackground = presentation === "background";
+      pipelineBackgroundRef.current = inBackground;
+      if (inBackground && vault) {
+        showToast(t("toast.pipeline_background_close", { name: vault.displayName }), 0);
+      }
+      const started = pipeline.start({
         vaultId,
-        kind: intent,
+        kind: "close",
         stepCount: lifecycleService.closingStepCount,
+        presentation,
         runPipeline: lifecycleService.runClosingPipeline.bind(lifecycleService),
         onComplete: () => {
-          finishCloseOrSeal(vaultId, intent);
-          notifyPipelineComplete(vaultId, intent);
+          finishClose(vaultId);
+          notifyPipelineComplete(vaultId, "close");
         },
-        onError: (errorI18nKey) => handlePipelineError(vaultId, intent, errorI18nKey),
+        onError: (errorI18nKey) => handlePipelineError(vaultId, "close", errorI18nKey),
       });
+      if (started) {
+        setVaultRuntimeState(vaultId, {
+          session: null,
+        });
+      }
+      return started;
     },
     [
-      finishCloseOrSeal,
+      finishClose,
       handlePipelineError,
       lifecycleService,
       notifyPipelineComplete,
       pipeline,
       setVaultRuntimeState,
+      showToast,
+      t,
     ],
   );
 
   const requestLifecycle = useCallback(
     (vaultId: string, intent: VaultLifecycleIntent) => {
-      if (pipeline.run?.vaultId === vaultId) return;
-      setLifecycleRequest({ vaultId, intent });
+      if (pipeline.isVaultPipelineBusy(vaultId)) return;
+      if (intent === "close") {
+        void (async () => {
+          const vault = vaultsRef.current.find((item) => item.id === vaultId);
+          if (!vault) return;
+          let mode: VaultSettingsConfig["security"]["mode"] = "session_ram";
+          try {
+            const vaultSettings = await vaultService.getSettings(vaultId);
+            if (vaultSettings) mode = vaultSettings.security.mode;
+          } catch {
+            // Lock is the safe direction; missing settings → session keys, no prompt.
+          }
+          if (requiresCloseDialog(vault, mode)) {
+            setLifecycleRequest({ vaultId, intent });
+            return;
+          }
+          startClosePipeline(vaultId);
+        })();
+        return;
+      }
+      void (async () => {
+        try {
+          const vaultSettings = await vaultService.getSettings(vaultId);
+          const mountPath = vaultSettings?.mount.workspace_path ?? WORKSPACE_PATH_DEFAULT;
+          if (!needsWorkspaceSetupOnOpen(getSettingsSnapshot().workspace.path, mountPath)) {
+            setLifecycleRequest({ vaultId, intent: "unlock" });
+            return;
+          }
+          let rootPath = "";
+          try {
+            const resolved = await vaultRootService.resolve({
+              vaultRootMode: settings.app.vault_root_mode,
+            });
+            if (resolved.status === "found") {
+              rootPath = resolved.rootPath;
+            } else {
+              rootPath = resolved.defaultRootAnchor;
+            }
+          } catch (error) {
+            if (shouldBumpVaultRootEpoch(error)) {
+              await reportVaultRootIntegrityFailure(error);
+            } else {
+              showToast(t(mobileErrorI18nKey(error, "error.settings_save_failed")));
+            }
+            return;
+          }
+          if (!rootPath.trim()) {
+            rootPath = settings.app.upriv_root_path.trim();
+          }
+          if (!rootPath.trim()) {
+            try {
+              const status = await vaultRootService.defaultRootStatus();
+              rootPath = status.defaultRootAnchor.trim();
+            } catch (error) {
+              if (shouldBumpVaultRootEpoch(error)) {
+                await reportVaultRootIntegrityFailure(error);
+              } else {
+                showToast(t(mobileErrorI18nKey(error, "error.settings_save_failed")));
+              }
+              return;
+            }
+          }
+          if (!rootPath.trim()) {
+            showToast(t("modal.workspace.error.unavailable"));
+            return;
+          }
+          setWorkspaceSetupRootPath(rootPath);
+          setWorkspaceSetupVaultId(vaultId);
+        } catch (error) {
+          showToast(t(mobileErrorI18nKey(error, "error.settings_save_failed")));
+        }
+      })();
     },
-    [pipeline.run?.vaultId, setLifecycleRequest],
+    [
+      getSettingsSnapshot,
+      pipeline,
+      reportVaultRootIntegrityFailure,
+      setLifecycleRequest,
+      settings.app.upriv_root_path,
+      settings.app.vault_root_mode,
+      showToast,
+      startClosePipeline,
+      t,
+      vaultRootService,
+      vaultService,
+    ],
   );
+
+  const handleWorkspaceSetupCancel = useCallback(() => {
+    setWorkspaceSetupVaultId(null);
+  }, []);
+
+  const handleWorkspaceSetupConfigured = useCallback(() => {
+    const vaultId = workspaceSetupVaultId;
+    setWorkspaceSetupVaultId(null);
+    if (!vaultId) return;
+    if (needsWorkspaceSetupOnOpen(getSettingsSnapshot().workspace.path, WORKSPACE_PATH_DEFAULT)) {
+      showToast(t("modal.workspace.error.unset"));
+      setWorkspaceSetupVaultId(vaultId);
+      return;
+    }
+    setLifecycleRequest({ vaultId, intent: "unlock" });
+  }, [getSettingsSnapshot, setLifecycleRequest, showToast, t, workspaceSetupVaultId]);
 
   const confirmLifecycle = useCallback(
     (password: string | null) => {
@@ -205,7 +335,7 @@ export function useVaultLifecycle({
       }
       setLifecycleRequest(null);
       const started =
-        intent === "unlock" ? startOpenPipeline(vaultId) : startClosePipeline(vaultId, intent);
+        intent === "unlock" ? startOpenPipeline(vaultId) : startClosePipeline(vaultId);
       submittingRef.current = false;
       if (!started) {
         showToast(t("toast.pipeline_busy"));
@@ -222,13 +352,38 @@ export function useVaultLifecycle({
     ],
   );
 
+  const handleOpenFolder = useCallback(
+    (vault: VaultListItem) => {
+      void (async () => {
+        try {
+          const vaultSettings = await vaultService.getSettings(vault.id);
+          const path = lifecycleService.resolveWorkspacePath(vault.displayName, {
+            globalWorkspacePath: settings.workspace.path,
+            mountWorkspacePath: vaultSettings?.mount.workspace_path,
+          });
+          showToast(t("toast.open_folder_mock", { path }), 8000);
+        } catch {
+          showToast(
+            t("toast.open_folder_mock", {
+              path: lifecycleService.resolveWorkspacePath(vault.displayName, {
+                globalWorkspacePath: settings.workspace.path,
+              }),
+            }),
+            8000,
+          );
+        }
+      })();
+    },
+    [lifecycleService, settings.workspace.path, showToast, t, vaultService],
+  );
+
   const cancelLifecycle = useCallback(() => {
     setLifecycleRequest(null);
   }, [setLifecycleRequest]);
 
   const sendPipelineToBackground = useCallback(() => {
     pipelineBackgroundRef.current = true;
-    pipeline.sendToBackground();
+    pipeline.moveToBackground();
   }, [pipeline]);
 
   const overlayProps = useMemo(() => {
@@ -239,18 +394,11 @@ export function useVaultLifecycle({
     const isOpen = run.kind === "open";
     return {
       open: true as const,
-      title: t(
-        isOpen
-          ? "open.overlay.title"
-          : run.kind === "seal"
-            ? "close.overlay.title_seal"
-            : "close.overlay.title_close",
-        {
-          name: pipelineVault?.displayName ?? "",
-        },
-      ),
+      title: t(isOpen ? "open.overlay.title" : "close.overlay.title_close", {
+        name: pipelineVault?.displayName ?? "",
+      }),
       hint: t(isOpen ? "open.overlay.hint" : "close.overlay.hint"),
-      stepKeys: (isOpen ? OPENING_PIPELINE_STEPS : CLOSING_PIPELINE_STEPS) as readonly I18nKey[],
+      stepKeys: isOpen ? OPENING_PIPELINE_STEPS : CLOSING_PIPELINE_STEPS,
       activeStep: run.activeStep,
       errorKey: run.errorKey ?? null,
     };
@@ -262,11 +410,16 @@ export function useVaultLifecycle({
     confirmLifecycle,
     cancelLifecycle,
     requestLifecycle,
+    handleOpenFolder,
     pipelineVault,
     pipelineOverlay: overlayProps,
     sendPipelineToBackground,
     dismissPipelineFailure: pipeline.dismissFailure,
     openingVaultIds: pipeline.openingVaultIds,
     closingVaultIds: pipeline.closingVaultIds,
+    workspaceSetupOpen: workspaceSetupVaultId !== null,
+    workspaceSetupRootPath,
+    handleWorkspaceSetupCancel,
+    handleWorkspaceSetupConfigured,
   };
 }

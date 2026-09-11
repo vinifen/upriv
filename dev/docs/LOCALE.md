@@ -54,16 +54,16 @@ locale = "en"   # "en" | "pt-BR" | "es" | future BCP-47 tags
 | Use key | Do not use key for |
 |---------|-------------------|
 | Button labels, titles, toasts, dialogs | Vault IDs (`vault-example-1`, …) — user-defined |
-| State badges (`open`, `closed`, `sealed`, `recovery`) | Technical persistence values in JSON/manifest |
+| State badges (`open`, `closed`, `recovery`) | Technical persistence values in JSON/manifest |
 | Warnings, confirmations, empty states | File paths, crypto algorithm names |
 | Settings labels in the app UI | `7zz` / CLI output (English logs OK) |
 
-**Persistence / protocol** stay English identifiers: `open`, `closed`, `sealed`, `encrypted_dir`, `plain` — UI translates them for display via `vault.status.*` keys.
+**Persistence / protocol** stay English identifiers: `open`, `closed`, `recovery`, `encrypted_dir`, `upriv_plain` — UI translates them for display via `vault.status.*` keys.
 
 ### PRD / SDD convention
 
 - Documents are written in **English**
-- Where UX copy matters, reference **i18n keys** (e.g. “shows `vault.status.sealed`”) instead of embedding Portuguese UI text
+- Where UX copy matters, reference **i18n keys** (e.g. “shows `vault.status.closed`”) instead of embedding Portuguese UI text
 
 ## Implementation checklist
 

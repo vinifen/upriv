@@ -5,7 +5,9 @@ React web UI (Electron shell). **Presentation only** — vault logic lives in `c
 ## Run
 
 ```bash
-cd dev/apps/desktop
+cd dev
+npm install --prefix js-lint               # ESLint + Prettier (once for all apps)
+cd apps/desktop
 npm install
 npm run dev              # http://localhost:1420 (browser, mock services)
 npm run preview          # browser-only preview of `dist/` — not Electron; use `npm run electron:dev`
@@ -37,7 +39,7 @@ Artifacts: `dev/target/release/bundle/electron/`. On Linux: `.deb` + `.AppImage`
 
 `platform/mocks/` backs all services via `createServices()` until desktop RPC adapters exist. **Future work:** delete that folder and rename remaining `mock*` / `getMock*` / `MOCK_*` symbols to neutral platform names (details in `src/platform/mocks/README.md`).
 
-Until real crypto is wired, unlock/close use prototype validation in `validateMockLifecyclePassword` (min 4 chars; `"wrong"` simulates failure). Hidden vault **Finance 2025** shows password hint _Q4 spreadsheet_ in the unlock modal.
+Until real crypto is wired, unlock (and lock in **Never save** mode) uses prototype validation in `validateMockLifecyclePassword` (trimmed length ≥ 4; `"wrong"` simulates failure). Default lock does not ask for the password. Hidden vault **Finance 2025** shows password hint _Q4 spreadsheet_ in the unlock modal.
 
 ## Source layout
 
@@ -93,7 +95,7 @@ src/
 | Rule                | Where                                                                                                              |
 | ------------------- | ------------------------------------------------------------------------------------------------------------------ |
 | UI copy             | `dev/apps/shared/locales/*.json` via `useTranslation()` — never hardcode sentences                                 |
-| Vault status colors | `theme/vault-status.ts` + CSS vars in `styles/tokens.css`                                                          |
+| Vault status colors | `theme/vault-status.ts` + CSS vars from `@upriv/shared` (`applyDocumentTheme`)                                     |
 | Desktop RPC         | `lib/commands.ts` — names match `crates/upriv-daemon`                                                              |
 | Domain types        | `@upriv/shared` (`shared/`) — `VaultRow`, settings, list sort/view                                                 |
 | Service layer       | `platform/services/` — factory + React context; mocks in `platform/mocks/`                                         |
@@ -116,16 +118,16 @@ Each feature folder under `features/vaults/*` and `features/system/*` has **one*
 3. **`hooks/` per feature** — custom hooks live in `<feature>/hooks/` (functions `use*` only). Types use `<feature>Types.ts` or `vaultListModalsTypes.ts` at the feature root, not inside `hooks/`. No `hooks/index.ts`.
 4. **No umbrella index** — there is no `features/vaults/index.ts` or `features/system/index.ts`. Each sub-feature (`list/`, `lifecycle/`, `settings/`, …) owns its boundary.
 5. **Domain types from `@upriv/shared`** — import `VaultListItem`, settings helpers, sort types, etc. from `@upriv/shared`, not re-exported through feature indexes. Feature indexes expose **UI, hooks, and desktop-only adapters** consumed elsewhere.
-6. **Prefer the barrel over deep paths** — outside code imports `@/features/vaults/list`, not `@/features/vaults/list/exportVaultArchive`. If something is used outside, add it to that folder’s `index.ts` and import from there.
+6. **Prefer the barrel over deep paths** — outside code imports `@/features/vaults/list`, not `@/features/vaults/list/exportVaultPackage`. If something is used outside, add it to that folder’s `index.ts` and import from there.
 
 **Current public APIs** (maintain this table when adding exports)
 
 | Module                 | Import path                      | Exports                                                                                                                              |
 | ---------------------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `vaults/list/`         | `@/features/vaults/list`         | `VaultListPage`, `exportVaultArchive`, `VaultListLifecycleModals`                                                                    |
+| `vaults/list/`         | `@/features/vaults/list`         | `VaultListPage`, `exportVaultPackage`, `VaultListLifecycleModals`                                                                    |
 | `vaults/lifecycle/`    | `@/features/vaults/lifecycle`    | `VaultLifecycleLayer`, `useVaultLifecycleActions`, `VaultLifecycleRequest`                                                           |
 | `vaults/settings/`     | `@/features/vaults/settings`     | `VaultSettingsModal`                                                                                                                 |
-| `vaults/create/`       | `@/features/vaults/create`       | `CreateVaultWizardModal`, `CreateVaultResult`                                                                                        |
+| `vaults/create/`       | `@/features/vaults/create`       | `CreateVaultModal`                                                                                                                   |
 | `vaults/backups/`      | `@/features/vaults/backups`      | `VaultBackupsModal`                                                                                                                  |
 | `vaults/file-manager/` | `@/features/vaults/file-manager` | `FileManagerProvider`, `useFileManager`, `FileManagerLayer`                                                                          |
 | `system/settings/`     | `@/features/system/settings`     | `AppSettingsModal`, `AppSettingsProvider`, `useAppSettingsContext`, `VaultRootGate`, `VaultRootDataFolderModal`, bulk-export helpers |

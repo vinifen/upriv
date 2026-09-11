@@ -4,13 +4,16 @@
 //! canonical `current-{seq}-{stamp}.log`; odd filenames still appear here.
 
 use std::fs::{self, File};
-use std::io::{self, BufRead, BufReader, Read};
+use std::io::{self, BufRead, BufReader};
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 use std::time::SystemTime;
+use std::{collections::HashMap, time::UNIX_EPOCH};
 
 use serde::Serialize;
 
 use super::names::{parse_archived_log_name, parse_current_log_name};
+use crate::error::{Result as CoreResult, UprivError};
 use crate::time::utc_ymdhms;
 
 /// Soft cap for `log_get` body (bytes). Larger files return an error.
@@ -18,6 +21,15 @@ pub const MAX_LOG_GET_BYTES: u64 = 2 * 1024 * 1024;
 
 /// Skip exact line counting above this size (list sets `line_count_exact = false`).
 pub const MAX_LINE_COUNT_SCAN_BYTES: u64 = 512 * 1024;
+
+#[derive(Clone)]
+struct LineCountCacheEntry {
+    mtime: SystemTime,
+    size: u64,
+    line_count: u32,
+}
+
+static LINE_COUNT_CACHE: OnceLock<Mutex<HashMap<PathBuf, LineCountCacheEntry>>> = OnceLock::new();
 
 /// Metadata for one file under `.upriv/logs/` (wire camelCase via serde rename).
 ///
@@ -64,7 +76,7 @@ pub fn list_log_files(logs_dir: &Path) -> io::Result<Vec<LogFileInfo>> {
 }
 
 /// Read one log file. `filename` must be a basename (no path separators).
-pub fn read_log_file(logs_dir: &Path, filename: &str) -> io::Result<Option<LogFileInfo>> {
+pub fn read_log_file(logs_dir: &Path, filename: &str) -> CoreResult<Option<LogFileInfo>> {
     let Some(path) = safe_log_path(logs_dir, filename) else {
         return Ok(None);
     };
@@ -73,18 +85,15 @@ pub fn read_log_file(logs_dir: &Path, filename: &str) -> io::Result<Option<LogFi
     }
     let meta = fs::metadata(&path)?;
     if meta.len() > MAX_LOG_GET_BYTES {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!(
-                "log_file_too_large: {} bytes (max {MAX_LOG_GET_BYTES})",
-                meta.len()
-            ),
-        ));
+        return Err(UprivError::LogFileTooLarge {
+            path,
+            size: meta.len(),
+            max: MAX_LOG_GET_BYTES,
+        });
     }
     let mut info = describe_log_file(&path, filename)?;
-    let mut content = String::new();
-    File::open(&path)?.read_to_string(&mut content)?;
-    info.content = content;
+    let bytes = fs::read(&path)?;
+    info.content = String::from_utf8_lossy(&bytes).into_owned();
     Ok(Some(info))
 }
 
@@ -126,7 +135,7 @@ fn describe_log_file(path: &Path, filename: &str) -> io::Result<LogFileInfo> {
     let (line_count, line_count_exact) = if size_bytes > MAX_LINE_COUNT_SCAN_BYTES {
         (0, false)
     } else {
-        (count_lines(path).unwrap_or(0), true)
+        (count_lines_cached_with_meta(path, &meta).unwrap_or(0), true)
     };
 
     let (seq, is_current, created_at) = if let Some((seq, stamp)) = parse_current_log_name(filename)
@@ -194,6 +203,44 @@ fn count_lines(path: &Path) -> io::Result<u32> {
     Ok(count)
 }
 
+fn cache_mtime(meta: &fs::Metadata) -> SystemTime {
+    meta.modified().unwrap_or(UNIX_EPOCH)
+}
+
+fn count_lines_cached_with_meta(path: &Path, meta: &fs::Metadata) -> io::Result<u32> {
+    let mtime = cache_mtime(meta);
+    let size = meta.len();
+    let cache = LINE_COUNT_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    {
+        let guard = cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(entry) = guard.get(path) {
+            if entry.size == size && entry.mtime == mtime {
+                return Ok(entry.line_count);
+            }
+        }
+    }
+    let line_count = count_lines(path)?;
+    let mut guard = cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    guard.insert(
+        path.to_path_buf(),
+        LineCountCacheEntry {
+            mtime,
+            size,
+            line_count,
+        },
+    );
+    Ok(line_count)
+}
+
+pub(crate) fn count_lines_cached(path: &Path) -> io::Result<u32> {
+    let meta = fs::metadata(path)?;
+    count_lines_cached_with_meta(path, &meta)
+}
+
 /// Reject path traversal — basename only, must stay under `logs_dir`.
 pub(crate) fn safe_log_path(logs_dir: &Path, filename: &str) -> Option<PathBuf> {
     if filename.is_empty()
@@ -223,28 +270,25 @@ pub(crate) fn safe_log_path(logs_dir: &Path, filename: &str) -> Option<PathBuf> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use tempfile::TempDir;
 
-    fn temp_dir() -> PathBuf {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("time")
-            .as_nanos();
-        let dir = std::env::temp_dir().join(format!("upriv-log-store-{nanos}"));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).expect("mkdir");
-        dir
+    fn temp_dir() -> TempDir {
+        tempfile::tempdir().expect("tempdir")
     }
 
     #[test]
     fn lists_canonical_and_odd_files() {
         let dir = temp_dir();
-        fs::write(dir.join("current-000001-20260101120000.log"), "0001 a\n").unwrap();
-        fs::write(dir.join("000002-20260102120000.log"), "0001 b\n").unwrap();
-        fs::write(dir.join("weird-name.log"), "x\n").unwrap();
-        fs::write(dir.join("notes.txt"), "nope").unwrap();
+        fs::write(
+            dir.path().join("current-000001-20260101120000.log"),
+            "0001 a\n",
+        )
+        .unwrap();
+        fs::write(dir.path().join("000002-20260102120000.log"), "0001 b\n").unwrap();
+        fs::write(dir.path().join("weird-name.log"), "x\n").unwrap();
+        fs::write(dir.path().join("notes.txt"), "nope").unwrap();
 
-        let files = list_log_files(&dir).expect("list");
+        let files = list_log_files(dir.path()).expect("list");
         assert_eq!(files.len(), 3);
         let weird = files
             .iter()
@@ -258,57 +302,53 @@ mod tests {
             .unwrap();
         assert!(current.is_current);
         assert_eq!(current.seq, 1);
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn rejects_path_traversal() {
         let dir = temp_dir();
-        assert!(safe_log_path(&dir, "../escape.log").is_none());
-        assert!(safe_log_path(&dir, "..").is_none());
-        assert!(safe_log_path(&dir, "ok.log").is_some());
+        assert!(safe_log_path(dir.path(), "../escape.log").is_none());
+        assert!(safe_log_path(dir.path(), "..").is_none());
+        assert!(safe_log_path(dir.path(), "ok.log").is_some());
         // Substring `..` in a basename is fine (not a path component).
-        assert!(safe_log_path(&dir, "foo..bar.log").is_some());
-        let _ = fs::remove_dir_all(&dir);
+        assert!(safe_log_path(dir.path(), "foo..bar.log").is_some());
     }
 
     #[test]
     fn delete_rejects_invalid_names() {
         let dir = temp_dir();
-        let err = delete_log_files(&dir, &["../escape.log".into()]).unwrap_err();
+        let err = delete_log_files(dir.path(), &["../escape.log".into()]).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn delete_mixed_invalid_does_not_remove_valid() {
         let dir = temp_dir();
         let name = "000001-20260101120000.log".to_string();
-        fs::write(dir.join(&name), "x\n").unwrap();
-        let err = delete_log_files(&dir, &[name.clone(), "../escape.log".into()]).unwrap_err();
+        fs::write(dir.path().join(&name), "x\n").unwrap();
+        let err =
+            delete_log_files(dir.path(), &[name.clone(), "../escape.log".into()]).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
         assert!(
-            dir.join(&name).is_file(),
+            dir.path().join(&name).is_file(),
             "valid file must remain after mixed reject"
         );
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn delete_is_idempotent() {
         let dir = temp_dir();
         let name = "000001-20260101120000.log".to_string();
-        fs::write(dir.join(&name), "x\n").unwrap();
-        delete_log_files(&dir, std::slice::from_ref(&name)).unwrap();
-        delete_log_files(&dir, std::slice::from_ref(&name)).unwrap();
-        let _ = fs::remove_dir_all(&dir);
+        fs::write(dir.path().join(&name), "x\n").unwrap();
+        delete_log_files(dir.path(), std::slice::from_ref(&name)).unwrap();
+        delete_log_files(dir.path(), std::slice::from_ref(&name)).unwrap();
     }
 
     #[test]
     fn get_rejects_oversized_file() {
         let dir = temp_dir();
         let name = "huge.log";
-        let path = dir.join(name);
+        let path = dir.path().join(name);
         let chunk = vec![b'x'; 64 * 1024];
         let mut file = fs::File::create(&path).unwrap();
         use std::io::Write;
@@ -318,9 +358,8 @@ mod tests {
             written += chunk.len() as u64;
         }
         drop(file);
-        let err = read_log_file(&dir, name).unwrap_err();
-        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
-        let _ = fs::remove_dir_all(&dir);
+        let err = read_log_file(dir.path(), name).unwrap_err();
+        assert!(matches!(err, UprivError::LogFileTooLarge { .. }));
     }
 
     #[test]

@@ -3,5 +3,6 @@ dist
 android
 ios
 .expo
+.vitest-cache
 coverage
 *.apk

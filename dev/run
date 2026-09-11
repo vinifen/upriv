@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Dev workspace runner — lint, auto-fix, tests, and combined checks.
-# Usage: ./run lint | lint-fix | test | check
+# Dev workspace runner — lint, tests, and local desktop/mobile with a cache wipe.
+# Usage: ./run lint | lint-fix | test | check | desktop | mobile
 set -uo pipefail
 
 DEV_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -14,7 +14,7 @@ Upriv dev workspace runner (run from dev/)
 
 Usage:
   ./run <command>
-  npm run <command>          # lint, lint:fix, test, check, help
+  npm run <command>          # lint, lint:fix, test, check, desktop, mobile, help
 
 Commands:
   help       Show this help
@@ -22,40 +22,59 @@ Commands:
   lint-fix   Apply auto-fixes (continues on failure; exit 1 if any step failed)
   test       Run all code tests
   check      lint + test
+  desktop    Wipe Vite cache, then Electron + upriv-daemon
+  mobile     Wipe Metro/Expo cache, then expo start --clear
+             Extra args go to Expo (e.g. ./run mobile --android)
 
 What each command runs:
 
   lint
     • Version:  check-version.mjs (VERSION vs manifests)
     • Rust:     rustfmt --check, clippy (-D warnings)
-    • Shared:   tsc --noEmit (via desktop toolchain)
+    • UniFFI:   regenerate Kotlin and diff vs committed binding
+    • Shared:   tsc --noEmit, eslint, prettier --check
     • Desktop:  tsc, eslint, prettier --check
-    • Electron: tsc
+    • Electron: tsc, eslint, prettier --check
     • Mobile:   tsc, eslint, prettier --check
 
   lint-fix
     • Rust:     rustfmt, clippy --fix
-    • Desktop:  eslint --fix, prettier --write
-    • Mobile:   eslint --fix, prettier --write
+    • Shared:   prettier --write, eslint --fix
+    • Desktop:  prettier --write, eslint --fix
+    • Electron: prettier --write, eslint --fix
+    • Mobile:   prettier --write, eslint --fix
     • TypeScript: tsc --noEmit (shared, desktop, electron, mobile)
 
   test
     • Rust:     cargo test --workspace
     • Shared:   vitest
     • Desktop:  vitest
+    • Electron: vitest (daemon protocol / IPC allowlist)
+    • Mobile:   vitest (modules without RN runtime)
 
   check
     • All lint steps, then all test steps
+
+  desktop
+    • Remove apps/desktop/.vite-cache and node_modules/.vite
+    • npm run electron:dev (daemon build + Vite + Electron)
+
+  mobile
+    • Remove apps/mobile/.expo and node_modules/.cache
+    • npx expo start --clear (from apps/mobile)
 
 Rust-only (npm):
   npm run rust:lint    check fmt + clippy
   npm run rust:fix     apply fmt + clippy --fix
 
 Notes:
-  • Requires node_modules in apps/desktop, apps/electron, apps/mobile
-  • Install: npm install --prefix apps/<app>
-  • Desktop eslint: max-len and import-newlines are "warn" in config but
-    `npm run lint` uses --max-warnings 0, so they fail CI like errors.
+  • Requires node_modules in js-lint/, apps/shared, apps/desktop,
+    apps/electron, apps/mobile
+  • Install: npm install --prefix js-lint && npm install --prefix apps/<app>
+  • ESLint + Prettier live in js-lint/ (JS/TS only). Rust is cargo fmt/clippy.
+    Each app only adds React plugins / ignores.
+  • max-len and import-newlines are "warn" in config but `npm run lint` uses
+    --max-warnings 0, so they fail CI like errors.
 
 Examples:
   ./run help
@@ -63,6 +82,9 @@ Examples:
   ./run lint-fix
   ./run test
   ./run check
+  ./run desktop
+  ./run mobile
+  ./run mobile --android
 EOF
 }
 
@@ -92,13 +114,15 @@ require_node_modules() {
   fi
 }
 
+require_lint_modules() {
+  if [[ ! -d "$DEV_ROOT/js-lint/node_modules" ]]; then
+    echo "Missing js-lint/node_modules — run: npm install --prefix js-lint" >&2
+    return 1
+  fi
+}
+
 run_tsc() {
   local app="$1"
-  if [[ "$app" == "shared" ]]; then
-    require_node_modules desktop || return 1
-    (cd "apps/shared" && npx --prefix ../desktop tsc --noEmit)
-    return
-  fi
   require_node_modules "$app" || return 1
   (cd "apps/$app" && npx tsc --noEmit)
 }
@@ -115,9 +139,17 @@ finish() {
 lint_steps() {
   step "Version (check-version.mjs)" node scripts/check-version.mjs
   step "Rust (rustfmt + clippy)" npm run rust:lint
+  step "UniFFI Kotlin (diff vs crates/upriv-ffi)" bash scripts/check-uniffi-kotlin.sh
   step "Shared (tsc)" run_tsc shared
+  if require_lint_modules && require_node_modules shared; then
+    step "Shared (eslint)" npm run lint --prefix apps/shared
+    step "Shared (prettier)" npm run format:check --prefix apps/shared
+  else
+    step "Shared (eslint)" false
+    step "Shared (prettier)" false
+  fi
   step "Desktop (tsc)" run_tsc desktop
-  if require_node_modules desktop; then
+  if require_lint_modules && require_node_modules desktop; then
     step "Desktop (eslint)" npm run lint --prefix apps/desktop
     step "Desktop (prettier)" npm run format:check --prefix apps/desktop
   else
@@ -125,8 +157,15 @@ lint_steps() {
     step "Desktop (prettier)" false
   fi
   step "Electron (tsc)" run_tsc electron
+  if require_lint_modules && require_node_modules electron; then
+    step "Electron (eslint)" npm run lint --prefix apps/electron
+    step "Electron (prettier)" npm run format:check --prefix apps/electron
+  else
+    step "Electron (eslint)" false
+    step "Electron (prettier)" false
+  fi
   step "Mobile (tsc)" run_tsc mobile
-  if require_node_modules mobile; then
+  if require_lint_modules && require_node_modules mobile; then
     step "Mobile (eslint)" npm run lint --prefix apps/mobile
     step "Mobile (prettier)" npm run format:check --prefix apps/mobile
   else
@@ -137,14 +176,28 @@ lint_steps() {
 
 lint_fix_steps() {
   step "Rust (rustfmt + clippy --fix)" npm run rust:fix
-  if require_node_modules desktop; then
+  if require_lint_modules && require_node_modules shared; then
+    step "Shared (prettier --write)" npm run format --prefix apps/shared
+    step "Shared (eslint --fix)" npm run lint:fix --prefix apps/shared
+  else
+    step "Shared (prettier --write)" false
+    step "Shared (eslint --fix)" false
+  fi
+  if require_lint_modules && require_node_modules desktop; then
     step "Desktop (prettier --write)" npm run format --prefix apps/desktop
     step "Desktop (eslint --fix)" npm run lint:fix --prefix apps/desktop
   else
     step "Desktop (prettier --write)" false
     step "Desktop (eslint --fix)" false
   fi
-  if require_node_modules mobile; then
+  if require_lint_modules && require_node_modules electron; then
+    step "Electron (prettier --write)" npm run format --prefix apps/electron
+    step "Electron (eslint --fix)" npm run lint:fix --prefix apps/electron
+  else
+    step "Electron (prettier --write)" false
+    step "Electron (eslint --fix)" false
+  fi
+  if require_lint_modules && require_node_modules mobile; then
     step "Mobile (prettier --write)" npm run format --prefix apps/mobile
     step "Mobile (eslint --fix)" npm run lint:fix --prefix apps/mobile
   else
@@ -168,6 +221,16 @@ test_steps() {
     step "Desktop (vitest)" npm test --prefix apps/desktop
   else
     step "Desktop (vitest)" false
+  fi
+  if require_node_modules electron; then
+    step "Electron (vitest)" npm test --prefix apps/electron
+  else
+    step "Electron (vitest)" false
+  fi
+  if require_node_modules mobile; then
+    step "Mobile (vitest)" npm test --prefix apps/mobile
+  else
+    step "Mobile (vitest)" false
   fi
 }
 
@@ -196,13 +259,50 @@ cmd_check() {
   finish "Check"
 }
 
+remove_if_present() {
+  local path="$1"
+  if [[ -e "$path" ]]; then
+    echo "  rm -rf ${path#"$DEV_ROOT"/}"
+    rm -rf "$path"
+  fi
+}
+
+cmd_desktop() {
+  require_node_modules desktop || exit 1
+  require_node_modules electron || exit 1
+  echo ""
+  echo "==> Clearing Vite cache"
+  remove_if_present "$DEV_ROOT/apps/desktop/.vite-cache"
+  remove_if_present "$DEV_ROOT/apps/desktop/node_modules/.vite"
+  echo ""
+  echo "==> Desktop (electron:dev)"
+  exec npm run electron:dev
+}
+
+cmd_mobile() {
+  require_node_modules mobile || exit 1
+  echo ""
+  echo "==> Clearing Metro / Expo cache"
+  remove_if_present "$DEV_ROOT/apps/mobile/.expo"
+  remove_if_present "$DEV_ROOT/apps/mobile/node_modules/.cache"
+  echo ""
+  echo "==> Mobile (expo start --clear)"
+  cd "$DEV_ROOT/apps/mobile"
+  exec npx expo start --clear "$@"
+}
+
 main() {
   local cmd="${1:-}"
+  if [[ $# -gt 0 ]]; then
+    shift
+  fi
   case "$cmd" in
     lint) cmd_lint ;;
     lint-fix | lint:fix) cmd_lint_fix ;;
     test) cmd_test ;;
     check) cmd_check ;;
+    desktop) cmd_desktop ;;
+    mobile) cmd_mobile "$@" ;;
     help | -h | --help) cmd_help ;;
     "")
       usage

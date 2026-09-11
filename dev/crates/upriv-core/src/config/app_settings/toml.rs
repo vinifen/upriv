@@ -5,9 +5,11 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Result, UprivError};
-use crate::paths::{VaultRootMode, VAULT_ROOT_SETTINGS_REL};
+use crate::paths::{validate_workspace_global_path, VaultRootMode, VAULT_ROOT_SETTINGS_REL};
 
-use super::types::{AppSectionSettings, AppSettings, LoggingSettings, UiSettings};
+use super::types::{
+    AppSectionSettings, AppSettings, LoggingSettings, UiSettings, WorkspaceSettings,
+};
 
 #[derive(Debug, Deserialize, Serialize)]
 pub(super) struct SettingsToml {
@@ -18,6 +20,14 @@ pub(super) struct SettingsToml {
     pub(super) logging: LoggingToml,
     #[serde(default)]
     pub(super) app: AppToml,
+    #[serde(default)]
+    pub(super) workspace: WorkspaceToml,
+}
+
+#[derive(Debug, Default, Deserialize, Serialize)]
+pub(super) struct WorkspaceToml {
+    #[serde(default)]
+    pub(super) path: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -34,12 +44,6 @@ pub(super) struct PackageToml {
     pub(super) logs_dir: String,
     #[serde(default = "default_app_dir")]
     pub(super) app_dir: String,
-    #[serde(default = "default_workspace_dir")]
-    pub(super) workspace_dir: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(super) default_vault: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(super) last_opened_vault: Option<String>,
 }
 
 pub(crate) fn default_package_version() -> i64 {
@@ -60,28 +64,28 @@ pub(crate) fn default_logs_dir() -> String {
 pub(crate) fn default_app_dir() -> String {
     ".upriv/app".into()
 }
-pub(crate) fn default_workspace_dir() -> String {
-    "workspace".into()
-}
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
 pub(super) struct UiToml {
-    #[serde(default = "default_locale")]
     pub(super) locale: String,
-    #[serde(default = "default_theme")]
     pub(super) theme: String,
-    #[serde(default = "default_sort")]
-    pub(super) vault_list_sort: String,
-    #[serde(default = "default_sort_dir")]
-    pub(super) vault_list_sort_direction: String,
-    #[serde(default = "default_view")]
-    pub(super) vault_list_view: String,
-    #[serde(default)]
-    pub(super) always_show_hidden_vaults: bool,
-    #[serde(default = "default_true")]
-    pub(super) allow_drag_vault_into_group: bool,
-    #[serde(default)]
+    pub(super) show_header_more_button: bool,
     pub(super) file_manager_dock_expanded: bool,
+    pub(super) always_show_hidden_vaults: bool,
+    pub(super) vault_list_sort: String,
+    pub(super) vault_list_sort_direction: String,
+    pub(super) vault_list_view: String,
+    pub(super) vault_list_search: String,
+    pub(super) vault_list_show_drag: bool,
+    pub(super) vault_list_allow_drag_into_group: bool,
+    pub(super) vault_list_show_create_button: bool,
+    pub(super) vault_list_show_search_button: bool,
+    pub(super) vault_list_show_sort_button: bool,
+    pub(super) vault_list_show_view_button: bool,
+    pub(super) vault_list_show_vault_more_button: bool,
+    pub(super) vault_list_show_vault_settings_button: bool,
+    pub(super) vault_list_show_group_settings_button: bool,
 }
 
 impl Default for UiToml {
@@ -89,13 +93,46 @@ impl Default for UiToml {
         Self {
             locale: default_locale(),
             theme: default_theme(),
+            show_header_more_button: true,
+            file_manager_dock_expanded: false,
+            always_show_hidden_vaults: false,
             vault_list_sort: default_sort(),
             vault_list_sort_direction: default_sort_dir(),
             vault_list_view: default_view(),
-            always_show_hidden_vaults: false,
-            allow_drag_vault_into_group: true,
-            file_manager_dock_expanded: false,
+            vault_list_search: String::new(),
+            vault_list_show_drag: true,
+            vault_list_allow_drag_into_group: true,
+            vault_list_show_create_button: true,
+            vault_list_show_search_button: true,
+            vault_list_show_sort_button: true,
+            vault_list_show_view_button: true,
+            vault_list_show_vault_more_button: true,
+            vault_list_show_vault_settings_button: true,
+            vault_list_show_group_settings_button: true,
         }
+    }
+}
+
+fn ui_toml_from_settings(ui: &UiSettings) -> UiToml {
+    UiToml {
+        locale: ui.locale.clone(),
+        theme: ui.theme.clone(),
+        show_header_more_button: ui.vault_list_show_header_more_button,
+        file_manager_dock_expanded: ui.file_manager_dock_expanded,
+        always_show_hidden_vaults: ui.always_show_hidden_vaults,
+        vault_list_sort: ui.vault_list_sort.clone(),
+        vault_list_sort_direction: ui.vault_list_sort_direction.clone(),
+        vault_list_view: ui.vault_list_view.clone(),
+        vault_list_search: ui.vault_list_search.clone(),
+        vault_list_show_drag: ui.vault_list_show_drag,
+        vault_list_allow_drag_into_group: ui.vault_list_allow_drag_into_group,
+        vault_list_show_create_button: ui.vault_list_show_create_button,
+        vault_list_show_search_button: ui.vault_list_show_search_button,
+        vault_list_show_sort_button: ui.vault_list_show_sort_button,
+        vault_list_show_view_button: ui.vault_list_show_view_button,
+        vault_list_show_vault_more_button: ui.vault_list_show_vault_more_button,
+        vault_list_show_vault_settings_button: ui.vault_list_show_vault_settings_button,
+        vault_list_show_group_settings_button: ui.vault_list_show_group_settings_button,
     }
 }
 
@@ -113,6 +150,29 @@ pub(crate) fn default_sort_dir() -> String {
 }
 pub(crate) fn default_view() -> String {
     "default".into()
+}
+
+pub(super) fn ui_settings_from_toml(ui: &UiToml) -> UiSettings {
+    UiSettings {
+        locale: ui.locale.clone(),
+        theme: ui.theme.clone(),
+        vault_list_sort: ui.vault_list_sort.clone(),
+        vault_list_sort_direction: ui.vault_list_sort_direction.clone(),
+        vault_list_view: ui.vault_list_view.clone(),
+        vault_list_search: ui.vault_list_search.clone(),
+        vault_list_show_create_button: ui.vault_list_show_create_button,
+        vault_list_show_search_button: ui.vault_list_show_search_button,
+        vault_list_show_sort_button: ui.vault_list_show_sort_button,
+        vault_list_show_view_button: ui.vault_list_show_view_button,
+        vault_list_show_header_more_button: ui.show_header_more_button,
+        vault_list_show_vault_more_button: ui.vault_list_show_vault_more_button,
+        vault_list_show_vault_settings_button: ui.vault_list_show_vault_settings_button,
+        vault_list_show_group_settings_button: ui.vault_list_show_group_settings_button,
+        always_show_hidden_vaults: ui.always_show_hidden_vaults,
+        vault_list_show_drag: ui.vault_list_show_drag,
+        vault_list_allow_drag_into_group: ui.vault_list_allow_drag_into_group,
+        file_manager_dock_expanded: ui.file_manager_dock_expanded,
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -153,10 +213,10 @@ pub(crate) fn default_keep() -> u32 {
 
 #[derive(Debug, Default, Deserialize, Serialize)]
 pub(super) struct AppToml {
-    /// Other `[app]` keys (e.g. `last_opened_vault`). Unknown historical keys
-    /// in old TOML are ignored by serde — vault-root mode is `.upriv-root` only.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(super) last_opened_vault: Option<String>,
+    /// Last vault id opened in the UI (empty = none). Always written so the
+    /// key stays visible in `settings.toml`; vault-root mode lives in `.upriv-root`.
+    #[serde(default)]
+    pub(super) last_opened_vault: String,
 }
 
 pub(super) fn parse_settings_toml(raw: &str, path: &Path) -> Result<SettingsToml> {
@@ -181,16 +241,7 @@ pub(super) fn parse_settings_toml(raw: &str, path: &Path) -> Result<SettingsToml
 pub fn parse_settings_toml_str(raw: &str) -> Result<AppSettings> {
     let parsed = parse_settings_toml(raw, &PathBuf::from("settings.toml"))?;
     Ok(AppSettings {
-        ui: UiSettings {
-            locale: parsed.ui.locale,
-            theme: parsed.ui.theme,
-            vault_list_sort: parsed.ui.vault_list_sort,
-            vault_list_sort_direction: parsed.ui.vault_list_sort_direction,
-            vault_list_view: parsed.ui.vault_list_view,
-            always_show_hidden_vaults: parsed.ui.always_show_hidden_vaults,
-            allow_drag_vault_into_group: parsed.ui.allow_drag_vault_into_group,
-            file_manager_dock_expanded: parsed.ui.file_manager_dock_expanded,
-        },
+        ui: ui_settings_from_toml(&parsed.ui),
         logging: LoggingSettings {
             enabled: parsed.logging.enabled,
             level: crate::logging::LogLevel::parse_filter(&parsed.logging.level)
@@ -202,35 +253,45 @@ pub fn parse_settings_toml_str(raw: &str) -> Result<AppSettings> {
         app: AppSectionSettings {
             vault_root_mode: VaultRootMode::DefaultRoot,
             upriv_root_path: String::new(),
+            last_opened_vault: parsed.app.last_opened_vault.trim().to_string(),
+        },
+        workspace: WorkspaceSettings {
+            path: parsed.workspace.path.trim().to_string(),
         },
     })
 }
 
 /// Pure [`AppSettings`] → `settings.toml` serialization with `[package]`
-/// / `[app].last_opened_vault` preservation from `previous` (when provided).
+/// preservation. `[app].last_opened_vault` is taken from the wire value
+/// (trimmed); empty clears the pointer — do not fall back to `previous`.
 ///
 /// Symmetric with [`parse_settings_toml_str`] — no disk access. Vault-root
 /// mode/path fields are **not** written (same rule as [`write_settings_toml_only`]).
 ///
 /// The Android SAF flow pairs this with the DocumentFile write in the Expo
 /// module: Rust owns TOML semantics, Kotlin only moves bytes through SAF.
+/// Callers must pass the real `last_opened_vault` from normalized settings
+/// (empty only when intentionally clearing).
 pub fn serialize_settings_toml_str(
     settings: &AppSettings,
     previous: Option<&str>,
 ) -> Result<String> {
-    let (package, last_opened_vault) = package_from_previous(previous);
+    let vault_root = if settings.app.vault_root_mode == VaultRootMode::CustomRoot
+        && !settings.app.upriv_root_path.trim().is_empty()
+    {
+        Some(Path::new(settings.app.upriv_root_path.trim()))
+    } else {
+        None
+    };
+    // Reserved check: custom_root FS root when set, plus always
+    // `path_is_under_reserved_upriv_tree` inside validate (default_root / SAF).
+    validate_workspace_global_path(&settings.workspace.path, vault_root)?;
+
+    let package = package_from_previous(previous);
+    let last_opened_vault = settings.app.last_opened_vault.trim().to_string();
     let file = SettingsToml {
         package,
-        ui: UiToml {
-            locale: settings.ui.locale.clone(),
-            theme: settings.ui.theme.clone(),
-            vault_list_sort: settings.ui.vault_list_sort.clone(),
-            vault_list_sort_direction: settings.ui.vault_list_sort_direction.clone(),
-            vault_list_view: settings.ui.vault_list_view.clone(),
-            always_show_hidden_vaults: settings.ui.always_show_hidden_vaults,
-            allow_drag_vault_into_group: settings.ui.allow_drag_vault_into_group,
-            file_manager_dock_expanded: settings.ui.file_manager_dock_expanded,
-        },
+        ui: ui_toml_from_settings(&settings.ui),
         logging: LoggingToml {
             enabled: settings.logging.enabled,
             level: crate::logging::LogLevel::parse_filter(&settings.logging.level)
@@ -240,25 +301,96 @@ pub fn serialize_settings_toml_str(
             keep_last_entries: settings.logging.keep_last_entries,
         },
         app: AppToml { last_opened_vault },
+        workspace: WorkspaceToml {
+            path: settings.workspace.path.trim().to_string(),
+        },
     };
     let body = toml::to_string_pretty(&file).map_err(|error| {
         UprivError::Io(std::io::Error::other(format!(
             "serialize settings.toml: {error}"
         )))
     })?;
+    let body = inject_package_section_comments(&body);
+    let body = inject_app_section_comments(&body);
+    let body = inject_workspace_section_comments(&body);
     let header = "# Upriv marker + app settings (vault-root directory)\n\n";
-    let footer = "\
-# Vault-root mode (`default_root` vs `custom_root`) is NOT configured in this file.
-# It lives in the app-home `.upriv-root` alias:
-#   missing or status=inactive → default_root mode
-#   status=active + path → custom_root
-";
-    Ok(format!("{header}{body}\n{footer}"))
+    Ok(format!("{header}{body}"))
 }
 
-/// Extract `[package]` + `[app].last_opened_vault` from a previous TOML string.
+const APP_SECTION_COMMENTS: &str = "\
+# Vault-root mode (`default_root` | `custom_root`): app-home `.upriv-root`, not here.
+# Missing/inactive → default_root; active + path → custom_root.";
+
+const WORKSPACE_SECTION_COMMENTS: &str = "\
+# Absolute path for the default mount parent (open vaults). Empty = unset — no folder created.";
+
+/// Append vault-root alias pointer under `[app]` (after `last_opened_vault`).
+fn inject_app_section_comments(body: &str) -> String {
+    let Some(app_idx) = body.find("[app]") else {
+        return body.to_string();
+    };
+    let after_header = app_idx + "[app]".len();
+    let has_newline = body.as_bytes().get(after_header) == Some(&b'\n');
+    let content_start = after_header + usize::from(has_newline);
+    let app_tail = &body[content_start..];
+
+    if let Some(rel) = app_tail.find("last_opened_vault =") {
+        let line_end = app_tail[rel..]
+            .find('\n')
+            .map(|i| rel + i)
+            .unwrap_or(app_tail.len());
+        let insert_at = content_start + line_end;
+        return format!(
+            "{}\n{APP_SECTION_COMMENTS}{}",
+            &body[..insert_at],
+            &body[insert_at..]
+        );
+    }
+
+    format!(
+        "{}{APP_SECTION_COMMENTS}\n{}",
+        &body[..content_start],
+        &body[content_start..]
+    )
+}
+
+/// Insert mount-parent comment under `[workspace]` (before `path =`).
+fn inject_workspace_section_comments(body: &str) -> String {
+    let Some(ws_idx) = body.find("[workspace]") else {
+        return body.to_string();
+    };
+    let after_header = ws_idx + "[workspace]".len();
+    let has_newline = body.as_bytes().get(after_header) == Some(&b'\n');
+    let content_start = after_header + usize::from(has_newline);
+    if body[content_start..].starts_with(WORKSPACE_SECTION_COMMENTS) {
+        return body.to_string();
+    }
+    format!(
+        "{}{WORKSPACE_SECTION_COMMENTS}\n{}",
+        &body[..content_start],
+        &body[content_start..]
+    )
+}
+
+const PACKAGE_SECTION_COMMENTS: &str = "\
+# List groups (optional): .upriv/vault_groups.toml — missing file = no groups.";
+
+/// Append vault-groups pointer after `[package]` (before `[ui]`).
+/// Keeps a blank line after the comment (same shape as `DEFAULT_SETTINGS_TOML`).
+fn inject_package_section_comments(body: &str) -> String {
+    if let Some(idx) = body.find("\n[ui]") {
+        let (package, rest) = body.split_at(idx);
+        // `rest` is `\n[ui]…`; extra `\n` after the comment restores the blank line
+        // that `package.trim_end()` removed between `[package]` and `[ui]`.
+        format!("{}\n{PACKAGE_SECTION_COMMENTS}\n{rest}", package.trim_end())
+    } else {
+        format!("{body}\n{PACKAGE_SECTION_COMMENTS}\n")
+    }
+}
+
+/// Extract `[package]` from a previous TOML string.
 /// Falls back to fresh defaults when `previous` is missing or unparseable.
-fn package_from_previous(previous: Option<&str>) -> (PackageToml, Option<String>) {
+fn package_from_previous(previous: Option<&str>) -> PackageToml {
     let mut package = PackageToml {
         version: default_package_version(),
         label: default_label(),
@@ -266,21 +398,16 @@ fn package_from_previous(previous: Option<&str>) -> (PackageToml, Option<String>
         state_file: default_state_file(),
         logs_dir: default_logs_dir(),
         app_dir: default_app_dir(),
-        workspace_dir: default_workspace_dir(),
-        default_vault: None,
-        last_opened_vault: None,
     };
-    let mut last_opened_vault = None;
     if let Some(raw) = previous {
         if let Ok(prev) = toml::from_str::<SettingsToml>(raw) {
             package = prev.package;
-            last_opened_vault = prev.app.last_opened_vault;
         }
     }
-    (package, last_opened_vault)
+    package
 }
 
-/// Write `[ui]` / `[logging]` (and preserve `[package]` / `[app].last_opened_vault`).
+/// Write `[ui]` / `[logging]` (preserve `[package]`; `last_opened_vault` from settings).
 pub(super) fn write_settings_toml_only(root: &Path, settings: &AppSettings) -> Result<()> {
     let path = root.join(VAULT_ROOT_SETTINGS_REL);
     let existing = if path.is_file() {
@@ -312,16 +439,14 @@ vaults_dir = ".upriv/vaults"
 state_file = ".upriv/state.json"
 logs_dir = ".upriv/logs"
 app_dir = ".upriv/app"
-workspace_dir = "workspace"
 
 [ui]
 locale = "pt-BR"
 theme = "dark"
+file_manager_dock_expanded = true
 vault_list_sort = "order"
 vault_list_sort_direction = "asc"
 vault_list_view = "default"
-always_show_hidden_vaults = false
-file_manager_dock_expanded = true
 
 [logging]
 enabled = true
@@ -335,7 +460,18 @@ last_opened_vault = "kept"
         let settings = parse_settings_toml_str(raw).unwrap();
         assert_eq!(settings.ui.locale, "pt-BR");
         assert!(settings.ui.file_manager_dock_expanded);
-        assert!(settings.ui.allow_drag_vault_into_group);
+        assert_eq!(settings.ui.vault_list_search, "");
+        // Missing keys use serde defaults (toolbar + drag flags default true).
+        assert!(settings.ui.vault_list_show_create_button);
+        assert!(settings.ui.vault_list_show_search_button);
+        assert!(settings.ui.vault_list_show_sort_button);
+        assert!(settings.ui.vault_list_show_view_button);
+        assert!(settings.ui.vault_list_show_header_more_button);
+        assert!(settings.ui.vault_list_show_vault_more_button);
+        assert!(settings.ui.vault_list_show_vault_settings_button);
+        assert!(settings.ui.vault_list_show_group_settings_button);
+        assert!(settings.ui.vault_list_show_drag);
+        assert!(settings.ui.vault_list_allow_drag_into_group);
         assert_eq!(settings.logging.level, "warn");
         assert_eq!(settings.logging.entries_per_file, 500);
         // Vault-root mode/path never come from TOML.
@@ -344,7 +480,71 @@ last_opened_vault = "kept"
     }
 
     #[test]
-    fn serialize_preserves_package_and_last_opened_vault() {
+    fn parse_ignores_legacy_show_keys_without_button_suffix() {
+        let raw = r#"
+[package]
+version = 1
+label = "Upriv"
+vaults_dir = ".upriv/vaults"
+state_file = ".upriv/state.json"
+logs_dir = ".upriv/logs"
+app_dir = ".upriv/app"
+
+[ui]
+vault_list_show_create = false
+vault_list_show_search = false
+vault_list_show_sort = false
+vault_list_show_view = false
+allow_drag_vault_list = false
+"#;
+        let settings = parse_settings_toml_str(raw).unwrap();
+        assert!(settings.ui.vault_list_show_create_button);
+        assert!(settings.ui.vault_list_show_search_button);
+        assert!(settings.ui.vault_list_show_sort_button);
+        assert!(settings.ui.vault_list_show_view_button);
+        assert!(settings.ui.vault_list_show_drag);
+    }
+
+    #[test]
+    fn parse_reads_flat_vault_settings_button_keys() {
+        let raw = r#"
+[package]
+version = 1
+label = "Upriv"
+vaults_dir = ".upriv/vaults"
+state_file = ".upriv/state.json"
+logs_dir = ".upriv/logs"
+app_dir = ".upriv/app"
+
+[ui]
+vault_list_show_vault_settings_button = false
+"#;
+        let settings = parse_settings_toml_str(raw).unwrap();
+        assert!(!settings.ui.vault_list_show_vault_settings_button);
+        assert!(settings.ui.vault_list_show_group_settings_button);
+    }
+
+    #[test]
+    fn parse_ignores_legacy_combined_vault_group_settings_key() {
+        let raw = r#"
+[package]
+version = 1
+label = "Upriv"
+vaults_dir = ".upriv/vaults"
+state_file = ".upriv/state.json"
+logs_dir = ".upriv/logs"
+app_dir = ".upriv/app"
+
+[ui]
+vault_list_show_vault_group_settings_button = false
+"#;
+        let settings = parse_settings_toml_str(raw).unwrap();
+        assert!(settings.ui.vault_list_show_vault_settings_button);
+        assert!(settings.ui.vault_list_show_group_settings_button);
+    }
+
+    #[test]
+    fn serialize_nonempty_last_opened_wins_over_previous() {
         let previous = r#"
 [package]
 version = 1
@@ -353,8 +553,6 @@ vaults_dir = ".upriv/vaults"
 state_file = ".upriv/state.json"
 logs_dir = ".upriv/logs"
 app_dir = ".upriv/app"
-workspace_dir = "workspace"
-default_vault = "notes"
 
 [ui]
 locale = "en"
@@ -367,17 +565,74 @@ last_opened_vault = "notes"
 "#;
         let mut settings = AppSettings::default();
         settings.ui.locale = "es".into();
+        settings.app.last_opened_vault = "from-wire".into();
         // Explicit custom_root should NOT be written to TOML — alias is the source of truth.
         settings.app.vault_root_mode = VaultRootMode::CustomRoot;
         settings.app.upriv_root_path = "content://ignored".into();
         let out = serialize_settings_toml_str(&settings, Some(previous)).unwrap();
         assert!(out.contains("locale = \"es\""));
-        assert!(out.contains("default_vault = \"notes\""));
-        assert!(out.contains("last_opened_vault = \"notes\""));
+        assert!(out.contains("last_opened_vault = \"from-wire\""));
+        assert!(!out.contains("last_opened_vault = \"notes\""));
+        let opened_idx = out
+            .find("last_opened_vault = \"from-wire\"")
+            .expect("last_opened");
+        let mode_idx = out.find("Vault-root mode").expect("vault-root comment");
+        assert!(
+            opened_idx < mode_idx,
+            "vault-root comment must follow last_opened_vault: {out}"
+        );
+        assert!(
+            out.contains("Absolute path for the default mount parent"),
+            "workspace comment missing: {out}"
+        );
         assert!(
             !out.contains("vault_root_mode") && !out.contains("upriv_root_path"),
             "mode/path must not be persisted: {out}"
         );
+    }
+
+    #[test]
+    fn serialize_empty_last_opened_clears_previous() {
+        let previous = r#"
+[package]
+version = 1
+label = "Upriv"
+vaults_dir = ".upriv/vaults"
+state_file = ".upriv/state.json"
+logs_dir = ".upriv/logs"
+app_dir = ".upriv/app"
+
+[app]
+last_opened_vault = "notes"
+"#;
+        let settings = AppSettings::default();
+        assert!(settings.app.last_opened_vault.is_empty());
+        let out = serialize_settings_toml_str(&settings, Some(previous)).unwrap();
+        assert!(out.contains("last_opened_vault = \"\""));
+        assert!(!out.contains("last_opened_vault = \"notes\""));
+    }
+
+    #[test]
+    fn serialize_preserves_package_fields_when_last_opened_cleared() {
+        let previous = r#"
+[package]
+version = 1
+label = "Upriv"
+vaults_dir = ".upriv/vaults"
+state_file = ".upriv/state.json"
+logs_dir = ".upriv/logs"
+app_dir = ".upriv/app"
+
+[app]
+last_opened_vault = "notes"
+"#;
+        let out = serialize_settings_toml_str(&AppSettings::default(), Some(previous)).unwrap();
+        assert!(out.contains("vaults_dir = \".upriv/vaults\""));
+        assert!(out.contains("state_file = \".upriv/state.json\""));
+        assert!(out.contains("logs_dir = \".upriv/logs\""));
+        assert!(out.contains("app_dir = \".upriv/app\""));
+        assert!(out.contains("label = \"Upriv\""));
+        assert!(out.contains("last_opened_vault = \"\""));
     }
 
     #[test]
@@ -386,12 +641,184 @@ last_opened_vault = "notes"
         assert!(out.contains("[package]"));
         assert!(out.contains("vaults_dir = \".upriv/vaults\""));
         assert!(out.contains("locale = \"en\""));
-        assert!(!out.contains("last_opened_vault"));
+        assert!(!out.contains("[ui.vault_list]"));
+        assert!(out.contains("vault_list_search = \"\""));
+        assert!(out.contains("always_show_hidden_vaults = false"));
+        assert!(out.contains("vault_list_show_drag = true"));
+        assert!(out.contains("vault_list_allow_drag_into_group = true"));
+        assert!(out.contains("vault_list_show_create_button = true"));
+        assert!(out.contains("vault_list_show_search_button = true"));
+        assert!(out.contains("vault_list_show_sort_button = true"));
+        assert!(out.contains("vault_list_show_view_button = true"));
+        assert!(out.contains("show_header_more_button = true"));
+        assert!(out.contains("vault_list_show_vault_more_button = true"));
+        let ui_section = out
+            .split("\n[ui]")
+            .nth(1)
+            .unwrap_or("")
+            .split("\n[logging]")
+            .next()
+            .unwrap_or("");
+        assert!(
+            ui_section.contains("show_header_more_button")
+                && ui_section.contains("vault_list_sort"),
+            "vault-list prefs must live under flat [ui]: {out}"
+        );
+        assert!(out.contains("vault_list_show_vault_settings_button = true"));
+        assert!(out.contains("vault_list_show_group_settings_button = true"));
+        assert!(!out.contains("vault_list_show_vault_group_settings_button"));
+        assert!(out.contains("vault_list_sort = \"order\""));
+        assert!(out.contains("vault_groups.toml"));
+        let ui_idx = out.find("\n[ui]").expect("[ui] section");
+        let groups_idx = out.find("vault_groups.toml").expect("groups comment");
+        assert!(
+            groups_idx < ui_idx,
+            "vault_groups comment must sit under [package], before [ui]: {out}"
+        );
+        assert!(
+            out.contains(
+                "# List groups (optional): .upriv/vault_groups.toml — missing file = no groups.\n\n[ui]"
+            ),
+            "blank line required after vault_groups comment (matches DEFAULT_SETTINGS_TOML): {out}"
+        );
+        assert!(out.contains("last_opened_vault = \"\""));
+    }
+
+    #[test]
+    fn serialize_rejects_relative_workspace_path() {
+        let mut settings = AppSettings::default();
+        settings.workspace.path = "workspace".into();
+        let err = serialize_settings_toml_str(&settings, None).unwrap_err();
+        assert!(matches!(err, UprivError::WorkspacePathInvalid { .. }));
+    }
+
+    #[test]
+    fn serialize_rejects_reserved_workspace_under_custom_root() {
+        let mut settings = AppSettings::default();
+        settings.app.vault_root_mode = VaultRootMode::CustomRoot;
+        settings.app.upriv_root_path = "/data/root".into();
+        settings.workspace.path = "/data/root/.upriv/vaults".into();
+        let err = serialize_settings_toml_str(&settings, None).unwrap_err();
+        assert!(matches!(err, UprivError::WorkspacePathReserved(_)));
+    }
+
+    #[test]
+    fn serialize_rejects_reserved_workspace_under_default_root() {
+        let mut settings = AppSettings::default();
+        assert_eq!(settings.app.vault_root_mode, VaultRootMode::DefaultRoot);
+        settings.workspace.path = "/tmp/foo/.upriv/vaults/x".into();
+        let err = serialize_settings_toml_str(&settings, None).unwrap_err();
+        assert!(matches!(err, UprivError::WorkspacePathReserved(_)));
+    }
+
+    #[test]
+    fn parse_ignores_nested_vault_list_table() {
+        let raw = r#"
+[package]
+version = 1
+label = "Upriv"
+vaults_dir = ".upriv/vaults"
+state_file = ".upriv/state.json"
+logs_dir = ".upriv/logs"
+app_dir = ".upriv/app"
+
+[ui]
+locale = "en"
+theme = "dark"
+
+[ui.vault_list]
+vault_list_sort = "name"
+vault_list_sort_direction = "desc"
+vault_list_view = "compact"
+vault_list_search = "notes"
+always_show_hidden_vaults = true
+vault_list_show_drag = false
+vault_list_allow_drag_into_group = false
+vault_list_show_create_button = false
+vault_list_show_search_button = false
+vault_list_show_sort_button = false
+vault_list_show_view_button = false
+vault_list_show_vault_more_button = false
+vault_list_show_vault_settings_button = false
+vault_list_show_group_settings_button = false
+"#;
+        let settings = parse_settings_toml_str(raw).unwrap();
+        assert_eq!(settings.ui.vault_list_sort, "order");
+        assert_eq!(settings.ui.vault_list_sort_direction, "asc");
+        assert_eq!(settings.ui.vault_list_view, "default");
+        assert_eq!(settings.ui.vault_list_search, "");
+        assert!(!settings.ui.always_show_hidden_vaults);
+        assert!(settings.ui.vault_list_show_drag);
+        assert!(settings.ui.vault_list_allow_drag_into_group);
+        assert!(settings.ui.vault_list_show_create_button);
+        assert!(settings.ui.vault_list_show_vault_settings_button);
+    }
+
+    #[test]
+    fn parse_accepts_header_more_under_ui_table() {
+        let raw = r#"
+[package]
+version = 1
+label = "Upriv"
+vaults_dir = ".upriv/vaults"
+state_file = ".upriv/state.json"
+logs_dir = ".upriv/logs"
+app_dir = ".upriv/app"
+
+[ui]
+show_header_more_button = false
+"#;
+        let settings = parse_settings_toml_str(raw).unwrap();
+        assert!(!settings.ui.vault_list_show_header_more_button);
+    }
+
+    #[test]
+    fn parse_ignores_header_more_in_nested_legacy_table() {
+        let raw = r#"
+[package]
+version = 1
+label = "Upriv"
+vaults_dir = ".upriv/vaults"
+state_file = ".upriv/state.json"
+logs_dir = ".upriv/logs"
+app_dir = ".upriv/app"
+
+[ui.vault_list]
+show_header_more_button = false
+"#;
+        let settings = parse_settings_toml_str(raw).unwrap();
+        assert!(settings.ui.vault_list_show_header_more_button);
     }
 
     #[test]
     fn parse_rejects_broken_toml() {
         let err = parse_settings_toml_str("[package\nversion = 1\n").unwrap_err();
         assert!(matches!(err, UprivError::VaultRootIncomplete { .. }));
+    }
+
+    #[test]
+    fn kotlin_saf_template_matches_core_defaults() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(
+            "../../apps/mobile/modules/upriv-core/android/src/main/java/expo/modules/uprivcore/SafVaultRoot.kt",
+        );
+        let src = std::fs::read_to_string(&path)
+            .unwrap_or_else(|err| panic!("read {}: {err}", path.display()));
+        let marker = "DEFAULT_SETTINGS_TOML_TEMPLATE = \"\"\"";
+        let start = src
+            .find(marker)
+            .unwrap_or_else(|| panic!("missing {marker} in {}", path.display()));
+        let after = &src[start + marker.len()..];
+        let end = after
+            .find("\"\"\"")
+            .expect("unclosed DEFAULT_SETTINGS_TOML_TEMPLATE");
+        let template = after[..end].replace("__LOCALE__", "en");
+        let from_kotlin = parse_settings_toml_str(&template).expect("kotlin template parses");
+        let from_core = parse_settings_toml_str(
+            &serialize_settings_toml_str(&AppSettings::default(), None).unwrap(),
+        )
+        .expect("core serialize parses");
+        assert_eq!(from_kotlin.ui, from_core.ui);
+        assert_eq!(from_kotlin.logging, from_core.logging);
+        assert_eq!(from_kotlin.workspace, from_core.workspace);
     }
 }

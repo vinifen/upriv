@@ -1,0 +1,35 @@
+name: check
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dev
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: dev/.nvmrc
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.94.0
+          components: rustfmt, clippy
+      - run: |
+          npm ci --prefix js-lint
+          npm ci --prefix apps/shared
+          npm ci --prefix apps/desktop
+          npm ci --prefix apps/electron
+          npm ci --prefix apps/mobile
+          ./run check

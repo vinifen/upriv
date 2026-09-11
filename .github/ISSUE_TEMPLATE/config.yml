@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Contributing guide
+    url: https://github.com/vinifen/upriv/blob/main/CONTRIBUTING.md
+    about: Branch, commit, and PR conventions
+  - name: Private contact
+    url: https://github.com/vinifen/upriv/blob/main/SECURITY.md
+    about: Crypto or plaintext-leak reports — not a public issue

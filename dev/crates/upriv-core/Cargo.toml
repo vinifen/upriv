@@ -3,6 +3,7 @@ name = "upriv-core"
 version.workspace = true
 description = "Upriv shared Rust core (desktop, mobile)"
 authors.workspace = true
+license.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 

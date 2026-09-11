@@ -11,6 +11,7 @@ import { useAppSettingsContext } from "./AppSettingsContext";
 import { useTranslation } from "@/i18n";
 import { mobileErrorI18nKey } from "@/lib/errorMessages";
 import { Button, Modal } from "@/components/ui";
+import { ModalFooterActions, modalFooterConfirmBtnStyle } from "@/components/ui/ModalFooterActions";
 import { useTheme } from "@/theme";
 import { spacing } from "@/theme/tokens";
 import { VaultRootLocationSection } from "./VaultRootLocationSection";
@@ -250,18 +251,20 @@ export function VaultRootDataFolderModal({
   const footer = discardConfirmOpen ? (
     <View style={styles.footerCol}>
       <Text style={typography.bodyMuted}>{t("modal.settings.discard_confirm")}</Text>
-      <View style={styles.footerActions}>
+      <ModalFooterActions layout="confirm">
         <Button
           variant="danger"
           label={t("modal.settings.discard_confirm_action")}
+          style={modalFooterConfirmBtnStyle}
           onPress={handleDiscardAndClose}
         />
         <Button
           variant="ghost"
           label={t("modal.settings.discard_keep_editing")}
+          style={modalFooterConfirmBtnStyle}
           onPress={dismissFooterConfirm}
         />
-      </View>
+      </ModalFooterActions>
     </View>
   ) : (
     <VaultRootConfirmFooter
@@ -289,6 +292,7 @@ export function VaultRootDataFolderModal({
     <Modal
       open={open}
       title={t("modal.data_folder.title")}
+      titleIcon="folder"
       onClose={requestClose}
       panelClassName="max-w-lg"
       footer={footer}
@@ -296,7 +300,7 @@ export function VaultRootDataFolderModal({
       <View style={styles.body}>
         <Text style={typography.bodyMuted}>{t("modal.data_folder.body")}</Text>
         <VaultRootLocationSection
-          config={{ vault_root_mode: mode, upriv_root_path: path }}
+          config={{ vault_root_mode: mode, upriv_root_path: path, last_opened_vault: "" }}
           onChange={onDraftChange}
           savedVaultRootMode={settings.app.vault_root_mode}
           savedRootPath={settings.app.upriv_root_path}
@@ -318,5 +322,4 @@ export function VaultRootDataFolderModal({
 const styles = StyleSheet.create({
   body: { gap: spacing.md },
   footerCol: { gap: spacing.md },
-  footerActions: { gap: spacing.sm },
 });

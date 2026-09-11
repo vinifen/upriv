@@ -10,8 +10,8 @@ import {
 } from "@upriv/shared";
 import { useTranslation } from "@/i18n";
 import { useErrorToast } from "@/hooks/useErrorToast";
+import { useVaultBackups } from "@upriv/shared/react";
 import { downloadBackupsZip } from "./downloadBackupsZip";
-import { useVaultBackups } from "./hooks/useVaultBackups";
 
 const backupCheckboxClass =
   "h-4 w-4 shrink-0 rounded border-outline-variant/50 bg-surface-container-high text-accent focus:ring-accent/50";
@@ -20,7 +20,7 @@ interface VaultBackupsModalProps {
   vault: VaultListItem | null;
   open: boolean;
   onClose: () => void;
-  onCreateVaultFromBackup?: (filename: string) => void;
+  onCreateVaultFromBackup?: (stamp: string) => void;
 }
 
 function matchesDeleteConfirmation(input: string, count: number, vaultId: string): boolean {
@@ -40,6 +40,7 @@ export function VaultBackupsModal({
   const backupService = useBackupService();
   const vaultId = vault?.id ?? null;
   const { backups, deleteBackups, promoteToSave, isLoading, isBusy, error } = useVaultBackups(
+    backupService,
     vaultId,
     open,
   );
@@ -52,9 +53,8 @@ export function VaultBackupsModal({
   const [confirmText, setConfirmText] = useState("");
   const confirmInputId = useId();
 
-  const allFilenames = useMemo(() => backups.map((entry) => entry.filename), [backups]);
-  const allSelected =
-    backups.length > 0 && allFilenames.every((filename) => selected.has(filename));
+  const allStamps = useMemo(() => backups.map((entry) => entry.stamp), [backups]);
+  const allSelected = backups.length > 0 && allStamps.every((stamp) => selected.has(stamp));
   const someSelected = selected.size > 0;
   const deleteCount = deleteTargets?.length ?? 0;
   const isSingleDelete = deleteCount === 1;
@@ -75,14 +75,14 @@ export function VaultBackupsModal({
   useEffect(() => {
     setSelected((current) => {
       const next = new Set<string>();
-      for (const filename of current) {
-        if (allFilenames.includes(filename)) next.add(filename);
+      for (const stamp of current) {
+        if (allStamps.includes(stamp)) next.add(stamp);
       }
       return next;
     });
     setDeleteTargets(null);
     setConfirmText("");
-  }, [allFilenames]);
+  }, [allStamps]);
 
   if (!open || !vault) return null;
 
@@ -93,11 +93,11 @@ export function VaultBackupsModal({
     onClose();
   };
 
-  const toggleSelected = (filename: string) => {
+  const toggleSelected = (stamp: string) => {
     setSelected((current) => {
       const next = new Set(current);
-      if (next.has(filename)) next.delete(filename);
-      else next.add(filename);
+      if (next.has(stamp)) next.delete(stamp);
+      else next.add(stamp);
       return next;
     });
   };
@@ -107,12 +107,12 @@ export function VaultBackupsModal({
       setSelected(new Set());
       return;
     }
-    setSelected(new Set(allFilenames));
+    setSelected(new Set(allStamps));
   };
 
-  const beginDelete = (filenames: string[]) => {
-    if (filenames.length === 0) return;
-    setDeleteTargets(filenames);
+  const beginDelete = (stamps: string[]) => {
+    if (stamps.length === 0) return;
+    setDeleteTargets(stamps);
     setConfirmText("");
   };
 
@@ -128,7 +128,7 @@ export function VaultBackupsModal({
       .then(() => {
         setSelected((current) => {
           const next = new Set(current);
-          for (const filename of targets) next.delete(filename);
+          for (const stamp of targets) next.delete(stamp);
           return next;
         });
         setDeleteTargets(null);
@@ -139,38 +139,42 @@ export function VaultBackupsModal({
       });
   };
 
-  const handlePromoteToSave = (filename: string) => {
-    void promoteToSave(filename).catch((err) => {
+  const handlePromoteToSave = (stamp: string) => {
+    void promoteToSave(stamp).catch((err) => {
       showError(err, "toast.backup_promote_failed");
     });
   };
 
   const handleDownload = () => {
-    const targets = someSelected
-      ? backups.filter((entry) => selected.has(entry.filename))
-      : backups;
+    const targets = someSelected ? backups.filter((entry) => selected.has(entry.stamp)) : backups;
     if (targets.length === 0) return;
     void downloadBackupsZip(
       targets,
       t("modal.backup.download_zip_name", { id: vault.id }),
       (entry) => backupService.getBackupBytes(entry),
-    );
+    ).catch((error) => {
+      showError(error, "error.unexpected");
+    });
   };
 
-  const handleDownloadOne = (filename: string) => {
-    const entry = backups.find((item) => item.filename === filename);
+  const handleDownloadOne = (stamp: string) => {
+    const entry = backups.find((item) => item.stamp === stamp);
     if (!entry) return;
     void downloadBackupsZip(
       [entry],
       t("modal.backup.download_zip_name", { id: vault.id }),
       (entry) => backupService.getBackupBytes(entry),
-    );
+    ).catch((error) => {
+      showError(error, "error.unexpected");
+    });
   };
 
   return (
     <Modal
       open={open}
-      title={t("modal.backup.title", { name: vault.displayName })}
+      title={t("modal.backup.title")}
+      titleIcon="archive"
+      contextTitle={vault.displayName}
       onClose={handleClose}
       panelClassName="max-w-2xl"
     >
@@ -212,7 +216,7 @@ export function VaultBackupsModal({
               selectionDisabled={deleteTargets !== null}
               onToggleSelected={toggleSelected}
               onDownload={handleDownloadOne}
-              onDelete={(filename) => beginDelete([filename])}
+              onDelete={(stamp) => beginDelete([stamp])}
               onCreateVaultFromBackup={onCreateVaultFromBackup}
             />
             <BackupSection
@@ -225,7 +229,7 @@ export function VaultBackupsModal({
               selectionDisabled={deleteTargets !== null}
               onToggleSelected={toggleSelected}
               onDownload={handleDownloadOne}
-              onDelete={(filename) => beginDelete([filename])}
+              onDelete={(stamp) => beginDelete([stamp])}
               onCreateVaultFromBackup={onCreateVaultFromBackup}
               onPromoteToSave={handlePromoteToSave}
             />
@@ -282,11 +286,11 @@ interface BackupSectionProps {
   locale: string;
   selected: Set<string>;
   selectionDisabled: boolean;
-  onToggleSelected: (filename: string) => void;
-  onDownload: (filename: string) => void;
-  onDelete: (filename: string) => void;
-  onCreateVaultFromBackup?: (filename: string) => void;
-  onPromoteToSave?: (filename: string) => void;
+  onToggleSelected: (stamp: string) => void;
+  onDownload: (stamp: string) => void;
+  onDelete: (stamp: string) => void;
+  onCreateVaultFromBackup?: (stamp: string) => void;
+  onPromoteToSave?: (stamp: string) => void;
 }
 
 function BackupSection({
@@ -317,18 +321,18 @@ function BackupSection({
         <ul className="space-y-2">
           {entries.map((entry) => (
             <BackupRow
-              key={entry.filename}
+              key={entry.stamp}
               entry={entry}
               locale={locale}
-              checked={selected.has(entry.filename)}
+              checked={selected.has(entry.stamp)}
               selectionDisabled={selectionDisabled}
-              onToggleSelected={() => onToggleSelected(entry.filename)}
-              onDownload={() => onDownload(entry.filename)}
-              onDelete={() => onDelete(entry.filename)}
+              onToggleSelected={() => onToggleSelected(entry.stamp)}
+              onDownload={() => onDownload(entry.stamp)}
+              onDelete={() => onDelete(entry.stamp)}
               onCreateVaultFromBackup={
-                onCreateVaultFromBackup ? () => onCreateVaultFromBackup(entry.filename) : undefined
+                onCreateVaultFromBackup ? () => onCreateVaultFromBackup(entry.stamp) : undefined
               }
-              onPromoteToSave={onPromoteToSave ? () => onPromoteToSave(entry.filename) : undefined}
+              onPromoteToSave={onPromoteToSave ? () => onPromoteToSave(entry.stamp) : undefined}
             />
           ))}
         </ul>
@@ -458,10 +462,10 @@ function BackupRow({
       >
         <p className="flex min-w-0 items-center gap-2">
           <span className="truncate font-mono text-xs text-on-surface sm:text-sm">
-            {entry.filename}
+            {entry.stamp}
           </span>
           {entry.saved ? (
-            <span className="shrink-0 rounded-md bg-accent/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-accent">
+            <span className="shrink-0 rounded bg-[color-mix(in_srgb,var(--accent)_15%,transparent)] px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-accent">
               {t("modal.backup.saved_badge")}
             </span>
           ) : null}

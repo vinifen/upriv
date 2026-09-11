@@ -22,7 +22,6 @@ export const desktopVaultGroupService: VaultGroupService = {
   delete: (id) => rpcVaultGroupDelete(id),
   setCollapsed: (id, collapsed) => rpcVaultGroupSetCollapsed(id, collapsed),
   reorder: (orders) => rpcVaultGroupReorder(orders),
-  reorderGroupedVaults: (id, groupedVaults) =>
-    rpcVaultGroupReorderGroupedVaults(id, groupedVaults),
+  reorderGroupedVaults: (id, groupedVaults) => rpcVaultGroupReorderGroupedVaults(id, groupedVaults),
   repair: () => rpcVaultGroupRepair(),
 };

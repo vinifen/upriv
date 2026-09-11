@@ -1,15 +1,7 @@
-export type {
-  FileTreeNode,
-  FileTreeNodeType,
-  VaultFileContent,
-  VaultFileLanguage,
-} from "./types";
+export type { FileTreeNode, FileTreeNodeType, VaultFileContent, VaultFileLanguage } from "./types";
 export { vaultFileLanguageFromPath } from "./language";
 export { validateFileName } from "./fileNameValidation";
-export {
-  fileNameErrorI18nKey,
-  type FileNameErrorCode,
-} from "./errorMessages";
+export { fileNameErrorI18nKey, type FileNameErrorCode } from "./errorMessages";
 export { joinPath, fileBaseName, findNode, isFolderPath } from "./treeUtils";
 export {
   getParentPath,

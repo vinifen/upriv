@@ -17,6 +17,8 @@ export function FileManagerDialogs({ fm }: FileManagerDialogsProps) {
       <Modal
         open={deleteTarget !== null}
         title={t("modal.file_manager.delete.title")}
+        titleIcon="trash"
+        contextTitle={deleteTarget?.name}
         onClose={() => fm.dispatch({ type: "set_delete_target", target: null })}
         panelClassName="max-w-md"
         rootClassName="z-[120]"
@@ -47,6 +49,7 @@ export function FileManagerDialogs({ fm }: FileManagerDialogsProps) {
       <Modal
         open={unsavedPrompt !== null}
         title={t("modal.file_manager.unsaved.title")}
+        titleIcon="file"
         onClose={() => fm.dispatch({ type: "set_unsaved_prompt", prompt: null })}
         panelClassName="max-w-md"
         rootClassName="z-[120]"

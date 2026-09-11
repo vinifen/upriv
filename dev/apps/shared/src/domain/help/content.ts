@@ -31,10 +31,7 @@ export const HELP_SECTION_BODY_KEYS: Record<HelpSectionId, readonly string[]> = 
   ],
   vault_settings: ["modal.help.body.vault_settings.1", "modal.help.body.vault_settings.2"],
   backups: ["modal.help.body.backups.1", "modal.help.body.backups.2"],
-  system_settings: [
-    "modal.help.body.system_settings.1",
-    "modal.help.body.system_settings.2",
-  ],
+  system_settings: ["modal.help.body.system_settings.1", "modal.help.body.system_settings.2"],
   data_folder: ["modal.help.body.data_folder.1"],
   logs: ["modal.help.body.logs.1", "modal.help.body.logs.2"],
   security: [

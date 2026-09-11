@@ -1,5 +1,5 @@
 import { createContext, useContext, useMemo, type ReactNode } from "react";
-import type { UiTheme } from "@upriv/shared";
+import { DEFAULT_UI_THEME, type UiTheme } from "@upriv/shared";
 import { useAppSettingsContext } from "@/features/system/settings/AppSettingsContext";
 import { colorsForTheme, typographyForColors, type ThemeColors } from "./tokens";
 
@@ -29,9 +29,9 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 }
 
 const FALLBACK: ThemeContextValue = (() => {
-  const colors = colorsForTheme("dark");
+  const colors = colorsForTheme(DEFAULT_UI_THEME);
   return {
-    theme: "dark",
+    theme: DEFAULT_UI_THEME,
     colors,
     typography: typographyForColors(colors),
     statusBarStyle: "light",

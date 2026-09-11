@@ -12,11 +12,10 @@ describe("defaultOrderAtEnd", () => {
 });
 
 describe("createEmptyCreateVaultDraft", () => {
-  it("defaults to encrypted_dir and encrypt_only compression", () => {
+  it("defaults to encrypted_dir and 256 MiB unlock RAM", () => {
     const draft = createEmptyCreateVaultDraft([2, 4]);
     expect(draft.storage.mode).toBe("encrypted_dir");
-    expect(draft.seven_zip.archive_mode).toBe("encrypt_only");
-    expect(draft.seven_zip.compression_level).toBe(0);
+    expect(draft.kdf.unlock_preset).toBe("256mib");
     expect(draft.order).toBe(5);
   });
 });

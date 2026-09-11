@@ -12,8 +12,8 @@ export interface IconButtonProps extends ButtonHTMLAttributes<HTMLButtonElement>
 
 const sizeClass: Record<IconButtonSize, string> = {
   sm: "h-9 w-9 rounded-md",
-  /** Match Button `size="md"` (`h-10`) — header ⋮ / toolbar chrome. */
-  md: "h-10 w-10 min-h-10 min-w-10 rounded-xl",
+  /** Match Button `size="md"` / `CONTROL_HEIGHT_MD`. */
+  md: "h-[var(--control-height-md)] w-[var(--control-height-md)] min-h-[var(--control-height-md)] min-w-[var(--control-height-md)] rounded-xl",
   row: "h-11 min-h-11 w-11 min-w-11 rounded-xl",
 };
 

@@ -1,6 +1,6 @@
 # Upriv — development workspace
 
-Stable, pinned scaffold for desktop and mobile apps. **Desktop** ships a full mock vault UI (`dev/apps/desktop/`) with an **Electron** shell and **`upriv-daemon`** sidecar; **mobile** is an Expo scaffold only. Core Rust logic lives in `crates/upriv-core`.
+Stable, pinned scaffold for desktop and mobile apps. **Desktop** ships a full mock vault UI (`dev/apps/desktop/`) with an **Electron** shell and **`upriv-daemon`** sidecar; **mobile** is Expo + React Native (mocks in Expo Go; `upriv-ffi` in a native dev client). Core Rust logic lives in `crates/upriv-core`.
 
 ## Layout
 
@@ -9,12 +9,15 @@ dev/
 ├── apps/
 │   ├── desktop/        # React 18 + Vite 6 + TypeScript + Tailwind 3
 │   ├── electron/       # Electron main/preload + electron-builder
-│   ├── mobile/         # Expo SDK 52 + React Native 0.76 (scaffold)
-│   └── shared/         # @upriv/shared — domain types + service interfaces (TS only)
+│   ├── mobile/         # Expo SDK 52 + React Native 0.76 (mocks in Expo Go; native FFI in a dev client)
+│   └── shared/         # @upriv/shared — domain types, service interfaces, and `./react` hooks (apps supply React)
 ├── crates/
 │   ├── upriv-core/     # Shared Rust API (all platforms)
-│   └── upriv-daemon/   # Desktop RPC sidecar → upriv-core
-├── docs/               # PRD, SDD, ARCHITECTURE, VERSIONS, i18n
+│   ├── upriv-rpc/      # Shared CORE RPC handlers (daemon + ffi)
+│   ├── upriv-daemon/   # Desktop stdio NDJSON sidecar → upriv-rpc
+│   └── upriv-ffi/      # UniFFI cdylib for mobile (libupriv_ffi.so)
+├── js-lint/            # ESLint + Prettier only (shared/desktop/electron/mobile). Rust: cargo fmt/clippy.
+├── docs/               # PRD, SDD, ARCHITECTURE, VERSIONS, LOCALE
 ├── Cargo.toml          # Rust workspace
 ├── .nvmrc              # Node 22.12+ (see docs/VERSIONS.md)
 └── rust-toolchain.toml
@@ -27,41 +30,51 @@ dev/
 
 ## Node dependencies
 
-**No `npm install` at `dev/` root.** Desktop, Electron, and mobile are independent apps — each has its own `node_modules`:
+**No `npm install` at `dev/` root** — there is no root `node_modules`. Install lint once, then each app:
 
 ```bash
-cd dev/apps/desktop && npm install
-cd dev/apps/electron && npm install
-cd dev/apps/mobile && npm install    # Expo (add @upriv/shared when wired)
+cd dev
+npm install --prefix js-lint               # ESLint + Prettier (shared/desktop/mobile)
+npm install --prefix apps/shared
+npm install --prefix apps/desktop
+npm install --prefix apps/electron
+npm install --prefix apps/mobile
 ```
 
-Do **not** run `npm install` in `dev/` — there is no root `node_modules`.
+`./run lint` needs `js-lint/node_modules` plus each app’s `node_modules` (React ESLint plugins live in desktop/mobile/shared; `tsc`/vitest use the app installs). Electron now runs ESLint + Prettier as well. Rust fmt/clippy do not live in `js-lint/`.
 
 ## Commands
 
 ```bash
 cd dev
 ./run help                 # list all run commands
-./run lint                 # all linters (Rust, tsc, eslint, prettier)
-./run lint-fix             # auto-fix (rustfmt, clippy --fix, eslint --fix, prettier)
-./run test                 # cargo test --workspace
+./run lint                 # version + rustfmt/clippy + tsc/eslint/prettier (see ./run help)
+./run lint-fix             # rustfmt/clippy --fix + prettier --write + eslint --fix + tsc
+./run test                 # cargo test --workspace + shared/desktop/electron/mobile vitest
 ./run check                # lint + test
+./run desktop              # wipe Vite cache, then Electron + upriv-daemon
+./run mobile               # wipe Metro/Expo cache, then expo start --clear
+./run mobile --android     # same, then open Android
 
 # Same via npm:
 npm run lint
 npm run lint:fix
 npm run test
 npm run check
+npm run desktop
+npm run mobile
 
 cargo test -p upriv-core   # Rust core only
 npm run rust:lint          # Rust only: rustfmt --check + clippy
 npm run rust:fix           # Rust only: apply rustfmt + clippy --fix
 
-# Browser only (mock services)
+# Browser only (mock services, no cache wipe)
 npm run dev
 
-# Desktop app (Electron + upriv-daemon)
+# Desktop / mobile without cache wipe:
 npm run electron:dev
+npm run mobile:start
+npm run mobile:android
 
 # Release build — Linux `.deb` (install) + `.AppImage` (portable)
 npm run electron:build
@@ -73,11 +86,6 @@ npm run electron:build:win
 ```
 
 On Ubuntu, prefer the **`.deb`** for “download and open” (Software Install / double-click) — no FUSE and no terminal. AppImage stays for portable USB-style use when `libfuse` is available.
-
-# Mobile (Expo Go / emulator)
-npm run mobile:start
-npm run mobile:android
-```
 
 ## Versions
 

@@ -8,8 +8,10 @@ web-build/
 *.key
 *.mobileprovision
 *.orig.*
+*.apk
 # Expo prebuild output only (not the local `modules/upriv-core/android` sources).
 /android/
 /ios/
 modules/upriv-core/android/build/
 modules/upriv-core/android/src/main/jniLibs/**/*.so
+.vitest-cache/

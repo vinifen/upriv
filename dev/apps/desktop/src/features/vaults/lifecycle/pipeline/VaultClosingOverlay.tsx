@@ -9,7 +9,7 @@ import { VaultPipelineOverlay } from "./VaultPipelineOverlay";
 
 interface VaultClosingOverlayProps {
   vault: VaultListItem | null;
-  intent: Extract<VaultLifecycleIntent, "close" | "seal"> | null;
+  intent: Extract<VaultLifecycleIntent, "close"> | null;
   open: boolean;
   activeStep: number;
   errorKey?: I18nKey | null;
@@ -30,10 +30,7 @@ export function VaultClosingOverlay({
 
   if (!intent) return null;
 
-  const title =
-    intent === "seal"
-      ? t("close.overlay.title_seal", { name: vault?.displayName ?? "" })
-      : t("close.overlay.title_close", { name: vault?.displayName ?? "" });
+  const title = t("close.overlay.title_close", { name: vault?.displayName ?? "" });
 
   return (
     <VaultPipelineOverlay

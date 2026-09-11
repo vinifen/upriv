@@ -1,12 +1,10 @@
-import { useEffect, useState } from "react";
 import { Modal as RnModal, StyleSheet, Text, View } from "react-native";
-import type { VaultListItem } from "@upriv/shared";
+import { LOADING_BUDGET_MS, type VaultListItem } from "@upriv/shared";
+import { useLoadingBudget } from "@upriv/shared/react";
 import { useTranslation, type I18nKey } from "@/i18n";
-import { Button } from "@/components/ui";
+import { Button, LoadingBudgetHint } from "@/components/ui";
 import { useTheme } from "@/theme";
 import { radii, spacing } from "@/theme/tokens";
-
-const PIPELINE_BACKGROUND_AFTER_MS = 1500;
 
 interface VaultPipelineOverlayProps {
   vault: VaultListItem | null;
@@ -33,18 +31,8 @@ export function VaultPipelineOverlay({
 }: VaultPipelineOverlayProps) {
   const { t } = useTranslation();
   const { colors, typography } = useTheme();
-  const [showBackgroundAction, setShowBackgroundAction] = useState(false);
   const failed = errorKey !== null;
-
-  useEffect(() => {
-    if (!open || failed) {
-      setShowBackgroundAction(false);
-      return;
-    }
-    setShowBackgroundAction(false);
-    const timer = setTimeout(() => setShowBackgroundAction(true), PIPELINE_BACKGROUND_AFTER_MS);
-    return () => clearTimeout(timer);
-  }, [open, vault?.id, failed]);
+  const budget = useLoadingBudget(open && !failed, LOADING_BUDGET_MS.vaultPipeline);
 
   if (!open || !vault) return null;
 
@@ -65,7 +53,9 @@ export function VaultPipelineOverlay({
 
           {failed ? (
             <>
-              <Text style={[typography.body, { color: colors.onErrorContainer }]}>{t(errorKey!)}</Text>
+              <Text style={[typography.body, { color: colors.onErrorContainer }]}>
+                {t(errorKey!)}
+              </Text>
               <Button
                 label={t("action.close")}
                 variant="accent"
@@ -94,13 +84,14 @@ export function VaultPipelineOverlay({
                   );
                 })}
               </View>
-              {showBackgroundAction ? (
-                <Button
-                  label={t("pipeline.action.background")}
-                  variant="ghost"
-                  onPress={onBackground}
-                />
+              {budget.visible ? (
+                <LoadingBudgetHint budgetMs={budget.budgetMs} remainingMs={budget.remainingMs} />
               ) : null}
+              <Button
+                label={t("pipeline.action.background")}
+                variant="ghost"
+                onPress={onBackground}
+              />
             </>
           )}
         </View>

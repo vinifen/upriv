@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Modal } from "@/components/ui";
+import { Modal, Select } from "@/components/ui";
 import { useTranslation } from "@/i18n";
 import {
   SUPPORTED_LOCALES,
@@ -7,6 +7,7 @@ import {
   VAULT_ROOT_ERROR_CODES,
   VAULT_ROOT_GATE_IDLE,
   isRpcError,
+  sameVaultRootPath,
   type AppDistribution,
   type LocaleId,
   type VaultRootMode,
@@ -18,12 +19,6 @@ import { useAppSettingsContext } from "./AppSettingsContext";
 import { desktopErrorI18nKey } from "@/lib/errorMessages";
 import { VaultRootConfirmFooter } from "./VaultRootConfirmFooter";
 import { VaultRootLocationSection } from "./VaultRootLocationSection";
-
-/** Trim + strip trailing separators for diskApplied path equality. */
-function samePathKey(a: string, b: string): boolean {
-  const norm = (p: string) => p.trim().replace(/[/\\]+$/g, "");
-  return norm(a) === norm(b);
-}
 
 interface VaultRootSetupModalProps {
   open: boolean;
@@ -191,13 +186,13 @@ export function VaultRootSetupModal({
       if (
         applied?.mode === "custom_root" &&
         current.replacePolicy == null &&
-        samePathKey(applied.rootPath, nextPath)
+        sameVaultRootPath(applied.rootPath, nextPath)
       ) {
         if (gen !== busyGen.current) return;
         await finish(applied.rootPath, "custom_root", gen);
         return;
       }
-      if (applied && !samePathKey(applied.rootPath, nextPath)) {
+      if (applied && !sameVaultRootPath(applied.rootPath, nextPath)) {
         diskApplied.current = null;
       }
       const { rootPath } = await vaultRoot.setupAtPath(nextPath, {
@@ -241,6 +236,7 @@ export function VaultRootSetupModal({
     <Modal
       open={open}
       title={t("modal.vault_root_setup.title")}
+      titleIcon="folder"
       onClose={() => undefined}
       dismissible={false}
       panelClassName="max-w-lg"
@@ -267,19 +263,17 @@ export function VaultRootSetupModal({
       headerActions={
         <label className="flex items-center gap-1.5">
           <span className="sr-only">{t("modal.app_settings.field.locale")}</span>
-          <select
+          <Select
+            size="sm"
             value={settings.ui.locale}
             disabled={busy}
             aria-label={t("modal.app_settings.field.locale")}
-            onChange={(event) => handleLocaleChange(event.target.value as LocaleId)}
-            className="h-9 max-w-[9.5rem] rounded-lg border border-transparent bg-surface-container-highest px-2 text-xs text-on-surface outline-none focus:border-[var(--accent)] disabled:opacity-60 sm:h-10 sm:max-w-[11rem] sm:text-sm"
-          >
-            {SUPPORTED_LOCALES.map((locale) => (
-              <option key={locale} value={locale}>
-                {t(`modal.app_settings.option.locale.${locale}`)}
-              </option>
-            ))}
-          </select>
+            onChange={(locale) => handleLocaleChange(locale as LocaleId)}
+            options={SUPPORTED_LOCALES.map((locale) => ({
+              value: locale,
+              label: t(`modal.app_settings.option.locale.${locale}`),
+            }))}
+          />
         </label>
       }
     >
@@ -291,7 +285,7 @@ export function VaultRootSetupModal({
       >
         <p>{t(setupBodyKey)}</p>
         <VaultRootLocationSection
-          config={{ vault_root_mode: mode, upriv_root_path: path }}
+          config={{ vault_root_mode: mode, upriv_root_path: path, last_opened_vault: "" }}
           onChange={onDraftChange}
           savedVaultRootMode="default_root"
           savedRootPath=""

@@ -22,17 +22,17 @@ Step-by-step (MSVC, icons, pitfalls): [`docs/WINDOWS-BUILD.md`](../../docs/WINDO
 
 ## Module system
 
-| Package | `"type"` | Why |
-|---------|----------|-----|
+| Package                         | `"type"`   | Why                                                                                |
+| ------------------------------- | ---------- | ---------------------------------------------------------------------------------- |
 | **electron** (`apps/electron/`) | `commonjs` | Electron main/preload compile with `tsc` to `dist/*.js` — Node `require` semantics |
-| **desktop** (`apps/desktop/`) | `module` | Vite 6 ESM for the React renderer |
+| **desktop** (`apps/desktop/`)   | `module`   | Vite 6 ESM for the React renderer                                                  |
 
 The renderer talks to main only through **`window.upriv`** (preload bridge), not direct Node APIs.
 
 ## Dev notes
 
 - **`npm run preview`** (desktop) serves browser `dist/` only — not the Electron bundle. Use `electron:dev` or AppImage to test the shell. Plain Chrome on `localhost:1420` has no `window.upriv` — `isElectronRenderer()` is false.
-- **Debug vs release daemon:** `npm run electron:dev` builds `target/debug/upriv-daemon`; `npm run electron:build` uses `target/release/upriv-daemon`. UI version (`dev/VERSION`) is the same; only the binary profile changes. `resolveDaemonBinary()` prefers debug when present in dev.
+- **Debug vs release daemon:** `npm run electron:dev` builds `target/debug/upriv-daemon`; `npm run electron:build` uses `target/release/upriv-daemon`. UI version (repo-root `VERSION`) is the same; only the binary profile changes. `resolveDaemonBinary()` prefers debug when present in dev.
 - **Vite wait:** dev script uses `wait-on -t 30000` on port 1420; first launch may briefly show a blank window until HMR finishes — reload once if needed.
 - **DevTools:** open automatically in `--dev` mode (detached). Skip with `--no-devtools` on the electron command.
 - **Linux:** AppImage adds `--no-sandbox` on Chromium (AppArmor); see `dev/README.md` troubleshooting.
@@ -57,6 +57,7 @@ Chromium’s OS SUID sandbox often fails under AppArmor / AppImage (`setuid_sand
 Method name constants: **`@upriv/shared` `CORE_RPC_COMMANDS`** (and desktop `lib/commands.ts`). Execution gate: **`upriv-rpc`** via **`upriv-daemon`**. Electron main only special-cases `app_exit`.
 
 Logs (daemon): `log_list` / `log_get` / `log_delete` — no Electron allowlist; all methods go to the daemon.
+
 ## Layout
 
 ```text

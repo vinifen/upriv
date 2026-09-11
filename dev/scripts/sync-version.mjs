@@ -1,14 +1,16 @@
 #!/usr/bin/env node
 /**
- * Propagate dev/VERSION to npm/Cargo/Expo manifests.
+ * Propagate repo-root VERSION to npm/Cargo/Expo manifests.
  * Run after bumping VERSION: node dev/scripts/sync-version.mjs
  */
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const devRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const versionPath = path.join(devRoot, "VERSION");
+const scriptsDir = path.dirname(fileURLToPath(import.meta.url));
+const devRoot = path.resolve(scriptsDir, "..");
+const repoRoot = path.resolve(devRoot, "..");
+const versionPath = path.join(repoRoot, "VERSION");
 
 if (!fs.existsSync(versionPath)) {
   console.error(`Missing ${versionPath} — create it with a semver (e.g. 0.1.0).`);
@@ -29,6 +31,7 @@ const jsonTargets = [
   "apps/desktop/package.json",
   "apps/electron/package.json",
   "apps/mobile/package.json",
+  "apps/mobile/modules/upriv-core/package.json",
   "apps/shared/package.json",
 ];
 
@@ -59,10 +62,8 @@ function setWorkspaceCargoVersion() {
   let content = fs.readFileSync(filePath, "utf8");
 
   if (!content.includes("[workspace.package]")) {
-    content = `${content.trim()}\n\n[workspace.package]\nversion = "${version}"\nauthors = ["Upriv"]\nedition = "2021"\nrust-version = "1.77.2"\n`;
-    fs.writeFileSync(filePath, content);
-    console.log(`added [workspace.package] to ${relativePath}`);
-    return true;
+    console.error(`Missing [workspace.package] in ${relativePath} — add it by hand (do not invent rust-version here).`);
+    process.exit(1);
   }
 
   const sectionMatch = content.match(/\[workspace\.package\]([\s\S]*?)(?=\n\[|$)/);

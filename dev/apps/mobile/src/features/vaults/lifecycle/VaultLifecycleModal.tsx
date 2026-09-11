@@ -1,17 +1,19 @@
 import { useEffect, useState } from "react";
-import { StyleSheet, Text, TextInput, View } from "react-native";
+import { Text } from "react-native";
 import {
   requireVaultErrorI18nKey,
   requiresPasswordForLifecycle,
+  resolveVaultPasswordHint,
+  storageModeIsPlaintext,
   VAULT_ERROR_CODES,
   type VaultLifecycleIntent,
   type VaultListItem,
 } from "@upriv/shared";
 import { useVaultLifecycleService, useVaultService } from "@/platform/services";
 import { useTranslation, type I18nKey } from "@/i18n";
-import { Button, Modal } from "@/components/ui";
+import { Button, Modal, ModalFooterActions } from "@/components/ui";
+import { PasswordInput } from "@/components/settings/settingsFields";
 import { useTheme } from "@/theme";
-import { radii, spacing } from "@/theme/tokens";
 
 interface VaultLifecycleModalProps {
   vault: VaultListItem | null;
@@ -26,8 +28,6 @@ function modalTitleKey(intent: VaultLifecycleIntent): I18nKey {
   switch (intent) {
     case "unlock":
       return "unlock.title";
-    case "seal":
-      return "close.dialog.seal_title";
     case "close":
       return "close.dialog.title";
   }
@@ -37,8 +37,6 @@ function confirmLabelKey(intent: VaultLifecycleIntent): I18nKey {
   switch (intent) {
     case "unlock":
       return "unlock.submit";
-    case "seal":
-      return "action.seal";
     case "close":
       return "action.lock";
   }
@@ -58,34 +56,39 @@ export function VaultLifecycleModal({
   const lifecycleService = useVaultLifecycleService();
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [requiresPassword, setRequiresPassword] = useState(false);
-  const [hint, setHint] = useState<string | null>(null);
+  // Unlock always needs a password — do not wait on settings (desktop parity).
+  const [requiresPassword, setRequiresPassword] = useState(intent === "unlock");
+  const [settingsLoading, setSettingsLoading] = useState(false);
 
   useEffect(() => {
     if (!open || !vault || !intent) {
       setRequiresPassword(false);
-      setHint(null);
+      setSettingsLoading(false);
       return;
     }
+    setRequiresPassword(intent === "unlock");
     let cancelled = false;
-    void vaultService.getSettings(vault.id).then((settings) => {
-      if (cancelled || !settings) return;
-      setRequiresPassword(
-        requiresPasswordForLifecycle(
-          vault,
-          intent,
-          settings.security.mode,
-          lifecycleService.hasPasswordInSession(vault.id),
-        ),
-      );
-      const fromSettings = settings.vault.password_hint?.trim();
-      const fromRow = vault.passwordHint?.trim();
-      setHint(fromSettings || fromRow || null);
-    });
+    setSettingsLoading(true);
+    void vaultService
+      .getSettings(vault.id)
+      .then((settings) => {
+        if (cancelled) return;
+        if (!settings) {
+          setRequiresPassword(true);
+          return;
+        }
+        setRequiresPassword(requiresPasswordForLifecycle(vault, intent, settings.security.mode));
+      })
+      .catch(() => {
+        if (!cancelled) setRequiresPassword(true);
+      })
+      .finally(() => {
+        if (!cancelled) setSettingsLoading(false);
+      });
     return () => {
       cancelled = true;
     };
-  }, [lifecycleService, open, vault, intent, vaultService]);
+  }, [open, vault, intent, vaultService]);
 
   useEffect(() => {
     if (!open) return;
@@ -103,48 +106,68 @@ export function VaultLifecycleModal({
     onConfirm(requiresPassword ? password : null);
   };
 
+  const canSubmit = !submitting && !settingsLoading && (!requiresPassword || password.length > 0);
+  const passwordHint = resolveVaultPasswordHint(vault);
+
   return (
     <Modal
       open={open}
-      title={t(modalTitleKey(intent), { name: vault.displayName })}
+      title={t(modalTitleKey(intent))}
+      titleIcon={intent === "unlock" ? "lock-open" : "lock"}
+      contextTitle={vault.displayName}
       onClose={onClose}
       panelClassName="max-w-md"
       dismissible={!submitting}
+      footer={
+        <ModalFooterActions layout="dialog">
+          <Button
+            label={t("action.cancel")}
+            variant="ghost"
+            disabled={submitting}
+            onPress={onClose}
+          />
+          <Button
+            label={submitting ? t("close.dialog.submitting") : t(confirmLabelKey(intent))}
+            variant="primary"
+            disabled={!canSubmit}
+            onPress={handleConfirm}
+          />
+        </ModalFooterActions>
+      }
     >
       {intent === "close" ? (
-        <Text style={typography.bodyMuted}>{t("close.dialog.close_hint")}</Text>
-      ) : null}
-      {intent === "seal" ? (
         <>
-          <Text style={typography.bodyMuted}>{t("close.dialog.seal_hint")}</Text>
-          <Text style={typography.bodyMuted}>{t("close.dialog.seal_confirm")}</Text>
+          {storageModeIsPlaintext(vault.storageMode) ? (
+            <Text style={typography.bodyMuted}>{t("close.dialog.close_hint_plain")}</Text>
+          ) : null}
+          {requiresPassword ? (
+            <Text style={typography.bodyMuted}>{t("close.dialog.close_hint_prompt")}</Text>
+          ) : null}
+          {!storageModeIsPlaintext(vault.storageMode) && !requiresPassword ? (
+            <Text style={typography.bodyMuted}>{t("close.dialog.close_hint")}</Text>
+          ) : null}
         </>
       ) : null}
 
       {requiresPassword ? (
         <>
-          {hint ? (
+          {passwordHint ? (
             <Text style={[typography.caption, { color: colors.accent }]}>
-              {t("unlock.password_hint_label")}: {hint}
+              {t("unlock.password_hint_label")}: {passwordHint}
             </Text>
           ) : null}
-          <TextInput
+          <PasswordInput
             value={password}
-            onChangeText={setPassword}
-            secureTextEntry
+            onChangeText={(value) => {
+              setPassword(value);
+              setError(null);
+            }}
             autoFocus
             editable={!submitting}
             placeholder={t("unlock.password")}
-            placeholderTextColor={colors.onSurfaceVariant}
-            style={[
-              styles.input,
-              {
-                ...typography.body,
-                backgroundColor: colors.surfaceContainerHigh,
-                borderColor: colors.outlineVariant,
-              },
-            ]}
-            onSubmitEditing={handleConfirm}
+            onSubmitEditing={() => {
+              if (canSubmit) handleConfirm();
+            }}
           />
         </>
       ) : null}
@@ -152,37 +175,6 @@ export function VaultLifecycleModal({
       {error ? (
         <Text style={[typography.body, { color: colors.onErrorContainer }]}>{error}</Text>
       ) : null}
-
-      <View style={styles.actions}>
-        <Button
-          label={t("action.cancel")}
-          variant="ghost"
-          disabled={submitting}
-          onPress={onClose}
-        />
-        <Button
-          label={submitting ? t("close.dialog.submitting") : t(confirmLabelKey(intent))}
-          variant="accent"
-          disabled={submitting || (requiresPassword && password.length === 0)}
-          onPress={handleConfirm}
-        />
-      </View>
     </Modal>
   );
 }
-
-const styles = StyleSheet.create({
-  input: {
-    borderRadius: radii.sm,
-    borderWidth: 1,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.md,
-    minHeight: 44,
-  },
-  actions: {
-    flexDirection: "row",
-    gap: spacing.sm,
-    justifyContent: "flex-end",
-    marginTop: spacing.sm,
-  },
-});

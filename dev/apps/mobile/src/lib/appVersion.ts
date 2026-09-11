@@ -14,6 +14,7 @@ function packageVersion(): string {
 
 /** Prefer native FFI version; fall back to Expo app version. */
 export function getMobileAppVersion(): MobileAppVersionInfo {
+  // Android mobile is always "installed" by contract (no portable distribution mode).
   const native = getUprivCoreNative();
   if (!native) {
     return {

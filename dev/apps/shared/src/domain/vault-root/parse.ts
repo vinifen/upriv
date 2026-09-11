@@ -18,9 +18,7 @@ function isAppDistribution(value: unknown): value is AppDistribution {
   return value === "portable" || value === "installed" || value === "dev";
 }
 
-function isVaultRootDirStatus(
-  value: unknown,
-): value is DefaultRootStatusResult["status"] {
+function isVaultRootDirStatus(value: unknown): value is DefaultRootStatusResult["status"] {
   return (
     value === "absent" ||
     value === "valid" ||

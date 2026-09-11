@@ -3,23 +3,31 @@
 [package]
 version = 1
 label = "Upriv Demo"
-vaults_dir = ".upriv/vaults"       # vaults/<id>/ — config.toml, persistence, archive, store, …
+vaults_dir = ".upriv/vaults"       # vaults/<id>/ — config.toml, contents/, backups/, …
 state_file = ".upriv/state.json"   # open sessions only (cleared on quit)
 logs_dir = ".upriv/logs"
 app_dir = ".upriv/app"
-workspace_dir = "workspace"
-default_vault = "my-encrypted-notes"
+# List groups (optional): .upriv/vault_groups.toml — missing file = no groups.
 
 [ui]
-locale = "en"   # UI: dev/apps/shared/locales/{locale}.json
+locale = "en"
 theme = "dark"
-# Vault list preferences (desktop UI reads/writes when wired to upriv-daemon)
-vault_list_sort = "order"              # order | name | state | last_accessed
-vault_list_sort_direction = "asc"      # asc | desc
-vault_list_view = "default"            # default | large | compact | blocks
+show_header_more_button = true
+file_manager_dock_expanded = false
 always_show_hidden_vaults = false
-allow_drag_vault_into_group = true
-file_manager_dock_expanded = false   # minimized file managers: show all chips vs single expand button
+vault_list_sort = "order"
+vault_list_sort_direction = "asc"
+vault_list_view = "default"
+vault_list_search = ""
+vault_list_show_drag = true
+vault_list_allow_drag_into_group = true
+vault_list_show_create_button = true
+vault_list_show_search_button = true
+vault_list_show_sort_button = true
+vault_list_show_view_button = true
+vault_list_show_vault_more_button = true
+vault_list_show_vault_settings_button = true
+vault_list_show_group_settings_button = true
 
 [logging]
 enabled = true
@@ -28,8 +36,10 @@ entries_per_file = 1000
 keep_last_entries = 10000         # 0 = unlimited; prune archived files by line budget
 
 [app]
-# Vault-root mode (nearby vs custom) is NOT configured here.
-# It lives in the app-home `.upriv-root` alias:
-#   missing or status=inactive → nearby mode
-#   status=active + path → custom vault-root
 last_opened_vault = "my-encrypted-notes"
+# Vault-root mode (`default_root` | `custom_root`): app-home `.upriv-root`, not here.
+# Missing/inactive → default_root; active + path → custom_root.
+
+[workspace]
+# Absolute path for the default mount parent (open vaults). Empty = unset — no folder created.
+path = ""

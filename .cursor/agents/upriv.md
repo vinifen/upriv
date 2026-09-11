@@ -5,9 +5,13 @@ description: Upriv vault manager — Rust upriv-core, Electron desktop, Expo mob
 
 # Upriv agent
 
-Read **[`.agent/AGENT.md`](../../.agent/AGENT.md)** first — canonical product rules, layout, guardrails, **current phase**, and **`temp/` legacy reference** (research only). Do not duplicate long command lists here.
+Read **[`.agent/AGENT.md`](../../.agent/AGENT.md)** first — canonical product rules, layout, guardrails, **current phase**, and **`temp/` research snapshot** (do not port). Do not duplicate long command lists here.
 
 **Security ship blocker:** [`.agent/SECURITY-PLAINTEXT.md`](../../.agent/SECURITY-PLAINTEXT.md) — `encrypted_dir` must never spill decrypted vault trees to disk; do **not** port `temp/` tempfile + `export_logical_tree` close/export.
+
+**Info modals:** when product data shown in **Info** (⋮ / ⋯) changes, update `@upriv/shared` `domain/system-info` + `domain/vault-info` in the same task — [`.cursor/rules/info-modals-sync.mdc`](../../.cursor/rules/info-modals-sync.mdc).
+
+**Git:** [`.agent/GIT.md`](../../.agent/GIT.md) — commits, PRs, human-only authorship. Never credit the AI as author or co-author.
 
 ## Stack (quick)
 

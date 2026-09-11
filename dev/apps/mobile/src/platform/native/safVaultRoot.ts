@@ -53,7 +53,7 @@ function extractSafCode(error: unknown): string | null {
     if (match) return match[0];
   }
   const text = blobs.join(" ").toLowerCase();
-  if (text.includes("cannot create") && (text.includes(".upriv") || text.includes("upriv/"))) {
+  if (text.includes("cannot create") && text.includes(".upriv")) {
     return "saf_create_failed";
   }
   if (
@@ -104,7 +104,7 @@ export function safRelease(treeUri: string): void {
 }
 
 /**
- * Create `.upriv/settings.toml` + subfolders + `workspace/` at the tree.
+ * Create `.upriv/settings.toml` + `{vaults,logs,app,runtime}` subfolders at the tree.
  * `settingsTomlOverride` (from `rpcAppSettingsSerializeToml`) atomically
  * seeds a fresh marker; falls back to the built-in template with `[ui].locale`
  * when null (parity with Rust `initial_settings_toml_for`).

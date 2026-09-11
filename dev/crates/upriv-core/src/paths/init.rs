@@ -2,49 +2,10 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::config::{serialize_settings_toml_str, AppSettings};
 use crate::error::{Result, UprivError};
 use crate::paths::{VaultRoot, VAULT_ROOT_SETTINGS_REL};
 use crate::time::utc_filename_stamp;
-
-/// Default `.upriv/settings.toml` for a newly initialized root.
-///
-/// `[ui].locale` is `"en"` here; callers that need a different UI locale should
-/// use [`initialize_vault_root_with_bootstrap`] (or the
-/// `_with_policy_and_bootstrap` entry point) so the correct locale is written
-/// **in the same file write** — no separate post-create stamp is needed.
-const DEFAULT_SETTINGS_TOML: &str = r#"# Upriv marker + app settings (vault-root directory)
-
-[package]
-version = 1
-label = "Upriv"
-vaults_dir = ".upriv/vaults"
-state_file = ".upriv/state.json"
-logs_dir = ".upriv/logs"
-app_dir = ".upriv/app"
-workspace_dir = "workspace"
-
-[ui]
-locale = "en"
-theme = "dark"
-vault_list_sort = "order"
-vault_list_sort_direction = "asc"
-vault_list_view = "default"
-always_show_hidden_vaults = false
-allow_drag_vault_into_group = true
-file_manager_dock_expanded = false
-
-[logging]
-enabled = true
-level = "info"
-entries_per_file = 1000
-keep_last_entries = 10000
-
-[app]
-# Vault-root mode (`default_root` vs `custom_root`) is NOT configured in this file.
-# It lives in the app-home `.upriv-root` alias:
-#   missing or status=inactive → default_root mode
-#   status=active + path → custom_root
-"#;
 
 /// Bootstrap UI prefs applied only when creating a new `.upriv/` (absent init or
 /// incomplete→replace init). Never applied when opening an already-valid root.
@@ -71,25 +32,14 @@ pub struct VaultRootBootstrapPrefs {
 /// malformed locale cannot corrupt the marker file.
 fn initial_settings_toml_for(prefs: Option<&VaultRootBootstrapPrefs>) -> Result<Vec<u8>> {
     let locale = prefs.and_then(|p| p.locale.as_deref());
-    let effective = locale
+    let effective_locale = locale
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .unwrap_or("en");
-    if effective
-        .chars()
-        .any(|c| c == '"' || c == '\\' || c.is_control())
-    {
-        return Err(UprivError::Io(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "locale contains characters not allowed in settings.toml",
-        )));
-    }
-    if effective == "en" {
-        return Ok(DEFAULT_SETTINGS_TOML.as_bytes().to_vec());
-    }
-    Ok(DEFAULT_SETTINGS_TOML
-        .replace("locale = \"en\"", &format!("locale = \"{effective}\""))
-        .into_bytes())
+        .unwrap_or("en")
+        .to_string();
+    let mut settings = AppSettings::default();
+    settings.ui.locale = effective_locale;
+    serialize_settings_toml_str(&settings, None).map(String::into_bytes)
 }
 
 /// Minimal TOML shape required for a usable vault-root marker.
@@ -155,12 +105,13 @@ pub fn validate_existing_vault_root(dir: impl AsRef<Path>) -> Result<()> {
 }
 
 fn ensure_standard_dirs(dir: &Path) -> Result<()> {
+    // Do not create `workspace/` here — mount parent is user-configured
+    // (`[workspace].path`) and must not appear as an unexplained folder.
     for relative in [
         ".upriv/vaults",
         ".upriv/logs",
         ".upriv/app",
         ".upriv/runtime",
-        "workspace",
     ] {
         std::fs::create_dir_all(dir.join(relative))?;
     }
@@ -171,10 +122,14 @@ fn ensure_standard_dirs(dir: &Path) -> Result<()> {
 ///
 /// - Valid marker + settings → open as-is (never overwrite `settings.toml`)
 /// - `.upriv` present but incomplete → [`UprivError::VaultRootIncomplete`]
-///   (unless [`open_or_initialize_vault_root_with_options`] with `replace_incomplete`)
+///   (`replace = None`)
 /// - No `.upriv` → create default structure
-pub fn open_or_initialize_vault_root(dir: impl AsRef<Path>) -> Result<VaultRoot> {
-    open_or_initialize_vault_root_with_options(dir, false)
+pub fn open_or_initialize_vault_root(
+    dir: impl AsRef<Path>,
+    replace: Option<IncompleteReplacePolicy>,
+    prefs: Option<&VaultRootBootstrapPrefs>,
+) -> Result<OpenedVaultRoot> {
+    open_or_initialize_vault_root_impl(dir, replace, prefs)
 }
 
 /// Status of `.upriv/` at `dir` (does not create or repair).
@@ -219,19 +174,19 @@ pub enum IncompleteReplacePolicy {
 /// **Safety:** `replace_incomplete = true` uses [`IncompleteReplacePolicy::Rename`]
 /// (not Delete). Prefer [`open_or_initialize_vault_root_with_policy`] when the UI
 /// must choose rename vs delete explicitly.
-pub fn open_or_initialize_vault_root_with_options(
+#[cfg(test)]
+pub(crate) fn open_or_initialize_vault_root_with_options(
     dir: impl AsRef<Path>,
     replace_incomplete: bool,
-) -> Result<VaultRoot> {
-    Ok(open_or_initialize_vault_root_with_policy(
+) -> Result<OpenedVaultRoot> {
+    open_or_initialize_vault_root_with_policy(
         dir,
         if replace_incomplete {
             Some(IncompleteReplacePolicy::Rename)
         } else {
             None
         },
-    )?
-    .root)
+    )
 }
 
 /// Result of [`open_or_initialize_vault_root_with_policy`].
@@ -249,7 +204,8 @@ pub struct OpenedVaultRoot {
 ///
 /// Equivalent to [`open_or_initialize_vault_root_with_policy_and_bootstrap`] with
 /// `prefs = None` (the default `"en"` locale is written on create).
-pub fn open_or_initialize_vault_root_with_policy(
+#[cfg(test)]
+pub(crate) fn open_or_initialize_vault_root_with_policy(
     dir: impl AsRef<Path>,
     replace: Option<IncompleteReplacePolicy>,
 ) -> Result<OpenedVaultRoot> {
@@ -267,7 +223,16 @@ pub fn open_or_initialize_vault_root_with_policy(
 ///   locale today) are written atomically as part of the initial settings.toml
 ///   — no separate post-create stamp is required, so a partial stamp failure
 ///   cannot leave a fresh root stuck on the built-in defaults.
-pub fn open_or_initialize_vault_root_with_policy_and_bootstrap(
+#[cfg(test)]
+pub(crate) fn open_or_initialize_vault_root_with_policy_and_bootstrap(
+    dir: impl AsRef<Path>,
+    replace: Option<IncompleteReplacePolicy>,
+    prefs: Option<&VaultRootBootstrapPrefs>,
+) -> Result<OpenedVaultRoot> {
+    open_or_initialize_vault_root_impl(dir, replace, prefs)
+}
+
+fn open_or_initialize_vault_root_impl(
     dir: impl AsRef<Path>,
     replace: Option<IncompleteReplacePolicy>,
     prefs: Option<&VaultRootBootstrapPrefs>,
@@ -289,12 +254,23 @@ pub fn open_or_initialize_vault_root_with_policy_and_bootstrap(
         VaultRootDirStatus::Unreadable => {
             // Surface the underlying I/O error (do not offer replace as if corrupt).
             validate_existing_vault_root(dir)?;
-            unreachable!("inspect_vault_root_at reported Unreadable");
+            // `inspect` and `validate` are separate disk reads — a transient I/O
+            // error can clear between them. Ask the caller to retry.
+            Err(UprivError::Io(std::io::Error::new(
+                std::io::ErrorKind::Interrupted,
+                "vault-root state changed during setup; retry",
+            )))
         }
         VaultRootDirStatus::Incomplete => {
-            let Some(policy) = replace else {
-                validate_existing_vault_root(dir)?;
-                unreachable!("inspect_vault_root_at reported Incomplete");
+            let policy = match replace {
+                Some(policy) => policy,
+                None => {
+                    validate_existing_vault_root(dir)?;
+                    return Err(UprivError::Io(std::io::Error::new(
+                        std::io::ErrorKind::Interrupted,
+                        "vault-root state changed during setup; retry",
+                    )));
+                }
             };
             let upriv = dir.join(".upriv");
             if upriv.exists() {
@@ -355,7 +331,7 @@ fn walk_refuse_symlinks(dir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Rename `.upriv` → `.upriv-invalidated-<stamp>`; if that name exists, append `-<stamp>` again.
+/// Rename `.upriv` → `.upriv-invalidated-<stamp>`; on collision append `-<n>`.
 pub fn rename_incomplete_upriv(upriv: &Path) -> Result<PathBuf> {
     let parent = upriv.parent().ok_or_else(|| {
         UprivError::Io(std::io::Error::other(
@@ -363,11 +339,11 @@ pub fn rename_incomplete_upriv(upriv: &Path) -> Result<PathBuf> {
         ))
     })?;
     let stamp = utc_filename_stamp();
-    let mut name = format!(".upriv-invalidated-{stamp}");
-    let mut dest = parent.join(&name);
+    let mut dest = parent.join(format!(".upriv-invalidated-{stamp}"));
+    let mut n = 2;
     while dest.exists() {
-        name = format!("{name}-{stamp}");
-        dest = parent.join(&name);
+        dest = parent.join(format!(".upriv-invalidated-{stamp}-{n}"));
+        n += 1;
     }
     match std::fs::rename(upriv, &dest) {
         Ok(()) => Ok(dest),
@@ -433,8 +409,14 @@ mod tests {
         let root = initialize_vault_root(dir.path()).unwrap();
         assert!(is_vault_root_marker(root.root()));
         assert!(root.vaults_dir().is_dir());
-        assert!(root.workspace_dir().is_dir());
+        // Suggested default parent only — not live mount resolution.
+        assert!(!crate::paths::suggested_default_workspace_path(root.root()).is_dir());
         assert!(root.logs_dir().is_dir());
+        let settings = std::fs::read_to_string(root.settings_path()).unwrap();
+        assert!(
+            settings.contains("[workspace]"),
+            "initial settings.toml must include [workspace], got:\n{settings}"
+        );
     }
 
     #[test]
@@ -461,8 +443,8 @@ mod tests {
         let before = std::fs::read_to_string(&settings).unwrap();
         std::fs::write(&settings, format!("{before}\n# kept\n")).unwrap();
 
-        let again = open_or_initialize_vault_root(dir.path()).unwrap();
-        let after = std::fs::read_to_string(again.settings_path()).unwrap();
+        let again = open_or_initialize_vault_root(dir.path(), None, None).unwrap();
+        let after = std::fs::read_to_string(again.root.settings_path()).unwrap();
         assert!(after.contains("# kept"));
     }
 
@@ -470,7 +452,7 @@ mod tests {
     fn incomplete_upriv_errors() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join(".upriv")).unwrap();
-        let err = open_or_initialize_vault_root(dir.path()).unwrap_err();
+        let err = open_or_initialize_vault_root(dir.path(), None, None).unwrap_err();
         assert!(matches!(err, UprivError::VaultRootIncomplete { .. }));
     }
 
@@ -546,13 +528,13 @@ vaults_dir = ".upriv/vaults"
         std::fs::create_dir_all(&upriv).unwrap();
         std::fs::write(upriv.join("keep-me.txt"), b"data").unwrap();
         assert!(matches!(
-            open_or_initialize_vault_root(dir.path()).unwrap_err(),
+            open_or_initialize_vault_root(dir.path(), None, None).unwrap_err(),
             UprivError::VaultRootIncomplete { .. }
         ));
         // `with_options(true)` → Rename (safer than Delete).
-        let root = open_or_initialize_vault_root_with_options(dir.path(), true).unwrap();
-        assert!(is_vault_root_marker(root.root()));
-        assert!(root.settings_path().is_file());
+        let opened = open_or_initialize_vault_root_with_options(dir.path(), true).unwrap();
+        assert!(is_vault_root_marker(opened.root.root()));
+        assert!(opened.root.settings_path().is_file());
         let backups: Vec<_> = std::fs::read_dir(dir.path())
             .unwrap()
             .filter_map(|e| e.ok())
@@ -642,6 +624,24 @@ vaults_dir = ".upriv/vaults"
     }
 
     #[test]
+    fn rename_incomplete_uses_incrementing_suffix_on_collision() {
+        let dir = tempfile::tempdir().unwrap();
+        let upriv = dir.path().join(".upriv");
+        std::fs::create_dir_all(&upriv).unwrap();
+        std::fs::write(upriv.join("marker"), "x").unwrap();
+        let stamp = crate::time::utc_filename_stamp();
+        let first = dir.path().join(format!(".upriv-invalidated-{stamp}"));
+        std::fs::create_dir_all(&first).unwrap();
+
+        let dest = rename_incomplete_upriv(&upriv).unwrap();
+        assert_eq!(
+            dest,
+            dir.path().join(format!(".upriv-invalidated-{stamp}-2"))
+        );
+        assert!(dest.join("marker").is_file());
+    }
+
+    #[test]
     fn open_valid_root_reports_not_created() {
         let dir = tempfile::tempdir().unwrap();
         let root = initialize_vault_root(dir.path()).unwrap();
@@ -700,13 +700,13 @@ vaults_dir = ".upriv/vaults"
     }
 
     #[test]
-    fn initialize_with_bootstrap_rejects_unsafe_locale() {
+    fn initialize_with_bootstrap_serializes_escaped_locale() {
         let dir = tempfile::tempdir().unwrap();
         let prefs = bootstrap_locale("en\"; rogue = \"x");
-        let err = initialize_vault_root_with_bootstrap(dir.path(), Some(&prefs)).unwrap_err();
-        assert!(matches!(err, UprivError::Io(_)));
-        // Settings must not be written when locale validation fails.
-        assert!(!dir.path().join(".upriv/settings.toml").is_file());
+        let root = initialize_vault_root_with_bootstrap(dir.path(), Some(&prefs)).unwrap();
+        let raw = std::fs::read_to_string(root.settings_path()).unwrap();
+        let parsed = crate::config::parse_settings_toml_str(&raw).unwrap();
+        assert_eq!(parsed.ui.locale, "en\"; rogue = \"x");
     }
 
     #[test]

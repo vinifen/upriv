@@ -4,7 +4,6 @@ import type { VaultDisplayStatus } from "../vault/types";
 export const vaultStatusColorVar = {
   open: "--vault-status-open",
   closed: "--vault-status-closed",
-  sealed: "--vault-status-sealed",
   recovery: "--vault-status-recovery",
   closing: "--vault-status-closed",
   opening: "--vault-status-closed",
@@ -14,7 +13,6 @@ export const vaultStatusColorVar = {
 export const vaultStatusI18nKey = {
   open: "vault.status.open",
   closed: "vault.status.closed",
-  sealed: "vault.status.sealed",
   recovery: "vault.status.recovery",
   closing: "vault.status.closing",
   opening: "vault.status.opening",

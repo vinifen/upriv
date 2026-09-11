@@ -1,5 +1,5 @@
 /** Max length for `[vault] note` in config.toml (SDD §3.2.2). */
-export const VAULT_NOTE_MAX_LENGTH = 256;
+export const VAULT_NOTE_MAX_LENGTH = 10_000;
 
 /** Max length for `[vault] password_hint` (SDD §3.2.2). */
 export const VAULT_PASSWORD_HINT_MAX_LENGTH = 128;

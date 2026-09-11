@@ -62,7 +62,7 @@ export function useAppLogs(open: boolean) {
   );
 
   const loadFileContent = useCallback(
-    async (filename: string): Promise<string> => {
+    async (filename: string): Promise<string | null> => {
       const cached = contentByName[filename];
       if (cached !== undefined) return cached;
       const existing = files.find((item) => item.filename === filename);
@@ -72,7 +72,7 @@ export function useAppLogs(open: boolean) {
       }
       const gen = loadGen.current;
       const file = await logService.getFile(filename);
-      if (gen !== loadGen.current) return "";
+      if (gen !== loadGen.current) return null;
       if (!file) {
         throw new Error(`log file not found: ${filename}`);
       }

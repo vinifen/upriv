@@ -29,7 +29,7 @@ export function CreateVaultStepNav({
       accessibilityRole="toolbar"
       accessibilityLabel={t("vault.create.step_nav")}
     >
-      {/* Horizontal only — parent create wizard owns the vertical scroll pane. */}
+      {/* Horizontal only — parent create wizard owns the vertical scroll pane below. */}
       <ScrollView
         horizontal
         nestedScrollEnabled
@@ -98,7 +98,7 @@ export function CreateVaultStepNav({
 }
 
 const styles = StyleSheet.create({
-  wrap: { marginTop: spacing.md, flexShrink: 0 },
+  wrap: { marginBottom: spacing.sm, flexShrink: 0 },
   scroll: { flexGrow: 0 },
   row: {
     flexDirection: "row",
@@ -107,19 +107,19 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.xs,
   },
   step: {
-    width: 148,
-    minHeight: 60,
+    width: 136,
+    minHeight: 52,
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.sm,
     borderRadius: radii.md,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.sm + 2,
+    paddingVertical: spacing.sm,
   },
   badge: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
+    width: 24,
+    height: 24,
+    borderRadius: radii.full,
     alignItems: "center",
     justifyContent: "center",
   },

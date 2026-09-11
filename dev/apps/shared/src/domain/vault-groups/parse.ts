@@ -19,11 +19,9 @@ export function parseVaultGroupWire(raw: unknown): VaultGroup {
     order: typeof r.order === "number" ? r.order : 0,
     collapsed: r.collapsed === true,
     groupedVaults: r.groupedVaults,
-    members: r.members,
     groupedVaultSort: r.groupedVaultSort,
-    memberSort: r.memberSort,
     groupedVaultSortDirection: r.groupedVaultSortDirection,
-    memberSortDirection: r.memberSortDirection,
+    hidden: r.hidden,
   });
   if (!group.id) {
     throw new RpcError(INVALID_RESPONSE, "vault group: empty id", raw);
@@ -31,7 +29,7 @@ export function parseVaultGroupWire(raw: unknown): VaultGroup {
   return group;
 }
 
-/** Parse `vault_group_list` result, including legacy `droppedDuplicateMemberships`. */
+/** Parse `vault_group_list` result. */
 export function parseVaultGroupListResult(raw: unknown): VaultGroupListResult {
   if (typeof raw !== "object" || raw === null) {
     throw new RpcError(INVALID_RESPONSE, "vault_group_list: expected object", raw);
@@ -43,10 +41,6 @@ export function parseVaultGroupListResult(raw: unknown): VaultGroupListResult {
     invalid: r.invalid === true,
     droppedOrphans: typeof r.droppedOrphans === "number" ? r.droppedOrphans : 0,
     droppedDuplicateAssignments:
-      typeof r.droppedDuplicateAssignments === "number"
-        ? r.droppedDuplicateAssignments
-        : typeof r.droppedDuplicateMemberships === "number"
-          ? r.droppedDuplicateMemberships
-          : 0,
+      typeof r.droppedDuplicateAssignments === "number" ? r.droppedDuplicateAssignments : 0,
   };
 }

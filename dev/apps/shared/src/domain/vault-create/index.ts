@@ -3,25 +3,41 @@ export { createDraftFromBackup } from "./createDraftFromBackup";
 export {
   createDraftForImportSource,
   createDraftForScratchSource,
-  createDraftFromImportArchive,
-} from "./createDraftFromImportArchive";
-export {
-  createEmptyCreateVaultDraft,
-  createVaultDraftEqual,
-  defaultOrderAtEnd,
-} from "./defaults";
+  createDraftFromImportPackage,
+  createVaultImportNeedsRename,
+} from "./createDraftFromImportPackage";
+export { createEmptyCreateVaultDraft, createVaultDraftEqual, defaultOrderAtEnd } from "./defaults";
 export {
   canSubmitCreateVault,
   getCreateVaultStepStatus,
   validateAllCreateVaultSteps,
   validateCreateVaultStep,
   vaultIdForCreateDraft,
+  CREATE_VAULT_PASSWORD_MIN_LENGTH,
+  isMockLifecyclePasswordValid,
   type CreateVaultValidationCode,
 } from "./validate";
 export {
-  createVaultErrorI18nKey,
-  type CreateVaultErrorI18nKey,
-} from "./errorMessages";
+  CREATE_VAULT_DEFAULT_FOCUS,
+  resolveCreateVaultFocusTarget,
+  resolveCreateVaultOpenStep,
+  shouldSelectCreateVaultFocusText,
+  shouldShowCreateVaultInlineErrors,
+  type CreateVaultFocusField,
+} from "./wizard";
+export {
+  createVaultWizardInitialState,
+  createVaultWizardReducer,
+  resolveCreateVaultCloseIntent,
+  selectCreateVaultWizardView,
+  type CreateVaultCloseIntent,
+  type CreateVaultWizardAction,
+  type CreateVaultWizardContext,
+  type CreateVaultWizardState,
+  type CreateVaultWizardView,
+} from "./wizardState";
+export { createVaultErrorI18nKey, type CreateVaultErrorI18nKey } from "./errorMessages";
+export { createVaultErrorsForField, type CreateVaultErrorField } from "./fieldErrors";
 export {
   CREATE_VAULT_STEPS,
   type CreateVaultDraft,

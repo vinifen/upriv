@@ -1,4 +1,5 @@
-import { LOG_ENTRIES_PER_FILE, LOG_KEEP_LAST_DEFAULT, type AppSettingsConfig } from "@upriv/shared";
+import type { AppSettingsConfig } from "@upriv/shared";
+import { LOG_ENTRIES_PER_FILE, LOG_KEEP_LAST_DEFAULT } from "@upriv/shared";
 
 export const DEFAULT_APP_SETTINGS: AppSettingsConfig = {
   ui: {
@@ -7,8 +8,18 @@ export const DEFAULT_APP_SETTINGS: AppSettingsConfig = {
     vault_list_sort: "order",
     vault_list_sort_direction: "asc",
     vault_list_view: "default",
+    vault_list_search: "",
+    vault_list_show_create_button: true,
+    vault_list_show_search_button: true,
+    vault_list_show_sort_button: true,
+    vault_list_show_view_button: true,
+    vault_list_show_header_more_button: true,
+    vault_list_show_vault_more_button: true,
+    vault_list_show_vault_settings_button: true,
+    vault_list_show_group_settings_button: true,
     always_show_hidden_vaults: false,
-    allow_drag_vault_into_group: true,
+    vault_list_show_drag: true,
+    vault_list_allow_drag_into_group: true,
     file_manager_dock_expanded: false,
   },
   logging: {
@@ -20,14 +31,24 @@ export const DEFAULT_APP_SETTINGS: AppSettingsConfig = {
   app: {
     vault_root_mode: "default_root",
     upriv_root_path: "",
+    last_opened_vault: "my-encrypted-notes",
+  },
+  workspace: {
+    path: "",
   },
 };
 
-/** Mock path used by “Choose folder” until native folder picker is wired.
- * Platform-neutral placeholder (not a real OS path). */
-export const MOCK_UPRIV_ROOT_PATH = "Documents/Upriv";
+/** Mock absolute vault-root path (validates as absolute for workspace setup). */
+export const MOCK_UPRIV_ROOT_PATH = "/mock/Documents/Upriv";
 
-/** @internal Used by mockAppSettingsService only. */
+let mockRuntimeSettings = structuredClone(DEFAULT_APP_SETTINGS);
+
+/** @internal Used by mockAppSettingsService and lifecycle mocks. */
 export function getMockAppSettings(): AppSettingsConfig {
-  return structuredClone(DEFAULT_APP_SETTINGS);
+  return structuredClone(mockRuntimeSettings);
+}
+
+/** @internal Keep mock settings store in sync with mockAppSettingsService.save. */
+export function replaceMockAppSettings(config: AppSettingsConfig): void {
+  mockRuntimeSettings = structuredClone(config);
 }

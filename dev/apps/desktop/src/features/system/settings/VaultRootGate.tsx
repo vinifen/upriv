@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { Button, LoadingBudgetHint, Modal } from "@/components/ui";
-import { useLoadingBudget } from "@/hooks/useLoadingBudget";
+import { useLoadingBudget } from "@upriv/shared/react";
 import { useTranslation } from "@/i18n";
 import { desktopErrorI18nKey } from "@/lib/errorMessages";
 import { useAppSettingsContext } from "./AppSettingsContext";
@@ -9,6 +9,7 @@ import {
   LOADING_BUDGET_MS,
   VAULT_ROOT_ERROR_CODES,
   isRpcError,
+  isVaultRootGoneError,
   type AppDistribution,
   type VaultRootMode,
   type VaultRootPresentationState,
@@ -35,12 +36,12 @@ function pathFromRpcError(error: unknown): string {
 /**
  * Resolves vault-root on launch. Blocks with setup/repair UI until a root exists.
  * Incomplete default_root or custom `.upriv/` → repair modal (rename recommended / delete).
- * Invalid active alias (e.g. unmounted drive) → dedicated recovery UI.
+ * Invalid active alias (e.g. unmounted drive) → first-run setup (same as a missing `.upriv`).
  *
  * Always resolves with `explicitPath: null` so env/CLI overrides stay in Rust only.
  * `custom_root` mode uses `vaultRootMode` + alias; wire/alias paths are for UX inspect only.
  *
- * Children stay mounted (pointer-events blocked while not ready) so providers keep state.
+ * Children stay mounted (`inert` + pointer-events while not ready) so providers keep state.
  * Re-resolves when settings become ready and when `vaultRootEpoch` bumps.
  * Epoch bumps while already ready soft-block via the applying overlay until resolve settles.
  * After Setup/Repair/Recovery success, shows a non-dismissible applying overlay until
@@ -52,7 +53,8 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
   const tRef = useRef(t);
   tRef.current = t;
   const vaultRoot = useVaultRootService();
-  const { settings, settingsReady, vaultRootEpoch, reloadSettings } = useAppSettingsContext();
+  const { settings, settingsReady, settingsLoadFailed, vaultRootEpoch, reloadSettings } =
+    useAppSettingsContext();
   const [ready, setReady] = useState(false);
   const [applying, setApplying] = useState(false);
   const [setup, setSetup] = useState<{
@@ -68,6 +70,7 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
   const [envOverridePath, setEnvOverridePath] = useState<string | null>(null);
   const [settingsLoadTimedOut, setSettingsLoadTimedOut] = useState(false);
   const resolveGen = useRef(0);
+  const childrenWrapRef = useRef<HTMLDivElement>(null);
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
   const readyRef = useRef(ready);
@@ -281,30 +284,69 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
       } catch (error) {
         if (gen !== resolveGen.current) return;
 
-        const aliasBroken =
-          isRpcError(error) &&
-          (error.code === VAULT_ROOT_ERROR_CODES.ALIAS_INVALID ||
-            (error.code === VAULT_ROOT_ERROR_CODES.NOT_FOUND && Boolean(wireOrAliasPath)));
-        if (aliasBroken) {
-          let remembered = wireOrAliasPath;
+        const gone = isVaultRootGoneError(error);
+        if (gone) {
           try {
-            const alias = await vaultRoot.readAlias();
-            if (alias?.path.trim()) remembered = alias.path.trim();
+            const result = await vaultRoot.resolve({
+              vaultRootMode: "default_root",
+              explicitPath: null,
+            });
+            if (gen !== resolveGen.current) return;
+            if (result.status === "found") {
+              validDefaultRootRetryRef.current = false;
+              setSetup(null);
+              setRepair(null);
+              setAliasInvalidPath(null);
+              setResolveError(null);
+              setApplying(false);
+              setReady(true);
+              setEnvOverridePath(result.source === "explicit" ? result.rootPath : null);
+              return;
+            }
+            validDefaultRootRetryRef.current = false;
+            setRepair(null);
+            setAliasInvalidPath(null);
+            setRecoveryPresentation(null);
+            setResolveError(null);
+            setApplying(false);
+            let rememberedAliasTarget: string | null = null;
+            try {
+              const alias = await vaultRoot.readAlias();
+              if (alias?.path.trim()) rememberedAliasTarget = alias.path.trim();
+            } catch {
+              // Optional enrichment for Setup labels.
+            }
+            if (gen !== resolveGen.current) return;
+            if (result.status === "needs_setup") {
+              setSetup({
+                presentation: {
+                  mode: "default_root",
+                  defaultRootAnchor: result.defaultRootAnchor,
+                  aliasPath: result.aliasPath,
+                  rememberedAliasTarget,
+                },
+                distribution: result.distribution,
+              });
+              setReady(false);
+              return;
+            }
           } catch {
-            // Keep wireOrAliasPath.
+            if (gen !== resolveGen.current) return;
           }
-          if (gen !== resolveGen.current) return;
-          setSetup(null);
+          setSetup({
+            presentation: {
+              mode: "default_root",
+              defaultRootAnchor: "",
+              aliasPath: "",
+              rememberedAliasTarget: null,
+            },
+            distribution: "portable",
+          });
           setRepair(null);
+          setAliasInvalidPath(null);
+          setRecoveryPresentation(null);
           setResolveError(null);
           setApplying(false);
-          setAliasInvalidPath(remembered || "");
-          setRecoveryPresentation({
-            mode: app.vault_root_mode,
-            defaultRootAnchor: "",
-            aliasPath: "",
-            rememberedAliasTarget: remembered || null,
-          });
           setReady(false);
           return;
         }
@@ -323,7 +365,11 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
           }
           if (gen !== resolveGen.current) return;
           if (repairPath) {
-            setRepair({ targetPath: repairPath, mode: "custom_root" });
+            setRepair({
+              targetPath: repairPath,
+              // Keep current mode: default_root repair must not write an active alias.
+              mode: wireOrAliasPath ? "custom_root" : app.vault_root_mode,
+            });
             setSetup(null);
             setAliasInvalidPath(null);
             setRecoveryPresentation(null);
@@ -431,7 +477,7 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
     resolveError === null;
 
   const settingsBudget = useLoadingBudget(
-    showLoadingSettings && !settingsLoadTimedOut,
+    showLoadingSettings && !settingsLoadTimedOut && !settingsLoadFailed,
     LOADING_BUDGET_MS.settingsLoad,
   );
   const applyingBudget = useLoadingBudget(showApplying, LOADING_BUDGET_MS.vaultRootResolve);
@@ -457,13 +503,24 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
   const retrySettingsLoad = () => {
     setSettingsLoadTimedOut(false);
     void reloadSettings().catch(() => {
-      setSettingsLoadTimedOut(true);
+      // Context sets settingsLoadFailed; Gate stays on Retry until a successful load.
     });
   };
+
+  // `aria-hidden` does not take the list out of tab order. Without `inert`,
+  // Electron focuses the first header button (⋮) on launch.
+  useLayoutEffect(() => {
+    const wrap = childrenWrapRef.current;
+    if (wrap) wrap.inert = blocking;
+    if (blocking || !wrap) return;
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && wrap.contains(active)) active.blur();
+  }, [blocking]);
 
   return (
     <>
       <div
+        ref={childrenWrapRef}
         aria-hidden={blocking || undefined}
         className={blocking ? "pointer-events-none select-none" : undefined}
       >
@@ -522,16 +579,18 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
           setRepair({ targetPath: path, mode: "custom_root" });
         }}
       />
-      {showLoadingSettings && (settingsBudget.visible || settingsLoadTimedOut) ? (
+      {showLoadingSettings &&
+      (settingsBudget.visible || settingsLoadTimedOut || settingsLoadFailed) ? (
         <Modal
           open
           title={t("modal.vault_root_setup.title")}
+          titleIcon="folder"
           onClose={() => undefined}
           dismissible={false}
           panelClassName="max-w-lg"
           rootClassName="z-[200]"
           footer={
-            settingsLoadTimedOut ? (
+            settingsLoadTimedOut || settingsLoadFailed ? (
               <div className="flex justify-end">
                 <Button variant="primary" size="md" onClick={retrySettingsLoad}>
                   {t("action.retry")}
@@ -543,9 +602,11 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
           <p className="text-sm leading-relaxed text-on-surface-variant" role="status">
             {settingsLoadTimedOut
               ? t("loading.timed_out")
-              : t("modal.vault_root_setup.loading_settings")}
+              : settingsLoadFailed
+                ? t("error.service_unavailable")
+                : t("modal.vault_root_setup.loading_settings")}
           </p>
-          {!settingsLoadTimedOut ? (
+          {!settingsLoadTimedOut && !settingsLoadFailed ? (
             <LoadingBudgetHint
               budgetMs={settingsBudget.budgetMs}
               remainingMs={settingsBudget.remainingMs}
@@ -557,6 +618,7 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
         <Modal
           open
           title={t("modal.vault_root_setup.title")}
+          titleIcon="folder"
           onClose={() => undefined}
           dismissible={false}
           panelClassName="max-w-lg"
@@ -575,6 +637,7 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
         <Modal
           open
           title={t("modal.vault_root_setup.title")}
+          titleIcon="folder"
           onClose={() => setEnvOverridePath(null)}
           dismissible
           panelClassName="max-w-lg"
@@ -596,6 +659,7 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
         <Modal
           open
           title={t("modal.vault_root_setup.title")}
+          titleIcon="folder"
           onClose={() => undefined}
           dismissible={false}
           panelClassName="max-w-lg"

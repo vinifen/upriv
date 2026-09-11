@@ -4,7 +4,8 @@
  *  Never use `localStorage` (or other browser storage) for product or mock vault-root state —
  *  in-memory mocks only; real persistence is disk via the daemon.
  *  TODO: rename `mock*` / `getMock*` / `MOCK_*` symbols to neutral names as remaining adapters land. */
-import type { AppServices } from "@upriv/shared";
+import { type AppServices } from "@upriv/shared";
+import { createMockVaultSecurityService } from "@upriv/shared/testing";
 import { mockAppSettingsService } from "./services/appSettingsService";
 import { mockBackupService } from "./services/backupService";
 import { mockCreateVaultService } from "./services/createVaultService";
@@ -26,4 +27,5 @@ export const mockServices: AppServices = {
   filesystem: mockVaultFileSystemService,
   lifecycle: mockVaultLifecycleService,
   createVault: mockCreateVaultService,
+  vaultSecurity: createMockVaultSecurityService(),
 };

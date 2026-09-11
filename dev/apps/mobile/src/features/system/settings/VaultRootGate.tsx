@@ -4,6 +4,7 @@ import {
   LOADING_BUDGET_MS,
   VAULT_ROOT_ERROR_CODES,
   isRpcError,
+  isVaultRootGoneError,
   type AppDistribution,
   type VaultRootMode,
   type VaultRootPresentationState,
@@ -12,8 +13,14 @@ import { useVaultRootService } from "@/platform/services";
 import { useAppSettingsContext } from "./AppSettingsContext";
 import { useTranslation } from "@/i18n";
 import { mobileErrorI18nKey } from "@/lib/errorMessages";
-import { useLoadingBudget } from "@/hooks/useLoadingBudget";
-import { Button, LoadingBudgetHint, Modal } from "@/components/ui";
+import { useLoadingBudget } from "@upriv/shared/react";
+import {
+  Button,
+  LoadingBudgetHint,
+  Modal,
+  ModalFooterActions,
+  modalFooterConfirmBtnStyle,
+} from "@/components/ui";
 import { useTheme } from "@/theme";
 import { spacing } from "@/theme/tokens";
 import { VaultRootSetupScreen } from "./VaultRootSetupScreen";
@@ -41,7 +48,8 @@ function pathFromRpcError(error: unknown): string {
  * - `found` (with env override notice when `source === "explicit"`)
  * - `needs_setup` → Setup
  * - `incomplete` → Repair
- * - `alias_invalid` / `unreadable` / `io_error` → AliasRecovery
+ * - `alias_invalid` / missing `.upriv` → first-run Setup (not Recovery)
+ * - inspect `unreadable` / `io_error` → AliasRecovery
  * - custom_root empty path → recover from active alias or run recovery
  * - M8: needs_setup + valid default root → single retry
  * - Loading / applying budgets with retry
@@ -56,7 +64,8 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
   tRef.current = t;
   const { colors, typography } = useTheme();
   const vaultRoot = useVaultRootService();
-  const { settings, settingsReady, vaultRootEpoch, reloadSettings } = useAppSettingsContext();
+  const { settings, settingsReady, settingsLoadFailed, vaultRootEpoch, reloadSettings } =
+    useAppSettingsContext();
   const [ready, setReady] = useState(false);
   const [applying, setApplying] = useState(false);
   const [setup, setSetup] = useState<{
@@ -159,24 +168,6 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
               setReady(false);
               return;
             }
-            if (inspected.status === "absent") {
-              // Custom root path remembered, but `.upriv/` was deleted → recovery
-              // (recreate there / pick another / switch to default). Do not treat
-              // a still-valid default_root as M8 "service unavailable".
-              setSetup(null);
-              setRepair(null);
-              setResolveError(null);
-              setApplying(false);
-              setAliasInvalidPath(wireOrAliasPath);
-              setRecoveryPresentation({
-                mode: app.vault_root_mode,
-                defaultRootAnchor: "",
-                aliasPath: "",
-                rememberedAliasTarget: wireOrAliasPath || null,
-              });
-              setReady(false);
-              return;
-            }
           } catch {
             if (gen !== resolveGen.current) return;
             setSetup(null);
@@ -223,23 +214,6 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
             return;
           }
           if (defaultRoot.status === "valid") {
-            // Custom root configured but resolve missed it, while default is still
-            // valid — offer recovery for the remembered custom path (not M8).
-            if (app.vault_root_mode === "custom_root" && wireOrAliasPath) {
-              setSetup(null);
-              setRepair(null);
-              setResolveError(null);
-              setApplying(false);
-              setAliasInvalidPath(wireOrAliasPath);
-              setRecoveryPresentation({
-                mode: app.vault_root_mode,
-                defaultRootAnchor: defaultRoot.defaultRootAnchor,
-                aliasPath: "",
-                rememberedAliasTarget: wireOrAliasPath || null,
-              });
-              setReady(false);
-              return;
-            }
             // needs_setup + valid default root is inconsistent — retry resolve once (M8).
             if (!validDefaultRootRetryRef.current) {
               validDefaultRootRetryRef.current = true;
@@ -313,30 +287,69 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
       } catch (error) {
         if (gen !== resolveGen.current) return;
 
-        const aliasBroken =
-          isRpcError(error) &&
-          (error.code === VAULT_ROOT_ERROR_CODES.ALIAS_INVALID ||
-            (error.code === VAULT_ROOT_ERROR_CODES.NOT_FOUND && Boolean(wireOrAliasPath)));
-        if (aliasBroken) {
-          let remembered = wireOrAliasPath;
+        const gone = isVaultRootGoneError(error);
+        if (gone) {
           try {
-            const alias = await vaultRoot.readAlias();
-            if (alias?.path.trim()) remembered = alias.path.trim();
+            const result = await vaultRoot.resolve({
+              vaultRootMode: "default_root",
+              explicitPath: null,
+            });
+            if (gen !== resolveGen.current) return;
+            if (result.status === "found") {
+              validDefaultRootRetryRef.current = false;
+              setSetup(null);
+              setRepair(null);
+              setAliasInvalidPath(null);
+              setResolveError(null);
+              setApplying(false);
+              setReady(true);
+              setEnvOverridePath(result.source === "explicit" ? result.rootPath : null);
+              return;
+            }
+            validDefaultRootRetryRef.current = false;
+            setRepair(null);
+            setAliasInvalidPath(null);
+            setRecoveryPresentation(null);
+            setResolveError(null);
+            setApplying(false);
+            let rememberedAliasTarget: string | null = null;
+            try {
+              const alias = await vaultRoot.readAlias();
+              if (alias?.path.trim()) rememberedAliasTarget = alias.path.trim();
+            } catch {
+              /* optional enrichment */
+            }
+            if (gen !== resolveGen.current) return;
+            if (result.status === "needs_setup") {
+              setSetup({
+                presentation: {
+                  mode: "default_root",
+                  defaultRootAnchor: result.defaultRootAnchor,
+                  aliasPath: result.aliasPath,
+                  rememberedAliasTarget,
+                },
+                distribution: result.distribution,
+              });
+              setReady(false);
+              return;
+            }
           } catch {
-            /* keep wireOrAliasPath */
+            if (gen !== resolveGen.current) return;
           }
-          if (gen !== resolveGen.current) return;
-          setSetup(null);
+          setSetup({
+            presentation: {
+              mode: "default_root",
+              defaultRootAnchor: "",
+              aliasPath: "",
+              rememberedAliasTarget: null,
+            },
+            distribution: "installed",
+          });
           setRepair(null);
+          setAliasInvalidPath(null);
+          setRecoveryPresentation(null);
           setResolveError(null);
           setApplying(false);
-          setAliasInvalidPath(remembered || "");
-          setRecoveryPresentation({
-            mode: app.vault_root_mode,
-            defaultRootAnchor: "",
-            aliasPath: "",
-            rememberedAliasTarget: remembered || null,
-          });
           setReady(false);
           return;
         }
@@ -356,7 +369,11 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
           }
           if (gen !== resolveGen.current) return;
           if (repairPath) {
-            setRepair({ targetPath: repairPath, mode: "custom_root" });
+            setRepair({
+              targetPath: repairPath,
+              // Keep current mode: default_root repair must not write an active alias.
+              mode: wireOrAliasPath ? "custom_root" : app.vault_root_mode,
+            });
             setSetup(null);
             setAliasInvalidPath(null);
             setRecoveryPresentation(null);
@@ -462,7 +479,7 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
     resolveError === null;
 
   const settingsBudget = useLoadingBudget(
-    showLoadingSettings && !settingsLoadTimedOut,
+    showLoadingSettings && !settingsLoadTimedOut && !settingsLoadFailed,
     LOADING_BUDGET_MS.settingsLoad,
   );
   const applyingBudget = useLoadingBudget(showApplying, LOADING_BUDGET_MS.vaultRootResolve);
@@ -487,7 +504,7 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
   const retrySettingsLoad = () => {
     setSettingsLoadTimedOut(false);
     void reloadSettings().catch(() => {
-      setSettingsLoadTimedOut(true);
+      // Context sets settingsLoadFailed; Gate stays on Retry until a successful load.
     });
   };
 
@@ -559,16 +576,21 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
         }}
       />
 
-      {showLoadingSettings && (settingsBudget.visible || settingsLoadTimedOut) ? (
+      {showLoadingSettings &&
+      (settingsBudget.visible || settingsLoadTimedOut || settingsLoadFailed) ? (
         <View style={overlayStyle} accessibilityRole="progressbar">
-          {settingsLoadTimedOut ? null : <ActivityIndicator size="large" color={colors.accent} />}
+          {settingsLoadTimedOut || settingsLoadFailed ? null : (
+            <ActivityIndicator size="large" color={colors.accent} />
+          )}
           <Text style={[typography.bodyMuted, styles.overlayText]}>
             {settingsLoadTimedOut
               ? t("loading.timed_out")
-              : t("modal.vault_root_setup.loading_settings")}
+              : settingsLoadFailed
+                ? t("error.service_unavailable")
+                : t("modal.vault_root_setup.loading_settings")}
           </Text>
-          {settingsLoadTimedOut ? (
-            <Button label={t("action.retry")} variant="accent" onPress={retrySettingsLoad} />
+          {settingsLoadTimedOut || settingsLoadFailed ? (
+            <Button label={t("action.retry")} variant="primary" onPress={retrySettingsLoad} />
           ) : (
             <LoadingBudgetHint
               budgetMs={settingsBudget.budgetMs}
@@ -594,17 +616,19 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
       <Modal
         open={Boolean(envOverridePath && ready && settingsReady)}
         title={t("modal.vault_root_setup.title")}
+        titleIcon="folder"
         onClose={() => setEnvOverridePath(null)}
         panelClassName="max-w-lg"
         dismissible
         footer={
-          <View style={styles.actionsCol}>
+          <ModalFooterActions layout="confirm">
             <Button
               label={t("action.continue")}
-              variant="accent"
+              variant="primary"
+              style={modalFooterConfirmBtnStyle}
               onPress={() => setEnvOverridePath(null)}
             />
-          </View>
+          </ModalFooterActions>
         }
       >
         <Text style={typography.bodyMuted}>
@@ -615,20 +639,22 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
       <Modal
         open={resolveError !== null}
         title={t("modal.vault_root_setup.title")}
+        titleIcon="folder"
         onClose={() => undefined}
         panelClassName="max-w-lg"
         dismissible={false}
         footer={
-          <View style={styles.actionsCol}>
+          <ModalFooterActions layout="confirm">
             <Button
               label={t("action.retry")}
-              variant="accent"
+              variant="primary"
+              style={modalFooterConfirmBtnStyle}
               onPress={() => {
                 setResolveError(null);
                 runResolveRef.current();
               }}
             />
-          </View>
+          </ModalFooterActions>
         }
       >
         <Text
@@ -654,5 +680,4 @@ const styles = StyleSheet.create({
     zIndex: 100,
   },
   overlayText: { textAlign: "center" },
-  actionsCol: { gap: spacing.sm },
 });

@@ -7,7 +7,7 @@ order = 10
 collapsed = false
 grouped_vault_sort = "order"
 grouped_vault_sort_direction = "asc"
-grouped_vaults = ["plain-folder-demo", "store-only-demo", "ram-only-demo", "plain-only-demo"]
+grouped_vaults = ["plain-folder-demo"]
 
 [[group]]
 id = "archives"

@@ -1,13 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { buildGroupedVaultPickerItems } from "../picker";
+import { buildGroupedVaultPickerItems, groupAssignmentClearOption } from "../picker";
 import type { VaultGroup } from "../types";
 import { vaultListItemFixture } from "../../vault-list/tests/fixtures";
 
-function group(partial: Partial<VaultGroup> & Pick<VaultGroup, "id" | "groupedVaults">): VaultGroup {
+function group(
+  partial: Partial<VaultGroup> & Pick<VaultGroup, "id" | "groupedVaults">,
+): VaultGroup {
   return {
     displayName: partial.id,
     order: 0,
     collapsed: false,
+    hidden: false,
     groupedVaultSort: "order",
     groupedVaultSortDirection: "asc",
     ...partial,
@@ -65,5 +68,25 @@ describe("buildGroupedVaultPickerItems", () => {
         includeHidden: true,
       }).map((i) => i.vault.id),
     ).toEqual(["a", "b", "c", "secret"]);
+  });
+});
+
+describe("groupAssignmentClearOption", () => {
+  const t = (key: string) => key;
+
+  it("uses remove + danger when a group is already selected", () => {
+    expect(groupAssignmentClearOption("work", t)).toEqual({
+      value: "",
+      label: "vault.group.assignment.remove",
+      tone: "danger",
+    });
+  });
+
+  it("uses none + muted when the vault is ungrouped", () => {
+    expect(groupAssignmentClearOption("", t)).toEqual({
+      value: "",
+      label: "vault.group.assignment.none",
+      tone: "muted",
+    });
   });
 });

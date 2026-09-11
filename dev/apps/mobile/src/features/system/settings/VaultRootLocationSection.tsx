@@ -7,7 +7,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { Platform, StyleSheet, Text, TextInput, View } from "react-native";
+import { Platform, StyleSheet, Text, View } from "react-native";
 import {
   VAULT_ROOT_ALIAS_FILE,
   isVaultRootDraftDirty,
@@ -24,7 +24,7 @@ import { useTranslation } from "@/i18n";
 import { useTheme } from "@/theme";
 import { radii, spacing } from "@/theme/tokens";
 import { Button } from "@/components/ui";
-import { PolicyRadioOption } from "@/components/settings/PolicyRadioOption";
+import { FieldHint, FieldLabel, PolicyRadioOption, ThemedInput } from "@/components/settings";
 import { getMobileAppVersion } from "@/lib/appVersion";
 import { isAndroidSafUri } from "@/platform/native/pickVaultRootFolder";
 import { VaultRootIncompleteReplacePanel } from "./VaultRootIncompleteReplacePanel";
@@ -295,8 +295,8 @@ export function VaultRootLocationSection({
 
   return (
     <View style={styles.wrap}>
-      <Text style={typography.bodyMuted}>{t("modal.app_settings.field.upriv_root_mode")}</Text>
-      <Text style={typography.caption}>{t("modal.app_settings.field.upriv_root_mode_help")}</Text>
+      <FieldLabel>{t("modal.app_settings.field.upriv_root_mode")}</FieldLabel>
+      <FieldHint>{t("modal.app_settings.field.upriv_root_mode_help")}</FieldHint>
       <View
         style={styles.options}
         accessibilityRole="radiogroup"
@@ -353,7 +353,7 @@ export function VaultRootLocationSection({
                       )}
                     </Text>
                   ) : null}
-                  {(disk === "unreadable" || disk === "unauthorized") ? (
+                  {disk === "unreadable" || disk === "unauthorized" ? (
                     <View style={styles.errorRow}>
                       <Text
                         style={[
@@ -423,89 +423,79 @@ export function VaultRootLocationSection({
               });
           }}
           footer={
-            showCustomExtras ? (
-              <View style={styles.footerCol}>
-                {customRootNotice ?? (
-                  <>
+            <View style={styles.footerCol}>
+              {customRootNotice ?? (
+                <Text style={typography.caption}>
+                  {t("modal.app_settings.field.upriv_root_help")}
+                </Text>
+              )}
+              {showCustomExtras && !customRootNotice ? (
+                <>
+                  {config.upriv_root_path.trim() ? (
                     <Text style={typography.caption}>
-                      {t("modal.app_settings.field.upriv_root_help")}
+                      {t("modal.app_settings.field.upriv_root_remembered", {
+                        file: VAULT_ROOT_ALIAS_FILE,
+                      })}
                     </Text>
-                    {config.upriv_root_path.trim() ? (
-                      <Text style={typography.caption}>
-                        {t("modal.app_settings.field.upriv_root_remembered", {
-                          file: VAULT_ROOT_ALIAS_FILE,
-                        })}
-                      </Text>
-                    ) : customPathLoading || disk === "checking" ? (
-                      <Text style={typography.caption}>
-                        {t("modal.app_settings.field.upriv_root_loading")}
-                      </Text>
-                    ) : null}
-                  </>
-                )}
-                <TextInput
-                  value={config.upriv_root_path}
-                  editable={false}
-                  selectTextOnFocus={!pathIsSaf}
-                  placeholder={t("modal.app_settings.field.upriv_root_placeholder")}
-                  placeholderTextColor={colors.onSurfaceVariant}
-                  style={[
-                    typography.mono,
-                    styles.input,
-                    {
-                      backgroundColor: colors.surfaceContainerHigh,
-                      borderColor: colors.outlineVariant,
-                      color: colors.onSurface,
-                    },
-                  ]}
-                />
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  label={t("modal.app_settings.action.choose_folder")}
-                  disabled={controlsDisabled || customPathLoading}
-                  onPress={pickCustomFolder}
-                />
-                {pathIsSaf ? (
-                  <Text style={typography.caption}>{t("modal.vault_root_setup.saf_notice")}</Text>
-                ) : Platform.OS !== "android" && !config.upriv_root_path.trim() ? (
-                  <Text style={typography.caption}>
-                    {t("modal.vault_root_setup.error_pick_unavailable")}
-                  </Text>
-                ) : null}
-                {disk === "unreadable" || disk === "unauthorized" ? (
-                  <View style={styles.errorRow}>
-                    <Text
-                      style={[
-                        typography.caption,
-                        styles.errorText,
-                        { color: colors.onErrorContainer },
-                      ]}
-                      accessibilityRole="alert"
-                    >
-                      {t(
-                        disk === "unauthorized"
-                          ? "modal.vault_root_setup.error_saf_unauthorized"
-                          : "modal.vault_root_setup.error_io",
-                      )}
+                  ) : customPathLoading || disk === "checking" ? (
+                    <Text style={typography.caption}>
+                      {t("modal.app_settings.field.upriv_root_loading")}
                     </Text>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      label={t("action.retry")}
-                      disabled={controlsDisabled}
-                      onPress={retryDiskCheck}
-                    />
-                  </View>
-                ) : null}
-                {disk === "needs_folder" ? (
-                  <Text style={typography.caption}>
-                    {t("modal.vault_root_setup.error_path_required")}
+                  ) : null}
+                </>
+              ) : null}
+              <ThemedInput
+                value={config.upriv_root_path}
+                editable={false}
+                selectTextOnFocus={!pathIsSaf}
+                placeholder={t("modal.app_settings.field.upriv_root_placeholder")}
+                mono
+              />
+              <Button
+                size="sm"
+                variant="ghost"
+                label={t("modal.app_settings.action.choose_folder")}
+                disabled={controlsDisabled || customPathLoading || Platform.OS !== "android"}
+                onPress={pickCustomFolder}
+              />
+              {showCustomExtras && pathIsSaf ? (
+                <Text style={typography.caption}>{t("modal.vault_root_setup.saf_notice")}</Text>
+              ) : null}
+              {showCustomExtras && Platform.OS !== "android" && !config.upriv_root_path.trim() ? (
+                <Text style={typography.caption}>{t("error.unsupported_platform")}</Text>
+              ) : null}
+              {showCustomExtras && (disk === "unreadable" || disk === "unauthorized") ? (
+                <View style={styles.errorRow}>
+                  <Text
+                    style={[
+                      typography.caption,
+                      styles.errorText,
+                      { color: colors.onErrorContainer },
+                    ]}
+                    accessibilityRole="alert"
+                  >
+                    {t(
+                      disk === "unauthorized"
+                        ? "modal.vault_root_setup.error_saf_unauthorized"
+                        : "modal.vault_root_setup.error_io",
+                    )}
                   </Text>
-                ) : null}
-                {incompletePanel}
-              </View>
-            ) : null
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    label={t("action.retry")}
+                    disabled={controlsDisabled}
+                    onPress={retryDiskCheck}
+                  />
+                </View>
+              ) : null}
+              {showCustomExtras && disk === "needs_folder" ? (
+                <Text style={typography.caption}>
+                  {t("modal.vault_root_setup.error_path_required")}
+                </Text>
+              ) : null}
+              {showCustomExtras ? incompletePanel : null}
+            </View>
           }
         />
       </View>
@@ -521,13 +511,6 @@ const styles = StyleSheet.create({
     borderRadius: radii.sm,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
-  },
-  input: {
-    borderRadius: radii.sm,
-    borderWidth: 1,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.md,
-    minHeight: 44,
   },
   errorRow: {
     flexDirection: "column",

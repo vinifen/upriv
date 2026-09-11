@@ -1,52 +1,30 @@
-import js from "@eslint/js";
-import eslintConfigPrettier from "eslint-config-prettier";
-import importNewlines from "eslint-plugin-import-newlines";
 import reactHooks from "eslint-plugin-react-hooks";
 import reactRefresh from "eslint-plugin-react-refresh";
-import tseslint from "typescript-eslint";
+import { uprivEslint, uprivPromiseChecked, uprivTypeChecked } from "../../js-lint/eslint.js";
 
-export default tseslint.config(
-  {
-    ignores: ["dist", "renderer-out", ".vite-cache", "node_modules"],
+export default uprivEslint({
+  files: ["**/*.{ts,tsx}"],
+  tsconfigRootDir: import.meta.dirname,
+  ignores: ["dist", "renderer-out", ".vite-cache", "node_modules"],
+  filesIgnores: ["vite.config.mjs"],
+  extraConfigs: [
+    uprivTypeChecked({
+      files: ["vite.config.mjs"],
+      project: ["./tsconfig.node.json"],
+      tsconfigRootDir: import.meta.dirname,
+    }),
+    uprivPromiseChecked({
+      files: ["src/**/*.{ts,tsx}"],
+      project: ["./tsconfig.json"],
+      tsconfigRootDir: import.meta.dirname,
+    }),
+  ],
+  extraPlugins: {
+    "react-hooks": reactHooks,
+    "react-refresh": reactRefresh,
   },
-  {
-    extends: [js.configs.recommended, ...tseslint.configs.recommendedTypeChecked],
-    files: ["vite.config.mjs"],
-    languageOptions: {
-      ecmaVersion: 2020,
-      parserOptions: {
-        project: ["./tsconfig.node.json"],
-        tsconfigRootDir: import.meta.dirname,
-      },
-    },
+  extraRules: {
+    ...reactHooks.configs.recommended.rules,
+    "react-refresh/only-export-components": "off",
   },
-  {
-    extends: [js.configs.recommended, ...tseslint.configs.recommended],
-    files: ["**/*.{ts,tsx}"],
-    ignores: ["vite.config.mjs"],
-    languageOptions: {
-      ecmaVersion: 2020,
-    },
-    plugins: {
-      "import-newlines": importNewlines,
-      "react-hooks": reactHooks,
-      "react-refresh": reactRefresh,
-    },
-    rules: {
-      ...reactHooks.configs.recommended.rules,
-      "react-refresh/only-export-components": "off",
-      "import-newlines/enforce": ["warn", { items: 7, "max-len": 100, forceSingleLine: true }],
-      "max-len": [
-        "warn",
-        {
-          code: 100,
-          ignoreUrls: true,
-          ignoreStrings: false,
-          ignoreTemplateLiterals: true,
-          ignoreRegExpLiterals: true,
-        },
-      ],
-    },
-  },
-  eslintConfigPrettier,
-);
+});

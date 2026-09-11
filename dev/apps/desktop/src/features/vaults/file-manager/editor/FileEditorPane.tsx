@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from "react";
 import { useTranslation } from "@/i18n";
+import { useErrorToast } from "@/hooks/useErrorToast";
 import { fileBaseName } from "@upriv/shared";
 import { filesFromDataTransfer, isOsFileDrag } from "../lib/osFileDrop";
 import type { FileManagerApi } from "../hooks/useVaultFileManager";
@@ -34,6 +35,10 @@ function EditorWithLineNumbers({
   const gutterRef = useRef<HTMLDivElement>(null);
 
   const lines = useMemo(() => lineCount(content), [content]);
+  const lineNumbersText = useMemo(
+    () => Array.from({ length: lines }, (_, index) => String(index + 1)).join("\n"),
+    [lines],
+  );
 
   const syncScroll = () => {
     if (textareaRef.current && gutterRef.current) {
@@ -48,17 +53,12 @@ function EditorWithLineNumbers({
       <div
         ref={gutterRef}
         aria-hidden
-        className="modal-scroll-pane pointer-events-none absolute bottom-3 top-3 overflow-hidden select-none"
+        className="modal-scroll-pane pointer-events-none absolute bottom-3 top-3 overflow-hidden whitespace-pre text-right select-none"
         style={{ left: GUTTER_INSET, width: `${gutterWidthCh}ch` }}
       >
-        {Array.from({ length: lines }, (_, index) => (
-          <div
-            key={index + 1}
-            className="flex h-[1.625rem] items-center justify-end font-mono text-[9px] tabular-nums text-[var(--vault-status-sealed)]"
-          >
-            {index + 1}
-          </div>
-        ))}
+        <pre className="font-mono text-[9px] leading-[1.625rem] tabular-nums text-[var(--editor-gutter-muted)]">
+          {lineNumbersText}
+        </pre>
       </div>
       <textarea
         ref={textareaRef}
@@ -103,6 +103,7 @@ function ImagePreview({
 }
 
 function ViewerDropZone({ fm, children }: { fm: FileManagerApi; children: ReactNode }) {
+  const { showError } = useErrorToast();
   const [dropActive, setDropActive] = useState(false);
 
   const handleDragOver = (event: DragEvent) => {
@@ -122,8 +123,12 @@ function ViewerDropZone({ fm, children }: { fm: FileManagerApi; children: ReactN
     event.preventDefault();
     setDropActive(false);
     void (async () => {
-      const files = await filesFromDataTransfer(event);
-      await fm.importFiles("/", files, { openFirstViewable: true });
+      try {
+        const files = await filesFromDataTransfer(event);
+        await fm.importFiles("/", files, { openFirstViewable: true });
+      } catch (error) {
+        showError(error, "error.unexpected");
+      }
     })();
   };
 

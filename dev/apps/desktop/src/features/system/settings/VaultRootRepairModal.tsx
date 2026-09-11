@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
-import { Button, Modal } from "@/components/ui";
+import { Button, Modal, Select } from "@/components/ui";
 import { PolicyRadioOption, settingsControlClass } from "@/components/settings";
 import { useTranslation } from "@/i18n";
 import {
   SUPPORTED_LOCALES,
   confirmNotesForReplacePolicy,
+  sameVaultRootPath,
   vaultRootGateFromState,
   type IncompleteReplacePolicy,
   type LocaleId,
@@ -42,11 +43,6 @@ type DiskApplied = {
   replacePolicy: IncompleteReplacePolicy | null;
 };
 
-function samePathKey(a: string, b: string): boolean {
-  const norm = (p: string) => p.trim().replace(/[/\\]+$/g, "");
-  return norm(a) === norm(b);
-}
-
 /**
  * Blocking when a chosen vault-root has incomplete/corrupt `.upriv/`.
  *
@@ -68,6 +64,7 @@ export function VaultRootRepairModal({
   const otherRepairGroup = useId();
   const [policy, setPolicy] = useState<PolicyChoice>("rename");
   const [busy, setBusy] = useState(false);
+  const [picking, setPicking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [otherPath, setOtherPath] = useState("");
   const [otherDisk, setOtherDisk] = useState<VaultRootDiskStatus>("needs_folder");
@@ -84,6 +81,7 @@ export function VaultRootRepairModal({
     if (!open) return;
     setPolicy("rename");
     setBusy(false);
+    setPicking(false);
     setError(null);
     submitLock.current = false;
     busyGen.current += 1;
@@ -178,7 +176,7 @@ export function VaultRootRepairModal({
           cached?.source === "current" &&
           cached.mode === mode &&
           cached.replacePolicy === nextPolicy &&
-          samePathKey(cached.path, targetPath)
+          sameVaultRootPath(cached.path, targetPath)
         ) {
           if (gen !== busyGen.current) return;
           await finishWithRoot(cached.rootPath, mode, gen);
@@ -234,7 +232,7 @@ export function VaultRootRepairModal({
   );
 
   const handlePickOtherFolder = useCallback(() => {
-    setBusy(true);
+    setPicking(true);
     setError(null);
     void (async () => {
       const suggested =
@@ -252,7 +250,7 @@ export function VaultRootRepairModal({
       .catch((err) => {
         setError(t(desktopErrorI18nKey(err, "modal.vault_root_setup.error_pick")));
       })
-      .finally(() => setBusy(false));
+      .finally(() => setPicking(false));
   }, [otherPath, t, targetPath, vaultRoot]);
 
   const applyOtherFolder = useCallback(() => {
@@ -274,7 +272,7 @@ export function VaultRootRepairModal({
         cached?.source === "other" &&
         cached.mode === "custom_root" &&
         cached.replacePolicy === (otherReplacePolicy ?? null) &&
-        samePathKey(cached.path, path)
+        sameVaultRootPath(cached.path, path)
       ) {
         if (gen !== busyGen.current) return;
         await finishWithRoot(cached.rootPath, "custom_root", gen);
@@ -326,10 +324,10 @@ export function VaultRootRepairModal({
 
   // UI primary = Continue
   const requestContinue = useCallback(() => {
-    if (busy || confirmOpen) return;
+    if (busy || picking || confirmOpen) return;
     if (policy === "choose_other" && otherGate.blocksPrimary) return;
     setConfirmOpen(true);
-  }, [busy, confirmOpen, otherGate.blocksPrimary, policy]);
+  }, [busy, picking, confirmOpen, otherGate.blocksPrimary, policy]);
 
   if (!open) return null;
 
@@ -342,13 +340,14 @@ export function VaultRootRepairModal({
     <Modal
       open={open}
       title={t("modal.vault_root_repair.title")}
+      titleIcon="refresh"
       onClose={() => undefined}
       dismissible={false}
       panelClassName="max-w-lg"
       footer={
         <VaultRootConfirmFooter
           busy={busy}
-          blocked={policy === "choose_other" && otherGate.blocksPrimary}
+          blocked={(policy === "choose_other" && otherGate.blocksPrimary) || picking}
           confirmOpen={confirmOpen}
           noteKeys={noteKeys}
           confirmDanger={
@@ -375,19 +374,17 @@ export function VaultRootRepairModal({
       headerActions={
         <label className="flex items-center gap-1.5">
           <span className="sr-only">{t("modal.app_settings.field.locale")}</span>
-          <select
+          <Select
+            size="sm"
             value={settings.ui.locale}
-            disabled={busy}
+            disabled={busy || picking}
             aria-label={t("modal.app_settings.field.locale")}
-            onChange={(event) => handleLocaleChange(event.target.value as LocaleId)}
-            className="h-9 max-w-[9.5rem] rounded-lg border border-transparent bg-surface-container-highest px-2 text-xs text-on-surface outline-none focus:border-[var(--accent)] disabled:opacity-60 sm:h-10 sm:max-w-[11rem] sm:text-sm"
-          >
-            {SUPPORTED_LOCALES.map((locale) => (
-              <option key={locale} value={locale}>
-                {t(`modal.app_settings.option.locale.${locale}`)}
-              </option>
-            ))}
-          </select>
+            onChange={(locale) => handleLocaleChange(locale as LocaleId)}
+            options={SUPPORTED_LOCALES.map((locale) => ({
+              value: locale,
+              label: t(`modal.app_settings.option.locale.${locale}`),
+            }))}
+          />
         </label>
       }
     >
@@ -448,62 +445,60 @@ export function VaultRootRepairModal({
               setError(null);
             }}
             footer={
-              policy === "choose_other" ? (
-                <div className="space-y-2">
-                  <div className="flex flex-col gap-2 sm:flex-row sm:items-stretch">
-                    <input
-                      type="text"
-                      readOnly
-                      value={otherPath}
-                      placeholder={t("modal.vault_root_setup.path_placeholder")}
-                      className={[
-                        settingsControlClass,
-                        "cursor-not-allowed opacity-90 font-mono text-xs sm:min-w-0 sm:flex-1",
-                      ].join(" ")}
-                    />
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      size="md"
-                      className="w-full shrink-0 sm:w-auto"
-                      disabled={busy}
-                      onClick={handlePickOtherFolder}
-                    >
-                      {t("modal.app_settings.action.choose_folder")}
-                    </Button>
-                  </div>
-                  {otherDisk === "checking" ? (
-                    <p className="text-xs leading-relaxed text-on-surface-variant" role="status">
-                      {t("modal.app_settings.field.upriv_root_loading")}
-                    </p>
-                  ) : null}
-                  {otherDisk === "needs_folder" ? (
-                    <p className="text-xs leading-relaxed text-on-surface-variant" role="status">
-                      {t("modal.vault_root_setup.error_path_required")}
-                    </p>
-                  ) : null}
-                  {otherDisk === "unreadable" ? (
-                    <p
-                      className="rounded-md bg-error-container/10 px-3 py-2 text-xs leading-relaxed text-on-error-container"
-                      role="alert"
-                    >
-                      {t("modal.vault_root_setup.error_io")}
-                    </p>
-                  ) : null}
-                  {otherDisk === "incomplete" ? (
-                    <VaultRootIncompleteReplacePanel
-                      context={{ kind: "custom_root", path: otherPath.trim() }}
-                      replacePolicy={otherReplacePolicy}
-                      onReplacePolicyChange={(next) => {
-                        setOtherReplacePolicy(next);
-                        setError(null);
-                      }}
-                      groupName={otherRepairGroup}
-                      primaryAction="continue"
-                    />
-                  ) : null}
+              <div className="space-y-2">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-stretch">
+                  <input
+                    type="text"
+                    readOnly
+                    value={otherPath}
+                    placeholder={t("modal.vault_root_setup.path_placeholder")}
+                    className={[
+                      settingsControlClass,
+                      "cursor-not-allowed opacity-90 font-mono text-xs sm:min-w-0 sm:flex-1",
+                    ].join(" ")}
+                  />
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="md"
+                    className="w-full shrink-0 sm:w-auto"
+                    disabled={busy || picking}
+                    onClick={handlePickOtherFolder}
+                  >
+                    {t("modal.app_settings.action.choose_folder")}
+                  </Button>
                 </div>
-              ) : null
+                {policy === "choose_other" && otherDisk === "checking" ? (
+                  <p className="text-xs leading-relaxed text-on-surface-variant" role="status">
+                    {t("modal.app_settings.field.upriv_root_loading")}
+                  </p>
+                ) : null}
+                {policy === "choose_other" && otherDisk === "needs_folder" ? (
+                  <p className="text-xs leading-relaxed text-on-surface-variant" role="status">
+                    {t("modal.vault_root_setup.error_path_required")}
+                  </p>
+                ) : null}
+                {policy === "choose_other" && otherDisk === "unreadable" ? (
+                  <p
+                    className="rounded-md bg-error-container/10 px-3 py-2 text-xs leading-relaxed text-on-error-container"
+                    role="alert"
+                  >
+                    {t("modal.vault_root_setup.error_io")}
+                  </p>
+                ) : null}
+                {policy === "choose_other" && otherDisk === "incomplete" ? (
+                  <VaultRootIncompleteReplacePanel
+                    context={{ kind: "custom_root", path: otherPath.trim() }}
+                    replacePolicy={otherReplacePolicy}
+                    onReplacePolicyChange={(next) => {
+                      setOtherReplacePolicy(next);
+                      setError(null);
+                    }}
+                    groupName={otherRepairGroup}
+                    primaryAction="continue"
+                  />
+                ) : null}
+              </div>
             }
           />
         </div>

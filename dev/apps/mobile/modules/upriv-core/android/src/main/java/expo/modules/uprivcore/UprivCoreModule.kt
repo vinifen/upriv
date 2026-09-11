@@ -74,10 +74,10 @@ class UprivCoreModule : Module() {
     }
 
     /**
-     * Create `.upriv/settings.toml` + `{vaults,logs,app,runtime}/` + `workspace/`
-     * at the SAF tree.
+     * Create `.upriv/settings.toml` + `{vaults,logs,app,runtime}/` at the SAF tree.
      *
-     * `replacePolicy` is `null` (idempotent no-op when settings already exist),
+     * `replacePolicy` is `null` (idempotent: keep settings, still ensure
+     * `{vaults,logs,app,runtime}/` exist),
      * `"delete"` (wipe marker dir in place — SAF cannot recreate the same
      * display name after `DocumentFile.delete()`), or `"rename"` (`.upriv` →
      * `.upriv-invalidated-<stamp>`). Callers must only pass delete/rename when

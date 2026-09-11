@@ -1,6 +1,6 @@
 import {
   CORE_RPC_COMMANDS,
-  LOADING_BUDGET_MS,
+  CORE_RPC_TIMEOUT_MS,
   RpcError,
   isRpcError,
   normalizeAppSettings,
@@ -33,37 +33,6 @@ const BRIDGE = {
 
 const DEFAULT_INVOKE_TIMEOUT_MS = 30_000;
 
-/**
- * Per-method budget. `timeoutMs <= 0` means no deadline (native dialogs only).
- * Never map vault-root busy ops to `0`.
- */
-export const METHOD_TIMEOUT_MS: Partial<Record<string, number>> = {
-  app_version: 10_000,
-  app_settings_get: LOADING_BUDGET_MS.settingsLoad,
-  app_settings_save: 30_000,
-  app_settings_parse_toml: 10_000,
-  app_settings_serialize_toml: 10_000,
-  vault_root_resolve: LOADING_BUDGET_MS.vaultRootResolve,
-  vault_root_setup_default_root: LOADING_BUDGET_MS.vaultRoot,
-  vault_root_setup_path: LOADING_BUDGET_MS.vaultRoot,
-  vault_root_deactivate_alias: 10_000,
-  vault_root_read_alias: 10_000,
-  vault_root_default_root_status: 10_000,
-  vault_root_inspect_path: 10_000,
-  log_list: LOADING_BUDGET_MS.logs,
-  log_get: LOADING_BUDGET_MS.logs,
-  log_delete: LOADING_BUDGET_MS.logs,
-  log_event: LOADING_BUDGET_MS.logs,
-  vault_group_list: LOADING_BUDGET_MS.default,
-  vault_group_create: LOADING_BUDGET_MS.default,
-  vault_group_update: LOADING_BUDGET_MS.default,
-  vault_group_delete: LOADING_BUDGET_MS.default,
-  vault_group_set_collapsed: LOADING_BUDGET_MS.default,
-  vault_group_reorder: LOADING_BUDGET_MS.default,
-  vault_group_reorder_grouped_vaults: LOADING_BUDGET_MS.default,
-  vault_group_repair: LOADING_BUDGET_MS.default,
-};
-
 function unwrapInvokeEnvelope(envelope: unknown): unknown {
   if (typeof envelope !== "object" || envelope === null) {
     throw new RpcError(BRIDGE.INVALID_RESPONSE, "invoke: expected envelope object", envelope);
@@ -94,13 +63,14 @@ function invokeFailure(error: unknown): RpcError {
 
 /**
  * Call CORE RPC through UniFFI `invoke`. Same envelope as desktop daemon.
- * Honors `METHOD_TIMEOUT_MS` / `LOADING_BUDGET_MS` like desktop `desktopInvokeRaw`.
+ * Honors `CORE_RPC_TIMEOUT_MS` / `LOADING_BUDGET_MS` like desktop `desktopInvokeRaw`.
  * @throws {RpcError}
  */
 export async function nativeInvokeRaw(
   method: string,
   params?: Record<string, unknown>,
-  timeoutMs = METHOD_TIMEOUT_MS[method] ?? DEFAULT_INVOKE_TIMEOUT_MS,
+  timeoutMs = (CORE_RPC_TIMEOUT_MS as Record<string, number | undefined>)[method] ??
+    DEFAULT_INVOKE_TIMEOUT_MS,
 ): Promise<unknown> {
   const native = getUprivCoreNative();
   if (!native) {
@@ -142,14 +112,6 @@ export async function nativeInvokeRaw(
   } finally {
     if (timer) clearTimeout(timer);
   }
-}
-
-export function rpcAppVersion(): string {
-  const native = getUprivCoreNative();
-  if (!native) {
-    throw new RpcError(BRIDGE.BRIDGE_INVOKE_FAILED, "UprivCore native module not loaded");
-  }
-  return native.appVersion();
 }
 
 export async function rpcAppSettingsGet(): Promise<{
@@ -212,8 +174,9 @@ export async function rpcAppSettingsParseToml(toml: string): Promise<AppSettings
 
 /**
  * Pure `AppSettingsConfig` → `settings.toml` serialization preserving
- * `[package]` / `[app].last_opened_vault` from `previousToml` (when provided).
- * Symmetric with [`rpcAppSettingsParseToml`] for the Android SAF flow.
+ * `[package]` from `previousToml` (when provided). `[app].last_opened_vault`
+ * comes from `settings` (empty clears). Symmetric with
+ * [`rpcAppSettingsParseToml`] for the Android SAF flow.
  */
 export async function rpcAppSettingsSerializeToml(
   settings: AppSettingsConfig,
@@ -411,10 +374,17 @@ export async function rpcLogDelete(filenames: readonly string[]): Promise<void> 
   await nativeInvokeRaw(CORE_RPC_COMMANDS.LOG_DELETE, { filenames: [...filenames] });
 }
 
-export async function rpcLogEvent(event: "vault_hidden"): Promise<void> {
+export async function rpcLogEvent(
+  event: "vault_hidden" | "vault_group_hidden" | "ui_crash",
+): Promise<void> {
   await nativeInvokeRaw(CORE_RPC_COMMANDS.LOG_EVENT, { event });
 }
 
+/**
+ * Vault-group RPC helpers are wired ahead of live mobile vault ids on disk.
+ * Keep them ready so group UI can switch from mock storage once vault list/core
+ * integration is activated on mobile release builds.
+ */
 export async function rpcVaultGroupList(): Promise<VaultGroupListResult> {
   return parseVaultGroupListResult(await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_GROUP_LIST));
 }
@@ -426,6 +396,7 @@ export async function rpcVaultGroupCreate(input: VaultGroupCreateInput): Promise
     groupedVaults: input.groupedVaults ?? [],
     groupedVaultSort: input.groupedVaultSort,
     groupedVaultSortDirection: input.groupedVaultSortDirection,
+    hidden: input.hidden,
   });
   if (typeof raw !== "object" || raw === null) {
     throw new RpcError(BRIDGE.INVALID_RESPONSE, "vault_group_create: expected object", raw);
@@ -442,6 +413,7 @@ export async function rpcVaultGroupUpdate(input: VaultGroupUpdateInput): Promise
     groupedVaults: input.groupedVaults,
     groupedVaultSort: input.groupedVaultSort,
     groupedVaultSortDirection: input.groupedVaultSortDirection,
+    hidden: input.hidden,
   });
   if (typeof raw !== "object" || raw === null) {
     throw new RpcError(BRIDGE.INVALID_RESPONSE, "vault_group_update: expected object", raw);

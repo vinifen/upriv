@@ -7,6 +7,8 @@
 **Status:** Approved direction (replaces Flutter mobile stack in SDD §9.1)  
 **Companion:** `prd.md`, `sdd.md`
 
+> **Rest layout, storage modes, backups, and export:** [`.agent/SECURITY-CRYPTO.md`](../../.agent/SECURITY-CRYPTO.md). Rest = `contents/`; lock = close (flush the session); `7zz` only for **export `.7z`**.
+
 ---
 
 ## 1. Summary
@@ -48,10 +50,10 @@ Single crate, compiled per target triple:
 | Concern | Owner |
 |---------|--------|
 | RAM session, `zeroize` passwords | `upriv-core` |
-| Crypto (Argon2id, AEAD) | `upriv-core` |
+| Crypto (Argon2id + XChaCha20-Poly1305) | `upriv-core` |
 | Disk / SAF via `VaultStorage` trait | `upriv-core` |
-| `7zz` spawn, stream, temp files | `upriv-core` |
-| Vault state machine (`open` / `closed` / `sealed`) | `upriv-core` |
+| `7zz` spawn for **export `.7z` only** (stream logical content; no plaintext temp tree) | `upriv-core` |
+| Vault state machine (`open` / `closed`) | `upriv-core` |
 | Recovery, manifest, lockfile | `upriv-core` |
 | FUSE mount (Linux desktop) | `upriv-core` + platform module |
 
@@ -89,7 +91,7 @@ Vault crypto and disk I/O never run in the renderer. When vault RPCs ship, passw
 | `rpcAppVersion()` / `rpcAppShutdown()` | React (`lib/rpc.ts`) | Per-method helpers with response validation |
 | `CORE_RPC_COMMANDS` | `@upriv/shared` | Rust ops — desktop + mobile (`app_version`, future `vault_*`) |
 | `DESKTOP_ONLY_RPC_COMMANDS` | `@upriv/shared` | Daemon ops — Electron only (`app_shutdown`); not mobile JNI |
-| `SHELL_ONLY_RPC_COMMANDS` | `@upriv/shared` | Main process only (`app_exit`); never sent to daemon |
+| `SHELL_ONLY_RPC_COMMANDS` | `@upriv/shared` | Main process only (`app_exit`, `pick_directory`); never sent to daemon |
 | `lib/commands.ts` | Desktop | Re-exports shared enums as `DAEMON_COMMANDS` / `SHELL_COMMANDS` |
 | `RpcErrorBody` / `RpcError` | `@upriv/shared` (`core-rpc/errors.ts`) | Wire envelope + protocol codes |
 | `VAULT_ERROR_CODES` | `@upriv/shared` (`vault/errors/codes.ts`) | upriv-core domain wire codes (`snake_case`) |
@@ -119,7 +121,7 @@ Errors are **not** centralized. Each origin owns its map:
 | Form validation | `vault-create/validate.ts` | `vault-create/errorMessages.ts` |
 | Lifecycle pipeline (client) | `vault-lifecycle/errors/codes.ts` | `vault-lifecycle/errors/messages.ts` |
 
-**Lifecycle pipeline timeouts:** IPC/daemon RPC use ~30s defaults (`invoke.ts`, `daemon.ts`) — enough for `app_version`, not for `7zz`. Per-vault open/close timeouts and subprocess kill **must** live in `upriv-core` when vault RPC lands; see SDD §8.2.2 (*Pipeline — erros e anti-travamento*).
+**Lifecycle pipeline timeouts:** IPC/daemon RPC use ~30s defaults (`invoke.ts`, `daemon.ts`) — enough for `app_version`, not for open/close flush or **export `.7z`**. Those timeouts and subprocess kill **must** live in `upriv-core` when vault RPC lands; see SDD §8.2.2 (*Pipeline — erros e anti-travamento*).
 
 | App settings (client) | — | `app-settings/errorMessages.ts` |
 | File rename (client) | `file-tree/fileNameValidation.ts` | `file-tree/errorMessages.ts` |
@@ -144,13 +146,13 @@ One **native executable** per OS/architecture. Bundled inside or beside it:
 - Chromium shell (Electron)
 - Compiled frontend assets (`renderer-out/` → bundled as `renderer/`)
 - `upriv-daemon` sidecar + `upriv-core`
-- `7zz` for the target triple
+- `7zz` for the target triple (**export `.7z` only** — close flushes `contents/`)
 
 **Validated builds (2026-07-03):**
 
 - Linux: `dev/target/release/bundle/electron/Upriv-*.AppImage` (portable), `upriv-electron_*.deb` (system install)
 
-**Current scaffold (not yet bundled):** per-target `7zz` binary in `extraResources` — add when vault archive RPC lands in `upriv-core`.
+**Current scaffold (not yet bundled):** per-target `7zz` binary in `extraResources` — add when **export `.7z`** RPC lands in `upriv-core`.
 
 Build commands: see `dev/README.md` and `dev/apps/desktop/README.md`.
 
@@ -161,7 +163,7 @@ Build commands: see `dev/README.md` and `dev/apps/desktop/README.md`.
 - React Native (JS bundle + native views)
 - Bridge (Expo module + UniFFI)
 - `libupriv_ffi.so` (arm64-v8a / armeabi-v7a / x86_64) — links `upriv-rpc` + `upriv-core` as rlibs
-- `7zz` (`arm64-v8a`, `jniLibs` or assets)
+- `7zz` (`arm64-v8a`, `jniLibs` or assets) for **export `.7z`**
 
 There is **no standalone `.exe` on Android** — the user installs one app icon; Rust is a native library inside the APK.
 
@@ -179,7 +181,7 @@ dev/
 │   ├── desktop/              # React web UI (Vite)
 │   ├── electron/             # Electron main/preload + electron-builder
 │   ├── mobile/               # Expo / React Native + UniFFI Expo module
-│   └── shared/               # @upriv/shared — TS domain types + service interfaces
+│   └── shared/               # @upriv/shared — TS domain types + service interfaces (no React)
 ├── crates/
 │   ├── upriv-core/           # Shared Rust core (rlib)
 │   ├── upriv-rpc/            # Shared CORE RPC handlers (daemon + FFI)
@@ -264,8 +266,8 @@ See SDD §9.4 for Android SAF flow.
 | ADR-05 | Desktop UI (rejected) | ~~React Native desktop for Linux~~ | No official stable RN for Linux; Electron is the desktop path |
 | ADR-06 | Core | Single `upriv-core` crate | One implementation of crypto, 7z, states; compile to `.so`/`.dll`/linked exe per target |
 | ADR-07 | Security boundary | UI = presentation; Rust = secrets + I/O | Minimize attack surface in JS; passwords never persisted in UI layer |
-| ADR-08 | Android packaging | Single APK | RN + UniFFI bridge + `libupriv_ffi.so` + `7zz` in one installable package |
-| ADR-09 | Desktop packaging | Single executable per OS/arch | Electron + `upriv-daemon`; `7zz` embedded |
+| ADR-08 | Android packaging | Single APK | RN + UniFFI bridge + `libupriv_ffi.so` + `7zz` (export `.7z`) in one installable package |
+| ADR-09 | Desktop packaging | Single executable per OS/arch | Electron + `upriv-daemon`; `7zz` embedded for export `.7z` |
 | ADR-10 | RN on Windows/macOS desktop | Not planned | Desktop stays React web + Electron; avoids duplicate desktop stacks |
 
 ---
@@ -284,11 +286,11 @@ See SDD §9.4 for Android SAF flow.
 
 ## 9. Implementation order
 
-1. Implement **`dev/crates/upriv-core/`** (crypto, 7z, state machine).
+1. Implement **`dev/crates/upriv-core/`** (`contents/` crypto, open/close flush, export `.zip` / `.7z`).
 2. Implement **`VaultStorage`** (desktop `std::fs` first).
 3. Wire RPC handlers in `upriv-rpc` (shared by `upriv-daemon` + `upriv-ffi`) to `upriv-core` only.
 4. **`dev/apps/shared/`** (`@upriv/shared`) — domain types, service interfaces, and UI locale catalogs (`locales/`).
-5. Complete desktop v1 (Linux FUSE + Windows WinFsp, open/close/seal).
+5. Complete desktop v1 (Linux FUSE + Windows WinFsp, open/close into `contents/`).
 6. **`dev/apps/mobile/`** — native module → `upriv-core` (JNI / UniFFI).
 7. Android: SAF adapter, APK packaging, OTG flows (PRD §3.6).
 
@@ -303,4 +305,4 @@ See SDD §9.4 for Android SAF flow.
 
 ---
 
-*When this document conflicts with older SDD mentions of Flutter, **this document wins** for stack choice (2026-05-31). Product requirements in PRD §3.6 (SAF, APK, workspace on HD) are unchanged.*
+*When this document conflicts with older SDD mentions of Flutter, **this document wins** for stack choice (2026-05-31). Rest layout, modes, backups, and export: SECURITY-CRYPTO wins. Product requirements in PRD §3.6 (SAF, APK, workspace on HD) are unchanged.*

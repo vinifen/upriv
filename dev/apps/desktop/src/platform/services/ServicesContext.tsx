@@ -52,6 +52,10 @@ export function useCreateVaultService(): AppServices["createVault"] {
   return useServices().createVault;
 }
 
+export function useVaultSecurityService(): AppServices["vaultSecurity"] {
+  return useServices().vaultSecurity;
+}
+
 export function useVaultRootService(): AppServices["vaultRoot"] {
   return useServices().vaultRoot;
 }

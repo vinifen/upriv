@@ -6,6 +6,7 @@ import {
   VAULT_ROOT_ERROR_CODES,
   VAULT_ROOT_GATE_IDLE,
   isRpcError,
+  sameVaultRootPath,
   type AppDistribution,
   type LocaleId,
   type VaultRootMode,
@@ -21,11 +22,6 @@ import { spacing } from "@/theme/tokens";
 import { Modal, Select, type SelectOption } from "@/components/ui";
 import { VaultRootLocationSection } from "./VaultRootLocationSection";
 import { VaultRootConfirmFooter } from "./VaultRootConfirmFooter";
-
-function samePathKey(a: string, b: string): boolean {
-  const norm = (p: string) => p.trim().replace(/[/\\]+$/g, "");
-  return norm(a) === norm(b);
-}
 
 interface VaultRootSetupScreenProps {
   open: boolean;
@@ -195,13 +191,13 @@ export function VaultRootSetupScreen({
       if (
         applied?.mode === "custom_root" &&
         current.replacePolicy == null &&
-        samePathKey(applied.rootPath, nextPath)
+        sameVaultRootPath(applied.rootPath, nextPath)
       ) {
         if (gen !== busyGen.current) return;
         await finish(applied.rootPath, "custom_root", gen);
         return;
       }
-      if (applied && !samePathKey(applied.rootPath, nextPath)) {
+      if (applied && !sameVaultRootPath(applied.rootPath, nextPath)) {
         diskApplied.current = null;
       }
       const { rootPath } = await vaultRoot.setupAtPath(nextPath, {
@@ -250,6 +246,7 @@ export function VaultRootSetupScreen({
     <Modal
       open={open}
       title={t("modal.vault_root_setup.title")}
+      titleIcon="folder"
       onClose={() => undefined}
       dismissible={false}
       panelClassName="max-w-lg"
@@ -290,7 +287,7 @@ export function VaultRootSetupScreen({
         <Text style={typography.bodyMuted}>{t(setupBodyKey)}</Text>
 
         <VaultRootLocationSection
-          config={{ vault_root_mode: mode, upriv_root_path: path }}
+          config={{ vault_root_mode: mode, upriv_root_path: path, last_opened_vault: "" }}
           onChange={onDraftChange}
           savedVaultRootMode="default_root"
           savedRootPath=""

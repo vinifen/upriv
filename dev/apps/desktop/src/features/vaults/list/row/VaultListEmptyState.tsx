@@ -4,15 +4,17 @@ import { useTranslation } from "@/i18n";
 
 interface VaultListEmptyStateProps {
   allVaultsHidden?: boolean;
+  searchNoMatches?: boolean;
   onCreateFromScratch: () => void;
-  onImportArchive: () => void;
+  onImportPackage: () => void;
 }
 
 /** Empty vault list: create / import CTAs (and drop hint) instead of plain copy. */
 export function VaultListEmptyState({
   allVaultsHidden = false,
+  searchNoMatches = false,
   onCreateFromScratch,
-  onImportArchive,
+  onImportPackage,
 }: VaultListEmptyStateProps) {
   const { t } = useTranslation();
 
@@ -21,6 +23,17 @@ export function VaultListEmptyState({
       <p className="py-16 text-center font-mono text-sm uppercase tracking-widest text-on-surface-variant">
         {t("empty.vaults_all_hidden")}
       </p>
+    );
+  }
+
+  if (searchNoMatches) {
+    return (
+      <div className="space-y-2 py-16 text-center">
+        <p className="font-mono text-sm uppercase tracking-widest text-on-surface-variant">
+          {t("empty.vaults_search")}
+        </p>
+        <p className="text-sm text-on-surface-variant">{t("empty.vaults_search_hint")}</p>
+      </div>
     );
   }
 
@@ -38,7 +51,7 @@ export function VaultListEmptyState({
           type="button"
           variant="primary"
           size="md"
-          className="gap-2 rounded-xl"
+          className="gap-2"
           onClick={onCreateFromScratch}
         >
           <Icon name="add" size={18} />
@@ -48,11 +61,11 @@ export function VaultListEmptyState({
           type="button"
           variant="secondary"
           size="md"
-          className="gap-2 rounded-xl"
-          onClick={onImportArchive}
+          className="gap-2"
+          onClick={onImportPackage}
         >
           <Icon name="archive" size={18} />
-          {t("empty.action.import_archive")}
+          {t("empty.action.import_file")}
         </Button>
       </div>
 

@@ -1,0 +1,10 @@
+{
+  "eslint.workingDirectories": [
+    { "directory": "dev/apps/shared", "changeProcessCWD": true },
+    { "directory": "dev/apps/desktop", "changeProcessCWD": true },
+    { "directory": "dev/apps/electron", "changeProcessCWD": true },
+    { "directory": "dev/apps/mobile", "changeProcessCWD": true }
+  ],
+  "eslint.nodePath": "dev/js-lint/node_modules",
+  "prettier.prettierPath": "dev/js-lint/node_modules/prettier"
+}

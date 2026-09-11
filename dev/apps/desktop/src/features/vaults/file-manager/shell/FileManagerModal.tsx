@@ -1,12 +1,15 @@
-import { type ReactNode, useEffect, useId } from "react";
+import { type ReactNode, useEffect, useId, useRef } from "react";
 import { createPortal } from "react-dom";
-import { Icon } from "@/components/icons";
-import { ModalChromeButton } from "@/components/ui";
+import { Icon, type IconName } from "@/components/icons";
+import { ModalChromeButton, ModalTitleCluster } from "@/components/ui";
+import { acquireScrollLock, releaseScrollLock } from "@/components/ui/scrollLock";
 import { useTranslation } from "@/i18n";
 
 interface FileManagerModalProps {
   open: boolean;
   title: string;
+  contextTitle?: string;
+  titleIcon?: IconName;
   onMinimize: () => void;
   onDismiss: () => void;
   /** When true, Escape and backdrop click do not minimize (unsaved dialog is active). */
@@ -17,6 +20,8 @@ interface FileManagerModalProps {
 export function FileManagerModal({
   open,
   title,
+  contextTitle,
+  titleIcon = "file-manager",
   onMinimize,
   onDismiss,
   suspendMinimize = false,
@@ -24,6 +29,8 @@ export function FileManagerModal({
 }: FileManagerModalProps) {
   const { t } = useTranslation();
   const titleId = useId();
+  const contextId = useId();
+  const scrimStart = useRef<{ x: number; y: number } | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -39,11 +46,8 @@ export function FileManagerModal({
 
   useEffect(() => {
     if (!open) return;
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => {
-      document.body.style.overflow = prev;
-    };
+    acquireScrollLock();
+    return () => releaseScrollLock();
   }, [open]);
 
   if (!open) return null;
@@ -53,43 +57,66 @@ export function FileManagerModal({
       <div
         className="absolute inset-0 bg-[var(--modal-scrim)] backdrop-blur-sm"
         aria-hidden
-        onClick={suspendMinimize ? undefined : onMinimize}
+        onPointerDown={
+          suspendMinimize
+            ? undefined
+            : (event) => {
+                scrimStart.current = { x: event.clientX, y: event.clientY };
+              }
+        }
+        onClick={
+          suspendMinimize
+            ? undefined
+            : (event) => {
+                const start = scrimStart.current;
+                scrimStart.current = null;
+                if (!start) {
+                  onMinimize();
+                  return;
+                }
+                const dx = event.clientX - start.x;
+                const dy = event.clientY - start.y;
+                if (dx * dx + dy * dy <= 100) onMinimize();
+              }
+        }
       />
       <div className="pointer-events-none relative z-10 flex h-[100dvh] w-full items-center justify-center p-0 sm:h-full">
         <div
           role="dialog"
           aria-modal="true"
-          aria-labelledby={titleId}
+          aria-labelledby={contextTitle ? `${titleId} ${contextId}` : titleId}
           className={[
             "pointer-events-auto flex h-full min-h-0 w-full flex-col overflow-hidden",
             "bg-surface-container-high shadow-modal",
             "rounded-none",
-            "sm:h-[calc(100vh-48px)] sm:max-h-[calc(100vh-48px)] sm:w-[calc(100vw-72px)] sm:max-w-[calc(100vw-72px)] sm:rounded-xl",
+            "sm:h-[calc(100vh-48px)] sm:max-h-[calc(100vh-48px)] sm:w-[calc(100vw-72px)] sm:max-w-[calc(100vw-72px)] sm:rounded-2xl",
           ].join(" ")}
           onMouseDown={(event) => event.stopPropagation()}
           onClick={(event) => event.stopPropagation()}
         >
           <header className="flex min-h-11 shrink-0 items-center justify-between gap-2 px-4 sm:min-h-12 sm:px-5">
-            <h2
-              id={titleId}
-              className="min-w-0 flex-1 truncate font-display text-sm font-semibold leading-none text-on-surface sm:text-base"
-            >
-              {title}
-            </h2>
-            <div className="flex shrink-0 items-center gap-0.5">
+            <ModalTitleCluster
+              titleId={titleId}
+              contextId={contextId}
+              title={title}
+              contextTitle={contextTitle}
+              titleIcon={titleIcon}
+              compact
+            />
+            <div className="flex shrink-0 items-center self-center gap-0.5">
               <ModalChromeButton
                 onClick={onMinimize}
                 aria-label={t("modal.file_manager.action.minimize")}
                 title={t("modal.file_manager.action.minimize")}
               >
-                <Icon name="minus" size={18} />
+                <Icon name="minus" size={18} className="block" />
               </ModalChromeButton>
               <ModalChromeButton
                 onClick={onDismiss}
                 aria-label={t("modal.file_manager.action.dismiss")}
                 title={`${t("modal.file_manager.action.dismiss")}. ${t("modal.file_manager.action.dismiss_help")}`}
               >
-                ×
+                <Icon name="close" size={18} className="block" />
               </ModalChromeButton>
             </div>
           </header>

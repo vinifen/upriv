@@ -9,6 +9,8 @@ module.exports = function (api) {
           root: ["."],
           alias: {
             "@": "./src",
+            "@upriv/shared/react": "../shared/src/react",
+            "@upriv/shared/testing": "../shared/src/testing",
             "@upriv/shared": "../shared/src",
             "upriv-core": "./modules/upriv-core/src",
           },

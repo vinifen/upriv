@@ -13,6 +13,7 @@ mod distribution;
 pub(crate) mod fs_env;
 mod init;
 mod resolve;
+mod workspace;
 
 pub use distribution::{
     default_vault_root_anchor, default_vault_root_anchor_for, detect_app_distribution,
@@ -22,17 +23,26 @@ pub use distribution::{
 pub use fs_env::env_default_root_anchor;
 pub use init::{
     initialize_vault_root, initialize_vault_root_with_bootstrap, inspect_vault_root_at,
-    open_or_initialize_vault_root, open_or_initialize_vault_root_with_options,
-    open_or_initialize_vault_root_with_policy,
-    open_or_initialize_vault_root_with_policy_and_bootstrap, rename_incomplete_upriv,
-    validate_existing_vault_root, IncompleteReplacePolicy, OpenedVaultRoot,
-    VaultRootBootstrapPrefs, VaultRootDirStatus,
+    open_or_initialize_vault_root, rename_incomplete_upriv, validate_existing_vault_root,
+    IncompleteReplacePolicy, OpenedVaultRoot, VaultRootBootstrapPrefs, VaultRootDirStatus,
+};
+#[cfg(test)]
+#[allow(unused_imports)]
+pub(crate) use init::{
+    open_or_initialize_vault_root_with_options, open_or_initialize_vault_root_with_policy,
+    open_or_initialize_vault_root_with_policy_and_bootstrap,
 };
 pub use resolve::{
     app_home_dir, binary_dir, deactivate_vault_root_alias_everywhere, discover_vault_root_upward,
     read_vault_root_alias, resolve_vault_root, setup_default_root_anchor, vault_root_alias_path,
     write_vault_root_alias, write_vault_root_alias_for_root, ResolveVaultRoot,
     ResolveVaultRootOptions, VaultRootAlias, VaultRootMode, VaultRootSource, VAULT_ROOT_ALIAS_FILE,
+};
+pub use workspace::{
+    is_absolute_filesystem_path, is_reserved_upriv_workspace_path, needs_workspace_setup_on_open,
+    normalize_mount_workspace_path, path_is_under_reserved_upriv_tree, resolve_mount_parent_path,
+    resolve_vault_mount_point, suggested_default_workspace_path, validate_mount_workspace_path,
+    validate_workspace_global_path, RESERVED_UPRIV_WORKSPACE_CHILDREN, WORKSPACE_PATH_DEFAULT,
 };
 
 /// Crate-internal: validate/open a default_root candidate path (used by `config::app_settings`).
@@ -87,7 +97,6 @@ const VAULTS_DIR_REL: &str = ".upriv/vaults";
 const STATE_FILE_REL: &str = ".upriv/state.json";
 const LOGS_DIR_REL: &str = ".upriv/logs";
 const APP_DIR_REL: &str = ".upriv/app";
-const WORKSPACE_DIR_REL: &str = "workspace";
 const RUNTIME_DIR_REL: &str = ".upriv/runtime";
 
 /// Atomically write `bytes` to `path` (temp + `sync_all` + rename).
@@ -188,57 +197,85 @@ impl VaultRoot {
         self.root.join(APP_DIR_REL)
     }
 
+    /// Suggested default only: `<root>/workspace`.
+    ///
+    /// **Do not use for vault open.** Live mount parents come from
+    /// `[workspace].path` / `[mount].workspace_path` via
+    /// [`resolve_vault_mount_point`] / [`resolve_mount_parent_path`]. This helper
+    /// is a UI/default hint only — open must never assume `<root>/workspace`.
     pub fn workspace_dir(&self) -> PathBuf {
-        self.root.join(WORKSPACE_DIR_REL)
+        suggested_default_workspace_path(&self.root)
     }
 
-    /// User-visible mount target: `workspace/{display_name}/`.
+    /// Suggested leaf under the default workspace parent: `workspace/{display_name}/`.
+    ///
+    /// **Do not use for vault open.** Prefer [`resolve_vault_mount_point`] with the
+    /// configured global + mount paths so the session folder matches settings.
     pub fn workspace_vault_dir(&self, display_name: &str) -> PathBuf {
         self.workspace_dir()
-            .join(sanitize_path_component(display_name))
+            .join(sanitize_display_leaf(display_name))
     }
 
     pub fn vaults_dir(&self) -> PathBuf {
         self.root.join(VAULTS_DIR_REL)
     }
 
-    pub fn vault_dir(&self, vault_id: &str) -> PathBuf {
-        self.vaults_dir().join(sanitize_path_component(vault_id))
+    pub fn vault_dir(&self, vault_id: &str) -> Result<PathBuf> {
+        Ok(self.vaults_dir().join(vault_id_component(vault_id)?))
     }
 
-    pub fn vault_config_path(&self, vault_id: &str) -> PathBuf {
-        self.vault_dir(vault_id).join("config.toml")
+    pub fn vault_config_path(&self, vault_id: &str) -> Result<PathBuf> {
+        Ok(self.vault_dir(vault_id)?.join("config.toml"))
     }
 
-    pub fn vault_persistence_path(&self, vault_id: &str) -> PathBuf {
-        self.vault_dir(vault_id).join("persistence.json")
+    pub fn vault_persistence_path(&self, vault_id: &str) -> Result<PathBuf> {
+        Ok(self.vault_dir(vault_id)?.join("persistence.json"))
     }
 
-    /// Main archive: `vaults/<id>/archive/{display_name}.7z` (display name not normalized).
-    pub fn vault_archive_path(&self, vault_id: &str, display_name: &str) -> PathBuf {
-        self.vault_dir(vault_id)
-            .join("archive")
-            .join(format!("{}.7z", sanitize_path_component(display_name)))
+    /// Vault body at rest: `vaults/<id>/contents/` (`vault.header` + index + chunks).
+    pub fn vault_contents_dir(&self, vault_id: &str) -> Result<PathBuf> {
+        Ok(self.vault_dir(vault_id)?.join("contents"))
     }
 
-    pub fn vault_store_dir(&self, vault_id: &str) -> PathBuf {
-        self.vault_dir(vault_id).join("store")
+    /// Suggested export filename only (`{display_name}.zip` or `.7z`).
+    /// Never a path under `vaults/<id>/` — a durable twin beside `contents/` is forbidden.
+    /// Sanitizes path-illegal characters for the OS save dialog; does **not** change `display_name`.
+    pub fn vault_suggested_export_filename(display_name: &str, seven_zip: bool) -> String {
+        let name = sanitize_filename_base(display_name);
+        if seven_zip {
+            format!("{name}.7z")
+        } else {
+            format!("{name}.zip")
+        }
     }
 
-    pub fn vault_backups_dir(&self, vault_id: &str) -> PathBuf {
-        self.vault_dir(vault_id).join("backups")
+    pub fn vault_backups_dir(&self, vault_id: &str) -> Result<PathBuf> {
+        Ok(self.vault_dir(vault_id)?.join("backups"))
     }
 
-    pub fn runtime_lock_path(&self, vault_id: &str) -> PathBuf {
-        self.root
+    pub fn runtime_lock_path(&self, vault_id: &str) -> Result<PathBuf> {
+        Ok(self
+            .root
             .join(RUNTIME_DIR_REL)
-            .join(format!("{}.lock", sanitize_path_component(vault_id)))
+            .join(format!("{}.lock", vault_id_component(vault_id)?)))
     }
 }
 
 /// Reject `..`, empty, separators, Windows reserved names / illegal chars, and controls
 /// so joins cannot escape the vault-root or create invalid OS paths.
-fn sanitize_path_component(name: &str) -> &str {
+pub(crate) fn vault_id_component(name: &str) -> Result<&str> {
+    let trimmed = name.trim();
+    if !slug_id_is_valid(trimmed) {
+        return Err(UprivError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("invalid vault id path component: {trimmed}"),
+        )));
+    }
+    Ok(trimmed)
+}
+
+/// Display-name leaf fallback for workspace mount folders.
+pub(crate) fn sanitize_display_leaf(name: &str) -> &str {
     let trimmed = name.trim();
     if trimmed.is_empty()
         || trimmed == "."
@@ -259,6 +296,32 @@ fn sanitize_path_component(name: &str) -> &str {
     } else {
         trimmed
     }
+}
+
+/// Export filename base. Unlike `sanitize_path_component`, which guards path
+/// joins and must fail closed, this keeps the user's name recognizable by
+/// replacing illegal characters (`Notes: 2026` → `Notes_ 2026`).
+fn sanitize_filename_base(display_name: &str) -> String {
+    let replaced: String = display_name
+        .trim()
+        .chars()
+        .map(|c| {
+            if matches!(c, '/' | '\\' | '<' | '>' | ':' | '"' | '|' | '?' | '*') || c.is_control() {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect();
+    let trimmed = replaced.trim();
+    if trimmed.is_empty()
+        || trimmed == "."
+        || trimmed == ".."
+        || is_windows_reserved_device_name(trimmed)
+    {
+        return "vault".to_string();
+    }
+    trimmed.to_string()
 }
 
 /// Windows device names (`CON`, `NUL`, `COM1`, …) including `name.ext` forms.
@@ -314,21 +377,29 @@ pub(crate) fn slug_id_is_valid(id: &str) -> bool {
 mod tests {
     use super::*;
 
-    fn prod_example_root() -> PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../..")
-            .join("prod-example")
-    }
+    use crate::test_support::{vault_root_with, VaultSpec};
 
     #[test]
-    fn discovers_prod_example_root() {
-        let root = VaultRoot::discover(prod_example_root()).expect("prod-example vault root");
+    fn discovers_minimal_vault_root() {
+        let (_tmp, root) = vault_root_with(&[
+            VaultSpec::upriv_plain("plain-folder-demo", "Plain Folder Demo", 3),
+            VaultSpec::encrypted("my-encrypted-notes", "My Encrypted Notes", 4),
+        ]);
         assert!(root.settings_path().is_file());
-        assert!(root.vault_config_path("plain-folder-demo").is_file());
-        assert!(root.vault_config_path("my-encrypted-notes").is_file());
         assert!(root
-            .vault_archive_path("my-encrypted-notes", "My Encrypted Notes")
+            .vault_config_path("plain-folder-demo")
+            .unwrap()
             .is_file());
+        assert!(root
+            .vault_config_path("my-encrypted-notes")
+            .unwrap()
+            .is_file());
+        assert_eq!(
+            root.vault_contents_dir("my-encrypted-notes").unwrap(),
+            root.vault_dir("my-encrypted-notes")
+                .unwrap()
+                .join("contents")
+        );
     }
 
     #[test]
@@ -349,20 +420,62 @@ mod tests {
 
     #[test]
     fn workspace_path_keeps_display_name() {
-        let root = VaultRoot::new("/tmp/fake-root");
         assert_eq!(
-            root.workspace_vault_dir("My Encrypted Notes"),
+            resolve_vault_mount_point(
+                "/tmp/fake-root/workspace",
+                WORKSPACE_PATH_DEFAULT,
+                "My Encrypted Notes",
+            )
+            .unwrap(),
             PathBuf::from("/tmp/fake-root/workspace/My Encrypted Notes")
+        );
+        assert_eq!(
+            resolve_vault_mount_point(
+                "/tmp/fake-root/workspace",
+                "/custom/mount/parent",
+                "My Encrypted Notes",
+            )
+            .unwrap(),
+            PathBuf::from("/custom/mount/parent/My Encrypted Notes")
         );
     }
 
     #[test]
     fn sanitize_rejects_windows_reserved_and_illegal() {
-        assert_eq!(sanitize_path_component("CON"), "_");
-        assert_eq!(sanitize_path_component("nul.txt"), "_");
-        assert_eq!(sanitize_path_component("a:b"), "_");
-        assert_eq!(sanitize_path_component("a*b"), "_");
-        assert_eq!(sanitize_path_component("ok-name"), "ok-name");
+        assert!(vault_id_component("CON").is_err());
+        assert!(vault_id_component("nul.txt").is_err());
+        assert!(vault_id_component("a:b").is_err());
+        assert!(vault_id_component("a*b").is_err());
+        assert_eq!(vault_id_component("ok-name").unwrap(), "ok-name");
+        assert_eq!(sanitize_display_leaf("CON"), "_");
+    }
+
+    #[test]
+    fn suggested_export_filename_sanitizes_and_defaults() {
+        assert_eq!(
+            VaultRoot::vault_suggested_export_filename("My notes", false),
+            "My notes.zip"
+        );
+        assert_eq!(
+            VaultRoot::vault_suggested_export_filename("a/b:c", true),
+            "a_b_c.7z"
+        );
+        assert_eq!(
+            VaultRoot::vault_suggested_export_filename("Notes: 2026", false),
+            "Notes_ 2026.zip"
+        );
+        assert_eq!(
+            VaultRoot::vault_suggested_export_filename("a\u{7f}b", false),
+            "a_b.zip"
+        );
+        assert_eq!(
+            VaultRoot::vault_suggested_export_filename("  ", false),
+            "vault.zip"
+        );
+        assert_eq!(
+            VaultRoot::vault_suggested_export_filename("CON", false),
+            "vault.zip"
+        );
     }
 
     #[test]

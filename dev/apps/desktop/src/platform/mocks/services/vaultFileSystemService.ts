@@ -16,7 +16,7 @@ import {
   resetVaultFileSession,
   setVaultFileContent,
   vaultFileLanguageFromPath,
-} from "@/platform/mocks/stores/fileSystem";
+} from "@upriv/shared/testing";
 
 /** Prototype workspace FS — in-memory tree until FUSE/mount is wired. */
 export const mockVaultFileSystemService: VaultFileSystemService = {

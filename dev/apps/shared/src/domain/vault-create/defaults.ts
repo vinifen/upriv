@@ -1,3 +1,5 @@
+import { DEFAULT_KDF_UNLOCK_PRESET } from "../vault-settings";
+import { WORKSPACE_PATH_DEFAULT } from "../workspace";
 import type { CreateVaultDraft } from "./types";
 
 export function createVaultDraftEqual(a: CreateVaultDraft, b: CreateVaultDraft): boolean {
@@ -32,13 +34,9 @@ export function createEmptyCreateVaultDraft(existingOrders: readonly number[]): 
       mode: "keep_last",
       keep_last: 1,
     },
-    seven_zip: {
-      archive_mode: "encrypt_only",
-      encrypt_file_names: true,
-      compression_level: 0,
-    },
+    kdf: { unlock_preset: DEFAULT_KDF_UNLOCK_PRESET },
     storage: { mode: "encrypted_dir" },
-    close: { default_action: "close" },
+    mount: { workspace_path: WORKSPACE_PATH_DEFAULT },
     security: {
       mode: "session_ram",
       secure_wipe_workspace: true,

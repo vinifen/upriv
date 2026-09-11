@@ -1,31 +1,17 @@
 import type { VaultSettingsConfig } from "@upriv/shared";
-
-function vaultPaths(
-  id: string,
-  displayName: string,
-): Pick<VaultSettingsConfig["vault"], "id" | "vault_file" | "store_dir" | "backups_dir"> {
-  return {
-    id,
-    vault_file: `archive/${displayName}.7z`,
-    store_dir: "store",
-    backups_dir: "backups",
-  };
-}
+import { cloneJson } from "../cloneJson";
 
 const DEFAULTS: VaultSettingsConfig = {
   vault: {
     id: "",
     display_name: "",
     order: 0,
-    vault_file: "",
-    store_dir: "store",
-    backups_dir: "backups",
     password_hint: "",
     note: "",
     hidden: false,
   },
   storage: { mode: "encrypted_dir" },
-  close: { default_action: "close" },
+  mount: { workspace_path: "default" },
   backup: { enabled: true, mode: "keep_last", keep_last: 1 },
   security: {
     mode: "session_ram",
@@ -64,7 +50,7 @@ const MOCK_BY_VAULT: Record<string, VaultSettingsOverrides> = {
       order: 1,
       password_hint: "hint: childhood street",
       note: "Daily scratch pad — sync after laptop backup.",
-      ...vaultPaths("my-encrypted-notes", "My Encrypted Notes"),
+      id: "my-encrypted-notes",
     },
     backup: { enabled: true, mode: "keep_last", keep_last: 1 },
     seven_zip: { archive_mode: "encrypt_only" },
@@ -75,8 +61,8 @@ const MOCK_BY_VAULT: Record<string, VaultSettingsOverrides> = {
       display_name: "Vault ExaMple 2",
       order: 2,
       password_hint: "Example passphrase reminder",
-      note: "Mock demo: unlock with gatefail, then lock to see archive test error.",
-      ...vaultPaths("vault-example-2", "Vault ExaMple 2"),
+      note: "Mock demo: unlock with gatefail, then lock to see the header test error.",
+      id: "vault-example-2",
     },
     backup: { enabled: true, mode: "keep_all" },
     auto_close: { enabled: true, idle_minutes: 15 },
@@ -88,7 +74,7 @@ const MOCK_BY_VAULT: Record<string, VaultSettingsOverrides> = {
       order: 3,
       password_hint: "Winter project archive",
       note: "Mock demo: open fails — insufficient RAM.",
-      ...vaultPaths("cold-storage", "Cold Storage"),
+      id: "cold-storage",
     },
   },
   "finance-2025": {
@@ -98,7 +84,7 @@ const MOCK_BY_VAULT: Record<string, VaultSettingsOverrides> = {
       password_hint: "Q4 spreadsheet",
       note: "",
       hidden: true,
-      ...vaultPaths("finance-2025", "Finance 2025"),
+      id: "finance-2025",
     },
     backup: { enabled: true, mode: "keep_last", keep_last: 5 },
   },
@@ -106,71 +92,18 @@ const MOCK_BY_VAULT: Record<string, VaultSettingsOverrides> = {
     vault: {
       display_name: "Travel Planner",
       order: 10,
-      ...vaultPaths("travel-planner", "Travel Planner"),
+      id: "travel-planner",
     },
     auto_close: { enabled: true, idle_minutes: 3, warn_before_seconds: 30 },
-  },
-  "plain-folder-demo": {
-    vault: {
-      display_name: "Plain Folder Demo",
-      order: 12,
-      note: "Plain storage demo vault.",
-      ...vaultPaths("plain-folder-demo", "Plain Folder Demo"),
-    },
-    storage: { mode: "plain" },
-    close: { default_action: "seal" },
-  },
-  "store-only-demo": {
-    vault: {
-      display_name: "Store Only Demo",
-      order: 13,
-      note: "Encrypted store primary; .7z on seal.",
-      ...vaultPaths("store-only-demo", "Store Only Demo"),
-    },
-    storage: { mode: "store_only" },
-    close: { default_action: "close" },
-  },
-  "upriv-only-demo": {
-    vault: {
-      display_name: "Upriv Only Demo",
-      order: 16,
-      note: "Encrypted store only; no .7z, no seal.",
-      ...vaultPaths("upriv-only-demo", "Upriv Only Demo"),
-    },
-    storage: { mode: "upriv_only" },
-    close: { default_action: "close" },
-    backup: { enabled: false, mode: "keep_last", keep_last: 1 },
   },
   "upriv-plain-demo": {
     vault: {
       display_name: "Upriv Plain Demo",
       order: 17,
-      note: "Upriv store when closed; plaintext folder while open.",
-      ...vaultPaths("upriv-plain-demo", "Upriv Plain Demo"),
+      note: "Ciphertext in contents/ when closed; plaintext workspace/ while open.",
+      id: "upriv-plain-demo",
     },
     storage: { mode: "upriv_plain" },
-    close: { default_action: "close" },
-    backup: { enabled: false, mode: "keep_last", keep_last: 1 },
-  },
-  "ram-only-demo": {
-    vault: {
-      display_name: "RAM Only Demo",
-      order: 14,
-      note: "Volatile RAM session; lock always seals.",
-      ...vaultPaths("ram-only-demo", "RAM Only Demo"),
-    },
-    storage: { mode: "ram_only" },
-    close: { default_action: "seal" },
-  },
-  "plain-only-demo": {
-    vault: {
-      display_name: "Plain Only Demo",
-      order: 15,
-      note: "Plaintext while open; no .7z until seal.",
-      ...vaultPaths("plain-only-demo", "Plain Only Demo"),
-    },
-    storage: { mode: "plain_only" },
-    close: { default_action: "seal" },
   },
   "old-archive": {
     vault: {
@@ -179,20 +112,15 @@ const MOCK_BY_VAULT: Record<string, VaultSettingsOverrides> = {
       password_hint: "",
       note: "",
       hidden: true,
-      ...vaultPaths("old-archive", "Old Archive"),
+      id: "old-archive",
     },
   },
 };
 
 const RUNTIME_VAULT_SETTINGS = new Map<string, VaultSettingsConfig>();
 
-/** JSON clone — Hermes may not provide `structuredClone`. */
-function cloneSettings(config: VaultSettingsConfig): VaultSettingsConfig {
-  return JSON.parse(JSON.stringify(config)) as VaultSettingsConfig;
-}
-
 export function registerMockVaultSettings(config: VaultSettingsConfig): void {
-  RUNTIME_VAULT_SETTINGS.set(config.vault.id, cloneSettings(config));
+  RUNTIME_VAULT_SETTINGS.set(config.vault.id, cloneJson(config));
 }
 
 export function unregisterMockVaultSettings(vaultId: string): void {
@@ -201,7 +129,7 @@ export function unregisterMockVaultSettings(vaultId: string): void {
 
 export function getMockVaultSettings(vaultId: string): VaultSettingsConfig {
   const runtime = RUNTIME_VAULT_SETTINGS.get(vaultId);
-  if (runtime) return cloneSettings(runtime);
+  if (runtime) return cloneJson(runtime);
 
   const custom = MOCK_BY_VAULT[vaultId] as VaultSettingsOverrides | undefined;
   const displayName = custom?.vault?.display_name ?? vaultId;
@@ -209,12 +137,12 @@ export function getMockVaultSettings(vaultId: string): VaultSettingsConfig {
   return {
     vault: {
       ...DEFAULTS.vault,
-      ...vaultPaths(vaultId, displayName),
+      id: vaultId,
       display_name: displayName,
       ...custom?.vault,
     },
     storage: { ...DEFAULTS.storage, ...custom?.storage },
-    close: { ...DEFAULTS.close, ...custom?.close },
+    mount: { ...DEFAULTS.mount, ...custom?.mount },
     backup: { ...DEFAULTS.backup, ...custom?.backup },
     security: { ...DEFAULTS.security, ...custom?.security },
     auto_close: { ...DEFAULTS.auto_close, ...custom?.auto_close },
@@ -222,6 +150,3 @@ export function getMockVaultSettings(vaultId: string): VaultSettingsConfig {
     policy: { ...DEFAULTS.policy, ...custom?.policy },
   };
 }
-
-/** @deprecated Import from `@upriv/shared` */
-export { vaultSettingsToListPatch } from "@upriv/shared";

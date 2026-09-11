@@ -3,16 +3,14 @@ import { Icon } from "@/components/icons";
 import {
   formatBytes,
   formatLogFileDate,
-  isRpcError,
-  isVaultRootErrorCode,
   LOADING_BUDGET_MS,
   parseLogLine,
+  shouldBumpVaultRootEpoch,
   type AppLogFile,
   type ParsedLogLine,
 } from "@upriv/shared";
 import { useTranslation } from "@/i18n";
-import { useToast } from "@/hooks/useToast";
-import { useLoadingBudget } from "@/hooks/useLoadingBudget";
+import { useLoadingBudget, useToast } from "@upriv/shared/react";
 import { desktopErrorI18nKey } from "@/lib/errorMessages";
 import { Button, IconButton, LoadingBudgetHint, Modal, Toast } from "@/components/ui";
 import { useAppSettingsContext } from "@/features/system/settings/AppSettingsContext";
@@ -63,7 +61,7 @@ export function LogsModal({ open, onClose }: LogsModalProps) {
       return;
     }
     if (!loadFailed || loadError == null) return;
-    if (isRpcError(loadError) && isVaultRootErrorCode(loadError.code)) {
+    if (shouldBumpVaultRootEpoch(loadError)) {
       if (rootIntegrityHandled.current) return;
       rootIntegrityHandled.current = true;
       void reportVaultRootIntegrityFailure(loadError).then(() => {
@@ -71,7 +69,7 @@ export function LogsModal({ open, onClose }: LogsModalProps) {
       });
       return;
     }
-    showToast(t("toast.logs_load_failed"));
+    showToast(t(desktopErrorI18nKey(loadError, "toast.logs_load_failed")));
   }, [open, loadFailed, loadError, onClose, reportVaultRootIntegrityFailure, showToast, t]);
 
   const allFilenames = useMemo(() => files.map((entry) => entry.filename), [files]);
@@ -146,7 +144,7 @@ export function LogsModal({ open, onClose }: LogsModalProps) {
     setViewerTimedOut(false);
     void loadFileContent(activeFilename)
       .then((content) => {
-        if (!cancelled && gen === viewerGen.current) setViewerText(content);
+        if (!cancelled && gen === viewerGen.current && content !== null) setViewerText(content);
       })
       .catch((error) => {
         if (!cancelled && gen === viewerGen.current) {
@@ -235,7 +233,7 @@ export function LogsModal({ open, onClose }: LogsModalProps) {
       const withContent = await Promise.all(
         targets.map(async (entry) => {
           const content = await loadFileContent(entry.filename);
-          if (!content) {
+          if (content == null || content.length === 0) {
             throw new Error(`empty log content for ${entry.filename}`);
           }
           return { filename: entry.filename, content };
@@ -247,9 +245,12 @@ export function LogsModal({ open, onClose }: LogsModalProps) {
     }
   };
 
-  const title = activeFilename ? (activeFile?.filename ?? activeFilename) : t("modal.logs.title");
-
   const showDeleteConfirm = deleteTargets !== null && !activeFilename;
+
+  const backToList = () => {
+    setActiveFilename(null);
+    setViewerText(null);
+  };
 
   const footer =
     showDeleteConfirm && deleteTargets ? (
@@ -276,30 +277,24 @@ export function LogsModal({ open, onClose }: LogsModalProps) {
           </Button>
         </div>
       </div>
+    ) : activeFilename ? (
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <Button variant="ghost" size="md" onClick={backToList} className="w-full sm:w-auto">
+          {t("modal.logs.back_to_list")}
+        </Button>
+      </div>
     ) : undefined;
 
   return (
     <>
       <Modal
         open={open}
-        title={title}
+        title={t("modal.logs.title")}
+        titleIcon="terminal"
+        contextTitle={activeFilename ? (activeFile?.filename ?? activeFilename) : undefined}
         onClose={handleClose}
         panelClassName={activeFilename ? "max-w-5xl" : "max-w-3xl"}
         footer={footer}
-        headerActions={
-          activeFilename ? (
-            <IconButton
-              label={t("modal.logs.back_to_list")}
-              size="sm"
-              onClick={() => {
-                setActiveFilename(null);
-                setViewerText(null);
-              }}
-            >
-              <Icon name="chevron-down" size={18} className="rotate-90" />
-            </IconButton>
-          ) : null
-        }
       >
         {activeFilename ? (
           <div className="min-w-0">
@@ -356,7 +351,7 @@ export function LogsModal({ open, onClose }: LogsModalProps) {
             ) : !loading &&
               loadFailed &&
               files.length === 0 &&
-              !(isRpcError(loadError) && isVaultRootErrorCode(loadError.code)) ? (
+              !shouldBumpVaultRootEpoch(loadError) ? (
               <div className="py-10 text-center text-sm text-on-surface-variant">
                 <p role="alert">{t("toast.logs_load_failed")}</p>
                 <div className="mt-4 flex justify-center">
@@ -521,16 +516,13 @@ function LogFileRow({
         onClick={onOpen}
         className="flex min-w-0 flex-1 items-center gap-3 text-left disabled:cursor-default"
       >
-        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-surface-container-highest text-on-surface-variant">
-          <Icon name="terminal" size={18} />
-        </div>
         <span className="min-w-0 flex-1">
           <span className="flex flex-wrap items-center gap-2">
             <span className="truncate font-mono text-xs text-on-surface sm:text-sm">
               {entry.filename}
             </span>
             {entry.isCurrent ? (
-              <span className="rounded-md bg-accent/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-accent">
+              <span className="rounded bg-[color-mix(in_srgb,var(--accent)_15%,transparent)] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-accent">
                 {t("modal.logs.badge.active")}
               </span>
             ) : null}

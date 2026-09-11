@@ -9,9 +9,16 @@ export {
   useDropdownPanelClose,
 } from "./DropdownPanel";
 export { IconButton, type IconButtonProps } from "./IconButton";
-export { Modal, ModalChromeButton, type ModalProps } from "./Modal";
+export {
+  Modal,
+  ModalChromeButton,
+  ModalTitleCluster,
+  type ModalProps,
+  type ModalTitleClusterProps,
+} from "./Modal";
 export { PasswordInput, type PasswordInputProps } from "./PasswordInput";
 export { StatusDot, type StatusDotProps } from "./StatusDot";
-export { Switch, type SwitchProps } from "./Switch";
+export { Switch, SwitchRow, type SwitchProps, type SwitchRowProps } from "./Switch";
 export { Toast, type ToastProps } from "./Toast";
+export { Select, type SelectOption, type SelectOptionTone } from "./Select";
 export { LoadingBudgetHint } from "./LoadingBudgetHint";

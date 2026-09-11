@@ -5,7 +5,7 @@ import {
   type VaultListItem,
   type VaultSettingsConfig,
 } from "@upriv/shared";
-import { useVaultLifecycleService, useVaultService } from "@/platform/services";
+import { useVaultService } from "@/platform/services";
 
 interface UseVaultAutoCloseOptions {
   vaults: VaultListItem[];
@@ -29,7 +29,6 @@ export function useVaultAutoClose({
   onAutoClose,
 }: UseVaultAutoCloseOptions) {
   const vaultService = useVaultService();
-  const lifecycleService = useVaultLifecycleService();
   const warnedRef = useRef<Set<string>>(new Set());
   const blockedRef = useRef<Set<string>>(new Set());
   const lastActivityRef = useRef(Date.now());
@@ -90,14 +89,7 @@ export function useVaultAutoClose({
         const autoClose = settings.auto_close;
         if (!autoClose.enabled) continue;
 
-        const hasPasswordInRam = lifecycleService.hasPasswordInSession(vault.id);
-        const canRun = canRunIdleAutoClose(
-          vault,
-          vault.storageMode,
-          settings.security.mode,
-          settings.close.default_action,
-          hasPasswordInRam,
-        );
+        const canRun = canRunIdleAutoClose(vault, settings.security.mode);
 
         const limitSeconds = autoClose.idle_minutes * 60;
         const warnAt = Math.max(0, limitSeconds - autoClose.warn_before_seconds);
@@ -135,5 +127,5 @@ export function useVaultAutoClose({
 
     const id = window.setInterval(tick, 1000);
     return () => window.clearInterval(id);
-  }, [vaults, isVaultPipelineBusy, lifecycleService, onAutoClose, onAutoCloseBlocked, onWarn]);
+  }, [vaults, isVaultPipelineBusy, onAutoClose, onAutoCloseBlocked, onWarn]);
 }

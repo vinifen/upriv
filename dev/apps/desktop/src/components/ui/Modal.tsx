@@ -1,32 +1,104 @@
-import { type ReactNode, useEffect, useId, useLayoutEffect, useRef } from "react";
+import {
+  type ButtonHTMLAttributes,
+  type ReactNode,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+} from "react";
 import { createPortal } from "react-dom";
+import { Icon, type IconName } from "@/components/icons";
 import { useTranslation } from "@/i18n";
-import { Button, type ButtonProps } from "./Button";
+import { acquireScrollLock, releaseScrollLock } from "./scrollLock";
 
 const modalChromeButtonClass =
-  "h-9 w-9 min-h-9 min-w-9 shrink-0 px-0 text-lg leading-none sm:h-10 sm:w-10 sm:min-h-10 sm:min-w-10";
+  "inline-flex size-8 shrink-0 items-center justify-center rounded-md border-0 bg-transparent p-0 leading-none text-on-surface hover:bg-surface-container-high focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-background";
 
 const FOCUSABLE_SELECTOR =
   'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
-/** Nested modals share one body overflow lock — restore only when the last closes. */
-let openModalCount = 0;
-
-/** Header chrome control (close, minimize) — shared sizing across modals. */
-export function ModalChromeButton({ className = "", ...props }: ButtonProps) {
+/** Header chrome control (close, minimize) — icon-sized, no text-button font strut. */
+export function ModalChromeButton({
+  className = "",
+  type = "button",
+  ...props
+}: ButtonHTMLAttributes<HTMLButtonElement>) {
   return (
-    <Button
-      variant="ghost"
-      size="sm"
+    <button
+      type={type}
       className={[modalChromeButtonClass, className].filter(Boolean).join(" ")}
       {...props}
     />
   );
 }
 
+export interface ModalTitleClusterProps {
+  titleId: string;
+  contextId: string;
+  title: string;
+  contextTitle?: string;
+  titleIcon?: IconName;
+  compact?: boolean;
+}
+
+/** Icon + action title, then vault/group name on the same baseline. */
+export function ModalTitleCluster({
+  titleId,
+  contextId,
+  title,
+  contextTitle,
+  titleIcon,
+  compact = false,
+}: ModalTitleClusterProps) {
+  const typeClass = compact
+    ? "font-display text-sm leading-none sm:text-base"
+    : "font-display text-base leading-none sm:text-xl";
+  const contextClass = compact
+    ? "font-display text-xs leading-none text-on-surface-variant sm:text-sm"
+    : "font-display text-sm leading-none text-on-surface-variant sm:text-base";
+
+  return (
+    <div className="flex min-w-0 flex-1 items-center gap-2">
+      {titleIcon ? (
+        <Icon
+          name={titleIcon}
+          size={compact ? 15 : 16}
+          className="block shrink-0 text-on-surface-variant"
+          aria-hidden
+        />
+      ) : null}
+      <div className="flex min-w-0 items-baseline gap-2">
+        <h2
+          id={titleId}
+          className={[
+            typeClass,
+            "font-semibold text-on-surface",
+            contextTitle ? "shrink-0" : "min-w-0 truncate",
+          ].join(" ")}
+        >
+          {title}
+        </h2>
+        {contextTitle ? (
+          <>
+            <span className={["shrink-0", contextClass].join(" ")} aria-hidden>
+              —
+            </span>
+            <p id={contextId} className={["min-w-0 truncate font-normal", contextClass].join(" ")}>
+              {contextTitle}
+            </p>
+          </>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 export interface ModalProps {
   open: boolean;
   title: string;
+  /** Shown to the right of `title` (vault or group display name). */
+  contextTitle?: string;
+  titleIcon?: IconName;
   onClose: () => void;
   children: ReactNode;
   footer?: ReactNode;
@@ -40,14 +112,18 @@ export interface ModalProps {
   dismissible?: boolean;
   /**
    * When false, children are not wrapped in a scroll pane — caller owns scroll
-   * (e.g. create-vault step body + sticky step nav). Mobile `bodyScroll` parity.
+   * (e.g. create-vault sticky step nav + scrollable step body). Mobile `bodyScroll` parity.
    */
   bodyScroll?: boolean;
+  /** Smaller title cluster — File Manager / short dialogs. */
+  compact?: boolean;
 }
 
 export function Modal({
   open,
   title,
+  contextTitle,
+  titleIcon,
   onClose,
   children,
   footer,
@@ -56,34 +132,33 @@ export function Modal({
   rootClassName = "z-[100]",
   dismissible = true,
   bodyScroll = true,
+  compact = false,
 }: ModalProps) {
   const { t } = useTranslation();
   const titleId = useId();
+  const contextId = useId();
   const panelRef = useRef<HTMLDivElement>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  const scrimStart = useRef<{ x: number; y: number } | null>(null);
 
   useEffect(() => {
     if (!open || !dismissible) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.key === "Escape") onCloseRef.current();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [open, onClose, dismissible]);
+  }, [open, dismissible]);
 
   useEffect(() => {
     if (!open) return;
-    openModalCount += 1;
-    document.body.style.overflow = "hidden";
-    return () => {
-      openModalCount = Math.max(0, openModalCount - 1);
-      if (openModalCount === 0) {
-        document.body.style.overflow = "";
-      }
-    };
+    acquireScrollLock();
+    return () => releaseScrollLock();
   }, [open]);
 
   // Focus the dialog once on open + Tab cycle. Do not steal focus on every
-  // children/footer/headerActions change (locale <select>). When a focused
+  // children/footer/headerActions change (locale Select). When a focused
   // control unmounts (focus leaves the panel), restore focus to the panel.
   useEffect(() => {
     if (!open) return;
@@ -118,7 +193,7 @@ export function Modal({
     };
 
     // Recover when focus escapes the dialog (e.g. Continue unmounted mid-step).
-    // Ignore focus moving into another portaled UI (native <select> listbox).
+    // Ignore focus moving into another portaled UI (Select listbox).
     const recoverIfFocusLeft = () => {
       const active = document.activeElement;
       if (active instanceof Node && panel.contains(active)) return;
@@ -169,37 +244,53 @@ export function Modal({
   if (!open) return null;
 
   const bodyClass = bodyScroll
-    ? [
-        "modal-scroll-pane min-h-0 text-body text-on-surface overflow-y-auto",
-        scrollFooterLayout ? "flex-1" : "",
-      ]
-        .filter(Boolean)
-        .join(" ")
+    ? "modal-scroll-pane min-h-0 text-body text-on-surface overflow-y-auto"
     : [
         "flex min-h-0 flex-col text-body text-on-surface overflow-hidden",
-        scrollFooterLayout ? "flex-1" : "",
+        scrollFooterLayout ? "min-h-0" : "",
       ]
         .filter(Boolean)
         .join(" ");
 
   return createPortal(
-    <div className={["fixed inset-0", rootClassName].join(" ")}>
+    <div className={["fixed inset-0 overscroll-none", rootClassName].join(" ")}>
       <div
         className="absolute inset-0 bg-[var(--modal-scrim)] backdrop-blur-sm"
         aria-hidden
-        onClick={dismissible ? onClose : undefined}
+        onPointerDown={
+          dismissible
+            ? (event) => {
+                scrimStart.current = { x: event.clientX, y: event.clientY };
+              }
+            : undefined
+        }
+        onClick={
+          dismissible
+            ? (event) => {
+                const start = scrimStart.current;
+                scrimStart.current = null;
+                if (!start) {
+                  onClose();
+                  return;
+                }
+                const dx = event.clientX - start.x;
+                const dy = event.clientY - start.y;
+                if (dx * dx + dy * dy <= 100) onClose();
+              }
+            : undefined
+        }
       />
       <div className="pointer-events-none relative z-10 flex min-h-full items-center justify-center p-3 sm:p-4">
         <div
           ref={panelRef}
           role="dialog"
           aria-modal="true"
-          aria-labelledby={titleId}
+          aria-labelledby={contextTitle ? `${titleId} ${contextId}` : titleId}
           tabIndex={-1}
           className={[
             // Keep in sync with mobile `MODAL_MAX_HEIGHT_RATIO` (~0.88 of viewport).
             "pointer-events-auto flex h-fit w-full max-h-[min(88dvh,calc(100dvh-2rem))] flex-col overflow-hidden bg-surface-container-high shadow-modal",
-            "rounded-xl",
+            "rounded-2xl",
             "p-4 sm:p-6",
             "outline-none",
             scrollFooterLayout ? "min-h-0 sm:max-h-[min(88vh,calc(100vh-2.5rem))]" : "",
@@ -208,18 +299,26 @@ export function Modal({
           onMouseDown={(event) => event.stopPropagation()}
           onClick={(event) => event.stopPropagation()}
         >
-          <header className="mb-3 flex min-h-10 shrink-0 items-center justify-between gap-2 sm:mb-4 sm:min-h-11 sm:gap-4">
-            <h2
-              id={titleId}
-              className="min-w-0 flex-1 font-display text-base font-semibold leading-none text-on-surface sm:text-xl"
-            >
-              {title}
-            </h2>
-            <div className="flex shrink-0 items-center gap-1">
+          <header
+            className={
+              compact
+                ? "mb-3 flex min-h-10 shrink-0 items-center justify-between gap-2 pb-2 sm:mb-4"
+                : "mb-4 flex min-h-11 shrink-0 items-center justify-between gap-2 pt-1.5 pb-2.5 sm:mb-5 sm:min-h-12 sm:gap-4 sm:pt-2 sm:pb-3"
+            }
+          >
+            <ModalTitleCluster
+              titleId={titleId}
+              contextId={contextId}
+              title={title}
+              contextTitle={contextTitle}
+              titleIcon={titleIcon}
+              compact={compact}
+            />
+            <div className="flex shrink-0 items-center self-center gap-1">
               {headerActions}
               {dismissible ? (
                 <ModalChromeButton onClick={onClose} aria-label={t("action.close")}>
-                  ×
+                  <Icon name="close" size={18} className="block" />
                 </ModalChromeButton>
               ) : null}
             </div>

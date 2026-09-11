@@ -1,0 +1,20 @@
+{
+  "name": "@upriv/js-lint",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "description": "ESLint + Prettier for shared, desktop, electron, and mobile (not Rust)",
+  "exports": {
+    "./eslint": "./eslint.js",
+    "./prettier": "./prettier.json"
+  },
+  "dependencies": {
+    "@eslint/js": "^9.28.0",
+    "eslint": "^9.28.0",
+    "eslint-config-prettier": "^10.1.5",
+    "eslint-plugin-import-newlines": "^1.4.1",
+    "prettier": "^3.5.3",
+    "typescript": "5.7.3",
+    "typescript-eslint": "^8.33.0"
+  }
+}

@@ -5,9 +5,26 @@
 
 uniffi::setup_scaffolding!();
 
-use upriv_rpc::{handle_rpc, RpcRequest};
+use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::sync::Once;
 
-/// Product version string (from `dev/VERSION`).
+use upriv_rpc::{handle_rpc, RpcErrorBody, RpcRequest, RpcResponse};
+
+fn install_panic_hook() {
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        std::panic::set_hook(Box::new(|info| {
+            eprintln!("[upriv-ffi] panic: {info}");
+        }));
+    });
+}
+
+fn internal_error_envelope() -> String {
+    r#"{"ok":false,"error":{"code":"internal_error","message":"internal error while handling request"}}"#
+        .to_string()
+}
+
+/// Product version string (from repo-root `VERSION`).
 #[uniffi::export]
 pub fn app_version() -> String {
     upriv_core::app_version().to_string()
@@ -21,6 +38,7 @@ pub fn app_version() -> String {
  */
 #[uniffi::export]
 pub fn configure_runtime(app_home: String, distribution: String) {
+    install_panic_hook();
     let home = app_home.trim();
     if !home.is_empty() {
         // SAFETY: called once from the RN module before concurrent RPC use.
@@ -46,6 +64,7 @@ pub fn configure_runtime(app_home: String, distribution: String) {
  */
 #[uniffi::export]
 pub fn invoke(method: String, params_json: String) -> String {
+    install_panic_hook();
     let params = if params_json.trim().is_empty() {
         serde_json::Value::Object(serde_json::Map::new())
     } else {
@@ -67,11 +86,19 @@ pub fn invoke(method: String, params_json: String) -> String {
         }
     };
 
-    let response = handle_rpc(RpcRequest { method, params });
-    serde_json::to_string(&response).unwrap_or_else(|_| {
-        r#"{"ok":false,"error":{"code":"invalid_request","message":"serialize failed"}}"#
-            .to_string()
-    })
+    let response = catch_unwind(AssertUnwindSafe(|| {
+        handle_rpc(RpcRequest { method, params })
+    }))
+    .unwrap_or_else(|_| RpcResponse {
+        ok: false,
+        result: None,
+        error: Some(RpcErrorBody {
+            code: "internal_error".into(),
+            message: "internal error while handling request".into(),
+            details: None,
+        }),
+    });
+    serde_json::to_string(&response).unwrap_or_else(|_| internal_error_envelope())
 }
 
 #[cfg(test)]
@@ -97,5 +124,13 @@ mod tests {
         let value: serde_json::Value = serde_json::from_str(&raw).unwrap();
         assert_eq!(value["ok"], false);
         assert_eq!(value["error"]["code"], "unknown_method");
+    }
+
+    #[test]
+    fn invoke_invalid_params_json() {
+        let raw = invoke("app_version".into(), "{".into());
+        let value: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(value["ok"], false);
+        assert_eq!(value["error"]["code"], "invalid_request");
     }
 }

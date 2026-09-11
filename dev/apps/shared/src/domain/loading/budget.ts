@@ -2,22 +2,39 @@
  * Finite loading budgets (ms) — every blocking UI load must use one of these
  * and show the budget to the user. Never wait forever.
  *
- * Keep `vaultRootSetup` / Gate in sync with desktop `invoke.ts` method timeouts.
+ * Keep `vaultRootSetup` / Gate in sync with `@upriv/shared` `CORE_RPC_TIMEOUT_MS`.
  */
 export const LOADING_BUDGET_MS = {
   /** Data-folder setup / rename (Setup/Repair/Data-folder busy overlays). */
   vaultRoot: 600_000,
   /**
    * Gate applying overlay while waiting on `vault_root_resolve` (epoch bump / post-setup).
-   * Keep in sync with desktop `METHOD_TIMEOUT_MS.vault_root_resolve`.
+   * Keep in sync with `CORE_RPC_TIMEOUT_MS.vault_root_resolve`.
    */
   vaultRootResolve: 60_000,
   /** First settings load before Gate — keep in sync with `app_settings_get`. */
   settingsLoad: 60_000,
   /** Logs list / viewer fetch — keep in sync with `log_*` invoke timeouts. */
   logs: 60_000,
+  /**
+   * Vault settings submit: password / KDF change rewraps `vault.header` and the
+   * key wrap in `contents/`, so a large vault can legitimately take minutes.
+   */
+  vaultRewrap: 600_000,
+  /**
+   * Open/close pipeline overlay (Argon2id unlock + flush into `contents/`).
+   * Same family as `vaultRewrap`. Keep invoke in sync when `vault_open` / `vault_close` land.
+   */
+  vaultPipeline: 600_000,
+  /**
+   * Export `{display_name}.zip` of `contents/` or portable `.7z` (flush + pack).
+   * Same family as `vaultRewrap`. Keep invoke in sync when the export RPC lands.
+   */
+  vaultExport: 600_000,
   /** Generic modal / list work. */
   default: 120_000,
+  /** Settings Save / workspace path persist — keep in sync with `app_settings_save`. */
+  settingsSave: 30_000,
 } as const;
 
 /**

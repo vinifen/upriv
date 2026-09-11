@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { Pressable, StyleSheet, Text, View } from "react-native";
 import {
   defaultOpenHelpSections,
   HELP_SECTION_BODY_KEYS,
@@ -11,8 +11,9 @@ import {
 } from "@upriv/shared";
 import { useTranslation, type I18nKey } from "@/i18n";
 import { useTheme } from "@/theme";
-import { radii, spacing } from "@/theme/tokens";
+import { radii, settingsSectionBoxShadow, spacing } from "@/theme/tokens";
 import { Modal } from "@/components/ui";
+import { ThemedInput } from "@/components/settings";
 import { getMobileAppVersion } from "@/lib/appVersion";
 
 interface HelpModalProps {
@@ -29,7 +30,7 @@ const DISTRIBUTION_LABEL_KEYS: Record<AppDistribution, I18nKey> = {
 /** Help — same sections/search/footer pattern as desktop HelpModal. */
 export function HelpModal({ open, onClose }: HelpModalProps) {
   const { t } = useTranslation();
-  const { colors, typography } = useTheme();
+  const { colors, typography, theme } = useTheme();
   const [query, setQuery] = useState("");
   const [openSections, setOpenSections] = useState<Set<HelpSectionId>>(defaultOpenHelpSections);
   const [appVersion, setAppVersion] = useState(() => getMobileAppVersion().version);
@@ -82,6 +83,7 @@ export function HelpModal({ open, onClose }: HelpModalProps) {
     <Modal
       open={open}
       title={t("modal.help.title")}
+      titleIcon="help"
       onClose={onClose}
       panelClassName="max-w-3xl"
       footer={footer}
@@ -89,23 +91,13 @@ export function HelpModal({ open, onClose }: HelpModalProps) {
       <View style={styles.content}>
         <Text style={typography.bodyMuted}>{t("modal.help.hint")}</Text>
 
-        <TextInput
+        <ThemedInput
           value={query}
           onChangeText={setQuery}
           placeholder={t("modal.help.search_placeholder")}
-          placeholderTextColor={colors.onSurfaceVariant}
           autoCorrect={false}
           autoCapitalize="none"
           clearButtonMode="while-editing"
-          style={[
-            styles.search,
-            typography.body,
-            {
-              backgroundColor: colors.surfaceContainerHigh,
-              borderColor: colors.outlineVariant,
-              color: colors.onSurface,
-            },
-          ]}
           accessibilityLabel={t("modal.help.search_placeholder")}
         />
 
@@ -121,7 +113,7 @@ export function HelpModal({ open, onClose }: HelpModalProps) {
                   styles.sectionCard,
                   {
                     backgroundColor: colors.surfaceContainerHigh,
-                    borderColor: colors.outlineVariant,
+                    boxShadow: settingsSectionBoxShadow(theme),
                   },
                 ]}
               >
@@ -156,18 +148,10 @@ export function HelpModal({ open, onClose }: HelpModalProps) {
 
 const styles = StyleSheet.create({
   content: { gap: spacing.md },
-  search: {
-    borderWidth: 1,
-    borderRadius: radii.md,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.md,
-    minHeight: 44,
-  },
   empty: { textAlign: "center", paddingVertical: spacing.xxl },
   sectionCard: {
     borderRadius: radii.md,
-    borderWidth: 1,
-    overflow: "hidden",
+    overflow: "visible",
   },
   sectionHeader: {
     flexDirection: "row",

@@ -1,102 +1,125 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Pressable, StyleSheet, Switch, Text, TextInput, View } from "react-native";
+import { Platform, StyleSheet, Text, View } from "react-native";
 import {
   APP_SETTINGS_ERROR_I18N_KEYS,
+  APP_SETTINGS_SECTIONS,
+  LOADING_BUDGET_MS,
   LOG_ENTRIES_PER_FILE,
   LOG_KEEP_LAST_ENTRY_OPTIONS,
   LOG_KEEP_LAST_UNLIMITED,
   LOG_LEVEL_PRESETS,
   SUPPORTED_LOCALES,
-  VAULT_DISPLAY_NAME_MAX_LENGTH,
   appSettingsEqual,
-  displayNameErrorI18nKey,
   isRpcError,
-  isVaultRootErrorCode,
+  shouldBumpVaultRootEpoch,
   logFileCountForKeepLast,
   normalizeAppSettings,
-  validateDisplayName,
+  validateWorkspaceGlobalPath,
+  vaultRootGoneRpcError,
+  vaultRootPathForWorkspaceValidation,
+  workspacePathIssueI18nKey,
   type AppSettingsConfig,
   type LocaleId,
   type UiTheme,
-  type VaultGroup,
-  type VaultListItem,
 } from "@upriv/shared";
 import { useAppSettingsContext } from "./AppSettingsContext";
 import { useTranslation, type I18nKey } from "@/i18n";
 import { useTheme } from "@/theme";
-import { radii, spacing } from "@/theme/tokens";
-import { Button, Modal, Select, Toast, type SelectOption } from "@/components/ui";
-import { Icon } from "@/components/icons";
-import { PolicyRadioOption } from "@/components/settings";
+import { spacing } from "@/theme/tokens";
+import {
+  Button,
+  LoadingBudgetHint,
+  Modal,
+  ModalFooterActions,
+  modalFooterConfirmBtnStyle,
+  Select,
+  Toast,
+  type SelectOption,
+} from "@/components/ui";
+import { useTapNotPan } from "@/components/ui/ScrimDismiss";
+import {
+  FieldHint,
+  FieldLabel,
+  PolicyRadioOption,
+  SettingsAccordionSection,
+  SwitchRow,
+  ThemedInput,
+} from "@/components/settings";
 import { mobileErrorI18nKey } from "@/lib/errorMessages";
-import { useToast } from "@/hooks/useToast";
-import { GroupedVaultPicker } from "@/features/vaults/list/GroupedVaultPicker";
+import { useLoadingBudget, useToast, useVaultRootIntegrityClose } from "@upriv/shared/react";
+import { useVaultRootService } from "@/platform/services";
 
 const SAVED_INDICATOR_MS = 1500;
 const THEMES: UiTheme[] = ["dark", "neutral", "light"];
-const MOBILE_SETTINGS_SECTIONS = ["appearance", "groups", "logging", "hidden_vaults"] as const;
 
 interface AppSettingsModalProps {
   open: boolean;
   onClose: () => void;
-  vaults?: VaultListItem[];
-  groups?: VaultGroup[];
-  includeHidden?: boolean;
-  onCreateGroup?: (displayName: string, groupedVaultIds: string[]) => Promise<void> | void;
+  /** Report unsaved draft so the list shell can refuse opening Data folder / Groups. */
+  onDirtyChange?: (dirty: boolean) => void;
+  /** Disable Clear on workspace path while any vault session is open. */
+  hasOpenVault?: boolean;
 }
 
 /**
  * System settings — draft + Save parity with desktop `AppSettingsModal`.
- * Data folder stays in its own modal; download_vaults is desktop-only for now.
+ * Creating groups lives in `VaultGroupsModal` (⋯ menu). Data folder stays in its own modal.
  */
 export function AppSettingsModal({
   open,
   onClose,
-  vaults = [],
-  groups = [],
-  includeHidden = false,
-  onCreateGroup,
+  onDirtyChange,
+  hasOpenVault = false,
 }: AppSettingsModalProps) {
   const { t, locale } = useTranslation();
   const { colors, typography } = useTheme();
   const { message, show, dismiss } = useToast();
+  const vaultRootService = useVaultRootService();
   const {
     settings,
     replaceSettings,
     showHiddenVaultsSession,
     setShowHiddenVaultsSession,
     settingsOnDisk,
+    reportVaultRootIntegrityFailure,
   } = useAppSettingsContext();
 
   const [draft, setDraft] = useState<AppSettingsConfig | null>(null);
+  const [draftShowHiddenVaultsSession, setDraftShowHiddenVaultsSession] = useState(false);
   const [saveConfirmOpen, setSaveConfirmOpen] = useState(false);
   const [discardConfirmOpen, setDiscardConfirmOpen] = useState(false);
   const [savedVisible, setSavedVisible] = useState(false);
   const [saveBusy, setSaveBusy] = useState(false);
-  const [expanded, setExpanded] = useState<string>("appearance");
-  const [newGroupName, setNewGroupName] = useState("");
-  const [groupedVaultIds, setGroupedVaultIds] = useState<string[]>([]);
-  const [groupNameError, setGroupNameError] = useState<string | null>(null);
+  const [resolvedRootPath, setResolvedRootPath] = useState<string | null>(null);
+  const [resolveFailure, setResolveFailure] = useState<unknown>(null);
   const savedHideRef = useRef<ReturnType<typeof setTimeout>>();
   const openedSessionRef = useRef(false);
+  /** True after the user patches workspace this modal session — skip live Context sync. */
+  const workspaceTouchedRef = useRef(false);
   const commitSaveLock = useRef(false);
+  const saveBusyGen = useRef(0);
+  const saveBudget = useLoadingBudget(saveBusy, LOADING_BUDGET_MS.settingsSave);
 
-  const pendingGroupName = newGroupName.trim();
-  const isDirty = useMemo(() => {
-    if (!draft) return pendingGroupName.length > 0;
-    return !appSettingsEqual(draft, settings) || pendingGroupName.length > 0;
-  }, [draft, pendingGroupName, settings]);
+  const isDirty = useMemo(
+    () =>
+      Boolean(draft && !appSettingsEqual(draft, settings)) ||
+      draftShowHiddenVaultsSession !== showHiddenVaultsSession,
+    [draft, draftShowHiddenVaultsSession, settings, showHiddenVaultsSession],
+  );
+
+  useEffect(() => {
+    onDirtyChange?.(open && isDirty);
+    return () => onDirtyChange?.(false);
+  }, [isDirty, onDirtyChange, open]);
 
   useEffect(() => {
     if (!open) return;
     if (openedSessionRef.current) return;
     openedSessionRef.current = true;
+    workspaceTouchedRef.current = false;
     setDraft(settings);
-    setExpanded("appearance");
-    setNewGroupName("");
-    setGroupedVaultIds([]);
-    setGroupNameError(null);
-  }, [open, settings]);
+    setDraftShowHiddenVaultsSession(showHiddenVaultsSession);
+  }, [open, settings, showHiddenVaultsSession]);
 
   useEffect(() => {
     if (!open) return;
@@ -104,7 +127,8 @@ export function AppSettingsModal({
       if (!current) return current;
       if (
         current.app.vault_root_mode === settings.app.vault_root_mode &&
-        current.app.upriv_root_path === settings.app.upriv_root_path
+        current.app.upriv_root_path === settings.app.upriv_root_path &&
+        current.app.last_opened_vault === settings.app.last_opened_vault
       ) {
         return current;
       }
@@ -112,18 +136,63 @@ export function AppSettingsModal({
     });
   }, [open, settings.app, settings.app.upriv_root_path, settings.app.vault_root_mode]);
 
+  // Keep draft.workspace aligned unless the user edited Workspace this session.
+  useEffect(() => {
+    if (!open) return;
+    if (workspaceTouchedRef.current) return;
+    setDraft((current) => {
+      if (!current) return current;
+      if (current.workspace.path === settings.workspace.path) return current;
+      return { ...current, workspace: { ...settings.workspace } };
+    });
+  }, [open, settings.workspace, settings.workspace.path]);
+
+  useEffect(() => {
+    if (!open) {
+      setResolvedRootPath(null);
+      setResolveFailure(null);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const resolved = await vaultRootService.resolve({
+          vaultRootMode: settings.app.vault_root_mode,
+        });
+        if (cancelled) return;
+        setResolveFailure(null);
+        if (resolved.status === "found") {
+          setResolvedRootPath(resolved.rootPath);
+        } else {
+          setResolvedRootPath(null);
+          setResolveFailure(vaultRootGoneRpcError());
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setResolvedRootPath(null);
+          setResolveFailure(error);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, settings.app.vault_root_mode, vaultRootService]);
+
   useEffect(() => {
     if (!open) {
       openedSessionRef.current = false;
+      workspaceTouchedRef.current = false;
+      saveBusyGen.current += 1;
+      commitSaveLock.current = false;
       setDraft(null);
-      setNewGroupName("");
-      setGroupedVaultIds([]);
-      setGroupNameError(null);
+      setDraftShowHiddenVaultsSession(showHiddenVaultsSession);
       setSaveConfirmOpen(false);
       setDiscardConfirmOpen(false);
       setSavedVisible(false);
+      setSaveBusy(false);
     }
-  }, [open]);
+  }, [open, showHiddenVaultsSession]);
 
   useEffect(() => {
     if (!isDirty) setSaveConfirmOpen(false);
@@ -131,13 +200,28 @@ export function AppSettingsModal({
 
   useEffect(() => () => clearTimeout(savedHideRef.current), []);
 
+  useEffect(() => {
+    if (!saveBudget.timedOut || !saveBusy) return;
+    saveBusyGen.current += 1;
+    commitSaveLock.current = false;
+    setSaveBusy(false);
+    show(t("error.operation_timed_out"));
+  }, [saveBudget.timedOut, saveBusy, show, t]);
+
   const dismissFooterConfirm = useCallback(() => {
     setDiscardConfirmOpen(false);
     setSaveConfirmOpen(false);
   }, []);
+  const dismissConfirmOnBodyTap = useTapNotPan(
+    dismissFooterConfirm,
+    discardConfirmOpen || saveConfirmOpen,
+  );
 
   const patchDraft = useCallback(
     <S extends keyof AppSettingsConfig>(section: S, patch: Partial<AppSettingsConfig[S]>) => {
+      if (section === "workspace") {
+        workspaceTouchedRef.current = true;
+      }
       setDiscardConfirmOpen(false);
       setSaveConfirmOpen(false);
       setDraft((current) =>
@@ -152,11 +236,19 @@ export function AppSettingsModal({
     [],
   );
 
+  const setDraftHiddenSession = useCallback((value: boolean) => {
+    setDiscardConfirmOpen(false);
+    setSaveConfirmOpen(false);
+    setDraftShowHiddenVaultsSession(value);
+  }, []);
+
   const handleClose = () => {
     setSaveConfirmOpen(false);
     setDiscardConfirmOpen(false);
     onClose();
   };
+
+  useVaultRootIntegrityClose(open, resolveFailure, reportVaultRootIntegrityFailure, handleClose);
 
   const hadOnDiskRef = useRef(false);
   useEffect(() => {
@@ -165,6 +257,8 @@ export function AppSettingsModal({
 
   useEffect(() => {
     if (!open || settingsOnDisk || !hadOnDiskRef.current) return;
+    saveBusyGen.current += 1;
+    commitSaveLock.current = false;
     setDraft(null);
     setSaveBusy(false);
     setSaveConfirmOpen(false);
@@ -186,62 +280,71 @@ export function AppSettingsModal({
 
   const handleDiscardAndClose = () => {
     setDraft(settings);
-    setNewGroupName("");
-    setGroupedVaultIds([]);
-    setGroupNameError(null);
+    setDraftShowHiddenVaultsSession(showHiddenVaultsSession);
     handleClose();
   };
 
+  const formConfig = draft ?? settings;
+  const workspaceRootForValidation = vaultRootPathForWorkspaceValidation(
+    formConfig.app.vault_root_mode,
+    formConfig.app.upriv_root_path,
+    resolvedRootPath,
+  );
+  const workspacePathInvalid = Boolean(
+    validateWorkspaceGlobalPath(formConfig.workspace.path, workspaceRootForValidation),
+  );
+  /** Open vault + emptied draft must not wipe a configured Context path. */
+  const workspaceClearWhileOpen =
+    hasOpenVault && !formConfig.workspace.path.trim() && Boolean(settings.workspace.path.trim());
+
   const handleSaveClick = () => {
-    if (!isDirty || !draft || saveBusy) return;
-    if (pendingGroupName) {
-      const validation = validateDisplayName(pendingGroupName);
-      if (validation) {
-        setGroupNameError(
-          t(
-            displayNameErrorI18nKey(validation),
-            validation === "too_long"
-              ? { max: String(VAULT_DISPLAY_NAME_MAX_LENGTH) }
-              : undefined,
-          ),
-        );
-        setExpanded("groups");
-        return;
-      }
+    if (!isDirty || saveBusy) return;
+    if (workspaceClearWhileOpen) return;
+    const workspacePath = workspaceTouchedRef.current
+      ? (draft ?? settings).workspace.path
+      : settings.workspace.path;
+    if (validateWorkspaceGlobalPath(workspacePath, workspaceRootForValidation)) {
+      return;
     }
-    setGroupNameError(null);
     dismissFooterConfirm();
     setSaveConfirmOpen(true);
   };
 
   const commitSave = () => {
-    if (!draft || !isDirty || saveBusy) return;
+    if (!isDirty || saveBusy) return;
+    if (workspaceClearWhileOpen) return;
+    const workspaceForSave = workspaceTouchedRef.current
+      ? (draft ?? settings).workspace
+      : { ...settings.workspace };
+    if (validateWorkspaceGlobalPath(workspaceForSave.path, workspaceRootForValidation)) {
+      return;
+    }
     if (commitSaveLock.current) return;
+    const generation = ++saveBusyGen.current;
     commitSaveLock.current = true;
     const normalized = normalizeAppSettings({
-      ...draft,
+      ...(draft ?? settings),
       app: { ...settings.app },
+      workspace: workspaceForSave,
     });
-    const settingsDirty = !appSettingsEqual(draft, settings);
     setSaveBusy(true);
     void (async () => {
       try {
-        if (settingsDirty) {
+        if (!appSettingsEqual(normalized, settings)) {
           await replaceSettings(normalized);
+          if (generation !== saveBusyGen.current) return;
           setDraft(normalized);
         }
-        if (pendingGroupName) {
-          await onCreateGroup?.(pendingGroupName, groupedVaultIds);
-          setNewGroupName("");
-          setGroupedVaultIds([]);
-        }
+        if (generation !== saveBusyGen.current) return;
+        setShowHiddenVaultsSession(draftShowHiddenVaultsSession);
         setSavedVisible(true);
         clearTimeout(savedHideRef.current);
         savedHideRef.current = setTimeout(() => setSavedVisible(false), SAVED_INDICATOR_MS);
         setSaveConfirmOpen(false);
       } catch (error) {
+        if (generation !== saveBusyGen.current) return;
         setSaveConfirmOpen(false);
-        if (isRpcError(error) && isVaultRootErrorCode(error.code)) {
+        if (shouldBumpVaultRootEpoch(error)) {
           setDraft(settings);
           handleClose();
           return;
@@ -252,50 +355,66 @@ export function AppSettingsModal({
             : APP_SETTINGS_ERROR_I18N_KEYS.SAVE_FAILED;
         show(t(mobileErrorI18nKey(error, fallback)));
       } finally {
-        commitSaveLock.current = false;
-        setSaveBusy(false);
+        if (generation === saveBusyGen.current) {
+          commitSaveLock.current = false;
+          setSaveBusy(false);
+        }
       }
     })();
   };
 
-  const formConfig = draft ?? settings;
-  const saveBlocked = !isDirty || saveBusy || saveConfirmOpen;
+  const saveBlocked =
+    !isDirty || saveBusy || saveConfirmOpen || workspacePathInvalid || workspaceClearWhileOpen;
 
   if (!open || !formConfig) return null;
 
+  const footerStatus = discardConfirmOpen ? (
+    <Text style={typography.bodyMuted}>{t("modal.settings.discard_confirm")}</Text>
+  ) : saveConfirmOpen ? (
+    <Text style={typography.bodyMuted}>{t("modal.app_settings.save_confirm")}</Text>
+  ) : savedVisible ? (
+    <Text style={[typography.body, { color: colors.vaultStatusOpen }]}>
+      {t("modal.settings.saved")}
+    </Text>
+  ) : null;
+  const showFooterStatus = Boolean(footerStatus) || saveBudget.visible;
+
   const footer = (
-    <View style={styles.footerCol}>
-      <View>
-        {discardConfirmOpen ? (
-          <Text style={typography.bodyMuted}>{t("modal.settings.discard_confirm")}</Text>
-        ) : saveConfirmOpen ? (
-          <Text style={typography.bodyMuted}>{t("modal.app_settings.save_confirm")}</Text>
-        ) : savedVisible ? (
-          <Text style={[typography.body, { color: colors.vaultStatusOpen }]}>
-            {t("modal.settings.saved")}
-          </Text>
-        ) : null}
-      </View>
+    <View style={showFooterStatus ? styles.footerCol : undefined}>
+      {showFooterStatus ? (
+        <View>
+          {footerStatus}
+          {saveBudget.visible ? (
+            <LoadingBudgetHint
+              budgetMs={saveBudget.budgetMs}
+              remainingMs={saveBudget.remainingMs}
+            />
+          ) : null}
+        </View>
+      ) : null}
       {discardConfirmOpen ? (
-        <View style={styles.footerRow}>
+        <ModalFooterActions layout="confirm">
           <Button
             variant="danger"
             label={t("modal.settings.discard_confirm_action")}
+            style={modalFooterConfirmBtnStyle}
             onPress={handleDiscardAndClose}
           />
           <Button
             variant="ghost"
             label={t("modal.settings.discard_keep_editing")}
+            style={modalFooterConfirmBtnStyle}
             onPress={dismissFooterConfirm}
           />
-        </View>
+        </ModalFooterActions>
       ) : (
-        <View style={styles.footerRow}>
+        <ModalFooterActions layout="confirm">
           <Button
             variant="primary"
             label={
               saveConfirmOpen ? t("modal.settings.save_confirm_action") : t("modal.settings.save")
             }
+            style={modalFooterConfirmBtnStyle}
             disabled={saveConfirmOpen ? saveBusy : saveBlocked}
             onPress={saveConfirmOpen ? commitSave : handleSaveClick}
           />
@@ -303,11 +422,12 @@ export function AppSettingsModal({
             <Button
               variant="ghost"
               label={t("modal.settings.save_cancel")}
+              style={modalFooterConfirmBtnStyle}
               disabled={saveBusy}
               onPress={dismissFooterConfirm}
             />
           ) : null}
-        </View>
+        </ModalFooterActions>
       )}
     </View>
   );
@@ -317,98 +437,69 @@ export function AppSettingsModal({
       <Modal
         open={open}
         title={t("modal.app_settings.title")}
+        titleIcon="settings"
         onClose={requestClose}
         panelClassName="max-w-3xl"
         footer={footer}
       >
-        <View style={styles.content} onTouchStart={dismissFooterConfirm}>
-          {MOBILE_SETTINGS_SECTIONS.map((sectionId) => {
-            const isOpen = expanded === sectionId;
-            return (
-              <View
-                key={sectionId}
-                style={[
-                  styles.sectionCard,
-                  {
-                    backgroundColor: colors.surfaceContainer,
-                    borderColor: colors.outlineVariant,
-                  },
-                ]}
-              >
-                <Pressable
-                  onPress={() => setExpanded(isOpen ? "" : sectionId)}
-                  style={styles.sectionHeader}
-                  accessibilityRole="button"
-                  accessibilityState={{ expanded: isOpen }}
-                >
-                  <Text style={typography.headline}>
-                    {t(`modal.app_settings.section.${sectionId}`)}
-                  </Text>
-                  <View
-                    style={{
-                      transform: [{ rotate: isOpen ? "0deg" : "-90deg" }],
-                    }}
-                  >
-                    <Icon name="chevron-down" size={18} color={colors.onSurfaceVariant} />
-                  </View>
-                </Pressable>
-                {isOpen ? (
-                  <View style={styles.sectionBody}>
-                    {sectionId === "appearance" ? (
-                      <AppearanceFields
-                        config={formConfig.ui}
-                        onChange={(patch) => patchDraft("ui", patch)}
-                      />
-                    ) : null}
-                    {sectionId === "groups" ? (
-                      <GroupsFields
-                        config={formConfig.ui}
-                        onChange={(patch) => patchDraft("ui", patch)}
-                        vaults={vaults}
-                        groups={groups}
-                        includeHidden={includeHidden}
-                        newGroupName={newGroupName}
-                        groupedVaultIds={groupedVaultIds}
-                        nameError={groupNameError}
-                        onNewGroupNameChange={(name) => {
-                          setNewGroupName(name);
-                          setGroupNameError(null);
-                          setSaveConfirmOpen(false);
-                          setDiscardConfirmOpen(false);
-                        }}
-                        onToggleGroupedVault={(vaultId) => {
-                          setGroupedVaultIds((prev) =>
-                            prev.includes(vaultId)
-                              ? prev.filter((id) => id !== vaultId)
-                              : [...prev, vaultId],
-                          );
-                          setSaveConfirmOpen(false);
-                          setDiscardConfirmOpen(false);
-                        }}
-                      />
-                    ) : null}
-                    {sectionId === "logging" ? (
-                      <LoggingFields
-                        config={formConfig.logging}
-                        locale={locale}
-                        onChange={(patch) => patchDraft("logging", patch)}
-                      />
-                    ) : null}
-                    {sectionId === "hidden_vaults" ? (
-                      <HiddenVaultsFields
-                        alwaysShowHiddenVaults={formConfig.ui.always_show_hidden_vaults}
-                        onAlwaysShowHiddenVaultsChange={(always_show_hidden_vaults) =>
-                          patchDraft("ui", { always_show_hidden_vaults })
-                        }
-                        showHiddenVaultsSession={showHiddenVaultsSession}
-                        onShowHiddenVaultsSessionChange={setShowHiddenVaultsSession}
-                      />
-                    ) : null}
-                  </View>
-                ) : null}
-              </View>
-            );
-          })}
+        <View style={styles.content} {...dismissConfirmOnBodyTap}>
+          {APP_SETTINGS_SECTIONS.map((sectionId) => (
+            <SettingsAccordionSection
+              key={sectionId}
+              title={t(`modal.app_settings.section.${sectionId}`)}
+              defaultOpen={sectionId === "language"}
+            >
+              {sectionId === "language" ? (
+                <LanguageFields
+                  config={formConfig.ui}
+                  onChange={(patch) => patchDraft("ui", patch)}
+                />
+              ) : null}
+              {sectionId === "general" ? (
+                <GeneralFields
+                  config={formConfig.ui}
+                  onChange={(patch) => patchDraft("ui", patch)}
+                />
+              ) : null}
+              {sectionId === "workspace" ? (
+                <WorkspaceFields
+                  config={formConfig.workspace}
+                  vaultRootPath={workspaceRootForValidation}
+                  clearDisabled={hasOpenVault}
+                  onChange={(patch) => patchDraft("workspace", patch)}
+                />
+              ) : null}
+              {sectionId === "vault_list" ? (
+                <VaultListFields
+                  config={formConfig.ui}
+                  onChange={(patch) => patchDraft("ui", patch)}
+                />
+              ) : null}
+              {sectionId === "groups" ? (
+                <GroupsPrefsFields
+                  config={formConfig.ui}
+                  onChange={(patch) => patchDraft("ui", patch)}
+                />
+              ) : null}
+              {sectionId === "logging" ? (
+                <LoggingFields
+                  config={formConfig.logging}
+                  locale={locale}
+                  onChange={(patch) => patchDraft("logging", patch)}
+                />
+              ) : null}
+              {sectionId === "hidden_vaults" ? (
+                <HiddenVaultsFields
+                  alwaysShowHiddenVaults={formConfig.ui.always_show_hidden_vaults}
+                  onAlwaysShowHiddenVaultsChange={(always_show_hidden_vaults) =>
+                    patchDraft("ui", { always_show_hidden_vaults })
+                  }
+                  showHiddenVaultsSession={draftShowHiddenVaultsSession}
+                  onShowHiddenVaultsSessionChange={setDraftHiddenSession}
+                />
+              ) : null}
+            </SettingsAccordionSection>
+          ))}
         </View>
       </Modal>
       <Toast message={message} onDismiss={dismiss} />
@@ -416,7 +507,7 @@ export function AppSettingsModal({
   );
 }
 
-function AppearanceFields({
+function LanguageFields({
   config,
   onChange,
 }: {
@@ -424,33 +515,42 @@ function AppearanceFields({
   onChange: (patch: Partial<AppSettingsConfig["ui"]>) => void;
 }) {
   const { t } = useTranslation();
-  const { colors, typography } = useTheme();
   return (
     <View style={styles.fields}>
-      <Text style={typography.caption}>{t("modal.app_settings.section.appearance_intro")}</Text>
+      <FieldHint>{t("modal.app_settings.section.language_intro")}</FieldHint>
 
-      <FieldGroup
-        label={t("modal.app_settings.field.locale")}
-        hint={t("modal.app_settings.field.locale_help")}
+      <View
+        style={styles.optionsCol}
+        accessibilityRole="radiogroup"
+        accessibilityLabel={t("modal.app_settings.section.language")}
       >
-        <View
-          style={styles.optionsCol}
-          accessibilityRole="radiogroup"
-          accessibilityLabel={t("modal.app_settings.field.locale")}
-        >
-          {SUPPORTED_LOCALES.map((loc) => (
-            <PolicyRadioOption
-              key={loc}
-              value={loc}
-              checked={config.locale === loc}
-              title={t(`modal.app_settings.option.locale.${loc}`)}
-              description={t(`modal.app_settings.option.locale.${loc}_desc` as I18nKey)}
-              badge={loc === "en" ? "default" : undefined}
-              onSelect={() => onChange({ locale: loc as LocaleId })}
-            />
-          ))}
-        </View>
-      </FieldGroup>
+        {SUPPORTED_LOCALES.map((loc) => (
+          <PolicyRadioOption
+            key={loc}
+            value={loc}
+            checked={config.locale === loc}
+            title={t(`modal.app_settings.option.locale.${loc}`)}
+            description={t(`modal.app_settings.option.locale.${loc}_desc` as I18nKey)}
+            badge={loc === "en" ? "default" : undefined}
+            onSelect={() => onChange({ locale: loc as LocaleId })}
+          />
+        ))}
+      </View>
+    </View>
+  );
+}
+
+function GeneralFields({
+  config,
+  onChange,
+}: {
+  config: AppSettingsConfig["ui"];
+  onChange: (patch: Partial<AppSettingsConfig["ui"]>) => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <View style={styles.fields}>
+      <FieldHint>{t("modal.app_settings.section.general_intro")}</FieldHint>
 
       <FieldGroup
         label={t("modal.app_settings.field.theme")}
@@ -474,89 +574,182 @@ function AppearanceFields({
           ))}
         </View>
       </FieldGroup>
+
+      <SwitchRow
+        label={t("modal.app_settings.field.vault_list_show_header_more_button")}
+        value={config.vault_list_show_header_more_button}
+        onValueChange={(vault_list_show_header_more_button) =>
+          onChange({ vault_list_show_header_more_button })
+        }
+      />
     </View>
   );
 }
 
-function GroupsFields({
+function WorkspaceFields({
   config,
   onChange,
-  vaults,
-  groups,
-  includeHidden,
-  newGroupName,
-  groupedVaultIds,
-  nameError,
-  onNewGroupNameChange,
-  onToggleGroupedVault,
+  vaultRootPath,
+  clearDisabled = false,
 }: {
-  config: AppSettingsConfig["ui"];
-  onChange: (patch: Partial<AppSettingsConfig["ui"]>) => void;
-  vaults: VaultListItem[];
-  groups: VaultGroup[];
-  includeHidden: boolean;
-  newGroupName: string;
-  groupedVaultIds: string[];
-  nameError: string | null;
-  onNewGroupNameChange: (name: string) => void;
-  onToggleGroupedVault: (vaultId: string) => void;
+  config: AppSettingsConfig["workspace"];
+  onChange: (patch: Partial<AppSettingsConfig["workspace"]>) => void;
+  vaultRootPath: string | null;
+  clearDisabled?: boolean;
 }) {
   const { t } = useTranslation();
   const { colors, typography } = useTheme();
+  const vaultRootService = useVaultRootService();
+  const pathIssue = validateWorkspaceGlobalPath(config.path, vaultRootPath);
+  const canClear = Boolean(config.path.trim()) && !clearDisabled;
+
   return (
     <View style={styles.fields}>
-      <Text style={typography.caption}>{t("modal.app_settings.section.groups_intro")}</Text>
-      <View style={styles.switchRow}>
-        <View style={styles.switchText}>
-          <Text style={typography.body}>
-            {t("modal.app_settings.field.allow_drag_vault_into_group")}
-          </Text>
-          <Text style={typography.caption}>
-            {t("modal.app_settings.field.allow_drag_vault_into_group_help")}
-          </Text>
-        </View>
-        <Switch
-          value={config.allow_drag_vault_into_group}
-          onValueChange={(allow_drag_vault_into_group) => onChange({ allow_drag_vault_into_group })}
-          trackColor={{ false: colors.outlineVariant, true: colors.accent }}
+      <FieldHint>{t("modal.app_settings.section.workspace_intro")}</FieldHint>
+      <FieldLabel>{t("modal.app_settings.field.workspace.path")}</FieldLabel>
+      <FieldHint>{t("modal.app_settings.field.workspace.path_help")}</FieldHint>
+      <ThemedInput
+        value={config.path}
+        placeholder={t("modal.app_settings.field.workspace.path_placeholder")}
+        onChangeText={(path) => {
+          if (clearDisabled) return;
+          onChange({ path });
+        }}
+        editable={!clearDisabled}
+        mono
+      />
+      <View style={styles.rowWrap}>
+        <Button
+          size="sm"
+          variant="ghost"
+          label={t("modal.app_settings.action.pick_workspace_folder")}
+          disabled={clearDisabled || Platform.OS !== "android"}
+          onPress={() => {
+            if (clearDisabled) return;
+            void (async () => {
+              const picked = await vaultRootService.pickFolder(
+                config.path.trim() || null,
+                t("modal.app_settings.action.pick_workspace_folder"),
+              );
+              if (!picked?.trim()) return;
+              onChange({ path: picked.trim() });
+            })();
+          }}
+        />
+        <Button
+          size="sm"
+          variant="ghost"
+          label={t("modal.app_settings.action.clear_workspace_path")}
+          disabled={!canClear}
+          onPress={() => {
+            if (clearDisabled) return;
+            onChange({ path: "" });
+          }}
         />
       </View>
-      <FieldGroup
-        label={t("modal.app_settings.field.new_group_name")}
-        hint={t("modal.app_settings.field.new_group_name_help")}
-      >
-        <TextInput
-          value={newGroupName}
-          maxLength={VAULT_DISPLAY_NAME_MAX_LENGTH}
-          onChangeText={onNewGroupNameChange}
-          placeholder={t("vault.group.create.name_label")}
-          placeholderTextColor={colors.onSurfaceVariant}
-          style={[
-            typography.body,
-            styles.input,
-            {
-              backgroundColor: colors.surfaceContainerHigh,
-              borderColor: colors.outlineVariant,
-              color: colors.onSurface,
-            },
-          ]}
-        />
-      </FieldGroup>
-      {nameError ? (
-        <Text style={[typography.caption, { color: colors.onErrorContainer }]}>{nameError}</Text>
+      {Platform.OS !== "android" ? <FieldHint>{t("error.unsupported_platform")}</FieldHint> : null}
+      {clearDisabled ? (
+        <FieldHint>{t("modal.app_settings.action.clear_workspace_path_blocked_open")}</FieldHint>
       ) : null}
-      <FieldGroup
-        label={t("vault.group.create.grouped_vaults")}
-        hint={t("vault.group.create.grouped_vaults_help")}
-      >
-        <GroupedVaultPicker
-          vaults={vaults}
-          groups={groups}
-          includeHidden={includeHidden}
-          selectedIds={groupedVaultIds}
-          onToggle={onToggleGroupedVault}
-        />
-      </FieldGroup>
+      {pathIssue ? (
+        <Text
+          style={[typography.caption, { color: colors.onErrorContainer }]}
+          accessibilityRole="alert"
+        >
+          {t(workspacePathIssueI18nKey(pathIssue))}
+        </Text>
+      ) : null}
+    </View>
+  );
+}
+
+function VaultListFields({
+  config,
+  onChange,
+}: {
+  config: AppSettingsConfig["ui"];
+  onChange: (patch: Partial<AppSettingsConfig["ui"]>) => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <View style={styles.fields}>
+      <FieldHint>{t("modal.app_settings.section.vault_list_intro")}</FieldHint>
+
+      <SwitchRow
+        label={t("modal.app_settings.field.vault_list_show_drag")}
+        hint={t("modal.app_settings.field.vault_list_show_drag_help")}
+        value={config.vault_list_show_drag}
+        onValueChange={(vault_list_show_drag) => onChange({ vault_list_show_drag })}
+      />
+      <SwitchRow
+        label={t("modal.app_settings.field.vault_list_show_create_button")}
+        value={config.vault_list_show_create_button}
+        onValueChange={(vault_list_show_create_button) =>
+          onChange({ vault_list_show_create_button })
+        }
+      />
+      <SwitchRow
+        label={t("modal.app_settings.field.vault_list_show_search_button")}
+        value={config.vault_list_show_search_button}
+        onValueChange={(vault_list_show_search_button) =>
+          onChange({ vault_list_show_search_button })
+        }
+      />
+      <SwitchRow
+        label={t("modal.app_settings.field.vault_list_show_sort_button")}
+        value={config.vault_list_show_sort_button}
+        onValueChange={(vault_list_show_sort_button) => onChange({ vault_list_show_sort_button })}
+      />
+      <SwitchRow
+        label={t("modal.app_settings.field.vault_list_show_view_button")}
+        value={config.vault_list_show_view_button}
+        onValueChange={(vault_list_show_view_button) => onChange({ vault_list_show_view_button })}
+      />
+      <SwitchRow
+        label={t("modal.app_settings.field.vault_list_show_vault_more_button")}
+        value={config.vault_list_show_vault_more_button}
+        onValueChange={(vault_list_show_vault_more_button) =>
+          onChange({ vault_list_show_vault_more_button })
+        }
+      />
+      <SwitchRow
+        label={t("modal.app_settings.field.vault_list_show_vault_settings_button")}
+        value={config.vault_list_show_vault_settings_button}
+        onValueChange={(vault_list_show_vault_settings_button) =>
+          onChange({ vault_list_show_vault_settings_button })
+        }
+      />
+    </View>
+  );
+}
+
+function GroupsPrefsFields({
+  config,
+  onChange,
+}: {
+  config: AppSettingsConfig["ui"];
+  onChange: (patch: Partial<AppSettingsConfig["ui"]>) => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <View style={styles.fields}>
+      <FieldHint>{t("modal.app_settings.section.groups_settings_intro")}</FieldHint>
+
+      <SwitchRow
+        label={t("modal.app_settings.field.vault_list_show_group_settings_button")}
+        value={config.vault_list_show_group_settings_button}
+        onValueChange={(vault_list_show_group_settings_button) =>
+          onChange({ vault_list_show_group_settings_button })
+        }
+      />
+      <SwitchRow
+        label={t("modal.app_settings.field.vault_list_allow_drag_into_group")}
+        hint={t("modal.app_settings.field.vault_list_allow_drag_into_group_help")}
+        value={config.vault_list_allow_drag_into_group}
+        onValueChange={(vault_list_allow_drag_into_group) =>
+          onChange({ vault_list_allow_drag_into_group })
+        }
+      />
     </View>
   );
 }
@@ -571,7 +764,6 @@ function LoggingFields({
   onChange: (patch: Partial<AppSettingsConfig["logging"]>) => void;
 }) {
   const { t } = useTranslation();
-  const { colors, typography } = useTheme();
 
   const keepLastOptions = useMemo<SelectOption<string>[]>(() => {
     const options: SelectOption<string>[] = LOG_KEEP_LAST_ENTRY_OPTIONS.map((entries) => ({
@@ -593,25 +785,19 @@ function LoggingFields({
 
   return (
     <View style={styles.fields}>
-      <Text style={typography.caption}>{t("modal.app_settings.section.logging_intro")}</Text>
+      <FieldHint>{t("modal.app_settings.section.logging_intro")}</FieldHint>
 
-      <View style={styles.switchRow}>
-        <View style={styles.switchText}>
-          <Text style={typography.body}>{t("modal.app_settings.field.logging_enabled_label")}</Text>
-          <Text style={typography.caption}>
-            {t("modal.app_settings.field.logging_enabled_help")}
-          </Text>
-        </View>
-        <Switch
-          value={config.enabled}
-          onValueChange={(enabled) => onChange({ enabled })}
-          trackColor={{ false: colors.outlineVariant, true: colors.accent }}
-        />
-      </View>
+      <SwitchRow
+        label={t("modal.app_settings.field.logging_enabled_label")}
+        hint={t("modal.app_settings.field.logging_enabled_help")}
+        value={config.enabled}
+        onValueChange={(enabled) => onChange({ enabled })}
+      />
 
       <FieldGroup
         label={t("modal.app_settings.field.logging_level")}
         hint={t("modal.app_settings.field.logging_level_help")}
+        disabled={!config.enabled}
       >
         <View
           style={styles.optionsCol}
@@ -623,6 +809,7 @@ function LoggingFields({
               key={level}
               value={level}
               checked={config.level === level}
+              disabled={!config.enabled}
               title={t(`modal.app_settings.option.logging_level.${level}`)}
               description={t(`modal.app_settings.option.logging_level.${level}_desc` as I18nKey)}
               badge={level === "info" ? "recommended" : undefined}
@@ -637,12 +824,14 @@ function LoggingFields({
         hint={t("modal.app_settings.field.logging_keep_last_help", {
           perFile: String(LOG_ENTRIES_PER_FILE),
         })}
+        disabled={!config.enabled}
       >
         <Select<string>
           value={keepLastValue}
           options={keepLastOptions}
           disabled={!config.enabled}
-          label={t("modal.app_settings.field.logging_keep_last")}
+          title={t("modal.app_settings.field.logging_keep_last")}
+          accessibilityLabel={t("modal.app_settings.field.logging_keep_last")}
           onChange={(next) => {
             const parsed = Number.parseInt(next, 10);
             onChange({
@@ -659,17 +848,18 @@ function LoggingFields({
 function FieldGroup({
   label,
   hint,
+  disabled = false,
   children,
 }: {
   label: string;
   hint?: string;
+  disabled?: boolean;
   children: React.ReactNode;
 }) {
-  const { typography } = useTheme();
   return (
     <View style={styles.fieldGroup}>
-      <Text style={typography.bodyMuted}>{label}</Text>
-      {hint ? <Text style={typography.caption}>{hint}</Text> : null}
+      <FieldLabel disabled={disabled}>{label}</FieldLabel>
+      {hint ? <FieldHint disabled={disabled}>{hint}</FieldHint> : null}
       {children}
     </View>
   );
@@ -687,40 +877,21 @@ function HiddenVaultsFields({
   onShowHiddenVaultsSessionChange: (value: boolean) => void;
 }) {
   const { t } = useTranslation();
-  const { colors, typography } = useTheme();
   return (
     <View style={styles.fields}>
-      <Text style={typography.caption}>{t("modal.app_settings.section.hidden_vaults_intro")}</Text>
-      <View style={styles.switchRow}>
-        <View style={styles.switchText}>
-          <Text style={typography.body}>
-            {t("modal.app_settings.field.show_hidden_vaults_session")}
-          </Text>
-          <Text style={typography.caption}>
-            {t("modal.app_settings.field.show_hidden_vaults_session_help")}
-          </Text>
-        </View>
-        <Switch
-          value={showHiddenVaultsSession}
-          onValueChange={onShowHiddenVaultsSessionChange}
-          trackColor={{ false: colors.outlineVariant, true: colors.accent }}
-        />
-      </View>
-      <View style={styles.switchRow}>
-        <View style={styles.switchText}>
-          <Text style={typography.body}>
-            {t("modal.app_settings.field.always_show_hidden_vaults")}
-          </Text>
-          <Text style={typography.caption}>
-            {t("modal.app_settings.field.always_show_hidden_vaults_help")}
-          </Text>
-        </View>
-        <Switch
-          value={alwaysShowHiddenVaults}
-          onValueChange={onAlwaysShowHiddenVaultsChange}
-          trackColor={{ false: colors.outlineVariant, true: colors.accent }}
-        />
-      </View>
+      <FieldHint>{t("modal.app_settings.section.hidden_vaults_intro")}</FieldHint>
+      <SwitchRow
+        label={t("modal.app_settings.field.show_hidden_vaults_session")}
+        hint={t("modal.app_settings.field.show_hidden_vaults_session_help")}
+        value={showHiddenVaultsSession}
+        onValueChange={onShowHiddenVaultsSessionChange}
+      />
+      <SwitchRow
+        label={t("modal.app_settings.field.always_show_hidden_vaults")}
+        hint={t("modal.app_settings.field.always_show_hidden_vaults_help")}
+        value={alwaysShowHiddenVaults}
+        onValueChange={onAlwaysShowHiddenVaultsChange}
+      />
     </View>
   );
 }
@@ -742,38 +913,9 @@ function formatKeepLast(
 
 const styles = StyleSheet.create({
   content: { gap: spacing.sm, paddingBottom: spacing.sm },
-  sectionCard: {
-    borderRadius: radii.md,
-    borderWidth: 1,
-    overflow: "hidden",
-  },
-  sectionHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.md,
-    gap: spacing.md,
-  },
-  sectionBody: { paddingHorizontal: spacing.md, paddingBottom: spacing.md },
   fields: { gap: spacing.md },
   fieldGroup: { gap: spacing.xs },
   optionsCol: { gap: spacing.sm },
   rowWrap: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm },
-  switchRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: spacing.md,
-  },
-  switchText: { flex: 1, gap: 4 },
-  input: {
-    borderRadius: radii.sm,
-    borderWidth: 1,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.md,
-    minHeight: 44,
-  },
   footerCol: { gap: spacing.md },
-  footerRow: { gap: spacing.sm },
 });

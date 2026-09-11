@@ -14,7 +14,7 @@ import {
   renameVaultPath,
   resetVaultFileSession,
   setVaultFileContent,
-} from "../fileSystem";
+} from "@upriv/shared/testing";
 
 const VAULT = "my-encrypted-notes";
 

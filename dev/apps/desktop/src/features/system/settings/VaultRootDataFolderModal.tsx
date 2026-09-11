@@ -279,6 +279,7 @@ export function VaultRootDataFolderModal({
     <Modal
       open={open}
       title={t("modal.data_folder.title")}
+      titleIcon="folder"
       onClose={requestClose}
       panelClassName="max-w-lg"
       footer={footer}
@@ -293,7 +294,7 @@ export function VaultRootDataFolderModal({
           {t("modal.data_folder.body")}
         </p>
         <VaultRootLocationSection
-          config={{ vault_root_mode: mode, upriv_root_path: path }}
+          config={{ vault_root_mode: mode, upriv_root_path: path, last_opened_vault: "" }}
           onChange={onDraftChange}
           savedVaultRootMode={settings.app.vault_root_mode}
           savedRootPath={settings.app.upriv_root_path}

@@ -1,7 +1,7 @@
 import type { VaultBackupEntry } from "@upriv/shared";
 import { downloadFiles } from "@/lib/downloadZip";
 
-/** Download selected backups as a zip (mock bytes until desktop reads real `.7z`). */
+/** Download selected backup trees as a zip (mock bytes until desktop copies frozen `contents/`). */
 export async function downloadBackupsZip(
   entries: readonly VaultBackupEntry[],
   zipName: string,
@@ -9,7 +9,7 @@ export async function downloadBackupsZip(
 ): Promise<void> {
   const files = await Promise.all(
     entries.map(async (entry) => ({
-      filename: entry.filename,
+      filename: entry.stamp,
       data: await getBackupBytes(entry),
     })),
   );

@@ -8,13 +8,14 @@ import {
   useState,
 } from "react";
 import { AnchoredPopover } from "./AnchoredPopover";
-import { menuItemClass, menuPanelClass } from "./menuStyles";
+import { menuGroupLabelClass, menuItemClass, menuPanelClass } from "./menuStyles";
 
 export interface DropdownMenuItem {
   id: string;
   label: string;
   icon?: ReactNode;
   className?: string;
+  disabled?: boolean;
   onSelect?: () => void;
 }
 
@@ -68,16 +69,21 @@ export function DropdownMenu({ trigger, items, align = "right", label }: Dropdow
         id={menuId}
         role="menu"
         aria-label={label}
-        className={["min-w-[12rem]", menuPanelClass].join(" ")}
+        className={["min-w-[12rem] py-1", menuPanelClass].join(" ")}
       >
+        <p className={menuGroupLabelClass} aria-hidden>
+          {label}
+        </p>
         <ul>
           {items.map((item) => (
             <li key={item.id} role="none">
               <button
                 type="button"
                 role="menuitem"
+                disabled={item.disabled}
                 className={[menuItemClass, item.className].filter(Boolean).join(" ")}
                 onClick={() => {
+                  if (item.disabled) return;
                   item.onSelect?.();
                   setOpen(false);
                 }}

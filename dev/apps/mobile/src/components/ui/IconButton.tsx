@@ -1,5 +1,11 @@
 import type { ReactNode } from "react";
-import { Pressable, StyleSheet, type StyleProp, type ViewStyle } from "react-native";
+import {
+  Pressable,
+  StyleSheet,
+  type GestureResponderEvent,
+  type StyleProp,
+  type ViewStyle,
+} from "react-native";
 import { Icon, type IconName } from "@/components/icons";
 import { useTheme } from "@/theme";
 import { radii, spacing } from "@/theme/tokens";
@@ -7,12 +13,12 @@ import { radii, spacing } from "@/theme/tokens";
 interface IconButtonProps {
   /** Accessibility label (desktop `aria-label` / title). */
   label: string;
-  onPress?: () => void;
+  onPress?: (event: GestureResponderEvent) => void;
   disabled?: boolean;
   /** Named glyph — ignored when `children` is provided. */
   icon?: IconName;
   size?: number;
-  tone?: "default" | "muted" | "accent";
+  tone?: "default" | "muted" | "accent" | "danger";
   children?: ReactNode;
   style?: StyleProp<ViewStyle>;
 }
@@ -32,9 +38,11 @@ export function IconButton({
   const color =
     tone === "accent"
       ? colors.accent
-      : tone === "default"
-        ? colors.onSurface
-        : colors.onSurfaceVariant;
+      : tone === "danger"
+        ? colors.onErrorContainer
+        : tone === "default"
+          ? colors.onSurface
+          : colors.onSurfaceVariant;
 
   return (
     <Pressable
@@ -56,7 +64,7 @@ const styles = StyleSheet.create({
     minHeight: 40,
     alignItems: "center",
     justifyContent: "center",
-    borderRadius: radii.sm,
+    borderRadius: radii.md,
     padding: spacing.xs,
   },
 });

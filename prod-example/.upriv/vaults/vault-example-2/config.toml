@@ -1,18 +1,16 @@
-# Vault config — storage, security, backup, 7z, policies (static; survives seal)
-# Example 2 — compress + encrypt, keep_all backups, auto-close with warning (sealed on disk)
+# Vault config — storage, security, backup, 7z, policies
+# Example 2 — compress + encrypt, keep_all backups, auto-close with warning
 
 [vault]
 id = "vault-example-2"                              # normalized (folder, backups, paths)
 display_name = "Vault ExaMple 2"                    # UI — verbatim user input at creation
 order = 1
-vault_file = "archive/Vault ExaMple 2.7z"           # main archive — NEVER normalized (same as display_name + .7z)
-backups_dir = "backups"
 
 [storage]
 mode = "encrypted_dir"
 
-[close]
-default_action = "close"
+# Unlock RAM (Argon2id) lives in contents/vault.header — not in config.toml.
+# There is no [kdf] section here; upriv-core reads KDF params from the header.
 
 [backup]
 enabled = true

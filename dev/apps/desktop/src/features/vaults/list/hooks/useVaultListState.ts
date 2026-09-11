@@ -1,62 +1,41 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import {
   VAULT_NOTE_MAX_LENGTH,
   DEFAULT_VAULT_LIST_VIEW,
   type VaultListViewMode,
-  assertPlainVaultInvariant,
-  type VaultPersistence,
   type VaultSession,
   type VaultSettingsListPatch,
   type VaultListItem,
   type VaultGroup,
+  type VaultListRootRow,
   applyVaultListHierarchySort,
   canReorderGroupedVaults,
   canReorderVaultList,
   DEFAULT_VAULT_LIST_SORT,
   type VaultListSort,
-  type VaultListRootRow,
+  dragKeyRefersToVaultId,
+  groupedVaultDropInsertsAfter,
   groupedVaultSortOf,
+  hiddenUngroupedRootVaults,
+  hiddenOmittedRootGroups,
   normalizeVaultGroup,
   reorderRootRows,
   reorderGroupedVaults,
-  rootRowDragKey,
   assignVaultToGroup,
   removeVaultFromGroups,
   insertUngroupedVaultAtRoot,
+  resolveListDrop,
   resolveVaultPasswordHint,
   sortVaultsByOrder,
 } from "@upriv/shared";
-import { isOsFileDrag } from "@/features/vaults/file-manager/lib/osFileDrop";
 import { registerMockVaultId, unregisterMockVaultId } from "@/platform/mocks/data/vaults";
+import { hitVaultListDropKey } from "../lib/hitListDropKey";
 
 function seedVaultPasswordHints(vaults: VaultListItem[]): VaultListItem[] {
   return vaults.map((vault) => {
-    assertPlainVaultInvariant(vault);
     const passwordHint = resolveVaultPasswordHint(vault);
     return passwordHint ? { ...vault, passwordHint } : vault;
   });
-}
-
-const ROOT_DRAG_MIME = "application/x-upriv-root-row";
-const MEMBER_DRAG_MIME = "application/x-upriv-group-member";
-const LIST_UNGROUP_DRAG_KEY = "list:ungroup";
-
-function readMemberDrag(
-  event: React.DragEvent,
-  draggingId: string | null,
-): { groupId: string; vaultId: string } | null {
-  const raw = event.dataTransfer.getData(MEMBER_DRAG_MIME);
-  if (raw) {
-    const [groupId, vaultId] = raw.split("\t");
-    if (groupId && vaultId) return { groupId, vaultId };
-  }
-  if (draggingId?.startsWith("member:")) {
-    const parts = draggingId.split(":");
-    const groupId = parts[1];
-    const vaultId = parts[2];
-    if (groupId && vaultId) return { groupId, vaultId };
-  }
-  return null;
 }
 
 export function useVaultListState(
@@ -65,23 +44,32 @@ export function useVaultListState(
     initialSort?: VaultListSort;
     initialViewMode?: VaultListViewMode;
     showHiddenVaults?: boolean;
-    reloadVaults?: () => Promise<VaultListItem[]>;
+    /** Search is open — hide grips and ignore reorder/assign drops. */
+    searchActive?: boolean;
     initialGroups?: VaultGroup[];
     /** Persist in-group vault order after drag (mock/RPC). Required so collapse reload keeps order. */
     onGroupedVaultsReordered?: (groupId: string, groupedVaults: string[]) => void;
-    /** Persist group `order` after a root-row drop (one RPC).
-     * Vault `order` is updated locally for session DnD only — there is no vault-order
-     * RPC yet (`vault_list` / settings order). After refresh, vault positions snap back. */
+    /** Persist group `order` after a root-row drop (one RPC). */
     onRootGroupsReordered?: (orders: { id: string; order: number }[]) => void;
+    /** Persist ungrouped vault `order` after a root-row drop (`config.toml` / mock settings). */
+    onRootVaultsReordered?: (orders: { id: string; order: number }[]) => void;
+    /** Drop tried to reorder while sort is not `order`, or while search is active (toast). */
+    onReorderBlocked?: (scope: "root" | "group" | "search") => void;
+    /** Show drag handles and allow list/group reorder. Default true. */
+    vaultListShowDrag?: boolean;
     /** Drop a vault onto a group (ungrouped or cross-group). Default true. */
-    allowDragVaultIntoGroup?: boolean;
+    vaultListAllowDragIntoGroup?: boolean;
     onVaultAssignedToGroup?: (targetGroupId: string, groupedVaults: string[]) => void;
   },
 ) {
-  const reloadVaults = options?.reloadVaults;
   const onGroupedVaultsReordered = options?.onGroupedVaultsReordered;
   const onRootGroupsReordered = options?.onRootGroupsReordered;
-  const allowDragVaultIntoGroup = options?.allowDragVaultIntoGroup !== false;
+  const onRootVaultsReordered = options?.onRootVaultsReordered;
+  const onReorderBlocked = options?.onReorderBlocked;
+  const searchLocked = options?.searchActive === true;
+  const vaultListShowDrag = options?.vaultListShowDrag !== false && !searchLocked;
+  const vaultListAllowDragIntoGroup =
+    options?.vaultListAllowDragIntoGroup !== false && !searchLocked;
   const onVaultAssignedToGroup = options?.onVaultAssignedToGroup;
   const [isReady, setIsReady] = useState(initialVaults.length > 0);
   const [vaults, setVaults] = useState(() =>
@@ -99,7 +87,23 @@ export function useVaultListState(
     options?.initialViewMode ?? DEFAULT_VAULT_LIST_VIEW,
   );
   const [draggingId, setDraggingId] = useState<string | null>(null);
+  const draggingIdRef = useRef<string | null>(null);
   const [dragOverId, setDragOverId] = useState<string | null>(null);
+  const dragOverIdRef = useRef<string | null>(null);
+  const [dragPointer, setDragPointer] = useState<{ x: number; y: number } | null>(null);
+
+  const beginDrag = useCallback((key: string) => {
+    draggingIdRef.current = key;
+    setDraggingId(key);
+  }, []);
+
+  const endDrag = useCallback(() => {
+    draggingIdRef.current = null;
+    dragOverIdRef.current = null;
+    setDraggingId(null);
+    setDragOverId(null);
+    setDragPointer(null);
+  }, []);
 
   const showHiddenVaults = options?.showHiddenVaults ?? false;
 
@@ -107,23 +111,40 @@ export function useVaultListState(
     return applyVaultListHierarchySort(vaults, groups, sort, { showHiddenVaults });
   }, [vaults, groups, sort, showHiddenVaults]);
 
-  const displayVaults = useMemo(() => {
-    const out: VaultListItem[] = [];
-    for (const row of displayRows) {
-      if (row.kind === "vault") out.push(row.vault);
-      else if (!row.group.collapsed) out.push(...row.groupedVaults);
-    }
-    return out;
-  }, [displayRows]);
+  const canReorder = vaultListShowDrag && canReorderVaultList(sort);
 
-  const canReorder = canReorderVaultList(sort);
+  const persistRootOrdersFromRows = useCallback(
+    (nextRows: VaultListRootRow[]) => {
+      const nextVaults = vaults.map((vault) => {
+        const row = nextRows.find((r) => r.kind === "vault" && r.vault.id === vault.id);
+        return row && row.kind === "vault" ? { ...vault, order: row.vault.order } : vault;
+      });
+      const nextGroups = groups.map((group) => {
+        const row = nextRows.find((r) => r.kind === "group" && r.group.id === group.id);
+        return row && row.kind === "group" ? { ...group, order: row.group.order } : group;
+      });
+      setVaults(nextVaults);
+      const groupOrders = nextGroups
+        .filter((group) => groups.find((g) => g.id === group.id)?.order !== group.order)
+        .map((group) => ({ id: group.id, order: group.order }));
+      if (groupOrders.length > 0) onRootGroupsReordered?.(groupOrders);
+      const vaultOrders = nextVaults
+        .filter((vault) => vaults.find((item) => item.id === vault.id)?.order !== vault.order)
+        .map((vault) => ({ id: vault.id, order: vault.order ?? 0 }));
+      if (vaultOrders.length > 0) onRootVaultsReordered?.(vaultOrders);
+      return nextGroups;
+    },
+    [groups, onRootGroupsReordered, onRootVaultsReordered, vaults],
+  );
 
-  const initializeVaults = useCallback((rows: VaultListItem[]) => {
-    setVaults(sortVaultsByOrder(seedVaultPasswordHints(rows)));
-    setIsReady(true);
-    setDraggingId(null);
-    setDragOverId(null);
-  }, []);
+  const initializeVaults = useCallback(
+    (rows: VaultListItem[]) => {
+      setVaults(sortVaultsByOrder(seedVaultPasswordHints(rows)));
+      setIsReady(true);
+      endDrag();
+    },
+    [endDrag],
+  );
 
   const initializeGroups = useCallback((next: VaultGroup[], invalid = false) => {
     setGroups(next.map((g) => normalizeVaultGroup({ ...g, groupedVaults: [...g.groupedVaults] })));
@@ -131,114 +152,14 @@ export function useVaultListState(
     if (!invalid) setGroupsInvalidDismissed(false);
   }, []);
 
-  const resetList = useCallback(async () => {
-    if (reloadVaults) {
-      const rows = await reloadVaults();
-      initializeVaults(rows);
-      return;
-    }
-    initializeVaults(initialVaults);
-  }, [initialVaults, reloadVaults, initializeVaults]);
-
-  const onRootDragStart = useCallback(
-    (row: VaultListRootRow) => {
-      return (event: React.DragEvent) => {
-        const isVault = row.kind === "vault";
-        if (!canReorder && !(allowDragVaultIntoGroup && isVault)) return;
-        const key = rootRowDragKey(row);
-        event.dataTransfer.effectAllowed = "move";
-        event.dataTransfer.setData(ROOT_DRAG_MIME, key);
-        setDraggingId(key);
-      };
-    },
-    [allowDragVaultIntoGroup, canReorder],
-  );
-
-  const onMemberDragStart = useCallback(
-    (groupId: string, vaultId: string) => {
-      return (event: React.DragEvent) => {
-        const group = groups.find((g) => g.id === groupId);
-        if (!group) return;
-        const canReorderInGroup = canReorderGroupedVaults(groupedVaultSortOf(group));
-        if (!canReorderInGroup && !allowDragVaultIntoGroup) return;
-        const key = `member:${groupId}:${vaultId}`;
-        event.dataTransfer.effectAllowed = "move";
-        event.dataTransfer.setData(MEMBER_DRAG_MIME, `${groupId}\t${vaultId}`);
-        setDraggingId(key);
-      };
-    },
-    [allowDragVaultIntoGroup, groups],
-  );
-
-  const onDragEnd = useCallback(() => {
-    setDraggingId(null);
-    setDragOverId(null);
-  }, []);
-
-  const onRootDragOver = useCallback(
-    (row: VaultListRootRow) => {
-      return (event: React.DragEvent) => {
-        if (isOsFileDrag(event)) return;
-        const memberDrag = draggingId?.startsWith("member:");
-        const vaultDrag = draggingId?.startsWith("vault:");
-        const groupDrag = draggingId?.startsWith("group:");
-        if (row.kind === "group") {
-          const acceptAssign =
-            allowDragVaultIntoGroup && Boolean(memberDrag || vaultDrag);
-          const acceptReorder = canReorder && Boolean(groupDrag || vaultDrag);
-          if (!acceptAssign && !acceptReorder) return;
-          event.preventDefault();
-          event.stopPropagation();
-          event.dataTransfer.dropEffect = "move";
-          setDragOverId(rootRowDragKey(row));
-          return;
-        }
-        const acceptUngroup = allowDragVaultIntoGroup && Boolean(memberDrag);
-        const acceptReorder = canReorder && Boolean(vaultDrag || groupDrag);
-        if (!acceptUngroup && !acceptReorder) return;
-        event.preventDefault();
-        event.stopPropagation();
-        event.dataTransfer.dropEffect = "move";
-        setDragOverId(rootRowDragKey(row));
-      };
-    },
-    [allowDragVaultIntoGroup, canReorder, draggingId],
-  );
-
-  const onMemberDragOver = useCallback(
-    (groupId: string, vaultId: string) => {
-      return (event: React.DragEvent) => {
-        if (isOsFileDrag(event)) return;
-        const group = groups.find((g) => g.id === groupId);
-        if (!group) return;
-        const canReorderInGroup = canReorderGroupedVaults(groupedVaultSortOf(group));
-        const memberDrag = draggingId?.startsWith("member:");
-        const vaultDrag = draggingId?.startsWith("vault:");
-        const sourceGroupId = memberDrag ? draggingId?.split(":")[1] : null;
-        const sameGroupReorder = memberDrag && sourceGroupId === groupId && canReorderInGroup;
-        const assignInto =
-          allowDragVaultIntoGroup && (vaultDrag || (memberDrag && sourceGroupId !== groupId));
-        if (!sameGroupReorder && !assignInto) return;
-        event.preventDefault();
-        event.stopPropagation();
-        event.dataTransfer.dropEffect = "move";
-        setDragOverId(`member:${groupId}:${vaultId}`);
-      };
-    },
-    [allowDragVaultIntoGroup, draggingId, groups],
-  );
-
-  const onDragLeave = useCallback((id: string) => {
-    return () => {
-      setDragOverId((current) => (current === id ? null : current));
-    };
-  }, []);
-
   const commitAssignToGroup = useCallback(
     (vaultId: string, targetGroupId: string, beforeVaultId?: string | null) => {
       const source = groups.find((g) => g.groupedVaults.includes(vaultId));
       if (source?.id === targetGroupId && !beforeVaultId) return;
-      const nextGroups = assignVaultToGroup(groups, vaultId, targetGroupId, beforeVaultId);
+      const targetGroup = groups.find((g) => g.id === targetGroupId);
+      const nextGroups = assignVaultToGroup(groups, vaultId, targetGroupId, beforeVaultId, {
+        insertAfter: targetGroup ? groupedVaultDropInsertsAfter(targetGroup) : false,
+      });
       setGroups(nextGroups);
       const target = nextGroups.find((g) => g.id === targetGroupId);
       if (target) onVaultAssignedToGroup?.(targetGroupId, target.groupedVaults);
@@ -256,7 +177,16 @@ export function useVaultListState(
       if (canReorder) {
         const vault = vaults.find((item) => item.id === vaultId);
         if (vault) {
-          const nextRows = insertUngroupedVaultAtRoot(displayRows, vault, beforeVaultId);
+          const hiddenTail = hiddenUngroupedRootVaults(vaults, groups, displayRows);
+          const hiddenGroups = hiddenOmittedRootGroups(groups, displayRows);
+          const nextRows = insertUngroupedVaultAtRoot(
+            displayRows,
+            vault,
+            beforeVaultId,
+            sort.direction,
+            hiddenTail,
+            hiddenGroups,
+          );
           nextVaults = vaults.map((item) => {
             const row = nextRows.find((r) => r.kind === "vault" && r.vault.id === item.id);
             return row && row.kind === "vault" ? { ...item, order: row.vault.order } : item;
@@ -265,10 +195,14 @@ export function useVaultListState(
             const row = nextRows.find((r) => r.kind === "group" && r.group.id === group.id);
             return row && row.kind === "group" ? { ...group, order: row.group.order } : group;
           });
-          const orders = nextGroups
+          const groupOrders = nextGroups
             .filter((group) => groups.find((g) => g.id === group.id)?.order !== group.order)
             .map((group) => ({ id: group.id, order: group.order }));
-          if (orders.length > 0) onRootGroupsReordered?.(orders);
+          if (groupOrders.length > 0) onRootGroupsReordered?.(groupOrders);
+          const vaultOrders = nextVaults
+            .filter((item) => vaults.find((prev) => prev.id === item.id)?.order !== item.order)
+            .map((item) => ({ id: item.id, order: item.order ?? 0 }));
+          if (vaultOrders.length > 0) onRootVaultsReordered?.(vaultOrders);
         }
       }
       setVaults(nextVaults);
@@ -280,189 +214,11 @@ export function useVaultListState(
       displayRows,
       groups,
       onRootGroupsReordered,
+      onRootVaultsReordered,
       onVaultAssignedToGroup,
+      sort.direction,
       vaults,
     ],
-  );
-
-  const onUngroupDragOver = useCallback(
-    (event: React.DragEvent) => {
-      if (isOsFileDrag(event)) return;
-      if (!allowDragVaultIntoGroup || !draggingId?.startsWith("member:")) return;
-      event.preventDefault();
-      event.stopPropagation();
-      event.dataTransfer.dropEffect = "move";
-      setDragOverId(LIST_UNGROUP_DRAG_KEY);
-    },
-    [allowDragVaultIntoGroup, draggingId],
-  );
-
-  const onUngroupDrop = useCallback(
-    (event: React.DragEvent) => {
-      if (isOsFileDrag(event)) return;
-      event.preventDefault();
-      event.stopPropagation();
-      const member = readMemberDrag(event, draggingId);
-      if (member && allowDragVaultIntoGroup) {
-        commitUngroup(member.vaultId);
-      }
-      setDraggingId(null);
-      setDragOverId(null);
-    },
-    [allowDragVaultIntoGroup, commitUngroup, draggingId],
-  );
-
-  const onRootDrop = useCallback(
-    (target: VaultListRootRow) => {
-      return (event: React.DragEvent) => {
-        if (isOsFileDrag(event)) return;
-        event.preventDefault();
-        event.stopPropagation();
-        const targetKey = rootRowDragKey(target);
-        const member = readMemberDrag(event, draggingId);
-        const rootRaw = event.dataTransfer.getData(ROOT_DRAG_MIME) || draggingId;
-
-        if (target.kind === "vault" && member && allowDragVaultIntoGroup) {
-          commitUngroup(member.vaultId, canReorder ? target.vault.id : null);
-          setDraggingId(null);
-          setDragOverId(null);
-          return;
-        }
-
-        if (target.kind === "group") {
-          const vaultId = member
-            ? member.vaultId
-            : rootRaw?.startsWith("vault:")
-              ? rootRaw.slice("vault:".length)
-              : null;
-          if (vaultId && allowDragVaultIntoGroup) {
-            commitAssignToGroup(vaultId, target.group.id);
-            setDraggingId(null);
-            setDragOverId(null);
-            return;
-          }
-        }
-
-        if (!canReorder) {
-          setDraggingId(null);
-          setDragOverId(null);
-          return;
-        }
-        const draggedKey = rootRaw;
-        if (draggedKey && draggedKey !== targetKey && !draggedKey.startsWith("member:")) {
-          const nextRows = reorderRootRows(displayRows, draggedKey, targetKey);
-          const nextVaults = vaults.map((vault) => {
-            const row = nextRows.find((r) => r.kind === "vault" && r.vault.id === vault.id);
-            return row && row.kind === "vault" ? { ...vault, order: row.vault.order } : vault;
-          });
-          const nextGroups = groups.map((group) => {
-            const row = nextRows.find((r) => r.kind === "group" && r.group.id === group.id);
-            return row && row.kind === "group" ? { ...group, order: row.group.order } : group;
-          });
-          setVaults(nextVaults);
-          setGroups(nextGroups);
-          const orders = nextGroups
-            .filter((group) => groups.find((g) => g.id === group.id)?.order !== group.order)
-            .map((group) => ({ id: group.id, order: group.order }));
-          if (orders.length > 0) onRootGroupsReordered?.(orders);
-        }
-        setDraggingId(null);
-        setDragOverId(null);
-      };
-    },
-    [
-      allowDragVaultIntoGroup,
-      canReorder,
-      commitAssignToGroup,
-      commitUngroup,
-      displayRows,
-      draggingId,
-      groups,
-      onRootGroupsReordered,
-      vaults,
-    ],
-  );
-
-  const onMemberDrop = useCallback(
-    (groupId: string, targetVaultId: string) => {
-      return (event: React.DragEvent) => {
-        if (isOsFileDrag(event)) return;
-        event.preventDefault();
-        event.stopPropagation();
-        const group = groups.find((g) => g.id === groupId);
-        if (!group) {
-          setDraggingId(null);
-          setDragOverId(null);
-          return;
-        }
-        const raw = event.dataTransfer.getData(MEMBER_DRAG_MIME);
-        const rootRaw = event.dataTransfer.getData(ROOT_DRAG_MIME) || draggingId;
-        let draggedVaultId: string | null = null;
-        let sourceGroupId: string | null = groupId;
-        if (raw) {
-          const [gid, vid] = raw.split("\t");
-          sourceGroupId = gid;
-          draggedVaultId = vid;
-        } else if (draggingId?.startsWith("member:")) {
-          const parts = draggingId.split(":");
-          sourceGroupId = parts[1] ?? groupId;
-          draggedVaultId = parts[2] ?? null;
-        } else if (rootRaw?.startsWith("vault:")) {
-          sourceGroupId = null;
-          draggedVaultId = rootRaw.slice("vault:".length);
-        }
-
-        if (draggedVaultId && sourceGroupId === groupId && draggedVaultId !== targetVaultId) {
-          if (canReorderGroupedVaults(groupedVaultSortOf(group))) {
-            const nextGroup = reorderGroupedVaults(group, draggedVaultId, targetVaultId);
-            setGroups((current) => current.map((g) => (g.id === groupId ? nextGroup : g)));
-            onGroupedVaultsReordered?.(groupId, nextGroup.groupedVaults);
-          }
-        } else if (
-          draggedVaultId &&
-          allowDragVaultIntoGroup &&
-          sourceGroupId !== groupId
-        ) {
-          commitAssignToGroup(draggedVaultId, groupId, targetVaultId);
-        }
-        setDraggingId(null);
-        setDragOverId(null);
-      };
-    },
-    [allowDragVaultIntoGroup, commitAssignToGroup, draggingId, groups, onGroupedVaultsReordered],
-  );
-
-  // Legacy vault-id drag adapters for VaultRow (root vault rows only).
-  const onDragStart = useCallback(
-    (vaultId: string) => {
-      const row = displayRows.find((r) => r.kind === "vault" && r.vault.id === vaultId);
-      if (row) return onRootDragStart(row);
-      // Member rows use onMemberDragStart from VaultList.
-      return onMemberDragStart("", vaultId);
-    },
-    [displayRows, onMemberDragStart, onRootDragStart],
-  );
-
-  const onDragOver = useCallback(
-    (vaultId: string) => {
-      const row = displayRows.find((r) => r.kind === "vault" && r.vault.id === vaultId);
-      if (row) return onRootDragOver(row);
-      return (event: React.DragEvent) => {
-        event.preventDefault();
-      };
-    },
-    [displayRows, onRootDragOver],
-  );
-
-  const onDrop = useCallback(
-    (vaultId: string) => {
-      const row = displayRows.find((r) => r.kind === "vault" && r.vault.id === vaultId);
-      if (row) return onRootDrop(row);
-      return (event: React.DragEvent) => {
-        event.preventDefault();
-      };
-    },
-    [displayRows, onRootDrop],
   );
 
   const updateNote = useCallback((vaultId: string, note: string) => {
@@ -485,8 +241,14 @@ export function useVaultListState(
         groupedVaults: group.groupedVaults.filter((id) => id !== vaultId),
       })),
     );
-    setDraggingId((id) => (id?.includes(vaultId) ? null : id));
-    setDragOverId((id) => (id?.includes(vaultId) ? null : id));
+    setDraggingId((id) => {
+      if (dragKeyRefersToVaultId(id, vaultId)) {
+        draggingIdRef.current = null;
+        return null;
+      }
+      return id;
+    });
+    setDragOverId((id) => (dragKeyRefersToVaultId(id, vaultId) ? null : id));
   }, []);
 
   const updateVaultSettings = useCallback((vaultId: string, patch: VaultSettingsListPatch) => {
@@ -501,11 +263,24 @@ export function useVaultListState(
               hidden: patch.hidden,
               passwordHint: patch.passwordHint,
               storageMode: patch.storageMode,
-              canSeal: patch.canSeal,
             }
           : vault,
       );
       return sortVaultsByOrder(next);
+    });
+  }, []);
+
+  const markVaultsHidden = useCallback((vaultIds: readonly string[], hidden = true) => {
+    if (vaultIds.length === 0) return;
+    const idSet = new Set(vaultIds);
+    setVaults((current) => {
+      let changed = false;
+      const next = current.map((vault) => {
+        if (!idSet.has(vault.id) || vault.hidden === hidden) return vault;
+        changed = true;
+        return { ...vault, hidden };
+      });
+      return changed ? next : current;
     });
   }, []);
 
@@ -519,8 +294,6 @@ export function useVaultListState(
       vaultId: string,
       patch: {
         session: VaultSession | null;
-        persistence?: VaultPersistence;
-        canSeal?: boolean;
         lastAccessedAt?: string;
         lastAccessedWhen?: string;
       },
@@ -532,23 +305,129 @@ export function useVaultListState(
     [],
   );
 
-  const upsertGroup = useCallback((group: VaultGroup) => {
-    setGroups((current) => {
-      const index = current.findIndex((g) => g.id === group.id);
-      if (index < 0) return [...current, { ...group, groupedVaults: [...group.groupedVaults] }];
-      return current.map((g) => (g.id === group.id ? { ...group, groupedVaults: [...group.groupedVaults] } : g));
-    });
-  }, []);
-
-  const removeGroup = useCallback((groupId: string) => {
-    setGroups((current) => current.filter((g) => g.id !== groupId));
-  }, []);
-
   const setGroupCollapsed = useCallback((groupId: string, collapsed: boolean) => {
-    setGroups((current) =>
-      current.map((g) => (g.id === groupId ? { ...g, collapsed } : g)),
-    );
+    setGroups((current) => current.map((g) => (g.id === groupId ? { ...g, collapsed } : g)));
   }, []);
+
+  const applyListDrop = useCallback(
+    (sourceKey: string, targetKey: string | null) => {
+      const action = resolveListDrop({
+        sourceKey,
+        targetKey,
+        canReorderRoot: canReorder,
+        allowDragIntoGroup: vaultListAllowDragIntoGroup,
+        canReorderGrouped: (groupId) => {
+          const group = groups.find((g) => g.id === groupId);
+          return Boolean(
+            group && vaultListShowDrag && canReorderGroupedVaults(groupedVaultSortOf(group)),
+          );
+        },
+      });
+
+      if (action.kind === "reorder-grouped") {
+        const group = groups.find((g) => g.id === action.groupId);
+        if (group) {
+          const nextGroup = reorderGroupedVaults(
+            group,
+            action.draggedVaultId,
+            action.targetVaultId,
+          );
+          setGroups((current) => current.map((g) => (g.id === group.id ? nextGroup : g)));
+          onGroupedVaultsReordered?.(group.id, nextGroup.groupedVaults);
+        }
+        endDrag();
+        return;
+      }
+
+      if (action.kind === "ungroup") {
+        commitUngroup(action.vaultId, action.beforeVaultId);
+        endDrag();
+        return;
+      }
+
+      if (action.kind === "assign-to-group") {
+        commitAssignToGroup(action.vaultId, action.targetGroupId, action.beforeVaultId);
+        endDrag();
+        return;
+      }
+
+      if (action.kind === "reorder-root") {
+        const hiddenTail = hiddenUngroupedRootVaults(vaults, groups, displayRows);
+        const hiddenGroups = hiddenOmittedRootGroups(groups, displayRows);
+        const nextRows = persistRootOrdersFromRows(
+          reorderRootRows(
+            displayRows,
+            sourceKey,
+            targetKey!,
+            sort.direction,
+            hiddenTail,
+            hiddenGroups,
+          ),
+        );
+        setGroups(nextRows);
+        endDrag();
+        return;
+      }
+
+      if (action.kind === "blocked-reorder-root") {
+        onReorderBlocked?.(searchLocked ? "search" : "root");
+      } else if (action.kind === "blocked-reorder-grouped") {
+        onReorderBlocked?.(searchLocked ? "search" : "group");
+      }
+
+      endDrag();
+    },
+    [
+      vaultListAllowDragIntoGroup,
+      canReorder,
+      commitAssignToGroup,
+      commitUngroup,
+      displayRows,
+      endDrag,
+      groups,
+      onGroupedVaultsReordered,
+      onReorderBlocked,
+      persistRootOrdersFromRows,
+      searchLocked,
+      sort.direction,
+      vaultListShowDrag,
+      vaults,
+    ],
+  );
+
+  const onPointerDragStart = useCallback(
+    (key: string, clientX: number, clientY: number) => {
+      dragOverIdRef.current = null;
+      beginDrag(key);
+      setDragOverId(null);
+      setDragPointer({ x: clientX, y: clientY });
+    },
+    [beginDrag],
+  );
+
+  const onPointerDragMove = useCallback((clientX: number, clientY: number) => {
+    setDragPointer({ x: clientX, y: clientY });
+    const over = hitVaultListDropKey(clientX, clientY, draggingIdRef.current);
+    dragOverIdRef.current = over;
+    setDragOverId(over);
+  }, []);
+
+  const onPointerDragEnd = useCallback(
+    (clientX: number, clientY: number) => {
+      const source = draggingIdRef.current;
+      if (!source) {
+        endDrag();
+        return;
+      }
+      const over = dragOverIdRef.current ?? hitVaultListDropKey(clientX, clientY, source);
+      applyListDrop(source, over);
+    },
+    [applyListDrop, endDrag],
+  );
+
+  const onPointerDragCancel = useCallback(() => {
+    endDrag();
+  }, [endDrag]);
 
   return {
     isReady,
@@ -560,37 +439,27 @@ export function useVaultListState(
     groupsInvalidDismissed,
     setGroupsInvalidDismissed,
     displayRows,
-    displayVaults,
     sort,
     setSort,
     viewMode,
     setViewMode,
     canReorder,
-    allowDragVaultIntoGroup,
+    vaultListShowDrag,
+    vaultListAllowDragIntoGroup,
     draggingId,
     dragOverId,
-    resetList,
+    dragPointer,
     updateNote,
     removeVault,
     addVault,
     setVaultRuntimeState,
     updateVaultSettings,
-    upsertGroup,
-    removeGroup,
+    markVaultsHidden,
     setGroupCollapsed,
     setGroups,
-    onDragStart,
-    onDragEnd,
-    onDragOver,
-    onDragLeave,
-    onDrop,
-    onRootDragStart,
-    onRootDragOver,
-    onRootDrop,
-    onUngroupDragOver,
-    onUngroupDrop,
-    onMemberDragStart,
-    onMemberDragOver,
-    onMemberDrop,
+    onPointerDragStart,
+    onPointerDragMove,
+    onPointerDragEnd,
+    onPointerDragCancel,
   };
 }

@@ -1,6 +1,7 @@
 //! Discover vault-root + load/save app settings (alias sync included).
 
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard};
 
 use crate::error::{Result, UprivError};
 use crate::paths::{
@@ -9,10 +10,19 @@ use crate::paths::{
     write_vault_root_alias_for_root, VaultRoot, VaultRootMode, VAULT_ROOT_SETTINGS_REL,
 };
 
-use super::toml::{parse_settings_toml, write_settings_toml_only};
+use super::toml::{parse_settings_toml, ui_settings_from_toml, write_settings_toml_only};
 use super::types::{
-    AppSectionSettings, AppSettings, LoadedAppSettings, LoggingSettings, UiSettings,
+    AppSectionSettings, AppSettings, LoadedAppSettings, LoggingSettings, WorkspaceSettings,
 };
+
+/// Serializes load-modify-save of settings.toml + alias (UniFFI may dispatch RPCs concurrently).
+static SETTINGS_WRITE_LOCK: Mutex<()> = Mutex::new(());
+
+fn lock_settings_write() -> MutexGuard<'static, ()> {
+    SETTINGS_WRITE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 /// Bootstrap: active alias root, else default_root (exact anchor when `UPRIV_DEFAULT_ROOT_ANCHOR` set).
 ///
@@ -124,16 +134,7 @@ pub fn load_app_settings_at(root: &Path) -> Result<LoadedAppSettings> {
     let parsed = parse_settings_toml(&raw, &path)?;
 
     let mut settings = AppSettings {
-        ui: UiSettings {
-            locale: parsed.ui.locale,
-            theme: parsed.ui.theme,
-            vault_list_sort: parsed.ui.vault_list_sort,
-            vault_list_sort_direction: parsed.ui.vault_list_sort_direction,
-            vault_list_view: parsed.ui.vault_list_view,
-            always_show_hidden_vaults: parsed.ui.always_show_hidden_vaults,
-            allow_drag_vault_into_group: parsed.ui.allow_drag_vault_into_group,
-            file_manager_dock_expanded: parsed.ui.file_manager_dock_expanded,
-        },
+        ui: ui_settings_from_toml(&parsed.ui),
         logging: LoggingSettings {
             enabled: parsed.logging.enabled,
             level: crate::logging::LogLevel::parse_filter(&parsed.logging.level)
@@ -145,6 +146,10 @@ pub fn load_app_settings_at(root: &Path) -> Result<LoadedAppSettings> {
         app: AppSectionSettings {
             vault_root_mode: VaultRootMode::DefaultRoot,
             upriv_root_path: String::new(),
+            last_opened_vault: parsed.app.last_opened_vault.trim().to_string(),
+        },
+        workspace: WorkspaceSettings {
+            path: parsed.workspace.path.trim().to_string(),
         },
     };
 
@@ -173,6 +178,8 @@ pub fn save_app_settings_with_alias_sync(
     settings: &AppSettings,
     sync_alias: bool,
 ) -> Result<()> {
+    let _guard = lock_settings_write();
+    crate::paths::validate_workspace_global_path(&settings.workspace.path, Some(root))?;
     if sync_alias {
         sync_alias_with_app_settings(settings)?;
     }
@@ -253,6 +260,7 @@ mod tests {
     #[test]
     fn roundtrip_settings_toml() {
         let _guard = ENV_LOCK.lock().unwrap();
+        let _env = crate::paths::EnvGuard::capture(&["APPIMAGE", "UPRIV_DEFAULT_ROOT_ANCHOR"]);
         let home = tempfile::tempdir().unwrap();
         std::env::remove_var("APPIMAGE");
         std::env::set_var("UPRIV_DEFAULT_ROOT_ANCHOR", home.path());
@@ -285,6 +293,7 @@ mod tests {
     #[test]
     fn load_and_save_normalize_logging_level_preset() {
         let _guard = ENV_LOCK.lock().unwrap();
+        let _env = crate::paths::EnvGuard::capture(&["APPIMAGE", "UPRIV_DEFAULT_ROOT_ANCHOR"]);
         let home = tempfile::tempdir().unwrap();
         std::env::remove_var("APPIMAGE");
         std::env::set_var("UPRIV_DEFAULT_ROOT_ANCHOR", home.path());
@@ -316,6 +325,7 @@ mod tests {
     #[test]
     fn save_custom_writes_active_alias() {
         let _guard = ENV_LOCK.lock().unwrap();
+        let _env = crate::paths::EnvGuard::capture(&["APPIMAGE", "UPRIV_DEFAULT_ROOT_ANCHOR"]);
         let home = tempfile::tempdir().unwrap();
         let root = tempfile::tempdir().unwrap();
         initialize_vault_root(root.path()).unwrap();
@@ -346,6 +356,7 @@ mod tests {
     #[test]
     fn load_derives_mode_from_alias_not_toml() {
         let _guard = ENV_LOCK.lock().unwrap();
+        let _env = crate::paths::EnvGuard::capture(&["APPIMAGE", "UPRIV_DEFAULT_ROOT_ANCHOR"]);
         let home = tempfile::tempdir().unwrap();
         let root = tempfile::tempdir().unwrap();
         initialize_vault_root(root.path()).unwrap();
@@ -390,6 +401,7 @@ obsolete_vault_root_flag = true
     #[test]
     fn active_broken_alias_does_not_fall_back_to_default_root() {
         let _guard = ENV_LOCK.lock().unwrap();
+        let _env = crate::paths::EnvGuard::capture(&["APPIMAGE", "UPRIV_DEFAULT_ROOT_ANCHOR"]);
         let home = tempfile::tempdir().unwrap();
         let default_root = tempfile::tempdir().unwrap();
         let missing = home.path().join("gone-custom");
@@ -431,6 +443,7 @@ obsolete_vault_root_flag = true
     #[test]
     fn save_session_default_root_writes_default_root_not_old_custom() {
         let _guard = ENV_LOCK.lock().unwrap();
+        let _env = crate::paths::EnvGuard::capture(&["APPIMAGE", "UPRIV_DEFAULT_ROOT_ANCHOR"]);
         let home = tempfile::tempdir().unwrap();
         let custom = tempfile::tempdir().unwrap();
         initialize_vault_root(home.path()).unwrap();
@@ -472,6 +485,7 @@ enabled = true
     #[test]
     fn save_session_missing_upriv_returns_not_found() {
         let _guard = ENV_LOCK.lock().unwrap();
+        let _env = crate::paths::EnvGuard::capture(&["APPIMAGE", "UPRIV_DEFAULT_ROOT_ANCHOR"]);
         let home = tempfile::tempdir().unwrap();
         std::env::remove_var("APPIMAGE");
         std::env::set_var("UPRIV_DEFAULT_ROOT_ANCHOR", home.path());
@@ -496,6 +510,7 @@ enabled = true
     #[test]
     fn save_session_empty_custom_path_is_soft_false() {
         let _guard = ENV_LOCK.lock().unwrap();
+        let _env = crate::paths::EnvGuard::capture(&["APPIMAGE", "UPRIV_DEFAULT_ROOT_ANCHOR"]);
         let home = tempfile::tempdir().unwrap();
         std::env::remove_var("APPIMAGE");
         std::env::set_var("UPRIV_DEFAULT_ROOT_ANCHOR", home.path());
@@ -504,6 +519,26 @@ enabled = true
         settings.app.vault_root_mode = VaultRootMode::CustomRoot;
         settings.app.upriv_root_path.clear();
         assert!(!save_app_settings_session(&settings).unwrap());
+
+        std::env::remove_var("UPRIV_DEFAULT_ROOT_ANCHOR");
+    }
+
+    #[test]
+    fn save_session_incomplete_upriv_returns_incomplete() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let _env = crate::paths::EnvGuard::capture(&["APPIMAGE", "UPRIV_DEFAULT_ROOT_ANCHOR"]);
+        let home = tempfile::tempdir().unwrap();
+        std::env::remove_var("APPIMAGE");
+        std::env::set_var("UPRIV_DEFAULT_ROOT_ANCHOR", home.path());
+        std::fs::create_dir_all(home.path().join(".upriv")).unwrap();
+
+        let mut settings = AppSettings::default();
+        settings.app.vault_root_mode = VaultRootMode::DefaultRoot;
+        let err = save_app_settings_session(&settings).unwrap_err();
+        assert!(
+            matches!(err, UprivError::VaultRootIncomplete { .. }),
+            "expected VaultRootIncomplete after empty .upriv, got {err:?}"
+        );
 
         std::env::remove_var("UPRIV_DEFAULT_ROOT_ANCHOR");
     }

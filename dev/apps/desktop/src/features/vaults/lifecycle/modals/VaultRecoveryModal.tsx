@@ -3,7 +3,7 @@ import { Button, Modal } from "@/components/ui";
 import { useTranslation } from "@/i18n";
 import type { VaultListItem } from "@upriv/shared";
 
-export type RecoveryAction = "use_store" | "reimport_archive" | "compare" | "discard_workspace";
+export type RecoveryAction = "resume_contents" | "create_from_backup" | "discard_workspace";
 
 interface VaultRecoveryModalProps {
   vault: VaultListItem | null;
@@ -22,7 +22,9 @@ export function VaultRecoveryModal({
 }: VaultRecoveryModalProps) {
   const { t } = useTranslation();
   const discardConfirmId = useId();
-  const [view, setView] = useState<"actions" | "compare" | "discard_confirm">("actions");
+  const discardHelpId = useId();
+  const discardVaultId = useId();
+  const [view, setView] = useState<"actions" | "discard_confirm">("actions");
   const [discardText, setDiscardText] = useState("");
 
   useEffect(() => {
@@ -40,6 +42,8 @@ export function VaultRecoveryModal({
     <Modal
       open={open}
       title={t("recovery.title")}
+      titleIcon="refresh"
+      contextTitle={vault.displayName}
       onClose={() => {
         if (!submitting) onClose();
       }}
@@ -64,44 +68,21 @@ export function VaultRecoveryModal({
               {submitting ? t("close.dialog.submitting") : t("recovery.discard_workspace")}
             </Button>
           </div>
-        ) : view === "compare" ? (
-          <div className="flex justify-end">
-            <Button variant="secondary" size="sm" onClick={() => setView("actions")}>
-              {t("action.back")}
-            </Button>
-          </div>
         ) : null
       }
     >
-      {view === "compare" ? (
+      {view === "discard_confirm" ? (
         <div className="space-y-3">
-          <p className="text-sm leading-relaxed text-on-surface-variant">
-            {t("recovery.compare_help")}
+          <label
+            htmlFor={discardConfirmId}
+            id={discardHelpId}
+            className="block text-sm text-on-surface-variant"
+          >
+            {t("recovery.discard_confirm")}
+          </label>
+          <p id={discardVaultId} className="font-mono text-xs text-on-surface-variant">
+            {vault.id}
           </p>
-          <dl className="space-y-2 rounded-lg bg-surface-container p-3 font-mono text-xs">
-            <div className="flex justify-between gap-3">
-              <dt className="text-on-surface-variant">{t("recovery.compare_archive_hash")}</dt>
-              <dd className="truncate text-on-surface">a3f8…9c2e</dd>
-            </div>
-            <div className="flex justify-between gap-3">
-              <dt className="text-on-surface-variant">{t("recovery.compare_store_hash")}</dt>
-              <dd className="truncate text-on-error-container">b71d…4f01</dd>
-            </div>
-            <div className="flex justify-between gap-3">
-              <dt className="text-on-surface-variant">{t("recovery.compare_last_close")}</dt>
-              <dd className="text-on-surface">2026-06-01T18:00:00Z</dd>
-            </div>
-            <div className="flex justify-between gap-3">
-              <dt className="text-on-surface-variant">{t("recovery.compare_store_write")}</dt>
-              <dd className="text-on-error-container">2026-06-02T08:15:00Z</dd>
-            </div>
-          </dl>
-          <p className="text-xs text-on-error-container">{t("recovery.compare_mismatch")}</p>
-        </div>
-      ) : view === "discard_confirm" ? (
-        <div className="space-y-3">
-          <p className="text-sm text-on-surface-variant">{t("recovery.discard_confirm")}</p>
-          <p className="font-mono text-xs text-on-surface-variant">{vault.id}</p>
           <input
             id={discardConfirmId}
             type="text"
@@ -110,6 +91,7 @@ export function VaultRecoveryModal({
             autoFocus
             autoComplete="off"
             spellCheck={false}
+            aria-describedby={`${discardHelpId} ${discardVaultId}`}
             className="w-full rounded-lg border-0 bg-surface-container-highest px-3 py-2.5 text-sm text-on-surface outline-none ring-1 ring-outline-variant/40 focus:ring-accent/50"
           />
         </div>
@@ -124,27 +106,18 @@ export function VaultRecoveryModal({
               size="sm"
               disabled={submitting}
               className="justify-start"
-              onClick={() => onAction("use_store")}
+              onClick={() => onAction("resume_contents")}
             >
-              {t("recovery.use_store")}
+              {t("recovery.resume_contents")}
             </Button>
             <Button
               variant="secondary"
               size="sm"
               disabled={submitting}
               className="justify-start"
-              onClick={() => onAction("reimport_archive")}
+              onClick={() => onAction("create_from_backup")}
             >
-              {t("recovery.reimport_archive")}
-            </Button>
-            <Button
-              variant="secondary"
-              size="sm"
-              disabled={submitting}
-              className="justify-start"
-              onClick={() => setView("compare")}
-            >
-              {t("recovery.compare")}
+              {t("recovery.create_from_backup")}
             </Button>
             <Button
               variant="ghost"

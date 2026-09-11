@@ -1,10 +1,10 @@
-import { normalizeVaultSettingsConfig } from "../vault-settings";
+import {
+  createVaultChoosesKdf,
+  DEFAULT_SEVEN_ZIP,
+  normalizeVaultSettingsConfig,
+} from "../vault-settings";
 import { displayNameToVaultId } from "../vault/displayName";
-import type {
-  CreateVaultDraft,
-  CreateVaultGroupAssignment,
-  CreateVaultResult,
-} from "./types";
+import type { CreateVaultDraft, CreateVaultGroupAssignment, CreateVaultResult } from "./types";
 
 export function resolveCreateVaultGroupAssignment(
   draft: CreateVaultDraft,
@@ -30,15 +30,12 @@ export function buildCreateVaultResult(
       id: vaultId,
       display_name: displayName,
       order: draft.order,
-      vault_file: `archive/${displayName}.7z`,
-      store_dir: "store",
-      backups_dir: "backups",
       password_hint: draft.passwordHint.trim(),
       note: draft.note.trim(),
       hidden: draft.hidden,
     },
     storage: { ...draft.storage },
-    close: { ...draft.close },
+    mount: { ...draft.mount },
     backup: { ...draft.backup },
     security: {
       mode: draft.security.mode,
@@ -47,13 +44,7 @@ export function buildCreateVaultResult(
       wipe_pattern: "random",
     },
     auto_close: { ...draft.auto_close },
-    seven_zip: {
-      encrypt_file_names: draft.seven_zip.encrypt_file_names,
-      archive_mode: draft.seven_zip.archive_mode,
-      compression_level: draft.seven_zip.compression_level,
-      solid: false,
-      method: "lzma2",
-    },
+    seven_zip: { ...DEFAULT_SEVEN_ZIP },
     policy: { ...draft.policy },
   });
 
@@ -65,6 +56,7 @@ export function buildCreateVaultResult(
     order: draft.order,
     storageMode: settings.storage.mode,
     settings,
+    unlockPreset: createVaultChoosesKdf(draft) ? draft.kdf.unlock_preset : undefined,
     groupAssignment: resolveCreateVaultGroupAssignment(draft),
   };
 }

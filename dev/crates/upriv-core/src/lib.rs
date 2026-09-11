@@ -11,17 +11,20 @@ pub mod paths;
 pub mod time;
 pub mod vault;
 
+#[cfg(test)]
+mod test_support;
+
 pub use config::{
-    create_vault_group, create_vault_group_with_sort, delete_vault_group, discover_bootstrap_root,
-    known_vault_ids, load_app_settings, load_app_settings_at, load_vault_config, load_vault_groups,
-    parse_settings_toml_str, parse_vault_groups_toml_str, reorder_vault_group_grouped_vaults,
-    reorder_vault_groups, repair_vault_groups, save_app_settings, save_app_settings_session,
-    save_app_settings_session_with_alias_sync, save_app_settings_with_alias_sync,
-    save_vault_groups, serialize_settings_toml_str, serialize_vault_groups,
-    sync_alias_with_app_settings, update_vault_group, vault_config_path, vault_groups_path,
-    AppSectionSettings, AppSettings, LoadedAppSettings, LoadedVaultGroups, LoggingSettings,
-    UiSettings, VaultConfig, VaultGroup, VaultGroupsFile, VaultIdentitySection, VaultStorageMode,
-    VaultStorageSection, VAULT_GROUPS_FILE_NAME,
+    create_vault_group_with_sort, delete_vault_group, discover_bootstrap_root, known_vault_ids,
+    load_app_settings, load_app_settings_at, load_vault_config, load_vault_config_raw,
+    load_vault_groups, parse_settings_toml_str, parse_vault_groups_toml_str,
+    reorder_vault_group_grouped_vaults, reorder_vault_groups, repair_vault_groups,
+    save_app_settings, save_app_settings_session, save_app_settings_session_with_alias_sync,
+    save_app_settings_with_alias_sync, serialize_settings_toml_str, sync_alias_with_app_settings,
+    update_vault_group, vault_config_path, vault_groups_path, AppSectionSettings, AppSettings,
+    LoadedAppSettings, LoadedVaultGroups, LoggingSettings, UiSettings, UpdateVaultGroupParams,
+    VaultConfig, VaultGroup, VaultGroupCreate, VaultGroupUpdate, VaultGroupsFile,
+    VaultIdentitySection, VaultStorageMode, VaultStorageSection, VAULT_GROUPS_FILE_NAME,
 };
 pub use error::{Result, UprivError};
 pub use paths::{
@@ -29,18 +32,16 @@ pub use paths::{
     detect_app_distribution, discover_vault_root_upward, distribution_str, env_default_root_anchor,
     init_app_distribution, initialize_vault_root, initialize_vault_root_with_bootstrap,
     inspect_vault_root_at, is_vault_root_marker, open_or_initialize_vault_root,
-    open_or_initialize_vault_root_with_options, open_or_initialize_vault_root_with_policy,
-    open_or_initialize_vault_root_with_policy_and_bootstrap, read_vault_root_alias,
-    rename_incomplete_upriv, resolve_vault_root, setup_default_root_anchor, suggested_vault_root,
-    validate_existing_vault_root, write_vault_root_alias, write_vault_root_alias_for_root,
-    AppDistribution, IncompleteReplacePolicy, OpenedVaultRoot, ResolveVaultRoot,
-    ResolveVaultRootOptions, VaultRoot, VaultRootAlias, VaultRootBootstrapPrefs,
+    read_vault_root_alias, rename_incomplete_upriv, resolve_vault_root, setup_default_root_anchor,
+    suggested_vault_root, validate_existing_vault_root, write_vault_root_alias,
+    write_vault_root_alias_for_root, AppDistribution, IncompleteReplacePolicy, OpenedVaultRoot,
+    ResolveVaultRoot, ResolveVaultRootOptions, VaultRoot, VaultRootAlias, VaultRootBootstrapPrefs,
     VaultRootDirStatus, VaultRootMode, VaultRootSource, VAULT_ROOT_ALIAS_FILE,
     VAULT_ROOT_SETTINGS_REL,
 };
 pub use time::{utc_filename_stamp, utc_timestamp_iso_millis, utc_ymdhms};
 
-/// Application version (from `dev/VERSION`, set in build.rs).
+/// Application version (from repo-root `VERSION`, set in build.rs).
 pub fn app_version() -> &'static str {
     env!("UPRIV_APP_VERSION")
 }

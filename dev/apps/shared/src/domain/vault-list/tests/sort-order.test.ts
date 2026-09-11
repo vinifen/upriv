@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { applyVaultListSort, canReorderVaultList, DEFAULT_VAULT_LIST_SORT } from "..";
+import {
+  applyVaultListSort,
+  canReorderGroupedVaults,
+  canReorderVaultList,
+  DEFAULT_VAULT_LIST_SORT,
+} from "..";
 import { reorderVaultList, sortVaultsByOrder } from "..";
 import { vaultListItemFixture } from "./fixtures";
 
@@ -26,7 +31,10 @@ describe("applyVaultListSort", () => {
   it("uses default sort config", () => {
     expect(DEFAULT_VAULT_LIST_SORT).toEqual({ mode: "order", direction: "asc" });
     expect(canReorderVaultList(DEFAULT_VAULT_LIST_SORT)).toBe(true);
+    expect(canReorderVaultList({ mode: "order", direction: "desc" })).toBe(true);
     expect(canReorderVaultList({ mode: "name", direction: "asc" })).toBe(false);
+    expect(canReorderGroupedVaults({ mode: "order", direction: "desc" })).toBe(true);
+    expect(canReorderGroupedVaults({ mode: "name", direction: "asc" })).toBe(false);
   });
 });
 

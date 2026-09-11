@@ -3,67 +3,30 @@
  *
  * Windows: electron-builder's built-in rcedit path pulls `winCodeSign`, whose
  * cache extract needs Developer Mode (symlinks). We keep
- * `signAndEditExecutable: false` and apply the icon with a standalone rcedit.
+ * `signAndEditExecutable: false` and apply the icon with the `rcedit`
+ * devDependency (vendored `bin/rcedit-*.exe`, integrity via package-lock).
+ * Linux packaging never runs that binary.
  */
 const fs = require("node:fs");
 const path = require("node:path");
+const { createRequire } = require("node:module");
 const { spawnSync } = require("node:child_process");
-const https = require("node:https");
 
-const RCEDIT_VERSION = "v2.0.0";
-const RCEDIT_URL = `https://github.com/electron/rcedit/releases/download/${RCEDIT_VERSION}/rcedit-x64.exe`;
+const requireFromHere = createRequire(__filename);
 
-function downloadFile(url, dest) {
-  return new Promise((resolve, reject) => {
-    const file = fs.createWriteStream(dest);
-    https
-      .get(url, (res) => {
-        if (
-          res.statusCode &&
-          res.statusCode >= 300 &&
-          res.statusCode < 400 &&
-          res.headers.location
-        ) {
-          file.close();
-          fs.unlinkSync(dest);
-          downloadFile(res.headers.location, dest).then(resolve, reject);
-          return;
-        }
-        if (res.statusCode !== 200) {
-          file.close();
-          fs.unlinkSync(dest);
-          reject(new Error(`download ${url} → HTTP ${res.statusCode}`));
-          return;
-        }
-        res.pipe(file);
-        file.on("finish", () => file.close(() => resolve()));
-      })
-      .on("error", (err) => {
-        file.close();
-        try {
-          fs.unlinkSync(dest);
-        } catch {
-          /* ignore */
-        }
-        reject(err);
-      });
-  });
-}
-
-async function ensureRcedit(toolsDir) {
-  const exe = path.join(toolsDir, "rcedit-x64.exe");
-  if (fs.existsSync(exe) && fs.statSync(exe).size > 100_000) {
-    return exe;
+function resolveRceditExe() {
+  // `rcedit` is ESM-only; resolve the package entry, then the vendored exe.
+  const entry = requireFromHere.resolve("rcedit");
+  const exeName =
+    process.arch === "ia32" || process.arch === "arm" ? "rcedit.exe" : "rcedit-x64.exe";
+  const exe = path.join(path.dirname(entry), "..", "bin", exeName);
+  if (!fs.existsSync(exe)) {
+    throw new Error(`[afterPack] rcedit binary missing at ${exe} — run npm ci in apps/electron`);
   }
-  fs.mkdirSync(toolsDir, { recursive: true });
-  const tmp = `${exe}.download`;
-  console.log(`[afterPack] downloading rcedit ${RCEDIT_VERSION}…`);
-  await downloadFile(RCEDIT_URL, tmp);
-  fs.renameSync(tmp, exe);
   return exe;
 }
 
-async function applyWindowsIcon(context) {
+function applyWindowsIcon(context) {
   const appOutDir = context.appOutDir;
   const executableName =
     context.packager.executableName ||
@@ -72,7 +35,6 @@ async function applyWindowsIcon(context) {
     "Upriv";
   const exePath = path.join(appOutDir, `${executableName}.exe`);
   const iconPath = path.join(__dirname, "../build/icons/icon.ico");
-  const toolsDir = path.join(__dirname, "../build/tools");
 
   if (!fs.existsSync(exePath)) {
     console.warn(`[afterPack] skip win icon: missing ${exePath}`);
@@ -83,7 +45,7 @@ async function applyWindowsIcon(context) {
     return;
   }
 
-  const rcedit = await ensureRcedit(toolsDir);
+  const rcedit = resolveRceditExe();
   const result = spawnSync(rcedit, [exePath, "--set-icon", iconPath], {
     encoding: "utf8",
   });
@@ -156,7 +118,7 @@ exec "$DIR/${executableName}.bin" "$@"
 
 exports.default = async function afterPack(context) {
   if (context.electronPlatformName === "win32") {
-    await applyWindowsIcon(context);
+    applyWindowsIcon(context);
     return;
   }
   if (context.electronPlatformName === "linux") {

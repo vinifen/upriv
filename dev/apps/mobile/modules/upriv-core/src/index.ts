@@ -25,8 +25,9 @@ export type UprivCoreNativeModule = {
    */
   safInspectRoot(treeUri: string): SafRootStatus;
   /**
-   * Create the standard `.upriv/` layout at the SAF tree (marker + subfolders +
-   * `workspace/`). Pass `replacePolicy` `"delete"` | `"rename"` to replace an
+   * Create the standard `.upriv/` layout at the SAF tree
+   * (`settings.toml` + `vaults/`, `logs/`, `app/`, `runtime/`).
+   * Pass `replacePolicy` `"delete"` | `"rename"` to replace an
    * incomplete marker; `null` is idempotent when settings already exist.
    * Pass `settingsTomlOverride` (from `app_settings_serialize_toml`) to seed
    * the marker atomically.

@@ -13,19 +13,24 @@ import {
   type ReactNode,
 } from "react";
 import {
-  Pressable,
+  InteractionManager,
   ScrollView,
   StyleSheet,
+  Text,
   useWindowDimensions,
   View,
   type GestureResponderEvent,
   type LayoutChangeEvent,
+  type StyleProp,
+  type TextStyle,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useTheme } from "@/theme";
 import { radii, spacing } from "@/theme/tokens";
 import { useTranslation } from "@/i18n";
+import { placeAnchoredMenu } from "@upriv/shared";
 import { useDropdownOverlay } from "./DropdownOverlayHost";
+import { ScrimDismiss } from "./ScrimDismiss";
 
 type TriggerProps = {
   onPress?: ((event?: GestureResponderEvent) => void) | null;
@@ -41,6 +46,11 @@ interface AnchorRect {
 interface DropdownPanelProps {
   /** Accessibility label for the menu (desktop `label`). */
   label: string;
+  /**
+   * Small uppercase heading inside the panel (desktop `DropdownMenu` / `MenuPanelGroup`).
+   * Omit when the children already include group labels (sort / view).
+   */
+  heading?: string;
   align?: "left" | "right";
   /** Desktop default ~14rem. */
   minWidth?: number;
@@ -57,8 +67,73 @@ export function useDropdownPanelClose(): () => void {
   return close ?? (() => undefined);
 }
 
+/** Desktop `menuGroupLabelClass` — small uppercase section title inside a menu. */
+export function MenuGroupLabel({
+  children,
+  style,
+}: {
+  children: string;
+  style?: StyleProp<TextStyle>;
+}) {
+  const { colors, typography } = useTheme();
+  return (
+    <Text
+      accessibilityRole="text"
+      style={[typography.caption, styles.groupLabel, { color: colors.onSurfaceVariant }, style]}
+    >
+      {children}
+    </Text>
+  );
+}
+
 const FALLBACK_TRIGGER_W = 48;
 const FALLBACK_TRIGGER_H = 40;
+/** First paint before `onLayout` — enough for a short ⋮ menu. */
+const PANEL_HEIGHT_ESTIMATE = 240;
+
+function triggerSize(
+  measured: AnchorRect | null,
+  layout: { width: number; height: number },
+): { w: number; h: number } {
+  return {
+    w: measured?.width ?? (layout.width > 0 ? layout.width : FALLBACK_TRIGGER_W),
+    h: measured?.height ?? (layout.height > 0 ? layout.height : FALLBACK_TRIGGER_H),
+  };
+}
+
+function anchorFromTouch(
+  touch: { pageX: number; pageY: number },
+  w: number,
+  h: number,
+): AnchorRect {
+  return {
+    x: Math.max(0, touch.pageX - w / 2),
+    y: Math.max(0, touch.pageY - h / 2),
+    width: w,
+    height: h,
+  };
+}
+
+function pickAnchor(
+  measured: AnchorRect | null,
+  touch: { pageX: number; pageY: number } | undefined,
+  w: number,
+  h: number,
+): AnchorRect | null {
+  if (!touch) return measured;
+  const fromTouch = anchorFromTouch(touch, w, h);
+  if (!measured) return fromTouch;
+
+  // FlatList `measure()` y on Android is often the header band / pre-scroll
+  // position. Keep measured x/size (those stay correct) and always take
+  // the press Y so the menu sits on the row that was tapped.
+  return {
+    x: measured.x,
+    y: fromTouch.y,
+    width: measured.width > 0 ? measured.width : w,
+    height: measured.height > 0 ? measured.height : h,
+  };
+}
 
 interface MenuSurfaceProps {
   label: string;
@@ -69,6 +144,8 @@ interface MenuSurfaceProps {
   maxPanelH: number;
   backgroundColor: string;
   close: () => void;
+  visible: boolean;
+  onHeight: (height: number) => void;
   children: ReactNode;
 }
 
@@ -85,6 +162,8 @@ function DropdownMenuSurface({
   maxPanelH,
   backgroundColor,
   close,
+  visible,
+  onHeight,
   children,
 }: MenuSurfaceProps) {
   const [contentH, setContentH] = useState(0);
@@ -98,15 +177,17 @@ function DropdownMenuSurface({
       minWidth: panelMinW,
       maxWidth: maxPanelW,
       backgroundColor,
+      opacity: visible ? 1 : 0,
       // Avoid Android expanding an absolute panel to maxHeight (empty gap under EN labels).
-      ...(needsScroll || contentH === 0
-        ? { maxHeight: maxPanelH }
-        : { height: contentH }),
+      ...(needsScroll || contentH === 0 ? { maxHeight: maxPanelH } : { height: contentH }),
     },
   ];
 
   const onContentLayout = (event: LayoutChangeEvent) => {
-    setContentH(event.nativeEvent.layout.height);
+    const next = Math.round(event.nativeEvent.layout.height);
+    if (next <= 0) return;
+    setContentH(next);
+    onHeight(next);
   };
 
   return (
@@ -137,6 +218,7 @@ function DropdownMenuSurface({
  */
 export function DropdownPanel({
   label,
+  heading,
   align = "right",
   minWidth = 224,
   trigger,
@@ -147,17 +229,21 @@ export function DropdownPanel({
   const { width: winW, height: winH } = useWindowDimensions();
   const { colors } = useTheme();
   const { t } = useTranslation();
-  const { setOverlay } = useDropdownOverlay();
+  const { setOverlay, measureHostOrigin } = useDropdownOverlay();
   const wrapRef = useRef<View>(null);
   const layoutSize = useRef({ width: 0, height: 0 });
   const [open, setOpen] = useState(false);
   const [anchor, setAnchor] = useState<AnchorRect | null>(null);
+  const [contentH, setContentH] = useState(0);
   const openRef = useRef(false);
   openRef.current = open;
+  const openGen = useRef(0);
 
   const close = useCallback(() => {
+    openGen.current += 1;
     setOpen(false);
     setAnchor(null);
+    setContentH(0);
   }, []);
 
   const readAnchor = useCallback((): Promise<AnchorRect | null> => {
@@ -208,36 +294,36 @@ export function DropdownPanel({
 
   const openMenu = useCallback(
     (touch?: { pageX: number; pageY: number }) => {
-      void readAnchor().then((measured) => {
-        const w =
-          measured?.width ??
-          (layoutSize.current.width > 0 ? layoutSize.current.width : FALLBACK_TRIGGER_W);
-        const h =
-          measured?.height ??
-          (layoutSize.current.height > 0 ? layoutSize.current.height : FALLBACK_TRIGGER_H);
+      const gen = ++openGen.current;
+      const run = () => {
+        if (gen !== openGen.current) return;
+        void Promise.all([readAnchor(), measureHostOrigin()]).then(([measured, origin]) => {
+          if (gen !== openGen.current) return;
+          const { w, h } = triggerSize(measured, layoutSize.current);
+          const picked = pickAnchor(measured, touch, w, h);
+          if (!picked) return;
+          setAnchor({
+            ...picked,
+            x: picked.x - origin.x,
+            y: picked.y - origin.y,
+          });
+          setOpen(true);
+        });
+      };
 
-        let next = measured;
+      if (touch) {
+        run();
+        return;
+      }
 
-        if (
-          touch &&
-          (!next ||
-            (next.x < 12 && touch.pageX > next.x + next.width + 24) ||
-            (next.y < 12 && touch.pageY > next.y + next.height + 24))
-        ) {
-          next = {
-            x: Math.max(0, touch.pageX - w / 2),
-            y: Math.max(0, touch.pageY - h / 2),
-            width: w,
-            height: h,
-          };
-        }
-
-        if (!next) return;
-        setAnchor(next);
-        setOpen(true);
+      // No press coordinates (rare) — wait a frame so layout after an RN Modal settles.
+      InteractionManager.runAfterInteractions(() => {
+        requestAnimationFrame(() => {
+          requestAnimationFrame(run);
+        });
       });
     },
-    [readAnchor],
+    [measureHostOrigin, readAnchor],
   );
 
   const onWrapLayout = useCallback((event: LayoutChangeEvent) => {
@@ -274,58 +360,57 @@ export function DropdownPanel({
       return;
     }
 
-    const spaceBelow =
-      winH - (anchor.y + anchor.height + gap) - Math.max(insets.bottom, spacing.md);
-    const spaceAbove = anchor.y - gap - Math.max(insets.top, spacing.md);
-
-    let panelTop: number;
-    let maxPanelH: number;
-    if (spaceBelow >= 180 || spaceBelow >= spaceAbove) {
-      panelTop = anchor.y + anchor.height + gap;
-      maxPanelH = Math.max(120, spaceBelow);
-    } else {
-      maxPanelH = Math.max(120, spaceAbove);
-      panelTop = Math.max(insets.top + spacing.sm, anchor.y - gap - maxPanelH);
-    }
-
-    let panelLeft = align === "right" ? anchor.x + anchor.width - panelMinW : anchor.x;
-    panelLeft = Math.max(spacing.md, Math.min(panelLeft, winW - panelMinW - spacing.md));
+    const paddingTop = Math.max(insets.top, spacing.md);
+    const paddingBottom = Math.max(insets.bottom, spacing.md);
+    const placed = placeAnchoredMenu({
+      anchor,
+      panelWidth: panelMinW,
+      panelHeight: contentH > 0 ? contentH : PANEL_HEIGHT_ESTIMATE,
+      viewport: { width: winW, height: winH },
+      padding: {
+        top: paddingTop,
+        right: spacing.md,
+        bottom: paddingBottom,
+        left: spacing.md,
+      },
+      gap,
+      align,
+    });
 
     setOverlay(
-      <View key={panelId} style={styles.overlay} pointerEvents="box-none">
-        <Pressable
-          style={StyleSheet.absoluteFill}
-          onPress={close}
-          accessibilityRole="button"
-          accessibilityLabel={t("action.dismiss")}
-        />
+      <View key={panelId} style={styles.overlay}>
+        <ScrimDismiss onDismiss={close} accessibilityLabel={t("action.dismiss")} />
         <DropdownMenuSurface
           label={label}
-          panelTop={panelTop}
-          panelLeft={panelLeft}
+          panelTop={placed.top}
+          panelLeft={placed.left}
           panelMinW={panelMinW}
           maxPanelW={maxPanelW}
-          maxPanelH={maxPanelH}
+          maxPanelH={placed.maxHeight}
           backgroundColor={colors.surfaceContainerHigh}
           close={close}
+          visible={contentH > 0}
+          onHeight={setContentH}
         >
+          {heading ? <MenuGroupLabel>{heading}</MenuGroupLabel> : null}
           {children}
         </DropdownMenuSurface>
       </View>,
     );
-
-    return () => {
-      setOverlay(null);
-    };
+    // Do not `setOverlay(null)` on deps change — that remounts a focused TextInput
+    // (search field) on every keystroke. Close / unmount still clear via the
+    // `!open` branch above and the unmount effect below.
   }, [
     align,
     anchor,
     children,
     close,
     colors.surfaceContainerHigh,
+    contentH,
     gap,
     insets.bottom,
     insets.top,
+    heading,
     label,
     maxPanelW,
     open,
@@ -353,6 +438,7 @@ const styles = StyleSheet.create({
   },
   panel: {
     position: "absolute",
+    zIndex: 1,
     flexGrow: 0,
     borderRadius: radii.lg,
     overflow: "hidden",
@@ -369,5 +455,16 @@ const styles = StyleSheet.create({
     flexGrow: 0,
     // Symmetric pad — height hugs items (EN/PT); View path avoids ScrollView clip.
     paddingVertical: spacing.sm,
+  },
+  groupLabel: {
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.xs,
+    paddingBottom: spacing.xs,
+    textTransform: "uppercase",
+    letterSpacing: 1.6,
+    fontSize: 10,
+    fontWeight: "600",
+    opacity: 0.75,
+    fontFamily: "monospace",
   },
 });

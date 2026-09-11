@@ -17,16 +17,16 @@ export const mockBackupService: BackupService = {
     return backupsForVault(vaultId);
   },
 
-  async deleteBackups(vaultId, filenames) {
-    if (filenames.length === 0) return;
-    const remove = new Set(filenames);
-    const next = backupsForVault(vaultId).filter((entry) => !remove.has(entry.filename));
+  async deleteBackups(vaultId, stamps) {
+    if (stamps.length === 0) return;
+    const remove = new Set(stamps);
+    const next = backupsForVault(vaultId).filter((entry) => !remove.has(entry.stamp));
     runtimeBackups.set(vaultId, next);
   },
 
-  async promoteToSave(vaultId, filename) {
+  async promoteToSave(vaultId, stamp) {
     const next = backupsForVault(vaultId).map((entry) =>
-      entry.filename === filename && !entry.saved ? { ...entry, saved: true } : entry,
+      entry.stamp === stamp && !entry.saved ? { ...entry, saved: true } : entry,
     );
     runtimeBackups.set(vaultId, next);
   },

@@ -1,20 +1,18 @@
 # Vault config — demo example for list reorder testing
+# Group membership is not here. If this vault is in a group, see .upriv/vault_groups.toml.
 
 [vault]
 id = "backup-mirror"
 display_name = "Backup Mirror"
 order = 14
-vault_file = "archive/Backup Mirror.7z"
-store_dir = "store"
-backups_dir = "backups"
 password_hint = ""
 note = "Secondary copy vault"
 
 [storage]
 mode = "encrypted_dir"
 
-[close]
-default_action = "close"
+# Unlock RAM (Argon2id) lives in contents/vault.header — not in config.toml.
+# There is no [kdf] section here; upriv-core reads KDF params from the header.
 
 [backup]
 enabled = false

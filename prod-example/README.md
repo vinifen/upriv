@@ -1,12 +1,14 @@
 # Upriv — reference bundle (vault-oriented layout)
 
-**Standalone sample only.** This folder shows what a user’s vault-root looks like on an external drive. It is **not** linked to `dev/` — no symlinks, no build dependency. To try the desktop app against this layout, set `UPRIV_VAULT_ROOT` to an absolute copy of this folder (or this path if you run locally).
+> **STALE — do not copy into `dev/`.** Dropped-mode vaults (`plain_only` / `ram_only` / `store_only`) and leftover `archive/` / `store/` directories were removed from this tree. Remaining docs and some `config.toml` fields still describe the old layout (Seal, `persistence.json`, `vault_file`). It is **not** the shipping on-disk protocol and must not be used as a layout template for new code. Canonical rest layout is **`contents/`**, two modes (`encrypted_dir` / `upriv_plain`), lock = close — see [`.agent/SECURITY-CRYPTO.md`](../.agent/SECURITY-CRYPTO.md). Greenfield: no migrator from this tree. Prefer a fresh vault-root created by the app (or fixtures under `dev/`) for development.
+
+**Standalone sample only.** This folder shows a historical vault-root shape for discovery/smoke tests. It is **not** linked to `dev/` — no symlinks, no build dependency. To try the desktop app against this layout, set `UPRIV_VAULT_ROOT` to an absolute copy of this folder (or this path if you run locally) **knowing the layout is outdated**.
 
 **`.upriv/` is a normal directory** (not a symbolic link): the hidden system folder inside `<vault-root>`. Nothing in `dev/` points at or links to this folder.
 
 Copy this folder to the root of an external drive or work directory. The Upriv marker is `.upriv/settings.toml`.
 
-Canonical layout for the product — see **`dev/docs/sdd.md`** §3 and **`dev/docs/prd.md`** (implementation may lag this bundle).
+Canonical layout for the product — see **`dev/docs/sdd.md`** §3 and **`.agent/SECURITY-CRYPTO.md`** (this bundle lags both).
 
 ## `settings.toml` vs `config.toml`
 
@@ -24,7 +26,7 @@ Same word **config**, different **folder** — no collision. Discovery: scan `va
 | **`.upriv/settings.toml`** | App marker, paths, UI, logging |
 | **`.upriv/state.json`** | Open sessions only (volatile; cleared on quit) |
 | **`.upriv/vault_groups.toml`** | Optional vault list groups (`[[group]]` id, display_name, order, collapsed, grouped_vaults[]) |
-| **`.upriv/vaults/<id>/`** | Per vault: `config.toml`, `persistence.json`, `archive/`, `store/`, `backups/`, `auth/` |
+| **`.upriv/vaults/<id>/`** | Per vault: `config.toml`, `persistence.json`, `backups/`, `auth/` (this bundle has no `contents/` trees) |
 | **`.upriv/logs/`** | App logs (`.log`, 1000 lines per file; see § Logs) |
 | **`.upriv/app/`** | Platform binaries + brand assets |
 | **`workspace/<display_name>/`** | Mount targets while open — user-visible name (package root) |
@@ -38,12 +40,9 @@ Same word **config**, different **folder** — no collision. Discovery: scan `va
 ├── app/
 └── vaults/
     ├── my-encrypted-notes/   # display: My Encrypted Notes — closed, open in state.json
-    ├── vault-example-2/      # display: Vault ExaMple 2 — sealed
-    ├── cold-storage/         # display: Cold Storage — sealed
-    ├── plain-folder-demo/    # display: Plain Folder Demo — plain + auth/
-    ├── store-only-demo/      # display: Store Only Demo — store_only (closed)
-    ├── ram-only-demo/        # display: RAM Only Demo — ram_only (sealed)
-    └── plain-only-demo/      # display: Plain Only Demo — plain_only (sealed)
+    ├── vault-example-2/      # display: Vault ExaMple 2 — closed
+    ├── cold-storage/         # display: Cold Storage — closed
+    └── plain-folder-demo/    # display: Plain Folder Demo — upriv_plain + auth/
 ```
 
 ### Vault groups (`vault_groups.toml`)
@@ -55,19 +54,19 @@ Optional organization for the vault list. Hierarchy is never flattened: the root
 | Source | Role |
 |--------|------|
 | `vaults/<id>/config.toml` | Registry — all vaults |
-| `vaults/<id>/persistence.json` | Persisted `closed` \| `sealed` + sync hashes; `vault_id` (normalized) + `display_name` (UI / main `.7z`) |
+| `vaults/<id>/persistence.json` | Persisted `closed` \| `recovery` + sync metadata; `vault_id` (normalized) + `display_name` |
 | **`state.json`** | Who is unlocked *right now* |
 
 `state.json` does **not** replace `persistence.json`. It holds no passwords or keys — only session metadata (`session: open`, resolved paths, timestamps).
 
-Sealed vaults **2** and **3** are registered but **not** listed in `state.json` in this demo.
+Closed vaults **2** and **3** are registered but **not** listed in `state.json` in this demo.
 
 ### Open in `state.json` (this demo)
 
 | Vault | `storage_mode` | `security_mode` |
 |-------|----------------|-----------------|
 | `my-encrypted-notes` | `encrypted_dir` | `session_ram` |
-| `plain-folder-demo` | `plain` | `disk_open_close` |
+| `plain-folder-demo` | `upriv_plain` | `disk_open_close` |
 
 Example entry fields: `workspace`, `vault_root`, `archive_path`, `store_path` (encrypted_dir) or `auth_path` (plain), `opened_at`, `last_activity_at`.
 
@@ -103,11 +102,9 @@ vaults/<id>/                    # <id> = normalized slug (filesystem-safe)
 | `store/`, logs | **Yes** | paths use `vault_id` |
 | **`workspace/`** | **No** | `workspace/{display_name}/` — same as UI |
 
-Rule: the **Plan B file** keeps the name the user created (spaces, casing, accents allowed where the OS allows). **Everything the app generates** around it uses the normalized `vault_id`.
+Rule: the **export filename** keeps the name the user created (spaces, casing, accents allowed where the OS allows). **Everything the app generates** around it uses the normalized `vault_id`.
 
-Quote `vault_file` in TOML when the name contains spaces.
-
-### Forbidden characters (`display_name` / main `.7z`)
+### Forbidden characters (`display_name` / export `.zip` / `.7z`)
 
 Validated on **create vault**, **rename vault**, and **import archive → new vault**. Target: all supported OSes (Windows rules are the strictest).
 
@@ -167,8 +164,8 @@ See **PRD** RF-15b/c/d · **SDD** §3.2.1 · **i18n** `vault.name.*`, `vault.exp
 | `vault_id` | `display_name` | Persisted | Runtime |
 |------------|----------------|-----------|---------|
 | `my-encrypted-notes` | My Encrypted Notes | `closed` | open |
-| `vault-example-2` | Vault ExaMple 2 | `sealed` | — |
-| `cold-storage` | Cold Storage | `sealed` | — |
+| `vault-example-2` | Vault ExaMple 2 | `closed` | — |
+| `cold-storage` | Cold Storage | `closed` | — |
 | `plain-folder-demo` | Plain Folder Demo | `closed` | open |
 
 ### Backups (per vault)
@@ -185,7 +182,7 @@ Two tiers under `backups/`:
 
 ### Auth (example 4 only)
 
-Local session for **`plain`** + **`disk_open_close`**: `.upriv/vaults/plain-folder-demo/auth/`.
+Local session for **`upriv_plain`** + **`disk_open_close`**: `.upriv/vaults/plain-folder-demo/auth/`.
 
 Forbidden in `encrypted_dir` / `session_ram` vaults.
 
@@ -197,7 +194,7 @@ Stored in **`config.toml`** (not `persistence.json`):
 |-------|---------|---------|
 | `order` | `[vault]` | Display order in the vault list (ascending integer; lower = higher on screen). Omit → sorted after explicit values, then by `display_name` |
 | `password_hint` | `[vault]` | Optional reminder at unlock — **not** the password (max 128 chars) |
-| `note` | `[vault]` | Optional short user annotation (max 256 chars) |
+| `note` | `[vault]` | Optional user annotation (max 10000 chars) |
 | `hidden` | `[vault]` | When `true`, vault stays on disk but is omitted from the list until the user shows hidden vaults (system settings or session toggle) |
 | `password_changed_at` | `[security]` | ISO 8601 UTC; set by app after change password; omitted until first change |
 
@@ -220,31 +217,31 @@ What the **user** sees while a vault is open.
 | Vault | Mode | In `state.json` | Literal files in `workspace/` on HD |
 |-------|------|-----------------|-------------------------------------|
 | `my-encrypted-notes` | `encrypted_dir` | Yes (open) | Yes (demo mount path) |
-| `vault-example-2` | `encrypted_dir` | No (sealed) | No |
-| `cold-storage` | `encrypted_dir` | No (sealed) | No |
-| **`plain-folder-demo`** | **`plain`** | Yes | **Yes** (plaintext on disk) |
+| `vault-example-2` | `encrypted_dir` | No (closed) | No |
+| `cold-storage` | `encrypted_dir` | No (closed) | No |
+| **`plain-folder-demo`** | **`upriv_plain`** | Yes | **Yes** (plaintext on disk) |
 
 ### `encrypted_dir` (1, 2, 3)
 
 - **RAM:** `state.json` → `session: open`, password/keys in memory.
 - **User path:** `workspace/{display_name}/` via virtual mount (FUSE), e.g. `workspace/My Encrypted Notes/`.
 - **HD:** ciphertext in `.upriv/vaults/<id>/store/` — not durable plaintext in `workspace/` in production.
-- Demo folder for **1** only illustrates a mount path (2 and 3 are sealed on disk).
+- Demo folder for **1** only illustrates a mount path (2 and 3 are closed on disk).
 
-### `plain` (4 only)
+### `upriv_plain` (4 only)
 
-- Listed in `state.json` as `plain` / `disk_open_close`.
-- **Literal plaintext** in `workspace/Plain Folder Demo/` until **seal**.
+- Listed in `state.json` as `upriv_plain` / `disk_open_close`.
+- **Literal plaintext** in `workspace/Plain Folder Demo/` until **close**.
 - **Local password on disk:** `.upriv/vaults/plain-folder-demo/auth/`.
 - **No** `store/` for this vault.
-- On seal: new `.7z` + `secure_wipe_workspace` + remove workspace tree.
+- On close: `secure_wipe_workspace` + remove workspace tree.
 
 See `workspace/Plain Folder Demo/PLAIN-MODE.txt` and `workspace/My Encrypted Notes/STORE-WRITE-MAP.txt`.
 
 | Path | Mode |
 |------|------|
 | `workspace/My Encrypted Notes/` | encrypted_dir sample |
-| `workspace/Plain Folder Demo/` | plain — plaintext in repo for demo |
+| `workspace/Plain Folder Demo/` | upriv_plain — plaintext in repo for demo |
 
 ## `.upriv/app/`
 
@@ -324,15 +321,28 @@ Example (file `current-000001-…`):
 
 ### UI (`settings.toml` → `[ui]`)
 
+Legacy nested `[ui.vault_list]` still loads; save writes flat keys under `[ui]`.
+
 | Key | Type | Default (demo) | Effect |
 |-----|------|----------------|--------|
-| `locale` | string | `"en"` | UI strings — `dev/apps/shared/locales/{locale}.json` |
-| `theme` | string | `"dark"` | `"dark"` \| `"light"` |
+| `locale` | string | `"en"` | UI language (`en`, `pt-BR`, `es`) |
+| `theme` | string | `"dark"` | `"dark"` \| `"neutral"` \| `"light"` |
+| `show_header_more_button` | bool | `true` | Show the header overflow (⋮) menu (Refresh, Logs, Help, Info) |
+| `file_manager_dock_expanded` | bool | `false` | When `true`, minimized file manager chips stay expanded; when `false`, only a single button expands the dock |
+| `always_show_hidden_vaults` | bool | `false` | When `true`, vaults with `[vault] hidden = true` appear in the list on every launch |
+| `vault_list_allow_drag_into_group` | bool | `true` | When `true`, dropping a vault onto a group assigns it (and onto the list ungroups). Turn off to keep drag for list reorder only |
+| `vault_list_show_drag` | bool | `true` | When `true`, show vertical drag grips on the vault list (drag up/down). Turn off to hide grips only — list order/sort unchanged |
 | `vault_list_sort` | string | `"order"` | `order` \| `name` \| `state` \| `last_accessed` |
 | `vault_list_sort_direction` | string | `"asc"` | `asc` \| `desc` |
-| `vault_list_view` | string | `"default"` | `default` \| `large` \| `compact` \| `blocks` |
-| `always_show_hidden_vaults` | bool | `false` | When `true`, vaults with `[vault] hidden = true` appear in the list on every launch |
-| `file_manager_dock_expanded` | bool | `false` | When `true`, minimized file manager chips stay expanded; when `false`, only a single button expands the dock |
+| `vault_list_view` | string | `"default"` | List view: `default` \| `large` \| `compact` \| `blocks` |
+| `vault_list_search` | string | `""` | Vault-list search query (names of ungrouped vaults, groups, and vaults in groups). Field expands only while focused. |
+| `vault_list_show_create_button` | bool | `true` | Show the new-vault (+) button |
+| `vault_list_show_search_button` | bool | `true` | Show the search button. A saved query still filters when hidden |
+| `vault_list_show_sort_button` | bool | `true` | Show the sort button. Current sort stays in effect when hidden |
+| `vault_list_show_view_button` | bool | `true` | Show the view button. Current view stays in effect when hidden |
+| `vault_list_show_vault_more_button` | bool | `true` | Show the vault row overflow (⋯) menu |
+| `vault_list_show_vault_settings_button` | bool | `true` | Show the vault row settings (gear) menu |
+| `vault_list_show_group_settings_button` | bool | `true` | Show the group header settings (gear) menu |
 
 **Demo:** `finance-2025` has `hidden = true` in `config.toml`; list visibility also depends on `always_show_hidden_vaults` and the session “show hidden vaults” toggle in system settings.
 

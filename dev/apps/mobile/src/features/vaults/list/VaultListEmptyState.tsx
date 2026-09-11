@@ -6,15 +6,17 @@ import { Button } from "@/components/ui";
 
 interface VaultListEmptyStateProps {
   allVaultsHidden?: boolean;
+  searchNoMatches?: boolean;
   onCreateFromScratch: () => void;
-  onImportArchive: () => void;
+  onImportPackage: () => void;
 }
 
 /** Empty vault list — create / import CTAs (desktop `VaultListEmptyState` parity). */
 export function VaultListEmptyState({
   allVaultsHidden = false,
+  searchNoMatches = false,
   onCreateFromScratch,
-  onImportArchive,
+  onImportPackage,
 }: VaultListEmptyStateProps) {
   const { t } = useTranslation();
   const { typography } = useTheme();
@@ -23,6 +25,17 @@ export function VaultListEmptyState({
     return (
       <View style={styles.wrap}>
         <Text style={[typography.bodyMuted, styles.center]}>{t("empty.vaults_all_hidden")}</Text>
+      </View>
+    );
+  }
+
+  if (searchNoMatches) {
+    return (
+      <View style={styles.wrap}>
+        <Text style={[typography.caption, styles.center, styles.kicker]}>
+          {t("empty.vaults_search")}
+        </Text>
+        <Text style={[typography.bodyMuted, styles.center]}>{t("empty.vaults_search_hint")}</Text>
       </View>
     );
   }
@@ -41,8 +54,8 @@ export function VaultListEmptyState({
         <Button
           variant="ghost"
           icon="archive"
-          label={t("empty.action.import_archive")}
-          onPress={onImportArchive}
+          label={t("empty.action.import_file")}
+          onPress={onImportPackage}
         />
       </View>
     </View>

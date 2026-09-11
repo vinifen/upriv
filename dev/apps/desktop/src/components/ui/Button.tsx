@@ -13,7 +13,7 @@ const variantClass: Record<ButtonVariant, string> = {
   secondary:
     "border border-outline-variant bg-transparent text-on-surface hover:bg-surface-container-high focus-visible:ring-outline",
   ghost:
-    "bg-transparent text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface focus-visible:ring-outline",
+    "border border-outline-variant bg-transparent text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface focus-visible:ring-outline",
   danger:
     "bg-error-container text-on-error-container hover:bg-error-container/90 focus-visible:ring-error",
 };

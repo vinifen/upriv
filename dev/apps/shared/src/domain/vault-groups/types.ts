@@ -7,6 +7,8 @@ export interface VaultGroup {
   /** Root list position key when global sort mode is `order`. */
   order: number;
   collapsed: boolean;
+  /** When true the group row is omitted unless show-hidden is on. */
+  hidden: boolean;
   /** Vault ids in manual in-group order (used when groupedVaultSort is `order`). */
   groupedVaults: string[];
   /** How vaults inside this group are ordered (independent of global list sort). */
@@ -29,6 +31,7 @@ export interface VaultGroupCreateInput {
   groupedVaults?: string[];
   groupedVaultSort?: GroupedVaultSortMode;
   groupedVaultSortDirection?: VaultListSortDirection;
+  hidden?: boolean;
 }
 
 export interface VaultGroupUpdateInput {
@@ -39,4 +42,5 @@ export interface VaultGroupUpdateInput {
   groupedVaults?: string[];
   groupedVaultSort?: GroupedVaultSortMode;
   groupedVaultSortDirection?: VaultListSortDirection;
+  hidden?: boolean;
 }

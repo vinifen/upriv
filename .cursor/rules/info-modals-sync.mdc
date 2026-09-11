@@ -1,0 +1,15 @@
+---
+description: Update Info modals when related product data changes.
+alwaysApply: true
+---
+
+# Info modals — keep in sync
+
+**Info** = read-only diagnostics (⋮ / ⋯ → **Info**). Not Help.
+
+When you change data Info shows or should show — **update Info in the same task**:
+- Shared builders: `@upriv/shared` `domain/system-info/`, `domain/vault-info/`
+- i18n: `modal.info.*` in `locales/{en,pt-BR,es}.json`
+- **Desktop and mobile** — both `dev/apps/desktop/` and `dev/apps/mobile/` (`features/system/info/`, `features/vaults/info/`)
+
+Typical triggers: `AppSettingsConfig`, vault-root, `VaultListItem`, `VaultSettingsConfig`, inventory counts, runtime/mock stats.

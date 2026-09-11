@@ -7,7 +7,7 @@
 
 use std::path::PathBuf;
 
-use crate::config::vault_config::{load_vault_config, VaultConfig, VaultStorageMode};
+use crate::config::vault_config::{load_vault_config_raw, VaultConfig, VaultStorageMode};
 use crate::error::Result;
 use crate::paths::VaultRoot;
 
@@ -30,8 +30,10 @@ pub(crate) struct VaultListEntry {
 /// List vaults under `root` by scanning `.upriv/vaults/*/config.toml`.
 ///
 /// Directories without a valid `config.toml` (or with `[vault].id` ≠ folder name)
-/// are **skipped** and reported on stderr. Sort is by `[vault].order` ascending,
-/// then `display_name` (casefold), then `id` (casefold) for a stable tie-break.
+/// are **skipped** and reported on stderr. Invalid `[mount]` is logged as a warning
+/// but the vault is still listed (strict mount validation runs on open/save).
+/// Sort is by `[vault].order` ascending, then `display_name` (casefold), then `id`
+/// (casefold) for a stable tie-break.
 ///
 /// Id ↔ dirname matching is **exact** (see `vault_config`); sort casefold is display-only.
 ///
@@ -52,8 +54,23 @@ pub(crate) fn list_vault_entries(root: &VaultRoot) -> Result<Vec<VaultListEntry>
             continue;
         }
         let vault_dir = entry.path();
-        match load_vault_config(&vault_dir) {
+        match load_vault_config_raw(&vault_dir) {
             Ok(config) => {
+                // Warn on bad mount but keep the entry (open/save validates fully).
+                if let Err(error) = crate::paths::validate_mount_workspace_path(
+                    &config.mount.workspace_path,
+                    Some(root.root()),
+                ) {
+                    let id = config.vault.id.as_str();
+                    eprintln!(
+                        "upriv-core: vault {id} has invalid [mount] (listed anyway): {error}"
+                    );
+                    crate::logging::log_event(
+                        crate::logging::LogLevel::Warn,
+                        "vault_mount_invalid",
+                        &[("id", id)],
+                    );
+                }
                 entries.push(VaultListEntry {
                     id: config.vault.id.clone(),
                     display_name: config.vault.display_name.clone(),
@@ -109,51 +126,20 @@ pub(crate) fn list_vault_entries(root: &VaultRoot) -> Result<Vec<VaultListEntry>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::paths::VaultRoot;
-    use std::path::Path;
-
-    fn prod_example_root() -> PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../..")
-            .join("prod-example")
-    }
+    use crate::test_support::{vault_root_with, VaultSpec};
 
     #[test]
-    fn lists_prod_example_vaults() {
-        let root = VaultRoot::discover(prod_example_root()).expect("prod-example root");
+    fn lists_vaults_sorted_by_order() {
+        let (_tmp, root) = vault_root_with(&[
+            VaultSpec::upriv_plain("plain-folder-demo", "Plain Folder Demo", 3),
+            VaultSpec::encrypted("my-encrypted-notes", "My Encrypted Notes", 4),
+        ]);
         let entries = list_vault_entries(&root).expect("list");
-        assert!(
-            entries.len() >= 2,
-            "expected multiple vaults, got {}",
-            entries.len()
-        );
-        assert!(entries.iter().any(|e| e.id == "my-encrypted-notes"));
-        assert!(entries.iter().any(|e| e.id == "plain-folder-demo"));
-        assert!(entries.iter().any(|e| e.id == "store-only-demo"));
-        assert!(entries.iter().any(|e| e.id == "ram-only-demo"));
-        assert!(entries.iter().any(|e| e.id == "plain-only-demo"));
-        assert_eq!(
-            entries
-                .iter()
-                .find(|e| e.id == "store-only-demo")
-                .map(|e| e.storage_mode),
-            Some(VaultStorageMode::StoreOnly)
-        );
-        assert_eq!(
-            entries
-                .iter()
-                .find(|e| e.id == "ram-only-demo")
-                .map(|e| e.storage_mode),
-            Some(VaultStorageMode::RamOnly)
-        );
-        assert_eq!(
-            entries
-                .iter()
-                .find(|e| e.id == "plain-only-demo")
-                .map(|e| e.storage_mode),
-            Some(VaultStorageMode::PlainOnly)
-        );
-        // Sorted by order
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].id, "plain-folder-demo");
+        assert_eq!(entries[0].storage_mode, VaultStorageMode::UprivPlain);
+        assert_eq!(entries[1].id, "my-encrypted-notes");
+        assert_eq!(entries[1].storage_mode, VaultStorageMode::EncryptedDir);
         for window in entries.windows(2) {
             assert!(
                 window[0].order <= window[1].order,
@@ -162,5 +148,50 @@ mod tests {
                 window[1].id
             );
         }
+    }
+
+    #[test]
+    fn list_skips_invalid_storage_mode_vaults() {
+        let (_tmp, root) = vault_root_with(&[VaultSpec::encrypted("good", "Good", 1)]);
+        let bad = root.vault_dir("bad-demo").unwrap();
+        std::fs::create_dir_all(&bad).unwrap();
+        std::fs::write(
+            bad.join("config.toml"),
+            r#"
+[vault]
+id = "bad-demo"
+display_name = "Bad"
+[storage]
+mode = "plain_only"
+"#,
+        )
+        .unwrap();
+        let entries = list_vault_entries(&root).expect("list");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].id, "good");
+    }
+
+    #[test]
+    fn list_includes_vault_with_relative_mount() {
+        let (_tmp, root) = vault_root_with(&[VaultSpec::encrypted("good", "Good", 1)]);
+        let bad_mount = root.vault_dir("rel-mount").unwrap();
+        std::fs::create_dir_all(&bad_mount).unwrap();
+        std::fs::write(
+            bad_mount.join("config.toml"),
+            r#"
+[vault]
+id = "rel-mount"
+display_name = "Relative Mount"
+[storage]
+mode = "encrypted_dir"
+[mount]
+workspace_path = "not/absolute"
+"#,
+        )
+        .unwrap();
+        let entries = list_vault_entries(&root).expect("list");
+        assert_eq!(entries.len(), 2);
+        assert!(entries.iter().any(|e| e.id == "rel-mount"));
+        assert!(entries.iter().any(|e| e.id == "good"));
     }
 }

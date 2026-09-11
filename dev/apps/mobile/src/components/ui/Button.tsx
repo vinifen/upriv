@@ -12,7 +12,7 @@ import { Icon, type IconName } from "@/components/icons";
 import { useTheme } from "@/theme/ThemeContext";
 import { CONTROL_HEIGHT_MD, radii, spacing } from "@/theme/tokens";
 
-type Variant = "primary" | "accent" | "ghost" | "danger";
+type Variant = "primary" | "secondary" | "accent" | "ghost" | "danger";
 type Size = "sm" | "md";
 
 interface ButtonProps extends Omit<PressableProps, "children"> {
@@ -46,13 +46,14 @@ export function Button({
           ? colors.errorContainer
           : "transparent";
   const labelColor =
-    variant === "ghost"
-      ? colors.onSurface
-      : variant === "primary"
-        ? colors.onPrimary
-        : variant === "danger"
-          ? colors.onErrorContainer
-          : colors.accentForeground;
+    variant === "primary"
+      ? colors.onPrimary
+      : variant === "danger"
+        ? colors.onErrorContainer
+        : variant === "accent"
+          ? colors.accentForeground
+          : colors.onSurface;
+  const outlined = variant === "ghost" || variant === "secondary";
 
   return (
     <Pressable
@@ -63,7 +64,7 @@ export function Button({
         size === "sm" ? styles.sm : styles.md,
         {
           backgroundColor: bg,
-          borderWidth: variant === "ghost" ? 1 : 0,
+          borderWidth: outlined ? 1 : 0,
           borderColor: colors.outlineVariant,
         },
         pressed && !isDisabled ? styles.pressed : null,
@@ -73,11 +74,15 @@ export function Button({
       {...rest}
     >
       {busy ? (
-        <ActivityIndicator color={variant === "ghost" ? colors.accent : labelColor} />
+        <ActivityIndicator color={outlined ? colors.accent : labelColor} />
       ) : (
         <View style={styles.content}>
           {icon ? <Icon name={icon} size={size === "sm" ? 16 : 18} color={labelColor} /> : null}
-          <Text style={[styles.label, { color: labelColor }]}>{label}</Text>
+          <Text
+            style={[styles.label, size === "sm" ? styles.smLabel : null, { color: labelColor }]}
+          >
+            {label}
+          </Text>
         </View>
       )}
     </Pressable>
@@ -86,7 +91,7 @@ export function Button({
 
 const styles = StyleSheet.create({
   base: {
-    borderRadius: radii.md,
+    borderRadius: radii.sm,
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: spacing.lg,
@@ -102,4 +107,5 @@ const styles = StyleSheet.create({
   pressed: { opacity: 0.85 },
   disabled: { opacity: 0.45 },
   label: { fontSize: 15, fontWeight: "600" },
+  smLabel: { fontSize: 13, fontWeight: "600" },
 });

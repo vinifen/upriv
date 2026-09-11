@@ -37,12 +37,12 @@ export async function rpcAppVersion(): Promise<AppVersionResult> {
   }
 }
 
-/** Graceful daemon shutdown (Electron main also calls this on quit). */
+/** Graceful daemon shutdown. Scaffolding for `close_on_app_exit` (UI not exposed yet). */
 export async function rpcAppShutdown(): Promise<void> {
   await desktopInvokeRaw(DAEMON_COMMANDS.APP_SHUTDOWN);
 }
 
-/** Request app exit — main awaits daemon teardown before quitting. */
+/** Request app exit — main awaits daemon teardown. Scaffolding for `close_on_app_exit`. */
 export async function rpcAppExit(): Promise<void> {
   await desktopInvokeRaw(SHELL_COMMANDS.APP_EXIT);
 }
@@ -246,7 +246,9 @@ export async function rpcVaultRootSuggestedCustomPath(): Promise<string> {
 }
 
 export async function rpcVaultRootDefaultRootStatus(): Promise<DefaultRootStatusResult> {
-  return parseDefaultRootStatus(await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_ROOT_DEFAULT_ROOT_STATUS));
+  return parseDefaultRootStatus(
+    await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_ROOT_DEFAULT_ROOT_STATUS),
+  );
 }
 
 export async function rpcVaultRootInspectPath(path: string): Promise<VaultRootInspectResult> {
@@ -296,8 +298,10 @@ export async function rpcLogDelete(filenames: readonly string[]): Promise<void> 
   await desktopInvokeRaw(DAEMON_COMMANDS.LOG_DELETE, { filenames: [...filenames] });
 }
 
-/** Append allowlisted session log event (`vault_hidden` has no name fields). */
-export async function rpcLogEvent(event: "vault_hidden"): Promise<void> {
+/** Append allowlisted session log event (`vault_hidden` / `ui_crash` have no name fields). */
+export async function rpcLogEvent(
+  event: "vault_hidden" | "vault_group_hidden" | "ui_crash",
+): Promise<void> {
   await desktopInvokeRaw(DAEMON_COMMANDS.LOG_EVENT, { event });
 }
 
@@ -313,9 +317,14 @@ export async function rpcVaultGroupCreate(input: VaultGroupCreateInput): Promise
     groupedVaults: input.groupedVaults ?? [],
     groupedVaultSort: input.groupedVaultSort,
     groupedVaultSortDirection: input.groupedVaultSortDirection,
+    hidden: input.hidden,
   });
   if (typeof raw !== "object" || raw === null) {
-    throw new RpcError(BRIDGE_ERROR_CODES.INVALID_RESPONSE, "vault_group_create: expected object", raw);
+    throw new RpcError(
+      BRIDGE_ERROR_CODES.INVALID_RESPONSE,
+      "vault_group_create: expected object",
+      raw,
+    );
   }
   return parseVaultGroupWire((raw as { group?: unknown }).group);
 }
@@ -329,9 +338,14 @@ export async function rpcVaultGroupUpdate(input: VaultGroupUpdateInput): Promise
     groupedVaults: input.groupedVaults,
     groupedVaultSort: input.groupedVaultSort,
     groupedVaultSortDirection: input.groupedVaultSortDirection,
+    hidden: input.hidden,
   });
   if (typeof raw !== "object" || raw === null) {
-    throw new RpcError(BRIDGE_ERROR_CODES.INVALID_RESPONSE, "vault_group_update: expected object", raw);
+    throw new RpcError(
+      BRIDGE_ERROR_CODES.INVALID_RESPONSE,
+      "vault_group_update: expected object",
+      raw,
+    );
   }
   return parseVaultGroupWire((raw as { group?: unknown }).group);
 }

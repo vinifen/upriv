@@ -2,6 +2,10 @@
 
 **Language:** English (UI copy: `dev/apps/shared/locales/` — see `LOCALE.md`)
 
+> **Rest layout, storage modes, backups, and export:** [`.agent/SECURITY-CRYPTO.md`](../../.agent/SECURITY-CRYPTO.md). `contents/` at rest; lock = close; FUSE/WinFsp (desktop) or in-app file manager (mobile) while open.
+
+> **Workspace mount (current):** app `[workspace].path` + vault `[mount].workspace_path` → `{parent}/{display_name}/`. Not auto-created at init. See `.agent/AGENT.md`. Older mentions of fixed `workspace/<id>/` under the vault-root are **legacy** until rewritten.
+
 **Software Design Document**  
 **Version:** 0.2  
 **Date:** 2026-05-31  
@@ -11,33 +15,32 @@
 
 ## 1. Architectural overview
 
-### 1.0 Layers (`archive` / `store` / `session` / `plain`)
+### 1.0 Layers (`contents/` / `session` / `plain`)
 
 | ID | Rust module | Disk | Session |
 |----|-------------|------|---------|
-| `archive` | `upriv_core::archive` | `vaults/<id>.7z` | — |
-| `store` | `upriv_core::store` | `stores/<id>/` (encrypted) | — |
-| `session` | `upriv_core::session` | — | mount `workspace/<id>/` + RAM |
-| `plain` | `upriv_core::plain` | `workspace/<id>/` in plaintext | only when `storage.mode = plain` |
+| `contents` | `upriv_core::store` (planned) | `vaults/<id>/contents/` (ciphertext) | — |
+| `session` | `upriv_core::session` (planned) | — | mount `workspace/<id>/` + RAM (`encrypted_dir`) |
+| `plain` | `upriv_core::plain` (planned) | `workspace/<id>/` in plaintext | only when `storage.mode = upriv_plain` |
 
-See PRD §11.1.
+No `archive/` layer. Portable `.zip` / `.7z` are **export files**, not rest layout. See PRD §1.6 and SECURITY-CRYPTO.
 
 ### 1.1 Principles
 
-0. **v1 Linux + Windows** — first delivery: desktop app on Linux and Windows (Electron + `upriv-daemon` + `upriv-core`; FUSE on Linux, WinFsp on Windows). Design the virtual-mount layer as a shared trait from day one. Vault layout and `.7z` remain portable; macOS/mobile later (PRD §3.5).
+0. **v1 Linux + Windows** — first delivery: desktop app on Linux and Windows (Electron + `upriv-daemon` + `upriv-core`; FUSE on Linux, WinFsp on Windows). Design the virtual-mount layer as a shared trait from day one. Mobile uses the in-app file manager (no FUSE).
 1. **Vault = folder + contract** — independent of where the executable is installed.
-2. **Seven storage modes** — `encrypted_dir` (default), `store_only`, `upriv_only`, `upriv_plain`, `ram_only`, `plain`, `plain_only` — UI + domain in v1; core paths refined iteratively. Closed-cache: `encrypted_dir` \| `store_only` \| `upriv_only` \| `upriv_plain`. Seal: `encrypted_dir` \| `store_only` only. Close-only (no `.7z`): `upriv_only` \| `upriv_plain`. Seal-only: `plain` \| `plain_only` \| `ram_only`. While open: `plain` keeps workspace + `.7z`; `plain_only` / `upriv_plain` keep workspace only (`upriv_plain` persists to store on close).
+2. **Two storage modes** — `encrypted_dir` (default) and `upriv_plain`. Rest is always `contents/`. Lock = close.
 3. **Core in Rust** — single `upriv-core` crate for all platforms; shared logic between desktop and mobile (FFI). UI layers (React web, React Native) are **presentation only** — no crypto, disk I/O, or session secrets in JS/TS. See `ARCHITECTURE.md` §2.
 4. **Declarative config** — `.upriv/settings.toml` + per-vault `vaults/<id>/config.toml`; safe defaults if missing.
 5. **Mutable config** — vault options **changeable at any time**; TOML is source of truth; app re-reads before open/close (not “create and lock”).
-6. **Fail safe** — never overwrite `vaults/<id>.7z` without validation; atomic writes.
-7. **Password default in RAM (v1)** — default `session_ram`; optional `disk_*` modes write **encrypted** `session.enc` (never plaintext password); after reboot without `session.enc`, remount with password.
-8. **Close = update `.7z`** — logical session content → `7zz` by stream; never pack `.enc` blobs from the store.
-9. **Manifest** — `sync_generation` + hashes align `.7z` and store; recovery without silent overwrite.
-10. **Unified states** — `open` | `closed` | `sealed`; `sealed` = only `.7z` when a portable archive exists. Close-only (`upriv_only`, `upriv_plain`) rest as `closed` (store, no `.7z`).
-11. **Virtual mount** — `workspace/` is not a data folder; I/O goes to encrypted `stores/<id>/`.
+6. **Fail safe** — never overwrite `contents/` without verification; atomic writes. Never leave a durable `.7z` twin beside `contents/`.
+7. **Password default in RAM (v1)** — default `session_ram` (lock does not re-ask); optional `disk_*` modes write **encrypted** `session.enc` (never plaintext password); after reboot without `session.enc`, remount with password. `always_prompt` is an opt-in presence check on lock, not a rewrap.
+8. **Close = flush session into `contents/`** — never pack `.enc` blobs into a `.7z` as rest. Export `.7z` streams **logical** content.
+9. **Recovery** — dirty close / leftover `upriv_plain` workspace / dead header → resume `contents/`, wipe plaintext, or create from backup. No archive-vs-store picker.
+10. **Unified states** — `open` (runtime) | `closed` (rest).
+11. **Virtual mount** — in `encrypted_dir`, `workspace/` is not a data folder; I/O goes to encrypted `contents/`.
 12. **Lockfile** — one open per vault at a time.
-13. **Crypto standard** — Argon2id + AEAD; portability via 7z.
+13. **Crypto standard** — Argon2id + XChaCha20-Poly1305 in `contents/`; optional `.7z` export for interoperability (weaker guessing). Do not claim “more secure than 7-Zip.”
 
 ### 1.2 High-level diagram
 
@@ -49,15 +52,15 @@ See PRD §11.1.
                               │ RPC (upriv-daemon) / native module (RN)
 ┌─────────────────────────────▼───────────────────────────────┐
 │                     upriv-core (Rust)                        │
-│  VaultManager │ Config │ Session │ Recovery │ SevenZip       │
+│  VaultManager │ Config │ Session │ Recovery │ contents crypto │
 └─────────────────────────────┬───────────────────────────────┘
-                              │ spawn / pipe
+                              │
 ┌─────────────────────────────▼───────────────────────────────┐
-│  storage modes + 7zz (encrypted_dir / store_only / upriv_only / upriv_plain / ram_only / plain) │
+│  encrypted_dir (RAM/FUSE)  or  upriv_plain (workspace/)      │
 └─────────────────────────────────────────────────────────────┘
                               │
 ┌─────────────────────────────▼───────────────────────────────┐
-│  stores/<id>/ (encrypted)  +  workspace/<id>/ (virtual)       │
+│  vaults/<id>/contents/  +  workspace/<id>/ (virtual or plain) │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -67,54 +70,43 @@ See PRD §11.1.
 
 ### 2.0 Persisted states (unified — PRD §1.7)
 
-**Central rule:** when **only `vaults/<id>.7z` exists**, modes with a portable archive share the **same** state: **`sealed`**. **Close-only modes never write a `.7z`** — resting state is **`closed`** (encrypted store only).
+**Central rule:** rest is **`contents/`**. Persistence on disk is always **`closed`**. **`open` is runtime only.** There is **no `sealed`**.
 
 | `persistence` | UI (i18n) | Disk | Modes |
 |---------------|-----------|------|-------|
-| `open` | `vault.status.open` | `.7z` + active work | all (`upriv_only`: store + mount; `upriv_plain`: plaintext workspace + store) |
-| `closed` | `vault.status.closed` | encrypted `stores/<id>/` (+ `.7z` except close-only) | `encrypted_dir`, `store_only`, `upriv_only`, `upriv_plain` |
-| `sealed` | `vault.status.sealed` | **only** `.7z` | all with a portable archive (`seal`, or seal-only lock) |
+| `open` | `vault.status.open` | session + `contents/` | both (`upriv_plain`: plaintext workspace + `contents/`) |
+| `closed` | `vault.status.closed` | encrypted `contents/` | `encrypted_dir`, `upriv_plain` |
 
 ```text
-encrypted_dir / store_only:
-  sealed ──open──► open ──close()──► closed ──seal()──► sealed
-     ▲                 └────────seal()───────────────┘
-
-upriv_only / upriv_plain:
+encrypted_dir / upriv_plain:
   closed ──open──► open ──close()──► closed
-  # never writes .7z; seal is not available
+  # never writes a rest .7z; seal is not available
   # upriv_plain open: plaintext workspace (wipe on close)
-
-plain / plain_only / ram_only:
-  sealed ──open──► open ──seal()──► sealed
-  # plain open: workspace + .7z; plain_only open: workspace only
 ```
 
 **Close actions (do not confuse with state):**
 
 | Action | `storage.mode` | Resulting `persistence` |
 |--------|----------------|-------------------------|
-| `close` | `encrypted_dir`, `store_only`, `upriv_only`, `upriv_plain` | `closed` |
-| `seal` | `encrypted_dir`, `store_only` | `sealed` |
-| `seal` | `plain`, `plain_only`, `ram_only` | `sealed` (wipe workspace or RAM session) |
+| `close` (lock) | `encrypted_dir`, `upriv_plain` | `closed` |
 
-Transient: `closing`, `recovery` — do not expose in UI as resting state.
+Transient: `closing`, `opening`, `recovery` — do not expose in UI as resting state.
 
 ```
-                    ┌──────────┐     seal only      ┌──────────┐
-                    │  SEALED  │◄──────────────────│  CLOSED  │
-                    └────┬─────┘   (encrypted_dir) └────┬─────┘
-                         │ open                         │ close
-                         ▼                              ▼
-                    ┌──────────┐◄────── close ──────────┘
+                    ┌──────────┐
+                    │  CLOSED  │
+                    └────┬─────┘
+                         │ open
+                         ▼
+                    ┌──────────┐
          ┌─────────│   OPEN   │─────────┐
-         │         └────┬─────┘         │ crash
-         │ seal/close   │               ▼
+         │         └────┬─────┘         │ crash / leftover plaintext
+         │ close        │               ▼
          ▼              │          ┌───────────┐
     ┌──────────┐        │          │ RECOVERY  │
     │ CLOSING  │        │          └───────────┘
     └────┬─────┘        │
-         └──────────────┴──► SEALED or CLOSED
+         └──────────────┴──► CLOSED
 ```
 
 ### Runtime states (per vault)
@@ -122,140 +114,88 @@ Transient: `closing`, `recovery` — do not expose in UI as resting state.
 | Runtime field | Values |
 |---------------|--------|
 | `session` | `open` \| `closing` \| `recovery` |
-| `persistence` (after successful close) | `closed` \| `sealed` — also written to `manifest` |
+| `persistence` (after successful close) | `closed` only — also written to persistence sidecar; **no `sealed`** |
 
 `.upriv/runtime/state.json`: `vaults.<id>.session` while app runs.
 
-**`open`:** only when `session == "open"` (lock + mount + key in RAM). Never infer `open` solely because `stores/<id>/` exists on disk.
+**`open`:** only when `session == "open"` (lock + mount + key in RAM). Never infer `open` solely because `contents/` exists on disk.
 
-**`closed` / `sealed`:** `manifest` + disk verification (§2.2).
+**`closed`:** header + index verification on `contents/`.
 
 ### Critical transitions
 
 **open (v1):**
 1. Resolve `<vault-root>` via `--vault` or dialog.
-2. Load config (defaults on failure).
+2. Load `vaults/<id>/config.toml`.
 3. Try to acquire `runtime/<id>.lock` — failure → `error.vault_already_open`.
-4. `SevenZip::test(vaults/<id>.7z, password)` — failure → abort.
-5. Read `manifest`; verify integrity (`archive_hash` vs `.7z`, `store_hash` vs encrypted tree).
-6. Compute whether `closed` is valid: `persistence=="closed"` AND `last_store_write_at <= last_close_ok_at` AND hashes OK.
-7. If `last_store_write_at > last_close_ok_at` or `.7z` replaced: **recovery** (do not assume `closed`).
-8. If divergence: UI (`recovery.use_store` / `recovery.reimport_archive`) — RF-48.
-9. If store missing or user chose re-import: materialize from `.7z` (ciphertext only on disk).
-10. Derive key (Argon2id); `SessionHandle` RAM only; apply anti-swap policy where supported.
-11. Mount `workspace/<id>/` **virtual** — **v1: FUSE (Linux) + WinFsp (Windows)**; DocumentProvider (Android) in later phases (§2.4).
-12. Update `runtime/state.json` → `vaults.<id>.session = "open"`.
+4. Read `vault.header`; derive master key (Argon2id from header params) — failure → abort.
+5. Verify index / chunk tags needed for the session.
+6. If dirty close or leftover `upriv_plain` workspace: **recovery** (resume `contents/`, wipe workspace, or create from backup).
+7. `encrypted_dir`: mount `workspace/<id>/` **virtual** — FUSE (Linux) + WinFsp (Windows); mobile uses the in-app file manager (no FUSE).
+8. `upriv_plain`: decrypt into plaintext `workspace/<id>/`.
+9. Update `runtime/state.json` → `vaults.<id>.session = "open"`.
 
 **close (v1):**
-1. Obtain password from `SessionHandle` in RAM (or prompt UI if expired).
-2. **Gate:** `SevenZip::test(vaults/<id>.7z, password)` — failure → abort.
-3. Flush encrypted store (`stores/<id>/`).
-4. If `[backup] enabled`: move current `.7z` to `backup/<id>/<timestamp>-<id>.7z`.
-5. `SevenZip::create_from_logical(vault_file.new, …)` — stream; `7zz` temp preferably in `tmpfs` (§2.6).
-6. `SevenZip::test(vault_file.new, password)` — failure → abort.
-7. Atomic rename: `vault_file.new` → `vaults/<id>.7z`.
-8. Update `manifest`: `sync_generation++`; `archive_hash`; `store_hash`; `last_close_ok_at = now`; `last_store_write_at = last_close_ok_at`; `persistence`.
-9. If action `close` (`encrypted_dir`): keep `stores/<id>/`; `manifest.persistence = "closed"`.
-10. If action `seal`: `secure_wipe` on `stores/<id>/` or `workspace/<id>/`; delete cache; `manifest.persistence = "sealed"` (**same** in both modes when only `.7z` remains).
-11. Unmount `workspace/<id>/`; release `runtime/<id>.lock`; remove entry in `state.json`.
-12. `zeroize` password/keys in RAM.
+1. Use keys from `SessionHandle` in RAM (or `session.enc` in disk modes). Prompt the UI **only** for `always_prompt` — a presence check against the open session / `vault.header`, never a new wrap. Default lock has no password field.
+2. Flush the session into `contents/` (header + index + chunks). Never pack `.enc` blobs into a `.7z` as rest.
+3. If `[backup] enabled`: copy `contents/` to `backups/<stamp>/`.
+4. `upriv_plain`: `secure_wipe_workspace` and remove plaintext `workspace/<id>/` (UI confirms wipe on manual lock).
+5. Unmount `workspace/<id>/`; release `runtime/<id>.lock`; remove entry in `state.json`.
+6. `zeroize` password/keys in RAM.
 
-**Reopen after reboot:** `open` with manifest; store reflects edits; `.7z` may lag until next successful close.
+**Reopen after reboot:** `open` against `contents/`; edits from the last successful close are in the ciphertext tree.
 
-**open / close (`plain`, v1):** classic flow — `7z t` → extract to plaintext `workspace/<id>/` → edit → on close: gate `7z t`, backup, `SevenZip::create` from `workspace/`, test `.new`, rename, **`secure_wipe_workspace`**, delete folder. Use when RAM cannot support mounted store or user explicitly chooses exception mode.
+### 2.1 Session integrity on close (not a new password)
 
-### 2.1 Password validation on close (`7z t` on old vault)
+**Problem (legacy `.7z` rest):** close used to re-pack an archive from a typed password. A different password on close would rewrite wrap material incompatibly with prior backups.
 
-**Problem:** without this step, the user can close with a **different password** than the one used to open the vault. The app would generate a new valid `.7z`, but **incompatible** with history and with plan B (7-Zip on the old file would no longer open with the vault’s “correct” password).
-
-**Rule:** before **any** write (backup or compression), test the password against the **current `vaults/<id>.7z`** (`7zz t -p{pass} …`). Continue only if the test passes.
+**Rule now:** close **flushes with the open session keys**. A typed password is **not** an input to wrap `vault.header`. RF-05 is header/session integrity before backup or flush.
 
 | Situation | Behavior |
 |-----------|----------|
-| Wrong password | `error.wrong_password` in UI; `vaults/<id>.7z`, `backup/`, and `workspace/` **unchanged** |
-| Correct password | Proceed backup (if enabled) → `.7z.new` → test `.new` → rename |
-| First close (vault created this session, no `.7z` on disk yet) | Skip step 2; test only `.7z.new` after create |
+| Default / `session_ram` / `disk_*` | Lock with session keys (or `session.enc`); no password field |
+| `always_prompt` + wrong password | `error.wrong_password`; `contents/` and backups **unchanged** (presence check only) |
+| `always_prompt` + correct password | Same flush as default — still the **open** session, not a rewrap |
+| Session gone (crash / process exit) | Recovery against `contents/` — do not ask a close password to “finish” a dead session |
+| First close of a vault created this session | Header already written at create; validate session key |
 
-**Why test the old file and not only the new:** the new archive is always created with the password the user just typed — it would pass the test even if it is **another** password. Testing the **existing** file ensures it is the **same** password as the vault that was open.
+Related: PRD **RF-05**, **RF-39**; checklist §12; tests §13.2 (“wrong password on close” = `always_prompt` presence check).
 
-Related: PRD **RF-05**, **RF-39**; checklist §12; tests §13.2 (“wrong password on close”).
+### 2.2 Persistence / integrity (no Seal twin)
 
-### 2.2 Manifest (sync `.7z` ↔ store)
+File: `.upriv/vaults/<id>/persistence.json` beside `config.toml` (not inside a deleted store).
 
-File: `.upriv/stores/<id>/manifest.json` (inside store; deleted on `seal`).
-
-**Sidecar after `seal`:** `.upriv/vaults/<id>.meta.json` (outside the deleted folder) with `persistence: "sealed"`, `archive_hash`, `sync_generation`, `sealed_at`. If absent: infer `sealed` when `<id>.7z` exists and `stores/<id>/` does not.
+There is **no** Seal sidecar, **no** durable `archive/` twin, and **no** `archive_hash`. Sync metadata that remains: `content_hash`, `last_close_ok_at` (recovery A). Canonical detail: [`.agent/SECURITY-CRYPTO.md`](../../.agent/SECURITY-CRYPTO.md).
 
 ```json
 {
   "format_version": 1,
-  "sync_generation": 42,
-  "archive_hash": "sha256:…",
-  "store_hash": "sha256:…",
+  "content_hash": "sha256:…",
   "last_close_ok_at": "2026-05-28T14:00:00Z",
-  "last_store_write_at": "2026-05-28T14:00:00Z",
   "persistence": "closed"
 }
 ```
 
-(`persistence`: `closed` | `sealed` at rest; `open` **never** in manifest — runtime only.)
+(`persistence`: `closed` at rest only; `open` is **never** persisted — runtime session only.)
 
-**Hashes (integrity, not equality):**
-
-| Hash | Computed over |
-|------|---------------|
-| `archive_hash` | Bytes of `vaults/<id>.7z` |
-| `store_hash` | Encrypted tree manifest (`index/` + `data/` metadata) |
-
-**Never** require `archive_hash == store_hash`.
-
-**Sync “`.7z` matches store” (real `closed`):**
-
-```rust
-fn is_closed_real(m: &Manifest, store_on_disk: &StoreMeta) -> bool {
-    m.persistence == Closed
-        && store_on_disk.exists
-        && m.last_store_write_at <= m.last_close_ok_at
-        && m.archive_hash == hash_file(archive_path)
-        && m.store_hash == hash_store_tree(store_path)
-}
-```
-
-**During `open`:** each write-through sets `last_store_write_at = now()` → no longer satisfies `closed` until next close.
-
-**Rules (`upriv-core::sync`):**
+**Rules (`upriv-core`):**
 
 | Condition | Action |
 |-----------|--------|
-| `last_store_write_at > last_close_ok_at` (no session) | `recovery` — store stale vs last close |
-| `archive_hash` ≠ hash of `.7z` on disk | `recovery` — `.7z` replaced |
-| `store_hash` ≠ current hash | `recovery` — store corrupted or manual |
-| Successful close | `sync_generation++`; both hashes; `last_close_ok_at = last_store_write_at = now` |
+| Dirty close / leftover `upriv_plain` workspace | `recovery` |
+| Header/index unreadable | Create new vault from backup only |
+| One chunk tag fail | That file; vault still opens |
+| Successful close | Update `content_hash` + `last_close_ok_at` |
 
 Related: PRD **RF-47**, **RF-48**, **RF-57**, §3.4.
 
-### 2.3 Close actions (`close` vs `seal`)
+### 2.3 Close action
 
-Config in `config/<id>.toml` (default action in UI):
+Lock is always **close** (flush the session into `contents/`). There is no Seal.
 
-```toml
-[close]
-default_action = "close"   # "close" | "seal"  — "close" only in closed-cache modes
-```
-
-| Action | Closed-cache (`encrypted_dir` / `store_only`) | Close-only (`upriv_only` / `upriv_plain`) | Seal-only (`plain` / `plain_only` / `ram_only`) |
-|--------|----------------------------------------------|-------------------------------------------|----------------------------------|
-| `close` | `closed` | `closed` (store only; no `.7z`; `upriv_plain` wipes workspace) | *not available* (destination = `sealed`) |
-| `seal` | `sealed` | *not available* | `sealed` |
-
-**Close dialog (closed-cache modes, RF-53c):**
-
-| UI option | Action | State | User-facing summary (i18n) |
-|-----------|--------|-------|----------------------------|
-| **`action.close`** | `close` | `closed` | `close.dialog.close_hint` |
-| **`action.seal`** | `seal` | `sealed` | `close.dialog.seal_hint` |
-
-`seal` requires extra confirmation (`close.dialog.seal_confirm`). In seal-only modes, single **`action.seal`** / lock → `sealed` (same UI label `vault.status.sealed`). In close-only modes (`upriv_only`, `upriv_plain`), lock is always **`action.close`** — Seal is hidden.
+| Action | `encrypted_dir` | `upriv_plain` |
+|--------|-----------------|---------------|
+| `close` | `closed` | `closed` (wipe plaintext workspace) |
 
 Related: PRD **RF-53**, **RF-53b**.
 
@@ -269,44 +209,44 @@ Related: PRD **RF-53**, **RF-53b**.
 
 ```
 App / Explorer  →  workspace/<id>/nota.txt  (logical path)
-                        ↓ FUSE / WinFSP / DocumentProvider
+                        ↓ FUSE / WinFsp / DocumentProvider
                    CryptoLayer::read/write
                         ↓
-                   stores/<id>/data/….enc   (only persistence)
+                   vaults/<id>/contents/data/….enc   (only persistence)
 ```
 
 - Read: decrypt stream → RAM → caller.
-- Write: caller → encrypt stream → blob in store (**write-through**).
+- Write: caller → encrypt stream → chunk in `contents/` (**write-through**).
 - `workspace/` is empty mountpoint until `open()`; after `close()`, unmounted (directory may exist empty).
 
-**Write-through invariant (RF-49b):** after a successful `write()` / file `close()` on the mount, the corresponding logical content **is already** in the encrypted store on disk — there is no “RAM-only version” as source of truth.
+**Write-through invariant (RF-49b):** after a successful `write()` / file `close()` on the mount, the corresponding logical content **is already** in `contents/` on disk — there is no “RAM-only version” as source of truth.
 
 | Event | Minimum guarantee |
 |-------|-------------------|
-| App writes and flush/`close` on handle | Updated encrypted blob in `stores/<id>/` |
+| App writes and flush/`close` on handle | Updated encrypted chunk in `contents/` |
 | `fsync` on file (OS/editor) | Encrypted data on disk (not only app buffer) |
-| Vault close | Global store `flush` + `.7z` export |
+| Vault close | Global flush of session into `contents/` |
 
-**Do not confuse:** read cache in RAM ≠ authoritative copy; on-disk authority is always the encrypted store after committed write.
+**Do not confuse:** read cache in RAM ≠ authoritative copy; on-disk authority is always `contents/` after committed write.
 
-**Required tests:** write via mount → no plaintext in real `workspace/` → ciphertext present in `stores/<id>/` before vault close.
+**Required tests:** write via mount → no plaintext in real `workspace/` → ciphertext present in `contents/` before vault close.
 
 Related: PRD **RF-49**.
 
-#### 2.4.1 Encrypted store — file and folder names (forensic resistance)
+#### 2.4.1 Encrypted contents — file and folder names (forensic resistance)
 
-In `encrypted_dir`, **logical paths must not appear in plaintext** under `vaults/<id>/store/` on HD/SSD. Forensic inspection of the store alone must not reveal what each blob represents (e.g. `passwords.txt` vs `photo.jpg`).
+In `encrypted_dir`, **logical paths must not appear in plaintext** under `vaults/<id>/contents/` on HD/SSD. Forensic inspection of the tree alone must not reveal what each blob represents (e.g. `passwords.txt` vs `photo.jpg`).
 
 **On-disk layout (example):**
 
 ```text
-store/
+contents/
 ├── vault.header          # format + KDF params + wrapped key (no cleartext tree)
 ├── index/root.idx.enc    # encrypted directory tree (paths + metadata)
-└── data/<hash>/….chunk.enc   # content ciphertext; opaque identifiers only
+└── data/<opaque>/….chunk.enc   # content ciphertext; opaque identifiers only
 ```
 
-**Crypto (see `prod-example` `vault.header`):**
+**Crypto (see [`.agent/SECURITY-CRYPTO.md`](../../.agent/SECURITY-CRYPTO.md)):**
 
 | Layer | Cipher | What it protects |
 |-------|--------|------------------|
@@ -315,11 +255,11 @@ store/
 
 **Rules:**
 
-- Never persist logical paths as human-readable filenames under `store/data/`.
-- Index updates are write-through with content (same session key); after `seal` + wipe, neither names nor content remain in the local store.
-- Logical names are visible only in the **virtual mount** while the vault is **open** (session), not as durable plaintext on the vault volume.
+- Never persist logical paths as human-readable filenames under `contents/data/`.
+- Index updates are write-through with content (same session key).
+- Logical names are visible only in the **virtual mount** / in-app file manager while the vault is **open** (session), not as durable plaintext on the vault volume.
 
-**Archive (`.7z`):** `[seven_zip] encrypt_file_names = true` by default — names hidden inside the closed archive too. Disabling it is a deliberate downgrade (UI warning).
+**Portable `.7z` export:** `[seven_zip] encrypt_file_names = true` by default — names hidden inside the export file too. Disabling it is a deliberate downgrade (UI warning). Export is not rest layout.
 
 Related: PRD §3.3.1, **RF-45**, **RF-49**, **RF-49b**.
 
@@ -369,12 +309,11 @@ Related: PRD **RF-56**, **RF-UI-05**.
 ### 2.10 Secure deletion (`secure_wipe`)
 
 > **`encrypted_dir` + virtual mount:** wipe on `workspace/` normally **not applicable** (no plaintext on disk).  
-> **`seal` action:** wipe on `stores/<id>/` (`encrypted_dir`) or `workspace/<id>/` (`plain`) before delete.  
-> **`persistence = sealed`:** same in both modes.
+> **`upriv_plain`:** wipe plaintext `workspace/<id>/` on close (and before delete).
 
 **Problem:** on HDD, `remove_file` / `rm -rf` **do not** erase bytes — only mark clusters free. On SSD, per-file wipe is best effort.
 
-**Requirement:** after new `.7z` is written and validated, and **before** removing local cache on `seal`, overwrite + `fsync` + `unlink`.
+**Requirement:** before removing a plaintext `upriv_plain` workspace, overwrite + `fsync` + `unlink`.
 
 **Algorithm (per file, order: deepest files first):**
 
@@ -467,13 +406,20 @@ vaults_dir = ".upriv/vaults"
 state_file = ".upriv/state.json"
 logs_dir = ".upriv/logs"
 app_dir = ".upriv/app"
-workspace_dir = "workspace"
-default_vault = "my-encrypted-notes"
 
 [ui]
 locale = "en"
 theme = "dark"
-# file_manager_dock_expanded = false   # optional; see table below
+show_header_more_button = true
+file_manager_dock_expanded = false
+# always_show_hidden_vaults = false          # optional; Hidden vaults section
+# vault_list_allow_drag_into_group = true    # optional
+# vault_list_show_drag = true                # optional
+# vault_list_sort = "order"                  # optional; see table below
+# vault_list_sort_direction = "asc"          # optional
+# vault_list_view = "default"                # optional
+# vault_list_search = ""                     # optional
+# vault_list_show_create_button = true       # optional
 
 [logging]
 enabled = true
@@ -482,11 +428,9 @@ entries_per_file = 1000
 keep_last_entries = 10000
 
 [app]
-# Vault-root mode (`default_root` vs `custom_root`) is NOT configured here.
-# It lives in the app-home `.upriv-root` alias:
-#   missing or status=inactive → default_root mode
-#   status=active + path → custom_root
 last_opened_vault = "my-encrypted-notes"
+# Vault-root mode (`default_root` | `custom_root`): app-home `.upriv-root`, not here.
+# Missing/inactive → default_root; active + path → custom_root.
 ```
 
 **Upriv marker:** folder is `<vault-root>` if it contains `.upriv/settings.toml`.
@@ -495,30 +439,31 @@ last_opened_vault = "my-encrypted-notes"
 
 #### `[ui]` — fields and where they are saved (v1 desktop)
 
-| Key | Edited in System settings modal? | When persisted |
-|-----|----------------------------------|----------------|
-| `locale` | Yes (Appearance) | Explicit **Save** in System settings |
-| `theme` | Yes (Appearance) | Explicit **Save** in System settings |
-| `always_show_hidden_vaults` | Yes (Hidden vaults) | Explicit **Save** in System settings |
-| `vault_list_sort`, `vault_list_sort_direction` | No | When user changes sort on the vault list toolbar |
-| `vault_list_view` | No | When user toggles list / block view on the vault list toolbar |
-| `file_manager_dock_expanded` | **No** | When user **expands or collapses** the minimized file-manager dock (bottom-right chip list). Restored on next app launch. Default `false` (collapsed — count button only). |
+**On disk:** prefs are **flat keys under `[ui]`**. General UI (`locale`, `theme`, `show_header_more_button`, `file_manager_dock_expanded`, `always_show_hidden_vaults`) then `vault_list_*` list prefs. Legacy nested **`[ui.vault_list]`** still loads; save writes flat `[ui]`. **`show_header_more_button`** is the on-disk name for the header ⋮ (wire: `vault_list_show_header_more_button`).
+
+**Wire / RPC:** flat `settings.ui.*` below (what TypeScript and the daemon exchange).
+
+| Wire key | TOML (on disk) | Edited in System settings modal? | When persisted |
+|-----|----------------|----------------------------------|----------------|
+| `locale` | `[ui].locale` | Yes (Language) | Explicit **Save** in System settings |
+| `theme` | `[ui].theme` | Yes (General) | Explicit **Save** in System settings |
+| `vault_list_show_header_more_button` | `[ui].show_header_more_button` | Yes (General) | Explicit **Save** in System settings. Default `true`. Shows the header overflow (⋮) menu. |
+| `file_manager_dock_expanded` | `[ui].file_manager_dock_expanded` | **No** | When user **expands or collapses** the minimized file-manager dock (bottom-right chip list). Restored on next app launch. Default `false` (collapsed — count button only). |
+| `always_show_hidden_vaults` | `[ui].always_show_hidden_vaults` | Yes (Hidden vaults) | Explicit **Save** in System settings |
+| `vault_list_show_drag` | `[ui].vault_list_show_drag` | Yes (Vault list) | Explicit **Save** in System settings. Default `true`. Shows vertical drag grips on the vault list; off hides grips only (order/sort unchanged). |
+| `vault_list_show_create_button` | `[ui].vault_list_show_create_button` | Yes (Vault list) | Explicit **Save** in System settings. Default `true`. Shows the new-vault (+) button. |
+| `vault_list_show_search_button` | `[ui].vault_list_show_search_button` | Yes (Vault list) | Explicit **Save** in System settings. Default `true`. Shows the search button. A saved `vault_list_search` still filters when hidden. |
+| `vault_list_show_sort_button` | `[ui].vault_list_show_sort_button` | Yes (Vault list) | Explicit **Save** in System settings. Default `true`. Shows the sort button. Current sort stays in effect when hidden. |
+| `vault_list_show_view_button` | `[ui].vault_list_show_view_button` | Yes (Vault list) | Explicit **Save** in System settings. Default `true`. Shows the view button. Current view stays in effect when hidden. |
+| `vault_list_show_vault_more_button` | `[ui].vault_list_show_vault_more_button` | Yes (Vault list) | Explicit **Save** in System settings. Default `true`. Shows the vault row overflow (⋯) menu. |
+| `vault_list_show_vault_settings_button` | `[ui].vault_list_show_vault_settings_button` | Yes (Vault list) | Explicit **Save** in System settings. Default `true`. Shows the vault row settings (gear) menu. |
+| `vault_list_show_group_settings_button` | `[ui].vault_list_show_group_settings_button` | Yes (Groups) | Explicit **Save** in System settings. Default `true`. Shows the group header settings gear. Legacy combined TOML key: `vault_list_show_vault_group_settings_button` (applies to both when the split keys are missing). |
+| `vault_list_allow_drag_into_group` | `[ui].vault_list_allow_drag_into_group` | Yes (Groups) | Explicit **Save** in System settings. Default `true`. Drop vault onto group to assign / onto list to ungroup. |
+| `vault_list_sort`, `vault_list_sort_direction` | `[ui].vault_list_sort*` | No | When user changes sort on the vault list toolbar |
+| `vault_list_view` | `[ui].vault_list_view` | No | When user toggles list view on the vault list toolbar |
+| `vault_list_search` | `[ui].vault_list_search` | No | When the user types in the vault-list search box (debounced). The control expands only while focused. Filters ungrouped vault names, group names, and vaults inside groups. |
 
 **Minimized file-manager dock:** after **Minimize** on a file-manager modal, vault chips appear in a floating dock. One control toggles between showing all chips vs. a single collapsed button with the count. That expanded/collapsed choice is written to `[ui] file_manager_dock_expanded` immediately on toggle — not exposed as a checkbox in System settings.
-
-**Download vaults (System settings — action only):** section **below Hidden vaults**. **Not** a `[ui]` key — checklist selection is **transient** (RAM while the modal is open; reset on close). **Does not** require or trigger System settings **Save**.
-
-| Rule | Detail |
-|------|--------|
-| Purpose | Zip selected main archives `vaults/<id>/archive/<display_name>.7z` for backup or moving to another drive |
-| List | All vaults in the current Upriv root, sorted by `display_name` |
-| Select all | `modal.app_settings.select_all_vaults` — toggles only **available** vaults (`closed` / `sealed` on disk) |
-| Blocked rows | `session === open \| closing \| recovery` → checkbox disabled; inline status `(Open)` etc.; `warning.download_vaults_*` callout when any blocked |
-| Download | Button enabled when ≥1 available vault selected; label **all** vs **selected**; zip name `modal.app_settings.download_vaults_zip_name` (`upriv-vaults-{date}.zip`) |
-| Zip layout | `{vault_id}/{display_name}.7z` per entry (avoids display-name collisions) |
-| UI pattern | **Flat checklist** like Hidden vaults — no bordered list cards, no `ring`/`divide` containers; compact rows (`text-xs`), subtle row hover only |
-
-**Desktop mock:** `AppSettingsDownloadVaultsSection`, `vaultBulkExport.ts`; future RPC: `vault_bulk_export(vault_root, vault_ids)`.
 
 **Working root (UX):** `workspace/` + launchers (`Upriv-windows.exe`, `Upriv-mac`, `Upriv-linux`) and `.upriv/`; documentation in `README.md` at `<vault-root>` root.
 
@@ -533,11 +478,10 @@ Each vault is a self-contained folder under `.upriv/vaults/<vault_id>/`:
 ```text
 vaults/<vault_id>/              # vault_id = normalized slug (filesystem-safe)
 ├── config.toml                 # structural config
-├── persistence.json            # closed | sealed (+ vault_id, display_name)
-├── archive/<display_name>.7z   # Plan B — user filename verbatim
-├── store/                      # encrypted_dir + closed (wiped on seal)
-├── backups/                    # {timestamp}-{vault_id}.7z (app-generated)
-└── auth/                       # disk_close / disk_open_close (any storage.mode)
+├── persistence.json            # closed (+ vault_id, display_name)
+├── contents/                   # rest — vault.header + index + chunks
+├── backups/                    # frozen copies of contents/ (`<stamp>/`)
+└── (optional) workspace leftovers only for dirty upriv_plain
 ```
 
 **Discovery:** scan `vaults/*/config.toml` on app start.
@@ -553,17 +497,17 @@ vaults/<vault_id>/              # vault_id = normalized slug (filesystem-safe)
 | `vault_id` / folder name | Yes | `my-encrypted-notes` |
 | `display_name` (UI, main `.7z` stem) | No — user input | `My Encrypted Notes` |
 | `workspace/{display_name}/` while open | No | `workspace/My Encrypted Notes/` |
-| `backups/*.7z` | Yes | `20260528T120000-my-encrypted-notes.7z` |
+| `backups/<stamp>/` | Yes | frozen `contents/` copy |
 
 #### 3.2.1 `display_name` validation and export/import
 
-**Forbidden in `display_name`** (and therefore in `archive/{display_name}.7z`): `\ / : * ? " < > |`, ASCII controls, empty/whitespace-only, trailing space or `.`, reserved Windows stems (`CON`, `PRN`, …), length > 128. Accents and internal spaces are allowed.
+**Forbidden in `display_name`** (and therefore in `{display_name}.zip` / `{display_name}.7z` export names): `\ / : * ? " < > |`, ASCII controls, empty/whitespace-only, trailing space or `.`, reserved Windows stems (`CON`, `PRN`, …), length > 128. Accents and internal spaces are allowed.
 
 **`vault_id`:** always normalized slug (§3.2 table); generated from `display_name`; max 64 chars; collision suffix `-2`, …
 
-**Export** (save `.7z` outside vault): default `{display_name}.7z`; if destination filename invalid, block or offer minimal sanitize (`-` replacement); **do not** change source vault `display_name`.
+**Export** (save outside vault): default `{display_name}.zip` (zip of encrypted `contents/`) or `{display_name}.7z`; if destination filename invalid, block or offer minimal sanitize (`-` replacement); **do not** change source vault `display_name`.
 
-**Import** (external `.7z` → new vault): stem → proposed `display_name`; if invalid, dialog with `sanitize_minimal(stem)` pre-fill; user confirms; copy to `archive/{display_name}.7z`. Spec: `prod/README.md` § Forbidden characters.
+**Import** (external `.zip` of `contents/` or `.7z` → new vault): stem → proposed `display_name`; if invalid, dialog with `sanitize_minimal(stem)` pre-fill; user confirms. Spec: `prod/README.md` § Forbidden characters.
 
 Example `prod/.upriv/vaults/my-encrypted-notes/config.toml`:
 
@@ -572,11 +516,8 @@ Example `prod/.upriv/vaults/my-encrypted-notes/config.toml`:
 id = "my-encrypted-notes"
 display_name = "My Encrypted Notes"
 order = 1
-vault_file = "archive/My Encrypted Notes.7z"
-store_dir = "store"
-backups_dir = "backups"
 password_hint = ""   # optional; max 128 chars; reminder only — never the password
-note = ""            # optional; max 256 chars; simple user annotation
+note = ""            # optional; max 10000 chars; user annotation
 
 [backup]
 enabled = true
@@ -584,7 +525,7 @@ mode = "keep_last"
 keep_last = 1
 
 [security]
-mode = "session_ram"              # default; UI offers all 4 password-memory choices for every storage.mode (§3.2.3a)
+mode = "session_ram"              # default; lock uses session keys (no password). UI: 4 password-memory choices (§3.2.3a)
 secure_wipe_workspace = true      # UI: Security
 wipe_passes = 1                   # hidden default
 wipe_pattern = "random"           # hidden default
@@ -619,19 +560,12 @@ method = "lzma2"
 
 ```toml
 [storage]
-mode = "encrypted_dir"   # encrypted_dir | store_only | upriv_only | upriv_plain | ram_only | plain | plain_only
-# store_only   — encrypted store primary; .7z on seal/export
-# upriv_only   — encrypted store only; no .7z, no seal (opens only in Upriv)
-# upriv_plain  — same closed store; plaintext workspace while open; lock closes + wipe
-# ram_only     — .7z + RAM session; always seal
-# plain        — open: plaintext + .7z; lock always seals
-# plain_only   — open: plaintext only (no .7z); lock always seals
-
-[close]
-default_action = "close"        # "close" | "seal" (close only if closed-cache mode)
+mode = "encrypted_dir"   # encrypted_dir | upriv_plain
+# encrypted_dir — rest = contents/; open: decrypt in RAM (FUSE / in-app FM)
+# upriv_plain  — rest = contents/; open: plaintext workspace; lock closes + wipe
 ```
 
-**RAM capacity (`encrypted_dir` / `ram_only`):** decrypted logical content is held in **RAM** while the vault is **open**. **`upriv-core`** must treat insufficient memory as a **hard failure** — open, edit, or close abort with a user-visible error; **never** silently spill plaintext workspace to disk in non-plaintext modes (RF-49). UI: **`warning.encrypted_dir_ram`**, **`warning.ram_only`**, **`warning.store_only`**, **`warning.upriv_only`**, **`warning.upriv_plain`**, **`warning.plain_mode`**, **`warning.plain_only`**. When RAM cannot fit the vault, user should split vaults or choose **`store_only`** / **`upriv_plain`** / **`plain`** / **`plain_only`**.
+**RAM capacity (`encrypted_dir`):** decrypted logical content is held in **RAM** while the vault is **open**. **`upriv-core`** must treat insufficient memory as a **hard failure** — open, edit, or close abort with a user-visible error; **never** silently spill plaintext workspace to disk in `encrypted_dir` (RF-49). UI: **`warning.encrypted_dir_ram`**, **`warning.upriv_plain`**. When RAM cannot fit the vault, split vaults or choose **`upriv_plain`**.
 
 | Value | `7zz` (summary) | Use |
 |-------|-----------------|-----|
@@ -646,9 +580,9 @@ User-facing metadata that is **not** sync state:
 
 | Field | Where stored | Why |
 |-------|--------------|-----|
-| `order` | `config.toml` → `[vault]` | User-controlled display order in vault list; survives seal; optional (non-negative integer) |
-| `password_hint` | `config.toml` → `[vault]` | Static, user-editable, survives seal; optional reminder at unlock |
-| `note` | `config.toml` → `[vault]` | Short annotation; same lifecycle as vault config |
+| `order` | `config.toml` → `[vault]` | User-controlled display order in vault list; optional (non-negative integer) |
+| `password_hint` | `config.toml` → `[vault]` | Static, user-editable; optional reminder at unlock |
+| `note` | `config.toml` → `[vault]` | User annotation; same lifecycle as vault config |
 | Password (secret) | **RAM only** (v1 `encrypted_dir`) | RF-24 — never in any vault file |
 | Sync hashes, generations | `persistence.json` | Operational manifest — rewritten on close |
 
@@ -665,7 +599,7 @@ User-facing metadata that is **not** sync state:
 |-------|------------|-------|
 | `order` | — (non-negative integer) | omit → sort after explicit values, then by `display_name` |
 | `password_hint` | 128 chars | `""` or omit key → no hint shown |
-| `note` | 256 chars | `""` or omit key → no note |
+| `note` | 10000 chars | `""` or omit key → no note |
 
 **Create-new wizard (not import):** password + confirm password (required); optional hint and note written to `[vault]` on first `config.toml` save.
 
@@ -680,13 +614,13 @@ Available in vault settings (**Security** section in UI; stored fields span `[va
 | Step | Action |
 |------|--------|
 | 1 | User enters **current password**, **new password**, **confirm new password** (new ≠ current) |
-| 2 | UI shows **`warning.password_change_backups`** — existing `backups/*.7z` keep the password from when each snapshot was created |
-| 3 | **`upriv-core`:** validate current password — `7zz t -p{current}` on main `vault_file`; unlock / read store with current password |
+| 2 | UI shows **`warning.password_change_backups`** — existing `backups/<stamp>/` keep the password from when each snapshot was created |
+| 3 | **`upriv-core`:** validate current password against `contents/` header; re-wrap keys |
 | 4 | **If vault open:** keep user workspace available; decrypt store + workspace path in controlled temp/RAM; do not leave plaintext on disk when `encrypted_dir` |
 | 5 | **If vault closed:** extract archive + store to temp workspace in RAM (or encrypted temp per policy); no user-facing mount required |
 | 6 | **Optional (recommended):** snapshot current main `.7z` into `backups/` **before** replace (uses **old** password — consistent with backup semantics) |
-| 7 | Re-encrypt store blobs and create new main `archive/{display_name}.7z` with **new** password (same atomic pipeline as close: `.7z.new` → rename) |
-| 8 | Secure-delete superseded archive/store/workspace temp; remove stale plaintext |
+| 7 | Re-encrypt `contents/` with the **new** password (same atomic flush as close) |
+| 8 | Secure-delete superseded session temp; remove stale plaintext |
 | 9 | Update `persistence.json` hashes / `sync_generation`; set `[security] password_changed_at` (ISO 8601 UTC) |
 | 10 | **If vault was open:** refresh in-memory session with new password; remount FUSE if applicable |
 | 11 | **Do not** re-encrypt or delete existing `backups/` files automatically |
@@ -711,28 +645,24 @@ Settings modal edits `config.toml` but **does not mirror every key** — advance
 
 | TOML section | Shown in UI | Hidden in UI (defaults / system) |
 |--------------|-------------|----------------------------------|
-| `[vault]` | `display_name`, `order`, `note` | `id` (slug — derived/normalized on rename migration), `vault_file`, `store_dir`, `backups_dir` (layout internal; user may relocate **package root** later via onboarding, not per-vault paths) |
-| `[storage]` | `mode` (`encrypted_dir` / `store_only` / `upriv_only` / `upriv_plain` / `ram_only` / `plain` / `plain_only`) + contextual warnings | — |
-| `[close]` + `[auto_close]` + `[security].secure_wipe_workspace` | **Close** section: default lock action (hidden when seal-only), secure wipe, idle auto-close | — |
-| `[security]` | `password_hint` (UI under **Security**; file still `[vault]`), **`mode` (password in memory — 4 UI options for all storage modes)**, **change password** | `secure_wipe_workspace` (UI under **Close**), `wipe_passes`, `wipe_pattern`, `password_changed_at` (set by app) |
+| `[vault]` | `display_name`, `order`, `note`, `password_hint` | `id` (folder slug; derived/normalized on rename migration). Layout dirs `contents/` and `backups/` are not TOML keys. |
+| `[storage]` | `mode` (`encrypted_dir` / `upriv_plain`) + contextual warnings | — |
+| `[auto_close]` + `[security].secure_wipe_workspace` | **Preferences / Lock and idle:** secure wipe, idle auto-close | — |
+| `[security]` | **`mode` (password in memory — 4 UI options for all storage modes)** | `wipe_passes`, `wipe_pattern`, `password_changed_at` (set by app). `secure_wipe_workspace` is shown under Lock and idle, not as a `[security]` form field. |
+| Password / Unlock RAM | Settings **areas** (not TOML sections): change password; change Argon2id preset | Cost lives in `contents/vault.header`, never a `[kdf]` section |
+| `[seven_zip]` | compression preset (**none/low/medium/high** → `archive_mode` + `compression_level`), `encrypt_file_names` | `method`, `solid` (defaults: `lzma2`, `false`) |
+| `[policy]` | `allow_external_editors`, `disallow_copy_outside_mount` (two radio groups) | `require_unmount_on_sleep` |
 
-**Password in memory (UI):** `session_ram`, ask on open and close (`always_prompt`; `ram_on_close_only` legacy maps here), `disk_close` (less secure), `disk_open_close` (insecure) — **same list for all storage modes**. Disk modes use `auth/<id>/.session.enc` (encrypted key blob). Does **not** weaken store or `.7z` encryption.
+**Password in memory (UI):** `session_ram` (lock without retyping), Never save (`always_prompt` — presence check on lock; does not rewrap), `disk_close` (less secure), `disk_open_close` (insecure) — **same list for all storage modes**. Legacy TOML `ram_on_close_only` loads/saves as `session_ram`. Disk modes use `auth/<id>/.session.enc` (encrypted key blob).
 
 **Storage mode warnings (UI):**
 
 | `storage.mode` | Warning key | When shown |
 |----------------|-------------|------------|
 | `encrypted_dir` | `warning.encrypted_dir_ram` | Storage section (settings + create wizard); Help → Security |
-| `store_only` | `warning.store_only` | Storage section |
-| `upriv_only` | `warning.upriv_only` | Storage section; hide Seal, `[backup]`, `[seven_zip]`; badge **More secure** |
-| `upriv_plain` | `warning.upriv_plain` | Storage section; hide Seal, `[backup]`, `[seven_zip]`; badge **Insecure**; plaintext while open |
-| `ram_only` | `warning.ram_only` | Storage section; hide **Close → keep cache** (seal-only) |
-| `plain` | `warning.plain_mode` | Storage section; hide **Close → keep cache** (seal-only); open = plain + `.7z`; suited for **large vaults/files** |
-| `plain_only` | `warning.plain_mode` + `warning.plain_only` | Storage section; seal-only; open = plain only (no `.7z`); suited for **very large** content |
+| `upriv_plain` | `warning.upriv_plain` | Storage section; badge **Insecure**; plaintext while open |
 
 Related: PRD **RF-UI-17**, §1.6.
-| `[seven_zip]` | compression preset (**none/low/medium/high** → `archive_mode` + `compression_level`), `encrypt_file_names` | `method`, `solid` (defaults: `lzma2`, `false`) |
-| `[policy]` | `allow_external_editors`, `disallow_copy_outside_mount` (two radio groups) | `require_unmount_on_sleep` |
 
 **Modal UX (unlike note/backups modals):** explicit **Save** (enabled only when dirty) → confirm save; close with dirty draft → **discard all and close** confirm; backdrop/Esc while confirm open cancels close attempt.
 
@@ -779,14 +709,14 @@ impl ConfigStore {
 | `[security]` (`secure_wipe_workspace`, `wipe_passes`, …) | Next **close** / discard | Immediate if only `mode`; wipe on close |
 | `[vault] password_hint`, `[vault] note`, `[vault] order` | Immediate (UI / list) | Immediate |
 | `[security] password_changed_at` | Set when change-password succeeds | Set when change-password succeeds (open or closed) |
-| `[vault] id` / `vault_file` | Only with **migration flow** (rename `.toml`, `.7z`, folders) | **Block** — close vault first |
+| `[vault] id` | Only with **migration flow** (rename folder + `config.toml`) | **Block** — close vault first |
 | `main.toml` `[package]` paths | Next open of any vault | Same |
 
 **Forbidden**
 
 - Assume config read only at vault creation.
 - Eternal cache without checking TOML `mtime`.
-- Rename `id` / `vault_file` with `workspace/<id>/` present without migration wizard.
+- Rename `id` with a session present without a migration wizard.
 
 **UI (v1+):** “Vault settings” screen edits same TOML (not parallel JSON structure that diverges).
 
@@ -794,7 +724,7 @@ impl ConfigStore {
 
 | Rule | Validation |
 |------|------------|
-| Unique `id` | No other `.toml`, `vaults/<id>.7z`, `auth/<id>/`, or `workspace/<id>/` with same name |
+| Unique `id` | No other `vaults/<id>/`, `config.toml`, or mount folder with the same slug |
 | File = `id` | `config/foo.toml` requires `[vault] id = "foo"` |
 | Aligned triad | Same `id` in config, vaults, and auth; on create, fail if any already exists |
 | Suggested charset | `[a-zA-Z0-9_-]+` (v1); reject `/`, `\`, `..`, reserved names (`runtime`, etc.) |
@@ -803,7 +733,7 @@ impl ConfigStore {
 fn validate_vault_id(id: &str, vault_root: &Path) -> Result<()> {
     // 1. charset + reserved names
     // 2. config/{id}.toml exists and tom.id == id
-    // 3. !vaults/<id>.7z exists OR is same vault being updated
+    // 3. !vaults/<id>/ exists OR is same vault being updated
     // 4. !workspace/<id> exists OR belongs to this vault (recovery)
     // 5. no duplicate ids across all loaded toml files
 }
@@ -813,11 +743,9 @@ fn validate_vault_id(id: &str, vault_root: &Path) -> Result<()> {
 
 | Path | Use |
 |------|-----|
-| `vaults/<id>.7z` | Closed vault (`vault_file` in TOML) |
-| `backup/<id>/<timestamp>-<id>.7z` | Vault snapshot before close (`[backup]`) |
-| `vaults/<id>.7z.new` | Temp on close |
+| `vaults/<id>/contents/` | Vault body at rest |
+| `vaults/<id>/backups/<stamp>/` | Frozen copy of `contents/` (`[backup]`) |
 | `auth/<id>/.session.enc` | Encrypted session (`disk_*` modes; hidden) |
-| `auth/<id>/.quick-auth` | Quick-access blob (hidden; **never** plaintext password) |
 
 **Open workspaces:** `workspace/<id>/` only while open; `runtime/state.json` lists open vaults (demo: several at once).
 
@@ -897,38 +825,17 @@ struct VaultRoot {
 }
 
 impl VaultRoot {
-    fn vaults_dir(&self, cfg: &PackageConfig) -> PathBuf {
-        self.root.join(&cfg.vaults_dir)   // archives only
+    fn vault_dir(&self, vault_id: &str) -> PathBuf {
+        self.vaults_dir().join(vault_id)
     }
-    fn stores_dir(&self, cfg: &PackageConfig) -> PathBuf {
-        self.root.join(&cfg.stores_dir)   // encrypted stores
+    fn vault_contents_dir(&self, vault_id: &str) -> PathBuf {
+        self.vault_dir(vault_id).join("contents")
     }
-    fn store_path(&self, cfg: &PackageConfig, vault: &VaultConfig) -> PathBuf {
-        self.stores_dir(cfg).join(&vault.store_dir)  // .upriv/stores/<id>/
+    fn vault_backups_dir(&self, vault_id: &str) -> PathBuf {
+        self.vault_dir(vault_id).join("backups")
     }
-    fn workspace(&self, cfg: &PackageConfig, vault_id: &str) -> PathBuf {
-        self.root.join(&cfg.workspace_dir).join(vault_id)
-    }
-    fn archive_path(&self, cfg: &PackageConfig, vault: &VaultConfig) -> PathBuf {
-        self.vaults_dir(cfg).join(&vault.vault_file)  // .upriv/vaults/<id>.7z
-    }
-    fn auth_dir(&self, vault: &VaultConfig) -> PathBuf {
-        self.root.join(&vault.auth_dir)  // .upriv/auth/<id>
-    }
-    fn session_path(&self, vault: &VaultConfig) -> PathBuf {
-        self.auth_dir(vault).join(&vault.session_file)
-    }
-    fn state_path(&self, cfg: &PackageConfig) -> PathBuf {
-        self.root.join(&cfg.runtime_dir).join("state.json")
-    }
-    fn app_dir(&self, cfg: &PackageConfig) -> PathBuf {
-        self.root.join(&cfg.app_dir)  // .upriv/app
-    }
-    fn backup_dir(&self, cfg: &PackageConfig, vault_id: &str) -> PathBuf {
-        self.root.join(&cfg.backup_dir).join(vault_id)
-    }
-    fn backup_filename(&self, vault_id: &str, closed_at: &DateTime<Utc>) -> String {
-        format!("{}-{}.7z", closed_at.format("%Y%m%dT%H%M%S"), vault_id)
+    fn vault_config_path(&self, vault_id: &str) -> PathBuf {
+        self.vault_dir(vault_id).join("config.toml")
     }
 }
 ```
@@ -941,17 +848,7 @@ impl VaultRoot {
 const DEFAULTS: PackageConfig = PackageConfig {
     version: 1,
     vaults_dir: ".upriv/vaults",
-    stores_dir: ".upriv/stores",
-    auth_dir: ".upriv/auth",
     runtime_dir: ".upriv/runtime",
-    workspace_dir: "workspace",
-    security_mode: SecurityMode::SessionRam,
-    seven_zip: SevenZipOptions {
-        encrypt_file_names: true,
-        archive_mode: ArchiveMode::EncryptOnly,  // default
-        compression_level: 5,  // only if compress_encrypt
-        solid: false,
-    },
 };
 ```
 
@@ -1003,7 +900,7 @@ impl VaultManager {
     pub fn discover(path: &Path) -> Result<Self>;
     pub fn create_new(root: &Path, password: &[u8]) -> Result<Self>;
     pub fn open(&mut self, password: &[u8]) -> Result<()>;
-    pub fn close(&mut self, password: Option<&[u8]>) -> Result<()>;
+    pub fn close(&mut self, password: Option<&[u8]>) -> Result<()>; // None = session keys; Some = always_prompt check only
     pub fn status(&self) -> VaultState;
     pub fn recovery_info(&self) -> Option<RecoveryInfo>;
     pub fn workspace_path(&self) -> PathBuf;
@@ -1085,11 +982,11 @@ Suggested format (v0.1):
 
 | Mode | open() | close() | reboot |
 |------|--------|---------|--------|
-| always_prompt | prompt password, no retention | prompt password | recovery prompts password |
-| session_ram | retain SessionHandle | use handle | handle lost, prompt password |
-| ram_on_close_only | prompt, zero after extract | prompt in UI, RAM only during close | same |
-| disk_close | prompt; write session.enc | use session.enc | session.enc allows close |
-| disk_open_close | session.enc after first unlock | use session.enc | same |
+| always_prompt | prompt password; do not retain the **string** | prompt as presence check against the open session (do not rewrap); idle auto-close skipped | recovery prompts password |
+| session_ram | retain SessionHandle | use handle; **no prompt** | handle lost, prompt password |
+| ram_on_close_only | *(legacy)* treat as `session_ram` on load/save | use handle; **no prompt** | same as `session_ram` |
+| disk_close | prompt; write session.enc | use session.enc; **no prompt** | session.enc allows close |
+| disk_open_close | session.enc after first unlock | use session.enc; **no prompt** | same |
 
 **`encrypted_dir` + disk session modes:**
 
@@ -1124,49 +1021,45 @@ fn detect_recovery(root: &VaultRoot) -> Option<RecoveryInfo> {
 | Action | Effect |
 |--------|--------|
 | `CloseWithPassword` | `7z t` → normal close |
-| `DiscardWorkspace` | `secure_wipe` + delete `workspace/<id>/`, keep `vaults/<id>.7z` |
-| `RestoreBackup` | copy latest backup from `backup/<id>/` → `vaults/<id>.7z` |
+| `DiscardWorkspace` | `secure_wipe` + delete leftover plaintext `workspace/`; keep `vaults/<id>/contents/` |
+| `RestoreBackup` | copy `backups/<stamp>/` (frozen `contents/`) into a **new** vault — never overwrite the source |
 
-### 7.3 Reopen after crash (no RAM session, store still on disk)
+### 7.3 Reopen after crash (no RAM session, `contents/` still on disk)
 
-**Typical case:** app quit, crash, or reboot — `state.json` is empty (`vaults: {}`), but `stores/<id>/` still exists with edits not yet exported to `.7z`.
+**Typical case:** app quit, crash, or reboot — `state.json` is empty (`vaults: {}`), but `vaults/<id>/contents/` still holds the last flushed ciphertext (and recovery may need dirty-close / leftover `upriv_plain` workspace handling).
 
 ```text
-stores/<id>/ exists
+vaults/<id>/contents/ exists
 state.json has no active session (not in RAM)
         │
         ▼
 User Unlock → password
         │
         ▼
-Validate manifest + hashes (§2.2)
+Validate header + index (§2.2)
         │
-        ├─ store ahead of .7z → recovery UI first (RF-48)
+        ├─ dirty close / leftover workspace → recovery UI first
         └─ OK → mount workspace/<id>/ (session in RAM only)
                     │
                     ▼
-              User works / or chooses Close or Seal
+              User works / chooses Close
                     │
-        ┌───────────┴───────────┐
-        ▼                       ▼
-   action.close              action.seal
-   7z t → new .7z           7z t → new .7z
-   keep stores/<id>/        wipe stores/<id>/
-   persistence: closed      vaults/<id>.meta.json
+                    ▼
+              action.close → flush session into contents/
+              persistence: closed
 ```
 
 **Rules:**
 
-- Do **not** require re-importing from `.7z` if the encrypted store is intact and the user accepts it (or hash check passes).
-- Password is required to derive keys and mount — nothing sensitive restored from `state.json` alone.
-- **Close** updates `.7z` and keeps `stores/<id>/` (fast reopen later).
-- **Seal** updates `.7z`, wipes `stores/<id>/`, leaves only archive + optional `.meta.json` in `vaults/`.
+- Do **not** require re-importing from a portable `.7z` if `contents/` is intact and checks pass.
+- Password is required to derive keys and mount — nothing sensitive is restored from `state.json` alone.
+- **Close** flushes the session into `contents/` and leaves the vault closed (no Seal).
+- Portable `.zip` / `.7z` export remains a separate user action, not rest layout.
 
-**Not the same as `open` from sealed:** if only `vaults/<id>.7z` exists (no store), `open` materializes a new store from the archive first, then mounts.
+**Dead header/index:** create a **new** vault from a backup stamp or contents zip — do not invent Seal recovery.
 
-Reference bundle: `prod/` — see `prod/README.md` (`settings.toml`, `vaults/<id>/`, `state.json`, `persistence.json`).
+Reference: [`.agent/SECURITY-CRYPTO.md`](../../.agent/SECURITY-CRYPTO.md). Canonical greenfield layout — `prod-example/` is stale.
 
----
 
 ## 8. Desktop UI (Electron)
 
@@ -1180,7 +1073,7 @@ dev/
 │   ├── desktop/                # React web UI (src/)
 │   ├── mobile/                 # Expo / React Native scaffold
 │   ├── electron/               # Electron shell (main/preload)
-│   └── shared/                 # @upriv/shared — TS domain + service interfaces
+│   └── shared/                 # @upriv/shared — TS domain + service interfaces (no React)
 ├── crates/
 │   ├── upriv-core/             # Shared Rust (all platforms)
 │   └── upriv-daemon/           # Desktop RPC → upriv-core
@@ -1192,18 +1085,6 @@ dev/
 **PRD:** §3.7 (RF-UI requirements). **v1 platform:** Linux + Windows + Electron; **dark** theme; **minimalist** UX.
 
 **i18n:** load `dev/apps/shared/locales/{locale}.json` per `[ui] locale` in `main.toml`. No hardcoded UI sentences in Rust/TS — see `LOCALE.md`.
-
-#### 8.2.0 Design baseline (not final UI)
-
-**`dev/docs/stitch_upriv_vault_manager/`** holds an exploratory **design baseline** (Stitch): `code.html`, `screen.png`, `DESIGN.md`, and `README.md`. Use it for **mood, layout ideas, and token starting points** only.
-
-| Rule | Detail |
-|------|--------|
-| **Not final** | Not production UI; not wired to Electron/`upriv-core` |
-| **Not authoritative** | Behavior, flows, and copy come from **PRD §3.7**, **this section (§8.2)**, and **`dev/apps/shared/locales/`** |
-| **Implementation** | Do not ship `code.html` as the app shell; replace hardcoded strings with i18n keys |
-
-When the baseline and PRD/SDD conflict, **PRD/SDD win**. See `dev/docs/stitch_upriv_vault_manager/README.md`.
 
 #### 8.2.1 Main screen — vault list
 
@@ -1217,7 +1098,7 @@ Single “home” screen: on launch, list **all vaults** in `<vault-root>` **cen
 ├──────────────────────────────────────────────────────────────┤
 │                                                              │
 │     ┌────────────────────────────────────────────────────┐   │
-│     │ ● vault-example-1  [💾] [⚙]  [  Unlock  ]          │   │  sealed/closed
+│     │ ● vault-example-1  [💾] [⚙]  [  Unlock  ]          │   │  closed
 │     └────────────────────────────────────────────────────┘   │
 │     ┌────────────────────────────────────────────────────┐   │
 │     │ ● vault-example-2 [💾][⚙]  [    Lock    ▼]          │   │  open + encrypted_dir
@@ -1234,9 +1115,8 @@ Single “home” screen: on launch, list **all vaults** in `<vault-root>` **cen
 | Right (→) | **`action.backups`** | Modal §8.2.3 |
 | | **`action.settings`** | Modal §8.2.4 |
 | | **`action.lock`** / **`action.unlock`** | Primary visual: ~1.2× icon height; bold weight |
-| | **▼** (split) | Only if `storageModeHasClosedCache` **and** `open`: menu **`action.seal`**; main button = **`action.close`** → `closed` |
 
-Fixed order in right area: `Backups` → `Config` → `Lock|Unlock` → `▼`.
+Fixed order in right area: `Backups` → `Config` → `Lock|Unlock`.
 
 **Colors (dark theme — suggested tokens, tune in CSS):**
 
@@ -1244,7 +1124,6 @@ Fixed order in right area: `Backups` → `Config` → `Lock|Unlock` → `▼`.
 |-------|-----|-------------------------|
 | `open` | `#3dd68c` | `border-left: 3px` + `background: rgba(61,214,140,.08)` |
 | `closed` | `#6b8cff` | neutral (`--row-bg`) |
-| `sealed` | `#8b8b8b` | `opacity: .85` or border `#5a5a5a` |
 | `recovery` | `#f5a623` | `background: rgba(245,166,35,.12)` |
 
 **Brand — wordmark color variants** (fixed exports in `.upriv/app/assets/`; PNG rasterized from matching SVG):
@@ -1265,16 +1144,13 @@ click(row) && !click(button):
   else                    → (nothing; use Unlock)
 
 click(Unlock)              → modal/dialog password → open pipeline
-click(Lock)                → close pipeline (→ closed by default in [close])
-click(▼) → Seal            → seal pipeline + extra confirmation
+click(Lock)                → close pipeline (→ closed)
 click(Backups|Config)      → stopPropagation; open respective modal
 ```
 
-**Close vs seal (closed-cache modes):**
+**Lock:**
 
-- **`action.lock`** (single click): `close` → `persistence = closed` (keeps store).
-- **▼ → `action.seal`:** `seal` → `persistence = sealed` (wipe store / refresh portable `.7z`); confirmation: `close.dialog.seal_confirm`.
-- In seal-only modes (`plain`, `ram_only`): only **`action.lock`** → seal directly (no dropdown, no `closed` state).
+- **`action.lock`** (single click): `close` → `persistence = closed`.
 
 #### 8.2.2 Modals and auxiliary flows
 
@@ -1299,7 +1175,7 @@ click(Backups|Config)      → stopPropagation; open respective modal
 | **Cancel na fila** | Não implementado (v1) | Opcional futuro: remover job **antes** de iniciar `7zz`; limpar senha em RAM |
 | **Timeout IPC** | `desktopInvokeRaw` 30s; `daemonRpc` 30s; spawn daemon 10s | **Timeout por operação de vault** no `upriv-core` (open/close podem levar minutos — valor TBD, ex. 30–60 min) |
 | **Kill subprocesso** | `stopDaemon` mata o processo inteiro | Se `7zz` travar: matar **só** o child, devolver `RpcError` estruturado, liberar slot da fila |
-| **Estado após falha** | Close mock reverte `session` | Wrong password / timeout no close **não alteram** `vaults/<id>.7z` (PRD); limpar temp/workspace conforme regra atômica (`.7z.new` → rename) |
+| **Estado após falha** | Close mock reverte `session` | Wrong password / timeout no close **não alteram** `contents/` (PRD); limpar temp/workspace conforme SECURITY-PLAINTEXT (nunca `.7z.new` como rest) |
 | **Fila após erro** | `dismissFailure()` segue para o próximo | Garantir que timeout/kill no Rust também completa o job com erro (não deixa slot ocupado para sempre) |
 
 **Checklist implementação (um PR por camada ou PR único coordenado):**
@@ -1320,13 +1196,6 @@ No separate Welcome screen in v1; “Open vault” = `--vault` on first run or a
 - **Delete:** inline confirmation or second step with `<input>` — placeholder `modal.backup.delete_confirm` + `` `<id>` ``; button disabled until `input === id`.
 - Suggested RPC methods: `backup_list(id)`, `backup_delete(id, backup_name, confirm_id)`, `backup_promote_save(id, backup_name)`.
 
-#### 8.2.3a Modal — system settings (Download vaults)
-
-Opened from app menu (**System settings**). Persisted sections use explicit **Save**; **Download vaults** does not.
-
-- Section order (v1 desktop): Appearance → Logging → Behavior → Hidden vaults → **Download vaults**
-- **Download vaults:** checklist of all vaults; see §3.1 table (*Download vaults*). i18n `modal.app_settings.section.download_vaults*`, `warning.download_vaults_*`.
-
 #### 8.2.4 Modal — vault settings
 
 - Form generated from `config/<id>.toml` schema (collapsible sections).
@@ -1343,7 +1212,6 @@ ui/
   VaultList.tsx          # sortable list; drag-and-drop reorder
   VaultRow.tsx           # row + colors + click + drag handle
   VaultLockButton.tsx   # Lock/Unlock prominent
-  VaultSealMenu.tsx     # split ▼
   modals/
     VaultConfigModal.tsx
     VaultBackupsModal.tsx
@@ -1376,8 +1244,6 @@ fn vault_reorder(vault_root: String, ordered_ids: Vec<String>) -> Result<(), Str
 fn backup_list(vault_id: String) -> Result<Vec<BackupEntryDto>, String>;
 fn backup_delete(vault_id: String, backup_name: String, confirm_id: String) -> Result<(), String>;
 fn backup_promote_save(vault_id: String, backup_name: String) -> Result<(), String>;
-fn vault_bulk_export(vault_root: String, vault_ids: Vec<String>) -> Result<Vec<u8>, String>;
-// Or stream/save-dialog variant; reads archive/<display_name>.7z per id.
 fn vault_delete(vault_id: String, confirm_id: String) -> Result<(), String>;
 fn vault_seal(vault_id: String, password: String) -> Result<(), String>;
 fn log_list() -> Result<Vec<LogFileDto>, String>;           // metadata only
@@ -1392,6 +1258,8 @@ fn log_delete(filenames: Vec<String>) -> Result<(), String>; // active current-*
 
 ```rust
 fn vault_open(vault_path: String, password: String) -> Result<(), String>;
+// password: Some only for `always_prompt` presence check; None = use SessionHandle / session.enc.
+// Never rewrap vault.header from this value.
 fn vault_close(vault_path: String, password: Option<String>) -> Result<(), String>;
 fn vault_open_workspace(vault_path: String) -> Result<(), String>;  // xdg-open / explorer
 fn vault_status(vault_path: String) -> Result<VaultStatusDto, String>;
@@ -1483,20 +1351,19 @@ trait VaultStorage {
 // Android: impl with DocumentFile + ContentResolver
 ```
 
-### 9.5 Android — workspace on HD
+### 9.5 Android — open session (no FUSE)
 
-| State | `workspace/<id>/` (SAF) | `vaults/<id>.7z` |
-|-------|-------------------------|------------------|
-| CLOSED | absent | present |
-| OPEN | present (extracted) | stale until close |
-| CLOSING | present + `<id>.7z.new` | old + `.new` |
-| RECOVERY | orphan may exist | old intact |
+Same vault body as desktop: rest is `vaults/<id>/contents/`. There is **no** OS mount and **no** extract-to-workspace of ciphertext as plaintext tree.
 
-**open (Android):** same as desktop — `7zz t` → extract to `<vault-root>/workspace/<id>/` via SAF.
+| State | Plaintext | `contents/` |
+|-------|-----------|-------------|
+| CLOSED | none | present |
+| OPEN | in-app file manager buffers (RAM) only | live ciphertext |
+| `upriv_plain` OPEN | real `workspace/<id>/` via SAF (warned) | live ciphertext; wipe workspace on close |
 
-**close:** read `workspace/<id>/` → create `vaults/<id>.7z.new` → test → atomic rename → delete workspace.
+**open (Android):** unlock session against `vault.header`; browse/edit via in-app file manager (or `upriv_plain` workspace). Never copy the vault into `filesDir` / OS temp to fake a mount (SECURITY-PLAINTEXT).
 
-**Internal cache:** temp only (`<id>.7z.new` if SAF rename problematic); **not** main workspace.
+**close:** flush session into `contents/`; wipe `upriv_plain` workspace if used.
 
 ### 9.6 Android — “Open vault folder” (Intent)
 
@@ -1545,10 +1412,10 @@ vault_tree_uri = "content://com.android.externalstorage.documents/tree/primary%3
 
 - [ ] Install APK from HD (OTG) → bind vault → open/close
 - [ ] “Open folder” button opens manager at `workspace/` (≥2 apps)
-- [ ] Edit file in manager → close vault → reopen → change persisted in `.7z`
+- [ ] Edit file in manager → close vault → reopen → change persisted in `contents/`
 - [ ] Disconnect OTG with vault open → reconnect → recovery
-- [ ] Plan B: ZArchiver opens `vaults/<id>.7z` with same password
-- [ ] Wrong password on close does not change `vaults/<id>.7z`
+- [ ] Plan B: export `.7z` → ZArchiver opens it with the vault password
+- [ ] Wrong password on lock (`always_prompt`) does not change `contents/`
 
 ### 9.11 iOS (later phase, summary)
 
@@ -1585,7 +1452,7 @@ vault_path = "/media/user/HD/my-vault"
 | Rule | Suggested value |
 |------|-----------------|
 | Workspace size before close | warn if > 3 GB |
-| Free disk space | `free >= size(workspace) + size(vault_file) + 512MB` |
+| Free disk space | `free >= size(session) + size(contents/) + 512MB` |
 | Workspace name | block `..`, dangerous symlinks on extract |
 | One default vault | v1; multiple in v1.1 |
 
@@ -1618,7 +1485,7 @@ vault_path = "/media/user/HD/my-vault"
 ### 13.2 Integration
 
 - Create vault temp dir → open → touch file → close → reopen
-- Wrong password on close → vault_file unchanged
+- Wrong password on lock (`always_prompt`) → `contents/` unchanged
 - Orphan workspace → recovery close
 - Kill during close → orphan `.new`, original vault intact
 - After close with wipe on HDD → forensic recovery **does not** restore workspace files (manual test with recovery tool)
@@ -1626,7 +1493,7 @@ vault_path = "/media/user/HD/my-vault"
 ### 13.3 Manual E2E
 
 - exFAT HD Windows ↔ Linux
-- 7-Zip opens app-generated `vaults/<id>.7z`
+- 7-Zip opens an exported portable `.7z`
 
 ---
 
@@ -1635,9 +1502,9 @@ vault_path = "/media/user/HD/my-vault"
 **v1 scope:** Linux + Windows desktop (PRD §3.5).
 
 1. **`upriv-core`**: config load, paths, `SevenZip` wrapper with temp dir tests.
-2. **Virtual mount** (`mount/` trait + platform backends): **FUSE** (Linux) and **WinFsp** (Windows) — `workspace/<id>/` → write-through to `store` (`encrypted_dir` only).
+2. **Virtual mount** (`mount/` trait + platform backends): **FUSE** (Linux) and **WinFsp** (Windows) — `workspace/<id>/` → write-through to `contents/` (`encrypted_dir` only).
 2b. **`plain/` module**: extract → real `workspace/<id>/` → close from workspace + **`secure_wipe_workspace`** (no virtual mount).
-3. **open/close** happy path without UI — **both** `encrypted_dir` and `plain` (Linux + Windows).
+3. **open/close** happy path without UI — **both** `encrypted_dir` and `upriv_plain` (Linux + Windows).
 4. **Recovery** detector + discard.
 5. **`7z t` gate** before write.
 6. **Electron** minimal: vault list (§8.2), Lock/Unlock, config/backups modals, row click → workspace.

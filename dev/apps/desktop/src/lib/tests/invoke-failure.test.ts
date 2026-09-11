@@ -17,7 +17,7 @@ describe("parseInvokeFailure", () => {
     expect(err.message).toBe("not open");
   });
 
-  it("maps legacy timeout: to rpc_timeout", () => {
+  it("maps timeout: prefix to rpc_timeout", () => {
     const err = parseInvokeFailure(
       new Error("Error invoking remote method 'x': Error: timeout: slow"),
     );
@@ -37,6 +37,13 @@ describe("parseInvokeFailure", () => {
     const err = parseInvokeFailure(new Error("preload boom"));
     expect(err.code).toBe(BRIDGE_ERROR_CODES.BRIDGE_INVOKE_FAILED);
     expect(err.message).toBe("preload boom");
+  });
+
+  it("maps daemon-process-down messages to daemon_unavailable", () => {
+    const exited = parseInvokeFailure(new Error("upriv-daemon exited (code 1)"));
+    expect(exited.code).toBe(BRIDGE_ERROR_CODES.DAEMON_UNAVAILABLE);
+    const down = parseInvokeFailure(new Error("upriv-daemon is not running"));
+    expect(down.code).toBe(BRIDGE_ERROR_CODES.DAEMON_UNAVAILABLE);
   });
 
   it("wraps non-Error values", () => {

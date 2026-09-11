@@ -1,5 +1,6 @@
 export { VaultSettingsSection } from "./VaultSettingsSection";
-export { VaultChangePasswordPanel } from "./VaultChangePasswordPanel";
+export { VaultChangePasswordFields } from "./VaultChangePasswordFields";
+export { VaultChangeKdfFields } from "./VaultChangeKdfFields";
 export {
   PolicyRadioOption,
   SecurityModeRadioGroup,
@@ -9,6 +10,8 @@ export {
   VaultSettingsBackupSection,
   VaultSettingsCloseSection,
   VaultSettingsDangerZoneSection,
+  VaultSettingsKdfSection,
+  VaultSettingsMountSection,
   VaultSettingsPolicySection,
   VaultSettingsSecuritySection,
   VaultSettingsSevenZipSection,

@@ -1,7 +1,8 @@
 {
   "name": "upriv-dev",
   "private": true,
-  "description": "Upriv dev scripts only — install deps in apps/desktop, apps/electron, and apps/mobile separately",
+  "license": "MIT",
+  "description": "Upriv dev scripts only — install js-lint/ once, then apps/desktop, apps/electron, apps/mobile, apps/shared separately",
   "scripts": {
     "sync-version": "node scripts/sync-version.mjs",
     "check-version": "node scripts/check-version.mjs",
@@ -18,6 +19,8 @@
     "lint:fix": "./run lint-fix",
     "test": "./run test",
     "check": "./run check",
+    "desktop": "./run desktop",
+    "mobile": "./run mobile",
     "help": "./run help",
     "electron:dev": "npm run daemon:build && npm run dev --prefix apps/electron",
     "electron:build": "node scripts/sync-version.mjs && npm run build:electron --prefix apps/desktop && npm run daemon:build:release && npm run dist:linux --prefix apps/electron",

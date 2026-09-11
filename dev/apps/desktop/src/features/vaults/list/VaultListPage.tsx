@@ -1,9 +1,11 @@
 import { AppSettingsModal, VaultRootDataFolderModal } from "@/features/system/settings";
 import { VaultBackupsModal } from "@/features/vaults/backups";
-import { CreateVaultWizardModal } from "@/features/vaults/create";
+import { CreateVaultModal } from "@/features/vaults/create";
 import { FileManagerLayer } from "@/features/vaults/file-manager";
 import { HelpModal } from "@/features/system/help";
+import { SystemInfoModal } from "@/features/system/info";
 import { LogsModal } from "@/features/system/logs";
+import { VaultInfoModal } from "@/features/vaults/info";
 import { VaultLifecycleLayer } from "@/features/vaults/lifecycle";
 import { VaultSettingsModal } from "@/features/vaults/settings";
 import { AppShell } from "@/components/layout";
@@ -11,9 +13,10 @@ import { Button, Toast } from "@/components/ui";
 import { useTranslation } from "@/i18n";
 import { VaultListHeader } from "./header/VaultListHeader";
 import { VaultListSectionHeader } from "./header/VaultListSectionHeader";
-import { VaultGroupAssignmentModal } from "./modals/VaultGroupAssignmentModal";
 import { VaultGroupSettingsModal } from "./modals/VaultGroupSettingsModal";
+import { VaultGroupsModal } from "./modals/VaultGroupsModal";
 import { VaultNoteModal } from "./modals/VaultNoteModal";
+import { ExportVaultModal } from "./modals/ExportVaultModal";
 import { VaultGroupsInvalidBanner } from "./VaultGroupsInvalidBanner";
 import { VaultList } from "./row/VaultList";
 import { useVaultListScreen } from "./hooks/useVaultListScreen";
@@ -41,24 +44,27 @@ export function VaultListPage() {
     note,
     backups,
     settings,
-    groupAssignment,
     groupSettings,
     appSettings,
+    groupsModal,
     dataFolder,
     logs,
     help,
+    systemInfo,
+    vaultInfo,
     createVault,
-    archiveDrop,
+    importDrop,
+    exportVault,
   } = screen;
 
   return (
     <AppShell header={<VaultListHeader {...header} />} contentClassName="max-w-vault-list">
       <div
         className="relative min-h-[min(28rem,70vh)]"
-        onDragEnter={archiveDrop.onDragEnter}
-        onDragOver={archiveDrop.onDragOver}
-        onDragLeave={archiveDrop.onDragLeave}
-        onDrop={archiveDrop.onDrop}
+        onDragEnter={importDrop.onDragEnter}
+        onDragOver={importDrop.onDragOver}
+        onDragLeave={importDrop.onDragLeave}
+        onDrop={importDrop.onDrop}
       >
         {list.groupsSanitizeNotice ? (
           <div
@@ -88,23 +94,30 @@ export function VaultListPage() {
           onSortChange={list.onSortChange}
           viewMode={list.viewMode}
           onViewModeChange={list.onViewModeChange}
+          search={list.search}
+          onSearchChange={list.onSearchChange}
+          onNewVault={list.onNewVault}
         />
         <VaultList
           rows={list.displayRows}
           pipelineListStatus={list.pipelineListStatus}
           isVaultPipelineBusy={list.isVaultPipelineBusy}
           allVaultsHidden={list.allVaultsHidden}
+          searchNoMatches={list.searchNoMatches}
           viewMode={list.viewMode}
           canReorder={list.canReorder}
-          allowDragVaultIntoGroup={list.allowDragVaultIntoGroup}
+          vaultListShowDrag={list.vaultListShowDrag}
+          vaultListAllowDragIntoGroup={list.vaultListAllowDragIntoGroup}
           draggingId={list.draggingId}
           dragOverId={list.dragOverId}
+          dragPointer={list.dragPointer}
+          pointerDrag={list.pointerDrag}
           onCreateFromScratch={list.onCreateFromScratch}
-          onImportArchive={list.onImportArchive}
+          onImportPackage={list.onImportPackage}
           onOpenBackups={list.onOpenBackups}
           onOpenNote={list.onOpenNote}
+          onOpenVaultInfo={list.onOpenVaultInfo}
           onOpenSettings={list.onOpenSettings}
-          onOpenGroupAssignment={list.onOpenGroupAssignment}
           onOpenGroupSettings={list.onOpenGroupSettings}
           onToggleGroupCollapsed={list.onToggleGroupCollapsed}
           onExportVault={list.onExportVault}
@@ -112,25 +125,14 @@ export function VaultListPage() {
           onOpenFileManager={screen.openFromVault}
           onLockVault={list.onLockVault}
           onUnlockVault={list.onUnlockVault}
-          onSealVault={list.onSealVault}
-          onRootDragStart={list.onRootDragStart}
-          onRootDragOver={list.onRootDragOver}
-          onRootDrop={list.onRootDrop}
-          onUngroupDragOver={list.onUngroupDragOver}
-          onUngroupDrop={list.onUngroupDrop}
-          onMemberDragStart={list.onMemberDragStart}
-          onMemberDragOver={list.onMemberDragOver}
-          onMemberDrop={list.onMemberDrop}
-          onDragEnd={list.onDragEnd}
-          onDragLeave={list.onDragLeave}
         />
-        {archiveDrop.isArchiveDropActive ? (
+        {importDrop.isImportDropActive ? (
           <div
             className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-2xl border-2 border-dashed border-primary/60 bg-primary/10 backdrop-blur-[1px]"
             aria-hidden
           >
             <p className="px-4 text-center font-mono text-sm uppercase tracking-widest text-primary">
-              {t("empty.drop_archive_overlay")}
+              {t("empty.drop_file_overlay")}
             </p>
           </div>
         ) : null}
@@ -149,21 +151,23 @@ export function VaultListPage() {
         onClose={backups.onClose}
         onCreateVaultFromBackup={backups.onCreateVaultFromBackup}
       />
+      <ExportVaultModal
+        vault={exportVault.vault}
+        open={exportVault.open}
+        submitting={exportVault.submitting}
+        onClose={exportVault.onClose}
+        onConfirm={exportVault.onConfirm}
+        onTimeout={exportVault.onTimeout}
+      />
       <VaultSettingsModal
         vault={settings.vault}
+        area={settings.area}
         open={settings.open}
         onClose={settings.onClose}
         onVaultSettingsSaved={settings.onVaultSettingsSaved}
         onVaultDelete={settings.onVaultDelete}
         groups={settings.groups}
         onCommitGroupAssignment={settings.onCommitGroupAssignment}
-      />
-      <VaultGroupAssignmentModal
-        vault={groupAssignment.vault}
-        groups={groupAssignment.groups}
-        open={groupAssignment.open}
-        onClose={groupAssignment.onClose}
-        onAssign={groupAssignment.onAssign}
       />
       <VaultGroupSettingsModal
         group={groupSettings.group}
@@ -174,16 +178,23 @@ export function VaultListPage() {
         onClose={groupSettings.onClose}
         onSave={groupSettings.onSave}
         onDelete={groupSettings.onDelete}
+        onBusyTimeout={groupSettings.onBusyTimeout}
       />
       <FileManagerLayer />
       <AppSettingsModal
         open={appSettings.open}
-        vaults={appSettings.vaults}
-        groups={appSettings.groups}
-        includeHidden={appSettings.includeHidden}
-        onCreateGroup={appSettings.onCreateGroup}
         onClose={appSettings.onClose}
         onDirtyChange={appSettings.onDirtyChange}
+        hasOpenVault={list.vaults.some((vault) => vault.session === "open")}
+      />
+      <VaultGroupsModal
+        open={groupsModal.open}
+        vaults={groupsModal.vaults}
+        groups={groupsModal.groups}
+        includeHidden={groupsModal.includeHidden}
+        onCreateGroup={groupsModal.onCreateGroup}
+        onClose={groupsModal.onClose}
+        onDirtyChange={groupsModal.onDirtyChange}
       />
       <VaultRootDataFolderModal
         open={dataFolder.open}
@@ -192,7 +203,19 @@ export function VaultListPage() {
       />
       <LogsModal open={logs.open} onClose={logs.onClose} />
       <HelpModal open={help.open} onClose={help.onClose} />
-      <CreateVaultWizardModal
+      <SystemInfoModal
+        open={systemInfo.open}
+        onClose={systemInfo.onClose}
+        vaults={list.vaults}
+        groups={list.groups}
+      />
+      <VaultInfoModal
+        vault={vaultInfo.vault}
+        open={vaultInfo.open}
+        onClose={vaultInfo.onClose}
+        groups={list.groups}
+      />
+      <CreateVaultModal
         open={createVault.open}
         existingVaultIds={createVault.existingVaultIds}
         existingOrders={createVault.existingOrders}

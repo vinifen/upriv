@@ -1,3 +1,4 @@
+import type { KdfUnlockPreset } from "../vault-settings/kdf";
 import type { VaultSettingsConfig } from "../vault-settings";
 
 export type CreateVaultSource = "import" | "scratch";
@@ -35,12 +36,10 @@ export interface CreateVaultDraft {
   passwordTestFailed: boolean;
   auto_close: VaultSettingsConfig["auto_close"];
   backup: VaultSettingsConfig["backup"];
-  seven_zip: Pick<
-    VaultSettingsConfig["seven_zip"],
-    "archive_mode" | "encrypt_file_names" | "compression_level"
-  >;
+  /** Create-time only — written to `vault.header`, not `config.toml`. */
+  kdf: { unlock_preset: KdfUnlockPreset };
   storage: VaultSettingsConfig["storage"];
-  close: VaultSettingsConfig["close"];
+  mount: VaultSettingsConfig["mount"];
   security: Pick<VaultSettingsConfig["security"], "mode" | "secure_wipe_workspace">;
   policy: VaultSettingsConfig["policy"];
   order: number;
@@ -61,5 +60,7 @@ export interface CreateVaultResult {
   order: number;
   storageMode: VaultSettingsConfig["storage"]["mode"];
   settings: VaultSettingsConfig;
+  /** Set when create chose unlock RAM — persisted to `vault.header` only. */
+  unlockPreset?: KdfUnlockPreset;
   groupAssignment: CreateVaultGroupAssignment;
 }

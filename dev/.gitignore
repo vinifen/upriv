@@ -1,4 +1,4 @@
-# Dependencies (never dev/node_modules at dev/ root — each app has its own .gitignore)
+# Dependencies (never a node_modules at this folder — apps and js-lint/ install locally)
 node_modules/
 
 # Vite / Vitest local caches
@@ -19,11 +19,14 @@ Thumbs.db
 
 # Electron build output (each app also has local .gitignore)
 apps/electron/dist/
+# Legacy afterPack rcedit download cache (no longer used; keep ignored if present)
 apps/electron/build/tools/
 
 # Local vault-root created by `electron:dev` (app home = this `dev/` folder)
 .upriv/
-workspace/
+# Mount parent folder beside `.upriv/` only — do NOT use unanchored `workspace/`
+# (that would ignore `apps/shared/src/domain/workspace/`).
+/workspace/
 .upriv-root
 .upriv-invalidated-*
 

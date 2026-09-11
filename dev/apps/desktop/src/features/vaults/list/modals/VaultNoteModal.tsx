@@ -14,7 +14,7 @@ interface VaultNoteModalProps {
   vault: VaultListItem | null;
   open: boolean;
   onClose: () => void;
-  onNoteChange: (vaultId: string, note: string) => void;
+  onNoteChange: (vaultId: string, note: string) => Promise<boolean>;
 }
 
 export function VaultNoteModal({ vault, open, onClose, onNoteChange }: VaultNoteModalProps) {
@@ -23,24 +23,30 @@ export function VaultNoteModal({ vault, open, onClose, onNoteChange }: VaultNote
   const [savedVisible, setSavedVisible] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout>>();
   const savedHideRef = useRef<ReturnType<typeof setTimeout>>();
+  const inFlightRef = useRef(0);
 
   const vaultId = vault?.id;
   const savedNote = normalizeNote(vault?.note);
+  const vaultRef = useRef(vault);
+  vaultRef.current = vault;
 
   useEffect(() => {
     if (!open || !vaultId) return;
-    setDraft(savedNote);
+    setDraft(normalizeNote(vaultRef.current?.note));
     setSavedVisible(false);
-  }, [open, vaultId, savedNote]);
+  }, [open, vaultId]);
 
   const persistNote = useCallback(
-    (note: string) => {
-      if (!vaultId) return;
+    async (note: string): Promise<boolean> => {
+      if (!vaultId) return false;
       const trimmed = normalizeNote(note).slice(0, VAULT_NOTE_MAX_LENGTH);
-      onNoteChange(vaultId, trimmed);
+      const requestId = ++inFlightRef.current;
+      const saved = await onNoteChange(vaultId, trimmed);
+      if (!saved || requestId !== inFlightRef.current) return false;
       setSavedVisible(true);
       clearTimeout(savedHideRef.current);
       savedHideRef.current = setTimeout(() => setSavedVisible(false), SAVED_INDICATOR_MS);
+      return true;
     },
     [vaultId, onNoteChange],
   );
@@ -51,22 +57,24 @@ export function VaultNoteModal({ vault, open, onClose, onNoteChange }: VaultNote
     debounceRef.current = setTimeout(() => {
       const trimmed = draft.slice(0, VAULT_NOTE_MAX_LENGTH);
       if (trimmed !== savedNote) {
-        persistNote(trimmed);
+        void persistNote(trimmed);
       }
     }, DEBOUNCE_MS);
     return () => clearTimeout(debounceRef.current);
   }, [draft, open, vaultId, savedNote, persistNote]);
 
   const handleClose = useCallback(() => {
-    if (vaultId) {
-      clearTimeout(debounceRef.current);
-      const trimmed = draft.slice(0, VAULT_NOTE_MAX_LENGTH);
-      if (trimmed !== savedNote) {
-        onNoteChange(vaultId, trimmed);
+    void (async () => {
+      if (vaultId) {
+        clearTimeout(debounceRef.current);
+        const trimmed = draft.slice(0, VAULT_NOTE_MAX_LENGTH);
+        if (trimmed !== savedNote) {
+          await persistNote(trimmed);
+        }
       }
-    }
-    onClose();
-  }, [vaultId, draft, savedNote, onNoteChange, onClose]);
+      onClose();
+    })();
+  }, [vaultId, draft, savedNote, persistNote, onClose]);
 
   useEffect(() => {
     return () => {
@@ -80,7 +88,9 @@ export function VaultNoteModal({ vault, open, onClose, onNoteChange }: VaultNote
   return (
     <Modal
       open={open}
-      title={t("modal.note.title", { name: vault.displayName })}
+      title={t("modal.note.title")}
+      titleIcon="note"
+      contextTitle={vault.displayName}
       onClose={handleClose}
     >
       <p className="mb-3 text-sm text-on-surface-variant">
@@ -90,20 +100,17 @@ export function VaultNoteModal({ vault, open, onClose, onNoteChange }: VaultNote
         value={draft}
         onChange={(event) => setDraft(event.target.value)}
         maxLength={VAULT_NOTE_MAX_LENGTH}
-        rows={5}
+        rows={8}
         placeholder={t("modal.note.placeholder")}
         autoFocus
         className="w-full resize-y rounded-lg border-0 bg-surface-container px-3 py-2.5 text-sm text-on-surface shadow-none outline-none ring-0 placeholder:text-on-surface-variant/60 focus:border-0 focus:outline-none focus:ring-0"
       />
-      <div className="mt-2 flex items-center justify-between text-xs text-on-surface-variant">
+      <div className="mt-2 text-xs text-on-surface-variant">
         <span
           className={savedVisible ? "text-vault-open transition-opacity" : "invisible"}
           aria-live="polite"
         >
           {t("modal.note.saved")}
-        </span>
-        <span className="font-mono tabular-nums">
-          {draft.length}/{VAULT_NOTE_MAX_LENGTH}
         </span>
       </div>
     </Modal>

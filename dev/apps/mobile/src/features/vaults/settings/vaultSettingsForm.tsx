@@ -1,32 +1,45 @@
-import { type ReactNode } from "react";
-import { Switch, StyleSheet, Text, TextInput, View, type TextInputProps } from "react-native";
+import { type ReactNode, useEffect, useRef, useState } from "react";
+import { Platform, StyleSheet, Text, View } from "react-native";
 import {
-  COMPRESSION_PRESETS,
+  KDF_UNLOCK_OPTION_META,
+  KDF_UNLOCK_PRESETS,
   VAULT_DISPLAY_NAME_MAX_LENGTH,
   VAULT_NOTE_MAX_LENGTH,
   VAULT_PASSWORD_HINT_MAX_LENGTH,
-  compressionPresetFromSevenZip,
+  WORKSPACE_PATH_DEFAULT,
+  normalizeMountWorkspacePath,
   securityModeToUi,
   securityUiModesForStorage,
-  sevenZipPatchFromCompressionPreset,
-  storageModeCloseOnly,
   storageModeIsPlaintext,
-  storageModeSealOnly,
   uiToSecurityMode,
-  vaultSettingsSectionsForStorage,
-  type CloseDefaultAction,
-  type CompressionPreset,
+  validateMountWorkspacePath,
+  vaultSettingsPreferenceSections,
+  workspacePathIssueI18nKey,
+  type KdfUnlockPreset,
+  type PolicyRadioBadge,
   type SecurityUiMode,
   type StorageMode,
   type VaultGroup,
   type VaultSettingsConfig,
   type VaultSettingsSectionId,
+  type WorkspacePathIssue,
+  groupsForAssignmentPicker,
+  groupAssignmentClearOption,
 } from "@upriv/shared";
 import { useTranslation, type I18nKey } from "@/i18n";
 import { useTheme } from "@/theme";
-import { radii, spacing } from "@/theme/tokens";
-import { Select } from "@/components/ui";
+import { spacing } from "@/theme/tokens";
+import { Button, Select } from "@/components/ui";
 import { PolicyRadioOption, SettingsAccordionSection } from "@/components/settings";
+import {
+  FieldHint,
+  FieldLabel,
+  RadioGroup,
+  SwitchRow,
+  ThemedInput,
+  Warning,
+} from "@/components/settings/settingsFields";
+import { useVaultRootService } from "@/platform/services";
 
 type PatchDraft = <S extends keyof VaultSettingsConfig>(
   section: S,
@@ -35,37 +48,27 @@ type PatchDraft = <S extends keyof VaultSettingsConfig>(
 
 const STORAGE_RADIOS: ReadonlyArray<{
   mode: StorageMode;
-  badge?: "recommended" | "more-secure" | "less-secure" | "insecure";
-  tone?: "default" | "less-secure" | "insecure";
+  badge?: PolicyRadioBadge;
+  tone?: "default" | "insecure";
 }> = [
   { mode: "encrypted_dir", badge: "recommended" },
-  { mode: "store_only" },
-  { mode: "upriv_only", badge: "more-secure" },
   { mode: "upriv_plain", badge: "insecure", tone: "insecure" },
-  { mode: "ram_only", badge: "less-secure", tone: "less-secure" },
-  { mode: "plain", badge: "insecure", tone: "insecure" },
-  { mode: "plain_only", badge: "insecure", tone: "insecure" },
 ];
 
 const STORAGE_WARNING: Partial<Record<StorageMode, I18nKey>> = {
   encrypted_dir: "warning.encrypted_dir_ram",
-  ram_only: "warning.ram_only",
-  store_only: "warning.store_only",
-  upriv_only: "warning.upriv_only",
   upriv_plain: "warning.upriv_plain",
-  plain: "warning.plain_mode",
-  plain_only: "warning.plain_only",
 };
 
 function securityOptionMeta(uiMode: SecurityUiMode): {
-  badge?: "recommended" | "less-secure" | "insecure" | "default";
+  badge?: PolicyRadioBadge;
   tone?: "default" | "less-secure" | "insecure";
 } {
   switch (uiMode) {
     case "session_ram":
       return { badge: "recommended" };
     case "prompt_open_close":
-      return {};
+      return { badge: "more-secure" };
     case "disk_close":
       return { badge: "less-secure", tone: "less-secure" };
     case "disk_open_close":
@@ -75,119 +78,48 @@ function securityOptionMeta(uiMode: SecurityUiMode): {
   }
 }
 
-function FieldLabel({ children }: { children: string }) {
-  const { typography } = useTheme();
-  return <Text style={typography.bodyMuted}>{children}</Text>;
-}
-
-function FieldHint({ children }: { children: string }) {
-  const { typography } = useTheme();
-  return <Text style={typography.caption}>{children}</Text>;
-}
-
-function ThemedInput({ mono, style, ...rest }: TextInputProps & { mono?: boolean }) {
-  const { colors, typography } = useTheme();
-  return (
-    <TextInput
-      placeholderTextColor={colors.onSurfaceVariant}
-      style={[
-        mono ? typography.mono : typography.body,
-        styles.input,
-        {
-          backgroundColor: colors.surfaceContainerHighest,
-          borderColor: colors.outlineVariant,
-          color: colors.onSurface,
-        },
-        style,
-      ]}
-      {...rest}
-    />
-  );
-}
-
-function SwitchRow({
-  label,
-  value,
-  onValueChange,
-}: {
-  label: string;
-  value: boolean;
-  onValueChange: (value: boolean) => void;
-}) {
-  const { colors, typography } = useTheme();
-  return (
-    <View style={styles.switchRow}>
-      <Text style={[typography.body, { flex: 1 }]}>{label}</Text>
-      <Switch
-        value={value}
-        onValueChange={onValueChange}
-        trackColor={{ false: colors.outlineVariant, true: colors.accent }}
-      />
-    </View>
-  );
-}
-
-function RadioGroup({ children }: { children: ReactNode }) {
-  return (
-    <View accessibilityRole="radiogroup" style={styles.radioGroup}>
-      {children}
-    </View>
-  );
-}
-
-function Warning({ children }: { children: string }) {
-  const { colors, typography } = useTheme();
-  return <Text style={[typography.caption, { color: colors.onErrorContainer }]}>{children}</Text>;
-}
-
 interface VaultSettingsFormProps {
   draft: VaultSettingsConfig;
   patchDraft: PatchDraft;
   storageModeLocked?: boolean;
-  groups?: readonly VaultGroup[];
-  selectedGroupId?: string;
-  newGroupName?: string;
-  nameError?: string | null;
-  onSelectedGroupIdChange?: (groupId: string) => void;
-  onNewGroupNameChange?: (name: string) => void;
+  /** Resolved vault-root for reserved mount-path checks. */
+  vaultRootPath?: string | null;
+  onPathIssueChange?: (issue: WorkspacePathIssue | null) => void;
+  hiddenLocked?: boolean;
+  children?: ReactNode;
 }
 
 export function VaultSettingsForm({
   draft,
   patchDraft,
   storageModeLocked = false,
-  groups = [],
-  selectedGroupId = "",
-  newGroupName = "",
-  nameError = null,
-  onSelectedGroupIdChange,
-  onNewGroupNameChange,
+  vaultRootPath = null,
+  onPathIssueChange,
+  hiddenLocked = false,
+  children,
 }: VaultSettingsFormProps) {
   const { t } = useTranslation();
 
   return (
     <View style={styles.root}>
-      {vaultSettingsSectionsForStorage(draft.storage.mode).map((sectionId) => (
+      {vaultSettingsPreferenceSections(draft.storage.mode).map((sectionId) => (
         <SettingsAccordionSection
           key={sectionId}
           title={t(`modal.settings.section.${sectionId}` as I18nKey)}
           defaultOpen={sectionId === "vault"}
         >
-          {renderSection(sectionId, draft, patchDraft, storageModeLocked)}
+          {renderSection(
+            sectionId,
+            draft,
+            patchDraft,
+            storageModeLocked,
+            vaultRootPath,
+            onPathIssueChange,
+            hiddenLocked,
+          )}
         </SettingsAccordionSection>
       ))}
-      {onSelectedGroupIdChange && onNewGroupNameChange ? (
-        <SettingsAccordionSection title={t("vault.group.assignment.section")}>
-          <GroupSection
-            groups={groups}
-            selectedGroupId={selectedGroupId}
-            newGroupName={newGroupName}
-            nameError={nameError}
-            onSelectedGroupIdChange={onSelectedGroupIdChange}
-            onNewGroupNameChange={onNewGroupNameChange}
-          />
-        </SettingsAccordionSection>
-      ) : null}
+      {children}
     </View>
   );
 }
@@ -197,11 +129,18 @@ function renderSection(
   draft: VaultSettingsConfig,
   patchDraft: PatchDraft,
   storageModeLocked: boolean,
+  vaultRootPath: string | null,
+  onPathIssueChange?: (issue: WorkspacePathIssue | null) => void,
+  hiddenLocked = false,
 ) {
   switch (sectionId) {
     case "vault":
       return (
-        <VaultSection config={draft.vault} onChange={(patch) => patchDraft("vault", patch)} />
+        <VaultSection
+          config={draft.vault}
+          hiddenLocked={hiddenLocked}
+          onChange={(patch) => patchDraft("vault", patch)}
+        />
       );
     case "storage":
       return (
@@ -211,15 +150,21 @@ function renderSection(
           onChange={(patch) => patchDraft("storage", patch)}
         />
       );
-    case "close":
+    case "mount":
       return (
-        <CloseSection
-          storageMode={draft.storage.mode}
-          close={draft.close}
+        <VaultSettingsMountSection
+          config={draft.mount}
+          vaultRootPath={vaultRootPath}
+          onPathIssueChange={onPathIssueChange}
+          onChange={(patch) => patchDraft("mount", patch)}
+        />
+      );
+    case "auto_close":
+      return (
+        <AutoCloseSection
           autoClose={draft.auto_close}
           secureWipe={draft.security.secure_wipe_workspace}
           requireUnmountOnSleep={draft.policy.require_unmount_on_sleep}
-          onCloseChange={(patch) => patchDraft("close", patch)}
           onAutoCloseChange={(patch) => patchDraft("auto_close", patch)}
           onSecureWipeChange={(secure_wipe_workspace) =>
             patchDraft("security", { secure_wipe_workspace })
@@ -243,13 +188,6 @@ function renderSection(
           onPasswordHintChange={(password_hint) => patchDraft("vault", { password_hint })}
         />
       );
-    case "seven_zip":
-      return (
-        <SevenZipSection
-          config={draft.seven_zip}
-          onChange={(patch) => patchDraft("seven_zip", patch)}
-        />
-      );
     case "policy":
       return (
         <PolicySection config={draft.policy} onChange={(patch) => patchDraft("policy", patch)} />
@@ -262,9 +200,11 @@ function renderSection(
 function VaultSection({
   config,
   onChange,
+  hiddenLocked = false,
 }: {
   config: VaultSettingsConfig["vault"];
   onChange: (patch: Partial<VaultSettingsConfig["vault"]>) => void;
+  hiddenLocked?: boolean;
 }) {
   const { t } = useTranslation();
   return (
@@ -296,10 +236,15 @@ function VaultSection({
       />
       <SwitchRow
         label={t("modal.settings.field.vault.hidden")}
-        value={config.hidden}
+        hint={
+          hiddenLocked
+            ? t("modal.settings.field.vault.hidden_locked_by_group")
+            : t("modal.settings.field.vault.hidden_help")
+        }
+        value={config.hidden || hiddenLocked}
+        disabled={hiddenLocked}
         onValueChange={(hidden) => onChange({ hidden })}
       />
-      <FieldHint>{t("modal.settings.field.vault.hidden_help")}</FieldHint>
     </View>
   );
 }
@@ -336,145 +281,196 @@ function StorageSection({
           />
         ))}
       </RadioGroup>
-      {warning ? <Warning>{t(warning)}</Warning> : null}
+      {warning ? <FieldHint>{t(warning)}</FieldHint> : null}
     </View>
   );
 }
 
-function CloseSection({
-  storageMode,
-  close,
+export function VaultSettingsMountSection({
+  config,
+  onChange,
+  vaultRootPath = null,
+  onPathIssueChange,
+}: {
+  config: VaultSettingsConfig["mount"];
+  onChange: (patch: Partial<VaultSettingsConfig["mount"]>) => void;
+  vaultRootPath?: string | null;
+  onPathIssueChange?: (issue: WorkspacePathIssue | null) => void;
+}) {
+  const { t } = useTranslation();
+  const { colors, typography } = useTheme();
+  const vaultRootService = useVaultRootService();
+  const customDraftRef = useRef("");
+  const storedIsDefault =
+    normalizeMountWorkspacePath(config.workspace_path) === WORKSPACE_PATH_DEFAULT;
+  const [uiMode, setUiMode] = useState<"default" | "custom">(
+    storedIsDefault ? "default" : "custom",
+  );
+
+  useEffect(() => {
+    if (!storedIsDefault) setUiMode("custom");
+  }, [storedIsDefault]);
+
+  const customPath = storedIsDefault ? "" : config.workspace_path;
+  const pathIssue: WorkspacePathIssue | null =
+    uiMode === "custom"
+      ? !customPath.trim()
+        ? "empty"
+        : validateMountWorkspacePath(customPath, vaultRootPath)
+      : null;
+
+  useEffect(() => {
+    onPathIssueChange?.(pathIssue);
+  }, [onPathIssueChange, pathIssue]);
+
+  return (
+    <View style={styles.fields}>
+      <FieldHint>{t("modal.settings.section.mount_intro")}</FieldHint>
+      <RadioGroup>
+        <PolicyRadioOption
+          value="default"
+          checked={uiMode === "default"}
+          title={t("modal.settings.field.mount.use_default")}
+          description={t("modal.settings.field.mount.use_default_desc")}
+          badge="default"
+          onSelect={() => {
+            if (!storedIsDefault && config.workspace_path.trim()) {
+              customDraftRef.current = config.workspace_path.trim();
+            }
+            setUiMode("default");
+            onChange({ workspace_path: WORKSPACE_PATH_DEFAULT });
+          }}
+        />
+        <PolicyRadioOption
+          value="custom"
+          checked={uiMode === "custom"}
+          title={t("modal.settings.field.mount.custom")}
+          description={t("modal.settings.field.mount.custom_desc")}
+          onSelect={() => {
+            setUiMode("custom");
+            if (storedIsDefault) {
+              onChange({ workspace_path: customDraftRef.current });
+            }
+          }}
+          footer={
+            uiMode === "custom" ? (
+              <View style={styles.fields}>
+                <FieldLabel>{t("modal.settings.field.mount.path")}</FieldLabel>
+                <FieldHint>{t("modal.settings.field.mount.path_help")}</FieldHint>
+                <ThemedInput
+                  value={customPath}
+                  placeholder={t("modal.app_settings.field.workspace.path_placeholder")}
+                  onChangeText={(next) => {
+                    customDraftRef.current = next.trim();
+                    onChange({ workspace_path: next });
+                  }}
+                  mono
+                />
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  label={t("modal.app_settings.action.pick_workspace_folder")}
+                  disabled={Platform.OS !== "android"}
+                  onPress={() => {
+                    void (async () => {
+                      const picked = await vaultRootService.pickFolder(
+                        customPath.trim() || null,
+                        t("modal.app_settings.action.pick_workspace_folder"),
+                      );
+                      if (!picked?.trim()) return;
+                      customDraftRef.current = picked.trim();
+                      onChange({ workspace_path: picked.trim() });
+                    })();
+                  }}
+                />
+                {Platform.OS !== "android" ? (
+                  <FieldHint>{t("error.unsupported_platform")}</FieldHint>
+                ) : null}
+                {pathIssue ? (
+                  <Text
+                    style={[typography.caption, { color: colors.onErrorContainer }]}
+                    accessibilityRole="alert"
+                  >
+                    {t(workspacePathIssueI18nKey(pathIssue))}
+                  </Text>
+                ) : null}
+              </View>
+            ) : undefined
+          }
+        />
+      </RadioGroup>
+    </View>
+  );
+}
+
+function AutoCloseSection({
   autoClose,
   secureWipe,
   requireUnmountOnSleep,
-  onCloseChange,
   onAutoCloseChange,
   onSecureWipeChange,
   onRequireUnmountOnSleepChange,
 }: {
-  storageMode: StorageMode;
-  close: VaultSettingsConfig["close"];
   autoClose: VaultSettingsConfig["auto_close"];
   secureWipe: boolean;
   requireUnmountOnSleep: boolean;
-  onCloseChange: (patch: Partial<VaultSettingsConfig["close"]>) => void;
   onAutoCloseChange: (patch: Partial<VaultSettingsConfig["auto_close"]>) => void;
   onSecureWipeChange: (secureWipe: boolean) => void;
   onRequireUnmountOnSleepChange: (requireUnmountOnSleep: boolean) => void;
 }) {
   const { t } = useTranslation();
-  const storeOnly = storageMode === "store_only";
 
   return (
     <View style={styles.fields}>
-      {storageModeSealOnly(storageMode) ? (
-        <FieldHint>
-          {t(
-            (storageMode === "ram_only"
-              ? "modal.settings.field.close.ram_seal_only"
-              : storageMode === "plain_only"
-                ? "modal.settings.field.close.plain_only_seal_only"
-                : "modal.settings.field.close.plain_seal_only") as I18nKey,
-          )}
-        </FieldHint>
-      ) : storageModeCloseOnly(storageMode) ? (
-        <FieldHint>
-          {t(
-            (storageMode === "upriv_plain"
-              ? "modal.settings.field.close.upriv_plain_close_only"
-              : "modal.settings.field.close.upriv_only_close_only") as I18nKey,
-          )}
-        </FieldHint>
-      ) : (
-        <>
-          <FieldLabel>{t("modal.settings.field.close.default_action")}</FieldLabel>
-          <FieldHint>
-            {t(
-              (storeOnly
-                ? "modal.settings.field.close.default_action_help_store_only"
-                : "modal.settings.field.close.default_action_help") as I18nKey,
-            )}
-          </FieldHint>
-          <RadioGroup>
-            <PolicyRadioOption
-              value="close"
-              checked={close.default_action === "close"}
-              title={t(
-                (storeOnly
-                  ? "modal.settings.option.close.close_store_only"
-                  : "modal.settings.option.close.close") as I18nKey,
-              )}
-              description={t(
-                (storeOnly
-                  ? "modal.settings.option.close.close_store_only_desc"
-                  : "modal.settings.option.close.close_desc") as I18nKey,
-              )}
-              badge="recommended"
-              onSelect={() => onCloseChange({ default_action: "close" as CloseDefaultAction })}
-            />
-            <PolicyRadioOption
-              value="seal"
-              checked={close.default_action === "seal"}
-              title={t("modal.settings.option.close.seal")}
-              description={t(
-                (storeOnly
-                  ? "modal.settings.option.close.seal_store_only_desc"
-                  : "modal.settings.option.close.seal_desc") as I18nKey,
-              )}
-              onSelect={() => onCloseChange({ default_action: "seal" })}
-            />
-          </RadioGroup>
-        </>
-      )}
-
       <SwitchRow
         label={t("modal.settings.field.close.secure_wipe")}
         value={secureWipe}
         onValueChange={onSecureWipeChange}
       />
-      {!secureWipe ? <Warning>{t("modal.settings.field.close.secure_wipe_warn")}</Warning> : null}
+      {!secureWipe ? (
+        <FieldHint>{t("modal.settings.field.close.secure_wipe_warn")}</FieldHint>
+      ) : null}
 
       <SwitchRow
         label={t("modal.settings.field.auto_close.enabled")}
         value={autoClose.enabled}
         onValueChange={(enabled) => onAutoCloseChange({ enabled })}
       />
-      {storageModeSealOnly(storageMode) && autoClose.enabled ? (
-        <FieldHint>{t("modal.settings.field.auto_close.plain_seals")}</FieldHint>
-      ) : null}
-      {autoClose.enabled ? (
-        <>
-          <FieldLabel>{t("modal.settings.field.auto_close.idle_minutes")}</FieldLabel>
-          <ThemedInput
-            keyboardType="number-pad"
-            value={String(autoClose.idle_minutes)}
-            onChangeText={(raw) =>
-              onAutoCloseChange({
-                idle_minutes: Math.min(1440, Math.max(1, Number.parseInt(raw, 10) || 1)),
-              })
-            }
-            mono
-          />
-          <FieldLabel>{t("modal.settings.field.auto_close.warn_before_seconds")}</FieldLabel>
-          <ThemedInput
-            keyboardType="number-pad"
-            value={String(autoClose.warn_before_seconds)}
-            onChangeText={(raw) =>
-              onAutoCloseChange({
-                warn_before_seconds: Math.min(300, Math.max(0, Number.parseInt(raw, 10) || 0)),
-              })
-            }
-            mono
-          />
-        </>
-      ) : null}
+      <FieldLabel disabled={!autoClose.enabled}>
+        {t("modal.settings.field.auto_close.idle_minutes")}
+      </FieldLabel>
+      <ThemedInput
+        keyboardType="number-pad"
+        disabled={!autoClose.enabled}
+        value={String(autoClose.idle_minutes)}
+        onChangeText={(raw) =>
+          onAutoCloseChange({
+            idle_minutes: Math.min(1440, Math.max(1, Number.parseInt(raw, 10) || 1)),
+          })
+        }
+        mono
+      />
+      <FieldLabel disabled={!autoClose.enabled}>
+        {t("modal.settings.field.auto_close.warn_before_seconds")}
+      </FieldLabel>
+      <ThemedInput
+        keyboardType="number-pad"
+        disabled={!autoClose.enabled}
+        value={String(autoClose.warn_before_seconds)}
+        onChangeText={(raw) =>
+          onAutoCloseChange({
+            warn_before_seconds: Math.min(300, Math.max(0, Number.parseInt(raw, 10) || 0)),
+          })
+        }
+        mono
+      />
 
       <SwitchRow
         label={t("modal.settings.field.close.require_unmount_on_sleep")}
+        hint={t("modal.settings.field.close.require_unmount_on_sleep_help")}
         value={requireUnmountOnSleep}
         onValueChange={onRequireUnmountOnSleepChange}
       />
-      <FieldHint>{t("modal.settings.field.close.require_unmount_on_sleep_help")}</FieldHint>
     </View>
   );
 }
@@ -494,32 +490,28 @@ function BackupSection({
         value={config.enabled}
         onValueChange={(enabled) => onChange({ enabled })}
       />
-      {config.enabled ? (
-        <>
-          <Select
-            label={t("modal.settings.field.backup.mode")}
-            value={config.mode}
-            options={[
-              { value: "keep_last", label: t("modal.settings.option.backup.keep_last") },
-              { value: "keep_all", label: t("modal.settings.option.backup.keep_all") },
-            ]}
-            onChange={(mode) => onChange({ mode })}
-          />
-          {config.mode === "keep_last" ? (
-            <>
-              <FieldLabel>{t("modal.settings.field.backup.keep_last")}</FieldLabel>
-              <ThemedInput
-                keyboardType="number-pad"
-                value={String(config.keep_last)}
-                onChangeText={(raw) =>
-                  onChange({ keep_last: Math.min(99, Math.max(1, Number.parseInt(raw, 10) || 1)) })
-                }
-                mono
-              />
-            </>
-          ) : null}
-        </>
-      ) : null}
+      <Select
+        label={t("modal.settings.field.backup.mode")}
+        value={config.mode}
+        disabled={!config.enabled}
+        options={[
+          { value: "keep_last", label: t("modal.settings.option.backup.keep_last") },
+          { value: "keep_all", label: t("modal.settings.option.backup.keep_all") },
+        ]}
+        onChange={(mode) => onChange({ mode })}
+      />
+      <FieldLabel disabled={!config.enabled || config.mode !== "keep_last"}>
+        {t("modal.settings.field.backup.keep_last")}
+      </FieldLabel>
+      <ThemedInput
+        keyboardType="number-pad"
+        disabled={!config.enabled || config.mode !== "keep_last"}
+        value={String(config.keep_last)}
+        onChangeText={(raw) =>
+          onChange({ keep_last: Math.min(99, Math.max(1, Number.parseInt(raw, 10) || 1)) })
+        }
+        mono
+      />
     </View>
   );
 }
@@ -575,42 +567,43 @@ function SecuritySection({
   );
 }
 
-function SevenZipSection({
+export function KdfSection({
   config,
   onChange,
+  choosesPreset = true,
 }: {
-  config: VaultSettingsConfig["seven_zip"];
-  onChange: (patch: Partial<VaultSettingsConfig["seven_zip"]>) => void;
+  config: { unlock_preset: KdfUnlockPreset };
+  onChange: (patch: Partial<{ unlock_preset: KdfUnlockPreset }>) => void;
+  choosesPreset?: boolean;
 }) {
   const { t } = useTranslation();
-  const preset = compressionPresetFromSevenZip(config);
+
   return (
     <View style={styles.fields}>
-      <FieldHint>{t("modal.settings.section.seven_zip_intro")}</FieldHint>
-      <FieldLabel>{t("modal.settings.field.seven_zip.compression")}</FieldLabel>
-      <FieldHint>{t("modal.settings.field.seven_zip.compression_help")}</FieldHint>
+      <FieldLabel disabled={!choosesPreset}>
+        {t("modal.settings.field.kdf.unlock_preset")}
+      </FieldLabel>
+      <FieldHint disabled={!choosesPreset}>{t("modal.settings.section.kdf_intro")}</FieldHint>
       <RadioGroup>
-        {COMPRESSION_PRESETS.map((value) => (
-          <PolicyRadioOption
-            key={value}
-            value={value}
-            checked={preset === value}
-            title={t(`modal.settings.option.seven_zip.compression.${value}` as I18nKey)}
-            description={t(
-              `modal.settings.option.seven_zip.compression.${value}_desc` as I18nKey,
-            )}
-            badge={value === "none" ? "recommended" : undefined}
-            onSelect={() => onChange(sevenZipPatchFromCompressionPreset(value as CompressionPreset))}
-          />
-        ))}
+        {KDF_UNLOCK_PRESETS.map((preset) => {
+          const meta = KDF_UNLOCK_OPTION_META[preset];
+          return (
+            <PolicyRadioOption
+              key={preset}
+              value={preset}
+              checked={config.unlock_preset === preset}
+              disabled={!choosesPreset}
+              title={t(meta.titleKey)}
+              description={t(meta.descKey)}
+              badge={meta.badge}
+              tone={meta.tone}
+              onSelect={() => onChange({ unlock_preset: preset })}
+            />
+          );
+        })}
       </RadioGroup>
-      <SwitchRow
-        label={t("modal.settings.field.seven_zip.encrypt_file_names_label")}
-        value={config.encrypt_file_names}
-        onValueChange={(encrypt_file_names) => onChange({ encrypt_file_names })}
-      />
-      {!config.encrypt_file_names ? (
-        <Warning>{t("modal.settings.field.seven_zip.encrypt_file_names_off_warn")}</Warning>
+      {!choosesPreset ? (
+        <FieldHint>{t("modal.settings.field.kdf.import_package")}</FieldHint>
       ) : null}
     </View>
   );
@@ -669,19 +662,18 @@ function PolicySection({
           onSelect={() => onChange({ disallow_copy_outside_mount: false })}
         />
       </RadioGroup>
-      {config.allow_external_editors ? <Warning>{t("warning.external_editor")}</Warning> : null}
-      {externalBlockCopy ? (
-        <FieldHint>{t("warning.policy.external_block_copy")}</FieldHint>
-      ) : null}
+      {config.allow_external_editors ? <FieldHint>{t("warning.external_editor")}</FieldHint> : null}
+      {externalBlockCopy ? <FieldHint>{t("warning.policy.external_block_copy")}</FieldHint> : null}
     </View>
   );
 }
 
-function GroupSection({
+export function VaultSettingsGroupSection({
   groups,
   selectedGroupId,
   newGroupName,
   nameError,
+  includeHidden = false,
   onSelectedGroupIdChange,
   onNewGroupNameChange,
 }: {
@@ -689,14 +681,16 @@ function GroupSection({
   selectedGroupId: string;
   newGroupName: string;
   nameError: string | null;
+  includeHidden?: boolean;
   onSelectedGroupIdChange: (groupId: string) => void;
   onNewGroupNameChange: (name: string) => void;
 }) {
   const { t } = useTranslation();
   const creating = Boolean(newGroupName.trim());
+  const pickerGroups = groupsForAssignmentPicker(groups, { includeHidden, selectedGroupId });
   const groupOptions = [
-    { value: "", label: t("vault.group.assignment.ungrouped") },
-    ...groups.map((group) => ({ value: group.id, label: group.displayName })),
+    groupAssignmentClearOption(creating ? "" : selectedGroupId, t),
+    ...pickerGroups.map((group) => ({ value: group.id, label: group.displayName })),
   ];
   return (
     <View style={styles.fields}>
@@ -722,21 +716,7 @@ function GroupSection({
 }
 
 const styles = StyleSheet.create({
-  root: { gap: spacing.sm, paddingBottom: spacing.sm },
+  root: { gap: spacing.sm },
   fields: { gap: spacing.md },
-  radioGroup: { gap: spacing.sm },
-  input: {
-    borderRadius: radii.sm,
-    borderWidth: 1,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.md,
-    minHeight: 44,
-  },
   multiline: { minHeight: 88, textAlignVertical: "top" },
-  switchRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: spacing.md,
-  },
 });

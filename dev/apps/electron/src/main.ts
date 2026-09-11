@@ -1,14 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import {
-  app,
-  BrowserWindow,
-  dialog,
-  ipcMain,
-  Menu,
-  nativeImage,
-  session,
-} from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu } from "electron";
+import { nativeImage, session, shell } from "electron";
 import {
   connectDaemonEvents,
   daemonRpc,
@@ -17,9 +10,9 @@ import {
   stopDaemon,
   type DaemonConnection,
 } from "./daemon";
+import { ELECTRON_IPC_METHODS } from "./ipcMethods";
 
-const isDev =
-  process.argv.includes("--dev") || process.env.UPRIV_DEV === "1";
+const isDev = process.argv.includes("--dev") || process.env.UPRIV_DEV === "1";
 /** Open detached DevTools in dev; pass `--no-devtools` to skip. */
 const openDevTools = isDev && !process.argv.includes("--no-devtools");
 
@@ -56,6 +49,8 @@ let daemon: DaemonConnection | null = null;
 let daemonStarting: Promise<DaemonConnection> | null = null;
 let stopEvents: (() => void) | null = null;
 let quitting = false;
+
+const ALLOWED_IPC_METHODS = new Set<string>(ELECTRON_IPC_METHODS);
 
 /** Window / taskbar icon while running (Explorer/Start still need .exe resources). */
 function resolveWindowIcon(): string | undefined {
@@ -107,9 +102,7 @@ function hardenProductionWindow(window: BrowserWindow): void {
   window.webContents.on("before-input-event", (event, input) => {
     if (input.type !== "keyDown") return;
     const key = input.key.toLowerCase();
-    const reload =
-      key === "f5" ||
-      ((input.control || input.meta) && key === "r");
+    const reload = key === "f5" || ((input.control || input.meta) && key === "r");
     if (reload) event.preventDefault();
   });
 }
@@ -127,10 +120,7 @@ async function ensureDaemon(): Promise<DaemonConnection> {
       daemon = null;
       // Notify renderer so version cache can clear before we force-quit (B9).
       mainWindow?.webContents.send("upriv-event", "daemon_exited", null);
-      dialog.showErrorBox(
-        "Upriv",
-        "The vault backend stopped unexpectedly. The app will close.",
-      );
+      dialog.showErrorBox("Upriv", "The vault backend stopped unexpectedly. The app will close.");
       void gracefulShutdown(1);
     });
     stopEvents?.();
@@ -167,8 +157,7 @@ async function createWindow(): Promise<void> {
 
   const iconPath = resolveWindowIcon();
   const iconImage = iconPath ? nativeImage.createFromPath(iconPath) : undefined;
-  const icon =
-    iconImage && !iconImage.isEmpty() ? iconImage : iconPath;
+  const icon = iconImage && !iconImage.isEmpty() ? iconImage : iconPath;
 
   mainWindow = new BrowserWindow({
     width: 960,
@@ -201,6 +190,15 @@ async function createWindow(): Promise<void> {
 
   hardenProductionWindow(mainWindow);
 
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//i.test(url)) void shell.openExternal(url);
+    return { action: "deny" };
+  });
+  mainWindow.webContents.on("will-navigate", (event, url) => {
+    const allowed = isDev ? "http://localhost:1420" : "file://";
+    if (!url.startsWith(allowed)) event.preventDefault();
+  });
+
   if (isDev) {
     await mainWindow.loadURL("http://localhost:1420");
     if (openDevTools) {
@@ -217,12 +215,11 @@ async function createWindow(): Promise<void> {
 
 ipcMain.handle(
   "upriv-invoke",
-  async (
-    _event,
-    method: string,
-    params: Record<string, unknown>,
-    timeoutMs?: number,
-  ) => {
+  async (_event, method: string, params: Record<string, unknown>, timeoutMs?: number) => {
+    if (typeof method !== "string" || !ALLOWED_IPC_METHODS.has(method)) {
+      throw new Error(`unknown_method: unknown IPC method: ${String(method)}`);
+    }
+
     if (method === "app_exit") {
       await gracefulShutdown(0);
       return null;
@@ -234,9 +231,7 @@ ipcMain.handle(
           ? params.defaultPath.trim()
           : undefined;
       const title =
-        typeof params?.title === "string" && params.title.trim()
-          ? params.title.trim()
-          : undefined;
+        typeof params?.title === "string" && params.title.trim() ? params.title.trim() : undefined;
       const options: Electron.OpenDialogOptions = {
         properties: ["openDirectory", "createDirectory"],
         ...(title ? { title } : {}),

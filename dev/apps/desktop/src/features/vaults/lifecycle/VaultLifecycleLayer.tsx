@@ -4,6 +4,7 @@ import { VaultClosingOverlay } from "./pipeline/VaultClosingOverlay";
 import { VaultOpeningOverlay } from "./pipeline/VaultOpeningOverlay";
 import { VaultLifecycleModal } from "./modals/VaultLifecycleModal";
 import { VaultRecoveryModal, type RecoveryAction } from "./modals/VaultRecoveryModal";
+import { WorkspaceSetupModal } from "./modals/WorkspaceSetupModal";
 
 interface VaultLifecycleLayerProps {
   lifecycleVault: VaultListItem | null;
@@ -16,8 +17,12 @@ interface VaultLifecycleLayerProps {
   recoverySubmitting: boolean;
   onRecoveryClose: () => void;
   onRecoveryAction: (action: RecoveryAction) => void;
+  workspaceSetupOpen: boolean;
+  workspaceSetupRootPath: string;
+  onWorkspaceSetupCancel: () => void;
+  onWorkspaceSetupConfigured: () => void;
   pipelineVault: VaultListItem | null;
-  pipelineClosingIntent: Extract<VaultLifecycleIntent, "close" | "seal"> | null;
+  pipelineClosingIntent: Extract<VaultLifecycleIntent, "close"> | null;
   closingOverlayOpen: boolean;
   openingOverlayOpen: boolean;
   activeStep: number;
@@ -26,7 +31,7 @@ interface VaultLifecycleLayerProps {
   onDismissPipelineError: () => void;
 }
 
-/** Unlock/close/seal modals, recovery, and pipeline overlays. */
+/** Unlock/close modals, workspace setup, recovery, and pipeline overlays. */
 export function VaultLifecycleLayer({
   lifecycleVault,
   lifecycleIntent,
@@ -38,6 +43,10 @@ export function VaultLifecycleLayer({
   recoverySubmitting,
   onRecoveryClose,
   onRecoveryAction,
+  workspaceSetupOpen,
+  workspaceSetupRootPath,
+  onWorkspaceSetupCancel,
+  onWorkspaceSetupConfigured,
   pipelineVault,
   pipelineClosingIntent,
   closingOverlayOpen,
@@ -49,6 +58,12 @@ export function VaultLifecycleLayer({
 }: VaultLifecycleLayerProps) {
   return (
     <>
+      <WorkspaceSetupModal
+        open={workspaceSetupOpen}
+        vaultRootPath={workspaceSetupRootPath}
+        onCancel={onWorkspaceSetupCancel}
+        onConfigured={onWorkspaceSetupConfigured}
+      />
       <VaultLifecycleModal
         vault={lifecycleVault}
         intent={lifecycleIntent}

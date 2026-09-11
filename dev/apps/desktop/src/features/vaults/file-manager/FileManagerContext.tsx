@@ -1,4 +1,13 @@
-import { createContext, useCallback, useContext, useMemo, useReducer, type ReactNode } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useReducer,
+  useRef,
+  type ReactNode,
+} from "react";
 import { useVaultFileSystemService } from "@/platform/services";
 import { isVaultFileManagerEligible, type VaultListItem } from "@upriv/shared";
 import { createDefaultWorkspaceState } from "./lib/fileManagerWorkspaceTypes";
@@ -34,7 +43,7 @@ interface FileManagerContextValue {
   maximize: (vaultId: string) => void;
   /** Hide file-manager UI; vault stays open on the list. */
   dismiss: (vaultId: string) => void;
-  /** Vault closed/sealed/deleted — tear down in-memory file session. */
+  /** Vault closed/deleted — tear down in-memory file session. */
   purgeForVaultClose: (vaultId: string) => void;
   /** Drop file-manager tabs for vaults that are gone or no longer open. */
   syncWithVaultList: (vaults: VaultListItem[]) => void;
@@ -162,6 +171,11 @@ function fileManagerReducer(state: FileManagerState, action: FileManagerAction):
 export function FileManagerProvider({ children }: { children: ReactNode }) {
   const fs = useVaultFileSystemService();
   const [state, dispatch] = useReducer(fileManagerReducer, initialState);
+  const orderRef = useRef(state.order);
+
+  useEffect(() => {
+    orderRef.current = state.order;
+  }, [state.order]);
 
   const openFromVault = useCallback((vault: VaultListItem) => {
     dispatch({ type: "open_from_vault", vault });
@@ -193,14 +207,14 @@ export function FileManagerProvider({ children }: { children: ReactNode }) {
         vaults.filter((vault) => vault.session === "open").map((vault) => vault.id),
       );
       const knownIds = new Set(vaults.map((vault) => vault.id));
-      for (const vaultId of state.order) {
+      for (const vaultId of orderRef.current) {
         if (!knownIds.has(vaultId) || !openIds.has(vaultId)) {
           fs.resetSession(vaultId);
         }
       }
       dispatch({ type: "sync_with_vault_list", vaults });
     },
-    [fs, state.order],
+    [fs],
   );
 
   const dispatchWorkspace = useCallback(

@@ -20,12 +20,18 @@ export function I18nProvider({ locale = DEFAULT_LOCALE, children }: I18nProvider
 
   useEffect(() => {
     let cancelled = false;
-    void loadLocale(locale).then((loaded) => {
-      if (cancelled) return;
-      setCatalog(loaded);
-      setActiveLocale(locale);
-      document.documentElement.lang = locale;
-    });
+    loadLocale(locale)
+      .catch(() => (locale === DEFAULT_LOCALE ? null : loadLocale(DEFAULT_LOCALE)))
+      .then((loaded) => {
+        if (cancelled) return;
+        // Empty catalog: `t()` returns the key so the UI stays navigable.
+        setCatalog(loaded ?? ({} as I18nCatalog));
+        setActiveLocale(locale);
+        document.documentElement.lang = locale;
+      })
+      .catch(() => {
+        if (!cancelled) setCatalog({} as I18nCatalog);
+      });
     return () => {
       cancelled = true;
     };

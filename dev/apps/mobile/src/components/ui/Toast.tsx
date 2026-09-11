@@ -1,32 +1,48 @@
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { Icon } from "@/components/icons";
+import { useTranslation } from "@/i18n";
 import { useTheme } from "@/theme/ThemeContext";
-import { radii, spacing } from "@/theme/tokens";
+import { modalShadow, radii, spacing } from "@/theme/tokens";
 
 interface ToastProps {
   message: string | null;
   onDismiss: () => void;
 }
 
+/** Bottom toast — desktop `Toast` parity (message + close). */
 export function Toast({ message, onDismiss }: ToastProps) {
   const insets = useSafeAreaInsets();
+  const { t } = useTranslation();
   const { colors, typography } = useTheme();
   if (!message) return null;
   return (
-    <View pointerEvents="box-none" style={[styles.wrap, { top: insets.top + spacing.md }]}>
-      <Pressable
-        onPress={onDismiss}
+    <View
+      pointerEvents="box-none"
+      style={[styles.wrap, { bottom: Math.max(insets.bottom, spacing.md) + spacing.md }]}
+    >
+      <View
         style={[
           styles.toast,
+          modalShadow,
           {
-            backgroundColor: colors.surfaceContainerHighest,
+            backgroundColor: colors.surfaceContainerHigh,
             borderColor: colors.outlineVariant,
           },
         ]}
         accessibilityRole="alert"
       >
-        <Text style={[typography.body, styles.text]}>{message}</Text>
-      </Pressable>
+        <Text style={[typography.body, styles.text, { color: colors.onSurface }]}>{message}</Text>
+        <Pressable
+          onPress={onDismiss}
+          hitSlop={8}
+          accessibilityRole="button"
+          accessibilityLabel={t("action.close")}
+          style={styles.close}
+        >
+          <Icon name="close" size={16} color={colors.onSurfaceVariant} />
+        </Pressable>
+      </View>
     </View>
   );
 }
@@ -34,18 +50,35 @@ export function Toast({ message, onDismiss }: ToastProps) {
 const styles = StyleSheet.create({
   wrap: {
     position: "absolute",
-    left: spacing.lg,
-    right: spacing.lg,
+    left: 0,
+    right: 0,
     zIndex: 300,
     alignItems: "center",
+    paddingHorizontal: spacing.lg,
   },
   toast: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md,
     borderRadius: radii.md,
     borderWidth: 1,
-    paddingHorizontal: spacing.lg,
+    paddingLeft: spacing.lg,
+    paddingRight: spacing.sm,
     paddingVertical: spacing.md,
-    maxWidth: 480,
+    maxWidth: 448,
     width: "100%",
   },
-  text: { textAlign: "center" },
+  text: {
+    flex: 1,
+    flexShrink: 1,
+    minWidth: 0,
+    lineHeight: 20,
+  },
+  close: {
+    width: 32,
+    height: 32,
+    alignItems: "center",
+    justifyContent: "center",
+    flexShrink: 0,
+  },
 });

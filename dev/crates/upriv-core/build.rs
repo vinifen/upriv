@@ -3,7 +3,7 @@ use std::path::PathBuf;
 fn main() {
     let manifest_dir =
         PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
-    let version_path = manifest_dir.join("../../VERSION");
+    let version_path = manifest_dir.join("../../../VERSION");
     let version = match std::fs::read_to_string(&version_path) {
         Ok(raw) => {
             let trimmed = raw.trim().to_string();

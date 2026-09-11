@@ -6,6 +6,7 @@ import {
   requiresPasswordForLifecycle,
   requireVaultErrorI18nKey,
   resolveVaultPasswordHint,
+  storageModeIsPlaintext,
   VAULT_ERROR_CODES,
   type VaultListItem,
   type VaultLifecycleIntent,
@@ -30,8 +31,6 @@ function modalTitleKey(intent: VaultLifecycleIntent): I18nKey {
   switch (intent) {
     case "unlock":
       return "unlock.title";
-    case "seal":
-      return "close.dialog.seal_title";
     case "close":
       return "close.dialog.title";
   }
@@ -41,8 +40,6 @@ function confirmLabelKey(intent: VaultLifecycleIntent): I18nKey {
   switch (intent) {
     case "unlock":
       return "unlock.submit";
-    case "seal":
-      return "action.seal";
     case "close":
       return "action.lock";
   }
@@ -62,29 +59,39 @@ export function VaultLifecycleModal({
   const passwordId = useId();
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [requiresPassword, setRequiresPassword] = useState(false);
+  // Unlock always needs a password (`requiresPasswordForLifecycle`) — do not wait on settings.
+  const [requiresPassword, setRequiresPassword] = useState(intent === "unlock");
+  const [settingsLoading, setSettingsLoading] = useState(false);
 
   useEffect(() => {
     if (!open || !vault || !intent) {
       setRequiresPassword(false);
+      setSettingsLoading(false);
       return;
     }
+    setRequiresPassword(intent === "unlock");
     let cancelled = false;
-    void vaultService.getSettings(vault.id).then((settings) => {
-      if (cancelled || !settings) return;
-      setRequiresPassword(
-        requiresPasswordForLifecycle(
-          vault,
-          intent,
-          settings.security.mode,
-          lifecycleService.hasPasswordInSession(vault.id),
-        ),
-      );
-    });
+    setSettingsLoading(true);
+    vaultService
+      .getSettings(vault.id)
+      .then((settings) => {
+        if (cancelled) return;
+        if (!settings) {
+          setRequiresPassword(true);
+          return;
+        }
+        setRequiresPassword(requiresPasswordForLifecycle(vault, intent, settings.security.mode));
+      })
+      .catch(() => {
+        if (!cancelled) setRequiresPassword(true);
+      })
+      .finally(() => {
+        if (!cancelled) setSettingsLoading(false);
+      });
     return () => {
       cancelled = true;
     };
-  }, [lifecycleService, open, vault, intent, vaultService]);
+  }, [open, vault, intent, vaultService]);
 
   useEffect(() => {
     if (!open) return;
@@ -102,13 +109,15 @@ export function VaultLifecycleModal({
     onConfirm(requiresPassword ? password : null);
   };
 
-  const canSubmit = !submitting && (!requiresPassword || password.length > 0);
+  const canSubmit = !submitting && !settingsLoading && (!requiresPassword || password.length > 0);
   const passwordHint = resolveVaultPasswordHint(vault);
 
   return (
     <Modal
       open={open}
-      title={t(modalTitleKey(intent), { name: vault.displayName })}
+      title={t(modalTitleKey(intent))}
+      titleIcon={intent === "unlock" ? "lock-open" : "lock"}
+      contextTitle={vault.displayName}
       onClose={onClose}
       panelClassName="max-w-md"
       footer={
@@ -116,12 +125,7 @@ export function VaultLifecycleModal({
           <Button variant="ghost" size="sm" disabled={submitting} onClick={onClose}>
             {t("action.cancel")}
           </Button>
-          <Button
-            variant={intent === "seal" ? "danger" : "primary"}
-            size="sm"
-            disabled={!canSubmit}
-            onClick={handleConfirm}
-          >
+          <Button variant="primary" size="sm" disabled={!canSubmit} onClick={handleConfirm}>
             {submitting ? t("close.dialog.submitting") : t(confirmLabelKey(intent))}
           </Button>
         </div>
@@ -129,18 +133,22 @@ export function VaultLifecycleModal({
     >
       <div className="space-y-4 px-0.5 pb-1">
         {intent === "close" ? (
-          <p className="text-sm leading-relaxed text-on-surface-variant">
-            {t("close.dialog.close_hint")}
-          </p>
-        ) : null}
-        {intent === "seal" ? (
           <>
-            <p className="text-sm leading-relaxed text-on-surface-variant">
-              {t("close.dialog.seal_hint")}
-            </p>
-            <p className="text-sm leading-relaxed text-on-surface-variant">
-              {t("close.dialog.seal_confirm")}
-            </p>
+            {storageModeIsPlaintext(vault.storageMode) ? (
+              <p className="text-sm leading-relaxed text-on-surface-variant">
+                {t("close.dialog.close_hint_plain")}
+              </p>
+            ) : null}
+            {requiresPassword ? (
+              <p className="text-sm leading-relaxed text-on-surface-variant">
+                {t("close.dialog.close_hint_prompt")}
+              </p>
+            ) : null}
+            {!storageModeIsPlaintext(vault.storageMode) && !requiresPassword ? (
+              <p className="text-sm leading-relaxed text-on-surface-variant">
+                {t("close.dialog.close_hint")}
+              </p>
+            ) : null}
           </>
         ) : null}
         {requiresPassword && passwordHint ? <VaultPasswordHintCallout hint={passwordHint} /> : null}

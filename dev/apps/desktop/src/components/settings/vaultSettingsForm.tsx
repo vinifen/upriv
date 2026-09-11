@@ -1,23 +1,35 @@
-import { useId, type ReactNode } from "react";
-import { Button } from "@/components/ui";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { Button, Select, SwitchRow } from "@/components/ui";
 import {
   COMPRESSION_PRESETS,
+  KDF_UNLOCK_OPTION_META,
+  KDF_UNLOCK_PRESETS,
+  POLICY_RADIO_BADGE_I18N,
   VAULT_DISPLAY_NAME_MAX_LENGTH,
   VAULT_NOTE_MAX_LENGTH,
+  VAULT_PASSWORD_HINT_MAX_LENGTH,
+  WORKSPACE_PATH_DEFAULT,
   compressionPresetFromSevenZip,
+  normalizeMountWorkspacePath,
   securityUiModesForStorage,
   sevenZipPatchFromCompressionPreset,
-  storageModeCloseOnly,
   storageModeIsPlaintext,
-  storageModeSealOnly,
+  validateMountWorkspacePath,
+  workspacePathIssueI18nKey,
   type CompressionPreset,
+  type KdfUnlockPreset,
+  type PolicyRadioBadge,
   type SecurityMode,
   type StorageMode,
   type VaultGroup,
   type VaultSettingsConfig,
+  type WorkspacePathIssue,
+  groupsForAssignmentPicker,
+  groupAssignmentClearOption,
 } from "@upriv/shared";
 import { useTranslation } from "@/i18n";
-import { VaultChangePasswordPanel } from "./VaultChangePasswordPanel";
+import { useVaultRootService } from "@/platform/services";
+import { useErrorToast } from "@/hooks/useErrorToast";
 import { securityModeToUi, type SecurityUiMode, uiToSecurityMode } from "@upriv/shared";
 
 export const settingsControlClass =
@@ -27,16 +39,38 @@ interface SettingsFieldProps {
   label: string;
   hint?: string;
   htmlFor?: string;
+  disabled?: boolean;
   children: ReactNode;
 }
 
-export function SettingsField({ label, hint, htmlFor, children }: SettingsFieldProps) {
+export function SettingsField({
+  label,
+  hint,
+  htmlFor,
+  disabled = false,
+  children,
+}: SettingsFieldProps) {
   return (
     <div className="space-y-1.5">
-      <label htmlFor={htmlFor} className="block text-sm font-medium text-on-surface">
+      <label
+        htmlFor={htmlFor}
+        className={[
+          "block text-sm font-medium",
+          disabled ? "text-on-surface-variant opacity-60" : "text-on-surface",
+        ].join(" ")}
+      >
         {label}
       </label>
-      {hint ? <p className="text-xs leading-relaxed text-on-surface-variant">{hint}</p> : null}
+      {hint ? (
+        <p
+          className={[
+            "text-xs leading-relaxed",
+            disabled ? "text-on-surface-variant opacity-60" : "text-on-surface-variant",
+          ].join(" ")}
+        >
+          {hint}
+        </p>
+      ) : null}
       {children}
     </div>
   );
@@ -53,9 +87,14 @@ export function SettingsFormGrid({ children }: SettingsFormGridProps) {
 interface VaultSettingsVaultSectionProps {
   config: VaultSettingsConfig["vault"];
   onChange: (patch: Partial<VaultSettingsConfig["vault"]>) => void;
+  hiddenLocked?: boolean;
 }
 
-export function VaultSettingsVaultSection({ config, onChange }: VaultSettingsVaultSectionProps) {
+export function VaultSettingsVaultSection({
+  config,
+  onChange,
+  hiddenLocked = false,
+}: VaultSettingsVaultSectionProps) {
   const { t } = useTranslation();
   const displayNameId = useId();
   const orderId = useId();
@@ -105,21 +144,18 @@ export function VaultSettingsVaultSection({ config, onChange }: VaultSettingsVau
           className={[settingsControlClass, "resize-y"].join(" ")}
         />
       </SettingsField>
-      <div className="space-y-1.5">
-        <label className="flex cursor-pointer select-none items-center gap-3">
-          <input
-            id={hiddenId}
-            type="checkbox"
-            checked={config.hidden}
-            onChange={(e) => onChange({ hidden: e.target.checked })}
-            className="h-4 w-4 rounded border-outline-variant/50 text-accent focus:ring-accent/50"
-          />
-          <span className="text-sm text-on-surface">{t("modal.settings.field.vault.hidden")}</span>
-        </label>
-        <p className="pl-7 text-xs leading-relaxed text-on-surface-variant">
-          {t("modal.settings.field.vault.hidden_help")}
-        </p>
-      </div>
+      <SwitchRow
+        id={hiddenId}
+        checked={config.hidden || hiddenLocked}
+        onChange={(hidden) => onChange({ hidden })}
+        disabled={hiddenLocked}
+        label={t("modal.settings.field.vault.hidden")}
+        hint={
+          hiddenLocked
+            ? t("modal.settings.field.vault.hidden_locked_by_group")
+            : t("modal.settings.field.vault.hidden_help")
+        }
+      />
     </SettingsFormGrid>
   );
 }
@@ -173,25 +209,6 @@ export function VaultSettingsStorageSection({
           />
           <PolicyRadioOption
             groupName={storageModeGroup}
-            value="store_only"
-            checked={config.mode === "store_only"}
-            disabled={storageModeLocked}
-            title={t("modal.settings.option.storage.store_only")}
-            description={t("modal.settings.option.storage.store_only_desc")}
-            onSelect={() => onChange({ mode: "store_only" })}
-          />
-          <PolicyRadioOption
-            groupName={storageModeGroup}
-            value="upriv_only"
-            checked={config.mode === "upriv_only"}
-            disabled={storageModeLocked}
-            title={t("modal.settings.option.storage.upriv_only")}
-            description={t("modal.settings.option.storage.upriv_only_desc")}
-            badge="more-secure"
-            onSelect={() => onChange({ mode: "upriv_only" })}
-          />
-          <PolicyRadioOption
-            groupName={storageModeGroup}
             value="upriv_plain"
             checked={config.mode === "upriv_plain"}
             disabled={storageModeLocked}
@@ -201,99 +218,233 @@ export function VaultSettingsStorageSection({
             tone="insecure"
             onSelect={() => onChange({ mode: "upriv_plain" })}
           />
-          <PolicyRadioOption
-            groupName={storageModeGroup}
-            value="ram_only"
-            checked={config.mode === "ram_only"}
-            disabled={storageModeLocked}
-            title={t("modal.settings.option.storage.ram_only")}
-            description={t("modal.settings.option.storage.ram_only_desc")}
-            badge="less-secure"
-            tone="less-secure"
-            onSelect={() => onChange({ mode: "ram_only" })}
-          />
-          <PolicyRadioOption
-            groupName={storageModeGroup}
-            value="plain"
-            checked={config.mode === "plain"}
-            disabled={storageModeLocked}
-            title={t("modal.settings.option.storage.plain")}
-            description={t("modal.settings.option.storage.plain_desc")}
-            badge="insecure"
-            tone="insecure"
-            onSelect={() => onChange({ mode: "plain" })}
-          />
-          <PolicyRadioOption
-            groupName={storageModeGroup}
-            value="plain_only"
-            checked={config.mode === "plain_only"}
-            disabled={storageModeLocked}
-            title={t("modal.settings.option.storage.plain_only")}
-            description={t("modal.settings.option.storage.plain_only_desc")}
-            badge="insecure"
-            tone="insecure"
-            onSelect={() => onChange({ mode: "plain_only" })}
-          />
         </div>
       </SettingsField>
       {config.mode === "encrypted_dir" ? (
-        <p className="text-xs leading-relaxed text-on-error-container/90">
+        <p className="text-xs leading-relaxed text-on-surface-variant">
           {t("warning.encrypted_dir_ram")}
         </p>
       ) : null}
-      {config.mode === "ram_only" ? (
-        <p className="text-xs leading-relaxed text-on-error-container/90">
-          {t("warning.ram_only")}
-        </p>
-      ) : null}
-      {config.mode === "store_only" ? (
-        <p className="text-xs leading-relaxed text-on-error-container/90">
-          {t("warning.store_only")}
-        </p>
-      ) : null}
-      {config.mode === "upriv_only" ? (
-        <p className="text-xs leading-relaxed text-on-error-container/90">
-          {t("warning.upriv_only")}
-        </p>
-      ) : null}
       {config.mode === "upriv_plain" ? (
-        <p className="text-xs font-medium text-on-error-container">{t("warning.upriv_plain")}</p>
+        <p className="text-xs leading-relaxed text-on-surface-variant">
+          {t("warning.upriv_plain")}
+        </p>
       ) : null}
-      {config.mode === "plain" ? (
-        <p className="text-xs font-medium text-on-error-container">{t("warning.plain_mode")}</p>
-      ) : null}
-      {config.mode === "plain_only" ? (
-        <p className="text-xs font-medium text-on-error-container">{t("warning.plain_only")}</p>
+    </SettingsFormGrid>
+  );
+}
+
+interface VaultSettingsMountSectionProps extends SectionPatchProps<"mount"> {
+  vaultRootPath?: string | null;
+  /** Notifies parent when the mount path UI is invalid (blocks save / create). */
+  onPathIssueChange?: (issue: WorkspacePathIssue | null) => void;
+}
+
+export function VaultSettingsMountSection({
+  config,
+  onChange,
+  vaultRootPath = null,
+  onPathIssueChange,
+}: VaultSettingsMountSectionProps) {
+  const { t } = useTranslation();
+  const { showError } = useErrorToast();
+  const mountGroup = useId();
+  const pathId = useId();
+  const vaultRootService = useVaultRootService();
+  const customDraftRef = useRef("");
+  const storedIsDefault =
+    normalizeMountWorkspacePath(config.workspace_path) === WORKSPACE_PATH_DEFAULT;
+  const [uiMode, setUiMode] = useState<"default" | "custom">(
+    storedIsDefault ? "default" : "custom",
+  );
+
+  useEffect(() => {
+    if (!storedIsDefault) setUiMode("custom");
+  }, [storedIsDefault]);
+
+  const customPath = storedIsDefault ? "" : config.workspace_path;
+  const pathIssue: WorkspacePathIssue | null =
+    uiMode === "custom"
+      ? !customPath.trim()
+        ? "empty"
+        : validateMountWorkspacePath(customPath, vaultRootPath)
+      : null;
+
+  useEffect(() => {
+    onPathIssueChange?.(pathIssue);
+  }, [onPathIssueChange, pathIssue]);
+
+  return (
+    <SettingsFormGrid>
+      <p className="text-xs leading-relaxed text-on-surface-variant">
+        {t("modal.settings.section.mount_intro")}
+      </p>
+
+      <div role="radiogroup" aria-label={t("modal.settings.section.mount")} className="grid gap-2">
+        <PolicyRadioOption
+          groupName={mountGroup}
+          value="default"
+          checked={uiMode === "default"}
+          title={t("modal.settings.field.mount.use_default")}
+          description={t("modal.settings.field.mount.use_default_desc")}
+          badge="default"
+          onSelect={() => {
+            if (!storedIsDefault && config.workspace_path.trim()) {
+              customDraftRef.current = config.workspace_path.trim();
+            }
+            setUiMode("default");
+            onChange({ workspace_path: WORKSPACE_PATH_DEFAULT });
+          }}
+        />
+        <PolicyRadioOption
+          groupName={mountGroup}
+          value="custom"
+          checked={uiMode === "custom"}
+          title={t("modal.settings.field.mount.custom")}
+          description={t("modal.settings.field.mount.custom_desc")}
+          onSelect={() => {
+            setUiMode("custom");
+            if (storedIsDefault) {
+              onChange({ workspace_path: customDraftRef.current });
+            }
+          }}
+          footer={
+            uiMode === "custom" ? (
+              <div className="space-y-2">
+                <SettingsField
+                  label={t("modal.settings.field.mount.path")}
+                  hint={t("modal.settings.field.mount.path_help")}
+                  htmlFor={pathId}
+                >
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                    <input
+                      id={pathId}
+                      type="text"
+                      value={customPath}
+                      placeholder={t("modal.app_settings.field.workspace.path_placeholder")}
+                      onChange={(e) => {
+                        const next = e.target.value;
+                        customDraftRef.current = next.trim();
+                        onChange({ workspace_path: next });
+                      }}
+                      className={[
+                        settingsControlClass,
+                        "font-mono text-xs sm:min-w-0 sm:flex-1",
+                      ].join(" ")}
+                    />
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="md"
+                      className="w-full shrink-0 sm:w-auto"
+                      onClick={() => {
+                        void (async () => {
+                          try {
+                            const picked = await vaultRootService.pickFolder(
+                              customPath.trim() || null,
+                              t("modal.app_settings.action.pick_workspace_folder"),
+                            );
+                            if (!picked?.trim()) return;
+                            customDraftRef.current = picked.trim();
+                            onChange({ workspace_path: picked.trim() });
+                          } catch (error) {
+                            showError(error, "error.unexpected");
+                          }
+                        })();
+                      }}
+                    >
+                      {t("modal.app_settings.action.pick_workspace_folder")}
+                    </Button>
+                  </div>
+                  {pathIssue ? (
+                    <p className="text-xs text-on-error-container" role="alert">
+                      {t(workspacePathIssueI18nKey(pathIssue))}
+                    </p>
+                  ) : null}
+                </SettingsField>
+              </div>
+            ) : undefined
+          }
+        />
+      </div>
+    </SettingsFormGrid>
+  );
+}
+
+interface VaultSettingsKdfSectionProps {
+  /** Create-time picker — preset is written to `vault.header`, not `config.toml`. */
+  config: { unlock_preset: KdfUnlockPreset };
+  onChange: (patch: Partial<{ unlock_preset: KdfUnlockPreset }>) => void;
+  /** `.zip` of `contents/` import: header already has KDF params. */
+  choosesPreset?: boolean;
+}
+
+export function VaultSettingsKdfSection({
+  config,
+  onChange,
+  choosesPreset = true,
+}: VaultSettingsKdfSectionProps) {
+  const { t } = useTranslation();
+  const groupName = useId();
+
+  return (
+    <SettingsFormGrid>
+      <SettingsField
+        label={t("modal.settings.field.kdf.unlock_preset")}
+        hint={t("modal.settings.section.kdf_intro")}
+        disabled={!choosesPreset}
+      >
+        <div
+          role="radiogroup"
+          aria-label={t("modal.settings.field.kdf.unlock_preset")}
+          className="grid gap-2"
+        >
+          {KDF_UNLOCK_PRESETS.map((preset) => {
+            const meta = KDF_UNLOCK_OPTION_META[preset];
+            return (
+              <PolicyRadioOption
+                key={preset}
+                groupName={groupName}
+                value={preset}
+                checked={config.unlock_preset === preset}
+                disabled={!choosesPreset}
+                title={t(meta.titleKey)}
+                description={t(meta.descKey)}
+                badge={meta.badge}
+                tone={meta.tone}
+                onSelect={() => onChange({ unlock_preset: preset })}
+              />
+            );
+          })}
+        </div>
+      </SettingsField>
+      {!choosesPreset ? (
+        <p className="text-sm leading-relaxed text-on-surface-variant">
+          {t("modal.settings.field.kdf.import_package")}
+        </p>
       ) : null}
     </SettingsFormGrid>
   );
 }
 
 interface VaultSettingsCloseSectionProps {
-  storageMode: StorageMode;
-  close: VaultSettingsConfig["close"];
   autoClose: VaultSettingsConfig["auto_close"];
   secureWipe: boolean;
   requireUnmountOnSleep: boolean;
-  onCloseChange: (patch: Partial<VaultSettingsConfig["close"]>) => void;
   onAutoCloseChange: (patch: Partial<VaultSettingsConfig["auto_close"]>) => void;
   onSecureWipeChange: (secureWipe: boolean) => void;
   onRequireUnmountOnSleepChange: (requireUnmountOnSleep: boolean) => void;
 }
 
 export function VaultSettingsCloseSection({
-  storageMode,
-  close,
   autoClose,
   secureWipe,
   requireUnmountOnSleep,
-  onCloseChange,
   onAutoCloseChange,
   onSecureWipeChange,
   onRequireUnmountOnSleepChange,
 }: VaultSettingsCloseSectionProps) {
   const { t } = useTranslation();
-  const lockActionGroup = useId();
   const enabledId = useId();
   const idleId = useId();
   const warnId = useId();
@@ -302,166 +453,76 @@ export function VaultSettingsCloseSection({
 
   return (
     <SettingsFormGrid>
-      {storageModeSealOnly(storageMode) ? (
-        <p className="text-xs leading-relaxed text-on-surface-variant">
-          {t(
-            storageMode === "ram_only"
-              ? "modal.settings.field.close.ram_seal_only"
-              : storageMode === "plain_only"
-                ? "modal.settings.field.close.plain_only_seal_only"
-                : "modal.settings.field.close.plain_seal_only",
-          )}
-        </p>
-      ) : storageModeCloseOnly(storageMode) ? (
-        <p className="text-xs leading-relaxed text-on-surface-variant">
-          {t(
-            storageMode === "upriv_plain"
-              ? "modal.settings.field.close.upriv_plain_close_only"
-              : "modal.settings.field.close.upriv_only_close_only",
-          )}
-        </p>
-      ) : (
-        <SettingsField
-          label={t("modal.settings.field.close.default_action")}
-          hint={t(
-            storageMode === "store_only"
-              ? "modal.settings.field.close.default_action_help_store_only"
-              : "modal.settings.field.close.default_action_help",
-          )}
-        >
-          <div
-            role="radiogroup"
-            aria-label={t("modal.settings.field.close.default_action")}
-            className="grid gap-2"
-          >
-            <PolicyRadioOption
-              groupName={lockActionGroup}
-              value="close"
-              checked={close.default_action === "close"}
-              title={t(
-                storageMode === "store_only"
-                  ? "modal.settings.option.close.close_store_only"
-                  : "modal.settings.option.close.close",
-              )}
-              description={t(
-                storageMode === "store_only"
-                  ? "modal.settings.option.close.close_store_only_desc"
-                  : "modal.settings.option.close.close_desc",
-              )}
-              badge="recommended"
-              onSelect={() => onCloseChange({ default_action: "close" })}
-            />
-            <PolicyRadioOption
-              groupName={lockActionGroup}
-              value="seal"
-              checked={close.default_action === "seal"}
-              title={t("modal.settings.option.close.seal")}
-              description={t(
-                storageMode === "store_only"
-                  ? "modal.settings.option.close.seal_store_only_desc"
-                  : "modal.settings.option.close.seal_desc",
-              )}
-              onSelect={() => onCloseChange({ default_action: "seal" })}
-            />
-          </div>
-        </SettingsField>
-      )}
-
-      <label className="flex cursor-pointer select-none items-center gap-3">
-        <input
-          id={wipeId}
-          type="checkbox"
-          checked={secureWipe}
-          onChange={(e) => onSecureWipeChange(e.target.checked)}
-          className="h-4 w-4 rounded border-outline-variant/50 text-accent focus:ring-accent/50"
-        />
-        <span className="text-sm text-on-surface">
-          {t("modal.settings.field.close.secure_wipe")}
-        </span>
-      </label>
+      <SwitchRow
+        id={wipeId}
+        checked={secureWipe}
+        onChange={onSecureWipeChange}
+        label={t("modal.settings.field.close.secure_wipe")}
+      />
       {!secureWipe ? (
-        <p className="text-xs text-on-error-container/90">
+        <p className="text-xs leading-relaxed text-on-surface-variant">
           {t("modal.settings.field.close.secure_wipe_warn")}
         </p>
       ) : null}
 
-      <label className="flex cursor-pointer select-none items-center gap-3">
-        <input
-          id={enabledId}
-          type="checkbox"
-          checked={autoClose.enabled}
-          onChange={(e) => onAutoCloseChange({ enabled: e.target.checked })}
-          className="h-4 w-4 rounded border-outline-variant/50 text-accent focus:ring-accent/50"
-        />
-        <span className="text-sm text-on-surface">
-          {t("modal.settings.field.auto_close.enabled")}
-        </span>
-      </label>
-      {storageModeSealOnly(storageMode) && autoClose.enabled ? (
-        <p className="text-xs leading-relaxed text-on-surface-variant">
-          {t("modal.settings.field.auto_close.plain_seals")}
-        </p>
-      ) : null}
-      {autoClose.enabled ? (
-        <div className="grid gap-4 sm:grid-cols-2">
-          <SettingsField label={t("modal.settings.field.auto_close.idle_minutes")} htmlFor={idleId}>
-            <input
-              id={idleId}
-              type="number"
-              min={1}
-              max={1440}
-              value={autoClose.idle_minutes}
-              onChange={(e) =>
-                onAutoCloseChange({
-                  idle_minutes: Math.min(
-                    1440,
-                    Math.max(1, Number.parseInt(e.target.value, 10) || 1),
-                  ),
-                })
-              }
-              className={[settingsControlClass, "font-mono tabular-nums"].join(" ")}
-            />
-          </SettingsField>
-          <SettingsField
-            label={t("modal.settings.field.auto_close.warn_before_seconds")}
-            htmlFor={warnId}
-          >
-            <input
-              id={warnId}
-              type="number"
-              min={0}
-              max={300}
-              value={autoClose.warn_before_seconds}
-              onChange={(e) =>
-                onAutoCloseChange({
-                  warn_before_seconds: Math.min(
-                    300,
-                    Math.max(0, Number.parseInt(e.target.value, 10) || 0),
-                  ),
-                })
-              }
-              className={[settingsControlClass, "font-mono tabular-nums"].join(" ")}
-            />
-          </SettingsField>
-        </div>
-      ) : null}
-      <div className="space-y-1.5">
-        <label className="flex cursor-pointer select-none items-center gap-3">
+      <SwitchRow
+        id={enabledId}
+        checked={autoClose.enabled}
+        onChange={(enabled) => onAutoCloseChange({ enabled })}
+        label={t("modal.settings.field.auto_close.enabled")}
+      />
+      <div className="grid gap-4 sm:grid-cols-2">
+        <SettingsField
+          label={t("modal.settings.field.auto_close.idle_minutes")}
+          htmlFor={idleId}
+          disabled={!autoClose.enabled}
+        >
           <input
-            id={sleepId}
-            type="checkbox"
-            checked={requireUnmountOnSleep}
-            onChange={(e) => onRequireUnmountOnSleepChange(e.target.checked)}
-            className="h-4 w-4 rounded border-outline-variant/50 text-accent focus:ring-accent/50"
+            id={idleId}
+            type="number"
+            min={1}
+            max={1440}
+            value={autoClose.idle_minutes}
+            disabled={!autoClose.enabled}
+            onChange={(e) =>
+              onAutoCloseChange({
+                idle_minutes: Math.min(1440, Math.max(1, Number.parseInt(e.target.value, 10) || 1)),
+              })
+            }
+            className={[settingsControlClass, "font-mono tabular-nums"].join(" ")}
           />
-          <span className="text-sm text-on-surface">
-            {t("modal.settings.field.close.require_unmount_on_sleep")}
-          </span>
-        </label>
-        <p className="pl-7 text-xs leading-relaxed text-on-surface-variant">
-          {t("modal.settings.field.close.require_unmount_on_sleep_help")}
-        </p>
+        </SettingsField>
+        <SettingsField
+          label={t("modal.settings.field.auto_close.warn_before_seconds")}
+          htmlFor={warnId}
+          disabled={!autoClose.enabled}
+        >
+          <input
+            id={warnId}
+            type="number"
+            min={0}
+            max={300}
+            value={autoClose.warn_before_seconds}
+            disabled={!autoClose.enabled}
+            onChange={(e) =>
+              onAutoCloseChange({
+                warn_before_seconds: Math.min(
+                  300,
+                  Math.max(0, Number.parseInt(e.target.value, 10) || 0),
+                ),
+              })
+            }
+            className={[settingsControlClass, "font-mono tabular-nums"].join(" ")}
+          />
+        </SettingsField>
       </div>
+      <SwitchRow
+        id={sleepId}
+        checked={requireUnmountOnSleep}
+        onChange={onRequireUnmountOnSleepChange}
+        label={t("modal.settings.field.close.require_unmount_on_sleep")}
+        hint={t("modal.settings.field.close.require_unmount_on_sleep_help")}
+      />
     </SettingsFormGrid>
   );
 }
@@ -474,52 +535,48 @@ export function VaultSettingsBackupSection({ config, onChange }: SectionPatchPro
 
   return (
     <SettingsFormGrid>
-      <label className="flex cursor-pointer select-none items-center gap-3">
-        <input
-          id={enabledId}
-          type="checkbox"
-          checked={config.enabled}
-          onChange={(e) => onChange({ enabled: e.target.checked })}
-          className="h-4 w-4 rounded border-outline-variant/50 text-accent focus:ring-accent/50"
+      <SwitchRow
+        id={enabledId}
+        checked={config.enabled}
+        onChange={(enabled) => onChange({ enabled })}
+        label={t("modal.settings.field.backup.enabled")}
+      />
+      <SettingsField
+        label={t("modal.settings.field.backup.mode")}
+        htmlFor={modeId}
+        disabled={!config.enabled}
+      >
+        <Select
+          id={modeId}
+          value={config.mode}
+          disabled={!config.enabled}
+          aria-label={t("modal.settings.field.backup.mode")}
+          onChange={(mode) => onChange({ mode: mode as VaultSettingsConfig["backup"]["mode"] })}
+          options={[
+            { value: "keep_last", label: t("modal.settings.option.backup.keep_last") },
+            { value: "keep_all", label: t("modal.settings.option.backup.keep_all") },
+          ]}
         />
-        <span className="text-sm text-on-surface">{t("modal.settings.field.backup.enabled")}</span>
-      </label>
-      {config.enabled ? (
-        <>
-          <SettingsField label={t("modal.settings.field.backup.mode")} htmlFor={modeId}>
-            <select
-              id={modeId}
-              value={config.mode}
-              onChange={(e) =>
-                onChange({ mode: e.target.value as VaultSettingsConfig["backup"]["mode"] })
-              }
-              className={settingsControlClass}
-            >
-              <option value="keep_last">{t("modal.settings.option.backup.keep_last")}</option>
-              <option value="keep_all">{t("modal.settings.option.backup.keep_all")}</option>
-            </select>
-          </SettingsField>
-          {config.mode === "keep_last" ? (
-            <SettingsField label={t("modal.settings.field.backup.keep_last")} htmlFor={keepId}>
-              <input
-                id={keepId}
-                type="number"
-                min={1}
-                max={99}
-                value={config.keep_last}
-                onChange={(e) => {
-                  const keepLast = Math.min(
-                    99,
-                    Math.max(1, Number.parseInt(e.target.value, 10) || 1),
-                  );
-                  onChange({ keep_last: keepLast });
-                }}
-                className={[settingsControlClass, "font-mono tabular-nums"].join(" ")}
-              />
-            </SettingsField>
-          ) : null}
-        </>
-      ) : null}
+      </SettingsField>
+      <SettingsField
+        label={t("modal.settings.field.backup.keep_last")}
+        htmlFor={keepId}
+        disabled={!config.enabled || config.mode !== "keep_last"}
+      >
+        <input
+          id={keepId}
+          type="number"
+          min={1}
+          max={99}
+          value={config.keep_last}
+          disabled={!config.enabled || config.mode !== "keep_last"}
+          onChange={(e) => {
+            const keepLast = Math.min(99, Math.max(1, Number.parseInt(e.target.value, 10) || 1));
+            onChange({ keep_last: keepLast });
+          }}
+          className={[settingsControlClass, "font-mono tabular-nums"].join(" ")}
+        />
+      </SettingsField>
     </SettingsFormGrid>
   );
 }
@@ -531,14 +588,14 @@ interface VaultSettingsSecuritySectionProps extends SectionPatchProps<"security"
 }
 
 function securityOptionMeta(uiMode: SecurityUiMode): {
-  badge?: "recommended" | "less-secure" | "insecure" | "default";
+  badge?: PolicyRadioBadge;
   tone?: "default" | "less-secure" | "insecure";
 } {
   switch (uiMode) {
     case "session_ram":
       return { badge: "recommended" };
     case "prompt_open_close":
-      return {};
+      return { badge: "more-secure" };
     case "disk_close":
       return { badge: "less-secure", tone: "less-secure" };
     case "disk_open_close":
@@ -620,15 +677,35 @@ export function VaultSettingsSecuritySection({
           />
         </div>
       </SettingsField>
-      <VaultChangePasswordPanel
-        passwordHint={passwordHint}
-        onPasswordHintChange={onPasswordHintChange}
-      />
+      <SettingsField
+        label={t("modal.settings.password_hint")}
+        hint={t("modal.settings.field.security.password_hint_help")}
+      >
+        <input
+          type="text"
+          value={passwordHint}
+          maxLength={VAULT_PASSWORD_HINT_MAX_LENGTH}
+          onChange={(e) => onPasswordHintChange(e.target.value)}
+          className={settingsControlClass}
+          autoComplete="off"
+        />
+      </SettingsField>
     </SettingsFormGrid>
   );
 }
 
-export function VaultSettingsSevenZipSection({ config, onChange }: SectionPatchProps<"seven_zip">) {
+interface VaultSettingsSevenZipSectionProps extends SectionPatchProps<"seven_zip"> {
+  disabled?: boolean;
+  /** Nested under a parent radio (export format) — skip the standalone intro. */
+  embedded?: boolean;
+}
+
+export function VaultSettingsSevenZipSection({
+  config,
+  onChange,
+  disabled = false,
+  embedded = false,
+}: VaultSettingsSevenZipSectionProps) {
   const { t } = useTranslation();
   const compressionGroup = useId();
   const encryptId = useId();
@@ -640,13 +717,16 @@ export function VaultSettingsSevenZipSection({ config, onChange }: SectionPatchP
 
   return (
     <SettingsFormGrid>
-      <p className="text-xs leading-relaxed text-on-surface-variant">
-        {t("modal.settings.section.seven_zip_intro")}
-      </p>
+      {embedded ? null : (
+        <p className="text-xs leading-relaxed text-on-surface-variant">
+          {t("modal.settings.section.seven_zip_intro")}
+        </p>
+      )}
 
       <SettingsField
         label={t("modal.settings.field.seven_zip.compression")}
         hint={t("modal.settings.field.seven_zip.compression_help")}
+        disabled={disabled}
       >
         <div
           role="radiogroup"
@@ -659,38 +739,28 @@ export function VaultSettingsSevenZipSection({ config, onChange }: SectionPatchP
               groupName={compressionGroup}
               value={value}
               checked={preset === value}
+              disabled={disabled}
               title={t(`modal.settings.option.seven_zip.compression.${value}`)}
               description={t(`modal.settings.option.seven_zip.compression.${value}_desc`)}
-              badge={value === "none" ? "recommended" : undefined}
               onSelect={() => setPreset(value)}
             />
           ))}
         </div>
       </SettingsField>
 
-      <SettingsField
-        label={t("modal.settings.field.seven_zip.encrypt_file_names")}
+      <SwitchRow
+        id={encryptId}
+        checked={config.encrypt_file_names}
+        onChange={(encrypt_file_names) => onChange({ encrypt_file_names })}
+        disabled={disabled}
+        label={t("modal.settings.field.seven_zip.encrypt_file_names_label")}
         hint={t("modal.settings.field.seven_zip.encrypt_file_names_help")}
-        htmlFor={encryptId}
-      >
-        <label className="flex cursor-pointer select-none items-center gap-3">
-          <input
-            id={encryptId}
-            type="checkbox"
-            checked={config.encrypt_file_names}
-            onChange={(e) => onChange({ encrypt_file_names: e.target.checked })}
-            className="h-4 w-4 rounded border-outline-variant/50 text-accent focus:ring-accent/50"
-          />
-          <span className="text-sm text-on-surface">
-            {t("modal.settings.field.seven_zip.encrypt_file_names_label")}
-          </span>
-        </label>
-        {!config.encrypt_file_names ? (
-          <p className="text-xs text-on-error-container/90">
-            {t("modal.settings.field.seven_zip.encrypt_file_names_off_warn")}
-          </p>
-        ) : null}
-      </SettingsField>
+      />
+      {!disabled && !config.encrypt_file_names ? (
+        <p className="text-xs leading-relaxed text-on-surface-variant">
+          {t("modal.settings.field.seven_zip.encrypt_file_names_off_warn")}
+        </p>
+      ) : null}
     </SettingsFormGrid>
   );
 }
@@ -766,7 +836,7 @@ export function VaultSettingsPolicySection({ config, onChange }: SectionPatchPro
       </SettingsField>
 
       {config.allow_external_editors ? (
-        <p className="text-xs leading-relaxed text-on-error-container">
+        <p className="text-xs leading-relaxed text-on-surface-variant">
           {t("warning.external_editor")}
         </p>
       ) : null}
@@ -783,6 +853,7 @@ interface VaultSettingsGroupSectionProps {
   groups: readonly VaultGroup[];
   selectedGroupId: string;
   newGroupName: string;
+  includeHidden?: boolean;
   onSelectedGroupIdChange: (groupId: string) => void;
   onNewGroupNameChange: (name: string) => void;
 }
@@ -791,32 +862,32 @@ export function VaultSettingsGroupSection({
   groups,
   selectedGroupId,
   newGroupName,
+  includeHidden = false,
   onSelectedGroupIdChange,
   onNewGroupNameChange,
 }: VaultSettingsGroupSectionProps) {
   const { t } = useTranslation();
   const nameId = useId();
   const creating = Boolean(newGroupName.trim());
+  const pickerGroups = groupsForAssignmentPicker(groups, { includeHidden, selectedGroupId });
+  const groupOptions = [
+    groupAssignmentClearOption(creating ? "" : selectedGroupId, t),
+    ...pickerGroups.map((group) => ({ value: group.id, label: group.displayName })),
+  ];
 
   return (
     <SettingsFormGrid>
       <p className="text-xs leading-relaxed text-on-surface-variant">
         {t("modal.settings.field.group.new_name_help")}
       </p>
-      <SettingsField label={t("vault.group.assignment.section")}>
-        <select
-          className={settingsControlClass}
+      <SettingsField label={t("vault.group.assignment.section")} disabled={creating}>
+        <Select
           value={creating ? "" : selectedGroupId}
           disabled={creating}
-          onChange={(event) => onSelectedGroupIdChange(event.target.value)}
-        >
-          <option value="">{t("vault.group.assignment.ungrouped")}</option>
-          {groups.map((group) => (
-            <option key={group.id} value={group.id}>
-              {group.displayName}
-            </option>
-          ))}
-        </select>
+          aria-label={t("vault.group.assignment.section")}
+          options={groupOptions}
+          onChange={onSelectedGroupIdChange}
+        />
       </SettingsField>
       <SettingsField
         label={t("modal.settings.field.group.new_name")}
@@ -837,21 +908,36 @@ export function VaultSettingsGroupSection({
   );
 }
 
+const POLICY_RADIO_BADGE_CLASS: Record<PolicyRadioBadge, string> = {
+  recommended:
+    "rounded bg-[color-mix(in_srgb,var(--accent)_15%,transparent)] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-accent",
+  "more-secure":
+    "rounded bg-[color-mix(in_srgb,var(--vault-status-open)_20%,transparent)] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-vault-open",
+  default:
+    "rounded bg-[color-mix(in_srgb,var(--accent)_15%,transparent)] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-accent",
+  "less-secure":
+    "rounded bg-[color-mix(in_srgb,var(--on-error-container)_15%,transparent)] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-on-error-container",
+  insecure:
+    "rounded bg-[color-mix(in_srgb,var(--on-error-container)_30%,transparent)] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-on-error-container",
+};
+
 interface PolicyRadioOptionProps {
   groupName: string;
   value: string;
   checked: boolean;
   title: string;
-  description: string;
+  /** Optional leading icon (sits before the title). */
+  icon?: ReactNode;
+  description?: string;
   disabled?: boolean;
-  badge?: "recommended" | "less-secure" | "insecure" | "default" | "more-secure";
+  badge?: PolicyRadioBadge;
   tone?: "default" | "less-secure" | "insecure";
   /**
    * Yellow/amber border while this option still needs follow-up config
    * (e.g. vault-root incomplete policy). Overrides the accent border when checked.
    */
   attention?: boolean;
-  /** Shown below the description while this option is selected. */
+  /** Extra controls under the description — always visible; inactive until this option is selected. */
   footer?: ReactNode;
   onSelect: () => void;
 }
@@ -861,6 +947,7 @@ export function PolicyRadioOption({
   value,
   checked,
   title,
+  icon,
   description,
   disabled = false,
   badge,
@@ -873,7 +960,6 @@ export function PolicyRadioOption({
   const inputId = useId();
   const isLessSecure = tone === "less-secure";
   const isInsecure = tone === "insecure";
-  const isRiskTone = isLessSecure || isInsecure;
 
   const cardBgClass = isInsecure
     ? "bg-[color-mix(in_srgb,var(--error-container)_18%,var(--surface-container))]"
@@ -894,13 +980,13 @@ export function PolicyRadioOption({
     : "border border-outline-variant";
 
   const radioClass =
-    "mt-0.5 h-4 w-4 shrink-0 border border-outline-variant text-accent focus:ring-0 focus-visible:ring-0";
+    "mt-0.5 h-4 w-4 shrink-0 rounded-full border border-outline-variant accent-accent text-accent focus:ring-0 focus-visible:ring-0";
 
   return (
     <label
       htmlFor={inputId}
       className={[
-        "block select-none rounded-lg p-2.5 transition-colors sm:p-3",
+        "block select-none rounded-xl p-2.5 transition-colors sm:p-3",
         disabled ? "cursor-not-allowed opacity-60" : "cursor-pointer",
         cardBgClass,
         borderClass,
@@ -924,48 +1010,28 @@ export function PolicyRadioOption({
         />
         <span className="min-w-0 flex-1">
           <span className="flex flex-wrap items-center gap-2">
-            <span
-              className={[
-                "text-sm font-medium leading-snug",
-                isRiskTone ? "text-on-error-container" : "text-on-surface",
-              ].join(" ")}
-            >
-              {title}
+            {icon ? (
+              <span className="inline-flex shrink-0 text-on-surface-variant">{icon}</span>
+            ) : null}
+            <span className="text-sm font-medium leading-snug text-on-surface">{title}</span>
+            {badge ? (
+              <span className={POLICY_RADIO_BADGE_CLASS[badge]}>
+                {t(POLICY_RADIO_BADGE_I18N[badge])}
+              </span>
+            ) : null}
+          </span>
+          {description ? (
+            <span className="mt-1.5 block text-xs leading-relaxed text-on-surface-variant">
+              {description}
             </span>
-            {badge === "recommended" ? (
-              <span className="rounded-md bg-accent/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-accent">
-                {t("modal.settings.badge.recommended")}
-              </span>
-            ) : null}
-            {badge === "more-secure" ? (
-              <span className="rounded-md bg-[color-mix(in_srgb,var(--vault-status-open)_20%,transparent)] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-vault-open">
-                {t("modal.settings.badge.more_secure")}
-              </span>
-            ) : null}
-            {badge === "default" ? (
-              <span className="rounded-md bg-accent/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-accent">
-                {t("modal.settings.badge.default")}
-              </span>
-            ) : null}
-            {badge === "less-secure" ? (
-              <span className="rounded-md bg-on-error-container/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-on-error-container">
-                {t("modal.settings.badge.less_secure")}
-              </span>
-            ) : null}
-            {badge === "insecure" ? (
-              <span className="rounded-md bg-on-error-container/30 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-on-error-container">
-                {t("modal.settings.badge.insecure")}
-              </span>
-            ) : null}
-          </span>
-          <span className="mt-1.5 block text-xs leading-relaxed text-on-surface-variant">
-            {description}
-          </span>
+          ) : null}
         </span>
       </span>
-      {checked && footer ? (
+      {footer ? (
         <div
-          className="mt-3 pl-6 sm:pl-7"
+          className={["mt-3 pl-6 sm:pl-7", checked ? "" : "pointer-events-none opacity-60"]
+            .filter(Boolean)
+            .join(" ")}
           onMouseDown={(event) => event.stopPropagation()}
           onClick={(event) => event.stopPropagation()}
         >
@@ -982,6 +1048,7 @@ interface VaultSettingsDangerZoneSectionProps {
   deleteConfirm: string;
   confirmInputId: string;
   canConfirmDelete: boolean;
+  busy?: boolean;
   onRequestDelete: () => void;
   onCancelDelete: () => void;
   onConfirmDelete: () => void;
@@ -994,6 +1061,7 @@ export function VaultSettingsDangerZoneSection({
   deleteConfirm,
   confirmInputId,
   canConfirmDelete,
+  busy = false,
   onRequestDelete,
   onCancelDelete,
   onConfirmDelete,
@@ -1005,7 +1073,7 @@ export function VaultSettingsDangerZoneSection({
     return (
       <div className="space-y-4">
         <p className="text-sm text-on-surface-variant">{t("modal.settings.danger_zone_help")}</p>
-        <Button variant="danger" size="sm" onClick={onRequestDelete}>
+        <Button variant="danger" size="sm" onClick={onRequestDelete} disabled={busy}>
           {t("modal.settings.delete_vault")}
         </Button>
       </div>
@@ -1024,13 +1092,19 @@ export function VaultSettingsDangerZoneSection({
         autoFocus
         autoComplete="off"
         spellCheck={false}
+        disabled={busy}
         className={settingsControlClass}
       />
       <div className="flex flex-wrap justify-end gap-2">
-        <Button variant="ghost" size="sm" onClick={onCancelDelete}>
+        <Button variant="ghost" size="sm" onClick={onCancelDelete} disabled={busy}>
           {t("action.cancel")}
         </Button>
-        <Button variant="danger" size="sm" disabled={!canConfirmDelete} onClick={onConfirmDelete}>
+        <Button
+          variant="danger"
+          size="sm"
+          disabled={!canConfirmDelete || busy}
+          onClick={onConfirmDelete}
+        >
           {t("action.delete")}
         </Button>
       </div>

@@ -11,7 +11,6 @@ export const VAULT_ERROR_CODES = {
   NOT_FOUND: "vault_not_found",
   WRONG_PASSWORD: "wrong_password",
   VAULT_ALREADY_OPEN: "vault_already_open",
-  SYNC_MISMATCH: "sync_mismatch",
   /** Corrupt `.upriv/vault_groups.toml` (list soft-fails with `invalid: true`; mutations may Err). */
   GROUPS_INVALID: "vault_groups_invalid",
   GROUP_NOT_FOUND: "vault_group_not_found",

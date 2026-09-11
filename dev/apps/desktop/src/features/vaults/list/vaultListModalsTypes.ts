@@ -4,6 +4,7 @@ import type {
   VaultGroup,
   VaultLifecycleRequest,
   VaultListItem,
+  VaultSettingsAreaId,
 } from "@upriv/shared";
 
 /** Modal open/close state wired by `useVaultListModals` and consumed by the list screen. */
@@ -17,25 +18,35 @@ export interface VaultListModalsHandle {
   settingsVaultId: string | null;
   setSettingsVaultId: (id: string | null) => void;
   settingsVault: VaultListItem | null;
-  /** Vault whose ⋮ → Group assignment modal is open. */
-  groupAssignmentVaultId: string | null;
-  setGroupAssignmentVaultId: (id: string | null) => void;
-  groupAssignmentVault: VaultListItem | null;
+  settingsArea: VaultSettingsAreaId | null;
+  setSettingsArea: (area: VaultSettingsAreaId | null) => void;
   settingsGroupId: string | null;
   setSettingsGroupId: (id: string | null) => void;
   settingsGroup: VaultGroup | null;
   appSettingsOpen: boolean;
-  /** Returns false when Data folder has unsaved edits (caller should toast). */
+  appSettingsDirty: boolean;
+  /** Returns false when Data folder or Groups has unsaved edits (caller should toast). */
   setAppSettingsOpen: (open: boolean) => boolean;
   setAppSettingsDirty: (dirty: boolean) => void;
   dataFolderOpen: boolean;
-  /** Returns false when System Settings has unsaved edits (caller should toast). */
+  dataFolderDirty: boolean;
+  /** Returns false when System settings or Groups has unsaved edits. */
   setDataFolderOpen: (open: boolean) => boolean;
   setDataFolderDirty: (dirty: boolean) => void;
+  groupsOpen: boolean;
+  groupsDirty: boolean;
+  /** Returns false when System settings or Data folder has unsaved edits. */
+  setGroupsOpen: (open: boolean) => boolean;
+  setGroupsDirty: (dirty: boolean) => void;
   logsOpen: boolean;
   setLogsOpen: (open: boolean) => void;
   helpOpen: boolean;
   setHelpOpen: (open: boolean) => void;
+  systemInfoOpen: boolean;
+  setSystemInfoOpen: (open: boolean) => void;
+  vaultInfoVaultId: string | null;
+  setVaultInfoVaultId: (id: string | null) => void;
+  vaultInfoVault: VaultListItem | null;
   createVaultOpen: boolean;
   setCreateVaultOpen: (open: boolean) => void;
   createVaultInitialDraft: CreateVaultDraft | null;
@@ -52,6 +63,11 @@ export interface VaultListModalsHandle {
   recoveryVault: VaultListItem | null;
   recoverySubmitting: boolean;
   setRecoverySubmitting: (submitting: boolean) => void;
+  exportVaultId: string | null;
+  setExportVaultId: (id: string | null) => void;
+  exportVault: VaultListItem | null;
+  exportSubmitting: boolean;
+  setExportSubmitting: (submitting: boolean) => void;
 }
 
 /** Subset of modal handles that vault lifecycle actions need. */
@@ -63,4 +79,7 @@ export type VaultListLifecycleModals = Pick<
   | "setRecoveryVaultId"
   | "recoveryVaultId"
   | "setRecoverySubmitting"
+  | "setExportVaultId"
+  | "exportVault"
+  | "setExportSubmitting"
 >;

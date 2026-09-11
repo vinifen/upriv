@@ -1,18 +1,11 @@
 import { useMemo, useState } from "react";
-import {
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  useWindowDimensions,
-  View,
-} from "react-native";
+import { Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Svg, { Path } from "react-native-svg";
 import { buildGroupedVaultPickerItems, type VaultGroup, type VaultListItem } from "@upriv/shared";
 import { useTranslation } from "@/i18n";
 import { useTheme } from "@/theme";
+import { ThemedInput } from "@/components/settings";
 import { MODAL_MAX_HEIGHT_RATIO, radii, spacing } from "@/theme/tokens";
 
 interface GroupedVaultPickerProps {
@@ -32,7 +25,7 @@ interface GroupedVaultPickerProps {
 
 const LIST_MAX_HEIGHT = 320;
 const CREATE_GROUP_CHROME =
-  52 /* title */ + 72 /* footer */ + 220 /* name + help + search + count */;
+  52 /* title */ + 72 /* footer */ + 220; /* name + help + search + count */
 
 /** Searchable vault multi-select (nested ScrollView — not FlatList, for Modal body). */
 export function GroupedVaultPicker({
@@ -77,29 +70,22 @@ export function GroupedVaultPicker({
   );
 
   if (items.length === 0 && !query.trim()) {
-    return (
-      <Text style={typography.bodyMuted}>{t("vault.group.create.grouped_vaults_empty")}</Text>
-    );
+    return <Text style={typography.bodyMuted}>{t("vault.group.create.grouped_vaults_empty")}</Text>;
   }
 
   return (
     <View style={[styles.root, fill ? styles.rootFill : null]}>
-      <TextInput
+      <ThemedInput
         value={query}
         editable={!disabled}
         onChangeText={setQuery}
         placeholder={t("vault.group.picker.search")}
-        placeholderTextColor={colors.onSurfaceVariant}
         autoCorrect={false}
         autoCapitalize="none"
+        autoComplete="off"
         spellCheck={false}
-        style={[
-          styles.search,
-          {
-            backgroundColor: colors.surfaceContainerHighest,
-            color: colors.onSurface,
-          },
-        ]}
+        blurOnSubmit={false}
+        style={styles.search}
       />
 
       <Text style={typography.caption}>
@@ -115,6 +101,7 @@ export function GroupedVaultPicker({
         <ScrollView
           nestedScrollEnabled
           keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="none"
           style={{ maxHeight: listMaxHeight, flexGrow: 0, flexShrink: 1 }}
           showsVerticalScrollIndicator
           bounces={false}
@@ -191,7 +178,7 @@ const styles = StyleSheet.create({
     minHeight: 0,
   },
   search: {
-    borderRadius: radii.md,
+    borderRadius: radii.sm,
     paddingHorizontal: 10,
     paddingVertical: 8,
     fontSize: 14,
@@ -204,12 +191,12 @@ const styles = StyleSheet.create({
     gap: 10,
     paddingHorizontal: 8,
     paddingVertical: 6,
-    borderRadius: 6,
+    borderRadius: radii.sm,
   },
   checkbox: {
     width: 16,
     height: 16,
-    borderRadius: 4,
+    borderRadius: radii.xs,
     borderWidth: 1,
     alignItems: "center",
     justifyContent: "center",

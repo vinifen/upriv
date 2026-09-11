@@ -1,8 +1,10 @@
 import "react-native-gesture-handler";
+import { useState } from "react";
 import { StatusBar } from "expo-status-bar";
 import { NavigationContainer, DarkTheme, DefaultTheme } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { SafeAreaProvider } from "react-native-safe-area-context";
+import { AppErrorBoundary } from "@/components/system/AppErrorBoundary";
 import { AppProviders } from "@/providers/AppProviders";
 import { VaultListScreen } from "@/features/vaults/list/VaultListScreen";
 import { useTheme } from "@/theme";
@@ -39,11 +41,14 @@ function ThemedNavigation() {
 }
 
 export default function App() {
+  const [resetKey, setResetKey] = useState(0);
   return (
-    <SafeAreaProvider>
-      <AppProviders>
-        <ThemedNavigation />
-      </AppProviders>
-    </SafeAreaProvider>
+    <AppErrorBoundary key={resetKey} onReload={() => setResetKey((n) => n + 1)}>
+      <SafeAreaProvider>
+        <AppProviders>
+          <ThemedNavigation />
+        </AppProviders>
+      </SafeAreaProvider>
+    </AppErrorBoundary>
   );
 }

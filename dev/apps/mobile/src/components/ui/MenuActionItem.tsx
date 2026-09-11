@@ -95,15 +95,15 @@ export function MenuActionItem({
 }
 
 const styles = StyleSheet.create({
-  /** Desktop `menuItemClass`: px-4 py-2.5 gap-3. */
+  /** Desktop `menuItemClass`: px-4 py-3 gap-3. */
   row: {
     flexDirection: "row",
     alignItems: "center",
     gap: 12,
-    paddingVertical: 10,
+    paddingVertical: 12,
     paddingHorizontal: spacing.lg,
     borderRadius: 0,
-    minHeight: 40,
+    minHeight: 48,
   },
   iconSlot: {
     width: 20,

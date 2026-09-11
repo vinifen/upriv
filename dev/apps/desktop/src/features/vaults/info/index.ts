@@ -1,0 +1,1 @@
+export { VaultInfoModal } from "./VaultInfoModal";

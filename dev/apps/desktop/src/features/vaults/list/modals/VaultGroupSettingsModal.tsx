@@ -1,12 +1,14 @@
 import { useEffect, useId, useRef, useState } from "react";
 import {
+  PolicyRadioOption,
   SettingsField,
   SettingsFormGrid,
   settingsControlClass,
   VaultSettingsSection,
 } from "@/components/settings";
-import { Button, LoadingBudgetHint, Modal } from "@/components/ui";
-import { useLoadingBudget } from "@/hooks/useLoadingBudget";
+import { Icon } from "@/components/icons";
+import { Button, LoadingBudgetHint, Modal, SwitchRow } from "@/components/ui";
+import { useLoadingBudget } from "@upriv/shared/react";
 import { useTranslation } from "@/i18n";
 import { desktopErrorI18nKey } from "@/lib/errorMessages";
 import {
@@ -15,6 +17,8 @@ import {
   VAULT_DISPLAY_NAME_MAX_LENGTH,
   displayNameErrorI18nKey,
   validateDisplayName,
+  SORT_DIRECTION_ICON,
+  SORT_MODE_ICON,
   type GroupedVaultSortMode,
   type VaultGroup,
   type VaultListItem,
@@ -22,12 +26,15 @@ import {
 } from "@upriv/shared";
 import { GroupedVaultPicker } from "./GroupedVaultPicker";
 
+const GROUPED_SORT_DIRS: VaultListSortDirection[] = ["asc", "desc"];
+
 export interface VaultGroupSettingsSavePatch {
   displayName: string;
   order: number;
   groupedVaults: string[];
   groupedVaultSort: GroupedVaultSortMode;
   groupedVaultSortDirection: VaultListSortDirection;
+  hidden: boolean;
 }
 
 interface VaultGroupSettingsModalProps {
@@ -39,6 +46,7 @@ interface VaultGroupSettingsModalProps {
   onClose: () => void;
   onSave: (patch: VaultGroupSettingsSavePatch) => Promise<void> | void;
   onDelete: () => Promise<void> | void;
+  onBusyTimeout?: () => void;
 }
 
 export function VaultGroupSettingsModal({
@@ -50,6 +58,7 @@ export function VaultGroupSettingsModal({
   onClose,
   onSave,
   onDelete,
+  onBusyTimeout,
 }: VaultGroupSettingsModalProps) {
   const { t } = useTranslation();
   const nameId = useId();
@@ -64,6 +73,7 @@ export function VaultGroupSettingsModal({
   const [groupedVaultSort, setGroupedVaultSort] = useState<GroupedVaultSortMode>("order");
   const [groupedVaultSortDirection, setGroupedVaultSortDirection] =
     useState<VaultListSortDirection>("asc");
+  const [hidden, setHidden] = useState(false);
   const [busy, setBusy] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -78,6 +88,7 @@ export function VaultGroupSettingsModal({
       setGroupedVaults([]);
       setGroupedVaultSort("order");
       setGroupedVaultSortDirection("asc");
+      setHidden(false);
       setBusy(false);
       setDeleteOpen(false);
       setError(null);
@@ -90,14 +101,16 @@ export function VaultGroupSettingsModal({
     setGroupedVaults([...group.groupedVaults]);
     setGroupedVaultSort(group.groupedVaultSort);
     setGroupedVaultSortDirection(group.groupedVaultSortDirection);
+    setHidden(group.hidden);
   }, [open, group]);
 
   useEffect(() => {
     if (!budget.timedOut || !busy) return;
     busyGen.current += 1;
+    onBusyTimeout?.();
     setBusy(false);
     setError(t("error.operation_timed_out"));
-  }, [budget.timedOut, busy, t]);
+  }, [budget.timedOut, busy, onBusyTimeout, t]);
 
   const validation = validateDisplayName(displayName);
   const canSave = Boolean(group) && !validation && !busy;
@@ -126,6 +139,7 @@ export function VaultGroupSettingsModal({
         groupedVaults,
         groupedVaultSort,
         groupedVaultSortDirection,
+        hidden,
       });
       if (generation !== busyGen.current) return;
       onClose();
@@ -158,6 +172,8 @@ export function VaultGroupSettingsModal({
     <Modal
       open={open}
       title={t("vault.group.settings.title")}
+      titleIcon="layers"
+      contextTitle={group.displayName}
       onClose={close}
       dismissible={!busy}
       panelClassName="max-w-xl"
@@ -175,7 +191,11 @@ export function VaultGroupSettingsModal({
       <div className="space-y-2">
         <VaultSettingsSection title={t("vault.group.settings.section_general")} defaultOpen>
           <SettingsFormGrid>
-            <SettingsField label={t("vault.group.settings.rename")} htmlFor={nameId}>
+            <SettingsField
+              label={t("vault.group.settings.rename")}
+              htmlFor={nameId}
+              disabled={busy}
+            >
               <input
                 id={nameId}
                 className={settingsControlClass}
@@ -198,6 +218,7 @@ export function VaultGroupSettingsModal({
               label={t("vault.group.settings.order")}
               hint={t("vault.group.settings.order_help")}
               htmlFor={orderId}
+              disabled={busy}
             >
               <input
                 id={orderId}
@@ -213,40 +234,70 @@ export function VaultGroupSettingsModal({
               />
             </SettingsField>
             <SettingsField
-              label={t("vault.group.settings.grouped_vault_sort")}
+              label={t("vault.list.sort.by_label")}
               hint={t("vault.group.settings.grouped_vault_sort_help")}
-              htmlFor={sortModeId}
+              disabled={busy}
             >
-              <div className="grid gap-2 sm:grid-cols-2">
-                <select
-                  id={sortModeId}
-                  className={settingsControlClass}
-                  value={groupedVaultSort}
-                  disabled={busy}
-                  onChange={(event) =>
-                    setGroupedVaultSort(event.target.value as GroupedVaultSortMode)
-                  }
-                >
-                  {GROUPED_VAULT_SORT_MODES.map((mode) => (
-                    <option key={mode} value={mode}>
-                      {t(`vault.list.sort.mode.${mode}`)}
-                    </option>
-                  ))}
-                </select>
-                <select
-                  id={sortDirId}
-                  className={settingsControlClass}
-                  value={groupedVaultSortDirection}
-                  disabled={busy}
-                  onChange={(event) =>
-                    setGroupedVaultSortDirection(event.target.value as VaultListSortDirection)
-                  }
-                >
-                  <option value="asc">{t("vault.list.sort.direction.asc")}</option>
-                  <option value="desc">{t("vault.list.sort.direction.desc")}</option>
-                </select>
+              <div
+                role="radiogroup"
+                aria-label={t("vault.list.sort.by_label")}
+                className="grid gap-2"
+              >
+                {GROUPED_VAULT_SORT_MODES.map((mode) => (
+                  <PolicyRadioOption
+                    key={mode}
+                    groupName={sortModeId}
+                    value={mode}
+                    checked={groupedVaultSort === mode}
+                    disabled={busy}
+                    title={t(`vault.list.sort.mode.${mode}`)}
+                    icon={
+                      <Icon
+                        name={SORT_MODE_ICON[mode]}
+                        size={18}
+                        className="text-on-surface-variant"
+                      />
+                    }
+                    badge={mode === "order" ? "default" : undefined}
+                    onSelect={() => setGroupedVaultSort(mode)}
+                  />
+                ))}
               </div>
             </SettingsField>
+            <SettingsField label={t("vault.list.sort.direction_label")} disabled={busy}>
+              <div
+                role="radiogroup"
+                aria-label={t("vault.list.sort.direction_label")}
+                className="grid gap-2"
+              >
+                {GROUPED_SORT_DIRS.map((direction) => (
+                  <PolicyRadioOption
+                    key={direction}
+                    groupName={sortDirId}
+                    value={direction}
+                    checked={groupedVaultSortDirection === direction}
+                    disabled={busy}
+                    title={t(`vault.list.sort.direction.${direction}`)}
+                    icon={
+                      <Icon
+                        name={SORT_DIRECTION_ICON[direction]}
+                        size={18}
+                        className="text-on-surface-variant"
+                      />
+                    }
+                    badge={direction === "asc" ? "default" : undefined}
+                    onSelect={() => setGroupedVaultSortDirection(direction)}
+                  />
+                ))}
+              </div>
+            </SettingsField>
+            <SwitchRow
+              checked={hidden}
+              onChange={setHidden}
+              disabled={busy}
+              label={t("vault.group.settings.hidden")}
+              hint={t("vault.group.settings.hidden_help")}
+            />
           </SettingsFormGrid>
         </VaultSettingsSection>
 

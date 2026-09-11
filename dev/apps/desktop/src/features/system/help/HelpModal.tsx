@@ -103,6 +103,7 @@ export function HelpModal({ open, onClose }: HelpModalProps) {
     <Modal
       open={open}
       title={t("modal.help.title")}
+      titleIcon="help"
       onClose={onClose}
       panelClassName="max-w-3xl"
       footer={

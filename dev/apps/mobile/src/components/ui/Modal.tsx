@@ -14,15 +14,12 @@ import {
   type ViewStyle,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { Icon } from "@/components/icons";
+import { Icon, type IconName } from "@/components/icons";
 import { useTheme } from "@/theme";
-import { MODAL_MAX_HEIGHT_RATIO, radii, spacing } from "@/theme/tokens";
+import { MODAL_MAX_HEIGHT_RATIO, modalShadow, radii, spacing } from "@/theme/tokens";
 import { useTranslation } from "@/i18n";
-
-export type ModalVariant = "dialog" | "menu";
-
-/** Desktop DropdownMenu / DropdownPanel placement for `variant="menu"`. */
-export type ModalMenuPlacement = "popover" | "center";
+import { DropdownOverlayProvider } from "./DropdownOverlayHost";
+import { ScrimDismiss } from "./ScrimDismiss";
 
 /** Tailwind-equivalent widths used by desktop `panelClassName`. */
 export type ModalPanelClassName = "max-w-md" | "max-w-lg" | "max-w-2xl" | "max-w-3xl" | "max-w-5xl";
@@ -38,28 +35,18 @@ const PANEL_MAX_WIDTH: Record<ModalPanelClassName, number> = {
 export interface ModalProps {
   open: boolean;
   title: string;
+  /** Shown to the right of `title` (vault or group display name). */
+  contextTitle?: string;
+  titleIcon?: IconName;
   onClose: () => void;
   children: ReactNode;
   footer?: ReactNode;
   /** Extra controls beside the close button (e.g. options menu). */
   headerActions?: ReactNode;
-  /**
-   * Panel width utility — same tokens as desktop (`max-w-lg` default).
-   * Ignored when `variant="menu"`.
-   */
+  /** Panel width utility — same tokens as desktop (`max-w-lg` default). */
   panelClassName?: ModalPanelClassName;
   /** When false, hide close control and ignore back / backdrop (blocking flows). */
   dismissible?: boolean;
-  /**
-   * Mobile-only: `menu` = desktop DropdownMenu / DropdownPanel chrome
-   * (no title bar / X; compact popover).
-   */
-  variant?: ModalVariant;
-  /**
-   * `popover` — top-right under app chrome (⋮ / sort / view). Default for menus.
-   * `center` — compact centered panel (Select inside dialogs).
-   */
-  menuPlacement?: ModalMenuPlacement;
   /**
    * When false, children are not wrapped in ScrollView — use for FlatList
    * or a caller-owned scroll pane (avoids VirtualizedList-in-ScrollView).
@@ -67,49 +54,56 @@ export interface ModalProps {
   bodyScroll?: boolean;
   /** Extra panel styles (escape hatch; prefer `panelClassName`). */
   panelStyle?: StyleProp<ViewStyle>;
+  /** Smaller title cluster — File Manager / short dialogs. */
+  compact?: boolean;
+  /** Drawn over the dialog (toasts) — same window as `RnModal`. */
+  overlay?: ReactNode;
 }
 
 const OPEN_MS = 180;
 const CLOSE_MS = 140;
 
-/**
- * Centered dialog (`variant="dialog"`) mirrors desktop Modal.
- * `variant="menu"` mirrors desktop DropdownMenu / DropdownPanel (no chrome).
- */
+/** Centered dialog — desktop Modal parity. */
 export function Modal({
   open,
   title,
+  contextTitle,
+  titleIcon,
   onClose,
   children,
   footer,
   headerActions,
   panelClassName = "max-w-lg",
   dismissible = true,
-  variant = "dialog",
-  menuPlacement = "popover",
   bodyScroll = true,
   panelStyle,
+  compact = false,
+  overlay,
 }: ModalProps) {
   const insets = useSafeAreaInsets();
   const { height: windowHeight } = useWindowDimensions();
   const { colors, typography } = useTheme();
   const { t } = useTranslation();
   const [mounted, setMounted] = useState(open);
-  const [menuContentHeight, setMenuContentHeight] = useState(0);
   const [dialogBodyHeight, setDialogBodyHeight] = useState(0);
+  const [dialogHeaderHeight, setDialogHeaderHeight] = useState(0);
+  const [dialogFooterHeight, setDialogFooterHeight] = useState(0);
   const opacity = useRef(new Animated.Value(open ? 1 : 0)).current;
   const scale = useRef(new Animated.Value(open ? 1 : 0.96)).current;
-  const isMenu = variant === "menu";
-  const menuPopover = isMenu && menuPlacement === "popover";
-  const scrollFooterLayout = Boolean(footer) && !isMenu;
+  const hasFooter = Boolean(footer);
+
+  useEffect(() => {
+    if (!hasFooter) setDialogFooterHeight(0);
+  }, [hasFooter]);
 
   useEffect(() => {
     if (open) {
       setMounted(true);
-      setMenuContentHeight(0);
       setDialogBodyHeight(0);
+      setDialogHeaderHeight(0);
+      setDialogFooterHeight(0);
       opacity.setValue(0);
-      scale.setValue(menuPopover ? 0.98 : 0.96);
+      scale.setValue(0.96);
       Animated.parallel([
         Animated.timing(opacity, {
           toValue: 1,
@@ -134,7 +128,7 @@ export function Modal({
         useNativeDriver: true,
       }),
       Animated.timing(scale, {
-        toValue: menuPopover ? 0.98 : 0.96,
+        toValue: 0.96,
         duration: CLOSE_MS,
         useNativeDriver: true,
       }),
@@ -143,21 +137,10 @@ export function Modal({
     });
   }, [open]); // eslint-disable-line react-hooks/exhaustive-deps -- animate on open edge only
 
-  const framePadTop = menuPopover
-    ? Math.max(insets.top, spacing.sm) + 52
-    : Math.max(insets.top, spacing.md);
+  const framePadTop = Math.max(insets.top, spacing.md);
   const framePadBottom = Math.max(insets.bottom, spacing.md);
   const framePadH = spacing.md;
-  /**
-   * Space left under the popover origin. Bound the *ScrollView* (not only the panel):
-   * otherwise RN sizes the ScrollView to full content, parent `overflow:hidden` clips
-   * it, and long filter lists lose the last rows with no scroll.
-   */
-  const maxPanelHeight = useMemo(
-    () => Math.max(280, windowHeight - framePadTop - framePadBottom),
-    [windowHeight, framePadTop, framePadBottom],
-  );
-  const dialogMaxHeight = useMemo(
+  const panelMaxH = useMemo(
     () =>
       Math.max(
         240,
@@ -168,22 +151,12 @@ export function Modal({
 
   if (!mounted) return null;
 
-  const maxWidth = isMenu ? 280 : PANEL_MAX_WIDTH[panelClassName];
-  const scrimColor = isMenu ? "rgba(0,0,0,0.35)" : colors.modalScrim;
-  const panelMaxH = isMenu ? maxPanelHeight : dialogMaxHeight;
-  // Android ScrollView often expands to maxHeight; pin height to content when short
-  // so locale/theme menus (~3 rows) hug content and do not scroll empty space.
-  const menuNeedsScroll = menuContentHeight > maxPanelHeight + 1;
-  const menuScrollStyle = {
-    maxHeight: maxPanelHeight,
-    flexGrow: 0 as const,
-    ...(menuContentHeight > 0 ? { height: Math.min(menuContentHeight, maxPanelHeight) } : null),
-  };
-
-  // Menus: scroll only when content exceeds the cap. Dialogs: hug content up to
-  // panelMaxH. Measure body height so late-arriving children (e.g. settings
-  // loaded after open) expand the panel instead of staying at height 0 on Android.
-  const dialogBodyMax = Math.max(120, panelMaxH - 160);
+  const maxWidth = PANEL_MAX_WIDTH[panelClassName];
+  const dialogChrome =
+    spacing.lg +
+    (dialogHeaderHeight > 0 ? dialogHeaderHeight : 56) +
+    (hasFooter ? (dialogFooterHeight > 0 ? dialogFooterHeight : 72) : 0);
+  const dialogBodyMax = Math.max(80, panelMaxH - dialogChrome);
   const dialogNeedsScroll = dialogBodyHeight > dialogBodyMax + 1;
   const dialogScrollStyle = {
     maxHeight: dialogBodyMax,
@@ -194,32 +167,17 @@ export function Modal({
       : { minHeight: 48 }),
   };
 
-  const body = isMenu ? (
+  const body = bodyScroll ? (
     <ScrollView
-      style={menuScrollStyle}
-      contentContainerStyle={styles.bodyMenu}
-      onContentSizeChange={(_w, h) => setMenuContentHeight(h)}
-      scrollEnabled={menuNeedsScroll}
-      keyboardShouldPersistTaps="handled"
-      showsVerticalScrollIndicator={menuNeedsScroll}
-      bounces={false}
-      nestedScrollEnabled
-    >
-      {children}
-    </ScrollView>
-  ) : bodyScroll ? (
-    <ScrollView
-      style={[
-        styles.bodyScroll,
-        scrollFooterLayout ? dialogScrollStyle : styles.bodyScrollShrink,
-      ]}
+      style={[styles.bodyScroll, hasFooter ? dialogScrollStyle : styles.bodyScrollShrink]}
       contentContainerStyle={styles.body}
       onContentSizeChange={(_w, h) => {
-        if (scrollFooterLayout) setDialogBodyHeight(h);
+        if (hasFooter) setDialogBodyHeight(h);
       }}
-      scrollEnabled={!scrollFooterLayout || dialogNeedsScroll}
+      scrollEnabled={!hasFooter || dialogNeedsScroll}
       keyboardShouldPersistTaps="handled"
-      showsVerticalScrollIndicator={!scrollFooterLayout || dialogNeedsScroll}
+      keyboardDismissMode="none"
+      showsVerticalScrollIndicator={!hasFooter || dialogNeedsScroll}
       bounces={false}
       nestedScrollEnabled
     >
@@ -241,78 +199,122 @@ export function Modal({
         style={styles.root}
         behavior={Platform.OS === "ios" ? "padding" : undefined}
       >
-        <View
-          style={[
-            styles.frame,
-            menuPopover ? styles.framePopover : null,
-            {
-              paddingTop: framePadTop,
-              paddingBottom: framePadBottom,
-              paddingHorizontal: framePadH,
-            },
-          ]}
-          pointerEvents="box-none"
-        >
-          <Animated.View
-            pointerEvents="box-none"
-            style={[StyleSheet.absoluteFill, { backgroundColor: scrimColor, opacity }]}
-          >
-            <Pressable
-              style={StyleSheet.absoluteFill}
-              onPress={dismissible ? onClose : undefined}
-              accessibilityRole="button"
+        <DropdownOverlayProvider>
+          <View style={styles.root} collapsable={false}>
+            <Animated.View
+              pointerEvents="none"
+              style={[StyleSheet.absoluteFill, { backgroundColor: colors.modalScrim, opacity }]}
+            />
+            <ScrimDismiss
+              enabled={dismissible}
+              onDismiss={onClose}
               accessibilityLabel={t("action.dismiss")}
             />
-          </Animated.View>
-
-          <Animated.View
-            accessibilityRole="menu"
-            accessibilityLabel={title}
-            style={[
-              styles.panel,
-              isMenu ? styles.menuPanel : styles.dialogPanel,
-              {
-                backgroundColor: colors.surfaceContainerHigh,
-                borderColor: colors.outlineVariant,
-                maxWidth,
-                width: isMenu ? undefined : "100%",
-                minWidth: isMenu ? 192 : undefined,
-                maxHeight: panelMaxH,
-                opacity,
-                transform: [{ scale }],
-                paddingBottom: footer ? 0 : isMenu ? 0 : spacing.lg,
-                alignSelf: menuPopover ? "flex-end" : "center",
-              },
-              panelStyle,
-            ]}
-          >
-            {!isMenu ? (
-              <View style={styles.header}>
-                <Text style={[typography.headline, styles.title]} numberOfLines={2}>
-                  {title}
-                </Text>
-                <View style={styles.headerTrailing}>
-                  {headerActions}
-                  {dismissible ? (
-                    <Pressable
-                      onPress={onClose}
-                      hitSlop={12}
-                      accessibilityRole="button"
-                      accessibilityLabel={t("action.close")}
-                      style={styles.closeBtn}
+            <View
+              style={[
+                styles.frame,
+                {
+                  paddingTop: framePadTop,
+                  paddingBottom: framePadBottom,
+                  paddingHorizontal: framePadH,
+                  zIndex: 1,
+                },
+              ]}
+              pointerEvents="box-none"
+            >
+              <Animated.View
+                accessibilityLabel={contextTitle ? `${title}. ${contextTitle}` : title}
+                pointerEvents="auto"
+                style={[
+                  styles.panel,
+                  {
+                    backgroundColor: colors.surfaceContainerHigh,
+                    maxWidth,
+                    width: "100%",
+                    maxHeight: panelMaxH,
+                    opacity,
+                    transform: [{ scale }],
+                    paddingBottom: footer ? 0 : spacing.lg,
+                  },
+                  panelStyle,
+                ]}
+              >
+                <View
+                  style={[styles.header, compact ? styles.headerCompact : null]}
+                  onLayout={(event) => setDialogHeaderHeight(event.nativeEvent.layout.height)}
+                >
+                  <View style={styles.headerLeading}>
+                    {titleIcon ? (
+                      <Icon
+                        name={titleIcon}
+                        size={compact ? 15 : 16}
+                        color={colors.onSurfaceVariant}
+                      />
+                    ) : null}
+                    <Text
+                      style={[
+                        compact
+                          ? [styles.titleCompact, { color: colors.onSurface }]
+                          : typography.headline,
+                        contextTitle ? styles.titleWithContext : styles.title,
+                        styles.headerType,
+                      ]}
+                      numberOfLines={1}
                     >
-                      <Icon name="close" size={20} color={colors.onSurfaceVariant} />
-                    </Pressable>
-                  ) : null}
+                      {title}
+                    </Text>
+                    {contextTitle ? (
+                      <>
+                        <Text
+                          style={[styles.separator, { color: colors.onSurfaceVariant }]}
+                          accessible={false}
+                        >
+                          —
+                        </Text>
+                        <Text
+                          style={[styles.contextTitle, { color: colors.onSurfaceVariant }]}
+                          numberOfLines={1}
+                        >
+                          {contextTitle}
+                        </Text>
+                      </>
+                    ) : null}
+                  </View>
+                  <View style={styles.headerTrailing}>
+                    {headerActions}
+                    {dismissible ? (
+                      <Pressable
+                        onPress={onClose}
+                        hitSlop={12}
+                        accessibilityRole="button"
+                        accessibilityLabel={t("action.close")}
+                        style={styles.closeBtn}
+                      >
+                        <Icon name="close" size={16} color={colors.onSurface} />
+                      </Pressable>
+                    ) : null}
+                  </View>
                 </View>
+
+                {body}
+
+                {footer ? (
+                  <View
+                    style={styles.footer}
+                    onLayout={(event) => setDialogFooterHeight(event.nativeEvent.layout.height)}
+                  >
+                    {footer}
+                  </View>
+                ) : null}
+              </Animated.View>
+            </View>
+            {overlay ? (
+              <View pointerEvents="box-none" style={StyleSheet.absoluteFill}>
+                {overlay}
               </View>
             ) : null}
-
-            {body}
-
-            {footer ? <View style={styles.footer}>{footer}</View> : null}
-          </Animated.View>
-        </View>
+          </View>
+        </DropdownOverlayProvider>
       </KeyboardAvoidingView>
     </RnModal>
   );
@@ -325,44 +327,58 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
   },
-  /** Desktop dropdown: hang under header, flush end. */
-  framePopover: {
-    justifyContent: "flex-start",
-    alignItems: "flex-end",
-  },
   panel: {
     flexDirection: "column",
     borderRadius: radii.lg,
-  },
-  dialogPanel: {
-    overflow: "hidden",
-    borderWidth: 1,
+    overflow: "visible",
     paddingTop: spacing.lg,
     paddingHorizontal: spacing.lg,
-  },
-  /** Desktop `menuPanelClass`: no border, shadow, tight padding. */
-  menuPanel: {
-    overflow: "hidden",
-    borderWidth: 0,
-    paddingTop: spacing.xs,
-    paddingBottom: spacing.xs,
-    paddingHorizontal: 0,
-    elevation: 16,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 12 },
-    shadowOpacity: 0.35,
-    shadowRadius: 24,
+    ...modalShadow,
   },
   header: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    marginBottom: spacing.md,
-    gap: spacing.md,
+    paddingTop: 14,
+    paddingBottom: 22,
+    gap: spacing.sm,
     flexShrink: 0,
-    minHeight: 40,
+  },
+  headerCompact: {
+    paddingTop: 4,
+    paddingBottom: 14,
+  },
+  headerLeading: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+  },
+  headerType: {
+    includeFontPadding: false,
+    textAlignVertical: "center",
+    lineHeight: 18,
   },
   title: { flex: 1, minWidth: 0 },
+  titleCompact: { fontSize: 16, fontWeight: "600" },
+  titleWithContext: { flexShrink: 0 },
+  separator: {
+    flexShrink: 0,
+    fontSize: 14,
+    lineHeight: 18,
+    includeFontPadding: false,
+    textAlignVertical: "center",
+  },
+  contextTitle: {
+    flexShrink: 1,
+    minWidth: 0,
+    fontSize: 14,
+    lineHeight: 18,
+    fontWeight: "400",
+    includeFontPadding: false,
+    textAlignVertical: "center",
+  },
   headerTrailing: {
     flexDirection: "row",
     alignItems: "center",
@@ -370,8 +386,6 @@ const styles = StyleSheet.create({
     flexShrink: 0,
   },
   closeBtn: {
-    minWidth: 36,
-    minHeight: 36,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -380,7 +394,6 @@ const styles = StyleSheet.create({
     flexShrink: 1,
     minHeight: 0,
   },
-  /** With footer: allow body to shrink under panel maxHeight so only one scroll. */
   bodyScrollShrink: {
     flexShrink: 1,
     minHeight: 0,
@@ -390,18 +403,12 @@ const styles = StyleSheet.create({
     paddingBottom: spacing.sm,
     flexGrow: 0,
   },
-  /** Caller-owned scroll (`bodyScroll={false}`) — clip so nested lists own the scrollbar. */
   bodyOwned: {
     overflow: "hidden",
   },
-  bodyMenu: {
-    gap: 0,
-    flexGrow: 0,
-    paddingVertical: spacing.sm,
-  },
   footer: {
-    marginTop: spacing.md,
-    marginBottom: spacing.lg,
+    paddingTop: spacing.md,
+    paddingBottom: spacing.lg,
     gap: spacing.sm,
     flexShrink: 0,
   },

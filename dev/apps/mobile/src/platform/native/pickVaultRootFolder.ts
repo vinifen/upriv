@@ -1,16 +1,20 @@
 import { Platform } from "react-native";
 import { StorageAccessFramework } from "expo-file-system";
+import { RpcError } from "@upriv/shared";
 
 /**
  * Opens the Android system directory picker (SAF).
- * Returns a persistable `content://` tree URI, or `null` if cancelled / unavailable.
+ * Returns a persistable `content://` tree URI, or `null` if cancelled.
  *
  * Desktop equivalent: Electron `dialog.showOpenDialog({ openDirectory })`.
- * iOS has no directory SAF equivalent in Expo — returns `null`.
+ * iOS has no directory SAF equivalent in Expo.
  */
 export async function pickVaultRootFolder(initialUri?: string | null): Promise<string | null> {
   if (Platform.OS !== "android") {
-    return null;
+    throw new RpcError(
+      "unsupported_platform",
+      "Directory picker is only available on Android (SAF)",
+    );
   }
 
   const initial =

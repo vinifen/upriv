@@ -68,7 +68,7 @@ export function DropdownPanel({
     : trigger;
 
   return (
-    <div ref={triggerRef} className="relative">
+    <div ref={triggerRef} className="relative shrink-0">
       {enhancedTrigger}
       <AnchoredPopover
         open={open}

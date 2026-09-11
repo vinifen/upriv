@@ -14,18 +14,18 @@ use serde_json::{json, Value};
 use upriv_core::logging::{
     clear_logging_session, delete_session_log_files, ensure_logging_session,
     list_session_log_files, log_app_start, log_event, log_vault_root_entered,
-    log_vault_root_leaving_on, log_vault_root_ready, read_session_log_file, session_logger,
-    LogLevel, Logger,
+    log_vault_root_leaving_on, log_vault_root_ready, map_needs_setup_after_ready,
+    read_session_log_file, reset_vault_root_ready, session_logger, LogLevel, Logger,
 };
 use upriv_core::{
     app_home_dir, create_vault_group_with_sort, deactivate_vault_root_alias_everywhere,
     delete_vault_group, discover_bootstrap_root, inspect_vault_root_at, known_vault_ids,
-    load_app_settings, load_vault_groups, open_or_initialize_vault_root_with_policy_and_bootstrap,
-    parse_settings_toml_str, read_vault_root_alias, reorder_vault_group_grouped_vaults,
-    reorder_vault_groups, repair_vault_groups, resolve_vault_root,
-    save_app_settings_session_with_alias_sync, serialize_settings_toml_str, suggested_vault_root,
-    update_vault_group, write_vault_root_alias_for_root, AppSettings, IncompleteReplacePolicy,
-    ResolveVaultRoot, ResolveVaultRootOptions, VaultGroup, VaultRootBootstrapPrefs,
+    load_app_settings, load_vault_groups, open_or_initialize_vault_root, parse_settings_toml_str,
+    read_vault_root_alias, reorder_vault_group_grouped_vaults, reorder_vault_groups,
+    repair_vault_groups, resolve_vault_root, save_app_settings_session_with_alias_sync,
+    serialize_settings_toml_str, suggested_vault_root, update_vault_group,
+    write_vault_root_alias_for_root, AppSettings, IncompleteReplacePolicy, ResolveVaultRoot,
+    ResolveVaultRootOptions, UpdateVaultGroupParams, VaultGroup, VaultRootBootstrapPrefs,
     VaultRootDirStatus, VaultRootMode, VaultRootSource, VAULT_ROOT_ALIAS_FILE,
 };
 
@@ -182,60 +182,67 @@ fn vault_root_resolve(params: Value) -> RpcResponse {
         binary_dir,
     };
     match resolve_vault_root(options) {
-        Ok(ResolveVaultRoot::Found { root, source }) => {
-            let root_path = match path_utf8(root.root()) {
-                Ok(p) => p,
-                Err(response) => return response,
-            };
-            let source = source_str(source);
-            log_app_start("vault_root_resolve");
-            log_vault_root_ready(source, &root_path);
-            // Probe can run more than once on Gate launch — keep at DEBUG.
-            log_event(
-                LogLevel::Debug,
-                "vault_root_resolve",
-                &[("status", "found"), ("source", source)],
-            );
-            ok(json!({
-                "status": "found",
-                "rootPath": root_path,
-                "source": source,
-            }))
-        }
-        Ok(ResolveVaultRoot::NeedsSetup {
-            alias_path,
-            default_root_anchor,
-            distribution,
-        }) => {
-            let alias = match path_utf8(&alias_path) {
-                Ok(p) => p,
-                Err(response) => return response,
-            };
-            let default_root = match path_utf8(&default_root_anchor) {
-                Ok(p) => p,
-                Err(response) => return response,
-            };
-            // No vault-root yet — drop any stale writer so it cannot recreate `.upriv/logs`.
-            clear_logging_session();
-            ok(json!({
-                "status": "needs_setup",
-                "aliasPath": alias,
-                "defaultRootAnchor": default_root,
-                "distribution": upriv_core::distribution_str(distribution),
-            }))
-        }
-        Err(error) => {
-            match &error {
-                upriv_core::UprivError::VaultRootIncomplete { .. }
-                | upriv_core::UprivError::VaultRootNotFound(_)
-                | upriv_core::UprivError::VaultRootAliasInvalid(_) => {
-                    clear_logging_session();
-                }
-                _ => {}
+        Ok(resolved) => match map_needs_setup_after_ready(resolved) {
+            Ok(ResolveVaultRoot::Found { root, source }) => {
+                let root_path = match path_utf8(root.root()) {
+                    Ok(p) => p,
+                    Err(response) => return response,
+                };
+                let source = source_str(source);
+                log_app_start("vault_root_resolve");
+                log_vault_root_ready(source, &root_path);
+                // Probe can run more than once on Gate launch — keep at DEBUG.
+                log_event(
+                    LogLevel::Debug,
+                    "vault_root_resolve",
+                    &[("status", "found"), ("source", source)],
+                );
+                ok(json!({
+                    "status": "found",
+                    "rootPath": root_path,
+                    "source": source,
+                }))
             }
-            map_core_err(error)
-        }
+            Ok(ResolveVaultRoot::NeedsSetup {
+                alias_path,
+                default_root_anchor,
+                distribution,
+            }) => {
+                let alias = match path_utf8(&alias_path) {
+                    Ok(p) => p,
+                    Err(response) => return response,
+                };
+                let default_root = match path_utf8(&default_root_anchor) {
+                    Ok(p) => p,
+                    Err(response) => return response,
+                };
+                // No vault-root yet — drop any stale writer so it cannot recreate `.upriv/logs`.
+                clear_logging_session();
+                ok(json!({
+                    "status": "needs_setup",
+                    "aliasPath": alias,
+                    "defaultRootAnchor": default_root,
+                    "distribution": upriv_core::distribution_str(distribution),
+                }))
+            }
+            Err(error) => fail_loud_vault_root_resolve(error),
+        },
+        Err(error) => fail_loud_vault_root_resolve(error),
     }
+}
+
+fn fail_loud_vault_root_resolve(error: upriv_core::UprivError) -> RpcResponse {
+    match &error {
+        upriv_core::UprivError::VaultRootIncomplete { .. }
+        | upriv_core::UprivError::VaultRootNotFound(_)
+        | upriv_core::UprivError::VaultRootAliasInvalid(_) => {
+            clear_logging_session();
+            // Gate must be able to present first-run Setup after the marker vanished.
+            reset_vault_root_ready();
+        }
+        _ => {}
+    }
+    map_core_err(error)
 }
 
 fn parse_replace_policy_flag(
@@ -342,11 +349,7 @@ fn vault_root_setup_default_root(params: Value) -> RpcResponse {
     // exists here anymore (A2/A3). Retry after a later step fails will find
     // a Valid `.upriv/` with the correct locale already on disk.
     let prior_status = inspect_vault_root_at(&anchor);
-    let opened = match open_or_initialize_vault_root_with_policy_and_bootstrap(
-        &anchor,
-        replace,
-        prefs.as_ref(),
-    ) {
+    let opened = match open_or_initialize_vault_root(&anchor, replace, prefs.as_ref()) {
         Ok(opened) => opened,
         Err(error) => return map_core_err(error),
     };
@@ -482,11 +485,7 @@ fn vault_root_setup_path(params: Value) -> RpcResponse {
     // (A2/A3). If alias write fails, `.upriv/` at `path` already carries the
     // correct locale, so retrying setup is safe.
     let prior_status = inspect_vault_root_at(&path);
-    let opened = match open_or_initialize_vault_root_with_policy_and_bootstrap(
-        &path,
-        replace,
-        prefs.as_ref(),
-    ) {
+    let opened = match open_or_initialize_vault_root(&path, replace, prefs.as_ref()) {
         Ok(opened) => opened,
         Err(error) => return map_core_err(error),
     };
@@ -590,6 +589,15 @@ fn log_append_event(params: Value) -> RpcResponse {
             log_event(LogLevel::Info, "vault_hidden", &[]);
             ok(json!(null))
         }
+        "vault_group_hidden" => {
+            log_event(LogLevel::Info, "vault_group_hidden", &[]);
+            ok(json!(null))
+        }
+        "ui_crash" => {
+            // No payload — do not attach component stacks or user paths.
+            log_event(LogLevel::Error, "ui_crash", &[]);
+            ok(json!(null))
+        }
         _ => err("invalid_request", "event is not allowed".into()),
     }
 }
@@ -612,15 +620,8 @@ fn log_get(params: Value) -> RpcResponse {
     match read_session_log_file(filename) {
         Ok(Some(file)) => ok(json!({ "file": file })),
         Ok(None) => ok(json!({ "file": Value::Null })),
-        Err(upriv_core::UprivError::Io(error))
-            if error.kind() == std::io::ErrorKind::InvalidData =>
-        {
-            let message = error.to_string();
-            if message.starts_with("log_file_too_large") {
-                err("log_file_too_large", message)
-            } else {
-                err("invalid_request", message)
-            }
+        Err(error @ upriv_core::UprivError::LogFileTooLarge { .. }) => {
+            err("log_file_too_large", error.to_string())
         }
         Err(error) => map_core_err(error),
     }
@@ -718,6 +719,7 @@ fn group_to_json(group: &VaultGroup) -> Value {
         "displayName": group.display_name,
         "order": group.order,
         "collapsed": group.collapsed,
+        "hidden": group.hidden,
         "groupedVaults": group.grouped_vaults,
         "groupedVaultSort": group.grouped_vault_sort,
         "groupedVaultSortDirection": group.grouped_vault_sort_direction,
@@ -759,13 +761,12 @@ struct VaultGroupCreateParams {
     display_name: String,
     #[serde(default)]
     grouped_vaults: Option<Vec<String>>,
-    /// Legacy wire key — prefer `grouped_vaults` when both present.
-    #[serde(default)]
-    members: Option<Vec<String>>,
     #[serde(default)]
     grouped_vault_sort: Option<String>,
     #[serde(default)]
     grouped_vault_sort_direction: Option<String>,
+    #[serde(default)]
+    hidden: Option<bool>,
 }
 
 fn vault_group_create(params: Value) -> RpcResponse {
@@ -777,7 +778,7 @@ fn vault_group_create(params: Value) -> RpcResponse {
         Ok(root) => root,
         Err(response) => return response,
     };
-    let grouped_vaults = parsed.grouped_vaults.or(parsed.members).unwrap_or_default();
+    let grouped_vaults = parsed.grouped_vaults.unwrap_or_default();
     match create_vault_group_with_sort(
         &root,
         &parsed.id,
@@ -785,14 +786,25 @@ fn vault_group_create(params: Value) -> RpcResponse {
         &grouped_vaults,
         parsed.grouped_vault_sort.as_deref(),
         parsed.grouped_vault_sort_direction.as_deref(),
+        parsed.hidden.unwrap_or(false),
     ) {
-        Ok(group) => {
+        Ok(created) => {
             log_event(
                 LogLevel::Info,
                 "vault_group_created",
-                &[("id", group.id.as_str())],
+                &[("id", created.group.id.as_str())],
             );
-            ok(json!({ "group": group_to_json(&group) }))
+            if created.group.hidden {
+                log_event(LogLevel::Info, "vault_group_hidden", &[]);
+            }
+            if created.sibling_vaults_moved {
+                log_event(
+                    LogLevel::Info,
+                    "vault_group_vaults_moved",
+                    &[("id", created.group.id.as_str())],
+                );
+            }
+            ok(json!({ "group": group_to_json(&created.group) }))
         }
         Err(error) => map_core_err(error),
     }
@@ -810,17 +822,12 @@ struct VaultGroupUpdateParams {
     order: Option<i64>,
     #[serde(default)]
     grouped_vaults: Option<Vec<String>>,
-    /// Legacy wire key — prefer `grouped_vaults` when both present.
-    #[serde(default)]
-    members: Option<Vec<String>>,
     #[serde(default)]
     grouped_vault_sort: Option<String>,
     #[serde(default)]
-    member_sort: Option<String>,
-    #[serde(default)]
     grouped_vault_sort_direction: Option<String>,
     #[serde(default)]
-    member_sort_direction: Option<String>,
+    hidden: Option<bool>,
 }
 
 fn vault_group_update(params: Value) -> RpcResponse {
@@ -832,28 +839,45 @@ fn vault_group_update(params: Value) -> RpcResponse {
         Ok(root) => root,
         Err(response) => return response,
     };
-    let grouped_vaults = parsed.grouped_vaults.or(parsed.members);
-    let grouped_vault_sort = parsed.grouped_vault_sort.or(parsed.member_sort);
-    let grouped_vault_sort_direction = parsed
-        .grouped_vault_sort_direction
-        .or(parsed.member_sort_direction);
     match update_vault_group(
         &root,
         &parsed.id,
-        parsed.display_name.as_deref(),
-        parsed.collapsed,
-        parsed.order,
-        grouped_vaults.as_deref(),
-        grouped_vault_sort.as_deref(),
-        grouped_vault_sort_direction.as_deref(),
+        UpdateVaultGroupParams {
+            display_name: parsed.display_name.as_deref(),
+            collapsed: parsed.collapsed,
+            order: parsed.order,
+            grouped_vaults: parsed.grouped_vaults.as_deref(),
+            grouped_vault_sort: parsed.grouped_vault_sort.as_deref(),
+            grouped_vault_sort_direction: parsed.grouped_vault_sort_direction.as_deref(),
+            hidden: parsed.hidden,
+        },
     ) {
-        Ok(group) => {
-            log_event(
-                LogLevel::Info,
-                "vault_group_updated",
-                &[("id", group.id.as_str())],
-            );
-            ok(json!({ "group": group_to_json(&group) }))
+        Ok(updated) => {
+            if updated.grouped_vaults_changed {
+                log_event(
+                    LogLevel::Info,
+                    "vault_group_vaults_moved",
+                    &[("id", updated.group.id.as_str())],
+                );
+            }
+            if updated.hidden_became_true {
+                log_event(LogLevel::Info, "vault_group_hidden", &[]);
+            }
+            let metadata_patched = parsed.display_name.is_some()
+                || parsed.collapsed.is_some()
+                || parsed.order.is_some()
+                || parsed.grouped_vault_sort.is_some()
+                || parsed.grouped_vault_sort_direction.is_some()
+                || parsed.hidden.is_some();
+            let is_pure_membership_move = updated.grouped_vaults_changed && !metadata_patched;
+            if !is_pure_membership_move {
+                log_event(
+                    LogLevel::Info,
+                    "vault_group_updated",
+                    &[("id", updated.group.id.as_str())],
+                );
+            }
+            ok(json!({ "group": group_to_json(&updated.group) }))
         }
         Err(error) => map_core_err(error),
     }
@@ -910,14 +934,12 @@ fn vault_group_set_collapsed(params: Value) -> RpcResponse {
     match update_vault_group(
         &root,
         &parsed.id,
-        None,
-        Some(parsed.collapsed),
-        None,
-        None,
-        None,
-        None,
+        UpdateVaultGroupParams {
+            collapsed: Some(parsed.collapsed),
+            ..Default::default()
+        },
     ) {
-        Ok(group) => ok(json!({ "group": group_to_json(&group) })),
+        Ok(updated) => ok(json!({ "group": group_to_json(&updated.group) })),
         Err(error) => map_core_err(error),
     }
 }
@@ -966,9 +988,6 @@ struct VaultGroupReorderGroupedVaultsParams {
     id: String,
     #[serde(default)]
     grouped_vaults: Option<Vec<String>>,
-    /// Legacy wire key — prefer `grouped_vaults` when both present.
-    #[serde(default)]
-    members: Option<Vec<String>>,
 }
 
 fn vault_group_reorder_grouped_vaults(params: Value) -> RpcResponse {
@@ -980,7 +999,7 @@ fn vault_group_reorder_grouped_vaults(params: Value) -> RpcResponse {
         Ok(root) => root,
         Err(response) => return response,
     };
-    let grouped_vaults = parsed.grouped_vaults.or(parsed.members).unwrap_or_default();
+    let grouped_vaults = parsed.grouped_vaults.unwrap_or_default();
     match reorder_vault_group_grouped_vaults(&root, &parsed.id, &grouped_vaults) {
         Ok(group) => {
             log_event(
@@ -1166,21 +1185,9 @@ fn truncate_log_msg(message: &str) -> &str {
     if message.len() <= MAX {
         message
     } else {
-        // Byte index may land mid-codepoint — snap to a char boundary.
-        let end = floor_char_boundary(message, MAX);
+        let end = message.floor_char_boundary(MAX);
         &message[..end]
     }
-}
-
-/// Largest index `<= max` that is a char boundary (Rust 1.73+ has `str::floor_char_boundary`).
-fn floor_char_boundary(s: &str, mut max: usize) -> usize {
-    if max >= s.len() {
-        return s.len();
-    }
-    while max > 0 && !s.is_char_boundary(max) {
-        max -= 1;
-    }
-    max
 }
 
 fn current_root_path_for_log() -> Option<String> {
@@ -1284,6 +1291,19 @@ fn map_core_err_response(error: upriv_core::UprivError, emit_log: bool) -> RpcRe
             ("vault_groups_invalid", Some(path.as_path()))
         }
         upriv_core::UprivError::VaultGroupNotFound(_) => ("vault_group_not_found", None),
+        upriv_core::UprivError::WorkspacePathInvalid { path, .. } => {
+            ("workspace_path_invalid", Some(path.as_path()))
+        }
+        upriv_core::UprivError::WorkspacePathReserved(p) => {
+            ("workspace_path_reserved", Some(p.as_path()))
+        }
+        upriv_core::UprivError::WorkspaceUnset => ("workspace_unset", None),
+        upriv_core::UprivError::WorkspaceUnavailable(p) => {
+            ("workspace_unavailable", Some(p.as_path()))
+        }
+        upriv_core::UprivError::LogFileTooLarge { path, .. } => {
+            ("log_file_too_large", Some(path.as_path()))
+        }
         upriv_core::UprivError::Io(_) => ("io_error", None),
     };
     let message = error.to_string();
@@ -1330,6 +1350,7 @@ fn err_with_details(code: &str, message: String, details: Option<Value>) -> RpcR
 #[cfg(test)]
 mod contract_tests {
     use super::*;
+    use serde::Deserialize;
     use serde_json::json;
 
     const REGISTERED_METHODS: &[&str] = &[
@@ -1390,6 +1411,73 @@ mod contract_tests {
     }
 
     #[test]
+    fn registered_methods_match_shared_contract() {
+        #[derive(Deserialize)]
+        struct RpcMethodContract {
+            core: Vec<String>,
+            #[serde(rename = "desktopOnly")]
+            desktop_only: Vec<String>,
+        }
+        let contract: RpcMethodContract = serde_json::from_str(include_str!(
+            "../../../apps/shared/src/domain/core-rpc/tests/rpc-methods.json"
+        ))
+        .expect("rpc-methods.json");
+        let mut expected = contract.core;
+        expected.extend(contract.desktop_only);
+        expected.sort();
+        let mut registered: Vec<String> = REGISTERED_METHODS
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
+        registered.sort();
+        assert_eq!(registered, expected);
+    }
+
+    #[test]
+    fn app_settings_parse_and_serialize_toml_roundtrip() {
+        let toml = "\
+[package]
+version = 1
+label = \"Upriv\"
+[ui]
+locale = \"pt-BR\"
+[logging]
+enabled = true
+level = \"info\"
+";
+        let parsed = handle_rpc(RpcRequest {
+            method: "app_settings_parse_toml".into(),
+            params: json!({ "toml": toml }),
+        });
+        assert!(parsed.ok, "{parsed:?}");
+        let settings = parsed.result.as_ref().unwrap()["settings"].clone();
+        assert_eq!(settings["ui"]["locale"], "pt-BR");
+
+        let serialized = handle_rpc(RpcRequest {
+            method: "app_settings_serialize_toml".into(),
+            params: json!({ "settings": settings, "previous": toml }),
+        });
+        assert!(serialized.ok, "{serialized:?}");
+        let body = serialized.result.as_ref().unwrap()["toml"]
+            .as_str()
+            .expect("toml string");
+        assert!(body.contains("pt-BR"), "body={body}");
+        assert!(
+            !body.contains("vault_root_mode") && !body.contains("upriv_root_path"),
+            "mode/path must not be persisted, body={body}"
+        );
+    }
+
+    #[test]
+    fn app_settings_parse_toml_rejects_garbage() {
+        let response = handle_rpc(RpcRequest {
+            method: "app_settings_parse_toml".into(),
+            params: json!({ "toml": "not toml {{{" }),
+        });
+        assert!(!response.ok);
+    }
+
+    #[test]
     fn log_event_vault_hidden_has_no_name_fields() {
         let ok_response = handle_rpc(RpcRequest {
             method: "log_event".into(),
@@ -1405,6 +1493,18 @@ mod contract_tests {
             other.error.as_ref().map(|e| e.code.as_str()),
             Some("invalid_request")
         );
+
+        let crash = handle_rpc(RpcRequest {
+            method: "log_event".into(),
+            params: json!({ "event": "ui_crash" }),
+        });
+        assert!(crash.ok, "{crash:?}");
+
+        let group_hidden = handle_rpc(RpcRequest {
+            method: "log_event".into(),
+            params: json!({ "event": "vault_group_hidden" }),
+        });
+        assert!(group_hidden.ok, "{group_hidden:?}");
 
         let with_name = handle_rpc(RpcRequest {
             method: "log_event".into(),

@@ -23,8 +23,8 @@ export const CORE_RPC_COMMANDS = {
   LOG_GET: "log_get",
   LOG_DELETE: "log_delete",
   /**
-   * Append a allowlisted event to the session log. `vault_hidden` takes no
-   * fields — never send vault id or display name.
+   * Append a allowlisted event to the session log. `vault_hidden` and `ui_crash`
+   * take no fields — never send vault id, display name, or stack traces.
    */
   LOG_EVENT: "log_event",
   VAULT_ROOT_RESOLVE: "vault_root_resolve",

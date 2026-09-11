@@ -1,30 +1,33 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Button, Modal } from "@/components/ui";
+import { Button, LoadingBudgetHint, Modal } from "@/components/ui";
 import { useTranslation } from "@/i18n";
 import { VaultSettingsSection } from "@/components/settings";
 import { useErrorToast } from "@/hooks/useErrorToast";
+import { useLoadingBudget, useVaultRootIntegrityClose } from "@upriv/shared/react";
+import { useVaultRootService } from "@/platform/services";
 import { useAppSettingsContext } from "./AppSettingsContext";
 import {
   APP_SETTINGS_ERROR_I18N_KEYS,
   APP_SETTINGS_SECTIONS,
-  VAULT_DISPLAY_NAME_MAX_LENGTH,
+  LOADING_BUDGET_MS,
   appSettingsEqual,
-  displayNameErrorI18nKey,
   isRpcError,
-  isVaultRootErrorCode,
+  shouldBumpVaultRootEpoch,
   normalizeAppSettings,
-  validateDisplayName,
+  validateWorkspaceGlobalPath,
+  vaultRootGoneRpcError,
+  vaultRootPathForWorkspaceValidation,
   type AppSettingsConfig,
   type AppSettingsSectionId,
-  type VaultGroup,
-  type VaultListItem,
 } from "@upriv/shared";
 import {
-  AppSettingsAppearanceSection,
-  AppSettingsDownloadVaultsSection,
-  AppSettingsGroupsSection,
+  AppSettingsGeneralSection,
+  AppSettingsGroupsPrefsSection,
   AppSettingsHiddenVaultsSection,
+  AppSettingsLanguageSection,
   AppSettingsLoggingSection,
+  AppSettingsVaultListSection,
+  AppSettingsWorkspaceSection,
 } from "./appSettingsForm";
 
 const SAVED_INDICATOR_MS = 1500;
@@ -32,53 +35,56 @@ const SAVED_INDICATOR_MS = 1500;
 interface AppSettingsModalProps {
   open: boolean;
   onClose: () => void;
-  vaults: VaultListItem[];
-  groups?: VaultGroup[];
-  includeHidden?: boolean;
-  onCreateGroup?: (displayName: string, groupedVaultIds: string[]) => Promise<void> | void;
   /** Report unsaved draft so the list shell can refuse opening Data folder. */
   onDirtyChange?: (dirty: boolean) => void;
+  /** Disable Clear on workspace path while any vault session is open. */
+  hasOpenVault?: boolean;
 }
 
 /**
- * System settings for the **active** vault-root (appearance, logging, …).
- * Data-folder switch lives in `VaultRootDataFolderModal` (⋯ menu) — separate context.
+ * System settings for the **active** vault-root (language, general UI, vault list, groups, logging, hidden vaults).
+ * Creating groups lives in `VaultGroupsModal` (⋯ menu). Data folder is `VaultRootDataFolderModal`.
  */
 export function AppSettingsModal({
   open,
   onClose,
-  vaults,
-  groups = [],
-  includeHidden = false,
-  onCreateGroup,
   onDirtyChange,
+  hasOpenVault = false,
 }: AppSettingsModalProps) {
   const { t } = useTranslation();
   const { showError } = useErrorToast();
+  const vaultRootService = useVaultRootService();
   const {
     settings,
     replaceSettings,
     showHiddenVaultsSession,
     setShowHiddenVaultsSession,
     settingsOnDisk,
+    reportVaultRootIntegrityFailure,
   } = useAppSettingsContext();
 
   const [draft, setDraft] = useState<AppSettingsConfig | null>(null);
+  const [draftShowHiddenVaultsSession, setDraftShowHiddenVaultsSession] = useState(false);
   const [saveConfirmOpen, setSaveConfirmOpen] = useState(false);
   const [discardConfirmOpen, setDiscardConfirmOpen] = useState(false);
   const [savedVisible, setSavedVisible] = useState(false);
   const [saveBusy, setSaveBusy] = useState(false);
-  const [newGroupName, setNewGroupName] = useState("");
-  const [groupedVaultIds, setGroupedVaultIds] = useState<string[]>([]);
-  const [groupNameError, setGroupNameError] = useState<string | null>(null);
+  const [resolvedRootPath, setResolvedRootPath] = useState<string | null>(null);
+  const [resolveFailure, setResolveFailure] = useState<unknown>(null);
   const savedHideRef = useRef<ReturnType<typeof setTimeout>>();
   const openedSessionRef = useRef(false);
+  /** True after the user patches workspace this modal session — skip live Context sync. */
+  const workspaceTouchedRef = useRef(false);
+  const commitSaveLock = useRef(false);
+  const saveBusyGen = useRef(0);
+  const saveBudget = useLoadingBudget(saveBusy, LOADING_BUDGET_MS.settingsSave);
 
-  const pendingGroupName = newGroupName.trim();
-  const isDirty = useMemo(() => {
-    const settingsDirty = Boolean(draft && !appSettingsEqual(draft, settings));
-    return settingsDirty || pendingGroupName.length > 0;
-  }, [draft, pendingGroupName, settings]);
+  const isDirty = useMemo(
+    () =>
+      Boolean(draft && !appSettingsEqual(draft, settings)) ||
+      draftShowHiddenVaultsSession !== showHiddenVaultsSession,
+    [draft, draftShowHiddenVaultsSession, settings, showHiddenVaultsSession],
+  );
 
   useEffect(() => {
     onDirtyChange?.(open && isDirty);
@@ -89,11 +95,10 @@ export function AppSettingsModal({
     if (!open) return;
     if (openedSessionRef.current) return;
     openedSessionRef.current = true;
+    workspaceTouchedRef.current = false;
     setDraft(settings);
-    setNewGroupName("");
-    setGroupedVaultIds([]);
-    setGroupNameError(null);
-  }, [open, settings]);
+    setDraftShowHiddenVaultsSession(showHiddenVaultsSession);
+  }, [open, settings, showHiddenVaultsSession]);
 
   // Keep draft.app aligned with live Context so Save never sends a stale vault-root.
   useEffect(() => {
@@ -102,7 +107,8 @@ export function AppSettingsModal({
       if (!current) return current;
       if (
         current.app.vault_root_mode === settings.app.vault_root_mode &&
-        current.app.upriv_root_path === settings.app.upriv_root_path
+        current.app.upriv_root_path === settings.app.upriv_root_path &&
+        current.app.last_opened_vault === settings.app.last_opened_vault
       ) {
         return current;
       }
@@ -110,18 +116,63 @@ export function AppSettingsModal({
     });
   }, [open, settings.app, settings.app.upriv_root_path, settings.app.vault_root_mode]);
 
+  // Keep draft.workspace aligned unless the user edited Workspace this session.
+  useEffect(() => {
+    if (!open) return;
+    if (workspaceTouchedRef.current) return;
+    setDraft((current) => {
+      if (!current) return current;
+      if (current.workspace.path === settings.workspace.path) return current;
+      return { ...current, workspace: { ...settings.workspace } };
+    });
+  }, [open, settings.workspace, settings.workspace.path]);
+
+  useEffect(() => {
+    if (!open) {
+      setResolvedRootPath(null);
+      setResolveFailure(null);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const resolved = await vaultRootService.resolve({
+          vaultRootMode: settings.app.vault_root_mode,
+        });
+        if (cancelled) return;
+        setResolveFailure(null);
+        if (resolved.status === "found") {
+          setResolvedRootPath(resolved.rootPath);
+        } else {
+          setResolvedRootPath(null);
+          setResolveFailure(vaultRootGoneRpcError());
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setResolvedRootPath(null);
+          setResolveFailure(error);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, settings.app.vault_root_mode, vaultRootService]);
+
   useEffect(() => {
     if (!open) {
       openedSessionRef.current = false;
+      workspaceTouchedRef.current = false;
+      saveBusyGen.current += 1;
+      commitSaveLock.current = false;
       setDraft(null);
-      setNewGroupName("");
-      setGroupedVaultIds([]);
-      setGroupNameError(null);
+      setDraftShowHiddenVaultsSession(showHiddenVaultsSession);
       setSaveConfirmOpen(false);
       setDiscardConfirmOpen(false);
       setSavedVisible(false);
+      setSaveBusy(false);
     }
-  }, [open]);
+  }, [open, showHiddenVaultsSession]);
 
   useEffect(() => {
     if (!isDirty) {
@@ -133,6 +184,14 @@ export function AppSettingsModal({
     return () => clearTimeout(savedHideRef.current);
   }, []);
 
+  useEffect(() => {
+    if (!saveBudget.timedOut || !saveBusy) return;
+    saveBusyGen.current += 1;
+    commitSaveLock.current = false;
+    setSaveBusy(false);
+    showError(new Error("operation timed out"), "error.operation_timed_out");
+  }, [saveBudget.timedOut, saveBusy, showError]);
+
   const dismissFooterConfirm = useCallback(() => {
     setDiscardConfirmOpen(false);
     setSaveConfirmOpen(false);
@@ -140,6 +199,9 @@ export function AppSettingsModal({
 
   const patchDraft = useCallback(
     <S extends keyof AppSettingsConfig>(section: S, patch: Partial<AppSettingsConfig[S]>) => {
+      if (section === "workspace") {
+        workspaceTouchedRef.current = true;
+      }
       setDiscardConfirmOpen(false);
       setSaveConfirmOpen(false);
       setDraft((current) =>
@@ -154,13 +216,21 @@ export function AppSettingsModal({
     [],
   );
 
+  const setDraftHiddenSession = useCallback((value: boolean) => {
+    setDiscardConfirmOpen(false);
+    setSaveConfirmOpen(false);
+    setDraftShowHiddenVaultsSession(value);
+  }, []);
+
   const handleClose = () => {
     setSaveConfirmOpen(false);
     setDiscardConfirmOpen(false);
     onClose();
   };
 
-  // Mid-session root loss: Gate reopens Setup/Repair — do not leave settings on top.
+  useVaultRootIntegrityClose(open, resolveFailure, reportVaultRootIntegrityFailure, handleClose);
+
+  // Mid-session root loss: Gate reopens Setup — do not leave settings on top.
   // Only close on true→false (had on-disk this session). Bootstrap / failed first load
   // keep `settingsOnDisk === false` and must not auto-dismiss an open modal.
   const hadOnDiskRef = useRef(false);
@@ -170,6 +240,8 @@ export function AppSettingsModal({
 
   useEffect(() => {
     if (!open || settingsOnDisk || !hadOnDiskRef.current) return;
+    saveBusyGen.current += 1;
+    commitSaveLock.current = false;
     setDraft(null);
     setSaveBusy(false);
     setSaveConfirmOpen(false);
@@ -191,63 +263,73 @@ export function AppSettingsModal({
 
   const handleDiscardAndClose = () => {
     setDraft(settings);
-    setNewGroupName("");
-    setGroupedVaultIds([]);
-    setGroupNameError(null);
+    setDraftShowHiddenVaultsSession(showHiddenVaultsSession);
     handleClose();
   };
 
+  const formConfig = draft ?? settings;
+  const workspaceRootForValidation = vaultRootPathForWorkspaceValidation(
+    formConfig.app.vault_root_mode,
+    formConfig.app.upriv_root_path,
+    resolvedRootPath,
+  );
+  const workspacePathInvalid = Boolean(
+    validateWorkspaceGlobalPath(formConfig.workspace.path, workspaceRootForValidation),
+  );
+  /** Open vault + emptied draft must not wipe a configured Context path. */
+  const workspaceClearWhileOpen =
+    hasOpenVault && !formConfig.workspace.path.trim() && Boolean(settings.workspace.path.trim());
+
   const handleSaveClick = () => {
-    if (!isDirty || !draft || saveBusy) return;
-    if (pendingGroupName) {
-      const validation = validateDisplayName(pendingGroupName);
-      if (validation) {
-        setGroupNameError(
-          t(
-            displayNameErrorI18nKey(validation),
-            validation === "too_long"
-              ? { max: String(VAULT_DISPLAY_NAME_MAX_LENGTH) }
-              : undefined,
-          ),
-        );
-        return;
-      }
+    if (!isDirty || saveBusy) return;
+    if (workspaceClearWhileOpen) return;
+    const workspacePath = workspaceTouchedRef.current
+      ? (draft ?? settings).workspace.path
+      : settings.workspace.path;
+    if (validateWorkspaceGlobalPath(workspacePath, workspaceRootForValidation)) {
+      return;
     }
-    setGroupNameError(null);
     dismissFooterConfirm();
     setSaveConfirmOpen(true);
   };
 
-  const commitSaveLock = useRef(false);
-
   const commitSave = () => {
-    if (!draft || !isDirty || saveBusy) return;
+    if (!isDirty || saveBusy) return;
+    if (workspaceClearWhileOpen) return;
+    const workspaceForSave = workspaceTouchedRef.current
+      ? (draft ?? settings).workspace
+      : { ...settings.workspace };
+    if (validateWorkspaceGlobalPath(workspaceForSave.path, workspaceRootForValidation)) {
+      return;
+    }
     if (commitSaveLock.current) return;
+    const generation = ++saveBusyGen.current;
     commitSaveLock.current = true;
     // Never persist draft vault-root wire fields — Data folder owns those mutations.
+    // If Workspace was not edited this session, prefer live Context so Save cannot wipe a newer path.
     const normalized = normalizeAppSettings({
-      ...draft,
+      ...(draft ?? settings),
       app: { ...settings.app },
+      workspace: workspaceForSave,
     });
     setSaveBusy(true);
     void (async () => {
       try {
-        if (draft && !appSettingsEqual(draft, settings)) {
+        if (!appSettingsEqual(normalized, settings)) {
           await replaceSettings(normalized);
+          if (generation !== saveBusyGen.current) return;
           setDraft(normalized);
         }
-        if (pendingGroupName) {
-          await onCreateGroup?.(pendingGroupName, groupedVaultIds);
-          setNewGroupName("");
-          setGroupedVaultIds([]);
-        }
+        if (generation !== saveBusyGen.current) return;
+        setShowHiddenVaultsSession(draftShowHiddenVaultsSession);
         setSavedVisible(true);
         clearTimeout(savedHideRef.current);
         savedHideRef.current = setTimeout(() => setSavedVisible(false), SAVED_INDICATOR_MS);
         setSaveConfirmOpen(false);
       } catch (error) {
+        if (generation !== saveBusyGen.current) return;
         setSaveConfirmOpen(false);
-        if (isRpcError(error) && isVaultRootErrorCode(error.code)) {
+        if (shouldBumpVaultRootEpoch(error)) {
           // Context already toasted + bumped Gate epoch; dismiss so Setup/Repair is usable.
           setDraft(settings);
           handleClose();
@@ -259,28 +341,41 @@ export function AppSettingsModal({
             : APP_SETTINGS_ERROR_I18N_KEYS.SAVE_FAILED;
         showError(error, fallback);
       } finally {
-        commitSaveLock.current = false;
-        setSaveBusy(false);
+        if (generation === saveBusyGen.current) {
+          commitSaveLock.current = false;
+          setSaveBusy(false);
+        }
       }
     })();
   };
 
-  const formConfig = draft ?? settings;
-  const saveBlocked = !isDirty || saveBusy || saveConfirmOpen;
+  const saveBlocked =
+    !isDirty || saveBusy || saveConfirmOpen || workspacePathInvalid || workspaceClearWhileOpen;
 
   if (!open || !formConfig) return null;
 
+  const footerStatus = discardConfirmOpen ? (
+    <p className="text-on-surface-variant">{t("modal.settings.discard_confirm")}</p>
+  ) : saveConfirmOpen ? (
+    <p className="text-on-surface-variant">{t("modal.app_settings.save_confirm")}</p>
+  ) : savedVisible ? (
+    <p className="text-vault-open">{t("modal.settings.saved")}</p>
+  ) : null;
+  const showFooterStatus = Boolean(footerStatus) || saveBudget.visible;
+
   const footer = (
-    <div className="flex flex-col gap-3">
-      <div className="text-sm" aria-live="polite">
-        {discardConfirmOpen ? (
-          <p className="text-on-surface-variant">{t("modal.settings.discard_confirm")}</p>
-        ) : saveConfirmOpen ? (
-          <p className="text-on-surface-variant">{t("modal.app_settings.save_confirm")}</p>
-        ) : savedVisible ? (
-          <p className="text-vault-open">{t("modal.settings.saved")}</p>
-        ) : null}
-      </div>
+    <div className={showFooterStatus ? "flex flex-col gap-3" : undefined}>
+      {showFooterStatus ? (
+        <div className="text-sm" aria-live="polite">
+          {footerStatus}
+          {saveBudget.visible ? (
+            <LoadingBudgetHint
+              budgetMs={saveBudget.budgetMs}
+              remainingMs={saveBudget.remainingMs}
+            />
+          ) : null}
+        </div>
+      ) : null}
       <div className="flex flex-col gap-2 sm:flex-row-reverse sm:flex-wrap sm:justify-start [&_button]:w-full sm:[&_button]:w-auto">
         {discardConfirmOpen ? (
           <>
@@ -316,6 +411,7 @@ export function AppSettingsModal({
     <Modal
       open={open}
       title={t("modal.app_settings.title")}
+      titleIcon="settings"
       onClose={requestClose}
       panelClassName="max-w-3xl"
       footer={footer}
@@ -332,38 +428,16 @@ export function AppSettingsModal({
           <VaultSettingsSection
             key={sectionId}
             title={t(`modal.app_settings.section.${sectionId}`)}
-            defaultOpen={sectionId === "appearance"}
+            defaultOpen={sectionId === "language"}
           >
             {renderAppSettingsSection(
               sectionId,
               formConfig,
               patchDraft,
-              showHiddenVaultsSession,
-              setShowHiddenVaultsSession,
-              vaults,
-              open,
-              {
-                groups,
-                includeHidden,
-                newGroupName,
-                groupedVaultIds,
-                nameError: groupNameError,
-                onNewGroupNameChange: (name) => {
-                  setNewGroupName(name);
-                  setGroupNameError(null);
-                  setSaveConfirmOpen(false);
-                  setDiscardConfirmOpen(false);
-                },
-                onToggleGroupedVault: (vaultId) => {
-                  setGroupedVaultIds((current) =>
-                    current.includes(vaultId)
-                      ? current.filter((id) => id !== vaultId)
-                      : [...current, vaultId],
-                  );
-                  setSaveConfirmOpen(false);
-                  setDiscardConfirmOpen(false);
-                },
-              },
+              draftShowHiddenVaultsSession,
+              setDraftHiddenSession,
+              workspaceRootForValidation,
+              hasOpenVault,
             )}
           </VaultSettingsSection>
         ))}
@@ -380,40 +454,46 @@ function renderAppSettingsSection(
     patch: Partial<AppSettingsConfig[S]>,
   ) => void,
   showHiddenVaultsSession: boolean,
-  setShowHiddenVaultsSession: (value: boolean) => void,
-  vaults: VaultListItem[],
-  modalOpen: boolean,
-  groupsDraft: {
-    groups: VaultGroup[];
-    includeHidden: boolean;
-    newGroupName: string;
-    groupedVaultIds: string[];
-    nameError: string | null;
-    onNewGroupNameChange: (name: string) => void;
-    onToggleGroupedVault: (vaultId: string) => void;
-  },
+  onShowHiddenVaultsSessionChange: (value: boolean) => void,
+  workspaceRootForValidation: string | null,
+  hasOpenVault: boolean,
 ) {
   switch (sectionId) {
-    case "appearance":
+    case "language":
       return (
-        <AppSettingsAppearanceSection
+        <AppSettingsLanguageSection
+          config={draft.ui}
+          onChange={(patch) => patchDraft("ui", patch)}
+        />
+      );
+    case "general":
+      return (
+        <AppSettingsGeneralSection
+          config={draft.ui}
+          onChange={(patch) => patchDraft("ui", patch)}
+        />
+      );
+    case "workspace":
+      return (
+        <AppSettingsWorkspaceSection
+          config={draft.workspace}
+          vaultRootPath={workspaceRootForValidation}
+          clearDisabled={hasOpenVault}
+          onChange={(patch) => patchDraft("workspace", patch)}
+        />
+      );
+    case "vault_list":
+      return (
+        <AppSettingsVaultListSection
           config={draft.ui}
           onChange={(patch) => patchDraft("ui", patch)}
         />
       );
     case "groups":
       return (
-        <AppSettingsGroupsSection
+        <AppSettingsGroupsPrefsSection
           config={draft.ui}
           onChange={(patch) => patchDraft("ui", patch)}
-          vaults={vaults}
-          groups={groupsDraft.groups}
-          includeHidden={groupsDraft.includeHidden}
-          newGroupName={groupsDraft.newGroupName}
-          groupedVaultIds={groupsDraft.groupedVaultIds}
-          nameError={groupsDraft.nameError}
-          onNewGroupNameChange={groupsDraft.onNewGroupNameChange}
-          onToggleGroupedVault={groupsDraft.onToggleGroupedVault}
         />
       );
     case "logging":
@@ -431,11 +511,9 @@ function renderAppSettingsSection(
             patchDraft("ui", { always_show_hidden_vaults })
           }
           showHiddenVaultsSession={showHiddenVaultsSession}
-          onShowHiddenVaultsSessionChange={setShowHiddenVaultsSession}
+          onShowHiddenVaultsSessionChange={onShowHiddenVaultsSessionChange}
         />
       );
-    case "download_vaults":
-      return <AppSettingsDownloadVaultsSection vaults={vaults} modalOpen={modalOpen} />;
     default:
       return null;
   }

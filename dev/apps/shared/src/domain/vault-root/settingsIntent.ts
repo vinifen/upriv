@@ -87,7 +87,12 @@ export function vaultRootGateFromState(args: {
   if (!dirty) {
     return { blocksPrimary: false, disk: "ready" };
   }
-  if (disk === "checking" || disk === "unreadable" || disk === "unauthorized" || disk === "needs_folder") {
+  if (
+    disk === "checking" ||
+    disk === "unreadable" ||
+    disk === "unauthorized" ||
+    disk === "needs_folder"
+  ) {
     return { blocksPrimary: true, disk };
   }
   if (disk === "incomplete") {

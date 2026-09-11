@@ -8,21 +8,21 @@ describe("getMockBackupsForVault", () => {
 
   it("sorts by createdAt descending", () => {
     const list = getMockBackupsForVault("my-encrypted-notes");
-    expect(list.map((b) => b.filename)).toEqual([
-      "20260528T120000-my-encrypted-notes.7z",
-      "20260515T090000-my-encrypted-notes.7z",
-      "20260401T100000-my-encrypted-notes.7z",
+    expect(list.map((b) => b.stamp)).toEqual([
+      "20260528T120000",
+      "20260515T090000",
+      "20260401T100000",
     ]);
     expect(list[2]?.saved).toBe(true);
   });
 });
 
 describe("getMockBackupBytes", () => {
-  it("encodes filename and optional saved marker", () => {
+  it("encodes stamp and optional saved marker", () => {
     const [entry] = getMockBackupsForVault("dev-secrets");
     expect(entry).toBeDefined();
     const text = new TextDecoder().decode(getMockBackupBytes(entry!));
-    expect(text).toContain(entry!.filename);
+    expect(text).toContain(entry!.stamp);
     expect(text.startsWith("[Upriv mock backup]\n")).toBe(true);
   });
 

@@ -10,10 +10,11 @@ import {
 } from "react";
 import {
   createDefaultAppSettings,
-  isRpcError,
-  isVaultRootErrorCode,
   normalizeAppSettings,
+  shouldBumpVaultRootEpoch,
+  isVaultRootGoneError,
   RpcError,
+  vaultRootGoneRpcError,
   type AppSettingsConfig,
   type AppSettingsPatch,
 } from "@upriv/shared";
@@ -27,12 +28,19 @@ interface PersistOptions {
 interface AppSettingsContextValue {
   settings: AppSettingsConfig;
   settingsReady: boolean;
+  /**
+   * True when `load()` threw (RPC/I/O). In-memory defaults are not bootstrap
+   * `onDisk: false` — Gate must offer Retry instead of looking ready.
+   */
+  settingsLoadFailed: boolean;
   settingsOnDisk: boolean;
   vaultRootEpoch: number;
   replaceSettings: (next: AppSettingsConfig, options?: PersistOptions) => Promise<void>;
   patchSettings: (patch: AppSettingsPatch, options?: PersistOptions) => Promise<boolean>;
   reloadSettings: () => Promise<void>;
   reportVaultRootIntegrityFailure: (error: unknown) => Promise<void>;
+  /** Latest settings including in-flight patch results (sync; bypasses React render lag). */
+  getSettingsSnapshot: () => AppSettingsConfig;
   showHiddenVaultsSession: boolean;
   setShowHiddenVaultsSession: (value: boolean) => void;
   bumpVaultRootEpoch: () => void;
@@ -47,6 +55,7 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
   const appSettingsService = useAppSettingsService();
   const [settings, setSettings] = useState<AppSettingsConfig>(() => createDefaultAppSettings());
   const [settingsReady, setSettingsReady] = useState(false);
+  const [settingsLoadFailed, setSettingsLoadFailed] = useState(false);
   const [settingsOnDisk, setSettingsOnDisk] = useState(false);
   const [vaultRootEpoch, setVaultRootEpoch] = useState(0);
   const [showHiddenVaultsSession, setShowHiddenVaultsSession] = useState(false);
@@ -73,15 +82,14 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
         settingsRef.current = normalized;
         setSettings(normalized);
         setSettingsOnDisk(loaded.onDisk);
+        setSettingsLoadFailed(false);
         setSettingsReady(true);
       })
       .catch(() => {
         if (cancelled) return;
-        const defaults = createDefaultAppSettings();
-        settingsRef.current = defaults;
-        setSettings(defaults);
+        // Hard RPC/I/O: keep in-memory defaults; do not mark ready as bootstrap.
         setSettingsOnDisk(false);
-        setSettingsReady(true);
+        setSettingsLoadFailed(true);
       });
     return () => {
       cancelled = true;
@@ -89,12 +97,24 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
   }, [appSettingsService]);
 
   const reloadSettings = useCallback(async () => {
-    const loaded = await appSettingsService.load();
-    const normalized = normalizeAppSettings(loaded.settings);
-    settingsRef.current = normalized;
-    setSettings(normalized);
-    setSettingsOnDisk(loaded.onDisk);
-    setSettingsReady(true);
+    setSettingsLoadFailed(false);
+    try {
+      const loaded = await appSettingsService.load();
+      const normalized = normalizeAppSettings(loaded.settings);
+      setSettingsOnDisk(loaded.onDisk);
+      if (!loaded.onDisk) {
+        // First-run / incomplete: keep RAM so the Gate locale picker still works.
+        // A missing `.upriv` (case B) resets via `forgetVaultRootSession` instead.
+        setSettingsReady(true);
+        return;
+      }
+      settingsRef.current = normalized;
+      setSettings(normalized);
+      setSettingsReady(true);
+    } catch (error) {
+      setSettingsLoadFailed(true);
+      throw error;
+    }
   }, [appSettingsService]);
 
   const notifyPersistFailed = useCallback((error: unknown) => {
@@ -102,19 +122,40 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
     setPersistErrorSignal((n) => n + 1);
   }, []);
 
-  const reportVaultRootIntegrityFailure = useCallback(
+  const forgetVaultRootSession = useCallback(() => {
+    const defaults = createDefaultAppSettings();
+    settingsRef.current = defaults;
+    setSettings(defaults);
+    setSettingsOnDisk(false);
+    setSettingsLoadFailed(false);
+    setSettingsReady(true);
+  }, []);
+
+  const applyVaultRootIntegrityFailure = useCallback(
     async (error: unknown) => {
-      if (isRpcError(error) && isVaultRootErrorCode(error.code)) {
+      if (isVaultRootGoneError(error)) {
+        forgetVaultRootSession();
+      }
+      if (shouldBumpVaultRootEpoch(error)) {
         setVaultRootEpoch((n) => n + 1);
       }
-      try {
-        await reloadSettings();
-      } catch {
-        /* keep memory */
+      if (!isVaultRootGoneError(error)) {
+        try {
+          await reloadSettings();
+        } catch {
+          /* keep memory */
+        }
       }
-      notifyPersistFailed(error);
+      notifyPersistFailed(isVaultRootGoneError(error) ? vaultRootGoneRpcError() : error);
     },
-    [notifyPersistFailed, reloadSettings],
+    [forgetVaultRootSession, notifyPersistFailed, reloadSettings],
+  );
+
+  const reportVaultRootIntegrityFailure = useCallback(
+    async (error: unknown) => {
+      await applyVaultRootIntegrityFailure(error);
+    },
+    [applyVaultRootIntegrityFailure],
   );
 
   const enqueuePersist = useCallback(<T,>(task: () => Promise<T>): Promise<T> => {
@@ -194,18 +235,11 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
           notifyPersistFailed(error);
           throw error;
         }
-        const rootIntegrity = isRpcError(error) && isVaultRootErrorCode(error.code);
-        if (rootIntegrity) setVaultRootEpoch((n) => n + 1);
-        try {
-          await reloadSettings();
-        } catch {
-          /* ignore */
-        }
-        notifyPersistFailed(error);
+        await applyVaultRootIntegrityFailure(error);
         throw error;
       }
     },
-    [appSettingsService, notifyPersistFailed, reloadSettings],
+    [appSettingsService, applyVaultRootIntegrityFailure, notifyPersistFailed, reloadSettings],
   );
 
   const replaceSettings = useCallback(
@@ -224,6 +258,9 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
           ui: patch.ui ? { ...current.ui, ...patch.ui } : current.ui,
           logging: patch.logging ? { ...current.logging, ...patch.logging } : current.logging,
           app: patch.app ? { ...current.app, ...patch.app } : current.app,
+          workspace: patch.workspace
+            ? { ...current.workspace, ...patch.workspace }
+            : current.workspace,
         });
         try {
           await persistUnlocked(next, options);
@@ -242,16 +279,20 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
     setVaultRootEpoch((n) => n + 1);
   }, []);
 
+  const getSettingsSnapshot = useCallback(() => settingsRef.current, []);
+
   const value = useMemo(
     () => ({
       settings,
       settingsReady,
+      settingsLoadFailed,
       settingsOnDisk,
       vaultRootEpoch,
       replaceSettings,
       patchSettings,
       reloadSettings,
       reportVaultRootIntegrityFailure,
+      getSettingsSnapshot,
       showHiddenVaultsSession,
       setShowHiddenVaultsSession,
       bumpVaultRootEpoch,
@@ -261,12 +302,14 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
     [
       settings,
       settingsReady,
+      settingsLoadFailed,
       settingsOnDisk,
       vaultRootEpoch,
       replaceSettings,
       patchSettings,
       reloadSettings,
       reportVaultRootIntegrityFailure,
+      getSettingsSnapshot,
       showHiddenVaultsSession,
       bumpVaultRootEpoch,
       persistErrorSignal,

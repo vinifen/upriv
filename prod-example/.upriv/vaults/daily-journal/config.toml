@@ -4,17 +4,14 @@
 id = "daily-journal"
 display_name = "Daily Journal"
 order = 13
-vault_file = "archive/Daily Journal.7z"
-store_dir = "store"
-backups_dir = "backups"
 password_hint = ""
 note = "Personal writing"
 
 [storage]
 mode = "encrypted_dir"
 
-[close]
-default_action = "close"
+# Unlock RAM (Argon2id) lives in contents/vault.header — not in config.toml.
+# There is no [kdf] section here; upriv-core reads KDF params from the header.
 
 [backup]
 enabled = false

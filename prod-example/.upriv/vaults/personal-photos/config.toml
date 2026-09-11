@@ -4,17 +4,14 @@
 id = "personal-photos"
 display_name = "Personal Photos"
 order = 5
-vault_file = "archive/Personal Photos.7z"
-store_dir = "store"
-backups_dir = "backups"
 password_hint = "Summer trip"
 note = "Phone backups and albums"
 
 [storage]
 mode = "encrypted_dir"
 
-[close]
-default_action = "close"
+# Unlock RAM (Argon2id) lives in contents/vault.header — not in config.toml.
+# There is no [kdf] section here; upriv-core reads KDF params from the header.
 
 [backup]
 enabled = false

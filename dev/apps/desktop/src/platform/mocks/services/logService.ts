@@ -18,4 +18,7 @@ export const mockLogService: LogService = {
   async recordVaultHidden() {
     // Browser scaffold has no session log files.
   },
+  async recordVaultGroupHidden() {
+    // Browser scaffold has no session log files.
+  },
 };

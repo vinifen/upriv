@@ -6,7 +6,6 @@ import type {
   AppSettingsService,
   LogService,
   VaultRootService,
-  VaultService,
 } from "@upriv/shared";
 import {
   createDefaultAppSettings,
@@ -41,6 +40,7 @@ import {
   safGetActiveUri,
   safInspectRoot,
   safPersist,
+  safRelease,
   safReadSettings,
   safSetActiveUri,
   safSetupRoot,
@@ -63,6 +63,9 @@ const nativeLogService: LogService = {
   async recordVaultHidden() {
     await rpcLogEvent("vault_hidden");
   },
+  async recordVaultGroupHidden() {
+    await rpcLogEvent("vault_group_hidden");
+  },
 };
 
 function rpcErrorForSafInspect(status: SafInspectStatus, safUri: string): RpcError {
@@ -76,15 +79,22 @@ function rpcErrorForSafInspect(status: SafInspectStatus, safUri: string): RpcErr
       path: safUri,
     });
   }
-  return new RpcError("vault_root_not_found", `SAF tree ${safUri} has no .upriv/`, { path: safUri });
+  return new RpcError("vault_root_not_found", `SAF tree ${safUri} has no .upriv/`, {
+    path: safUri,
+  });
 }
 
 /**
  * Kotlin `valid` only means non-empty UTF-8. Schema `valid` prefers Rust parse.
- * Missing RAM toml RPCs (stale `libupriv_ffi.so`) fall back to a marker-shape check.
+ * Stale `libupriv_ffi.so` (`unknown_method` on RAM toml RPCs): **dev only** —
+ * require marker keys (`[package]`, `vaults_dir`, `[app]`). Release fails inspect.
  */
-function looksLikeSettingsToml(toml: string): boolean {
-  return /\[package\]/.test(toml) && /\blabel\s*=/.test(toml);
+function staleFfiTomlFallbackAllowed(): boolean {
+  return typeof __DEV__ !== "undefined" && Boolean(__DEV__);
+}
+
+function looksLikeUprivSettingsToml(toml: string): boolean {
+  return /\[package\]/.test(toml) && /\bvaults_dir\s*=/.test(toml) && /\[app\]/.test(toml);
 }
 
 async function inspectSafWithSchema(safUri: string): Promise<SafInspectStatus> {
@@ -96,12 +106,26 @@ async function inspectSafWithSchema(safUri: string): Promise<SafInspectStatus> {
     await rpcAppSettingsParseToml(toml);
     return "valid";
   } catch (error) {
-    // Stale `libupriv_ffi.so` (no RAM toml RPCs): Kotlin already saw a non-empty
-    // marker. Do not fail Apply after a successful SAF create.
     if (isRpcError(error) && error.code === "unknown_method") {
-      return looksLikeSettingsToml(toml) ? "valid" : "incomplete";
+      if (staleFfiTomlFallbackAllowed() && looksLikeUprivSettingsToml(toml)) {
+        return "valid";
+      }
+      throw error;
     }
     return "incomplete";
+  }
+}
+
+function clearActiveSafUri(): void {
+  const previousUri = safGetActiveUri();
+  if (!previousUri) return;
+  safSetActiveUri(null);
+  if (isSafTreeUri(previousUri)) {
+    try {
+      safRelease(previousUri);
+    } catch {
+      /* best-effort release */
+    }
   }
 }
 
@@ -109,13 +133,19 @@ async function parseSafTomlOrThrow(toml: string, safUri: string): Promise<AppSet
   try {
     return await rpcAppSettingsParseToml(toml);
   } catch (error) {
-    if (isRpcError(error) && error.code === "unknown_method" && looksLikeSettingsToml(toml)) {
-      return normalizeAppSettings({
-        ...createDefaultAppSettings(),
-        app: { vault_root_mode: "custom_root", upriv_root_path: safUri },
-      });
+    if (isRpcError(error) && error.code === "unknown_method") {
+      if (staleFfiTomlFallbackAllowed() && looksLikeUprivSettingsToml(toml)) {
+        return normalizeAppSettings({
+          ...createDefaultAppSettings(),
+          app: {
+            ...createDefaultAppSettings().app,
+            vault_root_mode: "custom_root",
+            upriv_root_path: safUri,
+          },
+        });
+      }
+      throw error;
     }
-    if (isRpcError(error) && error.code === "unknown_method") throw error;
     throw new RpcError(
       "vault_root_incomplete",
       `SAF settings.toml is not a valid marker at ${safUri}`,
@@ -169,7 +199,11 @@ function createSafAwareAppSettingsService(): AppSettingsService {
       return {
         settings: normalizeAppSettings({
           ...parsed,
-          app: { vault_root_mode: "custom_root", upriv_root_path: safUri },
+          app: {
+            ...parsed.app,
+            vault_root_mode: "custom_root",
+            upriv_root_path: safUri,
+          },
         }),
         onDisk: true,
         rootPath: safUri,
@@ -189,14 +223,15 @@ function createSafAwareAppSettingsService(): AppSettingsService {
         } catch {
           /* Expo picker usually already persisted */
         }
-        let status: ReturnType<typeof safInspectRoot>;
+        let status: SafInspectStatus;
         try {
-          status = safInspectRoot(treeUri);
+          status = await inspectSafWithSchema(treeUri);
         } catch (error) {
+          if (isRpcError(error)) throw error;
           throw toSafRpcError(error, treeUri);
         }
-        if (status !== "valid" && status !== "incomplete") {
-          throw new RpcError("vault_root_not_found", `SAF vault-root ${treeUri} is ${status}`);
+        if (status !== "valid") {
+          throw rpcErrorForSafInspect(status, treeUri);
         }
         const previous = safReadSettings(treeUri);
         const body = await rpcAppSettingsSerializeToml(normalized, previous);
@@ -206,11 +241,13 @@ function createSafAwareAppSettingsService(): AppSettingsService {
       }
 
       // Leaving SAF (default_root or filesystem custom_root).
-      if (safGetActiveUri()) {
-        safSetActiveUri(null);
-      }
-
-      return rustSave(normalized, options);
+      // Release the grant only after Rust returns — a thrown save must not
+      // drop persistable permission. Soft `wrote: false` (empty custom_root
+      // bootstrap) is still a successful leave: resolve() prefers the active
+      // SAF URI, so a leftover grant would shadow the intended root.
+      const wrote = await rustSave(normalized, options);
+      clearActiveSafUri();
+      return wrote;
     },
   };
 }
@@ -252,9 +289,8 @@ function createNativeVaultRootService(): VaultRootService {
     async setupDefaultRoot(options) {
       // Switching to default_root always clears the SAF pref so the two
       // sources of truth cannot disagree (Rust alias for FS, SAF pref for URIs).
-      const previousSaf = safGetActiveUri();
       const result = await rpcVaultRootSetupDefaultRoot(options);
-      if (previousSaf) safSetActiveUri(null);
+      clearActiveSafUri();
       return result;
     },
 
@@ -325,8 +361,8 @@ function createNativeVaultRootService(): VaultRootService {
       try {
         safSetupRoot(trimmed, locale, seedToml, replacePolicy);
       } catch (error) {
-        // Previous attempt may have written `.upriv/` that listing still hides.
-        const existing = safInspectRoot(trimmed);
+        // Previous attempt may have written a complete `.upriv/`.
+        const existing = await inspectSafWithSchema(trimmed);
         if (existing !== "valid") {
           throw toSafRpcError(error, trimmed);
         }
@@ -368,7 +404,7 @@ function createNativeVaultRootService(): VaultRootService {
       return rpcVaultRootSuggestedCustomPath();
     },
 
-    async pickFolder(defaultPath) {
+    async pickFolder(defaultPath, _title) {
       return pickVaultRootFolder(defaultPath);
     },
   };
@@ -376,17 +412,74 @@ function createNativeVaultRootService(): VaultRootService {
 
 /**
  * Native adapters → in-process `upriv-ffi` (same split as desktop
- * `createDesktopServices`): live vault-root / settings / logs; empty vault list
- * until `vault_list` lands. Create-wizard vaults live in React state only
- * (not seeded MOCK_VAULTS), same as desktop `addVault`.
+ * `createDesktopServices`): live vault-root / settings / logs.
+ * Vault list stays on in-memory mocks until `vault_list` lands (`__DEV__`
+ * seeds `MOCK_VAULTS` so UI work survives reload; release stays empty).
  */
 export function createNativeServices(): AppServices {
   const mocks = createMobileMockServices();
-  const vault: VaultService = {
+  const failNotImplemented = (message: string): never => {
+    throw new RpcError("not_implemented", message);
+  };
+  const releaseVaultService = {
     ...mocks.vault,
     async listVaults() {
-      // Empty until vault_list RPC — do not return seeded MOCK_VAULTS against a real root.
       return [];
+    },
+    async getSettings() {
+      return failNotImplemented("Vault settings are not implemented on mobile release builds");
+    },
+    async registerSettings() {
+      return failNotImplemented("Vault settings are not implemented on mobile release builds");
+    },
+    async unregisterSettings() {
+      return failNotImplemented("Vault delete is not implemented on mobile release builds");
+    },
+    async getUnlockPreset() {
+      return failNotImplemented(
+        "Vault unlock presets are not implemented on mobile release builds",
+      );
+    },
+    async setUnlockPreset() {
+      return failNotImplemented(
+        "Vault unlock presets are not implemented on mobile release builds",
+      );
+    },
+    async getExportBytes() {
+      return failNotImplemented("Vault export is not implemented on mobile release builds");
+    },
+  };
+  const releaseLifecycleService = {
+    ...mocks.lifecycle,
+    runOpeningPipeline: async () =>
+      failNotImplemented("Vault open is not implemented on mobile release builds"),
+    runClosingPipeline: async () =>
+      failNotImplemented("Vault close is not implemented on mobile release builds"),
+    validateLifecyclePassword: () =>
+      failNotImplemented(
+        "Vault lifecycle password validation is not implemented on mobile release builds",
+      ),
+  };
+  const releaseCreateVaultService = {
+    ...mocks.createVault,
+    testImportPackagePassword: async () =>
+      failNotImplemented("Vault import is not implemented on mobile release builds"),
+    selectImportPackageForProbe: () =>
+      failNotImplemented("Vault import is not implemented on mobile release builds"),
+  };
+  const releaseBackupService = {
+    ...mocks.backups,
+    async listBackups() {
+      return failNotImplemented("Vault backups are not implemented on mobile release builds");
+    },
+    async deleteBackups() {
+      return failNotImplemented("Vault backups are not implemented on mobile release builds");
+    },
+    async promoteToSave() {
+      return failNotImplemented("Vault backups are not implemented on mobile release builds");
+    },
+    async getBackupBytes() {
+      return failNotImplemented("Vault backups are not implemented on mobile release builds");
     },
   };
   return {
@@ -394,8 +487,11 @@ export function createNativeServices(): AppServices {
     vaultRoot: createNativeVaultRootService(),
     appSettings: createSafAwareAppSettingsService(),
     logs: nativeLogService,
-    vault,
-    // Groups stay mock (empty by default) — live group RPCs need on-disk vault ids.
+    vault: __DEV__ ? mocks.vault : releaseVaultService,
+    lifecycle: __DEV__ ? mocks.lifecycle : releaseLifecycleService,
+    createVault: __DEV__ ? mocks.createVault : releaseCreateVaultService,
+    backups: __DEV__ ? mocks.backups : releaseBackupService,
+    // Groups stay mock — live group RPCs need on-disk vault ids.
     vaultGroups: mocks.vaultGroups,
   };
 }

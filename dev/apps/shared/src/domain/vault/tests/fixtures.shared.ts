@@ -8,10 +8,8 @@ export function vaultRowFixture(overrides: Partial<VaultRow> = {}): VaultRow {
   return {
     id: "demo",
     displayName: "Demo",
-    persistence: "closed",
     session: null,
     storageMode: "encrypted_dir",
-    canSeal: true,
     ...overrides,
   };
 }

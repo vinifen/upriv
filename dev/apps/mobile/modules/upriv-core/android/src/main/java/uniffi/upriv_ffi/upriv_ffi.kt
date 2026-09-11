@@ -873,7 +873,7 @@ private fun uniffiCheckContractApiVersion(lib: UniffiLib) {
 
 @Suppress("UNUSED_PARAMETER")
 private fun uniffiCheckApiChecksums(lib: UniffiLib) {
-    if (lib.uniffi_upriv_ffi_checksum_func_app_version() != 15973.toShort()) {
+    if (lib.uniffi_upriv_ffi_checksum_func_app_version() != 34247.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_upriv_ffi_checksum_func_configure_runtime() != 60242.toShort()) {
@@ -986,7 +986,7 @@ public object FfiConverterString: FfiConverter<String, RustBuffer.ByValue> {
     }
 }
         /**
-         * Product version string (from `dev/VERSION`).
+         * Product version string (from repo-root `VERSION`).
          */ fun `appVersion`(): kotlin.String {
             return FfiConverterString.lift(
     uniffiRustCall() { _status ->

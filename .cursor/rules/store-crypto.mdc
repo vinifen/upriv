@@ -1,0 +1,37 @@
+---
+description: Vault store crypto — Argon2id + HKDF + XChaCha20-Poly1305; 7z is export only; protocol/AAD/nonces/KDF params are the real risk.
+alwaysApply: true
+---
+
+# Store crypto (Argon2id + XChaCha20-Poly1305)
+
+## Stance
+
+At rest the vault body is **`contents/`** (Argon2id → HKDF → XChaCha20-Poly1305 chunks, AES-SIV names). **Backups** are frozen copies of that body. Portable files: ordinary **`.zip` of `contents/`** (Recommended; zip is an envelope, no zip password) or **`.7z`** (Plan B). AES-256 in 7-Zip is not “broken”; we use Argon2id + AEAD for **offline password guessing**, not because XChaCha beats AES.
+
+Never claim “more secure than 7-Zip.” Round-trip encrypt/decrypt is not a security proof.
+
+## Do
+
+- Primitives only via a mature library (no hand-rolled ChaCha/Poly1305/Argon2).
+- Unique random salt; persist KDF params in `vault.header`. Cost is chosen **at vault create** (default **256 MiB / 3 passes**; also **128 MiB / 3**, **64 MiB / 3**, **32 MiB / 3** less-secure opt-in, **1 GiB / 1**, **2 GiB / 1**). UI: security of each preset + RAM needed to unlock — **not** phone vs desktop. Open uses the header everywhere. **Never** auto-pick or lower params because of the current device.
+- Password unlocks master key once per open; each write = content key + new 192-bit CSPRNG nonce (not Argon2, not a RAM counter). See SECURITY-CRYPTO “Password, master key, edits, nonces”.
+- AEAD AAD binds version, **content identity** (not registry folder id), algos, KDF params, file id, chunk index, sizes.
+- Verify tags before any plaintext leaves `upriv-core`.
+- `contents/` = live ciphertext; `backups/<stamp>/` = frozen `contents/` (no `snapshot.toml`; `saves/` = pinned). Create-from-backup / **create from a `.zip` of `contents/`** copies that tree into a **new** vault. Export: user chooses that zip (**Recommended**) or `.7z` (warn: weaker offline guessing). Suggested filename = **`{display_name}.zip`** or **`{display_name}.7z`** (not registry id). Open vaults export **after flushing** the session into `contents/` (edits included; vault stays open). `.7z` never stores `.enc` blobs; zip envelope has **no** zip password. **Do not** present the zip as a custom “Upriv file” type — it is a normal `.zip` whose payload is Upriv ciphertext. **Mobile:** same `contents/` session via in-app file manager (no FUSE); never copy the vault to `filesDir` / OS temp to fake a mount.
+- Recovery: dirty close or leftover `upriv_plain` workspace — not a dual store/`.7z` picker. Dead header/index → new vault from backup only. One chunk tag fail → that file, vault still opens.
+- Greenfield layout only. Do not implement an `archive/` / `store/` / Seal importer for old demos.
+- No Seal in schema or UI: no `sealed`, `canSeal`, `[close] default_action`, `archive_hash`, seal lock. Lock = close.
+- Surface anti-brute-force: in **`upriv-core` session RAM** — serialize `open`; **5** failures / **60 s** → **60 s** block. Resets when the process exits. **No** JSON attempt counter. Does not stop offline guessing.
+- Plaintext vault bytes on ordinary disk **only** for `upriv_plain` while open. Import/export/backup/password/recovery must not stage a decrypted tree (including “temp for 7zz”).
+
+## Do not
+
+- Weaken or auto-downgrade the KDF, or pick a preset from device type (phone/desktop).
+- Use raw Argon2 output as every layer’s key (use HKDF domain separation).
+- Pack `.enc` blobs into `.7z`; put a zip password on the contents zip; leave a durable `.7z` twin next to `contents/` by default.
+- Reintroduce Seal or the dropped storage modes.
+- Claim in-app unlock backoff “prevents brute force,” or implement that backoff only in TypeScript.
+- Implement crypto in TypeScript / Electron / Expo.
+
+Full protocol bar and tests: [`.agent/SECURITY-CRYPTO.md`](../../.agent/SECURITY-CRYPTO.md).

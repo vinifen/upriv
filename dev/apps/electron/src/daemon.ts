@@ -2,14 +2,18 @@ import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { app } from "electron";
-
-/** Keep in sync with `@upriv/shared` `RpcErrorBody` (`core-rpc/errors.ts`). */
-type RpcErrorBody = { code: string; message: string; details?: unknown };
-
-const STARTUP_TIMEOUT_MS = 10_000;
-const DEFAULT_RPC_TIMEOUT_MS = 30_000;
-const SHUTDOWN_TIMEOUT_MS = 5_000;
-const SHUTDOWN_METHOD = "app_shutdown";
+import {
+  DEFAULT_RPC_TIMEOUT_MS,
+  SHUTDOWN_METHOD,
+  SHUTDOWN_TIMEOUT_MS,
+  STARTUP_TIMEOUT_MS,
+  formatRpcError,
+  parseDaemonStdoutLine,
+  rpcTimeoutErrorMessage,
+  shouldArmRpcTimeout,
+  stdoutBufferExceeded,
+  type RpcErrorBody,
+} from "./daemonProtocol";
 
 type WireOutReady = { type: "ready" };
 type WireOutResponse = {
@@ -45,7 +49,7 @@ export function setDaemonExitHandler(handler: (() => void) | null): void {
   exitAfterReadyHandler = handler;
 }
 
-export function resolveDaemonBinary(): string {
+function resolveDaemonBinary(): string {
   const binName = process.platform === "win32" ? "upriv-daemon.exe" : "upriv-daemon";
   if (app.isPackaged) {
     return path.join(process.resourcesPath, "bin", binName);
@@ -58,7 +62,7 @@ export function resolveDaemonBinary(): string {
 }
 
 /** Dev workspace (`…/upriv/dev`) — Electron `dist/` → `../../..`. */
-export function resolveDevDefaultRootAnchor(): string {
+function resolveDevDefaultRootAnchor(): string {
   const anchor = path.resolve(__dirname, "../../..");
   if (!fs.existsSync(anchor)) {
     console.warn(
@@ -121,7 +125,7 @@ function isRealAppImageEnv(): boolean {
  * User-owned app home when the install/portable folder is not writable
  * (`.deb` → `/opt`, Program Files, etc.).
  */
-export function resolveUserDataAppHome(): string {
+function resolveUserDataAppHome(): string {
   if (process.platform === "win32") {
     const local = process.env.LOCALAPPDATA;
     if (local) return path.join(local, "Upriv");
@@ -256,17 +260,10 @@ function daemonEnv(): NodeJS.ProcessEnv {
     // anchor already matches the OS user-data home (installed-like layout).
     const userData = resolveUserDataAppHome();
     const anchor = path.resolve(env.UPRIV_DEFAULT_ROOT_ANCHOR);
-    env.UPRIV_DISTRIBUTION =
-      anchor === path.resolve(userData) ? "installed" : "portable";
+    env.UPRIV_DISTRIBUTION = anchor === path.resolve(userData) ? "installed" : "portable";
     cleanupWriteProbes(env.UPRIV_DEFAULT_ROOT_ANCHOR);
   }
   return env;
-}
-
-function formatRpcError(error: RpcErrorBody | undefined, fallback: string): string {
-  if (!error) return fallback;
-  // Keep in sync with `DAEMON_ERROR_MESSAGE_RE` in `apps/desktop/src/lib/invoke.ts`.
-  return `${error.code}: ${error.message}`;
 }
 
 /** Write one NDJSON line, resolving once flushed (respects backpressure). */
@@ -325,9 +322,7 @@ function markDaemonDead(connection: DaemonConnection, error: Error): void {
 export async function startDaemon(): Promise<DaemonConnection> {
   const binary = resolveDaemonBinary();
   if (!fs.existsSync(binary)) {
-    throw new Error(
-      `upriv-daemon not found at ${binary}. Run: cargo build -p upriv-daemon`,
-    );
+    throw new Error(`upriv-daemon not found at ${binary}. Run: cargo build -p upriv-daemon`);
   }
 
   const child = spawn(binary, [], {
@@ -361,15 +356,14 @@ export async function startDaemon(): Promise<DaemonConnection> {
     };
 
     const handleLine = (line: string) => {
-      if (!line) return;
-
-      let message: WireOutMessage;
-      try {
-        message = JSON.parse(line) as WireOutMessage;
-      } catch {
-        console.error("[upriv-daemon] non-JSON stdout line:", line);
+      const parsed = parseDaemonStdoutLine(line);
+      if (parsed == null) {
+        if (line.trim()) {
+          console.error("[upriv-daemon] non-JSON stdout line:", line);
+        }
         return;
       }
+      const message = parsed as WireOutMessage;
 
       if (!settled && message.type === "ready") {
         settled = true;
@@ -381,8 +375,16 @@ export async function startDaemon(): Promise<DaemonConnection> {
       dispatchWireMessage(connection, message);
     };
 
-    child.stdout?.on("data", (chunk: Buffer) => {
-      buffer += chunk.toString("utf8");
+    // `setEncoding("utf8")` keeps a StringDecoder across chunks so a multibyte
+    // UTF-8 sequence split on a 64 KiB pipe boundary is not replaced with U+FFFD.
+    child.stdout?.setEncoding("utf8");
+    child.stdout?.on("data", (chunk: string) => {
+      buffer += chunk;
+      if (stdoutBufferExceeded(buffer.length)) {
+        console.error("[upriv-daemon] stdout line exceeded max buffer; discarding");
+        buffer = "";
+        return;
+      }
       let newlineIndex = buffer.indexOf("\n");
       while (newlineIndex >= 0) {
         const line = buffer.slice(0, newlineIndex).trim();
@@ -425,13 +427,14 @@ export async function stopDaemon(connection: DaemonConnection | null): Promise<v
   rejectAllPending(connection, new Error("upriv-daemon stopped"));
   connection.alive = false;
 
-  if (connection.process.exitCode === null && !connection.process.killed) {
+  const hasExited = () =>
+    connection.process.exitCode !== null || connection.process.signalCode !== null;
+
+  if (!hasExited()) {
     connection.process.kill("SIGTERM");
     await new Promise<void>((resolve) => {
       const timer = setTimeout(() => {
-        if (connection.process.exitCode === null && !connection.process.killed) {
-          connection.process.kill("SIGKILL");
-        }
+        if (!hasExited()) connection.process.kill("SIGKILL");
         resolve();
       }, 2_000);
       connection.process.once("exit", () => {
@@ -455,13 +458,12 @@ export async function daemonRpc<T>(
   const id = connection.nextRequestId++;
   const result = await new Promise<unknown>((resolve, reject) => {
     // `timeoutMs <= 0` = no deadline (same contract as renderer `invoke`).
-    const timer =
-      timeoutMs > 0
-        ? setTimeout(() => {
-            connection.pending.delete(id);
-            reject(new Error(`rpc_timeout: daemon RPC timeout: ${method}`));
-          }, timeoutMs)
-        : null;
+    const timer = shouldArmRpcTimeout(timeoutMs)
+      ? setTimeout(() => {
+          connection.pending.delete(id);
+          reject(new Error(rpcTimeoutErrorMessage(method)));
+        }, timeoutMs)
+      : null;
 
     connection.pending.set(id, { resolve, reject, timer });
     const line = JSON.stringify({ type: "request", id, method, params });

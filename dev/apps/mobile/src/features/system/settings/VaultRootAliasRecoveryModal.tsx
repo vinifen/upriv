@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { StyleSheet, Text, TextInput, View } from "react-native";
+import { Platform, StyleSheet, Text, View } from "react-native";
 import {
   SUPPORTED_LOCALES,
   VAULT_ROOT_ALIAS_FILE,
   VAULT_ROOT_ERROR_CODES,
   RpcError,
   isRpcError,
+  sameVaultRootPath,
   type LocaleId,
   type VaultRootDiskStatus,
   type VaultRootMode,
@@ -18,14 +19,9 @@ import { mobileErrorI18nKey } from "@/lib/errorMessages";
 import { useTheme } from "@/theme";
 import { radii, spacing } from "@/theme/tokens";
 import { Button, Modal, Select, type SelectOption } from "@/components/ui";
-import { PolicyRadioOption } from "@/components/settings/PolicyRadioOption";
+import { PolicyRadioOption, ThemedInput } from "@/components/settings";
 import { isAndroidSafUri } from "@/platform/native/pickVaultRootFolder";
 import { VaultRootConfirmFooter } from "./VaultRootConfirmFooter";
-
-function samePathKey(a: string, b: string): boolean {
-  const norm = (p: string) => p.trim().replace(/[/\\]+$/g, "");
-  return norm(a) === norm(b);
-}
 
 interface VaultRootAliasRecoveryModalProps {
   open: boolean;
@@ -74,6 +70,7 @@ export function VaultRootAliasRecoveryModal({
   const [mode, setMode] = useState<VaultRootMode>("default_root");
   const [pathInput, setPathInput] = useState("");
   const [busy, setBusy] = useState(false);
+  const [picking, setPicking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [customDisk, setCustomDisk] = useState<VaultRootDiskStatus>("needs_folder");
@@ -91,6 +88,7 @@ export function VaultRootAliasRecoveryModal({
     setMode(presentation.mode === "custom_root" ? "custom_root" : "default_root");
     setPathInput(rememberedPath.trim());
     setBusy(false);
+    setPicking(false);
     setError(null);
     setConfirmOpen(false);
     setCustomDisk(rememberedPath.trim() ? "checking" : "needs_folder");
@@ -118,7 +116,7 @@ export function VaultRootAliasRecoveryModal({
   useEffect(() => {
     const applied = diskApplied.current;
     if (!applied || applied.mode !== "custom_root") return;
-    if (!samePathKey(pathInput, applied.rootPath)) {
+    if (!sameVaultRootPath(pathInput, applied.rootPath)) {
       diskApplied.current = null;
     }
   }, [pathInput]);
@@ -156,7 +154,7 @@ export function VaultRootAliasRecoveryModal({
   }, [mode, pathInput, customDisk]);
 
   const handlePickFolder = useCallback(() => {
-    setBusy(true);
+    setPicking(true);
     setError(null);
     void (async () => {
       const remembered = pathInput.trim() || rememberedPath.trim();
@@ -170,7 +168,7 @@ export function VaultRootAliasRecoveryModal({
       .catch((caught) => {
         setError(t(mobileErrorI18nKey(caught, "modal.vault_root_setup.error_pick")));
       })
-      .finally(() => setBusy(false));
+      .finally(() => setPicking(false));
   }, [pathInput, rememberedPath, t, vaultRoot]);
 
   const commitContinue = useCallback(() => {
@@ -228,7 +226,7 @@ export function VaultRootAliasRecoveryModal({
       const path = pathInput.trim();
       const applied = diskApplied.current;
       const canReuseCustom =
-        applied?.mode === "custom_root" && path && samePathKey(applied.rootPath, path);
+        applied?.mode === "custom_root" && path && sameVaultRootPath(applied.rootPath, path);
 
       if (!path && !canReuseCustom) {
         setError(t("modal.vault_root_setup.error_path_required"));
@@ -316,6 +314,7 @@ export function VaultRootAliasRecoveryModal({
   ]);
 
   const blocked =
+    picking ||
     (mode === "custom_root" && !pathInput.trim()) ||
     (mode === "custom_root" &&
       (customDisk === "checking" || customDisk === "unreadable" || customDisk === "needs_folder"));
@@ -338,6 +337,7 @@ export function VaultRootAliasRecoveryModal({
     <Modal
       open={open}
       title={t("modal.vault_root_setup.title")}
+      titleIcon="folder"
       onClose={() => undefined}
       dismissible={false}
       panelClassName="max-w-lg"
@@ -347,7 +347,7 @@ export function VaultRootAliasRecoveryModal({
             value={settings.ui.locale as LocaleId}
             options={localeOptions}
             onChange={handleLocaleChange}
-            disabled={busy}
+            disabled={busy || picking}
             size="sm"
             label={t("modal.app_settings.field.locale")}
             title={t("modal.app_settings.field.locale")}
@@ -404,24 +404,22 @@ export function VaultRootAliasRecoveryModal({
               setError(null);
             }}
             footer={
-              mode === "default_root" ? (
-                defaultRootAnchor ? (
-                  <Text
-                    style={[
-                      typography.mono,
-                      styles.pathBox,
-                      { backgroundColor: colors.surfaceContainerHighest, color: colors.onSurface },
-                    ]}
-                    selectable
-                  >
-                    {defaultRootAnchor}
-                  </Text>
-                ) : (
-                  <Text style={typography.caption}>
-                    {t("modal.app_settings.field.upriv_root_loading")}
-                  </Text>
-                )
-              ) : null
+              defaultRootAnchor ? (
+                <Text
+                  style={[
+                    typography.mono,
+                    styles.pathBox,
+                    { backgroundColor: colors.surfaceContainerHighest, color: colors.onSurface },
+                  ]}
+                  selectable
+                >
+                  {defaultRootAnchor}
+                </Text>
+              ) : (
+                <Text style={typography.caption}>
+                  {t("modal.app_settings.field.upriv_root_loading")}
+                </Text>
+              )
             }
           />
           <PolicyRadioOption
@@ -439,60 +437,52 @@ export function VaultRootAliasRecoveryModal({
               }
             }}
             footer={
-              mode === "custom_root" ? (
-                <View style={styles.customCol}>
-                  <TextInput
-                    value={pathInput}
-                    editable={false}
-                    placeholder={t("modal.vault_root_setup.path_placeholder")}
-                    placeholderTextColor={colors.onSurfaceVariant}
-                    style={[
-                      typography.mono,
-                      styles.input,
-                      {
-                        backgroundColor: colors.surfaceContainerHigh,
-                        borderColor: colors.outlineVariant,
-                        color: colors.onSurface,
-                      },
-                    ]}
-                  />
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    label={t("modal.app_settings.action.choose_folder")}
-                    disabled={busy}
-                    onPress={handlePickFolder}
-                  />
-                  {pathIsSaf ? (
-                    <Text style={typography.caption}>{t("modal.vault_root_setup.saf_notice")}</Text>
-                  ) : null}
-                  {customDisk === "checking" ? (
-                    <Text style={typography.caption}>
-                      {t("modal.app_settings.field.upriv_root_loading")}
-                    </Text>
-                  ) : null}
-                  {customDisk === "will_create" ? (
-                    <Text style={typography.caption}>
-                      {t("modal.vault_root_gate.continue_confirm_note.create")}
-                    </Text>
-                  ) : null}
-                  {customDisk === "incomplete" ? (
-                    <Text style={typography.caption}>
-                      {t("modal.app_settings.continue_confirm_custom_incomplete", {
-                        path: pathInput.trim() || "…",
-                      })}
-                    </Text>
-                  ) : null}
-                  {customDisk === "unreadable" ? (
-                    <Text
-                      style={[typography.caption, { color: colors.onErrorContainer }]}
-                      accessibilityRole="alert"
-                    >
-                      {t("modal.vault_root_setup.error_io")}
-                    </Text>
-                  ) : null}
-                </View>
-              ) : null
+              <View style={styles.customCol}>
+                <ThemedInput
+                  value={pathInput}
+                  editable={false}
+                  placeholder={t("modal.vault_root_setup.path_placeholder")}
+                  mono
+                />
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  label={t("modal.app_settings.action.choose_folder")}
+                  disabled={busy || picking || Platform.OS !== "android"}
+                  onPress={handlePickFolder}
+                />
+                {mode === "custom_root" && Platform.OS !== "android" ? (
+                  <Text style={typography.caption}>{t("error.unsupported_platform")}</Text>
+                ) : null}
+                {mode === "custom_root" && pathIsSaf ? (
+                  <Text style={typography.caption}>{t("modal.vault_root_setup.saf_notice")}</Text>
+                ) : null}
+                {mode === "custom_root" && customDisk === "checking" ? (
+                  <Text style={typography.caption}>
+                    {t("modal.app_settings.field.upriv_root_loading")}
+                  </Text>
+                ) : null}
+                {mode === "custom_root" && customDisk === "will_create" ? (
+                  <Text style={typography.caption}>
+                    {t("modal.vault_root_gate.continue_confirm_note.create")}
+                  </Text>
+                ) : null}
+                {mode === "custom_root" && customDisk === "incomplete" ? (
+                  <Text style={typography.caption}>
+                    {t("modal.app_settings.continue_confirm_custom_incomplete", {
+                      path: pathInput.trim() || "…",
+                    })}
+                  </Text>
+                ) : null}
+                {mode === "custom_root" && customDisk === "unreadable" ? (
+                  <Text
+                    style={[typography.caption, { color: colors.onErrorContainer }]}
+                    accessibilityRole="alert"
+                  >
+                    {t("modal.vault_root_setup.error_io")}
+                  </Text>
+                ) : null}
+              </View>
             }
           />
         </View>
@@ -520,13 +510,6 @@ const styles = StyleSheet.create({
     borderRadius: radii.sm,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
-  },
-  input: {
-    borderRadius: radii.sm,
-    borderWidth: 1,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.md,
-    minHeight: 44,
   },
   localeSelect: { minWidth: 128, maxWidth: 176 },
 });

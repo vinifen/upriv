@@ -34,7 +34,7 @@ export function VaultSettingsSection({
   return (
     <section
       className={[
-        "overflow-hidden rounded-xl bg-surface-container transition-colors",
+        "settings-section rounded-xl bg-surface-container transition-colors",
         open ? "" : "hover:bg-surface-container-high/80",
       ].join(" ")}
     >

@@ -6,4 +6,6 @@ export interface LogService {
   getFile(filename: string): Promise<AppLogFile | undefined>;
   /** Session log line `vault_hidden` with no vault id or name. */
   recordVaultHidden(): Promise<void>;
+  /** Session log line `vault_group_hidden` with no group id or name. */
+  recordVaultGroupHidden(): Promise<void>;
 }

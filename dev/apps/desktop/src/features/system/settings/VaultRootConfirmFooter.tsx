@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import type { I18nKey, VaultRootConfirmAction } from "@upriv/shared";
 import { LOADING_BUDGET_MS } from "@upriv/shared";
 import { Button, LoadingBudgetHint } from "@/components/ui";
-import { useLoadingBudget } from "@/hooks/useLoadingBudget";
+import { useLoadingBudget } from "@upriv/shared/react";
 import { useTranslation } from "@/i18n";
 
 interface VaultRootConfirmFooterProps {

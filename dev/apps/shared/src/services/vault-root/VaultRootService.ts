@@ -87,7 +87,7 @@ export interface VaultRootService {
   /**
    * Native folder picker when available; otherwise `null` (UI falls back to text path).
    * `defaultPath` pre-selects that folder in the dialog when supported.
-   * `title` is the dialog title (i18n from the renderer).
+   * `title` is best-effort: desktop usually honors it; Android SAF may ignore it.
    */
   pickFolder(defaultPath?: string | null, title?: string | null): Promise<string | null>;
 }

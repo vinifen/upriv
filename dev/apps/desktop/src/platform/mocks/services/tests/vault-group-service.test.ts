@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { RpcError, VAULT_ERROR_CODES } from "@upriv/shared";
 import { registerMockVaultId } from "../../data/vaults";
+import { getMockVaultSettings, unregisterMockVaultSettings } from "../../stores/vaultSettings";
 import {
   mockVaultGroupService,
   resetMockVaultGroups,
@@ -72,5 +73,19 @@ describe("mockVaultGroupService", () => {
     await expect(mockVaultGroupService.delete("missing")).rejects.toMatchObject({
       code: VAULT_ERROR_CODES.GROUP_NOT_FOUND,
     });
+  });
+
+  it("cascades vault.hidden when creating a hidden group", async () => {
+    expect(getMockVaultSettings("my-encrypted-notes").vault.hidden).toBe(false);
+    await mockVaultGroupService.create({
+      id: "secrets",
+      displayName: "Secrets",
+      groupedVaults: ["my-encrypted-notes"],
+      hidden: true,
+    });
+    expect(getMockVaultSettings("my-encrypted-notes").vault.hidden).toBe(true);
+    await mockVaultGroupService.update({ id: "secrets", hidden: false });
+    expect(getMockVaultSettings("my-encrypted-notes").vault.hidden).toBe(false);
+    unregisterMockVaultSettings("my-encrypted-notes");
   });
 });

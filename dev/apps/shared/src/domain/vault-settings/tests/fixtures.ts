@@ -5,7 +5,6 @@ import type { VaultSettingsConfig } from "..";
 export function vaultSettingsFixture(
   overrides: {
     storageMode?: StorageMode;
-    closeAction?: VaultSettingsConfig["close"]["default_action"];
     securityMode?: VaultSettingsConfig["security"]["mode"];
     sevenZip?: Partial<VaultSettingsConfig["seven_zip"]>;
     vault?: Partial<VaultSettingsConfig["vault"]>;
@@ -17,16 +16,13 @@ export function vaultSettingsFixture(
       id: "demo",
       display_name: "Demo",
       order: 1,
-      vault_file: "archive/Demo.7z",
-      store_dir: "store",
-      backups_dir: "backups",
       password_hint: "",
       note: "",
       hidden: false,
       ...overrides.vault,
     },
     storage: { mode: storageMode },
-    close: { default_action: overrides.closeAction ?? "close" },
+    mount: { workspace_path: "default" },
     backup: { enabled: true, mode: "keep_last", keep_last: 1 },
     security: {
       mode: overrides.securityMode ?? "session_ram",

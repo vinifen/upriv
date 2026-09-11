@@ -14,7 +14,7 @@ Every **blocking** loading / busy / applying overlay in the desktop (and later m
 3. Delay first paint with `LOADING_APPEAR_DELAY_MS` (1s) via `useLoadingBudget().visible` — fast ops must not flash a spinner. Budget/timeout still count from when the op started.
 4. On timeout: **clear** the spinner / applying / `busy` state and offer **retry** (or a clear error). Never leave `applying` / `busy` stuck forever.
 5. Also **invalidate** the in-flight attempt: bump a generation token (`busyGen` on Setup / Repair / Data folder / Alias recovery; `resolveGen` on Gate applying) so a late RPC success cannot re-apply root / `setReady` / clear the timeout error.
-6. Electron **main** must honor the same map: renderer passes `METHOD_TIMEOUT_MS[method]` from `dev/apps/desktop/src/lib/invoke.ts` through preload into `daemonRpc` (unmapped methods fall back to 30s — do not leave long vault-root ops on that default).
+6. Electron **main** must honor the same map: renderer passes `METHOD_TIMEOUT_MS[method]` (CORE values from `@upriv/shared` `CORE_RPC_TIMEOUT_MS`, plus desktop `pick_directory` / `app_exit` / `app_shutdown` in `invoke.ts`) through preload into `daemonRpc` (unmapped methods fall back to 30s — do not leave long vault-root ops on that default).
 
 ## Budgets (current)
 
@@ -24,6 +24,10 @@ Every **blocking** loading / busy / applying overlay in the desktop (and later m
 | `vaultRootResolve` | 1 min | Gate applying while waiting on `vault_root_resolve` |
 | `settingsLoad` | 1 min | First settings load overlay |
 | `logs` | 1 min | Logs list / viewer |
+| `vaultRewrap` | 10 min | Vault settings password / KDF change |
+| `vaultPipeline` | 10 min | Open/close overlay (Argon2id unlock + flush) |
+| `vaultExport` | 10 min | Export zip of `contents/` or portable `.7z` |
+| `settingsSave` | 30 s | Settings Save / workspace path persist (`app_settings_save`) |
 | `default` | 2 min | Generic modal / list work |
 
 Do **not** swap `vaultRoot` and `vaultRootResolve` — setup/repair can be huge; resolve probe must fail sooner.

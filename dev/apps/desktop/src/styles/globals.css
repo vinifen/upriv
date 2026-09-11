@@ -1,5 +1,12 @@
 @import "./fonts.css";
-@import "./tokens.css";
+
+:root {
+  color-scheme: dark;
+}
+
+[data-theme="light"] {
+  color-scheme: light;
+}
 
 @tailwind base;
 @tailwind components;
@@ -8,18 +15,33 @@
 @layer base {
   html {
     @apply antialiased;
-    /* Reserve gutter so content width does not jump when scrollbar appears */
-    scrollbar-gutter: stable;
+    /* Matches `THEME_PALETTES.dark.background` until JS writes `--background`. */
+    background-color: var(--background, #081425);
     scrollbar-width: thin;
     scrollbar-color: var(--scrollbar-thumb) transparent;
+    overflow-x: hidden;
+    overflow-y: auto;
   }
 
   body {
     @apply min-h-screen bg-background font-body text-on-surface;
+    /* Page scroll only: 100vw does not shrink when the document scrollbar
+       appears, so the shell does not jump sideways. The thumb overlays the
+       right margin. Do not copy this onto modal / list panes. */
+    width: 100vw;
+    max-width: 100vw;
   }
 
   #root {
     @apply min-h-screen;
+    width: 100%;
+  }
+
+  /* Electron focuses the first tabbable (header ⋮) on show as :focus-visible. */
+  html[data-launch-focus] :focus-visible {
+    --tw-ring-shadow: 0 0 #0000;
+    --tw-ring-offset-shadow: 0 0 #0000;
+    outline: none;
   }
 
   /* Chromium scrollbar styling — slim thumb, no bright track */
@@ -35,7 +57,7 @@
   *::-webkit-scrollbar-thumb {
     background-color: var(--scrollbar-thumb);
     border: 2px solid transparent;
-    border-radius: 9999px;
+    border-radius: var(--radius-full);
     background-clip: padding-box;
   }
 
@@ -59,13 +81,38 @@
     outline-offset: -2px;
   }
 
-  /** Modal body scroll — stable width when scrollbar appears (no layout jump). */
+  /**
+   * Vault-list drop target. Tailwind opacity modifiers cannot tint a
+   * `var(--hex)` token; color-mix is the same 2px / 40% pattern as focus rings.
+   */
+  .vault-list-drop-over {
+    outline: 2px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  }
+
+  .vault-list-drop-over-blocked {
+    outline: 2px solid color-mix(in srgb, var(--vault-status-recovery) 40%, transparent);
+  }
+
+  .vault-list-drag-chip {
+    border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  }
+
+  .vault-list-drag-chip-blocked {
+    border-color: color-mix(in srgb, var(--vault-status-recovery) 40%, transparent);
+  }
+
+  .vault-list-ungroup-drop-active {
+    border-color: color-mix(in srgb, var(--accent) 60%, transparent);
+    background-color: color-mix(in srgb, var(--accent) 10%, transparent);
+  }
+
+  /** Modal body scroll — gutter only when the thumb is actually painted. */
   .modal-scroll-pane {
-    scrollbar-gutter: stable;
     overflow-x: hidden;
     overflow-y: auto;
     /* Room for focus rings on full-width controls (clipped by overflow otherwise). */
     padding-inline: 2px;
+    padding-block: 2px;
   }
 
   .modal-scroll-pane::-webkit-scrollbar {
@@ -76,7 +123,53 @@
     border-width: 1px;
   }
 
-  .vault-row {
+  /**
+   * Select dropdown — page thumb (`--scrollbar-thumb`) matches
+   * `surface-container-highest`, so it disappears on the picker. Contrast
+   * against on-surface so overflow is obvious.
+   */
+  .select-scroll-pane {
+    overflow-x: hidden;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in srgb, var(--on-surface) 42%, transparent) transparent;
+  }
+
+  .select-scroll-pane::-webkit-scrollbar {
+    width: 8px;
+  }
+
+  .select-scroll-pane::-webkit-scrollbar-track {
+    background: color-mix(in srgb, var(--on-surface) 8%, transparent);
+    border-radius: var(--radius-full);
+  }
+
+  .select-scroll-pane::-webkit-scrollbar-thumb {
+    background-color: color-mix(in srgb, var(--on-surface) 42%, transparent);
+    border: 2px solid transparent;
+    border-radius: var(--radius-full);
+    background-clip: padding-box;
+  }
+
+  .select-scroll-pane::-webkit-scrollbar-thumb:hover {
+    background-color: color-mix(in srgb, var(--on-surface) 58%, transparent);
+  }
+
+  /**
+   * Drop shadow via `--tw-shadow` so Tailwind `ring-*` (also box-shadow) still
+   * shows. Drop-target chrome uses `outline` (`vault-list-drop-over*`) instead
+   * of `ring-*`, so it does not go through this stack.
+   */
+  .vault-row,
+  .vault-group {
+    --tw-shadow: var(--vault-row-shadow);
+    box-shadow:
+      var(--tw-ring-offset-shadow, 0 0 #0000), var(--tw-ring-shadow, 0 0 #0000), var(--tw-shadow);
+    transition: background-color 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  .settings-section {
+    box-shadow: var(--settings-section-shadow);
     transition: background-color 0.2s cubic-bezier(0.4, 0, 0.2, 1);
   }
 }

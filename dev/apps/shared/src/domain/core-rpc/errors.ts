@@ -31,6 +31,7 @@ export class RpcError extends Error {
 export const RPC_PROTOCOL_ERROR_CODES = {
   UNKNOWN_METHOD: "unknown_method",
   INVALID_REQUEST: "invalid_request",
+  INTERNAL_ERROR: "internal_error",
 } as const;
 
 export type RpcProtocolErrorCode =

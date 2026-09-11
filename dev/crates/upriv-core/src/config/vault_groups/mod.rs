@@ -14,12 +14,20 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
+use crate::config::vault_config::set_vault_hidden;
 use crate::error::{Result, UprivError};
 use crate::paths::VaultRoot;
 
 pub use types::{LoadedVaultGroups, VaultGroup, VaultGroupsFile};
 
 pub const VAULT_GROUPS_FILE_NAME: &str = "vault_groups.toml";
+
+const VAULT_GROUPS_TOML_HEADER: &str = "\
+# Optional vault list organization (not a vault).
+# Membership is grouped_vaults[] here — not settings.toml or vaults/<id>/config.toml.
+# Missing file = no groups.
+
+";
 
 /// Serializes load-modify-save mutations (UniFFI may dispatch RPCs concurrently).
 static GROUPS_WRITE_LOCK: Mutex<()> = Mutex::new(());
@@ -103,12 +111,88 @@ fn trim_vault_ids(ids: &[String]) -> Vec<String> {
 }
 
 fn require_assignable_vault(root: &VaultRoot, vault_id: &str) -> Result<()> {
-    let dir = root.vault_dir(vault_id);
+    let dir = root.vault_dir(vault_id)?;
     if !dir.is_dir() {
         return Err(UprivError::VaultNotFound(dir));
     }
     crate::config::vault_config::load_vault_config(&dir)?;
     Ok(())
+}
+
+struct VaultHiddenRevert {
+    dir: PathBuf,
+    previous: bool,
+}
+
+fn unique_vault_ids(left: &[String], right: &[String]) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+    for id in left.iter().chain(right.iter()) {
+        if seen.insert(id.clone()) {
+            out.push(id.clone());
+        }
+    }
+    out
+}
+
+/// Load every existing member first so an invalid `config.toml` fails before any write.
+fn plan_set_grouped_vaults_hidden(
+    root: &VaultRoot,
+    vault_ids: &[String],
+    hidden: bool,
+) -> Result<Vec<(PathBuf, bool)>> {
+    let mut planned = Vec::new();
+    for vault_id in vault_ids {
+        let dir = match root.vault_dir(vault_id) {
+            Ok(dir) => dir,
+            Err(_) => continue,
+        };
+        if !dir.is_dir() {
+            continue;
+        }
+        let config = crate::config::vault_config::load_vault_config_raw(&dir)?;
+        if config.vault.hidden != hidden {
+            planned.push((dir, config.vault.hidden));
+        }
+    }
+    Ok(planned)
+}
+
+fn revert_vault_hidden(applied: &[VaultHiddenRevert]) {
+    for entry in applied.iter().rev() {
+        let _ = set_vault_hidden(&entry.dir, entry.previous);
+    }
+}
+
+fn apply_vault_hidden_plan(
+    plan: &[(PathBuf, bool)],
+    hidden: bool,
+) -> Result<Vec<VaultHiddenRevert>> {
+    let mut applied = Vec::new();
+    for (dir, previous) in plan {
+        match set_vault_hidden(dir, hidden) {
+            Ok(_) => applied.push(VaultHiddenRevert {
+                dir: dir.clone(),
+                previous: *previous,
+            }),
+            Err(error) => {
+                revert_vault_hidden(&applied);
+                return Err(error);
+            }
+        }
+    }
+    Ok(applied)
+}
+
+/// Cascade `[vault].hidden` on members. Skips missing dirs (orphans kept on
+/// mutate). Invalid `config.toml` fails the op before any vault write.
+fn set_grouped_vaults_hidden(
+    root: &VaultRoot,
+    vault_ids: &[String],
+    hidden: bool,
+) -> Result<Vec<VaultHiddenRevert>> {
+    let plan = plan_set_grouped_vaults_hidden(root, vault_ids, hidden)?;
+    apply_vault_hidden_plan(&plan, hidden)
 }
 
 fn find_group_index(groups: &[VaultGroup], group_id: &str) -> Option<usize> {
@@ -271,14 +355,15 @@ fn load_vault_groups_for_mutate(root: &VaultRoot) -> Result<Vec<VaultGroup>> {
 }
 
 /// Serialize groups to TOML body.
-pub fn serialize_vault_groups(groups: &[VaultGroup]) -> Result<String> {
+fn serialize_vault_groups(groups: &[VaultGroup]) -> Result<String> {
     let file = VaultGroupsFile {
         groups: groups.to_vec(),
     };
-    toml::to_string_pretty(&file).map_err(|error| UprivError::VaultGroupsInvalid {
+    let body = toml::to_string_pretty(&file).map_err(|error| UprivError::VaultGroupsInvalid {
         path: PathBuf::from(VAULT_GROUPS_FILE_NAME),
         detail: format!("serialize vault_groups.toml failed: {error}"),
-    })
+    })?;
+    Ok(format!("{VAULT_GROUPS_TOML_HEADER}{body}"))
 }
 
 fn prepare_groups_for_write(root: &VaultRoot, groups: &[VaultGroup]) -> Result<Vec<VaultGroup>> {
@@ -339,6 +424,7 @@ fn prepare_groups_for_write(root: &VaultRoot, groups: &[VaultGroup]) -> Result<V
             display_name,
             order: group.order,
             collapsed: group.collapsed,
+            hidden: group.hidden,
             grouped_vaults,
             grouped_vault_sort: sort.to_string(),
             grouped_vault_sort_direction: direction.to_string(),
@@ -349,7 +435,7 @@ fn prepare_groups_for_write(root: &VaultRoot, groups: &[VaultGroup]) -> Result<V
 
 /// Atomic write via [`crate::paths::write_bytes_atomic_existing_parent`].
 /// Never creates `.upriv/` (mid-session Case B must stay not-found).
-pub fn save_vault_groups(root: &VaultRoot, groups: &[VaultGroup]) -> Result<()> {
+fn save_vault_groups(root: &VaultRoot, groups: &[VaultGroup]) -> Result<()> {
     require_upriv_dir(root)?;
     let prepared = prepare_groups_for_write(root, groups)?;
     let body = serialize_vault_groups(&prepared)?;
@@ -419,14 +505,19 @@ pub fn known_vault_ids(root: &VaultRoot) -> Result<HashSet<String>> {
     Ok(ids)
 }
 
-/// Create a group (empty grouped_vaults unless provided). Sort defaults to order/asc.
-pub fn create_vault_group(
+/// Test helper — production must use [`create_vault_group_with_sort`] so
+/// `sibling_vaults_moved` is not discarded.
+#[cfg(test)]
+fn create_vault_group(
     root: &VaultRoot,
     id: &str,
     display_name: &str,
     grouped_vaults: &[String],
 ) -> Result<VaultGroup> {
-    create_vault_group_with_sort(root, id, display_name, grouped_vaults, None, None)
+    Ok(
+        create_vault_group_with_sort(root, id, display_name, grouped_vaults, None, None, false)?
+            .group,
+    )
 }
 
 /// Create a group with optional grouped-vault sort (same defaults as [`create_vault_group`]).
@@ -437,7 +528,8 @@ pub fn create_vault_group_with_sort(
     grouped_vaults: &[String],
     grouped_vault_sort: Option<&str>,
     grouped_vault_sort_direction: Option<&str>,
-) -> Result<VaultGroup> {
+    hidden: bool,
+) -> Result<VaultGroupCreate> {
     let _guard = lock_groups_write();
     require_upriv_dir(root)?;
     let id = id.trim();
@@ -454,10 +546,15 @@ pub fn create_vault_group_with_sort(
     }
     let clean_grouped = trim_vault_ids(grouped_vaults);
     let vault_set: HashSet<&str> = clean_grouped.iter().map(|s| s.as_str()).collect();
+    let mut sibling_vaults_moved = false;
     for group in &mut groups {
+        let before = group.grouped_vaults.len();
         group
             .grouped_vaults
             .retain(|m| !vault_set.contains(m.as_str()));
+        if group.grouped_vaults.len() != before {
+            sibling_vaults_moved = true;
+        }
     }
     for m in &clean_grouped {
         require_assignable_vault(root, m)?;
@@ -486,18 +583,26 @@ pub fn create_vault_group_with_sort(
         .unwrap_or(0)
         .saturating_add(1)
         .max(groups.len() as i64 + 1);
+    let applied = set_grouped_vaults_hidden(root, &clean_grouped, hidden)?;
     let group = VaultGroup {
         id: id.to_string(),
         display_name: display_name.to_string(),
         order,
         collapsed: false,
+        hidden,
         grouped_vaults: clean_grouped,
         grouped_vault_sort: sort,
         grouped_vault_sort_direction: direction,
     };
     groups.push(group.clone());
-    save_vault_groups(root, &groups)?;
-    Ok(group)
+    if let Err(error) = save_vault_groups(root, &groups) {
+        revert_vault_hidden(&applied);
+        return Err(error);
+    }
+    Ok(VaultGroupCreate {
+        group,
+        sibling_vaults_moved,
+    })
 }
 
 /// Delete group; vaults stay on disk. Returns removed group if found.
@@ -531,59 +636,72 @@ fn normalize_grouped_vault_sort_direction(direction: &str) -> Option<&'static st
     }
 }
 
+/// Result of [`create_vault_group_with_sort`]: the new group and whether siblings lost vaults.
+#[derive(Debug, Clone)]
+pub struct VaultGroupCreate {
+    pub group: VaultGroup,
+    /// True when creating with members removed those vaults from sibling groups.
+    pub sibling_vaults_moved: bool,
+}
+
+/// Result of [`update_vault_group`]: the saved group and whether membership moved.
+#[derive(Debug, Clone)]
+pub struct VaultGroupUpdate {
+    pub group: VaultGroup,
+    /// True when this group's `grouped_vaults` changed, or exclusivity removed a
+    /// vault from a sibling (assign / ungroup / picker).
+    pub grouped_vaults_changed: bool,
+    /// True when `hidden` flipped from false to true (log `vault_group_hidden`).
+    pub hidden_became_true: bool,
+}
+
+/// Optional fields for [`update_vault_group`] (avoids an 8-arg clippy hit).
+#[derive(Debug, Clone, Default)]
+pub struct UpdateVaultGroupParams<'a> {
+    pub display_name: Option<&'a str>,
+    pub collapsed: Option<bool>,
+    pub order: Option<i64>,
+    pub grouped_vaults: Option<&'a [String]>,
+    pub grouped_vault_sort: Option<&'a str>,
+    pub grouped_vault_sort_direction: Option<&'a str>,
+    pub hidden: Option<bool>,
+}
+
 /// Update display_name / collapsed / grouped_vaults / order / sort for one group.
 pub fn update_vault_group(
     root: &VaultRoot,
     group_id: &str,
-    display_name: Option<&str>,
-    collapsed: Option<bool>,
-    order: Option<i64>,
-    grouped_vaults: Option<&[String]>,
-    grouped_vault_sort: Option<&str>,
-    grouped_vault_sort_direction: Option<&str>,
-) -> Result<VaultGroup> {
+    params: UpdateVaultGroupParams<'_>,
+) -> Result<VaultGroupUpdate> {
     let _guard = lock_groups_write();
-    update_vault_group_locked(
-        root,
-        group_id,
-        display_name,
-        collapsed,
-        order,
-        grouped_vaults,
-        grouped_vault_sort,
-        grouped_vault_sort_direction,
-    )
+    update_vault_group_locked(root, group_id, params)
 }
 
 fn update_vault_group_locked(
     root: &VaultRoot,
     group_id: &str,
-    display_name: Option<&str>,
-    collapsed: Option<bool>,
-    order: Option<i64>,
-    grouped_vaults: Option<&[String]>,
-    grouped_vault_sort: Option<&str>,
-    grouped_vault_sort_direction: Option<&str>,
-) -> Result<VaultGroup> {
+    params: UpdateVaultGroupParams<'_>,
+) -> Result<VaultGroupUpdate> {
     require_upriv_dir(root)?;
     let mut groups = load_vault_groups_for_mutate(root)?;
     let idx = find_group_index(&groups, group_id)
         .ok_or_else(|| UprivError::VaultGroupNotFound(group_id.trim().to_string()))?;
+    let was_hidden = groups[idx].hidden;
 
-    if let Some(name) = display_name {
+    if let Some(name) = params.display_name {
         let name = name.trim();
         if name.is_empty() {
             return Err(groups_invalid(root, "display_name is empty"));
         }
         groups[idx].display_name = name.to_string();
     }
-    if let Some(c) = collapsed {
+    if let Some(c) = params.collapsed {
         groups[idx].collapsed = c;
     }
-    if let Some(o) = order {
+    if let Some(o) = params.order {
         groups[idx].order = o;
     }
-    if let Some(mode) = grouped_vault_sort {
+    if let Some(mode) = params.grouped_vault_sort {
         let Some(normalized) = normalize_grouped_vault_sort(mode) else {
             return Err(groups_invalid(
                 root,
@@ -592,7 +710,7 @@ fn update_vault_group_locked(
         };
         groups[idx].grouped_vault_sort = normalized.to_string();
     }
-    if let Some(direction) = grouped_vault_sort_direction {
+    if let Some(direction) = params.grouped_vault_sort_direction {
         let Some(normalized) = normalize_grouped_vault_sort_direction(direction) else {
             return Err(groups_invalid(
                 root,
@@ -601,26 +719,82 @@ fn update_vault_group_locked(
         };
         groups[idx].grouped_vault_sort_direction = normalized.to_string();
     }
-    if let Some(grouped_vaults) = grouped_vaults {
+    let previous_members = groups[idx].grouped_vaults.clone();
+    let mut grouped_vaults_changed = false;
+    if let Some(grouped_vaults) = params.grouped_vaults {
         let clean = trim_vault_ids(grouped_vaults);
         let vault_set: HashSet<&str> = clean.iter().map(|s| s.as_str()).collect();
         for (i, group) in groups.iter_mut().enumerate() {
             if i == idx {
                 continue;
             }
+            let before = group.grouped_vaults.len();
             group
                 .grouped_vaults
                 .retain(|m| !vault_set.contains(m.as_str()));
+            if group.grouped_vaults.len() != before {
+                grouped_vaults_changed = true;
+            }
         }
         for m in &clean {
             require_assignable_vault(root, m)?;
         }
+        if groups[idx].grouped_vaults != clean {
+            grouped_vaults_changed = true;
+        }
         groups[idx].grouped_vaults = clean;
+    }
+    if let Some(hidden) = params.hidden {
+        groups[idx].hidden = hidden;
+    }
+    let dest_hidden = groups[idx].hidden;
+    let current_members = groups[idx].grouped_vaults.clone();
+    let becoming_hidden = dest_hidden && !was_hidden;
+    let hide_ids = if dest_hidden {
+        if becoming_hidden {
+            unique_vault_ids(&previous_members, &current_members)
+        } else {
+            current_members.clone()
+        }
+    } else {
+        Vec::new()
+    };
+    let unhide_ids = if dest_hidden {
+        Vec::new()
+    } else if was_hidden {
+        unique_vault_ids(&previous_members, &current_members)
+    } else {
+        current_members
+            .iter()
+            .filter(|id| !previous_members.contains(id))
+            .cloned()
+            .collect()
+    };
+    let mut applied = Vec::new();
+    if !hide_ids.is_empty() {
+        applied.extend(set_grouped_vaults_hidden(root, &hide_ids, true)?);
+    }
+    if !unhide_ids.is_empty() {
+        match set_grouped_vaults_hidden(root, &unhide_ids, false) {
+            Ok(more) => applied.extend(more),
+            Err(error) => {
+                revert_vault_hidden(&applied);
+                return Err(error);
+            }
+        }
     }
 
     let updated = groups[idx].clone();
-    save_vault_groups(root, &groups)?;
-    Ok(updated)
+    let hidden_became_true = updated.hidden && !was_hidden;
+    if let Err(error) = save_vault_groups(root, &groups) {
+        revert_vault_hidden(&applied);
+        return Err(error);
+    }
+    Ok(VaultGroupUpdate {
+        group: updated,
+        grouped_vaults_changed,
+        hidden_became_true,
+    })
 }
 
 /// Persist root-level `order` values for the listed groups (one round-trip).
@@ -723,6 +897,7 @@ mod tests {
         assert_eq!(loaded.groups[0].grouped_vaults, vec!["notes", "taxes"]);
         let body = disk_body(&root);
         assert!(body.contains("grouped_vaults"));
+        assert!(body.contains("vaults/<id>/config.toml"));
         assert!(!body.contains("members ="));
         assert!(body.contains("grouped_vault_sort"));
         assert!(!body.contains("member_sort"));
@@ -770,10 +945,18 @@ grouped_vaults = ["notes"]
         let loaded = load_vault_groups(&root, &known).unwrap();
         assert_eq!(loaded.dropped_duplicate_assignments, 1);
         assert_eq!(loaded.groups[0].grouped_vaults, vec!["notes"]);
-        assert_eq!(loaded.groups[1].grouped_vaults.is_empty(), true);
+        assert!(loaded.groups[1].grouped_vaults.is_empty());
 
         // Mutate path soft-heals dual membership then persists.
-        update_vault_group(&root, "a", None, Some(true), None, None, None, None).unwrap();
+        update_vault_group(
+            &root,
+            "a",
+            UpdateVaultGroupParams {
+                collapsed: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
         let known = known_vault_ids(&root).unwrap();
         let after = load_vault_groups(&root, &known).unwrap();
         assert_eq!(after.dropped_duplicate_assignments, 0);
@@ -788,6 +971,7 @@ grouped_vaults = ["notes"]
                     display_name: "A".into(),
                     order: 1,
                     collapsed: false,
+                    hidden: false,
                     grouped_vaults: vec!["notes".into()],
                     grouped_vault_sort: "order".into(),
                     grouped_vault_sort_direction: "asc".into(),
@@ -797,6 +981,7 @@ grouped_vaults = ["notes"]
                     display_name: "B".into(),
                     order: 2,
                     collapsed: false,
+                    hidden: false,
                     grouped_vaults: vec!["notes".into()],
                     grouped_vault_sort: "order".into(),
                     grouped_vault_sort_direction: "asc".into(),
@@ -811,10 +996,22 @@ grouped_vaults = ["notes"]
     fn collapse_does_not_drop_orphans_or_invalid_config() {
         let (_tmp, root) = root_with_vaults(&["notes", "taxes"]);
         create_vault_group(&root, "work", "Work", &["notes".into(), "taxes".into()]).unwrap();
-        std::fs::remove_dir_all(root.vault_dir("taxes")).unwrap();
-        std::fs::write(root.vault_dir("notes").join("config.toml"), "not = [[[toml").unwrap();
+        std::fs::remove_dir_all(root.vault_dir("taxes").unwrap()).unwrap();
+        std::fs::write(
+            root.vault_dir("notes").unwrap().join("config.toml"),
+            "not = [[[toml",
+        )
+        .unwrap();
 
-        update_vault_group(&root, "work", None, Some(true), None, None, None, None).unwrap();
+        update_vault_group(
+            &root,
+            "work",
+            UpdateVaultGroupParams {
+                collapsed: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
         let body = disk_body(&root);
         assert!(body.contains("notes"));
         assert!(body.contains("taxes"));
@@ -824,7 +1021,11 @@ grouped_vaults = ["notes"]
     #[test]
     fn known_vault_ids_keeps_invalid_config_dir() {
         let (_tmp, root) = root_with_vaults(&["notes"]);
-        std::fs::write(root.vault_dir("notes").join("config.toml"), "broken").unwrap();
+        std::fs::write(
+            root.vault_dir("notes").unwrap().join("config.toml"),
+            "broken",
+        )
+        .unwrap();
         let known = known_vault_ids(&root).unwrap();
         assert!(known.contains("notes"));
     }
@@ -834,8 +1035,15 @@ grouped_vaults = ["notes"]
         let (_tmp, root) = root_with_vaults(&["notes"]);
         create_vault_group(&root, "work", "Work", &[]).unwrap();
         std::fs::remove_dir_all(root.root().join(".upriv")).unwrap();
-        let err = update_vault_group(&root, "work", None, Some(true), None, None, None, None)
-            .unwrap_err();
+        let err = update_vault_group(
+            &root,
+            "work",
+            UpdateVaultGroupParams {
+                collapsed: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
         assert!(matches!(err, UprivError::VaultRootNotFound(_)));
         assert!(!root.root().join(".upriv").exists());
     }
@@ -853,8 +1061,15 @@ grouped_vaults = ["notes"]
     #[test]
     fn update_missing_group_is_not_found() {
         let (_tmp, root) = root_with_vaults(&["notes"]);
-        let err = update_vault_group(&root, "missing", None, Some(true), None, None, None, None)
-            .unwrap_err();
+        let err = update_vault_group(
+            &root,
+            "missing",
+            UpdateVaultGroupParams {
+                collapsed: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
         assert!(matches!(err, UprivError::VaultGroupNotFound(_)));
     }
 
@@ -864,8 +1079,12 @@ grouped_vaults = ["notes"]
         let err = create_vault_group(&root, "work", "Work", &["gone".into()]).unwrap_err();
         assert!(matches!(err, UprivError::VaultNotFound(_)));
 
-        std::fs::create_dir_all(root.vault_dir("broken")).unwrap();
-        std::fs::write(root.vault_dir("broken").join("config.toml"), "nope").unwrap();
+        std::fs::create_dir_all(root.vault_dir("broken").unwrap()).unwrap();
+        std::fs::write(
+            root.vault_dir("broken").unwrap().join("config.toml"),
+            "nope",
+        )
+        .unwrap();
         let err = create_vault_group(&root, "other", "Other", &["broken".into()]).unwrap_err();
         assert!(matches!(err, UprivError::VaultConfigInvalid { .. }));
     }
@@ -893,6 +1112,7 @@ grouped_vaults = ["notes"]
                 display_name: "Work".into(),
                 order: 1,
                 collapsed: false,
+                hidden: false,
                 grouped_vaults: vec![],
                 grouped_vault_sort: "bogus".into(),
                 grouped_vault_sort_direction: "asc".into(),
@@ -915,7 +1135,15 @@ grouped_vaults = ["notes"]
     fn lookup_trims_group_id() {
         let (_tmp, root) = root_with_vaults(&["notes"]);
         create_vault_group(&root, "work", "Work", &[]).unwrap();
-        update_vault_group(&root, " work ", None, Some(true), None, None, None, None).unwrap();
+        update_vault_group(
+            &root,
+            " work ",
+            UpdateVaultGroupParams {
+                collapsed: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
         let known = known_vault_ids(&root).unwrap();
         let loaded = load_vault_groups(&root, &known).unwrap();
         assert!(loaded.groups[0].collapsed);
@@ -936,39 +1164,39 @@ grouped_vaults = ["notes"]
     }
 
     #[test]
-    fn legacy_members_keys_soft_migrate() {
-        let (_tmp, root) = root_with_vaults(&["notes", "taxes"]);
-        let path = vault_groups_path(&root);
-        std::fs::write(
-            &path,
-            r#"
-[[group]]
-id = "work"
-display_name = "Work"
-member_sort = "name"
-member_sort_direction = "desc"
-members = ["notes", "taxes"]
-"#,
-        )
-        .unwrap();
-        let known = known_vault_ids(&root).unwrap();
-        let loaded = load_vault_groups(&root, &known).unwrap();
-        assert_eq!(loaded.groups[0].grouped_vaults, vec!["notes", "taxes"]);
-        assert_eq!(loaded.groups[0].grouped_vault_sort, "name");
-        assert_eq!(loaded.groups[0].grouped_vault_sort_direction, "desc");
-    }
-
-    #[test]
-    fn prefer_new_keys_when_both_present() {
+    fn unknown_group_keys_are_rejected() {
         let raw = r#"
 [[group]]
 id = "work"
 display_name = "Work"
-members = ["old"]
 grouped_vaults = ["notes"]
+color = "red"
+"#;
+        assert!(parse_vault_groups_toml_str(raw).is_err());
+    }
+
+    #[test]
+    fn legacy_members_and_member_sort_load() {
+        let raw = r#"
+[[group]]
+id = "work"
+display_name = "Work"
+members = ["notes", "taxes"]
 member_sort = "name"
+"#;
+        let parsed = parse_vault_groups_toml_str(raw).unwrap();
+        assert_eq!(parsed.groups[0].grouped_vaults, vec!["notes", "taxes"]);
+        assert_eq!(parsed.groups[0].grouped_vault_sort, "name");
+    }
+
+    #[test]
+    fn grouped_vaults_key_is_required_shape() {
+        let raw = r#"
+[[group]]
+id = "work"
+display_name = "Work"
+grouped_vaults = ["notes"]
 grouped_vault_sort = "state"
-member_sort_direction = "desc"
 grouped_vault_sort_direction = "asc"
 "#;
         let parsed = parse_vault_groups_toml_str(raw).unwrap();
@@ -1024,17 +1252,37 @@ grouped_vault_sort_direction = "asc"
     #[test]
     fn create_respects_optional_sort() {
         let (_tmp, root) = root_with_vaults(&["notes"]);
-        let group = create_vault_group_with_sort(
+        let created = create_vault_group_with_sort(
             &root,
             "work",
             "Work",
             &["notes".into()],
             Some("name"),
             Some("desc"),
+            false,
         )
         .unwrap();
-        assert_eq!(group.grouped_vault_sort, "name");
-        assert_eq!(group.grouped_vault_sort_direction, "desc");
+        assert_eq!(created.group.grouped_vault_sort, "name");
+        assert_eq!(created.group.grouped_vault_sort_direction, "desc");
+        assert!(!created.sibling_vaults_moved);
+    }
+
+    #[test]
+    fn create_reports_sibling_vaults_moved() {
+        let (_tmp, root) = root_with_vaults(&["notes"]);
+        create_vault_group(&root, "work", "Work", &["notes".into()]).unwrap();
+        let created = create_vault_group_with_sort(
+            &root,
+            "home",
+            "Home",
+            &["notes".into()],
+            None,
+            None,
+            false,
+        )
+        .unwrap();
+        assert!(created.sibling_vaults_moved);
+        assert_eq!(created.group.grouped_vaults, vec!["notes"]);
     }
 
     #[test]
@@ -1048,5 +1296,260 @@ grouped_vault_sort_direction = "asc"
 
         let err = reorder_vault_group_grouped_vaults(&root, "work", &["notes".into()]).unwrap_err();
         assert!(matches!(err, UprivError::VaultGroupsInvalid { .. }));
+    }
+
+    #[test]
+    fn update_reports_grouped_vaults_moved() {
+        let (_tmp, root) = root_with_vaults(&["notes", "taxes"]);
+        create_vault_group(&root, "work", "Work", &["notes".into()]).unwrap();
+        create_vault_group(&root, "home", "Home", &[]).unwrap();
+
+        let collapse = update_vault_group(
+            &root,
+            "work",
+            UpdateVaultGroupParams {
+                collapsed: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(!collapse.grouped_vaults_changed);
+
+        let assigned = update_vault_group(
+            &root,
+            "home",
+            UpdateVaultGroupParams {
+                grouped_vaults: Some(&["notes".into()][..]),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(assigned.grouped_vaults_changed);
+        assert_eq!(assigned.group.grouped_vaults, vec!["notes"]);
+
+        let known = known_vault_ids(&root).unwrap();
+        let loaded = load_vault_groups(&root, &known).unwrap();
+        let work = loaded.groups.iter().find(|g| g.id == "work").unwrap();
+        assert!(work.grouped_vaults.is_empty());
+
+        let same = update_vault_group(
+            &root,
+            "home",
+            UpdateVaultGroupParams {
+                grouped_vaults: Some(&["notes".into()][..]),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(!same.grouped_vaults_changed);
+
+        let ungrouped = update_vault_group(
+            &root,
+            "home",
+            UpdateVaultGroupParams {
+                grouped_vaults: Some(&[][..]),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(ungrouped.grouped_vaults_changed);
+        assert!(ungrouped.group.grouped_vaults.is_empty());
+    }
+
+    fn vault_is_hidden(root: &VaultRoot, id: &str) -> bool {
+        crate::config::vault_config::load_vault_config(root.vault_dir(id).unwrap())
+            .unwrap()
+            .vault
+            .hidden
+    }
+
+    #[test]
+    fn hiding_group_cascades_vault_hidden_and_unhide_restores() {
+        let (_tmp, root) = root_with_vaults(&["notes", "taxes"]);
+        create_vault_group(&root, "work", "Work", &["notes".into(), "taxes".into()]).unwrap();
+        assert!(!vault_is_hidden(&root, "notes"));
+
+        update_vault_group(
+            &root,
+            "work",
+            UpdateVaultGroupParams {
+                hidden: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let known = known_vault_ids(&root).unwrap();
+        let loaded = load_vault_groups(&root, &known).unwrap();
+        assert!(loaded.groups[0].hidden);
+        assert!(vault_is_hidden(&root, "notes"));
+        assert!(vault_is_hidden(&root, "taxes"));
+
+        update_vault_group(
+            &root,
+            "work",
+            UpdateVaultGroupParams {
+                hidden: Some(false),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let loaded = load_vault_groups(&root, &known).unwrap();
+        assert!(!loaded.groups[0].hidden);
+        assert!(!vault_is_hidden(&root, "notes"));
+        assert!(!vault_is_hidden(&root, "taxes"));
+    }
+
+    #[test]
+    fn assign_into_hidden_group_hides_vault() {
+        let (_tmp, root) = root_with_vaults(&["notes", "taxes"]);
+        create_vault_group_with_sort(&root, "work", "Work", &["notes".into()], None, None, true)
+            .unwrap();
+        assert!(vault_is_hidden(&root, "notes"));
+        assert!(!vault_is_hidden(&root, "taxes"));
+
+        update_vault_group(
+            &root,
+            "work",
+            UpdateVaultGroupParams {
+                grouped_vaults: Some(&["notes".into(), "taxes".into()][..]),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(vault_is_hidden(&root, "taxes"));
+    }
+
+    #[test]
+    fn delete_hidden_group_leaves_vaults_hidden() {
+        let (_tmp, root) = root_with_vaults(&["notes"]);
+        create_vault_group_with_sort(&root, "work", "Work", &["notes".into()], None, None, true)
+            .unwrap();
+        delete_vault_group(&root, "work").unwrap();
+        assert!(vault_is_hidden(&root, "notes"));
+    }
+
+    #[test]
+    fn hiding_and_shrinking_membership_hides_removed_vaults() {
+        let (_tmp, root) = root_with_vaults(&["notes", "taxes"]);
+        create_vault_group(&root, "work", "Work", &["notes".into(), "taxes".into()]).unwrap();
+        update_vault_group(
+            &root,
+            "work",
+            UpdateVaultGroupParams {
+                grouped_vaults: Some(&["notes".into()][..]),
+                hidden: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(vault_is_hidden(&root, "notes"));
+        assert!(vault_is_hidden(&root, "taxes"));
+        let known = known_vault_ids(&root).unwrap();
+        let loaded = load_vault_groups(&root, &known).unwrap();
+        assert_eq!(loaded.groups[0].grouped_vaults, vec!["notes"]);
+        assert!(loaded.groups[0].hidden);
+    }
+
+    #[test]
+    fn hiding_group_validates_members_before_writing_hidden() {
+        let (_tmp, root) = root_with_vaults(&["notes", "taxes"]);
+        create_vault_group(&root, "work", "Work", &["notes".into(), "taxes".into()]).unwrap();
+        std::fs::write(
+            root.vault_dir("taxes").unwrap().join("config.toml"),
+            "not = [[[toml",
+        )
+        .unwrap();
+        let err = update_vault_group(
+            &root,
+            "work",
+            UpdateVaultGroupParams {
+                hidden: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(err, UprivError::VaultConfigInvalid { .. }));
+        assert!(!vault_is_hidden(&root, "notes"));
+        let known = known_vault_ids(&root).unwrap();
+        let loaded = load_vault_groups(&root, &known).unwrap();
+        assert!(!loaded.groups[0].hidden);
+    }
+
+    #[test]
+    fn moving_vault_from_hidden_group_to_visible_unhides() {
+        let (_tmp, root) = root_with_vaults(&["notes", "taxes"]);
+        create_vault_group_with_sort(
+            &root,
+            "secret",
+            "Secret",
+            &["notes".into()],
+            None,
+            None,
+            true,
+        )
+        .unwrap();
+        create_vault_group(&root, "visible", "Visible", &[]).unwrap();
+        update_vault_group(
+            &root,
+            "visible",
+            UpdateVaultGroupParams {
+                grouped_vaults: Some(&["notes".into()][..]),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(!vault_is_hidden(&root, "notes"));
+        let known = known_vault_ids(&root).unwrap();
+        let loaded = load_vault_groups(&root, &known).unwrap();
+        let secret = loaded.groups.iter().find(|g| g.id == "secret").unwrap();
+        let visible = loaded.groups.iter().find(|g| g.id == "visible").unwrap();
+        assert!(secret.grouped_vaults.is_empty());
+        assert_eq!(visible.grouped_vaults, vec!["notes"]);
+    }
+
+    #[test]
+    fn create_visible_group_unhides_stolen_members() {
+        let (_tmp, root) = root_with_vaults(&["notes"]);
+        create_vault_group_with_sort(
+            &root,
+            "secret",
+            "Secret",
+            &["notes".into()],
+            None,
+            None,
+            true,
+        )
+        .unwrap();
+        create_vault_group(&root, "open", "Open", &["notes".into()]).unwrap();
+        assert!(!vault_is_hidden(&root, "notes"));
+    }
+
+    #[test]
+    fn hiding_group_skips_mount_revalidation() {
+        let (_tmp, root) = root_with_vaults(&["notes", "taxes"]);
+        create_vault_group(&root, "work", "Work", &["notes".into(), "taxes".into()]).unwrap();
+        std::fs::write(
+            root.vault_dir("taxes").unwrap().join("config.toml"),
+            "[vault]\nid = \"taxes\"\ndisplay_name = \"taxes\"\n[mount]\nworkspace_path = \"relative\"\n",
+        )
+        .unwrap();
+        update_vault_group(
+            &root,
+            "work",
+            UpdateVaultGroupParams {
+                hidden: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(vault_hidden_raw(&root, "notes"));
+        assert!(vault_hidden_raw(&root, "taxes"));
+    }
+
+    fn vault_hidden_raw(root: &VaultRoot, id: &str) -> bool {
+        crate::config::vault_config::load_vault_config_raw(root.vault_dir(id).unwrap())
+            .unwrap()
+            .vault
+            .hidden
     }
 }

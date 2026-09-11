@@ -156,7 +156,7 @@ fn stdio_app_shutdown_exits_cleanly() {
 }
 
 #[test]
-fn stdio_app_settings_save_rejects_flattened_legacy_shape() {
+fn stdio_app_settings_save_rejects_flattened_shape() {
     let mut child = spawn_daemon();
     let mut stdout = std::io::BufReader::new(child.stdout.take().expect("stdout"));
     let mut stdin = child.stdin.take().expect("stdin");
@@ -164,10 +164,10 @@ fn stdio_app_settings_save_rejects_flattened_legacy_shape() {
     let _ready = read_line(&mut stdout);
     let _event = read_line(&mut stdout);
 
-    // Legacy flatten (ui/logging/app + syncAlias at top level) must fail — envelope is required.
+    // Flattened ui/logging/app at the top level must fail — envelope is required.
     writeln!(
         stdin,
-        r#"{{"type":"request","id":9,"method":"app_settings_save","params":{{"ui":{{"locale":"en","theme":"dark","vault_list_sort":"order","vault_list_sort_direction":"asc","vault_list_view":"default","always_show_hidden_vaults":false,"file_manager_dock_expanded":false}},"logging":{{"enabled":true,"level":"info","entries_per_file":1000,"keep_last_entries":10000}},"app":{{"vault_root_mode":"default_root","upriv_root_path":""}},"syncAlias":true}}}}"#
+        r#"{{"type":"request","id":9,"method":"app_settings_save","params":{{"ui":{{"locale":"en","theme":"dark","vault_list_sort":"order","vault_list_sort_direction":"asc","vault_list_view":"default","vault_list_search":"","vault_list_show_create_button":true,"vault_list_show_search_button":true,"vault_list_show_sort_button":true,"vault_list_show_view_button":true,"vault_list_show_header_more_button":true,"vault_list_show_vault_more_button":true,"vault_list_show_vault_settings_button":true,"vault_list_show_group_settings_button":true,"always_show_hidden_vaults":false,"vault_list_show_drag":true,"vault_list_allow_drag_into_group":true,"file_manager_dock_expanded":false}},"logging":{{"enabled":true,"level":"info","entries_per_file":1000,"keep_last_entries":10000}},"app":{{"vault_root_mode":"default_root","upriv_root_path":""}},"syncAlias":true}}}}"#
     )
     .expect("write request");
     stdin.flush().expect("flush stdin");
@@ -192,7 +192,7 @@ fn stdio_app_settings_save_rejects_snake_sync_alias() {
 
     writeln!(
         stdin,
-        r#"{{"type":"request","id":10,"method":"app_settings_save","params":{{"settings":{{"ui":{{"locale":"en","theme":"dark","vault_list_sort":"order","vault_list_sort_direction":"asc","vault_list_view":"default","always_show_hidden_vaults":false,"file_manager_dock_expanded":false}},"logging":{{"enabled":true,"level":"info","entries_per_file":1000,"keep_last_entries":10000}},"app":{{"vault_root_mode":"default_root","upriv_root_path":""}}}},"sync_alias":true}}}}"#
+        r#"{{"type":"request","id":10,"method":"app_settings_save","params":{{"settings":{{"ui":{{"locale":"en","theme":"dark","vault_list_sort":"order","vault_list_sort_direction":"asc","vault_list_view":"default","vault_list_search":"","vault_list_show_create_button":true,"vault_list_show_search_button":true,"vault_list_show_sort_button":true,"vault_list_show_view_button":true,"vault_list_show_header_more_button":true,"vault_list_show_vault_more_button":true,"vault_list_show_vault_settings_button":true,"vault_list_show_group_settings_button":true,"always_show_hidden_vaults":false,"vault_list_show_drag":true,"vault_list_allow_drag_into_group":true,"file_manager_dock_expanded":false}},"logging":{{"enabled":true,"level":"info","entries_per_file":1000,"keep_last_entries":10000}},"app":{{"vault_root_mode":"default_root","upriv_root_path":""}}}},"sync_alias":true}}}}"#
     )
     .expect("write request");
     stdin.flush().expect("flush stdin");
@@ -224,7 +224,7 @@ fn stdio_app_settings_save_wrote_true_roundtrip() {
 
     writeln!(
         stdin,
-        r#"{{"type":"request","id":11,"method":"app_settings_save","params":{{"settings":{{"ui":{{"locale":"en","theme":"dark","vault_list_sort":"order","vault_list_sort_direction":"asc","vault_list_view":"default","always_show_hidden_vaults":false,"file_manager_dock_expanded":false}},"logging":{{"enabled":true,"level":"info","entries_per_file":1000,"keep_last_entries":10000}},"app":{{"vault_root_mode":"default_root","upriv_root_path":""}}}},"syncAlias":false}}}}"#
+        r#"{{"type":"request","id":11,"method":"app_settings_save","params":{{"settings":{{"ui":{{"locale":"en","theme":"dark","vault_list_sort":"order","vault_list_sort_direction":"asc","vault_list_view":"default","vault_list_search":"","vault_list_show_create_button":true,"vault_list_show_search_button":true,"vault_list_show_sort_button":true,"vault_list_show_view_button":true,"vault_list_show_header_more_button":true,"vault_list_show_vault_more_button":true,"vault_list_show_vault_settings_button":true,"vault_list_show_group_settings_button":true,"always_show_hidden_vaults":false,"vault_list_show_drag":true,"vault_list_allow_drag_into_group":true,"file_manager_dock_expanded":false}},"logging":{{"enabled":true,"level":"info","entries_per_file":1000,"keep_last_entries":10000}},"app":{{"vault_root_mode":"default_root","upriv_root_path":""}}}},"syncAlias":false}}}}"#
     )
     .expect("write request");
     stdin.flush().expect("flush stdin");
@@ -257,7 +257,7 @@ fn stdio_log_list_get_delete_roundtrip() {
     // Persist settings + open logging session (emits settings_save / app_start).
     writeln!(
         stdin,
-        r#"{{"type":"request","id":20,"method":"app_settings_save","params":{{"settings":{{"ui":{{"locale":"en","theme":"dark","vault_list_sort":"order","vault_list_sort_direction":"asc","vault_list_view":"default","always_show_hidden_vaults":false,"file_manager_dock_expanded":false}},"logging":{{"enabled":true,"level":"info","entries_per_file":1000,"keep_last_entries":10000}},"app":{{"vault_root_mode":"default_root","upriv_root_path":""}}}},"syncAlias":false}}}}"#
+        r#"{{"type":"request","id":20,"method":"app_settings_save","params":{{"settings":{{"ui":{{"locale":"en","theme":"dark","vault_list_sort":"order","vault_list_sort_direction":"asc","vault_list_view":"default","vault_list_search":"","vault_list_show_create_button":true,"vault_list_show_search_button":true,"vault_list_show_sort_button":true,"vault_list_show_view_button":true,"vault_list_show_header_more_button":true,"vault_list_show_vault_more_button":true,"vault_list_show_vault_settings_button":true,"vault_list_show_group_settings_button":true,"always_show_hidden_vaults":false,"vault_list_show_drag":true,"vault_list_allow_drag_into_group":true,"file_manager_dock_expanded":false}},"logging":{{"enabled":true,"level":"info","entries_per_file":1000,"keep_last_entries":10000}},"app":{{"vault_root_mode":"default_root","upriv_root_path":""}}}},"syncAlias":false}}}}"#
     )
     .expect("write request");
     stdin.flush().expect("flush stdin");
@@ -344,7 +344,7 @@ fn stdio_log_list_mid_session_missing_root_is_not_found() {
 
     writeln!(
         stdin,
-        r#"{{"type":"request","id":30,"method":"app_settings_save","params":{{"settings":{{"ui":{{"locale":"en","theme":"dark","vault_list_sort":"order","vault_list_sort_direction":"asc","vault_list_view":"default","always_show_hidden_vaults":false,"file_manager_dock_expanded":false}},"logging":{{"enabled":true,"level":"info","entries_per_file":1000,"keep_last_entries":10000}},"app":{{"vault_root_mode":"default_root","upriv_root_path":""}}}},"syncAlias":false}}}}"#
+        r#"{{"type":"request","id":30,"method":"app_settings_save","params":{{"settings":{{"ui":{{"locale":"en","theme":"dark","vault_list_sort":"order","vault_list_sort_direction":"asc","vault_list_view":"default","vault_list_search":"","vault_list_show_create_button":true,"vault_list_show_search_button":true,"vault_list_show_sort_button":true,"vault_list_show_view_button":true,"vault_list_show_header_more_button":true,"vault_list_show_vault_more_button":true,"vault_list_show_vault_settings_button":true,"vault_list_show_group_settings_button":true,"always_show_hidden_vaults":false,"vault_list_show_drag":true,"vault_list_allow_drag_into_group":true,"file_manager_dock_expanded":false}},"logging":{{"enabled":true,"level":"info","entries_per_file":1000,"keep_last_entries":10000}},"app":{{"vault_root_mode":"default_root","upriv_root_path":""}}}},"syncAlias":false}}}}"#
     )
     .expect("write request");
     stdin.flush().expect("flush stdin");
@@ -374,6 +374,60 @@ fn stdio_log_list_mid_session_missing_root_is_not_found() {
         serde_json::from_str(&read_line(&mut stdout)).expect("parse list");
     assert_eq!(list["ok"], false, "list={list}");
     assert_eq!(list["error"]["code"], "vault_root_not_found");
+
+    child.kill().expect("kill daemon");
+    child.wait().expect("wait on daemon");
+}
+
+#[test]
+fn stdio_log_list_mid_session_incomplete_root_is_incomplete() {
+    let root = tempfile::tempdir().expect("tempdir");
+    upriv_core::initialize_vault_root(root.path()).expect("initialize vault root");
+    let anchor = root.path().to_str().expect("utf8 path");
+
+    let mut child = spawn_daemon_with_env(&[
+        ("UPRIV_DEFAULT_ROOT_ANCHOR", anchor),
+        ("UPRIV_DISTRIBUTION", "portable"),
+    ]);
+    let mut stdout = std::io::BufReader::new(child.stdout.take().expect("stdout"));
+    let mut stdin = child.stdin.take().expect("stdin");
+
+    let _ready = read_line(&mut stdout);
+    let _event = read_line(&mut stdout);
+
+    writeln!(
+        stdin,
+        r#"{{"type":"request","id":40,"method":"app_settings_save","params":{{"settings":{{"ui":{{"locale":"en","theme":"dark","vault_list_sort":"order","vault_list_sort_direction":"asc","vault_list_view":"default","vault_list_search":"","vault_list_show_create_button":true,"vault_list_show_search_button":true,"vault_list_show_sort_button":true,"vault_list_show_view_button":true,"vault_list_show_header_more_button":true,"vault_list_show_vault_more_button":true,"vault_list_show_vault_settings_button":true,"vault_list_show_group_settings_button":true,"always_show_hidden_vaults":false,"vault_list_show_drag":true,"vault_list_allow_drag_into_group":true,"file_manager_dock_expanded":false}},"logging":{{"enabled":true,"level":"info","entries_per_file":1000,"keep_last_entries":10000}},"app":{{"vault_root_mode":"default_root","upriv_root_path":""}}}},"syncAlias":false}}}}"#
+    )
+    .expect("write request");
+    stdin.flush().expect("flush stdin");
+    let save: serde_json::Value =
+        serde_json::from_str(&read_line(&mut stdout)).expect("parse save");
+    assert_eq!(save["ok"], true, "save={save}");
+
+    writeln!(
+        stdin,
+        r#"{{"type":"request","id":41,"method":"vault_root_resolve","params":{{}}}}"#
+    )
+    .expect("write request");
+    stdin.flush().expect("flush stdin");
+    let resolve: serde_json::Value =
+        serde_json::from_str(&read_line(&mut stdout)).expect("parse resolve");
+    assert_eq!(resolve["ok"], true, "resolve={resolve}");
+
+    std::fs::remove_dir_all(root.path().join(".upriv")).expect("remove .upriv");
+    std::fs::create_dir_all(root.path().join(".upriv")).expect("empty incomplete .upriv");
+
+    writeln!(
+        stdin,
+        r#"{{"type":"request","id":42,"method":"log_list","params":{{}}}}"#
+    )
+    .expect("write request");
+    stdin.flush().expect("flush stdin");
+    let list: serde_json::Value =
+        serde_json::from_str(&read_line(&mut stdout)).expect("parse list");
+    assert_eq!(list["ok"], false, "list={list}");
+    assert_eq!(list["error"]["code"], "vault_root_incomplete");
 
     child.kill().expect("kill daemon");
     child.wait().expect("wait on daemon");

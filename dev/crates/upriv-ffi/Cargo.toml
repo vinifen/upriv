@@ -3,6 +3,7 @@ name = "upriv-ffi"
 version.workspace = true
 description = "UniFFI bridge — mobile RN loads libupriv_ffi.so / staticlib into the app process"
 authors.workspace = true
+license.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 

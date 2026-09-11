@@ -1,5 +1,9 @@
+import {
+  CORE_RPC_TIMEOUT_MS,
+  DESKTOP_ONLY_RPC_COMMANDS,
+  SHELL_ONLY_RPC_COMMANDS,
+} from "@upriv/shared";
 import { BRIDGE_ERROR_CODES, RpcError, isRpcError } from "./errors";
-import { LOADING_BUDGET_MS } from "@upriv/shared";
 
 /** Matches `formatRpcError` in `apps/electron/src/daemon.ts` (`code: message`).
  * Electron wraps IPC failures as `Error invoking remote method '…': Error: code: message`.
@@ -27,37 +31,14 @@ const DEFAULT_INVOKE_TIMEOUT_MS = 30_000;
 
 /**
  * Per-method renderer + Electron main timeout. `0` = no timeout (native dialogs).
- * Keep in sync with `LOADING_BUDGET_MS` for user-visible waits.
+ * CORE values come from `@upriv/shared` `CORE_RPC_TIMEOUT_MS`.
  * Passed through preload so main `daemonRpc` does not clamp to 30s.
  */
 export const METHOD_TIMEOUT_MS: Partial<Record<string, number>> = {
-  app_shutdown: 5_000,
-  app_version: 10_000,
-  app_exit: 15_000,
-  app_settings_get: LOADING_BUDGET_MS.settingsLoad,
-  app_settings_save: 30_000,
-  pick_directory: 0,
-  vault_root_resolve: LOADING_BUDGET_MS.vaultRootResolve,
-  // Large `.upriv/` rename/delete on slow disks can take minutes; keep a high ceiling
-  // and map timeouts to vault-root-specific i18n (see errorMessages / locales).
-  vault_root_setup_default_root: LOADING_BUDGET_MS.vaultRoot,
-  vault_root_setup_path: LOADING_BUDGET_MS.vaultRoot,
-  vault_root_deactivate_alias: 10_000,
-  vault_root_read_alias: 10_000,
-  vault_root_default_root_status: 10_000,
-  vault_root_inspect_path: 10_000,
-  log_list: LOADING_BUDGET_MS.logs,
-  log_get: LOADING_BUDGET_MS.logs,
-  log_delete: LOADING_BUDGET_MS.logs,
-  log_event: LOADING_BUDGET_MS.logs,
-  vault_group_list: LOADING_BUDGET_MS.default,
-  vault_group_create: LOADING_BUDGET_MS.default,
-  vault_group_update: LOADING_BUDGET_MS.default,
-  vault_group_delete: LOADING_BUDGET_MS.default,
-  vault_group_set_collapsed: LOADING_BUDGET_MS.default,
-  vault_group_reorder: LOADING_BUDGET_MS.default,
-  vault_group_reorder_grouped_vaults: LOADING_BUDGET_MS.default,
-  vault_group_repair: LOADING_BUDGET_MS.default,
+  ...CORE_RPC_TIMEOUT_MS,
+  [DESKTOP_ONLY_RPC_COMMANDS.APP_SHUTDOWN]: 5_000,
+  [SHELL_ONLY_RPC_COMMANDS.APP_EXIT]: 15_000,
+  [SHELL_ONLY_RPC_COMMANDS.PICK_DIRECTORY]: 0,
 };
 
 /** Normalize Electron/preload invoke failures into `RpcError` (wire `code: message`). */
@@ -71,8 +52,17 @@ export function parseInvokeFailure(error: unknown): RpcError {
       const code = match[1] === "timeout" ? BRIDGE_ERROR_CODES.RPC_TIMEOUT : match[1];
       return new RpcError(code, match[2]);
     }
-    // Electron/preload/serialize — not the same as "daemon process down".
-    return new RpcError(BRIDGE_ERROR_CODES.BRIDGE_INVOKE_FAILED, error.message);
+    // Daemon-down messages are not `code: message` wire format — map them
+    // to `daemon_unavailable`. Other preload/serialize failures stay as
+    // `bridge_invoke_failed`.
+    const text = error.message;
+    if (
+      /upriv-daemon (exited|is not running)/i.test(text) ||
+      /upriv-daemon startup timeout/i.test(text)
+    ) {
+      return new RpcError(BRIDGE_ERROR_CODES.DAEMON_UNAVAILABLE, text);
+    }
+    return new RpcError(BRIDGE_ERROR_CODES.BRIDGE_INVOKE_FAILED, text);
   }
 
   return new RpcError(BRIDGE_ERROR_CODES.BRIDGE_INVOKE_FAILED, String(error));

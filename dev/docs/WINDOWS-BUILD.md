@@ -93,7 +93,7 @@ npm run electron:build:win
 
 That script runs, in order:
 
-1. `node scripts/sync-version.mjs` — sync `dev/VERSION` into manifests  
+1. `node scripts/sync-version.mjs` — sync repo-root `VERSION` into manifests  
 2. `npm run build:electron --prefix apps/desktop` — typecheck + Vite Electron renderer → `apps/desktop/renderer-out/`  
 3. `npm run daemon:build:release` — `cargo build --release -p upriv-daemon` → `target/release/upriv-daemon.exe`  
 4. `npm run dist:win --prefix apps/electron` — compile Electron main (`tsc`) + `electron-builder --win nsis portable`
@@ -110,8 +110,8 @@ npm run dist:win
 ## Pipeline details (what each piece does)
 
 ```text
-dev/VERSION
-    │ sync-version
+VERSION                 (repository root)
+    │ sync-version (from dev/)
     ▼
 apps/desktop  ──build:electron──►  renderer-out/     (React UI for Electron)
 apps/.../upriv-daemon ──release──► target/release/upriv-daemon.exe
@@ -154,13 +154,13 @@ electron-builder’s default Windows path downloads **winCodeSign**, whose cache
 
 **Trade-off:** without a follow-up step, `Upriv.exe` would keep the default **Electron atom** icon in Explorer / Start / taskbar.
 
-### 4. Icon embed via `afterPack` + standalone rcedit
+### 4. Icon embed via `afterPack` + vendored rcedit
 
 **Fix:** `apps/electron/scripts/afterPack.cjs`:
 
-- On **win32**, downloads (once) `build/tools/rcedit-x64.exe` (gitignored) and runs  
-  `rcedit Upriv.exe --set-icon build/icons/icon.ico`
-- On **linux**, keeps the AppImage `--no-sandbox` wrapper behavior (same file, platform branch)
+- On **win32**, runs the `rcedit` **devDependency** (`node_modules/rcedit/bin/rcedit-x64.exe`, pinned in `package-lock.json`) as  
+  `rcedit Upriv.exe --set-icon build/icons/icon.ico`. No GitHub download at pack time. The binary is **not** packed into the installer (`files` is a whitelist of `dist/` + renderer).
+- On **linux**, keeps the AppImage `--no-sandbox` wrapper behavior (same file, platform branch). Linux never executes rcedit.
 
 Executable name resolution uses `productFilename` (not only `packager.executableName`, which can be unset on Windows).
 
@@ -229,7 +229,7 @@ Same prerequisites as a physical Windows host. In CI:
 2. `npm ci` in `apps/desktop` and `apps/electron`.  
 3. Run `npm run electron:build:win` from `dev/` with MSVC env.  
 4. Upload `target/release/bundle/electron/*-setup-*.exe` and `*-portable-*.exe` as artifacts.  
-5. First CI run will download Electron + rcedit into caches; allow network.
+5. First CI run will download Electron (and npm deps, including the vendored `rcedit` exe) into caches; allow network. Pack time does **not** fetch rcedit from GitHub.
 
 ### macOS
 
@@ -276,4 +276,4 @@ DMG only, **on a Mac** (`electron-builder --mac`). Not produced by `electron:bui
 | `dev/apps/electron/scripts/afterPack.cjs` | Windows icon embed + Linux AppImage wrap |
 | `dev/apps/electron/build/icons/` | PNG/ICO brand assets |
 | `dev/apps/electron/src/main.ts` | Window icon, AppUserModelId, setAppDetails |
-| `dev/.gitignore` | Ignores `apps/electron/build/tools/` (downloaded rcedit) |
+| `dev/.gitignore` | Ignores `apps/electron/build/tools/` (legacy download cache; unused) |

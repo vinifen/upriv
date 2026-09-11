@@ -1,5 +1,4 @@
 import type { VaultSettingsConfig } from "./types";
-import { vaultCanSealFromStorage } from "./types";
 
 /** List fields synced from `[vault]` on save (mock until `vault_config_save` RPC). */
 export function vaultSettingsToListPatch(config: VaultSettingsConfig) {
@@ -12,6 +11,5 @@ export function vaultSettingsToListPatch(config: VaultSettingsConfig) {
     hidden: config.vault.hidden,
     passwordHint: passwordHint || undefined,
     storageMode,
-    canSeal: vaultCanSealFromStorage(storageMode),
   };
 }

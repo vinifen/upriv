@@ -1,19 +1,18 @@
-# Vault config — storage, security, backup, 7z, policies (static; survives seal)
-# Example 3 — sealed vault (archive only on disk; default close action = seal)
+# Vault config — storage, security, backup, 7z, policies
+# Example — encrypted_dir (closed)
 
 [vault]
 id = "cold-storage"
 display_name = "Cold Storage"
 order = 2
-vault_file = "archive/Cold Storage.7z"
 password_hint = "Winter project codes"
 note = "Long-term archive — open rarely"
 
 [storage]
 mode = "encrypted_dir"
 
-[close]
-default_action = "seal"
+# Unlock RAM (Argon2id) lives in contents/vault.header — not in config.toml.
+# There is no [kdf] section here; upriv-core reads KDF params from the header.
 
 [backup]
 enabled = false

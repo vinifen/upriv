@@ -14,7 +14,7 @@ const appServices = createServices();
  * 1. `ServicesProvider` — RPC/mock adapters
  * 2. `AppSettingsProvider` — settings + i18n (Gate needs settings)
  * 3. `VaultRootGate` — overlay until vault-root ready; children stay mounted
- *    (`pointer-events-none` + `aria-hidden` while blocked — not HTML `inert`).
+ *    (`inert` + `pointer-events-none` + `aria-hidden` while blocked).
  *    (`ready` kept across re-resolve until a blocking state is confirmed)
  * 4. `FileManagerProvider` — under gate so session state survives setup/repair overlays
  */

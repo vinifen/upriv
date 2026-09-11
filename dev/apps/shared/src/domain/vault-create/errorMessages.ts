@@ -9,6 +9,7 @@ export const CREATE_VAULT_ERROR_I18N_KEYS = {
   source_missing: "vault.create.error.source_missing",
   import_file_missing: "vault.create.error.import_file_missing",
   password_empty: "vault.create.error.password_empty",
+  password_too_short: "vault.create.error.password_too_short",
   password_mismatch: "vault.create.error.password_mismatch",
   password_not_validated: "vault.create.error.password_not_validated",
   password_wrong: "error.wrong_password",
@@ -16,6 +17,11 @@ export const CREATE_VAULT_ERROR_I18N_KEYS = {
   group_name_empty: "vault.create.error.group_name_empty",
   group_name_too_long: "vault.create.error.group_name_too_long",
   group_name_invalid: "vault.create.error.group_name_invalid",
+  mount_path_empty: "modal.workspace.error.empty",
+  mount_path_not_absolute: "modal.workspace.error.not_absolute",
+  mount_path_saf_tree: "modal.workspace.error.saf_tree_child",
+  mount_path_reserved: "modal.workspace.error.reserved",
+  mount_path_root_unknown: "modal.workspace.error.unavailable",
 } as const satisfies Record<CreateVaultValidationCode, I18nKey>;
 
 export type CreateVaultErrorI18nKey =

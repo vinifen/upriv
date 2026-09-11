@@ -2,7 +2,7 @@ import { useCallback } from "react";
 import { useTranslation } from "@/i18n";
 import type { I18nKey } from "@/i18n";
 import { desktopErrorI18nKey } from "@/lib/errorMessages";
-import { useToast, TOAST_DEFAULT_MS } from "./useToast";
+import { TOAST_DEFAULT_MS, useToast } from "@upriv/shared/react";
 
 /** Toast + translated user-facing errors (`showError(error, fallbackKey)`). */
 export function useErrorToast(defaultMs: number = TOAST_DEFAULT_MS) {

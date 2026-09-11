@@ -7,6 +7,7 @@ import { radii } from "@/theme/tokens";
 
 interface VaultDragHandleProps {
   disabled?: boolean;
+  label?: string;
   onDragStart: (pageX: number, pageY: number) => void;
   onDragMove: (pageX: number, pageY: number) => void;
   onDragEnd: (pageX: number, pageY: number) => void;
@@ -16,12 +17,14 @@ interface VaultDragHandleProps {
 /** Grip control — desktop `VaultDragHandle` parity via pan (no HTML5 DnD). */
 export function VaultDragHandle({
   disabled = false,
+  label,
   onDragStart,
   onDragMove,
   onDragEnd,
   onDragCancel,
 }: VaultDragHandleProps) {
   const { t } = useTranslation();
+  const handleLabel = label ?? t("action.drag_reorder");
   const { colors } = useTheme();
   const callbacksRef = useRef({ disabled, onDragStart, onDragMove, onDragEnd, onDragCancel });
   callbacksRef.current = { disabled, onDragStart, onDragMove, onDragEnd, onDragCancel };
@@ -34,10 +37,7 @@ export function VaultDragHandle({
         onMoveShouldSetPanResponder: () => !callbacksRef.current.disabled,
         onMoveShouldSetPanResponderCapture: () => !callbacksRef.current.disabled,
         onPanResponderGrant: (event) => {
-          callbacksRef.current.onDragStart(
-            event.nativeEvent.pageX,
-            event.nativeEvent.pageY,
-          );
+          callbacksRef.current.onDragStart(event.nativeEvent.pageX, event.nativeEvent.pageY);
         },
         onPanResponderMove: (event) => {
           callbacksRef.current.onDragMove(event.nativeEvent.pageX, event.nativeEvent.pageY);
@@ -58,7 +58,7 @@ export function VaultDragHandle({
     <View
       {...pan.panHandlers}
       accessibilityRole="button"
-      accessibilityLabel={t("action.drag_reorder")}
+      accessibilityLabel={handleLabel}
       accessibilityState={{ disabled }}
       collapsable={false}
       style={[styles.handle, disabled ? styles.disabled : null]}

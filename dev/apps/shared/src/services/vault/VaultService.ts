@@ -1,4 +1,5 @@
-import type { VaultListItem } from "../../domain/vault-list";
+import type { KdfUnlockPreset } from "../../domain/vault-settings/kdf";
+import type { VaultExportRequest, VaultListItem } from "../../domain/vault-list";
 import type { VaultSettingsConfig } from "../../domain/vault-settings";
 import type { VaultRow } from "../../domain/vault";
 
@@ -16,6 +17,18 @@ export interface VaultService {
   /** Remove settings on vault delete. */
   unregisterSettings(vaultId: string): Promise<void>;
 
-  /** Export bytes for `{display_name}.7z` (mock or desktop read). */
-  getArchiveExportBytes(vault: VaultRow): Promise<Uint8Array>;
+  /**
+   * Argon2id unlock preset from `contents/vault.header` (not `config.toml`).
+   * `undefined` only while the header is still being read or if the probe fails.
+   */
+  getUnlockPreset(vaultId: string): Promise<KdfUnlockPreset | undefined>;
+
+  /** Mock / post-rewrap: update the in-memory header preset after `changeKdfPreset`. */
+  setUnlockPreset(vaultId: string, preset: KdfUnlockPreset): Promise<void>;
+
+  /**
+   * Export bytes for `{display_name}.zip` or `{display_name}.7z`.
+   * Zip = envelope of `contents/` (no zip password). `.7z` = logical stream (never `.enc` blobs).
+   */
+  getExportBytes(vault: VaultRow, request: VaultExportRequest): Promise<Uint8Array>;
 }

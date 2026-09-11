@@ -1,8 +1,6 @@
 export {
-  colors,
   spacing,
   radii,
-  typography,
   touchMin,
   MODAL_MAX_HEIGHT_RATIO,
   MODAL_WIZARD_BODY_MAX_HEIGHT_RATIO,
@@ -11,3 +9,4 @@ export {
 } from "./tokens";
 export type { ThemeColors } from "./tokens";
 export { ThemeProvider, useTheme } from "./ThemeContext";
+export { vaultStatusBadgeColors, vaultStatusDotColor, vaultStatusIconColors } from "./vault-status";

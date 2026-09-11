@@ -3,6 +3,7 @@ name = "upriv-rpc"
 version.workspace = true
 description = "Shared JSON-RPC method handlers for upriv-daemon and upriv-ffi (mobile)"
 authors.workspace = true
+license.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 

@@ -63,9 +63,9 @@ export function FileManagerLayer() {
     <>
       <FileManagerModal
         open={maximizedEntry !== null}
-        title={
-          maximizedEntry ? t("modal.file_manager.title", { name: maximizedEntry.displayName }) : ""
-        }
+        title={maximizedEntry ? t("modal.file_manager.title") : ""}
+        contextTitle={maximizedEntry?.displayName}
+        titleIcon="file-manager"
         suspendMinimize={suspendMinimize}
         onMinimize={() => {
           if (!maximizedEntry || suspendMinimize) return;

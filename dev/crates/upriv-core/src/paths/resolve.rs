@@ -559,6 +559,7 @@ mod starts_order_tests {
     #[test]
     fn default_root_anchor_preferred_over_cwd_root() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _env = crate::paths::EnvGuard::capture(&["UPRIV_DEFAULT_ROOT_ANCHOR", "APPIMAGE"]);
         std::env::remove_var("UPRIV_DEFAULT_ROOT_ANCHOR");
 
         let appimage_dir = tempfile::tempdir().unwrap();
@@ -615,7 +616,12 @@ fn try_open_alias(app_home: &Path) -> Result<Option<VaultRoot>> {
         | Err(UprivError::VaultNotFound(_))
         | Err(UprivError::VaultConfigInvalid { .. })
         | Err(UprivError::VaultGroupsInvalid { .. })
-        | Err(UprivError::VaultGroupNotFound(_)) => {
+        | Err(UprivError::VaultGroupNotFound(_))
+        | Err(UprivError::WorkspacePathInvalid { .. })
+        | Err(UprivError::WorkspacePathReserved(_))
+        | Err(UprivError::WorkspaceUnset)
+        | Err(UprivError::LogFileTooLarge { .. })
+        | Err(UprivError::WorkspaceUnavailable(_)) => {
             Err(UprivError::VaultRootAliasInvalid(alias.path))
         }
     }
@@ -1009,6 +1015,7 @@ mod tests {
     #[test]
     fn app_home_prefers_appimage_dir_over_binary() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _env = crate::paths::EnvGuard::capture(&["UPRIV_DEFAULT_ROOT_ANCHOR", "APPIMAGE"]);
         let appimage_dir = tempfile::tempdir().unwrap();
         let appimage = appimage_dir.path().join("Upriv.AppImage");
         std::fs::write(&appimage, b"fake").unwrap();
@@ -1024,6 +1031,11 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
 
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _env = crate::paths::EnvGuard::capture(&[
+            "UPRIV_DEFAULT_ROOT_ANCHOR",
+            "APPIMAGE",
+            "XDG_DATA_HOME",
+        ]);
         let install = tempfile::tempdir().unwrap();
         let appimage = install.path().join("Upriv.AppImage");
         std::fs::write(&appimage, b"fake").unwrap();
@@ -1055,6 +1067,7 @@ mod tests {
         // Electron may set UPRIV_DEFAULT_ROOT_ANCHOR to an already-resolved home; trust it
         // even if a later probe would fail (no double fallback fight).
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _env = crate::paths::EnvGuard::capture(&["UPRIV_DEFAULT_ROOT_ANCHOR", "APPIMAGE"]);
         let anchor = tempfile::tempdir().unwrap();
         std::env::set_var("UPRIV_DEFAULT_ROOT_ANCHOR", anchor.path());
         std::env::remove_var("APPIMAGE");
@@ -1069,6 +1082,12 @@ mod tests {
         use crate::paths::{AppDistribution, ENV_DISTRIBUTION};
 
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _env = crate::paths::EnvGuard::capture(&[
+            "HOME",
+            "APPIMAGE",
+            "UPRIV_DEFAULT_ROOT_ANCHOR",
+            ENV_DISTRIBUTION,
+        ]);
         let home = tempfile::tempdir().unwrap();
         let appdata = home.path().join("appdata");
         std::fs::create_dir_all(&appdata).unwrap();
@@ -1106,6 +1125,11 @@ mod tests {
         use crate::paths::{initialize_vault_root, ENV_DISTRIBUTION};
 
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _env = crate::paths::EnvGuard::capture(&[
+            "APPIMAGE",
+            "UPRIV_DEFAULT_ROOT_ANCHOR",
+            ENV_DISTRIBUTION,
+        ]);
         let base = tempfile::tempdir().unwrap();
         let app_home = base.path().join("missing-app-home");
         assert!(!app_home.exists());

@@ -21,6 +21,24 @@ describe("log file wire contract", () => {
   it("rejects invalid shapes", () => {
     expect(() => parseAppLogFile(null)).toThrow(/expected object/);
     expect(() => parseAppLogFile({ filename: "x.log" })).toThrow(/invalid shape/);
+    expect(() =>
+      parseAppLogFile({
+        ...wireFixture,
+        sizeBytes: -1,
+      }),
+    ).toThrow(/invalid shape/);
+    expect(() =>
+      parseAppLogFile({
+        ...wireFixture,
+        lineCount: -1,
+      }),
+    ).toThrow(/invalid shape/);
+    expect(() =>
+      parseAppLogFile({
+        ...wireFixture,
+        lineCount: 3.5,
+      }),
+    ).toThrow(/invalid shape/);
   });
 });
 
@@ -29,8 +47,6 @@ describe("logCreatedAtFromFilename", () => {
     expect(logCreatedAtFromFilename("current-000001-20260101120000.log")).toBe(
       "2026-01-01T12:00:00.000Z",
     );
-    expect(logCreatedAtFromFilename("000002-20260529153045.log")).toBe(
-      "2026-05-29T15:30:45.000Z",
-    );
+    expect(logCreatedAtFromFilename("000002-20260529153045.log")).toBe("2026-05-29T15:30:45.000Z");
   });
 });

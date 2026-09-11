@@ -11,6 +11,17 @@ import { VAULT_ERROR_CODES } from "../../domain/vault/errors/codes";
 import { RpcError } from "../../domain/core-rpc/errors";
 import type { VaultGroupService } from "./VaultGroupService";
 
+function uniqueVaultIds(left: readonly string[], right: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const id of [...left, ...right]) {
+    if (seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
+}
+
 function cloneGroup(group: VaultGroup): VaultGroup {
   return normalizeVaultGroup({ ...group, groupedVaults: [...group.groupedVaults] });
 }
@@ -94,6 +105,11 @@ function sanitizeListed(
 export interface MockVaultGroupServiceOptions {
   getKnownVaultIds: () => Iterable<string>;
   initialGroups?: readonly VaultGroup[];
+  /** Persist `[vault].hidden` on members when a group is hidden or unhidden. */
+  hideVaults?: (vaultIds: readonly string[]) => void;
+  unhideVaults?: (vaultIds: readonly string[]) => void;
+  /** Fired when a group flips to hidden (no id/name — same contract as CORE). */
+  onGroupHidden?: () => void;
 }
 
 export interface MockVaultGroupServiceHandle {
@@ -118,6 +134,16 @@ export function createMockVaultGroupService(
     if (invalid) {
       throw new RpcError(VAULT_ERROR_CODES.GROUPS_INVALID, "vault groups file is invalid");
     }
+  }
+
+  function cascadeHideMembers(group: VaultGroup): void {
+    if (!group.hidden || group.groupedVaults.length === 0) return;
+    options.hideVaults?.(group.groupedVaults);
+  }
+
+  function cascadeUnhideMembers(previous: VaultGroup, next: VaultGroup): void {
+    if (!previous.hidden || next.hidden || next.groupedVaults.length === 0) return;
+    options.unhideVaults?.(next.groupedVaults);
   }
 
   function assertKnownVaultIds(ids: readonly string[]): void {
@@ -177,12 +203,15 @@ export function createMockVaultGroupService(
         displayName,
         order: maxOrder + 1,
         collapsed: false,
+        hidden: input.hidden === true,
         groupedVaults,
         groupedVaultSort: input.groupedVaultSort ?? DEFAULT_GROUPED_VAULT_SORT.mode,
         groupedVaultSortDirection:
           input.groupedVaultSortDirection ?? DEFAULT_GROUPED_VAULT_SORT.direction,
       });
       groups = [...groups, group];
+      cascadeHideMembers(group);
+      if (group.hidden) options.onGroupHidden?.();
       return cloneGroup(group);
     },
 
@@ -194,7 +223,9 @@ export function createMockVaultGroupService(
       }
       const current = groups[index];
       const nextDisplayName =
-        input.displayName !== undefined ? assertDisplayName(input.displayName) : current.displayName;
+        input.displayName !== undefined
+          ? assertDisplayName(input.displayName)
+          : current.displayName;
       assertGroupedVaultSort(input.groupedVaultSort);
       assertSortDirection(input.groupedVaultSortDirection);
       const nextGroupedVaults = input.groupedVaults
@@ -216,6 +247,7 @@ export function createMockVaultGroupService(
         ...current,
         displayName: nextDisplayName,
         collapsed: input.collapsed ?? current.collapsed,
+        hidden: input.hidden ?? current.hidden,
         order: input.order ?? current.order,
         groupedVaults: nextGroupedVaults,
         groupedVaultSort: input.groupedVaultSort ?? current.groupedVaultSort,
@@ -223,6 +255,13 @@ export function createMockVaultGroupService(
           input.groupedVaultSortDirection ?? current.groupedVaultSortDirection,
       });
       groups = groups.map((g, i) => (i === index ? next : g));
+      if (next.hidden && !current.hidden) {
+        options.hideVaults?.(uniqueVaultIds(current.groupedVaults, next.groupedVaults));
+        options.onGroupHidden?.();
+      } else {
+        cascadeHideMembers(next);
+      }
+      cascadeUnhideMembers(current, next);
       return cloneGroup(next);
     },
 

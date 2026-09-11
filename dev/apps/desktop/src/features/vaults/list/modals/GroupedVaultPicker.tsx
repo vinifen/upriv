@@ -119,13 +119,12 @@ export function GroupedVaultPicker({
     );
   };
 
-  const listClass = [
-    "min-h-0 overflow-y-auto [scrollbar-gutter:stable]",
-    fill ? "flex-1" : "max-h-80",
-  ].join(" ");
+  const listClass = ["min-h-0 overflow-y-auto", fill ? "flex-1" : "max-h-80"].join(" ");
 
   return (
-    <div className={["flex min-h-0 flex-col gap-2", fill ? "flex-1" : ""].filter(Boolean).join(" ")}>
+    <div
+      className={["flex min-h-0 flex-col gap-2", fill ? "flex-1" : ""].filter(Boolean).join(" ")}
+    >
       <input
         type="search"
         className={`${settingsControlClass} shrink-0`}

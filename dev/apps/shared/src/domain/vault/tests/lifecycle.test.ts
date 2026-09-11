@@ -1,64 +1,62 @@
 import { describe, expect, it } from "vitest";
-import {
-  canRunIdleAutoClose,
-  requiresPasswordForLifecycle,
-  resolveIdleAutoCloseIntent,
-} from "..";
+import { canRunIdleAutoClose, requiresCloseDialog, requiresPasswordForLifecycle } from "..";
 import { vaultRowFixture } from "./fixtures.shared";
-
-describe("resolveIdleAutoCloseIntent", () => {
-  it.each([
-    ["ram_only", "close", "seal"],
-    ["plain_only", "close", "seal"],
-    ["plain", "close", "seal"],
-    ["store_only", "close", "close"],
-    ["store_only", "seal", "seal"],
-    ["encrypted_dir", "seal", "seal"],
-    ["upriv_only", "seal", "close"],
-    ["upriv_only", "close", "close"],
-    ["upriv_plain", "seal", "close"],
-    ["upriv_plain", "close", "close"],
-  ] as const)("%s + close=%s → %s", (storageMode, closeDefault, expected) => {
-    expect(resolveIdleAutoCloseIntent(storageMode, closeDefault)).toBe(expected);
-  });
-});
 
 describe("requiresPasswordForLifecycle", () => {
   const openVault = vaultRowFixture({ session: "open", storageMode: "encrypted_dir" });
-  const closedVault = vaultRowFixture({ session: null, persistence: "closed" });
+  const closedVault = vaultRowFixture({ session: null });
 
   it("always requires password for unlock", () => {
-    expect(requiresPasswordForLifecycle(openVault, "unlock", "session_ram", true)).toBe(true);
-    expect(requiresPasswordForLifecycle(openVault, "unlock", "disk_open_close", true)).toBe(true);
+    expect(requiresPasswordForLifecycle(openVault, "unlock", "session_ram")).toBe(true);
+    expect(requiresPasswordForLifecycle(openVault, "unlock", "disk_open_close")).toBe(true);
   });
 
-  it("never requires password to seal a closed vault", () => {
-    expect(requiresPasswordForLifecycle(closedVault, "seal", "session_ram", false)).toBe(false);
+  it("does not require password to close a closed vault", () => {
+    expect(requiresPasswordForLifecycle(closedVault, "close", "session_ram")).toBe(false);
   });
 
   it("prompt_open_close requires password on close while open", () => {
-    expect(requiresPasswordForLifecycle(openVault, "close", "always_prompt", true)).toBe(true);
-    expect(requiresPasswordForLifecycle(openVault, "close", "always_prompt", false)).toBe(true);
+    expect(requiresPasswordForLifecycle(openVault, "close", "always_prompt")).toBe(true);
   });
 
-  it("disk_open_close skips password on close while open", () => {
-    expect(requiresPasswordForLifecycle(openVault, "close", "disk_open_close", false)).toBe(false);
+  it("legacy ram_on_close_only does not require password on close", () => {
+    expect(requiresPasswordForLifecycle(openVault, "close", "ram_on_close_only")).toBe(false);
   });
 
-  it("session_ram requires password on close when not in RAM", () => {
-    expect(requiresPasswordForLifecycle(openVault, "close", "session_ram", false)).toBe(true);
-    expect(requiresPasswordForLifecycle(openVault, "close", "session_ram", true)).toBe(false);
+  it("session_ram and disk modes skip password on close", () => {
+    expect(requiresPasswordForLifecycle(openVault, "close", "session_ram")).toBe(false);
+    expect(requiresPasswordForLifecycle(openVault, "close", "disk_close")).toBe(false);
+    expect(requiresPasswordForLifecycle(openVault, "close", "disk_open_close")).toBe(false);
+  });
+});
+
+describe("requiresCloseDialog", () => {
+  it("skips the dialog for default encrypted_dir lock", () => {
+    const vault = vaultRowFixture({ session: "open", storageMode: "encrypted_dir" });
+    expect(requiresCloseDialog(vault, "session_ram")).toBe(false);
+  });
+
+  it("shows the dialog for always_prompt", () => {
+    const vault = vaultRowFixture({ session: "open", storageMode: "encrypted_dir" });
+    expect(requiresCloseDialog(vault, "always_prompt")).toBe(true);
+  });
+
+  it("shows the dialog to confirm upriv_plain wipe", () => {
+    const vault = vaultRowFixture({ session: "open", storageMode: "upriv_plain" });
+    expect(requiresCloseDialog(vault, "session_ram")).toBe(true);
   });
 });
 
 describe("canRunIdleAutoClose", () => {
-  it("returns false when password would be required", () => {
+  it("returns false when always_prompt would require a password", () => {
     const vault = vaultRowFixture({ session: "open", storageMode: "encrypted_dir" });
-    expect(canRunIdleAutoClose(vault, "encrypted_dir", "session_ram", "close", false)).toBe(false);
+    expect(canRunIdleAutoClose(vault, "always_prompt")).toBe(false);
   });
 
-  it("returns true when auto-close can run without prompt", () => {
+  it("returns true when lock does not need a password", () => {
     const vault = vaultRowFixture({ session: "open", storageMode: "encrypted_dir" });
-    expect(canRunIdleAutoClose(vault, "encrypted_dir", "session_ram", "close", true)).toBe(true);
+    expect(canRunIdleAutoClose(vault, "session_ram")).toBe(true);
+    expect(canRunIdleAutoClose(vault, "ram_on_close_only")).toBe(true);
+    expect(canRunIdleAutoClose(vault, "disk_close")).toBe(true);
   });
 });

@@ -73,7 +73,9 @@ export function FileTreeContextMenu({ fm, tree }: FileTreeContextMenuProps) {
     {
       id: "copy",
       label: t("modal.file_manager.context.copy_path"),
-      onClick: copyPath,
+      onClick: () => {
+        void copyPath();
+      },
     },
     {
       id: "open-system",

@@ -20,7 +20,7 @@ use super::writer::Logger;
 use crate::config::{discover_bootstrap_root, load_app_settings, LoggingSettings};
 use crate::error::{Result as CoreResult, UprivError};
 use crate::paths::{
-    app_home_dir, read_vault_root_alias, setup_default_root_anchor, VaultRoot,
+    app_home_dir, read_vault_root_alias, setup_default_root_anchor, ResolveVaultRoot, VaultRoot,
     VAULT_ROOT_SETTINGS_REL,
 };
 
@@ -230,6 +230,37 @@ pub fn reset_vault_root_ready() {
     VAULT_ROOT_READY_EMITTED.store(false, Ordering::Relaxed);
 }
 
+/// True after this process has emitted `vault_root_ready` (a usable `.upriv` existed).
+pub fn vault_root_was_ready() -> bool {
+    VAULT_ROOT_READY_EMITTED.load(Ordering::Relaxed)
+}
+
+/// After this process already had a vault-root, a missing marker is not first-run
+/// `NeedsSetup` — callers must fail loud (`VaultRootNotFound`) so the UI can toast
+/// and reopen Setup.
+pub fn map_needs_setup_after_ready(resolved: ResolveVaultRoot) -> CoreResult<ResolveVaultRoot> {
+    match resolved {
+        ResolveVaultRoot::NeedsSetup {
+            default_root_anchor,
+            alias_path,
+            distribution,
+        } => {
+            if vault_root_was_ready() {
+                Err(UprivError::VaultRootNotFound(
+                    default_root_anchor.join(VAULT_ROOT_SETTINGS_REL),
+                ))
+            } else {
+                Ok(ResolveVaultRoot::NeedsSetup {
+                    default_root_anchor,
+                    alias_path,
+                    distribution,
+                })
+            }
+        }
+        other => Ok(other),
+    }
+}
+
 /// Write `vault_root_leaving` on an **existing** logger (old root).
 ///
 /// Call **after** a successful root/alias mutation and **before**
@@ -345,6 +376,68 @@ mod tests {
         assert!(
             matches!(err, UprivError::VaultRootNotFound(_)),
             "expected VaultRootNotFound after deleting .upriv, got {err:?}"
+        );
+
+        reset_vault_root_ready();
+        clear_logging_session();
+        std::env::remove_var("UPRIV_DEFAULT_ROOT_ANCHOR");
+    }
+
+    #[test]
+    fn resolve_after_ready_then_delete_upriv_is_not_found() {
+        use crate::paths::{resolve_vault_root, ResolveVaultRootOptions, VaultRootMode};
+
+        let _guard = ENV_LOCK.lock().unwrap();
+        reset_vault_root_ready();
+        clear_logging_session();
+        let home = tempfile::tempdir().unwrap();
+        std::env::remove_var("APPIMAGE");
+        std::env::set_var("UPRIV_DEFAULT_ROOT_ANCHOR", home.path());
+        initialize_vault_root(home.path()).unwrap();
+        log_vault_root_ready("test", home.path().to_str().unwrap_or(""));
+
+        std::fs::remove_dir_all(home.path().join(".upriv")).unwrap();
+
+        let resolved = resolve_vault_root(ResolveVaultRootOptions {
+            explicit: None,
+            mode: VaultRootMode::DefaultRoot,
+            binary_dir: None,
+        })
+        .unwrap();
+        let err = map_needs_setup_after_ready(resolved).unwrap_err();
+        assert!(
+            matches!(err, UprivError::VaultRootNotFound(_)),
+            "expected VaultRootNotFound after deleting .upriv, got {err:?}"
+        );
+
+        reset_vault_root_ready();
+        clear_logging_session();
+        std::env::remove_var("UPRIV_DEFAULT_ROOT_ANCHOR");
+    }
+
+    #[test]
+    fn resolve_needs_setup_before_ready_stays_soft() {
+        use crate::paths::{
+            resolve_vault_root, ResolveVaultRoot, ResolveVaultRootOptions, VaultRootMode,
+        };
+
+        let _guard = ENV_LOCK.lock().unwrap();
+        reset_vault_root_ready();
+        clear_logging_session();
+        let home = tempfile::tempdir().unwrap();
+        std::env::remove_var("APPIMAGE");
+        std::env::set_var("UPRIV_DEFAULT_ROOT_ANCHOR", home.path());
+
+        let resolved = resolve_vault_root(ResolveVaultRootOptions {
+            explicit: None,
+            mode: VaultRootMode::DefaultRoot,
+            binary_dir: None,
+        })
+        .unwrap();
+        let mapped = map_needs_setup_after_ready(resolved).unwrap();
+        assert!(
+            matches!(mapped, ResolveVaultRoot::NeedsSetup { .. }),
+            "true first-run must stay NeedsSetup, got {mapped:?}"
         );
 
         reset_vault_root_ready();

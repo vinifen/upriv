@@ -8,28 +8,34 @@ import {
   LOADING_BUDGET_MS,
   RpcError,
   VAULT_ERROR_CODES,
+  VAULT_LIST_SEARCH_PERSIST_MS,
   createDraftForImportSource,
   createDraftForScratchSource,
   createDraftFromBackup,
-  createDraftFromImportArchive,
+  createDraftFromImportPackage,
   displayNameToGroupId,
   filterVisibleVaults,
+  filterVaultListRowsBySearch,
+  normalizeVaultListSearch,
+  shouldBumpVaultRootEpoch,
   shouldRecordVaultHidden,
-  storageModeSealOnly,
+  vaultIdsInHiddenGroups,
+  vaultIdsUnhiddenByGroups,
   type GroupedVaultSortMode,
   type VaultListSort,
   type VaultListSortDirection,
   type VaultListViewMode,
+  type VaultSettingsAreaId,
 } from "@upriv/shared";
 import { useFileManager } from "@/features/vaults/file-manager";
 import { useTranslation } from "@/i18n";
 import { useVaultLifecycleActions } from "@/features/vaults/lifecycle";
 import { useErrorToast } from "@/hooks/useErrorToast";
-import { useLoadingBudget } from "@/hooks/useLoadingBudget";
+import { useLoadingBudget } from "@upriv/shared/react";
 import { useDaemonReady } from "@/lib/useDaemonReady";
 import { useVaultListState } from "./useVaultListState";
 import { useVaultListModals } from "./useVaultListModals";
-import { useVaultArchiveDrop } from "./useVaultArchiveDrop";
+import { useVaultImportDrop } from "./useVaultImportDrop";
 
 export function useVaultListScreen() {
   const { t } = useTranslation();
@@ -38,7 +44,8 @@ export function useVaultListScreen() {
   const logService = useLogService();
   const { openFromVault, syncWithVaultList, purgeForVaultClose, maximizedVaultId } =
     useFileManager();
-  const { settings, patchSettings, showHiddenVaultsSession } = useAppSettingsContext();
+  const { settings, patchSettings, showHiddenVaultsSession, reportVaultRootIntegrityFailure } =
+    useAppSettingsContext();
   const showHiddenVaults = settings.ui.always_show_hidden_vaults || showHiddenVaultsSession;
   const {
     message: toastMessage,
@@ -49,8 +56,10 @@ export function useVaultListScreen() {
   const daemonReady = useDaemonReady();
   const noteSaveGenerationRef = useRef<Map<string, number>>(new Map());
   const groupedOrderGenRef = useRef<Map<string, number>>(new Map());
+  const groupCollapsedGenRef = useRef<Map<string, number>>(new Map());
   /** Shared across root reorder + assign/ungroup + create-vault group apply. */
   const groupsMutateGenRef = useRef(0);
+  const vaultOrderGenRef = useRef(0);
   const repairGenRef = useRef(0);
   const [groupsRepairBusy, setGroupsRepairBusy] = useState(false);
   const groupsRepairBudget = useLoadingBudget(groupsRepairBusy, LOADING_BUDGET_MS.default);
@@ -74,7 +83,40 @@ export function useVaultListScreen() {
     ],
   );
 
-  const reloadVaults = useCallback(() => vaultService.listVaults(), [vaultService]);
+  const [listSearch, setListSearch] = useState(() =>
+    normalizeVaultListSearch(settings.ui.vault_list_search),
+  );
+  const knownPersistedSearch = useRef(normalizeVaultListSearch(settings.ui.vault_list_search));
+  const listSearchRef = useRef(listSearch);
+  listSearchRef.current = listSearch;
+
+  useEffect(() => {
+    const incoming = normalizeVaultListSearch(settings.ui.vault_list_search);
+    if (incoming === knownPersistedSearch.current) return;
+    if (listSearchRef.current === knownPersistedSearch.current) {
+      setListSearch(incoming);
+    }
+    knownPersistedSearch.current = incoming;
+  }, [settings.ui.vault_list_search]);
+
+  useEffect(() => {
+    const next = normalizeVaultListSearch(listSearch);
+    if (next === knownPersistedSearch.current) return;
+    const timer = window.setTimeout(() => {
+      knownPersistedSearch.current = next;
+      void patchSettings({ ui: { vault_list_search: next } });
+    }, VAULT_LIST_SEARCH_PERSIST_MS);
+    return () => window.clearTimeout(timer);
+  }, [listSearch, patchSettings]);
+
+  useEffect(() => {
+    return () => {
+      const next = normalizeVaultListSearch(listSearchRef.current);
+      if (next === knownPersistedSearch.current) return;
+      knownPersistedSearch.current = next;
+      void patchSettings({ ui: { vault_list_search: next } });
+    };
+  }, [patchSettings]);
 
   const applyGroupListResultRef = useRef<
     (result: {
@@ -89,27 +131,26 @@ export function useVaultListScreen() {
     (groupId: string, groupedVaults: string[]) => {
       const generation = (groupedOrderGenRef.current.get(groupId) ?? 0) + 1;
       groupedOrderGenRef.current.set(groupId, generation);
-      void vaultGroupService
-        .reorderGroupedVaults(groupId, groupedVaults)
-        .then(() => vaultGroupService.list())
-        .then((listed) => {
+      void (async () => {
+        try {
+          await vaultGroupService.reorderGroupedVaults(groupId, groupedVaults);
+          if (groupedOrderGenRef.current.get(groupId) !== generation) return;
+          const listed = await vaultGroupService.list();
           if (groupedOrderGenRef.current.get(groupId) !== generation) return;
           applyGroupListResultRef.current(listed);
-        })
-        .catch((error) => {
+        } catch (error) {
           if (groupedOrderGenRef.current.get(groupId) !== generation) return;
           showError(error, "error.unexpected");
-          void vaultGroupService
-            .list()
-            .then((result) => {
-              if (groupedOrderGenRef.current.get(groupId) !== generation) return;
-              applyGroupListResultRef.current(result);
-            })
-            .catch((listError) => {
-              if (groupedOrderGenRef.current.get(groupId) !== generation) return;
-              showError(listError, "error.unexpected");
-            });
-        });
+          try {
+            const result = await vaultGroupService.list();
+            if (groupedOrderGenRef.current.get(groupId) !== generation) return;
+            applyGroupListResultRef.current(result);
+          } catch (listError) {
+            if (groupedOrderGenRef.current.get(groupId) !== generation) return;
+            showError(listError, "error.unexpected");
+          }
+        }
+      })();
     },
     [showError, vaultGroupService],
   );
@@ -118,67 +159,110 @@ export function useVaultListScreen() {
     (orders: { id: string; order: number }[]) => {
       if (orders.length === 0) return;
       const generation = ++groupsMutateGenRef.current;
-      void vaultGroupService
-        .reorder(orders)
-        .then(() => vaultGroupService.list())
-        .then((listed) => {
+      void (async () => {
+        try {
+          await vaultGroupService.reorder(orders);
+          if (groupsMutateGenRef.current !== generation) return;
+          const listed = await vaultGroupService.list();
           if (groupsMutateGenRef.current !== generation) return;
           applyGroupListResultRef.current(listed);
-        })
-        .catch((error) => {
+        } catch (error) {
           if (groupsMutateGenRef.current !== generation) return;
           showError(error, "error.unexpected");
-          void vaultGroupService
-            .list()
-            .then((result) => {
-              if (groupsMutateGenRef.current !== generation) return;
-              applyGroupListResultRef.current(result);
-            })
-            .catch((listError) => {
-              if (groupsMutateGenRef.current !== generation) return;
-              showError(listError, "error.unexpected");
-            });
-        });
+          try {
+            const result = await vaultGroupService.list();
+            if (groupsMutateGenRef.current !== generation) return;
+            applyGroupListResultRef.current(result);
+          } catch (listError) {
+            if (groupsMutateGenRef.current !== generation) return;
+            showError(listError, "error.unexpected");
+          }
+        }
+      })();
     },
     [showError, vaultGroupService],
+  );
+
+  const persistRootVaultOrder = useCallback(
+    (orders: { id: string; order: number }[]) => {
+      if (orders.length === 0) return;
+      const generation = ++vaultOrderGenRef.current;
+      void (async () => {
+        try {
+          for (const { id, order } of orders) {
+            if (vaultOrderGenRef.current !== generation) return;
+            const settings = await vaultService.getSettings(id);
+            if (!settings) continue;
+            if (settings.vault.order === order) continue;
+            await vaultService.registerSettings(id, {
+              ...settings,
+              vault: { ...settings.vault, order },
+            });
+          }
+        } catch (error) {
+          if (vaultOrderGenRef.current !== generation) return;
+          showError(error, "error.unexpected");
+        }
+      })();
+    },
+    [showError, vaultService],
   );
 
   const persistVaultAssignedToGroup = useCallback(
     (targetGroupId: string, groupedVaults: string[]) => {
       const generation = ++groupsMutateGenRef.current;
-      void vaultGroupService
-        .update({ id: targetGroupId, groupedVaults })
-        .then(() => vaultGroupService.list())
-        .then((listed) => {
+      void (async () => {
+        try {
+          await vaultGroupService.update({ id: targetGroupId, groupedVaults });
+          if (groupsMutateGenRef.current !== generation) return;
+          const listed = await vaultGroupService.list();
           if (groupsMutateGenRef.current !== generation) return;
           applyGroupListResultRef.current(listed);
-        })
-        .catch((error) => {
+        } catch (error) {
           if (groupsMutateGenRef.current !== generation) return;
           showError(error, "error.unexpected");
-          void vaultGroupService
-            .list()
-            .then((result) => {
-              if (groupsMutateGenRef.current !== generation) return;
-              applyGroupListResultRef.current(result);
-            })
-            .catch((listError) => {
-              if (groupsMutateGenRef.current !== generation) return;
-              showError(listError, "error.unexpected");
-            });
-        });
+          try {
+            const result = await vaultGroupService.list();
+            if (groupsMutateGenRef.current !== generation) return;
+            applyGroupListResultRef.current(result);
+          } catch (listError) {
+            if (groupsMutateGenRef.current !== generation) return;
+            showError(listError, "error.unexpected");
+          }
+        }
+      })();
     },
     [showError, vaultGroupService],
   );
 
+  const handleReorderBlocked = useCallback(
+    (scope: "root" | "group" | "search") => {
+      showToast(
+        t(
+          scope === "search"
+            ? "toast.vault_list_reorder_needs_clear_search"
+            : scope === "group"
+              ? "toast.vault_group_reorder_needs_position_sort"
+              : "toast.vault_list_reorder_needs_position_sort",
+        ),
+      );
+    },
+    [showToast, t],
+  );
+
+  const searchActive = listSearch.trim().length > 0;
+
   const listState = useVaultListState([], {
     ...listDefaults,
     showHiddenVaults,
-    reloadVaults,
+    searchActive,
     onGroupedVaultsReordered: persistGroupedVaultOrder,
     onRootGroupsReordered: persistRootGroupOrder,
-    allowDragVaultIntoGroup: settings.ui.allow_drag_vault_into_group !== false,
+    onRootVaultsReordered: persistRootVaultOrder,
+    vaultListShowDrag: settings.ui.vault_list_show_drag !== false,
+    vaultListAllowDragIntoGroup: settings.ui.vault_list_allow_drag_into_group !== false,
     onVaultAssignedToGroup: persistVaultAssignedToGroup,
+    onReorderBlocked: handleReorderBlocked,
   });
 
   const {
@@ -191,32 +275,62 @@ export function useVaultListScreen() {
     groupsInvalidDismissed,
     setGroupsInvalidDismissed,
     displayRows,
-    displayVaults,
     sort,
     setSort,
     viewMode,
     setViewMode,
     canReorder,
-    allowDragVaultIntoGroup,
+    vaultListShowDrag,
+    vaultListAllowDragIntoGroup,
     draggingId,
     dragOverId,
+    dragPointer,
     updateNote,
     removeVault,
     addVault,
     setVaultRuntimeState,
     updateVaultSettings,
+    markVaultsHidden,
     setGroupCollapsed,
-    onDragEnd,
-    onDragLeave,
-    onRootDragStart,
-    onRootDragOver,
-    onRootDrop,
-    onUngroupDragOver,
-    onUngroupDrop,
-    onMemberDragStart,
-    onMemberDragOver,
-    onMemberDrop,
+    onPointerDragStart,
+    onPointerDragMove,
+    onPointerDragEnd,
+    onPointerDragCancel,
   } = listState;
+
+  const pointerDrag = useMemo(
+    () => ({
+      onStart: onPointerDragStart,
+      onMove: onPointerDragMove,
+      onEnd: onPointerDragEnd,
+      onCancel: onPointerDragCancel,
+    }),
+    [onPointerDragCancel, onPointerDragEnd, onPointerDragMove, onPointerDragStart],
+  );
+
+  useEffect(() => {
+    const next = {
+      mode: settings.ui.vault_list_sort,
+      direction: settings.ui.vault_list_sort_direction,
+    };
+    setSort((prev) => (prev.mode === next.mode && prev.direction === next.direction ? prev : next));
+  }, [setSort, settings.ui.vault_list_sort, settings.ui.vault_list_sort_direction]);
+
+  useEffect(() => {
+    setViewMode((prev) =>
+      prev === settings.ui.vault_list_view ? prev : settings.ui.vault_list_view,
+    );
+  }, [setViewMode, settings.ui.vault_list_view]);
+
+  const listRows = useMemo(
+    () => filterVaultListRowsBySearch(displayRows, listSearch),
+    [displayRows, listSearch],
+  );
+  const searchNoMatches =
+    searchActive && listRows.length === 0 && (vaults.length > 0 || groups.length > 0);
+
+  const groupsRef = useRef(groups);
+  groupsRef.current = groups;
 
   const applyGroupListResult = useCallback(
     (result: {
@@ -225,7 +339,10 @@ export function useVaultListScreen() {
       droppedOrphans?: number;
       droppedDuplicateAssignments?: number;
     }) => {
+      const previousGroups = groupsRef.current;
       initializeGroups(result.groups, result.invalid);
+      markVaultsHidden(vaultIdsUnhiddenByGroups(previousGroups, result.groups), false);
+      markVaultsHidden(vaultIdsInHiddenGroups(result.groups), true);
       const orphans = result.droppedOrphans ?? 0;
       const duplicates = result.droppedDuplicateAssignments ?? 0;
       if (orphans > 0 || duplicates > 0) {
@@ -234,7 +351,7 @@ export function useVaultListScreen() {
         setGroupsSanitizeNotice(null);
       }
     },
-    [initializeGroups],
+    [initializeGroups, markVaultsHidden],
   );
   applyGroupListResultRef.current = applyGroupListResult;
 
@@ -245,7 +362,13 @@ export function useVaultListScreen() {
 
   const { isRefreshing, refresh } = useAppRefresh({
     applyVaultList: initializeVaults,
-    onError: (error) => showError(error, "toast.refresh_failed"),
+    onError: (error) => {
+      if (shouldBumpVaultRootEpoch(error)) {
+        void reportVaultRootIntegrityFailure(error);
+        return;
+      }
+      showError(error, "toast.refresh_failed");
+    },
   });
 
   useEffect(() => {
@@ -255,10 +378,13 @@ export function useVaultListScreen() {
         if (cancelled) return;
         initializeVaults(rows);
         applyGroupListResult(groupResult);
-        syncWithVaultList(rows);
       })
       .catch((error) => {
         if (cancelled) return;
+        if (shouldBumpVaultRootEpoch(error)) {
+          void reportVaultRootIntegrityFailure(error);
+          return;
+        }
         showError(error, "toast.refresh_failed");
       });
     return () => {
@@ -267,11 +393,15 @@ export function useVaultListScreen() {
   }, [
     applyGroupListResult,
     initializeVaults,
+    reportVaultRootIntegrityFailure,
     showError,
-    syncWithVaultList,
     vaultGroupService,
     vaultService,
   ]);
+
+  useEffect(() => {
+    syncWithVaultList(vaults);
+  }, [syncWithVaultList, vaults]);
 
   const modals = useVaultListModals(vaults, groups);
 
@@ -328,11 +458,9 @@ export function useVaultListScreen() {
       addVault({
         id: result.vaultId,
         displayName: result.displayName,
-        persistence: "sealed",
         session: null,
         storageMode: result.storageMode,
         order: result.order,
-        canSeal: false,
         lastAccessedWhen: t("vault.create.just_created"),
         lastAccessedAt: new Date().toISOString(),
         note: result.note,
@@ -344,6 +472,9 @@ export function useVaultListScreen() {
       void (async () => {
         try {
           await vaultService.registerSettings(result.vaultId, result.settings);
+          if (result.unlockPreset) {
+            await vaultService.setUnlockPreset(result.vaultId, result.unlockPreset);
+          }
         } catch (error) {
           showError(error, APP_SETTINGS_ERROR_I18N_KEYS.SAVE_FAILED);
           return;
@@ -355,7 +486,7 @@ export function useVaultListScreen() {
         const generation = ++groupsMutateGenRef.current;
         try {
           if (assignment.kind === "create") {
-            const existingIds = groups.map((g) => g.id);
+            const existingIds = groupsRef.current.map((g) => g.id);
             const id = displayNameToGroupId(assignment.displayName, existingIds);
             await vaultGroupService.create({
               id,
@@ -363,7 +494,7 @@ export function useVaultListScreen() {
               groupedVaults: [result.vaultId],
             });
           } else {
-            const target = groups.find((g) => g.id === assignment.groupId);
+            const target = groupsRef.current.find((g) => g.id === assignment.groupId);
             if (!target) {
               throw new RpcError(
                 VAULT_ERROR_CODES.GROUP_NOT_FOUND,
@@ -396,7 +527,6 @@ export function useVaultListScreen() {
     [
       addVault,
       applyGroupListResult,
-      groups,
       recordVaultHiddenIfNeeded,
       reloadGroups,
       showError,
@@ -416,8 +546,6 @@ export function useVaultListScreen() {
         if (previous.session === "open") {
           setVaultRuntimeState(vaultId, {
             session: null,
-            persistence: storageModeSealOnly(patch.storageMode) ? "sealed" : "closed",
-            canSeal: patch.canSeal,
           });
           showToast(t("warning.storage_mode_requires_close"));
         }
@@ -435,10 +563,10 @@ export function useVaultListScreen() {
   );
 
   const handleCreateVaultFromBackup = useCallback(
-    (filename: string) => {
+    (stamp: string) => {
       if (!modals.backupVault) return;
       modals.setCreateVaultInitialDraft(
-        createDraftFromBackup(filename, modals.backupVault.id, existingOrders),
+        createDraftFromBackup(stamp, modals.backupVault.id, existingOrders),
       );
       modals.setCreateVaultInitialStep(null);
       modals.setBackupVaultId(null);
@@ -448,7 +576,7 @@ export function useVaultListScreen() {
   );
 
   const openCreateVaultWithDraft = useCallback(
-    (draft: ReturnType<typeof createDraftFromImportArchive>, step: "source" | null = "source") => {
+    (draft: ReturnType<typeof createDraftFromImportPackage>, step: "source" | null = "source") => {
       modals.setCreateVaultInitialDraft(draft);
       modals.setCreateVaultInitialStep(step);
       modals.setCreateVaultOpen(true);
@@ -460,28 +588,27 @@ export function useVaultListScreen() {
     openCreateVaultWithDraft(createDraftForScratchSource(existingOrders), "source");
   }, [existingOrders, openCreateVaultWithDraft]);
 
-  const handleImportArchive = useCallback(() => {
+  const handleImportPackage = useCallback(() => {
     openCreateVaultWithDraft(createDraftForImportSource(existingOrders), "source");
   }, [existingOrders, openCreateVaultWithDraft]);
 
-  const handleDroppedSevenZip = useCallback(
+  const handleDroppedImportPackage = useCallback(
     (file: File, absolutePath?: string) => {
       openCreateVaultWithDraft(
-        createDraftFromImportArchive(file.name, existingOrders, { filePath: absolutePath }),
+        createDraftFromImportPackage(file.name, existingOrders, { filePath: absolutePath }),
         "source",
       );
     },
     [existingOrders, openCreateVaultWithDraft],
   );
 
-  const handleRejectNonSevenZipDrop = useCallback(() => {
-    showToast(t("empty.drop_archive_rejected"));
+  const handleRejectNonImportDrop = useCallback(() => {
+    showToast(t("empty.drop_file_rejected"));
   }, [showToast, t]);
 
   const blockingUiOpen = Boolean(
     modals.createVaultOpen ||
     modals.settingsGroupId ||
-    modals.groupAssignmentVaultId ||
     modals.appSettingsOpen ||
     modals.dataFolderOpen ||
     modals.logsOpen ||
@@ -495,32 +622,39 @@ export function useVaultListScreen() {
     lifecycle.pipeline.run?.foreground,
   );
 
-  const archiveDrop = useVaultArchiveDrop({
+  const importDrop = useVaultImportDrop({
     enabled: !blockingUiOpen,
-    onAcceptSevenZip: handleDroppedSevenZip,
-    onRejectNonSevenZip: handleRejectNonSevenZipDrop,
+    onAcceptImportPackage: handleDroppedImportPackage,
+    onRejectNonImport: handleRejectNonImportDrop,
   });
 
   const handleNoteChange = useCallback(
-    (vaultId: string, note: string) => {
+    async (vaultId: string, note: string): Promise<boolean> => {
+      const previous = vaults.find((item) => item.id === vaultId)?.note ?? "";
       updateNote(vaultId, note);
       const nextGeneration = (noteSaveGenerationRef.current.get(vaultId) ?? 0) + 1;
       noteSaveGenerationRef.current.set(vaultId, nextGeneration);
-      void vaultService.getSettings(vaultId).then((settings) => {
-        if (!settings) return;
-        if (noteSaveGenerationRef.current.get(vaultId) !== nextGeneration) return;
-        void vaultService
-          .registerSettings(vaultId, {
-            ...settings,
-            vault: { ...settings.vault, note },
-          })
-          .catch((error) => {
-            if (noteSaveGenerationRef.current.get(vaultId) !== nextGeneration) return;
-            showError(error, APP_SETTINGS_ERROR_I18N_KEYS.SAVE_FAILED);
-          });
-      });
+
+      try {
+        const settings = await vaultService.getSettings(vaultId);
+        if (noteSaveGenerationRef.current.get(vaultId) !== nextGeneration) return false;
+        if (!settings) {
+          throw new RpcError(VAULT_ERROR_CODES.NOT_FOUND, `vault settings not found: ${vaultId}`);
+        }
+        await vaultService.registerSettings(vaultId, {
+          ...settings,
+          vault: { ...settings.vault, note },
+        });
+        if (noteSaveGenerationRef.current.get(vaultId) !== nextGeneration) return false;
+        return true;
+      } catch (error) {
+        if (noteSaveGenerationRef.current.get(vaultId) !== nextGeneration) return false;
+        updateNote(vaultId, previous);
+        showError(error, APP_SETTINGS_ERROR_I18N_KEYS.SAVE_FAILED);
+        return false;
+      }
     },
-    [showError, updateNote, vaultService],
+    [showError, updateNote, vaultService, vaults],
   );
 
   const handleVaultDelete = useCallback(
@@ -546,17 +680,15 @@ export function useVaultListScreen() {
         } catch (listError) {
           showError(listError, "toast.refresh_failed");
         }
-        return;
+        throw error;
       }
 
       lifecycle.handleVaultDelete(vaultId);
       removeVault(vaultId);
       modals.setSettingsVaultId(null);
+      modals.setSettingsArea(null);
       modals.setNoteVaultId(null);
       modals.setBackupVaultId(null);
-      if (modals.groupAssignmentVaultId === vaultId) {
-        modals.setGroupAssignmentVaultId(null);
-      }
       if (modals.lifecycleRequest?.vaultId === vaultId) {
         modals.setLifecycleRequest(null);
       }
@@ -564,22 +696,37 @@ export function useVaultListScreen() {
         modals.setRecoveryVaultId(null);
       }
     },
-    [groups, lifecycle, modals, reloadGroups, removeVault, showError, showToast, t, vaultGroupService, vaultService],
+    [
+      groups,
+      lifecycle,
+      modals,
+      reloadGroups,
+      removeVault,
+      showError,
+      showToast,
+      t,
+      vaultGroupService,
+      vaultService,
+    ],
   );
 
   const handleCreateGroup = useCallback(
-    async (displayName: string, groupedVaultIds: string[] = []) => {
-      const existingIds = groups.map((g) => g.id);
+    async (displayName: string, groupedVaultIds: string[] = [], hidden = false) => {
+      const generation = ++groupsMutateGenRef.current;
+      const existingIds = groupsRef.current.map((g) => g.id);
       const id = displayNameToGroupId(displayName, existingIds);
       await vaultGroupService.create({
         id,
         displayName,
         groupedVaults: [...groupedVaultIds],
+        hidden,
       });
+      if (groupsMutateGenRef.current !== generation) return;
       const listed = await vaultGroupService.list();
+      if (groupsMutateGenRef.current !== generation) return;
       applyGroupListResult(listed);
     },
-    [groups, applyGroupListResult, vaultGroupService],
+    [applyGroupListResult, vaultGroupService],
   );
 
   const handleSaveGroup = useCallback(
@@ -589,8 +736,10 @@ export function useVaultListScreen() {
       groupedVaults: string[];
       groupedVaultSort: GroupedVaultSortMode;
       groupedVaultSortDirection: VaultListSortDirection;
+      hidden: boolean;
     }) => {
       if (!modals.settingsGroup) return;
+      const generation = ++groupsMutateGenRef.current;
       await vaultGroupService.update({
         id: modals.settingsGroup.id,
         displayName: patch.displayName,
@@ -598,8 +747,11 @@ export function useVaultListScreen() {
         groupedVaults: patch.groupedVaults,
         groupedVaultSort: patch.groupedVaultSort,
         groupedVaultSortDirection: patch.groupedVaultSortDirection,
+        hidden: patch.hidden,
       });
+      if (groupsMutateGenRef.current !== generation) return;
       const listed = await vaultGroupService.list();
+      if (groupsMutateGenRef.current !== generation) return;
       applyGroupListResult(listed);
     },
     [applyGroupListResult, modals.settingsGroup, vaultGroupService],
@@ -607,8 +759,11 @@ export function useVaultListScreen() {
 
   const handleDeleteGroup = useCallback(async () => {
     if (!modals.settingsGroup) return;
+    const generation = ++groupsMutateGenRef.current;
     await vaultGroupService.delete(modals.settingsGroup.id);
+    if (groupsMutateGenRef.current !== generation) return;
     const listed = await vaultGroupService.list();
+    if (groupsMutateGenRef.current !== generation) return;
     applyGroupListResult(listed);
     modals.setSettingsGroupId(null);
   }, [applyGroupListResult, modals, vaultGroupService]);
@@ -618,15 +773,30 @@ export function useVaultListScreen() {
       const current = groups.find((g) => g.id === groupId);
       if (!current) return;
       const nextCollapsed = !current.collapsed;
+      const generation = (groupCollapsedGenRef.current.get(groupId) ?? 0) + 1;
+      groupCollapsedGenRef.current.set(groupId, generation);
       setGroupCollapsed(groupId, nextCollapsed);
       // Only patch collapsed — full upsert would overwrite local/persisted groupedVaults
       // if the service response were stale (must not wipe in-group order).
       void vaultGroupService.setCollapsed(groupId, nextCollapsed).catch((error) => {
-        setGroupCollapsed(groupId, current.collapsed);
+        if (groupCollapsedGenRef.current.get(groupId) !== generation) return;
+        const mutateGen = ++groupsMutateGenRef.current;
         showError(error, "error.unexpected");
+        void vaultGroupService
+          .list()
+          .then((listed) => {
+            if (groupCollapsedGenRef.current.get(groupId) !== generation) return;
+            if (groupsMutateGenRef.current !== mutateGen) return;
+            applyGroupListResult(listed);
+          })
+          .catch((listError) => {
+            if (groupCollapsedGenRef.current.get(groupId) !== generation) return;
+            if (groupsMutateGenRef.current !== mutateGen) return;
+            showError(listError, "error.unexpected");
+          });
       });
     },
-    [groups, setGroupCollapsed, showError, vaultGroupService],
+    [applyGroupListResult, groups, setGroupCollapsed, showError, vaultGroupService],
   );
 
   const handleRepairGroups = useCallback(async () => {
@@ -656,19 +826,17 @@ export function useVaultListScreen() {
 
   const handleVaultGroupAssignmentChange = useCallback(
     async (vaultId: string, groupId: string | null) => {
-      const currentGroup = groups.find((g) => g.groupedVaults.includes(vaultId)) ?? null;
+      const currentGroups = groupsRef.current;
+      const currentGroup = currentGroups.find((g) => g.groupedVaults.includes(vaultId)) ?? null;
       if ((currentGroup?.id ?? null) === groupId) return;
+      const generation = ++groupsMutateGenRef.current;
 
       try {
         if (groupId) {
-          const target = groups.find((g) => g.id === groupId);
+          const target = currentGroups.find((g) => g.id === groupId);
           if (!target) {
-            throw new RpcError(
-              VAULT_ERROR_CODES.GROUP_NOT_FOUND,
-              `group not found: ${groupId}`,
-            );
+            throw new RpcError(VAULT_ERROR_CODES.GROUP_NOT_FOUND, `group not found: ${groupId}`);
           }
-          // One membership write: destination exclusivity ungroups the vault from siblings.
           await vaultGroupService.update({
             id: groupId,
             groupedVaults: [...target.groupedVaults.filter((id) => id !== vaultId), vaultId],
@@ -679,18 +847,22 @@ export function useVaultListScreen() {
             groupedVaults: currentGroup.groupedVaults.filter((id) => id !== vaultId),
           });
         }
+        if (groupsMutateGenRef.current !== generation) return;
         const listed = await vaultGroupService.list();
+        if (groupsMutateGenRef.current !== generation) return;
         applyGroupListResult(listed);
       } catch (error) {
-        try {
-          await reloadGroups();
-        } catch {
-          // Keep the original error for the modal.
+        if (groupsMutateGenRef.current === generation) {
+          try {
+            await reloadGroups();
+          } catch {
+            // Keep the original error for the modal.
+          }
         }
         throw error;
       }
     },
-    [groups, applyGroupListResult, reloadGroups, vaultGroupService],
+    [applyGroupListResult, reloadGroups, vaultGroupService],
   );
 
   return {
@@ -707,6 +879,10 @@ export function useVaultListScreen() {
           try {
             await reloadGroups();
           } catch (error) {
+            if (shouldBumpVaultRootEpoch(error)) {
+              void reportVaultRootIntegrityFailure(error);
+              return;
+            }
             showError(error, "toast.refresh_failed");
           }
         })();
@@ -714,38 +890,65 @@ export function useVaultListScreen() {
       isRefreshing,
       onOpenSystemSettings: () => {
         if (!modals.setAppSettingsOpen(true)) {
-          showToast(t("toast.settings_surface_blocked_dirty"));
+          showToast(
+            t(
+              modals.groupsDirty
+                ? "toast.groups_surface_blocked_dirty"
+                : "toast.data_folder_blocked_dirty",
+            ),
+          );
+        }
+      },
+      onOpenGroups: () => {
+        if (!modals.setGroupsOpen(true)) {
+          showToast(
+            t(
+              modals.dataFolderDirty
+                ? "toast.data_folder_blocked_dirty"
+                : "toast.settings_surface_blocked_dirty",
+            ),
+          );
         }
       },
       onOpenDataFolder: () => {
         if (!modals.setDataFolderOpen(true)) {
-          showToast(t("toast.data_folder_blocked_dirty"));
+          showToast(
+            t(
+              modals.groupsDirty
+                ? "toast.groups_surface_blocked_dirty"
+                : "toast.settings_surface_blocked_dirty",
+            ),
+          );
         }
       },
       onViewLogs: () => modals.setLogsOpen(true),
       onOpenHelp: () => modals.setHelpOpen(true),
-      onNewVault: () => {
-        modals.setCreateVaultInitialDraft(null);
-        modals.setCreateVaultInitialStep(null);
-        modals.setCreateVaultOpen(true);
-      },
+      onOpenSystemInfo: () => modals.setSystemInfoOpen(true),
     },
     list: {
       vaults,
       groups,
-      displayRows,
-      displayVaults,
+      displayRows: listRows,
       sort,
       onSortChange: handleSortChange,
       viewMode,
       onViewModeChange: handleViewModeChange,
+      search: listSearch,
+      onSearchChange: setListSearch,
+      onNewVault: () => {
+        openCreateVaultWithDraft(createDraftForScratchSource(existingOrders), "source");
+      },
       pipelineListStatus: lifecycle.pipelineListStatus,
       isVaultPipelineBusy: lifecycle.pipeline.isVaultPipelineBusy,
-      allVaultsHidden: false,
+      allVaultsHidden: !searchActive && vaults.length > 0 && visibleVaults.length === 0,
+      searchNoMatches,
       canReorder,
-      allowDragVaultIntoGroup,
+      vaultListShowDrag,
+      vaultListAllowDragIntoGroup,
       draggingId,
       dragOverId,
+      dragPointer,
+      pointerDrag,
       groupsInvalid: groupsInvalid && !groupsInvalidDismissed,
       groupsSanitizeNotice,
       groupsRepairBusy,
@@ -760,30 +963,22 @@ export function useVaultListScreen() {
       onDismissGroupsInvalid: () => setGroupsInvalidDismissed(true),
       onDismissGroupsSanitizeNotice: () => setGroupsSanitizeNotice(null),
       onCreateFromScratch: handleCreateFromScratch,
-      onImportArchive: handleImportArchive,
+      onImportPackage: handleImportPackage,
       onOpenBackups: modals.setBackupVaultId,
       onOpenNote: modals.setNoteVaultId,
-      onOpenSettings: modals.setSettingsVaultId,
-      onOpenGroupAssignment: modals.setGroupAssignmentVaultId,
+      onOpenVaultInfo: modals.setVaultInfoVaultId,
+      onOpenSettings: (vaultId: string, area: VaultSettingsAreaId) => {
+        modals.setSettingsVaultId(vaultId);
+        modals.setSettingsArea(area);
+      },
       onOpenGroupSettings: modals.setSettingsGroupId,
       onToggleGroupCollapsed: handleToggleGroupCollapsed,
       onExportVault: lifecycle.handleExportVault,
       onOpenFolder: lifecycle.handleOpenFolder,
       onLockVault: lifecycle.handleLockVault,
       onUnlockVault: lifecycle.handleUnlockVault,
-      onSealVault: lifecycle.handleSealVault,
-      onRootDragStart,
-      onRootDragOver,
-      onRootDrop,
-      onUngroupDragOver,
-      onUngroupDrop,
-      onMemberDragStart,
-      onMemberDragOver,
-      onMemberDrop,
-      onDragEnd,
-      onDragLeave,
     },
-    archiveDrop,
+    importDrop,
     lifecycle: {
       lifecycleVault: modals.lifecycleVault,
       lifecycleIntent: modals.lifecycleRequest?.intent ?? null,
@@ -797,6 +992,10 @@ export function useVaultListScreen() {
         if (!modals.recoverySubmitting) modals.setRecoveryVaultId(null);
       },
       onRecoveryAction: lifecycle.handleRecoveryAction,
+      workspaceSetupOpen: lifecycle.workspaceSetupOpen,
+      workspaceSetupRootPath: lifecycle.workspaceSetupRootPath,
+      onWorkspaceSetupCancel: lifecycle.handleWorkspaceSetupCancel,
+      onWorkspaceSetupConfigured: lifecycle.handleWorkspaceSetupConfigured,
       pipelineVault: lifecycle.pipelineVault,
       pipelineClosingIntent: lifecycle.pipelineClosingIntent,
       closingOverlayOpen: Boolean(
@@ -826,17 +1025,28 @@ export function useVaultListScreen() {
       onClose: () => modals.setBackupVaultId(null),
       onCreateVaultFromBackup: handleCreateVaultFromBackup,
     },
+    exportVault: {
+      vault: modals.exportVault,
+      open: modals.exportVaultId !== null,
+      submitting: modals.exportSubmitting,
+      onClose: () => {
+        if (!modals.exportSubmitting) modals.setExportVaultId(null);
+      },
+      onConfirm: lifecycle.handleConfirmExportVault,
+      onTimeout: lifecycle.handleExportTimeout,
+    },
     settings: {
       vault: modals.settingsVault,
-      open: modals.settingsVaultId !== null,
-      onClose: () => modals.setSettingsVaultId(null),
+      area: modals.settingsArea,
+      open: modals.settingsVaultId !== null && modals.settingsArea !== null,
+      onClose: () => {
+        modals.setSettingsVaultId(null);
+        modals.setSettingsArea(null);
+      },
       onVaultSettingsSaved: handleVaultSettingsSaved,
       onVaultDelete: handleVaultDelete,
       groups,
-      onCommitGroupAssignment: async (
-        vaultId: string,
-        assignment: CreateVaultGroupAssignment,
-      ) => {
+      onCommitGroupAssignment: async (vaultId: string, assignment: CreateVaultGroupAssignment) => {
         if (assignment.kind === "create") {
           await handleCreateGroup(assignment.displayName, [vaultId]);
           return;
@@ -847,33 +1057,36 @@ export function useVaultListScreen() {
         );
       },
     },
-    groupAssignment: {
-      vault: modals.groupAssignmentVault,
-      open: modals.groupAssignmentVaultId !== null,
-      onClose: () => modals.setGroupAssignmentVaultId(null),
-      onAssign: handleVaultGroupAssignmentChange,
-      groups,
-    },
     groupSettings: {
       group: modals.settingsGroup,
       open: modals.settingsGroupId !== null,
       onClose: () => modals.setSettingsGroupId(null),
       onSave: handleSaveGroup,
       onDelete: handleDeleteGroup,
+      onBusyTimeout: () => {
+        groupsMutateGenRef.current += 1;
+      },
       vaults: visibleVaults,
       includeHidden: showHiddenVaults,
       groups,
     },
     appSettings: {
       open: modals.appSettingsOpen,
+      onClose: () => {
+        void modals.setAppSettingsOpen(false);
+      },
+      onDirtyChange: modals.setAppSettingsDirty,
+    },
+    groupsModal: {
+      open: modals.groupsOpen,
       vaults: visibleVaults,
       groups,
       includeHidden: showHiddenVaults,
       onCreateGroup: handleCreateGroup,
       onClose: () => {
-        void modals.setAppSettingsOpen(false);
+        void modals.setGroupsOpen(false);
       },
-      onDirtyChange: modals.setAppSettingsDirty,
+      onDirtyChange: modals.setGroupsDirty,
     },
     dataFolder: {
       open: modals.dataFolderOpen,
@@ -889,6 +1102,15 @@ export function useVaultListScreen() {
     help: {
       open: modals.helpOpen,
       onClose: () => modals.setHelpOpen(false),
+    },
+    systemInfo: {
+      open: modals.systemInfoOpen,
+      onClose: () => modals.setSystemInfoOpen(false),
+    },
+    vaultInfo: {
+      vault: modals.vaultInfoVault,
+      open: modals.vaultInfoVaultId !== null,
+      onClose: () => modals.setVaultInfoVaultId(null),
     },
     createVault: {
       open: modals.createVaultOpen,

@@ -1,5 +1,5 @@
-import { useEffect, useId, useMemo, useRef, useState } from "react";
-import { Button, Switch } from "@/components/ui";
+import { useId } from "react";
+import { Button, Select, SwitchRow } from "@/components/ui";
 import {
   PolicyRadioOption,
   settingsControlClass,
@@ -7,6 +7,7 @@ import {
   SettingsFormGrid,
 } from "@/components/settings";
 import { useTranslation } from "@/i18n";
+import { useVaultRootService } from "@/platform/services";
 import {
   LOG_ENTRIES_PER_FILE,
   LOG_KEEP_LAST_DEFAULT,
@@ -16,25 +17,16 @@ import {
   SUPPORTED_LOCALES,
   VAULT_DISPLAY_NAME_MAX_LENGTH,
   logFileCountForKeepLast,
+  suggestedDefaultWorkspacePath,
+  validateWorkspaceGlobalPath,
+  workspacePathIssueI18nKey,
   type AppSettingsConfig,
   type UiTheme,
   type VaultGroup,
   type VaultListItem,
-  resolveVaultDisplayStatus,
-  storageModeHasPortableArchive,
 } from "@upriv/shared";
-import { useVaultService } from "@/platform/services";
-import { vaultStatusI18nKey } from "@/theme/vault-status";
 import { GroupedVaultPicker } from "@/features/vaults/list/modals/GroupedVaultPicker";
-import {
-  downloadVaultsZip,
-  listVaultsBlockingBulkExport,
-  listVaultsReadyForBulkExport,
-  vaultBlocksBulkExport,
-} from "./vaultBulkExport";
-
-const vaultCheckboxClass =
-  "h-4 w-4 shrink-0 rounded border-outline-variant/50 bg-surface-container-high text-accent focus:ring-accent/50 disabled:cursor-not-allowed disabled:opacity-40";
+import { useErrorToast } from "@/hooks/useErrorToast";
 
 interface SectionPatchProps<S extends keyof AppSettingsConfig> {
   config: AppSettingsConfig[S];
@@ -43,40 +35,48 @@ interface SectionPatchProps<S extends keyof AppSettingsConfig> {
 
 const THEMES: UiTheme[] = ["dark", "neutral", "light"];
 
-export function AppSettingsAppearanceSection({ config, onChange }: SectionPatchProps<"ui">) {
+export function AppSettingsLanguageSection({ config, onChange }: SectionPatchProps<"ui">) {
   const { t } = useTranslation();
   const localeGroup = useId();
-  const themeGroup = useId();
 
   return (
     <SettingsFormGrid>
       <p className="text-xs leading-relaxed text-on-surface-variant">
-        {t("modal.app_settings.section.appearance_intro")}
+        {t("modal.app_settings.section.language_intro")}
       </p>
 
-      <SettingsField
-        label={t("modal.app_settings.field.locale")}
-        hint={t("modal.app_settings.field.locale_help")}
+      <div
+        role="radiogroup"
+        aria-label={t("modal.app_settings.section.language")}
+        className="grid gap-2"
       >
-        <div
-          role="radiogroup"
-          aria-label={t("modal.app_settings.field.locale")}
-          className="grid gap-2"
-        >
-          {SUPPORTED_LOCALES.map((locale) => (
-            <PolicyRadioOption
-              key={locale}
-              groupName={localeGroup}
-              value={locale}
-              checked={config.locale === locale}
-              title={t(`modal.app_settings.option.locale.${locale}`)}
-              description={t(`modal.app_settings.option.locale.${locale}_desc`)}
-              badge={locale === "en" ? "default" : undefined}
-              onSelect={() => onChange({ locale })}
-            />
-          ))}
-        </div>
-      </SettingsField>
+        {SUPPORTED_LOCALES.map((locale) => (
+          <PolicyRadioOption
+            key={locale}
+            groupName={localeGroup}
+            value={locale}
+            checked={config.locale === locale}
+            title={t(`modal.app_settings.option.locale.${locale}`)}
+            description={t(`modal.app_settings.option.locale.${locale}_desc`)}
+            badge={locale === "en" ? "default" : undefined}
+            onSelect={() => onChange({ locale })}
+          />
+        ))}
+      </div>
+    </SettingsFormGrid>
+  );
+}
+
+export function AppSettingsGeneralSection({ config, onChange }: SectionPatchProps<"ui">) {
+  const { t } = useTranslation();
+  const themeGroup = useId();
+  const showHeaderMoreId = useId();
+
+  return (
+    <SettingsFormGrid>
+      <p className="text-xs leading-relaxed text-on-surface-variant">
+        {t("modal.app_settings.section.general_intro")}
+      </p>
 
       <SettingsField
         label={t("modal.app_settings.field.theme")}
@@ -101,37 +101,145 @@ export function AppSettingsAppearanceSection({ config, onChange }: SectionPatchP
           ))}
         </div>
       </SettingsField>
+
+      <SwitchRow
+        id={showHeaderMoreId}
+        checked={config.vault_list_show_header_more_button}
+        onChange={(vault_list_show_header_more_button) =>
+          onChange({ vault_list_show_header_more_button })
+        }
+        label={t("modal.app_settings.field.vault_list_show_header_more_button")}
+      />
+    </SettingsFormGrid>
+  );
+}
+
+export function AppSettingsVaultListSection({ config, onChange }: SectionPatchProps<"ui">) {
+  const { t } = useTranslation();
+  const vaultListShowDragId = useId();
+  const showCreateId = useId();
+  const showSearchId = useId();
+  const showSortId = useId();
+  const showViewId = useId();
+  const showVaultMoreId = useId();
+  const showVaultSettingsId = useId();
+
+  return (
+    <SettingsFormGrid>
+      <p className="text-xs leading-relaxed text-on-surface-variant">
+        {t("modal.app_settings.section.vault_list_intro")}
+      </p>
+
+      <SwitchRow
+        id={vaultListShowDragId}
+        checked={config.vault_list_show_drag}
+        onChange={(vault_list_show_drag) => onChange({ vault_list_show_drag })}
+        label={t("modal.app_settings.field.vault_list_show_drag")}
+        hint={t("modal.app_settings.field.vault_list_show_drag_help")}
+      />
+      <SwitchRow
+        id={showCreateId}
+        checked={config.vault_list_show_create_button}
+        onChange={(vault_list_show_create_button) => onChange({ vault_list_show_create_button })}
+        label={t("modal.app_settings.field.vault_list_show_create_button")}
+      />
+      <SwitchRow
+        id={showSearchId}
+        checked={config.vault_list_show_search_button}
+        onChange={(vault_list_show_search_button) => onChange({ vault_list_show_search_button })}
+        label={t("modal.app_settings.field.vault_list_show_search_button")}
+      />
+      <SwitchRow
+        id={showSortId}
+        checked={config.vault_list_show_sort_button}
+        onChange={(vault_list_show_sort_button) => onChange({ vault_list_show_sort_button })}
+        label={t("modal.app_settings.field.vault_list_show_sort_button")}
+      />
+      <SwitchRow
+        id={showViewId}
+        checked={config.vault_list_show_view_button}
+        onChange={(vault_list_show_view_button) => onChange({ vault_list_show_view_button })}
+        label={t("modal.app_settings.field.vault_list_show_view_button")}
+      />
+      <SwitchRow
+        id={showVaultMoreId}
+        checked={config.vault_list_show_vault_more_button}
+        onChange={(vault_list_show_vault_more_button) =>
+          onChange({ vault_list_show_vault_more_button })
+        }
+        label={t("modal.app_settings.field.vault_list_show_vault_more_button")}
+      />
+      <SwitchRow
+        id={showVaultSettingsId}
+        checked={config.vault_list_show_vault_settings_button}
+        onChange={(vault_list_show_vault_settings_button) =>
+          onChange({ vault_list_show_vault_settings_button })
+        }
+        label={t("modal.app_settings.field.vault_list_show_vault_settings_button")}
+      />
+    </SettingsFormGrid>
+  );
+}
+
+/** List-drag prefs for groups — not the create-group form (`AppSettingsGroupsSection`). */
+export function AppSettingsGroupsPrefsSection({ config, onChange }: SectionPatchProps<"ui">) {
+  const { t } = useTranslation();
+  const allowDragIntoGroupId = useId();
+  const showGroupSettingsId = useId();
+
+  return (
+    <SettingsFormGrid>
+      <p className="text-xs leading-relaxed text-on-surface-variant">
+        {t("modal.app_settings.section.groups_settings_intro")}
+      </p>
+
+      <SwitchRow
+        id={showGroupSettingsId}
+        checked={config.vault_list_show_group_settings_button}
+        onChange={(vault_list_show_group_settings_button) =>
+          onChange({ vault_list_show_group_settings_button })
+        }
+        label={t("modal.app_settings.field.vault_list_show_group_settings_button")}
+      />
+      <SwitchRow
+        id={allowDragIntoGroupId}
+        checked={config.vault_list_allow_drag_into_group}
+        onChange={(vault_list_allow_drag_into_group) =>
+          onChange({ vault_list_allow_drag_into_group })
+        }
+        label={t("modal.app_settings.field.vault_list_allow_drag_into_group")}
+        hint={t("modal.app_settings.field.vault_list_allow_drag_into_group_help")}
+      />
     </SettingsFormGrid>
   );
 }
 
 interface AppSettingsGroupsSectionProps {
-  config: AppSettingsConfig["ui"];
-  onChange: (patch: Partial<AppSettingsConfig["ui"]>) => void;
   vaults: VaultListItem[];
   groups: VaultGroup[];
   includeHidden?: boolean;
   newGroupName: string;
   groupedVaultIds: string[];
   nameError: string | null;
+  hidden?: boolean;
+  onHiddenChange?: (hidden: boolean) => void;
   onNewGroupNameChange: (name: string) => void;
   onToggleGroupedVault: (vaultId: string) => void;
 }
 
 export function AppSettingsGroupsSection({
-  config,
-  onChange,
   vaults,
   groups,
   includeHidden = false,
   newGroupName,
   groupedVaultIds,
   nameError,
+  hidden = false,
+  onHiddenChange,
   onNewGroupNameChange,
   onToggleGroupedVault,
 }: AppSettingsGroupsSectionProps) {
   const { t } = useTranslation();
-  const allowDragIntoGroupId = useId();
   const nameId = useId();
 
   return (
@@ -139,27 +247,6 @@ export function AppSettingsGroupsSection({
       <p className="text-xs leading-relaxed text-on-surface-variant">
         {t("modal.app_settings.section.groups_intro")}
       </p>
-
-      <label
-        htmlFor={allowDragIntoGroupId}
-        className="flex cursor-pointer select-none items-center gap-3"
-      >
-        <Switch
-          id={allowDragIntoGroupId}
-          checked={config.allow_drag_vault_into_group}
-          onChange={(allow_drag_vault_into_group) => onChange({ allow_drag_vault_into_group })}
-          label={t("modal.app_settings.field.allow_drag_vault_into_group")}
-          className="shrink-0"
-        />
-        <span className="min-w-0 flex-1">
-          <span className="block text-sm text-on-surface">
-            {t("modal.app_settings.field.allow_drag_vault_into_group")}
-          </span>
-          <span className="mt-1.5 block text-xs leading-relaxed text-on-surface-variant">
-            {t("modal.app_settings.field.allow_drag_vault_into_group_help")}
-          </span>
-        </span>
-      </label>
 
       <SettingsField
         label={t("modal.app_settings.field.new_group_name")}
@@ -177,6 +264,13 @@ export function AppSettingsGroupsSection({
         />
       </SettingsField>
       {nameError ? <p className="text-sm text-on-error-container">{nameError}</p> : null}
+
+      <SwitchRow
+        checked={hidden}
+        onChange={(next) => onHiddenChange?.(next)}
+        label={t("vault.group.settings.hidden")}
+        hint={t("vault.group.settings.hidden_help")}
+      />
 
       <div className="space-y-2">
         <p className="font-mono text-xs uppercase tracking-wide text-on-surface-variant">
@@ -220,229 +314,22 @@ export function AppSettingsHiddenVaultsSection({
         {t("modal.app_settings.section.hidden_vaults_intro")}
       </p>
 
-      <label
-        htmlFor={showHiddenSessionId}
-        className="flex cursor-pointer select-none items-center gap-3"
-      >
-        <Switch
-          id={showHiddenSessionId}
-          checked={showHiddenVaultsSession}
-          onChange={onShowHiddenVaultsSessionChange}
-          label={t("modal.app_settings.field.show_hidden_vaults_session")}
-          className="shrink-0"
-        />
-        <span className="min-w-0 flex-1">
-          <span className="block text-sm text-on-surface">
-            {t("modal.app_settings.field.show_hidden_vaults_session")}
-          </span>
-          <span className="mt-1.5 block text-xs leading-relaxed text-on-surface-variant">
-            {t("modal.app_settings.field.show_hidden_vaults_session_help")}
-          </span>
-        </span>
-      </label>
+      <SwitchRow
+        id={showHiddenSessionId}
+        checked={showHiddenVaultsSession}
+        onChange={onShowHiddenVaultsSessionChange}
+        label={t("modal.app_settings.field.show_hidden_vaults_session")}
+        hint={t("modal.app_settings.field.show_hidden_vaults_session_help")}
+      />
 
-      <label
-        htmlFor={alwaysShowHiddenId}
-        className="flex cursor-pointer select-none items-center gap-3"
-      >
-        <input
-          id={alwaysShowHiddenId}
-          type="checkbox"
-          checked={alwaysShowHiddenVaults}
-          onChange={(e) => onAlwaysShowHiddenVaultsChange(e.target.checked)}
-          className="h-4 w-4 shrink-0 rounded border-outline-variant/50 text-accent focus:ring-accent/50"
-        />
-        <span className="min-w-0 flex-1">
-          <span className="block text-sm text-on-surface">
-            {t("modal.app_settings.field.always_show_hidden_vaults")}
-          </span>
-          <span className="mt-1.5 block text-xs leading-relaxed text-on-surface-variant">
-            {t("modal.app_settings.field.always_show_hidden_vaults_help")}
-          </span>
-        </span>
-      </label>
+      <SwitchRow
+        id={alwaysShowHiddenId}
+        checked={alwaysShowHiddenVaults}
+        onChange={onAlwaysShowHiddenVaultsChange}
+        label={t("modal.app_settings.field.always_show_hidden_vaults")}
+        hint={t("modal.app_settings.field.always_show_hidden_vaults_help")}
+      />
     </SettingsFormGrid>
-  );
-}
-
-interface AppSettingsDownloadVaultsSectionProps {
-  vaults: VaultListItem[];
-  /** Resets transient checklist when the system settings modal opens. */
-  modalOpen: boolean;
-}
-
-export function AppSettingsDownloadVaultsSection({
-  vaults,
-  modalOpen,
-}: AppSettingsDownloadVaultsSectionProps) {
-  const { t } = useTranslation();
-  const vaultService = useVaultService();
-  const selectAllId = useId();
-
-  const sortedVaults = useMemo(
-    () =>
-      [...vaults]
-        .filter((vault) => storageModeHasPortableArchive(vault.storageMode))
-        .sort((a, b) =>
-          a.displayName.localeCompare(b.displayName, undefined, { sensitivity: "base" }),
-        ),
-    [vaults],
-  );
-  const blockingVaults = useMemo(() => listVaultsBlockingBulkExport(vaults), [vaults]);
-  const readyVaults = useMemo(() => listVaultsReadyForBulkExport(vaults), [vaults]);
-  const readyIds = useMemo(() => readyVaults.map((vault) => vault.id), [readyVaults]);
-
-  const [selected, setSelected] = useState<Set<string>>(() => new Set());
-  const wasModalOpenRef = useRef(false);
-
-  useEffect(() => {
-    if (!modalOpen) {
-      wasModalOpenRef.current = false;
-      setSelected(new Set());
-      return;
-    }
-    if (!wasModalOpenRef.current) {
-      wasModalOpenRef.current = true;
-      setSelected(new Set(readyIds));
-    }
-  }, [modalOpen, readyIds]);
-
-  const allReadySelected =
-    readyVaults.length > 0 && readyVaults.every((vault) => selected.has(vault.id));
-  const someReadySelected = readyVaults.some((vault) => selected.has(vault.id));
-  const selectedReady = useMemo(
-    () => readyVaults.filter((vault) => selected.has(vault.id)),
-    [readyVaults, selected],
-  );
-  const canDownload = selectedReady.length > 0;
-
-  const toggleVault = (vaultId: string) => {
-    setSelected((current) => {
-      const next = new Set(current);
-      if (next.has(vaultId)) next.delete(vaultId);
-      else next.add(vaultId);
-      return next;
-    });
-  };
-
-  const toggleSelectAllReady = () => {
-    if (allReadySelected) {
-      setSelected(new Set());
-      return;
-    }
-    setSelected(new Set(readyIds));
-  };
-
-  const handleDownload = () => {
-    if (!canDownload) return;
-    const stamp = new Date().toISOString().slice(0, 10);
-    void downloadVaultsZip(
-      selectedReady,
-      t("modal.app_settings.download_vaults_zip_name", { date: stamp }),
-      (vault) => vaultService.getArchiveExportBytes(vault),
-    );
-  };
-
-  return (
-    <div className="space-y-2">
-      <p className="text-xs leading-snug text-on-surface-variant">
-        {t("modal.app_settings.section.download_vaults_intro")}
-      </p>
-
-      {blockingVaults.length > 0 ? (
-        <p
-          className="rounded-md bg-error-container/10 px-2 py-1.5 text-[11px] leading-snug text-on-error-container"
-          role="alert"
-        >
-          <span className="font-medium">{t("warning.download_vaults_open_title")}</span>
-          <span className="text-on-error-container/85">
-            {" "}
-            — {t("warning.download_vaults_open_body")}
-          </span>
-        </p>
-      ) : null}
-
-      {vaults.length === 0 ? (
-        <p className="text-xs text-on-surface-variant">
-          {t("modal.app_settings.download_vaults_empty")}
-        </p>
-      ) : (
-        <div className="space-y-0.5">
-          {readyVaults.length > 0 ? (
-            <label
-              htmlFor={selectAllId}
-              className="flex cursor-pointer select-none items-center gap-2.5 py-1"
-            >
-              <input
-                id={selectAllId}
-                type="checkbox"
-                checked={allReadySelected}
-                ref={(node) => {
-                  if (node) node.indeterminate = someReadySelected && !allReadySelected;
-                }}
-                onChange={toggleSelectAllReady}
-                className={vaultCheckboxClass}
-              />
-              <span className="text-xs text-on-surface-variant">
-                {t("modal.app_settings.select_all_vaults")}
-              </span>
-            </label>
-          ) : null}
-
-          <ul className="max-h-[min(13rem,36vh)] space-y-0.5 overflow-y-auto">
-            {sortedVaults.map((vault) => {
-              const blocked = vaultBlocksBulkExport(vault);
-              const checkboxId = `download-vault-${vault.id}`;
-              const status = resolveVaultDisplayStatus(vault);
-
-              return (
-                <li key={vault.id} className={blocked ? "opacity-60" : ""}>
-                  <label
-                    htmlFor={checkboxId}
-                    className={[
-                      "flex cursor-pointer select-none items-center gap-2.5 rounded-md py-1",
-                      blocked ? "cursor-not-allowed" : "hover:bg-surface-container-high/40",
-                    ].join(" ")}
-                  >
-                    <input
-                      id={checkboxId}
-                      type="checkbox"
-                      checked={!blocked && selected.has(vault.id)}
-                      disabled={blocked}
-                      onChange={() => toggleVault(vault.id)}
-                      className={vaultCheckboxClass}
-                    />
-                    <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
-                      <span className="truncate text-xs text-on-surface">{vault.displayName}</span>
-                      {blocked ? (
-                        <span className="shrink-0 text-[10px] text-on-error-container/85">
-                          ({t(vaultStatusI18nKey[status])})
-                        </span>
-                      ) : null}
-                    </span>
-                  </label>
-                </li>
-              );
-            })}
-          </ul>
-        </div>
-      )}
-
-      <div className="flex flex-wrap items-center gap-2">
-        <Button variant="secondary" size="sm" disabled={!canDownload} onClick={handleDownload}>
-          {selectedReady.length === readyVaults.length && readyVaults.length > 0
-            ? t("modal.app_settings.action.download_all_vaults")
-            : t("modal.app_settings.action.download_vaults_selected")}
-        </Button>
-        {someReadySelected ? (
-          <span className="text-[11px] tabular-nums text-on-surface-variant">
-            {t("modal.app_settings.download_vaults_selected_count", {
-              count: String(selectedReady.length),
-            })}
-          </span>
-        ) : null}
-      </div>
-    </div>
   );
 }
 
@@ -482,28 +369,18 @@ export function AppSettingsLoggingSection({ config, onChange }: SectionPatchProp
         {t("modal.app_settings.section.logging_intro")}
       </p>
 
-      <SettingsField
-        label={t("modal.app_settings.field.logging_enabled")}
+      <SwitchRow
+        id={enabledId}
+        checked={config.enabled}
+        onChange={(enabled) => onChange({ enabled })}
+        label={t("modal.app_settings.field.logging_enabled_label")}
         hint={t("modal.app_settings.field.logging_enabled_help")}
-        htmlFor={enabledId}
-      >
-        <label className="flex cursor-pointer select-none items-center gap-3">
-          <input
-            id={enabledId}
-            type="checkbox"
-            checked={config.enabled}
-            onChange={(e) => onChange({ enabled: e.target.checked })}
-            className="h-4 w-4 rounded border-outline-variant/50 text-accent focus:ring-accent/50"
-          />
-          <span className="text-sm text-on-surface">
-            {t("modal.app_settings.field.logging_enabled_label")}
-          </span>
-        </label>
-      </SettingsField>
+      />
 
       <SettingsField
         label={t("modal.app_settings.field.logging_level")}
         hint={t("modal.app_settings.field.logging_level_help")}
+        disabled={!config.enabled}
       >
         <div
           role="radiogroup"
@@ -516,6 +393,7 @@ export function AppSettingsLoggingSection({ config, onChange }: SectionPatchProp
               groupName={levelGroup}
               value={level}
               checked={config.level === level}
+              disabled={!config.enabled}
               title={t(`modal.app_settings.option.logging_level.${level}`)}
               description={t(`modal.app_settings.option.logging_level.${level}_desc`)}
               badge={level === "info" ? "recommended" : undefined}
@@ -531,29 +409,144 @@ export function AppSettingsLoggingSection({ config, onChange }: SectionPatchProp
         hint={t("modal.app_settings.field.logging_keep_last_help", {
           perFile: String(LOG_ENTRIES_PER_FILE),
         })}
+        disabled={!config.enabled}
       >
-        <select
+        <Select
           id={keepLastId}
           value={keepLastValue}
           disabled={!config.enabled}
-          onChange={(e) => {
-            const parsed = Number.parseInt(e.target.value, 10);
+          aria-label={t("modal.app_settings.field.logging_keep_last")}
+          onChange={(next) => {
+            const parsed = Number.parseInt(next, 10);
             onChange({
               keep_last_entries: Number.isNaN(parsed) ? LOG_KEEP_LAST_UNLIMITED : parsed,
               entries_per_file: LOG_ENTRIES_PER_FILE,
             });
           }}
-          className={settingsControlClass}
-        >
-          {LOG_KEEP_LAST_ENTRY_OPTIONS.map((entries) => (
-            <option key={entries} value={entries}>
-              {formatLogKeepLastOption(t, locale, entries)}
-            </option>
-          ))}
-          <option value={LOG_KEEP_LAST_UNLIMITED}>
-            {formatLogKeepLastOption(t, locale, LOG_KEEP_LAST_UNLIMITED)}
-          </option>
-        </select>
+          options={[
+            ...LOG_KEEP_LAST_ENTRY_OPTIONS.map((entries) => ({
+              value: String(entries),
+              label: formatLogKeepLastOption(t, locale, entries),
+            })),
+            {
+              value: String(LOG_KEEP_LAST_UNLIMITED),
+              label: formatLogKeepLastOption(t, locale, LOG_KEEP_LAST_UNLIMITED),
+            },
+          ]}
+        />
+      </SettingsField>
+    </SettingsFormGrid>
+  );
+}
+
+interface AppSettingsWorkspaceSectionProps extends SectionPatchProps<"workspace"> {
+  /** Resolved vault-root path for reserved-path checks; null when unknown. */
+  vaultRootPath?: string | null;
+  /** When true, Clear is disabled (e.g. a vault session is open). */
+  clearDisabled?: boolean;
+}
+
+export function AppSettingsWorkspaceSection({
+  config,
+  onChange,
+  vaultRootPath = null,
+  clearDisabled = false,
+}: AppSettingsWorkspaceSectionProps) {
+  const { t } = useTranslation();
+  const { showError } = useErrorToast();
+  const pathId = useId();
+  const vaultRootService = useVaultRootService();
+  const pathIssue = validateWorkspaceGlobalPath(config.path, vaultRootPath);
+  const canClear = Boolean(config.path.trim()) && !clearDisabled;
+
+  return (
+    <SettingsFormGrid>
+      <p className="text-xs leading-relaxed text-on-surface-variant">
+        {t("modal.app_settings.section.workspace_intro")}
+      </p>
+
+      <SettingsField
+        label={t("modal.app_settings.field.workspace.path")}
+        hint={t("modal.app_settings.field.workspace.path_help")}
+        htmlFor={pathId}
+      >
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+          <input
+            id={pathId}
+            type="text"
+            value={config.path}
+            readOnly={clearDisabled}
+            placeholder={
+              suggestedDefaultWorkspacePath(vaultRootPath) ||
+              t("modal.app_settings.field.workspace.path_placeholder")
+            }
+            onChange={(e) => {
+              if (clearDisabled) return;
+              onChange({ path: e.target.value });
+            }}
+            className={[
+              settingsControlClass,
+              "font-mono text-xs sm:min-w-0 sm:flex-1",
+              clearDisabled ? "cursor-default opacity-80" : "",
+            ]
+              .filter(Boolean)
+              .join(" ")}
+          />
+          <div className="flex flex-col gap-2 sm:flex-row sm:shrink-0">
+            <Button
+              type="button"
+              variant="secondary"
+              size="md"
+              className="w-full sm:w-auto"
+              disabled={clearDisabled}
+              onClick={() => {
+                if (clearDisabled) return;
+                void (async () => {
+                  try {
+                    const picked = await vaultRootService.pickFolder(
+                      config.path.trim() || null,
+                      t("modal.app_settings.action.pick_workspace_folder"),
+                    );
+                    if (!picked?.trim()) return;
+                    onChange({ path: picked.trim() });
+                  } catch (error) {
+                    showError(error, "error.unexpected");
+                  }
+                })();
+              }}
+            >
+              {t("modal.app_settings.action.pick_workspace_folder")}
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="md"
+              className="w-full sm:w-auto"
+              disabled={!canClear}
+              title={
+                clearDisabled
+                  ? t("modal.app_settings.action.clear_workspace_path_blocked_open")
+                  : undefined
+              }
+              onClick={() => {
+                if (clearDisabled) return;
+                onChange({ path: "" });
+              }}
+            >
+              {t("modal.app_settings.action.clear_workspace_path")}
+            </Button>
+          </div>
+        </div>
+        {clearDisabled ? (
+          <p className="text-xs text-on-surface-variant">
+            {t("modal.app_settings.action.clear_workspace_path_blocked_open")}
+          </p>
+        ) : null}
+        {pathIssue ? (
+          <p className="text-xs text-on-error-container" role="alert">
+            {t(workspacePathIssueI18nKey(pathIssue))}
+          </p>
+        ) : null}
       </SettingsField>
     </SettingsFormGrid>
   );

@@ -1,37 +1,41 @@
 import type { StorageMode } from "../vault/types";
-import {
-  storageModeCanSeal,
-  storageModeCloseOnly,
-  storageModeHasPortableArchive,
-  storageModeSealOnly,
-} from "../vault/types";
+import { normalizeMountWorkspacePath } from "../workspace";
 
-/** TOML section ids in `vaults/<id>/config.toml` (order matches prod-example). */
+export type { KdfParams, KdfUnlockPreset } from "./kdf";
+export {
+  CONFIG_TOML_KDF_ANNOTATION,
+  CONFIG_TOML_GROUPS_ANNOTATION,
+  createVaultChoosesKdf,
+  DEFAULT_KDF_UNLOCK_PRESET,
+  KDF_UNLOCK_PRESETS,
+  kdfParamsFromPreset,
+  kdfPresetIsDowngrade,
+  normalizeKdfUnlockPreset,
+} from "./kdf";
+
+/** TOML section ids in `vaults/<id>/config.toml`. Lock is always close. */
 export const VAULT_SETTINGS_SECTIONS = [
   "vault",
   "storage",
-  "close",
+  "mount",
+  "auto_close",
   "backup",
   "security",
-  "seven_zip",
   "policy",
 ] as const;
 
 export type VaultSettingsSectionId = (typeof VAULT_SETTINGS_SECTIONS)[number];
 
-/** Hide `.7z` sections when the storage mode has no portable archive. */
+/** Both modes export; compression is chosen at export, not here. */
 export function vaultSettingsSectionsForStorage(
-  mode: StorageMode,
+  _mode: StorageMode,
 ): readonly VaultSettingsSectionId[] {
-  if (storageModeHasPortableArchive(mode)) return VAULT_SETTINGS_SECTIONS;
-  return VAULT_SETTINGS_SECTIONS.filter((id) => id !== "seven_zip" && id !== "backup");
+  return VAULT_SETTINGS_SECTIONS;
 }
-
-export type CloseDefaultAction = "close" | "seal";
 export type BackupMode = "keep_last" | "keep_all";
 export type ArchiveMode = "compress_encrypt" | "encrypt_only";
 /**
- * UI preset for how the `.7z` is built on close/seal.
+ * UI preset for how the export `.7z` is built.
  * Maps to `[seven_zip] archive_mode` + `compression_level` (7zz `-mx`).
  */
 export type CompressionPreset = "none" | "low" | "medium" | "high";
@@ -44,15 +48,11 @@ export const COMPRESSION_PRESETS = [
 ] as const satisfies readonly CompressionPreset[];
 
 /**
- * Persisted `[security] mode` — all five values are valid for every storage mode (PRD §4).
- * UI collapses `always_prompt` + `ram_on_close_only` into one card (`prompt_open_close`).
+ * Persisted `[security] mode`. `ram_on_close_only` is a legacy TOML value from the
+ * `.7z`-on-close era; load/save maps it to `session_ram` (close uses session keys).
  */
 export type SecurityMode =
-  | "always_prompt"
-  | "session_ram"
-  | "ram_on_close_only"
-  | "disk_close"
-  | "disk_open_close";
+  "always_prompt" | "session_ram" | "ram_on_close_only" | "disk_close" | "disk_open_close";
 
 /** Password-memory choices in vault settings (all storage modes). */
 export const SECURITY_UI_MODES = [
@@ -80,27 +80,22 @@ export function uiToSecurityMode(ui: SecurityUiMode): SecurityMode {
 export function securityModeToUi(mode: SecurityMode): SecurityUiMode {
   if (mode === "disk_open_close") return "disk_open_close";
   if (mode === "disk_close") return "disk_close";
-  if (mode === "session_ram") return "session_ram";
-  // `always_prompt` and `ram_on_close_only` share one UI card until mobile needs a split.
-  if (mode === "always_prompt" || mode === "ram_on_close_only") return "prompt_open_close";
+  if (mode === "always_prompt") return "prompt_open_close";
+  // `session_ram` and legacy `ram_on_close_only` (close no longer needs the password string).
   return "session_ram";
 }
 
 /** Password UI options — same list for every storage mode (PRD §4, SDD §3.2.3a). */
-export function securityUiModesForStorage(
-  _storageMode: StorageMode,
-): readonly SecurityUiMode[] {
+export function securityUiModesForStorage(_storageMode: StorageMode): readonly SecurityUiMode[] {
   return SECURITY_UI_MODES;
 }
 
-/**
- * All five persisted security modes are valid for every storage mode.
- * Kept as an explicit hook for future migrations; currently identity.
- */
+/** Persist a supported mode; rewrite legacy `ram_on_close_only` to `session_ram`. */
 export function normalizeSecurityModeForStorage(
   _storageMode: StorageMode,
   securityMode: SecurityMode,
 ): SecurityMode {
+  if (securityMode === "ram_on_close_only") return "session_ram";
   return securityMode;
 }
 
@@ -147,114 +142,36 @@ export function sevenZipPatchFromCompressionPreset(
   }
 }
 
-/** Seal-only modes always seal; Upriv-only always closes (no `.7z`). */
-export function normalizeClosePolicyForStorage(config: VaultSettingsConfig): VaultSettingsConfig {
-  if (storageModeCloseOnly(config.storage.mode)) {
-    if (config.close.default_action === "close") return config;
-    return { ...config, close: { default_action: "close" } };
-  }
-  if (!storageModeSealOnly(config.storage.mode) || config.close.default_action === "seal") {
-    return config;
-  }
-  return { ...config, close: { default_action: "seal" } };
-}
-
-/** Normalize close policy, security mode, seven_zip, and backup for the active storage mode. */
+/** Normalize security mode, mount path, and seven_zip. */
 export function normalizeVaultSettingsConfig(config: VaultSettingsConfig): VaultSettingsConfig {
-  const withClose = normalizeClosePolicyForStorage(config);
-  const withBackup = storageModeHasPortableArchive(withClose.storage.mode)
-    ? withClose
-    : withClose.backup.enabled
-      ? { ...withClose, backup: { ...withClose.backup, enabled: false } }
-      : withClose;
   return {
-    ...withBackup,
-    security: {
-      ...withBackup.security,
-      mode: normalizeSecurityModeForStorage(withBackup.storage.mode, withBackup.security.mode),
+    ...config,
+    mount: {
+      workspace_path: normalizeMountWorkspacePath(config.mount?.workspace_path),
     },
-    seven_zip: normalizeSevenZipSection(withBackup.seven_zip),
+    security: {
+      ...config.security,
+      mode: normalizeSecurityModeForStorage(config.storage.mode, config.security.mode),
+    },
+    seven_zip: normalizeSevenZipSection(config.seven_zip),
   };
 }
 
-export function transitionStorageModeClose(
-  fromMode: StorageMode,
-  fromClose: CloseDefaultAction,
-  toMode: StorageMode,
-  encryptedClosePreference: CloseDefaultAction,
-): { close: CloseDefaultAction; encryptedClosePreference: CloseDefaultAction } {
-  if (toMode === fromMode) {
-    return {
-      close: fromClose,
-      encryptedClosePreference: storageModeCanSeal(fromMode)
-        ? fromClose
-        : encryptedClosePreference,
-    };
-  }
-
-  if (storageModeSealOnly(toMode)) {
-    const savedPreference = storageModeCanSeal(fromMode)
-      ? fromClose
-      : encryptedClosePreference;
-    return { close: "seal", encryptedClosePreference: savedPreference };
-  }
-
-  if (storageModeCloseOnly(toMode)) {
-    const savedPreference = storageModeCanSeal(fromMode)
-      ? fromClose
-      : encryptedClosePreference;
-    return { close: "close", encryptedClosePreference: savedPreference };
-  }
-
-  return { close: encryptedClosePreference, encryptedClosePreference };
-}
-
-/** Apply storage mode change; preserve close preference across seal-only detours. */
+/** Apply storage mode change. */
 export function patchStorageMode(
   config: VaultSettingsConfig,
   mode: StorageMode,
-  encryptedClosePreference: CloseDefaultAction,
-): { config: VaultSettingsConfig; encryptedClosePreference: CloseDefaultAction } {
-  const { close, encryptedClosePreference: nextPreference } = transitionStorageModeClose(
-    config.storage.mode,
-    config.close.default_action,
-    mode,
-    encryptedClosePreference,
-  );
-
-  const next: VaultSettingsConfig = {
+): VaultSettingsConfig {
+  return normalizeVaultSettingsConfig({
     ...config,
     storage: { mode },
-    close: { default_action: close },
     security: {
       ...config.security,
       mode: normalizeSecurityModeForStorage(mode, config.security.mode),
     },
-  };
-
-  return {
-    config: normalizeVaultSettingsConfig(next),
-    encryptedClosePreference: nextPreference,
-  };
+  });
 }
 
-export function patchCloseDefaultAction(
-  config: VaultSettingsConfig,
-  defaultAction: CloseDefaultAction,
-  encryptedClosePreference: CloseDefaultAction,
-): { config: VaultSettingsConfig; encryptedClosePreference: CloseDefaultAction } {
-  const nextAction = storageModeCloseOnly(config.storage.mode)
-    ? "close"
-    : storageModeSealOnly(config.storage.mode) && defaultAction === "close"
-      ? "seal"
-      : defaultAction;
-  return {
-    config: { ...config, close: { default_action: nextAction } },
-    encryptedClosePreference: storageModeCanSeal(config.storage.mode)
-      ? nextAction
-      : encryptedClosePreference,
-  };
-}
 export type WipePattern = "random" | "zeros";
 export type SevenZipMethod = "lzma2";
 
@@ -262,9 +179,6 @@ export interface VaultSectionConfig {
   id: string;
   display_name: string;
   order: number;
-  vault_file: string;
-  store_dir: string;
-  backups_dir: string;
   password_hint: string;
   note: string;
   hidden: boolean;
@@ -273,7 +187,13 @@ export interface VaultSectionConfig {
 export interface VaultSettingsConfig {
   vault: VaultSectionConfig;
   storage: { mode: StorageMode };
-  close: { default_action: CloseDefaultAction };
+  /**
+   * Where this vault’s open mount appears.
+   * `workspace_path`: `"default"` inherits app `[workspace].path`; otherwise an absolute path.
+   */
+  mount: {
+    workspace_path: string;
+  };
   backup: { enabled: boolean; mode: BackupMode; keep_last: number };
   security: {
     mode: SecurityMode;
@@ -303,6 +223,15 @@ export interface VaultSettingsConfig {
   };
 }
 
+/** Export-time 7z defaults (create persists these so export can hydrate). */
+export const DEFAULT_SEVEN_ZIP: VaultSettingsConfig["seven_zip"] = {
+  encrypt_file_names: true,
+  archive_mode: "encrypt_only",
+  compression_level: 0,
+  solid: false,
+  method: "lzma2",
+};
+
 export function vaultSettingsEqual(a: VaultSettingsConfig, b: VaultSettingsConfig): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }
@@ -315,9 +244,4 @@ export interface VaultSettingsListPatch {
   hidden: boolean;
   passwordHint?: string;
   storageMode: StorageMode;
-  canSeal: boolean;
-}
-
-export function vaultCanSealFromStorage(storageMode: StorageMode): boolean {
-  return storageModeCanSeal(storageMode);
 }

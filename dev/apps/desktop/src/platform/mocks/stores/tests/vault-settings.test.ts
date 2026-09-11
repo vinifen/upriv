@@ -12,29 +12,29 @@ describe("getMockVaultSettings", () => {
   });
 
   it("merges static overrides for known vaults", () => {
-    const settings = getMockVaultSettings("store-only-demo");
-    expect(settings.storage.mode).toBe("store_only");
-    expect(settings.vault.display_name).toBe("Store Only Demo");
-    expect(settings.vault.id).toBe("store-only-demo");
+    const settings = getMockVaultSettings("upriv-plain-demo");
+    expect(settings.storage.mode).toBe("upriv_plain");
+    expect(settings.vault.display_name).toBe("Upriv Plain Demo");
+    expect(settings.vault.id).toBe("upriv-plain-demo");
   });
 
   it("uses defaults for unknown vault ids", () => {
     const settings = getMockVaultSettings("brand-new-vault");
     expect(settings.storage.mode).toBe("encrypted_dir");
     expect(settings.vault.display_name).toBe("brand-new-vault");
-    expect(settings.vault.store_dir).toBe("store");
+    expect(settings.vault.id).toBe("brand-new-vault");
   });
 
   it("prefers runtime registration over static mocks", () => {
-    const config = getMockVaultSettings("store-only-demo");
+    const config = getMockVaultSettings("upriv-plain-demo");
     const runtime: VaultSettingsConfig = {
       ...config,
       vault: { ...config.vault, id: "runtime-test-vault", display_name: "Runtime" },
-      storage: { mode: "ram_only" },
+      storage: { mode: "upriv_plain" },
     };
     registerMockVaultSettings(runtime);
 
-    expect(getMockVaultSettings("runtime-test-vault").storage.mode).toBe("ram_only");
+    expect(getMockVaultSettings("runtime-test-vault").storage.mode).toBe("upriv_plain");
     expect(getMockVaultSettings("runtime-test-vault").vault.display_name).toBe("Runtime");
 
     unregisterMockVaultSettings("runtime-test-vault");

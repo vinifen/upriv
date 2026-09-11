@@ -1,6 +1,6 @@
 import { downloadFilesAsZip } from "@/lib/downloadZip";
 
-/** Always downloads a zip — consistent with bulk vault export. */
+/** Always downloads a zip of the selected log files. */
 export function downloadLogsZip(
   files: ReadonlyArray<{ filename: string; content: string }>,
   zipFilename: string,

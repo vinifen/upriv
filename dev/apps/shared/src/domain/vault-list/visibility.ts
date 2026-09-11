@@ -1,4 +1,4 @@
-/** Vaults shown in the list, pickers, and bulk download. */
+/** Vaults shown in the list and pickers. */
 export function filterVisibleVaults<T extends { hidden?: boolean }>(
   vaults: readonly T[],
   showHiddenVaults: boolean,

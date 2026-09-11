@@ -3,7 +3,8 @@ import { StyleSheet, Text, View } from "react-native";
 import type { I18nKey, VaultRootConfirmAction } from "@upriv/shared";
 import { LOADING_BUDGET_MS } from "@upriv/shared";
 import { Button, LoadingBudgetHint } from "@/components/ui";
-import { useLoadingBudget } from "@/hooks/useLoadingBudget";
+import { ModalFooterActions, modalFooterConfirmBtnStyle } from "@/components/ui/ModalFooterActions";
+import { useLoadingBudget } from "@upriv/shared/react";
 import { useTranslation } from "@/i18n";
 import { useTheme } from "@/theme";
 import { spacing } from "@/theme/tokens";
@@ -113,9 +114,9 @@ export function VaultRootConfirmFooter({
         ) : null}
       </View>
 
-      <View style={styles.actionsCol}>
+      <ModalFooterActions layout="confirm">
         <Button
-          variant={confirmOpen && confirmDanger ? "danger" : "accent"}
+          variant={confirmOpen && confirmDanger ? "danger" : "primary"}
           label={
             confirmOpen
               ? t(
@@ -125,6 +126,7 @@ export function VaultRootConfirmFooter({
                 )
               : t(isApply ? "action.apply" : "action.continue")
           }
+          style={modalFooterConfirmBtnStyle}
           busy={busy && !successKey}
           disabled={primaryDisabled}
           onPress={confirmOpen ? onConfirmPrimary : onRequestPrimary}
@@ -133,11 +135,12 @@ export function VaultRootConfirmFooter({
           <Button
             variant="ghost"
             label={t("action.cancel")}
+            style={modalFooterConfirmBtnStyle}
             disabled={busy}
             onPress={onCancelConfirm}
           />
         ) : null}
-      </View>
+      </ModalFooterActions>
     </View>
   );
 }
@@ -145,5 +148,4 @@ export function VaultRootConfirmFooter({
 const styles = StyleSheet.create({
   wrap: { gap: spacing.md },
   confirmCol: { gap: spacing.xs },
-  actionsCol: { gap: spacing.sm },
 });

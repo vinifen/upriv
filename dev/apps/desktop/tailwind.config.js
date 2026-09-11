@@ -6,6 +6,7 @@ export default {
       colors: {
         background: "var(--background)",
         "surface-container": "var(--surface-container)",
+        "surface-container-low": "var(--surface-container-low)",
         "surface-container-high": "var(--surface-container-high)",
         "surface-row-hover": "var(--surface-row-hover)",
         "on-surface": "var(--on-surface)",
@@ -21,7 +22,6 @@ export default {
         vault: {
           open: "var(--vault-status-open)",
           closed: "var(--vault-status-closed)",
-          sealed: "var(--vault-status-sealed)",
           recovery: "var(--vault-status-recovery)",
         },
       },
@@ -31,12 +31,22 @@ export default {
         mono: ['"JetBrains Mono"', "ui-monospace", "monospace"],
       },
       maxWidth: {
-        content: "1200px",
-        "vault-list": "900px",
+        /** From `@upriv/shared` `MAX_WIDTH_*` via `cssCustomProperties`. */
+        content: "var(--max-width-content)",
+        "vault-list": "var(--max-width-vault-list)",
       },
       spacing: {
         "margin-mobile": "16px",
         "margin-desktop": "32px",
+      },
+      borderRadius: {
+        sm: "var(--radius-xs)",
+        DEFAULT: "var(--radius-xs)",
+        md: "var(--radius-sm)",
+        lg: "var(--radius-sm)",
+        xl: "var(--radius-md)",
+        "2xl": "var(--radius-lg)",
+        full: "var(--radius-full)",
       },
     },
   },

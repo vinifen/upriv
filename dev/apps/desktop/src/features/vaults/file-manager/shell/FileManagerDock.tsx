@@ -101,7 +101,7 @@ export function FileManagerDock({
         aria-expanded={expanded}
         aria-controls="file-manager-dock-list"
         className={[
-          "flex items-center rounded-lg bg-surface-container-high shadow-modal transition-colors hover:bg-surface-container",
+          "flex items-center rounded-xl bg-surface-container-high shadow-modal transition-colors hover:bg-surface-container",
           expanded ? "w-full min-w-0 gap-2 px-2.5 py-2" : "gap-1.5 px-2 py-1.5",
         ].join(" ")}
         title={

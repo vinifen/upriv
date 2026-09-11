@@ -10,5 +10,6 @@ export {
   useVaultGroupService,
   useVaultLifecycleService,
   useVaultRootService,
+  useVaultSecurityService,
   useVaultService,
 } from "./ServicesContext";

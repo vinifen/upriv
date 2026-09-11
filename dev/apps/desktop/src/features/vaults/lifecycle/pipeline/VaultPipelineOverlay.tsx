@@ -1,12 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { createPortal } from "react-dom";
-import { Button } from "@/components/ui";
+import { Button, LoadingBudgetHint } from "@/components/ui";
+import { acquireScrollLock, releaseScrollLock } from "@/components/ui/scrollLock";
 import { useTranslation } from "@/i18n";
 import type { I18nKey } from "@/i18n/types";
-import type { VaultListItem } from "@upriv/shared";
-
-/** Show escape hatch before mock steps finish — real 7zz can take much longer. */
-const PIPELINE_BACKGROUND_AFTER_MS = 1500;
+import { LOADING_BUDGET_MS, type VaultListItem } from "@upriv/shared";
+import { useLoadingBudget } from "@upriv/shared/react";
 
 interface VaultPipelineOverlayProps {
   vault: VaultListItem | null;
@@ -32,29 +31,20 @@ export function VaultPipelineOverlay({
   onDismissError,
 }: VaultPipelineOverlayProps) {
   const { t } = useTranslation();
-  const [showBackgroundAction, setShowBackgroundAction] = useState(false);
   const failed = errorKey !== null;
+  const budget = useLoadingBudget(open && !failed, LOADING_BUDGET_MS.vaultPipeline);
 
   useEffect(() => {
-    if (!open || failed) {
-      setShowBackgroundAction(false);
-      return;
-    }
-
-    setShowBackgroundAction(false);
-    const timer = window.setTimeout(
-      () => setShowBackgroundAction(true),
-      PIPELINE_BACKGROUND_AFTER_MS,
-    );
-
-    return () => window.clearTimeout(timer);
-  }, [open, vault?.id, failed]);
+    if (!open) return;
+    acquireScrollLock();
+    return () => releaseScrollLock();
+  }, [open]);
 
   useEffect(() => {
     if (!open || failed) return;
 
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && showBackgroundAction) {
+      if (event.key === "Escape") {
         event.preventDefault();
         onBackground();
       }
@@ -62,7 +52,7 @@ export function VaultPipelineOverlay({
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [open, onBackground, showBackgroundAction, failed]);
+  }, [open, onBackground, failed]);
 
   if (!open || !vault) return null;
 
@@ -72,7 +62,7 @@ export function VaultPipelineOverlay({
         role="dialog"
         aria-modal="true"
         aria-busy={!failed}
-        className="mx-4 w-full max-w-md rounded-xl bg-surface-container-high p-6 shadow-modal"
+        className="mx-4 w-full max-w-md rounded-2xl bg-surface-container-high p-6 shadow-modal"
       >
         <h2 className="font-display text-lg font-semibold text-on-surface">{title}</h2>
         <p className="mt-1 text-sm text-on-surface-variant">{hint}</p>
@@ -99,6 +89,9 @@ export function VaultPipelineOverlay({
                 }}
               />
             </div>
+            {budget.visible ? (
+              <LoadingBudgetHint budgetMs={budget.budgetMs} remainingMs={budget.remainingMs} />
+            ) : null}
           </>
         )}
 
@@ -108,7 +101,7 @@ export function VaultPipelineOverlay({
               {t("action.close")}
             </Button>
           </div>
-        ) : showBackgroundAction ? (
+        ) : (
           <div className="mt-5 space-y-2">
             <p className="text-xs leading-relaxed text-on-surface-variant">
               {t("pipeline.background_hint")}
@@ -117,7 +110,7 @@ export function VaultPipelineOverlay({
               {t("pipeline.action.background")}
             </Button>
           </div>
-        ) : null}
+        )}
       </div>
     </div>,
     document.body,

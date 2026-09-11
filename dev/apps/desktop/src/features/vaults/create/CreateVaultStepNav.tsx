@@ -27,7 +27,7 @@ const STEPS: CreateVaultStepId[] = ["source", "identity", "password", "general",
 function stepButtonClass(isCurrent: boolean): string {
   return [
     // Always border-2 so the active step does not grow against the modal clip edge.
-    "flex min-h-[3.75rem] w-full min-w-0 items-center gap-2 rounded-lg border-2 px-2.5 py-3 text-left transition-colors sm:gap-2.5 sm:px-3 sm:py-3.5",
+    "flex min-h-[3.25rem] w-full min-w-0 items-center gap-2 rounded-xl border-2 px-2 py-2 text-left transition-colors sm:gap-2 sm:px-2.5 sm:py-2.5",
     isCurrent
       ? "border-[var(--accent)] bg-surface-container"
       : "border-outline-variant bg-surface-container/50 hover:bg-surface-container/80",
@@ -36,7 +36,7 @@ function stepButtonClass(isCurrent: boolean): string {
 
 function stepBadgeClass(status: CreateVaultStepStatus): string {
   return [
-    "flex h-7 w-7 shrink-0 items-center justify-center rounded-full font-mono text-xs font-semibold",
+    "flex h-6 w-6 shrink-0 items-center justify-center rounded-full font-mono text-[11px] font-semibold",
     status === "ready"
       ? "bg-vault-open/15 text-vault-open"
       : status === "error"
@@ -64,7 +64,7 @@ export function CreateVaultStepNav({
   const { t } = useTranslation();
 
   return (
-    <nav className="mt-4 min-w-0 shrink-0" aria-label={t("vault.create.step_nav")}>
+    <nav className="mb-3 min-w-0 shrink-0" aria-label={t("vault.create.step_nav")}>
       <ul className="flex gap-1.5 sm:gap-2">
         {STEPS.map((stepId, index) => {
           const status = stepStatuses[stepId];

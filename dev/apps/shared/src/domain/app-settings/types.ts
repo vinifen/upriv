@@ -2,6 +2,7 @@ import type { VaultListSortDirection, VaultListSortMode, VaultListViewMode } fro
 
 export type LocaleId = "en" | "pt-BR" | "es";
 export type UiTheme = "dark" | "neutral" | "light";
+export const DEFAULT_UI_THEME: UiTheme = "dark";
 /** Same four values as `LOG_LEVEL_PRESETS` / Rust `LogLevel` filter. */
 export type LogLevel = "error" | "warn" | "info" | "debug";
 
@@ -9,11 +10,13 @@ export type LogLevel = "error" | "warn" | "info" | "debug";
 export type VaultRootMode = "default_root" | "custom_root";
 
 export const APP_SETTINGS_SECTIONS = [
-  "appearance",
+  "language",
+  "general",
+  "workspace",
+  "vault_list",
   "groups",
   "logging",
   "hidden_vaults",
-  "download_vaults",
 ] as const;
 
 export type AppSettingsSectionId = (typeof APP_SETTINGS_SECTIONS)[number];
@@ -25,13 +28,36 @@ export interface AppSettingsConfig {
     vault_list_sort: VaultListSortMode;
     vault_list_sort_direction: VaultListSortDirection;
     vault_list_view: VaultListViewMode;
+    /** Vault list search query. Control expands only while focused. */
+    vault_list_search: string;
+    /** UI: show the new-vault button. Default true. */
+    vault_list_show_create_button: boolean;
+    /** UI: show the list search button. Default true. A saved query still filters if hidden. */
+    vault_list_show_search_button: boolean;
+    /** UI: show the sort button. Default true. Current sort stays in effect if hidden. */
+    vault_list_show_sort_button: boolean;
+    /** UI: show the view button. Default true. Current view stays in effect if hidden. */
+    vault_list_show_view_button: boolean;
+    /** UI: show the header overflow (⋮) menu. Default true. */
+    vault_list_show_header_more_button: boolean;
+    /** UI: show the vault row overflow (⋯) menu. Default true. */
+    vault_list_show_vault_more_button: boolean;
+    /** UI: show the vault row settings (gear) menu. Default true. */
+    vault_list_show_vault_settings_button: boolean;
+    /** UI: show the group header settings (gear) menu. Default true. */
+    vault_list_show_group_settings_button: boolean;
     always_show_hidden_vaults: boolean;
+    /**
+     * UI: show vertical drag handles on the vault list (drag up/down).
+     * Independent of sort mode; turn off to hide those handles.
+     */
+    vault_list_show_drag: boolean;
     /**
      * When true, dropping a vault onto a group assigns it, and dropping a grouped
      * vault onto the list (or an ungrouped vault) removes it from the group.
      * In-group reorder is independent.
      */
-    allow_drag_vault_into_group: boolean;
+    vault_list_allow_drag_into_group: boolean;
     /** Desktop file-manager dock UI — mobile clients may ignore. */
     file_manager_dock_expanded: boolean;
   };
@@ -53,6 +79,19 @@ export interface AppSettingsConfig {
      * Not persisted in `settings.toml`.
      */
     upriv_root_path: string;
+    /**
+     * `[app].last_opened_vault` in `settings.toml` — last vault id opened in the UI.
+     * Empty string when unset; always written on serialize.
+     */
+    last_opened_vault: string;
+  };
+  /**
+   * Default mount parent for open vaults (`[workspace]` in `settings.toml`).
+   * Empty `path` = unset — do not create a mount folder until the user chooses.
+   */
+  workspace: {
+    /** Absolute filesystem path, or `""` when unset. */
+    path: string;
   };
 }
 
@@ -60,9 +99,10 @@ export type AppSettingsPatch = {
   ui?: Partial<AppSettingsConfig["ui"]>;
   logging?: Partial<AppSettingsConfig["logging"]>;
   app?: Partial<AppSettingsConfig["app"]>;
+  workspace?: Partial<AppSettingsConfig["workspace"]>;
 };
 
-/** True when saveable System Settings prefs match (`ui` + `logging`; ignores wire `app`). */
+/** True when saveable System Settings prefs match (`ui` + `logging` + `workspace`; ignores wire `app`). */
 export function appSettingsEqual(a: AppSettingsConfig, b: AppSettingsConfig): boolean {
   return (
     a.ui.locale === b.ui.locale &&
@@ -70,12 +110,23 @@ export function appSettingsEqual(a: AppSettingsConfig, b: AppSettingsConfig): bo
     a.ui.vault_list_sort === b.ui.vault_list_sort &&
     a.ui.vault_list_sort_direction === b.ui.vault_list_sort_direction &&
     a.ui.vault_list_view === b.ui.vault_list_view &&
+    a.ui.vault_list_search === b.ui.vault_list_search &&
+    a.ui.vault_list_show_create_button === b.ui.vault_list_show_create_button &&
+    a.ui.vault_list_show_search_button === b.ui.vault_list_show_search_button &&
+    a.ui.vault_list_show_sort_button === b.ui.vault_list_show_sort_button &&
+    a.ui.vault_list_show_view_button === b.ui.vault_list_show_view_button &&
+    a.ui.vault_list_show_header_more_button === b.ui.vault_list_show_header_more_button &&
+    a.ui.vault_list_show_vault_more_button === b.ui.vault_list_show_vault_more_button &&
+    a.ui.vault_list_show_vault_settings_button === b.ui.vault_list_show_vault_settings_button &&
+    a.ui.vault_list_show_group_settings_button === b.ui.vault_list_show_group_settings_button &&
     a.ui.always_show_hidden_vaults === b.ui.always_show_hidden_vaults &&
-    a.ui.allow_drag_vault_into_group === b.ui.allow_drag_vault_into_group &&
+    a.ui.vault_list_show_drag === b.ui.vault_list_show_drag &&
+    a.ui.vault_list_allow_drag_into_group === b.ui.vault_list_allow_drag_into_group &&
     a.ui.file_manager_dock_expanded === b.ui.file_manager_dock_expanded &&
     a.logging.enabled === b.logging.enabled &&
     a.logging.level === b.logging.level &&
     a.logging.entries_per_file === b.logging.entries_per_file &&
-    a.logging.keep_last_entries === b.logging.keep_last_entries
+    a.logging.keep_last_entries === b.logging.keep_last_entries &&
+    a.workspace.path.trim() === b.workspace.path.trim()
   );
 }
