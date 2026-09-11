@@ -2,7 +2,7 @@
 
 **Product:** portable encrypted vault manager (`contents/` at rest; export a `.zip` of that ciphertext or a `.7z`).  
 **Repo:** monorepo with `dev/` (implementation), `prod-example/` (static vault-root demo — **layout is stale**; see that folder’s README).  
-**Status:** v0.1 — **Electron desktop shell**; **vault-root + app settings live** via daemon; vault list / open-close still mock. Next milestone: **`upriv-core` header + chunks**, then open/close into `contents/`.
+**Status:** v0.2-beta — **Electron desktop shell**; **vault-root + app settings live** via daemon; vault list / open-close still mock. Next milestone: **`upriv-core` header + chunks**, then open/close into `contents/`.
 
 When product behavior, security, or on-disk layout is unclear, **read the canonical docs** (below) before inventing behavior. **Rest layout, modes, Seal, backups, export:** [SECURITY-CRYPTO.md](SECURITY-CRYPTO.md) **wins** over stale PRD/SDD sections.
 
