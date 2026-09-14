@@ -2,7 +2,7 @@
   "expo": {
     "name": "Upriv",
     "slug": "upriv-mobile",
-    "version": "0.2.0-beta",
+    "version": "0.2.1-beta",
     "orientation": "default",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
@@ -30,6 +30,10 @@
     "web": {
       "favicon": "./assets/favicon.png"
     },
-    "plugins": ["expo-asset", "expo-font", "expo-dev-client"]
+    "plugins": [
+      "expo-asset",
+      "expo-font",
+      "expo-dev-client"
+    ]
   }
 }

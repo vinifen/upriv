@@ -4,7 +4,7 @@
 
 | | |
 |---|---|
-| **Version** | `0.2.0-beta` ([`VERSION`](VERSION)) |
+| **Version** | `0.2.1-beta` ([`VERSION`](VERSION)) |
 | **Desktop** | Electron + React + Rust daemon |
 | **Mobile** | Expo / React Native + UniFFI (`upriv-ffi`) |
 | **UI languages** | English · Português (Brasil) · Español |
