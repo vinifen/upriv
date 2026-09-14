@@ -1,6 +1,10 @@
 import { Icon } from "@/components/icons";
 import { useTranslation } from "@/i18n";
-import type { VaultDisplayStatus } from "@upriv/shared";
+import {
+  isVaultPipelineDisplayBusy,
+  isVaultOpenCredentialResumeStatus,
+  type VaultDisplayStatus,
+} from "@upriv/shared";
 import { vaultStatusI18nKey } from "@/theme";
 
 /** Fixed control size — all vault rows (Lock / Unlock). */
@@ -34,7 +38,7 @@ export function VaultLockButton({
       : LOCK_CONTROL_CLASS;
 
   const isOpen = status === "open";
-  const pipelineBusy = status === "closing" || status === "opening";
+  const pipelineBusy = isVaultPipelineDisplayBusy(status);
   const actionIcon = isOpen ? "lock" : "lock-open";
   const label = isOpen ? t("action.lock") : t("action.unlock");
 
@@ -54,19 +58,24 @@ export function VaultLockButton({
   };
 
   if (pipelineBusy) {
+    const resumeOpenCredential = isVaultOpenCredentialResumeStatus(status);
     return (
       <button
         type="button"
-        disabled
+        disabled={!resumeOpenCredential}
         aria-busy="true"
         aria-label={t(vaultStatusI18nKey[status])}
         className={[
           controlSizeClass,
-          "cursor-not-allowed rounded-xl opacity-70",
+          resumeOpenCredential ? "cursor-pointer" : "cursor-not-allowed",
+          "rounded-xl opacity-70",
           unlockSurfaceClass,
           iconOnly ? "" : `${labelClass} gap-1.5 px-2`,
         ].join(" ")}
-        onClick={(event) => event.stopPropagation()}
+        onClick={(event) => {
+          event.stopPropagation();
+          if (resumeOpenCredential) onUnlock?.();
+        }}
       >
         {iconOnly ? (
           <Icon name={actionIcon} size={20} />

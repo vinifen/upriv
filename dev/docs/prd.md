@@ -458,7 +458,7 @@ Opened by **`action.settings`** on vault row.
 | RF-UI-07 | Row click (outside buttons) opens workspace when `open` | P0 |
 | RF-UI-08 | **Export** (`action.export_vault`) from the overflow menu. User chooses `.zip` of `contents/` (Recommended) or `.7z` | P0 |
 | RF-UI-09 | Row buttons do not propagate click to row (stop propagation) | P0 |
-| RF-UI-10 | Transient screens: unlock (password), recovery, open/close progress overlay (optional **Continue in background**). Lock confirmation: **`always_prompt`** (password presence check) and **`upriv_plain`** (wipe). Default `encrypted_dir` lock goes straight to the overlay. **One pipeline at a time** — open/close requests are **queued** (FIFO); no cancel mid-flush | P0 |
+| RF-UI-10 | Transient screens: unlock (password), recovery; open/close progress on the **row** (and unlock/lock dialog while open) with a finite time budget — **no** blocking full-screen pipeline overlay. Lock confirmation: **`always_prompt`** (password **presence** check, not a second Argon2) and **`upriv_plain`** (wipe). Default `encrypted_dir` lock starts the close pipeline immediately. **One pipeline at a time** — open/close/create are **queued** (FIFO); no cancel mid-flush | P0 |
 | RF-UI-11 | **Create vault** modal/wizard: name, password, confirm password, optional hint, optional note | P0 |
 | RF-UI-12 | Unlock screen may show **`password_hint`** from config when non-empty (never auto-fill password) | P1 |
 | RF-UI-13 | **Reorder vault list:** drag-and-drop rows (press/hold + drag); persist new positions to `[vault] order` in each affected `config.toml` | P1 |

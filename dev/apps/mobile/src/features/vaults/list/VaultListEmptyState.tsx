@@ -52,7 +52,7 @@ export function VaultListEmptyState({
           onPress={onCreateFromScratch}
         />
         <Button
-          variant="ghost"
+          variant="secondary"
           icon="archive"
           label={t("empty.action.import_file")}
           onPress={onImportPackage}

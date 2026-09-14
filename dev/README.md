@@ -1,6 +1,8 @@
 # Upriv — development workspace
 
-Stable, pinned scaffold for desktop and mobile apps. **Desktop** ships a full mock vault UI (`dev/apps/desktop/`) with an **Electron** shell and **`upriv-daemon`** sidecar; **mobile** is Expo + React Native (mocks in Expo Go; `upriv-ffi` in a native dev client). Core Rust logic lives in `crates/upriv-core`.
+> **New here?** Start at the [repo root README](../README.md) for a product overview and copy-paste run/build tutorials. This file is the deeper workspace / packaging reference.
+
+Stable, pinned scaffold for desktop and mobile apps. **Desktop** = Electron shell + React UI + **`upriv-daemon`**; **mobile** = Expo + React Native (mocks in Expo Go; `upriv-ffi` in a native / release build). Core Rust logic lives in `crates/upriv-core`.
 
 ## Layout
 

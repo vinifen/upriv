@@ -1,4 +1,5 @@
 export type { VaultListItem } from "./types";
+export { parseVaultListItemWire, parseVaultListResult } from "./parse";
 export type {
   GroupedVaultSort,
   GroupedVaultSortMode,
@@ -42,8 +43,24 @@ export {
   vaultExportFilename,
 } from "./export";
 export { resolveVaultPasswordHint } from "./passwordHint";
-export { touchVaultLastAccessed } from "./lastAccessed";
+export {
+  formatLastAccessedWhen,
+  touchVaultLastAccessed,
+  vaultLastAccessedLabel,
+} from "./lastAccessed";
 export { filterVisibleVaults } from "./visibility";
+export {
+  applyPendingCreateGroupEffect,
+  buildCreatingVaultListItem,
+  buildPendingCreateGroupEffect,
+  mergePendingCreatingGroups,
+  mergePendingCreatingVaults,
+  nextVaultGroupOrder,
+  pendingCreateGroupId,
+  rollbackPendingCreateGroupEffect,
+} from "./pendingCreate";
+export type { PendingCreateGroupEffect } from "./pendingCreate";
+export { mergeVaultListSnapshot } from "./mergeSnapshot";
 export {
   draggingGroupedVaultSourceGroupId,
   groupedVaultDragKey,

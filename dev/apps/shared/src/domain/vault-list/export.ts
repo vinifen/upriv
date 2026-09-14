@@ -1,5 +1,5 @@
 import type { VaultSettingsConfig } from "../vault-settings/types";
-import type { VaultRow } from "../vault/types";
+import type { VaultPipelineListStatus, VaultRow } from "../vault/types";
 import { isWindowsReservedName } from "../format/windowsReserved";
 
 export type VaultExportFormat = "contents_zip" | "seven_zip";
@@ -50,14 +50,11 @@ export function exportFilenameSanitizeKind(displayName: string): ExportFilenameS
   return "adjusted";
 }
 
-export type VaultExportPipelineStatus = {
-  openingVaultIds?: readonly string[];
-  closingVaultIds?: readonly string[];
-};
+export type VaultExportPipelineStatus = VaultPipelineListStatus;
 
 /**
- * Single-vault export (`.zip` of `contents/` or `.7z`). Closing, opening, and recovery cannot export.
- * Open vaults may export after flushing `contents/`.
+ * Single-vault export (`.zip` of `contents/` or `.7z`). Closing, opening, creating,
+ * queued, and recovery cannot export. Open vaults may export after flushing `contents/`.
  */
 export function vaultCanExport(
   vault: Pick<VaultRow, "id" | "session">,
@@ -65,5 +62,7 @@ export function vaultCanExport(
 ): boolean {
   if (pipeline.openingVaultIds?.includes(vault.id)) return false;
   if (pipeline.closingVaultIds?.includes(vault.id)) return false;
+  if (pipeline.creatingVaultIds?.includes(vault.id)) return false;
+  if (pipeline.queuedVaultIds?.includes(vault.id)) return false;
   return vault.session !== "closing" && vault.session !== "recovery";
 }

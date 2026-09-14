@@ -228,6 +228,11 @@ export function buildSystemInfoSections(
           value: yesNo(t, ui.file_manager_dock_expanded),
         },
         {
+          id: "lifecycle_close_modal_on_submit",
+          label: t("modal.info.field.lifecycle_close_modal_on_submit"),
+          value: yesNo(t, ui.lifecycle_close_modal_on_submit),
+        },
+        {
           id: "always_show_hidden_vaults",
           label: t("modal.info.field.always_show_hidden_vaults"),
           value: yesNo(t, ui.always_show_hidden_vaults),

@@ -28,6 +28,10 @@ pub enum UprivError {
     #[error("vault config invalid at {path}: {detail}")]
     VaultConfigInvalid { path: PathBuf, detail: String },
 
+    /// Config save refused: quiet-gated field while session open / mid-close.
+    #[error("vault config busy: close vault before changing {target}")]
+    VaultConfigBusy { target: String },
+
     /// `.upriv/vault_groups.toml` missing schema / unreadable (groups layer only — not Gate).
     #[error("vault groups invalid at {path}: {detail}")]
     VaultGroupsInvalid { path: PathBuf, detail: String },
@@ -35,6 +39,38 @@ pub enum UprivError {
     /// Named group is gone (groups layer — not a corrupt file).
     #[error("vault group not found: {0}")]
     VaultGroupNotFound(String),
+
+    /// Registry folder already exists (`vaults/<id>/`).
+    #[error("vault already exists: {0}")]
+    VaultAlreadyExists(PathBuf),
+
+    /// Unlock / wrap AEAD failed — treat as wrong password (do not distinguish tamper).
+    #[error("wrong password")]
+    WrongPassword,
+
+    /// Vault session is already open in this process.
+    #[error("vault already open: {0}")]
+    VaultAlreadyOpen(String),
+
+    /// Close / session op but the vault is not open in this process.
+    #[error("vault not open: {0}")]
+    VaultNotOpen(String),
+
+    /// Surface unlock throttle (5 failures / 60 s → 60 s block).
+    #[error("vault unlock blocked for {retry_after_secs}s")]
+    VaultUnlockBlocked { retry_after_secs: u64 },
+
+    /// Argon2id could not allocate the header `m` cost.
+    #[error("insufficient RAM to derive vault key")]
+    InsufficientRam,
+
+    /// `contents/` header/index unreadable, unknown version, or AEAD fail after a good wrap.
+    #[error("vault store invalid at {path}: {detail}")]
+    VaultStoreInvalid { path: PathBuf, detail: String },
+
+    /// `upriv_plain` workspace extract/wipe is not implemented — refuse create/open.
+    #[error("upriv_plain is not implemented")]
+    UprivPlainUnavailable,
 
     /// Workspace / mount path is not absolute or otherwise invalid.
     #[error("workspace path invalid at {path}: {detail}")]

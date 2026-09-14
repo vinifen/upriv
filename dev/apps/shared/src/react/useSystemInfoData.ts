@@ -38,6 +38,9 @@ export function useSystemInfoData({
 
   const visibleVaults = vaults.filter((vault) => !vault.hidden);
   const vaultsTotal = visibleVaults.length;
+  // List-session inventory: `open` only. Renderer `closing` means flush may
+  // still be in flight in core, but Info "open" is the list badge, not a live
+  // core probe — do not count closing as open.
   const vaultsOpen = visibleVaults.filter(
     (vault) => resolveVaultDisplayStatus(vault) === "open",
   ).length;
@@ -146,6 +149,7 @@ export function useSystemInfoData({
     ui.vault_list_show_drag,
     ui.vault_list_allow_drag_into_group,
     ui.file_manager_dock_expanded,
+    ui.lifecycle_close_modal_on_submit,
     ui.always_show_hidden_vaults,
     logging.enabled,
     logging.level,

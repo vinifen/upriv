@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
-import { Text } from "react-native";
+import { StyleSheet, Text, View } from "react-native";
 import {
+  LOADING_BUDGET_MS,
+  lifecycleBusyLabelKey,
   requireVaultErrorI18nKey,
   requiresPasswordForLifecycle,
   resolveVaultPasswordHint,
@@ -9,17 +11,24 @@ import {
   type VaultLifecycleIntent,
   type VaultListItem,
 } from "@upriv/shared";
+import { useLoadingBudget } from "@upriv/shared/react";
 import { useVaultLifecycleService, useVaultService } from "@/platform/services";
 import { useTranslation, type I18nKey } from "@/i18n";
-import { Button, Modal, ModalFooterActions } from "@/components/ui";
-import { PasswordInput } from "@/components/settings/settingsFields";
+import { Button, LoadingBudgetHint, Modal, ModalFooterActions } from "@/components/ui";
+import { FieldLabel, PasswordInput } from "@/components/settings/settingsFields";
 import { useTheme } from "@/theme";
+import { spacing } from "@/theme/tokens";
 
 interface VaultLifecycleModalProps {
   vault: VaultListItem | null;
   intent: VaultLifecycleIntent | null;
   open: boolean;
   submitting?: boolean;
+  pipelineStep?: number;
+  budgetStartedAt?: number;
+  verifyErrorKey?: I18nKey | null;
+  /** Prefill after a failed attempt — the field, not the session RAM map. */
+  initialPassword?: string;
   onClose: () => void;
   onConfirm: (password: string | null) => void;
 }
@@ -47,6 +56,10 @@ export function VaultLifecycleModal({
   intent,
   open,
   submitting = false,
+  pipelineStep = 0,
+  budgetStartedAt,
+  verifyErrorKey = null,
+  initialPassword,
   onClose,
   onConfirm,
 }: VaultLifecycleModalProps) {
@@ -67,6 +80,10 @@ export function VaultLifecycleModal({
       return;
     }
     setRequiresPassword(intent === "unlock");
+    if (intent === "unlock") {
+      setSettingsLoading(false);
+      return;
+    }
     let cancelled = false;
     setSettingsLoading(true);
     void vaultService
@@ -92,9 +109,22 @@ export function VaultLifecycleModal({
 
   useEffect(() => {
     if (!open) return;
-    setPassword("");
+    setPassword(initialPassword ?? "");
     setError(null);
-  }, [open, vault?.id, intent]);
+  }, [open, vault?.id, intent, initialPassword]);
+
+  useEffect(() => {
+    if (!verifyErrorKey) return;
+    setError(t(verifyErrorKey));
+  }, [t, verifyErrorKey]);
+
+  const budget = useLoadingBudget(
+    open && submitting && budgetStartedAt != null,
+    LOADING_BUDGET_MS.vaultPipeline,
+    {
+      startedAt: budgetStartedAt,
+    },
+  );
 
   if (!open || !vault || !intent) return null;
 
@@ -103,10 +133,14 @@ export function VaultLifecycleModal({
       setError(t(requireVaultErrorI18nKey(VAULT_ERROR_CODES.WRONG_PASSWORD)));
       return;
     }
+    setError(null);
     onConfirm(requiresPassword ? password : null);
   };
 
-  const canSubmit = !submitting && !settingsLoading && (!requiresPassword || password.length > 0);
+  const canSubmit =
+    !submitting &&
+    !settingsLoading &&
+    (!requiresPassword || lifecycleService.validateLifecyclePassword(password));
   const passwordHint = resolveVaultPasswordHint(vault);
 
   return (
@@ -117,17 +151,20 @@ export function VaultLifecycleModal({
       contextTitle={vault.displayName}
       onClose={onClose}
       panelClassName="max-w-md"
-      dismissible={!submitting}
+      dismissible
       footer={
         <ModalFooterActions layout="dialog">
+          {submitting && intent === "unlock" ? null : (
+            <Button label={t("action.cancel")} variant="ghost" onPress={onClose} />
+          )}
           <Button
-            label={t("action.cancel")}
-            variant="ghost"
-            disabled={submitting}
-            onPress={onClose}
-          />
-          <Button
-            label={submitting ? t("close.dialog.submitting") : t(confirmLabelKey(intent))}
+            label={
+              submitting
+                ? budgetStartedAt != null
+                  ? t(lifecycleBusyLabelKey(intent, pipelineStep))
+                  : t("vault.status.queued")
+                : t(confirmLabelKey(intent))
+            }
             variant="primary"
             disabled={!canSubmit}
             onPress={handleConfirm}
@@ -150,31 +187,44 @@ export function VaultLifecycleModal({
       ) : null}
 
       {requiresPassword ? (
-        <>
+        <View style={styles.passwordBlock}>
+          <View style={styles.passwordField}>
+            <FieldLabel>{t("unlock.password")}</FieldLabel>
+            <PasswordInput
+              value={password}
+              onChangeText={(value) => {
+                // Keep the field selectable/copyable while opening; ignore edits.
+                if (submitting) return;
+                setPassword(value);
+                setError(null);
+              }}
+              autoFocus
+              showSoftInputOnFocus={!submitting}
+              onSubmitEditing={() => {
+                if (canSubmit) handleConfirm();
+              }}
+            />
+          </View>
           {passwordHint ? (
-            <Text style={[typography.caption, { color: colors.accent }]}>
-              {t("unlock.password_hint_label")}: {passwordHint}
+            <Text style={[typography.caption, { color: colors.onSurfaceVariant, lineHeight: 16 }]}>
+              {t("unlock.password_hint_label")} · {passwordHint}
             </Text>
           ) : null}
-          <PasswordInput
-            value={password}
-            onChangeText={(value) => {
-              setPassword(value);
-              setError(null);
-            }}
-            autoFocus
-            editable={!submitting}
-            placeholder={t("unlock.password")}
-            onSubmitEditing={() => {
-              if (canSubmit) handleConfirm();
-            }}
-          />
-        </>
+        </View>
       ) : null}
 
       {error ? (
         <Text style={[typography.body, { color: colors.onErrorContainer }]}>{error}</Text>
       ) : null}
+
+      {budget.visible ? (
+        <LoadingBudgetHint budgetMs={budget.budgetMs} remainingMs={budget.remainingMs} />
+      ) : null}
     </Modal>
   );
 }
+
+const styles = StyleSheet.create({
+  passwordBlock: { gap: spacing.sm },
+  passwordField: { gap: spacing.sm },
+});

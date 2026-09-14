@@ -1,0 +1,45 @@
+{
+  "gates": ["anytime", "vault_quiet", "vault_closed", "root_idle", "no_open_session"],
+  "vault": {
+    "vault.note": "anytime",
+    "vault.order": "anytime",
+    "vault.hidden": "anytime",
+    "vault.password_hint": "anytime",
+    "group.assignment": "anytime",
+    "auto_close": "anytime",
+    "backup": "anytime",
+    "policy": "anytime",
+    "security.wipe": "anytime",
+    "seven_zip": "anytime",
+    "vault.display_name": "vault_quiet",
+    "mount.workspace_path": "vault_quiet",
+    "storage.mode": "vault_quiet",
+    "security.mode": "vault_quiet",
+    "vault.id": "vault_quiet",
+    "action.change_password": "vault_closed",
+    "action.change_kdf": "vault_closed"
+  },
+  "app": {
+    "ui": "anytime",
+    "logging": "anytime",
+    "groups": "anytime",
+    "workspace.path": "no_open_session",
+    "data_folder": "root_idle",
+    "app.last_opened_vault": "anytime"
+  },
+  "lockedI18n": {
+    "vault.display_name": "modal.settings.field.vault.display_name_locked",
+    "mount.workspace_path": "modal.settings.field.mount.locked",
+    "storage.mode": "modal.settings.field.storage.mode_locked",
+    "security.mode": "modal.settings.field.security.mode_locked",
+    "action.change_password": "vault.change_password.vault_open",
+    "action.change_kdf": "vault.change_kdf.vault_open"
+  },
+  "rustConfigSaveQuietTargets": [
+    "vault.display_name",
+    "mount.workspace_path",
+    "storage.mode",
+    "security.mode",
+    "vault.id"
+  ]
+}

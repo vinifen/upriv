@@ -109,12 +109,13 @@ describe("useVaultPipelineRun", () => {
     });
   });
 
-  it("invalidates a hung job when the pipeline budget elapses", async () => {
+  it("keeps a late RPC success after the pipeline budget elapses", async () => {
     vi.useFakeTimers();
     const { result } = renderHook(() => useVaultPipelineRun(toI18n));
     const hang = deferred();
     const onComplete = vi.fn();
     const onError = vi.fn();
+    const onTimeout = vi.fn();
 
     act(() => {
       expect(
@@ -125,6 +126,7 @@ describe("useVaultPipelineRun", () => {
           runPipeline: async () => hang.promise,
           onComplete,
           onError,
+          onTimeout,
         }),
       ).toBe(true);
     });
@@ -135,14 +137,181 @@ describe("useVaultPipelineRun", () => {
 
     expect(result.current.run?.errorKey).toBe("loading.timed_out");
     expect(result.current.run?.foreground).toBe(true);
-    expect(onError).toHaveBeenCalledWith("loading.timed_out");
+    expect(onError).not.toHaveBeenCalled();
+    expect(onTimeout).toHaveBeenCalledOnce();
+
+    act(() => {
+      result.current.dismissFailure();
+    });
+    expect(result.current.run?.foreground).toBe(false);
+    expect(result.current.run?.errorKey).toBe("loading.timed_out");
 
     hang.resolve();
     await act(async () => {
       await Promise.resolve();
     });
-    expect(onComplete).not.toHaveBeenCalled();
-    expect(result.current.run?.errorKey).toBe("loading.timed_out");
+    expect(onComplete).toHaveBeenCalled();
+    expect(result.current.run).toBeNull();
     vi.useRealTimers();
+  });
+
+  it("does not park an advance-mode job on a timeout overlay", async () => {
+    vi.useFakeTimers();
+    const { result } = renderHook(() => useVaultPipelineRun(toI18n));
+    const hang = deferred();
+    const onComplete = vi.fn();
+    const onError = vi.fn();
+    const onTimeout = vi.fn();
+
+    act(() => {
+      expect(
+        result.current.start({
+          vaultId: "vault-a",
+          kind: "open",
+          stepCount: 2,
+          presentation: "background",
+          failureMode: "advance",
+          runPipeline: async () => hang.promise,
+          onComplete,
+          onError,
+          onTimeout,
+        }),
+      ).toBe(true);
+    });
+
+    await act(async () => {
+      vi.advanceTimersByTime(LOADING_BUDGET_MS.vaultPipeline);
+    });
+
+    expect(onTimeout).toHaveBeenCalledOnce();
+    expect(result.current.run?.errorKey).toBeUndefined();
+    expect(result.current.run?.vaultId).toBe("vault-a");
+    expect(onError).not.toHaveBeenCalled();
+
+    hang.resolve();
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(onComplete).toHaveBeenCalledOnce();
+    expect(result.current.run).toBeNull();
+    vi.useRealTimers();
+  });
+
+  it("queues create behind open; waiting create stays creating (not queued badge)", async () => {
+    const { result } = renderHook(() => useVaultPipelineRun(toI18n));
+    const first = deferred();
+
+    act(() => {
+      result.current.start({
+        vaultId: "vault-a",
+        kind: "open",
+        stepCount: 1,
+        runPipeline: async () => first.promise,
+        onComplete: () => undefined,
+        onError: () => undefined,
+      });
+      result.current.start({
+        vaultId: "vault-b",
+        kind: "create",
+        stepCount: 1,
+        presentation: "background",
+        failureMode: "advance",
+        runPipeline: async () => undefined,
+        onComplete: () => undefined,
+        onError: () => undefined,
+      });
+    });
+
+    expect(result.current.openingVaultIds).toEqual(["vault-a"]);
+    expect(result.current.creatingVaultIds).toEqual(["vault-b"]);
+    expect(result.current.queuedVaultIds).toEqual([]);
+    expect(result.current.getVaultPipelineListStatus("vault-a")).toBe("opening");
+    expect(result.current.getVaultPipelineListStatus("vault-b")).toBe("creating");
+    expect(result.current.queued).toEqual([{ vaultId: "vault-b", kind: "create" }]);
+
+    await act(async () => {
+      first.resolve();
+    });
+    await waitFor(() => {
+      expect(result.current.run).toBeNull();
+      expect(result.current.creatingVaultIds).toEqual([]);
+      expect(result.current.queuedVaultIds).toEqual([]);
+    });
+  });
+
+  it("lists a waiting open as queued while another vault is opening", async () => {
+    const { result } = renderHook(() => useVaultPipelineRun(toI18n));
+    const first = deferred();
+
+    act(() => {
+      result.current.start({
+        vaultId: "vault-a",
+        kind: "open",
+        stepCount: 1,
+        runPipeline: async () => first.promise,
+        onComplete: () => undefined,
+        onError: () => undefined,
+      });
+      result.current.start({
+        vaultId: "vault-b",
+        kind: "open",
+        stepCount: 1,
+        runPipeline: async () => undefined,
+        onComplete: () => undefined,
+        onError: () => undefined,
+      });
+    });
+
+    expect(result.current.openingVaultIds).toEqual(["vault-a"]);
+    expect(result.current.queuedVaultIds).toEqual(["vault-b"]);
+    expect(result.current.getVaultPipelineListStatus("vault-b")).toBe("queued");
+
+    await act(async () => {
+      first.resolve();
+    });
+    await waitFor(() => {
+      expect(result.current.queuedVaultIds).toEqual([]);
+    });
+  });
+
+  it("advances the queue when a create job fails", async () => {
+    const { result } = renderHook(() => useVaultPipelineRun(toI18n));
+    let rejectFirst!: (error: Error) => void;
+    const first = new Promise<void>((_, reject) => {
+      rejectFirst = reject;
+    });
+    const completed: string[] = [];
+    const errors: string[] = [];
+
+    act(() => {
+      result.current.start({
+        vaultId: "vault-a",
+        kind: "create",
+        stepCount: 1,
+        presentation: "background",
+        failureMode: "advance",
+        runPipeline: async () => first,
+        onComplete: () => undefined,
+        onError: (key) => errors.push(key),
+      });
+      result.current.start({
+        vaultId: "vault-b",
+        kind: "open",
+        stepCount: 1,
+        runPipeline: async () => undefined,
+        onComplete: () => completed.push("b"),
+        onError: () => undefined,
+      });
+    });
+
+    await act(async () => {
+      rejectFirst(new Error("create failed"));
+    });
+
+    await waitFor(() => {
+      expect(errors).toEqual(["error.unexpected"]);
+      expect(completed).toEqual(["b"]);
+      expect(result.current.run).toBeNull();
+    });
   });
 });

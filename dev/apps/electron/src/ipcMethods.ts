@@ -32,4 +32,10 @@ export const ELECTRON_IPC_METHODS = [
   "vault_group_reorder",
   "vault_group_reorder_grouped_vaults",
   "vault_group_repair",
+  "vault_list",
+  "vault_create",
+  "vault_open",
+  "vault_close",
+  "vault_config_get",
+  "vault_config_save",
 ] as const;

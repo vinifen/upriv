@@ -10,7 +10,12 @@ import {
   useVaultService,
 } from "@/platform/services";
 import { useTranslation } from "@/i18n";
-import { buildVaultInfoSections, type VaultGroup, type VaultListItem } from "@upriv/shared";
+import {
+  buildVaultInfoSections,
+  type VaultGroup,
+  type VaultListItem,
+  type VaultPipelineListStatus,
+} from "@upriv/shared";
 import { useVaultInfoData, useVaultRootIntegrityClose } from "@upriv/shared/react";
 import { getMockVaultRuntimeStats } from "@upriv/shared/testing";
 
@@ -19,9 +24,16 @@ interface VaultInfoModalProps {
   open: boolean;
   onClose: () => void;
   groups?: readonly VaultGroup[];
+  pipelineListStatus?: VaultPipelineListStatus;
 }
 
-export function VaultInfoModal({ vault, open, onClose, groups = [] }: VaultInfoModalProps) {
+export function VaultInfoModal({
+  vault,
+  open,
+  onClose,
+  groups = [],
+  pipelineListStatus = {},
+}: VaultInfoModalProps) {
   const { t } = useTranslation();
   const { settings, reportVaultRootIntegrityFailure } = useAppSettingsContext();
   const vaultService = useVaultService();
@@ -47,8 +59,8 @@ export function VaultInfoModal({ vault, open, onClose, groups = [] }: VaultInfoM
 
   const sections = useMemo(() => {
     if (!snapshot) return [];
-    return buildVaultInfoSections(snapshot, t);
-  }, [snapshot, t]);
+    return buildVaultInfoSections(snapshot, t, pipelineListStatus);
+  }, [pipelineListStatus, snapshot, t]);
 
   if (!open || !vault) return null;
 

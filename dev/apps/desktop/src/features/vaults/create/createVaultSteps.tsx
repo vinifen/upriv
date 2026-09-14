@@ -541,6 +541,7 @@ function CreateVaultAdvancedStep({
             if (patch.mode !== undefined) setStorageMode(patch.mode);
           }}
         />
+        <FieldErrors errors={createVaultErrorsForField(errors, "storage")} />
       </VaultSettingsSection>
 
       <VaultSettingsSection title={t("modal.settings.section.mount")}>

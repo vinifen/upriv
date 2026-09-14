@@ -4,7 +4,7 @@
  */
 export const VAULT_PIPELINE_ERROR_CODES = {
   INSUFFICIENT_RAM: "insufficient_ram",
-  /** Close / open step 0 (`overlay.step_test_header`) — vault.header failed verification. */
+  /** Close / open header check — vault.header failed verification. */
   HEADER_TEST_FAILED: "header_test_failed",
 } as const;
 

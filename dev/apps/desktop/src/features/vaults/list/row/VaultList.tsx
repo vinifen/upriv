@@ -15,6 +15,7 @@ import {
   type VaultListItem,
   type VaultListRootRow,
   type VaultListViewMode,
+  type VaultPipelineListStatus,
   type VaultSettingsAreaId,
 } from "@upriv/shared";
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -72,10 +73,7 @@ function blocksGroupInnerClass(innerColumns: 1 | 2 | 3): string {
   return `grid min-w-0 grid-cols-3 gap-4 ${pad}`;
 }
 
-export interface VaultPipelineListStatus {
-  openingVaultIds?: readonly string[];
-  closingVaultIds?: readonly string[];
-}
+export type { VaultPipelineListStatus } from "@upriv/shared";
 
 interface VaultListProps {
   rows: VaultListRootRow[];
@@ -100,7 +98,6 @@ interface VaultListProps {
   onOpenGroupSettings: (groupId: string) => void;
   onToggleGroupCollapsed: (groupId: string) => void;
   onExportVault: (vault: VaultListItem) => void;
-  onOpenFolder: (vault: VaultListItem) => void;
   onOpenFileManager: (vault: VaultListItem) => void;
   onLockVault: (vault: VaultListItem) => void;
   onUnlockVault: (vault: VaultListItem) => void;
@@ -129,7 +126,6 @@ export function VaultList({
   onOpenGroupSettings,
   onToggleGroupCollapsed,
   onExportVault,
-  onOpenFolder,
   onOpenFileManager,
   onLockVault,
   onUnlockVault,
@@ -263,7 +259,7 @@ export function VaultList({
         dropKey={drag.dropKey}
         pipelineListStatus={pipelineListStatus}
         isPipelineBusy={isVaultPipelineBusy(vault.id)}
-        dragDisabled={drag.dragDisabled}
+        dragDisabled={drag.dragDisabled || isVaultPipelineBusy(vault.id)}
         dragHandleLabel={drag.dragHandleLabel}
         isDragging={draggingId === drag.dropKey}
         isDragOver={isDropOver(drag.dropKey)}
@@ -275,7 +271,6 @@ export function VaultList({
         onOpenVaultInfo={onOpenVaultInfo}
         onOpenSettings={onOpenSettings}
         onExportVault={onExportVault}
-        onOpenFolder={onOpenFolder}
         onOpenFileManager={onOpenFileManager}
         onLockVault={onLockVault}
         onUnlockVault={onUnlockVault}
@@ -390,7 +385,11 @@ export function VaultList({
               dropKey={key}
               pipelineListStatus={pipelineListStatus}
               viewMode={viewMode}
-              dragDisabled={!vaultListShowDrag || (!canReorder && !vaultListAllowDragIntoGroup)}
+              dragDisabled={
+                !vaultListShowDrag ||
+                (!canReorder && !vaultListAllowDragIntoGroup) ||
+                isVaultPipelineBusy(row.vault.id)
+              }
               dragHandleLabel={canReorder ? reorderHandleLabel : groupHandleLabel}
               isDragging={draggingId === key}
               isDragOver={isDropOver(key)}
@@ -403,7 +402,6 @@ export function VaultList({
               onOpenVaultInfo={onOpenVaultInfo}
               onOpenSettings={onOpenSettings}
               onExportVault={onExportVault}
-              onOpenFolder={onOpenFolder}
               onOpenFileManager={onOpenFileManager}
               onLockVault={onLockVault}
               onUnlockVault={onUnlockVault}
@@ -457,7 +455,8 @@ export function VaultList({
                           viewMode={viewMode}
                           dragDisabled={
                             !vaultListShowDrag ||
-                            (!groupedVaultReorder && !vaultListAllowDragIntoGroup)
+                            (!groupedVaultReorder && !vaultListAllowDragIntoGroup) ||
+                            isVaultPipelineBusy(vault.id)
                           }
                           dragHandleLabel={
                             groupedVaultReorder ? reorderHandleLabel : groupHandleLabel
@@ -473,7 +472,6 @@ export function VaultList({
                           onOpenVaultInfo={onOpenVaultInfo}
                           onOpenSettings={onOpenSettings}
                           onExportVault={onExportVault}
-                          onOpenFolder={onOpenFolder}
                           onOpenFileManager={onOpenFileManager}
                           onLockVault={onLockVault}
                           onUnlockVault={onUnlockVault}

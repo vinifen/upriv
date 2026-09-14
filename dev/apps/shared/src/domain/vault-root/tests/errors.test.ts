@@ -33,6 +33,8 @@ describe("shouldBumpVaultRootEpoch", () => {
     expect(isVaultRootErrorCode(VAULT_ROOT_ERROR_CODES.ALIAS_INVALID)).toBe(true);
     expect(isVaultRootErrorCode("vault_not_found")).toBe(false);
     expect(isVaultRootErrorCode(VAULT_ROOT_ERROR_CODES.IO_ERROR)).toBe(false);
+    expect(isVaultRootErrorCode(VAULT_ROOT_ERROR_CODES.BUSY)).toBe(false);
+    expect(shouldBumpVaultRootEpoch(new RpcError(VAULT_ROOT_ERROR_CODES.BUSY, "open"))).toBe(false);
   });
 
   it("bumps Gate for SAF lost-grant and write/create failures", () => {

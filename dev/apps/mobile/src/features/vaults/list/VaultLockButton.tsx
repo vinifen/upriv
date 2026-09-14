@@ -1,10 +1,14 @@
 import { Pressable, Text, View } from "react-native";
-import type { VaultDisplayStatus } from "@upriv/shared";
-import { vaultStatusI18nKey } from "@upriv/shared";
+import {
+  isVaultPipelineDisplayBusy,
+  isVaultOpenCredentialResumeStatus,
+  type VaultDisplayStatus,
+  vaultStatusI18nKey,
+} from "@upriv/shared";
 import { Icon } from "@/components/icons";
 import { useTranslation, type I18nKey } from "@/i18n";
 import { useTheme } from "@/theme";
-import { radii } from "@/theme/tokens";
+import { mixHex, radii } from "@/theme/tokens";
 
 const LOCK_WIDTH = 144;
 const LOCK_HEIGHT = 44;
@@ -30,23 +34,30 @@ export function VaultLockButton({
   const { t } = useTranslation();
   const { colors } = useTheme();
   const isOpen = status === "open";
-  const pipelineBusy = status === "closing" || status === "opening";
+  const pipelineBusy = isVaultPipelineDisplayBusy(status);
+  const resumeOpenCredential = isVaultOpenCredentialResumeStatus(status);
   const iconOnly = appearance === "icon" && layout !== "block";
   const label = pipelineBusy
     ? t(vaultStatusI18nKey[status] as I18nKey)
     : isOpen
       ? t("action.lock")
       : t("action.unlock");
-  const backgroundColor = isOpen ? colors.surfaceContainerHigh : colors.surfaceContainerHighest;
+  // Desktop: open = primary@30% on surfaceContainerHighest; closed/busy = highest only.
+  const unlockSurface = colors.surfaceContainerHighest;
+  const lockSurface = mixHex(colors.surfaceContainerHighest, colors.primary, 0.3);
+  const backgroundColor = pipelineBusy ? unlockSurface : isOpen ? lockSurface : unlockSurface;
 
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={label}
-      accessibilityState={{ busy: pipelineBusy, disabled: pipelineBusy }}
-      disabled={pipelineBusy}
+      accessibilityState={{
+        busy: pipelineBusy,
+        disabled: pipelineBusy && !resumeOpenCredential,
+      }}
+      disabled={pipelineBusy && !resumeOpenCredential}
       onPress={() => {
-        if (pipelineBusy) return;
+        if (pipelineBusy && !resumeOpenCredential) return;
         if (isOpen) onLock?.();
         else onUnlock?.();
       }}

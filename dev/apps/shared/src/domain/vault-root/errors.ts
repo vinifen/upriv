@@ -11,6 +11,8 @@ export const VAULT_ROOT_ERROR_CODES = {
   NOT_FOUND: "vault_root_not_found",
   INCOMPLETE: "vault_root_incomplete",
   ALIAS_INVALID: "vault_root_alias_invalid",
+  /** Open session or in-flight Argon2 — refuse data-folder switch (not Gate A/B). */
+  BUSY: "vault_root_busy",
   IO_ERROR: "io_error",
 } as const;
 

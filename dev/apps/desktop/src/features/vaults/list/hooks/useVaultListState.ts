@@ -9,6 +9,7 @@ import {
   type VaultGroup,
   type VaultListRootRow,
   applyVaultListHierarchySort,
+  mergeVaultListSnapshot,
   canReorderGroupedVaults,
   canReorderVaultList,
   DEFAULT_VAULT_LIST_SORT,
@@ -91,6 +92,7 @@ export function useVaultListState(
   const [dragOverId, setDragOverId] = useState<string | null>(null);
   const dragOverIdRef = useRef<string | null>(null);
   const [dragPointer, setDragPointer] = useState<{ x: number; y: number } | null>(null);
+  const sessionWritesRef = useRef(new Map<string, number>());
 
   const beginDrag = useCallback((key: string) => {
     draggingIdRef.current = key;
@@ -137,9 +139,19 @@ export function useVaultListState(
     [groups, onRootGroupsReordered, onRootVaultsReordered, vaults],
   );
 
+  const resetSessionWrites = useCallback(() => {
+    sessionWritesRef.current.clear();
+  }, []);
+
   const initializeVaults = useCallback(
-    (rows: VaultListItem[]) => {
-      setVaults(sortVaultsByOrder(seedVaultPasswordHints(rows)));
+    (rows: VaultListItem[], fetchStartedAt: number) => {
+      setVaults((current) =>
+        sortVaultsByOrder(
+          seedVaultPasswordHints(
+            mergeVaultListSnapshot(current, rows, sessionWritesRef.current, fetchStartedAt),
+          ),
+        ),
+      );
       setIsReady(true);
       endDrag();
     },
@@ -234,6 +246,7 @@ export function useVaultListState(
 
   const removeVault = useCallback((vaultId: string) => {
     unregisterMockVaultId(vaultId);
+    sessionWritesRef.current.delete(vaultId);
     setVaults((current) => current.filter((vault) => vault.id !== vaultId));
     setGroups((current) =>
       current.map((group) => ({
@@ -284,8 +297,13 @@ export function useVaultListState(
     });
   }, []);
 
+  const touchSessionWrite = useCallback((vaultId: string) => {
+    sessionWritesRef.current.set(vaultId, Date.now());
+  }, []);
+
   const addVault = useCallback((vault: VaultListItem) => {
     registerMockVaultId(vault.id);
+    sessionWritesRef.current.set(vault.id, Date.now());
     setVaults((current) => sortVaultsByOrder([...current, vault]));
   }, []);
 
@@ -298,6 +316,7 @@ export function useVaultListState(
         lastAccessedWhen?: string;
       },
     ) => {
+      sessionWritesRef.current.set(vaultId, Date.now());
       setVaults((current) =>
         current.map((vault) => (vault.id === vaultId ? { ...vault, ...patch } : vault)),
       );
@@ -432,6 +451,7 @@ export function useVaultListState(
   return {
     isReady,
     initializeVaults,
+    resetSessionWrites,
     initializeGroups,
     vaults,
     groups,
@@ -452,6 +472,7 @@ export function useVaultListState(
     updateNote,
     removeVault,
     addVault,
+    touchSessionWrite,
     setVaultRuntimeState,
     updateVaultSettings,
     markVaultsHidden,

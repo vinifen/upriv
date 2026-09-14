@@ -19,5 +19,8 @@ describe("CORE_RPC_TIMEOUT_MS", () => {
     expect(CORE_RPC_TIMEOUT_MS.app_settings_save).toBe(LOADING_BUDGET_MS.settingsSave);
     expect(CORE_RPC_TIMEOUT_MS.log_list).toBe(LOADING_BUDGET_MS.logs);
     expect(CORE_RPC_TIMEOUT_MS.vault_group_list).toBe(LOADING_BUDGET_MS.default);
+    expect(CORE_RPC_TIMEOUT_MS.vault_create).toBe(LOADING_BUDGET_MS.vaultCreate);
+    expect(CORE_RPC_TIMEOUT_MS.vault_open).toBe(LOADING_BUDGET_MS.vaultPipeline);
+    expect(CORE_RPC_TIMEOUT_MS.vault_close).toBe(LOADING_BUDGET_MS.vaultPipeline);
   });
 });

@@ -15,6 +15,11 @@ export interface ChangeVaultKdfInput {
  * master key inside `upriv-core` — never in the UI. A wrong password must
  * reject with `RpcError(VAULT_ERROR_CODES.WRONG_PASSWORD)` so callers can map
  * it through `errorDisplayI18nKey`.
+ *
+ * Live change-password / KDF change is **blocked** until SECURITY-CRYPTO
+ * landmine P0 (v1 chunk AAD still binds salt). Use
+ * `createUnavailableVaultSecurityService` in desktop/native factories — never
+ * the mock that reports success without rewriting `contents/`.
  */
 export interface VaultSecurityService {
   /** Rewraps `vault.header` + `contents/` under a new password. */

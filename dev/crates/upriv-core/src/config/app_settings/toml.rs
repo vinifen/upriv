@@ -86,6 +86,8 @@ pub(super) struct UiToml {
     pub(super) vault_list_show_vault_more_button: bool,
     pub(super) vault_list_show_vault_settings_button: bool,
     pub(super) vault_list_show_group_settings_button: bool,
+    /// Close unlock/lock password dialog on Confirm. Default false.
+    pub(super) lifecycle_close_modal_on_submit: bool,
 }
 
 impl Default for UiToml {
@@ -109,6 +111,7 @@ impl Default for UiToml {
             vault_list_show_vault_more_button: true,
             vault_list_show_vault_settings_button: true,
             vault_list_show_group_settings_button: true,
+            lifecycle_close_modal_on_submit: false,
         }
     }
 }
@@ -133,6 +136,7 @@ fn ui_toml_from_settings(ui: &UiSettings) -> UiToml {
         vault_list_show_vault_more_button: ui.vault_list_show_vault_more_button,
         vault_list_show_vault_settings_button: ui.vault_list_show_vault_settings_button,
         vault_list_show_group_settings_button: ui.vault_list_show_group_settings_button,
+        lifecycle_close_modal_on_submit: ui.lifecycle_close_modal_on_submit,
     }
 }
 
@@ -172,6 +176,7 @@ pub(super) fn ui_settings_from_toml(ui: &UiToml) -> UiSettings {
         vault_list_show_drag: ui.vault_list_show_drag,
         vault_list_allow_drag_into_group: ui.vault_list_allow_drag_into_group,
         file_manager_dock_expanded: ui.file_manager_dock_expanded,
+        lifecycle_close_modal_on_submit: ui.lifecycle_close_modal_on_submit,
     }
 }
 

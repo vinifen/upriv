@@ -541,6 +541,7 @@ function CreateVaultAdvancedStep({
                 key={mode}
                 value={mode}
                 checked={draft.storage.mode === mode}
+                disabled={mode === "upriv_plain"}
                 title={t(`modal.settings.option.storage.${mode}` as I18nKey)}
                 description={t(`modal.settings.option.storage.${mode}_desc` as I18nKey)}
                 badge={badge}
@@ -555,6 +556,8 @@ function CreateVaultAdvancedStep({
           {draft.storage.mode === "upriv_plain" ? (
             <FieldHint>{t("warning.upriv_plain")}</FieldHint>
           ) : null}
+          <FieldHint>{t("error.upriv_plain_unavailable")}</FieldHint>
+          <FieldErrors errors={createVaultErrorsForField(errors, "storage")} />
         </View>
       </SettingsAccordionSection>
 

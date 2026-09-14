@@ -98,6 +98,9 @@ export function Select<T extends string | number>({
   const [anchor, setAnchor] = useState<AnchorRect | null>(null);
   const [contentH, setContentH] = useState(0);
   const [menuSide, setMenuSide] = useState<"below" | "above">("below");
+  /** Compact trigger min width = widest option (desktop invisible sizers). */
+  const [smMinWidth, setSmMinWidth] = useState(0);
+  const optionWidths = useRef(new Map<string, number>());
   openRef.current = open;
 
   const selected = useMemo(
@@ -235,6 +238,7 @@ export function Select<T extends string | number>({
     const paddingTop = Math.max(insets.top, EDGE);
     const paddingBottom = Math.max(insets.bottom, EDGE);
     const maxPanelW = Math.max(1, winW - EDGE * 2);
+    // Match trigger width (desktop `matchTriggerWidth`) so CTA + menu read as one control.
     const panelWidth = Math.min(maxPanelW, Math.max(1, anchor.width));
     const placed = placeAnchoredMenu({
       anchor,
@@ -248,7 +252,7 @@ export function Select<T extends string | number>({
         left: EDGE,
       },
       gap: -1,
-      align: "left",
+      align: compact ? "right" : "left",
     });
     setMenuSide(placed.side);
 
@@ -361,6 +365,7 @@ export function Select<T extends string | number>({
     anchor,
     close,
     colors,
+    compact,
     contentH,
     fill,
     hover,
@@ -390,8 +395,24 @@ export function Select<T extends string | number>({
     return () => sub.remove();
   }, [close, open]);
 
+  const onOptionSizerLayout = useCallback((key: string, labelWidth: number) => {
+    optionWidths.current.set(key, labelWidth);
+    let widest = 0;
+    for (const w of optionWidths.current.values()) {
+      if (w > widest) widest = w;
+    }
+    // padding + gap + chevron — keep CTA and menu the same width.
+    const next = Math.ceil(widest + spacing.md * 2 + spacing.sm + 14);
+    setSmMinWidth((current) => (current === next ? current : next));
+  }, []);
+
+  useEffect(() => {
+    optionWidths.current.clear();
+    setSmMinWidth(0);
+  }, [options]);
+
   return (
-    <View style={styles.wrap}>
+    <View style={compact ? styles.wrapSm : styles.wrap}>
       {label && !compact ? (
         <Text
           style={[
@@ -402,6 +423,25 @@ export function Select<T extends string | number>({
         >
           {label}
         </Text>
+      ) : null}
+      {compact ? (
+        <View
+          style={styles.sizerHost}
+          pointerEvents="none"
+          importantForAccessibility="no-hide-descendants"
+        >
+          {options.map((option) => (
+            <Text
+              key={`sizer-${String(option.value)}`}
+              style={[typography.caption, styles.sizerText]}
+              onLayout={(event) => {
+                onOptionSizerLayout(String(option.value), event.nativeEvent.layout.width);
+              }}
+            >
+              {option.label}
+            </Text>
+          ))}
+        </View>
       ) : null}
       <View style={compact ? styles.triggerWrapSm : styles.triggerWrap}>
         <Pressable
@@ -415,7 +455,8 @@ export function Select<T extends string | number>({
           onPress={openMenu}
           style={({ pressed }) => [
             styles.control,
-            compact ? styles.controlSm : null,
+            compact ? styles.controlSm : styles.controlMd,
+            compact && smMinWidth > 0 ? { minWidth: smMinWidth } : null,
             {
               backgroundColor: fill,
               opacity: disabled ? 0.6 : pressed ? 0.85 : 1,
@@ -430,7 +471,8 @@ export function Select<T extends string | number>({
           <Text
             style={[
               compact ? typography.caption : typography.body,
-              { color: colors.onSurface, flex: 1 },
+              compact ? styles.valueSm : styles.valueMd,
+              { color: colors.onSurface },
             ]}
             numberOfLines={1}
           >
@@ -492,11 +534,24 @@ function SelectOptionRow<T extends string | number>({
 }
 
 const styles = StyleSheet.create({
-  wrap: { gap: spacing.sm },
+  wrap: { gap: spacing.sm, alignSelf: "stretch" },
+  /** Header locale pickers — hug widest option; menu matches trigger. */
+  wrapSm: { alignSelf: "flex-start", maxWidth: 256, flexShrink: 0 },
   triggerWrap: { alignSelf: "stretch" },
-  triggerWrapSm: { alignSelf: "flex-end" },
+  triggerWrapSm: { alignSelf: "flex-start" },
+  sizerHost: {
+    position: "absolute",
+    opacity: 0,
+    left: 0,
+    top: 0,
+    zIndex: -1,
+  },
+  sizerText: {
+    position: "absolute",
+    left: 0,
+    top: 0,
+  },
   control: {
-    width: "100%",
     minHeight: 48,
     borderRadius: radii.md,
     paddingLeft: spacing.lg,
@@ -505,13 +560,20 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: spacing.sm,
   },
+  controlMd: {
+    width: "100%",
+    alignSelf: "stretch",
+  },
   controlSm: {
     minHeight: 40,
     maxWidth: 256,
+    alignSelf: "flex-start",
     borderRadius: radii.md,
     paddingLeft: spacing.md,
     paddingRight: spacing.md,
   },
+  valueMd: { flex: 1, minWidth: 0 },
+  valueSm: { flexGrow: 1, flexShrink: 1, minWidth: 0 },
   overlay: { flex: 1 },
   panel: {
     overflow: "visible",

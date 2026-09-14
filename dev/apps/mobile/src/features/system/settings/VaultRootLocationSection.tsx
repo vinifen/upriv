@@ -288,6 +288,7 @@ export function VaultRootLocationSection({
         replacePolicy={replacePolicy}
         onReplacePolicyChange={setReplacePolicy}
         primaryAction={primaryAction}
+        disabled={controlsDisabled}
       />
     ) : null;
 
@@ -309,6 +310,7 @@ export function VaultRootLocationSection({
           title={t(defaultRootTitleKey)}
           description={t(defaultRootDescKey)}
           badge="default"
+          disabled={controlsDisabled}
           onSelect={() => {
             if (controlsDisabled) return;
             aliasLoadGen.current += 1;
@@ -392,6 +394,7 @@ export function VaultRootLocationSection({
           description={t("modal.app_settings.option.upriv_root.custom_root_desc", {
             file: VAULT_ROOT_ALIAS_FILE,
           })}
+          disabled={controlsDisabled}
           onSelect={() => {
             if (controlsDisabled) return;
             const current = config.upriv_root_path.trim();

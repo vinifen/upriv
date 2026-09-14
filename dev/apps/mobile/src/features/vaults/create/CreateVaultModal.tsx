@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { ScrollView, StyleSheet, Text, useWindowDimensions } from "react-native";
+import { ScrollView, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import {
   NO_VAULT_GROUPS,
@@ -12,9 +12,16 @@ import {
 import { useAppSettingsContext } from "@/features/system/settings";
 import { useCreateVaultService, useVaultRootService } from "@/platform/services";
 import { useTranslation } from "@/i18n";
+import { mobileErrorI18nKey } from "@/lib/errorMessages";
 import { useTheme } from "@/theme";
 import { MODAL_MAX_HEIGHT_RATIO, spacing } from "@/theme/tokens";
-import { Button, Modal, ModalFooterNav, modalFooterConfirmBtnStyle } from "@/components/ui";
+import {
+  Button,
+  Modal,
+  ModalFooterActions,
+  ModalFooterNav,
+  modalFooterConfirmBtnStyle,
+} from "@/components/ui";
 import { useTapNotPan } from "@/components/ui/ScrimDismiss";
 import { CreateVaultStepNav } from "./CreateVaultStepNav";
 import { renderCreateVaultStep } from "./createVaultSteps";
@@ -28,7 +35,7 @@ interface CreateVaultModalProps {
   groups?: readonly VaultGroup[];
   initialDraft?: CreateVaultDraft | null;
   initialStep?: CreateVaultStepId | null;
-  onCreate: (result: CreateVaultResult) => void;
+  onCreate: (result: CreateVaultResult, password: string) => void;
 }
 
 /** Create-vault wizard — same step flow as desktop `CreateVaultModal`. */
@@ -43,13 +50,14 @@ export function CreateVaultModal({
   onCreate,
 }: CreateVaultModalProps) {
   const { t } = useTranslation();
-  const { typography } = useTheme();
+  const { colors, typography } = useTheme();
   const insets = useSafeAreaInsets();
   const { height: windowHeight } = useWindowDimensions();
   const createVaultService = useCreateVaultService();
   const { settings: appSettings, showHiddenVaultsSession } = useAppSettingsContext();
   const vaultRootService = useVaultRootService();
   const [resolvedRootPath, setResolvedRootPath] = useState<string | null>(null);
+  const [createError, setCreateError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) {
@@ -131,65 +139,80 @@ export function CreateVaultModal({
   } = wizard;
   const dismissConfirmOnBodyTap = useTapNotPan(dismissFooterConfirm, discardConfirmOpen);
 
+  useEffect(() => {
+    if (!open) setCreateError(null);
+  }, [open]);
+
   const footer = (
-    <ModalFooterNav
-      leading={
-        discardConfirmOpen ? (
+    <View style={{ gap: spacing.sm }}>
+      {createError ? (
+        <Text style={[typography.caption, { color: colors.onErrorContainer }]}>{createError}</Text>
+      ) : null}
+      {discardConfirmOpen ? (
+        <>
           <Text style={typography.bodyMuted}>{t("modal.settings.discard_confirm")}</Text>
-        ) : (
-          <Button
-            variant="ghost"
-            label={t("vault.create.action.back")}
-            style={modalFooterConfirmBtnStyle}
-            disabled={isFirstStep}
-            onPress={handleBack}
-          />
-        )
-      }
-      trailing={
-        discardConfirmOpen ? (
-          <>
-            <Button
-              variant="ghost"
-              label={t("modal.settings.discard_keep_editing")}
-              style={modalFooterConfirmBtnStyle}
-              onPress={dismissFooterConfirm}
-            />
+          <ModalFooterActions layout="confirm">
             <Button
               variant="danger"
               label={t("modal.settings.discard_confirm_action")}
               style={modalFooterConfirmBtnStyle}
               onPress={handleDiscardAndClose}
             />
-          </>
-        ) : (
-          <>
             <Button
               variant="ghost"
-              label={t("action.cancel")}
+              label={t("modal.settings.discard_keep_editing")}
               style={modalFooterConfirmBtnStyle}
-              onPress={requestClose}
+              onPress={dismissFooterConfirm}
             />
-            {isLastStep ? (
+          </ModalFooterActions>
+        </>
+      ) : (
+        <ModalFooterNav
+          leading={
+            <Button
+              variant="ghost"
+              label={t("vault.create.action.back")}
+              style={modalFooterConfirmBtnStyle}
+              disabled={isFirstStep}
+              onPress={handleBack}
+            />
+          }
+          trailing={
+            <>
               <Button
-                variant="primary"
-                label={t("vault.create.action.create")}
+                variant="ghost"
+                label={t("action.cancel")}
                 style={modalFooterConfirmBtnStyle}
-                disabled={!canCreate}
-                onPress={handleCreate}
+                onPress={requestClose}
               />
-            ) : (
-              <Button
-                variant="primary"
-                label={t("vault.create.action.next")}
-                style={modalFooterConfirmBtnStyle}
-                onPress={handleNext}
-              />
-            )}
-          </>
-        )
-      }
-    />
+              {isLastStep ? (
+                <Button
+                  variant="primary"
+                  label={t("vault.create.action.create")}
+                  style={modalFooterConfirmBtnStyle}
+                  disabled={!canCreate}
+                  onPress={() => {
+                    setCreateError(null);
+                    try {
+                      handleCreate();
+                    } catch (error) {
+                      setCreateError(t(mobileErrorI18nKey(error)));
+                    }
+                  }}
+                />
+              ) : (
+                <Button
+                  variant="primary"
+                  label={t("vault.create.action.next")}
+                  style={modalFooterConfirmBtnStyle}
+                  onPress={handleNext}
+                />
+              )}
+            </>
+          }
+        />
+      )}
+    </View>
   );
 
   return (

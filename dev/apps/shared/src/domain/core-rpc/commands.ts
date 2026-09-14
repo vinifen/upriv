@@ -1,7 +1,8 @@
 /**
  * Rust RPC method names used by desktop (`upriv-daemon`) and mobile (`upriv-ffi`).
- * DX only — handlers live in `upriv-rpc` (`handle_rpc`). Add vault_* when porting beta.
+ * DX only — handlers live in `upriv-rpc` (`handle_rpc`). Keep vault_* in this map.
  * Keep string values in sync with `upriv-rpc` match arms.
+ * Parity fixture (not runtime): `tests/rpc-methods.json` — TS + Rust tests only.
  */
 export const CORE_RPC_COMMANDS = {
   APP_VERSION: "app_version",
@@ -48,6 +49,12 @@ export const CORE_RPC_COMMANDS = {
   VAULT_GROUP_REORDER: "vault_group_reorder",
   VAULT_GROUP_REORDER_GROUPED_VAULTS: "vault_group_reorder_grouped_vaults",
   VAULT_GROUP_REPAIR: "vault_group_repair",
+  VAULT_LIST: "vault_list",
+  VAULT_CREATE: "vault_create",
+  VAULT_OPEN: "vault_open",
+  VAULT_CLOSE: "vault_close",
+  VAULT_CONFIG_GET: "vault_config_get",
+  VAULT_CONFIG_SAVE: "vault_config_save",
 } as const;
 
 /**

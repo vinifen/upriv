@@ -5,6 +5,7 @@ export const VAULT_ROOT_ERROR_I18N_KEYS = {
   [VAULT_ROOT_ERROR_CODES.NOT_FOUND]: "modal.vault_root_setup.lost",
   [VAULT_ROOT_ERROR_CODES.INCOMPLETE]: "modal.vault_root_setup.error_incomplete",
   [VAULT_ROOT_ERROR_CODES.ALIAS_INVALID]: "modal.vault_root_setup.error_alias_invalid",
+  [VAULT_ROOT_ERROR_CODES.BUSY]: "modal.data_folder.blocked_vault_activity",
   [VAULT_ROOT_ERROR_CODES.IO_ERROR]: "modal.vault_root_setup.error_io",
 } as const;
 

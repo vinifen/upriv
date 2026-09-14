@@ -582,6 +582,14 @@ function GeneralFields({
           onChange({ vault_list_show_header_more_button })
         }
       />
+      <SwitchRow
+        label={t("modal.app_settings.field.lifecycle_close_modal_on_submit")}
+        hint={t("modal.app_settings.field.lifecycle_close_modal_on_submit_help")}
+        value={config.lifecycle_close_modal_on_submit}
+        onValueChange={(lifecycle_close_modal_on_submit) =>
+          onChange({ lifecycle_close_modal_on_submit })
+        }
+      />
     </View>
   );
 }

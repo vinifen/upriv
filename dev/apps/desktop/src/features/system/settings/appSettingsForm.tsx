@@ -71,6 +71,7 @@ export function AppSettingsGeneralSection({ config, onChange }: SectionPatchProp
   const { t } = useTranslation();
   const themeGroup = useId();
   const showHeaderMoreId = useId();
+  const closeModalOnSubmitId = useId();
 
   return (
     <SettingsFormGrid>
@@ -109,6 +110,15 @@ export function AppSettingsGeneralSection({ config, onChange }: SectionPatchProp
           onChange({ vault_list_show_header_more_button })
         }
         label={t("modal.app_settings.field.vault_list_show_header_more_button")}
+      />
+      <SwitchRow
+        id={closeModalOnSubmitId}
+        checked={config.lifecycle_close_modal_on_submit}
+        onChange={(lifecycle_close_modal_on_submit) =>
+          onChange({ lifecycle_close_modal_on_submit })
+        }
+        label={t("modal.app_settings.field.lifecycle_close_modal_on_submit")}
+        hint={t("modal.app_settings.field.lifecycle_close_modal_on_submit_help")}
       />
     </SettingsFormGrid>
   );

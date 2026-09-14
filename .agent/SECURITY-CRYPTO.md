@@ -1,7 +1,7 @@
 # Store crypto — Argon2id + XChaCha20-Poly1305
 
 **Audience:** anyone implementing vault store, backups, key wrap, or `.7z` export in `upriv-core`.  
-**Status:** implementation invariant. `dev/` has **no** vault crypto yet — this is the bar, not a description of shipping code.  
+**Status:** implementation invariant **and** the bar for shipping `contents/`. `dev/` has header wrap + AES-SIV index + XChaCha chunks (create writes a seed file). **Change-password / salt rotation is not shipped** until landmine P0 (chunk AAD still binds `salt`/`m`/`t`/`p`).  
 **Related:** PRD **RF-55**; SDD **§2.4.1**, **§6**; [SECURITY-PLAINTEXT.md](SECURITY-PLAINTEXT.md).  
 **Product split:** at rest the vault body is **`contents/`** (Argon2id + AEAD). **Backups** are copies of that body. Portable files: an ordinary **`.zip` of `contents/`** (**Recommended**; zip is an envelope, no zip password) or **`.7z`** (logical Plan B, weaker guessing). Neither lives in `.upriv` as rest. **No `archive/`.**
 
@@ -9,21 +9,27 @@ Sketch on disk: `temp/upriv/prod-example/.upriv/vaults/teste/` + that bundle’s
 
 This note records a reviewed crypto stance: primitives are strong; **the protocol around them is the real risk**. Round-trip encrypt/decrypt proves almost nothing.
 
+**Closed `contents/` (applied review, 2026-09-12):** no **known** second path to plaintext without the password. Residual attack = guess the password paying the header Argon2id. That is **not** a formal proof, **not** “impossible to break,” **not** “prevents brute force.” A weak password still loses. In-app throttle (5 fails / 60 s) is process-RAM friction only — `open_store` and any offline copy ignore it.
+
 ---
 
 ## What we are not claiming
 
-Do **not** ship copy that says “Upriv is more secure than 7-Zip.”
+Do **not** ship copy that says “Upriv is more secure than 7-Zip” or “the same security as VeraCrypt.”
 
-Defensible claim:
+Defensible claims:
 
 > The vault store uses a memory-hard KDF (Argon2id) and modern AEAD (XChaCha20-Poly1305), designed for **offline password guessing** after disk theft. Portable `.7z` export remains AES-256 + SHA-256 (7z) for interoperability.
+
+> Closed on disk, Upriv is in the **same model** as a VeraCrypt container: password + KDF. It is not an audited VeraCrypt substitute. AEAD vs XTS is one dimension (tamper/bitrot is refused vs silent garbage) — not product equivalence.
 
 AES-256 in 7-Zip is **not** a broken cipher. The architectural gap is the **KDF** (SHA-256 iterations vs Argon2id) and **AEAD** (integrity of ciphertext + associated data), not “XChaCha beats AES.”
 
 A 20–30 character random password in a well-made `.7z` is still extremely hard to break. `123456789` behind Argon2id is still a bad password. Order of real security:
 
 **password → KDF parameters → protocol/implementation → cipher**
+
+`config.toml` / `persistence.json` are **public** (list without unlock). `password_hint` is attacker knowledge. An empty hint is safer than a hint that is the password.
 
 ---
 
@@ -32,7 +38,7 @@ A 20–30 character random password in a well-made `.7z` is still extremely hard
 | Piece | Job |
 |-------|-----|
 | **Argon2id** | Password → master key. Memory-hard; GPU/ASIC guessing is expensive when `m` is large enough (RFC 9106). |
-| **HKDF** | Split master key into **independent** keys (content, names/index, header wrap, …). Never use the raw Argon2 output as the sole key for every layer. |
+| **HKDF** | Split the random **master** into **independent** keys (content + index). Wrap uses the Argon2 **KEK**, not a third HKDF arm. Never use the raw Argon2 output as every layer’s key. |
 | **XChaCha20-Poly1305** | Confidentiality + authenticity of **content chunks** (192-bit nonce → random nonces are practical). |
 | **AES-SIV** (`name_cipher`) | Encrypted path index — logical names must not appear as plaintext filenames under `contents/data/` (SDD §2.4.1). |
 | **Poly1305 / AEAD tag** | Detects alteration. Decryption must **not** return plaintext if the tag fails (libsodium-style: authenticate first). A flipped bit on disk → hard fail, not silent garbage. |
@@ -48,17 +54,18 @@ A 20–30 character random password in a well-made `.7z` is still extremely hard
 password
     │
     ▼
-Argon2id  (unique random salt; params stored in header)
+Argon2id  (unique random salt; params stored in header)  →  KEK (wrap only)
     │
     ▼
-master key
+unwrap master key (XChaCha20-Poly1305 + wrap AAD)
     │
     ▼
-HKDF
-    ├── content key     → XChaCha20-Poly1305 (chunks)
-    ├── name/index key  → AES-SIV (tree)
-    └── wrap key        → AEAD wrap of master (or session) material in header
+HKDF-SHA256 (IKM = master, salt = None, RFC 5869)
+    ├── info "upriv-content-key-v1"  → content key (XChaCha chunks)
+    └── info "upriv-index-key-v1"    → index key (AES-SIV)
 ```
+
+Wrap uses the Argon2 **KEK**, not a third HKDF output. HKDF `salt=None` is intentional: IKM is a 32-byte CSPRNG master. Do not add a public HKDF salt without a `format_version` bump.
 
 **At rest:** `contents/` only (`vault.header` + `index/` + `data/`). Lock = close. No Seal, no `archive/`.  
 **On-disk zones:** plaintext `config.toml` + `persistence.json` at `vaults/<id>/` (list/name/policy **without** the password). Ciphertext only under `contents/`.  
@@ -133,6 +140,8 @@ On disk, persistence is only **`closed`**. **No `sealed`.** No Seal action, no `
 Drop from config / persistence / list DTO / UI: `sealed`, `canSeal`, `action.seal`, `[close] default_action`, `archive_hash`, `storageModeCanSeal` / `storageModeSealOnly`. Lock is always **close** → `contents/` stays, `persistence = "closed"`.
 
 Keep: `content_hash`, `last_close_ok_at` (recovery A). `open` is session, not a persisted enum.
+
+**`content_hash`** = SHA-256 of `vault.header` bytes **concatenated with** the sealed index blob. Chunk files are **not** in the hash. It is a dirty-close / recovery signal, **not** a MAC of the whole tree. Bitrot of one `*.chunk.enc` is a per-file tag fail (recovery B), not a `content_hash` mismatch.
 
 PRD/SDD still mention Seal — **this file wins.**
 
@@ -216,17 +225,11 @@ Throttle **wrong-password** attempts in **`upriv-core`**, in the **live process*
 
 ### Authenticated associated data (AAD)
 
-Every AEAD must bind protocol context, at least:
-
-- format version
-- **content identity** from the header (stable across “new vault from backup” copies — not the registry folder id)
-- algorithm identifiers
-- KDF parameters (or a hash of the header fields that define them)
-- `file_id` / object id
-- `chunk_index` / `chunk_number`
-- declared `file_size` / chunk length
+Every AEAD must bind protocol context. **v1 wrap and index** bind at least: format version, **content identity** (not the registry folder id), algorithm identifiers, KDF `m`/`t`/`p`/salt, `kind`. **v1 chunks** also bind `file_id`, `chunk_index`, `file_size`, `chunk_len` — and still bind salt/`m`/`t`/`p` (see landmine P0).
 
 Unauthenticated header fields that change how the rest is interpreted are a protocol bug.
+
+**Serialization (frozen for `format_version` 1):** AAD is `serde_json::to_vec` of a **dedicated struct**. Byte order = **struct field order**, compact JSON, no extra spaces. It is **not** the pretty-printed `vault.header` on disk and **not** RFC 8785 / sorted-key JSON. Reordering fields, renaming keys, or switching to a sorted map **bricks existing vaults**. Golden vectors live in `contents/header.rs` (`aad_bytes_are_struct_field_order`). Do not “fix” this to canonical JSON without a version bump and a migrator.
 
 ### Format / ops
 
@@ -247,6 +250,11 @@ These were implementation defaults; they are now **the format** until a version 
 | Chunk size | **256 KiB** logical plaintext per chunk (last chunk may be shorter; empty file = no data chunks) |
 | Chunk files | `contents/data/<file_id>.<chunk_index>.chunk.enc` — `nonce \|\| ciphertext \|\| tag` |
 | Index | `contents/index/` — AES-SIV sealed tree (`root.idx.enc`); logical names never appear as plaintext paths under `data/` |
+| Wrap | Argon2id (`m`/`t`/`p` + 16-byte salt from header, version **0x13** hardcoded) → 32-byte KEK → XChaCha unwrap of 32-byte master. Blob = nonce(24) ‖ ct ‖ tag(16) |
+| HKDF | SHA-256, `salt=None` (IKM is CSPRNG master), info `upriv-content-key-v1` (32 B) / `upriv-index-key-v1` (64 B) |
+| AAD JSON | Compact `serde_json` of a dedicated struct in **field order**. Not pretty `vault.header`, not RFC 8785. Frozen for v1 — golden vector in `header.rs` |
+| KDF bounds on open | `m` **32 MiB..=2 GiB**, `t` **1..=16**, `p` **= 1**. Out of range → fail closed **before** Argon2 (malicious header DoS) |
+| Argon2 version | **0x13** hardcoded; not in header/AAD. Changing it is a format bump |
 | Unknown `format_version` | Fail closed |
 
 **Open session (same `contents/`, different presentation):**
@@ -297,7 +305,7 @@ password → Argon2id (header salt + m/t/p) → KEK → unwrap MASTER KEY
 | **Open** | Yes (once) | **Read** nonce already stored on wrap + each chunk. Do not generate. |
 | **Edit / flush chunk** | No | **Generate** 192-bit CSPRNG nonce, encrypt, store `nonce \|\| ciphertext\|\|tag`. Unchanged files keep old blobs. |
 | **Close** | No | Only dirty objects get new messages (new nonces). Then wipe keys from RAM. |
-| **Change password** | Yes (new KEK) | New wrap nonce; **same** master key so chunks usually **not** rewritten. |
+| **Change password** | Yes (new KEK) | New wrap nonce; **same** master key so chunks usually **not** rewritten. **Blocked on v1:** chunk AAD still includes salt/`m`/`t`/`p`. Rotating salt without rewriting every chunk → tag fail on files. Do **not** ship rewrap until format_version ≥ 2 drops those fields from **chunk** AAD only (keep them on wrap + index). |
 
 Editing does **not** weaken XChaCha or “re-run Argon2.” Primitive fatigue is not a thing. Bugs on this path are **ours**: nonce reuse, plaintext staging, missing AAD, torn `.enc` writes (atomic replace), encrypting with the password instead of the content key.
 
@@ -335,11 +343,33 @@ Fuzz truncated/garbage store dirs. A security pass should hunt protocol bugs, no
 
 ---
 
+## Landmines (do not paper over in the UI)
+
+Applied review 2026-09-12. Confidentiality of closed `contents/` passed for wrap + index + chunks as implemented. These items are protocol/product work, not “fix XChaCha.”
+
+| Id | Issue | Do |
+|----|--------|----|
+| **P0** | v1 **chunk** AAD still binds header `salt`/`m`/`t`/`p`. Spec for change-password: new wrap, **same** master, **do not** rewrite chunks. Rotating salt (required — unique salt) without rewriting every `*.chunk.enc` → AEAD fail on files. | Do **not** ship change-password / KDF upgrade until `format_version` ≥ 2 drops salt/`m`/`t`/`p` from **chunk** AAD only (keep on wrap + index), plus migration + tests. |
+| **P1** | AAD comment once said maps were sorted. Reality = struct field order. | Do **not** “fix” serialization to RFC 8785. Keep golden vectors. Never reorder AAD struct fields without a version bump. |
+| **P1** | `load_header` / `derive_kek` must refuse absurd `m`/`t`/`p` (DoS / OOM). Editing `m` on an existing wrap does **not** cheapen that wrap (AAD + different KEK). | Bounds: `m` in **32 MiB..=2 GiB**, `t` in **1..=16**, `p` **= 1**. Fail closed before Argon2. |
+| **P2** | Argon2 version **0x13** is hardcoded, not in header/AAD. | Keep hardcoded + test. Putting it in AAD is a format bump. |
+| **P2** | A new encrypt call site with empty AAD is a protocol bug. | `encrypt_xchacha` **refuses** empty AAD. Do not add a silent empty-AAD path. |
+| **P2** | crate `aes-siv` 0.7.0 has no public audit (constant-time warning). | Residual. Do **not** replace with hand-rolled SIV or OpenSSL AES-SIV (CVE-2026-45446). |
+| **P2** | `content_hash` omits chunk files. | Recovery A signal only. One bad chunk = that file (recovery B). |
+| **P3** | `password_hint` in `config.toml` is public. | UI must say so. Do not encrypt the hint without changing the list-without-unlock model. |
+| **P3** | `create_empty_store` / `open_store` / `derive_kek` still accept an empty password. User RPC (`create_vault` / `open_vault`) already rejects. | Do not call store APIs from UI without the check. Closing the library API is later (or `cfg(test)` only). |
+
+---
+
 ## FAQ (honest answers for product / agents)
 
 ### What is KDF here?
 
 **KDF** = key derivation function. The password does **not** encrypt chunks directly. **Argon2id** turns password + salt + (`m`,`t`,`p`) into a KEK; HKDF splits into layer keys; XChaCha seals chunks. Create-time unlock presets are that Argon2 cost.
+
+### Same security as VeraCrypt? Better than 7-Zip?
+
+**No.** Closed-disk residual attack in all three is password + KDF. Upriv primitives are more modern (memory-hard + AEAD vs classic VeraCrypt PBKDF2+XTS and 7-Zip SHA iterations). VeraCrypt has years of operational review; Upriv’s protocol is new and unaudited as a product. AEAD vs XTS is tamper/bitrot behavior, not product equivalence. AES-256 in 7-Zip is not “broken.” Recommended portable file = ordinary `.zip` of `contents/` (no zip password). `.7z` is Plan B (weaker guessing). Never pack `.enc` blobs into `.7z`.
 
 ### Does Argon2id “stop” brute force?
 
@@ -374,3 +404,5 @@ Fuzz truncated/garbage store dirs. A security pass should hunt protocol bugs, no
 7. Plaintext vault bytes on ordinary disk **only** if the user chose `upriv_plain` and the vault is open. Transitional phases (import, export, backup, password, recovery) must stream or copy ciphertext — never a convenience extract.
 8. Surface anti-brute-force lives in **`upriv-core` RAM**: serialize `open`; **5** failures in **60 s** → **60 s** block. Not the UI, not a JSON counter. Do not market it as stopping offline guessing.
 9. Password unlocks the master key **once** per open. Saves = content key + new CSPRNG 192-bit nonce, not Argon2. Never RAM counters or password-derived nonces. Close flushes with those session keys — do **not** rewrap `vault.header` from a typed lock password (`always_prompt` is a presence check only). Open-session OS leaks ≠ “XChaCha failed while editing.”
+10. Do **not** ship change-password / KDF rewrap on format v1 until landmine P0 is fixed (chunk AAD vs salt rotation). Do not reorder AAD struct fields. Do not claim VeraCrypt equivalence or “prevents brute force.”
+11. Header `m`/`t`/`p` out of shipping bounds → fail closed. Do not lower `m` to make open snappy (that is the attacker’s optimization).

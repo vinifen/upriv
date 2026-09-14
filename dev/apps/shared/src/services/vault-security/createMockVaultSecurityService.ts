@@ -4,9 +4,10 @@ import { VAULT_ERROR_CODES } from "../../domain/vault/errors/codes";
 import type { VaultSecurityService } from "./VaultSecurityService";
 
 /**
- * Stand-in until `vault_change_password` / `vault_change_kdf` land in upriv-rpc.
- * Keeping the fake check here — and nowhere else — means swapping this factory
- * for the real adapter cannot leave a password bypass behind in the UI.
+ * Prototype UI only. Live desktop/native must use
+ * `createUnavailableVaultSecurityService` until SECURITY-CRYPTO landmine P0
+ * (chunk AAD vs salt rotation). This mock reports success without rewriting
+ * `contents/` — never wire it against a real vault.
  */
 const MOCK_WRONG_PASSWORD = "wrong";
 const MOCK_CHANGE_PASSWORD_MS = 700;
