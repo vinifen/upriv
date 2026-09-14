@@ -1,5 +1,5 @@
 import { useId } from "react";
-import type { ChangePasswordFieldsState } from "@upriv/shared";
+import { requireVaultConfigEditLockedI18nKey, type ChangePasswordFieldsState } from "@upriv/shared";
 import { useTranslation } from "@/i18n";
 import { createVaultErrorI18nKey } from "@/lib/errorMessages";
 import { PasswordInput } from "@/components/ui";
@@ -9,12 +9,15 @@ interface VaultChangePasswordFieldsProps {
   fields: ChangePasswordFieldsState;
   onChange: (patch: Partial<ChangePasswordFieldsState>) => void;
   error?: string | null;
+  /** Blocked when vault is not strictly closed (`vault_closed` gate). */
+  rewrapBlocked?: boolean;
 }
 
 export function VaultChangePasswordFields({
   fields,
   onChange,
   error,
+  rewrapBlocked = false,
 }: VaultChangePasswordFieldsProps) {
   const { t } = useTranslation();
   const currentId = useId();
@@ -26,30 +29,50 @@ export function VaultChangePasswordFields({
 
   return (
     <div className="space-y-3">
-      <SettingsField label={t("vault.change_password.current")} htmlFor={currentId}>
+      {rewrapBlocked ? (
+        <p className="text-xs leading-relaxed text-on-surface-variant">
+          {t(requireVaultConfigEditLockedI18nKey("action.change_password"))}
+        </p>
+      ) : null}
+      <SettingsField
+        label={t("vault.change_password.current")}
+        htmlFor={currentId}
+        disabled={rewrapBlocked}
+      >
         <PasswordInput
           id={currentId}
           value={fields.currentPassword}
+          disabled={rewrapBlocked}
           onChange={(e) => onChange({ currentPassword: e.target.value })}
           autoComplete="current-password"
           inputClassName={settingsControlClass}
         />
       </SettingsField>
 
-      <SettingsField label={t("vault.change_password.new")} htmlFor={newId}>
+      <SettingsField
+        label={t("vault.change_password.new")}
+        htmlFor={newId}
+        disabled={rewrapBlocked}
+      >
         <PasswordInput
           id={newId}
           value={fields.newPassword}
+          disabled={rewrapBlocked}
           onChange={(e) => onChange({ newPassword: e.target.value })}
           autoComplete="new-password"
           inputClassName={settingsControlClass}
         />
       </SettingsField>
 
-      <SettingsField label={t("vault.change_password.confirm")} htmlFor={confirmId}>
+      <SettingsField
+        label={t("vault.change_password.confirm")}
+        htmlFor={confirmId}
+        disabled={rewrapBlocked}
+      >
         <PasswordInput
           id={confirmId}
           value={fields.confirmPassword}
+          disabled={rewrapBlocked}
           onChange={(e) => onChange({ confirmPassword: e.target.value })}
           autoComplete="new-password"
           inputClassName={settingsControlClass}

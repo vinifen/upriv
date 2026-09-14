@@ -1,6 +1,6 @@
 /**
  * Argon2id unlock-cost presets (SECURITY-CRYPTO).
- * Chosen at vault create; stored in `vault.header` when crypto lands.
+ * Chosen at vault create; stored in `contents/vault.header`.
  * Labels = guessing cost + RAM to unlock — never device class.
  */
 
@@ -57,7 +57,8 @@ export const CONFIG_TOML_KDF_ANNOTATION = `# Unlock RAM (Argon2id) lives in cont
 export const CONFIG_TOML_GROUPS_ANNOTATION =
   "# Group membership is not here. If this vault is in a group, see .upriv/vault_groups.toml.";
 
-export function normalizeKdfUnlockPreset(preset: string | undefined): KdfUnlockPreset {
+/** Known shipping slug, or `null` — never coerce a typo to 256 MiB. */
+export function parseKdfUnlockPreset(preset: string): KdfUnlockPreset | null {
   if (
     preset === "32mib" ||
     preset === "64mib" ||
@@ -68,7 +69,14 @@ export function normalizeKdfUnlockPreset(preset: string | undefined): KdfUnlockP
   ) {
     return preset;
   }
-  return DEFAULT_KDF_UNLOCK_PRESET;
+  return null;
+}
+
+/** UI form default when the field is empty. Wire parse must use `parseKdfUnlockPreset`. */
+export function normalizeKdfUnlockPreset(preset: string | undefined): KdfUnlockPreset {
+  const trimmed = preset?.trim();
+  if (!trimmed) return DEFAULT_KDF_UNLOCK_PRESET;
+  return parseKdfUnlockPreset(trimmed) ?? DEFAULT_KDF_UNLOCK_PRESET;
 }
 
 function looksLikeBackupImportPath(path: string): boolean {

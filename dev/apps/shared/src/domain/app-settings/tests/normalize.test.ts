@@ -71,4 +71,16 @@ describe("normalizeAppSettings", () => {
     expect(normalized.ui.vault_list_show_vault_settings_button).toBe(true);
     expect(normalized.ui.vault_list_show_group_settings_button).toBe(false);
   });
+
+  it("defaults lifecycle_close_modal_on_submit to false", () => {
+    const settings = createDefaultAppSettings();
+    expect(settings.ui.lifecycle_close_modal_on_submit).toBe(false);
+    const omitted = {
+      ...settings,
+      ui: { ...settings.ui, lifecycle_close_modal_on_submit: undefined as unknown as boolean },
+    };
+    expect(normalizeAppSettings(omitted).ui.lifecycle_close_modal_on_submit).toBe(false);
+    settings.ui.lifecycle_close_modal_on_submit = true;
+    expect(normalizeAppSettings(settings).ui.lifecycle_close_modal_on_submit).toBe(true);
+  });
 });

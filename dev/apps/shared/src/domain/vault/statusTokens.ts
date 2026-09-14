@@ -7,6 +7,8 @@ export const vaultStatusColorVar = {
   recovery: "--vault-status-recovery",
   closing: "--vault-status-closed",
   opening: "--vault-status-closed",
+  creating: "--vault-status-closed",
+  queued: "--vault-status-closed",
 } as const satisfies Record<VaultDisplayStatus, string>;
 
 /** i18n keys for status labels — maps display status → catalog key. */
@@ -16,6 +18,8 @@ export const vaultStatusI18nKey = {
   recovery: "vault.status.recovery",
   closing: "vault.status.closing",
   opening: "vault.status.opening",
+  creating: "vault.status.creating",
+  queued: "vault.status.queued",
 } as const satisfies Record<VaultDisplayStatus, string>;
 
 /** Brand wordmark variants (SDD §8.2.1). */

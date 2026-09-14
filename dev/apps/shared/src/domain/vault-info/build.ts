@@ -2,19 +2,12 @@ import type { I18nKey } from "../../i18n/catalog";
 import type { VaultBackupEntry } from "../backups";
 import { formatBytes } from "../format/bytes";
 import { formatIsoDate } from "../format/datetime";
+import { vaultLastAccessedLabel } from "../vault-list/lastAccessed";
 import type { InfoSection, InfoTranslate } from "../info";
 import { securityModeToUi } from "../vault-settings/types";
 import { KDF_UNLOCK_OPTION_META } from "../vault-settings/kdf";
-import { isVaultFileManagerEligible, resolveVaultDisplayStatus } from "../vault";
+import { resolveVaultListStatus, vaultStatusI18nKey, type VaultPipelineListStatus } from "../vault";
 import type { VaultInfoSnapshot } from "./types";
-
-const STATUS_KEYS: Record<"open" | "closed" | "recovery" | "closing" | "opening", I18nKey> = {
-  open: "vault.status.open",
-  closed: "vault.status.closed",
-  recovery: "vault.status.recovery",
-  closing: "vault.status.closing",
-  opening: "vault.status.opening",
-};
 
 const SESSION_KEYS = {
   open: "modal.info.value.session.open",
@@ -56,6 +49,7 @@ function latestBackupStamp(backups: VaultBackupEntry[]): string {
 export function buildVaultInfoSections(
   snapshot: VaultInfoSnapshot,
   t: InfoTranslate,
+  pipeline: VaultPipelineListStatus = {},
 ): InfoSection[] {
   const {
     vault,
@@ -73,8 +67,8 @@ export function buildVaultInfoSections(
     locale,
   } = snapshot;
 
-  const displayStatus = resolveVaultDisplayStatus(vault);
-  const fileManagerEligible = isVaultFileManagerEligible(vault);
+  const displayStatus = resolveVaultListStatus(vault, pipeline);
+  const fileManagerEligible = displayStatus === "open";
 
   const identityFields = [
     { id: "display_name", label: t("modal.info.field.display_name"), value: vault.displayName },
@@ -101,13 +95,18 @@ export function buildVaultInfoSections(
       label: t("modal.info.field.password_hint"),
       value: emptyDash(vault.passwordHint),
     },
+    {
+      id: "password_hint_storage",
+      label: t("modal.info.field.password_hint_storage"),
+      value: t("modal.info.value.password_hint_plaintext"),
+    },
   ];
 
   const statusFields = [
     {
       id: "display_status",
       label: t("modal.info.field.display_status"),
-      value: t(STATUS_KEYS[displayStatus]),
+      value: t(vaultStatusI18nKey[displayStatus] as I18nKey),
     },
     {
       id: "session",
@@ -122,12 +121,12 @@ export function buildVaultInfoSections(
     {
       id: "last_accessed",
       label: t("modal.info.field.last_accessed"),
-      value: vault.lastAccessedWhen,
+      value: vaultLastAccessedLabel(vault, locale),
     },
     {
       id: "last_accessed_at",
       label: t("modal.info.field.last_accessed_at"),
-      value: formatIsoDate(vault.lastAccessedAt, locale),
+      value: emptyDash(vault.lastAccessedAt),
     },
     {
       id: "file_manager",

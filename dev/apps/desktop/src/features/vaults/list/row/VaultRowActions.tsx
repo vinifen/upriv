@@ -3,8 +3,9 @@ import { Icon } from "@/components/icons";
 import { DropdownMenu, IconButton } from "@/components/ui";
 import { useAppSettingsContext } from "@/features/system/settings";
 import { useTranslation } from "@/i18n";
+import { useVaultService } from "@/platform/services";
 import {
-  resolveVaultDisplayStatus,
+  resolveVaultListStatus,
   vaultCanExport,
   VAULT_SETTINGS_AREA_ICON,
   VAULT_SETTINGS_AREA_I18N,
@@ -20,17 +21,13 @@ const rowActionProps = {
 
 interface VaultRowActionsProps {
   vault: VaultListItem;
-  pipelineListStatus?: {
-    openingVaultIds?: readonly string[];
-    closingVaultIds?: readonly string[];
-  };
+  pipelineListStatus?: import("@upriv/shared").VaultPipelineListStatus;
   disabled?: boolean;
   onOpenBackups: (vaultId: string) => void;
   onOpenNote: (vaultId: string) => void;
   onOpenVaultInfo: (vaultId: string) => void;
   onOpenSettings: (vaultId: string, area: VaultSettingsAreaId) => void;
   onExportVault: (vault: VaultListItem) => void;
-  onOpenFolder: (vault: VaultListItem) => void;
   onOpenFileManager: (vault: VaultListItem) => void;
   /** Block cards: stack ⋯ / settings to the right of the title. */
   layout?: "row" | "column";
@@ -49,7 +46,6 @@ export function VaultRowActions({
   onOpenVaultInfo,
   onOpenSettings,
   onExportVault,
-  onOpenFolder,
   onOpenFileManager,
   layout = "row",
   includeLockAction = false,
@@ -58,10 +54,13 @@ export function VaultRowActions({
 }: VaultRowActionsProps) {
   const { t } = useTranslation();
   const { settings } = useAppSettingsContext();
+  const vaultService = useVaultService();
   const showVaultMore = settings.ui.vault_list_show_vault_more_button !== false;
   const showVaultSettings = settings.ui.vault_list_show_vault_settings_button !== false;
-  const isOpen = resolveVaultDisplayStatus(vault) === "open";
-  const canExport = vaultCanExport(vault, pipelineListStatus);
+  const listStatus = resolveVaultListStatus(vault, pipelineListStatus);
+  const isOpen = listStatus === "open";
+  const canUseOpenWorkspace = listStatus === "open";
+  const canExport = vaultService.canExportVault && vaultCanExport(vault, pipelineListStatus);
 
   const stacked = layout === "column";
   const actionBtnProps = stacked
@@ -99,7 +98,7 @@ export function VaultRowActions({
             },
           ]
         : []),
-      ...(isOpen
+      ...(canUseOpenWorkspace
         ? [
             {
               id: "open_upriv",
@@ -107,14 +106,6 @@ export function VaultRowActions({
               icon: <Icon name="file-manager" size={18} />,
               onSelect: () => {
                 window.requestAnimationFrame(() => onOpenFileManager(vault));
-              },
-            },
-            {
-              id: "open_folder",
-              label: t("action.open_folder"),
-              icon: <Icon name="folder" size={18} />,
-              onSelect: () => {
-                window.requestAnimationFrame(() => onOpenFolder(vault));
               },
             },
           ]
@@ -158,13 +149,13 @@ export function VaultRowActions({
     ],
     [
       canExport,
+      canUseOpenWorkspace,
       includeLockAction,
       isOpen,
       onExportVault,
       onLockVault,
       onOpenBackups,
       onOpenFileManager,
-      onOpenFolder,
       onOpenNote,
       onOpenVaultInfo,
       onUnlockVault,

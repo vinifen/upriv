@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { InfoTranslate } from "../../info";
+import { formatIsoDate } from "../../format/datetime";
 import { vaultListItemFixture } from "../../vault-list/tests/fixtures";
 import { vaultSettingsFixture } from "../../vault-settings/tests/fixtures";
 import { buildVaultInfoSections } from "../build";
@@ -67,6 +68,46 @@ describe("buildVaultInfoSections", () => {
     expect(field(sections, "group")).toBe("Work");
     expect(field(sections, "hidden")).toBe("modal.info.value.no");
     expect(field(sections, "hidden_locked_by_group")).toBe("modal.info.value.no");
+    expect(field(sections, "password_hint_storage")).toBe(
+      "modal.info.value.password_hint_plaintext",
+    );
+    expect(field(sections, "last_accessed")).toBe(formatIsoDate("2026-06-01T12:00:00.000Z", "en"));
+    expect(field(sections, "last_accessed_at")).toBe("2026-06-01T12:00:00.000Z");
+    expect(field(sections, "display_status")).toBe("vault.status.open");
+  });
+
+  it("keeps session and display_status on Closing together", () => {
+    const sections = buildVaultInfoSections(
+      snapshot({ vault: vaultListItemFixture({ id: "notes", session: "closing" }) }),
+      t,
+    );
+    expect(field(sections, "display_status")).toBe("vault.status.closing");
+    expect(field(sections, "session")).toBe("modal.info.value.session.closing");
+    expect(field(sections, "file_manager")).toBe("modal.info.value.not_eligible");
+  });
+
+  it("treats display_status open as file-manager eligible even if pipeline is empty", () => {
+    const sections = buildVaultInfoSections(snapshot(), t);
+    expect(field(sections, "file_manager")).toBe("modal.info.value.eligible");
+  });
+
+  it("does not label Closed while an open pipeline is in flight", () => {
+    const sections = buildVaultInfoSections(
+      snapshot({ vault: vaultListItemFixture({ id: "notes", session: null }) }),
+      t,
+      { openingVaultIds: ["notes"] },
+    );
+    expect(field(sections, "display_status")).toBe("vault.status.opening");
+    expect(field(sections, "session")).toBe("modal.info.value.session.none");
+  });
+
+  it("labels queued FIFO jobs as queued", () => {
+    const sections = buildVaultInfoSections(
+      snapshot({ vault: vaultListItemFixture({ id: "notes", session: null }) }),
+      t,
+      { queuedVaultIds: ["notes"] },
+    );
+    expect(field(sections, "display_status")).toBe("vault.status.queued");
   });
 
   it("falls back when settings and kdf are missing", () => {

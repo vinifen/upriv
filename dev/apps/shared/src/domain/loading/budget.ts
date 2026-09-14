@@ -22,8 +22,15 @@ export const LOADING_BUDGET_MS = {
    */
   vaultRewrap: 600_000,
   /**
-   * Open/close pipeline overlay (Argon2id unlock + flush into `contents/`).
-   * Same family as `vaultRewrap`. Keep invoke in sync when `vault_open` / `vault_close` land.
+   * Scratch create in the vault pipeline queue (Argon2id wrap + seed chunk).
+   * Same 10 min ceiling as other Argon2-bound ops — own key so it is not
+   * mistaken for change-password. The create modal closes immediately; the
+   * list row shows `creating` instead of a blocking overlay.
+   */
+  vaultCreate: 600_000,
+  /**
+   * Open/close pipeline progress (password modal if open + row hint; Argon2id
+   * unlock + flush into `contents/`). Not a full-screen overlay.
    */
   vaultPipeline: 600_000,
   /**
@@ -42,6 +49,17 @@ export const LOADING_BUDGET_MS = {
  * Timeout / budget still counts from when the op started (`active`), not from first paint.
  */
 export const LOADING_APPEAR_DELAY_MS = 1_000;
+
+/**
+ * Extra delay before showing the "up to 10 min" hint on long Argon2 / vault-root
+ * budgets. Fast unlocks should not flash a 10-minute countdown.
+ */
+export const LOADING_LONG_HINT_APPEAR_DELAY_MS = 10_000;
+
+/** Appear delay for a given budget — 10s for 10-minute ops, else 1s. */
+export function loadingAppearDelayMs(budgetMs: number): number {
+  return budgetMs >= 600_000 ? LOADING_LONG_HINT_APPEAR_DELAY_MS : LOADING_APPEAR_DELAY_MS;
+}
 
 export type LoadingBudgetKey = keyof typeof LOADING_BUDGET_MS;
 

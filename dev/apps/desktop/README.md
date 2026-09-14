@@ -64,7 +64,7 @@ src/
 │   ├── vaults/
 │   │   ├── list/            # Vault list UI (header/, row/, modals/, lib/) + VaultListPage
 │   │   ├── create/          # Create-vault wizard
-│   │   ├── lifecycle/       # Open/close/seal (modals/, pipeline/) + VaultLifecycleLayer
+│   │   ├── lifecycle/       # Open/close (modals/) + VaultLifecycleLayer
 │   │   ├── settings/        # VaultSettingsModal + useVaultSettings
 │   │   ├── backups/         # Backup list modal
 │   │   └── file-manager/    # File tree + editor (shell/, workspace/, tree/, editor/, lib/)

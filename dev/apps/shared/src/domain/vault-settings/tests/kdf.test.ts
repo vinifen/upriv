@@ -5,6 +5,7 @@ import {
   kdfParamsFromPreset,
   kdfPresetIsDowngrade,
   normalizeKdfUnlockPreset,
+  parseKdfUnlockPreset,
 } from "../kdf";
 
 describe("kdfParamsFromPreset", () => {
@@ -42,10 +43,20 @@ describe("kdfParamsFromPreset", () => {
   });
 });
 
+describe("parseKdfUnlockPreset", () => {
+  it("accepts shipping slugs and rejects typos", () => {
+    expect(parseKdfUnlockPreset("64mib")).toBe("64mib");
+    expect(parseKdfUnlockPreset("256MiB")).toBeNull();
+    expect(parseKdfUnlockPreset("phone")).toBeNull();
+  });
+});
+
 describe("normalizeKdfUnlockPreset", () => {
-  it("defaults unknown values to 256 MiB", () => {
+  it("defaults empty UI values to 256 MiB", () => {
     expect(normalizeKdfUnlockPreset(undefined)).toBe(DEFAULT_KDF_UNLOCK_PRESET);
+    expect(normalizeKdfUnlockPreset("   ")).toBe(DEFAULT_KDF_UNLOCK_PRESET);
     expect(normalizeKdfUnlockPreset("phone")).toBe("256mib");
+    expect(normalizeKdfUnlockPreset(" 64mib ")).toBe("64mib");
     expect(normalizeKdfUnlockPreset("64mib")).toBe("64mib");
     expect(normalizeKdfUnlockPreset("32mib")).toBe("32mib");
     expect(normalizeKdfUnlockPreset("128mib")).toBe("128mib");

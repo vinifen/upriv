@@ -20,6 +20,8 @@ interface VaultRootIncompleteReplacePanelProps {
    * Required so Apply/Continue copy cannot drift by accident.
    */
   primaryAction: VaultRootConfirmAction;
+  /** Disable rename/delete radios while parent commit is busy or blocked. */
+  disabled?: boolean;
 }
 
 /**
@@ -31,6 +33,7 @@ export function VaultRootIncompleteReplacePanel({
   replacePolicy,
   onReplacePolicyChange,
   primaryAction,
+  disabled = false,
 }: VaultRootIncompleteReplacePanelProps) {
   const { t } = useTranslation();
   const { typography } = useTheme();
@@ -67,6 +70,7 @@ export function VaultRootIncompleteReplacePanel({
           title={t("modal.vault_root_repair.option_rename")}
           description={t("modal.vault_root_repair.rename_hint")}
           badge="default"
+          disabled={disabled}
           onSelect={() => onReplacePolicyChange("rename")}
         />
         <PolicyRadioOption
@@ -75,6 +79,7 @@ export function VaultRootIncompleteReplacePanel({
           title={t("modal.vault_root_repair.option_delete")}
           description={t("modal.vault_root_repair.delete_hint")}
           tone="less-secure"
+          disabled={disabled}
           onSelect={() => onReplacePolicyChange("delete")}
         />
       </View>

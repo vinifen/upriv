@@ -9,6 +9,8 @@ export interface VaultPipelineRunState {
   activeStep: number;
   stepCount: number;
   foreground: boolean;
+  /** When this job actually started — shared by modal + row budget hints. */
+  startedAt: number;
   errorKey?: I18nKey;
 }
 
@@ -19,23 +21,39 @@ export interface QueuedPipelineJob {
   kind: VaultPipelineKind;
 }
 
+export type VaultPipelineFailureMode = "overlay" | "advance";
+
 interface StartPipelineOptions {
   vaultId: string;
   kind: VaultPipelineKind;
   stepCount: number;
-  /** Default `"foreground"` — overlay. `"background"` skips the blocking overlay. */
+  /** Default `"foreground"` — modal/row owns the busy UI. `"background"` = job only (no modal budget). */
   presentation?: VaultPipelinePresentation;
+  /** Default `vaultPipeline`. Create uses `vaultCreate`. */
+  budgetMs?: number;
+  /**
+   * `overlay` (default): keep the failed run until `dismissFailure` (legacy name;
+   * there is no full-screen pipeline overlay — modal/row/toast own the copy).
+   * `advance`: toast/row owns the failure and the next queued job starts.
+   */
+  failureMode?: VaultPipelineFailureMode;
   runPipeline: (vaultId: string, onStep: (stepIndex: number) => void) => Promise<void>;
   onComplete: () => void;
   onError: (errorKey: I18nKey) => void;
+  /** Budget elapsed; the job may still finish. Open handlers clear renderer password here. */
+  onTimeout?: () => void;
 }
 
-function listStatusKind(kind: VaultPipelineKind): "opening" | "closing" {
-  return kind === "open" ? "opening" : "closing";
+function listStatusKind(kind: VaultPipelineKind): "opening" | "closing" | "creating" {
+  if (kind === "open") return "opening";
+  if (kind === "create") return "creating";
+  return "closing";
 }
+
+export type VaultPipelineListKind = "opening" | "closing" | "creating" | "queued";
 
 /**
- * Global FIFO open/close runner (one pipeline at a time).
+ * Global FIFO open/close/create runner (one pipeline at a time).
  * `errorToI18nKey` is platform-owned (desktop bridge codes vs mobile SAF).
  */
 export function useVaultPipelineRun(errorToI18nKey: (error: unknown) => I18nKey) {
@@ -44,6 +62,7 @@ export function useVaultPipelineRun(errorToI18nKey: (error: unknown) => I18nKey)
   const runRef = useRef<VaultPipelineRunState | null>(null);
   const queueRef = useRef<StartPipelineOptions[]>([]);
   const generationRef = useRef(0);
+  const inFlightRef = useRef(false);
 
   const syncRun = useCallback((next: VaultPipelineRunState | null) => {
     runRef.current = next;
@@ -61,22 +80,26 @@ export function useVaultPipelineRun(errorToI18nKey: (error: unknown) => I18nKey)
 
   const executeJob = useCallback(
     (job: StartPipelineOptions) => {
-      const { vaultId, kind, stepCount, runPipeline, onComplete, onError } = job;
+      const { vaultId, kind, stepCount, runPipeline, onComplete, onError, onTimeout } = job;
       const foreground = job.presentation !== "background";
+      const failureMode = job.failureMode ?? "overlay";
       const generation = ++generationRef.current;
+      inFlightRef.current = true;
 
-      syncRun({ vaultId, kind, activeStep: 0, stepCount, foreground });
+      syncRun({ vaultId, kind, activeStep: 0, stepCount, foreground, startedAt: Date.now() });
 
       void (async () => {
         const cancelBudget = scheduleTimeout(() => {
           if (generationRef.current !== generation) return;
-          generationRef.current += 1;
           const current = runRef.current;
           if (!current || current.vaultId !== vaultId || current.errorKey) return;
-          const errorKey: I18nKey = "loading.timed_out";
-          syncRun({ ...current, foreground: true, errorKey });
-          onError(errorKey);
-        }, LOADING_BUDGET_MS.vaultPipeline);
+          if (failureMode === "advance") {
+            onTimeout?.();
+            return;
+          }
+          syncRun({ ...current, foreground: true, errorKey: "loading.timed_out" });
+          onTimeout?.();
+        }, job.budgetMs ?? LOADING_BUDGET_MS.vaultPipeline);
 
         try {
           await runPipeline(vaultId, (stepIndex) => {
@@ -88,8 +111,10 @@ export function useVaultPipelineRun(errorToI18nKey: (error: unknown) => I18nKey)
 
           if (generationRef.current !== generation) return;
 
-          syncRun(null);
+          // Patch session (open / closed) before dropping pipeline IDs so the
+          // row never flashes Closed while the vault is already open in core.
           onComplete();
+          syncRun(null);
         } catch (error) {
           if (generationRef.current !== generation) return;
 
@@ -97,11 +122,19 @@ export function useVaultPipelineRun(errorToI18nKey: (error: unknown) => I18nKey)
           if (current?.vaultId !== vaultId) return;
 
           const errorKey = errorToI18nKey(error);
-          syncRun({ ...current, foreground: true, errorKey });
-          onError(errorKey);
-          return;
+          if (failureMode === "advance") {
+            syncRun(null);
+            onError(errorKey);
+          } else {
+            syncRun({ ...current, foreground: true, errorKey });
+            onError(errorKey);
+            return;
+          }
         } finally {
           cancelBudget();
+          if (generationRef.current === generation) {
+            inFlightRef.current = false;
+          }
         }
 
         if (generationRef.current !== generation) return;
@@ -138,6 +171,11 @@ export function useVaultPipelineRun(errorToI18nKey: (error: unknown) => I18nKey)
   );
 
   const dismissFailure = useCallback(() => {
+    if (inFlightRef.current) {
+      const current = runRef.current;
+      if (current) syncRun({ ...current, foreground: false });
+      return;
+    }
     syncRun(null);
     if (queueRef.current.length === 0) return;
     const next = queueRef.current.shift()!;
@@ -147,7 +185,7 @@ export function useVaultPipelineRun(errorToI18nKey: (error: unknown) => I18nKey)
 
   const moveToBackground = useCallback(() => {
     const current = runRef.current;
-    if (!current || current.errorKey) return;
+    if (!current) return;
     syncRun({ ...current, foreground: false });
   }, [syncRun]);
 
@@ -158,28 +196,41 @@ export function useVaultPipelineRun(errorToI18nKey: (error: unknown) => I18nKey)
   }, []);
 
   const openingVaultIds = useMemo(() => {
-    const ids: string[] = [];
-    if (run?.kind === "open") ids.push(run.vaultId);
-    for (const job of queued) {
-      if (job.kind === "open") ids.push(job.vaultId);
-    }
-    return ids;
-  }, [run, queued]);
+    if (run?.kind === "open") return [run.vaultId];
+    return [];
+  }, [run]);
 
   const closingVaultIds = useMemo(() => {
     const ids: string[] = [];
-    if (run && run.kind !== "open") ids.push(run.vaultId);
+    if (run?.kind === "close") ids.push(run.vaultId);
     for (const job of queued) {
-      if (job.kind !== "open") ids.push(job.vaultId);
+      if (job.kind === "close") ids.push(job.vaultId);
     }
     return ids;
   }, [run, queued]);
 
+  const creatingVaultIds = useMemo(() => {
+    const ids: string[] = [];
+    if (run?.kind === "create") ids.push(run.vaultId);
+    for (const job of queued) {
+      if (job.kind === "create") ids.push(job.vaultId);
+    }
+    return ids;
+  }, [run, queued]);
+
+  /** Waiting **open** jobs only — close/create waits keep `closing` / `creating` labels. */
+  const queuedVaultIds = useMemo(
+    () => queued.filter((job) => job.kind === "open").map((job) => job.vaultId),
+    [queued],
+  );
+
   const getVaultPipelineListStatus = useCallback(
-    (vaultId: string): "opening" | "closing" | null => {
+    (vaultId: string): VaultPipelineListKind | null => {
       if (run?.vaultId === vaultId) return listStatusKind(run.kind);
       const queuedJob = queued.find((job) => job.vaultId === vaultId);
-      return queuedJob ? listStatusKind(queuedJob.kind) : null;
+      if (!queuedJob) return null;
+      if (queuedJob.kind === "open") return "queued";
+      return listStatusKind(queuedJob.kind);
     },
     [queued, run],
   );
@@ -201,11 +252,14 @@ export function useVaultPipelineRun(errorToI18nKey: (error: unknown) => I18nKey)
       getVaultPipelineListStatus,
       openingVaultIds,
       closingVaultIds,
+      creatingVaultIds,
+      queuedVaultIds,
       isRunning,
       isRunningNow,
     }),
     [
       closingVaultIds,
+      creatingVaultIds,
       dismissFailure,
       getVaultPipelineListStatus,
       isRunning,
@@ -214,6 +268,7 @@ export function useVaultPipelineRun(errorToI18nKey: (error: unknown) => I18nKey)
       moveToBackground,
       openingVaultIds,
       queued,
+      queuedVaultIds,
       run,
       start,
     ],

@@ -3,6 +3,7 @@ import {
   KDF_UNLOCK_OPTION_META,
   KDF_UNLOCK_PRESETS,
   changeKdfFormIsDowngrade,
+  requireVaultConfigEditLockedI18nKey,
   type ChangeKdfFieldsState,
   type KdfUnlockPreset,
 } from "@upriv/shared";
@@ -13,7 +14,7 @@ import { PolicyRadioOption, settingsControlClass, SettingsField } from "./vaultS
 interface VaultChangeKdfFieldsProps {
   /** Current unlock cost from `contents/vault.header`. */
   currentPreset: KdfUnlockPreset;
-  vaultOpen: boolean;
+  rewrapBlocked: boolean;
   fields: ChangeKdfFieldsState;
   onChange: (patch: Partial<ChangeKdfFieldsState>) => void;
   error?: string | null;
@@ -21,7 +22,7 @@ interface VaultChangeKdfFieldsProps {
 
 export function VaultChangeKdfFields({
   currentPreset,
-  vaultOpen,
+  rewrapBlocked,
   fields,
   onChange,
   error,
@@ -35,9 +36,9 @@ export function VaultChangeKdfFields({
 
   return (
     <div className="space-y-3">
-      {vaultOpen ? (
+      {rewrapBlocked ? (
         <p className="text-xs leading-relaxed text-on-surface-variant">
-          {t("vault.change_kdf.vault_open")}
+          {t(requireVaultConfigEditLockedI18nKey("action.change_kdf"))}
         </p>
       ) : null}
 
@@ -48,17 +49,22 @@ export function VaultChangeKdfFields({
         {t("warning.kdf_change_backups")}
       </p>
 
-      <SettingsField label={t("vault.change_kdf.current")} htmlFor={passwordId}>
+      <SettingsField
+        label={t("vault.change_kdf.current")}
+        htmlFor={passwordId}
+        disabled={rewrapBlocked}
+      >
         <PasswordInput
           id={passwordId}
           value={fields.password}
+          disabled={rewrapBlocked}
           onChange={(e) => onChange({ password: e.target.value })}
           autoComplete="current-password"
           inputClassName={settingsControlClass}
         />
       </SettingsField>
 
-      <SettingsField label={t("modal.settings.field.kdf.unlock_preset")}>
+      <SettingsField label={t("modal.settings.field.kdf.unlock_preset")} disabled={rewrapBlocked}>
         <div
           role="radiogroup"
           aria-label={t("modal.settings.field.kdf.unlock_preset")}
@@ -72,6 +78,7 @@ export function VaultChangeKdfFields({
                 groupName={presetGroup}
                 value={preset}
                 checked={fields.nextPreset === preset}
+                disabled={rewrapBlocked}
                 title={t(meta.titleKey)}
                 description={t(meta.descKey)}
                 badge={meta.badge}

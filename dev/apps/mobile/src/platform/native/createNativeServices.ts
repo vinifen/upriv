@@ -9,6 +9,7 @@ import type {
 } from "@upriv/shared";
 import {
   createDefaultAppSettings,
+  createUnavailableVaultSecurityService,
   isRpcError,
   normalizeAppSettings,
   RpcError,
@@ -34,6 +35,9 @@ import {
   rpcVaultRootSetupPath,
   rpcVaultRootSuggestedCustomPath,
 } from "@/lib/rpc";
+import { nativeVaultGroupService } from "./vaultGroupService";
+import { nativeVaultLifecycleService } from "./vaultLifecycleService";
+import { nativeVaultService } from "./vaultService";
 import { isAndroidSafUri, pickVaultRootFolder } from "./pickVaultRootFolder";
 import {
   isSafTreeUri,
@@ -412,53 +416,17 @@ function createNativeVaultRootService(): VaultRootService {
 
 /**
  * Native adapters → in-process `upriv-ffi` (same split as desktop
- * `createDesktopServices`): live vault-root / settings / logs.
- * Vault list stays on in-memory mocks until `vault_list` lands (`__DEV__`
- * seeds `MOCK_VAULTS` so UI work survives reload; release stays empty).
+ * `createDesktopServices`): live vault-root / settings / logs / vault list /
+ * create / open / close / groups when the root is a filesystem path. A SAF
+ * `content://` tree must not call those path RPCs (no copy to `filesDir`).
+ * Import, backups, and file manager stay mock until those RPCs land.
+ * Change-password / KDF rewrap is unavailable until SECURITY-CRYPTO landmine
+ * P0. Expo Go never reaches this factory.
  */
 export function createNativeServices(): AppServices {
   const mocks = createMobileMockServices();
   const failNotImplemented = (message: string): never => {
     throw new RpcError("not_implemented", message);
-  };
-  const releaseVaultService = {
-    ...mocks.vault,
-    async listVaults() {
-      return [];
-    },
-    async getSettings() {
-      return failNotImplemented("Vault settings are not implemented on mobile release builds");
-    },
-    async registerSettings() {
-      return failNotImplemented("Vault settings are not implemented on mobile release builds");
-    },
-    async unregisterSettings() {
-      return failNotImplemented("Vault delete is not implemented on mobile release builds");
-    },
-    async getUnlockPreset() {
-      return failNotImplemented(
-        "Vault unlock presets are not implemented on mobile release builds",
-      );
-    },
-    async setUnlockPreset() {
-      return failNotImplemented(
-        "Vault unlock presets are not implemented on mobile release builds",
-      );
-    },
-    async getExportBytes() {
-      return failNotImplemented("Vault export is not implemented on mobile release builds");
-    },
-  };
-  const releaseLifecycleService = {
-    ...mocks.lifecycle,
-    runOpeningPipeline: async () =>
-      failNotImplemented("Vault open is not implemented on mobile release builds"),
-    runClosingPipeline: async () =>
-      failNotImplemented("Vault close is not implemented on mobile release builds"),
-    validateLifecyclePassword: () =>
-      failNotImplemented(
-        "Vault lifecycle password validation is not implemented on mobile release builds",
-      ),
   };
   const releaseCreateVaultService = {
     ...mocks.createVault,
@@ -487,12 +455,12 @@ export function createNativeServices(): AppServices {
     vaultRoot: createNativeVaultRootService(),
     appSettings: createSafAwareAppSettingsService(),
     logs: nativeLogService,
-    vault: __DEV__ ? mocks.vault : releaseVaultService,
-    lifecycle: __DEV__ ? mocks.lifecycle : releaseLifecycleService,
+    vault: nativeVaultService,
+    lifecycle: nativeVaultLifecycleService,
+    vaultGroups: nativeVaultGroupService,
+    vaultSecurity: createUnavailableVaultSecurityService(),
     createVault: __DEV__ ? mocks.createVault : releaseCreateVaultService,
     backups: __DEV__ ? mocks.backups : releaseBackupService,
-    // Groups stay mock — live group RPCs need on-disk vault ids.
-    vaultGroups: mocks.vaultGroups,
   };
 }
 

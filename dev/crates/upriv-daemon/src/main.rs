@@ -2,15 +2,24 @@
 //!
 //! Speaks newline-delimited JSON over stdin/stdout (no TCP port). The Electron
 //! main process spawns this binary with piped stdio and proxies renderer calls.
+//!
+//! **Concurrency:** Argon2-bound methods (`vault_open`, `vault_create`) run on a
+//! dedicated worker thread so the stdin loop can still answer light RPCs
+//! (settings, groups, list, close, …). Electron already matches responses by
+//! `id` (out-of-order OK). One Argon2 at a time: single worker + core
+//! `with_unlock_lock`.
 
 mod wire;
 
 use std::io::{self, BufRead, Write};
 use std::panic::{self, AssertUnwindSafe};
+use std::sync::mpsc::{self, Sender};
+use std::sync::{Arc, Mutex};
+use std::thread::{self, JoinHandle};
 
 use serde_json::json;
 use upriv_rpc::RpcErrorBody;
-use wire::{handle_request, RequestOutcome, WireIn, WireOut};
+use wire::{handle_request, is_argon2_bound_method, RequestOutcome, WireIn, WireOut};
 
 /// Reject absurdly large request lines before parsing them.
 ///
@@ -18,11 +27,23 @@ use wire::{handle_request, RequestOutcome, WireIn, WireOut};
 /// real command ever needs a bigger single-line payload.
 const MAX_REQUEST_LINE_BYTES: usize = 1 << 20; // 1 MiB
 
-fn write_out(message: &WireOut) -> io::Result<()> {
+enum HeavyJob {
+    Request {
+        id: u64,
+        method: String,
+        params: serde_json::Value,
+    },
+    /// Drain the queue and exit the worker (sent once on process shutdown).
+    Shutdown,
+}
+
+fn write_out(stdout: &Mutex<io::Stdout>, message: &WireOut) -> io::Result<()> {
     let line = serde_json::to_string(message)?;
-    let mut stdout = io::stdout().lock();
-    writeln!(stdout, "{line}")?;
-    stdout.flush()
+    let mut guard = stdout
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    writeln!(guard, "{line}")?;
+    guard.flush()
 }
 
 /// Wire error `{ ok: false, error: { code: "invalid_request", ... } }`.
@@ -39,12 +60,55 @@ fn invalid_request(id: u64, message: String) -> WireOut {
     }
 }
 
+fn internal_error_response(id: u64) -> WireOut {
+    WireOut::Response {
+        id,
+        ok: false,
+        result: None,
+        error: Some(RpcErrorBody {
+            code: "internal_error".into(),
+            message: "internal error while handling request".into(),
+            details: None,
+        }),
+    }
+}
+
 /// Best-effort `id` recovery so a caller waiting on a Promise gets a structured
 /// error instead of hanging until its timeout. Returns `None` when the line is
 /// too malformed to even locate an id.
 fn extract_request_id(raw: &str) -> Option<u64> {
     let value: serde_json::Value = serde_json::from_str(raw).ok()?;
     value.get("id")?.as_u64()
+}
+
+fn run_request_caught(id: u64, method: String, params: serde_json::Value) -> RequestOutcome {
+    panic::catch_unwind(AssertUnwindSafe(|| handle_request(id, method, params)))
+        .unwrap_or_else(|_| RequestOutcome::Continue(internal_error_response(id)))
+}
+
+fn spawn_argon2_worker(stdout: Arc<Mutex<io::Stdout>>) -> (Sender<HeavyJob>, JoinHandle<()>) {
+    let (tx, rx) = mpsc::channel::<HeavyJob>();
+    let handle = thread::Builder::new()
+        .name("upriv-argon2".into())
+        .spawn(move || {
+            while let Ok(job) = rx.recv() {
+                match job {
+                    HeavyJob::Shutdown => break,
+                    HeavyJob::Request { id, method, params } => {
+                        // Heavy methods are never `app_shutdown`.
+                        let response = match run_request_caught(id, method, params) {
+                            RequestOutcome::Continue(wire) | RequestOutcome::Shutdown(wire) => wire,
+                        };
+                        if let Err(error) = write_out(&stdout, &response) {
+                            eprintln!("[upriv-daemon] heavy worker stdout error: {error}");
+                            break;
+                        }
+                    }
+                }
+            }
+        })
+        .expect("spawn upriv-argon2 worker");
+    (tx, handle)
 }
 
 fn main() {
@@ -61,11 +125,17 @@ fn run() -> io::Result<()> {
     // Pin distribution once after spawn env is in place (Electron sets UPRIV_*).
     let _ = upriv_core::init_app_distribution();
 
-    write_out(&WireOut::Ready)?;
-    write_out(&WireOut::Event {
-        name: "daemon_ready".to_string(),
-        payload: json!({ "version": upriv_core::app_version() }),
-    })?;
+    let stdout = Arc::new(Mutex::new(io::stdout()));
+    let (heavy_tx, heavy_join) = spawn_argon2_worker(Arc::clone(&stdout));
+
+    write_out(&stdout, &WireOut::Ready)?;
+    write_out(
+        &stdout,
+        &WireOut::Event {
+            name: "daemon_ready".to_string(),
+            payload: json!({ "version": upriv_core::app_version() }),
+        },
+    )?;
 
     match upriv_core::app_home_dir() {
         Ok(home) => {
@@ -104,7 +174,10 @@ fn run() -> io::Result<()> {
                 trimmed.len()
             );
             if let Some(id) = extract_request_id(trimmed) {
-                write_out(&invalid_request(id, "request line too large".to_string()))?;
+                write_out(
+                    &stdout,
+                    &invalid_request(id, "request line too large".to_string()),
+                )?;
             }
             continue;
         }
@@ -114,10 +187,10 @@ fn run() -> io::Result<()> {
             Err(error) => {
                 eprintln!("[upriv-daemon] invalid request JSON: {error}");
                 if let Some(id) = extract_request_id(trimmed) {
-                    write_out(&invalid_request(
-                        id,
-                        format!("invalid request JSON: {error}"),
-                    ))?;
+                    write_out(
+                        &stdout,
+                        &invalid_request(id, format!("invalid request JSON: {error}")),
+                    )?;
                 }
                 continue;
             }
@@ -125,29 +198,33 @@ fn run() -> io::Result<()> {
 
         match inbound {
             WireIn::Request { id, method, params } => {
-                let outcome =
-                    panic::catch_unwind(AssertUnwindSafe(|| handle_request(id, method, params)))
-                        .unwrap_or_else(|_| {
-                            RequestOutcome::Continue(WireOut::Response {
-                                id,
-                                ok: false,
-                                result: None,
-                                error: Some(RpcErrorBody {
-                                    code: "internal_error".into(),
-                                    message: "internal error while handling request".into(),
-                                    details: None,
-                                }),
-                            })
-                        });
-                match outcome {
-                    RequestOutcome::Continue(response) => write_out(&response)?,
+                if is_argon2_bound_method(&method) {
+                    if heavy_tx
+                        .send(HeavyJob::Request { id, method, params })
+                        .is_err()
+                    {
+                        write_out(&stdout, &internal_error_response(id))?;
+                        break;
+                    }
+                    continue;
+                }
+
+                match run_request_caught(id, method, params) {
+                    RequestOutcome::Continue(response) => write_out(&stdout, &response)?,
                     RequestOutcome::Shutdown(response) => {
-                        write_out(&response)?;
+                        write_out(&stdout, &response)?;
                         break;
                     }
                 }
             }
         }
+    }
+
+    // Finish in-flight Argon2 work before flushing logs / exiting.
+    let _ = heavy_tx.send(HeavyJob::Shutdown);
+    drop(heavy_tx);
+    if let Err(error) = heavy_join.join() {
+        eprintln!("[upriv-daemon] argon2 worker join panicked: {error:?}");
     }
 
     upriv_core::logging::flush_logging_session();

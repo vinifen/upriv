@@ -123,6 +123,92 @@ fn stdio_unknown_method_returns_structured_error() {
 }
 
 #[test]
+fn stdio_light_rpc_completes_while_vault_create_runs() {
+    // Argon2 create used to block the stdin loop — settings/version waited behind it.
+    // Heavy work is offloaded; light RPCs must answer before create finishes.
+    let root = tempfile::tempdir().expect("tempdir");
+    upriv_core::initialize_vault_root(root.path()).expect("initialize vault root");
+    let anchor = root.path().to_str().expect("utf8 path");
+
+    let mut child = spawn_daemon_with_env(&[
+        ("UPRIV_DEFAULT_ROOT_ANCHOR", anchor),
+        ("UPRIV_DISTRIBUTION", "portable"),
+    ]);
+    let mut stdout = std::io::BufReader::new(child.stdout.take().expect("stdout"));
+    let mut stdin = child.stdin.take().expect("stdin");
+
+    let _ready = read_line(&mut stdout);
+    let _event = read_line(&mut stdout);
+
+    let create = serde_json::json!({
+        "type": "request",
+        "id": 1,
+        "method": "vault_create",
+        "params": {
+            "password": "pass-word-ok",
+            "unlockPreset": "32mib",
+            "settings": {
+                "vault": {
+                    "id": "concurrent-create",
+                    "display_name": "Concurrent Create",
+                    "order": 1
+                },
+                "storage": { "mode": "encrypted_dir" }
+            }
+        }
+    });
+    writeln!(stdin, "{create}").expect("write create");
+    writeln!(
+        stdin,
+        r#"{{"type":"request","id":2,"method":"app_version","params":{{}}}}"#
+    )
+    .expect("write version");
+    stdin.flush().expect("flush stdin");
+
+    let started = std::time::Instant::now();
+    let mut light_at: Option<Duration> = None;
+    let mut create_at: Option<Duration> = None;
+    let mut first_id: Option<u64> = None;
+
+    while light_at.is_none() || create_at.is_none() {
+        assert!(
+            started.elapsed() < Duration::from_secs(120),
+            "timed out waiting for create + app_version responses"
+        );
+        let response: serde_json::Value =
+            serde_json::from_str(&read_line(&mut stdout)).expect("parse response");
+        let id = response["id"].as_u64().expect("id");
+        if first_id.is_none() {
+            first_id = Some(id);
+        }
+        if id == 2 {
+            assert_eq!(response["ok"], true, "app_version={response}");
+            light_at = Some(started.elapsed());
+        } else if id == 1 {
+            assert_eq!(
+                response["ok"], true,
+                "vault_create failed (cannot assert concurrency): {response}"
+            );
+            create_at = Some(started.elapsed());
+        }
+    }
+
+    let light = light_at.expect("light");
+    let heavy = create_at.expect("create");
+    assert!(
+        first_id == Some(2) || light < heavy.saturating_sub(Duration::from_millis(50)),
+        "light RPC should not wait for full Argon2 create (first_id={first_id:?} light={light:?} create={heavy:?})"
+    );
+    assert!(
+        light < Duration::from_secs(2),
+        "app_version should stay snappy while create runs (light={light:?})"
+    );
+
+    child.kill().expect("kill daemon");
+    child.wait().expect("wait on daemon");
+}
+
+#[test]
 fn stdio_app_shutdown_exits_cleanly() {
     let mut child = spawn_daemon();
     let mut stdout = std::io::BufReader::new(child.stdout.take().expect("stdout"));

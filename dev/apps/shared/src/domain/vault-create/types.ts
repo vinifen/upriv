@@ -63,4 +63,5 @@ export interface CreateVaultResult {
   /** Set when create chose unlock RAM — persisted to `vault.header` only. */
   unlockPreset?: KdfUnlockPreset;
   groupAssignment: CreateVaultGroupAssignment;
+  source: CreateVaultSource;
 }

@@ -10,6 +10,7 @@ import { VaultLifecycleLayer } from "@/features/vaults/lifecycle";
 import { VaultSettingsModal } from "@/features/vaults/settings";
 import { AppShell } from "@/components/layout";
 import { Button, Toast } from "@/components/ui";
+import { appConfigEditAllowed } from "@upriv/shared";
 import { useTranslation } from "@/i18n";
 import { VaultListHeader } from "./header/VaultListHeader";
 import { VaultListSectionHeader } from "./header/VaultListSectionHeader";
@@ -121,7 +122,6 @@ export function VaultListPage() {
           onOpenGroupSettings={list.onOpenGroupSettings}
           onToggleGroupCollapsed={list.onToggleGroupCollapsed}
           onExportVault={list.onExportVault}
-          onOpenFolder={list.onOpenFolder}
           onOpenFileManager={screen.openFromVault}
           onLockVault={list.onLockVault}
           onUnlockVault={list.onUnlockVault}
@@ -164,6 +164,7 @@ export function VaultListPage() {
         area={settings.area}
         open={settings.open}
         onClose={settings.onClose}
+        pipelineListStatus={list.pipelineListStatus}
         onVaultSettingsSaved={settings.onVaultSettingsSaved}
         onVaultDelete={settings.onVaultDelete}
         groups={settings.groups}
@@ -185,7 +186,7 @@ export function VaultListPage() {
         open={appSettings.open}
         onClose={appSettings.onClose}
         onDirtyChange={appSettings.onDirtyChange}
-        hasOpenVault={list.vaults.some((vault) => vault.session === "open")}
+        hasOpenVault={!appConfigEditAllowed("workspace.path", list.vaults, list.pipelineListStatus)}
       />
       <VaultGroupsModal
         open={groupsModal.open}
@@ -200,6 +201,9 @@ export function VaultListPage() {
         open={dataFolder.open}
         onClose={dataFolder.onClose}
         onDirtyChange={dataFolder.onDirtyChange}
+        vaultActivityBlocksChange={
+          !appConfigEditAllowed("data_folder", list.vaults, list.pipelineListStatus)
+        }
       />
       <LogsModal open={logs.open} onClose={logs.onClose} />
       <HelpModal open={help.open} onClose={help.onClose} />
@@ -214,6 +218,7 @@ export function VaultListPage() {
         open={vaultInfo.open}
         onClose={vaultInfo.onClose}
         groups={list.groups}
+        pipelineListStatus={list.pipelineListStatus}
       />
       <CreateVaultModal
         open={createVault.open}

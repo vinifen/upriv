@@ -82,6 +82,7 @@ export function createDefaultAppSettings(): AppSettingsConfig {
       vault_list_show_drag: true,
       vault_list_allow_drag_into_group: true,
       file_manager_dock_expanded: false,
+      lifecycle_close_modal_on_submit: false,
     },
     logging: {
       enabled: true,
@@ -128,6 +129,7 @@ export function normalizeAppSettings(config: AppSettingsConfig): AppSettingsConf
       vault_list_show_group_settings_button: normalizeShowGroupSettings(legacyUi),
       vault_list_show_drag: config.ui.vault_list_show_drag !== false,
       vault_list_allow_drag_into_group: config.ui.vault_list_allow_drag_into_group !== false,
+      lifecycle_close_modal_on_submit: config.ui.lifecycle_close_modal_on_submit === true,
     },
     logging,
     app: {

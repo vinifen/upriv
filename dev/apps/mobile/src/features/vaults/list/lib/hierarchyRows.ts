@@ -45,17 +45,30 @@ export function groupCellFromRow(
   };
 }
 
-/** Pack vaults and 0–1-member groups into grid rows; wider groups keep a full row. */
+/** Pack vaults and 0–1-member groups into grid rows; wider groups keep a full row.
+ * A lone group cell is emitted as `group_block` so FlatList keys stay `group:id`
+ * when membership crosses the 1↔2 threshold (avoids remount flicker). */
 export function packRowsForBlocks(rows: VaultListRootRow[], columns: number): FlatHierarchyRow[] {
   const out: FlatHierarchyRow[] = [];
   let batch: BlocksPackCell[] = [];
   const flush = () => {
     if (batch.length === 0) return;
-    out.push({
-      key: `cell-row:${batch.map((cell) => cell.key).join(",")}`,
-      kind: "cell_row",
-      cells: batch,
-    });
+    if (batch.length === 1 && batch[0]!.kind === "group") {
+      const cell = batch[0]!;
+      out.push({
+        kind: "group_block",
+        key: cell.key,
+        group: cell.group,
+        groupedVaults: cell.groupedVaults,
+        visibleVaultCount: cell.visibleVaultCount,
+      });
+    } else {
+      out.push({
+        key: `cell-row:${batch.map((cell) => cell.key).join(",")}`,
+        kind: "cell_row",
+        cells: batch,
+      });
+    }
     batch = [];
   };
   for (const row of rows) {

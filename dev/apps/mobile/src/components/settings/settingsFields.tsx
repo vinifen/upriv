@@ -100,58 +100,64 @@ export const ThemedInput = forwardRef<
 });
 
 /** Masked field with show/hide — eye sits inside the same chrome as desktop `PasswordInput`. */
-export const PasswordInput = forwardRef<TextInput, Omit<TextInputProps, "secureTextEntry">>(
-  function PasswordInput({ style, editable = true, onFocus, onBlur, ...rest }, ref) {
-    const { colors, typography } = useTheme();
-    const { t } = useTranslation();
-    const [visible, setVisible] = useState(false);
-    const [focused, setFocused] = useState(false);
-    const fill = colors.surfaceContainerHighest;
-    return (
-      <View
+export const PasswordInput = forwardRef<
+  TextInput,
+  Omit<TextInputProps, "secureTextEntry"> & { disabled?: boolean }
+>(function PasswordInput(
+  { style, editable = true, disabled = false, onFocus, onBlur, ...rest },
+  ref,
+) {
+  const { colors, typography } = useTheme();
+  const { t } = useTranslation();
+  const [visible, setVisible] = useState(false);
+  const [focused, setFocused] = useState(false);
+  const fill = colors.surfaceContainerHighest;
+  const isEditable = editable && !disabled;
+  return (
+    <View
+      collapsable={false}
+      style={[
+        styles.passwordField,
+        {
+          backgroundColor: fill,
+          opacity: isEditable ? 1 : 0.6,
+          ...controlFocusRing(colors.accent, fill, focused && isEditable),
+        },
+      ]}
+    >
+      <TextInput
+        ref={ref}
         collapsable={false}
-        style={[
-          styles.passwordField,
-          {
-            backgroundColor: fill,
-            opacity: editable ? 1 : 0.6,
-            ...controlFocusRing(colors.accent, fill, focused && editable),
-          },
-        ]}
+        {...rest}
+        editable={isEditable}
+        secureTextEntry={!visible}
+        blurOnSubmit={rest.blurOnSubmit ?? false}
+        underlineColorAndroid="transparent"
+        placeholderTextColor={colors.onSurfaceVariant}
+        onFocus={(event) => {
+          setFocused(true);
+          onFocus?.(event);
+        }}
+        onBlur={(event) => {
+          setFocused(false);
+          onBlur?.(event);
+        }}
+        style={[typography.body, styles.passwordText, { color: colors.onSurface }, style]}
+      />
+      <Pressable
+        onPress={() => setVisible((current) => !current)}
+        // Reveal stays available while `editable={false}` (e.g. unlock in progress).
+        disabled={disabled}
+        hitSlop={8}
+        accessibilityRole="button"
+        accessibilityLabel={visible ? t("action.hide_password") : t("action.show_password")}
+        style={styles.eyeBtn}
       >
-        <TextInput
-          ref={ref}
-          collapsable={false}
-          {...rest}
-          editable={editable}
-          secureTextEntry={!visible}
-          blurOnSubmit={rest.blurOnSubmit ?? false}
-          underlineColorAndroid="transparent"
-          placeholderTextColor={colors.onSurfaceVariant}
-          onFocus={(event) => {
-            setFocused(true);
-            onFocus?.(event);
-          }}
-          onBlur={(event) => {
-            setFocused(false);
-            onBlur?.(event);
-          }}
-          style={[typography.body, styles.passwordText, { color: colors.onSurface }, style]}
-        />
-        <Pressable
-          onPress={() => setVisible((current) => !current)}
-          disabled={!editable}
-          hitSlop={8}
-          accessibilityRole="button"
-          accessibilityLabel={visible ? t("action.hide_password") : t("action.show_password")}
-          style={styles.eyeBtn}
-        >
-          <Icon name={visible ? "eye-off" : "eye"} size={18} color={colors.onSurfaceVariant} />
-        </Pressable>
-      </View>
-    );
-  },
-);
+        <Icon name={visible ? "eye-off" : "eye"} size={18} color={colors.onSurfaceVariant} />
+      </Pressable>
+    </View>
+  );
+});
 
 export function SwitchRow({
   label,

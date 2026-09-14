@@ -26,6 +26,7 @@ export {
   kdfParamsFromPreset,
   kdfPresetIsDowngrade,
   normalizeKdfUnlockPreset,
+  parseKdfUnlockPreset,
   normalizeSecurityModeForStorage,
   normalizeSevenZipSection,
   normalizeVaultSettingsConfig,
@@ -40,6 +41,7 @@ export {
   vaultSettingsSectionsForStorage,
 } from "./types";
 export { vaultSettingsToListPatch } from "./listPatch";
+export { rebaseQuietLockedVaultSettings } from "./rebaseQuiet";
 export {
   VAULT_SETTINGS_AREA_ICON,
   VAULT_SETTINGS_AREA_I18N,

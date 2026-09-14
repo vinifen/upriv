@@ -13,10 +13,19 @@ path = "src/lib.rs"
 crate-type = ["rlib"]
 
 [dependencies]
+aes-siv = "=0.7.0"
+argon2 = "=0.5.3"
+base64 = "=0.22.1"
+chacha20poly1305 = "=0.10.1"
+hkdf = "=0.12.4"
+rand = "=0.8.5"
 serde = { version = "=1.0.228", features = ["derive"] }
+serde_json = "=1.0.150"
+sha2 = "=0.10.9"
 thiserror = "2"
 toml = "0.8"
+uuid = { version = "=1.18.1", features = ["v4", "serde"] }
+zeroize = { version = "=1.9.0", features = ["derive"] }
 
 [dev-dependencies]
-serde_json = "=1.0.150"
 tempfile = "3"

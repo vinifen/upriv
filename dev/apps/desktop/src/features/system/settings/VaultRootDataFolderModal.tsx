@@ -20,6 +20,11 @@ interface VaultRootDataFolderModalProps {
   onClose: () => void;
   /** Report unsaved draft so the list shell can refuse opening System Settings. */
   onDirtyChange?: (dirty: boolean) => void;
+  /**
+   * True while any list vault is open / opening / closing / creating.
+   * Modal stays openable; controls + Apply stay locked (closed + recovery OK).
+   */
+  vaultActivityBlocksChange?: boolean;
 }
 
 /**
@@ -30,6 +35,7 @@ export function VaultRootDataFolderModal({
   open,
   onClose,
   onDirtyChange,
+  vaultActivityBlocksChange = false,
 }: VaultRootDataFolderModalProps) {
   const { t } = useTranslation();
   const vaultRoot = useVaultRootService();
@@ -51,8 +57,15 @@ export function VaultRootDataFolderModal({
 
   const draftDirty = useMemo(
     () =>
+      !vaultActivityBlocksChange &&
       isVaultRootDraftDirty(mode, path, settings.app.vault_root_mode, settings.app.upriv_root_path),
-    [mode, path, settings.app.upriv_root_path, settings.app.vault_root_mode],
+    [
+      mode,
+      path,
+      settings.app.upriv_root_path,
+      settings.app.vault_root_mode,
+      vaultActivityBlocksChange,
+    ],
   );
 
   useEffect(() => {
@@ -100,17 +113,27 @@ export function VaultRootDataFolderModal({
     setDiscardConfirmOpen(false);
   }, [mode, path, gate.replacePolicy, gate.disk]);
 
+  useEffect(() => {
+    if (!vaultActivityBlocksChange) return;
+    setConfirmOpen(false);
+    setDiscardConfirmOpen(false);
+    setMode(settings.app.vault_root_mode);
+    setPath(settings.app.upriv_root_path);
+    setError(null);
+  }, [settings.app.upriv_root_path, settings.app.vault_root_mode, vaultActivityBlocksChange]);
+
   const onVaultRootGateChange = useCallback((next: VaultRootSettingsGate) => {
     setGate(next);
   }, []);
 
   const onDraftChange = useCallback(
     (patch: { vault_root_mode?: VaultRootMode; upriv_root_path?: string }) => {
+      if (vaultActivityBlocksChange) return;
       if (patch.vault_root_mode != null) setMode(patch.vault_root_mode);
       if (patch.upriv_root_path != null) setPath(patch.upriv_root_path);
       setError(null);
     },
-    [],
+    [vaultActivityBlocksChange],
   );
 
   const dismissFooterConfirm = useCallback(() => {
@@ -149,14 +172,30 @@ export function VaultRootDataFolderModal({
 
   const requestApply = useCallback(() => {
     const current = gateRef.current;
-    if (busy || appliedVisible || !draftDirty || current.blocksPrimary || confirmOpen) return;
+    if (
+      vaultActivityBlocksChange ||
+      busy ||
+      appliedVisible ||
+      !draftDirty ||
+      current.blocksPrimary ||
+      confirmOpen
+    ) {
+      return;
+    }
     setDiscardConfirmOpen(false);
     setConfirmOpen(true);
-  }, [appliedVisible, confirmOpen, busy, draftDirty]);
+  }, [appliedVisible, confirmOpen, busy, draftDirty, vaultActivityBlocksChange]);
 
   const commitApply = useCallback(() => {
     const current = gateRef.current;
-    if (submitLock.current || busy || appliedVisible || !draftDirty || current.blocksPrimary) {
+    if (
+      vaultActivityBlocksChange ||
+      submitLock.current ||
+      busy ||
+      appliedVisible ||
+      !draftDirty ||
+      current.blocksPrimary
+    ) {
       return;
     }
     // Same source as `blocksPrimary` — refuse incomplete without an explicit policy.
@@ -234,6 +273,7 @@ export function VaultRootDataFolderModal({
     path,
     settings.ui.locale,
     t,
+    vaultActivityBlocksChange,
     vaultRoot,
   ]);
 
@@ -256,7 +296,7 @@ export function VaultRootDataFolderModal({
   ) : (
     <VaultRootConfirmFooter
       busy={busy || appliedVisible}
-      blocked={!draftDirty || gate.blocksPrimary}
+      blocked={vaultActivityBlocksChange || !draftDirty || gate.blocksPrimary}
       confirmOpen={confirmOpen}
       primaryAction="apply"
       confirmDanger={gate.replacePolicy === "delete"}
@@ -293,12 +333,21 @@ export function VaultRootDataFolderModal({
         <p className="text-sm leading-relaxed text-on-surface-variant">
           {t("modal.data_folder.body")}
         </p>
+        {vaultActivityBlocksChange ? (
+          <p
+            className="rounded-md bg-error-container/10 px-3 py-2 text-sm text-on-error-container"
+            role="status"
+          >
+            {t("modal.data_folder.blocked_vault_activity")}
+          </p>
+        ) : null}
         <VaultRootLocationSection
           config={{ vault_root_mode: mode, upriv_root_path: path, last_opened_vault: "" }}
           onChange={onDraftChange}
           savedVaultRootMode={settings.app.vault_root_mode}
           savedRootPath={settings.app.upriv_root_path}
           onVaultRootGateChange={onVaultRootGateChange}
+          controlsDisabled={vaultActivityBlocksChange || busy || appliedVisible}
         />
         {error ? (
           <p

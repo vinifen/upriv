@@ -1,8 +1,10 @@
 import { useEffect, useId, useState } from "react";
-import { Button, Modal, PasswordInput } from "@/components/ui";
+import { Button, LoadingBudgetHint, Modal, PasswordInput } from "@/components/ui";
 import { useTranslation } from "@/i18n";
 import type { I18nKey } from "@/i18n/types";
 import {
+  LOADING_BUDGET_MS,
+  lifecycleBusyLabelKey,
   requiresPasswordForLifecycle,
   requireVaultErrorI18nKey,
   resolveVaultPasswordHint,
@@ -11,6 +13,7 @@ import {
   type VaultListItem,
   type VaultLifecycleIntent,
 } from "@upriv/shared";
+import { useLoadingBudget } from "@upriv/shared/react";
 import { useVaultLifecycleService, useVaultService } from "@/platform/services";
 import { VaultPasswordHintCallout } from "./VaultPasswordHintCallout";
 import { SettingsField } from "@/components/settings";
@@ -23,6 +26,11 @@ interface VaultLifecycleModalProps {
   intent: VaultLifecycleIntent | null;
   open: boolean;
   submitting?: boolean;
+  pipelineStep?: number;
+  budgetStartedAt?: number;
+  verifyErrorKey?: I18nKey | null;
+  /** Prefill after a failed attempt — the field, not the session RAM map. */
+  initialPassword?: string;
   onClose: () => void;
   onConfirm: (password: string | null) => void;
 }
@@ -50,6 +58,10 @@ export function VaultLifecycleModal({
   intent,
   open,
   submitting = false,
+  pipelineStep = 0,
+  budgetStartedAt,
+  verifyErrorKey = null,
+  initialPassword,
   onClose,
   onConfirm,
 }: VaultLifecycleModalProps) {
@@ -70,6 +82,10 @@ export function VaultLifecycleModal({
       return;
     }
     setRequiresPassword(intent === "unlock");
+    if (intent === "unlock") {
+      setSettingsLoading(false);
+      return;
+    }
     let cancelled = false;
     setSettingsLoading(true);
     vaultService
@@ -95,9 +111,22 @@ export function VaultLifecycleModal({
 
   useEffect(() => {
     if (!open) return;
-    setPassword("");
+    setPassword(initialPassword ?? "");
     setError(null);
-  }, [open, vault?.id, intent]);
+  }, [open, vault?.id, intent, initialPassword]);
+
+  useEffect(() => {
+    if (!verifyErrorKey) return;
+    setError(t(verifyErrorKey));
+  }, [t, verifyErrorKey]);
+
+  const budget = useLoadingBudget(
+    open && submitting && budgetStartedAt != null,
+    LOADING_BUDGET_MS.vaultPipeline,
+    {
+      startedAt: budgetStartedAt,
+    },
+  );
 
   if (!open || !vault || !intent) return null;
 
@@ -106,10 +135,14 @@ export function VaultLifecycleModal({
       setError(t(requireVaultErrorI18nKey(VAULT_ERROR_CODES.WRONG_PASSWORD)));
       return;
     }
+    setError(null);
     onConfirm(requiresPassword ? password : null);
   };
 
-  const canSubmit = !submitting && !settingsLoading && (!requiresPassword || password.length > 0);
+  const canSubmit =
+    !submitting &&
+    !settingsLoading &&
+    (!requiresPassword || lifecycleService.validateLifecyclePassword(password));
   const passwordHint = resolveVaultPasswordHint(vault);
 
   return (
@@ -119,14 +152,21 @@ export function VaultLifecycleModal({
       titleIcon={intent === "unlock" ? "lock-open" : "lock"}
       contextTitle={vault.displayName}
       onClose={onClose}
+      dismissible
       panelClassName="max-w-md"
       footer={
         <div className="flex flex-wrap justify-end gap-2">
-          <Button variant="ghost" size="sm" disabled={submitting} onClick={onClose}>
-            {t("action.cancel")}
-          </Button>
+          {submitting && intent === "unlock" ? null : (
+            <Button variant="ghost" size="sm" onClick={onClose}>
+              {t("action.cancel")}
+            </Button>
+          )}
           <Button variant="primary" size="sm" disabled={!canSubmit} onClick={handleConfirm}>
-            {submitting ? t("close.dialog.submitting") : t(confirmLabelKey(intent))}
+            {submitting
+              ? budgetStartedAt != null
+                ? t(lifecycleBusyLabelKey(intent, pipelineStep))
+                : t("vault.status.queued")
+              : t(confirmLabelKey(intent))}
           </Button>
         </div>
       }
@@ -151,26 +191,32 @@ export function VaultLifecycleModal({
             ) : null}
           </>
         ) : null}
-        {requiresPassword && passwordHint ? <VaultPasswordHintCallout hint={passwordHint} /> : null}
         {requiresPassword ? (
-          <SettingsField label={t("unlock.password")} htmlFor={passwordId}>
-            <PasswordInput
-              id={passwordId}
-              value={password}
-              onChange={(event) => {
-                setPassword(event.target.value);
-                setError(null);
-              }}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && canSubmit) handleConfirm();
-              }}
-              autoComplete={intent === "unlock" ? "current-password" : "off"}
-              autoFocus
-              inputClassName={lifecyclePasswordClass}
-            />
-          </SettingsField>
+          <div className="space-y-2">
+            <SettingsField label={t("unlock.password")} htmlFor={passwordId}>
+              <PasswordInput
+                id={passwordId}
+                value={password}
+                onChange={(event) => {
+                  setPassword(event.target.value);
+                  setError(null);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && canSubmit) handleConfirm();
+                }}
+                autoComplete={intent === "unlock" ? "current-password" : "off"}
+                autoFocus
+                readOnly={submitting}
+                inputClassName={lifecyclePasswordClass}
+              />
+            </SettingsField>
+            {passwordHint ? <VaultPasswordHintCallout hint={passwordHint} /> : null}
+          </div>
         ) : null}
         {error ? <p className="text-sm text-on-error-container">{error}</p> : null}
+        {budget.visible ? (
+          <LoadingBudgetHint budgetMs={budget.budgetMs} remainingMs={budget.remainingMs} />
+        ) : null}
       </div>
     </Modal>
   );

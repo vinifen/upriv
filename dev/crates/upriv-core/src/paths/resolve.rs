@@ -611,19 +611,10 @@ fn try_open_alias(app_home: &Path) -> Result<Option<VaultRoot>> {
             Err(UprivError::VaultRootAliasInvalid(alias.path))
         }
         Err(error @ UprivError::Io(_)) => Err(error),
-        Err(UprivError::VaultRootNotFound(_))
-        | Err(UprivError::VaultRootAliasInvalid(_))
-        | Err(UprivError::VaultNotFound(_))
-        | Err(UprivError::VaultConfigInvalid { .. })
-        | Err(UprivError::VaultGroupsInvalid { .. })
-        | Err(UprivError::VaultGroupNotFound(_))
-        | Err(UprivError::WorkspacePathInvalid { .. })
-        | Err(UprivError::WorkspacePathReserved(_))
-        | Err(UprivError::WorkspaceUnset)
-        | Err(UprivError::LogFileTooLarge { .. })
-        | Err(UprivError::WorkspaceUnavailable(_)) => {
-            Err(UprivError::VaultRootAliasInvalid(alias.path))
-        }
+        // `discover` does not return session/store errors. Anything else here is
+        // an unusable alias path — do not remap vault-open codes if this match
+        // is later reused around `open_vault`.
+        Err(_) => Err(UprivError::VaultRootAliasInvalid(alias.path)),
     }
 }
 

@@ -5,23 +5,30 @@ import { parseAppVersionResult, type AppVersionResult } from "./types";
 import type {
   AppSettingsConfig,
   AppLogFile,
+  CreateVaultInput,
   DefaultRootStatusResult,
   VaultGroup,
   VaultGroupCreateInput,
   VaultGroupListResult,
   VaultGroupUpdateInput,
+  VaultListItem,
   VaultRootAliasInfo,
   VaultRootBootstrapPrefs,
   VaultRootInspectResult,
   VaultRootMode,
   VaultRootResolveResult,
+  VaultSettingsConfig,
 } from "@upriv/shared";
 import {
+  isLifecyclePasswordPresent,
   normalizeAppSettings,
+  normalizeVaultSettingsConfig,
   parseAppLogFile,
   parseDefaultRootStatus,
   parseVaultGroupListResult,
   parseVaultGroupWire,
+  parseVaultListItemWire,
+  parseVaultListResult,
   parseVaultRootInspect,
   parseVaultRootResolve,
 } from "@upriv/shared";
@@ -411,4 +418,55 @@ export async function rpcVaultGroupReorder(
 
 export async function rpcVaultGroupRepair(): Promise<void> {
   await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_GROUP_REPAIR);
+}
+
+export async function rpcVaultList(): Promise<VaultListItem[]> {
+  return parseVaultListResult(await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_LIST));
+}
+
+export async function rpcVaultCreate(input: CreateVaultInput): Promise<VaultListItem> {
+  const raw = await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_CREATE, {
+    password: input.password,
+    unlockPreset: input.unlockPreset,
+    settings: input.settings,
+  });
+  if (typeof raw !== "object" || raw === null) {
+    throw new RpcError(BRIDGE_ERROR_CODES.INVALID_RESPONSE, "vault_create: expected object", raw);
+  }
+  return parseVaultListItemWire((raw as { vault?: unknown }).vault);
+}
+
+export async function rpcVaultOpen(id: string, password: string): Promise<void> {
+  await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_OPEN, { id, password });
+}
+
+export async function rpcVaultClose(id: string, password?: string): Promise<void> {
+  await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_CLOSE, {
+    id,
+    password: password && isLifecyclePasswordPresent(password) ? password : undefined,
+  });
+}
+
+export async function rpcVaultConfigGet(id: string): Promise<VaultSettingsConfig> {
+  const raw = await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_CONFIG_GET, { id });
+  if (typeof raw !== "object" || raw === null) {
+    throw new RpcError(
+      BRIDGE_ERROR_CODES.INVALID_RESPONSE,
+      "vault_config_get: expected object",
+      raw,
+    );
+  }
+  const settings = (raw as { settings?: unknown }).settings;
+  if (typeof settings !== "object" || settings === null) {
+    throw new RpcError(
+      BRIDGE_ERROR_CODES.INVALID_RESPONSE,
+      "vault_config_get: expected settings",
+      raw,
+    );
+  }
+  return normalizeVaultSettingsConfig(settings as VaultSettingsConfig);
+}
+
+export async function rpcVaultConfigSave(id: string, settings: VaultSettingsConfig): Promise<void> {
+  await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_CONFIG_SAVE, { id, settings });
 }

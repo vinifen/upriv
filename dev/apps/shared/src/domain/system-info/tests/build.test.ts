@@ -52,6 +52,7 @@ describe("buildSystemInfoSections", () => {
         "logging_enabled",
         "last_opened_vault",
         "always_show_hidden_vaults",
+        "lifecycle_close_modal_on_submit",
         "app_home",
         "logs_path",
       ]),

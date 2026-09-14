@@ -258,8 +258,7 @@ export function VaultRootSetupScreen({
             onChange={handleLocaleChange}
             disabled={busy}
             size="sm"
-            label={t("modal.app_settings.field.locale")}
-            title={t("modal.app_settings.field.locale")}
+            accessibilityLabel={t("modal.app_settings.field.locale")}
           />
         </View>
       }
@@ -323,5 +322,5 @@ export function VaultRootSetupScreen({
 
 const styles = StyleSheet.create({
   body: { gap: spacing.md },
-  localeSelect: { minWidth: 128, maxWidth: 176 },
+  localeSelect: { flexShrink: 0, maxWidth: 256 },
 });

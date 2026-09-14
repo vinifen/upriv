@@ -1,7 +1,5 @@
 import type { I18nKey } from "@/i18n/types";
 import type { VaultLifecycleIntent, VaultListItem } from "@upriv/shared";
-import { VaultClosingOverlay } from "./pipeline/VaultClosingOverlay";
-import { VaultOpeningOverlay } from "./pipeline/VaultOpeningOverlay";
 import { VaultLifecycleModal } from "./modals/VaultLifecycleModal";
 import { VaultRecoveryModal, type RecoveryAction } from "./modals/VaultRecoveryModal";
 import { WorkspaceSetupModal } from "./modals/WorkspaceSetupModal";
@@ -10,6 +8,11 @@ interface VaultLifecycleLayerProps {
   lifecycleVault: VaultListItem | null;
   lifecycleIntent: VaultLifecycleIntent | null;
   lifecycleOpen: boolean;
+  lifecycleSubmitting?: boolean;
+  lifecyclePipelineStep?: number;
+  lifecycleBudgetStartedAt?: number;
+  lifecycleVerifyErrorKey?: I18nKey | null;
+  lifecycleFieldPassword?: string;
   onLifecycleClose: () => void;
   onLifecycleConfirm: (password: string | null) => void;
   recoveryVault: VaultListItem | null;
@@ -21,21 +24,18 @@ interface VaultLifecycleLayerProps {
   workspaceSetupRootPath: string;
   onWorkspaceSetupCancel: () => void;
   onWorkspaceSetupConfigured: () => void;
-  pipelineVault: VaultListItem | null;
-  pipelineClosingIntent: Extract<VaultLifecycleIntent, "close"> | null;
-  closingOverlayOpen: boolean;
-  openingOverlayOpen: boolean;
-  activeStep: number;
-  errorKey: I18nKey | null;
-  onPipelineBackground: () => void;
-  onDismissPipelineError: () => void;
 }
 
-/** Unlock/close modals, workspace setup, recovery, and pipeline overlays. */
+/** Unlock/close password dialog, workspace setup, and recovery. */
 export function VaultLifecycleLayer({
   lifecycleVault,
   lifecycleIntent,
   lifecycleOpen,
+  lifecycleSubmitting = false,
+  lifecyclePipelineStep = 0,
+  lifecycleBudgetStartedAt,
+  lifecycleVerifyErrorKey = null,
+  lifecycleFieldPassword,
   onLifecycleClose,
   onLifecycleConfirm,
   recoveryVault,
@@ -47,14 +47,6 @@ export function VaultLifecycleLayer({
   workspaceSetupRootPath,
   onWorkspaceSetupCancel,
   onWorkspaceSetupConfigured,
-  pipelineVault,
-  pipelineClosingIntent,
-  closingOverlayOpen,
-  openingOverlayOpen,
-  activeStep,
-  errorKey,
-  onPipelineBackground,
-  onDismissPipelineError,
 }: VaultLifecycleLayerProps) {
   return (
     <>
@@ -68,6 +60,11 @@ export function VaultLifecycleLayer({
         vault={lifecycleVault}
         intent={lifecycleIntent}
         open={lifecycleOpen}
+        submitting={lifecycleSubmitting}
+        pipelineStep={lifecyclePipelineStep}
+        budgetStartedAt={lifecycleBudgetStartedAt}
+        verifyErrorKey={lifecycleVerifyErrorKey}
+        initialPassword={lifecycleFieldPassword}
         onClose={onLifecycleClose}
         onConfirm={onLifecycleConfirm}
       />
@@ -77,23 +74,6 @@ export function VaultLifecycleLayer({
         submitting={recoverySubmitting}
         onClose={onRecoveryClose}
         onAction={onRecoveryAction}
-      />
-      <VaultClosingOverlay
-        vault={pipelineVault}
-        intent={pipelineClosingIntent}
-        open={closingOverlayOpen}
-        activeStep={activeStep}
-        errorKey={errorKey}
-        onBackground={onPipelineBackground}
-        onDismissError={onDismissPipelineError}
-      />
-      <VaultOpeningOverlay
-        vault={pipelineVault}
-        open={openingOverlayOpen}
-        activeStep={activeStep}
-        errorKey={errorKey}
-        onBackground={onPipelineBackground}
-        onDismissError={onDismissPipelineError}
       />
     </>
   );

@@ -25,6 +25,7 @@ import {
   type WorkspacePathIssue,
   groupsForAssignmentPicker,
   groupAssignmentClearOption,
+  requireVaultConfigEditLockedI18nKey,
 } from "@upriv/shared";
 import { useTranslation, type I18nKey } from "@/i18n";
 import { useTheme } from "@/theme";
@@ -82,6 +83,9 @@ interface VaultSettingsFormProps {
   draft: VaultSettingsConfig;
   patchDraft: PatchDraft;
   storageModeLocked?: boolean;
+  displayNameLocked?: boolean;
+  mountLocked?: boolean;
+  securityModeLocked?: boolean;
   /** Resolved vault-root for reserved mount-path checks. */
   vaultRootPath?: string | null;
   onPathIssueChange?: (issue: WorkspacePathIssue | null) => void;
@@ -93,12 +97,22 @@ export function VaultSettingsForm({
   draft,
   patchDraft,
   storageModeLocked = false,
+  displayNameLocked = false,
+  mountLocked = false,
+  securityModeLocked = false,
   vaultRootPath = null,
   onPathIssueChange,
   hiddenLocked = false,
   children,
 }: VaultSettingsFormProps) {
   const { t } = useTranslation();
+  const locks = {
+    storageModeLocked,
+    displayNameLocked,
+    mountLocked,
+    securityModeLocked,
+    hiddenLocked,
+  };
 
   return (
     <View style={styles.root}>
@@ -108,15 +122,7 @@ export function VaultSettingsForm({
           title={t(`modal.settings.section.${sectionId}` as I18nKey)}
           defaultOpen={sectionId === "vault"}
         >
-          {renderSection(
-            sectionId,
-            draft,
-            patchDraft,
-            storageModeLocked,
-            vaultRootPath,
-            onPathIssueChange,
-            hiddenLocked,
-          )}
+          {renderSection(sectionId, draft, patchDraft, locks, vaultRootPath, onPathIssueChange)}
         </SettingsAccordionSection>
       ))}
       {children}
@@ -128,17 +134,23 @@ function renderSection(
   sectionId: VaultSettingsSectionId,
   draft: VaultSettingsConfig,
   patchDraft: PatchDraft,
-  storageModeLocked: boolean,
+  locks: {
+    storageModeLocked: boolean;
+    displayNameLocked: boolean;
+    mountLocked: boolean;
+    securityModeLocked: boolean;
+    hiddenLocked: boolean;
+  },
   vaultRootPath: string | null,
   onPathIssueChange?: (issue: WorkspacePathIssue | null) => void,
-  hiddenLocked = false,
 ) {
   switch (sectionId) {
     case "vault":
       return (
         <VaultSection
           config={draft.vault}
-          hiddenLocked={hiddenLocked}
+          hiddenLocked={locks.hiddenLocked}
+          displayNameLocked={locks.displayNameLocked}
           onChange={(patch) => patchDraft("vault", patch)}
         />
       );
@@ -146,7 +158,7 @@ function renderSection(
       return (
         <StorageSection
           config={draft.storage}
-          locked={storageModeLocked}
+          locked={locks.storageModeLocked}
           onChange={(patch) => patchDraft("storage", patch)}
         />
       );
@@ -155,6 +167,7 @@ function renderSection(
         <VaultSettingsMountSection
           config={draft.mount}
           vaultRootPath={vaultRootPath}
+          controlsDisabled={locks.mountLocked}
           onPathIssueChange={onPathIssueChange}
           onChange={(patch) => patchDraft("mount", patch)}
         />
@@ -184,6 +197,7 @@ function renderSection(
           storageMode={draft.storage.mode}
           config={draft.security}
           passwordHint={draft.vault.password_hint}
+          securityModeLocked={locks.securityModeLocked}
           onChange={(patch) => patchDraft("security", patch)}
           onPasswordHintChange={(password_hint) => patchDraft("vault", { password_hint })}
         />
@@ -201,18 +215,26 @@ function VaultSection({
   config,
   onChange,
   hiddenLocked = false,
+  displayNameLocked = false,
 }: {
   config: VaultSettingsConfig["vault"];
   onChange: (patch: Partial<VaultSettingsConfig["vault"]>) => void;
   hiddenLocked?: boolean;
+  displayNameLocked?: boolean;
 }) {
   const { t } = useTranslation();
   return (
     <View style={styles.fields}>
-      <FieldLabel>{t("modal.settings.field.vault.display_name")}</FieldLabel>
+      <FieldLabel disabled={displayNameLocked}>
+        {t("modal.settings.field.vault.display_name")}
+      </FieldLabel>
+      {displayNameLocked ? (
+        <FieldHint>{t(requireVaultConfigEditLockedI18nKey("vault.display_name"))}</FieldHint>
+      ) : null}
       <ThemedInput
         value={config.display_name}
         maxLength={VAULT_DISPLAY_NAME_MAX_LENGTH}
+        disabled={displayNameLocked}
         onChangeText={(display_name) => onChange({ display_name })}
       />
       <FieldLabel>{t("modal.settings.field.vault.order")}</FieldLabel>
@@ -265,14 +287,16 @@ function StorageSection({
       <FieldHint>{t("modal.settings.section.storage_intro")}</FieldHint>
       <FieldLabel>{t("modal.settings.field.storage.mode")}</FieldLabel>
       <FieldHint>{t("modal.settings.field.storage.mode_help")}</FieldHint>
-      {locked ? <FieldHint>{t("modal.settings.field.storage.mode_locked")}</FieldHint> : null}
+      {locked ? (
+        <FieldHint>{t(requireVaultConfigEditLockedI18nKey("storage.mode"))}</FieldHint>
+      ) : null}
       <RadioGroup>
         {STORAGE_RADIOS.map(({ mode, badge, tone }) => (
           <PolicyRadioOption
             key={mode}
             value={mode}
             checked={config.mode === mode}
-            disabled={locked}
+            disabled={locked || mode === "upriv_plain"}
             title={t(`modal.settings.option.storage.${mode}` as I18nKey)}
             description={t(`modal.settings.option.storage.${mode}_desc` as I18nKey)}
             badge={badge}
@@ -282,6 +306,7 @@ function StorageSection({
         ))}
       </RadioGroup>
       {warning ? <FieldHint>{t(warning)}</FieldHint> : null}
+      <FieldHint>{t("error.upriv_plain_unavailable")}</FieldHint>
     </View>
   );
 }
@@ -291,11 +316,13 @@ export function VaultSettingsMountSection({
   onChange,
   vaultRootPath = null,
   onPathIssueChange,
+  controlsDisabled = false,
 }: {
   config: VaultSettingsConfig["mount"];
   onChange: (patch: Partial<VaultSettingsConfig["mount"]>) => void;
   vaultRootPath?: string | null;
   onPathIssueChange?: (issue: WorkspacePathIssue | null) => void;
+  controlsDisabled?: boolean;
 }) {
   const { t } = useTranslation();
   const { colors, typography } = useTheme();
@@ -326,14 +353,19 @@ export function VaultSettingsMountSection({
   return (
     <View style={styles.fields}>
       <FieldHint>{t("modal.settings.section.mount_intro")}</FieldHint>
+      {controlsDisabled ? (
+        <FieldHint>{t(requireVaultConfigEditLockedI18nKey("mount.workspace_path"))}</FieldHint>
+      ) : null}
       <RadioGroup>
         <PolicyRadioOption
           value="default"
           checked={uiMode === "default"}
+          disabled={controlsDisabled}
           title={t("modal.settings.field.mount.use_default")}
           description={t("modal.settings.field.mount.use_default_desc")}
           badge="default"
           onSelect={() => {
+            if (controlsDisabled) return;
             if (!storedIsDefault && config.workspace_path.trim()) {
               customDraftRef.current = config.workspace_path.trim();
             }
@@ -344,9 +376,11 @@ export function VaultSettingsMountSection({
         <PolicyRadioOption
           value="custom"
           checked={uiMode === "custom"}
+          disabled={controlsDisabled}
           title={t("modal.settings.field.mount.custom")}
           description={t("modal.settings.field.mount.custom_desc")}
           onSelect={() => {
+            if (controlsDisabled) return;
             setUiMode("custom");
             if (storedIsDefault) {
               onChange({ workspace_path: customDraftRef.current });
@@ -355,10 +389,15 @@ export function VaultSettingsMountSection({
           footer={
             uiMode === "custom" ? (
               <View style={styles.fields}>
-                <FieldLabel>{t("modal.settings.field.mount.path")}</FieldLabel>
-                <FieldHint>{t("modal.settings.field.mount.path_help")}</FieldHint>
+                <FieldLabel disabled={controlsDisabled}>
+                  {t("modal.settings.field.mount.path")}
+                </FieldLabel>
+                <FieldHint disabled={controlsDisabled}>
+                  {t("modal.settings.field.mount.path_help")}
+                </FieldHint>
                 <ThemedInput
                   value={customPath}
+                  disabled={controlsDisabled}
                   placeholder={t("modal.app_settings.field.workspace.path_placeholder")}
                   onChangeText={(next) => {
                     customDraftRef.current = next.trim();
@@ -370,7 +409,7 @@ export function VaultSettingsMountSection({
                   size="sm"
                   variant="ghost"
                   label={t("modal.app_settings.action.pick_workspace_folder")}
-                  disabled={Platform.OS !== "android"}
+                  disabled={controlsDisabled || Platform.OS !== "android"}
                   onPress={() => {
                     void (async () => {
                       const picked = await vaultRootService.pickFolder(
@@ -522,23 +561,29 @@ function SecuritySection({
   passwordHint,
   onChange,
   onPasswordHintChange,
+  securityModeLocked = false,
 }: {
   storageMode: StorageMode;
   config: VaultSettingsConfig["security"];
   passwordHint: string;
   onChange: (patch: Partial<VaultSettingsConfig["security"]>) => void;
   onPasswordHintChange: (passwordHint: string) => void;
+  securityModeLocked?: boolean;
 }) {
   const { t } = useTranslation();
   const selectedUi = securityModeToUi(config.mode);
   const modes = securityUiModesForStorage(storageMode);
   return (
     <View style={styles.fields}>
-      <FieldLabel>{t("modal.settings.field.security.mode")}</FieldLabel>
-      <FieldHint>
-        {storageModeIsPlaintext(storageMode)
-          ? t("modal.settings.field.security.mode_help_plain")
-          : t("modal.settings.field.security.mode_help")}
+      <FieldLabel disabled={securityModeLocked}>
+        {t("modal.settings.field.security.mode")}
+      </FieldLabel>
+      <FieldHint disabled={securityModeLocked}>
+        {securityModeLocked
+          ? t(requireVaultConfigEditLockedI18nKey("security.mode"))
+          : storageModeIsPlaintext(storageMode)
+            ? t("modal.settings.field.security.mode_help_plain")
+            : t("modal.settings.field.security.mode_help")}
       </FieldHint>
       <RadioGroup>
         {modes.map((uiMode) => {
@@ -548,6 +593,7 @@ function SecuritySection({
               key={uiMode}
               value={uiMode}
               checked={selectedUi === uiMode}
+              disabled={securityModeLocked}
               title={t(`modal.settings.option.security.${uiMode}` as I18nKey)}
               description={t(`modal.settings.option.security.${uiMode}_desc` as I18nKey)}
               badge={meta.badge}
@@ -557,7 +603,8 @@ function SecuritySection({
           );
         })}
       </RadioGroup>
-      <FieldLabel>{t("unlock.password_hint_label")}</FieldLabel>
+      <FieldLabel>{t("modal.settings.password_hint")}</FieldLabel>
+      <FieldHint>{t("modal.settings.field.security.password_hint_help")}</FieldHint>
       <ThemedInput
         value={passwordHint}
         maxLength={VAULT_PASSWORD_HINT_MAX_LENGTH}

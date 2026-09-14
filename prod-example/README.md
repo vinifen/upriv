@@ -343,6 +343,7 @@ Legacy nested `[ui.vault_list]` still loads; save writes flat keys under `[ui]`.
 | `vault_list_show_vault_more_button` | bool | `true` | Show the vault row overflow (⋯) menu |
 | `vault_list_show_vault_settings_button` | bool | `true` | Show the vault row settings (gear) menu |
 | `vault_list_show_group_settings_button` | bool | `true` | Show the group header settings (gear) menu |
+| `lifecycle_close_modal_on_submit` | bool | `false` | When `true`, unlock/lock password dialog closes on Confirm and progress continues on the vault row (multi-unlock). When `false` (default), the dialog stays open so a wrong password can be fixed in place |
 
 **Demo:** `finance-2025` has `hidden = true` in `config.toml`; list visibility also depends on `always_show_hidden_vaults` and the session “show hidden vaults” toggle in system settings.
 

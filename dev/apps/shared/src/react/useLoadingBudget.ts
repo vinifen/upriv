@@ -1,16 +1,28 @@
 import { useEffect, useState } from "react";
-import { LOADING_APPEAR_DELAY_MS } from "../domain";
+import { loadingAppearDelayMs } from "../domain";
 import { scheduleInterval, scheduleTimeout } from "./schedule";
+
+export interface UseLoadingBudgetOptions {
+  appearDelayMs?: number;
+  /** Shared origin (e.g. pipeline `startedAt`) so modal + row stay on one clock. */
+  startedAt?: number;
+}
 
 /**
  * Tracks a finite loading budget while `active`.
  *
- * - `visible`: true only after {@link LOADING_APPEAR_DELAY_MS} while still active —
- *   skip the spinner for fast ops so the UI does not flash.
+ * - `visible`: true only after the appear delay while still active —
+ *   1s for short budgets, 10s for 10-minute ones so "up to 10 min" does not scare.
  * - `timedOut`: budget exhausted — callers must clear the spinner and offer retry.
- * - Budget countdown starts when `active` becomes true (not when `visible` flips).
+ * - Budget countdown starts at `startedAt` when given, otherwise when `active` flips.
  */
-export function useLoadingBudget(active: boolean, budgetMs: number) {
+export function useLoadingBudget(
+  active: boolean,
+  budgetMs: number,
+  options?: UseLoadingBudgetOptions,
+) {
+  const appearDelayMs = options?.appearDelayMs ?? loadingAppearDelayMs(budgetMs);
+  const startedAtOverride = options?.startedAt;
   const [remainingMs, setRemainingMs] = useState(budgetMs);
   const [timedOut, setTimedOut] = useState(false);
   const [visible, setVisible] = useState(false);
@@ -23,32 +35,37 @@ export function useLoadingBudget(active: boolean, budgetMs: number) {
       return;
     }
 
-    const startedAt = Date.now();
-    setVisible(false);
+    const startedAt = startedAtOverride ?? Date.now();
     setTimedOut(false);
-    setRemainingMs(budgetMs);
-
-    const cancelAppear = scheduleTimeout(() => {
-      setVisible(true);
-    }, LOADING_APPEAR_DELAY_MS);
 
     let cancelTick = () => {};
     const tick = () => {
-      const left = Math.max(0, budgetMs - (Date.now() - startedAt));
+      const elapsed = Date.now() - startedAt;
+      const left = Math.max(0, budgetMs - elapsed);
       setRemainingMs(left);
+      setVisible(elapsed >= appearDelayMs || left <= 0);
       if (left <= 0) {
         cancelTick();
         setTimedOut(true);
-        setVisible(true);
       }
     };
     tick();
     cancelTick = scheduleInterval(tick, 250);
+
+    const elapsed = Date.now() - startedAt;
+    const appearIn = Math.max(0, appearDelayMs - elapsed);
+    const cancelAppear =
+      appearIn === 0
+        ? () => {}
+        : scheduleTimeout(() => {
+            setVisible(true);
+          }, appearIn);
+
     return () => {
       cancelAppear();
       cancelTick();
     };
-  }, [active, budgetMs]);
+  }, [active, appearDelayMs, budgetMs, startedAtOverride]);
 
   return { remainingMs, timedOut, budgetMs, visible };
 }

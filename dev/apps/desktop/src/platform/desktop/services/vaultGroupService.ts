@@ -10,11 +10,7 @@ import {
   rpcVaultGroupUpdate,
 } from "@/lib/rpc";
 
-/** Desktop → daemon `vault_group_*` (`.upriv/vault_groups.toml`).
- *
- * Do not inject from `createDesktopServices` until `vault_list` lands — mock
- * vault ids are not on disk and live create/update would return `vault_not_found`.
- */
+/** Desktop → daemon `vault_group_*` (`.upriv/vault_groups.toml`). */
 export const desktopVaultGroupService: VaultGroupService = {
   list: () => rpcVaultGroupList(),
   create: (input) => rpcVaultGroupCreate(input),

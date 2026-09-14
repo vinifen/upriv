@@ -12,10 +12,16 @@ import { spacing } from "@/theme/tokens";
 interface LoadingBudgetHintProps {
   budgetMs: number;
   remainingMs: number;
+  /** `inline` — vault row meta; default block margin for dialogs. */
+  layout?: "block" | "inline";
 }
 
 /** Shows max duration + countdown so long loads never look infinite. */
-export function LoadingBudgetHint({ budgetMs, remainingMs }: LoadingBudgetHintProps) {
+export function LoadingBudgetHint({
+  budgetMs,
+  remainingMs,
+  layout = "block",
+}: LoadingBudgetHintProps) {
   const { t } = useTranslation();
   const { typography } = useTheme();
   const remaining = formatLoadingRemaining(remainingMs);
@@ -29,9 +35,17 @@ export function LoadingBudgetHint({ budgetMs, remainingMs }: LoadingBudgetHintPr
         remaining,
       });
 
-  return <Text style={[typography.caption, styles.text]}>{text}</Text>;
+  return (
+    <Text
+      style={[typography.caption, layout === "inline" ? styles.inline : styles.text]}
+      numberOfLines={layout === "inline" ? 1 : undefined}
+    >
+      {text}
+    </Text>
+  );
 }
 
 const styles = StyleSheet.create({
   text: { textAlign: "center", marginTop: spacing.sm },
+  inline: { flexShrink: 1 },
 });

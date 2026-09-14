@@ -11,6 +11,7 @@ export {
   kdfParamsFromPreset,
   kdfPresetIsDowngrade,
   normalizeKdfUnlockPreset,
+  parseKdfUnlockPreset,
 } from "./kdf";
 
 /** TOML section ids in `vaults/<id>/config.toml`. Lock is always close. */
@@ -236,7 +237,7 @@ export function vaultSettingsEqual(a: VaultSettingsConfig, b: VaultSettingsConfi
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
-/** List fields synced from `[vault]` on save (mock until `vault_config_save` RPC). */
+/** List fields synced from `[vault]` on save (`vault_config_save`). */
 export interface VaultSettingsListPatch {
   displayName: string;
   order: number;

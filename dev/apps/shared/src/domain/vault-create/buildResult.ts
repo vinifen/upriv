@@ -58,5 +58,6 @@ export function buildCreateVaultResult(
     settings,
     unlockPreset: createVaultChoosesKdf(draft) ? draft.kdf.unlock_preset : undefined,
     groupAssignment: resolveCreateVaultGroupAssignment(draft),
+    source: draft.source ?? "scratch",
   };
 }

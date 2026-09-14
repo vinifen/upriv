@@ -11,6 +11,7 @@ import {
   useState,
 } from "react";
 import { AnchoredPopover } from "./AnchoredPopover";
+import { MenuPanelHeader } from "./MenuPanelHeader";
 import { menuGroupLabelClass, menuPanelClass, menuPanelOptionClass } from "./menuStyles";
 
 type DropdownTriggerProps = {
@@ -89,13 +90,20 @@ export function DropdownPanel({
 
 interface MenuPanelGroupProps {
   label: string;
+  /** Put the panel close control on this section title (filter menus). */
+  withClose?: boolean;
   children: ReactNode;
 }
 
-export function MenuPanelGroup({ label, children }: MenuPanelGroupProps) {
+export function MenuPanelGroup({ label, withClose = false, children }: MenuPanelGroupProps) {
+  const close = useDropdownPanelClose();
   return (
     <div role="group" aria-label={label} className="py-1">
-      <p className={menuGroupLabelClass}>{label}</p>
+      {withClose ? (
+        <MenuPanelHeader title={label} onClose={close} />
+      ) : (
+        <p className={menuGroupLabelClass}>{label}</p>
+      )}
       <ul role="none">{children}</ul>
     </div>
   );

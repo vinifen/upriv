@@ -104,7 +104,7 @@ export function VaultListSectionHeader({
                 </Button>
               }
             >
-              <MenuPanelGroup label={t("vault.list.sort.by_label")}>
+              <MenuPanelGroup label={t("vault.list.sort.by_label")} withClose>
                 {SORT_MODES.map((mode) => (
                   <MenuPanelOption
                     key={mode}
@@ -147,7 +147,7 @@ export function VaultListSectionHeader({
                 </Button>
               }
             >
-              <MenuPanelGroup label={t("vault.list.view.layout_label")}>
+              <MenuPanelGroup label={t("vault.list.view.layout_label")} withClose>
                 {VIEW_MODES.map((mode) => (
                   <MenuPanelOption
                     key={mode}

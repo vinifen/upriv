@@ -3,6 +3,7 @@ import {
   KDF_UNLOCK_OPTION_META,
   KDF_UNLOCK_PRESETS,
   changeKdfFormIsDowngrade,
+  requireVaultConfigEditLockedI18nKey,
   type ChangeKdfFieldsState,
   type KdfUnlockPreset,
 } from "@upriv/shared";
@@ -13,14 +14,14 @@ import { FieldHint, FieldLabel, PasswordInput, RadioGroup, Warning } from "./set
 
 export function VaultChangeKdfFields({
   currentPreset,
-  vaultOpen,
+  rewrapBlocked,
   fields,
   onChange,
   error,
 }: {
   /** Current unlock cost from `contents/vault.header`. */
   currentPreset: KdfUnlockPreset;
-  vaultOpen: boolean;
+  rewrapBlocked: boolean;
   fields: ChangeKdfFieldsState;
   onChange: (patch: Partial<ChangeKdfFieldsState>) => void;
   error?: string | null;
@@ -31,17 +32,22 @@ export function VaultChangeKdfFields({
 
   return (
     <View style={{ gap: spacing.md }}>
-      {vaultOpen ? <FieldHint>{t("vault.change_kdf.vault_open")}</FieldHint> : null}
+      {rewrapBlocked ? (
+        <FieldHint>{t(requireVaultConfigEditLockedI18nKey("action.change_kdf"))}</FieldHint>
+      ) : null}
       <FieldHint>{t("modal.settings.change_kdf_intro")}</FieldHint>
       <FieldHint>{t("warning.kdf_change_backups")}</FieldHint>
-      <FieldLabel>{t("vault.change_kdf.current")}</FieldLabel>
+      <FieldLabel disabled={rewrapBlocked}>{t("vault.change_kdf.current")}</FieldLabel>
       <PasswordInput
         value={fields.password}
+        disabled={rewrapBlocked}
         onChangeText={(password) => onChange({ password })}
         autoCapitalize="none"
         autoCorrect={false}
       />
-      <FieldLabel>{t("modal.settings.field.kdf.unlock_preset")}</FieldLabel>
+      <FieldLabel disabled={rewrapBlocked}>
+        {t("modal.settings.field.kdf.unlock_preset")}
+      </FieldLabel>
       <RadioGroup>
         {KDF_UNLOCK_PRESETS.map((preset) => {
           const meta = KDF_UNLOCK_OPTION_META[preset];
@@ -50,6 +56,7 @@ export function VaultChangeKdfFields({
               key={preset}
               value={preset}
               checked={fields.nextPreset === preset}
+              disabled={rewrapBlocked}
               title={t(meta.titleKey)}
               description={t(meta.descKey)}
               badge={meta.badge}

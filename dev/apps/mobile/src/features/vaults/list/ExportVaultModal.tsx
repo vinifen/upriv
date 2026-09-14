@@ -26,6 +26,7 @@ interface ExportVaultModalProps {
   onClose: () => void;
   onConfirm: (request: VaultExportRequest) => void;
   onTimeout?: () => void;
+  onSettingsLoadError?: (error: unknown) => void;
 }
 
 export function ExportVaultModal({
@@ -35,6 +36,7 @@ export function ExportVaultModal({
   onClose,
   onConfirm,
   onTimeout,
+  onSettingsLoadError,
 }: ExportVaultModalProps) {
   const { t } = useTranslation();
   const vaultService = useVaultService();
@@ -49,14 +51,20 @@ export function ExportVaultModal({
     setFormat(DEFAULT_VAULT_EXPORT_FORMAT);
     setSevenZip(DEFAULT_SEVEN_ZIP);
     let cancelled = false;
-    void vaultService.getSettings(vault.id).then((settings) => {
-      if (cancelled || !settings?.seven_zip) return;
-      setSevenZip(settings.seven_zip);
-    });
+    void vaultService
+      .getSettings(vault.id)
+      .then((settings) => {
+        if (cancelled || !settings?.seven_zip) return;
+        setSevenZip(settings.seven_zip);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        onSettingsLoadError?.(error);
+      });
     return () => {
       cancelled = true;
     };
-  }, [open, vault, vaultService]);
+  }, [open, onSettingsLoadError, vault, vaultService]);
 
   useEffect(() => {
     if (!budget.timedOut || !submitting) return;
