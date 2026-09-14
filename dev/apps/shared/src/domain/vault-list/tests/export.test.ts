@@ -78,10 +78,12 @@ describe("vaultCanExport", () => {
     expect(vaultCanExport(vaultListItemFixture({ session: "recovery" }))).toBe(false);
   });
 
-  it("blocks in-flight opening and closing pipelines", () => {
+  it("blocks in-flight opening, closing, creating, and queued pipelines", () => {
     const vault = vaultListItemFixture({ id: "a", session: null });
     expect(vaultCanExport(vault, { openingVaultIds: ["a"] })).toBe(false);
     expect(vaultCanExport(vault, { closingVaultIds: ["a"] })).toBe(false);
+    expect(vaultCanExport(vault, { creatingVaultIds: ["a"] })).toBe(false);
+    expect(vaultCanExport(vault, { queuedVaultIds: ["a"] })).toBe(false);
     expect(vaultCanExport(vault, { openingVaultIds: ["other"] })).toBe(true);
   });
 });

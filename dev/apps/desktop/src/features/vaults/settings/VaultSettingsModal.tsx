@@ -31,6 +31,7 @@ import type {
   VaultSettingsConfig,
   VaultSettingsListPatch,
   VaultSettingsSectionId,
+  VaultPipelineListStatus,
   KdfUnlockPreset,
 } from "@upriv/shared";
 import {
@@ -47,6 +48,7 @@ import {
   NO_VAULT_GROUPS,
   isVaultInHiddenGroup,
   isHiddenGroup,
+  resolveVaultListStatus,
   selectedGroupIdAfterAssignment,
   normalizeVaultSettingsConfig,
   vaultSettingsEqual,
@@ -57,6 +59,8 @@ import {
   vaultSettingsPreferenceSections,
   vaultSettingsToListPatch,
   vaultRootPathForWorkspaceValidation,
+  vaultConfigEditAllowed,
+  rebaseQuietLockedVaultSettings,
 } from "@upriv/shared";
 import { createVaultErrorI18nKey, desktopErrorI18nKey } from "@/lib/errorMessages";
 
@@ -68,6 +72,8 @@ interface VaultSettingsModalProps {
   area: VaultSettingsAreaId | null;
   open: boolean;
   onClose: () => void;
+  /** List pipeline — gates quiet vs closed edits (see edit-policy). */
+  pipelineListStatus?: VaultPipelineListStatus;
   groups?: readonly VaultGroup[];
   onVaultSettingsSaved?: (vaultId: string, patch: VaultSettingsListPatch) => void;
   onCommitGroupAssignment?: (
@@ -82,6 +88,7 @@ export function VaultSettingsModal({
   area,
   open,
   onClose,
+  pipelineListStatus = {},
   groups = NO_VAULT_GROUPS,
   onVaultSettingsSaved,
   onCommitGroupAssignment,
@@ -124,6 +131,8 @@ export function VaultSettingsModal({
   const [resolvedRootPath, setResolvedRootPath] = useState<string | null>(null);
   /** Invalidates a submit whose loading budget already expired. */
   const sectionBusyGenRef = useRef(0);
+  /** Sync lock — React `sectionBusy` paints too late for double-click. */
+  const submitInFlightRef = useRef(false);
 
   const confirmInputId = useId();
   const savedHideRef = useRef<ReturnType<typeof setTimeout>>();
@@ -153,14 +162,9 @@ export function VaultSettingsModal({
       setHeaderUnlockPreset(undefined);
       return;
     }
-    let cancelled = false;
-    void vaultService.getUnlockPreset(vaultId).then((preset) => {
-      if (!cancelled) setHeaderUnlockPreset(preset ?? DEFAULT_KDF_UNLOCK_PRESET);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [open, vaultId, vaultService]);
+    // List row already probed `vault.header`. Missing ≠ 256 MiB.
+    setHeaderUnlockPreset(vault?.unlockPreset);
+  }, [open, vaultId, vault?.unlockPreset]);
 
   useEffect(() => {
     if (!open) {
@@ -190,7 +194,17 @@ export function VaultSettingsModal({
   }, [open, appSettings.app.vault_root_mode, vaultRootService]);
 
   const canConfirmDelete = vault !== null && deleteConfirm.trim() === vault.id;
-  const vaultOpen = vault?.session === "open";
+  const vaultListStatus = vault ? resolveVaultListStatus(vault, pipelineListStatus) : "closed";
+  const editAllowed = (target: Parameters<typeof vaultConfigEditAllowed>[0]) =>
+    vault != null && vaultConfigEditAllowed(target, vault, pipelineListStatus);
+  const storageModeLocked = !editAllowed("storage.mode");
+  const displayNameLocked = !editAllowed("vault.display_name");
+  const mountLocked = !editAllowed("mount.workspace_path");
+  const securityModeLocked = !editAllowed("security.mode");
+  /** password / KDF — `vault_closed`. */
+  const rewrapBlocked = Boolean(
+    vault && !vaultConfigEditAllowed("action.change_password", vault, pipelineListStatus),
+  );
 
   const baseline = useMemo(() => (config ? normalizeVaultSettingsConfig(config) : null), [config]);
 
@@ -232,6 +246,7 @@ export function VaultSettingsModal({
 
   const passwordCanSubmit = changePasswordFormCanSubmit({
     ...passwordFields,
+    vaultListStatus,
     submitting: passwordSubmitting,
   });
 
@@ -241,7 +256,7 @@ export function VaultSettingsModal({
       password: kdfFields?.password ?? "",
       nextPreset: kdfFields?.nextPreset ?? headerUnlockPreset,
       currentPreset: headerUnlockPreset,
-      vaultOpen,
+      vaultListStatus,
       submitting: kdfSubmitting,
     });
 
@@ -321,8 +336,11 @@ export function VaultSettingsModal({
 
   const persistPreferences = useCallback(
     async (next: VaultSettingsConfig) => {
-      if (!vaultId || !baseline) return;
-      const normalized = normalizeVaultSettingsConfig(next);
+      if (!vaultId || !baseline || !vault || !vaultService.canPersistSettings) return;
+      if (submitInFlightRef.current) return;
+      submitInFlightRef.current = true;
+      const rebased = rebaseQuietLockedVaultSettings(next, baseline, vault, pipelineListStatus);
+      const normalized = normalizeVaultSettingsConfig(rebased);
       const locked = Boolean(vaultId && isVaultInHiddenGroup(groupsRef.current, vaultId));
       const toSave =
         locked && !normalized.vault.hidden
@@ -342,14 +360,29 @@ export function VaultSettingsModal({
         if (generation !== sectionBusyGenRef.current) return;
         showError(error, "error.settings_save_failed");
       } finally {
-        if (generation === sectionBusyGenRef.current) setSectionBusy(false);
+        if (generation === sectionBusyGenRef.current) {
+          submitInFlightRef.current = false;
+          setSectionBusy(false);
+        }
       }
     },
-    [vaultId, baseline, replaceConfig, onVaultSettingsSaved, showError, vaultService, flashSaved],
+    [
+      vaultId,
+      baseline,
+      vault,
+      pipelineListStatus,
+      replaceConfig,
+      onVaultSettingsSaved,
+      showError,
+      vaultService,
+      flashSaved,
+    ],
   );
 
   const persistGroupAssignment = useCallback(async () => {
     if (!vaultId || !groupDirty) return;
+    if (submitInFlightRef.current) return;
+    submitInFlightRef.current = true;
     const generation = (sectionBusyGenRef.current += 1);
     setSectionBusy(true);
     try {
@@ -376,7 +409,10 @@ export function VaultSettingsModal({
       if (generation !== sectionBusyGenRef.current) return;
       showError(error, "error.settings_save_failed");
     } finally {
-      if (generation === sectionBusyGenRef.current) setSectionBusy(false);
+      if (generation === sectionBusyGenRef.current) {
+        submitInFlightRef.current = false;
+        setSectionBusy(false);
+      }
     }
   }, [
     vaultId,
@@ -395,6 +431,8 @@ export function VaultSettingsModal({
       setPasswordError(t(createVaultErrorI18nKey("password_mismatch")));
       return;
     }
+    if (submitInFlightRef.current) return;
+    submitInFlightRef.current = true;
     setPasswordError(null);
     const generation = (sectionBusyGenRef.current += 1);
     setPasswordSubmitting(true);
@@ -413,6 +451,7 @@ export function VaultSettingsModal({
       setPasswordError(t(errorDisplayI18nKey(error) ?? "error.settings_save_failed"));
     } finally {
       if (generation === sectionBusyGenRef.current) {
+        submitInFlightRef.current = false;
         setPasswordSubmitting(false);
         setSectionBusy(false);
       }
@@ -429,6 +468,8 @@ export function VaultSettingsModal({
 
   const submitKdfChange = useCallback(async () => {
     if (!vaultId || !kdfFields || !kdfCanSubmit) return;
+    if (submitInFlightRef.current) return;
+    submitInFlightRef.current = true;
     setKdfError(null);
     const generation = (sectionBusyGenRef.current += 1);
     setKdfSubmitting(true);
@@ -450,6 +491,7 @@ export function VaultSettingsModal({
       setKdfError(t(errorDisplayI18nKey(error) ?? "error.settings_save_failed"));
     } finally {
       if (generation === sectionBusyGenRef.current) {
+        submitInFlightRef.current = false;
         setKdfSubmitting(false);
         setSectionBusy(false);
       }
@@ -465,7 +507,11 @@ export function VaultSettingsModal({
     resetKdfForm,
   ]);
 
-  const submitBudget = useLoadingBudget(sectionBusy, LOADING_BUDGET_MS.vaultRewrap);
+  const submitBudgetMs =
+    passwordSubmitting || kdfSubmitting
+      ? LOADING_BUDGET_MS.vaultRewrap
+      : LOADING_BUDGET_MS.settingsSave;
+  const submitBudget = useLoadingBudget(sectionBusy, submitBudgetMs);
   const settingsLoading = Boolean(open && vaultId && loading && !loadTimedOut);
   const loadBudget = useLoadingBudget(settingsLoading, LOADING_BUDGET_MS.settingsLoad);
 
@@ -478,6 +524,7 @@ export function VaultSettingsModal({
   useEffect(() => {
     if (!submitBudget.timedOut) return;
     sectionBusyGenRef.current += 1;
+    submitInFlightRef.current = false;
     setSectionBusy(false);
     setPasswordSubmitting(false);
     setKdfSubmitting(false);
@@ -497,8 +544,15 @@ export function VaultSettingsModal({
         if (!current) return current;
 
         if (section === "storage" && "mode" in patch && typeof patch.mode === "string") {
-          if (vaultOpen) return current;
+          if (storageModeLocked) return current;
           return patchStorageMode(current, patch.mode as StorageMode);
+        }
+        if (section === "vault" && "display_name" in patch && displayNameLocked) {
+          return current;
+        }
+        if (section === "mount" && mountLocked) return current;
+        if (section === "security" && "mode" in patch && securityModeLocked) {
+          return current;
         }
 
         return {
@@ -507,7 +561,7 @@ export function VaultSettingsModal({
         };
       });
     },
-    [vaultOpen],
+    [storageModeLocked, displayNameLocked, mountLocked, securityModeLocked],
   );
 
   const resetActiveAreaDraft = useCallback(() => {
@@ -525,6 +579,11 @@ export function VaultSettingsModal({
   }, [activeArea, baseline, baselineGroupId, resetPasswordForm, resetKdfForm]);
 
   const handleCloseModal = () => {
+    sectionBusyGenRef.current += 1;
+    submitInFlightRef.current = false;
+    setSectionBusy(false);
+    setPasswordSubmitting(false);
+    setKdfSubmitting(false);
     setSaveConfirmOpen(false);
     setDiscardConfirmOpen(false);
     setDeleteOpen(false);
@@ -533,6 +592,7 @@ export function VaultSettingsModal({
   };
 
   const requestCloseModal = () => {
+    if (sectionBusy) return;
     if (discardConfirmOpen || saveConfirmOpen) {
       dismissFooterConfirm();
       return;
@@ -545,6 +605,7 @@ export function VaultSettingsModal({
   };
 
   const handleDiscardConfirmed = () => {
+    if (sectionBusy) return;
     resetActiveAreaDraft();
     setDiscardConfirmOpen(false);
     handleCloseModal();
@@ -591,7 +652,9 @@ export function VaultSettingsModal({
   };
 
   const handleConfirmDelete = async () => {
-    if (!canConfirmDelete || !vault || sectionBusy) return;
+    if (!canConfirmDelete || !vault || sectionBusy || !vaultService.canDeleteVault) return;
+    if (submitInFlightRef.current) return;
+    submitInFlightRef.current = true;
     const generation = (sectionBusyGenRef.current += 1);
     setSectionBusy(true);
     try {
@@ -604,7 +667,10 @@ export function VaultSettingsModal({
       if (generation !== sectionBusyGenRef.current) return;
       showError(error, "error.settings_save_failed");
     } finally {
-      if (generation === sectionBusyGenRef.current) setSectionBusy(false);
+      if (generation === sectionBusyGenRef.current) {
+        submitInFlightRef.current = false;
+        setSectionBusy(false);
+      }
     }
   };
 
@@ -630,6 +696,7 @@ export function VaultSettingsModal({
     sectionBusy ||
     !areaDirty ||
     mountPathIssue ||
+    (activeArea === "preferences" && !vaultService.canPersistSettings) ||
     (activeArea === "password" && !passwordCanSubmit) ||
     (activeArea === "kdf" && !kdfCanSubmit);
 
@@ -664,10 +731,20 @@ export function VaultSettingsModal({
           <div className="flex shrink-0 flex-col gap-2 sm:flex-row-reverse sm:flex-wrap sm:justify-end [&_button]:w-full sm:[&_button]:w-auto">
             {discardConfirmOpen ? (
               <>
-                <Button variant="danger" size="md" onClick={handleDiscardConfirmed}>
+                <Button
+                  variant="danger"
+                  size="md"
+                  disabled={sectionBusy}
+                  onClick={handleDiscardConfirmed}
+                >
                   {t("modal.settings.discard_confirm_action")}
                 </Button>
-                <Button variant="ghost" size="md" onClick={dismissFooterConfirm}>
+                <Button
+                  variant="ghost"
+                  size="md"
+                  disabled={sectionBusy}
+                  onClick={dismissFooterConfirm}
+                >
                   {t("modal.settings.discard_keep_editing")}
                 </Button>
               </>
@@ -682,7 +759,12 @@ export function VaultSettingsModal({
                   {saveLabel}
                 </Button>
                 {saveConfirmOpen ? (
-                  <Button variant="ghost" size="md" onClick={dismissFooterConfirm}>
+                  <Button
+                    variant="ghost"
+                    size="md"
+                    disabled={sectionBusy}
+                    onClick={dismissFooterConfirm}
+                  >
                     {t("modal.settings.save_cancel")}
                   </Button>
                 ) : null}
@@ -721,7 +803,6 @@ export function VaultSettingsModal({
                 setNewGroupName("");
                 setGroupNameError(null);
                 dismissFooterConfirm();
-                if (isHiddenGroup(groups, groupId)) lockDraftHidden();
               }}
               onNewGroupNameChange={(name) => {
                 setNewGroupName(name);
@@ -779,14 +860,19 @@ export function VaultSettingsModal({
                       sectionId,
                       formConfig,
                       patchDraft,
-                      vaultOpen,
+                      {
+                        storageModeLocked,
+                        displayNameLocked,
+                        mountLocked,
+                        securityModeLocked,
+                        hiddenLocked,
+                      },
                       vaultRootPathForWorkspaceValidation(
                         appSettings.app.vault_root_mode,
                         appSettings.app.upriv_root_path,
                         resolvedRootPath,
                       ),
                       setMountPathIssue,
-                      hiddenLocked,
                     )}
                   </VaultSettingsSection>
                 ))}
@@ -816,6 +902,7 @@ export function VaultSettingsModal({
                     }}
                     onConfirmChange={setDeleteConfirm}
                     busy={sectionBusy}
+                    enabled={vaultService.canDeleteVault}
                   />
                 </VaultSettingsSection>
               </>
@@ -829,6 +916,7 @@ export function VaultSettingsModal({
                 </p>
                 <VaultChangePasswordFields
                   fields={passwordFields}
+                  rewrapBlocked={rewrapBlocked}
                   onChange={(patch) => {
                     setPasswordFields((current) => ({ ...current, ...patch }));
                     setPasswordError(null);
@@ -844,7 +932,7 @@ export function VaultSettingsModal({
                 </p>
                 <VaultChangeKdfFields
                   currentPreset={headerUnlockPreset}
-                  vaultOpen={vaultOpen}
+                  rewrapBlocked={rewrapBlocked}
                   fields={kdfFields}
                   onChange={(patch) => {
                     setKdfFields((current) => (current ? { ...current, ...patch } : current));
@@ -856,7 +944,7 @@ export function VaultSettingsModal({
               </div>
             ) : activeArea === "kdf" ? (
               <p className="text-sm leading-relaxed text-on-surface-variant">
-                {t("vault.list.loading")}
+                {vault ? "—" : t("vault.list.loading")}
               </p>
             ) : null}
           </>
@@ -875,17 +963,23 @@ function renderPreferenceSection(
     section: S,
     patch: Partial<VaultSettingsConfig[S]>,
   ) => void,
-  storageModeLocked: boolean,
+  locks: {
+    storageModeLocked: boolean;
+    displayNameLocked: boolean;
+    mountLocked: boolean;
+    securityModeLocked: boolean;
+    hiddenLocked: boolean;
+  },
   vaultRootPath: string | null,
   onMountPathIssue: (invalid: boolean) => void,
-  hiddenLocked: boolean,
 ) {
   switch (sectionId) {
     case "vault":
       return (
         <VaultSettingsVaultSection
           config={draft.vault}
-          hiddenLocked={hiddenLocked}
+          hiddenLocked={locks.hiddenLocked}
+          displayNameLocked={locks.displayNameLocked}
           onChange={(patch) => patchDraft("vault", patch)}
         />
       );
@@ -893,7 +987,7 @@ function renderPreferenceSection(
       return (
         <VaultSettingsStorageSection
           config={draft.storage}
-          storageModeLocked={storageModeLocked}
+          storageModeLocked={locks.storageModeLocked}
           onChange={(patch) => patchDraft("storage", patch)}
         />
       );
@@ -902,6 +996,7 @@ function renderPreferenceSection(
         <VaultSettingsMountSection
           config={draft.mount}
           vaultRootPath={vaultRootPath}
+          controlsDisabled={locks.mountLocked}
           onPathIssueChange={(issue) => onMountPathIssue(issue != null)}
           onChange={(patch) => patchDraft("mount", patch)}
         />
@@ -934,6 +1029,7 @@ function renderPreferenceSection(
           storageMode={draft.storage.mode}
           config={draft.security}
           passwordHint={draft.vault.password_hint}
+          securityModeLocked={locks.securityModeLocked}
           onChange={(patch) => patchDraft("security", patch)}
           onPasswordHintChange={(password_hint) => patchDraft("vault", { password_hint })}
         />

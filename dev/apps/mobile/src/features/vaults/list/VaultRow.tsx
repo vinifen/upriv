@@ -7,9 +7,13 @@ import {
   type ViewStyle,
 } from "react-native";
 import {
-  resolveVaultDisplayStatus,
   resolveVaultListStatus,
+  isVaultListRowActivatable,
+  isVaultListRowUnlockTarget,
+  vaultPipelineRowBudget,
   vaultDisplayLetters,
+  vaultLastAccessedLabel,
+  vaultStatusI18nKey,
   VAULT_ROW_DENSITY,
   type VaultDisplayStatus,
   type VaultListItem,
@@ -17,7 +21,9 @@ import {
   type VaultSettingsAreaId,
 } from "@upriv/shared";
 import { Icon } from "@/components/icons";
-import { useTranslation } from "@/i18n";
+import { LoadingBudgetHint } from "@/components/ui";
+import { useTranslation, type I18nKey } from "@/i18n";
+import { useLoadingBudget } from "@upriv/shared/react";
 import { useTheme } from "@/theme";
 import { radii, spacing, vaultRowShadow } from "@/theme/tokens";
 import { useVaultRowChrome } from "@/hooks/useVaultRowChrome";
@@ -42,13 +48,9 @@ interface VaultRowProps {
   variant?: "row" | "block";
   viewMode: VaultListViewMode;
   nested?: boolean;
-  pipelineListStatus?: {
-    openingVaultIds?: readonly string[];
-    closingVaultIds?: readonly string[];
-  };
+  pipelineListStatus?: import("@upriv/shared").VaultPipelineListStatus;
   dragEnabled: boolean;
   dragHandleLabel?: string;
-  groupBusy?: boolean;
   isDragging: boolean;
   isDragOver: boolean;
   isDropBlocked?: boolean;
@@ -59,7 +61,6 @@ interface VaultRowProps {
   onDragEnd: (x: number, y: number) => void;
   onDragCancel: () => void;
   onOpenFileManager: (vault: VaultListItem) => void;
-  onOpenFolder: (vault: VaultListItem) => void;
   onOpenSettings: (vault: VaultListItem, area: VaultSettingsAreaId) => void;
   onUnlock: (vault: VaultListItem) => void;
   onLock: (vault: VaultListItem) => void;
@@ -77,7 +78,6 @@ export function VaultRow({
   pipelineListStatus = {},
   dragEnabled,
   dragHandleLabel,
-  groupBusy = false,
   isDragging,
   isDragOver,
   isDropBlocked = false,
@@ -88,7 +88,6 @@ export function VaultRow({
   onDragEnd,
   onDragCancel,
   onOpenFileManager,
-  onOpenFolder,
   onOpenSettings,
   onUnlock,
   onLock,
@@ -97,18 +96,36 @@ export function VaultRow({
   onOpenNote,
   onOpenVaultInfo,
 }: VaultRowProps) {
-  const { t } = useTranslation();
+  const { t, locale } = useTranslation();
   const { colors, typography } = useTheme();
   const { settings: appSettings } = useAppSettingsContext();
   const status = resolveVaultListStatus(vault, pipelineListStatus);
-  const isOpen = resolveVaultDisplayStatus(vault) === "open";
+  const isOpen = status === "open";
   const isLastOpened = appSettings.app.last_opened_vault.trim() === vault.id;
   const density = VAULT_ROW_DENSITY[viewMode === "blocks" ? "default" : viewMode];
+  const blockTitleSize = VAULT_ROW_DENSITY.blocks.titleSize;
   const { chrome, onLayout: onChromeLayout } = useVaultRowChrome();
-  const comfortable = variant === "block" || chrome === "comfortable";
-  const lastAccessedLabel = t("vault.last_accessed", { when: vault.lastAccessedWhen });
-  const lastAccessedText = comfortable ? lastAccessedLabel : vault.lastAccessedWhen;
-  const showGrip = dragEnabled && !groupBusy;
+  const comfortable = chrome === "comfortable";
+  const lastAccessedWhen = vaultLastAccessedLabel(vault, locale);
+  const lastAccessedLabel = t("vault.last_accessed", { when: lastAccessedWhen });
+  const lastAccessedText =
+    variant === "block" || comfortable ? lastAccessedLabel : lastAccessedWhen;
+  const rowBudget = vaultPipelineRowBudget(status, pipelineListStatus, vault.id);
+  const openingBudget = useLoadingBudget(rowBudget.active, rowBudget.budgetMs, {
+    startedAt: rowBudget.startedAt,
+  });
+  const lastAccessedOrBudget = openingBudget.visible ? (
+    <LoadingBudgetHint
+      budgetMs={openingBudget.budgetMs}
+      remainingMs={openingBudget.remainingMs}
+      layout="inline"
+    />
+  ) : (
+    <Text style={[typography.caption, styles.meta]} numberOfLines={1}>
+      {lastAccessedText}
+    </Text>
+  );
+  const showGrip = dragEnabled && !isPipelineBusy;
   const iconTone = vaultStatusIconColors(status, colors);
   const letters = vaultDisplayLetters(vault.displayName);
   const avatarSize = variant === "block" ? 36 : density.icon;
@@ -118,7 +135,6 @@ export function VaultRow({
       style={[
         styles.avatarCircle,
         { width: avatarSize, height: avatarSize, backgroundColor: iconTone.background },
-        variant === "block" ? { alignSelf: "flex-start", marginTop: 2 } : null,
       ]}
       accessibilityElementsHidden
     >
@@ -156,51 +172,70 @@ export function VaultRow({
       onOpenSettings={onOpenSettings}
       onExportVault={onExport}
       onOpenFileManager={onOpenFileManager}
-      onOpenFolder={onOpenFolder}
       onLockVault={onLock}
       onUnlockVault={onUnlock}
     />
   );
 
   const identity = (
-    <View style={[styles.identity, variant === "block" ? styles.blockIdentity : null]}>
+    <View style={styles.identity}>
       <View style={styles.titleRow}>
         <Text
           style={[styles.title, { color: colors.onSurface, fontSize: density.titleSize }]}
-          numberOfLines={variant === "block" ? 2 : 1}
+          numberOfLines={1}
         >
           {vault.displayName}
         </Text>
         <VaultLastOpenedIndicator active={isLastOpened} />
         <VaultHiddenIndicator hidden={vault.hidden} />
       </View>
-      {variant === "block" ? (
-        <>
-          <VaultStatusBadge status={status} />
-          <Text style={typography.caption} numberOfLines={1} accessibilityLabel={lastAccessedLabel}>
-            {lastAccessedText}
-          </Text>
-        </>
-      ) : (
-        <View style={styles.metaRow}>
-          <VaultStatusBadge status={status} />
-          <View style={styles.metaWhen} accessible accessibilityLabel={lastAccessedLabel}>
-            {!comfortable ? <Icon name="clock" size={12} color={colors.onSurfaceVariant} /> : null}
-            <Text style={[typography.caption, styles.meta]} numberOfLines={1}>
-              {lastAccessedText}
-            </Text>
-          </View>
+      <View style={styles.metaRow}>
+        <VaultStatusBadge status={status} />
+        <View style={styles.metaWhen} accessible accessibilityLabel={lastAccessedLabel}>
+          {!comfortable ? <Icon name="clock" size={12} color={colors.onSurfaceVariant} /> : null}
+          {lastAccessedOrBudget}
         </View>
-      )}
+      </View>
+    </View>
+  );
+
+  const blockIdentity = (
+    <View style={styles.blockIdentity}>
+      <View style={styles.blockTitleRow}>
+        {avatar}
+        <View style={styles.blockTitleText}>
+          <Text
+            style={[styles.title, { color: colors.onSurface, fontSize: blockTitleSize }]}
+            numberOfLines={2}
+          >
+            {vault.displayName}
+          </Text>
+          <VaultLastOpenedIndicator active={isLastOpened} size={13} />
+          <VaultHiddenIndicator hidden={vault.hidden} size={13} />
+        </View>
+      </View>
+      <View style={styles.blockMetaRow}>
+        <VaultStatusBadge status={status} />
+        <View style={styles.metaWhen} accessible accessibilityLabel={lastAccessedLabel}>
+          {lastAccessedOrBudget}
+        </View>
+      </View>
     </View>
   );
 
   const openOrUnlock = () => {
     if (isDragging) return;
     if (isOpen) onOpenFileManager(vault);
-    else if (status === "closed" || status === "recovery") onUnlock(vault);
+    else if (isVaultListRowUnlockTarget(status)) onUnlock(vault);
   };
-  const rowActivates = isOpen || status === "closed" || status === "recovery";
+  const rowActivates = isVaultListRowActivatable(status);
+  const activateLabel = isOpen
+    ? t("action.open_upriv")
+    : isVaultListRowUnlockTarget(status)
+      ? status === "closed" || status === "recovery"
+        ? t("action.unlock")
+        : t(vaultStatusI18nKey[status] as I18nKey)
+      : undefined;
   const dropRing = (
     <DropOverRing
       visible={isDragOver}
@@ -217,13 +252,7 @@ export function VaultRow({
         onLayout={handleLayout}
         onPress={rowActivates ? openOrUnlock : undefined}
         accessibilityRole={rowActivates ? "button" : undefined}
-        accessibilityLabel={
-          isOpen
-            ? t("action.open_upriv")
-            : status === "closed" || status === "recovery"
-              ? t("action.unlock")
-              : undefined
-        }
+        accessibilityLabel={activateLabel}
         style={[
           styles.blockCard,
           rowSurface(
@@ -239,7 +268,7 @@ export function VaultRow({
         <View style={styles.blockTop}>
           {showGrip ? (
             <VaultDragHandle
-              disabled={!dragEnabled || groupBusy}
+              disabled={!dragEnabled}
               label={dragHandleLabel}
               onDragStart={onDragStart}
               onDragMove={onDragMove}
@@ -247,8 +276,7 @@ export function VaultRow({
               onDragCancel={onDragCancel}
             />
           ) : null}
-          {avatar}
-          {identity}
+          {blockIdentity}
           {actions}
         </View>
         <VaultLockButton
@@ -267,13 +295,7 @@ export function VaultRow({
       onLayout={handleLayout}
       onPress={rowActivates ? openOrUnlock : undefined}
       accessibilityRole={rowActivates ? "button" : undefined}
-      accessibilityLabel={
-        isOpen
-          ? t("action.open_upriv")
-          : status === "closed" || status === "recovery"
-            ? t("action.unlock")
-            : undefined
-      }
+      accessibilityLabel={activateLabel}
       style={[
         styles.row,
         nested ? styles.memberRow : null,
@@ -294,7 +316,7 @@ export function VaultRow({
       {dropRing}
       {showGrip ? (
         <VaultDragHandle
-          disabled={!dragEnabled || groupBusy}
+          disabled={!dragEnabled}
           label={dragHandleLabel}
           onDragStart={onDragStart}
           onDragMove={onDragMove}
@@ -307,7 +329,7 @@ export function VaultRow({
       {actions}
       <VaultLockButton
         status={status}
-        appearance="icon"
+        appearance={comfortable ? "label" : "icon"}
         onLock={() => onLock(vault)}
         onUnlock={() => onUnlock(vault)}
       />
@@ -361,13 +383,26 @@ const styles = StyleSheet.create({
   },
   blockCard: {
     position: "relative",
-    minHeight: 160,
     padding: 14,
     borderRadius: radii.md,
-    justifyContent: "space-between",
     gap: spacing.sm,
     ...vaultRowShadow,
   },
-  blockTop: { flex: 1, flexDirection: "row", alignItems: "stretch", gap: 10 },
-  blockIdentity: { justifyContent: "space-between", gap: 6, paddingVertical: 2 },
+  blockTop: { flexDirection: "row", alignItems: "flex-start", gap: 10 },
+  blockIdentity: { flex: 1, minWidth: 0, gap: 6 },
+  blockTitleRow: { flexDirection: "row", alignItems: "center", gap: 10, minWidth: 0 },
+  blockTitleText: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  blockMetaRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    flexWrap: "wrap",
+    gap: 8,
+    minWidth: 0,
+  },
 });

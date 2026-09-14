@@ -420,6 +420,7 @@ file_manager_dock_expanded = false
 # vault_list_view = "default"                # optional
 # vault_list_search = ""                     # optional
 # vault_list_show_create_button = true       # optional
+# lifecycle_close_modal_on_submit = false    # optional; close unlock/lock dialog on Confirm
 
 [logging]
 enabled = true
@@ -448,6 +449,7 @@ last_opened_vault = "my-encrypted-notes"
 | `locale` | `[ui].locale` | Yes (Language) | Explicit **Save** in System settings |
 | `theme` | `[ui].theme` | Yes (General) | Explicit **Save** in System settings |
 | `vault_list_show_header_more_button` | `[ui].show_header_more_button` | Yes (General) | Explicit **Save** in System settings. Default `true`. Shows the header overflow (⋮) menu. |
+| `lifecycle_close_modal_on_submit` | `[ui].lifecycle_close_modal_on_submit` | Yes (General) | Explicit **Save** in System settings. Default `false`. When `true`, unlock/lock password dialog closes on Confirm (progress on the row). |
 | `file_manager_dock_expanded` | `[ui].file_manager_dock_expanded` | **No** | When user **expands or collapses** the minimized file-manager dock (bottom-right chip list). Restored on next app launch. Default `false` (collapsed — count button only). |
 | `always_show_hidden_vaults` | `[ui].always_show_hidden_vaults` | Yes (Hidden vaults) | Explicit **Save** in System settings |
 | `vault_list_show_drag` | `[ui].vault_list_show_drag` | Yes (Vault list) | Explicit **Save** in System settings. Default `true`. Shows vertical drag grips on the vault list; off hides grips only (order/sort unchanged). |
@@ -607,23 +609,21 @@ User-facing metadata that is **not** sync state:
 
 #### 3.2.3 Change password
 
-Available in vault settings (**Security** section in UI; stored fields span `[vault]` hint + `[security]` metadata). Works with vault **open or closed** — user **always** enters the **current password** (never inferred from session alone without explicit confirmation in this flow).
+Available in vault settings (**Security** / password area in UI; stored fields span `[vault]` hint + `[security]` metadata). Edit-policy gate is **`vault_closed`** — vault must be **closed** (not open, opening, closing, or recovery). User **always** enters the **current password** (never inferred from session alone).
 
-**Why closed is allowed:** the operation only needs the current password to decrypt the main archive and store, re-encrypt in RAM/disk temp, then atomically replace files. An open session is **not** required.
+**Why closed-only:** rewrap replaces `contents/` keys; an open session must not race mid-rewrap. Recovery is out of this flow (same as `action.change_password` / `change_kdf` in `edit-policy.json`). SDD formerly allowed “open or closed”; that is **deprecated** — see AGENT config edit policy.
 
 | Step | Action |
 |------|--------|
 | 1 | User enters **current password**, **new password**, **confirm new password** (new ≠ current) |
 | 2 | UI shows **`warning.password_change_backups`** — existing `backups/<stamp>/` keep the password from when each snapshot was created |
-| 3 | **`upriv-core`:** validate current password against `contents/` header; re-wrap keys |
-| 4 | **If vault open:** keep user workspace available; decrypt store + workspace path in controlled temp/RAM; do not leave plaintext on disk when `encrypted_dir` |
-| 5 | **If vault closed:** extract archive + store to temp workspace in RAM (or encrypted temp per policy); no user-facing mount required |
-| 6 | **Optional (recommended):** snapshot current main `.7z` into `backups/` **before** replace (uses **old** password — consistent with backup semantics) |
-| 7 | Re-encrypt `contents/` with the **new** password (same atomic flush as close) |
-| 8 | Secure-delete superseded session temp; remove stale plaintext |
-| 9 | Update `persistence.json` hashes / `sync_generation`; set `[security] password_changed_at` (ISO 8601 UTC) |
-| 10 | **If vault was open:** refresh in-memory session with new password; remount FUSE if applicable |
-| 11 | **Do not** re-encrypt or delete existing `backups/` files automatically |
+| 3 | **`upriv-core`:** validate current password against `contents/` header; re-wrap keys (no open session) |
+| 4 | Decrypt/re-encrypt in controlled RAM / encrypted temp only — do not leave plaintext on disk when `encrypted_dir` |
+| 5 | **Optional (recommended):** snapshot current main store into `backups/` **before** replace (uses **old** password — consistent with backup semantics) |
+| 6 | Re-encrypt `contents/` with the **new** password (same atomic flush as close) |
+| 7 | Secure-delete superseded session temp; remove stale plaintext |
+| 8 | Update `persistence.json` hashes / `sync_generation`; set `[security] password_changed_at` (ISO 8601 UTC) |
+| 9 | **Do not** re-encrypt or delete existing `backups/` files automatically |
 
 **Config after change:**
 
@@ -708,7 +708,7 @@ impl ConfigStore {
 | `[auto_close]` | Immediate on timer (recalculate `auto_close_at`) | Immediate |
 | `[security]` (`secure_wipe_workspace`, `wipe_passes`, …) | Next **close** / discard | Immediate if only `mode`; wipe on close |
 | `[vault] password_hint`, `[vault] note`, `[vault] order` | Immediate (UI / list) | Immediate |
-| `[security] password_changed_at` | Set when change-password succeeds | Set when change-password succeeds (open or closed) |
+| `[security] password_changed_at` | Set when change-password succeeds (**vault closed**) | **Blocked** — close vault first (`vault_closed`) |
 | `[vault] id` | Only with **migration flow** (rename folder + `config.toml`) | **Block** — close vault first |
 | `main.toml` `[package]` paths | Next open of any vault | Same |
 
@@ -1160,31 +1160,29 @@ click(Backups|Config)      → stopPropagation; open respective modal
 | **Vault config** | Wide modal | ⚙ button |
 | **Backups** | Medium modal | 💾 button |
 | **Recovery** | Blocking modal | Detection on startup / listing |
-| **Closing** | Overlay + progress | During `7zz` on close |
-| **Opening** | Overlay + progress | During `7zz` test / decrypt / mount on unlock |
+| **Closing** | Row badge + modal (if open) + finite budget | During flush into `contents/` |
+| **Opening** | Row badge + unlock dialog (while open) + finite budget | During Argon2 unlock |
 
-**Open/close/seal pipelines (v1):** one global **FIFO queue** — only one `7zz` (or equivalent) runs at a time; further requests wait. UI may show progress in a blocking overlay first, then **Continue in background** so the list stays usable; queued vaults show `opening` / `closing` on their row until their turn completes. No mid-pipeline cancel (abort would risk inconsistent disk state). Desktop UI implements the FIFO queue in `useVaultPipelineRun`; pipeline steps are still **mock** until `upriv-core` vault RPCs land.
+**Open/close pipelines (v1):** one global **FIFO queue** — only one open/close/create runs at a time; further requests wait. Progress lives on the **row** (and the unlock/lock dialog while it is open); there is **no** blocking full-screen pipeline overlay and no **Continue in background**. Queued vaults show `opening` / `closing` / `creating` until their turn completes. No mid-pipeline cancel (abort would risk inconsistent disk state). Desktop/mobile UI implements the FIFO queue in `useVaultPipelineRun`; live open/close call `vault_open` / `vault_close`.
 
-**Pipeline — erros e anti-travamento (pendente ao wirear `upriv-core`):**
+**Pipeline — erros e anti-travamento:**
 
-| Área | Já existe (mock / infra) | Falta quando for `7zz` real |
-|------|--------------------------|------------------------------|
-| **Fila FIFO** | `useVaultPipelineRun` — enfileira, status `opening`/`closing` na lista | RPC `vault_open` / `vault_close` / `vault_seal` no daemon; progresso por passo vindo do Rust |
-| **Erros user-facing** | `VaultPipelineError` + i18n; overlay + toast; `revertCloseFailure` no close | Espelhar códigos Rust em `VAULT_ERROR_CODES` + `vault-lifecycle/errors/codes.ts`; erros reais (`wrong_password`, `archive_test_failed`, …) |
-| **Sem cancel no meio** | SDD + PRD RF-UI-10 | Manter — abort mid-`7zz` arrisca disco inconsistente |
-| **Cancel na fila** | Não implementado (v1) | Opcional futuro: remover job **antes** de iniciar `7zz`; limpar senha em RAM |
-| **Timeout IPC** | `desktopInvokeRaw` 30s; `daemonRpc` 30s; spawn daemon 10s | **Timeout por operação de vault** no `upriv-core` (open/close podem levar minutos — valor TBD, ex. 30–60 min) |
-| **Kill subprocesso** | `stopDaemon` mata o processo inteiro | Se `7zz` travar: matar **só** o child, devolver `RpcError` estruturado, liberar slot da fila |
-| **Estado após falha** | Close mock reverte `session` | Wrong password / timeout no close **não alteram** `contents/` (PRD); limpar temp/workspace conforme SECURITY-PLAINTEXT (nunca `.7z.new` como rest) |
-| **Fila após erro** | `dismissFailure()` segue para o próximo | Garantir que timeout/kill no Rust também completa o job com erro (não deixa slot ocupado para sempre) |
+| Área | Já existe | Notas |
+|------|-----------|-------|
+| **Fila FIFO** | `useVaultPipelineRun` — enfileira, status `opening`/`closing`/`creating` na lista | RPC `vault_open` / `vault_close` / `vault_create` no daemon |
+| **Erros user-facing** | `VaultPipelineError` + i18n; toast; `revertCloseFailure` no close | Espelhar códigos Rust em `VAULT_ERROR_CODES` |
+| **Sem cancel no meio** | SDD + PRD RF-UI-10 | Manter — abort mid-flush arrisca disco inconsistente |
+| **Timeout IPC** | Budgets `LOADING_BUDGET_MS.vaultPipeline` / `vaultCreate` (10 min) | Alinhados com `CORE_RPC_TIMEOUT_MS` |
+| **Estado após falha** | Close reverte `session` | Wrong password no close **não altera** `contents/` (PRD) |
+| **Fila após erro** | `failureMode: "advance"` segue para o próximo | Não deixa slot ocupado para sempre |
 
-**Checklist implementação (um PR por camada ou PR único coordenado):**
+**Checklist (histórico — open/close live já aterraram):**
 
-1. **Rust:** spawn `7zz` com timeout configurável; códigos de erro estáveis; nunca deixar `.7z` / workspace em estado ambíguo.
-2. **Daemon:** handlers RPC de lifecycle; repassar progresso (evento ou polling) se overlay precisar de passos reais.
-3. **Shared:** `VAULT_ERROR_CODES` deixa de ser `planned`; sync com `upriv-rpc`.
-4. **Desktop:** `createDesktopServices()` delega `runOpeningPipeline` / `runClosingPipeline` ao RPC (substituir `runTimedPipeline` mock).
-5. **Testes:** integração stdio com pipeline que falha (senha errada, timeout simulado); UI não fica `opening`/`closing` eternamente.
+1. ~~Rust: spawn `7zz`…~~ → `contents/` flush + Argon2 unlock em `upriv-core`.
+2. ~~Daemon: handlers RPC de lifecycle~~ → `vault_open` / `vault_close` / `vault_create`.
+3. Shared: manter `VAULT_ERROR_CODES` sync com `upriv-rpc`.
+4. Desktop/mobile: `runOpeningPipeline` / `runClosingPipeline` no RPC live.
+5. Testes: integração + UI não fica `opening`/`closing` eternamente.
 
 No separate Welcome screen in v1; “Open vault” = `--vault` on first run or app bar menu item (future).
 
@@ -1232,7 +1230,7 @@ ui/
 
 #### 8.2.6 Desktop RPC methods (UI)
 
-**Transport (v0.1+):** React calls `desktopInvoke(method, params)` → Electron main → **stdio NDJSON** → `upriv-daemon` → `upriv-rpc` → `upriv_core`. No HTTP, no Tauri `invoke`. Errors: `{ code, message, details? }`. Shell-only: `app_exit`. See `@upriv/shared` `CORE_RPC_COMMANDS` and SDD §8.3.
+**Transport (v0.1+):** React calls `desktopInvoke(method, params)` → Electron main → **stdio NDJSON** → `upriv-daemon` → `upriv-rpc` → `upriv_core`. No HTTP, no Tauri `invoke`. Errors: `{ code, message, details? }`. Shell-only: `app_exit`. See `@upriv/shared` `CORE_RPC_COMMANDS` and SDD §8.3. **Daemon concurrency:** `vault_open` / `vault_create` (Argon2) run on a worker thread so light RPCs (settings, groups, list, close, …) are not blocked on stdin; still **one Argon2 at a time** (worker + core `UNLOCK_GATE`). Responses may complete out of order — Electron matches by request `id`.
 
 In addition to §8.3:
 

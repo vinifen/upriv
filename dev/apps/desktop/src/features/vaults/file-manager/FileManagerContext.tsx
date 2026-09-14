@@ -9,7 +9,11 @@ import {
   type ReactNode,
 } from "react";
 import { useVaultFileSystemService } from "@/platform/services";
-import { isVaultFileManagerEligible, type VaultListItem } from "@upriv/shared";
+import {
+  isVaultFileManagerEligible,
+  isVaultFileManagerRetained,
+  type VaultListItem,
+} from "@upriv/shared";
 import { createDefaultWorkspaceState } from "./lib/fileManagerWorkspaceTypes";
 import type { FileManagerEntry } from "./fileManagerTypes";
 import { vaultWorkspaceReducer, type VaultWorkspaceAction } from "./lib/vaultWorkspaceReducer";
@@ -138,7 +142,7 @@ function fileManagerReducer(state: FileManagerState, action: FileManagerAction):
       return removeEntry(state, action.vaultId);
     case "sync_with_vault_list": {
       const openIds = new Set(
-        action.vaults.filter((vault) => isVaultFileManagerEligible(vault)).map((vault) => vault.id),
+        action.vaults.filter((vault) => isVaultFileManagerRetained(vault)).map((vault) => vault.id),
       );
       const knownIds = new Set(action.vaults.map((vault) => vault.id));
       let next = state;
@@ -204,7 +208,7 @@ export function FileManagerProvider({ children }: { children: ReactNode }) {
   const syncWithVaultList = useCallback(
     (vaults: VaultListItem[]) => {
       const openIds = new Set(
-        vaults.filter((vault) => vault.session === "open").map((vault) => vault.id),
+        vaults.filter((vault) => isVaultFileManagerRetained(vault)).map((vault) => vault.id),
       );
       const knownIds = new Set(vaults.map((vault) => vault.id));
       for (const vaultId of orderRef.current) {

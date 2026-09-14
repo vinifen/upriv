@@ -4,6 +4,8 @@ import type { VaultListItem } from "./types";
 export const STATE_RANK: Record<VaultDisplayStatus, number> = {
   open: 0,
   opening: 1,
+  creating: 1,
+  queued: 1,
   closing: 2,
   closed: 3,
   recovery: 4,

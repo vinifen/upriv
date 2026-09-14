@@ -15,6 +15,10 @@ fn default_true() -> bool {
     true
 }
 
+fn default_false() -> bool {
+    false
+}
+
 /// In-memory app settings matching the TS `AppSettingsConfig` wire shape (snake_case JSON).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AppSettings {
@@ -81,6 +85,9 @@ pub struct UiSettings {
     #[serde(default = "default_true", alias = "allow_drag_vault_into_group")]
     pub vault_list_allow_drag_into_group: bool,
     pub file_manager_dock_expanded: bool,
+    /// Close unlock/lock password dialog on Confirm (progress on the row). Default false.
+    #[serde(default = "default_false")]
+    pub lifecycle_close_modal_on_submit: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -133,6 +140,7 @@ impl Default for AppSettings {
                 vault_list_show_drag: true,
                 vault_list_allow_drag_into_group: true,
                 file_manager_dock_expanded: false,
+                lifecycle_close_modal_on_submit: false,
             },
             logging: LoggingSettings {
                 enabled: true,

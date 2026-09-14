@@ -6,7 +6,7 @@ import { mockServices } from "@/platform/mocks";
 /**
  * Platform service factory.
  *
- * Electron: real vault-root + app-settings RPCs (vault list = mocks in dev until `vault_list`).
+ * Electron: live vault-root, settings, list, create, open/close, and groups.
  * Browser: full in-memory mocks (no `localStorage`; temporary until mocks are removed).
  */
 export function createServices(): AppServices {

@@ -13,7 +13,9 @@ import {
   type ReactNode,
 } from "react";
 import {
+  BackHandler,
   InteractionManager,
+  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -25,6 +27,7 @@ import {
   type TextStyle,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { Icon } from "@/components/icons";
 import { useTheme } from "@/theme";
 import { radii, spacing } from "@/theme/tokens";
 import { useTranslation } from "@/i18n";
@@ -71,11 +74,18 @@ export function useDropdownPanelClose(): () => void {
 export function MenuGroupLabel({
   children,
   style,
+  withClose = false,
 }: {
   children: string;
   style?: StyleProp<TextStyle>;
+  /** Put the panel close control on this section title (filter menus). */
+  withClose?: boolean;
 }) {
   const { colors, typography } = useTheme();
+  const close = useDropdownPanelClose();
+  if (withClose) {
+    return <MenuPanelHeader title={children} onClose={close} />;
+  }
   return (
     <Text
       accessibilityRole="text"
@@ -83,6 +93,36 @@ export function MenuGroupLabel({
     >
       {children}
     </Text>
+  );
+}
+
+/** Title + close — sized to the uppercase caption (desktop `MenuPanelHeader`). */
+function MenuPanelHeader({ title, onClose }: { title: string; onClose: () => void }) {
+  const { colors, typography } = useTheme();
+  const { t } = useTranslation();
+  return (
+    <View style={styles.headerRow}>
+      <Text
+        accessibilityElementsHidden
+        importantForAccessibility="no-hide-descendants"
+        style={[typography.caption, styles.headerTitle, { color: colors.onSurfaceVariant }]}
+        numberOfLines={1}
+      >
+        {title}
+      </Text>
+      <Pressable
+        onPress={onClose}
+        hitSlop={8}
+        accessibilityRole="button"
+        accessibilityLabel={t("action.close")}
+        style={({ pressed }) => [
+          styles.closeBtn,
+          pressed ? { backgroundColor: colors.surfaceContainerHighest } : null,
+        ]}
+      >
+        <Icon name="close" size={12} color={colors.onSurfaceVariant} />
+      </Pressable>
+    </View>
   );
 }
 
@@ -137,6 +177,8 @@ function pickAnchor(
 
 interface MenuSurfaceProps {
   label: string;
+  /** When set (⋮ / settings), show title + close. Filter menus use section `withClose` instead. */
+  title: string | null;
   panelTop: number;
   panelLeft: number;
   panelMinW: number;
@@ -155,6 +197,7 @@ interface MenuSurfaceProps {
  */
 function DropdownMenuSurface({
   label,
+  title,
   panelTop,
   panelLeft,
   panelMinW,
@@ -190,6 +233,13 @@ function DropdownMenuSurface({
     onHeight(next);
   };
 
+  const body = (
+    <PanelCloseContext.Provider value={close}>
+      {title ? <MenuPanelHeader title={title} onClose={close} /> : null}
+      {children}
+    </PanelCloseContext.Provider>
+  );
+
   return (
     <View accessibilityRole="menu" accessibilityLabel={label} style={panelStyle}>
       {needsScroll ? (
@@ -201,11 +251,11 @@ function DropdownMenuSurface({
           style={styles.scroll}
           contentContainerStyle={styles.scrollContent}
         >
-          <PanelCloseContext.Provider value={close}>{children}</PanelCloseContext.Provider>
+          {body}
         </ScrollView>
       ) : (
         <View style={styles.scrollContent} onLayout={onContentLayout}>
-          <PanelCloseContext.Provider value={close}>{children}</PanelCloseContext.Provider>
+          {body}
         </View>
       )}
     </View>
@@ -382,6 +432,7 @@ export function DropdownPanel({
         <ScrimDismiss onDismiss={close} accessibilityLabel={t("action.dismiss")} />
         <DropdownMenuSurface
           label={label}
+          title={heading ?? null}
           panelTop={placed.top}
           panelLeft={placed.left}
           panelMinW={panelMinW}
@@ -392,7 +443,6 @@ export function DropdownPanel({
           visible={contentH > 0}
           onHeight={setContentH}
         >
-          {heading ? <MenuGroupLabel>{heading}</MenuGroupLabel> : null}
           {children}
         </DropdownMenuSurface>
       </View>,
@@ -423,6 +473,15 @@ export function DropdownPanel({
   ]);
 
   useEffect(() => () => setOverlay(null), [setOverlay]);
+
+  useEffect(() => {
+    if (!open) return;
+    const sub = BackHandler.addEventListener("hardwareBackPress", () => {
+      close();
+      return true;
+    });
+    return () => sub.remove();
+  }, [close, open]);
 
   return (
     <View ref={wrapRef} collapsable={false} onLayout={onWrapLayout} style={styles.triggerWrap}>
@@ -455,6 +514,31 @@ const styles = StyleSheet.create({
     flexGrow: 0,
     // Symmetric pad — height hugs items (EN/PT); View path avoids ScrollView clip.
     paddingVertical: spacing.sm,
+  },
+  headerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.xs,
+    paddingLeft: spacing.lg,
+    paddingRight: spacing.sm,
+    paddingVertical: 2,
+  },
+  headerTitle: {
+    flex: 1,
+    minWidth: 0,
+    textTransform: "uppercase",
+    letterSpacing: 1.6,
+    fontSize: 10,
+    fontWeight: "600",
+    opacity: 0.75,
+    fontFamily: "monospace",
+  },
+  closeBtn: {
+    width: 24,
+    height: 24,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: radii.sm,
   },
   groupLabel: {
     paddingHorizontal: spacing.lg,

@@ -8,7 +8,8 @@ import {
   useState,
 } from "react";
 import { AnchoredPopover } from "./AnchoredPopover";
-import { menuGroupLabelClass, menuItemClass, menuPanelClass } from "./menuStyles";
+import { MenuPanelHeader } from "./MenuPanelHeader";
+import { menuItemClass, menuPanelClass } from "./menuStyles";
 
 export interface DropdownMenuItem {
   id: string;
@@ -71,9 +72,7 @@ export function DropdownMenu({ trigger, items, align = "right", label }: Dropdow
         aria-label={label}
         className={["min-w-[12rem] py-1", menuPanelClass].join(" ")}
       >
-        <p className={menuGroupLabelClass} aria-hidden>
-          {label}
-        </p>
+        <MenuPanelHeader title={label} onClose={() => setOpen(false)} />
         <ul>
           {items.map((item) => (
             <li key={item.id} role="none">

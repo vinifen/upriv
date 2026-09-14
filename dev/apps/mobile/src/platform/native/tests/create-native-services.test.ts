@@ -21,7 +21,16 @@ const mockServices = {
     unregisterSettings: vi.fn(async () => undefined),
     getUnlockPreset: vi.fn(async () => undefined),
     setUnlockPreset: vi.fn(async () => undefined),
-    getExportBytes: vi.fn(async () => new Uint8Array()),
+    createVault: vi.fn(async () => ({
+      id: "new",
+      displayName: "New",
+      session: null,
+      storageMode: "encrypted_dir",
+      order: 0,
+      lastAccessedWhen: "—",
+      lastAccessedAt: "",
+      note: "",
+    })),
   },
   vaultGroups: {},
   vaultRoot: {},
@@ -81,6 +90,19 @@ vi.mock("@/lib/rpc", () => ({
   rpcVaultRootSetupDefaultRoot: vi.fn(async () => ({ rootPath: "/tmp" })),
   rpcVaultRootSetupPath: vi.fn(async () => ({ rootPath: "/tmp", aliasPath: "/tmp/.upriv-root" })),
   rpcVaultRootSuggestedCustomPath: vi.fn(async () => "/tmp"),
+  rpcVaultList: vi.fn(async () => []),
+  rpcVaultCreate: vi.fn(),
+  rpcVaultOpen: vi.fn(),
+  rpcVaultClose: vi.fn(),
+  rpcVaultConfigGet: vi.fn(),
+  rpcVaultGroupList: vi.fn(async () => ({ groups: [], invalid: false })),
+  rpcVaultGroupCreate: vi.fn(),
+  rpcVaultGroupUpdate: vi.fn(),
+  rpcVaultGroupDelete: vi.fn(),
+  rpcVaultGroupSetCollapsed: vi.fn(),
+  rpcVaultGroupReorder: vi.fn(),
+  rpcVaultGroupReorderGroupedVaults: vi.fn(),
+  rpcVaultGroupRepair: vi.fn(),
 }));
 
 vi.mock("@/platform/native/pickVaultRootFolder", () => ({
@@ -145,17 +167,39 @@ describe("createNativeServices", () => {
     expect(toSafRpcError).toHaveBeenCalled();
   });
 
-  it("fails loud for vault and lifecycle in release mode", async () => {
+  it("uses live vault list/open adapters in native builds", async () => {
+    safState.activeUri = "";
+    const { createNativeServices } = await importModule(true);
+    const rpc = await import("@/lib/rpc");
+    vi.mocked(rpc.rpcVaultList).mockClear();
+    const services = createNativeServices();
+    await services.vault.listVaults();
+    expect(rpc.rpcVaultList).toHaveBeenCalled();
+    expect(services.lifecycle.validateLifecyclePassword("  secret  ")).toBe(true);
+    expect(services.lifecycle.validateLifecyclePassword("   ")).toBe(false);
+  });
+
+  it("does not call path vault RPCs while a SAF tree is active", async () => {
+    safState.activeUri = "content://tree/old";
+    const { createNativeServices } = await importModule(true);
+    const rpc = await import("@/lib/rpc");
+    vi.mocked(rpc.rpcVaultList).mockClear();
+    vi.mocked(rpc.rpcVaultOpen).mockClear();
+    vi.mocked(rpc.rpcVaultGroupList).mockClear();
+    const services = createNativeServices();
+    await expect(services.vault.listVaults()).resolves.toEqual([]);
+    expect(rpc.rpcVaultList).not.toHaveBeenCalled();
+    await expect(services.vaultGroups.list()).resolves.toEqual({ groups: [], invalid: false });
+    expect(rpc.rpcVaultGroupList).not.toHaveBeenCalled();
+    await expect(
+      services.lifecycle.runOpeningPipeline("notes", () => undefined),
+    ).rejects.toMatchObject({ code: "vault_saf_unavailable" });
+    expect(rpc.rpcVaultOpen).not.toHaveBeenCalled();
+  });
+
+  it("fails loud for import and backups in release mode", async () => {
     const { createNativeServices } = await importModule(false);
     const services = createNativeServices();
-    await expect(services.vault.getSettings("vault-1")).rejects.toMatchObject({
-      code: "not_implemented",
-    });
-    await expect(
-      services.lifecycle.runOpeningPipeline("vault-1", () => undefined),
-    ).rejects.toMatchObject({
-      code: "not_implemented",
-    });
     await expect(services.createVault.testImportPackagePassword("x")).rejects.toMatchObject({
       code: "not_implemented",
     });

@@ -93,9 +93,8 @@ export function useVaultInfoData({
 
     void (async () => {
       try {
-        const [settings, kdfPreset, backups, root] = await Promise.all([
+        const [settings, backups, root] = await Promise.all([
           vaultService.getSettings(current.id),
-          vaultService.getUnlockPreset(current.id),
           backupService.listBackups(current.id),
           vaultRootService.resolve({ vaultRootMode }),
         ]);
@@ -122,13 +121,15 @@ export function useVaultInfoData({
         setSnapshot({
           vault: current,
           settings: settings ?? null,
-          kdfPreset: kdfPreset ?? null,
+          kdfPreset: current.unlockPreset ?? null,
           groupName,
           groupHidden,
           backups,
           runtime,
           passwordInSession,
           workspacePath,
+          // Mount is live only while the list session is open — not during
+          // opening/closing list badges (builder uses displayStatus too).
           workspacePathIsActive: isOpen,
           contentsPath: storePaths.contentsPath,
           backupsPath: storePaths.backupsPath,
@@ -162,6 +163,7 @@ export function useVaultInfoData({
     vault?.lastAccessedWhen,
     vault?.lastAccessedAt,
     vault?.hidden,
+    vault?.unlockPreset,
     groupName,
     groupHidden,
     locale,

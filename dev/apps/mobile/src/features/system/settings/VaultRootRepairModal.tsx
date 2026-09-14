@@ -354,8 +354,7 @@ export function VaultRootRepairModal({
             onChange={handleLocaleChange}
             disabled={busy || picking}
             size="sm"
-            label={t("modal.app_settings.field.locale")}
-            title={t("modal.app_settings.field.locale")}
+            accessibilityLabel={t("modal.app_settings.field.locale")}
           />
         </View>
       }
@@ -521,5 +520,5 @@ const styles = StyleSheet.create({
   },
   options: { gap: spacing.sm },
   chooseOtherCol: { gap: spacing.sm },
-  localeSelect: { minWidth: 128, maxWidth: 176 },
+  localeSelect: { flexShrink: 0, maxWidth: 256 },
 });

@@ -3,15 +3,31 @@ import type { VaultExportRequest, VaultListItem } from "../../domain/vault-list"
 import type { VaultSettingsConfig } from "../../domain/vault-settings";
 import type { VaultRow } from "../../domain/vault";
 
-/** Vault list and per-vault config access (mock or desktop RPC). */
+export interface CreateVaultInput {
+  password: string;
+  unlockPreset?: KdfUnlockPreset;
+  settings: VaultSettingsConfig;
+}
+
+/** Vault list and per-vault config access (native or desktop RPC, or in-memory mock). */
 export interface VaultService {
+  /** Live when `vault_config_save` is wired (desktop/native). */
+  readonly canPersistSettings: boolean;
+  /** Live adapters stay false until `vault_delete` lands. */
+  readonly canDeleteVault: boolean;
+  /** Live adapters stay false until export zip/`.7z` RPC lands. */
+  readonly canExportVault: boolean;
+
   /** All vault rows for the list screen. */
   listVaults(): Promise<VaultListItem[]>;
+
+  /** Scratch create: writes `config.toml` + seeded `contents/` (password is not stored). */
+  createVault(input: CreateVaultInput): Promise<VaultListItem>;
 
   /** Load `vaults/<id>/config.toml` equivalent. */
   getSettings(vaultId: string): Promise<VaultSettingsConfig | undefined>;
 
-  /** Persist settings after save (mock registry or `vault_config_save` RPC). */
+  /** Persist settings (`vault_config_save` — enforces edit-policy on quiet targets). */
   registerSettings(vaultId: string, config: VaultSettingsConfig): Promise<void>;
 
   /** Remove settings on vault delete. */
@@ -19,7 +35,8 @@ export interface VaultService {
 
   /**
    * Argon2id unlock preset from `contents/vault.header` (not `config.toml`).
-   * `undefined` only while the header is still being read or if the probe fails.
+   * Prefer `VaultListItem.unlockPreset` — live adapters do not relist for this field.
+   * `undefined` when the header is missing or the probe is unavailable.
    */
   getUnlockPreset(vaultId: string): Promise<KdfUnlockPreset | undefined>;
 

@@ -14,6 +14,7 @@ export {
   validateCreateVaultStep,
   vaultIdForCreateDraft,
   CREATE_VAULT_PASSWORD_MIN_LENGTH,
+  isLifecyclePasswordPresent,
   isMockLifecyclePasswordValid,
   type CreateVaultValidationCode,
 } from "./validate";

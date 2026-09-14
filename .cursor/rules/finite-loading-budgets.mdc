@@ -11,7 +11,7 @@ Every **blocking** loading / busy / applying overlay in the desktop (and later m
 
 1. Use a **finite** timeout from `LOADING_BUDGET_MS` in `@upriv/shared` (`domain/loading/budget.ts`) — keep Electron invoke timeouts in sync for the same operation.
 2. **Show** the budget to the user (`LoadingBudgetHint` + `useLoadingBudget`): max duration **and** countdown remaining, so the wait never looks endless.
-3. Delay first paint with `LOADING_APPEAR_DELAY_MS` (1s) via `useLoadingBudget().visible` — fast ops must not flash a spinner. Budget/timeout still count from when the op started.
+3. Delay first paint via `useLoadingBudget().visible` — `LOADING_APPEAR_DELAY_MS` (1s) for short budgets; `LOADING_LONG_HINT_APPEAR_DELAY_MS` (10s) for 10-minute budgets so "up to 10 min" does not scare on a fast unlock. Budget/timeout still count from when the op started. Open modal + row share `pipeline.run.startedAt`.
 4. On timeout: **clear** the spinner / applying / `busy` state and offer **retry** (or a clear error). Never leave `applying` / `busy` stuck forever.
 5. Also **invalidate** the in-flight attempt: bump a generation token (`busyGen` on Setup / Repair / Data folder / Alias recovery; `resolveGen` on Gate applying) so a late RPC success cannot re-apply root / `setReady` / clear the timeout error.
 6. Electron **main** must honor the same map: renderer passes `METHOD_TIMEOUT_MS[method]` (CORE values from `@upriv/shared` `CORE_RPC_TIMEOUT_MS`, plus desktop `pick_directory` / `app_exit` / `app_shutdown` in `invoke.ts`) through preload into `daemonRpc` (unmapped methods fall back to 30s — do not leave long vault-root ops on that default).
@@ -25,7 +25,8 @@ Every **blocking** loading / busy / applying overlay in the desktop (and later m
 | `settingsLoad` | 1 min | First settings load overlay |
 | `logs` | 1 min | Logs list / viewer |
 | `vaultRewrap` | 10 min | Vault settings password / KDF change |
-| `vaultPipeline` | 10 min | Open/close overlay (Argon2id unlock + flush) |
+| `vaultCreate` | 10 min | Scratch create in the vault pipeline queue (Argon2id wrap + seed) |
+| `vaultPipeline` | 10 min | Open/close progress (password modal if open + row hint; Argon2id unlock + flush) |
 | `vaultExport` | 10 min | Export zip of `contents/` or portable `.7z` |
 | `settingsSave` | 30 s | Settings Save / workspace path persist (`app_settings_save`) |
 | `default` | 2 min | Generic modal / list work |

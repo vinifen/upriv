@@ -2,7 +2,7 @@
 
 **Product:** portable encrypted vault manager (`contents/` at rest; export a `.zip` of that ciphertext or a `.7z`).  
 **Repo:** monorepo with `dev/` (implementation), `prod-example/` (static vault-root demo — **layout is stale**; see that folder’s README).  
-**Status:** v0.2-beta — **Electron desktop shell**; **vault-root + app settings live** via daemon; vault list / open-close still mock. Next milestone: **`upriv-core` header + chunks**, then open/close into `contents/`.
+**Status:** v0.2-beta — Electron desktop + Expo mobile; vault-root / settings / **vault list + create + open/close** talk to `upriv-core` (`contents/` wrap + index + chunks). File manager / FUSE still mock. Change-password **not** shipped (SECURITY-CRYPTO landmine P0).
 
 When product behavior, security, or on-disk layout is unclear, **read the canonical docs** (below) before inventing behavior. **Rest layout, modes, Seal, backups, export:** [SECURITY-CRYPTO.md](SECURITY-CRYPTO.md) **wins** over stale PRD/SDD sections.
 
@@ -15,7 +15,7 @@ When product behavior, security, or on-disk layout is unclear, **read the canoni
 | Fact | Detail |
 |------|--------|
 | **Product promise** | Default mode never leaves decrypted vault files on HD/SSD (PRD RF-45, RF-49; SDD §2.6). |
-| **`dev/` today** | No vault crypto yet — invariant is **specified, not enforceable**. Disk I/O is settings/paths/logs only. |
+| **`dev/` today** | Vault create/open/close persist **`contents/`** (header wrap, sealed index, chunk files). File manager / FUSE / export / change-password are not the live path yet. Invariant is **specified**; RF-49 still applies to every new I/O. |
 | **`temp/upriv/` (research snapshot)** | FUSE session OK; **close/materialize/password/recovery write full plaintext trees to OS tempfile** via `export_logical_tree` + `create_from_dir`. **Do not port that pattern.** |
 | **Ship blocker** | Real open/close must persist **`contents/`** without a plaintext tree on disk (or tmpfs+noswap+wipe only). Export `.7z` streams logical content. No `DevPlaintext` in user builds. No `7zz -p` on argv. |
 | **Exception** | `upriv_plain` may use real `workspace/` plaintext **with** UI warning + wipe — never confuse with default mode. |
@@ -26,28 +26,27 @@ When product behavior, security, or on-disk layout is unclear, **read the canoni
 
 ## Current development phase (read this first)
 
-We are **past the Tauri → Electron migration** and **past UI/lifecycle scaffolding**. Vault-root discovery/setup and settings persistence talk to **`upriv-daemon`**; vault I/O (list/open/mount) is still mock.
+We are **past the Tauri → Electron migration** and **past UI/lifecycle scaffolding**. Vault-root / settings / **vault list + create + open/close** talk to **`upriv-daemon`**. File manager / FUSE / export / change-password are not live.
 
 | Layer | State in `dev/` (active) |
 |-------|---------------------------|
-| **React UI** | Vault list / lifecycle / file-manager still **mock**; settings + **`VaultRootGate`** / setup / repair use live vault-root + app-settings services |
-| **Mobile UI** | Expo RN: Gate + list + lifecycle/settings/backups/FM; **Expo Go = mocks**; **dev-client = `upriv-ffi`** for vault-root/settings/logs |
+| **React UI** | Vault list / create / open-close live via daemon; **file-manager still mock**; settings + **`VaultRootGate`** / setup / repair use live vault-root + app-settings |
+| **Mobile UI** | Expo RN: Gate + list + lifecycle/settings/backups/FM; **Expo Go = mocks**; **dev-client = `upriv-ffi`** for vault-root/settings/logs/vault I/O |
 | **Electron** | Shell, preload, daemon spawn, IPC timeouts, packaging scaffold |
 | **upriv-rpc / upriv-ffi** | Shared CORE RPC handlers; UniFFI `invoke` + Expo module `modules/upriv-core` |
 | **upriv-daemon** | stdio JSON-RPC — thin wrapper over `upriv-rpc` (same handlers as mobile) |
-| **upriv-core** | `logging` (`Logger` / `log_event` + list/get/delete), `time`, `app_version()`, **`paths/`**, **`config/`** (app settings + vault `config.toml`), **`vault/`** list stub — **no open/close/crypto/7zz yet** |
-| **Integration** | Desktop: `createDesktopServices()` → live root/settings/logs; Mobile: `createServices()` → native if bridge linked, else mocks |
+| **upriv-core** | `logging`, `time`, `app_version()`, **`paths/`**, **`config/`**, **`contents/`** (Argon2id wrap + AES-SIV index + XChaCha chunks), **`vault/`** list / create / open / close |
+| **Integration** | Desktop: `createDesktopServices()` → live root/settings/logs/vaults; Mobile: `createServices()` → native if bridge linked, else mocks |
 
 **What to build next (default order):**
 
-1. `upriv-core`: `vault_list`, domain errors (`wrong_password`, …) — vault-root/paths already landed  
-2. `upriv-rpc` + `CORE_RPC_COMMANDS` + `lib/rpc.ts` for each new handler  
-3. `platform/desktop/` adapters replacing remaining mocks (one RPC at a time)  
-   **Blocking prerequisite for the `vaultService` swap:** Rust `VaultConfig` now models the same TOML sections as TS `VaultSettingsConfig` (`[vault]`, `[storage]`, `[mount]`, `[backup]`, `[security]`, `[auto_close]`, `[seven_zip]`, `[policy]`) with `#[serde(default)]` + serialize round-trip tests. Wire `vault_config_save` / replace mock `registerSettings` next — do **not** reintroduce a partial struct that drops sections. `[kdf]` stays out: unlock cost belongs to `vault.header` (absent preset in `config.toml` means “read it from the header”). Hidden-vault **list/UI** is already covered in `@upriv/shared` `domain/vault-list/tests/hidden-vaults.test.ts` + `VaultConfig` TOML `hidden`; when `vault_list` lands, extend that file (persist flag, `log_event` line has no id/name, open/export of a hidden vault).  
-4. Open/close into `contents/`; export a `.zip` of `contents/` or `.7z` with `7zz` as a **separate** action (timeouts/kill in Rust — see SDD §8.2.2)  
-5. Mount (FUSE / WinFsp) and remaining RPCs from SDD §8.2–8.3  
+1. File manager / FUSE reading **chunk I/O** (already in `contents/`) — no plaintext trees  
+2. Export `.zip` of `contents/` / `.7z` stream (timeouts/kill in Rust — SDD §8.2.2)  
+3. Import / create-from-backup  
+4. Change-password **only after** SECURITY-CRYPTO landmine P0 (chunk AAD vs salt)  
+5. Remaining RPCs from SDD §8.2–8.3  
 
-**Do not** re-implement vault logic in TypeScript or duplicate crypto in `upriv-daemon` / `upriv-ffi` — only `upriv-core`.  
+Vault list / create / open / close + groups are already live. **Do not** re-implement vault logic in TypeScript.  
 **Do not** reimplement vault-root resolution in TS — use existing `vault_root_*` RPCs / `VaultRootService`.  
 **Do not** ship infinite loading overlays — every blocking busy/applying UI uses `LOADING_BUDGET_MS` + visible countdown (`LoadingBudgetHint` / `useLoadingBudget`); on timeout clear state, bump generation tokens (`busyGen` / `resolveGen`), and offer retry. See `.cursor/rules/finite-loading-budgets.mdc`.  
 **Do not** leave **Info** modals stale when changing settings, vault DTOs, root paths, or diagnostics mocks — extend `domain/system-info` / `domain/vault-info` in the same change. See `.cursor/rules/info-modals-sync.mdc`.
@@ -77,7 +76,7 @@ After Gate is **ready** / `settingsOnDisk`, I/O that assumes a valid contentor m
 
 **Settings save:** missing/corrupt target → `Err` (not `wrote: false`). Soft `wrote: false` only for empty `custom_root` path (bootstrap). Pre-root UI (`onDisk: false`) keeps prefs in memory without requiring a disk write.
 
-**Case C** wire/type is reserved; vault open/list RPCs are still stub — do not invent Gate reopen for vault-layer errors when those land.
+**Case C:** `vault_not_found` when the root is valid but `vaults/<id>` is gone — toast + invalidate that vault; **do not** reopen Gate.
 
 **Taxonomy is layered / extensible** — A/B/C are the presence spine, not a closed set:
 
@@ -99,8 +98,8 @@ The repo may contain **`temp/upriv/`** on disk — a **frozen snapshot of an old
 | Aspect | `temp/upriv/` (snapshot) | `dev/` (active) |
 |--------|------------------------|-----------------|
 | Desktop shell | Tauri 2 (`src-tauri/`) | Electron + `upriv-daemon` |
-| `upriv-core` | Large — vault, crypto, `seven_zip`, mount, session, … | Minimal scaffold |
-| UI wiring | Often **real** Tauri commands | **Mocks** until RPC port |
+| `upriv-core` | Large — vault, crypto, `seven_zip`, mount, session, … | Growing: paths, config, `contents/` crypto, vault list/create/open/close. No FUSE/export/rewrap yet |
+| UI wiring | Often **real** Tauri commands | Live root/settings/list/create/open/close; FM / export / change-password still mock or blocked |
 | Code quality | Grew fast; **inconsistent, shortcuts, debt** | Intentional boundaries, reviews, typed errors |
 
 **How agents may use `temp/`:**
@@ -221,7 +220,7 @@ upriv/
 | **Mobile FFI** | `dev/crates/upriv-ffi/` | UniFFI `invoke` / `app_version` | UI |
 | **Core** | `dev/crates/upriv-core/` | Crypto, 7z, paths, state machine, FUSE, recovery | Depend on Electron |
 
-**Desktop UI prototype (`dev/apps/desktop/`, mock layer):** vault list, lifecycle, file manager, settings, and help run on in-memory mocks until `upriv-daemon`/`upriv-core` wiring. **Logs** use live `log_*` RPC when desktop. Notable conventions:
+**Desktop UI:** Electron (`createDesktopServices`) talks to `upriv-daemon` for vault-root, settings, logs, vault list/create/open/close, groups, and `vault_config_save`. **Vite browser** still uses in-memory mocks. File manager / FUSE / export / import stay mock or `not_implemented`. Notable conventions:
 
 - **Pipeline:** `useVaultPipelineRun` enforces SDD §8.2.2 — one open/close at a time (`isRunning`). No Seal.
 - **Auto-close:** at most one close per idle tick; warn toast once per vault per idle cycle; respects `isPipelineRunning`.
@@ -229,7 +228,7 @@ upriv/
 - **Hidden until wired:** `close_on_app_exit` UI not exposed yet (`before-quit` runs daemon shutdown; vault `close_all` RPC still TODO).
 - **Feature module boundaries:** each `features/vaults/*` and `features/system/*` folder has one `index.ts` — see [`dev/apps/desktop/README.md`](../dev/apps/desktop/README.md).
 
-Replace mocks with `desktopInvoke()` → `upriv-daemon` → `upriv-core` before shipping crypto; do not treat JS `Map` passwords as production architecture.
+Electron already uses `desktopInvoke()` → `upriv-daemon` → `upriv-core` for list/create/open/close. Vite browser still mocks. Do not treat the renderer password `Map` as the unlock store — session keys live in `upriv-core`.
 
 ### Data flow
 
@@ -253,7 +252,7 @@ Rest layout and crypto bar: [`SECURITY-CRYPTO.md`](SECURITY-CRYPTO.md). No Seal,
 upriv-core/src/
 ├── lib.rs
 ├── config/       # app settings.toml + vaults/*/config.toml (load)
-├── vault/        # list stub; open/close/recovery next
+├── vault/        # list / create / open / close (recovery / rewrap later)
 ├── seven_zip/    # 7zz wrapper (export/import .7z only — not rest)
 ├── session/      # RAM session, security modes
 ├── recovery/     # dirty close / leftover upriv_plain workspace
@@ -350,6 +349,10 @@ When selecting an already-valid vault-root, **do not change** that folder’s `.
 
 Pre-root UI prefs are carried by the **bootstrap prefs bag** — a named payload distinct from the vault-root directory: `VaultRootBootstrapPrefs` in Rust (`upriv-core`) and TS (`@upriv/shared`), nested under `bootstrap` on the daemon wire (never a top-level peer of `path` / `replaceIncomplete`). Today the only pre-root pref is UI locale (Gate selector); future entries (theme, high-contrast, etc.) extend the same bag without renaming setup APIs. Bootstrap prefs seed the new `settings.toml` **only when creating** a new `.upriv` (or incomplete→replace) — the daemon ignores them on a Valid target so opening never rewrites another vault-root's UI prefs. **System settings** Save edits the **active** root only; switch/create data folder via the vault-list **⋯ → Data folder** modal (not inside System settings).
 
+**Data folder switch:** UI blocks apply while any vault is not `closed` / `recovery` (also `opening` / `closing` / `creating`). Modal stays open read-only — no bulk-close. Core refuses `vault_root_setup_*` with `vault_root_busy` while a session is open, mid-close flush, or Argon2 unlock/create holds the process gate.
+
+**Config edit policy:** `@upriv/shared` `domain/edit-policy` (contract `edit-policy.json`) is the table for what may change while a vault is busy (`anytime` / `vault_quiet` / `vault_closed` / `root_idle` / `no_open_session`). Hybrid default: list/next-close prefs anytime; `display_name` / mount / storage / `security.mode` need quiet (no open/opening/closing; recovery OK; **creating and queued-open are still quiet** at this gate); change-password / KDF need **strictly closed** (not recovery). App targets stay coarse (`ui` / `logging` / …) until fine field locks are needed. SDD §3.2.3 “open or closed” for rewrap is **deprecated**. Rewrap still unavailable in core until SECURITY-CRYPTO P0. **Rust** `save_vault_config_checked` / RPC `vault_config_save` refuse quiet-gated field changes while the session is open, mid-close, or Argon2 is in flight (`vault_config_busy`) — same targets as `rustConfigSaveQuietTargets` in the JSON contract (UI may also refuse edits while list status is **opening** — that is pipeline UX, not the quiet predicate). Quiet gate allows creating/queued-open; waiting close/create keep `closing`/`creating` badges (not the `queued` label). Row UI usually hides settings while pipeline-busy. Locked-field copy comes from `lockedI18n` in that contract (`vaultConfigEditLockedI18nKey`).
+
 ---
 
 ## v1 implementation order (SDD §14)
@@ -368,7 +371,7 @@ Work in this order unless the user explicitly reprioritizes:
 8. Windows packaging (`7zz`, `.exe`, WinFsp deps)  
 9. Later: macOS, RN Android, iOS  
 
-Current scaffold: **UI + Electron shell done on mocks**; **Rust vault step 1** (`config`, `vault_list`, errors) is the active milestone — see § Current development phase.
+Current scaffold: vault list / create / open / close + groups + `vault_config_save` are live on Electron and native FFI (filesystem vault-root only). **Next:** file manager / FUSE over `contents/` chunk I/O, then export / import. See § Current development phase. **Do not** re-implement list/create/open/close in TypeScript.
 
 **Deferred (vault list UX already stubbed):** OS `.zip` of `contents/` / `.7z` drop / import opens the create wizard with Import pre-filled (name + Electron `File.path` when present). Still needed: native file picker, daemon copy into vault-root, real header/format probe (replace mock `selectImportPackageForProbe`).
 
@@ -443,7 +446,7 @@ Rust `paths::` uses `std::fs::Path` — SAF `content://` URIs are handled **outs
 - **TOML semantics:** stay in Rust via two RAM-only RPCs — `app_settings_parse_toml` / `app_settings_serialize_toml` (in `upriv-core::config::app_settings`, wired in `upriv-rpc`). Kotlin moves bytes, Rust owns schema. `[app].last_opened_vault` is on the wire (`AppSettings.app`) and always written (empty allowed); shown in System Settings → Workspace.
 - **Service adapter:** `createNativeServices` wraps `VaultRootService` / `AppSettingsService` so SAF-active mode calls the Kotlin bridge, otherwise falls back to the existing Rust RPCs. Default-root and non-SAF filesystem paths behave exactly as before.
 - **UI:** `VaultRootDataFolderModal` Apply now accepts `content://`; the previous `error_saf_not_ready` block is gone and replaced with a neutral `saf_notice` hint.
-- **Still not SAF-backed:** vault open/close/mount (`encrypted_dir` FUSE / archive) — those layers do not exist yet in `dev/`. USB OTG / Documents work today for **setup + resolve + settings**; when vault I/O lands it must either mount via SAF-aware storage or route through a proper `VaultStorage` implementation. Do **not** introduce a “copy SAF tree to filesDir” shortcut — that would spill plaintext.
+- **Still not SAF-backed:** `vault_*` / `vault_group_*` use `discover_bootstrap_root()` (`std::fs`). A SAF `content://` tree is Kotlin `DocumentFile` only. Native adapters **must not** call those path RPCs while `safGetActiveUri()` is set (empty list / `vault_saf_unavailable`). USB OTG / Documents work today for **setup + resolve + settings.toml**. Vault I/O on SAF needs a `VaultStorage` (or equivalent) — **do not** copy the tree to `filesDir`. FUSE/mount is desktop-only and still mock.
 
 ---
 

@@ -40,7 +40,7 @@ describe("changeKdfFormCanSubmit", () => {
         password: "secret",
         nextPreset: "1gib",
         currentPreset: "256mib",
-        vaultOpen: false,
+        vaultListStatus: "closed",
       }),
     ).toBe(true);
     expect(
@@ -48,7 +48,7 @@ describe("changeKdfFormCanSubmit", () => {
         password: "secret",
         nextPreset: "256mib",
         currentPreset: "256mib",
-        vaultOpen: false,
+        vaultListStatus: "closed",
       }),
     ).toBe(false);
     expect(
@@ -56,7 +56,15 @@ describe("changeKdfFormCanSubmit", () => {
         password: "secret",
         nextPreset: "1gib",
         currentPreset: "256mib",
-        vaultOpen: true,
+        vaultListStatus: "open",
+      }),
+    ).toBe(false);
+    expect(
+      changeKdfFormCanSubmit({
+        password: "secret",
+        nextPreset: "1gib",
+        currentPreset: "256mib",
+        vaultListStatus: "recovery",
       }),
     ).toBe(false);
     expect(
@@ -64,7 +72,7 @@ describe("changeKdfFormCanSubmit", () => {
         password: "",
         nextPreset: "1gib",
         currentPreset: "256mib",
-        vaultOpen: false,
+        vaultListStatus: "closed",
       }),
     ).toBe(false);
   });
@@ -118,6 +126,7 @@ describe("changePasswordFormCanSubmit", () => {
         currentPassword: "old",
         newPassword: "new-secret",
         confirmPassword: "new-secret",
+        vaultListStatus: "closed",
       }),
     ).toBe(true);
     expect(
@@ -125,6 +134,7 @@ describe("changePasswordFormCanSubmit", () => {
         currentPassword: "",
         newPassword: "new-secret",
         confirmPassword: "new-secret",
+        vaultListStatus: "closed",
       }),
     ).toBe(false);
     expect(
@@ -132,6 +142,7 @@ describe("changePasswordFormCanSubmit", () => {
         currentPassword: "old",
         newPassword: "new-secret",
         confirmPassword: "other",
+        vaultListStatus: "closed",
       }),
     ).toBe(false);
     expect(
@@ -139,6 +150,7 @@ describe("changePasswordFormCanSubmit", () => {
         currentPassword: "same",
         newPassword: "same",
         confirmPassword: "same",
+        vaultListStatus: "closed",
       }),
     ).toBe(false);
     expect(
@@ -146,7 +158,24 @@ describe("changePasswordFormCanSubmit", () => {
         currentPassword: "old",
         newPassword: "new-secret",
         confirmPassword: "new-secret",
+        vaultListStatus: "closed",
         submitting: true,
+      }),
+    ).toBe(false);
+    expect(
+      changePasswordFormCanSubmit({
+        currentPassword: "old",
+        newPassword: "new-secret",
+        confirmPassword: "new-secret",
+        vaultListStatus: "open",
+      }),
+    ).toBe(false);
+    expect(
+      changePasswordFormCanSubmit({
+        currentPassword: "old",
+        newPassword: "new-secret",
+        confirmPassword: "new-secret",
+        vaultListStatus: "recovery",
       }),
     ).toBe(false);
   });

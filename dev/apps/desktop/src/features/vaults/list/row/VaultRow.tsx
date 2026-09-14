@@ -1,16 +1,21 @@
 import { useMemo, useRef } from "react";
 import { Icon } from "@/components/icons";
+import { LoadingBudgetHint } from "@/components/ui";
 import { useTranslation } from "@/i18n";
 import {
   resolveVaultListStatus,
+  isVaultListRowActivatable,
+  isVaultListRowUnlockTarget,
+  vaultPipelineRowBudget,
   vaultDisplayLetters,
+  vaultLastAccessedLabel,
   vaultRowChrome,
   type VaultListViewMode,
   type VaultListItem,
   type VaultSettingsAreaId,
 } from "@upriv/shared";
 import type { VaultPipelineListStatus } from "./VaultList";
-import { vaultStatusIconClass, vaultStatusRowClass } from "@/theme";
+import { vaultStatusIconClass, vaultStatusI18nKey, vaultStatusRowClass } from "@/theme";
 import { useElementWidth } from "@/hooks/useElementWidth";
 import { vaultListDropOverClass } from "../lib/dropOverClass";
 import { vaultListDropKeyProps } from "../lib/listDropKey";
@@ -24,6 +29,7 @@ import { VaultStatusBadge } from "./VaultStatusBadge";
 import { vaultRowDensityClass } from "../lib/vaultListView";
 import type { VaultListPointerDragHandlers } from "./vaultListPointerDrag";
 import { useAppSettingsContext } from "@/features/system/settings";
+import { useLoadingBudget } from "@upriv/shared/react";
 
 interface VaultRowProps {
   vault: VaultListItem;
@@ -43,7 +49,6 @@ interface VaultRowProps {
   onOpenVaultInfo: (vaultId: string) => void;
   onOpenSettings: (vaultId: string, area: VaultSettingsAreaId) => void;
   onExportVault: (vault: VaultListItem) => void;
-  onOpenFolder: (vault: VaultListItem) => void;
   onOpenFileManager: (vault: VaultListItem) => void;
   onLockVault: (vault: VaultListItem) => void;
   onUnlockVault: (vault: VaultListItem) => void;
@@ -72,12 +77,11 @@ export function VaultRow({
   onOpenVaultInfo,
   onOpenSettings,
   onExportVault,
-  onOpenFolder,
   onOpenFileManager,
   onLockVault,
   onUnlockVault,
 }: VaultRowProps) {
-  const { t } = useTranslation();
+  const { t, locale } = useTranslation();
   const { settings: appSettings } = useAppSettingsContext();
   const status = resolveVaultListStatus(vault, pipelineListStatus);
   const isOpen = status === "open";
@@ -89,14 +93,19 @@ export function VaultRow({
   const estimatedWidth = useMemo(listWidthEstimate, []);
   const rowWidth = useElementWidth(articleRef, estimatedWidth);
   const comfortable = vaultRowChrome(rowWidth) === "comfortable";
-  const lastAccessedLabel = t("vault.last_accessed", { when: vault.lastAccessedWhen });
+  const lastAccessedWhen = vaultLastAccessedLabel(vault, locale);
+  const lastAccessedLabel = t("vault.last_accessed", { when: lastAccessedWhen });
+  const rowBudget = vaultPipelineRowBudget(status, pipelineListStatus, vault.id);
+  const openingBudget = useLoadingBudget(rowBudget.active, rowBudget.budgetMs, {
+    startedAt: rowBudget.startedAt,
+  });
 
   const openOrUnlock = () => {
     if (isReorderActive || isDragging) return;
     if (isOpen) onOpenFileManager(vault);
-    else if (status === "closed" || status === "recovery") onUnlockVault(vault);
+    else if (isVaultListRowUnlockTarget(status)) onUnlockVault(vault);
   };
-  const rowActivates = isOpen || status === "closed" || status === "recovery";
+  const rowActivates = isVaultListRowActivatable(status);
 
   return (
     <article
@@ -128,8 +137,10 @@ export function VaultRow({
       aria-label={
         isOpen
           ? t("action.open_upriv")
-          : status === "closed" || status === "recovery"
-            ? t("action.unlock")
+          : isVaultListRowUnlockTarget(status)
+            ? status === "closed" || status === "recovery"
+              ? t("action.unlock")
+              : t(vaultStatusI18nKey[status])
             : undefined
       }
     >
@@ -172,17 +183,25 @@ export function VaultRow({
             </h3>
             <div className="flex min-w-0 items-center gap-2">
               <VaultStatusBadge status={status} />
-              <span
-                className="flex min-w-0 items-center gap-1 text-xs text-on-surface-variant"
-                title={lastAccessedLabel}
-              >
-                {!comfortable ? (
-                  <Icon name="clock" size={12} className="shrink-0 text-on-surface-variant" />
-                ) : null}
-                <span className="min-w-0 truncate">
-                  {comfortable ? lastAccessedLabel : vault.lastAccessedWhen}
+              {openingBudget.visible ? (
+                <LoadingBudgetHint
+                  budgetMs={openingBudget.budgetMs}
+                  remainingMs={openingBudget.remainingMs}
+                  layout="inline"
+                />
+              ) : (
+                <span
+                  className="flex min-w-0 items-center gap-1 text-xs text-on-surface-variant"
+                  title={lastAccessedLabel}
+                >
+                  {!comfortable ? (
+                    <Icon name="clock" size={12} className="shrink-0 text-on-surface-variant" />
+                  ) : null}
+                  <span className="min-w-0 truncate">
+                    {comfortable ? lastAccessedLabel : lastAccessedWhen}
+                  </span>
                 </span>
-              </span>
+              )}
             </div>
           </div>
         </div>
@@ -203,7 +222,6 @@ export function VaultRow({
           onOpenVaultInfo={onOpenVaultInfo}
           onOpenSettings={onOpenSettings}
           onExportVault={onExportVault}
-          onOpenFolder={onOpenFolder}
           onOpenFileManager={onOpenFileManager}
           onLockVault={onLockVault}
           onUnlockVault={onUnlockVault}

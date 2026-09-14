@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   canSubmitCreateVault,
+  isLifecyclePasswordPresent,
   isMockLifecyclePasswordValid,
   validateCreateVaultStep,
   validateAllCreateVaultSteps,
@@ -14,14 +15,20 @@ describe("validateCreateVaultStep", () => {
     ).toEqual(["source_missing"]);
   });
 
-  it("requires import file name for import source", () => {
+  it("refuses import source until copy RPC exists", () => {
     expect(
       validateCreateVaultStep(
         "source",
-        createVaultDraftFixture([], { source: "import", importFileName: "" }),
+        createVaultDraftFixture([], { source: "import", importFileName: "backup.zip" }),
         [],
       ),
-    ).toContain("import_file_missing");
+    ).toContain("import_not_available");
+    expect(
+      canSubmitCreateVault(
+        createVaultDraftFixture([], { source: "import", importFileName: "backup.zip" }),
+        [],
+      ),
+    ).toBe(false);
   });
 
   it("rejects duplicate vault id on identity step", () => {
@@ -44,48 +51,38 @@ describe("validateCreateVaultStep", () => {
     ).toContain("password_mismatch");
   });
 
-  it("rejects passwords shorter than 4 characters", () => {
+  it("allows short and reserved mock passwords on live create", () => {
     expect(
       validateCreateVaultStep(
         "password",
         createVaultDraftFixture([], { password: "abc", passwordConfirm: "abc" }),
         [],
       ),
-    ).toContain("password_too_short");
-  });
-
-  it("measures create-vault password length after trim", () => {
-    expect(
-      validateCreateVaultStep(
-        "password",
-        createVaultDraftFixture([], { password: "  ab", passwordConfirm: "  ab" }),
-        [],
-      ),
-    ).toContain("password_too_short");
-    expect(
-      validateCreateVaultStep(
-        "password",
-        createVaultDraftFixture([], { password: "  abcd  ", passwordConfirm: "  abcd  " }),
-        [],
-      ),
     ).toEqual([]);
-  });
-
-  it("rejects the prototype reserved password on scratch create", () => {
     expect(
       validateCreateVaultStep(
         "password",
         createVaultDraftFixture([], { password: "wrong", passwordConfirm: "wrong" }),
         [],
       ),
-    ).toContain("password_wrong");
+    ).toEqual([]);
+  });
+
+  it("measures create-vault empty-detect with trim only", () => {
     expect(
       validateCreateVaultStep(
         "password",
-        createVaultDraftFixture([], { password: "  wrong  ", passwordConfirm: "  wrong  " }),
+        createVaultDraftFixture([], { password: "  ab", passwordConfirm: "  ab" }),
         [],
       ),
-    ).toContain("password_wrong");
+    ).toEqual([]);
+    expect(
+      validateCreateVaultStep(
+        "password",
+        createVaultDraftFixture([], { password: "   ", passwordConfirm: "   " }),
+        [],
+      ),
+    ).toContain("password_empty");
   });
 
   it("requires validated password on import password step", () => {
@@ -184,6 +181,14 @@ describe("canSubmitCreateVault", () => {
     expect(canSubmitCreateVault(draft, [], [], null)).toBe(false);
   });
 
+  it("refuses upriv_plain until wipe exists", () => {
+    const draft = createVaultDraftFixture([], {
+      storage: { mode: "upriv_plain" },
+    });
+    expect(validateCreateVaultStep("advanced", draft, [])).toContain("plain_not_available");
+    expect(canSubmitCreateVault(draft, [])).toBe(false);
+  });
+
   it("still submits when mount is default", () => {
     const draft = createVaultDraftFixture([], {
       mount: { workspace_path: "default" },
@@ -205,5 +210,18 @@ describe("isMockLifecyclePasswordValid", () => {
     ["  wrong  ", false],
   ])("%j → %s", (password, expected) => {
     expect(isMockLifecyclePasswordValid(password)).toBe(expected);
+  });
+});
+
+describe("isLifecyclePasswordPresent", () => {
+  it.each([
+    ["pass", true],
+    ["  abcd  ", true],
+    ["  ab", true],
+    ["wrong", true],
+    ["", false],
+    ["   ", false],
+  ])("%j → %s", (password, expected) => {
+    expect(isLifecyclePasswordPresent(password)).toBe(expected);
   });
 });

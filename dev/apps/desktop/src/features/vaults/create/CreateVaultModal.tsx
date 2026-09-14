@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Button, Modal } from "@/components/ui";
 import { useAppSettingsContext } from "@/features/system/settings";
 import { useTranslation } from "@/i18n";
+import { desktopErrorI18nKey } from "@/lib/errorMessages";
 import { useCreateVaultService, useVaultRootService } from "@/platform/services";
 import {
   NO_VAULT_GROUPS,
@@ -11,9 +12,9 @@ import {
   type CreateVaultStepId,
   type VaultGroup,
 } from "@upriv/shared";
+import { useCreateVaultWizard } from "@upriv/shared/react";
 import { CreateVaultStepNav } from "./CreateVaultStepNav";
 import { renderCreateVaultStep } from "./createVaultSteps";
-import { useCreateVaultWizard } from "@upriv/shared/react";
 
 interface CreateVaultModalProps {
   open: boolean;
@@ -23,7 +24,7 @@ interface CreateVaultModalProps {
   initialDraft?: CreateVaultDraft | null;
   initialStep?: CreateVaultStepId | null;
   onClose: () => void;
-  onCreate: (result: CreateVaultResult) => void;
+  onCreate: (result: CreateVaultResult, password: string) => void;
 }
 
 export function CreateVaultModal({
@@ -41,6 +42,7 @@ export function CreateVaultModal({
   const { settings: appSettings, showHiddenVaultsSession } = useAppSettingsContext();
   const vaultRootService = useVaultRootService();
   const [resolvedRootPath, setResolvedRootPath] = useState<string | null>(null);
+  const [createError, setCreateError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) {
@@ -110,6 +112,10 @@ export function CreateVaultModal({
     stepFocus,
   } = wizard;
 
+  useEffect(() => {
+    if (!open) setCreateError(null);
+  }, [open]);
+
   if (!open) return null;
 
   const footer = (
@@ -118,6 +124,8 @@ export function CreateVaultModal({
         <div className="text-sm" aria-live="polite">
           {discardConfirmOpen ? (
             <p className="text-on-surface-variant">{t("modal.settings.discard_confirm")}</p>
+          ) : createError ? (
+            <p className="text-on-error-container">{createError}</p>
           ) : null}
         </div>
         {!discardConfirmOpen ? (
@@ -144,7 +152,19 @@ export function CreateVaultModal({
               {t("action.cancel")}
             </Button>
             {isLastStep ? (
-              <Button variant="primary" size="md" disabled={!canCreate} onClick={handleCreate}>
+              <Button
+                variant="primary"
+                size="md"
+                disabled={!canCreate}
+                onClick={() => {
+                  setCreateError(null);
+                  try {
+                    void handleCreate();
+                  } catch (error) {
+                    setCreateError(t(desktopErrorI18nKey(error)));
+                  }
+                }}
+              >
                 {t("vault.create.action.create")}
               </Button>
             ) : (

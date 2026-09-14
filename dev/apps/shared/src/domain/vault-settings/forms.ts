@@ -1,3 +1,5 @@
+import { configEditGateAllows } from "../edit-policy/policy";
+import type { VaultDisplayStatus } from "../vault/types";
 import { kdfPresetIsDowngrade, type KdfUnlockPreset } from "./kdf";
 
 export interface ChangePasswordFieldsState {
@@ -33,9 +35,14 @@ export function changePasswordFormCanSubmit(fields: {
   currentPassword: string;
   newPassword: string;
   confirmPassword: string;
+  /** Rewrap requires `vault_closed` (recovery blocked). */
+  vaultListStatus: VaultDisplayStatus;
   submitting?: boolean;
 }): boolean {
   if (fields.submitting) return false;
+  if (!configEditGateAllows("vault_closed", { vaultStatus: fields.vaultListStatus })) {
+    return false;
+  }
   const passwordsMatch =
     fields.newPassword.length > 0 && fields.newPassword === fields.confirmPassword;
   return (
@@ -60,10 +67,14 @@ export function changeKdfFormCanSubmit(fields: {
   password: string;
   nextPreset: KdfUnlockPreset;
   currentPreset: KdfUnlockPreset;
-  vaultOpen: boolean;
+  /** Rewrap requires `vault_closed`. */
+  vaultListStatus: VaultDisplayStatus;
   submitting?: boolean;
 }): boolean {
-  if (fields.submitting || fields.vaultOpen) return false;
+  if (fields.submitting) return false;
+  if (!configEditGateAllows("vault_closed", { vaultStatus: fields.vaultListStatus })) {
+    return false;
+  }
   if (fields.password.length === 0) return false;
   return fields.nextPreset !== fields.currentPreset;
 }

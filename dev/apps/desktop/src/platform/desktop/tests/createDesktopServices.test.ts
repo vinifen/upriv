@@ -1,13 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { createDesktopServices } from "../createDesktopServices";
 import { desktopVaultGroupService } from "../services/vaultGroupService";
+import { desktopVaultLifecycleService } from "../services/vaultLifecycleService";
+import { desktopVaultService } from "../services/vaultService";
 import { mockServices } from "@/platform/mocks";
 
 describe("createDesktopServices", () => {
-  it("keeps vault groups on the mock until vault_list", () => {
+  it("uses live vault, lifecycle, and group adapters", () => {
     const services = createDesktopServices();
-    expect(services.vaultGroups).toBe(mockServices.vaultGroups);
-    expect(services.vaultGroups).not.toBe(desktopVaultGroupService);
+    expect(services.vault).toBe(desktopVaultService);
+    expect(services.lifecycle).toBe(desktopVaultLifecycleService);
+    expect(services.vaultGroups).toBe(desktopVaultGroupService);
   });
 
   it("uses live vault-root, settings, and logs adapters", () => {
@@ -15,7 +18,7 @@ describe("createDesktopServices", () => {
     expect(services.vaultRoot).not.toBe(mockServices.vaultRoot);
     expect(services.appSettings).not.toBe(mockServices.appSettings);
     expect(services.logs).not.toBe(mockServices.logs);
-    expect(services.lifecycle).toBe(mockServices.lifecycle);
     expect(services.filesystem).toBe(mockServices.filesystem);
+    expect(services.vaultSecurity).not.toBe(mockServices.vaultSecurity);
   });
 });

@@ -10,10 +10,13 @@ import {
   resolveVaultMountPoint,
   runTimedPipeline,
   WORKSPACE_PATH_DEFAULT,
+  DEFAULT_KDF_UNLOCK_PRESET,
   type AppLogFile,
   type AppServices,
   type AppSettingsLoadResult,
+  type CreateVaultInput,
   type VaultBackupEntry,
+  type VaultListItem,
   type VaultPipelineError as VaultPipelineErrorType,
   type VaultRootMode,
   type VaultSettingsConfig,
@@ -44,7 +47,12 @@ import {
   recordMockVaultOpened,
   setMockVaultUnlockPreset,
 } from "@upriv/shared/testing";
-import { MOCK_VAULTS, knownMockVaultIds } from "./data/vaults";
+import {
+  MOCK_VAULTS,
+  knownMockVaultIds,
+  registerMockVaultId,
+  unregisterMockVaultId,
+} from "./data/vaults";
 import { MOCK_VAULT_GROUPS } from "./data/vaultGroups";
 import { MOCK_ALIAS_URI, MOCK_DEFAULT_ANCHOR, MOCK_VAULT_ROOT_URI } from "./data/paths";
 import {
@@ -179,17 +187,47 @@ function appendMockLogEvent(event: string) {
  * Paths use `content://upriv.mock/...` stubs (SAF-shaped), not desktop FS paths.
  */
 export function createMobileMockServices(): AppServices {
+  const extraCreatedVaults: VaultListItem[] = [];
   return {
     vault: {
+      canPersistSettings: true,
+      canDeleteVault: true,
+      canExportVault: true,
       async listVaults() {
-        return MOCK_VAULTS.map((v) => {
+        return [...MOCK_VAULTS, ...extraCreatedVaults].map((v) => {
           const settings = getMockVaultSettings(v.id);
           return {
             ...v,
             order: settings.vault.order,
             hidden: settings.vault.hidden,
+            unlockPreset: getMockVaultUnlockPreset(v.id),
           };
         });
+      },
+      async createVault(input: CreateVaultInput) {
+        const id = input.settings.vault.id.trim();
+        const settings = { ...input.settings, vault: { ...input.settings.vault, id } };
+        registerMockVaultSettings(settings);
+        const unlockPreset = input.unlockPreset ?? DEFAULT_KDF_UNLOCK_PRESET;
+        setMockVaultUnlockPreset(id, unlockPreset);
+        const item: VaultListItem = {
+          id,
+          displayName: settings.vault.display_name,
+          session: null,
+          storageMode: settings.storage.mode,
+          order: settings.vault.order,
+          lastAccessedWhen: "—",
+          lastAccessedAt: new Date().toISOString(),
+          note: settings.vault.note,
+          passwordHint: settings.vault.password_hint || undefined,
+          hidden: settings.vault.hidden,
+          unlockPreset,
+        };
+        const existing = extraCreatedVaults.findIndex((row) => row.id === item.id);
+        if (existing >= 0) extraCreatedVaults.splice(existing, 1);
+        extraCreatedVaults.push(item);
+        registerMockVaultId(item.id);
+        return item;
       },
       async getSettings(vaultId) {
         return getMockVaultSettings(vaultId);
@@ -200,6 +238,9 @@ export function createMobileMockServices(): AppServices {
       async unregisterSettings(vaultId) {
         unregisterMockVaultSettings(vaultId);
         clearMockVaultUnlockPreset(vaultId);
+        const index = extraCreatedVaults.findIndex((row) => row.id === vaultId);
+        if (index >= 0) extraCreatedVaults.splice(index, 1);
+        unregisterMockVaultId(vaultId);
       },
       async getUnlockPreset(vaultId) {
         return getMockVaultUnlockPreset(vaultId);

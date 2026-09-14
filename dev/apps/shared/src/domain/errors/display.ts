@@ -27,6 +27,9 @@ export function errorDisplayI18nKey(error: unknown): I18nKey | null {
   if (isRpcError(error) && error.code === VAULT_ROOT_ERROR_CODES.IO_ERROR) {
     return vaultRootErrorI18nKey(VAULT_ROOT_ERROR_CODES.IO_ERROR);
   }
+  if (isRpcError(error) && error.code === VAULT_ROOT_ERROR_CODES.BUSY) {
+    return vaultRootErrorI18nKey(VAULT_ROOT_ERROR_CODES.BUSY);
+  }
   if (isRpcError(error) && isVaultRootErrorCode(error.code)) {
     return vaultRootErrorI18nKey(error.code);
   }

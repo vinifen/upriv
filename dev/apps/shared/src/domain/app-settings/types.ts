@@ -60,6 +60,12 @@ export interface AppSettingsConfig {
     vault_list_allow_drag_into_group: boolean;
     /** Desktop file-manager dock UI — mobile clients may ignore. */
     file_manager_dock_expanded: boolean;
+    /**
+     * When true, unlock/lock password dialog closes as soon as Confirm queues the
+     * pipeline (progress on the row). Default false — keep the dialog open so a
+     * wrong password can be fixed in place.
+     */
+    lifecycle_close_modal_on_submit: boolean;
   };
   logging: {
     enabled: boolean;
@@ -123,6 +129,7 @@ export function appSettingsEqual(a: AppSettingsConfig, b: AppSettingsConfig): bo
     a.ui.vault_list_show_drag === b.ui.vault_list_show_drag &&
     a.ui.vault_list_allow_drag_into_group === b.ui.vault_list_allow_drag_into_group &&
     a.ui.file_manager_dock_expanded === b.ui.file_manager_dock_expanded &&
+    a.ui.lifecycle_close_modal_on_submit === b.ui.lifecycle_close_modal_on_submit &&
     a.logging.enabled === b.logging.enabled &&
     a.logging.level === b.logging.level &&
     a.logging.entries_per_file === b.logging.entries_per_file &&

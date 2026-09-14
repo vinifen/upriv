@@ -42,7 +42,11 @@ export interface UseCreateVaultWizardOptions {
   vaultRootPath?: string | null;
   initialDraft?: CreateVaultDraft | null;
   initialStep?: CreateVaultStepId | null;
-  onCreate: (result: CreateVaultResult) => void;
+  /**
+   * Enqueue create (list row + pipeline). Must throw synchronously to keep the
+   * wizard open (import / duplicate id). Do not await Argon2 here.
+   */
+  onCreate: (result: CreateVaultResult, password: string) => void;
   onClose: () => void;
   testImportPassword: (password: string) => Promise<boolean>;
 }
@@ -149,7 +153,7 @@ export function useCreateVaultWizard<
     onClose();
   }, [onClose]);
 
-  const handleCreate = useCallback(() => {
+  const handleCreate = useCallback((): void => {
     dispatch({ type: "submitRequested" });
     // Decided from the draft, not from `view`: the render that produced `view`
     // predates this dispatch, so reading it would couple submit to render order.
@@ -163,7 +167,7 @@ export function useCreateVaultWizard<
     ) {
       return;
     }
-    onCreate(buildCreateVaultResult(state.draft, existingVaultIds));
+    void onCreate(buildCreateVaultResult(state.draft, existingVaultIds), state.draft.password);
     handleClose();
   }, [
     state.draft,

@@ -21,6 +21,7 @@ describe("buildCreateVaultResult", () => {
     expect(result.settings.security.mode).toBe("session_ram");
     expect(result.settings.vault.order).toBe(3);
     expect(result.groupAssignment).toEqual({ kind: "none" });
+    expect(result.source).toBe("scratch");
   });
 
   it("carries unlock preset for a `.7z` import (new contents/ is wrapped here)", () => {

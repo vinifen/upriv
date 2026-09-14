@@ -9,7 +9,7 @@ export interface MobileAppVersionInfo {
 }
 
 function packageVersion(): string {
-  return Constants.expoConfig?.version ?? Constants.nativeAppVersion ?? "0.2.0-beta";
+  return Constants.expoConfig?.version ?? Constants.nativeAppVersion ?? "0.2.1-beta";
 }
 
 /** Prefer native FFI version; fall back to Expo app version. */

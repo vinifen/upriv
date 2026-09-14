@@ -17,6 +17,7 @@ export type CreateVaultValidationCode =
   | "duplicate"
   | "source_missing"
   | "import_file_missing"
+  | "import_not_available"
   | "password_empty"
   | "password_too_short"
   | "password_mismatch"
@@ -30,20 +31,29 @@ export type CreateVaultValidationCode =
   | "mount_path_not_absolute"
   | "mount_path_saf_tree"
   | "mount_path_reserved"
-  | "mount_path_root_unknown";
+  | "mount_path_root_unknown"
+  | "plain_not_available";
 
-/** Matches mock lifecycle unlock (`trim().length >= 4`). Live core will own the real policy. */
+/** Mock lifecycle unlock (`trim().length >= 4`). Live create/open only reject empty. */
 export const CREATE_VAULT_PASSWORD_MIN_LENGTH = 4;
 
-/** Prototype mock: unlock / create / rewrap reject this word. Live core will own policy. */
+/** Mock unlock / rewrap reject this word. Live create does not. */
 const MOCK_LIFECYCLE_WRONG_PASSWORD = "wrong";
 
-/** Prototype unlock check — same trim + length + reserved word as create-vault. */
+/** Prototype mock unlock — still trims. Not used on live create. */
 export function isMockLifecyclePasswordValid(password: string): boolean {
   const trimmed = password.trim();
   if (!trimmed) return false;
   if (trimmed.length < CREATE_VAULT_PASSWORD_MIN_LENGTH) return false;
   return trimmed !== MOCK_LIFECYCLE_WRONG_PASSWORD;
+}
+
+/**
+ * Live unlock / close prompt: trim only to detect an empty field.
+ * Argon2 receives the password bytes exactly as typed.
+ */
+export function isLifecyclePasswordPresent(password: string): boolean {
+  return password.trim().length > 0;
 }
 
 export function vaultIdForCreateDraft(
@@ -66,7 +76,7 @@ export function validateCreateVaultStep(
     case "source": {
       const errors: CreateVaultValidationCode[] = [];
       if (!draft.source) errors.push("source_missing");
-      if (draft.source === "import" && !draft.importFileName) errors.push("import_file_missing");
+      if (draft.source === "import") errors.push("import_not_available");
       return errors;
     }
     case "identity": {
@@ -79,13 +89,8 @@ export function validateCreateVaultStep(
     }
     case "password": {
       const errors: CreateVaultValidationCode[] = [];
-      const password = draft.password.trim();
-      if (!password) errors.push("password_empty");
-      else if (password.length < CREATE_VAULT_PASSWORD_MIN_LENGTH) {
-        errors.push("password_too_short");
-      } else if (password === MOCK_LIFECYCLE_WRONG_PASSWORD) {
-        errors.push("password_wrong");
-      }
+      const password = draft.password;
+      if (!password.trim()) errors.push("password_empty");
       if (draft.source === "scratch") {
         if (draft.password !== draft.passwordConfirm) errors.push("password_mismatch");
       } else if (draft.source === "import" && !draft.passwordValidated) {
@@ -115,6 +120,7 @@ export function validateCreateVaultStep(
     }
     case "advanced": {
       const errors: CreateVaultValidationCode[] = [];
+      if (draft.storage.mode === "upriv_plain") errors.push("plain_not_available");
       // Empty = UI "custom incomplete" (normalizeMount would coerce to "default").
       const raw = draft.mount.workspace_path.trim();
       if (raw === "") {

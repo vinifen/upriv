@@ -8,6 +8,7 @@ export {
   MenuPanelOption,
   useDropdownPanelClose,
 } from "./DropdownPanel";
+export { MenuPanelHeader } from "./MenuPanelHeader";
 export { IconButton, type IconButtonProps } from "./IconButton";
 export {
   Modal,

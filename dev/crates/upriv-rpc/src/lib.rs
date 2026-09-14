@@ -15,18 +15,21 @@ use upriv_core::logging::{
     clear_logging_session, delete_session_log_files, ensure_logging_session,
     list_session_log_files, log_app_start, log_event, log_vault_root_entered,
     log_vault_root_leaving_on, log_vault_root_ready, map_needs_setup_after_ready,
-    read_session_log_file, reset_vault_root_ready, session_logger, LogLevel, Logger,
+    read_session_log_file, reset_vault_root_ready, session_logger, vault_root_was_ready, LogLevel,
+    Logger,
 };
 use upriv_core::{
-    app_home_dir, create_vault_group_with_sort, deactivate_vault_root_alias_everywhere,
-    delete_vault_group, discover_bootstrap_root, inspect_vault_root_at, known_vault_ids,
-    load_app_settings, load_vault_groups, open_or_initialize_vault_root, parse_settings_toml_str,
+    app_home_dir, close_vault, create_vault, create_vault_group_with_sort,
+    deactivate_vault_root_alias_everywhere, delete_vault_group, discover_bootstrap_root,
+    inspect_vault_root_at, known_vault_ids, list_vaults, load_app_settings, load_vault_config,
+    load_vault_groups, open_or_initialize_vault_root, open_vault, parse_settings_toml_str,
     read_vault_root_alias, reorder_vault_group_grouped_vaults, reorder_vault_groups,
     repair_vault_groups, resolve_vault_root, save_app_settings_session_with_alias_sync,
-    serialize_settings_toml_str, suggested_vault_root, update_vault_group,
-    write_vault_root_alias_for_root, AppSettings, IncompleteReplacePolicy, ResolveVaultRoot,
-    ResolveVaultRootOptions, UpdateVaultGroupParams, VaultGroup, VaultRootBootstrapPrefs,
-    VaultRootDirStatus, VaultRootMode, VaultRootSource, VAULT_ROOT_ALIAS_FILE,
+    serialize_settings_toml_str, suggested_vault_root, update_vault_group, vault_list_item,
+    write_vault_root_alias_for_root, AppSettings, IncompleteReplacePolicy, KdfUnlockPreset,
+    ResolveVaultRoot, ResolveVaultRootOptions, UpdateVaultGroupParams, VaultConfig, VaultGroup,
+    VaultListItem, VaultRootBootstrapPrefs, VaultRootDirStatus, VaultRootMode, VaultRootSource,
+    VaultStorageMode, VAULT_ROOT_ALIAS_FILE,
 };
 
 #[derive(Debug, Deserialize)]
@@ -134,6 +137,12 @@ pub fn handle_rpc(req: RpcRequest) -> RpcResponse {
         "vault_group_reorder" => vault_group_reorder(req.params),
         "vault_group_reorder_grouped_vaults" => vault_group_reorder_grouped_vaults(req.params),
         "vault_group_repair" => vault_group_repair(),
+        "vault_list" => vault_list(),
+        "vault_create" => vault_create(req.params),
+        "vault_open" => vault_open(req.params),
+        "vault_close" => vault_close(req.params),
+        "vault_config_get" => vault_config_get(req.params),
+        "vault_config_save" => vault_config_save(req.params),
         other => err("unknown_method", format!("unknown method: {other}")),
     }
 }
@@ -316,7 +325,24 @@ fn bootstrap_prefs_for_dir(
     }
 }
 
+fn refuse_root_switch_if_busy() -> Option<RpcResponse> {
+    if !upriv_core::vault_activity_blocks_root_switch() {
+        return None;
+    }
+    const MSG: &str =
+        "close vaults that are open, opening, closing, or creating before switching data folder";
+    log_event(
+        LogLevel::Warn,
+        "rpc_error",
+        &[("code", "vault_root_busy"), ("message", MSG)],
+    );
+    Some(err("vault_root_busy", MSG.into()))
+}
+
 fn vault_root_setup_default_root(params: Value) -> RpcResponse {
+    if let Some(response) = refuse_root_switch_if_busy() {
+        return response;
+    }
     let parsed: SetupDefaultRootParams = match serde_json::from_value(params) {
         Ok(value) => value,
         Err(error) => return err("invalid_request", error.to_string()),
@@ -457,6 +483,9 @@ fn require_absolute_path(path: &Path) -> Result<(), RpcResponse> {
 }
 
 fn vault_root_setup_path(params: Value) -> RpcResponse {
+    if let Some(response) = refuse_root_switch_if_busy() {
+        return response;
+    }
     let parsed: PathParams = match serde_json::from_value(params) {
         Ok(value) => value,
         Err(error) => return err("invalid_request", error.to_string()),
@@ -702,15 +731,43 @@ fn log_delete(params: Value) -> RpcResponse {
     }
 }
 
-fn require_vault_root() -> Result<upriv_core::VaultRoot, RpcResponse> {
+/// Bootstrap (never `vault_root_ready` this process, no `.upriv` yet) → `Ok(None)`.
+/// After a root was ready, absence is mid-session integrity (`vault_root_not_found`).
+fn optional_vault_root() -> Result<Option<upriv_core::VaultRoot>, RpcResponse> {
     match discover_bootstrap_root() {
+        Ok(Some(root)) => Ok(Some(root)),
+        Ok(None) => {
+            if vault_root_was_ready() {
+                Err(err(
+                    "vault_root_not_found",
+                    "vault-root missing after it was ready".into(),
+                ))
+            } else {
+                Ok(None)
+            }
+        }
+        Err(error) => Err(map_core_err(error)),
+    }
+}
+
+fn require_vault_root() -> Result<upriv_core::VaultRoot, RpcResponse> {
+    match optional_vault_root() {
         Ok(Some(root)) => Ok(root),
         Ok(None) => Err(err(
             "vault_root_not_found",
-            "no vault-root available for vault groups".into(),
+            "no vault-root available".into(),
         )),
-        Err(error) => Err(map_core_err(error)),
+        Err(response) => Err(response),
     }
+}
+
+fn empty_group_list_json() -> Value {
+    json!({
+        "groups": [],
+        "droppedOrphans": 0,
+        "droppedDuplicateAssignments": 0,
+        "invalid": false,
+    })
 }
 
 fn group_to_json(group: &VaultGroup) -> Value {
@@ -727,8 +784,9 @@ fn group_to_json(group: &VaultGroup) -> Value {
 }
 
 fn vault_group_list() -> RpcResponse {
-    let root = match require_vault_root() {
-        Ok(root) => root,
+    let root = match optional_vault_root() {
+        Ok(Some(root)) => root,
+        Ok(None) => return ok(empty_group_list_json()),
         Err(response) => return response,
     };
     let known = match known_vault_ids(&root) {
@@ -1027,6 +1085,190 @@ fn vault_group_repair() -> RpcResponse {
     }
 }
 
+fn storage_mode_wire(mode: VaultStorageMode) -> &'static str {
+    match mode {
+        VaultStorageMode::EncryptedDir => "encrypted_dir",
+        VaultStorageMode::UprivPlain => "upriv_plain",
+    }
+}
+
+fn vault_list_item_json(item: &VaultListItem) -> Value {
+    let unlock_preset = item
+        .unlock_preset
+        .and_then(|preset| serde_json::to_value(preset).ok());
+    json!({
+        "id": item.id,
+        "displayName": item.display_name,
+        "session": item.session,
+        "storageMode": storage_mode_wire(item.storage_mode),
+        "order": item.order,
+        "passwordHint": item.password_hint,
+        "hidden": item.hidden,
+        "note": item.note,
+        "lastAccessedAt": item.last_accessed_at,
+        "unlockPreset": unlock_preset,
+    })
+}
+
+fn vault_list() -> RpcResponse {
+    let root = match optional_vault_root() {
+        Ok(Some(root)) => root,
+        Ok(None) => return ok(json!({ "vaults": [] })),
+        Err(response) => return response,
+    };
+    match list_vaults(&root) {
+        Ok(items) => ok(json!({
+            "vaults": items.iter().map(vault_list_item_json).collect::<Vec<_>>(),
+        })),
+        Err(error) => map_core_err(error),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct VaultCreateParams {
+    password: String,
+    #[serde(default)]
+    unlock_preset: Option<KdfUnlockPreset>,
+    settings: VaultConfig,
+}
+
+fn vault_create(params: Value) -> RpcResponse {
+    let parsed: VaultCreateParams = match serde_json::from_value(params) {
+        Ok(value) => value,
+        Err(error) => return err("invalid_request", error.to_string()),
+    };
+    if parsed.password.is_empty() {
+        return err("invalid_request", "password is required".into());
+    }
+    let root = match require_vault_root() {
+        Ok(root) => root,
+        Err(response) => return response,
+    };
+    let preset = parsed.unlock_preset.unwrap_or(KdfUnlockPreset::M256);
+    // Same trim `create_vault` persists — padded request ids still resolve via
+    // `vault_dir`, but the returned row must be looked up with that folder id.
+    let id = parsed.settings.vault.id.trim().to_string();
+    match create_vault(&root, parsed.settings, parsed.password.as_bytes(), preset) {
+        Ok(()) => match vault_list_item(&root, &id) {
+            Ok(item) => ok(json!({ "vault": vault_list_item_json(&item) })),
+            Err(error) => map_core_err(error),
+        },
+        Err(error) => map_core_err(error),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct VaultIdPasswordParams {
+    id: String,
+    #[serde(default)]
+    password: Option<String>,
+}
+
+fn vault_open(params: Value) -> RpcResponse {
+    let parsed: VaultIdPasswordParams = match serde_json::from_value(params) {
+        Ok(value) => value,
+        Err(error) => return err("invalid_request", error.to_string()),
+    };
+    let password = match parsed.password {
+        Some(ref value) if !value.is_empty() => value.as_bytes(),
+        _ => return err("invalid_request", "password is required".into()),
+    };
+    let root = match require_vault_root() {
+        Ok(root) => root,
+        Err(response) => return response,
+    };
+    match open_vault(&root, parsed.id.trim(), password) {
+        Ok(()) => ok(json!(null)),
+        Err(error) => map_core_err(error),
+    }
+}
+
+fn vault_close(params: Value) -> RpcResponse {
+    let parsed: VaultIdPasswordParams = match serde_json::from_value(params) {
+        Ok(value) => value,
+        Err(error) => return err("invalid_request", error.to_string()),
+    };
+    let password = parsed
+        .password
+        .as_ref()
+        .filter(|value| !value.is_empty())
+        .map(|value| value.as_bytes());
+    let root = match require_vault_root() {
+        Ok(root) => root,
+        Err(response) => return response,
+    };
+    match close_vault(&root, parsed.id.trim(), password) {
+        Ok(()) => ok(json!(null)),
+        Err(error) => map_core_err(error),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct VaultIdParams {
+    id: String,
+}
+
+fn vault_config_get(params: Value) -> RpcResponse {
+    let parsed: VaultIdParams = match serde_json::from_value(params) {
+        Ok(value) => value,
+        Err(error) => return err("invalid_request", error.to_string()),
+    };
+    let root = match require_vault_root() {
+        Ok(root) => root,
+        Err(response) => return response,
+    };
+    let dir = match root.vault_dir(parsed.id.trim()) {
+        Ok(dir) => dir,
+        Err(error) => return map_core_err(error),
+    };
+    if !dir.is_dir() {
+        return map_core_err(upriv_core::UprivError::VaultNotFound(dir));
+    }
+    match load_vault_config(&dir) {
+        Ok(config) => match serde_json::to_value(&config) {
+            Ok(settings) => ok(json!({ "settings": settings })),
+            Err(error) => err("invalid_request", error.to_string()),
+        },
+        Err(upriv_core::UprivError::VaultConfigInvalid { path, .. }) if !path.exists() => {
+            map_core_err(upriv_core::UprivError::VaultNotFound(dir))
+        }
+        Err(error) => map_core_err(error),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct VaultConfigSaveParams {
+    id: String,
+    settings: VaultConfig,
+}
+
+fn vault_config_save(params: Value) -> RpcResponse {
+    let parsed: VaultConfigSaveParams = match serde_json::from_value(params) {
+        Ok(value) => value,
+        Err(error) => return err("invalid_request", error.to_string()),
+    };
+    let root = match require_vault_root() {
+        Ok(root) => root,
+        Err(response) => return response,
+    };
+    let id = parsed.id.trim();
+    let dir = match root.vault_dir(id) {
+        Ok(dir) => dir,
+        Err(error) => return map_core_err(error),
+    };
+    if !dir.is_dir() {
+        return map_core_err(upriv_core::UprivError::VaultNotFound(dir));
+    }
+    match upriv_core::save_vault_config_checked(&dir, &parsed.settings) {
+        Ok(()) => ok(json!({ "id": id })),
+        Err(error) => map_core_err(error),
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct AppSettingsSaveParams {
@@ -1287,10 +1529,23 @@ fn map_core_err_response(error: upriv_core::UprivError, emit_log: bool) -> RpcRe
         upriv_core::UprivError::VaultConfigInvalid { path, .. } => {
             ("vault_config_invalid", Some(path.as_path()))
         }
+        upriv_core::UprivError::VaultConfigBusy { .. } => ("vault_config_busy", None),
         upriv_core::UprivError::VaultGroupsInvalid { path, .. } => {
             ("vault_groups_invalid", Some(path.as_path()))
         }
         upriv_core::UprivError::VaultGroupNotFound(_) => ("vault_group_not_found", None),
+        upriv_core::UprivError::VaultAlreadyExists(p) => {
+            ("vault_already_exists", Some(p.as_path()))
+        }
+        upriv_core::UprivError::WrongPassword => ("wrong_password", None),
+        upriv_core::UprivError::VaultAlreadyOpen(_) => ("vault_already_open", None),
+        upriv_core::UprivError::VaultNotOpen(_) => ("vault_not_open", None),
+        upriv_core::UprivError::VaultUnlockBlocked { .. } => ("vault_unlock_blocked", None),
+        upriv_core::UprivError::InsufficientRam => ("insufficient_ram", None),
+        upriv_core::UprivError::VaultStoreInvalid { path, .. } => {
+            ("vault_store_invalid", Some(path.as_path()))
+        }
+        upriv_core::UprivError::UprivPlainUnavailable => ("upriv_plain_unavailable", None),
         upriv_core::UprivError::WorkspacePathInvalid { path, .. } => {
             ("workspace_path_invalid", Some(path.as_path()))
         }
@@ -1309,7 +1564,7 @@ fn map_core_err_response(error: upriv_core::UprivError, emit_log: bool) -> RpcRe
     let message = error.to_string();
     if emit_log {
         let level = match code {
-            "vault_root_incomplete" => LogLevel::Warn,
+            "vault_root_incomplete" | "wrong_password" | "vault_unlock_blocked" => LogLevel::Warn,
             _ => LogLevel::Error,
         };
         log_event(
@@ -1318,7 +1573,13 @@ fn map_core_err_response(error: upriv_core::UprivError, emit_log: bool) -> RpcRe
             &[("code", code), ("message", truncate_log_msg(&message))],
         );
     }
-    let details = path.and_then(|p| p.to_str().map(|s| json!({ "path": s })));
+    let details = match &error {
+        upriv_core::UprivError::VaultUnlockBlocked { retry_after_secs } => {
+            Some(json!({ "retryAfterSecs": retry_after_secs }))
+        }
+        upriv_core::UprivError::VaultConfigBusy { target } => Some(json!({ "target": target })),
+        _ => path.and_then(|p| p.to_str().map(|s| json!({ "path": s }))),
+    };
     err_with_details(code, message, details)
 }
 
@@ -1380,6 +1641,12 @@ mod contract_tests {
         "vault_group_reorder",
         "vault_group_reorder_grouped_vaults",
         "vault_group_repair",
+        "vault_list",
+        "vault_create",
+        "vault_open",
+        "vault_close",
+        "vault_config_get",
+        "vault_config_save",
     ];
 
     #[test]
@@ -1587,5 +1854,76 @@ level = \"info\"
             .unwrap()
             .expect("bootstrap prefs on incomplete→replace");
         assert_eq!(prefs.locale.as_deref(), Some("es"));
+    }
+
+    #[test]
+    fn vault_root_setup_refuses_while_vault_session_open() {
+        let dir = tempfile::tempdir().unwrap();
+        upriv_core::initialize_vault_root(dir.path()).unwrap();
+        let root = upriv_core::VaultRoot::discover(dir.path()).unwrap();
+        let cfg = upriv_core::VaultConfig {
+            vault: upriv_core::config::VaultIdentitySection {
+                id: "busy-root".into(),
+                display_name: "Busy Root".into(),
+                order: 1,
+                note: String::new(),
+                hidden: false,
+                password_hint: String::new(),
+            },
+            storage: upriv_core::VaultStorageSection {
+                mode: upriv_core::VaultStorageMode::EncryptedDir,
+            },
+            mount: Default::default(),
+            backup: Default::default(),
+            security: Default::default(),
+            auto_close: Default::default(),
+            seven_zip: Default::default(),
+            policy: Default::default(),
+        };
+        upriv_core::create_vault(
+            &root,
+            cfg,
+            b"pass-word-ok",
+            upriv_core::KdfUnlockPreset::M32,
+        )
+        .expect("create");
+        upriv_core::open_vault(&root, "busy-root", b"pass-word-ok").expect("open");
+
+        let blocked = handle_rpc(RpcRequest {
+            method: "vault_root_setup_default_root".into(),
+            params: json!({ "bootstrap": { "locale": "en" } }),
+        });
+        assert_eq!(
+            blocked.error.as_ref().map(|e| e.code.as_str()),
+            Some("vault_root_busy"),
+            "{blocked:?}"
+        );
+
+        let blocked_path = handle_rpc(RpcRequest {
+            method: "vault_root_setup_path".into(),
+            params: json!({
+                "path": dir.path().to_str().unwrap(),
+                "bootstrap": { "locale": "en" }
+            }),
+        });
+        assert_eq!(
+            blocked_path.error.as_ref().map(|e| e.code.as_str()),
+            Some("vault_root_busy"),
+            "{blocked_path:?}"
+        );
+
+        upriv_core::close_vault(&root, "busy-root", None).expect("close");
+        let after = handle_rpc(RpcRequest {
+            method: "vault_root_setup_path".into(),
+            params: json!({
+                "path": dir.path().to_str().unwrap(),
+                "bootstrap": { "locale": "en" }
+            }),
+        });
+        assert_ne!(
+            after.error.as_ref().map(|e| e.code.as_str()),
+            Some("vault_root_busy"),
+            "idle setup must not return vault_root_busy: {after:?}"
+        );
     }
 }

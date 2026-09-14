@@ -3,25 +3,32 @@ import {
   CORE_RPC_TIMEOUT_MS,
   RpcError,
   isRpcError,
+  isLifecyclePasswordPresent,
   normalizeAppSettings,
+  normalizeVaultSettingsConfig,
   parseAppLogFile,
   parseDefaultRootStatus,
   parseVaultGroupListResult,
   parseVaultGroupWire,
+  parseVaultListItemWire,
+  parseVaultListResult,
   parseVaultRootInspect,
   parseVaultRootResolve,
   type AppLogFile,
   type AppSettingsConfig,
+  type CreateVaultInput,
   type DefaultRootStatusResult,
   type VaultGroup,
   type VaultGroupCreateInput,
   type VaultGroupListResult,
   type VaultGroupUpdateInput,
+  type VaultListItem,
   type VaultRootAliasInfo,
   type VaultRootBootstrapPrefs,
   type VaultRootInspectResult,
   type VaultRootMode,
   type VaultRootResolveResult,
+  type VaultSettingsConfig,
 } from "@upriv/shared";
 import { getUprivCoreNative } from "upriv-core";
 
@@ -381,9 +388,7 @@ export async function rpcLogEvent(
 }
 
 /**
- * Vault-group RPC helpers are wired ahead of live mobile vault ids on disk.
- * Keep them ready so group UI can switch from mock storage once vault list/core
- * integration is activated on mobile release builds.
+ * Vault-group RPC helpers — live `.upriv/vault_groups.toml` via `upriv-ffi`.
  */
 export async function rpcVaultGroupList(): Promise<VaultGroupListResult> {
   return parseVaultGroupListResult(await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_GROUP_LIST));
@@ -470,4 +475,47 @@ export async function rpcVaultGroupReorderGroupedVaults(
 
 export async function rpcVaultGroupRepair(): Promise<void> {
   await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_GROUP_REPAIR);
+}
+
+export async function rpcVaultList(): Promise<VaultListItem[]> {
+  return parseVaultListResult(await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_LIST));
+}
+
+export async function rpcVaultCreate(input: CreateVaultInput): Promise<VaultListItem> {
+  const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_CREATE, {
+    password: input.password,
+    unlockPreset: input.unlockPreset,
+    settings: input.settings,
+  });
+  if (typeof raw !== "object" || raw === null) {
+    throw new RpcError(BRIDGE.INVALID_RESPONSE, "vault_create: expected object", raw);
+  }
+  return parseVaultListItemWire((raw as { vault?: unknown }).vault);
+}
+
+export async function rpcVaultOpen(id: string, password: string): Promise<void> {
+  await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_OPEN, { id, password });
+}
+
+export async function rpcVaultClose(id: string, password?: string): Promise<void> {
+  await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_CLOSE, {
+    id,
+    password: password && isLifecyclePasswordPresent(password) ? password : undefined,
+  });
+}
+
+export async function rpcVaultConfigGet(id: string): Promise<VaultSettingsConfig> {
+  const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_CONFIG_GET, { id });
+  if (typeof raw !== "object" || raw === null) {
+    throw new RpcError(BRIDGE.INVALID_RESPONSE, "vault_config_get: expected object", raw);
+  }
+  const settings = (raw as { settings?: unknown }).settings;
+  if (typeof settings !== "object" || settings === null) {
+    throw new RpcError(BRIDGE.INVALID_RESPONSE, "vault_config_get: expected settings", raw);
+  }
+  return normalizeVaultSettingsConfig(settings as VaultSettingsConfig);
+}
+
+export async function rpcVaultConfigSave(id: string, settings: VaultSettingsConfig): Promise<void> {
+  await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_CONFIG_SAVE, { id, settings });
 }
