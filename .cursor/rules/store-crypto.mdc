@@ -13,7 +13,7 @@ Never claim “more secure than 7-Zip” or “the same security as VeraCrypt.�
 
 ## Do
 
-- Primitives only via a mature library (no hand-rolled ChaCha/Poly1305/Argon2).
+- Primitives only via a mature library (no hand-rolled ChaCha/Poly1305/Argon2). Those crates are pinned in `dev/vendor/` (`[patch]`). Refresh is the checklist in `dev/vendor/MANIFEST.txt`; do not `cargo generate-lockfile`. Do not edit `vendor/*/src` except in a reviewed upgrade.
 - Unique random salt; persist KDF params in `vault.header`. Cost is chosen **at vault create** (default **256 MiB / 3 passes**; also **128 MiB / 3**, **64 MiB / 3**, **32 MiB / 3** less-secure opt-in, **1 GiB / 1**, **2 GiB / 1**). UI: security of each preset + RAM needed to unlock — **not** phone vs desktop. Open uses the header everywhere. **Never** auto-pick or lower params because of the current device.
 - Password unlocks master key once per open; each write = content key + new 192-bit CSPRNG nonce (not Argon2, not a RAM counter). See SECURITY-CRYPTO “Password, master key, edits, nonces”.
 - AEAD AAD is compact `serde_json` of a **struct in field order** (not pretty `vault.header`, not RFC 8785). Bind version, **content identity** (not registry folder id), algos, KDF params on wrap/index; chunks also bind file id / chunk index / sizes. **v1 chunks still bind salt/m/t/p — do not ship change-password until that is versioned out of chunk AAD.** Verify tags before any plaintext leaves `upriv-core`.

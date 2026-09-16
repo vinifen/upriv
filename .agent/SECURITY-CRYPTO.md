@@ -396,7 +396,7 @@ Applied review 2026-09-12. Confidentiality of closed `contents/` passed for wrap
 ## Agent rules
 
 1. Do not invent a second cipher/KDF “for fun.” Store = Argon2id + HKDF + XChaCha20-Poly1305 + AES-SIV names as specified.
-2. Do not implement primitives; call a reviewed crate/API.
+2. Do not implement primitives; call a reviewed crate/API. Vault crypto crates are **vendored** at [`dev/vendor/`](../dev/vendor/) (`[patch.crates-io]` in `dev/Cargo.toml`). Do not `cargo update` Argon2 / AEAD / AES-SIV / `rand` without copying a new snapshot (checklist in `dev/vendor/MANIFEST.txt`) and reviewing `src/` against crates.io. Do not `cargo generate-lockfile` for that. Do not edit `vendor/*/src` except in that reviewed upgrade.
 3. Do not treat `.7z` as the vault’s security story or as the backup format. Backup / **Recommended** portable file = copy of `contents/` (zip envelope OK). `.7z` = versatile export with a guessing warning. Restore = new vault from package or from `.7z`.
 4. Argon2id cost is chosen **at create** (default **256 MiB / 3 passes**). Shipping presets include **32 MiB** (less-secure opt-in) and **128 MiB** (mid). Presets are security + unlock RAM, not device type. Never auto-select or downgrade the header from the current OS.
 5. Do not ship store I/O without the tamper/truncation tests above.
