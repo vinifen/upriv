@@ -3,8 +3,59 @@ resolver = "2"
 members = ["crates/upriv-core", "crates/upriv-daemon", "crates/upriv-rpc", "crates/upriv-ffi"]
 
 [workspace.package]
-version = "0.2.1-beta"
+version = "0.2.2-beta"
 authors = ["Upriv"]
 edition = "2021"
 rust-version = "1.94.0"
 license = "MIT"
+
+# Vault crypto is pinned under vendor/ (see vendor/MANIFEST.txt).
+# [patch] replaces crates.io for the whole workspace, including UniFFI:
+# libc / cfg-if / proc-macro2 / quote / unicode-ident are workspace-wide on
+# purpose. Bump the vendor folder when the rest of the lock needs a new libc.
+# getrandom 0.2 and syn 2 are path-linked inside vendor only (lock also has
+# getrandom 0.3/0.4 and syn 3 — one [patch] name cannot cover all).
+# zerocopy-derive stays on disk because zerocopy lists it as an optional path
+# dep; the app does not enable feature "derive".
+[patch.crates-io]
+cfg-if = { path = "vendor/cfg-if-1.0.4" }
+libc = { path = "vendor/libc-0.2.186" }
+proc-macro2 = { path = "vendor/proc-macro2-1.0.106" }
+quote = { path = "vendor/quote-1.0.45" }
+unicode-ident = { path = "vendor/unicode-ident-1.0.24" }
+aead = { path = "vendor/aead-0.5.2" }
+aes = { path = "vendor/aes-0.8.4" }
+aes-siv = { path = "vendor/aes-siv-0.7.0" }
+argon2 = { path = "vendor/argon2-0.5.3" }
+base64 = { path = "vendor/base64-0.22.1" }
+base64ct = { path = "vendor/base64ct-1.8.3" }
+blake2 = { path = "vendor/blake2-0.10.6" }
+block-buffer = { path = "vendor/block-buffer-0.10.4" }
+chacha20 = { path = "vendor/chacha20-0.9.1" }
+chacha20poly1305 = { path = "vendor/chacha20poly1305-0.10.1" }
+cipher = { path = "vendor/cipher-0.4.4" }
+cmac = { path = "vendor/cmac-0.7.2" }
+cpufeatures = { path = "vendor/cpufeatures-0.2.17" }
+crypto-common = { path = "vendor/crypto-common-0.1.7" }
+ctr = { path = "vendor/ctr-0.9.2" }
+dbl = { path = "vendor/dbl-0.3.2" }
+digest = { path = "vendor/digest-0.10.7" }
+generic-array = { path = "vendor/generic-array-0.14.7" }
+hkdf = { path = "vendor/hkdf-0.12.4" }
+hmac = { path = "vendor/hmac-0.12.1" }
+inout = { path = "vendor/inout-0.1.4" }
+opaque-debug = { path = "vendor/opaque-debug-0.3.1" }
+password-hash = { path = "vendor/password-hash-0.5.0" }
+poly1305 = { path = "vendor/poly1305-0.8.0" }
+ppv-lite86 = { path = "vendor/ppv-lite86-0.2.21" }
+rand = { path = "vendor/rand-0.8.5" }
+rand_chacha = { path = "vendor/rand_chacha-0.3.1" }
+rand_core = { path = "vendor/rand_core-0.6.4" }
+sha2 = { path = "vendor/sha2-0.10.9" }
+subtle = { path = "vendor/subtle-2.6.1" }
+typenum = { path = "vendor/typenum-1.20.1" }
+universal-hash = { path = "vendor/universal-hash-0.5.1" }
+version_check = { path = "vendor/version_check-0.9.5" }
+zerocopy = { path = "vendor/zerocopy-0.8.57" }
+zeroize = { path = "vendor/zeroize-1.9.0" }
+zeroize_derive = { path = "vendor/zeroize_derive-1.5.0" }

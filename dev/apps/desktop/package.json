@@ -2,7 +2,7 @@
   "name": "upriv-desktop",
   "private": true,
   "license": "MIT",
-  "version": "0.2.1-beta",
+  "version": "0.2.2-beta",
   "type": "module",
   "scripts": {
     "dev": "vite --configLoader native",

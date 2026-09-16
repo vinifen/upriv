@@ -181,8 +181,10 @@ upriv/
 ├── VERSION                 # Product SemVer (sync into dev/ manifests)
 ├── README.md
 └── dev/
-    ├── Cargo.toml          # Rust workspace: upriv-core + upriv-rpc + upriv-daemon + upriv-ffi
+    ├── Cargo.toml          # Rust workspace: upriv-core + upriv-rpc + upriv-daemon + upriv-ffi; [patch] → vendor/
     ├── Cargo.lock
+    ├── vendor/             # Pinned vault crypto (Argon2 / XChaCha / AES-SIV). Refresh: MANIFEST.txt
+    ├── scripts/            # version sync, Android FFI
     ├── rust-toolchain.toml # Rust 1.94.0 (pinned)
     ├── .nvmrc              # Node 22.12.0
     ├── apps/
@@ -241,6 +243,7 @@ Mobile:   RN     ──JNI/FFI──► libupriv_core.so ──► upriv_core::*
 ### Rust workspace
 
 - Build from `dev/`: `cargo build -p upriv-daemon`, `cargo test -p upriv-core`, `npm run rust:lint` (rustfmt + clippy).
+- Vault crypto crates live in **`dev/vendor/`** (`[patch]`). Refresh is the checklist in `dev/vendor/MANIFEST.txt`; do not `cargo generate-lockfile`. See [`SECURITY-CRYPTO.md`](SECURITY-CRYPTO.md) agent rule 2.
 - Artifacts go to **`dev/target/`** only — **never commit** `target/`, `node_modules/`, `dist/`, `.expo/`.
 - `upriv-daemon/src/main.rs` is entry only; do not add vault logic there — use `upriv-core`.
 

@@ -1,6 +1,6 @@
 {
   "name": "upriv-core",
-  "version": "0.2.1-beta",
+  "version": "0.2.2-beta",
   "private": true,
   "license": "MIT",
   "main": "src/index.ts",

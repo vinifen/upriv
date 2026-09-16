@@ -119,7 +119,7 @@ Where vault data lives (`UPRIV_DISTRIBUTION`) — **portable is only a desktop p
 
 Build: `npm run electron:build` (or `electron:build:linux`).
 
-Artifacts: `dev/target/release/bundle/electron/` — e.g. `Upriv-0.2.1-beta-linux-x64.deb`, `Upriv-0.2.1-beta-linux-x64.AppImage`.
+Artifacts: `dev/target/release/bundle/electron/` — e.g. `Upriv-0.2.2-beta-linux-x64.deb`, `Upriv-0.2.2-beta-linux-x64.AppImage`.
 
 ## Windows packaging
 
