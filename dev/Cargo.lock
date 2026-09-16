@@ -1133,7 +1133,7 @@ dependencies = [
 
 [[package]]
 name = "upriv-core"
-version = "0.2.1-beta"
+version = "0.2.2-beta"
 dependencies = [
  "aes-siv",
  "argon2",
@@ -1153,7 +1153,7 @@ dependencies = [
 
 [[package]]
 name = "upriv-daemon"
-version = "0.2.1-beta"
+version = "0.2.2-beta"
 dependencies = [
  "serde",
  "serde_json",
@@ -1164,7 +1164,7 @@ dependencies = [
 
 [[package]]
 name = "upriv-ffi"
-version = "0.2.1-beta"
+version = "0.2.2-beta"
 dependencies = [
  "serde_json",
  "uniffi",
@@ -1174,7 +1174,7 @@ dependencies = [
 
 [[package]]
 name = "upriv-rpc"
-version = "0.2.1-beta"
+version = "0.2.2-beta"
 dependencies = [
  "serde",
  "serde_json",
