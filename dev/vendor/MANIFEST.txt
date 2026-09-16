@@ -1,0 +1,114 @@
+# Upriv vendor — vault crypto, frozen in-tree
+#
+# Why: Argon2id, XChaCha20-Poly1305, AES-SIV, HKDF, and the RNG/wipe used to
+# unlock and persist `contents/` are the product trust boundary. A crates.io
+# publish or hijack must not change that code on the next build unless we
+# copy a new tree here and review the diff. This is containment, not an
+# air-gap of the whole app (React/npm, UniFFI, serde/toml/uuid stay online).
+#
+# What this is: a pinned snapshot of those crate sources. Cargo [patch] in
+# ../Cargo.toml points crates.io names at these folders. Runtime crypto still
+# runs in the local binary; authors of the original crates cannot ship a new
+# tarball into Upriv without a commit in this repo.
+#
+# For third-party audit: intent is that cipher/KDF/RNG implementation files
+# match crates.io for the versions listed below. Diff each folder against
+# `crate-version` from the registry; expected deltas are packaging only
+# (see Local edits). Cargo.toml.orig, src/, tests/, benches/, and licenses
+# should match upstream. .cargo-checksum.json is from the original
+# `cargo vendor` copy (hashes the registry Cargo.toml, not our patched one).
+#
+# What this is not: a rewrite of the algorithms, a security audit by itself,
+# or offline builds of desktop/mobile.
+#
+# How Cargo finds these crates
+# -----------------------------
+# [patch] (workspace-wide, including UniFFI): every name in ../Cargo.toml
+# [patch.crates-io]. libc / cfg-if / proc-macro2 / quote / unicode-ident are
+# patched for the whole workspace on purpose; bump the folder here if the
+# rest of the lock needs a newer libc.
+#
+# Path-only (in this tree, NOT in [patch] — Cargo cannot [patch] one name
+# to several incompatible versions):
+#   getrandom 0.2.17  — rand_core path; 0.3 (uuid) and 0.4 (tempfile) stay
+#                       crates.io
+#   syn 2.0.117       — zeroize_derive path; crates.io still supplies syn 2
+#                       for serde_derive/UniFFI. syn 3 (wasm-bindgen / uuid)
+#                       also stays crates.io — one [patch] cannot cover 2 and 3.
+#
+# On disk, optional, not in the app graph:
+#   zerocopy-derive 0.8.57 — zerocopy lists it as an optional path dep.
+#   ppv-lite86 enables zerocopy "simd" only, not "derive". Do not delete the
+#   folder while that optional path remains (Cargo still resolves it).
+#
+# Optional unused crates.io deps may still appear in some manifests
+# (serde/arrayvec/blobby/wasm). Upriv does not enable those features.
+# `cargo test -p aead` would hit the registry; the app build does not.
+#
+# Local edits vs the crates.io tarball (src/*.rs of the ciphers/KDF is unchanged):
+# - Cargo.toml: deps that live in this vendor tree use path = "../<crate>-<ver>"
+#   instead of version = from the registry.
+# - Cargo.toml: [dev-dependencies] removed (tests-only; path vs version on the
+#   same crate name broke Cargo).
+# - Cargo.toml: [lints.rust] unexpected_cfgs, mismatched_lifetime_syntaxes,
+#   dead_code, deprecated = "allow". Path crates are not --cap-lints allow
+#   like crates.io; these are upstream noise on rustc 1.94, not Upriv src.
+# - syn 2: feature `test` dropped the missing syn-test-suite crate after
+#   stripping dev-deps.
+#
+# Refresh (manual; no helper script):
+# 1. From dev/, cargo vendor --versioned-dirs /tmp/upriv-vendor-src
+# 2. Replace only the listed crate folders here; keep this MANIFEST.txt.
+# 3. Packaging (do not edit src/): sibling deps → path = "../<dir>"; drop
+#    [dev-dependencies]; syn 2 feature test = []; [lints.rust]
+#    unexpected_cfgs / mismatched_lifetime_syntaxes / dead_code / deprecated
+#    = "allow" (merge into an existing [lints.rust]).
+# 4. If directory names changed, update [patch.crates-io] in ../Cargo.toml.
+# 5. cargo check --workspace. Do not cargo generate-lockfile (that re-resolves
+#    unrelated crates.io deps). Diff src/ vs the registry for the new versions.
+#
+# name version
+aead 0.5.2
+aes 0.8.4
+aes-siv 0.7.0
+argon2 0.5.3
+base64 0.22.1
+base64ct 1.8.3
+blake2 0.10.6
+block-buffer 0.10.4
+cfg-if 1.0.4
+chacha20 0.9.1
+chacha20poly1305 0.10.1
+cipher 0.4.4
+cmac 0.7.2
+cpufeatures 0.2.17
+crypto-common 0.1.7
+ctr 0.9.2
+dbl 0.3.2
+digest 0.10.7
+generic-array 0.14.7
+getrandom 0.2.17
+hkdf 0.12.4
+hmac 0.12.1
+inout 0.1.4
+libc 0.2.186
+opaque-debug 0.3.1
+password-hash 0.5.0
+poly1305 0.8.0
+ppv-lite86 0.2.21
+proc-macro2 1.0.106
+quote 1.0.45
+rand 0.8.5
+rand_chacha 0.3.1
+rand_core 0.6.4
+sha2 0.10.9
+subtle 2.6.1
+syn 2.0.117
+typenum 1.20.1
+unicode-ident 1.0.24
+universal-hash 0.5.1
+version_check 0.9.5
+zerocopy 0.8.57
+zerocopy-derive 0.8.57
+zeroize 1.9.0
+zeroize_derive 1.5.0
