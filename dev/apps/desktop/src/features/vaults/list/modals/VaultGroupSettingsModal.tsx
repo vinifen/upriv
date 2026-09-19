@@ -4,6 +4,7 @@ import {
   SettingsField,
   SettingsFormGrid,
   settingsControlClass,
+  DisplayNameFieldError,
   VaultSettingsSection,
 } from "@/components/settings";
 import { Icon } from "@/components/icons";
@@ -15,8 +16,8 @@ import {
   GROUPED_VAULT_SORT_MODES,
   LOADING_BUDGET_MS,
   VAULT_DISPLAY_NAME_MAX_LENGTH,
-  displayNameErrorI18nKey,
   validateDisplayName,
+  normalizeStoredName,
   SORT_DIRECTION_ICON,
   SORT_MODE_ICON,
   type GroupedVaultSortMode,
@@ -134,7 +135,7 @@ export function VaultGroupSettingsModal({
     setError(null);
     try {
       await onSave({
-        displayName: displayName.trim(),
+        displayName: normalizeStoredName(displayName),
         order,
         groupedVaults,
         groupedVaultSort,
@@ -200,20 +201,15 @@ export function VaultGroupSettingsModal({
                 id={nameId}
                 className={settingsControlClass}
                 value={displayName}
+                maxLength={VAULT_DISPLAY_NAME_MAX_LENGTH}
                 disabled={busy}
+                autoComplete="off"
+                spellCheck={false}
+                aria-invalid={validateDisplayName(displayName) ? true : undefined}
                 onChange={(event) => setDisplayName(event.target.value)}
               />
+              <DisplayNameFieldError name={displayName} />
             </SettingsField>
-            {validation ? (
-              <p className="text-sm text-on-error-container">
-                {t(
-                  displayNameErrorI18nKey(validation),
-                  validation === "too_long"
-                    ? { max: String(VAULT_DISPLAY_NAME_MAX_LENGTH) }
-                    : undefined,
-                )}
-              </p>
-            ) : null}
             <SettingsField
               label={t("vault.group.settings.order")}
               hint={t("vault.group.settings.order_help")}

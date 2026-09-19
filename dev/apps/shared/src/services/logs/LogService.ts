@@ -8,4 +8,6 @@ export interface LogService {
   recordVaultHidden(): Promise<void>;
   /** Session log line `vault_group_hidden` with no group id or name. */
   recordVaultGroupHidden(): Promise<void>;
+  /** Session log line `import_cache_wipe_failed` with no cache URI. */
+  recordImportCacheWipeFailed(): Promise<void>;
 }

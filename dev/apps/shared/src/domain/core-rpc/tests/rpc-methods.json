@@ -30,7 +30,8 @@
     "vault_open",
     "vault_close",
     "vault_config_get",
-    "vault_config_save"
+    "vault_config_save",
+    "vault_rename"
   ],
   "desktopOnly": ["app_shutdown"],
   "shellOnly": ["app_exit", "pick_directory"]

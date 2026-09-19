@@ -5,6 +5,7 @@ export { MenuActionItem } from "./MenuActionItem";
 export { DropdownPanel, MenuGroupLabel, useDropdownPanelClose } from "./DropdownPanel";
 export { DropdownOverlayProvider } from "./DropdownOverlayHost";
 export { Modal, type ModalProps, type ModalPanelClassName } from "./Modal";
+export { Collapse } from "./Collapse";
 export {
   ModalFooterActions,
   ModalFooterNav,

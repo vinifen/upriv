@@ -11,6 +11,8 @@ import {
   runTimedPipeline,
   WORKSPACE_PATH_DEFAULT,
   DEFAULT_KDF_UNLOCK_PRESET,
+  displayNameToVaultId,
+  normalizeStoredName,
   type AppLogFile,
   type AppServices,
   type AppSettingsLoadResult,
@@ -18,6 +20,7 @@ import {
   type VaultBackupEntry,
   type VaultListItem,
   type VaultPipelineError as VaultPipelineErrorType,
+  type VaultRenameResult,
   type VaultRootMode,
   type VaultSettingsConfig,
 } from "@upriv/shared";
@@ -37,6 +40,7 @@ import {
   moveVaultPath,
   renameVaultPath,
   resetVaultFileSession,
+  remapVaultWorkspaceSnapshot,
   setVaultFileContent,
   vaultFileLanguageFromPath,
   clearMockVaultUnlockPreset,
@@ -48,9 +52,12 @@ import {
   setMockVaultUnlockPreset,
 } from "@upriv/shared/testing";
 import {
-  MOCK_VAULTS,
   knownMockVaultIds,
+  listMockVaultSeedRows,
   registerMockVaultId,
+  registerRemappedMockSeedVault,
+  removeRemappedMockSeedVault,
+  suppressMockSeedVaultId,
   unregisterMockVaultId,
 } from "./data/vaults";
 import { MOCK_VAULT_GROUPS } from "./data/vaultGroups";
@@ -173,11 +180,11 @@ const MOCK_LOGS: AppLogFile[] = [
   },
 ];
 
-function appendMockLogEvent(event: string) {
+function appendMockLogEvent(event: string, level: "INFO" | "WARN" | "ERROR" = "INFO") {
   const file = MOCK_LOGS.find((entry) => entry.isCurrent) ?? MOCK_LOGS[0];
   if (!file) return;
   const nextIndex = String(file.lineCount + 1).padStart(4, "0");
-  file.content += `${nextIndex} ${new Date().toISOString()} INFO  ${event.padEnd(20)} \n`;
+  file.content += `${nextIndex} ${new Date().toISOString()} ${level.padEnd(5)} ${event.padEnd(20)} \n`;
   file.lineCount += 1;
   file.sizeBytes = file.content.length;
 }
@@ -188,13 +195,90 @@ function appendMockLogEvent(event: string) {
  */
 export function createMobileMockServices(): AppServices {
   const extraCreatedVaults: VaultListItem[] = [];
+
+  async function mockRename(vaultId: string, displayName: string): Promise<VaultRenameResult> {
+    const trimmed = normalizeStoredName(displayName);
+    const listed = [
+      ...listMockVaultSeedRows(),
+      ...extraCreatedVaults.map((row) => structuredClone(row)),
+    ];
+    const existing = listed.map((row) => row.id).filter((id) => id !== vaultId);
+    const newId = displayNameToVaultId(trimmed, existing);
+    const idChanged = newId !== vaultId;
+    const settings = getMockVaultSettings(vaultId);
+    const nextSettings = {
+      ...settings,
+      vault: { ...settings.vault, id: newId, display_name: trimmed },
+    };
+
+    if (idChanged) {
+      remapVaultWorkspaceSnapshot(vaultId, newId);
+      if (runtimeSettings.app.last_opened_vault.trim() === vaultId) {
+        runtimeSettings = {
+          ...runtimeSettings,
+          app: { ...runtimeSettings.app, last_opened_vault: newId },
+        };
+      }
+      const preset = getMockVaultUnlockPreset(vaultId);
+      unregisterMockVaultSettings(vaultId);
+      clearMockVaultUnlockPreset(vaultId);
+      unregisterMockVaultId(vaultId);
+
+      const createdIdx = extraCreatedVaults.findIndex((row) => row.id === vaultId);
+      if (createdIdx >= 0) {
+        extraCreatedVaults[createdIdx] = {
+          ...extraCreatedVaults[createdIdx],
+          id: newId,
+          displayName: trimmed,
+        };
+        registerMockVaultId(newId);
+      } else {
+        const seed = listMockVaultSeedRows().find((row) => row.id === vaultId);
+        removeRemappedMockSeedVault(vaultId);
+        suppressMockSeedVaultId(vaultId);
+        registerRemappedMockSeedVault({
+          ...(seed ?? {
+            id: vaultId,
+            displayName: trimmed,
+            session: null,
+            storageMode: settings.storage.mode,
+            order: settings.vault.order,
+            lastAccessedWhen: "—",
+            lastAccessedAt: new Date().toISOString(),
+            note: settings.vault.note,
+            hidden: settings.vault.hidden,
+          }),
+          id: newId,
+          displayName: trimmed,
+        });
+      }
+      if (preset) setMockVaultUnlockPreset(newId, preset);
+    } else {
+      const createdIdx = extraCreatedVaults.findIndex((row) => row.id === vaultId);
+      if (createdIdx >= 0) {
+        extraCreatedVaults[createdIdx] = {
+          ...extraCreatedVaults[createdIdx],
+          displayName: trimmed,
+        };
+      }
+    }
+
+    registerMockVaultSettings(nextSettings);
+    return {
+      id: newId,
+      previousId: vaultId,
+      displayName: trimmed,
+      idChanged,
+    };
+  }
+
   return {
     vault: {
       canPersistSettings: true,
       canDeleteVault: true,
       canExportVault: true,
       async listVaults() {
-        return [...MOCK_VAULTS, ...extraCreatedVaults].map((v) => {
+        return [...listMockVaultSeedRows(), ...extraCreatedVaults].map((v) => {
           const settings = getMockVaultSettings(v.id);
           return {
             ...v,
@@ -235,6 +319,7 @@ export function createMobileMockServices(): AppServices {
       async registerSettings(vaultId, config: VaultSettingsConfig) {
         registerMockVaultSettings({ ...config, vault: { ...config.vault, id: vaultId } });
       },
+      rename: mockRename,
       async unregisterSettings(vaultId) {
         unregisterMockVaultSettings(vaultId);
         clearMockVaultUnlockPreset(vaultId);
@@ -414,6 +499,9 @@ export function createMobileMockServices(): AppServices {
       },
       async recordVaultGroupHidden() {
         appendMockLogEvent("vault_group_hidden");
+      },
+      async recordImportCacheWipeFailed() {
+        appendMockLogEvent("import_cache_wipe_failed", "WARN");
       },
     },
 

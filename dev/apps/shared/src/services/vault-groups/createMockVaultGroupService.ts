@@ -1,4 +1,5 @@
 import { DEFAULT_GROUPED_VAULT_SORT, GROUPED_VAULT_SORT_MODES } from "../../domain/vault-list/sort";
+import { normalizeStoredName } from "../../domain/format/storedName";
 import {
   normalizeVaultGroup,
   slugIdIsValid,
@@ -44,7 +45,7 @@ function assertGroupId(id: string): void {
 }
 
 function assertDisplayName(name: string): string {
-  const trimmed = name.trim();
+  const trimmed = normalizeStoredName(name);
   if (!trimmed) {
     throw new RpcError(VAULT_ERROR_CODES.GROUPS_INVALID, "display_name is empty");
   }

@@ -78,6 +78,10 @@ describe("resolveListDrop", () => {
     ).toEqual({ kind: "ungroup", vaultId: "a", beforeVaultId: null });
   });
 
+  it("does not ungroup when dropped back on the same group", () => {
+    expect(resolve(groupedVaultDragKey("work", "a"), "group:work")).toEqual({ kind: "noop" });
+  });
+
   it("does not ungroup by dropping onto a root vault unless position sort is on", () => {
     expect(resolve(groupedVaultDragKey("work", "a"), "vault:b", { canReorderRoot: false })).toEqual(
       { kind: "blocked-reorder-root" },

@@ -18,7 +18,12 @@ import type { I18nKey } from "../../i18n/catalog";
 import contract from "./edit-policy.json";
 
 export type ConfigEditGate =
-  "anytime" | "vault_quiet" | "vault_closed" | "root_idle" | "no_open_session";
+  | "anytime"
+  | "vault_quiet"
+  | "vault_closed"
+  | "vault_closed_or_recovery"
+  | "root_idle"
+  | "no_open_session";
 
 export const CONFIG_EDIT_GATES = contract.gates as readonly ConfigEditGate[];
 
@@ -65,6 +70,11 @@ export function configEditGateAllows(gate: ConfigEditGate, ctx: ConfigEditContex
       const status = ctx.vaultStatus;
       if (status == null) return false;
       return status === "closed";
+    }
+    case "vault_closed_or_recovery": {
+      const status = ctx.vaultStatus;
+      if (status == null) return false;
+      return status === "closed" || status === "recovery";
     }
     case "root_idle":
       return !listHasVaultBlockingDataFolderChange(ctx.vaults ?? [], ctx.pipeline);

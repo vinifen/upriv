@@ -13,7 +13,9 @@ import {
   type ReactNode,
 } from "react";
 import {
+  Animated,
   BackHandler,
+  Easing,
   InteractionManager,
   Pressable,
   ScrollView,
@@ -31,7 +33,7 @@ import { Icon } from "@/components/icons";
 import { useTheme } from "@/theme";
 import { radii, spacing } from "@/theme/tokens";
 import { useTranslation } from "@/i18n";
-import { placeAnchoredMenu } from "@upriv/shared";
+import { MODAL_CLOSE_MS, MODAL_OPEN_MS, MODAL_SCALE_FROM, placeAnchoredMenu } from "@upriv/shared";
 import { useDropdownOverlay } from "./DropdownOverlayHost";
 import { ScrimDismiss } from "./ScrimDismiss";
 
@@ -57,6 +59,8 @@ interface DropdownPanelProps {
   align?: "left" | "right";
   /** Desktop default ~14rem. */
   minWidth?: number;
+  /** Cap intrinsic growth from long labels (default 320). */
+  maxWidth?: number;
   /** Pressable / IconButton trigger — opened menu anchors under this control. */
   trigger: ReactElement<TriggerProps>;
   children: ReactNode;
@@ -130,6 +134,8 @@ const FALLBACK_TRIGGER_W = 48;
 const FALLBACK_TRIGGER_H = 40;
 /** First paint before `onLayout` — enough for a short ⋮ menu. */
 const PANEL_HEIGHT_ESTIMATE = 240;
+/** Desktop AnchoredPopover `ease-out`. */
+const menuEase = Easing.out(Easing.quad);
 
 function triggerSize(
   measured: AnchorRect | null,
@@ -186,7 +192,8 @@ interface MenuSurfaceProps {
   maxPanelH: number;
   backgroundColor: string;
   close: () => void;
-  visible: boolean;
+  opacity: Animated.Value;
+  scale: Animated.Value;
   onHeight: (height: number) => void;
   children: ReactNode;
 }
@@ -205,7 +212,8 @@ function DropdownMenuSurface({
   maxPanelH,
   backgroundColor,
   close,
-  visible,
+  opacity,
+  scale,
   onHeight,
   children,
 }: MenuSurfaceProps) {
@@ -220,7 +228,8 @@ function DropdownMenuSurface({
       minWidth: panelMinW,
       maxWidth: maxPanelW,
       backgroundColor,
-      opacity: visible ? 1 : 0,
+      opacity,
+      transform: [{ scale }],
       // Avoid Android expanding an absolute panel to maxHeight (empty gap under EN labels).
       ...(needsScroll || contentH === 0 ? { maxHeight: maxPanelH } : { height: contentH }),
     },
@@ -241,7 +250,7 @@ function DropdownMenuSurface({
   );
 
   return (
-    <View accessibilityRole="menu" accessibilityLabel={label} style={panelStyle}>
+    <Animated.View accessibilityRole="menu" accessibilityLabel={label} style={panelStyle}>
       {needsScroll ? (
         <ScrollView
           bounces={false}
@@ -258,7 +267,7 @@ function DropdownMenuSurface({
           {body}
         </View>
       )}
-    </View>
+    </Animated.View>
   );
 }
 
@@ -271,6 +280,7 @@ export function DropdownPanel({
   heading,
   align = "right",
   minWidth = 224,
+  maxWidth = 320,
   trigger,
   children,
 }: DropdownPanelProps) {
@@ -283,18 +293,92 @@ export function DropdownPanel({
   const wrapRef = useRef<View>(null);
   const layoutSize = useRef({ width: 0, height: 0 });
   const [open, setOpen] = useState(false);
+  const [exiting, setExiting] = useState(false);
   const [anchor, setAnchor] = useState<AnchorRect | null>(null);
   const [contentH, setContentH] = useState(0);
   const openRef = useRef(false);
   openRef.current = open;
+  const exitingRef = useRef(false);
   const openGen = useRef(0);
+  const menuOpacity = useRef(new Animated.Value(0)).current;
+  const menuScale = useRef(new Animated.Value(MODAL_SCALE_FROM)).current;
+  const enteredRef = useRef(false);
 
-  const close = useCallback(() => {
+  const finishClose = useCallback(() => {
     openGen.current += 1;
+    exitingRef.current = false;
     setOpen(false);
+    setExiting(false);
     setAnchor(null);
     setContentH(0);
-  }, []);
+    enteredRef.current = false;
+    menuOpacity.setValue(0);
+    menuScale.setValue(MODAL_SCALE_FROM);
+    setOverlay(null, panelId);
+  }, [menuOpacity, menuScale, panelId, setOverlay]);
+
+  const close = useCallback(() => {
+    if (exitingRef.current) {
+      finishClose();
+      return;
+    }
+    if (!openRef.current) {
+      finishClose();
+      return;
+    }
+    exitingRef.current = true;
+    setExiting(true);
+    const gen = openGen.current;
+    const done = () => {
+      if (gen !== openGen.current) return;
+      finishClose();
+    };
+    Animated.parallel([
+      Animated.timing(menuOpacity, {
+        toValue: 0,
+        duration: MODAL_CLOSE_MS,
+        easing: menuEase,
+        useNativeDriver: true,
+      }),
+      Animated.timing(menuScale, {
+        toValue: MODAL_SCALE_FROM,
+        duration: MODAL_CLOSE_MS,
+        easing: menuEase,
+        useNativeDriver: true,
+      }),
+    ]).start(done);
+  }, [finishClose, menuOpacity, menuScale]);
+
+  // Enter as soon as the menu mounts — do not wait on content measure (that felt like a snap).
+  useEffect(() => {
+    if (!open || exiting || enteredRef.current) return;
+    enteredRef.current = true;
+    menuOpacity.setValue(0);
+    menuScale.setValue(MODAL_SCALE_FROM);
+    let inner = 0;
+    const outer = requestAnimationFrame(() => {
+      inner = requestAnimationFrame(() => {
+        Animated.parallel([
+          Animated.timing(menuOpacity, {
+            toValue: 1,
+            duration: MODAL_OPEN_MS,
+            easing: menuEase,
+            useNativeDriver: true,
+          }),
+          Animated.timing(menuScale, {
+            toValue: 1,
+            duration: MODAL_OPEN_MS,
+            easing: menuEase,
+            useNativeDriver: true,
+          }),
+        ]).start();
+      });
+    });
+    return () => {
+      cancelAnimationFrame(outer);
+      cancelAnimationFrame(inner);
+    };
+  }, [exiting, menuOpacity, menuScale, open]);
 
   const readAnchor = useCallback((): Promise<AnchorRect | null> => {
     return new Promise((resolve) => {
@@ -357,6 +441,8 @@ export function DropdownPanel({
             x: picked.x - origin.x,
             y: picked.y - origin.y,
           });
+          exitingRef.current = false;
+          setExiting(false);
           setOpen(true);
         });
       };
@@ -401,12 +487,18 @@ export function DropdownPanel({
     : trigger;
 
   const gap = spacing.sm;
-  const maxPanelW = Math.min(320, winW - spacing.lg * 2);
+  const maxPanelW = Math.min(maxWidth, winW - spacing.lg * 2);
   const panelMinW = Math.min(minWidth, maxPanelW);
 
   useLayoutEffect(() => {
-    if (!open || !anchor) {
-      setOverlay(null);
+    if (!open && !exiting) {
+      setOverlay(null, panelId);
+      return;
+    }
+    if (!open || !anchor || exiting) {
+      // Keep the current overlay while the close tween runs. Remounting here
+      // aborts native-driver animation (`finished: false`) and leaves a scrim
+      // that swallows the next press on ⋮ / settings.
       return;
     }
 
@@ -440,12 +532,14 @@ export function DropdownPanel({
           maxPanelH={placed.maxHeight}
           backgroundColor={colors.surfaceContainerHigh}
           close={close}
-          visible={contentH > 0}
+          opacity={menuOpacity}
+          scale={menuScale}
           onHeight={setContentH}
         >
           {children}
         </DropdownMenuSurface>
       </View>,
+      panelId,
     );
     // Do not `setOverlay(null)` on deps change — that remounts a focused TextInput
     // (search field) on every keystroke. Close / unmount still clear via the
@@ -457,12 +551,15 @@ export function DropdownPanel({
     close,
     colors.surfaceContainerHigh,
     contentH,
+    exiting,
     gap,
     insets.bottom,
     insets.top,
     heading,
     label,
     maxPanelW,
+    menuOpacity,
+    menuScale,
     open,
     panelId,
     panelMinW,
@@ -472,7 +569,7 @@ export function DropdownPanel({
     t,
   ]);
 
-  useEffect(() => () => setOverlay(null), [setOverlay]);
+  useEffect(() => () => setOverlay(null, panelId), [panelId, setOverlay]);
 
   useEffect(() => {
     if (!open) return;
@@ -491,7 +588,7 @@ export function DropdownPanel({
 }
 
 const styles = StyleSheet.create({
-  overlay: { flex: 1 },
+  overlay: { flex: 1, pointerEvents: "box-none" },
   triggerWrap: {
     alignSelf: "center",
   },

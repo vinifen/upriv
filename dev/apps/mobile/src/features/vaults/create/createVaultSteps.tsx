@@ -37,6 +37,7 @@ import {
   RadioGroup,
   SwitchRow,
   ThemedInput,
+  DisplayNameFieldError,
 } from "@/components/settings/settingsFields";
 import {
   KdfSection,
@@ -209,12 +210,19 @@ function CreateVaultIdentityStep({
         ref={bindFieldRef?.("displayName")}
         value={draft.displayName}
         maxLength={VAULT_DISPLAY_NAME_MAX_LENGTH}
+        autoCorrect={false}
+        spellCheck={false}
         onFocus={() => onFieldFocus?.("displayName")}
         onChangeText={(displayName) => onChange({ displayName })}
         returnKeyType="next"
         onSubmitEditing={() => onAdvanceStep?.()}
       />
-      <FieldErrors errors={createVaultErrorsForField(errors, "displayName")} />
+      <DisplayNameFieldError name={draft.displayName} allowEmpty />
+      <FieldErrors
+        errors={createVaultErrorsForField(errors, "displayName").filter(
+          (code) => code === "empty" || code === "duplicate",
+        )}
+      />
       <FieldLabel>{t("vault.create.note")}</FieldLabel>
       <FieldHint>{t("vault.create.note_help", { max: String(VAULT_NOTE_MAX_LENGTH) })}</FieldHint>
       <ThemedInput
@@ -446,6 +454,8 @@ function CreateVaultGeneralStep({
           <ThemedInput
             value={draft.groupName}
             maxLength={VAULT_DISPLAY_NAME_MAX_LENGTH}
+            autoCorrect={false}
+            spellCheck={false}
             onChangeText={(groupName) => {
               if (groupName.trim()) {
                 onChange({ groupMode: "create", groupName });
@@ -458,8 +468,8 @@ function CreateVaultGeneralStep({
             }}
             placeholder={t("vault.group.create.name_label")}
           />
+          <DisplayNameFieldError name={draft.groupName} allowEmpty />
           <FieldHint>{t("vault.create.group_create_help")}</FieldHint>
-          <FieldErrors errors={createVaultErrorsForField(errors, "groupName")} />
         </View>
       </SettingsAccordionSection>
 

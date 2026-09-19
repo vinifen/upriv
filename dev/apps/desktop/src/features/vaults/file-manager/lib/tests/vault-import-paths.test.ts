@@ -13,4 +13,12 @@ describe("relativePathFromImportFile", () => {
   it("falls back to file.name", () => {
     expect(relativePathFromImportFile(new File([], "solo.md"))).toBe("solo.md");
   });
+
+  it("normalizes Windows backslashes to folder separators", () => {
+    const file = new File([], "a.md");
+    Object.defineProperty(file, "webkitRelativePath", {
+      value: "docs\\sub\\a.md",
+    });
+    expect(relativePathFromImportFile(file)).toBe("docs/sub/a.md");
+  });
 });

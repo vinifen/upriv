@@ -231,7 +231,11 @@ export function CreateVaultModal({
         onSelectStep={goToStep}
       />
       <ScrollView
-        style={{ maxHeight: stepPaneMaxHeight }}
+        style={{
+          maxHeight: stepPaneMaxHeight,
+          // Stable pane height across steps (desktop `min-h-[min(24rem,60dvh)]` parity).
+          minHeight: Math.min(stepPaneMaxHeight, 280),
+        }}
         contentContainerStyle={styles.body}
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="none"

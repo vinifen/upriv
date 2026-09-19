@@ -83,4 +83,58 @@ describe("normalizeAppSettings", () => {
     settings.ui.lifecycle_close_modal_on_submit = true;
     expect(normalizeAppSettings(settings).ui.lifecycle_close_modal_on_submit).toBe(true);
   });
+
+  it("defaults lifecycle_open_file_manager_on_open to false", () => {
+    const settings = createDefaultAppSettings();
+    expect(settings.ui.lifecycle_open_file_manager_on_open).toBe(false);
+    const omitted = {
+      ...settings,
+      ui: { ...settings.ui, lifecycle_open_file_manager_on_open: undefined as unknown as boolean },
+    };
+    expect(normalizeAppSettings(omitted).ui.lifecycle_open_file_manager_on_open).toBe(false);
+    settings.ui.lifecycle_open_file_manager_on_open = true;
+    expect(normalizeAppSettings(settings).ui.lifecycle_open_file_manager_on_open).toBe(true);
+  });
+
+  it("defaults file_manager_confirm_delete to true", () => {
+    const settings = createDefaultAppSettings();
+    expect(settings.ui.file_manager_confirm_delete).toBe(true);
+    const omitted = {
+      ...settings,
+      ui: { ...settings.ui, file_manager_confirm_delete: undefined as unknown as boolean },
+    };
+    expect(normalizeAppSettings(omitted).ui.file_manager_confirm_delete).toBe(true);
+    settings.ui.file_manager_confirm_delete = false;
+    expect(normalizeAppSettings(settings).ui.file_manager_confirm_delete).toBe(false);
+  });
+
+  it("coerces file_manager_dock_expanded to boolean (default false)", () => {
+    const settings = createDefaultAppSettings();
+    expect(settings.ui.file_manager_dock_expanded).toBe(false);
+    const omitted = {
+      ...settings,
+      ui: { ...settings.ui, file_manager_dock_expanded: undefined as unknown as boolean },
+    };
+    expect(normalizeAppSettings(omitted).ui.file_manager_dock_expanded).toBe(false);
+    settings.ui.file_manager_dock_expanded = true;
+    expect(normalizeAppSettings(settings).ui.file_manager_dock_expanded).toBe(true);
+  });
+
+  it("clamps file_manager_tree_split_percent to integer 15–65 (default 20)", () => {
+    const settings = createDefaultAppSettings();
+    expect(settings.ui.file_manager_tree_split_percent).toBe(20);
+    const omitted = {
+      ...settings,
+      ui: { ...settings.ui, file_manager_tree_split_percent: undefined as unknown as number },
+    };
+    expect(normalizeAppSettings(omitted).ui.file_manager_tree_split_percent).toBe(20);
+    settings.ui.file_manager_tree_split_percent = 99;
+    expect(normalizeAppSettings(settings).ui.file_manager_tree_split_percent).toBe(65);
+    settings.ui.file_manager_tree_split_percent = 5;
+    expect(normalizeAppSettings(settings).ui.file_manager_tree_split_percent).toBe(15);
+    settings.ui.file_manager_tree_split_percent = 33;
+    expect(normalizeAppSettings(settings).ui.file_manager_tree_split_percent).toBe(33);
+    settings.ui.file_manager_tree_split_percent = 33.7;
+    expect(normalizeAppSettings(settings).ui.file_manager_tree_split_percent).toBe(34);
+  });
 });

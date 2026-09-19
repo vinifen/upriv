@@ -1,11 +1,15 @@
-import type { UnsavedPromptAction, VaultWorkspaceState } from "./fileManagerWorkspaceTypes";
+import type { UnsavedPromptAction, VaultWorkspaceState } from "./workspaceTypes";
+import { ancestorFolderPaths, remapLogicalPath } from "../file-tree/treeOps";
 
-export type { UnsavedPromptAction, VaultWorkspaceState } from "./fileManagerWorkspaceTypes";
+export type { UnsavedPromptAction, VaultWorkspaceState } from "./workspaceTypes";
 export {
   createDefaultWorkspaceState,
   hasUnsavedWorkspaceChanges,
   isPathDirty,
-} from "./fileManagerWorkspaceTypes";
+  isPathSessionModified,
+  sessionPathKind,
+  type SessionPathKind,
+} from "./workspaceTypes";
 
 export type VaultWorkspaceAction =
   | { type: "toggle_folder"; path: string }
@@ -16,10 +20,18 @@ export type VaultWorkspaceAction =
   | { type: "close_tab"; path: string }
   | { type: "request_active_tab"; path: string }
   | { type: "set_active_tab"; path: string }
-  | { type: "set_tree_split"; percent: number }
+  | { type: "reorder_tabs"; fromPath: string; toPath: string }
+  | {
+      type: "hydrate_persisted";
+      openTabs: string[];
+      activeTabPath: string | null;
+      expandedPaths: string[];
+      selectedPath: string | null;
+    }
   | { type: "tree_mutated"; revision: number }
   | { type: "set_editor_draft"; path: string; content: string }
   | { type: "mark_saved"; path: string; content: string }
+  | { type: "mark_session_created"; paths: string[] }
   | { type: "start_rename"; path: string }
   | { type: "cancel_rename" }
   | { type: "set_context_menu"; menu: VaultWorkspaceState["contextMenu"] }
@@ -30,12 +42,51 @@ export type VaultWorkspaceAction =
   | { type: "remove_paths"; paths: string[] }
   | { type: "discard_unsaved_and"; next: VaultWorkspaceAction };
 
+function mergeUniquePaths(existing: readonly string[], added: readonly string[]): string[] {
+  if (added.length === 0) return existing.slice();
+  const next = existing.slice();
+  for (const path of added) {
+    if (path && !next.includes(path)) next.push(path);
+  }
+  return next;
+}
+
+function remapPath(path: string, map: Record<string, string>): string {
+  const froms = Object.keys(map).sort((a, b) => b.length - a.length);
+  for (const from of froms) {
+    const to = map[from];
+    if (!to) continue;
+    const next = remapLogicalPath(path, from, to);
+    if (next !== path) return next;
+  }
+  return path;
+}
+
 function remapList(paths: string[], map: Record<string, string>): string[] {
-  return paths.map((p) => map[p] ?? p).filter(Boolean);
+  return mergeUniquePaths([], paths.map((p) => remapPath(p, map)).filter(Boolean));
 }
 
 function removeFromList(paths: string[], removeSet: Set<string>): string[] {
   return paths.filter((p) => !removeSet.has(p));
+}
+
+/** Move `fromPath` to the index of `toPath` in the open-tabs strip. */
+export function reorderOpenTabs(
+  tabs: readonly string[],
+  fromPath: string,
+  toPath: string,
+): string[] | null {
+  if (fromPath === toPath) return null;
+  const from = tabs.indexOf(fromPath);
+  const to = tabs.indexOf(toPath);
+  if (from < 0 || to < 0) return null;
+  const next = tabs.slice();
+  next.splice(from, 1);
+  next.splice(to, 0, fromPath);
+  if (next.length === tabs.length && next.every((path, index) => path === tabs[index])) {
+    return null;
+  }
+  return next;
 }
 
 function applyPathMap(
@@ -43,19 +94,23 @@ function applyPathMap(
   map: Record<string, string>,
 ): VaultWorkspaceState {
   const openTabs = remapList(state.openTabs, map);
-  const activeTabPath = state.activeTabPath
-    ? (map[state.activeTabPath] ?? state.activeTabPath)
-    : null;
-  const selectedPath = state.selectedPath ? (map[state.selectedPath] ?? state.selectedPath) : null;
-  const renamingPath = state.renamingPath ? (map[state.renamingPath] ?? null) : null;
+  const activeTabPath = state.activeTabPath ? remapPath(state.activeTabPath, map) : null;
+  const selectedPath = state.selectedPath ? remapPath(state.selectedPath, map) : null;
+  const renamingPath = state.renamingPath ? remapPath(state.renamingPath, map) : null;
   const expandedPaths = remapList(state.expandedPaths, map);
   const editorDrafts: Record<string, string> = {};
-  const dirtyPaths: string[] = [];
   for (const [path, content] of Object.entries(state.editorDrafts)) {
-    const next = map[path] ?? path;
-    editorDrafts[next] = content;
-    if (state.dirtyPaths.includes(path)) dirtyPaths.push(next);
+    editorDrafts[remapPath(path, map)] = content;
   }
+  const dirtyPaths = remapList(state.dirtyPaths, map);
+
+  const remappedCreated = remapList(state.sessionCreatedPaths, map);
+  const remappedModified = remapList(state.sessionModifiedPaths, map);
+  /* Rename/move of a previously clean path counts as modified at the destination. */
+  const destinations = Object.values(map);
+  const createdSet = new Set(remappedCreated);
+  const modifiedExtra = destinations.filter((p) => p && !createdSet.has(p));
+
   return {
     ...state,
     openTabs,
@@ -65,6 +120,8 @@ function applyPathMap(
     expandedPaths,
     editorDrafts,
     dirtyPaths,
+    sessionCreatedPaths: remappedCreated,
+    sessionModifiedPaths: mergeUniquePaths(remappedModified, modifiedExtra),
   };
 }
 
@@ -88,6 +145,8 @@ function applyPathRemoval(state: VaultWorkspaceState, paths: string[]): VaultWor
       state.renamingPath && removeSet.has(state.renamingPath) ? null : state.renamingPath,
     editorDrafts,
     dirtyPaths: state.dirtyPaths.filter((p) => !removeSet.has(p)),
+    sessionCreatedPaths: state.sessionCreatedPaths.filter((p) => !removeSet.has(p)),
+    sessionModifiedPaths: state.sessionModifiedPaths.filter((p) => !removeSet.has(p)),
     expandedPaths: state.expandedPaths.filter((p) => !removeSet.has(p)),
   };
 }
@@ -97,12 +156,22 @@ function needsUnsavedPrompt(state: VaultWorkspaceState, path: string | null): bo
 }
 
 function activateTab(state: VaultWorkspaceState, path: string): VaultWorkspaceState {
+  const expandedPaths = mergeExpanded(state.expandedPaths, ancestorFolderPaths(path));
   return {
     ...state,
     activeTabPath: path,
     selectedPath: path,
+    expandedPaths,
     unsavedPrompt: null,
   };
+}
+
+function mergeExpanded(existing: readonly string[], add: readonly string[]): string[] {
+  const next = existing.slice();
+  for (const path of add) {
+    if (path && !next.includes(path)) next.push(path);
+  }
+  return next;
 }
 
 function discardDirtyPaths(
@@ -132,7 +201,6 @@ export function vaultWorkspaceReducer(
         expandedPaths: expanded
           ? state.expandedPaths.filter((p) => p !== action.path)
           : [...state.expandedPaths, action.path],
-        selectedPath: action.path,
       };
     }
     case "expand_folder":
@@ -150,6 +218,7 @@ export function vaultWorkspaceReducer(
         openTabs,
         activeTabPath: action.path,
         selectedPath: action.path,
+        expandedPaths: mergeExpanded(state.expandedPaths, ancestorFolderPaths(action.path)),
         unsavedPrompt: null,
       };
     }
@@ -168,10 +237,12 @@ export function vaultWorkspaceReducer(
       }
       const editorDrafts = { ...state.editorDrafts };
       delete editorDrafts[action.path];
+      const selectedPath = state.selectedPath === action.path ? activeTabPath : state.selectedPath;
       return {
         ...state,
         openTabs,
         activeTabPath,
+        selectedPath,
         dirtyPaths: state.dirtyPaths.filter((p) => p !== action.path),
         editorDrafts,
         unsavedPrompt: null,
@@ -179,15 +250,24 @@ export function vaultWorkspaceReducer(
     }
     case "request_active_tab": {
       if (action.path === state.activeTabPath) return state;
-      if (needsUnsavedPrompt(state, state.activeTabPath)) {
-        return { ...state, unsavedPrompt: { type: "switch_tab", toPath: action.path } };
-      }
+      /* VS Code-style: dirty drafts stay in RAM; switching tabs never prompts. */
       return activateTab(state, action.path);
     }
     case "set_active_tab":
       return vaultWorkspaceReducer(state, { type: "request_active_tab", path: action.path });
-    case "set_tree_split":
-      return { ...state, treeSplitPercent: action.percent };
+    case "reorder_tabs": {
+      const openTabs = reorderOpenTabs(state.openTabs, action.fromPath, action.toPath);
+      if (!openTabs) return state;
+      return { ...state, openTabs };
+    }
+    case "hydrate_persisted":
+      return {
+        ...state,
+        openTabs: action.openTabs,
+        activeTabPath: action.activeTabPath,
+        expandedPaths: action.expandedPaths.length > 0 ? action.expandedPaths : ["/"],
+        selectedPath: action.selectedPath,
+      };
     case "tree_mutated":
       return { ...state, treeRevision: action.revision };
     case "set_editor_draft": {
@@ -201,12 +281,24 @@ export function vaultWorkspaceReducer(
       };
     }
     case "mark_saved": {
+      const isCreated = state.sessionCreatedPaths.includes(action.path);
       return {
         ...state,
         editorDrafts: { ...state.editorDrafts, [action.path]: action.content },
         dirtyPaths: state.dirtyPaths.filter((p) => p !== action.path),
+        /* Created stays green; only mark modified when the path was not new this session. */
+        sessionModifiedPaths: isCreated
+          ? state.sessionModifiedPaths
+          : mergeUniquePaths(state.sessionModifiedPaths, [action.path]),
       };
     }
+    case "mark_session_created":
+      return {
+        ...state,
+        sessionCreatedPaths: mergeUniquePaths(state.sessionCreatedPaths, action.paths),
+        /* Drop from modified if somehow present — created wins. */
+        sessionModifiedPaths: state.sessionModifiedPaths.filter((p) => !action.paths.includes(p)),
+      };
     case "start_rename":
       return { ...state, renamingPath: action.path, contextMenu: null };
     case "cancel_rename":
@@ -226,13 +318,11 @@ export function vaultWorkspaceReducer(
     case "discard_unsaved_and": {
       const dirtyPath = state.unsavedPrompt?.type === "close_tab" ? state.unsavedPrompt.path : null;
       const dirtyPaths =
-        state.unsavedPrompt?.type === "switch_tab" && state.activeTabPath
-          ? [state.activeTabPath]
-          : state.unsavedPrompt?.type === "dismiss_workspace"
-            ? state.dirtyPaths
-            : dirtyPath
-              ? [dirtyPath]
-              : [];
+        state.unsavedPrompt?.type === "dismiss_workspace"
+          ? state.dirtyPaths
+          : dirtyPath
+            ? [dirtyPath]
+            : [];
       const next = discardDirtyPaths(state, dirtyPaths);
       return vaultWorkspaceReducer(next, action.next);
     }
@@ -248,8 +338,6 @@ export function resolveUnsavedPrompt(
   switch (prompt.type) {
     case "close_tab":
       return { type: "close_tab", path: prompt.path };
-    case "switch_tab":
-      return { type: "request_active_tab", path: prompt.toPath };
     case "dismiss_workspace":
       return { type: "set_unsaved_prompt", prompt: null };
   }

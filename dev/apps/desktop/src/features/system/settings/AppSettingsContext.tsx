@@ -34,6 +34,11 @@ interface PersistOptions {
    * modal-owned; Context never calls setup*.
    */
   vaultRootAlreadyApplied?: boolean;
+  /**
+   * Apply the patch in RAM only. Used when core already wrote the same field
+   * (`vault_rename` patches `[app].last_opened_vault`).
+   */
+  memoryOnly?: boolean;
 }
 
 interface AppSettingsContextValue {
@@ -222,8 +227,15 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
 
   const persistUnlocked = useCallback(
     async (next: AppSettingsConfig, options?: PersistOptions) => {
-      const previous = settingsRef.current;
       const normalized = normalizeAppSettings(next);
+
+      if (options?.memoryOnly) {
+        settingsRef.current = normalized;
+        setSettings(normalized);
+        return;
+      }
+
+      const previous = settingsRef.current;
       const rootModeChanged =
         previous.app.vault_root_mode !== normalized.app.vault_root_mode ||
         previous.app.upriv_root_path !== normalized.app.upriv_root_path;

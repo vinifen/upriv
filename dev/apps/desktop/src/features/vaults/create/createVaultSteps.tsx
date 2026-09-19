@@ -21,6 +21,7 @@ import type { CreateVaultStepFocusProps } from "@upriv/shared/react";
 import { useCreateVaultService } from "@/platform/services";
 import { useTranslation } from "@/i18n";
 import {
+  DisplayNameFieldError,
   PolicyRadioOption,
   SecurityModeRadioGroup,
   settingsControlClass,
@@ -208,10 +209,17 @@ function CreateVaultIdentityStep({
               onAdvanceStep?.();
             }
           }}
+          autoComplete="off"
+          spellCheck={false}
           onChange={(e) => onChange({ displayName: e.target.value })}
           className={settingsControlClass}
         />
-        <FieldErrors errors={createVaultErrorsForField(errors, "displayName")} />
+        <DisplayNameFieldError name={draft.displayName} allowEmpty />
+        <FieldErrors
+          errors={createVaultErrorsForField(errors, "displayName").filter(
+            (code) => code === "empty" || code === "duplicate",
+          )}
+        />
       </SettingsField>
       <SettingsField
         label={t("vault.create.note")}
@@ -454,7 +462,6 @@ function CreateVaultGeneralStep({
           }}
         />
         <FieldErrors errors={createVaultErrorsForField(errors, "group")} />
-        <FieldErrors errors={createVaultErrorsForField(errors, "groupName")} />
       </VaultSettingsSection>
 
       <VaultSettingsSection title={t("modal.settings.section.kdf")} defaultOpen>

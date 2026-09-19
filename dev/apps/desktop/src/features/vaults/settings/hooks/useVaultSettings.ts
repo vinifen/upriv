@@ -9,15 +9,18 @@ export function useVaultSettings(vaultId: string | null, open: boolean) {
   const [loadError, setLoadError] = useState<unknown>(null);
   const [loadAttempt, setLoadAttempt] = useState(0);
   const genRef = useRef(0);
+  const loadedIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!open || !vaultId) {
       genRef.current += 1;
+      loadedIdRef.current = null;
       setConfig(null);
       setLoading(false);
       setLoadError(null);
       return;
     }
+    if (loadedIdRef.current === vaultId) return;
     const gen = ++genRef.current;
     let cancelled = false;
     setLoading(true);
@@ -31,6 +34,7 @@ export function useVaultSettings(vaultId: string | null, open: boolean) {
           setLoadError(new Error("missing settings"));
           return;
         }
+        loadedIdRef.current = settings.vault.id;
         setConfig(settings);
       })
       .catch((error: unknown) => {
@@ -47,6 +51,7 @@ export function useVaultSettings(vaultId: string | null, open: boolean) {
   }, [open, vaultId, vaultService, loadAttempt]);
 
   const replaceConfig = useCallback((next: VaultSettingsConfig) => {
+    loadedIdRef.current = next.vault.id;
     setConfig(next);
   }, []);
 

@@ -27,4 +27,27 @@ describe("createLiveVaultService", () => {
     await service.registerSettings("notes", config);
     expect(saveSettings).toHaveBeenCalledWith("notes", config);
   });
+
+  it("forwards rename when wired", async () => {
+    const rename = vi.fn(async () => ({
+      id: "work-docs",
+      previousId: "notes",
+      displayName: "Work Docs",
+      idChanged: true,
+    }));
+    const service = createLiveVaultService({
+      listVaults: vi.fn(async () => []),
+      createVault: vi.fn(),
+      getSettings: vi.fn(),
+      saveSettings: vi.fn(),
+      rename,
+    });
+    await expect(service.rename("notes", "Work Docs")).resolves.toEqual({
+      id: "work-docs",
+      previousId: "notes",
+      displayName: "Work Docs",
+      idChanged: true,
+    });
+    expect(rename).toHaveBeenCalledWith("notes", "Work Docs");
+  });
 });

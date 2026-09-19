@@ -25,6 +25,7 @@ export {
   VAULT_LIST_SEARCH_PERSIST_MS,
   createDefaultAppSettings,
   normalizeAppSettings,
+  normalizeFileManagerTreeSplitPercent,
   normalizeVaultListSearch,
   normalizeVaultRootMode,
 } from "./normalize";

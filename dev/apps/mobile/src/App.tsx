@@ -32,8 +32,13 @@ function ThemedNavigation() {
 
   return (
     <NavigationContainer theme={navTheme}>
-      <StatusBar style={statusBarStyle} />
-      <Stack.Navigator screenOptions={{ headerShown: false }}>
+      <StatusBar style={statusBarStyle} translucent />
+      <Stack.Navigator
+        screenOptions={{
+          headerShown: false,
+          contentStyle: { backgroundColor: colors.background },
+        }}
+      >
         <Stack.Screen name="VaultList" component={VaultListScreen} />
       </Stack.Navigator>
     </NavigationContainer>

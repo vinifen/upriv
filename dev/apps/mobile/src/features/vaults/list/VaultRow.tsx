@@ -25,7 +25,7 @@ import { LoadingBudgetHint } from "@/components/ui";
 import { useTranslation, type I18nKey } from "@/i18n";
 import { useLoadingBudget } from "@upriv/shared/react";
 import { useTheme } from "@/theme";
-import { radii, spacing, vaultRowShadow } from "@/theme/tokens";
+import { radii, spacing, vaultRowBoxShadow } from "@/theme/tokens";
 import { useVaultRowChrome } from "@/hooks/useVaultRowChrome";
 import { vaultStatusIconColors } from "@/theme/vault-status";
 import { DropOverRing } from "./DropOverRing";
@@ -35,6 +35,9 @@ import { VaultLastOpenedIndicator } from "./VaultLastOpenedIndicator";
 import { VaultLockButton } from "./VaultLockButton";
 import { VaultRowActions } from "./VaultRowActions";
 import { VaultStatusBadge } from "./VaultStatusBadge";
+import {
+  VaultFileManagerIndicator,
+} from "@/features/vaults/file-manager/row/VaultFileManagerIndicator";
 import { useAppSettingsContext } from "@/features/system/settings";
 
 export interface VaultRowDropTargetProps {
@@ -97,7 +100,7 @@ export function VaultRow({
   onOpenVaultInfo,
 }: VaultRowProps) {
   const { t, locale } = useTranslation();
-  const { colors, typography } = useTheme();
+  const { colors, typography, theme } = useTheme();
   const { settings: appSettings } = useAppSettingsContext();
   const status = resolveVaultListStatus(vault, pipelineListStatus);
   const isOpen = status === "open";
@@ -125,7 +128,8 @@ export function VaultRow({
       {lastAccessedText}
     </Text>
   );
-  const showGrip = dragEnabled && !isPipelineBusy;
+  const showGrip = dragEnabled;
+  const gripDisabled = isPipelineBusy;
   const iconTone = vaultStatusIconColors(status, colors);
   const letters = vaultDisplayLetters(vault.displayName);
   const avatarSize = variant === "block" ? 36 : density.icon;
@@ -187,6 +191,7 @@ export function VaultRow({
           {vault.displayName}
         </Text>
         <VaultLastOpenedIndicator active={isLastOpened} />
+        <VaultFileManagerIndicator vaultId={vault.id} />
         <VaultHiddenIndicator hidden={vault.hidden} />
       </View>
       <View style={styles.metaRow}>
@@ -211,6 +216,7 @@ export function VaultRow({
             {vault.displayName}
           </Text>
           <VaultLastOpenedIndicator active={isLastOpened} size={13} />
+          <VaultFileManagerIndicator vaultId={vault.id} size={13} />
           <VaultHiddenIndicator hidden={vault.hidden} size={13} />
         </View>
       </View>
@@ -255,6 +261,7 @@ export function VaultRow({
         accessibilityLabel={activateLabel}
         style={[
           styles.blockCard,
+          { boxShadow: vaultRowBoxShadow(theme) },
           rowSurface(
             status,
             colors.surfaceContainer,
@@ -268,7 +275,7 @@ export function VaultRow({
         <View style={styles.blockTop}>
           {showGrip ? (
             <VaultDragHandle
-              disabled={!dragEnabled}
+              disabled={gripDisabled}
               label={dragHandleLabel}
               onDragStart={onDragStart}
               onDragMove={onDragMove}
@@ -303,6 +310,7 @@ export function VaultRow({
           paddingVertical: density.paddingY,
           paddingRight: density.paddingX,
           paddingLeft: showGrip ? Math.max(density.paddingX - 8, spacing.sm) : density.paddingX,
+          boxShadow: vaultRowBoxShadow(theme),
         },
         rowSurface(
           status,
@@ -316,7 +324,7 @@ export function VaultRow({
       {dropRing}
       {showGrip ? (
         <VaultDragHandle
-          disabled={!dragEnabled}
+          disabled={gripDisabled}
           label={dragHandleLabel}
           onDragStart={onDragStart}
           onDragMove={onDragMove}
@@ -355,12 +363,15 @@ function rowSurface(
 const styles = StyleSheet.create({
   row: {
     position: "relative",
+    alignSelf: "stretch",
+    width: "100%",
+    minWidth: 0,
     flexDirection: "row",
     alignItems: "center",
     gap: 12,
     borderRadius: radii.md,
     marginBottom: spacing.sm,
-    ...vaultRowShadow,
+    overflow: "visible",
   },
   memberRow: { marginBottom: 0 },
   rowPress: { flex: 1, minWidth: 0, minHeight: 44, justifyContent: "center" },
@@ -386,7 +397,7 @@ const styles = StyleSheet.create({
     padding: 14,
     borderRadius: radii.md,
     gap: spacing.sm,
-    ...vaultRowShadow,
+    overflow: "visible",
   },
   blockTop: { flexDirection: "row", alignItems: "flex-start", gap: 10 },
   blockIdentity: { flex: 1, minWidth: 0, gap: 6 },

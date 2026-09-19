@@ -33,8 +33,8 @@ pub use vault_config::{
 };
 pub use vault_groups::{
     create_vault_group_with_sort, delete_vault_group, known_vault_ids, load_vault_groups,
-    parse_vault_groups_toml_str, reorder_vault_group_grouped_vaults, reorder_vault_groups,
-    repair_vault_groups, update_vault_group, vault_groups_path, LoadedVaultGroups,
-    UpdateVaultGroupParams, VaultGroup, VaultGroupCreate, VaultGroupUpdate, VaultGroupsFile,
-    VAULT_GROUPS_FILE_NAME,
+    parse_vault_groups_toml_str, remap_grouped_vault_id, reorder_vault_group_grouped_vaults,
+    reorder_vault_groups, repair_vault_groups, update_vault_group, vault_groups_path,
+    LoadedVaultGroups, UpdateVaultGroupParams, VaultGroup, VaultGroupCreate, VaultGroupUpdate,
+    VaultGroupsFile, VAULT_GROUPS_FILE_NAME,
 };

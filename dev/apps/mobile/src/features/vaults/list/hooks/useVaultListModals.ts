@@ -31,7 +31,6 @@ export function useVaultListModals() {
   const [exportVault, setExportVault] = useState<VaultListItem | null>(null);
   const [exportSubmitting, setExportSubmitting] = useState(false);
   const [backupsVault, setBackupsVault] = useState<VaultListItem | null>(null);
-  const [fmVault, setFmVault] = useState<VaultListItem | null>(null);
   const [settingsGroup, setSettingsGroup] = useState<VaultGroup | null>(null);
   const settingsGroupOpenRef = useRef(false);
   settingsGroupOpenRef.current = settingsGroup !== null;
@@ -89,8 +88,6 @@ export function useVaultListModals() {
     setExportSubmitting,
     backupsVault,
     setBackupsVault,
-    fmVault,
-    setFmVault,
     settingsGroup,
     setSettingsGroup,
     settingsGroupOpenRef,

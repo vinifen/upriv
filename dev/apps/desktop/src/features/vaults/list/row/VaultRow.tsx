@@ -112,7 +112,7 @@ export function VaultRow({
       ref={articleRef}
       {...vaultListDropKeyProps(dropKey)}
       className={[
-        "vault-row relative z-0 flex flex-row items-center justify-between overflow-visible rounded-xl px-4 transition-[opacity,box-shadow,background-color]",
+        "vault-row relative z-0 flex min-w-0 w-full flex-row items-center justify-between overflow-visible rounded-xl px-4 transition-[opacity,box-shadow,background-color]",
         dragDisabled ? "pl-4" : "pl-2",
         "pr-4 sm:pr-6",
         rowGap,
@@ -147,7 +147,7 @@ export function VaultRow({
       <div className="flex min-w-0 flex-1 items-center gap-2 sm:gap-3">
         {!dragDisabled ? (
           <VaultDragHandle
-            disabled={dragDisabled}
+            disabled={isPipelineBusy}
             dropKey={dropKey}
             label={dragHandleLabel}
             onPointerDragStart={pointerDrag.onStart}

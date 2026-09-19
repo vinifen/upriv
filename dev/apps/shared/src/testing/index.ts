@@ -16,6 +16,8 @@ export {
   moveVaultPath,
   renameVaultPath,
   resetVaultFileSession,
+  resetVaultWorkspaceSnapshots,
+  remapVaultWorkspaceSnapshot,
   setVaultFileContent,
   vaultFileLanguageFromPath,
 } from "./fileSystem";

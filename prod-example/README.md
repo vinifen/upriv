@@ -329,6 +329,8 @@ Legacy nested `[ui.vault_list]` still loads; save writes flat keys under `[ui]`.
 | `theme` | string | `"dark"` | `"dark"` \| `"neutral"` \| `"light"` |
 | `show_header_more_button` | bool | `true` | Show the header overflow (⋮) menu (Refresh, Logs, Help, Info) |
 | `file_manager_dock_expanded` | bool | `false` | When `true`, minimized file manager chips stay expanded; when `false`, only a single button expands the dock |
+| `file_manager_tree_split_percent` | number | `20` | Explorer/editor split % for the in-app file manager (15–65). Shared by every vault; set by dragging the resize grip |
+| `file_manager_confirm_delete` | bool | `true` | When `true`, deleting a file or folder in the file manager asks for confirmation. Off skips the prompt. Can also be turned off from the delete dialog |
 | `always_show_hidden_vaults` | bool | `false` | When `true`, vaults with `[vault] hidden = true` appear in the list on every launch |
 | `vault_list_allow_drag_into_group` | bool | `true` | When `true`, dropping a vault onto a group assigns it (and onto the list ungroups). Turn off to keep drag for list reorder only |
 | `vault_list_show_drag` | bool | `true` | When `true`, show vertical drag grips on the vault list (drag up/down). Turn off to hide grips only — list order/sort unchanged |
@@ -344,6 +346,7 @@ Legacy nested `[ui.vault_list]` still loads; save writes flat keys under `[ui]`.
 | `vault_list_show_vault_settings_button` | bool | `true` | Show the vault row settings (gear) menu |
 | `vault_list_show_group_settings_button` | bool | `true` | Show the group header settings (gear) menu |
 | `lifecycle_close_modal_on_submit` | bool | `false` | When `true`, unlock/lock password dialog closes on Confirm and progress continues on the vault row (multi-unlock). When `false` (default), the dialog stays open so a wrong password can be fixed in place |
+| `lifecycle_open_file_manager_on_open` | bool | `false` | When `true`, after a vault unlock succeeds the in-app file manager opens automatically — only if no other dialog is already open. Off by default |
 
 **Demo:** `finance-2025` has `hidden = true` in `config.toml`; list visibility also depends on `always_show_hidden_vaults` and the session “show hidden vaults” toggle in system settings.
 

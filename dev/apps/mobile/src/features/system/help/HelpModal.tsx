@@ -12,7 +12,7 @@ import {
 import { useTranslation, type I18nKey } from "@/i18n";
 import { useTheme } from "@/theme";
 import { radii, settingsSectionBoxShadow, spacing } from "@/theme/tokens";
-import { Modal } from "@/components/ui";
+import { Collapse, Modal } from "@/components/ui";
 import { ThemedInput } from "@/components/settings";
 import { getMobileAppVersion } from "@/lib/appVersion";
 
@@ -128,7 +128,7 @@ export function HelpModal({ open, onClose }: HelpModalProps) {
                   </Text>
                   <Text style={typography.bodyMuted}>{isOpen ? "▾" : "▸"}</Text>
                 </Pressable>
-                {isOpen ? (
+                <Collapse open={isOpen}>
                   <View style={styles.sectionBody}>
                     {HELP_SECTION_BODY_KEYS[section.id].map((bodyKey) => (
                       <Text key={bodyKey} style={[typography.bodyMuted, styles.paragraph]}>
@@ -136,7 +136,7 @@ export function HelpModal({ open, onClose }: HelpModalProps) {
                       </Text>
                     ))}
                   </View>
-                ) : null}
+                </Collapse>
               </View>
             );
           })

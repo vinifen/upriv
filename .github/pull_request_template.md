@@ -15,5 +15,5 @@
 - [ ] Tests ran (`./run check` from `dev/`, or note what you ran)
 
 <!--
-Do not credit an AI, model, or editor as author or co-author in this PR.
+Do NOT credit an AI, model, or editor as author or co-author in this PR or PR template.
 -->

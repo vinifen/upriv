@@ -39,6 +39,8 @@ export type ThemePalette = {
   modalScrim: string;
   modalShadow: string;
   vaultRowShadow: string;
+  /** Compact float for FM dock chips — soft all-around, a bit stronger than vault rows. */
+  dockChipShadow: string;
   settingsSectionShadow: string;
   logViewerBg: string;
 };
@@ -52,7 +54,7 @@ const DARK: ThemePalette = {
   surfaceContainerHighest: "#2a3548",
   onSurface: "#d8e3fb",
   onSurfaceVariant: "#c6c6cd",
-  outlineVariant: "#45464d",
+  outlineVariant: hexWithAlpha("#45464d", 0.6),
   splitDivider: hexWithAlpha("#909097", 0.38),
   splitDividerOnPrimary: hexWithAlpha("#283044", 0.32),
   scrollbarThumb: "#2a3548",
@@ -75,6 +77,7 @@ const DARK: ThemePalette = {
   modalScrim: hexWithAlpha("#081425", 0.8),
   modalShadow: `0 12px 32px ${hexWithAlpha("#000000", 0.22)}`,
   vaultRowShadow: `0 10px 14px -10px ${hexWithAlpha("#000000", 0.4)}`,
+  dockChipShadow: `0 0 6px ${hexWithAlpha("#000000", 0.28)}, 0 5px 12px -4px ${hexWithAlpha("#000000", 0.48)}`,
   settingsSectionShadow: `0 6px 12px -8px ${hexWithAlpha("#000000", 0.22)}`,
   logViewerBg: "#0d1117",
 };
@@ -88,7 +91,7 @@ const NEUTRAL: ThemePalette = {
   surfaceContainerHighest: "#505864",
   onSurface: "#eaebee",
   onSurfaceVariant: "#a4acb8",
-  outlineVariant: "#5c6474",
+  outlineVariant: hexWithAlpha("#5c6474", 0.6),
   splitDivider: hexWithAlpha("#8c94a4", 0.44),
   splitDividerOnPrimary: hexWithAlpha("#202632", 0.38),
   scrollbarThumb: "#525a68",
@@ -111,6 +114,7 @@ const NEUTRAL: ThemePalette = {
   modalScrim: hexWithAlpha("#202632", 0.74),
   modalShadow: `0 12px 32px ${hexWithAlpha("#000000", 0.2)}`,
   vaultRowShadow: `0 10px 14px -10px ${hexWithAlpha("#000000", 0.34)}`,
+  dockChipShadow: `0 0 6px ${hexWithAlpha("#000000", 0.24)}, 0 5px 12px -4px ${hexWithAlpha("#000000", 0.42)}`,
   settingsSectionShadow: `0 6px 12px -8px ${hexWithAlpha("#000000", 0.18)}`,
   logViewerBg: "#2e3542",
 };
@@ -124,7 +128,7 @@ const LIGHT: ThemePalette = {
   surfaceContainerHighest: "#c8d2e0",
   onSurface: "#243048",
   onSurfaceVariant: "#566678",
-  outlineVariant: "#bcc8d8",
+  outlineVariant: hexWithAlpha("#bcc8d8", 0.6),
   splitDivider: hexWithAlpha("#58667c", 0.24),
   splitDividerOnPrimary: hexWithAlpha("#ffffff", 0.42),
   scrollbarThumb: "#c0cad8",
@@ -147,6 +151,7 @@ const LIGHT: ThemePalette = {
   modalScrim: hexWithAlpha("#243048", 0.32),
   modalShadow: `0 12px 32px ${hexWithAlpha("#243048", 0.08)}`,
   vaultRowShadow: `0 10px 14px -10px ${hexWithAlpha("#243048", 0.16)}`,
+  dockChipShadow: `0 0 6px ${hexWithAlpha("#243048", 0.1)}, 0 5px 12px -4px ${hexWithAlpha("#243048", 0.18)}`,
   settingsSectionShadow: `0 6px 12px -8px ${hexWithAlpha("#243048", 0.1)}`,
   logViewerBg: "#d0d8e4",
 };

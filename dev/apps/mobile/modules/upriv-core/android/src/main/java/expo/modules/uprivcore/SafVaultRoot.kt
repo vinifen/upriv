@@ -47,6 +47,7 @@ locale = "__LOCALE__"
 theme = "dark"
 show_header_more_button = true
 file_manager_dock_expanded = false
+file_manager_tree_split_percent = 20
 always_show_hidden_vaults = false
 vault_list_sort = "order"
 vault_list_sort_direction = "asc"
@@ -62,6 +63,8 @@ vault_list_show_vault_more_button = true
 vault_list_show_vault_settings_button = true
 vault_list_show_group_settings_button = true
 lifecycle_close_modal_on_submit = false
+lifecycle_open_file_manager_on_open = false
+file_manager_confirm_delete = true
 
 [logging]
 enabled = true
@@ -109,7 +112,32 @@ path = ""
     }
   }
 
+  /**
+   * Same `ACTION_OPEN_DOCUMENT_TREE` grant — encoding and a `/document/` leaf
+   * must not look like a different tree (import-folder vs vault-root).
+   */
+  fun sameTreeUri(left: String, right: String): Boolean {
+    val a = left.trim()
+    val b = right.trim()
+    if (a.isEmpty() || b.isEmpty()) return false
+    if (a == b) return true
+    val ua = Uri.parse(a)
+    val ub = Uri.parse(b)
+    if (ua == ub) return true
+    return try {
+      ua.authority == ub.authority &&
+        DocumentsContract.getTreeDocumentId(ua) == DocumentsContract.getTreeDocumentId(ub)
+    } catch (_: Throwable) {
+      false
+    }
+  }
+
   fun release(context: Context, treeUri: String) {
+    val active = SafPrefs.getActiveUri(context)
+    if (!active.isNullOrBlank() && sameTreeUri(active, treeUri)) {
+      // File-manager import must not drop the custom vault-root grant.
+      return
+    }
     val uri = Uri.parse(treeUri)
     val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
     try {

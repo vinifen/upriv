@@ -1,4 +1,5 @@
 import { RpcError } from "../core-rpc/errors";
+import { normalizeStoredName } from "../format/storedName";
 import { parseKdfUnlockPreset, type KdfUnlockPreset } from "../vault-settings/kdf";
 import { STORAGE_MODES, type StorageMode, type VaultSession } from "../vault/types";
 import type { VaultListItem } from "./types";
@@ -52,7 +53,7 @@ export function parseVaultListItemWire(raw: unknown): VaultListItem {
   const passwordHint = typeof r.passwordHint === "string" ? r.passwordHint : "";
   return {
     id: r.id.trim(),
-    displayName: r.displayName,
+    displayName: normalizeStoredName(r.displayName),
     session: parseSession(r.session),
     storageMode: parseStorageMode(r.storageMode),
     order: typeof r.order === "number" ? r.order : 0,

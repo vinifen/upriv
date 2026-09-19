@@ -18,14 +18,17 @@ import {
   selectedGroupIdAfterAssignment,
   normalizeVaultSettingsConfig,
   vaultSettingsEqual,
+  vaultSettingsEqualIgnoringIdentity,
   patchStorageMode,
   validateDisplayName,
   vaultSettingsAreaTitleKey,
   VAULT_SETTINGS_AREA_ICON,
   vaultSettingsToListPatch,
+  vaultSettingsIdentityListPatch,
   vaultRootPathForWorkspaceValidation,
   vaultConfigEditAllowed,
   rebaseQuietLockedVaultSettings,
+  normalizeStoredName,
   type CreateVaultGroupAssignment,
   type ChangeKdfFieldsState,
   type ChangePasswordFieldsState,
@@ -76,6 +79,7 @@ interface VaultSettingsModalProps {
   /** List pipeline — blocks KDF/password/storage changes while open/opening/closing. */
   pipelineListStatus?: VaultPipelineListStatus;
   onSaved: (vaultId: string, patch: ReturnType<typeof vaultSettingsToListPatch>) => void;
+  onPersistBusyChange?: (vaultIds: readonly string[] | null) => void;
   showToast: (message: string) => void;
   groups?: readonly VaultGroup[];
   onCommitGroupAssignment?: (
@@ -92,6 +96,7 @@ export function VaultSettingsModal({
   onClose,
   pipelineListStatus = {},
   onSaved,
+  onPersistBusyChange,
   showToast,
   groups = NO_VAULT_GROUPS,
   onCommitGroupAssignment,
@@ -132,7 +137,6 @@ export function VaultSettingsModal({
   const [loadAttempt, setLoadAttempt] = useState(0);
   const [selectedGroupId, setSelectedGroupId] = useState("");
   const [newGroupName, setNewGroupName] = useState("");
-  const [groupNameError, setGroupNameError] = useState<string | null>(null);
   const showHiddenVaults = appSettings.ui.always_show_hidden_vaults || showHiddenVaultsSession;
   const hiddenLocked = Boolean(vault && isVaultInHiddenGroup(groups, vault.id));
   const lockDraftHidden = useCallback(() => {
@@ -166,6 +170,9 @@ export function VaultSettingsModal({
   const savedHideRef = useRef<ReturnType<typeof setTimeout>>();
   const groupsRef = useRef(groups);
   groupsRef.current = groups;
+  const identityMigratingRef = useRef(false);
+  const identityMigratingToRef = useRef<string | null>(null);
+  const renameCommittedRef = useRef(false);
 
   useEffect(() => {
     if (!open || !vaultId) {
@@ -212,12 +219,19 @@ export function VaultSettingsModal({
     [groups, vaultId],
   );
 
-  const pendingGroupName = newGroupName.trim();
+  const pendingGroupName = normalizeStoredName(newGroupName);
   const groupDirty = pendingGroupName.length > 0 || selectedGroupId !== baselineGroupId;
 
   const preferencesDirty = useMemo(
     () => Boolean(draft && baseline && !vaultSettingsEqual(draft, baseline)),
     [draft, baseline],
+  );
+
+  const nameDirty = Boolean(
+    draft &&
+    baseline &&
+    normalizeStoredName(draft.vault.display_name) !==
+      normalizeStoredName(baseline.vault.display_name),
   );
 
   const passwordDirty = useMemo(() => changePasswordFormIsDirty(passwordFields), [passwordFields]);
@@ -276,6 +290,8 @@ export function VaultSettingsModal({
 
   useEffect(() => {
     if (!open || !vaultId) {
+      identityMigratingRef.current = false;
+      identityMigratingToRef.current = null;
       loadGen.current += 1;
       setDraft(null);
       setBaseline(null);
@@ -287,12 +303,18 @@ export function VaultSettingsModal({
       setSavedVisible(false);
       setSelectedGroupId("");
       setNewGroupName("");
-      setGroupNameError(null);
       resetPasswordForm();
       resetKdfForm();
       setDeleteOpen(false);
       setDeleteConfirm("");
       return;
+    }
+
+    if (identityMigratingRef.current) {
+      const skip = identityMigratingToRef.current === vaultId;
+      identityMigratingRef.current = false;
+      identityMigratingToRef.current = null;
+      if (skip) return;
     }
 
     let cancelled = false;
@@ -306,8 +328,6 @@ export function VaultSettingsModal({
       groupsRef.current.find((group) => group.groupedVaults.includes(vaultId))?.id ?? "",
     );
     setNewGroupName("");
-    setGroupNameError(null);
-
     const apply = (settings: VaultSettingsConfig) => {
       const normalized = cloneSettings(normalizeVaultSettingsConfig(settings));
       setBaseline(normalized);
@@ -399,17 +419,20 @@ export function VaultSettingsModal({
   const submitBudgetMs =
     passwordSubmitting || kdfSubmitting
       ? LOADING_BUDGET_MS.vaultRewrap
-      : LOADING_BUDGET_MS.settingsSave;
+      : nameDirty
+        ? LOADING_BUDGET_MS.vaultRename
+        : LOADING_BUDGET_MS.settingsSave;
   const submitBudget = useLoadingBudget(busy, submitBudgetMs);
 
   useEffect(() => {
     if (!submitBudget.timedOut) return;
     busyGenRef.current += 1;
-    submitInFlightRef.current = false;
     setBusy(false);
     setPasswordSubmitting(false);
     setKdfSubmitting(false);
-    setSaveError(t("error.operation_timed_out"));
+    if (!renameCommittedRef.current) {
+      setSaveError(t("error.operation_timed_out"));
+    }
   }, [submitBudget.timedOut, t]);
 
   const flashSaved = useCallback(() => {
@@ -434,27 +457,99 @@ export function VaultSettingsModal({
     const generation = (busyGenRef.current += 1);
     setBusy(true);
     setSaveError(null);
+    const fromId = vault.id;
+    let renamedIdentity: { id: string; displayName: string } | null = null;
+    renameCommittedRef.current = false;
+    onPersistBusyChange?.([fromId]);
     try {
       const rebased = rebaseQuietLockedVaultSettings(draft, baseline, vault, pipelineListStatus);
       const normalized = normalizeVaultSettingsConfig(rebased);
       const locked = Boolean(vault && isVaultInHiddenGroup(groupsRef.current, vault.id));
-      const toSave =
+      let toSave =
         locked && !normalized.vault.hidden
           ? { ...normalized, vault: { ...normalized.vault, hidden: true } }
           : normalized;
-      await vaultService.registerSettings(vault.id, toSave);
+      const nameDirty =
+        toSave.vault.display_name !== normalizeStoredName(baseline.vault.display_name);
+      if (nameDirty) {
+        const validation = validateDisplayName(toSave.vault.display_name);
+        if (validation) {
+          setSaveError(
+            t(
+              displayNameErrorI18nKey(validation),
+              validation === "too_long"
+                ? { max: String(VAULT_DISPLAY_NAME_MAX_LENGTH) }
+                : undefined,
+            ),
+          );
+          return;
+        }
+        const renamed = await vaultService.rename(fromId, toSave.vault.display_name);
+        toSave = {
+          ...toSave,
+          vault: {
+            ...toSave.vault,
+            id: renamed.id,
+            display_name: renamed.displayName,
+          },
+        };
+        renamedIdentity = { id: renamed.id, displayName: renamed.displayName };
+        renameCommittedRef.current = true;
+        if (renamed.id !== fromId) {
+          identityMigratingRef.current = true;
+          identityMigratingToRef.current = renamed.id;
+          onPersistBusyChange?.([fromId, renamed.id]);
+        }
+        const stale = generation !== busyGenRef.current;
+        if (!stale) {
+          const identityBaseline = {
+            ...baseline,
+            vault: {
+              ...baseline.vault,
+              id: renamed.id,
+              display_name: renamed.displayName,
+            },
+          };
+          setBaseline(identityBaseline);
+          setDraft(toSave);
+        }
+        if (stale) {
+          onSaved(
+            fromId,
+            vaultSettingsIdentityListPatch(baseline, renamed.id, renamed.displayName),
+          );
+          return;
+        }
+      }
+      const otherDirty = !vaultSettingsEqualIgnoringIdentity(baseline, toSave);
+      if (!nameDirty && !otherDirty) {
+        if (generation !== busyGenRef.current) return;
+        setSaveConfirmOpen(false);
+        return;
+      }
+      if (otherDirty) {
+        await vaultService.registerSettings(toSave.vault.id, toSave);
+      }
+      onSaved(fromId, vaultSettingsToListPatch(toSave));
       if (generation !== busyGenRef.current) return;
       setBaseline(toSave);
       setDraft(toSave);
-      onSaved(vault.id, vaultSettingsToListPatch(toSave));
       flashSaved();
       setSaveConfirmOpen(false);
     } catch (caught) {
+      if (renamedIdentity) {
+        onSaved(
+          fromId,
+          vaultSettingsIdentityListPatch(baseline, renamedIdentity.id, renamedIdentity.displayName),
+        );
+      }
       if (generation !== busyGenRef.current) return;
       setSaveError(t(mobileErrorI18nKey(caught)));
     } finally {
+      onPersistBusyChange?.(null);
+      submitInFlightRef.current = false;
+      renameCommittedRef.current = false;
       if (generation === busyGenRef.current) {
-        submitInFlightRef.current = false;
         setBusy(false);
       }
     }
@@ -467,6 +562,7 @@ export function VaultSettingsModal({
     pipelineListStatus,
     vaultService,
     onSaved,
+    onPersistBusyChange,
     flashSaved,
     t,
   ]);
@@ -491,7 +587,6 @@ export function VaultSettingsModal({
       await onCommitGroupAssignment?.(vault.id, assignment);
       if (generation !== busyGenRef.current) return;
       setNewGroupName("");
-      setGroupNameError(null);
       setSelectedGroupId(nextSelectedId);
       if (nextSelectedId && isHiddenGroup(groupsRef.current, nextSelectedId)) {
         lockDraftHidden();
@@ -502,8 +597,8 @@ export function VaultSettingsModal({
       if (generation !== busyGenRef.current) return;
       setSaveError(t(mobileErrorI18nKey(caught)));
     } finally {
+      submitInFlightRef.current = false;
       if (generation === busyGenRef.current) {
-        submitInFlightRef.current = false;
         setBusy(false);
       }
     }
@@ -544,8 +639,8 @@ export function VaultSettingsModal({
       if (generation !== busyGenRef.current) return;
       setPasswordError(t(mobileErrorI18nKey(caught)));
     } finally {
+      submitInFlightRef.current = false;
       if (generation === busyGenRef.current) {
-        submitInFlightRef.current = false;
         setPasswordSubmitting(false);
         setBusy(false);
       }
@@ -584,8 +679,8 @@ export function VaultSettingsModal({
       if (generation !== busyGenRef.current) return;
       setKdfError(t(mobileErrorI18nKey(caught)));
     } finally {
+      submitInFlightRef.current = false;
       if (generation === busyGenRef.current) {
-        submitInFlightRef.current = false;
         setKdfSubmitting(false);
         setBusy(false);
       }
@@ -607,7 +702,6 @@ export function VaultSettingsModal({
     } else if (activeArea === "group") {
       setSelectedGroupId(baselineGroupId);
       setNewGroupName("");
-      setGroupNameError(null);
     } else if (activeArea === "password") {
       resetPasswordForm();
     } else if (activeArea === "kdf") {
@@ -658,19 +752,14 @@ export function VaultSettingsModal({
 
   const handleSaveClick = () => {
     if (!activeArea || !areaDirty || busy) return;
+    if (activeArea === "preferences" && draft) {
+      const validation = validateDisplayName(draft.vault.display_name);
+      if (validation) return;
+    }
     if (activeArea === "group" && pendingGroupName) {
       const validation = validateDisplayName(pendingGroupName);
-      if (validation) {
-        setGroupNameError(
-          t(
-            displayNameErrorI18nKey(validation),
-            validation === "too_long" ? { max: String(VAULT_DISPLAY_NAME_MAX_LENGTH) } : undefined,
-          ),
-        );
-        return;
-      }
+      if (validation) return;
     }
-    setGroupNameError(null);
     dismissFooterConfirm();
     setSaveConfirmOpen(true);
   };
@@ -814,16 +903,13 @@ export function VaultSettingsModal({
             includeHidden={showHiddenVaults}
             selectedGroupId={selectedGroupId}
             newGroupName={newGroupName}
-            nameError={groupNameError}
             onSelectedGroupIdChange={(groupId) => {
               setSelectedGroupId(groupId);
               setNewGroupName("");
-              setGroupNameError(null);
               dismissFooterConfirm();
             }}
             onNewGroupNameChange={(name) => {
               setNewGroupName(name);
-              setGroupNameError(null);
               dismissFooterConfirm();
             }}
           />

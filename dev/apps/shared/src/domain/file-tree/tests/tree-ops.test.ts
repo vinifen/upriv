@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   addChild,
+  ancestorFolderPaths,
   collectFilePaths,
   getParentPath,
   isDescendantPath,
   moveNode,
   remapContentPaths,
+  remapLogicalPath,
   removeContentPaths,
   removeNode,
   renameNode,
@@ -50,6 +52,12 @@ describe("tree path helpers", () => {
     expect(isDescendantPath("/", "/")).toBe(false);
     expect(isDescendantPath("/notes", "/readme.md")).toBe(false);
   });
+
+  it("lists ancestor folders for reveal-in-explorer", () => {
+    expect(ancestorFolderPaths("/notes/a.md")).toEqual(["/", "/notes"]);
+    expect(ancestorFolderPaths("/readme.md")).toEqual(["/"]);
+    expect(ancestorFolderPaths("/")).toEqual(["/"]);
+  });
 });
 
 describe("uniqueName", () => {
@@ -61,12 +69,20 @@ describe("uniqueName", () => {
   it("does not treat a leading-dot name as an extension split", () => {
     expect(uniqueName([".env"], ".env")).toBe(".env-2");
   });
+
+  it("keeps internal spaces in the stem when suffixing a collision", () => {
+    expect(uniqueName(["My  Notes.md"], "My  Notes.md")).toBe("My  Notes-2.md");
+  });
 });
 
 describe("uniqueFolderName", () => {
   it("uses a space suffix, not a hyphen", () => {
     expect(uniqueFolderName(["Notes"], "Notes")).toBe("Notes 2");
     expect(uniqueFolderName(["Notes", "Notes 2"], "Notes")).toBe("Notes 3");
+  });
+
+  it("keeps internal spaces when suffixing a collision", () => {
+    expect(uniqueFolderName(["My  Notes"], "My  Notes")).toBe("My  Notes 2");
   });
 });
 
@@ -113,6 +129,9 @@ describe("content path maps", () => {
       "/docs/b.md": "b",
       "/other.md": "c",
     });
+    expect(remapLogicalPath("/notes/a.md", "/notes", "/docs")).toBe("/docs/a.md");
+    expect(remapLogicalPath("/notes", "/notes", "/docs")).toBe("/docs");
+    expect(remapLogicalPath("/notes2/a.md", "/notes", "/docs")).toBe("/notes2/a.md");
   });
 
   it("removes a prefix including the exact path", () => {

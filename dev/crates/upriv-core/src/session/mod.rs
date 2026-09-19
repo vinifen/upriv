@@ -77,9 +77,16 @@ static UNLOCK_GATE: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 /// Vault dirs mid-close (`take_session` … flush done). Covers the gap where
 /// the session map is empty but flush still runs against the current root.
 static CLOSING: LazyLock<Mutex<HashSet<PathBuf>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
+/// Vault dirs mid-open / mid-create-seed (before `insert_session`). Refcounted so
+/// overlapping `open_vault` calls keep the mark until the last guard drops.
+/// `rename_vault` honors this without waiting on Argon2 or using `UNLOCK_GATE`.
+static PREPARING: LazyLock<Mutex<HashMap<PathBuf, usize>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 /// Serializes create (and other dir-scoped writes) per `vaults/<id>/`.
 static VAULT_DIR_GATES: LazyLock<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
+/// Serializes vault folder create + deep rename (slug alloc / `fs::rename`).
+static VAULT_REGISTRY_GATE: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
 fn session_lock_poisoned(detail: &str) -> UprivError {
     UprivError::VaultStoreInvalid {
@@ -110,6 +117,31 @@ pub fn with_vault_dir_lock<T>(vault_dir: &Path, f: impl FnOnce() -> Result<T>) -
         .lock()
         .map_err(|_| session_lock_poisoned("vault-dir lock poisoned"))?;
     f()
+}
+
+/// Process-wide identity lock: slug allocation + `vaults/<id>/` create/rename.
+pub fn with_vault_registry_lock<T>(f: impl FnOnce() -> Result<T>) -> Result<T> {
+    let _held = VAULT_REGISTRY_GATE
+        .lock()
+        .map_err(|_| session_lock_poisoned("vault-registry lock poisoned"))?;
+    f()
+}
+
+/// Lock two vault directories in `Path` order (avoids A→B / B→A deadlock).
+pub fn with_vault_dir_locks<T>(
+    first: &Path,
+    second: &Path,
+    f: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    if first == second {
+        return with_vault_dir_lock(first, f);
+    }
+    let (a, b) = if first.as_os_str() <= second.as_os_str() {
+        (first, second)
+    } else {
+        (second, first)
+    };
+    with_vault_dir_lock(a, || with_vault_dir_lock(b, f))
 }
 
 fn lock_sessions() -> Result<std::sync::MutexGuard<'static, HashMap<PathBuf, OpenSession>>> {
@@ -180,6 +212,14 @@ pub fn is_vault_closing_at(vault_dir: &Path) -> bool {
         .unwrap_or(true)
 }
 
+/// True while this vault is mid-open or mid-create-seed. Fail closed on poison.
+pub fn is_vault_preparing_at(vault_dir: &Path) -> bool {
+    PREPARING
+        .lock()
+        .map(|g| g.get(vault_dir).is_some_and(|count| *count > 0))
+        .unwrap_or(true)
+}
+
 /// Mark `vault_dir` as closing until dropped (covers flush after `take_session`).
 pub(crate) struct ClosingGuard {
     vault_dir: PathBuf,
@@ -201,6 +241,37 @@ impl Drop for ClosingGuard {
     fn drop(&mut self) {
         if let Ok(mut guard) = CLOSING.lock() {
             guard.remove(&self.vault_dir);
+        }
+    }
+}
+
+/// Mark `vault_dir` as preparing until dropped (open Argon2 / create seed).
+pub(crate) struct PreparingGuard {
+    vault_dir: PathBuf,
+}
+
+impl PreparingGuard {
+    pub(crate) fn enter(vault_dir: &Path) -> Result<Self> {
+        let mut guard = PREPARING
+            .lock()
+            .map_err(|_| session_lock_poisoned("preparing lock poisoned"))?;
+        *guard.entry(vault_dir.to_path_buf()).or_insert(0) += 1;
+        Ok(Self {
+            vault_dir: vault_dir.to_path_buf(),
+        })
+    }
+}
+
+impl Drop for PreparingGuard {
+    fn drop(&mut self) {
+        if let Ok(mut guard) = PREPARING.lock() {
+            match guard.get_mut(&self.vault_dir) {
+                Some(count) if *count > 1 => *count -= 1,
+                Some(_) => {
+                    guard.remove(&self.vault_dir);
+                }
+                None => {}
+            }
         }
     }
 }
@@ -278,6 +349,23 @@ pub(crate) fn clear_throttle_key_for_tests(vault_dir: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preparing_mark_is_refcounted() {
+        let dir = PathBuf::from(format!(
+            "/upriv-test-preparing-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        assert!(!is_vault_preparing_at(&dir));
+        let first = PreparingGuard::enter(&dir).expect("first preparing");
+        let second = PreparingGuard::enter(&dir).expect("second preparing");
+        assert!(is_vault_preparing_at(&dir));
+        drop(first);
+        assert!(is_vault_preparing_at(&dir));
+        drop(second);
+        assert!(!is_vault_preparing_at(&dir));
+    }
 
     #[test]
     fn throttle_blocks_after_five_failures() {

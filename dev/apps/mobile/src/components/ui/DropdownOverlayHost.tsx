@@ -16,7 +16,7 @@ interface OverlayOrigin {
 
 interface DropdownOverlayApi {
   /** Replace the single full-screen overlay layer (menus, not RN Modal). */
-  setOverlay: (node: ReactNode | null) => void;
+  setOverlay: (node: ReactNode | null, ownerId: string) => void;
   /** Window origin of the overlay host — convert `measure()` pageX/pageY into overlay space. */
   measureHostOrigin: () => Promise<OverlayOrigin>;
 }
@@ -37,8 +37,16 @@ export function useDropdownOverlay(): DropdownOverlayApi {
  */
 export function DropdownOverlayProvider({ children }: { children: ReactNode }) {
   const rootRef = useRef<View>(null);
+  const ownerIdRef = useRef<string | null>(null);
   const [overlay, setOverlayState] = useState<ReactNode>(null);
-  const setOverlay = useCallback((node: ReactNode | null) => {
+  const setOverlay = useCallback((node: ReactNode | null, ownerId: string) => {
+    if (node == null) {
+      if (ownerIdRef.current !== null && ownerIdRef.current !== ownerId) return;
+      ownerIdRef.current = null;
+      setOverlayState(null);
+      return;
+    }
+    ownerIdRef.current = ownerId;
     setOverlayState(node);
   }, []);
   const measureHostOrigin = useCallback((): Promise<OverlayOrigin> => {
@@ -63,7 +71,7 @@ export function DropdownOverlayProvider({ children }: { children: ReactNode }) {
       <View ref={rootRef} collapsable={false} style={styles.root}>
         <View style={styles.content}>{children}</View>
         {overlay != null ? (
-          <View style={styles.layer} pointerEvents="auto">
+          <View style={styles.layer} pointerEvents="box-none">
             {overlay}
           </View>
         ) : null}

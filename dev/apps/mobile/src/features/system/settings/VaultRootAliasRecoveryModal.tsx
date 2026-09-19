@@ -324,7 +324,6 @@ export function VaultRootAliasRecoveryModal({
     setConfirmOpen(true);
   }, [blocked, busy, confirmOpen]);
 
-  if (!open) return null;
 
   const pathIsSaf = isAndroidSafUri(pathInput);
 

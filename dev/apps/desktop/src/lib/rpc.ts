@@ -3,6 +3,7 @@ import { BRIDGE_ERROR_CODES, RpcError, isRpcError } from "./errors";
 import { desktopInvokeRaw } from "./invoke";
 import { parseAppVersionResult, type AppVersionResult } from "./types";
 import type {
+  AllowlistedUiLogEvent,
   AppSettingsConfig,
   AppLogFile,
   CreateVaultInput,
@@ -17,6 +18,7 @@ import type {
   VaultRootInspectResult,
   VaultRootMode,
   VaultRootResolveResult,
+  VaultRenameResult,
   VaultSettingsConfig,
 } from "@upriv/shared";
 import {
@@ -29,6 +31,7 @@ import {
   parseVaultGroupWire,
   parseVaultListItemWire,
   parseVaultListResult,
+  parseVaultRenameResult,
   parseVaultRootInspect,
   parseVaultRootResolve,
 } from "@upriv/shared";
@@ -305,10 +308,8 @@ export async function rpcLogDelete(filenames: readonly string[]): Promise<void> 
   await desktopInvokeRaw(DAEMON_COMMANDS.LOG_DELETE, { filenames: [...filenames] });
 }
 
-/** Append allowlisted session log event (`vault_hidden` / `ui_crash` have no name fields). */
-export async function rpcLogEvent(
-  event: "vault_hidden" | "vault_group_hidden" | "ui_crash",
-): Promise<void> {
+/** Append allowlisted session log event (no id, name, or path fields). */
+export async function rpcLogEvent(event: AllowlistedUiLogEvent): Promise<void> {
   await desktopInvokeRaw(DAEMON_COMMANDS.LOG_EVENT, { event });
 }
 
@@ -469,4 +470,9 @@ export async function rpcVaultConfigGet(id: string): Promise<VaultSettingsConfig
 
 export async function rpcVaultConfigSave(id: string, settings: VaultSettingsConfig): Promise<void> {
   await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_CONFIG_SAVE, { id, settings });
+}
+
+export async function rpcVaultRename(id: string, displayName: string): Promise<VaultRenameResult> {
+  const raw = await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_RENAME, { id, displayName });
+  return parseVaultRenameResult(raw);
 }

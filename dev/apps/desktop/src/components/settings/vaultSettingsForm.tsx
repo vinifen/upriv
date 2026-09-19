@@ -27,6 +27,8 @@ import {
   groupsForAssignmentPicker,
   groupAssignmentClearOption,
   requireVaultConfigEditLockedI18nKey,
+  liveDisplayNameError,
+  displayNameErrorI18nKey,
 } from "@upriv/shared";
 import { useTranslation } from "@/i18n";
 import { useVaultRootService } from "@/platform/services";
@@ -85,11 +87,31 @@ export function SettingsFormGrid({ children }: SettingsFormGridProps) {
   return <div className="space-y-3 sm:space-y-4">{children}</div>;
 }
 
+export function DisplayNameFieldError({
+  name,
+  allowEmpty = false,
+}: {
+  name: string;
+  allowEmpty?: boolean;
+}) {
+  const { t } = useTranslation();
+  const code = liveDisplayNameError(name, { allowEmpty });
+  if (!code) return null;
+  return (
+    <p role="alert" aria-live="polite" className="text-xs text-on-error-container">
+      {t(
+        displayNameErrorI18nKey(code),
+        code === "too_long" ? { max: String(VAULT_DISPLAY_NAME_MAX_LENGTH) } : undefined,
+      )}
+    </p>
+  );
+}
+
 interface VaultSettingsVaultSectionProps {
   config: VaultSettingsConfig["vault"];
   onChange: (patch: Partial<VaultSettingsConfig["vault"]>) => void;
   hiddenLocked?: boolean;
-  /** `vault.display_name` requires vault_quiet. */
+  /** `vault.display_name` requires closed or recovery. */
   displayNameLocked?: boolean;
 }
 
@@ -123,9 +145,15 @@ export function VaultSettingsVaultSection({
           value={config.display_name}
           maxLength={VAULT_DISPLAY_NAME_MAX_LENGTH}
           disabled={displayNameLocked}
+          autoComplete="off"
+          spellCheck={false}
+          aria-invalid={
+            !displayNameLocked && liveDisplayNameError(config.display_name) ? true : undefined
+          }
           onChange={(e) => onChange({ display_name: e.target.value })}
           className={settingsControlClass}
         />
+        {displayNameLocked ? null : <DisplayNameFieldError name={config.display_name} />}
       </SettingsField>
       <SettingsField
         label={t("modal.settings.field.vault.order")}
@@ -941,10 +969,14 @@ export function VaultSettingsGroupSection({
           type="text"
           value={newGroupName}
           maxLength={VAULT_DISPLAY_NAME_MAX_LENGTH}
+          autoComplete="off"
+          spellCheck={false}
+          aria-invalid={liveDisplayNameError(newGroupName, { allowEmpty: true }) ? true : undefined}
           onChange={(event) => onNewGroupNameChange(event.target.value)}
           className={settingsControlClass}
           placeholder={t("vault.group.create.name_label")}
         />
+        <DisplayNameFieldError name={newGroupName} allowEmpty />
       </SettingsField>
     </SettingsFormGrid>
   );

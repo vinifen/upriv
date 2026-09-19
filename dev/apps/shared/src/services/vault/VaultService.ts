@@ -9,6 +9,14 @@ export interface CreateVaultInput {
   settings: VaultSettingsConfig;
 }
 
+/** Result of `vault_rename` (display name + optional folder id migration). */
+export interface VaultRenameResult {
+  id: string;
+  previousId: string;
+  displayName: string;
+  idChanged: boolean;
+}
+
 /** Vault list and per-vault config access (native or desktop RPC, or in-memory mock). */
 export interface VaultService {
   /** Live when `vault_config_save` is wired (desktop/native). */
@@ -29,6 +37,12 @@ export interface VaultService {
 
   /** Persist settings (`vault_config_save` — enforces edit-policy on quiet targets). */
   registerSettings(vaultId: string, config: VaultSettingsConfig): Promise<void>;
+
+  /**
+   * Deep rename via `vault_rename` — updates display name; migrates folder/`[vault].id`
+   * when the slug changes. Vault must be closed.
+   */
+  rename(vaultId: string, displayName: string): Promise<VaultRenameResult>;
 
   /** Remove settings on vault delete. */
   unregisterSettings(vaultId: string): Promise<void>;

@@ -57,7 +57,10 @@ class UprivCoreModule : Module() {
       runSafOrThrow { SafVaultRoot.persist(requireContext(), treeUri) }
     }
 
-    /** Release persistable permission — best-effort (missing perm is not an error). */
+    /**
+     * Release persistable permission — best-effort (missing perm is not an error).
+     * Refuses to drop the currently active vault-root tree (import-folder).
+     */
     Function("safReleasePermission") { treeUri: String ->
       ensureRuntimeConfigured()
       runSafOrThrow { SafVaultRoot.release(requireContext(), treeUri) }

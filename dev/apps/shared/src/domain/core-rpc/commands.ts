@@ -24,8 +24,8 @@ export const CORE_RPC_COMMANDS = {
   LOG_GET: "log_get",
   LOG_DELETE: "log_delete",
   /**
-   * Append a allowlisted event to the session log. `vault_hidden` and `ui_crash`
-   * take no fields — never send vault id, display name, or stack traces.
+   * Append a allowlisted event to the session log. UI events take no fields —
+   * never send vault id, display name, paths, or stack traces.
    */
   LOG_EVENT: "log_event",
   VAULT_ROOT_RESOLVE: "vault_root_resolve",
@@ -55,6 +55,8 @@ export const CORE_RPC_COMMANDS = {
   VAULT_CLOSE: "vault_close",
   VAULT_CONFIG_GET: "vault_config_get",
   VAULT_CONFIG_SAVE: "vault_config_save",
+  /** Deep rename: display name + folder/`[vault].id` migration (vault closed). */
+  VAULT_RENAME: "vault_rename",
 } as const;
 
 /**

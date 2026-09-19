@@ -12,6 +12,11 @@ import { Icon } from "@/components/icons";
 import { useTranslation } from "@/i18n";
 import { useTheme } from "@/theme";
 import { controlFocusRing, radii, spacing } from "@/theme/tokens";
+import {
+  VAULT_DISPLAY_NAME_MAX_LENGTH,
+  displayNameErrorI18nKey,
+  liveDisplayNameError,
+} from "@upriv/shared";
 
 export function FieldLabel({
   children,
@@ -210,6 +215,26 @@ export function RadioGroup({ children }: { children: ReactNode }) {
 export function Warning({ children }: { children: string }) {
   const { colors, typography } = useTheme();
   return <Text style={[typography.caption, { color: colors.onErrorContainer }]}>{children}</Text>;
+}
+
+export function DisplayNameFieldError({
+  name,
+  allowEmpty = false,
+}: {
+  name: string;
+  allowEmpty?: boolean;
+}) {
+  const { t } = useTranslation();
+  const code = liveDisplayNameError(name, { allowEmpty });
+  if (!code) return null;
+  return (
+    <Warning>
+      {t(
+        displayNameErrorI18nKey(code),
+        code === "too_long" ? { max: String(VAULT_DISPLAY_NAME_MAX_LENGTH) } : undefined,
+      )}
+    </Warning>
+  );
 }
 
 const styles = StyleSheet.create({

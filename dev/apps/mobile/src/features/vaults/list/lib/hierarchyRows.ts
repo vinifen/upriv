@@ -4,11 +4,13 @@ export type BlocksGroupCell = {
   key: string;
   group: VaultGroup;
   groupedVaults: VaultListItem[];
-  visibleVaultCount: number;
+  /** Membership size — not collapsed visibility (Collapse keeps children mounted). */
+  memberCount: number;
 };
 
 export type BlocksPackCell =
-  { kind: "vault"; key: string; vault: VaultListItem } | ({ kind: "group" } & BlocksGroupCell);
+  | { kind: "vault"; key: string; vault: VaultListItem }
+  | ({ kind: "group" } & BlocksGroupCell);
 
 export type FlatHierarchyRow =
   | ({ kind: "group_block" } & BlocksGroupCell)
@@ -26,8 +28,9 @@ export function flattenHierarchyRows(rows: VaultListRootRow[]): FlatHierarchyRow
       key: `group:${row.group.id}`,
       kind: "group_block",
       group: row.group,
-      groupedVaults: row.group.collapsed ? [] : row.groupedVaults,
-      visibleVaultCount: row.groupedVaults.length,
+      // Keep members while collapsed so UI can animate height without remount/pack flicker.
+      groupedVaults: row.groupedVaults,
+      memberCount: row.groupedVaults.length,
     });
   }
   return out;
@@ -36,12 +39,11 @@ export function flattenHierarchyRows(rows: VaultListRootRow[]): FlatHierarchyRow
 export function groupCellFromRow(
   row: Extract<VaultListRootRow, { kind: "group" }>,
 ): BlocksGroupCell {
-  const visible = row.group.collapsed ? [] : row.groupedVaults;
   return {
     key: `group:${row.group.id}`,
     group: row.group,
-    groupedVaults: visible,
-    visibleVaultCount: row.groupedVaults.length,
+    groupedVaults: row.groupedVaults,
+    memberCount: row.groupedVaults.length,
   };
 }
 
@@ -60,7 +62,7 @@ export function packRowsForBlocks(rows: VaultListRootRow[], columns: number): Fl
         key: cell.key,
         group: cell.group,
         groupedVaults: cell.groupedVaults,
-        visibleVaultCount: cell.visibleVaultCount,
+        memberCount: cell.memberCount,
       });
     } else {
       out.push({
@@ -78,8 +80,9 @@ export function packRowsForBlocks(rows: VaultListRootRow[], columns: number): Fl
       continue;
     }
     const cell = groupCellFromRow(row);
-    const visibleMembers = cell.groupedVaults.length;
-    if (visibleMembers <= 1) {
+    // Pack by membership, not collapsed visibility — collapsed must not remount keys.
+    const memberCount = cell.memberCount;
+    if (memberCount <= 1) {
       batch.push({ kind: "group", ...cell });
       if (batch.length >= columns) flush();
       continue;

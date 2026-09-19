@@ -4,22 +4,28 @@ import {
   fileBaseName,
   fileNameErrorI18nKey,
   findNode,
-  foldersToExpandOnImport,
+  formatImportOutcomeToast,
+  applyImportedFilesToWorkspace,
+  importBatchIsReadFailure,
+  importLogicalFiles,
   getParentPath,
-  resolveImportDestination,
+  isInternalVaultPath,
+  isInternalVaultFileName,
+  resolveUnsavedPrompt,
   siblingNames,
   validateFileName,
-  VAULT_DISPLAY_NAME_MAX_LENGTH,
+  persistLogicalFileName,
+  LOGICAL_FILE_NAME_MAX_LENGTH,
+  type FileManagerEntry,
   type FileNameErrorCode,
+  type VaultWorkspaceAction,
 } from "@upriv/shared";
 import { useVaultFileSystemService } from "@/platform/services";
 import { useToast } from "@upriv/shared/react";
 import { useTranslation } from "@/i18n";
-import type { FileManagerEntry } from "../fileManagerTypes";
-import type { VaultWorkspaceAction } from "../lib/vaultWorkspaceReducer";
+import { useAppSettingsContext } from "@/features/system/settings";
 import type { DroppedImportFile } from "../lib/osFileDrop";
 import { readImportFileContent } from "../lib/vaultFileImport";
-import { resolveUnsavedPrompt } from "../lib/vaultWorkspaceReducer";
 
 interface UseVaultFileManagerOptions {
   entry: FileManagerEntry;
@@ -34,6 +40,7 @@ export function useVaultFileManager({
 }: UseVaultFileManagerOptions) {
   const { t } = useTranslation();
   const fs = useVaultFileSystemService();
+  const { getSettingsSnapshot } = useAppSettingsContext();
   const vaultId = entry.vaultId;
   const workspace = entry.workspace;
 
@@ -74,12 +81,22 @@ export function useVaultFileManager({
     }
   }, [fs, saveFile, vaultId, workspace.dirtyPaths]);
 
+  /** VS Code-style: click a file in the explorer → open/activate it in the editor. */
+  const openFile = useCallback(
+    (path: string) => {
+      if (isInternalVaultPath(path)) return;
+      dispatch({ type: "open_file", path });
+    },
+    [dispatch],
+  );
+
   const createFile = useCallback(
     (parentPath: string) => {
       const path = fs.createFile(vaultId, parentPath, t("modal.file_manager.default.new_file"));
       if (!path) return;
       syncTree();
       dispatch({ type: "expand_folder", path: parentPath });
+      dispatch({ type: "mark_session_created", paths: [path] });
       dispatch({ type: "open_file", path });
       dispatch({ type: "start_rename", path });
     },
@@ -92,6 +109,7 @@ export function useVaultFileManager({
       if (!path) return;
       syncTree();
       dispatch({ type: "expand_folder", path: parentPath });
+      dispatch({ type: "mark_session_created", paths: [path] });
       dispatch({ type: "start_rename", path });
     },
     [dispatch, fs, syncTree, t, vaultId],
@@ -100,7 +118,7 @@ export function useVaultFileManager({
   const nameErrorMessage = useCallback(
     (code: FileNameErrorCode) => {
       const key = fileNameErrorI18nKey(code);
-      if (code === "too_long") return t(key, { max: VAULT_DISPLAY_NAME_MAX_LENGTH });
+      if (code === "too_long") return t(key, { max: LOGICAL_FILE_NAME_MAX_LENGTH });
       return t(key);
     },
     [t],
@@ -108,7 +126,12 @@ export function useVaultFileManager({
 
   const commitRename = useCallback(
     (path: string, rawName: string) => {
-      const name = rawName.trim();
+      const name = persistLogicalFileName(rawName);
+      if (isInternalVaultFileName(name)) {
+        showToast(t("modal.file_manager.toast.rename_reserved"));
+        dispatch({ type: "cancel_rename" });
+        return;
+      }
       const error = validateFileName(name);
       if (error) {
         showToast(nameErrorMessage(error));
@@ -129,12 +152,16 @@ export function useVaultFileManager({
         return;
       }
       const newPath = fs.renamePath(vaultId, path, name);
-      if (!newPath) return;
+      if (!newPath) {
+        showToast(t("modal.file_manager.toast.rename_failed"));
+        dispatch({ type: "cancel_rename" });
+        return;
+      }
       syncTree();
       dispatch({ type: "remap_paths", map: { [path]: newPath } });
       dispatch({ type: "cancel_rename" });
     },
-    [dispatch, fs, nameErrorMessage, showToast, syncTree, vaultId],
+    [dispatch, fs, nameErrorMessage, showToast, syncTree, t, vaultId],
   );
 
   const requestDelete = useCallback(
@@ -142,12 +169,20 @@ export function useVaultFileManager({
       if (path === "/") return;
       const node = findNode(fs.getFileTree(vaultId), path);
       if (!node) return;
+      if (getSettingsSnapshot().ui.file_manager_confirm_delete === false) {
+        const pathsToRemove =
+          node.type === "folder" ? [...collectFilePaths(node, path), path] : [path];
+        fs.deletePath(vaultId, path);
+        syncTree();
+        dispatch({ type: "remove_paths", paths: pathsToRemove });
+        return;
+      }
       dispatch({
         type: "set_delete_target",
         target: { path, name: node.name, isFolder: node.type === "folder" },
       });
     },
-    [dispatch, fs, vaultId],
+    [dispatch, fs, getSettingsSnapshot, syncTree, vaultId],
   );
 
   const confirmDelete = useCallback(() => {
@@ -179,73 +214,49 @@ export function useVaultFileManager({
     async (
       parentPath: string,
       files: readonly DroppedImportFile[],
-      options?: { openFirstViewable?: boolean },
+      options?: { openFirstViewable?: boolean; skippedUnsupported?: number },
     ) => {
-      if (files.length === 0) return;
-
-      const importedPaths: string[] = [];
-      const foldersToExpand = new Set<string>();
-      let skippedInvalid = 0;
-      let readFailureName: string | null = null;
-
-      for (const { file, relativePath } of files) {
-        const destination = resolveImportDestination(
+      const result = await importLogicalFiles(
+        files.map(({ file, relativePath }) => ({ name: file.name, relativePath, file })),
+        {
           vaultId,
           parentPath,
-          relativePath,
-          fs.ensureFolder,
+          skippedUnsupported: options?.skippedUnsupported,
+          readContent: async (logical) => readImportFileContent(logical.file),
+          ensureFolder: fs.ensureFolder,
+          importFile: fs.importFile,
+        },
+      );
+
+      if (result.importedPaths.length === 0) {
+        if (importBatchIsReadFailure(result) && result.readFailureName) {
+          showToast(t("modal.file_manager.toast.import_failed", { name: result.readFailureName }));
+          return;
+        }
+        const message = formatImportOutcomeToast(
+          0,
+          result.skippedInvalid,
+          result.skippedUnsupported,
+          (key, vars) => t(key, vars),
         );
-        if (!destination) {
-          skippedInvalid += 1;
-          continue;
-        }
-
-        let content = "";
-
-        try {
-          content = await readImportFileContent(file);
-        } catch {
-          readFailureName = file.name;
-          continue;
-        }
-
-        const path = fs.importFile(vaultId, destination.parentPath, destination.fileName, content);
-        if (!path) {
-          skippedInvalid += 1;
-          continue;
-        }
-        importedPaths.push(path);
-        for (const folderPath of foldersToExpandOnImport(parentPath, relativePath)) {
-          foldersToExpand.add(folderPath);
-        }
-      }
-
-      if (importedPaths.length === 0) {
-        if (readFailureName) {
-          showToast(t("modal.file_manager.toast.import_failed", { name: readFailureName }));
-        } else if (skippedInvalid > 0) {
-          showToast(
-            t("modal.file_manager.toast.import_skipped_invalid", { count: skippedInvalid }),
-          );
-        }
+        if (message) showToast(message);
         return;
       }
 
-      syncTree();
-      for (const folderPath of foldersToExpand) {
-        dispatch({ type: "expand_folder", path: folderPath });
-      }
+      applyImportedFilesToWorkspace(result, dispatch, syncTree);
 
       if (options?.openFirstViewable) {
-        const toOpen = importedPaths.find((path) => fs.isFileViewable(vaultId, path));
+        const toOpen = result.importedPaths.find((path) => fs.isFileViewable(vaultId, path));
         if (toOpen) dispatch({ type: "open_file", path: toOpen });
       }
 
-      let message = t("modal.file_manager.toast.imported", { count: importedPaths.length });
-      if (skippedInvalid > 0) {
-        message += ` ${t("modal.file_manager.toast.import_skipped_suffix", { count: skippedInvalid })}`;
-      }
-      showToast(message);
+      const message = formatImportOutcomeToast(
+        result.importedPaths.length,
+        result.skippedInvalid,
+        result.skippedUnsupported,
+        (key, vars) => t(key, vars),
+      );
+      if (message) showToast(message);
     },
     [dispatch, fs, showToast, syncTree, t, vaultId],
   );
@@ -259,12 +270,6 @@ export function useVaultFileManager({
         dispatch({
           type: "discard_unsaved_and",
           next: { type: "close_tab", path: prompt.path },
-        });
-        return;
-      case "switch_tab":
-        dispatch({
-          type: "discard_unsaved_and",
-          next: { type: "request_active_tab", path: prompt.toPath },
         });
         return;
       case "dismiss_workspace":
@@ -289,13 +294,6 @@ export function useVaultFileManager({
           next: resolveUnsavedPrompt(workspace, prompt),
         });
         return;
-      case "switch_tab":
-        if (workspace.activeTabPath) saveFile(workspace.activeTabPath);
-        dispatch({
-          type: "discard_unsaved_and",
-          next: resolveUnsavedPrompt(workspace, prompt),
-        });
-        return;
       case "dismiss_workspace":
         saveAllFiles();
         dispatch({
@@ -307,7 +305,10 @@ export function useVaultFileManager({
     }
   }, [dispatch, onDismissConfirmed, saveAllFiles, saveFile, workspace]);
 
-  const tree = useMemo(() => fs.getFileTree(vaultId), [fs, vaultId]);
+  const tree = useMemo(() => {
+    void workspace.treeRevision;
+    return fs.getFileTree(vaultId);
+  }, [fs, vaultId, workspace.treeRevision]);
 
   return {
     vaultId,
@@ -319,6 +320,7 @@ export function useVaultFileManager({
     isFileImage: (path: string) => fs.isFileImage(vaultId, path),
     saveFile,
     saveAllFiles,
+    openFile,
     createFile,
     createFolder,
     commitRename,
@@ -337,3 +339,7 @@ export function useVaultFileManager({
 }
 
 export type FileManagerApi = ReturnType<typeof useVaultFileManager>;
+
+export function hasUnsavedEditableTabs(fm: FileManagerApi): boolean {
+  return fm.workspace.dirtyPaths.some((path) => fm.isFileEditable(path));
+}

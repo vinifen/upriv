@@ -286,7 +286,6 @@ export function VaultRootDataFolderModal({
     vaultRoot,
   ]);
 
-  if (!open) return null;
 
   const footer = discardConfirmOpen ? (
     <View style={styles.footerCol}>

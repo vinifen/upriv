@@ -590,6 +590,20 @@ function GeneralFields({
           onChange({ lifecycle_close_modal_on_submit })
         }
       />
+      <SwitchRow
+        label={t("modal.app_settings.field.lifecycle_open_file_manager_on_open")}
+        hint={t("modal.app_settings.field.lifecycle_open_file_manager_on_open_help")}
+        value={config.lifecycle_open_file_manager_on_open}
+        onValueChange={(lifecycle_open_file_manager_on_open) =>
+          onChange({ lifecycle_open_file_manager_on_open })
+        }
+      />
+      <SwitchRow
+        label={t("modal.app_settings.field.file_manager_confirm_delete")}
+        hint={t("modal.app_settings.field.file_manager_confirm_delete_help")}
+        value={config.file_manager_confirm_delete}
+        onValueChange={(file_manager_confirm_delete) => onChange({ file_manager_confirm_delete })}
+      />
     </View>
   );
 }

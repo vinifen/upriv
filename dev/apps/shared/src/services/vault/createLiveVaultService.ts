@@ -1,6 +1,6 @@
 import { RpcError } from "../../domain/core-rpc/errors";
 import type { VaultSettingsConfig } from "../../domain/vault-settings";
-import type { CreateVaultInput, VaultService } from "./VaultService";
+import type { CreateVaultInput, VaultRenameResult, VaultService } from "./VaultService";
 import type { VaultListItem } from "../../domain/vault-list";
 
 function notImplemented(what: string): never {
@@ -13,6 +13,8 @@ export interface LiveVaultRpc {
   getSettings: (vaultId: string) => Promise<VaultSettingsConfig | undefined>;
   /** Persist full `config.toml` via `vault_config_save` (enforces edit-policy). */
   saveSettings?: (vaultId: string, config: VaultSettingsConfig) => Promise<void>;
+  /** Deep rename via `vault_rename` (display name + optional folder migration). */
+  rename?: (vaultId: string, displayName: string) => Promise<VaultRenameResult>;
 }
 
 /** Shared live adapter — desktop daemon and native FFI pass their `rpc*` fns. */
@@ -32,6 +34,13 @@ export function createLiveVaultService(rpc: LiveVaultRpc): VaultService {
         notImplemented("Vault settings save");
       }
       await rpc.saveSettings(vaultId, config);
+    },
+
+    async rename(vaultId, displayName) {
+      if (!rpc.rename) {
+        notImplemented("Vault rename");
+      }
+      return rpc.rename(vaultId, displayName);
     },
 
     async unregisterSettings() {

@@ -231,7 +231,7 @@ export function Select<T extends string | number>({
 
   useLayoutEffect(() => {
     if (!open || !anchor) {
-      setOverlay(null);
+      setOverlay(null, listId);
       return;
     }
 
@@ -360,6 +360,7 @@ export function Select<T extends string | number>({
           </View>
         </View>
       </View>,
+      listId,
     );
   }, [
     anchor,
@@ -384,7 +385,7 @@ export function Select<T extends string | number>({
     winW,
   ]);
 
-  useEffect(() => () => setOverlay(null), [setOverlay]);
+  useEffect(() => () => setOverlay(null, listId), [listId, setOverlay]);
 
   useEffect(() => {
     if (!open) return;
@@ -574,7 +575,7 @@ const styles = StyleSheet.create({
   },
   valueMd: { flex: 1, minWidth: 0 },
   valueSm: { flexGrow: 1, flexShrink: 1, minWidth: 0 },
-  overlay: { flex: 1 },
+  overlay: { flex: 1, pointerEvents: "box-none" },
   panel: {
     overflow: "visible",
   },

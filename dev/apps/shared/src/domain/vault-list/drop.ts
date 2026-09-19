@@ -76,6 +76,8 @@ export function resolveListDrop(input: ResolveListDropInput): ListDropResolution
     return { kind: "blocked-reorder-grouped" };
   }
 
+  // Explicit ungroup targets only (`list:ungroup` / `list:ungroup:<groupId>`).
+  // Do not put those keys on a host that wraps groups — padding/gaps would ungroup.
   if (sourceGrouped && sourceVaultId && allowDragIntoGroup && isListUngroupDragKey(targetKey)) {
     return { kind: "ungroup", vaultId: sourceVaultId, beforeVaultId: null };
   }

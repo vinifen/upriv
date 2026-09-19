@@ -91,7 +91,7 @@ export function VaultListHeader({
   );
 
   return (
-    <header className="sticky top-0 z-40 bg-background/80 backdrop-blur-xl">
+    <header className="sticky top-0 z-40 bg-background">
       <div className="mx-auto flex max-w-vault-list items-center justify-between px-margin-mobile py-4 md:px-margin-desktop">
         <UprivWordmark theme={settings.ui.theme} className="h-6 w-auto object-contain" />
         <div className="flex items-center gap-2">

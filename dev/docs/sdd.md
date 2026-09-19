@@ -20,8 +20,8 @@
 | ID | Rust module | Disk | Session |
 |----|-------------|------|---------|
 | `contents` | `upriv_core::store` (planned) | `vaults/<id>/contents/` (ciphertext) | — |
-| `session` | `upriv_core::session` (planned) | — | mount `workspace/<id>/` + RAM (`encrypted_dir`) |
-| `plain` | `upriv_core::plain` (planned) | `workspace/<id>/` in plaintext | only when `storage.mode = upriv_plain` |
+| `session` | `upriv_core::session` (planned) | — | mount `{parent}/{display_name}/` + RAM (`encrypted_dir`). Legacy docs: `workspace/<id>/` |
+| `plain` | `upriv_core::plain` (planned) | `{parent}/{display_name}/` in plaintext | only when `storage.mode = upriv_plain` |
 
 No `archive/` layer. Portable `.zip` / `.7z` are **export files**, not rest layout. See PRD §1.6 and SECURITY-CRYPTO.
 
@@ -32,7 +32,7 @@ No `archive/` layer. Portable `.zip` / `.7z` are **export files**, not rest layo
 2. **Two storage modes** — `encrypted_dir` (default) and `upriv_plain`. Rest is always `contents/`. Lock = close.
 3. **Core in Rust** — single `upriv-core` crate for all platforms; shared logic between desktop and mobile (FFI). UI layers (React web, React Native) are **presentation only** — no crypto, disk I/O, or session secrets in JS/TS. See `ARCHITECTURE.md` §2.
 4. **Declarative config** — `.upriv/settings.toml` + per-vault `vaults/<id>/config.toml`; safe defaults if missing.
-5. **Mutable config** — vault options **changeable at any time**; TOML is source of truth; app re-reads before open/close (not “create and lock”).
+5. **Mutable config** — TOML is source of truth; the app re-reads before open/close (not “create and lock”). **Not all** fields are anytime: `[vault].display_name` / `id` only via `vault_rename` while closed; password/KDF while closed. See the mutability table in §3.2.4 and edit-policy.
 6. **Fail safe** — never overwrite `contents/` without verification; atomic writes. Never leave a durable `.7z` twin beside `contents/`.
 7. **Password default in RAM (v1)** — default `session_ram` (lock does not re-ask); optional `disk_*` modes write **encrypted** `session.enc` (never plaintext password); after reboot without `session.enc`, remount with password. `always_prompt` is an opt-in presence check on lock, not a rewrap.
 8. **Close = flush session into `contents/`** — never pack `.enc` blobs into a `.7z` as rest. Export `.7z` streams **logical** content.
@@ -60,7 +60,8 @@ No `archive/` layer. Portable `.zip` / `.7z` are **export files**, not rest layo
 └─────────────────────────────────────────────────────────────┘
                               │
 ┌─────────────────────────────▼───────────────────────────────┐
-│  vaults/<id>/contents/  +  workspace/<id>/ (virtual or plain) │
+│  vaults/<id>/contents/  +  {parent}/{display_name}/ (virtual or plain) │
+│  (legacy diagram path: workspace/<id>/ under the vault-root)          │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -412,6 +413,7 @@ locale = "en"
 theme = "dark"
 show_header_more_button = true
 file_manager_dock_expanded = false
+# file_manager_tree_split_percent = 20       # optional; explorer/editor split % (15–65), all vaults
 # always_show_hidden_vaults = false          # optional; Hidden vaults section
 # vault_list_allow_drag_into_group = true    # optional
 # vault_list_show_drag = true                # optional
@@ -421,6 +423,8 @@ file_manager_dock_expanded = false
 # vault_list_search = ""                     # optional
 # vault_list_show_create_button = true       # optional
 # lifecycle_close_modal_on_submit = false    # optional; close unlock/lock dialog on Confirm
+# lifecycle_open_file_manager_on_open = false # optional; open file manager after unlock if no other modal
+# file_manager_confirm_delete = true # optional; confirm before deleting in file manager
 
 [logging]
 enabled = true
@@ -440,7 +444,7 @@ last_opened_vault = "my-encrypted-notes"
 
 #### `[ui]` — fields and where they are saved (v1 desktop)
 
-**On disk:** prefs are **flat keys under `[ui]`**. General UI (`locale`, `theme`, `show_header_more_button`, `file_manager_dock_expanded`, `always_show_hidden_vaults`) then `vault_list_*` list prefs. Legacy nested **`[ui.vault_list]`** still loads; save writes flat `[ui]`. **`show_header_more_button`** is the on-disk name for the header ⋮ (wire: `vault_list_show_header_more_button`).
+**On disk:** prefs are **flat keys under `[ui]`**. General UI (`locale`, `theme`, `show_header_more_button`, `file_manager_dock_expanded`, `file_manager_tree_split_percent`, `always_show_hidden_vaults`) then `vault_list_*` list prefs. Legacy nested **`[ui.vault_list]`** still loads; save writes flat `[ui]`. **`show_header_more_button`** is the on-disk name for the header ⋮ (wire: `vault_list_show_header_more_button`).
 
 **Wire / RPC:** flat `settings.ui.*` below (what TypeScript and the daemon exchange).
 
@@ -450,7 +454,10 @@ last_opened_vault = "my-encrypted-notes"
 | `theme` | `[ui].theme` | Yes (General) | Explicit **Save** in System settings |
 | `vault_list_show_header_more_button` | `[ui].show_header_more_button` | Yes (General) | Explicit **Save** in System settings. Default `true`. Shows the header overflow (⋮) menu. |
 | `lifecycle_close_modal_on_submit` | `[ui].lifecycle_close_modal_on_submit` | Yes (General) | Explicit **Save** in System settings. Default `false`. When `true`, unlock/lock password dialog closes on Confirm (progress on the row). |
+| `lifecycle_open_file_manager_on_open` | `[ui].lifecycle_open_file_manager_on_open` | Yes (General) | Explicit **Save** in System settings. Default `false`. When `true`, after unlock succeeds open the in-app file manager if no other modal is open. |
+| `file_manager_confirm_delete` | `[ui].file_manager_confirm_delete` | Yes (General) | Explicit **Save** in System settings. Default `true`. When `true`, deleting a file/folder in the file manager asks for confirmation. |
 | `file_manager_dock_expanded` | `[ui].file_manager_dock_expanded` | **No** | When user **expands or collapses** the minimized file-manager dock (bottom-right chip list). Restored on next app launch. Default `false` (collapsed — count button only). |
+| `file_manager_tree_split_percent` | `[ui].file_manager_tree_split_percent` | **No** | When user **releases** the file-manager explorer/editor resize grip. App-wide for every vault (not per-vault `.upriv-workspace.json`). Default `20`; clamped to 15–65. |
 | `always_show_hidden_vaults` | `[ui].always_show_hidden_vaults` | Yes (Hidden vaults) | Explicit **Save** in System settings |
 | `vault_list_show_drag` | `[ui].vault_list_show_drag` | Yes (Vault list) | Explicit **Save** in System settings. Default `true`. Shows vertical drag grips on the vault list; off hides grips only (order/sort unchanged). |
 | `vault_list_show_create_button` | `[ui].vault_list_show_create_button` | Yes (Vault list) | Explicit **Save** in System settings. Default `true`. Shows the new-vault (+) button. |
@@ -466,6 +473,8 @@ last_opened_vault = "my-encrypted-notes"
 | `vault_list_search` | `[ui].vault_list_search` | No | When the user types in the vault-list search box (debounced). The control expands only while focused. Filters ungrouped vault names, group names, and vaults inside groups. |
 
 **Minimized file-manager dock:** after **Minimize** on a file-manager modal, vault chips appear in a floating dock. One control toggles between showing all chips vs. a single collapsed button with the count. That expanded/collapsed choice is written to `[ui] file_manager_dock_expanded` immediately on toggle — not exposed as a checkbox in System settings.
+
+**File-manager explorer split:** dragging the resize grip between explorer and editor updates a live preview; on pointer-up the canonical % is written to `[ui] file_manager_tree_split_percent` (shared by all vaults). Not a System settings control — adjust by dragging in any open file manager.
 
 **Working root (UX):** `workspace/` + launchers (`Upriv-windows.exe`, `Upriv-mac`, `Upriv-linux`) and `.upriv/`; documentation in `README.md` at `<vault-root>` root.
 
@@ -709,7 +718,8 @@ impl ConfigStore {
 | `[security]` (`secure_wipe_workspace`, `wipe_passes`, …) | Next **close** / discard | Immediate if only `mode`; wipe on close |
 | `[vault] password_hint`, `[vault] note`, `[vault] order` | Immediate (UI / list) | Immediate |
 | `[security] password_changed_at` | Set when change-password succeeds (**vault closed**) | **Blocked** — close vault first (`vault_closed`) |
-| `[vault] id` | Only with **migration flow** (rename folder + `config.toml`) | **Block** — close vault first |
+| `[vault] display_name` | Only via **`vault_rename`** (updates the label; folder/`id` migration when the slug changes) | **Block** — close vault first |
+| `[vault] id` | Only via **`vault_rename`** (folder + `config.toml` + groups/`last_opened` remap) | **Block** — close vault first |
 | `main.toml` `[package]` paths | Next open of any vault | Same |
 
 **Forbidden**
@@ -717,6 +727,7 @@ impl ConfigStore {
 - Assume config read only at vault creation.
 - Eternal cache without checking TOML `mtime`.
 - Rename `id` with a session present without a migration wizard.
+- Change `[vault].id` or `[vault].display_name` through `vault_config_save` — use **`vault_rename`** (UI preferences save calls it when `display_name` is dirty).
 
 **UI (v1+):** “Vault settings” screen edits same TOML (not parallel JSON structure that diverges).
 
@@ -1198,7 +1209,7 @@ No separate Welcome screen in v1; “Open vault” = `--vault` on first run or a
 
 - Form generated from `config/<id>.toml` schema (collapsible sections).
 - **`[vault]` section** includes **`order`** (integer) — same semantics as list sort; user may set position manually when not using drag-and-drop.
-- **Save** → atomic TOML write + `config_reload`.
+- **Save (preferences):** if `display_name` changed vs baseline → **`vault_rename`** first (folder/`[vault].id` migration when the slug changes; remaps groups + `last_opened` + leftover closed mount leaf). List/modal identity updates immediately after a successful rename, even if a later `vault_config_save` of other prefs fails. Other dirty preference fields → **`vault_config_save`** against the **effective** id.
 - Footer **`modal.settings.danger_zone`:** **`modal.settings.delete_vault`** button (red) → confirmation with `input === id` → `vault_delete(id, confirm_id)`.
 - Detailed field content: **TBD** (product); modal structure stable from v1.
 
@@ -1360,6 +1371,30 @@ Same vault body as desktop: rest is `vaults/<id>/contents/`. There is **no** OS 
 | `upriv_plain` OPEN | real `workspace/<id>/` via SAF (warned) | live ciphertext; wipe workspace on close |
 
 **open (Android):** unlock session against `vault.header`; browse/edit via in-app file manager (or `upriv_plain` workspace). Never copy the vault into `filesDir` / OS temp to fake a mount (SECURITY-PLAINTEXT).
+
+**In-app file manager context menu (mobile vs desktop):** row ⋯ on mobile / right-click on desktop share the same actions (new file/folder, rename, copy path, open in system files, delete last in red) except **Open in terminal** — **desktop only**. Phones have no useful “open folder in terminal” target; keep the action off the React Native menu.
+
+**Explorer selection / dirty cues (desktop + mobile):** the active editor file stays highlighted in the tree with a soft square on-surface wash (~6%, weaker than hover); hover uses `surface-container-highest`. Unsaved editable drafts show a small white dot after the file name (tabs and explorer). Session icon colors (RAM-only): **created** this session (create/import) → `vault-status-open` (green); **modified** (save/rename/move/dirty of an existing path) → accent. Folders inherit from descendants with **created outranking modified** (VS Code-style). A created file that is later edited stays green.
+
+**Explorer move (desktop + mobile):** drag a file/folder onto a folder (or empty explorer area → root) to move it. Desktop uses HTML5 DnD; mobile uses long-press (~450ms) then pan. Reject self/descendant targets. Same `movePath` + session remap as rename.
+
+**Unsaved drafts (VS Code-style):** switching tabs / opening another file keeps dirty drafts in RAM and does **not** prompt. Prompt only when **closing a dirty tab** or **dismissing the file-manager workspace** with any dirty files.
+
+**Explorer → editor:** single-click (desktop) / tap (mobile) a file in the tree opens or activates it in the editor (adds a tab if needed, expands ancestor folders, scrolls the tab into view) — same as VS Code reveal.
+
+**Open-tab reorder (desktop + mobile):** drag a tab onto another tab to change strip order (`openTabs`). Desktop: HTML5 DnD. Mobile: long-press (~450ms) then pan. Order is part of `.upriv-workspace.json` persistence. Does not change the active file unless the user also activates a tab.
+
+**Workspace layout persistence (`.upriv-workspace.json`):** logical file at the vault root (encrypted with the vault body in `contents/`). Hidden from the in-app explorer/editor (reserved name; create/rename/delete/move/open blocked). **Source of truth = vault tree**, not the JSON — on load, drop tabs/folders/selection that no longer exist; corrupt/unknown `format_version` → start clean. Host mounts FM with `key={vaultId}` so vault switches remount persistence cleanly. Explorer/editor **split %** is **not** per-vault — it lives in app `[ui].file_manager_tree_split_percent` (default 20, clamp 15–65), shared by every vault; dragging the FM grip patches settings on pointer-up (same pattern as dock expand).
+
+| Persist (vault `.upriv-workspace.json`) | Persist (app `settings.toml` `[ui]`) | Do not persist |
+|---------|----------------|----------------|
+| `openTabs` (+ order), `activeTabPath`, `expandedPaths`, `selectedPath` | `file_manager_tree_split_percent` | Unsaved drafts, dirty dots, session created/modified cues, modal UI |
+
+**When to write (product):** on each layout action (open/close/reorder tab, expand folder, selection) while the FM is open — skip write if the sanitized snapshot is unchanged. Also flush on FM dismiss, unmount (minimize), and vault close/purge. Split writes to app settings on drag end. Does **not** write on every editor keystroke (drafts are not persisted here).
+
+**When to restore:** when the user **opens the file manager** for that vault (not auto-open on unlock). Seed sync from disk if there is no in-memory entry; hydrate effect is a backstop. Tabs/folders/focus come back as last saved for that vault; split comes from app settings.
+
+**Current stage (mock FS):** schema + sanitize + hide + per-action write/hydrate/flush are implemented in `@upriv/shared` + desktop/mobile FM. Mock keeps the snapshot in a process-durable map across `resetSession` so reopen-in-same-run works. **Deferred until real `contents/` I/O:** durable across app restarts / devices; FUSE must not surface the file as a normal editable path (or must treat it as reserved the same way); export `.zip`/`.7z` will include the file automatically once it lives in `contents/`.
 
 **close:** flush session into `contents/`; wipe `upriv_plain` workspace if used.
 

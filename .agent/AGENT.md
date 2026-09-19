@@ -35,7 +35,7 @@ We are **past the Tauri → Electron migration** and **past UI/lifecycle scaffol
 | **Electron** | Shell, preload, daemon spawn, IPC timeouts, packaging scaffold |
 | **upriv-rpc / upriv-ffi** | Shared CORE RPC handlers; UniFFI `invoke` + Expo module `modules/upriv-core` |
 | **upriv-daemon** | stdio JSON-RPC — thin wrapper over `upriv-rpc` (same handlers as mobile) |
-| **upriv-core** | `logging`, `time`, `app_version()`, **`paths/`**, **`config/`**, **`contents/`** (Argon2id wrap + AES-SIV index + XChaCha chunks), **`vault/`** list / create / open / close |
+| **upriv-core** | `logging`, `time`, `app_version()`, **`paths/`**, **`config/`**, **`contents/`** (Argon2id wrap + AES-SIV index + XChaCha chunks), **`vault/`** list / create / open / close / rename |
 | **Integration** | Desktop: `createDesktopServices()` → live root/settings/logs/vaults; Mobile: `createServices()` → native if bridge linked, else mocks |
 
 **What to build next (default order):**
@@ -55,6 +55,7 @@ Vault list / create / open / close + groups are already live. **Do not** re-impl
 
 - **Format / rotation / names:** canonical contract in [`prod-example/README.md`](../prod-example/README.md) § Logs; keep Rust `logging/format.rs` and `@upriv/shared` `domain/logs/format.ts` in sync.
 - **`log_event` is lazy:** with no vault-root yet it does not write under `.upriv/logs/` (stderr/`eprintln` only).
+- **Allowlisted UI `log_event`s** (no id/name/path fields): `vault_hidden`, `vault_group_hidden`, `ui_crash`, `import_cache_wipe_failed`.
 - **Session clear:** NeedsSetup / incomplete / missing root clears the process logger so a stale writer cannot `mkdir` a fake `.upriv/logs`.
 - **`ensure_logs_dir`:** never recreate a missing `.upriv`; only create the `logs` leaf after `validate_existing_vault_root`.
 - **`vault_root_resolve`:** after `vault_root_ready` this process, missing marker → typed `vault_root_not_found` (**not** soft `needs_setup`). `needs_setup` is only true first-run / after A/B reset of the ready flag.
@@ -222,7 +223,7 @@ upriv/
 | **Mobile FFI** | `dev/crates/upriv-ffi/` | UniFFI `invoke` / `app_version` | UI |
 | **Core** | `dev/crates/upriv-core/` | Crypto, 7z, paths, state machine, FUSE, recovery | Depend on Electron |
 
-**Desktop UI:** Electron (`createDesktopServices`) talks to `upriv-daemon` for vault-root, settings, logs, vault list/create/open/close, groups, and `vault_config_save`. **Vite browser** still uses in-memory mocks. File manager / FUSE / export / import stay mock or `not_implemented`. Notable conventions:
+**Desktop UI:** Electron (`createDesktopServices`) talks to `upriv-daemon` for vault-root, settings, logs, vault list/create/open/close/`vault_rename`, groups, and `vault_config_save`. **Vite browser** still uses in-memory mocks. File manager / FUSE / export / import stay mock or `not_implemented`. Notable conventions:
 
 - **Pipeline:** `useVaultPipelineRun` enforces SDD §8.2.2 — one open/close at a time (`isRunning`). No Seal.
 - **Auto-close:** at most one close per idle tick; warn toast once per vault per idle cycle; respects `isPipelineRunning`.
@@ -255,7 +256,7 @@ Rest layout and crypto bar: [`SECURITY-CRYPTO.md`](SECURITY-CRYPTO.md). No Seal,
 upriv-core/src/
 ├── lib.rs
 ├── config/       # app settings.toml + vaults/*/config.toml (load)
-├── vault/        # list / create / open / close (recovery / rewrap later)
+├── vault/        # list / create / open / close / rename (recovery / rewrap later)
 ├── seven_zip/    # 7zz wrapper (export/import .7z only — not rest)
 ├── session/      # RAM session, security modes
 ├── recovery/     # dirty close / leftover upriv_plain workspace
@@ -354,7 +355,7 @@ Pre-root UI prefs are carried by the **bootstrap prefs bag** — a named payload
 
 **Data folder switch:** UI blocks apply while any vault is not `closed` / `recovery` (also `opening` / `closing` / `creating`). Modal stays open read-only — no bulk-close. Core refuses `vault_root_setup_*` with `vault_root_busy` while a session is open, mid-close flush, or Argon2 unlock/create holds the process gate.
 
-**Config edit policy:** `@upriv/shared` `domain/edit-policy` (contract `edit-policy.json`) is the table for what may change while a vault is busy (`anytime` / `vault_quiet` / `vault_closed` / `root_idle` / `no_open_session`). Hybrid default: list/next-close prefs anytime; `display_name` / mount / storage / `security.mode` need quiet (no open/opening/closing; recovery OK; **creating and queued-open are still quiet** at this gate); change-password / KDF need **strictly closed** (not recovery). App targets stay coarse (`ui` / `logging` / …) until fine field locks are needed. SDD §3.2.3 “open or closed” for rewrap is **deprecated**. Rewrap still unavailable in core until SECURITY-CRYPTO P0. **Rust** `save_vault_config_checked` / RPC `vault_config_save` refuse quiet-gated field changes while the session is open, mid-close, or Argon2 is in flight (`vault_config_busy`) — same targets as `rustConfigSaveQuietTargets` in the JSON contract (UI may also refuse edits while list status is **opening** — that is pipeline UX, not the quiet predicate). Quiet gate allows creating/queued-open; waiting close/create keep `closing`/`creating` badges (not the `queued` label). Row UI usually hides settings while pipeline-busy. Locked-field copy comes from `lockedI18n` in that contract (`vaultConfigEditLockedI18nKey`).
+**Config edit policy:** `@upriv/shared` `domain/edit-policy` (contract `edit-policy.json`) is the table for what may change while a vault is busy (`anytime` / `vault_quiet` / `vault_closed` / `vault_closed_or_recovery` / `root_idle` / `no_open_session`). Hybrid default: list/next-close prefs anytime; mount / storage / `security.mode` need **quiet** (no open/opening/closing; recovery OK; **creating and queued-open are still quiet** at this gate); `vault.display_name` / `vault.id` need **closed or recovery** (not creating/queued — those wait on create Argon2 or a queued open). Change-password / KDF need **strictly closed** (not recovery). App targets stay coarse (`ui` / `logging` / …) until fine field locks are needed. SDD §3.2.3 “open or closed” for rewrap is **deprecated**. Rewrap still unavailable in core until SECURITY-CRYPTO P0. **Rust** `save_vault_config_checked` / RPC `vault_config_save` refuse quiet-gated field changes (mount / storage / `security.mode`) while the session is open, mid-close, or Argon2 is in flight (`vault_config_busy`) — same targets as `rustConfigSaveQuietTargets` in the JSON contract (UI may also refuse edits while list status is **opening** — that is pipeline UX, not the quiet predicate). Display name and folder id change **only** via RPC `vault_rename` (never `vault_config_save`; a live save of those fields is `VaultConfigInvalid`). `rename_vault` also refuses while this vault is open, mid-close, or preparing (open/create seed). Quiet gate allows creating/queued-open; waiting close/create keep `closing`/`creating` badges (not the `queued` label). Row UI usually hides settings while pipeline-busy. Locked-field copy comes from `lockedI18n` in that contract (`vaultConfigEditLockedI18nKey`).
 
 ---
 
@@ -374,7 +375,7 @@ Work in this order unless the user explicitly reprioritizes:
 8. Windows packaging (`7zz`, `.exe`, WinFsp deps)  
 9. Later: macOS, RN Android, iOS  
 
-Current scaffold: vault list / create / open / close + groups + `vault_config_save` are live on Electron and native FFI (filesystem vault-root only). **Next:** file manager / FUSE over `contents/` chunk I/O, then export / import. See § Current development phase. **Do not** re-implement list/create/open/close in TypeScript.
+Current scaffold: vault list / create / open / close / `vault_rename` + groups + `vault_config_save` are live on Electron and native FFI (filesystem vault-root only). **Next:** file manager / FUSE over `contents/` chunk I/O, then export / import. See § Current development phase. **Do not** re-implement list/create/open/close/rename in TypeScript.
 
 **Deferred (vault list UX already stubbed):** OS `.zip` of `contents/` / `.7z` drop / import opens the create wizard with Import pre-filled (name + Electron `File.path` when present). Still needed: native file picker, daemon copy into vault-root, real header/format probe (replace mock `selectImportPackageForProbe`).
 

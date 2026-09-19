@@ -8,8 +8,10 @@ interface CheckboxProps {
   /** Select-all mixed state — desktop `indeterminate`. */
   indeterminate?: boolean;
   disabled?: boolean;
-  onChange: () => void;
-  label: string;
+  onChange?: () => void;
+  label?: string;
+  /** When false, parent owns the hit target (no nested Pressable). */
+  interactive?: boolean;
 }
 
 /** 16px checkbox — desktop logs/backups list parity. */
@@ -18,12 +20,40 @@ export function Checkbox({
   indeterminate = false,
   disabled = false,
   onChange,
-  label,
+  label = "",
+  interactive = true,
 }: CheckboxProps) {
   const { colors } = useTheme();
   const filled = checked || indeterminate;
   const bg = filled ? colors.accent : colors.surfaceContainerHigh;
   const border = filled ? colors.accent : colorAlpha(colors.outlineVariant, 0.5);
+
+  const box = (
+    <View style={[styles.box, { backgroundColor: bg, borderColor: border }]}>
+      {indeterminate ? (
+        <View style={[styles.dash, { backgroundColor: colors.accentForeground }]} />
+      ) : checked ? (
+        <Svg width={10} height={10} viewBox="0 0 10 10">
+          <Path
+            d="M1.5 5.2 3.8 7.5 8.5 2.4"
+            stroke={colors.accentForeground}
+            strokeWidth={1.6}
+            fill="none"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </Svg>
+      ) : null}
+    </View>
+  );
+
+  if (!interactive) {
+    return (
+      <View accessible={false} style={[styles.hit, { opacity: disabled ? 0.4 : 1 }]}>
+        {box}
+      </View>
+    );
+  }
 
   return (
     <Pressable
@@ -35,22 +65,7 @@ export function Checkbox({
       onPress={onChange}
       style={[styles.hit, { opacity: disabled ? 0.4 : 1 }]}
     >
-      <View style={[styles.box, { backgroundColor: bg, borderColor: border }]}>
-        {indeterminate ? (
-          <View style={[styles.dash, { backgroundColor: colors.accentForeground }]} />
-        ) : checked ? (
-          <Svg width={10} height={10} viewBox="0 0 10 10">
-            <Path
-              d="M1.5 5.2 3.8 7.5 8.5 2.4"
-              stroke={colors.accentForeground}
-              strokeWidth={1.6}
-              fill="none"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </Svg>
-        ) : null}
-      </View>
+      {box}
     </Pressable>
   );
 }
