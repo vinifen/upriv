@@ -1,5 +1,12 @@
 {
-  "gates": ["anytime", "vault_quiet", "vault_closed", "root_idle", "no_open_session"],
+  "gates": [
+    "anytime",
+    "vault_quiet",
+    "vault_closed",
+    "vault_closed_or_recovery",
+    "root_idle",
+    "no_open_session"
+  ],
   "vault": {
     "vault.note": "anytime",
     "vault.order": "anytime",
@@ -11,11 +18,11 @@
     "policy": "anytime",
     "security.wipe": "anytime",
     "seven_zip": "anytime",
-    "vault.display_name": "vault_quiet",
+    "vault.display_name": "vault_closed_or_recovery",
     "mount.workspace_path": "vault_quiet",
     "storage.mode": "vault_quiet",
     "security.mode": "vault_quiet",
-    "vault.id": "vault_quiet",
+    "vault.id": "vault_closed_or_recovery",
     "action.change_password": "vault_closed",
     "action.change_kdf": "vault_closed"
   },
@@ -35,11 +42,5 @@
     "action.change_password": "vault.change_password.vault_open",
     "action.change_kdf": "vault.change_kdf.vault_open"
   },
-  "rustConfigSaveQuietTargets": [
-    "vault.display_name",
-    "mount.workspace_path",
-    "storage.mode",
-    "security.mode",
-    "vault.id"
-  ]
+  "rustConfigSaveQuietTargets": ["mount.workspace_path", "storage.mode", "security.mode"]
 }

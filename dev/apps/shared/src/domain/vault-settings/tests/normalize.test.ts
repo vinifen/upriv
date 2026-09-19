@@ -14,6 +14,13 @@ describe("normalizeVaultSettingsConfig", () => {
     expect(normalized.seven_zip.compression_level).toBe(0);
     expect(normalized.backup.enabled).toBe(true);
   });
+
+  it("collapses extra spaces in the vault display name", () => {
+    const raw = vaultSettingsFixture();
+    raw.vault.display_name = "Demo    Vault";
+    const normalized = normalizeVaultSettingsConfig(raw);
+    expect(normalized.vault.display_name).toBe("Demo Vault");
+  });
 });
 
 describe("vaultSettingsSectionsForStorage", () => {

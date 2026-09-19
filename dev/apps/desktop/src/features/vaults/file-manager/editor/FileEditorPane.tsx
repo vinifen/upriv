@@ -9,9 +9,9 @@ interface FileEditorPaneProps {
   fm: FileManagerApi;
 }
 
-const EDITOR_LINE_CLASS = "font-mono text-sm leading-[1.625rem]";
-const GUTTER_INSET = "0.5rem";
-const GUTTER_TEXT_GAP = "0.25rem";
+const EDITOR_LINE_CLASS = "font-mono text-[13px] leading-5";
+const GUTTER_INSET = "0.1rem";
+const GUTTER_TEXT_GAP = "0.2rem";
 
 function lineCount(content: string): number {
   if (!content) return 1;
@@ -49,14 +49,19 @@ function EditorWithLineNumbers({
   const gutterWidthCh = Math.max(2, String(lines).length);
 
   return (
-    <div className="relative min-h-0 flex-1 overflow-hidden bg-surface-container-high py-3">
+    <div className="relative min-h-0 flex-1 overflow-hidden bg-surface-container-high">
       <div
         ref={gutterRef}
         aria-hidden
-        className="modal-scroll-pane pointer-events-none absolute bottom-3 top-3 overflow-hidden whitespace-pre text-right select-none"
-        style={{ left: GUTTER_INSET, width: `${gutterWidthCh}ch` }}
+        className="pointer-events-none absolute bottom-0 top-0 overflow-hidden whitespace-pre text-center select-none"
+        style={{
+          left: GUTTER_INSET,
+          width: `${gutterWidthCh}ch`,
+          paddingTop: "0.5rem",
+          paddingBottom: "0.5rem",
+        }}
       >
-        <pre className="font-mono text-[9px] leading-[1.625rem] tabular-nums text-[var(--editor-gutter-muted)]">
+        <pre className="w-full text-center font-mono text-[9px] leading-5 tabular-nums text-[var(--editor-gutter-muted)]">
           {lineNumbersText}
         </pre>
       </div>
@@ -70,7 +75,8 @@ function EditorWithLineNumbers({
           paddingLeft: `calc(${GUTTER_INSET} + ${gutterWidthCh}ch + ${GUTTER_TEXT_GAP})`,
         }}
         className={[
-          "modal-scroll-pane h-full min-h-0 w-full resize-none bg-transparent pr-4 text-on-surface outline-none md:pr-5",
+          /* Absolute fill — only this pane scrolls; parent must not grow with line count. */
+          "absolute inset-0 h-full w-full resize-none overflow-x-hidden overflow-y-auto bg-transparent py-2 pr-4 text-on-surface outline-none md:pr-5",
           EDITOR_LINE_CLASS,
         ].join(" ")}
         aria-label={ariaLabel}
@@ -90,7 +96,7 @@ function ImagePreview({
   ariaLabel: string;
 }) {
   return (
-    <div className="modal-scroll-pane flex min-h-0 flex-1 items-center justify-center bg-surface-container-high p-4">
+    <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto bg-surface-container-high p-4">
       <img
         src={src}
         alt={ariaLabel}
@@ -135,7 +141,7 @@ function ViewerDropZone({ fm, children }: { fm: FileManagerApi; children: ReactN
   return (
     <div
       className={[
-        "flex min-h-0 flex-1 flex-col",
+        "flex min-h-0 flex-1 flex-col overflow-hidden",
         dropActive ? "ring-2 ring-inset ring-[var(--accent)]" : "",
       ].join(" ")}
       onDragOver={handleDragOver}
@@ -192,7 +198,21 @@ export function FileEditorPane({ fm }: FileEditorPaneProps) {
   const content = getEditorContent(activeTabPath);
   const fileName = fileBaseName(activeTabPath);
 
-  if (isImage && content) {
+  if (isImage) {
+    if (!content) {
+      return (
+        <ViewerDropZone fm={fm}>
+          <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 bg-surface-container-high px-6 text-center">
+            <p className="font-mono text-[10px] uppercase tracking-widest text-on-surface-variant">
+              {t("modal.file_manager.viewer.preview_unavailable_kicker")}
+            </p>
+            <p className="max-w-sm text-sm text-on-surface-variant">
+              {t("modal.file_manager.viewer.preview_unavailable_body", { name: fileName })}
+            </p>
+          </div>
+        </ViewerDropZone>
+      );
+    }
     return (
       <ViewerDropZone fm={fm}>
         <ImagePreview
@@ -222,6 +242,7 @@ export function FileEditorPane({ fm }: FileEditorPaneProps) {
   return (
     <ViewerDropZone fm={fm}>
       <EditorWithLineNumbers
+        key={activeTabPath}
         content={content}
         fileName={fileName}
         ariaLabel={t("modal.file_manager.viewer.editor_label", { name: fileName })}
@@ -233,7 +254,4 @@ export function FileEditorPane({ fm }: FileEditorPaneProps) {
   );
 }
 
-/** Whether any open tab has unsaved editable changes (tab bar Save all). */
-export function hasUnsavedEditableTabs(fm: FileManagerApi): boolean {
-  return fm.workspace.dirtyPaths.some((path: string) => fm.isFileEditable(path));
-}
+export { hasUnsavedEditableTabs } from "../hooks/useVaultFileManager";

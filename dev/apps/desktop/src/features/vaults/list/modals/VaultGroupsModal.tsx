@@ -6,11 +6,10 @@ import { useErrorToast } from "@/hooks/useErrorToast";
 import { useTranslation } from "@/i18n";
 import {
   APP_SETTINGS_ERROR_I18N_KEYS,
-  VAULT_DISPLAY_NAME_MAX_LENGTH,
-  displayNameErrorI18nKey,
   isRpcError,
   shouldBumpVaultRootEpoch,
   validateDisplayName,
+  normalizeStoredName,
   type VaultGroup,
   type VaultListItem,
 } from "@upriv/shared";
@@ -52,12 +51,11 @@ export function VaultGroupsModal({
   const [newGroupName, setNewGroupName] = useState("");
   const [groupedVaultIds, setGroupedVaultIds] = useState<string[]>([]);
   const [hidden, setHidden] = useState(false);
-  const [groupNameError, setGroupNameError] = useState<string | null>(null);
   const savedHideRef = useRef<ReturnType<typeof setTimeout>>();
   const openedSessionRef = useRef(false);
   const commitSaveLock = useRef(false);
 
-  const pendingGroupName = newGroupName.trim();
+  const pendingGroupName = normalizeStoredName(newGroupName);
   const isDirty = pendingGroupName.length > 0;
 
   useEffect(() => {
@@ -72,7 +70,6 @@ export function VaultGroupsModal({
     setNewGroupName("");
     setGroupedVaultIds([]);
     setHidden(false);
-    setGroupNameError(null);
   }, [open]);
 
   useEffect(() => {
@@ -81,7 +78,6 @@ export function VaultGroupsModal({
       setNewGroupName("");
       setGroupedVaultIds([]);
       setHidden(false);
-      setGroupNameError(null);
       setSaveConfirmOpen(false);
       setDiscardConfirmOpen(false);
       setSavedVisible(false);
@@ -136,23 +132,13 @@ export function VaultGroupsModal({
     setNewGroupName("");
     setGroupedVaultIds([]);
     setHidden(false);
-    setGroupNameError(null);
     handleClose();
   };
 
   const handleSaveClick = () => {
     if (!isDirty || saveBusy) return;
     const validation = validateDisplayName(pendingGroupName);
-    if (validation) {
-      setGroupNameError(
-        t(
-          displayNameErrorI18nKey(validation),
-          validation === "too_long" ? { max: String(VAULT_DISPLAY_NAME_MAX_LENGTH) } : undefined,
-        ),
-      );
-      return;
-    }
-    setGroupNameError(null);
+    if (validation) return;
     dismissFooterConfirm();
     setSaveConfirmOpen(true);
   };
@@ -193,8 +179,6 @@ export function VaultGroupsModal({
   };
 
   const saveBlocked = !isDirty || saveBusy || saveConfirmOpen;
-
-  if (!open) return null;
 
   const footer = (
     <div className="flex flex-col gap-3">
@@ -259,7 +243,6 @@ export function VaultGroupsModal({
           includeHidden={includeHidden}
           newGroupName={newGroupName}
           groupedVaultIds={groupedVaultIds}
-          nameError={groupNameError}
           hidden={hidden}
           onHiddenChange={(next) => {
             setHidden(next);
@@ -268,7 +251,6 @@ export function VaultGroupsModal({
           }}
           onNewGroupNameChange={(name) => {
             setNewGroupName(name);
-            setGroupNameError(null);
             setSaveConfirmOpen(false);
             setDiscardConfirmOpen(false);
           }}

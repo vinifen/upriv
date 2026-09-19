@@ -30,6 +30,6 @@
     "web": {
       "favicon": "./assets/favicon.png"
     },
-    "plugins": ["expo-asset", "expo-font", "expo-dev-client"]
+    "plugins": ["expo-asset", "expo-font", "expo-dev-client", "expo-document-picker"]
   }
 }

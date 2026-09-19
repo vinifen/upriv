@@ -4,7 +4,6 @@ import {
   groupedVaultDragKey,
   groupedVaultSortOf,
   listDropHighlight,
-  LIST_ROOT_UNGROUP_DRAG_KEY,
   listUngroupDragKey,
   parseGroupedVaultDragKey,
   resolveListDrop,
@@ -20,6 +19,7 @@ import {
 } from "@upriv/shared";
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "@/components/icons";
+import { Collapse } from "@/components/ui";
 import { useTranslation } from "@/i18n";
 import { vaultListDropOverClass } from "../lib/dropOverClass";
 import { vaultListDropKeyProps } from "../lib/listDropKey";
@@ -67,7 +67,8 @@ function blocksGridClass(columns: 1 | 2 | 3): string {
 }
 
 function blocksGroupInnerClass(innerColumns: 1 | 2 | 3): string {
-  const pad = "min-w-0 px-1.5 pb-2 pt-0 sm:px-2";
+  // Keep the first member's 2px drop outline inside Collapse's clipping boundary.
+  const pad = "px-2 pb-2 pt-1 sm:px-3";
   if (innerColumns <= 1) return `grid min-w-0 grid-cols-1 gap-3 ${pad}`;
   if (innerColumns === 2) return `grid min-w-0 grid-cols-2 gap-3 sm:gap-4 ${pad}`;
   return `grid min-w-0 grid-cols-3 gap-4 ${pad}`;
@@ -278,12 +279,7 @@ export function VaultList({
     );
 
     return (
-      <div
-        className="relative"
-        {...(draggingGroupedVaultSourceGroupId
-          ? vaultListDropKeyProps(LIST_ROOT_UNGROUP_DRAG_KEY)
-          : {})}
-      >
+      <div className="relative">
         <div ref={gridRef} className={blocksGridClass(blockColumns)}>
           {rows.map((row) => {
             if (row.kind === "vault") {
@@ -299,10 +295,10 @@ export function VaultList({
             const childrenVisible = !row.group.collapsed && row.groupedVaults.length > 0;
             const showUngroupInGroup = draggingGroupedVaultSourceGroupId === row.group.id;
             const groupOpen = !row.group.collapsed || showUngroupInGroup;
-            const bodyVisible = childrenVisible || showUngroupInGroup;
-            const visibleMembers = childrenVisible ? row.groupedVaults.length : 0;
-            const span = vaultBlocksGroupColumnSpan(visibleMembers, blockColumns);
-            const innerColumns = vaultBlocksGroupInnerColumns(visibleMembers, blockColumns);
+            // Pack/span by membership, not collapsed visibility — avoids column jump on toggle.
+            const memberCount = row.groupedVaults.length;
+            const span = vaultBlocksGroupColumnSpan(memberCount, blockColumns);
+            const innerColumns = vaultBlocksGroupInnerColumns(memberCount, blockColumns);
 
             const groupDragOver = isDropOver(groupKey);
 
@@ -311,7 +307,7 @@ export function VaultList({
                 key={groupKey}
                 {...vaultListDropKeyProps(groupKey)}
                 className={[
-                  "min-w-0 w-full overflow-visible rounded-xl",
+                  "min-w-0 w-full overflow-visible rounded-xl transition-[border-color,background-color] duration-200 ease-out motion-reduce:transition-none",
                   groupOpen
                     ? "border border-outline-variant bg-surface-container-low"
                     : "border border-transparent bg-surface-container",
@@ -326,35 +322,35 @@ export function VaultList({
                   viewMode={viewMode}
                   dragDisabled={!vaultListShowDrag || !canReorder}
                   isDragging={draggingId === groupKey}
-                  expanded={bodyVisible}
+                  expanded={childrenVisible || showUngroupInGroup}
                   pointerDrag={pointerDrag}
                   onToggleCollapsed={onToggleGroupCollapsed}
                   onOpenSettings={onOpenGroupSettings}
                 />
-                {bodyVisible ? (
+                <Collapse open={childrenVisible}>
                   <div className={blocksGroupInnerClass(innerColumns)}>
-                    {childrenVisible
-                      ? row.groupedVaults.map((vault) => {
-                          const groupedVaultKey = groupedVaultDragKey(row.group.id, vault.id);
-                          const groupedVaultReorder =
-                            vaultListShowDrag &&
-                            canReorderGroupedVaults(groupedVaultSortOf(row.group));
-                          return renderBlockCard(vault, {
-                            dragDisabled:
-                              !vaultListShowDrag ||
-                              (!groupedVaultReorder && !vaultListAllowDragIntoGroup),
-                            dropKey: groupedVaultKey,
-                            dragHandleLabel: groupedVaultReorder
-                              ? reorderHandleLabel
-                              : groupHandleLabel,
-                          });
-                        })
-                      : null}
+                    {row.groupedVaults.map((vault) => {
+                      const groupedVaultKey = groupedVaultDragKey(row.group.id, vault.id);
+                      const groupedVaultReorder =
+                        vaultListShowDrag && canReorderGroupedVaults(groupedVaultSortOf(row.group));
+                      return renderBlockCard(vault, {
+                        dragDisabled:
+                          !vaultListShowDrag ||
+                          (!groupedVaultReorder && !vaultListAllowDragIntoGroup),
+                        dropKey: groupedVaultKey,
+                        dragHandleLabel: groupedVaultReorder
+                          ? reorderHandleLabel
+                          : groupHandleLabel,
+                      });
+                    })}
                     {showUngroupInGroup
                       ? renderGroupUngroupDrop(row.group.id, "col-span-full")
                       : null}
                   </div>
-                ) : null}
+                </Collapse>
+                {showUngroupInGroup && !childrenVisible
+                  ? renderGroupUngroupDrop(row.group.id, "px-3 pb-3")
+                  : null}
               </div>
             );
           })}
@@ -369,12 +365,7 @@ export function VaultList({
     viewMode === "compact" ? "space-y-3" : viewMode === "large" ? "space-y-4" : "space-y-4";
 
   return (
-    <div
-      className={`relative overflow-visible ${listGap}`}
-      {...(draggingGroupedVaultSourceGroupId
-        ? vaultListDropKeyProps(LIST_ROOT_UNGROUP_DRAG_KEY)
-        : {})}
-    >
+    <div className={`relative overflow-visible ${listGap}`}>
       {rows.map((row) => {
         if (row.kind === "vault") {
           const key = rootRowDragKey(row);
@@ -385,11 +376,7 @@ export function VaultList({
               dropKey={key}
               pipelineListStatus={pipelineListStatus}
               viewMode={viewMode}
-              dragDisabled={
-                !vaultListShowDrag ||
-                (!canReorder && !vaultListAllowDragIntoGroup) ||
-                isVaultPipelineBusy(row.vault.id)
-              }
+              dragDisabled={!vaultListShowDrag || (!canReorder && !vaultListAllowDragIntoGroup)}
               dragHandleLabel={canReorder ? reorderHandleLabel : groupHandleLabel}
               isDragging={draggingId === key}
               isDragOver={isDropOver(key)}
@@ -413,14 +400,13 @@ export function VaultList({
         const childrenVisible = !row.group.collapsed && row.groupedVaults.length > 0;
         const showUngroupInGroup = draggingGroupedVaultSourceGroupId === row.group.id;
         const groupOpen = !row.group.collapsed || showUngroupInGroup;
-        const bodyVisible = childrenVisible || showUngroupInGroup;
         const groupDragOver = isDropOver(groupKey);
         return (
           <div
             key={groupKey}
             {...vaultListDropKeyProps(groupKey)}
             className={[
-              "vault-group relative z-0 overflow-visible rounded-xl",
+              "vault-group relative z-0 min-w-0 w-full overflow-visible rounded-xl transition-[border-color,background-color] duration-200 ease-out motion-reduce:transition-none",
               groupOpen
                 ? "border border-outline-variant bg-surface-container-low"
                 : "border border-transparent bg-surface-container",
@@ -434,54 +420,51 @@ export function VaultList({
               viewMode={viewMode}
               dragDisabled={!vaultListShowDrag || !canReorder}
               isDragging={draggingId === groupKey}
-              expanded={bodyVisible}
+              expanded={childrenVisible || showUngroupInGroup}
               pointerDrag={pointerDrag}
               onToggleCollapsed={onToggleGroupCollapsed}
               onOpenSettings={onOpenGroupSettings}
             />
-            {bodyVisible ? (
-              <div className="space-y-3 px-1.5 pb-2 pt-0 sm:px-2">
-                {childrenVisible
-                  ? row.groupedVaults.map((vault) => {
-                      const groupedVaultKey = groupedVaultDragKey(row.group.id, vault.id);
-                      const groupedVaultReorder =
-                        vaultListShowDrag && canReorderGroupedVaults(groupedVaultSortOf(row.group));
-                      return (
-                        <VaultRow
-                          key={vault.id}
-                          vault={vault}
-                          dropKey={groupedVaultKey}
-                          pipelineListStatus={pipelineListStatus}
-                          viewMode={viewMode}
-                          dragDisabled={
-                            !vaultListShowDrag ||
-                            (!groupedVaultReorder && !vaultListAllowDragIntoGroup) ||
-                            isVaultPipelineBusy(vault.id)
-                          }
-                          dragHandleLabel={
-                            groupedVaultReorder ? reorderHandleLabel : groupHandleLabel
-                          }
-                          isDragging={draggingId === groupedVaultKey}
-                          isDragOver={isDropOver(groupedVaultKey)}
-                          isDropBlocked={dropOverBlocked}
-                          isReorderActive={draggingId !== null}
-                          isPipelineBusy={isVaultPipelineBusy(vault.id)}
-                          pointerDrag={pointerDrag}
-                          onOpenBackups={onOpenBackups}
-                          onOpenNote={onOpenNote}
-                          onOpenVaultInfo={onOpenVaultInfo}
-                          onOpenSettings={onOpenSettings}
-                          onExportVault={onExportVault}
-                          onOpenFileManager={onOpenFileManager}
-                          onLockVault={onLockVault}
-                          onUnlockVault={onUnlockVault}
-                        />
-                      );
-                    })
-                  : null}
+            <Collapse open={childrenVisible}>
+              <div className="min-w-0 space-y-3 px-3 pb-3 pt-1">
+                {row.groupedVaults.map((vault) => {
+                  const groupedVaultKey = groupedVaultDragKey(row.group.id, vault.id);
+                  const groupedVaultReorder =
+                    vaultListShowDrag && canReorderGroupedVaults(groupedVaultSortOf(row.group));
+                  return (
+                    <VaultRow
+                      key={vault.id}
+                      vault={vault}
+                      dropKey={groupedVaultKey}
+                      pipelineListStatus={pipelineListStatus}
+                      viewMode={viewMode}
+                      dragDisabled={
+                        !vaultListShowDrag || (!groupedVaultReorder && !vaultListAllowDragIntoGroup)
+                      }
+                      dragHandleLabel={groupedVaultReorder ? reorderHandleLabel : groupHandleLabel}
+                      isDragging={draggingId === groupedVaultKey}
+                      isDragOver={isDropOver(groupedVaultKey)}
+                      isDropBlocked={dropOverBlocked}
+                      isReorderActive={draggingId !== null}
+                      isPipelineBusy={isVaultPipelineBusy(vault.id)}
+                      pointerDrag={pointerDrag}
+                      onOpenBackups={onOpenBackups}
+                      onOpenNote={onOpenNote}
+                      onOpenVaultInfo={onOpenVaultInfo}
+                      onOpenSettings={onOpenSettings}
+                      onExportVault={onExportVault}
+                      onOpenFileManager={onOpenFileManager}
+                      onLockVault={onLockVault}
+                      onUnlockVault={onUnlockVault}
+                    />
+                  );
+                })}
                 {showUngroupInGroup ? renderGroupUngroupDrop(row.group.id) : null}
               </div>
-            ) : null}
+            </Collapse>
+            {showUngroupInGroup && !childrenVisible
+              ? renderGroupUngroupDrop(row.group.id, "px-3 pb-3")
+              : null}
           </div>
         );
       })}

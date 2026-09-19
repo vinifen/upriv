@@ -58,14 +58,32 @@ export interface AppSettingsConfig {
      * In-group reorder is independent.
      */
     vault_list_allow_drag_into_group: boolean;
-    /** Desktop file-manager dock UI — mobile clients may ignore. */
+    /**
+     * Minimized file-manager dock expanded (chip tower vs count button).
+     * Toggled from the dock itself — not a System settings checkbox.
+     */
     file_manager_dock_expanded: boolean;
+    /**
+     * Explorer/editor split width (canonical integer % of the FM pane, 15–65).
+     * App-wide — shared by every vault. Adjusted by dragging the FM resize grip.
+     */
+    file_manager_tree_split_percent: number;
     /**
      * When true, unlock/lock password dialog closes as soon as Confirm queues the
      * pipeline (progress on the row). Default false — keep the dialog open so a
      * wrong password can be fixed in place.
      */
     lifecycle_close_modal_on_submit: boolean;
+    /**
+     * When true, after a vault successfully opens, open the in-app file manager
+     * automatically — only if no other modal is open at that moment. Default false.
+     */
+    lifecycle_open_file_manager_on_open: boolean;
+    /**
+     * When true, deleting a file/folder in the file manager asks for confirmation.
+     * Default true. The delete dialog can turn this off via “don’t ask again”.
+     */
+    file_manager_confirm_delete: boolean;
   };
   logging: {
     enabled: boolean;
@@ -129,7 +147,10 @@ export function appSettingsEqual(a: AppSettingsConfig, b: AppSettingsConfig): bo
     a.ui.vault_list_show_drag === b.ui.vault_list_show_drag &&
     a.ui.vault_list_allow_drag_into_group === b.ui.vault_list_allow_drag_into_group &&
     a.ui.file_manager_dock_expanded === b.ui.file_manager_dock_expanded &&
+    a.ui.file_manager_tree_split_percent === b.ui.file_manager_tree_split_percent &&
     a.ui.lifecycle_close_modal_on_submit === b.ui.lifecycle_close_modal_on_submit &&
+    a.ui.lifecycle_open_file_manager_on_open === b.ui.lifecycle_open_file_manager_on_open &&
+    a.ui.file_manager_confirm_delete === b.ui.file_manager_confirm_delete &&
     a.logging.enabled === b.logging.enabled &&
     a.logging.level === b.logging.level &&
     a.logging.entries_per_file === b.logging.entries_per_file &&

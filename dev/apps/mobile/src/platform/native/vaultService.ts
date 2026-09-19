@@ -1,8 +1,14 @@
 import { createLiveVaultService, type CreateVaultInput } from "@upriv/shared";
-import { rpcVaultConfigGet, rpcVaultConfigSave, rpcVaultCreate, rpcVaultList } from "@/lib/rpc";
+import {
+  rpcVaultConfigGet,
+  rpcVaultConfigSave,
+  rpcVaultCreate,
+  rpcVaultList,
+  rpcVaultRename,
+} from "@/lib/rpc";
 import { assertSafVaultPathRpcAvailable, safVaultPathRpcUnavailable } from "./safVaultRpcGuard";
 
-/** Native → `upriv-ffi` vault list / create / config get+save. */
+/** Native → `upriv-ffi` vault list / create / config get+save / rename. */
 export const nativeVaultService = createLiveVaultService({
   async listVaults() {
     if (safVaultPathRpcUnavailable()) return [];
@@ -19,5 +25,9 @@ export const nativeVaultService = createLiveVaultService({
   async saveSettings(vaultId, config) {
     assertSafVaultPathRpcAvailable();
     await rpcVaultConfigSave(vaultId, config);
+  },
+  async rename(vaultId, displayName) {
+    assertSafVaultPathRpcAvailable();
+    return rpcVaultRename(vaultId, displayName);
   },
 });

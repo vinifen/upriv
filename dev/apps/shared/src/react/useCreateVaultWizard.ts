@@ -5,6 +5,7 @@ import {
   createEmptyCreateVaultDraft,
   createVaultWizardInitialState,
   createVaultWizardReducer,
+  MODAL_OPEN_MS,
   NO_VAULT_GROUPS,
   resolveCreateVaultCloseIntent,
   resolveCreateVaultFocusTarget,
@@ -17,7 +18,7 @@ import {
   type CreateVaultStepId,
   type VaultGroup,
 } from "../domain";
-import { scheduleAnimationFrame } from "./schedule";
+import { scheduleAnimationFrame, scheduleTimeout } from "./schedule";
 
 /** Web inputs expose `select()`; React Native `TextInput` only has `focus()`. */
 export type CreateVaultFocusableField = {
@@ -85,6 +86,8 @@ export function useCreateVaultWizard<
   const lastFocusByStep = useRef<Partial<Record<CreateVaultStepId, CreateVaultFocusField>>>({});
   const visitedSteps = useRef<Set<CreateVaultStepId>>(new Set());
   const wasOpen = useRef(false);
+  /** When true, first focus waits for the modal enter tween. */
+  const deferFocusOnOpen = useRef(false);
   /** Invalidates in-flight import-password probes (unmount, reopen, re-test). */
   const passwordTestGen = useRef(0);
 
@@ -92,6 +95,7 @@ export function useCreateVaultWizard<
   // wizard is up, and reacting to those new arrays would wipe what the user typed.
   useEffect(() => {
     if (open && !wasOpen.current) {
+      deferFocusOnOpen.current = true;
       dispatch({
         type: "opened",
         draft: initialDraft ?? createEmptyCreateVaultDraft(existingOrders),
@@ -103,6 +107,7 @@ export function useCreateVaultWizard<
       // A probe started in the previous session must not land on this draft.
       passwordTestGen.current += 1;
     }
+    if (!open) deferFocusOnOpen.current = false;
     wasOpen.current = open;
   }, [open, existingOrders, initialDraft, initialStep]);
 
@@ -222,12 +227,28 @@ export function useCreateVaultWizard<
     visitedSteps.current.add(step);
     if (!target) return;
 
-    // Native inputs mount a frame after the step swaps; focusing sooner is a no-op.
-    return scheduleAnimationFrame(() => {
+    const focusField = () => {
       const field = fieldRefs.current[target];
       field?.focus();
       if (shouldSelectCreateVaultFocusText(target)) field?.select?.();
-    });
+    };
+
+    // Wait for the shared modal enter tween on first open; step changes focus ASAP.
+    // `deferFocusOnOpen` is set in a useEffect that runs *after* this layout pass, so
+    // also treat `!wasOpen` as the closed→open edge (and the follow-up after `opened`).
+    const delay = deferFocusOnOpen.current || !wasOpen.current ? MODAL_OPEN_MS : 0;
+    deferFocusOnOpen.current = false;
+    if (delay <= 0) {
+      return scheduleAnimationFrame(focusField);
+    }
+    let cancelFrame: (() => void) | undefined;
+    const cancelTimeout = scheduleTimeout(() => {
+      cancelFrame = scheduleAnimationFrame(focusField);
+    }, delay);
+    return () => {
+      cancelTimeout();
+      cancelFrame?.();
+    };
   }, [open, state.currentStep]);
 
   return {

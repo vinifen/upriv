@@ -65,19 +65,15 @@ export function typographyForColors(c: ThemeColors) {
 }
 
 /**
- * RN elevation objects for heavy surfaces (vault rows, dialogs).
- * Settings accordion cards use `settingsSectionBoxShadow(theme)` (CSS `boxShadow`,
- * New Architecture) — same soft shape as desktop, slightly stronger on mobile only.
+ * Vault / group cards — same CSS as desktop `--vault-row-shadow`
+ * (`0 10px 14px -10px`). Negative spread keeps the drop below the card so
+ * Android `elevation` does not paint a clipped halo on the sides.
  */
-export const vaultRowShadow = {
-  shadowColor: "#000",
-  shadowOffset: { width: 0, height: 8 },
-  shadowOpacity: 0.32,
-  shadowRadius: 18,
-  elevation: 5,
-} as const;
+export function vaultRowBoxShadow(theme: UiTheme) {
+  return cssBoxShadowToRn(colorsForTheme(theme).vaultRowShadow);
+}
 
-/** Dialog panel elevation. Same caveat as `vaultRowShadow`. */
+/** Dialog panel elevation. */
 export const modalShadow = {
   shadowColor: "#000",
   shadowOffset: { width: 0, height: 8 },
@@ -85,6 +81,33 @@ export const modalShadow = {
   shadowRadius: 16,
   elevation: 8,
 } as const;
+
+/**
+ * Shared `dockChipShadow` CSS → RN object layers. Android `RCTView` NaNs on the
+ * raw CSS string (two layers + `#RRGGBBAA`); keep geometry in `palettes.ts`.
+ */
+export function dockChipBoxShadow(theme: UiTheme) {
+  return cssBoxShadowToRn(colorsForTheme(theme).dockChipShadow);
+}
+
+/** Parses the palette form `0 0 6px #rrggbbaa, 0 5px 12px -4px #rrggbbaa`. */
+function cssBoxShadowToRn(css: string) {
+  return css.split(/,(?![^()]*\))/).map((layer) => {
+    const args = layer.trim().split(/\s+/);
+    const color = args.find((arg) => arg.startsWith("#"));
+    const lens = args
+      .filter((arg) => !arg.startsWith("#"))
+      .map((arg) => Number.parseFloat(arg))
+      .filter((n) => Number.isFinite(n));
+    return {
+      offsetX: lens[0] ?? 0,
+      offsetY: lens[1] ?? 0,
+      blurRadius: lens[2] ?? 0,
+      ...(lens[3] != null ? { spreadDistance: lens[3] } : {}),
+      color,
+    };
+  });
+}
 
 /**
  * Mobile settings/help section cards only. Keeps desktop `0 6px 12px -8px` geometry;

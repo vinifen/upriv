@@ -7,7 +7,8 @@ use crate::logging::{log_event, LogLevel};
 use crate::paths::VaultRoot;
 use crate::session::{
     check_unlock_allowed, insert_session, is_vault_open_at, record_unlock_failure,
-    record_unlock_success, take_session, with_unlock_lock, ClosingGuard, OpenSession,
+    record_unlock_success, take_session, with_unlock_lock, with_vault_dir_lock, ClosingGuard,
+    OpenSession, PreparingGuard,
 };
 
 use super::persistence::{save_vault_persistence, VaultPersistence};
@@ -26,33 +27,40 @@ pub fn open_vault(root: &VaultRoot, vault_id: &str, password: &[u8]) -> Result<(
         return Err(UprivError::WrongPassword);
     }
     let vault_dir = vault_dir_or_not_found(root, vault_id)?;
-    with_unlock_lock(|| {
-        check_unlock_allowed(&vault_dir)?;
-        if is_vault_open_at(&vault_dir) {
-            return Err(UprivError::VaultAlreadyOpen(vault_id.to_string()));
+    // Mark before the dir lock so `rename_vault` can refuse without waiting on Argon2.
+    let _preparing = PreparingGuard::enter(&vault_dir)?;
+    with_vault_dir_lock(&vault_dir, || {
+        if !vault_dir.is_dir() {
+            return Err(UprivError::VaultNotFound(vault_dir.clone()));
         }
-        let config = load_vault_config(&vault_dir)?;
-        if config.storage_mode() == VaultStorageMode::UprivPlain {
-            return Err(UprivError::UprivPlainUnavailable);
-        }
-        let contents = vault_dir.join("contents");
-        let opened = match open_store(&contents, password) {
-            Ok(opened) => opened,
-            Err(UprivError::WrongPassword) => {
-                let _ = record_unlock_failure(&vault_dir);
-                return Err(UprivError::WrongPassword);
+        with_unlock_lock(|| {
+            check_unlock_allowed(&vault_dir)?;
+            if is_vault_open_at(&vault_dir) {
+                return Err(UprivError::VaultAlreadyOpen(vault_id.to_string()));
             }
-            Err(other) => return Err(other),
-        };
-        record_unlock_success(&vault_dir);
-        insert_session(OpenSession::from_opened(
-            vault_id.to_string(),
-            vault_dir.clone(),
-            config.security.mode.normalized(),
-            opened,
-        ))?;
-        log_event(LogLevel::Info, "vault_opened", &[("id", vault_id)]);
-        Ok(())
+            let config = load_vault_config(&vault_dir)?;
+            if config.storage_mode() == VaultStorageMode::UprivPlain {
+                return Err(UprivError::UprivPlainUnavailable);
+            }
+            let contents = vault_dir.join("contents");
+            let opened = match open_store(&contents, password) {
+                Ok(opened) => opened,
+                Err(UprivError::WrongPassword) => {
+                    let _ = record_unlock_failure(&vault_dir);
+                    return Err(UprivError::WrongPassword);
+                }
+                Err(other) => return Err(other),
+            };
+            record_unlock_success(&vault_dir);
+            insert_session(OpenSession::from_opened(
+                vault_id.to_string(),
+                vault_dir.clone(),
+                config.security.mode.normalized(),
+                opened,
+            ))?;
+            log_event(LogLevel::Info, "vault_opened", &[("id", vault_id)]);
+            Ok(())
+        })
     })
 }
 

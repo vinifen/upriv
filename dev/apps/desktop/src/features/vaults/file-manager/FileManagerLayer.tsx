@@ -1,7 +1,7 @@
 import { useCallback } from "react";
 import { useTranslation } from "@/i18n";
 import { useFileManager } from "./FileManagerContext";
-import { hasUnsavedWorkspaceChanges } from "./lib/fileManagerWorkspaceTypes";
+import { hasUnsavedWorkspaceChanges } from "@upriv/shared";
 import { FileManagerDock } from "./shell/FileManagerDock";
 import { FileManagerModal } from "./shell/FileManagerModal";
 import { FileManagerWorkspace } from "./workspace/FileManagerWorkspace";
@@ -77,6 +77,7 @@ export function FileManagerLayer() {
       >
         {maximizedEntry ? (
           <FileManagerWorkspace
+            key={maximizedEntry.vaultId}
             entry={maximizedEntry}
             onDismissConfirmed={() => handleDismissConfirmed(maximizedEntry.vaultId)}
           />

@@ -23,7 +23,7 @@ use upriv_core::{
     deactivate_vault_root_alias_everywhere, delete_vault_group, discover_bootstrap_root,
     inspect_vault_root_at, known_vault_ids, list_vaults, load_app_settings, load_vault_config,
     load_vault_groups, open_or_initialize_vault_root, open_vault, parse_settings_toml_str,
-    read_vault_root_alias, reorder_vault_group_grouped_vaults, reorder_vault_groups,
+    read_vault_root_alias, rename_vault, reorder_vault_group_grouped_vaults, reorder_vault_groups,
     repair_vault_groups, resolve_vault_root, save_app_settings_session_with_alias_sync,
     serialize_settings_toml_str, suggested_vault_root, update_vault_group, vault_list_item,
     write_vault_root_alias_for_root, AppSettings, IncompleteReplacePolicy, KdfUnlockPreset,
@@ -143,6 +143,7 @@ pub fn handle_rpc(req: RpcRequest) -> RpcResponse {
         "vault_close" => vault_close(req.params),
         "vault_config_get" => vault_config_get(req.params),
         "vault_config_save" => vault_config_save(req.params),
+        "vault_rename" => vault_rename(req.params),
         other => err("unknown_method", format!("unknown method: {other}")),
     }
 }
@@ -607,7 +608,7 @@ struct LogEventParams {
     event: String,
 }
 
-/// Allowlisted UI events. `vault_hidden` records no vault id or display name.
+/// Allowlisted UI events. No vault id, display name, or paths.
 fn log_append_event(params: Value) -> RpcResponse {
     let parsed: LogEventParams = match serde_json::from_value(params) {
         Ok(value) => value,
@@ -625,6 +626,11 @@ fn log_append_event(params: Value) -> RpcResponse {
         "ui_crash" => {
             // No payload — do not attach component stacks or user paths.
             log_event(LogLevel::Error, "ui_crash", &[]);
+            ok(json!(null))
+        }
+        "import_cache_wipe_failed" => {
+            // No URI — picker cache path must not land in session logs.
+            log_event(LogLevel::Warn, "import_cache_wipe_failed", &[]);
             ok(json!(null))
         }
         _ => err("invalid_request", "event is not allowed".into()),
@@ -1270,6 +1276,33 @@ fn vault_config_save(params: Value) -> RpcResponse {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct VaultRenameParams {
+    id: String,
+    display_name: String,
+}
+
+fn vault_rename(params: Value) -> RpcResponse {
+    let parsed: VaultRenameParams = match serde_json::from_value(params) {
+        Ok(value) => value,
+        Err(error) => return err("invalid_request", error.to_string()),
+    };
+    let root = match require_vault_root() {
+        Ok(root) => root,
+        Err(response) => return response,
+    };
+    match rename_vault(&root, parsed.id.trim(), &parsed.display_name) {
+        Ok(result) => ok(json!({
+            "id": result.id,
+            "previousId": result.previous_id,
+            "displayName": result.display_name,
+            "idChanged": result.id_changed,
+        })),
+        Err(error) => map_core_err(error),
+    }
+}
+
+#[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct AppSettingsSaveParams {
     /// Nested `AppSettings` (snake_case sections: `ui`, `logging`, `app`).
@@ -1647,6 +1680,7 @@ mod contract_tests {
         "vault_close",
         "vault_config_get",
         "vault_config_save",
+        "vault_rename",
     ];
 
     #[test]
@@ -1772,6 +1806,21 @@ level = \"info\"
             params: json!({ "event": "vault_group_hidden" }),
         });
         assert!(group_hidden.ok, "{group_hidden:?}");
+
+        let wipe_failed = handle_rpc(RpcRequest {
+            method: "log_event".into(),
+            params: json!({ "event": "import_cache_wipe_failed" }),
+        });
+        assert!(wipe_failed.ok, "{wipe_failed:?}");
+
+        let wipe_with_path = handle_rpc(RpcRequest {
+            method: "log_event".into(),
+            params: json!({ "event": "import_cache_wipe_failed", "path": "/tmp/x" }),
+        });
+        assert_eq!(
+            wipe_with_path.error.as_ref().map(|e| e.code.as_str()),
+            Some("invalid_request")
+        );
 
         let with_name = handle_rpc(RpcRequest {
             method: "log_event".into(),

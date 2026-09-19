@@ -71,7 +71,8 @@ export function MenuActionItem({
               includeFontPadding: false,
             },
           ]}
-          numberOfLines={2}
+          numberOfLines={1}
+          ellipsizeMode="tail"
         >
           {label}
         </Text>
@@ -95,10 +96,10 @@ export function MenuActionItem({
 }
 
 const styles = StyleSheet.create({
-  /** Desktop `menuItemClass`: px-4 py-3 gap-3. */
+  /** Desktop `menuItemClass`: px-4 py-3 gap-3 — icon tops with the first text line. */
   row: {
     flexDirection: "row",
-    alignItems: "center",
+    alignItems: "flex-start",
     gap: 12,
     paddingVertical: 12,
     paddingHorizontal: spacing.lg,
@@ -107,12 +108,16 @@ const styles = StyleSheet.create({
   },
   iconSlot: {
     width: 20,
+    height: 20,
+    marginTop: 1,
     alignItems: "center",
     justifyContent: "center",
+    flexShrink: 0,
   },
   textCol: { flex: 1, gap: 2, minWidth: 0 },
   check: {
     width: 16,
+    marginTop: 2,
     textAlign: "center",
     fontSize: 12,
     fontFamily: "monospace",

@@ -20,6 +20,7 @@ describe("LOADING_BUDGET_MS", () => {
     expect(LOADING_BUDGET_MS.vaultExport).toBe(LOADING_BUDGET_MS.vaultRewrap);
     expect(LOADING_BUDGET_MS.settingsSave).toBe(30_000);
     expect(LOADING_BUDGET_MS.settingsSave).toBeLessThan(LOADING_BUDGET_MS.default);
+    expect(LOADING_BUDGET_MS.vaultRename).toBe(LOADING_BUDGET_MS.default);
   });
 });
 

@@ -10,12 +10,12 @@ export function parseVaultGroupWire(raw: unknown): VaultGroup {
     throw new RpcError(INVALID_RESPONSE, "vault group: expected object", raw);
   }
   const r = raw as Record<string, unknown>;
-  if (typeof r.id !== "string" || typeof r.displayName !== "string") {
-    throw new RpcError(INVALID_RESPONSE, "vault group: missing id/displayName", raw);
+  if (typeof r.id !== "string") {
+    throw new RpcError(INVALID_RESPONSE, "vault group: missing id", raw);
   }
   const group = normalizeVaultGroup({
     id: r.id,
-    displayName: r.displayName,
+    displayName: typeof r.displayName === "string" ? r.displayName : r.id,
     order: typeof r.order === "number" ? r.order : 0,
     collapsed: r.collapsed === true,
     groupedVaults: r.groupedVaults,

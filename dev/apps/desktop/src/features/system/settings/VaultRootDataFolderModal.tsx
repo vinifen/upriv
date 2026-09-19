@@ -277,8 +277,6 @@ export function VaultRootDataFolderModal({
     vaultRoot,
   ]);
 
-  if (!open) return null;
-
   const footer = discardConfirmOpen ? (
     <div className="flex flex-col gap-3">
       <div className="text-sm" aria-live="polite">

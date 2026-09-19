@@ -38,7 +38,7 @@ import {
   RadioGroup,
   SwitchRow,
   ThemedInput,
-  Warning,
+  DisplayNameFieldError,
 } from "@/components/settings/settingsFields";
 import { useVaultRootService } from "@/platform/services";
 
@@ -235,8 +235,11 @@ function VaultSection({
         value={config.display_name}
         maxLength={VAULT_DISPLAY_NAME_MAX_LENGTH}
         disabled={displayNameLocked}
+        autoCorrect={false}
+        spellCheck={false}
         onChangeText={(display_name) => onChange({ display_name })}
       />
+      {displayNameLocked ? null : <DisplayNameFieldError name={config.display_name} />}
       <FieldLabel>{t("modal.settings.field.vault.order")}</FieldLabel>
       <FieldHint>{t("modal.settings.field.vault.order_help")}</FieldHint>
       <ThemedInput
@@ -719,7 +722,6 @@ export function VaultSettingsGroupSection({
   groups,
   selectedGroupId,
   newGroupName,
-  nameError,
   includeHidden = false,
   onSelectedGroupIdChange,
   onNewGroupNameChange,
@@ -727,7 +729,6 @@ export function VaultSettingsGroupSection({
   groups: readonly VaultGroup[];
   selectedGroupId: string;
   newGroupName: string;
-  nameError: string | null;
   includeHidden?: boolean;
   onSelectedGroupIdChange: (groupId: string) => void;
   onNewGroupNameChange: (name: string) => void;
@@ -753,10 +754,12 @@ export function VaultSettingsGroupSection({
       <ThemedInput
         value={newGroupName}
         maxLength={VAULT_DISPLAY_NAME_MAX_LENGTH}
+        autoCorrect={false}
+        spellCheck={false}
         onChangeText={onNewGroupNameChange}
         placeholder={t("vault.group.create.name_label")}
       />
-      {nameError ? <Warning>{nameError}</Warning> : null}
+      <DisplayNameFieldError name={newGroupName} allowEmpty />
       <FieldHint>{t("vault.create.group_create_help")}</FieldHint>
     </View>
   );

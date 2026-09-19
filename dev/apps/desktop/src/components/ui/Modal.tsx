@@ -1,14 +1,22 @@
 import {
   type ButtonHTMLAttributes,
+  type CSSProperties,
   type ReactNode,
   useEffect,
   useId,
-  useLayoutEffect,
   useRef,
+  useState,
 } from "react";
 import { createPortal } from "react-dom";
 import { Icon, type IconName } from "@/components/icons";
 import { useTranslation } from "@/i18n";
+import {
+  MODAL_CLOSE_MS,
+  MODAL_OPEN_MS,
+  MODAL_SCALE_FROM,
+  acquireOpenModal,
+  releaseOpenModal,
+} from "@upriv/shared";
 import { acquireScrollLock, releaseScrollLock } from "./scrollLock";
 
 const modalChromeButtonClass =
@@ -141,6 +149,50 @@ export function Modal({
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
   const scrimStart = useRef<{ x: number; y: number } | null>(null);
+  const [mounted, setMounted] = useState(open);
+  const [visible, setVisible] = useState(false);
+
+  useEffect(() => {
+    if (open) {
+      setMounted(true);
+      setVisible(false);
+      return;
+    }
+
+    setVisible(false);
+    const reduce =
+      typeof window !== "undefined" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (reduce) {
+      setMounted(false);
+      return;
+    }
+    const id = window.setTimeout(() => setMounted(false), MODAL_CLOSE_MS);
+    return () => window.clearTimeout(id);
+  }, [open]);
+
+  // Reveal after the portal has painted at opacity 0 (avoids skipping the enter tween).
+  useEffect(() => {
+    if (!open || !mounted || visible) return;
+    const reduce =
+      typeof window !== "undefined" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (reduce) {
+      setVisible(true);
+      return;
+    }
+    let inner = 0;
+    const outer = requestAnimationFrame(() => {
+      inner = requestAnimationFrame(() => {
+        void panelRef.current?.offsetHeight;
+        setVisible(true);
+      });
+    });
+    return () => {
+      cancelAnimationFrame(outer);
+      cancelAnimationFrame(inner);
+    };
+  }, [open, mounted, visible]);
 
   useEffect(() => {
     if (!open || !dismissible) return;
@@ -152,14 +204,20 @@ export function Modal({
   }, [open, dismissible]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!mounted) return;
     acquireScrollLock();
     return () => releaseScrollLock();
-  }, [open]);
+  }, [mounted]);
 
-  // Focus the dialog once on open + Tab cycle. Do not steal focus on every
-  // children/footer/headerActions change (locale Select). When a focused
-  // control unmounts (focus leaves the panel), restore focus to the panel.
+  useEffect(() => {
+    if (!mounted) return;
+    acquireOpenModal();
+    return () => releaseOpenModal();
+  }, [mounted]);
+
+  // Focus trap while open. Delay initial focus until the enter tween finishes
+  // so large dialogs (create vault) are not interrupted mid-animation.
+  // Do not steal focus if a child already took it (e.g. PasswordInput autoFocus).
   useEffect(() => {
     if (!open) return;
     const panel = panelRef.current;
@@ -170,7 +228,13 @@ export function Modal({
         (el) => !el.hasAttribute("disabled") && el.tabIndex !== -1,
       );
 
-    panel.focus({ preventScroll: true });
+    const focusTimer = window.setTimeout(() => {
+      const active = document.activeElement;
+      if (active instanceof HTMLElement && panel.contains(active) && active !== panel) {
+        return;
+      }
+      panel.focus({ preventScroll: true });
+    }, MODAL_OPEN_MS);
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Tab") return;
@@ -224,24 +288,16 @@ export function Modal({
     panel.addEventListener("keydown", onKeyDown);
     document.addEventListener("focusin", onFocusIn);
     return () => {
+      window.clearTimeout(focusTimer);
       panel.removeEventListener("keydown", onKeyDown);
       document.removeEventListener("focusin", onFocusIn);
       observer.disconnect();
     };
-  }, [open]);
-
-  useLayoutEffect(() => {
-    if (!open) return;
-    const panel = panelRef.current;
-    if (!panel) return;
-    const active = document.activeElement;
-    if (active instanceof Node && panel.contains(active)) return;
-    panel.focus({ preventScroll: true });
-  }, [open]);
+  }, [open, mounted]);
 
   const scrollFooterLayout = Boolean(footer);
 
-  if (!open) return null;
+  if (!mounted) return null;
 
   const bodyClass = bodyScroll
     ? "modal-scroll-pane min-h-0 text-body text-on-surface overflow-y-auto"
@@ -252,10 +308,25 @@ export function Modal({
         .filter(Boolean)
         .join(" ");
 
+  const motionMs = visible ? MODAL_OPEN_MS : MODAL_CLOSE_MS;
+  const motionStyle: CSSProperties = {
+    transitionDuration: `${motionMs}ms`,
+    transitionTimingFunction: "cubic-bezier(0.22, 1, 0.36, 1)",
+    transform: visible ? "scale(1)" : `scale(${MODAL_SCALE_FROM})`,
+    willChange: "opacity, transform",
+  };
+
   return createPortal(
     <div className={["fixed inset-0 overscroll-none", rootClassName].join(" ")}>
       <div
-        className="absolute inset-0 bg-[var(--modal-scrim)] backdrop-blur-sm"
+        className={[
+          "absolute inset-0 bg-[var(--modal-scrim)] transition-opacity motion-reduce:!transition-none",
+          visible ? "opacity-100" : "opacity-0",
+        ].join(" ")}
+        style={{
+          transitionDuration: `${motionMs}ms`,
+          transitionTimingFunction: "cubic-bezier(0.22, 1, 0.36, 1)",
+        }}
         aria-hidden
         onPointerDown={
           dismissible
@@ -293,9 +364,12 @@ export function Modal({
             "rounded-2xl",
             "p-4 sm:p-6",
             "outline-none",
+            "origin-center transition-[opacity,transform] motion-reduce:!transition-none",
+            visible ? "opacity-100" : "opacity-0",
             scrollFooterLayout ? "min-h-0 sm:max-h-[min(88vh,calc(100vh-2.5rem))]" : "",
             panelClassName,
           ].join(" ")}
+          style={motionStyle}
           onMouseDown={(event) => event.stopPropagation()}
           onClick={(event) => event.stopPropagation()}
         >

@@ -12,8 +12,10 @@ import {
   parseVaultGroupWire,
   parseVaultListItemWire,
   parseVaultListResult,
+  parseVaultRenameResult,
   parseVaultRootInspect,
   parseVaultRootResolve,
+  type AllowlistedUiLogEvent,
   type AppLogFile,
   type AppSettingsConfig,
   type CreateVaultInput,
@@ -28,6 +30,7 @@ import {
   type VaultRootInspectResult,
   type VaultRootMode,
   type VaultRootResolveResult,
+  type VaultRenameResult,
   type VaultSettingsConfig,
 } from "@upriv/shared";
 import { getUprivCoreNative } from "upriv-core";
@@ -381,9 +384,7 @@ export async function rpcLogDelete(filenames: readonly string[]): Promise<void> 
   await nativeInvokeRaw(CORE_RPC_COMMANDS.LOG_DELETE, { filenames: [...filenames] });
 }
 
-export async function rpcLogEvent(
-  event: "vault_hidden" | "vault_group_hidden" | "ui_crash",
-): Promise<void> {
+export async function rpcLogEvent(event: AllowlistedUiLogEvent): Promise<void> {
   await nativeInvokeRaw(CORE_RPC_COMMANDS.LOG_EVENT, { event });
 }
 
@@ -518,4 +519,9 @@ export async function rpcVaultConfigGet(id: string): Promise<VaultSettingsConfig
 
 export async function rpcVaultConfigSave(id: string, settings: VaultSettingsConfig): Promise<void> {
   await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_CONFIG_SAVE, { id, settings });
+}
+
+export async function rpcVaultRename(id: string, displayName: string): Promise<VaultRenameResult> {
+  const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_RENAME, { id, displayName });
+  return parseVaultRenameResult(raw);
 }

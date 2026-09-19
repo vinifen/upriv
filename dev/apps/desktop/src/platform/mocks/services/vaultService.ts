@@ -1,20 +1,28 @@
 import {
   clearMockVaultUnlockPreset,
   getMockVaultUnlockPreset,
+  mockVaultExportBytes,
+  remapVaultWorkspaceSnapshot,
   setMockVaultUnlockPreset,
 } from "@upriv/shared/testing";
 import {
   DEFAULT_KDF_UNLOCK_PRESET,
+  displayNameToVaultId,
+  normalizeStoredName,
   type CreateVaultInput,
   type VaultListItem,
+  type VaultRenameResult,
   type VaultService,
 } from "@upriv/shared";
-import { mockVaultExportBytes } from "@upriv/shared/testing";
 import {
-  MOCK_VAULTS,
+  listMockVaultSeedRows,
   registerMockVaultId,
+  registerRemappedMockSeedVault,
+  removeRemappedMockSeedVault,
+  suppressMockSeedVaultId,
   unregisterMockVaultId,
 } from "@/platform/mocks/data/vaults";
+import { getMockAppSettings, replaceMockAppSettings } from "@/platform/mocks/data/appSettings";
 import {
   getMockVaultSettings,
   registerMockVaultSettings,
@@ -40,6 +48,80 @@ function listVaultWithPersistedOrder(vault: VaultListItem): VaultListItem {
 
 const extraCreatedVaults: VaultListItem[] = [];
 
+async function mockRename(vaultId: string, displayName: string): Promise<VaultRenameResult> {
+  const trimmed = normalizeStoredName(displayName);
+  const listed = await mockVaultService.listVaults();
+  const existing = listed.map((row) => row.id).filter((id) => id !== vaultId);
+  const newId = displayNameToVaultId(trimmed, existing);
+  const idChanged = newId !== vaultId;
+  const settings = getMockVaultSettings(vaultId);
+  const nextSettings = {
+    ...settings,
+    vault: { ...settings.vault, id: newId, display_name: trimmed },
+  };
+
+  if (idChanged) {
+    remapVaultWorkspaceSnapshot(vaultId, newId);
+    const app = getMockAppSettings();
+    if (app.app.last_opened_vault.trim() === vaultId) {
+      replaceMockAppSettings({
+        ...app,
+        app: { ...app.app, last_opened_vault: newId },
+      });
+    }
+    const preset = getMockVaultUnlockPreset(vaultId);
+    unregisterMockVaultSettings(vaultId);
+    clearMockVaultUnlockPreset(vaultId);
+    unregisterMockVaultId(vaultId);
+
+    const createdIdx = extraCreatedVaults.findIndex((row) => row.id === vaultId);
+    if (createdIdx >= 0) {
+      extraCreatedVaults[createdIdx] = {
+        ...extraCreatedVaults[createdIdx],
+        id: newId,
+        displayName: trimmed,
+      };
+      registerMockVaultId(newId);
+    } else {
+      const seed = listMockVaultSeedRows().find((row) => row.id === vaultId);
+      removeRemappedMockSeedVault(vaultId);
+      suppressMockSeedVaultId(vaultId);
+      registerRemappedMockSeedVault({
+        ...(seed ?? {
+          id: vaultId,
+          displayName: trimmed,
+          session: null,
+          storageMode: settings.storage.mode,
+          order: settings.vault.order,
+          lastAccessedWhen: "—",
+          lastAccessedAt: new Date().toISOString(),
+          note: settings.vault.note,
+          hidden: settings.vault.hidden,
+        }),
+        id: newId,
+        displayName: trimmed,
+      });
+    }
+    if (preset) setMockVaultUnlockPreset(newId, preset);
+  } else {
+    const createdIdx = extraCreatedVaults.findIndex((row) => row.id === vaultId);
+    if (createdIdx >= 0) {
+      extraCreatedVaults[createdIdx] = {
+        ...extraCreatedVaults[createdIdx],
+        displayName: trimmed,
+      };
+    }
+  }
+
+  registerMockVaultSettings(nextSettings);
+  return {
+    id: newId,
+    previousId: vaultId,
+    displayName: trimmed,
+    idChanged,
+  };
+}
+
 /** In-memory vault service for Vite browser / tests. Electron uses the daemon adapter. */
 export const mockVaultService: VaultService = {
   canPersistSettings: true,
@@ -47,7 +129,7 @@ export const mockVaultService: VaultService = {
   canExportVault: true,
 
   async listVaults() {
-    return [...structuredClone(MOCK_VAULTS), ...structuredClone(extraCreatedVaults)].map(
+    return [...listMockVaultSeedRows(), ...structuredClone(extraCreatedVaults)].map(
       listVaultWithPersistedOrder,
     );
   },
@@ -85,6 +167,8 @@ export const mockVaultService: VaultService = {
   async registerSettings(_vaultId, config) {
     registerMockVaultSettings(config);
   },
+
+  rename: mockRename,
 
   async unregisterSettings(vaultId) {
     unregisterMockVaultSettings(vaultId);

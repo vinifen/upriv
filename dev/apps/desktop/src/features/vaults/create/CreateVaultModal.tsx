@@ -116,8 +116,6 @@ export function CreateVaultModal({
     if (!open) setCreateError(null);
   }, [open]);
 
-  if (!open) return null;
-
   const footer = (
     <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
       <div className="sm:min-w-0 sm:flex-1">
@@ -188,7 +186,7 @@ export function CreateVaultModal({
       bodyScroll={false}
       footer={footer}
     >
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <div className="flex min-h-[min(24rem,60dvh)] min-w-0 flex-1 flex-col">
         <CreateVaultStepNav
           currentStep={currentStep}
           stepStatuses={stepStatuses}

@@ -1,6 +1,7 @@
 import { useId } from "react";
 import { Button, Select, SwitchRow } from "@/components/ui";
 import {
+  DisplayNameFieldError,
   PolicyRadioOption,
   settingsControlClass,
   SettingsField,
@@ -16,6 +17,7 @@ import {
   LOG_LEVEL_PRESETS,
   SUPPORTED_LOCALES,
   VAULT_DISPLAY_NAME_MAX_LENGTH,
+  liveDisplayNameError,
   logFileCountForKeepLast,
   suggestedDefaultWorkspacePath,
   validateWorkspaceGlobalPath,
@@ -72,6 +74,8 @@ export function AppSettingsGeneralSection({ config, onChange }: SectionPatchProp
   const themeGroup = useId();
   const showHeaderMoreId = useId();
   const closeModalOnSubmitId = useId();
+  const openFileManagerOnOpenId = useId();
+  const confirmDeleteId = useId();
 
   return (
     <SettingsFormGrid>
@@ -119,6 +123,22 @@ export function AppSettingsGeneralSection({ config, onChange }: SectionPatchProp
         }
         label={t("modal.app_settings.field.lifecycle_close_modal_on_submit")}
         hint={t("modal.app_settings.field.lifecycle_close_modal_on_submit_help")}
+      />
+      <SwitchRow
+        id={openFileManagerOnOpenId}
+        checked={config.lifecycle_open_file_manager_on_open}
+        onChange={(lifecycle_open_file_manager_on_open) =>
+          onChange({ lifecycle_open_file_manager_on_open })
+        }
+        label={t("modal.app_settings.field.lifecycle_open_file_manager_on_open")}
+        hint={t("modal.app_settings.field.lifecycle_open_file_manager_on_open_help")}
+      />
+      <SwitchRow
+        id={confirmDeleteId}
+        checked={config.file_manager_confirm_delete}
+        onChange={(file_manager_confirm_delete) => onChange({ file_manager_confirm_delete })}
+        label={t("modal.app_settings.field.file_manager_confirm_delete")}
+        hint={t("modal.app_settings.field.file_manager_confirm_delete_help")}
       />
     </SettingsFormGrid>
   );
@@ -230,7 +250,6 @@ interface AppSettingsGroupsSectionProps {
   includeHidden?: boolean;
   newGroupName: string;
   groupedVaultIds: string[];
-  nameError: string | null;
   hidden?: boolean;
   onHiddenChange?: (hidden: boolean) => void;
   onNewGroupNameChange: (name: string) => void;
@@ -243,7 +262,6 @@ export function AppSettingsGroupsSection({
   includeHidden = false,
   newGroupName,
   groupedVaultIds,
-  nameError,
   hidden = false,
   onHiddenChange,
   onNewGroupNameChange,
@@ -268,12 +286,15 @@ export function AppSettingsGroupsSection({
           type="text"
           value={newGroupName}
           maxLength={VAULT_DISPLAY_NAME_MAX_LENGTH}
+          autoComplete="off"
+          spellCheck={false}
+          aria-invalid={liveDisplayNameError(newGroupName, { allowEmpty: true }) ? true : undefined}
           onChange={(event) => onNewGroupNameChange(event.target.value)}
           className={settingsControlClass}
           placeholder={t("vault.group.create.name_label")}
         />
+        <DisplayNameFieldError name={newGroupName} allowEmpty />
       </SettingsField>
-      {nameError ? <p className="text-sm text-on-error-container">{nameError}</p> : null}
 
       <SwitchRow
         checked={hidden}

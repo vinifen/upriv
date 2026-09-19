@@ -14,6 +14,14 @@ describe("parseVaultGroupWire", () => {
     expect(group.groupedVaults).toEqual(["notes"]);
   });
 
+  it("collapses internal whitespace in displayName", () => {
+    const group = parseVaultGroupWire({
+      id: "work",
+      displayName: "Work    Notes",
+    });
+    expect(group.displayName).toBe("Work Notes");
+  });
+
   it("reads hidden from the wire object", () => {
     const group = parseVaultGroupWire({
       id: "secrets",
@@ -25,6 +33,11 @@ describe("parseVaultGroupWire", () => {
 
   it("rejects empty id after trim", () => {
     expect(() => parseVaultGroupWire({ id: "  ", displayName: "Work" })).toThrow(RpcError);
+  });
+
+  it("fills displayName from id when omitted", () => {
+    const group = parseVaultGroupWire({ id: "trasdf" });
+    expect(group.displayName).toBe("trasdf");
   });
 });
 

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { findNode } from "@upriv/shared";
+import { findNode, UPRIV_WORKSPACE_PATH } from "@upriv/shared";
 import {
   createVaultFile,
   createVaultFolder,
@@ -11,8 +11,10 @@ import {
   importVaultFile,
   isVaultFileEditable,
   moveVaultPath,
+  remapVaultWorkspaceSnapshot,
   renameVaultPath,
   resetVaultFileSession,
+  resetVaultWorkspaceSnapshots,
   setVaultFileContent,
 } from "@upriv/shared/testing";
 
@@ -80,5 +82,16 @@ describe("mock vault fileSystem", () => {
     const path = createVaultFile(VAULT, "/", "temp.md");
     expect(deleteVaultPath(VAULT, path!)).toBe(true);
     expect(getVaultFileContent(VAULT, path!)).toBeNull();
+  });
+
+  it("remaps durable file-manager snapshots when the vault id changes", () => {
+    const payload =
+      '{"format_version":1,"openTabs":["/README.md"],"activeTabPath":"/README.md","expandedPaths":["/"],"selectedPath":"/README.md"}\n';
+    setVaultFileContent(VAULT, UPRIV_WORKSPACE_PATH, payload);
+    resetVaultFileSession(VAULT);
+    remapVaultWorkspaceSnapshot(VAULT, "renamed-notes");
+    expect(getVaultFileContent("renamed-notes", UPRIV_WORKSPACE_PATH)?.content).toBe(payload);
+    resetVaultFileSession("renamed-notes");
+    resetVaultWorkspaceSnapshots("renamed-notes");
   });
 });

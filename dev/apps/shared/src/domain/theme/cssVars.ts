@@ -41,6 +41,7 @@ export const THEME_CSS_VAR_NAMES = {
   modalScrim: "--modal-scrim",
   modalShadow: "--modal-shadow",
   vaultRowShadow: "--vault-row-shadow",
+  dockChipShadow: "--dock-chip-shadow",
   settingsSectionShadow: "--settings-section-shadow",
   logViewerBg: "--log-viewer-bg",
 } as const satisfies Record<keyof ThemePalette, `--${string}`>;

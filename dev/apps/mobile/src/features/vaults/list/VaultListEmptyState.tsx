@@ -65,7 +65,6 @@ export function VaultListEmptyState({
 const styles = StyleSheet.create({
   wrap: {
     paddingVertical: spacing.xxl,
-    paddingHorizontal: spacing.lg,
     gap: spacing.md,
     alignItems: "center",
   },

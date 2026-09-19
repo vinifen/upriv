@@ -2,6 +2,11 @@
 .DS_Store
 Thumbs.db
 
+# Dependencies / local test caches (never install at repo root)
+node_modules/
+.vite/
+.vitest/
+
 # Env
 .env
 

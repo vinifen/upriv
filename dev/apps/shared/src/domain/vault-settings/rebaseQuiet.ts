@@ -3,9 +3,9 @@ import type { VaultPipelineListStatus, VaultRow } from "../vault/types";
 import type { VaultSettingsConfig } from "./types";
 
 /**
- * When quiet-gated fields are locked (vault open/opening/closing), keep baseline
- * values so a preferences save can still persist `anytime` fields without
- * sending stale quiet dirty from before the lock.
+ * When gated fields are locked (vault open/opening/closing/creating/queued),
+ * keep baseline values so a preferences save can still persist `anytime`
+ * fields without sending stale dirty from before the lock.
  */
 export function rebaseQuietLockedVaultSettings(
   draft: VaultSettingsConfig,

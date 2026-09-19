@@ -1,3 +1,4 @@
+import { persistableTreeSplitPercent, TREE_SPLIT_DEFAULT_PERCENT } from "../file-tree";
 import { normalizeWorkspaceGlobalPath } from "../workspace";
 import {
   LOG_ENTRIES_PER_FILE,
@@ -6,6 +7,14 @@ import {
   normalizeLogLevel,
 } from "./logging";
 import { DEFAULT_UI_THEME, type AppSettingsConfig, type VaultRootMode } from "./types";
+
+/** Clamp / default `[ui].file_manager_tree_split_percent` (integer 15–65; matches Rust `u8`). */
+export function normalizeFileManagerTreeSplitPercent(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return TREE_SPLIT_DEFAULT_PERCENT;
+  }
+  return persistableTreeSplitPercent(value);
+}
 
 /** Max characters for `[ui].vault_list_search` (matches vault display-name cap). */
 export const VAULT_LIST_SEARCH_MAX_LENGTH = 128;
@@ -82,7 +91,10 @@ export function createDefaultAppSettings(): AppSettingsConfig {
       vault_list_show_drag: true,
       vault_list_allow_drag_into_group: true,
       file_manager_dock_expanded: false,
+      file_manager_tree_split_percent: TREE_SPLIT_DEFAULT_PERCENT,
       lifecycle_close_modal_on_submit: false,
+      lifecycle_open_file_manager_on_open: false,
+      file_manager_confirm_delete: true,
     },
     logging: {
       enabled: true,
@@ -129,7 +141,13 @@ export function normalizeAppSettings(config: AppSettingsConfig): AppSettingsConf
       vault_list_show_group_settings_button: normalizeShowGroupSettings(legacyUi),
       vault_list_show_drag: config.ui.vault_list_show_drag !== false,
       vault_list_allow_drag_into_group: config.ui.vault_list_allow_drag_into_group !== false,
+      file_manager_dock_expanded: config.ui.file_manager_dock_expanded === true,
+      file_manager_tree_split_percent: normalizeFileManagerTreeSplitPercent(
+        config.ui.file_manager_tree_split_percent,
+      ),
       lifecycle_close_modal_on_submit: config.ui.lifecycle_close_modal_on_submit === true,
+      lifecycle_open_file_manager_on_open: config.ui.lifecycle_open_file_manager_on_open === true,
+      file_manager_confirm_delete: config.ui.file_manager_confirm_delete !== false,
     },
     logging,
     app: {

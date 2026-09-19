@@ -70,6 +70,9 @@ const nativeLogService: LogService = {
   async recordVaultGroupHidden() {
     await rpcLogEvent("vault_group_hidden");
   },
+  async recordImportCacheWipeFailed() {
+    await rpcLogEvent("import_cache_wipe_failed");
+  },
 };
 
 function rpcErrorForSafInspect(status: SafInspectStatus, safUri: string): RpcError {

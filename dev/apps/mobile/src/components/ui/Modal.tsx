@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Animated,
+  Easing,
   KeyboardAvoidingView,
   Modal as RnModal,
   Platform,
@@ -15,6 +16,13 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Icon, type IconName } from "@/components/icons";
+import {
+  MODAL_CLOSE_MS,
+  MODAL_OPEN_MS,
+  MODAL_SCALE_FROM,
+  acquireOpenModal,
+  releaseOpenModal,
+} from "@upriv/shared";
 import { useTheme } from "@/theme";
 import { MODAL_MAX_HEIGHT_RATIO, modalShadow, radii, spacing } from "@/theme/tokens";
 import { useTranslation } from "@/i18n";
@@ -31,6 +39,9 @@ const PANEL_MAX_WIDTH: Record<ModalPanelClassName, number> = {
   "max-w-3xl": 768,
   "max-w-5xl": 1024,
 };
+
+/** Desktop Modal CSS `cubic-bezier(0.22, 1, 0.36, 1)`. */
+const enterEase = Easing.bezier(0.22, 1, 0.36, 1);
 
 export interface ModalProps {
   open: boolean;
@@ -60,9 +71,6 @@ export interface ModalProps {
   overlay?: ReactNode;
 }
 
-const OPEN_MS = 180;
-const CLOSE_MS = 140;
-
 /** Centered dialog — desktop Modal parity. */
 export function Modal({
   open,
@@ -89,51 +97,82 @@ export function Modal({
   const [dialogHeaderHeight, setDialogHeaderHeight] = useState(0);
   const [dialogFooterHeight, setDialogFooterHeight] = useState(0);
   const opacity = useRef(new Animated.Value(open ? 1 : 0)).current;
-  const scale = useRef(new Animated.Value(open ? 1 : 0.96)).current;
+  const scale = useRef(new Animated.Value(open ? 1 : MODAL_SCALE_FROM)).current;
   const hasFooter = Boolean(footer);
+  const enterStarted = useRef(false);
+  const enterGen = useRef(0);
 
   useEffect(() => {
     if (!hasFooter) setDialogFooterHeight(0);
   }, [hasFooter]);
 
   useEffect(() => {
+    if (!mounted) return;
+    acquireOpenModal();
+    return () => releaseOpenModal();
+  }, [mounted]);
+
+  const startEnter = () => {
+    if (enterStarted.current) return;
+    enterStarted.current = true;
+    Animated.parallel([
+      Animated.timing(opacity, {
+        toValue: 1,
+        duration: MODAL_OPEN_MS,
+        easing: enterEase,
+        useNativeDriver: true,
+      }),
+      Animated.timing(scale, {
+        toValue: 1,
+        duration: MODAL_OPEN_MS,
+        easing: enterEase,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  };
+
+  useEffect(() => {
     if (open) {
+      const gen = ++enterGen.current;
+      enterStarted.current = false;
       setMounted(true);
       setDialogBodyHeight(0);
       setDialogHeaderHeight(0);
       setDialogFooterHeight(0);
       opacity.setValue(0);
-      scale.setValue(0.96);
-      Animated.parallel([
-        Animated.timing(opacity, {
-          toValue: 1,
-          duration: OPEN_MS,
-          useNativeDriver: true,
-        }),
-        Animated.timing(scale, {
-          toValue: 1,
-          duration: OPEN_MS,
-          useNativeDriver: true,
-        }),
-      ]).start();
-      return;
+      scale.setValue(MODAL_SCALE_FROM);
+      // Fallback when `onShow` is late/missing (some Android builds).
+      let inner = 0;
+      const outer = requestAnimationFrame(() => {
+        inner = requestAnimationFrame(() => {
+          if (gen === enterGen.current) startEnter();
+        });
+      });
+      return () => {
+        cancelAnimationFrame(outer);
+        cancelAnimationFrame(inner);
+      };
     }
 
     if (!mounted) return;
 
+    const gen = ++enterGen.current;
+    enterStarted.current = false;
     Animated.parallel([
       Animated.timing(opacity, {
         toValue: 0,
-        duration: CLOSE_MS,
+        duration: MODAL_CLOSE_MS,
+        easing: enterEase,
         useNativeDriver: true,
       }),
       Animated.timing(scale, {
-        toValue: 0.96,
-        duration: CLOSE_MS,
+        toValue: MODAL_SCALE_FROM,
+        duration: MODAL_CLOSE_MS,
+        easing: enterEase,
         useNativeDriver: true,
       }),
     ]).start(({ finished }) => {
-      if (finished) setMounted(false);
+      if (finished && gen === enterGen.current) setMounted(false);
     });
   }, [open]); // eslint-disable-line react-hooks/exhaustive-deps -- animate on open edge only
 
@@ -193,6 +232,7 @@ export function Modal({
       animationType="none"
       transparent
       statusBarTranslucent
+      onShow={startEnter}
       onRequestClose={dismissible ? onClose : undefined}
     >
       <KeyboardAvoidingView
@@ -200,7 +240,7 @@ export function Modal({
         behavior={Platform.OS === "ios" ? "padding" : undefined}
       >
         <DropdownOverlayProvider>
-          <View style={styles.root} collapsable={false}>
+          <View style={styles.root}>
             <Animated.View
               pointerEvents="none"
               style={[StyleSheet.absoluteFill, { backgroundColor: colors.modalScrim, opacity }]}

@@ -13,7 +13,7 @@ describe("readImportFileContent", () => {
 
   it("returns empty string for binary extensions", async () => {
     const file = new File([new Uint8Array([1, 2, 3])], "doc.pdf");
-    await expect(readImportFileContent(file)).resolves.toBe("");
+    await expect(readImportFileContent(file)).rejects.toThrow(/unsupported/);
   });
 
   it("reads images as data URLs", async () => {

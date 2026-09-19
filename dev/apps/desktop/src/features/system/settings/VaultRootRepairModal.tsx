@@ -329,8 +329,6 @@ export function VaultRootRepairModal({
     setConfirmOpen(true);
   }, [busy, picking, confirmOpen, otherGate.blocksPrimary, policy]);
 
-  if (!open) return null;
-
   const noteKeys =
     policy === "choose_other"
       ? otherGate.confirmNotes

@@ -22,3 +22,9 @@ export {
   type VaultPipelinePresentation,
   type VaultPipelineRunState,
 } from "./useVaultPipelineRun";
+export { useWorkspacePersistence, loadPersistedWorkspaceState } from "./useWorkspacePersistence";
+export {
+  FileManagerProvider,
+  useFileManager,
+  type FileManagerContextValue,
+} from "./FileManagerContext";

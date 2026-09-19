@@ -457,6 +457,8 @@ export function useVaultListScreen() {
 
   const modals = useVaultListModals(vaults, groups);
 
+  const settingsPersistVaultIdsRef = useRef(new Set<string>());
+
   const lifecycle = useVaultLifecycleActions({
     vaults,
     setVaultRuntimeState,
@@ -465,6 +467,7 @@ export function useVaultListScreen() {
     showError,
     dismissToast,
     t,
+    settingsPersistVaultIdsRef,
   });
 
   const handleSortChange = useCallback(
@@ -658,16 +661,35 @@ export function useVaultListScreen() {
     ],
   );
 
+  const settingsVaultId = modals.settingsVaultId;
+  const setSettingsVaultId = modals.setSettingsVaultId;
+
   const handleVaultSettingsSaved = useCallback(
     (vaultId: string, patch: Parameters<typeof updateVaultSettings>[1]) => {
       const previous = vaults.find((vault) => vault.id === vaultId);
       updateVaultSettings(vaultId, patch);
+      if (patch.id && patch.id !== vaultId && settingsVaultId === vaultId) {
+        setSettingsVaultId(patch.id);
+      }
+      if (patch.id && patch.id !== vaultId && settings.app.last_opened_vault.trim() === vaultId) {
+        void patchSettings({ app: { last_opened_vault: patch.id } }, { memoryOnly: true });
+      }
       recordVaultHiddenIfNeeded(previous?.hidden, patch.hidden);
       if (previous && previous.storageMode !== patch.storageMode && previous.session === "open") {
         showToast(t("warning.storage_mode_requires_close"));
       }
     },
-    [recordVaultHiddenIfNeeded, showToast, t, updateVaultSettings, vaults],
+    [
+      patchSettings,
+      recordVaultHiddenIfNeeded,
+      setSettingsVaultId,
+      settings.app.last_opened_vault,
+      settingsVaultId,
+      showToast,
+      t,
+      updateVaultSettings,
+      vaults,
+    ],
   );
 
   const handleCreateVaultFromBackup = useCallback(
@@ -1164,6 +1186,9 @@ export function useVaultListScreen() {
         modals.setSettingsArea(null);
       },
       onVaultSettingsSaved: handleVaultSettingsSaved,
+      onPersistBusyChange: (vaultIds: readonly string[] | null) => {
+        settingsPersistVaultIdsRef.current = new Set(vaultIds ?? []);
+      },
       onVaultDelete: handleVaultDelete,
       groups,
       onCommitGroupAssignment: async (vaultId: string, assignment: CreateVaultGroupAssignment) => {

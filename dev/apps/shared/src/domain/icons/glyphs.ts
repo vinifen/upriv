@@ -116,6 +116,7 @@ export const ICON_GLYPHS: Record<IconName, readonly IconShape[]> = {
   ],
   clock: [c(12, 12, 8, stroke), p("M12 8v4l3 2", roundJoin)],
   close: [p("M6 6l12 12M18 6L6 18", round)],
+  copy: [r(9, 9, 11, 11, { rx: 2, strokeWidth: 1.75 }), p("M5 15V5a2 2 0 0 1 2-2h10", roundJoin)],
   cpu: [
     r(4, 4, 16, 16, { rx: 2, strokeWidth: 1.75 }),
     r(9, 9, 6, 6, { rx: 1, strokeWidth: 1.75 }),
@@ -187,6 +188,10 @@ export const ICON_GLYPHS: Record<IconName, readonly IconShape[]> = {
     }),
     p("M11 9h6M11 13h4", round),
   ],
+  pencil: [
+    p("M12 20h9", round),
+    p("M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z", roundJoin),
+  ],
   refresh: [
     p("M4 12a8 8 0 0 1 13.5-5.7", round),
     p("M20 3v5h-5", roundJoin),
@@ -194,6 +199,11 @@ export const ICON_GLYPHS: Record<IconName, readonly IconShape[]> = {
     p("M4 21v-5h5", roundJoin),
   ],
   search: [c(11, 11, 7, stroke), p("M20 20l-3.9-3.9", round)],
+  save: [
+    p("M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z", roundJoin),
+    p("M17 21v-8H7v8", roundJoin),
+    p("M7 3v5h8", roundJoin),
+  ],
   settings: [c(12, 12, 3, stroke), p(PATH_SETTINGS, roundJoin)],
   terminal: [r(3, 5, 18, 14, { rx: 2, strokeWidth: 1.75 }), p("M7 10l3 3-3 3M12 16h5", roundJoin)],
   sort: [p("M4 8h8M4 12h6M4 16h4", round), p("M16 6v12M13 9l3-3 3 3M13 15l3 3 3-3", roundJoin)],

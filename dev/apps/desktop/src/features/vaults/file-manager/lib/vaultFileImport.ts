@@ -1,4 +1,4 @@
-import { vaultFileLanguageFromPath } from "@upriv/shared";
+import { vaultFileLanguageFromPath, isVaultImportUnsupported } from "@upriv/shared";
 
 function readAsDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -10,8 +10,10 @@ function readAsDataUrl(file: File): Promise<string> {
 }
 
 export async function readImportFileContent(file: File): Promise<string> {
+  if (isVaultImportUnsupported(file.name)) {
+    throw new Error("unsupported");
+  }
   const language = vaultFileLanguageFromPath(file.name);
-  if (language === "binary") return "";
   if (language === "image") return readAsDataUrl(file);
   return file.text();
 }

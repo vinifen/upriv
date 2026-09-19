@@ -7,8 +7,8 @@ use serde::{Deserialize, Serialize};
 use crate::paths::VaultRootMode;
 
 use super::toml::{
-    default_entries, default_keep, default_locale, default_log_level, default_sort,
-    default_sort_dir, default_theme, default_view,
+    default_entries, default_file_manager_tree_split_percent, default_keep, default_locale,
+    default_log_level, default_sort, default_sort_dir, default_theme, default_view,
 };
 
 fn default_true() -> bool {
@@ -17,6 +17,11 @@ fn default_true() -> bool {
 
 fn default_false() -> bool {
     false
+}
+
+/// Clamp explorer/editor split % to the shared 15–65 band.
+pub(crate) fn clamp_file_manager_tree_split_percent(value: u8) -> u8 {
+    value.clamp(15, 65)
 }
 
 /// In-memory app settings matching the TS `AppSettingsConfig` wire shape (snake_case JSON).
@@ -85,9 +90,18 @@ pub struct UiSettings {
     #[serde(default = "default_true", alias = "allow_drag_vault_into_group")]
     pub vault_list_allow_drag_into_group: bool,
     pub file_manager_dock_expanded: bool,
+    /// Explorer/editor split % (canonical 15–65). App-wide for every vault.
+    #[serde(default = "super::toml::default_file_manager_tree_split_percent")]
+    pub file_manager_tree_split_percent: u8,
     /// Close unlock/lock password dialog on Confirm (progress on the row). Default false.
     #[serde(default = "default_false")]
     pub lifecycle_close_modal_on_submit: bool,
+    /// After unlock succeeds, open the file manager if no other modal is open. Default false.
+    #[serde(default = "default_false")]
+    pub lifecycle_open_file_manager_on_open: bool,
+    /// Confirm before deleting files/folders in the file manager. Default true.
+    #[serde(default = "default_true")]
+    pub file_manager_confirm_delete: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -140,7 +154,10 @@ impl Default for AppSettings {
                 vault_list_show_drag: true,
                 vault_list_allow_drag_into_group: true,
                 file_manager_dock_expanded: false,
+                file_manager_tree_split_percent: default_file_manager_tree_split_percent(),
                 lifecycle_close_modal_on_submit: false,
+                lifecycle_open_file_manager_on_open: false,
+                file_manager_confirm_delete: true,
             },
             logging: LoggingSettings {
                 enabled: true,

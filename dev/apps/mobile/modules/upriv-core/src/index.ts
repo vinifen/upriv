@@ -16,7 +16,10 @@ export type UprivCoreNativeModule = {
 
   /** `takePersistableUriPermission(READ|WRITE)`. Idempotent — safe to call after picker. */
   safPersistPermission(treeUri: string): void;
-  /** Best-effort `releasePersistableUriPermission`. Missing perm is not an error. */
+  /**
+   * Best-effort `releasePersistableUriPermission`. Missing perm is not an error.
+   * Native side refuses to drop the active vault-root tree.
+   */
   safReleasePermission(treeUri: string): void;
   /**
    * Inspect `.upriv/settings.toml` under the SAF tree.

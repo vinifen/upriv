@@ -3,6 +3,7 @@ import {
   type GroupedVaultSortMode,
   type VaultListSortDirection,
 } from "../vault-list/sort";
+import { normalizeStoredName } from "../format/storedName";
 import type { VaultGroup } from "./types";
 
 const GROUPED_VAULT_SORT_MODES = new Set<GroupedVaultSortMode>([
@@ -34,7 +35,7 @@ function asStringArray(value: unknown): string[] {
 /** Normalize wire / partial group payloads (defaults for grouped-vault sort). */
 export function normalizeVaultGroup(raw: {
   id: string;
-  displayName: string;
+  displayName?: string;
   order?: number;
   collapsed?: boolean;
   groupedVaults?: unknown;
@@ -49,9 +50,12 @@ export function normalizeVaultGroup(raw: {
   const sortRaw = raw.groupedVaultSort ?? raw.grouped_vault_sort;
   const directionRaw = raw.groupedVaultSortDirection ?? raw.grouped_vault_sort_direction;
 
+  const id = raw.id.trim();
+  const displayName = normalizeStoredName(raw.displayName ?? "") || id;
+
   return {
-    id: raw.id.trim(),
-    displayName: raw.displayName.trim(),
+    id,
+    displayName,
     order: typeof raw.order === "number" ? raw.order : 0,
     collapsed: raw.collapsed === true,
     hidden: raw.hidden === true,

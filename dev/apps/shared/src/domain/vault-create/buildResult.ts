@@ -3,6 +3,7 @@ import {
   DEFAULT_SEVEN_ZIP,
   normalizeVaultSettingsConfig,
 } from "../vault-settings";
+import { normalizeStoredName } from "../format/storedName";
 import { displayNameToVaultId } from "../vault/displayName";
 import type { CreateVaultDraft, CreateVaultGroupAssignment, CreateVaultResult } from "./types";
 
@@ -10,7 +11,7 @@ export function resolveCreateVaultGroupAssignment(
   draft: CreateVaultDraft,
 ): CreateVaultGroupAssignment {
   if (draft.groupMode === "create") {
-    return { kind: "create", displayName: draft.groupName.trim() };
+    return { kind: "create", displayName: normalizeStoredName(draft.groupName) };
   }
   if (draft.groupMode === "existing" && draft.groupId.trim()) {
     return { kind: "existing", groupId: draft.groupId.trim() };
@@ -23,7 +24,7 @@ export function buildCreateVaultResult(
   existingIds: readonly string[],
 ): CreateVaultResult {
   const vaultId = displayNameToVaultId(draft.displayName, existingIds);
-  const displayName = draft.displayName.trim();
+  const displayName = normalizeStoredName(draft.displayName);
 
   const settings = normalizeVaultSettingsConfig({
     vault: {

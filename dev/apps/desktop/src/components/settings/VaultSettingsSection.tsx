@@ -1,5 +1,7 @@
 import { useId, useState, type ReactNode } from "react";
+import { GROUP_COLLAPSE_MS, GROUP_EXPAND_MS } from "@upriv/shared";
 import { Icon } from "@/components/icons";
+import { Collapse } from "@/components/ui/Collapse";
 
 interface VaultSettingsSectionProps {
   title: string;
@@ -50,9 +52,12 @@ export function VaultSettingsSection({
           name="chevron-down"
           size={18}
           className={[
-            "shrink-0 text-on-surface-variant transition-transform",
+            "shrink-0 text-on-surface-variant transition-transform motion-reduce:!transition-none",
             open ? "rotate-0" : "-rotate-90",
           ].join(" ")}
+          style={{
+            transitionDuration: `${open ? GROUP_EXPAND_MS : GROUP_COLLAPSE_MS}ms`,
+          }}
         />
         <span
           className={[
@@ -63,7 +68,7 @@ export function VaultSettingsSection({
           {title}
         </span>
       </button>
-      {open ? (
+      <Collapse open={open}>
         <div
           id={panelId}
           role="region"
@@ -72,7 +77,7 @@ export function VaultSettingsSection({
         >
           {children}
         </div>
-      ) : null}
+      </Collapse>
     </section>
   );
 }
