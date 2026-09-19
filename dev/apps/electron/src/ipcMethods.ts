@@ -38,4 +38,5 @@ export const ELECTRON_IPC_METHODS = [
   "vault_close",
   "vault_config_get",
   "vault_config_save",
+  "vault_rename",
 ] as const;

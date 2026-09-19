@@ -128,7 +128,7 @@ export function VaultListPage() {
         />
         {importDrop.isImportDropActive ? (
           <div
-            className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-2xl border-2 border-dashed border-primary/60 bg-primary/10 backdrop-blur-[1px]"
+            className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-2xl border-2 border-dashed border-primary/60 bg-primary/10"
             aria-hidden
           >
             <p className="px-4 text-center font-mono text-sm uppercase tracking-widest text-primary">
@@ -166,6 +166,7 @@ export function VaultListPage() {
         onClose={settings.onClose}
         pipelineListStatus={list.pipelineListStatus}
         onVaultSettingsSaved={settings.onVaultSettingsSaved}
+        onPersistBusyChange={settings.onPersistBusyChange}
         onVaultDelete={settings.onVaultDelete}
         groups={settings.groups}
         onCommitGroupAssignment={settings.onCommitGroupAssignment}

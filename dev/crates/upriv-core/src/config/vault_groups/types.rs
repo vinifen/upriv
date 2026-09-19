@@ -11,10 +11,13 @@ fn default_grouped_vault_sort_direction() -> String {
 }
 
 /// One vault group — organizational only (not a vault).
+///
+/// `display_name` is the list title. Omitted on old files fills from `id`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct VaultGroup {
     pub id: String,
+    #[serde(default)]
     pub display_name: String,
     #[serde(default)]
     pub order: i64,
@@ -33,6 +36,19 @@ pub struct VaultGroup {
     pub grouped_vault_sort: String,
     #[serde(default = "default_grouped_vault_sort_direction")]
     pub grouped_vault_sort_direction: String,
+}
+
+impl VaultGroup {
+    /// Trim `id`; empty / omitted `display_name` → `id`. Collapse internal spaces.
+    pub fn resolve_identity(&mut self) {
+        self.id = self.id.trim().to_string();
+        let name = crate::paths::normalize_stored_name(&self.display_name);
+        self.display_name = if name.is_empty() {
+            self.id.clone()
+        } else {
+            name
+        };
+    }
 }
 
 /// Root document: list of `[[group]]` tables.

@@ -3,10 +3,10 @@ import { StyleSheet, Text, View } from "react-native";
 import {
   APP_SETTINGS_ERROR_I18N_KEYS,
   VAULT_DISPLAY_NAME_MAX_LENGTH,
-  displayNameErrorI18nKey,
   isRpcError,
   shouldBumpVaultRootEpoch,
   validateDisplayName,
+  normalizeStoredName,
   type VaultGroup,
   type VaultListItem,
 } from "@upriv/shared";
@@ -21,7 +21,13 @@ import {
   modalFooterConfirmBtnStyle,
   Toast,
 } from "@/components/ui";
-import { FieldHint, FieldLabel, SwitchRow, ThemedInput } from "@/components/settings";
+import {
+  FieldHint,
+  FieldLabel,
+  SwitchRow,
+  ThemedInput,
+  DisplayNameFieldError,
+} from "@/components/settings";
 import { useTapNotPan } from "@/components/ui/ScrimDismiss";
 import { mobileErrorI18nKey } from "@/lib/errorMessages";
 import { useToast } from "@upriv/shared/react";
@@ -65,12 +71,11 @@ export function VaultGroupsModal({
   const [newGroupName, setNewGroupName] = useState("");
   const [groupedVaultIds, setGroupedVaultIds] = useState<string[]>([]);
   const [hidden, setHidden] = useState(false);
-  const [groupNameError, setGroupNameError] = useState<string | null>(null);
   const savedHideRef = useRef<ReturnType<typeof setTimeout>>();
   const openedSessionRef = useRef(false);
   const commitSaveLock = useRef(false);
 
-  const pendingGroupName = newGroupName.trim();
+  const pendingGroupName = normalizeStoredName(newGroupName);
   const isDirty = pendingGroupName.length > 0;
 
   useEffect(() => {
@@ -85,7 +90,6 @@ export function VaultGroupsModal({
     setNewGroupName("");
     setGroupedVaultIds([]);
     setHidden(false);
-    setGroupNameError(null);
   }, [open]);
 
   useEffect(() => {
@@ -94,7 +98,6 @@ export function VaultGroupsModal({
       setNewGroupName("");
       setGroupedVaultIds([]);
       setHidden(false);
-      setGroupNameError(null);
       setSaveConfirmOpen(false);
       setDiscardConfirmOpen(false);
       setSavedVisible(false);
@@ -151,23 +154,13 @@ export function VaultGroupsModal({
     setNewGroupName("");
     setGroupedVaultIds([]);
     setHidden(false);
-    setGroupNameError(null);
     handleClose();
   };
 
   const handleSaveClick = () => {
     if (!isDirty || saveBusy) return;
     const validation = validateDisplayName(pendingGroupName);
-    if (validation) {
-      setGroupNameError(
-        t(
-          displayNameErrorI18nKey(validation),
-          validation === "too_long" ? { max: String(VAULT_DISPLAY_NAME_MAX_LENGTH) } : undefined,
-        ),
-      );
-      return;
-    }
-    setGroupNameError(null);
+    if (validation) return;
     dismissFooterConfirm();
     setSaveConfirmOpen(true);
   };
@@ -208,8 +201,6 @@ export function VaultGroupsModal({
   };
 
   const saveBlocked = !isDirty || saveBusy || saveConfirmOpen;
-
-  if (!open) return null;
 
   const footer = (
     <View style={styles.footerCol}>
@@ -283,20 +274,17 @@ export function VaultGroupsModal({
               <ThemedInput
                 value={newGroupName}
                 maxLength={VAULT_DISPLAY_NAME_MAX_LENGTH}
+                autoCorrect={false}
+                spellCheck={false}
                 onChangeText={(name) => {
                   setNewGroupName(name);
-                  setGroupNameError(null);
                   setSaveConfirmOpen(false);
                   setDiscardConfirmOpen(false);
                 }}
                 placeholder={t("vault.group.create.name_label")}
               />
+              <DisplayNameFieldError name={newGroupName} allowEmpty />
             </View>
-            {groupNameError ? (
-              <Text style={[typography.caption, { color: colors.onErrorContainer }]}>
-                {groupNameError}
-              </Text>
-            ) : null}
             <SwitchRow
               label={t("vault.group.settings.hidden")}
               hint={t("vault.group.settings.hidden_help")}

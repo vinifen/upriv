@@ -120,7 +120,7 @@ export function VaultBlockCard({
       <div className="flex min-w-0 items-start gap-2">
         {!dragDisabled ? (
           <VaultDragHandle
-            disabled={dragDisabled}
+            disabled={isPipelineBusy}
             dropKey={dropKey}
             label={dragHandleLabel}
             onPointerDragStart={pointerDrag.onStart}

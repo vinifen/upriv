@@ -9,6 +9,8 @@ import {
   type VaultGroup,
   type VaultListRootRow,
   applyVaultListHierarchySort,
+  applyVaultSettingsListPatch,
+  remapVaultIdInGroups,
   mergeVaultListSnapshot,
   canReorderGroupedVaults,
   canReorderVaultList,
@@ -265,22 +267,21 @@ export function useVaultListState(
   }, []);
 
   const updateVaultSettings = useCallback((vaultId: string, patch: VaultSettingsListPatch) => {
+    const nextId = patch.id || vaultId;
     setVaults((current) => {
       const next = current.map((vault) =>
-        vault.id === vaultId
-          ? {
-              ...vault,
-              displayName: patch.displayName,
-              order: patch.order,
-              note: patch.note,
-              hidden: patch.hidden,
-              passwordHint: patch.passwordHint,
-              storageMode: patch.storageMode,
-            }
-          : vault,
+        vault.id === vaultId ? applyVaultSettingsListPatch(vault, patch) : vault,
       );
       return sortVaultsByOrder(next);
     });
+    if (nextId !== vaultId) {
+      setGroups((current) => remapVaultIdInGroups(current, vaultId, nextId));
+      const writtenAt = sessionWritesRef.current.get(vaultId);
+      if (writtenAt !== undefined) {
+        sessionWritesRef.current.delete(vaultId);
+        sessionWritesRef.current.set(nextId, writtenAt);
+      }
+    }
   }, []);
 
   const markVaultsHidden = useCallback((vaultIds: readonly string[], hidden = true) => {

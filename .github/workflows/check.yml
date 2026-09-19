@@ -1,7 +1,7 @@
 name: check
 
+# PR-only: do not run on push (direct commits to a branch skip this workflow).
 on:
-  push:
   pull_request:
 
 permissions:

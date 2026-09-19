@@ -31,6 +31,14 @@ describe("parseVaultListItemWire", () => {
     });
   });
 
+  it("collapses extra spaces in displayName", () => {
+    const item = parseVaultListItemWire({
+      id: "notes",
+      displayName: "My    Notes",
+    });
+    expect(item.displayName).toBe("My Notes");
+  });
+
   it("rejects an unknown storage mode instead of defaulting", () => {
     expect(() =>
       parseVaultListItemWire({

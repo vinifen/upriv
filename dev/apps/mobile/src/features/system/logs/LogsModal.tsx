@@ -4,6 +4,7 @@ import {
   formatBytes,
   formatLogFileDate,
   LOADING_BUDGET_MS,
+  MODAL_CLOSE_MS,
   parseLogLine,
   shouldBumpVaultRootEpoch,
   sortLogFilesNewestFirst,
@@ -48,7 +49,10 @@ export function LogsModal({ open, onClose }: LogsModalProps) {
 
   const [files, setFiles] = useState<AppLogFile[]>([]);
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
+  /** Viewer mounts only when `viewerText` is set — timeout stays on the list. */
   const [activeFilename, setActiveFilename] = useState<string | null>(null);
+  /** Row open in flight; list stays visible until load resolves. */
+  const [openingFilename, setOpeningFilename] = useState<string | null>(null);
   const [viewerText, setViewerText] = useState<string | null>(null);
   const [deleteTargets, setDeleteTargets] = useState<string[] | null>(null);
   const [listFailed, setListFailed] = useState(false);
@@ -56,14 +60,18 @@ export function LogsModal({ open, onClose }: LogsModalProps) {
   const [viewerLoading, setViewerLoading] = useState(false);
   const [listTimedOut, setListTimedOut] = useState(false);
   const [viewerTimedOut, setViewerTimedOut] = useState(false);
+  const [viewerTimedOutFilename, setViewerTimedOutFilename] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<unknown>(null);
   const listGen = useRef(0);
   const viewerGen = useRef(0);
+  const openingFilenameRef = useRef<string | null>(null);
   const rootIntegrityHandled = useRef(false);
+
+  openingFilenameRef.current = openingFilename;
 
   const listBudget = useLoadingBudget(open && listLoading && !listTimedOut, LOADING_BUDGET_MS.logs);
   const viewerBudget = useLoadingBudget(
-    open && Boolean(activeFilename) && (viewerLoading || viewerText === null) && !viewerTimedOut,
+    open && Boolean(openingFilename) && !viewerTimedOut,
     LOADING_BUDGET_MS.logs,
   );
 
@@ -120,25 +128,54 @@ export function LogsModal({ open, onClose }: LogsModalProps) {
 
   useEffect(() => {
     if (!viewerBudget.timedOut) return;
+    const timedOutName = openingFilenameRef.current;
     viewerGen.current += 1;
     setViewerLoading(false);
     setViewerTimedOut(true);
-  }, [viewerBudget.timedOut]);
+    setOpeningFilename(null);
+    setActiveFilename(null);
+    setViewerText(null);
+    if (timedOutName) {
+      setViewerTimedOutFilename(timedOutName);
+      showToast(t("loading.timed_out"));
+    }
+  }, [viewerBudget.timedOut, showToast, t]);
 
   useEffect(() => {
     if (!open) {
-      setSelected(new Set());
-      setActiveFilename(null);
-      setViewerText(null);
-      setDeleteTargets(null);
-      setViewerLoading(false);
-      setListTimedOut(false);
-      setViewerTimedOut(false);
-      setListFailed(false);
-      setLoadError(null);
-      rootIntegrityHandled.current = false;
-      return;
+      // Drop in-flight loads immediately; clear UI state after the close tween.
+      listGen.current += 1;
+      viewerGen.current += 1;
+      const id = setTimeout(() => {
+        setSelected(new Set());
+        setActiveFilename(null);
+        setOpeningFilename(null);
+        setViewerText(null);
+        setDeleteTargets(null);
+        setViewerLoading(false);
+        setListLoading(false);
+        setListTimedOut(false);
+        setViewerTimedOut(false);
+        setViewerTimedOutFilename(null);
+        setListFailed(false);
+        setLoadError(null);
+        rootIntegrityHandled.current = false;
+      }, MODAL_CLOSE_MS);
+      return () => clearTimeout(id);
     }
+    // Quick re-open cancels the delayed close reset — wipe stale viewer/selection here.
+    setSelected(new Set());
+    setActiveFilename(null);
+    setOpeningFilename(null);
+    setViewerText(null);
+    setDeleteTargets(null);
+    setViewerLoading(false);
+    setListTimedOut(false);
+    setViewerTimedOut(false);
+    setViewerTimedOutFilename(null);
+    setListFailed(false);
+    setLoadError(null);
+    rootIntegrityHandled.current = false;
     void reload();
   }, [open, reload]);
 
@@ -167,32 +204,38 @@ export function LogsModal({ open, onClose }: LogsModalProps) {
       setActiveFilename(null);
       setViewerText(null);
     }
+    if (openingFilename && !allFilenames.includes(openingFilename)) {
+      viewerGen.current += 1;
+      setOpeningFilename(null);
+      setViewerLoading(false);
+    }
+    setViewerTimedOutFilename((current) =>
+      current && allFilenames.includes(current) ? current : null,
+    );
     setDeleteTargets((current) => {
       if (current === null) return null;
       const stillPresent = current.filter((name) => allFilenames.includes(name));
       return stillPresent.length === 0 ? null : stillPresent;
     });
-  }, [activeFilename, allFilenames]);
+  }, [activeFilename, openingFilename, allFilenames]);
 
   useEffect(() => {
-    setViewerText(null);
-    setViewerTimedOut(false);
-  }, [activeFilename]);
-
-  useEffect(() => {
-    if (!open || !activeFilename) return;
+    if (!open || !openingFilename) return;
     const gen = ++viewerGen.current;
     let cancelled = false;
     setViewerLoading(true);
     setViewerTimedOut(false);
-    void loadFileContent(activeFilename)
+    void loadFileContent(openingFilename)
       .then((content) => {
-        if (!cancelled && gen === viewerGen.current) setViewerText(content);
+        if (cancelled || gen !== viewerGen.current) return;
+        setViewerText(content);
+        setActiveFilename(openingFilename);
+        setOpeningFilename(null);
       })
       .catch((error) => {
         if (!cancelled && gen === viewerGen.current) {
+          setOpeningFilename(null);
           setViewerText(null);
-          setActiveFilename(null);
           showToast(t(mobileErrorI18nKey(error, "toast.logs_load_failed")));
         }
       })
@@ -202,14 +245,15 @@ export function LogsModal({ open, onClose }: LogsModalProps) {
     return () => {
       cancelled = true;
     };
-  }, [activeFilename, loadFileContent, open, showToast, t]);
+  }, [openingFilename, loadFileContent, open, showToast, t]);
 
-  const handleClose = () => {
-    setSelected(new Set());
-    setActiveFilename(null);
+  const openLogFile = (filename: string) => {
+    if (deleteTargets !== null) return;
+    setViewerTimedOut(false);
+    setViewerTimedOutFilename(null);
     setViewerText(null);
-    setDeleteTargets(null);
-    onClose();
+    setActiveFilename(null);
+    setOpeningFilename(filename);
   };
 
   const retryList = () => {
@@ -217,13 +261,14 @@ export function LogsModal({ open, onClose }: LogsModalProps) {
     void reload();
   };
 
-  const retryViewer = () => {
-    if (!activeFilename) return;
-    const name = activeFilename;
+  const retryViewer = (filename?: string | null) => {
+    const name = filename ?? viewerTimedOutFilename;
+    if (!name) return;
     setViewerTimedOut(false);
+    setViewerTimedOutFilename(null);
     setViewerText(null);
     setActiveFilename(null);
-    queueMicrotask(() => setActiveFilename(name));
+    setOpeningFilename(name);
   };
 
   const toggleSelected = (filename: string) => {
@@ -261,6 +306,11 @@ export function LogsModal({ open, onClose }: LogsModalProps) {
         setActiveFilename(null);
         setViewerText(null);
       }
+      if (openingFilename && deleteTargets.includes(openingFilename)) {
+        viewerGen.current += 1;
+        setOpeningFilename(null);
+        setViewerLoading(false);
+      }
       setDeleteTargets(null);
       await reload();
     } catch {
@@ -290,8 +340,13 @@ export function LogsModal({ open, onClose }: LogsModalProps) {
   const showDeleteConfirm = deleteTargets !== null && !activeFilename;
 
   const backToList = () => {
+    viewerGen.current += 1;
     setActiveFilename(null);
+    setOpeningFilename(null);
     setViewerText(null);
+    setViewerLoading(false);
+    setViewerTimedOut(false);
+    setViewerTimedOutFilename(null);
   };
 
   const footer =
@@ -319,7 +374,7 @@ export function LogsModal({ open, onClose }: LogsModalProps) {
           />
         </ModalFooterActions>
       </View>
-    ) : activeFilename ? (
+    ) : activeFile ? (
       <ModalFooterActions layout="confirm">
         <Button
           label={t("modal.logs.back_to_list")}
@@ -337,36 +392,15 @@ export function LogsModal({ open, onClose }: LogsModalProps) {
       open={open}
       title={t("modal.logs.title")}
       titleIcon="terminal"
-      contextTitle={activeFilename ? (activeFile?.filename ?? activeFilename) : undefined}
-      onClose={handleClose}
-      panelClassName={activeFilename ? "max-w-5xl" : "max-w-3xl"}
-      bodyScroll={!activeFilename}
+      contextTitle={activeFile?.filename}
+      onClose={onClose}
+      panelClassName="max-w-5xl"
+      bodyScroll={!activeFile}
       footer={footer}
       overlay={<Toast message={toastMessage} onDismiss={dismissToast} />}
     >
-      {activeFilename ? (
-        viewerTimedOut ? (
-          <View style={styles.center}>
-            <Text style={typography.bodyMuted} accessibilityRole="alert">
-              {t("loading.timed_out")}
-            </Text>
-            <Button label={t("action.retry")} variant="primary" onPress={retryViewer} />
-          </View>
-        ) : viewerLoading || !activeFile ? (
-          viewerBudget.visible ? (
-            <View style={styles.center}>
-              <Text style={typography.mono}>{t("modal.logs.loading")}</Text>
-              <LoadingBudgetHint
-                budgetMs={viewerBudget.budgetMs}
-                remainingMs={viewerBudget.remainingMs}
-              />
-            </View>
-          ) : (
-            <View style={styles.placeholder} accessibilityState={{ busy: true }} />
-          )
-        ) : (
-          <LogFileViewer file={activeFile} />
-        )
+      {activeFile ? (
+        <LogFileViewer file={activeFile} />
       ) : (
         <View
           onTouchStart={() => {
@@ -402,7 +436,10 @@ export function LogsModal({ open, onClose }: LogsModalProps) {
           ) : listLoading && files.length === 0 ? (
             <View style={styles.placeholder} accessibilityState={{ busy: true }} />
           ) : (
-            <View style={styles.list}>
+            <View
+              style={styles.list}
+              accessibilityState={{ busy: viewerLoading || Boolean(openingFilename) }}
+            >
               {deleteTargets === null ? (
                 <LogListToolbar
                   allSelected={allSelected}
@@ -422,9 +459,20 @@ export function LogsModal({ open, onClose }: LogsModalProps) {
                   entry={entry}
                   locale={locale}
                   checked={selected.has(entry.filename)}
-                  selectionDisabled={deleteTargets !== null}
+                  selectionDisabled={deleteTargets !== null || Boolean(openingFilename)}
+                  opening={openingFilename === entry.filename}
+                  timedOut={viewerTimedOutFilename === entry.filename}
+                  openingBudget={
+                    openingFilename === entry.filename && viewerBudget.visible
+                      ? {
+                          budgetMs: viewerBudget.budgetMs,
+                          remainingMs: viewerBudget.remainingMs,
+                        }
+                      : null
+                  }
                   onToggleSelected={() => toggleSelected(entry.filename)}
-                  onOpen={() => setActiveFilename(entry.filename)}
+                  onOpen={() => openLogFile(entry.filename)}
+                  onRetry={() => retryViewer(entry.filename)}
                   onDelete={() => beginDelete([entry.filename])}
                 />
               ))}
@@ -498,8 +546,12 @@ interface LogFileRowProps {
   locale: string;
   checked: boolean;
   selectionDisabled: boolean;
+  opening?: boolean;
+  timedOut?: boolean;
+  openingBudget?: { budgetMs: number; remainingMs: number } | null;
   onToggleSelected: () => void;
   onOpen: () => void;
+  onRetry: () => void;
   onDelete: () => void;
 }
 
@@ -508,8 +560,12 @@ function LogFileRow({
   locale,
   checked,
   selectionDisabled,
+  opening = false,
+  timedOut = false,
+  openingBudget = null,
   onToggleSelected,
   onOpen,
+  onRetry,
   onDelete,
 }: LogFileRowProps) {
   const { t } = useTranslation();
@@ -521,8 +577,9 @@ function LogFileRow({
         styles.row,
         {
           backgroundColor: colors.surfaceContainer,
-          borderColor: checked ? colorAlpha(colors.accent, 0.4) : "transparent",
-          opacity: selectionDisabled ? 0.6 : 1,
+          borderColor:
+            checked || opening || timedOut ? colorAlpha(colors.accent, 0.4) : "transparent",
+          opacity: selectionDisabled && !opening ? 0.6 : 1,
         },
       ]}
     >
@@ -567,16 +624,31 @@ function LogFileRow({
               })}
             </Text>
           </Text>
+          {openingBudget ? (
+            <LoadingBudgetHint
+              budgetMs={openingBudget.budgetMs}
+              remainingMs={openingBudget.remainingMs}
+            />
+          ) : null}
+          {timedOut ? (
+            <Text style={typography.caption} accessibilityRole="alert">
+              {t("loading.timed_out")}
+            </Text>
+          ) : null}
         </View>
       </Pressable>
-      <IconButton
-        label={t("action.delete")}
-        icon="trash"
-        size={18}
-        tone="muted"
-        disabled={selectionDisabled}
-        onPress={onDelete}
-      />
+      {timedOut ? (
+        <Button label={t("action.retry")} variant="secondary" size="sm" onPress={onRetry} />
+      ) : (
+        <IconButton
+          label={t("action.delete")}
+          icon="trash"
+          size={18}
+          tone="muted"
+          disabled={selectionDisabled}
+          onPress={onDelete}
+        />
+      )}
     </View>
   );
 }

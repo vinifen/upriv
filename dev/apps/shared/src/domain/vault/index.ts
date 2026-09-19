@@ -43,6 +43,7 @@ export {
   importDisplayNameFromFilename,
   suggestValidDisplayName,
   validateDisplayName,
+  liveDisplayNameError,
   vaultDisplayLetters,
   type DisplayNameValidationCode,
 } from "./displayName";

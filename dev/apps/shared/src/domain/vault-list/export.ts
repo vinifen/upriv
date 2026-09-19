@@ -1,5 +1,6 @@
 import type { VaultSettingsConfig } from "../vault-settings/types";
 import type { VaultPipelineListStatus, VaultRow } from "../vault/types";
+import { normalizeStoredName } from "../format/storedName";
 import { isWindowsReservedName } from "../format/windowsReserved";
 
 export type VaultExportFormat = "contents_zip" | "seven_zip";
@@ -21,7 +22,7 @@ const UNSAFE_FILENAME_CHARS = /[/\\<>:"|?*\u0000-\u001f\u007f-\u009f]/g;
  * collapsing to the generic fallback. Does **not** change the vault `display_name`.
  */
 export function sanitizeExportFilenameBase(displayName: string): string {
-  const replaced = displayName.trim().replace(UNSAFE_FILENAME_CHARS, "_").trim();
+  const replaced = normalizeStoredName(displayName).replace(UNSAFE_FILENAME_CHARS, "_").trim();
   if (!replaced || replaced === "." || replaced === "..") return "vault";
   if (isWindowsReservedName(replaced)) return "vault";
   return replaced;
@@ -43,7 +44,7 @@ export type ExportFilenameSanitizeKind = "unchanged" | "adjusted" | "fallback";
  * `fallback` is the generic `"vault"` stem (empty, `.` / `..`, reserved device).
  */
 export function exportFilenameSanitizeKind(displayName: string): ExportFilenameSanitizeKind {
-  const trimmed = displayName.trim();
+  const trimmed = normalizeStoredName(displayName);
   const base = sanitizeExportFilenameBase(displayName);
   if (base === trimmed) return "unchanged";
   if (base === "vault") return "fallback";

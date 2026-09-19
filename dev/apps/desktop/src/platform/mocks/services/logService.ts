@@ -21,4 +21,7 @@ export const mockLogService: LogService = {
   async recordVaultGroupHidden() {
     // Browser scaffold has no session log files.
   },
+  async recordImportCacheWipeFailed() {
+    // Browser scaffold has no session log files.
+  },
 };

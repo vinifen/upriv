@@ -17,13 +17,10 @@ use crate::session::{is_unlock_in_flight, is_vault_closing_at, is_vault_open_at}
 
 /// Targets refused while the vault session is open, mid-close, or Argon2 is in flight.
 /// Keep in sync with `edit-policy.json` → `rustConfigSaveQuietTargets`.
-pub const CONFIG_SAVE_QUIET_TARGETS: &[&str] = &[
-    "vault.display_name",
-    "mount.workspace_path",
-    "storage.mode",
-    "security.mode",
-    "vault.id",
-];
+/// `vault.display_name` / `vault.id` are not listed: they are `VaultConfigInvalid`
+/// (must use `vault_rename`), never `vault_config_busy`.
+pub const CONFIG_SAVE_QUIET_TARGETS: &[&str] =
+    &["mount.workspace_path", "storage.mode", "security.mode"];
 
 /// Which quiet targets differ between two configs.
 ///
@@ -31,12 +28,6 @@ pub const CONFIG_SAVE_QUIET_TARGETS: &[&str] = &[
 /// `CONFIG_SAVE_QUIET_TARGETS` entry is reachable here.
 pub fn quiet_targets_changed(before: &VaultConfig, after: &VaultConfig) -> Vec<&'static str> {
     let mut out = Vec::new();
-    if before.vault.display_name != after.vault.display_name {
-        out.push("vault.display_name");
-    }
-    if before.vault.id != after.vault.id {
-        out.push("vault.id");
-    }
     if before.mount.workspace_path != after.mount.workspace_path {
         out.push("mount.workspace_path");
     }
@@ -75,13 +66,20 @@ pub fn refuse_config_save_if_busy(
 pub fn save_vault_config_checked(vault_dir: impl AsRef<Path>, after: &VaultConfig) -> Result<()> {
     let vault_dir = vault_dir.as_ref();
     let before = crate::config::load_vault_config_raw(vault_dir)?;
-    // Id change is never a live `vault_config_save` — always migration error first,
-    // even when the session is busy (do not mask as `vault_config_busy`).
+    // Id / display_name are never a live `vault_config_save` — always
+    // `vault_rename` first, even when the session is busy (do not mask as
+    // `vault_config_busy`).
     if after.vault.id != before.vault.id {
         return Err(UprivError::VaultConfigInvalid {
             path: crate::config::vault_config_path(vault_dir),
             detail: "changing [vault].id requires a migration flow; close vault and rename folder"
                 .into(),
+        });
+    }
+    if after.vault.display_name != before.vault.display_name {
+        return Err(UprivError::VaultConfigInvalid {
+            path: crate::config::vault_config_path(vault_dir),
+            detail: "changing [vault].display_name requires vault_rename".into(),
         });
     }
     refuse_config_save_if_busy(vault_dir, &before, after)?;
@@ -131,8 +129,6 @@ mode = "encrypted_dir"
     fn quiet_targets_changed_covers_every_listed_target() {
         let before = sample_config("notes", "Notes");
         let mut after = before.clone();
-        after.vault.display_name = "Renamed".into();
-        after.vault.id = "other".into();
         after.mount.workspace_path = "/tmp/custom".into();
         after.storage.mode = crate::config::VaultStorageMode::UprivPlain;
         after.security.mode = crate::config::VaultSecurityMode::AlwaysPrompt;
@@ -153,7 +149,10 @@ mode = "encrypted_dir"
         let mut after = crate::config::load_vault_config_raw(&dir).unwrap();
         after.vault.display_name = "Renamed".into();
         let err = save_vault_config_checked(&dir, &after).unwrap_err();
-        assert!(matches!(err, UprivError::VaultConfigBusy { .. }));
+        assert!(
+            matches!(err, UprivError::VaultConfigInvalid { .. }),
+            "display_name change must not use vault_config_save: {err:?}"
+        );
         close_vault(&root, "notes", None).expect("close");
         assert!(
             !crate::session::is_vault_open_at(&dir),
@@ -163,10 +162,23 @@ mode = "encrypted_dir"
             !crate::session::is_vault_closing_at(&dir),
             "closing mark must clear after close"
         );
-        // Process-wide UNLOCK_GATE may be held by parallel Argon2 (other tests) —
-        // only assert the checked save when that gate is free.
+        let err = save_vault_config_checked(&dir, &after).unwrap_err();
+        assert!(
+            matches!(err, UprivError::VaultConfigInvalid { .. }),
+            "display_name change stays blocked when closed: {err:?}"
+        );
+    }
+
+    #[test]
+    fn closed_session_allows_note_save() {
+        let (_tmp, root) = vault_root_with(&[]);
+        let cfg = sample_config("notes", "Notes");
+        create_vault(&root, cfg, b"pass-word-ok", KdfUnlockPreset::M32).expect("create");
+        let dir = root.vault_dir("notes").unwrap();
+        let mut after = crate::config::load_vault_config_raw(&dir).unwrap();
+        after.vault.note = "ok when closed".into();
         if !crate::session::is_unlock_in_flight() {
-            save_vault_config_checked(&dir, &after).expect("save when closed");
+            save_vault_config_checked(&dir, &after).expect("note when closed");
         }
     }
 
@@ -236,7 +248,7 @@ mode = "encrypted_dir"
             .expect("unlock gate held");
         let before = sample_config("x", "X");
         let mut after = before.clone();
-        after.vault.display_name = "Renamed".into();
+        after.storage.mode = crate::config::VaultStorageMode::UprivPlain;
         let err = refuse_config_save_if_busy(&dir, &before, &after).unwrap_err();
         assert!(matches!(err, UprivError::VaultConfigBusy { .. }));
         let _ = release_tx.send(());

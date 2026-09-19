@@ -1,99 +1,54 @@
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useRef, type ReactNode } from "react";
 import {
+  Animated,
+  Easing,
   FlatList,
   Pressable,
   StyleSheet,
   Text,
   View,
-  useWindowDimensions,
   type ListRenderItem,
 } from "react-native";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
 import {
-  applyPendingCreateGroupEffect,
-  applyVaultListHierarchySort,
-  buildCreatingVaultListItem,
-  buildPendingCreateGroupEffect,
-  assignVaultToGroup,
   canReorderGroupedVaults,
-  canReorderVaultList,
   createDraftForImportSource,
   createDraftForScratchSource,
   createDraftFromBackup,
-  displayNameErrorI18nKey,
-  displayNameToGroupId,
+  normalizeStoredName,
   draggingGroupedVaultSourceGroupId as resolveDraggingGroupedVaultSourceGroupId,
   groupedVaultDragKey,
-  groupedVaultDropInsertsAfter,
   isGroupedVaultDragKey,
-  filterVisibleVaults,
-  mergePendingCreatingGroups,
-  mergePendingCreatingVaults,
-  pendingCreateGroupId,
-  rollbackPendingCreateGroupEffect,
   appConfigEditAllowed,
-  mergeVaultListSnapshot,
-  filterVaultListRowsBySearch,
   groupedVaultSortOf,
-  insertUngroupedVaultAtRoot,
   hiddenUngroupedRootVaults,
   hiddenOmittedRootGroups,
   hexWithAlpha,
   listDropHighlight,
   isListUngroupDragKey,
-  LIST_ROOT_UNGROUP_DRAG_KEY,
   listUngroupDragKey,
-  LOADING_BUDGET_MS,
+  GROUP_COLLAPSE_MS,
+  GROUP_EXPAND_MS,
   parseGroupedVaultDragKey,
   pickListDropTarget,
-  vaultIdsInHiddenGroups,
-  vaultIdsUnhiddenByGroups,
+  pointInHitRect,
   reorderGroupedVaults,
   reorderRootRows,
-  removeVaultFromGroups,
   resolveListDrop,
-  sortVaultsByOrder,
-  resolveVaultListStatus,
-  vaultCanExport,
-  RpcError,
-  shouldBumpVaultRootEpoch,
-  isVaultRootGoneError,
-  shouldRecordVaultHidden,
   validateDisplayName,
   VAULT_DISPLAY_NAME_MAX_LENGTH,
-  VAULT_ERROR_CODES,
-  VAULT_NOTE_MAX_LENGTH,
   GROUPED_VAULT_SORT_MODES,
-  VAULT_ROW_DENSITY,
-  vaultBlocksColumnCount,
   vaultBlocksGroupInnerColumns,
   SORT_DIRECTION_ICON,
   SORT_MODE_ICON,
   VIEW_MODE_ICON,
-  type CreateVaultDraft,
-  type CreateVaultGroupAssignment,
-  type CreateVaultResult,
-  type CreateVaultStepId,
-  type PendingCreateGroupEffect,
-  type VaultExportRequest,
   type VaultGroup,
   type VaultListItem,
   type VaultListSortDirection,
   type VaultListSortMode,
   type VaultListViewMode,
-  type VaultSession,
 } from "@upriv/shared";
-import {
-  useLogService,
-  useVaultGroupService,
-  useVaultLifecycleService,
-  useVaultService,
-} from "@/platform/services";
-import { unregisterMockVaultId } from "@/platform/mocks/data/vaults";
-import { useAppSettingsContext } from "@/features/system/settings";
-import { useTranslation, type I18nKey } from "@/i18n";
+import { type I18nKey } from "@/i18n";
 import { mobileErrorI18nKey } from "@/lib/errorMessages";
-import { useLoadingBudget, useToast } from "@upriv/shared/react";
 import { useTheme } from "@/theme";
 import {
   CONTROL_HEIGHT_MD,
@@ -102,7 +57,7 @@ import {
   radii,
   spacing,
   touchMin,
-  vaultRowShadow,
+  vaultRowBoxShadow,
 } from "@/theme/tokens";
 import { AppSettingsModal } from "@/features/system/settings/AppSettingsModal";
 import { VaultRootDataFolderModal } from "@/features/system/settings/VaultRootDataFolderModal";
@@ -114,21 +69,20 @@ import { CreateVaultModal } from "@/features/vaults/create/CreateVaultModal";
 import { ExportVaultModal } from "@/features/vaults/list/ExportVaultModal";
 import { VaultGroupsModal } from "@/features/vaults/list/VaultGroupsModal";
 import { VaultNoteModal } from "@/features/vaults/list/VaultNoteModal";
-import { exportVaultPackage } from "@/features/vaults/list/exportVaultPackage";
 import { GroupedVaultPicker } from "@/features/vaults/list/GroupedVaultPicker";
 import {
   VaultLifecycleModal,
   VaultRecoveryModal,
   WorkspaceSetupModal,
-  useVaultLifecycle,
 } from "@/features/vaults/lifecycle";
 import { VaultSettingsModal } from "@/features/vaults/settings/VaultSettingsModal";
 import { VaultBackupsModal } from "@/features/vaults/backups/VaultBackupsModal";
-import { FileManagerScreen } from "@/features/vaults/file-manager/FileManagerScreen";
+import { FileManagerLayer } from "@/features/vaults/file-manager";
 import { UprivWordmark } from "@/components/brand/UprivWordmark";
 import { CenteredPanel } from "@/components/layout/CenteredPanel";
 import {
   Button,
+  Collapse,
   DropdownPanel,
   IconButton,
   LoadingBudgetHint,
@@ -145,6 +99,7 @@ import {
   SettingsAccordionSection,
   SwitchRow,
   ThemedInput,
+  DisplayNameFieldError,
 } from "@/components/settings";
 import { RadioGroup } from "@/components/settings/settingsFields";
 import { Icon } from "@/components/icons";
@@ -154,42 +109,72 @@ import { VaultHiddenIndicator } from "./VaultHiddenIndicator";
 import { VaultListEmptyState } from "./VaultListEmptyState";
 import { VaultListSearch } from "./VaultListSearch";
 import { VaultRow } from "./VaultRow";
-import { useVaultListScreen as useVaultListScreenState } from "./hooks";
-import {
-  flattenHierarchyRows,
-  packRowsForBlocks,
-  type BlocksGroupCell,
-  type FlatHierarchyRow,
-} from "./lib/hierarchyRows";
+import { useVaultListScreen } from "./hooks";
+import { type BlocksGroupCell, type FlatHierarchyRow } from "./lib/hierarchyRows";
 
 const SORT_MODES: VaultListSortMode[] = ["order", "name", "state", "last_accessed", "groups"];
 const SORT_DIRS: VaultListSortDirection[] = ["asc", "desc"];
 const VIEW_MODES: VaultListViewMode[] = ["default", "large", "compact", "blocks"];
+/** Desktop `AppShell` main `py-10`. */
+const MAIN_PAD_TOP = 40;
+/** Outer gutter — a step tighter than desktop `px-margin-mobile` (16). */
+const PAGE_PAD_H = spacing.md;
+
+function StickyAppHeader({
+  insetTop,
+  background,
+  onHeight,
+  children,
+}: {
+  insetTop: number;
+  background: string;
+  onHeight: (height: number) => void;
+  children: ReactNode;
+}) {
+  return (
+    <View
+      style={[styles.header, { paddingTop: insetTop, backgroundColor: background }]}
+      onLayout={(event) => onHeight(event.nativeEvent.layout.height)}
+    >
+      {children}
+    </View>
+  );
+}
+
+function GroupChevron({ collapsed, color }: { collapsed: boolean; color: string }) {
+  const rotation = useRef(new Animated.Value(collapsed ? 1 : 0)).current;
+
+  useEffect(() => {
+    Animated.timing(rotation, {
+      toValue: collapsed ? 1 : 0,
+      duration: collapsed ? GROUP_COLLAPSE_MS : GROUP_EXPAND_MS,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start();
+  }, [collapsed, rotation]);
+
+  const rotate = rotation.interpolate({
+    inputRange: [0, 1],
+    outputRange: ["0deg", "-90deg"],
+  });
+
+  return (
+    <Animated.View style={[styles.groupChevronWrap, { transform: [{ rotate }] }]}>
+      <Icon name="chevron-down" size={18} color={color} />
+    </Animated.View>
+  );
+}
 
 export function VaultListScreen() {
-  const { t } = useTranslation();
-  const { colors, typography } = useTheme();
-  const vaultService = useVaultService();
-  const vaultGroupService = useVaultGroupService();
-  const lifecycleService = useVaultLifecycleService();
-  const logService = useLogService();
   const {
+    t,
     settings,
     patchSettings,
-    showHiddenVaultsSession,
-    reportVaultRootIntegrityFailure,
-    settingsOnDisk,
-    vaultRootEpoch,
-  } = useAppSettingsContext();
-  const insets = useSafeAreaInsets();
-  const { width: windowWidth } = useWindowDimensions();
-  const { message, show, dismiss } = useToast();
-
-  const { state, modals } = useVaultListScreenState(
-    settings.ui.vault_list_search,
-    useCallback((patch) => patchSettings(patch), [patchSettings]),
-  );
-  const {
+    show,
+    dismiss,
+    message,
+    openFromVault,
+    setMeasuredHeaderHeight,
     listSearch,
     setListSearch,
     vaultListSearchRef,
@@ -199,13 +184,11 @@ export function VaultListScreen() {
     groups,
     setGroups,
     groupsInvalid,
-    setGroupsInvalid,
     groupsInvalidDismissed,
     setGroupsInvalidDismissed,
     groupsSanitizeNotice,
     setGroupsSanitizeNotice,
     refreshing,
-    setRefreshing,
     draggingId,
     setDraggingId,
     draggingIdRef,
@@ -218,12 +201,6 @@ export function VaultListScreen() {
     setDragScrollLock,
     dropViewsRef,
     dropRectsRef,
-  } = state;
-  const groupsRef = useRef(groups);
-  const pendingCreatesRef = useRef<Map<string, VaultListItem>>(new Map());
-  const pendingCreateGroupsRef = useRef<Map<string, PendingCreateGroupEffect>>(new Map());
-  groupsRef.current = groups;
-  const {
     settingsOpen,
     setSettingsOpen,
     settingsDirty,
@@ -245,13 +222,9 @@ export function VaultListScreen() {
     vaultInfoVaultId,
     setVaultInfoVaultId,
     createOpen,
-    setCreateOpen,
     createDraft,
-    setCreateDraft,
     createStep,
-    setCreateStep,
     lifecycleRequest,
-    setLifecycleRequest,
     settingsVault,
     setSettingsVault,
     settingsArea,
@@ -261,14 +234,10 @@ export function VaultListScreen() {
     exportVault,
     setExportVault,
     exportSubmitting,
-    setExportSubmitting,
     backupsVault,
     setBackupsVault,
-    fmVault,
-    setFmVault,
     settingsGroup,
     setSettingsGroup,
-    settingsGroupOpenRef,
     groupDraftName,
     setGroupDraftName,
     groupDraftOrder,
@@ -286,661 +255,67 @@ export function VaultListScreen() {
     groupFormError,
     setGroupFormError,
     groupBusy,
-    setGroupBusy,
     repairBusy,
     setRepairBusy,
-  } = modals;
-  const groupBusyGenRef = useRef(0);
-  const vaultOrderGenRef = useRef(0);
-  const repairGenRef = useRef(0);
-  const groupBudget = useLoadingBudget(groupBusy, LOADING_BUDGET_MS.default);
-  const repairBudget = useLoadingBudget(repairBusy, LOADING_BUDGET_MS.default);
-  const noteSaveGenerationRef = useRef(new Map<string, number>());
-  const exportBusyGenRef = useRef(0);
-  /** Aborted on export timeout so a late run cannot open the share sheet. */
-  const exportAbortRef = useRef<AbortController | null>(null);
-
-  const sortMode = settings.ui.vault_list_sort;
-  const sortDirection = settings.ui.vault_list_sort_direction;
-  const viewMode = settings.ui.vault_list_view;
-  const showHidden = settings.ui.always_show_hidden_vaults || showHiddenVaultsSession;
-  const searchActive = listSearch.trim().length > 0;
-  const vaultListShowDrag = settings.ui.vault_list_show_drag !== false && !searchActive;
-  const showHeaderMore = settings.ui.vault_list_show_header_more_button !== false;
-  const showGroupSettings = settings.ui.vault_list_show_group_settings_button !== false;
-  const vaultListAllowDragIntoGroup =
-    settings.ui.vault_list_allow_drag_into_group !== false && !searchActive;
-  const canReorder =
-    vaultListShowDrag && canReorderVaultList({ mode: sortMode, direction: sortDirection });
-
-  const existingVaultIds = useMemo(() => vaults.map((vault) => vault.id), [vaults]);
-  const existingOrders = useMemo(() => vaults.map((vault) => vault.order ?? 0), [vaults]);
-  const noteVault = useMemo(
-    () => vaults.find((vault) => vault.id === noteVaultId) ?? null,
-    [vaults, noteVaultId],
-  );
-  const vaultInfoVault = useMemo(
-    () => vaults.find((vault) => vault.id === vaultInfoVaultId) ?? null,
-    [vaults, vaultInfoVaultId],
-  );
-
-  const hierarchyRows = useMemo(() => {
-    return applyVaultListHierarchySort(
-      vaults,
-      groups,
-      {
-        mode: sortMode,
-        direction: sortDirection,
-      },
-      { showHiddenVaults: showHidden },
-    );
-  }, [vaults, groups, showHidden, sortMode, sortDirection]);
-
-  const displayRows = useMemo(
-    () => filterVaultListRowsBySearch(hierarchyRows, listSearch),
-    [hierarchyRows, listSearch],
-  );
-
-  const searchNoMatches =
-    searchActive && displayRows.length === 0 && (vaults.length > 0 || groups.length > 0);
-
-  const flatRows = useMemo(() => flattenHierarchyRows(displayRows), [displayRows]);
-
-  const visibleVaults = useMemo(
-    () => filterVisibleVaults(vaults, showHidden),
-    [showHidden, vaults],
-  );
-  const allVaultsHidden = !searchActive && vaults.length > 0 && visibleVaults.length === 0;
-
-  const sessionWritesRef = useRef(new Map<string, number>());
-  const prevVaultRootEpochRef = useRef(vaultRootEpoch);
-  useEffect(() => {
-    if (prevVaultRootEpochRef.current === vaultRootEpoch) return;
-    prevVaultRootEpochRef.current = vaultRootEpoch;
-    sessionWritesRef.current.clear();
-  }, [vaultRootEpoch]);
-
-  const setVaultRuntimeState = useCallback(
-    (
-      vaultId: string,
-      patch: {
-        session: VaultSession | null;
-        lastAccessedAt?: string;
-        lastAccessedWhen?: string;
-      },
-    ) => {
-      sessionWritesRef.current.set(vaultId, Date.now());
-      setVaults((prev) =>
-        prev.map((vault) => (vault.id === vaultId ? { ...vault, ...patch } : vault)),
-      );
-    },
-    [setVaults],
-  );
-
-  const lifecycle = useVaultLifecycle({
-    vaults,
-    setVaultRuntimeState,
-    lifecycleRequest,
-    setLifecycleRequest,
-    showToast: show,
-    dismissToast: dismiss,
-    onDiscardWorkspace: (vaultId) => {
-      setFmVault((current) => (current?.id === vaultId ? null : current));
-    },
-  });
-
-  const reload = useCallback(async (): Promise<VaultListItem[]> => {
-    setRefreshing(true);
-    const fetchStartedAt = Date.now();
-    try {
-      const [list, groupResult] = await Promise.all([
-        vaultService.listVaults(),
-        vaultGroupService.list(),
-      ]);
-      for (const row of list) {
-        pendingCreatesRef.current.delete(row.id);
-      }
-      setVaults((current) =>
-        mergeVaultListSnapshot(
-          current,
-          mergePendingCreatingVaults(list, [...pendingCreatesRef.current.values()]),
-          sessionWritesRef.current,
-          fetchStartedAt,
-        ),
-      );
-      if (settingsGroupOpenRef.current) {
-        show(t("toast.groups_refresh_blocked_settings"));
-      } else {
-        setGroups(
-          mergePendingCreatingGroups(groupResult.groups, pendingCreateGroupsRef.current.values()),
-        );
-        setGroupsInvalid(groupResult.invalid);
-        if (!groupResult.invalid) setGroupsInvalidDismissed(false);
-        const orphans = groupResult.droppedOrphans ?? 0;
-        const duplicates = groupResult.droppedDuplicateAssignments ?? 0;
-        if (orphans > 0 || duplicates > 0) {
-          setGroupsSanitizeNotice({ orphans, duplicates });
-        } else {
-          setGroupsSanitizeNotice(null);
-        }
-      }
-      return list;
-    } catch (error) {
-      if (isVaultRootGoneError(error) && !settingsOnDisk) {
-        // Children stay mounted under Gate; first-run is not mid-session integrity.
-      } else if (shouldBumpVaultRootEpoch(error)) {
-        void reportVaultRootIntegrityFailure(error);
-      } else {
-        show(t(mobileErrorI18nKey(error, "toast.refresh_failed")));
-      }
-      return [];
-    } finally {
-      setRefreshing(false);
-    }
-  }, [
-    reportVaultRootIntegrityFailure,
-    setGroups,
-    setGroupsInvalid,
-    setGroupsInvalidDismissed,
-    setGroupsSanitizeNotice,
-    setRefreshing,
-    setVaults,
-    settingsGroupOpenRef,
-    settingsOnDisk,
-    show,
-    t,
+    insets,
+    appHeaderHeight,
+    groupsRef,
+    groupBusyGenRef,
+    repairGenRef,
+    groupBudget,
+    repairBudget,
+    sortMode,
+    sortDirection,
+    viewMode,
+    showHidden,
+    searchActive,
+    vaultListShowDrag,
+    showHeaderMore,
+    showGroupSettings,
+    vaultListAllowDragIntoGroup,
+    canReorder,
+    existingVaultIds,
+    existingOrders,
+    noteVault,
+    vaultInfoVault,
+    displayRowsRef,
+    searchNoMatches,
+    visibleVaults,
+    allVaultsHidden,
+    lifecycle,
+    reload,
+    openCreate,
+    closeCreate,
+    pipelineStatus,
+    handleConfirmExportVault,
+    handleRowExport,
+    handleExportTimeout,
+    isVaultPipelineBusy,
+    rowDensity,
+    rowPaddingY,
+    rowPaddingX,
+    blockColumns,
+    listData,
+    blockCellWidth,
+    displayNameMessage,
+    applyListedIfCurrent,
+    showGroupErr,
+    runWithGroupBusy,
+    persistRootOrders,
+    persistVaultRootOrders,
+    assignVaultToGroupByDrag,
+    ungroupVaultFromGroup,
+    handleCreateGroup,
+    handleCommitGroupAssignment,
+    handleVaultDelete,
+    handleNoteChange,
+    vaultsRef,
+    handleVaultSettingsSaved,
+    handlePersistBusyChange,
+    handleCreateVault,
     vaultGroupService,
-    vaultService,
-  ]);
-
-  useEffect(() => {
-    void reload();
-  }, [reload]);
-
-  const openCreate = useCallback(
-    (draft: CreateVaultDraft | null = null, step: CreateVaultStepId | null = null) => {
-      setCreateDraft(draft);
-      setCreateStep(step);
-      setCreateOpen(true);
-    },
-    [setCreateDraft, setCreateOpen, setCreateStep],
-  );
-
-  const closeCreate = useCallback(() => {
-    setCreateOpen(false);
-    setCreateDraft(null);
-    setCreateStep(null);
-  }, [setCreateDraft, setCreateOpen, setCreateStep]);
-
-  const pipelineStatus = useMemo(
-    () => ({
-      openingVaultIds: [...lifecycle.openingVaultIds],
-      closingVaultIds: [...lifecycle.closingVaultIds],
-      creatingVaultIds: [...lifecycle.creatingVaultIds],
-      queuedVaultIds: [...lifecycle.queuedVaultIds],
-      activeVaultId: lifecycle.activePipelineVaultId ?? undefined,
-      activeStartedAt: lifecycle.activePipelineStartedAt ?? undefined,
-    }),
-    [
-      lifecycle.activePipelineStartedAt,
-      lifecycle.activePipelineVaultId,
-      lifecycle.closingVaultIds,
-      lifecycle.creatingVaultIds,
-      lifecycle.openingVaultIds,
-      lifecycle.queuedVaultIds,
-    ],
-  );
-
-  const handleConfirmExportVault = useCallback(
-    (request: VaultExportRequest) => {
-      if (!exportVault) return;
-      const vault = exportVault;
-      const gen = ++exportBusyGenRef.current;
-      exportAbortRef.current?.abort();
-      const abort = new AbortController();
-      exportAbortRef.current = abort;
-      setExportSubmitting(true);
-      void exportVaultPackage(
-        vault,
-        (row, exportRequest) => vaultService.getExportBytes(row, exportRequest),
-        request,
-        abort.signal,
-      )
-        .then(() => {
-          if (gen !== exportBusyGenRef.current) return;
-          show(t("vault.export.success", { name: vault.displayName }));
-          setExportVault(null);
-        })
-        .catch((error) => {
-          if (gen !== exportBusyGenRef.current) return;
-          show(t(mobileErrorI18nKey(error, "vault.export.failed")));
-        })
-        .finally(() => {
-          if (gen === exportBusyGenRef.current) setExportSubmitting(false);
-        });
-    },
-    [exportVault, setExportSubmitting, setExportVault, show, t, vaultService],
-  );
-
-  const handleRowExport = useCallback(
-    (vault: VaultListItem) => {
-      const listStatus = resolveVaultListStatus(vault, pipelineStatus);
-      if (!vaultService.canExportVault) return;
-      if (
-        listStatus === "opening" ||
-        listStatus === "closing" ||
-        listStatus === "creating" ||
-        listStatus === "queued"
-      ) {
-        show(t("vault.export.blocked_opening"));
-        return;
-      }
-      if (!vaultCanExport(vault, pipelineStatus)) {
-        show(t("vault.export.blocked_open"));
-        return;
-      }
-      setExportVault(vault);
-    },
-    [pipelineStatus, setExportVault, show, t, vaultService.canExportVault],
-  );
-
-  const isVaultPipelineBusy = lifecycle.isVaultPipelineBusy;
-
-  const rowDensity = VAULT_ROW_DENSITY[viewMode === "blocks" ? "default" : viewMode];
-  const rowPaddingY = rowDensity.paddingY;
-  const rowPaddingX = rowDensity.paddingX;
-  const listPanelWidth = Math.min(windowWidth, MAX_WIDTH_VAULT_LIST);
-  const blockColumns = viewMode === "blocks" ? vaultBlocksColumnCount(listPanelWidth) : 1;
-  const listData = viewMode === "blocks" ? packRowsForBlocks(displayRows, blockColumns) : flatRows;
-  const blockCellWidth =
-    blockColumns > 1
-      ? (listPanelWidth - spacing.lg * 2 - spacing.sm * (blockColumns - 1)) / blockColumns
-      : undefined;
-
-  const displayNameMessage = (code: ReturnType<typeof validateDisplayName>) => {
-    if (!code) return null;
-    return t(
-      displayNameErrorI18nKey(code),
-      code === "too_long" ? { max: String(VAULT_DISPLAY_NAME_MAX_LENGTH) } : undefined,
-    );
-  };
-
-  const applyListedGroups = (listed: {
-    groups: VaultGroup[];
-    invalid: boolean;
-    droppedOrphans?: number;
-    droppedDuplicateAssignments?: number;
-  }) => {
-    const merged = mergePendingCreatingGroups(
-      listed.groups,
-      pendingCreateGroupsRef.current.values(),
-    );
-    setGroups(merged);
-    const hideIds = new Set(vaultIdsInHiddenGroups(merged));
-    const showIds = new Set(vaultIdsUnhiddenByGroups(groupsRef.current, merged));
-    if (hideIds.size > 0 || showIds.size > 0) {
-      setVaults((current) =>
-        current.map((vault) => {
-          if (hideIds.has(vault.id)) {
-            return vault.hidden ? vault : { ...vault, hidden: true };
-          }
-          if (showIds.has(vault.id)) {
-            return vault.hidden ? { ...vault, hidden: false } : vault;
-          }
-          return vault;
-        }),
-      );
-    }
-    setGroupsInvalid(listed.invalid);
-    if (!listed.invalid) setGroupsInvalidDismissed(false);
-    const orphans = listed.droppedOrphans ?? 0;
-    const duplicates = listed.droppedDuplicateAssignments ?? 0;
-    if (orphans > 0 || duplicates > 0) {
-      setGroupsSanitizeNotice({ orphans, duplicates });
-    } else {
-      setGroupsSanitizeNotice(null);
-    }
-  };
-
-  const applyListedIfCurrent = async (generation: number) => {
-    if (generation !== groupBusyGenRef.current) return;
-    const listed = await vaultGroupService.list();
-    if (generation !== groupBusyGenRef.current) return;
-    applyListedGroups(listed);
-  };
-
-  const showGroupErr = (error: unknown) => {
-    const message = t(mobileErrorI18nKey(error));
-    setGroupFormError(message);
-    show(message);
-  };
-
-  const runWithGroupBusy = async (
-    work: (generation: number) => Promise<void>,
-    options?: {
-      notify?: boolean;
-      /** When false, no busy UI — desktop drag-assign parity. */ ui?: boolean;
-    },
-  ) => {
-    const generation = ++groupBusyGenRef.current;
-    const showBusy = options?.ui !== false;
-    if (showBusy) setGroupBusy(true);
-    setGroupFormError(null);
-    try {
-      await work(generation);
-    } catch (error) {
-      if (generation !== groupBusyGenRef.current) return;
-      if (options?.notify !== false) showGroupErr(error);
-      await reload().catch(() => undefined);
-      throw error;
-    } finally {
-      if (showBusy && generation === groupBusyGenRef.current) setGroupBusy(false);
-    }
-  };
-
-  const applyVaultGroupMembership = async (
-    vaultId: string,
-    groupId: string | null,
-    beforeGroupedVaultId: string | null | undefined,
-    generation: number,
-  ) => {
-    const currentGroups = groupsRef.current;
-    const currentGroup = currentGroups.find((g) => g.groupedVaults.includes(vaultId)) ?? null;
-    if ((currentGroup?.id ?? null) === groupId && !beforeGroupedVaultId) return;
-    if (groupId) {
-      const target = currentGroups.find((g) => g.id === groupId);
-      if (!target) {
-        throw new RpcError(VAULT_ERROR_CODES.GROUP_NOT_FOUND, `group not found: ${groupId}`);
-      }
-      const nextGroups = assignVaultToGroup(currentGroups, vaultId, groupId, beforeGroupedVaultId, {
-        insertAfter: groupedVaultDropInsertsAfter(target),
-      });
-      const updated = nextGroups.find((g) => g.id === groupId);
-      if (!updated) return;
-      // Desktop parity — paint membership before the RPC so the group does not flicker.
-      setGroups(nextGroups);
-      await vaultGroupService.update({
-        id: groupId,
-        groupedVaults: updated.groupedVaults,
-      });
-    } else if (currentGroup) {
-      const nextGrouped = currentGroup.groupedVaults.filter((id) => id !== vaultId);
-      setGroups(
-        currentGroups.map((group) =>
-          group.id === currentGroup.id ? { ...group, groupedVaults: nextGrouped } : group,
-        ),
-      );
-      await vaultGroupService.update({
-        id: currentGroup.id,
-        groupedVaults: nextGrouped,
-      });
-    }
-    if (generation !== groupBusyGenRef.current) return;
-    await applyListedIfCurrent(generation);
-  };
-
-  const assignVaultToGroupByDrag = async (
-    vaultId: string,
-    groupId: string | null,
-    beforeGroupedVaultId?: string | null,
-  ) => {
-    const currentGroup = groupsRef.current.find((g) => g.groupedVaults.includes(vaultId)) ?? null;
-    if ((currentGroup?.id ?? null) === groupId && !beforeGroupedVaultId) {
-      return;
-    }
-    await runWithGroupBusy(
-      async (generation) => {
-        await applyVaultGroupMembership(vaultId, groupId, beforeGroupedVaultId, generation);
-      },
-      { ui: false, notify: true },
-    );
-  };
-
-  const ungroupVaultFromGroup = async (vaultId: string, beforeRootVaultId?: string | null) => {
-    const currentGroups = groupsRef.current;
-    const source = currentGroups.find((g) => g.groupedVaults.includes(vaultId));
-    if (!source) return;
-
-    await runWithGroupBusy(
-      async (generation) => {
-        const nextGroups = removeVaultFromGroups(currentGroups, vaultId);
-        setGroups(nextGroups);
-        await vaultGroupService.update({
-          id: source.id,
-          groupedVaults: source.groupedVaults.filter((id) => id !== vaultId),
-        });
-        if (generation !== groupBusyGenRef.current) return;
-
-        if (canReorder) {
-          const vault = vaultsRef.current.find((item) => item.id === vaultId);
-          if (vault) {
-            const previous = currentGroups;
-            const hiddenTail = hiddenUngroupedRootVaults(
-              vaultsRef.current,
-              currentGroups,
-              displayRowsRef.current,
-            );
-            const hiddenGroups = hiddenOmittedRootGroups(currentGroups, displayRowsRef.current);
-            const nextRows = insertUngroupedVaultAtRoot(
-              displayRowsRef.current,
-              vault,
-              beforeRootVaultId,
-              sortDirection,
-              hiddenTail,
-              hiddenGroups,
-            );
-            const previousVaults = vaultsRef.current;
-            const nextVaults = previousVaults.map((item) => {
-              const row = nextRows.find((r) => r.kind === "vault" && r.vault.id === item.id);
-              return row && row.kind === "vault" ? { ...item, order: row.vault.order } : item;
-            });
-            const nextGroupsWithOrder = removeVaultFromGroups(currentGroups, vaultId).map(
-              (group) => {
-                const row = nextRows.find((r) => r.kind === "group" && r.group.id === group.id);
-                return row && row.kind === "group" ? { ...group, order: row.group.order } : group;
-              },
-            );
-            setVaults(nextVaults);
-            setGroups(nextGroupsWithOrder);
-            persistVaultRootOrders(nextVaults, previousVaults);
-            const orders = nextGroupsWithOrder
-              .filter((group) => previous.find((g) => g.id === group.id)?.order !== group.order)
-              .map((group) => ({ id: group.id, order: group.order }));
-            if (orders.length > 0) {
-              await vaultGroupService.reorder(orders);
-              if (generation !== groupBusyGenRef.current) return;
-            }
-          }
-        }
-
-        await applyListedIfCurrent(generation);
-      },
-      { ui: false, notify: true },
-    );
-  };
-
-  const handleCreateGroup = async (
-    displayName: string,
-    groupedVaultIds: string[] = [],
-    hidden = false,
-  ) => {
-    await runWithGroupBusy(
-      async (generation) => {
-        const id = displayNameToGroupId(
-          displayName,
-          groupsRef.current.map((g) => g.id),
-        );
-        await vaultGroupService.create({
-          id,
-          displayName,
-          groupedVaults: [...groupedVaultIds],
-          hidden,
-        });
-        await applyListedIfCurrent(generation);
-      },
-      { notify: false },
-    );
-  };
-
-  const handleCommitGroupAssignment = async (
-    vaultId: string,
-    assignment: CreateVaultGroupAssignment,
-  ) => {
-    if (assignment.kind === "create") {
-      await runWithGroupBusy(
-        async (generation) => {
-          const pendingEffect = pendingCreateGroupsRef.current.get(vaultId);
-          const existingIds = groupsRef.current
-            .map((g) => g.id)
-            .filter((id) => pendingEffect?.kind !== "create" || id !== pendingEffect.group.id);
-          const id =
-            pendingCreateGroupId(pendingEffect, assignment, existingIds) ??
-            displayNameToGroupId(assignment.displayName, existingIds);
-          await vaultGroupService.create({
-            id,
-            displayName: assignment.displayName,
-            groupedVaults: [vaultId],
-          });
-          pendingCreateGroupsRef.current.delete(vaultId);
-          await applyListedIfCurrent(generation);
-        },
-        { notify: false, ui: false },
-      );
-      return;
-    }
-    await runWithGroupBusy(
-      async (generation) => {
-        await applyVaultGroupMembership(
-          vaultId,
-          assignment.kind === "existing" ? assignment.groupId : null,
-          undefined,
-          generation,
-        );
-        pendingCreateGroupsRef.current.delete(vaultId);
-      },
-      { notify: false, ui: false },
-    );
-  };
-
-  const handleVaultDelete = async (vaultId: string) => {
-    if (isVaultPipelineBusy(vaultId)) {
-      show(t("toast.pipeline_busy"));
-      return;
-    }
-    if (!vaultService.canDeleteVault) {
-      show(t("error.not_implemented"));
-      return;
-    }
-
-    lifecycle.cancelClosingHold(vaultId);
-    lifecycle.invalidateOpenRetain(vaultId);
-
-    groupBusyGenRef.current += 1;
-    try {
-      const containing = groupsRef.current.filter((group) => group.groupedVaults.includes(vaultId));
-      for (const group of containing) {
-        await vaultGroupService.update({
-          id: group.id,
-          groupedVaults: group.groupedVaults.filter((id) => id !== vaultId),
-        });
-      }
-      await vaultService.unregisterSettings(vaultId);
-    } catch (error) {
-      show(t(mobileErrorI18nKey(error, "error.unexpected")));
-      try {
-        const listed = await vaultGroupService.list();
-        applyListedGroups(listed);
-      } catch (listError) {
-        show(t(mobileErrorI18nKey(listError, "toast.refresh_failed")));
-      }
-      return;
-    }
-
-    unregisterMockVaultId(vaultId);
-    lifecycleService.clearPasswordInSession(vaultId);
-    sessionWritesRef.current.delete(vaultId);
-    pendingCreatesRef.current.delete(vaultId);
-    setVaults((current) => current.filter((vault) => vault.id !== vaultId));
-    setGroups((current) =>
-      current.map((group) => ({
-        ...group,
-        groupedVaults: group.groupedVaults.filter((id) => id !== vaultId),
-      })),
-    );
-    setSettingsVault(null);
-    setSettingsArea(null);
-    setNoteVaultId((current) => (current === vaultId ? null : current));
-    setBackupsVault((current) => (current?.id === vaultId ? null : current));
-    setFmVault((current) => (current?.id === vaultId ? null : current));
-    if (lifecycleRequest?.vaultId === vaultId) {
-      setLifecycleRequest(null);
-    }
-  };
-
-  const handleNoteChange = useCallback(
-    async (vaultId: string, note: string): Promise<boolean> => {
-      if (!vaultService.canPersistSettings) {
-        show(t("error.not_implemented"));
-        return false;
-      }
-      const trimmed = (note ?? "").slice(0, VAULT_NOTE_MAX_LENGTH);
-      const previous = vaultsRef.current.find((vault) => vault.id === vaultId)?.note ?? "";
-      setVaults((current) =>
-        current.map((vault) =>
-          vault.id === vaultId && (vault.note ?? "") !== trimmed
-            ? { ...vault, note: trimmed }
-            : vault,
-        ),
-      );
-      const nextGeneration = (noteSaveGenerationRef.current.get(vaultId) ?? 0) + 1;
-      noteSaveGenerationRef.current.set(vaultId, nextGeneration);
-      const rollback = () => {
-        setVaults((current) =>
-          current.map((vault) =>
-            vault.id === vaultId && (vault.note ?? "") !== previous
-              ? { ...vault, note: previous }
-              : vault,
-          ),
-        );
-      };
-
-      let vaultSettings;
-      try {
-        vaultSettings = await vaultService.getSettings(vaultId);
-      } catch (error) {
-        if (noteSaveGenerationRef.current.get(vaultId) !== nextGeneration) return false;
-        rollback();
-        show(t(mobileErrorI18nKey(error, "error.settings_save_failed")));
-        return false;
-      }
-      if (noteSaveGenerationRef.current.get(vaultId) !== nextGeneration) return false;
-      if (!vaultSettings) {
-        rollback();
-        show(t("error.unexpected"));
-        return false;
-      }
-
-      try {
-        await vaultService.registerSettings(vaultId, {
-          ...vaultSettings,
-          vault: { ...vaultSettings.vault, note: trimmed },
-        });
-      } catch (error) {
-        if (noteSaveGenerationRef.current.get(vaultId) !== nextGeneration) return false;
-        rollback();
-        show(t(mobileErrorI18nKey(error, "error.settings_save_failed")));
-        return false;
-      }
-      if (noteSaveGenerationRef.current.get(vaultId) !== nextGeneration) return false;
-      return true;
-    },
-    [setVaults, show, t, vaultService],
-  );
-
-  const vaultsRef = useRef(vaults);
-  vaultsRef.current = vaults;
-  const displayRowsRef = useRef(displayRows);
-  displayRowsRef.current = displayRows;
+  } = useVaultListScreen();
+  const { colors, typography, theme } = useTheme();
 
   const dropRefCbs = useRef(new Map<string, (node: View | null) => void>());
   const bindDropTarget = (key: string) => {
@@ -976,12 +351,9 @@ export function VaultListScreen() {
 
   const hitDropKey = (pageX: number, pageY: number): string | null => {
     const source = draggingIdRef.current;
-    const pointInRect = (rect: { x: number; y: number; w: number; h: number }) =>
-      pageX >= rect.x && pageX <= rect.x + rect.w && pageY >= rect.y && pageY <= rect.y + rect.h;
-
     const matches: string[] = [];
     dropRectsRef.current.forEach((rect, key) => {
-      if (key === source || !pointInRect(rect)) return;
+      if (key === source || !pointInHitRect(pageX, pageY, rect)) return;
       matches.push(key);
     });
     return pickListDropTarget(matches, source);
@@ -996,44 +368,6 @@ export function VaultListScreen() {
     setDraggingId(null);
     setDragOverId(null);
     setDragPointer(null);
-  };
-
-  const persistRootOrders = (nextGroups: VaultGroup[], previous: VaultGroup[]) => {
-    const orders = nextGroups
-      .filter((group) => previous.find((g) => g.id === group.id)?.order !== group.order)
-      .map((group) => ({ id: group.id, order: group.order }));
-    if (orders.length === 0) return;
-    void runWithGroupBusy(
-      async (generation) => {
-        await vaultGroupService.reorder(orders);
-        await applyListedIfCurrent(generation);
-      },
-      { ui: false },
-    ).catch(() => undefined);
-  };
-
-  const persistVaultRootOrders = (nextVaults: VaultListItem[], previous: VaultListItem[]) => {
-    const orders = nextVaults
-      .filter((vault) => previous.find((item) => item.id === vault.id)?.order !== vault.order)
-      .map((vault) => ({ id: vault.id, order: vault.order ?? 0 }));
-    if (orders.length === 0 || !vaultService.canPersistSettings) return;
-    const generation = ++vaultOrderGenRef.current;
-    void (async () => {
-      try {
-        for (const { id, order } of orders) {
-          if (vaultOrderGenRef.current !== generation) return;
-          const settingsForVault = await vaultService.getSettings(id);
-          if (!settingsForVault || settingsForVault.vault.order === order) continue;
-          await vaultService.registerSettings(id, {
-            ...settingsForVault,
-            vault: { ...settingsForVault.vault, order },
-          });
-        }
-      } catch (error) {
-        if (vaultOrderGenRef.current !== generation) return;
-        show(t(mobileErrorI18nKey(error)));
-      }
-    })();
   };
 
   const applyListDrop = (sourceKey: string, targetKey: string | null) => {
@@ -1213,27 +547,6 @@ export function VaultListScreen() {
     };
   }, [draggingId, draggingGroupedVaultSourceGroupId, refreshDropRects]);
 
-  useEffect(() => {
-    if (!groupBudget.timedOut || !groupBusy) return;
-    groupBusyGenRef.current += 1;
-    setGroupBusy(false);
-    show(t("error.operation_timed_out"));
-  }, [groupBudget.timedOut, groupBusy, setGroupBusy, show, t]);
-
-  useEffect(() => {
-    if (!repairBudget.timedOut || !repairBusy) return;
-    repairGenRef.current += 1;
-    setRepairBusy(false);
-    show(t("error.operation_timed_out"));
-  }, [repairBudget.timedOut, repairBusy, setRepairBusy, show, t]);
-
-  const handleExportTimeout = useCallback(() => {
-    exportBusyGenRef.current += 1;
-    exportAbortRef.current?.abort();
-    setExportSubmitting(false);
-    show(t("error.operation_timed_out"));
-  }, [setExportSubmitting, show, t]);
-
   const renderVaultRow = (
     vault: VaultListItem,
     opts?: { nested?: boolean; blocks?: boolean; group?: VaultGroup; dropKey?: string },
@@ -1275,7 +588,7 @@ export function VaultListScreen() {
         onDragMove={onRowDragMove}
         onDragEnd={onRowDragEnd}
         onDragCancel={clearDrag}
-        onOpenFileManager={setFmVault}
+        onOpenFileManager={openFromVault}
         onOpenSettings={(rowVault, area) => {
           setSettingsVault(rowVault);
           setSettingsArea(area);
@@ -1341,12 +654,13 @@ export function VaultListScreen() {
 
   const renderBlocksGroup = (pack: BlocksGroupCell, layout: "cell" | "wide" = "wide") => {
     const fillMemberGrid = layout === "wide";
-    const groupedVaultCount = pack.visibleVaultCount;
+    const groupedVaultCount = pack.memberCount;
     const groupInnerColumns =
       viewMode === "blocks" ? vaultBlocksGroupInnerColumns(groupedVaultCount, blockColumns) : 1;
     const wrapGroupMembers = viewMode === "blocks" && fillMemberGrid && groupInnerColumns > 1;
     const showUngroupInThisGroup = draggingGroupedVaultSourceGroupId === pack.group.id;
-    const expanded = !pack.group.collapsed || showUngroupInThisGroup;
+    const childrenVisible = !pack.group.collapsed && pack.groupedVaults.length > 0;
+    const expanded = childrenVisible || showUngroupInThisGroup;
     const groupKey = pack.key;
     const isDragging = draggingId === groupKey;
     const isDragOver = isDropOver(groupKey);
@@ -1362,6 +676,7 @@ export function VaultListScreen() {
             borderColor: expanded ? colors.outlineVariant : "transparent",
             borderWidth: 1,
             opacity: isDragging ? 0.45 : 1,
+            boxShadow: vaultRowBoxShadow(theme),
           },
         ]}
       >
@@ -1375,7 +690,8 @@ export function VaultListScreen() {
           style={[
             styles.groupHeader,
             {
-              paddingVertical: rowPaddingY,
+              // Vertical pad on toggle/sides — header padY leaves dead bands in large mode.
+              alignItems: "stretch",
               paddingRight: rowPaddingX,
               paddingLeft:
                 vaultListShowDrag && canReorder
@@ -1385,30 +701,25 @@ export function VaultListScreen() {
           ]}
         >
           {vaultListShowDrag && canReorder ? (
-            <VaultDragHandle
-              disabled={!canReorder}
-              onDragStart={(x, y) => onRowDragStart(groupKey, x, y)}
-              onDragMove={onRowDragMove}
-              onDragEnd={onRowDragEnd}
-              onDragCancel={clearDrag}
-            />
+            <View style={[styles.groupHeaderSide, { paddingVertical: rowPaddingY }]}>
+              <VaultDragHandle
+                disabled={!canReorder}
+                onDragStart={(x, y) => onRowDragStart(groupKey, x, y)}
+                onDragMove={onRowDragMove}
+                onDragEnd={onRowDragEnd}
+                onDragCancel={clearDrag}
+              />
+            </View>
           ) : null}
           <Pressable
-            style={styles.rowPress}
+            style={[styles.rowPress, { paddingVertical: rowPaddingY }]}
             onPress={() => toggleGroupCollapsed(pack.group)}
             onLongPress={showGroupSettings ? () => openGroupSettings(pack.group) : undefined}
             accessibilityRole="button"
-            accessibilityState={{ expanded }}
+            accessibilityState={{ expanded: childrenVisible }}
             accessibilityLabel={pack.group.displayName}
           >
-            <View
-              style={[
-                styles.groupChevronWrap,
-                pack.group.collapsed ? styles.groupChevronCollapsed : null,
-              ]}
-            >
-              <Icon name="chevron-down" size={18} color={colors.onSurfaceVariant} />
-            </View>
+            <GroupChevron collapsed={pack.group.collapsed} color={colors.onSurfaceVariant} />
             <View style={styles.rowText}>
               <View style={styles.groupTitleRow}>
                 <Text
@@ -1417,8 +728,7 @@ export function VaultListScreen() {
                     styles.rowTitle,
                     styles.groupTitle,
                     {
-                      fontSize:
-                        VAULT_ROW_DENSITY[viewMode === "blocks" ? "default" : viewMode].titleSize,
+                      fontSize: rowDensity.titleSize,
                     },
                   ]}
                   numberOfLines={1}
@@ -1438,15 +748,17 @@ export function VaultListScreen() {
             </View>
           </Pressable>
           {showGroupSettings ? (
-            <IconButton
-              label={t("vault.group.open_settings")}
-              icon="settings"
-              size={18}
-              onPress={() => openGroupSettings(pack.group)}
-            />
+            <View style={[styles.groupHeaderSide, { paddingVertical: rowPaddingY }]}>
+              <IconButton
+                label={t("vault.group.open_settings")}
+                icon="settings"
+                size={18}
+                onPress={() => openGroupSettings(pack.group)}
+              />
+            </View>
           ) : null}
         </View>
-        {expanded && (pack.groupedVaults.length > 0 || showUngroupInThisGroup) ? (
+        <Collapse open={childrenVisible}>
           <View style={[styles.groupGroupedVaults, wrapGroupMembers ? styles.blockRowWrap : null]}>
             {pack.groupedVaults.map((vault) => (
               <View
@@ -1454,9 +766,9 @@ export function VaultListScreen() {
                 style={
                   viewMode === "blocks" && fillMemberGrid
                     ? wrapGroupMembers && blockCellWidth != null
-                      ? { width: blockCellWidth }
-                      : { width: "100%" }
-                    : undefined
+                      ? { width: blockCellWidth, minWidth: 0 }
+                      : { width: "100%", minWidth: 0 }
+                    : { width: "100%", minWidth: 0 }
                 }
               >
                 {renderVaultRow(vault, {
@@ -1472,7 +784,12 @@ export function VaultListScreen() {
                 })
               : null}
           </View>
-        ) : null}
+        </Collapse>
+        {showUngroupInThisGroup && !childrenVisible
+          ? renderUngroupDrop(pack.group.id, {
+              fullWidth: viewMode === "blocks" && fillMemberGrid,
+            })
+          : null}
       </View>
     );
   };
@@ -1513,143 +830,33 @@ export function VaultListScreen() {
 
   return (
     <View
-      style={[styles.root, { paddingTop: insets.top, backgroundColor: colors.background }]}
+      style={[styles.root, { backgroundColor: colors.background }]}
       onTouchStart={blurVaultListSearchIfOutside}
     >
       <CenteredPanel maxWidth={MAX_WIDTH_VAULT_LIST}>
-        <View style={[styles.header, { backgroundColor: colors.background }]}>
-          <UprivWordmark height={20} style={styles.brand} />
-          <View style={styles.headerActions}>
-            {showHeaderMore ? (
-              <DropdownPanel
-                label={t("app.menu.more")}
-                heading={t("app.menu.more")}
-                align="right"
-                minWidth={220}
-                trigger={
-                  <IconButton
-                    label={t("app.menu.more")}
-                    icon="more-vertical"
-                    size={20}
-                    style={[styles.headerChromeBtn, { borderColor: colors.outlineVariant }]}
-                  />
-                }
-              >
-                <MenuActionItem
-                  icon="refresh"
-                  label={t("action.refresh")}
-                  disabled={refreshing}
-                  onPress={() => void reload()}
-                />
-                <MenuActionItem
-                  icon="terminal"
-                  label={t("app.menu.view_logs")}
-                  onPress={() => setLogsOpen(true)}
-                />
-                <MenuActionItem
-                  icon="help"
-                  label={t("app.menu.help")}
-                  onPress={() => setHelpOpen(true)}
-                />
-                <MenuActionItem
-                  icon="info"
-                  label={t("app.menu.system_info")}
-                  onPress={() => setSystemInfoOpen(true)}
-                />
-              </DropdownPanel>
-            ) : null}
-            <DropdownPanel
-              label={t("action.settings")}
-              heading={t("action.settings")}
-              align="right"
-              minWidth={220}
-              trigger={
-                <IconButton
-                  label={t("action.settings")}
-                  icon="settings"
-                  size={18}
-                  style={[styles.headerChromeBtn, { borderColor: colors.outlineVariant }]}
-                />
-              }
-            >
-              <MenuActionItem
-                icon="settings"
-                label={t("app.menu.system_settings")}
-                onPress={() => {
-                  if (dataFolderDirty || groupsDirty) {
-                    show(
-                      t(
-                        groupsDirty
-                          ? "toast.groups_surface_blocked_dirty"
-                          : "toast.data_folder_blocked_dirty",
-                      ),
-                    );
-                    return;
-                  }
-                  setDataFolderOpen(false);
-                  setGroupsOpen(false);
-                  setSettingsOpen(true);
-                }}
-              />
-              <MenuActionItem
-                icon="layers"
-                label={t("app.menu.groups")}
-                onPress={() => {
-                  if (settingsDirty || dataFolderDirty) {
-                    show(
-                      t(
-                        dataFolderDirty
-                          ? "toast.data_folder_blocked_dirty"
-                          : "toast.settings_surface_blocked_dirty",
-                      ),
-                    );
-                    return;
-                  }
-                  setSettingsOpen(false);
-                  setDataFolderOpen(false);
-                  setGroupsOpen(true);
-                }}
-              />
-              <MenuActionItem
-                icon="folder"
-                label={t("app.menu.data_folder")}
-                onPress={() => {
-                  if (settingsDirty || groupsDirty) {
-                    show(
-                      t(
-                        groupsDirty
-                          ? "toast.groups_surface_blocked_dirty"
-                          : "toast.settings_surface_blocked_dirty",
-                      ),
-                    );
-                    return;
-                  }
-                  setSettingsOpen(false);
-                  setGroupsOpen(false);
-                  setDataFolderOpen(true);
-                }}
-              />
-            </DropdownPanel>
-          </View>
-        </View>
-
-        <View
-          style={styles.listHost}
-          {...(draggingGroupedVaultSourceGroupId ? bindDropTarget(LIST_ROOT_UNGROUP_DRAG_KEY) : {})}
-        >
+        <View style={styles.listHost}>
           <FlatList
             key={`vault-list-${viewMode}-${blockColumns}`}
             data={listData}
             extraData={`${draggingId}|${dragOverId}|${viewMode}|${searchActive}`}
             keyExtractor={(item) => item.key}
             renderItem={renderItem}
-            contentContainerStyle={[styles.list, listData.length === 0 ? styles.listEmpty : null]}
+            removeClippedSubviews={false}
+            contentContainerStyle={[
+              styles.list,
+              {
+                paddingTop: appHeaderHeight + MAIN_PAD_TOP,
+                paddingBottom: Math.max(insets.bottom, spacing.xxl),
+                paddingHorizontal: PAGE_PAD_H,
+              },
+              listData.length === 0 ? styles.listEmpty : null,
+            ]}
             scrollEnabled={!draggingId && !dragScrollLock}
             keyboardShouldPersistTaps="handled"
             keyboardDismissMode="none"
             ListHeaderComponent={
               <>
-                <View style={[styles.toolbar, { backgroundColor: colors.background }]}>
+                <View style={styles.toolbar}>
                   <View style={styles.toolbarTitleRow}>
                     <Icon name="encrypted" size={22} color={colors.onSurfaceVariant} />
                     <Text style={[typography.headline, styles.toolbarTitle]} numberOfLines={1}>
@@ -1910,6 +1117,130 @@ export function VaultListScreen() {
         </View>
       </CenteredPanel>
 
+      <StickyAppHeader
+        insetTop={insets.top}
+        background={colors.background}
+        onHeight={(height) => {
+          setMeasuredHeaderHeight((current) => (current === height ? current : height));
+        }}
+      >
+        <View style={styles.headerInner}>
+          <UprivWordmark height={24} style={styles.brand} />
+          <View style={styles.headerActions}>
+            {showHeaderMore ? (
+              <DropdownPanel
+                label={t("app.menu.more")}
+                heading={t("app.menu.more")}
+                align="right"
+                minWidth={220}
+                trigger={
+                  <IconButton
+                    label={t("app.menu.more")}
+                    icon="more-vertical"
+                    size={20}
+                    style={[styles.headerChromeBtn, { borderColor: colors.outlineVariant }]}
+                  />
+                }
+              >
+                <MenuActionItem
+                  icon="refresh"
+                  label={t("action.refresh")}
+                  disabled={refreshing}
+                  onPress={() => void reload()}
+                />
+                <MenuActionItem
+                  icon="terminal"
+                  label={t("app.menu.view_logs")}
+                  onPress={() => setLogsOpen(true)}
+                />
+                <MenuActionItem
+                  icon="help"
+                  label={t("app.menu.help")}
+                  onPress={() => setHelpOpen(true)}
+                />
+                <MenuActionItem
+                  icon="info"
+                  label={t("app.menu.system_info")}
+                  onPress={() => setSystemInfoOpen(true)}
+                />
+              </DropdownPanel>
+            ) : null}
+            <DropdownPanel
+              label={t("action.settings")}
+              heading={t("action.settings")}
+              align="right"
+              minWidth={220}
+              trigger={
+                <IconButton
+                  label={t("action.settings")}
+                  icon="settings"
+                  size={18}
+                  style={[styles.headerChromeBtn, { borderColor: colors.outlineVariant }]}
+                />
+              }
+            >
+              <MenuActionItem
+                icon="settings"
+                label={t("app.menu.system_settings")}
+                onPress={() => {
+                  if (dataFolderDirty || groupsDirty) {
+                    show(
+                      t(
+                        groupsDirty
+                          ? "toast.groups_surface_blocked_dirty"
+                          : "toast.data_folder_blocked_dirty",
+                      ),
+                    );
+                    return;
+                  }
+                  setDataFolderOpen(false);
+                  setGroupsOpen(false);
+                  setSettingsOpen(true);
+                }}
+              />
+              <MenuActionItem
+                icon="layers"
+                label={t("app.menu.groups")}
+                onPress={() => {
+                  if (settingsDirty || dataFolderDirty) {
+                    show(
+                      t(
+                        dataFolderDirty
+                          ? "toast.data_folder_blocked_dirty"
+                          : "toast.settings_surface_blocked_dirty",
+                      ),
+                    );
+                    return;
+                  }
+                  setSettingsOpen(false);
+                  setDataFolderOpen(false);
+                  setGroupsOpen(true);
+                }}
+              />
+              <MenuActionItem
+                icon="folder"
+                label={t("app.menu.data_folder")}
+                onPress={() => {
+                  if (settingsDirty || groupsDirty) {
+                    show(
+                      t(
+                        groupsDirty
+                          ? "toast.groups_surface_blocked_dirty"
+                          : "toast.settings_surface_blocked_dirty",
+                      ),
+                    );
+                    return;
+                  }
+                  setSettingsOpen(false);
+                  setGroupsOpen(false);
+                  setDataFolderOpen(true);
+                }}
+              />
+            </DropdownPanel>
+          </View>
+        </View>
+      </StickyAppHeader>
+
       <VaultNoteModal
         vault={noteVault}
         open={noteVaultId !== null}
@@ -1964,17 +1295,8 @@ export function VaultListScreen() {
         onVaultDelete={(vaultId) => {
           void handleVaultDelete(vaultId);
         }}
-        onSaved={(vaultId, patch) => {
-          const previous = vaults.find((vault) => vault.id === vaultId);
-          setVaults((prev) =>
-            prev.map((vault) => (vault.id === vaultId ? { ...vault, ...patch } : vault)),
-          );
-          if (shouldRecordVaultHidden(previous?.hidden, patch.hidden)) {
-            void logService.recordVaultHidden().catch(() => {
-              /* Logging must never block hide. */
-            });
-          }
-        }}
+        onPersistBusyChange={handlePersistBusyChange}
+        onSaved={handleVaultSettingsSaved}
       />
 
       <ExportVaultModal
@@ -2020,7 +1342,7 @@ export function VaultListScreen() {
               disabled={groupBusy}
               onPress={() => {
                 if (!settingsGroup || groupBusy) return;
-                const name = groupDraftName.trim();
+                const name = normalizeStoredName(groupDraftName);
                 const validation = validateDisplayName(name);
                 if (validation) {
                   setGroupFormError(displayNameMessage(validation));
@@ -2057,12 +1379,16 @@ export function VaultListScreen() {
             <FieldLabel>{t("vault.group.settings.rename")}</FieldLabel>
             <ThemedInput
               value={groupDraftName}
+              maxLength={VAULT_DISPLAY_NAME_MAX_LENGTH}
+              autoCorrect={false}
+              spellCheck={false}
               onChangeText={(value) => {
                 setGroupDraftName(value);
                 setGroupFormError(null);
               }}
               style={styles.groupInput}
             />
+            <DisplayNameFieldError name={groupDraftName} />
             {groupFormError ? (
               <Text style={[typography.caption, { color: colors.onErrorContainer }]}>
                 {groupFormError}
@@ -2201,7 +1527,7 @@ export function VaultListScreen() {
         }}
       />
 
-      <FileManagerScreen vault={fmVault} open={fmVault !== null} onClose={() => setFmVault(null)} />
+      <FileManagerLayer />
 
       <AppSettingsModal
         open={settingsOpen}
@@ -2247,99 +1573,7 @@ export function VaultListScreen() {
         groups={groups}
         initialDraft={createDraft}
         initialStep={createStep}
-        onCreate={(result: CreateVaultResult, password: string) => {
-          if (result.source === "import") {
-            throw new RpcError(
-              "not_implemented",
-              "Import and create-from-backup are not implemented",
-            );
-          }
-          if (
-            vaults.some((vault) => vault.id === result.vaultId) ||
-            isVaultPipelineBusy(result.vaultId)
-          ) {
-            throw new RpcError(
-              VAULT_ERROR_CODES.VAULT_ALREADY_EXISTS,
-              `vault already exists: ${result.vaultId}`,
-            );
-          }
-
-          const placeholder = buildCreatingVaultListItem(result);
-          pendingCreatesRef.current.set(result.vaultId, placeholder);
-          sessionWritesRef.current.set(result.vaultId, Date.now());
-          setVaults((current) => sortVaultsByOrder([...current, placeholder]));
-
-          const groupEffect = buildPendingCreateGroupEffect(
-            result.groupAssignment,
-            result.vaultId,
-            groupsRef.current,
-          );
-          if (groupEffect) {
-            pendingCreateGroupsRef.current.set(result.vaultId, groupEffect);
-            setGroups((current) => applyPendingCreateGroupEffect(current, groupEffect));
-          }
-
-          const started = lifecycle.startCreatePipeline(
-            result.vaultId,
-            async () => {
-              await vaultService.createVault({
-                password,
-                unlockPreset: result.unlockPreset,
-                settings: result.settings,
-              });
-            },
-            {
-              onComplete: () => {
-                sessionWritesRef.current.set(result.vaultId, Date.now());
-                if (shouldRecordVaultHidden(false, result.settings.vault.hidden)) {
-                  void logService.recordVaultHidden().catch(() => {
-                    /* Logging must never block hide. */
-                  });
-                }
-                void (async () => {
-                  const assignment = result.groupAssignment;
-                  if (assignment.kind !== "none") {
-                    try {
-                      await handleCommitGroupAssignment(result.vaultId, assignment);
-                    } catch (error) {
-                      show(t(mobileErrorI18nKey(error, "error.unexpected")));
-                    }
-                  }
-                  const listed = await reload();
-                  if (listed.some((row) => row.id === result.vaultId)) {
-                    pendingCreatesRef.current.delete(result.vaultId);
-                    pendingCreateGroupsRef.current.delete(result.vaultId);
-                  }
-                })();
-              },
-              onError: () => {
-                const pendingEffect = pendingCreateGroupsRef.current.get(result.vaultId);
-                pendingCreatesRef.current.delete(result.vaultId);
-                pendingCreateGroupsRef.current.delete(result.vaultId);
-                sessionWritesRef.current.delete(result.vaultId);
-                setVaults((current) => current.filter((vault) => vault.id !== result.vaultId));
-                if (pendingEffect) {
-                  setGroups((current) => rollbackPendingCreateGroupEffect(current, pendingEffect));
-                }
-              },
-            },
-          );
-
-          if (!started) {
-            const pendingEffect = pendingCreateGroupsRef.current.get(result.vaultId);
-            pendingCreatesRef.current.delete(result.vaultId);
-            pendingCreateGroupsRef.current.delete(result.vaultId);
-            sessionWritesRef.current.delete(result.vaultId);
-            setVaults((current) => current.filter((vault) => vault.id !== result.vaultId));
-            if (pendingEffect) {
-              setGroups((current) => rollbackPendingCreateGroupEffect(current, pendingEffect));
-            }
-            throw new RpcError(
-              VAULT_ERROR_CODES.VAULT_ALREADY_EXISTS,
-              `vault already exists: ${result.vaultId}`,
-            );
-          }
-        }}
+        onCreate={handleCreateVault}
       />
 
       <Toast message={message} onDismiss={dismiss} />
@@ -2381,14 +1615,24 @@ export function VaultListScreen() {
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
+  /** After the list in the tree so it covers rows without Android `elevation` (that draws a seam). */
   header: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    zIndex: 20,
+  },
+  /** Desktop `VaultListHeader` inner column. */
+  headerInner: {
+    width: "100%",
+    maxWidth: MAX_WIDTH_VAULT_LIST,
+    alignSelf: "center",
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    paddingHorizontal: spacing.lg,
-    paddingTop: spacing.md,
-    paddingBottom: spacing.sm,
-    minHeight: touchMin + spacing.md,
+    paddingHorizontal: PAGE_PAD_H,
+    paddingVertical: spacing.lg,
     gap: spacing.sm,
   },
   brand: { flexShrink: 0, marginRight: spacing.sm },
@@ -2415,10 +1659,8 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.md,
-    minHeight: CONTROL_HEIGHT_MD,
-    paddingHorizontal: spacing.lg,
-    paddingTop: spacing.xl,
-    paddingBottom: spacing.md,
+    height: CONTROL_HEIGHT_MD,
+    marginBottom: spacing.xl,
     overflow: "hidden",
   },
   toolbarTitleRow: {
@@ -2433,8 +1675,9 @@ const styles = StyleSheet.create({
   toolbarTitle: {
     flexShrink: 1,
     minWidth: 0,
+    fontSize: 20,
     fontWeight: "600",
-    lineHeight: 22,
+    lineHeight: 20,
     includeFontPadding: false,
     textAlignVertical: "center",
   },
@@ -2470,12 +1713,15 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     flexShrink: 0,
   },
-  list: { padding: spacing.lg, gap: spacing.sm, overflow: "visible" },
-  listHost: { flex: 1 },
-  listEmpty: { flexGrow: 1, justifyContent: "center" },
+  list: {
+    gap: spacing.sm,
+    overflow: "visible",
+  },
+  listHost: { flex: 1, overflow: "visible" },
+  /** Fill leftover space; do not center — that drops the vaults header. */
+  listEmpty: { flexGrow: 1 },
   invalidBanner: {
-    marginHorizontal: spacing.lg,
-    marginBottom: spacing.sm,
+    marginBottom: spacing.md,
     padding: spacing.md,
     borderRadius: radii.md,
     borderWidth: 1,
@@ -2494,9 +1740,12 @@ const styles = StyleSheet.create({
   },
   groupBox: {
     position: "relative",
+    alignSelf: "stretch",
+    width: "100%",
+    minWidth: 0,
     borderRadius: radii.md,
     marginBottom: spacing.sm,
-    ...vaultRowShadow,
+    overflow: "visible",
   },
   groupBoxInCell: {
     marginBottom: 0,
@@ -2510,18 +1759,20 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
     backgroundColor: "transparent",
   },
+  groupHeaderSide: {
+    justifyContent: "center",
+  },
   groupChevronWrap: {
     width: 22,
     height: 22,
     alignItems: "center",
     justifyContent: "center",
   },
-  groupChevronCollapsed: {
-    transform: [{ rotate: "-90deg" }],
-  },
   groupGroupedVaults: {
-    paddingHorizontal: spacing.sm,
-    paddingBottom: spacing.sm,
+    minWidth: 0,
+    paddingHorizontal: spacing.md,
+    paddingBottom: spacing.md,
+    paddingTop: spacing.xs,
     gap: spacing.md,
   },
   ungroupDrop: {
@@ -2562,8 +1813,8 @@ const styles = StyleSheet.create({
   },
   busyHint: {
     position: "absolute",
-    left: spacing.lg,
-    right: spacing.lg,
+    left: PAGE_PAD_H,
+    right: PAGE_PAD_H,
     bottom: spacing.lg,
     zIndex: 30,
   },

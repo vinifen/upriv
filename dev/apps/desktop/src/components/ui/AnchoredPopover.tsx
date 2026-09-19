@@ -9,7 +9,13 @@ import {
   type RefObject,
 } from "react";
 import { createPortal } from "react-dom";
-import { isTriggerOccluded, placeAnchoredMenu } from "@upriv/shared";
+import {
+  isTriggerOccluded,
+  MODAL_CLOSE_MS,
+  MODAL_OPEN_MS,
+  MODAL_SCALE_FROM,
+  placeAnchoredMenu,
+} from "@upriv/shared";
 
 /** Below Modal (`z-[100]`), above vault/group cards. */
 const ANCHORED_MENU_Z_INDEX = 90;
@@ -95,12 +101,46 @@ export function AnchoredPopover({
   onCloseRef.current = onClose;
   const catcherStart = useRef<{ x: number; y: number } | null>(null);
   const [style, setStyle] = useState<CSSProperties | null>(null);
+  const [mounted, setMounted] = useState(open);
+  const [visible, setVisible] = useState(false);
 
-  useLayoutEffect(() => {
-    if (!open) {
+  useEffect(() => {
+    const reduce =
+      typeof window !== "undefined" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+    if (open) {
+      setMounted(true);
+      setVisible(false);
+      if (reduce) {
+        setVisible(true);
+        return;
+      }
+      let inner = 0;
+      const outer = requestAnimationFrame(() => {
+        inner = requestAnimationFrame(() => setVisible(true));
+      });
+      return () => {
+        cancelAnimationFrame(outer);
+        cancelAnimationFrame(inner);
+      };
+    }
+
+    setVisible(false);
+    if (reduce) {
+      setMounted(false);
       setStyle(null);
       return;
     }
+    const timer = window.setTimeout(() => {
+      setMounted(false);
+      setStyle(null);
+    }, MODAL_CLOSE_MS);
+    return () => window.clearTimeout(timer);
+  }, [open]);
+
+  useLayoutEffect(() => {
+    if (!mounted || !open) return;
 
     const update = () => {
       const el = triggerRef.current;
@@ -178,7 +218,7 @@ export function AnchoredPopover({
       document.removeEventListener("scroll", onScroll, true);
       ro?.disconnect();
     };
-  }, [align, gap, matchTriggerWidth, open, triggerRef, zIndex]);
+  }, [align, gap, matchTriggerWidth, mounted, open, triggerRef, zIndex]);
 
   useEffect(() => {
     if (!open) return;
@@ -212,7 +252,9 @@ export function AnchoredPopover({
     if (dx * dx + dy * dy <= 100) onCloseRef.current();
   };
 
-  if (!open || typeof document === "undefined") return null;
+  if (!mounted || typeof document === "undefined") return null;
+
+  const motionMs = visible ? MODAL_OPEN_MS : MODAL_CLOSE_MS;
 
   return createPortal(
     <div
@@ -228,7 +270,8 @@ export function AnchoredPopover({
         style={{
           position: "absolute",
           inset: 0,
-          pointerEvents: "auto",
+          // Release the catcher while exiting so the fade-out does not block the page.
+          pointerEvents: open && visible ? "auto" : "none",
         }}
         onPointerDown={(event) => {
           event.stopPropagation();
@@ -247,10 +290,16 @@ export function AnchoredPopover({
           zIndex: 1,
           ...(style ?? { top: 0, left: 0 }),
           visibility: style ? "visible" : "hidden",
-          pointerEvents: style ? "auto" : "none",
+          pointerEvents: style && visible ? "auto" : "none",
+          opacity: visible ? 1 : 0,
+          transform: visible ? "scale(1)" : `scale(${MODAL_SCALE_FROM})`,
+          transformOrigin: "top center",
+          transitionProperty: "opacity, transform",
+          transitionDuration: `${motionMs}ms`,
+          transitionTimingFunction: "ease-out",
           ...styleProp,
         }}
-        className={className}
+        className={[className, "motion-reduce:!transition-none"].filter(Boolean).join(" ")}
       >
         {children}
       </div>

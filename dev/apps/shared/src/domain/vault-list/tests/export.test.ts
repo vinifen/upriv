@@ -17,6 +17,10 @@ describe("vaultExportFilename", () => {
     expect(vaultExportFilename("  Vault  ", "contents_zip")).toBe("Vault.zip");
   });
 
+  it("collapses extra spaces in the display name", () => {
+    expect(vaultExportFilename("My    notes", "contents_zip")).toBe("My notes.zip");
+  });
+
   it("replaces illegal path characters instead of dropping the name", () => {
     expect(vaultExportFilename("a/b:c", "seven_zip")).toBe("a_b_c.7z");
     expect(vaultExportFilename("Notes: 2026", "contents_zip")).toBe("Notes_ 2026.zip");

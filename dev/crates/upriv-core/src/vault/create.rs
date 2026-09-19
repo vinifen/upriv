@@ -7,7 +7,9 @@ use crate::contents::{content_hash_hex, create_seeded_store, KdfUnlockPreset};
 use crate::error::{Result, UprivError};
 use crate::logging::{log_event, LogLevel};
 use crate::paths::VaultRoot;
-use crate::session::{with_unlock_lock, with_vault_dir_lock};
+use crate::session::{
+    with_unlock_lock, with_vault_dir_lock, with_vault_registry_lock, PreparingGuard,
+};
 
 use super::persistence::{save_vault_persistence, VaultPersistence};
 
@@ -28,16 +30,24 @@ pub fn create_vault(
     // so list does not skip the row (`[vault].id` must match the directory name).
     let id = config.vault.id.trim().to_string();
     config.vault.id = id.clone();
+    config.vault.display_name = crate::config::vault_config::normalize_and_validate_display_name(
+        &config.vault.display_name,
+    )?;
     let dest = root.vault_dir(&id)?;
     std::fs::create_dir_all(root.vaults_dir())?;
-    with_vault_dir_lock(&dest, || {
-        match std::fs::create_dir(&dest) {
-            Ok(()) => {}
+    // Registry lock only around `create_dir` so Argon2 does not block rename.
+    with_vault_registry_lock(|| {
+        with_vault_dir_lock(&dest, || match std::fs::create_dir(&dest) {
+            Ok(()) => Ok(()),
             Err(error) if error.kind() == ErrorKind::AlreadyExists => {
-                return Err(UprivError::VaultAlreadyExists(dest.clone()));
+                Err(UprivError::VaultAlreadyExists(dest.clone()))
             }
-            Err(error) => return Err(error.into()),
-        }
+            Err(error) => Err(error.into()),
+        })
+    })?;
+    // After mkdir so `rename_vault` of this id refuses during Argon2 seed.
+    let _preparing = PreparingGuard::enter(&dest)?;
+    with_vault_dir_lock(&dest, || {
         let created: Result<()> = (|| {
             save_vault_config(&dest, &config)?;
             let contents = dest.join("contents");

@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState, type MutableRefObject } from "react";
 import {
   isVaultCredentialChallengeI18nKey,
   LOADING_BUDGET_MS,
@@ -16,6 +16,7 @@ import {
   type VaultPipelineKind,
   type VaultSession,
   type VaultSettingsConfig,
+  scheduleOpenFileManagerIfIdle,
 } from "@upriv/shared";
 import { useAppSettingsContext } from "@/features/system/settings";
 import { useTranslation, type I18nKey } from "@/i18n";
@@ -46,6 +47,10 @@ interface UseVaultLifecycleOptions {
   dismissToast: () => void;
   /** Close in-app file manager when recovery discards a vault session. */
   onDiscardWorkspace?: (vaultId: string) => void;
+  /** Open the in-app file manager after a successful unlock (settings-gated). */
+  onOpenFileManager?: (vault: VaultListItem) => void;
+  /** Vault ids whose settings persist is in flight — Open/Unlock must wait. */
+  settingsPersistVaultIdsRef?: MutableRefObject<Set<string>>;
 }
 
 export function useVaultLifecycle({
@@ -56,6 +61,8 @@ export function useVaultLifecycle({
   showToast,
   dismissToast,
   onDiscardWorkspace,
+  onOpenFileManager,
+  settingsPersistVaultIdsRef,
 }: UseVaultLifecycleOptions) {
   const { t } = useTranslation();
   const { settings, patchSettings, getSettingsSnapshot, reportVaultRootIntegrityFailure } =
@@ -203,6 +210,7 @@ export function useVaultLifecycle({
 
   const startOpenPipeline = useCallback(
     (vaultId: string): boolean => {
+      if (settingsPersistVaultIdsRef?.current.has(vaultId)) return false;
       if (pipeline.isVaultPipelineBusy(vaultId)) return false;
       closingHold.cancel(vaultId);
       pipelineBackgroundRef.current = false;
@@ -227,6 +235,15 @@ export function useVaultLifecycle({
           setTypedCredential((current) => (current?.vaultId === vaultId ? null : current));
           if (lifecycleRequestRef.current?.vaultId === vaultId) setLifecycleRequest(null);
           finishOpenVault(vaultId);
+          scheduleOpenFileManagerIfIdle(
+            getSettingsSnapshot().ui.lifecycle_open_file_manager_on_open === true,
+            () => {
+              const vault = vaultsRef.current.find((item) => item.id === vaultId);
+              if (!vault || !onOpenFileManager) return;
+              // Force open session — list state may still be mid-commit after finishOpenVault.
+              onOpenFileManager({ ...vault, session: "open" });
+            },
+          );
           const retainGen = bumpOpenRetainGen(vaultId);
           void vaultService
             .getSettings(vaultId)
@@ -297,12 +314,15 @@ export function useVaultLifecycle({
       clearCredentialVerify,
       closingHold,
       finishOpenVault,
+      getSettingsSnapshot,
       handlePipelineError,
       isCredentialVerifying,
       lifecycleService,
       notifyPipelineComplete,
+      onOpenFileManager,
       pipeline,
       setLifecycleRequest,
+      settingsPersistVaultIdsRef,
       showToast,
       t,
       vaultService,
@@ -445,6 +465,7 @@ export function useVaultLifecycle({
         return;
       }
       if (pipeline.isVaultPipelineBusy(vaultId)) return;
+      if (intent === "unlock" && settingsPersistVaultIdsRef?.current.has(vaultId)) return;
       if (intent === "close" && closingHold.holdIds.includes(vaultId)) {
         showToast(t("toast.pipeline_busy"));
         return;
@@ -537,6 +558,7 @@ export function useVaultLifecycle({
       setLifecycleRequest,
       settings.app.upriv_root_path,
       settings.app.vault_root_mode,
+      settingsPersistVaultIdsRef,
       showToast,
       startClosePipeline,
       t,

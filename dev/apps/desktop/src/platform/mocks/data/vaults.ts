@@ -148,6 +148,9 @@ export const MOCK_VAULTS: VaultListItem[] = [
 
 /** Wizard-created vaults live in React state, not `MOCK_VAULTS`. */
 const extraMockVaultIds = new Set<string>();
+/** Seed vaults whose folder id was remapped by mock `rename`. */
+const suppressedSeedVaultIds = new Set<string>();
+const remappedSeedVaults: VaultListItem[] = [];
 
 export function registerMockVaultId(id: string): void {
   const trimmed = id.trim();
@@ -158,10 +161,41 @@ export function unregisterMockVaultId(id: string): void {
   extraMockVaultIds.delete(id.trim());
 }
 
+export function suppressMockSeedVaultId(id: string): void {
+  const trimmed = id.trim();
+  if (trimmed) suppressedSeedVaultIds.add(trimmed);
+}
+
+export function removeRemappedMockSeedVault(id: string): void {
+  const idx = remappedSeedVaults.findIndex((row) => row.id === id.trim());
+  if (idx >= 0) remappedSeedVaults.splice(idx, 1);
+}
+
+export function registerRemappedMockSeedVault(vault: VaultListItem): void {
+  removeRemappedMockSeedVault(vault.id);
+  remappedSeedVaults.push(structuredClone(vault));
+  registerMockVaultId(vault.id);
+}
+
+export function listMockVaultSeedRows(): VaultListItem[] {
+  return [
+    ...MOCK_VAULTS.filter((vault) => !suppressedSeedVaultIds.has(vault.id)),
+    ...remappedSeedVaults,
+  ].map((vault) => structuredClone(vault));
+}
+
 export function knownMockVaultIds(): Set<string> {
-  return new Set([...MOCK_VAULTS.map((vault) => vault.id), ...extraMockVaultIds]);
+  return new Set([
+    ...MOCK_VAULTS.filter((vault) => !suppressedSeedVaultIds.has(vault.id)).map(
+      (vault) => vault.id,
+    ),
+    ...remappedSeedVaults.map((vault) => vault.id),
+    ...extraMockVaultIds,
+  ]);
 }
 
 export function resetMockVaultIds(): void {
   extraMockVaultIds.clear();
+  suppressedSeedVaultIds.clear();
+  remappedSeedVaults.length = 0;
 }

@@ -1,4 +1,5 @@
-import { useRef } from "react";
+import { VAULT_LIST_DRAG_THRESHOLD_PX } from "@upriv/shared";
+import { useRef, type PointerEvent } from "react";
 import { Icon } from "@/components/icons";
 import { useTranslation } from "@/i18n";
 
@@ -10,6 +11,12 @@ interface VaultDragHandleProps {
   onPointerDragMove: (clientX: number, clientY: number) => void;
   onPointerDragEnd: (clientX: number, clientY: number) => void;
   onPointerDragCancel: () => void;
+}
+
+function movedPastThreshold(origin: { x: number; y: number }, x: number, y: number): boolean {
+  const dx = x - origin.x;
+  const dy = y - origin.y;
+  return dx * dx + dy * dy >= VAULT_LIST_DRAG_THRESHOLD_PX * VAULT_LIST_DRAG_THRESHOLD_PX;
 }
 
 /** Grip — pointer drag (mobile parity; HTML5 DnD is unreliable in Electron nested groups). */
@@ -24,6 +31,7 @@ export function VaultDragHandle({
 }: VaultDragHandleProps) {
   const { t } = useTranslation();
   const handleLabel = label ?? t("action.drag_reorder");
+  const originRef = useRef<{ x: number; y: number } | null>(null);
   const draggingRef = useRef(false);
   const callbacksRef = useRef({
     dropKey,
@@ -38,6 +46,12 @@ export function VaultDragHandle({
     onPointerDragMove,
     onPointerDragEnd,
     onPointerDragCancel,
+  };
+
+  const releasePointer = (event: PointerEvent<HTMLDivElement>) => {
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
   };
 
   return (
@@ -59,34 +73,39 @@ export function VaultDragHandle({
         if (disabled || event.button !== 0) return;
         event.preventDefault();
         event.stopPropagation();
-        draggingRef.current = true;
+        originRef.current = { x: event.clientX, y: event.clientY };
+        draggingRef.current = false;
         event.currentTarget.setPointerCapture(event.pointerId);
-        callbacksRef.current.onPointerDragStart(
-          callbacksRef.current.dropKey,
-          event.clientX,
-          event.clientY,
-        );
       }}
       onPointerMove={(event) => {
-        if (!draggingRef.current) return;
+        const origin = originRef.current;
+        if (!origin) return;
         event.preventDefault();
+        if (!draggingRef.current) {
+          if (!movedPastThreshold(origin, event.clientX, event.clientY)) return;
+          draggingRef.current = true;
+          callbacksRef.current.onPointerDragStart(
+            callbacksRef.current.dropKey,
+            event.clientX,
+            event.clientY,
+          );
+        }
         callbacksRef.current.onPointerDragMove(event.clientX, event.clientY);
       }}
       onPointerUp={(event) => {
+        if (!originRef.current) return;
+        originRef.current = null;
+        event.preventDefault();
+        releasePointer(event);
         if (!draggingRef.current) return;
         draggingRef.current = false;
-        event.preventDefault();
-        if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-          event.currentTarget.releasePointerCapture(event.pointerId);
-        }
         callbacksRef.current.onPointerDragEnd(event.clientX, event.clientY);
       }}
       onPointerCancel={(event) => {
+        originRef.current = null;
+        releasePointer(event);
         if (!draggingRef.current) return;
         draggingRef.current = false;
-        if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-          event.currentTarget.releasePointerCapture(event.pointerId);
-        }
         callbacksRef.current.onPointerDragCancel();
       }}
       onClick={(event) => event.stopPropagation()}

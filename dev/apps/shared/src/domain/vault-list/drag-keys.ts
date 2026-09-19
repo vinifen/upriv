@@ -84,6 +84,8 @@ export function pickListDropTarget(
     const sameGroup = sourceGroupId && candidates.find((key) => key === `group:${sourceGroupId}`);
     if (sameGroup) return sameGroup;
 
+    // Only when an explicit list-level ungroup target is under the pointer —
+    // never a wrapper around the groups themselves (gaps would steal membership).
     if (candidates.includes(LIST_ROOT_UNGROUP_DRAG_KEY)) {
       return LIST_ROOT_UNGROUP_DRAG_KEY;
     }

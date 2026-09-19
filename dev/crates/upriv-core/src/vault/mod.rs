@@ -5,6 +5,7 @@
 mod create;
 mod open_close;
 mod persistence;
+mod rename;
 
 use std::path::PathBuf;
 
@@ -17,6 +18,7 @@ use crate::session::is_vault_open_at;
 pub use create::create_vault;
 pub use open_close::{close_vault, open_vault};
 pub use persistence::{load_vault_persistence, VaultPersistence};
+pub use rename::{rename_vault, VaultRenameResult};
 
 /// Wire DTO for `vault_list`.
 #[derive(Debug, Clone, PartialEq, Eq)]

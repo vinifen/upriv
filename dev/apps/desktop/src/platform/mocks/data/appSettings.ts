@@ -21,7 +21,10 @@ export const DEFAULT_APP_SETTINGS: AppSettingsConfig = {
     vault_list_show_drag: true,
     vault_list_allow_drag_into_group: true,
     file_manager_dock_expanded: false,
+    file_manager_tree_split_percent: 20,
     lifecycle_close_modal_on_submit: false,
+    lifecycle_open_file_manager_on_open: false,
+    file_manager_confirm_delete: true,
   },
   logging: {
     enabled: true,

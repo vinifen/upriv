@@ -38,9 +38,15 @@ export {
   uiToSecurityMode,
   VAULT_SETTINGS_SECTIONS,
   vaultSettingsEqual,
+  vaultSettingsEqualIgnoringIdentity,
   vaultSettingsSectionsForStorage,
 } from "./types";
-export { vaultSettingsToListPatch } from "./listPatch";
+export {
+  vaultSettingsToListPatch,
+  vaultSettingsIdentityListPatch,
+  applyVaultSettingsListPatch,
+  remapVaultIdInGroups,
+} from "./listPatch";
 export { rebaseQuietLockedVaultSettings } from "./rebaseQuiet";
 export {
   VAULT_SETTINGS_AREA_ICON,

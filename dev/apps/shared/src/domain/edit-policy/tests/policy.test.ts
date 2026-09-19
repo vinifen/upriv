@@ -37,8 +37,9 @@ describe("edit-policy.json contract", () => {
         VAULT_CONFIG_EDIT_LOCKED_I18N[target as keyof typeof VAULT_CONFIG_EDIT_LOCKED_I18N],
       ).toBe(key);
     }
-    // `vault.id` is quiet in Rust but not a settings form field — no lockedI18n.
-    expect(RUST_CONFIG_SAVE_QUIET_TARGETS).toContain("vault.id");
+    // `vault.id` is not a settings form field — no lockedI18n. Identity uses `vault_rename`.
+    expect(RUST_CONFIG_SAVE_QUIET_TARGETS).not.toContain("vault.id");
+    expect(RUST_CONFIG_SAVE_QUIET_TARGETS).not.toContain("vault.display_name");
     expect(vaultConfigEditLockedI18nKey("vault.id")).toBeUndefined();
     expect(vaultConfigEditLockedI18nKey("action.change_password")).toBe(
       "vault.change_password.vault_open",
@@ -72,6 +73,24 @@ describe("configEditGateAllows", () => {
     expect(configEditGateAllows("vault_closed", { vaultStatus: "recovery" })).toBe(false);
   });
 
+  it("vault_closed_or_recovery allows closed and recovery only", () => {
+    expect(configEditGateAllows("vault_closed_or_recovery", { vaultStatus: "closed" })).toBe(true);
+    expect(configEditGateAllows("vault_closed_or_recovery", { vaultStatus: "recovery" })).toBe(
+      true,
+    );
+    expect(configEditGateAllows("vault_closed_or_recovery", { vaultStatus: "creating" })).toBe(
+      false,
+    );
+    expect(configEditGateAllows("vault_closed_or_recovery", { vaultStatus: "queued" })).toBe(false);
+    expect(configEditGateAllows("vault_closed_or_recovery", { vaultStatus: "open" })).toBe(false);
+    expect(configEditGateAllows("vault_closed_or_recovery", { vaultStatus: "opening" })).toBe(
+      false,
+    );
+    expect(configEditGateAllows("vault_closed_or_recovery", { vaultStatus: "closing" })).toBe(
+      false,
+    );
+  });
+
   it("root_idle / no_open_session match list helpers", () => {
     const closed = vaultRowFixture({ id: "a" });
     const open = vaultRowFixture({ id: "b", session: "open" });
@@ -90,10 +109,24 @@ describe("vaultConfigEditAllowed", () => {
     expect(vaultConfigEditAllowed("action.change_password", open)).toBe(false);
   });
 
-  it("recovery allows quiet edits but not rewrap", () => {
+  it("recovery allows quiet edits and rename, but not rewrap", () => {
     const recovery = vaultRowFixture({ id: "notes", session: "recovery" });
     expect(isVaultQuiet(recovery)).toBe(true);
     expect(vaultConfigEditAllowed("storage.mode", recovery)).toBe(true);
+    expect(vaultConfigEditAllowed("vault.display_name", recovery)).toBe(true);
     expect(vaultConfigEditAllowed("action.change_kdf", recovery)).toBe(false);
+  });
+
+  it("creating and queued block rename, not quiet storage", () => {
+    const closed = vaultRowFixture({ id: "notes" });
+    expect(
+      vaultConfigEditAllowed("vault.display_name", closed, { creatingVaultIds: ["notes"] }),
+    ).toBe(false);
+    expect(vaultConfigEditAllowed("storage.mode", closed, { creatingVaultIds: ["notes"] })).toBe(
+      true,
+    );
+    expect(
+      vaultConfigEditAllowed("vault.display_name", closed, { queuedVaultIds: ["notes"] }),
+    ).toBe(false);
   });
 });

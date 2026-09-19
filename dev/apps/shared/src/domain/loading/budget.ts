@@ -38,6 +38,11 @@ export const LOADING_BUDGET_MS = {
    * Same family as `vaultRewrap`. Keep invoke in sync when the export RPC lands.
    */
   vaultExport: 600_000,
+  /**
+   * Deep vault rename (`vault_rename`): folder + `[vault].id` + groups/`last_opened`
+   * remap. Metadata-heavy, but keep a 2 min ceiling so a stuck rename cannot hang.
+   */
+  vaultRename: 120_000,
   /** Generic modal / list work. */
   default: 120_000,
   /** Settings Save / workspace path persist — keep in sync with `app_settings_save`. */

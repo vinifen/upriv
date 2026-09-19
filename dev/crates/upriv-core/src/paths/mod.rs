@@ -13,6 +13,7 @@ mod distribution;
 pub(crate) mod fs_env;
 mod init;
 mod resolve;
+mod slug_alloc;
 mod workspace;
 
 pub use distribution::{
@@ -38,6 +39,7 @@ pub use resolve::{
     write_vault_root_alias, write_vault_root_alias_for_root, ResolveVaultRoot,
     ResolveVaultRootOptions, VaultRootAlias, VaultRootMode, VaultRootSource, VAULT_ROOT_ALIAS_FILE,
 };
+pub use slug_alloc::display_name_to_vault_id;
 pub use workspace::{
     is_absolute_filesystem_path, is_reserved_upriv_workspace_path, needs_workspace_setup_on_open,
     normalize_mount_workspace_path, path_is_under_reserved_upriv_tree, resolve_mount_parent_path,
@@ -274,27 +276,33 @@ pub(crate) fn vault_id_component(name: &str) -> Result<&str> {
     Ok(trimmed)
 }
 
+/// Trim and collapse Unicode whitespace to a single ASCII space.
+/// Persist this form for vault names and group titles only.
+pub(crate) fn normalize_stored_name(raw: &str) -> String {
+    raw.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 /// Display-name leaf fallback for workspace mount folders.
-pub(crate) fn sanitize_display_leaf(name: &str) -> &str {
-    let trimmed = name.trim();
-    if trimmed.is_empty()
-        || trimmed == "."
-        || trimmed == ".."
-        || trimmed.contains('/')
-        || trimmed.contains('\\')
-        || trimmed.contains('<')
-        || trimmed.contains('>')
-        || trimmed.contains(':')
-        || trimmed.contains('"')
-        || trimmed.contains('|')
-        || trimmed.contains('?')
-        || trimmed.contains('*')
-        || trimmed.chars().any(|c| c.is_control())
-        || is_windows_reserved_device_name(trimmed)
+pub(crate) fn sanitize_display_leaf(name: &str) -> String {
+    let normalized = normalize_stored_name(name);
+    if normalized.is_empty()
+        || normalized == "."
+        || normalized == ".."
+        || normalized.contains('/')
+        || normalized.contains('\\')
+        || normalized.contains('<')
+        || normalized.contains('>')
+        || normalized.contains(':')
+        || normalized.contains('"')
+        || normalized.contains('|')
+        || normalized.contains('?')
+        || normalized.contains('*')
+        || normalized.chars().any(|c| c.is_control())
+        || is_windows_reserved_device_name(&normalized)
     {
-        "_"
+        "_".to_string()
     } else {
-        trimmed
+        normalized
     }
 }
 
@@ -302,8 +310,7 @@ pub(crate) fn sanitize_display_leaf(name: &str) -> &str {
 /// joins and must fail closed, this keeps the user's name recognizable by
 /// replacing illegal characters (`Notes: 2026` → `Notes_ 2026`).
 fn sanitize_filename_base(display_name: &str) -> String {
-    let replaced: String = display_name
-        .trim()
+    let replaced: String = normalize_stored_name(display_name)
         .chars()
         .map(|c| {
             if matches!(c, '/' | '\\' | '<' | '>' | ':' | '"' | '|' | '?' | '*') || c.is_control() {
@@ -313,15 +320,15 @@ fn sanitize_filename_base(display_name: &str) -> String {
             }
         })
         .collect();
-    let trimmed = replaced.trim();
+    let trimmed = normalize_stored_name(&replaced);
     if trimmed.is_empty()
         || trimmed == "."
         || trimmed == ".."
-        || is_windows_reserved_device_name(trimmed)
+        || is_windows_reserved_device_name(&trimmed)
     {
         return "vault".to_string();
     }
-    trimmed.to_string()
+    trimmed
 }
 
 /// Windows device names (`CON`, `NUL`, `COM1`, …) including `name.ext` forms.
@@ -448,6 +455,11 @@ mod tests {
         assert!(vault_id_component("a*b").is_err());
         assert_eq!(vault_id_component("ok-name").unwrap(), "ok-name");
         assert_eq!(sanitize_display_leaf("CON"), "_");
+        assert_eq!(sanitize_display_leaf("A    B"), "A B");
+        assert_eq!(
+            normalize_stored_name("  TEST    ASDF   ASD  "),
+            "TEST ASDF ASD"
+        );
     }
 
     #[test]
@@ -475,6 +487,10 @@ mod tests {
         assert_eq!(
             VaultRoot::vault_suggested_export_filename("CON", false),
             "vault.zip"
+        );
+        assert_eq!(
+            VaultRoot::vault_suggested_export_filename("My    notes", false),
+            "My notes.zip"
         );
     }
 

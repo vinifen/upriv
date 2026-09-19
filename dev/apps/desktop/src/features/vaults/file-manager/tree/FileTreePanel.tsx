@@ -9,7 +9,20 @@ import {
 import { Icon } from "@/components/icons";
 import { useTranslation } from "@/i18n";
 import { useErrorToast } from "@/hooks/useErrorToast";
-import { getParentPath, findNode, isDescendantPath, joinPath } from "@upriv/shared";
+import {
+  findNode,
+  getParentPath,
+  isDescendantPath,
+  isPathDirty,
+  joinPath,
+  liveFileNameError,
+  fileNameErrorI18nKey,
+  FILE_MANAGER_LONG_PRESS_MS,
+  FILE_MANAGER_LONG_PRESS_MOVE_PX,
+  LOGICAL_FILE_NAME_MAX_LENGTH,
+  renameBasenameSelection,
+  sessionPathKind,
+} from "@upriv/shared";
 import type { FileTreeNode } from "@upriv/shared";
 import { filesFromDataTransfer, filesFromFileInput, isOsFileDrag } from "../lib/osFileDrop";
 import type { FileManagerApi } from "../hooks/useVaultFileManager";
@@ -41,17 +54,22 @@ function importTargetPath(fm: FileManagerApi): string {
 }
 
 function FileTreeRow({ node, path, depth, fm }: FileTreeRowProps) {
+  const { t } = useTranslation();
   const { showError } = useErrorToast();
   const { workspace, dispatch, commitRename, movePath, importFiles } = fm;
   const isFolder = node.type === "folder";
   const isExpanded = isFolder && workspace.expandedPaths.includes(path);
-  const isSelected = workspace.selectedPath === path;
+  const isSelected = workspace.activeTabPath === path;
+  const isDirty = !isFolder && isPathDirty(workspace, path);
+  const pathKind = sessionPathKind(workspace, path);
   const isRenaming = workspace.renamingPath === path;
   const isDragging = workspace.dragSourcePath === path;
   const isDropTarget = workspace.dropTargetPath === path && isFolder;
   const isRoot = path === "/";
   const longPressRef = useRef<number | null>(null);
+  const pressOriginRef = useRef<{ x: number; y: number } | null>(null);
   const [renameValue, setRenameValue] = useState(node.name);
+  const renameError = isRenaming ? liveFileNameError(renameValue) : null;
 
   useEffect(() => {
     if (isRenaming) setRenameValue(node.name);
@@ -68,7 +86,7 @@ function FileTreeRow({ node, path, depth, fm }: FileTreeRowProps) {
       dispatch({ type: "toggle_folder", path });
       return;
     }
-    dispatch({ type: "open_file", path });
+    fm.openFile(path);
   };
 
   const handleContextMenu = (event: MouseEvent) => {
@@ -77,17 +95,30 @@ function FileTreeRow({ node, path, depth, fm }: FileTreeRowProps) {
     openContextMenu(event.clientX, event.clientY);
   };
 
-  const handlePointerDown = (event: React.PointerEvent) => {
-    if (event.pointerType !== "touch") return;
-    longPressRef.current = window.setTimeout(() => {
-      openContextMenu(event.clientX, event.clientY);
-    }, 500);
-  };
-
   const clearLongPress = () => {
+    pressOriginRef.current = null;
     if (longPressRef.current) {
       window.clearTimeout(longPressRef.current);
       longPressRef.current = null;
+    }
+  };
+
+  const handlePointerDown = (event: React.PointerEvent) => {
+    if (event.pointerType !== "touch") return;
+    pressOriginRef.current = { x: event.clientX, y: event.clientY };
+    longPressRef.current = window.setTimeout(() => {
+      openContextMenu(event.clientX, event.clientY);
+    }, FILE_MANAGER_LONG_PRESS_MS);
+  };
+
+  const handlePointerMove = (event: React.PointerEvent) => {
+    const origin = pressOriginRef.current;
+    if (!origin || !longPressRef.current) return;
+    if (
+      Math.abs(event.clientX - origin.x) > FILE_MANAGER_LONG_PRESS_MOVE_PX ||
+      Math.abs(event.clientY - origin.y) > FILE_MANAGER_LONG_PRESS_MOVE_PX
+    ) {
+      clearLongPress();
     }
   };
 
@@ -114,39 +145,46 @@ function FileTreeRow({ node, path, depth, fm }: FileTreeRowProps) {
     dispatch({ type: "set_drag", source: null, target: null });
   };
 
+  const dropFolderPath = isFolder ? path : getParentPath(path);
+
   const handleDragOver = (event: DragEvent) => {
     if (isOsFileDrag(event)) {
-      const targetPath = isFolder ? path : getParentPath(path);
       event.preventDefault();
+      event.stopPropagation();
       event.dataTransfer.dropEffect = "copy";
-      if (workspace.dropTargetPath !== targetPath) {
-        dispatch({ type: "set_drag", source: null, target: targetPath });
-        if (targetPath !== "/") dispatch({ type: "expand_folder", path: targetPath });
+      if (workspace.dropTargetPath !== dropFolderPath) {
+        dispatch({ type: "set_drag", source: null, target: dropFolderPath });
+        if (dropFolderPath !== "/") dispatch({ type: "expand_folder", path: dropFolderPath });
       }
       return;
     }
 
-    if (!isFolder) return;
-
     const source = workspace.dragSourcePath;
-    if (!source || source === path || isDescendantPath(source, path)) return;
+    if (!source || isDescendantPath(source, dropFolderPath)) {
+      event.stopPropagation();
+      if (source && workspace.dropTargetPath) {
+        dispatch({ type: "set_drag", source, target: null });
+      }
+      return;
+    }
     event.preventDefault();
+    event.stopPropagation();
     event.dataTransfer.dropEffect = "move";
-    if (workspace.dropTargetPath !== path) {
-      dispatch({ type: "set_drag", source, target: path });
-      dispatch({ type: "expand_folder", path });
+    if (workspace.dropTargetPath !== dropFolderPath) {
+      dispatch({ type: "set_drag", source, target: dropFolderPath });
+      if (dropFolderPath !== "/") dispatch({ type: "expand_folder", path: dropFolderPath });
     }
   };
 
   const handleDrop = (event: DragEvent) => {
     event.preventDefault();
+    event.stopPropagation();
 
     if (isOsFileDrag(event)) {
-      const targetPath = isFolder ? path : getParentPath(path);
       void (async () => {
         try {
           const files = await filesFromDataTransfer(event);
-          await importFiles(targetPath, files);
+          await importFiles(dropFolderPath, files);
         } catch (error) {
           showError(error, "error.unexpected");
         }
@@ -156,85 +194,142 @@ function FileTreeRow({ node, path, depth, fm }: FileTreeRowProps) {
     }
 
     const from = workspace.dragSourcePath ?? event.dataTransfer.getData("text/plain");
-    if (from && isFolder && !isDescendantPath(from, path)) movePath(from, path);
+    if (from && !isDescendantPath(from, dropFolderPath)) movePath(from, dropFolderPath);
     dispatch({ type: "set_drag", source: null, target: null });
   };
 
-  const finishRename = () => {
+  const finishRename = (fromBlur = false) => {
+    if (renameError) {
+      if (fromBlur) dispatch({ type: "cancel_rename" });
+      return;
+    }
     commitRename(path, renameValue);
   };
 
-  return (
-    <>
-      <div
-        role="button"
-        tabIndex={0}
-        draggable={!isRoot && !isRenaming}
-        onClick={handleActivate}
-        onKeyDown={(event) => {
-          if (event.key === "Enter" || event.key === " ") {
-            event.preventDefault();
-            handleActivate();
-          }
-        }}
-        onDragStart={handleDragStart}
-        onDragEnd={handleDragEnd}
-        onDragOver={handleDragOver}
-        onDrop={handleDrop}
-        onContextMenu={handleContextMenu}
-        onPointerDown={handlePointerDown}
-        onPointerUp={clearLongPress}
-        onPointerLeave={clearLongPress}
-        className={[
-          "grid w-full min-w-0 cursor-pointer items-center gap-x-0.5 rounded-md py-1 text-left text-xs outline-none transition-colors",
-          isSelected
-            ? "bg-surface-container-highest/80 text-on-surface"
-            : "text-on-surface-variant hover:bg-surface-container-highest hover:text-on-surface",
-          isDragging ? "opacity-50" : "",
-          isDropTarget ? "ring-1 ring-[var(--accent)]" : "",
-        ].join(" ")}
-        style={{
-          gridTemplateColumns: ROW_GRID,
-          paddingLeft: `${depth * DEPTH_INDENT_PX + 2}px`,
-        }}
-      >
-        {isFolder ? (
-          <Icon
-            name="chevron-down"
-            size={13}
-            className={[
-              "shrink-0 text-on-surface-variant transition-transform",
-              isExpanded ? "" : "-rotate-90",
-            ].join(" ")}
-          />
-        ) : (
-          <span className="shrink-0" aria-hidden />
-        )}
+  const row = (
+    <div
+      role={isRenaming ? undefined : "button"}
+      tabIndex={isRenaming ? -1 : 0}
+      draggable={!isRoot && !isRenaming}
+      onClick={handleActivate}
+      onKeyDown={(event) => {
+        if (isRenaming) return;
+        if (event.target instanceof HTMLInputElement) return;
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          handleActivate();
+        }
+      }}
+      onDragStart={handleDragStart}
+      onDragEnd={handleDragEnd}
+      onDragOver={isFolder ? undefined : handleDragOver}
+      onDrop={isFolder ? undefined : handleDrop}
+      onContextMenu={handleContextMenu}
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={clearLongPress}
+      onPointerCancel={clearLongPress}
+      onPointerLeave={clearLongPress}
+      className={[
+        "grid w-full min-w-0 cursor-pointer items-center gap-x-0.5 py-1 text-left text-xs outline-none transition-colors",
+        isSelected
+          ? "bg-[color-mix(in_srgb,var(--on-surface)_6%,transparent)] text-on-surface hover:bg-surface-container-highest"
+          : "text-on-surface-variant hover:bg-surface-container-highest hover:text-on-surface",
+        isDragging ? "opacity-50" : "",
+      ].join(" ")}
+      style={{
+        gridTemplateColumns: ROW_GRID,
+        paddingLeft: `${depth * DEPTH_INDENT_PX + 2}px`,
+      }}
+    >
+      {isFolder ? (
         <Icon
-          name={isFolder ? "folder" : "file"}
-          size={14}
-          className="shrink-0 text-on-surface-variant"
+          name="chevron-down"
+          size={13}
+          className={[
+            "shrink-0 text-on-surface-variant transition-transform",
+            isExpanded ? "" : "-rotate-90",
+          ].join(" ")}
         />
-        {isRenaming ? (
+      ) : (
+        <span className="shrink-0" aria-hidden />
+      )}
+      <Icon
+        name={isFolder ? "folder" : "file"}
+        size={14}
+        className={[
+          "shrink-0",
+          pathKind === "created"
+            ? "text-[var(--vault-status-open)]"
+            : pathKind === "modified"
+              ? "text-[var(--accent)]"
+              : "text-on-surface-variant",
+        ].join(" ")}
+      />
+      {isRenaming ? (
+        <div className="min-w-0">
           <input
             autoFocus
             value={renameValue}
+            maxLength={LOGICAL_FILE_NAME_MAX_LENGTH}
             onChange={(e) => setRenameValue(e.target.value)}
-            onBlur={finishRename}
+            onFocus={(e) => {
+              const { start, end } = renameBasenameSelection(e.currentTarget.value);
+              e.currentTarget.setSelectionRange(start, end);
+            }}
+            onBlur={() => finishRename(true)}
+            autoComplete="off"
+            spellCheck={false}
+            aria-invalid={renameError ? true : undefined}
             onKeyDown={(e) => {
-              if (e.key === "Enter") finishRename();
-              if (e.key === "Escape") dispatch({ type: "cancel_rename" });
+              e.stopPropagation();
+              if (e.key === "Enter") {
+                e.preventDefault();
+                finishRename();
+              }
+              if (e.key === "Escape") {
+                e.preventDefault();
+                dispatch({ type: "cancel_rename" });
+              }
             }}
             onClick={(e) => e.stopPropagation()}
             className="min-w-0 w-full rounded bg-surface-container-highest px-1.5 py-0.5 text-xs text-on-surface outline-none ring-1 ring-[var(--accent)]"
           />
-        ) : (
-          <span className="block min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">
-            {node.name}
-          </span>
-        )}
-      </div>
-      {isFolder && isExpanded
+          {renameError ? (
+            <p role="alert" className="mt-0.5 text-[10px] leading-tight text-on-error-container">
+              {t(
+                fileNameErrorI18nKey(renameError),
+                renameError === "too_long"
+                  ? { max: String(LOGICAL_FILE_NAME_MAX_LENGTH) }
+                  : undefined,
+              )}
+            </p>
+          ) : null}
+        </div>
+      ) : (
+        <span className="flex min-w-0 items-center gap-1.5 overflow-hidden">
+          <span className="min-w-0 truncate">{node.name}</span>
+          {isDirty ? (
+            <span className="size-1.5 shrink-0 rounded-full bg-white" aria-hidden />
+          ) : null}
+        </span>
+      )}
+    </div>
+  );
+
+  if (!isFolder) return row;
+
+  return (
+    <div
+      className={[
+        "w-full min-w-0",
+        isDropTarget ? "rounded-sm ring-1 ring-inset ring-[var(--accent)]" : "",
+      ].join(" ")}
+      onDragOver={handleDragOver}
+      onDrop={handleDrop}
+    >
+      {row}
+      {isExpanded
         ? node.children?.map((child) => (
             <FileTreeRow
               key={joinPath(path, child.name)}
@@ -245,7 +340,7 @@ function FileTreeRow({ node, path, depth, fm }: FileTreeRowProps) {
             />
           ))
         : null}
-    </>
+    </div>
   );
 }
 
@@ -364,66 +459,71 @@ export function FileTreePanel({ fm, splitPercent, layout }: FileTreePanelProps) 
       className="flex min-h-0 shrink-0 flex-col overflow-hidden bg-surface-container"
     >
       <div className="flex shrink-0 items-center gap-1 px-2 pb-1 pt-2">
-        <p className="min-w-0 flex-1 font-mono text-[10px] font-medium uppercase tracking-widest text-on-surface-variant">
+        <p
+          className="min-w-0 flex-1 truncate font-mono text-[10px] font-medium uppercase tracking-widest text-on-surface-variant"
+          title={t("modal.file_manager.explorer.title")}
+        >
           {t("modal.file_manager.explorer.title")}
         </p>
-        <input
-          ref={importFilesInputRef}
-          type="file"
-          multiple
-          className="sr-only"
-          aria-hidden
-          tabIndex={-1}
-          onChange={handleImportFilesChange}
-        />
-        <input
-          ref={importFolderInputRef}
-          type="file"
-          multiple
-          className="sr-only"
-          aria-hidden
-          tabIndex={-1}
-          // @ts-expect-error — non-standard directory picker attribute (Chromium, Firefox, Safari)
-          webkitdirectory=""
-          directory=""
-          onChange={handleImportFolderChange}
-        />
-        <button
-          type="button"
-          className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-on-surface-variant transition-colors hover:bg-surface-container-highest hover:text-on-surface"
-          onClick={() => fm.createFile("/")}
-          aria-label={t("modal.file_manager.context.new_file")}
-          title={t("modal.file_manager.context.new_file")}
-        >
-          <Icon name="file" size={14} />
-        </button>
-        <button
-          type="button"
-          className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-on-surface-variant transition-colors hover:bg-surface-container-highest hover:text-on-surface"
-          onClick={() => fm.createFolder("/")}
-          aria-label={t("modal.file_manager.context.new_folder")}
-          title={t("modal.file_manager.context.new_folder")}
-        >
-          <Icon name="folder" size={14} />
-        </button>
-        <button
-          type="button"
-          className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-on-surface-variant transition-colors hover:bg-surface-container-highest hover:text-on-surface"
-          onClick={openImportFilesPicker}
-          aria-label={t("modal.file_manager.explorer.import_files")}
-          title={t("modal.file_manager.explorer.import_files")}
-        >
-          <Icon name="arrow-up" size={14} />
-        </button>
-        <button
-          type="button"
-          className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-on-surface-variant transition-colors hover:bg-surface-container-highest hover:text-on-surface"
-          onClick={openImportFolderPicker}
-          aria-label={t("modal.file_manager.explorer.import_folder")}
-          title={t("modal.file_manager.explorer.import_folder")}
-        >
-          <Icon name="archive" size={14} />
-        </button>
+        <div className="flex shrink-0 items-center gap-0.5">
+          <input
+            ref={importFilesInputRef}
+            type="file"
+            multiple
+            className="sr-only"
+            aria-hidden
+            tabIndex={-1}
+            onChange={handleImportFilesChange}
+          />
+          <input
+            ref={importFolderInputRef}
+            type="file"
+            multiple
+            className="sr-only"
+            aria-hidden
+            tabIndex={-1}
+            // @ts-expect-error — non-standard directory picker attribute (Chromium, Firefox, Safari)
+            webkitdirectory=""
+            directory=""
+            onChange={handleImportFolderChange}
+          />
+          <button
+            type="button"
+            className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-on-surface-variant transition-colors hover:bg-surface-container-highest hover:text-on-surface"
+            onClick={() => fm.createFile(importTargetPath(fm))}
+            aria-label={t("modal.file_manager.context.new_file")}
+            title={t("modal.file_manager.context.new_file")}
+          >
+            <Icon name="file" size={14} />
+          </button>
+          <button
+            type="button"
+            className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-on-surface-variant transition-colors hover:bg-surface-container-highest hover:text-on-surface"
+            onClick={() => fm.createFolder(importTargetPath(fm))}
+            aria-label={t("modal.file_manager.context.new_folder")}
+            title={t("modal.file_manager.context.new_folder")}
+          >
+            <Icon name="folder" size={14} />
+          </button>
+          <button
+            type="button"
+            className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-on-surface-variant transition-colors hover:bg-surface-container-highest hover:text-on-surface"
+            onClick={openImportFilesPicker}
+            aria-label={t("modal.file_manager.explorer.import_files")}
+            title={t("modal.file_manager.explorer.import_files")}
+          >
+            <Icon name="arrow-up" size={14} />
+          </button>
+          <button
+            type="button"
+            className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-on-surface-variant transition-colors hover:bg-surface-container-highest hover:text-on-surface"
+            onClick={openImportFolderPicker}
+            aria-label={t("modal.file_manager.explorer.import_folder")}
+            title={t("modal.file_manager.explorer.import_folder")}
+          >
+            <Icon name="archive" size={14} />
+          </button>
+        </div>
       </div>
       <nav
         className={[

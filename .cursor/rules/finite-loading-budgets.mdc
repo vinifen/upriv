@@ -28,6 +28,7 @@ Every **blocking** loading / busy / applying overlay in the desktop (and later m
 | `vaultCreate` | 10 min | Scratch create in the vault pipeline queue (Argon2id wrap + seed) |
 | `vaultPipeline` | 10 min | Open/close progress (password modal if open + row hint; Argon2id unlock + flush) |
 | `vaultExport` | 10 min | Export zip of `contents/` or portable `.7z` |
+| `vaultRename` | 2 min | Deep vault rename (`vault_rename` folder + id remap) |
 | `settingsSave` | 30 s | Settings Save / workspace path persist (`app_settings_save`) |
 | `default` | 2 min | Generic modal / list work |
 

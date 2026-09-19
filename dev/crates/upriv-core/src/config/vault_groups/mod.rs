@@ -25,6 +25,7 @@ pub const VAULT_GROUPS_FILE_NAME: &str = "vault_groups.toml";
 const VAULT_GROUPS_TOML_HEADER: &str = "\
 # Optional vault list organization (not a vault).
 # Membership is grouped_vaults[] here — not settings.toml or vaults/<id>/config.toml.
+# [[group]].display_name is the group title in the vault list.
 # Missing file = no groups.
 
 ";
@@ -45,11 +46,14 @@ pub fn vault_groups_path(root: &VaultRoot) -> PathBuf {
 
 /// Parse + validate schema (no disk assignment check).
 pub fn parse_vault_groups_toml_str(raw: &str) -> Result<VaultGroupsFile> {
-    let parsed: VaultGroupsFile =
+    let mut parsed: VaultGroupsFile =
         toml::from_str(raw).map_err(|error| UprivError::VaultGroupsInvalid {
             path: PathBuf::from(VAULT_GROUPS_FILE_NAME),
             detail: format!("invalid vault_groups.toml: {error}"),
         })?;
+    for group in &mut parsed.groups {
+        group.resolve_identity();
+    }
     validate_schema(&parsed, Path::new(VAULT_GROUPS_FILE_NAME))?;
     Ok(parsed)
 }
@@ -62,12 +66,6 @@ fn validate_schema(file: &VaultGroupsFile, path: &Path) -> Result<()> {
             return Err(UprivError::VaultGroupsInvalid {
                 path: path.to_path_buf(),
                 detail: "[[group]].id is empty".into(),
-            });
-        }
-        if group.display_name.trim().is_empty() {
-            return Err(UprivError::VaultGroupsInvalid {
-                path: path.to_path_buf(),
-                detail: format!("[[group]].display_name is empty for id {id}"),
             });
         }
         if !seen_ids.insert(id.to_string()) {
@@ -213,8 +211,7 @@ pub fn sanitize_vault_groups(
     let mut groups = Vec::with_capacity(file.groups.len());
 
     for mut group in file.groups {
-        group.id = group.id.trim().to_string();
-        group.display_name = group.display_name.trim().to_string();
+        group.resolve_identity();
 
         let mut grouped_vaults = Vec::new();
         let mut seen_in_group = HashSet::new();
@@ -267,11 +264,14 @@ fn parse_file_from_disk(root: &VaultRoot) -> Result<Option<VaultGroupsFile>> {
         return Ok(None);
     }
     let raw = std::fs::read_to_string(&path).map_err(UprivError::from)?;
-    let parsed: VaultGroupsFile =
+    let mut parsed: VaultGroupsFile =
         toml::from_str(&raw).map_err(|error| UprivError::VaultGroupsInvalid {
             path: path.clone(),
             detail: format!("invalid vault_groups.toml: {error}"),
         })?;
+    for group in &mut parsed.groups {
+        group.resolve_identity();
+    }
     validate_schema(&parsed, &path)?;
     Ok(Some(parsed))
 }
@@ -282,8 +282,7 @@ fn trim_group_headers(file: VaultGroupsFile) -> VaultGroupsFile {
             .groups
             .into_iter()
             .map(|mut group| {
-                group.id = group.id.trim().to_string();
-                group.display_name = group.display_name.trim().to_string();
+                group.resolve_identity();
                 group
             })
             .collect(),
@@ -323,8 +322,7 @@ fn soften_groups_for_mutate(groups: Vec<VaultGroup>) -> Vec<VaultGroup> {
     let mut claimed: HashSet<String> = HashSet::new();
     let mut out = Vec::with_capacity(groups.len());
     for mut group in groups {
-        group.id = group.id.trim().to_string();
-        group.display_name = group.display_name.trim().to_string();
+        group.resolve_identity();
         group.grouped_vault_sort = normalize_grouped_vault_sort(&group.grouped_vault_sort)
             .unwrap_or("order")
             .to_string();
@@ -374,17 +372,18 @@ fn prepare_groups_for_write(root: &VaultRoot, groups: &[VaultGroup]) -> Result<V
 
     for group in groups {
         let id = group.id.trim().to_string();
-        let display_name = group.display_name.trim().to_string();
+        let display_name = {
+            let name = crate::paths::normalize_stored_name(&group.display_name);
+            if name.is_empty() {
+                id.clone()
+            } else {
+                name
+            }
+        };
         if !crate::paths::slug_id_is_valid(&id) {
             return Err(UprivError::VaultGroupsInvalid {
                 path: path.clone(),
                 detail: format!("invalid [[group]].id: {id}"),
-            });
-        }
-        if display_name.is_empty() {
-            return Err(UprivError::VaultGroupsInvalid {
-                path: path.clone(),
-                detail: format!("[[group]].display_name is empty for id {id}"),
             });
         }
         if !seen_ids.insert(id.clone()) {
@@ -472,6 +471,31 @@ fn repair_vault_groups_locked(root: &VaultRoot) -> Result<()> {
     Ok(())
 }
 
+/// Remap a vault id inside every group's `grouped_vaults` (deep rename).
+pub fn remap_grouped_vault_id(root: &VaultRoot, old_id: &str, new_id: &str) -> Result<()> {
+    let _guard = lock_groups_write();
+    require_upriv_dir(root)?;
+    let old_id = old_id.trim();
+    let new_id = new_id.trim();
+    if old_id.is_empty() || new_id.is_empty() || old_id == new_id {
+        return Ok(());
+    }
+    let mut groups = load_vault_groups_for_mutate(root)?;
+    let mut changed = false;
+    for group in &mut groups {
+        for id in &mut group.grouped_vaults {
+            if id == old_id {
+                *id = new_id.to_string();
+                changed = true;
+            }
+        }
+    }
+    if changed {
+        save_vault_groups(root, &groups)?;
+    }
+    Ok(())
+}
+
 /// Known vault ids from scanning `vaults/*/`. Invalid `config.toml` still counts
 /// (directory name) so list sanitize does not treat a broken config as an orphan.
 pub fn known_vault_ids(root: &VaultRoot) -> Result<HashSet<String>> {
@@ -533,7 +557,7 @@ pub fn create_vault_group_with_sort(
     let _guard = lock_groups_write();
     require_upriv_dir(root)?;
     let id = id.trim();
-    let display_name = display_name.trim();
+    let display_name = crate::paths::normalize_stored_name(display_name);
     if !crate::paths::slug_id_is_valid(id) {
         return Err(groups_invalid(root, format!("invalid group id: {id}")));
     }
@@ -586,7 +610,7 @@ pub fn create_vault_group_with_sort(
     let applied = set_grouped_vaults_hidden(root, &clean_grouped, hidden)?;
     let group = VaultGroup {
         id: id.to_string(),
-        display_name: display_name.to_string(),
+        display_name: display_name.clone(),
         order,
         collapsed: false,
         hidden,
@@ -689,11 +713,11 @@ fn update_vault_group_locked(
     let was_hidden = groups[idx].hidden;
 
     if let Some(name) = params.display_name {
-        let name = name.trim();
+        let name = crate::paths::normalize_stored_name(name);
         if name.is_empty() {
             return Err(groups_invalid(root, "display_name is empty"));
         }
-        groups[idx].display_name = name.to_string();
+        groups[idx].display_name = name;
     }
     if let Some(c) = params.collapsed {
         groups[idx].collapsed = c;
@@ -901,6 +925,52 @@ mod tests {
         assert!(!body.contains("members ="));
         assert!(body.contains("grouped_vault_sort"));
         assert!(!body.contains("member_sort"));
+    }
+
+    #[test]
+    fn writes_display_name_even_when_it_equals_id() {
+        let (_tmp, root) = root_with_vaults(&["notes"]);
+        create_vault_group(&root, "trasdf", "trasdf", &[]).unwrap();
+        let body = disk_body(&root);
+        assert!(body.contains("display_name = \"trasdf\""));
+        let known = known_vault_ids(&root).unwrap();
+        let loaded = load_vault_groups(&root, &known).unwrap();
+        assert_eq!(loaded.groups[0].id, "trasdf");
+        assert_eq!(loaded.groups[0].display_name, "trasdf");
+    }
+
+    #[test]
+    fn keeps_display_name_when_it_differs_from_id() {
+        let (_tmp, root) = root_with_vaults(&["notes"]);
+        create_vault_group(&root, "test-2", "test", &[]).unwrap();
+        let body = disk_body(&root);
+        assert!(body.contains("display_name = \"test\""));
+        let known = known_vault_ids(&root).unwrap();
+        let loaded = load_vault_groups(&root, &known).unwrap();
+        assert_eq!(loaded.groups[0].id, "test-2");
+        assert_eq!(loaded.groups[0].display_name, "test");
+    }
+
+    #[test]
+    fn collapses_internal_whitespace_in_display_name() {
+        let (_tmp, root) = root_with_vaults(&["notes"]);
+        create_vault_group(&root, "work", "Work    Notes", &[]).unwrap();
+        let body = disk_body(&root);
+        assert!(body.contains("display_name = \"Work Notes\""));
+        let known = known_vault_ids(&root).unwrap();
+        let loaded = load_vault_groups(&root, &known).unwrap();
+        assert_eq!(loaded.groups[0].display_name, "Work Notes");
+    }
+
+    #[test]
+    fn load_fills_display_name_from_id_when_omitted() {
+        let raw = r#"
+[[group]]
+id = "trasdf"
+grouped_vaults = []
+"#;
+        let parsed = parse_vault_groups_toml_str(raw).unwrap();
+        assert_eq!(parsed.groups[0].display_name, "trasdf");
     }
 
     #[test]

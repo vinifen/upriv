@@ -7,6 +7,7 @@ export {
   settingsControlClass,
   SettingsField,
   SettingsFormGrid,
+  DisplayNameFieldError,
   VaultSettingsBackupSection,
   VaultSettingsCloseSection,
   VaultSettingsDangerZoneSection,

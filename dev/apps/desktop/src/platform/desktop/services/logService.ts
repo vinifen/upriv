@@ -25,4 +25,7 @@ export const desktopLogService: LogService = {
   async recordVaultGroupHidden() {
     await rpcLogEvent("vault_group_hidden");
   },
+  async recordImportCacheWipeFailed() {
+    await rpcLogEvent("import_cache_wipe_failed");
+  },
 };

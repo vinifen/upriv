@@ -8,7 +8,8 @@ use crate::error::{Result, UprivError};
 use crate::paths::{validate_workspace_global_path, VaultRootMode, VAULT_ROOT_SETTINGS_REL};
 
 use super::types::{
-    AppSectionSettings, AppSettings, LoggingSettings, UiSettings, WorkspaceSettings,
+    clamp_file_manager_tree_split_percent, AppSectionSettings, AppSettings, LoggingSettings,
+    UiSettings, WorkspaceSettings,
 };
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -72,6 +73,8 @@ pub(super) struct UiToml {
     pub(super) theme: String,
     pub(super) show_header_more_button: bool,
     pub(super) file_manager_dock_expanded: bool,
+    #[serde(default = "default_file_manager_tree_split_percent")]
+    pub(super) file_manager_tree_split_percent: u8,
     pub(super) always_show_hidden_vaults: bool,
     pub(super) vault_list_sort: String,
     pub(super) vault_list_sort_direction: String,
@@ -88,6 +91,11 @@ pub(super) struct UiToml {
     pub(super) vault_list_show_group_settings_button: bool,
     /// Close unlock/lock password dialog on Confirm. Default false.
     pub(super) lifecycle_close_modal_on_submit: bool,
+    /// After unlock succeeds, open the file manager if idle. Default false.
+    pub(super) lifecycle_open_file_manager_on_open: bool,
+    /// Confirm before deleting in the file manager. Default true.
+    #[serde(default = "default_true")]
+    pub(super) file_manager_confirm_delete: bool,
 }
 
 impl Default for UiToml {
@@ -97,6 +105,7 @@ impl Default for UiToml {
             theme: default_theme(),
             show_header_more_button: true,
             file_manager_dock_expanded: false,
+            file_manager_tree_split_percent: default_file_manager_tree_split_percent(),
             always_show_hidden_vaults: false,
             vault_list_sort: default_sort(),
             vault_list_sort_direction: default_sort_dir(),
@@ -112,6 +121,8 @@ impl Default for UiToml {
             vault_list_show_vault_settings_button: true,
             vault_list_show_group_settings_button: true,
             lifecycle_close_modal_on_submit: false,
+            lifecycle_open_file_manager_on_open: false,
+            file_manager_confirm_delete: true,
         }
     }
 }
@@ -122,6 +133,9 @@ fn ui_toml_from_settings(ui: &UiSettings) -> UiToml {
         theme: ui.theme.clone(),
         show_header_more_button: ui.vault_list_show_header_more_button,
         file_manager_dock_expanded: ui.file_manager_dock_expanded,
+        file_manager_tree_split_percent: clamp_file_manager_tree_split_percent(
+            ui.file_manager_tree_split_percent,
+        ),
         always_show_hidden_vaults: ui.always_show_hidden_vaults,
         vault_list_sort: ui.vault_list_sort.clone(),
         vault_list_sort_direction: ui.vault_list_sort_direction.clone(),
@@ -137,6 +151,8 @@ fn ui_toml_from_settings(ui: &UiSettings) -> UiToml {
         vault_list_show_vault_settings_button: ui.vault_list_show_vault_settings_button,
         vault_list_show_group_settings_button: ui.vault_list_show_group_settings_button,
         lifecycle_close_modal_on_submit: ui.lifecycle_close_modal_on_submit,
+        lifecycle_open_file_manager_on_open: ui.lifecycle_open_file_manager_on_open,
+        file_manager_confirm_delete: ui.file_manager_confirm_delete,
     }
 }
 
@@ -154,6 +170,10 @@ pub(crate) fn default_sort_dir() -> String {
 }
 pub(crate) fn default_view() -> String {
     "default".into()
+}
+
+pub(crate) fn default_file_manager_tree_split_percent() -> u8 {
+    20
 }
 
 pub(super) fn ui_settings_from_toml(ui: &UiToml) -> UiSettings {
@@ -176,7 +196,12 @@ pub(super) fn ui_settings_from_toml(ui: &UiToml) -> UiSettings {
         vault_list_show_drag: ui.vault_list_show_drag,
         vault_list_allow_drag_into_group: ui.vault_list_allow_drag_into_group,
         file_manager_dock_expanded: ui.file_manager_dock_expanded,
+        file_manager_tree_split_percent: clamp_file_manager_tree_split_percent(
+            ui.file_manager_tree_split_percent,
+        ),
         lifecycle_close_modal_on_submit: ui.lifecycle_close_modal_on_submit,
+        lifecycle_open_file_manager_on_open: ui.lifecycle_open_file_manager_on_open,
+        file_manager_confirm_delete: ui.file_manager_confirm_delete,
     }
 }
 
@@ -477,11 +502,45 @@ last_opened_vault = "kept"
         assert!(settings.ui.vault_list_show_group_settings_button);
         assert!(settings.ui.vault_list_show_drag);
         assert!(settings.ui.vault_list_allow_drag_into_group);
+        // Omitted lifecycle prefs default false.
+        assert!(!settings.ui.lifecycle_close_modal_on_submit);
+        assert!(!settings.ui.lifecycle_open_file_manager_on_open);
+        assert!(settings.ui.file_manager_confirm_delete);
+        assert_eq!(settings.ui.file_manager_tree_split_percent, 20);
         assert_eq!(settings.logging.level, "warn");
         assert_eq!(settings.logging.entries_per_file, 500);
         // Vault-root mode/path never come from TOML.
         assert_eq!(settings.app.vault_root_mode, VaultRootMode::DefaultRoot);
         assert!(settings.app.upriv_root_path.is_empty());
+    }
+
+    #[test]
+    fn parse_lifecycle_ui_prefs_when_present() {
+        let raw = r#"
+[package]
+version = 1
+label = "Upriv"
+vaults_dir = ".upriv/vaults"
+state_file = ".upriv/state.json"
+logs_dir = ".upriv/logs"
+app_dir = ".upriv/app"
+
+[ui]
+locale = "en"
+theme = "dark"
+lifecycle_close_modal_on_submit = true
+lifecycle_open_file_manager_on_open = true
+file_manager_confirm_delete = false
+"#;
+        let settings = parse_settings_toml_str(raw).unwrap();
+        assert!(settings.ui.lifecycle_close_modal_on_submit);
+        assert!(settings.ui.lifecycle_open_file_manager_on_open);
+        assert!(!settings.ui.file_manager_confirm_delete);
+        let written = serialize_settings_toml_str(&settings, None).unwrap();
+        assert!(written.contains("lifecycle_close_modal_on_submit = true"));
+        assert!(written.contains("lifecycle_open_file_manager_on_open = true"));
+        assert!(written.contains("file_manager_confirm_delete = false"));
+        assert!(written.contains("file_manager_tree_split_percent = 20"));
     }
 
     #[test]

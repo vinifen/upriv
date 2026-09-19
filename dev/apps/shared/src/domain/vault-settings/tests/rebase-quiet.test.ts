@@ -33,4 +33,19 @@ describe("rebaseQuietLockedVaultSettings", () => {
     expect(rebased.security.mode).toBe("session_ram");
     expect(rebased.mount.workspace_path).toBe("default");
   });
+
+  it("rebases display_name when creating, keeps vault_quiet dirty", () => {
+    const closed = vaultRowFixture({ id: "notes" });
+    const draft = {
+      ...baseline,
+      vault: { ...baseline.vault, display_name: "Renamed", note: "keep" },
+      storage: { mode: "upriv_plain" as const },
+    };
+    const rebased = rebaseQuietLockedVaultSettings(draft, baseline, closed, {
+      creatingVaultIds: ["notes"],
+    });
+    expect(rebased.vault.display_name).toBe("Notes");
+    expect(rebased.vault.note).toBe("keep");
+    expect(rebased.storage.mode).toBe("upriv_plain");
+  });
 });

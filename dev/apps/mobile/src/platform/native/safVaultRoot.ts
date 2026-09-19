@@ -1,5 +1,6 @@
 import { RpcError } from "@upriv/shared";
 import { getUprivCoreNative, type SafRootStatus, type UprivCoreNativeModule } from "upriv-core";
+import { shouldReleaseImportTreePermission } from "./sameSafTreeUri";
 
 /**
  * SAF (Android Storage Access Framework) surface used by mobile services.
@@ -101,6 +102,23 @@ export function safPersist(treeUri: string): void {
 /** Best-effort release of persistable permission. Missing perm not an error. */
 export function safRelease(treeUri: string): void {
   requireNative().safReleasePermission(treeUri);
+}
+
+/**
+ * Drop the persistable grant from a one-shot folder pick (file-manager import).
+ * No-op when native is missing (Expo Go) or when the URI is the active vault-root.
+ * Native `safReleasePermission` also refuses to drop the active tree.
+ */
+export function safReleaseImportTree(treeUri: string): void {
+  const native = getUprivCoreNative();
+  if (!native) return;
+  const active = native.safGetActiveUri()?.trim() || null;
+  if (!shouldReleaseImportTreePermission(treeUri, active)) return;
+  try {
+    native.safReleasePermission(treeUri.trim());
+  } catch {
+    /* already gone */
+  }
 }
 
 /**

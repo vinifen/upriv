@@ -16,8 +16,15 @@ import {
   type VaultFileLanguage,
   uniqueFolderName,
   uniqueName,
+  acceptedLogicalFileName,
   vaultFileLanguageFromPath as languageFromPathShared,
 } from "../domain/file-tree";
+import {
+  isInternalVaultFileName,
+  isInternalVaultPath,
+  omitInternalVaultNodes,
+  UPRIV_WORKSPACE_PATH,
+} from "../domain/file-manager/workspaceSnapshot";
 import { getMockFileContent, getMockVaultFileTree } from "./fileTree";
 
 interface VaultFileSession {
@@ -28,6 +35,12 @@ interface VaultFileSession {
 }
 
 const sessions = new Map<string, VaultFileSession>();
+
+/**
+ * Survives `resetVaultFileSession` so mock reopen can restore FM layout within the
+ * same app process. Real core will persist this as a logical file in `contents/`.
+ */
+const durableWorkspaceSnapshots = new Map<string, string>();
 
 function languageFromPath(path: string): VaultFileLanguage {
   return languageFromPathShared(path);
@@ -48,6 +61,11 @@ function loadInitialContents(vaultId: string, tree: FileTreeNode): VaultFileSess
       languages[path] = file.language;
     }
   }
+  const durable = durableWorkspaceSnapshots.get(vaultId);
+  if (durable !== undefined) {
+    contents[UPRIV_WORKSPACE_PATH] = durable;
+    languages[UPRIV_WORKSPACE_PATH] = "text";
+  }
   return { tree, contents, languages, revision: 0 };
 }
 
@@ -66,8 +84,41 @@ function bump(session: VaultFileSession): number {
   return session.revision;
 }
 
+function rememberWorkspaceSnapshot(vaultId: string, session: VaultFileSession): void {
+  const raw = session.contents[UPRIV_WORKSPACE_PATH];
+  if (typeof raw === "string") {
+    durableWorkspaceSnapshots.set(vaultId, raw);
+  }
+}
+
 export function resetVaultFileSession(vaultId: string): void {
+  const session = sessions.get(vaultId);
+  if (session) rememberWorkspaceSnapshot(vaultId, session);
   sessions.delete(vaultId);
+}
+
+/** Test helper — clear durable FM snapshots too. */
+export function resetVaultWorkspaceSnapshots(vaultId?: string): void {
+  if (vaultId) durableWorkspaceSnapshots.delete(vaultId);
+  else durableWorkspaceSnapshots.clear();
+}
+
+/** After mock `vault_rename` changes the folder id — keep FM layout in this process. */
+export function remapVaultWorkspaceSnapshot(fromId: string, toId: string): void {
+  if (!fromId || fromId === toId) return;
+
+  const session = sessions.get(fromId);
+  if (session) {
+    rememberWorkspaceSnapshot(fromId, session);
+    sessions.set(toId, session);
+    sessions.delete(fromId);
+  }
+
+  const raw = durableWorkspaceSnapshots.get(fromId);
+  if (raw !== undefined) {
+    durableWorkspaceSnapshots.set(toId, raw);
+    durableWorkspaceSnapshots.delete(fromId);
+  }
 }
 
 export function getVaultTreeRevision(vaultId: string): number {
@@ -75,10 +126,23 @@ export function getVaultTreeRevision(vaultId: string): number {
 }
 
 export function getVaultFileTree(vaultId: string): FileTreeNode {
-  return ensureSession(vaultId).tree;
+  return omitInternalVaultNodes(ensureSession(vaultId).tree);
 }
 
 export function getVaultFileContent(vaultId: string, path: string): VaultFileContent | null {
+  if (isInternalVaultPath(path)) {
+    const session = ensureSession(vaultId);
+    const fromSession = session.contents[path];
+    if (typeof fromSession === "string") {
+      return { content: fromSession, language: "text" };
+    }
+    const durable = durableWorkspaceSnapshots.get(vaultId);
+    if (typeof durable === "string") {
+      return { content: durable, language: "text" };
+    }
+    return null;
+  }
+
   const session = ensureSession(vaultId);
   if (!(path in session.contents)) {
     const initial = getMockFileContent(vaultId, path);
@@ -92,18 +156,21 @@ export function getVaultFileContent(vaultId: string, path: string): VaultFileCon
 }
 
 export function isVaultFileEditable(vaultId: string, path: string): boolean {
+  if (isInternalVaultPath(path)) return false;
   const file = getVaultFileContent(vaultId, path);
   if (!file) return false;
   return file.language !== "binary" && file.language !== "image";
 }
 
 export function isVaultFileViewable(vaultId: string, path: string): boolean {
+  if (isInternalVaultPath(path)) return false;
   const file = getVaultFileContent(vaultId, path);
   if (!file) return false;
   return file.language !== "binary";
 }
 
 export function isVaultFileImage(vaultId: string, path: string): boolean {
+  if (isInternalVaultPath(path)) return false;
   const file = getVaultFileContent(vaultId, path);
   return file?.language === "image";
 }
@@ -112,7 +179,18 @@ export function setVaultFileContent(vaultId: string, path: string, content: stri
   const session = ensureSession(vaultId);
   session.contents[path] = content;
   session.languages[path] ??= languageFromPath(path);
+  if (isInternalVaultPath(path)) {
+    durableWorkspaceSnapshots.set(vaultId, content);
+    /* Internal snapshot writes do not need a tree node or explorer revision bump. */
+    return session.revision;
+  }
   return bump(session);
+}
+
+function acceptedSessionName(raw: string): string | null {
+  const name = acceptedLogicalFileName(raw);
+  if (!name || isInternalVaultFileName(name)) return null;
+  return name;
 }
 
 export function createVaultFile(
@@ -120,9 +198,11 @@ export function createVaultFile(
   parentPath: string,
   baseName: string,
 ): string | null {
+  const base = acceptedSessionName(baseName);
+  if (!base) return null;
   const session = ensureSession(vaultId);
   const names = siblingNames(session.tree, parentPath);
-  const name = uniqueName(names, baseName);
+  const name = uniqueName(names, base);
   session.tree = addChild(session.tree, parentPath, { name, type: "file" });
   const path = joinPath(parentPath, name);
   session.contents[path] = "";
@@ -137,11 +217,13 @@ export function importVaultFile(
   fileName: string,
   content: string,
 ): string | null {
+  const imported = acceptedSessionName(fileName);
+  if (!imported) return null;
   const session = ensureSession(vaultId);
   if (findNode(session.tree, parentPath)?.type !== "folder") return null;
 
   const names = siblingNames(session.tree, parentPath);
-  const name = uniqueName(names, fileName);
+  const name = uniqueName(names, imported);
   session.tree = addChild(session.tree, parentPath, { name, type: "file" });
   const path = joinPath(parentPath, name);
   session.contents[path] = content;
@@ -155,9 +237,11 @@ export function createVaultFolder(
   parentPath: string,
   baseName: string,
 ): string | null {
+  const base = acceptedSessionName(baseName);
+  if (!base) return null;
   const session = ensureSession(vaultId);
   const names = siblingNames(session.tree, parentPath);
-  const name = uniqueFolderName(names, baseName);
+  const name = uniqueFolderName(names, base);
   session.tree = addChild(session.tree, parentPath, { name, type: "folder", children: [] });
   bump(session);
   return joinPath(parentPath, name);
@@ -169,33 +253,36 @@ export function ensureVaultFolder(
   parentPath: string,
   folderName: string,
 ): string | null {
+  const name = acceptedSessionName(folderName);
+  if (!name) return null;
   const session = ensureSession(vaultId);
   const parent = findNode(session.tree, parentPath);
   if (parent?.type !== "folder") return null;
 
-  const existing = parent.children?.find(
-    (child) => child.type === "folder" && child.name === folderName,
-  );
-  if (existing) return joinPath(parentPath, folderName);
+  const existing = parent.children?.find((child) => child.type === "folder" && child.name === name);
+  if (existing) return joinPath(parentPath, name);
 
   session.tree = addChild(session.tree, parentPath, {
-    name: folderName,
+    name,
     type: "folder",
     children: [],
   });
   bump(session);
-  return joinPath(parentPath, folderName);
+  return joinPath(parentPath, name);
 }
 
 export function renameVaultPath(vaultId: string, path: string, newName: string): string | null {
-  if (path === "/") return null;
+  const name = acceptedSessionName(newName);
+  if (path === "/" || !name || isInternalVaultPath(path)) {
+    return null;
+  }
   const session = ensureSession(vaultId);
   const parentPath = getParentPath(path);
   const names = siblingNames(session.tree, parentPath).filter((n) => n !== fileBaseName(path));
-  if (names.includes(newName)) return null;
+  if (names.includes(name)) return null;
 
-  const newPath = joinPath(parentPath, newName);
-  session.tree = renameNode(session.tree, path, newName);
+  const newPath = joinPath(parentPath, name);
+  session.tree = renameNode(session.tree, path, name);
   session.contents = remapContentPaths(session.contents, path, newPath);
   const nextLanguages: Record<string, VaultFileLanguage> = {};
   for (const [p, lang] of Object.entries(session.languages)) {
@@ -209,7 +296,7 @@ export function renameVaultPath(vaultId: string, path: string, newName: string):
 }
 
 export function deleteVaultPath(vaultId: string, path: string): boolean {
-  if (path === "/") return false;
+  if (path === "/" || isInternalVaultPath(path)) return false;
   const session = ensureSession(vaultId);
   session.tree = removeNode(session.tree, path);
   session.contents = removeContentPaths(session.contents, path);
@@ -226,7 +313,14 @@ export function moveVaultPath(
   fromPath: string,
   toFolderPath: string,
 ): string | null {
-  if (fromPath === "/" || fromPath === toFolderPath) return null;
+  if (
+    fromPath === "/" ||
+    fromPath === toFolderPath ||
+    isInternalVaultPath(fromPath) ||
+    isInternalVaultFileName(fileBaseName(fromPath))
+  ) {
+    return null;
+  }
   const session = ensureSession(vaultId);
   const node = findNode(session.tree, fromPath);
   if (!node) return null;

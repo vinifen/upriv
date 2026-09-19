@@ -82,4 +82,18 @@ describe("buildCreateVaultResult", () => {
     );
     expect(result.groupAssignment).toEqual({ kind: "create", displayName: "Travel" });
   });
+
+  it("collapses extra spaces in vault and group names", () => {
+    const result = buildCreateVaultResult(
+      createVaultDraftFixture([], {
+        displayName: "My    Vault",
+        groupMode: "create",
+        groupName: "Work    Notes",
+      }),
+      [],
+    );
+    expect(result.displayName).toBe("My Vault");
+    expect(result.settings.vault.display_name).toBe("My Vault");
+    expect(result.groupAssignment).toEqual({ kind: "create", displayName: "Work Notes" });
+  });
 });

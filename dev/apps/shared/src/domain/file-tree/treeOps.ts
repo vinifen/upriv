@@ -18,6 +18,17 @@ export function getParentPath(path: string): string {
   return segments.length === 0 ? "/" : `/${segments.join("/")}`;
 }
 
+/** Folder paths from `/` down to the parent of `path` (for reveal-in-explorer). */
+export function ancestorFolderPaths(path: string): string[] {
+  if (!path || path === "/") return ["/"];
+  const segments = path.split("/").filter(Boolean);
+  const folders: string[] = ["/"];
+  for (let i = 0; i < segments.length - 1; i += 1) {
+    folders.push(`/${segments.slice(0, i + 1).join("/")}`);
+  }
+  return folders;
+}
+
 export function siblingNames(root: FileTreeNode, parentPath: string): string[] {
   const parent = findNode(root, parentPath);
   return parent?.children?.map((child) => child.name) ?? [];
@@ -103,6 +114,15 @@ export function collectFilePaths(root: FileTreeNode, base = "/"): string[] {
   );
 }
 
+/** Same prefix rule as vault FS: exact `from` or any `from/…` descendant. */
+export function remapLogicalPath(path: string, fromPrefix: string, toPrefix: string): string {
+  if (path === fromPrefix) return toPrefix;
+  if (path.startsWith(`${fromPrefix}/`)) {
+    return `${toPrefix}${path.slice(fromPrefix.length)}`;
+  }
+  return path;
+}
+
 export function remapContentPaths(
   contents: Record<string, string>,
   fromPrefix: string,
@@ -110,13 +130,7 @@ export function remapContentPaths(
 ): Record<string, string> {
   const next: Record<string, string> = {};
   for (const [path, value] of Object.entries(contents)) {
-    if (path === fromPrefix) {
-      next[toPrefix] = value;
-    } else if (path.startsWith(`${fromPrefix}/`)) {
-      next[`${toPrefix}${path.slice(fromPrefix.length)}`] = value;
-    } else {
-      next[path] = value;
-    }
+    next[remapLogicalPath(path, fromPrefix, toPrefix)] = value;
   }
   return next;
 }

@@ -5,6 +5,7 @@ import {
   importDisplayNameFromFilename,
   suggestValidDisplayName,
   validateDisplayName,
+  liveDisplayNameError,
   vaultDisplayLetters,
 } from "..";
 
@@ -78,6 +79,32 @@ describe("validateDisplayName", () => {
   it("accepts valid names", () => {
     expect(validateDisplayName("My Encrypted Notes")).toBeNull();
   });
+
+  it("collapses internal whitespace", () => {
+    expect(validateDisplayName("TEST    ASDF")).toBeNull();
+    expect(suggestValidDisplayName("Notes:   2026")).toBe("Notes_ 2026");
+  });
+});
+
+describe("liveDisplayNameError", () => {
+  it("skips empty when the field is optional", () => {
+    expect(liveDisplayNameError("", { allowEmpty: true })).toBeNull();
+    expect(liveDisplayNameError("   ", { allowEmpty: true })).toBeNull();
+  });
+
+  it("still flags illegal characters when empty is allowed", () => {
+    expect(liveDisplayNameError("asd /23", { allowEmpty: true })).toBe("invalid_chars");
+  });
+
+  it("flags empty when the field is required", () => {
+    expect(liveDisplayNameError("")).toBe("empty");
+  });
+
+  it("allows in-progress spaces; persist collapses them", () => {
+    expect(liveDisplayNameError("My ")).toBeNull();
+    expect(liveDisplayNameError("My  Vault")).toBeNull();
+    expect(liveDisplayNameError("My Vault.")).toBe("trailing");
+  });
 });
 
 describe("vaultDisplayLetters", () => {
@@ -115,5 +142,25 @@ describe("displayNameToVaultId", () => {
 
   it("falls back to vault when slug is empty", () => {
     expect(displayNameToVaultId("!!!", [])).toBe("vault");
+  });
+
+  it("turns ß into a hyphen like NFD (ß does not decompose)", () => {
+    expect(displayNameToVaultId("Straße", [])).toBe("stra-e");
+  });
+
+  it("does not invent ASCII for letters that NFD does not decompose", () => {
+    expect(displayNameToVaultId("Øresund", [])).toBe("resund");
+    expect(displayNameToVaultId("Kıbrıs", [])).toBe("k-br-s");
+    expect(displayNameToVaultId("Łódź", [])).toBe("odz");
+    expect(displayNameToVaultId("Đakovo", [])).toBe("akovo");
+    expect(displayNameToVaultId("Ħamrun", [])).toBe("amrun");
+    expect(displayNameToVaultId("Nguyễn", [])).toBe("nguyen");
+    expect(displayNameToVaultId("Hà Nội", [])).toBe("ha-noi");
+    expect(displayNameToVaultId("İstanbul", [])).toBe("istanbul");
+    expect(displayNameToVaultId("XŉY", [])).toBe("x-y");
+  });
+
+  it("skips Windows reserved slugs", () => {
+    expect(displayNameToVaultId("CON", [])).toBe("con-2");
   });
 });

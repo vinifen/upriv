@@ -8,10 +8,12 @@ import { modalShadow, radii, spacing } from "@/theme/tokens";
 interface ToastProps {
   message: string | null;
   onDismiss: () => void;
+  /** Extra lift above the default safe-area offset (file-manager dock). */
+  bottomExtra?: number;
 }
 
 /** Bottom toast — desktop `Toast` parity (message + close). */
-export function Toast({ message, onDismiss }: ToastProps) {
+export function Toast({ message, onDismiss, bottomExtra = 0 }: ToastProps) {
   const insets = useSafeAreaInsets();
   const { t } = useTranslation();
   const { colors, typography } = useTheme();
@@ -19,7 +21,10 @@ export function Toast({ message, onDismiss }: ToastProps) {
   return (
     <View
       pointerEvents="box-none"
-      style={[styles.wrap, { bottom: Math.max(insets.bottom, spacing.md) + spacing.md }]}
+      style={[
+        styles.wrap,
+        { bottom: Math.max(insets.bottom, spacing.md) + spacing.md + bottomExtra },
+      ]}
     >
       <View
         style={[

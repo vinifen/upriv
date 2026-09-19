@@ -69,7 +69,7 @@ pub fn load_vault_config_raw(vault_dir: impl AsRef<Path>) -> Result<VaultConfig>
         });
     }
     let raw = std::fs::read_to_string(&path).map_err(UprivError::from)?;
-    let parsed: VaultConfig =
+    let mut parsed: VaultConfig =
         toml::from_str(&raw).map_err(|error| UprivError::VaultConfigInvalid {
             path: path.clone(),
             detail: format!("invalid config.toml: {error}"),
@@ -81,7 +81,8 @@ pub fn load_vault_config_raw(vault_dir: impl AsRef<Path>) -> Result<VaultConfig>
             detail: "[vault].id is empty".into(),
         });
     }
-    if parsed.vault.display_name.trim().is_empty() {
+    parsed.vault.display_name = crate::paths::normalize_stored_name(&parsed.vault.display_name);
+    if parsed.vault.display_name.is_empty() {
         return Err(UprivError::VaultConfigInvalid {
             path,
             detail: "[vault].display_name is empty".into(),
@@ -120,6 +121,44 @@ pub fn load_vault_config_raw(vault_dir: impl AsRef<Path>) -> Result<VaultConfig>
         seven_zip: parsed.seven_zip,
         policy: parsed.policy,
     })
+}
+
+/// Trim, collapse internal whitespace, and reject empty / illegal / reserved names.
+pub(crate) fn normalize_and_validate_display_name(raw: &str) -> Result<String> {
+    let name = crate::paths::normalize_stored_name(raw);
+    if name.is_empty() {
+        return Err(UprivError::VaultConfigInvalid {
+            path: PathBuf::from("config.toml"),
+            detail: "[vault].display_name is empty".into(),
+        });
+    }
+    if name.encode_utf16().count() > 128 {
+        return Err(UprivError::VaultConfigInvalid {
+            path: PathBuf::from("config.toml"),
+            detail: "[vault].display_name is too long (max 128)".into(),
+        });
+    }
+    if name.ends_with('.') {
+        return Err(UprivError::VaultConfigInvalid {
+            path: PathBuf::from("config.toml"),
+            detail: "[vault].display_name cannot end with a space or period".into(),
+        });
+    }
+    if name.chars().any(|c| {
+        matches!(c, '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|') || c.is_control()
+    }) {
+        return Err(UprivError::VaultConfigInvalid {
+            path: PathBuf::from("config.toml"),
+            detail: "[vault].display_name contains forbidden characters".into(),
+        });
+    }
+    if crate::paths::is_windows_reserved_device_name(&name) {
+        return Err(UprivError::VaultConfigInvalid {
+            path: PathBuf::from("config.toml"),
+            detail: "[vault].display_name is a reserved Windows device name".into(),
+        });
+    }
+    Ok(name)
 }
 
 /// Load and fully validate a vault `config.toml` (identity + mount).
@@ -186,6 +225,7 @@ pub fn serialize_vault_config_toml(config: &VaultConfig) -> Result<String> {
 
 fn serialize_vault_config_toml_unchecked(config: &VaultConfig) -> Result<String> {
     let mut config = config.clone();
+    config.vault.display_name = crate::paths::normalize_stored_name(&config.vault.display_name);
     config.security.mode = config.security.mode.normalized();
     let body = toml::to_string_pretty(&config).map_err(|error| UprivError::VaultConfigInvalid {
         path: PathBuf::from("config.toml"),

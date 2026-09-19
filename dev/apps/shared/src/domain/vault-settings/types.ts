@@ -1,4 +1,5 @@
 import type { StorageMode } from "../vault/types";
+import { normalizeStoredName } from "../format/storedName";
 import { normalizeMountWorkspacePath } from "../workspace";
 
 export type { KdfParams, KdfUnlockPreset } from "./kdf";
@@ -147,6 +148,10 @@ export function sevenZipPatchFromCompressionPreset(
 export function normalizeVaultSettingsConfig(config: VaultSettingsConfig): VaultSettingsConfig {
   return {
     ...config,
+    vault: {
+      ...config.vault,
+      display_name: normalizeStoredName(config.vault.display_name),
+    },
     mount: {
       workspace_path: normalizeMountWorkspacePath(config.mount?.workspace_path),
     },
@@ -237,8 +242,21 @@ export function vaultSettingsEqual(a: VaultSettingsConfig, b: VaultSettingsConfi
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
-/** List fields synced from `[vault]` on save (`vault_config_save`). */
+/** True when only `[vault].id` / `display_name` differ (rename path already persisted those). */
+export function vaultSettingsEqualIgnoringIdentity(
+  a: VaultSettingsConfig,
+  b: VaultSettingsConfig,
+): boolean {
+  return vaultSettingsEqual(
+    { ...a, vault: { ...a.vault, id: "", display_name: "" } },
+    { ...b, vault: { ...b.vault, id: "", display_name: "" } },
+  );
+}
+
+/** List fields synced from `[vault]` on save (`vault_config_save` / `vault_rename`). */
 export interface VaultSettingsListPatch {
+  /** Effective vault id after save (may differ from the modal’s previous id when renamed). */
+  id: string;
   displayName: string;
   order: number;
   note: string;
