@@ -230,7 +230,6 @@ export function VaultRootSetupModal({
         ? "modal.vault_root_setup.body_dev"
         : "modal.vault_root_setup.body_portable";
 
-
   return (
     <Modal
       open={open}

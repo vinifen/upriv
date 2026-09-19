@@ -450,7 +450,11 @@ export function VaultSettingsModal({
         if (renamedIdentity) {
           onVaultSettingsSaved?.(
             fromId,
-            vaultSettingsIdentityListPatch(baseline, renamedIdentity.id, renamedIdentity.displayName),
+            vaultSettingsIdentityListPatch(
+              baseline,
+              renamedIdentity.id,
+              renamedIdentity.displayName,
+            ),
           );
         }
         if (generation !== sectionBusyGenRef.current) return;

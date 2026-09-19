@@ -286,7 +286,6 @@ export function VaultRootDataFolderModal({
     vaultRoot,
   ]);
 
-
   const footer = discardConfirmOpen ? (
     <View style={styles.footerCol}>
       <Text style={typography.bodyMuted}>{t("modal.settings.discard_confirm")}</Text>

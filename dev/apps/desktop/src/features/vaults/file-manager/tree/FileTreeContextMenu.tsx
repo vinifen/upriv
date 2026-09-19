@@ -31,9 +31,7 @@ export function FileTreeContextMenu({ fm, tree }: FileTreeContextMenuProps) {
   const isRoot = menu?.path === "/";
   const isFolder = node?.type === "folder";
   const parentForCreate = menu && isFolder ? menu.path : menu ? getParentPath(menu.path) : "/";
-  const title = isRoot
-    ? t("modal.file_manager.explorer.title")
-    : (node?.name ?? "");
+  const title = isRoot ? t("modal.file_manager.explorer.title") : (node?.name ?? "");
 
   const close = () => fm.dispatch({ type: "set_context_menu", menu: null });
 
@@ -167,10 +165,7 @@ export function FileTreeContextMenu({ fm, tree }: FileTreeContextMenuProps) {
             key={item.id}
             type="button"
             role="menuitem"
-            className={[
-              menuItemClass,
-              item.danger ? "!text-on-error-container" : "",
-            ].join(" ")}
+            className={[menuItemClass, item.danger ? "!text-on-error-container" : ""].join(" ")}
             style={item.danger ? { color: "var(--on-error-container)" } : undefined}
             onClick={() => {
               if (item.id !== "copy") close();

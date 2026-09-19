@@ -149,10 +149,7 @@ export function FileManagerTabBar({
   if (openTabs.length === 0) {
     return (
       <View
-        style={[
-          styles.emptyBar,
-          { height: barHeight, backgroundColor: colors.surfaceContainer },
-        ]}
+        style={[styles.emptyBar, { height: barHeight, backgroundColor: colors.surfaceContainer }]}
       >
         <Text style={[typography.caption, { color: colors.onSurfaceVariant }]}>
           {t("modal.file_manager.tabs.empty")}
@@ -164,12 +161,7 @@ export function FileManagerTabBar({
   const isDragging = Boolean(dragSourcePath);
 
   return (
-    <View
-      style={[
-        styles.bar,
-        { height: barHeight, backgroundColor: colors.surfaceContainer },
-      ]}
-    >
+    <View style={[styles.bar, { height: barHeight, backgroundColor: colors.surfaceContainer }]}>
       <ScrollView
         horizontal
         scrollEnabled={!isDragging}

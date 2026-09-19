@@ -13,9 +13,7 @@ function decodeUriLoose(uri: string): string {
   }
 }
 
-function treeParts(
-  decoded: string,
-): { authority: string; treeId: string } | null {
+function treeParts(decoded: string): { authority: string; treeId: string } | null {
   const match = /^content:\/\/([^/]+)\/tree\/(.+)$/i.exec(decoded);
   if (!match) return null;
   const authority = (match[1] ?? "").toLowerCase();

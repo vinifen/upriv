@@ -95,11 +95,7 @@ export function Collapse({
       style={style}
       aria-hidden={!open}
     >
-      <div
-        className={
-          settled && expanded ? "min-h-0 min-w-0" : "min-h-0 min-w-0 overflow-hidden"
-        }
-      >
+      <div className={settled && expanded ? "min-h-0 min-w-0" : "min-h-0 min-w-0 overflow-hidden"}>
         {children}
       </div>
     </div>

@@ -180,19 +180,33 @@ fn rollback_error(old_dir: &Path, parts: Vec<String>) -> UprivError {
     }
 }
 
-/// Restore prior identity files after a failed migration. Errors are visible, not swallowed.
-fn rollback_migration(
-    root: &VaultRoot,
-    old_id: &str,
-    new_id: &str,
-    old_dir: &Path,
-    new_dir: &Path,
-    prior_config: &VaultConfig,
-    prior_persistence: &Option<VaultPersistence>,
+struct RenameRollback<'a> {
+    root: &'a VaultRoot,
+    old_id: &'a str,
+    new_id: &'a str,
+    old_dir: &'a Path,
+    new_dir: &'a Path,
+    prior_config: &'a VaultConfig,
+    prior_persistence: &'a Option<VaultPersistence>,
     groups_remapped: bool,
     last_opened_patched: bool,
-    mount_moved: &Option<(PathBuf, PathBuf)>,
-) -> Result<()> {
+    mount_moved: &'a Option<(PathBuf, PathBuf)>,
+}
+
+/// Restore prior identity files after a failed migration. Errors are visible, not swallowed.
+fn rollback_migration(ctx: RenameRollback<'_>) -> Result<()> {
+    let RenameRollback {
+        root,
+        old_id,
+        new_id,
+        old_dir,
+        new_dir,
+        prior_config,
+        prior_persistence,
+        groups_remapped,
+        last_opened_patched,
+        mount_moved,
+    } = ctx;
     let mut errors: Vec<String> = Vec::new();
     if last_opened_patched {
         if let Err(error) = patch_last_opened(root, new_id, old_id) {
@@ -325,18 +339,18 @@ pub fn rename_vault(
             })();
 
             if let Err(error) = migrated {
-                return match rollback_migration(
+                return match rollback_migration(RenameRollback {
                     root,
                     old_id,
-                    &new_id,
-                    &old_dir,
-                    &new_dir,
-                    &prior_config,
-                    &prior_persistence,
+                    new_id: &new_id,
+                    old_dir: &old_dir,
+                    new_dir: &new_dir,
+                    prior_config: &prior_config,
+                    prior_persistence: &prior_persistence,
                     groups_remapped,
                     last_opened_patched,
-                    &mount_moved,
-                ) {
+                    mount_moved: &mount_moved,
+                }) {
                     Ok(()) => Err(error),
                     Err(rollback) => Err(combine_migrate_and_rollback(&old_dir, error, rollback)),
                 };
@@ -629,18 +643,18 @@ mode = "encrypted_dir"
         broken.vault.display_name = "Work Docs".into();
         save_vault_config(&new_dir, &broken).unwrap();
 
-        rollback_migration(
-            &root,
-            "notes",
-            "work-docs",
-            &old_dir,
-            &new_dir,
-            &prior,
-            &None,
-            false,
-            false,
-            &None,
-        )
+        rollback_migration(RenameRollback {
+            root: &root,
+            old_id: "notes",
+            new_id: "work-docs",
+            old_dir: &old_dir,
+            new_dir: &new_dir,
+            prior_config: &prior,
+            prior_persistence: &None,
+            groups_remapped: false,
+            last_opened_patched: false,
+            mount_moved: &None,
+        })
         .expect("rollback");
 
         assert!(old_dir.is_dir());

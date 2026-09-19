@@ -41,7 +41,12 @@ export {
   vaultSettingsEqualIgnoringIdentity,
   vaultSettingsSectionsForStorage,
 } from "./types";
-export { vaultSettingsToListPatch, vaultSettingsIdentityListPatch, applyVaultSettingsListPatch, remapVaultIdInGroups } from "./listPatch";
+export {
+  vaultSettingsToListPatch,
+  vaultSettingsIdentityListPatch,
+  applyVaultSettingsListPatch,
+  remapVaultIdInGroups,
+} from "./listPatch";
 export { rebaseQuietLockedVaultSettings } from "./rebaseQuiet";
 export {
   VAULT_SETTINGS_AREA_ICON,

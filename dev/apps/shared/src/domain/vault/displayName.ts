@@ -28,9 +28,7 @@ export function suggestValidDisplayName(raw: string): string {
     trimmed.replace(FORBIDDEN_CHARS_GLOBAL, "_").replace(/[ .]+$/u, ""),
   );
   if (next.length > VAULT_DISPLAY_NAME_MAX_LENGTH) {
-    next = normalizeStoredName(
-      next.slice(0, VAULT_DISPLAY_NAME_MAX_LENGTH).replace(/[ .]+$/u, ""),
-    );
+    next = normalizeStoredName(next.slice(0, VAULT_DISPLAY_NAME_MAX_LENGTH).replace(/[ .]+$/u, ""));
   }
   if (!validateDisplayName(next)) return next;
   return "vault";

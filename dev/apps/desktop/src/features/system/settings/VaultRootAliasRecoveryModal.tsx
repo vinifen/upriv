@@ -329,7 +329,6 @@ export function VaultRootAliasRecoveryModal({
     setConfirmOpen(true);
   }, [blocked, busy, confirmOpen]);
 
-
   return (
     <Modal
       open={open}

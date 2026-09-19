@@ -1,14 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { sameSafTreeUri, shouldReleaseImportTreePermission } from "../sameSafTreeUri";
 
-const DOWNLOAD =
-  "content://com.android.externalstorage.documents/tree/primary%3ADownload";
-const DOWNLOAD_DECODED =
-  "content://com.android.externalstorage.documents/tree/primary:Download";
+const DOWNLOAD = "content://com.android.externalstorage.documents/tree/primary%3ADownload";
+const DOWNLOAD_DECODED = "content://com.android.externalstorage.documents/tree/primary:Download";
 const DOWNLOAD_DOCUMENT =
   "content://com.android.externalstorage.documents/tree/primary%3ADownload/document/primary%3ADownload";
-const NOTES =
-  "content://com.android.externalstorage.documents/tree/primary%3ADownload%2Fnotes";
+const NOTES = "content://com.android.externalstorage.documents/tree/primary%3ADownload%2Fnotes";
 
 describe("sameSafTreeUri", () => {
   it("treats percent-encoding and document leaf as the same tree", () => {
@@ -41,8 +38,6 @@ describe("shouldReleaseImportTreePermission", () => {
   });
 
   it("ignores non-content URIs", () => {
-    expect(shouldReleaseImportTreePermission("/storage/emulated/0/Download", null)).toBe(
-      false,
-    );
+    expect(shouldReleaseImportTreePermission("/storage/emulated/0/Download", null)).toBe(false);
   });
 });

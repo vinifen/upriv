@@ -9,8 +9,7 @@ export type BlocksGroupCell = {
 };
 
 export type BlocksPackCell =
-  | { kind: "vault"; key: string; vault: VaultListItem }
-  | ({ kind: "group" } & BlocksGroupCell);
+  { kind: "vault"; key: string; vault: VaultListItem } | ({ kind: "group" } & BlocksGroupCell);
 
 export type FlatHierarchyRow =
   | ({ kind: "group_block" } & BlocksGroupCell)

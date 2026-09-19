@@ -1,5 +1,8 @@
 import { type ReactNode } from "react";
-import { FileManagerProvider as SharedFileManagerProvider, useFileManager } from "@upriv/shared/react";
+import {
+  FileManagerProvider as SharedFileManagerProvider,
+  useFileManager,
+} from "@upriv/shared/react";
 import { useVaultFileSystemService } from "@/platform/services";
 
 export { useFileManager };

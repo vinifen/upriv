@@ -131,7 +131,6 @@ export function WorkspaceSetupModal({
     })();
   }, [blocked, chosenPath, onConfigured, patchSettings, t]);
 
-
   const footer = (
     <View style={styles.footerCol}>
       {error ? (

@@ -35,9 +35,7 @@ import { VaultLastOpenedIndicator } from "./VaultLastOpenedIndicator";
 import { VaultLockButton } from "./VaultLockButton";
 import { VaultRowActions } from "./VaultRowActions";
 import { VaultStatusBadge } from "./VaultStatusBadge";
-import {
-  VaultFileManagerIndicator,
-} from "@/features/vaults/file-manager/row/VaultFileManagerIndicator";
+import { VaultFileManagerIndicator } from "@/features/vaults/file-manager";
 import { useAppSettingsContext } from "@/features/system/settings";
 
 export interface VaultRowDropTargetProps {

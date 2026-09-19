@@ -94,7 +94,9 @@ export function listMockVaultSeedRows(): VaultListItem[] {
 
 export function knownMockVaultIds(): Set<string> {
   return new Set([
-    ...MOCK_VAULTS.filter((vault) => !suppressedSeedVaultIds.has(vault.id)).map((vault) => vault.id),
+    ...MOCK_VAULTS.filter((vault) => !suppressedSeedVaultIds.has(vault.id)).map(
+      (vault) => vault.id,
+    ),
     ...remappedSeedVaults.map((vault) => vault.id),
     ...extraMockVaultIds,
   ]);

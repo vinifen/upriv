@@ -436,7 +436,10 @@ export function LogsModal({ open, onClose }: LogsModalProps) {
           ) : listLoading && files.length === 0 ? (
             <View style={styles.placeholder} accessibilityState={{ busy: true }} />
           ) : (
-            <View style={styles.list} accessibilityState={{ busy: viewerLoading || Boolean(openingFilename) }}>
+            <View
+              style={styles.list}
+              accessibilityState={{ busy: viewerLoading || Boolean(openingFilename) }}
+            >
               {deleteTargets === null ? (
                 <LogListToolbar
                   allSelected={allSelected}

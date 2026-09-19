@@ -9,10 +9,7 @@ interface VaultFileManagerIndicatorProps {
   size?: number;
 }
 
-export function VaultFileManagerIndicator({
-  vaultId,
-  size = 14,
-}: VaultFileManagerIndicatorProps) {
+export function VaultFileManagerIndicator({ vaultId, size = 14 }: VaultFileManagerIndicatorProps) {
   const { t } = useTranslation();
   const { colors } = useTheme();
   const { entries } = useFileManager();

@@ -3,10 +3,7 @@ import { FILE_MANAGER_PICKER_CACHE_WIPE_RETRY_MS, hasUnsavedWorkspaceChanges } f
 import { useTranslation } from "@/i18n";
 import { useLogService } from "@/platform/services";
 import { useFileManager } from "./FileManagerContext";
-import {
-  retryPendingPickerCacheWipes,
-  setPickerCacheWipeFailedReporter,
-} from "./lib/osFileImport";
+import { retryPendingPickerCacheWipes, setPickerCacheWipeFailedReporter } from "./lib/osFileImport";
 import { FileManagerDock } from "./shell/FileManagerDock";
 import { FileManagerModal } from "./shell/FileManagerModal";
 import { FileManagerWorkspace } from "./workspace/FileManagerWorkspace";

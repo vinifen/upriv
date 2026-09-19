@@ -64,11 +64,7 @@ export function FileManagerModal({
   const framePadBottom = Math.max(insets.bottom, 12);
   const framePadH = spacing.sm;
   const panelMaxH = useMemo(
-    () =>
-      Math.max(
-        280,
-        windowHeight - framePadTop - framePadBottom,
-      ),
+    () => Math.max(280, windowHeight - framePadTop - framePadBottom),
     [windowHeight, framePadTop, framePadBottom],
   );
   // Near-full width like desktop `sm:w-[calc(100vw-72px)]`.
@@ -154,11 +150,7 @@ export function FileManagerModal({
   if (!mounted) return null;
 
   return (
-    <View
-      pointerEvents="box-none"
-      style={styles.root}
-      accessibilityViewIsModal
-    >
+    <View pointerEvents="box-none" style={styles.root} accessibilityViewIsModal>
       <Animated.View
         pointerEvents="none"
         style={[StyleSheet.absoluteFill, { backgroundColor: colors.modalScrim, opacity }]}
@@ -205,7 +197,10 @@ export function FileManagerModal({
               </Text>
               {contextTitle ? (
                 <>
-                  <Text style={[styles.separator, { color: colors.onSurfaceVariant }]} accessible={false}>
+                  <Text
+                    style={[styles.separator, { color: colors.onSurfaceVariant }]}
+                    accessible={false}
+                  >
                     —
                   </Text>
                   <Text

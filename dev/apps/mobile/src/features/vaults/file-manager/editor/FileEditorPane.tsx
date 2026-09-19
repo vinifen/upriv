@@ -103,13 +103,7 @@ function EditorWithLineNumbers({
   );
 }
 
-function ImagePreview({
-  src,
-  ariaLabel,
-}: {
-  src: string;
-  ariaLabel: string;
-}) {
+function ImagePreview({ src, ariaLabel }: { src: string; ariaLabel: string }) {
   const { colors } = useTheme();
   return (
     <View style={[styles.imageWrap, { backgroundColor: colors.surfaceContainerHigh }]}>
@@ -130,9 +124,7 @@ function EmptyState({ kicker, body }: { kicker: string; body: string }) {
       <Text style={[typography.caption, styles.kicker, { color: colors.onSurfaceVariant }]}>
         {kicker}
       </Text>
-      <Text style={[typography.body, styles.body, { color: colors.onSurfaceVariant }]}>
-        {body}
-      </Text>
+      <Text style={[typography.body, styles.body, { color: colors.onSurfaceVariant }]}>{body}</Text>
     </View>
   );
 }

@@ -87,7 +87,6 @@ export function HelpModal({ open, onClose }: HelpModalProps) {
     });
   };
 
-
   const versionCredit = (
     <>
       {distribution ? <>{t(distributionLabelKey(distribution))} · </> : null}

@@ -116,10 +116,7 @@ export const ICON_GLYPHS: Record<IconName, readonly IconShape[]> = {
   ],
   clock: [c(12, 12, 8, stroke), p("M12 8v4l3 2", roundJoin)],
   close: [p("M6 6l12 12M18 6L6 18", round)],
-  copy: [
-    r(9, 9, 11, 11, { rx: 2, strokeWidth: 1.75 }),
-    p("M5 15V5a2 2 0 0 1 2-2h10", roundJoin),
-  ],
+  copy: [r(9, 9, 11, 11, { rx: 2, strokeWidth: 1.75 }), p("M5 15V5a2 2 0 0 1 2-2h10", roundJoin)],
   cpu: [
     r(4, 4, 16, 16, { rx: 2, strokeWidth: 1.75 }),
     r(9, 9, 6, 6, { rx: 1, strokeWidth: 1.75 }),

@@ -324,7 +324,6 @@ export function VaultRootAliasRecoveryModal({
     setConfirmOpen(true);
   }, [blocked, busy, confirmOpen]);
 
-
   const pathIsSaf = isAndroidSafUri(pathInput);
 
   const localeOptions: SelectOption<LocaleId>[] = SUPPORTED_LOCALES.map((loc) => ({

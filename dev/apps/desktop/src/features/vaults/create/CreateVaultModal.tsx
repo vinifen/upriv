@@ -116,7 +116,6 @@ export function CreateVaultModal({
     if (!open) setCreateError(null);
   }, [open]);
 
-
   const footer = (
     <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
       <div className="sm:min-w-0 sm:flex-1">

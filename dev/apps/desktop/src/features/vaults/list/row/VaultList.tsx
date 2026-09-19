@@ -332,8 +332,7 @@ export function VaultList({
                     {row.groupedVaults.map((vault) => {
                       const groupedVaultKey = groupedVaultDragKey(row.group.id, vault.id);
                       const groupedVaultReorder =
-                        vaultListShowDrag &&
-                        canReorderGroupedVaults(groupedVaultSortOf(row.group));
+                        vaultListShowDrag && canReorderGroupedVaults(groupedVaultSortOf(row.group));
                       return renderBlockCard(vault, {
                         dragDisabled:
                           !vaultListShowDrag ||
@@ -377,9 +376,7 @@ export function VaultList({
               dropKey={key}
               pipelineListStatus={pipelineListStatus}
               viewMode={viewMode}
-              dragDisabled={
-                !vaultListShowDrag || (!canReorder && !vaultListAllowDragIntoGroup)
-              }
+              dragDisabled={!vaultListShowDrag || (!canReorder && !vaultListAllowDragIntoGroup)}
               dragHandleLabel={canReorder ? reorderHandleLabel : groupHandleLabel}
               isDragging={draggingId === key}
               isDragOver={isDropOver(key)}
@@ -442,12 +439,9 @@ export function VaultList({
                       pipelineListStatus={pipelineListStatus}
                       viewMode={viewMode}
                       dragDisabled={
-                        !vaultListShowDrag ||
-                        (!groupedVaultReorder && !vaultListAllowDragIntoGroup)
+                        !vaultListShowDrag || (!groupedVaultReorder && !vaultListAllowDragIntoGroup)
                       }
-                      dragHandleLabel={
-                        groupedVaultReorder ? reorderHandleLabel : groupHandleLabel
-                      }
+                      dragHandleLabel={groupedVaultReorder ? reorderHandleLabel : groupHandleLabel}
                       isDragging={draggingId === groupedVaultKey}
                       isDragOver={isDropOver(groupedVaultKey)}
                       isDropBlocked={dropOverBlocked}

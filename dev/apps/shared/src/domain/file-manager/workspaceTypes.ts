@@ -11,8 +11,7 @@ export interface FileDeleteTarget {
 }
 
 export type UnsavedPromptAction =
-  | { type: "close_tab"; path: string }
-  | { type: "dismiss_workspace" };
+  { type: "close_tab"; path: string } | { type: "dismiss_workspace" };
 
 /** VS Code-style explorer cue: created (green) outranks modified (accent). */
 export type SessionPathKind = "created" | "modified";
@@ -84,10 +83,7 @@ function pathOrDescendantInList(paths: readonly string[], path: string): boolean
  * Session cue for a file/folder icon (self or any descendant).
  * Created wins over modified — same priority as VS Code source-control colors.
  */
-export function sessionPathKind(
-  state: VaultWorkspaceState,
-  path: string,
-): SessionPathKind | null {
+export function sessionPathKind(state: VaultWorkspaceState, path: string): SessionPathKind | null {
   if (pathOrDescendantInList(state.sessionCreatedPaths, path)) return "created";
   if (
     pathOrDescendantInList(state.sessionModifiedPaths, path) ||
