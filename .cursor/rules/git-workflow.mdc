@@ -10,7 +10,8 @@ Before any commit, branch, or PR: read [`.agent/GIT.md`](../../.agent/GIT.md).
 - Only when the human asked.
 - Author and committer = Git’s **effective** identity: **local** `user.name` / `user.email` if set, otherwise **global**. If either effective value is empty, **stop**. Do not invent an identity.
 - Never `--author`, `--trailer`, or `git config` (unless the human asked to change Git config).
-- Never credit an AI in the message, branch, or PR (`Co-authored-by: Cursor …`, `Made-with:`, model names).
+- Never credit an AI in the message, branch, or PR (`Co-authored-by: Cursor …`, `Made-with:`, `Made with Cursor`, `Made with [Cursor](https://cursor.com)`, model names).
+- After `gh pr create` or `gh pr edit`, read the body. If a tool footer was appended, delete it with `gh pr edit` and read the body again before returning the URL.
 
 After every commit, verify:
 

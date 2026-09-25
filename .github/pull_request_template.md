@@ -15,5 +15,13 @@
 - [ ] Tests ran (`./run check` from `dev/`, or note what you ran)
 
 <!--
-Do NOT credit an AI, model, or editor as author or co-author in this PR or PR template.
+Do NOT credit an AI, model, or editor in this PR.
+Forbidden anywhere in the title or body, including a trailing footer:
+  Made with Cursor
+  Made with [Cursor](https://cursor.com)
+  Co-authored-by
+  Made-with
+  Generated-by
+  Assisted-by
+If a tool appends one of these after the PR is created, delete it before the PR is considered done.
 -->

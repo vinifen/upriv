@@ -418,7 +418,7 @@ npm run typecheck --prefix apps/mobile
 3. **Security:** No passwords/secrets in logs, commits, or UI persistence. Use `zeroize` in Rust for sensitive buffers.
 4. **Config:** TOML is source of truth; mutable at runtime; re-read before open/close.
 5. **Fail safe:** No overwrite of `store/` without verification and atomic write.
-6. **Git:** Read [`GIT.md`](GIT.md) before commit/PR. Never commit `dev/target/`, `node_modules/`, `dist/`, `.env`, large binaries. Commit `Cargo.lock` in workspace. **Never** set the AI as Git author or co-author — use Git’s effective `user.name` / `user.email` (local if set, else global). After each commit, verify identity and that the message has no AI credit.
+6. **Git:** Read [`GIT.md`](GIT.md) before commit/PR. Never commit `dev/target/`, `node_modules/`, `dist/`, `.env`, large binaries. Commit `Cargo.lock` in workspace. **Never** set the AI as Git author or co-author — use Git’s effective `user.name` / `user.email` (local if set, else global). After each commit, verify identity and that the message has no AI credit. After every PR create or edit, read the body and delete a `Made with Cursor` / `Made with [Cursor](https://cursor.com)` footer if the host appended one.
 7. **Design:** Shipped UI follows PRD §3.7 + SDD §8.2 + i18n.
 
 ---

@@ -44,6 +44,6 @@ Why this exists, if the subject is not enough.
 Types: `feat` `fix` `docs` `style` `refactor` `perf` `test` `chore` `infra` `revert` `release` `hotfix`  
 Scopes (optional): `core` `rpc` `daemon` `ffi` `desktop` `electron` `mobile` `shared` `docs` `ci`
 
-Open a PR into **`develop`**. Title matches the commit subject. Body: summary, related issue, two-box checklist ([template](.github/pull_request_template.md)).
+Open a PR into **`develop`**. Title matches the commit subject. Body: summary, related issue, two-box checklist ([template](.github/pull_request_template.md)). No editor footer (`Made with Cursor`, `Made with [Cursor](https://cursor.com)`, `Co-authored-by`, `Made-with`, `Generated-by`, `Assisted-by`). If one is appended after the PR is created, remove it before the PR is done.
 
 **Author of every commit is the human Git user** (`git config user.name` / `user.email`: local if set, else global). Tools and models are not authors or co-authors. Full rule: [`docs/gitflow/COMMITS.md`](docs/gitflow/COMMITS.md).
