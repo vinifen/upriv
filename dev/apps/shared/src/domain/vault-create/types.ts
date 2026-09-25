@@ -3,6 +3,9 @@ import type { VaultSettingsConfig } from "../vault-settings";
 
 export type CreateVaultSource = "import" | "scratch";
 
+/** How an import draft was chosen — a backup tree is not a `.7z` archive. */
+export type CreateVaultImportKind = "file" | "backup";
+
 export const CREATE_VAULT_STEPS = [
   "source",
   "identity",
@@ -25,6 +28,8 @@ export type CreateVaultGroupAssignment =
 
 export interface CreateVaultDraft {
   source: CreateVaultSource | null;
+  /** `backup` skips 7z password/probe and copies frozen `store/`. */
+  importKind: CreateVaultImportKind;
   importFileName: string;
   importFilePath: string;
   displayName: string;
@@ -34,6 +39,8 @@ export interface CreateVaultDraft {
   passwordHint: string;
   passwordValidated: boolean;
   passwordTestFailed: boolean;
+  /** Probe threw (SAF / missing method) — not a wrong archive password. */
+  passwordProbeUnavailable: boolean;
   auto_close: VaultSettingsConfig["auto_close"];
   backup: VaultSettingsConfig["backup"];
   /** Create-time only — written to `vault.header`, not `config.toml`. */
@@ -64,4 +71,7 @@ export interface CreateVaultResult {
   unlockPreset?: KdfUnlockPreset;
   groupAssignment: CreateVaultGroupAssignment;
   source: CreateVaultSource;
+  importKind: CreateVaultImportKind;
+  importFilePath?: string;
+  importFileName?: string;
 }

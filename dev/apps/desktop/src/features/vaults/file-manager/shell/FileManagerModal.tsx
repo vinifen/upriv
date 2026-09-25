@@ -21,6 +21,11 @@ interface FileManagerModalProps {
   onDismiss: () => void;
   /** When true, Escape and backdrop click do not minimize (unsaved dialog is active). */
   suspendMinimize?: boolean;
+  /**
+   * Keep children mounted after the overlay hides so minimized vaults can keep
+   * in-flight import skeletons and session state.
+   */
+  keepMounted?: boolean;
   children: ReactNode;
 }
 
@@ -32,6 +37,7 @@ export function FileManagerModal({
   onMinimize,
   onDismiss,
   suspendMinimize = false,
+  keepMounted = false,
   children,
 }: FileManagerModalProps) {
   const { t } = useTranslation();
@@ -40,11 +46,13 @@ export function FileManagerModal({
   const scrimStart = useRef<{ x: number; y: number } | null>(null);
   const [mounted, setMounted] = useState(open);
   const [visible, setVisible] = useState(false);
+  const [collapsed, setCollapsed] = useState(!open);
   const panelRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (open) {
       setMounted(true);
+      setCollapsed(false);
       setVisible(false);
       return;
     }
@@ -53,12 +61,16 @@ export function FileManagerModal({
       typeof window !== "undefined" &&
       window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     if (reduce) {
-      setMounted(false);
+      if (!keepMounted) setMounted(false);
+      setCollapsed(true);
       return;
     }
-    const id = window.setTimeout(() => setMounted(false), MODAL_CLOSE_MS);
+    const id = window.setTimeout(() => {
+      if (!keepMounted) setMounted(false);
+      setCollapsed(true);
+    }, MODAL_CLOSE_MS);
     return () => window.clearTimeout(id);
-  }, [open]);
+  }, [open, keepMounted]);
 
   useEffect(() => {
     if (!open || !mounted || visible) return;
@@ -95,19 +107,20 @@ export function FileManagerModal({
   }, [open, onMinimize, suspendMinimize]);
 
   useEffect(() => {
-    if (!mounted) return;
+    if (!open) return;
     acquireScrollLock();
     return () => releaseScrollLock();
-  }, [mounted]);
+  }, [open]);
 
   useEffect(() => {
-    if (!mounted) return;
+    if (!open) return;
     acquireOpenModal();
     return () => releaseOpenModal();
-  }, [mounted]);
+  }, [open]);
 
   if (!mounted) return null;
 
+  const showChrome = !collapsed;
   const motionMs = visible ? MODAL_OPEN_MS : MODAL_CLOSE_MS;
   const panelMotion: CSSProperties = {
     transitionDuration: `${motionMs}ms`,
@@ -118,83 +131,109 @@ export function FileManagerModal({
   };
 
   return createPortal(
-    <div className="fixed inset-0 z-[100]">
-      <div
-        className={[
-          "absolute inset-0 bg-[var(--modal-scrim)] transition-opacity motion-reduce:!transition-none",
-          visible ? "opacity-100" : "opacity-0",
-        ].join(" ")}
-        style={{
-          transitionDuration: `${motionMs}ms`,
-          transitionTimingFunction: "cubic-bezier(0.22, 1, 0.36, 1)",
-        }}
-        aria-hidden
-        onPointerDown={
-          suspendMinimize
-            ? undefined
-            : (event) => {
-                scrimStart.current = { x: event.clientX, y: event.clientY };
-              }
-        }
-        onClick={
-          suspendMinimize
-            ? undefined
-            : (event) => {
-                const start = scrimStart.current;
-                scrimStart.current = null;
-                if (!start) {
-                  onMinimize();
-                  return;
+    <div
+      className={showChrome ? "fixed inset-0 z-[100]" : "hidden"}
+      hidden={!showChrome}
+      aria-hidden={!showChrome}
+    >
+      {showChrome ? (
+        <div
+          className={[
+            "absolute inset-0 bg-[var(--modal-scrim)] transition-opacity motion-reduce:!transition-none",
+            visible ? "opacity-100" : "opacity-0",
+          ].join(" ")}
+          style={{
+            transitionDuration: `${motionMs}ms`,
+            transitionTimingFunction: "cubic-bezier(0.22, 1, 0.36, 1)",
+          }}
+          aria-hidden
+          onPointerDown={
+            suspendMinimize
+              ? undefined
+              : (event) => {
+                  scrimStart.current = { x: event.clientX, y: event.clientY };
                 }
-                const dx = event.clientX - start.x;
-                const dy = event.clientY - start.y;
-                if (dx * dx + dy * dy <= 100) onMinimize();
-              }
+          }
+          onClick={
+            suspendMinimize
+              ? undefined
+              : (event) => {
+                  const start = scrimStart.current;
+                  scrimStart.current = null;
+                  if (!start) {
+                    onMinimize();
+                    return;
+                  }
+                  const dx = event.clientX - start.x;
+                  const dy = event.clientY - start.y;
+                  if (dx * dx + dy * dy <= 100) onMinimize();
+                }
+          }
+        />
+      ) : null}
+      <div
+        className={
+          showChrome
+            ? "pointer-events-none relative z-10 flex h-[100dvh] w-full items-center justify-center p-0 sm:h-full"
+            : undefined
         }
-      />
-      <div className="pointer-events-none relative z-10 flex h-[100dvh] w-full items-center justify-center p-0 sm:h-full">
+      >
         <div
           ref={panelRef}
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby={contextTitle ? `${titleId} ${contextId}` : titleId}
-          className={[
-            "pointer-events-auto flex h-full min-h-0 w-full flex-col overflow-hidden",
-            "origin-center bg-surface-container-high shadow-modal transition-[opacity,transform] motion-reduce:!transition-none",
-            "rounded-none",
-            "sm:h-[calc(100vh-48px)] sm:max-h-[calc(100vh-48px)] sm:w-[calc(100vw-72px)] sm:max-w-[calc(100vw-72px)] sm:rounded-2xl",
-          ].join(" ")}
-          style={panelMotion}
-          onMouseDown={(event) => event.stopPropagation()}
-          onClick={(event) => event.stopPropagation()}
+          role={showChrome ? "dialog" : undefined}
+          aria-modal={showChrome ? "true" : undefined}
+          aria-labelledby={
+            showChrome ? (contextTitle ? `${titleId} ${contextId}` : titleId) : undefined
+          }
+          className={
+            showChrome
+              ? [
+                  "pointer-events-auto flex h-full min-h-0 w-full flex-col overflow-hidden",
+                  "origin-center bg-surface-container-high shadow-modal transition-[opacity,transform] motion-reduce:!transition-none",
+                  "rounded-none",
+                  "sm:h-[calc(100vh-48px)] sm:max-h-[calc(100vh-48px)] sm:w-[calc(100vw-72px)] sm:max-w-[calc(100vw-72px)] sm:rounded-2xl",
+                ].join(" ")
+              : undefined
+          }
+          style={showChrome ? panelMotion : undefined}
+          onMouseDown={showChrome ? (event) => event.stopPropagation() : undefined}
+          onClick={showChrome ? (event) => event.stopPropagation() : undefined}
         >
-          <header className="flex min-h-11 shrink-0 items-center justify-between gap-2 px-4 sm:min-h-12 sm:px-5">
-            <ModalTitleCluster
-              titleId={titleId}
-              contextId={contextId}
-              title={title}
-              contextTitle={contextTitle}
-              titleIcon={titleIcon}
-              compact
-            />
-            <div className="flex shrink-0 items-center self-center gap-0.5">
-              <ModalChromeButton
-                onClick={onMinimize}
-                aria-label={t("modal.file_manager.action.minimize")}
-                title={t("modal.file_manager.action.minimize")}
-              >
-                <Icon name="minus" size={18} className="block" />
-              </ModalChromeButton>
-              <ModalChromeButton
-                onClick={onDismiss}
-                aria-label={t("modal.file_manager.action.dismiss")}
-                title={`${t("modal.file_manager.action.dismiss")}. ${t("modal.file_manager.action.dismiss_help")}`}
-              >
-                <Icon name="close" size={18} className="block" />
-              </ModalChromeButton>
-            </div>
-          </header>
-          <div className="flex min-h-0 flex-1 flex-col overflow-hidden text-body text-on-surface">
+          {showChrome ? (
+            <header className="flex min-h-11 shrink-0 items-center justify-between gap-2 px-4 sm:min-h-12 sm:px-5">
+              <ModalTitleCluster
+                titleId={titleId}
+                contextId={contextId}
+                title={title}
+                contextTitle={contextTitle}
+                titleIcon={titleIcon}
+                compact
+              />
+              <div className="flex shrink-0 items-center self-center gap-0.5">
+                <ModalChromeButton
+                  onClick={onMinimize}
+                  aria-label={t("modal.file_manager.action.minimize")}
+                  title={t("modal.file_manager.action.minimize")}
+                >
+                  <Icon name="minus" size={18} className="block" />
+                </ModalChromeButton>
+                <ModalChromeButton
+                  onClick={onDismiss}
+                  aria-label={t("modal.file_manager.action.dismiss")}
+                  title={`${t("modal.file_manager.action.dismiss")}. ${t("modal.file_manager.action.dismiss_help")}`}
+                >
+                  <Icon name="close" size={18} className="block" />
+                </ModalChromeButton>
+              </div>
+            </header>
+          ) : null}
+          <div
+            className={
+              showChrome
+                ? "flex min-h-0 flex-1 flex-col overflow-hidden text-body text-on-surface"
+                : undefined
+            }
+          >
             {children}
           </div>
         </div>

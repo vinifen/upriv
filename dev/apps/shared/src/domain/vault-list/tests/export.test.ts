@@ -9,45 +9,42 @@ import { vaultListItemFixture } from "./fixtures";
 
 describe("vaultExportFilename", () => {
   it("uses the display name, not a slug", () => {
-    expect(vaultExportFilename("Minhas notas", "contents_zip")).toBe("Minhas notas.zip");
+    expect(vaultExportFilename("Minhas notas", "store_zip")).toBe("Minhas notas.zip");
     expect(vaultExportFilename("Minhas notas", "seven_zip")).toBe("Minhas notas.7z");
   });
 
   it("trims the display name", () => {
-    expect(vaultExportFilename("  Vault  ", "contents_zip")).toBe("Vault.zip");
+    expect(vaultExportFilename("  Vault  ", "store_zip")).toBe("Vault.zip");
   });
 
   it("collapses extra spaces in the display name", () => {
-    expect(vaultExportFilename("My    notes", "contents_zip")).toBe("My notes.zip");
+    expect(vaultExportFilename("My    notes", "store_zip")).toBe("My notes.zip");
   });
 
   it("replaces illegal path characters instead of dropping the name", () => {
     expect(vaultExportFilename("a/b:c", "seven_zip")).toBe("a_b_c.7z");
-    expect(vaultExportFilename("Notes: 2026", "contents_zip")).toBe("Notes_ 2026.zip");
+    expect(vaultExportFilename("Notes: 2026", "store_zip")).toBe("Notes_ 2026.zip");
   });
 
   it("replaces control characters, including DEL and C1", () => {
-    expect(vaultExportFilename("a\u0001b", "contents_zip")).toBe("a_b.zip");
-    expect(vaultExportFilename("a\u007fb", "contents_zip")).toBe("a_b.zip");
-    expect(vaultExportFilename("a\u0085b", "contents_zip")).toBe("a_b.zip");
+    expect(vaultExportFilename("a\u0001b", "store_zip")).toBe("a_b.zip");
+    expect(vaultExportFilename("a\u007fb", "store_zip")).toBe("a_b.zip");
+    expect(vaultExportFilename("a\u0085b", "store_zip")).toBe("a_b.zip");
   });
 
   it("falls back to vault for empty, dot and reserved names", () => {
-    expect(vaultExportFilename("", "contents_zip")).toBe("vault.zip");
-    expect(vaultExportFilename("..", "contents_zip")).toBe("vault.zip");
-    expect(vaultExportFilename("CON", "contents_zip")).toBe("vault.zip");
+    expect(vaultExportFilename("", "store_zip")).toBe("vault.zip");
+    expect(vaultExportFilename("..", "store_zip")).toBe("vault.zip");
+    expect(vaultExportFilename("CON", "store_zip")).toBe("vault.zip");
   });
 
   it("does not throw on a lone surrogate", () => {
-    expect(vaultExportFilename("Fotos \uD83D", "contents_zip")).toBe("Fotos \uD83D.zip");
+    expect(vaultExportFilename("Fotos \uD83D", "store_zip")).toBe("Fotos \uD83D.zip");
   });
 
-  it("defaults callers to a .zip of encrypted contents", () => {
+  it("defaults callers to a .zip of the encrypted vault", () => {
     expect(
-      vaultExportFilename(
-        vaultListItemFixture({ displayName: "Demo" }).displayName,
-        "contents_zip",
-      ),
+      vaultExportFilename(vaultListItemFixture({ displayName: "Demo" }).displayName, "store_zip"),
     ).toBe("Demo.zip");
   });
 });
@@ -57,7 +54,7 @@ describe("vaultCanExport", () => {
     expect(vaultCanExport(vaultListItemFixture({ session: null }))).toBe(true);
   });
 
-  it("allows open vaults", () => {
+  it("refuses open vaults", () => {
     expect(
       vaultCanExport(
         vaultListItemFixture({
@@ -65,7 +62,7 @@ describe("vaultCanExport", () => {
           session: "open",
         }),
       ),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("allows upriv_plain vaults", () => {
@@ -106,7 +103,7 @@ describe("exportFilenameSanitizeKind", () => {
     expect(exportFilenameSanitizeKind("CON")).toBe("fallback");
   });
 
-  it("defaults the zip format to contents_zip", () => {
-    expect(DEFAULT_VAULT_EXPORT_FORMAT).toBe("contents_zip");
+  it("defaults the zip format to store_zip", () => {
+    expect(DEFAULT_VAULT_EXPORT_FORMAT).toBe("store_zip");
   });
 });

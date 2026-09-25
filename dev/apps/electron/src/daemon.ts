@@ -415,13 +415,18 @@ export async function startDaemon(): Promise<DaemonConnection> {
   });
 }
 
-export async function stopDaemon(connection: DaemonConnection | null): Promise<void> {
+export async function stopDaemon(
+  connection: DaemonConnection | null,
+  options?: { flush?: boolean },
+): Promise<void> {
   if (!connection?.alive) return;
 
-  try {
-    await daemonRpc(connection, SHUTDOWN_METHOD, {}, SHUTDOWN_TIMEOUT_MS);
-  } catch {
-    // Daemon may already be stopping.
+  if (options?.flush !== false) {
+    try {
+      await daemonRpc(connection, SHUTDOWN_METHOD, {}, SHUTDOWN_TIMEOUT_MS);
+    } catch {
+      // Daemon may already be stopping.
+    }
   }
 
   rejectAllPending(connection, new Error("upriv-daemon stopped"));

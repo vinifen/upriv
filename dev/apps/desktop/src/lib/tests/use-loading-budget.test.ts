@@ -86,4 +86,17 @@ describe("useLoadingBudget", () => {
     expect(second.result.current.visible).toBe(true);
     expect(second.result.current.remainingMs).toBe(first.result.current.remainingMs);
   });
+
+  it("shows vaultFsImport overlay after 1s when appear delay is overridden", () => {
+    const { result } = renderHook(() =>
+      useLoadingBudget(true, LOADING_BUDGET_MS.vaultFsImport, {
+        appearDelayMs: LOADING_APPEAR_DELAY_MS,
+      }),
+    );
+    act(() => {
+      vi.advanceTimersByTime(LOADING_APPEAR_DELAY_MS);
+    });
+    expect(result.current.visible).toBe(true);
+    expect(result.current.timedOut).toBe(false);
+  });
 });

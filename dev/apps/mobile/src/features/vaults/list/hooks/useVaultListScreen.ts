@@ -28,6 +28,7 @@ import {
   sortVaultsByOrder,
   vaultIdsInHiddenGroups,
   vaultIdsUnhiddenByGroups,
+  canDeleteVaultNow,
   resolveVaultListStatus,
   vaultCanExport,
   RpcError,
@@ -40,6 +41,7 @@ import {
   VAULT_NOTE_MAX_LENGTH,
   VAULT_ROW_DENSITY,
   vaultBlocksColumnCount,
+  createVaultImportPackage,
   type CreateVaultDraft,
   type CreateVaultGroupAssignment,
   type CreateVaultResult,
@@ -56,7 +58,6 @@ import {
   useVaultLifecycleService,
   useVaultService,
 } from "@/platform/services";
-import { unregisterMockVaultId } from "@/platform/mocks/data/vaults";
 import { useAppSettingsContext } from "@/features/system/settings";
 import { useTranslation } from "@/i18n";
 import { mobileErrorI18nKey } from "@/lib/errorMessages";
@@ -91,7 +92,8 @@ export function useVaultListScreen() {
   const appHeaderHeight = measuredHeaderHeight ?? headerHeightFallback;
   const { width: windowWidth } = useWindowDimensions();
   const { message, show, dismiss } = useToast();
-  const { openFromVault, syncWithVaultList, purgeForVaultClose } = useFileManager();
+  const { openFromVault, syncWithVaultList, purgeForVaultClose, flushWorkspaceSnapshot } =
+    useFileManager();
 
   const state = useVaultListState(
     settings.ui.vault_list_search,
@@ -160,6 +162,21 @@ export function useVaultListScreen() {
 
   const existingVaultIds = useMemo(() => vaults.map((vault) => vault.id), [vaults]);
   const existingOrders = useMemo(() => vaults.map((vault) => vault.order ?? 0), [vaults]);
+
+  const openCreate = useCallback(
+    (draft: CreateVaultDraft | null = null, step: CreateVaultStepId | null = null) => {
+      setCreateDraft(draft);
+      setCreateStep(step);
+      setCreateOpen(true);
+    },
+    [setCreateDraft, setCreateOpen, setCreateStep],
+  );
+
+  const closeCreate = useCallback(() => {
+    setCreateOpen(false);
+    setCreateDraft(null);
+    setCreateStep(null);
+  }, [setCreateDraft, setCreateOpen, setCreateStep]);
   const noteVault = useMemo(
     () => vaults.find((vault) => vault.id === noteVaultId) ?? null,
     [vaults, noteVaultId],
@@ -233,6 +250,7 @@ export function useVaultListScreen() {
     showToast: show,
     dismissToast: dismiss,
     onDiscardWorkspace: purgeForVaultClose,
+    onFlushWorkspace: flushWorkspaceSnapshot,
     onOpenFileManager: openFromVault,
     settingsPersistVaultIdsRef,
   });
@@ -309,27 +327,13 @@ export function useVaultListScreen() {
     syncWithVaultList(vaults);
   }, [syncWithVaultList, vaults]);
 
-  const openCreate = useCallback(
-    (draft: CreateVaultDraft | null = null, step: CreateVaultStepId | null = null) => {
-      setCreateDraft(draft);
-      setCreateStep(step);
-      setCreateOpen(true);
-    },
-    [setCreateDraft, setCreateOpen, setCreateStep],
-  );
-
-  const closeCreate = useCallback(() => {
-    setCreateOpen(false);
-    setCreateDraft(null);
-    setCreateStep(null);
-  }, [setCreateDraft, setCreateOpen, setCreateStep]);
-
   const pipelineStatus = useMemo(
     () => ({
       openingVaultIds: [...lifecycle.openingVaultIds],
       closingVaultIds: [...lifecycle.closingVaultIds],
       creatingVaultIds: [...lifecycle.creatingVaultIds],
       queuedVaultIds: [...lifecycle.queuedVaultIds],
+      queuedOpenVaultIds: [...lifecycle.queuedOpenVaultIds],
       activeVaultId: lifecycle.activePipelineVaultId ?? undefined,
       activeStartedAt: lifecycle.activePipelineStartedAt ?? undefined,
     }),
@@ -339,6 +343,7 @@ export function useVaultListScreen() {
       lifecycle.closingVaultIds,
       lifecycle.creatingVaultIds,
       lifecycle.openingVaultIds,
+      lifecycle.queuedOpenVaultIds,
       lifecycle.queuedVaultIds,
     ],
   );
@@ -354,12 +359,17 @@ export function useVaultListScreen() {
       setExportSubmitting(true);
       void exportVaultPackage(
         vault,
-        (row, exportRequest) => vaultService.getExportBytes(row, exportRequest),
+        {
+          getExportBytes: (row, exportRequest) => vaultService.getExportBytes(row, exportRequest),
+          exportToPath: (row, exportRequest, destPath) =>
+            vaultService.exportToPath(row, exportRequest, destPath),
+        },
         request,
         abort.signal,
       )
-        .then(() => {
+        .then((outcome) => {
           if (gen !== exportBusyGenRef.current) return;
+          if (outcome === "cancelled") return;
           show(t("vault.export.success", { name: vault.displayName }));
           setExportVault(null);
         })
@@ -721,32 +731,23 @@ export function useVaultListScreen() {
       show(t("error.not_implemented"));
       return;
     }
+    const target = vaults.find((vault) => vault.id === vaultId);
+    if (!target || !canDeleteVaultNow(resolveVaultListStatus(target, pipelineStatus))) {
+      show(t("modal.settings.delete_only_closed"));
+      return;
+    }
 
     lifecycle.cancelClosingHold(vaultId);
     lifecycle.invalidateOpenRetain(vaultId);
 
     groupBusyGenRef.current += 1;
     try {
-      const containing = groupsRef.current.filter((group) => group.groupedVaults.includes(vaultId));
-      for (const group of containing) {
-        await vaultGroupService.update({
-          id: group.id,
-          groupedVaults: group.groupedVaults.filter((id) => id !== vaultId),
-        });
-      }
       await vaultService.unregisterSettings(vaultId);
     } catch (error) {
       show(t(mobileErrorI18nKey(error, "error.unexpected")));
-      try {
-        const listed = await vaultGroupService.list();
-        applyListedGroups(listed);
-      } catch (listError) {
-        show(t(mobileErrorI18nKey(listError, "toast.refresh_failed")));
-      }
       return;
     }
 
-    unregisterMockVaultId(vaultId);
     lifecycleService.clearPasswordInSession(vaultId);
     sessionWritesRef.current.delete(vaultId);
     pendingCreatesRef.current.delete(vaultId);
@@ -896,9 +897,6 @@ export function useVaultListScreen() {
   }, [setExportSubmitting, show, t]);
 
   const handleCreateVault = (result: CreateVaultResult, password: string) => {
-    if (result.source === "import") {
-      throw new RpcError("not_implemented", "Import and create-from-backup are not implemented");
-    }
     if (
       vaults.some((vault) => vault.id === result.vaultId) ||
       isVaultPipelineBusy(result.vaultId)
@@ -931,6 +929,7 @@ export function useVaultListScreen() {
           password,
           unlockPreset: result.unlockPreset,
           settings: result.settings,
+          importPackage: createVaultImportPackage(result, password),
         });
       },
       {

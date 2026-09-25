@@ -3,11 +3,11 @@ import { createEmptyCreateVaultDraft } from "./defaults";
 import type { CreateVaultDraft } from "./types";
 
 /**
- * Seed create-vault wizard for an OS-dropped or picked `.zip` of `contents/` or `.7z`.
+ * Seed create-vault wizard for an OS-dropped or picked `.zip` of `store/` or `.7z`.
  *
- * FUTURE: `importFilePath` must be a real absolute path (Electron `File.path` or
- * daemon-copied path under the vault-root). Browser File blobs alone are not enough
- * for the eventual copy-into-vault-folder step.
+ * `importFilePath` must be a real absolute path (Electron `webUtils.getPathForFile`
+ * / native picker). Never fall back to the filename — the daemon would treat it as
+ * a relative path and fail with a misleading IO error.
  */
 export function createDraftFromImportPackage(
   fileName: string,
@@ -16,11 +16,12 @@ export function createDraftFromImportPackage(
 ): CreateVaultDraft {
   const draft = createEmptyCreateVaultDraft(existingOrders);
   const trimmedName = fileName.trim();
-  const path = options?.filePath?.trim() || trimmedName;
+  const path = options?.filePath?.trim() ?? "";
 
   return {
     ...draft,
     source: "import",
+    importKind: "file",
     importFileName: trimmedName,
     importFilePath: path,
     displayName: importDisplayNameFromFilename(trimmedName).displayName,

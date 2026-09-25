@@ -11,6 +11,6 @@ export interface VaultListItem extends VaultRow {
   lastAccessedAt: string;
   /** Optional annotation stored in config (`[vault] note`); empty string when unset. */
   note: string;
-  /** From `contents/vault.header` when readable without the password. */
+  /** From `store/header/vault.header` when readable without the password. */
   unlockPreset?: KdfUnlockPreset;
 }

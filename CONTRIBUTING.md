@@ -12,7 +12,7 @@ Thanks for taking the time. Upriv is a portable encrypted vault manager. You do 
 2. **Suggestion** — [idea template](https://github.com/vinifen/upriv/issues/new?template=2_suggestion.md).
 3. **Pull request** — fork (or a branch on this repo), work against **`develop`**, open a PR using the conventions below.
 
-Please write issues, commits, and PR text in **English**. The app UI is translated separately (`dev/docs/LOCALE.md`). Never paste passwords, vault contents, or raw `contents/` dumps. Crypto or plaintext-leak reports: [`SECURITY.md`](SECURITY.md).
+Please write issues, commits, and PR text in **English**. The app UI is translated separately (`dev/docs/LOCALE.md`). Never paste passwords, vault contents, or raw `store/` dumps. Crypto or plaintext-leak reports: [`SECURITY.md`](SECURITY.md).
 
 ## Development setup
 

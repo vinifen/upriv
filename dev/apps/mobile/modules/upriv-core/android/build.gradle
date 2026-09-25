@@ -37,6 +37,7 @@ dependencies {
   implementation "net.java.dev.jna:jna:5.14.0@aar"
   // SAF DocumentFile helpers for content:// vault-root trees.
   implementation "androidx.documentfile:documentfile:1.0.1"
+  implementation "androidx.core:core-ktx:1.15.0"
 }
 
 def safeExtGet(prop, fallback) {

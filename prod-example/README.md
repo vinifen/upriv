@@ -1,6 +1,6 @@
 # Upriv — reference bundle (vault-oriented layout)
 
-> **STALE — do not copy into `dev/`.** Dropped-mode vaults (`plain_only` / `ram_only` / `store_only`) and leftover `archive/` / `store/` directories were removed from this tree. Remaining docs and some `config.toml` fields still describe the old layout (Seal, `persistence.json`, `vault_file`). It is **not** the shipping on-disk protocol and must not be used as a layout template for new code. Canonical rest layout is **`contents/`**, two modes (`encrypted_dir` / `upriv_plain`), lock = close — see [`.agent/SECURITY-CRYPTO.md`](../.agent/SECURITY-CRYPTO.md). Greenfield: no migrator from this tree. Prefer a fresh vault-root created by the app (or fixtures under `dev/`) for development.
+> **STALE — do not copy into `dev/`.** Dropped-mode vaults (`plain_only` / `ram_only` / `store_only`) and leftover Seal-era `archive/` / `store/` directories were removed from this tree. Remaining docs and some `config.toml` fields still describe the old layout (Seal, `persistence.json`, `vault_file`). It is **not** the shipping on-disk protocol and must not be used as a layout template for new code. Canonical rest layout is greenfield **`store/`** (not Seal-era `store/`), two modes (`encrypted_dir` / `upriv_plain`), lock = close — see [`.agent/SECURITY-CRYPTO.md`](../.agent/SECURITY-CRYPTO.md). Greenfield: no migrator from this tree. Prefer a fresh vault-root created by the app (or fixtures under `dev/`) for development.
 
 **Standalone sample only.** This folder shows a historical vault-root shape for discovery/smoke tests. It is **not** linked to `dev/` — no symlinks, no build dependency. To try the desktop app against this layout, set `UPRIV_VAULT_ROOT` to an absolute copy of this folder (or this path if you run locally) **knowing the layout is outdated**.
 
@@ -26,7 +26,7 @@ Same word **config**, different **folder** — no collision. Discovery: scan `va
 | **`.upriv/settings.toml`** | App marker, paths, UI, logging |
 | **`.upriv/state.json`** | Open sessions only (volatile; cleared on quit) |
 | **`.upriv/vault_groups.toml`** | Optional vault list groups (`[[group]]` id, display_name, order, collapsed, grouped_vaults[]) |
-| **`.upriv/vaults/<id>/`** | Per vault: `config.toml`, `persistence.json`, `backups/`, `auth/` (this bundle has no `contents/` trees) |
+| **`.upriv/vaults/<id>/`** | Per vault: `config.toml`, `persistence.json`, `backups/`, `auth/` (this bundle has no `store/` trees) |
 | **`.upriv/logs/`** | App logs (`.log`, 1000 lines per file; see § Logs) |
 | **`.upriv/app/`** | Platform binaries + brand assets |
 | **`workspace/<display_name>/`** | Mount targets while open — user-visible name (package root) |

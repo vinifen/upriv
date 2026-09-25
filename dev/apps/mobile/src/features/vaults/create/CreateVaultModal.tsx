@@ -113,7 +113,8 @@ export function CreateVaultModal({
     initialStep,
     onCreate,
     onClose,
-    testImportPassword: (password) => createVaultService.testImportPackagePassword(password),
+    testImportPassword: (password, importFile) =>
+      createVaultService.testImportPackagePassword(password, importFile),
   });
 
   const {

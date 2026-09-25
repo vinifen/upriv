@@ -15,6 +15,7 @@ export function createDraftFromBackup(
   return {
     ...draft,
     source: "import",
+    importKind: "backup",
     importFileName: stamp,
     importFilePath: `vaults/${sourceVaultId}/backups/${stamp}`,
     displayName,

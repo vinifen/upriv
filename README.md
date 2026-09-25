@@ -1,6 +1,6 @@
 # 🔐 Upriv
 
-**Encrypted vaults you control** — files stay ciphertext on disk (`contents/`). Open in a session, lock when you’re done. Export a normal **`.zip` of that ciphertext** (recommended) or a portable **`.7z`**.
+**Encrypted vaults you control** — files stay ciphertext on disk (`store/`). Open in a session, lock when you’re done. Export a normal **`.zip` of that ciphertext** (recommended) or a portable **`.7z`**.
 
 | | |
 |---|---|
@@ -9,7 +9,7 @@
 | **Mobile** | Expo / React Native + UniFFI (`upriv-ffi`) |
 | **UI languages** | English · Português (Brasil) · Español |
 
-> **Today:** vault root setup, settings, vault list, create, groups, and open/close talk to live `upriv-core`. File manager / FUSE and change-password are still in progress.
+> **Today:** greenfield. One store format (`format_version` 1). Vault root setup, settings, vault list, create, groups, open/close, the in-app file manager, Linux FUSE, zip and `.7z` import/export, and backups talk to live `upriv-core`. There is no importer for an older vault layout. WinFsp and change-password are not in this build.
 
 ---
 
@@ -18,7 +18,7 @@
 - 📁 **Data folder** — pick a default or custom root; repair / recover if something’s incomplete
 - 🗂️ **Vault list** — create, group, sort, search, hide, open / lock
 - 🔑 **Unlock** — Argon2id + AEAD at rest; optional public password hint
-- 📦 **Export** — `.zip` of `contents/` (envelope only) or `.7z` (weaker offline guessing)
+- 📦 **Export** — `.zip` of `store/` (envelope only) or `.7z` (weaker offline guessing)
 - 🖥️📱 **Same product** — shared domain package `@upriv/shared` on desktop and mobile
 
 **Security stance (short):** default mode never leaves a decrypted vault tree on ordinary disk. Details: [`.agent/SECURITY-CRYPTO.md`](.agent/SECURITY-CRYPTO.md) · [`.agent/SECURITY-PLAINTEXT.md`](.agent/SECURITY-PLAINTEXT.md).

@@ -18,9 +18,8 @@ export interface VaultImportDropHandlers {
 /**
  * Accept OS `.zip` / `.7z` drops on the vault list when no blocking UI is open.
  *
- * FUTURE: copy the file into the vault-root via daemon, detect zip-of-contents vs
- * 7z, and replace mock `selectImportPackageForProbe`. Multi-file drops use the
- * first matching name only.
+ * Electron 32+ exposes the real path via `window.upriv.getPathForFile`.
+ * Multi-file drops use the first matching name only.
  */
 export function useVaultImportDrop(options: {
   enabled: boolean;

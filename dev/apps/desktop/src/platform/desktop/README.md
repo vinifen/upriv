@@ -2,22 +2,21 @@
 
 Real `AppServices` implementations that call `upriv-daemon` via `desktopInvokeRaw()` / `rpc*.ts`.
 
-## Live vs mock
+## Live adapters
 
-| Service                                        | Desktop (`isDesktop()`)                             | Browser                                        |
-| ---------------------------------------------- | --------------------------------------------------- | ---------------------------------------------- |
-| `vaultRoot`                                    | **Live** — `vault_root_*` RPCs + `pick_directory`   | mock (in-memory)                               |
-| `appSettings`                                  | **Live** — `app_settings_get` / `app_settings_save` | mock                                           |
-| `logs`                                         | **Live** — `log_list` / `log_get` / `log_delete`    | **Live** (same adapter; needs Electron bridge) |
-| `vault`                                        | Stub empty `listVaults()` until `vault_list` RPC    | mock rows                                      |
-| backups / filesystem / lifecycle / createVault | mock                                                | mock                                           |
+| Service       | Desktop                                                    |
+| ------------- | ---------------------------------------------------------- |
+| `vaultRoot`   | `vault_root_*` RPCs + `pick_directory`                     |
+| `appSettings` | `app_settings_get` / `app_settings_save`                   |
+| `logs`        | `log_list` / `log_get` / `log_delete`                      |
+| `vault`       | list / create / import / config / rename / delete / export |
+| `lifecycle`   | `vault_open` / `vault_close`                               |
+| `vaultGroups` | group list / create / update / delete / reorder            |
+| `filesystem`  | `vault_fs_*` (in-app file manager)                         |
+| `backups`     | `backup_*` (ciphertext `backups/<stamp>.zip`)              |
+| `createVault` | `pick_file` + `vault_import_probe`                         |
 
-`createServices()`:
-
-```typescript
-if (isDesktop()) return createDesktopServices();
-return mockServices;
-```
+`createServices()` always returns `createDesktopServices()`. Vault calls need the Electron preload.
 
 ## Layout
 
@@ -27,8 +26,14 @@ platform/desktop/
 ├── createDesktopServices.ts
 └── services/
     ├── appSettingsService.ts
+    ├── backupService.ts
+    ├── createVaultService.ts
     ├── logService.ts
-    └── vaultRootService.ts
+    ├── vaultFileSystemService.ts
+    ├── vaultGroupService.ts
+    ├── vaultLifecycleService.ts
+    ├── vaultRootService.ts
+    └── vaultService.ts
 ```
 
 ### Dev vs prod default_root create

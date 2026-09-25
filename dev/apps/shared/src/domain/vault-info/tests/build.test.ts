@@ -28,13 +28,13 @@ function snapshot(overrides: Partial<VaultInfoSnapshot> = {}): VaultInfoSnapshot
       openCount: 2,
       lastOpenedAt: "2026-05-29T09:00:00.000Z",
       sessionRamBytes: 1024,
-      contentsBytes: 2048,
+      storeBytes: 2048,
       logicalFileCount: 4,
     },
     passwordInSession: true,
     workspacePath: "/data/workspace/Notes",
     workspacePathIsActive: true,
-    contentsPath: "/data/.upriv/vaults/notes/contents/",
+    storePath: "/data/.upriv/vaults/notes/store/",
     backupsPath: "/data/.upriv/vaults/notes/backups/",
     locale: "en",
     ...overrides,
@@ -126,5 +126,25 @@ describe("buildVaultInfoSections", () => {
     expect(field(sections, "kdf_preset")).toBe("—");
     expect(field(sections, "file_manager")).toBe("modal.info.value.not_eligible");
     expect(field(sections, "backup_latest")).toBe("—");
+  });
+
+  it("shows an em dash when runtime counters are unknown", () => {
+    const sections = buildVaultInfoSections(
+      snapshot({
+        runtime: {
+          openCount: null,
+          lastOpenedAt: null,
+          sessionRamBytes: null,
+          storeBytes: null,
+          logicalFileCount: null,
+        },
+      }),
+      t,
+    );
+    expect(field(sections, "open_count")).toBe("—");
+    expect(field(sections, "last_opened_at")).toBe("—");
+    expect(field(sections, "session_ram")).toBe("—");
+    expect(field(sections, "logical_file_count")).toBe("—");
+    expect(field(sections, "store_size")).toBe("—");
   });
 });

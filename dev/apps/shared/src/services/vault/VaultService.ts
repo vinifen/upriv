@@ -2,11 +2,23 @@ import type { KdfUnlockPreset } from "../../domain/vault-settings/kdf";
 import type { VaultExportRequest, VaultListItem } from "../../domain/vault-list";
 import type { VaultSettingsConfig } from "../../domain/vault-settings";
 import type { VaultRow } from "../../domain/vault";
+import type { VaultPathWriteResult } from "../backup/createLiveBackupService";
+
+export type VaultImportPackageKind = "store_zip" | "seven_zip";
+
+/** Zip of `store/` or logical `.7z`. Prefer `archivePath` so large files skip NDJSON. */
+export interface VaultImportPackage {
+  kind: VaultImportPackageKind;
+  archivePath?: string;
+  contentB64?: string;
+  archivePassword?: string;
+}
 
 export interface CreateVaultInput {
   password: string;
   unlockPreset?: KdfUnlockPreset;
   settings: VaultSettingsConfig;
+  importPackage?: VaultImportPackage;
 }
 
 /** Result of `vault_rename` (display name + optional folder id migration). */
@@ -21,15 +33,15 @@ export interface VaultRenameResult {
 export interface VaultService {
   /** Live when `vault_config_save` is wired (desktop/native). */
   readonly canPersistSettings: boolean;
-  /** Live adapters stay false until `vault_delete` lands. */
+  /** Live when `vault_delete` is wired. */
   readonly canDeleteVault: boolean;
-  /** Live adapters stay false until export zip/`.7z` RPC lands. */
+  /** Live when `vault_export` is wired. */
   readonly canExportVault: boolean;
 
   /** All vault rows for the list screen. */
   listVaults(): Promise<VaultListItem[]>;
 
-  /** Scratch create: writes `config.toml` + seeded `contents/` (password is not stored). */
+  /** Scratch create: writes `config.toml` + seeded `store/` (password is not stored). */
   createVault(input: CreateVaultInput): Promise<VaultListItem>;
 
   /** Load `vaults/<id>/config.toml` equivalent. */
@@ -44,11 +56,14 @@ export interface VaultService {
    */
   rename(vaultId: string, displayName: string): Promise<VaultRenameResult>;
 
-  /** Remove settings on vault delete. */
+  /** Remove the vault folder (wipe) via `vault_delete`. */
   unregisterSettings(vaultId: string): Promise<void>;
 
+  /** Clear dirty-close recovery (`vault_recover_ack`). */
+  recoverDirtyClose(vaultId: string): Promise<void>;
+
   /**
-   * Argon2id unlock preset from `contents/vault.header` (not `config.toml`).
+   * Argon2id unlock preset from `store/header/vault.header` (not `config.toml`).
    * Prefer `VaultListItem.unlockPreset` — live adapters do not relist for this field.
    * `undefined` when the header is missing or the probe is unavailable.
    */
@@ -59,7 +74,24 @@ export interface VaultService {
 
   /**
    * Export bytes for `{display_name}.zip` or `{display_name}.7z`.
-   * Zip = envelope of `contents/` (no zip password). `.7z` = logical stream (never `.enc` blobs).
+   * Zip = envelope of `store/` (no zip password). `.7z` = logical stream (never `.enc` blobs).
+   * Prefer `exportToPath` so large archives skip the NDJSON cap.
    */
   getExportBytes(vault: VaultRow, request: VaultExportRequest): Promise<Uint8Array>;
+
+  /** Write the export archive to `destPath` in core (no base64 in NDJSON). */
+  exportToPath(
+    vault: VaultRow,
+    request: VaultExportRequest,
+    destPath: string,
+  ): Promise<VaultPathWriteResult>;
+
+  /** Whether portable `.7z` export can run in RAM (always on when core is linked). Zip of `store/` is always available. */
+  exportCapabilities(): Promise<{ sevenZip: boolean }>;
+
+  /**
+   * Argon2id check that `password` unlocks this closed vault.
+   * Resolves `false` for a wrong password. Does not pack an export.
+   */
+  probeExportPassword(vaultId: string, password: string): Promise<boolean>;
 }

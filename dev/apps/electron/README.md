@@ -54,7 +54,7 @@ Chromium’s OS SUID sandbox often fails under AppArmor / AppImage (`setuid_sand
 
 ## RPC contract
 
-Method name constants: **`@upriv/shared` `CORE_RPC_COMMANDS`** (and desktop `lib/commands.ts`). Execution gate: **`upriv-rpc`** via **`upriv-daemon`**. Electron main only special-cases `app_exit`.
+Method name constants: **`@upriv/shared` `CORE_RPC_COMMANDS`** (and desktop `lib/commands.ts`). Execution gate: **`upriv-rpc`** via **`upriv-daemon`**. Electron main special-cases `app_exit`, `pick_directory`, and `pick_file`.
 
 Logs (daemon): `log_list` / `log_get` / `log_delete` — no Electron allowlist; all methods go to the daemon.
 

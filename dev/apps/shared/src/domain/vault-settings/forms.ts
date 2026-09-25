@@ -53,7 +53,7 @@ export function changePasswordFormCanSubmit(fields: {
   );
 }
 
-/** Unlock cost always comes from `contents/vault.header` (never `config.toml`). */
+/** Unlock cost always comes from `store/header/vault.header` (never `config.toml`). */
 export function changeKdfFormIsDirty(fields: {
   password: string;
   nextPreset: KdfUnlockPreset;

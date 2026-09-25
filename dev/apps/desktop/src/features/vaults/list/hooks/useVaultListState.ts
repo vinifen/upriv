@@ -31,7 +31,6 @@ import {
   resolveVaultPasswordHint,
   sortVaultsByOrder,
 } from "@upriv/shared";
-import { registerMockVaultId, unregisterMockVaultId } from "@/platform/mocks/data/vaults";
 import { hitVaultListDropKey } from "../lib/hitListDropKey";
 
 function seedVaultPasswordHints(vaults: VaultListItem[]): VaultListItem[] {
@@ -247,7 +246,6 @@ export function useVaultListState(
   }, []);
 
   const removeVault = useCallback((vaultId: string) => {
-    unregisterMockVaultId(vaultId);
     sessionWritesRef.current.delete(vaultId);
     setVaults((current) => current.filter((vault) => vault.id !== vaultId));
     setGroups((current) =>
@@ -303,7 +301,6 @@ export function useVaultListState(
   }, []);
 
   const addVault = useCallback((vault: VaultListItem) => {
-    registerMockVaultId(vault.id);
     sessionWritesRef.current.set(vault.id, Date.now());
     setVaults((current) => sortVaultsByOrder([...current, vault]));
   }, []);

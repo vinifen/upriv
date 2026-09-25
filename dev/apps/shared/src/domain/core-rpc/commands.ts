@@ -57,6 +57,43 @@ export const CORE_RPC_COMMANDS = {
   VAULT_CONFIG_SAVE: "vault_config_save",
   /** Deep rename: display name + folder/`[vault].id` migration (vault closed). */
   VAULT_RENAME: "vault_rename",
+  VAULT_DELETE: "vault_delete",
+  VAULT_RECOVER_ACK: "vault_recover_ack",
+  VAULT_EXPORT: "vault_export",
+  VAULT_EXPORT_CAPABILITIES: "vault_export_capabilities",
+  /** Argon2id unlock of a closed vault. Does not pack an export. */
+  VAULT_EXPORT_PROBE: "vault_export_probe",
+  VAULT_IMPORT_ZIP: "vault_import_zip",
+  VAULT_IMPORT_7Z: "vault_import_7z",
+  VAULT_IMPORT_PROBE: "vault_import_probe",
+  VAULT_FS_LIST: "vault_fs_list",
+  VAULT_FS_REVISION: "vault_fs_revision",
+  VAULT_FS_READ: "vault_fs_read",
+  VAULT_FS_READ_RANGE: "vault_fs_read_range",
+  VAULT_FS_WRITE: "vault_fs_write",
+  VAULT_FS_WRITE_RANGE: "vault_fs_write_range",
+  /**
+   * Stream an OS file into `store/` in the daemon (no JSON-RPC file bytes).
+   * Desktop drop / picker with a real path; mobile `file://` cache copies.
+   */
+  VAULT_FS_IMPORT_OS_FILE: "vault_fs_import_os_file",
+  VAULT_FS_TRUNCATE: "vault_fs_truncate",
+  VAULT_FS_MKDIR: "vault_fs_mkdir",
+  VAULT_FS_CREATE_FILE: "vault_fs_create_file",
+  VAULT_FS_CREATE_FOLDER: "vault_fs_create_folder",
+  VAULT_FS_ENSURE_FOLDER: "vault_fs_ensure_folder",
+  VAULT_FS_DELETE: "vault_fs_delete",
+  VAULT_FS_RENAME: "vault_fs_rename",
+  VAULT_FS_MOVE: "vault_fs_move",
+  /**
+   * Absolute OS path of a logical item on the live FUSE/WinFsp mount.
+   * Missing mount (mobile, WinFsp stub) → `vault_mount_failed`.
+   */
+  VAULT_FS_OS_PATH: "vault_fs_os_path",
+  BACKUP_LIST: "backup_list",
+  BACKUP_DELETE: "backup_delete",
+  BACKUP_PROMOTE: "backup_promote",
+  BACKUP_GET: "backup_get",
 } as const;
 
 /**
@@ -73,6 +110,12 @@ export const DESKTOP_ONLY_RPC_COMMANDS = {
 export const SHELL_ONLY_RPC_COMMANDS = {
   APP_EXIT: "app_exit",
   PICK_DIRECTORY: "pick_directory",
+  PICK_FILE: "pick_file",
+  PICK_SAVE_FILE: "pick_save_file",
+  /** Open the vault mount path in Finder / Explorer / the desktop file manager. */
+  REVEAL_IN_FILE_MANAGER: "reveal_in_file_manager",
+  /** Open a system terminal at the vault mount path (desktop only). */
+  OPEN_IN_TERMINAL: "open_in_terminal",
 } as const;
 
 export type CoreRpcCommand = (typeof CORE_RPC_COMMANDS)[keyof typeof CORE_RPC_COMMANDS];

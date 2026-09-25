@@ -1,6 +1,6 @@
 /**
  * Argon2id unlock-cost presets (SECURITY-CRYPTO).
- * Chosen at vault create; stored in `contents/vault.header`.
+ * Chosen at vault create; stored in `store/header/vault.header`.
  * Labels = guessing cost + RAM to unlock — never device class.
  */
 
@@ -48,9 +48,9 @@ export function kdfParamsFromPreset(preset: KdfUnlockPreset): KdfParams {
 
 /**
  * Reminder lines for `vaults/<id>/config.toml` (typically after `[storage]`).
- * Unlock cost is **never** a TOML section — only in `contents/vault.header`.
+ * Unlock cost is **never** a TOML section — only in `store/header/vault.header`.
  */
-export const CONFIG_TOML_KDF_ANNOTATION = `# Unlock RAM (Argon2id) lives in contents/vault.header — not in config.toml.
+export const CONFIG_TOML_KDF_ANNOTATION = `# Unlock RAM (Argon2id) lives in store/header/vault.header — not in config.toml.
 # There is no [kdf] section here; upriv-core reads KDF params from the header.`;
 
 /** Reminder for `vaults/<id>/config.toml` — group membership is a sibling file. */
@@ -85,10 +85,10 @@ function looksLikeBackupImportPath(path: string): boolean {
 }
 
 /**
- * Scratch and `.7z` import wrap a **new** `contents/` — user picks unlock RAM.
- * A `.zip` of `contents/` already has `vault.header` — skip the picker (copy
+ * Scratch and `.7z` import wrap a **new** `store/` — user picks unlock RAM.
+ * A `.zip` of `store/` already has `vault.header` — skip the picker (copy
  * ciphertext; do not rewrite KDF). Create-from-backup copies a frozen
- * `contents/` (stamp under `backups/`, often no `.zip` suffix) — same skip.
+ * `store/` (`importKind: "backup"`) — same skip.
  * Product import accepts only `.zip` | `.7z` (`isVaultImportFileName`); until
  * core peeks for `vault.header` inside the zip, extension is the interim
  * format signal (SECURITY-CRYPTO import table).
@@ -97,8 +97,10 @@ export function createVaultChoosesKdf(draft: {
   source: "import" | "scratch" | null;
   importFileName: string;
   importFilePath?: string;
+  importKind?: "file" | "backup";
 }): boolean {
   if (draft.source !== "import") return true;
+  if (draft.importKind === "backup") return false;
   if (looksLikeBackupImportPath(draft.importFilePath ?? "")) return false;
   const name = draft.importFileName.trim().toLowerCase();
   if (name.endsWith(".zip")) return false;

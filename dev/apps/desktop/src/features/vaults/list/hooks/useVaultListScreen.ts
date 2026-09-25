@@ -16,7 +16,10 @@ import {
   buildCreatingVaultListItem,
   buildPendingCreateGroupEffect,
   createDraftFromImportPackage,
+  createVaultImportPackage,
+  canDeleteVaultNow,
   displayNameToGroupId,
+  resolveVaultListStatus,
   mergePendingCreatingGroups,
   mergePendingCreatingVaults,
   pendingCreateGroupId,
@@ -510,9 +513,6 @@ export function useVaultListScreen() {
 
   const handleCreateVault = useCallback(
     (result: CreateVaultResult, password: string) => {
-      if (result.source === "import") {
-        throw new RpcError("not_implemented", "Import and create-from-backup are not implemented");
-      }
       if (
         vaults.some((vault) => vault.id === result.vaultId) ||
         lifecycle.pipeline.isVaultPipelineBusy(result.vaultId)
@@ -544,6 +544,7 @@ export function useVaultListScreen() {
             password,
             unlockPreset: result.unlockPreset,
             settings: result.settings,
+            importPackage: createVaultImportPackage(result, password),
           });
         },
         {
@@ -724,12 +725,17 @@ export function useVaultListScreen() {
 
   const handleDroppedImportPackage = useCallback(
     (file: File, absolutePath?: string) => {
+      if (!absolutePath) {
+        showToast(t("vault.create.error.import_file_missing"));
+        openCreateVaultWithDraft(createDraftForImportSource(existingOrders), "source");
+        return;
+      }
       openCreateVaultWithDraft(
         createDraftFromImportPackage(file.name, existingOrders, { filePath: absolutePath }),
         "source",
       );
     },
-    [existingOrders, openCreateVaultWithDraft],
+    [existingOrders, openCreateVaultWithDraft, showToast, t],
   );
 
   const handleRejectNonImportDrop = useCallback(() => {
@@ -804,28 +810,29 @@ export function useVaultListScreen() {
         showError(error, APP_SETTINGS_ERROR_I18N_KEYS.SAVE_FAILED);
         throw error;
       }
+      const target = vaults.find((vault) => vault.id === vaultId);
+      if (
+        !target ||
+        !canDeleteVaultNow(resolveVaultListStatus(target, lifecycle.pipelineListStatus))
+      ) {
+        showToast(t("modal.settings.delete_only_closed"));
+        return;
+      }
 
       try {
-        const containing = groups.filter((group) => group.groupedVaults.includes(vaultId));
-        for (const group of containing) {
-          await vaultGroupService.update({
-            id: group.id,
-            groupedVaults: group.groupedVaults.filter((id) => id !== vaultId),
-          });
-        }
         await vaultService.unregisterSettings(vaultId);
       } catch (error) {
         showError(error, APP_SETTINGS_ERROR_I18N_KEYS.SAVE_FAILED);
-        try {
-          await reloadGroups();
-        } catch (listError) {
-          showError(listError, "toast.refresh_failed");
-        }
         throw error;
       }
 
       lifecycle.handleVaultDelete(vaultId);
       removeVault(vaultId);
+      try {
+        await reloadGroups();
+      } catch (listError) {
+        showError(listError, "toast.refresh_failed");
+      }
       modals.setSettingsVaultId(null);
       modals.setSettingsArea(null);
       modals.setNoteVaultId(null);
@@ -837,18 +844,7 @@ export function useVaultListScreen() {
         modals.setRecoveryVaultId(null);
       }
     },
-    [
-      groups,
-      lifecycle,
-      modals,
-      reloadGroups,
-      removeVault,
-      showError,
-      showToast,
-      t,
-      vaultGroupService,
-      vaultService,
-    ],
+    [lifecycle, modals, reloadGroups, removeVault, showError, showToast, t, vaultService, vaults],
   );
 
   const handleCreateGroup = useCallback(
@@ -1166,6 +1162,7 @@ export function useVaultListScreen() {
       open: modals.backupVaultId !== null,
       onClose: () => modals.setBackupVaultId(null),
       onCreateVaultFromBackup: handleCreateVaultFromBackup,
+      onDownloadNotice: showToast,
     },
     exportVault: {
       vault: modals.exportVault,

@@ -16,14 +16,22 @@ export type { VaultWorkspaceAction } from "./workspaceReducer";
 export { vaultWorkspaceReducer, resolveUnsavedPrompt, reorderOpenTabs } from "./workspaceReducer";
 export type {
   FileManagerAction,
+  FileManagerDismissIntent,
   FileManagerEntry,
   FileManagerState,
   FileManagerSurface,
 } from "./dockReducer";
-export { createEmptyFileManagerState, fileManagerReducer } from "./dockReducer";
+export {
+  createEmptyFileManagerState,
+  fileManagerBlockingPrompt,
+  fileManagerDismissIntent,
+  fileManagerReducer,
+} from "./dockReducer";
 export {
   applyImportedFilesToWorkspace,
   importBatchIsReadFailure,
+  importBatchIsWriteFailure,
+  importBatchNeedsRetry,
   importLogicalFiles,
   type ImportLogicalFile,
   type ImportLogicalResult,
@@ -37,11 +45,14 @@ export {
   omitInternalVaultNodes,
   parseWorkspaceSnapshot,
   persistWorkspaceSnapshot,
+  serializedLayoutSnapshot,
   serializeWorkspaceSnapshot,
   sanitizeWorkspaceSnapshot,
   workspaceSnapshotFromState,
   workspaceStateFromSnapshot,
   snapshotsEqual,
+  isDefaultWorkspaceSnapshot,
+  shouldHydratePersistedWorkspace,
   type WorkspaceSnapshot,
   type WorkspaceSnapshotV1,
 } from "./workspaceSnapshot";

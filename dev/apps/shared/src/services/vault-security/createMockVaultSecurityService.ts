@@ -5,9 +5,8 @@ import type { VaultSecurityService } from "./VaultSecurityService";
 
 /**
  * Prototype UI only. Live desktop/native must use
- * `createUnavailableVaultSecurityService` until SECURITY-CRYPTO landmine P0
- * (chunk AAD vs salt rotation). This mock reports success without rewriting
- * `contents/` — never wire it against a real vault.
+ * `createUnavailableVaultSecurityService`. This mock reports success without
+ * rewriting `store/` — never wire it against a real vault.
  */
 const MOCK_WRONG_PASSWORD = "wrong";
 const MOCK_CHANGE_PASSWORD_MS = 700;

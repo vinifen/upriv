@@ -7,7 +7,7 @@ alwaysApply: true
 
 ## Hard rule
 
-In default mode `encrypted_dir`, **never** write or read decrypted vault file trees on ordinary disk (`/tmp`, `%TEMP%`, vault `workspace/`, crash staging, Android `filesDir`). Decrypt only in RAM (FUSE/WinFsp on desktop; in-app file manager on mobile); persist only ciphertext in `contents/`. Close flushes the session into `contents/` (PRD RF-45/RF-49). Export `.7z` (separate action) must **stream** logical content — never pack `.enc` blobs.
+In default mode `encrypted_dir`, **never** write or read decrypted vault file trees on ordinary disk (`/tmp`, `%TEMP%`, vault `workspace/`, crash staging, Android `filesDir`). Decrypt only in RAM (FUSE/WinFsp on desktop; in-app file manager on mobile); persist only ciphertext in `store/`. Close flushes the session into `store/` (PRD RF-45/RF-49). Export `.7z` (separate action) must **stream** logical content — never pack `.enc` blobs.
 
 **Transitional phases** (import, export, backup copy, password, recovery, cancel/crash) are the usual leak. A temp extract “just for 7zz / zip” is still a spill. Fail the op rather than write plaintext.
 

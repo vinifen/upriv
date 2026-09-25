@@ -14,6 +14,7 @@ import {
   NO_VAULT_GROUPS,
   isVaultInHiddenGroup,
   isHiddenGroup,
+  canDeleteVaultNow,
   resolveVaultListStatus,
   selectedGroupIdAfterAssignment,
   normalizeVaultSettingsConfig,
@@ -110,6 +111,7 @@ export function VaultSettingsModal({
   const { settings: appSettings, showHiddenVaultsSession } = useAppSettingsContext();
   const vaultId = vault?.id ?? null;
   const vaultListStatus = vault ? resolveVaultListStatus(vault, pipelineListStatus) : "closed";
+  const canDeleteNow = canDeleteVaultNow(vaultListStatus);
   const editAllowed = (target: Parameters<typeof vaultConfigEditAllowed>[0]) =>
     vault != null && vaultConfigEditAllowed(target, vault, pipelineListStatus);
   const storageModeLocked = !editAllowed("storage.mode");
@@ -179,7 +181,7 @@ export function VaultSettingsModal({
       setHeaderUnlockPreset(undefined);
       return;
     }
-    // List row already probed `vault.header`. Missing ≠ 256 MiB.
+    // List row already probed `header/vault.header`. Missing ≠ 256 MiB.
     setHeaderUnlockPreset(vault?.unlockPreset);
   }, [open, vaultId, vault?.unlockPreset]);
 
@@ -725,10 +727,19 @@ export function VaultSettingsModal({
   const canConfirmDelete = vault !== null && deleteConfirm.trim() === vault.id;
 
   const handleConfirmDelete = useCallback(() => {
-    if (!canConfirmDelete || !vault || busy || !vaultService.canDeleteVault) return;
+    if (!canConfirmDelete || !canDeleteNow || !vault || busy || !vaultService.canDeleteVault)
+      return;
     onVaultDelete?.(vault.id);
     handleCloseModal();
-  }, [canConfirmDelete, vault, busy, onVaultDelete, handleCloseModal, vaultService.canDeleteVault]);
+  }, [
+    canConfirmDelete,
+    canDeleteNow,
+    vault,
+    busy,
+    onVaultDelete,
+    handleCloseModal,
+    vaultService.canDeleteVault,
+  ]);
 
   const requestCloseModal = () => {
     if (busy) return;
@@ -970,11 +981,16 @@ export function VaultSettingsModal({
                       <Text style={typography.bodyMuted}>
                         {t("modal.settings.danger_zone_help")}
                       </Text>
+                      {canDeleteNow ? null : (
+                        <Text style={typography.bodyMuted}>
+                          {t("modal.settings.delete_only_closed")}
+                        </Text>
+                      )}
                       <Button
                         variant="danger"
                         size="sm"
                         label={t("modal.settings.delete_vault")}
-                        disabled={!vaultService.canDeleteVault}
+                        disabled={!vaultService.canDeleteVault || !canDeleteNow}
                         onPress={() => {
                           setDeleteOpen(true);
                           setDeleteConfirm("");
@@ -1008,7 +1024,7 @@ export function VaultSettingsModal({
                           variant="danger"
                           size="sm"
                           label={t("action.delete")}
-                          disabled={!canConfirmDelete}
+                          disabled={!canConfirmDelete || !canDeleteNow}
                           onPress={handleConfirmDelete}
                         />
                       </ModalFooterActions>

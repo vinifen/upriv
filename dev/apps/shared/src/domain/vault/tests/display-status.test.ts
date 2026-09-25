@@ -4,9 +4,13 @@ import {
   isVaultBlockingWorkspaceClear,
   isVaultFileManagerEligible,
   isVaultFileManagerRetained,
+  canDeleteVaultNow,
   isVaultListClosed,
   isVaultPipelineDisplayBusy,
   isVaultOpenCredentialResumeStatus,
+  isVaultOpenResumeTarget,
+  isVaultCloseQueued,
+  isVaultCloseWritesLocked,
   isVaultListRowActivatable,
   isVaultListRowUnlockTarget,
   listHasVaultBlockingDataFolderChange,
@@ -57,6 +61,13 @@ describe("resolveVaultListStatus", () => {
     expect(isVaultListClosed(row, { queuedVaultIds: ["a"] })).toBe(false);
     expect(isVaultListClosed(row)).toBe(true);
     expect(isVaultListClosed(vaultRowFixture({ id: "a", session: "open" }))).toBe(false);
+    expect(canDeleteVaultNow("closed")).toBe(true);
+    expect(canDeleteVaultNow("recovery")).toBe(true);
+    expect(canDeleteVaultNow("open")).toBe(false);
+    expect(canDeleteVaultNow("opening")).toBe(false);
+    expect(canDeleteVaultNow("closing")).toBe(false);
+    expect(canDeleteVaultNow("creating")).toBe(false);
+    expect(canDeleteVaultNow("queued")).toBe(false);
   });
 
   it("prefers active opening over queued for the same id", () => {
@@ -86,6 +97,22 @@ describe("resolveVaultListStatus", () => {
     expect(isVaultOpenCredentialResumeStatus("opening")).toBe(true);
     expect(isVaultOpenCredentialResumeStatus("queued")).toBe(true);
     expect(isVaultOpenCredentialResumeStatus("closing")).toBe(false);
+    expect(isVaultOpenResumeTarget("opening", "a")).toBe(true);
+    expect(isVaultOpenResumeTarget("queued", "a", { queuedOpenVaultIds: ["a"] })).toBe(true);
+    expect(isVaultOpenResumeTarget("queued", "a", { queuedOpenVaultIds: [] })).toBe(false);
+    expect(isVaultOpenResumeTarget("queued", "a")).toBe(true);
+    expect(isVaultCloseQueued("a", { queuedVaultIds: ["a"], queuedOpenVaultIds: [] })).toBe(true);
+    expect(isVaultCloseQueued("a", { queuedVaultIds: ["a"], queuedOpenVaultIds: ["a"] })).toBe(
+      false,
+    );
+    expect(isVaultCloseQueued("a", {})).toBe(false);
+    expect(isVaultCloseWritesLocked("a", { queuedVaultIds: ["a"], queuedOpenVaultIds: [] })).toBe(
+      true,
+    );
+    expect(isVaultCloseWritesLocked("a", { closingVaultIds: ["a"] })).toBe(true);
+    expect(
+      isVaultCloseWritesLocked("a", { queuedVaultIds: ["a"], queuedOpenVaultIds: ["a"] }),
+    ).toBe(false);
     expect(isVaultListRowActivatable("queued")).toBe(true);
     expect(isVaultListRowUnlockTarget("opening")).toBe(true);
     expect(isVaultListRowUnlockTarget("open")).toBe(false);

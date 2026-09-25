@@ -6,7 +6,6 @@ import {
   vaultRootGoneRpcError,
   vaultStoreDisplayPaths,
   WORKSPACE_PATH_DEFAULT,
-  type StorageMode,
   type VaultGroup,
   type VaultInfoSnapshot,
   type VaultListItem,
@@ -34,18 +33,19 @@ export interface UseVaultInfoDataOptions {
   workspaceGlobalPath: string;
   /**
    * Last-resort prefix when `vault_root_resolve` is not `found`
-   * (mock / pre-setup). Do not use this as the happy path.
+   * (pre-setup). Do not use this as the happy path.
    */
   fallbackVaultRootBase: string;
-  /**
-   * Session/runtime counters for Info. Mock apps pass `getMockVaultRuntimeStats`
-   * from `@upriv/shared/testing` — this hook does not import mock helpers.
-   */
-  getRuntimeStats: (
-    vaultId: string,
-    options: { isOpen: boolean; storageMode: StorageMode },
-  ) => VaultRuntimeStats;
 }
+
+/** Core does not report session counters yet — Info shows an em dash, not a guess. */
+const UNAVAILABLE_RUNTIME_STATS: VaultRuntimeStats = {
+  openCount: null,
+  lastOpenedAt: null,
+  sessionRamBytes: null,
+  storeBytes: null,
+  logicalFileCount: null,
+};
 
 export function useVaultInfoData({
   vault,
@@ -59,7 +59,6 @@ export function useVaultInfoData({
   vaultRootMode,
   workspaceGlobalPath,
   fallbackVaultRootBase,
-  getRuntimeStats,
 }: UseVaultInfoDataOptions) {
   const [snapshot, setSnapshot] = useState<VaultInfoSnapshot | null>(null);
   const [loading, setLoading] = useState(false);
@@ -105,10 +104,7 @@ export function useVaultInfoData({
 
         const isOpen = current.session === "open";
         const passwordInSession = lifecycleService.hasPasswordInSession(current.id);
-        const runtime = getRuntimeStats(current.id, {
-          isOpen,
-          storageMode: current.storageMode,
-        });
+        const runtime = { ...UNAVAILABLE_RUNTIME_STATS };
         const vaultRootBase = vaultRootContentorPath(root, fallbackVaultRootBase);
         const storePaths = vaultStoreDisplayPaths(vaultRootBase, current.id);
         const mountPath = settings?.mount.workspace_path ?? WORKSPACE_PATH_DEFAULT;
@@ -131,7 +127,7 @@ export function useVaultInfoData({
           // Mount is live only while the list session is open — not during
           // opening/closing list badges (builder uses displayStatus too).
           workspacePathIsActive: isOpen,
-          contentsPath: storePaths.contentsPath,
+          storePath: storePaths.storePath,
           backupsPath: storePaths.backupsPath,
           locale,
         });
@@ -174,7 +170,6 @@ export function useVaultInfoData({
     vaultRootMode,
     workspaceGlobalPath,
     fallbackVaultRootBase,
-    getRuntimeStats,
     loadAttempt,
   ]);
 

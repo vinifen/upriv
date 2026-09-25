@@ -10,6 +10,7 @@ import {
   resolveVaultListStatus,
   isVaultListRowActivatable,
   isVaultListRowUnlockTarget,
+  isVaultOpenResumeTarget,
   vaultPipelineRowBudget,
   vaultDisplayLetters,
   vaultLastAccessedLabel,
@@ -227,15 +228,18 @@ export function VaultRow({
     </View>
   );
 
+  const resumeOpen = isVaultOpenResumeTarget(status, vault.id, pipelineListStatus);
+  const canUnlockFromRow =
+    isVaultListRowUnlockTarget(status) && (status !== "queued" || resumeOpen);
   const openOrUnlock = () => {
     if (isDragging) return;
     if (isOpen) onOpenFileManager(vault);
-    else if (isVaultListRowUnlockTarget(status)) onUnlock(vault);
+    else if (canUnlockFromRow) onUnlock(vault);
   };
-  const rowActivates = isVaultListRowActivatable(status);
+  const rowActivates = isVaultListRowActivatable(status) && (status !== "queued" || resumeOpen);
   const activateLabel = isOpen
     ? t("action.open_upriv")
-    : isVaultListRowUnlockTarget(status)
+    : canUnlockFromRow
       ? status === "closed" || status === "recovery"
         ? t("action.unlock")
         : t(vaultStatusI18nKey[status] as I18nKey)
@@ -287,6 +291,7 @@ export function VaultRow({
         <VaultLockButton
           status={status}
           layout="block"
+          resumeUnlock={resumeOpen}
           onLock={() => onLock(vault)}
           onUnlock={() => onUnlock(vault)}
         />
@@ -336,6 +341,7 @@ export function VaultRow({
       <VaultLockButton
         status={status}
         appearance={comfortable ? "label" : "icon"}
+        resumeUnlock={resumeOpen}
         onLock={() => onLock(vault)}
         onUnlock={() => onUnlock(vault)}
       />

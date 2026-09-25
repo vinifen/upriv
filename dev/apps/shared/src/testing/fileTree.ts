@@ -35,26 +35,6 @@ const TREES: Record<string, FileTreeNode> = {
       },
     ],
   },
-  "dev-secrets": {
-    name: "workspace",
-    type: "folder",
-    children: [
-      { name: ".env.local", type: "file" },
-      {
-        name: "keys",
-        type: "folder",
-        children: [
-          { name: "api-token.txt", type: "file" },
-          { name: "ssh-config-notes.md", type: "file" },
-        ],
-      },
-      {
-        name: "scripts",
-        type: "folder",
-        children: [{ name: "rotate-secrets.sh", type: "file" }],
-      },
-    ],
-  },
   "work-documents": {
     name: "workspace",
     type: "folder",
@@ -74,26 +54,6 @@ const TREES: Record<string, FileTreeNode> = {
           { name: "q1-summary.md", type: "file" },
           { name: "action-items.txt", type: "file" },
         ],
-      },
-    ],
-  },
-  "travel-planner": {
-    name: "workspace",
-    type: "folder",
-    children: [
-      { name: "itinerary.md", type: "file" },
-      {
-        name: "bookings",
-        type: "folder",
-        children: [
-          { name: "flights.pdf", type: "file" },
-          { name: "hotel-confirmation.txt", type: "file" },
-        ],
-      },
-      {
-        name: "packing",
-        type: "folder",
-        children: [{ name: "checklist.md", type: "file" }],
       },
     ],
   },
@@ -118,25 +78,6 @@ const CONTENTS: Record<string, Record<string, VaultFileContent>> = {
       content: "Dear team,\n\nSharing the updated roadmap draft.\n",
     },
   },
-  "dev-secrets": {
-    "/.env.local": {
-      language: "env",
-      content: "UPRIV_MOCK=true\nAPI_BASE=https://api.example.test\n",
-    },
-    "/keys/api-token.txt": {
-      language: "text",
-      content: "mock-token-7f3a9c2b-rotate-quarterly\n",
-    },
-    "/keys/ssh-config-notes.md": {
-      language: "markdown",
-      content: "## Bastion\n\nHost jump uses ed25519 key in team vault.\n",
-    },
-    "/scripts/rotate-secrets.sh": {
-      language: "shell",
-      content:
-        '#!/usr/bin/env bash\nset -euo pipefail\necho "Mock rotate — wire to upriv-core later"\n',
-    },
-  },
   "work-documents": {
     "/contracts/nda-2025.pdf": {
       language: "binary",
@@ -153,25 +94,6 @@ const CONTENTS: Record<string, Record<string, VaultFileContent>> = {
     "/reports/action-items.txt": {
       language: "text",
       content: "- Send countersigned NDA\n- Archive receipts in Finance vault\n",
-    },
-  },
-  "travel-planner": {
-    "/itinerary.md": {
-      language: "markdown",
-      content:
-        "# Trip — Lisbon\n\n| Day | Plan |\n|-----|------|\n| 1 | Arrive, check-in |\n| 2 | Alfama walk |\n",
-    },
-    "/bookings/flights.pdf": {
-      language: "binary",
-      content: "",
-    },
-    "/bookings/hotel-confirmation.txt": {
-      language: "text",
-      content: "Ref: UPRIV-MOCK-8842\nCheck-in: 14:00\n",
-    },
-    "/packing/checklist.md": {
-      language: "markdown",
-      content: "- Passport\n- Chargers\n- Offline maps\n",
     },
   },
 };

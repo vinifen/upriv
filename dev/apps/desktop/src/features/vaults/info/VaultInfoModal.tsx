@@ -17,7 +17,6 @@ import {
   type VaultPipelineListStatus,
 } from "@upriv/shared";
 import { useVaultInfoData, useVaultRootIntegrityClose } from "@upriv/shared/react";
-import { getMockVaultRuntimeStats } from "@upriv/shared/testing";
 
 interface VaultInfoModalProps {
   vault: VaultListItem | null;
@@ -52,7 +51,6 @@ export function VaultInfoModal({
     vaultRootMode: settings.app.vault_root_mode,
     workspaceGlobalPath: settings.workspace.path,
     fallbackVaultRootBase: "",
-    getRuntimeStats: getMockVaultRuntimeStats,
   });
 
   useVaultRootIntegrityClose(open, loadFailure, reportVaultRootIntegrityFailure, onClose);

@@ -264,6 +264,8 @@ describe("useVaultPipelineRun", () => {
 
     expect(result.current.openingVaultIds).toEqual(["vault-a"]);
     expect(result.current.queuedVaultIds).toEqual(["vault-b"]);
+    expect(result.current.queuedOpenVaultIds).toEqual(["vault-b"]);
+    expect(result.current.closingVaultIds).toEqual([]);
     expect(result.current.getVaultPipelineListStatus("vault-b")).toBe("queued");
 
     await act(async () => {
@@ -271,6 +273,45 @@ describe("useVaultPipelineRun", () => {
     });
     await waitFor(() => {
       expect(result.current.queuedVaultIds).toEqual([]);
+    });
+  });
+
+  it("lists a waiting close as queued, not closing, until it starts", async () => {
+    const { result } = renderHook(() => useVaultPipelineRun(toI18n));
+    const first = deferred();
+
+    act(() => {
+      result.current.start({
+        vaultId: "vault-a",
+        kind: "open",
+        stepCount: 1,
+        runPipeline: async () => first.promise,
+        onComplete: () => undefined,
+        onError: () => undefined,
+      });
+      result.current.start({
+        vaultId: "vault-b",
+        kind: "close",
+        stepCount: 1,
+        presentation: "background",
+        failureMode: "advance",
+        runPipeline: async () => undefined,
+        onComplete: () => undefined,
+        onError: () => undefined,
+      });
+    });
+
+    expect(result.current.closingVaultIds).toEqual([]);
+    expect(result.current.queuedVaultIds).toEqual(["vault-b"]);
+    expect(result.current.queuedOpenVaultIds).toEqual([]);
+    expect(result.current.getVaultPipelineListStatus("vault-b")).toBe("queued");
+
+    await act(async () => {
+      first.resolve();
+    });
+    await waitFor(() => {
+      expect(result.current.queuedVaultIds).toEqual([]);
+      expect(result.current.run).toBeNull();
     });
   });
 

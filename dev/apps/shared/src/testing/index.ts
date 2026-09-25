@@ -20,16 +20,11 @@ export {
   remapVaultWorkspaceSnapshot,
   setVaultFileContent,
   vaultFileLanguageFromPath,
+  createAsyncVaultFileSystemService,
 } from "./fileSystem";
-export {
-  getMockVaultRuntimeStats,
-  recordMockVaultOpened,
-  resetMockVaultRuntimeStats,
-} from "../services/vault/mockVaultRuntimeStats";
 export {
   clearMockVaultUnlockPreset,
   getMockVaultUnlockPreset,
-  seedMockVaultUnlockPreset,
   setMockVaultUnlockPreset,
 } from "../services/vault/mockVaultHeaderKdf";
 export { createMockVaultGroupService } from "../services/vault-groups/createMockVaultGroupService";

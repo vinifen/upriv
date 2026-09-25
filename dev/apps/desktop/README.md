@@ -9,7 +9,7 @@ cd dev
 npm install --prefix js-lint               # ESLint + Prettier (once for all apps)
 cd apps/desktop
 npm install
-npm run dev              # http://localhost:1420 (browser, mock services)
+npm run dev              # Vite only — vault I/O needs Electron (`npm run electron:dev` from `dev/`)
 npm run preview          # browser-only preview of `dist/` — not Electron; use `npm run electron:dev`
 npm run build            # typecheck + production bundle
 npm run lint             # ESLint
@@ -33,13 +33,7 @@ Artifacts: `dev/target/release/bundle/electron/`. On Linux: `.deb` + `.AppImage`
 
 **Linux note:** on Ubuntu 23.10+ the Electron shell uses `--no-sandbox` (AppArmor blocks Chromium user namespaces). Renderer `sandbox: true` still applies. Optional: configure `chrome-sandbox` as root 4755 — see [Electron Linux docs](https://www.electronjs.org/docs/latest/tutorial/sandbox).
 
-**MVP:** Settings + **`VaultRootGate`** (setup / repair / alias recovery) talk to live `app_settings_*` and `vault_root_*` RPCs via `platform/desktop/`. Vault list, open/close, file manager, and most other services still use **mock** data until their RPCs land (SDD §8.2.6).
-
-## Prototype mocks (temporary)
-
-`platform/mocks/` backs all services via `createServices()` until desktop RPC adapters exist. **Future work:** delete that folder and rename remaining `mock*` / `getMock*` / `MOCK_*` symbols to neutral platform names (details in `src/platform/mocks/README.md`).
-
-Until real crypto is wired, unlock (and lock in **Never save** mode) uses prototype validation in `validateMockLifecyclePassword` (trimmed length ≥ 4; `"wrong"` simulates failure). Default lock does not ask for the password. Hidden vault **Finance 2025** shows password hint _Q4 spreadsheet_ in the unlock modal.
+**Services:** `createServices()` always returns `createDesktopServices()` — vault-root, settings, logs, list, create, open/close, groups, file manager, export/import, and backups talk to `upriv-daemon`. Change-password / KDF rewrap is not implemented. There is no in-memory vault list.
 
 ## Source layout
 
@@ -54,10 +48,6 @@ src/
 │
 ├── platform/                # Desktop-only adapters
 │   ├── desktop/             # Live RPC adapters (vaultRoot, appSettings, …)
-│   ├── mocks/               # Prototype data + mock services — remove when desktop RPC is wired
-│   │   ├── data/            # Static fixtures (vaults, logs, settings defaults)
-│   │   ├── stores/          # In-memory state (file tree, settings registry)
-│   │   └── services/        # AppServices mock implementations
 │   └── services/            # createServices(), ServicesProvider, hooks
 │
 ├── features/                # Feature modules grouped by domain
@@ -98,7 +88,7 @@ src/
 | Vault status colors | `theme/vault-status.ts` + CSS vars from `@upriv/shared` (`applyDocumentTheme`)                                     |
 | Desktop RPC         | `lib/commands.ts` — names match `crates/upriv-daemon`                                                              |
 | Domain types        | `@upriv/shared` (`shared/`) — `VaultRow`, settings, list sort/view                                                 |
-| Service layer       | `platform/services/` — factory + React context; mocks in `platform/mocks/`                                         |
+| Service layer       | `platform/services/` — factory + React context; live adapters in `platform/desktop/`                               |
 | App layout          | `AppShell` + `VaultListHeader` on the vault list home screen                                                       |
 | Feature UI          | `features/vaults/*` or `features/system/*`; compose `components/ui` and `components/settings`                      |
 | Hook naming         | `useVault*` for vault features; `useApp*` for system-wide (`useAppSettingsContext`, `useAppLogs`, `useAppRefresh`) |

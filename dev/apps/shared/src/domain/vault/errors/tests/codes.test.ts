@@ -30,6 +30,9 @@ describe("isVaultCredentialChallengeI18nKey", () => {
     expect(isVaultCredentialChallengeI18nKey(requireVaultErrorI18nKey("insufficient_ram"))).toBe(
       true,
     );
+    expect(
+      isVaultCredentialChallengeI18nKey(requireVaultErrorI18nKey("insufficient_ram_export")),
+    ).toBe(false);
     expect(isVaultCredentialChallengeI18nKey(requireVaultErrorI18nKey("vault_not_found"))).toBe(
       false,
     );

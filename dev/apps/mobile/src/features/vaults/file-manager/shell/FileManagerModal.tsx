@@ -31,6 +31,11 @@ interface FileManagerModalProps {
   onDismiss: () => void;
   /** When true, back / backdrop must not minimize (unsaved dialog active). */
   suspendMinimize?: boolean;
+  /**
+   * Keep children mounted after the overlay hides so minimized vaults can keep
+   * in-flight import skeletons and session state.
+   */
+  keepMounted?: boolean;
   children: ReactNode;
 }
 
@@ -47,6 +52,7 @@ export function FileManagerModal({
   onMinimize,
   onDismiss,
   suspendMinimize = false,
+  keepMounted = false,
   children,
 }: FileManagerModalProps) {
   const { t } = useTranslation();
@@ -54,6 +60,7 @@ export function FileManagerModal({
   const insets = useSafeAreaInsets();
   const { height: windowHeight, width: windowWidth } = useWindowDimensions();
   const [mounted, setMounted] = useState(open);
+  const [collapsed, setCollapsed] = useState(!open);
   const opacity = useRef(new Animated.Value(open ? 1 : 0)).current;
   const scale = useRef(new Animated.Value(open ? 1 : MODAL_SCALE_FROM)).current;
   const enterStarted = useRef(false);
@@ -94,6 +101,7 @@ export function FileManagerModal({
       const gen = ++enterGen.current;
       enterStarted.current = false;
       setMounted(true);
+      setCollapsed(false);
       opacity.setValue(0);
       scale.setValue(MODAL_SCALE_FROM);
       let inner = 0;
@@ -126,16 +134,18 @@ export function FileManagerModal({
         useNativeDriver: true,
       }),
     ]).start(({ finished }) => {
-      if (finished && gen === enterGen.current) setMounted(false);
+      if (!finished || gen !== enterGen.current) return;
+      if (!keepMounted) setMounted(false);
+      setCollapsed(true);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- animate on open edge only
-  }, [open]);
+  }, [open, keepMounted]);
 
   useEffect(() => {
-    if (!mounted) return;
+    if (!open) return;
     acquireOpenModal();
     return () => releaseOpenModal();
-  }, [mounted]);
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -149,8 +159,14 @@ export function FileManagerModal({
 
   if (!mounted) return null;
 
+  const showChrome = !collapsed;
+
   return (
-    <View pointerEvents="box-none" style={styles.root} accessibilityViewIsModal>
+    <View
+      pointerEvents={showChrome ? "box-none" : "none"}
+      style={showChrome ? styles.root : styles.collapsedHost}
+      accessibilityViewIsModal={showChrome}
+    >
       <Animated.View
         pointerEvents="none"
         style={[StyleSheet.absoluteFill, { backgroundColor: colors.modalScrim, opacity }]}
@@ -242,6 +258,13 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     zIndex: 100,
     elevation: 100,
+  },
+  collapsedHost: {
+    position: "absolute",
+    width: 0,
+    height: 0,
+    overflow: "hidden",
+    opacity: 0,
   },
   frame: {
     flex: 1,

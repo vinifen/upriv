@@ -16,7 +16,6 @@ import {
   SUPPORTED_LOCALES,
   type LocaleId,
 } from "@upriv/shared";
-import { createMobileMockServices } from "@/platform/mocks";
 import {
   rpcAppSettingsGet,
   rpcAppSettingsParseToml,
@@ -38,6 +37,9 @@ import {
 import { nativeVaultGroupService } from "./vaultGroupService";
 import { nativeVaultLifecycleService } from "./vaultLifecycleService";
 import { nativeVaultService } from "./vaultService";
+import { nativeVaultFileSystemService } from "./vaultFileSystemService";
+import { nativeBackupService } from "./backupService";
+import { nativeCreateVaultService } from "./createVaultService";
 import { isAndroidSafUri, pickVaultRootFolder } from "./pickVaultRootFolder";
 import {
   isSafTreeUri,
@@ -422,48 +424,22 @@ function createNativeVaultRootService(): VaultRootService {
  * `createDesktopServices`): live vault-root / settings / logs / vault list /
  * create / open / close / groups when the root is a filesystem path. A SAF
  * `content://` tree must not call those path RPCs (no copy to `filesDir`).
- * Import, backups, and file manager stay mock until those RPCs land.
- * Change-password / KDF rewrap is unavailable until SECURITY-CRYPTO landmine
- * P0. Expo Go never reaches this factory.
+ * Import, backups, and file manager use path RPCs when the root is a filesystem
+ * path. A SAF `content://` tree skips those RPCs (`vault_saf_unavailable`).
+ * Change-password / KDF rewrap is not implemented. Expo Go never reaches this factory.
  */
 export function createNativeServices(): AppServices {
-  const mocks = createMobileMockServices();
-  const failNotImplemented = (message: string): never => {
-    throw new RpcError("not_implemented", message);
-  };
-  const releaseCreateVaultService = {
-    ...mocks.createVault,
-    testImportPackagePassword: async () =>
-      failNotImplemented("Vault import is not implemented on mobile release builds"),
-    selectImportPackageForProbe: () =>
-      failNotImplemented("Vault import is not implemented on mobile release builds"),
-  };
-  const releaseBackupService = {
-    ...mocks.backups,
-    async listBackups() {
-      return failNotImplemented("Vault backups are not implemented on mobile release builds");
-    },
-    async deleteBackups() {
-      return failNotImplemented("Vault backups are not implemented on mobile release builds");
-    },
-    async promoteToSave() {
-      return failNotImplemented("Vault backups are not implemented on mobile release builds");
-    },
-    async getBackupBytes() {
-      return failNotImplemented("Vault backups are not implemented on mobile release builds");
-    },
-  };
   return {
-    ...mocks,
     vaultRoot: createNativeVaultRootService(),
     appSettings: createSafAwareAppSettingsService(),
     logs: nativeLogService,
     vault: nativeVaultService,
     lifecycle: nativeVaultLifecycleService,
     vaultGroups: nativeVaultGroupService,
+    filesystem: nativeVaultFileSystemService,
+    backups: nativeBackupService,
+    createVault: nativeCreateVaultService,
     vaultSecurity: createUnavailableVaultSecurityService(),
-    createVault: __DEV__ ? mocks.createVault : releaseCreateVaultService,
-    backups: __DEV__ ? mocks.backups : releaseBackupService,
   };
 }
 

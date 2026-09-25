@@ -7,7 +7,7 @@ Templates live in [`.github/ISSUE_TEMPLATE/`](../../.github/ISSUE_TEMPLATE/). Bl
 ## Do not put in an issue
 
 - Passwords, passphrases, or recovery material
-- Vault file contents, `contents/` dumps, or decrypted trees
+- Vault file contents, `store/` dumps, or decrypted trees
 - Full logs that include vault names you consider private — redact
 - Crypto or plaintext-leak write-ups that could help an attacker — do not file those as a public issue; see [`SECURITY.md`](../../SECURITY.md)
 
@@ -26,7 +26,7 @@ Examples:
 ```text
 [BUG] Gate stays on applying after vault-root probe fails
 [SUGGESTION] Remember last export folder
-[TASK: FEAT] Open vault into contents/ on desktop
+[TASK: FEAT] Open vault into store/ on desktop
 ```
 
 ## What a useful bug includes

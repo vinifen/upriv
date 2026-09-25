@@ -7,6 +7,7 @@ import {
   percentFromDelta,
   TREE_SPLIT_DEFAULT_PERCENT,
   type FileManagerEntry,
+  type VaultWorkspaceAction,
 } from "@upriv/shared";
 import { useWorkspacePersistence } from "@upriv/shared/react";
 import { useAppSettingsContext } from "@/features/system/settings";
@@ -25,10 +26,17 @@ const NARROW_MAX_WIDTH = 767;
 
 interface FileManagerWorkspaceProps {
   entry: FileManagerEntry;
+  active?: boolean;
+  writesLocked?: boolean;
   onDismissConfirmed: () => void;
 }
 
-export function FileManagerWorkspace({ entry, onDismissConfirmed }: FileManagerWorkspaceProps) {
+export function FileManagerWorkspace({
+  entry,
+  active = true,
+  writesLocked = false,
+  onDismissConfirmed,
+}: FileManagerWorkspaceProps) {
   const { colors } = useTheme();
   const { width: windowWidth } = useWindowDimensions();
   const isNarrow = windowWidth <= NARROW_MAX_WIDTH;
@@ -54,10 +62,16 @@ export function FileManagerWorkspace({ entry, onDismissConfirmed }: FileManagerW
     setLivePercent(settingsPercent);
   }, [settingsPercent]);
 
+  const dispatch = useCallback(
+    (action: VaultWorkspaceAction) => dispatchWorkspace(entry.vaultId, action),
+    [dispatchWorkspace, entry.vaultId],
+  );
+
   const fm = useVaultFileManager({
     entry,
-    dispatch: (action) => dispatchWorkspace(entry.vaultId, action),
+    dispatch,
     onDismissConfirmed,
+    writesLocked,
   });
 
   const fs = useVaultFileSystemService();
@@ -65,7 +79,8 @@ export function FileManagerWorkspace({ entry, onDismissConfirmed }: FileManagerW
     vaultId: entry.vaultId,
     workspace: entry.workspace,
     fs,
-    dispatch: (action) => dispatchWorkspace(entry.vaultId, action),
+    dispatch,
+    suspend: fm.importBusy,
   });
 
   const applyContainerSize = useCallback((size: number) => {
@@ -123,10 +138,12 @@ export function FileManagerWorkspace({ entry, onDismissConfirmed }: FileManagerW
     <>
       <View
         collapsable={false}
+        pointerEvents={active ? "auto" : "none"}
         style={[
           styles.root,
           isNarrow ? styles.rootColumn : styles.rootRow,
           { backgroundColor: colors.surfaceContainerHigh },
+          active ? null : styles.inactive,
         ]}
         onLayout={(event) => {
           const { width, height } = event.nativeEvent.layout;
@@ -143,20 +160,21 @@ export function FileManagerWorkspace({ entry, onDismissConfirmed }: FileManagerW
         <View style={[styles.editorCol, { backgroundColor: colors.surfaceContainerHigh }]}>
           <FileManagerTabBar
             workspace={entry.workspace}
-            onWorkspaceAction={(action) => dispatchWorkspace(entry.vaultId, action)}
+            onWorkspaceAction={dispatch}
             showSave={hasUnsavedEditableTabs(fm)}
             onSave={fm.saveAllFiles}
           />
           <FileEditorPane fm={fm} />
         </View>
       </View>
-      <FileManagerDialogs fm={fm} />
+      <FileManagerDialogs fm={fm} promptsOpen={active} />
     </>
   );
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, minHeight: 0, minWidth: 0, overflow: "hidden" },
+  root: { flex: 1, minHeight: 0, minWidth: 0, overflow: "hidden", position: "relative" },
+  inactive: { display: "none" },
   rootColumn: { flexDirection: "column" },
   rootRow: { flexDirection: "row" },
   editorCol: { flex: 1, minHeight: 0, minWidth: 0, overflow: "hidden" },

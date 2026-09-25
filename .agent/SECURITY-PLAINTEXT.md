@@ -9,14 +9,14 @@
 
 ## Transitional phases (highest leak risk)
 
-Spills happen on **the way** between states, not in the happy resting `contents/` tree. Treat every pipeline as fail-closed: crash, cancel, timeout, or error must not leave a decrypted tree on HD/SSD/`/tmp`/`%TEMP%`.
+Spills happen on **the way** between states, not in the happy resting `store/` tree. Treat every pipeline as fail-closed: crash, cancel, timeout, or error must not leave a decrypted tree on HD/SSD/`/tmp`/`%TEMP%`.
 
 | Phase | Allowed on ordinary disk | Forbidden |
 |-------|--------------------------|-----------|
-| Open / close (`encrypted_dir`) | Ciphertext in `contents/` | Staging a logical tree to pack or unpack |
-| Import `.7z` → `contents/` | Source `.7z` (already encrypted); dest chunks | Extract-then-re-encrypt via a folder |
-| Export | Destination `.7z` / Upriv `.zip` package | Dump vault files to temp, then `7zz a`; leftover extract after cancel |
-| Backup / create-from-backup | Copy of `contents/` (ciphertext) | Decrypt snapshot “to be safe” |
+| Open / close (`encrypted_dir`) | Ciphertext in `store/` | Staging a logical tree to pack or unpack |
+| Import `.7z` → `store/` | Source `.7z` (already encrypted); dest chunks | Extract-then-re-encrypt via a folder |
+| Export | Destination `.7z` ciphertext / Upriv `.zip` of `store/` | Dump vault files to temp, then `7zz a`; leftover extract after cancel |
+| Backup / create-from-backup | Stored zip of `store/` (ciphertext). Unpack only into the new vault’s `store/` | Decrypt the snapshot, or leave an unpacked backup tree |
 | Change password / recovery | Rewrap in place / stream | Full extract to tempfile |
 | `upriv_plain` while **open** | `workspace/` (user chose this mode) | Leaving that tree after close; using this path as a helper for `encrypted_dir` |
 
@@ -30,8 +30,8 @@ In **`encrypted_dir`** (default):
 
 1. **Never** write decrypted vault file bytes to ordinary disk (vault volume, `/tmp`, `%TEMP%`, crash staging dirs, etc.).
 2. **Never** read vault content from a durable plaintext tree on disk (except `upriv_plain`).
-3. While open: decrypt only into **RAM** (FUSE/WinFsp reply buffers on desktop; in-app file-manager buffers on mobile); persist only **ciphertext** in `contents/` (write-through).
-4. On close: flush the session into **`contents/`**. Export `.7z` (separate action) streams **logical** content — do **not** pack `.enc` blobs; do **not** materialize a full plaintext tree for `7zz`. No Seal.
+3. While open: decrypt only into **RAM** (FUSE/WinFsp reply buffers on desktop; in-app file-manager buffers on mobile); persist only **ciphertext** in `store/` (write-through).
+4. On close: flush the session into **`store/`**. Export `.7z` (separate action) packs **logical** content **in RAM** — do **not** pack `.enc` blobs; do **not** materialize a plaintext tree for `7zz`. Import `.7z` the same way (in-process decode into `store/`). Fail closed if RAM is insufficient. No Seal.
 5. If `7zz` absolutely requires a directory: **only** tmpfs (or equivalent) with **noswap** where available, RAII delete + secure wipe, **never** use real `workspace/` as staging (SDD §2.6).
 6. Insufficient RAM → **fail open/edit/close** with a user-visible error — **never** silently spill plaintext to disk (`warning.encrypted_dir_ram`).
 
@@ -71,7 +71,7 @@ When implementing `seven_zip` + close pipeline:
 5. Hard `ensure_encrypted_dir` / `ensure_plain` on every open/close path so modes cannot mix.
 6. Automated tests (RF-49 / RF-45):
    - After mount write: no regular files under real `workspace/<id>/` on the vault volume.
-   - Ciphertext present in `contents/` (write-through).
+   - Ciphertext present in `store/` (write-through).
    - After close: no leftover plaintext staging under OS temp (or only documented tmpfs that is wiped).
    - CI fails if release `encrypted_dir` paths call `export_logical_tree` to ordinary disk.
 
@@ -82,7 +82,7 @@ When implementing `seven_zip` + close pipeline:
 | Case | Allowed? |
 |------|----------|
 | FUSE/WinFsp buffers / in-app file-manager buffers / process RAM while vault open | Yes (document swap/hibernation limits — RF-51) |
-| Encrypted `contents/` on disk | Yes |
+| Encrypted `store/` on disk | Yes |
 | Destination `.7z` / Upriv `.zip` package (export payload) | Yes — ciphertext |
 | `upriv_plain` mode `workspace/` while open + wipe on close | Yes, with UI warning |
 | OS tempfile / vault `workspace/` full decrypted tree in `encrypted_dir` (including “temp for 7zz”, crash leftover) | **No — ship blocker** |

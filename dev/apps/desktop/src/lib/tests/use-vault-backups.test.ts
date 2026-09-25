@@ -25,6 +25,8 @@ describe("useVaultBackups", () => {
       deleteBackups: async () => undefined,
       promoteToSave: async () => undefined,
       getBackupBytes: async () => new Uint8Array(),
+      exportToPath: async (_vaultId, _entry, destPath) => ({ path: destPath, size: 0 }),
+      exportSnapshotsToPath: async (_vaultId, _stamps, destPath) => ({ path: destPath, size: 0 }),
     };
 
     const { result, rerender } = renderHook(
@@ -50,6 +52,8 @@ describe("useVaultBackups", () => {
       deleteBackups: () => hang.promise,
       promoteToSave: async () => undefined,
       getBackupBytes: async () => new Uint8Array(),
+      exportToPath: async (_vaultId, _entry, destPath) => ({ path: destPath, size: 0 }),
+      exportSnapshotsToPath: async (_vaultId, _stamps, destPath) => ({ path: destPath, size: 0 }),
     };
 
     const { result, rerender } = renderHook(

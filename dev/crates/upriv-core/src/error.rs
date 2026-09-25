@@ -64,7 +64,11 @@ pub enum UprivError {
     #[error("insufficient RAM to derive vault key")]
     InsufficientRam,
 
-    /// `contents/` header/index unreadable, unknown version, or AEAD fail after a good wrap.
+    /// Portable `.7z` export could not keep logical bytes in RAM.
+    #[error("insufficient RAM to export portable .7z")]
+    InsufficientRamExport,
+
+    /// `store/` header/index unreadable, unknown version, or AEAD fail after a good wrap.
     #[error("vault store invalid at {path}: {detail}")]
     VaultStoreInvalid { path: PathBuf, detail: String },
 
@@ -91,6 +95,41 @@ pub enum UprivError {
     /// `log_get` refused to load a very large file body into memory.
     #[error("log_file_too_large: {size} bytes (max {max}) at {path}")]
     LogFileTooLarge { path: PathBuf, size: u64, max: u64 },
+
+    /// Logical path is missing from the open-session index.
+    #[error("vault path not found: {0}")]
+    VaultPathNotFound(String),
+
+    /// Create / rename / move would collide with an existing node.
+    #[error("vault path exists: {0}")]
+    VaultPathExists(String),
+
+    /// Full-file RPC payload exceeds the stdio / FFI envelope.
+    #[error("vault file too large: {size} bytes (max {max}) at {path}")]
+    VaultFileTooLarge { path: PathBuf, size: u64, max: u64 },
+
+    /// `runtime/<id>.lock` is held by a live process (this host or another).
+    #[error("vault locked: {0}")]
+    VaultLocked(PathBuf),
+
+    /// Virtual mount failed (missing FUSE/WinFsp, busy mountpoint, …).
+    #[error("vault mount failed: {0}")]
+    VaultMountFailed(String),
+
+    /// Import `.zip` / `.7z` path is relative, missing, or unreadable.
+    /// Not transport `io_error` — that wire code is mapped to the vault-root data-folder toast.
+    #[error("import archive unreadable: {0}")]
+    ImportArchiveNotFound(PathBuf),
+
+    /// OS path for `vault_fs_import_os_file` is relative, missing, a symlink,
+    /// not a regular file, or inside this vault's `store/`.
+    /// Not `io_error` (vault-root toast) and not `workspace_path_*` (Gate).
+    #[error("import source unreadable: {0}")]
+    ImportSourceUnreadable(PathBuf),
+
+    /// This vault must be closed first (export of this vault).
+    #[error("close this vault first")]
+    VaultMustBeClosed,
 
     #[error(transparent)]
     Io(#[from] std::io::Error),

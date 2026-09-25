@@ -15,6 +15,7 @@ describe("CORE_RPC_TIMEOUT_MS", () => {
     expect(CORE_RPC_TIMEOUT_MS.vault_root_resolve).toBe(LOADING_BUDGET_MS.vaultRootResolve);
     expect(CORE_RPC_TIMEOUT_MS.vault_root_setup_default_root).toBe(LOADING_BUDGET_MS.vaultRoot);
     expect(CORE_RPC_TIMEOUT_MS.vault_root_setup_path).toBe(LOADING_BUDGET_MS.vaultRoot);
+    expect(CORE_RPC_TIMEOUT_MS.vault_delete).toBe(LOADING_BUDGET_MS.vaultDelete);
     expect(CORE_RPC_TIMEOUT_MS.app_settings_get).toBe(LOADING_BUDGET_MS.settingsLoad);
     expect(CORE_RPC_TIMEOUT_MS.app_settings_save).toBe(LOADING_BUDGET_MS.settingsSave);
     expect(CORE_RPC_TIMEOUT_MS.log_list).toBe(LOADING_BUDGET_MS.logs);
@@ -23,5 +24,8 @@ describe("CORE_RPC_TIMEOUT_MS", () => {
     expect(CORE_RPC_TIMEOUT_MS.vault_open).toBe(LOADING_BUDGET_MS.vaultPipeline);
     expect(CORE_RPC_TIMEOUT_MS.vault_close).toBe(LOADING_BUDGET_MS.vaultPipeline);
     expect(CORE_RPC_TIMEOUT_MS.vault_rename).toBe(LOADING_BUDGET_MS.vaultRename);
+    expect(CORE_RPC_TIMEOUT_MS.vault_export).toBe(LOADING_BUDGET_MS.vaultExport);
+    expect(CORE_RPC_TIMEOUT_MS.vault_export_probe).toBe(LOADING_BUDGET_MS.vaultPipeline);
+    expect(CORE_RPC_TIMEOUT_MS.vault_fs_import_os_file).toBe(LOADING_BUDGET_MS.vaultFsImport);
   });
 });

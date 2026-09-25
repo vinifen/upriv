@@ -439,8 +439,8 @@ fn rename_display_name_only(
 mod tests {
     use super::*;
     use crate::config::{create_vault_group_with_sort, load_vault_groups, save_app_settings};
-    use crate::contents::KdfUnlockPreset;
     use crate::session::PreparingGuard;
+    use crate::store::KdfUnlockPreset;
     use crate::test_support::{vault_root_with, VaultSpec};
     use crate::vault::{close_vault, create_vault, open_vault};
 

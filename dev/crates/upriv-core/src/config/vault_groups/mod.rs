@@ -496,6 +496,29 @@ pub fn remap_grouped_vault_id(root: &VaultRoot, old_id: &str, new_id: &str) -> R
     Ok(())
 }
 
+/// Drop `vault_id` from every group's `grouped_vaults` (delete / hide cleanup).
+pub fn remove_vault_from_groups(root: &VaultRoot, vault_id: &str) -> Result<()> {
+    let _guard = lock_groups_write();
+    require_upriv_dir(root)?;
+    let vault_id = vault_id.trim();
+    if vault_id.is_empty() {
+        return Ok(());
+    }
+    let mut groups = load_vault_groups_for_mutate(root)?;
+    let mut changed = false;
+    for group in &mut groups {
+        let before = group.grouped_vaults.len();
+        group.grouped_vaults.retain(|id| id != vault_id);
+        if group.grouped_vaults.len() != before {
+            changed = true;
+        }
+    }
+    if changed {
+        save_vault_groups(root, &groups)?;
+    }
+    Ok(())
+}
+
 /// Known vault ids from scanning `vaults/*/`. Invalid `config.toml` still counts
 /// (directory name) so list sanitize does not treat a broken config as an orphan.
 pub fn known_vault_ids(root: &VaultRoot) -> Result<HashSet<String>> {

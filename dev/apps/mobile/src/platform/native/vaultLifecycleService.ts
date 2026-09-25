@@ -44,8 +44,9 @@ export const nativeVaultLifecycleService: VaultLifecycleService = {
     assertSafVaultPathRpcAvailable();
     onStep(0);
     const password = vaultPasswordInRam.get(vaultId);
-    await rpcVaultClose(vaultId, password);
+    const outcome = await rpcVaultClose(vaultId, password);
     onStep(1);
+    return outcome;
   },
 
   resolveWorkspacePath(displayName, options) {

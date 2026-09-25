@@ -82,4 +82,7 @@ export type VaultListLifecycleModals = Pick<
   | "setExportVaultId"
   | "exportVault"
   | "setExportSubmitting"
+  | "setCreateVaultOpen"
+  | "setCreateVaultInitialDraft"
+  | "setCreateVaultInitialStep"
 >;

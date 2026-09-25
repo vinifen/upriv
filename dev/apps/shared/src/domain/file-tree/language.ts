@@ -12,9 +12,64 @@ const IMAGE_EXTENSIONS = [
   ".avif",
 ] as const;
 
-export function vaultFileLanguageFromPath(path: string): VaultFileLanguage {
+/**
+ * Opaque in the in-app editor (still stored). Classification only — import does
+ * not skip these types.
+ */
+const BINARY_EXTENSIONS = [
+  ".pdf",
+  ".mp4",
+  ".m4v",
+  ".mov",
+  ".mkv",
+  ".webm",
+  ".avi",
+  ".wmv",
+  ".flv",
+  ".mpeg",
+  ".mpg",
+  ".mp3",
+  ".wav",
+  ".flac",
+  ".ogg",
+  ".aac",
+  ".m4a",
+  ".wma",
+  ".opus",
+  ".zip",
+  ".7z",
+  ".rar",
+  ".tar",
+  ".gz",
+  ".bz2",
+  ".xz",
+  ".tgz",
+  ".doc",
+  ".docx",
+  ".xls",
+  ".xlsx",
+  ".ppt",
+  ".pptx",
+  ".odt",
+  ".ods",
+  ".wasm",
+  ".exe",
+  ".dll",
+  ".so",
+  ".dmg",
+  ".iso",
+  ".bin",
+  ".dat",
+  ".apk",
+  ".ipa",
+  ".jar",
+] as const;
+
+export function vaultFileLanguageFromPath(path: string, mimeHint?: string): VaultFileLanguage {
   const lower = path.toLowerCase();
-  if (lower.endsWith(".pdf")) return "binary";
+  if (BINARY_EXTENSIONS.some((ext) => lower.endsWith(ext))) return "binary";
+  const mime = mimeHint?.trim().toLowerCase() ?? "";
+  if (mime.startsWith("video/") || mime.startsWith("audio/")) return "binary";
   if (IMAGE_EXTENSIONS.some((ext) => lower.endsWith(ext))) return "image";
   if (lower.endsWith(".md")) return "markdown";
   if (lower.endsWith(".sh")) return "shell";
@@ -22,9 +77,14 @@ export function vaultFileLanguageFromPath(path: string): VaultFileLanguage {
   return "text";
 }
 
-/** PDF and other non-text, non-image types the mock/live FM cannot store yet. */
-export function isVaultImportUnsupported(path: string): boolean {
-  return vaultFileLanguageFromPath(path) === "binary";
+/** True when the editor should not decode the file as text or an image. */
+export function isImportableBinaryPath(path: string, mimeHint?: string): boolean {
+  return vaultFileLanguageFromPath(path, mimeHint) === "binary";
+}
+
+/** Import is not typed-gated; reserved names are skipped elsewhere. */
+export function isVaultImportUnsupported(_path: string, _mimeHint?: string): boolean {
+  return false;
 }
 
 /** MIME for an image path (used when materializing a data URL). */

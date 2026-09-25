@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Pressable, Text, View } from "react-native";
+import { Modal as RnModal, Pressable, StyleSheet, Text, View } from "react-native";
 import { Button, Checkbox, Modal, ModalFooterActions, Toast } from "@/components/ui";
 import { useAppSettingsContext } from "@/features/system/settings";
 import { useTranslation } from "@/i18n";
@@ -8,15 +8,17 @@ import type { FileManagerApi } from "../hooks/useVaultFileManager";
 
 interface FileManagerDialogsProps {
   fm: FileManagerApi;
+  promptsOpen?: boolean;
 }
 
-export function FileManagerDialogs({ fm }: FileManagerDialogsProps) {
+export function FileManagerDialogs({ fm, promptsOpen = true }: FileManagerDialogsProps) {
   const { t } = useTranslation();
   const { typography, colors } = useTheme();
   const { patchSettings } = useAppSettingsContext();
   const deleteTarget = fm.workspace.deleteTarget;
   const unsavedPrompt = fm.workspace.unsavedPrompt;
   const isDismissWorkspacePrompt = unsavedPrompt?.type === "dismiss_workspace";
+  const isImportInProgressPrompt = unsavedPrompt?.type === "import_in_progress";
   const [dontAskAgain, setDontAskAgain] = useState(false);
 
   const closeDelete = () => {
@@ -36,7 +38,7 @@ export function FileManagerDialogs({ fm }: FileManagerDialogsProps) {
   return (
     <>
       <Modal
-        open={deleteTarget !== null}
+        open={promptsOpen && deleteTarget !== null}
         title={t("modal.file_manager.delete.title")}
         titleIcon="trash"
         contextTitle={deleteTarget?.name}
@@ -78,50 +80,93 @@ export function FileManagerDialogs({ fm }: FileManagerDialogsProps) {
       </Modal>
 
       <Modal
-        open={unsavedPrompt !== null}
-        title={t("modal.file_manager.unsaved.title")}
+        open={promptsOpen && unsavedPrompt !== null}
+        title={
+          isImportInProgressPrompt
+            ? t("modal.file_manager.import_in_progress.title")
+            : t("modal.file_manager.unsaved.title")
+        }
         titleIcon="file"
         panelClassName="max-w-md"
         onClose={() => fm.dispatch({ type: "set_unsaved_prompt", prompt: null })}
         footer={
-          <ModalFooterActions layout="dialog">
-            <Button
-              label={t("action.cancel")}
-              variant="ghost"
-              size="sm"
-              onPress={() => fm.dispatch({ type: "set_unsaved_prompt", prompt: null })}
-            />
-            <Button
-              label={
-                isDismissWorkspacePrompt
-                  ? t("modal.file_manager.unsaved.discard_all")
-                  : t("modal.file_manager.unsaved.discard")
-              }
-              variant="danger"
-              size="sm"
-              onPress={fm.confirmUnsaved}
-            />
-            <Button
-              label={
-                isDismissWorkspacePrompt
-                  ? t("modal.file_manager.unsaved.save_all")
-                  : t("modal.file_manager.unsaved.save_and_close")
-              }
-              variant="primary"
-              size="sm"
-              onPress={fm.confirmSaveUnsaved}
-            />
-          </ModalFooterActions>
+          isImportInProgressPrompt ? (
+            <ModalFooterActions layout="dialog">
+              <Button
+                label={t("modal.file_manager.import_in_progress.close_and_cancel")}
+                variant="danger"
+                size="sm"
+                onPress={fm.cancelImportAndClose}
+              />
+              <Button
+                label={t("modal.file_manager.import_in_progress.stay")}
+                variant="primary"
+                size="sm"
+                onPress={() => fm.dispatch({ type: "set_unsaved_prompt", prompt: null })}
+              />
+            </ModalFooterActions>
+          ) : (
+            <ModalFooterActions layout="dialog">
+              <Button
+                label={t("action.cancel")}
+                variant="ghost"
+                size="sm"
+                onPress={() => fm.dispatch({ type: "set_unsaved_prompt", prompt: null })}
+              />
+              <Button
+                label={
+                  isDismissWorkspacePrompt
+                    ? t("modal.file_manager.unsaved.discard_all")
+                    : t("modal.file_manager.unsaved.discard")
+                }
+                variant="danger"
+                size="sm"
+                onPress={fm.confirmUnsaved}
+              />
+              <Button
+                label={
+                  isDismissWorkspacePrompt
+                    ? t("modal.file_manager.unsaved.save_all")
+                    : t("modal.file_manager.unsaved.save_and_close")
+                }
+                variant="primary"
+                size="sm"
+                onPress={fm.confirmSaveUnsaved}
+              />
+            </ModalFooterActions>
+          )
         }
       >
         <Text style={[typography.body, { color: colors.onSurfaceVariant }]}>
-          {isDismissWorkspacePrompt
-            ? t("modal.file_manager.unsaved.workspace_body")
-            : t("modal.file_manager.unsaved.body")}
+          {isImportInProgressPrompt
+            ? t("modal.file_manager.import_in_progress.body")
+            : isDismissWorkspacePrompt
+              ? t("modal.file_manager.unsaved.workspace_body")
+              : t("modal.file_manager.unsaved.body")}
         </Text>
       </Modal>
 
-      <Toast message={fm.toastMessage} onDismiss={fm.dismissToast} bottomExtra={56} />
+      {promptsOpen || !fm.toastMessage ? (
+        <Toast message={fm.toastMessage} onDismiss={fm.dismissToast} bottomExtra={56} />
+      ) : (
+        <RnModal
+          transparent
+          visible
+          animationType="none"
+          statusBarTranslucent
+          onRequestClose={fm.dismissToast}
+        >
+          <View pointerEvents="box-none" style={styles.toastHost}>
+            <Toast message={fm.toastMessage} onDismiss={fm.dismissToast} bottomExtra={56} />
+          </View>
+        </RnModal>
+      )}
     </>
   );
 }
+
+const styles = StyleSheet.create({
+  toastHost: {
+    flex: 1,
+  },
+});

@@ -7,6 +7,7 @@ import {
 import { ELECTRON_IPC_METHODS } from "../ipcMethods";
 import {
   MAX_STDOUT_BUFFER_CHARS,
+  SHUTDOWN_TIMEOUT_MS,
   formatRpcError,
   parseDaemonStdoutLine,
   rpcTimeoutErrorMessage,
@@ -45,6 +46,10 @@ describe("daemon protocol helpers", () => {
     expect(parseDaemonStdoutLine("")).toBeNull();
     expect(parseDaemonStdoutLine("not-json")).toBeNull();
     expect(parseDaemonStdoutLine('{"type":"ready"}')).toEqual({ type: "ready" });
+  });
+
+  it("gives app_shutdown the vault-pipeline budget so close_all can flush", () => {
+    expect(SHUTDOWN_TIMEOUT_MS).toBe(600_000);
   });
 
   it("flags an oversized stdout buffer", () => {

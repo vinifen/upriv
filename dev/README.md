@@ -29,6 +29,7 @@ dev/
 
 1. **Node.js 22.12+** — `nvm use` in this folder (see `.nvmrc`)
 2. **Rust 1.94.0** — `cd dev` (rustup reads `rust-toolchain.toml`) or `rustup toolchain install 1.94.0`
+3. **Linux vault mount (optional):** `libfuse3-dev` (and typically `fuse3`) to compile `upriv-core`'s FUSE session. The in-app file manager works without a successful mount. Windows WinFsp is not wired yet.
 
 ## Node dependencies
 
@@ -70,7 +71,7 @@ cargo test -p upriv-core   # Rust core only
 npm run rust:lint          # Rust only: rustfmt --check + clippy
 npm run rust:fix           # Rust only: apply rustfmt + clippy --fix
 
-# Browser only (mock services, no cache wipe)
+# Vite renderer only (no daemon — use electron:dev for the app)
 npm run dev
 
 # Desktop / mobile without cache wipe:
@@ -101,21 +102,21 @@ Architecture and requirements: **`docs/`** (`ARCHITECTURE.md`, `prd.md`, `sdd.md
 
 Where vault data lives (`UPRIV_DISTRIBUTION`) — **portable is only a desktop packaging mode**:
 
-| Platform | Installed | Portable (data beside app) | Build host |
-|----------|-----------|----------------------------|------------|
-| **Linux** | `.deb` → `~/.local/share/upriv` | `.AppImage` (writable folder) | This Linux machine |
-| **Windows** | NSIS setup → `%LOCALAPPDATA%\Upriv` | portable `.exe` (uses `PORTABLE_EXECUTABLE_DIR`) | Windows PC / Windows VM / CI |
-| **macOS** | DMG → Application Support (`installed` always; never portable-beside-`.app`) | **No** | Mac only (experimental / unsigned scaffold) |
-| **Android** | App sandbox / SAF (later RN) | **No** — no “USB beside APK” model; not Electron | Android toolchain later |
+| Platform    | Installed                                                                    | Portable (data beside app)                       | Build host                                  |
+| ----------- | ---------------------------------------------------------------------------- | ------------------------------------------------ | ------------------------------------------- |
+| **Linux**   | `.deb` → `~/.local/share/upriv`                                              | `.AppImage` (writable folder)                    | This Linux machine                          |
+| **Windows** | NSIS setup → `%LOCALAPPDATA%\Upriv`                                          | portable `.exe` (uses `PORTABLE_EXECUTABLE_DIR`) | Windows PC / Windows VM / CI                |
+| **macOS**   | DMG → Application Support (`installed` always; never portable-beside-`.app`) | **No**                                           | Mac only (experimental / unsigned scaffold) |
+| **Android** | App sandbox / SAF (later RN)                                                 | **No** — no “USB beside APK” model; not Electron | Android toolchain later                     |
 
 `custom_root` (pick any folder) still exists on desktop when the app ships; it is not the same as portable packaging.
 
 ## Linux packaging
 
-| Artifact | Best for | Notes |
-|----------|----------|--------|
-| **`.deb`** | Ubuntu / Debian install | Double-click → Software Install. No FUSE. Upriv icons in hicolor (16–512) + menu entry. Data folder defaults to `~/.local/share/upriv` (install dir `/opt` is not writable). |
-| **`.AppImage`** | Portable / no install | Needs **libfuse**. Sandbox wrapper only when `$APPIMAGE` is set. Data beside the `.AppImage` when that folder is writable. |
+| Artifact        | Best for                | Notes                                                                                                                                                                        |
+| --------------- | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **`.deb`**      | Ubuntu / Debian install | Double-click → Software Install. No FUSE. Upriv icons in hicolor (16–512) + menu entry. Data folder defaults to `~/.local/share/upriv` (install dir `/opt` is not writable). |
+| **`.AppImage`** | Portable / no install   | Needs **libfuse**. Sandbox wrapper only when `$APPIMAGE` is set. Data beside the `.AppImage` when that folder is writable.                                                   |
 
 Build: `npm run electron:build` (or `electron:build:linux`).
 
@@ -123,10 +124,10 @@ Artifacts: `dev/target/release/bundle/electron/` — e.g. `Upriv-0.2.2-beta-linu
 
 ## Windows packaging
 
-| Artifact | Best for | Notes |
-|----------|----------|--------|
-| **NSIS setup** (`*-setup-*.exe`) | Installed | Per-user default: `%LOCALAPPDATA%\Programs\Upriv`; data under `%LOCALAPPDATA%\Upriv` (`installed`). |
-| **Portable** (`*-portable-*.exe`) | USB / no install | Data beside the exe when that folder is writable (`portable`). |
+| Artifact                          | Best for         | Notes                                                                                               |
+| --------------------------------- | ---------------- | --------------------------------------------------------------------------------------------------- |
+| **NSIS setup** (`*-setup-*.exe`)  | Installed        | Per-user default: `%LOCALAPPDATA%\Programs\Upriv`; data under `%LOCALAPPDATA%\Upriv` (`installed`). |
+| **Portable** (`*-portable-*.exe`) | USB / no install | Data beside the exe when that folder is writable (`portable`).                                      |
 
 Build **on Windows** (Node 22 + Rust + VS Build Tools / MSVC, then `npm run electron:build:win`).  
 Cross-building Windows installers from Linux needs Wine + a Windows Rust target — **not** set up by default on the Linux workspace.
@@ -137,8 +138,8 @@ Artifacts land in the same folder: `dev/target/release/bundle/electron/`.
 
 ## macOS packaging
 
-| Artifact | Best for | Notes |
-|----------|----------|--------|
+| Artifact               | Best for  | Notes                                                                                                                                                                                                               |
+| ---------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **DMG** (experimental) | Installed | Drag to Applications; data under Application Support (`installed`). **No portable target**. **Not notarized / no hardenedRuntime** in this scaffold — Gatekeeper will block unsigned builds until signing is added. |
 
 Build **on a Mac** only (`electron-builder --mac`). Not cross-built from Linux/Windows. Treat macOS packaging as experimental until notarization is wired.
@@ -149,12 +150,12 @@ Build **on a Mac** only (`electron-builder --mac`). Not cross-built from Linux/W
 
 ## Linux troubleshooting (AppImage / .deb)
 
-| Symptom | Likely cause | Fix |
-|---------|----------------|-----|
-| Want no terminal / no FUSE | AppImage needs fuse | Use the **`.deb`** on Ubuntu |
-| AppImage: needs FUSE | AppImage mounts via libfuse | Prefer `.deb`; or `sudo apt install libfuse2` / `libfuse2t64` |
-| AppImage: `setuid_sandbox_host` / Trace/breakpoint trap under `/tmp/.mount_Upriv-*` | FUSE mount is `nosuid` → `chrome-sandbox` useless | Rebuild (wrapper disables sandbox **only when `$APPIMAGE` is set**). Old AppImages: `./Upriv-*.AppImage --no-sandbox`. `.deb` keeps chrome-sandbox. |
-| AppImage won't start / sandbox error | Chromium sandbox vs AppArmor | Same as above; renderer sandbox stays on. Dev `npm run electron:dev` always uses `--no-sandbox` (dev-only). |
-| `upriv-daemon not found` | Release binary missing before pack | Run `npm run daemon:build:release` or full `npm run electron:build` |
-| Blank window on first `electron:dev` | Vite still compiling | Wait for port 1420 or reload once |
-| FUSE / vault mount (future) | User not in `fuse` group | `sudo usermod -aG fuse $USER` then re-login — required when encrypted vault workspace mounts land in `upriv-core` |
+| Symptom                                                                             | Likely cause                                             | Fix                                                                                                                                                 |
+| ----------------------------------------------------------------------------------- | -------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Want no terminal / no FUSE                                                          | AppImage needs fuse                                      | Use the **`.deb`** on Ubuntu                                                                                                                        |
+| AppImage: needs FUSE                                                                | AppImage mounts via libfuse                              | Prefer `.deb`; or `sudo apt install libfuse2` / `libfuse2t64`                                                                                       |
+| AppImage: `setuid_sandbox_host` / Trace/breakpoint trap under `/tmp/.mount_Upriv-*` | FUSE mount is `nosuid` → `chrome-sandbox` useless        | Rebuild (wrapper disables sandbox **only when `$APPIMAGE` is set**). Old AppImages: `./Upriv-*.AppImage --no-sandbox`. `.deb` keeps chrome-sandbox. |
+| AppImage won't start / sandbox error                                                | Chromium sandbox vs AppArmor                             | Same as above; renderer sandbox stays on. Dev `npm run electron:dev` always uses `--no-sandbox` (dev-only).                                         |
+| `upriv-daemon not found`                                                            | Release binary missing before pack                       | Run `npm run daemon:build:release` or full `npm run electron:build`                                                                                 |
+| Blank window on first `electron:dev`                                                | Vite still compiling                                     | Wait for port 1420 or reload once                                                                                                                   |
+| FUSE / vault mount                                                                  | User not in `fuse` group, or `libfuse3` missing at build | `sudo apt install libfuse3-dev fuse3`; `sudo usermod -aG fuse $USER` then re-login. In-app file manager still works if the mount fails.             |

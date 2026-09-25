@@ -70,14 +70,21 @@ describe("createVaultChoosesKdf", () => {
     expect(createVaultChoosesKdf({ source: "import", importFileName: "" })).toBe(true);
   });
 
-  it("skips the picker for .zip of contents (header already has KDF)", () => {
+  it("skips the picker for .zip of store/ (header already has KDF)", () => {
     expect(createVaultChoosesKdf({ source: "import", importFileName: "Notes.upriv.zip" })).toBe(
       false,
     );
     expect(createVaultChoosesKdf({ source: "import", importFileName: "Notes.zip" })).toBe(false);
   });
 
-  it("skips the picker for create-from-backup (frozen contents/, stamp has no .zip)", () => {
+  it("skips the picker for create-from-backup (frozen store/, stamp has no .zip)", () => {
+    expect(
+      createVaultChoosesKdf({
+        source: "import",
+        importKind: "backup",
+        importFileName: "20260528T120000",
+      }),
+    ).toBe(false);
     expect(
       createVaultChoosesKdf({
         source: "import",

@@ -14,6 +14,7 @@ export function defaultOrderAtEnd(existingOrders: readonly number[]): number {
 export function createEmptyCreateVaultDraft(existingOrders: readonly number[]): CreateVaultDraft {
   return {
     source: null,
+    importKind: "file",
     importFileName: "",
     importFilePath: "",
     displayName: "",
@@ -23,6 +24,7 @@ export function createEmptyCreateVaultDraft(existingOrders: readonly number[]): 
     passwordHint: "",
     passwordValidated: false,
     passwordTestFailed: false,
+    passwordProbeUnavailable: false,
     auto_close: {
       enabled: false,
       idle_minutes: 15,

@@ -435,7 +435,7 @@ interface VaultSettingsKdfSectionProps {
   /** Create-time picker — preset is written to `vault.header`, not `config.toml`. */
   config: { unlock_preset: KdfUnlockPreset };
   onChange: (patch: Partial<{ unlock_preset: KdfUnlockPreset }>) => void;
-  /** `.zip` of `contents/` import: header already has KDF params. */
+  /** `.zip` of `store/` import: header already has KDF params. */
   choosesPreset?: boolean;
 }
 
@@ -1013,6 +1013,8 @@ interface PolicyRadioOptionProps {
   attention?: boolean;
   /** Extra controls under the description — always visible; inactive until this option is selected. */
   footer?: ReactNode;
+  /** Click on an already-selected card (not its footer controls). */
+  onCardPress?: () => void;
   onSelect: () => void;
 }
 
@@ -1028,6 +1030,7 @@ export function PolicyRadioOption({
   tone = "default",
   attention = false,
   footer,
+  onCardPress,
   onSelect,
 }: PolicyRadioOptionProps) {
   const { t } = useTranslation();
@@ -1068,6 +1071,9 @@ export function PolicyRadioOption({
       ]
         .filter(Boolean)
         .join(" ")}
+      onClick={() => {
+        if (!disabled && checked) onCardPress?.();
+      }}
     >
       <span className="flex gap-2.5 sm:gap-3">
         <input
@@ -1124,6 +1130,8 @@ interface VaultSettingsDangerZoneSectionProps {
   canConfirmDelete: boolean;
   busy?: boolean;
   enabled?: boolean;
+  /** Closed or recovery. When false the button stays off and the reason is shown. */
+  allowed?: boolean;
   onRequestDelete: () => void;
   onCancelDelete: () => void;
   onConfirmDelete: () => void;
@@ -1138,6 +1146,7 @@ export function VaultSettingsDangerZoneSection({
   canConfirmDelete,
   busy = false,
   enabled = true,
+  allowed = true,
   onRequestDelete,
   onCancelDelete,
   onConfirmDelete,
@@ -1149,7 +1158,17 @@ export function VaultSettingsDangerZoneSection({
     return (
       <div className="space-y-4">
         <p className="text-sm text-on-surface-variant">{t("modal.settings.danger_zone_help")}</p>
-        <Button variant="danger" size="sm" onClick={onRequestDelete} disabled={busy || !enabled}>
+        {allowed ? null : (
+          <p className="text-sm text-on-surface-variant">
+            {t("modal.settings.delete_only_closed")}
+          </p>
+        )}
+        <Button
+          variant="danger"
+          size="sm"
+          onClick={onRequestDelete}
+          disabled={busy || !enabled || !allowed}
+        >
           {t("modal.settings.delete_vault")}
         </Button>
       </div>
@@ -1178,7 +1197,7 @@ export function VaultSettingsDangerZoneSection({
         <Button
           variant="danger"
           size="sm"
-          disabled={!canConfirmDelete || busy}
+          disabled={!canConfirmDelete || busy || !allowed}
           onClick={onConfirmDelete}
         >
           {t("action.delete")}

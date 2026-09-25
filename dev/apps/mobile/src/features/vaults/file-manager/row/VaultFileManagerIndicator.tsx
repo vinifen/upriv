@@ -1,4 +1,4 @@
-import { View } from "react-native";
+import { ActivityIndicator, View } from "react-native";
 import { Icon } from "@/components/icons";
 import { useFileManager } from "@/features/vaults/file-manager";
 import { useTranslation } from "@/i18n";
@@ -16,14 +16,20 @@ export function VaultFileManagerIndicator({ vaultId, size = 14 }: VaultFileManag
   const entry = entries[vaultId];
   if (!entry) return null;
 
-  const label =
-    entry.surface === "maximized"
+  const importing = entry.importInFlight;
+  const label = importing
+    ? t("vault.file_manager.importing")
+    : entry.surface === "maximized"
       ? t("vault.file_manager.active")
       : t("vault.file_manager.active_minimized");
 
   return (
     <View accessibilityRole="image" accessibilityLabel={label}>
-      <Icon name="folder" size={size} color={colors.accent} />
+      {importing ? (
+        <ActivityIndicator size="small" color={colors.accent} />
+      ) : (
+        <Icon name="folder" size={size} color={colors.accent} />
+      )}
     </View>
   );
 }

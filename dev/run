@@ -22,7 +22,7 @@ Commands:
   lint-fix   Apply auto-fixes (continues on failure; exit 1 if any step failed)
   test       Run all code tests
   check      lint + test
-  desktop    Wipe Vite cache, then Electron + upriv-daemon
+  desktop    Wipe Vite cache, free port 1420 if needed, then Electron + upriv-daemon
   mobile     Wipe Metro/Expo cache, then expo start --clear
              Extra args go to Expo (e.g. ./run mobile --android)
 
@@ -57,6 +57,7 @@ What each command runs:
 
   desktop
     • Remove apps/desktop/.vite-cache and node_modules/.vite
+    • Free TCP 1420 if a leftover Vite is still bound
     • npm run electron:dev (daemon build + Vite + Electron)
 
   mobile
@@ -267,6 +268,34 @@ remove_if_present() {
   fi
 }
 
+# Vite uses strictPort 1420. A leftover `./run desktop` keeps the port and the next start fails.
+free_tcp_port() {
+  local port="$1"
+  local pids=""
+  if command -v fuser >/dev/null 2>&1; then
+    if fuser "${port}/tcp" >/dev/null 2>&1; then
+      echo "  killing listener on ${port}"
+      fuser -k "${port}/tcp" >/dev/null 2>&1 || true
+      sleep 0.3
+      if fuser "${port}/tcp" >/dev/null 2>&1; then
+        fuser -k -KILL "${port}/tcp" >/dev/null 2>&1 || true
+      fi
+    fi
+    return
+  fi
+  if command -v lsof >/dev/null 2>&1; then
+    pids=$(lsof -tiTCP:"${port}" -sTCP:LISTEN 2>/dev/null || true)
+  fi
+  if [[ -n "${pids}" ]]; then
+    echo "  killing listener on ${port}"
+    # shellcheck disable=SC2086
+    kill ${pids} 2>/dev/null || true
+    sleep 0.3
+    # shellcheck disable=SC2086
+    kill -9 ${pids} 2>/dev/null || true
+  fi
+}
+
 cmd_desktop() {
   require_node_modules desktop || exit 1
   require_node_modules electron || exit 1
@@ -274,6 +303,9 @@ cmd_desktop() {
   echo "==> Clearing Vite cache"
   remove_if_present "$DEV_ROOT/apps/desktop/.vite-cache"
   remove_if_present "$DEV_ROOT/apps/desktop/node_modules/.vite"
+  echo ""
+  echo "==> Freeing port 1420 if in use"
+  free_tcp_port 1420
   echo ""
   echo "==> Desktop (electron:dev)"
   exec npm run electron:dev

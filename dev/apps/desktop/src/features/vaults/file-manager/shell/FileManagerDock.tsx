@@ -67,6 +67,7 @@ export function FileManagerDock({
           {entries.map((entry) => {
             const active = entry.vaultId === highlightVaultId;
             const isMaximized = entry.vaultId === maximizedVaultId;
+            const importing = entry.importInFlight;
             const letters = vaultDisplayLetters(entry.displayName);
             return (
               <div
@@ -85,23 +86,31 @@ export function FileManagerDock({
                   active ? "dock-entry-selected" : "",
                 ].join(" ")}
                 aria-label={
-                  isMaximized
-                    ? t("modal.file_manager.dock.minimize", { name: entry.displayName })
-                    : t("modal.file_manager.dock.restore", { name: entry.displayName })
+                  importing
+                    ? t("modal.file_manager.dock.importing", { name: entry.displayName })
+                    : isMaximized
+                      ? t("modal.file_manager.dock.minimize", { name: entry.displayName })
+                      : t("modal.file_manager.dock.restore", { name: entry.displayName })
                 }
               >
                 <span
-                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-surface-container text-accent"
+                  className="relative flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-surface-container text-accent"
                   aria-hidden
                 >
                   <span
                     className={[
                       "font-semibold leading-none tracking-tight",
                       letters.length > 1 ? "text-[11px]" : "text-[12px]",
+                      importing ? "opacity-0" : "",
                     ].join(" ")}
                   >
                     {letters}
                   </span>
+                  {importing ? (
+                    <span className="absolute inset-0 flex items-center justify-center">
+                      <span className="h-4 w-4 animate-spin rounded-full border-2 border-accent/30 border-t-accent" />
+                    </span>
+                  ) : null}
                 </span>
                 <span
                   className="min-w-0 flex-1 truncate text-sm font-medium text-on-surface"

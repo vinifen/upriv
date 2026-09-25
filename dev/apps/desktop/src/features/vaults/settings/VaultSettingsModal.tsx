@@ -48,6 +48,7 @@ import {
   NO_VAULT_GROUPS,
   isVaultInHiddenGroup,
   isHiddenGroup,
+  canDeleteVaultNow,
   resolveVaultListStatus,
   selectedGroupIdAfterAssignment,
   normalizeVaultSettingsConfig,
@@ -118,6 +119,7 @@ export function VaultSettingsModal({
   const [discardConfirmOpen, setDiscardConfirmOpen] = useState(false);
   const [savedVisible, setSavedVisible] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleteSubmitting, setDeleteSubmitting] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState("");
   const [selectedGroupId, setSelectedGroupId] = useState("");
   const [newGroupName, setNewGroupName] = useState("");
@@ -172,7 +174,7 @@ export function VaultSettingsModal({
       setHeaderUnlockPreset(undefined);
       return;
     }
-    // List row already probed `vault.header`. Missing ≠ 256 MiB.
+    // List row already probed `header/vault.header`. Missing ≠ 256 MiB.
     setHeaderUnlockPreset(vault?.unlockPreset);
   }, [open, vaultId, vault?.unlockPreset]);
 
@@ -205,6 +207,7 @@ export function VaultSettingsModal({
 
   const canConfirmDelete = vault !== null && deleteConfirm.trim() === vault.id;
   const vaultListStatus = vault ? resolveVaultListStatus(vault, pipelineListStatus) : "closed";
+  const canDeleteNow = canDeleteVaultNow(vaultListStatus);
   const editAllowed = (target: Parameters<typeof vaultConfigEditAllowed>[0]) =>
     vault != null && vaultConfigEditAllowed(target, vault, pipelineListStatus);
   const storageModeLocked = !editAllowed("storage.mode");
@@ -611,8 +614,9 @@ export function VaultSettingsModal({
     resetKdfForm,
   ]);
 
-  const submitBudgetMs =
-    passwordSubmitting || kdfSubmitting
+  const submitBudgetMs = deleteSubmitting
+    ? LOADING_BUDGET_MS.vaultDelete
+    : passwordSubmitting || kdfSubmitting
       ? LOADING_BUDGET_MS.vaultRewrap
       : nameDirty
         ? LOADING_BUDGET_MS.vaultRename
@@ -631,6 +635,7 @@ export function VaultSettingsModal({
     if (!submitBudget.timedOut) return;
     sectionBusyGenRef.current += 1;
     setSectionBusy(false);
+    setDeleteSubmitting(false);
     setPasswordSubmitting(false);
     setKdfSubmitting(false);
     if (!renameCommittedRef.current) {
@@ -688,6 +693,7 @@ export function VaultSettingsModal({
     sectionBusyGenRef.current += 1;
     submitInFlightRef.current = false;
     setSectionBusy(false);
+    setDeleteSubmitting(false);
     setPasswordSubmitting(false);
     setKdfSubmitting(false);
     setSaveConfirmOpen(false);
@@ -753,10 +759,19 @@ export function VaultSettingsModal({
   };
 
   const handleConfirmDelete = async () => {
-    if (!canConfirmDelete || !vault || sectionBusy || !vaultService.canDeleteVault) return;
+    if (
+      !canConfirmDelete ||
+      !canDeleteNow ||
+      !vault ||
+      sectionBusy ||
+      !vaultService.canDeleteVault
+    ) {
+      return;
+    }
     if (submitInFlightRef.current) return;
     submitInFlightRef.current = true;
     const generation = (sectionBusyGenRef.current += 1);
+    setDeleteSubmitting(true);
     setSectionBusy(true);
     try {
       await onVaultDelete?.(vault.id);
@@ -770,6 +785,7 @@ export function VaultSettingsModal({
     } finally {
       if (generation === sectionBusyGenRef.current) {
         submitInFlightRef.current = false;
+        setDeleteSubmitting(false);
         setSectionBusy(false);
       }
     }
@@ -999,6 +1015,7 @@ export function VaultSettingsModal({
                     onConfirmChange={setDeleteConfirm}
                     busy={sectionBusy}
                     enabled={vaultService.canDeleteVault}
+                    allowed={canDeleteNow}
                   />
                 </VaultSettingsSection>
               </>

@@ -87,7 +87,7 @@ export function FileTreeContextMenu({ fm, tree }: FileTreeContextMenuProps) {
         label: t("modal.file_manager.context.open_system"),
         onClick: () => {
           close();
-          fm.showMockToast("open_system");
+          void fm.openInSystemFileManager(menu.path);
         },
       },
       {
@@ -96,7 +96,7 @@ export function FileTreeContextMenu({ fm, tree }: FileTreeContextMenuProps) {
         label: t("modal.file_manager.context.open_terminal"),
         onClick: () => {
           close();
-          fm.showMockToast("open_terminal");
+          void fm.openInTerminal(menu.path);
         },
       },
     );

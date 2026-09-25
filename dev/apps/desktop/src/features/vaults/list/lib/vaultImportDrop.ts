@@ -1,3 +1,5 @@
+import { isAbsoluteOsFilesystemPath } from "@upriv/shared";
+
 /** Helpers for OS drag of vault `.zip` / `.7z` onto the vault list. */
 
 export function isVaultImportFileName(name: string): boolean {
@@ -5,10 +7,27 @@ export function isVaultImportFileName(name: string): boolean {
   return lower.endsWith(".zip") || lower.endsWith(".7z");
 }
 
-/** Electron exposes absolute `path` on dropped File; browsers do not. */
+function droppedFilePathHint(file: File): string | undefined {
+  const legacy = (file as File & { path?: string }).path?.trim();
+  if (legacy) return legacy;
+  const api = typeof window !== "undefined" ? window.upriv : undefined;
+  if (!api || typeof api.getPathForFile !== "function") return undefined;
+  try {
+    return api.getPathForFile(file)?.trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Absolute OS path of an OS-dropped vault package.
+ * Electron 32+ removed `File.path` — prefer `window.upriv.getPathForFile`.
+ * Relative names and SAF URIs are dropped: the daemon can only `std::fs::read` a real path.
+ */
 export function absolutePathFromDroppedFile(file: File): string | undefined {
-  const path = (file as File & { path?: string }).path?.trim();
-  return path || undefined;
+  const path = droppedFilePathHint(file);
+  if (!path || !isAbsoluteOsFilesystemPath(path)) return undefined;
+  return path;
 }
 
 export function firstVaultImportFile(files: Iterable<File>): File | null {

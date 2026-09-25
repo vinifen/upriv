@@ -2,7 +2,9 @@ import { useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } 
 import { useTranslation } from "@/i18n";
 import { useErrorToast } from "@/hooks/useErrorToast";
 import { fileBaseName } from "@upriv/shared";
-import { filesFromDataTransfer, isOsFileDrag } from "../lib/osFileDrop";
+import { Button, LoadingBudgetHint } from "@/components/ui";
+import { allowFileManagerDrop, beginOsFileImport } from "../lib/osFileDrop";
+import { osFileImportParentPath } from "../lib/osFileImportTarget";
 import type { FileManagerApi } from "../hooks/useVaultFileManager";
 
 interface FileEditorPaneProps {
@@ -22,6 +24,7 @@ interface EditorWithLineNumbersProps {
   content: string;
   fileName: string;
   ariaLabel: string;
+  readOnly?: boolean;
   onChange: (content: string) => void;
 }
 
@@ -29,6 +32,7 @@ function EditorWithLineNumbers({
   content,
   fileName,
   ariaLabel,
+  readOnly = false,
   onChange,
 }: EditorWithLineNumbersProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -68,6 +72,7 @@ function EditorWithLineNumbers({
       <textarea
         ref={textareaRef}
         value={content}
+        readOnly={readOnly}
         onChange={(event) => onChange(event.target.value)}
         onScroll={syncScroll}
         spellCheck={false}
@@ -113,9 +118,7 @@ function ViewerDropZone({ fm, children }: { fm: FileManagerApi; children: ReactN
   const [dropActive, setDropActive] = useState(false);
 
   const handleDragOver = (event: DragEvent) => {
-    if (!isOsFileDrag(event)) return;
-    event.preventDefault();
-    event.dataTransfer.dropEffect = "copy";
+    allowFileManagerDrop(event, "copy");
     setDropActive(true);
   };
 
@@ -125,17 +128,18 @@ function ViewerDropZone({ fm, children }: { fm: FileManagerApi; children: ReactN
   };
 
   const handleDrop = (event: DragEvent) => {
-    if (!isOsFileDrag(event)) return;
-    event.preventDefault();
     setDropActive(false);
-    void (async () => {
-      try {
-        const files = await filesFromDataTransfer(event);
-        await fm.importFiles("/", files, { openFirstViewable: true });
-      } catch (error) {
-        showError(error, "error.unexpected");
-      }
-    })();
+    if (
+      beginOsFileImport(
+        event,
+        osFileImportParentPath(fm.tree, fm.workspace),
+        fm.importOsDrop,
+        (error) => showError(error, "error.unexpected"),
+        { openFirstViewable: true },
+      )
+    ) {
+      fm.dispatch({ type: "set_drag", source: null, target: null });
+    }
   };
 
   return (
@@ -144,6 +148,7 @@ function ViewerDropZone({ fm, children }: { fm: FileManagerApi; children: ReactN
         "flex min-h-0 flex-1 flex-col overflow-hidden",
         dropActive ? "ring-2 ring-inset ring-[var(--accent)]" : "",
       ].join(" ")}
+      onDragEnter={handleDragOver}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
@@ -160,9 +165,17 @@ export function FileEditorPane({ fm }: FileEditorPaneProps) {
     dispatch,
     saveFile,
     getEditorContent,
+    fileLoadError,
+    isFileContentReady,
+    writesLocked,
     isFileEditable,
     isFileViewable,
     isFileImage,
+    isImportPending,
+    isImportProcessing,
+    isImportTimedOut,
+    importBudget,
+    retryImport,
   } = fm;
   const activeTabPath = workspace.activeTabPath;
 
@@ -171,7 +184,7 @@ export function FileEditorPane({ fm }: FileEditorPaneProps) {
     const onKeyDown = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
         event.preventDefault();
-        if (isFileEditable(activeTabPath)) saveFile(activeTabPath);
+        if (isFileEditable(activeTabPath)) void saveFile(activeTabPath);
       }
     };
     window.addEventListener("keydown", onKeyDown);
@@ -197,6 +210,108 @@ export function FileEditorPane({ fm }: FileEditorPaneProps) {
   const viewable = isFileViewable(activeTabPath);
   const content = getEditorContent(activeTabPath);
   const fileName = fileBaseName(activeTabPath);
+  const loadError = fileLoadError(activeTabPath);
+  const importing = isImportPending(activeTabPath);
+  const processing = isImportProcessing(activeTabPath);
+
+  if (importing && isImportTimedOut(activeTabPath)) {
+    return (
+      <ViewerDropZone fm={fm}>
+        <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 bg-surface-container-high px-6 text-center">
+          <p className="font-mono text-[10px] uppercase tracking-widest text-on-surface-variant">
+            {t("modal.file_manager.import.loading_kicker")}
+          </p>
+          <p className="max-w-sm text-sm text-on-surface-variant">{t("loading.timed_out")}</p>
+          <Button variant="primary" size="md" onClick={retryImport}>
+            {t("action.retry")}
+          </Button>
+        </div>
+      </ViewerDropZone>
+    );
+  }
+
+  if (importing && processing && importBudget.timedOut) {
+    return (
+      <ViewerDropZone fm={fm}>
+        <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 bg-surface-container-high px-6 text-center">
+          <p className="font-mono text-[10px] uppercase tracking-widest text-on-surface-variant">
+            {t("modal.file_manager.import.loading_kicker")}
+          </p>
+          <p className="max-w-sm text-sm text-on-surface-variant">{t("loading.timed_out")}</p>
+        </div>
+      </ViewerDropZone>
+    );
+  }
+
+  if (importing) {
+    return (
+      <ViewerDropZone fm={fm}>
+        <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 bg-surface-container-high px-6 text-center">
+          <p className="font-mono text-[10px] uppercase tracking-widest text-on-surface-variant">
+            {t(
+              processing
+                ? "modal.file_manager.import.loading_kicker"
+                : "modal.file_manager.import.queued_kicker",
+            )}
+          </p>
+          <p className="max-w-sm text-sm text-on-surface-variant">
+            {processing
+              ? t("modal.file_manager.import.loading_body")
+              : t("modal.file_manager.import.queued_body", { name: fileName })}
+          </p>
+          {processing && importBudget.visible ? (
+            <LoadingBudgetHint
+              budgetMs={importBudget.budgetMs}
+              remainingMs={importBudget.remainingMs}
+            />
+          ) : null}
+        </div>
+      </ViewerDropZone>
+    );
+  }
+
+  if (!isFileContentReady(activeTabPath)) {
+    return (
+      <ViewerDropZone fm={fm}>
+        <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 bg-surface-container-high px-6 text-center">
+          <p className="font-mono text-[10px] uppercase tracking-widest text-on-surface-variant">
+            {t("modal.file_manager.viewer.loading_kicker")}
+          </p>
+          <p className="max-w-sm text-sm text-on-surface-variant">
+            {t("modal.file_manager.viewer.loading_body", { name: fileName })}
+          </p>
+        </div>
+      </ViewerDropZone>
+    );
+  }
+
+  if (!viewable) {
+    return (
+      <ViewerDropZone fm={fm}>
+        <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 bg-surface-container-high px-6 text-center">
+          <p className="font-mono text-[10px] uppercase tracking-widest text-on-surface-variant">
+            {t("modal.file_manager.viewer.preview_unavailable_kicker")}
+          </p>
+          <p className="max-w-sm text-sm text-on-surface-variant">
+            {t("modal.file_manager.viewer.preview_unavailable_body", { name: fileName })}
+          </p>
+        </div>
+      </ViewerDropZone>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <ViewerDropZone fm={fm}>
+        <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 bg-surface-container-high px-6 text-center">
+          <p className="font-mono text-[10px] uppercase tracking-widest text-on-surface-variant">
+            {t("modal.file_manager.viewer.read_failed_kicker")}
+          </p>
+          <p className="max-w-sm text-sm text-on-surface-variant">{loadError}</p>
+        </div>
+      </ViewerDropZone>
+    );
+  }
 
   if (isImage) {
     if (!content) {
@@ -224,21 +339,6 @@ export function FileEditorPane({ fm }: FileEditorPaneProps) {
     );
   }
 
-  if (!viewable) {
-    return (
-      <ViewerDropZone fm={fm}>
-        <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 bg-surface-container-high px-6 text-center">
-          <p className="font-mono text-[10px] uppercase tracking-widest text-on-surface-variant">
-            {t("modal.file_manager.viewer.preview_unavailable_kicker")}
-          </p>
-          <p className="max-w-sm text-sm text-on-surface-variant">
-            {t("modal.file_manager.viewer.preview_unavailable_body", { name: fileName })}
-          </p>
-        </div>
-      </ViewerDropZone>
-    );
-  }
-
   return (
     <ViewerDropZone fm={fm}>
       <EditorWithLineNumbers
@@ -246,9 +346,11 @@ export function FileEditorPane({ fm }: FileEditorPaneProps) {
         content={content}
         fileName={fileName}
         ariaLabel={t("modal.file_manager.viewer.editor_label", { name: fileName })}
-        onChange={(next) =>
-          dispatch({ type: "set_editor_draft", path: activeTabPath, content: next })
-        }
+        readOnly={writesLocked}
+        onChange={(next) => {
+          if (writesLocked) return;
+          dispatch({ type: "set_editor_draft", path: activeTabPath, content: next });
+        }}
       />
     </ViewerDropZone>
   );

@@ -98,16 +98,24 @@ function applyLinuxNosandboxWrap(context) {
 
   fs.renameSync(binaryPath, realBinaryPath);
 
+  // Resolve symlinks: /usr/bin/upriv-electron → alternatives → /opt/Upriv/…
+  // so dirname("$0") is not /usr/bin (missing .bin beside the PATH link).
   const wrapper = `#!/bin/bash
 set -euo pipefail
-DIR="$(cd "$(dirname "$0")" && pwd)"
+SOURCE="\${BASH_SOURCE[0]}"
+while [ -L "\$SOURCE" ]; do
+  DIR="\$(cd "\$(dirname "\$SOURCE")" && pwd)"
+  SOURCE="\$(readlink "\$SOURCE")"
+  [[ "\$SOURCE" != /* ]] && SOURCE="\$DIR/\$SOURCE"
+done
+DIR="\$(cd "\$(dirname "\$SOURCE")" && pwd)"
 # AppImageKit sets APPIMAGE to the real file; .deb does not — keep chrome-sandbox.
 # Require -f so a spoofed APPIMAGE=1 cannot disable sandbox on .deb.
 if [ -n "\${APPIMAGE:-}" ] && [ -f "\$APPIMAGE" ]; then
   export ELECTRON_DISABLE_SANDBOX=1
-  exec "$DIR/${executableName}.bin" --no-sandbox --disable-setuid-sandbox "$@"
+  exec "\$DIR/${executableName}.bin" --no-sandbox --disable-setuid-sandbox "\$@"
 fi
-exec "$DIR/${executableName}.bin" "$@"
+exec "\$DIR/${executableName}.bin" "\$@"
 `;
 
   fs.writeFileSync(binaryPath, wrapper, { mode: 0o755 });

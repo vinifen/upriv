@@ -21,13 +21,23 @@ else
     ln -sf '/opt/${sanitizedProductName}/${executable}' '/usr/bin/${executable}'
 fi
 
-# Check if user namespaces are supported by the kernel and working with a quick test:
-if ! { [[ -L /proc/self/ns/user ]] && unshare --user true; }; then
-    # Use SUID chrome-sandbox only on systems without user namespaces:
-    chmod 4755 '/opt/${sanitizedProductName}/chrome-sandbox' || true
-else
-    chmod 0755 '/opt/${sanitizedProductName}/chrome-sandbox' || true
-fi
+# Always SUID chrome-sandbox on .deb.
+# Kernel userns can exist (`unshare --user`) while AppArmor still blocks
+# unprivileged userns for Chromium (`apparmor_restrict_unprivileged_userns=1`
+# on Ubuntu). Then Electron aborts: chrome-sandbox found but not mode 4755.
+# AppImage never uses this script (FUSE nosuid → wrapper --no-sandbox).
+# Do not swallow failures: a 0755 chrome-sandbox makes the Apps menu icon a no-op.
+SANDBOX='/opt/${sanitizedProductName}/chrome-sandbox'
+chown root:root "$SANDBOX"
+chmod 4755 "$SANDBOX"
+mode=$(stat -c '%a' "$SANDBOX" 2>/dev/null || true)
+case "$mode" in
+  4755|6755) ;;
+  *)
+    echo "upriv-electron postinst: chrome-sandbox mode is '$mode' (want 4755); menu launch will abort" >&2
+    exit 1
+    ;;
+esac
 
 if hash update-mime-database 2>/dev/null; then
     update-mime-database /usr/share/mime || true

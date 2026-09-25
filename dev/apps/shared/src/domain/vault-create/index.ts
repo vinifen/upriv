@@ -1,6 +1,12 @@
 export { buildCreateVaultResult, resolveCreateVaultGroupAssignment } from "./buildResult";
 export { createDraftFromBackup } from "./createDraftFromBackup";
 export {
+  createVaultImportNeedsArchivePassword,
+  createVaultImportPackage,
+  createVaultImportPackageKind,
+  isCreateVaultBackupImport,
+} from "./importKind";
+export {
   createDraftForImportSource,
   createDraftForScratchSource,
   createDraftFromImportPackage,
@@ -44,6 +50,7 @@ export {
   type CreateVaultDraft,
   type CreateVaultGroupAssignment,
   type CreateVaultGroupMode,
+  type CreateVaultImportKind,
   type CreateVaultResult,
   type CreateVaultSource,
   type CreateVaultStepId,

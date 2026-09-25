@@ -5,24 +5,26 @@ import {
 } from "../vault/displayName";
 import {
   isAbsoluteFilesystemPath,
+  isAbsoluteOsFilesystemPath,
   isReservedUprivWorkspacePath,
   normalizeMountWorkspacePath,
   safTreeUriHasExtraSegment,
   WORKSPACE_PATH_DEFAULT,
 } from "../workspace";
 import type { CreateVaultDraft, CreateVaultStepId, CreateVaultStepStatus } from "./types";
+import { createVaultImportNeedsArchivePassword } from "./importKind";
 
 export type CreateVaultValidationCode =
   | DisplayNameValidationCode
   | "duplicate"
   | "source_missing"
   | "import_file_missing"
-  | "import_not_available"
   | "password_empty"
   | "password_too_short"
   | "password_mismatch"
   | "password_not_validated"
   | "password_wrong"
+  | "import_probe_unavailable"
   | "group_missing"
   | "group_name_empty"
   | "group_name_too_long"
@@ -69,14 +71,22 @@ export function validateCreateVaultStep(
   existingIds: readonly string[],
   /** When set, `existing` group assignment must reference a live group id. */
   knownGroupIds: readonly string[] = [],
-  /** Active vault-root path for reserved-mount checks on custom workspace paths. */
   vaultRootPath?: string | null,
 ): CreateVaultValidationCode[] {
   switch (stepId) {
     case "source": {
       const errors: CreateVaultValidationCode[] = [];
       if (!draft.source) errors.push("source_missing");
-      if (draft.source === "import") errors.push("import_not_available");
+      if (draft.source === "import") {
+        if (draft.importKind === "backup") {
+          if (!draft.importFilePath.trim()) errors.push("import_file_missing");
+        } else if (
+          !draft.importFileName.trim() ||
+          !isAbsoluteOsFilesystemPath(draft.importFilePath)
+        ) {
+          errors.push("import_file_missing");
+        }
+      }
       return errors;
     }
     case "identity": {
@@ -90,15 +100,24 @@ export function validateCreateVaultStep(
     case "password": {
       const errors: CreateVaultValidationCode[] = [];
       const password = draft.password;
-      if (!password.trim()) errors.push("password_empty");
       if (draft.source === "scratch") {
+        if (!password.trim()) errors.push("password_empty");
         if (draft.password !== draft.passwordConfirm) errors.push("password_mismatch");
-      } else if (draft.source === "import" && !draft.passwordValidated) {
-        if (draft.passwordTestFailed) {
-          if (!errors.includes("password_wrong")) errors.push("password_wrong");
-        } else {
-          errors.push("password_not_validated");
+      } else if (draft.source === "import") {
+        if (createVaultImportNeedsArchivePassword(draft)) {
+          if (!password.trim()) errors.push("password_empty");
+          if (draft.passwordProbeUnavailable) {
+            errors.push("import_probe_unavailable");
+          } else if (!draft.passwordValidated) {
+            if (draft.passwordTestFailed) {
+              if (!errors.includes("password_wrong")) errors.push("password_wrong");
+            } else {
+              errors.push("password_not_validated");
+            }
+          }
         }
+      } else if (!password.trim()) {
+        errors.push("password_empty");
       }
       return errors;
     }

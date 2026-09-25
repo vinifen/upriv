@@ -5,6 +5,10 @@ export {
   type UseCreateVaultWizardOptions,
 } from "./useCreateVaultWizard";
 export { useLoadingBudget, type UseLoadingBudgetOptions } from "./useLoadingBudget";
+export {
+  useExportPasswordCheck,
+  type UseExportPasswordCheckOptions,
+} from "./useExportPasswordCheck";
 export { TOAST_DEFAULT_MS, useToast } from "./useToast";
 export { useVaultBackups } from "./useVaultBackups";
 export { useVaultInfoData, type UseVaultInfoDataOptions } from "./useVaultInfoData";

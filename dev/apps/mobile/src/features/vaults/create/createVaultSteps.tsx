@@ -3,6 +3,7 @@ import {
   createVaultChoosesKdf,
   createVaultErrorI18nKey,
   createVaultErrorsForField,
+  createVaultImportNeedsArchivePassword,
   createVaultImportNeedsRename,
   importDisplayNameFromFilename,
   isHiddenGroup,
@@ -115,16 +116,20 @@ function CreateVaultSourceStep({ draft, errors, onChange }: StepProps) {
   const createVaultService = useCreateVaultService();
 
   const chooseImportFile = () => {
-    const { fileName, path } = createVaultService.selectImportPackageForProbe();
-    onChange({
-      source: "import",
-      importFileName: fileName,
-      importFilePath: path,
-      displayName: importDisplayNameFromFilename(fileName).displayName,
-      password: "",
-      passwordConfirm: "",
-      passwordValidated: false,
-      passwordTestFailed: false,
+    void createVaultService.selectImportPackageForProbe().then((picked) => {
+      if (!picked) return;
+      onChange({
+        source: "import",
+        importFileName: picked.fileName,
+        importFilePath: picked.path,
+        displayName: importDisplayNameFromFilename(picked.fileName).displayName,
+        password: "",
+        passwordConfirm: "",
+        passwordValidated: false,
+        passwordTestFailed: false,
+        passwordProbeUnavailable: false,
+        importKind: "file",
+      });
     });
   };
 
@@ -159,8 +164,10 @@ function CreateVaultSourceStep({ draft, errors, onChange }: StepProps) {
               source: "scratch",
               importFileName: "",
               importFilePath: "",
+              importKind: "file",
               passwordValidated: false,
               passwordTestFailed: false,
+              passwordProbeUnavailable: false,
             })
           }
         />
@@ -173,10 +180,12 @@ function CreateVaultSourceStep({ draft, errors, onChange }: StepProps) {
           onSelect={() =>
             onChange({
               source: "import",
+              importKind: "file",
               password: "",
               passwordConfirm: "",
               passwordValidated: false,
               passwordTestFailed: false,
+              passwordProbeUnavailable: false,
             })
           }
         />
@@ -251,30 +260,38 @@ function CreateVaultPasswordStep({
   const { t } = useTranslation();
   const { colors, typography } = useTheme();
   const isImport = draft.source === "import";
+  const needsArchivePassword = createVaultImportNeedsArchivePassword(draft);
 
   return (
     <View style={styles.fields}>
       <Text style={typography.bodyMuted}>
         {isImport
-          ? t("vault.create.password_import_intro")
+          ? needsArchivePassword
+            ? t("vault.create.password_import_intro")
+            : t("vault.create.password_import_copy_intro")
           : t("vault.create.password_scratch_intro")}
       </Text>
-      <FieldLabel>{t("vault.create.password")}</FieldLabel>
-      <PasswordInput
-        value={draft.password}
-        ref={bindFieldRef?.("password")}
-        autoComplete="password-new"
-        onFocus={() => onFieldFocus?.("password")}
-        onSubmitEditing={() => onAdvanceStep?.()}
-        returnKeyType="next"
-        onChangeText={(password) =>
-          onChange({
-            password,
-            passwordValidated: false,
-            passwordTestFailed: false,
-          })
-        }
-      />
+      {!isImport || needsArchivePassword ? (
+        <>
+          <FieldLabel>{t("vault.create.password")}</FieldLabel>
+          <PasswordInput
+            value={draft.password}
+            ref={bindFieldRef?.("password")}
+            autoComplete="password-new"
+            onFocus={() => onFieldFocus?.("password")}
+            onSubmitEditing={() => onAdvanceStep?.()}
+            returnKeyType="next"
+            onChangeText={(password) =>
+              onChange({
+                password,
+                passwordValidated: false,
+                passwordTestFailed: false,
+                passwordProbeUnavailable: false,
+              })
+            }
+          />
+        </>
+      ) : null}
       <FieldErrors errors={createVaultErrorsForField(errors, "password")} />
       {!isImport ? (
         <>
@@ -290,7 +307,7 @@ function CreateVaultPasswordStep({
           />
           <FieldErrors errors={createVaultErrorsForField(errors, "passwordConfirm")} />
         </>
-      ) : (
+      ) : needsArchivePassword ? (
         <View style={styles.row}>
           <Button
             label={
@@ -309,7 +326,7 @@ function CreateVaultPasswordStep({
             </Text>
           ) : null}
         </View>
-      )}
+      ) : null}
       <FieldLabel>{t("vault.create.password_hint")}</FieldLabel>
       <FieldHint>{t("vault.create.password_hint_help")}</FieldHint>
       <ThemedInput

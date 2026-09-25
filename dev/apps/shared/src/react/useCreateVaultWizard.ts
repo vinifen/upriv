@@ -3,8 +3,10 @@ import {
   buildCreateVaultResult,
   canSubmitCreateVault,
   createEmptyCreateVaultDraft,
+  createVaultImportNeedsArchivePassword,
   createVaultWizardInitialState,
   createVaultWizardReducer,
+  isRpcError,
   MODAL_OPEN_MS,
   NO_VAULT_GROUPS,
   resolveCreateVaultCloseIntent,
@@ -12,6 +14,7 @@ import {
   resolveCreateVaultOpenStep,
   selectCreateVaultWizardView,
   shouldSelectCreateVaultFocusText,
+  VAULT_ERROR_CODES,
   type CreateVaultDraft,
   type CreateVaultFocusField,
   type CreateVaultResult,
@@ -49,7 +52,10 @@ export interface UseCreateVaultWizardOptions {
    */
   onCreate: (result: CreateVaultResult, password: string) => void;
   onClose: () => void;
-  testImportPassword: (password: string) => Promise<boolean>;
+  testImportPassword: (
+    password: string,
+    importFile: { path: string; fileName: string; kind?: "file" | "backup" },
+  ) => Promise<boolean>;
 }
 
 export function useCreateVaultWizard<
@@ -138,20 +144,26 @@ export function useCreateVaultWizard<
   }, []);
 
   const handleTestImportPassword = useCallback(() => {
+    if (!createVaultImportNeedsArchivePassword(state.draft)) return;
     const generation = (passwordTestGen.current += 1);
     dispatch({ type: "importPasswordTestStarted" });
     const password = state.draft.password;
     void (async () => {
       let ok = false;
+      let unavailable = false;
       try {
-        ok = await testImportPassword(password);
-      } catch {
-        ok = false;
+        ok = await testImportPassword(password, {
+          path: state.draft.importFilePath,
+          fileName: state.draft.importFileName,
+          kind: state.draft.importKind,
+        });
+      } catch (error) {
+        unavailable = !(isRpcError(error) && error.code === VAULT_ERROR_CODES.WRONG_PASSWORD);
       }
       if (passwordTestGen.current !== generation) return;
-      dispatch({ type: "importPasswordTestFinished", ok });
+      dispatch({ type: "importPasswordTestFinished", ok, unavailable });
     })();
-  }, [state.draft.password, testImportPassword]);
+  }, [state.draft, testImportPassword]);
 
   const handleClose = useCallback(() => {
     dispatch({ type: "closed" });

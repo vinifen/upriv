@@ -17,6 +17,8 @@ interface VaultLockButtonProps {
   layout?: "inline" | "block";
   /** Compact / small screens — lock / unlock glyph instead of the 9rem label. */
   appearance?: "label" | "icon";
+  /** Waiting open can reopen the password dialog. A queued close cannot. */
+  resumeUnlock?: boolean;
   onLock?: () => void;
   onUnlock?: () => void;
 }
@@ -25,6 +27,7 @@ export function VaultLockButton({
   status,
   layout = "inline",
   appearance = "label",
+  resumeUnlock,
   onLock,
   onUnlock,
 }: VaultLockButtonProps) {
@@ -58,7 +61,7 @@ export function VaultLockButton({
   };
 
   if (pipelineBusy) {
-    const resumeOpenCredential = isVaultOpenCredentialResumeStatus(status);
+    const resumeOpenCredential = resumeUnlock ?? isVaultOpenCredentialResumeStatus(status);
     return (
       <button
         type="button"

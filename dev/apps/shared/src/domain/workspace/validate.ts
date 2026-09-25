@@ -18,6 +18,16 @@ export function isAbsoluteFilesystemPath(path: string): boolean {
 }
 
 /**
+ * Absolute OS filesystem path (`std::path::Path::is_absolute`).
+ * SAF `content://` is absolute for mount/workspace, but `upriv-core` cannot `std::fs::read` it.
+ */
+export function isAbsoluteOsFilesystemPath(path: string): boolean {
+  const p = path.trim();
+  if (!p || p.startsWith("content://")) return false;
+  return isAbsoluteFilesystemPath(p);
+}
+
+/**
  * `DocumentFile.fromTreeUri` only opens the tree id. Concatenating `/workspace`
  * (or any extra segment other than `/document/…`) is not a child URI.
  */

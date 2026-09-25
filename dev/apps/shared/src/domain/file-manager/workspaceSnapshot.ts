@@ -2,7 +2,7 @@ import { findNode, type FileTreeNode } from "../file-tree";
 import type { VaultWorkspaceState } from "./workspaceTypes";
 import { createDefaultWorkspaceState } from "./workspaceTypes";
 
-/** Logical file at vault root — encrypted in `contents/` with the rest of the vault. */
+/** Logical file at vault root — encrypted in `store/` with the rest of the vault. */
 export const UPRIV_WORKSPACE_FILE_NAME = ".upriv-workspace.json";
 export const UPRIV_WORKSPACE_PATH = `/${UPRIV_WORKSPACE_FILE_NAME}`;
 
@@ -182,16 +182,53 @@ export function snapshotsEqual(a: WorkspaceSnapshot, b: WorkspaceSnapshot): bool
   );
 }
 
-/** Flush layout into the vault session (dismiss / purge / list sync). */
-export function persistWorkspaceSnapshot(
+/** Cold-open layout: no tabs, root expanded, nothing selected. */
+export function isDefaultWorkspaceSnapshot(snapshot: WorkspaceSnapshot): boolean {
+  return (
+    snapshot.openTabs.length === 0 &&
+    snapshot.activeTabPath === null &&
+    snapshot.selectedPath === null &&
+    snapshot.expandedPaths.length === 1 &&
+    snapshot.expandedPaths[0] === "/"
+  );
+}
+
+/**
+ * Apply a loaded snapshot only when memory is still the cold-open layout.
+ * Host seed or user edits (open file / expand folder) must win — including when
+ * a parent re-render recaptures “mount” as the already-edited layout.
+ */
+export function shouldHydratePersistedWorkspace(
+  mount: WorkspaceSnapshot,
+  current: WorkspaceSnapshot,
+  loaded: WorkspaceSnapshot,
+): boolean {
+  return (
+    isDefaultWorkspaceSnapshot(current) &&
+    snapshotsEqual(current, mount) &&
+    !snapshotsEqual(current, loaded)
+  );
+}
+
+export function serializedLayoutSnapshot(
+  workspace: VaultWorkspaceState,
+  tree: FileTreeNode,
+): string {
+  return serializeWorkspaceSnapshot(
+    sanitizeWorkspaceSnapshot(workspaceSnapshotFromState(workspace), tree),
+  );
+}
+
+/** Flush layout into the open vault session (dismiss / close). */
+export async function persistWorkspaceSnapshot(
   fs: {
-    getFileTree: (vaultId: string) => FileTreeNode;
-    setFileContent: (vaultId: string, path: string, content: string) => number;
+    getFileTree: (vaultId: string) => FileTreeNode | Promise<FileTreeNode>;
+    setFileContent: (vaultId: string, path: string, content: string) => number | Promise<number>;
   },
   vaultId: string,
   workspace: VaultWorkspaceState,
-): void {
-  const snapshot = workspaceSnapshotFromState(workspace);
-  const sanitized = sanitizeWorkspaceSnapshot(snapshot, fs.getFileTree(vaultId));
-  fs.setFileContent(vaultId, UPRIV_WORKSPACE_PATH, serializeWorkspaceSnapshot(sanitized));
+): Promise<string> {
+  const raw = serializedLayoutSnapshot(workspace, await fs.getFileTree(vaultId));
+  await fs.setFileContent(vaultId, UPRIV_WORKSPACE_PATH, raw);
+  return raw;
 }

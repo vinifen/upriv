@@ -36,6 +36,10 @@ function emptyDash(value: string | undefined | null): string {
   return trimmed ? trimmed : "—";
 }
 
+function countOrDash(value: number | null): string {
+  return value == null ? "—" : String(value);
+}
+
 function backupTotalBytes(backups: VaultBackupEntry[]): number {
   return backups.reduce((sum, entry) => sum + (entry.sizeBytes ?? 0), 0);
 }
@@ -62,7 +66,7 @@ export function buildVaultInfoSections(
     passwordInSession,
     workspacePath,
     workspacePathIsActive,
-    contentsPath,
+    storePath,
     backupsPath,
     locale,
   } = snapshot;
@@ -136,7 +140,11 @@ export function buildVaultInfoSections(
   ];
 
   const runtimeFields = [
-    { id: "open_count", label: t("modal.info.field.open_count"), value: String(runtime.openCount) },
+    {
+      id: "open_count",
+      label: t("modal.info.field.open_count"),
+      value: countOrDash(runtime.openCount),
+    },
     {
       id: "last_opened_at",
       label: t("modal.info.field.last_opened_at"),
@@ -160,12 +168,12 @@ export function buildVaultInfoSections(
     {
       id: "logical_file_count",
       label: t("modal.info.field.file_count"),
-      value: String(runtime.logicalFileCount),
+      value: countOrDash(runtime.logicalFileCount),
     },
   ];
 
   const storageFields = [
-    { id: "contents_path", label: t("modal.info.field.contents_path"), value: contentsPath },
+    { id: "store_path", label: t("modal.info.field.store_path"), value: storePath },
     { id: "backups_path", label: t("modal.info.field.backups_path"), value: backupsPath },
     {
       id: "workspace_path",
@@ -177,9 +185,9 @@ export function buildVaultInfoSections(
       value: emptyDash(workspacePath),
     },
     {
-      id: "contents_size",
-      label: t("modal.info.field.contents_size"),
-      value: formatBytes(runtime.contentsBytes),
+      id: "store_size",
+      label: t("modal.info.field.store_size"),
+      value: formatBytes(runtime.storeBytes ?? undefined),
     },
   ];
 

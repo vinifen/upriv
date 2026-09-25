@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  ActivityIndicator,
   Animated,
   Easing,
   Pressable,
@@ -138,6 +139,7 @@ export function FileManagerDock({
             {entries.map((entry) => {
               const active = entry.vaultId === highlightVaultId;
               const isMaximized = entry.vaultId === maximizedVaultId;
+              const importing = entry.importInFlight;
               const letters = vaultDisplayLetters(entry.displayName);
               return (
                 <View
@@ -158,9 +160,11 @@ export function FileManagerDock({
                     onPress={() => handleEntryClick(entry.vaultId)}
                     accessibilityRole="button"
                     accessibilityLabel={
-                      isMaximized
-                        ? t("modal.file_manager.dock.minimize", { name: entry.displayName })
-                        : t("modal.file_manager.dock.restore", { name: entry.displayName })
+                      importing
+                        ? t("modal.file_manager.dock.importing", { name: entry.displayName })
+                        : isMaximized
+                          ? t("modal.file_manager.dock.minimize", { name: entry.displayName })
+                          : t("modal.file_manager.dock.restore", { name: entry.displayName })
                     }
                     style={({ pressed }) => [
                       styles.chip,
@@ -171,19 +175,23 @@ export function FileManagerDock({
                       style={[styles.chipAvatar, { backgroundColor: colors.surfaceContainer }]}
                       accessibilityElementsHidden
                     >
-                      <Text
-                        style={[
-                          styles.chipLetters,
-                          {
-                            color: colors.accent,
-                            fontSize: letters.length > 1 ? 11 : 12,
-                            letterSpacing: letters.length > 1 ? -0.6 : 0,
-                          },
-                        ]}
-                        numberOfLines={1}
-                      >
-                        {letters}
-                      </Text>
+                      {importing ? (
+                        <ActivityIndicator size="small" color={colors.accent} />
+                      ) : (
+                        <Text
+                          style={[
+                            styles.chipLetters,
+                            {
+                              color: colors.accent,
+                              fontSize: letters.length > 1 ? 11 : 12,
+                              letterSpacing: letters.length > 1 ? -0.6 : 0,
+                            },
+                          ]}
+                          numberOfLines={1}
+                        >
+                          {letters}
+                        </Text>
+                      )}
                     </View>
                     <Text
                       style={[

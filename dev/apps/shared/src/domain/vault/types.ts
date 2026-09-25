@@ -6,9 +6,9 @@ export type VaultSession = "open" | "closing" | "recovery";
 /**
  * Storage mode from `config.toml` → `[storage] mode`.
  *
- * - `encrypted_dir` — default. Rest = `contents/`. While open: decrypt in RAM
+ * - `encrypted_dir` — default. Rest = `store/`. While open: decrypt in RAM
  *   (FUSE/WinFsp on desktop; in-app file manager on mobile).
- * - `upriv_plain` — rest = `contents/`. While open: plaintext under the open
+ * - `upriv_plain` — rest = `store/`. While open: plaintext under the open
  *   mount folder on disk (wipe on close) — not app `[workspace].path` alone.
  */
 export type StorageMode = "encrypted_dir" | "upriv_plain";
@@ -36,16 +36,18 @@ export type VaultDisplayStatus =
 /**
  * In-flight or queued open / close / create (renderer FIFO, not `vault_list`).
  * `openingVaultIds` = active open run only.
- * `queuedVaultIds` = waiting **open** jobs (display `queued`).
- * Waiting close/create stay in `closingVaultIds` / `creatingVaultIds` so an
- * open session with a queued close still resolves as `closing` (not quiet).
+ * `queuedVaultIds` = waiting open and close jobs (display `queued`).
+ * Waiting create stays in `creatingVaultIds`.
+ * `queuedOpenVaultIds` = waiting opens only, so a queued close is not an unlock to resume.
  */
 export type VaultPipelineListStatus = {
   openingVaultIds?: readonly string[];
   closingVaultIds?: readonly string[];
   creatingVaultIds?: readonly string[];
-  /** Waiting open jobs only — display as `queued` until they start. */
+  /** Waiting open and close jobs — display as `queued` until they start. */
   queuedVaultIds?: readonly string[];
+  /** Waiting open jobs. Absent means every `queued` row can resume unlock. */
+  queuedOpenVaultIds?: readonly string[];
   /** Active FIFO job — shared clock for modal + row budget hints. */
   activeVaultId?: string;
   activeStartedAt?: number;
@@ -91,6 +93,41 @@ export function isVaultPipelineDisplayBusy(status: VaultDisplayStatus): boolean 
  */
 export function isVaultOpenCredentialResumeStatus(status: VaultDisplayStatus): boolean {
   return status === "opening" || status === "queued";
+}
+
+/**
+ * Active open, or a waiting open. A waiting close also displays as `queued`,
+ * and that row must not reopen the unlock dialog.
+ */
+export function isVaultOpenResumeTarget(
+  status: VaultDisplayStatus,
+  vaultId: string,
+  pipeline: VaultPipelineListStatus = {},
+): boolean {
+  if (status === "opening") return true;
+  if (status !== "queued") return false;
+  const waitingOpens = pipeline.queuedOpenVaultIds;
+  if (!waitingOpens) return true;
+  return waitingOpens.includes(vaultId);
+}
+
+/** Waiting close. The session is still open until that job starts. */
+export function isVaultCloseQueued(
+  vaultId: string,
+  pipeline: VaultPipelineListStatus = {},
+): boolean {
+  if (!pipeline.queuedVaultIds?.includes(vaultId)) return false;
+  if (pipeline.queuedOpenVaultIds?.includes(vaultId)) return false;
+  return true;
+}
+
+/** Queued or active close. Editor drafts and imports stay blocked until it finishes. */
+export function isVaultCloseWritesLocked(
+  vaultId: string,
+  pipeline: VaultPipelineListStatus = {},
+): boolean {
+  if (isVaultCloseQueued(vaultId, pipeline)) return true;
+  return pipeline.closingVaultIds?.includes(vaultId) ?? false;
 }
 
 /** Row / card may be activated (file manager or unlock / resume unlock). */
@@ -206,10 +243,18 @@ export function isVaultDisplayStatusQuiet(status: VaultDisplayStatus): boolean {
 
 /** True when this vault has no open session and no open/close in flight. Recovery OK. */
 export function isVaultQuiet(row: VaultRow, pipeline: VaultPipelineListStatus = {}): boolean {
-  return isVaultDisplayStatusQuiet(resolveVaultListStatus(row, pipeline));
+  const status = resolveVaultListStatus(row, pipeline);
+  // A queued close is still an open session. Quiet edits must wait until it finishes.
+  if (status === "queued" && resolveVaultDisplayStatus(row) === "open") return false;
+  return isVaultDisplayStatusQuiet(status);
 }
 
 /** True only when the vault is not open and no open/close/create is in flight. */
 export function isVaultListClosed(row: VaultRow, pipeline: VaultPipelineListStatus = {}): boolean {
   return resolveVaultListStatus(row, pipeline) === "closed";
+}
+
+/** Delete removes the vault folder. Only a closed vault, or one in recovery, may start it. */
+export function canDeleteVaultNow(status: VaultDisplayStatus): boolean {
+  return status === "closed" || status === "recovery";
 }

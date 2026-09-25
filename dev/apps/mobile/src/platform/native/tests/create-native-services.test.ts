@@ -13,55 +13,6 @@ const toSafRpcError = vi.fn((error: unknown, treeUri: string) => {
   return new RpcError("io_error", `setup failed: ${String(error)} @ ${treeUri}`);
 });
 
-const mockServices = {
-  vault: {
-    listVaults: vi.fn(async () => []),
-    getSettings: vi.fn(async () => undefined),
-    registerSettings: vi.fn(async () => undefined),
-    unregisterSettings: vi.fn(async () => undefined),
-    getUnlockPreset: vi.fn(async () => undefined),
-    setUnlockPreset: vi.fn(async () => undefined),
-    createVault: vi.fn(async () => ({
-      id: "new",
-      displayName: "New",
-      session: null,
-      storageMode: "encrypted_dir",
-      order: 0,
-      lastAccessedWhen: "—",
-      lastAccessedAt: "",
-      note: "",
-    })),
-  },
-  vaultGroups: {},
-  vaultRoot: {},
-  appSettings: {},
-  backups: {},
-  logs: {},
-  filesystem: {},
-  lifecycle: {
-    hasPasswordInSession: vi.fn(() => false),
-    setPasswordInSession: vi.fn(),
-    clearPasswordInSession: vi.fn(),
-    openingStepCount: 1,
-    closingStepCount: 1,
-    runOpeningPipeline: vi.fn(async () => undefined),
-    runClosingPipeline: vi.fn(async () => undefined),
-    resolveWorkspacePath: vi.fn(() => "/tmp/workspace"),
-    validateLifecyclePassword: vi.fn(() => true),
-    isPipelineError: vi.fn(() => false),
-    pipelineErrorCode: vi.fn(() => "unknown"),
-  },
-  createVault: {
-    testImportPackagePassword: vi.fn(async () => true),
-    selectImportPackageForProbe: vi.fn(() => ({ path: "/tmp/x.7z", fileName: "x.7z" })),
-  },
-  vaultSecurity: {},
-};
-
-vi.mock("@/platform/mocks", () => ({
-  createMobileMockServices: () => mockServices,
-}));
-
 vi.mock("@/lib/rpc", () => ({
   rpcAppSettingsGet: vi.fn(async () => ({
     settings: createDefaultAppSettings(),
@@ -95,6 +46,36 @@ vi.mock("@/lib/rpc", () => ({
   rpcVaultOpen: vi.fn(),
   rpcVaultClose: vi.fn(),
   rpcVaultConfigGet: vi.fn(),
+  rpcVaultConfigSave: vi.fn(),
+  rpcVaultRename: vi.fn(),
+  rpcVaultDelete: vi.fn(),
+  rpcVaultExport: vi.fn(),
+  rpcVaultExportToPath: vi.fn(),
+  rpcVaultExportCapabilities: vi.fn(async () => ({ sevenZip: true })),
+  rpcVaultExportProbe: vi.fn(async () => true),
+  rpcVaultImportZip: vi.fn(),
+  rpcVaultImport7z: vi.fn(),
+  rpcVaultImportProbe: vi.fn(async () => ({ ok: true, kind: "seven_zip" })),
+  rpcVaultRecoverAck: vi.fn(),
+  rpcVaultFsList: vi.fn(),
+  rpcVaultFsRevision: vi.fn(),
+  rpcVaultFsRead: vi.fn(),
+  rpcVaultFsReadRange: vi.fn(),
+  rpcVaultFsWrite: vi.fn(),
+  rpcVaultFsWriteRange: vi.fn(),
+  rpcVaultFsTruncate: vi.fn(),
+  rpcVaultFsCreateFile: vi.fn(),
+  rpcVaultFsCreateFolder: vi.fn(),
+  rpcVaultFsEnsureFolder: vi.fn(),
+  rpcVaultFsDelete: vi.fn(),
+  rpcVaultFsRename: vi.fn(),
+  rpcVaultFsMove: vi.fn(),
+  rpcVaultFsOsPath: vi.fn(),
+  rpcBackupList: vi.fn(async () => []),
+  rpcBackupDelete: vi.fn(),
+  rpcBackupPromote: vi.fn(),
+  rpcBackupGet: vi.fn(),
+  rpcBackupExportToPath: vi.fn(),
   rpcVaultGroupList: vi.fn(async () => ({ groups: [], invalid: false })),
   rpcVaultGroupCreate: vi.fn(),
   rpcVaultGroupUpdate: vi.fn(),
@@ -197,15 +178,43 @@ describe("createNativeServices", () => {
     expect(rpc.rpcVaultOpen).not.toHaveBeenCalled();
   });
 
-  it("fails loud for import and backups in release mode", async () => {
+  it("skips the SAF assertion for zip and backup import probes", async () => {
+    const { createNativeServices } = await importModule(false);
+    const services = createNativeServices();
+    await expect(
+      services.createVault.testImportPackagePassword("x", {
+        path: "/tmp/notes.zip",
+        fileName: "notes.zip",
+      }),
+    ).resolves.toBe(true);
+    await expect(
+      services.createVault.testImportPackagePassword("x", {
+        path: "vaults/notes/backups/20260528T120000",
+        fileName: "20260528T120000",
+        kind: "backup",
+      }),
+    ).resolves.toBe(true);
+  });
+
+  it("refuses path vault RPCs for import and backups while a SAF tree is active", async () => {
     const { createNativeServices } = await importModule(false);
     const services = createNativeServices();
     await expect(services.createVault.testImportPackagePassword("x")).rejects.toMatchObject({
-      code: "not_implemented",
+      code: "vault_saf_unavailable",
     });
     await expect(services.backups.listBackups("vault-1")).rejects.toMatchObject({
-      code: "not_implemented",
+      code: "vault_saf_unavailable",
     });
+  });
+
+  it("uses live backups when the vault-root is a filesystem path", async () => {
+    safState.activeUri = "";
+    const { createNativeServices } = await importModule(false);
+    const rpc = await import("@/lib/rpc");
+    vi.mocked(rpc.rpcBackupList).mockClear();
+    const services = createNativeServices();
+    await expect(services.backups.listBackups("vault-1")).resolves.toEqual([]);
+    expect(rpc.rpcBackupList).toHaveBeenCalledWith("vault-1");
   });
 
   it("does not release SAF when leaving SAF if rustSave fails", async () => {

@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { vaultRowFixture } from "../../vault/tests/fixtures.shared";
-import { createEmptyFileManagerState, fileManagerReducer } from "../dockReducer";
+import {
+  createEmptyFileManagerState,
+  fileManagerBlockingPrompt,
+  fileManagerDismissIntent,
+  fileManagerReducer,
+} from "../dockReducer";
 import { persistWorkspaceSnapshot, UPRIV_WORKSPACE_PATH } from "../workspaceSnapshot";
 import { createDefaultWorkspaceState } from "../workspaceTypes";
 import type { FileTreeNode } from "../../file-tree";
@@ -105,10 +110,52 @@ describe("fileManagerReducer", () => {
     expect(state.entries.notes?.workspace.openTabs).toEqual(["/a.md"]);
     expect(state.entries.notes?.workspace.activeTabPath).toBe("/a.md");
   });
+
+  it("tracks import-in-flight independently of minimize and opening another vault", () => {
+    let state = fileManagerReducer(createEmptyFileManagerState(), {
+      type: "open_from_vault",
+      vault: openNotes,
+    });
+    state = fileManagerReducer(state, {
+      type: "set_import_in_flight",
+      vaultId: "notes",
+      inFlight: true,
+    });
+    expect(state.entries.notes?.importInFlight).toBe(true);
+
+    state = fileManagerReducer(state, { type: "minimize", vaultId: "notes" });
+    expect(state.entries.notes?.surface).toBe("minimized");
+    expect(state.entries.notes?.importInFlight).toBe(true);
+
+    state = fileManagerReducer(state, { type: "open_from_vault", vault: openWork });
+    expect(state.entries.notes?.importInFlight).toBe(true);
+    expect(state.entries.work?.importInFlight).toBe(false);
+    expect(state.maximizedVaultId).toBe("work");
+  });
+
+  it("blocks dismiss while an import is in flight ahead of unsaved drafts", () => {
+    const workspace = {
+      ...createDefaultWorkspaceState(),
+      dirtyPaths: ["/a.md"],
+    };
+    expect(fileManagerDismissIntent({ importInFlight: true, workspace })).toBe(
+      "import_in_progress",
+    );
+    expect(fileManagerBlockingPrompt("import_in_progress")).toEqual({
+      type: "import_in_progress",
+    });
+    expect(fileManagerDismissIntent({ importInFlight: false, workspace })).toBe("unsaved");
+    expect(
+      fileManagerDismissIntent({
+        importInFlight: false,
+        workspace: createDefaultWorkspaceState(),
+      }),
+    ).toBe("dismiss");
+  });
 });
 
 describe("persistWorkspaceSnapshot", () => {
-  it("writes a sanitized snapshot for the vault", () => {
+  it("writes a sanitized snapshot for the vault", async () => {
     const tree: FileTreeNode = {
       name: "",
       type: "folder",
@@ -122,7 +169,7 @@ describe("persistWorkspaceSnapshot", () => {
       selectedPath: "/a.md",
     };
 
-    persistWorkspaceSnapshot(
+    await persistWorkspaceSnapshot(
       {
         getFileTree: () => tree,
         setFileContent: (_vaultId, path, content) => {

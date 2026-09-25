@@ -2,15 +2,18 @@
 //!
 //! Current surface: `logging`, `time`, `app_version()`, `error`, `paths`
 //! (layout, resolve, alias, initialize), `config` (app `settings.toml` + vault
-//! `config.toml`), `contents` (header + index + chunk I/O), `vault` (list / create /
-//! open / close).
+//! `config.toml`), `store` (header + index + chunk I/O), `vault` (list / create /
+//! open / close / fs / backup / delete / import).
 
 pub mod config;
-pub mod contents;
 pub mod error;
+pub mod lockfile;
 pub mod logging;
+pub mod mount;
 pub mod paths;
+pub mod runtime_state;
 pub mod session;
+pub mod store;
 pub mod time;
 pub mod vault;
 
@@ -31,7 +34,6 @@ pub use config::{
     VaultGroupUpdate, VaultGroupsFile, VaultIdentitySection, VaultStorageMode, VaultStorageSection,
     CONFIG_SAVE_QUIET_TARGETS, VAULT_GROUPS_FILE_NAME,
 };
-pub use contents::{KdfUnlockPreset, FORMAT_VERSION as STORE_FORMAT_VERSION};
 pub use error::{Result, UprivError};
 pub use paths::{
     app_home_dir, deactivate_vault_root_alias_everywhere, default_vault_root_anchor,
@@ -46,13 +48,25 @@ pub use paths::{
     VaultRootDirStatus, VaultRootMode, VaultRootSource, VAULT_ROOT_ALIAS_FILE,
     VAULT_ROOT_SETTINGS_REL,
 };
+pub use runtime_state::{acknowledge_dirty_close, dirty_close_ids, sweep_stale_mount_leaves};
 pub use session::{
     is_unlock_in_flight, is_vault_open, open_session_ids, vault_activity_blocks_root_switch,
 };
+pub use store::{KdfUnlockPreset, FORMAT_VERSION as STORE_FORMAT_VERSION};
 pub use time::{utc_filename_stamp, utc_timestamp_iso_millis, utc_ymdhms};
 pub use vault::{
-    close_vault, create_vault, list_vaults, load_vault_persistence, open_vault, rename_vault,
-    vault_list_item, VaultListItem, VaultPersistence, VaultRenameResult,
+    backup_on_close, backup_zip_file, close_all_vaults, close_vault, create_vault, delete_backups,
+    delete_vault, export_backups_to_path, export_logical_seven_zip,
+    export_logical_seven_zip_to_path, export_store_zip, export_store_zip_to_path, fs_create_file,
+    fs_create_folder, fs_delete, fs_ensure_folder, fs_import_from_os_path, fs_list_tree, fs_mkdir,
+    fs_move, fs_os_path, fs_read_file, fs_read_range, fs_rename, fs_tree_revision, fs_truncate,
+    fs_write_file, fs_write_from_reader, fs_write_range, import_from_backup,
+    import_logical_seven_zip, import_store_from_archive_path, import_store_tree, import_store_zip,
+    list_backups, list_vaults, load_vault_persistence, open_vault, probe_export_password,
+    probe_logical_seven_zip, probe_store_zip, probe_store_zip_path, promote_backup_save,
+    read_backup_zip_bytes, read_import_archive_bytes, rename_vault, seven_zip_export_available,
+    vault_list_item, zip_directory_to_bytes, zip_directory_to_path, BackupEntry, CloseVaultOutcome,
+    VaultListItem, VaultPersistence, VaultRenameResult,
 };
 
 /// Application version (from repo-root `VERSION`, set in build.rs).

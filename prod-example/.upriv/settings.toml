@@ -3,7 +3,7 @@
 [package]
 version = 1
 label = "Upriv Demo"
-vaults_dir = ".upriv/vaults"       # vaults/<id>/ — config.toml, contents/, backups/, …
+vaults_dir = ".upriv/vaults"       # vaults/<id>/ — config.toml, store/, backups/, …
 state_file = ".upriv/state.json"   # open sessions only (cleared on quit)
 logs_dir = ".upriv/logs"
 app_dir = ".upriv/app"

@@ -1,7 +1,9 @@
 export type { FileTreeNode, FileTreeNodeType, VaultFileContent, VaultFileLanguage } from "./types";
+export { parseFileTreeNode } from "./parse";
 export {
   vaultFileLanguageFromPath,
   isVaultImportUnsupported,
+  isImportableBinaryPath,
   imageMimeFromPath,
   imageDataUrlFromBase64,
 } from "./language";
@@ -51,8 +53,39 @@ export type { TreeSplitAxis } from "./treeSplit";
 export {
   resolveImportDestination,
   foldersToExpandOnImport,
+  foldersToExpandForImportBatch,
   importPathSegments,
 } from "./importPaths";
+export {
+  IMPORT_WALK_SLOT_COUNT,
+  IMPORT_WALK_SLOT_PREFIX,
+  isImportWalkPlaceholderName,
+  isImportWalkPlaceholderPath,
+  walkPlaceholderEntries,
+  IMPORT_EXPLORER_SKELETON_FILES,
+  IMPORT_QUEUE_SLOT_NAME,
+  isImportQueueSlotPath,
+  pendingEntriesForExplorer,
+  plannedImportPathMap,
+  pendingEntriesFromRelativePaths,
+  plannedImportPath,
+  replaceSessionPending,
+  dropSessionPending,
+  ensureNodeAtPath,
+  mergePendingIntoTree,
+  attachImportedPath,
+  dropResolvedPending,
+  upsertActiveImportWrite,
+  dropActiveImportWritesForSession,
+  dropActiveImportWritePath,
+  activeImportWriteForPath,
+  filesStillPendingImport,
+  rememberLandedImportPaths,
+  releaseLandedImportPaths,
+  isPendingImportTimedOut,
+  type PendingImportEntry,
+  type ActiveImportWrite,
+} from "./pendingImport";
 export {
   importOutcomeToast,
   formatImportOutcomeToast,

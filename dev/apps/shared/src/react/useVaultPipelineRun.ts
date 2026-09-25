@@ -201,13 +201,9 @@ export function useVaultPipelineRun(errorToI18nKey: (error: unknown) => I18nKey)
   }, [run]);
 
   const closingVaultIds = useMemo(() => {
-    const ids: string[] = [];
-    if (run?.kind === "close") ids.push(run.vaultId);
-    for (const job of queued) {
-      if (job.kind === "close") ids.push(job.vaultId);
-    }
-    return ids;
-  }, [run, queued]);
+    if (run?.kind === "close") return [run.vaultId];
+    return [];
+  }, [run]);
 
   const creatingVaultIds = useMemo(() => {
     const ids: string[] = [];
@@ -218,8 +214,15 @@ export function useVaultPipelineRun(errorToI18nKey: (error: unknown) => I18nKey)
     return ids;
   }, [run, queued]);
 
-  /** Waiting **open** jobs only — close/create waits keep `closing` / `creating` labels. */
+  /** Waiting open and close jobs. Create waits keep the creating label. */
   const queuedVaultIds = useMemo(
+    () =>
+      queued.filter((job) => job.kind === "open" || job.kind === "close").map((job) => job.vaultId),
+    [queued],
+  );
+
+  /** Waiting opens only — a queued close is not an unlock to resume. */
+  const queuedOpenVaultIds = useMemo(
     () => queued.filter((job) => job.kind === "open").map((job) => job.vaultId),
     [queued],
   );
@@ -229,7 +232,7 @@ export function useVaultPipelineRun(errorToI18nKey: (error: unknown) => I18nKey)
       if (run?.vaultId === vaultId) return listStatusKind(run.kind);
       const queuedJob = queued.find((job) => job.vaultId === vaultId);
       if (!queuedJob) return null;
-      if (queuedJob.kind === "open") return "queued";
+      if (queuedJob.kind === "open" || queuedJob.kind === "close") return "queued";
       return listStatusKind(queuedJob.kind);
     },
     [queued, run],
@@ -254,6 +257,7 @@ export function useVaultPipelineRun(errorToI18nKey: (error: unknown) => I18nKey)
       closingVaultIds,
       creatingVaultIds,
       queuedVaultIds,
+      queuedOpenVaultIds,
       isRunning,
       isRunningNow,
     }),
@@ -268,6 +272,7 @@ export function useVaultPipelineRun(errorToI18nKey: (error: unknown) => I18nKey)
       moveToBackground,
       openingVaultIds,
       queued,
+      queuedOpenVaultIds,
       queuedVaultIds,
       run,
       start,
