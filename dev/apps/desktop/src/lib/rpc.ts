@@ -37,6 +37,7 @@ import {
   parseVaultRenameResult,
   parseVaultRootInspect,
   parseVaultRootResolve,
+  vaultImportProbeTimeoutMs,
   parsePathWriteResult,
   type CloseVaultOutcome,
 } from "@upriv/shared";
@@ -647,7 +648,11 @@ export async function rpcVaultImportProbe(params: {
   archivePassword?: string;
   kind?: string;
 }): Promise<{ ok: boolean; kind: string }> {
-  const raw = await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_IMPORT_PROBE, params);
+  const raw = await desktopInvokeRaw(
+    DAEMON_COMMANDS.VAULT_IMPORT_PROBE,
+    params,
+    vaultImportProbeTimeoutMs(params),
+  );
   const record = requireRecord(raw, "vault_import_probe");
   return {
     ok: record.ok === true,

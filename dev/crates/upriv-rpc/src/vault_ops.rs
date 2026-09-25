@@ -234,22 +234,64 @@ fn fsync_path(path: &std::path::Path) -> std::io::Result<()> {
 }
 
 /// Install `tmp` at `dest`. Unix `rename` replaces a file atomically. Windows
-/// cannot rename over an existing file, so only then unlink `dest` and retry.
-/// Never unlink `dest` first on Unix (a failed rename would drop the original).
+/// cannot rename over an existing file; `ReplaceFileW` swaps them in one call
+/// so a failure leaves the previous dest in place.
 fn replace_dest_file(tmp: &std::path::Path, dest: &std::path::Path) -> std::io::Result<()> {
     match std::fs::rename(tmp, dest) {
         Ok(()) => Ok(()),
-        Err(error) if dest.exists() => {
-            #[cfg(windows)]
-            {
-                std::fs::remove_file(dest)?;
-                std::fs::rename(tmp, dest)
-            }
-            #[cfg(not(windows))]
-            Err(error)
-        }
+        #[cfg(windows)]
+        Err(_) if dest.exists() => replace_existing_windows_file(tmp, dest),
         Err(error) => Err(error),
     }
+}
+
+/// Replace `dest` with `tmp` via `ReplaceFileW`.
+///
+/// Windows `rename` fails when `dest` already exists. This call swaps the two
+/// names in one step and does not keep a backup. On failure `dest` is unchanged
+/// and `tmp` is still the new bytes. On success `dest` is the new file and the
+/// `tmp` name is gone.
+#[cfg(windows)]
+fn replace_existing_windows_file(
+    tmp: &std::path::Path,
+    dest: &std::path::Path,
+) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    fn wide(path: &std::path::Path) -> Vec<u16> {
+        let mut encoded: Vec<u16> = path.as_os_str().encode_wide().collect();
+        encoded.push(0);
+        encoded
+    }
+    let replaced = wide(dest);
+    let replacement = wide(tmp);
+    let ok = unsafe {
+        ReplaceFileW(
+            replaced.as_ptr(),
+            replacement.as_ptr(),
+            std::ptr::null(),
+            0,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
+    if ok == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(windows)]
+#[link(name = "kernel32")]
+extern "system" {
+    fn ReplaceFileW(
+        replaced: *const u16,
+        replacement: *const u16,
+        backup: *const u16,
+        flags: u32,
+        exclude: *mut core::ffi::c_void,
+        reserved: *mut core::ffi::c_void,
+    ) -> i32;
 }
 
 fn write_atomic_dest(
@@ -271,7 +313,7 @@ fn write_atomic_dest(
         return map_core_err(error.into());
     }
     if let Err(error) = replace_dest_file(&tmp, dest) {
-        // Keep the part file when `dest` is already gone (Windows unlink-then-rename).
+        // A failed replace that left `dest` in place has nothing to keep.
         if dest.exists() {
             let _ = std::fs::remove_file(&tmp);
         }

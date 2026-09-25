@@ -151,6 +151,7 @@ export function useCreateVaultWizard<
     void (async () => {
       let ok = false;
       let unavailable = false;
+      let timedOut = false;
       try {
         ok = await testImportPassword(password, {
           path: state.draft.importFilePath,
@@ -158,10 +159,14 @@ export function useCreateVaultWizard<
           kind: state.draft.importKind,
         });
       } catch (error) {
+        timedOut = isRpcError(error) && error.code === "rpc_timeout";
         unavailable = !(isRpcError(error) && error.code === VAULT_ERROR_CODES.WRONG_PASSWORD);
       }
       if (passwordTestGen.current !== generation) return;
       dispatch({ type: "importPasswordTestFinished", ok, unavailable });
+      // A timed-out probe can still finish in the daemon. Drop this generation
+      // so a late callback cannot replace the timeout with success.
+      if (timedOut) passwordTestGen.current += 1;
     })();
   }, [state.draft, testImportPassword]);
 

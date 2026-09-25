@@ -28,7 +28,6 @@ unicode-normalization = "=0.1.25"
 uuid = { version = "=1.18.1", features = ["v4", "serde"] }
 zeroize = { version = "=1.9.0", features = ["derive"] }
 zip = { version = "0.6.6", default-features = false, features = ["deflate"] }
-tempfile = "3"
 # Portable .7z Plan B encoder (logical files in RAM). Not vault rest crypto.
 # Pinned below 0.21: 0.21+ wants aes 0.9 / sha2 0.11, which vendor [patch] cannot satisfy.
 # 0.20.1+ encrypts small headers (7-Zip -mhe).
@@ -41,3 +40,4 @@ libc = "=0.2.186"
 fuser = "0.15.1"
 
 [dev-dependencies]
+tempfile = "3"

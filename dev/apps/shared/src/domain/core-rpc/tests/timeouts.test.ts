@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { LOADING_BUDGET_MS } from "../../loading/budget";
 import { CORE_RPC_COMMANDS } from "../commands";
-import { CORE_RPC_TIMEOUT_MS } from "../timeouts";
+import { CORE_RPC_TIMEOUT_MS, vaultImportProbeTimeoutMs } from "../timeouts";
 
 describe("CORE_RPC_TIMEOUT_MS", () => {
   it("covers every CORE RPC and never uses 0", () => {
@@ -27,5 +27,14 @@ describe("CORE_RPC_TIMEOUT_MS", () => {
     expect(CORE_RPC_TIMEOUT_MS.vault_export).toBe(LOADING_BUDGET_MS.vaultExport);
     expect(CORE_RPC_TIMEOUT_MS.vault_export_probe).toBe(LOADING_BUDGET_MS.vaultPipeline);
     expect(CORE_RPC_TIMEOUT_MS.vault_fs_import_os_file).toBe(LOADING_BUDGET_MS.vaultFsImport);
+    expect(CORE_RPC_TIMEOUT_MS.vault_import_probe).toBe(LOADING_BUDGET_MS.default);
+    expect(vaultImportProbeTimeoutMs({ kind: "seven_zip" })).toBe(LOADING_BUDGET_MS.vaultCreate);
+    expect(vaultImportProbeTimeoutMs({ kind: "7z" })).toBe(LOADING_BUDGET_MS.vaultCreate);
+    expect(vaultImportProbeTimeoutMs({ archivePath: "/tmp/notes.7z" })).toBe(
+      LOADING_BUDGET_MS.vaultCreate,
+    );
+    expect(vaultImportProbeTimeoutMs({ kind: "store_zip", archivePath: "/tmp/notes.7z" })).toBe(
+      LOADING_BUDGET_MS.default,
+    );
   });
 });

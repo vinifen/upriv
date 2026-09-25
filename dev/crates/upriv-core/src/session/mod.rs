@@ -33,12 +33,6 @@ pub struct OpenSession {
     pub security_mode: VaultSecurityMode,
     /// Writers must set this; `close_vault` reseals the index regardless until then.
     pub dirty: bool,
-    /// OS imports applied to the in-memory index since the last seal.
-    /// Close, and the next tree list or revision read, seal the remainder.
-    pub imports_since_index_seal: u32,
-    /// When the sealed index last matched this session. Skip on zeroize — `Instant` is not a secret.
-    #[zeroize(skip)]
-    pub index_sealed_at: Option<Instant>,
     /// Explorer cache invalidation — bumped on every committed mutation.
     #[zeroize(skip)]
     pub tree_revision: u64,
@@ -74,8 +68,6 @@ impl OpenSession {
             index: opened.index,
             security_mode,
             dirty: false,
-            imports_since_index_seal: 0,
-            index_sealed_at: Some(Instant::now()),
             tree_revision: 0,
             mount: None,
             lock: None,

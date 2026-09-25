@@ -51,6 +51,7 @@ export const CORE_RPC_TIMEOUT_MS = {
   [CORE_RPC_COMMANDS.VAULT_EXPORT_PROBE]: LOADING_BUDGET_MS.vaultPipeline,
   [CORE_RPC_COMMANDS.VAULT_IMPORT_ZIP]: LOADING_BUDGET_MS.vaultExport,
   [CORE_RPC_COMMANDS.VAULT_IMPORT_7Z]: LOADING_BUDGET_MS.vaultCreate,
+  /** Store-zip probe. `.7z` uses `vaultImportProbeTimeoutMs`. */
   [CORE_RPC_COMMANDS.VAULT_IMPORT_PROBE]: LOADING_BUDGET_MS.default,
   [CORE_RPC_COMMANDS.VAULT_FS_LIST]: LOADING_BUDGET_MS.default,
   [CORE_RPC_COMMANDS.VAULT_FS_REVISION]: CHEAP_RPC_MS,
@@ -73,3 +74,13 @@ export const CORE_RPC_TIMEOUT_MS = {
   [CORE_RPC_COMMANDS.BACKUP_PROMOTE]: LOADING_BUDGET_MS.default,
   [CORE_RPC_COMMANDS.BACKUP_GET]: LOADING_BUDGET_MS.vaultExport,
 } as const satisfies Record<CoreRpcCommand, number>;
+
+/** Same rule as the daemon: `seven_zip` / `7z`, or a `.7z` path when kind is omitted. */
+export function vaultImportProbeTimeoutMs(params: { kind?: string; archivePath?: string }): number {
+  const kind = params.kind?.trim().toLowerCase();
+  if (kind === "seven_zip" || kind === "7z") return LOADING_BUDGET_MS.vaultCreate;
+  if (!kind && params.archivePath?.trim().toLowerCase().endsWith(".7z")) {
+    return LOADING_BUDGET_MS.vaultCreate;
+  }
+  return CORE_RPC_TIMEOUT_MS[CORE_RPC_COMMANDS.VAULT_IMPORT_PROBE];
+}

@@ -9,7 +9,7 @@ use crate::logging::{log_event, LogLevel};
 use crate::paths::{VaultRoot, STORE_DIR_NAME};
 use crate::session::{
     is_vault_closing_at, is_vault_open_at, is_vault_preparing_at, record_unlock_success,
-    take_session, with_vault_dir_lock, ClosingGuard,
+    with_vault_dir_lock, ClosingGuard,
 };
 use crate::store::{HEADER_DIR_NAME, INDEX_DIR_NAME};
 
@@ -59,9 +59,6 @@ pub fn delete_vault(root: &VaultRoot, vault_id: &str) -> Result<()> {
                 target: "action.delete".into(),
             });
         }
-        if is_vault_open_at(&vault_dir) {
-            let _ = take_session(&vault_dir);
-        }
         let config = load_vault_config(&vault_dir).ok();
         if let Some(mount) = crate::runtime_state::load_runtime_state(root)
             .ok()
@@ -74,7 +71,9 @@ pub fn delete_vault(root: &VaultRoot, vault_id: &str) -> Result<()> {
             }
         }
         let lock_path = root.runtime_lock_path(vault_id)?;
-        let _ = std::fs::remove_file(&lock_path);
+        // Hold the cross-process lock for the wipe. A live flock means another
+        // Upriv still has this vault open; do not unlink that lock file.
+        let _lock = crate::lockfile::acquire_vault_lock(lock_path)?;
         let _ = crate::runtime_state::mark_session_closed(root, vault_id);
         record_unlock_success(&vault_dir);
 
@@ -153,5 +152,22 @@ mode = "encrypted_dir"
         std::fs::write(dir.join("leftover.bin"), vec![7u8; 4096]).unwrap();
         delete_vault(&root, "gone").unwrap();
         assert!(!dir.exists());
+    }
+
+    #[test]
+    fn delete_refuses_when_another_process_holds_the_lock() {
+        let (_tmp, root) = vault_root_with(&[]);
+        create_vault(
+            &root,
+            sample_config("held", "Held"),
+            b"pass-word-ok",
+            KdfUnlockPreset::M32,
+        )
+        .unwrap();
+        let lock_path = root.runtime_lock_path("held").unwrap();
+        let _lock = crate::lockfile::acquire_vault_lock(lock_path).unwrap();
+        let err = delete_vault(&root, "held").unwrap_err();
+        assert!(matches!(err, UprivError::VaultLocked(_)));
+        assert!(root.vault_dir("held").unwrap().is_dir());
     }
 }

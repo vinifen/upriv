@@ -605,28 +605,27 @@ export function useVaultFileManager({
     const timedOut = [...lastBySessionRef.current.entries()].filter(
       ([id]) => !importInFlightRef.current.has(id),
     );
-    const lastEntry = timedOut.at(-1);
-    if (!lastEntry) return;
-    const [lastId, last] = lastEntry;
-    const leftover = pendingImportsRef.current.filter((entry) => entry.sessionId === lastId);
-    const landedNow = landedImportPathsRef.current;
-    lastBySessionRef.current.delete(lastId);
-    setTimedOutSessionIds((prev) => prev.filter((id) => id !== lastId));
-    const kept = leftover.filter((entry) => entry.type === "file" && landedNow.has(entry.path));
-    if (kept.length > 0) {
-      setTree((prev) => kept.reduce((next, entry) => attachImportedPath(next, entry.path), prev));
+    for (const [sessionId, last] of timedOut) {
+      const leftover = pendingImportsRef.current.filter((entry) => entry.sessionId === sessionId);
+      const landedNow = landedImportPathsRef.current;
+      lastBySessionRef.current.delete(sessionId);
+      setTimedOutSessionIds((prev) => prev.filter((id) => id !== sessionId));
+      const kept = leftover.filter((entry) => entry.type === "file" && landedNow.has(entry.path));
+      if (kept.length > 0) {
+        setTree((prev) => kept.reduce((next, entry) => attachImportedPath(next, entry.path), prev));
+      }
+      setPendingImports((prev) => dropSessionPending(prev, sessionId));
+      commitLandedImportPaths(releaseLandedImportPaths(landedNow, leftover, sessionId));
+      const remaining = filesStillPendingImport(
+        last.files,
+        last.parentPath,
+        leftover,
+        last.planTree,
+        landedNow,
+      );
+      if (remaining.length === 0) continue;
+      void importFiles(last.parentPath, remaining, last.options);
     }
-    setPendingImports((prev) => dropSessionPending(prev, lastId));
-    commitLandedImportPaths(releaseLandedImportPaths(landedNow, leftover, lastId));
-    const remaining = filesStillPendingImport(
-      last.files,
-      last.parentPath,
-      leftover,
-      last.planTree,
-      landedNow,
-    );
-    if (remaining.length === 0) return;
-    void importFiles(last.parentPath, remaining, last.options);
   }, [commitLandedImportPaths, importFiles]);
 
   const cancelImportAndClose = useCallback(() => {

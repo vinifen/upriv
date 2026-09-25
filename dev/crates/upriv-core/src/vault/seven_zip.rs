@@ -139,13 +139,15 @@ pub fn import_logical_seven_zip(
         }
         Ok(())
     })();
-    if let Err(error) = ingest {
+    if let Err(ingest_error) = ingest {
         let dir = root.vault_dir(&id)?;
         if is_vault_open_at(&dir) {
-            let _ = close_vault(root, &id, Some(new_password));
+            // Delete refuses a vault that is still open. A failed close must
+            // surface here; swallowing it left the partial vault in the session.
+            close_vault(root, &id, Some(new_password))?;
         }
-        let _ = super::delete::delete_vault(root, &id);
-        return Err(error);
+        super::delete::delete_vault(root, &id)?;
+        return Err(ingest_error);
     }
     close_vault(root, &id, Some(new_password))?;
     log_event(LogLevel::Info, "vault_imported", &[("id", id.as_str())]);

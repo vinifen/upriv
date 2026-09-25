@@ -1,7 +1,7 @@
 //! Exclusive `runtime/<id>.lock` for one open vault (RF-54).
 
 use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -117,13 +117,9 @@ pub fn acquire_vault_lock(path: PathBuf) -> Result<VaultLock> {
             Ok(on_disk) if on_disk == identity => {}
             Ok(_) | Err(_) => continue,
         }
-        if let Some(body) = read_lock_body(&mut file)? {
-            if let Ok(host) = hostname() {
-                if body.hostname != host {
-                    return Err(UprivError::VaultLocked(path));
-                }
-            }
-        }
+        // The exclusive flock is ours, so the previous holder is gone. Rewrite
+        // the body even when it names another host (copied vault root, renamed
+        // machine). A lock still held by a live process never reaches here.
         write_lock_body(&mut file)?;
         return Ok(VaultLock {
             path,
@@ -150,19 +146,6 @@ fn write_lock_body(file: &mut File) -> Result<()> {
     file.set_len(bytes.len() as u64)?;
     file.sync_all()?;
     Ok(())
-}
-
-fn read_lock_body(file: &mut File) -> Result<Option<LockBody>> {
-    file.seek(SeekFrom::Start(0))?;
-    let mut raw = String::new();
-    file.read_to_string(&mut raw)?;
-    if raw.trim().is_empty() {
-        return Ok(None);
-    }
-    match serde_json::from_str(&raw) {
-        Ok(body) => Ok(Some(body)),
-        Err(_) => Ok(None),
-    }
 }
 
 fn open_lock_file(path: &Path, create: bool) -> Result<File> {
@@ -353,18 +336,15 @@ fn identity_of_path(path: &Path) -> std::io::Result<FileIdentity> {
     }
 }
 
-/// True when `path` is held by a live flock, or names another host's lock.
+/// True when another process holds the exclusive flock on `path`.
+/// A free flock is not live, including when the body names another host.
 pub fn lock_held_by_live_process(path: &Path) -> bool {
-    let Ok(mut file) = open_lock_file(path, false) else {
+    let Ok(file) = open_lock_file(path, false) else {
         return false;
     };
     match try_exclusive_lock(&file) {
-        Ok(false) => true,
-        Err(_) => true,
-        Ok(true) => match (read_lock_body(&mut file), hostname()) {
-            (Ok(Some(body)), Ok(host)) => body.hostname != host,
-            _ => false,
-        },
+        Ok(true) => false,
+        Ok(false) | Err(_) => true,
     }
 }
 
@@ -387,7 +367,7 @@ mod tests {
     }
 
     #[test]
-    fn does_not_steal_lock_from_another_host() {
+    fn takes_over_free_lock_recorded_for_another_host() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("notes.lock");
         let body = LockBody {
@@ -396,8 +376,8 @@ mod tests {
             started_at: utc_timestamp_iso_millis(),
         };
         std::fs::write(&path, serde_json::to_vec_pretty(&body).unwrap()).unwrap();
-        let err = acquire_vault_lock(path.clone()).unwrap_err();
-        assert!(matches!(err, UprivError::VaultLocked(_)));
+        assert!(!lock_held_by_live_process(&path));
+        let _lock = acquire_vault_lock(path.clone()).unwrap();
         assert!(lock_held_by_live_process(&path));
     }
 

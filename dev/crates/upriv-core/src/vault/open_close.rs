@@ -191,15 +191,20 @@ fn close_vault_inner(
         let _ = insert_session(session);
         return Err(error);
     }
-    drop(session.mount.take());
+    // Keep the mount until the close is recorded. Dropping it first and then
+    // failing the state write would reinsert an open session with no mount.
+    let mount = session.mount.take();
     if let Err(error) = mark_session_closed(root, vault_id) {
         if matches!(kind, CloseKind::Shutdown) {
+            drop(mount);
             drop(session);
             return Err(error);
         }
+        session.mount = mount;
         let _ = insert_session(session);
         return Err(error);
     }
+    drop(mount);
     drop(session);
     log_event(LogLevel::Info, "vault_closed", &[("id", vault_id)]);
     Ok(CloseVaultOutcome { backup_failed })

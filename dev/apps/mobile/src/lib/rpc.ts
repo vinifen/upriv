@@ -15,6 +15,7 @@ import {
   parseVaultRenameResult,
   parseVaultRootInspect,
   parseVaultRootResolve,
+  vaultImportProbeTimeoutMs,
   bytesFromContentB64,
   parsePathWriteResult,
   type CloseVaultOutcome,
@@ -648,7 +649,11 @@ export async function rpcVaultImportProbe(params: {
   archivePassword?: string;
   kind?: string;
 }): Promise<{ ok: boolean; kind: string }> {
-  const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_IMPORT_PROBE, params);
+  const raw = await nativeInvokeRaw(
+    CORE_RPC_COMMANDS.VAULT_IMPORT_PROBE,
+    params,
+    vaultImportProbeTimeoutMs(params),
+  );
   const record = requireRecord(raw, "vault_import_probe");
   return {
     ok: record.ok === true,

@@ -206,8 +206,8 @@ fn run() -> io::Result<()> {
 
         match inbound {
             WireIn::Request { id, method, params } => {
-                if is_heavy_method(&method) {
-                    let tx = if is_argon2_bound_method(&method) {
+                if is_heavy_method(&method, &params) {
+                    let tx = if is_argon2_bound_method(&method, &params) {
                         &argon2_tx
                     } else {
                         &io_tx

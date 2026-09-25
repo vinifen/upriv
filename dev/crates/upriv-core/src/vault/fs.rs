@@ -1,14 +1,14 @@
 //! Session-backed logical file operations. Mutations seal the index.
-//! OS import batches that seal — rewriting it on every file gets slower as the vault grows.
+//! Each OS import seals before it returns so a kill cannot drop the new file.
 
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use zeroize::Zeroize;
 
 use crate::error::{Result, UprivError};
+use crate::logging::{log_event, LogLevel};
 use crate::paths::VaultRoot;
 use crate::session::{with_open_session, OpenSession};
 use crate::store::{
@@ -25,44 +25,12 @@ fn store_dir(session: &OpenSession) -> std::path::PathBuf {
     session.vault_dir.join(crate::paths::STORE_DIR_NAME)
 }
 
-/// Imports kept in the session index before the next seal. Sealing rewrites and
-/// fsyncs the whole index, so once per file gets slower as more files land.
-const IMPORT_INDEX_SEAL_EVERY: u32 = 16;
-/// Also seal if unflushed imports have been sitting this long when the next
-/// import runs. A tree list or revision read seals whatever is still in RAM,
-/// and `close_vault` seals the rest.
-const IMPORT_INDEX_SEAL_MAX_AGE: Duration = Duration::from_secs(2);
-
 fn commit(session: &mut OpenSession) -> Result<()> {
     let store = store_dir(session);
     flush_index_parts(&store, &session.header, &session.index_key, &session.index)?;
     session.dirty = false;
-    session.imports_since_index_seal = 0;
-    session.index_sealed_at = Some(std::time::Instant::now());
     session.tree_revision = session.tree_revision.saturating_add(1);
     Ok(())
-}
-
-fn import_index_seal_due(session: &OpenSession) -> bool {
-    if session.imports_since_index_seal == 0 {
-        return false;
-    }
-    if session.imports_since_index_seal >= IMPORT_INDEX_SEAL_EVERY {
-        return true;
-    }
-    session
-        .index_sealed_at
-        .is_none_or(|sealed_at| sealed_at.elapsed() >= IMPORT_INDEX_SEAL_MAX_AGE)
-}
-
-/// Persist imports that were applied in RAM but not yet sealed.
-/// Tree reads call this so the tail of a batch is durable once the UI refreshes,
-/// without sealing on every file.
-fn seal_deferred_imports(session: &mut OpenSession) -> Result<()> {
-    if session.imports_since_index_seal == 0 {
-        return Ok(());
-    }
-    commit(session)
 }
 
 fn commit_or_restore(session: &mut OpenSession, before: VaultIndex) -> Result<()> {
@@ -76,9 +44,9 @@ fn commit_or_restore(session: &mut OpenSession, before: VaultIndex) -> Result<()
 }
 
 /// Seal `session.index`, then unlink `retired` blobs. A failed seal restores
-/// the previous index and leaves blobs in place. A failed unlink does not:
-/// `remove_file_chunks` may already have deleted blobs the previous index
-/// still names, and sealing that index back would point at missing ciphertext.
+/// the previous index and leaves blobs in place. After a successful seal the
+/// logical delete has landed; a failed unlink leaves orphan ciphertext and is
+/// logged instead of being reported as a failed delete.
 fn commit_then_unlink(
     session: &mut OpenSession,
     before: VaultIndex,
@@ -88,8 +56,19 @@ fn commit_then_unlink(
         session.index = before;
         return Err(error);
     }
+    let store = store_dir(session);
     for item in &retired {
-        remove_file_chunks(&store_dir(session), &item.file_id, item.chunk_count)?;
+        if remove_file_chunks(&store, &item.file_id, item.chunk_count).is_err() {
+            log_event(
+                LogLevel::Warn,
+                "vault_fs_leftover_blobs",
+                &[
+                    ("vault_id", session.vault_id.as_str()),
+                    ("file_id", item.file_id.as_str()),
+                    ("chunk_count", &item.chunk_count.to_string()),
+                ],
+            );
+        }
     }
     Ok(())
 }
@@ -148,16 +127,12 @@ fn require_user_visible_logical(path: &str) -> Result<()> {
 
 pub fn fs_tree_revision(root: &VaultRoot, vault_id: &str) -> Result<u64> {
     let dir = require_open(root, vault_id)?;
-    with_open_session(&dir, |session| {
-        seal_deferred_imports(session)?;
-        Ok(session.tree_revision)
-    })
+    with_open_session(&dir, |session| Ok(session.tree_revision))
 }
 
 pub fn fs_list_tree(root: &VaultRoot, vault_id: &str) -> Result<FileTreeNode> {
     let dir = require_open(root, vault_id)?;
     with_open_session(&dir, |session| {
-        seal_deferred_imports(session)?;
         let name = crate::config::load_vault_config_raw(&session.vault_dir)
             .map(|c| c.vault.display_name)
             .unwrap_or_else(|_| session.vault_id.clone());
@@ -390,8 +365,9 @@ pub fn fs_write_from_reader(
 
 /// Stream an OS file into the open vault without pulling bytes through JSON-RPC.
 ///
-/// The source must be an absolute regular file (no symlink). Ciphertext under
-/// this vault's `store/` is refused so we never re-encrypt our own store.
+/// The source must be an absolute regular file (no symlink). The opened path
+/// is canonicalized, and ciphertext under this vault's `store/` is refused so
+/// a directory symlink cannot re-encrypt our own store.
 /// The session lock is held for the whole import so another write cannot
 /// replace the file between pieces.
 pub fn fs_import_from_os_path(
@@ -475,39 +451,25 @@ pub fn fs_import_from_os_path(
         })();
         let outcome = match streamed {
             Ok(()) => {
-                session.imports_since_index_seal =
-                    session.imports_since_index_seal.saturating_add(1);
-                // A replaced generation can only be unlinked after the seal that
-                // stops naming it. Imports do not replace; if one ever does, seal now.
-                let seal_now = import_index_seal_due(session) || retired_acc.is_some();
-                if seal_now {
-                    if let Err(error) = commit(session) {
-                        if retired_acc.is_none() {
-                            session.index.nodes.truncate(nodes_before);
-                            mutation.discard_created();
-                            mutation.delete_superseded();
-                            session.imports_since_index_seal =
-                                session.imports_since_index_seal.saturating_sub(1);
-                            if session.imports_since_index_seal == 0 {
-                                session.dirty = false;
-                            }
-                        }
-                        Err(error)
-                    } else {
+                // Seal before return. A kill or "just close" does not run Drop,
+                // so an unsealed import would disappear on the next open.
+                if let Err(error) = commit(session) {
+                    if retired_acc.is_none() {
+                        session.index.nodes.truncate(nodes_before);
+                        mutation.discard_created();
                         mutation.delete_superseded();
-                        if let Some(retired) = retired_acc {
-                            let _ = remove_file_chunks(
-                                &store_dir(session),
-                                &retired.file_id,
-                                retired.chunk_count,
-                            );
-                        }
-                        Ok((to_ui_path(&path), session.tree_revision))
+                        session.dirty = false;
                     }
+                    Err(error)
                 } else {
-                    // Replaced chunks of this new file are not in the sealed index.
                     mutation.delete_superseded();
-                    session.tree_revision = session.tree_revision.saturating_add(1);
+                    if let Some(retired) = retired_acc {
+                        let _ = remove_file_chunks(
+                            &store_dir(session),
+                            &retired.file_id,
+                            retired.chunk_count,
+                        );
+                    }
                     Ok((to_ui_path(&path), session.tree_revision))
                 }
             }
@@ -515,9 +477,7 @@ pub fn fs_import_from_os_path(
                 session.index.nodes.truncate(nodes_before);
                 mutation.discard_created();
                 mutation.delete_superseded();
-                if session.imports_since_index_seal == 0 {
-                    session.dirty = false;
-                }
+                session.dirty = false;
                 Err(error)
             }
         };
@@ -542,21 +502,34 @@ fn open_import_source(path: &Path) -> Result<File> {
     }
 }
 
+fn reject_unreadable(path: &Path) -> UprivError {
+    UprivError::ImportSourceUnreadable(path.to_path_buf())
+}
+
+/// Real path of `path`, after directory symlinks. Fail closed when the OS
+/// cannot resolve it.
+fn canonical_file(path: &Path) -> Result<PathBuf> {
+    std::fs::canonicalize(path).map_err(|_| reject_unreadable(path))
+}
+
 fn validate_import_os_path(root: &VaultRoot, vault_id: &str, os_path: &Path) -> Result<PathBuf> {
     if !os_path.is_absolute() {
-        return Err(UprivError::ImportSourceUnreadable(os_path.to_path_buf()));
+        return Err(reject_unreadable(os_path));
     }
-    let meta = std::fs::symlink_metadata(os_path)
-        .map_err(|_| UprivError::ImportSourceUnreadable(os_path.to_path_buf()))?;
+    let meta = std::fs::symlink_metadata(os_path).map_err(|_| reject_unreadable(os_path))?;
     if meta.file_type().is_symlink() || !meta.is_file() {
-        return Err(UprivError::ImportSourceUnreadable(os_path.to_path_buf()));
+        return Err(reject_unreadable(os_path));
     }
+    let canonical = canonical_file(os_path)?;
     if let Ok(store) = root.vault_store_dir(vault_id) {
-        if os_path.starts_with(&store) {
-            return Err(UprivError::ImportSourceUnreadable(os_path.to_path_buf()));
+        if store.exists() {
+            let store = canonical_file(&store).map_err(|_| reject_unreadable(os_path))?;
+            if canonical.starts_with(&store) {
+                return Err(reject_unreadable(os_path));
+            }
         }
     }
-    Ok(os_path.to_path_buf())
+    Ok(canonical)
 }
 
 pub fn fs_truncate(root: &VaultRoot, vault_id: &str, ui_path: &str, size: u64) -> Result<u64> {
@@ -1171,6 +1144,15 @@ mode = "encrypted_dir"
             let linked =
                 fs_import_from_os_path(&root, "notes", "/", "link.bin", &link).unwrap_err();
             assert!(matches!(linked, UprivError::ImportSourceUnreadable(_)));
+
+            let alias = tmp.path().join("alias");
+            std::fs::create_dir(&alias).unwrap();
+            let store_link = alias.join("into-store");
+            std::os::unix::fs::symlink(&store, &store_link).unwrap();
+            let via = store_link.join("bait.bin");
+            let via_store =
+                fs_import_from_os_path(&root, "notes", "/", "via.bin", &via).unwrap_err();
+            assert!(matches!(via_store, UprivError::ImportSourceUnreadable(_)));
         }
 
         close_vault(&root, "notes", None).unwrap();
@@ -1191,7 +1173,7 @@ mode = "encrypted_dir"
         assert_eq!(folder, "/photos");
         let (again, _) = fs_ensure_folder(&root, "notes", "/", "photos").unwrap();
         assert_eq!(again, "/photos");
-        let count = (IMPORT_INDEX_SEAL_EVERY + 4) as usize;
+        let count = 4;
         for index in 0..count {
             let name = format!("f{index}.txt");
             let src = tmp.path().join(&name);
@@ -1213,7 +1195,7 @@ mode = "encrypted_dir"
     }
 
     #[test]
-    fn listing_the_tree_seals_imports_still_only_in_memory() {
+    fn import_seals_the_index_before_it_returns() {
         let (tmp, root) = vault_root_with(&[]);
         create_vault(
             &root,
@@ -1230,30 +1212,15 @@ mode = "encrypted_dir"
         crate::session::with_open_session(&dir, |session| {
             let store = store_dir(session);
             assert!(
-                !crate::store::sealed_index_contains(
+                crate::store::sealed_index_contains(
                     &store,
                     &session.header,
                     &session.index_key,
                     "one.txt",
                 )
                 .unwrap(),
-                "one fast import stays in RAM"
+                "import seals before it returns"
             );
-            assert_eq!(session.imports_since_index_seal, 1);
-            Ok(())
-        })
-        .unwrap();
-        let _ = fs_list_tree(&root, "notes").unwrap();
-        crate::session::with_open_session(&dir, |session| {
-            let store = store_dir(session);
-            assert!(crate::store::sealed_index_contains(
-                &store,
-                &session.header,
-                &session.index_key,
-                "one.txt",
-            )
-            .unwrap());
-            assert_eq!(session.imports_since_index_seal, 0);
             Ok(())
         })
         .unwrap();
