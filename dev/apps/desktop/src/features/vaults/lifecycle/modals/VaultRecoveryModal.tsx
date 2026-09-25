@@ -1,9 +1,12 @@
 import { useEffect, useId, useState } from "react";
 import { Button, Modal } from "@/components/ui";
+import { PolicyRadioOption } from "@/components/settings";
 import { useTranslation } from "@/i18n";
-import type { VaultListItem } from "@upriv/shared";
+import { storageModeIsPlaintext, type VaultListItem } from "@upriv/shared";
 
-export type RecoveryAction = "resume_contents" | "create_from_backup" | "discard_workspace";
+export type RecoveryAction = "resume_store" | "discard_workspace";
+
+type PlainChoice = RecoveryAction;
 
 interface VaultRecoveryModalProps {
   vault: VaultListItem | null;
@@ -13,6 +16,11 @@ interface VaultRecoveryModalProps {
   onAction: (action: RecoveryAction) => void;
 }
 
+/**
+ * Dirty-close recovery.
+ * - `encrypted_dir`: unlock the encrypted vault only (no discard / create-from-backup).
+ * - `upriv_plain`: choose resume or wipe leftover plaintext workspace.
+ */
 export function VaultRecoveryModal({
   vault,
   open,
@@ -21,14 +29,19 @@ export function VaultRecoveryModal({
   onAction,
 }: VaultRecoveryModalProps) {
   const { t } = useTranslation();
+  const choiceGroup = useId();
   const discardConfirmId = useId();
   const discardHelpId = useId();
   const discardVaultId = useId();
+  const [choice, setChoice] = useState<PlainChoice>("resume_store");
   const [view, setView] = useState<"actions" | "discard_confirm">("actions");
   const [discardText, setDiscardText] = useState("");
 
+  const isPlain = vault ? storageModeIsPlaintext(vault.storageMode) : false;
+
   useEffect(() => {
     if (!open) {
+      setChoice("resume_store");
       setView("actions");
       setDiscardText("");
     }
@@ -37,6 +50,25 @@ export function VaultRecoveryModal({
   if (!open || !vault) return null;
 
   const canConfirmDiscard = discardText.trim() === vault.id;
+
+  const runPrimary = () => {
+    if (submitting) return;
+    if (!isPlain) {
+      onAction("resume_store");
+      return;
+    }
+    if (choice === "discard_workspace") {
+      setView("discard_confirm");
+      return;
+    }
+    onAction("resume_store");
+  };
+
+  const footerCtaLabel = submitting
+    ? t("close.dialog.submitting")
+    : isPlain
+      ? t("action.continue")
+      : t("action.unlock");
 
   return (
     <Modal
@@ -68,7 +100,16 @@ export function VaultRecoveryModal({
               {submitting ? t("close.dialog.submitting") : t("recovery.discard_workspace")}
             </Button>
           </div>
-        ) : null
+        ) : (
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button variant="ghost" size="sm" disabled={submitting} onClick={onClose}>
+              {t("action.cancel")}
+            </Button>
+            <Button variant="primary" size="sm" disabled={submitting} onClick={runPrimary}>
+              {footerCtaLabel}
+            </Button>
+          </div>
+        )
       }
     >
       {view === "discard_confirm" ? (
@@ -95,40 +136,37 @@ export function VaultRecoveryModal({
             className="w-full rounded-lg border-0 bg-surface-container-highest px-3 py-2.5 text-sm text-on-surface outline-none ring-1 ring-outline-variant/40 focus:ring-accent/50"
           />
         </div>
+      ) : isPlain ? (
+        <div className="space-y-4">
+          <p className="text-sm leading-relaxed text-on-surface-variant">
+            {t("recovery.hint_plain", { name: vault.displayName })}
+          </p>
+          <div role="radiogroup" aria-label={t("recovery.title")} className="grid gap-2">
+            <PolicyRadioOption
+              groupName={choiceGroup}
+              value="resume_store"
+              checked={choice === "resume_store"}
+              title={t("recovery.resume_store")}
+              description={t("recovery.resume_store_desc")}
+              badge="recommended"
+              onSelect={() => setChoice("resume_store")}
+            />
+            <PolicyRadioOption
+              groupName={choiceGroup}
+              value="discard_workspace"
+              checked={choice === "discard_workspace"}
+              title={t("recovery.discard_workspace")}
+              description={t("recovery.discard_workspace_desc")}
+              tone="less-secure"
+              onSelect={() => setChoice("discard_workspace")}
+            />
+          </div>
+        </div>
       ) : (
         <div className="space-y-4">
           <p className="text-sm leading-relaxed text-on-surface-variant">
             {t("recovery.hint", { name: vault.displayName })}
           </p>
-          <div className="grid gap-2">
-            <Button
-              variant="primary"
-              size="sm"
-              disabled={submitting}
-              className="justify-start"
-              onClick={() => onAction("resume_contents")}
-            >
-              {t("recovery.resume_contents")}
-            </Button>
-            <Button
-              variant="secondary"
-              size="sm"
-              disabled={submitting}
-              className="justify-start"
-              onClick={() => onAction("create_from_backup")}
-            >
-              {t("recovery.create_from_backup")}
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              disabled={submitting}
-              className="justify-start text-on-error-container hover:bg-error-container/15"
-              onClick={() => setView("discard_confirm")}
-            >
-              {t("recovery.discard_workspace")}
-            </Button>
-          </div>
         </div>
       )}
     </Modal>

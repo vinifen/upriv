@@ -50,4 +50,16 @@ describe("createLiveVaultService", () => {
     });
     expect(rename).toHaveBeenCalledWith("notes", "Work Docs");
   });
+
+  it("forwards export password probe when wired", async () => {
+    const probeExportPassword = vi.fn(async () => true);
+    const service = createLiveVaultService({
+      listVaults: vi.fn(async () => []),
+      createVault: vi.fn(),
+      getSettings: vi.fn(),
+      probeExportPassword,
+    });
+    await expect(service.probeExportPassword("notes", "pass-word-ok")).resolves.toBe(true);
+    expect(probeExportPassword).toHaveBeenCalledWith("notes", "pass-word-ok");
+  });
 });

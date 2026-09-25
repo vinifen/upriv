@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type DragEvent } from "react";
 import { useMediaQuery } from "@/lib/useMediaQuery";
+import { useErrorToast } from "@/hooks/useErrorToast";
 import { useFileManager } from "../FileManagerContext";
 import { FileEditorPane } from "../editor/FileEditorPane";
 import { FileManagerDialogs } from "../dialogs/FileManagerDialogs";
@@ -14,21 +15,33 @@ import {
   percentFromDelta,
   TREE_SPLIT_DEFAULT_PERCENT,
   type FileManagerEntry,
+  type VaultWorkspaceAction,
 } from "@upriv/shared";
 import { useWorkspacePersistence } from "@upriv/shared/react";
 import { useAppSettingsContext } from "@/features/system/settings";
 import { hasUnsavedEditableTabs, useVaultFileManager } from "../hooks/useVaultFileManager";
 import { useVaultFileSystemService } from "@/platform/services";
+import { allowFileManagerDrop, beginOsFileImport } from "../lib/osFileDrop";
+import { osFileImportParentPath } from "../lib/osFileImportTarget";
+import { useNativeOsFileDrop } from "../hooks/useNativeOsFileDrop";
 
 interface FileManagerWorkspaceProps {
   entry: FileManagerEntry;
+  active?: boolean;
+  writesLocked?: boolean;
   onDismissConfirmed: () => void;
 }
 
-export function FileManagerWorkspace({ entry, onDismissConfirmed }: FileManagerWorkspaceProps) {
+export function FileManagerWorkspace({
+  entry,
+  active = true,
+  writesLocked = false,
+  onDismissConfirmed,
+}: FileManagerWorkspaceProps) {
   const { dispatchWorkspace } = useFileManager();
   const { settings, patchSettings } = useAppSettingsContext();
   const fs = useVaultFileSystemService();
+  const { showError } = useErrorToast();
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerSize, setContainerSize] = useState(0);
   const isMobile = useMediaQuery("(max-width: 767px)");
@@ -50,17 +63,24 @@ export function FileManagerWorkspace({ entry, onDismissConfirmed }: FileManagerW
     setLivePercent(settingsPercent);
   }, [settingsPercent]);
 
+  const dispatch = useCallback(
+    (action: VaultWorkspaceAction) => dispatchWorkspace(entry.vaultId, action),
+    [dispatchWorkspace, entry.vaultId],
+  );
+
   const fm = useVaultFileManager({
     entry,
-    dispatch: (action) => dispatchWorkspace(entry.vaultId, action),
+    dispatch,
     onDismissConfirmed,
+    writesLocked,
   });
 
   useWorkspacePersistence({
     vaultId: entry.vaultId,
     workspace: entry.workspace,
     fs,
-    dispatch: (action) => dispatchWorkspace(entry.vaultId, action),
+    dispatch,
+    suspend: fm.importBusy,
   });
 
   useLayoutEffect(() => {
@@ -126,11 +146,41 @@ export function FileManagerWorkspace({ entry, onDismissConfirmed }: FileManagerW
 
   const splitPercent = displayTreeSplitPercent(livePercent, dragSize ?? containerSize, axis);
 
+  useNativeOsFileDrop({
+    enabled: active,
+    getParentPath: () => osFileImportParentPath(fm.tree, fm.workspace),
+    isInternalDrag: () => Boolean(fm.workspace.dragSourcePath),
+    importOsDrop: fm.importOsDrop,
+    onImported: () => fm.dispatch({ type: "set_drag", source: null, target: null }),
+    onError: (error) => showError(error, "error.unexpected"),
+  });
+
+  const handleWorkspaceDragOver = (event: DragEvent) => {
+    allowFileManagerDrop(event, fm.workspace.dragSourcePath ? "move" : "copy");
+  };
+
+  const handleWorkspaceDrop = (event: DragEvent) => {
+    if (
+      beginOsFileImport(
+        event,
+        osFileImportParentPath(fm.tree, fm.workspace),
+        fm.importOsDrop,
+        (error) => showError(error, "error.unexpected"),
+        { openFirstViewable: true },
+      )
+    ) {
+      fm.dispatch({ type: "set_drag", source: null, target: null });
+    }
+  };
+
   return (
     <>
       <div
         ref={containerRef}
-        className="flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-surface-container-high md:flex-row"
+        className="relative flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-surface-container-high md:flex-row"
+        onDragEnter={active ? handleWorkspaceDragOver : undefined}
+        onDragOver={active ? handleWorkspaceDragOver : undefined}
+        onDrop={active ? handleWorkspaceDrop : undefined}
       >
         <FileTreePanel fm={fm} splitPercent={splitPercent} layout={isMobile ? "column" : "row"} />
         <PaneResizeHandle
@@ -144,7 +194,7 @@ export function FileManagerWorkspace({ entry, onDismissConfirmed }: FileManagerW
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
           <FileManagerTabBar
             workspace={entry.workspace}
-            onWorkspaceAction={(action) => dispatchWorkspace(entry.vaultId, action)}
+            onWorkspaceAction={dispatch}
             showSave={hasUnsavedEditableTabs(fm)}
             onSave={fm.saveAllFiles}
           />
@@ -152,7 +202,7 @@ export function FileManagerWorkspace({ entry, onDismissConfirmed }: FileManagerW
         </div>
       </div>
       <FileTreeContextMenu fm={fm} tree={fm.tree} />
-      <FileManagerDialogs fm={fm} />
+      <FileManagerDialogs fm={fm} promptsOpen={active} />
     </>
   );
 }

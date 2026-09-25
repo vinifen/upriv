@@ -10,8 +10,8 @@ use std::time::{Duration, Instant};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use crate::config::VaultSecurityMode;
-use crate::contents::{OpenedStore, VaultHeader, VaultIndex};
 use crate::error::{Result, UprivError};
+use crate::store::{OpenedStore, VaultHeader, VaultIndex};
 
 const FAILURE_WINDOW: Duration = Duration::from_secs(60);
 const BLOCK_DURATION: Duration = Duration::from_secs(60);
@@ -33,6 +33,16 @@ pub struct OpenSession {
     pub security_mode: VaultSecurityMode,
     /// Writers must set this; `close_vault` reseals the index regardless until then.
     pub dirty: bool,
+    /// Explorer cache invalidation — bumped on every committed mutation.
+    #[zeroize(skip)]
+    pub tree_revision: u64,
+    /// OS mount (FUSE/WinFsp). Declared before `lock` so drop unmounts before
+    /// the process lock file is released.
+    #[zeroize(skip)]
+    pub mount: Option<crate::mount::MountedVault>,
+    /// Process lockfile; released when the session is dropped.
+    #[zeroize(skip)]
+    pub lock: Option<crate::lockfile::VaultLock>,
 }
 
 impl OpenSession {
@@ -58,6 +68,9 @@ impl OpenSession {
             index: opened.index,
             security_mode,
             dirty: false,
+            tree_revision: 0,
+            mount: None,
+            lock: None,
         }
     }
 }
@@ -68,7 +81,7 @@ struct UnlockThrottle {
     blocked_until: Option<Instant>,
 }
 
-static SESSIONS: LazyLock<Mutex<HashMap<PathBuf, OpenSession>>> =
+static SESSIONS: LazyLock<Mutex<HashMap<PathBuf, Arc<Mutex<OpenSession>>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 static THROTTLE: LazyLock<Mutex<HashMap<PathBuf, UnlockThrottle>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
@@ -144,7 +157,8 @@ pub fn with_vault_dir_locks<T>(
     with_vault_dir_lock(a, || with_vault_dir_lock(b, f))
 }
 
-fn lock_sessions() -> Result<std::sync::MutexGuard<'static, HashMap<PathBuf, OpenSession>>> {
+fn lock_sessions(
+) -> Result<std::sync::MutexGuard<'static, HashMap<PathBuf, Arc<Mutex<OpenSession>>>>> {
     SESSIONS.lock().map_err(|_| UprivError::VaultStoreInvalid {
         path: PathBuf::from("session"),
         detail: "session lock poisoned".into(),
@@ -173,9 +187,28 @@ pub fn is_vault_open(vault_dir: impl AsRef<Path>) -> bool {
 }
 
 pub fn open_session_ids() -> Vec<String> {
-    lock_sessions()
-        .map(|g| g.values().map(|s| s.vault_id.clone()).collect())
-        .unwrap_or_default()
+    let Ok(guard) = lock_sessions() else {
+        return Vec::new();
+    };
+    let mut ids = Vec::new();
+    for session in guard.values() {
+        if let Ok(inner) = session.lock() {
+            ids.push(inner.vault_id.clone());
+        }
+    }
+    ids
+}
+
+/// Refuse export of this vault while it is open, closing, or seeding.
+pub fn ensure_vault_session_closed(vault_dir: &Path) -> Result<()> {
+    if is_vault_open_at(vault_dir)
+        || is_vault_closing_at(vault_dir)
+        || is_vault_preparing_at(vault_dir)
+    {
+        Err(UprivError::VaultMustBeClosed)
+    } else {
+        Ok(())
+    }
 }
 
 /// Refuse vault-root switch while any vault is open, mid-close, or Argon2 is in flight.
@@ -281,20 +314,56 @@ pub fn insert_session(session: OpenSession) -> Result<()> {
     if guard.contains_key(&session.vault_dir) {
         return Err(UprivError::VaultAlreadyOpen(session.vault_id.clone()));
     }
-    guard.insert(session.vault_dir.clone(), session);
+    guard.insert(session.vault_dir.clone(), Arc::new(Mutex::new(session)));
     Ok(())
 }
 
 pub fn take_session(vault_dir: &Path) -> Result<OpenSession> {
-    lock_sessions()?
+    let arc = lock_sessions()?
         .remove(vault_dir)
-        .ok_or_else(|| UprivError::VaultNotOpen(vault_dir.display().to_string()))
+        .ok_or_else(|| UprivError::VaultNotOpen(vault_dir.display().to_string()))?;
+    let mutex = wait_unique_session(arc)?;
+    mutex
+        .into_inner()
+        .map_err(|_| session_lock_poisoned("open session poisoned"))
+}
+
+fn wait_unique_session(mut arc: Arc<Mutex<OpenSession>>) -> Result<Mutex<OpenSession>> {
+    loop {
+        match Arc::try_unwrap(arc) {
+            Ok(mutex) => return Ok(mutex),
+            Err(remaining) => {
+                drop(
+                    remaining
+                        .lock()
+                        .map_err(|_| session_lock_poisoned("open session poisoned"))?,
+                );
+                arc = remaining;
+                std::thread::yield_now();
+            }
+        }
+    }
+}
+
+/// Run `f` against the open session without removing it from the map.
+pub fn with_open_session<T>(
+    vault_dir: &Path,
+    f: impl FnOnce(&mut OpenSession) -> Result<T>,
+) -> Result<T> {
+    let arc = lock_sessions()?
+        .get(vault_dir)
+        .cloned()
+        .ok_or_else(|| UprivError::VaultNotOpen(vault_dir.display().to_string()))?;
+    let mut session = arc
+        .lock()
+        .map_err(|_| session_lock_poisoned("open session poisoned"))?;
+    f(&mut session)
 }
 
 pub fn get_session_vault_id(vault_dir: &Path) -> Option<String> {
-    lock_sessions()
-        .ok()
-        .and_then(|g| g.get(vault_dir).map(|s| s.vault_id.clone()))
+    let guard = lock_sessions().ok()?;
+    let arc = guard.get(vault_dir)?;
+    arc.lock().ok().map(|s| s.vault_id.clone())
 }
 
 /// Fail closed if this vault is in the 60 s block window.

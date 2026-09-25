@@ -1,6 +1,11 @@
 import { isVaultFileManagerEligible, isVaultFileManagerRetained, type VaultRow } from "../vault";
 import { vaultWorkspaceReducer, type VaultWorkspaceAction } from "./workspaceReducer";
-import { createDefaultWorkspaceState, type VaultWorkspaceState } from "./workspaceTypes";
+import {
+  createDefaultWorkspaceState,
+  hasUnsavedWorkspaceChanges,
+  type UnsavedPromptAction,
+  type VaultWorkspaceState,
+} from "./workspaceTypes";
 
 export type FileManagerSurface = "maximized" | "minimized";
 
@@ -9,6 +14,8 @@ export interface FileManagerEntry {
   displayName: string;
   surface: FileManagerSurface;
   workspace: VaultWorkspaceState;
+  /** True while an OS/in-app import session is still writing. RAM-only. */
+  importInFlight: boolean;
 }
 
 export interface FileManagerState {
@@ -26,7 +33,26 @@ export type FileManagerAction =
   | { type: "dismiss"; vaultId: string }
   | { type: "purge_for_vault_close"; vaultId: string }
   | { type: "sync_with_vault_list"; vaults: readonly VaultRow[] }
-  | { type: "workspace"; vaultId: string; action: VaultWorkspaceAction };
+  | { type: "workspace"; vaultId: string; action: VaultWorkspaceAction }
+  | { type: "set_import_in_flight"; vaultId: string; inFlight: boolean };
+
+export type FileManagerDismissIntent = "import_in_progress" | "unsaved" | "dismiss";
+
+export function fileManagerDismissIntent(
+  entry: Pick<FileManagerEntry, "importInFlight" | "workspace">,
+): FileManagerDismissIntent {
+  if (entry.importInFlight) return "import_in_progress";
+  if (hasUnsavedWorkspaceChanges(entry.workspace)) return "unsaved";
+  return "dismiss";
+}
+
+export function fileManagerBlockingPrompt(
+  intent: FileManagerDismissIntent,
+): UnsavedPromptAction | null {
+  if (intent === "import_in_progress") return { type: "import_in_progress" };
+  if (intent === "unsaved") return { type: "dismiss_workspace" };
+  return null;
+}
 
 export function createEmptyFileManagerState(): FileManagerState {
   return {
@@ -85,6 +111,7 @@ export function fileManagerReducer(
         displayName: action.vault.displayName,
         surface: "maximized",
         workspace: existing?.workspace ?? action.workspace ?? createDefaultWorkspaceState(),
+        importInFlight: existing?.importInFlight ?? false,
       };
 
       return {
@@ -141,6 +168,17 @@ export function fileManagerReducer(
             ...existing,
             workspace: vaultWorkspaceReducer(existing.workspace, action.action),
           },
+        },
+      };
+    }
+    case "set_import_in_flight": {
+      const existing = state.entries[action.vaultId];
+      if (!existing || existing.importInFlight === action.inFlight) return state;
+      return {
+        ...state,
+        entries: {
+          ...state.entries,
+          [action.vaultId]: { ...existing, importInFlight: action.inFlight },
         },
       };
     }

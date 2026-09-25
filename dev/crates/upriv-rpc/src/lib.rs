@@ -32,6 +32,8 @@ use upriv_core::{
     VaultStorageMode, VAULT_ROOT_ALIAS_FILE,
 };
 
+mod vault_ops;
+
 #[derive(Debug, Deserialize)]
 pub struct RpcRequest {
     pub method: String,
@@ -112,7 +114,7 @@ pub fn handle_rpc(req: RpcRequest) -> RpcResponse {
             "version": upriv_core::app_version(),
             "distribution": upriv_core::distribution_str(upriv_core::detect_app_distribution()),
         })),
-        "app_shutdown" => ok(json!(null)),
+        "app_shutdown" => vault_ops::app_shutdown(),
         "app_settings_get" => app_settings_get(),
         "app_settings_save" => app_settings_save(req.params),
         "app_settings_parse_toml" => app_settings_parse_toml(req.params),
@@ -141,9 +143,37 @@ pub fn handle_rpc(req: RpcRequest) -> RpcResponse {
         "vault_create" => vault_create(req.params),
         "vault_open" => vault_open(req.params),
         "vault_close" => vault_close(req.params),
+        "vault_export_capabilities" => vault_ops::vault_export_capabilities(req.params),
         "vault_config_get" => vault_config_get(req.params),
         "vault_config_save" => vault_config_save(req.params),
         "vault_rename" => vault_rename(req.params),
+        "vault_delete" => vault_ops::vault_delete(req.params),
+        "vault_recover_ack" => vault_ops::vault_recover_ack(req.params),
+        "vault_export" => vault_ops::vault_export(req.params),
+        "vault_export_probe" => vault_ops::vault_export_probe(req.params),
+        "vault_import_zip" => vault_ops::vault_import_zip(req.params),
+        "vault_import_7z" => vault_ops::vault_import_7z(req.params),
+        "vault_import_probe" => vault_ops::vault_import_probe(req.params),
+        "vault_fs_list" => vault_ops::vault_fs_list(req.params),
+        "vault_fs_revision" => vault_ops::vault_fs_revision(req.params),
+        "vault_fs_read" => vault_ops::vault_fs_read(req.params),
+        "vault_fs_read_range" => vault_ops::vault_fs_read_range(req.params),
+        "vault_fs_write" => vault_ops::vault_fs_write(req.params),
+        "vault_fs_write_range" => vault_ops::vault_fs_write_range(req.params),
+        "vault_fs_import_os_file" => vault_ops::vault_fs_import_os_file(req.params),
+        "vault_fs_truncate" => vault_ops::vault_fs_truncate(req.params),
+        "vault_fs_mkdir" => vault_ops::vault_fs_mkdir(req.params),
+        "vault_fs_create_file" => vault_ops::vault_fs_create_file(req.params),
+        "vault_fs_create_folder" => vault_ops::vault_fs_create_folder(req.params),
+        "vault_fs_ensure_folder" => vault_ops::vault_fs_ensure_folder(req.params),
+        "vault_fs_delete" => vault_ops::vault_fs_delete(req.params),
+        "vault_fs_rename" => vault_ops::vault_fs_rename(req.params),
+        "vault_fs_os_path" => vault_ops::vault_fs_os_path(req.params),
+        "vault_fs_move" => vault_ops::vault_fs_move(req.params),
+        "backup_list" => vault_ops::backup_list(req.params),
+        "backup_delete" => vault_ops::backup_delete(req.params),
+        "backup_promote" => vault_ops::backup_promote(req.params),
+        "backup_get" => vault_ops::backup_get(req.params),
         other => err("unknown_method", format!("unknown method: {other}")),
     }
 }
@@ -1206,7 +1236,7 @@ fn vault_close(params: Value) -> RpcResponse {
         Err(response) => return response,
     };
     match close_vault(&root, parsed.id.trim(), password) {
-        Ok(()) => ok(json!(null)),
+        Ok(outcome) => ok(json!({ "backupFailed": outcome.backup_failed })),
         Err(error) => map_core_err(error),
     }
 }
@@ -1385,12 +1415,8 @@ fn app_settings_save(params: Value) -> RpcResponse {
             ok(json!({ "wrote": wrote }))
         }
         Err(error) => {
-            let message = error.to_string();
-            log_event(
-                LogLevel::Error,
-                "settings_save_failed",
-                &[("error", truncate_log_msg(&message))],
-            );
+            // Code only. The Display string of a settings error includes a path.
+            log_event(LogLevel::Error, "settings_save_failed", &[]);
             map_core_err_response(error, false)
         }
     }
@@ -1455,14 +1481,9 @@ fn replace_policy_str(policy: IncompleteReplacePolicy) -> &'static str {
     }
 }
 
-fn truncate_log_msg(message: &str) -> &str {
-    const MAX: usize = 160;
-    if message.len() <= MAX {
-        message
-    } else {
-        let end = message.floor_char_boundary(MAX);
-        &message[..end]
-    }
+/// Disk fields for an RPC failure. The code only — never the Display string.
+fn rpc_error_log_fields(code: &str) -> [(&str, &str); 1] {
+    [("code", code)]
 }
 
 fn current_root_path_for_log() -> Option<String> {
@@ -1575,6 +1596,7 @@ fn map_core_err_response(error: upriv_core::UprivError, emit_log: bool) -> RpcRe
         upriv_core::UprivError::VaultNotOpen(_) => ("vault_not_open", None),
         upriv_core::UprivError::VaultUnlockBlocked { .. } => ("vault_unlock_blocked", None),
         upriv_core::UprivError::InsufficientRam => ("insufficient_ram", None),
+        upriv_core::UprivError::InsufficientRamExport => ("insufficient_ram_export", None),
         upriv_core::UprivError::VaultStoreInvalid { path, .. } => {
             ("vault_store_invalid", Some(path.as_path()))
         }
@@ -1592,6 +1614,20 @@ fn map_core_err_response(error: upriv_core::UprivError, emit_log: bool) -> RpcRe
         upriv_core::UprivError::LogFileTooLarge { path, .. } => {
             ("log_file_too_large", Some(path.as_path()))
         }
+        upriv_core::UprivError::VaultPathNotFound(_) => ("vault_path_not_found", None),
+        upriv_core::UprivError::VaultPathExists(_) => ("vault_path_exists", None),
+        upriv_core::UprivError::VaultFileTooLarge { path, .. } => {
+            ("vault_file_too_large", Some(path.as_path()))
+        }
+        upriv_core::UprivError::VaultLocked(p) => ("vault_locked", Some(p.as_path())),
+        upriv_core::UprivError::VaultMountFailed(_) => ("vault_mount_failed", None),
+        upriv_core::UprivError::ImportArchiveNotFound(p) => {
+            ("import_archive_not_found", Some(p.as_path()))
+        }
+        upriv_core::UprivError::ImportSourceUnreadable(p) => {
+            ("import_source_unreadable", Some(p.as_path()))
+        }
+        upriv_core::UprivError::VaultMustBeClosed => ("vault_must_be_closed", None),
         upriv_core::UprivError::Io(_) => ("io_error", None),
     };
     let message = error.to_string();
@@ -1600,17 +1636,20 @@ fn map_core_err_response(error: upriv_core::UprivError, emit_log: bool) -> RpcRe
             "vault_root_incomplete" | "wrong_password" | "vault_unlock_blocked" => LogLevel::Warn,
             _ => LogLevel::Error,
         };
-        log_event(
-            level,
-            "rpc_error",
-            &[("code", code), ("message", truncate_log_msg(&message))],
-        );
+        // `message` stays on the RPC response for the person at the screen.
+        // It must not be written under `.upriv/logs/`: Display text for
+        // `VaultPathNotFound`, `VaultPathExists`, `VaultFileTooLarge`, and
+        // some `VaultStoreInvalid` values is the logical path inside the vault.
+        log_event(level, "rpc_error", &rpc_error_log_fields(code));
     }
     let details = match &error {
         upriv_core::UprivError::VaultUnlockBlocked { retry_after_secs } => {
             Some(json!({ "retryAfterSecs": retry_after_secs }))
         }
         upriv_core::UprivError::VaultConfigBusy { target } => Some(json!({ "target": target })),
+        upriv_core::UprivError::VaultFileTooLarge { size, max, .. } => {
+            Some(json!({ "size": size, "max": max }))
+        }
         _ => path.and_then(|p| p.to_str().map(|s| json!({ "path": s }))),
     };
     err_with_details(code, message, details)
@@ -1637,6 +1676,23 @@ fn err_with_details(code: &str, message: String, details: Option<Value>) -> RpcR
             message,
             details,
         }),
+    }
+}
+
+#[cfg(test)]
+mod log_redaction_tests {
+    use super::rpc_error_log_fields;
+
+    #[test]
+    fn rpc_error_log_fields_carry_the_code_and_not_a_logical_path() {
+        let canary = "CANARY-merger-filename.xlsx";
+        let shown = upriv_core::UprivError::VaultPathNotFound(canary.into()).to_string();
+        assert!(shown.contains(canary), "{shown}");
+        let fields = rpc_error_log_fields("vault_path_not_found");
+        assert_eq!(fields, [("code", "vault_path_not_found")]);
+        let rendered = format!("{fields:?}");
+        assert!(!rendered.contains(canary));
+        assert!(!rendered.contains("message"));
     }
 }
 
@@ -1678,9 +1734,37 @@ mod contract_tests {
         "vault_create",
         "vault_open",
         "vault_close",
+        "vault_export_capabilities",
         "vault_config_get",
         "vault_config_save",
         "vault_rename",
+        "vault_delete",
+        "vault_recover_ack",
+        "vault_export",
+        "vault_export_probe",
+        "vault_import_zip",
+        "vault_import_7z",
+        "vault_import_probe",
+        "vault_fs_list",
+        "vault_fs_revision",
+        "vault_fs_read",
+        "vault_fs_read_range",
+        "vault_fs_write",
+        "vault_fs_write_range",
+        "vault_fs_import_os_file",
+        "vault_fs_truncate",
+        "vault_fs_mkdir",
+        "vault_fs_create_file",
+        "vault_fs_create_folder",
+        "vault_fs_ensure_folder",
+        "vault_fs_delete",
+        "vault_fs_rename",
+        "vault_fs_os_path",
+        "vault_fs_move",
+        "backup_list",
+        "backup_delete",
+        "backup_promote",
+        "backup_get",
     ];
 
     #[test]

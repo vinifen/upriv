@@ -77,42 +77,19 @@ const MOCK_BY_VAULT: Record<string, VaultSettingsOverrides> = {
       id: "cold-storage",
     },
   },
-  "finance-2025": {
+  "personal-photos": {
     vault: {
-      display_name: "Finance 2025",
-      order: 7,
-      password_hint: "Q4 spreadsheet",
-      note: "",
-      hidden: true,
-      id: "finance-2025",
+      display_name: "Personal Photos",
+      order: 4,
+      note: "RAW exports only; JPEG previews live elsewhere.",
+      id: "personal-photos",
     },
-    backup: { enabled: true, mode: "keep_last", keep_last: 5 },
   },
-  "travel-planner": {
+  "work-documents": {
     vault: {
-      display_name: "Travel Planner",
-      order: 10,
-      id: "travel-planner",
-    },
-    auto_close: { enabled: true, idle_minutes: 3, warn_before_seconds: 30 },
-  },
-  "upriv-plain-demo": {
-    vault: {
-      display_name: "Upriv Plain Demo",
-      order: 17,
-      note: "Ciphertext in contents/ when closed; plaintext workspace/ while open.",
-      id: "upriv-plain-demo",
-    },
-    storage: { mode: "upriv_plain" },
-  },
-  "old-archive": {
-    vault: {
-      display_name: "Old Archive",
-      order: 6,
-      password_hint: "",
-      note: "",
-      hidden: true,
-      id: "old-archive",
+      display_name: "Work Documents",
+      order: 5,
+      id: "work-documents",
     },
   },
 };

@@ -97,11 +97,11 @@ export function FileTreePanel({ fm, layout, splitExtent }: FileTreePanelProps) {
 
   const entries = useMemo(() => {
     const out: FlatEntry[] = [];
-    if (fm.tree.type === "folder") {
-      walkExpanded(fm.tree, "/", 0, workspace.expandedPaths, out);
+    if (fm.displayTree.type === "folder") {
+      walkExpanded(fm.displayTree, "/", 0, workspace.expandedPaths, out);
     }
     return out;
-  }, [fm.tree, workspace.expandedPaths]);
+  }, [fm.displayTree, workspace.expandedPaths]);
 
   const dropViewsRef = useRef(new Map<string, View>());
   const dropRectsRef = useRef(new Map<string, PageRect>());
@@ -174,7 +174,7 @@ export function FileTreePanel({ fm, layout, splitExtent }: FileTreePanelProps) {
       dwellTimerRef.current = setTimeout(() => {
         dwellTimerRef.current = null;
         if (dropTargetRef.current === next && dragSourceRef.current) {
-          dispatch({ type: "expand_folder", path: next });
+          dispatch({ type: "expand_folder", path: next, force: true });
         }
       }, FILE_MANAGER_DROP_EXPAND_MS);
     },
@@ -258,6 +258,7 @@ export function FileTreePanel({ fm, layout, splitExtent }: FileTreePanelProps) {
       await fm.importFiles(createTargetPath(fm), result.files, {
         openFirstViewable: true,
         skippedUnsupported: result.skippedUnsupported,
+        releaseSafTree: result.releaseSafTree,
       });
     } catch (error) {
       if (error instanceof FolderPickerUnavailableError) {
@@ -286,6 +287,9 @@ export function FileTreePanel({ fm, layout, splitExtent }: FileTreePanelProps) {
       dirtyPaths: workspace.dirtyPaths,
       sessionCreatedPaths: workspace.sessionCreatedPaths,
       sessionModifiedPaths: workspace.sessionModifiedPaths,
+      importBusy: fm.importBusy,
+      importTimedOut: fm.importTimedOut,
+      displayTree: fm.displayTree,
     }),
     [
       workspace.dragSourcePath,
@@ -297,6 +301,9 @@ export function FileTreePanel({ fm, layout, splitExtent }: FileTreePanelProps) {
       workspace.dirtyPaths,
       workspace.sessionCreatedPaths,
       workspace.sessionModifiedPaths,
+      fm.importBusy,
+      fm.importTimedOut,
+      fm.displayTree,
     ],
   );
   const rootDropActive = workspace.dropTargetPath === ROOT_DROP_KEY;
@@ -362,6 +369,7 @@ export function FileTreePanel({ fm, layout, splitExtent }: FileTreePanelProps) {
         onDragCancel={clearDrag}
         onActivate={() => {
           if (isRenaming || isDragging) return;
+          if (fm.isImportWalkPlaceholder(item.path) || fm.isImportQueueSlot(item.path)) return;
           if (isFolder) {
             dispatch({ type: "toggle_folder", path: item.path });
             return;
@@ -434,6 +442,16 @@ export function FileTreePanel({ fm, layout, splitExtent }: FileTreePanelProps) {
             }}
             style={styles.toolBtn}
           />
+          {fm.importTimedOut ? (
+            <IconButton
+              label={t("action.retry")}
+              icon="refresh"
+              size={14}
+              tone="muted"
+              onPress={fm.retryImport}
+              style={styles.toolBtn}
+            />
+          ) : null}
         </View>
       </View>
       <View
@@ -519,6 +537,11 @@ function FileTreeRow({
   >();
   const renameError = isRenaming ? liveFileNameError(renameValue) : null;
   const parentForCreate = isFolder ? path : getParentPath(path);
+  const isPending = fm.isImportPending(path);
+  const isPendingTimedOut = fm.isImportTimedOut(path);
+  const isWalkPlaceholder = fm.isImportWalkPlaceholder(path);
+  const isQueueSlot = fm.isImportQueueSlot(path);
+  const isProcessing = fm.isImportProcessing(path) || isWalkPlaceholder || isQueueSlot;
 
   const setDropRef = useCallback(
     (node: View | null) => {
@@ -616,7 +639,13 @@ function FileTreeRow({
   );
 
   const onTouchStart = (event: GestureResponderEvent) => {
-    if (callbacksRef.current.isRenaming || callbacksRef.current.dragActive) return;
+    if (
+      callbacksRef.current.isRenaming ||
+      callbacksRef.current.dragActive ||
+      isPending ||
+      isQueueSlot
+    )
+      return;
     const { pageX, pageY } = event.nativeEvent;
     touchStartRef.current = { x: pageX, y: pageY };
     armedRef.current = false;
@@ -696,7 +725,15 @@ function FileTreeRow({
         {
           paddingLeft: depth * DEPTH_INDENT + 2,
           backgroundColor: isSelected ? selectedBg : "transparent",
-          opacity: isDragging ? 0.5 : 1,
+          opacity: isDragging
+            ? 0.5
+            : isPending && isPendingTimedOut
+              ? 0.6
+              : isProcessing
+                ? 0.75
+                : isPending
+                  ? 0.45
+                  : 1,
         },
       ]}
     >
@@ -781,20 +818,36 @@ function FileTreeRow({
           </View>
         ) : (
           <View style={styles.nameRow}>
-            <Text
-              style={[
-                styles.rowName,
-                { color: isSelected ? colors.onSurface : colors.onSurfaceVariant },
-              ]}
-              numberOfLines={1}
-            >
-              {name}
-            </Text>
+            {isQueueSlot ? (
+              <Text
+                style={[styles.rowName, { color: colors.onSurfaceVariant, fontStyle: "italic" }]}
+                numberOfLines={1}
+              >
+                {t("modal.file_manager.import.folder_pending")}
+              </Text>
+            ) : isWalkPlaceholder ? (
+              <View
+                style={[
+                  styles.skeletonBar,
+                  { backgroundColor: colors.onSurfaceVariant, opacity: 0.2 },
+                ]}
+              />
+            ) : (
+              <Text
+                style={[
+                  styles.rowName,
+                  { color: isSelected ? colors.onSurface : colors.onSurfaceVariant },
+                ]}
+                numberOfLines={1}
+              >
+                {name}
+              </Text>
+            )}
             {isDirty ? <View style={styles.dirtyDot} /> : null}
           </View>
         )}
       </View>
-      {!isRenaming && !dragActive ? (
+      {!isRenaming && !dragActive && !isPending && !isQueueSlot ? (
         // No “open in terminal” on mobile — desktop-only (SDD §9.5).
         <DropdownPanel
           label={name}
@@ -839,7 +892,9 @@ function FileTreeRow({
           <MenuActionItem
             icon="file-manager"
             label={t("modal.file_manager.context.open_system")}
-            onPress={() => fm.showMockToast("open_system")}
+            onPress={() => {
+              void fm.openInSystemFileManager(path);
+            }}
           />
           <MenuActionItem
             icon="trash"
@@ -914,6 +969,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 6,
   },
+  skeletonBar: { height: 10, width: 96, borderRadius: 4 },
   renameWrap: { flex: 1, minWidth: 0 },
   renameError: { marginTop: 2, fontSize: 10, lineHeight: 13 },
   dirtyDot: {

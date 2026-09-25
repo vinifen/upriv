@@ -7,7 +7,7 @@
 **Status:** Approved direction (replaces Flutter mobile stack in SDD §9.1)  
 **Companion:** `prd.md`, `sdd.md`
 
-> **Rest layout, storage modes, backups, and export:** [`.agent/SECURITY-CRYPTO.md`](../../.agent/SECURITY-CRYPTO.md). Rest = `contents/`; lock = close (flush the session); `7zz` only for **export `.7z`**.
+> **Rest layout, storage modes, backups, and export:** [`.agent/SECURITY-CRYPTO.md`](../../.agent/SECURITY-CRYPTO.md). Rest = `store/`; lock = close (flush the session); portable `.7z` is packed **in RAM** (`sevenz-rust2`).
 
 ---
 
@@ -52,7 +52,7 @@ Single crate, compiled per target triple:
 | RAM session, `zeroize` passwords | `upriv-core` |
 | Crypto (Argon2id + XChaCha20-Poly1305) | `upriv-core` |
 | Disk / SAF via `VaultStorage` trait | `upriv-core` |
-| `7zz` spawn for **export `.7z` only** (stream logical content; no plaintext temp tree) | `upriv-core` |
+| In-process `.7z` pack/unpack in RAM (`sevenz-rust2`; fail if RAM is insufficient) | `upriv-core` |
 | Vault state machine (`open` / `closed`) | `upriv-core` |
 | Recovery, manifest, lockfile | `upriv-core` |
 | FUSE mount (Linux desktop) | `upriv-core` + platform module |
@@ -146,13 +146,11 @@ One **native executable** per OS/architecture. Bundled inside or beside it:
 - Chromium shell (Electron)
 - Compiled frontend assets (`renderer-out/` → bundled as `renderer/`)
 - `upriv-daemon` sidecar + `upriv-core`
-- `7zz` for the target triple (**export `.7z` only** — close flushes `contents/`)
+- Portable `.7z` via `sevenz-rust2` inside `upriv-core` (no bundled `7zz`). Close flushes `store/`
 
 **Validated builds (2026-07-03):**
 
 - Linux: `dev/target/release/bundle/electron/Upriv-*.AppImage` (portable), `upriv-electron_*.deb` (system install)
-
-**Current scaffold (not yet bundled):** per-target `7zz` binary in `extraResources` — add when **export `.7z`** RPC lands in `upriv-core`.
 
 Build commands: see `dev/README.md` and `dev/apps/desktop/README.md`.
 
@@ -163,7 +161,7 @@ Build commands: see `dev/README.md` and `dev/apps/desktop/README.md`.
 - React Native (JS bundle + native views)
 - Bridge (Expo module + UniFFI)
 - `libupriv_ffi.so` (arm64-v8a / armeabi-v7a / x86_64) — links `upriv-rpc` + `upriv-core` as rlibs
-- `7zz` (`arm64-v8a`, `jniLibs` or assets) for **export `.7z`**
+- Portable `.7z` via `sevenz-rust2` inside `libupriv_ffi.so` (no bundled `7zz`)
 
 There is **no standalone `.exe` on Android** — the user installs one app icon; Rust is a native library inside the APK.
 
@@ -266,8 +264,8 @@ See SDD §9.4 for Android SAF flow.
 | ADR-05 | Desktop UI (rejected) | ~~React Native desktop for Linux~~ | No official stable RN for Linux; Electron is the desktop path |
 | ADR-06 | Core | Single `upriv-core` crate | One implementation of crypto, 7z, states; compile to `.so`/`.dll`/linked exe per target |
 | ADR-07 | Security boundary | UI = presentation; Rust = secrets + I/O | Minimize attack surface in JS; passwords never persisted in UI layer |
-| ADR-08 | Android packaging | Single APK | RN + UniFFI bridge + `libupriv_ffi.so` + `7zz` (export `.7z`) in one installable package |
-| ADR-09 | Desktop packaging | Single executable per OS/arch | Electron + `upriv-daemon`; `7zz` embedded for export `.7z` |
+| ADR-08 | Android packaging | Single APK | RN + UniFFI bridge + `libupriv_ffi.so` (`sevenz-rust2` for export `.7z`) in one installable package |
+| ADR-09 | Desktop packaging | Single executable per OS/arch | Electron + `upriv-daemon`; `.7z` export is in-process in `upriv-core` |
 | ADR-10 | RN on Windows/macOS desktop | Not planned | Desktop stays React web + Electron; avoids duplicate desktop stacks |
 
 ---
@@ -286,11 +284,11 @@ See SDD §9.4 for Android SAF flow.
 
 ## 9. Implementation order
 
-1. Implement **`dev/crates/upriv-core/`** (`contents/` crypto, open/close flush, export `.zip` / `.7z`).
+1. Implement **`dev/crates/upriv-core/`** (`store/` crypto, open/close flush, export `.zip` / `.7z`).
 2. Implement **`VaultStorage`** (desktop `std::fs` first).
 3. Wire RPC handlers in `upriv-rpc` (shared by `upriv-daemon` + `upriv-ffi`) to `upriv-core` only.
 4. **`dev/apps/shared/`** (`@upriv/shared`) — domain types, service interfaces, and UI locale catalogs (`locales/`).
-5. Complete desktop v1 (Linux FUSE + Windows WinFsp, open/close into `contents/`).
+5. Complete desktop v1 (Linux FUSE + Windows WinFsp, open/close into `store/`).
 6. **`dev/apps/mobile/`** — native module → `upriv-core` (JNI / UniFFI).
 7. Android: SAF adapter, APK packaging, OTG flows (PRD §3.6).
 

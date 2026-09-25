@@ -23,6 +23,8 @@ interface VaultBackupsModalProps {
   open: boolean;
   onClose: () => void;
   onCreateVaultFromBackup?: (stamp: string) => void;
+  /** List-level toast so a download can finish after this modal closes. */
+  onDownloadNotice?: (message: string) => void;
 }
 
 function matchesDeleteConfirmation(input: string, count: number, vaultId: string): boolean {
@@ -36,6 +38,7 @@ export function VaultBackupsModal({
   open,
   onClose,
   onCreateVaultFromBackup,
+  onDownloadNotice,
 }: VaultBackupsModalProps) {
   const { locale, t } = useTranslation();
   const { colors, typography } = useTheme();
@@ -149,22 +152,30 @@ export function VaultBackupsModal({
 
   const handleDownload = () => {
     const targets = someSelected ? backups.filter((entry) => selected.has(entry.stamp)) : backups;
-    if (targets.length === 0) return;
-    void shareBackupsZip(targets, t("modal.backup.download_zip_name", { id: vault.id }), (entry) =>
-      backupService.getBackupBytes(entry),
-    ).catch((err) => {
-      showToast(t(mobileErrorI18nKey(err, "modal.backup.load_failed")));
-    });
+    startDownload(targets);
   };
 
   const handleDownloadOne = (stamp: string) => {
     const entry = backups.find((item) => item.stamp === stamp);
     if (!entry) return;
-    void shareBackupsZip([entry], t("modal.backup.download_zip_name", { id: vault.id }), (item) =>
-      backupService.getBackupBytes(item),
-    ).catch((err) => {
-      showToast(t(mobileErrorI18nKey(err, "modal.backup.load_failed")));
-    });
+    startDownload([entry]);
+  };
+
+  const startDownload = (targets: VaultBackupEntry[]) => {
+    if (!vault || targets.length === 0) return;
+    const vaultId = vault.id;
+    const notice = onDownloadNotice ?? showToast;
+    notice(t("toast.backup_download_started"));
+    void shareBackupsZip(targets, t("modal.backup.download_zip_name", { id: vaultId }), {
+      exportSnapshotsToPath: (stamps, destPath) =>
+        backupService.exportSnapshotsToPath(vaultId, stamps, destPath),
+    })
+      .then(() => {
+        notice(t("toast.backup_download_saved"));
+      })
+      .catch((err) => {
+        notice(t(mobileErrorI18nKey(err, "toast.backup_download_failed")));
+      });
   };
 
   return (

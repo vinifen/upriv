@@ -37,7 +37,7 @@ export type CreateVaultWizardAction =
   | { type: "nextRequested"; context: CreateVaultWizardContext }
   | { type: "submitRequested" }
   | { type: "importPasswordTestStarted" }
-  | { type: "importPasswordTestFinished"; ok: boolean }
+  | { type: "importPasswordTestFinished"; ok: boolean; unavailable?: boolean }
   | { type: "discardConfirmRequested" }
   | { type: "discardConfirmDismissed" }
   | { type: "draftDiscarded" }
@@ -136,7 +136,8 @@ export function createVaultWizardReducer(
         draft: {
           ...state.draft,
           passwordValidated: action.ok,
-          passwordTestFailed: !action.ok,
+          passwordTestFailed: !action.ok && !action.unavailable,
+          passwordProbeUnavailable: action.unavailable === true,
         },
       };
 

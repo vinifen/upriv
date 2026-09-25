@@ -9,6 +9,7 @@ import {
   isVaultDisplayStatusQuiet,
   listHasVaultBlockingDataFolderChange,
   listHasVaultBlockingWorkspaceClear,
+  resolveVaultDisplayStatus,
   resolveVaultListStatus,
   type VaultDisplayStatus,
   type VaultPipelineListStatus,
@@ -89,8 +90,12 @@ export function vaultConfigEditAllowed(
   pipeline: VaultPipelineListStatus = {},
 ): boolean {
   const gate = VAULT_CONFIG_EDIT_POLICY[target];
+  let vaultStatus = resolveVaultListStatus(row, pipeline);
+  if (vaultStatus === "queued" && resolveVaultDisplayStatus(row) === "open") {
+    vaultStatus = "closing";
+  }
   return configEditGateAllows(gate, {
-    vaultStatus: resolveVaultListStatus(row, pipeline),
+    vaultStatus,
     vaults: [row],
     pipeline,
   });

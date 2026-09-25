@@ -12,7 +12,7 @@ Thanks for taking the time. Upriv is a portable encrypted vault manager. You do 
 2. **Suggestion** — [idea template](https://github.com/vinifen/upriv/issues/new?template=2_suggestion.md).
 3. **Pull request** — fork (or a branch on this repo), work against **`develop`**, open a PR using the conventions below.
 
-Please write issues, commits, and PR text in **English**. The app UI is translated separately (`dev/docs/LOCALE.md`). Never paste passwords, vault contents, or raw `contents/` dumps. Crypto or plaintext-leak reports: [`SECURITY.md`](SECURITY.md).
+Please write issues, commits, and PR text in **English**. The app UI is translated separately (`dev/docs/LOCALE.md`). Never paste passwords, vault contents, or raw `store/` dumps. Crypto or plaintext-leak reports: [`SECURITY.md`](SECURITY.md).
 
 ## Development setup
 
@@ -44,6 +44,6 @@ Why this exists, if the subject is not enough.
 Types: `feat` `fix` `docs` `style` `refactor` `perf` `test` `chore` `infra` `revert` `release` `hotfix`  
 Scopes (optional): `core` `rpc` `daemon` `ffi` `desktop` `electron` `mobile` `shared` `docs` `ci`
 
-Open a PR into **`develop`**. Title matches the commit subject. Body: summary, related issue, two-box checklist ([template](.github/pull_request_template.md)).
+Open a PR into **`develop`**. Title matches the commit subject. Body: summary, related issue, two-box checklist ([template](.github/pull_request_template.md)). No editor footer (`Made with Cursor`, `Made with [Cursor](https://cursor.com)`, `Co-authored-by`, `Made-with`, `Generated-by`, `Assisted-by`). If one is appended after the PR is created, remove it before the PR is done.
 
 **Author of every commit is the human Git user** (`git config user.name` / `user.email`: local if set, else global). Tools and models are not authors or co-authors. Full rule: [`docs/gitflow/COMMITS.md`](docs/gitflow/COMMITS.md).

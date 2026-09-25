@@ -11,7 +11,7 @@ import {
 import { useTranslation } from "@/i18n";
 import { useErrorToast } from "@/hooks/useErrorToast";
 import { useVaultBackups } from "@upriv/shared/react";
-import { downloadBackupsZip } from "./downloadBackupsZip";
+import { pickBackupDownload } from "./downloadBackupsZip";
 
 const backupCheckboxClass =
   "h-4 w-4 shrink-0 rounded border-outline-variant/50 bg-surface-container-high text-accent focus:ring-accent/50";
@@ -21,6 +21,8 @@ interface VaultBackupsModalProps {
   open: boolean;
   onClose: () => void;
   onCreateVaultFromBackup?: (stamp: string) => void;
+  /** List-level toast so a download can finish after this modal closes. */
+  onDownloadNotice?: (message: string) => void;
 }
 
 function matchesDeleteConfirmation(input: string, count: number, vaultId: string): boolean {
@@ -34,6 +36,7 @@ export function VaultBackupsModal({
   open,
   onClose,
   onCreateVaultFromBackup,
+  onDownloadNotice,
 }: VaultBackupsModalProps) {
   const { locale, t } = useTranslation();
   const { showError, errorText } = useErrorToast();
@@ -147,26 +150,34 @@ export function VaultBackupsModal({
 
   const handleDownload = () => {
     const targets = someSelected ? backups.filter((entry) => selected.has(entry.stamp)) : backups;
-    if (targets.length === 0) return;
-    void downloadBackupsZip(
-      targets,
-      t("modal.backup.download_zip_name", { id: vault.id }),
-      (entry) => backupService.getBackupBytes(entry),
-    ).catch((error) => {
-      showError(error, "error.unexpected");
-    });
+    startDownload(targets);
   };
 
   const handleDownloadOne = (stamp: string) => {
     const entry = backups.find((item) => item.stamp === stamp);
     if (!entry) return;
-    void downloadBackupsZip(
-      [entry],
-      t("modal.backup.download_zip_name", { id: vault.id }),
-      (entry) => backupService.getBackupBytes(entry),
-    ).catch((error) => {
-      showError(error, "error.unexpected");
-    });
+    startDownload([entry]);
+  };
+
+  const startDownload = (targets: VaultBackupEntry[]) => {
+    if (!vault || targets.length === 0) return;
+    const vaultId = vault.id;
+    void pickBackupDownload(targets, t("modal.backup.download_zip_name", { id: vaultId }), {
+      getBackupBytes: (entry) => backupService.getBackupBytes(vaultId, entry),
+      exportSnapshotsToPath: (stamps, destPath) =>
+        backupService.exportSnapshotsToPath(vaultId, stamps, destPath),
+    })
+      .then((picked) => {
+        if (picked === "cancelled") return;
+        onDownloadNotice?.(t("toast.backup_download_started"));
+        return picked.write().then(() => {
+          onDownloadNotice?.(t("toast.backup_download_saved"));
+        });
+      })
+      .catch((error) => {
+        if (onDownloadNotice) onDownloadNotice(t("toast.backup_download_failed"));
+        else showError(error, "toast.backup_download_failed");
+      });
   };
 
   return (

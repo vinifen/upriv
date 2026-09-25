@@ -155,6 +155,24 @@ describe("vaultWorkspaceReducer", () => {
     expect(isPathDirty(state, "/b.md")).toBe(true);
   });
 
+  it("keeps a folder closed when import tries to expand it again", () => {
+    let state = vaultWorkspaceReducer(createDefaultWorkspaceState(), {
+      type: "expand_folder",
+      path: "/docs",
+    });
+    state = vaultWorkspaceReducer(state, { type: "toggle_folder", path: "/docs" });
+    expect(state.expandedPaths).not.toContain("/docs");
+    state = vaultWorkspaceReducer(state, { type: "expand_folder", path: "/docs" });
+    expect(state.expandedPaths).not.toContain("/docs");
+    state = vaultWorkspaceReducer(state, { type: "open_file", path: "/docs/a.md" });
+    expect(state.expandedPaths).not.toContain("/docs");
+    expect(state.openTabs).toEqual(["/docs/a.md"]);
+    state = vaultWorkspaceReducer(state, { type: "expand_folder", path: "/docs", force: true });
+    expect(state.expandedPaths).toContain("/docs");
+    state = vaultWorkspaceReducer(state, { type: "expand_folder", path: "/docs" });
+    expect(state.expandedPaths).toContain("/docs");
+  });
+
   it("toggles folder expansion without changing the selected path", () => {
     let state = createDefaultWorkspaceState();
     state = vaultWorkspaceReducer(state, { type: "open_file", path: "/a.md" });
@@ -322,6 +340,9 @@ describe("resolveUnsavedPrompt", () => {
     });
     expect(
       resolveUnsavedPrompt(createDefaultWorkspaceState(), { type: "dismiss_workspace" }),
+    ).toEqual({ type: "set_unsaved_prompt", prompt: null });
+    expect(
+      resolveUnsavedPrompt(createDefaultWorkspaceState(), { type: "import_in_progress" }),
     ).toEqual({ type: "set_unsaved_prompt", prompt: null });
   });
 });

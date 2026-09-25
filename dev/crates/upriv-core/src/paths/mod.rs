@@ -101,9 +101,12 @@ const LOGS_DIR_REL: &str = ".upriv/logs";
 const APP_DIR_REL: &str = ".upriv/app";
 const RUNTIME_DIR_REL: &str = ".upriv/runtime";
 
-/// Atomically write `bytes` to `path` (temp + `sync_all` + rename).
+/// On-disk vault body leaf: `vaults/<id>/store/` (`header/` + `index/` + `data/`).
+pub const STORE_DIR_NAME: &str = "store";
+
+/// Atomically write `bytes` to `path` (temp + `sync_all` + rename + parent fsync).
 /// On failure, best-effort removes the temp file.
-/// After rename, best-effort fsync of the parent directory on Unix.
+/// After rename, fsync the parent directory on Unix and return that error.
 ///
 /// Creates missing parent directories. Prefer
 /// [`write_bytes_atomic_existing_parent`] for vault-root `settings.toml` so a
@@ -137,12 +140,13 @@ fn write_bytes_atomic_inner(path: &Path, bytes: &[u8], create_parents: bool) -> 
         file.write_all(bytes)?;
         file.sync_all()?;
         std::fs::rename(&tmp, path)?;
-        // Best-effort: persist the directory entry after rename (Unix).
+        // The file body is durable before the rename. The directory entry is
+        // not, until the parent is synced. A failure here is a failed write:
+        // ignoring it reported success for a rename a crash could still drop.
         #[cfg(unix)]
         if let Some(parent) = path.parent() {
-            if let Ok(dir) = std::fs::File::open(parent) {
-                let _ = dir.sync_all();
-            }
+            let dir = std::fs::File::open(parent)?;
+            dir.sync_all()?;
         }
         Ok(())
     })();
@@ -234,13 +238,13 @@ impl VaultRoot {
         Ok(self.vault_dir(vault_id)?.join("persistence.json"))
     }
 
-    /// Vault body at rest: `vaults/<id>/contents/` (`vault.header` + index + chunks).
-    pub fn vault_contents_dir(&self, vault_id: &str) -> Result<PathBuf> {
-        Ok(self.vault_dir(vault_id)?.join("contents"))
+    /// Vault body at rest: `vaults/<id>/store/` (`header/` + index + chunks).
+    pub fn vault_store_dir(&self, vault_id: &str) -> Result<PathBuf> {
+        Ok(self.vault_dir(vault_id)?.join(STORE_DIR_NAME))
     }
 
     /// Suggested export filename only (`{display_name}.zip` or `.7z`).
-    /// Never a path under `vaults/<id>/` — a durable twin beside `contents/` is forbidden.
+    /// Never a path under `vaults/<id>/` — a durable twin beside `store/` is forbidden.
     /// Sanitizes path-illegal characters for the OS save dialog; does **not** change `display_name`.
     pub fn vault_suggested_export_filename(display_name: &str, seven_zip: bool) -> String {
         let name = sanitize_filename_base(display_name);
@@ -402,10 +406,10 @@ mod tests {
             .unwrap()
             .is_file());
         assert_eq!(
-            root.vault_contents_dir("my-encrypted-notes").unwrap(),
+            root.vault_store_dir("my-encrypted-notes").unwrap(),
             root.vault_dir("my-encrypted-notes")
                 .unwrap()
-                .join("contents")
+                .join(STORE_DIR_NAME)
         );
     }
 

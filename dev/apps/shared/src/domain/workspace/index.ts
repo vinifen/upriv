@@ -6,6 +6,7 @@ export {
 } from "./types";
 export {
   isAbsoluteFilesystemPath,
+  isAbsoluteOsFilesystemPath,
   isReservedUprivWorkspacePath,
   safTreeUriHasExtraSegment,
   needsWorkspaceSetupOnOpen,

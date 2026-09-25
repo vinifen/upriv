@@ -1,7 +1,7 @@
 import type { VaultRootResolveResult } from "./types";
 
 /**
- * Folder that contains `.upriv/` (`vaults/<id>/contents/`, `backups/`, `logs/`).
+ * Folder that contains `.upriv/` (`vaults/<id>/store/`, `backups/`, `logs/`).
  * Wire `rootPath` from `vault_root_resolve` is this folder — not `.upriv` itself.
  * Prefer a successful resolve; `fallback` is mock / last-resort only.
  */
@@ -40,34 +40,30 @@ export function vaultRootLogsDisplayPath(rootBase: string): string {
   return `${base}/.upriv/logs`;
 }
 
-function posixVaultStorePath(
-  rootBase: string,
-  vaultId: string,
-  leaf: "contents" | "backups",
-): string {
+function posixVaultStorePath(rootBase: string, vaultId: string, leaf: "store" | "backups"): string {
   const upriv = vaultRootUprivDisplayPath(rootBase);
   return `${upriv}/vaults/${vaultId}/${leaf}/`;
 }
 
 /**
  * Diagnostic paths for Vault Info.
- * POSIX vault-root → `{root}/.upriv/vaults/<id>/contents/`.
+ * POSIX vault-root → `{root}/.upriv/vaults/<id>/store/`.
  * SAF `content://` URIs are not joined as filesystem paths — Info shows the
  * tree URI plus the logical `.upriv/vaults/…` leaf.
  */
 export function vaultStoreDisplayPaths(
   rootBase: string,
   vaultId: string,
-): { contentsPath: string; backupsPath: string } {
+): { storePath: string; backupsPath: string } {
   const base = trimRootBase(rootBase);
   if (isSafContentUri(base)) {
     return {
-      contentsPath: `${base} · .upriv/vaults/${vaultId}/contents`,
+      storePath: `${base} · .upriv/vaults/${vaultId}/store`,
       backupsPath: `${base} · .upriv/vaults/${vaultId}/backups`,
     };
   }
   return {
-    contentsPath: posixVaultStorePath(base, vaultId, "contents"),
+    storePath: posixVaultStorePath(base, vaultId, "store"),
     backupsPath: posixVaultStorePath(base, vaultId, "backups"),
   };
 }

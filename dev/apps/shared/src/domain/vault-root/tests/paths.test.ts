@@ -29,7 +29,7 @@ describe("vaultRootContentorPath", () => {
 describe("vaultStoreDisplayPaths", () => {
   it("joins POSIX vault-root as {root}/.upriv/vaults/<id>/…", () => {
     expect(vaultStoreDisplayPaths("/data", "notes")).toEqual({
-      contentsPath: "/data/.upriv/vaults/notes/contents/",
+      storePath: "/data/.upriv/vaults/notes/store/",
       backupsPath: "/data/.upriv/vaults/notes/backups/",
     });
   });
@@ -37,7 +37,7 @@ describe("vaultStoreDisplayPaths", () => {
   it("does not POSIX-join SAF content URIs", () => {
     const uri = "content://com.android.externalstorage.documents/tree/primary%3AUpriv";
     expect(vaultStoreDisplayPaths(uri, "notes")).toEqual({
-      contentsPath: `${uri} · .upriv/vaults/notes/contents`,
+      storePath: `${uri} · .upriv/vaults/notes/store`,
       backupsPath: `${uri} · .upriv/vaults/notes/backups`,
     });
   });

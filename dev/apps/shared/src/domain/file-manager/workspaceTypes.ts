@@ -11,13 +11,20 @@ export interface FileDeleteTarget {
 }
 
 export type UnsavedPromptAction =
-  { type: "close_tab"; path: string } | { type: "dismiss_workspace" };
+  | { type: "close_tab"; path: string }
+  | { type: "dismiss_workspace" }
+  | { type: "import_in_progress" };
 
 /** VS Code-style explorer cue: created (green) outranks modified (accent). */
 export type SessionPathKind = "created" | "modified";
 
 export interface VaultWorkspaceState {
   expandedPaths: string[];
+  /**
+   * Folders the user collapsed. Import and other automatic expands skip these
+   * until the user opens the folder again. RAM-only; not written to the snapshot.
+   */
+  userCollapsedPaths: string[];
   openTabs: string[];
   activeTabPath: string | null;
   selectedPath: string | null;
@@ -47,6 +54,7 @@ export interface VaultWorkspaceState {
 export function createDefaultWorkspaceState(): VaultWorkspaceState {
   return {
     expandedPaths: ["/"],
+    userCollapsedPaths: [],
     openTabs: [],
     activeTabPath: null,
     selectedPath: null,

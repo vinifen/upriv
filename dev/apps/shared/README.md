@@ -66,4 +66,3 @@ cd dev/apps/desktop && npm install
 - React components, modals, RN shadow objects
 - Tailwind class maps (`logLevelClass`, `vaultStatusRowClass`)
 - Browser download (`downloadZip`), desktop RPC
-- Mocks (`apps/desktop/src/platform/mocks/`)

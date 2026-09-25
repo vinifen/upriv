@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   WORKSPACE_PATH_DEFAULT,
+  isAbsoluteFilesystemPath,
+  isAbsoluteOsFilesystemPath,
   isReservedUprivWorkspacePath,
   needsWorkspaceSetupOnOpen,
   normalizeMountWorkspacePath,
@@ -25,6 +27,14 @@ describe("workspace path validation", () => {
   it("accepts absolute global paths", () => {
     expect(validateWorkspaceGlobalPath("/home/u/Documents/Upriv")).toBeNull();
     expect(validateWorkspaceGlobalPath("C:\\Users\\u\\Upriv")).toBeNull();
+  });
+
+  it("treats SAF URIs as absolute for workspace, not for OS file import", () => {
+    const uri = "content://com.android.externalstorage.documents/tree/primary";
+    expect(isAbsoluteFilesystemPath(uri)).toBe(true);
+    expect(isAbsoluteOsFilesystemPath(uri)).toBe(false);
+    expect(isAbsoluteOsFilesystemPath("/tmp/Notes.zip")).toBe(true);
+    expect(isAbsoluteOsFilesystemPath("Notes.zip")).toBe(false);
   });
 
   it("blocks reserved .upriv children", () => {

@@ -10,7 +10,7 @@ note = "Private health documents"
 [storage]
 mode = "encrypted_dir"
 
-# Unlock RAM (Argon2id) lives in contents/vault.header — not in config.toml.
+# Unlock RAM (Argon2id) lives in store/vault.header — not in config.toml.
 # There is no [kdf] section here; upriv-core reads KDF params from the header.
 
 [backup]

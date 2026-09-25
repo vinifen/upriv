@@ -1,12 +1,21 @@
 import { useCallback } from "react";
 import { useTranslation } from "@/i18n";
 import { useFileManager } from "./FileManagerContext";
-import { hasUnsavedWorkspaceChanges } from "@upriv/shared";
+import {
+  fileManagerBlockingPrompt,
+  fileManagerDismissIntent,
+  isVaultCloseWritesLocked,
+  type VaultPipelineListStatus,
+} from "@upriv/shared";
 import { FileManagerDock } from "./shell/FileManagerDock";
 import { FileManagerModal } from "./shell/FileManagerModal";
 import { FileManagerWorkspace } from "./workspace/FileManagerWorkspace";
 
-export function FileManagerLayer() {
+export function FileManagerLayer({
+  pipelineListStatus = {},
+}: {
+  pipelineListStatus?: VaultPipelineListStatus;
+}) {
   const { t } = useTranslation();
   const {
     maximizedEntry,
@@ -40,17 +49,14 @@ export function FileManagerLayer() {
         return;
       }
 
-      if (hasUnsavedWorkspaceChanges(entry.workspace)) {
+      const prompt = fileManagerBlockingPrompt(fileManagerDismissIntent(entry));
+      if (prompt) {
         if (maximizedVaultId !== vaultId) {
           maximize(vaultId);
         }
-        if (entry.workspace.unsavedPrompt?.type === "dismiss_workspace") {
-          return;
+        if (entry.workspace.unsavedPrompt?.type !== prompt.type) {
+          dispatchWorkspace(vaultId, { type: "set_unsaved_prompt", prompt });
         }
-        dispatchWorkspace(vaultId, {
-          type: "set_unsaved_prompt",
-          prompt: { type: "dismiss_workspace" },
-        });
         return;
       }
 
@@ -61,28 +67,41 @@ export function FileManagerLayer() {
 
   return (
     <>
-      <FileManagerModal
-        open={maximizedEntry !== null}
-        title={maximizedEntry ? t("modal.file_manager.title") : ""}
-        contextTitle={maximizedEntry?.displayName}
-        titleIcon="file-manager"
-        suspendMinimize={suspendMinimize}
-        onMinimize={() => {
-          if (!maximizedEntry || suspendMinimize) return;
-          minimize(maximizedEntry.vaultId);
-        }}
-        onDismiss={() => {
-          if (maximizedEntry) requestDismiss(maximizedEntry.vaultId);
-        }}
-      >
-        {maximizedEntry ? (
-          <FileManagerWorkspace
-            key={maximizedEntry.vaultId}
-            entry={maximizedEntry}
-            onDismissConfirmed={() => handleDismissConfirmed(maximizedEntry.vaultId)}
-          />
-        ) : null}
-      </FileManagerModal>
+      {openEntries.length > 0 ? (
+        <FileManagerModal
+          open={maximizedEntry !== null}
+          keepMounted
+          title={maximizedEntry ? t("modal.file_manager.title") : ""}
+          contextTitle={maximizedEntry?.displayName}
+          titleIcon="file-manager"
+          suspendMinimize={suspendMinimize}
+          onMinimize={() => {
+            if (!maximizedEntry || suspendMinimize) return;
+            minimize(maximizedEntry.vaultId);
+          }}
+          onDismiss={() => {
+            if (maximizedEntry) requestDismiss(maximizedEntry.vaultId);
+          }}
+        >
+          {openEntries.map((entry) => {
+            const active = entry.vaultId === maximizedVaultId;
+            return (
+              <div
+                key={entry.vaultId}
+                hidden={!active}
+                className={active ? "flex min-h-0 flex-1 flex-col overflow-hidden" : "hidden"}
+              >
+                <FileManagerWorkspace
+                  entry={entry}
+                  active={active}
+                  writesLocked={isVaultCloseWritesLocked(entry.vaultId, pipelineListStatus)}
+                  onDismissConfirmed={() => handleDismissConfirmed(entry.vaultId)}
+                />
+              </div>
+            );
+          })}
+        </FileManagerModal>
+      ) : null}
       <FileManagerDock
         entries={openEntries}
         focusedVaultId={focusedVaultId}

@@ -1,6 +1,6 @@
 import type { VaultListItem } from "@upriv/shared";
 
-/** Demo vaults — same shape as desktop browser mocks. Mutated by create flows in mocks. */
+/** Expo Go seed vaults. Created vaults are tracked beside this list. */
 export const MOCK_VAULTS: VaultListItem[] = [
   {
     id: "my-encrypted-notes",

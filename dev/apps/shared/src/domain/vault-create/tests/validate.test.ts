@@ -15,20 +15,70 @@ describe("validateCreateVaultStep", () => {
     ).toEqual(["source_missing"]);
   });
 
-  it("refuses import source until copy RPC exists", () => {
+  it("requires an import file on the source step", () => {
+    expect(
+      validateCreateVaultStep(
+        "source",
+        createVaultDraftFixture([], { source: "import", importFileName: "" }),
+        [],
+      ),
+    ).toContain("import_file_missing");
     expect(
       validateCreateVaultStep(
         "source",
         createVaultDraftFixture([], { source: "import", importFileName: "backup.zip" }),
         [],
       ),
-    ).toContain("import_not_available");
+    ).toContain("import_file_missing");
     expect(
-      canSubmitCreateVault(
-        createVaultDraftFixture([], { source: "import", importFileName: "backup.zip" }),
+      validateCreateVaultStep(
+        "source",
+        createVaultDraftFixture([], {
+          source: "import",
+          importFileName: "backup.zip",
+          importFilePath: "/tmp/backup.zip",
+        }),
         [],
       ),
-    ).toBe(false);
+    ).not.toContain("import_file_missing");
+    expect(
+      validateCreateVaultStep(
+        "source",
+        createVaultDraftFixture([], {
+          source: "import",
+          importFileName: "backup.zip",
+          importFilePath: "content://com.android.externalstorage/document/zip",
+        }),
+        [],
+      ),
+    ).toContain("import_file_missing");
+    expect(
+      validateCreateVaultStep(
+        "source",
+        createVaultDraftFixture([], {
+          source: "import",
+          importKind: "backup",
+          importFileName: "20260528T120000",
+          importFilePath: "vaults/notes/backups/20260528T120000",
+        }),
+        [],
+      ),
+    ).not.toContain("import_file_missing");
+  });
+
+  it("allows backup import while other vaults stay open", () => {
+    expect(
+      validateCreateVaultStep(
+        "source",
+        createVaultDraftFixture([], {
+          source: "import",
+          importKind: "backup",
+          importFileName: "20260528T120000",
+          importFilePath: "vaults/notes/backups/20260528T120000",
+        }),
+        [],
+      ),
+    ).toEqual([]);
   });
 
   it("rejects duplicate vault id on identity step", () => {
@@ -97,6 +147,52 @@ describe("validateCreateVaultStep", () => {
         [],
       ),
     ).toContain("password_not_validated");
+  });
+
+  it("skips archive password for zip and backup imports", () => {
+    expect(
+      validateCreateVaultStep(
+        "password",
+        createVaultDraftFixture([], {
+          source: "import",
+          importKind: "file",
+          importFileName: "notes.zip",
+          password: "",
+          passwordValidated: false,
+        }),
+        [],
+      ),
+    ).toEqual([]);
+    expect(
+      validateCreateVaultStep(
+        "password",
+        createVaultDraftFixture([], {
+          source: "import",
+          importKind: "backup",
+          importFileName: "20260528T120000",
+          importFilePath: "vaults/notes/backups/20260528T120000",
+          password: "",
+          passwordValidated: false,
+        }),
+        [],
+      ),
+    ).toEqual([]);
+  });
+
+  it("surfaces probe-unavailable separately from a wrong archive password", () => {
+    expect(
+      validateCreateVaultStep(
+        "password",
+        createVaultDraftFixture([], {
+          source: "import",
+          importFileName: "notes.7z",
+          password: "secret",
+          passwordValidated: false,
+          passwordProbeUnavailable: true,
+        }),
+        [],
+      ),
+    ).toEqual(["import_probe_unavailable"]);
   });
 
   it("requires a group id when assigning to an existing group", () => {

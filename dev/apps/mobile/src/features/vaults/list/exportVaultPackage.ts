@@ -13,20 +13,31 @@ import {
   vaultExportFilename,
   type VaultExportFormat,
   type VaultExportRequest,
+  type VaultPathWriteResult,
   type VaultRow,
 } from "@upriv/shared";
+import { fsPathFromFileUri } from "@/lib/fileUri";
 
 /** Own cache subfolder so the sweep can never touch unrelated cached files. */
 const EXPORT_CACHE_DIR = "upriv-exports/";
 /** How long a staged export may linger before the next export sweeps it. */
 const EXPORT_CACHE_TTL_MS = 10 * 60 * 1000;
 
+export interface ExportVaultPackageFns {
+  getExportBytes: (vault: VaultRow, request: VaultExportRequest) => Promise<Uint8Array>;
+  exportToPath: (
+    vault: VaultRow,
+    request: VaultExportRequest,
+    destPath: string,
+  ) => Promise<VaultPathWriteResult>;
+}
+
 function exportMimeType(format: VaultExportFormat): string {
-  return format === "contents_zip" ? "application/zip" : "application/x-7z-compressed";
+  return format === "store_zip" ? "application/zip" : "application/x-7z-compressed";
 }
 
 function exportUti(format: VaultExportFormat): string {
-  return format === "contents_zip" ? "public.zip-archive" : "org.7-zip.7-zip-archive";
+  return format === "store_zip" ? "public.zip-archive" : "org.7-zip.7-zip-archive";
 }
 
 /**
@@ -57,26 +68,29 @@ async function sweepStaleExports(dir: string): Promise<void> {
   );
 }
 
+async function fileExists(uri: string): Promise<boolean> {
+  try {
+    const info = await getInfoAsync(uri);
+    return info.exists === true;
+  } catch {
+    return false;
+  }
+}
+
 /**
- * Write `{display_name}.zip` / `.7z` to app cache and open the system share sheet.
- * Bytes come from `upriv-core` (mock ciphertext today) — never a decrypted tree.
+ * Write `{display_name}.zip` / `.7z` in core (or mock bytes) then open the share sheet.
+ * Prefer `exportToPath` so the archive never crosses the JS bridge.
  *
  * `signal` is aborted when the caller's loading budget expires: an export that
  * outlived its overlay must not pop a share sheet over an unrelated screen.
- *
- * TODO: once `upriv-core` writes the package itself, take a native file path
- * instead of moving the whole vault through the JS bridge.
  */
 export async function exportVaultPackage(
   vault: VaultRow,
-  getExportBytes: (vault: VaultRow, request: VaultExportRequest) => Promise<Uint8Array>,
+  fns: ExportVaultPackageFns,
   request: VaultExportRequest,
   signal?: AbortSignal,
-): Promise<void> {
+): Promise<"written" | "cancelled"> {
   const filename = vaultExportFilename(vault.displayName, request.format);
-  const data = await getExportBytes(vault, request);
-  if (signal?.aborted) return;
-
   const root = cacheDirectory;
   if (!root) {
     throw new Error("cacheDirectory unavailable");
@@ -85,14 +99,26 @@ export async function exportVaultPackage(
   const dir = `${root}${EXPORT_CACHE_DIR}`;
   await makeDirectoryAsync(dir, { intermediates: true });
   await sweepStaleExports(dir);
-  if (signal?.aborted) return;
+  if (signal?.aborted) return "cancelled";
 
   const uri = `${dir}${filename}`;
-  await writeAsStringAsync(uri, fromByteArray(data), { encoding: EncodingType.Base64 });
+  const destPath = fsPathFromFileUri(uri);
+  let staged = false;
+  try {
+    await fns.exportToPath(vault, request, destPath);
+    staged = await fileExists(uri);
+  } catch {
+    staged = false;
+  }
+  if (!staged) {
+    const data = await fns.getExportBytes(vault, request);
+    if (signal?.aborted) return "cancelled";
+    await writeAsStringAsync(uri, fromByteArray(data), { encoding: EncodingType.Base64 });
+  }
 
   if (signal?.aborted) {
     await deleteAsync(uri, { idempotent: true }).catch(() => undefined);
-    return;
+    return "cancelled";
   }
 
   if (!(await isAvailableAsync())) {
@@ -103,4 +129,5 @@ export async function exportVaultPackage(
     UTI: exportUti(request.format),
     dialogTitle: filename,
   });
+  return "written";
 }

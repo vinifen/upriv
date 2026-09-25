@@ -1,7 +1,12 @@
-import { useEffect, useId, useState } from "react";
-import { Button, LoadingBudgetHint, Modal } from "@/components/ui";
-import { PolicyRadioOption, VaultSettingsSevenZipSection } from "@/components/settings";
-import { useLoadingBudget } from "@upriv/shared/react";
+import { useEffect, useId, useRef, useState } from "react";
+import { Button, LoadingBudgetHint, Modal, PasswordInput } from "@/components/ui";
+import {
+  PolicyRadioOption,
+  SettingsField,
+  settingsControlClass,
+  VaultSettingsSevenZipSection,
+} from "@/components/settings";
+import { useExportPasswordCheck, useLoadingBudget } from "@upriv/shared/react";
 import { useTranslation } from "@/i18n";
 import { useVaultService } from "@/platform/services";
 import { useErrorToast } from "@/hooks/useErrorToast";
@@ -38,15 +43,29 @@ export function ExportVaultModal({
   const { showError } = useErrorToast();
   const vaultService = useVaultService();
   const formatGroup = useId();
+  const passwordId = useId();
+  const passwordRef = useRef<HTMLInputElement>(null);
+  const focusPasswordRef = useRef(false);
   const [format, setFormat] = useState<VaultExportFormat>(DEFAULT_VAULT_EXPORT_FORMAT);
   const [sevenZip, setSevenZip] = useState<VaultSettingsConfig["seven_zip"]>(DEFAULT_SEVEN_ZIP);
-  // Live export = flush `contents/` + zip/.7z — same family as vaultRewrap. Mock finishes instantly.
+  const [password, setPassword] = useState("");
+  const [sevenZipAvailable, setSevenZipAvailable] = useState(false);
+  const passwordCheck = useExportPasswordCheck({
+    open: open && vault != null,
+    vaultId: vault?.id ?? null,
+    password,
+    probe: vaultService.probeExportPassword,
+    onProbeError: (error) => showError(error, "error.unexpected"),
+  });
+  // Live export = flush `store/` + zip/.7z — same family as vaultRewrap. Mock finishes instantly.
   const budget = useLoadingBudget(submitting, LOADING_BUDGET_MS.vaultExport);
 
   useEffect(() => {
     if (!open || !vault) return;
     setFormat(DEFAULT_VAULT_EXPORT_FORMAT);
     setSevenZip(DEFAULT_SEVEN_ZIP);
+    setPassword("");
+    setSevenZipAvailable(false);
     let cancelled = false;
     void vaultService
       .getSettings(vault.id)
@@ -58,6 +77,17 @@ export function ExportVaultModal({
         if (cancelled) return;
         showError(error, "error.unexpected");
       });
+    void vaultService
+      .exportCapabilities()
+      .then((caps) => {
+        if (cancelled) return;
+        setSevenZipAvailable(caps.sevenZip);
+        if (!caps.sevenZip) setFormat(DEFAULT_VAULT_EXPORT_FORMAT);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setSevenZipAvailable(false);
+      });
     return () => {
       cancelled = true;
     };
@@ -68,10 +98,29 @@ export function ExportVaultModal({
     onTimeout?.();
   }, [budget.timedOut, onTimeout, submitting]);
 
+  useEffect(() => {
+    if (!focusPasswordRef.current || format !== "seven_zip") return;
+    focusPasswordRef.current = false;
+    passwordRef.current?.focus();
+  }, [format]);
+
   if (!open || !vault) return null;
 
   const filenameKind = exportFilenameSanitizeKind(vault.displayName);
   const filename = vaultExportFilename(vault.displayName, format);
+  const sevenZipReady = format !== "seven_zip" || (sevenZipAvailable && passwordCheck.passwordOk);
+
+  const selectSevenZip = () => {
+    if (submitting || !sevenZipAvailable) return;
+    // The card is a label for the radio, so its click focuses that control after
+    // this handler. Defer until the password is enabled and that focus has landed.
+    if (format === "seven_zip") {
+      window.setTimeout(() => passwordRef.current?.focus(), 0);
+      return;
+    }
+    focusPasswordRef.current = true;
+    setFormat("seven_zip");
+  };
 
   return (
     <Modal
@@ -91,8 +140,14 @@ export function ExportVaultModal({
           <Button
             variant="primary"
             size="sm"
-            disabled={submitting}
-            onClick={() => onConfirm({ format, sevenZip })}
+            disabled={submitting || passwordCheck.checking || !sevenZipReady}
+            onClick={() =>
+              onConfirm({
+                format,
+                sevenZip,
+                password: format === "seven_zip" ? password : undefined,
+              })
+            }
           >
             {submitting ? t("vault.export.dialog.submitting") : t("vault.export.dialog.confirm")}
           </Button>
@@ -116,12 +171,12 @@ export function ExportVaultModal({
         <div role="radiogroup" className="grid gap-2">
           <PolicyRadioOption
             groupName={formatGroup}
-            value="contents_zip"
-            checked={format === "contents_zip"}
-            title={t("vault.export.option.contents_zip")}
-            description={t("vault.export.option.contents_zip_desc")}
+            value="store_zip"
+            checked={format === "store_zip"}
+            title={t("vault.export.option.store_zip")}
+            description={t("vault.export.option.store_zip_desc")}
             badge="recommended"
-            onSelect={() => setFormat("contents_zip")}
+            onSelect={() => setFormat("store_zip")}
             footer={
               <p className="text-xs leading-relaxed text-on-surface-variant">
                 {t("vault.export.dialog.zip_no_compression")}
@@ -133,15 +188,82 @@ export function ExportVaultModal({
             value="seven_zip"
             checked={format === "seven_zip"}
             title={t("vault.export.option.seven_zip")}
-            description={t("vault.export.option.seven_zip_desc")}
-            onSelect={() => setFormat("seven_zip")}
+            description={
+              sevenZipAvailable
+                ? t("vault.export.option.seven_zip_desc")
+                : t("vault.export.dialog.seven_zip_unavailable")
+            }
+            disabled={!sevenZipAvailable}
+            attention={format === "seven_zip" && !passwordCheck.passwordOk}
+            onSelect={selectSevenZip}
+            onCardPress={selectSevenZip}
             footer={
-              <VaultSettingsSevenZipSection
-                config={sevenZip}
-                disabled={format !== "seven_zip"}
-                embedded
-                onChange={(patch) => setSevenZip((current) => ({ ...current, ...patch }))}
-              />
+              <>
+                <SettingsField
+                  label={t("vault.export.dialog.seven_zip_password")}
+                  hint={t("vault.export.dialog.seven_zip_password_help")}
+                  htmlFor={passwordId}
+                >
+                  <PasswordInput
+                    ref={passwordRef}
+                    id={passwordId}
+                    value={password}
+                    autoComplete="new-password"
+                    disabled={submitting || passwordCheck.checking || format !== "seven_zip"}
+                    className={settingsControlClass}
+                    onKeyDown={(event) => {
+                      if (event.key !== "Enter" || passwordCheck.passwordOk) return;
+                      event.preventDefault();
+                      passwordCheck.check();
+                    }}
+                    onChange={(event) => {
+                      setPassword(event.target.value);
+                      passwordCheck.notePasswordEdited();
+                    }}
+                  />
+                </SettingsField>
+                {passwordCheck.passwordOk ? (
+                  <p className="mt-2 text-sm text-vault-open">
+                    {t("vault.export.dialog.seven_zip_password_ok")}
+                  </p>
+                ) : (
+                  <div className="mt-2 space-y-2">
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      disabled={submitting || format !== "seven_zip" || !passwordCheck.canCheck}
+                      onClick={() => passwordCheck.check()}
+                    >
+                      {passwordCheck.checking
+                        ? t("vault.export.dialog.seven_zip_password_checking")
+                        : t("vault.export.dialog.seven_zip_password_check")}
+                    </Button>
+                    {passwordCheck.passwordWrong ? (
+                      <p className="text-sm text-on-error-container">{t("error.wrong_password")}</p>
+                    ) : null}
+                    {passwordCheck.timedOut ? (
+                      <p className="text-sm text-on-error-container">
+                        {t("error.operation_timed_out")}
+                      </p>
+                    ) : null}
+                    {passwordCheck.checking && passwordCheck.budget.visible ? (
+                      <LoadingBudgetHint
+                        budgetMs={passwordCheck.budget.budgetMs}
+                        remainingMs={passwordCheck.budget.remainingMs}
+                      />
+                    ) : null}
+                  </div>
+                )}
+                <div className="mt-3">
+                  <VaultSettingsSevenZipSection
+                    config={sevenZip}
+                    disabled={format !== "seven_zip"}
+                    embedded
+                    onChange={(patch) => setSevenZip((current) => ({ ...current, ...patch }))}
+                  />
+                </div>
+              </>
             }
           />
         </div>

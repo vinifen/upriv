@@ -27,10 +27,28 @@ describe("absolutePathFromDroppedFile", () => {
     expect(absolutePathFromDroppedFile(file)).toBe("/tmp/vaults/a.7z");
   });
 
-  it("returns undefined when path is missing or blank", () => {
+  it("reads path from window.upriv.getPathForFile when File.path is missing", () => {
+    const previous = (globalThis as { window?: unknown }).window;
+    (globalThis as { window: { upriv: { getPathForFile: (file: File) => string } } }).window = {
+      upriv: { getPathForFile: () => "/tmp/dropped/Notes.zip" },
+    };
+    try {
+      expect(absolutePathFromDroppedFile(new File([], "Notes.zip"))).toBe("/tmp/dropped/Notes.zip");
+    } finally {
+      if (previous === undefined) {
+        delete (globalThis as { window?: unknown }).window;
+      } else {
+        (globalThis as { window: unknown }).window = previous;
+      }
+    }
+  });
+
+  it("returns undefined when path is missing, blank, or not an OS absolute path", () => {
     expect(absolutePathFromDroppedFile(new File([], "a.7z"))).toBeUndefined();
     const blank = Object.assign(new File([], "a.7z"), { path: "  " });
     expect(absolutePathFromDroppedFile(blank)).toBeUndefined();
+    const relative = Object.assign(new File([], "Notes.zip"), { path: "Notes.zip" });
+    expect(absolutePathFromDroppedFile(relative)).toBeUndefined();
   });
 });
 

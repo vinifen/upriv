@@ -12,7 +12,7 @@ function concatBytes(prefix: Uint8Array, rest: Uint8Array): Uint8Array {
 }
 
 /**
- * Mock export payload until `upriv-core` streams a zip of `contents/` or a logical `.7z`.
+ * Mock export payload until `upriv-core` streams a zip of `store/` or a logical `.7z`.
  * Magics differ per format so a “`.zip`” download is never a 7z signature.
  *
  * Import from `@upriv/shared/testing` — not the domain barrel.

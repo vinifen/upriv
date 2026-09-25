@@ -6,6 +6,11 @@ import type {
 
 export type { VaultPipelineKind };
 
+/** Outcome of `vault_close`. Close still succeeds if the optional close-backup copy fails. */
+export interface CloseVaultOutcome {
+  backupFailed: boolean;
+}
+
 /** Vault session password and open/close pipelines (mock or desktop → upriv-core). */
 export interface VaultLifecycleService {
   hasPasswordInSession(vaultId: string): boolean;
@@ -16,7 +21,10 @@ export interface VaultLifecycleService {
   readonly closingStepCount: number;
 
   runOpeningPipeline(vaultId: string, onStep: (stepIndex: number) => void): Promise<void>;
-  runClosingPipeline(vaultId: string, onStep: (stepIndex: number) => void): Promise<void>;
+  runClosingPipeline(
+    vaultId: string,
+    onStep: (stepIndex: number) => void,
+  ): Promise<CloseVaultOutcome>;
 
   /** Virtual mount path shown until the platform opens the OS file manager. */
   resolveWorkspacePath(

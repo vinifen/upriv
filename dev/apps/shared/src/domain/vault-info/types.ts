@@ -3,11 +3,12 @@ import type { VaultListItem } from "../vault-list";
 import type { KdfUnlockPreset, VaultSettingsConfig } from "../vault-settings";
 
 export interface VaultRuntimeStats {
-  openCount: number;
+  /** `null` when core does not report a counter (do not invent one). */
+  openCount: number | null;
   lastOpenedAt: string | null;
   sessionRamBytes: number | null;
-  contentsBytes: number;
-  logicalFileCount: number;
+  storeBytes: number | null;
+  logicalFileCount: number | null;
 }
 
 export interface VaultInfoSnapshot {
@@ -24,7 +25,7 @@ export interface VaultInfoSnapshot {
   workspacePath: string | null;
   /** True when the vault session is open (mount is live vs predicted). */
   workspacePathIsActive: boolean;
-  contentsPath: string;
+  storePath: string;
   backupsPath: string;
   locale: string;
 }

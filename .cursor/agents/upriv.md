@@ -11,7 +11,7 @@ Read **[`.agent/AGENT.md`](../../.agent/AGENT.md)** first — canonical product 
 
 **Info modals:** when product data shown in **Info** (⋮ / ⋯) changes, update `@upriv/shared` `domain/system-info` + `domain/vault-info` in the same task — [`.cursor/rules/info-modals-sync.mdc`](../../.cursor/rules/info-modals-sync.mdc).
 
-**Git:** [`.agent/GIT.md`](../../.agent/GIT.md) — commits, PRs, human-only authorship. Never credit the AI as author or co-author.
+**Git:** [`.agent/GIT.md`](../../.agent/GIT.md) — commits, PRs, human-only authorship. Never credit the AI as author or co-author. Never leave `Made with Cursor` or `Made with [Cursor](https://cursor.com)` on a PR; if it appears after create, delete it and read the body again.
 
 ## Stack (quick)
 

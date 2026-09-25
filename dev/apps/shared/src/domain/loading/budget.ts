@@ -18,7 +18,7 @@ export const LOADING_BUDGET_MS = {
   logs: 60_000,
   /**
    * Vault settings submit: password / KDF change rewraps `vault.header` and the
-   * key wrap in `contents/`, so a large vault can legitimately take minutes.
+   * key wrap in `store/`, so a large vault can legitimately take minutes.
    */
   vaultRewrap: 600_000,
   /**
@@ -30,14 +30,24 @@ export const LOADING_BUDGET_MS = {
   vaultCreate: 600_000,
   /**
    * Open/close pipeline progress (password modal if open + row hint; Argon2id
-   * unlock + flush into `contents/`). Not a full-screen overlay.
+   * unlock + flush into `store/`). Not a full-screen overlay.
    */
   vaultPipeline: 600_000,
   /**
-   * Export `{display_name}.zip` of `contents/` or portable `.7z` (flush + pack).
+   * Export `{display_name}.zip` of `store/` or portable `.7z` (flush + pack).
    * Same family as `vaultRewrap`. Keep invoke in sync when the export RPC lands.
    */
   vaultExport: 600_000,
+  /**
+   * In-app file manager import (OS drop / picker). Desktop streams the OS path
+   * in the daemon (`vault_fs_import_os_file`); explorer skeletons appear at the
+   * drop target immediately. Editor countdown only for the file currently
+   * being written (that write's `startedAt`), not queued siblings. 10 min
+   * ceiling for a stuck RPC — overlapping drops are separate sessions. Close
+   * and cancel stops queued files; the write already in flight still finishes.
+   * On write/RPC failure keep remaining skeletons and offer Retry.
+   */
+  vaultFsImport: 600_000,
   /**
    * Deep vault rename (`vault_rename`): folder + `[vault].id` + groups/`last_opened`
    * remap. Metadata-heavy, but keep a 2 min ceiling so a stuck rename cannot hang.
@@ -47,6 +57,11 @@ export const LOADING_BUDGET_MS = {
   default: 120_000,
   /** Settings Save / workspace path persist — keep in sync with `app_settings_save`. */
   settingsSave: 30_000,
+  /**
+   * Delete a closed or recovery vault (`vault_delete`): wipe key material, then
+   * remove the vault directory including backups. Not the 30s settings save.
+   */
+  vaultDelete: 600_000,
 } as const;
 
 /**

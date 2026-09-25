@@ -12,9 +12,11 @@ import { fileNameErrorI18nKey } from "../errorMessages";
 import {
   vaultFileLanguageFromPath,
   isVaultImportUnsupported,
+  isImportableBinaryPath,
   imageDataUrlFromBase64,
 } from "../language";
 import {
+  foldersToExpandForImportBatch,
   foldersToExpandOnImport,
   importPathSegments,
   resolveImportDestination,
@@ -186,31 +188,53 @@ describe("vaultFileLanguageFromPath", () => {
     ["/.env", "env"],
     ["/app.env.local", "env"],
     ["/notes.txt", "text"],
+    ["/clip.mp4", "binary"],
+    ["/song.mp3", "binary"],
+    ["/pack.zip", "binary"],
+    ["/data.bin", "binary"],
   ] as const)("%s → %s", (path, language) => {
     expect(vaultFileLanguageFromPath(path)).toBe(language);
   });
 
-  it("marks PDF as unsupported import and images as supported", () => {
-    expect(isVaultImportUnsupported("doc.pdf")).toBe(true);
+  it("does not gate import on file type; editor language stays binary for opaque files", () => {
+    expect(isVaultImportUnsupported("doc.pdf")).toBe(false);
+    expect(isVaultImportUnsupported("clip.mp4")).toBe(false);
+    expect(isVaultImportUnsupported("clip.mkv")).toBe(false);
+    expect(isVaultImportUnsupported("pack.zip")).toBe(false);
+    expect(isVaultImportUnsupported("pack.7z")).toBe(false);
+    expect(isVaultImportUnsupported("song.mp3")).toBe(false);
     expect(isVaultImportUnsupported("pic.png")).toBe(false);
+    expect(isImportableBinaryPath("doc.pdf")).toBe(true);
+    expect(isImportableBinaryPath("clip.mkv")).toBe(true);
+    expect(isImportableBinaryPath("note.txt")).toBe(false);
     expect(imageDataUrlFromBase64("AAAA", "pic.png")).toBe("data:image/png;base64,AAAA");
+  });
+
+  it("treats video MIME as binary even without an extension", () => {
+    expect(isImportableBinaryPath("clip", "video/x-matroska")).toBe(true);
+    expect(isVaultImportUnsupported("clip", "video/x-matroska")).toBe(false);
   });
 });
 
 describe("resolveImportDestination", () => {
-  it("creates nested folders then returns the file leaf", () => {
+  it("creates nested folders then returns the file leaf", async () => {
     const created: string[] = [];
-    const result = resolveImportDestination("vault-1", "/", "docs/a.md", (_id, parent, name) => {
-      created.push(`${parent}/${name}`);
-      return parent === "/" ? `/${name}` : `${parent}/${name}`;
-    });
+    const result = await resolveImportDestination(
+      "vault-1",
+      "/",
+      "docs/a.md",
+      (_id, parent, name) => {
+        created.push(`${parent}/${name}`);
+        return parent === "/" ? `/${name}` : `${parent}/${name}`;
+      },
+    );
     expect(result).toEqual({ parentPath: "/docs", fileName: "a.md" });
     expect(created).toEqual(["//docs"]);
   });
 
-  it("sanitizes OS-illegal segments instead of skipping the file", () => {
+  it("sanitizes OS-illegal segments instead of skipping the file", async () => {
     const created: string[] = [];
-    const result = resolveImportDestination(
+    const result = await resolveImportDestination(
       "v",
       "/",
       "Notes: 2026/file?.md",
@@ -223,16 +247,16 @@ describe("resolveImportDestination", () => {
     expect(created).toEqual(["Notes_ 2026"]);
   });
 
-  it("rewrites .. so import cannot walk out of the vault", () => {
-    const result = resolveImportDestination("v", "/", "../x.md", (_id, parent, name) => {
+  it("rewrites .. so import cannot walk out of the vault", async () => {
+    const result = await resolveImportDestination("v", "/", "../x.md", (_id, parent, name) => {
       return parent === "/" ? `/${name}` : `${parent}/${name}`;
     });
     expect(result).toEqual({ parentPath: "/folder", fileName: "x.md" });
   });
 
-  it("keeps double spaces in every segment when nothing is illegal", () => {
+  it("keeps double spaces in every segment when nothing is illegal", async () => {
     const created: string[] = [];
-    const result = resolveImportDestination(
+    const result = await resolveImportDestination(
       "v",
       "/",
       "Viagem  2026/fotos  raw/ok  file.md",
@@ -248,9 +272,9 @@ describe("resolveImportDestination", () => {
     expect(created).toEqual(["Viagem  2026", "fotos  raw"]);
   });
 
-  it("treats Windows backslashes as folder separators", () => {
+  it("treats Windows backslashes as folder separators", async () => {
     const created: string[] = [];
-    const result = resolveImportDestination(
+    const result = await resolveImportDestination(
       "v",
       "/",
       "docs\\Notes: 2026\\a.md",
@@ -261,6 +285,16 @@ describe("resolveImportDestination", () => {
     );
     expect(result).toEqual({ parentPath: "/docs/Notes_ 2026", fileName: "a.md" });
     expect(created).toEqual(["docs", "Notes_ 2026"]);
+  });
+});
+
+describe("foldersToExpandForImportBatch", () => {
+  it("opens each folder once", () => {
+    expect(foldersToExpandForImportBatch("/", ["a/b/c.md", "a/d.md", "e.md"])).toEqual([
+      "/",
+      "/a",
+      "/a/b",
+    ]);
   });
 });
 

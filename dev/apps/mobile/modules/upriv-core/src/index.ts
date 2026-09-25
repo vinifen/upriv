@@ -49,6 +49,12 @@ export type UprivCoreNativeModule = {
   safGetActiveUri(): string;
   /** Save the active SAF tree URI (empty string clears it). */
   safSetActiveUri(uri: string): void;
+  /**
+   * Open an existing OS path in the system Files app (Android).
+   * Encrypted vaults have no OS folder — only a live mount / `upriv_plain` path.
+   * Optional: Expo Go and older native builds omit this method.
+   */
+  revealInFileManager?(osPath: string): void;
 };
 
 /**

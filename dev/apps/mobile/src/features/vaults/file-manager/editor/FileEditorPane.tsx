@@ -1,4 +1,4 @@
-import { useMemo, useRef } from "react";
+import { useMemo, useRef, type ReactNode } from "react";
 import {
   Image,
   ScrollView,
@@ -10,6 +10,7 @@ import {
   type TextInputScrollEventData,
 } from "react-native";
 import { fileBaseName } from "@upriv/shared";
+import { Button, LoadingBudgetHint } from "@/components/ui";
 import { useTranslation } from "@/i18n";
 import { useTheme } from "@/theme";
 import { spacing } from "@/theme/tokens";
@@ -34,10 +35,12 @@ function lineCount(content: string): number {
 function EditorWithLineNumbers({
   content,
   ariaLabel,
+  readOnly = false,
   onChange,
 }: {
   content: string;
   ariaLabel: string;
+  readOnly?: boolean;
   onChange: (content: string) => void;
 }) {
   const { colors } = useTheme();
@@ -78,6 +81,7 @@ function EditorWithLineNumbers({
       <TextInput
         collapsable={false}
         value={content}
+        editable={!readOnly}
         onChangeText={onChange}
         onScroll={syncGutter}
         multiline
@@ -117,7 +121,15 @@ function ImagePreview({ src, ariaLabel }: { src: string; ariaLabel: string }) {
   );
 }
 
-function EmptyState({ kicker, body }: { kicker: string; body: string }) {
+function EmptyState({
+  kicker,
+  body,
+  children,
+}: {
+  kicker: string;
+  body: string;
+  children?: ReactNode;
+}) {
   const { colors, typography } = useTheme();
   return (
     <View style={[styles.empty, { backgroundColor: colors.surfaceContainerHigh }]}>
@@ -125,13 +137,28 @@ function EmptyState({ kicker, body }: { kicker: string; body: string }) {
         {kicker}
       </Text>
       <Text style={[typography.body, styles.body, { color: colors.onSurfaceVariant }]}>{body}</Text>
+      {children}
     </View>
   );
 }
 
 export function FileEditorPane({ fm }: FileEditorPaneProps) {
   const { t } = useTranslation();
-  const { workspace, dispatch, getEditorContent, isFileViewable, isFileImage } = fm;
+  const {
+    workspace,
+    dispatch,
+    getEditorContent,
+    fileLoadError,
+    isFileContentReady,
+    writesLocked,
+    isFileViewable,
+    isFileImage,
+    isImportPending,
+    isImportProcessing,
+    isImportTimedOut,
+    importBudget,
+    retryImport,
+  } = fm;
   const activeTabPath = workspace.activeTabPath;
 
   if (!activeTabPath) {
@@ -147,6 +174,77 @@ export function FileEditorPane({ fm }: FileEditorPaneProps) {
   const content = getEditorContent(activeTabPath);
   const isImage = isFileImage(activeTabPath);
   const viewable = isFileViewable(activeTabPath);
+  const loadError = fileLoadError(activeTabPath);
+  const importing = isImportPending(activeTabPath);
+  const processing = isImportProcessing(activeTabPath);
+
+  if (importing && isImportTimedOut(activeTabPath)) {
+    return (
+      <EmptyState
+        kicker={t("modal.file_manager.import.loading_kicker")}
+        body={t("loading.timed_out")}
+      >
+        <Button label={t("action.retry")} variant="primary" onPress={retryImport} />
+      </EmptyState>
+    );
+  }
+
+  if (importing && processing && importBudget.timedOut) {
+    return (
+      <EmptyState
+        kicker={t("modal.file_manager.import.loading_kicker")}
+        body={t("loading.timed_out")}
+      />
+    );
+  }
+
+  if (importing) {
+    return (
+      <EmptyState
+        kicker={t(
+          processing
+            ? "modal.file_manager.import.loading_kicker"
+            : "modal.file_manager.import.queued_kicker",
+        )}
+        body={
+          processing
+            ? t("modal.file_manager.import.loading_body")
+            : t("modal.file_manager.import.queued_body", { name: fileName })
+        }
+      >
+        {processing && importBudget.visible ? (
+          <LoadingBudgetHint
+            budgetMs={importBudget.budgetMs}
+            remainingMs={importBudget.remainingMs}
+          />
+        ) : null}
+      </EmptyState>
+    );
+  }
+
+  if (!isFileContentReady(activeTabPath)) {
+    return (
+      <EmptyState
+        kicker={t("modal.file_manager.viewer.loading_kicker")}
+        body={t("modal.file_manager.viewer.loading_body", { name: fileName })}
+      />
+    );
+  }
+
+  if (!viewable) {
+    return (
+      <EmptyState
+        kicker={t("modal.file_manager.viewer.preview_unavailable_kicker")}
+        body={t("modal.file_manager.viewer.preview_unavailable_body", { name: fileName })}
+      />
+    );
+  }
+
+  if (loadError) {
+    return (
+      <EmptyState kicker={t("modal.file_manager.viewer.read_failed_kicker")} body={loadError} />
+    );
+  }
 
   if (isImage) {
     if (!content) {
@@ -165,23 +263,16 @@ export function FileEditorPane({ fm }: FileEditorPaneProps) {
     );
   }
 
-  if (!viewable) {
-    return (
-      <EmptyState
-        kicker={t("modal.file_manager.viewer.preview_unavailable_kicker")}
-        body={t("modal.file_manager.viewer.preview_unavailable_body", { name: fileName })}
-      />
-    );
-  }
-
   return (
     <EditorWithLineNumbers
       key={activeTabPath}
       content={content}
       ariaLabel={t("modal.file_manager.viewer.editor_label", { name: fileName })}
-      onChange={(next) =>
-        dispatch({ type: "set_editor_draft", path: activeTabPath, content: next })
-      }
+      readOnly={writesLocked}
+      onChange={(next) => {
+        if (writesLocked) return;
+        dispatch({ type: "set_editor_draft", path: activeTabPath, content: next });
+      }}
     />
   );
 }

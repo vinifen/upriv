@@ -1,15 +1,15 @@
-//! Create a new vault directory + `config.toml` + seeded `contents/`.
+//! Create a new vault directory + `config.toml` + seeded `store/`.
 
 use std::io::ErrorKind;
 
 use crate::config::{save_vault_config, VaultConfig, VaultStorageMode};
-use crate::contents::{content_hash_hex, create_seeded_store, KdfUnlockPreset};
 use crate::error::{Result, UprivError};
 use crate::logging::{log_event, LogLevel};
 use crate::paths::VaultRoot;
 use crate::session::{
     with_unlock_lock, with_vault_dir_lock, with_vault_registry_lock, PreparingGuard,
 };
+use crate::store::{content_hash_hex, create_seeded_store, KdfUnlockPreset};
 
 use super::persistence::{save_vault_persistence, VaultPersistence};
 
@@ -46,15 +46,21 @@ pub fn create_vault(
         })
     })?;
     // After mkdir so `rename_vault` of this id refuses during Argon2 seed.
-    let _preparing = PreparingGuard::enter(&dest)?;
+    let _preparing = match PreparingGuard::enter(&dest) {
+        Ok(guard) => guard,
+        Err(error) => {
+            let _ = std::fs::remove_dir_all(&dest);
+            return Err(error);
+        }
+    };
     with_vault_dir_lock(&dest, || {
         let created: Result<()> = (|| {
             save_vault_config(&dest, &config)?;
-            let contents = dest.join("contents");
+            let store = dest.join(crate::paths::STORE_DIR_NAME);
             // Same process-wide Argon2 gate as `open_vault` — never two KDFs at once.
-            with_unlock_lock(|| create_seeded_store(&contents, password, preset))?;
+            with_unlock_lock(|| create_seeded_store(&store, password, preset))?;
             std::fs::create_dir_all(dest.join("backups"))?;
-            let hash = content_hash_hex(&contents)?;
+            let hash = content_hash_hex(&store)?;
             save_vault_persistence(
                 &dest,
                 &VaultPersistence::closed(

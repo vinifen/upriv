@@ -14,6 +14,14 @@ pub fn utc_timestamp_iso_millis() -> String {
     )
 }
 
+/// Unix epoch milliseconds — compact timestamp for encrypted structures.
+///
+/// The sealed index uses this instead of the ISO string in `persistence.json`:
+/// it is never read by a human and converts to `SystemTime` for mount `stat`.
+pub fn unix_millis() -> u64 {
+    unix_now().as_millis() as u64
+}
+
 /// Filename stamp `YYYYMMDDHHmmss` (UTC).
 pub fn utc_filename_stamp() -> String {
     let duration = unix_now();

@@ -89,8 +89,8 @@ pub fn save_vault_config_checked(vault_dir: impl AsRef<Path>, after: &VaultConfi
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::contents::KdfUnlockPreset;
     use crate::session::with_unlock_lock;
+    use crate::store::KdfUnlockPreset;
     use crate::test_support::vault_root_with;
     use crate::vault::{close_vault, create_vault, open_vault};
     use std::sync::mpsc;

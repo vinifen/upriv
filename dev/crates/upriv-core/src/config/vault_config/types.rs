@@ -4,9 +4,9 @@ use serde::{Deserialize, Serialize};
 
 /// Storage mode from `[storage] mode` (TS `StorageMode`).
 ///
-/// - `encrypted_dir` — default. Rest = `contents/`. While open: decrypt in RAM
+/// - `encrypted_dir` — default. Rest = `store/`. While open: decrypt in RAM
 ///   (FUSE/WinFsp on desktop; in-app file manager on mobile).
-/// - `upriv_plain` — rest = `contents/`. While open: plaintext under the open
+/// - `upriv_plain` — rest = `store/`. While open: plaintext under the open
 ///   mount folder on disk (wipe on close). Not app `[workspace].path`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]

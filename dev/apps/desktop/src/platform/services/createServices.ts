@@ -1,17 +1,10 @@
 import type { AppServices } from "@upriv/shared";
-import { isDesktop } from "@/lib/invoke";
 import { createDesktopServices } from "@/platform/desktop/createDesktopServices";
-import { mockServices } from "@/platform/mocks";
 
 /**
- * Platform service factory.
- *
- * Electron: live vault-root, settings, list, create, open/close, and groups.
- * Browser: full in-memory mocks (no `localStorage`; temporary until mocks are removed).
+ * Electron desktop services. Vault I/O goes through `upriv-daemon`.
+ * There is no in-memory vault list — open the UI from the Electron shell.
  */
 export function createServices(): AppServices {
-  if (isDesktop()) {
-    return createDesktopServices();
-  }
-  return mockServices;
+  return createDesktopServices();
 }

@@ -15,11 +15,17 @@ import {
   parseVaultRenameResult,
   parseVaultRootInspect,
   parseVaultRootResolve,
+  vaultImportProbeTimeoutMs,
+  bytesFromContentB64,
+  parsePathWriteResult,
+  type CloseVaultOutcome,
   type AllowlistedUiLogEvent,
   type AppLogFile,
   type AppSettingsConfig,
   type CreateVaultInput,
   type DefaultRootStatusResult,
+  type VaultBackupEntry,
+  type VaultExportRequest,
   type VaultGroup,
   type VaultGroupCreateInput,
   type VaultGroupListResult,
@@ -498,11 +504,19 @@ export async function rpcVaultOpen(id: string, password: string): Promise<void> 
   await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_OPEN, { id, password });
 }
 
-export async function rpcVaultClose(id: string, password?: string): Promise<void> {
-  await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_CLOSE, {
+export async function rpcVaultClose(id: string, password?: string): Promise<CloseVaultOutcome> {
+  const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_CLOSE, {
     id,
     password: password && isLifecyclePasswordPresent(password) ? password : undefined,
   });
+  return parseCloseVaultOutcome(raw);
+}
+
+function parseCloseVaultOutcome(raw: unknown): CloseVaultOutcome {
+  if (typeof raw !== "object" || raw === null) {
+    return { backupFailed: false };
+  }
+  return { backupFailed: (raw as { backupFailed?: unknown }).backupFailed === true };
 }
 
 export async function rpcVaultConfigGet(id: string): Promise<VaultSettingsConfig> {
@@ -524,4 +538,347 @@ export async function rpcVaultConfigSave(id: string, settings: VaultSettingsConf
 export async function rpcVaultRename(id: string, displayName: string): Promise<VaultRenameResult> {
   const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_RENAME, { id, displayName });
   return parseVaultRenameResult(raw);
+}
+
+function requireRecord(raw: unknown, label: string): Record<string, unknown> {
+  if (typeof raw !== "object" || raw === null) {
+    throw new RpcError(BRIDGE.INVALID_RESPONSE, `${label}: expected object`, raw);
+  }
+  return raw as Record<string, unknown>;
+}
+
+function requireRevision(raw: unknown, label: string): number {
+  const record = requireRecord(raw, label);
+  const revision = record.revision;
+  if (typeof revision !== "number" || !Number.isFinite(revision)) {
+    throw new RpcError(BRIDGE.INVALID_RESPONSE, `${label}: expected revision`, raw);
+  }
+  return revision;
+}
+
+function requirePathRevision(raw: unknown, label: string): { path: string; revision: number } {
+  const record = requireRecord(raw, label);
+  if (typeof record.path !== "string" || typeof record.revision !== "number") {
+    throw new RpcError(BRIDGE.INVALID_RESPONSE, `${label}: expected path+revision`, raw);
+  }
+  return { path: record.path, revision: record.revision };
+}
+
+function parseVaultResult(raw: unknown, label: string): VaultListItem {
+  const record = requireRecord(raw, label);
+  return parseVaultListItemWire(record.vault);
+}
+
+export async function rpcVaultDelete(id: string): Promise<void> {
+  await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_DELETE, { id });
+}
+
+export async function rpcVaultRecoverAck(id: string): Promise<void> {
+  await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_RECOVER_ACK, { id });
+}
+
+export async function rpcVaultExportCapabilities(): Promise<{ sevenZip: boolean }> {
+  const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_EXPORT_CAPABILITIES, {});
+  if (typeof raw !== "object" || raw === null) {
+    return { sevenZip: false };
+  }
+  return { sevenZip: (raw as { sevenZip?: unknown }).sevenZip === true };
+}
+
+export async function rpcVaultExportProbe(id: string, password: string): Promise<boolean> {
+  const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_EXPORT_PROBE, { id, password });
+  const record = requireRecord(raw, "vault_export_probe");
+  return record.ok === true;
+}
+
+export async function rpcVaultExport(id: string, request: VaultExportRequest): Promise<Uint8Array> {
+  const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_EXPORT, {
+    id,
+    format: request.format,
+    password: request.password,
+    sevenZip: request.sevenZip,
+  });
+  return bytesFromContentB64(raw);
+}
+
+export async function rpcVaultExportToPath(
+  id: string,
+  request: VaultExportRequest,
+  destPath: string,
+): Promise<{ path: string; size: number }> {
+  const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_EXPORT, {
+    id,
+    format: request.format,
+    password: request.password,
+    sevenZip: request.sevenZip,
+    destPath,
+  });
+  const written = parsePathWriteResult(raw);
+  if (!written) {
+    throw new RpcError(BRIDGE.INVALID_RESPONSE, "vault_export: expected path+size", raw);
+  }
+  return written;
+}
+
+export async function rpcVaultImportZip(input: CreateVaultInput): Promise<VaultListItem> {
+  const pkg = input.importPackage;
+  const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_IMPORT_ZIP, {
+    settings: input.settings,
+    archivePath: pkg?.archivePath,
+    contentB64: pkg?.contentB64,
+  });
+  return parseVaultResult(raw, "vault_import_zip");
+}
+
+export async function rpcVaultImport7z(input: CreateVaultInput): Promise<VaultListItem> {
+  const pkg = input.importPackage;
+  const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_IMPORT_7Z, {
+    settings: input.settings,
+    password: input.password,
+    unlockPreset: input.unlockPreset,
+    archivePath: pkg?.archivePath,
+    contentB64: pkg?.contentB64,
+    archivePassword: pkg?.archivePassword ?? input.password,
+  });
+  return parseVaultResult(raw, "vault_import_7z");
+}
+
+export async function rpcVaultImportProbe(params: {
+  archivePath?: string;
+  contentB64?: string;
+  archivePassword?: string;
+  kind?: string;
+}): Promise<{ ok: boolean; kind: string }> {
+  const raw = await nativeInvokeRaw(
+    CORE_RPC_COMMANDS.VAULT_IMPORT_PROBE,
+    params,
+    vaultImportProbeTimeoutMs(params),
+  );
+  const record = requireRecord(raw, "vault_import_probe");
+  return {
+    ok: record.ok === true,
+    kind: typeof record.kind === "string" ? record.kind : "store_zip",
+  };
+}
+
+export async function rpcVaultFsList(id: string): Promise<{ tree: unknown; revision: number }> {
+  const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_FS_LIST, { id });
+  const record = requireRecord(raw, "vault_fs_list");
+  return { tree: record.tree, revision: requireRevision(raw, "vault_fs_list") };
+}
+
+export async function rpcVaultFsRevision(id: string): Promise<number> {
+  return requireRevision(
+    await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_FS_REVISION, { id }),
+    "vault_fs_revision",
+  );
+}
+
+export async function rpcVaultFsRead(id: string, path: string): Promise<{ contentB64: string }> {
+  const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_FS_READ, { id, path });
+  const record = requireRecord(raw, "vault_fs_read");
+  if (typeof record.contentB64 !== "string") {
+    throw new RpcError(BRIDGE.INVALID_RESPONSE, "vault_fs_read: expected contentB64", raw);
+  }
+  return { contentB64: record.contentB64 };
+}
+
+export async function rpcVaultFsWrite(
+  id: string,
+  path: string,
+  contentB64: string,
+): Promise<number> {
+  return requireRevision(
+    await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_FS_WRITE, { id, path, contentB64 }),
+    "vault_fs_write",
+  );
+}
+
+export async function rpcVaultFsReadRange(
+  id: string,
+  path: string,
+  offset: number,
+  len: number,
+): Promise<{ contentB64: string }> {
+  const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_FS_READ_RANGE, {
+    id,
+    path,
+    offset,
+    len,
+  });
+  const record = requireRecord(raw, "vault_fs_read_range");
+  if (typeof record.contentB64 !== "string") {
+    throw new RpcError(BRIDGE.INVALID_RESPONSE, "vault_fs_read_range: expected contentB64", raw);
+  }
+  return { contentB64: record.contentB64 };
+}
+
+export async function rpcVaultFsWriteRange(
+  id: string,
+  path: string,
+  offset: number,
+  contentB64: string,
+): Promise<number> {
+  return requireRevision(
+    await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_FS_WRITE_RANGE, {
+      id,
+      path,
+      offset,
+      contentB64,
+    }),
+    "vault_fs_write_range",
+  );
+}
+
+export async function rpcVaultFsImportOsFile(
+  id: string,
+  parentPath: string,
+  name: string,
+  osPath: string,
+): Promise<{ path: string; revision: number }> {
+  return requirePathRevision(
+    await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_FS_IMPORT_OS_FILE, {
+      id,
+      parentPath,
+      name,
+      osPath,
+    }),
+    "vault_fs_import_os_file",
+  );
+}
+
+export async function rpcVaultFsTruncate(id: string, path: string, size: number): Promise<number> {
+  return requireRevision(
+    await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_FS_TRUNCATE, { id, path, size }),
+    "vault_fs_truncate",
+  );
+}
+
+export async function rpcVaultFsCreateFile(
+  id: string,
+  parentPath: string,
+  name: string,
+): Promise<{ path: string; revision: number }> {
+  return requirePathRevision(
+    await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_FS_CREATE_FILE, { id, parentPath, name }),
+    "vault_fs_create_file",
+  );
+}
+
+export async function rpcVaultFsCreateFolder(
+  id: string,
+  parentPath: string,
+  name: string,
+): Promise<{ path: string; revision: number }> {
+  return requirePathRevision(
+    await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_FS_CREATE_FOLDER, { id, parentPath, name }),
+    "vault_fs_create_folder",
+  );
+}
+
+export async function rpcVaultFsEnsureFolder(
+  id: string,
+  parentPath: string,
+  name: string,
+): Promise<{ path: string; revision: number }> {
+  return requirePathRevision(
+    await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_FS_ENSURE_FOLDER, { id, parentPath, name }),
+    "vault_fs_ensure_folder",
+  );
+}
+
+export async function rpcVaultFsDelete(id: string, path: string): Promise<number> {
+  return requireRevision(
+    await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_FS_DELETE, { id, path }),
+    "vault_fs_delete",
+  );
+}
+
+export async function rpcVaultFsRename(
+  id: string,
+  path: string,
+  newName: string,
+): Promise<{ path: string; revision: number }> {
+  return requirePathRevision(
+    await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_FS_RENAME, { id, path, newName }),
+    "vault_fs_rename",
+  );
+}
+
+export async function rpcVaultFsMove(
+  id: string,
+  fromPath: string,
+  toFolderPath: string,
+): Promise<{ path: string; revision: number }> {
+  return requirePathRevision(
+    await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_FS_MOVE, { id, fromPath, toFolderPath }),
+    "vault_fs_move",
+  );
+}
+
+export async function rpcVaultFsOsPath(id: string, path: string): Promise<{ osPath: string }> {
+  const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_FS_OS_PATH, { id, path });
+  const record = requireRecord(raw, "vault_fs_os_path");
+  if (typeof record.osPath !== "string" || !record.osPath.trim()) {
+    throw new RpcError(BRIDGE.INVALID_RESPONSE, "vault_fs_os_path: expected osPath", raw);
+  }
+  return { osPath: record.osPath };
+}
+
+function parseBackupEntry(raw: unknown): VaultBackupEntry {
+  const record = requireRecord(raw, "backup");
+  return {
+    stamp: typeof record.stamp === "string" ? record.stamp : "",
+    createdAt: typeof record.createdAt === "string" ? record.createdAt : "",
+    sizeBytes: typeof record.sizeBytes === "number" ? record.sizeBytes : undefined,
+    saved: record.saved === true,
+  };
+}
+
+export async function rpcBackupList(id: string): Promise<VaultBackupEntry[]> {
+  const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.BACKUP_LIST, { id });
+  const record = requireRecord(raw, "backup_list");
+  const backups = record.backups;
+  if (!Array.isArray(backups)) {
+    throw new RpcError(BRIDGE.INVALID_RESPONSE, "backup_list: expected backups", raw);
+  }
+  return backups.map(parseBackupEntry);
+}
+
+export async function rpcBackupDelete(id: string, stamps: readonly string[]): Promise<void> {
+  await nativeInvokeRaw(CORE_RPC_COMMANDS.BACKUP_DELETE, { id, stamps: [...stamps] });
+}
+
+export async function rpcBackupPromote(id: string, stamp: string): Promise<void> {
+  await nativeInvokeRaw(CORE_RPC_COMMANDS.BACKUP_PROMOTE, { id, stamp });
+}
+
+export async function rpcBackupGet(id: string, stamp: string): Promise<Uint8Array> {
+  return bytesFromContentB64(await nativeInvokeRaw(CORE_RPC_COMMANDS.BACKUP_GET, { id, stamp }));
+}
+
+export async function rpcBackupExportToPath(
+  id: string,
+  stamp: string,
+  destPath: string,
+): Promise<{ path: string; size: number }> {
+  return rpcBackupExportStampsToPath(id, [stamp], destPath);
+}
+
+export async function rpcBackupExportStampsToPath(
+  id: string,
+  stamps: readonly string[],
+  destPath: string,
+): Promise<{ path: string; size: number }> {
+  const raw = await nativeInvokeRaw(
+    CORE_RPC_COMMANDS.BACKUP_GET,
+    stamps.length === 1
+      ? { id, stamp: stamps[0], destPath }
+      : { id, stamps: [...stamps], destPath },
+  );
+  const written = parsePathWriteResult(raw);
+  if (!written) {
+    throw new RpcError(BRIDGE.INVALID_RESPONSE, "backup_get: expected path+size", raw);
+  }
+  return written;
 }

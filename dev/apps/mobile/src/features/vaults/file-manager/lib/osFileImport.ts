@@ -1,4 +1,5 @@
 import { Platform } from "react-native";
+import { toByteArray } from "base64-js";
 import {
   EncodingType,
   cacheDirectory,
@@ -8,10 +9,9 @@ import {
   StorageAccessFramework,
 } from "expo-file-system";
 import {
-  imageDataUrlFromBase64,
-  isVaultImportUnsupported,
+  VAULT_FS_INLINE_CHUNK_BYTES,
   sanitizeLogicalFileName,
-  vaultFileLanguageFromPath,
+  type VaultBinaryByteSource,
 } from "@upriv/shared";
 import { safReleaseImportTree } from "@/platform/native/safVaultRoot";
 import { safDocumentName } from "./safDocumentName";
@@ -19,12 +19,15 @@ import { safDocumentName } from "./safDocumentName";
 export interface MobileImportFile {
   name: string;
   relativePath: string;
-  content: string;
+  uri: string;
+  size: number;
+  cacheUri?: string;
 }
 
 export interface MobileImportPick {
   files: MobileImportFile[];
   skippedUnsupported: number;
+  releaseSafTree?: string;
 }
 
 export class DocumentPickerUnavailableError extends Error {
@@ -57,19 +60,6 @@ function loadDocumentPicker(): DocumentPickerModule {
   }
 }
 
-async function readAssetContent(asset: {
-  name: string;
-  uri: string;
-  mimeType?: string;
-}): Promise<string> {
-  const language = vaultFileLanguageFromPath(asset.name);
-  if (language === "image") {
-    const base64 = await readAsStringAsync(asset.uri, { encoding: EncodingType.Base64 });
-    return imageDataUrlFromBase64(base64, asset.name, asset.mimeType);
-  }
-  return readAsStringAsync(asset.uri, { encoding: EncodingType.UTF8 });
-}
-
 const pendingCacheWipeUris = new Set<string>();
 let wipeFailedReporter: (() => void) | null = null;
 let wipeFailLogged = false;
@@ -79,7 +69,7 @@ export function setPickerCacheWipeFailedReporter(reporter: (() => void) | null):
   wipeFailedReporter = reporter;
 }
 
-/** Picker copies into app cache so we can read SAF URIs — wipe after read. */
+/** Picker copies into app cache so we can read SAF URIs — wipe after import. */
 async function wipePickerCacheCopy(uri: string): Promise<void> {
   if (!cacheDirectory || !uri.startsWith(cacheDirectory)) return;
   try {
@@ -103,10 +93,82 @@ export async function retryPendingPickerCacheWipes(): Promise<void> {
   }
 }
 
+export async function finishMobileImportSession(
+  files: readonly MobileImportFile[],
+  releaseSafTree?: string,
+): Promise<void> {
+  for (const file of files) {
+    if (file.cacheUri) await wipePickerCacheCopy(file.cacheUri);
+  }
+  await retryPendingPickerCacheWipes();
+  if (releaseSafTree) safReleaseImportTree(releaseSafTree);
+}
+
 function importReadError(name: string): Error {
   const error = new Error(name);
   error.name = "ImportReadError";
   return error;
+}
+
+/** `file://` / absolute path the native core can `File::open`. Not `content://`. */
+export function nativeOsPathFromImportUri(uri: string): string | null {
+  const trimmed = uri.trim();
+  if (!trimmed || trimmed.startsWith("content:")) return null;
+  if (trimmed.startsWith("file:")) {
+    try {
+      const parsed = new URL(trimmed);
+      if (parsed.protocol !== "file:") return null;
+      let osPath = decodeURIComponent(parsed.pathname);
+      if (/^\/[A-Za-z]:\//.test(osPath)) osPath = osPath.slice(1);
+      return osPath || null;
+    } catch {
+      return null;
+    }
+  }
+  if (trimmed.startsWith("/")) return trimmed;
+  return null;
+}
+
+async function uriSize(uri: string, hinted?: number): Promise<number> {
+  if (hinted && hinted > 0) return hinted;
+  try {
+    const info = await getInfoAsync(uri);
+    if (info.exists && "size" in info && typeof info.size === "number" && info.size > 0) {
+      return info.size;
+    }
+  } catch {
+    /* size unknown */
+  }
+  return -1;
+}
+
+export async function uriByteSource(file: MobileImportFile): Promise<VaultBinaryByteSource> {
+  const size = await uriSize(file.uri, file.size);
+  if (size === 0) {
+    return { size: 0, slice: async () => new Uint8Array() };
+  }
+  if (size < 0) {
+    const b64 = await readAsStringAsync(file.uri, { encoding: EncodingType.Base64 });
+    const bytes = b64 ? toByteArray(b64) : new Uint8Array();
+    return {
+      size: bytes.byteLength,
+      slice: async (start, end) => bytes.subarray(start, end),
+    };
+  }
+  return {
+    size,
+    slice: async (start, end) => {
+      const length = Math.min(Math.max(0, end - start), VAULT_FS_INLINE_CHUNK_BYTES);
+      if (length === 0) return new Uint8Array();
+      const b64 = await readAsStringAsync(file.uri, {
+        encoding: EncodingType.Base64,
+        position: start,
+        length,
+      });
+      if (!b64) return new Uint8Array();
+      return toByteArray(b64);
+    },
+  };
 }
 
 /**
@@ -129,28 +191,18 @@ export async function pickImportFiles(): Promise<MobileImportPick | null> {
   if (result.canceled || !result.assets?.length) return null;
 
   const out: MobileImportFile[] = [];
-  let skippedUnsupported = 0;
-  let firstFailedName: string | null = null;
   for (const asset of result.assets) {
     const name = sanitizeLogicalFileName(asset.name ?? "", "file");
-    try {
-      if (isVaultImportUnsupported(name)) {
-        skippedUnsupported += 1;
-        continue;
-      }
-      const content = await readAssetContent(asset);
-      out.push({ name, relativePath: name, content });
-    } catch {
-      firstFailedName ??= name;
-    } finally {
-      await wipePickerCacheCopy(asset.uri);
-    }
+    const uri = asset.uri;
+    out.push({
+      name,
+      relativePath: name,
+      uri,
+      size: typeof asset.size === "number" ? asset.size : 0,
+      cacheUri: cacheDirectory && uri.startsWith(cacheDirectory) ? uri : undefined,
+    });
   }
-  await retryPendingPickerCacheWipes();
-  if (out.length === 0 && firstFailedName) {
-    throw importReadError(firstFailedName);
-  }
-  return { files: out, skippedUnsupported };
+  return { files: out, skippedUnsupported: 0 };
 }
 
 async function isSafDirectory(uri: string): Promise<boolean> {
@@ -173,7 +225,6 @@ async function collectSafTree(
   prefix: string,
   out: MobileImportFile[],
   firstFailedName: { current: string | null },
-  skippedUnsupported: { current: number },
 ): Promise<void> {
   let children: string[];
   try {
@@ -186,20 +237,16 @@ async function collectSafTree(
     if (await isSafDirectory(childUri)) {
       const folderName = sanitizeLogicalFileName(rawName, "folder");
       const nextPrefix = prefix ? `${prefix}/${folderName}` : folderName;
-      await collectSafTree(childUri, nextPrefix, out, firstFailedName, skippedUnsupported);
+      await collectSafTree(childUri, nextPrefix, out, firstFailedName);
       continue;
     }
     const name = sanitizeLogicalFileName(rawName, "file");
-    if (isVaultImportUnsupported(name)) {
-      skippedUnsupported.current += 1;
-      continue;
-    }
     try {
-      const content = await readAssetContent({ name, uri: childUri });
       out.push({
         name,
         relativePath: prefix ? `${prefix}/${name}` : name,
-        content,
+        uri: childUri,
+        size: await uriSize(childUri),
       });
     } catch {
       firstFailedName.current ??= name;
@@ -235,13 +282,13 @@ export async function pickImportFolder(): Promise<MobileImportPick | null> {
     const folderName = sanitizeLogicalFileName(safDocumentName(directoryUri), "folder");
     const out: MobileImportFile[] = [];
     const firstFailedName = { current: null as string | null };
-    const skippedUnsupported = { current: 0 };
-    await collectSafTree(directoryUri, folderName, out, firstFailedName, skippedUnsupported);
+    await collectSafTree(directoryUri, folderName, out, firstFailedName);
     if (out.length === 0 && firstFailedName.current) {
       throw importReadError(firstFailedName.current);
     }
-    return { files: out, skippedUnsupported: skippedUnsupported.current };
-  } finally {
+    return { files: out, skippedUnsupported: 0, releaseSafTree: directoryUri };
+  } catch (error) {
     safReleaseImportTree(directoryUri);
+    throw error;
   }
 }

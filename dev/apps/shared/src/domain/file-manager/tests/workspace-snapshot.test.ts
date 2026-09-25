@@ -5,6 +5,7 @@ import {
   parseWorkspaceSnapshot,
   sanitizeWorkspaceSnapshot,
   serializeWorkspaceSnapshot,
+  shouldHydratePersistedWorkspace,
   UPRIV_WORKSPACE_PATH,
   workspaceSnapshotFromState,
   workspaceStateFromSnapshot,
@@ -100,5 +101,15 @@ describe("workspaceSnapshot", () => {
     expect(restored.openTabs).toEqual(["/a.md"]);
     expect(restored.dirtyPaths).toEqual([]);
     expect(restored.editorDrafts).toEqual({});
+  });
+
+  it("hydrates a disk snapshot only when memory is still the cold-open layout", () => {
+    const empty = workspaceSnapshotFromState(createDefaultWorkspaceState());
+    const loaded = { ...empty, openTabs: ["/a.md"], activeTabPath: "/a.md", selectedPath: "/a.md" };
+    const edited = { ...empty, openTabs: ["/b.md"], activeTabPath: "/b.md", selectedPath: "/b.md" };
+    expect(shouldHydratePersistedWorkspace(empty, empty, loaded)).toBe(true);
+    expect(shouldHydratePersistedWorkspace(loaded, loaded, loaded)).toBe(false);
+    expect(shouldHydratePersistedWorkspace(empty, edited, loaded)).toBe(false);
+    expect(shouldHydratePersistedWorkspace(edited, edited, empty)).toBe(false);
   });
 });

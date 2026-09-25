@@ -1525,9 +1525,10 @@ export function VaultListScreen() {
           setBackupsVault(null);
           openCreate(createDraftFromBackup(stamp, sourceId, existingOrders), "source");
         }}
+        onDownloadNotice={show}
       />
 
-      <FileManagerLayer />
+      <FileManagerLayer pipelineListStatus={pipelineStatus} />
 
       <AppSettingsModal
         open={settingsOpen}

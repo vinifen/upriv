@@ -26,6 +26,12 @@ jobs:
         with:
           toolchain: 1.94.0
           components: rustfmt, clippy
+      # `fuser` links libfuse3 on Linux (`upriv-core` vault mount).
+      - name: Install libfuse3
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libfuse3-dev pkg-config
+        working-directory: ${{ github.workspace }}
       - run: |
           npm ci --prefix js-lint
           npm ci --prefix apps/shared

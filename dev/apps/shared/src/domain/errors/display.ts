@@ -22,6 +22,12 @@ export function errorDisplayI18nKey(error: unknown): I18nKey | null {
   if (isRpcError(error) && error.code === "not_implemented") {
     return "error.not_implemented";
   }
+  if (isRpcError(error) && error.code === "open_path_failed") {
+    return "modal.file_manager.toast.open_system_failed";
+  }
+  if (isRpcError(error) && error.code === "open_terminal_failed") {
+    return "modal.file_manager.toast.open_terminal_failed";
+  }
   if (isVaultPipelineError(error)) return vaultPipelineErrorI18nKey(error.code);
   if (isRpcError(error) && isVaultErrorCode(error.code)) return vaultErrorI18nKey(error.code);
   if (isRpcError(error) && error.code === VAULT_ROOT_ERROR_CODES.IO_ERROR) {

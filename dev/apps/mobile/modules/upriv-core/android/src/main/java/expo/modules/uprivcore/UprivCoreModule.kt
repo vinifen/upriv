@@ -134,6 +134,14 @@ class UprivCoreModule : Module() {
       ensureRuntimeConfigured()
       SafPrefs.setActiveUri(requireContext(), uri)
     }
+
+    /**
+     * Open an existing filesystem or `content://` folder in the system Files app.
+     * Encrypted vaults have no OS folder — callers should only pass a live mount path.
+     */
+    Function("revealInFileManager") { osPath: String ->
+      revealInFileManager(requireContext(), osPath)
+    }
   }
 
   private fun requireContext(): Context =

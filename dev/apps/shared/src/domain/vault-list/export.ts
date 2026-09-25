@@ -3,15 +3,17 @@ import type { VaultPipelineListStatus, VaultRow } from "../vault/types";
 import { normalizeStoredName } from "../format/storedName";
 import { isWindowsReservedName } from "../format/windowsReserved";
 
-export type VaultExportFormat = "contents_zip" | "seven_zip";
+export type VaultExportFormat = "store_zip" | "seven_zip";
 
-/** Ordinary `.zip` of `contents/` — not a custom file type (SECURITY-CRYPTO). */
-export const DEFAULT_VAULT_EXPORT_FORMAT: VaultExportFormat = "contents_zip";
+/** Ordinary `.zip` of `store/` — not a custom file type (SECURITY-CRYPTO). */
+export const DEFAULT_VAULT_EXPORT_FORMAT: VaultExportFormat = "store_zip";
 
-/** Format + 7z options for `getExportBytes` (zip ignores `sevenZip`). */
+/** Format + 7z options for `getExportBytes` (zip ignores `sevenZip` / `password`). */
 export interface VaultExportRequest {
   format: VaultExportFormat;
   sevenZip?: VaultSettingsConfig["seven_zip"];
+  /** 7-Zip AES password; also unlocks `store/` so logical files can be decrypted. */
+  password?: string;
 }
 // eslint-disable-next-line no-control-regex
 const UNSAFE_FILENAME_CHARS = /[/\\<>:"|?*\u0000-\u001f\u007f-\u009f]/g;
@@ -30,11 +32,11 @@ export function sanitizeExportFilenameBase(displayName: string): string {
 
 /**
  * Suggested download name = vault **display name** (not registry id).
- * Encrypted contents zip: `{name}.zip`. Portable 7-Zip: `{name}.7z`.
+ * Encrypted vault zip: `{name}.zip`. Portable 7-Zip: `{name}.7z`.
  */
 export function vaultExportFilename(displayName: string, format: VaultExportFormat): string {
   const name = sanitizeExportFilenameBase(displayName);
-  return format === "contents_zip" ? `${name}.zip` : `${name}.7z`;
+  return format === "store_zip" ? `${name}.zip` : `${name}.7z`;
 }
 
 export type ExportFilenameSanitizeKind = "unchanged" | "adjusted" | "fallback";
@@ -54,8 +56,9 @@ export function exportFilenameSanitizeKind(displayName: string): ExportFilenameS
 export type VaultExportPipelineStatus = VaultPipelineListStatus;
 
 /**
- * Single-vault export (`.zip` of `contents/` or `.7z`). Closing, opening, creating,
- * queued, and recovery cannot export. Open vaults may export after flushing `contents/`.
+ * Single-vault export (`.zip` of `store/` or `.7z`). This vault must be
+ * closed. Opening, closing, creating, queued, recovery, and an open session
+ * cannot export. Other vaults may stay open.
  */
 export function vaultCanExport(
   vault: Pick<VaultRow, "id" | "session">,
@@ -65,5 +68,5 @@ export function vaultCanExport(
   if (pipeline.closingVaultIds?.includes(vault.id)) return false;
   if (pipeline.creatingVaultIds?.includes(vault.id)) return false;
   if (pipeline.queuedVaultIds?.includes(vault.id)) return false;
-  return vault.session !== "closing" && vault.session !== "recovery";
+  return vault.session !== "open" && vault.session !== "closing" && vault.session !== "recovery";
 }

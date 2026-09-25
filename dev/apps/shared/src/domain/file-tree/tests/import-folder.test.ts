@@ -17,28 +17,35 @@ const VAULT = "folder-import-policy";
 function importRelativeTree(
   files: readonly { relativePath: string; content: string }[],
   baseParent = "/",
-): { paths: string[]; skipped: number } {
-  const paths: string[] = [];
-  let skipped = 0;
-  for (const file of files) {
-    const destination = resolveImportDestination(
-      VAULT,
-      baseParent,
-      file.relativePath,
-      ensureVaultFolder,
-    );
-    if (!destination) {
-      skipped += 1;
-      continue;
+): Promise<{ paths: string[]; skipped: number }> {
+  return (async () => {
+    const paths: string[] = [];
+    let skipped = 0;
+    for (const file of files) {
+      const destination = await resolveImportDestination(
+        VAULT,
+        baseParent,
+        file.relativePath,
+        ensureVaultFolder,
+      );
+      if (!destination) {
+        skipped += 1;
+        continue;
+      }
+      const path = importVaultFile(
+        VAULT,
+        destination.parentPath,
+        destination.fileName,
+        file.content,
+      );
+      if (!path) {
+        skipped += 1;
+        continue;
+      }
+      paths.push(path);
     }
-    const path = importVaultFile(VAULT, destination.parentPath, destination.fileName, file.content);
-    if (!path) {
-      skipped += 1;
-      continue;
-    }
-    paths.push(path);
-  }
-  return { paths, skipped };
+    return { paths, skipped };
+  })();
 }
 
 describe("folder import name policy", () => {
@@ -46,8 +53,8 @@ describe("folder import name policy", () => {
     resetVaultFileSession(VAULT);
   });
 
-  it("keeps original folder and file names when they are already universal", () => {
-    const { paths, skipped } = importRelativeTree([
+  it("keeps original folder and file names when they are already universal", async () => {
+    const { paths, skipped } = await importRelativeTree([
       { relativePath: "Viagem  2026/fotos/praia.jpg", content: "img-a" },
       { relativePath: "Viagem  2026/fotos/mar.jpg", content: "img-b" },
       { relativePath: "Viagem  2026/ok.md", content: "ok" },
@@ -63,8 +70,8 @@ describe("folder import name policy", () => {
     expect(getVaultFileContent(VAULT, "/Viagem  2026/ok.md")?.content).toBe("ok");
   });
 
-  it("rewrites only OS-illegal segments and reuses the sanitized folder", () => {
-    const { paths, skipped } = importRelativeTree([
+  it("rewrites only OS-illegal segments and reuses the sanitized folder", async () => {
+    const { paths, skipped } = await importRelativeTree([
       { relativePath: "Notes: 2026/dia 1.md", content: "one" },
       { relativePath: "Notes: 2026/dia 2.md", content: "two" },
       { relativePath: "Notes| 2026/extra.md", content: "three" },
@@ -83,8 +90,8 @@ describe("folder import name policy", () => {
     );
   });
 
-  it("keeps unicode, punctuation that every OS allows, and leading-dot names", () => {
-    const { paths, skipped } = importRelativeTree([
+  it("keeps unicode, punctuation that every OS allows, and leading-dot names", async () => {
+    const { paths, skipped } = await importRelativeTree([
       { relativePath: "São Paulo/mês 1.txt", content: "a" },
       { relativePath: "São Paulo/it's ok.md", content: "b" },
       { relativePath: "São Paulo/.env", content: "c" },
@@ -100,8 +107,8 @@ describe("folder import name policy", () => {
     ]);
   });
 
-  it("rewrites reserved Windows files and suffixes collisions after sanitizing", () => {
-    const { paths, skipped } = importRelativeTree([
+  it("rewrites reserved Windows files and suffixes collisions after sanitizing", async () => {
+    const { paths, skipped } = await importRelativeTree([
       { relativePath: "pack/CON.txt", content: "con" },
       { relativePath: "pack/file?.md", content: "q" },
       { relativePath: "pack/file|.md", content: "p" },
@@ -113,14 +120,14 @@ describe("folder import name policy", () => {
     expect(getVaultFileContent(VAULT, "/pack/file_-2.md")?.content).toBe("p");
   });
 
-  it("does not create empty folders that were never listed as file ancestors", () => {
-    importRelativeTree([{ relativePath: "keep/a.md", content: "x" }]);
+  it("does not create empty folders that were never listed as file ancestors", async () => {
+    await importRelativeTree([{ relativePath: "keep/a.md", content: "x" }]);
     expect(findNode(getVaultFileTree(VAULT), "/keep")).not.toBeNull();
     expect(findNode(getVaultFileTree(VAULT), "/empty")).toBeNull();
   });
 
-  it("skips the reserved workspace snapshot name", () => {
-    const { paths, skipped } = importRelativeTree([
+  it("skips the reserved workspace snapshot name", async () => {
+    const { paths, skipped } = await importRelativeTree([
       { relativePath: ".upriv-workspace.json", content: "{}" },
       { relativePath: "readme.md", content: "hi" },
     ]);
@@ -138,8 +145,8 @@ describe("folder import name policy", () => {
     ]);
   });
 
-  it("rebuilds a Windows backslash tree instead of flattening it into one name", () => {
-    const { paths, skipped } = importRelativeTree([
+  it("rebuilds a Windows backslash tree instead of flattening it into one name", async () => {
+    const { paths, skipped } = await importRelativeTree([
       { relativePath: "Viagem  2026\\fotos\\praia.jpg", content: "img" },
     ]);
     expect(skipped).toBe(0);

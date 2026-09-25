@@ -4,6 +4,7 @@ import {
   fileBaseName,
   findNode,
   getParentPath,
+  imageDataUrlFromBase64,
   joinPath,
   moveNode,
   removeContentPaths,
@@ -25,7 +26,13 @@ import {
   omitInternalVaultNodes,
   UPRIV_WORKSPACE_PATH,
 } from "../domain/file-manager/workspaceSnapshot";
+import { RpcError } from "../domain/core-rpc/errors";
+import { VAULT_ERROR_CODES } from "../domain/vault/errors/codes";
 import { getMockFileContent, getMockVaultFileTree } from "./fileTree";
+import type {
+  VaultBinaryByteSource,
+  VaultFileSystemService,
+} from "../services/filesystem/VaultFileSystemService";
 
 interface VaultFileSession {
   tree: FileTreeNode;
@@ -37,8 +44,8 @@ interface VaultFileSession {
 const sessions = new Map<string, VaultFileSession>();
 
 /**
- * Survives `resetVaultFileSession` so mock reopen can restore FM layout within the
- * same app process. Real core will persist this as a logical file in `contents/`.
+ * Expo Go only. Survives `resetVaultFileSession` inside this process.
+ * The live file manager stores this snapshot as a logical file in `store/`.
  */
 const durableWorkspaceSnapshots = new Map<string, string>();
 
@@ -232,6 +239,68 @@ export function importVaultFile(
   return path;
 }
 
+const MOCK_IMPORT_CHUNK = 4 * 1024 * 1024;
+
+function concatMockBytes(chunks: readonly Uint8Array[]): Uint8Array {
+  const total = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return out;
+}
+
+function mockBytesToB64(bytes: Uint8Array): string {
+  const chunk = 0x8000;
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...Array.from(bytes.subarray(i, i + chunk)));
+  }
+  return btoa(binary);
+}
+
+async function bytesFromMockSource(source: VaultBinaryByteSource): Promise<Uint8Array> {
+  if (source.size === 0) return new Uint8Array();
+  const chunks: Uint8Array[] = [];
+  if (source.size > 0) {
+    let offset = 0;
+    while (offset < source.size) {
+      const end = Math.min(offset + MOCK_IMPORT_CHUNK, source.size);
+      chunks.push(await source.slice(offset, end));
+      offset = end;
+    }
+    return concatMockBytes(chunks);
+  }
+  let offset = 0;
+  for (;;) {
+    const piece = await source.slice(offset, offset + MOCK_IMPORT_CHUNK);
+    if (piece.byteLength === 0) break;
+    chunks.push(piece);
+    offset += piece.byteLength;
+    if (piece.byteLength < MOCK_IMPORT_CHUNK) break;
+  }
+  return concatMockBytes(chunks);
+}
+
+function contentFromMockBytes(fileName: string, bytes: Uint8Array): string {
+  const language = languageFromPath(fileName);
+  if (language === "binary") return "";
+  if (language === "image") return imageDataUrlFromBase64(mockBytesToB64(bytes), fileName);
+  return new TextDecoder().decode(bytes);
+}
+
+export async function importVaultFileFromBytes(
+  vaultId: string,
+  parentPath: string,
+  fileName: string,
+  source: VaultBinaryByteSource,
+): Promise<string | null> {
+  const bytes = await bytesFromMockSource(source);
+  return importVaultFile(vaultId, parentPath, fileName, contentFromMockBytes(fileName, bytes));
+}
+
 export function createVaultFolder(
   vaultId: string,
   parentPath: string,
@@ -344,4 +413,41 @@ export function moveVaultPath(
   session.languages = nextLanguages;
   bump(session);
   return newPath;
+}
+
+/** Browser / test adapter wrapping the in-memory session helpers. */
+export function createAsyncVaultFileSystemService(): VaultFileSystemService {
+  return {
+    resetSession: resetVaultFileSession,
+    getTreeRevision: async (vaultId) => getVaultTreeRevision(vaultId),
+    getFileTree: async (vaultId) => getVaultFileTree(vaultId),
+    getFileContent: async (vaultId, path) => getVaultFileContent(vaultId, path),
+    isFileEditable: isVaultFileEditable,
+    isFileViewable: isVaultFileViewable,
+    isFileImage: isVaultFileImage,
+    setFileContent: async (vaultId, path, content) => setVaultFileContent(vaultId, path, content),
+    createFile: async (vaultId, parentPath, baseName) =>
+      createVaultFile(vaultId, parentPath, baseName),
+    importFile: async (vaultId, parentPath, fileName, content) =>
+      importVaultFile(vaultId, parentPath, fileName, content),
+    importFileFromBytes: async (vaultId, parentPath, fileName, source) =>
+      importVaultFileFromBytes(vaultId, parentPath, fileName, source),
+    importFileFromOsPath: async (vaultId, parentPath, fileName) =>
+      importVaultFile(vaultId, parentPath, fileName, ""),
+    createFolder: async (vaultId, parentPath, baseName) =>
+      createVaultFolder(vaultId, parentPath, baseName),
+    ensureFolder: async (vaultId, parentPath, folderName) =>
+      ensureVaultFolder(vaultId, parentPath, folderName),
+    renamePath: async (vaultId, path, newName) => renameVaultPath(vaultId, path, newName),
+    deletePath: async (vaultId, path) => deleteVaultPath(vaultId, path),
+    movePath: async (vaultId, fromPath, toFolderPath) =>
+      moveVaultPath(vaultId, fromPath, toFolderPath),
+    osPath: async () => {
+      throw new RpcError(
+        VAULT_ERROR_CODES.MOUNT_FAILED,
+        "OS mount is not available in the in-memory file manager",
+      );
+    },
+    languageFromPath: vaultFileLanguageFromPath,
+  };
 }

@@ -128,5 +128,15 @@ describe("vaultConfigEditAllowed", () => {
     expect(
       vaultConfigEditAllowed("vault.display_name", closed, { queuedVaultIds: ["notes"] }),
     ).toBe(false);
+    expect(vaultConfigEditAllowed("storage.mode", closed, { queuedVaultIds: ["notes"] })).toBe(
+      true,
+    );
+  });
+
+  it("a queued close on an open session is not quiet", () => {
+    const open = vaultRowFixture({ id: "notes", session: "open" });
+    const pipeline = { queuedVaultIds: ["notes"], queuedOpenVaultIds: [] as string[] };
+    expect(isVaultQuiet(open, pipeline)).toBe(false);
+    expect(vaultConfigEditAllowed("storage.mode", open, pipeline)).toBe(false);
   });
 });

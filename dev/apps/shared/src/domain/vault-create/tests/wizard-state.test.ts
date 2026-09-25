@@ -106,6 +106,18 @@ describe("createVaultWizardReducer / import password test", () => {
     );
     expect(done.draft.passwordValidated).toBe(false);
     expect(done.draft.passwordTestFailed).toBe(true);
+    expect(done.draft.passwordProbeUnavailable).toBe(false);
+  });
+
+  it("records a probe that could not run (not a wrong password)", () => {
+    const done = reduce(
+      openedAt("password"),
+      { type: "importPasswordTestStarted" },
+      { type: "importPasswordTestFinished", ok: false, unavailable: true },
+    );
+    expect(done.draft.passwordValidated).toBe(false);
+    expect(done.draft.passwordTestFailed).toBe(false);
+    expect(done.draft.passwordProbeUnavailable).toBe(true);
   });
 
   it("keeps the discard confirmation open when a probe answers", () => {

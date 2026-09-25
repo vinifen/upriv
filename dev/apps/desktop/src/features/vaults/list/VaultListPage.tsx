@@ -150,6 +150,7 @@ export function VaultListPage() {
         open={backups.open}
         onClose={backups.onClose}
         onCreateVaultFromBackup={backups.onCreateVaultFromBackup}
+        onDownloadNotice={backups.onDownloadNotice}
       />
       <ExportVaultModal
         vault={exportVault.vault}
@@ -182,7 +183,7 @@ export function VaultListPage() {
         onDelete={groupSettings.onDelete}
         onBusyTimeout={groupSettings.onBusyTimeout}
       />
-      <FileManagerLayer />
+      <FileManagerLayer pipelineListStatus={list.pipelineListStatus} />
       <AppSettingsModal
         open={appSettings.open}
         onClose={appSettings.onClose}

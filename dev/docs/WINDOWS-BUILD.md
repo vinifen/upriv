@@ -47,6 +47,7 @@ Install once on the machine that will run the Windows build.
 
 Optional:
 
+- **WinFsp** — not wired yet. Desktop vault mount on Windows is a stub; the in-app file manager does not need a mount.
 - **Windows Developer Mode** — only needed if you turn `signAndEditExecutable` back to `true` (electron-builder’s `winCodeSign` cache uses symlinks). Current packaging does **not** require it (see [Icons](#windows-icons-exe--start--taskbar)).
 
 ### MSVC environment (required for `cargo`)

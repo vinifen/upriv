@@ -38,7 +38,7 @@ export type BackupMode = "keep_last" | "keep_all";
 export type ArchiveMode = "compress_encrypt" | "encrypt_only";
 /**
  * UI preset for how the export `.7z` is built.
- * Maps to `[seven_zip] archive_mode` + `compression_level` (7zz `-mx`).
+ * Maps to `[seven_zip] archive_mode` + `compression_level`.
  */
 export type CompressionPreset = "none" | "low" | "medium" | "high";
 
@@ -113,7 +113,7 @@ export function compressionPresetFromSevenZip(sevenZip: {
   return "high";
 }
 
-/** Drop orphan `compression_level` when not compressing; clamp invalid compress levels (7zz `-mx` is 0..=9). */
+/** Drop orphan `compression_level` when not compressing; clamp invalid compress levels. */
 export function normalizeSevenZipSection(
   sevenZip: VaultSettingsConfig["seven_zip"],
 ): VaultSettingsConfig["seven_zip"] {

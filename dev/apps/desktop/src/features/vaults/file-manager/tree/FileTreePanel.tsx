@@ -24,7 +24,7 @@ import {
   sessionPathKind,
 } from "@upriv/shared";
 import type { FileTreeNode } from "@upriv/shared";
-import { filesFromDataTransfer, filesFromFileInput, isOsFileDrag } from "../lib/osFileDrop";
+import { allowFileManagerDrop, beginOsFileImport, filesFromFileInput } from "../lib/osFileDrop";
 import type { FileManagerApi } from "../hooks/useVaultFileManager";
 
 interface FileTreePanelProps {
@@ -56,7 +56,7 @@ function importTargetPath(fm: FileManagerApi): string {
 function FileTreeRow({ node, path, depth, fm }: FileTreeRowProps) {
   const { t } = useTranslation();
   const { showError } = useErrorToast();
-  const { workspace, dispatch, commitRename, movePath, importFiles } = fm;
+  const { workspace, dispatch, commitRename, movePath, importOsDrop } = fm;
   const isFolder = node.type === "folder";
   const isExpanded = isFolder && workspace.expandedPaths.includes(path);
   const isSelected = workspace.activeTabPath === path;
@@ -66,6 +66,11 @@ function FileTreeRow({ node, path, depth, fm }: FileTreeRowProps) {
   const isDragging = workspace.dragSourcePath === path;
   const isDropTarget = workspace.dropTargetPath === path && isFolder;
   const isRoot = path === "/";
+  const isPending = fm.isImportPending(path);
+  const isPendingTimedOut = fm.isImportTimedOut(path);
+  const isWalkPlaceholder = fm.isImportWalkPlaceholder(path);
+  const isQueueSlot = fm.isImportQueueSlot(path);
+  const isProcessing = fm.isImportProcessing(path) || isWalkPlaceholder || isQueueSlot;
   const longPressRef = useRef<number | null>(null);
   const pressOriginRef = useRef<{ x: number; y: number } | null>(null);
   const [renameValue, setRenameValue] = useState(node.name);
@@ -81,7 +86,7 @@ function FileTreeRow({ node, path, depth, fm }: FileTreeRowProps) {
   };
 
   const handleActivate = () => {
-    if (isRenaming) return;
+    if (isRenaming || isWalkPlaceholder || isQueueSlot) return;
     if (isFolder) {
       dispatch({ type: "toggle_folder", path });
       return;
@@ -90,6 +95,11 @@ function FileTreeRow({ node, path, depth, fm }: FileTreeRowProps) {
   };
 
   const handleContextMenu = (event: MouseEvent) => {
+    if (isPending || isQueueSlot) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
     event.preventDefault();
     event.stopPropagation();
     openContextMenu(event.clientX, event.clientY);
@@ -104,7 +114,7 @@ function FileTreeRow({ node, path, depth, fm }: FileTreeRowProps) {
   };
 
   const handlePointerDown = (event: React.PointerEvent) => {
-    if (event.pointerType !== "touch") return;
+    if (event.pointerType !== "touch" || isPending || isWalkPlaceholder || isQueueSlot) return;
     pressOriginRef.current = { x: event.clientX, y: event.clientY };
     longPressRef.current = window.setTimeout(() => {
       openContextMenu(event.clientX, event.clientY);
@@ -148,31 +158,34 @@ function FileTreeRow({ node, path, depth, fm }: FileTreeRowProps) {
   const dropFolderPath = isFolder ? path : getParentPath(path);
 
   const handleDragOver = (event: DragEvent) => {
-    if (isOsFileDrag(event)) {
-      event.preventDefault();
+    const source = workspace.dragSourcePath;
+    if (source) {
+      if (isDescendantPath(source, dropFolderPath)) {
+        event.stopPropagation();
+        allowFileManagerDrop(event, "none");
+        if (workspace.dropTargetPath) {
+          dispatch({ type: "set_drag", source, target: null });
+        }
+        return;
+      }
+      allowFileManagerDrop(event, "move");
       event.stopPropagation();
-      event.dataTransfer.dropEffect = "copy";
       if (workspace.dropTargetPath !== dropFolderPath) {
-        dispatch({ type: "set_drag", source: null, target: dropFolderPath });
-        if (dropFolderPath !== "/") dispatch({ type: "expand_folder", path: dropFolderPath });
+        dispatch({ type: "set_drag", source, target: dropFolderPath });
+        if (dropFolderPath !== "/") {
+          dispatch({ type: "expand_folder", path: dropFolderPath, force: true });
+        }
       }
       return;
     }
 
-    const source = workspace.dragSourcePath;
-    if (!source || isDescendantPath(source, dropFolderPath)) {
-      event.stopPropagation();
-      if (source && workspace.dropTargetPath) {
-        dispatch({ type: "set_drag", source, target: null });
-      }
-      return;
-    }
-    event.preventDefault();
+    allowFileManagerDrop(event, "copy");
     event.stopPropagation();
-    event.dataTransfer.dropEffect = "move";
     if (workspace.dropTargetPath !== dropFolderPath) {
-      dispatch({ type: "set_drag", source, target: dropFolderPath });
-      if (dropFolderPath !== "/") dispatch({ type: "expand_folder", path: dropFolderPath });
+      dispatch({ type: "set_drag", source: null, target: dropFolderPath });
+      if (dropFolderPath !== "/") {
+        dispatch({ type: "expand_folder", path: dropFolderPath, force: true });
+      }
     }
   };
 
@@ -180,15 +193,11 @@ function FileTreeRow({ node, path, depth, fm }: FileTreeRowProps) {
     event.preventDefault();
     event.stopPropagation();
 
-    if (isOsFileDrag(event)) {
-      void (async () => {
-        try {
-          const files = await filesFromDataTransfer(event);
-          await importFiles(dropFolderPath, files);
-        } catch (error) {
-          showError(error, "error.unexpected");
-        }
-      })();
+    if (
+      beginOsFileImport(event, dropFolderPath, importOsDrop, (error) =>
+        showError(error, "error.unexpected"),
+      )
+    ) {
       dispatch({ type: "set_drag", source: null, target: null });
       return;
     }
@@ -210,7 +219,7 @@ function FileTreeRow({ node, path, depth, fm }: FileTreeRowProps) {
     <div
       role={isRenaming ? undefined : "button"}
       tabIndex={isRenaming ? -1 : 0}
-      draggable={!isRoot && !isRenaming}
+      draggable={!isRoot && !isRenaming && !isPending && !isQueueSlot}
       onClick={handleActivate}
       onKeyDown={(event) => {
         if (isRenaming) return;
@@ -222,6 +231,7 @@ function FileTreeRow({ node, path, depth, fm }: FileTreeRowProps) {
       }}
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
+      onDragEnter={isFolder ? undefined : handleDragOver}
       onDragOver={isFolder ? undefined : handleDragOver}
       onDrop={isFolder ? undefined : handleDrop}
       onContextMenu={handleContextMenu}
@@ -236,7 +246,15 @@ function FileTreeRow({ node, path, depth, fm }: FileTreeRowProps) {
           ? "bg-[color-mix(in_srgb,var(--on-surface)_6%,transparent)] text-on-surface hover:bg-surface-container-highest"
           : "text-on-surface-variant hover:bg-surface-container-highest hover:text-on-surface",
         isDragging ? "opacity-50" : "",
+        isPendingTimedOut
+          ? "opacity-60"
+          : isProcessing
+            ? "animate-pulse"
+            : isPending
+              ? "opacity-75"
+              : "",
       ].join(" ")}
+      aria-busy={isProcessing && !isPendingTimedOut ? true : undefined}
       style={{
         gridTemplateColumns: ROW_GRID,
         paddingLeft: `${depth * DEPTH_INDENT_PX + 2}px`,
@@ -308,7 +326,15 @@ function FileTreeRow({ node, path, depth, fm }: FileTreeRowProps) {
         </div>
       ) : (
         <span className="flex min-w-0 items-center gap-1.5 overflow-hidden">
-          <span className="min-w-0 truncate">{node.name}</span>
+          {isQueueSlot ? (
+            <span className="min-w-0 truncate italic">
+              {t("modal.file_manager.import.folder_pending")}
+            </span>
+          ) : isWalkPlaceholder ? (
+            <span className="h-2.5 w-24 shrink-0 rounded bg-on-surface/15" aria-hidden />
+          ) : (
+            <span className="min-w-0 truncate">{node.name}</span>
+          )}
           {isDirty ? (
             <span className="size-1.5 shrink-0 rounded-full bg-white" aria-hidden />
           ) : null}
@@ -325,6 +351,7 @@ function FileTreeRow({ node, path, depth, fm }: FileTreeRowProps) {
         "w-full min-w-0",
         isDropTarget ? "rounded-sm ring-1 ring-inset ring-[var(--accent)]" : "",
       ].join(" ")}
+      onDragEnter={handleDragOver}
       onDragOver={handleDragOver}
       onDrop={handleDrop}
     >
@@ -388,21 +415,22 @@ export function FileTreePanel({ fm, splitPercent, layout }: FileTreePanelProps) 
   const handleNavDragOver = (event: DragEvent) => {
     if (event.target !== event.currentTarget) return;
 
-    if (isOsFileDrag(event)) {
-      event.preventDefault();
-      event.dataTransfer.dropEffect = "copy";
+    const source = fm.workspace.dragSourcePath;
+    if (source) {
+      if (getParentPath(source) === "/") {
+        allowFileManagerDrop(event, "none");
+        return;
+      }
+      allowFileManagerDrop(event, "move");
       if (fm.workspace.dropTargetPath !== "/") {
-        fm.dispatch({ type: "set_drag", source: null, target: "/" });
+        fm.dispatch({ type: "set_drag", source, target: "/" });
       }
       return;
     }
 
-    const source = fm.workspace.dragSourcePath;
-    if (!source || getParentPath(source) === "/") return;
-    event.preventDefault();
-    event.dataTransfer.dropEffect = "move";
+    allowFileManagerDrop(event, "copy");
     if (fm.workspace.dropTargetPath !== "/") {
-      fm.dispatch({ type: "set_drag", source, target: "/" });
+      fm.dispatch({ type: "set_drag", source: null, target: "/" });
     }
   };
 
@@ -411,15 +439,11 @@ export function FileTreePanel({ fm, splitPercent, layout }: FileTreePanelProps) 
 
     event.preventDefault();
 
-    if (isOsFileDrag(event)) {
-      void (async () => {
-        try {
-          const files = await filesFromDataTransfer(event);
-          await fm.importFiles("/", files);
-        } catch (error) {
-          showError(error, "error.unexpected");
-        }
-      })();
+    if (
+      beginOsFileImport(event, "/", fm.importOsDrop, (error) =>
+        showError(error, "error.unexpected"),
+      )
+    ) {
       fm.dispatch({ type: "set_drag", source: null, target: null });
       return;
     }
@@ -507,7 +531,7 @@ export function FileTreePanel({ fm, splitPercent, layout }: FileTreePanelProps) 
           </button>
           <button
             type="button"
-            className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-on-surface-variant transition-colors hover:bg-surface-container-highest hover:text-on-surface"
+            className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-on-surface-variant transition-colors hover:bg-surface-container-highest hover:text-on-surface disabled:pointer-events-none disabled:opacity-40"
             onClick={openImportFilesPicker}
             aria-label={t("modal.file_manager.explorer.import_files")}
             title={t("modal.file_manager.explorer.import_files")}
@@ -516,13 +540,24 @@ export function FileTreePanel({ fm, splitPercent, layout }: FileTreePanelProps) 
           </button>
           <button
             type="button"
-            className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-on-surface-variant transition-colors hover:bg-surface-container-highest hover:text-on-surface"
+            className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-on-surface-variant transition-colors hover:bg-surface-container-highest hover:text-on-surface disabled:pointer-events-none disabled:opacity-40"
             onClick={openImportFolderPicker}
             aria-label={t("modal.file_manager.explorer.import_folder")}
             title={t("modal.file_manager.explorer.import_folder")}
           >
             <Icon name="archive" size={14} />
           </button>
+          {fm.importTimedOut ? (
+            <button
+              type="button"
+              className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-on-surface-variant transition-colors hover:bg-surface-container-highest hover:text-on-surface"
+              onClick={fm.retryImport}
+              aria-label={t("action.retry")}
+              title={t("action.retry")}
+            >
+              <Icon name="refresh" size={14} />
+            </button>
+          ) : null}
         </div>
       </div>
       <nav
@@ -532,10 +567,11 @@ export function FileTreePanel({ fm, splitPercent, layout }: FileTreePanelProps) 
         ].join(" ")}
         aria-label={t("modal.file_manager.explorer.title")}
         onContextMenu={handleNavContextMenu}
+        onDragEnter={handleNavDragOver}
         onDragOver={handleNavDragOver}
         onDrop={handleNavDrop}
       >
-        <FileTreeRoot tree={fm.tree} fm={fm} />
+        <FileTreeRoot tree={fm.displayTree} fm={fm} />
       </nav>
     </aside>
   );

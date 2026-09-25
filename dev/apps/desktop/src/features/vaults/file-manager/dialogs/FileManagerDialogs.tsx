@@ -6,14 +6,16 @@ import type { FileManagerApi } from "../hooks/useVaultFileManager";
 
 interface FileManagerDialogsProps {
   fm: FileManagerApi;
+  promptsOpen?: boolean;
 }
 
-export function FileManagerDialogs({ fm }: FileManagerDialogsProps) {
+export function FileManagerDialogs({ fm, promptsOpen = true }: FileManagerDialogsProps) {
   const { t } = useTranslation();
   const { patchSettings } = useAppSettingsContext();
   const deleteTarget = fm.workspace.deleteTarget;
   const unsavedPrompt = fm.workspace.unsavedPrompt;
   const isDismissWorkspacePrompt = unsavedPrompt?.type === "dismiss_workspace";
+  const isImportInProgressPrompt = unsavedPrompt?.type === "import_in_progress";
   const [dontAskAgain, setDontAskAgain] = useState(false);
 
   const closeDelete = () => {
@@ -33,7 +35,7 @@ export function FileManagerDialogs({ fm }: FileManagerDialogsProps) {
   return (
     <>
       <Modal
-        open={deleteTarget !== null}
+        open={promptsOpen && deleteTarget !== null}
         title={t("modal.file_manager.delete.title")}
         titleIcon="trash"
         contextTitle={deleteTarget?.name}
@@ -72,38 +74,59 @@ export function FileManagerDialogs({ fm }: FileManagerDialogsProps) {
       </Modal>
 
       <Modal
-        open={unsavedPrompt !== null}
-        title={t("modal.file_manager.unsaved.title")}
+        open={promptsOpen && unsavedPrompt !== null}
+        title={
+          isImportInProgressPrompt
+            ? t("modal.file_manager.import_in_progress.title")
+            : t("modal.file_manager.unsaved.title")
+        }
         titleIcon="file"
         onClose={() => fm.dispatch({ type: "set_unsaved_prompt", prompt: null })}
         panelClassName="max-w-md"
         rootClassName="z-[120]"
         footer={
-          <div className="flex flex-wrap justify-end gap-2">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => fm.dispatch({ type: "set_unsaved_prompt", prompt: null })}
-            >
-              {t("action.cancel")}
-            </Button>
-            <Button variant="danger" size="sm" onClick={fm.confirmUnsaved}>
-              {isDismissWorkspacePrompt
-                ? t("modal.file_manager.unsaved.discard_all")
-                : t("modal.file_manager.unsaved.discard")}
-            </Button>
-            <Button variant="primary" size="sm" onClick={fm.confirmSaveUnsaved}>
-              {isDismissWorkspacePrompt
-                ? t("modal.file_manager.unsaved.save_all")
-                : t("modal.file_manager.unsaved.save_and_close")}
-            </Button>
-          </div>
+          isImportInProgressPrompt ? (
+            <div className="flex flex-wrap justify-end gap-2">
+              <Button variant="danger" size="sm" onClick={fm.cancelImportAndClose}>
+                {t("modal.file_manager.import_in_progress.close_and_cancel")}
+              </Button>
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={() => fm.dispatch({ type: "set_unsaved_prompt", prompt: null })}
+              >
+                {t("modal.file_manager.import_in_progress.stay")}
+              </Button>
+            </div>
+          ) : (
+            <div className="flex flex-wrap justify-end gap-2">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => fm.dispatch({ type: "set_unsaved_prompt", prompt: null })}
+              >
+                {t("action.cancel")}
+              </Button>
+              <Button variant="danger" size="sm" onClick={fm.confirmUnsaved}>
+                {isDismissWorkspacePrompt
+                  ? t("modal.file_manager.unsaved.discard_all")
+                  : t("modal.file_manager.unsaved.discard")}
+              </Button>
+              <Button variant="primary" size="sm" onClick={fm.confirmSaveUnsaved}>
+                {isDismissWorkspacePrompt
+                  ? t("modal.file_manager.unsaved.save_all")
+                  : t("modal.file_manager.unsaved.save_and_close")}
+              </Button>
+            </div>
+          )
         }
       >
         <p className="text-sm leading-relaxed text-on-surface-variant">
-          {isDismissWorkspacePrompt
-            ? t("modal.file_manager.unsaved.workspace_body")
-            : t("modal.file_manager.unsaved.body")}
+          {isImportInProgressPrompt
+            ? t("modal.file_manager.import_in_progress.body")
+            : isDismissWorkspacePrompt
+              ? t("modal.file_manager.unsaved.workspace_body")
+              : t("modal.file_manager.unsaved.body")}
         </p>
       </Modal>
 

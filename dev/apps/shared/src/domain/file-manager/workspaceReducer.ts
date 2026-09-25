@@ -13,7 +13,7 @@ export {
 
 export type VaultWorkspaceAction =
   | { type: "toggle_folder"; path: string }
-  | { type: "expand_folder"; path: string }
+  | { type: "expand_folder"; path: string; force?: boolean }
   | { type: "select_path"; path: string }
   | { type: "open_file"; path: string }
   | { type: "request_close_tab"; path: string }
@@ -98,6 +98,7 @@ function applyPathMap(
   const selectedPath = state.selectedPath ? remapPath(state.selectedPath, map) : null;
   const renamingPath = state.renamingPath ? remapPath(state.renamingPath, map) : null;
   const expandedPaths = remapList(state.expandedPaths, map);
+  const userCollapsedPaths = remapList(state.userCollapsedPaths, map);
   const editorDrafts: Record<string, string> = {};
   for (const [path, content] of Object.entries(state.editorDrafts)) {
     editorDrafts[remapPath(path, map)] = content;
@@ -118,6 +119,7 @@ function applyPathMap(
     selectedPath,
     renamingPath,
     expandedPaths,
+    userCollapsedPaths,
     editorDrafts,
     dirtyPaths,
     sessionCreatedPaths: remappedCreated,
@@ -148,6 +150,7 @@ function applyPathRemoval(state: VaultWorkspaceState, paths: string[]): VaultWor
     sessionCreatedPaths: state.sessionCreatedPaths.filter((p) => !removeSet.has(p)),
     sessionModifiedPaths: state.sessionModifiedPaths.filter((p) => !removeSet.has(p)),
     expandedPaths: state.expandedPaths.filter((p) => !removeSet.has(p)),
+    userCollapsedPaths: state.userCollapsedPaths.filter((p) => !removeSet.has(p)),
   };
 }
 
@@ -155,8 +158,17 @@ function needsUnsavedPrompt(state: VaultWorkspaceState, path: string | null): bo
   return Boolean(path && state.dirtyPaths.includes(path));
 }
 
+function expandUnlessUserCollapsed(state: VaultWorkspaceState, paths: readonly string[]): string[] {
+  if (state.userCollapsedPaths.length === 0) return mergeExpanded(state.expandedPaths, paths);
+  const blocked = new Set(state.userCollapsedPaths);
+  return mergeExpanded(
+    state.expandedPaths,
+    paths.filter((path) => !blocked.has(path)),
+  );
+}
+
 function activateTab(state: VaultWorkspaceState, path: string): VaultWorkspaceState {
-  const expandedPaths = mergeExpanded(state.expandedPaths, ancestorFolderPaths(path));
+  const expandedPaths = expandUnlessUserCollapsed(state, ancestorFolderPaths(path));
   return {
     ...state,
     activeTabPath: path,
@@ -196,17 +208,41 @@ export function vaultWorkspaceReducer(
   switch (action.type) {
     case "toggle_folder": {
       const expanded = state.expandedPaths.includes(action.path);
+      if (expanded) {
+        const userCollapsedPaths = state.userCollapsedPaths.includes(action.path)
+          ? state.userCollapsedPaths
+          : [...state.userCollapsedPaths, action.path];
+        return {
+          ...state,
+          expandedPaths: state.expandedPaths.filter((p) => p !== action.path),
+          userCollapsedPaths,
+        };
+      }
       return {
         ...state,
-        expandedPaths: expanded
-          ? state.expandedPaths.filter((p) => p !== action.path)
-          : [...state.expandedPaths, action.path],
+        expandedPaths: [...state.expandedPaths, action.path],
+        userCollapsedPaths: state.userCollapsedPaths.filter((p) => p !== action.path),
       };
     }
-    case "expand_folder":
-      return state.expandedPaths.includes(action.path)
-        ? state
-        : { ...state, expandedPaths: [...state.expandedPaths, action.path] };
+    case "expand_folder": {
+      const userCollapsedPaths = action.force
+        ? state.userCollapsedPaths.filter((p) => p !== action.path)
+        : state.userCollapsedPaths;
+      if (!action.force && userCollapsedPaths.includes(action.path)) return state;
+      if (
+        state.expandedPaths.includes(action.path) &&
+        userCollapsedPaths === state.userCollapsedPaths
+      ) {
+        return state;
+      }
+      return {
+        ...state,
+        expandedPaths: state.expandedPaths.includes(action.path)
+          ? state.expandedPaths
+          : [...state.expandedPaths, action.path],
+        userCollapsedPaths,
+      };
+    }
     case "select_path":
       return { ...state, selectedPath: action.path };
     case "open_file": {
@@ -218,7 +254,7 @@ export function vaultWorkspaceReducer(
         openTabs,
         activeTabPath: action.path,
         selectedPath: action.path,
-        expandedPaths: mergeExpanded(state.expandedPaths, ancestorFolderPaths(action.path)),
+        expandedPaths: expandUnlessUserCollapsed(state, ancestorFolderPaths(action.path)),
         unsavedPrompt: null,
       };
     }
@@ -339,6 +375,7 @@ export function resolveUnsavedPrompt(
     case "close_tab":
       return { type: "close_tab", path: prompt.path };
     case "dismiss_workspace":
+    case "import_in_progress":
       return { type: "set_unsaved_prompt", prompt: null };
   }
 }

@@ -24,7 +24,7 @@ describe("buildCreateVaultResult", () => {
     expect(result.source).toBe("scratch");
   });
 
-  it("carries unlock preset for a `.7z` import (new contents/ is wrapped here)", () => {
+  it("carries unlock preset for a `.7z` import (new store/ is wrapped here)", () => {
     const result = buildCreateVaultResult(
       createVaultDraftFixture([], {
         source: "import",
@@ -40,7 +40,7 @@ describe("buildCreateVaultResult", () => {
     const result = buildCreateVaultResult(
       createVaultDraftFixture([], {
         source: "import",
-        importFileName: "contents.zip",
+        importFileName: "notes.zip",
         kdf: { unlock_preset: "64mib" },
       }),
       [],
@@ -48,7 +48,7 @@ describe("buildCreateVaultResult", () => {
     expect(result.unlockPreset).toBeUndefined();
   });
 
-  it("writes no unlock preset for create-from-backup (copy contents/; do not rewrite KDF)", () => {
+  it("writes no unlock preset for create-from-backup (copy store/; do not rewrite KDF)", () => {
     const result = buildCreateVaultResult(
       createVaultDraftFixture([], {
         source: "import",

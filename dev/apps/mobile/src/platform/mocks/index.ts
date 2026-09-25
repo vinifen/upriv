@@ -1,1 +1,1 @@
-export { createMobileMockServices, resetMobileMockVaultRoot } from "./createMobileMockServices";
+export { createMobileMockServices } from "./createMobileMockServices";

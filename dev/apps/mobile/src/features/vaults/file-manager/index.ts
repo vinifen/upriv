@@ -2,4 +2,8 @@
 export { FileManagerProvider, useFileManager } from "./FileManagerContext";
 export { FileManagerLayer } from "./FileManagerLayer";
 export { VaultFileManagerIndicator } from "./row/VaultFileManagerIndicator";
-export { hasUnsavedWorkspaceChanges } from "@upriv/shared";
+export {
+  fileManagerBlockingPrompt,
+  fileManagerDismissIntent,
+  hasUnsavedWorkspaceChanges,
+} from "@upriv/shared";

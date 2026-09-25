@@ -1,39 +1,66 @@
+/** @vitest-environment jsdom */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { readImportFileContent } from "../vaultFileImport";
+import { binarySourceFromDropped } from "../vaultFileImport";
 
-describe("readImportFileContent", () => {
+describe("binarySourceFromDropped", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
   });
 
-  it("reads text files via file.text()", async () => {
-    const file = new File(["hello vault"], "note.md", { type: "text/markdown" });
-    await expect(readImportFileContent(file)).resolves.toBe("hello vault");
+  it("streams a File with a known size without loading it as text", async () => {
+    const payload = new Uint8Array([1, 2, 3, 4]);
+    const file = new File([payload], "clip.mkv", { type: "video/x-matroska" });
+    const source = binarySourceFromDropped(file);
+    expect(source.size).toBe(4);
+    await expect(source.slice(0, 4)).resolves.toEqual(payload);
   });
 
-  it("returns empty string for binary extensions", async () => {
-    const file = new File([new Uint8Array([1, 2, 3])], "doc.pdf");
-    await expect(readImportFileContent(file)).rejects.toThrow(/unsupported/);
+  it("stores pdf, zip, and 7z the same way as any other dropped file", () => {
+    const pdf = binarySourceFromDropped(new File([new Uint8Array([1, 2, 3])], "doc.pdf"));
+    const zip = binarySourceFromDropped(new File([new Uint8Array([1, 2, 3])], "pack.zip"));
+    const seven = binarySourceFromDropped(new File([new Uint8Array([1, 2, 3])], "pack.7z"));
+    expect(pdf.size).toBe(3);
+    expect(zip.size).toBe(3);
+    expect(seven.size).toBe(3);
   });
 
-  it("reads images as data URLs", async () => {
-    class FakeFileReader {
-      result: string | null = null;
-      onload: ((ev: ProgressEvent<FileReader>) => void) | null = null;
-      onerror: ((ev: ProgressEvent<FileReader>) => void) | null = null;
-      error: DOMException | null = null;
+  it("imports an empty file as a zero-byte source", async () => {
+    const source = binarySourceFromDropped(new File([], "empty.dat"));
+    expect(source.size).toBe(0);
+    await expect(source.slice(0, 1)).resolves.toEqual(new Uint8Array());
+  });
 
-      readAsDataURL() {
-        this.result = "data:image/png;base64,AAAA";
-        queueMicrotask(() => {
-          this.onload?.({} as ProgressEvent<FileReader>);
-        });
-      }
-    }
+  it("falls back to an OS path when the File size is a dummy zero", async () => {
+    const calls: { offset: number; len: number }[] = [];
+    vi.stubGlobal("window", {
+      upriv: {
+        readDroppedPathRange: async (_path: string, offset: number, len: number) => {
+          calls.push({ offset, len });
+          return { contentB64: btoa("abcd") };
+        },
+      },
+    });
+    const source = binarySourceFromDropped(new File([], "huge.bin"), "/tmp/huge.bin", 4);
+    expect(source.size).toBe(4);
+    const bytes = await source.slice(0, 4);
+    expect(Array.from(bytes)).toEqual([97, 98, 99, 100]);
+    expect(calls[0]).toEqual({ offset: 0, len: 4 });
+  });
 
-    vi.stubGlobal("FileReader", FakeFileReader);
-
-    const file = new File([new Uint8Array([137, 80, 78, 71])], "pic.png", { type: "image/png" });
-    await expect(readImportFileContent(file)).resolves.toBe("data:image/png;base64,AAAA");
+  it("prefers an OS path over an in-memory File so large drops skip the renderer", async () => {
+    const calls: { offset: number; len: number }[] = [];
+    vi.stubGlobal("window", {
+      upriv: {
+        readDroppedPathRange: async (_path: string, offset: number, len: number) => {
+          calls.push({ offset, len });
+          return { contentB64: btoa("abcd") };
+        },
+      },
+    });
+    const file = new File([new Uint8Array(8)], "huge.bin");
+    const source = binarySourceFromDropped(file, "/tmp/huge.bin", 4);
+    expect(source.size).toBe(4);
+    await source.slice(0, 4);
+    expect(calls[0]).toEqual({ offset: 0, len: 4 });
   });
 });

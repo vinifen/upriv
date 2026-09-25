@@ -12,7 +12,7 @@ import { PasswordInput } from "@/components/ui";
 import { PolicyRadioOption, settingsControlClass, SettingsField } from "./vaultSettingsForm";
 
 interface VaultChangeKdfFieldsProps {
-  /** Current unlock cost from `contents/vault.header`. */
+  /** Current unlock cost from `store/header/vault.header`. */
   currentPreset: KdfUnlockPreset;
   rewrapBlocked: boolean;
   fields: ChangeKdfFieldsState;

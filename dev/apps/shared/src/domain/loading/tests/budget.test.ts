@@ -18,7 +18,9 @@ describe("LOADING_BUDGET_MS", () => {
     expect(LOADING_BUDGET_MS.vaultCreate).toBe(LOADING_BUDGET_MS.vaultRewrap);
     expect(LOADING_BUDGET_MS.vaultPipeline).toBe(LOADING_BUDGET_MS.vaultRewrap);
     expect(LOADING_BUDGET_MS.vaultExport).toBe(LOADING_BUDGET_MS.vaultRewrap);
+    expect(LOADING_BUDGET_MS.vaultFsImport).toBe(LOADING_BUDGET_MS.vaultExport);
     expect(LOADING_BUDGET_MS.settingsSave).toBe(30_000);
+    expect(LOADING_BUDGET_MS.vaultDelete).toBe(LOADING_BUDGET_MS.vaultRoot);
     expect(LOADING_BUDGET_MS.settingsSave).toBeLessThan(LOADING_BUDGET_MS.default);
     expect(LOADING_BUDGET_MS.vaultRename).toBe(LOADING_BUDGET_MS.default);
   });
@@ -42,6 +44,9 @@ describe("loading budget copy helpers", () => {
 
   it("holds the 10-minute hint for 10s, shorter budgets for 1s", () => {
     expect(loadingAppearDelayMs(LOADING_BUDGET_MS.vaultPipeline)).toBe(
+      LOADING_LONG_HINT_APPEAR_DELAY_MS,
+    );
+    expect(loadingAppearDelayMs(LOADING_BUDGET_MS.vaultFsImport)).toBe(
       LOADING_LONG_HINT_APPEAR_DELAY_MS,
     );
     expect(loadingAppearDelayMs(LOADING_BUDGET_MS.settingsSave)).toBe(LOADING_APPEAR_DELAY_MS);

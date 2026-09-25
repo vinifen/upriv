@@ -26,29 +26,13 @@ import {
 } from "@upriv/shared";
 import {
   cloneJson,
-  createVaultFile,
-  createVaultFolder,
-  deleteVaultPath,
-  ensureVaultFolder,
-  getVaultFileContent,
-  getVaultFileTree,
-  getVaultTreeRevision,
-  importVaultFile,
-  isVaultFileEditable,
-  isVaultFileImage,
-  isVaultFileViewable,
-  moveVaultPath,
-  renameVaultPath,
-  resetVaultFileSession,
   remapVaultWorkspaceSnapshot,
-  setVaultFileContent,
-  vaultFileLanguageFromPath,
+  createAsyncVaultFileSystemService,
   clearMockVaultUnlockPreset,
   createMockVaultGroupService,
   createMockVaultSecurityService,
   getMockVaultUnlockPreset,
   mockVaultExportBytes,
-  recordMockVaultOpened,
   setMockVaultUnlockPreset,
 } from "@upriv/shared/testing";
 import {
@@ -148,7 +132,7 @@ const MOCK_BACKUPS: Record<string, VaultBackupEntry[]> = {
 const MOCK_LOG_CURRENT = [
   "0001 2026-06-02T12:00:00.000Z INFO  app_start          version=0.1.0-beta source=mobile_mock",
   "0002 2026-06-02T12:00:01.120Z DEBUG vault_root_resolve status=ready",
-  "0003 2026-06-02T12:00:02.400Z INFO  vault_list         count=4",
+  "0003 2026-06-02T12:00:02.400Z INFO  vault_list         count=5",
   "0004 2026-06-02T12:01:10.000Z WARN  unlock_failed      vault=work-documents",
 ].join("\n");
 
@@ -190,7 +174,7 @@ function appendMockLogEvent(event: string, level: "INFO" | "WARN" | "ERROR" = "I
 }
 
 /**
- * In-memory AppServices for Expo Go until the native Rust bridge lands.
+ * In-memory AppServices for Expo Go (no `upriv-ffi`).
  * Paths use `content://upriv.mock/...` stubs (SAF-shaped), not desktop FS paths.
  */
 export function createMobileMockServices(): AppServices {
@@ -326,7 +310,10 @@ export function createMobileMockServices(): AppServices {
         const index = extraCreatedVaults.findIndex((row) => row.id === vaultId);
         if (index >= 0) extraCreatedVaults.splice(index, 1);
         unregisterMockVaultId(vaultId);
+        suppressMockSeedVaultId(vaultId);
+        removeRemappedMockSeedVault(vaultId);
       },
+      async recoverDirtyClose() {},
       async getUnlockPreset(vaultId) {
         return getMockVaultUnlockPreset(vaultId);
       },
@@ -335,6 +322,16 @@ export function createMobileMockServices(): AppServices {
       },
       async getExportBytes(vault, request) {
         return mockVaultExportBytes(vault, request);
+      },
+      async exportToPath(vault, request, destPath) {
+        const data = mockVaultExportBytes(vault, request);
+        return { path: destPath, size: data.byteLength };
+      },
+      async exportCapabilities() {
+        return { sevenZip: true };
+      },
+      async probeExportPassword(_vaultId, password) {
+        return isMockLifecyclePasswordValid(password);
       },
     },
 
@@ -475,9 +472,17 @@ export function createMobileMockServices(): AppServices {
           if (entry.stamp === stamp) entry.saved = true;
         }
       },
-      async getBackupBytes(entry) {
+      async getBackupBytes(_vaultId, entry) {
         const header = `[Upriv mock backup]\n${entry.stamp}\n${entry.saved ? "saved\n" : ""}`;
         return new TextEncoder().encode(header);
+      },
+      async exportToPath(_vaultId, entry, destPath) {
+        const header = `[Upriv mock backup]\n${entry.stamp}\n${entry.saved ? "saved\n" : ""}`;
+        const data = new TextEncoder().encode(header);
+        return { path: destPath, size: data.byteLength };
+      },
+      async exportSnapshotsToPath(_vaultId, stamps, destPath) {
+        return { path: destPath, size: stamps.length };
       },
     },
 
@@ -505,56 +510,7 @@ export function createMobileMockServices(): AppServices {
       },
     },
 
-    filesystem: {
-      resetSession(vaultId) {
-        resetVaultFileSession(vaultId);
-      },
-      getTreeRevision(vaultId) {
-        return getVaultTreeRevision(vaultId);
-      },
-      getFileTree(vaultId) {
-        return getVaultFileTree(vaultId);
-      },
-      getFileContent(vaultId, path) {
-        return getVaultFileContent(vaultId, path);
-      },
-      isFileEditable(vaultId, path) {
-        return isVaultFileEditable(vaultId, path);
-      },
-      isFileViewable(vaultId, path) {
-        return isVaultFileViewable(vaultId, path);
-      },
-      isFileImage(vaultId, path) {
-        return isVaultFileImage(vaultId, path);
-      },
-      setFileContent(vaultId, path, content) {
-        return setVaultFileContent(vaultId, path, content);
-      },
-      createFile(vaultId, parentPath, baseName) {
-        return createVaultFile(vaultId, parentPath, baseName);
-      },
-      importFile(vaultId, parentPath, fileName, content) {
-        return importVaultFile(vaultId, parentPath, fileName, content);
-      },
-      createFolder(vaultId, parentPath, baseName) {
-        return createVaultFolder(vaultId, parentPath, baseName);
-      },
-      ensureFolder(vaultId, parentPath, folderName) {
-        return ensureVaultFolder(vaultId, parentPath, folderName);
-      },
-      renamePath(vaultId, path, newName) {
-        return renameVaultPath(vaultId, path, newName);
-      },
-      deletePath(vaultId, path) {
-        return deleteVaultPath(vaultId, path);
-      },
-      movePath(vaultId, fromPath, toFolderPath) {
-        return moveVaultPath(vaultId, fromPath, toFolderPath);
-      },
-      languageFromPath(path) {
-        return vaultFileLanguageFromPath(path);
-      },
-    },
+    filesystem: createAsyncVaultFileSystemService(),
 
     lifecycle: {
       hasPasswordInSession(vaultId) {
@@ -574,7 +530,6 @@ export function createMobileMockServices(): AppServices {
             throw new VaultPipelineError(VAULT_PIPELINE_ERROR_CODES.INSUFFICIENT_RAM);
           }
         });
-        recordMockVaultOpened(vaultId);
       },
       async runClosingPipeline(vaultId, onStep) {
         await runTimedPipeline(CLOSING_PIPELINE_STEP_COUNT, onStep, (stepIndex) => {
@@ -582,6 +537,7 @@ export function createMobileMockServices(): AppServices {
             throw new VaultPipelineError(VAULT_PIPELINE_ERROR_CODES.HEADER_TEST_FAILED);
           }
         });
+        return { backupFailed: false };
       },
       resolveWorkspacePath(displayName, options) {
         return (
@@ -610,7 +566,7 @@ export function createMobileMockServices(): AppServices {
         await new Promise((resolve) => setTimeout(resolve, MOCK_IMPORT_PASSWORD_TEST_MS));
         return password.length > 0;
       },
-      selectImportPackageForProbe() {
+      async selectImportPackageForProbe() {
         return {
           path: "content://upriv.mock/import/demo.zip",
           fileName: "demo.zip",
@@ -618,14 +574,4 @@ export function createMobileMockServices(): AppServices {
       },
     },
   };
-}
-
-/** Dev helper: force Gate NeedsSetup on next resolve. */
-export function resetMobileMockVaultRoot() {
-  runtimeRoot = {
-    configured: false,
-    rootPath: "",
-    aliasActive: false,
-  };
-  settingsOnDisk = false;
 }
