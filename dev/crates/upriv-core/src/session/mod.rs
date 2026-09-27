@@ -43,6 +43,9 @@ pub struct OpenSession {
     /// Process lockfile; released when the session is dropped.
     #[zeroize(skip)]
     pub lock: Option<crate::lockfile::VaultLock>,
+    /// Import and other ingest sessions must not snapshot a vault that was just created.
+    #[zeroize(skip)]
+    pub skip_close_backup: bool,
 }
 
 impl OpenSession {
@@ -71,6 +74,7 @@ impl OpenSession {
             tree_revision: 0,
             mount: None,
             lock: None,
+            skip_close_backup: false,
         }
     }
 }

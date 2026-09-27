@@ -5,10 +5,13 @@
 mod backup;
 mod create;
 mod delete;
+mod embedded_settings;
 mod export;
+mod files_zip;
 pub(crate) mod fs;
 mod import;
 mod open_close;
+mod os_import;
 mod persistence;
 mod rename;
 mod seven_zip;
@@ -17,7 +20,7 @@ mod wipe;
 mod zip_io;
 
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::config::vault_config::{load_vault_config_raw, VaultConfig, VaultStorageMode};
 use crate::error::{Result, UprivError};
@@ -32,9 +35,14 @@ pub use backup::{
 };
 pub use create::create_vault;
 pub use delete::delete_vault;
+pub use embedded_settings::{parse_embedded_settings, EmbeddedVaultSettings};
 pub use export::{
     export_logical_seven_zip, export_logical_seven_zip_to_path, export_store_zip,
     export_store_zip_to_path, probe_export_password,
+};
+pub use files_zip::{
+    classify_import_zip_bytes, classify_import_zip_path, import_logical_files_zip,
+    import_logical_files_zip_path, ZipImportClass,
 };
 pub use fs::{
     fs_create_file, fs_create_folder, fs_delete, fs_ensure_folder, fs_import_from_os_path,
@@ -43,15 +51,23 @@ pub use fs::{
 };
 pub use import::{
     import_from_backup, import_store_from_archive_path, import_store_tree, import_store_zip,
-    parse_backup_import_path, read_import_archive_bytes,
+    parse_backup_import_path, read_import_archive_bytes, read_import_zip_settings,
 };
 pub use open_close::{close_all_vaults, close_vault, open_vault, CloseVaultOutcome};
+pub use os_import::{
+    abort_import_vault, import_logical_os_path, ingest_import_directory, ingest_import_reader,
+    open_import_session,
+};
 pub use persistence::{load_vault_persistence, VaultPersistence};
 pub use rename::{rename_vault, VaultRenameResult};
-pub use seven_zip::{import_logical_seven_zip, probe_logical_seven_zip};
+pub use seven_zip::{
+    import_logical_seven_zip, import_logical_seven_zip_path, probe_logical_seven_zip,
+    probe_logical_seven_zip_path,
+};
 pub use seven_zip_pack::seven_zip_export_available;
 pub use zip_io::{
-    probe_store_zip, probe_store_zip_path, zip_directory_to_bytes, zip_directory_to_path,
+    probe_store_zip, probe_store_zip_path, read_zip_config_toml, zip_directory_to_bytes,
+    zip_directory_to_path, zip_store_with_config_to_bytes, zip_store_with_config_to_path,
 };
 
 /// Wire DTO for `vault_list`.
@@ -232,6 +248,51 @@ pub fn list_vaults(root: &VaultRoot) -> Result<Vec<VaultListItem>> {
         .collect())
 }
 
+/// Byte length of regular files under `store/`. Directory entries and symlink
+/// targets are not included. File contents are not read.
+pub fn vault_store_on_disk_bytes(root: &VaultRoot, vault_id: &str) -> Result<u64> {
+    let vault_dir = root.vault_dir(vault_id)?;
+    if !vault_dir.is_dir() {
+        return Err(UprivError::VaultNotFound(vault_dir));
+    }
+    let store = vault_dir.join(crate::paths::STORE_DIR_NAME);
+    let meta = std::fs::symlink_metadata(&store)?;
+    if !meta.is_dir() {
+        return Err(UprivError::VaultStoreInvalid {
+            path: store,
+            detail: "store directory is missing".into(),
+        });
+    }
+    sum_regular_file_bytes(&store)
+}
+
+pub(crate) fn sum_regular_file_bytes(root: &Path) -> Result<u64> {
+    let mut total: u64 = 0;
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        for entry in std::fs::read_dir(&dir)? {
+            let entry = entry?;
+            let file_type = entry.file_type()?;
+            if file_type.is_symlink() {
+                continue;
+            }
+            if file_type.is_dir() {
+                pending.push(entry.path());
+                continue;
+            }
+            if file_type.is_file() {
+                // Length from lstat. A symlink swapped in after the type check is skipped.
+                let meta = std::fs::symlink_metadata(entry.path())?;
+                if meta.file_type().is_symlink() || !meta.is_file() {
+                    continue;
+                }
+                total = total.saturating_add(meta.len());
+            }
+        }
+    }
+    Ok(total)
+}
+
 /// One vault after a successful create — does not scan siblings.
 pub fn vault_list_item(root: &VaultRoot, vault_id: &str) -> Result<VaultListItem> {
     let vault_dir = root.vault_dir(vault_id)?;
@@ -263,6 +324,32 @@ pub fn vault_list_item(root: &VaultRoot, vault_id: &str) -> Result<VaultListItem
 mod tests {
     use super::*;
     use crate::test_support::{vault_root_with, VaultSpec};
+
+    #[test]
+    fn store_on_disk_bytes_sums_regular_files_only() {
+        let (_tmp, root) = vault_root_with(&[VaultSpec::encrypted("notes", "Notes", 1)]);
+        let store = root
+            .vault_dir("notes")
+            .unwrap()
+            .join(crate::paths::STORE_DIR_NAME);
+        std::fs::create_dir_all(store.join("header")).unwrap();
+        std::fs::create_dir_all(store.join("data")).unwrap();
+        std::fs::write(store.join("header").join("vault.header"), vec![1u8; 10]).unwrap();
+        std::fs::write(store.join("data").join("a.blob"), vec![2u8; 25]).unwrap();
+        std::fs::write(
+            store.join("DANGER-DO-NOT-EDIT-PERMANENT-DATA-LOSS.md"),
+            b"note",
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink("/etc/passwd", store.join("data").join("escape")).unwrap();
+        }
+        assert_eq!(
+            vault_store_on_disk_bytes(&root, "notes").unwrap(),
+            10 + 25 + 4
+        );
+    }
 
     #[test]
     fn lists_vaults_sorted_by_order() {

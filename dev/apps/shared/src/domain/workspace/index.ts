@@ -7,6 +7,7 @@ export {
 export {
   isAbsoluteFilesystemPath,
   isAbsoluteOsFilesystemPath,
+  isContentUri,
   isReservedUprivWorkspacePath,
   safTreeUriHasExtraSegment,
   needsWorkspaceSetupOnOpen,

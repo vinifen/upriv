@@ -5,15 +5,20 @@ use std::path::Path;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use upriv_core::{
-    acknowledge_dirty_close, close_all_vaults, delete_backups, delete_vault,
+    abort_import_vault, acknowledge_dirty_close, classify_import_zip_bytes,
+    classify_import_zip_path, close_all_vaults, delete_backups, delete_vault,
     export_backups_to_path, export_logical_seven_zip, export_logical_seven_zip_to_path,
     export_store_zip, export_store_zip_to_path, fs_create_file, fs_create_folder, fs_delete,
     fs_ensure_folder, fs_import_from_os_path, fs_list_tree, fs_mkdir, fs_move, fs_os_path,
     fs_read_file, fs_read_range, fs_rename, fs_tree_revision, fs_truncate, fs_write_file,
-    import_logical_seven_zip, import_store_from_archive_path, import_store_zip, list_backups,
-    probe_export_password, probe_logical_seven_zip, probe_store_zip, probe_store_zip_path,
-    promote_backup_save, read_backup_zip_bytes, read_import_archive_bytes,
-    seven_zip_export_available, vault_list_item, KdfUnlockPreset, VaultConfig,
+    import_logical_files_zip, import_logical_files_zip_path, import_logical_os_path,
+    import_logical_seven_zip, import_logical_seven_zip_path, import_store_from_archive_path,
+    import_store_zip, ingest_import_directory, ingest_import_reader, list_backups,
+    parse_backup_import_path, parse_embedded_settings, probe_export_password,
+    probe_logical_seven_zip, probe_logical_seven_zip_path, probe_store_zip, promote_backup_save,
+    read_backup_zip_bytes, read_import_archive_bytes, read_import_zip_settings,
+    read_zip_config_toml, seven_zip_export_available, vault_list_item, KdfUnlockPreset,
+    VaultConfig, ZipImportClass,
 };
 
 use super::{err, map_core_err, ok, optional_vault_root, require_vault_root, RpcResponse};
@@ -174,6 +179,19 @@ struct VaultImport7zParams {
     archive_path: Option<String>,
     #[serde(default)]
     archive_password: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct VaultImportFilesZipParams {
+    settings: VaultConfig,
+    password: String,
+    #[serde(default)]
+    unlock_preset: Option<KdfUnlockPreset>,
+    #[serde(default)]
+    content_b64: Option<String>,
+    #[serde(default)]
+    archive_path: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -648,6 +666,66 @@ pub(super) fn vault_delete(params: Value) -> RpcResponse {
     }
 }
 
+pub(super) fn vault_discard_import(params: Value) -> RpcResponse {
+    let parsed: VaultIdParams = match serde_json::from_value(params) {
+        Ok(value) => value,
+        Err(error) => return err("invalid_request", error.to_string()),
+    };
+    let root = match require_vault_root() {
+        Ok(root) => root,
+        Err(response) => return response,
+    };
+    match abort_import_vault(&root, parsed.id.trim()) {
+        Ok(()) => ok(json!(null)),
+        Err(error) => map_core_err(error),
+    }
+}
+
+pub(super) fn vault_ingest_directory(params: Value) -> RpcResponse {
+    let parsed: VaultFsPathParams = match serde_json::from_value(params) {
+        Ok(value) => value,
+        Err(error) => return err("invalid_request", error.to_string()),
+    };
+    let root = match require_vault_root() {
+        Ok(root) => root,
+        Err(response) => return response,
+    };
+    match ingest_import_directory(&root, parsed.id.trim(), parsed.path.trim()) {
+        Ok(()) => ok(json!(null)),
+        Err(error) => map_core_err(error),
+    }
+}
+
+/// Read one already-open file descriptor into the import session.
+///
+/// The caller transferred ownership of `fd` (Android `detachFd`). Not a JSON
+/// RPC: a desktop daemon must not import an arbitrary process file descriptor.
+pub fn ingest_content_fd(vault_id: &str, logical_path: &str, fd: i32) -> RpcResponse {
+    if fd < 0 {
+        return err("invalid_request", "import file is unavailable".into());
+    }
+    #[cfg(unix)]
+    {
+        use std::fs::File;
+        use std::os::unix::io::FromRawFd;
+        // SAFETY: the caller moved this descriptor in and will not close it.
+        let mut file = unsafe { File::from_raw_fd(fd) };
+        let root = match require_vault_root() {
+            Ok(root) => root,
+            Err(response) => return response,
+        };
+        match ingest_import_reader(&root, vault_id.trim(), logical_path.trim(), &mut file) {
+            Ok(()) => ok(json!(null)),
+            Err(error) => map_core_err(error),
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (vault_id, logical_path, fd);
+        err("not_implemented", "content import is unavailable".into())
+    }
+}
+
 pub(super) fn vault_recover_ack(params: Value) -> RpcResponse {
     let parsed: VaultIdParams = match serde_json::from_value(params) {
         Ok(v) => v,
@@ -772,22 +850,119 @@ pub(super) fn vault_import_7z(params: Value) -> RpcResponse {
         Ok(root) => root,
         Err(response) => return response,
     };
-    let bytes = match load_archive_bytes(
-        parsed.content_b64.as_deref(),
-        parsed.archive_path.as_deref(),
-    ) {
-        Ok(bytes) => bytes,
-        Err(response) => return response,
-    };
     let archive_pw = parsed.archive_password.as_deref().unwrap_or("").as_bytes();
     let preset = parsed.unlock_preset.unwrap_or(KdfUnlockPreset::M256);
-    match import_logical_seven_zip(
+    let imported = if let Some(path) = parsed
+        .archive_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        import_logical_seven_zip_path(
+            &root,
+            parsed.settings,
+            parsed.password.as_bytes(),
+            preset,
+            Path::new(path),
+            archive_pw,
+        )
+    } else {
+        let bytes = match load_archive_bytes(parsed.content_b64.as_deref(), None) {
+            Ok(bytes) => bytes,
+            Err(response) => return response,
+        };
+        import_logical_seven_zip(
+            &root,
+            parsed.settings,
+            parsed.password.as_bytes(),
+            preset,
+            &bytes,
+            archive_pw,
+        )
+    };
+    match imported {
+        Ok(id) => match vault_list_item(&root, &id) {
+            Ok(item) => ok(json!({ "vault": super::vault_list_item_json(&item) })),
+            Err(error) => map_core_err(error),
+        },
+        Err(error) => map_core_err(error),
+    }
+}
+
+pub(super) fn vault_import_files_zip(params: Value) -> RpcResponse {
+    let parsed: VaultImportFilesZipParams = match serde_json::from_value(params) {
+        Ok(v) => v,
+        Err(error) => return err("invalid_request", error.to_string()),
+    };
+    if parsed.password.is_empty() {
+        return err("invalid_request", "password is required".into());
+    }
+    let root = match require_vault_root() {
+        Ok(root) => root,
+        Err(response) => return response,
+    };
+    let preset = parsed.unlock_preset.unwrap_or(KdfUnlockPreset::M256);
+    let path = parsed
+        .archive_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let imported = if let Some(path) = path {
+        import_logical_files_zip_path(
+            &root,
+            parsed.settings,
+            parsed.password.as_bytes(),
+            preset,
+            Path::new(path),
+        )
+    } else {
+        match load_archive_bytes(parsed.content_b64.as_deref(), None) {
+            Ok(bytes) => import_logical_files_zip(
+                &root,
+                parsed.settings,
+                parsed.password.as_bytes(),
+                preset,
+                &bytes,
+            ),
+            Err(response) => return response,
+        }
+    };
+    match imported {
+        Ok(id) => match vault_list_item(&root, &id) {
+            Ok(item) => ok(json!({ "vault": super::vault_list_item_json(&item) })),
+            Err(error) => map_core_err(error),
+        },
+        Err(error) => map_core_err(error),
+    }
+}
+
+pub(super) fn vault_import_os_path(params: Value) -> RpcResponse {
+    let parsed: VaultImportFilesZipParams = match serde_json::from_value(params) {
+        Ok(v) => v,
+        Err(error) => return err("invalid_request", error.to_string()),
+    };
+    if parsed.password.is_empty() {
+        return err("invalid_request", "password is required".into());
+    }
+    let Some(path) = parsed
+        .archive_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return err("invalid_request", "source path is required".into());
+    };
+    let root = match require_vault_root() {
+        Ok(root) => root,
+        Err(response) => return response,
+    };
+    let preset = parsed.unlock_preset.unwrap_or(KdfUnlockPreset::M256);
+    match import_logical_os_path(
         &root,
         parsed.settings,
         parsed.password.as_bytes(),
         preset,
-        &bytes,
-        archive_pw,
+        Path::new(path),
     ) {
         Ok(id) => match vault_list_item(&root, &id) {
             Ok(item) => ok(json!({ "vault": super::vault_list_item_json(&item) })),
@@ -802,9 +977,10 @@ pub(super) fn vault_import_probe(params: Value) -> RpcResponse {
         Ok(v) => v,
         Err(error) => return err("invalid_request", error.to_string()),
     };
-    if let Err(response) = require_vault_root() {
-        return response;
-    }
+    let root = match require_vault_root() {
+        Ok(root) => root,
+        Err(response) => return response,
+    };
     let kind = infer_import_kind(parsed.kind.as_deref(), parsed.archive_path.as_deref());
     let archive_pw = parsed.archive_password.as_deref().unwrap_or("").as_bytes();
     let path = parsed
@@ -813,26 +989,72 @@ pub(super) fn vault_import_probe(params: Value) -> RpcResponse {
         .map(str::trim)
         .filter(|value| !value.is_empty());
     let probed = if kind == "seven_zip" {
-        let bytes = match load_archive_bytes(parsed.content_b64.as_deref(), path) {
-            Ok(bytes) => bytes,
-            Err(response) => return response,
-        };
-        probe_logical_seven_zip(&bytes, archive_pw)
+        if let Some(path) = path {
+            probe_logical_seven_zip_path(Path::new(path), archive_pw).map(|()| None)
+        } else {
+            let bytes = match load_archive_bytes(parsed.content_b64.as_deref(), None) {
+                Ok(bytes) => bytes,
+                Err(response) => return response,
+            };
+            probe_logical_seven_zip(&bytes, archive_pw).map(|()| None)
+        }
     } else if let Some(path) = path {
-        probe_store_zip_path(Path::new(path))
+        if parse_backup_import_path(path).is_none() {
+            match classify_import_zip_path(Path::new(path)) {
+                Ok(ZipImportClass::Files) => return ok(probe_ok_body("files_zip", None)),
+                Ok(ZipImportClass::Store) => {}
+                Err(error) => return map_core_err(error),
+            }
+        }
+        read_import_zip_settings(&root, path)
     } else {
         let bytes = match load_archive_bytes(parsed.content_b64.as_deref(), None) {
             Ok(bytes) => bytes,
             Err(response) => return response,
         };
-        probe_store_zip(&bytes)
+        match classify_import_zip_bytes(&bytes) {
+            Ok(ZipImportClass::Files) => return ok(probe_ok_body("files_zip", None)),
+            Ok(ZipImportClass::Store) => probe_store_zip(&bytes).and_then(|_| {
+                read_zip_config_toml(std::io::Cursor::new(bytes)).and_then(parse_optional_settings)
+            }),
+            Err(error) => return map_core_err(error),
+        }
     };
     match probed {
-        Ok(()) => ok(json!({ "ok": true, "kind": kind })),
+        Ok(settings) => ok(probe_ok_body(kind, settings.as_ref())),
         Err(upriv_core::UprivError::WrongPassword) => ok(json!({ "ok": false, "kind": kind })),
         Err(error) if kind == "seven_zip" => map_core_err(error),
         Err(_) => ok(json!({ "ok": false, "kind": kind })),
     }
+}
+
+fn parse_optional_settings(
+    bytes: Option<Vec<u8>>,
+) -> upriv_core::Result<Option<upriv_core::EmbeddedVaultSettings>> {
+    match bytes {
+        Some(bytes) => parse_embedded_settings(&bytes).map(Some),
+        None => Ok(None),
+    }
+}
+
+fn probe_ok_body(kind: &str, settings: Option<&upriv_core::EmbeddedVaultSettings>) -> Value {
+    let mut body = json!({ "ok": true, "kind": kind });
+    let Some(parsed) = settings else {
+        return body;
+    };
+    if let Ok(mut value) = serde_json::to_value(&parsed.config) {
+        if let Some(security) = value
+            .get_mut("security")
+            .and_then(|item| item.as_object_mut())
+        {
+            security.remove("password_changed_at");
+        }
+        body["settings"] = value;
+    }
+    if let Some(preset) = parsed.unlock_preset {
+        body["unlockPreset"] = serde_json::to_value(preset).unwrap_or(Value::Null);
+    }
+    body
 }
 
 pub(super) fn backup_list(params: Value) -> RpcResponse {
@@ -848,6 +1070,7 @@ pub(super) fn backup_list(params: Value) -> RpcResponse {
         Ok(entries) => ok(json!({
             "backups": entries.iter().map(|e| json!({
                 "stamp": e.stamp,
+                "fileName": e.file_name,
                 "createdAt": e.created_at,
                 "sizeBytes": e.size_bytes,
                 "saved": e.saved,

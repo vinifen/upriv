@@ -101,6 +101,28 @@ pub fn invoke(method: String, params_json: String) -> String {
     serde_json::to_string(&response).unwrap_or_else(|_| internal_error_envelope())
 }
 
+/// Stream one Android content file into the open import session.
+///
+/// `fd` is owned by this call (`ParcelFileDescriptor.detachFd`). Returns the
+/// same JSON envelope as [`invoke`].
+#[uniffi::export]
+pub fn import_content_fd(vault_id: String, logical_path: String, fd: i32) -> String {
+    install_panic_hook();
+    let response = catch_unwind(AssertUnwindSafe(|| {
+        upriv_rpc::ingest_content_fd(&vault_id, &logical_path, fd)
+    }))
+    .unwrap_or_else(|_| RpcResponse {
+        ok: false,
+        result: None,
+        error: Some(RpcErrorBody {
+            code: "internal_error".into(),
+            message: "internal error while handling request".into(),
+            details: None,
+        }),
+    });
+    serde_json::to_string(&response).unwrap_or_else(|_| internal_error_envelope())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

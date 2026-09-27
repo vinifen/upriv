@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Button, Modal } from "@/components/ui";
 import { useAppSettingsContext } from "@/features/system/settings";
 import { useTranslation } from "@/i18n";
@@ -14,12 +14,13 @@ import {
 } from "@upriv/shared";
 import { useCreateVaultWizard } from "@upriv/shared/react";
 import { CreateVaultStepNav } from "./CreateVaultStepNav";
-import { renderCreateVaultStep } from "./createVaultSteps";
+import { invalidateImportPicks, renderCreateVaultStep } from "./createVaultSteps";
 
 interface CreateVaultModalProps {
   open: boolean;
   existingVaultIds: readonly string[];
   existingOrders: readonly number[];
+  existingDisplayNames?: readonly string[];
   groups?: readonly VaultGroup[];
   initialDraft?: CreateVaultDraft | null;
   initialStep?: CreateVaultStepId | null;
@@ -31,6 +32,7 @@ export function CreateVaultModal({
   open,
   existingVaultIds,
   existingOrders,
+  existingDisplayNames = [],
   groups = NO_VAULT_GROUPS,
   initialDraft = null,
   initialStep = null,
@@ -39,7 +41,11 @@ export function CreateVaultModal({
 }: CreateVaultModalProps) {
   const { t } = useTranslation();
   const createVaultService = useCreateVaultService();
-  const { settings: appSettings, showHiddenVaultsSession } = useAppSettingsContext();
+  const {
+    settings: appSettings,
+    showHiddenVaultsSession,
+    reportVaultRootIntegrityFailure,
+  } = useAppSettingsContext();
   const vaultRootService = useVaultRootService();
   const [resolvedRootPath, setResolvedRootPath] = useState<string | null>(null);
   const [createError, setCreateError] = useState<string | null>(null);
@@ -70,6 +76,13 @@ export function CreateVaultModal({
     };
   }, [open, appSettings.app.vault_root_mode, vaultRootService]);
 
+  const reportImportVaultRootFailure = useCallback(
+    (error: unknown) => {
+      void reportVaultRootIntegrityFailure(error);
+    },
+    [reportVaultRootIntegrityFailure],
+  );
+
   const vaultRootPath = vaultRootPathForWorkspaceValidation(
     appSettings.app.vault_root_mode,
     appSettings.app.upriv_root_path,
@@ -81,6 +94,7 @@ export function CreateVaultModal({
     open,
     existingVaultIds,
     existingOrders,
+    existingDisplayNames,
     groups,
     vaultRootPath,
     initialDraft,
@@ -89,6 +103,9 @@ export function CreateVaultModal({
     onClose,
     testImportPassword: (password, importFile) =>
       createVaultService.testImportPackagePassword(password, importFile),
+    readImportPackageSettings: (importFile) =>
+      createVaultService.readImportPackageSettings(importFile),
+    onVaultRootFailure: reportImportVaultRootFailure,
   });
 
   const {
@@ -115,6 +132,7 @@ export function CreateVaultModal({
 
   useEffect(() => {
     if (!open) setCreateError(null);
+    invalidateImportPicks();
   }, [open]);
 
   const footer = (
@@ -205,6 +223,7 @@ export function CreateVaultModal({
             onChange: patchDraft,
             groups,
             includeHidden,
+            existingDisplayNames,
             vaultRootPath,
             onTestImportPassword: handleTestImportPassword,
             testingPassword,

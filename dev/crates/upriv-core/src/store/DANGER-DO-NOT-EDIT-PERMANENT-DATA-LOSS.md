@@ -30,8 +30,8 @@ This layout does not change when a file is added.
 
 - **`header/vault.header`** — Argon2id salt and cost, and the master key sealed by the password.
 - **`header/vault.header.copy`** — an exact second copy of `header/vault.header`.
-- **`index/root.idx.enc`** — names and folders, encrypted. If this file is lost, the name list is lost.
-- **`data/*.chunk.enc`** — file contents in encrypted chunks. A chunk filename is not the file's name. Damaging one chunk destroys that piece of data.
+- **`index/root.idx.enc` and `index/root.idx.enc.copy`** — names and folders, encrypted, the same bytes. If one file is lost or unreadable, the app restores it from the other. If both are lost, the name list is lost.
+- **`data/*.blob`** — file contents, one encrypted file per document. The filename is not the document's name. Damaging one file destroys that document.
 
 There are no plaintext documents here. A text editor will not show the vault's files. Saving any of these files from an editor can corrupt them and cause the same permanent loss.
 
@@ -57,8 +57,8 @@ Esta estructura no cambia cuando se añade un archivo.
 
 - **`header/vault.header`** — sal y coste de Argon2id, y la clave maestra sellada con la contraseña.
 - **`header/vault.header.copy`** — una segunda copia exacta de `header/vault.header`.
-- **`index/root.idx.enc`** — nombres y carpetas, cifrados. Si este archivo se pierde, se pierde la lista de nombres.
-- **`data/*.chunk.enc`** — el contenido de los archivos, en trozos cifrados. El nombre de un chunk no es el nombre del archivo. Dañar un chunk destruye ese trozo de datos.
+- **`index/root.idx.enc` y `index/root.idx.enc.copy`** — nombres y carpetas, cifrados, los mismos bytes. Si uno se pierde o no se puede leer, la aplicación lo restaura desde el otro. Si se pierden los dos, se pierde la lista de nombres.
+- **`data/*.blob`** — el contenido de los archivos, un archivo cifrado por documento. El nombre no es el del documento. Dañar un archivo destruye ese documento.
 
 Aquí no hay documentos en claro. Un editor de texto no muestra los archivos del cofre. Guardar cualquiera de estos archivos desde un editor puede corromperlos y provocar la misma pérdida permanente.
 
@@ -84,8 +84,8 @@ Aquí no hay documentos en claro. Un editor de texto no muestra los archivos del
 
 - **`header/vault.header`** — Argon2id 的盐与成本，以及由密码密封的主密钥。
 - **`header/vault.header.copy`** — `header/vault.header` 的精确第二份副本。
-- **`index/root.idx.enc`** — 加密的名称与文件夹。若此文件丢失，名称列表也会丢失。
-- **`data/*.chunk.enc`** — 以加密分块存放的文件内容。分块文件名不是文件的真实名称。损坏一个分块会永久毁掉那一段数据。
+- **`index/root.idx.enc` 与 `index/root.idx.enc.copy`** — 加密的名称与文件夹，字节完全相同。若其中一份丢失或无法读取，应用会用另一份恢复。若两份都丢失，名称列表也会丢失。
+- **`data/*.blob`** — 每个文档对应一个加密文件。文件名不是文档的真实名称。损坏一个文件会永久毁掉该文档。
 
 此处没有明文文档。文本编辑器不会显示保险库中的文件。从编辑器保存这些文件可能导致损坏，并造成同样的永久损失。
 
@@ -111,7 +111,7 @@ Aquí no hay documentos en claro. Un editor de texto no muestra los archivos del
 
 - **`header/vault.header`** — Argon2id का साल्ट और लागत, तथा पासवर्ड से सील की गई मास्टर कुंजी।
 - **`header/vault.header.copy`** — `header/vault.header` की सटीक दूसरी प्रति।
-- **`index/root.idx.enc`** — एन्क्रिप्टेड नाम और फ़ोल्डर। यह फ़ाइल खो जाए तो नामों की सूची खो जाती है।
-- **`data/*.chunk.enc`** — एन्क्रिप्टेड खंडों में फ़ाइल सामग्री। खंड का फ़ाइलनाम फ़ाइल का असली नाम नहीं है। एक खंड बिगड़ने से उस हिस्से का डेटा नष्ट हो जाता है।
+- **`index/root.idx.enc` और `index/root.idx.enc.copy`** — एन्क्रिप्टेड नाम और फ़ोल्डर, एक जैसे बाइट। एक फ़ाइल खो जाए या पढ़ी न जा सके तो ऐप उसे दूसरी से बहाल करता है। दोनों खो जाएँ तो नामों की सूची खो जाती है।
+- **`data/*.blob`** — हर दस्तावेज़ के लिए एक एन्क्रिप्टेड फ़ाइल। फ़ाइलनाम दस्तावेज़ का असली नाम नहीं है। एक फ़ाइल बिगड़ने से वह दस्तावेज़ नष्ट हो जाता है।
 
 यहाँ कोई सादा पाठ दस्तावेज़ नहीं है। टेक्स्ट एडिटर वॉल्ट की फ़ाइलें नहीं दिखाएगा। एडिटर से इनमें से किसी फ़ाइल को सहेजना उन्हें बिगाड़ सकता है और वही स्थायी हानि कर सकता है।

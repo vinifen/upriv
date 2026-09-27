@@ -156,6 +156,7 @@ export function VaultListPage() {
         vault={exportVault.vault}
         open={exportVault.open}
         submitting={exportVault.submitting}
+        startedAt={exportVault.startedAt}
         onClose={exportVault.onClose}
         onConfirm={exportVault.onConfirm}
         onTimeout={exportVault.onTimeout}
@@ -226,6 +227,7 @@ export function VaultListPage() {
         open={createVault.open}
         existingVaultIds={createVault.existingVaultIds}
         existingOrders={createVault.existingOrders}
+        existingDisplayNames={createVault.existingDisplayNames}
         groups={createVault.groups}
         initialDraft={createVault.initialDraft}
         initialStep={createVault.initialStep}

@@ -26,6 +26,8 @@ interface ExportVaultModalProps {
   vault: VaultListItem | null;
   open: boolean;
   submitting?: boolean;
+  /** When set, the countdown continues from this origin after the dialog is reopened. */
+  startedAt?: number | null;
   onClose: () => void;
   onConfirm: (request: VaultExportRequest) => void;
   onTimeout?: () => void;
@@ -35,6 +37,7 @@ export function ExportVaultModal({
   vault,
   open,
   submitting = false,
+  startedAt = null,
   onClose,
   onConfirm,
   onTimeout,
@@ -58,10 +61,12 @@ export function ExportVaultModal({
     onProbeError: (error) => showError(error, "error.unexpected"),
   });
   // Live export = flush `store/` + zip/.7z — same family as vaultRewrap. Mock finishes instantly.
-  const budget = useLoadingBudget(submitting, LOADING_BUDGET_MS.vaultExport);
+  const budget = useLoadingBudget(submitting, LOADING_BUDGET_MS.vaultExport, {
+    startedAt: startedAt ?? undefined,
+  });
 
   useEffect(() => {
-    if (!open || !vault) return;
+    if (!open || !vault || submitting) return;
     setFormat(DEFAULT_VAULT_EXPORT_FORMAT);
     setSevenZip(DEFAULT_SEVEN_ZIP);
     setPassword("");
@@ -91,7 +96,7 @@ export function ExportVaultModal({
     return () => {
       cancelled = true;
     };
-  }, [open, showError, vault, vaultService]);
+  }, [open, showError, submitting, vault, vaultService]);
 
   useEffect(() => {
     if (!budget.timedOut || !submitting) return;
@@ -128,14 +133,12 @@ export function ExportVaultModal({
       title={t("vault.export.dialog.title")}
       titleIcon="download"
       contextTitle={vault.displayName}
-      onClose={() => {
-        if (!submitting) onClose();
-      }}
+      onClose={onClose}
       panelClassName="max-w-lg"
       footer={
         <div className="flex flex-wrap justify-end gap-2">
-          <Button variant="ghost" size="sm" disabled={submitting} onClick={onClose}>
-            {t("action.cancel")}
+          <Button variant="ghost" size="sm" onClick={onClose}>
+            {submitting ? t("action.close") : t("action.cancel")}
           </Button>
           <Button
             variant="primary"

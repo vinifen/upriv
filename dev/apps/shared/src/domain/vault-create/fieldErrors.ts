@@ -11,7 +11,7 @@ export type CreateVaultErrorField =
   | "storage";
 
 const FIELD_CODES: Record<CreateVaultErrorField, readonly CreateVaultValidationCode[]> = {
-  source: ["source_missing", "import_file_missing"],
+  source: ["source_missing", "import_file_missing", "import_zip_pending", "import_zip_rejected"],
   displayName: ["empty", "invalid_chars", "trailing", "reserved", "too_long", "duplicate"],
   password: [
     "password_empty",

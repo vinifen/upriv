@@ -46,6 +46,7 @@ vi.mock("@/lib/rpc", () => ({
   rpcVaultOpen: vi.fn(),
   rpcVaultClose: vi.fn(),
   rpcVaultConfigGet: vi.fn(),
+  rpcVaultStoreSize: vi.fn(async () => 0),
   rpcVaultConfigSave: vi.fn(),
   rpcVaultRename: vi.fn(),
   rpcVaultDelete: vi.fn(),
@@ -186,14 +187,14 @@ describe("createNativeServices", () => {
         path: "/tmp/notes.zip",
         fileName: "notes.zip",
       }),
-    ).resolves.toBe(true);
+    ).resolves.toEqual({ ok: true, embedded: null });
     await expect(
       services.createVault.testImportPackagePassword("x", {
         path: "vaults/notes/backups/20260528T120000",
         fileName: "20260528T120000",
         kind: "backup",
       }),
-    ).resolves.toBe(true);
+    ).resolves.toEqual({ ok: true, embedded: null });
   });
 
   it("refuses path vault RPCs for import and backups while a SAF tree is active", async () => {

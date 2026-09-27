@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ScrollView, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import {
@@ -10,6 +10,7 @@ import {
   type VaultGroup,
 } from "@upriv/shared";
 import { useAppSettingsContext } from "@/features/system/settings";
+import { releasePendingImport, retainsPendingImport } from "@/platform/native/contentTreeImport";
 import { useCreateVaultService, useVaultRootService } from "@/platform/services";
 import { useTranslation } from "@/i18n";
 import { mobileErrorI18nKey } from "@/lib/errorMessages";
@@ -24,7 +25,7 @@ import {
 } from "@/components/ui";
 import { useTapNotPan } from "@/components/ui/ScrimDismiss";
 import { CreateVaultStepNav } from "./CreateVaultStepNav";
-import { renderCreateVaultStep } from "./createVaultSteps";
+import { invalidateImportPicks, renderCreateVaultStep } from "./createVaultSteps";
 import { useCreateVaultWizard } from "@upriv/shared/react";
 
 interface CreateVaultModalProps {
@@ -32,6 +33,7 @@ interface CreateVaultModalProps {
   onClose: () => void;
   existingVaultIds: readonly string[];
   existingOrders: readonly number[];
+  existingDisplayNames?: readonly string[];
   groups?: readonly VaultGroup[];
   initialDraft?: CreateVaultDraft | null;
   initialStep?: CreateVaultStepId | null;
@@ -44,6 +46,7 @@ export function CreateVaultModal({
   onClose,
   existingVaultIds,
   existingOrders,
+  existingDisplayNames = [],
   groups = NO_VAULT_GROUPS,
   initialDraft = null,
   initialStep = null,
@@ -54,7 +57,11 @@ export function CreateVaultModal({
   const insets = useSafeAreaInsets();
   const { height: windowHeight } = useWindowDimensions();
   const createVaultService = useCreateVaultService();
-  const { settings: appSettings, showHiddenVaultsSession } = useAppSettingsContext();
+  const {
+    settings: appSettings,
+    showHiddenVaultsSession,
+    reportVaultRootIntegrityFailure,
+  } = useAppSettingsContext();
   const vaultRootService = useVaultRootService();
   const [resolvedRootPath, setResolvedRootPath] = useState<string | null>(null);
   const [createError, setCreateError] = useState<string | null>(null);
@@ -85,6 +92,13 @@ export function CreateVaultModal({
     };
   }, [open, appSettings.app.vault_root_mode, vaultRootService]);
 
+  const reportImportVaultRootFailure = useCallback(
+    (error: unknown) => {
+      void reportVaultRootIntegrityFailure(error);
+    },
+    [reportVaultRootIntegrityFailure],
+  );
+
   const vaultRootPath = vaultRootPathForWorkspaceValidation(
     appSettings.app.vault_root_mode,
     appSettings.app.upriv_root_path,
@@ -103,19 +117,35 @@ export function CreateVaultModal({
     return Math.max(120, Math.min(dialogMaxHeight - chromeReserve, 680));
   }, [insets.bottom, insets.top, windowHeight]);
 
+  const importPathRef = useRef("");
+  const keepImportCopy = useRef(false);
   const wizard = useCreateVaultWizard({
     open,
     existingVaultIds,
     existingOrders,
+    existingDisplayNames,
     groups,
     vaultRootPath,
     initialDraft,
     initialStep,
-    onCreate,
-    onClose,
+    onCreate: (result, password) => {
+      onCreate(result, password);
+      keepImportCopy.current = retainsPendingImport(result.importFilePath ?? "");
+    },
+    onClose: () => {
+      const path = importPathRef.current;
+      const keep = keepImportCopy.current;
+      keepImportCopy.current = false;
+      if (!keep) void releasePendingImport(path).catch(() => undefined);
+      onClose();
+    },
     testImportPassword: (password, importFile) =>
       createVaultService.testImportPackagePassword(password, importFile),
+    readImportPackageSettings: (importFile) =>
+      createVaultService.readImportPackageSettings(importFile),
+    onVaultRootFailure: reportImportVaultRootFailure,
   });
+  importPathRef.current = wizard.draft.importFilePath;
 
   const {
     draft,
@@ -142,6 +172,7 @@ export function CreateVaultModal({
 
   useEffect(() => {
     if (!open) setCreateError(null);
+    invalidateImportPicks();
   }, [open]);
 
   const footer = (
@@ -250,6 +281,7 @@ export function CreateVaultModal({
           onChange: patchDraft,
           groups,
           includeHidden,
+          existingDisplayNames,
           vaultRootPath,
           onTestImportPassword: handleTestImportPassword,
           testingPassword,

@@ -12,6 +12,7 @@ import {
   createDraftForImportSource,
   createDraftForScratchSource,
   createDraftFromBackup,
+  groupIdContainingVault,
   applyPendingCreateGroupEffect,
   buildCreatingVaultListItem,
   buildPendingCreateGroupEffect,
@@ -49,6 +50,7 @@ import { useDaemonReady } from "@/lib/useDaemonReady";
 import { useVaultListState } from "./useVaultListState";
 import { useVaultListModals } from "./useVaultListModals";
 import { useVaultImportDrop } from "./useVaultImportDrop";
+import type { VaultListDropSource } from "../lib/vaultImportDrop";
 
 export function useVaultListScreen() {
   const { t } = useTranslation();
@@ -496,6 +498,7 @@ export function useVaultListScreen() {
 
   const existingVaultIds = useMemo(() => vaults.map((vault) => vault.id), [vaults]);
   const existingOrders = useMemo(() => vaults.map((vault) => vault.order ?? 0), [vaults]);
+  const existingDisplayNames = useMemo(() => vaults.map((vault) => vault.displayName), [vaults]);
   const visibleVaults = useMemo(
     () => filterVisibleVaults(vaults, showHiddenVaults),
     [showHiddenVaults, vaults],
@@ -513,10 +516,16 @@ export function useVaultListScreen() {
 
   const handleCreateVault = useCallback(
     (result: CreateVaultResult, password: string) => {
-      if (
-        vaults.some((vault) => vault.id === result.vaultId) ||
-        lifecycle.pipeline.isVaultPipelineBusy(result.vaultId)
-      ) {
+      const listed = vaults.some((vault) => vault.id === result.vaultId);
+      const createInFlight =
+        lifecycle.pipeline.creatingVaultIds.length > 0 ||
+        lifecycle.pipeline.queued.some((job) => job.kind === "create") ||
+        (lifecycle.pipeline.isVaultPipelineBusy(result.vaultId) && !listed);
+      if (createInFlight) {
+        showToast(t("vault.create.busy"));
+        return;
+      }
+      if (listed) {
         throw new RpcError(
           VAULT_ERROR_CODES.VAULT_ALREADY_EXISTS,
           `vault already exists: ${result.vaultId}`,
@@ -655,6 +664,8 @@ export function useVaultListScreen() {
       removeVault,
       setGroups,
       showError,
+      showToast,
+      t,
       touchSessionWrite,
       vaultGroupService,
       vaultService,
@@ -694,16 +705,25 @@ export function useVaultListScreen() {
   );
 
   const handleCreateVaultFromBackup = useCallback(
-    (stamp: string) => {
+    (stamp: string, fileName: string, saved = false) => {
       if (!modals.backupVault) return;
       modals.setCreateVaultInitialDraft(
-        createDraftFromBackup(stamp, modals.backupVault.id, existingOrders),
+        createDraftFromBackup(
+          stamp,
+          modals.backupVault.id,
+          modals.backupVault.displayName,
+          existingOrders,
+          existingDisplayNames,
+          groupIdContainingVault(groups, modals.backupVault.id),
+          fileName,
+          saved,
+        ),
       );
       modals.setCreateVaultInitialStep("source");
       modals.setBackupVaultId(null);
       modals.setCreateVaultOpen(true);
     },
-    [existingOrders, modals],
+    [existingDisplayNames, existingOrders, groups, modals],
   );
 
   const openCreateVaultWithDraft = useCallback(
@@ -724,23 +744,23 @@ export function useVaultListScreen() {
   }, [existingOrders, openCreateVaultWithDraft]);
 
   const handleDroppedImportPackage = useCallback(
-    (file: File, absolutePath?: string) => {
-      if (!absolutePath) {
+    (source: VaultListDropSource) => {
+      if (!source.absolutePath) {
         showToast(t("vault.create.error.import_file_missing"));
         openCreateVaultWithDraft(createDraftForImportSource(existingOrders), "source");
         return;
       }
       openCreateVaultWithDraft(
-        createDraftFromImportPackage(file.name, existingOrders, { filePath: absolutePath }),
+        createDraftFromImportPackage(source.fileName, existingOrders, {
+          filePath: source.absolutePath,
+          existingDisplayNames,
+          shape: source.shape,
+        }),
         "source",
       );
     },
-    [existingOrders, openCreateVaultWithDraft, showToast, t],
+    [existingDisplayNames, existingOrders, openCreateVaultWithDraft, showToast, t],
   );
-
-  const handleRejectNonImportDrop = useCallback(() => {
-    showToast(t("empty.drop_file_rejected"));
-  }, [showToast, t]);
 
   const blockingUiOpen = Boolean(
     modals.createVaultOpen ||
@@ -760,7 +780,6 @@ export function useVaultListScreen() {
   const importDrop = useVaultImportDrop({
     enabled: !blockingUiOpen,
     onAcceptImportPackage: handleDroppedImportPackage,
-    onRejectNonImport: handleRejectNonImportDrop,
   });
 
   const handleNoteChange = useCallback(
@@ -1168,8 +1187,9 @@ export function useVaultListScreen() {
       vault: modals.exportVault,
       open: modals.exportVaultId !== null,
       submitting: modals.exportSubmitting,
+      startedAt: modals.exportStartedAt,
       onClose: () => {
-        if (!modals.exportSubmitting) modals.setExportVaultId(null);
+        modals.setExportVaultId(null);
       },
       onConfirm: lifecycle.handleConfirmExportVault,
       onTimeout: lifecycle.handleExportTimeout,
@@ -1258,6 +1278,7 @@ export function useVaultListScreen() {
       open: modals.createVaultOpen,
       existingVaultIds,
       existingOrders,
+      existingDisplayNames,
       groups,
       initialDraft: modals.createVaultInitialDraft,
       initialStep: modals.createVaultInitialStep,

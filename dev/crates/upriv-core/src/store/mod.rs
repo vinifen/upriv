@@ -1,4 +1,4 @@
-//! At-rest vault body: `header/vault.header` (+ `.copy`) + AES-SIV index + chunk files.
+//! At-rest vault body: `header/vault.header` (+ `.copy`) + AES-SIV index (+ `.copy`) + one `.blob` per file.
 //!
 //! Create writes a non-secret seed file so wrap + index + chunk AEAD can be
 //! validated. The in-app file manager / FUSE still does not list that tree.
@@ -17,17 +17,22 @@ use zeroize::Zeroizing;
 
 use crate::error::{Result, UprivError};
 
+pub(crate) use chunk::{
+    blobs_need_pack, mutation_blob_ids, pack_blob_waste, remove_file_chunks, BlobPackMode,
+    ChunkBlobMutation,
+};
 pub use chunk::{
     read_logical_file, read_logical_range, seed_plaintext, truncate_logical_file,
     write_logical_file, write_logical_range, RetiredFileChunks, SEED_LOGICAL_PATH,
     VAULT_FS_MAX_INLINE_BYTES,
 };
-pub(crate) use chunk::{remove_file_chunks, ChunkBlobMutation};
 pub use header::{
-    load_header, unlock_header, VaultHeader, CHUNK_SIZE, FORMAT_VERSION, HEADER_DIR_NAME,
-    HEADER_FILE_NAME,
+    ensure_danger_notice, load_header, unlock_header, VaultHeader, CHUNK_SIZE, FORMAT_VERSION,
+    HEADER_DIR_NAME, HEADER_FILE_NAME, STORE_DANGER_FILE_NAME,
 };
-pub use index::{VaultIndex, VaultNode, DATA_DIR_NAME, INDEX_DIR_NAME};
+pub use index::{
+    VaultIndex, VaultNode, DATA_DIR_NAME, INDEX_COPY_FILE_NAME, INDEX_DIR_NAME, INDEX_FILE_NAME,
+};
 pub use kdf::KdfUnlockPreset;
 pub use tree::{
     build_file_tree, child_logical_path, delete_empty_directory, delete_logical_path,
@@ -88,7 +93,7 @@ pub fn create_seeded_store(
     let store_dir = store_dir.as_ref();
     let (header, content_key, index_key) = create_store_core(store_dir, password, preset)?;
     let mut index = Index::empty();
-    chunk::write_logical_file(
+    let (_retired, mutation) = chunk::write_logical_file(
         store_dir,
         &header,
         &content_key,
@@ -96,6 +101,7 @@ pub fn create_seeded_store(
         SEED_LOGICAL_PATH,
         &seed_plaintext(header.content_identity),
     )?;
+    mutation.sync_before_index()?;
     save_sealed_index(store_dir, &header, &index_key, &index)?;
     Ok(header)
 }
@@ -109,6 +115,7 @@ pub fn open_store(store_dir: impl AsRef<Path>, password: &[u8]) -> Result<Opened
     let header = unlock_header(store_dir, password)?;
     let (content_key, index_key) = derive_layer_keys(&header.master_key)?;
     let index = load_sealed_index(store_dir, &header.header, &index_key)?;
+    chunk::remove_unreferenced_blobs(store_dir, &index);
     Ok(OpenedStore {
         header: header.header,
         master_key: header.master_key,
@@ -131,8 +138,10 @@ pub fn probe_unlock_preset(store_dir: impl AsRef<Path>) -> Option<KdfUnlockPrese
     load_header(store_dir).ok().and_then(|h| h.unlock_preset())
 }
 
-pub fn flush_index(store_dir: impl AsRef<Path>, store: &OpenedStore) -> Result<()> {
-    flush_index_parts(store_dir, &store.header, &store.index_key, &store.index)
+pub fn flush_index(store_dir: impl AsRef<Path>, store: &mut OpenedStore) -> Result<()> {
+    flush_index_parts(store_dir, &store.header, &store.index_key, &store.index)?;
+    store.index.clear_unsealed_holes();
+    Ok(())
 }
 
 #[cfg(test)]
@@ -167,7 +176,13 @@ pub fn content_hash_hex(store_dir: impl AsRef<Path>) -> Result<String> {
         }
         Err(error) => return Err(error.into()),
     };
-    let index_bytes = std::fs::read(&index_path).map_err(UprivError::from)?;
+    let index_bytes = match std::fs::read(&index_path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            std::fs::read(index::index_copy_path(store_dir)).map_err(UprivError::from)?
+        }
+        Err(error) => return Err(error.into()),
+    };
     let mut hasher = Sha256::new();
     hasher.update(&header_bytes);
     hasher.update(&index_bytes);

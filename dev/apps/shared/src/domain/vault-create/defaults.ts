@@ -1,4 +1,4 @@
-import { DEFAULT_KDF_UNLOCK_PRESET } from "../vault-settings";
+import { DEFAULT_KDF_UNLOCK_PRESET, DEFAULT_SEVEN_ZIP } from "../vault-settings";
 import { WORKSPACE_PATH_DEFAULT } from "../workspace";
 import type { CreateVaultDraft } from "./types";
 
@@ -15,8 +15,13 @@ export function createEmptyCreateVaultDraft(existingOrders: readonly number[]): 
   return {
     source: null,
     importKind: "file",
+    importShape: "file",
+    importExtract: true,
     importFileName: "",
     importFilePath: "",
+    zipLayout: null,
+    importZipRejected: false,
+    importZipProbeFailed: false,
     displayName: "",
     note: "",
     password: "",
@@ -37,12 +42,16 @@ export function createEmptyCreateVaultDraft(existingOrders: readonly number[]): 
       keep_last: 1,
     },
     kdf: { unlock_preset: DEFAULT_KDF_UNLOCK_PRESET },
+    archiveUnlockPreset: null,
     storage: { mode: "encrypted_dir" },
     mount: { workspace_path: WORKSPACE_PATH_DEFAULT },
     security: {
       mode: "session_ram",
       secure_wipe_workspace: true,
+      wipe_passes: 1,
+      wipe_pattern: "random",
     },
+    seven_zip: { ...DEFAULT_SEVEN_ZIP },
     policy: {
       allow_external_editors: false,
       disallow_copy_outside_mount: true,

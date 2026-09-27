@@ -13,7 +13,7 @@ Real `AppServices` implementations that call `upriv-daemon` via `desktopInvokeRa
 | `lifecycle`   | `vault_open` / `vault_close`                               |
 | `vaultGroups` | group list / create / update / delete / reorder            |
 | `filesystem`  | `vault_fs_*` (in-app file manager)                         |
-| `backups`     | `backup_*` (ciphertext `backups/<stamp>.zip`)              |
+| `backups`     | `backup_*` (ciphertext `backups/<stamp>-<id>.zip`)         |
 | `createVault` | `pick_file` + `vault_import_probe`                         |
 
 `createServices()` always returns `createDesktopServices()`. Vault calls need the Electron preload.

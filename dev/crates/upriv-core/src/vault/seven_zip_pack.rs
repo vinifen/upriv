@@ -69,16 +69,101 @@ pub(crate) fn parse_mem_available_bytes(meminfo: &str) -> Option<u64> {
     None
 }
 
+/// Working space for a `.7z` decoder beyond the compressed archive.
+pub(crate) const SEVEN_ZIP_DECODE_SLACK: u64 = 64 * 1024 * 1024;
+
+/// RAM the `.7z` decoder needs while the archive stays on disk.
+///
+/// This is the decode slack, not the compressed length. A caller that loads
+/// the archive into a `Vec` checks that length on its own.
+pub(crate) fn seven_zip_import_ram_needed() -> u64 {
+    SEVEN_ZIP_DECODE_SLACK
+}
+
 fn mem_available_bytes() -> Option<u64> {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     {
         let text = std::fs::read_to_string("/proc/meminfo").ok()?;
         parse_mem_available_bytes(&text)
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    {
+        return apple_mem_available_bytes();
+    }
+    #[cfg(windows)]
+    {
+        return windows_mem_available_bytes();
+    }
+    #[cfg(not(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos",
+        target_os = "ios",
+        windows
+    )))]
     {
         None
     }
+}
+
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+fn apple_mem_available_bytes() -> Option<u64> {
+    let mut stats: libc::vm_statistics64 = unsafe { std::mem::zeroed() };
+    let mut count = libc::HOST_VM_INFO64_COUNT;
+    let host = unsafe { libc::mach_host_self() };
+    let rc = unsafe {
+        libc::host_statistics64(
+            host,
+            libc::HOST_VM_INFO64,
+            &mut stats as *mut libc::vm_statistics64 as libc::host_info64_t,
+            &mut count,
+        )
+    };
+    if rc != libc::KERN_SUCCESS {
+        return None;
+    }
+    let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+    if page <= 0 {
+        return None;
+    }
+    let pages = u64::from(stats.free_count)
+        .saturating_add(u64::from(stats.inactive_count))
+        .saturating_add(u64::from(stats.speculative_count));
+    Some(pages.saturating_mul(page as u64))
+}
+
+#[cfg(windows)]
+fn windows_mem_available_bytes() -> Option<u64> {
+    #[repr(C)]
+    struct MemoryStatusEx {
+        length: u32,
+        memory_load: u32,
+        total_phys: u64,
+        avail_phys: u64,
+        total_page_file: u64,
+        avail_page_file: u64,
+        total_virtual: u64,
+        avail_virtual: u64,
+        avail_extended_virtual: u64,
+    }
+    extern "system" {
+        fn GlobalMemoryStatusEx(lpbuffer: *mut MemoryStatusEx) -> i32;
+    }
+    let mut status = MemoryStatusEx {
+        length: std::mem::size_of::<MemoryStatusEx>() as u32,
+        memory_load: 0,
+        total_phys: 0,
+        avail_phys: 0,
+        total_page_file: 0,
+        avail_page_file: 0,
+        total_virtual: 0,
+        avail_virtual: 0,
+        avail_extended_virtual: 0,
+    };
+    if unsafe { GlobalMemoryStatusEx(&mut status) } == 0 {
+        return None;
+    }
+    Some(status.avail_phys)
 }
 
 fn lzma_dict_bytes(level: u8) -> u64 {
@@ -162,13 +247,15 @@ pub(crate) fn seven_zip_archive_vec_budget(sizes: LogicalExportSize) -> u64 {
         .saturating_add(sizes.files.saturating_mul(4096))
 }
 
-pub(crate) fn ensure_seven_zip_export_ram(needed: u64) -> Result<()> {
-    if let Some(available) = mem_available_bytes() {
-        if available < needed {
-            return Err(UprivError::InsufficientRamExport);
-        }
+pub(crate) fn ensure_available_ram(available: Option<u64>, needed: u64) -> Result<()> {
+    match available {
+        Some(available) if available >= needed => Ok(()),
+        _ => Err(UprivError::InsufficientRamExport),
     }
-    Ok(())
+}
+
+pub(crate) fn ensure_seven_zip_export_ram(needed: u64) -> Result<()> {
+    ensure_available_ram(mem_available_bytes(), needed)
 }
 
 pub(crate) fn try_vec_with_capacity(bytes: u64) -> Result<Vec<u8>> {
@@ -235,14 +322,30 @@ fn export_file_nodes(index: &VaultIndex, skip: impl Fn(&str) -> bool) -> Vec<&Va
         .collect()
 }
 
+fn export_dir_nodes<'a>(index: &'a VaultIndex, skip: &impl Fn(&str) -> bool) -> Vec<&'a VaultNode> {
+    let mut dirs: Vec<&VaultNode> = index
+        .nodes
+        .iter()
+        .filter(|node| !skip(&node.path) && node.is_dir())
+        .collect();
+    dirs.sort_by(|left, right| left.path.cmp(&right.path));
+    dirs
+}
+
+fn seven_zip_logical_member(outer: &str, logical: &str) -> String {
+    let logical = logical.trim_start_matches('/');
+    format!("{outer}/{logical}")
+}
+
 fn read_export_file(
     store_dir: &Path,
     header: &VaultHeader,
     content_key: &[u8; 32],
     index: &VaultIndex,
+    outer_folder: &str,
     node: &VaultNode,
 ) -> Result<(String, Zeroizing<Vec<u8>>)> {
-    let name = archive_member_name(&node.path)?;
+    let name = archive_member_name(&seven_zip_logical_member(outer_folder, &node.path))?;
     let data = Zeroizing::new(read_logical_file(
         store_dir,
         header,
@@ -257,6 +360,18 @@ fn push_one<W: Write + Seek>(writer: &mut ArchiveWriter<W>, name: &str, data: &[
     let entry = ArchiveEntry::new_file(name);
     writer
         .push_archive_entry(entry, Some(Cursor::new(data)))
+        .map_err(map_sevenz_error)?;
+    Ok(())
+}
+
+fn push_directory<W: Write + Seek>(writer: &mut ArchiveWriter<W>, name: &str) -> Result<()> {
+    let mut entry = ArchiveEntry::new_directory(name);
+    // sevenz-rust2 0.20.2 writes the anti-item bit inverted (`has_anti |= !is_anti`),
+    // so a normal directory is stored as an anti-item. Setting the flag makes
+    // the writer omit that bit and import reads a directory. Re-check on upgrade.
+    entry.is_anti_item = true;
+    writer
+        .push_archive_entry::<std::io::Empty>(entry, None)
         .map_err(map_sevenz_error)?;
     Ok(())
 }
@@ -294,13 +409,25 @@ pub(crate) fn pack_logical_seven_zip_to_writer<W: Write + Seek>(
     source: LogicalSevenZipSource<'_>,
     archive_password: &[u8],
     opts: &VaultSevenZipSection,
+    outer_folder: &str,
     skip: impl Fn(&str) -> bool,
 ) -> Result<W> {
     let password = sevenz_password(archive_password)?;
     let mut writer = ArchiveWriter::new(dest).map_err(map_sevenz_error)?;
     writer.set_encrypt_header(opts.encrypt_file_names);
     writer.set_content_methods(content_methods(opts, password));
+    let dirs = export_dir_nodes(source.index, &skip);
     let nodes = export_file_nodes(source.index, skip);
+    // A vault with no files and no folders is one outer directory. Folders that
+    // exist in the vault, including empty ones, are members under that name.
+    if nodes.is_empty() && dirs.is_empty() {
+        push_directory(&mut writer, outer_folder)?;
+    } else {
+        for dir in dirs {
+            let name = archive_member_name(&seven_zip_logical_member(outer_folder, &dir.path))?;
+            push_directory(&mut writer, &name)?;
+        }
+    }
     if opts.solid {
         let mut files = Vec::with_capacity(nodes.len());
         for node in nodes {
@@ -309,6 +436,7 @@ pub(crate) fn pack_logical_seven_zip_to_writer<W: Write + Seek>(
                 source.header,
                 source.content_key,
                 source.index,
+                outer_folder,
                 node,
             )?);
         }
@@ -320,6 +448,7 @@ pub(crate) fn pack_logical_seven_zip_to_writer<W: Write + Seek>(
                 source.header,
                 source.content_key,
                 source.index,
+                outer_folder,
                 node,
             )?;
             push_one(&mut writer, &name, data.as_slice())?;
@@ -341,6 +470,24 @@ mod tests {
         ));
         assert!(sevenz_password(b"bad\npass").is_err());
         assert!(sevenz_password(b"bad\0pass").is_err());
+    }
+
+    #[test]
+    fn import_decoder_ram_does_not_grow_with_the_archive() {
+        assert_eq!(seven_zip_import_ram_needed(), SEVEN_ZIP_DECODE_SLACK);
+    }
+
+    #[test]
+    fn unknown_ram_fails_closed() {
+        assert!(matches!(
+            ensure_available_ram(None, 1).unwrap_err(),
+            UprivError::InsufficientRamExport
+        ));
+        assert!(ensure_available_ram(Some(10), 10).is_ok());
+        assert!(matches!(
+            ensure_available_ram(Some(9), 10).unwrap_err(),
+            UprivError::InsufficientRamExport
+        ));
     }
 
     #[test]

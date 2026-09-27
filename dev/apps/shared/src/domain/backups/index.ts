@@ -1,2 +1,8 @@
 export type { VaultBackupEntry } from "./types";
-export { backupCreatedAtFromStamp, formatBackupDate } from "./format";
+export {
+  backupBundleEntryName,
+  backupEntryFileName,
+  backupEntryKey,
+  backupSnapshotFileName,
+  formatBackupDate,
+} from "./format";

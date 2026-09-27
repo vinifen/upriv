@@ -1,6 +1,11 @@
 import { cacheDirectory, getInfoAsync, makeDirectoryAsync } from "expo-file-system";
 import { isAvailableAsync, shareAsync } from "expo-sharing";
-import type { VaultBackupEntry, VaultPathWriteResult } from "@upriv/shared";
+import {
+  backupEntryFileName,
+  backupEntryKey,
+  type VaultBackupEntry,
+  type VaultPathWriteResult,
+} from "@upriv/shared";
 import { fsPathFromFileUri } from "@/lib/fileUri";
 
 const BACKUP_CACHE_DIR = "upriv-backups/";
@@ -19,6 +24,7 @@ function safeEntryName(name: string): string {
 /** Copy one snapshot zip, or a zip of several, into cache and open the share sheet. */
 export async function shareBackupsZip(
   entries: readonly VaultBackupEntry[],
+  vaultId: string,
   bundleName: string,
   fns: ShareBackupsZipFns,
 ): Promise<void> {
@@ -30,11 +36,13 @@ export async function shareBackupsZip(
   const dir = `${root}${BACKUP_CACHE_DIR}`;
   await makeDirectoryAsync(dir, { intermediates: true });
   const filename =
-    entries.length === 1 ? `${safeEntryName(entries[0].stamp)}.zip` : safeEntryName(bundleName);
+    entries.length === 1
+      ? safeEntryName(backupEntryFileName(entries[0], vaultId))
+      : safeEntryName(bundleName);
   const uri = `${dir}${filename}`;
   const destPath = fsPathFromFileUri(uri);
   await fns.exportSnapshotsToPath(
-    entries.map((entry) => entry.stamp),
+    entries.map((entry) => backupEntryKey(entry, vaultId)),
     destPath,
   );
   const info = await getInfoAsync(uri);

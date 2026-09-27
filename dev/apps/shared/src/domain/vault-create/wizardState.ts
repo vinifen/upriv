@@ -1,3 +1,5 @@
+import type { EmbeddedSettingsSnapshot, EmbeddedVaultSettings } from "./applyEmbeddedVaultSettings";
+import { applyEmbeddedVaultSettings } from "./applyEmbeddedVaultSettings";
 import { createEmptyCreateVaultDraft, createVaultDraftEqual } from "./defaults";
 import { CREATE_VAULT_STEPS } from "./types";
 import type { CreateVaultDraft, CreateVaultStepId, CreateVaultStepStatus } from "./types";
@@ -38,6 +40,18 @@ export type CreateVaultWizardAction =
   | { type: "submitRequested" }
   | { type: "importPasswordTestStarted" }
   | { type: "importPasswordTestFinished"; ok: boolean; unavailable?: boolean }
+  | {
+      type: "embeddedSettings";
+      embedded: EmbeddedVaultSettings;
+      snapshot: EmbeddedSettingsSnapshot;
+      existingDisplayNames?: readonly string[];
+    }
+  | {
+      type: "zipClassified";
+      zipLayout: CreateVaultDraft["zipLayout"];
+      rejected: boolean;
+      probeFailed?: boolean;
+    }
   | { type: "discardConfirmRequested" }
   | { type: "discardConfirmDismissed" }
   | { type: "draftDiscarded" }
@@ -140,6 +154,30 @@ export function createVaultWizardReducer(
           passwordProbeUnavailable: action.unavailable === true,
         },
       };
+
+    case "zipClassified": {
+      const zipFields = {
+        zipLayout: action.zipLayout,
+        importZipRejected: action.rejected,
+        importZipProbeFailed: action.probeFailed === true,
+      };
+      return {
+        ...state,
+        draft: { ...state.draft, ...zipFields },
+        baseline: { ...state.baseline, ...zipFields },
+      };
+    }
+
+    case "embeddedSettings": {
+      const next = applyEmbeddedVaultSettings(
+        state.draft,
+        action.embedded,
+        action.snapshot,
+        action.existingDisplayNames ?? [],
+      );
+      const baseline = createVaultDraftEqual(state.draft, state.baseline) ? next : state.baseline;
+      return { ...state, draft: next, baseline };
+    }
 
     case "discardConfirmRequested":
       return { ...state, discardConfirmOpen: true };

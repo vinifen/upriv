@@ -487,7 +487,7 @@ mod tests {
             relocate_logical_path(&mut opened.index, "other/b.txt", "inbox", "c.txt").unwrap();
         assert_eq!(relocated, "inbox/c.txt");
         assert!(opened.index.find("other/b.txt").is_none());
-        flush_index(&dir, &opened).unwrap();
+        flush_index(&dir, &mut opened).unwrap();
         delete_logical_path(&mut opened.index, "docs").unwrap();
         assert!(opened.index.find("docs").is_none());
         assert!(opened.index.find("inbox/c.txt").is_some());

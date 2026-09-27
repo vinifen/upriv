@@ -6,6 +6,7 @@ import {
   filesFromOsDropSnapshot,
   listFilesFromOsDropSnapshot,
   isOsFileDrag,
+  isPotentialOsFileDrag,
   snapshotLooksLikeOsImport,
   snapshotOsFileDrop,
 } from "../osFileDrop";
@@ -35,6 +36,18 @@ describe("isOsFileDrag", () => {
       true,
     );
   });
+
+  it("recognizes a portal or Nautilus drag", () => {
+    expect(isOsFileDrag(dragEvent({ types: ["application/vnd.portal.filetransfer"] }))).toBe(true);
+    expect(isOsFileDrag(dragEvent({ types: ["x-special/gnome-copied-files"] }))).toBe(true);
+  });
+});
+
+describe("isPotentialOsFileDrag", () => {
+  it("accepts an empty type list so a Linux dragover can still drop", () => {
+    expect(isPotentialOsFileDrag(dragEvent({ types: [] }))).toBe(true);
+    expect(isPotentialOsFileDrag(dragEvent({ types: ["text/plain"] }))).toBe(false);
+  });
 });
 
 describe("filesFromFileInput", () => {
@@ -57,6 +70,34 @@ describe("filesFromFileInput", () => {
 describe("filesFromDataTransfer", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  it("pathsOnly records the folder path without reading directory entries", async () => {
+    const readEntries = vi.fn();
+    vi.stubGlobal("window", {
+      upriv: { getPathForFile: () => "/tmp/Photos" },
+    });
+    const folder = new File([], "Photos");
+    const transfer = {
+      items: [
+        {
+          kind: "file",
+          getAsFile: () => folder,
+          webkitGetAsEntry: () => ({
+            isFile: false,
+            isDirectory: true,
+            name: "Photos",
+            createReader: () => ({ readEntries }),
+          }),
+        },
+      ],
+      files: [folder],
+      getData: () => "",
+    } as unknown as DataTransfer;
+    const snapshot = snapshotOsFileDrop(dragEvent(transfer), { pathsOnly: true });
+    expect(snapshot.osPaths).toEqual(["/tmp/Photos"]);
+    expect(await snapshot.pending).toEqual([]);
+    expect(readEntries).not.toHaveBeenCalled();
   });
 
   it("returns empty when transfer is missing", async () => {
@@ -413,5 +454,26 @@ describe("filesFromDataTransfer", () => {
     expect(files[0]?.osPath).toBeUndefined();
     expect(files[0]?.file.size).toBe(5);
     expect(await files[0]?.file.text()).toBe("hello");
+  });
+
+  it("refuses a drop that contains a symlink", async () => {
+    vi.stubGlobal("window", {
+      upriv: {
+        statDroppedPaths: async () => ({
+          files: [{ relativePath: "a.txt", osPath: "/tmp/a.txt", size: 1 }],
+          unreadable: [],
+          truncated: false,
+          symlinks: ["/tmp/link"],
+        }),
+      },
+    });
+    const transfer = {
+      items: [],
+      files: [],
+      getData: (type: string) => (type === "text/uri-list" ? "file:///tmp/a.txt" : ""),
+    } as unknown as DataTransfer;
+    await expect(
+      listFilesFromOsDropSnapshot(snapshotOsFileDrop(dragEvent(transfer))),
+    ).rejects.toMatchObject({ code: "import_source_unreadable" });
   });
 });

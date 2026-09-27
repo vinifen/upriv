@@ -4,9 +4,12 @@ import type { VaultSettingsConfig } from "../../domain/vault-settings";
 import type { VaultRow } from "../../domain/vault";
 import type { VaultPathWriteResult } from "../backup/createLiveBackupService";
 
-export type VaultImportPackageKind = "store_zip" | "seven_zip";
+export type VaultImportPackageKind = "store_zip" | "seven_zip" | "files_zip" | "os_tree";
 
-/** Zip of `store/` or logical `.7z`. Prefer `archivePath` so large files skip NDJSON. */
+/**
+ * Store zip, logical `.7z`, or a zip of ordinary files.
+ * Prefer `archivePath` so large files skip NDJSON.
+ */
 export interface VaultImportPackage {
   kind: VaultImportPackageKind;
   archivePath?: string;
@@ -46,6 +49,12 @@ export interface VaultService {
 
   /** Load `vaults/<id>/config.toml` equivalent. */
   getSettings(vaultId: string): Promise<VaultSettingsConfig | undefined>;
+
+  /**
+   * On-disk size of regular files in `store/`. Metadata only.
+   * `null` when the live adapter does not measure it.
+   */
+  storeOnDiskBytes(vaultId: string): Promise<number | null>;
 
   /** Persist settings (`vault_config_save` — enforces edit-policy on quiet targets). */
   registerSettings(vaultId: string, config: VaultSettingsConfig): Promise<void>;

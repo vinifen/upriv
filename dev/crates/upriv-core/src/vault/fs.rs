@@ -12,13 +12,13 @@ use crate::logging::{log_event, LogLevel};
 use crate::paths::VaultRoot;
 use crate::session::{with_open_session, OpenSession};
 use crate::store::{
-    build_file_tree, child_logical_path, delete_empty_directory, delete_logical_path,
-    ensure_folder, file_name, flush_index_parts, from_ui_path, mkdir_logical, move_logical_path,
-    read_logical_file, read_logical_range, relocate_logical_path, relocate_replacing,
-    remove_file_chunks, rename_logical_path, to_ui_path, truncate_logical_file, unique_file_name,
-    unique_folder_name, write_logical_file, write_logical_range, ChunkBlobMutation, FileTreeNode,
-    RetiredFileChunks, VaultIndex, INTERNAL_WORKSPACE_FILE, SEED_LOGICAL_PATH,
-    VAULT_FS_MAX_INLINE_BYTES,
+    blobs_need_pack, build_file_tree, child_logical_path, delete_empty_directory,
+    delete_logical_path, ensure_folder, file_name, flush_index_parts, from_ui_path, mkdir_logical,
+    move_logical_path, mutation_blob_ids, pack_blob_waste, read_logical_file, read_logical_range,
+    relocate_logical_path, relocate_replacing, remove_file_chunks, rename_logical_path, to_ui_path,
+    truncate_logical_file, unique_file_name, unique_folder_name, write_logical_file,
+    write_logical_range, BlobPackMode, ChunkBlobMutation, FileTreeNode, RetiredFileChunks,
+    VaultIndex, INTERNAL_WORKSPACE_FILE, SEED_LOGICAL_PATH, VAULT_FS_MAX_INLINE_BYTES,
 };
 
 fn store_dir(session: &OpenSession) -> std::path::PathBuf {
@@ -28,6 +28,7 @@ fn store_dir(session: &OpenSession) -> std::path::PathBuf {
 fn commit(session: &mut OpenSession) -> Result<()> {
     let store = store_dir(session);
     flush_index_parts(&store, &session.header, &session.index_key, &session.index)?;
+    session.index.clear_unsealed_holes();
     session.dirty = false;
     session.tree_revision = session.tree_revision.saturating_add(1);
     Ok(())
@@ -79,6 +80,11 @@ fn commit_mutation(
     mutation: ChunkBlobMutation,
     retired: Option<RetiredFileChunks>,
 ) -> Result<()> {
+    if let Err(error) = mutation.sync_before_index() {
+        session.index = before;
+        mutation.discard_created();
+        return Err(error);
+    }
     match commit(session) {
         Ok(()) => {
             mutation.delete_superseded();
@@ -86,12 +92,56 @@ fn commit_mutation(
                 let _ =
                     remove_file_chunks(&store_dir(session), &retired.file_id, retired.chunk_count);
             }
+            pack_sealed_waste(session, &mutation);
             Ok(())
         }
         Err(error) => {
             session.index = before;
             mutation.discard_created();
             Err(error)
+        }
+    }
+}
+
+fn pack_sealed_waste(session: &mut OpenSession, mutation: &ChunkBlobMutation) {
+    let ids = mutation_blob_ids(mutation);
+    let store = store_dir(session);
+    if !blobs_need_pack(
+        &store,
+        &session.header,
+        &session.index,
+        BlobPackMode::SessionWaste,
+        Some(&ids),
+    ) {
+        return;
+    }
+    match pack_blob_waste(
+        &store,
+        &session.header,
+        &session.content_key,
+        &mut session.index,
+        BlobPackMode::SessionWaste,
+        Some(&ids),
+    ) {
+        Ok(packed) if packed.created.is_empty() => {}
+        Ok(packed) => match packed.sync_before_index().and_then(|_| commit(session)) {
+            Ok(()) => packed.delete_superseded(),
+            Err(_error) => {
+                packed.restore_packed_nodes(&mut session.index);
+                packed.discard_created();
+                log_event(
+                    LogLevel::Warn,
+                    "vault_blob_pack_failed",
+                    &[("id", session.vault_id.as_str())],
+                );
+            }
+        },
+        Err(_error) => {
+            log_event(
+                LogLevel::Warn,
+                "vault_blob_pack_failed",
+                &[("id", session.vault_id.as_str())],
+            );
         }
     }
 }
@@ -453,13 +503,17 @@ pub fn fs_import_from_os_path(
             Ok(()) => {
                 // Seal before return. A kill or "just close" does not run Drop,
                 // so an unsealed import would disappear on the next open.
-                if let Err(error) = commit(session) {
-                    if retired_acc.is_none() {
-                        session.index.nodes.truncate(nodes_before);
-                        mutation.discard_created();
-                        mutation.delete_superseded();
-                        session.dirty = false;
-                    }
+                // Flush the blob first so the index cannot name bytes still in cache.
+                if let Err(error) = mutation.sync_before_index() {
+                    session.index.nodes.truncate(nodes_before);
+                    mutation.discard_created();
+                    session.dirty = false;
+                    Err(error)
+                } else if let Err(error) = commit(session) {
+                    // The sealed index is unchanged. Keep every blob it still names.
+                    session.index.nodes.truncate(nodes_before);
+                    mutation.discard_created();
+                    session.dirty = false;
                     Err(error)
                 } else {
                     mutation.delete_superseded();
@@ -476,7 +530,6 @@ pub fn fs_import_from_os_path(
             Err(error) => {
                 session.index.nodes.truncate(nodes_before);
                 mutation.discard_created();
-                mutation.delete_superseded();
                 session.dirty = false;
                 Err(error)
             }

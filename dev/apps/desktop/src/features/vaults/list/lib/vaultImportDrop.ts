@@ -1,45 +1,53 @@
-import { isAbsoluteOsFilesystemPath } from "@upriv/shared";
+import { isAbsoluteOsFilesystemPath, type CreateVaultImportShape } from "@upriv/shared";
+import {
+  droppedOsRootPaths,
+  type OsDropSnapshot,
+} from "@/features/vaults/file-manager/lib/osFileDrop";
 
-/** Helpers for OS drag of vault `.zip` / `.7z` onto the vault list. */
-
-export function isVaultImportFileName(name: string): boolean {
-  const lower = name.trim().toLowerCase();
-  return lower.endsWith(".zip") || lower.endsWith(".7z");
+/** One create-vault import chosen from an OS drop. */
+export interface VaultListDropSource {
+  fileName: string;
+  absolutePath?: string;
+  shape: CreateVaultImportShape;
 }
 
-function droppedFilePathHint(file: File): string | undefined {
-  const legacy = (file as File & { path?: string }).path?.trim();
-  if (legacy) return legacy;
-  const api = typeof window !== "undefined" ? window.upriv : undefined;
-  if (!api || typeof api.getPathForFile !== "function") return undefined;
+function fileNameFromOsPath(osPath: string): string {
+  const parts = osPath.split("/");
+  const name = parts[parts.length - 1] ?? "";
+  return name.trim();
+}
+
+async function shapeOfDroppedPath(absolutePath: string): Promise<CreateVaultImportShape> {
+  const api = typeof window === "undefined" ? undefined : window.upriv;
+  if (!api || typeof api.classifyDroppedPath !== "function") return "file";
   try {
-    return api.getPathForFile(file)?.trim() || undefined;
+    const kind = await api.classifyDroppedPath(absolutePath);
+    return kind === "directory" ? "directory" : "file";
   } catch {
-    return undefined;
+    return "file";
   }
 }
 
 /**
- * Absolute OS path of an OS-dropped vault package.
- * Electron 32+ removed `File.path` — prefer `window.upriv.getPathForFile`.
- * Relative names and SAF URIs are dropped: the daemon can only `std::fs::read` a real path.
+ * First dropped file or folder. A file inside a dropped folder is not its own import.
+ * The daemon reads that path later — this does not walk the folder.
  */
-export function absolutePathFromDroppedFile(file: File): string | undefined {
-  const path = droppedFilePathHint(file);
-  if (!path || !isAbsoluteOsFilesystemPath(path)) return undefined;
-  return path;
-}
-
-export function firstVaultImportFile(files: Iterable<File>): File | null {
-  for (const file of files) {
-    if (file.name.length > 0 && isVaultImportFileName(file.name)) return file;
+export async function vaultListDropSource(
+  snapshot: OsDropSnapshot,
+): Promise<VaultListDropSource | null> {
+  const roots = await droppedOsRootPaths(snapshot);
+  for (const root of roots) {
+    if (!isAbsoluteOsFilesystemPath(root)) continue;
+    const fileName = fileNameFromOsPath(root);
+    if (!fileName) continue;
+    return {
+      fileName,
+      absolutePath: root,
+      shape: await shapeOfDroppedPath(root),
+    };
   }
-  return null;
-}
 
-export function dataTransferHasVaultImport(dataTransfer: DataTransfer | null): boolean {
-  if (!dataTransfer) return false;
-  return Array.from(dataTransfer.files).some(
-    (file) => file.name.length > 0 && isVaultImportFileName(file.name),
-  );
+  const named = snapshot.files.find((dropped) => dropped.file.name.trim().length > 0);
+  if (!named) return null;
+  return { fileName: named.file.name.trim(), shape: "file" };
 }

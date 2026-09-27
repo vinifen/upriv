@@ -1,3 +1,4 @@
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -15,6 +16,8 @@ export type DroppedContentResult = {
   files: DroppedImportPayload[];
   /** True when the byte-reading walk stopped before every file. */
   truncated: boolean;
+  /** A symlink was in the tree. `files` is empty; the import must not continue. */
+  symlinks: string[];
 };
 
 export type DroppedImportPayload = {
@@ -31,12 +34,13 @@ export type DroppedImportStat = {
 /**
  * Read user-dropped OS files/folders into RAM (no temp extract).
  * Stops at `CONTENT_MAX_FILES` because each file's bytes are held here.
- * Symlinks are not followed.
+ * A symlink refuses the import. The final component is opened without following it.
  */
 export async function readDroppedImportPaths(inputPaths: unknown): Promise<DroppedContentResult> {
-  if (!Array.isArray(inputPaths)) return { files: [], truncated: false };
+  if (!Array.isArray(inputPaths)) return { files: [], truncated: false, symlinks: [] };
   const out: DroppedImportPayload[] = [];
   let truncated = false;
+  const found = { symlink: null as string | null };
   for (const raw of inputPaths) {
     if (typeof raw !== "string") continue;
     const trimmed = raw.trim();
@@ -47,10 +51,13 @@ export async function readDroppedImportPaths(inputPaths: unknown): Promise<Dropp
       truncated = true;
       break;
     }
-    truncated = (await walkDroppedPath(abs, path.basename(abs), 0, out)) || truncated;
+    truncated = (await walkDroppedPath(abs, path.basename(abs), 0, out, found)) || truncated;
+    if (found.symlink) {
+      return { files: [], truncated: false, symlinks: [found.symlink] };
+    }
     if (truncated) break;
   }
-  return { files: out, truncated };
+  return { files: out, truncated, symlinks: [] };
 }
 
 export type DroppedImportStatResult = {
@@ -59,6 +66,8 @@ export type DroppedImportStatResult = {
   unreadable: string[];
   /** True when free memory or depth stopped the walk before every file was listed. */
   truncated: boolean;
+  /** A symlink was in the tree. `files` is empty; the import must not continue. */
+  symlinks: string[];
 };
 
 type StatBudget = {
@@ -127,17 +136,41 @@ function canAppendStat(budget: StatBudget, relativePath: string, osPath: string)
   );
 }
 
+export type DroppedPathKind = "file" | "directory" | "other";
+
+/**
+ * `lstat` one dropped path. Does not follow symlinks, walk a folder, or
+ * resolve a relative path against this process's cwd.
+ */
+export async function classifyDroppedPath(input: unknown): Promise<DroppedPathKind> {
+  if (typeof input !== "string") return "other";
+  const trimmed = input.trim();
+  if (!path.isAbsolute(trimmed)) return "other";
+  try {
+    const st = await fs.lstat(trimmed);
+    if (st.isSymbolicLink()) return "other";
+    if (st.isDirectory()) return "directory";
+    if (st.isFile()) return "file";
+    return "other";
+  } catch {
+    return "other";
+  }
+}
+
 /**
  * List dropped files as path + size only. File bytes stay on disk.
  * Stops when the path list would crowd out the reserve, or when a directory
- * is deeper than `MAX_DEPTH`. Symlinks are not followed.
+ * is deeper than `MAX_DEPTH`. A symlink refuses the listing.
  */
 export async function statDroppedImportPaths(
   inputPaths: unknown,
 ): Promise<DroppedImportStatResult> {
-  if (!Array.isArray(inputPaths)) return { files: [], unreadable: [], truncated: false };
+  if (!Array.isArray(inputPaths)) {
+    return { files: [], unreadable: [], truncated: false, symlinks: [] };
+  }
   const budget: StatBudget = { files: [], retainedBytes: 0, truncated: false };
   const unreadable: string[] = [];
+  const found = { symlink: null as string | null };
   for (const raw of inputPaths) {
     if (budget.truncated) break;
     if (typeof raw !== "string") continue;
@@ -145,10 +178,13 @@ export async function statDroppedImportPaths(
     if (!trimmed) continue;
     const abs = path.resolve(trimmed);
     if (!path.isAbsolute(abs)) continue;
-    const status = await walkDroppedStats(abs, path.basename(abs), 0, budget);
+    const status = await walkDroppedStats(abs, path.basename(abs), 0, budget, found);
+    if (status === "symlink" && found.symlink) {
+      return { files: [], unreadable, truncated: false, symlinks: [found.symlink] };
+    }
     if (status === "unreadable") unreadable.push(abs);
   }
-  return { files: budget.files, unreadable, truncated: budget.truncated };
+  return { files: budget.files, unreadable, truncated: budget.truncated, symlinks: [] };
 }
 
 export async function readDroppedPathRange(
@@ -173,18 +209,58 @@ export async function readDroppedPathRange(
   } catch {
     return { contentB64: "" };
   }
-  if (st.isSymbolicLink() || !st.isFile()) return { contentB64: "" };
+  if (st.isSymbolicLink()) throw new RefusingSymlinkError();
+  if (!st.isFile()) return { contentB64: "" };
 
   let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
   try {
-    handle = await fs.open(abs, "r");
+    handle = await openRegularNoFollow(abs, st);
     const buf = Buffer.alloc(want);
     const { bytesRead } = await handle.read(buf, 0, want, start);
     return { contentB64: buf.subarray(0, bytesRead).toString("base64") };
-  } catch {
-    return { contentB64: "" };
   } finally {
     await handle?.close().catch(() => undefined);
+  }
+}
+
+/** The final path component is a symlink, or it was replaced by one before open. */
+class RefusingSymlinkError extends Error {
+  constructor() {
+    super("refusing a symlink");
+    this.name = "RefusingSymlinkError";
+  }
+}
+
+/**
+ * Open the final path component without following a symlink.
+ * `O_NOFOLLOW` covers Unix. The `lstat`/`fstat` identity check covers a
+ * replacement between the check and the open, including Windows.
+ */
+async function openRegularNoFollow(
+  abs: string,
+  st: Awaited<ReturnType<typeof fs.lstat>>,
+): Promise<Awaited<ReturnType<typeof fs.open>>> {
+  const nofollow = fsConstants.O_NOFOLLOW;
+  const flags =
+    typeof nofollow === "number" ? fsConstants.O_RDONLY | nofollow : fsConstants.O_RDONLY;
+  let handle: Awaited<ReturnType<typeof fs.open>>;
+  try {
+    handle = await fs.open(abs, flags);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ELOOP") throw new RefusingSymlinkError();
+    throw error;
+  }
+  try {
+    const opened = await handle.stat();
+    const followed = opened.dev !== st.dev || opened.ino !== st.ino;
+    if (followed || opened.isSymbolicLink() || !opened.isFile()) {
+      throw new RefusingSymlinkError();
+    }
+    return handle;
+  } catch (error) {
+    await handle.close().catch(() => undefined);
+    throw error;
   }
 }
 
@@ -194,7 +270,9 @@ async function walkDroppedPath(
   relative: string,
   depth: number,
   out: DroppedImportPayload[],
+  found: { symlink: string | null },
 ): Promise<boolean> {
+  if (found.symlink) return true;
   if (out.length >= CONTENT_MAX_FILES) return true;
   if (depth > MAX_DEPTH) return true;
   if (SKIP_NAMES.has(path.basename(abs))) return false;
@@ -205,7 +283,10 @@ async function walkDroppedPath(
   } catch {
     return false;
   }
-  if (st.isSymbolicLink()) return false;
+  if (st.isSymbolicLink()) {
+    found.symlink = abs;
+    return true;
+  }
 
   if (st.isDirectory()) {
     let names: string[];
@@ -220,6 +301,7 @@ async function walkDroppedPath(
         path.posix.join(relative, name),
         depth + 1,
         out,
+        found,
       );
       if (stopped) return true;
     }
@@ -228,11 +310,19 @@ async function walkDroppedPath(
 
   if (!st.isFile() || st.size > MAX_FILE_BYTES) return false;
 
+  let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
   let buf: Buffer;
   try {
-    buf = await fs.readFile(abs);
-  } catch {
+    handle = await openRegularNoFollow(abs, st);
+    buf = await handle.readFile();
+  } catch (error) {
+    if (error instanceof RefusingSymlinkError) {
+      found.symlink = abs;
+      return true;
+    }
     return false;
+  } finally {
+    await handle?.close().catch(() => undefined);
   }
   out.push({
     relativePath: relative.replace(/\\/g, "/"),
@@ -241,13 +331,14 @@ async function walkDroppedPath(
   return false;
 }
 
-type WalkStatus = "ok" | "unreadable" | "stop";
+type WalkStatus = "ok" | "unreadable" | "stop" | "symlink";
 
 async function walkDroppedStats(
   abs: string,
   relative: string,
   depth: number,
   budget: StatBudget,
+  found: { symlink: string | null },
 ): Promise<WalkStatus> {
   if (budget.truncated) return "stop";
   if (depth > MAX_DEPTH) {
@@ -262,7 +353,10 @@ async function walkDroppedStats(
   } catch {
     return "unreadable";
   }
-  if (st.isSymbolicLink()) return "ok";
+  if (st.isSymbolicLink()) {
+    found.symlink = abs;
+    return "symlink";
+  }
 
   if (st.isDirectory()) {
     if (
@@ -284,8 +378,9 @@ async function walkDroppedStats(
         path.posix.join(relative, name),
         depth + 1,
         budget,
+        found,
       );
-      if (status === "stop") return "stop";
+      if (status === "symlink" || status === "stop") return status;
     }
     return "ok";
   }

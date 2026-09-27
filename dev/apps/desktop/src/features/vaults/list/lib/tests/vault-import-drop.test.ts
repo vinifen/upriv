@@ -1,77 +1,223 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  absolutePathFromDroppedFile,
-  dataTransferHasVaultImport,
-  firstVaultImportFile,
-  isVaultImportFileName,
-} from "../vaultImportDrop";
+  snapshotOsFileDrop,
+  type FileDropEvent,
+} from "@/features/vaults/file-manager/lib/osFileDrop";
+import { vaultListDropSource } from "../vaultImportDrop";
 
-describe("isVaultImportFileName", () => {
-  it.each([
-    ["notes.7z", true],
-    ["Notes.7Z", true],
-    ["  archive.7z  ", true],
-    ["notes.zip", true],
-    ["Notes.upriv.zip", true],
-    ["7z", false],
-    ["notes.txt", false],
-    ["", false],
-  ])("%j → %s", (name, expected) => {
-    expect(isVaultImportFileName(name)).toBe(expected);
-  });
-});
+function dropEvent(partial: Partial<DataTransfer>): FileDropEvent {
+  return {
+    preventDefault() {},
+    stopPropagation() {},
+    dataTransfer: partial as DataTransfer,
+  };
+}
 
-describe("absolutePathFromDroppedFile", () => {
-  it("reads Electron path when present", () => {
-    const file = Object.assign(new File([], "a.7z"), { path: "/tmp/vaults/a.7z" });
-    expect(absolutePathFromDroppedFile(file)).toBe("/tmp/vaults/a.7z");
-  });
+function transfer(
+  partial: Partial<DataTransfer> & { getData?: (type: string) => string },
+): DataTransfer {
+  return {
+    items: [],
+    files: [],
+    getData: () => "",
+    ...partial,
+  } as unknown as DataTransfer;
+}
 
-  it("reads path from window.upriv.getPathForFile when File.path is missing", () => {
-    const previous = (globalThis as { window?: unknown }).window;
-    (globalThis as { window: { upriv: { getPathForFile: (file: File) => string } } }).window = {
-      upriv: { getPathForFile: () => "/tmp/dropped/Notes.zip" },
-    };
-    try {
-      expect(absolutePathFromDroppedFile(new File([], "Notes.zip"))).toBe("/tmp/dropped/Notes.zip");
-    } finally {
-      if (previous === undefined) {
-        delete (globalThis as { window?: unknown }).window;
-      } else {
-        (globalThis as { window: unknown }).window = previous;
-      }
-    }
+describe("vaultListDropSource", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
-  it("returns undefined when path is missing, blank, or not an OS absolute path", () => {
-    expect(absolutePathFromDroppedFile(new File([], "a.7z"))).toBeUndefined();
-    const blank = Object.assign(new File([], "a.7z"), { path: "  " });
-    expect(absolutePathFromDroppedFile(blank)).toBeUndefined();
-    const relative = Object.assign(new File([], "Notes.zip"), { path: "Notes.zip" });
-    expect(absolutePathFromDroppedFile(relative)).toBeUndefined();
-  });
-});
-
-describe("firstVaultImportFile", () => {
-  it("returns the first .zip or .7z in the iterable", () => {
-    const files = [new File([], "readme.txt"), new File([], "vault.zip"), new File([], "b.7z")];
-    expect(firstVaultImportFile(files)?.name).toBe("vault.zip");
+  it("returns null when the drop has no file", async () => {
+    const source = await vaultListDropSource(
+      snapshotOsFileDrop({
+        preventDefault() {},
+        stopPropagation() {},
+        dataTransfer: null,
+      }),
+    );
+    expect(source).toBeNull();
   });
 
-  it("returns null when none match", () => {
-    expect(firstVaultImportFile([new File([], "a.txt")])).toBeNull();
+  it("uses the absolute path of a plain file", async () => {
+    vi.stubGlobal("window", {
+      upriv: {
+        getPathForFile: () => "/tmp/notes.txt",
+        classifyDroppedPath: async () => "file",
+      },
+    });
+    const source = await vaultListDropSource(
+      snapshotOsFileDrop(
+        dropEvent(
+          transfer({
+            files: [new File([], "notes.txt")] as unknown as FileList,
+          }),
+        ),
+        { pathsOnly: true },
+      ),
+    );
+    expect(source).toEqual({
+      fileName: "notes.txt",
+      absolutePath: "/tmp/notes.txt",
+      shape: "file",
+    });
   });
-});
 
-describe("dataTransferHasVaultImport", () => {
-  it("is false for null transfer", () => {
-    expect(dataTransferHasVaultImport(null)).toBe(false);
+  it("keeps a folder and drops a child that sits inside it", async () => {
+    const seen: string[] = [];
+    vi.stubGlobal("window", {
+      upriv: {
+        getPathForFile: (file: File) =>
+          file.name === "Photos" ? "/tmp/Photos" : "/tmp/Photos/a.txt",
+        classifyDroppedPath: async (osPath: string) => {
+          seen.push(osPath);
+          return osPath === "/tmp/Photos" ? "directory" : "file";
+        },
+      },
+    });
+    const source = await vaultListDropSource(
+      snapshotOsFileDrop(
+        dropEvent(
+          transfer({
+            files: [new File([], "Photos"), new File([], "a.txt")] as unknown as FileList,
+          }),
+        ),
+        { pathsOnly: true },
+      ),
+    );
+    expect(source).toEqual({
+      fileName: "Photos",
+      absolutePath: "/tmp/Photos",
+      shape: "directory",
+    });
+    expect(seen).toEqual(["/tmp/Photos"]);
   });
 
-  it("detects .zip among files", () => {
-    const transfer = {
-      files: [new File([], "a.txt"), new File([], "b.zip")],
-    } as unknown as DataTransfer;
-    expect(dataTransferHasVaultImport(transfer)).toBe(true);
+  it("reads a file URI when the drop has no File object", async () => {
+    vi.stubGlobal("window", {
+      upriv: {
+        classifyDroppedPath: async () => "file",
+      },
+    });
+    const source = await vaultListDropSource(
+      snapshotOsFileDrop(
+        dropEvent(
+          transfer({
+            getData: (type: string) => (type === "text/uri-list" ? "file:///tmp/notes.txt" : ""),
+          }),
+        ),
+        { pathsOnly: true },
+      ),
+    );
+    expect(source).toEqual({
+      fileName: "notes.txt",
+      absolutePath: "/tmp/notes.txt",
+      shape: "file",
+    });
+  });
+
+  it("resolves an XDG portal key to a folder", async () => {
+    vi.stubGlobal("window", {
+      upriv: {
+        retrievePortalDrop: async () => ["/tmp/Photos"],
+        classifyDroppedPath: async () => "directory",
+      },
+    });
+    const source = await vaultListDropSource(
+      snapshotOsFileDrop(
+        dropEvent(
+          transfer({
+            getData: (type: string) =>
+              type === "application/vnd.portal.filetransfer" ? "portal-key" : "",
+          }),
+        ),
+        { pathsOnly: true },
+      ),
+    );
+    expect(source).toEqual({
+      fileName: "Photos",
+      absolutePath: "/tmp/Photos",
+      shape: "directory",
+    });
+  });
+
+  it("uses the first root when two files are dropped", async () => {
+    vi.stubGlobal("window", {
+      upriv: {
+        getPathForFile: (file: File) => (file.name === "a.txt" ? "/tmp/a.txt" : "/tmp/b.txt"),
+        classifyDroppedPath: async () => "file",
+      },
+    });
+    const source = await vaultListDropSource(
+      snapshotOsFileDrop(
+        dropEvent(
+          transfer({
+            files: [new File([], "a.txt"), new File([], "b.txt")] as unknown as FileList,
+          }),
+        ),
+        { pathsOnly: true },
+      ),
+    );
+    expect(source?.absolutePath).toBe("/tmp/a.txt");
+    expect(source?.fileName).toBe("a.txt");
+  });
+
+  it("keeps a file name when the shell has no path", async () => {
+    const source = await vaultListDropSource(
+      snapshotOsFileDrop(
+        dropEvent(
+          transfer({
+            files: [new File([], "notes.txt")] as unknown as FileList,
+          }),
+        ),
+        { pathsOnly: true },
+      ),
+    );
+    expect(source).toEqual({ fileName: "notes.txt", shape: "file" });
+  });
+
+  it("treats a symlink classification as a file so create can refuse it", async () => {
+    vi.stubGlobal("window", {
+      upriv: {
+        getPathForFile: () => "/tmp/link",
+        classifyDroppedPath: async () => "other",
+      },
+    });
+    const source = await vaultListDropSource(
+      snapshotOsFileDrop(
+        dropEvent(
+          transfer({
+            files: [new File([], "link")] as unknown as FileList,
+          }),
+        ),
+        { pathsOnly: true },
+      ),
+    );
+    expect(source?.shape).toBe("file");
+    expect(source?.absolutePath).toBe("/tmp/link");
+  });
+
+  it("stays a file when classification fails", async () => {
+    vi.stubGlobal("window", {
+      upriv: {
+        getPathForFile: () => "/tmp/Photos",
+        classifyDroppedPath: async () => {
+          throw new Error("ipc down");
+        },
+      },
+    });
+    const source = await vaultListDropSource(
+      snapshotOsFileDrop(
+        dropEvent(
+          transfer({
+            files: [new File([], "Photos")] as unknown as FileList,
+          }),
+        ),
+        { pathsOnly: true },
+      ),
+    );
+    expect(source?.shape).toBe("file");
+    expect(source?.absolutePath).toBe("/tmp/Photos");
   });
 });

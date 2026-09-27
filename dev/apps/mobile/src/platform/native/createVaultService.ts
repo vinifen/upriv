@@ -1,7 +1,14 @@
-import type { CreateVaultService } from "@upriv/shared";
+import { Platform } from "react-native";
+import { importZipClassificationFromProbe, type CreateVaultService } from "@upriv/shared";
 import { RpcError } from "@upriv/shared";
+import {
+  nativeOsPathFromImportUri,
+  pickImportFolder,
+} from "@/features/vaults/file-manager/lib/osFileImport";
 import { rpcVaultImportProbe } from "@/lib/rpc";
 import { assertSafVaultPathRpcAvailable } from "./safVaultRpcGuard";
+import { contentTreeFromFolderPick, rememberContentTree } from "./contentTreeImport";
+import { safReleaseImportTree } from "./safVaultRoot";
 
 type DocumentPickerModule = typeof import("expo-document-picker");
 
@@ -17,6 +24,8 @@ function loadDocumentPicker(): DocumentPickerModule {
 }
 
 function fsPathFromPickerUri(uri: string): string {
+  const parsed = nativeOsPathFromImportUri(uri);
+  if (parsed) return parsed;
   if (uri.startsWith("file://")) {
     try {
       return decodeURIComponent(uri.slice("file://".length));
@@ -34,7 +43,7 @@ export const nativeCreateVaultService: CreateVaultService = {
     let result: Awaited<ReturnType<DocumentPickerModule["getDocumentAsync"]>>;
     try {
       result = await DocumentPicker.getDocumentAsync({
-        type: ["application/zip", "application/x-7z-compressed", "*/*"],
+        type: "*/*",
         copyToCacheDirectory: true,
         multiple: false,
       });
@@ -51,17 +60,43 @@ export const nativeCreateVaultService: CreateVaultService = {
     return { path, fileName };
   },
 
+  async selectImportFolder() {
+    if (Platform.OS !== "android") return null;
+    const picked = await pickImportFolder({ failClosed: true });
+    if (!picked) return null;
+    try {
+      const tree = contentTreeFromFolderPick(picked);
+      rememberContentTree(tree);
+      return { path: tree.directoryUri, fileName: tree.folderName };
+    } catch (error) {
+      if (picked.releaseSafTree) safReleaseImportTree(picked.releaseSafTree);
+      throw error;
+    }
+  },
+
   async testImportPackagePassword(password, importFile) {
     if (importFile?.kind === "backup" || importFile?.fileName.toLowerCase().endsWith(".zip")) {
-      return true;
+      return { ok: true, embedded: null };
     }
     assertSafVaultPathRpcAvailable();
-    if (!importFile?.path) return false;
+    if (!importFile?.path) return { ok: false, embedded: null };
     const probed = await rpcVaultImportProbe({
       archivePath: importFile.path,
       archivePassword: password,
       kind: "seven_zip",
     });
-    return probed.ok;
+    return { ok: probed.ok, embedded: probed.ok ? probed.embedded : null };
+  },
+
+  async readImportPackageSettings(importFile) {
+    if (!importFile.path.trim()) return null;
+    if (importFile.kind === "backup" || importFile.fileName.toLowerCase().endsWith(".zip")) {
+      assertSafVaultPathRpcAvailable();
+    }
+    const probed = await rpcVaultImportProbe({
+      archivePath: importFile.path,
+      kind: "store_zip",
+    });
+    return importZipClassificationFromProbe(probed);
   },
 };

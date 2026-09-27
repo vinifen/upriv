@@ -1,4 +1,4 @@
-import type { VaultBackupEntry } from "../../domain/backups";
+import { backupEntryKey, type VaultBackupEntry } from "../../domain/backups";
 import type { BackupService } from "./BackupService";
 
 export interface VaultPathWriteResult {
@@ -48,8 +48,9 @@ export function createLiveBackupService(rpc: LiveBackupRpc): BackupService {
     listBackups: (vaultId) => rpc.listBackups(vaultId),
     deleteBackups: (vaultId, stamps) => rpc.deleteBackups(vaultId, stamps),
     promoteToSave: (vaultId, stamp) => rpc.promoteToSave(vaultId, stamp),
-    getBackupBytes: (vaultId, entry) => rpc.getBackupBytes(vaultId, entry.stamp),
-    exportToPath: (vaultId, entry, destPath) => rpc.exportToPath(vaultId, entry.stamp, destPath),
+    getBackupBytes: (vaultId, entry) => rpc.getBackupBytes(vaultId, backupEntryKey(entry, vaultId)),
+    exportToPath: (vaultId, entry, destPath) =>
+      rpc.exportToPath(vaultId, backupEntryKey(entry, vaultId), destPath),
     exportSnapshotsToPath: (vaultId, stamps, destPath) =>
       stamps.length === 1
         ? rpc.exportToPath(vaultId, stamps[0], destPath)

@@ -139,7 +139,7 @@ Transient: `closing`, `opening`, `recovery` — do not expose in UI as resting s
 **close (v1):**
 1. Use keys from `SessionHandle` in RAM (or `session.enc` in disk modes). Prompt the UI **only** for `always_prompt` — a presence check against the open session / `vault.header`, never a new wrap. Default lock has no password field.
 2. Flush the session into `store/` (header + index + chunks). Never pack `.enc` blobs into a `.7z` as rest.
-3. If `[backup] enabled`: write a Stored zip of `store/` to `backups/<stamp>.zip` (no zip password).
+3. If `[backup] enabled`: write a Stored zip of `store/` to `backups/<stamp>-<id>.zip` (no zip password).
 4. `upriv_plain`: `secure_wipe_workspace` and remove plaintext `workspace/<id>/` (UI confirms wipe on manual lock).
 5. Unmount `workspace/<id>/`; release `runtime/<id>.lock`; remove entry in `state.json`.
 6. `zeroize` password/keys in RAM.
@@ -246,7 +246,8 @@ store/
 ├── header/vault.header       # format + KDF params + wrapped key (no cleartext tree)
 ├── header/vault.header.copy  # same bytes; spare for a damaged primary
 ├── index/root.idx.enc        # encrypted directory tree (paths + metadata)
-└── data/<opaque>/….chunk.enc # content ciphertext; opaque identifiers only
+├── index/root.idx.enc.copy   # same bytes; spare for a damaged primary
+└── data/<file_id>.blob       # one ciphertext file per logical file; chunk offsets live in the index
 ```
 
 **Crypto (see [`.agent/SECURITY-CRYPTO.md`](../../.agent/SECURITY-CRYPTO.md)):**
@@ -511,7 +512,7 @@ vaults/<vault_id>/              # vault_id = normalized slug (filesystem-safe)
 | `vault_id` / folder name | Yes | `my-encrypted-notes` |
 | `display_name` (UI, main `.7z` stem) | No — user input | `My Encrypted Notes` |
 | `workspace/{display_name}/` while open | No | `workspace/My Encrypted Notes/` |
-| `backups/<stamp>.zip` | Yes | Stored zip of `store/` |
+| `backups/<stamp>-<id>.zip` | Yes | Stored zip of `store/` |
 
 #### 3.2.1 `display_name` validation and export/import
 
@@ -628,7 +629,7 @@ Available in vault settings (**Security** / password area in UI; stored fields s
 | Step | Action |
 |------|--------|
 | 1 | User enters **current password**, **new password**, **confirm new password** (new ≠ current) |
-| 2 | UI shows **`warning.password_change_backups`** — existing `backups/<stamp>.zip` keep the password from when each snapshot was created |
+| 2 | UI shows **`warning.password_change_backups`** — existing `backups/<stamp>-<id>.zip` keep the password from when each snapshot was created |
 | 3 | **`upriv-core`:** validate current password against `store/` header; re-wrap keys (no open session) |
 | 4 | Decrypt/re-encrypt in controlled RAM / encrypted temp only — do not leave plaintext on disk when `encrypted_dir` |
 | 5 | **Optional (recommended):** snapshot current main store into `backups/` **before** replace (uses **old** password — consistent with backup semantics) |
@@ -758,7 +759,7 @@ fn validate_vault_id(id: &str, vault_root: &Path) -> Result<()> {
 | Path | Use |
 |------|-----|
 | `vaults/<id>/store/` | Vault body at rest |
-| `vaults/<id>/backups/<stamp>.zip` | Stored zip of `store/` (`[backup]`) |
+| `vaults/<id>/backups/<stamp>-<id>.zip` | Stored zip of `store/` (`[backup]`) |
 | `auth/<id>/.session.enc` | Encrypted session (`disk_*` modes; hidden) |
 
 **Open workspaces:** `workspace/<id>/` only while open; `runtime/state.json` lists open vaults (demo: several at once).
@@ -932,6 +933,8 @@ Exposed to desktop via `upriv-daemon` stdio JSON-RPC and to mobile via React Nat
 - Pack and unpack with the `sevenz-rust2` crate inside `upriv-core`. Do not bundle or spawn `7zz`.
 - Close does not create a `.7z`. Export is a separate action.
 - Members are decoded in RAM and written into `store/` through the logical file API. Never extract a decrypted tree under `workspace/` or OS temp.
+- One outer folder (sanitized display name). Vault files sit directly under it, including a user `config.toml`. No settings sidecar. The seed file and `.upriv-workspace.json` are skipped.
+- The same import option examines a `.zip`. `store/header/vault.header` is the store-zip copy (`README.md` and `config.toml` sit beside `store/` and are not copied into the new vault). Any other `.zip` streams ordinary documents into a new `store/`.
 
 ### 5.2 What not to run
 
@@ -1034,7 +1037,7 @@ fn detect_recovery(root: &VaultRoot) -> Option<RecoveryInfo> {
 |--------|--------|
 | `CloseWithPassword` | `7z t` → normal close |
 | `DiscardWorkspace` | `secure_wipe` + delete leftover plaintext `workspace/`; keep `vaults/<id>/store/` |
-| `RestoreBackup` | unpack `backups/<stamp>.zip` into a **new** vault — never overwrite the source |
+| `RestoreBackup` | unpack `backups/<stamp>-<id>.zip` into a **new** vault — never overwrite the source |
 
 ### 7.3 Reopen after crash (no RAM session, `store/` still on disk)
 
@@ -1201,7 +1204,7 @@ No separate Welcome screen in v1; “Open vault” = `--vault` on first run or a
 #### 8.2.3 Modal — backups
 
 - Title: `modal.backup.title` — `<id>`
-- Two tiers: **Saves** (`backups/saves/<stamp>.zip`, never auto-deleted) and **Standard** (`backups/<stamp>.zip`, rotated per `[backup]`). **Save** on a standard row → `backup_promote_save`.
+- Two tiers: **Saves** (`backups/saves/<stamp>-<id>.zip`, never auto-deleted) and **Standard** (`backups/<stamp>-<id>.zip`, rotated per `[backup]`). **Save** on a standard row → `backup_promote_save`.
 - Table/list: columns **Name**, **Date**, **Actions**
 - **Delete:** inline confirmation or second step with `<input>` — placeholder `modal.backup.delete_confirm` + `` `<id>` ``; button disabled until `input === id`.
 - Suggested RPC methods: `backup_list(id)`, `backup_delete(id, backup_name, confirm_id)`, `backup_promote_save(id, backup_name)`.
@@ -1395,7 +1398,7 @@ Same vault body as desktop: rest is `vaults/<id>/store/`. There is **no** OS mou
 
 **When to restore:** when the user **opens the file manager** for that vault (not auto-open on unlock). Seed sync from disk if there is no in-memory entry; hydrate effect is a backstop. Tabs/folders/focus come back as last saved for that vault; split comes from app settings.
 
-**Current stage:** layout persistence is live on `store/` via `vault_fs_*` (hidden reserved file; missing/corrupt → start clean). FUSE and the in-app explorer omit `.upriv-workspace.json` and the seed file. Portable `.7z` skips those reserved paths; a `.zip` of `store/` keeps the ciphertext as-is.
+**Current stage:** layout persistence is live on `store/` via `vault_fs_*` (hidden reserved file; missing/corrupt → start clean). FUSE and the in-app explorer omit `.upriv-workspace.json` and the seed file. Portable `.7z` skips `.upriv-workspace.json` and the seed file; a `.zip` of `store/` keeps the ciphertext as-is.
 
 **close:** flush session into `store/`; wipe `upriv_plain` workspace if used.
 

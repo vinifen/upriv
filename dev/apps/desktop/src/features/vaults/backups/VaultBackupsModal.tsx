@@ -3,6 +3,8 @@ import { useBackupService } from "@/platform/services";
 import { Icon } from "@/components/icons";
 import { Button, IconButton, Modal } from "@/components/ui";
 import {
+  backupEntryFileName,
+  backupEntryKey,
   formatBytes,
   formatBackupDate,
   type VaultBackupEntry,
@@ -20,7 +22,7 @@ interface VaultBackupsModalProps {
   vault: VaultListItem | null;
   open: boolean;
   onClose: () => void;
-  onCreateVaultFromBackup?: (stamp: string) => void;
+  onCreateVaultFromBackup?: (stamp: string, fileName: string, saved?: boolean) => void;
   /** List-level toast so a download can finish after this modal closes. */
   onDownloadNotice?: (message: string) => void;
 }
@@ -56,8 +58,11 @@ export function VaultBackupsModal({
   const [confirmText, setConfirmText] = useState("");
   const confirmInputId = useId();
 
-  const allStamps = useMemo(() => backups.map((entry) => entry.stamp), [backups]);
-  const allSelected = backups.length > 0 && allStamps.every((stamp) => selected.has(stamp));
+  const rowKeys = useMemo(
+    () => backups.map((entry) => backupEntryKey(entry, vaultId ?? "")),
+    [backups, vaultId],
+  );
+  const allSelected = backups.length > 0 && rowKeys.every((key) => selected.has(key));
   const someSelected = selected.size > 0;
   const deleteCount = deleteTargets?.length ?? 0;
   const isSingleDelete = deleteCount === 1;
@@ -78,14 +83,14 @@ export function VaultBackupsModal({
   useEffect(() => {
     setSelected((current) => {
       const next = new Set<string>();
-      for (const stamp of current) {
-        if (allStamps.includes(stamp)) next.add(stamp);
+      for (const key of current) {
+        if (rowKeys.includes(key)) next.add(key);
       }
       return next;
     });
     setDeleteTargets(null);
     setConfirmText("");
-  }, [allStamps]);
+  }, [rowKeys]);
 
   if (!open || !vault) return null;
 
@@ -110,7 +115,7 @@ export function VaultBackupsModal({
       setSelected(new Set());
       return;
     }
-    setSelected(new Set(allStamps));
+    setSelected(new Set(rowKeys));
   };
 
   const beginDelete = (stamps: string[]) => {
@@ -149,12 +154,14 @@ export function VaultBackupsModal({
   };
 
   const handleDownload = () => {
-    const targets = someSelected ? backups.filter((entry) => selected.has(entry.stamp)) : backups;
+    const targets = someSelected
+      ? backups.filter((entry) => selected.has(backupEntryKey(entry, vault.id)))
+      : backups;
     startDownload(targets);
   };
 
-  const handleDownloadOne = (stamp: string) => {
-    const entry = backups.find((item) => item.stamp === stamp);
+  const handleDownloadOne = (key: string) => {
+    const entry = backups.find((item) => backupEntryKey(item, vault.id) === key);
     if (!entry) return;
     startDownload([entry]);
   };
@@ -162,11 +169,16 @@ export function VaultBackupsModal({
   const startDownload = (targets: VaultBackupEntry[]) => {
     if (!vault || targets.length === 0) return;
     const vaultId = vault.id;
-    void pickBackupDownload(targets, t("modal.backup.download_zip_name", { id: vaultId }), {
-      getBackupBytes: (entry) => backupService.getBackupBytes(vaultId, entry),
-      exportSnapshotsToPath: (stamps, destPath) =>
-        backupService.exportSnapshotsToPath(vaultId, stamps, destPath),
-    })
+    void pickBackupDownload(
+      targets,
+      vaultId,
+      t("modal.backup.download_zip_name", { id: vaultId }),
+      {
+        getBackupBytes: (entry) => backupService.getBackupBytes(vaultId, entry),
+        exportSnapshotsToPath: (stamps, destPath) =>
+          backupService.exportSnapshotsToPath(vaultId, stamps, destPath),
+      },
+    )
       .then((picked) => {
         if (picked === "cancelled") return;
         onDownloadNotice?.(t("toast.backup_download_started"));
@@ -223,6 +235,7 @@ export function VaultBackupsModal({
               emptyLabel={t("modal.backup.saves_empty")}
               entries={savedBackups}
               locale={locale}
+              vaultId={vault?.id ?? ""}
               selected={selected}
               selectionDisabled={deleteTargets !== null}
               onToggleSelected={toggleSelected}
@@ -236,6 +249,7 @@ export function VaultBackupsModal({
               emptyLabel={t("modal.backup.standard_empty")}
               entries={standardBackups}
               locale={locale}
+              vaultId={vault?.id ?? ""}
               selected={selected}
               selectionDisabled={deleteTargets !== null}
               onToggleSelected={toggleSelected}
@@ -295,12 +309,13 @@ interface BackupSectionProps {
   emptyLabel: string;
   entries: VaultBackupEntry[];
   locale: string;
+  vaultId: string;
   selected: Set<string>;
   selectionDisabled: boolean;
   onToggleSelected: (stamp: string) => void;
   onDownload: (stamp: string) => void;
   onDelete: (stamp: string) => void;
-  onCreateVaultFromBackup?: (stamp: string) => void;
+  onCreateVaultFromBackup?: (stamp: string, fileName: string, saved?: boolean) => void;
   onPromoteToSave?: (stamp: string) => void;
 }
 
@@ -310,6 +325,7 @@ function BackupSection({
   emptyLabel,
   entries,
   locale,
+  vaultId,
   selected,
   selectionDisabled,
   onToggleSelected,
@@ -330,22 +346,29 @@ function BackupSection({
         </p>
       ) : (
         <ul className="space-y-2">
-          {entries.map((entry) => (
-            <BackupRow
-              key={entry.stamp}
-              entry={entry}
-              locale={locale}
-              checked={selected.has(entry.stamp)}
-              selectionDisabled={selectionDisabled}
-              onToggleSelected={() => onToggleSelected(entry.stamp)}
-              onDownload={() => onDownload(entry.stamp)}
-              onDelete={() => onDelete(entry.stamp)}
-              onCreateVaultFromBackup={
-                onCreateVaultFromBackup ? () => onCreateVaultFromBackup(entry.stamp) : undefined
-              }
-              onPromoteToSave={onPromoteToSave ? () => onPromoteToSave(entry.stamp) : undefined}
-            />
-          ))}
+          {entries.map((entry) => {
+            const key = backupEntryKey(entry, vaultId);
+            const fileName = backupEntryFileName(entry, vaultId);
+            return (
+              <BackupRow
+                key={key}
+                entry={entry}
+                locale={locale}
+                fileName={fileName}
+                checked={selected.has(key)}
+                selectionDisabled={selectionDisabled}
+                onToggleSelected={() => onToggleSelected(key)}
+                onDownload={() => onDownload(key)}
+                onDelete={() => onDelete(key)}
+                onCreateVaultFromBackup={
+                  onCreateVaultFromBackup
+                    ? () => onCreateVaultFromBackup(entry.stamp, fileName, Boolean(entry.saved))
+                    : undefined
+                }
+                onPromoteToSave={onPromoteToSave ? () => onPromoteToSave(key) : undefined}
+              />
+            );
+          })}
         </ul>
       )}
     </section>
@@ -419,6 +442,7 @@ function BackupListToolbar({
 interface BackupRowProps {
   entry: VaultBackupEntry;
   locale: string;
+  fileName: string;
   checked: boolean;
   selectionDisabled: boolean;
   onToggleSelected: () => void;
@@ -431,6 +455,7 @@ interface BackupRowProps {
 function BackupRow({
   entry,
   locale,
+  fileName,
   checked,
   selectionDisabled,
   onToggleSelected,
@@ -472,9 +497,7 @@ function BackupRow({
         ].join(" ")}
       >
         <p className="flex min-w-0 items-center gap-2">
-          <span className="truncate font-mono text-xs text-on-surface sm:text-sm">
-            {entry.stamp}
-          </span>
+          <span className="truncate font-mono text-xs text-on-surface sm:text-sm">{fileName}</span>
           {entry.saved ? (
             <span className="shrink-0 rounded bg-[color-mix(in_srgb,var(--accent)_15%,transparent)] px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-accent">
               {t("modal.backup.saved_badge")}

@@ -79,31 +79,34 @@ export function normalizeKdfUnlockPreset(preset: string | undefined): KdfUnlockP
   return parseKdfUnlockPreset(trimmed) ?? DEFAULT_KDF_UNLOCK_PRESET;
 }
 
-function looksLikeBackupImportPath(path: string): boolean {
-  const normalized = path.trim().replace(/\\/g, "/").toLowerCase();
-  return /(^|\/)backups\//.test(normalized);
-}
-
 /**
- * Scratch and `.7z` import wrap a **new** `store/` — user picks unlock RAM.
- * A `.zip` of `store/` already has `vault.header` — skip the picker (copy
- * ciphertext; do not rewrite KDF). Create-from-backup copies a frozen
- * `store/` (`importKind: "backup"`) — same skip.
- * Product import accepts only `.zip` | `.7z` (`isVaultImportFileName`); until
- * core peeks for `vault.header` inside the zip, extension is the interim
- * format signal (SECURITY-CRYPTO import table).
+ * Scratch, a documents `.zip`, and `.7z` import wrap a **new** `store/` — user
+ * picks unlock RAM. A Upriv `.zip` already has `vault.header` — skip the
+ * picker (copy ciphertext; do not rewrite KDF). Create-from-backup copies a
+ * frozen `store/` (`importKind: "backup"`) — same skip. A folder named
+ * `backups` is not that copy. A `.zip` whose layout is still unknown stays
+ * locked so the default preset is not shown as chosen. Extract off stores
+ * that `.zip` as one file, so the user does choose a preset.
  */
 export function createVaultChoosesKdf(draft: {
   source: "import" | "scratch" | null;
   importFileName: string;
+  /** Present on drafts. A directory named `backups` does not hide the picker. */
   importFilePath?: string;
   importKind?: "file" | "backup";
+  importShape?: "file" | "directory";
+  importExtract?: boolean;
+  zipLayout?: "store" | "files" | null;
 }): boolean {
   if (draft.source !== "import") return true;
   if (draft.importKind === "backup") return false;
-  if (looksLikeBackupImportPath(draft.importFilePath ?? "")) return false;
+  if (draft.importShape === "directory") return true;
   const name = draft.importFileName.trim().toLowerCase();
-  if (name.endsWith(".zip")) return false;
+  if (name.endsWith(".zip")) {
+    if (draft.zipLayout === "store") return false;
+    if (draft.importExtract === false) return true;
+    return draft.zipLayout === "files";
+  }
   return true;
 }
 

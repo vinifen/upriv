@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+} from "react";
 import {
   buildCreateVaultResult,
   canSubmitCreateVault,
@@ -13,9 +21,13 @@ import {
   resolveCreateVaultFocusTarget,
   resolveCreateVaultOpenStep,
   selectCreateVaultWizardView,
+  shouldBumpVaultRootEpoch,
   shouldSelectCreateVaultFocusText,
   VAULT_ERROR_CODES,
   type CreateVaultDraft,
+  type EmbeddedSettingsSnapshot,
+  type EmbeddedVaultSettings,
+  type ImportZipClassification,
   type CreateVaultFocusField,
   type CreateVaultResult,
   type CreateVaultStepId,
@@ -41,6 +53,8 @@ export interface UseCreateVaultWizardOptions {
   open: boolean;
   existingVaultIds: readonly string[];
   existingOrders: readonly number[];
+  /** Display names already on the vault list, for ` N` and ` backup` suggestions. */
+  existingDisplayNames?: readonly string[];
   groups?: readonly VaultGroup[];
   /** Active vault-root path for reserved-mount checks on custom workspace paths. */
   vaultRootPath?: string | null;
@@ -55,7 +69,15 @@ export interface UseCreateVaultWizardOptions {
   testImportPassword: (
     password: string,
     importFile: { path: string; fileName: string; kind?: "file" | "backup" },
-  ) => Promise<boolean>;
+  ) => Promise<{ ok: boolean; embedded: EmbeddedVaultSettings | null }>;
+  /** Classify a `.zip` and load store settings. A `.7z` does not carry settings. */
+  readImportPackageSettings?: (importFile: {
+    path: string;
+    fileName: string;
+    kind?: "file" | "backup";
+  }) => Promise<ImportZipClassification | null>;
+  /** Missing or incomplete vault-root. Does not mark the zip as rejected. */
+  onVaultRootFailure?: (error: unknown) => void;
 }
 
 export function useCreateVaultWizard<
@@ -64,6 +86,7 @@ export function useCreateVaultWizard<
   open,
   existingVaultIds,
   existingOrders,
+  existingDisplayNames = [],
   groups = NO_VAULT_GROUPS,
   vaultRootPath = null,
   initialDraft = null,
@@ -71,6 +94,8 @@ export function useCreateVaultWizard<
   onCreate,
   onClose,
   testImportPassword,
+  readImportPackageSettings,
+  onVaultRootFailure,
 }: UseCreateVaultWizardOptions) {
   const [state, dispatch] = useReducer(
     createVaultWizardReducer,
@@ -96,12 +121,26 @@ export function useCreateVaultWizard<
   const deferFocusOnOpen = useRef(false);
   /** Invalidates in-flight import-password probes (unmount, reopen, re-test). */
   const passwordTestGen = useRef(0);
+  const existingDisplayNamesRef = useRef(existingDisplayNames);
+  existingDisplayNamesRef.current = existingDisplayNames;
+  /** Draft when the import path was chosen, before embedded settings replace untouched fields. */
+  const settingsSnapshot = useRef<EmbeddedSettingsSnapshot | null>(null);
+  const settingsPath = useRef<string | null>(null);
+  const settingsGen = useRef(0);
+  /** One number per open. The settings effect waits until this visit's draft is in state. */
+  const [visit, setVisit] = useState(0);
+  /** False for the render that still shows the previous visit, until `opened` lands. */
+  const acceptSettings = useRef(true);
+  const draftRef = useRef(state.draft);
+  draftRef.current = state.draft;
 
   // Reset on the closed→open edge only: the vault list keeps refreshing while the
   // wizard is up, and reacting to those new arrays would wipe what the user typed.
   useEffect(() => {
     if (open && !wasOpen.current) {
       deferFocusOnOpen.current = true;
+      acceptSettings.current = false;
+      setVisit((current) => current + 1);
       dispatch({
         type: "opened",
         draft: initialDraft ?? createEmptyCreateVaultDraft(existingOrders),
@@ -110,16 +149,93 @@ export function useCreateVaultWizard<
       fieldRefs.current = {};
       lastFocusByStep.current = {};
       visitedSteps.current = new Set();
-      // A probe started in the previous session must not land on this draft.
+      settingsSnapshot.current = null;
+      settingsPath.current = null;
       passwordTestGen.current += 1;
+      settingsGen.current += 1;
     }
-    if (!open) deferFocusOnOpen.current = false;
+    if (!open) {
+      deferFocusOnOpen.current = false;
+      if (wasOpen.current) {
+        settingsSnapshot.current = null;
+        settingsPath.current = null;
+        passwordTestGen.current += 1;
+        settingsGen.current += 1;
+      }
+    }
     wasOpen.current = open;
   }, [open, existingOrders, initialDraft, initialStep]);
 
   useEffect(() => {
+    if (!acceptSettings.current) {
+      acceptSettings.current = true;
+      return;
+    }
+    if (!open || !readImportPackageSettings || visit === 0) return;
+    const path = state.draft.importFilePath.trim();
+    if (!path || settingsPath.current === path) return;
+    const draft = draftRef.current;
+    settingsPath.current = path;
+    settingsSnapshot.current = draft;
+    if (draft.source !== "import") return;
+    const isZip =
+      draft.importShape !== "directory" &&
+      (draft.importKind === "backup" || draft.importFileName.toLowerCase().endsWith(".zip"));
+    if (!isZip) return;
+    const generation = (settingsGen.current += 1);
+    void readImportPackageSettings({
+      path,
+      fileName: draft.importFileName,
+      kind: draft.importKind,
+    })
+      .then((classified) => {
+        if (settingsGen.current !== generation) return;
+        if (!classified) {
+          dispatch({ type: "zipClassified", zipLayout: null, rejected: true });
+          return;
+        }
+        dispatch({
+          type: "zipClassified",
+          zipLayout: classified.zipLayout,
+          rejected: false,
+        });
+        if (classified.zipLayout === "store" && classified.embedded) {
+          dispatch({
+            type: "embeddedSettings",
+            embedded: classified.embedded,
+            snapshot: draft,
+            existingDisplayNames: existingDisplayNamesRef.current,
+          });
+        }
+      })
+      .catch((error: unknown) => {
+        if (settingsGen.current !== generation) return;
+        if (shouldBumpVaultRootEpoch(error)) {
+          onVaultRootFailure?.(error);
+          return;
+        }
+        dispatch({
+          type: "zipClassified",
+          zipLayout: null,
+          rejected: false,
+          probeFailed: true,
+        });
+      });
+  }, [
+    open,
+    visit,
+    readImportPackageSettings,
+    state.draft.importFilePath,
+    state.draft.importFileName,
+    state.draft.importKind,
+    state.draft.importShape,
+    onVaultRootFailure,
+  ]);
+
+  useEffect(() => {
     return () => {
       passwordTestGen.current += 1;
+      settingsGen.current += 1;
     };
   }, []);
 
@@ -150,20 +266,30 @@ export function useCreateVaultWizard<
     const password = state.draft.password;
     void (async () => {
       let ok = false;
+      let embedded: EmbeddedVaultSettings | null = null;
       let unavailable = false;
       let timedOut = false;
       try {
-        ok = await testImportPassword(password, {
+        const probed = await testImportPassword(password, {
           path: state.draft.importFilePath,
           fileName: state.draft.importFileName,
           kind: state.draft.importKind,
         });
+        ok = probed.ok;
+        embedded = probed.embedded;
       } catch (error) {
         timedOut = isRpcError(error) && error.code === "rpc_timeout";
         unavailable = !(isRpcError(error) && error.code === VAULT_ERROR_CODES.WRONG_PASSWORD);
       }
       if (passwordTestGen.current !== generation) return;
       dispatch({ type: "importPasswordTestFinished", ok, unavailable });
+      if (ok && embedded) {
+        dispatch({
+          type: "embeddedSettings",
+          embedded,
+          snapshot: settingsSnapshot.current ?? draftRef.current,
+        });
+      }
       // A timed-out probe can still finish in the daemon. Drop this generation
       // so a late callback cannot replace the timeout with success.
       if (timedOut) passwordTestGen.current += 1;

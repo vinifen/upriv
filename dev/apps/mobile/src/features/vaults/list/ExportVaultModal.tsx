@@ -29,6 +29,7 @@ interface ExportVaultModalProps {
   vault: VaultListItem | null;
   open: boolean;
   submitting?: boolean;
+  startedAt?: number | null;
   onClose: () => void;
   onConfirm: (request: VaultExportRequest) => void;
   onTimeout?: () => void;
@@ -39,6 +40,7 @@ export function ExportVaultModal({
   vault,
   open,
   submitting = false,
+  startedAt = null,
   onClose,
   onConfirm,
   onTimeout,
@@ -61,10 +63,12 @@ export function ExportVaultModal({
   const focusPasswordRef = useRef(false);
   const [sevenZipAvailable, setSevenZipAvailable] = useState(false);
   // Live export = flush `store/` + zip/.7z — same family as vaultRewrap. Mock finishes instantly.
-  const budget = useLoadingBudget(submitting, LOADING_BUDGET_MS.vaultExport);
+  const budget = useLoadingBudget(submitting, LOADING_BUDGET_MS.vaultExport, {
+    startedAt: startedAt ?? undefined,
+  });
 
   useEffect(() => {
-    if (!open || !vault) return;
+    if (!open || !vault || submitting) return;
     setFormat(DEFAULT_VAULT_EXPORT_FORMAT);
     setSevenZip(DEFAULT_SEVEN_ZIP);
     setPassword("");
@@ -94,7 +98,7 @@ export function ExportVaultModal({
     return () => {
       cancelled = true;
     };
-  }, [open, onSettingsLoadError, vault, vaultService]);
+  }, [open, onSettingsLoadError, submitting, vault, vaultService]);
 
   useEffect(() => {
     if (!budget.timedOut || !submitting) return;
@@ -130,16 +134,15 @@ export function ExportVaultModal({
       titleIcon="download"
       contextTitle={vault.displayName}
       onClose={() => {
-        if (!submitting) onClose();
+        onClose();
       }}
-      dismissible={!submitting}
+      dismissible
       panelClassName="max-w-lg"
       footer={
         <ModalFooterActions layout="dialog">
           <Button
-            label={t("action.cancel")}
+            label={submitting ? t("action.close") : t("action.cancel")}
             variant="ghost"
-            disabled={submitting}
             onPress={onClose}
           />
           <Button

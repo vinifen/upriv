@@ -38,12 +38,11 @@ export interface UseVaultInfoDataOptions {
   fallbackVaultRootBase: string;
 }
 
-/** Core does not report session counters yet — Info shows an em dash, not a guess. */
-const UNAVAILABLE_RUNTIME_STATS: VaultRuntimeStats = {
+/** Core does not report these session counters — Info shows an em dash, not a guess. */
+const UNAVAILABLE_RUNTIME_STATS: Omit<VaultRuntimeStats, "storeBytes"> = {
   openCount: null,
   lastOpenedAt: null,
   sessionRamBytes: null,
-  storeBytes: null,
   logicalFileCount: null,
 };
 
@@ -92,10 +91,11 @@ export function useVaultInfoData({
 
     void (async () => {
       try {
-        const [settings, backups, root] = await Promise.all([
+        const [settings, backups, root, storeBytes] = await Promise.all([
           vaultService.getSettings(current.id),
           backupService.listBackups(current.id),
           vaultRootService.resolve({ vaultRootMode }),
+          vaultService.storeOnDiskBytes(current.id).catch(() => null),
         ]);
         if (cancelled) return;
         if (root.status !== "found") {
@@ -104,7 +104,7 @@ export function useVaultInfoData({
 
         const isOpen = current.session === "open";
         const passwordInSession = lifecycleService.hasPasswordInSession(current.id);
-        const runtime = { ...UNAVAILABLE_RUNTIME_STATS };
+        const runtime = { ...UNAVAILABLE_RUNTIME_STATS, storeBytes };
         const vaultRootBase = vaultRootContentorPath(root, fallbackVaultRootBase);
         const storePaths = vaultStoreDisplayPaths(vaultRootBase, current.id);
         const mountPath = settings?.mount.workspace_path ?? WORKSPACE_PATH_DEFAULT;

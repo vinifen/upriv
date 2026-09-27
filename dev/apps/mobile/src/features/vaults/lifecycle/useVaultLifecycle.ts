@@ -355,6 +355,7 @@ export function useVaultLifecycle({
       hooks: {
         onComplete: () => void;
         onError: () => void;
+        onAbandoned?: (ok: boolean) => void;
       },
     ): boolean => {
       if (pipeline.isVaultPipelineBusy(vaultId)) return false;
@@ -366,6 +367,7 @@ export function useVaultLifecycle({
         presentation: "background",
         budgetMs: LOADING_BUDGET_MS.vaultCreate,
         failureMode: "advance",
+        invalidateOnTimeout: true,
         runPipeline: async () => {
           await runCreate();
         },
@@ -380,7 +382,15 @@ export function useVaultLifecycle({
           pipelineBackgroundRef.current = false;
         },
         onTimeout: () => {
+          hooks.onError();
           showToast(t("error.operation_timed_out"));
+          pipelineBackgroundRef.current = false;
+        },
+        onAbandoned: (ok) => {
+          hooks.onAbandoned?.(ok);
+          if (!ok) return;
+          hooks.onComplete();
+          notifyPipelineComplete(vaultId, "create");
         },
       });
     },

@@ -12,5 +12,6 @@
     },
     "resolveJsonModule": true
   },
-  "include": ["**/*.ts", "**/*.tsx", "../shared/locales/*.json"]
+  "include": ["**/*.ts", "**/*.tsx", "../shared/locales/*.json"],
+  "exclude": ["node_modules", "vitest"]
 }

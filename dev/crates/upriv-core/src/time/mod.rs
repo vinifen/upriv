@@ -29,6 +29,22 @@ pub fn utc_filename_stamp() -> String {
     format!("{y:04}{mo:02}{d:02}{h:02}{mi:02}{s:02}")
 }
 
+/// `YYYYMMDDHHmmss` → `YYYY-MM-DDTHH:MM:SSZ`. `None` when `stamp` is not 14 digits.
+pub fn filename_stamp_to_iso(stamp: &str) -> Option<String> {
+    if stamp.len() != 14 || !stamp.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    Some(format!(
+        "{}-{}-{}T{}:{}:{}Z",
+        &stamp[0..4],
+        &stamp[4..6],
+        &stamp[6..8],
+        &stamp[8..10],
+        &stamp[10..12],
+        &stamp[12..14],
+    ))
+}
+
 /// Calendar UTC components from Unix seconds (Howard Hinnant civil algorithm).
 pub fn utc_ymdhms(seconds: u64) -> (u32, u32, u32, u32, u32, u32) {
     let mut secs = seconds;
@@ -84,5 +100,15 @@ mod tests {
     fn known_unix_second() {
         let (y, mo, d, h, mi, s) = utc_ymdhms(1_780_056_000);
         assert_eq!((y, mo, d, h, mi, s), (2026, 5, 29, 12, 0, 0));
+    }
+
+    #[test]
+    fn filename_stamp_iso_matches_the_same_second() {
+        assert_eq!(
+            filename_stamp_to_iso("20260529120000").as_deref(),
+            Some("2026-05-29T12:00:00Z")
+        );
+        assert_eq!(filename_stamp_to_iso("2026052912000"), None);
+        assert_eq!(filename_stamp_to_iso("2026052912000a"), None);
     }
 }

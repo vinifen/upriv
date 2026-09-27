@@ -13,6 +13,8 @@ export interface LiveVaultRpc {
   listVaults: () => Promise<VaultListItem[]>;
   createVault: (input: CreateVaultInput) => Promise<VaultListItem>;
   getSettings: (vaultId: string) => Promise<VaultSettingsConfig | undefined>;
+  /** Regular-file bytes under `store/`. Omitted adapters leave Info on an em dash. */
+  storeOnDiskBytes?: (vaultId: string) => Promise<number>;
   /** Persist full `config.toml` via `vault_config_save` (enforces edit-policy). */
   saveSettings?: (vaultId: string, config: VaultSettingsConfig) => Promise<void>;
   /** Deep rename via `vault_rename` (display name + optional folder migration). */
@@ -28,6 +30,8 @@ export interface LiveVaultRpc {
   probeExportPassword?: (vaultId: string, password: string) => Promise<boolean>;
   importZip?: (input: CreateVaultInput) => Promise<VaultListItem>;
   import7z?: (input: CreateVaultInput) => Promise<VaultListItem>;
+  importFilesZip?: (input: CreateVaultInput) => Promise<VaultListItem>;
+  importOsPath?: (input: CreateVaultInput) => Promise<VaultListItem>;
   recoverDirtyClose?: (vaultId: string) => Promise<void>;
 }
 
@@ -51,9 +55,19 @@ export function createLiveVaultService(rpc: LiveVaultRpc): VaultService {
         if (!rpc.import7z) notImplemented("Vault 7z import");
         return rpc.import7z(input);
       }
+      if (input.importPackage?.kind === "files_zip") {
+        if (!rpc.importFilesZip) notImplemented("Files zip import");
+        return rpc.importFilesZip(input);
+      }
+      if (input.importPackage?.kind === "os_tree") {
+        if (!rpc.importOsPath) notImplemented("File import");
+        return rpc.importOsPath(input);
+      }
       return rpc.createVault(input);
     },
     getSettings: (vaultId) => rpc.getSettings(vaultId),
+    storeOnDiskBytes: (vaultId) =>
+      rpc.storeOnDiskBytes ? rpc.storeOnDiskBytes(vaultId) : Promise.resolve(null),
 
     async registerSettings(vaultId, config) {
       if (!rpc.saveSettings) {

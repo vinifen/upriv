@@ -1,3 +1,4 @@
+import { RpcError, VAULT_ERROR_CODES } from "@upriv/shared";
 import { relativePathFromImportFile } from "./vaultImportPaths";
 
 export interface DroppedImportFile {
@@ -34,7 +35,14 @@ type FileSystemDirectoryReaderLike = {
   ) => void;
 };
 
-const OS_FILE_DRAG_TYPES = ["Files", "text/uri-list", "application/x-moz-file"] as const;
+const OS_FILE_DRAG_TYPES = [
+  "Files",
+  "text/uri-list",
+  "application/x-moz-file",
+  "application/vnd.portal.filetransfer",
+  "application/vnd.portal.files",
+  "x-special/gnome-copied-files",
+] as const;
 
 export type OsDropSnapshot = {
   files: DroppedImportFile[];
@@ -76,6 +84,26 @@ export function isOsFileDrag(event: FileDropEvent): boolean {
     /* DataTransferItemList may be restricted */
   }
   return false;
+}
+
+function dragTypeCount(types: DataTransfer["types"] | undefined): number {
+  if (!types) return 0;
+  try {
+    return Array.from(types as ArrayLike<string>).length;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * True for an OS file drag, including a Linux dragover whose type list is still empty.
+ * `drop` does not fire unless dragover called `preventDefault`.
+ */
+export function isPotentialOsFileDrag(event: FileDropEvent): boolean {
+  if (isOsFileDrag(event)) return true;
+  const transfer = event.dataTransfer;
+  if (!transfer) return false;
+  return dragTypeCount(transfer.types) === 0;
 }
 
 /**
@@ -289,29 +317,45 @@ function isStatRow(value: unknown): value is DroppedStatRow {
   );
 }
 
+function stringList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+}
+
 function statRowsFromApi(stats: unknown): {
   rows: DroppedStatRow[];
   unreadable: string[];
   truncated: boolean;
+  symlinks: string[];
 } {
   if (Array.isArray(stats))
-    return { rows: stats.filter(isStatRow), unreadable: [], truncated: false };
-  if (!stats || typeof stats !== "object") return { rows: [], unreadable: [], truncated: false };
-  const record = stats as { files?: unknown; unreadable?: unknown; truncated?: unknown };
+    return { rows: stats.filter(isStatRow), unreadable: [], truncated: false, symlinks: [] };
+  if (!stats || typeof stats !== "object")
+    return { rows: [], unreadable: [], truncated: false, symlinks: [] };
+  const record = stats as {
+    files?: unknown;
+    unreadable?: unknown;
+    truncated?: unknown;
+    symlinks?: unknown;
+  };
   return {
     rows: Array.isArray(record.files) ? record.files.filter(isStatRow) : [],
-    unreadable: Array.isArray(record.unreadable)
-      ? record.unreadable.filter(
-          (item): item is string => typeof item === "string" && item.trim().length > 0,
-        )
-      : [],
+    unreadable: stringList(record.unreadable),
     truncated: record.truncated === true,
+    symlinks: stringList(record.symlinks),
   };
+}
+
+function refuseDroppedSymlinks(symlinks: readonly string[]): void {
+  const first = symlinks[0];
+  if (!first) return;
+  throw new RpcError(VAULT_ERROR_CODES.IMPORT_SOURCE_UNREADABLE, `refusing a symlink: ${first}`);
 }
 
 function contentRowsFromApi(raw: unknown): {
   rows: { relativePath: string; contentB64: string }[];
   truncated: boolean;
+  symlinks: string[];
 } {
   if (Array.isArray(raw)) {
     return {
@@ -323,10 +367,11 @@ function contentRowsFromApi(raw: unknown): {
           typeof (row as { contentB64?: unknown }).contentB64 === "string",
       ),
       truncated: false,
+      symlinks: [],
     };
   }
-  if (!raw || typeof raw !== "object") return { rows: [], truncated: false };
-  const record = raw as { files?: unknown; truncated?: unknown };
+  if (!raw || typeof raw !== "object") return { rows: [], truncated: false, symlinks: [] };
+  const record = raw as { files?: unknown; truncated?: unknown; symlinks?: unknown };
   const files = Array.isArray(record.files) ? record.files : [];
   return {
     rows: files.filter(
@@ -337,6 +382,7 @@ function contentRowsFromApi(raw: unknown): {
         typeof (row as { contentB64?: unknown }).contentB64 === "string",
     ),
     truncated: record.truncated === true,
+    symlinks: stringList(record.symlinks),
   };
 }
 
@@ -356,12 +402,16 @@ async function filesFromOsPaths(paths: string[]): Promise<OsPathWalk | null> {
   if (!api) return null;
 
   if (typeof api.statDroppedPaths === "function") {
-    const { rows, unreadable, truncated } = statRowsFromApi(await api.statDroppedPaths(paths));
+    const { rows, unreadable, truncated, symlinks } = statRowsFromApi(
+      await api.statDroppedPaths(paths),
+    );
+    refuseDroppedSymlinks(symlinks);
     return { files: rows.map(fileFromStat), unreadable, truncated };
   }
 
   if (typeof api.readDroppedPaths !== "function") return null;
   const content = contentRowsFromApi(await api.readDroppedPaths(paths));
+  refuseDroppedSymlinks(content.symlinks);
   return {
     files: content.rows.map((row) => {
       const name = row.relativePath.split("/").pop() || "file";
@@ -448,8 +498,14 @@ export function snapshotLooksLikeOsImport(snapshot: OsDropSnapshot): boolean {
 /**
  * Copy File / FileSystemEntry / file: URI handles during the drop event.
  * Chromium clears `dataTransfer` after the handler returns; do not await first.
+ *
+ * `pathsOnly` skips reading directory entries. Create-vault needs the folder path,
+ * and the daemon walks that folder later.
  */
-export function snapshotOsFileDrop(event: FileDropEvent): OsDropSnapshot {
+export function snapshotOsFileDrop(
+  event: FileDropEvent,
+  options?: { pathsOnly?: boolean },
+): OsDropSnapshot {
   const transfer = event.dataTransfer;
   if (!transfer) {
     return { files: [], pending: Promise.resolve([]), osPaths: [], hasDirectory: false };
@@ -466,7 +522,7 @@ export function snapshotOsFileDrop(event: FileDropEvent): OsDropSnapshot {
     const entry = entryFromDataTransferItem(item);
     if (entry?.isDirectory) {
       hasDirectory = true;
-      pending.push(collectEntryFilesLater(entry));
+      if (!options?.pathsOnly) pending.push(collectEntryFilesLater(entry));
       continue;
     }
 
@@ -499,26 +555,30 @@ export function snapshotOsFileDrop(event: FileDropEvent): OsDropSnapshot {
   };
 }
 
-export async function listFilesFromOsDropSnapshot(snapshot: OsDropSnapshot): Promise<ListedOsDrop> {
-  const extra = await snapshot.pending;
-  const collected = extra.length > 0 ? [...snapshot.files, ...extra] : [...snapshot.files];
-
+/** Absolute dropped paths. A file inside a dropped folder is not a separate root. */
+export async function droppedOsRootPaths(snapshot: OsDropSnapshot): Promise<string[]> {
   const osPaths = [...snapshot.osPaths];
   if (snapshot.portalKey) {
     const api = typeof window === "undefined" ? undefined : window.upriv;
     if (api && typeof api.retrievePortalDrop === "function") {
       try {
         const portalPaths = await api.retrievePortalDrop(snapshot.portalKey);
-        for (const path of portalPaths) {
-          if (path.trim()) osPaths.push(path.trim());
+        for (const portalPath of portalPaths) {
+          if (portalPath.trim()) osPaths.push(portalPath.trim());
         }
       } catch {
         /* portal retrieve is best-effort */
       }
     }
   }
+  return rootOsPaths(osPaths);
+}
 
-  const roots = rootOsPaths(osPaths);
+export async function listFilesFromOsDropSnapshot(snapshot: OsDropSnapshot): Promise<ListedOsDrop> {
+  const extra = await snapshot.pending;
+  const collected = extra.length > 0 ? [...snapshot.files, ...extra] : [...snapshot.files];
+
+  const roots = await droppedOsRootPaths(snapshot);
   // Prefer OS paths whenever available: Linux folder drops arrive as a single
   // `File` with a non-zero directory size (often 4096), not an empty stub.
   // A root the main process could not stat keeps its browser `File` bytes.

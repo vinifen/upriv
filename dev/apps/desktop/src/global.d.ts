@@ -9,11 +9,15 @@ declare global {
       onEvent(callback: (name: string, payload: unknown) => void): () => void;
       /** Absolute path of an OS-dropped File (Electron 32+). */
       getPathForFile?(file: File): string | undefined;
-      readDroppedPaths?(
-        paths: string[],
-      ): Promise<
+      /** `lstat` of one dropped path. Missing paths and symlinks are `other`. */
+      classifyDroppedPath?(osPath: string): Promise<"file" | "directory" | "other">;
+      readDroppedPaths?(paths: string[]): Promise<
         | { relativePath: string; contentB64: string }[]
-        | { files: { relativePath: string; contentB64: string }[]; truncated: boolean }
+        | {
+            files: { relativePath: string; contentB64: string }[];
+            truncated: boolean;
+            symlinks?: string[];
+          }
       >;
       statDroppedPaths?(paths: string[]): Promise<
         | { relativePath: string; osPath: string; size: number }[]
@@ -21,6 +25,7 @@ declare global {
             files: { relativePath: string; osPath: string; size: number }[];
             unreadable: string[];
             truncated?: boolean;
+            symlinks?: string[];
           }
       >;
       readDroppedPathRange?(

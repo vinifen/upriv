@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { VaultBackupEntry } from "../domain";
+import { backupEntryKey, type VaultBackupEntry } from "../domain";
 import type { BackupService } from "../services";
 
 export function useVaultBackups(
@@ -68,7 +68,7 @@ export function useVaultBackups(
   const deleteBackups = useCallback(
     async (stamps: readonly string[]) => {
       if (!vaultId || stamps.length === 0) return;
-      const allowed = new Set(backupsRef.current.map((entry) => entry.stamp));
+      const allowed = new Set(backupsRef.current.map((entry) => backupEntryKey(entry, vaultId)));
       if (stamps.some((stamp) => !allowed.has(stamp))) return;
       const startedFor = vaultId;
       const busyGen = ++busyGenRef.current;

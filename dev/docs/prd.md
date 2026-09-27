@@ -108,7 +108,7 @@ encrypted_dir / upriv_plain:
 | 1 | **Open:** unlock `store/` (`vault.header`); decrypt in RAM. |
 | 2 | **Session:** mount virtual `workspace/<id>/` (desktop) or in-app file manager (mobile). No durable plaintext tree on ordinary disk. |
 | 3 | **Edit:** each save updates the session **and** persists ciphertext chunks in `store/`. |
-| 4 | **Close:** flush session into `store/`; optional backup = Stored zip of `store/` at `backups/<stamp>.zip` (no zip password). |
+| 4 | **Close:** flush session into `store/`; optional backup = Stored zip of `store/` at `backups/<stamp>-<id>.zip` (no zip password). |
 | 5 | **Close:** unmount, zero password/keys in RAM → **`closed`**. |
 
 #### `upriv_plain` (plaintext while open)
@@ -128,7 +128,7 @@ encrypted_dir / upriv_plain:
 | # | Risk | Product mitigation |
 |---|--------|----------------------|
 | 1 | Incomplete close | Recovery: unlock the encrypted vault again (`resume_store`). Wipe leftover plaintext only for `upriv_plain`. Create-from-backup is for a dead store (row 2), not a dirty-close peer |
-| 2 | Dead `vault.header` / index | New vault from a `backups/<stamp>.zip` — not a dual store/`.7z` picker |
+| 2 | Dead `vault.header` / index | New vault from a `backups/<stamp>-<id>.zip` — not a dual store/`.7z` picker |
 | 3 | Direct writes to `workspace/` on HD (`encrypted_dir`) | **Virtual** mount (FUSE/WinFsp) or in-app FM; tests that forbid persistent plaintext |
 | 4 | Plaintext temp when exporting `.7z` | Pack in process with `sevenz-rust2`; never stage a decrypted tree |
 | 5 | Swap/hibernation | **Minimize** swap of sensitive buffers (`mlock`, RAM buffers); do not promise 100% on all OSes |
@@ -211,7 +211,7 @@ encrypted_dir / upriv_plain:
 | RF-04c | (`encrypted_dir`) Require sufficient RAM for the **entire unlocked vault** while open; fail open/edit/close with user-visible error if not; UI **`warning.encrypted_dir_ram`** (RF-UI-17) | P0 |
 | RF-05 | On close: verify **open session / `vault.header`** before backup or flush — failure aborts; `store/` unchanged. Do **not** rewrap the header from a typed close password. Optional `always_prompt` re-asks as a **presence check** against that session only | P0 |
 | RF-06 | Atomic write of `store/` (header + index + chunks); never a durable `.7z` twin beside `store/` | P0 |
-| RF-07 | Backup on close: Stored zip of `store/` at `backups/<stamp>.zip` if `[backup] enabled` (no zip password) | P1 |
+| RF-07 | Backup on close: Stored zip of `store/` at `backups/<stamp>-<id>.zip` if `[backup] enabled` (no zip password) | P1 |
 | RF-07b | Modes: `keep_last` (only latest backup) or `keep_all` (history) | P1 |
 | RF-08 | Recovery UI if workspace/marker exists with vault logically "closed" | P0 |
 | RF-09 | Open existing vault via `--vault <path>` or dialog | P0 |
@@ -283,7 +283,7 @@ encrypted_dir / upriv_plain:
 | RF-53c | Lock UI is **`action.lock` / `action.close` only** | P0 |
 | RF-54 | **Lockfile** `runtime/<id>.lock` on vault open; refuse second open in another process/PC | P1 |
 | RF-55 | Crypto primitives: Argon2id + AEAD (e.g. XChaCha20-Poly1305); protected names/paths | P0 |
-| RF-56 | **Backups** UI per vault: list `backups/<stamp>.zip`, metadata, download (one zip, or one zip of several), delete, **create new vault from backup** (does not replace the source vault) | P1 |
+| RF-56 | **Backups** UI per vault: list `backups/<stamp>-<id>.zip`, metadata, download (one zip, or one zip of several), delete, **create new vault from backup** (does not replace the source vault) | P1 |
 | RF-57 | **Real states:** `open` only with active session; `closed` = `store/` at rest | P0 |
 
 ### 3.4 Rest, identity, lock, backups
@@ -304,7 +304,7 @@ At rest the vault body is **`store/`** (`header/vault.header`, `header/vault.hea
 
 **After OK close:** session keys dropped; `store/` is the rest body.
 
-**Backups:** `backups/<stamp>.zip` is a **Stored zip of `store/`** (no zip password, no `snapshot.toml`). Create-from-backup unpacks that snapshot into a **new** vault — never in-place restore. Download copies one `.zip`, or bundles several snapshot zips into one file.
+**Backups:** `backups/<stamp>-<id>.zip` is a **Stored zip of `store/`** (no zip password, no `snapshot.toml`). Create-from-backup unpacks that snapshot into a **new** vault — never in-place restore. Download copies one `.zip`, or bundles several snapshot zips into one file.
 
 **Export** is a separate action (files stay **outside** `.upriv`): `{display_name}.zip` of `store/` (Recommended) or `{display_name}.7z` (Plan B).
 

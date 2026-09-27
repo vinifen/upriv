@@ -1,13 +1,17 @@
 package expo.modules.uprivcore
 
 import android.content.Context
+import android.net.Uri
+import android.os.ParcelFileDescriptor
 import expo.modules.kotlin.exception.CodedException
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
+import java.io.File
+import java.util.concurrent.atomic.AtomicReference
 import uniffi.upriv_ffi.appVersion
 import uniffi.upriv_ffi.configureRuntime
+import uniffi.upriv_ffi.importContentFd
 import uniffi.upriv_ffi.invoke
-import java.io.File
 
 /**
  * Expo module wrapping UniFFI `upriv_ffi` (`libupriv_ffi.so`).
@@ -142,6 +146,15 @@ class UprivCoreModule : Module() {
     Function("revealInFileManager") { osPath: String ->
       revealInFileManager(requireContext(), osPath)
     }
+
+    /**
+     * Stream one `content://` document into the open import session.
+     * Returns the UniFFI JSON envelope. Does not copy the file into app cache.
+     */
+    AsyncFunction("importContentUri") { vaultId: String, logicalPath: String, contentUri: String ->
+      ensureRuntimeConfigured()
+      streamContentUri(requireContext(), vaultId, logicalPath, contentUri)
+    }
   }
 
   private fun requireContext(): Context =
@@ -176,3 +189,100 @@ class UprivCoreModule : Module() {
  * "TOML failure from Rust" and "SAF failure from Kotlin".
  */
 private class SafCodedException(code: String, message: String) : CodedException(code, message, null)
+
+private fun rpcError(code: String, message: String): String {
+  val error = org.json.JSONObject()
+  error.put("code", code)
+  error.put("message", message)
+  val envelope = org.json.JSONObject()
+  envelope.put("ok", false)
+  envelope.put("error", error)
+  return envelope.toString()
+}
+
+private fun envelopeOk(raw: String): Boolean {
+  return try {
+    org.json.JSONObject(raw).optBoolean("ok", false)
+  } catch (_: Exception) {
+    false
+  }
+}
+
+/**
+ * Hand the content file to Rust as a file descriptor. A provider that cannot
+ * open a descriptor is copied through a pipe, which holds only a small buffer.
+ */
+private fun streamContentUri(
+  context: Context,
+  vaultId: String,
+  logicalPath: String,
+  contentUri: String,
+): String {
+  val uri = Uri.parse(contentUri)
+  val resolver = context.contentResolver
+  val descriptor =
+    try {
+      resolver.openFileDescriptor(uri, "r")
+    } catch (_: Exception) {
+      null
+    }
+  if (descriptor != null) {
+    val fd = descriptor.detachFd()
+    descriptor.close()
+    return importContentFd(vaultId, logicalPath, fd)
+  }
+  val input =
+    try {
+      resolver.openInputStream(uri)
+    } catch (_: Exception) {
+      return rpcError("io_error", "could not read the import file")
+    } ?: return rpcError("io_error", "could not read the import file")
+  val pipe =
+    try {
+      ParcelFileDescriptor.createPipe()
+    } catch (_: Exception) {
+      input.close()
+      return rpcError("io_error", "could not read the import file")
+    }
+  val readSide = pipe[0]
+  val writeSide = pipe[1]
+  val copyError = AtomicReference<Exception>(null)
+  val writer =
+    Thread {
+      try {
+        ParcelFileDescriptor.AutoCloseOutputStream(writeSide).use { out ->
+          input.use { stream -> stream.copyTo(out) }
+        }
+      } catch (error: Exception) {
+        copyError.set(error)
+        runCatching { input.close() }
+      }
+    }
+  writer.start()
+  val readFd = readSide.detachFd()
+  val imported =
+    try {
+      importContentFd(vaultId, logicalPath, readFd)
+    } catch (_: Exception) {
+      // Rust takes the descriptor only after this call is entered. Closing it
+      // here unblocks the writer when the call never reached Rust.
+      closeAbandonedImportFd(readFd)
+      writer.join()
+      return rpcError("io_error", "could not read the import file")
+    }
+  writer.join()
+  val failed = copyError.get()
+  if (failed != null && envelopeOk(imported)) {
+    return rpcError("io_error", "could not read the import file")
+  }
+  return imported
+}
+
+private fun closeAbandonedImportFd(fd: Int) {
+  if (fd < 0) return
+  try {
+    ParcelFileDescriptor.adoptFd(fd).close()
+  } catch (_: Exception) {
+    /* already closed */
+  }
+}

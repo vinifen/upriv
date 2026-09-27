@@ -6,10 +6,12 @@ import { useVaultPipelineRun } from "@upriv/shared/react";
 
 function deferred() {
   let resolve!: () => void;
-  const promise = new Promise<void>((next) => {
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<void>((next, fail) => {
     resolve = next;
+    reject = fail;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 const toI18n = (): I18nKey => "error.unexpected";
@@ -194,6 +196,129 @@ describe("useVaultPipelineRun", () => {
     });
     expect(onComplete).toHaveBeenCalledOnce();
     expect(result.current.run).toBeNull();
+    vi.useRealTimers();
+  });
+
+  it("invalidates a create when its budget elapses and ignores the late result", async () => {
+    vi.useFakeTimers();
+    const { result } = renderHook(() => useVaultPipelineRun(toI18n));
+    const hang = deferred();
+    const queued = deferred();
+    const onComplete = vi.fn();
+    const onError = vi.fn();
+    const onTimeout = vi.fn();
+    const onAbandoned = vi.fn();
+    const queuedComplete = vi.fn();
+
+    act(() => {
+      result.current.start({
+        vaultId: "vault-a",
+        kind: "create",
+        stepCount: 1,
+        presentation: "background",
+        budgetMs: LOADING_BUDGET_MS.vaultCreate,
+        failureMode: "advance",
+        invalidateOnTimeout: true,
+        runPipeline: async () => hang.promise,
+        onComplete,
+        onError,
+        onTimeout,
+        onAbandoned,
+      });
+      result.current.start({
+        vaultId: "vault-b",
+        kind: "create",
+        stepCount: 1,
+        presentation: "background",
+        failureMode: "advance",
+        invalidateOnTimeout: true,
+        runPipeline: async () => queued.promise,
+        onComplete: queuedComplete,
+        onError: () => undefined,
+      });
+    });
+
+    await act(async () => {
+      vi.advanceTimersByTime(LOADING_BUDGET_MS.vaultCreate);
+    });
+
+    expect(onTimeout).toHaveBeenCalledOnce();
+    expect(result.current.run).toBeNull();
+    expect(result.current.isVaultPipelineBusy("vault-a")).toBe(true);
+    expect(onComplete).not.toHaveBeenCalled();
+    expect(queuedComplete).not.toHaveBeenCalled();
+    expect(
+      result.current.start({
+        vaultId: "vault-a",
+        kind: "create",
+        stepCount: 1,
+        runPipeline: async () => undefined,
+        onComplete: () => undefined,
+        onError: () => undefined,
+      }),
+    ).toBe(false);
+
+    hang.resolve();
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(onComplete).not.toHaveBeenCalled();
+    expect(onError).not.toHaveBeenCalled();
+    expect(onAbandoned).toHaveBeenCalledWith(true);
+    expect(result.current.isVaultPipelineBusy("vault-a")).toBe(false);
+
+    await act(async () => {
+      queued.resolve();
+      await Promise.resolve();
+    });
+    expect(queuedComplete).toHaveBeenCalledOnce();
+    vi.useRealTimers();
+  });
+
+  it("stays busy after a create timeout until the failed rpc settles", async () => {
+    vi.useFakeTimers();
+    const { result } = renderHook(() => useVaultPipelineRun(toI18n));
+    const hang = deferred();
+    const onComplete = vi.fn();
+    const onError = vi.fn();
+    const onAbandoned = vi.fn();
+
+    act(() => {
+      result.current.start({
+        vaultId: "vault-a",
+        kind: "create",
+        stepCount: 1,
+        presentation: "background",
+        budgetMs: LOADING_BUDGET_MS.vaultCreate,
+        failureMode: "advance",
+        invalidateOnTimeout: true,
+        runPipeline: async () => hang.promise,
+        onComplete,
+        onError,
+        onAbandoned,
+      });
+    });
+
+    await act(async () => {
+      vi.advanceTimersByTime(LOADING_BUDGET_MS.vaultCreate);
+    });
+
+    expect(result.current.run).toBeNull();
+    expect(result.current.isRunningNow()).toBe(true);
+    expect(result.current.isVaultPipelineBusy("vault-a")).toBe(true);
+
+    hang.reject(new Error("create failed"));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(onAbandoned).toHaveBeenCalledWith(false);
+    expect(onComplete).not.toHaveBeenCalled();
+    expect(onError).not.toHaveBeenCalled();
+    expect(result.current.isRunningNow()).toBe(false);
+    expect(result.current.isVaultPipelineBusy("vault-a")).toBe(false);
     vi.useRealTimers();
   });
 
