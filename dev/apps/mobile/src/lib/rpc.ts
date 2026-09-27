@@ -7,6 +7,7 @@ import {
   normalizeAppSettings,
   normalizeVaultSettingsConfig,
   parseAppLogFile,
+  parseEmbeddedVaultSettings,
   parseDefaultRootStatus,
   parseVaultGroupListResult,
   parseVaultGroupWire,
@@ -16,6 +17,7 @@ import {
   parseVaultRootInspect,
   parseVaultRootResolve,
   vaultImportProbeTimeoutMs,
+  backupSnapshotFileName,
   bytesFromContentB64,
   parsePathWriteResult,
   type CloseVaultOutcome,
@@ -504,6 +506,60 @@ export async function rpcVaultOpen(id: string, password: string): Promise<void> 
   await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_OPEN, { id, password });
 }
 
+/** Unlock a just-created vault so files can be streamed. Does not mount. */
+export async function rpcVaultIngestOpen(id: string, password: string): Promise<void> {
+  await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_INGEST_OPEN, { id, password });
+}
+
+/** One folder, including parents, inside an import session. */
+export async function rpcVaultIngestDirectory(id: string, path: string): Promise<void> {
+  await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_INGEST_DIRECTORY, { id, path });
+}
+
+/** Delete a vault whose import failed. Drops an open ingest session first. */
+export async function rpcVaultDiscardImport(id: string): Promise<void> {
+  await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_DISCARD_IMPORT, { id });
+}
+
+/** Stream one Android `content://` file into the open import session. */
+export async function rpcImportContentUri(
+  vaultId: string,
+  logicalPath: string,
+  contentUri: string,
+): Promise<void> {
+  const native = getUprivCoreNative();
+  if (!native?.importContentUri) {
+    throw new RpcError(BRIDGE.BRIDGE_INVOKE_FAILED, "content import is unavailable");
+  }
+  const timeoutMs = CORE_RPC_TIMEOUT_MS[CORE_RPC_COMMANDS.VAULT_FS_IMPORT_OS_FILE];
+  const invocation = Promise.resolve(
+    native.importContentUri(vaultId, logicalPath, contentUri),
+  ).then((raw) => {
+    unwrapInvokeEnvelope(JSON.parse(raw));
+  });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  invocation.catch(() => undefined);
+  try {
+    await Promise.race([
+      invocation,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          reject(
+            new RpcError(
+              BRIDGE.RPC_TIMEOUT,
+              `invoke timeout after ${timeoutMs}ms: import_content_uri`,
+            ),
+          );
+        }, timeoutMs);
+      }),
+    ]);
+  } catch (error) {
+    throw invokeFailure(error);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 export async function rpcVaultClose(id: string, password?: string): Promise<CloseVaultOutcome> {
   const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_CLOSE, {
     id,
@@ -517,6 +573,18 @@ function parseCloseVaultOutcome(raw: unknown): CloseVaultOutcome {
     return { backupFailed: false };
   }
   return { backupFailed: (raw as { backupFailed?: unknown }).backupFailed === true };
+}
+
+export async function rpcVaultStoreSize(id: string): Promise<number> {
+  const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_STORE_SIZE, { id });
+  if (typeof raw !== "object" || raw === null) {
+    throw new RpcError(BRIDGE.INVALID_RESPONSE, "vault_store_size: expected object", raw);
+  }
+  const storeBytes = (raw as { storeBytes?: unknown }).storeBytes;
+  if (typeof storeBytes !== "number" || !Number.isFinite(storeBytes) || storeBytes < 0) {
+    throw new RpcError(BRIDGE.INVALID_RESPONSE, "vault_store_size: expected storeBytes", raw);
+  }
+  return storeBytes;
 }
 
 export async function rpcVaultConfigGet(id: string): Promise<VaultSettingsConfig> {
@@ -643,12 +711,39 @@ export async function rpcVaultImport7z(input: CreateVaultInput): Promise<VaultLi
   return parseVaultResult(raw, "vault_import_7z");
 }
 
+export async function rpcVaultImportFilesZip(input: CreateVaultInput): Promise<VaultListItem> {
+  const pkg = input.importPackage;
+  const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_IMPORT_FILES_ZIP, {
+    settings: input.settings,
+    password: input.password,
+    unlockPreset: input.unlockPreset,
+    archivePath: pkg?.archivePath,
+    contentB64: pkg?.contentB64,
+  });
+  return parseVaultResult(raw, "vault_import_files_zip");
+}
+
+export async function rpcVaultImportOsPath(input: CreateVaultInput): Promise<VaultListItem> {
+  const pkg = input.importPackage;
+  const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_IMPORT_OS_PATH, {
+    settings: input.settings,
+    password: input.password,
+    unlockPreset: input.unlockPreset,
+    archivePath: pkg?.archivePath,
+  });
+  return parseVaultResult(raw, "vault_import_os_path");
+}
+
 export async function rpcVaultImportProbe(params: {
   archivePath?: string;
   contentB64?: string;
   archivePassword?: string;
   kind?: string;
-}): Promise<{ ok: boolean; kind: string }> {
+}): Promise<{
+  ok: boolean;
+  kind: string;
+  embedded: ReturnType<typeof parseEmbeddedVaultSettings>;
+}> {
   const raw = await nativeInvokeRaw(
     CORE_RPC_COMMANDS.VAULT_IMPORT_PROBE,
     params,
@@ -658,6 +753,7 @@ export async function rpcVaultImportProbe(params: {
   return {
     ok: record.ok === true,
     kind: typeof record.kind === "string" ? record.kind : "store_zip",
+    embedded: parseEmbeddedVaultSettings(record),
   };
 }
 
@@ -825,10 +921,13 @@ export async function rpcVaultFsOsPath(id: string, path: string): Promise<{ osPa
   return { osPath: record.osPath };
 }
 
-function parseBackupEntry(raw: unknown): VaultBackupEntry {
+function parseBackupEntry(raw: unknown, vaultId: string): VaultBackupEntry {
   const record = requireRecord(raw, "backup");
+  const stamp = typeof record.stamp === "string" ? record.stamp : "";
+  const fromWire = typeof record.fileName === "string" ? record.fileName.trim() : "";
   return {
-    stamp: typeof record.stamp === "string" ? record.stamp : "",
+    stamp,
+    fileName: fromWire || backupSnapshotFileName(stamp, vaultId.trim()),
     createdAt: typeof record.createdAt === "string" ? record.createdAt : "",
     sizeBytes: typeof record.sizeBytes === "number" ? record.sizeBytes : undefined,
     saved: record.saved === true,
@@ -842,7 +941,7 @@ export async function rpcBackupList(id: string): Promise<VaultBackupEntry[]> {
   if (!Array.isArray(backups)) {
     throw new RpcError(BRIDGE.INVALID_RESPONSE, "backup_list: expected backups", raw);
   }
-  return backups.map(parseBackupEntry);
+  return backups.map((entry) => parseBackupEntry(entry, id));
 }
 
 export async function rpcBackupDelete(id: string, stamps: readonly string[]): Promise<void> {

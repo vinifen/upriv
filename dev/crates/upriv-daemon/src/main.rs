@@ -3,13 +3,14 @@
 //! Speaks newline-delimited JSON over stdin/stdout (no TCP port). The Electron
 //! main process spawns this binary with piped stdio and proxies renderer calls.
 //!
-//! **Concurrency:** Argon2-bound methods (`vault_open`, `vault_create`, 7z
-//! import/export) run on `upriv-argon2` so the stdin loop can still answer
-//! light RPCs (settings, groups, list, …). Multi-GB `vault_fs_import_os_file`,
-//! `vault_close`, and `vault_delete` run on `upriv-fs-io` so they do not queue
-//! behind Argon2 or stall list/settings/lock. Electron already matches
-//! responses by `id` (out-of-order OK). One Argon2 at a time: single worker +
-//! core `with_unlock_lock`.
+//! **Concurrency:** Three off-stdin workers, so a long import does not sit in
+//! front of a lock.
+//! - `upriv-argon2`: short unlocks (`vault_open`, `vault_create`, export probe).
+//! - `upriv-fs-io`: close, delete, backup download.
+//! - `upriv-pack`: vault import, export, and in-app file import.
+//!
+//! Light RPCs stay on the stdin loop. Electron matches responses by `id`.
+//! One Argon2 at a time: single worker + core `with_unlock_lock`.
 
 mod wire;
 
@@ -22,7 +23,7 @@ use std::thread::{self, JoinHandle};
 use serde_json::json;
 use upriv_rpc::RpcErrorBody;
 use wire::{
-    handle_request, is_argon2_bound_method, is_heavy_method, RequestOutcome, WireIn, WireOut,
+    handle_request, heavy_lane, is_heavy_method, HeavyLane, RequestOutcome, WireIn, WireOut,
 };
 
 /// Reject absurdly large request lines before parsing them.
@@ -134,7 +135,8 @@ fn run() -> io::Result<()> {
 
     let stdout = Arc::new(Mutex::new(io::stdout()));
     let (argon2_tx, argon2_join) = spawn_named_worker("upriv-argon2", Arc::clone(&stdout));
-    let (io_tx, io_join) = spawn_named_worker("upriv-fs-io", Arc::clone(&stdout));
+    let (lifecycle_tx, lifecycle_join) = spawn_named_worker("upriv-fs-io", Arc::clone(&stdout));
+    let (pack_tx, pack_join) = spawn_named_worker("upriv-pack", Arc::clone(&stdout));
 
     write_out(&stdout, &WireOut::Ready)?;
     write_out(
@@ -207,10 +209,12 @@ fn run() -> io::Result<()> {
         match inbound {
             WireIn::Request { id, method, params } => {
                 if is_heavy_method(&method, &params) {
-                    let tx = if is_argon2_bound_method(&method, &params) {
-                        &argon2_tx
-                    } else {
-                        &io_tx
+                    let lane = heavy_lane(&method, &params)
+                        .expect("heavy method is argon2, lifecycle, or pack");
+                    let tx = match lane {
+                        HeavyLane::Argon2 => &argon2_tx,
+                        HeavyLane::Lifecycle => &lifecycle_tx,
+                        HeavyLane::Pack => &pack_tx,
                     };
                     if tx.send(HeavyJob::Request { id, method, params }).is_err() {
                         write_out(&stdout, &internal_error_response(id))?;
@@ -230,16 +234,21 @@ fn run() -> io::Result<()> {
         }
     }
 
-    // Finish in-flight Argon2 / OS-import work before flushing logs / exiting.
+    // Finish in-flight work before flushing logs / exiting.
     let _ = argon2_tx.send(HeavyJob::Shutdown);
     drop(argon2_tx);
     if let Err(error) = argon2_join.join() {
         eprintln!("[upriv-daemon] argon2 worker join panicked: {error:?}");
     }
-    let _ = io_tx.send(HeavyJob::Shutdown);
-    drop(io_tx);
-    if let Err(error) = io_join.join() {
+    let _ = lifecycle_tx.send(HeavyJob::Shutdown);
+    drop(lifecycle_tx);
+    if let Err(error) = lifecycle_join.join() {
         eprintln!("[upriv-daemon] fs-io worker join panicked: {error:?}");
+    }
+    let _ = pack_tx.send(HeavyJob::Shutdown);
+    drop(pack_tx);
+    if let Err(error) = pack_join.join() {
+        eprintln!("[upriv-daemon] pack worker join panicked: {error:?}");
     }
 
     upriv_core::logging::flush_logging_session();

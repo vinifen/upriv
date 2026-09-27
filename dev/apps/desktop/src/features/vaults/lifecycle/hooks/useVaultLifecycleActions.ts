@@ -145,6 +145,8 @@ export function useVaultLifecycleActions({
     setExportVaultId,
     exportVault,
     setExportSubmitting,
+    exportJobVaultId,
+    setExportJob,
   } = modals;
   const lifecycleRequestRef = useRef(lifecycleRequest);
   lifecycleRequestRef.current = lifecycleRequest;
@@ -394,6 +396,7 @@ export function useVaultLifecycleActions({
       hooks: {
         onComplete: () => void;
         onError: () => void;
+        onAbandoned?: (ok: boolean) => void;
       },
     ): boolean => {
       if (pipeline.isVaultPipelineBusy(vaultId)) return false;
@@ -405,6 +408,7 @@ export function useVaultLifecycleActions({
         presentation: "background",
         budgetMs: LOADING_BUDGET_MS.vaultCreate,
         failureMode: "advance",
+        invalidateOnTimeout: true,
         runPipeline: async () => {
           await runCreate();
         },
@@ -419,7 +423,15 @@ export function useVaultLifecycleActions({
           pipelineBackgroundRef.current = false;
         },
         onTimeout: () => {
+          hooks.onError();
           showToast(t("error.operation_timed_out"));
+          pipelineBackgroundRef.current = false;
+        },
+        onAbandoned: (ok) => {
+          hooks.onAbandoned?.(ok);
+          if (!ok) return;
+          hooks.onComplete();
+          notifyPipelineComplete(vaultId, "create");
         },
       });
     },
@@ -783,6 +795,14 @@ export function useVaultLifecycleActions({
   const handleExportVault = useCallback(
     (vault: VaultListItem) => {
       if (!vaultService.canExportVault) return;
+      if (exportJobVaultId && exportJobVaultId !== vault.id) {
+        showToast(t("vault.export.busy"));
+        return;
+      }
+      if (exportJobVaultId === vault.id) {
+        setExportVaultId(vault.id);
+        return;
+      }
       if (!vaultCanExport(vault, pipelineListStatus)) {
         const listStatus = resolveVaultListStatus(vault, pipelineListStatus);
         if (
@@ -799,17 +819,25 @@ export function useVaultLifecycleActions({
       }
       setExportVaultId(vault.id);
     },
-    [pipelineListStatus, setExportVaultId, showToast, t, vaultService.canExportVault],
+    [
+      exportJobVaultId,
+      pipelineListStatus,
+      setExportVaultId,
+      showToast,
+      t,
+      vaultService.canExportVault,
+    ],
   );
 
   const handleConfirmExportVault = useCallback(
     (request: VaultExportRequest) => {
-      if (!exportVault) return;
+      if (!exportVault || exportJobVaultId) return;
       const vault = exportVault;
       const gen = ++exportBusyGenRef.current;
       exportAbortRef.current?.abort();
       const abort = new AbortController();
       exportAbortRef.current = abort;
+      setExportJob({ vaultId: vault.id, startedAt: Date.now() });
       setExportSubmitting(true);
       void exportVaultPackage(
         vault,
@@ -832,18 +860,31 @@ export function useVaultLifecycleActions({
           showError(error, "vault.export.failed");
         })
         .finally(() => {
-          if (gen === exportBusyGenRef.current) setExportSubmitting(false);
+          if (gen !== exportBusyGenRef.current) return;
+          setExportSubmitting(false);
+          setExportJob(null);
         });
     },
-    [exportVault, setExportSubmitting, setExportVaultId, showError, showToast, t, vaultService],
+    [
+      exportJobVaultId,
+      exportVault,
+      setExportJob,
+      setExportSubmitting,
+      setExportVaultId,
+      showError,
+      showToast,
+      t,
+      vaultService,
+    ],
   );
 
   const handleExportTimeout = useCallback(() => {
     exportBusyGenRef.current += 1;
     exportAbortRef.current?.abort();
     setExportSubmitting(false);
+    setExportJob(null);
     showToast(t("error.operation_timed_out"));
-  }, [setExportSubmitting, showToast, t]);
+  }, [setExportJob, setExportSubmitting, showToast, t]);
 
   const handleAutoCloseVault = useCallback(
     (vault: VaultListItem, settings: VaultSettingsConfig): boolean => {

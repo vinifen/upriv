@@ -1,5 +1,5 @@
 import type { I18nKey } from "../../i18n/catalog";
-import type { VaultBackupEntry } from "../backups";
+import { backupEntryFileName, type VaultBackupEntry } from "../backups";
 import { formatBytes } from "../format/bytes";
 import { formatIsoDate } from "../format/datetime";
 import { vaultLastAccessedLabel } from "../vault-list/lastAccessed";
@@ -44,10 +44,16 @@ function backupTotalBytes(backups: VaultBackupEntry[]): number {
   return backups.reduce((sum, entry) => sum + (entry.sizeBytes ?? 0), 0);
 }
 
-function latestBackupStamp(backups: VaultBackupEntry[]): string {
+function latestBackupName(backups: VaultBackupEntry[], vaultId: string): string {
   if (backups.length === 0) return "—";
-  const sorted = [...backups].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
-  return sorted[0]?.stamp ?? "—";
+  const sorted = [...backups].sort((a, b) => {
+    const byTime = Date.parse(b.createdAt) - Date.parse(a.createdAt);
+    if (byTime !== 0) return byTime;
+    return backupEntryFileName(a, vaultId).localeCompare(backupEntryFileName(b, vaultId));
+  });
+  const latest = sorted[0];
+  if (!latest) return "—";
+  return backupEntryFileName(latest, vaultId);
 }
 
 export function buildVaultInfoSections(
@@ -277,7 +283,7 @@ export function buildVaultInfoSections(
     {
       id: "backup_latest",
       label: t("modal.info.field.backup_latest"),
-      value: latestBackupStamp(backups),
+      value: latestBackupName(backups, vault.id),
     },
     {
       id: "backup_total_size",

@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  backupVaultDisplayName,
   displayNameFromImportFilename,
   displayNameToVaultId,
   importDisplayNameFromFilename,
+  uniqueDisplayName,
   suggestValidDisplayName,
   validateDisplayName,
   liveDisplayNameError,
@@ -162,5 +164,23 @@ describe("displayNameToVaultId", () => {
 
   it("skips Windows reserved slugs", () => {
     expect(displayNameToVaultId("CON", [])).toBe("con-2");
+  });
+});
+
+describe("uniqueDisplayName", () => {
+  it("keeps a free name and suffixes a taken one", () => {
+    expect(uniqueDisplayName("example", [])).toBe("example");
+    expect(uniqueDisplayName("example", ["Example"])).toBe("example 2");
+    expect(uniqueDisplayName("example", ["example", "example 2"])).toBe("example 3");
+  });
+});
+
+describe("backupVaultDisplayName", () => {
+  it("appends backup, then a number when that name exists", () => {
+    expect(backupVaultDisplayName("example", [])).toBe("example backup");
+    expect(backupVaultDisplayName("example", ["example backup"])).toBe("example backup 2");
+    expect(backupVaultDisplayName("example", ["example backup", "Example backup 2"])).toBe(
+      "example backup 3",
+    );
   });
 });

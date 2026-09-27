@@ -7,6 +7,7 @@ export interface VaultRuntimeStats {
   openCount: number | null;
   lastOpenedAt: string | null;
   sessionRamBytes: number | null;
+  /** Regular-file bytes in `store/`. `null` when that measurement did not run. */
   storeBytes: number | null;
   logicalFileCount: number | null;
 }

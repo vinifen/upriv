@@ -1,7 +1,13 @@
 import { downloadFiles } from "@/lib/downloadZip";
 import { isElectronRenderer } from "@/lib/invoke";
 import { rpcPickSaveFile } from "@/lib/rpc";
-import type { VaultBackupEntry, VaultPathWriteResult } from "@upriv/shared";
+import {
+  backupBundleEntryName,
+  backupEntryFileName,
+  backupEntryKey,
+  type VaultBackupEntry,
+  type VaultPathWriteResult,
+} from "@upriv/shared";
 
 export interface DownloadBackupsZipFns {
   getBackupBytes: (entry: VaultBackupEntry) => Promise<Uint8Array>;
@@ -19,11 +25,12 @@ export interface PickedBackupDownload {
 /** Ask where to save, then return a write that copies one zip or bundles several. */
 export async function pickBackupDownload(
   entries: readonly VaultBackupEntry[],
+  vaultId: string,
   bundleName: string,
   fns: DownloadBackupsZipFns,
 ): Promise<PickedBackupDownload | "cancelled"> {
   if (entries.length === 0) return "cancelled";
-  const singleName = `${entries[0].stamp}.zip`;
+  const singleName = backupEntryFileName(entries[0], vaultId);
   const fileName = entries.length === 1 ? singleName : bundleName;
 
   if (isElectronRenderer()) {
@@ -37,7 +44,7 @@ export async function pickBackupDownload(
       destPath,
       write: async () => {
         await fns.exportSnapshotsToPath(
-          entries.map((entry) => entry.stamp),
+          entries.map((entry) => backupEntryKey(entry, vaultId)),
           destPath,
         );
       },
@@ -49,7 +56,7 @@ export async function pickBackupDownload(
     write: async () => {
       const files = await Promise.all(
         entries.map(async (entry) => ({
-          filename: `${entry.stamp}.zip`,
+          filename: backupBundleEntryName(entry, vaultId, entries),
           data: await fns.getBackupBytes(entry),
         })),
       );

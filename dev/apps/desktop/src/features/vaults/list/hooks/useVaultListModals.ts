@@ -36,6 +36,7 @@ export function useVaultListModals(
   const [recoverySubmitting, setRecoverySubmitting] = useState(false);
   const [exportVaultId, setExportVaultId] = useState<string | null>(null);
   const [exportSubmitting, setExportSubmitting] = useState(false);
+  const [exportJob, setExportJob] = useState<{ vaultId: string; startedAt: number } | null>(null);
 
   const noteVault = useMemo(
     () => vaults.find((vault) => vault.id === noteVaultId) ?? null,
@@ -175,5 +176,8 @@ export function useVaultListModals(
     exportVault,
     exportSubmitting,
     setExportSubmitting,
+    exportJobVaultId: exportJob?.vaultId ?? null,
+    exportStartedAt: exportJob?.startedAt ?? null,
+    setExportJob,
   };
 }

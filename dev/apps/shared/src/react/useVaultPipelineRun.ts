@@ -37,11 +37,18 @@ interface StartPipelineOptions {
    * `advance`: toast/row owns the failure and the next queued job starts.
    */
   failureMode?: VaultPipelineFailureMode;
+  /**
+   * Create only. On budget, drop the run so a late result cannot apply, and
+   * keep the id busy until that result settles.
+   */
+  invalidateOnTimeout?: boolean;
   runPipeline: (vaultId: string, onStep: (stepIndex: number) => void) => Promise<void>;
   onComplete: () => void;
   onError: (errorKey: I18nKey) => void;
   /** Budget elapsed; the job may still finish. Open handlers clear renderer password here. */
   onTimeout?: () => void;
+  /** Fired when an invalidated job settles. `ok` is the RPC outcome, not the timeout. */
+  onAbandoned?: (ok: boolean) => void;
 }
 
 function listStatusKind(kind: VaultPipelineKind): "opening" | "closing" | "creating" {
@@ -63,6 +70,8 @@ export function useVaultPipelineRun(errorToI18nKey: (error: unknown) => I18nKey)
   const queueRef = useRef<StartPipelineOptions[]>([]);
   const generationRef = useRef(0);
   const inFlightRef = useRef(false);
+  /** Create ids whose UI attempt was invalidated and whose RPC has not settled. */
+  const settlingRef = useRef(new Set<string>());
 
   const syncRun = useCallback((next: VaultPipelineRunState | null) => {
     runRef.current = next;
@@ -80,7 +89,8 @@ export function useVaultPipelineRun(errorToI18nKey: (error: unknown) => I18nKey)
 
   const executeJob = useCallback(
     (job: StartPipelineOptions) => {
-      const { vaultId, kind, stepCount, runPipeline, onComplete, onError, onTimeout } = job;
+      const { vaultId, kind, stepCount, runPipeline, onComplete, onError, onTimeout, onAbandoned } =
+        job;
       const foreground = job.presentation !== "background";
       const failureMode = job.failureMode ?? "overlay";
       const generation = ++generationRef.current;
@@ -88,11 +98,27 @@ export function useVaultPipelineRun(errorToI18nKey: (error: unknown) => I18nKey)
 
       syncRun({ vaultId, kind, activeStep: 0, stepCount, foreground, startedAt: Date.now() });
 
+      const pumpQueue = () => {
+        if (queueRef.current.length === 0) return;
+        const next = queueRef.current.shift()!;
+        syncQueued();
+        executeJob(next);
+      };
+
       void (async () => {
+        let abandoned = false;
         const cancelBudget = scheduleTimeout(() => {
           if (generationRef.current !== generation) return;
           const current = runRef.current;
           if (!current || current.vaultId !== vaultId || current.errorKey) return;
+          if (failureMode === "advance" && job.invalidateOnTimeout) {
+            generationRef.current += 1;
+            abandoned = true;
+            settlingRef.current.add(vaultId);
+            syncRun(null);
+            onTimeout?.();
+            return;
+          }
           if (failureMode === "advance") {
             onTimeout?.();
             return;
@@ -100,6 +126,13 @@ export function useVaultPipelineRun(errorToI18nKey: (error: unknown) => I18nKey)
           syncRun({ ...current, foreground: true, errorKey: "loading.timed_out" });
           onTimeout?.();
         }, job.budgetMs ?? LOADING_BUDGET_MS.vaultPipeline);
+
+        const finishAbandoned = (ok: boolean) => {
+          settlingRef.current.delete(vaultId);
+          inFlightRef.current = false;
+          onAbandoned?.(ok);
+          pumpQueue();
+        };
 
         try {
           await runPipeline(vaultId, (stepIndex) => {
@@ -109,6 +142,10 @@ export function useVaultPipelineRun(errorToI18nKey: (error: unknown) => I18nKey)
             syncRun({ ...current, activeStep: stepIndex });
           });
 
+          if (abandoned) {
+            finishAbandoned(true);
+            return;
+          }
           if (generationRef.current !== generation) return;
 
           // Patch session (open / closed) before dropping pipeline IDs so the
@@ -116,6 +153,10 @@ export function useVaultPipelineRun(errorToI18nKey: (error: unknown) => I18nKey)
           onComplete();
           syncRun(null);
         } catch (error) {
+          if (abandoned) {
+            finishAbandoned(false);
+            return;
+          }
           if (generationRef.current !== generation) return;
 
           const current = runRef.current;
@@ -137,13 +178,8 @@ export function useVaultPipelineRun(errorToI18nKey: (error: unknown) => I18nKey)
           }
         }
 
-        if (generationRef.current !== generation) return;
-
-        if (queueRef.current.length > 0) {
-          const next = queueRef.current.shift()!;
-          syncQueued();
-          executeJob(next);
-        }
+        if (abandoned || generationRef.current !== generation) return;
+        pumpQueue();
       })();
     },
     [errorToI18nKey, syncQueued, syncRun],
@@ -153,12 +189,13 @@ export function useVaultPipelineRun(errorToI18nKey: (error: unknown) => I18nKey)
     (options: StartPipelineOptions): boolean => {
       const alreadyTracked =
         runRef.current?.vaultId === options.vaultId ||
-        queueRef.current.some((job) => job.vaultId === options.vaultId);
+        queueRef.current.some((job) => job.vaultId === options.vaultId) ||
+        settlingRef.current.has(options.vaultId);
       if (alreadyTracked) return false;
 
       const job: StartPipelineOptions = { ...options };
 
-      if (runRef.current === null) {
+      if (runRef.current === null && !inFlightRef.current) {
         executeJob(job);
         return true;
       }
@@ -191,7 +228,9 @@ export function useVaultPipelineRun(errorToI18nKey: (error: unknown) => I18nKey)
 
   const isVaultPipelineBusy = useCallback((vaultId: string) => {
     return (
-      runRef.current?.vaultId === vaultId || queueRef.current.some((job) => job.vaultId === vaultId)
+      runRef.current?.vaultId === vaultId ||
+      queueRef.current.some((job) => job.vaultId === vaultId) ||
+      settlingRef.current.has(vaultId)
     );
   }, []);
 
@@ -241,7 +280,7 @@ export function useVaultPipelineRun(errorToI18nKey: (error: unknown) => I18nKey)
   const isRunning = run !== null || queued.length > 0;
 
   const isRunningNow = useCallback(() => {
-    return runRef.current !== null || queueRef.current.length > 0;
+    return runRef.current !== null || queueRef.current.length > 0 || inFlightRef.current;
   }, []);
 
   return useMemo(

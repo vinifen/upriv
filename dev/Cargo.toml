@@ -59,3 +59,18 @@ version_check = { path = "vendor/version_check-0.9.5" }
 zerocopy = { path = "vendor/zerocopy-0.8.57" }
 zeroize = { path = "vendor/zeroize-1.9.0" }
 zeroize_derive = { path = "vendor/zeroize_derive-1.5.0" }
+
+# `./run desktop` builds the daemon with this profile. opt-level 0 makes
+# Argon2id and XChaCha20-Poly1305 run at a few MiB/s, so importing a video
+# `.zip` cannot finish inside the 10 minute create budget. Dependencies are
+# optimized; the workspace crates stay unoptimized so a daemon rebuild is still
+# a small compile.
+[profile.dev.package."*"]
+opt-level = 3
+
+# `*` does not cover workspace members. The cipher is monomorphized in
+# upriv-core, so the daemon dependency must be optimized too.
+[profile.dev.package.upriv-core]
+opt-level = 3
+[profile.dev.package.upriv-rpc]
+opt-level = 3

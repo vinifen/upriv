@@ -27,6 +27,11 @@ export function isAbsoluteOsFilesystemPath(path: string): boolean {
   return isAbsoluteFilesystemPath(p);
 }
 
+/** Android Storage Access Framework address. Rust `File::open` cannot read it. */
+export function isContentUri(path: string): boolean {
+  return path.trim().toLowerCase().startsWith("content://");
+}
+
 /**
  * `DocumentFile.fromTreeUri` only opens the tree id. Concatenating `/workspace`
  * (or any extra segment other than `/document/…`) is not a child URI.

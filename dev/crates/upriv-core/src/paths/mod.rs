@@ -115,6 +115,136 @@ pub(crate) fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     write_bytes_atomic_inner(path, bytes, true)
 }
 
+/// Flush one file to stable storage. One call per document, on every OS:
+/// `fsync` on Linux and Android, `FlushFileBuffers` on Windows, `F_FULLFSYNC`
+/// on Mac and iOS. Opened for write because Windows rejects `FlushFileBuffers`
+/// on a read-only handle.
+pub(crate) fn sync_file_durable(path: &Path) -> Result<()> {
+    let file = open_nofollow(path, NofollowMode::ReadWrite)?;
+    sync_handle(&file)
+}
+
+/// Open the final path component without following it.
+#[derive(Clone, Copy)]
+pub(crate) enum NofollowMode {
+    Read,
+    ReadWrite,
+    CreateNew,
+}
+
+/// Open `path` without following a symlink or Windows reparse point at the
+/// final component. Directory symlinks earlier in the path are still followed,
+/// so a vault folder that is itself a link keeps working.
+pub(crate) fn open_nofollow(path: &Path, mode: NofollowMode) -> std::io::Result<std::fs::File> {
+    use std::io::{Error, ErrorKind};
+
+    if let Ok(meta) = std::fs::symlink_metadata(path) {
+        if meta.file_type().is_symlink() {
+            return Err(Error::new(ErrorKind::InvalidInput, "refusing a symlink"));
+        }
+        if !matches!(mode, NofollowMode::CreateNew) && !meta.is_file() {
+            return Err(Error::new(ErrorKind::InvalidInput, "refusing a non-file"));
+        }
+    }
+
+    let mut opts = std::fs::OpenOptions::new();
+    match mode {
+        NofollowMode::Read => {
+            opts.read(true);
+        }
+        NofollowMode::ReadWrite => {
+            opts.read(true).write(true);
+        }
+        NofollowMode::CreateNew => {
+            opts.read(true).write(true).create_new(true);
+        }
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.custom_flags(libc::O_NOFOLLOW);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        opts.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let file = opts.open(path).map_err(|error| {
+        if is_symlink_open_error(&error) {
+            Error::new(ErrorKind::InvalidInput, "refusing a symlink")
+        } else {
+            error
+        }
+    })?;
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        if file.metadata()?.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err(Error::new(ErrorKind::InvalidInput, "refusing a symlink"));
+        }
+    }
+    if !file.metadata()?.is_file() {
+        return Err(Error::new(ErrorKind::InvalidInput, "refusing a non-file"));
+    }
+    Ok(file)
+}
+
+/// Why [`open_nofollow`] refused a path.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NofollowReject {
+    Symlink,
+    NonFile,
+}
+
+/// `Some` when `error` is the refusal from [`open_nofollow`].
+pub(crate) fn nofollow_reject(error: &std::io::Error) -> Option<NofollowReject> {
+    if error.kind() != std::io::ErrorKind::InvalidInput {
+        return None;
+    }
+    if error.to_string().contains("non-file") {
+        Some(NofollowReject::NonFile)
+    } else {
+        Some(NofollowReject::Symlink)
+    }
+}
+
+fn is_symlink_open_error(error: &std::io::Error) -> bool {
+    #[cfg(unix)]
+    {
+        error.raw_os_error() == Some(libc::ELOOP)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = error;
+        false
+    }
+}
+
+/// Flush a directory so a new file name survives a crash. Unix only.
+#[cfg(unix)]
+pub(crate) fn sync_dir_durable(path: &Path) -> Result<()> {
+    let file = std::fs::File::open(path)?;
+    sync_handle(&file)
+}
+
+fn sync_handle(file: &std::fs::File) -> Result<()> {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    {
+        let rc = unsafe { libc::fcntl(std::os::fd::AsRawFd::as_raw_fd(file), libc::F_FULLFSYNC) };
+        if rc != 0 {
+            file.sync_all()?;
+        }
+        return Ok(());
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+    {
+        file.sync_all()?;
+        Ok(())
+    }
+}
+
 /// Like [`write_bytes_atomic`], but fails if the parent directory is missing
 /// (does **not** `create_dir_all`).
 pub(crate) fn write_bytes_atomic_existing_parent(path: &Path, bytes: &[u8]) -> Result<()> {
@@ -145,8 +275,7 @@ fn write_bytes_atomic_inner(path: &Path, bytes: &[u8], create_parents: bool) -> 
         // ignoring it reported success for a rename a crash could still drop.
         #[cfg(unix)]
         if let Some(parent) = path.parent() {
-            let dir = std::fs::File::open(parent)?;
-            dir.sync_all()?;
+            sync_dir_durable(parent)?;
         }
         Ok(())
     })();
@@ -313,6 +442,11 @@ pub(crate) fn sanitize_display_leaf(name: &str) -> String {
 /// Export filename base. Unlike `sanitize_path_component`, which guards path
 /// joins and must fail closed, this keeps the user's name recognizable by
 /// replacing illegal characters (`Notes: 2026` → `Notes_ 2026`).
+/// Outer folder inside a portable `.7z`. Same rules as the suggested filename.
+pub(crate) fn seven_zip_outer_folder(display_name: &str) -> String {
+    sanitize_filename_base(display_name)
+}
+
 fn sanitize_filename_base(display_name: &str) -> String {
     let replaced: String = normalize_stored_name(display_name)
         .chars()

@@ -717,6 +717,8 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -736,6 +738,8 @@ internal interface UniffiLib : Library {
     ): RustBuffer.ByValue
     fun uniffi_upriv_ffi_fn_func_configure_runtime(`appHome`: RustBuffer.ByValue,`distribution`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    fun uniffi_upriv_ffi_fn_func_import_content_fd(`vaultId`: RustBuffer.ByValue,`logicalPath`: RustBuffer.ByValue,`fd`: Int,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     fun uniffi_upriv_ffi_fn_func_invoke(`method`: RustBuffer.ByValue,`paramsJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun ffi_upriv_ffi_rustbuffer_alloc(`size`: Long,uniffi_out_err: UniffiRustCallStatus, 
@@ -854,6 +858,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_upriv_ffi_checksum_func_configure_runtime(
     ): Short
+    fun uniffi_upriv_ffi_checksum_func_import_content_fd(
+    ): Short
     fun uniffi_upriv_ffi_checksum_func_invoke(
     ): Short
     fun ffi_upriv_ffi_uniffi_contract_version(
@@ -877,6 +883,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_upriv_ffi_checksum_func_configure_runtime() != 60242.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_upriv_ffi_checksum_func_import_content_fd() != 45401.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_upriv_ffi_checksum_func_invoke() != 41611.toShort()) {
@@ -928,6 +937,29 @@ inline fun <T : Disposable?, R> T.use(block: (T) -> R) =
  * @suppress
  * */
 object NoPointer
+
+/**
+ * @suppress
+ */
+public object FfiConverterInt: FfiConverter<Int, Int> {
+    override fun lift(value: Int): Int {
+        return value
+    }
+
+    override fun read(buf: ByteBuffer): Int {
+        return buf.getInt()
+    }
+
+    override fun lower(value: Int): Int {
+        return value
+    }
+
+    override fun allocationSize(value: Int) = 4UL
+
+    override fun write(value: Int, buf: ByteBuffer) {
+        buf.putInt(value)
+    }
+}
 
 /**
  * @suppress
@@ -1009,6 +1041,21 @@ public object FfiConverterString: FfiConverter<String, RustBuffer.ByValue> {
         FfiConverterString.lower(`appHome`),FfiConverterString.lower(`distribution`),_status)
 }
     
+    
+
+        /**
+         * Stream one Android content file into the open import session.
+         *
+         * `fd` is owned by this call (`ParcelFileDescriptor.detachFd`). Returns the
+         * same JSON envelope as [`invoke`].
+         */ fun `importContentFd`(`vaultId`: kotlin.String, `logicalPath`: kotlin.String, `fd`: kotlin.Int): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_upriv_ffi_fn_func_import_content_fd(
+        FfiConverterString.lower(`vaultId`),FfiConverterString.lower(`logicalPath`),FfiConverterInt.lower(`fd`),_status)
+}
+    )
+    }
     
 
         /**

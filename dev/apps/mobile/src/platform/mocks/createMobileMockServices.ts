@@ -17,6 +17,7 @@ import {
   type AppServices,
   type AppSettingsLoadResult,
   type CreateVaultInput,
+  backupEntryKey,
   type VaultBackupEntry,
   type VaultListItem,
   type VaultPipelineError as VaultPipelineErrorType,
@@ -109,12 +110,14 @@ function mockCloseGateFails(vaultId: string): boolean {
 const MOCK_BACKUPS: Record<string, VaultBackupEntry[]> = {
   "my-encrypted-notes": [
     {
-      stamp: "20260601T120000",
+      stamp: "20260601120000",
+      fileName: "20260601120000-my-encrypted-notes.zip",
       createdAt: "2026-06-01T12:00:00.000Z",
       sizeBytes: 128_000,
     },
     {
-      stamp: "20260520T090000",
+      stamp: "20260520090000",
+      fileName: "20260520090000-my-encrypted-notes.zip",
       createdAt: "2026-05-20T09:00:00.000Z",
       sizeBytes: 120_000,
       saved: true,
@@ -122,7 +125,8 @@ const MOCK_BACKUPS: Record<string, VaultBackupEntry[]> = {
   ],
   "work-documents": [
     {
-      stamp: "20260602T080000",
+      stamp: "20260602080000",
+      fileName: "20260602080000-work-documents.zip",
       createdAt: "2026-06-02T08:00:00.000Z",
       sizeBytes: 256_000,
     },
@@ -297,6 +301,9 @@ export function createMobileMockServices(): AppServices {
         registerMockVaultId(item.id);
         return item;
       },
+      async storeOnDiskBytes() {
+        return null;
+      },
       async getSettings(vaultId) {
         return getMockVaultSettings(vaultId);
       },
@@ -463,13 +470,15 @@ export function createMobileMockServices(): AppServices {
         const list = MOCK_BACKUPS[vaultId];
         if (!list) return;
         const set = new Set(stamps);
-        MOCK_BACKUPS[vaultId] = list.filter((b) => !set.has(b.stamp));
+        MOCK_BACKUPS[vaultId] = list.filter((entry) => !set.has(backupEntryKey(entry, vaultId)));
       },
       async promoteToSave(vaultId, stamp) {
         const list = MOCK_BACKUPS[vaultId];
         if (!list) return;
         for (const entry of list) {
-          if (entry.stamp === stamp) entry.saved = true;
+          if (backupEntryKey(entry, vaultId) === stamp) {
+            entry.saved = true;
+          }
         }
       },
       async getBackupBytes(_vaultId, entry) {
@@ -564,12 +573,21 @@ export function createMobileMockServices(): AppServices {
     createVault: {
       async testImportPackagePassword(password) {
         await new Promise((resolve) => setTimeout(resolve, MOCK_IMPORT_PASSWORD_TEST_MS));
-        return password.length > 0;
+        return { ok: password.length > 0, embedded: null };
+      },
+      async readImportPackageSettings() {
+        return { embedded: null, zipLayout: "store" as const };
       },
       async selectImportPackageForProbe() {
         return {
           path: "content://upriv.mock/import/demo.zip",
           fileName: "demo.zip",
+        };
+      },
+      async selectImportFolder() {
+        return {
+          path: "content://upriv.mock/import/Photos",
+          fileName: "Photos",
         };
       },
     },

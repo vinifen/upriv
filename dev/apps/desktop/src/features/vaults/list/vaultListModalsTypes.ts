@@ -68,6 +68,10 @@ export interface VaultListModalsHandle {
   exportVault: VaultListItem | null;
   exportSubmitting: boolean;
   setExportSubmitting: (submitting: boolean) => void;
+  /** Vault whose export is still writing, even if the dialog is hidden. */
+  exportJobVaultId: string | null;
+  exportStartedAt: number | null;
+  setExportJob: (job: { vaultId: string; startedAt: number } | null) => void;
 }
 
 /** Subset of modal handles that vault lifecycle actions need. */
@@ -82,6 +86,8 @@ export type VaultListLifecycleModals = Pick<
   | "setExportVaultId"
   | "exportVault"
   | "setExportSubmitting"
+  | "exportJobVaultId"
+  | "setExportJob"
   | "setCreateVaultOpen"
   | "setCreateVaultInitialDraft"
   | "setCreateVaultInitialStep"

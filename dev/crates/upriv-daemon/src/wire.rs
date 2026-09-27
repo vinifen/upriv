@@ -38,36 +38,68 @@ pub enum RequestOutcome {
     Shutdown(WireOut),
 }
 
-/// `vault_export` with `format: "seven_zip"` unlocks the store (Argon2id).
-/// Any other format, including a missing one, is a ciphertext zip of `store/`.
-fn export_runs_argon2(params: &Value) -> bool {
-    params.get("format").and_then(Value::as_str) == Some("seven_zip")
-}
-
-/// Methods that run Argon2id. Handled on the daemon `upriv-argon2` worker so
-/// light RPCs (`app_settings_*`, groups, list, …) are not blocked on
+/// Methods whose whole call is Argon2id. Handled on the daemon `upriv-argon2`
+/// worker so light RPCs (`app_settings_*`, groups, list, …) are not blocked on
 /// stdin.
 ///
 /// Still one Argon2 at a time: single worker + `upriv_core::session::with_unlock_lock`.
-/// A ciphertext `store/` zip does not unlock, so it is not in this set.
-pub fn is_argon2_bound_method(method: &str, params: &Value) -> bool {
-    match method {
-        "vault_open" | "vault_create" | "vault_import_7z" | "vault_export_probe" => true,
-        "vault_export" => export_runs_argon2(params),
-        _ => false,
-    }
+/// A long `.7z` pack or import takes that lock only for the Argon2 moment.
+/// The rest of the job runs on `upriv-pack`, not on this worker and not on
+/// the close worker.
+pub fn is_argon2_bound_method(method: &str, _params: &Value) -> bool {
+    matches!(
+        method,
+        "vault_open" | "vault_create" | "vault_export_probe" | "vault_ingest_open"
+    )
 }
 
-/// Long contents I/O that would stall stdin if run inline (multi-GB OS import,
-/// close backup copy, a ciphertext export zip, or wiping and unlinking a vault
-/// tree). Own worker so it does not queue behind Argon2 or block
-/// list/settings/lock while it finishes.
-pub fn is_long_io_method(method: &str, params: &Value) -> bool {
-    match method {
-        "vault_fs_import_os_file" | "vault_close" | "vault_delete" | "backup_get" => true,
-        "vault_export" => !export_runs_argon2(params),
-        _ => false,
+/// Close, delete, and backup download. Own worker so a lock is not stuck
+/// behind a multi-minute import or export.
+pub fn is_lifecycle_io_method(method: &str) -> bool {
+    matches!(
+        method,
+        "vault_close" | "vault_delete" | "backup_get" | "vault_discard_import"
+    )
+}
+
+/// Vault-file import, portable export, and in-app file import.
+/// Separate from close: those jobs must not share one queue.
+pub fn is_pack_io_method(method: &str) -> bool {
+    matches!(
+        method,
+        "vault_fs_import_os_file"
+            | "vault_import_zip"
+            | "vault_import_7z"
+            | "vault_import_files_zip"
+            | "vault_import_os_path"
+            | "vault_export"
+    )
+}
+
+/// Long contents I/O that would stall stdin if run inline.
+pub fn is_long_io_method(method: &str, _params: &Value) -> bool {
+    is_lifecycle_io_method(method) || is_pack_io_method(method)
+}
+
+/// Which off-stdin worker runs this method.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HeavyLane {
+    Argon2,
+    Lifecycle,
+    Pack,
+}
+
+pub fn heavy_lane(method: &str, params: &Value) -> Option<HeavyLane> {
+    if is_argon2_bound_method(method, params) {
+        return Some(HeavyLane::Argon2);
     }
+    if is_lifecycle_io_method(method) {
+        return Some(HeavyLane::Lifecycle);
+    }
+    if is_pack_io_method(method) {
+        return Some(HeavyLane::Pack);
+    }
+    None
 }
 
 /// Off-stdin work: Argon2, a ciphertext export zip, a long OS-path import, vault close, or vault delete.
@@ -96,22 +128,51 @@ mod tests {
     use super::*;
 
     #[test]
-    fn argon2_bound_methods_include_open_create_and_7z_import() {
+    fn argon2_worker_is_only_short_unlocks() {
         let empty = Value::Null;
         assert!(is_argon2_bound_method("vault_open", &empty));
+        assert!(is_argon2_bound_method("vault_ingest_open", &empty));
+        assert!(is_lifecycle_io_method("vault_discard_import"));
+        assert!(!is_argon2_bound_method("vault_ingest_directory", &empty));
+        assert!(!is_long_io_method("vault_ingest_directory", &empty));
         assert!(is_argon2_bound_method("vault_create", &empty));
-        assert!(is_argon2_bound_method("vault_import_7z", &empty));
         assert!(is_argon2_bound_method("vault_export_probe", &empty));
+        assert!(!is_argon2_bound_method("vault_import_7z", &empty));
         assert!(!is_argon2_bound_method("vault_import_zip", &empty));
         assert!(!is_argon2_bound_method("vault_close", &empty));
         assert!(!is_argon2_bound_method("app_settings_save", &empty));
         assert!(!is_argon2_bound_method("vault_list", &empty));
+        assert!(!is_heavy_method("vault_store_size", &empty));
         assert!(!is_argon2_bound_method("app_shutdown", &empty));
         assert!(!is_argon2_bound_method("vault_fs_import_os_file", &empty));
         assert!(is_long_io_method("vault_fs_import_os_file", &empty));
-        assert!(is_long_io_method("vault_close", &empty));
-        assert!(is_long_io_method("vault_delete", &empty));
-        assert!(is_long_io_method("backup_get", &empty));
+        assert!(is_long_io_method("vault_import_zip", &empty));
+        assert!(is_long_io_method("vault_import_7z", &empty));
+        assert!(is_lifecycle_io_method("vault_close"));
+        assert!(is_lifecycle_io_method("vault_delete"));
+        assert!(is_lifecycle_io_method("backup_get"));
+        assert_eq!(
+            heavy_lane("vault_close", &empty),
+            Some(HeavyLane::Lifecycle)
+        );
+        assert_eq!(heavy_lane("vault_import_7z", &empty), Some(HeavyLane::Pack));
+        assert_eq!(
+            heavy_lane("vault_import_files_zip", &empty),
+            Some(HeavyLane::Pack)
+        );
+        assert_eq!(
+            heavy_lane("vault_import_os_path", &empty),
+            Some(HeavyLane::Pack)
+        );
+        assert_eq!(
+            heavy_lane("vault_import_zip", &empty),
+            Some(HeavyLane::Pack)
+        );
+        assert_ne!(
+            heavy_lane("vault_close", &empty),
+            heavy_lane("vault_import_7z", &empty)
+        );
+        assert!(is_heavy_method("vault_import_7z", &empty));
         assert!(is_heavy_method("vault_fs_import_os_file", &empty));
         assert!(is_heavy_method("vault_close", &empty));
         assert!(is_heavy_method("vault_delete", &empty));
@@ -120,17 +181,15 @@ mod tests {
     }
 
     #[test]
-    fn store_zip_export_does_not_share_the_argon2_worker() {
+    fn export_does_not_share_the_argon2_worker() {
         let store_zip = serde_json::json!({ "format": "store_zip" });
         let missing = serde_json::json!({});
         let seven_zip = serde_json::json!({ "format": "seven_zip" });
-        assert!(!is_argon2_bound_method("vault_export", &store_zip));
-        assert!(is_long_io_method("vault_export", &store_zip));
-        assert!(is_heavy_method("vault_export", &store_zip));
-        assert!(!is_argon2_bound_method("vault_export", &missing));
-        assert!(is_long_io_method("vault_export", &missing));
-        assert!(is_argon2_bound_method("vault_export", &seven_zip));
-        assert!(!is_long_io_method("vault_export", &seven_zip));
-        assert!(is_heavy_method("vault_export", &seven_zip));
+        for params in [&store_zip, &missing, &seven_zip] {
+            assert!(!is_argon2_bound_method("vault_export", params));
+            assert!(is_long_io_method("vault_export", params));
+            assert!(is_heavy_method("vault_export", params));
+            assert_eq!(heavy_lane("vault_export", params), Some(HeavyLane::Pack));
+        }
     }
 }

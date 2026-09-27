@@ -437,12 +437,15 @@ interface VaultSettingsKdfSectionProps {
   onChange: (patch: Partial<{ unlock_preset: KdfUnlockPreset }>) => void;
   /** `.zip` of `store/` import: header already has KDF params. */
   choosesPreset?: boolean;
+  /** Header preset for a disabled list. `null` leaves every option unselected. */
+  archivePreset?: KdfUnlockPreset | null;
 }
 
 export function VaultSettingsKdfSection({
   config,
   onChange,
   choosesPreset = true,
+  archivePreset = null,
 }: VaultSettingsKdfSectionProps) {
   const { t } = useTranslation();
   const groupName = useId();
@@ -461,12 +464,13 @@ export function VaultSettingsKdfSection({
         >
           {KDF_UNLOCK_PRESETS.map((preset) => {
             const meta = KDF_UNLOCK_OPTION_META[preset];
+            const selected = choosesPreset ? config.unlock_preset : archivePreset;
             return (
               <PolicyRadioOption
                 key={preset}
                 groupName={groupName}
                 value={preset}
-                checked={config.unlock_preset === preset}
+                checked={selected === preset}
                 disabled={!choosesPreset}
                 title={t(meta.titleKey)}
                 description={t(meta.descKey)}

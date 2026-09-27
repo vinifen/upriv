@@ -11,6 +11,7 @@ import {
   type DaemonConnection,
 } from "./daemon";
 import {
+  classifyDroppedPath,
   readDroppedImportPaths,
   readDroppedPathRange,
   statDroppedImportPaths,
@@ -390,6 +391,10 @@ ipcMain.handle("upriv-read-dropped", async (_event, paths: unknown) => {
 
 ipcMain.handle("upriv-stat-dropped", async (_event, paths: unknown) => {
   return statDroppedImportPaths(paths);
+});
+
+ipcMain.handle("upriv-classify-dropped", async (_event, osPath: unknown) => {
+  return classifyDroppedPath(osPath);
 });
 
 ipcMain.handle(

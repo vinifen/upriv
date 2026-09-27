@@ -8,6 +8,8 @@ export const CREATE_VAULT_ERROR_I18N_KEYS = {
   duplicate: "vault.create.error.duplicate",
   source_missing: "vault.create.error.source_missing",
   import_file_missing: "vault.create.error.import_file_missing",
+  import_zip_pending: "vault.create.error.import_zip_pending",
+  import_zip_rejected: "vault.create.error.import_zip_rejected",
   password_empty: "vault.create.error.password_empty",
   password_too_short: "vault.create.error.password_too_short",
   password_mismatch: "vault.create.error.password_mismatch",

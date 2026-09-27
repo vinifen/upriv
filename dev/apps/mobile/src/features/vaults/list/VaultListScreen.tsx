@@ -14,6 +14,7 @@ import {
   createDraftForImportSource,
   createDraftForScratchSource,
   createDraftFromBackup,
+  groupIdContainingVault,
   normalizeStoredName,
   draggingGroupedVaultSourceGroupId as resolveDraggingGroupedVaultSourceGroupId,
   groupedVaultDragKey,
@@ -234,6 +235,7 @@ export function VaultListScreen() {
     exportVault,
     setExportVault,
     exportSubmitting,
+    exportJob,
     backupsVault,
     setBackupsVault,
     settingsGroup,
@@ -276,6 +278,7 @@ export function VaultListScreen() {
     canReorder,
     existingVaultIds,
     existingOrders,
+    existingDisplayNames,
     noteVault,
     vaultInfoVault,
     displayRowsRef,
@@ -1303,8 +1306,8 @@ export function VaultListScreen() {
         vault={exportVault}
         open={exportVault !== null}
         submitting={exportSubmitting}
+        startedAt={exportJob?.startedAt ?? null}
         onClose={() => {
-          if (exportSubmitting) return;
           setExportVault(null);
         }}
         onConfirm={handleConfirmExportVault}
@@ -1519,11 +1522,23 @@ export function VaultListScreen() {
         vault={backupsVault}
         open={backupsVault !== null}
         onClose={() => setBackupsVault(null)}
-        onCreateVaultFromBackup={(stamp) => {
+        onCreateVaultFromBackup={(stamp, fileName, saved = false) => {
           if (!backupsVault) return;
           const sourceId = backupsVault.id;
           setBackupsVault(null);
-          openCreate(createDraftFromBackup(stamp, sourceId, existingOrders), "source");
+          openCreate(
+            createDraftFromBackup(
+              stamp,
+              sourceId,
+              backupsVault.displayName,
+              existingOrders,
+              existingDisplayNames,
+              groupIdContainingVault(groups, sourceId),
+              fileName,
+              saved,
+            ),
+            "source",
+          );
         }}
         onDownloadNotice={show}
       />
@@ -1571,6 +1586,7 @@ export function VaultListScreen() {
         onClose={closeCreate}
         existingVaultIds={existingVaultIds}
         existingOrders={existingOrders}
+        existingDisplayNames={existingDisplayNames}
         groups={groups}
         initialDraft={createDraft}
         initialStep={createStep}

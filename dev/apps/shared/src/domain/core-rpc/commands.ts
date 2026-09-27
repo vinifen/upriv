@@ -54,6 +54,8 @@ export const CORE_RPC_COMMANDS = {
   VAULT_OPEN: "vault_open",
   VAULT_CLOSE: "vault_close",
   VAULT_CONFIG_GET: "vault_config_get",
+  /** Sum of regular-file lengths under `store/`. Metadata only; not the vault list. */
+  VAULT_STORE_SIZE: "vault_store_size",
   VAULT_CONFIG_SAVE: "vault_config_save",
   /** Deep rename: display name + folder/`[vault].id` migration (vault closed). */
   VAULT_RENAME: "vault_rename",
@@ -65,6 +67,16 @@ export const CORE_RPC_COMMANDS = {
   VAULT_EXPORT_PROBE: "vault_export_probe",
   VAULT_IMPORT_ZIP: "vault_import_zip",
   VAULT_IMPORT_7Z: "vault_import_7z",
+  /** Ordinary `.zip` of documents. Not a Upriv store zip. */
+  VAULT_IMPORT_FILES_ZIP: "vault_import_files_zip",
+  /** One OS file, or the children of one OS folder, streamed into a new vault. */
+  VAULT_IMPORT_OS_PATH: "vault_import_os_path",
+  /** Unlock a just-created vault for streaming. Does not mount a file manager. */
+  VAULT_INGEST_OPEN: "vault_ingest_open",
+  /** One folder inside an import session, including its parents. */
+  VAULT_INGEST_DIRECTORY: "vault_ingest_directory",
+  /** Drop a failed import session and delete the vault. No close backup. */
+  VAULT_DISCARD_IMPORT: "vault_discard_import",
   VAULT_IMPORT_PROBE: "vault_import_probe",
   VAULT_FS_LIST: "vault_fs_list",
   VAULT_FS_REVISION: "vault_fs_revision",

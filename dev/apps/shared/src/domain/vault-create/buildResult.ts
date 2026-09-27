@@ -1,8 +1,4 @@
-import {
-  createVaultChoosesKdf,
-  DEFAULT_SEVEN_ZIP,
-  normalizeVaultSettingsConfig,
-} from "../vault-settings";
+import { createVaultChoosesKdf, normalizeVaultSettingsConfig } from "../vault-settings";
 import { normalizeStoredName } from "../format/storedName";
 import { displayNameToVaultId } from "../vault/displayName";
 import type { CreateVaultDraft, CreateVaultGroupAssignment, CreateVaultResult } from "./types";
@@ -41,11 +37,11 @@ export function buildCreateVaultResult(
     security: {
       mode: draft.security.mode,
       secure_wipe_workspace: draft.security.secure_wipe_workspace,
-      wipe_passes: 1,
-      wipe_pattern: "random",
+      wipe_passes: draft.security.wipe_passes,
+      wipe_pattern: draft.security.wipe_pattern,
     },
     auto_close: { ...draft.auto_close },
-    seven_zip: { ...DEFAULT_SEVEN_ZIP },
+    seven_zip: { ...draft.seven_zip },
     policy: { ...draft.policy },
   });
 
@@ -61,6 +57,9 @@ export function buildCreateVaultResult(
     groupAssignment: resolveCreateVaultGroupAssignment(draft),
     source: draft.source ?? "scratch",
     importKind: draft.importKind,
+    importShape: draft.importShape,
+    importExtract: draft.importExtract,
+    zipLayout: draft.zipLayout,
     importFilePath: draft.importFilePath,
     importFileName: draft.importFileName,
   };

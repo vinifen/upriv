@@ -621,10 +621,12 @@ export function KdfSection({
   config,
   onChange,
   choosesPreset = true,
+  archivePreset = null,
 }: {
   config: { unlock_preset: KdfUnlockPreset };
   onChange: (patch: Partial<{ unlock_preset: KdfUnlockPreset }>) => void;
   choosesPreset?: boolean;
+  archivePreset?: KdfUnlockPreset | null;
 }) {
   const { t } = useTranslation();
 
@@ -637,11 +639,12 @@ export function KdfSection({
       <RadioGroup>
         {KDF_UNLOCK_PRESETS.map((preset) => {
           const meta = KDF_UNLOCK_OPTION_META[preset];
+          const selected = choosesPreset ? config.unlock_preset : archivePreset;
           return (
             <PolicyRadioOption
               key={preset}
               value={preset}
-              checked={config.unlock_preset === preset}
+              checked={selected === preset}
               disabled={!choosesPreset}
               title={t(meta.titleKey)}
               description={t(meta.descKey)}

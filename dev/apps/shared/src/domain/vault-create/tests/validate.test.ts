@@ -15,6 +15,121 @@ describe("validateCreateVaultStep", () => {
     ).toEqual(["source_missing"]);
   });
 
+  it("waits for a .zip to be classified, then accepts store or files", () => {
+    expect(
+      validateCreateVaultStep(
+        "source",
+        createVaultDraftFixture([], {
+          source: "import",
+          importFileName: "Photos.zip",
+          importFilePath: "/tmp/Photos.zip",
+        }),
+        [],
+      ),
+    ).toEqual(["import_zip_pending"]);
+    expect(
+      validateCreateVaultStep(
+        "source",
+        createVaultDraftFixture([], {
+          source: "import",
+          importFileName: "Photos.zip",
+          importFilePath: "/tmp/Photos.zip",
+          importZipRejected: true,
+        }),
+        [],
+      ),
+    ).toEqual(["import_zip_rejected"]);
+    expect(
+      validateCreateVaultStep(
+        "source",
+        createVaultDraftFixture([], {
+          source: "import",
+          importFileName: "Photos.zip",
+          importFilePath: "/tmp/Photos.zip",
+          importZipProbeFailed: true,
+          importExtract: false,
+        }),
+        [],
+      ),
+    ).toEqual(["import_zip_rejected"]);
+    expect(
+      validateCreateVaultStep(
+        "source",
+        createVaultDraftFixture([], {
+          source: "import",
+          importFileName: "Photos.zip",
+          importFilePath: "/tmp/Photos.zip",
+          zipLayout: "files",
+        }),
+        [],
+      ),
+    ).toEqual([]);
+    expect(
+      validateCreateVaultStep(
+        "source",
+        createVaultDraftFixture([], {
+          source: "import",
+          importFileName: "Notes.zip",
+          importFilePath: "/tmp/Notes.zip",
+          zipLayout: "store",
+        }),
+        [],
+      ),
+    ).toEqual([]);
+  });
+
+  it("accepts a normal file, a folder, and a rejected zip stored whole", () => {
+    expect(
+      validateCreateVaultStep(
+        "source",
+        createVaultDraftFixture([], {
+          source: "import",
+          importFileName: "notes.txt",
+          importFilePath: "/tmp/notes.txt",
+        }),
+        [],
+      ),
+    ).toEqual([]);
+    expect(
+      validateCreateVaultStep(
+        "source",
+        createVaultDraftFixture([], {
+          source: "import",
+          importShape: "directory",
+          importFileName: "Photos",
+          importFilePath: "/tmp/Photos",
+        }),
+        [],
+      ),
+    ).toEqual([]);
+    expect(
+      validateCreateVaultStep(
+        "source",
+        createVaultDraftFixture([], {
+          source: "import",
+          importFileName: "Photos.zip",
+          importFilePath: "/tmp/Photos.zip",
+          importZipRejected: true,
+          importExtract: false,
+        }),
+        [],
+      ),
+    ).toEqual([]);
+    expect(
+      validateCreateVaultStep(
+        "password",
+        createVaultDraftFixture([], {
+          source: "import",
+          importFileName: "notes.txt",
+          importFilePath: "/tmp/notes.txt",
+          password: "",
+          passwordConfirm: "",
+        }),
+        [],
+      ),
+    ).toContain("password_empty");
+  });
+
   it("requires an import file on the source step", () => {
     expect(
       validateCreateVaultStep(
@@ -37,6 +152,7 @@ describe("validateCreateVaultStep", () => {
           source: "import",
           importFileName: "backup.zip",
           importFilePath: "/tmp/backup.zip",
+          zipLayout: "store",
         }),
         [],
       ),
@@ -52,6 +168,18 @@ describe("validateCreateVaultStep", () => {
         [],
       ),
     ).toContain("import_file_missing");
+    expect(
+      validateCreateVaultStep(
+        "source",
+        createVaultDraftFixture([], {
+          source: "import",
+          importShape: "directory",
+          importFileName: "Photos",
+          importFilePath: "content://com.android.externalstorage.documents/tree/primary",
+        }),
+        [],
+      ),
+    ).not.toContain("import_file_missing");
     expect(
       validateCreateVaultStep(
         "source",
@@ -149,7 +277,7 @@ describe("validateCreateVaultStep", () => {
     ).toContain("password_not_validated");
   });
 
-  it("skips archive password for zip and backup imports", () => {
+  it("skips archive password for a store zip and a backup, and requires one for documents", () => {
     expect(
       validateCreateVaultStep(
         "password",
@@ -157,12 +285,27 @@ describe("validateCreateVaultStep", () => {
           source: "import",
           importKind: "file",
           importFileName: "notes.zip",
+          zipLayout: "store",
           password: "",
           passwordValidated: false,
         }),
         [],
       ),
     ).toEqual([]);
+    expect(
+      validateCreateVaultStep(
+        "password",
+        createVaultDraftFixture([], {
+          source: "import",
+          importKind: "file",
+          importFileName: "Photos.zip",
+          zipLayout: "files",
+          password: "",
+          passwordConfirm: "",
+        }),
+        [],
+      ),
+    ).toContain("password_empty");
     expect(
       validateCreateVaultStep(
         "password",

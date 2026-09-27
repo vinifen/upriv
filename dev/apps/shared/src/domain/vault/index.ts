@@ -42,10 +42,13 @@ export {
   VAULT_PASSWORD_HINT_MAX_LENGTH,
 } from "./constants";
 export {
+  backupVaultDisplayName,
   displayNameFromImportFilename,
   displayNameToVaultId,
   importDisplayNameFromFilename,
+  suggestedImportDisplayName,
   suggestValidDisplayName,
+  uniqueDisplayName,
   validateDisplayName,
   liveDisplayNameError,
   vaultDisplayLetters,

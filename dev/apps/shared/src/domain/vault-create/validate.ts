@@ -6,19 +6,22 @@ import {
 import {
   isAbsoluteFilesystemPath,
   isAbsoluteOsFilesystemPath,
+  isContentUri,
   isReservedUprivWorkspacePath,
   normalizeMountWorkspacePath,
   safTreeUriHasExtraSegment,
   WORKSPACE_PATH_DEFAULT,
 } from "../workspace";
 import type { CreateVaultDraft, CreateVaultStepId, CreateVaultStepStatus } from "./types";
-import { createVaultImportNeedsArchivePassword } from "./importKind";
+import { createVaultImportNeedsArchivePassword, importSetsVaultPassword } from "./importKind";
 
 export type CreateVaultValidationCode =
   | DisplayNameValidationCode
   | "duplicate"
   | "source_missing"
   | "import_file_missing"
+  | "import_zip_pending"
+  | "import_zip_rejected"
   | "password_empty"
   | "password_too_short"
   | "password_mismatch"
@@ -65,6 +68,14 @@ export function vaultIdForCreateDraft(
   return displayNameToVaultId(draft.displayName, existingIds);
 }
 
+function importSourcePathAccepted(draft: CreateVaultDraft): boolean {
+  if (!draft.importFileName.trim()) return false;
+  if (draft.importShape === "directory") {
+    return isAbsoluteOsFilesystemPath(draft.importFilePath) || isContentUri(draft.importFilePath);
+  }
+  return isAbsoluteOsFilesystemPath(draft.importFilePath);
+}
+
 export function validateCreateVaultStep(
   stepId: CreateVaultStepId,
   draft: CreateVaultDraft,
@@ -80,11 +91,17 @@ export function validateCreateVaultStep(
       if (draft.source === "import") {
         if (draft.importKind === "backup") {
           if (!draft.importFilePath.trim()) errors.push("import_file_missing");
-        } else if (
-          !draft.importFileName.trim() ||
-          !isAbsoluteOsFilesystemPath(draft.importFilePath)
-        ) {
+        } else if (!importSourcePathAccepted(draft)) {
           errors.push("import_file_missing");
+        } else if (
+          draft.importShape !== "directory" &&
+          draft.importFileName.trim().toLowerCase().endsWith(".zip")
+        ) {
+          if (draft.importZipProbeFailed) errors.push("import_zip_rejected");
+          else if (!draft.zipLayout && !draft.importZipRejected) errors.push("import_zip_pending");
+          else if (draft.importZipRejected && draft.importExtract) {
+            errors.push("import_zip_rejected");
+          }
         }
       }
       return errors;
@@ -100,7 +117,7 @@ export function validateCreateVaultStep(
     case "password": {
       const errors: CreateVaultValidationCode[] = [];
       const password = draft.password;
-      if (draft.source === "scratch") {
+      if (draft.source === "scratch" || importSetsVaultPassword(draft)) {
         if (!password.trim()) errors.push("password_empty");
         if (draft.password !== draft.passwordConfirm) errors.push("password_mismatch");
       } else if (draft.source === "import") {

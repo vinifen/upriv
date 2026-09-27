@@ -47,6 +47,59 @@ export function importDisplayNameFromFilename(filename: string): {
   };
 }
 
+function displayNameKey(name: string): string {
+  return normalizeStoredName(name).toLowerCase();
+}
+
+/**
+ * Keep `base` when no vault already uses it (case-insensitive).
+ * Otherwise `base 2`, `base 3`, … trimmed to the display-name limit.
+ */
+export function uniqueDisplayName(base: string, existing: readonly string[]): string {
+  const used = new Set(existing.map((name) => displayNameKey(name)));
+  const start = suggestValidDisplayName(normalizeStoredName(base) || "vault");
+  const taken = (name: string) => used.has(displayNameKey(name));
+  if (!taken(start)) return start;
+  for (let n = 2; n < 10_000; n += 1) {
+    const suffix = ` ${n}`;
+    const room = VAULT_DISPLAY_NAME_MAX_LENGTH - suffix.length;
+    let stem = start;
+    if (stem.length > room) {
+      stem = normalizeStoredName(stem.slice(0, Math.max(1, room)).replace(/[ .]+$/u, ""));
+    }
+    if (!stem) stem = "vault";
+    const candidate = `${stem}${suffix}`;
+    if (validateDisplayName(candidate) === null && !taken(candidate)) return candidate;
+  }
+  return start;
+}
+
+/** Name for the create-from-backup button: `{source} backup`, then `{source} backup 2`. */
+export function backupVaultDisplayName(
+  sourceDisplayName: string,
+  existing: readonly string[],
+): string {
+  const source = suggestValidDisplayName(sourceDisplayName);
+  const suffix = " backup";
+  const room = VAULT_DISPLAY_NAME_MAX_LENGTH - suffix.length;
+  let stem = source;
+  if (stem.length > room) {
+    stem = normalizeStoredName(stem.slice(0, Math.max(1, room)).replace(/[ .]+$/u, "")) || "vault";
+  }
+  return uniqueDisplayName(`${stem}${suffix}`, existing);
+}
+
+/** Filename suggestion, with ` N` when a vault already has that name. */
+export function suggestedImportDisplayName(
+  filename: string,
+  existingDisplayNames: readonly string[] = [],
+): string {
+  return uniqueDisplayName(
+    importDisplayNameFromFilename(filename).displayName,
+    existingDisplayNames,
+  );
+}
+
 export function validateDisplayName(name: string): DisplayNameValidationCode | null {
   const trimmed = normalizeStoredName(name);
   if (!trimmed) return "empty";

@@ -16,18 +16,23 @@ export interface UprivDesktopApi {
   /**
    * Read user-dropped OS files/folders from absolute paths (folders walked in RAM).
    */
-  readDroppedPaths(
-    paths: string[],
-  ): Promise<
+  readDroppedPaths(paths: string[]): Promise<
     | { relativePath: string; contentB64: string }[]
-    | { files: { relativePath: string; contentB64: string }[]; truncated: boolean }
+    | {
+        files: { relativePath: string; contentB64: string }[];
+        truncated: boolean;
+        symlinks?: string[];
+      }
   >;
+  /** `lstat` of one dropped path: file, directory, or anything else (including missing). */
+  classifyDroppedPath(osPath: string): Promise<"file" | "directory" | "other">;
   statDroppedPaths(paths: string[]): Promise<
     | { relativePath: string; osPath: string; size: number }[]
     | {
         files: { relativePath: string; osPath: string; size: number }[];
         unreadable: string[];
         truncated?: boolean;
+        symlinks?: string[];
       }
   >;
   readDroppedPathRange(
@@ -62,6 +67,9 @@ const api: UprivDesktopApi = {
   },
   readDroppedPaths(paths) {
     return ipcRenderer.invoke("upriv-read-dropped", paths);
+  },
+  classifyDroppedPath(osPath) {
+    return ipcRenderer.invoke("upriv-classify-dropped", osPath);
   },
   statDroppedPaths(paths) {
     return ipcRenderer.invoke("upriv-stat-dropped", paths);

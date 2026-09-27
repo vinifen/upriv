@@ -21,8 +21,18 @@ function snapshot(overrides: Partial<VaultInfoSnapshot> = {}): VaultInfoSnapshot
     groupName: "Work",
     groupHidden: false,
     backups: [
-      { stamp: "20260528T120000", createdAt: "2026-05-28T12:00:00.000Z", sizeBytes: 10 },
-      { stamp: "20260529T090000", createdAt: "2026-05-29T09:00:00.000Z", sizeBytes: 20 },
+      {
+        stamp: "20260528120000",
+        fileName: "20260528120000-notes.zip",
+        createdAt: "2026-05-28T12:00:00.000Z",
+        sizeBytes: 10,
+      },
+      {
+        stamp: "20260529120000",
+        fileName: "20260529120000-notes.zip",
+        createdAt: "2026-05-29T09:00:00.000Z",
+        sizeBytes: 20,
+      },
     ],
     runtime: {
       openCount: 2,
@@ -64,7 +74,37 @@ describe("buildVaultInfoSections", () => {
     expect(field(sections, "kdf_preset")).toBe("modal.settings.option.kdf.256mib");
     expect(field(sections, "file_manager")).toBe("modal.info.value.eligible");
     expect(field(sections, "backup_count")).toBe("2");
-    expect(field(sections, "backup_latest")).toBe("20260529T090000");
+    expect(field(sections, "backup_latest")).toBe("20260529120000-notes.zip");
+    const unnamed = buildVaultInfoSections(
+      snapshot({
+        backups: [
+          { stamp: "20260529120000", createdAt: "2026-05-29T09:00:00.000Z", sizeBytes: 20 },
+        ],
+      }),
+      t,
+    );
+    expect(field(unnamed, "backup_latest")).toBe("20260529120000-notes.zip");
+    const tied = buildVaultInfoSections(
+      snapshot({
+        backups: [
+          {
+            stamp: "20260528120000",
+            fileName: "20260528120000-other.zip",
+            createdAt: "2026-05-28T12:00:00.000Z",
+            sizeBytes: 10,
+          },
+          {
+            stamp: "20260528120000",
+            fileName: "20260528120000-notes.zip",
+            createdAt: "2026-05-28T12:00:00.000Z",
+            sizeBytes: 10,
+          },
+        ],
+      }),
+      t,
+    );
+    expect(field(tied, "backup_count")).toBe("2");
+    expect(field(tied, "backup_latest")).toBe("20260528120000-notes.zip");
     expect(field(sections, "group")).toBe("Work");
     expect(field(sections, "hidden")).toBe("modal.info.value.no");
     expect(field(sections, "hidden_locked_by_group")).toBe("modal.info.value.no");

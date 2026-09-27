@@ -1,11 +1,16 @@
-import { StyleSheet, Text, View } from "react-native";
+import { useState } from "react";
+import { Platform, StyleSheet, Text, View } from "react-native";
 import {
   createVaultChoosesKdf,
   createVaultErrorI18nKey,
   createVaultErrorsForField,
   createVaultImportNeedsArchivePassword,
   createVaultImportNeedsRename,
-  importDisplayNameFromFilename,
+  createVaultImportSelectionPatch,
+  importExtractApplies,
+  importExtractEnabled,
+  importSetsVaultPassword,
+  importZipWrapsDocuments,
   isHiddenGroup,
   groupsForAssignmentPicker,
   groupAssignmentClearOption,
@@ -25,6 +30,7 @@ import {
   type StorageMode,
   type VaultGroup,
 } from "@upriv/shared";
+import { releasePendingImport } from "@/platform/native/contentTreeImport";
 import { useCreateVaultService } from "@/platform/services";
 import { useTranslation, type I18nKey } from "@/i18n";
 import { useTheme } from "@/theme";
@@ -46,6 +52,13 @@ import {
 } from "@/features/vaults/settings/vaultSettingsForm";
 import type { CreateVaultStepFocusProps } from "@upriv/shared/react";
 
+let importPickGeneration = 0;
+
+/** Drop a folder or file pick that finishes after the wizard moved on. */
+export function invalidateImportPicks(): void {
+  importPickGeneration += 1;
+}
+
 interface StepProps extends Partial<CreateVaultStepFocusProps> {
   draft: CreateVaultDraft;
   errors: readonly CreateVaultValidationCode[];
@@ -54,6 +67,8 @@ interface StepProps extends Partial<CreateVaultStepFocusProps> {
   includeHidden?: boolean;
   /** Resolved vault-root for mount reserved checks (from wizard / CreateVaultModal). */
   vaultRootPath?: string | null;
+  /** Display names already on the vault list, so a picked file can take `name 2`. */
+  existingDisplayNames?: readonly string[];
 }
 
 export function renderCreateVaultStep(
@@ -110,33 +125,79 @@ function securityOptionMeta(uiMode: SecurityUiMode): {
   return {};
 }
 
-function CreateVaultSourceStep({ draft, errors, onChange }: StepProps) {
+function CreateVaultSourceStep({ draft, errors, onChange, existingDisplayNames = [] }: StepProps) {
   const { t } = useTranslation();
-  const { typography } = useTheme();
+  const { colors, typography } = useTheme();
   const createVaultService = useCreateVaultService();
+  const [pickError, setPickError] = useState<"file" | "folder" | null>(null);
+
+  const changeSource = (patch: Partial<CreateVaultDraft>) => {
+    invalidateImportPicks();
+    setPickError(null);
+    const previous = draft.importFilePath;
+    const next = patch.importFilePath ?? previous;
+    onChange(patch);
+    if (previous && previous !== next) void releasePendingImport(previous).catch(() => undefined);
+  };
+
+  const applyPicked = (picked: { path: string; fileName: string; shape: "file" | "directory" }) => {
+    onChange(createVaultImportSelectionPatch(picked, draft.importFilePath, existingDisplayNames));
+  };
+
+  const acceptPicked = (
+    generation: number,
+    picked: { path: string; fileName: string } | null,
+    shape: "file" | "directory",
+  ) => {
+    if (!picked) return;
+    if (generation !== importPickGeneration) {
+      void releasePendingImport(picked.path).catch(() => undefined);
+      return;
+    }
+    const previous = draft.importFilePath;
+    if (previous && previous !== picked.path) {
+      void releasePendingImport(previous).catch(() => undefined);
+    }
+    applyPicked({ ...picked, shape });
+  };
 
   const chooseImportFile = () => {
-    void createVaultService.selectImportPackageForProbe().then((picked) => {
-      if (!picked) return;
-      onChange({
-        source: "import",
-        importFileName: picked.fileName,
-        importFilePath: picked.path,
-        displayName: importDisplayNameFromFilename(picked.fileName).displayName,
-        password: "",
-        passwordConfirm: "",
-        passwordValidated: false,
-        passwordTestFailed: false,
-        passwordProbeUnavailable: false,
-        importKind: "file",
+    const generation = importPickGeneration;
+    setPickError(null);
+    void createVaultService
+      .selectImportPackageForProbe()
+      .then((picked) => {
+        acceptPicked(generation, picked, "file");
+      })
+      .catch(() => {
+        if (generation !== importPickGeneration) return;
+        setPickError("file");
       });
-    });
   };
+
+  const chooseImportFolder = () => {
+    const generation = importPickGeneration;
+    setPickError(null);
+    void createVaultService
+      .selectImportFolder?.()
+      .then((picked) => {
+        acceptPicked(generation, picked, "directory");
+      })
+      .catch(() => {
+        if (generation !== importPickGeneration) return;
+        setPickError("folder");
+      });
+  };
+
+  const showExtract = importExtractApplies(draft);
+  const extractOn = importExtractEnabled(draft);
+  const archiveName = draft.importFileName.trim().toLowerCase();
+  const showFolder = Platform.OS === "android" && Boolean(createVaultService.selectImportFolder);
 
   const importFilePicker = (
     <View style={styles.fields}>
       <ThemedInput
-        value={draft.importFileName}
+        value={draft.source === "import" ? draft.importFileName : ""}
         editable={false}
         placeholder={t("vault.create.import_file_placeholder")}
         mono
@@ -146,6 +207,63 @@ function CreateVaultSourceStep({ draft, errors, onChange }: StepProps) {
         variant="ghost"
         onPress={chooseImportFile}
       />
+      {showFolder ? (
+        <Button
+          label={t("vault.create.action.choose_folder")}
+          variant="ghost"
+          onPress={chooseImportFolder}
+        />
+      ) : null}
+      {pickError ? (
+        <Text
+          accessibilityRole="alert"
+          style={[typography.caption, { color: colors.onErrorContainer }]}
+        >
+          {t(
+            pickError === "folder"
+              ? "vault.create.import_folder_unreadable"
+              : "error.import_source_unreadable",
+          )}
+        </Text>
+      ) : null}
+      {showExtract ? (
+        <SwitchRow
+          label={t("vault.create.extract")}
+          hint={t("vault.create.extract_hint")}
+          value={draft.importExtract}
+          onValueChange={(importExtract) =>
+            onChange({
+              importExtract,
+              password: "",
+              passwordConfirm: "",
+              passwordValidated: false,
+              passwordTestFailed: false,
+              passwordProbeUnavailable: false,
+            })
+          }
+        />
+      ) : null}
+      {draft.source === "import" && draft.importShape === "directory" ? (
+        <Text style={[typography.caption, { color: colors.onSurfaceVariant }]}>
+          {t("vault.create.option.import_folder_note")}
+        </Text>
+      ) : null}
+      {extractOn && archiveName.endsWith(".7z") ? (
+        <Text
+          accessibilityRole="alert"
+          style={[typography.caption, { color: colors.onErrorContainer }]}
+        >
+          {t("vault.create.option.import_7z_warn")}
+        </Text>
+      ) : null}
+      {extractOn && draft.zipLayout === "files" ? (
+        <Text
+          accessibilityRole="alert"
+          style={[typography.caption, { color: colors.onErrorContainer }]}
+        >
+          {t("vault.create.option.import_files_zip_note")}
+        </Text>
+      ) : null}
     </View>
   );
 
@@ -160,11 +278,16 @@ function CreateVaultSourceStep({ draft, errors, onChange }: StepProps) {
           description={t("vault.create.option.scratch_desc")}
           badge="default"
           onSelect={() =>
-            onChange({
+            changeSource({
               source: "scratch",
               importFileName: "",
               importFilePath: "",
               importKind: "file",
+              importShape: "file",
+              importExtract: true,
+              zipLayout: null,
+              importZipRejected: false,
+              importZipProbeFailed: false,
               passwordValidated: false,
               passwordTestFailed: false,
               passwordProbeUnavailable: false,
@@ -177,17 +300,25 @@ function CreateVaultSourceStep({ draft, errors, onChange }: StepProps) {
           title={t("vault.create.option.import")}
           description={t("vault.create.option.import_desc")}
           footer={importFilePicker}
-          onSelect={() =>
-            onChange({
+          onSelect={() => {
+            if (draft.source === "import") return;
+            changeSource({
               source: "import",
+              importFileName: "",
+              importFilePath: "",
               importKind: "file",
+              importShape: "file",
+              importExtract: true,
+              zipLayout: null,
+              importZipRejected: false,
+              importZipProbeFailed: false,
               password: "",
               passwordConfirm: "",
               passwordValidated: false,
               passwordTestFailed: false,
               passwordProbeUnavailable: false,
-            })
-          }
+            });
+          }}
         />
       </RadioGroup>
       <FieldErrors errors={createVaultErrorsForField(errors, "source")} />
@@ -260,18 +391,25 @@ function CreateVaultPasswordStep({
   const { t } = useTranslation();
   const { colors, typography } = useTheme();
   const isImport = draft.source === "import";
+  const wrapsDocuments = importZipWrapsDocuments(draft);
+  const setsVaultPassword = !isImport || importSetsVaultPassword(draft);
   const needsArchivePassword = createVaultImportNeedsArchivePassword(draft);
+  const showPassword = setsVaultPassword || needsArchivePassword;
 
   return (
     <View style={styles.fields}>
       <Text style={typography.bodyMuted}>
-        {isImport
-          ? needsArchivePassword
+        {wrapsDocuments
+          ? t("vault.create.password_files_intro")
+          : needsArchivePassword
             ? t("vault.create.password_import_intro")
-            : t("vault.create.password_import_copy_intro")
-          : t("vault.create.password_scratch_intro")}
+            : setsVaultPassword
+              ? isImport
+                ? t("vault.create.password_wrap_intro")
+                : t("vault.create.password_scratch_intro")
+              : t("vault.create.password_import_copy_intro")}
       </Text>
-      {!isImport || needsArchivePassword ? (
+      {showPassword ? (
         <>
           <FieldLabel>{t("vault.create.password")}</FieldLabel>
           <PasswordInput
@@ -293,7 +431,7 @@ function CreateVaultPasswordStep({
         </>
       ) : null}
       <FieldErrors errors={createVaultErrorsForField(errors, "password")} />
-      {!isImport ? (
+      {setsVaultPassword ? (
         <>
           <FieldLabel>{t("vault.create.password_confirm")}</FieldLabel>
           <PasswordInput
@@ -494,6 +632,7 @@ function CreateVaultGeneralStep({
         <KdfSection
           config={draft.kdf}
           choosesPreset={createVaultChoosesKdf(draft)}
+          archivePreset={draft.archiveUnlockPreset}
           onChange={(patch) => onChange({ kdf: { ...draft.kdf, ...patch } })}
         />
       </SettingsAccordionSection>

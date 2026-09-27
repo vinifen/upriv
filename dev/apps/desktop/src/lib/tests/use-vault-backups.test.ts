@@ -68,7 +68,7 @@ describe("useVaultBackups", () => {
 
     let deleteDone: Promise<void> | undefined;
     act(() => {
-      deleteDone = result.current.deleteBackups(["s1"]);
+      deleteDone = result.current.deleteBackups(["s1-vault-a.zip"]);
     });
     expect(result.current.isBusy).toBe(true);
 

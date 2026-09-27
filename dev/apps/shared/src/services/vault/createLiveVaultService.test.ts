@@ -51,6 +51,27 @@ describe("createLiveVaultService", () => {
     expect(rename).toHaveBeenCalledWith("notes", "Work Docs");
   });
 
+  it("routes a files zip away from the store-zip import", async () => {
+    const importZip = vi.fn();
+    const importFilesZip = vi.fn(async () => ({ id: "photos" }) as never);
+    const createVault = vi.fn();
+    const service = createLiveVaultService({
+      listVaults: vi.fn(async () => []),
+      createVault,
+      getSettings: vi.fn(),
+      importZip,
+      importFilesZip,
+    });
+    await service.createVault({
+      password: "secret",
+      settings: { vault: { id: "photos" } } as never,
+      importPackage: { kind: "files_zip", archivePath: "/tmp/Photos.zip" },
+    });
+    expect(importFilesZip).toHaveBeenCalledOnce();
+    expect(importZip).not.toHaveBeenCalled();
+    expect(createVault).not.toHaveBeenCalled();
+  });
+
   it("forwards export password probe when wired", async () => {
     const probeExportPassword = vi.fn(async () => true);
     const service = createLiveVaultService({

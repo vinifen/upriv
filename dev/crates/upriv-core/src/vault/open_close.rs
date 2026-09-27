@@ -11,7 +11,10 @@ use crate::session::{
     record_unlock_failure, record_unlock_success, take_session, with_open_session,
     with_unlock_lock, with_vault_dir_lock, ClosingGuard, OpenSession, PreparingGuard,
 };
-use crate::store::{content_hash_hex, flush_index_parts, open_store};
+use crate::store::{
+    content_hash_hex, flush_index_parts, open_store, pack_blob_waste, BlobPackMode,
+    ChunkBlobMutation,
+};
 
 use super::backup::backup_on_close;
 use super::persistence::{save_vault_persistence, VaultPersistence};
@@ -74,8 +77,27 @@ fn try_attach_mount(root: &VaultRoot, vault_id: &str, vault_dir: &std::path::Pat
     }
 }
 
-/// Unlock into a RAM session. Password bytes are used exactly as given.
+/// Unlock into a RAM session and attach the FUSE mount. Password bytes are used exactly as given.
 pub fn open_vault(root: &VaultRoot, vault_id: &str, password: &[u8]) -> Result<()> {
+    open_unlocked_session(root, vault_id, password, true)
+}
+
+/// Unlock for an in-process ingest (portable `.7z` import). No FUSE mount:
+/// a half-written vault must not appear on the desktop where a file manager can block on it.
+pub(crate) fn open_vault_for_ingest(
+    root: &VaultRoot,
+    vault_id: &str,
+    password: &[u8],
+) -> Result<()> {
+    open_unlocked_session(root, vault_id, password, false)
+}
+
+fn open_unlocked_session(
+    root: &VaultRoot,
+    vault_id: &str,
+    password: &[u8],
+    attach_mount: bool,
+) -> Result<()> {
     if password.is_empty() {
         return Err(UprivError::WrongPassword);
     }
@@ -119,12 +141,15 @@ pub fn open_vault(root: &VaultRoot, vault_id: &str, password: &[u8]) -> Result<(
                 opened,
             );
             session.lock = Some(lock);
+            session.skip_close_backup = !attach_mount;
             insert_session(session)?;
             if let Err(error) = mark_session_open(root, vault_id, None) {
                 let _ = take_session(&vault_dir);
                 return Err(error);
             }
-            try_attach_mount(root, vault_id, &vault_dir)?;
+            if attach_mount {
+                try_attach_mount(root, vault_id, &vault_dir)?;
+            }
             log_event(LogLevel::Info, "vault_opened", &[("id", vault_id)]);
             Ok(())
         })
@@ -161,7 +186,51 @@ fn close_vault_inner(
     let store = vault_dir.join(crate::paths::STORE_DIR_NAME);
     let mut backup_failed = false;
     let persist = (|| {
-        flush_index_parts(&store, &session.header, &session.index_key, &session.index)?;
+        let packed = match pack_blob_waste(
+            &store,
+            &session.header,
+            &session.content_key,
+            &mut session.index,
+            BlobPackMode::Close,
+            None,
+        ) {
+            Ok(mutation) => mutation,
+            Err(_error) => {
+                log_event(
+                    LogLevel::Warn,
+                    "vault_blob_pack_failed",
+                    &[("id", vault_id)],
+                );
+                ChunkBlobMutation::default()
+            }
+        };
+        let packed_ok = if packed.created.is_empty() {
+            false
+        } else if packed.sync_before_index().is_ok() {
+            true
+        } else {
+            packed.restore_packed_nodes(&mut session.index);
+            packed.discard_created();
+            log_event(
+                LogLevel::Warn,
+                "vault_blob_pack_failed",
+                &[("id", vault_id)],
+            );
+            false
+        };
+        if let Err(error) =
+            flush_index_parts(&store, &session.header, &session.index_key, &session.index)
+        {
+            if packed_ok {
+                packed.restore_packed_nodes(&mut session.index);
+                packed.discard_created();
+            }
+            return Err(error);
+        }
+        session.index.clear_unsealed_holes();
+        if packed_ok {
+            packed.delete_superseded();
+        }
         let hash = content_hash_hex(&store)?;
         let display_name = crate::config::load_vault_config_raw(&vault_dir)
             .map(|c| c.vault.display_name)
@@ -170,14 +239,16 @@ fn close_vault_inner(
             &vault_dir,
             &VaultPersistence::closed(session.vault_id.clone(), display_name, Some(hash)),
         )?;
-        if let Err(_error) = backup_on_close(root, vault_id) {
-            backup_failed = true;
-            // No `detail`: `UprivError`'s Display text includes filesystem paths.
-            log_event(
-                LogLevel::Warn,
-                "vault_backup_on_close_failed",
-                &[("id", vault_id)],
-            );
+        if !session.skip_close_backup {
+            if let Err(_error) = backup_on_close(root, vault_id) {
+                backup_failed = true;
+                // No `detail`: `UprivError`'s Display text includes filesystem paths.
+                log_event(
+                    LogLevel::Warn,
+                    "vault_backup_on_close_failed",
+                    &[("id", vault_id)],
+                );
+            }
         }
         Ok(())
     })();
@@ -242,6 +313,49 @@ pub fn close_all_vaults(root: &VaultRoot) -> Result<Vec<String>> {
         Some(error) => Err(error),
         None => Ok(closed),
     }
+}
+
+/// Remove a vault whose import did not finish.
+///
+/// The partial `store/` is discarded. Closing it would flush that tree and
+/// write a backup, which needs more free space and can fail when the disk is
+/// already full. Drop the session so delete is not refused, then remove the
+/// folder.
+pub(crate) fn delete_failed_import(root: &VaultRoot, vault_id: &str) -> Result<()> {
+    let dir = root.vault_dir(vault_id)?;
+    if is_vault_open_at(&dir) {
+        drop(take_session(&dir)?);
+    }
+    if dir.is_dir() {
+        super::delete::delete_vault(root, vault_id)?;
+    }
+    Ok(())
+}
+
+/// Drop a failed import and always surface `ingest_error`.
+///
+/// A cleanup failure is logged and tried once more. It does not replace the
+/// reason the import stopped.
+pub(crate) fn abandon_failed_import(
+    root: &VaultRoot,
+    vault_id: &str,
+    ingest_error: UprivError,
+) -> UprivError {
+    if let Err(_error) = delete_failed_import(root, vault_id) {
+        log_event(
+            LogLevel::Warn,
+            "vault_import_cleanup_failed",
+            &[("id", vault_id)],
+        );
+        if let Err(_error) = delete_failed_import(root, vault_id) {
+            log_event(
+                LogLevel::Warn,
+                "vault_import_cleanup_retry_failed",
+                &[("id", vault_id)],
+            );
+        }
+    }
+    ingest_error
 }
 
 #[cfg(test)]

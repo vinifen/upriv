@@ -66,6 +66,12 @@ import { CONTROL_HEIGHT_MD, MAX_WIDTH_VAULT_LIST, spacing } from "@/theme/tokens
 import { exportVaultPackage } from "@/features/vaults/list/exportVaultPackage";
 import { useVaultLifecycle } from "@/features/vaults/lifecycle";
 import { useFileManager } from "@/features/vaults/file-manager";
+import {
+  claimContentTreeForCreate,
+  contentTreeClaimedForCreate,
+  releaseContentJob,
+  releaseContentTree,
+} from "@/platform/native/contentTreeImport";
 import { useVaultListModals } from "./useVaultListModals";
 import { useVaultListState } from "./useVaultListState";
 import { flattenHierarchyRows, packRowsForBlocks } from "../lib/hierarchyRows";
@@ -128,6 +134,8 @@ export function useVaultListScreen() {
     vaultInfoVaultId,
     exportVault,
     setExportVault,
+    exportJob,
+    setExportJob,
     setExportSubmitting,
     setBackupsVault,
     settingsGroupOpenRef,
@@ -162,6 +170,7 @@ export function useVaultListScreen() {
 
   const existingVaultIds = useMemo(() => vaults.map((vault) => vault.id), [vaults]);
   const existingOrders = useMemo(() => vaults.map((vault) => vault.order ?? 0), [vaults]);
+  const existingDisplayNames = useMemo(() => vaults.map((vault) => vault.displayName), [vaults]);
 
   const openCreate = useCallback(
     (draft: CreateVaultDraft | null = null, step: CreateVaultStepId | null = null) => {
@@ -350,12 +359,13 @@ export function useVaultListScreen() {
 
   const handleConfirmExportVault = useCallback(
     (request: VaultExportRequest) => {
-      if (!exportVault) return;
+      if (!exportVault || exportJob) return;
       const vault = exportVault;
       const gen = ++exportBusyGenRef.current;
       exportAbortRef.current?.abort();
       const abort = new AbortController();
       exportAbortRef.current = abort;
+      setExportJob({ vaultId: vault.id, startedAt: Date.now() });
       setExportSubmitting(true);
       void exportVaultPackage(
         vault,
@@ -378,16 +388,36 @@ export function useVaultListScreen() {
           show(t(mobileErrorI18nKey(error, "vault.export.failed")));
         })
         .finally(() => {
-          if (gen === exportBusyGenRef.current) setExportSubmitting(false);
+          if (gen !== exportBusyGenRef.current) return;
+          setExportSubmitting(false);
+          setExportJob(null);
         });
     },
-    [exportVault, setExportSubmitting, setExportVault, show, t, vaultService],
+    [
+      exportJob,
+      exportVault,
+      setExportJob,
+      setExportSubmitting,
+      setExportVault,
+      show,
+      t,
+      vaultService,
+    ],
   );
 
   const handleRowExport = useCallback(
     (vault: VaultListItem) => {
       const listStatus = resolveVaultListStatus(vault, pipelineStatus);
       if (!vaultService.canExportVault) return;
+      if (exportJob && exportJob.vaultId !== vault.id) {
+        show(t("vault.export.busy"));
+        return;
+      }
+      if (exportJob?.vaultId === vault.id) {
+        const current = vaults.find((item) => item.id === vault.id) ?? vault;
+        setExportVault(current);
+        return;
+      }
       if (
         listStatus === "opening" ||
         listStatus === "closing" ||
@@ -403,7 +433,7 @@ export function useVaultListScreen() {
       }
       setExportVault(vault);
     },
-    [pipelineStatus, setExportVault, show, t, vaultService.canExportVault],
+    [exportJob, pipelineStatus, setExportVault, show, t, vaultService.canExportVault, vaults],
   );
 
   const isVaultPipelineBusy = lifecycle.isVaultPipelineBusy;
@@ -893,14 +923,20 @@ export function useVaultListScreen() {
     exportBusyGenRef.current += 1;
     exportAbortRef.current?.abort();
     setExportSubmitting(false);
+    setExportJob(null);
     show(t("error.operation_timed_out"));
-  }, [setExportSubmitting, show, t]);
+  }, [setExportJob, setExportSubmitting, show, t]);
 
   const handleCreateVault = (result: CreateVaultResult, password: string) => {
-    if (
-      vaults.some((vault) => vault.id === result.vaultId) ||
-      isVaultPipelineBusy(result.vaultId)
-    ) {
+    const listed = vaults.some((vault) => vault.id === result.vaultId);
+    const createInFlight =
+      lifecycle.creatingVaultIds.length > 0 || (isVaultPipelineBusy(result.vaultId) && !listed);
+    if (createInFlight) {
+      show(t("vault.create.busy"));
+      releaseContentTree(result.importFilePath ?? "");
+      return;
+    }
+    if (listed) {
       throw new RpcError(
         VAULT_ERROR_CODES.VAULT_ALREADY_EXISTS,
         `vault already exists: ${result.vaultId}`,
@@ -920,6 +956,10 @@ export function useVaultListScreen() {
     if (groupEffect) {
       pendingCreateGroupsRef.current.set(result.vaultId, groupEffect);
       setGroups((current) => applyPendingCreateGroupEffect(current, groupEffect));
+    }
+
+    if (result.importShape === "directory") {
+      claimContentTreeForCreate(result.vaultId, result.importFilePath ?? "");
     }
 
     const started = lifecycle.startCreatePipeline(
@@ -966,10 +1006,16 @@ export function useVaultListScreen() {
             setGroups((current) => rollbackPendingCreateGroupEffect(current, pendingEffect));
           }
         },
+        onAbandoned: () => {
+          const claimed = contentTreeClaimedForCreate(result.vaultId);
+          if (claimed) releaseContentJob(claimed);
+        },
       },
     );
 
     if (!started) {
+      const claimed = contentTreeClaimedForCreate(result.vaultId);
+      if (claimed) releaseContentJob(claimed);
       const pendingEffect = pendingCreateGroupsRef.current.get(result.vaultId);
       pendingCreatesRef.current.delete(result.vaultId);
       pendingCreateGroupsRef.current.delete(result.vaultId);
@@ -1015,6 +1061,7 @@ export function useVaultListScreen() {
     canReorder,
     existingVaultIds,
     existingOrders,
+    existingDisplayNames,
     noteVault,
     vaultInfoVault,
     displayRowsRef,

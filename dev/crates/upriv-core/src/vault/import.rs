@@ -1,4 +1,4 @@
-//! Import a `.zip` of `store/` (ciphertext copy) or unpack `backups/<stamp>.zip`
+//! Import a `.zip` of `store/` (ciphertext copy) or unpack `backups/<stamp>-<id>.zip`
 //! into a new vault.
 
 use std::fs::File;
@@ -12,10 +12,32 @@ use crate::paths::{display_name_to_vault_id, VaultRoot};
 use crate::session::{with_vault_dir_lock, with_vault_registry_lock, PreparingGuard};
 use crate::store::{content_hash_hex, load_header, INDEX_DIR_NAME};
 
-use super::backup::{backup_zip_file, copy_ciphertext_tree, is_backup_stamp};
+use super::backup::{backup_locator_from_leaf, backup_zip_file, copy_ciphertext_tree};
+use super::embedded_settings::{parse_embedded_settings, EmbeddedVaultSettings};
 use super::persistence::{save_vault_persistence, VaultPersistence};
 use super::seven_zip_pack::{ensure_seven_zip_export_ram, try_vec_with_capacity};
-use super::zip_io::{unzip_store_bytes, unzip_store_path};
+use super::zip_io::{read_zip_config_toml, unzip_store_bytes, unzip_store_path};
+
+pub(crate) fn map_archive_open_error(path: &Path, error: std::io::Error) -> UprivError {
+    match crate::paths::nofollow_reject(&error) {
+        Some(crate::paths::NofollowReject::Symlink) => UprivError::VaultStoreInvalid {
+            path: path.to_path_buf(),
+            detail: "refusing a symlink".into(),
+        },
+        Some(crate::paths::NofollowReject::NonFile) => UprivError::VaultStoreInvalid {
+            path: path.to_path_buf(),
+            detail: "refusing a non-file".into(),
+        },
+        None if matches!(
+            error.kind(),
+            ErrorKind::NotFound | ErrorKind::PermissionDenied
+        ) =>
+        {
+            UprivError::ImportArchiveNotFound(path.to_path_buf())
+        }
+        None => error.into(),
+    }
+}
 
 fn prepare_imported_id(root: &VaultRoot, config: &mut VaultConfig) -> Result<String> {
     if config.storage_mode() == VaultStorageMode::UprivPlain {
@@ -64,6 +86,7 @@ fn materialize_imported_store(
             save_vault_config(&dest, &config)?;
             let store = dest.join(crate::paths::STORE_DIR_NAME);
             fill_store(&store)?;
+            crate::store::ensure_danger_notice(&store)?;
             load_header(&store)?;
             if !store.join(INDEX_DIR_NAME).is_dir() {
                 return Err(UprivError::VaultStoreInvalid {
@@ -117,8 +140,9 @@ pub fn import_store_tree(root: &VaultRoot, config: VaultConfig, src: &Path) -> R
     materialize_imported_store(root, config, |store| copy_ciphertext_tree(src, store))
 }
 
-/// Locator `vaults/<id>/backups/<stamp>` or `…/backups/saves/<stamp>` (optional `.zip`).
-/// On disk the snapshot is always `<stamp>.zip`.
+/// Locator `vaults/<id>/backups/<leaf>` or `…/backups/saves/<leaf>`.
+/// The leaf is a stamp or the on-disk name `<stamp>-<id>.zip`. The file name
+/// selects one zip when two store zips share a stamp.
 pub fn parse_backup_import_path(path: &str) -> Option<(String, String)> {
     let normalized = path.replace('\\', "/");
     let parts: Vec<&str> = normalized
@@ -136,24 +160,45 @@ pub fn parse_backup_import_path(path: &str) -> Option<(String, String)> {
     match parts.get(vaults_idx + 3).copied() {
         Some("saves") => {
             let raw = (*parts.get(vaults_idx + 4)?).to_string();
-            let stamp = raw.strip_suffix(".zip").unwrap_or(&raw);
-            if parts.len() != vaults_idx + 5 || !is_backup_stamp(stamp) {
+            let stamp = backup_locator_from_leaf(&raw)?;
+            if parts.len() != vaults_idx + 5 {
                 return None;
             }
-            Some((id, stamp.to_string()))
+            Some((id, format!("saves/{stamp}")))
         }
         Some(raw) => {
-            let stamp = raw.strip_suffix(".zip").unwrap_or(raw);
-            if parts.len() != vaults_idx + 4 || !is_backup_stamp(stamp) {
+            let stamp = backup_locator_from_leaf(raw)?;
+            if parts.len() != vaults_idx + 4 {
                 return None;
             }
-            Some((id, stamp.to_string()))
+            Some((id, stamp))
         }
         None => None,
     }
 }
 
-/// Unpack `backups/<stamp>.zip` into a new vault.
+/// Public settings inside a store zip or a backup locator. Missing entry is `Ok(None)`.
+pub fn read_import_zip_settings(
+    root: &VaultRoot,
+    archive_path: &str,
+) -> Result<Option<EmbeddedVaultSettings>> {
+    let zip_path = if let Some((id, stamp)) = parse_backup_import_path(archive_path) {
+        backup_zip_file(root, &id, &stamp)?
+    } else {
+        let path = Path::new(archive_path);
+        if !path.is_absolute() || !path.is_file() {
+            return Err(UprivError::ImportArchiveNotFound(path.to_path_buf()));
+        }
+        path.to_path_buf()
+    };
+    let file = File::open(&zip_path)?;
+    match read_zip_config_toml(file)? {
+        Some(bytes) => Ok(Some(parse_embedded_settings(&bytes)?)),
+        None => Ok(None),
+    }
+}
+
+/// Unpack `backups/<stamp>-<id>.zip` into a new vault.
 pub fn import_from_backup(
     root: &VaultRoot,
     source_vault_id: &str,
@@ -170,29 +215,20 @@ pub fn read_import_archive_bytes(path: &Path) -> Result<Vec<u8>> {
     if !path.is_absolute() {
         return Err(UprivError::ImportArchiveNotFound(path.to_path_buf()));
     }
-    let meta = match std::fs::metadata(path) {
-        Ok(meta) => meta,
-        Err(error)
-            if matches!(
-                error.kind(),
-                ErrorKind::NotFound | ErrorKind::PermissionDenied
-            ) =>
-        {
-            return Err(UprivError::ImportArchiveNotFound(path.to_path_buf()));
-        }
-        Err(error) => return Err(error.into()),
+    let file = match crate::paths::open_nofollow(path, crate::paths::NofollowMode::Read) {
+        Ok(file) => file,
+        Err(error) => return Err(map_archive_open_error(path, error)),
     };
-    if !meta.is_file() {
-        return Err(UprivError::ImportArchiveNotFound(path.to_path_buf()));
-    }
-    ensure_seven_zip_export_ram(meta.len())?;
-    let mut buf = try_vec_with_capacity(meta.len())?;
-    let file = File::open(path)?;
-    file.take(meta.len()).read_to_end(&mut buf)?;
+    let len = file.metadata()?.len();
+    // This path copies the archive into a buffer. The decoder's own check is
+    // only the slack in `seven_zip_import_ram_needed`.
+    ensure_seven_zip_export_ram(len)?;
+    let mut buf = try_vec_with_capacity(len)?;
+    file.take(len).read_to_end(&mut buf)?;
     Ok(buf)
 }
 
-/// Zip file, ciphertext directory, or in-root backup locator (`vaults/<id>/backups/<stamp>.zip`).
+/// Zip file, ciphertext directory, or in-root backup locator (`vaults/<id>/backups/<stamp>`).
 pub fn import_store_from_archive_path(
     root: &VaultRoot,
     config: VaultConfig,
@@ -241,12 +277,20 @@ mode = "encrypted_dir"
     #[test]
     fn parse_backup_import_path_accepts_relative_and_absolute() {
         assert_eq!(
+            parse_backup_import_path("vaults/notes/backups/20260528120000-notes.zip"),
+            Some(("notes".into(), "20260528120000-notes.zip".into()))
+        );
+        assert_eq!(
+            parse_backup_import_path("vaults/notes/backups/saves/20260528120000-notes.zip"),
+            Some(("notes".into(), "saves/20260528120000-notes.zip".into()))
+        );
+        assert_eq!(
             parse_backup_import_path("vaults/notes/backups/20260528120000.zip"),
-            Some(("notes".into(), "20260528120000".into()))
+            None
         );
         assert_eq!(
             parse_backup_import_path("/home/u/.upriv/vaults/notes/backups/saves/20260528120000"),
-            Some(("notes".into(), "20260528120000".into()))
+            Some(("notes".into(), "saves/20260528120000".into()))
         );
         assert_eq!(parse_backup_import_path("/tmp/Notes.zip"), None);
         assert_eq!(parse_backup_import_path("vaults/notes/store"), None);
@@ -286,6 +330,11 @@ mode = "encrypted_dir"
         assert!(root.vault_store_dir("notes-backup").unwrap().is_dir());
         crate::store::load_header(root.vault_store_dir("notes-backup").unwrap())
             .expect("imported header");
+        let notice = crate::store::STORE_DANGER_FILE_NAME;
+        assert_eq!(
+            std::fs::read(root.vault_store_dir("notes").unwrap().join(notice)).unwrap(),
+            std::fs::read(root.vault_store_dir("notes-backup").unwrap().join(notice)).unwrap()
+        );
     }
 
     #[test]

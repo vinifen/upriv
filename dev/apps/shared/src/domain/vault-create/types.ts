@@ -3,8 +3,14 @@ import type { VaultSettingsConfig } from "../vault-settings";
 
 export type CreateVaultSource = "import" | "scratch";
 
+/** Result of reading a `.zip` central directory. `null` until the probe returns. */
+export type ZipImportLayout = "store" | "files";
+
 /** How an import draft was chosen — a backup tree is not a `.7z` archive. */
 export type CreateVaultImportKind = "file" | "backup";
+
+/** What the Import option picked. A directory's children become the vault root. */
+export type CreateVaultImportShape = "file" | "directory";
 
 export const CREATE_VAULT_STEPS = [
   "source",
@@ -30,8 +36,28 @@ export interface CreateVaultDraft {
   source: CreateVaultSource | null;
   /** `backup` skips 7z password/probe and copies frozen `store/`. */
   importKind: CreateVaultImportKind;
+  /** `directory` copies the folder's children. `file` is one file or an archive. */
+  importShape: CreateVaultImportShape;
+  /**
+   * Unpack an ordinary `.zip` or `.7z`. Ignored for a folder, a normal file,
+   * and a Upriv store `.zip`. Defaults on.
+   */
+  importExtract: boolean;
   importFileName: string;
   importFilePath: string;
+  /**
+   * Set when a `.zip` has been examined. `store` copies ciphertext.
+   * `files` wraps the documents into a new vault. `null` for scratch, `.7z`,
+   * backup, or a `.zip` still being read.
+   */
+  zipLayout: ZipImportLayout | null;
+  /** Classification refused this `.zip` (not a store copy and not documents). */
+  importZipRejected: boolean;
+  /**
+   * The probe threw before it returned a layout. The zip stays blocked.
+   * This is not a classification refusal, so Extract stays hidden.
+   */
+  importZipProbeFailed: boolean;
   displayName: string;
   note: string;
   password: string;
@@ -45,9 +71,16 @@ export interface CreateVaultDraft {
   backup: VaultSettingsConfig["backup"];
   /** Create-time only — written to `vault.header`, not `config.toml`. */
   kdf: { unlock_preset: KdfUnlockPreset };
+  /**
+   * Preset already stored in an imported `vault.header`. Shown on the disabled
+   * KDF list. `null` means the archive did not say, so nothing is selected.
+   */
+  archiveUnlockPreset: KdfUnlockPreset | null;
   storage: VaultSettingsConfig["storage"];
   mount: VaultSettingsConfig["mount"];
-  security: Pick<VaultSettingsConfig["security"], "mode" | "secure_wipe_workspace">;
+  security: Omit<VaultSettingsConfig["security"], "password_changed_at">;
+  /** Carried from an import so create does not reset compression the form does not show. */
+  seven_zip: VaultSettingsConfig["seven_zip"];
   policy: VaultSettingsConfig["policy"];
   order: number;
   hidden: boolean;
@@ -72,6 +105,9 @@ export interface CreateVaultResult {
   groupAssignment: CreateVaultGroupAssignment;
   source: CreateVaultSource;
   importKind: CreateVaultImportKind;
+  importShape: CreateVaultImportShape;
+  importExtract: boolean;
+  zipLayout: ZipImportLayout | null;
   importFilePath?: string;
   importFileName?: string;
 }

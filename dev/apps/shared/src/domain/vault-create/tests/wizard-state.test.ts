@@ -169,6 +169,31 @@ describe("resolveCreateVaultCloseIntent", () => {
     expect(resolveCreateVaultCloseIntent(openedAt("identity"))).toBe("close");
   });
 
+  it("keeps a failed zip probe when the user discards later edits", () => {
+    const opened = openedAt(
+      "source",
+      createVaultDraftFixture([], {
+        source: "import",
+        importFileName: "Photos.zip",
+        importFilePath: "/tmp/Photos.zip",
+        displayName: "Photos",
+      }),
+    );
+    const edited = reduce(opened, { type: "draftPatched", patch: { displayName: "Renamed" } });
+    const classified = reduce(edited, {
+      type: "zipClassified",
+      zipLayout: null,
+      rejected: false,
+      probeFailed: true,
+    });
+    expect(classified.draft.importZipProbeFailed).toBe(true);
+    expect(classified.baseline.importZipProbeFailed).toBe(true);
+    const discarded = reduce(classified, { type: "draftDiscarded" });
+    expect(discarded.draft.displayName).toBe("Photos");
+    expect(discarded.draft.importZipProbeFailed).toBe(true);
+    expect(resolveCreateVaultCloseIntent(discarded)).toBe("close");
+  });
+
   it("asks for confirmation once the draft differs from the baseline", () => {
     const edited = reduce(openedAt("identity"), {
       type: "draftPatched",

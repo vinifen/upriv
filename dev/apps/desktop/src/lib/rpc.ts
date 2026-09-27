@@ -24,11 +24,13 @@ import type {
   VaultSettingsConfig,
 } from "@upriv/shared";
 import {
+  backupSnapshotFileName,
   bytesFromContentB64,
   isLifecyclePasswordPresent,
   normalizeAppSettings,
   normalizeVaultSettingsConfig,
   parseAppLogFile,
+  parseEmbeddedVaultSettings,
   parseDefaultRootStatus,
   parseVaultGroupListResult,
   parseVaultGroupWire,
@@ -502,6 +504,26 @@ function parseCloseVaultOutcome(raw: unknown): CloseVaultOutcome {
   return { backupFailed: (raw as { backupFailed?: unknown }).backupFailed === true };
 }
 
+export async function rpcVaultStoreSize(id: string): Promise<number> {
+  const raw = await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_STORE_SIZE, { id });
+  if (typeof raw !== "object" || raw === null) {
+    throw new RpcError(
+      BRIDGE_ERROR_CODES.INVALID_RESPONSE,
+      "vault_store_size: expected object",
+      raw,
+    );
+  }
+  const storeBytes = (raw as { storeBytes?: unknown }).storeBytes;
+  if (typeof storeBytes !== "number" || !Number.isFinite(storeBytes) || storeBytes < 0) {
+    throw new RpcError(
+      BRIDGE_ERROR_CODES.INVALID_RESPONSE,
+      "vault_store_size: expected storeBytes",
+      raw,
+    );
+  }
+  return storeBytes;
+}
+
 export async function rpcVaultConfigGet(id: string): Promise<VaultSettingsConfig> {
   const raw = await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_CONFIG_GET, { id });
   if (typeof raw !== "object" || raw === null) {
@@ -642,12 +664,39 @@ export async function rpcVaultImport7z(input: CreateVaultInput): Promise<VaultLi
   return parseVaultResult(raw, "vault_import_7z");
 }
 
+export async function rpcVaultImportFilesZip(input: CreateVaultInput): Promise<VaultListItem> {
+  const pkg = input.importPackage;
+  const raw = await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_IMPORT_FILES_ZIP, {
+    settings: input.settings,
+    password: input.password,
+    unlockPreset: input.unlockPreset,
+    archivePath: pkg?.archivePath,
+    contentB64: pkg?.contentB64,
+  });
+  return parseVaultResult(raw, "vault_import_files_zip");
+}
+
+export async function rpcVaultImportOsPath(input: CreateVaultInput): Promise<VaultListItem> {
+  const pkg = input.importPackage;
+  const raw = await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_IMPORT_OS_PATH, {
+    settings: input.settings,
+    password: input.password,
+    unlockPreset: input.unlockPreset,
+    archivePath: pkg?.archivePath,
+  });
+  return parseVaultResult(raw, "vault_import_os_path");
+}
+
 export async function rpcVaultImportProbe(params: {
   archivePath?: string;
   contentB64?: string;
   archivePassword?: string;
   kind?: string;
-}): Promise<{ ok: boolean; kind: string }> {
+}): Promise<{
+  ok: boolean;
+  kind: string;
+  embedded: ReturnType<typeof parseEmbeddedVaultSettings>;
+}> {
   const raw = await desktopInvokeRaw(
     DAEMON_COMMANDS.VAULT_IMPORT_PROBE,
     params,
@@ -657,6 +706,7 @@ export async function rpcVaultImportProbe(params: {
   return {
     ok: record.ok === true,
     kind: typeof record.kind === "string" ? record.kind : "store_zip",
+    embedded: parseEmbeddedVaultSettings(record),
   };
 }
 
@@ -846,10 +896,13 @@ export async function rpcOpenInTerminal(vaultId: string, path: string): Promise<
   await desktopInvokeRaw(SHELL_COMMANDS.OPEN_IN_TERMINAL, { vaultId, path });
 }
 
-function parseBackupEntry(raw: unknown): VaultBackupEntry {
+function parseBackupEntry(raw: unknown, vaultId: string): VaultBackupEntry {
   const record = requireRecord(raw, "backup");
+  const stamp = typeof record.stamp === "string" ? record.stamp : "";
+  const fromWire = typeof record.fileName === "string" ? record.fileName.trim() : "";
   return {
-    stamp: typeof record.stamp === "string" ? record.stamp : "",
+    stamp,
+    fileName: fromWire || backupSnapshotFileName(stamp, vaultId.trim()),
     createdAt: typeof record.createdAt === "string" ? record.createdAt : "",
     sizeBytes: typeof record.sizeBytes === "number" ? record.sizeBytes : undefined,
     saved: record.saved === true,
@@ -863,7 +916,7 @@ export async function rpcBackupList(id: string): Promise<VaultBackupEntry[]> {
   if (!Array.isArray(backups)) {
     throw new RpcError(BRIDGE_ERROR_CODES.INVALID_RESPONSE, "backup_list: expected backups", raw);
   }
-  return backups.map(parseBackupEntry);
+  return backups.map((entry) => parseBackupEntry(entry, id));
 }
 
 export async function rpcBackupDelete(id: string, stamps: readonly string[]): Promise<void> {

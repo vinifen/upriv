@@ -1,9 +1,9 @@
-import { importDisplayNameFromFilename } from "../vault/displayName";
+import { importDisplayNameFromFilename, suggestedImportDisplayName } from "../vault/displayName";
 import { createEmptyCreateVaultDraft } from "./defaults";
-import type { CreateVaultDraft } from "./types";
+import type { CreateVaultDraft, CreateVaultImportShape } from "./types";
 
 /**
- * Seed create-vault wizard for an OS-dropped or picked `.zip` of `store/` or `.7z`.
+ * Seed create-vault wizard for an OS-dropped or picked file or folder.
  *
  * `importFilePath` must be a real absolute path (Electron `webUtils.getPathForFile`
  * / native picker). Never fall back to the filename — the daemon would treat it as
@@ -12,7 +12,11 @@ import type { CreateVaultDraft } from "./types";
 export function createDraftFromImportPackage(
   fileName: string,
   existingOrders: readonly number[],
-  options?: { filePath?: string },
+  options?: {
+    filePath?: string;
+    existingDisplayNames?: readonly string[];
+    shape?: CreateVaultImportShape;
+  },
 ): CreateVaultDraft {
   const draft = createEmptyCreateVaultDraft(existingOrders);
   const trimmedName = fileName.trim();
@@ -22,9 +26,10 @@ export function createDraftFromImportPackage(
     ...draft,
     source: "import",
     importKind: "file",
+    importShape: options?.shape ?? "file",
     importFileName: trimmedName,
     importFilePath: path,
-    displayName: importDisplayNameFromFilename(trimmedName).displayName,
+    displayName: suggestedImportDisplayName(trimmedName, options?.existingDisplayNames ?? []),
   };
 }
 
@@ -33,11 +38,13 @@ export function createVaultImportNeedsRename(draft: {
   source: CreateVaultDraft["source"];
   importFileName: string;
 }): boolean {
-  if (draft.source !== "import" || !draft.importFileName.trim()) return false;
+  if (draft.source !== "import" || !draft.importFileName.trim()) {
+    return false;
+  }
   return importDisplayNameFromFilename(draft.importFileName).needsChoice;
 }
 
-/** Open wizard on Import with no archive chosen yet (empty-state Import CTA). */
+/** Open wizard on Import with nothing chosen yet (empty-state Import CTA). */
 export function createDraftForImportSource(existingOrders: readonly number[]): CreateVaultDraft {
   return {
     ...createEmptyCreateVaultDraft(existingOrders),

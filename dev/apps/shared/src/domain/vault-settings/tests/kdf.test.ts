@@ -64,25 +64,37 @@ describe("normalizeKdfUnlockPreset", () => {
 });
 
 describe("createVaultChoosesKdf", () => {
-  it("lets scratch and .7z import pick unlock RAM", () => {
+  it("lets scratch, a documents .zip, and .7z import pick unlock RAM", () => {
     expect(createVaultChoosesKdf({ source: "scratch", importFileName: "" })).toBe(true);
+    expect(
+      createVaultChoosesKdf({
+        source: "import",
+        importFileName: "Notes.zip",
+        zipLayout: "files",
+      }),
+    ).toBe(true);
     expect(createVaultChoosesKdf({ source: "import", importFileName: "Notes.7z" })).toBe(true);
     expect(createVaultChoosesKdf({ source: "import", importFileName: "" })).toBe(true);
   });
 
-  it("skips the picker for .zip of store/ (header already has KDF)", () => {
-    expect(createVaultChoosesKdf({ source: "import", importFileName: "Notes.upriv.zip" })).toBe(
-      false,
-    );
+  it("skips the picker for a Upriv .zip (header already has KDF)", () => {
+    expect(
+      createVaultChoosesKdf({
+        source: "import",
+        importFileName: "Notes.upriv.zip",
+        zipLayout: "store",
+      }),
+    ).toBe(false);
     expect(createVaultChoosesKdf({ source: "import", importFileName: "Notes.zip" })).toBe(false);
   });
 
-  it("skips the picker for create-from-backup (frozen store/, stamp has no .zip)", () => {
+  it("skips the picker for create-from-backup, not for a file that merely lives under backups/", () => {
     expect(
       createVaultChoosesKdf({
         source: "import",
         importKind: "backup",
         importFileName: "20260528T120000",
+        importFilePath: "vaults/cold-storage/backups/20260528T120000-abc.zip",
       }),
     ).toBe(false);
     expect(
@@ -91,14 +103,22 @@ describe("createVaultChoosesKdf", () => {
         importFileName: "20260528T120000",
         importFilePath: "vaults/cold-storage/backups/20260528T120000",
       }),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       createVaultChoosesKdf({
         source: "import",
         importFileName: "Notes.7z",
         importFilePath: "vaults/notes/backups/Notes.7z",
       }),
-    ).toBe(false);
+    ).toBe(true);
+    expect(
+      createVaultChoosesKdf({
+        source: "import",
+        importFileName: "Notes.zip",
+        importFilePath: "vaults/notes/backups/Notes.zip",
+        zipLayout: "files",
+      }),
+    ).toBe(true);
   });
 });
 

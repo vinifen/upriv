@@ -3,6 +3,7 @@
 use crate::config::load_vault_config;
 use crate::config::vault_config::VaultSevenZipSection;
 use crate::error::{Result, UprivError};
+use crate::paths::seven_zip_outer_folder;
 use crate::paths::VaultRoot;
 use crate::session::{
     check_unlock_allowed, ensure_vault_session_closed, record_unlock_failure,
@@ -12,13 +13,15 @@ use crate::store::{
     file_name, open_store, probe_store_password, VaultHeader, VaultIndex, INTERNAL_WORKSPACE_FILE,
     SEED_LOGICAL_PATH,
 };
+use crate::time::utc_filename_stamp;
 
+use super::embedded_settings::snapshot_settings_bytes;
 use super::seven_zip_pack::{
     ensure_seven_zip_export_ram, logical_export_size, pack_logical_seven_zip_to_writer,
     seven_zip_archive_vec_budget, seven_zip_pack_ram_needed, try_vec_with_capacity,
     LogicalSevenZipSource, SevenZipSink,
 };
-use super::zip_io::{zip_directory_to_bytes, zip_directory_to_path};
+use super::zip_io::{zip_store_with_config_to_bytes, zip_store_with_config_to_path};
 
 fn closed_vault_paths(
     root: &VaultRoot,
@@ -32,10 +35,6 @@ fn closed_vault_paths(
     ensure_vault_session_closed(&vault_dir)?;
     let store = vault_dir.join(crate::paths::STORE_DIR_NAME);
     Ok((vault_dir, store))
-}
-
-fn closed_store_dir(root: &VaultRoot, vault_id: &str) -> Result<std::path::PathBuf> {
-    Ok(closed_vault_paths(root, vault_id)?.1)
 }
 
 fn unlock_closed_store<T>(
@@ -62,18 +61,24 @@ fn unlock_closed_store<T>(
     })
 }
 
-/// Zip of `store/` (no zip password). This vault must be closed.
+/// Zip of `store/` plus `README.md` and `config.toml` (no zip password). This vault must be closed.
 pub fn export_store_zip(root: &VaultRoot, vault_id: &str) -> Result<Vec<u8>> {
-    zip_directory_to_bytes(&closed_store_dir(root, vault_id)?)
+    let (vault_dir, store) = closed_vault_paths(root, vault_id)?;
+    crate::store::ensure_danger_notice(&store)?;
+    let settings = snapshot_settings_bytes(&vault_dir, &store)?;
+    zip_store_with_config_to_bytes(&store, &settings, &utc_filename_stamp())
 }
 
-/// Zip of `store/` written to `dest` (no zip password, no NDJSON payload).
+/// Zip of `store/` plus `README.md` and `config.toml` written to `dest` (no zip password).
 pub fn export_store_zip_to_path(
     root: &VaultRoot,
     vault_id: &str,
     dest: &std::path::Path,
 ) -> Result<u64> {
-    zip_directory_to_path(&closed_store_dir(root, vault_id)?, dest)
+    let (vault_dir, store) = closed_vault_paths(root, vault_id)?;
+    crate::store::ensure_danger_notice(&store)?;
+    let settings = snapshot_settings_bytes(&vault_dir, &store)?;
+    zip_store_with_config_to_path(&store, &settings, &utc_filename_stamp(), dest)
 }
 
 fn skip_export_path(path: &str) -> bool {
@@ -81,27 +86,21 @@ fn skip_export_path(path: &str) -> bool {
 }
 
 fn pack_logical_seven_zip_to_path(
-    store_dir: &std::path::Path,
-    header: &VaultHeader,
-    content_key: &[u8; 32],
-    index: &VaultIndex,
+    source: LogicalSevenZipSource<'_>,
     archive_password: &[u8],
     opts: &VaultSevenZipSection,
+    outer: &str,
     dest: &std::path::Path,
 ) -> Result<u64> {
-    let sizes = logical_export_size(index, skip_export_path);
+    let sizes = logical_export_size(source.index, skip_export_path);
     ensure_seven_zip_export_ram(seven_zip_pack_ram_needed(sizes, opts, SevenZipSink::File))?;
     let file = std::fs::File::create(dest)?;
     match pack_logical_seven_zip_to_writer(
         file,
-        LogicalSevenZipSource {
-            store_dir,
-            header,
-            content_key,
-            index,
-        },
+        source,
         archive_password,
         opts,
+        outer,
         skip_export_path,
     ) {
         Ok(mut file) => {
@@ -123,6 +122,7 @@ fn pack_logical_seven_zip_in_memory(
     index: &VaultIndex,
     archive_password: &[u8],
     opts: &VaultSevenZipSection,
+    outer: &str,
 ) -> Result<Vec<u8>> {
     let sizes = logical_export_size(index, skip_export_path);
     let needed = seven_zip_pack_ram_needed(sizes, opts, SevenZipSink::Memory);
@@ -138,6 +138,7 @@ fn pack_logical_seven_zip_in_memory(
         },
         archive_password,
         opts,
+        outer,
         skip_export_path,
     )?;
     Ok(cursor.into_inner())
@@ -184,7 +185,15 @@ pub fn export_logical_seven_zip(
         vault_id,
         archive_password,
         |store, header, key, index| {
-            pack_logical_seven_zip_in_memory(store, header, key, index, archive_password, &opts)
+            pack_logical_seven_zip_in_memory(
+                store,
+                header,
+                key,
+                index,
+                archive_password,
+                &opts,
+                &seven_zip_outer_folder(&config.vault.display_name),
+            )
         },
     )
 }
@@ -208,7 +217,18 @@ pub fn export_logical_seven_zip_to_path(
         vault_id,
         archive_password,
         |store, header, key, index| {
-            pack_logical_seven_zip_to_path(store, header, key, index, archive_password, &opts, dest)
+            pack_logical_seven_zip_to_path(
+                LogicalSevenZipSource {
+                    store_dir: store,
+                    header,
+                    content_key: key,
+                    index,
+                },
+                archive_password,
+                &opts,
+                &seven_zip_outer_folder(&config.vault.display_name),
+                dest,
+            )
         },
     )
 }
@@ -221,9 +241,39 @@ mod tests {
     use crate::store::KdfUnlockPreset;
     use crate::test_support::vault_root_with;
     use crate::vault::create::create_vault;
-    use crate::vault::fs::fs_write_file;
+    use crate::vault::fs::{fs_list_tree, fs_mkdir, fs_write_file};
     use crate::vault::open_close::{close_vault, open_vault};
     use crate::vault::seven_zip::{import_logical_seven_zip, probe_logical_seven_zip};
+
+    fn assert_same_store_payload(left: &[u8], right: &[u8]) {
+        let left = zip_bodies(left);
+        let right = zip_bodies(right);
+        assert_eq!(left.len(), right.len());
+        for ((left_name, left_body), (right_name, right_body)) in left.iter().zip(right.iter()) {
+            assert_eq!(left_name, right_name);
+            if left_name == super::super::embedded_settings::ZIP_README_ENTRY {
+                assert!(left_body.windows(9).any(|window| window == b"Created: "));
+                assert!(right_body.windows(9).any(|window| window == b"Created: "));
+            } else {
+                assert_eq!(left_body, right_body);
+            }
+        }
+    }
+
+    fn zip_bodies(bytes: &[u8]) -> Vec<(String, Vec<u8>)> {
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        let mut entries = Vec::new();
+        for index in 0..archive.len() {
+            let mut file = archive.by_index(index).unwrap();
+            let name = file.name().to_string();
+            let mut body = Vec::new();
+            if !file.is_dir() {
+                std::io::Read::read_to_end(&mut file, &mut body).unwrap();
+            }
+            entries.push((name, body));
+        }
+        entries
+    }
 
     fn sample_config(id: &str, name: &str) -> VaultConfig {
         toml::from_str(&format!(
@@ -259,6 +309,37 @@ mode = "encrypted_dir"
     }
 
     #[test]
+    fn zip_export_keeps_the_store_danger_notice() {
+        let (_tmp, root) = vault_root_with(&[]);
+        create_vault(
+            &root,
+            sample_config("notes", "Notes"),
+            b"pass-word-ok",
+            KdfUnlockPreset::M32,
+        )
+        .unwrap();
+        let notice = root
+            .vault_dir("notes")
+            .unwrap()
+            .join(crate::paths::STORE_DIR_NAME)
+            .join(crate::store::STORE_DANGER_FILE_NAME);
+        let bytes = std::fs::read(&notice).unwrap();
+        std::fs::remove_file(&notice).unwrap();
+        let zip = export_store_zip(&root, "notes").unwrap();
+        assert_eq!(std::fs::read(&notice).unwrap(), bytes);
+        let name = format!(
+            "{}/{}",
+            crate::paths::STORE_DIR_NAME,
+            crate::store::STORE_DANGER_FILE_NAME
+        );
+        let packed = zip_bodies(&zip)
+            .into_iter()
+            .find(|(entry, _)| entry == &name)
+            .expect("danger notice in the export zip");
+        assert_eq!(packed.1, bytes);
+    }
+
+    #[test]
     fn zip_export_to_path_matches_bytes() {
         let (_tmp, root) = vault_root_with(&[]);
         create_vault(
@@ -271,8 +352,24 @@ mode = "encrypted_dir"
         let bytes = export_store_zip(&root, "notes").unwrap();
         let dest = _tmp.path().join("Notes.zip");
         let size = export_store_zip_to_path(&root, "notes", &dest).unwrap();
-        assert_eq!(size as usize, bytes.len());
-        assert_eq!(std::fs::read(&dest).unwrap(), bytes);
+        let on_disk = std::fs::read(&dest).unwrap();
+        assert_eq!(size as usize, on_disk.len());
+        assert_same_store_payload(&bytes, &on_disk);
+        let embedded = crate::vault::read_zip_config_toml(std::io::Cursor::new(bytes))
+            .unwrap()
+            .expect("config.toml");
+        let parsed = crate::vault::parse_embedded_settings(&embedded).unwrap();
+        assert_eq!(parsed.config.vault.display_name, "Notes");
+        assert_eq!(parsed.unlock_preset, Some(KdfUnlockPreset::M32));
+        let readme = super::super::zip_io::read_zip_root_entry(
+            std::io::Cursor::new(on_disk),
+            super::super::embedded_settings::ZIP_README_ENTRY,
+        )
+        .unwrap()
+        .expect("README.md");
+        let readme = String::from_utf8(readme).unwrap();
+        assert!(readme.contains("Created: "));
+        assert!(readme.contains('Z'));
     }
 
     #[test]
@@ -323,6 +420,14 @@ mode = "encrypted_dir"
         .unwrap();
         open_vault(&root, "notes", b"pass-word-ok").unwrap();
         fs_write_file(&root, "notes", "/docs/hi.txt", b"hello-export").unwrap();
+        fs_write_file(&root, "notes", "/config.toml", b"user-config").unwrap();
+        fs_write_file(
+            &root,
+            "notes",
+            "/.upriv-workspace.json",
+            b"{\"format_version\":1}\n",
+        )
+        .unwrap();
         close_vault(&root, "notes", None).unwrap();
         let bytes = export_logical_seven_zip(&root, "notes", b"pass-word-ok", None)
             .expect("in-RAM .7z export");
@@ -356,8 +461,76 @@ mode = "encrypted_dir"
         let json = serde_json::to_string(&listed).unwrap();
         assert!(json.contains("hi.txt"), "{json}");
         assert!(!json.contains(SEED_LOGICAL_PATH), "{json}");
+        assert!(!json.contains("Notes/files"), "{json}");
         let body = crate::vault::fs::fs_read_file(&root, &imported, "/docs/hi.txt").unwrap();
         assert_eq!(body, b"hello-export");
+        let named = crate::vault::fs::fs_read_file(&root, &imported, "/config.toml").unwrap();
+        assert_eq!(named, b"user-config");
+        let workspace =
+            crate::vault::fs::fs_read_file(&root, &imported, "/.upriv-workspace.json").unwrap();
+        assert!(workspace.is_empty());
+        close_vault(&root, &imported, None).unwrap();
+    }
+
+    #[test]
+    fn seven_zip_clean_vault_imports_with_no_folders() {
+        let (_tmp, root) = vault_root_with(&[]);
+        create_vault(
+            &root,
+            sample_config("notes", "Notes"),
+            b"pass-word-ok",
+            KdfUnlockPreset::M32,
+        )
+        .unwrap();
+        let bytes = export_logical_seven_zip(&root, "notes", b"pass-word-ok", None).unwrap();
+        let imported = import_logical_seven_zip(
+            &root,
+            sample_config("notes-7z", "Notes 7z"),
+            b"pass-word-ok",
+            KdfUnlockPreset::M32,
+            &bytes,
+            b"pass-word-ok",
+        )
+        .unwrap();
+        open_vault(&root, &imported, b"pass-word-ok").unwrap();
+        let listed = fs_list_tree(&root, &imported).unwrap();
+        assert!(listed.children.unwrap().is_empty());
+        close_vault(&root, &imported, None).unwrap();
+    }
+
+    #[test]
+    fn seven_zip_round_trip_keeps_empty_folders() {
+        let (_tmp, root) = vault_root_with(&[]);
+        create_vault(
+            &root,
+            sample_config("notes", "Notes"),
+            b"pass-word-ok",
+            KdfUnlockPreset::M32,
+        )
+        .unwrap();
+        open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        fs_mkdir(&root, "notes", "/empty").unwrap();
+        fs_mkdir(&root, "notes", "/only").unwrap();
+        fs_mkdir(&root, "notes", "/only/inner").unwrap();
+        fs_mkdir(&root, "notes", "/docs").unwrap();
+        fs_mkdir(&root, "notes", "/docs/blank").unwrap();
+        fs_write_file(&root, "notes", "/docs/hi.txt", b"hello-export").unwrap();
+        close_vault(&root, "notes", None).unwrap();
+        let bytes = export_logical_seven_zip(&root, "notes", b"pass-word-ok", None).unwrap();
+        let imported = import_logical_seven_zip(
+            &root,
+            sample_config("notes-7z", "Notes 7z"),
+            b"pass-word-ok",
+            KdfUnlockPreset::M32,
+            &bytes,
+            b"pass-word-ok",
+        )
+        .unwrap();
+        open_vault(&root, &imported, b"pass-word-ok").unwrap();
+        let json = serde_json::to_string(&fs_list_tree(&root, &imported).unwrap()).unwrap();
+        for name in ["empty", "only", "inner", "blank", "hi.txt"] {
+            assert!(json.contains(name), "{json}");
+        }
         close_vault(&root, &imported, None).unwrap();
     }
 

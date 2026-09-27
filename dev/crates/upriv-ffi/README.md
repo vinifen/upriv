@@ -4,6 +4,7 @@ UniFFI bridge for mobile. Exports:
 
 - `app_version() -> String`
 - `invoke(method, params_json) -> String` — same envelope as the daemon (`{ ok, result | error }`)
+- `import_content_fd(vault_id, logical_path, fd) -> String` — Android content file into an open import session; same envelope. Not a daemon RPC.
 
 ```bash
 cd dev

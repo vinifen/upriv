@@ -1,8 +1,19 @@
+export {
+  applyEmbeddedVaultSettings,
+  parseEmbeddedVaultSettings,
+  type EmbeddedSettingsSnapshot,
+  type EmbeddedVaultSettings,
+} from "./applyEmbeddedVaultSettings";
 export { buildCreateVaultResult, resolveCreateVaultGroupAssignment } from "./buildResult";
-export { createDraftFromBackup } from "./createDraftFromBackup";
+export { createDraftFromBackup, groupIdContainingVault } from "./createDraftFromBackup";
 export {
   createVaultImportNeedsArchivePassword,
   createVaultImportPackage,
+  createVaultImportSelectionPatch,
+  importExtractApplies,
+  importExtractEnabled,
+  importSetsVaultPassword,
+  importZipWrapsDocuments,
   createVaultImportPackageKind,
   isCreateVaultBackupImport,
 } from "./importKind";
@@ -13,6 +24,10 @@ export {
   createVaultImportNeedsRename,
 } from "./createDraftFromImportPackage";
 export { createEmptyCreateVaultDraft, createVaultDraftEqual, defaultOrderAtEnd } from "./defaults";
+export {
+  importZipClassificationFromProbe,
+  type ImportZipClassification,
+} from "./zipClassification";
 export {
   canSubmitCreateVault,
   getCreateVaultStepStatus,
@@ -51,6 +66,7 @@ export {
   type CreateVaultGroupAssignment,
   type CreateVaultGroupMode,
   type CreateVaultImportKind,
+  type CreateVaultImportShape,
   type CreateVaultResult,
   type CreateVaultSource,
   type CreateVaultStepId,

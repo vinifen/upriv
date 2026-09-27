@@ -13,6 +13,8 @@ export default defineConfig({
       "@upriv/shared/testing": path.resolve(root, "../shared/src/testing/index.ts"),
       "@upriv/shared": path.resolve(root, "../shared/src/index.ts"),
       "upriv-core": path.resolve(root, "modules/upriv-core/src/index.ts"),
+      "react-native": path.resolve(root, "vitest/reactNativeStub.ts"),
+      "expo-file-system": path.resolve(root, "vitest/expoFileSystemStub.ts"),
     },
   },
   test: {

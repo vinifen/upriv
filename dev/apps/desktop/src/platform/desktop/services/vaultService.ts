@@ -9,10 +9,13 @@ import {
   rpcVaultExportProbe,
   rpcVaultExportToPath,
   rpcVaultImport7z,
+  rpcVaultImportFilesZip,
+  rpcVaultImportOsPath,
   rpcVaultImportZip,
   rpcVaultList,
   rpcVaultRecoverAck,
   rpcVaultRename,
+  rpcVaultStoreSize,
 } from "@/lib/rpc";
 
 /** Desktop → daemon vault list / create / import / config / rename / delete / export. */
@@ -20,6 +23,7 @@ export const desktopVaultService = createLiveVaultService({
   listVaults: () => rpcVaultList(),
   createVault: (input: CreateVaultInput) => rpcVaultCreate(input),
   getSettings: (vaultId) => rpcVaultConfigGet(vaultId),
+  storeOnDiskBytes: (vaultId) => rpcVaultStoreSize(vaultId),
   saveSettings: (vaultId, config) => rpcVaultConfigSave(vaultId, config),
   rename: (vaultId, displayName) => rpcVaultRename(vaultId, displayName),
   deleteVault: (vaultId) => rpcVaultDelete(vaultId),
@@ -30,5 +34,7 @@ export const desktopVaultService = createLiveVaultService({
   probeExportPassword: (vaultId, password) => rpcVaultExportProbe(vaultId, password),
   importZip: (input) => rpcVaultImportZip(input),
   import7z: (input) => rpcVaultImport7z(input),
+  importFilesZip: (input) => rpcVaultImportFilesZip(input),
+  importOsPath: (input) => rpcVaultImportOsPath(input),
   recoverDirtyClose: (vaultId) => rpcVaultRecoverAck(vaultId),
 });

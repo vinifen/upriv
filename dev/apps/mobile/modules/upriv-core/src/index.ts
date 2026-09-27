@@ -55,6 +55,12 @@ export type UprivCoreNativeModule = {
    * Optional: Expo Go and older native builds omit this method.
    */
   revealInFileManager?(osPath: string): void;
+  /**
+   * Stream one `content://` file into an open import session.
+   * Returns the UniFFI JSON envelope (`{ ok, result | error }`).
+   * Optional: Expo Go and builds from before this method omit it.
+   */
+  importContentUri?(vaultId: string, logicalPath: string, contentUri: string): Promise<string>;
 };
 
 /**

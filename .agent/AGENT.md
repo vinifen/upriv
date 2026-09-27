@@ -4,7 +4,7 @@
 **Repo:** monorepo with `dev/` (implementation), `prod-example/` (static vault-root demo — **layout is stale**; see that folder’s README).  
 **Status:** v0.2-beta — Electron desktop + Expo mobile; vault-root / settings / **vault list + create + open/close**, **in-app file manager**, **Linux FUSE**, **zip/7z export**, **import**, and **backups** talk to `upriv-core` (`store/` wrap + index + chunks, `format_version` 1 only). WinFsp is still a stub. Change-password is **not** implemented. Portable `.7z` export/import pack and unpack logical files **in RAM** (export fails closed if RAM is insufficient); zip of `store/` is always available.
 
-**Greenfield.** `dev/` is the first product, not a successor. Nothing older shipped. One store format (`format_version` 1). One backup file (`backups/<stamp>.zip`). Do not add a reader, migrator, or dual path for drafts, Seal, `archive/`, unpacked backup folders, `.7z` backups, or demo trees. If a doc, review, or example still describes an older layout, ignore it and implement the current path only — no compatibility shim beside the real one. [SECURITY-CRYPTO.md](SECURITY-CRYPTO.md) states that rule and **wins** over stale PRD/SDD sections.
+**Greenfield.** `dev/` is the first product, not a successor. Nothing older shipped. One store format (`format_version` 1). One backup file (`backups/<stamp>-<id>.zip`). Do not add a reader, migrator, or dual path for drafts, Seal, `archive/`, unpacked backup folders, `.7z` backups, or demo trees. If a doc, review, or example still describes an older layout, ignore it and implement the current path only — no compatibility shim beside the real one. [SECURITY-CRYPTO.md](SECURITY-CRYPTO.md) states that rule and **wins** over stale PRD/SDD sections.
 
 ---
 
@@ -157,12 +157,12 @@ When temp and canonical docs conflict, **`dev/docs/` wins**. When porting an ide
 
 ## Product summary (storage / rest: SECURITY-CRYPTO wins over stale PRD/SDD)
 
-- **At rest:** `store/` (Argon2id + XChaCha20-Poly1305). **No `archive/`.** **No Seal.** A backup is `backups/<stamp>.zip` — a Stored zip of `store/`, no zip password (pins: `backups/saves/<stamp>.zip`). **Greenfield** — no unpacked backup tree, no `.7z` backup, no migrator from demo `archive/`+`store/`.
+- **At rest:** `store/` (Argon2id + XChaCha20-Poly1305). **No `archive/`.** **No Seal.** A backup is `backups/<stamp>-<id>.zip` — a Stored zip with `README.md` and `config.toml` beside `store/` (`header/`, `index/`, `data/`, `DANGER-DO-NOT-EDIT-PERMANENT-DATA-LOSS.md`), no zip password (pins: `backups/saves/<stamp>-<id>.zip`). `README.md` records the UTC time that copy was written, the same instant as `<stamp>`, and the rounded size of the files in `store/` (not the exact length of the zip). **Greenfield** — no unpacked backup tree, no `.7z` backup, no migrator from demo `archive/`+`store/`. Create-from-backup and a store `.zip` import pre-fill the wizard from that `config.toml` and write `DANGER-DO-NOT-EDIT-PERMANENT-DATA-LOSS.md` into the new `store/`. The new vault does not keep `README.md`. A `.7z` does not. Export and backup write that warning file before packing so the zip keeps it inside `store/`.
 - **Argon2id:** user picks cost at create; default **256 MiB / 3 passes**; also 32 MiB (less-secure), 64 MiB, 128 MiB, 1 GiB, and 2 GiB. UI explains **security + RAM to unlock**, not device class. Header params apply everywhere — never auto-downgrade.
 - **Modes:** **`encrypted_dir`** (default — plaintext in RAM only: FUSE/WinFsp on desktop, **in-app file manager on mobile**) and **`upriv_plain`** (plaintext `workspace/` on disk while open; wipe on close; **Insecure**). Dropped: `store_only`, `upriv_only`, `ram_only`, `plain`, `plain_only`. Same `store/` on every OS.
 - **States:** `open` = unlocked session (runtime). Where plaintext lives is the **mode**, not the word “open”. On disk: `closed` only. **No Seal.**
 - **Recovery:** dirty close (A) or leftover `upriv_plain` workspace (D). One bad chunk = file error (B). Dead header/index = create-from-backup only (C).
-- **`.zip` / `.7z`:** import/export outside `.upriv`. Create vault from **zip of `store/`** (Recommended, Argon2id ciphertext inside a normal zip) or from **`.7z`** (re-wrap). Export is **per vault** (user chooses; store zip is default). Suggested file = `{display_name}.zip` or `{display_name}.7z`. Export requires **that** vault closed (other vaults may stay open). File zip/7z import and create-from-backup copy a frozen tree — they do not require the source vault closed. No bulk download of several vaults.
+- **`.zip` / `.7z`:** import/export outside `.upriv`. One import option. A chosen `.zip` is examined: `store/header/vault.header` means a **zip of `store/`** (Recommended; copy ciphertext, settings kept from the root `config.toml`). Anything else is ordinary documents wrapped into a new `store/` (new password and unlock RAM; one shared top folder is stripped). A `.7z` is one outer folder named from the display name; the vault's files sit directly under that folder. It does not carry the store-zip envelope. Export is **per vault** (user chooses; store zip is default). Suggested file = `{display_name}.zip` or `{display_name}.7z`. Export requires **that** vault closed (other vaults may stay open). File zip/7z import and create-from-backup copy a frozen tree — they do not require the source vault closed. No bulk download of several vaults.
 - **Compression UI:** presets none/low/medium/high apply to **export** `.7z` (`[seven_zip]`).
 - **Close:** write `store/` from the session (stream / mount buffers). Export `.7z` is a separate action — stream logical content; never pack `.enc` blobs.
 - **Passwords:** RAM only in v1 default; never in `localStorage`, UI config, or logs.
@@ -294,8 +294,8 @@ Marker: **`.upriv/settings.toml`** at vault-root. Per-vault: **`vaults/<vault_id
 | `.upriv/state.json` | Open sessions only (volatile) |
 | `.upriv/vaults/<id>/config.toml` | Vault config (list/name/policy; no password) |
 | `.upriv/vaults/<id>/persistence.json` | Persisted `closed` only (+ sync metadata; **no `sealed`**) |
-| `.upriv/vaults/<id>/store/` | Vault body at rest (`header/vault.header` + `header/vault.header.copy` + `index/` + `data/`) |
-| `.upriv/vaults/<id>/backups/<stamp>.zip` | Frozen Stored zip of `store/` (pins under `backups/saves/`) |
+| `.upriv/vaults/<id>/store/` | Vault body at rest (`header/vault.header` + `header/vault.header.copy` + `index/root.idx.enc` + `index/root.idx.enc.copy` + `data/`) |
+| `.upriv/vaults/<id>/backups/<stamp>-<id>.zip` | Frozen Stored zip of `store/` (pins under `backups/saves/`) |
 | `workspace/{display_name}/` | Desktop mount while open (`encrypted_dir` = virtual; `upriv_plain` = real plaintext) — **only when** app `[workspace].path` (or vault `[mount]` override) is set; not auto-created at vault-root init |
 
 Portable `.zip` of `store/` and `.7z` are **export/import files**, not modules under `vaults/<id>/`.

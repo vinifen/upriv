@@ -22,10 +22,11 @@ use upriv_core::{
     app_home_dir, close_vault, create_vault, create_vault_group_with_sort,
     deactivate_vault_root_alias_everywhere, delete_vault_group, discover_bootstrap_root,
     inspect_vault_root_at, known_vault_ids, list_vaults, load_app_settings, load_vault_config,
-    load_vault_groups, open_or_initialize_vault_root, open_vault, parse_settings_toml_str,
-    read_vault_root_alias, rename_vault, reorder_vault_group_grouped_vaults, reorder_vault_groups,
-    repair_vault_groups, resolve_vault_root, save_app_settings_session_with_alias_sync,
-    serialize_settings_toml_str, suggested_vault_root, update_vault_group, vault_list_item,
+    load_vault_groups, open_import_session, open_or_initialize_vault_root, open_vault,
+    parse_settings_toml_str, read_vault_root_alias, rename_vault,
+    reorder_vault_group_grouped_vaults, reorder_vault_groups, repair_vault_groups,
+    resolve_vault_root, save_app_settings_session_with_alias_sync, serialize_settings_toml_str,
+    suggested_vault_root, update_vault_group, vault_list_item, vault_store_on_disk_bytes,
     write_vault_root_alias_for_root, AppSettings, IncompleteReplacePolicy, KdfUnlockPreset,
     ResolveVaultRoot, ResolveVaultRootOptions, UpdateVaultGroupParams, VaultConfig, VaultGroup,
     VaultListItem, VaultRootBootstrapPrefs, VaultRootDirStatus, VaultRootMode, VaultRootSource,
@@ -33,6 +34,7 @@ use upriv_core::{
 };
 
 mod vault_ops;
+pub use vault_ops::ingest_content_fd;
 
 #[derive(Debug, Deserialize)]
 pub struct RpcRequest {
@@ -145,6 +147,7 @@ pub fn handle_rpc(req: RpcRequest) -> RpcResponse {
         "vault_close" => vault_close(req.params),
         "vault_export_capabilities" => vault_ops::vault_export_capabilities(req.params),
         "vault_config_get" => vault_config_get(req.params),
+        "vault_store_size" => vault_store_size(req.params),
         "vault_config_save" => vault_config_save(req.params),
         "vault_rename" => vault_rename(req.params),
         "vault_delete" => vault_ops::vault_delete(req.params),
@@ -153,6 +156,11 @@ pub fn handle_rpc(req: RpcRequest) -> RpcResponse {
         "vault_export_probe" => vault_ops::vault_export_probe(req.params),
         "vault_import_zip" => vault_ops::vault_import_zip(req.params),
         "vault_import_7z" => vault_ops::vault_import_7z(req.params),
+        "vault_import_files_zip" => vault_ops::vault_import_files_zip(req.params),
+        "vault_import_os_path" => vault_ops::vault_import_os_path(req.params),
+        "vault_ingest_open" => vault_ingest_open(req.params),
+        "vault_ingest_directory" => vault_ops::vault_ingest_directory(req.params),
+        "vault_discard_import" => vault_ops::vault_discard_import(req.params),
         "vault_import_probe" => vault_ops::vault_import_probe(req.params),
         "vault_fs_list" => vault_ops::vault_fs_list(req.params),
         "vault_fs_revision" => vault_ops::vault_fs_revision(req.params),
@@ -1221,6 +1229,26 @@ fn vault_open(params: Value) -> RpcResponse {
     }
 }
 
+/// Unlock for streaming an import. No desktop mount, so the file manager stays closed.
+fn vault_ingest_open(params: Value) -> RpcResponse {
+    let parsed: VaultIdPasswordParams = match serde_json::from_value(params) {
+        Ok(value) => value,
+        Err(error) => return err("invalid_request", error.to_string()),
+    };
+    let password = match parsed.password {
+        Some(ref value) if !value.is_empty() => value.as_bytes(),
+        _ => return err("invalid_request", "password is required".into()),
+    };
+    let root = match require_vault_root() {
+        Ok(root) => root,
+        Err(response) => return response,
+    };
+    match open_import_session(&root, parsed.id.trim(), password) {
+        Ok(()) => ok(json!(null)),
+        Err(error) => map_core_err(error),
+    }
+}
+
 fn vault_close(params: Value) -> RpcResponse {
     let parsed: VaultIdPasswordParams = match serde_json::from_value(params) {
         Ok(value) => value,
@@ -1245,6 +1273,21 @@ fn vault_close(params: Value) -> RpcResponse {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct VaultIdParams {
     id: String,
+}
+
+fn vault_store_size(params: Value) -> RpcResponse {
+    let parsed: VaultIdParams = match serde_json::from_value(params) {
+        Ok(value) => value,
+        Err(error) => return err("invalid_request", error.to_string()),
+    };
+    let root = match require_vault_root() {
+        Ok(root) => root,
+        Err(response) => return response,
+    };
+    match vault_store_on_disk_bytes(&root, parsed.id.trim()) {
+        Ok(store_bytes) => ok(json!({ "storeBytes": store_bytes })),
+        Err(error) => map_core_err(error),
+    }
 }
 
 fn vault_config_get(params: Value) -> RpcResponse {
@@ -1736,6 +1779,7 @@ mod contract_tests {
         "vault_close",
         "vault_export_capabilities",
         "vault_config_get",
+        "vault_store_size",
         "vault_config_save",
         "vault_rename",
         "vault_delete",
@@ -1744,6 +1788,11 @@ mod contract_tests {
         "vault_export_probe",
         "vault_import_zip",
         "vault_import_7z",
+        "vault_import_files_zip",
+        "vault_import_os_path",
+        "vault_ingest_open",
+        "vault_ingest_directory",
+        "vault_discard_import",
         "vault_import_probe",
         "vault_fs_list",
         "vault_fs_revision",
