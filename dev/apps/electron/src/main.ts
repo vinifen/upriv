@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { app, BrowserWindow, dialog, ipcMain, Menu } from "electron";
 import { nativeImage, session, shell } from "electron";
@@ -18,7 +19,7 @@ import {
 } from "./droppedImport";
 import { ELECTRON_IPC_METHODS } from "./ipcMethods";
 import { retrievePortalTransferPaths } from "./portalFileTransfer";
-import { revealOsPathInFileManager } from "./revealInFileManager";
+import { isAbsoluteOsPath, revealOsPathInFileManager } from "./revealInFileManager";
 import { createDefaultTerminalHost, openOsPathInTerminal } from "./openInTerminal";
 
 const isDev = process.argv.includes("--dev") || process.env.UPRIV_DEV === "1";
@@ -323,6 +324,9 @@ async function createWindow(): Promise<void> {
     minWidth: 640,
     minHeight: 480,
     title: "Upriv",
+    // Default-theme `background` in `@upriv/shared` palettes (renderer `index.html` splash).
+    backgroundColor: "#081425",
+    show: false,
     ...(icon ? { icon } : {}),
     autoHideMenuBar: !isDev,
     webPreferences: {
@@ -346,6 +350,9 @@ async function createWindow(): Promise<void> {
     }
   }
 
+  const win = mainWindow;
+  win.once("ready-to-show", () => win.show());
+
   hardenProductionWindow(mainWindow);
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
@@ -357,13 +364,18 @@ async function createWindow(): Promise<void> {
     if (!url.startsWith(allowed)) event.preventDefault();
   });
 
-  if (isDev) {
-    await mainWindow.loadURL("http://localhost:1420");
-    if (openDevTools) {
-      mainWindow.webContents.openDevTools({ mode: "detach" });
+  try {
+    if (isDev) {
+      await mainWindow.loadURL("http://localhost:1420");
+      if (openDevTools) {
+        mainWindow.webContents.openDevTools({ mode: "detach" });
+      }
+    } else {
+      await mainWindow.loadFile(path.join(__dirname, "../renderer/index.html"));
     }
-  } else {
-    await mainWindow.loadFile(path.join(__dirname, "../renderer/index.html"));
+  } finally {
+    // `ready-to-show` never fires when the load fails; never leave the window hidden.
+    if (!win.isDestroyed() && !win.isVisible()) win.show();
   }
 
   mainWindow.on("close", (event) => {
@@ -384,6 +396,17 @@ async function createWindow(): Promise<void> {
     mainWindow = null;
   });
 }
+
+/** Same CPU count Rust `available_parallelism` uses for the import pool. */
+function logicalProcessorCount(): number {
+  const count =
+    typeof os.availableParallelism === "function" ? os.availableParallelism() : os.cpus().length;
+  return count >= 1 ? count : 1;
+}
+
+ipcMain.on("upriv-logical-processors", (event) => {
+  event.returnValue = logicalProcessorCount();
+});
 
 ipcMain.handle("upriv-read-dropped", async (_event, paths: unknown) => {
   return readDroppedImportPaths(paths);
@@ -484,6 +507,15 @@ ipcMain.handle(
     if (method === "reveal_in_file_manager") {
       const osPath = await resolveVaultMountOsPath(params, finiteTimeoutMs(timeoutMs));
       await revealOsPathInFileManager(osPath, fs, shell);
+      return null;
+    }
+
+    if (method === "reveal_os_path") {
+      const target = typeof params?.path === "string" ? params.path.trim() : "";
+      if (!isAbsoluteOsPath(target)) {
+        throw new Error("open_path_failed: path must be absolute");
+      }
+      await revealOsPathInFileManager(target, fs, shell);
       return null;
     }
 

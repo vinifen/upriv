@@ -1,5 +1,7 @@
 //! `vaults/<id>/persistence.json` — closed-only rest metadata.
 
+#[allow(unused_imports)]
+use crate::host_fs::HostFsQuery;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -19,6 +21,12 @@ pub struct VaultPersistence {
     pub sync_generation: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_hash: Option<String>,
+    /// Logical index hash of the last backup that finished. Absent until one does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backed_up_index_hash: Option<String>,
+    /// Stamp of that zip. A later close skips a new zip only while this file is still listed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backed_up_stamp: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_close_ok_at: Option<String>,
     pub persistence: String,
@@ -32,6 +40,8 @@ impl VaultPersistence {
             display_name,
             sync_generation: 1,
             content_hash,
+            backed_up_index_hash: None,
+            backed_up_stamp: None,
             last_close_ok_at: Some(utc_timestamp_iso_millis()),
             persistence: "closed".into(),
         }
@@ -44,10 +54,10 @@ pub fn persistence_path(vault_dir: impl AsRef<Path>) -> PathBuf {
 
 pub fn load_vault_persistence(vault_dir: impl AsRef<Path>) -> Result<Option<VaultPersistence>> {
     let path = persistence_path(vault_dir);
-    if !path.is_file() {
+    if !path.host_is_file() {
         return Ok(None);
     }
-    let raw = std::fs::read_to_string(&path)?;
+    let raw = crate::host_fs::read_to_string(&path)?;
     let parsed = serde_json::from_str(&raw).map_err(|error| UprivError::VaultStoreInvalid {
         path: path.clone(),
         detail: format!("invalid persistence.json: {error}"),

@@ -28,13 +28,13 @@ pub const CONFIG_SAVE_QUIET_TARGETS: &[&str] =
 /// `CONFIG_SAVE_QUIET_TARGETS` entry is reachable here.
 pub fn quiet_targets_changed(before: &VaultConfig, after: &VaultConfig) -> Vec<&'static str> {
     let mut out = Vec::new();
-    if before.mount.workspace_path != after.mount.workspace_path {
+    if before.mount != after.mount {
         out.push("mount.workspace_path");
     }
     if before.storage.mode != after.storage.mode {
         out.push("storage.mode");
     }
-    if before.security.mode.normalized() != after.security.mode.normalized() {
+    if before.security.mode != after.security.mode {
         out.push("security.mode");
     }
     out
@@ -129,7 +129,7 @@ mode = "encrypted_dir"
     fn quiet_targets_changed_covers_every_listed_target() {
         let before = sample_config("notes", "Notes");
         let mut after = before.clone();
-        after.mount.workspace_path = "/tmp/custom".into();
+        after.mount.linux.path = "/tmp/custom".into();
         after.storage.mode = crate::config::VaultStorageMode::UprivPlain;
         after.security.mode = crate::config::VaultSecurityMode::AlwaysPrompt;
         let mut changed = quiet_targets_changed(&before, &after);

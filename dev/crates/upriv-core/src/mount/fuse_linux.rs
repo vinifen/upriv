@@ -1,5 +1,7 @@
 //! Linux FUSE adapter over the open-session file API (no plaintext tree).
 
+#[allow(unused_imports)]
+use crate::host_fs::HostFsQuery;
 use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::path::PathBuf;
@@ -694,6 +696,8 @@ pub(super) fn spawn(
 #[cfg(test)]
 mod inode_tests {
     use super::*;
+    #[allow(unused_imports)]
+    use crate::host_fs::HostFsQuery;
 
     #[test]
     fn remap_keeps_ino_and_rewrites_children() {

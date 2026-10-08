@@ -1,4 +1,5 @@
 import type { StorageMode } from "../../vault";
+import { vaultWorkspace } from "../../workspace";
 import type { VaultSettingsConfig } from "..";
 
 /** Minimal valid `VaultSettingsConfig` for domain tests. */
@@ -22,7 +23,7 @@ export function vaultSettingsFixture(
       ...overrides.vault,
     },
     storage: { mode: storageMode },
-    mount: { workspace_path: "default" },
+    mount: vaultWorkspace(),
     backup: { enabled: true, mode: "keep_last", keep_last: 1 },
     security: {
       mode: overrides.securityMode ?? "session_ram",

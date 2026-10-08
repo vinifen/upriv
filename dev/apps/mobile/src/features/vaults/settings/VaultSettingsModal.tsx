@@ -18,6 +18,7 @@ import {
   resolveVaultListStatus,
   selectedGroupIdAfterAssignment,
   normalizeVaultSettingsConfig,
+  peekVaultSettings,
   vaultSettingsEqual,
   vaultSettingsEqualIgnoringIdentity,
   patchStorageMode,
@@ -46,6 +47,7 @@ import { useTranslation } from "@/i18n";
 import { mobileErrorI18nKey } from "@/lib/errorMessages";
 import {
   Button,
+  ContentSkeleton,
   LoadingBudgetHint,
   Modal,
   ModalFooterActions,
@@ -169,6 +171,9 @@ export function VaultSettingsModal({
   const [resolvedRootPath, setResolvedRootPath] = useState<string | null>(null);
 
   const loadGen = useRef(0);
+  /** Draft object seeded from the last read. A different object means the user edited. */
+  const settingsSeedRef = useRef<VaultSettingsConfig | null>(null);
+  const [seededFor, setSeededFor] = useState<string | null>(null);
   const savedHideRef = useRef<ReturnType<typeof setTimeout>>();
   const groupsRef = useRef(groups);
   groupsRef.current = groups;
@@ -211,6 +216,28 @@ export function VaultSettingsModal({
       cancelled = true;
     };
   }, [open, appSettings.app.vault_root_mode, vaultRootService]);
+
+  if (open && vaultId && seededFor !== vaultId) {
+    const migrating = identityMigratingRef.current && identityMigratingToRef.current === vaultId;
+    if (!migrating) {
+      const remembered = peekVaultSettings(vaultId);
+      if (remembered) {
+        const normalized = cloneSettings(normalizeVaultSettingsConfig(remembered));
+        const shown = cloneSettings(normalized);
+        settingsSeedRef.current = shown;
+        setBaseline(normalized);
+        setDraft(shown);
+      } else {
+        settingsSeedRef.current = null;
+        setDraft(null);
+        setBaseline(null);
+      }
+    }
+    setSeededFor(vaultId);
+  }
+  if (!open && seededFor !== null) {
+    setSeededFor(null);
+  }
 
   const loading = Boolean(open && vaultId && !draft && !loadError && !loadTimedOut);
   const loadBudget = useLoadingBudget(loading, LOADING_BUDGET_MS.settingsLoad);
@@ -295,6 +322,7 @@ export function VaultSettingsModal({
       identityMigratingRef.current = false;
       identityMigratingToRef.current = null;
       loadGen.current += 1;
+      settingsSeedRef.current = null;
       setDraft(null);
       setBaseline(null);
       setLoadError(null);
@@ -321,8 +349,6 @@ export function VaultSettingsModal({
 
     let cancelled = false;
     const gen = ++loadGen.current;
-    setDraft(null);
-    setBaseline(null);
     setLoadError(null);
     setSaveError(null);
     setLoadTimedOut(false);
@@ -332,8 +358,15 @@ export function VaultSettingsModal({
     setNewGroupName("");
     const apply = (settings: VaultSettingsConfig) => {
       const normalized = cloneSettings(normalizeVaultSettingsConfig(settings));
-      setBaseline(normalized);
-      setDraft(cloneSettings(normalized));
+      setBaseline(cloneSettings(normalized));
+      setDraft((current) => {
+        if (settingsSeedRef.current && current && current !== settingsSeedRef.current) {
+          return current;
+        }
+        const next = cloneSettings(normalized);
+        settingsSeedRef.current = next;
+        return next;
+      });
     };
 
     void vaultService
@@ -934,7 +967,7 @@ export function VaultSettingsModal({
             </Text>
             <Button label={t("action.retry")} variant="primary" onPress={reload} />
           </View>
-        ) : loadError ? (
+        ) : loadError && !draft ? (
           <View style={styles.center}>
             <Text
               style={[typography.body, { color: colors.onErrorContainer }]}
@@ -966,16 +999,12 @@ export function VaultSettingsModal({
                 appSettings.app.upriv_root_path,
                 resolvedRootPath,
               )}
+              appWorkspace={appSettings.workspace}
               onPathIssueChange={(issue) => setMountPathIssue(issue != null)}
               hiddenLocked={hiddenLocked}
             >
               {onVaultDelete ? (
-                <SettingsAccordionSection
-                  key={deleteOpen ? "danger-zone-open" : "danger-zone"}
-                  title={t("modal.settings.danger_zone")}
-                  tone="danger"
-                  defaultOpen={deleteOpen}
-                >
+                <SettingsAccordionSection title={t("modal.settings.danger_zone")} tone="danger">
                   {!deleteOpen ? (
                     <View style={styles.section}>
                       <Text style={typography.bodyMuted}>
@@ -1067,7 +1096,7 @@ export function VaultSettingsModal({
             <Text style={typography.bodyMuted}>{vault ? "—" : t("vault.list.loading")}</Text>
           ) : null
         ) : (
-          <View style={styles.placeholder} accessibilityState={{ busy: true }} />
+          <ContentSkeleton label={t("modal.info.loading")} />
         )}
       </View>
     </Modal>
@@ -1083,6 +1112,5 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.xl,
     minHeight: 160,
   },
-  placeholder: { minHeight: 160 },
   footerCol: { gap: spacing.sm },
 });

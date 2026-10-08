@@ -78,7 +78,7 @@ const AppSettingsContext = createContext<AppSettingsContextValue | null>(null);
 
 function SettingsPersistErrorToast({ signal, error }: { signal: number; error: unknown }) {
   const { t } = useTranslation();
-  const { message, show: showToast, dismiss } = useToast();
+  const { toast, show: showToast, dismiss } = useToast();
   const errorRef = useRef(error);
   const tRef = useRef(t);
   const showToastRef = useRef(showToast);
@@ -101,7 +101,7 @@ function SettingsPersistErrorToast({ signal, error }: { signal: number; error: u
     showToastRef.current(tRef.current(key));
   }, [signal]);
 
-  return <Toast message={message} onDismiss={dismiss} className="z-[220]" />;
+  return <Toast toast={toast} onDismiss={dismiss} className="z-[220]" />;
 }
 
 export function AppSettingsProvider({ children }: { children: ReactNode }) {

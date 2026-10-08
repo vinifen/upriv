@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { PathField } from "@/components/PathField";
 import { Button, Modal, Select } from "@/components/ui";
-import { PolicyRadioOption, settingsControlClass } from "@/components/settings";
+import { PolicyRadioOption } from "@/components/settings";
 import { useTranslation } from "@/i18n";
 import {
   SUPPORTED_LOCALES,
@@ -399,9 +400,7 @@ export function VaultRootRepairModal({
               : "modal.vault_root_repair.body",
           )}
         </p>
-        <p className="break-all rounded-md bg-surface-container px-3 py-2 font-mono text-xs text-on-surface">
-          {targetPath}
-        </p>
+        <PathField value={targetPath} readOnly />
         <div
           role="radiogroup"
           aria-label={t("modal.vault_root_repair.title")}
@@ -445,15 +444,11 @@ export function VaultRootRepairModal({
             footer={
               <div className="space-y-2">
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-stretch">
-                  <input
-                    type="text"
-                    readOnly
+                  <PathField
+                    className="sm:flex-1"
                     value={otherPath}
+                    readOnly
                     placeholder={t("modal.vault_root_setup.path_placeholder")}
-                    className={[
-                      settingsControlClass,
-                      "cursor-not-allowed opacity-90 font-mono text-xs sm:min-w-0 sm:flex-1",
-                    ].join(" ")}
                   />
                   <Button
                     type="button"

@@ -1,6 +1,7 @@
 import type { VaultBackupEntry } from "../backups";
 import type { VaultListItem } from "../vault-list";
 import type { KdfUnlockPreset, VaultSettingsConfig } from "../vault-settings";
+import type { WorkspaceSystem } from "../workspace";
 
 export interface VaultRuntimeStats {
   /** `null` when core does not report a counter (do not invent one). */
@@ -26,6 +27,8 @@ export interface VaultInfoSnapshot {
   workspacePath: string | null;
   /** True when the vault session is open (mount is live vs predicted). */
   workspacePathIsActive: boolean;
+  /** Row used for the vault folder override. */
+  workspaceSystem: WorkspaceSystem;
   storePath: string;
   backupsPath: string;
   locale: string;

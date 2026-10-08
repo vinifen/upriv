@@ -45,7 +45,7 @@ export const LOADING_BUDGET_MS = {
    * being written (that write's `startedAt`), not queued siblings. 10 min
    * ceiling for a stuck RPC — overlapping drops are separate sessions. Close
    * and cancel stops queued files; the write already in flight still finishes.
-   * On write/RPC failure keep remaining skeletons and offer Retry.
+   * On write/RPC failure drop the remaining skeletons for that batch.
    */
   vaultFsImport: 600_000,
   /**

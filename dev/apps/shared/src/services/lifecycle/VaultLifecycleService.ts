@@ -27,13 +27,7 @@ export interface VaultLifecycleService {
   ): Promise<CloseVaultOutcome>;
 
   /** Virtual mount path shown until the platform opens the OS file manager. */
-  resolveWorkspacePath(
-    displayName: string,
-    options?: {
-      globalWorkspacePath?: string | null;
-      mountWorkspacePath?: string | null;
-    },
-  ): string;
+  resolveWorkspacePath(displayName: string, parentPath?: string | null): string;
 
   /** Pre-flight password check before starting a lifecycle pipeline (mock or RPC-backed). */
   validateLifecyclePassword(password: string): boolean;

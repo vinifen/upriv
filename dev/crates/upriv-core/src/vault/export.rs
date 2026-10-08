@@ -3,6 +3,8 @@
 use crate::config::load_vault_config;
 use crate::config::vault_config::VaultSevenZipSection;
 use crate::error::{Result, UprivError};
+#[allow(unused_imports)]
+use crate::host_fs::HostFsQuery;
 use crate::paths::seven_zip_outer_folder;
 use crate::paths::VaultRoot;
 use crate::session::{
@@ -18,7 +20,7 @@ use crate::time::utc_filename_stamp;
 use super::embedded_settings::snapshot_settings_bytes;
 use super::seven_zip_pack::{
     ensure_seven_zip_export_ram, logical_export_size, pack_logical_seven_zip_to_writer,
-    seven_zip_archive_vec_budget, seven_zip_pack_ram_needed, try_vec_with_capacity,
+    seven_zip_archive_vec_budget, seven_zip_pack_budget, try_vec_with_capacity,
     LogicalSevenZipSource, SevenZipSink,
 };
 use super::zip_io::{zip_store_with_config_to_bytes, zip_store_with_config_to_path};
@@ -28,7 +30,7 @@ fn closed_vault_paths(
     vault_id: &str,
 ) -> Result<(std::path::PathBuf, std::path::PathBuf)> {
     let vault_dir = root.vault_dir(vault_id)?;
-    if !vault_dir.is_dir() {
+    if !vault_dir.host_is_dir() {
         return Err(UprivError::VaultNotFound(vault_dir));
     }
     let _ = load_vault_config(&vault_dir)?;
@@ -93,14 +95,16 @@ fn pack_logical_seven_zip_to_path(
     dest: &std::path::Path,
 ) -> Result<u64> {
     let sizes = logical_export_size(source.index, skip_export_path);
-    ensure_seven_zip_export_ram(seven_zip_pack_ram_needed(sizes, opts, SevenZipSink::File))?;
-    let file = std::fs::File::create(dest)?;
+    let budget = seven_zip_pack_budget(sizes, opts, SevenZipSink::File);
+    ensure_seven_zip_export_ram(budget.ram)?;
+    let file = crate::host_fs::File::create(dest)?;
     match pack_logical_seven_zip_to_writer(
         file,
         source,
         archive_password,
         opts,
         outer,
+        budget.threads,
         skip_export_path,
     ) {
         Ok(mut file) => {
@@ -109,7 +113,7 @@ fn pack_logical_seven_zip_to_path(
             Ok(file.metadata()?.len())
         }
         Err(error) => {
-            let _ = std::fs::remove_file(dest);
+            let _ = crate::host_fs::remove_file(dest);
             Err(error)
         }
     }
@@ -125,8 +129,8 @@ fn pack_logical_seven_zip_in_memory(
     outer: &str,
 ) -> Result<Vec<u8>> {
     let sizes = logical_export_size(index, skip_export_path);
-    let needed = seven_zip_pack_ram_needed(sizes, opts, SevenZipSink::Memory);
-    ensure_seven_zip_export_ram(needed)?;
+    let budget = seven_zip_pack_budget(sizes, opts, SevenZipSink::Memory);
+    ensure_seven_zip_export_ram(budget.ram)?;
     let buf = try_vec_with_capacity(seven_zip_archive_vec_budget(sizes))?;
     let cursor = pack_logical_seven_zip_to_writer(
         std::io::Cursor::new(buf),
@@ -139,6 +143,7 @@ fn pack_logical_seven_zip_in_memory(
         archive_password,
         opts,
         outer,
+        budget.threads,
         skip_export_path,
     )?;
     Ok(cursor.into_inner())
@@ -175,7 +180,7 @@ pub fn export_logical_seven_zip(
     options: Option<&VaultSevenZipSection>,
 ) -> Result<Vec<u8>> {
     let vault_dir = root.vault_dir(vault_id)?;
-    if !vault_dir.is_dir() {
+    if !vault_dir.host_is_dir() {
         return Err(UprivError::VaultNotFound(vault_dir));
     }
     let config = load_vault_config(&vault_dir)?;
@@ -207,7 +212,7 @@ pub fn export_logical_seven_zip_to_path(
     dest: &std::path::Path,
 ) -> Result<u64> {
     let vault_dir = root.vault_dir(vault_id)?;
-    if !vault_dir.is_dir() {
+    if !vault_dir.host_is_dir() {
         return Err(UprivError::VaultNotFound(vault_dir));
     }
     let config = load_vault_config(&vault_dir)?;
@@ -238,6 +243,8 @@ mod tests {
     use super::*;
     use crate::config::VaultConfig;
     use crate::error::UprivError;
+    #[allow(unused_imports)]
+    use crate::host_fs::HostFsQuery;
     use crate::store::KdfUnlockPreset;
     use crate::test_support::vault_root_with;
     use crate::vault::create::create_vault;
@@ -323,10 +330,10 @@ mode = "encrypted_dir"
             .unwrap()
             .join(crate::paths::STORE_DIR_NAME)
             .join(crate::store::STORE_DANGER_FILE_NAME);
-        let bytes = std::fs::read(&notice).unwrap();
-        std::fs::remove_file(&notice).unwrap();
+        let bytes = crate::host_fs::read(&notice).unwrap();
+        crate::host_fs::remove_file(&notice).unwrap();
         let zip = export_store_zip(&root, "notes").unwrap();
-        assert_eq!(std::fs::read(&notice).unwrap(), bytes);
+        assert_eq!(crate::host_fs::read(&notice).unwrap(), bytes);
         let name = format!(
             "{}/{}",
             crate::paths::STORE_DIR_NAME,
@@ -352,7 +359,7 @@ mode = "encrypted_dir"
         let bytes = export_store_zip(&root, "notes").unwrap();
         let dest = _tmp.path().join("Notes.zip");
         let size = export_store_zip_to_path(&root, "notes", &dest).unwrap();
-        let on_disk = std::fs::read(&dest).unwrap();
+        let on_disk = crate::host_fs::read(&dest).unwrap();
         assert_eq!(size as usize, on_disk.len());
         assert_same_store_payload(&bytes, &on_disk);
         let embedded = crate::vault::read_zip_config_toml(std::io::Cursor::new(bytes))

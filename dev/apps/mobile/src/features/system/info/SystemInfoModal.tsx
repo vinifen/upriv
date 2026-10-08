@@ -1,7 +1,7 @@
 import { useCallback, useMemo } from "react";
-import { StyleSheet, Text, View } from "react-native";
+import { Platform, StyleSheet, Text, View } from "react-native";
 import { SettingsAccordionSection } from "@/components/settings";
-import { Button, Modal } from "@/components/ui";
+import { Button, ContentSkeleton, Modal } from "@/components/ui";
 import { useAppSettingsContext } from "@/features/system/settings";
 import { useTranslation } from "@/i18n";
 import { getMobileAppVersion } from "@/lib/appVersion";
@@ -44,6 +44,7 @@ export function SystemInfoModal({ open, onClose, vaults, groups }: SystemInfoMod
     vaultRootService,
     getVersion,
     showHiddenVaults,
+    host: Platform.OS,
   });
 
   useVaultRootIntegrityClose(open, loadFailure, reportVaultRootIntegrityFailure, onClose);
@@ -95,9 +96,7 @@ export function SystemInfoModal({ open, onClose, vaults, groups }: SystemInfoMod
           />
         </View>
       ) : (
-        <Text style={[typography.bodyMuted, { color: colors.onSurfaceVariant }]}>
-          {t("modal.info.loading")}
-        </Text>
+        <ContentSkeleton label={t("modal.info.loading")} />
       )}
     </Modal>
   );

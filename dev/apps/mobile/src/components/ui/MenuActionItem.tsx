@@ -1,7 +1,7 @@
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { Icon, type IconName } from "@/components/icons";
 import { useTheme } from "@/theme";
-import { spacing } from "@/theme/tokens";
+import { colorAlpha, spacing } from "@/theme/tokens";
 import { useDropdownPanelClose } from "./DropdownPanel";
 
 interface MenuActionItemProps {
@@ -51,7 +51,11 @@ export function MenuActionItem({
       style={({ pressed }) => [
         styles.row,
         {
-          backgroundColor: selected || pressed ? colors.surfaceContainerHighest : "transparent",
+          backgroundColor: selected
+            ? colorAlpha(colors.accent, 0.15)
+            : pressed
+              ? colors.surfaceContainerHighest
+              : "transparent",
           opacity: disabled ? 0.45 : 1,
         },
       ]}

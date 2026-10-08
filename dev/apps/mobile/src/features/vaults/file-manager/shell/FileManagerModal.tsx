@@ -27,6 +27,8 @@ interface FileManagerModalProps {
   open: boolean;
   title: string;
   contextTitle?: string;
+  /** Closing / backing up, shown beside the vault name. */
+  activityLabel?: string;
   onMinimize: () => void;
   onDismiss: () => void;
   /** When true, back / backdrop must not minimize (unsaved dialog active). */
@@ -49,6 +51,7 @@ export function FileManagerModal({
   open,
   title,
   contextTitle,
+  activityLabel,
   onMinimize,
   onDismiss,
   suspendMinimize = false,
@@ -191,7 +194,7 @@ export function FileManagerModal({
       >
         <Animated.View
           accessibilityRole="summary"
-          accessibilityLabel={contextTitle ? `${title}. ${contextTitle}` : title}
+          accessibilityLabel={[title, contextTitle, activityLabel].filter(Boolean).join(". ")}
           style={[
             styles.panel,
             modalShadow,
@@ -226,6 +229,14 @@ export function FileManagerModal({
                     {contextTitle}
                   </Text>
                 </>
+              ) : null}
+              {activityLabel ? (
+                <Text
+                  style={[styles.context, { color: colors.primary, fontWeight: "600" }]}
+                  numberOfLines={1}
+                >
+                  {activityLabel}
+                </Text>
               ) : null}
             </View>
             <IconButton

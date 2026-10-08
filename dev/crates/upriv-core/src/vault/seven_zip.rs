@@ -6,7 +6,7 @@
 //! Plaintext is capped at 64 times the archive length, the same factor as a
 //! files zip.
 
-use std::fs::File;
+use crate::host_fs::File;
 use std::io::{Cursor, ErrorKind, Read, Seek};
 use std::path::{Path, PathBuf};
 
@@ -23,7 +23,7 @@ use super::files_zip::FILES_ZIP_EXPAND_FACTOR;
 use super::fs::{fs_ensure_folder, fs_write_from_reader};
 use super::open_close::{abandon_failed_import, close_vault, open_vault_for_ingest};
 use super::seven_zip_pack::{
-    ensure_seven_zip_export_ram, seven_zip_import_ram_needed, sevenz_member_name_unsafe,
+    ensure_seven_zip_export_ram, seven_zip_decode_budget, sevenz_member_name_unsafe,
     sevenz_password,
 };
 
@@ -49,10 +49,11 @@ fn open_prepared_reader<R: Read + Seek>(
     archive_password: &[u8],
     archive_len: u64,
 ) -> Result<ArchiveReader<R>> {
-    ensure_seven_zip_export_ram(seven_zip_import_ram_needed())?;
+    let decode = seven_zip_decode_budget();
+    ensure_seven_zip_export_ram(decode.ram)?;
     let password = sevenz_password(archive_password)?;
     let mut reader = ArchiveReader::new(reader, password).map_err(map_sevenz_read_error)?;
-    reader.set_thread_count(1);
+    reader.set_thread_count(decode.threads);
     let budget = plaintext_budget(archive_len);
     if reader
         .archive()

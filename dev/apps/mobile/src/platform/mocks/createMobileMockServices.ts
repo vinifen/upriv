@@ -9,7 +9,6 @@ import {
   isVaultPipelineError,
   resolveVaultMountPoint,
   runTimedPipeline,
-  WORKSPACE_PATH_DEFAULT,
   DEFAULT_KDF_UNLOCK_PRESET,
   displayNameToVaultId,
   normalizeStoredName,
@@ -548,14 +547,8 @@ export function createMobileMockServices(): AppServices {
         });
         return { backupFailed: false };
       },
-      resolveWorkspacePath(displayName, options) {
-        return (
-          resolveVaultMountPoint(
-            options?.globalWorkspacePath ?? runtimeSettings.workspace.path,
-            options?.mountWorkspacePath ?? WORKSPACE_PATH_DEFAULT,
-            displayName,
-          ) ?? ""
-        );
+      resolveWorkspacePath(displayName, parentPath) {
+        return resolveVaultMountPoint(parentPath ?? "", displayName) ?? "";
       },
       validateLifecyclePassword(password) {
         return isMockLifecyclePasswordValid(password);

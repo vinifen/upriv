@@ -5,6 +5,7 @@ import {
   parseEmbeddedVaultSettings,
 } from "../applyEmbeddedVaultSettings";
 import type { VaultSettingsConfig } from "../../vault-settings";
+import { vaultWorkspace } from "../../workspace";
 
 function settings(patch: Partial<VaultSettingsConfig> = {}): VaultSettingsConfig {
   return {
@@ -17,7 +18,11 @@ function settings(patch: Partial<VaultSettingsConfig> = {}): VaultSettingsConfig
       hidden: true,
     },
     storage: { mode: "encrypted_dir" },
-    mount: { workspace_path: "/data/vaults" },
+    mount: {
+      ...vaultWorkspace(),
+      custom_file_manager_folder: true,
+      linux: { place: "unset", path: "/data/vaults" },
+    },
     backup: { enabled: false, mode: "keep_all", keep_last: 3 },
     security: {
       mode: "always_prompt",

@@ -6,6 +6,8 @@ export interface InfoField {
   id: string;
   label: string;
   value: string;
+  /** Absolute OS path or `content://` URI the system file manager can open. */
+  openPath?: string;
 }
 
 export interface InfoSection {

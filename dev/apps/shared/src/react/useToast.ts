@@ -3,9 +3,18 @@ import { scheduleTimeout } from "./schedule";
 
 export const TOAST_DEFAULT_MS = 5000;
 
+/** One visible toast. `id` changes on every `show`, so the progress line restarts. */
+export interface ToastState {
+  message: string;
+  /** Auto-dismiss delay. `0` = stays until dismissed (no progress line). */
+  durationMs: number;
+  id: number;
+}
+
 export function useToast(defaultMs = TOAST_DEFAULT_MS) {
-  const [message, setMessage] = useState<string | null>(null);
+  const [toast, setToast] = useState<ToastState | null>(null);
   const cancelRef = useRef<(() => void) | null>(null);
+  const idRef = useRef(0);
 
   const clearTimer = useCallback(() => {
     cancelRef.current?.();
@@ -14,18 +23,21 @@ export function useToast(defaultMs = TOAST_DEFAULT_MS) {
 
   const dismiss = useCallback(() => {
     clearTimer();
-    setMessage(null);
+    setToast(null);
   }, [clearTimer]);
 
   const show = useCallback(
-    (next: string, durationMs = defaultMs) => {
+    (message: string, durationMs = defaultMs) => {
       clearTimer();
-      setMessage(next);
-      if (durationMs > 0) {
+      idRef.current += 1;
+      const id = idRef.current;
+      const duration = Math.max(0, durationMs);
+      setToast({ message, durationMs: duration, id });
+      if (duration > 0) {
         cancelRef.current = scheduleTimeout(() => {
-          setMessage(null);
           cancelRef.current = null;
-        }, durationMs);
+          setToast((current) => (current?.id === id ? null : current));
+        }, duration);
       }
     },
     [clearTimer, defaultMs],
@@ -33,5 +45,5 @@ export function useToast(defaultMs = TOAST_DEFAULT_MS) {
 
   useEffect(() => () => clearTimer(), [clearTimer]);
 
-  return { message, show, dismiss };
+  return { toast, show, dismiss };
 }

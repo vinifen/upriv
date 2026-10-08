@@ -1,7 +1,9 @@
 //! Import a `.zip` of `store/` (ciphertext copy) or unpack `backups/<stamp>-<id>.zip`
 //! into a new vault.
 
-use std::fs::File;
+use crate::host_fs::File;
+#[allow(unused_imports)]
+use crate::host_fs::HostFsQuery;
 use std::io::{ErrorKind, Read};
 use std::path::Path;
 
@@ -28,14 +30,33 @@ pub(crate) fn map_archive_open_error(path: &Path, error: std::io::Error) -> Upri
             path: path.to_path_buf(),
             detail: "refusing a non-file".into(),
         },
-        None if matches!(
-            error.kind(),
-            ErrorKind::NotFound | ErrorKind::PermissionDenied
-        ) =>
-        {
+        None if archive_open_unreadable(&error) => {
             UprivError::ImportArchiveNotFound(path.to_path_buf())
         }
         None => error.into(),
+    }
+}
+
+/// Missing, denied, or `O_NOFOLLOW` rejected by Android FUSE (Downloads).
+/// Those are the chosen archive, not the vault-root data folder (`io_error`).
+fn archive_open_unreadable(error: &std::io::Error) -> bool {
+    if matches!(
+        error.kind(),
+        ErrorKind::NotFound | ErrorKind::PermissionDenied
+    ) {
+        return true;
+    }
+    #[cfg(unix)]
+    {
+        matches!(
+            error.raw_os_error(),
+            Some(libc::ENOENT | libc::EACCES | libc::EPERM)
+        )
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = error;
+        false
     }
 }
 
@@ -64,9 +85,9 @@ fn materialize_imported_store(
 ) -> Result<String> {
     let id = prepare_imported_id(root, &mut config)?;
     let dest = root.vault_dir(&id)?;
-    std::fs::create_dir_all(root.vaults_dir())?;
+    crate::host_fs::create_dir_all(root.vaults_dir())?;
     with_vault_registry_lock(|| {
-        with_vault_dir_lock(&dest, || match std::fs::create_dir(&dest) {
+        with_vault_dir_lock(&dest, || match crate::host_fs::create_dir(&dest) {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == ErrorKind::AlreadyExists => {
                 Err(UprivError::VaultAlreadyExists(dest.clone()))
@@ -77,7 +98,7 @@ fn materialize_imported_store(
     let _preparing = match PreparingGuard::enter(&dest) {
         Ok(guard) => guard,
         Err(error) => {
-            let _ = std::fs::remove_dir_all(&dest);
+            let _ = crate::host_fs::remove_dir_all(&dest);
             return Err(error);
         }
     };
@@ -88,13 +109,13 @@ fn materialize_imported_store(
             fill_store(&store)?;
             crate::store::ensure_danger_notice(&store)?;
             load_header(&store)?;
-            if !store.join(INDEX_DIR_NAME).is_dir() {
+            if !store.join(INDEX_DIR_NAME).host_is_dir() {
                 return Err(UprivError::VaultStoreInvalid {
                     path: store.clone(),
                     detail: "imported store is missing index/".into(),
                 });
             }
-            std::fs::create_dir_all(dest.join("backups"))?;
+            crate::host_fs::create_dir_all(dest.join("backups"))?;
             let hash = content_hash_hex(&store)?;
             save_vault_persistence(
                 &dest,
@@ -107,7 +128,7 @@ fn materialize_imported_store(
             Ok(())
         })();
         if created.is_err() {
-            let _ = std::fs::remove_dir_all(&dest);
+            let _ = crate::host_fs::remove_dir_all(&dest);
         }
         created
     })?;
@@ -126,7 +147,7 @@ pub fn import_store_zip_path(
     config: VaultConfig,
     zip_path: &Path,
 ) -> Result<String> {
-    if !zip_path.is_absolute() || !zip_path.is_file() {
+    if !zip_path.is_absolute() || !zip_path.host_is_file() {
         return Err(UprivError::ImportArchiveNotFound(zip_path.to_path_buf()));
     }
     materialize_imported_store(root, config, |store| unzip_store_path(zip_path, store))
@@ -134,7 +155,7 @@ pub fn import_store_zip_path(
 
 /// Create a new vault by copying an existing ciphertext `store/` (or backup) tree.
 pub fn import_store_tree(root: &VaultRoot, config: VaultConfig, src: &Path) -> Result<String> {
-    if !src.is_dir() {
+    if !src.host_is_dir() {
         return Err(UprivError::VaultPathNotFound(src.display().to_string()));
     }
     materialize_imported_store(root, config, |store| copy_ciphertext_tree(src, store))
@@ -186,12 +207,12 @@ pub fn read_import_zip_settings(
         backup_zip_file(root, &id, &stamp)?
     } else {
         let path = Path::new(archive_path);
-        if !path.is_absolute() || !path.is_file() {
+        if !path.is_absolute() || !path.host_is_file() {
             return Err(UprivError::ImportArchiveNotFound(path.to_path_buf()));
         }
         path.to_path_buf()
     };
-    let file = File::open(&zip_path)?;
+    let file = File::open(&zip_path).map_err(|error| map_archive_open_error(&zip_path, error))?;
     match read_zip_config_toml(file)? {
         Some(bytes) => Ok(Some(parse_embedded_settings(&bytes)?)),
         None => Ok(None),
@@ -221,7 +242,7 @@ pub fn read_import_archive_bytes(path: &Path) -> Result<Vec<u8>> {
     };
     let len = file.metadata()?.len();
     // This path copies the archive into a buffer. The decoder's own check is
-    // only the slack in `seven_zip_import_ram_needed`.
+    // the slack in `seven_zip_decode_budget`, separate from this length.
     ensure_seven_zip_export_ram(len)?;
     let mut buf = try_vec_with_capacity(len)?;
     file.take(len).read_to_end(&mut buf)?;
@@ -239,7 +260,7 @@ pub fn import_store_from_archive_path(
             Ok(id) => return Ok(id),
             Err(error) => {
                 let path = Path::new(archive_path);
-                if path.is_dir() {
+                if path.host_is_dir() {
                     return import_store_tree(root, config, path);
                 }
                 return Err(error);
@@ -247,7 +268,7 @@ pub fn import_store_from_archive_path(
         }
     }
     let path = Path::new(archive_path);
-    if path.is_dir() {
+    if path.host_is_dir() {
         return import_store_tree(root, config, path);
     }
     import_store_zip_path(root, config, path)
@@ -256,6 +277,8 @@ pub fn import_store_from_archive_path(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[allow(unused_imports)]
+    use crate::host_fs::HostFsQuery;
     use crate::store::KdfUnlockPreset;
     use crate::test_support::vault_root_with;
     use crate::vault::{close_vault, create_vault, list_backups, open_vault};
@@ -327,13 +350,14 @@ mode = "encrypted_dir"
         )
         .unwrap();
         assert_eq!(new_id, "notes-backup");
-        assert!(root.vault_store_dir("notes-backup").unwrap().is_dir());
+        assert!(root.vault_store_dir("notes-backup").unwrap().host_is_dir());
         crate::store::load_header(root.vault_store_dir("notes-backup").unwrap())
             .expect("imported header");
         let notice = crate::store::STORE_DANGER_FILE_NAME;
         assert_eq!(
-            std::fs::read(root.vault_store_dir("notes").unwrap().join(notice)).unwrap(),
-            std::fs::read(root.vault_store_dir("notes-backup").unwrap().join(notice)).unwrap()
+            crate::host_fs::read(root.vault_store_dir("notes").unwrap().join(notice)).unwrap(),
+            crate::host_fs::read(root.vault_store_dir("notes-backup").unwrap().join(notice))
+                .unwrap()
         );
     }
 

@@ -42,6 +42,7 @@ import {
   VAULT_ROW_DENSITY,
   vaultBlocksColumnCount,
   createVaultImportPackage,
+  createVaultImportPackageKind,
   type CreateVaultDraft,
   type CreateVaultGroupAssignment,
   type CreateVaultResult,
@@ -70,13 +71,25 @@ import {
   claimContentTreeForCreate,
   contentTreeClaimedForCreate,
   releaseContentJob,
-  releaseContentTree,
+  releaseUnclaimedImport,
 } from "@/platform/native/contentTreeImport";
+import { releaseImportCache } from "@/platform/native/importCache";
 import { useVaultListModals } from "./useVaultListModals";
 import { useVaultListState } from "./useVaultListState";
 import { flattenHierarchyRows, packRowsForBlocks } from "../lib/hierarchyRows";
 
 const PAGE_PAD_H = spacing.md;
+
+/** A folder or one document is streamed. A zip or 7z stays on the archive path. */
+function claimsContentTree(result: CreateVaultResult): boolean {
+  if (result.source !== "import") return false;
+  if (result.importShape === "directory") return true;
+  try {
+    return createVaultImportPackageKind(result) === "os_tree";
+  } catch {
+    return false;
+  }
+}
 
 export function useVaultListScreen() {
   const { t } = useTranslation();
@@ -90,6 +103,7 @@ export function useVaultListScreen() {
     showHiddenVaultsSession,
     reportVaultRootIntegrityFailure,
     settingsOnDisk,
+    settingsReady,
     vaultRootEpoch,
   } = useAppSettingsContext();
   const insets = useSafeAreaInsets();
@@ -97,7 +111,7 @@ export function useVaultListScreen() {
   const [measuredHeaderHeight, setMeasuredHeaderHeight] = useState<number | null>(null);
   const appHeaderHeight = measuredHeaderHeight ?? headerHeightFallback;
   const { width: windowWidth } = useWindowDimensions();
-  const { message, show, dismiss } = useToast();
+  const { toast, show, dismiss } = useToast();
   const { openFromVault, syncWithVaultList, purgeForVaultClose, flushWorkspaceSnapshot } =
     useFileManager();
 
@@ -194,6 +208,11 @@ export function useVaultListScreen() {
     () => vaults.find((vault) => vault.id === vaultInfoVaultId) ?? null,
     [vaults, vaultInfoVaultId],
   );
+  const backupsVaultId = modals.backupsVault?.id ?? null;
+  const backupsVault = useMemo(
+    () => vaults.find((vault) => vault.id === backupsVaultId) ?? null,
+    [vaults, backupsVaultId],
+  );
 
   const hierarchyRows = useMemo(() => {
     return applyVaultListHierarchySort(
@@ -228,11 +247,8 @@ export function useVaultListScreen() {
   const sessionWritesRef = useRef(new Map<string, number>());
   const settingsPersistVaultIdsRef = useRef(new Set<string>());
   const prevVaultRootEpochRef = useRef(vaultRootEpoch);
-  useEffect(() => {
-    if (prevVaultRootEpochRef.current === vaultRootEpoch) return;
-    prevVaultRootEpochRef.current = vaultRootEpoch;
-    sessionWritesRef.current.clear();
-  }, [vaultRootEpoch]);
+  const vaultRootEpochRef = useRef(vaultRootEpoch);
+  vaultRootEpochRef.current = vaultRootEpoch;
 
   const setVaultRuntimeState = useCallback(
     (
@@ -267,11 +283,13 @@ export function useVaultListScreen() {
   const reload = useCallback(async (): Promise<VaultListItem[]> => {
     setRefreshing(true);
     const fetchStartedAt = Date.now();
+    const epochAtStart = vaultRootEpochRef.current;
     try {
       const [list, groupResult] = await Promise.all([
         vaultService.listVaults(),
         vaultGroupService.list(),
       ]);
+      if (vaultRootEpochRef.current !== epochAtStart) return [];
       for (const row of list) {
         pendingCreatesRef.current.delete(row.id);
       }
@@ -329,8 +347,21 @@ export function useVaultListScreen() {
   ]);
 
   useEffect(() => {
+    if (!settingsReady) return;
     void reload();
-  }, [reload]);
+  }, [reload, settingsReady]);
+
+  useEffect(() => {
+    if (prevVaultRootEpochRef.current === vaultRootEpoch) return;
+    prevVaultRootEpochRef.current = vaultRootEpoch;
+    sessionWritesRef.current.clear();
+    pendingCreatesRef.current.clear();
+    pendingCreateGroupsRef.current.clear();
+    setVaults([]);
+    setGroups([]);
+    if (!settingsReady) return;
+    void reload();
+  }, [reload, setGroups, setVaults, settingsReady, vaultRootEpoch]);
 
   useEffect(() => {
     syncWithVaultList(vaults);
@@ -340,6 +371,7 @@ export function useVaultListScreen() {
     () => ({
       openingVaultIds: [...lifecycle.openingVaultIds],
       closingVaultIds: [...lifecycle.closingVaultIds],
+      backingUpVaultIds: [...lifecycle.backingUpVaultIds],
       creatingVaultIds: [...lifecycle.creatingVaultIds],
       queuedVaultIds: [...lifecycle.queuedVaultIds],
       queuedOpenVaultIds: [...lifecycle.queuedOpenVaultIds],
@@ -349,6 +381,7 @@ export function useVaultListScreen() {
     [
       lifecycle.activePipelineStartedAt,
       lifecycle.activePipelineVaultId,
+      lifecycle.backingUpVaultIds,
       lifecycle.closingVaultIds,
       lifecycle.creatingVaultIds,
       lifecycle.openingVaultIds,
@@ -933,7 +966,7 @@ export function useVaultListScreen() {
       lifecycle.creatingVaultIds.length > 0 || (isVaultPipelineBusy(result.vaultId) && !listed);
     if (createInFlight) {
       show(t("vault.create.busy"));
-      releaseContentTree(result.importFilePath ?? "");
+      releaseUnclaimedImport(result.importFilePath ?? "");
       return;
     }
     if (listed) {
@@ -958,13 +991,19 @@ export function useVaultListScreen() {
       setGroups((current) => applyPendingCreateGroupEffect(current, groupEffect));
     }
 
-    if (result.importShape === "directory") {
-      claimContentTreeForCreate(result.vaultId, result.importFilePath ?? "");
-    }
+    const releaseCreateImport = () => {
+      const claimed = contentTreeClaimedForCreate(result.vaultId);
+      if (claimed) releaseContentJob(claimed);
+      if (result.source !== "import") return;
+      void releaseImportCache(result.importFilePath ?? "").catch(() => undefined);
+    };
 
     const started = lifecycle.startCreatePipeline(
       result.vaultId,
       async () => {
+        if (claimsContentTree(result)) {
+          await claimContentTreeForCreate(result.vaultId, result.importFilePath ?? "");
+        }
         await vaultService.createVault({
           password,
           unlockPreset: result.unlockPreset,
@@ -997,6 +1036,7 @@ export function useVaultListScreen() {
           })();
         },
         onError: () => {
+          releaseCreateImport();
           const pendingEffect = pendingCreateGroupsRef.current.get(result.vaultId);
           pendingCreatesRef.current.delete(result.vaultId);
           pendingCreateGroupsRef.current.delete(result.vaultId);
@@ -1007,8 +1047,7 @@ export function useVaultListScreen() {
           }
         },
         onAbandoned: () => {
-          const claimed = contentTreeClaimedForCreate(result.vaultId);
-          if (claimed) releaseContentJob(claimed);
+          releaseCreateImport();
         },
       },
     );
@@ -1037,7 +1076,7 @@ export function useVaultListScreen() {
     patchSettings,
     show,
     dismiss,
-    message,
+    toast,
     openFromVault,
     setMeasuredHeaderHeight,
     ...state,
@@ -1064,6 +1103,7 @@ export function useVaultListScreen() {
     existingDisplayNames,
     noteVault,
     vaultInfoVault,
+    backupsVault,
     displayRowsRef,
     searchNoMatches,
     visibleVaults,

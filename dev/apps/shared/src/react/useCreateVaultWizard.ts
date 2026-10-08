@@ -10,19 +10,23 @@ import {
 import {
   buildCreateVaultResult,
   canSubmitCreateVault,
+  CREATE_VAULT_STEPS,
   createEmptyCreateVaultDraft,
   createVaultImportNeedsArchivePassword,
   createVaultWizardInitialState,
   createVaultWizardReducer,
+  firstInvalidCreateVaultField,
   isRpcError,
   MODAL_OPEN_MS,
   NO_VAULT_GROUPS,
   resolveCreateVaultCloseIntent,
   resolveCreateVaultFocusTarget,
+  resolveCreateVaultNextKeyField,
   resolveCreateVaultOpenStep,
   selectCreateVaultWizardView,
   shouldBumpVaultRootEpoch,
   shouldSelectCreateVaultFocusText,
+  validateCreateVaultStep,
   VAULT_ERROR_CODES,
   type CreateVaultDraft,
   type EmbeddedSettingsSnapshot,
@@ -46,7 +50,8 @@ export interface CreateVaultStepFocusProps<
 > {
   onFieldFocus: (field: CreateVaultFocusField) => void;
   bindFieldRef: (field: CreateVaultFocusField) => (node: TField | null) => void;
-  onAdvanceStep: () => void;
+  /** Keyboard Next / Enter on a field: next invalid field, else the step's Next. */
+  onFieldSubmit: (field: CreateVaultFocusField) => void;
 }
 
 export interface UseCreateVaultWizardOptions {
@@ -116,6 +121,11 @@ export function useCreateVaultWizard<
   const fieldRefs = useRef<Partial<Record<CreateVaultFocusField, TField>>>({});
   const lastFocusByStep = useRef<Partial<Record<CreateVaultStepId, CreateVaultFocusField>>>({});
   const visitedSteps = useRef<Set<CreateVaultStepId>>(new Set());
+  /** Focus chosen by a keyboard Next that advanced the step (null = no field needs input). */
+  const pendingStepFocus = useRef<{
+    step: CreateVaultStepId;
+    field: CreateVaultFocusField | null;
+  } | null>(null);
   const wasOpen = useRef(false);
   /** When true, first focus waits for the modal enter tween. */
   const deferFocusOnOpen = useRef(false);
@@ -149,6 +159,7 @@ export function useCreateVaultWizard<
       fieldRefs.current = {};
       lastFocusByStep.current = {};
       visitedSteps.current = new Set();
+      pendingStepFocus.current = null;
       settingsSnapshot.current = null;
       settingsPath.current = null;
       passwordTestGen.current += 1;
@@ -161,6 +172,7 @@ export function useCreateVaultWizard<
         settingsPath.current = null;
         passwordTestGen.current += 1;
         settingsGen.current += 1;
+        dispatch({ type: "closed" });
       }
     }
     wasOpen.current = open;
@@ -359,22 +371,58 @@ export function useCreateVaultWizard<
     [],
   );
 
+  const focusField = useCallback((field: CreateVaultFocusField) => {
+    const node = fieldRefs.current[field];
+    node?.focus();
+    if (shouldSelectCreateVaultFocusText(field)) node?.select?.();
+  }, []);
+
+  const onFieldSubmit = useCallback(
+    (field: CreateVaultFocusField) => {
+      const validate = (step: CreateVaultStepId) =>
+        validateCreateVaultStep(
+          step,
+          state.draft,
+          context.existingVaultIds,
+          context.knownGroupIds,
+          context.vaultRootPath,
+        );
+      const step = state.currentStep;
+      const errors = validate(step);
+      const target = resolveCreateVaultNextKeyField(step, field, errors);
+      if (target) {
+        focusField(target);
+        return;
+      }
+      const nextStep = CREATE_VAULT_STEPS[CREATE_VAULT_STEPS.indexOf(step) + 1];
+      if (errors.length === 0 && nextStep) {
+        pendingStepFocus.current = {
+          step: nextStep,
+          field: firstInvalidCreateVaultField(nextStep, validate(nextStep)),
+        };
+      }
+      dispatch({ type: "nextRequested", context });
+    },
+    [context, focusField, state.currentStep, state.draft],
+  );
+
   useLayoutEffect(() => {
     if (!open) return;
     const step = state.currentStep;
-    const target = resolveCreateVaultFocusTarget(
-      step,
-      lastFocusByStep.current[step],
-      visitedSteps.current.has(step),
-    );
+    const pending = pendingStepFocus.current;
+    pendingStepFocus.current = null;
+    const target =
+      pending?.step === step
+        ? pending.field
+        : resolveCreateVaultFocusTarget(
+            step,
+            lastFocusByStep.current[step],
+            visitedSteps.current.has(step),
+          );
     visitedSteps.current.add(step);
     if (!target) return;
 
-    const focusField = () => {
-      const field = fieldRefs.current[target];
-      field?.focus();
-      if (shouldSelectCreateVaultFocusText(target)) field?.select?.();
-    };
+    const focusTarget = () => focusField(target);
 
     // Wait for the shared modal enter tween on first open; step changes focus ASAP.
     // `deferFocusOnOpen` is set in a useEffect that runs *after* this layout pass, so
@@ -382,17 +430,17 @@ export function useCreateVaultWizard<
     const delay = deferFocusOnOpen.current || !wasOpen.current ? MODAL_OPEN_MS : 0;
     deferFocusOnOpen.current = false;
     if (delay <= 0) {
-      return scheduleAnimationFrame(focusField);
+      return scheduleAnimationFrame(focusTarget);
     }
     let cancelFrame: (() => void) | undefined;
     const cancelTimeout = scheduleTimeout(() => {
-      cancelFrame = scheduleAnimationFrame(focusField);
+      cancelFrame = scheduleAnimationFrame(focusTarget);
     }, delay);
     return () => {
       cancelTimeout();
       cancelFrame?.();
     };
-  }, [open, state.currentStep]);
+  }, [focusField, open, state.currentStep]);
 
   return {
     draft: state.draft,
@@ -409,7 +457,7 @@ export function useCreateVaultWizard<
     requestClose,
     handleDiscardAndClose,
     dismissFooterConfirm,
-    stepFocus: { onFieldFocus, bindFieldRef, onAdvanceStep: handleNext },
+    stepFocus: { onFieldFocus, bindFieldRef, onFieldSubmit },
     groups,
   };
 }

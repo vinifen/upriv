@@ -1,28 +1,42 @@
+/**
+ * Theme colors are CSS variables holding hex values, so Tailwind cannot add an
+ * alpha channel itself. Opacity modifiers (`bg-accent/15`) mix with transparent,
+ * matching mobile `colorAlpha`.
+ */
+function themeColor(variable) {
+  return ({ opacityValue }) => {
+    if (opacityValue === undefined || String(opacityValue).startsWith("var(")) {
+      return `var(${variable})`;
+    }
+    return `color-mix(in srgb, var(${variable}) calc(${opacityValue} * 100%), transparent)`;
+  };
+}
+
 /** @type {import('tailwindcss').Config} */
 export default {
   content: ["./index.html", "./src/**/*.{js,ts,jsx,tsx}"],
   theme: {
     extend: {
       colors: {
-        background: "var(--background)",
-        "surface-container": "var(--surface-container)",
-        "surface-container-low": "var(--surface-container-low)",
-        "surface-container-high": "var(--surface-container-high)",
-        "surface-row-hover": "var(--surface-row-hover)",
-        "on-surface": "var(--on-surface)",
-        "on-surface-variant": "var(--on-surface-variant)",
-        "outline-variant": "var(--outline-variant)",
-        primary: "var(--primary)",
-        "on-primary": "var(--on-primary)",
-        "surface-container-highest": "var(--surface-container-highest)",
-        accent: "var(--accent)",
-        "accent-foreground": "var(--accent-foreground)",
-        "error-container": "var(--error-container)",
-        "on-error-container": "var(--on-error-container)",
+        background: themeColor("--background"),
+        "surface-container": themeColor("--surface-container"),
+        "surface-container-low": themeColor("--surface-container-low"),
+        "surface-container-high": themeColor("--surface-container-high"),
+        "surface-row-hover": themeColor("--surface-row-hover"),
+        "on-surface": themeColor("--on-surface"),
+        "on-surface-variant": themeColor("--on-surface-variant"),
+        "outline-variant": themeColor("--outline-variant"),
+        primary: themeColor("--primary"),
+        "on-primary": themeColor("--on-primary"),
+        "surface-container-highest": themeColor("--surface-container-highest"),
+        accent: themeColor("--accent"),
+        "accent-foreground": themeColor("--accent-foreground"),
+        "error-container": themeColor("--error-container"),
+        "on-error-container": themeColor("--on-error-container"),
         vault: {
-          open: "var(--vault-status-open)",
-          closed: "var(--vault-status-closed)",
-          recovery: "var(--vault-status-recovery)",
+          open: themeColor("--vault-status-open"),
+          closed: themeColor("--vault-status-closed"),
+          recovery: themeColor("--vault-status-recovery"),
         },
       },
       fontFamily: {

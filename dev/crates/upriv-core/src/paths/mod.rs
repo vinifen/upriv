@@ -9,9 +9,12 @@
 //! Default-root mode ignores an active alias (alias file is the on-disk source of truth for
 //! mode/path — not `settings.toml`) and deactivates it on save.
 
+#[allow(unused_imports)]
+use crate::host_fs::HostFsQuery;
 mod distribution;
 pub(crate) mod fs_env;
 mod init;
+mod relocate;
 mod resolve;
 mod slug_alloc;
 mod workspace;
@@ -33,6 +36,7 @@ pub(crate) use init::{
     open_or_initialize_vault_root_with_options, open_or_initialize_vault_root_with_policy,
     open_or_initialize_vault_root_with_policy_and_bootstrap,
 };
+pub use relocate::{relocate_upriv_dir, UprivDirRelocate};
 pub use resolve::{
     app_home_dir, binary_dir, deactivate_vault_root_alias_everywhere, discover_vault_root_upward,
     read_vault_root_alias, resolve_vault_root, setup_default_root_anchor, vault_root_alias_path,
@@ -41,10 +45,12 @@ pub use resolve::{
 };
 pub use slug_alloc::display_name_to_vault_id;
 pub use workspace::{
-    is_absolute_filesystem_path, is_reserved_upriv_workspace_path, needs_workspace_setup_on_open,
-    normalize_mount_workspace_path, path_is_under_reserved_upriv_tree, resolve_mount_parent_path,
-    resolve_vault_mount_point, suggested_default_workspace_path, validate_mount_workspace_path,
-    validate_workspace_global_path, RESERVED_UPRIV_WORKSPACE_CHILDREN, WORKSPACE_PATH_DEFAULT,
+    app_workspace_place, encrypted_shortcut_active, is_absolute_filesystem_path,
+    is_absolute_workspace_address, is_reserved_upriv_workspace_path,
+    path_is_under_reserved_upriv_tree, resolve_vault_mount_point, resolved_workspace_parent,
+    suggested_default_workspace_path, validate_workspace_global_path, validate_workspace_table,
+    VaultMountSection, VaultShortcut, WorkspaceOsEntry, WorkspacePlace, WorkspaceSettings,
+    WorkspaceSystem, WorkspaceTable, RESERVED_UPRIV_WORKSPACE_CHILDREN,
 };
 
 /// Crate-internal: validate/open a default_root candidate path (used by `config::app_settings`).
@@ -105,6 +111,8 @@ const RUNTIME_DIR_REL: &str = ".upriv/runtime";
 pub const STORE_DIR_NAME: &str = "store";
 
 /// Atomically write `bytes` to `path` (temp + `sync_all` + rename + parent fsync).
+/// On a storage-access folder, a provider that refuses to rename onto an
+/// existing document is overwritten in place from the same bytes.
 /// On failure, best-effort removes the temp file.
 /// After rename, fsync the parent directory on Unix and return that error.
 ///
@@ -135,19 +143,22 @@ pub(crate) enum NofollowMode {
 /// Open `path` without following a symlink or Windows reparse point at the
 /// final component. Directory symlinks earlier in the path are still followed,
 /// so a vault folder that is itself a link keeps working.
-pub(crate) fn open_nofollow(path: &Path, mode: NofollowMode) -> std::io::Result<std::fs::File> {
+pub(crate) fn open_nofollow(
+    path: &Path,
+    mode: NofollowMode,
+) -> std::io::Result<crate::host_fs::File> {
     use std::io::{Error, ErrorKind};
 
-    if let Ok(meta) = std::fs::symlink_metadata(path) {
-        if meta.file_type().is_symlink() {
+    if let Ok(kind) = crate::host_fs::entry_kind(path) {
+        if kind == crate::host_fs::EntryKind::Symlink {
             return Err(Error::new(ErrorKind::InvalidInput, "refusing a symlink"));
         }
-        if !matches!(mode, NofollowMode::CreateNew) && !meta.is_file() {
+        if !matches!(mode, NofollowMode::CreateNew) && kind != crate::host_fs::EntryKind::File {
             return Err(Error::new(ErrorKind::InvalidInput, "refusing a non-file"));
         }
     }
 
-    let mut opts = std::fs::OpenOptions::new();
+    let mut opts = crate::host_fs::OpenOptions::new();
     match mode {
         NofollowMode::Read => {
             opts.read(true);
@@ -185,7 +196,7 @@ pub(crate) fn open_nofollow(path: &Path, mode: NofollowMode) -> std::io::Result<
             return Err(Error::new(ErrorKind::InvalidInput, "refusing a symlink"));
         }
     }
-    if !file.metadata()?.is_file() {
+    if !file.metadata()?.host_is_file() {
         return Err(Error::new(ErrorKind::InvalidInput, "refusing a non-file"));
     }
     Ok(file)
@@ -223,13 +234,19 @@ fn is_symlink_open_error(error: &std::io::Error) -> bool {
 }
 
 /// Flush a directory so a new file name survives a crash. Unix only.
+///
+/// A storage-access directory cannot be fsynced. The provider rename already
+/// returned, and opening the path would sync a local stand-in instead.
 #[cfg(unix)]
 pub(crate) fn sync_dir_durable(path: &Path) -> Result<()> {
-    let file = std::fs::File::open(path)?;
+    if crate::host_fs::is_bridge_path(path) {
+        return Ok(());
+    }
+    let file = crate::host_fs::File::open(path)?;
     sync_handle(&file)
 }
 
-fn sync_handle(file: &std::fs::File) -> Result<()> {
+fn sync_handle(file: &crate::host_fs::File) -> Result<()> {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     {
         let rc = unsafe { libc::fcntl(std::os::fd::AsRawFd::as_raw_fd(file), libc::F_FULLFSYNC) };
@@ -255,10 +272,16 @@ fn write_bytes_atomic_inner(path: &Path, bytes: &[u8], create_parents: bool) -> 
     use std::io::Write;
     if let Some(parent) = path.parent() {
         if create_parents {
-            std::fs::create_dir_all(parent)?;
-        } else if !parent.is_dir() {
+            crate::host_fs::create_dir_all(parent)?;
+        } else if !parent.host_is_dir() {
             return Err(UprivError::VaultRootNotFound(path.to_path_buf()));
         }
+    }
+    // A storage-access provider will not rename onto a file that already
+    // exists, so the temp file was a full extra copy of a growing index.
+    // Overwrite that document once.
+    if crate::host_fs::is_bridge_path(path) && path.host_is_file() {
+        return overwrite_bridge_file(path, bytes);
     }
     let nonce = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -266,10 +289,22 @@ fn write_bytes_atomic_inner(path: &Path, bytes: &[u8], create_parents: bool) -> 
         .unwrap_or(0);
     let tmp = path.with_extension(format!("tmp.{}.{}", std::process::id(), nonce));
     let result = (|| -> Result<()> {
-        let mut file = std::fs::File::create(&tmp)?;
+        let mut file = crate::host_fs::File::create(&tmp)?;
         file.write_all(bytes)?;
         file.sync_all()?;
-        std::fs::rename(&tmp, path)?;
+        if let Err(error) = crate::host_fs::rename(&tmp, path) {
+            if !crate::host_fs::is_bridge_path(path) {
+                return Err(UprivError::from(error));
+            }
+            // The provider will not rename onto an existing document. The temp
+            // file already holds the new bytes.
+            if let Err(overwrite_error) = overwrite_bridge_file(path, bytes) {
+                if path.host_is_file() || crate::host_fs::rename(&tmp, path).is_err() {
+                    return Err(overwrite_error);
+                }
+            }
+            let _ = crate::host_fs::remove_file(&tmp);
+        }
         // The file body is durable before the rename. The directory entry is
         // not, until the parent is synced. A failure here is a failed write:
         // ignoring it reported success for a rename a crash could still drop.
@@ -280,14 +315,47 @@ fn write_bytes_atomic_inner(path: &Path, bytes: &[u8], create_parents: bool) -> 
         Ok(())
     })();
     if result.is_err() {
-        let _ = std::fs::remove_file(&tmp);
+        // A storage-access replace may already have removed the destination.
+        // Keep the temp file in that case; it still holds the new bytes.
+        let destination_missing = crate::host_fs::is_bridge_path(path) && !path.host_is_file();
+        if !destination_missing {
+            let _ = crate::host_fs::remove_file(&tmp);
+        }
     }
     result
 }
 
+/// Replace one storage-access document. Used when rename cannot take a name
+/// that already exists. Callers keep the temp file until this returns `Ok`.
+fn overwrite_bridge_file(path: &Path, bytes: &[u8]) -> Result<()> {
+    use std::io::Write;
+    let mut file = crate::host_fs::File::create(path)?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    drop(file);
+    match crate::host_fs::metadata(path) {
+        Ok(meta) if meta.len() == bytes.len() as u64 => return Ok(()),
+        _ => {}
+    }
+    // `"wt"` opened the old document without truncating it. Replace the
+    // document so the previous bytes cannot stay after the new write.
+    let _ = crate::host_fs::remove_file(path);
+    let mut file = crate::host_fs::File::create(path)?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    drop(file);
+    let meta = crate::host_fs::metadata(path)?;
+    if meta.len() != bytes.len() as u64 {
+        return Err(UprivError::Io(std::io::Error::other(
+            "storage-access replace left a different length",
+        )));
+    }
+    Ok(())
+}
+
 /// True when `path` contains the Upriv vault-root marker (`.upriv/settings.toml`).
 pub fn is_vault_root_marker(path: impl AsRef<Path>) -> bool {
-    path.as_ref().join(SETTINGS_REL).is_file()
+    path.as_ref().join(SETTINGS_REL).host_is_file()
 }
 
 /// Canonical paths under a vault-root directory.
@@ -302,7 +370,7 @@ impl VaultRoot {
     /// Uses the same rules as inspect/default_root: missing `.upriv` → NotFound;
     /// `.upriv` present but broken/empty → Incomplete (not NotFound).
     pub fn discover(path: impl AsRef<Path>) -> Result<Self> {
-        let root = path.as_ref().canonicalize().map_err(UprivError::from)?;
+        let root = crate::host_fs::canonicalize(path.as_ref()).map_err(UprivError::from)?;
         crate::paths::validate_existing_vault_root(&root)?;
         Ok(Self { root })
     }
@@ -334,10 +402,9 @@ impl VaultRoot {
 
     /// Suggested default only: `<root>/workspace`.
     ///
-    /// **Do not use for vault open.** Live mount parents come from
-    /// `[workspace].path` / `[mount].workspace_path` via
-    /// [`resolve_vault_mount_point`] / [`resolve_mount_parent_path`]. This helper
-    /// is a UI/default hint only — open must never assume `<root>/workspace`.
+    /// **Do not use for vault open.** Live mount parents come from the
+    /// per-system `[workspace]` / `[mount]` tables via
+    /// [`resolve_vault_mount_point`]. This helper is a hint only.
     pub fn workspace_dir(&self) -> PathBuf {
         suggested_default_workspace_path(&self.root)
     }
@@ -345,7 +412,7 @@ impl VaultRoot {
     /// Suggested leaf under the default workspace parent: `workspace/{display_name}/`.
     ///
     /// **Do not use for vault open.** Prefer [`resolve_vault_mount_point`] with the
-    /// configured global + mount paths so the session folder matches settings.
+    /// effective path for this system.
     pub fn workspace_vault_dir(&self, display_name: &str) -> PathBuf {
         self.workspace_dir()
             .join(sanitize_display_leaf(display_name))
@@ -521,6 +588,8 @@ pub(crate) fn slug_id_is_valid(id: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[allow(unused_imports)]
+    use crate::host_fs::HostFsQuery;
 
     use crate::test_support::{vault_root_with, VaultSpec};
 
@@ -530,15 +599,15 @@ mod tests {
             VaultSpec::upriv_plain("plain-folder-demo", "Plain Folder Demo", 3),
             VaultSpec::encrypted("my-encrypted-notes", "My Encrypted Notes", 4),
         ]);
-        assert!(root.settings_path().is_file());
+        assert!(root.settings_path().host_is_file());
         assert!(root
             .vault_config_path("plain-folder-demo")
             .unwrap()
-            .is_file());
+            .host_is_file());
         assert!(root
             .vault_config_path("my-encrypted-notes")
             .unwrap()
-            .is_file());
+            .host_is_file());
         assert_eq!(
             root.vault_store_dir("my-encrypted-notes").unwrap(),
             root.vault_dir("my-encrypted-notes")
@@ -558,7 +627,7 @@ mod tests {
     #[test]
     fn discover_empty_upriv_dir_is_incomplete() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(dir.path().join(".upriv")).unwrap();
+        crate::host_fs::create_dir_all(dir.path().join(".upriv")).unwrap();
         let err = VaultRoot::discover(dir.path()).unwrap_err();
         assert!(matches!(err, UprivError::VaultRootIncomplete { .. }));
     }
@@ -566,21 +635,11 @@ mod tests {
     #[test]
     fn workspace_path_keeps_display_name() {
         assert_eq!(
-            resolve_vault_mount_point(
-                "/tmp/fake-root/workspace",
-                WORKSPACE_PATH_DEFAULT,
-                "My Encrypted Notes",
-            )
-            .unwrap(),
+            resolve_vault_mount_point("/tmp/fake-root", "My Encrypted Notes", false).unwrap(),
             PathBuf::from("/tmp/fake-root/workspace/My Encrypted Notes")
         );
         assert_eq!(
-            resolve_vault_mount_point(
-                "/tmp/fake-root/workspace",
-                "/custom/mount/parent",
-                "My Encrypted Notes",
-            )
-            .unwrap(),
+            resolve_vault_mount_point("/custom/mount/parent", "My Encrypted Notes", true).unwrap(),
             PathBuf::from("/custom/mount/parent/My Encrypted Notes")
         );
     }

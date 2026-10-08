@@ -2,7 +2,7 @@
 //!
 //! One map per process (desktop daemon / mobile FFI). Closing Upriv clears it.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
@@ -46,6 +46,21 @@ pub struct OpenSession {
     /// Import and other ingest sessions must not snapshot a vault that was just created.
     #[zeroize(skip)]
     pub skip_close_backup: bool,
+    /// Files appended by an import that are not in the sealed index yet.
+    #[zeroize(skip)]
+    pub unsealed_imports: u64,
+    /// Highest import append included in the last successful index seal.
+    #[zeroize(skip)]
+    pub sealed_seq: u64,
+    /// Next import append. Compared with [`Self::sealed_seq`].
+    #[zeroize(skip)]
+    pub import_seq: u64,
+    /// One importer is sealing the index for the current wave.
+    #[zeroize(skip)]
+    pub sealing: bool,
+    /// Blob files named in the session and not yet flushed with the index.
+    #[zeroize(skip)]
+    pub staged_blobs: Vec<PathBuf>,
 }
 
 impl OpenSession {
@@ -75,6 +90,11 @@ impl OpenSession {
             mount: None,
             lock: None,
             skip_close_backup: false,
+            unsealed_imports: 0,
+            sealed_seq: 0,
+            import_seq: 0,
+            sealing: false,
+            staged_blobs: Vec::new(),
         }
     }
 }
@@ -93,7 +113,8 @@ static THROTTLE: LazyLock<Mutex<HashMap<PathBuf, UnlockThrottle>>> =
 static UNLOCK_GATE: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 /// Vault dirs mid-close (`take_session` … flush done). Covers the gap where
 /// the session map is empty but flush still runs against the current root.
-static CLOSING: LazyLock<Mutex<HashSet<PathBuf>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
+static CLOSING: LazyLock<Mutex<HashMap<PathBuf, ClosePhase>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 /// Vault dirs mid-open / mid-create-seed (before `insert_session`). Refcounted so
 /// overlapping `open_vault` calls keep the mark until the last guard drops.
 /// `rename_vault` honors this without waiting on Argon2 or using `UNLOCK_GATE`.
@@ -245,8 +266,13 @@ fn any_closing() -> bool {
 pub fn is_vault_closing_at(vault_dir: &Path) -> bool {
     CLOSING
         .lock()
-        .map(|g| g.contains(vault_dir))
+        .map(|g| g.contains_key(vault_dir))
         .unwrap_or(true)
+}
+
+/// Where an in-flight close of this vault is. `None` when no close is running.
+pub fn vault_close_phase_at(vault_dir: &Path) -> Option<ClosePhase> {
+    CLOSING.lock().ok().and_then(|g| g.get(vault_dir).copied())
 }
 
 /// True while this vault is mid-open or mid-create-seed. Fail closed on poison.
@@ -255,6 +281,24 @@ pub fn is_vault_preparing_at(vault_dir: &Path) -> bool {
         .lock()
         .map(|g| g.get(vault_dir).is_some_and(|count| *count > 0))
         .unwrap_or(true)
+}
+
+/// Step of an in-flight close, read by the UI while `vault_close` runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClosePhase {
+    /// Packing, index flush, and state write.
+    Flush,
+    /// Writing the close backup zip.
+    Backup,
+}
+
+impl ClosePhase {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ClosePhase::Flush => "flush",
+            ClosePhase::Backup => "backup",
+        }
+    }
 }
 
 /// Mark `vault_dir` as closing until dropped (covers flush after `take_session`).
@@ -267,10 +311,18 @@ impl ClosingGuard {
         let mut guard = CLOSING
             .lock()
             .map_err(|_| session_lock_poisoned("closing lock poisoned"))?;
-        guard.insert(vault_dir.to_path_buf());
+        guard.insert(vault_dir.to_path_buf(), ClosePhase::Flush);
         Ok(Self {
             vault_dir: vault_dir.to_path_buf(),
         })
+    }
+
+    pub(crate) fn set_phase(&self, phase: ClosePhase) {
+        if let Ok(mut guard) = CLOSING.lock() {
+            if let Some(current) = guard.get_mut(&self.vault_dir) {
+                *current = phase;
+            }
+        }
     }
 }
 
@@ -483,6 +535,25 @@ mod tests {
         // Do not assert process-wide idle — parallel Argon2 holds UNLOCK_GATE.
         let _guard = ClosingGuard::enter(&dir).expect("enter closing");
         assert!(vault_activity_blocks_root_switch());
+    }
+
+    #[test]
+    fn close_phase_follows_guard() {
+        let dir = PathBuf::from(format!(
+            "/upriv-test-close-phase-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        assert_eq!(vault_close_phase_at(&dir), None);
+        {
+            let guard = ClosingGuard::enter(&dir).expect("enter closing");
+            assert_eq!(vault_close_phase_at(&dir), Some(ClosePhase::Flush));
+            guard.set_phase(ClosePhase::Backup);
+            assert_eq!(vault_close_phase_at(&dir), Some(ClosePhase::Backup));
+            assert!(is_vault_closing_at(&dir));
+        }
+        assert_eq!(vault_close_phase_at(&dir), None);
+        assert!(!is_vault_closing_at(&dir));
     }
 
     #[test]

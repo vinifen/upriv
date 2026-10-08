@@ -20,6 +20,7 @@ import {
   createVaultImportPackage,
   canDeleteVaultNow,
   displayNameToGroupId,
+  resolveVaultDisplayStatus,
   resolveVaultListStatus,
   mergePendingCreatingGroups,
   mergePendingCreatingVaults,
@@ -67,12 +68,7 @@ export function useVaultListScreen() {
     vaultRootEpoch,
   } = useAppSettingsContext();
   const showHiddenVaults = settings.ui.always_show_hidden_vaults || showHiddenVaultsSession;
-  const {
-    message: toastMessage,
-    show: showToast,
-    showError,
-    dismiss: dismissToast,
-  } = useErrorToast();
+  const { toast: toastState, show: showToast, showError, dismiss: dismissToast } = useErrorToast();
   const daemonReady = useDaemonReady();
   const noteSaveGenerationRef = useRef<Map<string, number>>(new Map());
   const groupedOrderGenRef = useRef<Map<string, number>>(new Map());
@@ -1077,6 +1073,11 @@ export function useVaultListScreen() {
           );
         }
       },
+      showCloseAllVaults:
+        vaults.filter((vault) => resolveVaultDisplayStatus(vault) === "open").length > 1,
+      onCloseAllVaults: () => {
+        lifecycle.closeAllOpenVaults();
+      },
       onViewLogs: () => modals.setLogsOpen(true),
       onOpenHelp: () => modals.setHelpOpen(true),
       onOpenSystemInfo: () => modals.setSystemInfoOpen(true),
@@ -1161,13 +1162,16 @@ export function useVaultListScreen() {
         if (!modals.recoverySubmitting) modals.setRecoveryVaultId(null);
       },
       onRecoveryAction: lifecycle.handleRecoveryAction,
-      workspaceSetupOpen: lifecycle.workspaceSetupOpen,
-      workspaceSetupRootPath: lifecycle.workspaceSetupRootPath,
-      onWorkspaceSetupCancel: lifecycle.handleWorkspaceSetupCancel,
-      onWorkspaceSetupConfigured: lifecycle.handleWorkspaceSetupConfigured,
+      closeAllUnsavedOpen: lifecycle.closeAllUnsavedOpen,
+      closeAllUnsavedSaving: lifecycle.closeAllUnsavedSaving,
+      onCloseAllUnsavedCancel: lifecycle.cancelCloseAllUnsaved,
+      onCloseAllUnsavedDiscard: lifecycle.confirmCloseAllDiscard,
+      onCloseAllUnsavedSave: lifecycle.confirmCloseAllSave,
+      onCloseAllUnsavedTimeout: lifecycle.timeoutCloseAllSave,
     },
+    onCloseVaultAfterUnsaved: lifecycle.closeVaultAfterUnsaved,
     toast: {
-      message: toastMessage,
+      toast: toastState,
       onDismiss: dismissToast,
     },
     note: {

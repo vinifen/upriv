@@ -3,6 +3,8 @@
 //! Keeps write-probe, AppImage, and path-equality logic in one place so
 //! `resolve` and `distribution` cannot drift (e.g. macOS `.app` bundles).
 
+#[allow(unused_imports)]
+use crate::host_fs::HostFsQuery;
 use std::path::{Path, PathBuf};
 
 /// Create+delete a probe file — more reliable than `W_OK` alone for `/opt`-style mounts.
@@ -11,7 +13,7 @@ use std::path::{Path, PathBuf};
 /// Leftover probes (e.g. kill -9 between create and unlink) are cleaned by
 /// [`cleanup_stale_write_probes`].
 pub(crate) fn dir_is_writable(dir: &Path) -> bool {
-    if !dir.is_dir() {
+    if !dir.host_is_dir() {
         return false;
     }
     if is_inside_macos_app_bundle(dir) {
@@ -29,10 +31,10 @@ pub(crate) fn dir_is_writable(dir: &Path) -> bool {
     struct ProbeFile(PathBuf);
     impl Drop for ProbeFile {
         fn drop(&mut self) {
-            let _ = std::fs::remove_file(&self.0);
+            let _ = crate::host_fs::remove_file(&self.0);
         }
     }
-    match std::fs::OpenOptions::new()
+    match crate::host_fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(&probe)
@@ -48,7 +50,7 @@ pub(crate) fn dir_is_writable(dir: &Path) -> bool {
 
 /// Best-effort remove leftover `.upriv-write-probe-*` files (kill -9 mid-probe).
 pub(crate) fn cleanup_stale_write_probes(dir: &Path) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
+    let Ok(entries) = crate::host_fs::read_dir(dir) else {
         return;
     };
     for entry in entries.flatten() {
@@ -57,7 +59,7 @@ pub(crate) fn cleanup_stale_write_probes(dir: &Path) {
             continue;
         };
         if name.starts_with(".upriv-write-probe-") {
-            let _ = std::fs::remove_file(entry.path());
+            let _ = crate::host_fs::remove_file(entry.path());
         }
     }
 }
@@ -89,7 +91,7 @@ pub fn env_default_root_anchor() -> Option<PathBuf> {
 pub(crate) fn env_appimage_file() -> Option<PathBuf> {
     std::env::var_os("APPIMAGE").and_then(|value| {
         let path = PathBuf::from(value);
-        if path.as_os_str().is_empty() || !path.is_file() {
+        if path.as_os_str().is_empty() || !path.host_is_file() {
             return None;
         }
         Some(path)
@@ -119,6 +121,8 @@ pub(crate) fn same_dir(a: &Path, b: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[allow(unused_imports)]
+    use crate::host_fs::HostFsQuery;
 
     #[test]
     fn detects_macos_app_bundle_paths() {

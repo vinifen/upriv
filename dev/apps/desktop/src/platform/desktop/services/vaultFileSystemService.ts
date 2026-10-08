@@ -25,8 +25,8 @@ export const desktopVaultFileSystemService = createLiveVaultFileSystemService({
   readRange: (id, path, offset, len) => rpcVaultFsReadRange(id, path, offset, len),
   write: (id, path, contentB64) => rpcVaultFsWrite(id, path, contentB64),
   writeRange: (id, path, offset, contentB64) => rpcVaultFsWriteRange(id, path, offset, contentB64),
-  importOsFile: (id, parentPath, name, osPath) =>
-    rpcVaultFsImportOsFile(id, parentPath, name, osPath),
+  importOsFile: (id, parentPath, name, osPath, deferIndex) =>
+    rpcVaultFsImportOsFile(id, parentPath, name, osPath, deferIndex),
   truncate: (id, path, size) => rpcVaultFsTruncate(id, path, size),
   createFile: (id, parentPath, name) => rpcVaultFsCreateFile(id, parentPath, name),
   createFolder: (id, parentPath, name) => rpcVaultFsCreateFolder(id, parentPath, name),

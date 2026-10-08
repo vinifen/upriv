@@ -3,6 +3,8 @@
 //! Create writes a non-secret seed file so wrap + index + chunk AEAD can be
 //! validated. The in-app file manager / FUSE still does not list that tree.
 
+#[allow(unused_imports)]
+use crate::host_fs::HostFsQuery;
 mod aead;
 mod chunk;
 mod header;
@@ -18,8 +20,8 @@ use zeroize::Zeroizing;
 use crate::error::{Result, UprivError};
 
 pub(crate) use chunk::{
-    blobs_need_pack, mutation_blob_ids, pack_blob_waste, remove_file_chunks, BlobPackMode,
-    ChunkBlobMutation,
+    blobs_need_pack, mutation_blob_ids, pack_blob_waste, record_imported_file, remove_file_chunks,
+    seal_import_chunk, BlobPackMode, ChunkBlobMutation, ImportBlob,
 };
 pub use chunk::{
     read_logical_file, read_logical_range, seed_plaintext, truncate_logical_file,
@@ -64,8 +66,8 @@ fn create_store_core(
     password: &[u8],
     preset: KdfUnlockPreset,
 ) -> Result<(VaultHeader, ContentKey, Zeroizing<[u8; INDEX_KEY_LEN]>)> {
-    std::fs::create_dir_all(store_dir.join(INDEX_DIR_NAME))?;
-    std::fs::create_dir_all(store_dir.join(DATA_DIR_NAME))?;
+    crate::host_fs::create_dir_all(store_dir.join(INDEX_DIR_NAME))?;
+    crate::host_fs::create_dir_all(store_dir.join(DATA_DIR_NAME))?;
     let master = random_master_key();
     let header = create_header(password, preset, &master)?;
     let (content_key, index_key) = derive_layer_keys(&master)?;
@@ -169,17 +171,18 @@ pub fn content_hash_hex(store_dir: impl AsRef<Path>) -> Result<String> {
     let store_dir = store_dir.as_ref();
     let header_path = header::VaultHeader::path(store_dir);
     let index_path = index::index_path(store_dir);
-    let header_bytes = match std::fs::read(&header_path) {
+    let header_bytes = match crate::host_fs::read(&header_path) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            std::fs::read(header::VaultHeader::copy_path(store_dir)).map_err(UprivError::from)?
+            crate::host_fs::read(header::VaultHeader::copy_path(store_dir))
+                .map_err(UprivError::from)?
         }
         Err(error) => return Err(error.into()),
     };
-    let index_bytes = match std::fs::read(&index_path) {
+    let index_bytes = match crate::host_fs::read(&index_path) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            std::fs::read(index::index_copy_path(store_dir)).map_err(UprivError::from)?
+            crate::host_fs::read(index::index_copy_path(store_dir)).map_err(UprivError::from)?
         }
         Err(error) => return Err(error.into()),
     };
@@ -189,9 +192,22 @@ pub fn content_hash_hex(store_dir: impl AsRef<Path>) -> Result<String> {
     Ok(format!("sha256:{:x}", hasher.finalize()))
 }
 
+/// Stable id of the logical index. Sealed bytes change on every flush because
+/// the nonce is random; this hash does not, so an unchanged vault can skip a
+/// new backup zip. `None` when the index cannot be serialized — that close
+/// must still write a backup.
+pub fn index_logical_hash(index: &VaultIndex) -> Option<String> {
+    let bytes = serde_json::to_vec(index).ok()?;
+    let mut hasher = Sha256::new();
+    hasher.update(&bytes);
+    Some(format!("sha256:{:x}", hasher.finalize()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[allow(unused_imports)]
+    use crate::host_fs::HostFsQuery;
     use crate::store::header::unwrap_header_master;
 
     #[test]
@@ -203,6 +219,12 @@ mod tests {
         let opened = open_store(&dir, password).expect("open");
         assert!(opened.index.nodes.is_empty());
         assert_eq!(opened.header.unlock_preset(), Some(KdfUnlockPreset::M32));
+        let hash = index_logical_hash(&opened.index).expect("logical hash");
+        assert!(hash.starts_with("sha256:"));
+        assert_eq!(
+            index_logical_hash(&opened.index).as_deref(),
+            Some(hash.as_str())
+        );
     }
 
     #[test]
@@ -228,9 +250,9 @@ mod tests {
             header::VaultHeader::copy_path(dir),
         ] {
             let mut value: serde_json::Value =
-                serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+                serde_json::from_str(&crate::host_fs::read_to_string(&path).unwrap()).unwrap();
             edit(&mut value);
-            std::fs::write(&path, serde_json::to_string(&value).unwrap()).unwrap();
+            crate::host_fs::write(&path, serde_json::to_string(&value).unwrap()).unwrap();
         }
     }
 
@@ -324,10 +346,10 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().join(crate::paths::STORE_DIR_NAME);
         create_empty_store(&dir, b"copy-pair-ok", KdfUnlockPreset::M32).unwrap();
-        let primary = std::fs::read(header::VaultHeader::path(&dir)).unwrap();
-        let copy = std::fs::read(header::VaultHeader::copy_path(&dir)).unwrap();
+        let primary = crate::host_fs::read(header::VaultHeader::path(&dir)).unwrap();
+        let copy = crate::host_fs::read(header::VaultHeader::copy_path(&dir)).unwrap();
         assert_eq!(primary, copy);
-        assert!(dir.join(header::STORE_DANGER_FILE_NAME).is_file());
+        assert!(dir.join(header::STORE_DANGER_FILE_NAME).host_is_file());
         let header = load_header(&dir).unwrap();
         assert_eq!(header.warning, header::HEADER_WARNING);
     }
@@ -337,11 +359,11 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().join(crate::paths::STORE_DIR_NAME);
         create_empty_store(&dir, b"restore-primary", KdfUnlockPreset::M32).unwrap();
-        let copy = std::fs::read(header::VaultHeader::copy_path(&dir)).unwrap();
-        std::fs::remove_file(header::VaultHeader::path(&dir)).unwrap();
+        let copy = crate::host_fs::read(header::VaultHeader::copy_path(&dir)).unwrap();
+        crate::host_fs::remove_file(header::VaultHeader::path(&dir)).unwrap();
         open_store(&dir, b"restore-primary").expect("open from copy");
         assert_eq!(
-            std::fs::read(header::VaultHeader::path(&dir)).unwrap(),
+            crate::host_fs::read(header::VaultHeader::path(&dir)).unwrap(),
             copy
         );
     }
@@ -351,18 +373,18 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().join(crate::paths::STORE_DIR_NAME);
         create_empty_store(&dir, b"restore-wrap", KdfUnlockPreset::M32).unwrap();
-        let copy = std::fs::read(header::VaultHeader::copy_path(&dir)).unwrap();
+        let copy = crate::host_fs::read(header::VaultHeader::copy_path(&dir)).unwrap();
         let path = header::VaultHeader::path(&dir);
         let mut value: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            serde_json::from_str(&crate::host_fs::read_to_string(&path).unwrap()).unwrap();
         let sealed = value["wrapped_master_key_b64"]
             .as_str()
             .unwrap()
             .to_string();
         value["wrapped_master_key_b64"] = serde_json::json!(flip_sealed(&sealed));
-        std::fs::write(&path, serde_json::to_string_pretty(&value).unwrap()).unwrap();
+        crate::host_fs::write(&path, serde_json::to_string_pretty(&value).unwrap()).unwrap();
         open_store(&dir, b"restore-wrap").expect("copy opens");
-        assert_eq!(std::fs::read(&path).unwrap(), copy);
+        assert_eq!(crate::host_fs::read(&path).unwrap(), copy);
     }
 
     #[test]
@@ -372,15 +394,15 @@ mod tests {
         create_empty_store(&dir, b"newer-broken", KdfUnlockPreset::M32).unwrap();
         let path = header::VaultHeader::path(&dir);
         let copy_path = header::VaultHeader::copy_path(&dir);
-        let copy_bytes = std::fs::read(&copy_path).unwrap();
+        let copy_bytes = crate::host_fs::read(&copy_path).unwrap();
         let mut primary: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            serde_json::from_slice(&crate::host_fs::read(&path).unwrap()).unwrap();
         primary["wrapped_master_key_b64"] = serde_json::json!("YQ==");
-        std::fs::write(&path, serde_json::to_vec_pretty(&primary).unwrap()).unwrap();
+        crate::host_fs::write(&path, serde_json::to_vec_pretty(&primary).unwrap()).unwrap();
         load_header(&dir).expect("copy is readable");
-        assert_ne!(std::fs::read(&path).unwrap(), copy_bytes);
+        assert_ne!(crate::host_fs::read(&path).unwrap(), copy_bytes);
         open_store(&dir, b"newer-broken").expect("copy opens");
-        assert_eq!(std::fs::read(&path).unwrap(), copy_bytes);
+        assert_eq!(crate::host_fs::read(&path).unwrap(), copy_bytes);
     }
 
     #[test]
@@ -388,10 +410,10 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().join(crate::paths::STORE_DIR_NAME);
         create_empty_store(&dir, b"list-reads-copy", KdfUnlockPreset::M32).unwrap();
-        std::fs::remove_file(header::VaultHeader::path(&dir)).unwrap();
+        crate::host_fs::remove_file(header::VaultHeader::path(&dir)).unwrap();
         let header = load_header(&dir).expect("preset comes from the copy");
         assert_eq!(header.warning, header::HEADER_WARNING);
-        assert!(!header::VaultHeader::path(&dir).exists());
+        assert!(!header::VaultHeader::path(&dir).host_exists());
     }
 
     #[test]
@@ -400,8 +422,8 @@ mod tests {
         let dir = tmp.path().join(crate::paths::STORE_DIR_NAME);
         create_empty_store(&dir, b"broken-primary", KdfUnlockPreset::M32).unwrap();
         let path = header::VaultHeader::path(&dir);
-        std::fs::write(&path, b"not-json").unwrap();
-        std::fs::remove_file(header::VaultHeader::copy_path(&dir)).unwrap();
+        crate::host_fs::write(&path, b"not-json").unwrap();
+        crate::host_fs::remove_file(header::VaultHeader::copy_path(&dir)).unwrap();
         let err = load_header(&dir).expect_err("broken header");
         match err {
             UprivError::VaultStoreInvalid { detail, .. } => {

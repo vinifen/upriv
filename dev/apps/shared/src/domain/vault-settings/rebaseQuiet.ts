@@ -23,7 +23,7 @@ export function rebaseQuietLockedVaultSettings(
   if (!vaultConfigEditAllowed("mount.workspace_path", row, pipeline)) {
     next = {
       ...next,
-      mount: { ...next.mount, workspace_path: baseline.mount.workspace_path },
+      mount: baseline.mount,
     };
   }
   if (!vaultConfigEditAllowed("storage.mode", row, pipeline)) {

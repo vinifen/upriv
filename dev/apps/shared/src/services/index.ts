@@ -19,6 +19,11 @@ export type {
 } from "./vault/VaultService";
 export { parseVaultRenameResult } from "./vault/parseRename";
 export { createLiveVaultService } from "./vault/createLiveVaultService";
+export {
+  forgetVaultSettings,
+  peekVaultSettings,
+  rememberVaultSettings,
+} from "./vault/vaultSettingsMemory";
 export type { LiveVaultRpc } from "./vault/createLiveVaultService";
 export {
   createLiveVaultFileSystemService,

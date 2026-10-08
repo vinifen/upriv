@@ -12,31 +12,28 @@ interface ThemeContextValue {
 
 const ThemeContext = createContext<ThemeContextValue | null>(null);
 
+function themeContextValue(theme: UiTheme): ThemeContextValue {
+  const colors = colorsForTheme(theme);
+  return {
+    theme,
+    colors,
+    typography: typographyForColors(colors),
+    statusBarStyle: theme === "light" ? "dark" : "light",
+  };
+}
+
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const { settings } = useAppSettingsContext();
-  const theme = settings.ui.theme;
-  const value = useMemo<ThemeContextValue>(() => {
-    const colors = colorsForTheme(theme);
-    return {
-      theme,
-      colors,
-      typography: typographyForColors(colors),
-      statusBarStyle: theme === "light" ? "dark" : "light",
-    };
-  }, [theme]);
+  return <ThemeScope theme={settings.ui.theme}>{children}</ThemeScope>;
+}
 
+/** Pins a subtree to one theme (e.g. the launch cover before saved settings apply). */
+export function ThemeScope({ theme, children }: { theme: UiTheme; children: ReactNode }) {
+  const value = useMemo(() => themeContextValue(theme), [theme]);
   return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;
 }
 
-const FALLBACK: ThemeContextValue = (() => {
-  const colors = colorsForTheme(DEFAULT_UI_THEME);
-  return {
-    theme: DEFAULT_UI_THEME,
-    colors,
-    typography: typographyForColors(colors),
-    statusBarStyle: "light",
-  };
-})();
+const FALLBACK = themeContextValue(DEFAULT_UI_THEME);
 
 /** Prefer ThemeProvider; falls back to dark tokens (e.g. early toast outside the tree). */
 export function useTheme(): ThemeContextValue {

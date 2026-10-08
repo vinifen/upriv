@@ -3,6 +3,8 @@
 //! This is not a Upriv store zip. Entries are streamed into a new `store/`.
 //! Nothing is unpacked onto disk.
 
+#[allow(unused_imports)]
+use crate::host_fs::HostFsQuery;
 use std::collections::HashSet;
 use std::io::{Cursor, ErrorKind, Read, Seek};
 use std::path::Path;
@@ -149,10 +151,11 @@ fn classify_reader<R: Read + Seek>(reader: R, source_len: u64) -> Result<ZipImpo
 
 /// Classify a `.zip` from an absolute path. Reads the central directory only.
 pub fn classify_import_zip_path(zip_path: &Path) -> Result<ZipImportClass> {
-    if !zip_path.is_absolute() || !zip_path.is_file() {
+    if !zip_path.is_absolute() || !zip_path.host_is_file() {
         return Err(UprivError::ImportArchiveNotFound(zip_path.to_path_buf()));
     }
-    let file = std::fs::File::open(zip_path)?;
+    let file = crate::host_fs::File::open(zip_path)
+        .map_err(|error| super::import::map_archive_open_error(zip_path, error))?;
     let len = file.metadata()?.len();
     classify_reader(file, len)
 }
@@ -358,16 +361,19 @@ pub fn import_logical_files_zip_path(
     preset: KdfUnlockPreset,
     zip_path: &Path,
 ) -> Result<String> {
-    if !zip_path.is_absolute() || !zip_path.is_file() {
+    if !zip_path.is_absolute() || !zip_path.host_is_file() {
         return Err(UprivError::ImportArchiveNotFound(zip_path.to_path_buf()));
     }
-    let file = std::fs::File::open(zip_path)?;
+    let file = crate::host_fs::File::open(zip_path)
+        .map_err(|error| super::import::map_archive_open_error(zip_path, error))?;
     let len = file.metadata()?.len();
     import_reader(root, config, new_password, preset, file, len)
 }
 
 #[cfg(test)]
 mod tests {
+    #[allow(unused_imports)]
+    use crate::host_fs::HostFsQuery;
     use std::io::Write;
 
     use zip::write::FileOptions;
@@ -523,7 +529,7 @@ mode = "encrypted_dir"
         )
         .unwrap_err();
         assert!(matches!(err, UprivError::VaultStoreInvalid { .. }));
-        assert!(!root.vault_dir("notes").unwrap().exists());
+        assert!(!root.vault_dir("notes").unwrap().host_exists());
 
         import_logical_files_zip(&root, config, b"pass-word-ok", KdfUnlockPreset::M32, &bytes)
             .unwrap();

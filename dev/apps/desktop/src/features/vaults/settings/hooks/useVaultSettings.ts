@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useVaultService } from "@/platform/services";
-import type { VaultSettingsConfig } from "@upriv/shared";
+import { peekVaultSettings, type VaultSettingsConfig } from "@upriv/shared";
 
 export function useVaultSettings(vaultId: string | null, open: boolean) {
   const vaultService = useVaultService();
@@ -25,7 +25,7 @@ export function useVaultSettings(vaultId: string | null, open: boolean) {
     let cancelled = false;
     setLoading(true);
     setLoadError(null);
-    setConfig(null);
+    setConfig(peekVaultSettings(vaultId) ?? null);
     void vaultService
       .getSettings(vaultId)
       .then((settings) => {

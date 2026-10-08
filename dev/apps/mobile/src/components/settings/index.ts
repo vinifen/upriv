@@ -6,6 +6,7 @@ export {
   ThemedInput,
   DisplayNameFieldError,
 } from "./settingsFields";
+export { IntegerInput } from "./IntegerInput";
 export { PolicyRadioOption } from "./PolicyRadioOption";
 export { SettingsAccordionSection } from "./SettingsAccordionSection";
 export { VaultChangeKdfFields } from "./VaultChangeKdfFields";

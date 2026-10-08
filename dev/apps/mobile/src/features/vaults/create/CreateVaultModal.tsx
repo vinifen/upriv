@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { ScrollView, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import {
@@ -10,7 +10,13 @@ import {
   type VaultGroup,
 } from "@upriv/shared";
 import { useAppSettingsContext } from "@/features/system/settings";
-import { releasePendingImport, retainsPendingImport } from "@/platform/native/contentTreeImport";
+import {
+  importFolderListingError,
+  releaseContentTree,
+  releasePendingImport,
+  retainsPendingImport,
+  subscribeImportFolderListing,
+} from "@/platform/native/contentTreeImport";
 import { useCreateVaultService, useVaultRootService } from "@/platform/services";
 import { useTranslation } from "@/i18n";
 import { mobileErrorI18nKey } from "@/lib/errorMessages";
@@ -136,7 +142,8 @@ export function CreateVaultModal({
       const path = importPathRef.current;
       const keep = keepImportCopy.current;
       keepImportCopy.current = false;
-      if (!keep) void releasePendingImport(path).catch(() => undefined);
+      if (keep) releaseContentTree(path);
+      else void releasePendingImport(path).catch(() => undefined);
       onClose();
     },
     testImportPassword: (password, importFile) =>
@@ -168,6 +175,17 @@ export function CreateVaultModal({
     dismissFooterConfirm,
     stepFocus,
   } = wizard;
+  const folderListingFailed = useSyncExternalStore(
+    subscribeImportFolderListing,
+    () =>
+      wizard.draft.source === "import" &&
+      wizard.draft.importShape === "directory" &&
+      importFolderListingError(wizard.draft.importFilePath) != null,
+    () => false,
+  );
+  useEffect(() => {
+    if (folderListingFailed && currentStep !== "source") goToStep("source");
+  }, [currentStep, folderListingFailed, goToStep]);
   const dismissConfirmOnBodyTap = useTapNotPan(dismissFooterConfirm, discardConfirmOpen);
 
   useEffect(() => {
@@ -222,7 +240,7 @@ export function CreateVaultModal({
                   variant="primary"
                   label={t("vault.create.action.create")}
                   style={modalFooterConfirmBtnStyle}
-                  disabled={!canCreate}
+                  disabled={!canCreate || folderListingFailed}
                   onPress={() => {
                     setCreateError(null);
                     try {
@@ -237,7 +255,11 @@ export function CreateVaultModal({
                   variant="primary"
                   label={t("vault.create.action.next")}
                   style={modalFooterConfirmBtnStyle}
-                  onPress={handleNext}
+                  disabled={folderListingFailed}
+                  onPress={() => {
+                    if (folderListingFailed) return;
+                    handleNext();
+                  }}
                 />
               )}
             </>
@@ -260,7 +282,10 @@ export function CreateVaultModal({
       <CreateVaultStepNav
         currentStep={currentStep}
         stepStatuses={stepStatuses}
-        onSelectStep={goToStep}
+        onSelectStep={(step) => {
+          if (folderListingFailed && step !== "source") return;
+          goToStep(step);
+        }}
       />
       <ScrollView
         style={{
@@ -283,6 +308,7 @@ export function CreateVaultModal({
           includeHidden,
           existingDisplayNames,
           vaultRootPath,
+          appWorkspace: appSettings.workspace,
           onTestImportPassword: handleTestImportPassword,
           testingPassword,
           ...stepFocus,

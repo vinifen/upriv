@@ -1,12 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Platform } from "react-native";
+import { nativeProcessorCount } from "upriv-core";
 import {
+  joinPath,
   collectFilePaths,
   fileBaseName,
   fileNameErrorI18nKey,
   findNode,
   formatImportOutcomeToast,
-  importBatchNeedsRetry,
   importLogicalFiles,
+  importFileSlots,
   getParentPath,
   isInternalVaultPath,
   isInternalVaultFileName,
@@ -24,6 +27,8 @@ import {
   foldersToExpandForImportBatch,
   rememberLandedImportPaths,
   hasUnsavedWorkspaceChanges,
+  MAX_DIRTY_DRAFT_SAVE_PASSES,
+  withSavedDraftDiskContents,
   IMPORT_EXPLORER_SKELETON_FILES,
   isImportQueueSlotPath,
   isImportWalkPlaceholderPath,
@@ -32,30 +37,34 @@ import {
   pendingEntriesFromRelativePaths,
   plannedImportPathMap,
   replaceSessionPending,
+  walkPlaceholderEntries,
+  yieldToPaint,
   upsertActiveImportWrite,
   dropActiveImportWritesForSession,
   dropActiveImportWritePath,
   activeImportWriteForPath,
-  filesStillPendingImport,
   releaseLandedImportPaths,
-  isPendingImportTimedOut,
   type ActiveImportWrite,
   type FileManagerEntry,
   type FileNameErrorCode,
-  type FileTreeNode,
   type PendingImportEntry,
   type VaultWorkspaceAction,
 } from "@upriv/shared";
-import { useToast, useLoadingBudget } from "@upriv/shared/react";
+import { useToast, useLoadingBudget, useVaultFileTree } from "@upriv/shared/react";
 import { useVaultFileSystemService } from "@/platform/services";
+import { rpcImportContentUri, rpcVaultFsImportSeal } from "@/lib/rpc";
 import { useTranslation } from "@/i18n";
 import { useAppSettingsContext } from "@/features/system/settings";
 import { useFileManager } from "../FileManagerContext";
 import { mobileErrorI18nKey } from "@/lib/errorMessages";
 import { revealInOsFileManager } from "@/lib/revealInFileManager";
+import { safReleaseImportTree } from "@/platform/native/safVaultRoot";
 import {
   finishMobileImportSession,
+  FolderPickerUnavailableError,
+  listGrantedImportFolder,
   nativeOsPathFromImportUri,
+  pickImportFolderGrant,
   uriByteSource,
   type MobileImportFile,
 } from "../lib/osFileImport";
@@ -64,22 +73,25 @@ type MobileImportOptions = {
   openFirstViewable?: boolean;
   skippedUnsupported?: number;
   releaseSafTree?: string;
+  /** Rows are already on screen for this session. This call finishes it. */
+  sessionId?: number;
 };
 
 interface UseVaultFileManagerOptions {
   entry: FileManagerEntry;
   dispatch: (action: VaultWorkspaceAction) => void;
   onDismissConfirmed?: () => void;
+  /** Lock asked to close this vault: save or discard, then close it. */
+  onVaultCloseConfirmed?: () => void;
   /** Queued close: keep the current files. New drafts and imports wait. */
   writesLocked?: boolean;
 }
-
-const EMPTY_TREE: FileTreeNode = { name: "", type: "folder", children: [] };
 
 export function useVaultFileManager({
   entry,
   dispatch,
   onDismissConfirmed,
+  onVaultCloseConfirmed,
   writesLocked = false,
 }: UseVaultFileManagerOptions) {
   const { t } = useTranslation();
@@ -90,31 +102,31 @@ export function useVaultFileManager({
   const writesLockedRef = useRef(writesLocked);
   writesLockedRef.current = writesLocked;
   const workspace = entry.workspace;
-  const [tree, setTree] = useState<FileTreeNode>(EMPTY_TREE);
+  const {
+    tree,
+    setTree,
+    status: treeStatus,
+    retry: retryTree,
+  } = useVaultFileTree(fs, vaultId, workspace.treeRevision);
   const treeRef = useRef(tree);
   treeRef.current = tree;
   const [diskContents, setDiskContents] = useState<Record<string, string>>({});
   const [loadErrors, setLoadErrors] = useState<Record<string, true>>({});
+  const workspaceRef = useRef(workspace);
+  workspaceRef.current = workspace;
+  const diskContentsRef = useRef(diskContents);
+  diskContentsRef.current = diskContents;
+  const loadErrorsRef = useRef(loadErrors);
+  loadErrorsRef.current = loadErrors;
   const [previewBlocked, setPreviewBlocked] = useState<Record<string, true>>({});
   const previewBlockedRef = useRef(previewBlocked);
   previewBlockedRef.current = previewBlocked;
   const [importBusy, setImportBusy] = useState(false);
-  const [timedOutSessionIds, setTimedOutSessionIds] = useState<number[]>([]);
-  const [inFlightIds, setInFlightIds] = useState<number[]>([]);
   const importSessionSeqRef = useRef(0);
   const importInFlightRef = useRef(new Set<number>());
   const importAbortRef = useRef(new AbortController());
-  const lastBySessionRef = useRef(
-    new Map<
-      number,
-      {
-        parentPath: string;
-        files: readonly MobileImportFile[];
-        options?: MobileImportOptions;
-        planTree: FileTreeNode;
-      }
-    >(),
-  );
+  /** Lock confirmed "close and cancel import"; close the vault once writes stop. */
+  const closeVaultAfterImportRef = useRef(false);
   const importPeekRef = useRef<string | null>(null);
   const [pendingImports, setPendingImports] = useState<PendingImportEntry[]>([]);
   const [activeImportWrites, setActiveImportWrites] = useState<ActiveImportWrite[]>([]);
@@ -137,7 +149,6 @@ export function useVaultFileManager({
     }
     return next;
   }, [landedImportPaths, pendingPathSet]);
-  const importTimedOut = timedOutSessionIds.length > 0;
   const processingPathSet = useMemo(
     () => new Set(activeImportWrites.map((write) => write.path)),
     [activeImportWrites],
@@ -169,43 +180,42 @@ export function useVaultFileManager({
   }, [importBusy, setImportInFlight, vaultId]);
 
   useEffect(() => {
+    setDiskContents((current) => withSavedDraftDiskContents(current, workspace));
+  }, [workspace]);
+
+  useEffect(() => {
     if (importBusy) return;
-    if (workspace.unsavedPrompt?.type !== "import_in_progress") return;
-    dispatch({ type: "set_unsaved_prompt", prompt: null });
-  }, [dispatch, importBusy, workspace.unsavedPrompt]);
+    const promptType = workspace.unsavedPrompt?.type;
+    if (promptType === "import_in_progress" || promptType === "close_vault_import") {
+      dispatch({ type: "set_unsaved_prompt", prompt: null });
+    }
+    // Save/discard of a vault lock is still on screen. Closing waits for that answer.
+    if (!closeVaultAfterImportRef.current || promptType === "close_vault") return;
+    closeVaultAfterImportRef.current = false;
+    onVaultCloseConfirmed?.();
+  }, [dispatch, importBusy, onVaultCloseConfirmed, workspace.unsavedPrompt]);
 
   const syncTree = useCallback(async () => {
     const revision = await fs.getTreeRevision(vaultId);
     dispatch({ type: "tree_mutated", revision });
   }, [dispatch, fs, vaultId]);
 
-  useEffect(() => {
-    let cancelled = false;
-    void fs
-      .getFileTree(vaultId)
-      .then((next) => {
-        if (!cancelled) setTree(next);
-      })
-      .catch(() => {
-        if (!cancelled) setTree(EMPTY_TREE);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [fs, vaultId, workspace.treeRevision]);
-
-  const { message: toastMessage, show: showToast, dismiss: dismissToast } = useToast(2800);
-
-  useEffect(() => {
-    const lastBySession = lastBySessionRef;
-    const inFlight = importInFlightRef;
-    return () => {
-      for (const [id, last] of lastBySession.current.entries()) {
-        if (inFlight.current.has(id)) continue;
-        void finishMobileImportSession(last.files, last.options?.releaseSafTree);
+  const publishImportedTree = useCallback(async () => {
+    try {
+      const nextTree = await fs.getFileTree(vaultId);
+      const revision = await fs.getTreeRevision(vaultId);
+      setTree(nextTree);
+      dispatch({ type: "tree_mutated", revision });
+    } catch {
+      try {
+        await syncTree();
+      } catch {
+        /* The caller still drops this batch's placeholders. */
       }
-    };
-  }, []);
+    }
+  }, [dispatch, fs, setTree, syncTree, vaultId]);
+
+  const { toast, show: showToast, dismiss: dismissToast } = useToast(2800);
 
   useEffect(() => {
     let cancelled = false;
@@ -292,52 +302,62 @@ export function useVaultFileManager({
 
   const saveFile = useCallback(
     async (path: string): Promise<boolean> => {
-      if (!workspace.dirtyPaths.includes(path)) return true;
-      if (loadErrors[path] || !(path in diskContents)) {
+      for (let pass = 0; pass < MAX_DIRTY_DRAFT_SAVE_PASSES; pass++) {
+        const current = workspaceRef.current;
+        if (!current.dirtyPaths.includes(path)) return true;
+        if (loadErrorsRef.current[path] || !(path in diskContentsRef.current)) {
+          showToast(t("modal.file_manager.toast.read_failed"));
+          return false;
+        }
+        const content =
+          path in current.editorDrafts
+            ? current.editorDrafts[path]
+            : (diskContentsRef.current[path] ?? "");
+        try {
+          await fs.setFileContent(vaultId, path, content);
+        } catch {
+          showToast(t("modal.file_manager.toast.save_failed"));
+          return false;
+        }
+        const fresh = workspaceRef.current;
+        if (!fresh.dirtyPaths.includes(path)) return true;
+        const freshContent = fresh.editorDrafts[path];
+        if (freshContent !== undefined && freshContent !== content) continue;
+        const stored = freshContent ?? content;
+        setDiskContents((prev) => (prev[path] === stored ? prev : { ...prev, [path]: stored }));
+        dispatch({ type: "mark_saved", path, content: stored });
+        return true;
+      }
+      showToast(t("modal.file_manager.toast.save_failed"));
+      return false;
+    },
+    [dispatch, fs, showToast, t, vaultId],
+  );
+
+  const saveFiles = useCallback(
+    async (paths: readonly string[]): Promise<boolean> => {
+      let blocked = false;
+      for (const path of paths) {
+        if (!workspaceRef.current.dirtyPaths.includes(path) || !fs.isFileEditable(vaultId, path)) {
+          continue;
+        }
+        if (loadErrorsRef.current[path] || !(path in diskContentsRef.current)) {
+          blocked = true;
+          continue;
+        }
+        const ok = await saveFile(path);
+        if (!ok) return false;
+      }
+      if (blocked) {
         showToast(t("modal.file_manager.toast.read_failed"));
         return false;
       }
-      const content = getEditorContent(path);
-      try {
-        await fs.setFileContent(vaultId, path, content);
-        setDiskContents((prev) => ({ ...prev, [path]: content }));
-        dispatch({ type: "mark_saved", path, content });
-        return true;
-      } catch {
-        showToast(t("modal.file_manager.toast.save_failed"));
-        return false;
-      }
+      return true;
     },
-    [
-      diskContents,
-      dispatch,
-      fs,
-      getEditorContent,
-      loadErrors,
-      showToast,
-      t,
-      vaultId,
-      workspace.dirtyPaths,
-    ],
+    [fs, saveFile, showToast, t, vaultId],
   );
 
-  const saveAllFiles = useCallback(async (): Promise<boolean> => {
-    let blocked = false;
-    for (const path of workspace.dirtyPaths) {
-      if (!fs.isFileEditable(vaultId, path)) continue;
-      if (loadErrors[path] || !(path in diskContents)) {
-        blocked = true;
-        continue;
-      }
-      const ok = await saveFile(path);
-      if (!ok) return false;
-    }
-    if (blocked) {
-      showToast(t("modal.file_manager.toast.read_failed"));
-      return false;
-    }
-    return true;
-  }, [diskContents, fs, loadErrors, saveFile, showToast, t, vaultId, workspace.dirtyPaths]);
+  const saveAllFiles = useCallback(() => saveFiles(workspaceRef.current.dirtyPaths), [saveFiles]);
 
   const openFile = useCallback(
     (path: string) => {
@@ -391,28 +411,49 @@ export function useVaultFileManager({
     const sessionId = importSessionSeqRef.current + 1;
     importSessionSeqRef.current = sessionId;
     importInFlightRef.current.add(sessionId);
-    setInFlightIds([...importInFlightRef.current]);
     setImportBusy(true);
     return sessionId;
   }, []);
 
   const endImportSession = useCallback(
-    (sessionId: number, failed: boolean) => {
+    (sessionId: number) => {
       importInFlightRef.current.delete(sessionId);
       setImportInFlight(vaultId, importInFlightRef.current.size > 0);
-      setInFlightIds([...importInFlightRef.current]);
       setActiveImportWrites((prev) => dropActiveImportWritesForSession(prev, sessionId));
       setImportBusy(importInFlightRef.current.size > 0);
-      setTimedOutSessionIds((prev) =>
-        failed
-          ? prev.includes(sessionId)
-            ? prev
-            : [...prev, sessionId]
-          : prev.filter((id) => id !== sessionId),
-      );
-      if (!failed) lastBySessionRef.current.delete(sessionId);
     },
     [setImportInFlight, vaultId],
+  );
+
+  const clearImportSession = useCallback(
+    (sessionId: number) => {
+      setPendingImports((prev) => dropSessionPending(prev, sessionId));
+      commitLandedImportPaths(
+        releaseLandedImportPaths(
+          landedImportPathsRef.current,
+          pendingImportsRef.current,
+          sessionId,
+        ),
+      );
+    },
+    [commitLandedImportPaths],
+  );
+
+  const revealImportNames = useCallback(
+    (sessionId: number, parentPath: string, relativePaths: readonly string[]) => {
+      const planTree = treeRef.current;
+      setPendingImports((prev) =>
+        replaceSessionPending(
+          prev,
+          sessionId,
+          pendingEntriesFromRelativePaths(parentPath, relativePaths, sessionId, planTree),
+        ),
+      );
+      for (const folder of foldersToExpandForImportBatch(parentPath, relativePaths)) {
+        dispatch({ type: "expand_folder", path: folder });
+      }
+    },
+    [dispatch],
   );
 
   const importFiles = useCallback(
@@ -421,41 +462,29 @@ export function useVaultFileManager({
       files: readonly MobileImportFile[],
       options?: MobileImportOptions,
     ) => {
-      if (writesLockedRef.current) {
+      const preparedSession = options?.sessionId;
+      const prepared = preparedSession != null;
+      if (!prepared && writesLockedRef.current) {
         showToast(t("modal.file_manager.toast.close_queued"));
         return;
       }
-      const sessionId = beginImportSession();
+      const sessionId = preparedSession ?? beginImportSession();
       const signal = importAbortRef.current.signal;
-      const planTree = treeRef.current;
-      const plannedByRelative = plannedImportPathMap(
-        parentPath,
-        files.map((file) => file.relativePath),
-        planTree,
-      );
-      const skeleton = files.length > IMPORT_EXPLORER_SKELETON_FILES;
-      lastBySessionRef.current.set(sessionId, { parentPath, files, options, planTree });
+      const relativePaths = files.map((file) => file.relativePath);
       importPeekRef.current = null;
-      setPendingImports((prev) =>
-        replaceSessionPending(
-          prev,
-          sessionId,
-          pendingEntriesFromRelativePaths(
-            parentPath,
-            files.map((file) => file.relativePath),
-            sessionId,
-            planTree,
-          ),
-        ),
-      );
-      for (const folder of foldersToExpandForImportBatch(
-        parentPath,
-        files.map((file) => file.relativePath),
-      )) {
-        dispatch({ type: "expand_folder", path: folder });
-      }
-      let failed = false;
       try {
+        if (!prepared && files.length > IMPORT_EXPLORER_SKELETON_FILES) {
+          setPendingImports((prev) =>
+            replaceSessionPending(prev, sessionId, walkPlaceholderEntries(parentPath, sessionId)),
+          );
+          dispatch({ type: "expand_folder", path: parentPath });
+          await yieldToPaint();
+        }
+        revealImportNames(sessionId, parentPath, relativePaths);
+        await yieldToPaint();
+        const planTree = treeRef.current;
+        const plannedByRelative = plannedImportPathMap(parentPath, relativePaths, planTree);
+        const skeleton = files.length > IMPORT_EXPLORER_SKELETON_FILES;
         const result = await importLogicalFiles(files, {
           vaultId,
           parentPath,
@@ -464,9 +493,15 @@ export function useVaultFileManager({
           ensureFolder: fs.ensureFolder,
           importFile: fs.importFile,
           signal,
+          importSlots: importFileSlots(nativeProcessorCount(), true),
+          sealImports: () => rpcVaultFsImportSeal(vaultId).then(() => undefined),
           importBinaryFile: async (id, parent, name, file) => {
+            if (Platform.OS === "android" && file.uri.startsWith("content:")) {
+              await rpcImportContentUri(id, joinPath(parent, name).replace(/^\/+/, ""), file.uri);
+              return joinPath(parent, name);
+            }
             const osPath = nativeOsPathFromImportUri(file.cacheUri ?? file.uri);
-            if (osPath) return fs.importFileFromOsPath(id, parent, name, osPath);
+            if (osPath) return fs.importFileFromOsPath(id, parent, name, osPath, true);
             const source = await uriByteSource(file);
             return fs.importFileFromBytes(id, parent, name, source);
           },
@@ -499,19 +534,12 @@ export function useVaultFileManager({
           },
         });
 
-        if (signal.aborted) {
-          setPendingImports((prev) => dropSessionPending(prev, sessionId));
-          commitLandedImportPaths(
-            releaseLandedImportPaths(
-              landedImportPathsRef.current,
-              pendingImportsRef.current,
-              sessionId,
-            ),
-          );
+        if (signal.aborted && result.importedPaths.length === 0) {
+          clearImportSession(sessionId);
           return;
         }
 
-        if (options?.openFirstViewable && !importPeekRef.current) {
+        if (!signal.aborted && options?.openFirstViewable && !importPeekRef.current) {
           const toOpen = result.importedPaths.find((path) => fs.isFileViewable(vaultId, path));
           if (toOpen) dispatch({ type: "open_file", path: toOpen });
         }
@@ -522,78 +550,54 @@ export function useVaultFileManager({
           result.skippedUnsupported,
           (key, vars) => t(key, vars),
         );
-        if (message) showToast(message);
-
-        if (importBatchNeedsRetry(result)) {
-          if (result.readFailureName) {
-            showToast(
-              t("modal.file_manager.toast.import_failed", { name: result.readFailureName }),
-            );
-          }
-          if (result.writeFailureName) {
-            showToast(
-              t("modal.file_manager.toast.import_write_failed", { name: result.writeFailureName }),
-            );
-          }
-          throw new Error("import-batch-failed");
+        if (result.readFailureName) {
+          showToast(t("modal.file_manager.toast.import_failed", { name: result.readFailureName }));
+        } else if (result.writeFailureName) {
+          showToast(
+            t("modal.file_manager.toast.import_write_failed", { name: result.writeFailureName }),
+          );
+        } else if (options?.releaseSafTree) {
+          const note = t("vault.create.option.import_folder_dot_note");
+          showToast(message ? `${message} ${note}` : note);
+        } else if (message) {
+          showToast(message);
         }
 
         if (result.importedPaths.length === 0) {
-          await syncTree();
-          setPendingImports((prev) => dropSessionPending(prev, sessionId));
-          commitLandedImportPaths(
-            releaseLandedImportPaths(
-              landedImportPathsRef.current,
-              pendingImportsRef.current,
-              sessionId,
-            ),
-          );
+          try {
+            await syncTree();
+          } catch {
+            /* Placeholders for this batch are still cleared. */
+          }
+          clearImportSession(sessionId);
         } else {
-          const nextTree = await fs.getFileTree(vaultId);
-          const revision = await fs.getTreeRevision(vaultId);
-          setTree(nextTree);
-          setPendingImports((prev) => dropSessionPending(prev, sessionId));
-          commitLandedImportPaths(
-            releaseLandedImportPaths(
-              landedImportPathsRef.current,
-              pendingImportsRef.current,
-              sessionId,
-            ),
-          );
-          dispatch({ type: "tree_mutated", revision });
+          await publishImportedTree();
+          clearImportSession(sessionId);
           for (const folder of result.foldersToExpand) {
             dispatch({ type: "expand_folder", path: folder });
           }
           dispatch({ type: "mark_session_created", paths: result.importedPaths });
         }
       } catch {
-        if (signal.aborted) return;
-        failed = true;
-        await syncTree();
-      } finally {
-        endImportSession(sessionId, failed);
-        if (signal.aborted || !failed) {
-          await finishMobileImportSession(files, options?.releaseSafTree);
-        } else {
-          const leftover = filesStillPendingImport(
-            files,
-            parentPath,
-            pendingImportsRef.current.filter((entry) => entry.sessionId === sessionId),
-            planTree,
-            landedImportPathsRef.current,
-          );
-          const leftoverSet = new Set(leftover);
-          const done = files.filter((file) => !leftoverSet.has(file));
-          if (done.length > 0) await finishMobileImportSession(done);
+        await publishImportedTree();
+        clearImportSession(sessionId);
+        if (!signal.aborted) {
+          showToast(t("modal.file_manager.toast.import_seal_failed"));
         }
+      } finally {
+        endImportSession(sessionId);
+        await finishMobileImportSession(files, options?.releaseSafTree);
       }
     },
     [
       beginImportSession,
+      clearImportSession,
       commitLandedImportPaths,
       dispatch,
       endImportSession,
       fs,
+      publishImportedTree,
+      revealImportNames,
       showToast,
       syncTree,
       t,
@@ -601,47 +605,117 @@ export function useVaultFileManager({
     ],
   );
 
-  const retryImport = useCallback(() => {
-    const timedOut = [...lastBySessionRef.current.entries()].filter(
-      ([id]) => !importInFlightRef.current.has(id),
-    );
-    for (const [sessionId, last] of timedOut) {
-      const leftover = pendingImportsRef.current.filter((entry) => entry.sessionId === sessionId);
-      const landedNow = landedImportPathsRef.current;
-      lastBySessionRef.current.delete(sessionId);
-      setTimedOutSessionIds((prev) => prev.filter((id) => id !== sessionId));
-      const kept = leftover.filter((entry) => entry.type === "file" && landedNow.has(entry.path));
-      if (kept.length > 0) {
-        setTree((prev) => kept.reduce((next, entry) => attachImportedPath(next, entry.path), prev));
+  const importPickedFolder = useCallback(
+    async (parentPath: string) => {
+      if (writesLockedRef.current) {
+        showToast(t("modal.file_manager.toast.close_queued"));
+        return;
       }
-      setPendingImports((prev) => dropSessionPending(prev, sessionId));
-      commitLandedImportPaths(releaseLandedImportPaths(landedNow, leftover, sessionId));
-      const remaining = filesStillPendingImport(
-        last.files,
-        last.parentPath,
-        leftover,
-        last.planTree,
-        landedNow,
+      let grant: { directoryUri: string; folderName: string } | null;
+      try {
+        grant = await pickImportFolderGrant();
+      } catch (error) {
+        if (error instanceof FolderPickerUnavailableError) {
+          showToast(t("modal.file_manager.toast.import_folder_unavailable"));
+          return;
+        }
+        throw error;
+      }
+      if (!grant) return;
+      if (writesLockedRef.current) {
+        safReleaseImportTree(grant.directoryUri);
+        showToast(t("modal.file_manager.toast.close_queued"));
+        return;
+      }
+      const sessionId = beginImportSession();
+      const signal = importAbortRef.current.signal;
+      setPendingImports((prev) =>
+        replaceSessionPending(prev, sessionId, walkPlaceholderEntries(parentPath, sessionId)),
       );
-      if (remaining.length === 0) continue;
-      void importFiles(last.parentPath, remaining, last.options);
+      dispatch({ type: "expand_folder", path: parentPath });
+      await yieldToPaint();
+      let handedOff = false;
+      try {
+        const listed = await listGrantedImportFolder(grant.directoryUri, grant.folderName, false, {
+          onSnapshot: (snapshot) => {
+            if (signal.aborted || !importInFlightRef.current.has(sessionId)) return;
+            revealImportNames(
+              sessionId,
+              parentPath,
+              snapshot.files.map((file) => file.relativePath),
+            );
+          },
+          shouldStop: () => signal.aborted || !importInFlightRef.current.has(sessionId),
+        });
+        if (signal.aborted || !importInFlightRef.current.has(sessionId)) {
+          clearImportSession(sessionId);
+          return;
+        }
+        if (listed.files.length === 0) {
+          clearImportSession(sessionId);
+          showToast(t("modal.file_manager.toast.import_folder_empty"));
+          return;
+        }
+        handedOff = true;
+        await importFiles(parentPath, listed.files, {
+          openFirstViewable: true,
+          releaseSafTree: listed.releaseSafTree,
+          sessionId,
+        });
+      } catch {
+        if (signal.aborted) return;
+        await syncTree();
+        clearImportSession(sessionId);
+        showToast(t("modal.file_manager.toast.import_failed", { name: grant.folderName }));
+      } finally {
+        if (!handedOff && importInFlightRef.current.has(sessionId)) {
+          endImportSession(sessionId);
+          await finishMobileImportSession([], grant.directoryUri);
+        }
+      }
+    },
+    [
+      beginImportSession,
+      clearImportSession,
+      dispatch,
+      endImportSession,
+      importFiles,
+      revealImportNames,
+      showToast,
+      syncTree,
+      t,
+    ],
+  );
+
+  const continueVaultClose = useCallback(() => {
+    if (importInFlightRef.current.size > 0) {
+      closeVaultAfterImportRef.current = true;
+      return;
     }
-  }, [commitLandedImportPaths, importFiles]);
+    closeVaultAfterImportRef.current = false;
+    onVaultCloseConfirmed?.();
+  }, [onVaultCloseConfirmed]);
 
   const cancelImportAndClose = useCallback(() => {
+    const closingVault = workspace.unsavedPrompt?.type === "close_vault_import";
     importAbortRef.current.abort();
-    lastBySessionRef.current.clear();
     setPendingImports([]);
     commitLandedImportPaths(new Set());
     setActiveImportWrites([]);
-    setTimedOutSessionIds([]);
     if (hasUnsavedWorkspaceChanges(workspace)) {
-      dispatch({ type: "set_unsaved_prompt", prompt: { type: "dismiss_workspace" } });
+      dispatch({
+        type: "set_unsaved_prompt",
+        prompt: { type: closingVault ? "close_vault" : "dismiss_workspace" },
+      });
       return;
     }
     dispatch({ type: "set_unsaved_prompt", prompt: null });
-    onDismissConfirmed?.();
-  }, [commitLandedImportPaths, dispatch, onDismissConfirmed, workspace]);
+    if (!closingVault) {
+      onDismissConfirmed?.();
+      return;
+    }
+    continueVaultClose();
+  }, [commitLandedImportPaths, continueVaultClose, dispatch, onDismissConfirmed, workspace]);
 
   const nameErrorMessage = useCallback(
     (code: FileNameErrorCode) => {
@@ -756,6 +830,12 @@ export function useVaultFileManager({
           next: { type: "close_tab", path: prompt.path },
         });
         return;
+      case "close_tabs":
+        dispatch({
+          type: "discard_unsaved_and",
+          next: { type: "close_tabs", paths: prompt.paths },
+        });
+        return;
       case "dismiss_workspace":
         dispatch({
           type: "discard_unsaved_and",
@@ -763,11 +843,25 @@ export function useVaultFileManager({
         });
         onDismissConfirmed?.();
         return;
+      case "close_vault":
+        dispatch({
+          type: "discard_unsaved_and",
+          next: { type: "set_unsaved_prompt", prompt: null },
+        });
+        continueVaultClose();
+        return;
       case "import_in_progress":
+      case "close_vault_import":
         cancelImportAndClose();
         return;
     }
-  }, [cancelImportAndClose, dispatch, onDismissConfirmed, workspace.unsavedPrompt]);
+  }, [
+    cancelImportAndClose,
+    continueVaultClose,
+    dispatch,
+    onDismissConfirmed,
+    workspace.unsavedPrompt,
+  ]);
 
   const confirmSaveUnsaved = useCallback(() => {
     const prompt = workspace.unsavedPrompt;
@@ -777,6 +871,15 @@ export function useVaultFileManager({
       switch (prompt.type) {
         case "close_tab": {
           const ok = await saveFile(prompt.path);
+          if (!ok) return;
+          dispatch({
+            type: "discard_unsaved_and",
+            next: resolveUnsavedPrompt(workspace, prompt),
+          });
+          return;
+        }
+        case "close_tabs": {
+          const ok = await saveFiles(prompt.paths);
           if (!ok) return;
           dispatch({
             type: "discard_unsaved_and",
@@ -794,17 +897,38 @@ export function useVaultFileManager({
           onDismissConfirmed?.();
           return;
         }
+        case "close_vault": {
+          const ok = await saveAllFiles();
+          if (!ok) return;
+          dispatch({
+            type: "discard_unsaved_and",
+            next: resolveUnsavedPrompt(workspace, prompt),
+          });
+          continueVaultClose();
+          return;
+        }
         case "import_in_progress":
+        case "close_vault_import":
           dispatch({ type: "set_unsaved_prompt", prompt: null });
       }
     })();
-  }, [dispatch, onDismissConfirmed, saveAllFiles, saveFile, workspace]);
+  }, [
+    continueVaultClose,
+    dispatch,
+    onDismissConfirmed,
+    saveAllFiles,
+    saveFile,
+    saveFiles,
+    workspace,
+  ]);
 
   return {
     vaultId,
     writesLocked,
     tree,
     displayTree,
+    treeStatus,
+    retryTree,
     workspace,
     getEditorContent,
     fileLoadError: (path: string) =>
@@ -824,14 +948,6 @@ export function useVaultFileManager({
     isFileImage: (path: string) => fs.isFileImage(vaultId, path),
     isImportPending: (path: string) => unresolvedImportPaths.has(path),
     isImportProcessing: (path: string) => processingPathSet.has(path),
-    isImportTimedOut: (path: string) =>
-      isPendingImportTimedOut(
-        path,
-        pendingImports,
-        timedOutSessionIds,
-        inFlightIds,
-        processingPathSet,
-      ),
     isImportWalkPlaceholder: isImportWalkPlaceholderPath,
     isImportQueueSlot: isImportQueueSlotPath,
     saveFile,
@@ -840,16 +956,15 @@ export function useVaultFileManager({
     createFile,
     createFolder,
     importFiles,
+    importPickedFolder,
     importBusy,
-    importTimedOut,
     importBudget,
-    retryImport,
     cancelImportAndClose,
     commitRename,
     movePath,
     requestDelete,
     confirmDelete,
-    toastMessage,
+    toast,
     openInSystemFileManager,
     showToast,
     dismissToast,

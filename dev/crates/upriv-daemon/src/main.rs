@@ -3,11 +3,13 @@
 //! Speaks newline-delimited JSON over stdin/stdout (no TCP port). The Electron
 //! main process spawns this binary with piped stdio and proxies renderer calls.
 //!
-//! **Concurrency:** Three off-stdin workers, so a long import does not sit in
+//! **Concurrency:** Four off-stdin lanes, so a long import does not sit in
 //! front of a lock.
 //! - `upriv-argon2`: short unlocks (`vault_open`, `vault_create`, export probe).
 //! - `upriv-fs-io`: close, delete, backup download.
-//! - `upriv-pack`: vault import, export, and in-app file import.
+//! - `upriv-pack`: zip and `.7z` import, and export. One at a time.
+//! - `upriv-import`: file imports. One thread per import slot (one file on a
+//!   single core, up to four on a large desktop).
 //!
 //! Light RPCs stay on the stdin loop. Electron matches responses by `id`.
 //! One Argon2 at a time: single worker + core `with_unlock_lock`.
@@ -25,6 +27,7 @@ use upriv_rpc::RpcErrorBody;
 use wire::{
     handle_request, heavy_lane, is_heavy_method, HeavyLane, RequestOutcome, WireIn, WireOut,
 };
+use zeroize::Zeroizing;
 
 /// Reject absurdly large request lines before parsing them.
 ///
@@ -91,6 +94,45 @@ fn run_request_caught(id: u64, method: String, params: serde_json::Value) -> Req
         .unwrap_or_else(|_| RequestOutcome::Continue(internal_error_response(id)))
 }
 
+fn spawn_worker_pool(
+    count: usize,
+    thread_name: &'static str,
+    stdout: Arc<Mutex<io::Stdout>>,
+) -> (Sender<HeavyJob>, Vec<JoinHandle<()>>) {
+    let count = count.max(1);
+    let (tx, rx) = mpsc::channel::<HeavyJob>();
+    let rx = Arc::new(Mutex::new(rx));
+    let mut handles = Vec::with_capacity(count);
+    for index in 0..count {
+        let rx = Arc::clone(&rx);
+        let stdout = Arc::clone(&stdout);
+        let name = format!("{thread_name}-{index}");
+        let handle = thread::Builder::new()
+            .name(name.clone())
+            .spawn(move || loop {
+                let job = {
+                    let guard = rx.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                    guard.recv()
+                };
+                match job {
+                    Ok(HeavyJob::Shutdown) | Err(_) => break,
+                    Ok(HeavyJob::Request { id, method, params }) => {
+                        let response = match run_request_caught(id, method, params) {
+                            RequestOutcome::Continue(wire) | RequestOutcome::Shutdown(wire) => wire,
+                        };
+                        if let Err(error) = write_out(&stdout, &response) {
+                            eprintln!("[upriv-daemon] {name} stdout error: {error}");
+                            break;
+                        }
+                    }
+                }
+            })
+            .unwrap_or_else(|_| panic!("spawn {thread_name} worker"));
+        handles.push(handle);
+    }
+    (tx, handles)
+}
+
 fn spawn_named_worker(
     thread_name: &'static str,
     stdout: Arc<Mutex<io::Stdout>>,
@@ -137,6 +179,9 @@ fn run() -> io::Result<()> {
     let (argon2_tx, argon2_join) = spawn_named_worker("upriv-argon2", Arc::clone(&stdout));
     let (lifecycle_tx, lifecycle_join) = spawn_named_worker("upriv-fs-io", Arc::clone(&stdout));
     let (pack_tx, pack_join) = spawn_named_worker("upriv-pack", Arc::clone(&stdout));
+    let import_count = upriv_core::import_slots();
+    let (import_tx, import_joins) =
+        spawn_worker_pool(import_count, "upriv-import", Arc::clone(&stdout));
 
     write_out(&stdout, &WireOut::Ready)?;
     write_out(
@@ -165,8 +210,9 @@ fn run() -> io::Result<()> {
 
     let stdin = io::stdin();
     for line in stdin.lock().lines() {
+        // Lines carry passwords and file bytes; wipe each one when its iteration ends.
         let line = match line {
-            Ok(value) => value,
+            Ok(value) => Zeroizing::new(value),
             Err(error) => {
                 eprintln!("[upriv-daemon] stdin read error: {error}");
                 break;
@@ -210,11 +256,12 @@ fn run() -> io::Result<()> {
             WireIn::Request { id, method, params } => {
                 if is_heavy_method(&method, &params) {
                     let lane = heavy_lane(&method, &params)
-                        .expect("heavy method is argon2, lifecycle, or pack");
+                        .expect("heavy method is argon2, lifecycle, pack, or import");
                     let tx = match lane {
                         HeavyLane::Argon2 => &argon2_tx,
                         HeavyLane::Lifecycle => &lifecycle_tx,
                         HeavyLane::Pack => &pack_tx,
+                        HeavyLane::Import => &import_tx,
                     };
                     if tx.send(HeavyJob::Request { id, method, params }).is_err() {
                         write_out(&stdout, &internal_error_response(id))?;
@@ -249,6 +296,15 @@ fn run() -> io::Result<()> {
     drop(pack_tx);
     if let Err(error) = pack_join.join() {
         eprintln!("[upriv-daemon] pack worker join panicked: {error:?}");
+    }
+    for _ in 0..import_joins.len() {
+        let _ = import_tx.send(HeavyJob::Shutdown);
+    }
+    drop(import_tx);
+    for handle in import_joins {
+        if let Err(error) = handle.join() {
+            eprintln!("[upriv-daemon] import worker join panicked: {error:?}");
+        }
     }
 
     upriv_core::logging::flush_logging_session();

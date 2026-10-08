@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { StyleSheet, useWindowDimensions, View } from "react-native";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { StyleSheet, useWindowDimensions, View, type ViewStyle } from "react-native";
 import {
   clampCanonicalTreeSplitPercent,
   persistableTreeSplitPercent,
@@ -29,6 +29,7 @@ interface FileManagerWorkspaceProps {
   active?: boolean;
   writesLocked?: boolean;
   onDismissConfirmed: () => void;
+  onVaultCloseConfirmed?: () => void;
 }
 
 export function FileManagerWorkspace({
@@ -36,6 +37,7 @@ export function FileManagerWorkspace({
   active = true,
   writesLocked = false,
   onDismissConfirmed,
+  onVaultCloseConfirmed,
 }: FileManagerWorkspaceProps) {
   const { colors } = useTheme();
   const { width: windowWidth } = useWindowDimensions();
@@ -44,6 +46,7 @@ export function FileManagerWorkspace({
   const { dispatchWorkspace } = useFileManager();
   const { settings, patchSettings } = useAppSettingsContext();
   const layoutSize = useRef(0);
+  const treeSlotRef = useRef<View>(null);
   const [containerSize, setContainerSize] = useState(0);
 
   const settingsPercent = clampCanonicalTreeSplitPercent(
@@ -71,6 +74,7 @@ export function FileManagerWorkspace({
     entry,
     dispatch,
     onDismissConfirmed,
+    onVaultCloseConfirmed,
     writesLocked,
   });
 
@@ -99,6 +103,14 @@ export function FileManagerWorkspace({
     setDragSize(size > 0 ? size : null);
   }, []);
 
+  const applyTreeExtent = useCallback((extent: number, narrow: boolean) => {
+    treeSlotRef.current?.setNativeProps({
+      style: narrow
+        ? { height: extent, width: "100%", flexGrow: 0, flexShrink: 0 }
+        : { width: extent, height: "100%", flexGrow: 0, flexShrink: 0 },
+    });
+  }, []);
+
   const handleSplitDrag = useCallback(
     (deltaPx: number) => {
       const percent = percentFromDelta(
@@ -108,9 +120,12 @@ export function FileManagerWorkspace({
         axis,
       );
       livePercentRef.current = percent;
-      setLivePercent(percent);
+      const size = dragStartSizeRef.current;
+      if (size <= 0) return;
+      const shown = displayTreeSplitPercent(percent, size, axis);
+      applyTreeExtent(Math.round((size * shown) / 100), axis === "y");
     },
-    [axis],
+    [applyTreeExtent, axis],
   );
 
   const persistSplitPercent = useCallback(
@@ -130,9 +145,22 @@ export function FileManagerWorkspace({
     persistSplitPercent(livePercentRef.current);
   }, [persistSplitPercent]);
 
+  // A redraw while the finger is down would put the pre-drag size back.
+  // Apply the live size again before paint.
+  useLayoutEffect(() => {
+    if (!draggingRef.current) return;
+    const size = dragStartSizeRef.current;
+    if (size <= 0) return;
+    const shown = displayTreeSplitPercent(livePercentRef.current, size, axis);
+    applyTreeExtent(Math.round((size * shown) / 100), axis === "y");
+  });
+
   const sizeForSplit = dragSize ?? containerSize;
   const splitPercent = displayTreeSplitPercent(livePercent, sizeForSplit, axis);
   const treeExtent = sizeForSplit > 0 ? Math.round((sizeForSplit * splitPercent) / 100) : undefined;
+  const treeSlotStyle: ViewStyle = isNarrow
+    ? { height: treeExtent ?? "20%", width: "100%" }
+    : { width: treeExtent ?? "20%", height: "100%" };
 
   return (
     <>
@@ -150,7 +178,9 @@ export function FileManagerWorkspace({
           applyContainerSize(axis === "y" ? height : width);
         }}
       >
-        <FileTreePanel fm={fm} layout={isNarrow ? "column" : "row"} splitExtent={treeExtent} />
+        <View ref={treeSlotRef} collapsable={false} style={[styles.treeSlot, treeSlotStyle]}>
+          <FileTreePanel fm={fm} />
+        </View>
         <PaneResizeHandle
           axis={axis}
           onDragStart={handleSplitDragStart}
@@ -161,6 +191,8 @@ export function FileManagerWorkspace({
           <FileManagerTabBar
             workspace={entry.workspace}
             onWorkspaceAction={dispatch}
+            onDelete={fm.requestDelete}
+            isPathPending={fm.isImportPending}
             showSave={hasUnsavedEditableTabs(fm)}
             onSave={fm.saveAllFiles}
           />
@@ -177,5 +209,6 @@ const styles = StyleSheet.create({
   inactive: { display: "none" },
   rootColumn: { flexDirection: "column" },
   rootRow: { flexDirection: "row" },
+  treeSlot: { flexGrow: 0, flexShrink: 0, minWidth: 0, minHeight: 0 },
   editorCol: { flex: 1, minHeight: 0, minWidth: 0, overflow: "hidden" },
 });

@@ -5,6 +5,7 @@ import {
   fileManagerBlockingPrompt,
   fileManagerDismissIntent,
   isVaultCloseWritesLocked,
+  vaultCloseActivityLabelKey,
   type VaultPipelineListStatus,
 } from "@upriv/shared";
 import { FileManagerDock } from "./shell/FileManagerDock";
@@ -13,8 +14,11 @@ import { FileManagerWorkspace } from "./workspace/FileManagerWorkspace";
 
 export function FileManagerLayer({
   pipelineListStatus = {},
+  onCloseVault,
 }: {
   pipelineListStatus?: VaultPipelineListStatus;
+  /** After the user saves or discards from a lock prompt, close that vault. */
+  onCloseVault?: (vaultId: string) => void;
 }) {
   const { t } = useTranslation();
   const {
@@ -33,6 +37,9 @@ export function FileManagerLayer({
     .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry));
 
   const suspendMinimize = Boolean(maximizedEntry?.workspace.unsavedPrompt);
+  const closeActivityKey = maximizedEntry
+    ? vaultCloseActivityLabelKey(maximizedEntry.vaultId, pipelineListStatus)
+    : null;
 
   const handleDismissConfirmed = useCallback(
     (vaultId: string) => {
@@ -73,6 +80,7 @@ export function FileManagerLayer({
           keepMounted
           title={maximizedEntry ? t("modal.file_manager.title") : ""}
           contextTitle={maximizedEntry?.displayName}
+          activityLabel={closeActivityKey ? t(closeActivityKey) : undefined}
           titleIcon="file-manager"
           suspendMinimize={suspendMinimize}
           onMinimize={() => {
@@ -96,6 +104,7 @@ export function FileManagerLayer({
                   active={active}
                   writesLocked={isVaultCloseWritesLocked(entry.vaultId, pipelineListStatus)}
                   onDismissConfirmed={() => handleDismissConfirmed(entry.vaultId)}
+                  onVaultCloseConfirmed={() => onCloseVault?.(entry.vaultId)}
                 />
               </div>
             );

@@ -34,6 +34,8 @@ declare global {
         len: number,
       ): Promise<{ contentB64: string }>;
       retrievePortalDrop?(key: string): Promise<string[]>;
+      /** Logical processors. `0` or missing means use `navigator.hardwareConcurrency`. */
+      logicalProcessors?(): number;
     };
   }
 }

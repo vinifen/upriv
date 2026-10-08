@@ -42,6 +42,11 @@ export interface UprivDesktopApi {
   ): Promise<{ contentB64: string }>;
   /** Resolve an XDG FileTransfer portal key from a GTK4/Nautilus drop. */
   retrievePortalDrop(key: string): Promise<string[]>;
+  /**
+   * Logical processors on this computer. `0` when the shell did not answer,
+   * so the caller can fall back to `navigator.hardwareConcurrency`.
+   */
+  logicalProcessors(): number;
 }
 
 const api: UprivDesktopApi = {
@@ -79,6 +84,17 @@ const api: UprivDesktopApi = {
   },
   retrievePortalDrop(key) {
     return ipcRenderer.invoke("upriv-retrieve-portal-drop", key);
+  },
+  logicalProcessors() {
+    try {
+      const count: unknown = ipcRenderer.sendSync("upriv-logical-processors");
+      if (typeof count === "number" && Number.isFinite(count) && count >= 1) {
+        return Math.floor(count);
+      }
+    } catch {
+      // Older shells have no handler. The renderer falls back.
+    }
+    return 0;
   },
 };
 

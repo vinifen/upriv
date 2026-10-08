@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { FileTreeNode } from "../types";
 import {
+  IMPORT_EXPLORER_SKELETON_FILES,
   IMPORT_WALK_SLOT_COUNT,
   attachImportedPath,
   dropResolvedPending,
@@ -16,9 +17,7 @@ import {
   dropActiveImportWritesForSession,
   dropActiveImportWritePath,
   activeImportWriteForPath,
-  filesStillPendingImport,
   rememberLandedImportPaths,
-  isPendingImportTimedOut,
 } from "../pendingImport";
 
 const emptyRoot: FileTreeNode = { name: "", type: "folder", children: [] };
@@ -127,7 +126,7 @@ describe("replaceSessionPending", () => {
 });
 
 describe("active import writes", () => {
-  it("tracks one in-flight write per session and looks up by path", () => {
+  it("keeps every file a session is writing and looks up by path", () => {
     const first = upsertActiveImportWrite([], {
       sessionId: 1,
       path: "/a.zip",
@@ -138,7 +137,7 @@ describe("active import writes", () => {
       path: "/b.txt",
       startedAt: 20,
     });
-    expect(activeImportWriteForPath(queuedSibling, "/a.zip")).toBeUndefined();
+    expect(activeImportWriteForPath(queuedSibling, "/a.zip")?.startedAt).toBe(10);
     expect(activeImportWriteForPath(queuedSibling, "/b.txt")?.startedAt).toBe(20);
 
     const overlapping = upsertActiveImportWrite(queuedSibling, {
@@ -152,29 +151,14 @@ describe("active import writes", () => {
       "/c.md",
     ]);
     expect(dropActiveImportWritePath(overlapping, "/b.txt", 1).map((write) => write.path)).toEqual([
+      "/a.zip",
       "/c.md",
     ]);
     expect(dropActiveImportWritePath(overlapping, "/b.txt", 2).map((write) => write.path)).toEqual([
+      "/a.zip",
       "/b.txt",
       "/c.md",
     ]);
-  });
-
-  it("retry lists only files whose skeletons are still pending", () => {
-    const files = [{ relativePath: "a.txt" }, { relativePath: "b.txt" }, { relativePath: "c.txt" }];
-    const pending = pendingEntriesFromRelativePaths("/", ["b.txt", "c.txt"], 1);
-    expect(filesStillPendingImport(files, "/", pending).map((file) => file.relativePath)).toEqual([
-      "b.txt",
-      "c.txt",
-    ]);
-    expect(
-      filesStillPendingImport(files, "/", pendingEntriesFromRelativePaths("/", ["z.md"], 1)),
-    ).toEqual([]);
-    expect(
-      filesStillPendingImport(files, "/", walkPlaceholderEntries("/", 1)).map(
-        (file) => file.relativePath,
-      ),
-    ).toEqual(["a.txt", "b.txt", "c.txt"]);
   });
 
   it("draws every queued file until the explorer skeleton limit", () => {
@@ -185,39 +169,26 @@ describe("active import writes", () => {
     ]);
   });
 
-  it("draws folders and only the file being written once the queue is large", () => {
+  it("draws the first queued files before any of them start writing", () => {
     const relative = Array.from({ length: 201 }, (_, index) => `photos/f${index}.txt`);
     const pending = pendingEntriesFromRelativePaths("/", relative, 1);
-    const shown = pendingEntriesForExplorer(pending, new Set(["/photos/f0.txt"]));
-    expect(shown.filter((entry) => entry.type === "folder").map((entry) => entry.path)).toEqual([
-      "/photos",
-    ]);
-    expect(shown.filter((entry) => entry.type === "file").map((entry) => entry.path)).toEqual([
-      "/photos/f0.txt",
-      "/photos/.upriv-import-queue",
-    ]);
     const idle = pendingEntriesForExplorer(pending, new Set());
-    expect(idle.filter((entry) => entry.type === "file").map((entry) => entry.path)).toEqual([
-      "/photos/.upriv-import-queue",
-    ]);
-    const landed = new Set(["/photos/f0.txt", "/photos/f1.txt"]);
-    const kept = pendingEntriesForExplorer(pending, new Set(["/photos/f2.txt"]), landed);
-    expect(kept.filter((entry) => entry.type === "folder").map((entry) => entry.path)).toEqual([
+    expect(idle.filter((entry) => entry.type === "folder").map((entry) => entry.path)).toEqual([
       "/photos",
     ]);
-    expect(kept.filter((entry) => entry.type === "file").map((entry) => entry.path)).toEqual([
-      "/photos/f0.txt",
-      "/photos/f1.txt",
-      "/photos/f2.txt",
-      "/photos/.upriv-import-queue",
-    ]);
-  });
+    const idleFiles = idle.filter((entry) => entry.type === "file").map((entry) => entry.path);
+    expect(idleFiles).toHaveLength(IMPORT_EXPLORER_SKELETON_FILES + 1);
+    expect(idleFiles[0]).toBe("/photos/f0.txt");
+    expect(idleFiles[IMPORT_EXPLORER_SKELETON_FILES - 1]).toBe(
+      `/photos/f${IMPORT_EXPLORER_SKELETON_FILES - 1}.txt`,
+    );
+    expect(idleFiles.at(-1)).toBe("/photos/.upriv-import-queue");
+    expect(idleFiles).not.toContain("/photos/f200.txt");
 
-  it("times out only the in-flight write while the session is still running", () => {
-    const pending = pendingEntriesFromRelativePaths("/", ["a.zip", "b.txt"], 1);
-    const processing = new Set(["/a.zip"]);
-    expect(isPendingImportTimedOut("/a.zip", pending, [1], [1], processing)).toBe(true);
-    expect(isPendingImportTimedOut("/b.txt", pending, [1], [1], processing)).toBe(false);
-    expect(isPendingImportTimedOut("/b.txt", pending, [1], [], processing)).toBe(true);
+    const shown = pendingEntriesForExplorer(pending, new Set(["/photos/f200.txt"]));
+    const shownFiles = shown.filter((entry) => entry.type === "file").map((entry) => entry.path);
+    expect(shownFiles).toContain("/photos/f0.txt");
+    expect(shownFiles).toContain("/photos/f200.txt");
+    expect(shownFiles).not.toContain("/photos/.upriv-import-queue");
   });
 });

@@ -14,6 +14,7 @@ import {
   stdoutBufferExceeded,
   type RpcErrorBody,
 } from "./daemonProtocol";
+import { packagedVaultHome, relocateInstallDirVault } from "./installVaultHome";
 
 type WireOutReady = { type: "ready" };
 type WireOutResponse = {
@@ -247,12 +248,36 @@ function daemonEnv(): NodeJS.ProcessEnv {
       } else {
         candidate = path.dirname(app.getPath("exe"));
       }
-      cleanupWriteProbes(candidate);
-      // Product default is portable when the install/portable folder is writable
-      // (USB / external HD). Read-only installs (Program Files, /opt) → installed.
-      env.UPRIV_DISTRIBUTION = isDirWritable(candidate) ? "portable" : "installed";
-      env.UPRIV_DEFAULT_ROOT_ANCHOR = resolveWritableAppHome(candidate);
-      cleanupWriteProbes(env.UPRIV_DEFAULT_ROOT_ANCHOR);
+      const homeKind = packagedVaultHome({
+        platform: process.platform,
+        portableExecutableDir: portableDir,
+        appImageFile: isRealAppImageEnv(),
+      });
+      if (homeKind === "portable") {
+        cleanupWriteProbes(candidate);
+        // AppImage and the portable exe keep the data folder beside the program
+        // when that folder is writable. A read-only folder falls back to user data.
+        env.UPRIV_DISTRIBUTION = "portable";
+        env.UPRIV_DEFAULT_ROOT_ANCHOR = resolveWritableAppHome(candidate);
+        cleanupWriteProbes(env.UPRIV_DEFAULT_ROOT_ANCHOR);
+      } else {
+        // NSIS, .deb, and any other packaged install. A writable per-user
+        // install directory is still an install: uninstall deletes it, so the
+        // data folder is the OS user-data directory.
+        const userData = resolveUserDataAppHome();
+        const relocated =
+          process.platform === "win32"
+            ? relocateInstallDirVault(candidate, userData)
+            : { anchor: userData, notice: null, noticePath: null };
+        env.UPRIV_DISTRIBUTION =
+          path.resolve(relocated.anchor) === path.resolve(userData) ? "installed" : "portable";
+        env.UPRIV_DEFAULT_ROOT_ANCHOR = relocated.anchor;
+        if (relocated.notice && relocated.noticePath) {
+          env.UPRIV_VAULT_RELOCATE_NOTICE = relocated.notice;
+          env.UPRIV_VAULT_RELOCATE_PATH = relocated.noticePath;
+        }
+        cleanupWriteProbes(env.UPRIV_DEFAULT_ROOT_ANCHOR);
+      }
     }
   } else if (!env.UPRIV_DISTRIBUTION) {
     // Anchor already set (CI / launcher) without an explicit distribution.

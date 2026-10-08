@@ -13,8 +13,9 @@ export type PendingImportEntry = {
 /** Synthetic explorer rows while an OS folder drop is still listing files. */
 export const IMPORT_WALK_SLOT_COUNT = 3;
 /**
- * Queued files drawn as explorer rows. Larger drops still import every listed
- * file, but the tree shows folders and the file currently being written.
+ * File rows drawn as soon as their names are known, before any write starts.
+ * A larger drop still imports every file. Past this many, one queue row per
+ * folder stands in for the names that are not on screen yet.
  */
 export const IMPORT_EXPLORER_SKELETON_FILES = 200;
 export const IMPORT_WALK_SLOT_PREFIX = ".upriv-import-walk-";
@@ -153,16 +154,20 @@ export function pendingEntriesForExplorer(
     if (entry.type === "file" && !isImportWalkPlaceholderPath(entry.path)) files += 1;
   }
   if (files <= IMPORT_EXPLORER_SKELETON_FILES) return [...pending];
-  const visible = pending.filter((entry) => {
-    if (entry.type === "folder" || isImportWalkPlaceholderPath(entry.path)) return true;
-    if (activePaths.has(entry.path)) return true;
-    return landedPaths?.has(entry.path) ?? false;
-  });
-  const shown = new Set(visible.map((entry) => entry.path));
+  const visible: PendingImportEntry[] = [];
+  let drawnFiles = 0;
   const parents = new Set<string>();
   for (const entry of pending) {
-    if (entry.type !== "file" || isImportWalkPlaceholderPath(entry.path)) continue;
-    if (shown.has(entry.path)) continue;
+    if (entry.type === "folder" || isImportWalkPlaceholderPath(entry.path)) {
+      visible.push(entry);
+      continue;
+    }
+    const started = activePaths.has(entry.path) || (landedPaths?.has(entry.path) ?? false);
+    if (started || drawnFiles < IMPORT_EXPLORER_SKELETON_FILES) {
+      visible.push(entry);
+      drawnFiles += 1;
+      continue;
+    }
     parents.add(parentFolderOf(entry.path));
   }
   const slots: PendingImportEntry[] = [...parents].sort().map((parent) => ({
@@ -265,7 +270,7 @@ export function attachImportedPath(tree: FileTreeNode, path: string): FileTreeNo
   return ensureNodeAtPath(tree, path, "file");
 }
 
-/** The file a session is writing right now — queued siblings are not this. */
+/** A file this session is encrypting now. Queued files are not added until they start. */
 export type ActiveImportWrite = {
   sessionId: number;
   path: string;
@@ -276,7 +281,10 @@ export function upsertActiveImportWrite(
   writes: readonly ActiveImportWrite[],
   next: ActiveImportWrite,
 ): ActiveImportWrite[] {
-  return [...writes.filter((write) => write.sessionId !== next.sessionId), next];
+  const rest = writes.filter(
+    (write) => write.sessionId !== next.sessionId || write.path !== next.path,
+  );
+  return [...rest, next];
 }
 
 export function dropActiveImportWritesForSession(
@@ -300,33 +308,6 @@ export function activeImportWriteForPath(
 ): ActiveImportWrite | undefined {
   if (!path) return undefined;
   return writes.find((write) => write.path === path);
-}
-
-/** Retry only files whose planned skeleton is still pending. */
-export function filesStillPendingImport<T extends { relativePath: string }>(
-  files: readonly T[],
-  parentPath: string,
-  pending: readonly PendingImportEntry[],
-  tree?: FileTreeNode,
-  landedPaths?: ReadonlySet<string>,
-): T[] {
-  if (pending.some((entry) => isImportWalkPlaceholderPath(entry.path))) {
-    return [...files];
-  }
-  const pendingPaths = new Set(
-    pending.filter((entry) => entry.type === "file").map((entry) => entry.path),
-  );
-  const planned = planPendingImport(
-    parentPath,
-    files.map((file) => file.relativePath),
-    0,
-    tree,
-  ).filePaths;
-  return files.filter((_file, index) => {
-    const path = planned[index];
-    if (path == null || landedPaths?.has(path)) return false;
-    return pendingPaths.has(path);
-  });
 }
 
 /** Record paths stored during a large import. Same set when nothing new was added. */
@@ -357,23 +338,6 @@ export function releaseLandedImportPaths(
     if (entry.sessionId === sessionId && next.delete(entry.path)) changed = true;
   }
   return changed ? next : landed;
-}
-
-/**
- * Timeout UI: while a session is still writing, only the current file.
- * After the session ends, leftover skeletons for that batch can all retry.
- */
-export function isPendingImportTimedOut(
-  path: string,
-  pending: readonly PendingImportEntry[],
-  timedOutSessionIds: readonly number[],
-  inFlightIds: readonly number[],
-  processingPaths: ReadonlySet<string>,
-): boolean {
-  const entry = pending.find((item) => item.path === path);
-  if (!entry || !timedOutSessionIds.includes(entry.sessionId)) return false;
-  if (inFlightIds.includes(entry.sessionId)) return processingPaths.has(path);
-  return true;
 }
 
 function folderStillHasPendingChild(

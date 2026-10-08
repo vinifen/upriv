@@ -48,6 +48,8 @@ export type VaultPipelineListStatus = {
   queuedVaultIds?: readonly string[];
   /** Waiting open jobs. Absent means every `queued` row can resume unlock. */
   queuedOpenVaultIds?: readonly string[];
+  /** Active close that core reports is writing the close backup. Still displays `closing`. */
+  backingUpVaultIds?: readonly string[];
   /** Active FIFO job — shared clock for modal + row budget hints. */
   activeVaultId?: string;
   activeStartedAt?: number;

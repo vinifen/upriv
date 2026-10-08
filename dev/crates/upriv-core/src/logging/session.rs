@@ -370,7 +370,7 @@ mod tests {
         assert!(list_session_log_files().unwrap().is_empty());
         log_vault_root_ready("test", home.path().to_str().unwrap_or(""));
 
-        std::fs::remove_dir_all(home.path().join(".upriv")).unwrap();
+        crate::host_fs::remove_dir_all(home.path().join(".upriv")).unwrap();
 
         let err = list_session_log_files().unwrap_err();
         assert!(
@@ -396,7 +396,7 @@ mod tests {
         initialize_vault_root(home.path()).unwrap();
         log_vault_root_ready("test", home.path().to_str().unwrap_or(""));
 
-        std::fs::remove_dir_all(home.path().join(".upriv")).unwrap();
+        crate::host_fs::remove_dir_all(home.path().join(".upriv")).unwrap();
 
         let resolved = resolve_vault_root(ResolveVaultRootOptions {
             explicit: None,

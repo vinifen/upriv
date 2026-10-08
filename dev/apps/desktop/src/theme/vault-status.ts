@@ -17,7 +17,7 @@ export const vaultStatusRowClass = {
   closed:
     "border-l-2 border-transparent bg-surface-container hover:bg-surface-row-hover [&:has(button:hover)]:bg-surface-container",
   recovery:
-    "border-l-2 border-vault-recovery bg-vault-recovery/10 hover:bg-surface-row-hover [&:has(button:hover)]:bg-surface-container",
+    "border-l-2 border-vault-recovery bg-surface-container hover:bg-surface-row-hover [&:has(button:hover)]:bg-surface-container",
   closing:
     "border-l-2 border-vault-closed/60 bg-surface-container opacity-95 hover:bg-surface-row-hover [&:has(button:hover)]:bg-surface-container",
   opening:

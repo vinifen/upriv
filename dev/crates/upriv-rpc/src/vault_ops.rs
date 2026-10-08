@@ -9,18 +9,19 @@ use upriv_core::{
     classify_import_zip_path, close_all_vaults, delete_backups, delete_vault,
     export_backups_to_path, export_logical_seven_zip, export_logical_seven_zip_to_path,
     export_store_zip, export_store_zip_to_path, fs_create_file, fs_create_folder, fs_delete,
-    fs_ensure_folder, fs_import_from_os_path, fs_list_tree, fs_mkdir, fs_move, fs_os_path,
-    fs_read_file, fs_read_range, fs_rename, fs_tree_revision, fs_truncate, fs_write_file,
-    import_logical_files_zip, import_logical_files_zip_path, import_logical_os_path,
-    import_logical_seven_zip, import_logical_seven_zip_path, import_store_from_archive_path,
-    import_store_zip, ingest_import_directory, ingest_import_reader, list_backups,
-    parse_backup_import_path, parse_embedded_settings, probe_export_password,
-    probe_logical_seven_zip, probe_logical_seven_zip_path, probe_store_zip, promote_backup_save,
-    read_backup_zip_bytes, read_import_archive_bytes, read_import_zip_settings,
-    read_zip_config_toml, seven_zip_export_available, vault_list_item, KdfUnlockPreset,
-    VaultConfig, ZipImportClass,
+    fs_ensure_folder, fs_import_from_os_path, fs_import_from_os_path_deferred, fs_list_tree,
+    fs_mkdir, fs_move, fs_os_path, fs_read_file, fs_read_range, fs_rename, fs_seal_staged_imports,
+    fs_tree_revision, fs_truncate, fs_write_file, import_logical_files_zip,
+    import_logical_files_zip_path, import_logical_os_path, import_logical_seven_zip,
+    import_logical_seven_zip_path, import_store_from_archive_path, import_store_zip,
+    ingest_import_directory, ingest_import_reader_staged, list_backups, parse_backup_import_path,
+    parse_embedded_settings, probe_export_password, probe_logical_seven_zip,
+    probe_logical_seven_zip_path, probe_store_zip, promote_backup_save, read_backup_zip_bytes,
+    read_import_archive_bytes, read_import_zip_settings, read_zip_config_toml,
+    seven_zip_export_available, vault_list_item, KdfUnlockPreset, VaultConfig, ZipImportClass,
 };
 
+use super::secret::{secret_bytes, SecretString};
 use super::{err, map_core_err, ok, optional_vault_root, require_vault_root, RpcResponse};
 
 fn b64_encode(bytes: &[u8]) -> String {
@@ -98,6 +99,9 @@ struct VaultFsImportOsFileParams {
     parent_path: String,
     name: String,
     os_path: String,
+    /// Stage the blob and leave the index for `vault_fs_import_seal`.
+    #[serde(default)]
+    defer_index: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -139,7 +143,7 @@ struct BackupStampParams {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct VaultExportProbeParams {
     id: String,
-    password: String,
+    password: SecretString,
 }
 
 #[derive(Debug, Deserialize)]
@@ -149,7 +153,7 @@ struct VaultExportParams {
     #[serde(default)]
     format: Option<String>,
     #[serde(default)]
-    password: Option<String>,
+    password: Option<SecretString>,
     #[serde(default)]
     seven_zip: Option<upriv_core::config::vault_config::VaultSevenZipSection>,
     #[serde(default)]
@@ -170,7 +174,7 @@ struct VaultImportZipParams {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct VaultImport7zParams {
     settings: VaultConfig,
-    password: String,
+    password: SecretString,
     #[serde(default)]
     unlock_preset: Option<KdfUnlockPreset>,
     #[serde(default)]
@@ -178,14 +182,14 @@ struct VaultImport7zParams {
     #[serde(default)]
     archive_path: Option<String>,
     #[serde(default)]
-    archive_password: Option<String>,
+    archive_password: Option<SecretString>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct VaultImportFilesZipParams {
     settings: VaultConfig,
-    password: String,
+    password: SecretString,
     #[serde(default)]
     unlock_preset: Option<KdfUnlockPreset>,
     #[serde(default)]
@@ -202,7 +206,7 @@ struct VaultImportProbeParams {
     #[serde(default)]
     archive_path: Option<String>,
     #[serde(default)]
-    archive_password: Option<String>,
+    archive_password: Option<SecretString>,
     #[serde(default)]
     kind: Option<String>,
 }
@@ -496,14 +500,40 @@ pub(super) fn vault_fs_import_os_file(params: Value) -> RpcResponse {
         Ok(root) => root,
         Err(response) => return response,
     };
-    match fs_import_from_os_path(
-        &root,
-        parsed.id.trim(),
-        &parsed.parent_path,
-        parsed.name.trim(),
-        Path::new(parsed.os_path.trim()),
-    ) {
+    let imported = if parsed.defer_index {
+        fs_import_from_os_path_deferred(
+            &root,
+            parsed.id.trim(),
+            &parsed.parent_path,
+            parsed.name.trim(),
+            Path::new(parsed.os_path.trim()),
+        )
+    } else {
+        fs_import_from_os_path(
+            &root,
+            parsed.id.trim(),
+            &parsed.parent_path,
+            parsed.name.trim(),
+            Path::new(parsed.os_path.trim()),
+        )
+    };
+    match imported {
         Ok((path, revision)) => ok(json!({ "path": path, "revision": revision })),
+        Err(error) => map_core_err(error),
+    }
+}
+
+pub(super) fn vault_fs_import_seal(params: Value) -> RpcResponse {
+    let parsed: VaultIdParams = match serde_json::from_value(params) {
+        Ok(v) => v,
+        Err(error) => return err("invalid_request", error.to_string()),
+    };
+    let root = match require_vault_root() {
+        Ok(root) => root,
+        Err(response) => return response,
+    };
+    match fs_seal_staged_imports(&root, parsed.id.trim()) {
+        Ok(revision) => ok(json!({ "revision": revision })),
         Err(error) => map_core_err(error),
     }
 }
@@ -714,7 +744,7 @@ pub fn ingest_content_fd(vault_id: &str, logical_path: &str, fd: i32) -> RpcResp
             Ok(root) => root,
             Err(response) => return response,
         };
-        match ingest_import_reader(&root, vault_id.trim(), logical_path.trim(), &mut file) {
+        match ingest_import_reader_staged(&root, vault_id.trim(), logical_path.trim(), &mut file) {
             Ok(()) => ok(json!(null)),
             Err(error) => map_core_err(error),
         }
@@ -765,7 +795,7 @@ pub(super) fn vault_export(params: Value) -> RpcResponse {
                 export_logical_seven_zip_to_path(
                     &root,
                     parsed.id.trim(),
-                    parsed.password.as_deref().unwrap_or("").as_bytes(),
+                    secret_bytes(parsed.password.as_ref()),
                     parsed.seven_zip.as_ref(),
                     tmp,
                 )
@@ -779,7 +809,7 @@ pub(super) fn vault_export(params: Value) -> RpcResponse {
         "seven_zip" => export_logical_seven_zip(
             &root,
             parsed.id.trim(),
-            parsed.password.as_deref().unwrap_or("").as_bytes(),
+            secret_bytes(parsed.password.as_ref()),
             parsed.seven_zip.as_ref(),
         ),
         _ => export_store_zip(&root, parsed.id.trim()),
@@ -850,7 +880,7 @@ pub(super) fn vault_import_7z(params: Value) -> RpcResponse {
         Ok(root) => root,
         Err(response) => return response,
     };
-    let archive_pw = parsed.archive_password.as_deref().unwrap_or("").as_bytes();
+    let archive_pw = secret_bytes(parsed.archive_password.as_ref());
     let preset = parsed.unlock_preset.unwrap_or(KdfUnlockPreset::M256);
     let imported = if let Some(path) = parsed
         .archive_path
@@ -982,7 +1012,7 @@ pub(super) fn vault_import_probe(params: Value) -> RpcResponse {
         Err(response) => return response,
     };
     let kind = infer_import_kind(parsed.kind.as_deref(), parsed.archive_path.as_deref());
-    let archive_pw = parsed.archive_password.as_deref().unwrap_or("").as_bytes();
+    let archive_pw = secret_bytes(parsed.archive_password.as_ref());
     let path = parsed
         .archive_path
         .as_deref()

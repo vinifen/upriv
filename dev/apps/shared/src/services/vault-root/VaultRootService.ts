@@ -4,6 +4,7 @@ import type {
   VaultRootAliasInfo,
   VaultRootBootstrapPrefs,
   VaultRootInspectResult,
+  VaultRootPrivateRoot,
   VaultRootResolveResult,
 } from "../../domain/vault-root";
 import type { VaultRootMode } from "../../domain/app-settings";
@@ -67,7 +68,7 @@ export interface VaultRootService {
       replacePolicy?: IncompleteReplacePolicy;
       bootstrap?: VaultRootBootstrapPrefs | null;
     },
-  ): Promise<{ rootPath: string; aliasPath: string }>;
+  ): Promise<{ rootPath: string; aliasPath: string; privateRoot?: VaultRootPrivateRoot }>;
 
   /** Read remembered `.upriv-root` path (active or inactive). Missing file → `null`. */
   readAlias(): Promise<VaultRootAliasInfo | null>;

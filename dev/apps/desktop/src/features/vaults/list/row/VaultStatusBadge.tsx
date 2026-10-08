@@ -1,12 +1,14 @@
-import { useTranslation } from "@/i18n";
+import { useTranslation, type I18nKey } from "@/i18n";
 import type { VaultDisplayStatus } from "@upriv/shared";
 import { vaultStatusBadgeClass, vaultStatusI18nKey } from "@/theme";
 
 interface VaultStatusBadgeProps {
   status: VaultDisplayStatus;
+  /** Overrides the status label (e.g. a closing vault in its backup phase). */
+  labelKey?: I18nKey;
 }
 
-export function VaultStatusBadge({ status }: VaultStatusBadgeProps) {
+export function VaultStatusBadge({ status, labelKey }: VaultStatusBadgeProps) {
   const { t } = useTranslation();
 
   return (
@@ -16,7 +18,7 @@ export function VaultStatusBadge({ status }: VaultStatusBadgeProps) {
         vaultStatusBadgeClass[status],
       ].join(" ")}
     >
-      {t(vaultStatusI18nKey[status])}
+      {t(labelKey ?? vaultStatusI18nKey[status])}
     </span>
   );
 }

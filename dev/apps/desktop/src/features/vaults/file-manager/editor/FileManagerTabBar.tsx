@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState, type DragEvent } from "react";
 import { Icon } from "@/components/icons";
-import { IconButton } from "@/components/ui";
+import { ContextMenu, IconButton, type ContextMenuItem } from "@/components/ui";
 import { useTranslation } from "@/i18n";
 import {
   fileBaseName,
+  fileTabMenuAction,
+  fileTabMenuItems,
   isPathDirty,
   sessionPathKind,
   type VaultWorkspaceAction,
@@ -13,13 +15,23 @@ import {
 interface FileManagerTabBarProps {
   workspace: VaultWorkspaceState;
   onWorkspaceAction: (action: VaultWorkspaceAction) => void;
+  onDelete: (path: string) => void;
+  isPathPending: (path: string) => boolean;
   onSave?: () => void;
   showSave?: boolean;
+}
+
+interface TabMenuState {
+  x: number;
+  y: number;
+  path: string;
 }
 
 export function FileManagerTabBar({
   workspace,
   onWorkspaceAction,
+  onDelete,
+  isPathPending,
   onSave,
   showSave = false,
 }: FileManagerTabBarProps) {
@@ -31,6 +43,7 @@ export function FileManagerTabBar({
   const didDragRef = useRef(false);
   const [dragSourcePath, setDragSourcePath] = useState<string | null>(null);
   const [dropTargetPath, setDropTargetPath] = useState<string | null>(null);
+  const [tabMenu, setTabMenu] = useState<TabMenuState | null>(null);
   const saveLabel = t("modal.file_manager.viewer.save");
 
   useEffect(() => {
@@ -134,6 +147,10 @@ export function FileManagerTabBar({
               onDragEnd={handleDragEnd}
               onDragOver={handleDragOver}
               onDrop={handleDrop}
+              onContextMenu={(event) => {
+                event.preventDefault();
+                setTabMenu({ x: event.clientX, y: event.clientY, path });
+              }}
               className={[
                 "group flex h-8 max-w-[14rem] shrink-0 items-stretch self-start",
                 isActive ? "bg-surface-container-high" : "bg-surface-container",
@@ -210,6 +227,27 @@ export function FileManagerTabBar({
             <Icon name="save" size={14} />
           </IconButton>
         </div>
+      ) : null}
+      {tabMenu && openTabs.includes(tabMenu.path) ? (
+        <ContextMenu
+          x={tabMenu.x}
+          y={tabMenu.y}
+          title={fileBaseName(tabMenu.path)}
+          items={fileTabMenuItems(openTabs, { pending: isPathPending(tabMenu.path) }).map(
+            (item): ContextMenuItem => ({
+              id: item.id,
+              icon: item.icon,
+              label: t(item.labelKey),
+              danger: item.danger,
+              onSelect: () => {
+                const { path } = tabMenu;
+                if (item.id === "delete") onDelete(path);
+                else onWorkspaceAction(fileTabMenuAction(openTabs, path, item.id));
+              },
+            }),
+          )}
+          onClose={() => setTabMenu(null)}
+        />
       ) : null}
     </div>
   );

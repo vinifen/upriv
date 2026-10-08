@@ -31,8 +31,8 @@ export const PasswordInput = forwardRef<HTMLInputElement, PasswordInputProps>(
           label={visible ? t("action.hide_password") : t("action.show_password")}
           variant="ghost"
           size="sm"
-          // Reveal stays available while `readOnly` (e.g. unlock in progress) so the
-          // user can check / copy the password; only a full `disabled` blocks the eye.
+          // Reveal stays available while `readOnly` so the user can check / copy the
+          // password; only a full `disabled` blocks the eye.
           disabled={disabled}
           className="absolute right-0.5 top-1/2 h-8 w-8 -translate-y-1/2"
           onClick={() => setVisible((current) => !current)}

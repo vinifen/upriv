@@ -1,5 +1,6 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
+import { hideNativeSplash } from "@/lib/nativeSplash";
 
 interface AppErrorBoundaryProps {
   children: ReactNode;
@@ -22,6 +23,7 @@ export class AppErrorBoundary extends Component<AppErrorBoundaryProps, AppErrorB
   }
 
   componentDidCatch(error: Error, info: ErrorInfo): void {
+    hideNativeSplash();
     console.error("[upriv] ui crash", error, info.componentStack);
     void import("@/lib/rpc")
       .then(({ rpcLogEvent }) => rpcLogEvent("ui_crash"))

@@ -78,7 +78,29 @@ last_opened_vault = ""
 # Missing/inactive → default_root; active + path → custom_root.
 
 [workspace]
-# Absolute path for the default mount parent (open vaults). Empty = unset — no folder created.
+file_manager_folder = false
+# One folder per system. `place` starts unset: nothing is created until chosen.
+# beside = workspace next to .upriv. custom = `path`.
+# `file_manager_folder` is one flag for every system and starts off. Phones keep it and do not mount.
+
+[workspace.linux]
+place = "unset"
+path = ""
+
+[workspace.windows]
+place = "unset"
+path = ""
+
+[workspace.macos]
+place = "unset"
+path = ""
+
+[workspace.android]
+place = "unset"
+path = ""
+
+[workspace.ios]
+place = "unset"
 path = ""
 """
 
@@ -96,6 +118,31 @@ path = ""
       Unauthorized -> "unauthorized"
       Unreadable -> "unreadable"
     }
+  }
+
+  /**
+   * Document URI for the shared Documents directory.
+   *
+   * The picker must open on a folder that already exists. `Documents/Upriv`
+   * often does not, and the system then lands on a location where the user
+   * cannot confirm. Confirming Documents is the one step; `Upriv` is created
+   * inside that grant.
+   */
+  fun documentsUprivInitialUri(): String {
+    return DocumentsContract.buildDocumentUri(
+      "com.android.externalstorage.documents",
+      "primary:Documents",
+    ).toString()
+  }
+
+  /** True when the persisted tree is the shared Documents directory itself. */
+  fun isSharedDocumentsTree(treeUri: String): Boolean {
+    val id = try {
+      DocumentsContract.getTreeDocumentId(Uri.parse(treeUri)).trimEnd('/')
+    } catch (_: Throwable) {
+      return false
+    }
+    return id == "primary:Documents" || id == "home:Documents"
   }
 
   fun persist(context: Context, treeUri: String) {
@@ -197,11 +244,29 @@ path = ""
     return DocumentFile.fromSingleUri(context, uri)
   }
 
-  /** Find `.upriv` under the tree root. Leading-dot names often skip `findFile`. */
+  /**
+   * Folder that holds `.upriv`. A Documents grant is confirmed as-is; the
+   * data folder is the `Upriv` directory inside it.
+   */
+  private fun vaultParent(context: Context, tree: DocumentFile, treeUri: String): DocumentFile {
+    if (!isSharedDocumentsTree(treeUri)) return tree
+    childByDocumentId(context, treeUri, "Upriv")?.let { return it }
+    tree.findFile("Upriv")?.takeIf { it.isDirectory }?.let { return it }
+    return createChildDirectory(context, tree, "Upriv")
+      ?: throw SafException("saf_create_failed", "cannot create Documents/Upriv")
+  }
+
+  /** Find `.upriv` under the vault folder. Leading-dot names often skip `findFile`. */
   private fun findUprivDir(context: Context, tree: DocumentFile, treeUri: String): DocumentFile? {
-    tree.findFile(UPRIV_DIR)?.takeIf { it.isDirectory }?.let { return it }
-    // fromSingleUri.isDirectory is often false for tree children — trust the query.
-    return childByDocumentId(context, treeUri, UPRIV_DIR)
+    val parent = if (isSharedDocumentsTree(treeUri)) {
+      childByDocumentId(context, treeUri, "Upriv")
+        ?: tree.findFile("Upriv")?.takeIf { it.isDirectory }
+    } else {
+      tree
+    } ?: return null
+    parent.findFile(UPRIV_DIR)?.takeIf { it.isDirectory }?.let { return it }
+    val relative = if (isSharedDocumentsTree(treeUri)) "Upriv/$UPRIV_DIR" else UPRIV_DIR
+    return childByDocumentId(context, treeUri, relative)
   }
 
   private fun findSettingsFile(
@@ -211,8 +276,9 @@ path = ""
   ): DocumentFile? {
     upriv.findFile(SETTINGS_FILE)?.takeIf { !it.isDirectory }?.let { return it }
     val dirName = upriv.name ?: UPRIV_DIR
+    val nested = if (isSharedDocumentsTree(treeUri)) "Upriv/$UPRIV_DIR/$SETTINGS_FILE" else "$UPRIV_DIR/$SETTINGS_FILE"
     return childByDocumentId(context, treeUri, "$dirName/$SETTINGS_FILE")?.takeIf { !it.isDirectory }
-      ?: childByDocumentId(context, treeUri, "$UPRIV_DIR/$SETTINGS_FILE")?.takeIf { !it.isDirectory }
+      ?: childByDocumentId(context, treeUri, nested)?.takeIf { !it.isDirectory }
   }
 
   /**
@@ -248,7 +314,7 @@ path = ""
   private fun createUprivDir(context: Context, tree: DocumentFile, treeUri: String): DocumentFile {
     findUprivDir(context, tree, treeUri)?.let { return it }
 
-    createChildDirectory(context, tree, UPRIV_DIR)?.let { return it }
+    createChildDirectory(context, vaultParent(context, tree, treeUri), UPRIV_DIR)?.let { return it }
 
     // Create reported failure but the folder may already exist (hidden listing).
     findUprivDir(context, tree, treeUri)?.let { return it }

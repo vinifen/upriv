@@ -32,6 +32,8 @@
 //!   directory itself): Incomplete is **skipped** and search continues — a corrupt
 //!   sibling must not block finding another valid root.
 
+#[allow(unused_imports)]
+use crate::host_fs::HostFsQuery;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -147,7 +149,7 @@ pub fn app_home_dir() -> Result<PathBuf> {
     } else {
         prefer_writable_app_home(binary_dir()?)?
     };
-    if path.is_dir() {
+    if path.host_is_dir() {
         cleanup_stale_write_probes(&path);
     }
     Ok(path)
@@ -204,7 +206,7 @@ pub(crate) fn resolve_user_data_app_home() -> Result<PathBuf> {
 /// Resolve then create the user-data app home (first write under installed home).
 pub(crate) fn ensure_user_data_app_home() -> Result<PathBuf> {
     let path = resolve_user_data_app_home()?;
-    std::fs::create_dir_all(&path)?;
+    crate::host_fs::create_dir_all(&path)?;
     crate::paths::fs_env::cleanup_stale_write_probes(&path);
     Ok(path)
 }
@@ -267,7 +269,7 @@ fn path_as_alias_line(path: &Path) -> Result<String> {
 /// line → [`UprivError::VaultRootAliasInvalid`].
 pub fn read_vault_root_alias(home: impl AsRef<Path>) -> Result<Option<VaultRootAlias>> {
     let path = vault_root_alias_path(home);
-    let raw = match std::fs::read_to_string(&path) {
+    let raw = match crate::host_fs::read_to_string(&path) {
         Ok(raw) => raw,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error.into()),
@@ -348,7 +350,7 @@ pub fn write_vault_root_alias_for_root(home: impl AsRef<Path>, root: &VaultRoot)
     {
         let _ = ensure_user_data_app_home()?;
     } else {
-        std::fs::create_dir_all(home)?;
+        crate::host_fs::create_dir_all(home)?;
     }
     let alias = vault_root_alias_path(home);
     write_alias_file_atomic(&alias, &alias_file_contents(root.root(), true)?)
@@ -406,12 +408,12 @@ pub fn discover_vault_root_upward(start: impl AsRef<Path>) -> Option<PathBuf> {
             return current.canonicalize().ok();
         }
         if depth == 0 {
-            if let Ok(entries) = std::fs::read_dir(&current) {
+            if let Ok(entries) = crate::host_fs::read_dir(&current) {
                 // Deterministic pick when multiple sibling roots exist.
                 let mut siblings: Vec<PathBuf> = entries
                     .flatten()
                     .map(|e| e.path())
-                    .filter(|path| path.is_dir() && is_vault_root_marker(path))
+                    .filter(|path| path.host_is_dir() && is_vault_root_marker(path))
                     .collect();
                 siblings.sort();
                 if let Some(path) = siblings.into_iter().next() {
@@ -553,6 +555,8 @@ pub fn resolve_vault_root(options: ResolveVaultRootOptions) -> Result<ResolveVau
 #[cfg(test)]
 mod starts_order_tests {
     use super::*;
+    #[allow(unused_imports)]
+    use crate::host_fs::HostFsQuery;
     use crate::paths::{initialize_vault_root, ENV_LOCK};
 
     /// Regression: `starts` tries default_root_anchor before cwd (do not invert the vec).
@@ -564,7 +568,7 @@ mod starts_order_tests {
 
         let appimage_dir = tempfile::tempdir().unwrap();
         let appimage = appimage_dir.path().join("Upriv.AppImage");
-        std::fs::write(&appimage, b"fake").unwrap();
+        crate::host_fs::write(&appimage, b"fake").unwrap();
         initialize_vault_root(appimage_dir.path()).unwrap();
 
         let cwd_root = tempfile::tempdir().unwrap();
@@ -604,6 +608,9 @@ fn try_open_alias(app_home: &Path) -> Result<Option<VaultRoot>> {
     if !alias.active {
         return Ok(None);
     }
+    if crate::host_fs::is_unmounted_saf_root(&alias.path) {
+        return Ok(None);
+    }
     match VaultRoot::discover(&alias.path) {
         Ok(root) => Ok(Some(root)),
         Err(error @ UprivError::VaultRootIncomplete { .. }) => Err(error),
@@ -637,6 +644,8 @@ pub fn setup_default_root_anchor() -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[allow(unused_imports)]
+    use crate::host_fs::HostFsQuery;
     use crate::paths::initialize_vault_root;
     use crate::paths::ENV_LOCK;
 
@@ -645,7 +654,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = initialize_vault_root(dir.path()).unwrap();
         let nested = dir.path().join("bin");
-        std::fs::create_dir_all(&nested).unwrap();
+        crate::host_fs::create_dir_all(&nested).unwrap();
 
         let resolved = resolve_vault_root(ResolveVaultRootOptions {
             explicit: None,
@@ -673,7 +682,7 @@ mod tests {
         let default_root = initialize_vault_root(default_root_dir.path()).unwrap();
         initialize_vault_root(elsewhere.path()).unwrap();
         let bin = default_root_dir.path().join("bin");
-        std::fs::create_dir_all(&bin).unwrap();
+        crate::host_fs::create_dir_all(&bin).unwrap();
         write_vault_root_alias(&bin, elsewhere.path()).unwrap();
 
         let resolved = resolve_vault_root(ResolveVaultRootOptions {
@@ -773,14 +782,14 @@ mod tests {
     fn custom_root_incomplete_alias_errors_incomplete() {
         let home = tempfile::tempdir().unwrap();
         let elsewhere = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(elsewhere.path().join(".upriv")).unwrap();
-        std::fs::write(
+        crate::host_fs::create_dir_all(elsewhere.path().join(".upriv")).unwrap();
+        crate::host_fs::write(
             elsewhere.path().join(".upriv/settings.toml"),
             "not valid toml {{{",
         )
         .unwrap();
         // Bypass write_vault_root_alias (requires a valid marker).
-        std::fs::write(
+        crate::host_fs::write(
             vault_root_alias_path(home.path()),
             format!("status=active\n{}\n", elsewhere.path().display()),
         )
@@ -799,8 +808,8 @@ mod tests {
     fn explicit_incomplete_errors_incomplete() {
         let bin = tempfile::tempdir().unwrap();
         let broken = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(broken.path().join(".upriv")).unwrap();
-        std::fs::write(broken.path().join(".upriv/settings.toml"), "broken").unwrap();
+        crate::host_fs::create_dir_all(broken.path().join(".upriv")).unwrap();
+        crate::host_fs::write(broken.path().join(".upriv/settings.toml"), "broken").unwrap();
 
         let err = resolve_vault_root(ResolveVaultRootOptions {
             explicit: Some(broken.path().to_path_buf()),
@@ -815,7 +824,7 @@ mod tests {
     fn custom_root_invalid_alias_errors() {
         let home = tempfile::tempdir().unwrap();
         let missing = home.path().join("gone");
-        std::fs::write(
+        crate::host_fs::write(
             vault_root_alias_path(home.path()),
             format!("status=active\n{}\n", missing.display()),
         )
@@ -880,9 +889,9 @@ mod tests {
         write_vault_root_alias(home.path(), elsewhere.path()).unwrap();
         deactivate_vault_root_alias(home.path()).unwrap();
 
-        let raw = std::fs::read_to_string(vault_root_alias_path(home.path())).unwrap();
+        let raw = crate::host_fs::read_to_string(vault_root_alias_path(home.path())).unwrap();
         assert!(raw.contains("status=inactive"));
-        assert!(vault_root_alias_path(home.path()).is_file());
+        assert!(vault_root_alias_path(home.path()).host_is_file());
 
         write_vault_root_alias(home.path(), elsewhere.path()).unwrap();
         let alias = read_vault_root_alias(home.path()).unwrap().unwrap();
@@ -895,7 +904,7 @@ mod tests {
         let elsewhere = tempfile::tempdir().unwrap();
         initialize_vault_root(elsewhere.path()).unwrap();
         let alias_path = vault_root_alias_path(home.path());
-        std::fs::write(&alias_path, format!("{}\n", elsewhere.path().display())).unwrap();
+        crate::host_fs::write(&alias_path, format!("{}\n", elsewhere.path().display())).unwrap();
         let alias = read_vault_root_alias(home.path()).unwrap().unwrap();
         assert!(!alias.active);
         assert_eq!(alias.path, elsewhere.path());
@@ -907,7 +916,7 @@ mod tests {
         let elsewhere = tempfile::tempdir().unwrap();
         initialize_vault_root(elsewhere.path()).unwrap();
         let alias_path = vault_root_alias_path(home.path());
-        std::fs::write(
+        crate::host_fs::write(
             &alias_path,
             format!("status=actve\n{}\n", elsewhere.path().display()),
         )
@@ -915,7 +924,7 @@ mod tests {
         let alias = read_vault_root_alias(home.path()).unwrap().unwrap();
         assert!(!alias.active);
         assert_eq!(alias.path, elsewhere.path());
-        let raw = std::fs::read_to_string(&alias_path).unwrap();
+        let raw = crate::host_fs::read_to_string(&alias_path).unwrap();
         assert!(
             raw.contains("status=inactive"),
             "unknown status should be rewritten to inactive: {raw}"
@@ -960,8 +969,8 @@ mod tests {
             _ => panic!("expected rewritten alias"),
         }
 
-        std::fs::remove_file(vault_root_alias_path(bin.path())).unwrap();
-        assert!(!vault_root_alias_path(bin.path()).is_file());
+        crate::host_fs::remove_file(vault_root_alias_path(bin.path())).unwrap();
+        assert!(!vault_root_alias_path(bin.path()).host_is_file());
     }
 
     #[test]
@@ -1009,7 +1018,7 @@ mod tests {
         let _env = crate::paths::EnvGuard::capture(&["UPRIV_DEFAULT_ROOT_ANCHOR", "APPIMAGE"]);
         let appimage_dir = tempfile::tempdir().unwrap();
         let appimage = appimage_dir.path().join("Upriv.AppImage");
-        std::fs::write(&appimage, b"fake").unwrap();
+        crate::host_fs::write(&appimage, b"fake").unwrap();
         std::env::remove_var("UPRIV_DEFAULT_ROOT_ANCHOR");
         std::env::set_var("APPIMAGE", &appimage);
         assert_eq!(app_home_dir().unwrap(), appimage_dir.path());
@@ -1029,23 +1038,31 @@ mod tests {
         ]);
         let install = tempfile::tempdir().unwrap();
         let appimage = install.path().join("Upriv.AppImage");
-        std::fs::write(&appimage, b"fake").unwrap();
+        crate::host_fs::write(&appimage, b"fake").unwrap();
 
         let data = tempfile::tempdir().unwrap();
         std::env::remove_var("UPRIV_DEFAULT_ROOT_ANCHOR");
         std::env::set_var("APPIMAGE", &appimage);
         std::env::set_var("XDG_DATA_HOME", data.path());
 
-        std::fs::set_permissions(install.path(), std::fs::Permissions::from_mode(0o555)).unwrap();
+        crate::host_fs::set_permissions(
+            install.path(),
+            crate::host_fs::Permissions::from_mode(0o555),
+        )
+        .unwrap();
         let home = app_home_dir().unwrap();
         assert_eq!(home, data.path().join("upriv"));
         // Resolve is pure — directory is created on write via ensure_user_data_app_home.
-        assert!(!home.exists() || home.is_dir());
+        assert!(!home.host_exists() || home.host_is_dir());
         let ensured = ensure_user_data_app_home().unwrap();
         assert_eq!(ensured, home);
-        assert!(ensured.is_dir());
+        assert!(ensured.host_is_dir());
 
-        std::fs::set_permissions(install.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+        crate::host_fs::set_permissions(
+            install.path(),
+            crate::host_fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
         std::env::remove_var("APPIMAGE");
         std::env::remove_var("XDG_DATA_HOME");
     }
@@ -1062,9 +1079,17 @@ mod tests {
         let anchor = tempfile::tempdir().unwrap();
         std::env::set_var("UPRIV_DEFAULT_ROOT_ANCHOR", anchor.path());
         std::env::remove_var("APPIMAGE");
-        std::fs::set_permissions(anchor.path(), std::fs::Permissions::from_mode(0o555)).unwrap();
+        crate::host_fs::set_permissions(
+            anchor.path(),
+            crate::host_fs::Permissions::from_mode(0o555),
+        )
+        .unwrap();
         assert_eq!(app_home_dir().unwrap(), anchor.path());
-        std::fs::set_permissions(anchor.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+        crate::host_fs::set_permissions(
+            anchor.path(),
+            crate::host_fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
         std::env::remove_var("UPRIV_DEFAULT_ROOT_ANCHOR");
     }
 
@@ -1081,7 +1106,7 @@ mod tests {
         ]);
         let home = tempfile::tempdir().unwrap();
         let appdata = home.path().join("appdata");
-        std::fs::create_dir_all(&appdata).unwrap();
+        crate::host_fs::create_dir_all(&appdata).unwrap();
         std::env::set_var("HOME", home.path());
         std::env::set_var(ENV_DISTRIBUTION, "installed");
         std::env::set_var("UPRIV_DEFAULT_ROOT_ANCHOR", &appdata);
@@ -1123,7 +1148,7 @@ mod tests {
         ]);
         let base = tempfile::tempdir().unwrap();
         let app_home = base.path().join("missing-app-home");
-        assert!(!app_home.exists());
+        assert!(!app_home.host_exists());
 
         std::env::set_var(ENV_DISTRIBUTION, "installed");
         std::env::set_var("UPRIV_DEFAULT_ROOT_ANCHOR", &app_home);
@@ -1132,11 +1157,15 @@ mod tests {
         // Resolve is path-only — Electron does not mkdir; first write creates.
         assert_eq!(app_home_dir().unwrap(), app_home);
         assert_eq!(setup_default_root_anchor().unwrap(), app_home);
-        assert!(!app_home.exists());
+        assert!(!app_home.host_exists());
 
         let root = initialize_vault_root(&app_home).unwrap();
-        assert!(app_home.is_dir());
-        assert!(root.root().join(".upriv").join("settings.toml").is_file());
+        assert!(app_home.host_is_dir());
+        assert!(root
+            .root()
+            .join(".upriv")
+            .join("settings.toml")
+            .host_is_file());
 
         std::env::remove_var(ENV_DISTRIBUTION);
         std::env::remove_var("UPRIV_DEFAULT_ROOT_ANCHOR");
@@ -1148,7 +1177,7 @@ mod tests {
         let target = tempfile::tempdir().unwrap();
         initialize_vault_root(target.path()).unwrap();
         write_vault_root_alias(home.path(), target.path()).unwrap();
-        let raw = std::fs::read_to_string(vault_root_alias_path(home.path())).unwrap();
+        let raw = crate::host_fs::read_to_string(vault_root_alias_path(home.path())).unwrap();
         assert!(raw.contains("# Upriv vault-root alias"));
         assert!(raw.contains("status=active"));
         let parsed = read_vault_root_alias(home.path()).unwrap().unwrap();

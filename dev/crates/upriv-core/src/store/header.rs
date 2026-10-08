@@ -397,7 +397,7 @@ fn log_header_restored(store_dir: &Path, file_name: &str) {
 }
 
 fn read_bytes(path: &Path) -> Result<Option<Vec<u8>>> {
-    match std::fs::read(path) {
+    match crate::host_fs::read(path) {
         Ok(bytes) => Ok(Some(bytes)),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error.into()),
@@ -499,7 +499,7 @@ fn unwrap_with_kek(
 
 pub fn ensure_danger_notice(store_dir: &Path) -> Result<()> {
     let path = store_dir.join(STORE_DANGER_FILE_NAME);
-    if std::fs::read(&path).ok().as_deref() == Some(DANGER_NOTICE.as_bytes()) {
+    if crate::host_fs::read(&path).ok().as_deref() == Some(DANGER_NOTICE.as_bytes()) {
         return Ok(());
     }
     paths::write_bytes_atomic(&path, DANGER_NOTICE.as_bytes())

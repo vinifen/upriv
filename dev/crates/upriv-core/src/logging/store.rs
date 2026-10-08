@@ -3,7 +3,9 @@
 //! Lists **every** `*.log` in the directory. The writer only appends to a
 //! canonical `current-{seq}-{stamp}.log`; odd filenames still appear here.
 
-use std::fs::{self, File};
+#[allow(unused_imports)]
+use crate::host_fs::HostFsQuery;
+use crate::host_fs::{self as fs, File};
 use std::io::{self, BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
@@ -53,7 +55,7 @@ pub struct LogFileInfo {
 
 /// List every `*.log` under `logs_dir` (missing dir → empty list).
 pub fn list_log_files(logs_dir: &Path) -> io::Result<Vec<LogFileInfo>> {
-    if !logs_dir.is_dir() {
+    if !logs_dir.host_is_dir() {
         return Ok(Vec::new());
     }
 
@@ -61,7 +63,7 @@ pub fn list_log_files(logs_dir: &Path) -> io::Result<Vec<LogFileInfo>> {
     for entry in fs::read_dir(logs_dir)? {
         let entry = entry?;
         let path = entry.path();
-        if !path.is_file() {
+        if !path.host_is_file() {
             continue;
         }
         let Some(filename) = path.file_name().and_then(|n| n.to_str()) else {
@@ -80,7 +82,7 @@ pub fn read_log_file(logs_dir: &Path, filename: &str) -> CoreResult<Option<LogFi
     let Some(path) = safe_log_path(logs_dir, filename) else {
         return Ok(None);
     };
-    if !path.is_file() {
+    if !path.host_is_file() {
         return Ok(None);
     }
     let meta = fs::metadata(&path)?;
@@ -270,6 +272,8 @@ pub(crate) fn safe_log_path(logs_dir: &Path, filename: &str) -> Option<PathBuf> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[allow(unused_imports)]
+    use crate::host_fs::HostFsQuery;
     use tempfile::TempDir;
 
     fn temp_dir() -> TempDir {
@@ -330,7 +334,7 @@ mod tests {
             delete_log_files(dir.path(), &[name.clone(), "../escape.log".into()]).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
         assert!(
-            dir.path().join(&name).is_file(),
+            dir.path().join(&name).host_is_file(),
             "valid file must remain after mixed reject"
         );
     }

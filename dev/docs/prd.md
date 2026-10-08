@@ -106,7 +106,7 @@ encrypted_dir / upriv_plain:
 | Step | What |
 |-------|--------|
 | 1 | **Open:** unlock `store/` (`vault.header`); decrypt in RAM. |
-| 2 | **Session:** mount virtual `workspace/<id>/` (desktop) or in-app file manager (mobile). No durable plaintext tree on ordinary disk. |
+| 2 | **Session:** mount the file manager folder when it is on (desktop) or use the in-app file manager (mobile). No durable plaintext tree on ordinary disk. |
 | 3 | **Edit:** each save updates the session **and** persists ciphertext chunks in `store/`. |
 | 4 | **Close:** flush session into `store/`; optional backup = Stored zip of `store/` at `backups/<stamp>-<id>.zip` (no zip password). |
 | 5 | **Close:** unmount, zero password/keys in RAM → **`closed`**. |
@@ -115,7 +115,7 @@ encrypted_dir / upriv_plain:
 
 | Step | What |
 |-------|--------|
-| 1 | **Open:** decrypt `store/` into plaintext `workspace/<id>/` on disk. |
+| 1 | **Open:** decrypt `store/` into the plaintext folder (required path). |
 | 2 | **Edit:** real files on disk (UI warning). |
 | 3 | **Lock:** always **close** → encrypt workspace into `store/` → **`secure_wipe_workspace`** → **`closed`**. |
 
@@ -161,8 +161,8 @@ encrypted_dir / upriv_plain:
 
 1. User connects HD with pre-created structure or creates vault at volume root.
 2. Runs one of 3 launchers at root: `Upriv-windows.exe`, `Upriv-mac`, or `Upriv-linux`.
-3. Enters password → virtual `workspace/<id>/` appears → edits files.
-4. **Close vault** → `workspace/<id>/` is unmounted; only encrypted vault data persists (and `.7z` if enabled/exported).
+3. Enters password → the file manager folder appears when it is on → edits files.
+4. **Close vault** → the file manager folder is removed; only encrypted vault data persists (and `.7z` if enabled/exported).
 
 ### UC-2 — Vault in system folder
 
@@ -187,7 +187,7 @@ encrypted_dir / upriv_plain:
 2. **Link vault:** app prompts **"Select vault"** → user chooses **root folder** (`<vault-root>`) where `workspace/` (optional), `.upriv/settings.toml`, and (on desktop) launcher `Upriv-<so>.*` exist at root; grants persistent permission.
 3. **Open vault:** enter password → app validates and opens virtual view in `workspace/` (default mode) or extracts in exception mode (`plain`, when available).
 4. **Work:** button **`action.open_folder`** → Intent → system file manager (Files, Solid Explorer, etc.) opens `workspace/`; user edits with third-party apps.
-5. **Close vault:** in Upriv → unmount `workspace/<id>/`; in exception mode also recompress to `.7z`, wipe, and remove plaintext workspace.
+5. **Close vault:** in Upriv → unmount the file manager folder; in exception mode also recompress to `.7z`, wipe, and remove the plaintext folder.
 6. **Next times:** open installed app; use already authorized vault URI (no need to reinstall APK if app stays installed).
 
 **Android v1 non-goal:** run app "unpacked" from HD folder (without installation); do not replace file manager — only delegate via Intent.
@@ -204,9 +204,9 @@ encrypted_dir / upriv_plain:
 | RF-01b | **Create-new wizard (not import):** require password + confirm password; optional **password hint** field | P0 |
 | RF-01c | **Vault note:** optional user annotation per vault (max 10 000 characters); editable in create wizard and vault settings | P1 |
 | RF-01d | Store `password_hint` and `note` in **`config.toml` `[vault]`** — not in `persistence.json`, not a separate notes file (v1) | P0 |
-| RF-02 | Open vault (`encrypted_dir` default): validate password, mount virtual `workspace/<id>/`, load encrypted store | P0 |
+| RF-02 | Open vault (`encrypted_dir` default): validate password, mount the file manager folder when it is on, load encrypted store | P0 |
 | RF-03 | Expose `workspace` to user (button `action.open_folder` → OS file manager) | P0 |
-| RF-04 | Close vault (`encrypted_dir`): unmount `workspace/<id>/`, flush session into `store/` using **session keys** (not a newly typed password), clear session keys. Default lock has **no password prompt** | P0 |
+| RF-04 | Close vault (`encrypted_dir`): unmount the file manager folder, flush session into `store/` using **session keys** (not a newly typed password), clear session keys. Default lock has **no password prompt** | P0 |
 | RF-04h | `upriv_plain` mode: rest = `store/`; while open plaintext `workspace/`; UI **`warning.upriv_plain`** + badge **insecure**; lock always **close** + wipe workspace → `closed`. UI confirms wipe; password only if `always_prompt` | P1 |
 | RF-04c | (`encrypted_dir`) Require sufficient RAM for the **entire unlocked vault** while open; fail open/edit/close with user-visible error if not; UI **`warning.encrypted_dir_ram`** (RF-UI-17) | P0 |
 | RF-05 | On close: verify **open session / `vault.header`** before backup or flush — failure aborts; `store/` unchanged. Do **not** rewrap the header from a typed close password. Optional `always_prompt` re-asks as a **presence check** against that session only | P0 |
@@ -217,7 +217,7 @@ encrypted_dir / upriv_plain:
 | RF-09 | Open existing vault via `--vault <path>` or dialog | P0 |
 | RF-10 | Remember last vault in app profile (outside vault folder) | P2 |
 | RF-11 | **Multiple vaults** per HD: one `.toml` + encrypted store per vault (and optional `.7z` per vault) | P1 |
-| RF-12 | Virtual workspace = `{mount_parent}/{display_name}/` where mount parent is app `[workspace].path` or vault `[mount].workspace_path` (not auto-created at init). Legacy docs said `workspace/<id>/` under the vault-root — superseded. | P0 |
+| RF-12 | File manager folder while open. App folder: `{place}/workspace/{display_name}/`. Vault's own folder: `{path}/{display_name}/`. Not created at init. See `.agent/AGENT.md`. | P0 |
 | RF-13 | Discover vaults by listing `config/*.toml` (filename / `id` field) | P0 |
 | RF-14 | Open/close vaults **independently** (several open at once) | P1 |
 | RF-15 | **Unique `vault_id`:** normalized slug for `vaults/<vault_id>/`; `display_name` for UI / main `.7z` / `workspace/` | P0 |
@@ -261,7 +261,7 @@ encrypted_dir / upriv_plain:
 | RF-34b | `session.enc` (encrypted session key, never plaintext password) allowed in **both** storage modes when user picks `disk_close` or `disk_open_close`; default remains `session_ram`; UI badges less-secure / insecure | P0 |
 | RF-35 | **Auto-close per vault:** `[auto_close]` in `config/<id>.toml` | P1 |
 | RF-36 | Auto-close after `idle_minutes` without activity on open vault | P1 |
-| RF-37 | Activity = app UI + changes in `workspace/<id>/` (virtual filesystem watch) | P1 |
+| RF-37 | Activity = app UI + changes in the file manager folder (virtual filesystem watch) | P1 |
 | RF-38 | Optional `warn_before_seconds` warning before auto-close | P2 |
 | RF-39 | Auto-close uses the same close as a user close: flush `store/`, unmount, drop the session. No `.7z` pack | P0 |
 | RF-40 | Global default: `enabled = false` if section missing | P0 |
@@ -273,7 +273,7 @@ encrypted_dir / upriv_plain:
 | RF-46 | (`encrypted_dir`) After reboot: reopen requires password; data preserved in `store/` | P0 |
 | RF-47 | **`persistence.json`** per vault: last OK close timestamp; content identity lives in `vault.header` | P0 |
 | RF-48 | Recovery UI for dirty close: **`recovery.resume_store`** (unlock the encrypted vault). **`recovery.discard_workspace`** only when leftover plaintext remains (`upriv_plain`). Create-from-backup is via Backups / New vault when the store is dead — not a dirty-close peer. No silent overwrite; no fake archive-vs-store compare | P0 |
-| RF-49 | `workspace/<id>/` in `encrypted_dir` is **virtual mount only** — forbid plaintext persistence on HD; automated tests | P0 |
+| RF-49 | The encrypted file manager folder is **virtual mount only** — forbid plaintext persistence on HD; automated tests | P0 |
 | RF-49b | **Write-through:** every committed write via mount persists immediately to `store/`; what user saves in session is not "RAM only" | P0 |
 | RF-50 | Export `.7z`: in-process `sevenz-rust2` pack of logical content. Fail with insufficient RAM instead of a plaintext temp | P1 |
 | RF-51 | **Minimize swap** of session data buffers (`mlock` / per-OS policies where supported) | P1 |
@@ -483,9 +483,8 @@ Close uses **session keys** already in RAM (or `session.enc`). It does **not** r
 |------|-----|------------------------|
 | 1 — Opt-in | `always_prompt` | Prompt on open **and lock** as a presence check against the open session; do not retain the password **string** in RAM. Session keys still stay in RAM while the vault is open. Typed close password must **not** rewrap `vault.header`. Idle auto-close cannot run (would need a prompt). |
 | 2 — Default | `session_ram` | One password per session in RAM; **lock does not ask again**; after reboot prompt again |
-| 3 — Legacy | `ram_on_close_only` | Deprecated (was for `.7z` re-pack on close). Load/save **rewrites to `session_ram`**. Not shown in the UI. |
-| 4 | `disk_close` | `session.enc` on disk to lock without retyping; open always prompts |
-| 5 — Less secure | `disk_open_close` | `session.enc` to open and close without retyping |
+| 3 | `disk_close` | `session.enc` on disk to lock without retyping; open always prompts |
+| 4 — Less secure | `disk_open_close` | `session.enc` to open and close without retyping |
 
 **Recommended default:** `session_ram` (mode 2).
 
@@ -611,7 +610,7 @@ Close uses **session keys** already in RAM (or `session.enc`). It does **not** r
 
 ### v0.2
 - Backup in `backup/<id>/` (`keep_last` / `keep_all`)
-- 4 security UI modes + `session.enc` (opt-in disk modes); legacy `ram_on_close_only` rewritten to `session_ram`
+- 4 security UI modes + `session.enc` (opt-in disk modes)
 - Settings UI
 
 ### v0.3
@@ -650,8 +649,8 @@ Upriv = **vault UX** + **universal 7z container**.
 | Layer (ID) | UI (i18n) | What | Path / runtime |
 |-------------|---------|-------|----------------|
 | **`store`** | — | Ciphertext at rest | `vaults/<id>/store/` |
-| **`session`** | `layer.session` | Active logical view (mount + RAM) | virtual `workspace/<id>/` |
-| **`plain`** | `layer.plain` | `upriv_plain` only: files in plaintext on disk while open | real `workspace/<id>/` |
+| **`session`** | `layer.session` | Active logical view (mount + RAM) | virtual file manager folder |
+| **`plain`** | `layer.plain` | `upriv_plain` only: files in plaintext on disk while open | real folder from the workspace place |
 
 Open: **`store` → `session`** (or **`plain`**). Close: flush back to **`store`**.
 

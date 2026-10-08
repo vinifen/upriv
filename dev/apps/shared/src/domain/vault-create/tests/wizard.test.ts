@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  firstInvalidCreateVaultField,
   getCreateVaultStepStatus,
   resolveCreateVaultFocusTarget,
+  resolveCreateVaultNextKeyField,
   resolveCreateVaultOpenStep,
   shouldSelectCreateVaultFocusText,
   shouldShowCreateVaultInlineErrors,
@@ -39,6 +41,43 @@ describe("resolveCreateVaultFocusTarget", () => {
   it("returns null for steps without a text field", () => {
     expect(resolveCreateVaultFocusTarget("source", undefined, false)).toBeNull();
     expect(resolveCreateVaultFocusTarget("advanced", undefined, false)).toBeNull();
+  });
+});
+
+describe("resolveCreateVaultNextKeyField", () => {
+  it("jumps to the next field that still has an error", () => {
+    expect(resolveCreateVaultNextKeyField("password", "password", ["password_mismatch"])).toBe(
+      "passwordConfirm",
+    );
+  });
+
+  it("skips valid and optional fields, then runs Next", () => {
+    expect(resolveCreateVaultNextKeyField("password", "password", [])).toBeNull();
+    expect(resolveCreateVaultNextKeyField("identity", "displayName", [])).toBeNull();
+  });
+
+  it("stays on an invalid field so Next shows its error", () => {
+    expect(resolveCreateVaultNextKeyField("identity", "displayName", ["empty"])).toBeNull();
+    expect(
+      resolveCreateVaultNextKeyField("password", "password", [
+        "password_empty",
+        "password_mismatch",
+      ]),
+    ).toBeNull();
+  });
+
+  it("goes back to an earlier invalid field", () => {
+    expect(resolveCreateVaultNextKeyField("password", "passwordHint", ["password_empty"])).toBe(
+      "password",
+    );
+  });
+});
+
+describe("firstInvalidCreateVaultField", () => {
+  it("picks the first field with an error, or null when the step is valid", () => {
+    expect(firstInvalidCreateVaultField("password", ["password_mismatch"])).toBe("passwordConfirm");
+    expect(firstInvalidCreateVaultField("password", [])).toBeNull();
+    expect(firstInvalidCreateVaultField("general", ["group_missing"])).toBeNull();
   });
 });
 

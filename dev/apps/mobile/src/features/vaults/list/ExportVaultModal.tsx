@@ -101,6 +101,10 @@ export function ExportVaultModal({
   }, [open, onSettingsLoadError, submitting, vault, vaultService]);
 
   useEffect(() => {
+    if (!open) setPassword("");
+  }, [open]);
+
+  useEffect(() => {
     if (!budget.timedOut || !submitting) return;
     onTimeout?.();
   }, [budget.timedOut, onTimeout, submitting]);
@@ -211,7 +215,7 @@ export function ExportVaultModal({
                   <PasswordInput
                     ref={passwordRef}
                     value={password}
-                    editable={!submitting && !passwordCheck.checking && format === "seven_zip"}
+                    editable={!submitting && format === "seven_zip"}
                     autoComplete="password-new"
                     onSubmitEditing={() => {
                       if (!passwordCheck.passwordOk) passwordCheck.check();

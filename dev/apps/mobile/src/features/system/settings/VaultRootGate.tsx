@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { ActivityIndicator, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Platform, StyleSheet, Text, View } from "react-native";
 import {
   LOADING_BUDGET_MS,
   VAULT_ROOT_ERROR_CODES,
@@ -26,6 +26,7 @@ import { spacing } from "@/theme/tokens";
 import { VaultRootSetupScreen } from "./VaultRootSetupScreen";
 import { VaultRootRepairModal } from "./VaultRootRepairModal";
 import { VaultRootAliasRecoveryModal } from "./VaultRootAliasRecoveryModal";
+import { AppBootCover } from "./AppBootCover";
 
 interface VaultRootGateProps {
   children: ReactNode;
@@ -53,6 +54,7 @@ function pathFromRpcError(error: unknown): string {
  * - custom_root empty path → recover from active alias or run recovery
  * - M8: needs_setup + valid default root → single retry
  * - Loading / applying budgets with retry
+ * - Launch cover (`AppBootCover`) until settings and the first resolve settle
  * - Epoch soft-block while re-resolve runs after a mutation
  * - Resolve errors localized via `mobileErrorI18nKey`
  *
@@ -67,7 +69,10 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
   const { settings, settingsReady, settingsLoadFailed, vaultRootEpoch, reloadSettings } =
     useAppSettingsContext();
   const [ready, setReady] = useState(false);
-  const [applying, setApplying] = useState(false);
+  /** Starts true so the launch resolve runs under the `vaultRootResolve` budget. */
+  const [applying, setApplying] = useState(true);
+  /** Latched once the launch settles; `AppBootCover` covers everything until then. */
+  const [booted, setBooted] = useState(false);
   const [setup, setSetup] = useState<{
     presentation: VaultRootPresentationState;
     distribution: AppDistribution;
@@ -129,6 +134,28 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
         });
         if (gen !== resolveGen.current) return;
         if (result.status === "found") {
+          if (
+            Platform.OS === "android" &&
+            result.source === "default_root" &&
+            !result.rootPath.startsWith("content://")
+          ) {
+            validDefaultRootRetryRef.current = false;
+            setRepair(null);
+            setAliasInvalidPath(null);
+            setResolveError(null);
+            setApplying(false);
+            setSetup({
+              presentation: {
+                mode: "default_root",
+                defaultRootAnchor: "",
+                aliasPath: "",
+                rememberedAliasTarget: null,
+              },
+              distribution: "installed",
+            });
+            setReady(false);
+            return;
+          }
           validDefaultRootRetryRef.current = false;
           setSetup(null);
           setRepair(null);
@@ -190,6 +217,23 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
           const defaultRoot = await vaultRoot.defaultRootStatus();
           if (gen !== resolveGen.current) return;
           if (defaultRoot.status === "incomplete") {
+            if (Platform.OS === "android") {
+              setRepair(null);
+              setAliasInvalidPath(null);
+              setResolveError(null);
+              setApplying(false);
+              setSetup({
+                presentation: {
+                  mode: "default_root",
+                  defaultRootAnchor: "",
+                  aliasPath: "",
+                  rememberedAliasTarget: null,
+                },
+                distribution: "installed",
+              });
+              setReady(false);
+              return;
+            }
             setRepair({ targetPath: defaultRoot.defaultRootAnchor, mode: "default_root" });
             setSetup(null);
             setAliasInvalidPath(null);
@@ -289,13 +333,39 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
 
         const gone = isVaultRootGoneError(error);
         if (gone) {
+          // An active `.upriv-root` keeps every other RPC on the broken path, so a valid
+          // default_root probe must not count as ready — the user picks a folder in Setup.
+          const aliasBroken =
+            isRpcError(error) && error.code === VAULT_ROOT_ERROR_CODES.ALIAS_INVALID;
           try {
             const result = await vaultRoot.resolve({
               vaultRootMode: "default_root",
               explicitPath: null,
             });
             if (gen !== resolveGen.current) return;
-            if (result.status === "found") {
+            if (result.status === "found" && !aliasBroken) {
+              if (
+                Platform.OS === "android" &&
+                result.source === "default_root" &&
+                !result.rootPath.startsWith("content://")
+              ) {
+                validDefaultRootRetryRef.current = false;
+                setRepair(null);
+                setAliasInvalidPath(null);
+                setResolveError(null);
+                setApplying(false);
+                setSetup({
+                  presentation: {
+                    mode: "default_root",
+                    defaultRootAnchor: "",
+                    aliasPath: "",
+                    rememberedAliasTarget: null,
+                  },
+                  distribution: "installed",
+                });
+                setReady(false);
+                return;
+              }
               validDefaultRootRetryRef.current = false;
               setSetup(null);
               setRepair(null);
@@ -333,6 +403,19 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
               setReady(false);
               return;
             }
+            if (aliasBroken) {
+              setSetup({
+                presentation: {
+                  mode: "default_root",
+                  defaultRootAnchor: result.rootPath,
+                  aliasPath: "",
+                  rememberedAliasTarget: rememberedAliasTarget ?? (pathFromRpcError(error) || null),
+                },
+                distribution: "installed",
+              });
+              setReady(false);
+              return;
+            }
           } catch {
             if (gen !== resolveGen.current) return;
           }
@@ -341,7 +424,7 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
               mode: "default_root",
               defaultRootAnchor: "",
               aliasPath: "",
-              rememberedAliasTarget: null,
+              rememberedAliasTarget: aliasBroken ? pathFromRpcError(error) || null : null,
             },
             distribution: "installed",
           });
@@ -386,6 +469,24 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
             const defaultRoot = await vaultRoot.defaultRootStatus();
             if (gen !== resolveGen.current) return;
             if (defaultRoot.status === "incomplete") {
+              if (Platform.OS === "android") {
+                setRepair(null);
+                setAliasInvalidPath(null);
+                setRecoveryPresentation(null);
+                setResolveError(null);
+                setApplying(false);
+                setSetup({
+                  presentation: {
+                    mode: "default_root",
+                    defaultRootAnchor: "",
+                    aliasPath: "",
+                    rememberedAliasTarget: null,
+                  },
+                  distribution: "installed",
+                });
+                setReady(false);
+                return;
+              }
               setRepair({ targetPath: defaultRoot.defaultRootAnchor, mode: "default_root" });
               setSetup(null);
               setAliasInvalidPath(null);
@@ -501,12 +602,47 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
     setResolveError(tRef.current("modal.vault_root_setup.error_timeout"));
   }, [applyingBudget.timedOut, showApplying]);
 
+  const bootSettled =
+    settingsReady &&
+    !applying &&
+    (ready ||
+      setup !== null ||
+      repair !== null ||
+      aliasInvalidPath !== null ||
+      resolveError !== null);
+
+  useEffect(() => {
+    if (bootSettled) setBooted(true);
+  }, [bootSettled]);
+
   const retrySettingsLoad = () => {
     setSettingsLoadTimedOut(false);
     void reloadSettings().catch(() => {
       // Context sets settingsLoadFailed; Gate stays on Retry until a successful load.
     });
   };
+
+  const settingsLoadStuck = settingsLoadTimedOut || settingsLoadFailed;
+  const settingsLoadVisible = showLoadingSettings && (settingsBudget.visible || settingsLoadStuck);
+  const applyingVisible = showApplying && applyingBudget.visible;
+
+  const settingsLoadStatus = (
+    <GateLoadingStatus
+      message={
+        settingsLoadTimedOut
+          ? t("loading.timed_out")
+          : settingsLoadFailed
+            ? t("error.service_unavailable")
+            : t("modal.vault_root_setup.loading_settings")
+      }
+      budget={settingsLoadStuck ? null : settingsBudget}
+      onRetry={settingsLoadStuck ? retrySettingsLoad : undefined}
+    />
+  );
+
+  const applyingStatus = (
+    <GateLoadingStatus message={t("modal.vault_root_setup.busy")} budget={applyingBudget} />
+  );
 
   const overlayStyle = [styles.overlay, { backgroundColor: colors.modalScrim }];
 
@@ -576,42 +712,30 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
         }}
       />
 
-      {showLoadingSettings &&
-      (settingsBudget.visible || settingsLoadTimedOut || settingsLoadFailed) ? (
+      {booted && settingsLoadVisible ? (
         <View style={overlayStyle} accessibilityRole="progressbar">
-          {settingsLoadTimedOut || settingsLoadFailed ? null : (
-            <ActivityIndicator size="large" color={colors.accent} />
-          )}
-          <Text style={[typography.bodyMuted, styles.overlayText]}>
-            {settingsLoadTimedOut
-              ? t("loading.timed_out")
-              : settingsLoadFailed
-                ? t("error.service_unavailable")
-                : t("modal.vault_root_setup.loading_settings")}
-          </Text>
-          {settingsLoadTimedOut || settingsLoadFailed ? (
-            <Button label={t("action.retry")} variant="primary" onPress={retrySettingsLoad} />
-          ) : (
-            <LoadingBudgetHint
-              budgetMs={settingsBudget.budgetMs}
-              remainingMs={settingsBudget.remainingMs}
-            />
-          )}
+          {settingsLoadStatus}
         </View>
       ) : null}
 
-      {showApplying && applyingBudget.visible ? (
+      {booted && applyingVisible ? (
         <View style={overlayStyle} accessibilityRole="progressbar">
-          <ActivityIndicator size="large" color={colors.accent} />
-          <Text style={[typography.bodyMuted, styles.overlayText]}>
-            {t("modal.vault_root_setup.busy")}
-          </Text>
-          <LoadingBudgetHint
-            budgetMs={applyingBudget.budgetMs}
-            remainingMs={applyingBudget.remainingMs}
-          />
+          {applyingStatus}
         </View>
       ) : null}
+
+      <AppBootCover
+        done={booted}
+        status={
+          booted
+            ? null
+            : settingsLoadVisible
+              ? settingsLoadStatus
+              : applyingVisible
+                ? applyingStatus
+                : null
+        }
+      />
 
       <Modal
         open={Boolean(envOverridePath && ready && settingsReady)}
@@ -665,6 +789,29 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
         </Text>
       </Modal>
     </View>
+  );
+}
+
+interface GateLoadingStatusProps {
+  message: string;
+  budget?: { budgetMs: number; remainingMs: number } | null;
+  onRetry?: () => void;
+}
+
+/** Spinner + budget, or Retry once stuck. Reads the theme where it renders (cover vs overlay). */
+function GateLoadingStatus({ message, budget, onRetry }: GateLoadingStatusProps) {
+  const { t } = useTranslation();
+  const { colors, typography } = useTheme();
+  return (
+    <>
+      {onRetry ? null : <ActivityIndicator size="large" color={colors.accent} />}
+      <Text style={[typography.bodyMuted, styles.overlayText]}>{message}</Text>
+      {onRetry ? (
+        <Button label={t("action.retry")} variant="primary" onPress={onRetry} />
+      ) : budget ? (
+        <LoadingBudgetHint budgetMs={budget.budgetMs} remainingMs={budget.remainingMs} />
+      ) : null}
+    </>
   );
 }
 

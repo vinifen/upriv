@@ -3,20 +3,24 @@ import { useBackupService } from "@/platform/services";
 import { Icon } from "@/components/icons";
 import { Button, IconButton, Modal } from "@/components/ui";
 import {
+  backupDeleteConfirmPhrase,
   backupEntryFileName,
   backupEntryKey,
   formatBytes,
   formatBackupDate,
+  matchesBackupDeleteConfirmation,
   type VaultBackupEntry,
   type VaultListItem,
 } from "@upriv/shared";
 import { useTranslation } from "@/i18n";
 import { useErrorToast } from "@/hooks/useErrorToast";
+import { useRevealWhen } from "@/hooks/useRevealWhen";
+import { settingsControlClass } from "@/components/settings";
 import { useVaultBackups } from "@upriv/shared/react";
 import { pickBackupDownload } from "./downloadBackupsZip";
 
 const backupCheckboxClass =
-  "h-4 w-4 shrink-0 rounded border-outline-variant/50 bg-surface-container-high text-accent focus:ring-accent/50";
+  "h-4 w-4 shrink-0 rounded border-outline-variant/50 bg-surface-container-high text-accent focus:ring-accent/40";
 
 interface VaultBackupsModalProps {
   vault: VaultListItem | null;
@@ -25,12 +29,6 @@ interface VaultBackupsModalProps {
   onCreateVaultFromBackup?: (stamp: string, fileName: string, saved?: boolean) => void;
   /** List-level toast so a download can finish after this modal closes. */
   onDownloadNotice?: (message: string) => void;
-}
-
-function matchesDeleteConfirmation(input: string, count: number, vaultId: string): boolean {
-  const trimmed = input.trim();
-  if (count === 1) return trimmed === vaultId;
-  return trimmed.toLowerCase() === `delete ${count}`;
 }
 
 export function VaultBackupsModal({
@@ -57,6 +55,7 @@ export function VaultBackupsModal({
   const [deleteTargets, setDeleteTargets] = useState<string[] | null>(null);
   const [confirmText, setConfirmText] = useState("");
   const confirmInputId = useId();
+  const confirmRef = useRevealWhen<HTMLDivElement>(deleteTargets !== null);
 
   const rowKeys = useMemo(
     () => backups.map((entry) => backupEntryKey(entry, vaultId ?? "")),
@@ -64,13 +63,17 @@ export function VaultBackupsModal({
   );
   const allSelected = backups.length > 0 && rowKeys.every((key) => selected.has(key));
   const someSelected = selected.size > 0;
+  /** A single backup has nothing to multi-select: row actions cover it. */
+  const selectable = backups.length > 1;
+  const selectedStandardKeys = standardBackups
+    .map((entry) => backupEntryKey(entry, vaultId ?? ""))
+    .filter((key) => selected.has(key));
   const deleteCount = deleteTargets?.length ?? 0;
-  const isSingleDelete = deleteCount === 1;
   const canConfirmDelete =
     vault !== null &&
     deleteTargets !== null &&
     deleteCount > 0 &&
-    matchesDeleteConfirmation(confirmText, deleteCount, vault.id);
+    matchesBackupDeleteConfirmation(confirmText, vault.displayName, deleteCount);
 
   useEffect(() => {
     if (!open) {
@@ -148,16 +151,13 @@ export function VaultBackupsModal({
   };
 
   const handlePromoteToSave = (stamp: string) => {
-    void promoteToSave(stamp).catch((err) => {
+    void promoteToSave([stamp]).catch((err) => {
       showError(err, "toast.backup_promote_failed");
     });
   };
 
-  const handleDownload = () => {
-    const targets = someSelected
-      ? backups.filter((entry) => selected.has(backupEntryKey(entry, vault.id)))
-      : backups;
-    startDownload(targets);
+  const handleDownloadSelected = () => {
+    startDownload(backups.filter((entry) => selected.has(backupEntryKey(entry, vault.id))));
   };
 
   const handleDownloadOne = (key: string) => {
@@ -217,13 +217,20 @@ export function VaultBackupsModal({
         </p>
       ) : (
         <>
-          {deleteTargets === null ? (
+          {deleteTargets === null && selectable ? (
             <BackupListToolbar
               allSelected={allSelected}
               someSelected={someSelected}
               selectedCount={selected.size}
               onToggleSelectAll={toggleSelectAll}
-              onDownload={handleDownload}
+              promoteCount={selectedStandardKeys.length}
+              promoteDisabled={isBusy}
+              onPromoteSelected={() => {
+                void promoteToSave(selectedStandardKeys).catch((err) => {
+                  showError(err, "toast.backup_promote_failed");
+                });
+              }}
+              onDownload={handleDownloadSelected}
               onDeleteSelected={() => beginDelete(Array.from(selected))}
             />
           ) : null}
@@ -238,7 +245,7 @@ export function VaultBackupsModal({
               vaultId={vault?.id ?? ""}
               selected={selected}
               selectionDisabled={deleteTargets !== null}
-              onToggleSelected={toggleSelected}
+              onToggleSelected={selectable ? toggleSelected : undefined}
               onDownload={handleDownloadOne}
               onDelete={(stamp) => beginDelete([stamp])}
               onCreateVaultFromBackup={onCreateVaultFromBackup}
@@ -252,7 +259,7 @@ export function VaultBackupsModal({
               vaultId={vault?.id ?? ""}
               selected={selected}
               selectionDisabled={deleteTargets !== null}
-              onToggleSelected={toggleSelected}
+              onToggleSelected={selectable ? toggleSelected : undefined}
               onDownload={handleDownloadOne}
               onDelete={(stamp) => beginDelete([stamp])}
               onCreateVaultFromBackup={onCreateVaultFromBackup}
@@ -263,26 +270,21 @@ export function VaultBackupsModal({
       )}
 
       {deleteTargets !== null ? (
-        <div className="mt-4 rounded-xl border border-outline-variant/20 bg-surface-container px-4 py-4">
-          <p className="mb-2 text-sm text-on-surface-variant">
-            {isSingleDelete
-              ? t("modal.backup.delete_confirm_one")
-              : t("modal.backup.delete_confirm_many", { count: String(deleteCount) })}
+        <div ref={confirmRef} className="mt-4 space-y-3 rounded-xl bg-surface-container px-4 py-4">
+          <p className="text-sm text-on-surface-variant">
+            {t("modal.backup.delete_confirm", { count: String(deleteCount) })}
           </p>
-          <p className="mb-3 font-mono text-xs text-on-surface-variant/80">
-            {isSingleDelete
-              ? vault.id
-              : t("modal.backup.delete_phrase_many", { count: String(deleteCount) })}
+          <p className="font-mono text-xs text-on-surface-variant/80">
+            {backupDeleteConfirmPhrase(vault.displayName, deleteCount)}
           </p>
           <input
             id={confirmInputId}
             type="text"
             value={confirmText}
             onChange={(event) => setConfirmText(event.target.value)}
-            autoFocus
             autoComplete="off"
             spellCheck={false}
-            className="mb-3 w-full rounded-lg border-0 bg-surface-container-high px-3 py-2.5 text-sm text-on-surface outline-none ring-1 ring-outline-variant/40 focus:ring-accent/50"
+            className={settingsControlClass}
           />
           <div className="flex justify-end gap-2">
             <Button variant="ghost" size="sm" onClick={cancelDelete}>
@@ -312,7 +314,7 @@ interface BackupSectionProps {
   vaultId: string;
   selected: Set<string>;
   selectionDisabled: boolean;
-  onToggleSelected: (stamp: string) => void;
+  onToggleSelected?: (stamp: string) => void;
   onDownload: (stamp: string) => void;
   onDelete: (stamp: string) => void;
   onCreateVaultFromBackup?: (stamp: string, fileName: string, saved?: boolean) => void;
@@ -355,9 +357,9 @@ function BackupSection({
                 entry={entry}
                 locale={locale}
                 fileName={fileName}
-                checked={selected.has(key)}
+                checked={Boolean(onToggleSelected) && selected.has(key)}
                 selectionDisabled={selectionDisabled}
-                onToggleSelected={() => onToggleSelected(key)}
+                onToggleSelected={onToggleSelected ? () => onToggleSelected(key) : undefined}
                 onDownload={() => onDownload(key)}
                 onDelete={() => onDelete(key)}
                 onCreateVaultFromBackup={
@@ -379,7 +381,11 @@ interface BackupListToolbarProps {
   allSelected: boolean;
   someSelected: boolean;
   selectedCount: number;
+  /** Selected standard backups that "Save" would promote. */
+  promoteCount: number;
+  promoteDisabled: boolean;
   onToggleSelectAll: () => void;
+  onPromoteSelected: () => void;
   onDownload: () => void;
   onDeleteSelected: () => void;
 }
@@ -388,7 +394,10 @@ function BackupListToolbar({
   allSelected,
   someSelected,
   selectedCount,
+  promoteCount,
+  promoteDisabled,
   onToggleSelectAll,
+  onPromoteSelected,
   onDownload,
   onDeleteSelected,
 }: BackupListToolbarProps) {
@@ -420,9 +429,28 @@ function BackupListToolbar({
             {t("modal.backup.selected_count", { count: String(selectedCount) })}
           </span>
         ) : null}
-        <Button variant="secondary" size="sm" onClick={onDownload}>
-          {someSelected ? t("modal.backup.download_selected") : t("modal.backup.download_all")}
-        </Button>
+        {promoteCount > 0 ? (
+          <Button
+            variant="secondary"
+            size="sm"
+            disabled={promoteDisabled}
+            className="mr-0.5 h-8 shrink-0 px-2 text-xs sm:px-2.5"
+            onClick={onPromoteSelected}
+          >
+            {t("modal.backup.promote_to_save")}
+          </Button>
+        ) : null}
+        {someSelected ? (
+          <IconButton
+            label={t("modal.backup.download_selected")}
+            size="row"
+            variant="row-action"
+            className="-mr-1 text-on-surface-variant hover:bg-accent/15 hover:text-accent"
+            onClick={onDownload}
+          >
+            <Icon name="download" size={18} />
+          </IconButton>
+        ) : null}
         {someSelected ? (
           <IconButton
             label={t("modal.backup.delete_selected")}
@@ -445,7 +473,8 @@ interface BackupRowProps {
   fileName: string;
   checked: boolean;
   selectionDisabled: boolean;
-  onToggleSelected: () => void;
+  /** Omitted when the list has a single entry: no checkbox. */
+  onToggleSelected?: () => void;
   onDownload: () => void;
   onDelete: () => void;
   onCreateVaultFromBackup?: () => void;
@@ -478,22 +507,24 @@ function BackupRow({
         .filter(Boolean)
         .join(" ")}
     >
-      <input
-        id={checkboxId}
-        type="checkbox"
-        checked={checked}
-        disabled={selectionDisabled}
-        onChange={onToggleSelected}
-        className={[backupCheckboxClass, "disabled:opacity-40"].join(" ")}
-      />
+      {onToggleSelected ? (
+        <input
+          id={checkboxId}
+          type="checkbox"
+          checked={checked}
+          disabled={selectionDisabled}
+          onChange={onToggleSelected}
+          className={[backupCheckboxClass, "disabled:opacity-40"].join(" ")}
+        />
+      ) : null}
       <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-surface-container-highest text-on-surface-variant">
         <Icon name="archive" size={18} />
       </div>
       <label
-        htmlFor={checkboxId}
+        htmlFor={onToggleSelected ? checkboxId : undefined}
         className={[
           "min-w-0 flex-1 select-none",
-          selectionDisabled ? "cursor-default" : "cursor-pointer",
+          selectionDisabled || !onToggleSelected ? "cursor-default" : "cursor-pointer",
         ].join(" ")}
       >
         <p className="flex min-w-0 items-center gap-2">

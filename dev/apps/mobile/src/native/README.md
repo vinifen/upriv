@@ -19,6 +19,19 @@ Android has no `HOME` / `XDG_DATA_HOME`. The Expo module calls UniFFI
 `UPRIV_DEFAULT_ROOT_ANCHOR` + `UPRIV_DISTRIBUTION` inside Rust before any CORE
 RPC (same env Electron sets for the daemon on desktop).
 
+`filesDir/upriv` is app-specific storage. Android removes it when the app is
+uninstalled, and the app can write there with no user prompt. A directory
+created there can be named Documents and is still deleted with the app. That
+directory keeps the folder pointer (`.upriv-root`) and the saved grant. It
+does not keep `.upriv/`.
+
+The vault lives in the phone's shared **Documents/Upriv**. Shared storage
+stays after uninstall. Android will not let the app create that folder on its
+own, so setup opens the system screen on Documents and the user confirms it
+once (`ACTION_OPEN_DOCUMENT_TREE`). Upriv then creates `Upriv` inside the
+grant. Uninstall drops the grant. The ciphertext stays. The next install
+confirms the same folder and opens the existing `.upriv` as-is.
+
 | Runtime                         | Bridge                                                   |
 | ------------------------------- | -------------------------------------------------------- |
 | Expo Go                         | Mocks only (`createMobileMockServices`)                  |

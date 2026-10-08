@@ -4,7 +4,7 @@
 
 **Product version:** edit **`VERSION`** at the repository root only, then run `npm run sync-version --prefix dev` (or `build` / `electron:build`, which sync automatically). CI runs `scripts/check-version.mjs` via `./run lint` to catch drift.
 
-**Last reviewed:** 2026-08-07 (Android SAF vault-root — Kotlin DocumentFile bridge + RAM-only TOML RPCs; full Rust `VaultStorage` trait deferred)
+**Last reviewed:** 2026-10-05 (Android data folder is `/upriv-saf-root` via `SafFs`; in-app file manager. No `VaultStorage` trait.)
 
 ## System
 

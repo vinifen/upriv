@@ -14,7 +14,9 @@ import {
   isRpcError,
   shouldBumpVaultRootEpoch,
   normalizeAppSettings,
-  validateWorkspaceGlobalPath,
+  validateWorkspaceTable,
+  currentWorkspaceSystem,
+  workspaceTablesEqual,
   vaultRootGoneRpcError,
   vaultRootPathForWorkspaceValidation,
   type AppSettingsConfig,
@@ -122,10 +124,10 @@ export function AppSettingsModal({
     if (workspaceTouchedRef.current) return;
     setDraft((current) => {
       if (!current) return current;
-      if (current.workspace.path === settings.workspace.path) return current;
+      if (workspaceTablesEqual(current.workspace, settings.workspace)) return current;
       return { ...current, workspace: { ...settings.workspace } };
     });
-  }, [open, settings.workspace, settings.workspace.path]);
+  }, [open, settings.workspace]);
 
   useEffect(() => {
     if (!open) {
@@ -273,20 +275,23 @@ export function AppSettingsModal({
     formConfig.app.upriv_root_path,
     resolvedRootPath,
   );
+  const workspaceSystem = currentWorkspaceSystem();
   const workspacePathInvalid = Boolean(
-    validateWorkspaceGlobalPath(formConfig.workspace.path, workspaceRootForValidation),
+    validateWorkspaceTable(formConfig.workspace, workspaceRootForValidation),
   );
-  /** Open vault + emptied draft must not wipe a configured Context path. */
+  /** Open vault + emptied draft must not wipe a configured path for this system. */
   const workspaceClearWhileOpen =
-    hasOpenVault && !formConfig.workspace.path.trim() && Boolean(settings.workspace.path.trim());
+    hasOpenVault &&
+    !formConfig.workspace[workspaceSystem].path.trim() &&
+    Boolean(settings.workspace[workspaceSystem].path.trim());
 
   const handleSaveClick = () => {
     if (!isDirty || saveBusy) return;
     if (workspaceClearWhileOpen) return;
-    const workspacePath = workspaceTouchedRef.current
-      ? (draft ?? settings).workspace.path
-      : settings.workspace.path;
-    if (validateWorkspaceGlobalPath(workspacePath, workspaceRootForValidation)) {
+    const workspaceForCheck = workspaceTouchedRef.current
+      ? (draft ?? settings).workspace
+      : settings.workspace;
+    if (validateWorkspaceTable(workspaceForCheck, workspaceRootForValidation)) {
       return;
     }
     dismissFooterConfirm();
@@ -299,7 +304,7 @@ export function AppSettingsModal({
     const workspaceForSave = workspaceTouchedRef.current
       ? (draft ?? settings).workspace
       : { ...settings.workspace };
-    if (validateWorkspaceGlobalPath(workspaceForSave.path, workspaceRootForValidation)) {
+    if (validateWorkspaceTable(workspaceForSave, workspaceRootForValidation)) {
       return;
     }
     if (commitSaveLock.current) return;

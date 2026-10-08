@@ -1,4 +1,5 @@
 import { useId } from "react";
+import { PathField } from "@/components/PathField";
 import { Button, Select, SwitchRow } from "@/components/ui";
 import {
   DisplayNameFieldError,
@@ -19,8 +20,12 @@ import {
   VAULT_DISPLAY_NAME_MAX_LENGTH,
   liveDisplayNameError,
   logFileCountForKeepLast,
+  workspaceSystemsCurrentFirst,
+  appWorkspacePlace,
+  validateWorkspaceTable,
   suggestedDefaultWorkspacePath,
-  validateWorkspaceGlobalPath,
+  currentWorkspaceSystem,
+  workspaceSystemHasShortcut,
   workspacePathIssueI18nKey,
   type AppSettingsConfig,
   type UiTheme,
@@ -486,99 +491,179 @@ export function AppSettingsWorkspaceSection({
   const { t } = useTranslation();
   const { showError } = useErrorToast();
   const pathId = useId();
+  const placeGroup = useId();
   const vaultRootService = useVaultRootService();
-  const pathIssue = validateWorkspaceGlobalPath(config.path, vaultRootPath);
-  const canClear = Boolean(config.path.trim()) && !clearDisabled;
+  const current = currentWorkspaceSystem();
+  const currentPlace = appWorkspacePlace(config[current]);
+  const showShortcut = workspaceSystemHasShortcut(current);
+  const pathIssue = validateWorkspaceTable(config, vaultRootPath);
+  const defaultWorkspacePath = suggestedDefaultWorkspacePath(vaultRootPath);
 
   return (
     <SettingsFormGrid>
       <p className="text-xs leading-relaxed text-on-surface-variant">
         {t("modal.app_settings.section.workspace_intro")}
       </p>
-
-      <SettingsField
-        label={t("modal.app_settings.field.workspace.path")}
-        hint={t("modal.app_settings.field.workspace.path_help")}
-        htmlFor={pathId}
-      >
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-          <input
-            id={pathId}
-            type="text"
-            value={config.path}
-            readOnly={clearDisabled}
-            placeholder={
-              suggestedDefaultWorkspacePath(vaultRootPath) ||
-              t("modal.app_settings.field.workspace.path_placeholder")
+      {workspaceSystemsCurrentFirst().map((system) => {
+        const active = system === current && !clearDisabled;
+        const entry = config[system];
+        const place = appWorkspacePlace(entry);
+        return (
+          <SettingsField
+            key={system}
+            label={t(`modal.app_settings.field.workspace.system.${system}`)}
+            hint={
+              system === current
+                ? t(
+                    showShortcut
+                      ? "modal.app_settings.field.workspace.path_help"
+                      : "modal.app_settings.field.workspace.phone_help",
+                  )
+                : t("modal.app_settings.field.workspace.other_system")
             }
-            onChange={(e) => {
-              if (clearDisabled) return;
-              onChange({ path: e.target.value });
-            }}
-            className={[
-              settingsControlClass,
-              "font-mono text-xs sm:min-w-0 sm:flex-1",
-              clearDisabled ? "cursor-default opacity-80" : "",
-            ]
-              .filter(Boolean)
-              .join(" ")}
-          />
-          <div className="flex flex-col gap-2 sm:flex-row sm:shrink-0">
-            <Button
-              type="button"
-              variant="secondary"
-              size="md"
-              className="w-full sm:w-auto"
-              disabled={clearDisabled}
-              onClick={() => {
-                if (clearDisabled) return;
-                void (async () => {
-                  try {
-                    const picked = await vaultRootService.pickFolder(
-                      config.path.trim() || null,
-                      t("modal.app_settings.action.pick_workspace_folder"),
-                    );
-                    if (!picked?.trim()) return;
-                    onChange({ path: picked.trim() });
-                  } catch (error) {
-                    showError(error, "error.unexpected");
+            htmlFor={system === current ? pathId : undefined}
+          >
+            <div className={active ? "flex flex-col gap-2" : "flex flex-col gap-2 opacity-60"}>
+              {system === current ? (
+                <div
+                  role="radiogroup"
+                  aria-label={t(`modal.app_settings.field.workspace.system.${system}`)}
+                  className="grid gap-2"
+                >
+                  <PolicyRadioOption
+                    groupName={placeGroup}
+                    value="unset"
+                    checked={place === "unset"}
+                    title={t("modal.app_settings.field.workspace.unset")}
+                    description={t("modal.app_settings.field.workspace.unset_desc")}
+                    disabled={!active}
+                    onSelect={() => {
+                      if (!active) return;
+                      onChange({
+                        [system]: { ...entry, place: "unset", path: "" },
+                      });
+                    }}
+                  />
+                  <PolicyRadioOption
+                    groupName={placeGroup}
+                    value="beside"
+                    checked={place === "beside"}
+                    title={t("modal.app_settings.field.workspace.default")}
+                    description={t("modal.app_settings.field.workspace.default_desc")}
+                    disabled={!active}
+                    onSelect={() => {
+                      if (!active) return;
+                      onChange({ [system]: { ...entry, place: "beside", path: "" } });
+                    }}
+                    footer={<PathField value={defaultWorkspacePath} readOnly />}
+                  />
+                  <PolicyRadioOption
+                    groupName={placeGroup}
+                    value="custom"
+                    checked={place === "custom"}
+                    title={t("modal.app_settings.field.workspace.custom")}
+                    description={t("modal.app_settings.field.workspace.custom_desc")}
+                    disabled={!active}
+                    onSelect={() => {
+                      if (!active || place === "custom") return;
+                      void (async () => {
+                        try {
+                          const picked = await vaultRootService.pickFolder(
+                            null,
+                            t("modal.app_settings.action.pick_workspace_folder"),
+                          );
+                          if (!picked?.trim()) return;
+                          onChange({
+                            [system]: { ...entry, place: "custom", path: picked.trim() },
+                          });
+                        } catch (error) {
+                          showError(error, "error.unexpected");
+                        }
+                      })();
+                    }}
+                    footer={
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                        <PathField
+                          id={pathId}
+                          className="sm:flex-1"
+                          value={entry.path}
+                          disabled={!active || place !== "custom"}
+                          placeholder={t("modal.app_settings.field.workspace.path_placeholder")}
+                          onChange={(path) => {
+                            if (!active) return;
+                            onChange({
+                              [system]: {
+                                ...entry,
+                                place: path.trim() ? "custom" : "unset",
+                                path,
+                              },
+                            });
+                          }}
+                        />
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          size="md"
+                          className="w-full shrink-0 sm:w-auto"
+                          disabled={!active}
+                          onClick={() => {
+                            if (!active) return;
+                            void (async () => {
+                              try {
+                                const picked = await vaultRootService.pickFolder(
+                                  entry.path.trim() || null,
+                                  t("modal.app_settings.action.pick_workspace_folder"),
+                                );
+                                if (!picked?.trim()) return;
+                                onChange({
+                                  [system]: { ...entry, place: "custom", path: picked.trim() },
+                                });
+                              } catch (error) {
+                                showError(error, "error.unexpected");
+                              }
+                            })();
+                          }}
+                        >
+                          {t("modal.app_settings.action.pick_workspace_folder")}
+                        </Button>
+                      </div>
+                    }
+                  />
+                </div>
+              ) : (
+                <PathField
+                  value={
+                    appWorkspacePlace(entry) === "beside"
+                      ? t("modal.app_settings.field.workspace.default")
+                      : entry.path
                   }
-                })();
-              }}
-            >
-              {t("modal.app_settings.action.pick_workspace_folder")}
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              size="md"
-              className="w-full sm:w-auto"
-              disabled={!canClear}
-              title={
-                clearDisabled
-                  ? t("modal.app_settings.action.clear_workspace_path_blocked_open")
-                  : undefined
-              }
-              onClick={() => {
-                if (clearDisabled) return;
-                onChange({ path: "" });
-              }}
-            >
-              {t("modal.app_settings.action.clear_workspace_path")}
-            </Button>
-          </div>
-        </div>
-        {clearDisabled ? (
-          <p className="text-xs text-on-surface-variant">
-            {t("modal.app_settings.action.clear_workspace_path_blocked_open")}
-          </p>
-        ) : null}
-        {pathIssue ? (
-          <p className="text-xs text-on-error-container" role="alert">
-            {t(workspacePathIssueI18nKey(pathIssue))}
-          </p>
-        ) : null}
-      </SettingsField>
+                  disabled
+                  placeholder={t("modal.app_settings.field.workspace.unset")}
+                />
+              )}
+            </div>
+          </SettingsField>
+        );
+      })}
+      {showShortcut ? (
+        <SwitchRow
+          label={t("modal.app_settings.field.workspace.mount")}
+          hint={t("modal.app_settings.field.workspace.mount_help")}
+          checked={config.file_manager_folder}
+          disabled={clearDisabled || currentPlace === "unset"}
+          onChange={(file_manager_folder) => onChange({ file_manager_folder })}
+        />
+      ) : null}
+      {clearDisabled ? (
+        <p className="text-xs text-on-surface-variant">
+          {t("modal.app_settings.action.clear_workspace_path_blocked_open")}
+        </p>
+      ) : null}
+      {pathIssue ? (
+        <p className="text-xs text-on-error-container" role="alert">
+          {t(workspacePathIssueI18nKey(pathIssue))}
+        </p>
+      ) : null}
     </SettingsFormGrid>
   );
 }

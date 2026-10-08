@@ -110,7 +110,10 @@ export function VaultLifecycleModal({
   }, [open, vault, intent, vaultService]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      setPassword("");
+      return;
+    }
     setPassword(initialPassword ?? "");
     setError(null);
   }, [open, vault?.id, intent, initialPassword]);
@@ -206,7 +209,6 @@ export function VaultLifecycleModal({
                 }}
                 autoComplete={intent === "unlock" ? "current-password" : "off"}
                 autoFocus
-                readOnly={submitting}
                 inputClassName={lifecyclePasswordClass}
               />
             </SettingsField>

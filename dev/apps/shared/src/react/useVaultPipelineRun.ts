@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useRef, useState } from "react";
-import { LOADING_BUDGET_MS, type VaultPipelineKind } from "../domain";
+import { CLOSING_BACKUP_STEP, LOADING_BUDGET_MS, type VaultPipelineKind } from "../domain";
 import type { I18nKey } from "../i18n/catalog";
 import { scheduleTimeout } from "./schedule";
 
@@ -244,6 +244,12 @@ export function useVaultPipelineRun(errorToI18nKey: (error: unknown) => I18nKey)
     return [];
   }, [run]);
 
+  /** Active close that reached the core backup phase. */
+  const backingUpVaultIds = useMemo(() => {
+    if (run?.kind === "close" && run.activeStep === CLOSING_BACKUP_STEP) return [run.vaultId];
+    return [];
+  }, [run]);
+
   const creatingVaultIds = useMemo(() => {
     const ids: string[] = [];
     if (run?.kind === "create") ids.push(run.vaultId);
@@ -294,6 +300,7 @@ export function useVaultPipelineRun(errorToI18nKey: (error: unknown) => I18nKey)
       getVaultPipelineListStatus,
       openingVaultIds,
       closingVaultIds,
+      backingUpVaultIds,
       creatingVaultIds,
       queuedVaultIds,
       queuedOpenVaultIds,
@@ -301,6 +308,7 @@ export function useVaultPipelineRun(errorToI18nKey: (error: unknown) => I18nKey)
       isRunningNow,
     }),
     [
+      backingUpVaultIds,
       closingVaultIds,
       creatingVaultIds,
       dismissFailure,

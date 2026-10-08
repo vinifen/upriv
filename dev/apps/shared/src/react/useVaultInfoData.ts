@@ -1,11 +1,15 @@
 import { useEffect, useState } from "react";
 import {
+  currentWorkspaceSystem,
+  encryptedShortcutActive,
   resolveVaultMountPoint,
+  resolvedWorkspaceParent,
+  vaultWorkspace,
   shouldBumpVaultRootEpoch,
   vaultRootContentorPath,
   vaultRootGoneRpcError,
   vaultStoreDisplayPaths,
-  WORKSPACE_PATH_DEFAULT,
+  type AppSettingsConfig,
   type VaultGroup,
   type VaultInfoSnapshot,
   type VaultListItem,
@@ -29,13 +33,15 @@ export interface UseVaultInfoDataOptions {
   lifecycleService: VaultLifecycleService;
   vaultRootService: VaultRootService;
   vaultRootMode: VaultRootMode;
-  /** App `[workspace].path` used to resolve the mount point. */
-  workspaceGlobalPath: string;
+  /** App workspace table used to resolve this system's mount point. */
+  workspace: AppSettingsConfig["workspace"];
   /**
    * Last-resort prefix when `vault_root_resolve` is not `found`
    * (pre-setup). Do not use this as the happy path.
    */
   fallbackVaultRootBase: string;
+  /** React Native `Platform.OS`. Omit in Electron; that renderer has no Node `process`. */
+  host?: string | null;
 }
 
 /** Core does not report these session counters — Info shows an em dash, not a guess. */
@@ -56,8 +62,9 @@ export function useVaultInfoData({
   lifecycleService,
   vaultRootService,
   vaultRootMode,
-  workspaceGlobalPath,
+  workspace,
   fallbackVaultRootBase,
+  host,
 }: UseVaultInfoDataOptions) {
   const [snapshot, setSnapshot] = useState<VaultInfoSnapshot | null>(null);
   const [loading, setLoading] = useState(false);
@@ -107,12 +114,14 @@ export function useVaultInfoData({
         const runtime = { ...UNAVAILABLE_RUNTIME_STATS, storeBytes };
         const vaultRootBase = vaultRootContentorPath(root, fallbackVaultRootBase);
         const storePaths = vaultStoreDisplayPaths(vaultRootBase, current.id);
-        const mountPath = settings?.mount.workspace_path ?? WORKSPACE_PATH_DEFAULT;
-        const workspacePath = resolveVaultMountPoint(
-          workspaceGlobalPath,
-          mountPath,
-          current.displayName,
-        );
+        const system = currentWorkspaceSystem(host);
+        const mount = settings?.mount ?? vaultWorkspace();
+        const parent = resolvedWorkspaceParent(workspace, mount, system, vaultRootBase);
+        const ownFolder = mount[system].path.trim() !== "";
+        const workspacePath = resolveVaultMountPoint(parent, current.displayName, ownFolder);
+        const mountOn = settings
+          ? encryptedShortcutActive(workspace, settings.mount, system)
+          : false;
 
         setSnapshot({
           vault: current,
@@ -126,7 +135,8 @@ export function useVaultInfoData({
           workspacePath,
           // Mount is live only while the list session is open — not during
           // opening/closing list badges (builder uses displayStatus too).
-          workspacePathIsActive: isOpen,
+          workspacePathIsActive: isOpen && mountOn,
+          workspaceSystem: system,
           storePath: storePaths.storePath,
           backupsPath: storePaths.backupsPath,
           locale,
@@ -168,8 +178,9 @@ export function useVaultInfoData({
     lifecycleService,
     vaultRootService,
     vaultRootMode,
-    workspaceGlobalPath,
+    workspace,
     fallbackVaultRootBase,
+    host,
     loadAttempt,
   ]);
 

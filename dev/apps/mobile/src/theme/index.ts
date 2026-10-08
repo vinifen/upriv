@@ -8,5 +8,5 @@ export {
   typographyForColors,
 } from "./tokens";
 export type { ThemeColors } from "./tokens";
-export { ThemeProvider, useTheme } from "./ThemeContext";
+export { ThemeProvider, ThemeScope, useTheme } from "./ThemeContext";
 export { vaultStatusBadgeColors, vaultStatusDotColor, vaultStatusIconColors } from "./vault-status";

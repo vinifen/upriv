@@ -1,5 +1,5 @@
 import { persistableTreeSplitPercent, TREE_SPLIT_DEFAULT_PERCENT } from "../file-tree";
-import { normalizeWorkspaceGlobalPath } from "../workspace";
+import { appWorkspace, normalizeWorkspaceTable } from "../workspace";
 import {
   LOG_ENTRIES_PER_FILE,
   LOG_KEEP_LAST_DEFAULT,
@@ -21,34 +21,6 @@ export const VAULT_LIST_SEARCH_MAX_LENGTH = 128;
 
 /** Debounce before writing the list search query to `settings.toml`. */
 export const VAULT_LIST_SEARCH_PERSIST_MS = 400;
-
-type LegacyUiSettings = AppSettingsConfig["ui"] & {
-  /** Legacy combined toggle (vault + group). */
-  vault_list_show_vault_group_settings_button?: boolean;
-};
-
-function readShowToggle(
-  explicit: boolean | undefined,
-  legacyCombined: boolean | undefined,
-): boolean {
-  if (explicit !== undefined) return explicit !== false;
-  if (legacyCombined !== undefined) return legacyCombined !== false;
-  return true;
-}
-
-function normalizeShowVaultSettings(ui: LegacyUiSettings): boolean {
-  return readShowToggle(
-    ui.vault_list_show_vault_settings_button,
-    ui.vault_list_show_vault_group_settings_button,
-  );
-}
-
-function normalizeShowGroupSettings(ui: LegacyUiSettings): boolean {
-  return readShowToggle(
-    ui.vault_list_show_group_settings_button,
-    ui.vault_list_show_vault_group_settings_button,
-  );
-}
 
 /** Strip controls, cap length; keep spaces so typing is not trimmed mid-edit. */
 export function normalizeVaultListSearch(value: unknown): string {
@@ -107,9 +79,7 @@ export function createDefaultAppSettings(): AppSettingsConfig {
       upriv_root_path: "",
       last_opened_vault: "",
     },
-    workspace: {
-      path: "",
-    },
+    workspace: appWorkspace(),
   };
 }
 
@@ -124,8 +94,6 @@ export function normalizeAppSettings(config: AppSettingsConfig): AppSettingsConf
     keep_last_entries: normalizeLogKeepLastEntries(config.logging.keep_last_entries),
   };
 
-  const legacyUi = config.ui as LegacyUiSettings;
-
   const normalized: AppSettingsConfig = {
     ...config,
     ui: {
@@ -137,8 +105,10 @@ export function normalizeAppSettings(config: AppSettingsConfig): AppSettingsConf
       vault_list_show_view_button: config.ui.vault_list_show_view_button !== false,
       vault_list_show_header_more_button: config.ui.vault_list_show_header_more_button !== false,
       vault_list_show_vault_more_button: config.ui.vault_list_show_vault_more_button !== false,
-      vault_list_show_vault_settings_button: normalizeShowVaultSettings(legacyUi),
-      vault_list_show_group_settings_button: normalizeShowGroupSettings(legacyUi),
+      vault_list_show_vault_settings_button:
+        config.ui.vault_list_show_vault_settings_button !== false,
+      vault_list_show_group_settings_button:
+        config.ui.vault_list_show_group_settings_button !== false,
       vault_list_show_drag: config.ui.vault_list_show_drag !== false,
       vault_list_allow_drag_into_group: config.ui.vault_list_allow_drag_into_group !== false,
       file_manager_dock_expanded: config.ui.file_manager_dock_expanded === true,
@@ -156,9 +126,7 @@ export function normalizeAppSettings(config: AppSettingsConfig): AppSettingsConf
       last_opened_vault:
         typeof config.app.last_opened_vault === "string" ? config.app.last_opened_vault.trim() : "",
     },
-    workspace: {
-      path: normalizeWorkspaceGlobalPath(config.workspace?.path),
-    },
+    workspace: normalizeWorkspaceTable(config.workspace, "app"),
   };
 
   if (normalized.app.vault_root_mode !== "default_root") return normalized;

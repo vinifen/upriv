@@ -1,5 +1,7 @@
 //! Create / open a vault-root layout (marker + empty dirs).
 
+#[allow(unused_imports)]
+use crate::host_fs::HostFsQuery;
 use std::path::{Path, PathBuf};
 
 use crate::config::{serialize_settings_toml_str, AppSettings};
@@ -60,12 +62,12 @@ struct PackageTomlRequired {
 pub fn validate_existing_vault_root(dir: impl AsRef<Path>) -> Result<()> {
     let dir = dir.as_ref();
     let upriv = dir.join(".upriv");
-    if !upriv.exists() {
+    if !upriv.host_exists() {
         return Err(UprivError::VaultRootNotFound(
             dir.join(VAULT_ROOT_SETTINGS_REL),
         ));
     }
-    if !upriv.is_dir() {
+    if !upriv.host_is_dir() {
         return Err(UprivError::VaultRootIncomplete {
             path: upriv,
             detail: ".upriv exists but is not a directory".into(),
@@ -73,14 +75,14 @@ pub fn validate_existing_vault_root(dir: impl AsRef<Path>) -> Result<()> {
     }
 
     let settings = dir.join(VAULT_ROOT_SETTINGS_REL);
-    if !settings.is_file() {
+    if !settings.host_is_file() {
         return Err(UprivError::VaultRootIncomplete {
             path: settings,
             detail: "missing .upriv/settings.toml".into(),
         });
     }
 
-    let raw = std::fs::read_to_string(&settings).map_err(UprivError::from)?;
+    let raw = crate::host_fs::read_to_string(&settings).map_err(UprivError::from)?;
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return Err(UprivError::VaultRootIncomplete {
@@ -113,7 +115,7 @@ fn ensure_standard_dirs(dir: &Path) -> Result<()> {
         ".upriv/app",
         ".upriv/runtime",
     ] {
-        std::fs::create_dir_all(dir.join(relative))?;
+        crate::host_fs::create_dir_all(dir.join(relative))?;
     }
     Ok(())
 }
@@ -149,7 +151,7 @@ pub enum VaultRootDirStatus {
 pub fn inspect_vault_root_at(dir: impl AsRef<Path>) -> VaultRootDirStatus {
     let dir = dir.as_ref();
     let upriv = dir.join(".upriv");
-    if !upriv.exists() {
+    if !upriv.host_exists() {
         return VaultRootDirStatus::Absent;
     }
     match validate_existing_vault_root(dir) {
@@ -273,7 +275,7 @@ fn open_or_initialize_vault_root_impl(
                 }
             };
             let upriv = dir.join(".upriv");
-            if upriv.exists() {
+            if upriv.host_exists() {
                 match policy {
                     IncompleteReplacePolicy::Delete => {
                         // Refuse to recursively delete if `.upriv` or any entry under it
@@ -281,7 +283,7 @@ fn open_or_initialize_vault_root_impl(
                         // `workspace/` is intentionally left in place — only the broken
                         // `.upriv/` tree is removed when safe.
                         refuse_delete_if_symlinks_under(&upriv)?;
-                        std::fs::remove_dir_all(&upriv)?;
+                        crate::host_fs::remove_dir_all(&upriv)?;
                     }
                     IncompleteReplacePolicy::Rename => {
                         rename_incomplete_upriv(&upriv)?;
@@ -299,32 +301,32 @@ fn open_or_initialize_vault_root_impl(
 /// Walk `upriv` with `symlink_metadata` (do not follow links). Refuse Delete when
 /// `.upriv` itself or any nested entry is a symlink — use Rename instead.
 fn refuse_delete_if_symlinks_under(upriv: &Path) -> Result<()> {
-    let meta = std::fs::symlink_metadata(upriv).map_err(UprivError::from)?;
+    let meta = crate::host_fs::symlink_metadata(upriv).map_err(UprivError::from)?;
     if meta.file_type().is_symlink() {
         return Err(UprivError::Io(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             "refusing to delete .upriv: path is a symbolic link (use Rename)",
         )));
     }
-    if !meta.is_dir() {
+    if !meta.host_is_dir() {
         return Ok(());
     }
     walk_refuse_symlinks(upriv)
 }
 
 fn walk_refuse_symlinks(dir: &Path) -> Result<()> {
-    let entries = std::fs::read_dir(dir)?;
+    let entries = crate::host_fs::read_dir(dir)?;
     for entry in entries {
         let entry = entry.map_err(UprivError::from)?;
         let path = entry.path();
-        let meta = std::fs::symlink_metadata(&path).map_err(UprivError::from)?;
+        let meta = crate::host_fs::symlink_metadata(&path).map_err(UprivError::from)?;
         if meta.file_type().is_symlink() {
             return Err(UprivError::Io(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 "refusing to delete .upriv: tree contains a symbolic link (use Rename)",
             )));
         }
-        if meta.is_dir() {
+        if meta.host_is_dir() {
             walk_refuse_symlinks(&path)?;
         }
     }
@@ -341,11 +343,11 @@ pub fn rename_incomplete_upriv(upriv: &Path) -> Result<PathBuf> {
     let stamp = utc_filename_stamp();
     let mut dest = parent.join(format!(".upriv-invalidated-{stamp}"));
     let mut n = 2;
-    while dest.exists() {
+    while dest.host_exists() {
         dest = parent.join(format!(".upriv-invalidated-{stamp}-{n}"));
         n += 1;
     }
-    match std::fs::rename(upriv, &dest) {
+    match crate::host_fs::rename(upriv, &dest) {
         Ok(()) => Ok(dest),
         Err(error)
             if error.kind() == std::io::ErrorKind::CrossesDevices
@@ -386,10 +388,10 @@ pub fn initialize_vault_root_with_bootstrap(
     prefs: Option<&VaultRootBootstrapPrefs>,
 ) -> Result<VaultRoot> {
     let dir = dir.as_ref();
-    std::fs::create_dir_all(dir)?;
+    crate::host_fs::create_dir_all(dir)?;
 
     let settings_path = dir.join(VAULT_ROOT_SETTINGS_REL);
-    if !settings_path.is_file() {
+    if !settings_path.host_is_file() {
         let bytes = initial_settings_toml_for(prefs)?;
         crate::paths::write_bytes_atomic(&settings_path, &bytes)?;
     }
@@ -401,6 +403,8 @@ pub fn initialize_vault_root_with_bootstrap(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[allow(unused_imports)]
+    use crate::host_fs::HostFsQuery;
     use crate::paths::{is_vault_root_marker, VaultRoot};
 
     #[test]
@@ -408,14 +412,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = initialize_vault_root(dir.path()).unwrap();
         assert!(is_vault_root_marker(root.root()));
-        assert!(root.vaults_dir().is_dir());
+        assert!(root.vaults_dir().host_is_dir());
         // Suggested default parent only — not live mount resolution.
-        assert!(!crate::paths::suggested_default_workspace_path(root.root()).is_dir());
-        assert!(root.logs_dir().is_dir());
-        let settings = std::fs::read_to_string(root.settings_path()).unwrap();
+        assert!(!crate::paths::suggested_default_workspace_path(root.root()).host_is_dir());
+        assert!(root.logs_dir().host_is_dir());
+        let settings = crate::host_fs::read_to_string(root.settings_path()).unwrap();
         assert!(
-            settings.contains("[workspace]"),
-            "initial settings.toml must include [workspace], got:\n{settings}"
+            settings.contains("[workspace.linux]"),
+            "initial settings.toml must include per-system workspace rows, got:\n{settings}"
         );
     }
 
@@ -423,14 +427,14 @@ mod tests {
     fn initialize_does_not_overwrite_settings() {
         let dir = tempfile::tempdir().unwrap();
         let settings = dir.path().join(".upriv/settings.toml");
-        std::fs::create_dir_all(settings.parent().unwrap()).unwrap();
-        std::fs::write(
+        crate::host_fs::create_dir_all(settings.parent().unwrap()).unwrap();
+        crate::host_fs::write(
             &settings,
             "[package]\nversion = 1\nvaults_dir = \".upriv/vaults\"\n",
         )
         .unwrap();
         let _ = initialize_vault_root(dir.path()).unwrap();
-        let raw = std::fs::read_to_string(&settings).unwrap();
+        let raw = crate::host_fs::read_to_string(&settings).unwrap();
         assert!(raw.contains("vaults_dir"));
         assert!(!raw.contains("label = \"Upriv\""));
     }
@@ -440,18 +444,18 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let first = initialize_vault_root(dir.path()).unwrap();
         let settings = first.settings_path();
-        let before = std::fs::read_to_string(&settings).unwrap();
-        std::fs::write(&settings, format!("{before}\n# kept\n")).unwrap();
+        let before = crate::host_fs::read_to_string(&settings).unwrap();
+        crate::host_fs::write(&settings, format!("{before}\n# kept\n")).unwrap();
 
         let again = open_or_initialize_vault_root(dir.path(), None, None).unwrap();
-        let after = std::fs::read_to_string(again.root.settings_path()).unwrap();
+        let after = crate::host_fs::read_to_string(again.root.settings_path()).unwrap();
         assert!(after.contains("# kept"));
     }
 
     #[test]
     fn incomplete_upriv_errors() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(dir.path().join(".upriv")).unwrap();
+        crate::host_fs::create_dir_all(dir.path().join(".upriv")).unwrap();
         let err = open_or_initialize_vault_root(dir.path(), None, None).unwrap_err();
         assert!(matches!(err, UprivError::VaultRootIncomplete { .. }));
     }
@@ -460,8 +464,8 @@ mod tests {
     fn empty_settings_errors() {
         let dir = tempfile::tempdir().unwrap();
         let settings = dir.path().join(".upriv/settings.toml");
-        std::fs::create_dir_all(settings.parent().unwrap()).unwrap();
-        std::fs::write(&settings, "   \n").unwrap();
+        crate::host_fs::create_dir_all(settings.parent().unwrap()).unwrap();
+        crate::host_fs::write(&settings, "   \n").unwrap();
         let err = validate_existing_vault_root(dir.path()).unwrap_err();
         assert!(matches!(err, UprivError::VaultRootIncomplete { .. }));
     }
@@ -470,8 +474,8 @@ mod tests {
     fn corrupt_toml_settings_are_incomplete() {
         let dir = tempfile::tempdir().unwrap();
         let settings = dir.path().join(".upriv/settings.toml");
-        std::fs::create_dir_all(settings.parent().unwrap()).unwrap();
-        std::fs::write(
+        crate::host_fs::create_dir_all(settings.parent().unwrap()).unwrap();
+        crate::host_fs::write(
             &settings,
             r#"
 [package]
@@ -493,8 +497,8 @@ vaults_dir = ".upriv/vaults"
     fn comment_only_markers_do_not_validate() {
         let dir = tempfile::tempdir().unwrap();
         let settings = dir.path().join(".upriv/settings.toml");
-        std::fs::create_dir_all(settings.parent().unwrap()).unwrap();
-        std::fs::write(
+        crate::host_fs::create_dir_all(settings.parent().unwrap()).unwrap();
+        crate::host_fs::write(
             &settings,
             "# [package]\n# vaults_dir = \".upriv/vaults\"\n[ui]\nlocale = \"en\"\n",
         )
@@ -514,7 +518,7 @@ vaults_dir = ".upriv/vaults"
         assert_eq!(inspect_vault_root_at(dir.path()), VaultRootDirStatus::Valid);
 
         let broken = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(broken.path().join(".upriv")).unwrap();
+        crate::host_fs::create_dir_all(broken.path().join(".upriv")).unwrap();
         assert_eq!(
             inspect_vault_root_at(broken.path()),
             VaultRootDirStatus::Incomplete
@@ -525,8 +529,8 @@ vaults_dir = ".upriv/vaults"
     fn replace_incomplete_options_renames_and_recreates() {
         let dir = tempfile::tempdir().unwrap();
         let upriv = dir.path().join(".upriv");
-        std::fs::create_dir_all(&upriv).unwrap();
-        std::fs::write(upriv.join("keep-me.txt"), b"data").unwrap();
+        crate::host_fs::create_dir_all(&upriv).unwrap();
+        crate::host_fs::write(upriv.join("keep-me.txt"), b"data").unwrap();
         assert!(matches!(
             open_or_initialize_vault_root(dir.path(), None, None).unwrap_err(),
             UprivError::VaultRootIncomplete { .. }
@@ -534,22 +538,26 @@ vaults_dir = ".upriv/vaults"
         // `with_options(true)` → Rename (safer than Delete).
         let opened = open_or_initialize_vault_root_with_options(dir.path(), true).unwrap();
         assert!(is_vault_root_marker(opened.root.root()));
-        assert!(opened.root.settings_path().is_file());
-        let backups: Vec<_> = std::fs::read_dir(dir.path())
+        assert!(opened.root.settings_path().host_is_file());
+        let backups: Vec<_> = crate::host_fs::read_dir(dir.path())
             .unwrap()
             .filter_map(|e| e.ok())
             .map(|e| e.file_name().to_string_lossy().into_owned())
             .filter(|n| n.starts_with(".upriv-invalidated-"))
             .collect();
         assert_eq!(backups.len(), 1);
-        assert!(dir.path().join(&backups[0]).join("keep-me.txt").is_file());
+        assert!(dir
+            .path()
+            .join(&backups[0])
+            .join("keep-me.txt")
+            .host_is_file());
     }
 
     #[test]
     fn replace_incomplete_delete_refuses_inner_symlink() {
         let dir = tempfile::tempdir().unwrap();
         let upriv = dir.path().join(".upriv");
-        std::fs::create_dir_all(&upriv).unwrap();
+        crate::host_fs::create_dir_all(&upriv).unwrap();
         let outside = tempfile::tempdir().unwrap();
         #[cfg(unix)]
         {
@@ -560,7 +568,7 @@ vaults_dir = ".upriv/vaults"
             )
             .unwrap_err();
             assert!(matches!(err, UprivError::Io(_)));
-            assert!(upriv.exists());
+            assert!(upriv.host_exists());
             // Rename still works.
             let root = open_or_initialize_vault_root_with_policy(
                 dir.path(),
@@ -579,7 +587,7 @@ vaults_dir = ".upriv/vaults"
     #[test]
     fn replace_incomplete_delete_removes_and_recreates() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(dir.path().join(".upriv")).unwrap();
+        crate::host_fs::create_dir_all(dir.path().join(".upriv")).unwrap();
         let opened = open_or_initialize_vault_root_with_policy(
             dir.path(),
             Some(IncompleteReplacePolicy::Delete),
@@ -588,9 +596,9 @@ vaults_dir = ".upriv/vaults"
         assert!(opened.created);
         let root = opened.root;
         assert!(is_vault_root_marker(root.root()));
-        assert!(root.settings_path().is_file());
-        assert!(!dir.path().join(".upriv-invalidated").exists());
-        let backups: Vec<_> = std::fs::read_dir(dir.path())
+        assert!(root.settings_path().host_is_file());
+        assert!(!dir.path().join(".upriv-invalidated").host_exists());
+        let backups: Vec<_> = crate::host_fs::read_dir(dir.path())
             .unwrap()
             .filter_map(|e| e.ok())
             .map(|e| e.file_name().to_string_lossy().into_owned())
@@ -603,8 +611,8 @@ vaults_dir = ".upriv/vaults"
     fn replace_incomplete_rename_keeps_old_tree() {
         let dir = tempfile::tempdir().unwrap();
         let upriv = dir.path().join(".upriv");
-        std::fs::create_dir_all(&upriv).unwrap();
-        std::fs::write(upriv.join("keep-me.txt"), b"data").unwrap();
+        crate::host_fs::create_dir_all(&upriv).unwrap();
+        crate::host_fs::write(upriv.join("keep-me.txt"), b"data").unwrap();
         let opened = open_or_initialize_vault_root_with_policy(
             dir.path(),
             Some(IncompleteReplacePolicy::Rename),
@@ -613,32 +621,36 @@ vaults_dir = ".upriv/vaults"
         assert!(opened.created);
         let root = opened.root;
         assert!(is_vault_root_marker(root.root()));
-        let backups: Vec<_> = std::fs::read_dir(dir.path())
+        let backups: Vec<_> = crate::host_fs::read_dir(dir.path())
             .unwrap()
             .filter_map(|e| e.ok())
             .map(|e| e.file_name().to_string_lossy().into_owned())
             .filter(|n| n.starts_with(".upriv-invalidated-"))
             .collect();
         assert_eq!(backups.len(), 1);
-        assert!(dir.path().join(&backups[0]).join("keep-me.txt").is_file());
+        assert!(dir
+            .path()
+            .join(&backups[0])
+            .join("keep-me.txt")
+            .host_is_file());
     }
 
     #[test]
     fn rename_incomplete_uses_incrementing_suffix_on_collision() {
         let dir = tempfile::tempdir().unwrap();
         let upriv = dir.path().join(".upriv");
-        std::fs::create_dir_all(&upriv).unwrap();
-        std::fs::write(upriv.join("marker"), "x").unwrap();
+        crate::host_fs::create_dir_all(&upriv).unwrap();
+        crate::host_fs::write(upriv.join("marker"), "x").unwrap();
         let stamp = crate::time::utc_filename_stamp();
         let first = dir.path().join(format!(".upriv-invalidated-{stamp}"));
-        std::fs::create_dir_all(&first).unwrap();
+        crate::host_fs::create_dir_all(&first).unwrap();
 
         let dest = rename_incomplete_upriv(&upriv).unwrap();
         assert_eq!(
             dest,
             dir.path().join(format!(".upriv-invalidated-{stamp}-2"))
         );
-        assert!(dest.join("marker").is_file());
+        assert!(dest.join("marker").host_is_file());
     }
 
     #[test]
@@ -670,7 +682,7 @@ vaults_dir = ".upriv/vaults"
         let dir = tempfile::tempdir().unwrap();
         let prefs = bootstrap_locale("pt-BR");
         let root = initialize_vault_root_with_bootstrap(dir.path(), Some(&prefs)).unwrap();
-        let raw = std::fs::read_to_string(root.settings_path()).unwrap();
+        let raw = crate::host_fs::read_to_string(root.settings_path()).unwrap();
         assert!(
             raw.contains("locale = \"pt-BR\""),
             "expected initial settings.toml to carry pt-BR, got:\n{raw}"
@@ -682,20 +694,20 @@ vaults_dir = ".upriv/vaults"
     fn initialize_with_bootstrap_defaults_to_en_when_missing() {
         let dir = tempfile::tempdir().unwrap();
         let root = initialize_vault_root_with_bootstrap(dir.path(), None).unwrap();
-        let raw = std::fs::read_to_string(root.settings_path()).unwrap();
+        let raw = crate::host_fs::read_to_string(root.settings_path()).unwrap();
         assert!(raw.contains("locale = \"en\""));
 
         let other = tempfile::tempdir().unwrap();
         let prefs = bootstrap_locale("   ");
         let root = initialize_vault_root_with_bootstrap(other.path(), Some(&prefs)).unwrap();
-        let raw = std::fs::read_to_string(root.settings_path()).unwrap();
+        let raw = crate::host_fs::read_to_string(root.settings_path()).unwrap();
         assert!(raw.contains("locale = \"en\""));
 
         let empty = tempfile::tempdir().unwrap();
         let default_prefs = VaultRootBootstrapPrefs::default();
         let root =
             initialize_vault_root_with_bootstrap(empty.path(), Some(&default_prefs)).unwrap();
-        let raw = std::fs::read_to_string(root.settings_path()).unwrap();
+        let raw = crate::host_fs::read_to_string(root.settings_path()).unwrap();
         assert!(raw.contains("locale = \"en\""));
     }
 
@@ -704,7 +716,7 @@ vaults_dir = ".upriv/vaults"
         let dir = tempfile::tempdir().unwrap();
         let prefs = bootstrap_locale("en\"; rogue = \"x");
         let root = initialize_vault_root_with_bootstrap(dir.path(), Some(&prefs)).unwrap();
-        let raw = std::fs::read_to_string(root.settings_path()).unwrap();
+        let raw = crate::host_fs::read_to_string(root.settings_path()).unwrap();
         let parsed = crate::config::parse_settings_toml_str(&raw).unwrap();
         assert_eq!(parsed.ui.locale, "en\"; rogue = \"x");
     }
@@ -717,7 +729,7 @@ vaults_dir = ".upriv/vaults"
             open_or_initialize_vault_root_with_policy_and_bootstrap(dir.path(), None, Some(&prefs))
                 .unwrap();
         assert!(opened.created);
-        let raw = std::fs::read_to_string(opened.root.settings_path()).unwrap();
+        let raw = crate::host_fs::read_to_string(opened.root.settings_path()).unwrap();
         assert!(raw.contains("locale = \"pt-BR\""));
     }
 
@@ -729,14 +741,14 @@ vaults_dir = ".upriv/vaults"
         // Seed as `en` (default), then observe that re-opening with pt-BR does not rewrite.
         initialize_vault_root(dir.path()).unwrap();
         let settings = dir.path().join(".upriv/settings.toml");
-        let before = std::fs::read_to_string(&settings).unwrap();
+        let before = crate::host_fs::read_to_string(&settings).unwrap();
 
         let prefs = bootstrap_locale("pt-BR");
         let opened =
             open_or_initialize_vault_root_with_policy_and_bootstrap(dir.path(), None, Some(&prefs))
                 .unwrap();
         assert!(!opened.created);
-        let after = std::fs::read_to_string(&settings).unwrap();
+        let after = crate::host_fs::read_to_string(&settings).unwrap();
         assert_eq!(before, after);
         assert!(after.contains("locale = \"en\""));
     }
@@ -744,7 +756,7 @@ vaults_dir = ".upriv/vaults"
     #[test]
     fn incomplete_replace_with_bootstrap_stamps_fresh_layout() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(dir.path().join(".upriv")).unwrap();
+        crate::host_fs::create_dir_all(dir.path().join(".upriv")).unwrap();
         let prefs = bootstrap_locale("es");
         let opened = open_or_initialize_vault_root_with_policy_and_bootstrap(
             dir.path(),
@@ -753,7 +765,7 @@ vaults_dir = ".upriv/vaults"
         )
         .unwrap();
         assert!(opened.created);
-        let raw = std::fs::read_to_string(opened.root.settings_path()).unwrap();
+        let raw = crate::host_fs::read_to_string(opened.root.settings_path()).unwrap();
         assert!(raw.contains("locale = \"es\""));
     }
 }

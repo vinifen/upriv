@@ -1,6 +1,6 @@
 import type { StorageMode } from "../vault/types";
 import { normalizeStoredName } from "../format/storedName";
-import { normalizeMountWorkspacePath } from "../workspace";
+import { normalizeWorkspaceTable, vaultMountForDaemon, type WorkspaceTable } from "../workspace";
 
 export type { KdfParams, KdfUnlockPreset } from "./kdf";
 export {
@@ -49,12 +49,8 @@ export const COMPRESSION_PRESETS = [
   "high",
 ] as const satisfies readonly CompressionPreset[];
 
-/**
- * Persisted `[security] mode`. `ram_on_close_only` is a legacy TOML value from the
- * `.7z`-on-close era; load/save maps it to `session_ram` (close uses session keys).
- */
-export type SecurityMode =
-  "always_prompt" | "session_ram" | "ram_on_close_only" | "disk_close" | "disk_open_close";
+/** Persisted `[security] mode`. Close uses session keys except `always_prompt`. */
+export type SecurityMode = "always_prompt" | "session_ram" | "disk_close" | "disk_open_close";
 
 /** Password-memory choices in vault settings (all storage modes). */
 export const SECURITY_UI_MODES = [
@@ -83,7 +79,6 @@ export function securityModeToUi(mode: SecurityMode): SecurityUiMode {
   if (mode === "disk_open_close") return "disk_open_close";
   if (mode === "disk_close") return "disk_close";
   if (mode === "always_prompt") return "prompt_open_close";
-  // `session_ram` and legacy `ram_on_close_only` (close no longer needs the password string).
   return "session_ram";
 }
 
@@ -92,12 +87,11 @@ export function securityUiModesForStorage(_storageMode: StorageMode): readonly S
   return SECURITY_UI_MODES;
 }
 
-/** Persist a supported mode; rewrite legacy `ram_on_close_only` to `session_ram`. */
+/** Persist the chosen mode. The same list applies to every storage mode. */
 export function normalizeSecurityModeForStorage(
   _storageMode: StorageMode,
   securityMode: SecurityMode,
 ): SecurityMode {
-  if (securityMode === "ram_on_close_only") return "session_ram";
   return securityMode;
 }
 
@@ -152,15 +146,18 @@ export function normalizeVaultSettingsConfig(config: VaultSettingsConfig): Vault
       ...config.vault,
       display_name: normalizeStoredName(config.vault.display_name),
     },
-    mount: {
-      workspace_path: normalizeMountWorkspacePath(config.mount?.workspace_path),
-    },
+    mount: normalizeWorkspaceTable(config.mount, "vault"),
     security: {
       ...config.security,
       mode: normalizeSecurityModeForStorage(config.storage.mode, config.security.mode),
     },
     seven_zip: normalizeSevenZipSection(config.seven_zip),
   };
+}
+
+/** Daemon JSON stores `app_file_manager_folder` and `custom_file_manager_folder` once. */
+export function vaultSettingsForDaemon(settings: VaultSettingsConfig) {
+  return { ...settings, mount: vaultMountForDaemon(settings.mount) };
 }
 
 /** Apply storage mode change. */
@@ -194,12 +191,12 @@ export interface VaultSettingsConfig {
   vault: VaultSectionConfig;
   storage: { mode: StorageMode };
   /**
-   * Where this vault’s open mount appears.
-   * `workspace_path`: `"default"` inherits app `[workspace].path`; otherwise an absolute path.
+   * Per-system folder path. Empty path follows the app place. `app_file_manager_folder`
+   * and `custom_file_manager_folder` are stored once. `app_file_manager_folder` is `inherit`, `on`,
+   * or `off` for Use the app folder and starts `inherit`. `custom_file_manager_folder`
+   * is the another-folder switch and starts off.
    */
-  mount: {
-    workspace_path: string;
-  };
+  mount: WorkspaceTable;
   backup: { enabled: boolean; mode: BackupMode; keep_last: number };
   security: {
     mode: SecurityMode;

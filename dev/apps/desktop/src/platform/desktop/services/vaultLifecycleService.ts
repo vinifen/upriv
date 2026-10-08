@@ -1,14 +1,17 @@
 import {
+  CLOSING_BACKUP_STEP,
+  CLOSING_DONE_STEP,
+  CLOSING_FLUSH_STEP,
   LIVE_CLOSING_PIPELINE_STEP_COUNT,
   LIVE_OPENING_PIPELINE_STEP_COUNT,
-  WORKSPACE_PATH_DEFAULT,
   borrowSessionRamPassword,
   isLifecyclePasswordPresent,
   isVaultPipelineError,
   resolveVaultMountPoint,
+  watchClosePhase,
   type VaultLifecycleService,
 } from "@upriv/shared";
-import { rpcVaultClose, rpcVaultOpen } from "@/lib/rpc";
+import { rpcVaultClose, rpcVaultClosePhase, rpcVaultOpen } from "@/lib/rpc";
 
 /** Session RAM only — never persist. */
 const vaultPasswordInRam = new Map<string, string>();
@@ -40,21 +43,19 @@ export const desktopVaultLifecycleService: VaultLifecycleService = {
   },
 
   async runClosingPipeline(vaultId, onStep) {
-    onStep(0);
+    onStep(CLOSING_FLUSH_STEP);
     const password = vaultPasswordInRam.get(vaultId);
-    const outcome = await rpcVaultClose(vaultId, password);
-    onStep(1);
+    const outcome = await watchClosePhase(
+      rpcVaultClose(vaultId, password),
+      () => rpcVaultClosePhase(vaultId),
+      () => onStep(CLOSING_BACKUP_STEP),
+    );
+    onStep(CLOSING_DONE_STEP);
     return outcome;
   },
 
-  resolveWorkspacePath(displayName, options) {
-    return (
-      resolveVaultMountPoint(
-        options?.globalWorkspacePath ?? "",
-        options?.mountWorkspacePath ?? WORKSPACE_PATH_DEFAULT,
-        displayName,
-      ) ?? ""
-    );
+  resolveWorkspacePath(displayName, parentPath) {
+    return resolveVaultMountPoint(parentPath ?? "", displayName) ?? "";
   },
 
   validateLifecyclePassword(password) {

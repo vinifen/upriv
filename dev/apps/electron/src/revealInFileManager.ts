@@ -10,8 +10,25 @@ export type RevealShell = {
   openPath(target: string): Promise<string>;
 };
 
-export function isAbsoluteOsPath(target: string): boolean {
-  return path.isAbsolute(target) || /^[A-Za-z]:[\\/]/.test(target);
+function hasControlChar(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    if (value.charCodeAt(index) < 0x20) return true;
+  }
+  return false;
+}
+
+/**
+ * Absolute on this operating system, so `path.resolve` cannot glue a foreign
+ * path (`C:\…` on Linux, a UNC prefix on POSIX) onto the current directory.
+ */
+export function isAbsoluteOsPath(
+  target: string,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  const trimmed = target.trim();
+  if (!trimmed || hasControlChar(trimmed) || /^content:/i.test(trimmed)) return false;
+  if (platform === "win32") return path.win32.isAbsolute(trimmed);
+  return path.posix.isAbsolute(trimmed);
 }
 
 /** Walk up from a missing leaf to an existing path on disk. */

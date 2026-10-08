@@ -1,9 +1,8 @@
 import type { I18nKey } from "@/i18n/types";
 import type { VaultLifecycleIntent, VaultListItem } from "@upriv/shared";
+import { CloseAllUnsavedModal } from "./modals/CloseAllUnsavedModal";
 import { VaultLifecycleModal } from "./modals/VaultLifecycleModal";
 import { VaultRecoveryModal, type RecoveryAction } from "./modals/VaultRecoveryModal";
-import { WorkspaceSetupModal } from "./modals/WorkspaceSetupModal";
-
 interface VaultLifecycleLayerProps {
   lifecycleVault: VaultListItem | null;
   lifecycleIntent: VaultLifecycleIntent | null;
@@ -20,13 +19,15 @@ interface VaultLifecycleLayerProps {
   recoverySubmitting: boolean;
   onRecoveryClose: () => void;
   onRecoveryAction: (action: RecoveryAction) => void;
-  workspaceSetupOpen: boolean;
-  workspaceSetupRootPath: string;
-  onWorkspaceSetupCancel: () => void;
-  onWorkspaceSetupConfigured: () => void;
+  closeAllUnsavedOpen: boolean;
+  closeAllUnsavedSaving: boolean;
+  onCloseAllUnsavedCancel: () => void;
+  onCloseAllUnsavedDiscard: () => void;
+  onCloseAllUnsavedSave: () => void;
+  onCloseAllUnsavedTimeout: () => void;
 }
 
-/** Unlock/close password dialog, workspace setup, and recovery. */
+/** Unlock/close password dialog, close-all unsaved prompt, and recovery. */
 export function VaultLifecycleLayer({
   lifecycleVault,
   lifecycleIntent,
@@ -43,19 +44,15 @@ export function VaultLifecycleLayer({
   recoverySubmitting,
   onRecoveryClose,
   onRecoveryAction,
-  workspaceSetupOpen,
-  workspaceSetupRootPath,
-  onWorkspaceSetupCancel,
-  onWorkspaceSetupConfigured,
+  closeAllUnsavedOpen,
+  closeAllUnsavedSaving,
+  onCloseAllUnsavedCancel,
+  onCloseAllUnsavedDiscard,
+  onCloseAllUnsavedSave,
+  onCloseAllUnsavedTimeout,
 }: VaultLifecycleLayerProps) {
   return (
     <>
-      <WorkspaceSetupModal
-        open={workspaceSetupOpen}
-        vaultRootPath={workspaceSetupRootPath}
-        onCancel={onWorkspaceSetupCancel}
-        onConfigured={onWorkspaceSetupConfigured}
-      />
       <VaultLifecycleModal
         vault={lifecycleVault}
         intent={lifecycleIntent}
@@ -67,6 +64,14 @@ export function VaultLifecycleLayer({
         initialPassword={lifecycleFieldPassword}
         onClose={onLifecycleClose}
         onConfirm={onLifecycleConfirm}
+      />
+      <CloseAllUnsavedModal
+        open={closeAllUnsavedOpen}
+        saving={closeAllUnsavedSaving}
+        onCancel={onCloseAllUnsavedCancel}
+        onDiscard={onCloseAllUnsavedDiscard}
+        onSave={onCloseAllUnsavedSave}
+        onSaveTimeout={onCloseAllUnsavedTimeout}
       />
       <VaultRecoveryModal
         vault={recoveryVault}

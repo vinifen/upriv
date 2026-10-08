@@ -13,12 +13,13 @@ import {
 import { useVaultRootService } from "@/platform/services";
 import { useAppSettingsContext } from "./AppSettingsContext";
 import { useTranslation } from "@/i18n";
+import { alertIfPrivateRootLeftBehind, releaseIfDocumentsRoot } from "./dataFolderGrant";
 import { mobileErrorI18nKey } from "@/lib/errorMessages";
 import { useTheme } from "@/theme";
-import { radii, spacing } from "@/theme/tokens";
+import { spacing } from "@/theme/tokens";
+import { PathField } from "@/components/PathField";
 import { Button, Modal, Select, type SelectOption } from "@/components/ui";
-import { PolicyRadioOption, ThemedInput } from "@/components/settings";
-import { isAndroidSafUri } from "@/platform/native/pickVaultRootFolder";
+import { PolicyRadioOption } from "@/components/settings";
 import { VaultRootIncompleteReplacePanel } from "./VaultRootIncompleteReplacePanel";
 import { VaultRootConfirmFooter } from "./VaultRootConfirmFooter";
 
@@ -204,6 +205,11 @@ export function VaultRootRepairModal({
             bootstrap: { locale: settings.ui.locale },
           });
           rootPath = result.rootPath;
+          alertIfPrivateRootLeftBehind(
+            result.privateRoot,
+            t("modal.vault_root_setup.title"),
+            t("modal.vault_root_setup.private_root_left_behind"),
+          );
         }
         if (gen !== busyGen.current) return;
         diskApplied.current = {
@@ -241,6 +247,10 @@ export function VaultRootRepairModal({
         t("modal.vault_root_setup.pick_folder_title"),
       );
       if (!picked?.trim()) return;
+      if (releaseIfDocumentsRoot(picked)) {
+        setError(t("modal.vault_root_setup.documents_grant_rejected"));
+        return;
+      }
       setOtherReplacePolicy(null);
       setOtherPath(picked.trim());
     })()
@@ -276,12 +286,17 @@ export function VaultRootRepairModal({
         return;
       }
 
-      const { rootPath } = await vaultRoot.setupAtPath(path, {
+      const { rootPath, privateRoot } = await vaultRoot.setupAtPath(path, {
         replaceIncomplete: otherReplacePolicy != null,
         replacePolicy: otherReplacePolicy ?? undefined,
         bootstrap: { locale: settings.ui.locale },
       });
       if (gen !== busyGen.current) return;
+      alertIfPrivateRootLeftBehind(
+        privateRoot,
+        t("modal.vault_root_setup.title"),
+        t("modal.vault_root_setup.private_root_left_behind"),
+      );
       diskApplied.current = {
         rootPath,
         source: "other",
@@ -328,8 +343,6 @@ export function VaultRootRepairModal({
     policy === "choose_other"
       ? otherGate.confirmNotes
       : confirmNotesForReplacePolicy(policy === "delete" || policy === "rename" ? policy : null);
-
-  const otherPathIsSaf = isAndroidSafUri(otherPath);
 
   const localeOptions: SelectOption<LocaleId>[] = SUPPORTED_LOCALES.map((loc) => ({
     value: loc as LocaleId,
@@ -391,16 +404,7 @@ export function VaultRootRepairModal({
               : "modal.vault_root_repair.body",
           )}
         </Text>
-        <Text
-          style={[
-            typography.mono,
-            styles.pathBox,
-            { backgroundColor: colors.surfaceContainerHighest, color: colors.onSurface },
-          ]}
-          selectable
-        >
-          {targetPath}
-        </Text>
+        <PathField value={targetPath} editable={false} />
 
         <View
           style={styles.options}
@@ -441,11 +445,10 @@ export function VaultRootRepairModal({
             }}
             footer={
               <View style={styles.chooseOtherCol}>
-                <ThemedInput
+                <PathField
                   value={otherPath}
                   editable={false}
                   placeholder={t("modal.vault_root_setup.path_placeholder")}
-                  mono
                 />
                 <Button
                   size="sm"
@@ -456,9 +459,6 @@ export function VaultRootRepairModal({
                 />
                 {policy === "choose_other" && Platform.OS !== "android" ? (
                   <Text style={typography.caption}>{t("error.unsupported_platform")}</Text>
-                ) : null}
-                {policy === "choose_other" && otherPathIsSaf ? (
-                  <Text style={typography.caption}>{t("modal.vault_root_setup.saf_notice")}</Text>
                 ) : null}
                 {policy === "choose_other" && otherDisk === "checking" ? (
                   <Text style={typography.caption}>
@@ -511,11 +511,6 @@ export function VaultRootRepairModal({
 
 const styles = StyleSheet.create({
   body: { gap: spacing.md },
-  pathBox: {
-    borderRadius: radii.sm,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-  },
   options: { gap: spacing.sm },
   chooseOtherCol: { gap: spacing.sm },
   localeSelect: { flexShrink: 0, maxWidth: 256 },

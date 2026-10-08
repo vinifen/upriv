@@ -13,6 +13,24 @@ describe("parseVaultRootResolve", () => {
     ).toEqual({ status: "found", rootPath: "/data", source: "default_root" });
   });
 
+  it("parses a relocate notice", () => {
+    expect(
+      parseVaultRootResolve({
+        status: "found",
+        rootPath: "/data",
+        source: "default_root",
+        relocateNotice: "left_behind",
+        relocatePath: "C:/Program",
+      }),
+    ).toEqual({
+      status: "found",
+      rootPath: "/data",
+      source: "default_root",
+      relocateNotice: "left_behind",
+      relocatePath: "C:/Program",
+    });
+  });
+
   it("rejects an unknown status", () => {
     expect(() => parseVaultRootResolve({ status: "nope" })).toThrow(RpcError);
   });

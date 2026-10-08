@@ -57,7 +57,6 @@ function dedupePaths(paths: string[]): string[] {
 /**
  * Parse raw JSON text. Corrupt / unknown versions → null (caller starts clean).
  * Does **not** check that paths exist — use `sanitizeWorkspaceSnapshot` for that.
- * Legacy `treeSplitPercent` in older files is ignored (split lives in app settings).
  */
 export function parseWorkspaceSnapshot(raw: string): WorkspaceSnapshot | null {
   let parsed: unknown;

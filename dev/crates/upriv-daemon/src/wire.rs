@@ -62,13 +62,12 @@ pub fn is_lifecycle_io_method(method: &str) -> bool {
     )
 }
 
-/// Vault-file import, portable export, and in-app file import.
-/// Separate from close: those jobs must not share one queue.
+/// Zip and `.7z` import, and portable export.
+/// File imports use [`is_import_io_method`] so they can run beside each other.
 pub fn is_pack_io_method(method: &str) -> bool {
     matches!(
         method,
-        "vault_fs_import_os_file"
-            | "vault_import_zip"
+        "vault_import_zip"
             | "vault_import_7z"
             | "vault_import_files_zip"
             | "vault_import_os_path"
@@ -76,17 +75,25 @@ pub fn is_pack_io_method(method: &str) -> bool {
     )
 }
 
+/// One vault file copied in from the operating system.
+pub fn is_import_io_method(method: &str) -> bool {
+    matches!(method, "vault_fs_import_os_file" | "vault_fs_import_seal")
+}
+
 /// Long contents I/O that would stall stdin if run inline.
 pub fn is_long_io_method(method: &str, _params: &Value) -> bool {
-    is_lifecycle_io_method(method) || is_pack_io_method(method)
+    is_lifecycle_io_method(method) || is_pack_io_method(method) || is_import_io_method(method)
 }
 
 /// Which off-stdin worker runs this method.
+///
+/// Android `CoreLanes` in `UprivCoreModule.kt` uses these same method names.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HeavyLane {
     Argon2,
     Lifecycle,
     Pack,
+    Import,
 }
 
 pub fn heavy_lane(method: &str, params: &Value) -> Option<HeavyLane> {
@@ -95,6 +102,9 @@ pub fn heavy_lane(method: &str, params: &Value) -> Option<HeavyLane> {
     }
     if is_lifecycle_io_method(method) {
         return Some(HeavyLane::Lifecycle);
+    }
+    if is_import_io_method(method) {
+        return Some(HeavyLane::Import);
     }
     if is_pack_io_method(method) {
         return Some(HeavyLane::Pack);
@@ -143,8 +153,11 @@ mod tests {
         assert!(!is_argon2_bound_method("app_settings_save", &empty));
         assert!(!is_argon2_bound_method("vault_list", &empty));
         assert!(!is_heavy_method("vault_store_size", &empty));
+        assert!(!is_heavy_method("vault_close_phase", &empty));
         assert!(!is_argon2_bound_method("app_shutdown", &empty));
         assert!(!is_argon2_bound_method("vault_fs_import_os_file", &empty));
+        assert!(is_import_io_method("vault_fs_import_os_file"));
+        assert!(!is_pack_io_method("vault_fs_import_os_file"));
         assert!(is_long_io_method("vault_fs_import_os_file", &empty));
         assert!(is_long_io_method("vault_import_zip", &empty));
         assert!(is_long_io_method("vault_import_7z", &empty));
@@ -156,6 +169,10 @@ mod tests {
             Some(HeavyLane::Lifecycle)
         );
         assert_eq!(heavy_lane("vault_import_7z", &empty), Some(HeavyLane::Pack));
+        assert_eq!(
+            heavy_lane("vault_fs_import_os_file", &empty),
+            Some(HeavyLane::Import)
+        );
         assert_eq!(
             heavy_lane("vault_import_files_zip", &empty),
             Some(HeavyLane::Pack)
@@ -190,6 +207,56 @@ mod tests {
             assert!(is_long_io_method("vault_export", params));
             assert!(is_heavy_method("vault_export", params));
             assert_eq!(heavy_lane("vault_export", params), Some(HeavyLane::Pack));
+        }
+    }
+
+    #[test]
+    fn android_core_lanes_list_the_same_methods() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(
+            "../../apps/mobile/modules/upriv-core/android/src/main/java/expo/modules/uprivcore/UprivCoreModule.kt",
+        );
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+        let body = text
+            .split_once("fun dispatcher")
+            .expect("CoreLanes dispatcher")
+            .1
+            .split_once("else ->")
+            .expect("dispatcher else")
+            .0;
+        let mut found = std::collections::BTreeSet::new();
+        let mut parts = body.split('"');
+        let _ = parts.next();
+        while let Some(method) = parts.next() {
+            if !method.is_empty() {
+                found.insert(method.to_string());
+            }
+            let _ = parts.next();
+        }
+        let expected = [
+            "backup_get",
+            "vault_close",
+            "vault_create",
+            "vault_delete",
+            "vault_discard_import",
+            "vault_export",
+            "vault_export_probe",
+            "vault_fs_import_os_file",
+            "vault_fs_import_seal",
+            "vault_import_7z",
+            "vault_import_files_zip",
+            "vault_import_os_path",
+            "vault_import_zip",
+            "vault_ingest_open",
+            "vault_open",
+        ];
+        let expected: std::collections::BTreeSet<_> = expected
+            .iter()
+            .map(|method| (*method).to_string())
+            .collect();
+        assert_eq!(found, expected);
+        for method in &expected {
+            assert!(is_heavy_method(method, &Value::Null), "{method}");
         }
     }
 }

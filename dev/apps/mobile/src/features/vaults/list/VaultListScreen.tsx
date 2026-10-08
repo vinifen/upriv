@@ -35,6 +35,7 @@ import {
   reorderGroupedVaults,
   reorderRootRows,
   resolveListDrop,
+  resolveVaultDisplayStatus,
   validateDisplayName,
   VAULT_DISPLAY_NAME_MAX_LENGTH,
   GROUPED_VAULT_SORT_MODES,
@@ -72,9 +73,9 @@ import { VaultGroupsModal } from "@/features/vaults/list/VaultGroupsModal";
 import { VaultNoteModal } from "@/features/vaults/list/VaultNoteModal";
 import { GroupedVaultPicker } from "@/features/vaults/list/GroupedVaultPicker";
 import {
+  CloseAllUnsavedModal,
   VaultLifecycleModal,
   VaultRecoveryModal,
-  WorkspaceSetupModal,
 } from "@/features/vaults/lifecycle";
 import { VaultSettingsModal } from "@/features/vaults/settings/VaultSettingsModal";
 import { VaultBackupsModal } from "@/features/vaults/backups/VaultBackupsModal";
@@ -99,6 +100,7 @@ import {
   PolicyRadioOption,
   SettingsAccordionSection,
   SwitchRow,
+  IntegerInput,
   ThemedInput,
   DisplayNameFieldError,
 } from "@/components/settings";
@@ -173,7 +175,7 @@ export function VaultListScreen() {
     patchSettings,
     show,
     dismiss,
-    message,
+    toast,
     openFromVault,
     setMeasuredHeaderHeight,
     listSearch,
@@ -1145,6 +1147,14 @@ export function VaultListScreen() {
                   />
                 }
               >
+                {vaults.filter((vault) => resolveVaultDisplayStatus(vault) === "open").length >
+                1 ? (
+                  <MenuActionItem
+                    icon="lock"
+                    label={t("app.menu.close_all_vaults")}
+                    onPress={() => lifecycle.closeAllOpenVaults()}
+                  />
+                ) : null}
                 <MenuActionItem
                   icon="refresh"
                   label={t("action.refresh")}
@@ -1251,11 +1261,13 @@ export function VaultListScreen() {
         onNoteChange={handleNoteChange}
       />
 
-      <WorkspaceSetupModal
-        open={lifecycle.workspaceSetupOpen}
-        vaultRootPath={lifecycle.workspaceSetupRootPath}
-        onCancel={lifecycle.handleWorkspaceSetupCancel}
-        onConfigured={lifecycle.handleWorkspaceSetupConfigured}
+      <CloseAllUnsavedModal
+        open={lifecycle.closeAllUnsavedOpen}
+        saving={lifecycle.closeAllUnsavedSaving}
+        onCancel={lifecycle.cancelCloseAllUnsaved}
+        onDiscard={lifecycle.confirmCloseAllDiscard}
+        onSave={lifecycle.confirmCloseAllSave}
+        onSaveTimeout={lifecycle.timeoutCloseAllSave}
       />
 
       <VaultLifecycleModal
@@ -1399,14 +1411,13 @@ export function VaultListScreen() {
             ) : null}
             <FieldLabel>{t("vault.group.settings.order")}</FieldLabel>
             <FieldHint>{t("vault.group.settings.order_help")}</FieldHint>
-            <ThemedInput
-              value={String(groupDraftOrder)}
-              keyboardType="number-pad"
-              onChangeText={(raw) => {
-                setGroupDraftOrder(Math.max(0, Number.parseInt(raw, 10) || 0));
+            <IntegerInput
+              min={0}
+              value={groupDraftOrder}
+              onChange={(order) => {
+                setGroupDraftOrder(order);
                 setGroupFormError(null);
               }}
-              mono
               style={styles.groupInput}
             />
             <FieldLabel>{t("vault.list.sort.by_label")}</FieldLabel>
@@ -1543,7 +1554,10 @@ export function VaultListScreen() {
         onDownloadNotice={show}
       />
 
-      <FileManagerLayer pipelineListStatus={pipelineStatus} />
+      <FileManagerLayer
+        pipelineListStatus={pipelineStatus}
+        onCloseVault={lifecycle.closeVaultAfterUnsaved}
+      />
 
       <AppSettingsModal
         open={settingsOpen}
@@ -1593,7 +1607,7 @@ export function VaultListScreen() {
         onCreate={handleCreateVault}
       />
 
-      <Toast message={message} onDismiss={dismiss} />
+      <Toast toast={toast} onDismiss={dismiss} />
 
       {draggingId && dragPointer ? (
         <View pointerEvents="none" style={styles.dragOverlay}>

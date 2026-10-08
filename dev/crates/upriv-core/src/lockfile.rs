@@ -1,6 +1,8 @@
 //! Exclusive `runtime/<id>.lock` for one open vault (RF-54).
 
-use std::fs::{self, File, OpenOptions};
+#[allow(unused_imports)]
+use crate::host_fs::HostFsQuery;
+use crate::host_fs::{self as fs, File, OpenOptions};
 use std::io::{Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
@@ -184,6 +186,12 @@ fn try_exclusive_lock(file: &File) -> Result<bool> {
         {
             return Ok(false);
         }
+        // Shared storage (Android storage-access) has no kernel file lock.
+        // The lock body still records the holder; a missing flock is not a
+        // live holder.
+        if crate::host_fs::unsupported_fs_op(&err) {
+            return Ok(true);
+        }
         Err(err.into())
     }
     #[cfg(windows)]
@@ -326,7 +334,7 @@ fn identity_of_file(file: &File) -> Result<FileIdentity> {
 
 #[cfg(not(any(unix, windows)))]
 fn identity_of_path(path: &Path) -> std::io::Result<FileIdentity> {
-    if path.is_file() {
+    if path.host_is_file() {
         Ok(FileIdentity { dev: 0, ino: 0 })
     } else {
         Err(std::io::Error::new(
@@ -351,6 +359,8 @@ pub fn lock_held_by_live_process(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[allow(unused_imports)]
+    use crate::host_fs::HostFsQuery;
 
     #[test]
     fn acquire_and_drop_releases() {
@@ -358,11 +368,11 @@ mod tests {
         let path = tmp.path().join("notes.lock");
         {
             let _lock = acquire_vault_lock(path.clone()).unwrap();
-            assert!(path.is_file());
+            assert!(path.host_is_file());
             let err = acquire_vault_lock(path.clone()).unwrap_err();
             assert!(matches!(err, UprivError::VaultLocked(_)));
         }
-        assert!(!path.exists());
+        assert!(!path.host_exists());
         acquire_vault_lock(path).unwrap();
     }
 
@@ -375,7 +385,7 @@ mod tests {
             hostname: "other-machine.example".into(),
             started_at: utc_timestamp_iso_millis(),
         };
-        std::fs::write(&path, serde_json::to_vec_pretty(&body).unwrap()).unwrap();
+        crate::host_fs::write(&path, serde_json::to_vec_pretty(&body).unwrap()).unwrap();
         assert!(!lock_held_by_live_process(&path));
         let _lock = acquire_vault_lock(path.clone()).unwrap();
         assert!(lock_held_by_live_process(&path));
@@ -390,8 +400,8 @@ mod tests {
             hostname: hostname().unwrap(),
             started_at: utc_timestamp_iso_millis(),
         };
-        std::fs::write(&path, serde_json::to_vec_pretty(&body).unwrap()).unwrap();
+        crate::host_fs::write(&path, serde_json::to_vec_pretty(&body).unwrap()).unwrap();
         let _lock = acquire_vault_lock(path.clone()).unwrap();
-        assert!(path.is_file());
+        assert!(path.host_is_file());
     }
 }

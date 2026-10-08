@@ -1,5 +1,6 @@
 import { RpcError } from "../../domain/core-rpc/errors";
 import type { VaultSettingsConfig } from "../../domain/vault-settings";
+import { forgetVaultSettings, rememberVaultSettings } from "./vaultSettingsMemory";
 import type { CreateVaultInput, VaultRenameResult, VaultService } from "./VaultService";
 import type { VaultExportRequest, VaultListItem } from "../../domain/vault-list";
 import type { VaultRow } from "../../domain/vault";
@@ -65,7 +66,11 @@ export function createLiveVaultService(rpc: LiveVaultRpc): VaultService {
       }
       return rpc.createVault(input);
     },
-    getSettings: (vaultId) => rpc.getSettings(vaultId),
+    async getSettings(vaultId) {
+      const settings = await rpc.getSettings(vaultId);
+      if (settings) rememberVaultSettings(vaultId, settings);
+      return settings;
+    },
     storeOnDiskBytes: (vaultId) =>
       rpc.storeOnDiskBytes ? rpc.storeOnDiskBytes(vaultId) : Promise.resolve(null),
 
@@ -74,13 +79,16 @@ export function createLiveVaultService(rpc: LiveVaultRpc): VaultService {
         notImplemented("Vault settings save");
       }
       await rpc.saveSettings(vaultId, config);
+      rememberVaultSettings(vaultId, config);
     },
 
     async rename(vaultId, displayName) {
       if (!rpc.rename) {
         notImplemented("Vault rename");
       }
-      return rpc.rename(vaultId, displayName);
+      const result = await rpc.rename(vaultId, displayName);
+      if (result.idChanged) forgetVaultSettings(vaultId);
+      return result;
     },
 
     async unregisterSettings(vaultId) {
@@ -88,6 +96,7 @@ export function createLiveVaultService(rpc: LiveVaultRpc): VaultService {
         notImplemented("Vault delete");
       }
       await rpc.deleteVault(vaultId);
+      forgetVaultSettings(vaultId);
     },
 
     async recoverDirtyClose(vaultId) {

@@ -2,6 +2,8 @@
 //! Empty vault = no files. The primary file is the commit; the copy is written
 //! first so a crash still leaves the previous primary in place.
 
+#[allow(unused_imports)]
+use crate::host_fs::HostFsQuery;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -198,7 +200,7 @@ pub fn save_sealed_index(
     let store_dir = store_dir.as_ref();
     let path = index_path(store_dir);
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+        crate::host_fs::create_dir_all(parent)?;
     }
     let aad = index_aad(header)?;
     let plain = encode_index(index)?;
@@ -217,8 +219,8 @@ pub fn load_sealed_index(
     let store_dir = store_dir.as_ref();
     let primary_path = index_path(store_dir);
     let copy_path = index_copy_path(store_dir);
-    let primary_raw = std::fs::read(&primary_path).ok();
-    let copy_raw = std::fs::read(&copy_path).ok();
+    let primary_raw = crate::host_fs::read(&primary_path).ok();
+    let copy_raw = crate::host_fs::read(&copy_path).ok();
     let aad = index_aad(header)?;
     if let Some(raw) = primary_raw.as_deref() {
         if let Ok(index) = unseal_index(&primary_path, index_key, raw, &aad) {
@@ -275,6 +277,8 @@ fn log_index_restored(store_dir: &Path, file_name: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[allow(unused_imports)]
+    use crate::host_fs::HostFsQuery;
 
     #[test]
     fn file_node_without_chunk_offsets_does_not_decode() {
@@ -308,20 +312,20 @@ mod tests {
         .unwrap();
         let primary = index_path(&dir);
         let copy = index_copy_path(&dir);
-        let original = std::fs::read(&primary).unwrap();
-        assert_eq!(std::fs::read(&copy).unwrap(), original);
+        let original = crate::host_fs::read(&primary).unwrap();
+        assert_eq!(crate::host_fs::read(&copy).unwrap(), original);
 
-        std::fs::write(&primary, b"torn").unwrap();
+        crate::host_fs::write(&primary, b"torn").unwrap();
         super::super::open_store(&dir, b"index-copy-ok").unwrap();
-        assert_eq!(std::fs::read(&primary).unwrap(), original);
-        assert_eq!(std::fs::read(&copy).unwrap(), original);
+        assert_eq!(crate::host_fs::read(&primary).unwrap(), original);
+        assert_eq!(crate::host_fs::read(&copy).unwrap(), original);
 
-        std::fs::remove_file(&primary).unwrap();
+        crate::host_fs::remove_file(&primary).unwrap();
         super::super::open_store(&dir, b"index-copy-ok").unwrap();
-        assert_eq!(std::fs::read(&primary).unwrap(), original);
+        assert_eq!(crate::host_fs::read(&primary).unwrap(), original);
 
-        std::fs::write(&primary, b"torn").unwrap();
-        std::fs::write(&copy, b"torn").unwrap();
+        crate::host_fs::write(&primary, b"torn").unwrap();
+        crate::host_fs::write(&copy, b"torn").unwrap();
         assert!(super::super::open_store(&dir, b"index-copy-ok").is_err());
     }
 
@@ -337,12 +341,12 @@ mod tests {
         .unwrap();
         let primary = index_path(&dir);
         let copy = index_copy_path(&dir);
-        std::fs::remove_file(&copy).unwrap();
-        std::fs::write(&primary, b"torn").unwrap();
+        crate::host_fs::remove_file(&copy).unwrap();
+        crate::host_fs::write(&primary, b"torn").unwrap();
 
         let err = super::super::open_store(&dir, b"index-copy-ok");
         assert!(matches!(err, Err(UprivError::VaultStoreInvalid { .. })));
-        assert_eq!(std::fs::read(&primary).unwrap(), b"torn");
-        assert!(!copy.exists());
+        assert_eq!(crate::host_fs::read(&primary).unwrap(), b"torn");
+        assert!(!copy.host_exists());
     }
 }

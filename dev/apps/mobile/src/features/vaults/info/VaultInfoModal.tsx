@@ -1,8 +1,8 @@
 import { useMemo } from "react";
-import { StyleSheet, Text, View } from "react-native";
+import { Platform, StyleSheet, Text, View } from "react-native";
 import { SettingsAccordionSection } from "@/components/settings";
 import { InfoFieldList } from "@/features/system/info/InfoFieldList";
-import { Button, Modal } from "@/components/ui";
+import { Button, ContentSkeleton, Modal } from "@/components/ui";
 import { useAppSettingsContext } from "@/features/system/settings";
 import { useTranslation } from "@/i18n";
 import {
@@ -53,8 +53,9 @@ export function VaultInfoModal({
     lifecycleService,
     vaultRootService,
     vaultRootMode: settings.app.vault_root_mode,
-    workspaceGlobalPath: settings.workspace.path,
+    workspace: settings.workspace,
     fallbackVaultRootBase: "",
+    host: Platform.OS,
   });
 
   useVaultRootIntegrityClose(open, loadFailure, reportVaultRootIntegrityFailure, onClose);
@@ -109,9 +110,7 @@ export function VaultInfoModal({
           />
         </View>
       ) : (
-        <Text style={[typography.bodyMuted, { color: colors.onSurfaceVariant }]}>
-          {t("modal.info.loading")}
-        </Text>
+        <ContentSkeleton label={t("modal.info.loading")} />
       )}
     </Modal>
   );

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { StyleSheet, Text, View } from "react-native";
+import { Platform, StyleSheet, Text, View } from "react-native";
 import {
   SUPPORTED_LOCALES,
   VAULT_ROOT_ALIAS_FILE,
@@ -20,6 +20,7 @@ import { mobileErrorI18nKey } from "@/lib/errorMessages";
 import { useTheme } from "@/theme";
 import { spacing } from "@/theme/tokens";
 import { Modal, Select, type SelectOption } from "@/components/ui";
+import { alertIfPrivateRootLeftBehind, pickDocumentsUprivFolder } from "./dataFolderGrant";
 import { VaultRootLocationSection } from "./VaultRootLocationSection";
 import { VaultRootConfirmFooter } from "./VaultRootConfirmFooter";
 
@@ -145,6 +146,32 @@ export function VaultRootSetupScreen({
       setBusy(true);
       setError(null);
       void (async () => {
+        if (Platform.OS === "android") {
+          const suggested = await vaultRoot.suggestedCustomRootPath().catch(() => "");
+          const picked = await pickDocumentsUprivFolder(
+            (initial, title) => vaultRoot.pickFolder(initial, title),
+            suggested || null,
+            t("modal.vault_root_setup.pick_folder_title"),
+          );
+          if (gen !== busyGen.current) return;
+          if (picked.status === "cancelled") {
+            setConfirmOpen(false);
+            return;
+          }
+          const { rootPath, privateRoot } = await vaultRoot.setupAtPath(picked.uri, {
+            replaceIncomplete: current.replacePolicy != null,
+            replacePolicy: current.replacePolicy,
+            bootstrap: { locale: settings.ui.locale },
+          });
+          if (gen !== busyGen.current) return;
+          alertIfPrivateRootLeftBehind(
+            privateRoot,
+            t("modal.vault_root_setup.title"),
+            t("modal.vault_root_setup.private_root_left_behind"),
+          );
+          await finish(rootPath, "custom_root", gen);
+          return;
+        }
         if (diskApplied.current?.mode === "default_root") {
           if (gen !== busyGen.current) return;
           await finish(diskApplied.current.rootPath, "default_root", gen);
@@ -200,12 +227,17 @@ export function VaultRootSetupScreen({
       if (applied && !sameVaultRootPath(applied.rootPath, nextPath)) {
         diskApplied.current = null;
       }
-      const { rootPath } = await vaultRoot.setupAtPath(nextPath, {
+      const { rootPath, privateRoot } = await vaultRoot.setupAtPath(nextPath, {
         replaceIncomplete: current.replacePolicy != null,
         replacePolicy: current.replacePolicy,
         bootstrap: { locale: settings.ui.locale },
       });
       if (gen !== busyGen.current) return;
+      alertIfPrivateRootLeftBehind(
+        privateRoot,
+        t("modal.vault_root_setup.title"),
+        t("modal.vault_root_setup.private_root_left_behind"),
+      );
       await finish(rootPath, "custom_root", gen);
     })()
       .catch((caught) => {

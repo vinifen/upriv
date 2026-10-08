@@ -12,6 +12,15 @@
 @tailwind components;
 @tailwind utilities;
 
+@keyframes toast-progress {
+  from {
+    transform: scaleX(1);
+  }
+  to {
+    transform: scaleX(0);
+  }
+}
+
 @layer base {
   html {
     @apply antialiased;
@@ -73,6 +82,14 @@
 @layer utilities {
   .shadow-modal {
     box-shadow: var(--modal-shadow);
+  }
+
+  /** Toast time left: shrinks toward the left edge over `animation-duration`. */
+  .toast-progress {
+    transform-origin: left center;
+    animation-name: toast-progress;
+    animation-timing-function: linear;
+    animation-fill-mode: forwards;
   }
 
   /** Inset accent ring for dock chips — 1px to match FM `ring-1` selection. */

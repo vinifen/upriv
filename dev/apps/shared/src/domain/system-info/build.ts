@@ -1,6 +1,12 @@
 import type { I18nKey } from "../../i18n/catalog";
+import {
+  appWorkspacePlace,
+  suggestedDefaultWorkspacePath,
+  workspaceContainerPath,
+  workspaceSystemHasShortcut,
+} from "../workspace";
 import type { AppDistribution } from "../vault-root";
-import type { InfoSection, InfoTranslate } from "../info";
+import { withOpenPath, type InfoSection, type InfoTranslate } from "../info";
 import type { SystemInfoSnapshot } from "./types";
 
 const DISTRIBUTION_KEYS: Record<AppDistribution, I18nKey> = {
@@ -61,12 +67,37 @@ function emptyDash(value: string | undefined | null): string {
   return trimmed ? trimmed : "—";
 }
 
+/** Path Info shows for this system's workspace place. Unset has no path. */
+function workspaceInfoPath(
+  row: SystemInfoSnapshot["workspace"][SystemInfoSnapshot["workspaceSystem"]],
+  root: SystemInfoSnapshot["root"],
+): string {
+  const place = appWorkspacePlace(row);
+  if (place === "custom") return workspaceContainerPath(row.path);
+  if (place === "beside" && root.status === "found") {
+    return suggestedDefaultWorkspacePath(root.rootPath);
+  }
+  return "";
+}
+
 export function buildSystemInfoSections(
   snapshot: SystemInfoSnapshot,
   t: InfoTranslate,
 ): InfoSection[] {
-  const { app, root, rootMode, inventory, ui, logging, workspace, lastOpenedVault, paths } =
-    snapshot;
+  const {
+    app,
+    root,
+    rootMode,
+    inventory,
+    ui,
+    logging,
+    workspace,
+    workspaceSystem,
+    lastOpenedVault,
+    paths,
+  } = snapshot;
+  const workspaceRow = workspace[workspaceSystem];
+  const workspacePath = workspaceInfoPath(workspaceRow, root);
 
   const distribution = app.distribution != null ? t(DISTRIBUTION_KEYS[app.distribution]) : "—";
 
@@ -78,7 +109,10 @@ export function buildSystemInfoSections(
             label: t("modal.info.field.root_status"),
             value: t("modal.info.value.root_status.found"),
           },
-          { id: "root_path", label: t("modal.info.field.root_path"), value: root.rootPath },
+          withOpenPath(
+            { id: "root_path", label: t("modal.info.field.root_path"), value: root.rootPath },
+            root.rootPath,
+          ),
           {
             id: "root_source",
             label: t("modal.info.field.root_source"),
@@ -91,12 +125,18 @@ export function buildSystemInfoSections(
             label: t("modal.info.field.root_status"),
             value: t("modal.info.value.root_status.needs_setup"),
           },
-          {
-            id: "default_root_anchor",
-            label: t("modal.info.field.default_root_anchor"),
-            value: root.defaultRootAnchor,
-          },
-          { id: "alias_path", label: t("modal.info.field.alias_path"), value: root.aliasPath },
+          withOpenPath(
+            {
+              id: "default_root_anchor",
+              label: t("modal.info.field.default_root_anchor"),
+              value: root.defaultRootAnchor,
+            },
+            root.defaultRootAnchor,
+          ),
+          withOpenPath(
+            { id: "alias_path", label: t("modal.info.field.alias_path"), value: root.aliasPath },
+            root.aliasPath,
+          ),
           {
             id: "distribution",
             label: t("modal.info.field.distribution"),
@@ -284,11 +324,23 @@ export function buildSystemInfoSections(
       id: "workspace",
       title: t("modal.info.section.workspace"),
       fields: [
-        {
-          id: "workspace_global_path",
-          label: t("modal.info.field.workspace_global_path"),
-          value: emptyDash(workspace.path),
-        },
+        withOpenPath(
+          {
+            id: "workspace_global_path",
+            label: t("modal.info.field.workspace_global_path"),
+            value: emptyDash(workspacePath),
+          },
+          workspacePath,
+        ),
+        ...(workspaceSystemHasShortcut(workspaceSystem)
+          ? [
+              {
+                id: "workspace_mount",
+                label: t("modal.info.field.workspace_mount"),
+                value: yesNo(t, workspace.file_manager_folder),
+              },
+            ]
+          : []),
         {
           id: "last_opened_vault",
           label: t("modal.app_settings.field.last_opened_vault"),
@@ -300,8 +352,14 @@ export function buildSystemInfoSections(
       id: "paths",
       title: t("modal.info.section.paths"),
       fields: [
-        { id: "app_home", label: t("modal.info.field.app_home"), value: paths.appHome },
-        { id: "logs_path", label: t("modal.info.field.logs_path"), value: paths.logsDir },
+        withOpenPath(
+          { id: "app_home", label: t("modal.info.field.app_home"), value: paths.appHome },
+          paths.appHome,
+        ),
+        withOpenPath(
+          { id: "logs_path", label: t("modal.info.field.logs_path"), value: paths.logsDir },
+          paths.logsDir,
+        ),
       ],
     },
   ];

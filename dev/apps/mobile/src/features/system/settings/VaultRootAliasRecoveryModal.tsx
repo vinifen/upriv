@@ -16,11 +16,16 @@ import { useVaultRootService } from "@/platform/services";
 import { useAppSettingsContext } from "./AppSettingsContext";
 import { useTranslation } from "@/i18n";
 import { mobileErrorI18nKey } from "@/lib/errorMessages";
+import {
+  alertIfPrivateRootLeftBehind,
+  pickDocumentsUprivFolder,
+  releaseIfDocumentsRoot,
+} from "./dataFolderGrant";
 import { useTheme } from "@/theme";
-import { radii, spacing } from "@/theme/tokens";
+import { spacing } from "@/theme/tokens";
+import { PathField } from "@/components/PathField";
 import { Button, Modal, Select, type SelectOption } from "@/components/ui";
-import { PolicyRadioOption, ThemedInput } from "@/components/settings";
-import { isAndroidSafUri } from "@/platform/native/pickVaultRootFolder";
+import { PolicyRadioOption } from "@/components/settings";
 import { VaultRootConfirmFooter } from "./VaultRootConfirmFooter";
 
 interface VaultRootAliasRecoveryModalProps {
@@ -163,7 +168,12 @@ export function VaultRootAliasRecoveryModal({
         suggested || null,
         t("modal.vault_root_setup.pick_folder_title"),
       );
-      if (picked) setPathInput(picked);
+      if (!picked?.trim()) return;
+      if (releaseIfDocumentsRoot(picked)) {
+        setError(t("modal.vault_root_setup.documents_grant_rejected"));
+        return;
+      }
+      setPathInput(picked.trim());
     })()
       .catch((caught) => {
         setError(t(mobileErrorI18nKey(caught, "modal.vault_root_setup.error_pick")));
@@ -179,6 +189,38 @@ export function VaultRootAliasRecoveryModal({
     setError(null);
     void (async () => {
       if (mode === "default_root") {
+        if (Platform.OS === "android") {
+          const suggested = await vaultRoot.suggestedCustomRootPath().catch(() => "");
+          const picked = await pickDocumentsUprivFolder(
+            (initial, title) => vaultRoot.pickFolder(initial, title),
+            suggested || null,
+            t("modal.vault_root_setup.pick_folder_title"),
+          );
+          if (gen !== busyGen.current) return;
+          if (picked.status === "cancelled") return;
+          const { rootPath, privateRoot } = await vaultRoot.setupAtPath(picked.uri, {
+            bootstrap: { locale: settings.ui.locale },
+          });
+          if (gen !== busyGen.current) return;
+          alertIfPrivateRootLeftBehind(
+            privateRoot,
+            t("modal.vault_root_setup.title"),
+            t("modal.vault_root_setup.private_root_left_behind"),
+          );
+          const savedGrant = await patchSettings(
+            {
+              app: {
+                vault_root_mode: "custom_root",
+                upriv_root_path: rootPath,
+              },
+            },
+            { vaultRootAlreadyApplied: true },
+          );
+          if (gen !== busyGen.current) return;
+          if (!savedGrant) throw new Error("settings_save_failed");
+          onRecovered();
+          return;
+        }
         if (!diskApplied.current || diskApplied.current.mode !== "default_root") {
           const defaultRoot = await vaultRoot.defaultRootStatus();
           if (gen !== busyGen.current) return;
@@ -250,10 +292,15 @@ export function VaultRootAliasRecoveryModal({
           }
         }
         try {
-          const { rootPath } = await vaultRoot.setupAtPath(path, {
+          const { rootPath, privateRoot } = await vaultRoot.setupAtPath(path, {
             bootstrap: { locale: settings.ui.locale },
           });
           if (gen !== busyGen.current) return;
+          alertIfPrivateRootLeftBehind(
+            privateRoot,
+            t("modal.vault_root_setup.title"),
+            t("modal.vault_root_setup.private_root_left_behind"),
+          );
           diskApplied.current = { rootPath, mode: "custom_root" };
           const saved = await patchSettings(
             {
@@ -317,14 +364,15 @@ export function VaultRootAliasRecoveryModal({
     picking ||
     (mode === "custom_root" && !pathInput.trim()) ||
     (mode === "custom_root" &&
-      (customDisk === "checking" || customDisk === "unreadable" || customDisk === "needs_folder"));
+      (customDisk === "checking" ||
+        customDisk === "unreadable" ||
+        customDisk === "not_vault_capable" ||
+        customDisk === "needs_folder"));
 
   const requestContinue = useCallback(() => {
     if (busy || blocked || confirmOpen) return;
     setConfirmOpen(true);
   }, [blocked, busy, confirmOpen]);
-
-  const pathIsSaf = isAndroidSafUri(pathInput);
 
   const localeOptions: SelectOption<LocaleId>[] = SUPPORTED_LOCALES.map((loc) => ({
     value: loc as LocaleId,
@@ -394,24 +442,24 @@ export function VaultRootAliasRecoveryModal({
             value="default_root"
             checked={mode === "default_root"}
             title={t("modal.app_settings.option.upriv_root.default_root")}
-            description={t("modal.vault_root_setup.recovery_default_root_desc")}
+            description={t(
+              Platform.OS === "android"
+                ? "modal.app_settings.option.upriv_root.default_root_desc_android"
+                : "modal.vault_root_setup.recovery_default_root_desc",
+            )}
             badge="default"
             onSelect={() => {
               setMode("default_root");
               setError(null);
             }}
             footer={
-              defaultRootAnchor ? (
-                <Text
-                  style={[
-                    typography.mono,
-                    styles.pathBox,
-                    { backgroundColor: colors.surfaceContainerHighest, color: colors.onSurface },
-                  ]}
-                  selectable
-                >
-                  {defaultRootAnchor}
-                </Text>
+              Platform.OS === "android" ? (
+                <PathField
+                  value={t("modal.app_settings.option.upriv_root.android_documents_path")}
+                  editable={false}
+                />
+              ) : defaultRootAnchor ? (
+                <PathField value={defaultRootAnchor} editable={false} />
               ) : (
                 <Text style={typography.caption}>
                   {t("modal.app_settings.field.upriv_root_loading")}
@@ -423,9 +471,12 @@ export function VaultRootAliasRecoveryModal({
             value="custom_root"
             checked={mode === "custom_root"}
             title={t("modal.app_settings.option.upriv_root.custom_root")}
-            description={t("modal.app_settings.option.upriv_root.custom_root_desc", {
-              file: VAULT_ROOT_ALIAS_FILE,
-            })}
+            description={t(
+              Platform.OS === "android"
+                ? "modal.app_settings.option.upriv_root.custom_root_desc_android"
+                : "modal.app_settings.option.upriv_root.custom_root_desc",
+              { file: VAULT_ROOT_ALIAS_FILE },
+            )}
             onSelect={() => {
               setMode("custom_root");
               setError(null);
@@ -435,11 +486,10 @@ export function VaultRootAliasRecoveryModal({
             }}
             footer={
               <View style={styles.customCol}>
-                <ThemedInput
+                <PathField
                   value={pathInput}
                   editable={false}
                   placeholder={t("modal.vault_root_setup.path_placeholder")}
-                  mono
                 />
                 <Button
                   size="sm"
@@ -450,9 +500,6 @@ export function VaultRootAliasRecoveryModal({
                 />
                 {mode === "custom_root" && Platform.OS !== "android" ? (
                   <Text style={typography.caption}>{t("error.unsupported_platform")}</Text>
-                ) : null}
-                {mode === "custom_root" && pathIsSaf ? (
-                  <Text style={typography.caption}>{t("modal.vault_root_setup.saf_notice")}</Text>
                 ) : null}
                 {mode === "custom_root" && customDisk === "checking" ? (
                   <Text style={typography.caption}>
@@ -503,10 +550,5 @@ const styles = StyleSheet.create({
   },
   options: { gap: spacing.sm },
   customCol: { gap: spacing.sm },
-  pathBox: {
-    borderRadius: radii.sm,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-  },
   localeSelect: { flexShrink: 0, maxWidth: 256 },
 });

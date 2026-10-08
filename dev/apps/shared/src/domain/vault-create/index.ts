@@ -41,7 +41,9 @@ export {
 } from "./validate";
 export {
   CREATE_VAULT_DEFAULT_FOCUS,
+  firstInvalidCreateVaultField,
   resolveCreateVaultFocusTarget,
+  resolveCreateVaultNextKeyField,
   resolveCreateVaultOpenStep,
   shouldSelectCreateVaultFocusText,
   shouldShowCreateVaultInlineErrors,

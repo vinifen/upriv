@@ -29,12 +29,14 @@ import {
   isLifecyclePasswordPresent,
   normalizeAppSettings,
   normalizeVaultSettingsConfig,
+  vaultSettingsForDaemon,
   parseAppLogFile,
   parseEmbeddedVaultSettings,
   parseDefaultRootStatus,
   parseVaultGroupListResult,
   parseVaultGroupWire,
   parseVaultListItemWire,
+  parseVaultClosePhase,
   parseVaultListResult,
   parseVaultRenameResult,
   parseVaultRootInspect,
@@ -42,6 +44,7 @@ import {
   vaultImportProbeTimeoutMs,
   parsePathWriteResult,
   type CloseVaultOutcome,
+  type VaultClosePhase,
 } from "@upriv/shared";
 
 /** Fetch product version from upriv-daemon. */
@@ -477,7 +480,7 @@ export async function rpcVaultCreate(input: CreateVaultInput): Promise<VaultList
   const raw = await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_CREATE, {
     password: input.password,
     unlockPreset: input.unlockPreset,
-    settings: input.settings,
+    settings: vaultSettingsForDaemon(input.settings),
   });
   if (typeof raw !== "object" || raw === null) {
     throw new RpcError(BRIDGE_ERROR_CODES.INVALID_RESPONSE, "vault_create: expected object", raw);
@@ -502,6 +505,10 @@ function parseCloseVaultOutcome(raw: unknown): CloseVaultOutcome {
     return { backupFailed: false };
   }
   return { backupFailed: (raw as { backupFailed?: unknown }).backupFailed === true };
+}
+
+export async function rpcVaultClosePhase(id: string): Promise<VaultClosePhase | null> {
+  return parseVaultClosePhase(await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_CLOSE_PHASE, { id }));
 }
 
 export async function rpcVaultStoreSize(id: string): Promise<number> {
@@ -545,7 +552,10 @@ export async function rpcVaultConfigGet(id: string): Promise<VaultSettingsConfig
 }
 
 export async function rpcVaultConfigSave(id: string, settings: VaultSettingsConfig): Promise<void> {
-  await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_CONFIG_SAVE, { id, settings });
+  await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_CONFIG_SAVE, {
+    id,
+    settings: vaultSettingsForDaemon(settings),
+  });
 }
 
 export async function rpcVaultRename(id: string, displayName: string): Promise<VaultRenameResult> {
@@ -644,7 +654,7 @@ export async function rpcVaultExportToPath(
 export async function rpcVaultImportZip(input: CreateVaultInput): Promise<VaultListItem> {
   const pkg = input.importPackage;
   const raw = await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_IMPORT_ZIP, {
-    settings: input.settings,
+    settings: vaultSettingsForDaemon(input.settings),
     archivePath: pkg?.archivePath,
     contentB64: pkg?.contentB64,
   });
@@ -654,7 +664,7 @@ export async function rpcVaultImportZip(input: CreateVaultInput): Promise<VaultL
 export async function rpcVaultImport7z(input: CreateVaultInput): Promise<VaultListItem> {
   const pkg = input.importPackage;
   const raw = await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_IMPORT_7Z, {
-    settings: input.settings,
+    settings: vaultSettingsForDaemon(input.settings),
     password: input.password,
     unlockPreset: input.unlockPreset,
     archivePath: pkg?.archivePath,
@@ -667,7 +677,7 @@ export async function rpcVaultImport7z(input: CreateVaultInput): Promise<VaultLi
 export async function rpcVaultImportFilesZip(input: CreateVaultInput): Promise<VaultListItem> {
   const pkg = input.importPackage;
   const raw = await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_IMPORT_FILES_ZIP, {
-    settings: input.settings,
+    settings: vaultSettingsForDaemon(input.settings),
     password: input.password,
     unlockPreset: input.unlockPreset,
     archivePath: pkg?.archivePath,
@@ -679,7 +689,7 @@ export async function rpcVaultImportFilesZip(input: CreateVaultInput): Promise<V
 export async function rpcVaultImportOsPath(input: CreateVaultInput): Promise<VaultListItem> {
   const pkg = input.importPackage;
   const raw = await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_IMPORT_OS_PATH, {
-    settings: input.settings,
+    settings: vaultSettingsForDaemon(input.settings),
     password: input.password,
     unlockPreset: input.unlockPreset,
     archivePath: pkg?.archivePath,
@@ -792,6 +802,7 @@ export async function rpcVaultFsImportOsFile(
   parentPath: string,
   name: string,
   osPath: string,
+  deferIndex?: boolean,
 ): Promise<{ path: string; revision: number }> {
   return requirePathRevision(
     await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_FS_IMPORT_OS_FILE, {
@@ -799,8 +810,17 @@ export async function rpcVaultFsImportOsFile(
       parentPath,
       name,
       osPath,
+      ...(deferIndex ? { deferIndex: true } : {}),
     }),
     "vault_fs_import_os_file",
+  );
+}
+
+/** Seal the index for files staged with `deferIndex`. */
+export async function rpcVaultFsImportSeal(id: string): Promise<number> {
+  return requireRevision(
+    await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_FS_IMPORT_SEAL, { id }),
+    "vault_fs_import_seal",
   );
 }
 
@@ -889,6 +909,11 @@ export async function rpcVaultFsOsPath(id: string, path: string): Promise<{ osPa
 /** Open the vault mount (Finder / Explorer / desktop file manager) at `path`. */
 export async function rpcRevealInFileManager(vaultId: string, path: string): Promise<void> {
   await desktopInvokeRaw(SHELL_COMMANDS.REVEAL_IN_FILE_MANAGER, { vaultId, path });
+}
+
+/** Open an absolute OS path in Finder / Explorer / the desktop file manager. */
+export async function rpcRevealOsPath(path: string): Promise<void> {
+  await desktopInvokeRaw(SHELL_COMMANDS.REVEAL_OS_PATH, { path });
 }
 
 /** Open a system terminal at the vault mount path (cwd = folder, or parent of a file). */

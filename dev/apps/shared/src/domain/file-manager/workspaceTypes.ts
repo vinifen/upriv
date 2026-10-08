@@ -12,7 +12,12 @@ export interface FileDeleteTarget {
 
 export type UnsavedPromptAction =
   | { type: "close_tab"; path: string }
+  | { type: "close_tabs"; paths: string[] }
   | { type: "dismiss_workspace" }
+  /** Lock / close-all: after save or discard, close the vault. */
+  | { type: "close_vault" }
+  /** Lock while an import is still writing. Cancel continues into close. */
+  | { type: "close_vault_import" }
   | { type: "import_in_progress" };
 
 /** VS Code-style explorer cue: created (green) outranks modified (accent). */
@@ -100,9 +105,4 @@ export function sessionPathKind(state: VaultWorkspaceState, path: string): Sessi
     return "modified";
   }
   return null;
-}
-
-/** @deprecated Prefer `sessionPathKind` — kept for call sites that only need a boolean. */
-export function isPathSessionModified(state: VaultWorkspaceState, path: string): boolean {
-  return sessionPathKind(state, path) !== null;
 }

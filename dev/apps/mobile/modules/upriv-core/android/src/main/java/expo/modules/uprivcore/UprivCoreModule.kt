@@ -4,14 +4,25 @@ import android.content.Context
 import android.net.Uri
 import android.os.ParcelFileDescriptor
 import expo.modules.kotlin.exception.CodedException
+import expo.modules.kotlin.functions.Coroutine
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 import java.io.File
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.withContext
+import uniffi.upriv_ffi.SafFsCallback
 import uniffi.upriv_ffi.appVersion
 import uniffi.upriv_ffi.configureRuntime
 import uniffi.upriv_ffi.importContentFd
 import uniffi.upriv_ffi.invoke
+import uniffi.upriv_ffi.mountSafFs
+import uniffi.upriv_ffi.probeSafFs
+import uniffi.upriv_ffi.unmountSafFs
 
 /**
  * Expo module wrapping UniFFI `upriv_ffi` (`libupriv_ffi.so`).
@@ -45,9 +56,26 @@ class UprivCoreModule : Module() {
       appVersion()
     }
 
-    AsyncFunction("invoke") { method: String, paramsJson: String ->
+    /** Logical processors. The JS import pool uses this; Hermes has no `hardwareConcurrency`. */
+    Function("processorCount") {
+      Runtime.getRuntime().availableProcessors().coerceAtLeast(1)
+    }
+
+    AsyncFunction("invoke") Coroutine { method: String, paramsJson: String ->
       ensureRuntimeConfigured()
-      invoke(method, paramsJson)
+      withContext(CoreLanes.dispatcher(method)) { invoke(method, paramsJson) }
+    }
+
+    // Long work leaves Expo's async thread. Probes stay on the IO pool so a
+    // close-phase read is not queued behind either the light lane or a close.
+    AsyncFunction("invokeProbe") Coroutine { method: String, paramsJson: String ->
+      if (method !in PROBE_METHODS) {
+        throw CodedException("ERR_UPRIV_PROBE_METHOD", "not a probe method: $method", null)
+      }
+      withContext(Dispatchers.IO) {
+        ensureRuntimeConfigured()
+        invoke(method, paramsJson)
+      }
     }
 
     // ---- SAF (Android Storage Access Framework) ---------------------
@@ -59,6 +87,15 @@ class UprivCoreModule : Module() {
     Function("safPersistPermission") { treeUri: String ->
       ensureRuntimeConfigured()
       runSafOrThrow { SafVaultRoot.persist(requireContext(), treeUri) }
+    }
+
+    /**
+     * Document URI for the shared Documents directory.
+     * Passed as the system screen's starting location so the user can confirm
+     * it without browsing. This does not grant it. `Upriv` is created after.
+     */
+    Function("safDocumentsInitialUri") {
+      SafVaultRoot.documentsUprivInitialUri()
     }
 
     /**
@@ -140,8 +177,40 @@ class UprivCoreModule : Module() {
     }
 
     /**
-     * Open an existing filesystem or `content://` folder in the system Files app.
-     * Encrypted vaults have no OS folder — callers should only pass a live mount path.
+     * Point Rust `/upriv-saf-root` at this persisted tree. Sync so the next
+     * vault RPC sees the mount. The callback must not call `invoke`.
+     */
+    Function("mountSafRoot") { uri: String ->
+      ensureRuntimeConfigured()
+      val trimmed = uri.trim()
+      if (!trimmed.startsWith("content://")) {
+        throw SafCodedException("saf_invalid_tree", "data folder must be a content tree")
+      }
+      val ctx = requireContext()
+      runSafOrThrow {
+        SafFs.bind(ctx, trimmed)
+        mountSafFs(
+          object : SafFsCallback {
+            override fun dispatch(op: String, payload: String): String = SafFs.dispatch(op, payload)
+          },
+        )
+        if (!probeSafFs()) {
+          unmountSafFs()
+          SafFs.clear()
+          throw SafException("saf_not_ready", "chosen folder cannot store vaults")
+        }
+      }
+    }
+
+    /** Drop the Rust mount. The persistable grant stays until it is released. */
+    Function("unmountSafRoot") {
+      unmountSafFs()
+      SafFs.clear()
+    }
+
+    /**
+     * Open a user-visible filesystem path or `content://` tree in the system Files app.
+     * Does not decrypt `store/`. Callers pass a location the UI already shows.
      */
     Function("revealInFileManager") { osPath: String ->
       revealInFileManager(requireContext(), osPath)
@@ -151,9 +220,12 @@ class UprivCoreModule : Module() {
      * Stream one `content://` document into the open import session.
      * Returns the UniFFI JSON envelope. Does not copy the file into app cache.
      */
-    AsyncFunction("importContentUri") { vaultId: String, logicalPath: String, contentUri: String ->
+    AsyncFunction("importContentUri") Coroutine { vaultId: String, logicalPath: String, contentUri: String ->
       ensureRuntimeConfigured()
-      streamContentUri(requireContext(), vaultId, logicalPath, contentUri)
+      val context = requireContext()
+      withContext(CoreLanes.importFiles) {
+        streamContentUri(context, vaultId, logicalPath, contentUri)
+      }
     }
   }
 
@@ -176,6 +248,8 @@ class UprivCoreModule : Module() {
       if (runtimeConfigured) return
       val ctx = requireContext()
       val home = File(ctx.filesDir, "upriv").apply { mkdirs() }
+      // App-specific directory. Android deletes it on uninstall. It holds the
+      // folder pointer only. The vault is the shared Documents/Upriv grant.
       // Single path: Rust owns the env pin (parity with Electron setting the same vars).
       configureRuntime(home.absolutePath, "installed")
       runtimeConfigured = true
@@ -188,6 +262,53 @@ class UprivCoreModule : Module() {
  * Rust `RpcError` shape, so mobile error handling stays uniform between
  * "TOML failure from Rust" and "SAF failure from Kotlin".
  */
+/** Light, read-only RPCs that may run beside a long heavy call. */
+private val PROBE_METHODS = setOf("vault_close_phase")
+
+/**
+ * Same lanes as the desktop daemon (`upriv-daemon` `wire.rs`), plus a light
+ * lane for everything else. Argon2, close, and pack are one thread each.
+ * File import uses up to two threads, the phone cap in `import_slots_for`.
+ * A one-core phone uses one thread.
+ *
+ * Method names match `is_argon2_bound_method`, `is_lifecycle_io_method`,
+ * `is_import_io_method`, and `is_pack_io_method`.
+ */
+private object CoreLanes {
+  private fun single(name: String): CoroutineDispatcher =
+    Executors.newSingleThreadExecutor { runnable ->
+      Thread(runnable, name).apply { isDaemon = true }
+    }.asCoroutineDispatcher()
+
+  private val light = single("upriv-rpc")
+  private val argon2 = single("upriv-argon2")
+  private val lifecycle = single("upriv-fs-io")
+  val pack = single("upriv-pack")
+  private val importNames = AtomicInteger()
+  val importFiles: CoroutineDispatcher =
+    Executors.newFixedThreadPool(phoneImportThreads()) { runnable ->
+      Thread(runnable, "upriv-import-${importNames.getAndIncrement()}").apply { isDaemon = true }
+    }.asCoroutineDispatcher()
+
+  /** Same cap as Rust `import_slots_for(cores, phone = true)`. One core stays one thread. */
+  private fun phoneImportThreads(): Int {
+    val cores = Runtime.getRuntime().availableProcessors().coerceAtLeast(1)
+    return (cores - 1).coerceIn(1, 2)
+  }
+
+  fun dispatcher(method: String): CoroutineDispatcher = when (method) {
+    "vault_open", "vault_create", "vault_export_probe", "vault_ingest_open" -> argon2
+    "vault_close", "vault_delete", "backup_get", "vault_discard_import" -> lifecycle
+    "vault_fs_import_os_file", "vault_fs_import_seal" -> importFiles
+    "vault_import_zip",
+    "vault_import_7z",
+    "vault_import_files_zip",
+    "vault_import_os_path",
+    "vault_export" -> pack
+    else -> light
+  }
+}
+
 private class SafCodedException(code: String, message: String) : CodedException(code, message, null)
 
 private fun rpcError(code: String, message: String): String {
@@ -235,14 +356,14 @@ private fun streamContentUri(
     try {
       resolver.openInputStream(uri)
     } catch (_: Exception) {
-      return rpcError("io_error", "could not read the import file")
-    } ?: return rpcError("io_error", "could not read the import file")
+      return rpcError("import_source_unreadable", "could not read the import file")
+    } ?: return rpcError("import_source_unreadable", "could not read the import file")
   val pipe =
     try {
       ParcelFileDescriptor.createPipe()
     } catch (_: Exception) {
       input.close()
-      return rpcError("io_error", "could not read the import file")
+      return rpcError("import_source_unreadable", "could not read the import file")
     }
   val readSide = pipe[0]
   val writeSide = pipe[1]
@@ -251,7 +372,7 @@ private fun streamContentUri(
     Thread {
       try {
         ParcelFileDescriptor.AutoCloseOutputStream(writeSide).use { out ->
-          input.use { stream -> stream.copyTo(out) }
+          input.use { stream -> stream.copyTo(out, 256 * 1024) }
         }
       } catch (error: Exception) {
         copyError.set(error)
@@ -268,14 +389,27 @@ private fun streamContentUri(
       // here unblocks the writer when the call never reached Rust.
       closeAbandonedImportFd(readFd)
       writer.join()
-      return rpcError("io_error", "could not read the import file")
+      return rpcError("import_source_unreadable", "could not read the import file")
     }
   writer.join()
   val failed = copyError.get()
   if (failed != null && envelopeOk(imported)) {
-    return rpcError("io_error", "could not read the import file")
+    // Closing the pipe is a normal end of file, so Rust stores the bytes it
+    // already read. Drop that partial document before the batch seals it.
+    discardPartialImport(vaultId, logicalPath)
+    return rpcError("import_source_unreadable", "could not read the import file")
   }
   return imported
+}
+
+/** Remove a document staged from a pipe that closed early. */
+private fun discardPartialImport(vaultId: String, logicalPath: String) {
+  val params =
+    org.json.JSONObject()
+      .put("id", vaultId)
+      .put("path", logicalPath)
+      .toString()
+  runCatching { invoke("vault_fs_delete", params) }
 }
 
 private fun closeAbandonedImportFd(fd: Int) {

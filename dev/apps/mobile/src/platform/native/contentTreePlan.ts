@@ -5,7 +5,7 @@ export interface ContentImportFile {
   uri: string;
 }
 
-/** Folder listing held in memory until the creating job streams it. */
+/** Folder or single file held in memory until the creating job streams it. */
 export interface ContentImportTree {
   directoryUri: string;
   folderName: string;
@@ -72,6 +72,21 @@ export function contentTreeFromFolderPick(picked: {
   return { directoryUri, folderName, directories, files };
 }
 
+/** One document. `path` is the wizard key; `uri` is what Android can open. */
+export function contentTreeFromPickedFile(picked: {
+  path: string;
+  uri: string;
+  fileName: string;
+}): ContentImportTree {
+  const directoryUri = picked.path.trim();
+  const uri = picked.uri.trim();
+  const logicalPath = picked.fileName.trim();
+  if (!directoryUri || !uri || !logicalPath) throw new Error("import file is unavailable");
+  const files = [{ logicalPath, uri }];
+  assertImportTreeNames([], files);
+  return { directoryUri, folderName: logicalPath, directories: [], files };
+}
+
 const RESERVED_SEED_PATH = "upriv-seed.txt";
 const RESERVED_WORKSPACE_FILE = ".upriv-workspace.json";
 
@@ -129,7 +144,7 @@ type ContentTreeSlot = {
   jobs: Set<ContentImportTree>;
 };
 
-/** Folder listings. The permission stays while the wizard or a creating job still needs it. */
+/** Listings. The permission stays while the wizard or a creating job still needs it. */
 export function createContentTreeRegistry() {
   const entries = new Map<string, ContentTreeSlot>();
 

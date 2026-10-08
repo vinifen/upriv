@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { StyleSheet, Text, View } from "react-native";
+import { Platform, StyleSheet, Text, View } from "react-native";
 import {
   isVaultRootDraftDirty,
   VAULT_ROOT_GATE_IDLE,
@@ -10,6 +10,7 @@ import { useVaultRootService } from "@/platform/services";
 import { useAppSettingsContext } from "./AppSettingsContext";
 import { useTranslation } from "@/i18n";
 import { mobileErrorI18nKey } from "@/lib/errorMessages";
+import { alertIfPrivateRootLeftBehind, pickDocumentsUprivFolder } from "./dataFolderGrant";
 import { Button, Modal } from "@/components/ui";
 import { ModalFooterActions, modalFooterConfirmBtnStyle } from "@/components/ui/ModalFooterActions";
 import { useTheme } from "@/theme";
@@ -34,8 +35,8 @@ interface VaultRootDataFolderModalProps {
 /**
  * Dedicated surface for switching/creating the vault-root data folder (⋯ menu).
  * Not part of System Settings Save — avoids mixing appearance drafts with folder
- * switch. Mirrors desktop `VaultRootDataFolderModal` semantics; SAF picker stays
- * behind `VaultRootLocationSection` and `isAndroidSafUri`.
+ * switch. Mirrors desktop `VaultRootDataFolderModal` semantics. A system-picker
+ * `content://` folder is the data folder: vaults are created and edited there.
  *
  * Keeps the recent Apply ordering: close the modal BEFORE `patchSettings`
  * reloads settings from the new root, so theme/locale do not flash while the
@@ -222,7 +223,33 @@ export function VaultRootDataFolderModal({
 
     void (async () => {
       const replacePolicy = current.replacePolicy;
-      if (mode === "default_root") {
+      let savedMode = mode;
+      let savedPath = mode === "custom_root" ? path.trim() : "";
+      if (Platform.OS === "android" && mode === "default_root") {
+        const suggested = await vaultRoot.suggestedCustomRootPath().catch(() => "");
+        const picked = await pickDocumentsUprivFolder(
+          (initial, title) => vaultRoot.pickFolder(initial, title),
+          suggested || null,
+          t("modal.vault_root_setup.pick_folder_title"),
+        );
+        if (gen !== busyGen.current) return;
+        if (picked.status === "cancelled") {
+          setConfirmOpen(false);
+          return;
+        }
+        const applied = await vaultRoot.setupAtPath(picked.uri, {
+          replaceIncomplete: replacePolicy != null,
+          replacePolicy,
+          bootstrap: { locale: settings.ui.locale },
+        });
+        alertIfPrivateRootLeftBehind(
+          applied.privateRoot,
+          t("modal.vault_root_setup.title"),
+          t("modal.vault_root_setup.private_root_left_behind"),
+        );
+        savedMode = "custom_root";
+        savedPath = applied.rootPath;
+      } else if (mode === "default_root") {
         await vaultRoot.setupDefaultRoot({
           replaceIncomplete: replacePolicy != null,
           replacePolicy,
@@ -235,11 +262,16 @@ export function VaultRootDataFolderModal({
           setError(t("modal.vault_root_setup.error_path_required"));
           return;
         }
-        await vaultRoot.setupAtPath(nextPath, {
+        const applied = await vaultRoot.setupAtPath(nextPath, {
           replaceIncomplete: replacePolicy != null,
           replacePolicy,
           bootstrap: { locale: settings.ui.locale },
         });
+        alertIfPrivateRootLeftBehind(
+          applied.privateRoot,
+          t("modal.vault_root_setup.title"),
+          t("modal.vault_root_setup.private_root_left_behind"),
+        );
       }
       if (gen !== busyGen.current) return;
 
@@ -255,8 +287,8 @@ export function VaultRootDataFolderModal({
         void patchSettings(
           {
             app: {
-              vault_root_mode: mode,
-              upriv_root_path: mode === "custom_root" ? path.trim() : "",
+              vault_root_mode: savedMode,
+              upriv_root_path: savedPath,
             },
           },
           { vaultRootAlreadyApplied: true },

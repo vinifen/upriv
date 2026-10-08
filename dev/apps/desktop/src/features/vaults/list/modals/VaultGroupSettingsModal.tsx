@@ -3,6 +3,7 @@ import {
   PolicyRadioOption,
   SettingsField,
   SettingsFormGrid,
+  IntegerInput,
   settingsControlClass,
   DisplayNameFieldError,
   VaultSettingsSection,
@@ -11,6 +12,7 @@ import { Icon } from "@/components/icons";
 import { Button, LoadingBudgetHint, Modal, SwitchRow } from "@/components/ui";
 import { useLoadingBudget } from "@upriv/shared/react";
 import { useTranslation } from "@/i18n";
+import { useRevealWhen } from "@/hooks/useRevealWhen";
 import { desktopErrorI18nKey } from "@/lib/errorMessages";
 import {
   GROUPED_VAULT_SORT_MODES,
@@ -77,6 +79,7 @@ export function VaultGroupSettingsModal({
   const [hidden, setHidden] = useState(false);
   const [busy, setBusy] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const deleteConfirmRef = useRevealWhen<HTMLDivElement>(deleteOpen);
   const [error, setError] = useState<string | null>(null);
   const budget = useLoadingBudget(busy, LOADING_BUDGET_MS.default);
 
@@ -216,16 +219,12 @@ export function VaultGroupSettingsModal({
               htmlFor={orderId}
               disabled={busy}
             >
-              <input
+              <IntegerInput
                 id={orderId}
-                type="number"
                 min={0}
-                step={1}
                 value={order}
                 disabled={busy}
-                onChange={(event) =>
-                  setOrder(Math.max(0, Number.parseInt(event.target.value, 10) || 0))
-                }
+                onChange={setOrder}
                 className={[settingsControlClass, "font-mono tabular-nums"].join(" ")}
               />
             </SettingsField>
@@ -314,12 +313,7 @@ export function VaultGroupSettingsModal({
           </SettingsFormGrid>
         </VaultSettingsSection>
 
-        <VaultSettingsSection
-          key={deleteOpen ? "danger-open" : "danger"}
-          title={t("modal.settings.danger_zone")}
-          tone="danger"
-          defaultOpen={deleteOpen}
-        >
+        <VaultSettingsSection title={t("modal.settings.danger_zone")} tone="danger">
           {!deleteOpen ? (
             <div className="space-y-3">
               <p className="text-sm text-on-surface-variant">
@@ -337,7 +331,7 @@ export function VaultGroupSettingsModal({
               </Button>
             </div>
           ) : (
-            <div className="space-y-3">
+            <div ref={deleteConfirmRef} className="space-y-3">
               <p className="text-sm text-on-surface-variant">
                 {t("vault.group.settings.delete_confirm")}
               </p>

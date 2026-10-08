@@ -4,7 +4,7 @@
 
 > **Rest layout, storage modes, backups, and export:** [`.agent/SECURITY-CRYPTO.md`](../../.agent/SECURITY-CRYPTO.md). `store/` at rest; lock = close; FUSE/WinFsp (desktop) or in-app file manager (mobile) while open.
 
-> **Workspace mount (current):** app `[workspace].path` + vault `[mount].workspace_path` → `{parent}/{display_name}/`. Not auto-created at init. See `.agent/AGENT.md`. Older mentions of fixed `workspace/<id>/` under the vault-root are **legacy** until rewritten.
+> **Workspace mount:** app folder → `{place}/workspace/{display_name}/`. A vault's own folder → `{path}/{display_name}/`. Not created at init. See `.agent/AGENT.md`.
 
 **Software Design Document**  
 **Version:** 0.2  
@@ -20,7 +20,7 @@
 | ID | Rust module | Disk | Session |
 |----|-------------|------|---------|
 | `store` | `upriv_core::store` (planned) | `vaults/<id>/store/` (ciphertext) | — |
-| `session` | `upriv_core::session` (planned) | — | mount `{parent}/{display_name}/` + RAM (`encrypted_dir`). Legacy docs: `workspace/<id>/` |
+| `session` | `upriv_core::session` (planned) | — | mount + RAM (`encrypted_dir`). App folder: `{place}/workspace/{display_name}/`. Own folder: `{path}/{display_name}/` |
 | `plain` | `upriv_core::plain` (planned) | `{parent}/{display_name}/` in plaintext | only when `storage.mode = upriv_plain` |
 
 No `archive/` layer. Portable `.zip` / `.7z` are **export files**, not rest layout. See PRD §1.6 and SECURITY-CRYPTO.
@@ -60,8 +60,7 @@ No `archive/` layer. Portable `.zip` / `.7z` are **export files**, not rest layo
 └─────────────────────────────────────────────────────────────┘
                               │
 ┌─────────────────────────────▼───────────────────────────────┐
-│  vaults/<id>/store/  +  {parent}/{display_name}/ (virtual or plain) │
-│  (legacy diagram path: workspace/<id>/ under the vault-root)          │
+│  vaults/<id>/store/  +  file manager folder while open (virtual or plain) │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -132,23 +131,23 @@ Transient: `closing`, `opening`, `recovery` — do not expose in UI as resting s
 4. Read `header/vault.header` (or `vault.header.copy` when the primary cannot be used); derive master key (Argon2id from header params) — failure → abort.
 5. Verify index / chunk tags needed for the session.
 6. If dirty close: **recovery** → unlock the encrypted vault. If leftover `upriv_plain` workspace: wipe or resume. If header/index dead: create from backup / store zip (not a dirty-close peer).
-7. `encrypted_dir`: mount `workspace/<id>/` **virtual** — FUSE (Linux) + WinFsp (Windows); mobile uses the in-app file manager (no FUSE).
-8. `upriv_plain`: decrypt into plaintext `workspace/<id>/`.
+7. `encrypted_dir`: mount the file manager folder when it is on — FUSE (Linux) + WinFsp (Windows); mobile uses the in-app file manager (no FUSE).
+8. `upriv_plain`: decrypt into the plaintext folder.
 9. Update `runtime/state.json` → `vaults.<id>.session = "open"`.
 
 **close (v1):**
 1. Use keys from `SessionHandle` in RAM (or `session.enc` in disk modes). Prompt the UI **only** for `always_prompt` — a presence check against the open session / `vault.header`, never a new wrap. Default lock has no password field.
 2. Flush the session into `store/` (header + index + chunks). Never pack `.enc` blobs into a `.7z` as rest.
 3. If `[backup] enabled`: write a Stored zip of `store/` to `backups/<stamp>-<id>.zip` (no zip password).
-4. `upriv_plain`: `secure_wipe_workspace` and remove plaintext `workspace/<id>/` (UI confirms wipe on manual lock).
-5. Unmount `workspace/<id>/`; release `runtime/<id>.lock`; remove entry in `state.json`.
+4. `upriv_plain`: `secure_wipe_workspace` and remove the plaintext folder (UI confirms wipe on manual lock).
+5. Unmount the file manager folder; release `runtime/<id>.lock`; remove entry in `state.json`.
 6. `zeroize` password/keys in RAM.
 
 **Reopen after reboot:** `open` against `store/`; edits from the last successful close are in the ciphertext tree.
 
 ### 2.1 Session integrity on close (not a new password)
 
-**Problem (legacy `.7z` rest):** close used to re-pack an archive from a typed password. A different password on close would rewrite wrap material incompatibly with prior backups.
+**Close flushes the open session.** It does not re-pack a `.7z` from a typed password. A different password on close would rewrite wrap material incompatibly with prior backups.
 
 **Rule now:** close **flushes with the open session keys**. A typed password is **not** an input to wrap `vault.header`. RF-05 is header/session integrity before backup or flush.
 
@@ -204,12 +203,12 @@ Related: PRD **RF-53**, **RF-53b**.
 
 **v1:** mount implementation **Linux (FUSE) + Windows (WinFsp)**. DocumentProvider (Android) in later phases (PRD §3.5).
 
-**Invariant:** in `encrypted_dir`, **never** create persistent regular files in `workspace/<id>/` on the vault volume.
+**Invariant:** in `encrypted_dir`, **never** create persistent regular files in the file manager folder on the vault volume.
 
 **RAM:** session serves decrypted bytes from RAM; the full unlocked vault working set must fit available memory (see **`warning.encrypted_dir_ram`** and §3.2.2).
 
 ```
-App / Explorer  →  workspace/<id>/nota.txt  (logical path)
+App / Explorer  →  file manager folder/nota.txt  (logical path)
                         ↓ FUSE / WinFsp / DocumentProvider
                    CryptoLayer::read/write
                         ↓
@@ -280,7 +279,7 @@ Related: PRD **RF-54**.
 - Close flushes `store/`. It does not pack a `.7z`.
 - Portable `.7z` export is a separate action. `upriv-core` packs it in process with `sevenz-rust2` (logical content in RAM, ciphertext only on disk). No `7zz` binary, no `-p` on a command line, no plaintext temp directory.
 - If RAM is not enough for that pack, return `InsufficientRam` and do not spill a decrypted tree.
-- Never use `workspace/<id>/` as export staging.
+- Never use the file manager folder as export staging.
 
 Related: PRD **RF-45**, **RF-50**.
 
@@ -314,7 +313,7 @@ Related: PRD **RF-56**, **RF-UI-05**.
 ### 2.10 Secure deletion (`secure_wipe`)
 
 > **`encrypted_dir` + virtual mount:** wipe on `workspace/` normally **not applicable** (no plaintext on disk).  
-> **`upriv_plain`:** wipe plaintext `workspace/<id>/` on close (and before delete).
+> **`upriv_plain`:** wipe the plaintext file manager folder on close (and before delete).
 
 **Problem:** on HDD, `remove_file` / `rm -rf` **do not** erase bytes — only mark clusters free. On SSD, per-file wipe is best effort.
 
@@ -323,7 +322,7 @@ Related: PRD **RF-56**, **RF-UI-05**.
 **Algorithm (per file, order: deepest files first):**
 
 ```text
-for each regular file in workspace/<id>/ (do not follow symlinks outside):
+for each regular file in the file manager folder (do not follow symlinks outside):
   1. open O_RDWR
   2. repeat wipe_passes times:
        write wipe_pattern (zeros or random) from offset 0 to file_size
@@ -666,7 +665,7 @@ Settings modal edits `config.toml` but **does not mirror every key** — advance
 | `[seven_zip]` | compression preset (**none/low/medium/high** → `archive_mode` + `compression_level`), `encrypt_file_names` | `method`, `solid` (defaults: `lzma2`, `false`) |
 | `[policy]` | `allow_external_editors`, `disallow_copy_outside_mount` (two radio groups) | `require_unmount_on_sleep` |
 
-**Password in memory (UI):** `session_ram` (lock without retyping), Never save (`always_prompt` — presence check on lock; does not rewrap), `disk_close` (less secure), `disk_open_close` (insecure) — **same list for all storage modes**. Legacy TOML `ram_on_close_only` loads/saves as `session_ram`. Disk modes use `auth/<id>/.session.enc` (encrypted key blob).
+**Password in memory (UI):** `session_ram` (lock without retyping), Never save (`always_prompt` — presence check on lock; does not rewrap), `disk_close` (less secure), `disk_open_close` (insecure) — **same list for all storage modes**. Disk modes use `auth/<id>/.session.enc` (encrypted key blob).
 
 **Storage mode warnings (UI):**
 
@@ -749,7 +748,7 @@ fn validate_vault_id(id: &str, vault_root: &Path) -> Result<()> {
     // 1. charset + reserved names
     // 2. config/{id}.toml exists and tom.id == id
     // 3. !vaults/<id>/ exists OR is same vault being updated
-    // 4. !workspace/<id> exists OR belongs to this vault (recovery)
+    // 4. file manager folder missing OR belongs to this vault (recovery)
     // 5. no duplicate ids across all loaded toml files
 }
 ```
@@ -762,7 +761,7 @@ fn validate_vault_id(id: &str, vault_root: &Path) -> Result<()> {
 | `vaults/<id>/backups/<stamp>-<id>.zip` | Stored zip of `store/` (`[backup]`) |
 | `auth/<id>/.session.enc` | Encrypted session (`disk_*` modes; hidden) |
 
-**Open workspaces:** `workspace/<id>/` only while open; `runtime/state.json` lists open vaults (demo: several at once).
+**Open workspaces:** the file manager folder exists only while open; `runtime/state.json` lists open vaults (demo: several at once).
 
 #### 3.2.5 Auto-close on inactivity
 
@@ -778,7 +777,7 @@ fn validate_vault_id(id: &str, vault_root: &Path) -> Result<()> {
 **What resets the inactivity timer:**
 
 1. Any Upriv UI action with that vault in focus.
-2. Filesystem event in `workspace/<id>/` (create, modify, delete, rename) — debounce 2–5 s.
+2. Filesystem event in the file manager folder (create, modify, delete, rename) — debounce 2–5 s.
 3. Return focus to app window with vault open (desktop).
 
 **What does not reset:** editing another vault; mouse outside; HD merely connected.
@@ -800,7 +799,7 @@ Recalculate `auto_close_at = last_activity_at + idle_minutes` on each activity.
 idle expired
   → if warn_before_seconds > 0: notify; user can "action.continue" (resets timer)
   → else or after countdown: VaultManager::close(vault_id)
-  → same pipeline as manual close (7z t, <id>.7z.new, remove workspace/<id>/)
+  → same pipeline as manual close (7z t, <id>.7z.new, remove the file manager folder)
 ```
 
 **Suggested implementation (`upriv-core`):**
@@ -944,7 +943,7 @@ Do not shell out to 7-Zip. These commands are not the implementation (they put t
 |---|---|
 | `7zz t -p{pass}` | Password appears in the process list |
 | `7zz x -p{pass} -o{workspace}` | Writes a decrypted tree on disk |
-| `7zz a -p{pass} … workspace/<id>/*` | Reads a decrypted tree and puts the password on `argv` |
+| `7zz a -p{pass} … <file manager folder>/*` | Reads a decrypted tree and puts the password on `argv` |
 
 ### 5.3 Password
 
@@ -999,7 +998,6 @@ Suggested format (v0.1):
 |------|--------|---------|--------|
 | always_prompt | prompt password; do not retain the **string** | prompt as presence check against the open session (do not rewrap); idle auto-close skipped | recovery prompts password |
 | session_ram | retain SessionHandle | use handle; **no prompt** | handle lost, prompt password |
-| ram_on_close_only | *(legacy)* treat as `session_ram` on load/save | use handle; **no prompt** | same as `session_ram` |
 | disk_close | prompt; write session.enc | use session.enc; **no prompt** | session.enc allows close |
 | disk_open_close | session.enc after first unlock | use session.enc; **no prompt** | same |
 
@@ -1054,7 +1052,7 @@ User Unlock → password
 Validate header + index (§2.2)
         │
         ├─ dirty close / leftover workspace → recovery UI first
-        └─ OK → mount workspace/<id>/ (session in RAM only)
+        └─ OK → mount the file manager folder (session in RAM only)
                     │
                     ▼
               User works / chooses Close
@@ -1155,7 +1153,7 @@ Default in-app header: **white** variant. App icon tile background: `#0f172a` (s
 
 ```text
 click(row) && !click(button):
-  if session == open      → vault_open_workspace(id)   // xdg-open workspace/<id>/ (runtime only)
+  if session == open      → vault_open_workspace(id)   // xdg-open the file manager folder (runtime only)
   else                    → (nothing; use Unlock)
 
 click(Unlock)              → modal/dialog password → open pipeline
@@ -1206,7 +1204,7 @@ No separate Welcome screen in v1; “Open vault” = `--vault` on first run or a
 - Title: `modal.backup.title` — `<id>`
 - Two tiers: **Saves** (`backups/saves/<stamp>-<id>.zip`, never auto-deleted) and **Standard** (`backups/<stamp>-<id>.zip`, rotated per `[backup]`). **Save** on a standard row → `backup_promote_save`.
 - Table/list: columns **Name**, **Date**, **Actions**
-- **Delete:** inline confirmation or second step with `<input>` — placeholder `modal.backup.delete_confirm` + `` `<id>` ``; button disabled until `input === id`.
+- **Delete:** inline confirmation with `<input>` — prompt `modal.backup.delete_confirm`; phrase = the vault's **current** display name, a space, and the count (`Notes 2`), even when backup file names carry an older id; button disabled until the trimmed input matches.
 - Suggested RPC methods: `backup_list(id)`, `backup_delete(id, backup_name, confirm_id)`, `backup_promote_save(id, backup_name)`.
 
 #### 8.2.4 Modal — vault settings
@@ -1321,7 +1319,7 @@ Android **does not** run HD binaries like desktop. Model is:
 1. **APK** distributed in `app/Android/Upriv.apk` (HD bundle) or outside → user **installs** once.
 2. Installed app **binds** vault via **SAF** (persistent URI of HD root folder).
 3. Vault layout **identical** to desktop: `.upriv/…` + `workspace/` at HD root.
-4. File editing: **`action.open_folder`** button delegates to external manager via `Intent` — **no** full file manager inside Upriv.
+4. File editing is the **in-app file manager** (RAM only for `encrypted_dir`). **Open in system files** is an extra action, not the editor.
 
 **Decision (ADR):** `workspace/` folder stays **on vault volume (OTG)**, not internal-only cache, for desktop parity and folder Intents.
 
@@ -1340,29 +1338,16 @@ Android **does not** run HD binaries like desktop. Model is:
 
 ```text
 Upriv (installed)
-  → "Select vault" screen
-  → Intent ACTION_OPEN_DOCUMENT_TREE
-  → User chooses <vault-root> on OTG HD
-  → Validate: .upriv/settings.toml exists AND vaults/<id>/ structure
+  → data-folder setup
+  → app folder, or ACTION_OPEN_DOCUMENT_TREE
   → takePersistableUriPermission(uri, READ|WRITE)
-  → Save in local app config (SharedPreferences / file in filesDir):
-        vault_tree_uri = "content://..."
+  → Rust addresses that folder as /upriv-saf-root
+  → app-home alias .upriv-root stores that logical path, not the content:// URI
 ```
 
-**Discovery:** vault = `<vault-root>` whose SAF tree contains `.upriv/settings.toml`. Do not use absolute path `/storage/XXXX-XXXX/...` as source of truth.
+**Discovery:** vaults live under the chosen data folder's `.upriv/vaults/`. Do not use absolute path `/storage/XXXX-XXXX/...` as source of truth. Do not store the `content://` URI in `settings.toml`.
 
-**Abstraction in `upriv-core`:**
-
-```rust
-trait VaultStorage {
-    fn read_file(&self, relative: &str) -> Result<Vec<u8>>;
-    fn write_file(&self, relative: &str, data: &[u8]) -> Result<()>;
-    fn list_dir(&self, relative: &str) -> Result<Vec<String>>;
-    fn delete_tree(&self, relative: &str) -> Result<()>;
-}
-// Desktop: impl with std::fs::Path
-// Android: impl with DocumentFile + ContentResolver
-```
+**Abstraction in `upriv-core`:** there is no `VaultStorage` trait. Desktop paths use `std::fs`. A picked Android folder is a `content://` tree. Rust addresses it as `/upriv-saf-root`. `host_fs` sends that prefix to the mounted `SafFs` bridge, which opens documents on the grant and returns detached file descriptors. The logical path is not created on disk. Do not copy a vault into `filesDir` or OS temp to fake a mount.
 
 ### 9.5 Android — open session (no FUSE)
 
@@ -1372,7 +1357,7 @@ Same vault body as desktop: rest is `vaults/<id>/store/`. There is **no** OS mou
 |-------|-----------|-------------|
 | CLOSED | none | present |
 | OPEN | in-app file manager buffers (RAM) only | live ciphertext |
-| `upriv_plain` OPEN | real `workspace/<id>/` via SAF (warned) | live ciphertext; wipe workspace on close |
+| `upriv_plain` OPEN | real file manager folder via SAF (warned) | live ciphertext; wipe that folder on close |
 
 **open (Android):** unlock session against `vault.header`; browse/edit via in-app file manager (or `upriv_plain` workspace). Never copy the vault into `filesDir` / OS temp to fake a mount (SECURITY-PLAINTEXT).
 
@@ -1396,7 +1381,7 @@ Same vault body as desktop: rest is `vaults/<id>/store/`. There is **no** OS mou
 
 **When to write (product):** on each layout action (open/close/reorder tab, expand folder, selection) while the FM is open — skip write if the sanitized snapshot is unchanged. Also flush on FM dismiss, unmount (minimize), and vault close/purge. Split writes to app settings on drag end. Does **not** write on every editor keystroke (drafts are not persisted here).
 
-**When to restore:** when the user **opens the file manager** for that vault (not auto-open on unlock). Seed sync from disk if there is no in-memory entry; hydrate effect is a backstop. Tabs/folders/focus come back as last saved for that vault; split comes from app settings.
+**When to restore:** when the user **opens the file manager** for that vault (not auto-open on unlock). The shell paints immediately from memory. Hydration reads `.upriv-workspace.json` after paint and applies it only while memory is still the cold-open layout, so an edit made before that read wins. Tabs/folders/focus come back as last saved for that vault; split comes from app settings.
 
 **Current stage:** layout persistence is live on `store/` via `vault_fs_*` (hidden reserved file; missing/corrupt → start clean). FUSE and the in-app explorer omit `.upriv-workspace.json` and the seed file. Portable `.7z` skips `.upriv-workspace.json` and the seed file; a `.zip` of `store/` keeps the ciphertext as-is.
 
@@ -1412,9 +1397,9 @@ PRD requirement **RF-A05**. Suggested implementation:
 3. `Intent.createChooser(intent, "Open vault folder")`.
 4. User edits in external app (Google Files, Solid Explorer, X-plore, etc.).
 
-**Fallback:** if no app accepts Intent, show message + link to install manager; optional v2: simple file list **inside** Upriv (read-only/open-with only).
+**Fallback:** if no app accepts Intent, the in-app file manager is still the editor.
 
-**Do not do v1:** full explorer (copy, move, rename) inside Upriv.
+The in-app explorer (copy, move, rename, delete) is the v1 editor on Android. Opening the system file manager is optional and does not replace it.
 
 ### 9.7 Android — screens (v1)
 
@@ -1422,18 +1407,13 @@ PRD requirement **RF-A05**. Suggested implementation:
 |---|--------|---------|
 | 1 | Welcome | Select vault / Last vault |
 | 2 | Unlock | Password |
-| 3 | Open | Status; **`action.open_folder`**; **Close vault** |
+| 3 | Open | In-app file manager; **Close vault** |
 | 4 | Recovery | Unlock encrypted vault; **`recovery.discard_workspace`** only for leftover plaintext (`upriv_plain`) |
 | 5 | Closing | Progress while `store/` flushes |
 
 ### 9.8 Android — app config (outside vault)
 
-Store in Android app (not on HD):
-
-```toml
-[last]
-vault_tree_uri = "content://com.android.externalstorage.documents/tree/primary%3A..."
-```
+The persistable grant is held by Android. Rust addresses the chosen folder as `/upriv-saf-root`. The app-home alias `.upriv-root` stores that logical path, not the `content://` URI. `settings.toml` does not store the grant.
 
 **Do not** store password. Optional: `last_opened_vault = "vault-example-1"`.
 
@@ -1504,7 +1484,7 @@ vault_path = "/media/user/HD/my-vault"
 - [ ] `session.enc` never contains plaintext password
 - [ ] UI warning for `disk_*` modes
 - [ ] Do not follow symlinks when deleting workspace without care
-- [ ] `secure_wipe_workspace` before removing `workspace/<id>/` (default on)
+- [ ] `secure_wipe_workspace` before removing the file manager folder (default on)
 - [ ] `fsync` after each file overwrite (HDD)
 - [ ] UI warns if `secure_wipe_workspace = false`
 - [ ] Recovery `DiscardWorkspace` uses same wipe
@@ -1539,8 +1519,8 @@ vault_path = "/media/user/HD/my-vault"
 **v1 scope:** Linux + Windows desktop (PRD §3.5).
 
 1. **`upriv-core`**: config load, paths, in-process `.7z` (no plaintext temp).
-2. **Virtual mount** (`mount/` trait + platform backends): **FUSE** (Linux) and **WinFsp** (Windows) — `workspace/<id>/` → write-through to `store/` (`encrypted_dir` only).
-2b. **`plain/` module**: extract → real `workspace/<id>/` → close from workspace + **`secure_wipe_workspace`** (no virtual mount).
+2. **Virtual mount** (`mount/` trait + platform backends): **FUSE** (Linux) and **WinFsp** (Windows) — the file manager folder → write-through to `store/` (`encrypted_dir` only).
+2b. **`plain/` module**: extract → real file manager folder → close from that folder + **`secure_wipe_workspace`** (no virtual mount).
 3. **open/close** happy path without UI — **both** `encrypted_dir` and `upriv_plain` (Linux + Windows).
 4. **Recovery** detector + discard.
 5. **Unlock** checks the password with Argon2id before any write.

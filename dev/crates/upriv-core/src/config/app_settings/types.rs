@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::paths::VaultRootMode;
 
+pub use crate::paths::WorkspaceSettings;
+
 use super::toml::{
     default_entries, default_file_manager_tree_split_percent, default_keep, default_locale,
     default_log_level, default_sort, default_sort_dir, default_theme, default_view,
@@ -30,17 +32,9 @@ pub struct AppSettings {
     pub ui: UiSettings,
     pub logging: LoggingSettings,
     pub app: AppSectionSettings,
-    /// Default mount parent (`[workspace]` in settings.toml). Empty path = unset.
+    /// Per-system mount parents (`[workspace.<os>]` in settings.toml).
     #[serde(default)]
     pub workspace: WorkspaceSettings,
-}
-
-/// App `[workspace]` — mount parent for open vaults.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub struct WorkspaceSettings {
-    /// Absolute path, or empty when unset.
-    #[serde(default)]
-    pub path: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -54,16 +48,16 @@ pub struct UiSettings {
     #[serde(default)]
     pub vault_list_search: String,
     /// UI: show the new-vault button. Default true.
-    #[serde(default = "default_true", alias = "vault_list_show_create")]
+    #[serde(default = "default_true")]
     pub vault_list_show_create_button: bool,
     /// UI: show the list search button. Default true.
-    #[serde(default = "default_true", alias = "vault_list_show_search")]
+    #[serde(default = "default_true")]
     pub vault_list_show_search_button: bool,
     /// UI: show the sort button. Default true.
-    #[serde(default = "default_true", alias = "vault_list_show_sort")]
+    #[serde(default = "default_true")]
     pub vault_list_show_sort_button: bool,
     /// UI: show the view button. Default true.
-    #[serde(default = "default_true", alias = "vault_list_show_view")]
+    #[serde(default = "default_true")]
     pub vault_list_show_view_button: bool,
     /// UI: show the header overflow (⋮) menu. Default true.
     #[serde(default = "default_true")]
@@ -77,17 +71,13 @@ pub struct UiSettings {
     /// UI: show the group header settings (gear) menu. Default true.
     #[serde(default = "default_true")]
     pub vault_list_show_group_settings_button: bool,
-    #[serde(default, alias = "vault_list_always_show_hidden")]
+    #[serde(default)]
     pub always_show_hidden_vaults: bool,
     /// UI: show vertical drag handles on the vault list (drag up/down). Default true.
-    #[serde(
-        default = "default_true",
-        alias = "show_drag_vault_list",
-        alias = "allow_drag_vault_list"
-    )]
+    #[serde(default = "default_true")]
     pub vault_list_show_drag: bool,
     /// Dropping a vault onto a group assigns it. Default true; missing TOML/JSON → true.
-    #[serde(default = "default_true", alias = "allow_drag_vault_into_group")]
+    #[serde(default = "default_true")]
     pub vault_list_allow_drag_into_group: bool,
     pub file_manager_dock_expanded: bool,
     /// Explorer/editor split % (canonical 15–65). App-wide for every vault.

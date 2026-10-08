@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   PanResponder,
   ScrollView,
@@ -10,6 +10,8 @@ import {
 } from "react-native";
 import {
   fileBaseName,
+  fileTabMenuAction,
+  fileTabMenuItems,
   FILE_MANAGER_LONG_PRESS_MS,
   FILE_MANAGER_LONG_PRESS_MOVE_PX,
   isPathDirty,
@@ -18,14 +20,22 @@ import {
   type VaultWorkspaceState,
 } from "@upriv/shared";
 import { Icon } from "@/components/icons";
-import { IconButton } from "@/components/ui";
+import {
+  DropdownPanel,
+  IconButton,
+  MenuActionItem,
+  type DropdownPanelHandle,
+} from "@/components/ui";
 import { useTranslation } from "@/i18n";
 import { useTheme } from "@/theme";
+import { useDoubleTap } from "../hooks/useDoubleTap";
 import { measurePageRect, type PageRect } from "../lib/measurePageRect";
 
 interface FileManagerTabBarProps {
   workspace: VaultWorkspaceState;
   onWorkspaceAction: (action: VaultWorkspaceAction) => void;
+  onDelete: (path: string) => void;
+  isPathPending: (path: string) => boolean;
   onSave?: () => void;
   showSave?: boolean;
 }
@@ -38,6 +48,8 @@ const TAB_LABEL_MAX = 132;
 export function FileManagerTabBar({
   workspace,
   onWorkspaceAction,
+  onDelete,
+  isPathPending,
   onSave,
   showSave = false,
 }: FileManagerTabBarProps) {
@@ -176,6 +188,18 @@ export function FileManagerTabBar({
           const pathKind = sessionPathKind(workspace, path);
           const name = fileBaseName(path);
           const tabBind = bindTabRef(path);
+          const menu = fileTabMenuItems(openTabs, { pending: isPathPending(path) }).map((item) => (
+            <MenuActionItem
+              key={item.id}
+              icon={item.icon}
+              label={t(item.labelKey)}
+              danger={item.danger}
+              onPress={() => {
+                if (item.id === "delete") onDelete(path);
+                else onWorkspaceAction(fileTabMenuAction(openTabs, path, item.id));
+              }}
+            />
+          ));
           return (
             <TabChip
               key={path}
@@ -198,6 +222,7 @@ export function FileManagerTabBar({
               onDragEnd={onDragEnd}
               onDragCancel={clearDrag}
               closeLabel={t("modal.file_manager.tabs.close", { name })}
+              menu={menu}
             />
           );
         })}
@@ -243,6 +268,7 @@ function TabChip({
   onDragEnd,
   onDragCancel,
   closeLabel,
+  menu,
 }: {
   path: string;
   name: string;
@@ -267,12 +293,16 @@ function TabChip({
   onDragEnd: (pageX: number, pageY: number) => void;
   onDragCancel: () => void;
   closeLabel: string;
+  /** Items of the menu a double tap opens (desktop right-click). */
+  menu: ReactNode;
 }) {
   const armedRef = useRef(false);
   const panGrantedRef = useRef(false);
   const movedRef = useRef(false);
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const touchStartRef = useRef<{ x: number; y: number } | null>(null);
+  const menuRef = useRef<DropdownPanelHandle>(null);
+  const isDoubleTap = useDoubleTap();
   const callbacksRef = useRef({
     path,
     dragActive,
@@ -370,6 +400,7 @@ function TabChip({
     const wasArmed = armedRef.current;
     const panHadGrant = panGrantedRef.current;
     const wasMoved = movedRef.current;
+    const tapAt = touchStartRef.current;
     clearLongPressTimer();
     touchStartRef.current = null;
     movedRef.current = false;
@@ -384,11 +415,15 @@ function TabChip({
 
     armedRef.current = false;
     if (!wasMoved && !callbacksRef.current.dragActive) {
+      if (tapAt && isDoubleTap()) {
+        menuRef.current?.open({ pageX: tapAt.x, pageY: tapAt.y });
+        return;
+      }
       callbacksRef.current.onActivate();
     }
   };
 
-  return (
+  const tab = (
     <View
       ref={tabBind.ref}
       onLayout={tabBind.onLayout}
@@ -457,6 +492,21 @@ function TabChip({
         </View>
       ) : null}
     </View>
+  );
+
+  return (
+    <DropdownPanel
+      ref={menuRef}
+      label={name}
+      heading={name}
+      align="left"
+      minWidth={200}
+      maxWidth={240}
+      openOnPress={false}
+      trigger={tab}
+    >
+      {menu}
+    </DropdownPanel>
   );
 }
 

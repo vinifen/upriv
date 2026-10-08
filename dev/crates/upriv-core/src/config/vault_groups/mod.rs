@@ -8,6 +8,8 @@
 //! Mutations that do not change membership persist the raw `grouped_vaults` list
 //! (collapse / rename / order must not drop assignments).
 
+#[allow(unused_imports)]
+use crate::host_fs::HostFsQuery;
 mod types;
 
 use std::collections::HashSet;
@@ -87,7 +89,7 @@ fn groups_invalid(root: &VaultRoot, detail: impl Into<String>) -> UprivError {
 
 fn require_upriv_dir(root: &VaultRoot) -> Result<()> {
     let dir = root.root().join(".upriv");
-    if !dir.is_dir() {
+    if !dir.host_is_dir() {
         return Err(UprivError::VaultRootNotFound(dir));
     }
     Ok(())
@@ -110,7 +112,7 @@ fn trim_vault_ids(ids: &[String]) -> Vec<String> {
 
 fn require_assignable_vault(root: &VaultRoot, vault_id: &str) -> Result<()> {
     let dir = root.vault_dir(vault_id)?;
-    if !dir.is_dir() {
+    if !dir.host_is_dir() {
         return Err(UprivError::VaultNotFound(dir));
     }
     crate::config::vault_config::load_vault_config(&dir)?;
@@ -145,7 +147,7 @@ fn plan_set_grouped_vaults_hidden(
             Ok(dir) => dir,
             Err(_) => continue,
         };
-        if !dir.is_dir() {
+        if !dir.host_is_dir() {
             continue;
         }
         let config = crate::config::vault_config::load_vault_config_raw(&dir)?;
@@ -254,16 +256,16 @@ pub fn sanitize_vault_groups(
 
 fn parse_file_from_disk(root: &VaultRoot) -> Result<Option<VaultGroupsFile>> {
     let path = vault_groups_path(root);
-    if path.exists() && !path.is_file() {
+    if path.host_exists() && !path.host_is_file() {
         return Err(UprivError::VaultGroupsInvalid {
             path,
             detail: "vault_groups.toml exists but is not a file".into(),
         });
     }
-    if !path.is_file() {
+    if !path.host_is_file() {
         return Ok(None);
     }
-    let raw = std::fs::read_to_string(&path).map_err(UprivError::from)?;
+    let raw = crate::host_fs::read_to_string(&path).map_err(UprivError::from)?;
     let mut parsed: VaultGroupsFile =
         toml::from_str(&raw).map_err(|error| UprivError::VaultGroupsInvalid {
             path: path.clone(),
@@ -452,21 +454,21 @@ pub fn repair_vault_groups(root: &VaultRoot) -> Result<()> {
 fn repair_vault_groups_locked(root: &VaultRoot) -> Result<()> {
     require_upriv_dir(root)?;
     let path = vault_groups_path(root);
-    let backup_bytes = if path.is_file() {
-        Some(std::fs::read(&path).map_err(UprivError::from)?)
+    let backup_bytes = if path.host_is_file() {
+        Some(crate::host_fs::read(&path).map_err(UprivError::from)?)
     } else {
         None
     };
     save_vault_groups(root, &[])?;
     if let Some(bytes) = backup_bytes {
         let bak = path.with_extension("toml.bak");
-        let bak = if bak.exists() {
+        let bak = if bak.host_exists() {
             let stamp = crate::time::utc_filename_stamp();
             path.with_extension(format!("toml.bak.{stamp}"))
         } else {
             bak
         };
-        let _ = std::fs::write(&bak, bytes);
+        let _ = crate::host_fs::write(&bak, bytes);
     }
     Ok(())
 }
@@ -524,12 +526,12 @@ pub fn remove_vault_from_groups(root: &VaultRoot, vault_id: &str) -> Result<()> 
 pub fn known_vault_ids(root: &VaultRoot) -> Result<HashSet<String>> {
     let vaults_dir = root.vaults_dir();
     let mut ids = HashSet::new();
-    if !vaults_dir.is_dir() {
+    if !vaults_dir.host_is_dir() {
         return Ok(ids);
     }
-    for entry in std::fs::read_dir(&vaults_dir)? {
+    for entry in crate::host_fs::read_dir(&vaults_dir)? {
         let entry = entry?;
-        if !entry.file_type()?.is_dir() {
+        if !entry.file_type()?.host_is_dir() {
             continue;
         }
         let dir = entry.path();
@@ -898,21 +900,23 @@ pub fn reorder_vault_group_grouped_vaults(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[allow(unused_imports)]
+    use crate::host_fs::HostFsQuery;
     use tempfile::TempDir;
 
     fn root_with_vaults(ids: &[&str]) -> (TempDir, VaultRoot) {
         let tmp = TempDir::new().unwrap();
         let root_path = tmp.path().to_path_buf();
-        std::fs::create_dir_all(root_path.join(".upriv/vaults")).unwrap();
-        std::fs::write(
+        crate::host_fs::create_dir_all(root_path.join(".upriv/vaults")).unwrap();
+        crate::host_fs::write(
             root_path.join(".upriv/settings.toml"),
             "[package]\nvaults_dir = \".upriv/vaults\"\n",
         )
         .unwrap();
         for id in ids {
             let dir = root_path.join(".upriv/vaults").join(id);
-            std::fs::create_dir_all(&dir).unwrap();
-            std::fs::write(
+            crate::host_fs::create_dir_all(&dir).unwrap();
+            crate::host_fs::write(
                 dir.join("config.toml"),
                 format!("[vault]\nid = \"{id}\"\ndisplay_name = \"{id}\"\n"),
             )
@@ -923,7 +927,7 @@ mod tests {
     }
 
     fn disk_body(root: &VaultRoot) -> String {
-        std::fs::read_to_string(vault_groups_path(root)).unwrap()
+        crate::host_fs::read_to_string(vault_groups_path(root)).unwrap()
     }
 
     #[test]
@@ -1000,7 +1004,7 @@ grouped_vaults = []
     fn orphan_soft_dropped() {
         let (_tmp, root) = root_with_vaults(&["notes"]);
         let path = vault_groups_path(&root);
-        std::fs::write(
+        crate::host_fs::write(
             &path,
             r#"
 [[group]]
@@ -1019,7 +1023,7 @@ grouped_vaults = ["notes", "gone"]
     #[test]
     fn dual_assignment_dropped_on_load_rejected_on_save() {
         let (_tmp, root) = root_with_vaults(&["notes"]);
-        std::fs::write(
+        crate::host_fs::write(
             vault_groups_path(&root),
             r#"
 [[group]]
@@ -1089,8 +1093,8 @@ grouped_vaults = ["notes"]
     fn collapse_does_not_drop_orphans_or_invalid_config() {
         let (_tmp, root) = root_with_vaults(&["notes", "taxes"]);
         create_vault_group(&root, "work", "Work", &["notes".into(), "taxes".into()]).unwrap();
-        std::fs::remove_dir_all(root.vault_dir("taxes").unwrap()).unwrap();
-        std::fs::write(
+        crate::host_fs::remove_dir_all(root.vault_dir("taxes").unwrap()).unwrap();
+        crate::host_fs::write(
             root.vault_dir("notes").unwrap().join("config.toml"),
             "not = [[[toml",
         )
@@ -1114,7 +1118,7 @@ grouped_vaults = ["notes"]
     #[test]
     fn known_vault_ids_keeps_invalid_config_dir() {
         let (_tmp, root) = root_with_vaults(&["notes"]);
-        std::fs::write(
+        crate::host_fs::write(
             root.vault_dir("notes").unwrap().join("config.toml"),
             "broken",
         )
@@ -1127,7 +1131,7 @@ grouped_vaults = ["notes"]
     fn save_missing_upriv_does_not_recreate() {
         let (_tmp, root) = root_with_vaults(&["notes"]);
         create_vault_group(&root, "work", "Work", &[]).unwrap();
-        std::fs::remove_dir_all(root.root().join(".upriv")).unwrap();
+        crate::host_fs::remove_dir_all(root.root().join(".upriv")).unwrap();
         let err = update_vault_group(
             &root,
             "work",
@@ -1138,14 +1142,14 @@ grouped_vaults = ["notes"]
         )
         .unwrap_err();
         assert!(matches!(err, UprivError::VaultRootNotFound(_)));
-        assert!(!root.root().join(".upriv").exists());
+        assert!(!root.root().join(".upriv").host_exists());
     }
 
     #[test]
     fn directory_at_groups_path_is_invalid() {
         let (_tmp, root) = root_with_vaults(&["notes"]);
         let path = vault_groups_path(&root);
-        std::fs::create_dir_all(&path).unwrap();
+        crate::host_fs::create_dir_all(&path).unwrap();
         let known = known_vault_ids(&root).unwrap();
         let err = load_vault_groups(&root, &known).unwrap_err();
         assert!(matches!(err, UprivError::VaultGroupsInvalid { .. }));
@@ -1172,8 +1176,8 @@ grouped_vaults = ["notes"]
         let err = create_vault_group(&root, "work", "Work", &["gone".into()]).unwrap_err();
         assert!(matches!(err, UprivError::VaultNotFound(_)));
 
-        std::fs::create_dir_all(root.vault_dir("broken").unwrap()).unwrap();
-        std::fs::write(
+        crate::host_fs::create_dir_all(root.vault_dir("broken").unwrap()).unwrap();
+        crate::host_fs::write(
             root.vault_dir("broken").unwrap().join("config.toml"),
             "nope",
         )
@@ -1269,20 +1273,6 @@ color = "red"
     }
 
     #[test]
-    fn legacy_members_and_member_sort_load() {
-        let raw = r#"
-[[group]]
-id = "work"
-display_name = "Work"
-members = ["notes", "taxes"]
-member_sort = "name"
-"#;
-        let parsed = parse_vault_groups_toml_str(raw).unwrap();
-        assert_eq!(parsed.groups[0].grouped_vaults, vec!["notes", "taxes"]);
-        assert_eq!(parsed.groups[0].grouped_vault_sort, "name");
-    }
-
-    #[test]
     fn grouped_vaults_key_is_required_shape() {
         let raw = r#"
 [[group]]
@@ -1301,7 +1291,7 @@ grouped_vault_sort_direction = "asc"
     #[test]
     fn invalid_toml_errors() {
         let (_tmp, root) = root_with_vaults(&[]);
-        std::fs::write(vault_groups_path(&root), "not = [[[toml").unwrap();
+        crate::host_fs::write(vault_groups_path(&root), "not = [[[toml").unwrap();
         let known = known_vault_ids(&root).unwrap();
         let err = load_vault_groups(&root, &known).unwrap_err();
         assert!(matches!(err, UprivError::VaultGroupsInvalid { .. }));
@@ -1311,10 +1301,10 @@ grouped_vault_sort_direction = "asc"
     fn repair_backs_up_and_clears() {
         let (_tmp, root) = root_with_vaults(&["a"]);
         let path = vault_groups_path(&root);
-        std::fs::write(&path, "broken [[[").unwrap();
+        crate::host_fs::write(&path, "broken [[[").unwrap();
         repair_vault_groups(&root).unwrap();
         assert!(
-            path.with_extension("toml.bak").is_file()
+            path.with_extension("toml.bak").host_is_file()
                 || path
                     .parent()
                     .unwrap()
@@ -1325,7 +1315,7 @@ grouped_vault_sort_direction = "asc"
         let known = known_vault_ids(&root).unwrap();
         let loaded = load_vault_groups(&root, &known).unwrap();
         assert!(loaded.groups.is_empty());
-        assert!(path.is_file());
+        assert!(path.host_is_file());
     }
 
     #[test]
@@ -1334,7 +1324,7 @@ grouped_vault_sort_direction = "asc"
         create_vault_group(&root, "work", "Work", &[]).unwrap();
         let path = vault_groups_path(&root);
         let parent = path.parent().unwrap();
-        let leftovers: Vec<_> = std::fs::read_dir(parent)
+        let leftovers: Vec<_> = crate::host_fs::read_dir(parent)
             .unwrap()
             .filter_map(|e| e.ok())
             .filter(|e| e.file_name().to_string_lossy() == "vault_groups.toml.tmp")
@@ -1547,7 +1537,7 @@ grouped_vault_sort_direction = "asc"
     fn hiding_group_validates_members_before_writing_hidden() {
         let (_tmp, root) = root_with_vaults(&["notes", "taxes"]);
         create_vault_group(&root, "work", "Work", &["notes".into(), "taxes".into()]).unwrap();
-        std::fs::write(
+        crate::host_fs::write(
             root.vault_dir("taxes").unwrap().join("config.toml"),
             "not = [[[toml",
         )
@@ -1621,9 +1611,9 @@ grouped_vault_sort_direction = "asc"
     fn hiding_group_skips_mount_revalidation() {
         let (_tmp, root) = root_with_vaults(&["notes", "taxes"]);
         create_vault_group(&root, "work", "Work", &["notes".into(), "taxes".into()]).unwrap();
-        std::fs::write(
+        crate::host_fs::write(
             root.vault_dir("taxes").unwrap().join("config.toml"),
-            "[vault]\nid = \"taxes\"\ndisplay_name = \"taxes\"\n[mount]\nworkspace_path = \"relative\"\n",
+            "[vault]\nid = \"taxes\"\ndisplay_name = \"taxes\"\n[mount.linux]\npath = \"relative\"\n[mount.windows]\npath = \"relative\"\n[mount.macos]\npath = \"relative\"\n[mount.android]\npath = \"relative\"\n[mount.ios]\npath = \"relative\"\n",
         )
         .unwrap();
         update_vault_group(

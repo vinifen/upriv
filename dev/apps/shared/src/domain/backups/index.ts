@@ -6,3 +6,4 @@ export {
   backupSnapshotFileName,
   formatBackupDate,
 } from "./format";
+export { backupDeleteConfirmPhrase, matchesBackupDeleteConfirmation } from "./deleteConfirm";

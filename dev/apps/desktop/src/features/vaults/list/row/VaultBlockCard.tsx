@@ -8,6 +8,7 @@ import {
   vaultPipelineRowBudget,
   vaultDisplayLetters,
   vaultLastAccessedLabel,
+  vaultStatusLabelKey,
   type VaultListItem,
   type VaultSettingsAreaId,
 } from "@upriv/shared";
@@ -72,6 +73,7 @@ export function VaultBlockCard({
   const { t, locale } = useTranslation();
   const { settings: appSettings } = useAppSettingsContext();
   const status = resolveVaultListStatus(vault, pipelineListStatus);
+  const statusLabelKey = vaultStatusLabelKey(status, vault.id, pipelineListStatus);
   const rowBudget = vaultPipelineRowBudget(status, pipelineListStatus, vault.id);
   const openingBudget = useLoadingBudget(rowBudget.active, rowBudget.budgetMs, {
     startedAt: rowBudget.startedAt,
@@ -154,7 +156,7 @@ export function VaultBlockCard({
             </h3>
           </div>
           <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-            <VaultStatusBadge status={status} />
+            <VaultStatusBadge status={status} labelKey={statusLabelKey} />
             {openingBudget.visible ? (
               <LoadingBudgetHint
                 budgetMs={openingBudget.budgetMs}

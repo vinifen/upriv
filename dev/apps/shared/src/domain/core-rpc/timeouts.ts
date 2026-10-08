@@ -8,7 +8,7 @@ const CHEAP_RPC_MS = 10_000;
  * Invoke timeout for every CORE RPC. `satisfies Record<CoreRpcCommand, number>`
  * fails the typecheck if a command is added without a budget.
  * Desktop adds `app_shutdown` / `app_exit` / `pick_directory` / `pick_file` /
- * `pick_save_file` / `reveal_in_file_manager` / `open_in_terminal` in `invoke.ts`.
+ * `pick_save_file` / `reveal_in_file_manager` / `reveal_os_path` / `open_in_terminal` in `invoke.ts`.
  */
 export const CORE_RPC_TIMEOUT_MS = {
   [CORE_RPC_COMMANDS.APP_VERSION]: CHEAP_RPC_MS,
@@ -42,6 +42,7 @@ export const CORE_RPC_TIMEOUT_MS = {
   [CORE_RPC_COMMANDS.VAULT_CLOSE]: LOADING_BUDGET_MS.vaultPipeline,
   [CORE_RPC_COMMANDS.VAULT_CONFIG_GET]: LOADING_BUDGET_MS.default,
   [CORE_RPC_COMMANDS.VAULT_STORE_SIZE]: CHEAP_RPC_MS,
+  [CORE_RPC_COMMANDS.VAULT_CLOSE_PHASE]: CHEAP_RPC_MS,
   [CORE_RPC_COMMANDS.VAULT_CONFIG_SAVE]: LOADING_BUDGET_MS.settingsSave,
   [CORE_RPC_COMMANDS.VAULT_RENAME]: LOADING_BUDGET_MS.vaultRename,
   [CORE_RPC_COMMANDS.VAULT_DELETE]: LOADING_BUDGET_MS.vaultDelete,
@@ -67,6 +68,7 @@ export const CORE_RPC_TIMEOUT_MS = {
   [CORE_RPC_COMMANDS.VAULT_FS_WRITE]: LOADING_BUDGET_MS.default,
   [CORE_RPC_COMMANDS.VAULT_FS_WRITE_RANGE]: LOADING_BUDGET_MS.default,
   [CORE_RPC_COMMANDS.VAULT_FS_IMPORT_OS_FILE]: LOADING_BUDGET_MS.vaultFsImport,
+  [CORE_RPC_COMMANDS.VAULT_FS_IMPORT_SEAL]: LOADING_BUDGET_MS.vaultFsImport,
   [CORE_RPC_COMMANDS.VAULT_FS_TRUNCATE]: LOADING_BUDGET_MS.default,
   [CORE_RPC_COMMANDS.VAULT_FS_MKDIR]: LOADING_BUDGET_MS.default,
   [CORE_RPC_COMMANDS.VAULT_FS_CREATE_FILE]: LOADING_BUDGET_MS.default,

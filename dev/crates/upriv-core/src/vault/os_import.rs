@@ -6,7 +6,9 @@
 //! each content URI through [`ingest_import_reader`]. Neither path copies the
 //! source tree onto disk.
 
-use std::fs::{self, File};
+#[allow(unused_imports)]
+use crate::host_fs::HostFsQuery;
+use crate::host_fs::{self as fs, File};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
@@ -17,7 +19,7 @@ use crate::paths::VaultRoot;
 use crate::store::{file_name, KdfUnlockPreset, INTERNAL_WORKSPACE_FILE, SEED_LOGICAL_PATH};
 
 use super::create::create_vault;
-use super::fs::{fs_ensure_folder, fs_write_from_reader};
+use super::fs::{fs_ensure_folder, fs_write_from_reader, fs_write_send_reader};
 use super::open_close::{
     abandon_failed_import, close_vault, delete_failed_import, open_vault_for_ingest,
 };
@@ -33,6 +35,11 @@ fn layout_error(path: &Path, detail: impl Into<String>) -> UprivError {
         path: path.to_path_buf(),
         detail: detail.into(),
     }
+}
+
+/// The chosen file or folder could not be read. Not a vault-root `io_error`.
+fn source_unreadable(path: &Path) -> UprivError {
+    UprivError::ImportSourceUnreadable(path.to_path_buf())
 }
 
 fn os_name(path: &Path) -> Result<String> {
@@ -65,11 +72,11 @@ fn plan_os_path(source: &Path) -> Result<Vec<PlannedOsEntry>> {
     if !source.is_absolute() {
         return Err(layout_error(source, "choose an absolute file or folder"));
     }
-    let meta = fs::symlink_metadata(source)?;
+    let meta = fs::symlink_metadata(source).map_err(|_| source_unreadable(source))?;
     if meta.file_type().is_symlink() {
         return Err(layout_error(source, "refusing a symlink"));
     }
-    if meta.is_file() {
+    if meta.host_is_file() {
         let logical = os_name(source)?;
         if logical_name_rejected(&logical) {
             return Err(layout_error(source, "reserved or unsafe file name"));
@@ -79,22 +86,25 @@ fn plan_os_path(source: &Path) -> Result<Vec<PlannedOsEntry>> {
             source: source.to_path_buf(),
         }]);
     }
-    if !meta.is_dir() {
+    if !meta.host_is_dir() {
         return Err(layout_error(source, "choose a file or a folder"));
     }
 
     let mut planned = Vec::new();
     let mut stack = vec![(source.to_path_buf(), String::new())];
     while let Some((dir, prefix)) = stack.pop() {
-        let dir_meta = fs::symlink_metadata(&dir)?;
-        if dir_meta.file_type().is_symlink() || !dir_meta.is_dir() {
+        let dir_meta = fs::symlink_metadata(&dir).map_err(|_| source_unreadable(&dir))?;
+        if dir_meta.file_type().is_symlink() || !dir_meta.host_is_dir() {
             return Err(layout_error(&dir, "refusing a symlink"));
         }
-        let mut children = fs::read_dir(&dir)?.collect::<std::io::Result<Vec<_>>>()?;
+        let mut children = fs::read_dir(&dir)
+            .map_err(|_| source_unreadable(&dir))?
+            .collect::<std::io::Result<Vec<_>>>()
+            .map_err(|_| source_unreadable(&dir))?;
         children.sort_by_key(|entry| entry.file_name());
         for entry in children {
             let path = entry.path();
-            let child_meta = fs::symlink_metadata(&path)?;
+            let child_meta = fs::symlink_metadata(&path).map_err(|_| source_unreadable(&path))?;
             if child_meta.file_type().is_symlink() {
                 return Err(layout_error(&path, "refusing a symlink"));
             }
@@ -107,10 +117,10 @@ fn plan_os_path(source: &Path) -> Result<Vec<PlannedOsEntry>> {
             if logical_name_rejected(&logical) {
                 return Err(layout_error(&path, "reserved or unsafe file name"));
             }
-            if child_meta.is_dir() {
+            if child_meta.host_is_dir() {
                 planned.push(PlannedOsEntry::Directory(logical.clone()));
                 stack.push((path, logical));
-            } else if child_meta.is_file() {
+            } else if child_meta.host_is_file() {
                 planned.push(PlannedOsEntry::File {
                     logical,
                     source: path,
@@ -134,7 +144,7 @@ fn open_regular_file(path: &Path) -> Result<File> {
             Some(crate::paths::NofollowReject::Symlink) => {
                 Err(layout_error(path, "refusing a symlink"))
             }
-            None => Err(error.into()),
+            None => Err(source_unreadable(path)),
         },
     }
 }
@@ -203,13 +213,34 @@ pub fn ingest_import_reader(
     root: &VaultRoot,
     vault_id: &str,
     logical_path: &str,
-    reader: &mut (impl Read + ?Sized),
+    reader: &mut (impl Read + Send + ?Sized),
+) -> Result<()> {
+    ingest_import_reader_at(root, vault_id, logical_path, reader, false)
+}
+
+/// Stream one document without sealing the index.
+/// [`crate::fs_seal_staged_imports`] writes the index for the staged files.
+pub fn ingest_import_reader_staged(
+    root: &VaultRoot,
+    vault_id: &str,
+    logical_path: &str,
+    reader: &mut (impl Read + Send + ?Sized),
+) -> Result<()> {
+    ingest_import_reader_at(root, vault_id, logical_path, reader, true)
+}
+
+fn ingest_import_reader_at(
+    root: &VaultRoot,
+    vault_id: &str,
+    logical_path: &str,
+    reader: &mut (impl Read + Send + ?Sized),
+    defer_index: bool,
 ) -> Result<()> {
     let logical = normalize_import_logical(logical_path)?;
     if let Some((parent, _)) = logical.rsplit_once('/') {
         ensure_folder_path(root, vault_id, parent)?;
     }
-    fs_write_from_reader(root, vault_id, &format!("/{logical}"), reader)?;
+    fs_write_send_reader(root, vault_id, &format!("/{logical}"), reader, defer_index)?;
     Ok(())
 }
 
@@ -235,6 +266,8 @@ fn normalize_import_logical(path: &str) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
+    #[allow(unused_imports)]
+    use crate::host_fs::HostFsQuery;
     use std::fs;
     use std::io::Write;
 
@@ -294,6 +327,22 @@ mode = "encrypted_dir"
         crate::close_vault(&root, "notes", None).unwrap();
     }
 
+    #[test]
+    fn a_missing_file_is_unreadable_and_leaves_no_vault() {
+        let (_tmp, root) = crate::test_support::vault_root_with(&[]);
+        let missing = _tmp.path().join("gone.txt");
+        let err = import_logical_os_path(
+            &root,
+            config(),
+            b"pass-word-ok",
+            KdfUnlockPreset::M32,
+            &missing,
+        )
+        .unwrap_err();
+        assert!(matches!(err, UprivError::ImportSourceUnreadable(_)));
+        assert!(!root.vault_dir("notes").unwrap().host_exists());
+    }
+
     #[cfg(unix)]
     #[test]
     fn a_symlink_is_refused_and_leaves_no_vault() {
@@ -309,7 +358,7 @@ mode = "encrypted_dir"
             import_logical_os_path(&root, config(), b"pass-word-ok", KdfUnlockPreset::M32, &dir)
                 .unwrap_err();
         assert!(matches!(err, UprivError::VaultStoreInvalid { .. }));
-        assert!(!root.vault_dir("notes").unwrap().exists());
+        assert!(!root.vault_dir("notes").unwrap().host_exists());
     }
 
     #[test]
@@ -352,6 +401,6 @@ mode = "encrypted_dir"
             ingest_import_reader(&root, "notes", "upriv-seed.txt", &mut &b"no"[..]).unwrap_err();
         assert!(matches!(err, UprivError::VaultStoreInvalid { .. }));
         abort_import_vault(&root, "notes").unwrap();
-        assert!(!root.vault_dir("notes").unwrap().exists());
+        assert!(!root.vault_dir("notes").unwrap().host_exists());
     }
 }

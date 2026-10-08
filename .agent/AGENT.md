@@ -296,28 +296,24 @@ Marker: **`.upriv/settings.toml`** at vault-root. Per-vault: **`vaults/<vault_id
 | `.upriv/vaults/<id>/persistence.json` | Persisted `closed` only (+ sync metadata; **no `sealed`**) |
 | `.upriv/vaults/<id>/store/` | Vault body at rest (`header/vault.header` + `header/vault.header.copy` + `index/root.idx.enc` + `index/root.idx.enc.copy` + `data/`) |
 | `.upriv/vaults/<id>/backups/<stamp>-<id>.zip` | Frozen Stored zip of `store/` (pins under `backups/saves/`) |
-| `workspace/{display_name}/` | Desktop mount while open (`encrypted_dir` = virtual; `upriv_plain` = real plaintext) — **only when** app `[workspace].path` (or vault `[mount]` override) is set; not auto-created at vault-root init |
+| `{path}/workspace/{display_name}/` | Folder while open when the vault follows the app folder. `workspace` holds every open file manager folder there. A vault's own folder mounts at `{path}/{display_name}/` instead. Encrypted: an empty vault path needs the app file manager folder and a chosen place. A vault with its own path needs `custom_file_manager_folder` only. Plain text still uses `workspace`. Not created at vault-root init. Linux FUSE is the live folder. |
 
 Portable `.zip` of `store/` and `.7z` are **export/import files**, not modules under `vaults/<id>/`.
 
-### Workspace mount path (open access folder)
+### Workspace
 
-Distinct from vault-root / `store/`. Configures **where open vaults appear** (FUSE/WinFsp or `upriv_plain` folder).
-UI System Settings → **Mount parent** (`[workspace].path`) = folder where open vaults appear as children. Open overlay / wipe / recovery “session folder” = the open mount leaf (`{parent}/{display_name}`), not the settings field.
+Distinct from vault-root / `store/`. One folder per system, because `settings.toml` travels with the data folder. All five rows are visible; only the current system can be edited.
 
-| Store | Field | Role |
+| Store | Fields | Role |
 |-------|--------|------|
-| `.upriv/settings.toml` | `[workspace].path` | App-wide default mount **parent** (absolute). Empty = unset. |
-| `vaults/<id>/config.toml` | `[mount].workspace_path` | `"default"` inherits global, or absolute override for that vault. |
+| `.upriv/settings.toml` | `[workspace]` `file_manager_folder` | One encrypted-folder flag for every system. Starts off. A phone save keeps it. Unset on one system does not clear it. |
+| `.upriv/settings.toml` | `[workspace.<os>]` `place` + `path` | `place` is `unset`, `beside`, or `custom`. Starts `unset`. All five systems. |
+| `vaults/<id>/config.toml` | `[mount]` `app_file_manager_folder` + `custom_file_manager_folder` | Two choices for every system. `app_file_manager_folder` is `inherit`, `on`, or `off` for Use the app folder and starts `inherit`. `custom_file_manager_folder` is the Another folder switch and starts off. |
+| `vaults/<id>/config.toml` | `[mount.<os>]` `path` | Empty path follows the app place. The vault screen does not store `place`. |
 
-**Rules:**
+`unset` is the start: nothing is created, and plain text has no folder until the user chooses. `beside` creates `<data folder>/workspace/{vault name}`, next to `.upriv`. `custom` uses `{path}/workspace/{vault name}`. A vault's own folder uses `{path}/{vault name}` at that folder's root. A missing `place` with an empty path reads as `unset`. A missing `place` with a path reads as `custom`. `workspace` is where every app-folder file manager folder lives. Paths stay per system. The app stores one `file_manager_folder`. A vault stores `app_file_manager_folder` and `custom_file_manager_folder` once. The screen calls this the file manager folder. It runs only on desktop, and only when that system's place is chosen. An empty vault path follows the app place and needs the app file manager folder on, unless this vault set `on` or `off`. `app_file_manager_folder` is `inherit`, `on`, or `off` and starts as `inherit`. `on` still needs a chosen place. An own path uses `custom_file_manager_folder`, which starts off and creates that vault's folder on its own. Both choices stay saved when you switch folders. Opening an encrypted vault never waits for a folder. The in-app file manager is always available. Plain text uses the chosen place as the real folder and ignores `file_manager_folder`. Linux is the live folder; Windows and macOS save the flag until their folder exists. Phones never show a file manager folder and never mount one. A phone save keeps the shared flags.
 
-- Do **not** auto-create a workspace folder on vault-root init or create-vault.
-- Create-vault with mount `"default"` while global is empty is OK (config only).
-- Vault mount **custom** absolute path does **not** need global `[workspace].path`.
-- On **open**, if mount is `"default"` and global is empty → **prompt** (not a naked error): radios **Default** = `<vault-root>/workspace` (beside `.upriv`) / **Custom** = pick folder → write `[workspace].path` → continue unlock.
-- Paths under `.upriv/` (the entire tree, including `workspace/`) are reserved (reject). Suggested mount parent is `<vault-root>/workspace` **beside** `.upriv`, not inside it.
-- Gate does **not** validate workspace; validation is on settings save and at open.
+Do not create the folder at vault-root init. Paths under `.upriv/` are reserved. The gate does not validate workspace; save does.
 
 **`prod-example/`** is a **stale** historical bundle (`archive/` + Seal demos). Do **not** copy its layout into `dev/`. For local testing against a real tree, prefer a fresh vault-root or set `UPRIV_VAULT_ROOT` knowingly.
 
@@ -342,7 +338,7 @@ Order in `upriv-core` `paths::resolve_vault_root`:
 
 **Portable packaging exists only on Linux (AppImage) and Windows (portable exe).** macOS is always `installed` (Application Support). Android (later) has no portable mode — app sandbox / SAF only. See `dev/README.md` packaging matrix.
 
-Electron sets `UPRIV_DISTRIBUTION` + `UPRIV_DEFAULT_ROOT_ANCHOR`. First-run UI defaults to **`default_root`** for all distributions (beside the app when portable; user data dir when installed). `custom_root` mode still writes `.upriv-root` in app home. Rust `suggested_vault_root()` (`~/Documents/Upriv`) is exposed as daemon RPC `vault_root_suggested_custom_path` for the custom folder picker. Packaged **macOS is always `installed`**. **Portable remains the product default** when only an anchor is set (USB/HD-first), unless the anchor already matches the OS user-data home.
+Electron sets `UPRIV_DISTRIBUTION` + `UPRIV_DEFAULT_ROOT_ANCHOR`. Desktop first-run UI defaults to **`default_root`** (beside the app when portable; user data dir when installed, including a writable Windows install directory). Android first-run starts on **Documents/Upriv**. `custom_root` mode still writes `.upriv-root` in app home. Rust `suggested_vault_root()` (`~/Documents/Upriv`) is exposed as daemon RPC `vault_root_suggested_custom_path` for the custom folder picker. Packaged **macOS is always `installed`**. **Portable remains the product default** when only an anchor is set (USB/HD-first), unless the anchor already matches the OS user-data home.
 
 `prod-example/` is **not** auto-discovered by `electron:dev` (strict `UPRIV_DEFAULT_ROOT_ANCHOR=dev/`). It is stale vs greenfield `store/` — use only as a discovery smoke fixture or with eyes open (`UPRIV_VAULT_ROOT=…/prod-example`).
 
@@ -440,16 +436,15 @@ Vault **format** is cross-platform from day one; **v1 desktop app** ships on **L
 
 One **APK** = JS bundle + RN runtime + **`libupriv_core.so`** + `7zz` + JNI bridge. Mobile uses React Native, not Electron. Expo Go does **not** load custom Rust; need dev build when bridge exists.
 
-### Android SAF vault-root (custom_root, `content://`)
+### Android data folder
 
-Rust `paths::` uses `std::fs::Path` — SAF `content://` URIs are handled **outside** the core via a pragmatic Kotlin bridge (SDD §9.4, ARCHITECTURE §6 — the full `VaultStorage` trait migration is deferred).
+The Android default data folder is **Documents/Upriv**. `.upriv/` is not created in the private app folder. App-specific storage (`filesDir`, and `Android/data/<package>/`) needs no confirmation and is deleted on uninstall, including a directory created there under a Documents name. Shared Documents stays after uninstall, and Android requires one system confirmation before the app can create it. The system screen opens on Documents, which already exists, so confirming it is the step. Upriv creates the `Upriv` folder inside that grant, and the vault lives there. The persisted grant is Documents: Android will not grant a folder that does not exist yet, and it will not narrow a parent grant. Rust addresses the data folder as `/upriv-saf-root` (the `Upriv` child of a Documents grant, or the tree itself when the grant is already `Documents/Upriv`). The private app folder (`filesDir/upriv`) keeps the folder pointer, not the vault tree. The saved grant stays in private storage and disappears with the app. The ciphertext stays. On the next install the user confirms the same folder; an existing `.upriv` is opened as-is. If the app folder already has `.upriv` and the granted folder does not, the tree is copied and the app-folder copy is removed only after the copy matches. If the granted folder already has `.upriv`, both stay. A `.upriv` found only in the private app folder is not opened as the data folder; setup asks for Documents/Upriv and then copies it. Do not copy a vault into `filesDir` or OS temp to fake a mount.
 
-- **Persist:** the Expo picker (`pickVaultRootFolder`) already calls SAF with persistable access; native module `saf_persist_permission` takes the `takePersistableUriPermission` grant, and the active URI is stored in Android `SharedPreferences` (`SafPrefs`) — **not** in `.upriv-root` (which is `PathBuf`-only). Custom-mode `content://` short-circuits the Rust alias.
-- **`.upriv/` I/O:** `SafVaultRoot.kt` (`DocumentsContract` + `DocumentFile`) creates the `.upriv/{vaults,logs,app,runtime}` skeleton + `settings.toml` under the SAF tree. Fail if `.upriv/` cannot be created — never a second marker `upriv/` (desktop only recognizes `.upriv/`). Read/write of `settings.toml` streams bytes only — no OS temp / no plaintext staging.
-- **TOML semantics:** stay in Rust via two RAM-only RPCs — `app_settings_parse_toml` / `app_settings_serialize_toml` (in `upriv-core::config::app_settings`, wired in `upriv-rpc`). Kotlin moves bytes, Rust owns schema. `[app].last_opened_vault` is on the wire (`AppSettings.app`) and always written (empty allowed); shown in System Settings → Workspace.
-- **Service adapter:** `createNativeServices` wraps `VaultRootService` / `AppSettingsService` so SAF-active mode calls the Kotlin bridge, otherwise falls back to the existing Rust RPCs. Default-root and non-SAF filesystem paths behave exactly as before.
-- **UI:** `VaultRootDataFolderModal` Apply now accepts `content://`; the previous `error_saf_not_ready` block is gone and replaced with a neutral `saf_notice` hint.
-- **Still not SAF-backed:** `vault_*` / `vault_group_*` use `discover_bootstrap_root()` (`std::fs`). A SAF `content://` tree is Kotlin `DocumentFile` only. Native adapters **must not** call those path RPCs while `safGetActiveUri()` is set (empty list / `vault_saf_unavailable`). USB OTG / Documents work today for **setup + resolve + settings.toml**. Vault I/O on SAF needs a `VaultStorage` (or equivalent) — **do not** copy the tree to `filesDir`. FUSE/mount is desktop-only (Linux live; WinFsp stub).
+- Do **not** request `MANAGE_EXTERNAL_STORAGE`. Do not treat `/storage` or `/sdcard` as a path Rust can open.
+- Mount the grant before any path RPC while that folder is the data folder. A leftover grant is dropped when the alias is not `/upriv-saf-root`.
+- Android setup confirms Documents. The data folder created inside it is Documents/Upriv. Desktop custom paths stay filesystem paths. A Windows installer uses the user-data directory even when the install folder is writable. Portable exe and AppImage stay beside the program.
+- A picker result that cannot host vaults fails at selection time and does not become the active root.
+- Encrypted open does not create or require a workspace folder. A phone path, if the user sets one, is a storage-access document URI (`…/tree/<id>/document/<id>%2F…`), not `<tree-uri>/workspace`. A Documents grant would use `…/document/<id>%2FUpriv%2F…`, because the data folder is the `Upriv` child. The private app folder is not a workspace.
 
 ---
 

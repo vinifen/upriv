@@ -61,7 +61,7 @@ export function VaultGroupsModal({
 }: VaultGroupsModalProps) {
   const { t } = useTranslation();
   const { colors, typography } = useTheme();
-  const { message, show, dismiss } = useToast();
+  const { toast, show, dismiss } = useToast();
   const { settingsOnDisk, reportVaultRootIntegrityFailure } = useAppSettingsContext();
 
   const [saveConfirmOpen, setSaveConfirmOpen] = useState(false);
@@ -317,7 +317,7 @@ export function VaultGroupsModal({
           </View>
         </View>
       </Modal>
-      <Toast message={message} onDismiss={dismiss} />
+      <Toast toast={toast} onDismiss={dismiss} />
     </>
   );
 }

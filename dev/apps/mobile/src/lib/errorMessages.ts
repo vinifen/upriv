@@ -3,6 +3,7 @@ import type { I18nKey } from "@/i18n";
 
 /** Android SAF vault-root codes from Kotlin `SafVaultRoot` / `toSafRpcError`. */
 const SAF_ERROR_I18N: Record<string, I18nKey> = {
+  saf_not_ready: "modal.vault_root_setup.error_saf_not_ready",
   saf_unauthorized: "modal.vault_root_setup.error_saf_unauthorized",
   saf_create_failed: "modal.vault_root_setup.error_saf_create_failed",
   saf_write_failed: "modal.vault_root_setup.error_io",

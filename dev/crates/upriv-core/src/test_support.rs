@@ -58,8 +58,8 @@ impl VaultSpec {
 /// Write `vaults/<id>/config.toml` under `vaults_parent` and return the vault dir.
 pub fn write_vault_dir(vaults_parent: &Path, spec: &VaultSpec) -> PathBuf {
     let dir = vaults_parent.join(spec.id);
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("config.toml"), spec.to_toml()).unwrap();
+    crate::host_fs::create_dir_all(&dir).unwrap();
+    crate::host_fs::write(dir.join("config.toml"), spec.to_toml()).unwrap();
     dir
 }
 
@@ -68,8 +68,8 @@ pub fn vault_root_with(specs: &[VaultSpec]) -> (TempDir, VaultRoot) {
     let tmp = TempDir::new().unwrap();
     let root_path = tmp.path();
     let vaults_dir = root_path.join(".upriv/vaults");
-    std::fs::create_dir_all(&vaults_dir).unwrap();
-    std::fs::write(
+    crate::host_fs::create_dir_all(&vaults_dir).unwrap();
+    crate::host_fs::write(
         root_path.join(".upriv/settings.toml"),
         "[package]\nvaults_dir = \".upriv/vaults\"\n",
     )

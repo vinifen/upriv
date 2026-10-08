@@ -1,13 +1,23 @@
 import { Platform } from "react-native";
-import { importZipClassificationFromProbe, type CreateVaultService } from "@upriv/shared";
-import { RpcError } from "@upriv/shared";
 import {
+  importZipClassificationFromProbe,
+  RpcError,
+  sanitizeLogicalFileName,
+  type CreateVaultService,
+} from "@upriv/shared";
+import {
+  listGrantedImportFolder,
   nativeOsPathFromImportUri,
-  pickImportFolder,
+  pickImportFolderGrant,
 } from "@/features/vaults/file-manager/lib/osFileImport";
 import { rpcVaultImportProbe } from "@/lib/rpc";
-import { assertSafVaultPathRpcAvailable } from "./safVaultRpcGuard";
-import { contentTreeFromFolderPick, rememberContentTree } from "./contentTreeImport";
+import {
+  contentTreeFromFolderPick,
+  contentTreeFromPickedFile,
+  rememberContentTree,
+  startContentTreeListing,
+} from "./contentTreeImport";
+import { releaseImportCache } from "./importCache";
 import { safReleaseImportTree } from "./safVaultRoot";
 
 type DocumentPickerModule = typeof import("expo-document-picker");
@@ -55,30 +65,39 @@ export const nativeCreateVaultService: CreateVaultService = {
     }
     if (result.canceled || !result.assets?.[0]) return null;
     const asset = result.assets[0];
-    const fileName = asset.name?.trim() || "import.zip";
-    const path = fsPathFromPickerUri(asset.uri);
-    return { path, fileName };
+    const fileName = sanitizeLogicalFileName(asset.name?.trim() || "file", "file");
+    const path = fsPathFromPickerUri(asset.uri).trim();
+    let tree;
+    try {
+      tree = contentTreeFromPickedFile({ path, uri: asset.uri, fileName });
+    } catch (error) {
+      void releaseImportCache(path).catch(() => undefined);
+      throw error;
+    }
+    rememberContentTree(tree);
+    return { path: tree.directoryUri, fileName: tree.folderName };
   },
 
   async selectImportFolder() {
     if (Platform.OS !== "android") return null;
-    const picked = await pickImportFolder({ failClosed: true });
-    if (!picked) return null;
-    try {
-      const tree = contentTreeFromFolderPick(picked);
-      rememberContentTree(tree);
-      return { path: tree.directoryUri, fileName: tree.folderName };
-    } catch (error) {
-      if (picked.releaseSafTree) safReleaseImportTree(picked.releaseSafTree);
-      throw error;
-    }
+    const grant = await pickImportFolderGrant();
+    if (!grant) return null;
+    startContentTreeListing(grant.directoryUri, async () => {
+      const picked = await listGrantedImportFolder(grant.directoryUri, grant.folderName, true);
+      try {
+        return contentTreeFromFolderPick(picked);
+      } catch (error) {
+        if (picked.releaseSafTree) safReleaseImportTree(picked.releaseSafTree);
+        throw error;
+      }
+    });
+    return { path: grant.directoryUri, fileName: grant.folderName };
   },
 
   async testImportPackagePassword(password, importFile) {
     if (importFile?.kind === "backup" || importFile?.fileName.toLowerCase().endsWith(".zip")) {
       return { ok: true, embedded: null };
     }
-    assertSafVaultPathRpcAvailable();
     if (!importFile?.path) return { ok: false, embedded: null };
     const probed = await rpcVaultImportProbe({
       archivePath: importFile.path,
@@ -90,9 +109,6 @@ export const nativeCreateVaultService: CreateVaultService = {
 
   async readImportPackageSettings(importFile) {
     if (!importFile.path.trim()) return null;
-    if (importFile.kind === "backup" || importFile.fileName.toLowerCase().endsWith(".zip")) {
-      assertSafVaultPathRpcAvailable();
-    }
     const probed = await rpcVaultImportProbe({
       archivePath: importFile.path,
       kind: "store_zip",

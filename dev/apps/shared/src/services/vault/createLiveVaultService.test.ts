@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createLiveVaultService } from "./createLiveVaultService";
+import { forgetVaultSettings, peekVaultSettings } from "./vaultSettingsMemory";
 
 describe("createLiveVaultService", () => {
   it("does not relist for unlock preset", async () => {
@@ -82,5 +83,27 @@ describe("createLiveVaultService", () => {
     });
     await expect(service.probeExportPassword("notes", "pass-word-ok")).resolves.toBe(true);
     expect(probeExportPassword).toHaveBeenCalledWith("notes", "pass-word-ok");
+  });
+
+  it("keeps the last read so preferences can open without waiting", async () => {
+    forgetVaultSettings("notes");
+    const config = { vault: { id: "notes", display_name: "Notes" } } as never;
+    const saveSettings = vi.fn(async () => undefined);
+    const deleteVault = vi.fn(async () => undefined);
+    const service = createLiveVaultService({
+      listVaults: vi.fn(async () => []),
+      createVault: vi.fn(),
+      getSettings: vi.fn(async () => config),
+      saveSettings,
+      deleteVault,
+    });
+    expect(peekVaultSettings("notes")).toBeUndefined();
+    await service.getSettings("notes");
+    expect(peekVaultSettings("notes")).toEqual(config);
+    expect(peekVaultSettings("notes")).not.toBe(config);
+    await service.registerSettings("notes", config);
+    expect(peekVaultSettings("notes")).toEqual(config);
+    await service.unregisterSettings("notes");
+    expect(peekVaultSettings("notes")).toBeUndefined();
   });
 });

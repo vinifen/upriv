@@ -11,6 +11,7 @@ import {
   vaultDisplayLetters,
   vaultLastAccessedLabel,
   vaultRowChrome,
+  vaultStatusLabelKey,
   type VaultListViewMode,
   type VaultListItem,
   type VaultSettingsAreaId,
@@ -85,6 +86,7 @@ export function VaultRow({
   const { t, locale } = useTranslation();
   const { settings: appSettings } = useAppSettingsContext();
   const status = resolveVaultListStatus(vault, pipelineListStatus);
+  const statusLabelKey = vaultStatusLabelKey(status, vault.id, pipelineListStatus);
   const isOpen = status === "open";
   const isLastOpened = appSettings.app.last_opened_vault.trim() === vault.id;
   const density =
@@ -186,7 +188,7 @@ export function VaultRow({
               <VaultHiddenIndicator hidden={vault.hidden} />
             </h3>
             <div className="flex min-w-0 items-center gap-2">
-              <VaultStatusBadge status={status} />
+              <VaultStatusBadge status={status} labelKey={statusLabelKey} />
               {openingBudget.visible ? (
                 <LoadingBudgetHint
                   budgetMs={openingBudget.budgetMs}

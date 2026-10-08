@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } 
 import { useTranslation } from "@/i18n";
 import { useErrorToast } from "@/hooks/useErrorToast";
 import { fileBaseName } from "@upriv/shared";
-import { Button, LoadingBudgetHint } from "@/components/ui";
+import { LoadingBudgetHint } from "@/components/ui";
 import { allowFileManagerDrop, beginOsFileImport } from "../lib/osFileDrop";
 import { osFileImportParentPath } from "../lib/osFileImportTarget";
 import type { FileManagerApi } from "../hooks/useVaultFileManager";
@@ -173,9 +173,7 @@ export function FileEditorPane({ fm }: FileEditorPaneProps) {
     isFileImage,
     isImportPending,
     isImportProcessing,
-    isImportTimedOut,
     importBudget,
-    retryImport,
   } = fm;
   const activeTabPath = workspace.activeTabPath;
 
@@ -213,35 +211,6 @@ export function FileEditorPane({ fm }: FileEditorPaneProps) {
   const loadError = fileLoadError(activeTabPath);
   const importing = isImportPending(activeTabPath);
   const processing = isImportProcessing(activeTabPath);
-
-  if (importing && isImportTimedOut(activeTabPath)) {
-    return (
-      <ViewerDropZone fm={fm}>
-        <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 bg-surface-container-high px-6 text-center">
-          <p className="font-mono text-[10px] uppercase tracking-widest text-on-surface-variant">
-            {t("modal.file_manager.import.loading_kicker")}
-          </p>
-          <p className="max-w-sm text-sm text-on-surface-variant">{t("loading.timed_out")}</p>
-          <Button variant="primary" size="md" onClick={retryImport}>
-            {t("action.retry")}
-          </Button>
-        </div>
-      </ViewerDropZone>
-    );
-  }
-
-  if (importing && processing && importBudget.timedOut) {
-    return (
-      <ViewerDropZone fm={fm}>
-        <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 bg-surface-container-high px-6 text-center">
-          <p className="font-mono text-[10px] uppercase tracking-widest text-on-surface-variant">
-            {t("modal.file_manager.import.loading_kicker")}
-          </p>
-          <p className="max-w-sm text-sm text-on-surface-variant">{t("loading.timed_out")}</p>
-        </div>
-      </ViewerDropZone>
-    );
-  }
 
   if (importing) {
     return (
