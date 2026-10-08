@@ -182,7 +182,7 @@ describe("active import writes", () => {
     expect(idleFiles[IMPORT_EXPLORER_SKELETON_FILES - 1]).toBe(
       `/photos/f${IMPORT_EXPLORER_SKELETON_FILES - 1}.txt`,
     );
-    expect(idleFiles.at(-1)).toBe("/photos/.upriv-import-queue");
+    expect(idleFiles[idleFiles.length - 1]).toBe("/photos/.upriv-import-queue");
     expect(idleFiles).not.toContain("/photos/f200.txt");
 
     const shown = pendingEntriesForExplorer(pending, new Set(["/photos/f200.txt"]));

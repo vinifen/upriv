@@ -704,6 +704,7 @@ export function useVaultFileManager({
       dispatch,
       fs,
       publishImportedTree,
+      setTree,
       showToast,
       syncTree,
       t,

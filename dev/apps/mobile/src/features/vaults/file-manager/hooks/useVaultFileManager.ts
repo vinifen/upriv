@@ -598,6 +598,7 @@ export function useVaultFileManager({
       fs,
       publishImportedTree,
       revealImportNames,
+      setTree,
       showToast,
       syncTree,
       t,
