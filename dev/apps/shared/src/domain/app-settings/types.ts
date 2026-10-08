@@ -1,4 +1,5 @@
 import type { VaultListSortDirection, VaultListSortMode, VaultListViewMode } from "../vault-list";
+import { workspaceTablesEqual, type WorkspaceTable } from "../workspace";
 
 export type LocaleId = "en" | "pt-BR" | "es";
 export type UiTheme = "dark" | "neutral" | "light";
@@ -110,13 +111,10 @@ export interface AppSettingsConfig {
     last_opened_vault: string;
   };
   /**
-   * Default mount parent for open vaults (`[workspace]` in `settings.toml`).
-   * Empty `path` = unset — do not create a mount folder until the user chooses.
+   * Per-system workspace place (`[workspace.<os>]` in `settings.toml`).
+   * `place` starts `unset`. `file_manager_folder` is one flag for every system and starts off.
    */
-  workspace: {
-    /** Absolute filesystem path, or `""` when unset. */
-    path: string;
-  };
+  workspace: WorkspaceTable;
 }
 
 export type AppSettingsPatch = {
@@ -155,6 +153,6 @@ export function appSettingsEqual(a: AppSettingsConfig, b: AppSettingsConfig): bo
     a.logging.level === b.logging.level &&
     a.logging.entries_per_file === b.logging.entries_per_file &&
     a.logging.keep_last_entries === b.logging.keep_last_entries &&
-    a.workspace.path.trim() === b.workspace.path.trim()
+    workspaceTablesEqual(a.workspace, b.workspace)
   );
 }

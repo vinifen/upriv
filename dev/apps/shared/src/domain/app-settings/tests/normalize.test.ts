@@ -40,38 +40,6 @@ describe("normalizeAppSettings", () => {
     expect(normalizeAppSettings(settings).app.upriv_root_path).toBe("/data/upriv");
   });
 
-  it("splits the legacy combined settings-button toggle", () => {
-    const settings = createDefaultAppSettings();
-    const legacy = settings as typeof settings & {
-      ui: typeof settings.ui & {
-        vault_list_show_vault_group_settings_button?: boolean;
-      };
-    };
-    delete (legacy.ui as { vault_list_show_vault_settings_button?: boolean })
-      .vault_list_show_vault_settings_button;
-    delete (legacy.ui as { vault_list_show_group_settings_button?: boolean })
-      .vault_list_show_group_settings_button;
-    legacy.ui.vault_list_show_vault_group_settings_button = false;
-    const normalized = normalizeAppSettings(legacy);
-    expect(normalized.ui.vault_list_show_vault_settings_button).toBe(false);
-    expect(normalized.ui.vault_list_show_group_settings_button).toBe(false);
-  });
-
-  it("explicit vault/group toggles win over the legacy combined flag", () => {
-    const settings = createDefaultAppSettings();
-    const legacy = settings as typeof settings & {
-      ui: typeof settings.ui & {
-        vault_list_show_vault_group_settings_button?: boolean;
-      };
-    };
-    legacy.ui.vault_list_show_vault_settings_button = true;
-    legacy.ui.vault_list_show_group_settings_button = false;
-    legacy.ui.vault_list_show_vault_group_settings_button = false;
-    const normalized = normalizeAppSettings(legacy);
-    expect(normalized.ui.vault_list_show_vault_settings_button).toBe(true);
-    expect(normalized.ui.vault_list_show_group_settings_button).toBe(false);
-  });
-
   it("defaults lifecycle_close_modal_on_submit to false", () => {
     const settings = createDefaultAppSettings();
     expect(settings.ui.lifecycle_close_modal_on_submit).toBe(false);

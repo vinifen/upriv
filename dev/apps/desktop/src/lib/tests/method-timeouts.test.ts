@@ -11,6 +11,7 @@ describe("METHOD_TIMEOUT_MS", () => {
     expect(METHOD_TIMEOUT_MS.pick_file).toBe(0);
     expect(METHOD_TIMEOUT_MS.pick_save_file).toBe(0);
     expect(METHOD_TIMEOUT_MS.reveal_in_file_manager).toBe(10_000);
+    expect(METHOD_TIMEOUT_MS.reveal_os_path).toBe(10_000);
     expect(METHOD_TIMEOUT_MS.open_in_terminal).toBe(10_000);
     expect(METHOD_TIMEOUT_MS.app_shutdown).toBe(LOADING_BUDGET_MS.vaultPipeline);
     expect(METHOD_TIMEOUT_MS.app_exit).toBe(LOADING_BUDGET_MS.vaultPipeline);

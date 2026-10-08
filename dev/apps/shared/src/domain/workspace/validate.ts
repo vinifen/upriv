@@ -1,4 +1,5 @@
-import { WORKSPACE_PATH_DEFAULT, type WorkspacePathIssue } from "./types";
+import type { WorkspacePathIssue } from "./types";
+import { WORKSPACE_SYSTEMS, type WorkspaceTable } from "./os";
 import { isWindowsReservedName } from "../format/windowsReserved";
 
 function trimPath(value: unknown): string {
@@ -49,19 +50,7 @@ export function safTreeUriHasExtraSegment(path: string): boolean {
   return !/^\/document(\/|$)/i.test(rest);
 }
 
-/**
- * Normalize vault `[mount].workspace_path`: empty → `"default"`; otherwise trim.
- * Does not validate absolute-ness (use {@link validateMountWorkspacePath}).
- */
-export function normalizeMountWorkspacePath(value: unknown): string {
-  const trimmed = trimPath(value);
-  if (!trimmed || trimmed.toLowerCase() === WORKSPACE_PATH_DEFAULT) {
-    return WORKSPACE_PATH_DEFAULT;
-  }
-  return trimmed;
-}
-
-/** Normalize app `[workspace].path`: trim; empty stays unset. */
+/** Normalize one workspace path: trim; empty stays unset. */
 export function normalizeWorkspaceGlobalPath(value: unknown): string {
   return trimPath(value);
 }
@@ -69,13 +58,38 @@ export function normalizeWorkspaceGlobalPath(value: unknown): string {
 /**
  * Whether `candidate` contains a `.upriv` path segment (case-insensitive),
  * independent of vault-root — parity with Rust `path_is_under_reserved_upriv_tree`.
- * The entire `.upriv/` tree is reserved (not only vaults/logs/app/runtime).
+ * The entire `.upriv/` tree is reserved. A storage-access address is checked
+ * after percent-decoding, so `…%2F.upriv` is the same reserved tree.
  */
 export function pathIsUnderReservedUprivTree(candidate: string): boolean {
   const path = trimPath(candidate);
-  if (!path || path.startsWith("content://")) return false;
-  const parts = path.replace(/\\/g, "/").toLowerCase().split("/").filter(Boolean);
-  return parts.includes(".upriv");
+  if (!path) return false;
+  const saf = path.toLowerCase().startsWith("content://");
+  const decoded = saf ? decodeContentUri(path) : path;
+  const parts = decoded.replace(/\\/g, "/").split("/").filter(Boolean);
+  return parts.some((part) => segmentIsReservedUpriv(part, saf));
+}
+
+function segmentIsReservedUpriv(segment: string, saf: boolean): boolean {
+  if (segment.toLowerCase() === ".upriv") return true;
+  if (!saf) return false;
+  const tail = segment.split(":").pop() ?? segment;
+  return tail.toLowerCase() === ".upriv";
+}
+
+/** At most two passes. Storage-access ids are encoded once; a pasted id may be twice. */
+function decodeContentUri(uri: string): string {
+  let current = uri;
+  for (let pass = 0; pass < 2; pass += 1) {
+    try {
+      const next = decodeURIComponent(current);
+      if (next === current) break;
+      current = next;
+    } catch {
+      break;
+    }
+  }
+  return current;
 }
 
 /**
@@ -111,51 +125,43 @@ export function validateWorkspaceGlobalPath(
   return null;
 }
 
-/**
- * Validate vault `[mount].workspace_path`.
- * `"default"` is always ok; otherwise must be absolute and not reserved.
- */
-export function validateMountWorkspacePath(
-  path: unknown,
+/** Validate every path in a workspace table. Empty is unset. */
+export function validateWorkspaceTable(
+  table: WorkspaceTable,
   vaultRootPath?: string | null,
 ): WorkspacePathIssue | null {
-  const normalized = normalizeMountWorkspacePath(path);
-  if (normalized === WORKSPACE_PATH_DEFAULT) return null;
-  if (!isAbsoluteFilesystemPath(normalized)) return "not_absolute";
-  if (safTreeUriHasExtraSegment(normalized)) return "saf_tree_child";
-  if (isReservedUprivWorkspacePath(normalized, vaultRootPath)) return "reserved";
+  for (const system of WORKSPACE_SYSTEMS) {
+    const issue = validateWorkspaceGlobalPath(table[system].path, vaultRootPath);
+    if (issue) return issue;
+  }
   return null;
 }
 
 /**
- * Resolve the mount parent directory for a vault (no display_name leaf yet).
- * Returns `null` when global is unset and vault uses default.
- */
-export function resolveMountParentPath(
-  globalPath: string | null | undefined,
-  mountWorkspacePath: string | null | undefined,
-): string | null {
-  const mount = normalizeMountWorkspacePath(mountWorkspacePath);
-  if (mount !== WORKSPACE_PATH_DEFAULT) return mount;
-  const global = normalizeWorkspaceGlobalPath(globalPath);
-  return global || null;
-}
-
-/**
- * Full mount point: `{parent}/{displayName}` when parent is known.
- * Does not create directories. Leaf sanitization matches Rust `sanitize_path_component`.
+ * Full mount point when `parent` is set.
+ * The app folder uses `{parent}/workspace/{displayName}`.
+ * A vault's own folder uses `{parent}/{displayName}` at that folder's root.
+ * A `content://` tree becomes the document URI of that child.
+ * Does not create directories. Leaf sanitization matches Rust.
  */
 export function resolveVaultMountPoint(
-  globalPath: string | null | undefined,
-  mountWorkspacePath: string | null | undefined,
+  parent: string | null | undefined,
   displayName: string,
+  ownFolder = false,
 ): string | null {
-  const parent = resolveMountParentPath(globalPath, mountWorkspacePath);
-  if (!parent) return null;
+  const base = normalizeWorkspaceGlobalPath(parent).replace(/[/\\]+$/, "");
+  if (!base) return null;
   const leaf = sanitizeMountLeaf(displayName);
-  const sep = parent.includes("\\") && !parent.includes("/") ? "\\" : "/";
-  const base = parent.replace(/[/\\]+$/, "");
-  return `${base}${sep}${leaf}`;
+  if (base.toLowerCase().startsWith("content://")) {
+    const tree = parseSafTree(base);
+    if (!tree) return null;
+    const documentId = ownFolder
+      ? `${tree.treeId}/${leaf}`
+      : `${safWorkspaceDocumentId(tree.treeId)}/${leaf}`;
+    return safDocumentUri(tree, documentId);
+  }
+  const sep = base.includes("\\") && !base.includes("/") ? "\\" : "/";
+  return ownFolder ? `${base}${sep}${leaf}` : `${base}${sep}workspace${sep}${leaf}`;
 }
 
 /** Mount leaf under the parent — mirrors Rust `sanitize_path_component`. */
@@ -175,31 +181,80 @@ export function sanitizeMountLeaf(name: string): string {
 }
 
 /**
- * Suggested default for app `[workspace].path`: `<vaultRoot>/workspace`
- * (beside `.upriv`, same data-folder parent). Empty vault-root → `""`.
+ * Child of the granted tree where `workspace` sits beside `.upriv`.
+ * A Documents grant is the parent; the data folder is the `Upriv` directory
+ * inside it.
+ */
+function safWorkspaceDocumentId(treeId: string): string {
+  if (treeId === "primary:Documents" || treeId === "home:Documents") {
+    return `${treeId}/Upriv/workspace`;
+  }
+  return `${treeId}/workspace`;
+}
+
+interface SafTree {
+  base: string;
+  treeId: string;
+}
+
+/** `content://…/tree/<id>` without a fake child path stuck on the end. */
+function parseSafTree(treeUri: string): SafTree | null {
+  const lower = treeUri.toLowerCase();
+  const marker = "/tree/";
+  const idx = lower.indexOf(marker);
+  if (idx < 0) return null;
+  let after = treeUri.slice(idx + marker.length);
+  const query = after.search(/[?#]/);
+  if (query >= 0) after = after.slice(0, query);
+  const documentAt = after.toLowerCase().indexOf("/document/");
+  const treeEncoded = (documentAt >= 0 ? after.slice(0, documentAt) : after).replace(/\/+$/, "");
+  if (!treeEncoded) return null;
+  let treeId: string;
+  try {
+    treeId = decodeURIComponent(treeEncoded);
+  } catch {
+    return null;
+  }
+  if (!treeId || treeId === "." || treeId === "..") return null;
+  return { base: treeUri.slice(0, idx).replace(/[?#].*$/, ""), treeId };
+}
+
+function safDocumentUri(tree: SafTree, documentId: string): string {
+  return `${tree.base}/tree/${encodeURIComponent(tree.treeId)}/document/${encodeURIComponent(documentId)}`;
+}
+
+/**
+ * Document URI of the `workspace` child under a storage-access tree.
+ * `…/tree/<id>/workspace` is not a child; the child is
+ * `…/tree/<id>/document/<id>%2Fworkspace`.
+ */
+function suggestedSafWorkspaceUri(treeUri: string): string {
+  const tree = parseSafTree(treeUri);
+  if (!tree) return "";
+  return safDocumentUri(tree, safWorkspaceDocumentId(tree.treeId));
+}
+
+/**
+ * Folder that holds every app-folder file manager folder: `{parent}/workspace`.
+ * A storage-access address is returned unchanged; it is not a filesystem path.
+ */
+export function workspaceContainerPath(parent: string | null | undefined): string {
+  const base = trimPath(parent).replace(/[/\\]+$/, "");
+  if (!base || base.toLowerCase().startsWith("content://")) return base;
+  const sep = base.includes("\\") && !base.includes("/") ? "\\" : "/";
+  return `${base}${sep}workspace`;
+}
+
+/**
+ * Suggested default for app `[workspace].path`: `<vaultRoot>/workspace`.
+ * A storage-access tree uses the document URI of that child. Empty vault-root → `""`.
  */
 export function suggestedDefaultWorkspacePath(vaultRootPath: string | null | undefined): string {
   const root = trimPath(vaultRootPath).replace(/[/\\]+$/, "");
   if (!root) return "";
-  // SAF tree URIs are not filesystem parents — `/workspace` concat is not a child.
-  if (root.toLowerCase().startsWith("content://")) return "";
+  if (root.toLowerCase().startsWith("content://")) return suggestedSafWorkspaceUri(root);
   const sep = root.includes("\\") && !root.includes("/") ? "\\" : "/";
   return `${root}${sep}workspace`;
-}
-
-/**
- * True when opening a vault that inherits the global workspace and that path
- * is still unset — UI should prompt (Default = beside `.upriv` / Custom).
- * Create-vault with `"default"` is fine while unset; only open needs a path.
- */
-export function needsWorkspaceSetupOnOpen(
-  globalPath: string | null | undefined,
-  mountWorkspacePath: string | null | undefined,
-): boolean {
-  if (normalizeMountWorkspacePath(mountWorkspacePath) !== WORKSPACE_PATH_DEFAULT) {
-    return false;
-  }
-  return !normalizeWorkspaceGlobalPath(globalPath);
 }
 
 /**

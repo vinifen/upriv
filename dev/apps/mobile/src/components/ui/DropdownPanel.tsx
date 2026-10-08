@@ -1,11 +1,13 @@
 import {
   cloneElement,
   createContext,
+  forwardRef,
   isValidElement,
   useCallback,
   useContext,
   useEffect,
   useId,
+  useImperativeHandle,
   useLayoutEffect,
   useRef,
   useState,
@@ -63,7 +65,14 @@ interface DropdownPanelProps {
   maxWidth?: number;
   /** Pressable / IconButton trigger — opened menu anchors under this control. */
   trigger: ReactElement<TriggerProps>;
+  /** When false the trigger only anchors the menu; open it through the ref (double-tap). */
+  openOnPress?: boolean;
   children: ReactNode;
+}
+
+export interface DropdownPanelHandle {
+  /** Open anchored to the trigger, at the height of `touch` when given. */
+  open: (touch?: { pageX: number; pageY: number }) => void;
 }
 
 const PanelCloseContext = createContext<(() => void) | null>(null);
@@ -275,317 +284,329 @@ function DropdownMenuSurface({
  * Anchored menu under the trigger — desktop `DropdownPanel` / `DropdownMenu` parity.
  * Renders through {@link DropdownOverlayProvider} (same window as the trigger).
  */
-export function DropdownPanel({
-  label,
-  heading,
-  align = "right",
-  minWidth = 224,
-  maxWidth = 320,
-  trigger,
-  children,
-}: DropdownPanelProps) {
-  const panelId = useId();
-  const insets = useSafeAreaInsets();
-  const { width: winW, height: winH } = useWindowDimensions();
-  const { colors } = useTheme();
-  const { t } = useTranslation();
-  const { setOverlay, measureHostOrigin } = useDropdownOverlay();
-  const wrapRef = useRef<View>(null);
-  const layoutSize = useRef({ width: 0, height: 0 });
-  const [open, setOpen] = useState(false);
-  const [exiting, setExiting] = useState(false);
-  const [anchor, setAnchor] = useState<AnchorRect | null>(null);
-  const [contentH, setContentH] = useState(0);
-  const openRef = useRef(false);
-  openRef.current = open;
-  const exitingRef = useRef(false);
-  const openGen = useRef(0);
-  const menuOpacity = useRef(new Animated.Value(0)).current;
-  const menuScale = useRef(new Animated.Value(MODAL_SCALE_FROM)).current;
-  const enteredRef = useRef(false);
+export const DropdownPanel = forwardRef<DropdownPanelHandle, DropdownPanelProps>(
+  function DropdownPanel(
+    {
+      label,
+      heading,
+      align = "right",
+      minWidth = 224,
+      maxWidth = 320,
+      trigger,
+      openOnPress = true,
+      children,
+    },
+    ref,
+  ) {
+    const panelId = useId();
+    const insets = useSafeAreaInsets();
+    const { width: winW, height: winH } = useWindowDimensions();
+    const { colors } = useTheme();
+    const { t } = useTranslation();
+    const { setOverlay, measureHostOrigin } = useDropdownOverlay();
+    const wrapRef = useRef<View>(null);
+    const layoutSize = useRef({ width: 0, height: 0 });
+    const [open, setOpen] = useState(false);
+    const [exiting, setExiting] = useState(false);
+    const [anchor, setAnchor] = useState<AnchorRect | null>(null);
+    const [contentH, setContentH] = useState(0);
+    const openRef = useRef(false);
+    openRef.current = open;
+    const exitingRef = useRef(false);
+    const openGen = useRef(0);
+    const menuOpacity = useRef(new Animated.Value(0)).current;
+    const menuScale = useRef(new Animated.Value(MODAL_SCALE_FROM)).current;
+    const enteredRef = useRef(false);
 
-  const finishClose = useCallback(() => {
-    openGen.current += 1;
-    exitingRef.current = false;
-    setOpen(false);
-    setExiting(false);
-    setAnchor(null);
-    setContentH(0);
-    enteredRef.current = false;
-    menuOpacity.setValue(0);
-    menuScale.setValue(MODAL_SCALE_FROM);
-    setOverlay(null, panelId);
-  }, [menuOpacity, menuScale, panelId, setOverlay]);
+    const finishClose = useCallback(() => {
+      openGen.current += 1;
+      exitingRef.current = false;
+      setOpen(false);
+      setExiting(false);
+      setAnchor(null);
+      setContentH(0);
+      enteredRef.current = false;
+      menuOpacity.setValue(0);
+      menuScale.setValue(MODAL_SCALE_FROM);
+      setOverlay(null, panelId);
+    }, [menuOpacity, menuScale, panelId, setOverlay]);
 
-  const close = useCallback(() => {
-    if (exitingRef.current) {
-      finishClose();
-      return;
-    }
-    if (!openRef.current) {
-      finishClose();
-      return;
-    }
-    exitingRef.current = true;
-    setExiting(true);
-    const gen = openGen.current;
-    const done = () => {
-      if (gen !== openGen.current) return;
-      finishClose();
-    };
-    Animated.parallel([
-      Animated.timing(menuOpacity, {
-        toValue: 0,
-        duration: MODAL_CLOSE_MS,
-        easing: menuEase,
-        useNativeDriver: true,
-      }),
-      Animated.timing(menuScale, {
-        toValue: MODAL_SCALE_FROM,
-        duration: MODAL_CLOSE_MS,
-        easing: menuEase,
-        useNativeDriver: true,
-      }),
-    ]).start(done);
-  }, [finishClose, menuOpacity, menuScale]);
-
-  // Enter as soon as the menu mounts — do not wait on content measure (that felt like a snap).
-  useEffect(() => {
-    if (!open || exiting || enteredRef.current) return;
-    enteredRef.current = true;
-    menuOpacity.setValue(0);
-    menuScale.setValue(MODAL_SCALE_FROM);
-    let inner = 0;
-    const outer = requestAnimationFrame(() => {
-      inner = requestAnimationFrame(() => {
-        Animated.parallel([
-          Animated.timing(menuOpacity, {
-            toValue: 1,
-            duration: MODAL_OPEN_MS,
-            easing: menuEase,
-            useNativeDriver: true,
-          }),
-          Animated.timing(menuScale, {
-            toValue: 1,
-            duration: MODAL_OPEN_MS,
-            easing: menuEase,
-            useNativeDriver: true,
-          }),
-        ]).start();
-      });
-    });
-    return () => {
-      cancelAnimationFrame(outer);
-      cancelAnimationFrame(inner);
-    };
-  }, [exiting, menuOpacity, menuScale, open]);
-
-  const readAnchor = useCallback((): Promise<AnchorRect | null> => {
-    return new Promise((resolve) => {
-      const node = wrapRef.current;
-      if (!node) {
-        resolve(null);
+    const close = useCallback(() => {
+      if (exitingRef.current) {
+        finishClose();
         return;
       }
+      if (!openRef.current) {
+        finishClose();
+        return;
+      }
+      exitingRef.current = true;
+      setExiting(true);
+      const gen = openGen.current;
+      const done = () => {
+        if (gen !== openGen.current) return;
+        finishClose();
+      };
+      Animated.parallel([
+        Animated.timing(menuOpacity, {
+          toValue: 0,
+          duration: MODAL_CLOSE_MS,
+          easing: menuEase,
+          useNativeDriver: true,
+        }),
+        Animated.timing(menuScale, {
+          toValue: MODAL_SCALE_FROM,
+          duration: MODAL_CLOSE_MS,
+          easing: menuEase,
+          useNativeDriver: true,
+        }),
+      ]).start(done);
+    }, [finishClose, menuOpacity, menuScale]);
 
-      // Prefer measure() pageX/pageY — measureInWindow is unreliable on Android
-      // edge-to-edge (SDK 35 / RN 0.76) and was placing menus at the wrong origin.
-      node.measure((_x, _y, width, height, pageX, pageY) => {
-        const w =
-          width > 0
-            ? width
-            : layoutSize.current.width > 0
-              ? layoutSize.current.width
-              : FALLBACK_TRIGGER_W;
-        const h =
-          height > 0
-            ? height
-            : layoutSize.current.height > 0
-              ? layoutSize.current.height
-              : FALLBACK_TRIGGER_H;
+    // Enter as soon as the menu mounts — do not wait on content measure (that felt like a snap).
+    useEffect(() => {
+      if (!open || exiting || enteredRef.current) return;
+      enteredRef.current = true;
+      menuOpacity.setValue(0);
+      menuScale.setValue(MODAL_SCALE_FROM);
+      let inner = 0;
+      const outer = requestAnimationFrame(() => {
+        inner = requestAnimationFrame(() => {
+          Animated.parallel([
+            Animated.timing(menuOpacity, {
+              toValue: 1,
+              duration: MODAL_OPEN_MS,
+              easing: menuEase,
+              useNativeDriver: true,
+            }),
+            Animated.timing(menuScale, {
+              toValue: 1,
+              duration: MODAL_OPEN_MS,
+              easing: menuEase,
+              useNativeDriver: true,
+            }),
+          ]).start();
+        });
+      });
+      return () => {
+        cancelAnimationFrame(outer);
+        cancelAnimationFrame(inner);
+      };
+    }, [exiting, menuOpacity, menuScale, open]);
 
-        if (
-          !Number.isFinite(pageX) ||
-          !Number.isFinite(pageY) ||
-          (pageX === 0 && pageY === 0 && w === FALLBACK_TRIGGER_W && layoutSize.current.width === 0)
-        ) {
-          node.measureInWindow((ix, iy, iw, ih) => {
-            const ww = iw > 0 ? iw : w;
-            const hh = ih > 0 ? ih : h;
-            if (!Number.isFinite(ix) || !Number.isFinite(iy)) {
-              resolve(null);
-              return;
-            }
-            resolve({ x: ix, y: iy, width: ww, height: hh });
-          });
+    const readAnchor = useCallback((): Promise<AnchorRect | null> => {
+      return new Promise((resolve) => {
+        const node = wrapRef.current;
+        if (!node) {
+          resolve(null);
           return;
         }
 
-        resolve({ x: pageX, y: pageY, width: w, height: h });
-      });
-    });
-  }, []);
+        // Prefer measure() pageX/pageY — measureInWindow is unreliable on Android
+        // edge-to-edge (SDK 35 / RN 0.76) and was placing menus at the wrong origin.
+        node.measure((_x, _y, width, height, pageX, pageY) => {
+          const w =
+            width > 0
+              ? width
+              : layoutSize.current.width > 0
+                ? layoutSize.current.width
+                : FALLBACK_TRIGGER_W;
+          const h =
+            height > 0
+              ? height
+              : layoutSize.current.height > 0
+                ? layoutSize.current.height
+                : FALLBACK_TRIGGER_H;
 
-  const openMenu = useCallback(
-    (touch?: { pageX: number; pageY: number }) => {
-      const gen = ++openGen.current;
-      const run = () => {
-        if (gen !== openGen.current) return;
-        void Promise.all([readAnchor(), measureHostOrigin()]).then(([measured, origin]) => {
-          if (gen !== openGen.current) return;
-          const { w, h } = triggerSize(measured, layoutSize.current);
-          const picked = pickAnchor(measured, touch, w, h);
-          if (!picked) return;
-          setAnchor({
-            ...picked,
-            x: picked.x - origin.x,
-            y: picked.y - origin.y,
-          });
-          exitingRef.current = false;
-          setExiting(false);
-          setOpen(true);
+          if (
+            !Number.isFinite(pageX) ||
+            !Number.isFinite(pageY) ||
+            (pageX === 0 &&
+              pageY === 0 &&
+              w === FALLBACK_TRIGGER_W &&
+              layoutSize.current.width === 0)
+          ) {
+            node.measureInWindow((ix, iy, iw, ih) => {
+              const ww = iw > 0 ? iw : w;
+              const hh = ih > 0 ? ih : h;
+              if (!Number.isFinite(ix) || !Number.isFinite(iy)) {
+                resolve(null);
+                return;
+              }
+              resolve({ x: ix, y: iy, width: ww, height: hh });
+            });
+            return;
+          }
+
+          resolve({ x: pageX, y: pageY, width: w, height: h });
         });
-      };
+      });
+    }, []);
 
-      if (touch) {
-        run();
+    const openMenu = useCallback(
+      (touch?: { pageX: number; pageY: number }) => {
+        const gen = ++openGen.current;
+        const run = () => {
+          if (gen !== openGen.current) return;
+          void Promise.all([readAnchor(), measureHostOrigin()]).then(([measured, origin]) => {
+            if (gen !== openGen.current) return;
+            const { w, h } = triggerSize(measured, layoutSize.current);
+            const picked = pickAnchor(measured, touch, w, h);
+            if (!picked) return;
+            setAnchor({
+              ...picked,
+              x: picked.x - origin.x,
+              y: picked.y - origin.y,
+            });
+            exitingRef.current = false;
+            setExiting(false);
+            setOpen(true);
+          });
+        };
+
+        if (touch) {
+          run();
+          return;
+        }
+
+        // No press coordinates (rare) — wait a frame so layout after an RN Modal settles.
+        InteractionManager.runAfterInteractions(() => {
+          requestAnimationFrame(() => {
+            requestAnimationFrame(run);
+          });
+        });
+      },
+      [measureHostOrigin, readAnchor],
+    );
+
+    const onWrapLayout = useCallback((event: LayoutChangeEvent) => {
+      const { width, height } = event.nativeEvent.layout;
+      layoutSize.current = { width, height };
+    }, []);
+
+    useImperativeHandle(ref, () => ({ open: openMenu }), [openMenu]);
+
+    const enhancedTrigger =
+      openOnPress && isValidElement(trigger)
+        ? cloneElement(trigger, {
+            onPress: (event?: GestureResponderEvent) => {
+              trigger.props.onPress?.(event);
+              if (openRef.current) {
+                close();
+                return;
+              }
+              const pageX = event?.nativeEvent?.pageX;
+              const pageY = event?.nativeEvent?.pageY;
+              openMenu(
+                pageX != null && pageY != null && Number.isFinite(pageX) && Number.isFinite(pageY)
+                  ? { pageX, pageY }
+                  : undefined,
+              );
+            },
+          })
+        : trigger;
+
+    const gap = spacing.sm;
+    const maxPanelW = Math.min(maxWidth, winW - spacing.lg * 2);
+    const panelMinW = Math.min(minWidth, maxPanelW);
+
+    useLayoutEffect(() => {
+      if (!open && !exiting) {
+        setOverlay(null, panelId);
+        return;
+      }
+      if (!open || !anchor || exiting) {
+        // Keep the current overlay while the close tween runs. Remounting here
+        // aborts native-driver animation (`finished: false`) and leaves a scrim
+        // that swallows the next press on ⋮ / settings.
         return;
       }
 
-      // No press coordinates (rare) — wait a frame so layout after an RN Modal settles.
-      InteractionManager.runAfterInteractions(() => {
-        requestAnimationFrame(() => {
-          requestAnimationFrame(run);
-        });
-      });
-    },
-    [measureHostOrigin, readAnchor],
-  );
-
-  const onWrapLayout = useCallback((event: LayoutChangeEvent) => {
-    const { width, height } = event.nativeEvent.layout;
-    layoutSize.current = { width, height };
-  }, []);
-
-  const enhancedTrigger = isValidElement(trigger)
-    ? cloneElement(trigger, {
-        onPress: (event?: GestureResponderEvent) => {
-          trigger.props.onPress?.(event);
-          if (openRef.current) {
-            close();
-            return;
-          }
-          const pageX = event?.nativeEvent?.pageX;
-          const pageY = event?.nativeEvent?.pageY;
-          openMenu(
-            pageX != null && pageY != null && Number.isFinite(pageX) && Number.isFinite(pageY)
-              ? { pageX, pageY }
-              : undefined,
-          );
+      const paddingTop = Math.max(insets.top, spacing.md);
+      const paddingBottom = Math.max(insets.bottom, spacing.md);
+      const placed = placeAnchoredMenu({
+        anchor,
+        panelWidth: panelMinW,
+        panelHeight: contentH > 0 ? contentH : PANEL_HEIGHT_ESTIMATE,
+        viewport: { width: winW, height: winH },
+        padding: {
+          top: paddingTop,
+          right: spacing.md,
+          bottom: paddingBottom,
+          left: spacing.md,
         },
-      })
-    : trigger;
+        gap,
+        align,
+      });
 
-  const gap = spacing.sm;
-  const maxPanelW = Math.min(maxWidth, winW - spacing.lg * 2);
-  const panelMinW = Math.min(minWidth, maxPanelW);
-
-  useLayoutEffect(() => {
-    if (!open && !exiting) {
-      setOverlay(null, panelId);
-      return;
-    }
-    if (!open || !anchor || exiting) {
-      // Keep the current overlay while the close tween runs. Remounting here
-      // aborts native-driver animation (`finished: false`) and leaves a scrim
-      // that swallows the next press on ⋮ / settings.
-      return;
-    }
-
-    const paddingTop = Math.max(insets.top, spacing.md);
-    const paddingBottom = Math.max(insets.bottom, spacing.md);
-    const placed = placeAnchoredMenu({
-      anchor,
-      panelWidth: panelMinW,
-      panelHeight: contentH > 0 ? contentH : PANEL_HEIGHT_ESTIMATE,
-      viewport: { width: winW, height: winH },
-      padding: {
-        top: paddingTop,
-        right: spacing.md,
-        bottom: paddingBottom,
-        left: spacing.md,
-      },
-      gap,
+      setOverlay(
+        <View key={panelId} style={styles.overlay}>
+          <ScrimDismiss onDismiss={close} accessibilityLabel={t("action.dismiss")} />
+          <DropdownMenuSurface
+            label={label}
+            title={heading ?? null}
+            panelTop={placed.top}
+            panelLeft={placed.left}
+            panelMinW={panelMinW}
+            maxPanelW={maxPanelW}
+            maxPanelH={placed.maxHeight}
+            backgroundColor={colors.surfaceContainerHigh}
+            close={close}
+            opacity={menuOpacity}
+            scale={menuScale}
+            onHeight={setContentH}
+          >
+            {children}
+          </DropdownMenuSurface>
+        </View>,
+        panelId,
+      );
+      // Do not `setOverlay(null)` on deps change — that remounts a focused TextInput
+      // (search field) on every keystroke. Close / unmount still clear via the
+      // `!open` branch above and the unmount effect below.
+    }, [
       align,
-    });
-
-    setOverlay(
-      <View key={panelId} style={styles.overlay}>
-        <ScrimDismiss onDismiss={close} accessibilityLabel={t("action.dismiss")} />
-        <DropdownMenuSurface
-          label={label}
-          title={heading ?? null}
-          panelTop={placed.top}
-          panelLeft={placed.left}
-          panelMinW={panelMinW}
-          maxPanelW={maxPanelW}
-          maxPanelH={placed.maxHeight}
-          backgroundColor={colors.surfaceContainerHigh}
-          close={close}
-          opacity={menuOpacity}
-          scale={menuScale}
-          onHeight={setContentH}
-        >
-          {children}
-        </DropdownMenuSurface>
-      </View>,
+      anchor,
+      children,
+      close,
+      colors.surfaceContainerHigh,
+      contentH,
+      exiting,
+      gap,
+      insets.bottom,
+      insets.top,
+      heading,
+      label,
+      maxPanelW,
+      menuOpacity,
+      menuScale,
+      open,
       panelId,
+      panelMinW,
+      setOverlay,
+      winH,
+      winW,
+      t,
+    ]);
+
+    useEffect(() => () => setOverlay(null, panelId), [panelId, setOverlay]);
+
+    useEffect(() => {
+      if (!open) return;
+      const sub = BackHandler.addEventListener("hardwareBackPress", () => {
+        close();
+        return true;
+      });
+      return () => sub.remove();
+    }, [close, open]);
+
+    return (
+      <View ref={wrapRef} collapsable={false} onLayout={onWrapLayout} style={styles.triggerWrap}>
+        {enhancedTrigger}
+      </View>
     );
-    // Do not `setOverlay(null)` on deps change — that remounts a focused TextInput
-    // (search field) on every keystroke. Close / unmount still clear via the
-    // `!open` branch above and the unmount effect below.
-  }, [
-    align,
-    anchor,
-    children,
-    close,
-    colors.surfaceContainerHigh,
-    contentH,
-    exiting,
-    gap,
-    insets.bottom,
-    insets.top,
-    heading,
-    label,
-    maxPanelW,
-    menuOpacity,
-    menuScale,
-    open,
-    panelId,
-    panelMinW,
-    setOverlay,
-    winH,
-    winW,
-    t,
-  ]);
-
-  useEffect(() => () => setOverlay(null, panelId), [panelId, setOverlay]);
-
-  useEffect(() => {
-    if (!open) return;
-    const sub = BackHandler.addEventListener("hardwareBackPress", () => {
-      close();
-      return true;
-    });
-    return () => sub.remove();
-  }, [close, open]);
-
-  return (
-    <View ref={wrapRef} collapsable={false} onLayout={onWrapLayout} style={styles.triggerWrap}>
-      {enhancedTrigger}
-    </View>
-  );
-}
+  },
+);
 
 const styles = StyleSheet.create({
   overlay: { flex: 1, pointerEvents: "box-none" },

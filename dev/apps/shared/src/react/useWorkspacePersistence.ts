@@ -58,7 +58,7 @@ export async function loadPersistedWorkspaceState(
 
 /**
  * Write layout on each layout action (skip if unchanged). Flush on unmount.
- * Hydrate is a backstop when the host did not seed via `loadPersistedWorkspaceState`.
+ * The file manager shell opens first; this effect hydrates tabs from the vault file.
  * Prefer `key={vaultId}` on the host.
  */
 export function useWorkspacePersistence({

@@ -5,12 +5,14 @@ export {
   type UseCreateVaultWizardOptions,
 } from "./useCreateVaultWizard";
 export { useLoadingBudget, type UseLoadingBudgetOptions } from "./useLoadingBudget";
+export { useIntegerDraft, type UseIntegerDraftOptions } from "./useIntegerDraft";
 export {
   useExportPasswordCheck,
   type UseExportPasswordCheckOptions,
 } from "./useExportPasswordCheck";
-export { TOAST_DEFAULT_MS, useToast } from "./useToast";
+export { TOAST_DEFAULT_MS, useToast, type ToastState } from "./useToast";
 export { useVaultBackups } from "./useVaultBackups";
+export { useVaultFileTree } from "./useVaultFileTree";
 export { useVaultInfoData, type UseVaultInfoDataOptions } from "./useVaultInfoData";
 export {
   useSystemInfoData,

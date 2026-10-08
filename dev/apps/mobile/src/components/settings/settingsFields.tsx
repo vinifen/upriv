@@ -151,7 +151,7 @@ export const PasswordInput = forwardRef<
       />
       <Pressable
         onPress={() => setVisible((current) => !current)}
-        // Reveal stays available while `editable={false}` (e.g. unlock in progress).
+        // Reveal stays available while `editable={false}`.
         disabled={disabled}
         hitSlop={8}
         accessibilityRole="button"

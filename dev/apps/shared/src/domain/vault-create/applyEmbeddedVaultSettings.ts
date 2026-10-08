@@ -1,3 +1,4 @@
+import { normalizeWorkspaceTable } from "../workspace";
 import { uniqueDisplayName } from "../vault/displayName";
 import { parseKdfUnlockPreset, normalizeSecurityModeForStorage } from "../vault-settings";
 import type { KdfUnlockPreset, VaultSettingsConfig } from "../vault-settings";
@@ -52,9 +53,7 @@ export function applyEmbeddedVaultSettings(
     hidden: unchanged(draft.hidden, snapshot.hidden, source.vault.hidden),
     order: unchanged(draft.order, snapshot.order, source.vault.order),
     storage: unchanged(draft.storage, snapshot.storage, { mode: source.storage.mode }),
-    mount: unchanged(draft.mount, snapshot.mount, {
-      workspace_path: source.mount.workspace_path,
-    }),
+    mount: unchanged(draft.mount, snapshot.mount, source.mount),
     backup: unchanged(draft.backup, snapshot.backup, { ...source.backup }),
     auto_close: unchanged(draft.auto_close, snapshot.auto_close, { ...source.auto_close }),
     security: unchanged(draft.security, snapshot.security, security),
@@ -111,7 +110,6 @@ export function parseEmbeddedVaultSettings(
   const securityMode = oneOf(str(settings.security.mode) ?? "", [
     "always_prompt",
     "session_ram",
-    "ram_on_close_only",
     "disk_close",
     "disk_open_close",
   ] as const);
@@ -135,7 +133,6 @@ export function parseEmbeddedVaultSettings(
   ) {
     return null;
   }
-  const workspace = str(settings.mount.workspace_path);
   const keepLast = num(settings.backup.keep_last);
   const wipePasses = num(settings.security.wipe_passes);
   const idle = num(settings.auto_close.idle_minutes);
@@ -143,7 +140,6 @@ export function parseEmbeddedVaultSettings(
   const compression = num(settings.seven_zip.compression_level);
   const order = num(settings.vault.order);
   if (
-    workspace === null ||
     keepLast === null ||
     wipePasses === null ||
     idle === null ||
@@ -190,7 +186,7 @@ export function parseEmbeddedVaultSettings(
         hidden,
       },
       storage: { mode },
-      mount: { workspace_path: workspace },
+      mount: normalizeWorkspaceTable(settings.mount, "vault"),
       backup: {
         enabled,
         mode: backupMode,

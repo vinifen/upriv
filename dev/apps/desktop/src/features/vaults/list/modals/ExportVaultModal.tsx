@@ -99,6 +99,10 @@ export function ExportVaultModal({
   }, [open, showError, submitting, vault, vaultService]);
 
   useEffect(() => {
+    if (!open) setPassword("");
+  }, [open]);
+
+  useEffect(() => {
     if (!budget.timedOut || !submitting) return;
     onTimeout?.();
   }, [budget.timedOut, onTimeout, submitting]);
@@ -212,7 +216,7 @@ export function ExportVaultModal({
                     id={passwordId}
                     value={password}
                     autoComplete="new-password"
-                    disabled={submitting || passwordCheck.checking || format !== "seven_zip"}
+                    disabled={submitting || format !== "seven_zip"}
                     className={settingsControlClass}
                     onKeyDown={(event) => {
                       if (event.key !== "Enter" || passwordCheck.passwordOk) return;

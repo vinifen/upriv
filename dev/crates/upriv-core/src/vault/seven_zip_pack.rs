@@ -4,6 +4,8 @@
 //! ciphertext. If RAM cannot hold the working set, the op fails closed — never
 //! a plaintext staging tree on ordinary disk or tmpfs.
 
+#[allow(unused_imports)]
+use crate::host_fs::HostFsQuery;
 use std::io::{Cursor, ErrorKind, Seek, Write};
 use std::path::{Path, PathBuf};
 
@@ -72,18 +74,66 @@ pub(crate) fn parse_mem_available_bytes(meminfo: &str) -> Option<u64> {
 /// Working space for a `.7z` decoder beyond the compressed archive.
 pub(crate) const SEVEN_ZIP_DECODE_SLACK: u64 = 64 * 1024 * 1024;
 
-/// RAM the `.7z` decoder needs while the archive stays on disk.
-///
-/// This is the decode slack, not the compressed length. A caller that loads
+/// Cores LZMA2 may use. Extra threads each keep their own dictionary, so the
+/// count stays inside what the RAM check can still refuse.
+pub(crate) fn seven_zip_cpu_threads() -> u32 {
+    let cores = std::thread::available_parallelism()
+        .map(|count| u32::try_from(count.get()).unwrap_or(1))
+        .unwrap_or(1);
+    cores.clamp(1, 8)
+}
+
+/// How many of `cores` fit in `available` when each one costs `per_thread`
+/// on top of `fixed`. Unknown RAM stays on one thread. A budget that cannot
+/// hold even one thread still returns 1 so the caller fails closed.
+pub(crate) fn threads_that_fit(
+    cores: u32,
+    available: Option<u64>,
+    per_thread: u64,
+    fixed: u64,
+) -> u32 {
+    let cores = cores.clamp(1, 8);
+    let Some(available) = available else {
+        return 1;
+    };
+    let mut fit = 1u32;
+    for threads in 1..=cores {
+        let needed = fixed.saturating_add(per_thread.saturating_mul(u64::from(threads)));
+        if available >= needed {
+            fit = threads;
+        } else {
+            break;
+        }
+    }
+    fit
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct SevenZipDecodeBudget {
+    pub ram: u64,
+    pub threads: u32,
+}
+
+/// Decoder threads that fit in currently free RAM, and the bytes those
+/// threads need. The archive length is not part of this. A caller that loads
 /// the archive into a `Vec` checks that length on its own.
-pub(crate) fn seven_zip_import_ram_needed() -> u64 {
-    SEVEN_ZIP_DECODE_SLACK
+pub(crate) fn seven_zip_decode_budget() -> SevenZipDecodeBudget {
+    let threads = threads_that_fit(
+        seven_zip_cpu_threads(),
+        mem_available_bytes(),
+        SEVEN_ZIP_DECODE_SLACK,
+        0,
+    );
+    SevenZipDecodeBudget {
+        ram: SEVEN_ZIP_DECODE_SLACK.saturating_mul(u64::from(threads)),
+        threads,
+    }
 }
 
 fn mem_available_bytes() -> Option<u64> {
     #[cfg(any(target_os = "linux", target_os = "android"))]
     {
-        let text = std::fs::read_to_string("/proc/meminfo").ok()?;
+        let text = crate::host_fs::read_to_string("/proc/meminfo").ok()?;
         parse_mem_available_bytes(&text)
     }
     #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -167,24 +217,61 @@ fn windows_mem_available_bytes() -> Option<u64> {
 }
 
 fn lzma_dict_bytes(level: u8) -> u64 {
-    match level.min(9) {
-        0 => 64 * 1024,
-        1 => 256 * 1024,
-        2 => 1024 * 1024,
-        3 => 4 * 1024 * 1024,
-        4 => 8 * 1024 * 1024,
-        5 => 16 * 1024 * 1024,
-        6 => 32 * 1024 * 1024,
-        _ => 64 * 1024 * 1024,
-    }
+    // `lzma-rust2` 0.16 `LzmaOptions::PRESET_TO_DICT_SIZE`. Each extra
+    // worker keeps one of these.
+    const PRESETS: [u64; 10] = [
+        1 << 18,
+        1 << 20,
+        1 << 21,
+        1 << 22,
+        1 << 22,
+        1 << 23,
+        1 << 23,
+        1 << 24,
+        1 << 25,
+        1 << 26,
+    ];
+    PRESETS[usize::from(level.min(9))]
 }
 
-fn encoder_working_set(opts: &VaultSevenZipSection) -> u64 {
-    if opts.archive_mode == VaultArchiveMode::EncryptOnly {
-        ENCODER_SLACK
+fn pack_fixed_bytes(
+    sizes: LogicalExportSize,
+    opts: &VaultSevenZipSection,
+    sink: SevenZipSink,
+) -> u64 {
+    let plaintext = if opts.solid {
+        sizes.total
     } else {
-        ENCODER_SLACK.saturating_add(lzma_dict_bytes(opts.compression_level))
+        sizes.largest
+    };
+    let archive = match sink {
+        SevenZipSink::Memory => sizes
+            .total
+            .saturating_add(ARCHIVE_HEADER_SLACK)
+            .saturating_add(sizes.files.saturating_mul(4096)),
+        SevenZipSink::File => ARCHIVE_HEADER_SLACK,
+    };
+    plaintext
+        .saturating_add(archive)
+        .saturating_add(ENCODER_SLACK)
+}
+
+/// LZMA2 workers for this pack. Copy-only archives stay on one thread.
+/// Each extra worker adds one dictionary to the RAM budget.
+pub(crate) fn seven_zip_pack_threads(
+    sizes: LogicalExportSize,
+    opts: &VaultSevenZipSection,
+    sink: SevenZipSink,
+) -> u32 {
+    if opts.archive_mode == VaultArchiveMode::EncryptOnly {
+        return 1;
     }
+    threads_that_fit(
+        seven_zip_cpu_threads(),
+        mem_available_bytes(),
+        lzma_dict_bytes(opts.compression_level),
+        pack_fixed_bytes(sizes, opts, sink),
+    )
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -219,25 +306,28 @@ pub(crate) fn logical_export_size(
     }
 }
 
-pub(crate) fn seven_zip_pack_ram_needed(
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct SevenZipPackBudget {
+    pub ram: u64,
+    pub threads: u32,
+}
+
+/// One snapshot of free RAM: the thread count and the bytes those threads need.
+pub(crate) fn seven_zip_pack_budget(
     sizes: LogicalExportSize,
     opts: &VaultSevenZipSection,
     sink: SevenZipSink,
-) -> u64 {
-    let work = encoder_working_set(opts);
-    let plaintext = if opts.solid {
-        sizes.total
+) -> SevenZipPackBudget {
+    let threads = seven_zip_pack_threads(sizes, opts, sink);
+    let dicts = if opts.archive_mode == VaultArchiveMode::EncryptOnly {
+        0
     } else {
-        sizes.largest
+        lzma_dict_bytes(opts.compression_level).saturating_mul(u64::from(threads))
     };
-    let archive = match sink {
-        SevenZipSink::Memory => sizes
-            .total
-            .saturating_add(ARCHIVE_HEADER_SLACK)
-            .saturating_add(sizes.files.saturating_mul(4096)),
-        SevenZipSink::File => ARCHIVE_HEADER_SLACK,
-    };
-    plaintext.saturating_add(archive).saturating_add(work)
+    SevenZipPackBudget {
+        threads,
+        ram: pack_fixed_bytes(sizes, opts, sink).saturating_add(dicts),
+    }
 }
 
 pub(crate) fn seven_zip_archive_vec_budget(sizes: LogicalExportSize) -> u64 {
@@ -301,15 +391,19 @@ fn archive_member_name(logical: &str) -> Result<String> {
 fn content_methods(
     opts: &VaultSevenZipSection,
     password: Password,
+    threads: u32,
 ) -> Vec<sevenz_rust2::EncoderConfiguration> {
     let mut aes_opts = AesEncoderOptions::new(password);
     // 7-Zip CLI default is 2^19 SHA-256 iterations (`7zAES:19`).
     aes_opts.num_cycles_power = 19;
     let aes = aes_opts.into();
+    let level = u32::from(opts.compression_level.min(9));
     let data = if opts.archive_mode == VaultArchiveMode::EncryptOnly {
         EncoderMethod::COPY.into()
+    } else if threads <= 1 {
+        Lzma2Options::from_level(level).into()
     } else {
-        Lzma2Options::from_level(u32::from(opts.compression_level.min(9))).into()
+        Lzma2Options::from_level_mt(level, threads, lzma_dict_bytes(opts.compression_level)).into()
     };
     vec![aes, data]
 }
@@ -410,12 +504,13 @@ pub(crate) fn pack_logical_seven_zip_to_writer<W: Write + Seek>(
     archive_password: &[u8],
     opts: &VaultSevenZipSection,
     outer_folder: &str,
+    threads: u32,
     skip: impl Fn(&str) -> bool,
 ) -> Result<W> {
     let password = sevenz_password(archive_password)?;
     let mut writer = ArchiveWriter::new(dest).map_err(map_sevenz_error)?;
     writer.set_encrypt_header(opts.encrypt_file_names);
-    writer.set_content_methods(content_methods(opts, password));
+    writer.set_content_methods(content_methods(opts, password, threads));
     let dirs = export_dir_nodes(source.index, &skip);
     let nodes = export_file_nodes(source.index, skip);
     // A vault with no files and no folders is one outer directory. Folders that
@@ -460,6 +555,8 @@ pub(crate) fn pack_logical_seven_zip_to_writer<W: Write + Seek>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[allow(unused_imports)]
+    use crate::host_fs::HostFsQuery;
 
     #[test]
     fn sevenz_password_rejects_newline_and_empty() {
@@ -473,8 +570,58 @@ mod tests {
     }
 
     #[test]
+    fn copy_only_pack_stays_on_one_thread() {
+        let opts = VaultSevenZipSection::default();
+        let sizes = LogicalExportSize {
+            total: 1000,
+            largest: 800,
+            files: 2,
+        };
+        assert_eq!(seven_zip_pack_threads(sizes, &opts, SevenZipSink::File), 1);
+        assert_eq!(
+            seven_zip_pack_budget(sizes, &opts, SevenZipSink::File).threads,
+            1
+        );
+    }
+
+    #[test]
     fn import_decoder_ram_does_not_grow_with_the_archive() {
-        assert_eq!(seven_zip_import_ram_needed(), SEVEN_ZIP_DECODE_SLACK);
+        let needed = seven_zip_decode_budget().ram;
+        assert_eq!(needed % SEVEN_ZIP_DECODE_SLACK, 0);
+        assert!(needed >= SEVEN_ZIP_DECODE_SLACK);
+        assert!(needed / SEVEN_ZIP_DECODE_SLACK <= u64::from(seven_zip_cpu_threads()));
+    }
+
+    #[test]
+    fn threads_stop_when_the_next_worker_would_not_fit() {
+        let slack = 64 * 1024 * 1024;
+        assert_eq!(threads_that_fit(4, None, slack, 0), 1);
+        assert_eq!(threads_that_fit(4, Some(slack / 2), slack, 0), 1);
+        assert_eq!(threads_that_fit(4, Some(slack * 3), slack, 0), 3);
+        assert_eq!(threads_that_fit(4, Some(slack * 9), slack, 0), 4);
+        let dict = 16 * 1024 * 1024;
+        let fixed = 40 * 1024 * 1024;
+        assert_eq!(threads_that_fit(8, Some(fixed + dict), dict, fixed), 1);
+        assert_eq!(threads_that_fit(8, Some(fixed + dict * 2), dict, fixed), 2);
+        assert_eq!(
+            threads_that_fit(8, Some(fixed + dict * 2 - 1), dict, fixed),
+            1
+        );
+    }
+
+    #[test]
+    fn lzma_dict_follows_the_encoder_presets() {
+        assert_eq!(lzma_dict_bytes(0), 1 << 18);
+        assert_eq!(lzma_dict_bytes(3), 1 << 22);
+        assert_eq!(lzma_dict_bytes(5), 1 << 23);
+        assert_eq!(lzma_dict_bytes(9), 1 << 26);
+        assert_eq!(lzma_dict_bytes(99), 1 << 26);
+    }
+
+    #[test]
+    fn cpu_thread_cap_stays_inside_one_and_eight() {
+        let cores = seven_zip_cpu_threads();
+        assert!((1..=8).contains(&cores));
     }
 
     #[test]
@@ -505,8 +652,8 @@ mod tests {
             largest: 800,
             files: 2,
         };
-        let memory = seven_zip_pack_ram_needed(sizes, &opts, SevenZipSink::Memory);
-        let file = seven_zip_pack_ram_needed(sizes, &opts, SevenZipSink::File);
+        let memory = seven_zip_pack_budget(sizes, &opts, SevenZipSink::Memory).ram;
+        let file = seven_zip_pack_budget(sizes, &opts, SevenZipSink::File).ram;
         assert!(memory > file);
         assert!(memory >= sizes.total + sizes.largest);
     }

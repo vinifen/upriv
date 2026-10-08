@@ -4,13 +4,9 @@ import {
   type DisplayNameValidationCode,
 } from "../vault/displayName";
 import {
-  isAbsoluteFilesystemPath,
   isAbsoluteOsFilesystemPath,
   isContentUri,
-  isReservedUprivWorkspacePath,
-  normalizeMountWorkspacePath,
-  safTreeUriHasExtraSegment,
-  WORKSPACE_PATH_DEFAULT,
+  validateWorkspaceGlobalPath,
 } from "../workspace";
 import type { CreateVaultDraft, CreateVaultStepId, CreateVaultStepStatus } from "./types";
 import { createVaultImportNeedsArchivePassword, importSetsVaultPassword } from "./importKind";
@@ -157,32 +153,16 @@ export function validateCreateVaultStep(
     case "advanced": {
       const errors: CreateVaultValidationCode[] = [];
       if (draft.storage.mode === "upriv_plain") errors.push("plain_not_available");
-      // Empty = UI "custom incomplete" (normalizeMount would coerce to "default").
-      const raw = draft.mount.workspace_path.trim();
-      if (raw === "") {
-        errors.push("mount_path_empty");
-        return errors;
-      }
-      const normalized = normalizeMountWorkspacePath(raw);
-      if (normalized === WORKSPACE_PATH_DEFAULT) {
-        return errors;
-      }
-      if (!isAbsoluteFilesystemPath(normalized)) {
-        errors.push("mount_path_not_absolute");
-        return errors;
-      }
-      if (safTreeUriHasExtraSegment(normalized)) {
-        errors.push("mount_path_saf_tree");
-        return errors;
-      }
-      // Fail closed: cannot prove reserved-safety without a known vault-root.
       const root = typeof vaultRootPath === "string" ? vaultRootPath.trim() : "";
-      if (!root) {
-        errors.push("mount_path_root_unknown");
-        return errors;
-      }
-      if (isReservedUprivWorkspacePath(normalized, root)) {
-        errors.push("mount_path_reserved");
+      for (const system of ["linux", "windows", "macos", "android", "ios"] as const) {
+        const raw = draft.mount[system].path.trim();
+        if (!raw) continue;
+        const issue = validateWorkspaceGlobalPath(raw, root || null);
+        if (issue === "not_absolute") errors.push("mount_path_not_absolute");
+        else if (issue === "saf_tree_child") errors.push("mount_path_saf_tree");
+        else if (issue === "reserved") errors.push("mount_path_reserved");
+        else if (!root) errors.push("mount_path_root_unknown");
+        if (errors.length > 0) return errors;
       }
       return errors;
     }

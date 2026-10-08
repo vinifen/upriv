@@ -79,10 +79,8 @@ export {
   dropActiveImportWritesForSession,
   dropActiveImportWritePath,
   activeImportWriteForPath,
-  filesStillPendingImport,
   rememberLandedImportPaths,
   releaseLandedImportPaths,
-  isPendingImportTimedOut,
   type PendingImportEntry,
   type ActiveImportWrite,
 } from "./pendingImport";

@@ -1,7 +1,4 @@
-/** Sentinels and constants for configurable mount parents (not `[package].workspace_dir`). */
-
-/** Vault `[mount].workspace_path` value that inherits app `[workspace].path`. */
-export const WORKSPACE_PATH_DEFAULT = "default";
+/** Constants for configurable mount parents (not `[package].workspace_dir`). */
 
 /**
  * Standard child directories created under `<vault-root>/.upriv/` (not a mount parent).

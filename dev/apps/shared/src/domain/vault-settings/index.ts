@@ -30,6 +30,7 @@ export {
   normalizeSecurityModeForStorage,
   normalizeSevenZipSection,
   normalizeVaultSettingsConfig,
+  vaultSettingsForDaemon,
   patchStorageMode,
   SECURITY_UI_MODES,
   securityModeToUi,

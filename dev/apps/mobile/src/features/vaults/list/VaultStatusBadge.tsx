@@ -8,10 +8,12 @@ import { vaultStatusBadgeColors } from "@/theme/vault-status";
 
 interface VaultStatusBadgeProps {
   status: VaultDisplayStatus;
+  /** Overrides the status label (e.g. a closing vault in its backup phase). */
+  labelKey?: I18nKey;
 }
 
 /** Uppercase mono chip — desktop `VaultStatusBadge`. */
-export function VaultStatusBadge({ status }: VaultStatusBadgeProps) {
+export function VaultStatusBadge({ status, labelKey }: VaultStatusBadgeProps) {
   const { t } = useTranslation();
   const { colors } = useTheme();
   const tone = vaultStatusBadgeColors(status, colors);
@@ -39,7 +41,7 @@ export function VaultStatusBadge({ status }: VaultStatusBadgeProps) {
           includeFontPadding: false,
         }}
       >
-        {t(vaultStatusI18nKey[status] as I18nKey).toLocaleUpperCase()}
+        {t(labelKey ?? (vaultStatusI18nKey[status] as I18nKey)).toLocaleUpperCase()}
       </Text>
     </View>
   );

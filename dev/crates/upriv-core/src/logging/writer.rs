@@ -1,4 +1,6 @@
-use std::fs::{self, File, OpenOptions};
+#[allow(unused_imports)]
+use crate::host_fs::HostFsQuery;
+use crate::host_fs::{self as fs, File, OpenOptions};
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -110,7 +112,7 @@ impl Logger {
     ) -> io::Result<()> {
         // External rename/delete: drop stale handle so we open/create a real current.
         if let Some(active) = guard.as_ref() {
-            if !active.path.exists() {
+            if !active.path.host_exists() {
                 *guard = None;
             }
         }
@@ -180,7 +182,7 @@ fn ensure_logs_dir(logs_dir: &Path) -> io::Result<()> {
                     format!("refusing to create logs: {error}"),
                 )
             })?;
-            if logs_dir.is_dir() {
+            if logs_dir.host_is_dir() {
                 return Ok(());
             }
             // Leaf only — do not create `.upriv` if it vanished after validate.
@@ -332,7 +334,7 @@ fn archive_current_path(current: &Path) -> PathBuf {
 
 fn next_sequence_number(logs_dir: &Path) -> io::Result<u32> {
     let mut max_seq = 0_u32;
-    if logs_dir.is_dir() {
+    if logs_dir.host_is_dir() {
         for entry in fs::read_dir(logs_dir)? {
             let entry = entry?;
             let Some(name) = entry.file_name().to_str().map(str::to_string) else {
@@ -407,6 +409,8 @@ fn prune_old_files(config: &LogConfig) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[allow(unused_imports)]
+    use crate::host_fs::HostFsQuery;
     use tempfile::TempDir;
 
     fn temp_logs_dir() -> TempDir {
@@ -482,7 +486,7 @@ mod tests {
         logger.info("ignored", &[]);
         logger.flush();
         assert!(
-            !dir.path().exists()
+            !dir.path().host_exists()
                 || fs::read_dir(dir.path())
                     .map(|mut d| d.next().is_none())
                     .unwrap_or(true)
@@ -501,7 +505,7 @@ mod tests {
         };
         let _logger = Logger::open(config).expect("open");
         assert!(
-            !dir.path().exists()
+            !dir.path().host_exists()
                 || fs::read_dir(dir.path())
                     .map(|mut d| d.next().is_none())
                     .unwrap_or(true)
@@ -628,7 +632,7 @@ mod tests {
         );
         assert!(current[0].starts_with("current-000002-"));
         // The lower-seq file must have been archived, not deleted.
-        assert!(dir.path().join("000001-20260101000000.log").exists());
+        assert!(dir.path().join("000001-20260101000000.log").host_exists());
     }
 
     #[test]
@@ -696,7 +700,7 @@ mod tests {
         logger.info("should_not_create_upriv", &[]);
         logger.flush();
         assert!(
-            !root.path().join(".upriv").exists(),
+            !root.path().join(".upriv").host_exists(),
             "logging must not mkdir .upriv when settings.toml is missing"
         );
     }
@@ -722,6 +726,6 @@ mod tests {
         .expect("open");
         logger.info("ok", &[]);
         logger.flush();
-        assert!(logs.is_dir());
+        assert!(logs.host_is_dir());
     }
 }

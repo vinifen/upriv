@@ -1,11 +1,13 @@
 //! Serde mapping for `.upriv/settings.toml` (marker + app prefs).
 
+#[allow(unused_imports)]
+use crate::host_fs::HostFsQuery;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Result, UprivError};
-use crate::paths::{validate_workspace_global_path, VaultRootMode, VAULT_ROOT_SETTINGS_REL};
+use crate::paths::{validate_workspace_table, VaultRootMode, VAULT_ROOT_SETTINGS_REL};
 
 use super::types::{
     clamp_file_manager_tree_split_percent, AppSectionSettings, AppSettings, LoggingSettings,
@@ -22,13 +24,7 @@ pub(super) struct SettingsToml {
     #[serde(default)]
     pub(super) app: AppToml,
     #[serde(default)]
-    pub(super) workspace: WorkspaceToml,
-}
-
-#[derive(Debug, Default, Deserialize, Serialize)]
-pub(super) struct WorkspaceToml {
-    #[serde(default)]
-    pub(super) path: String,
+    pub(super) workspace: WorkspaceSettings,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -285,9 +281,7 @@ pub fn parse_settings_toml_str(raw: &str) -> Result<AppSettings> {
             upriv_root_path: String::new(),
             last_opened_vault: parsed.app.last_opened_vault.trim().to_string(),
         },
-        workspace: WorkspaceSettings {
-            path: parsed.workspace.path.trim().to_string(),
-        },
+        workspace: parsed.workspace,
     })
 }
 
@@ -315,7 +309,7 @@ pub fn serialize_settings_toml_str(
     };
     // Reserved check: custom_root FS root when set, plus always
     // `path_is_under_reserved_upriv_tree` inside validate (default_root / SAF).
-    validate_workspace_global_path(&settings.workspace.path, vault_root)?;
+    validate_workspace_table(&settings.workspace, vault_root)?;
 
     let package = package_from_previous(previous);
     let last_opened_vault = settings.app.last_opened_vault.trim().to_string();
@@ -331,9 +325,7 @@ pub fn serialize_settings_toml_str(
             keep_last_entries: settings.logging.keep_last_entries,
         },
         app: AppToml { last_opened_vault },
-        workspace: WorkspaceToml {
-            path: settings.workspace.path.trim().to_string(),
-        },
+        workspace: settings.workspace.clone(),
     };
     let body = toml::to_string_pretty(&file).map_err(|error| {
         UprivError::Io(std::io::Error::other(format!(
@@ -352,7 +344,9 @@ const APP_SECTION_COMMENTS: &str = "\
 # Missing/inactive → default_root; active + path → custom_root.";
 
 const WORKSPACE_SECTION_COMMENTS: &str = "\
-# Absolute path for the default mount parent (open vaults). Empty = unset — no folder created.";
+# One folder per system. `place` starts unset: nothing is created until chosen.
+# beside = workspace next to .upriv. custom = `path`.
+# `file_manager_folder` is one flag for every system and starts off. Phones keep it and do not mount.";
 
 /// Append vault-root alias pointer under `[app]` (after `last_opened_vault`).
 fn inject_app_section_comments(body: &str) -> String {
@@ -384,21 +378,18 @@ fn inject_app_section_comments(body: &str) -> String {
     )
 }
 
-/// Insert mount-parent comment under `[workspace]` (before `path =`).
+/// Insert the workspace comment before the first per-system table.
 fn inject_workspace_section_comments(body: &str) -> String {
-    let Some(ws_idx) = body.find("[workspace]") else {
+    let Some(ws_idx) = body.find("[workspace.linux]") else {
         return body.to_string();
     };
-    let after_header = ws_idx + "[workspace]".len();
-    let has_newline = body.as_bytes().get(after_header) == Some(&b'\n');
-    let content_start = after_header + usize::from(has_newline);
-    if body[content_start..].starts_with(WORKSPACE_SECTION_COMMENTS) {
+    if body[..ws_idx].ends_with(WORKSPACE_SECTION_COMMENTS) {
         return body.to_string();
     }
     format!(
         "{}{WORKSPACE_SECTION_COMMENTS}\n{}",
-        &body[..content_start],
-        &body[content_start..]
+        &body[..ws_idx],
+        &body[ws_idx..]
     )
 }
 
@@ -440,8 +431,8 @@ fn package_from_previous(previous: Option<&str>) -> PackageToml {
 /// Write `[ui]` / `[logging]` (preserve `[package]`; `last_opened_vault` from settings).
 pub(super) fn write_settings_toml_only(root: &Path, settings: &AppSettings) -> Result<()> {
     let path = root.join(VAULT_ROOT_SETTINGS_REL);
-    let existing = if path.is_file() {
-        std::fs::read_to_string(&path).ok()
+    let existing = if path.host_is_file() {
+        crate::host_fs::read_to_string(&path).ok()
     } else {
         None
     };
@@ -449,7 +440,7 @@ pub(super) fn write_settings_toml_only(root: &Path, settings: &AppSettings) -> R
     // Mid-session: if `.upriv` was deleted, fail — never recreate it via create_dir_all.
     // First-time init already created `.upriv/` before this write (settings may not exist yet).
     let upriv = root.join(".upriv");
-    if !upriv.is_dir() {
+    if !upriv.host_is_dir() {
         return Err(UprivError::VaultRootNotFound(path.clone()));
     }
     crate::paths::write_bytes_atomic_existing_parent(&path, contents.as_bytes())
@@ -458,6 +449,8 @@ pub(super) fn write_settings_toml_only(root: &Path, settings: &AppSettings) -> R
 #[cfg(test)]
 mod pure_toml_tests {
     use super::*;
+    #[allow(unused_imports)]
+    use crate::host_fs::HostFsQuery;
 
     #[test]
     fn parse_roundtrip_preserves_ui_and_logging() {
@@ -544,32 +537,6 @@ file_manager_confirm_delete = false
     }
 
     #[test]
-    fn parse_ignores_legacy_show_keys_without_button_suffix() {
-        let raw = r#"
-[package]
-version = 1
-label = "Upriv"
-vaults_dir = ".upriv/vaults"
-state_file = ".upriv/state.json"
-logs_dir = ".upriv/logs"
-app_dir = ".upriv/app"
-
-[ui]
-vault_list_show_create = false
-vault_list_show_search = false
-vault_list_show_sort = false
-vault_list_show_view = false
-allow_drag_vault_list = false
-"#;
-        let settings = parse_settings_toml_str(raw).unwrap();
-        assert!(settings.ui.vault_list_show_create_button);
-        assert!(settings.ui.vault_list_show_search_button);
-        assert!(settings.ui.vault_list_show_sort_button);
-        assert!(settings.ui.vault_list_show_view_button);
-        assert!(settings.ui.vault_list_show_drag);
-    }
-
-    #[test]
     fn parse_reads_flat_vault_settings_button_keys() {
         let raw = r#"
 [package]
@@ -585,25 +552,6 @@ vault_list_show_vault_settings_button = false
 "#;
         let settings = parse_settings_toml_str(raw).unwrap();
         assert!(!settings.ui.vault_list_show_vault_settings_button);
-        assert!(settings.ui.vault_list_show_group_settings_button);
-    }
-
-    #[test]
-    fn parse_ignores_legacy_combined_vault_group_settings_key() {
-        let raw = r#"
-[package]
-version = 1
-label = "Upriv"
-vaults_dir = ".upriv/vaults"
-state_file = ".upriv/state.json"
-logs_dir = ".upriv/logs"
-app_dir = ".upriv/app"
-
-[ui]
-vault_list_show_vault_group_settings_button = false
-"#;
-        let settings = parse_settings_toml_str(raw).unwrap();
-        assert!(settings.ui.vault_list_show_vault_settings_button);
         assert!(settings.ui.vault_list_show_group_settings_button);
     }
 
@@ -646,7 +594,7 @@ last_opened_vault = "notes"
             "vault-root comment must follow last_opened_vault: {out}"
         );
         assert!(
-            out.contains("Absolute path for the default mount parent"),
+            out.contains("One folder per system"),
             "workspace comment missing: {out}"
         );
         assert!(
@@ -751,7 +699,7 @@ last_opened_vault = "notes"
     #[test]
     fn serialize_rejects_relative_workspace_path() {
         let mut settings = AppSettings::default();
-        settings.workspace.path = "workspace".into();
+        settings.workspace.linux.path = "workspace".into();
         let err = serialize_settings_toml_str(&settings, None).unwrap_err();
         assert!(matches!(err, UprivError::WorkspacePathInvalid { .. }));
     }
@@ -761,7 +709,7 @@ last_opened_vault = "notes"
         let mut settings = AppSettings::default();
         settings.app.vault_root_mode = VaultRootMode::CustomRoot;
         settings.app.upriv_root_path = "/data/root".into();
-        settings.workspace.path = "/data/root/.upriv/vaults".into();
+        settings.workspace.linux.path = "/data/root/.upriv/vaults".into();
         let err = serialize_settings_toml_str(&settings, None).unwrap_err();
         assert!(matches!(err, UprivError::WorkspacePathReserved(_)));
     }
@@ -770,7 +718,7 @@ last_opened_vault = "notes"
     fn serialize_rejects_reserved_workspace_under_default_root() {
         let mut settings = AppSettings::default();
         assert_eq!(settings.app.vault_root_mode, VaultRootMode::DefaultRoot);
-        settings.workspace.path = "/tmp/foo/.upriv/vaults/x".into();
+        settings.workspace.linux.path = "/tmp/foo/.upriv/vaults/x".into();
         let err = serialize_settings_toml_str(&settings, None).unwrap_err();
         assert!(matches!(err, UprivError::WorkspacePathReserved(_)));
     }
@@ -837,24 +785,6 @@ show_header_more_button = false
     }
 
     #[test]
-    fn parse_ignores_header_more_in_nested_legacy_table() {
-        let raw = r#"
-[package]
-version = 1
-label = "Upriv"
-vaults_dir = ".upriv/vaults"
-state_file = ".upriv/state.json"
-logs_dir = ".upriv/logs"
-app_dir = ".upriv/app"
-
-[ui.vault_list]
-show_header_more_button = false
-"#;
-        let settings = parse_settings_toml_str(raw).unwrap();
-        assert!(settings.ui.vault_list_show_header_more_button);
-    }
-
-    #[test]
     fn parse_rejects_broken_toml() {
         let err = parse_settings_toml_str("[package\nversion = 1\n").unwrap_err();
         assert!(matches!(err, UprivError::VaultRootIncomplete { .. }));
@@ -865,7 +795,7 @@ show_header_more_button = false
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(
             "../../apps/mobile/modules/upriv-core/android/src/main/java/expo/modules/uprivcore/SafVaultRoot.kt",
         );
-        let src = std::fs::read_to_string(&path)
+        let src = crate::host_fs::read_to_string(&path)
             .unwrap_or_else(|err| panic!("read {}: {err}", path.display()));
         let marker = "DEFAULT_SETTINGS_TOML_TEMPLATE = \"\"\"";
         let start = src

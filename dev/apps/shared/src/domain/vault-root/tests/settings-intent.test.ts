@@ -33,8 +33,8 @@ describe("vaultRootGateFromState", () => {
     ).toEqual({ blocksPrimary: false, disk: "ready" });
   });
 
-  it("blocks while checking / unreadable / needs folder", () => {
-    for (const disk of ["checking", "unreadable", "needs_folder"] as const) {
+  it("blocks while checking / unreadable / needs folder / not vault capable", () => {
+    for (const disk of ["checking", "unreadable", "needs_folder", "not_vault_capable"] as const) {
       expect(vaultRootGateFromState({ dirty: true, disk, replacePolicy: null }).blocksPrimary).toBe(
         true,
       );

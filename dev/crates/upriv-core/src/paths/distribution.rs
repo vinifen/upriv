@@ -2,14 +2,17 @@
 //!
 //! | Kind | Vault data (`default_root`) | App home (`.upriv-root` alias) |
 //! |------|---------------------------|----------------------------------|
-//! | **Portable** | Beside AppImage / exe | Same as vault anchor |
+//! | **Portable** | Beside AppImage / portable exe | Same as vault anchor |
 //! | **Installed** | User data dir (same as app home) | User data dir |
 //! | **Dev** | `UPRIV_DEFAULT_ROOT_ANCHOR` / `dev/` | Same as vault anchor |
 //!
-//! Installed `default_root` and app home are the same path (`~/.local/share/upriv` on
-//! Linux, `%LOCALAPPDATA%\Upriv` on Windows, Application Support on macOS).
-//! `custom_root` mode still writes `.upriv-root` there pointing at another folder.
+//! Installed includes NSIS even when the install directory is writable.
+//! Uninstall removes that directory, so the data folder is the user-data dir
+//! (`%LOCALAPPDATA%\Upriv`, `~/.local/share/upriv`, Application Support).
+//! Portable is only the AppImage and the Windows portable exe.
 
+#[allow(unused_imports)]
+use crate::host_fs::HostFsQuery;
 use std::path::PathBuf;
 #[cfg(not(test))]
 use std::sync::OnceLock;
@@ -27,9 +30,10 @@ pub const ENV_DISTRIBUTION: &str = "UPRIV_DISTRIBUTION";
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AppDistribution {
-    /// AppImage / portable exe — data beside the binary when writable.
+    /// AppImage / Windows portable exe — data beside the program when writable.
     Portable,
     /// System package (`.deb`, NSIS, …) — data under the OS user-data home.
+    /// A writable NSIS install directory is still installed: uninstall deletes it.
     Installed,
     /// Unpackaged Electron dev / `electron .`.
     Dev,
@@ -180,7 +184,7 @@ pub fn suggested_vault_root() -> Result<PathBuf> {
             .unwrap_or_else(|| home.join("Documents"))
     };
 
-    let base = if documents.is_dir() {
+    let base = if documents.host_is_dir() {
         documents
     } else {
         home.clone()
@@ -191,6 +195,8 @@ pub fn suggested_vault_root() -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[allow(unused_imports)]
+    use crate::host_fs::HostFsQuery;
     use crate::paths::ENV_LOCK;
     use std::path::Path;
 
@@ -219,7 +225,7 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let home = tempfile::tempdir().unwrap();
         let docs = home.path().join("Documents");
-        std::fs::create_dir_all(&docs).unwrap();
+        crate::host_fs::create_dir_all(&docs).unwrap();
         std::env::set_var("HOME", home.path());
         std::env::remove_var("XDG_DOCUMENTS_DIR");
         assert_eq!(suggested_vault_root().unwrap(), docs.join("Upriv"));
@@ -231,7 +237,7 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let home = tempfile::tempdir().unwrap();
         let appdata = home.path().join("appdata");
-        std::fs::create_dir_all(&appdata).unwrap();
+        crate::host_fs::create_dir_all(&appdata).unwrap();
         std::env::set_var(ENV_DISTRIBUTION, "installed");
         std::env::set_var("UPRIV_DEFAULT_ROOT_ANCHOR", &appdata);
         std::env::remove_var("APPIMAGE");
@@ -253,7 +259,7 @@ mod tests {
         // Match `user_data_app_home()` shape for this host OS.
         let support = if cfg!(windows) {
             let local = home.path().join("Local");
-            std::fs::create_dir_all(&local).unwrap();
+            crate::host_fs::create_dir_all(&local).unwrap();
             std::env::set_var("LOCALAPPDATA", &local);
             local.join("Upriv")
         } else if cfg!(target_os = "macos") {
@@ -262,16 +268,16 @@ mod tests {
                 .join("Library")
                 .join("Application Support")
                 .join("Upriv");
-            std::fs::create_dir_all(&p).unwrap();
+            crate::host_fs::create_dir_all(&p).unwrap();
             std::env::set_var("HOME", home.path());
             p
         } else {
             let xdg = home.path().join("xdg-data");
-            std::fs::create_dir_all(&xdg).unwrap();
+            crate::host_fs::create_dir_all(&xdg).unwrap();
             std::env::set_var("XDG_DATA_HOME", &xdg);
             xdg.join("upriv")
         };
-        std::fs::create_dir_all(&support).unwrap();
+        crate::host_fs::create_dir_all(&support).unwrap();
         std::env::set_var("UPRIV_DEFAULT_ROOT_ANCHOR", &support);
         assert_eq!(detect_app_distribution(), AppDistribution::Installed);
         std::env::remove_var("UPRIV_DEFAULT_ROOT_ANCHOR");
@@ -286,7 +292,7 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let base = tempfile::tempdir().unwrap();
         let local = base.path().join("Local");
-        std::fs::create_dir_all(&local).unwrap();
+        crate::host_fs::create_dir_all(&local).unwrap();
         std::env::set_var("LOCALAPPDATA", &local);
         std::env::remove_var("UPRIV_DEFAULT_ROOT_ANCHOR");
         std::env::remove_var("APPIMAGE");
@@ -301,7 +307,7 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let base = tempfile::tempdir().unwrap();
         let xdg = base.path().join("xdg-data");
-        std::fs::create_dir_all(&xdg).unwrap();
+        crate::host_fs::create_dir_all(&xdg).unwrap();
         std::env::set_var("XDG_DATA_HOME", &xdg);
         std::env::remove_var("UPRIV_DEFAULT_ROOT_ANCHOR");
         std::env::remove_var("APPIMAGE");

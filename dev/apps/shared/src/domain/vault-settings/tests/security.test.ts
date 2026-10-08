@@ -10,7 +10,6 @@ describe("securityModeToUi / uiToSecurityMode", () => {
   it.each([
     ["session_ram", "session_ram"],
     ["always_prompt", "prompt_open_close"],
-    ["ram_on_close_only", "session_ram"],
     ["disk_close", "disk_close"],
     ["disk_open_close", "disk_open_close"],
   ] as const)("maps persisted %s → UI %s", (persisted, ui) => {
@@ -34,9 +33,6 @@ describe("normalizeSecurityModeForStorage", () => {
     expect(normalizeSecurityModeForStorage("encrypted_dir", "disk_close")).toBe("disk_close");
     expect(normalizeSecurityModeForStorage("upriv_plain", "disk_open_close")).toBe(
       "disk_open_close",
-    );
-    expect(normalizeSecurityModeForStorage("encrypted_dir", "ram_on_close_only")).toBe(
-      "session_ram",
     );
   });
 });

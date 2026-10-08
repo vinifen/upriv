@@ -188,8 +188,22 @@ export function createVaultWizardReducer(
     case "draftDiscarded":
       return { ...state, draft: state.baseline, discardConfirmOpen: false };
 
+    // Secrets must not outlive the dialog; the rest of the draft is reset on the next `opened`.
     case "closed":
-      return { ...state, discardConfirmOpen: false, submitAttempted: false };
+      return {
+        ...state,
+        draft: {
+          ...state.draft,
+          password: "",
+          passwordConfirm: "",
+          passwordValidated: false,
+          passwordTestFailed: false,
+          passwordProbeUnavailable: false,
+        },
+        testingPassword: false,
+        discardConfirmOpen: false,
+        submitAttempted: false,
+      };
 
     default:
       return state;

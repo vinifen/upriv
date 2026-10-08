@@ -9,6 +9,7 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Once;
 
 use upriv_rpc::{handle_rpc, RpcErrorBody, RpcRequest, RpcResponse};
+use zeroize::Zeroizing;
 
 fn install_panic_hook() {
     static ONCE: Once = Once::new();
@@ -65,6 +66,8 @@ pub fn configure_runtime(app_home: String, distribution: String) {
 #[uniffi::export]
 pub fn invoke(method: String, params_json: String) -> String {
     install_panic_hook();
+    // Params carry passwords and file bytes; wipe the raw JSON once parsed.
+    let params_json = Zeroizing::new(params_json);
     let params = if params_json.trim().is_empty() {
         serde_json::Value::Object(serde_json::Map::new())
     } else {
@@ -99,6 +102,42 @@ pub fn invoke(method: String, params_json: String) -> String {
         }),
     });
     serde_json::to_string(&response).unwrap_or_else(|_| internal_error_envelope())
+}
+
+/// Vault I/O for a user-chosen Android data folder.
+///
+/// `dispatch` returns JSON. Failures are `{"ok":false,...}`, not thrown.
+#[uniffi::export(callback_interface)]
+pub trait SafFsCallback: Send + Sync {
+    fn dispatch(&self, op: String, payload: String) -> String;
+}
+
+struct SafFsAdapter(Box<dyn SafFsCallback>);
+
+impl upriv_core::host_fs::SafBridge for SafFsAdapter {
+    fn dispatch(&self, op: &str, payload: &str) -> std::io::Result<String> {
+        Ok(self.0.dispatch(op.to_owned(), payload.to_owned()))
+    }
+}
+
+/// Mount `/upriv-saf-root` onto the storage-access tree `callback` addresses.
+#[uniffi::export]
+pub fn mount_saf_fs(callback: Box<dyn SafFsCallback>) {
+    install_panic_hook();
+    upriv_core::host_fs::mount_bridge(std::sync::Arc::new(SafFsAdapter(callback)));
+}
+
+/// Drop the mounted storage-access data folder.
+#[uniffi::export]
+pub fn unmount_saf_fs() {
+    upriv_core::host_fs::unmount();
+}
+
+/// True when the mounted folder can store a vault file (write + exclusive lock).
+#[uniffi::export]
+pub fn probe_saf_fs() -> bool {
+    install_panic_hook();
+    upriv_core::host_fs::probe_mounted().is_ok()
 }
 
 /// Stream one Android content file into the open import session.

@@ -30,6 +30,11 @@ export type VaultRootDiskStatus =
   | "unreadable"
   /** SAF permission gone — user must re-pick the folder. */
   | "unauthorized"
+  /**
+   * `content://` tree. Vault create and edit need a filesystem path, so this
+   * folder must not become the data folder.
+   */
+  | "not_vault_capable"
   | "needs_folder";
 
 export interface VaultRootSettingsGate {
@@ -91,6 +96,7 @@ export function vaultRootGateFromState(args: {
     disk === "checking" ||
     disk === "unreadable" ||
     disk === "unauthorized" ||
+    disk === "not_vault_capable" ||
     disk === "needs_folder"
   ) {
     return { blocksPrimary: true, disk };

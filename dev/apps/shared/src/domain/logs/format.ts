@@ -54,6 +54,20 @@ export function compareLogFilesNewestFirst(a: AppLogFile, b: AppLogFile): number
   return a.filename.localeCompare(b.filename);
 }
 
+/**
+ * Lowest and highest `seq` among `filenames` (used to name a multi-file delete).
+ * `null` when any of them has no sequence number, so the range never misstates the selection.
+ */
+export function logSeqRange(
+  files: readonly AppLogFile[],
+  filenames: readonly string[],
+): { first: number; last: number } | null {
+  const wanted = new Set(filenames);
+  const seqs = files.filter((file) => wanted.has(file.filename)).map((file) => file.seq);
+  if (seqs.length !== wanted.size || seqs.some((seq) => seq <= 0)) return null;
+  return { first: Math.min(...seqs), last: Math.max(...seqs) };
+}
+
 export function sortLogFilesNewestFirst(files: readonly AppLogFile[]): AppLogFile[] {
   return [...files].sort(compareLogFilesNewestFirst);
 }

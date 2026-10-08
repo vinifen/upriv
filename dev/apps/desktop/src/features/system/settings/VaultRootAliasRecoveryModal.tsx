@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { PathField } from "@/components/PathField";
 import { Button, Modal, Select } from "@/components/ui";
-import { PolicyRadioOption, settingsControlClass } from "@/components/settings";
+import { PolicyRadioOption } from "@/components/settings";
 import { useTranslation } from "@/i18n";
 import {
   SUPPORTED_LOCALES,
@@ -406,9 +407,7 @@ export function VaultRootAliasRecoveryModal({
             }}
             footer={
               defaultRootAnchor ? (
-                <p className="break-all rounded-md bg-surface-container-highest px-3 py-2 font-mono text-xs text-on-surface">
-                  {defaultRootAnchor}
-                </p>
+                <PathField value={defaultRootAnchor} readOnly />
               ) : (
                 <p className="text-xs leading-relaxed text-on-surface-variant" role="status">
                   {t("modal.app_settings.field.upriv_root_loading")}
@@ -434,16 +433,12 @@ export function VaultRootAliasRecoveryModal({
             footer={
               <div className="space-y-2">
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-stretch">
-                  <input
-                    type="text"
-                    readOnly
+                  <PathField
+                    className="sm:flex-1"
                     value={pathInput}
+                    readOnly
+                    invalid={Boolean(error)}
                     placeholder={t("modal.vault_root_setup.path_placeholder")}
-                    aria-invalid={error ? true : undefined}
-                    className={[
-                      settingsControlClass,
-                      "cursor-not-allowed opacity-90 font-mono text-xs sm:min-w-0 sm:flex-1",
-                    ].join(" ")}
                   />
                   <Button
                     type="button"

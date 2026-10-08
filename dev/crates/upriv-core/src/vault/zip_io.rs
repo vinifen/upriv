@@ -1,7 +1,9 @@
 //! Zip envelope of a ciphertext `store/` tree (no zip password).
 
-use std::fs::File;
-use std::io::{Cursor, Read, Seek, Write};
+use crate::host_fs::File;
+#[allow(unused_imports)]
+use crate::host_fs::HostFsQuery;
+use std::io::{BufWriter, Cursor, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use zip::write::FileOptions;
@@ -15,6 +17,37 @@ use crate::store::{
     HEADER_DIR_NAME, HEADER_FILE_NAME, INDEX_COPY_FILE_NAME, INDEX_DIR_NAME, INDEX_FILE_NAME,
     STORE_DANGER_FILE_NAME,
 };
+
+const ZIP_WRITE_BUFFER: usize = 256 * 1024;
+
+/// Batches small zip headers and stored bytes. A storage-access file pays for
+/// each write; seeking flushes first so the zip offsets stay correct.
+struct SeekBufWriter<W: Write + Seek> {
+    inner: BufWriter<W>,
+}
+
+fn buffered_zip_file(file: File) -> SeekBufWriter<File> {
+    SeekBufWriter {
+        inner: BufWriter::with_capacity(ZIP_WRITE_BUFFER, file),
+    }
+}
+
+impl<W: Write + Seek> Write for SeekBufWriter<W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.inner.write(buf)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+impl<W: Write + Seek> Seek for SeekBufWriter<W> {
+    fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+        self.inner.flush()?;
+        self.inner.get_mut().seek(pos)
+    }
+}
 
 fn zip_err(path: &Path, error: impl std::fmt::Display) -> UprivError {
     UprivError::VaultStoreInvalid {
@@ -30,10 +63,11 @@ pub fn probe_store_zip(bytes: &[u8]) -> Result<()> {
 
 /// Probe a zip file without reading every entry into RAM.
 pub fn probe_store_zip_path(path: &Path) -> Result<()> {
-    if !path.is_absolute() || !path.is_file() {
+    if !path.is_absolute() || !path.host_is_file() {
         return Err(UprivError::ImportArchiveNotFound(path.to_path_buf()));
     }
-    let file = File::open(path)?;
+    let file =
+        File::open(path).map_err(|error| super::import::map_archive_open_error(path, error))?;
     probe_store_zip_reader(file)
 }
 
@@ -75,8 +109,11 @@ fn zip_entry_is_store_header(name: &str) -> bool {
         && parts[n - 1] == HEADER_FILE_NAME
 }
 
-/// Read every entry (so the zip checksums are checked) and require the two
-/// sealed index files to be present and byte-identical.
+/// Require the two sealed index files to be present and byte-identical.
+///
+/// Every entry is read through to the end so its checksum is checked before
+/// an older backup can be deleted. Skipping bodies on a storage-access folder
+/// let a bad persist replace the previous zip.
 pub(crate) fn verify_store_zip_copies(path: &Path) -> Result<()> {
     let file = File::open(path)?;
     let mut archive = ZipArchive::new(file).map_err(|e| zip_err(path, e))?;
@@ -149,7 +186,7 @@ fn read_zip_entry_checked(
 }
 
 fn write_zip<W: Write + std::io::Seek>(src: &Path, writer: W) -> Result<()> {
-    if !src.is_dir() {
+    if !src.host_is_dir() {
         return Err(UprivError::VaultPathNotFound(src.display().to_string()));
     }
     let mut zip = ZipWriter::new(writer);
@@ -167,8 +204,8 @@ fn write_zip_with_config<W: Write + std::io::Seek>(
     config_toml: &[u8],
     readme: &str,
     writer: W,
-) -> Result<()> {
-    if !src.is_dir() {
+) -> Result<W> {
+    if !src.host_is_dir() {
         return Err(UprivError::VaultPathNotFound(src.display().to_string()));
     }
     let mut zip = ZipWriter::new(writer);
@@ -184,8 +221,7 @@ fn write_zip_with_config<W: Write + std::io::Seek>(
     zip.add_directory(format!("{STORE_DIR_NAME}/"), options)
         .map_err(|e| zip_err(src, e))?;
     add_dir(&mut zip, src, store_rel, options)?;
-    zip.finish().map_err(|e| zip_err(src, e))?;
-    Ok(())
+    zip.finish().map_err(|e| zip_err(src, e))
 }
 
 /// Zip of `store/` plus `README.md` and `config.toml`.
@@ -197,8 +233,8 @@ pub fn zip_store_with_config_to_bytes(
     created_stamp: &str,
 ) -> Result<Vec<u8>> {
     let readme = store_zip_readme(created_stamp, super::sum_regular_file_bytes(store)?)?;
-    let mut cursor = Cursor::new(Vec::new());
-    write_zip_with_config(store, config_toml, &readme, &mut cursor)?;
+    let cursor = Cursor::new(Vec::new());
+    let cursor = write_zip_with_config(store, config_toml, &readme, cursor)?;
     Ok(cursor.into_inner())
 }
 
@@ -212,9 +248,19 @@ pub fn zip_store_with_config_to_path(
     dest: &Path,
 ) -> Result<u64> {
     let readme = store_zip_readme(created_stamp, super::sum_regular_file_bytes(store)?)?;
-    let file = File::create(dest)?;
-    write_zip_with_config(store, config_toml, &readme, file)?;
-    Ok(std::fs::metadata(dest)?.len())
+    let file = buffered_zip_file(File::create(dest)?);
+    let mut file = write_zip_with_config(store, config_toml, &readme, file)?;
+    // Position on the fd we already hold. A new open would be another
+    // storage-access round trip just to read the length.
+    match file.stream_position() {
+        Ok(len) => Ok(len),
+        Err(error) => {
+            drop(file);
+            crate::host_fs::metadata(dest)
+                .map(|meta| meta.len())
+                .map_err(|_| error.into())
+        }
+    }
 }
 
 /// The root `config.toml`, if this zip carries vault settings.
@@ -256,9 +302,9 @@ pub fn zip_directory_to_bytes(src: &Path) -> Result<Vec<u8>> {
 
 /// Pack `src` into `dest` without holding the zip in an extra buffer.
 pub fn zip_directory_to_path(src: &Path, dest: &Path) -> Result<u64> {
-    let file = File::create(dest)?;
+    let file = buffered_zip_file(File::create(dest)?);
     write_zip(src, file)?;
-    Ok(std::fs::metadata(dest)?.len())
+    Ok(crate::host_fs::metadata(dest)?.len())
 }
 
 fn add_dir<W: Write + std::io::Seek>(
@@ -267,7 +313,9 @@ fn add_dir<W: Write + std::io::Seek>(
     rel: &Path,
     options: FileOptions,
 ) -> Result<()> {
-    let mut entries: Vec<_> = std::fs::read_dir(abs)?.filter_map(|e| e.ok()).collect();
+    let mut entries: Vec<_> = crate::host_fs::read_dir(abs)?
+        .filter_map(|e| e.ok())
+        .collect();
     entries.sort_by_key(|e| e.file_name());
     for entry in entries {
         let name = entry.file_name();
@@ -284,12 +332,12 @@ fn add_dir<W: Write + std::io::Seek>(
                 detail: "refusing to copy a symlink into a zip".into(),
             });
         }
-        if ft.is_dir() {
+        if ft.host_is_dir() {
             let dir_name = format!("{}/", child_rel.to_string_lossy().replace('\\', "/"));
             zip.add_directory(&dir_name, options)
                 .map_err(|e| zip_err(&child_abs, e))?;
             add_dir(zip, &child_abs, &child_rel, options)?;
-        } else if ft.is_file() {
+        } else if ft.host_is_file() {
             let zip_name = child_rel.to_string_lossy().replace('\\', "/");
             zip.start_file(&zip_name, options)
                 .map_err(|e| zip_err(&child_abs, e))?;
@@ -339,7 +387,7 @@ pub fn zip_files_to_path(entries: &[(String, &Path)], dest: &Path) -> Result<u64
         std::io::copy(&mut input, &mut zip).map_err(|e| zip_err(src, e))?;
     }
     zip.finish().map_err(|e| zip_err(dest, e))?;
-    Ok(std::fs::metadata(dest)?.len())
+    Ok(crate::host_fs::metadata(dest)?.len())
 }
 
 /// Extract a `.zip` of `store/` into `dest`. Rejects path escape.
@@ -349,7 +397,8 @@ pub fn unzip_store_bytes(bytes: &[u8], dest: &Path) -> Result<()> {
 
 /// Extract a zip file into `dest`, copying each entry without a second full buffer.
 pub fn unzip_store_path(path: &Path, dest: &Path) -> Result<()> {
-    let file = File::open(path)?;
+    let file =
+        File::open(path).map_err(|error| super::import::map_archive_open_error(path, error))?;
     let len = file.metadata()?.len();
     unzip_store_reader(file, dest, len)
 }
@@ -359,7 +408,7 @@ const ZIP_EXPAND_FACTOR: u64 = 8;
 
 fn unzip_store_reader<R: Read + Seek>(reader: R, dest: &Path, source_len: u64) -> Result<()> {
     let expand_limit = source_len.saturating_mul(ZIP_EXPAND_FACTOR);
-    std::fs::create_dir_all(dest)?;
+    crate::host_fs::create_dir_all(dest)?;
     let mut archive = ZipArchive::new(reader).map_err(|e| zip_err(dest, e))?;
     let strip = detect_single_root_prefix(&mut archive)?;
     let mut unpacked: u64 = 0;
@@ -389,7 +438,7 @@ fn unzip_store_reader<R: Read + Seek>(reader: R, dest: &Path, source_len: u64) -
             });
         }
         if file.is_dir() {
-            std::fs::create_dir_all(&out)?;
+            crate::host_fs::create_dir_all(&out)?;
             continue;
         }
         let entry_len = file.size();
@@ -400,7 +449,7 @@ fn unzip_store_reader<R: Read + Seek>(reader: R, dest: &Path, source_len: u64) -
             });
         }
         if let Some(parent) = out.parent() {
-            std::fs::create_dir_all(parent)?;
+            crate::host_fs::create_dir_all(parent)?;
         }
         let mut dest_file = File::create(&out)?;
         let copied = std::io::copy(&mut file.take(entry_len), &mut dest_file)?;
@@ -509,6 +558,8 @@ fn enclosed_path(name: &str, strip: Option<&str>) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    #[allow(unused_imports)]
+    use crate::host_fs::HostFsQuery;
     use std::io::Write;
 
     use super::*;
@@ -517,23 +568,23 @@ mod tests {
     fn zip_round_trip_preserves_bytes() {
         let tmp = tempfile::tempdir().unwrap();
         let src = tmp.path().join(crate::paths::STORE_DIR_NAME);
-        std::fs::create_dir_all(src.join("header")).unwrap();
-        std::fs::create_dir_all(src.join("data")).unwrap();
-        std::fs::write(src.join("header").join("vault.header"), b"header-bytes").unwrap();
-        std::fs::write(src.join("data").join("a.blob"), b"cipher").unwrap();
+        crate::host_fs::create_dir_all(src.join("header")).unwrap();
+        crate::host_fs::create_dir_all(src.join("data")).unwrap();
+        crate::host_fs::write(src.join("header").join("vault.header"), b"header-bytes").unwrap();
+        crate::host_fs::write(src.join("data").join("a.blob"), b"cipher").unwrap();
         let dest_file = tmp.path().join("packed.zip");
         let size = zip_directory_to_path(&src, &dest_file).unwrap();
         let zipped = zip_directory_to_bytes(&src).unwrap();
         assert_eq!(size as usize, zipped.len());
-        assert_eq!(std::fs::read(&dest_file).unwrap(), zipped);
+        assert_eq!(crate::host_fs::read(&dest_file).unwrap(), zipped);
         let dest = tmp.path().join("out");
         unzip_store_bytes(&zipped, &dest).unwrap();
         assert_eq!(
-            std::fs::read(dest.join("header").join("vault.header")).unwrap(),
+            crate::host_fs::read(dest.join("header").join("vault.header")).unwrap(),
             b"header-bytes"
         );
         assert_eq!(
-            std::fs::read(dest.join("data").join("a.blob")).unwrap(),
+            crate::host_fs::read(dest.join("data").join("a.blob")).unwrap(),
             b"cipher"
         );
     }
@@ -542,9 +593,9 @@ mod tests {
     fn store_zip_keeps_config_out_of_the_store_tree() {
         let tmp = tempfile::tempdir().unwrap();
         let src = tmp.path().join(crate::paths::STORE_DIR_NAME);
-        std::fs::create_dir_all(src.join("header")).unwrap();
-        std::fs::write(src.join("header").join("vault.header"), b"header-bytes").unwrap();
-        std::fs::write(src.join(STORE_DANGER_FILE_NAME), b"notice").unwrap();
+        crate::host_fs::create_dir_all(src.join("header")).unwrap();
+        crate::host_fs::write(src.join("header").join("vault.header"), b"header-bytes").unwrap();
+        crate::host_fs::write(src.join(STORE_DANGER_FILE_NAME), b"notice").unwrap();
         let config = b"[vault]\nid = \"notes\"\ndisplay_name = \"Notes\"\nnote = \"kept\"\n";
         let zipped = zip_store_with_config_to_bytes(&src, config, "20260529120000").unwrap();
         let read = read_zip_config_toml(Cursor::new(zipped.clone()))
@@ -583,11 +634,11 @@ mod tests {
         assert!(readme.contains("The zip file is a little larger."));
         let dest = tmp.path().join("out");
         unzip_store_bytes(&zipped, &dest).unwrap();
-        assert!(!dest.join("config.toml").exists());
-        assert!(!dest.join("README.md").exists());
-        assert!(!dest.join(STORE_DANGER_FILE_NAME).exists());
+        assert!(!dest.join("config.toml").host_exists());
+        assert!(!dest.join("README.md").host_exists());
+        assert!(!dest.join(STORE_DANGER_FILE_NAME).host_exists());
         assert_eq!(
-            std::fs::read(dest.join("header").join("vault.header")).unwrap(),
+            crate::host_fs::read(dest.join("header").join("vault.header")).unwrap(),
             b"header-bytes"
         );
     }
@@ -643,7 +694,7 @@ mod tests {
         let dest = tmp.path().join("out");
         let err = unzip_store_bytes(&cursor.into_inner(), &dest).unwrap_err();
         assert!(matches!(err, UprivError::VaultStoreInvalid { .. }));
-        assert!(!dest.join("header").join("vault.header").exists());
+        assert!(!dest.join("header").join("vault.header").host_exists());
     }
 
     #[test]

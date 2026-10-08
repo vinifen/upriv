@@ -1,6 +1,8 @@
 //! Logical files as XChaCha20-Poly1305 chunks under `store/data/`.
 //!
-//! One operating-system file per logical file: `store/data/<file_id>.blob`.
+//! One operating-system file per logical file. New files are
+//! `store/data/<hh>/<file_id>.blob`. Files already at `store/data/<file_id>.blob`
+//! stay there.
 //! Chunks are concatenated inside it. The sealed index stores each chunk's
 //! byte offset. A rewrite writes the new ciphertext into a free span when one
 //! fits, otherwise it appends. The previous generation stays until the index
@@ -8,6 +10,8 @@
 //! when they are large, and again on close when the waste is worth a copy.
 //! Logical paths live only in the sealed index.
 
+#[allow(unused_imports)]
+use crate::host_fs::HostFsQuery;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
@@ -64,13 +68,47 @@ fn cipher_len(plain_len: u32) -> usize {
     plain_len as usize + XCHACHA_NONCE_LEN + XCHACHA_TAG_LEN
 }
 
-/// `store/data/<file_id>.blob` — every chunk of that logical file.
-pub fn blob_path(store_dir: impl AsRef<Path>, file_id: &str) -> Result<PathBuf> {
-    let parsed = parse_file_id(file_id)?;
-    Ok(store_dir
-        .as_ref()
+fn blob_file_name(file_id: &Uuid) -> String {
+    format!("{file_id}{BLOB_FILE_SUFFIX}")
+}
+
+fn flat_blob_path(store_dir: &Path, file_id: &Uuid) -> PathBuf {
+    store_dir.join(DATA_DIR_NAME).join(blob_file_name(file_id))
+}
+
+/// Two hex digits, so new blobs spread across 256 directories.
+fn sharded_blob_path(store_dir: &Path, file_id: &Uuid) -> PathBuf {
+    let simple = file_id.simple().to_string();
+    store_dir
         .join(DATA_DIR_NAME)
-        .join(format!("{parsed}{BLOB_FILE_SUFFIX}")))
+        .join(&simple[..2])
+        .join(blob_file_name(file_id))
+}
+
+/// Where a new blob is created. Does not look at the flat directory.
+pub(crate) fn new_blob_path(store_dir: impl AsRef<Path>, file_id: &str) -> Result<PathBuf> {
+    Ok(sharded_blob_path(
+        store_dir.as_ref(),
+        &parse_file_id(file_id)?,
+    ))
+}
+
+/// Path of this file's blob.
+///
+/// New files live in `store/data/<hh>/`. A file created before that split is
+/// still `store/data/<file_id>.blob`.
+pub fn blob_path(store_dir: impl AsRef<Path>, file_id: &str) -> Result<PathBuf> {
+    let store_dir = store_dir.as_ref();
+    let parsed = parse_file_id(file_id)?;
+    let sharded = sharded_blob_path(store_dir, &parsed);
+    if crate::host_fs::is_file(&sharded) {
+        return Ok(sharded);
+    }
+    let flat = flat_blob_path(store_dir, &parsed);
+    if crate::host_fs::is_file(&flat) {
+        return Ok(flat);
+    }
+    Ok(sharded)
 }
 
 pub fn chunk_count(file_size: u64, chunk_size: u32) -> u32 {
@@ -127,7 +165,7 @@ pub(crate) fn remove_file_chunks(store_dir: &Path, file_id: &str, _count: u32) -
 
 fn remove_all_chunks_for_file_id(store_dir: &Path, file_id: &str) -> Result<()> {
     let path = blob_path(store_dir, file_id)?;
-    match std::fs::remove_file(&path) {
+    match crate::host_fs::remove_file(&path) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error.into()),
@@ -137,7 +175,7 @@ fn remove_all_chunks_for_file_id(store_dir: &Path, file_id: &str) -> Result<()> 
 /// One logical file, held open so every chunk is written once and the caller
 /// flushes it once.
 struct OpenBlob {
-    file: std::fs::File,
+    file: crate::host_fs::File,
     path: PathBuf,
     position: u64,
     created: bool,
@@ -163,7 +201,7 @@ fn blob_io(path: &Path, error: std::io::Error) -> UprivError {
 impl OpenBlob {
     fn create(path: PathBuf) -> Result<Self> {
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
+            crate::host_fs::create_dir_all(parent)?;
         }
         let file = crate::paths::open_nofollow(&path, crate::paths::NofollowMode::CreateNew)
             .map_err(|error| blob_io(&path, error))?;
@@ -217,7 +255,17 @@ impl OpenBlob {
         let reserve_end = offset.saturating_add(slot);
         if reserve_end > self.position && !overlaps_occupied(offset, slot, occupied) {
             self.file.set_len(reserve_end)?;
-            self.position = reserve_end;
+            // A storage-access fd often rejects the preallocation and still
+            // keeps the bytes just written. Do not treat that as a longer file.
+            let grown = self
+                .file
+                .metadata()
+                .is_ok_and(|meta| meta.len() >= reserve_end);
+            self.position = if grown {
+                reserve_end
+            } else {
+                self.position.max(offset.saturating_add(need))
+            };
         } else if offset.saturating_add(need) > self.position {
             self.position = offset + need;
         }
@@ -241,12 +289,12 @@ impl OpenBlob {
 
 fn open_blob(store_dir: &Path, file_id: &str, allow_create: bool) -> Result<OpenBlob> {
     let path = blob_path(store_dir, file_id)?;
-    match std::fs::symlink_metadata(&path) {
-        Ok(meta) if meta.file_type().is_symlink() => Err(UprivError::VaultStoreInvalid {
+    match crate::host_fs::entry_kind(&path) {
+        Ok(crate::host_fs::EntryKind::Symlink) => Err(UprivError::VaultStoreInvalid {
             path,
             detail: "refusing a symlink".into(),
         }),
-        Ok(meta) if meta.is_file() => OpenBlob::append(path),
+        Ok(crate::host_fs::EntryKind::File) => OpenBlob::append(path),
         Ok(_) => Err(UprivError::VaultStoreInvalid {
             path,
             detail: "refusing a non-file".into(),
@@ -397,7 +445,7 @@ impl ChunkBlobMutation {
 
     pub fn discard_created(&self) {
         for path in &self.created {
-            let _ = std::fs::remove_file(path);
+            let _ = crate::host_fs::remove_file(path);
         }
         let mut shortest: Vec<(&Path, u64)> = Vec::new();
         for (path, len) in &self.truncate_to {
@@ -423,13 +471,14 @@ impl ChunkBlobMutation {
 
     pub fn delete_superseded(&self) {
         for path in &self.superseded {
-            let _ = std::fs::remove_file(path);
+            let _ = crate::host_fs::remove_file(path);
         }
     }
 
-    /// Flush each logical file once, then the directory that names a new file.
-    /// Call this before the index that records those bytes is sealed.
-    pub fn sync_before_index(&self) -> Result<()> {
+    /// Flush each logical file once. The directory that names a new file is
+    /// flushed with the index, not on every file, so a long import does not
+    /// fsync a growing folder for each blob.
+    pub fn sync_created_files(&self) -> Result<()> {
         let mut synced: Vec<&Path> = Vec::new();
         for path in &self.created {
             sync_unique(path, &mut synced)?;
@@ -437,10 +486,17 @@ impl ChunkBlobMutation {
         for (path, _) in &self.truncate_to {
             sync_unique(path, &mut synced)?;
         }
+        Ok(())
+    }
+
+    /// Flush each logical file once, then the directory that names a new file.
+    /// Call this before the index that records those bytes is sealed.
+    pub fn sync_before_index(&self) -> Result<()> {
+        self.sync_created_files()?;
         #[cfg(unix)]
         if let Some(path) = self.created.first() {
             if let Some(parent) = path.parent() {
-                if parent.is_dir() {
+                if parent.host_is_dir() {
                     crate::paths::sync_dir_durable(parent)?;
                 }
             }
@@ -615,7 +671,7 @@ pub fn read_logical_file(
 }
 
 struct BlobRead {
-    file: std::fs::File,
+    file: crate::host_fs::File,
     path: PathBuf,
 }
 
@@ -714,6 +770,97 @@ fn seal_chunk(
     )?;
     let bytes = encrypt_xchacha(content_key, plaintext, &aad)?;
     Ok((version, bytes))
+}
+
+/// Ciphertext for one chunk, sealed before it is appended to the blob.
+pub(crate) struct SealedPiece {
+    pub version: String,
+    pub plaintext_len: u32,
+    pub bytes: Vec<u8>,
+}
+
+pub(crate) fn seal_import_chunk(
+    header: &VaultHeader,
+    content_key: &[u8; CONTENT_KEY_LEN],
+    file_id: &str,
+    chunk_index: u32,
+    plaintext: &[u8],
+) -> Result<SealedPiece> {
+    let (version, bytes) = seal_chunk(header, content_key, file_id, chunk_index, plaintext)?;
+    Ok(SealedPiece {
+        version,
+        plaintext_len: plaintext.len() as u32,
+        bytes,
+    })
+}
+
+/// A new blob that receives chunks already sealed on another thread.
+pub(crate) struct ImportBlob {
+    inner: OpenBlob,
+}
+
+impl ImportBlob {
+    pub(crate) fn create(store_dir: &Path, file_id: &str) -> Result<Self> {
+        let path = new_blob_path(store_dir, file_id)?;
+        Ok(Self {
+            inner: OpenBlob::create(path)?,
+        })
+    }
+
+    pub(crate) fn append(&mut self, bytes: &[u8]) -> Result<u64> {
+        self.inner.append_bytes(bytes)
+    }
+
+    pub(crate) fn mutation(&self) -> ChunkBlobMutation {
+        self.inner.mutation()
+    }
+}
+
+/// Record a file whose chunks are already in its blob.
+pub(crate) fn record_imported_file(
+    index: &mut VaultIndex,
+    logical_path: &str,
+    file_id: String,
+    file_size: u64,
+    chunk_versions: Vec<String>,
+    chunk_offsets: Vec<u64>,
+) -> Result<Option<RetiredFileChunks>> {
+    validate_logical_path(logical_path)?;
+    if let Some(node) = index.find(logical_path) {
+        if node.as_file().is_none() {
+            return Err(UprivError::VaultStoreInvalid {
+                path: PathBuf::from(logical_path),
+                detail: "logical path is a directory".into(),
+            });
+        }
+    }
+    let previous = index.find(logical_path).and_then(|node| {
+        node.as_file().map(|(old_id, _, versions)| {
+            (
+                RetiredFileChunks {
+                    file_id: old_id.to_string(),
+                    chunk_count: versions.len() as u32,
+                },
+                node.created_at,
+            )
+        })
+    });
+    let created_at = previous.as_ref().map(|(_, created_at)| *created_at);
+    if previous.is_some() {
+        index.remove(logical_path);
+    }
+    let mut node = VaultNode::file(
+        logical_path,
+        file_id,
+        file_size,
+        chunk_versions,
+        chunk_offsets,
+    );
+    if let Some(created_at) = created_at {
+        node.created_at = created_at;
+    }
+    index.nodes.push(node);
+    Ok(previous.map(|(retired, _)| retired))
 }
 
 fn append_chunk(
@@ -1163,8 +1310,8 @@ pub fn truncate_logical_file(
             }
         } else if new_count == 0 {
             if let Ok(path) = blob_path(store_dir, &file_id) {
-                if let Ok(meta) = std::fs::symlink_metadata(&path) {
-                    if meta.is_file() || meta.file_type().is_symlink() {
+                if let Ok(meta) = crate::host_fs::symlink_metadata(&path) {
+                    if meta.host_is_file() || meta.file_type().is_symlink() {
                         mutation.superseded.push(path);
                     }
                 }
@@ -1238,8 +1385,8 @@ fn measure_blob(
     let count = chunk_count(size, header.chunk_size);
     require_chunk_lists(&node.path, count, versions, offsets)?;
     let path = blob_path(store_dir, file_id)?;
-    let meta = std::fs::symlink_metadata(&path).map_err(|error| blob_io(&path, error))?;
-    if meta.file_type().is_symlink() || !meta.is_file() {
+    let meta = crate::host_fs::symlink_metadata(&path).map_err(|error| blob_io(&path, error))?;
+    if meta.file_type().is_symlink() || !meta.host_is_file() {
         return Err(UprivError::VaultStoreInvalid {
             path,
             detail: "refusing a symlink".into(),
@@ -1347,7 +1494,7 @@ pub(crate) fn pack_blob_waste(
     })();
     if let Err(error) = packed {
         for item in &planned {
-            let _ = std::fs::remove_file(&item.new_path);
+            let _ = crate::host_fs::remove_file(&item.new_path);
         }
         return Err(error);
     }
@@ -1431,7 +1578,7 @@ fn repack_live_blob(
         Ok(())
     })();
     if let Err(error) = rewritten {
-        let _ = std::fs::remove_file(&new_path);
+        let _ = crate::host_fs::remove_file(&new_path);
         return Err(error);
     }
     Ok(PackedBlob {
@@ -1467,14 +1614,14 @@ pub(crate) fn mutation_blob_ids(mutation: &ChunkBlobMutation) -> Vec<String> {
     ids
 }
 
-/// Delete `store/data/*.blob` the sealed index does not name.
+/// Delete blob files the sealed index does not name.
 ///
 /// `remove_file` on a symlink removes the link, not the target. A blob the
 /// index still names is left in place, even if it is a symlink — the next
 /// read refuses it.
 pub(crate) fn remove_unreferenced_blobs(store_dir: &Path, index: &VaultIndex) {
     let dir = store_dir.join(DATA_DIR_NAME);
-    let entries = match std::fs::read_dir(&dir) {
+    let entries = match crate::host_fs::read_dir(&dir) {
         Ok(entries) => entries,
         Err(_) => return,
     };
@@ -1488,23 +1635,73 @@ pub(crate) fn remove_unreferenced_blobs(store_dir: &Path, index: &VaultIndex) {
         let Some(name) = entry.file_name().to_str().map(str::to_string) else {
             continue;
         };
-        let Some(id) = name.strip_suffix(BLOB_FILE_SUFFIX) else {
-            continue;
-        };
-        if Uuid::parse_str(id).is_err() || referenced.contains(id) {
+        if is_blob_shard_name(&name) {
+            let nested = match crate::host_fs::read_dir(entry.path()) {
+                Ok(nested) => nested,
+                Err(_) => continue,
+            };
+            for child in nested.flatten() {
+                drop_unreferenced_blob(&child, &referenced);
+            }
             continue;
         }
-        let _ = std::fs::remove_file(entry.path());
+        drop_unreferenced_blob(&entry, &referenced);
     }
+}
+
+fn is_blob_shard_name(name: &str) -> bool {
+    name.len() == 2 && name.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn drop_unreferenced_blob(
+    entry: &crate::host_fs::DirEntry,
+    referenced: &std::collections::HashSet<String>,
+) {
+    let file_name = entry.file_name();
+    let Some(name) = file_name.to_str() else {
+        return;
+    };
+    let Some(id) = name.strip_suffix(BLOB_FILE_SUFFIX) else {
+        return;
+    };
+    if Uuid::parse_str(id).is_err() || referenced.contains(id) {
+        return;
+    }
+    let _ = crate::host_fs::remove_file(entry.path());
 }
 
 #[cfg(test)]
 mod tests {
     use super::super::header::chunk_aad;
     use super::*;
+    #[allow(unused_imports)]
+    use crate::host_fs::HostFsQuery;
     use crate::store::{create_empty_store, flush_index, open_store, KdfUnlockPreset, CHUNK_SIZE};
 
     const PW: &[u8] = b"chunk-round-trip-ok";
+
+    #[test]
+    fn new_blobs_use_a_bucket_and_old_flat_blobs_still_open() {
+        let tmp = std::env::temp_dir().join(format!("upriv-blob-{}", Uuid::new_v4().simple()));
+        crate::host_fs::create_dir_all(tmp.join(DATA_DIR_NAME)).unwrap();
+        let old_id = "11111111-1111-4111-8111-111111111111";
+        let flat = tmp
+            .join(DATA_DIR_NAME)
+            .join(format!("{old_id}{BLOB_FILE_SUFFIX}"));
+        crate::host_fs::write(&flat, b"old").unwrap();
+        assert_eq!(blob_path(&tmp, old_id).unwrap(), flat);
+        let new_id = Uuid::new_v4().to_string();
+        let created = new_blob_path(&tmp, &new_id).unwrap();
+        assert_ne!(
+            created,
+            tmp.join(DATA_DIR_NAME)
+                .join(format!("{new_id}{BLOB_FILE_SUFFIX}"))
+        );
+        let bucket = created.parent().unwrap().file_name().unwrap();
+        assert_eq!(bucket.len(), 2);
+        assert_eq!(blob_path(&tmp, &new_id).unwrap(), created);
+        let _ = crate::host_fs::remove_dir_all(&tmp);
+    }
 
     fn file_chunk_meta(
         opened: &crate::store::OpenedStore,
@@ -1525,7 +1722,7 @@ mod tests {
     ) -> Vec<u8> {
         use std::io::{Read, Seek, SeekFrom};
         let path = blob_path(dir, file_id).unwrap();
-        let mut file = std::fs::File::open(path).unwrap();
+        let mut file = crate::host_fs::File::open(path).unwrap();
         file.seek(SeekFrom::Start(offset)).unwrap();
         let mut buf = vec![0u8; cipher_len(plain_len)];
         file.read_exact(&mut buf).unwrap();
@@ -1572,7 +1769,7 @@ mod tests {
         .unwrap();
         flush_index(&dir, &mut opened).unwrap();
         let data = dir.join(DATA_DIR_NAME);
-        assert_eq!(std::fs::read_dir(&data).unwrap().count(), 0);
+        assert_eq!(crate::host_fs::read_dir(&data).unwrap().count(), 0);
         let got = read_logical_file(
             &dir,
             &opened.header,
@@ -1599,7 +1796,7 @@ mod tests {
         assert_eq!(got, data);
         let (file_id, _, off0) = file_chunk_meta(&opened, "wide.bin", 0);
         let (_, _, off1) = file_chunk_meta(&opened, "wide.bin", 1);
-        let blobs: Vec<_> = std::fs::read_dir(dir.join(DATA_DIR_NAME))
+        let blobs: Vec<_> = crate::host_fs::read_dir(dir.join(DATA_DIR_NAME))
             .unwrap()
             .map(|entry| entry.unwrap().file_name())
             .collect();
@@ -1616,7 +1813,7 @@ mod tests {
             "each chunk must have its own CSPRNG nonce"
         );
         assert!(
-            !std::fs::read(dir.join("index/root.idx.enc"))
+            !crate::host_fs::read(dir.join("index/root.idx.enc"))
                 .unwrap()
                 .windows(b"wide.bin".len())
                 .any(|w| w == b"wide.bin"),
@@ -1631,14 +1828,14 @@ mod tests {
         let (file_id, _, off0) = file_chunk_meta(&opened, "wide.bin", 0);
         let (_, _, off1) = file_chunk_meta(&opened, "wide.bin", 1);
         let path = blob_path(&dir, &file_id).unwrap();
-        let mut raw = std::fs::read(&path).unwrap();
+        let mut raw = crate::host_fs::read(&path).unwrap();
         let c0 = cipher_len(CHUNK_SIZE);
         let c1 = cipher_len(13);
         let first = raw[off0 as usize..off0 as usize + c0].to_vec();
         let second = raw[off1 as usize..off1 as usize + c1].to_vec();
         raw.splice(off0 as usize..off0 as usize + c0, second);
         raw.splice(off0 as usize + c1..off0 as usize + c1, first);
-        std::fs::write(&path, &raw).unwrap();
+        crate::host_fs::write(&path, &raw).unwrap();
         let opened = open_store(&dir, PW).expect("vault still opens; one file is torn");
         let err = read_logical_file(
             &dir,
@@ -1660,9 +1857,9 @@ mod tests {
         let opened = open_store(&dir, PW).unwrap();
         let (file_id, _, off0) = file_chunk_meta(&opened, "wide.bin", 0);
         let path = blob_path(&dir, &file_id).unwrap();
-        let mut raw = std::fs::read(&path).unwrap();
+        let mut raw = crate::host_fs::read(&path).unwrap();
         raw[off0 as usize + 24] ^= 0x01;
-        std::fs::write(&path, &raw).unwrap();
+        crate::host_fs::write(&path, &raw).unwrap();
         let opened = open_store(&dir, PW).unwrap();
         assert!(matches!(
             read_logical_file(
@@ -1676,7 +1873,7 @@ mod tests {
         ));
         raw[24] ^= 0x01;
         raw.truncate(raw.len() - 4);
-        std::fs::write(&path, &raw).unwrap();
+        crate::host_fs::write(&path, &raw).unwrap();
         assert!(matches!(
             read_logical_file(
                 &dir,
@@ -1729,13 +1926,13 @@ mod tests {
         let reopened = open_store(&dir, PW).unwrap();
         let (new_id, _, new_off) = file_chunk_meta(&reopened, "wide.bin", 0);
         let path = blob_path(&dir, &new_id).unwrap();
-        let mut raw = std::fs::read(&path).unwrap();
+        let mut raw = crate::host_fs::read(&path).unwrap();
         let end = new_off as usize + stale.len();
         if raw.len() < end {
             raw.resize(end, 0);
         }
         raw[new_off as usize..end].copy_from_slice(&stale);
-        std::fs::write(&path, &raw).unwrap();
+        crate::host_fs::write(&path, &raw).unwrap();
 
         let err = read_logical_file(
             &dir,
@@ -1838,7 +2035,7 @@ mod tests {
         flush_index(&dir, &mut opened).unwrap();
         let old_id = opened.index.find("notes.txt").unwrap().as_file().unwrap().0;
         let old_blob = blob_path(&dir, old_id).unwrap();
-        assert!(old_blob.is_file());
+        assert!(old_blob.host_is_file());
 
         write_logical_file(
             &dir,
@@ -1850,7 +2047,7 @@ mod tests {
         )
         .unwrap();
         assert!(
-            old_blob.is_file(),
+            old_blob.host_is_file(),
             "previous ciphertext must survive until the sealed index is flushed"
         );
 
@@ -1884,7 +2081,7 @@ mod tests {
         flush_index(&dir, &mut opened).unwrap();
         let old_id = opened.index.find("notes.txt").unwrap().as_file().unwrap().0;
         let old_blob = blob_path(&dir, old_id).unwrap();
-        assert!(old_blob.is_file());
+        assert!(old_blob.host_is_file());
 
         write_logical_range(
             &dir,
@@ -1897,7 +2094,7 @@ mod tests {
         )
         .unwrap();
         assert!(
-            old_blob.is_file(),
+            old_blob.host_is_file(),
             "previous ciphertext must survive until the sealed index is flushed"
         );
 
@@ -1951,7 +2148,7 @@ mod tests {
             .unwrap()
             .0
             .to_string();
-        let len_after_seal = std::fs::metadata(blob_path(&dir, &file_id).unwrap())
+        let len_after_seal = crate::host_fs::metadata(blob_path(&dir, &file_id).unwrap())
             .unwrap()
             .len();
         write_logical_range(
@@ -1964,7 +2161,7 @@ mod tests {
             &third,
         )
         .unwrap();
-        let len_after_reuse = std::fs::metadata(blob_path(&dir, &file_id).unwrap())
+        let len_after_reuse = crate::host_fs::metadata(blob_path(&dir, &file_id).unwrap())
             .unwrap()
             .len();
         assert_eq!(
@@ -2088,7 +2285,7 @@ mod tests {
         flush_index(&dir, &mut opened).unwrap();
         packed.delete_superseded();
         let file_id = opened.index.find("notes.txt").unwrap().as_file().unwrap().0;
-        let len = std::fs::metadata(blob_path(&dir, file_id).unwrap())
+        let len = crate::host_fs::metadata(blob_path(&dir, file_id).unwrap())
             .unwrap()
             .len();
         assert_eq!(len, cipher_len(b"generation-two".len() as u32) as u64);
@@ -2123,10 +2320,10 @@ mod tests {
         let orphan = dir.join(DATA_DIR_NAME).join(format!(
             "00000000-0000-4000-8000-000000000099{BLOB_FILE_SUFFIX}"
         ));
-        std::fs::write(&orphan, b"orphan").unwrap();
+        crate::host_fs::write(&orphan, b"orphan").unwrap();
         let _ = open_store(&dir, PW).unwrap();
         assert!(
-            !orphan.exists(),
+            !orphan.host_exists(),
             "an unreferenced blob must be removed on open"
         );
         let reopened = open_store(&dir, PW).unwrap();
@@ -2160,9 +2357,9 @@ mod tests {
         flush_index(&dir, &mut opened).unwrap();
         let file_id = opened.index.find("notes.txt").unwrap().as_file().unwrap().0;
         let blob = blob_path(&dir, file_id).unwrap();
-        std::fs::remove_file(&blob).unwrap();
+        crate::host_fs::remove_file(&blob).unwrap();
         let target = tmp.path().join("outside.txt");
-        std::fs::write(&target, b"do-not-touch").unwrap();
+        crate::host_fs::write(&target, b"do-not-touch").unwrap();
         std::os::unix::fs::symlink(&target, &blob).unwrap();
         let err = write_logical_range(
             &dir,
@@ -2175,6 +2372,6 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(err, UprivError::VaultStoreInvalid { .. }), "{err}");
-        assert_eq!(std::fs::read(&target).unwrap(), b"do-not-touch");
+        assert_eq!(crate::host_fs::read(&target).unwrap(), b"do-not-touch");
     }
 }

@@ -56,7 +56,13 @@ export {
 } from "./displayName";
 export { displayNameErrorI18nKey, DISPLAY_NAME_ERROR_I18N_KEYS } from "./errors/nameMessages";
 export type { DisplayNameErrorI18nKey } from "./errors/nameMessages";
-export { brandColors, vaultStatusColorVar, vaultStatusI18nKey } from "./statusTokens";
+export {
+  brandColors,
+  vaultStatusColorVar,
+  vaultStatusI18nKey,
+  vaultStatusLabelKey,
+  vaultCloseActivityLabelKey,
+} from "./statusTokens";
 /** Rust wire codes + UI i18n. */
 export { isVaultErrorCode, VAULT_ERROR_CODES } from "./errors/codes";
 export type { VaultErrorCode } from "./errors/codes";

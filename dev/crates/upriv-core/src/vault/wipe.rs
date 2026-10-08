@@ -1,6 +1,8 @@
 //! Overwrite + fsync + unlink (SDD §2.10). SSD/flash is best-effort.
 
-use std::fs::{self, File, OpenOptions};
+#[allow(unused_imports)]
+use crate::host_fs::HostFsQuery;
+use crate::host_fs::{self as fs, File, OpenOptions};
 use std::io::{Seek, SeekFrom, Write};
 use std::path::Path;
 
@@ -34,12 +36,12 @@ pub fn secure_wipe_path(path: &Path, opts: &WipeOptions) -> Result<()> {
         fs::remove_file(path)?;
         return Ok(());
     }
-    if meta.is_file() {
+    if meta.host_is_file() {
         wipe_file_contents(path, opts)?;
         fs::remove_file(path)?;
         return Ok(());
     }
-    if meta.is_dir() {
+    if meta.host_is_dir() {
         let mut children: Vec<_> = fs::read_dir(path)?.filter_map(|e| e.ok()).collect();
         children.sort_by_key(|e| std::cmp::Reverse(e.path().as_os_str().to_os_string()));
         for child in children {
@@ -90,12 +92,14 @@ fn fill_pattern(buf: &mut [u8], pattern: VaultWipePattern) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[allow(unused_imports)]
+    use crate::host_fs::HostFsQuery;
 
     #[test]
     fn wipe_removes_file_after_overwrite() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("secret.bin");
-        std::fs::write(&path, b"plaintext-secret").unwrap();
+        crate::host_fs::write(&path, b"plaintext-secret").unwrap();
         secure_wipe_path(
             &path,
             &WipeOptions {
@@ -104,6 +108,6 @@ mod tests {
             },
         )
         .unwrap();
-        assert!(!path.exists());
+        assert!(!path.host_exists());
     }
 }

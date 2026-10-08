@@ -7,7 +7,7 @@ import { TOAST_DEFAULT_MS, useToast } from "@upriv/shared/react";
 /** Toast + translated user-facing errors (`showError(error, fallbackKey)`). */
 export function useErrorToast(defaultMs: number = TOAST_DEFAULT_MS) {
   const { t } = useTranslation();
-  const { message, show, dismiss } = useToast(defaultMs);
+  const { toast, show, dismiss } = useToast(defaultMs);
 
   const showError = useCallback(
     (error: unknown, fallback: I18nKey = "error.unexpected") => {
@@ -21,5 +21,5 @@ export function useErrorToast(defaultMs: number = TOAST_DEFAULT_MS) {
     [t],
   );
 
-  return { message, show, showError, errorText, dismiss, t };
+  return { toast, show, showError, errorText, dismiss, t };
 }

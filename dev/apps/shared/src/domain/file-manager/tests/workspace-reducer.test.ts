@@ -328,6 +328,76 @@ describe("vaultWorkspaceReducer", () => {
     expect(state.expandedPaths).toEqual(["/", "/notes"]);
     expect(state.dirtyPaths).toEqual(["/tmp.md"]);
   });
+
+  it("closes other clean tabs and activates the kept one", () => {
+    let state = createDefaultWorkspaceState();
+    for (const path of ["/a.md", "/b.md", "/c.md"]) {
+      state = vaultWorkspaceReducer(state, { type: "open_file", path });
+    }
+    state = vaultWorkspaceReducer(state, {
+      type: "request_close_tabs",
+      paths: ["/a.md", "/c.md"],
+    });
+    expect(state.openTabs).toEqual(["/b.md"]);
+    expect(state.activeTabPath).toBe("/b.md");
+    expect(state.unsavedPrompt).toBeNull();
+  });
+
+  it("prompts once before closing several tabs when one is dirty", () => {
+    let state = createDefaultWorkspaceState();
+    for (const path of ["/a.md", "/b.md", "/c.md"]) {
+      state = vaultWorkspaceReducer(state, { type: "open_file", path });
+    }
+    state = vaultWorkspaceReducer(state, { type: "set_editor_draft", path: "/a.md", content: "x" });
+    state = vaultWorkspaceReducer(state, {
+      type: "request_close_tabs",
+      paths: ["/a.md", "/b.md", "/c.md", "/gone.md"],
+    });
+    expect(state.unsavedPrompt).toEqual({
+      type: "close_tabs",
+      paths: ["/a.md", "/b.md", "/c.md"],
+    });
+    expect(state.openTabs).toHaveLength(3);
+
+    state = vaultWorkspaceReducer(state, {
+      type: "discard_unsaved_and",
+      next: resolveUnsavedPrompt(state, state.unsavedPrompt!),
+    });
+    expect(state.openTabs).toEqual([]);
+    expect(state.activeTabPath).toBeNull();
+    expect(hasUnsavedWorkspaceChanges(state)).toBe(false);
+  });
+
+  it("start_rename expands the ancestors of the renamed path", () => {
+    let state = createDefaultWorkspaceState();
+    state = vaultWorkspaceReducer(state, { type: "open_file", path: "/notes/deep/a.md" });
+    state = vaultWorkspaceReducer(state, { type: "toggle_folder", path: "/notes" });
+    expect(state.expandedPaths).not.toContain("/notes");
+
+    state = vaultWorkspaceReducer(state, { type: "start_rename", path: "/notes/deep/a.md" });
+    expect(state.renamingPath).toBe("/notes/deep/a.md");
+    expect(state.expandedPaths).toEqual(expect.arrayContaining(["/", "/notes", "/notes/deep"]));
+    expect(state.userCollapsedPaths).not.toContain("/notes");
+  });
+});
+
+describe("discard_all_dirty", () => {
+  it("drops every unsaved draft", () => {
+    let state = createDefaultWorkspaceState();
+    state = vaultWorkspaceReducer(state, {
+      type: "set_editor_draft",
+      path: "/a.md",
+      content: "x",
+    });
+    state = vaultWorkspaceReducer(state, {
+      type: "set_unsaved_prompt",
+      prompt: { type: "close_vault" },
+    });
+    state = vaultWorkspaceReducer(state, { type: "discard_all_dirty" });
+    expect(state.dirtyPaths).toEqual([]);
+    expect(state.editorDrafts).toEqual({});
+    expect(state.unsavedPrompt).toBeNull();
+  });
 });
 
 describe("resolveUnsavedPrompt", () => {
@@ -339,7 +409,17 @@ describe("resolveUnsavedPrompt", () => {
       path: "/a",
     });
     expect(
+      resolveUnsavedPrompt(createDefaultWorkspaceState(), { type: "close_tabs", paths: ["/a"] }),
+    ).toEqual({ type: "close_tabs", paths: ["/a"] });
+    expect(
       resolveUnsavedPrompt(createDefaultWorkspaceState(), { type: "dismiss_workspace" }),
+    ).toEqual({ type: "set_unsaved_prompt", prompt: null });
+    expect(resolveUnsavedPrompt(createDefaultWorkspaceState(), { type: "close_vault" })).toEqual({
+      type: "set_unsaved_prompt",
+      prompt: null,
+    });
+    expect(
+      resolveUnsavedPrompt(createDefaultWorkspaceState(), { type: "close_vault_import" }),
     ).toEqual({ type: "set_unsaved_prompt", prompt: null });
     expect(
       resolveUnsavedPrompt(createDefaultWorkspaceState(), { type: "import_in_progress" }),

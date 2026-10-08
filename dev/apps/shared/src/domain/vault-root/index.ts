@@ -9,6 +9,8 @@ export type {
   VaultRootPresentationState,
   VaultRootResolveResult,
   VaultRootResolveSource,
+  VaultRootRelocateNotice,
+  VaultRootPrivateRoot,
 } from "./types";
 export { VAULT_ROOT_ALIAS_FILE } from "./types";
 export {
@@ -29,7 +31,12 @@ export type { VaultRootErrorCode, VaultRootIntegrityCode } from "./errors";
 export { VAULT_ROOT_ERROR_I18N_KEYS, vaultRootErrorI18nKey } from "./messages";
 export type { VaultRootErrorI18nKey } from "./messages";
 export { sameVaultRootPath, vaultRootPathKey } from "./pathKey";
-export { parseDefaultRootStatus, parseVaultRootInspect, parseVaultRootResolve } from "./parse";
+export {
+  parseDefaultRootStatus,
+  parseVaultRootInspect,
+  parseVaultRootResolve,
+  parseVaultRootPrivateRoot,
+} from "./parse";
 export {
   VAULT_ROOT_GATE_IDLE,
   confirmNotesForReplacePolicy,

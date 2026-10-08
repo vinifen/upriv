@@ -15,6 +15,8 @@ interface PolicyRadioOptionProps {
   icon?: ReactNode;
   description?: string;
   disabled?: boolean;
+  /** Gray, still selectable. The file manager folder inside can stay locked. */
+  muted?: boolean;
   badge?: PolicyRadioBadge;
   tone?: Tone;
   /**
@@ -71,6 +73,7 @@ export function PolicyRadioOption({
   icon,
   description,
   disabled = false,
+  muted = false,
   badge,
   tone = "default",
   attention = false,
@@ -101,74 +104,92 @@ export function PolicyRadioOption({
 
   return (
     <View style={styles.wrap}>
-      <Pressable
-        onPress={() => {
-          if (disabled) return;
-          onSelect();
-        }}
-        disabled={disabled}
-        accessibilityRole="radio"
-        accessibilityState={{ checked, disabled }}
-        accessibilityLabel={accessibilityLabel ?? title}
-        accessibilityValue={{ text: value }}
-        style={({ pressed }) => [
+      <View
+        style={[
           styles.card,
           {
             backgroundColor: cardBg,
             borderColor,
             borderWidth: checked ? 2 : 1,
-            opacity: disabled ? 0.6 : pressed ? 0.9 : 1,
+            opacity: disabled || muted ? 0.6 : 1,
           },
         ]}
       >
-        <View style={styles.rowTop}>
-          <View
-            style={[
-              styles.radio,
-              {
-                borderColor: checked ? colors.accent : colors.outlineVariant,
-              },
-            ]}
-          >
-            {checked ? (
-              <View style={[styles.radioDot, { backgroundColor: colors.accent }]} />
-            ) : null}
-          </View>
-          <View style={styles.textCol}>
-            <View style={styles.titleRow}>
-              {icon ? <View style={styles.icon}>{icon}</View> : null}
-              <Text
-                style={[typography.body, styles.titleText, { color: colors.onSurface }]}
-                numberOfLines={2}
-              >
-                {title}
-              </Text>
-              {badgeLabel && badgeTone ? (
-                <View style={[styles.badge, { backgroundColor: badgeTone.backgroundColor }]}>
-                  <Text style={[styles.badgeText, { color: badgeTone.color }]}>
-                    {badgeLabel.toLocaleUpperCase()}
-                  </Text>
-                </View>
+        <Pressable
+          onPress={() => {
+            if (disabled) return;
+            onSelect();
+          }}
+          disabled={disabled}
+          accessibilityRole="radio"
+          accessibilityState={{ checked, disabled }}
+          accessibilityLabel={accessibilityLabel ?? title}
+          accessibilityValue={{ text: value }}
+          style={({ pressed }) => [pressed && !disabled ? { opacity: 0.9 } : null]}
+        >
+          <View style={styles.rowTop}>
+            <View
+              style={[
+                styles.radio,
+                {
+                  borderColor: checked ? colors.accent : colors.outlineVariant,
+                },
+              ]}
+            >
+              {checked ? (
+                <View style={[styles.radioDot, { backgroundColor: colors.accent }]} />
               ) : null}
             </View>
-            {description ? (
-              <Text
-                style={[typography.caption, styles.description, { color: colors.onSurfaceVariant }]}
-              >
-                {description}
-              </Text>
-            ) : null}
+            <View style={styles.textCol}>
+              <View style={styles.titleRow}>
+                {icon ? <View style={styles.icon}>{icon}</View> : null}
+                <Text
+                  style={[typography.body, styles.titleText, { color: colors.onSurface }]}
+                  numberOfLines={2}
+                >
+                  {title}
+                </Text>
+                {badgeLabel && badgeTone ? (
+                  <View style={[styles.badge, { backgroundColor: badgeTone.backgroundColor }]}>
+                    <Text style={[styles.badgeText, { color: badgeTone.color }]}>
+                      {badgeLabel.toLocaleUpperCase()}
+                    </Text>
+                  </View>
+                ) : null}
+              </View>
+              {description ? (
+                <Text
+                  style={[
+                    typography.caption,
+                    styles.description,
+                    { color: colors.onSurfaceVariant },
+                  ]}
+                >
+                  {description}
+                </Text>
+              ) : null}
+            </View>
           </View>
-        </View>
+        </Pressable>
         {footer ? (
-          <View
-            pointerEvents={checked ? "auto" : "none"}
-            style={[styles.footer, checked ? null : styles.footerInactive]}
-          >
-            {footer}
-          </View>
+          checked ? (
+            <View style={styles.footer}>{footer}</View>
+          ) : (
+            <Pressable
+              onPress={() => {
+                if (disabled) return;
+                onSelect();
+              }}
+              disabled={disabled}
+              accessibilityElementsHidden
+              importantForAccessibility="no-hide-descendants"
+              style={[styles.footer, styles.footerInactive]}
+            >
+              <View pointerEvents="none">{footer}</View>
+            </Pressable>
+          )
         ) : null}
-      </Pressable>
+      </View>
     </View>
   );
 }

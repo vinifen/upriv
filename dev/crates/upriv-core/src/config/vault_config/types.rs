@@ -7,7 +7,8 @@ use serde::{Deserialize, Serialize};
 /// - `encrypted_dir` — default. Rest = `store/`. While open: decrypt in RAM
 ///   (FUSE/WinFsp on desktop; in-app file manager on mobile).
 /// - `upriv_plain` — rest = `store/`. While open: plaintext under the open
-///   mount folder on disk (wipe on close). Not app `[workspace].path`.
+///   mount folder on disk (wipe on close). That folder is this system's
+///   workspace path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum VaultStorageMode {
@@ -25,30 +26,15 @@ pub enum VaultBackupMode {
     KeepAll,
 }
 
-/// `[security] mode`.
-///
-/// `ram_on_close_only` is a legacy TOML value from the `.7z`-on-close era.
-/// Load/save maps it to [`Self::SessionRam`] — close uses session keys, not a
-/// freshly typed password.
+/// `[security] mode`. Close uses session keys except `always_prompt`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum VaultSecurityMode {
     AlwaysPrompt,
     #[default]
     SessionRam,
-    RamOnCloseOnly,
     DiskClose,
     DiskOpenClose,
-}
-
-impl VaultSecurityMode {
-    /// Rewrite deprecated close-password modes to the current contract.
-    pub fn normalized(self) -> Self {
-        match self {
-            Self::RamOnCloseOnly => Self::SessionRam,
-            other => other,
-        }
-    }
 }
 
 /// `[security] wipe_pattern`.
@@ -98,25 +84,7 @@ pub struct VaultStorageSection {
     pub mode: VaultStorageMode,
 }
 
-/// `[mount]` — where this vault’s open session appears on disk / FUSE.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct VaultMountSection {
-    /// `"default"` inherits app `[workspace].path`; otherwise an absolute path.
-    #[serde(default = "default_mount_workspace_path")]
-    pub workspace_path: String,
-}
-
-fn default_mount_workspace_path() -> String {
-    crate::paths::WORKSPACE_PATH_DEFAULT.to_string()
-}
-
-impl Default for VaultMountSection {
-    fn default() -> Self {
-        Self {
-            workspace_path: default_mount_workspace_path(),
-        }
-    }
-}
+pub use crate::paths::VaultMountSection;
 
 /// `[backup]`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

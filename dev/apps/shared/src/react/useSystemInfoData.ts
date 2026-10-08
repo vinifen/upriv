@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import {
+  currentWorkspaceSystem,
   resolveVaultDisplayStatus,
   shouldBumpVaultRootEpoch,
   vaultRootGoneRpcError,
@@ -19,6 +20,8 @@ export interface UseSystemInfoDataOptions {
   getVersion: () => Promise<SystemInfoAppVersion> | SystemInfoAppVersion;
   /** Effective list show-hidden (persisted always-show or session). */
   showHiddenVaults?: boolean;
+  /** React Native `Platform.OS`. Omit in Electron; that renderer has no Node `process`. */
+  host?: string | null;
 }
 
 export function useSystemInfoData({
@@ -29,6 +32,7 @@ export function useSystemInfoData({
   vaultRootService,
   getVersion,
   showHiddenVaults = false,
+  host,
 }: UseSystemInfoDataOptions) {
   const [snapshot, setSnapshot] = useState<SystemInfoSnapshot | null>(null);
   const [loading, setLoading] = useState(false);
@@ -47,7 +51,10 @@ export function useSystemInfoData({
   const groupsTotal = groups.filter((group) => !group.hidden).length;
   const ui = settings.ui;
   const logging = settings.logging;
-  const workspacePath = settings.workspace.path;
+  const workspace = settings.workspace;
+  const workspaceSystem = currentWorkspaceSystem(host);
+  const workspacePath = workspace[workspaceSystem].path;
+  const workspaceMount = workspace.file_manager_folder;
   const vaultRootMode = settings.app.vault_root_mode;
   const lastOpenedRaw = settings.app.last_opened_vault ?? "";
   const lastOpenedIsHidden = vaults.some(
@@ -101,7 +108,8 @@ export function useSystemInfoData({
           },
           ui,
           logging,
-          workspace: { path: workspacePath },
+          workspace,
+          workspaceSystem,
           lastOpenedVault,
           paths: {
             appHome,
@@ -159,6 +167,8 @@ export function useSystemInfoData({
     logging.entries_per_file,
     logging.keep_last_entries,
     workspacePath,
+    workspaceMount,
+    workspaceSystem,
     vaultRootService,
     getVersion,
     loadAttempt,

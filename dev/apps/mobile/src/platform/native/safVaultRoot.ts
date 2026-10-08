@@ -5,11 +5,9 @@ import { shouldReleaseImportTreePermission } from "./sameSafTreeUri";
 /**
  * SAF (Android Storage Access Framework) surface used by mobile services.
  *
- * Rust `upriv-core` speaks `std::fs::Path` and cannot address `content://`
- * URIs from the Android system picker. This module owns the SAF side of the
- * `.upriv/` tree — inspect / setup / read / write of `settings.toml` — so the
- * mobile UI can host a custom vault-root on Documents / USB OTG / SD card
- * volumes without a full `VaultStorage` trait migration in Rust.
+ * A picked `content://` folder is the data folder. Rust addresses it as
+ * `/upriv-saf-root` and this module mounts that path onto the grant
+ * (`mountSafRoot`). Inspect still reads `.upriv/settings.toml` through SAF.
  *
  * Layering:
  * - Kotlin (`SafVaultRoot.kt`): DocumentsContract I/O + persistable perm
@@ -96,7 +94,11 @@ export function safInspectRoot(treeUri: string): SafInspectStatus {
 
 /** Take persistable read/write permission. Idempotent; safe after picker. */
 export function safPersist(treeUri: string): void {
-  requireNative().safPersistPermission(treeUri);
+  try {
+    requireNative().safPersistPermission(treeUri);
+  } catch (error) {
+    throw toSafRpcError(error, treeUri);
+  }
 }
 
 /** Best-effort release of persistable permission. Missing perm not an error. */
@@ -159,4 +161,33 @@ export function safGetActiveUri(): string | null {
 
 export function safSetActiveUri(uri: string | null): void {
   requireNative().safSetActiveUri(uri ?? "");
+}
+
+/** Point Rust `/upriv-saf-root` at this persisted tree. */
+export function mountSafRoot(treeUri: string): void {
+  const native = requireNative();
+  if (!native.mountSafRoot) {
+    throw new RpcError("saf_not_ready", "This build cannot use a chosen data folder");
+  }
+  try {
+    native.mountSafRoot(treeUri);
+  } catch (error) {
+    throw toSafRpcError(error, treeUri);
+  }
+}
+
+/** Drop the Rust mount. The persistable grant is left in place. */
+export function unmountSafRoot(): void {
+  const native = getUprivCoreNative();
+  try {
+    native?.unmountSafRoot?.();
+  } catch {
+    /* already unmounted */
+  }
+}
+
+/** Starting URI for the data-folder screen (Documents). Null when the bridge has no helper. */
+export function safDocumentsInitialUri(): string | null {
+  const uri = getUprivCoreNative()?.safDocumentsInitialUri?.()?.trim();
+  return uri && uri.length > 0 ? uri : null;
 }

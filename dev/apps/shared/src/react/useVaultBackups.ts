@@ -91,17 +91,20 @@ export function useVaultBackups(
     [backupService, reload, vaultId],
   );
 
+  /** Promote standard backups to saves one by one, then reload the list once. */
   const promoteToSave = useCallback(
-    async (stamp: string) => {
-      if (!vaultId) return;
+    async (stamps: readonly string[]) => {
+      if (!vaultId || stamps.length === 0) return;
       const startedFor = vaultId;
       const busyGen = ++busyGenRef.current;
       setIsBusy(true);
       setError(null);
       try {
-        await backupService.promoteToSave(startedFor, stamp);
-        if (busyGen !== busyGenRef.current) return;
-        if (vaultIdRef.current !== startedFor) return;
+        for (const stamp of stamps) {
+          await backupService.promoteToSave(startedFor, stamp);
+          if (busyGen !== busyGenRef.current) return;
+          if (vaultIdRef.current !== startedFor) return;
+        }
         await reload();
       } catch (err) {
         if (busyGen !== busyGenRef.current) return;

@@ -6,6 +6,8 @@ import { RpcError } from "@upriv/shared";
  * Opens the Android system directory picker (SAF).
  * Returns a persistable `content://` tree URI, or `null` if cancelled.
  *
+ * This picker chooses the data folder. Import folders use a different call.
+ *
  * Desktop equivalent: Electron `dialog.showOpenDialog({ openDirectory })`.
  * iOS has no directory SAF equivalent in Expo.
  */
@@ -26,7 +28,7 @@ export async function pickVaultRootFolder(initialUri?: string | null): Promise<s
   return uri && uri.length > 0 ? uri : null;
 }
 
-/** Android SAF tree / document URIs — not usable by Rust `std::fs` yet. */
+/** Android SAF tree / document URIs — not a filesystem path. */
 export function isAndroidSafUri(path: string): boolean {
   const trimmed = path.trim();
   return trimmed.startsWith("content://");

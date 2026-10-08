@@ -2,6 +2,8 @@
 //!
 //! Daemon and UI adapters call into this module; they must not reimplement vault I/O.
 
+#[allow(unused_imports)]
+use crate::host_fs::HostFsQuery;
 mod backup;
 mod create;
 mod delete;
@@ -10,6 +12,7 @@ mod export;
 mod files_zip;
 pub(crate) mod fs;
 mod import;
+mod import_slots;
 mod open_close;
 mod os_import;
 mod persistence;
@@ -46,17 +49,19 @@ pub use files_zip::{
 };
 pub use fs::{
     fs_create_file, fs_create_folder, fs_delete, fs_ensure_folder, fs_import_from_os_path,
-    fs_list_tree, fs_mkdir, fs_move, fs_os_path, fs_read_file, fs_read_range, fs_rename,
-    fs_tree_revision, fs_truncate, fs_write_file, fs_write_from_reader, fs_write_range,
+    fs_import_from_os_path_deferred, fs_list_tree, fs_mkdir, fs_move, fs_os_path, fs_read_file,
+    fs_read_range, fs_rename, fs_seal_staged_imports, fs_tree_revision, fs_truncate, fs_write_file,
+    fs_write_from_reader, fs_write_range,
 };
 pub use import::{
     import_from_backup, import_store_from_archive_path, import_store_tree, import_store_zip,
     parse_backup_import_path, read_import_archive_bytes, read_import_zip_settings,
 };
-pub use open_close::{close_all_vaults, close_vault, open_vault, CloseVaultOutcome};
+pub use import_slots::{import_slots, import_slots_for};
+pub use open_close::{close_all_vaults, close_phase, close_vault, open_vault, CloseVaultOutcome};
 pub use os_import::{
     abort_import_vault, import_logical_os_path, ingest_import_directory, ingest_import_reader,
-    open_import_session,
+    ingest_import_reader_staged, open_import_session,
 };
 pub use persistence::{load_vault_persistence, VaultPersistence};
 pub use rename::{rename_vault, VaultRenameResult};
@@ -112,25 +117,24 @@ pub(crate) struct VaultListEntry {
 ///
 pub(crate) fn list_vault_entries(root: &VaultRoot) -> Result<Vec<VaultListEntry>> {
     let vaults_dir = root.vaults_dir();
-    if !vaults_dir.is_dir() {
+    if !vaults_dir.host_is_dir() {
         return Ok(Vec::new());
     }
 
     let mut entries = Vec::new();
     let mut skipped = 0usize;
-    for entry in std::fs::read_dir(&vaults_dir)? {
+    for entry in crate::host_fs::read_dir(&vaults_dir)? {
         let entry = entry?;
-        if !entry.file_type()?.is_dir() {
+        if !entry.file_type()?.host_is_dir() {
             continue;
         }
         let vault_dir = entry.path();
         match load_vault_config_raw(&vault_dir) {
             Ok(config) => {
                 // Warn on bad mount but keep the entry (open/save validates fully).
-                if let Err(error) = crate::paths::validate_mount_workspace_path(
-                    &config.mount.workspace_path,
-                    Some(root.root()),
-                ) {
+                if let Err(error) =
+                    crate::paths::validate_workspace_table(&config.mount, Some(root.root()))
+                {
                     let id = config.vault.id.as_str();
                     eprintln!(
                         "upriv-core: vault {id} has invalid [mount] (listed anyway): {error}"
@@ -252,12 +256,12 @@ pub fn list_vaults(root: &VaultRoot) -> Result<Vec<VaultListItem>> {
 /// targets are not included. File contents are not read.
 pub fn vault_store_on_disk_bytes(root: &VaultRoot, vault_id: &str) -> Result<u64> {
     let vault_dir = root.vault_dir(vault_id)?;
-    if !vault_dir.is_dir() {
+    if !vault_dir.host_is_dir() {
         return Err(UprivError::VaultNotFound(vault_dir));
     }
     let store = vault_dir.join(crate::paths::STORE_DIR_NAME);
-    let meta = std::fs::symlink_metadata(&store)?;
-    if !meta.is_dir() {
+    let meta = crate::host_fs::symlink_metadata(&store)?;
+    if !meta.host_is_dir() {
         return Err(UprivError::VaultStoreInvalid {
             path: store,
             detail: "store directory is missing".into(),
@@ -270,23 +274,28 @@ pub(crate) fn sum_regular_file_bytes(root: &Path) -> Result<u64> {
     let mut total: u64 = 0;
     let mut pending = vec![root.to_path_buf()];
     while let Some(dir) = pending.pop() {
-        for entry in std::fs::read_dir(&dir)? {
+        for entry in crate::host_fs::read_dir(&dir)? {
             let entry = entry?;
             let file_type = entry.file_type()?;
             if file_type.is_symlink() {
                 continue;
             }
-            if file_type.is_dir() {
+            if file_type.host_is_dir() {
                 pending.push(entry.path());
                 continue;
             }
-            if file_type.is_file() {
-                // Length from lstat. A symlink swapped in after the type check is skipped.
-                let meta = std::fs::symlink_metadata(entry.path())?;
-                if meta.file_type().is_symlink() || !meta.is_file() {
-                    continue;
-                }
-                total = total.saturating_add(meta.len());
+            if file_type.host_is_file() {
+                let len = if let Some(len) = entry.known_len() {
+                    len
+                } else {
+                    // Length from lstat. A symlink swapped in after the type check is skipped.
+                    let meta = crate::host_fs::symlink_metadata(entry.path())?;
+                    if meta.file_type().is_symlink() || !meta.host_is_file() {
+                        continue;
+                    }
+                    meta.len()
+                };
+                total = total.saturating_add(len);
             }
         }
     }
@@ -296,7 +305,7 @@ pub(crate) fn sum_regular_file_bytes(root: &Path) -> Result<u64> {
 /// One vault after a successful create — does not scan siblings.
 pub fn vault_list_item(root: &VaultRoot, vault_id: &str) -> Result<VaultListItem> {
     let vault_dir = root.vault_dir(vault_id)?;
-    if !vault_dir.is_dir() {
+    if !vault_dir.host_is_dir() {
         return Err(UprivError::VaultNotFound(vault_dir));
     }
     let dirty: HashSet<String> = dirty_close_ids(root)
@@ -323,6 +332,8 @@ pub fn vault_list_item(root: &VaultRoot, vault_id: &str) -> Result<VaultListItem
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[allow(unused_imports)]
+    use crate::host_fs::HostFsQuery;
     use crate::test_support::{vault_root_with, VaultSpec};
 
     #[test]
@@ -332,11 +343,11 @@ mod tests {
             .vault_dir("notes")
             .unwrap()
             .join(crate::paths::STORE_DIR_NAME);
-        std::fs::create_dir_all(store.join("header")).unwrap();
-        std::fs::create_dir_all(store.join("data")).unwrap();
-        std::fs::write(store.join("header").join("vault.header"), vec![1u8; 10]).unwrap();
-        std::fs::write(store.join("data").join("a.blob"), vec![2u8; 25]).unwrap();
-        std::fs::write(
+        crate::host_fs::create_dir_all(store.join("header")).unwrap();
+        crate::host_fs::create_dir_all(store.join("data")).unwrap();
+        crate::host_fs::write(store.join("header").join("vault.header"), vec![1u8; 10]).unwrap();
+        crate::host_fs::write(store.join("data").join("a.blob"), vec![2u8; 25]).unwrap();
+        crate::host_fs::write(
             store.join("DANGER-DO-NOT-EDIT-PERMANENT-DATA-LOSS.md"),
             b"note",
         )
@@ -377,8 +388,8 @@ mod tests {
     fn list_skips_invalid_storage_mode_vaults() {
         let (_tmp, root) = vault_root_with(&[VaultSpec::encrypted("good", "Good", 1)]);
         let bad = root.vault_dir("bad-demo").unwrap();
-        std::fs::create_dir_all(&bad).unwrap();
-        std::fs::write(
+        crate::host_fs::create_dir_all(&bad).unwrap();
+        crate::host_fs::write(
             bad.join("config.toml"),
             r#"
 [vault]
@@ -400,7 +411,7 @@ mode = "plain_only"
             VaultSpec::encrypted("good", "Good", 1),
             VaultSpec::encrypted("other", "Other", 2),
         ]);
-        std::fs::write(
+        crate::host_fs::write(
             root.vault_dir("good").unwrap().join("persistence.json"),
             "{not-json",
         )
@@ -431,8 +442,8 @@ mode = "plain_only"
     fn list_includes_vault_with_relative_mount() {
         let (_tmp, root) = vault_root_with(&[VaultSpec::encrypted("good", "Good", 1)]);
         let bad_mount = root.vault_dir("rel-mount").unwrap();
-        std::fs::create_dir_all(&bad_mount).unwrap();
-        std::fs::write(
+        crate::host_fs::create_dir_all(&bad_mount).unwrap();
+        crate::host_fs::write(
             bad_mount.join("config.toml"),
             r#"
 [vault]
@@ -440,8 +451,16 @@ id = "rel-mount"
 display_name = "Relative Mount"
 [storage]
 mode = "encrypted_dir"
-[mount]
-workspace_path = "not/absolute"
+[mount.linux]
+path = "not/absolute"
+[mount.windows]
+path = "not/absolute"
+[mount.macos]
+path = "not/absolute"
+[mount.android]
+path = "not/absolute"
+[mount.ios]
+path = "not/absolute"
 "#,
         )
         .unwrap();
@@ -549,7 +568,7 @@ mode = "upriv_plain"
             err,
             crate::error::UprivError::UprivPlainUnavailable
         ));
-        assert!(!root.vault_dir("plain").unwrap().is_dir());
+        assert!(!root.vault_dir("plain").unwrap().host_is_dir());
     }
 
     #[test]
@@ -698,10 +717,10 @@ mode = "upriv_plain"
         let alias_dir = root.vaults_dir().join("notes2");
         copy_tree(&notes, &alias_dir);
         let cfg = alias_dir.join("config.toml");
-        let rewritten = std::fs::read_to_string(&cfg)
+        let rewritten = crate::host_fs::read_to_string(&cfg)
             .unwrap()
             .replace("id = \"notes\"", "id = \"notes2\"");
-        std::fs::write(&cfg, rewritten).unwrap();
+        crate::host_fs::write(&cfg, rewritten).unwrap();
 
         open_vault(&root, "notes2", b"pass-word-ok")
             .expect("same ciphertext under a new folder id is a new throttle key (in-app only)");
@@ -709,14 +728,14 @@ mode = "upriv_plain"
     }
 
     fn copy_tree(src: &std::path::Path, dst: &std::path::Path) {
-        std::fs::create_dir_all(dst).unwrap();
-        for entry in std::fs::read_dir(src).unwrap() {
+        crate::host_fs::create_dir_all(dst).unwrap();
+        for entry in crate::host_fs::read_dir(src).unwrap() {
             let entry = entry.unwrap();
             let to = dst.join(entry.file_name());
-            if entry.file_type().unwrap().is_dir() {
+            if entry.file_type().unwrap().host_is_dir() {
                 copy_tree(&entry.path(), &to);
             } else {
-                std::fs::copy(entry.path(), to).unwrap();
+                crate::host_fs::copy(entry.path(), to).unwrap();
             }
         }
     }

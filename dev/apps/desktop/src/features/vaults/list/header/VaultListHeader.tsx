@@ -8,6 +8,9 @@ import { useTranslation } from "@/i18n";
 interface VaultListHeaderProps {
   onRefresh?: () => void;
   isRefreshing?: boolean;
+  /** More than one vault is open — offer a single close-all action. */
+  showCloseAllVaults?: boolean;
+  onCloseAllVaults?: () => void;
   onOpenSystemSettings?: () => void;
   onOpenDataFolder?: () => void;
   onViewLogs?: () => void;
@@ -19,6 +22,8 @@ interface VaultListHeaderProps {
 export function VaultListHeader({
   onRefresh,
   isRefreshing = false,
+  showCloseAllVaults = false,
+  onCloseAllVaults,
   onOpenSystemSettings,
   onOpenDataFolder,
   onViewLogs,
@@ -59,6 +64,16 @@ export function VaultListHeader({
 
   const overflowItems = useMemo(
     () => [
+      ...(showCloseAllVaults
+        ? [
+            {
+              id: "close-all-vaults",
+              label: t("app.menu.close_all_vaults"),
+              icon: <Icon name="lock" size={18} />,
+              onSelect: onCloseAllVaults,
+            },
+          ]
+        : []),
       {
         id: "refresh",
         label: t("action.refresh"),
@@ -87,7 +102,16 @@ export function VaultListHeader({
         onSelect: onOpenSystemInfo,
       },
     ],
-    [t, onRefresh, isRefreshing, onViewLogs, onOpenHelp, onOpenSystemInfo],
+    [
+      t,
+      showCloseAllVaults,
+      onCloseAllVaults,
+      onRefresh,
+      isRefreshing,
+      onViewLogs,
+      onOpenHelp,
+      onOpenSystemInfo,
+    ],
   );
 
   return (

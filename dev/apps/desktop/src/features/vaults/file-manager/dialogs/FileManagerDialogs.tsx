@@ -2,6 +2,11 @@ import { useState } from "react";
 import { Button, Modal, Toast } from "@/components/ui";
 import { useAppSettingsContext } from "@/features/system/settings";
 import { useTranslation } from "@/i18n";
+import {
+  unsavedPromptBodyKey,
+  unsavedPromptConfirmsAllFiles,
+  unsavedPromptIsImport,
+} from "@upriv/shared";
 import type { FileManagerApi } from "../hooks/useVaultFileManager";
 
 interface FileManagerDialogsProps {
@@ -14,8 +19,8 @@ export function FileManagerDialogs({ fm, promptsOpen = true }: FileManagerDialog
   const { patchSettings } = useAppSettingsContext();
   const deleteTarget = fm.workspace.deleteTarget;
   const unsavedPrompt = fm.workspace.unsavedPrompt;
-  const isDismissWorkspacePrompt = unsavedPrompt?.type === "dismiss_workspace";
-  const isImportInProgressPrompt = unsavedPrompt?.type === "import_in_progress";
+  const isMultiFilePrompt = unsavedPromptConfirmsAllFiles(unsavedPrompt);
+  const isImportInProgressPrompt = unsavedPromptIsImport(unsavedPrompt);
   const [dontAskAgain, setDontAskAgain] = useState(false);
 
   const closeDelete = () => {
@@ -65,7 +70,7 @@ export function FileManagerDialogs({ fm, promptsOpen = true }: FileManagerDialog
                 type="checkbox"
                 checked={dontAskAgain}
                 onChange={(event) => setDontAskAgain(event.target.checked)}
-                className="h-4 w-4 shrink-0 rounded border-outline-variant/50 bg-surface-container-high text-accent focus:ring-accent/50"
+                className="h-4 w-4 shrink-0 rounded border-outline-variant/50 bg-surface-container-high text-accent focus:ring-accent/40"
               />
               {t("modal.file_manager.delete.dont_ask_again")}
             </label>
@@ -108,12 +113,12 @@ export function FileManagerDialogs({ fm, promptsOpen = true }: FileManagerDialog
                 {t("action.cancel")}
               </Button>
               <Button variant="danger" size="sm" onClick={fm.confirmUnsaved}>
-                {isDismissWorkspacePrompt
+                {isMultiFilePrompt
                   ? t("modal.file_manager.unsaved.discard_all")
                   : t("modal.file_manager.unsaved.discard")}
               </Button>
               <Button variant="primary" size="sm" onClick={fm.confirmSaveUnsaved}>
-                {isDismissWorkspacePrompt
+                {isMultiFilePrompt
                   ? t("modal.file_manager.unsaved.save_all")
                   : t("modal.file_manager.unsaved.save_and_close")}
               </Button>
@@ -122,15 +127,11 @@ export function FileManagerDialogs({ fm, promptsOpen = true }: FileManagerDialog
         }
       >
         <p className="text-sm leading-relaxed text-on-surface-variant">
-          {isImportInProgressPrompt
-            ? t("modal.file_manager.import_in_progress.body")
-            : isDismissWorkspacePrompt
-              ? t("modal.file_manager.unsaved.workspace_body")
-              : t("modal.file_manager.unsaved.body")}
+          {unsavedPrompt ? t(unsavedPromptBodyKey(unsavedPrompt)) : null}
         </p>
       </Modal>
 
-      <Toast message={fm.toastMessage} onDismiss={fm.dismissToast} className="bottom-20 z-[130]" />
+      <Toast toast={fm.toast} onDismiss={fm.dismissToast} className="bottom-20 z-[130]" />
     </>
   );
 }

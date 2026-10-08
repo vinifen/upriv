@@ -1,4 +1,6 @@
+import { useCallback } from "react";
 import { View } from "react-native";
+import { useToast } from "@upriv/shared/react";
 import {
   resolveVaultListStatus,
   vaultCanExport,
@@ -8,10 +10,12 @@ import {
   type VaultListItem,
   type VaultSettingsAreaId,
 } from "@upriv/shared";
-import { DropdownPanel, IconButton, MenuActionItem } from "@/components/ui";
+import { DropdownPanel, FloatingToast, IconButton, MenuActionItem } from "@/components/ui";
 import { useAppSettingsContext } from "@/features/system/settings";
 import { useTranslation } from "@/i18n";
-import { useVaultService } from "@/platform/services";
+import { mobileErrorI18nKey } from "@/lib/errorMessages";
+import { revealInOsFileManager } from "@/lib/revealInFileManager";
+import { useVaultFileSystemService, useVaultService } from "@/platform/services";
 import { radii } from "@/theme/tokens";
 
 const rowIconStyle = {
@@ -67,6 +71,16 @@ export function VaultRowActions({
   const { t } = useTranslation();
   const { settings } = useAppSettingsContext();
   const vaultService = useVaultService();
+  const fs = useVaultFileSystemService();
+  const { toast, show, dismiss } = useToast();
+  const openOsMount = useCallback(() => {
+    void fs
+      .osPath(vault.id, "/")
+      .then((osPath) => revealInOsFileManager(osPath))
+      .catch((error: unknown) => {
+        show(t(mobileErrorI18nKey(error, "modal.file_manager.toast.open_system_failed")));
+      });
+  }, [fs, show, t, vault.id]);
   const showVaultMore = settings.ui.vault_list_show_vault_more_button !== false;
   const showVaultSettings = settings.ui.vault_list_show_vault_settings_button !== false;
   const listStatus = resolveVaultListStatus(vault, pipelineListStatus);
@@ -115,12 +129,20 @@ export function VaultRowActions({
             />
           ) : null}
           {canUseOpenWorkspace ? (
-            <MenuActionItem
-              icon="file-manager"
-              label={t("action.open_upriv")}
-              disabled={disabled}
-              onPress={() => onOpenFileManager(vault)}
-            />
+            <>
+              <MenuActionItem
+                icon="file-manager"
+                label={t("action.open_upriv")}
+                disabled={disabled}
+                onPress={() => onOpenFileManager(vault)}
+              />
+              <MenuActionItem
+                icon="folder"
+                label={t("action.open_file_manager")}
+                disabled={disabled}
+                onPress={openOsMount}
+              />
+            </>
           ) : null}
           {canExport ? (
             <MenuActionItem
@@ -177,6 +199,7 @@ export function VaultRowActions({
           ))}
         </DropdownPanel>
       ) : null}
+      <FloatingToast toast={toast} onDismiss={dismiss} />
     </View>
   );
 }

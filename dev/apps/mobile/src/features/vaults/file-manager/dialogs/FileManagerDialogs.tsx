@@ -3,6 +3,11 @@ import { Modal as RnModal, Pressable, StyleSheet, Text, View } from "react-nativ
 import { Button, Checkbox, Modal, ModalFooterActions, Toast } from "@/components/ui";
 import { useAppSettingsContext } from "@/features/system/settings";
 import { useTranslation } from "@/i18n";
+import {
+  unsavedPromptBodyKey,
+  unsavedPromptConfirmsAllFiles,
+  unsavedPromptIsImport,
+} from "@upriv/shared";
 import { useTheme } from "@/theme";
 import type { FileManagerApi } from "../hooks/useVaultFileManager";
 
@@ -17,8 +22,8 @@ export function FileManagerDialogs({ fm, promptsOpen = true }: FileManagerDialog
   const { patchSettings } = useAppSettingsContext();
   const deleteTarget = fm.workspace.deleteTarget;
   const unsavedPrompt = fm.workspace.unsavedPrompt;
-  const isDismissWorkspacePrompt = unsavedPrompt?.type === "dismiss_workspace";
-  const isImportInProgressPrompt = unsavedPrompt?.type === "import_in_progress";
+  const isMultiFilePrompt = unsavedPromptConfirmsAllFiles(unsavedPrompt);
+  const isImportInProgressPrompt = unsavedPromptIsImport(unsavedPrompt);
   const [dontAskAgain, setDontAskAgain] = useState(false);
 
   const closeDelete = () => {
@@ -115,7 +120,7 @@ export function FileManagerDialogs({ fm, promptsOpen = true }: FileManagerDialog
               />
               <Button
                 label={
-                  isDismissWorkspacePrompt
+                  isMultiFilePrompt
                     ? t("modal.file_manager.unsaved.discard_all")
                     : t("modal.file_manager.unsaved.discard")
                 }
@@ -125,7 +130,7 @@ export function FileManagerDialogs({ fm, promptsOpen = true }: FileManagerDialog
               />
               <Button
                 label={
-                  isDismissWorkspacePrompt
+                  isMultiFilePrompt
                     ? t("modal.file_manager.unsaved.save_all")
                     : t("modal.file_manager.unsaved.save_and_close")
                 }
@@ -138,16 +143,12 @@ export function FileManagerDialogs({ fm, promptsOpen = true }: FileManagerDialog
         }
       >
         <Text style={[typography.body, { color: colors.onSurfaceVariant }]}>
-          {isImportInProgressPrompt
-            ? t("modal.file_manager.import_in_progress.body")
-            : isDismissWorkspacePrompt
-              ? t("modal.file_manager.unsaved.workspace_body")
-              : t("modal.file_manager.unsaved.body")}
+          {unsavedPrompt ? t(unsavedPromptBodyKey(unsavedPrompt)) : null}
         </Text>
       </Modal>
 
-      {promptsOpen || !fm.toastMessage ? (
-        <Toast message={fm.toastMessage} onDismiss={fm.dismissToast} bottomExtra={56} />
+      {promptsOpen || !fm.toast ? (
+        <Toast toast={fm.toast} onDismiss={fm.dismissToast} bottomExtra={56} />
       ) : (
         <RnModal
           transparent
@@ -157,7 +158,7 @@ export function FileManagerDialogs({ fm, promptsOpen = true }: FileManagerDialog
           onRequestClose={fm.dismissToast}
         >
           <View pointerEvents="box-none" style={styles.toastHost}>
-            <Toast message={fm.toastMessage} onDismiss={fm.dismissToast} bottomExtra={56} />
+            <Toast toast={fm.toast} onDismiss={fm.dismissToast} bottomExtra={56} />
           </View>
         </RnModal>
       )}

@@ -143,6 +143,24 @@ describe("createVaultWizardReducer / submit and close", () => {
     expect(state.submitAttempted).toBe(false);
   });
 
+  it("drops the typed passwords on close but keeps the other fields", () => {
+    const state = reduce(
+      openedAt("password"),
+      {
+        type: "draftPatched",
+        patch: { password: "hunter2", passwordConfirm: "hunter2", passwordHint: "pet" },
+      },
+      { type: "importPasswordTestStarted" },
+      { type: "importPasswordTestFinished", ok: true },
+      { type: "closed" },
+    );
+    expect(state.draft.password).toBe("");
+    expect(state.draft.passwordConfirm).toBe("");
+    expect(state.draft.passwordValidated).toBe(false);
+    expect(state.testingPassword).toBe(false);
+    expect(state.draft.passwordHint).toBe("pet");
+  });
+
   it("resets everything when reopened", () => {
     const dirty = reduce(
       openedAt("identity"),

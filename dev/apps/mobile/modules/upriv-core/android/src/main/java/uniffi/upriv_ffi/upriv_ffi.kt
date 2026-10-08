@@ -653,6 +653,33 @@ internal open class UniffiForeignFutureStructVoid(
 internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
     fun callback(`callbackData`: Long,`result`: UniffiForeignFutureStructVoid.UniffiByValue,)
 }
+internal interface UniffiCallbackInterfaceSafFsCallbackMethod0 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`op`: RustBuffer.ByValue,`payload`: RustBuffer.ByValue,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,)
+}
+@Structure.FieldOrder("dispatch", "uniffiFree")
+internal open class UniffiVTableCallbackInterfaceSafFsCallback(
+    @JvmField internal var `dispatch`: UniffiCallbackInterfaceSafFsCallbackMethod0? = null,
+    @JvmField internal var `uniffiFree`: UniffiCallbackInterfaceFree? = null,
+) : Structure() {
+    class UniffiByValue(
+        `dispatch`: UniffiCallbackInterfaceSafFsCallbackMethod0? = null,
+        `uniffiFree`: UniffiCallbackInterfaceFree? = null,
+    ): UniffiVTableCallbackInterfaceSafFsCallback(`dispatch`,`uniffiFree`,), Structure.ByValue
+
+   internal fun uniffiSetValue(other: UniffiVTableCallbackInterfaceSafFsCallback) {
+        `dispatch` = other.`dispatch`
+        `uniffiFree` = other.`uniffiFree`
+    }
+
+}
+
+
+
+
+
+
+
+
 
 
 
@@ -729,11 +756,14 @@ internal interface UniffiLib : Library {
             .also { lib: UniffiLib ->
                 uniffiCheckContractApiVersion(lib)
                 uniffiCheckApiChecksums(lib)
+                uniffiCallbackInterfaceSafFsCallback.register(lib)
                 }
         }
         
     }
 
+    fun uniffi_upriv_ffi_fn_init_callback_vtable_saffscallback(`vtable`: UniffiVTableCallbackInterfaceSafFsCallback,
+    ): Unit
     fun uniffi_upriv_ffi_fn_func_app_version(uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_upriv_ffi_fn_func_configure_runtime(`appHome`: RustBuffer.ByValue,`distribution`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -742,6 +772,12 @@ internal interface UniffiLib : Library {
     ): RustBuffer.ByValue
     fun uniffi_upriv_ffi_fn_func_invoke(`method`: RustBuffer.ByValue,`paramsJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    fun uniffi_upriv_ffi_fn_func_mount_saf_fs(`callback`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    fun uniffi_upriv_ffi_fn_func_probe_saf_fs(uniffi_out_err: UniffiRustCallStatus, 
+    ): Byte
+    fun uniffi_upriv_ffi_fn_func_unmount_saf_fs(uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
     fun ffi_upriv_ffi_rustbuffer_alloc(`size`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun ffi_upriv_ffi_rustbuffer_from_bytes(`bytes`: ForeignBytes.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -862,6 +898,14 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_upriv_ffi_checksum_func_invoke(
     ): Short
+    fun uniffi_upriv_ffi_checksum_func_mount_saf_fs(
+    ): Short
+    fun uniffi_upriv_ffi_checksum_func_probe_saf_fs(
+    ): Short
+    fun uniffi_upriv_ffi_checksum_func_unmount_saf_fs(
+    ): Short
+    fun uniffi_upriv_ffi_checksum_method_saffscallback_dispatch(
+    ): Short
     fun ffi_upriv_ffi_uniffi_contract_version(
     ): Int
     
@@ -889,6 +933,18 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_upriv_ffi_checksum_func_invoke() != 41611.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_upriv_ffi_checksum_func_mount_saf_fs() != 24976.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_upriv_ffi_checksum_func_probe_saf_fs() != 28953.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_upriv_ffi_checksum_func_unmount_saf_fs() != 28751.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_upriv_ffi_checksum_method_saffscallback_dispatch() != 56001.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
 }
@@ -964,6 +1020,29 @@ public object FfiConverterInt: FfiConverter<Int, Int> {
 /**
  * @suppress
  */
+public object FfiConverterBoolean: FfiConverter<Boolean, Byte> {
+    override fun lift(value: Byte): Boolean {
+        return value.toInt() != 0
+    }
+
+    override fun read(buf: ByteBuffer): Boolean {
+        return lift(buf.get())
+    }
+
+    override fun lower(value: Boolean): Byte {
+        return if (value) 1.toByte() else 0.toByte()
+    }
+
+    override fun allocationSize(value: Boolean) = 1UL
+
+    override fun write(value: Boolean, buf: ByteBuffer) {
+        buf.put(lower(value))
+    }
+}
+
+/**
+ * @suppress
+ */
 public object FfiConverterString: FfiConverter<String, RustBuffer.ByValue> {
     // Note: we don't inherit from FfiConverterRustBuffer, because we use a
     // special encoding when lowering/lifting.  We can use `RustBuffer.len` to
@@ -1017,6 +1096,96 @@ public object FfiConverterString: FfiConverter<String, RustBuffer.ByValue> {
         buf.put(byteBuf)
     }
 }
+
+
+
+
+
+/**
+ * Vault I/O for a user-chosen Android data folder.
+ *
+ * `dispatch` returns JSON. Failures are `{"ok":false,...}`, not thrown.
+ */
+public interface SafFsCallback {
+    
+    fun `dispatch`(`op`: kotlin.String, `payload`: kotlin.String): kotlin.String
+    
+    companion object
+}
+
+// Magic number for the Rust proxy to call using the same mechanism as every other method,
+// to free the callback once it's dropped by Rust.
+internal const val IDX_CALLBACK_FREE = 0
+// Callback return codes
+internal const val UNIFFI_CALLBACK_SUCCESS = 0
+internal const val UNIFFI_CALLBACK_ERROR = 1
+internal const val UNIFFI_CALLBACK_UNEXPECTED_ERROR = 2
+
+/**
+ * @suppress
+ */
+public abstract class FfiConverterCallbackInterface<CallbackInterface: Any>: FfiConverter<CallbackInterface, Long> {
+    internal val handleMap = UniffiHandleMap<CallbackInterface>()
+
+    internal fun drop(handle: Long) {
+        handleMap.remove(handle)
+    }
+
+    override fun lift(value: Long): CallbackInterface {
+        return handleMap.get(value)
+    }
+
+    override fun read(buf: ByteBuffer) = lift(buf.getLong())
+
+    override fun lower(value: CallbackInterface) = handleMap.insert(value)
+
+    override fun allocationSize(value: CallbackInterface) = 8UL
+
+    override fun write(value: CallbackInterface, buf: ByteBuffer) {
+        buf.putLong(lower(value))
+    }
+}
+
+// Put the implementation in an object so we don't pollute the top-level namespace
+internal object uniffiCallbackInterfaceSafFsCallback {
+    internal object `dispatch`: UniffiCallbackInterfaceSafFsCallbackMethod0 {
+        override fun callback(`uniffiHandle`: Long,`op`: RustBuffer.ByValue,`payload`: RustBuffer.ByValue,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,) {
+            val uniffiObj = FfiConverterTypeSafFsCallback.handleMap.get(uniffiHandle)
+            val makeCall = { ->
+                uniffiObj.`dispatch`(
+                    FfiConverterString.lift(`op`),
+                    FfiConverterString.lift(`payload`),
+                )
+            }
+            val writeReturn = { value: kotlin.String -> uniffiOutReturn.setValue(FfiConverterString.lower(value)) }
+            uniffiTraitInterfaceCall(uniffiCallStatus, makeCall, writeReturn)
+        }
+    }
+
+    internal object uniffiFree: UniffiCallbackInterfaceFree {
+        override fun callback(handle: Long) {
+            FfiConverterTypeSafFsCallback.handleMap.remove(handle)
+        }
+    }
+
+    internal var vtable = UniffiVTableCallbackInterfaceSafFsCallback.UniffiByValue(
+        `dispatch`,
+        uniffiFree,
+    )
+
+    // Registers the foreign callback with the Rust side.
+    // This method is generated for each callback interface.
+    internal fun register(lib: UniffiLib) {
+        lib.uniffi_upriv_ffi_fn_init_callback_vtable_saffscallback(vtable)
+    }
+}
+
+/**
+ * The ffiConverter which transforms the Callbacks in to handles to pass to Rust.
+ *
+ * @suppress
+ */
+public object FfiConverterTypeSafFsCallback: FfiConverterCallbackInterface<SafFsCallback>()
         /**
          * Product version string (from repo-root `VERSION`).
          */ fun `appVersion`(): kotlin.String {
@@ -1072,6 +1241,40 @@ public object FfiConverterString: FfiConverter<String, RustBuffer.ByValue> {
 }
     )
     }
+    
+
+        /**
+         * Mount `/upriv-saf-root` onto the storage-access tree `callback` addresses.
+         */ fun `mountSafFs`(`callback`: SafFsCallback)
+        = 
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_upriv_ffi_fn_func_mount_saf_fs(
+        FfiConverterTypeSafFsCallback.lower(`callback`),_status)
+}
+    
+    
+
+        /**
+         * True when the mounted folder can store a vault file (write + exclusive lock).
+         */ fun `probeSafFs`(): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_upriv_ffi_fn_func_probe_saf_fs(
+        _status)
+}
+    )
+    }
+    
+
+        /**
+         * Drop the mounted storage-access data folder.
+         */ fun `unmountSafFs`()
+        = 
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_upriv_ffi_fn_func_unmount_saf_fs(
+        _status)
+}
+    
     
 
 

@@ -3,9 +3,9 @@ import {
   applyImportedFilesToWorkspace,
   importBatchIsReadFailure,
   importBatchIsWriteFailure,
-  importBatchNeedsRetry,
   importLogicalFiles,
 } from "../importLogicalFiles";
+import { importFileSlots } from "../importSlots";
 import type { VaultWorkspaceAction } from "../workspaceReducer";
 
 describe("importLogicalFiles", () => {
@@ -125,7 +125,7 @@ describe("importLogicalFiles", () => {
     expect(events).toEqual(["start:/a.txt", "write:a.txt", "start:/b.txt", "write:b.txt"]);
   });
 
-  it("stops the batch after a write failure so queued files stay pending", async () => {
+  it("stops the batch after a write failure", async () => {
     const written: string[] = [];
     const result = await importLogicalFiles(
       [
@@ -148,7 +148,6 @@ describe("importLogicalFiles", () => {
     expect(written).toEqual(["a.txt"]);
     expect(result.importedPaths).toEqual(["/a.txt"]);
     expect(result.writeFailureName).toBe("b.txt");
-    expect(importBatchNeedsRetry(result)).toBe(true);
     expect(importBatchIsWriteFailure(result)).toBe(false);
   });
 
@@ -177,7 +176,6 @@ describe("importLogicalFiles", () => {
     expect(written).toEqual(["a.txt"]);
     expect(result.importedPaths).toEqual(["/a.txt"]);
     expect(result.writeFailureName).toBeNull();
-    expect(importBatchNeedsRetry(result)).toBe(false);
   });
 
   it("skips the reserved workspace snapshot filename", async () => {
@@ -269,7 +267,6 @@ describe("importLogicalFiles", () => {
         },
       },
     );
-    expect(importBatchNeedsRetry(result)).toBe(true);
     expect(result.writeFailureName).toBe("a.txt");
     expect(result.skippedInvalid).toBe(0);
     expect(imported).toEqual([]);
@@ -310,4 +307,171 @@ describe("importLogicalFiles", () => {
     );
     expect(actions).toEqual([]);
   });
+
+  it("keeps two byte imports in flight and returns paths in start order", async () => {
+    const names = ["a.txt", "b.txt", "c.txt", "d.txt"];
+    let running = 0;
+    let maxRunning = 0;
+    const release: Array<() => void> = [];
+    const pending = importLogicalFiles(
+      names.map((name) => ({ name, relativePath: name })),
+      {
+        vaultId: "v",
+        parentPath: "/",
+        importSlots: 2,
+        readContent: async () => "",
+        ensureFolder: () => "/",
+        importFile: () => "/no",
+        importBinaryFile: (_id, _parent, name) =>
+          new Promise((resolve) => {
+            running += 1;
+            maxRunning = Math.max(maxRunning, running);
+            release.push(() => {
+              running -= 1;
+              resolve(`/${name}`);
+            });
+          }),
+      },
+    );
+    await waitUntil(() => release.length >= 2);
+    expect(release).toHaveLength(2);
+    expect(maxRunning).toBe(2);
+    release[0]?.();
+    release[1]?.();
+    await waitUntil(() => release.length >= 4);
+    expect(maxRunning).toBe(2);
+    release[2]?.();
+    release[3]?.();
+    const result = await pending;
+    expect(result.importedPaths).toEqual(["/a.txt", "/b.txt", "/c.txt", "/d.txt"]);
+    expect(result.writeFailureName).toBeNull();
+  });
+
+  it("finishes a write already started after a failure and does not start another", async () => {
+    const started: string[] = [];
+    let releaseFailure: (() => void) | undefined;
+    const holdFailure = new Promise<void>((resolve) => {
+      releaseFailure = resolve;
+    });
+    const pending = importLogicalFiles(
+      ["a.txt", "b.txt", "c.txt"].map((name) => ({ name, relativePath: name })),
+      {
+        vaultId: "v",
+        parentPath: "/",
+        importSlots: 2,
+        readContent: async () => "",
+        ensureFolder: () => "/",
+        importFile: () => "/no",
+        importBinaryFile: async (_id, _parent, name) => {
+          started.push(name);
+          if (name === "a.txt") {
+            await holdFailure;
+            throw new Error("write failed");
+          }
+          await delay(40);
+          return `/${name}`;
+        },
+      },
+    );
+    await waitUntil(() => started.length >= 2);
+    releaseFailure?.();
+    const result = await pending;
+    expect(started).toEqual(["a.txt", "b.txt"]);
+    expect(result.writeFailureName).toBe("a.txt");
+    expect(result.importedPaths).toEqual(["/b.txt"]);
+  });
+
+  it("stops the next byte import when the batch is aborted", async () => {
+    const abort = new AbortController();
+    const started: string[] = [];
+    const result = await importLogicalFiles(
+      ["a.txt", "b.txt", "c.txt"].map((name) => ({ name, relativePath: name })),
+      {
+        vaultId: "v",
+        parentPath: "/",
+        importSlots: 2,
+        signal: abort.signal,
+        readContent: async () => "",
+        ensureFolder: () => "/",
+        importFile: () => "/no",
+        importBinaryFile: async (_id, _parent, name) => {
+          started.push(name);
+          if (name === "a.txt") abort.abort();
+          return `/${name}`;
+        },
+      },
+    );
+    expect(started).not.toContain("c.txt");
+    expect(result.importedPaths).toContain("/a.txt");
+    expect(result.writeFailureName).toBeNull();
+  });
+
+  it("seals the index once after the batch, not between files", async () => {
+    const importOne = async (count: number, sealImports: () => Promise<void>) =>
+      importLogicalFiles(
+        Array.from({ length: count }, (_, index) => ({
+          name: `${index}.bin`,
+          relativePath: `${index}.bin`,
+        })),
+        {
+          vaultId: "v",
+          parentPath: "/",
+          importSlots: 2,
+          readContent: async () => "",
+          ensureFolder: () => "/",
+          importFile: () => "/no",
+          importBinaryFile: async (_id, _parent, name) => `/${name}`,
+          sealImports,
+        },
+      );
+    const short: string[] = [];
+    await importOne(3, async () => {
+      short.push("seal");
+    });
+    expect(short).toEqual(["seal"]);
+    const long: string[] = [];
+    await importOne(33, async () => {
+      long.push("seal");
+    });
+    expect(long).toEqual(["seal"]);
+  });
 });
+
+describe("importFileSlots", () => {
+  it("leaves cores free and stays at one file on a single core", () => {
+    expect(importFileSlots(1, false)).toBe(1);
+    expect(importFileSlots(1, true)).toBe(1);
+    expect(importFileSlots(2, true)).toBe(1);
+    expect(importFileSlots(4, false)).toBe(2);
+    expect(importFileSlots(8, false)).toBe(4);
+    expect(importFileSlots(16, false)).toBe(4);
+    expect(importFileSlots(4, true)).toBe(2);
+    expect(importFileSlots(8, true)).toBe(2);
+  });
+});
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timers = globalThis as {
+      setTimeout?: (fn: () => void, ms: number) => void;
+    };
+    if (!timers.setTimeout) {
+      resolve();
+      return;
+    }
+    timers.setTimeout(resolve, ms);
+  });
+}
+
+function waitUntil(ready: () => boolean): Promise<void> {
+  const started = Date.now();
+  const poll = async (): Promise<void> => {
+    if (ready()) return;
+    if (Date.now() - started > 2000) {
+      throw new Error("timed out waiting for import slots");
+    }
+    await delay(1);
+    return poll();
+  };
+  return poll();
+}

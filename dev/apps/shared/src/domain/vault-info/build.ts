@@ -1,12 +1,16 @@
-import type { I18nKey } from "../../i18n/catalog";
 import { backupEntryFileName, type VaultBackupEntry } from "../backups";
+import { workspaceSystemHasShortcut } from "../workspace";
 import { formatBytes } from "../format/bytes";
 import { formatIsoDate } from "../format/datetime";
 import { vaultLastAccessedLabel } from "../vault-list/lastAccessed";
-import type { InfoSection, InfoTranslate } from "../info";
+import { withOpenPath, type InfoSection, type InfoTranslate } from "../info";
 import { securityModeToUi } from "../vault-settings/types";
 import { KDF_UNLOCK_OPTION_META } from "../vault-settings/kdf";
-import { resolveVaultListStatus, vaultStatusI18nKey, type VaultPipelineListStatus } from "../vault";
+import {
+  resolveVaultListStatus,
+  vaultStatusLabelKey,
+  type VaultPipelineListStatus,
+} from "../vault";
 import type { VaultInfoSnapshot } from "./types";
 
 const SESSION_KEYS = {
@@ -105,18 +109,13 @@ export function buildVaultInfoSections(
       label: t("modal.info.field.password_hint"),
       value: emptyDash(vault.passwordHint),
     },
-    {
-      id: "password_hint_storage",
-      label: t("modal.info.field.password_hint_storage"),
-      value: t("modal.info.value.password_hint_plaintext"),
-    },
   ];
 
   const statusFields = [
     {
       id: "display_status",
       label: t("modal.info.field.display_status"),
-      value: t(vaultStatusI18nKey[displayStatus] as I18nKey),
+      value: t(vaultStatusLabelKey(displayStatus, vault.id, pipeline)),
     },
     {
       id: "session",
@@ -179,17 +178,26 @@ export function buildVaultInfoSections(
   ];
 
   const storageFields = [
-    { id: "store_path", label: t("modal.info.field.store_path"), value: storePath },
-    { id: "backups_path", label: t("modal.info.field.backups_path"), value: backupsPath },
-    {
-      id: "workspace_path",
-      label: t(
-        workspacePathIsActive
-          ? "modal.info.field.workspace_path"
-          : "modal.info.field.workspace_path_expected",
-      ),
-      value: emptyDash(workspacePath),
-    },
+    withOpenPath(
+      { id: "store_path", label: t("modal.info.field.store_path"), value: storePath },
+      storePath,
+    ),
+    withOpenPath(
+      { id: "backups_path", label: t("modal.info.field.backups_path"), value: backupsPath },
+      backupsPath,
+    ),
+    withOpenPath(
+      {
+        id: "workspace_path",
+        label: t(
+          workspacePathIsActive
+            ? "modal.info.field.workspace_path"
+            : "modal.info.field.workspace_path_expected",
+        ),
+        value: emptyDash(workspacePath),
+      },
+      workspacePath,
+    ),
     {
       id: "store_size",
       label: t("modal.info.field.store_size"),
@@ -212,13 +220,35 @@ export function buildVaultInfoSections(
     },
   ];
 
+  const { workspaceSystem } = snapshot;
+  const mountPath = settings?.mount[workspaceSystem].path ?? "";
   const configFields = settings
     ? [
-        {
-          id: "mount_workspace_path",
-          label: t("modal.info.field.mount_workspace_path"),
-          value: emptyDash(settings.mount.workspace_path),
-        },
+        withOpenPath(
+          {
+            id: "mount_workspace_path",
+            label: t("modal.info.field.mount_workspace_path"),
+            value: emptyDash(mountPath),
+          },
+          mountPath,
+        ),
+        ...(settings.storage.mode === "encrypted_dir" && workspaceSystemHasShortcut(workspaceSystem)
+          ? [
+              {
+                id: "vault_mount",
+                label: t("modal.info.field.vault_mount"),
+                value: t(
+                  `modal.info.value.vault_shortcut_${
+                    settings.mount[workspaceSystem].path.trim()
+                      ? settings.mount.custom_file_manager_folder
+                        ? "on"
+                        : "off"
+                      : settings.mount.app_file_manager_folder
+                  }`,
+                ),
+              },
+            ]
+          : []),
         {
           id: "backup_enabled",
           label: t("modal.info.field.backup_enabled"),

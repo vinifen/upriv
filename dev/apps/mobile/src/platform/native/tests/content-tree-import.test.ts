@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { CreateVaultInput, VaultListItem } from "@upriv/shared";
 import {
   contentTreeFromFolderPick,
+  contentTreeFromPickedFile,
   createContentTreeRegistry,
   importContentTree,
   relativeUnderPickedFolder,
@@ -82,6 +83,40 @@ describe("contentTreeFromFolderPick", () => {
         files: [{ relativePath: "Photos/upriv-seed.txt", uri: "content://doc/seed" }],
       }),
     ).toThrow(/reserved/);
+  });
+});
+
+describe("contentTreeFromPickedFile", () => {
+  it("keeps one document at the vault root", () => {
+    const tree = contentTreeFromPickedFile({
+      path: "/data/user/0/app/cache/DocumentPicker/note.pdf",
+      uri: "file:///data/user/0/app/cache/DocumentPicker/note.pdf",
+      fileName: "note.pdf",
+    });
+    expect(tree.directoryUri).toBe("/data/user/0/app/cache/DocumentPicker/note.pdf");
+    expect(tree.directories).toEqual([]);
+    expect(tree.files).toEqual([
+      {
+        logicalPath: "note.pdf",
+        uri: "file:///data/user/0/app/cache/DocumentPicker/note.pdf",
+      },
+    ]);
+  });
+
+  it("rejects a reserved name before a vault is created", () => {
+    expect(() =>
+      contentTreeFromPickedFile({
+        path: "/data/user/0/app/cache/DocumentPicker/seed.txt",
+        uri: "file:///cache/seed.txt",
+        fileName: "upriv-seed.txt",
+      }),
+    ).toThrow(/reserved/);
+  });
+
+  it("rejects an empty picker uri", () => {
+    expect(() =>
+      contentTreeFromPickedFile({ path: "/tmp/note.pdf", uri: "  ", fileName: "note.pdf" }),
+    ).toThrow(/unavailable/);
   });
 });
 

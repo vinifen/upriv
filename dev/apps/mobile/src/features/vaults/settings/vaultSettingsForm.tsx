@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { Platform, StyleSheet, Text, View } from "react-native";
 import {
   KDF_UNLOCK_OPTION_META,
@@ -6,13 +6,16 @@ import {
   VAULT_DISPLAY_NAME_MAX_LENGTH,
   VAULT_NOTE_MAX_LENGTH,
   VAULT_PASSWORD_HINT_MAX_LENGTH,
-  WORKSPACE_PATH_DEFAULT,
-  normalizeMountWorkspacePath,
+  workspaceSystemsCurrentFirst,
+  workspaceSystemFromHost,
+  workspaceSystemHasShortcut,
+  appWorkspace,
+  appWorkspacePlace,
   securityModeToUi,
   securityUiModesForStorage,
   storageModeIsPlaintext,
   uiToSecurityMode,
-  validateMountWorkspacePath,
+  validateWorkspaceTable,
   vaultSettingsPreferenceSections,
   workspacePathIssueI18nKey,
   type KdfUnlockPreset,
@@ -22,16 +25,21 @@ import {
   type VaultGroup,
   type VaultSettingsConfig,
   type VaultSettingsSectionId,
+  type WorkspaceOsEntry,
   type WorkspacePathIssue,
+  type WorkspaceSystem,
+  type WorkspaceTable,
   groupsForAssignmentPicker,
   groupAssignmentClearOption,
   requireVaultConfigEditLockedI18nKey,
 } from "@upriv/shared";
+import { PathField } from "@/components/PathField";
+import { mobileErrorI18nKey } from "@/lib/errorMessages";
 import { useTranslation, type I18nKey } from "@/i18n";
 import { useTheme } from "@/theme";
 import { spacing } from "@/theme/tokens";
 import { Button, Select } from "@/components/ui";
-import { PolicyRadioOption, SettingsAccordionSection } from "@/components/settings";
+import { IntegerInput, PolicyRadioOption, SettingsAccordionSection } from "@/components/settings";
 import {
   FieldHint,
   FieldLabel,
@@ -89,6 +97,7 @@ interface VaultSettingsFormProps {
   /** Resolved vault-root for reserved mount-path checks. */
   vaultRootPath?: string | null;
   onPathIssueChange?: (issue: WorkspacePathIssue | null) => void;
+  appWorkspace?: WorkspaceTable;
   hiddenLocked?: boolean;
   children?: ReactNode;
 }
@@ -102,6 +111,7 @@ export function VaultSettingsForm({
   securityModeLocked = false,
   vaultRootPath = null,
   onPathIssueChange,
+  appWorkspace: appFolders = appWorkspace(),
   hiddenLocked = false,
   children,
 }: VaultSettingsFormProps) {
@@ -122,7 +132,15 @@ export function VaultSettingsForm({
           title={t(`modal.settings.section.${sectionId}` as I18nKey)}
           defaultOpen={sectionId === "vault"}
         >
-          {renderSection(sectionId, draft, patchDraft, locks, vaultRootPath, onPathIssueChange)}
+          {renderSection(
+            sectionId,
+            draft,
+            patchDraft,
+            locks,
+            vaultRootPath,
+            appFolders,
+            onPathIssueChange,
+          )}
         </SettingsAccordionSection>
       ))}
       {children}
@@ -142,6 +160,7 @@ function renderSection(
     hiddenLocked: boolean;
   },
   vaultRootPath: string | null,
+  appFolders: WorkspaceTable,
   onPathIssueChange?: (issue: WorkspacePathIssue | null) => void,
 ) {
   switch (sectionId) {
@@ -168,6 +187,8 @@ function renderSection(
           config={draft.mount}
           vaultRootPath={vaultRootPath}
           controlsDisabled={locks.mountLocked}
+          plaintext={draft.storage.mode === "upriv_plain"}
+          appWorkspace={appFolders}
           onPathIssueChange={onPathIssueChange}
           onChange={(patch) => patchDraft("mount", patch)}
         />
@@ -242,12 +263,7 @@ function VaultSection({
       {displayNameLocked ? null : <DisplayNameFieldError name={config.display_name} />}
       <FieldLabel>{t("modal.settings.field.vault.order")}</FieldLabel>
       <FieldHint>{t("modal.settings.field.vault.order_help")}</FieldHint>
-      <ThemedInput
-        keyboardType="number-pad"
-        value={String(config.order)}
-        onChangeText={(raw) => onChange({ order: Math.max(0, Number.parseInt(raw, 10) || 0) })}
-        mono
-      />
+      <IntegerInput min={0} value={config.order} onChange={(order) => onChange({ order })} />
       <FieldLabel>{t("modal.settings.note")}</FieldLabel>
       <FieldHint>
         {t("modal.settings.field.vault.note_help", { max: String(VAULT_NOTE_MAX_LENGTH) })}
@@ -320,34 +336,21 @@ export function VaultSettingsMountSection({
   vaultRootPath = null,
   onPathIssueChange,
   controlsDisabled = false,
+  plaintext = false,
+  appWorkspace: appFolders = appWorkspace(),
 }: {
   config: VaultSettingsConfig["mount"];
   onChange: (patch: Partial<VaultSettingsConfig["mount"]>) => void;
   vaultRootPath?: string | null;
   onPathIssueChange?: (issue: WorkspacePathIssue | null) => void;
   controlsDisabled?: boolean;
+  plaintext?: boolean;
+  appWorkspace?: WorkspaceTable;
 }) {
   const { t } = useTranslation();
   const { colors, typography } = useTheme();
-  const vaultRootService = useVaultRootService();
-  const customDraftRef = useRef("");
-  const storedIsDefault =
-    normalizeMountWorkspacePath(config.workspace_path) === WORKSPACE_PATH_DEFAULT;
-  const [uiMode, setUiMode] = useState<"default" | "custom">(
-    storedIsDefault ? "default" : "custom",
-  );
-
-  useEffect(() => {
-    if (!storedIsDefault) setUiMode("custom");
-  }, [storedIsDefault]);
-
-  const customPath = storedIsDefault ? "" : config.workspace_path;
-  const pathIssue: WorkspacePathIssue | null =
-    uiMode === "custom"
-      ? !customPath.trim()
-        ? "empty"
-        : validateMountWorkspacePath(customPath, vaultRootPath)
-      : null;
+  const current = workspaceSystemFromHost(Platform.OS);
+  const pathIssue = validateWorkspaceTable(config, vaultRootPath);
 
   useEffect(() => {
     onPathIssueChange?.(pathIssue);
@@ -359,88 +362,235 @@ export function VaultSettingsMountSection({
       {controlsDisabled ? (
         <FieldHint>{t(requireVaultConfigEditLockedI18nKey("mount.workspace_path"))}</FieldHint>
       ) : null}
-      <RadioGroup>
-        <PolicyRadioOption
-          value="default"
-          checked={uiMode === "default"}
-          disabled={controlsDisabled}
-          title={t("modal.settings.field.mount.use_default")}
-          description={t("modal.settings.field.mount.use_default_desc")}
-          badge="default"
-          onSelect={() => {
-            if (controlsDisabled) return;
-            if (!storedIsDefault && config.workspace_path.trim()) {
-              customDraftRef.current = config.workspace_path.trim();
-            }
-            setUiMode("default");
-            onChange({ workspace_path: WORKSPACE_PATH_DEFAULT });
-          }}
-        />
-        <PolicyRadioOption
-          value="custom"
-          checked={uiMode === "custom"}
-          disabled={controlsDisabled}
-          title={t("modal.settings.field.mount.custom")}
-          description={t("modal.settings.field.mount.custom_desc")}
-          onSelect={() => {
-            if (controlsDisabled) return;
-            setUiMode("custom");
-            if (storedIsDefault) {
-              onChange({ workspace_path: customDraftRef.current });
-            }
-          }}
-          footer={
-            uiMode === "custom" ? (
-              <View style={styles.fields}>
-                <FieldLabel disabled={controlsDisabled}>
-                  {t("modal.settings.field.mount.path")}
-                </FieldLabel>
-                <FieldHint disabled={controlsDisabled}>
-                  {t("modal.settings.field.mount.path_help")}
-                </FieldHint>
-                <ThemedInput
-                  value={customPath}
-                  disabled={controlsDisabled}
-                  placeholder={t("modal.app_settings.field.workspace.path_placeholder")}
-                  onChangeText={(next) => {
-                    customDraftRef.current = next.trim();
-                    onChange({ workspace_path: next });
-                  }}
-                  mono
-                />
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  label={t("modal.app_settings.action.pick_workspace_folder")}
-                  disabled={controlsDisabled || Platform.OS !== "android"}
-                  onPress={() => {
-                    void (async () => {
-                      const picked = await vaultRootService.pickFolder(
-                        customPath.trim() || null,
-                        t("modal.app_settings.action.pick_workspace_folder"),
-                      );
-                      if (!picked?.trim()) return;
-                      customDraftRef.current = picked.trim();
-                      onChange({ workspace_path: picked.trim() });
-                    })();
-                  }}
-                />
-                {Platform.OS !== "android" ? (
-                  <FieldHint>{t("error.unsupported_platform")}</FieldHint>
-                ) : null}
-                {pathIssue ? (
-                  <Text
-                    style={[typography.caption, { color: colors.onErrorContainer }]}
-                    accessibilityRole="alert"
-                  >
-                    {t(workspacePathIssueI18nKey(pathIssue))}
-                  </Text>
-                ) : null}
+      {workspaceSystemsCurrentFirst(Platform.OS).map((system) => {
+        const active = system === current && !controlsDisabled;
+        const entry = config[system];
+        return (
+          <View key={system} style={active ? undefined : { opacity: 0.6 }}>
+            <FieldLabel disabled={!active}>
+              {t(`modal.app_settings.field.workspace.system.${system}`)}
+            </FieldLabel>
+            <FieldHint disabled={!active}>
+              {system === current
+                ? t(
+                    plaintext
+                      ? "modal.settings.field.mount.plain_help"
+                      : workspaceSystemHasShortcut(system)
+                        ? "modal.settings.field.mount.path_help"
+                        : "modal.settings.field.mount.phone_help",
+                  )
+                : t("modal.app_settings.field.workspace.other_system")}
+            </FieldHint>
+            {system === current ? (
+              <CurrentVaultFolderChoices
+                system={system}
+                entry={entry}
+                appEntry={appFolders[system]}
+                appShortcutOn={appFolders.file_manager_folder}
+                vaultAppShortcut={config.app_file_manager_folder}
+                vaultCustomShortcut={config.custom_file_manager_folder}
+                active={active}
+                plaintext={plaintext}
+                canPick={Platform.OS === "android"}
+                onChange={onChange}
+              />
+            ) : (
+              <PathField
+                value={entry.path}
+                disabled
+                placeholder={t("modal.settings.field.mount.inherit")}
+              />
+            )}
+          </View>
+        );
+      })}
+      {pathIssue ? (
+        <Text
+          style={[typography.caption, { color: colors.onErrorContainer }]}
+          accessibilityRole="alert"
+        >
+          {t(workspacePathIssueI18nKey(pathIssue))}
+        </Text>
+      ) : null}
+    </View>
+  );
+}
+
+function CurrentVaultFolderChoices({
+  system,
+  entry,
+  appEntry,
+  appShortcutOn,
+  vaultAppShortcut,
+  vaultCustomShortcut,
+  active,
+  plaintext,
+  canPick,
+  onChange,
+}: {
+  system: WorkspaceSystem;
+  entry: WorkspaceOsEntry;
+  appEntry: WorkspaceOsEntry;
+  appShortcutOn: boolean;
+  vaultAppShortcut: VaultSettingsConfig["mount"]["app_file_manager_folder"];
+  vaultCustomShortcut: boolean;
+  active: boolean;
+  plaintext: boolean;
+  canPick: boolean;
+  onChange: (patch: Partial<VaultSettingsConfig["mount"]>) => void;
+}) {
+  const { t } = useTranslation();
+  const { colors, typography } = useTheme();
+  const vaultRootService = useVaultRootService();
+  const trimmed = entry.path.trim();
+  const [customPending, setCustomPending] = useState(false);
+  const [pickError, setPickError] = useState<string | null>(null);
+  const custom = trimmed !== "" || customPending;
+  const showShortcut = workspaceSystemHasShortcut(system) && !plaintext;
+  const workspaceReady = appWorkspacePlace(appEntry) !== "unset";
+  const shortcutLocked = !active || !workspaceReady;
+  const radiosDisabled = shortcutLocked || custom;
+  const appFolderTitle = workspaceReady
+    ? t("modal.settings.field.mount.inherit")
+    : `${t("modal.settings.field.mount.inherit")} (${t("modal.app_settings.field.workspace.unset")})`;
+  const followTitle = workspaceReady
+    ? `${t("modal.settings.field.mount.shortcut_inherit")} (${t(
+        appShortcutOn
+          ? "modal.settings.field.mount.shortcut_on"
+          : "modal.settings.field.mount.shortcut_off",
+      )})`
+    : t("modal.settings.field.mount.shortcut_inherit");
+
+  function writePath(path: string) {
+    const next = path.trim();
+    if (!next) setCustomPending(false);
+    onChange({ [system]: { ...entry, path: next } });
+  }
+
+  function pickFolder(initial: string | null) {
+    if (!active || !canPick) return;
+    void (async () => {
+      setPickError(null);
+      try {
+        const picked = await vaultRootService.pickFolder(
+          initial,
+          t("modal.app_settings.action.pick_workspace_folder"),
+        );
+        if (!picked?.trim()) return;
+        setCustomPending(false);
+        onChange({ [system]: { ...entry, path: picked.trim() } });
+      } catch (error) {
+        setPickError(t(mobileErrorI18nKey(error, "error.unexpected")));
+      }
+    })();
+  }
+
+  return (
+    <View style={styles.fields}>
+      <PolicyRadioOption
+        value="inherit"
+        checked={!custom}
+        title={appFolderTitle}
+        description={t("modal.settings.field.mount.inherit_desc")}
+        disabled={!active}
+        muted={!workspaceReady}
+        onSelect={() => {
+          if (!active) return;
+          setCustomPending(false);
+          onChange({ [system]: { ...entry, path: "" } });
+        }}
+        footer={
+          showShortcut ? (
+            <View
+              accessibilityRole="radiogroup"
+              accessibilityLabel={t("modal.settings.field.mount.mount")}
+              style={styles.fields}
+            >
+              <View>
+                <Text style={[typography.body, { color: colors.onSurface, fontWeight: "500" }]}>
+                  {t("modal.settings.field.mount.mount")}
+                </Text>
+                <Text style={[typography.caption, { color: colors.onSurfaceVariant }]}>
+                  {t(
+                    workspaceReady
+                      ? "modal.settings.field.mount.inherit_shortcut_help"
+                      : "modal.settings.field.mount.shortcut_unset",
+                  )}
+                </Text>
               </View>
-            ) : undefined
+              {(["inherit", "on", "off"] as const).map((mode) => (
+                <PolicyRadioOption
+                  key={mode}
+                  value={mode}
+                  checked={vaultAppShortcut === mode}
+                  disabled={shortcutLocked}
+                  title={
+                    mode === "inherit"
+                      ? followTitle
+                      : t(`modal.settings.field.mount.shortcut_${mode}`)
+                  }
+                  onSelect={() => {
+                    if (radiosDisabled) return;
+                    onChange({ app_file_manager_folder: mode });
+                  }}
+                />
+              ))}
+            </View>
+          ) : null
+        }
+      />
+      <PolicyRadioOption
+        value="custom"
+        checked={custom}
+        title={t("modal.settings.field.mount.custom")}
+        description={t("modal.settings.field.mount.custom_desc")}
+        disabled={!active}
+        onSelect={() => {
+          if (!active || custom) return;
+          if (!canPick) {
+            setCustomPending(true);
+            return;
           }
-        />
-      </RadioGroup>
+          pickFolder(null);
+        }}
+        footer={
+          <View style={styles.fields}>
+            <PathField
+              value={entry.path}
+              disabled={!active || !custom}
+              placeholder={t("modal.settings.field.mount.path_placeholder")}
+              onChangeText={(path) => {
+                if (!active) return;
+                writePath(path);
+              }}
+            />
+            <Button
+              size="sm"
+              variant="ghost"
+              label={t("modal.app_settings.action.pick_workspace_folder")}
+              disabled={!active || !canPick}
+              onPress={() => pickFolder(trimmed || null)}
+            />
+            {showShortcut ? (
+              <SwitchRow
+                label={t("modal.settings.field.mount.mount")}
+                hint={t("modal.settings.field.mount.mount_help")}
+                value={vaultCustomShortcut}
+                disabled={!active || trimmed === ""}
+                onValueChange={(checked) => onChange({ custom_file_manager_folder: checked })}
+              />
+            ) : null}
+          </View>
+        }
+      />
+      {pickError ? (
+        <Text
+          style={[typography.caption, { color: colors.onErrorContainer }]}
+          accessibilityRole="alert"
+        >
+          {pickError}
+        </Text>
+      ) : null}
     </View>
   );
 }
@@ -481,30 +631,22 @@ function AutoCloseSection({
       <FieldLabel disabled={!autoClose.enabled}>
         {t("modal.settings.field.auto_close.idle_minutes")}
       </FieldLabel>
-      <ThemedInput
-        keyboardType="number-pad"
+      <IntegerInput
+        min={1}
+        max={1440}
         disabled={!autoClose.enabled}
-        value={String(autoClose.idle_minutes)}
-        onChangeText={(raw) =>
-          onAutoCloseChange({
-            idle_minutes: Math.min(1440, Math.max(1, Number.parseInt(raw, 10) || 1)),
-          })
-        }
-        mono
+        value={autoClose.idle_minutes}
+        onChange={(idle_minutes) => onAutoCloseChange({ idle_minutes })}
       />
       <FieldLabel disabled={!autoClose.enabled}>
         {t("modal.settings.field.auto_close.warn_before_seconds")}
       </FieldLabel>
-      <ThemedInput
-        keyboardType="number-pad"
+      <IntegerInput
+        min={0}
+        max={300}
         disabled={!autoClose.enabled}
-        value={String(autoClose.warn_before_seconds)}
-        onChangeText={(raw) =>
-          onAutoCloseChange({
-            warn_before_seconds: Math.min(300, Math.max(0, Number.parseInt(raw, 10) || 0)),
-          })
-        }
-        mono
+        value={autoClose.warn_before_seconds}
+        onChange={(warn_before_seconds) => onAutoCloseChange({ warn_before_seconds })}
       />
 
       <SwitchRow
@@ -545,14 +687,12 @@ function BackupSection({
       <FieldLabel disabled={!config.enabled || config.mode !== "keep_last"}>
         {t("modal.settings.field.backup.keep_last")}
       </FieldLabel>
-      <ThemedInput
-        keyboardType="number-pad"
+      <IntegerInput
+        min={1}
+        max={99}
         disabled={!config.enabled || config.mode !== "keep_last"}
-        value={String(config.keep_last)}
-        onChangeText={(raw) =>
-          onChange({ keep_last: Math.min(99, Math.max(1, Number.parseInt(raw, 10) || 1)) })
-        }
-        mono
+        value={config.keep_last}
+        onChange={(keep_last) => onChange({ keep_last })}
       />
     </View>
   );

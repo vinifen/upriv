@@ -54,6 +54,15 @@ export function fileManagerBlockingPrompt(
   return null;
 }
 
+/** Vault lock / close-all: saving or discarding continues into closing that vault. */
+export function vaultCloseBlockingPrompt(
+  intent: FileManagerDismissIntent,
+): UnsavedPromptAction | null {
+  if (intent === "import_in_progress") return { type: "close_vault_import" };
+  if (intent === "unsaved") return { type: "close_vault" };
+  return null;
+}
+
 export function createEmptyFileManagerState(): FileManagerState {
   return {
     entries: {},

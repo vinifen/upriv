@@ -3,6 +3,7 @@ import { Icon } from "@/components/icons";
 import {
   formatBytes,
   formatLogFileDate,
+  logSeqRange,
   LOADING_BUDGET_MS,
   MODAL_CLOSE_MS,
   parseLogLine,
@@ -13,14 +14,21 @@ import {
 import { useTranslation } from "@/i18n";
 import { useLoadingBudget, useToast } from "@upriv/shared/react";
 import { desktopErrorI18nKey } from "@/lib/errorMessages";
-import { Button, IconButton, LoadingBudgetHint, Modal, Toast } from "@/components/ui";
+import {
+  Button,
+  ContentSkeleton,
+  IconButton,
+  LoadingBudgetHint,
+  Modal,
+  Toast,
+} from "@/components/ui";
 import { useAppSettingsContext } from "@/features/system/settings/AppSettingsContext";
 import { downloadLogsZip } from "./downloadLogsZip";
 import { logLevelClass } from "./logFormat";
 import { useAppLogs } from "./hooks/useAppLogs";
 
 const logCheckboxClass =
-  "h-4 w-4 shrink-0 rounded border-outline-variant/50 bg-surface-container-high text-accent focus:ring-accent/50";
+  "h-4 w-4 shrink-0 rounded border-outline-variant/50 bg-surface-container-high text-accent focus:ring-accent/40";
 
 interface LogsModalProps {
   open: boolean;
@@ -29,7 +37,7 @@ interface LogsModalProps {
 
 export function LogsModal({ open, onClose }: LogsModalProps) {
   const { locale, t } = useTranslation();
-  const { message: toastMessage, show: showToast, dismiss: dismissToast } = useToast();
+  const { toast, show: showToast, dismiss: dismissToast } = useToast();
   const { reportVaultRootIntegrityFailure } = useAppSettingsContext();
   const {
     files,
@@ -84,6 +92,8 @@ export function LogsModal({ open, onClose }: LogsModalProps) {
   const allSelected =
     allFilenames.length > 0 && allFilenames.every((filename) => selected.has(filename));
   const someSelected = selected.size > 0;
+  /** A single log has nothing to multi-select: row actions cover it. */
+  const selectable = files.length > 1;
   const activeFileMeta = activeFilename ? getFile(activeFilename) : undefined;
   const activeFile =
     activeFilename && viewerText !== null && activeFileMeta
@@ -274,8 +284,8 @@ export function LogsModal({ open, onClose }: LogsModalProps) {
     }
   };
 
-  const handleDownload = async () => {
-    const targets = someSelected ? files.filter((entry) => selected.has(entry.filename)) : files;
+  const handleDownload = async (filenames: ReadonlySet<string>) => {
+    const targets = files.filter((entry) => filenames.has(entry.filename));
     if (targets.length === 0) return;
 
     try {
@@ -295,6 +305,18 @@ export function LogsModal({ open, onClose }: LogsModalProps) {
   };
 
   const showDeleteConfirm = deleteTargets !== null && !activeFilename;
+  const deleteSeqRange =
+    deleteTargets && deleteTargets.length > 1 ? logSeqRange(files, deleteTargets) : null;
+  const deleteQuestion =
+    deleteTargets?.length === 1
+      ? t("modal.logs.delete_confirm_one")
+      : deleteSeqRange
+        ? t("modal.logs.delete_confirm_many_range", {
+            count: String(deleteTargets?.length ?? 0),
+            first: String(deleteSeqRange.first),
+            last: String(deleteSeqRange.last),
+          })
+        : t("modal.logs.delete_confirm_many", { count: String(deleteTargets?.length ?? 0) });
 
   const backToList = () => {
     viewerGen.current += 1;
@@ -310,10 +332,12 @@ export function LogsModal({ open, onClose }: LogsModalProps) {
     showDeleteConfirm && deleteTargets ? (
       <div className="flex flex-col gap-3">
         <div className="text-sm" aria-live="polite">
-          <p className="text-on-surface-variant">
-            {deleteTargets.length === 1
-              ? t("modal.logs.delete_confirm_one")
-              : t("modal.logs.delete_confirm_many", { count: String(deleteTargets.length) })}
+          <p className="text-on-surface-variant">{deleteQuestion}</p>
+          {deleteTargets.length === 1 ? (
+            <p className="mt-1 break-all font-mono text-xs text-on-surface">{deleteTargets[0]}</p>
+          ) : null}
+          <p className="mt-1 text-on-surface-variant">
+            {t("modal.logs.delete_confirm_irreversible")}
           </p>
         </div>
         <div className="flex flex-col gap-2 sm:flex-row-reverse sm:flex-wrap sm:justify-start [&_button]:w-full sm:[&_button]:w-auto">
@@ -396,10 +420,10 @@ export function LogsModal({ open, onClose }: LogsModalProps) {
                 {t("modal.logs.empty")}
               </p>
             ) : loading && files.length === 0 ? (
-              <div className="py-10" aria-busy="true" />
+              <ContentSkeleton label={t("modal.logs.loading")} />
             ) : (
               <>
-                {deleteTargets === null ? (
+                {deleteTargets === null && selectable ? (
                   <LogListToolbar
                     allSelected={allSelected}
                     someSelected={someSelected}
@@ -407,7 +431,7 @@ export function LogsModal({ open, onClose }: LogsModalProps) {
                     onToggleSelectAll={toggleSelectAll}
                     onDeleteSelected={() => beginDelete(Array.from(selected))}
                     onDownload={() => {
-                      void handleDownload();
+                      void handleDownload(selected);
                     }}
                   />
                 ) : null}
@@ -418,7 +442,7 @@ export function LogsModal({ open, onClose }: LogsModalProps) {
                       key={entry.filename}
                       entry={entry}
                       locale={locale}
-                      checked={selected.has(entry.filename)}
+                      checked={selectable && selected.has(entry.filename)}
                       selectionDisabled={deleteTargets !== null || Boolean(openingFilename)}
                       opening={openingFilename === entry.filename}
                       timedOut={viewerTimedOutFilename === entry.filename}
@@ -430,9 +454,14 @@ export function LogsModal({ open, onClose }: LogsModalProps) {
                             }
                           : null
                       }
-                      onToggleSelected={() => toggleSelected(entry.filename)}
+                      onToggleSelected={
+                        selectable ? () => toggleSelected(entry.filename) : undefined
+                      }
                       onOpen={() => openLogFile(entry.filename)}
                       onRetry={() => retryViewer(entry.filename)}
+                      onDownload={() => {
+                        void handleDownload(new Set([entry.filename]));
+                      }}
                       onDelete={() => beginDelete([entry.filename])}
                     />
                   ))}
@@ -442,7 +471,7 @@ export function LogsModal({ open, onClose }: LogsModalProps) {
           </div>
         )}
       </Modal>
-      <Toast message={toastMessage} onDismiss={dismissToast} className="z-[220]" />
+      <Toast toast={toast} onDismiss={dismissToast} className="z-[220]" />
     </>
   );
 }
@@ -492,9 +521,17 @@ function LogListToolbar({
             {t("modal.logs.selected_count", { count: String(selectedCount) })}
           </span>
         ) : null}
-        <Button variant="secondary" size="sm" onClick={onDownload}>
-          {someSelected ? t("modal.logs.download_selected") : t("modal.logs.download_all")}
-        </Button>
+        {someSelected ? (
+          <IconButton
+            label={t("modal.logs.download_selected")}
+            size="row"
+            variant="row-action"
+            className="-mr-1 text-on-surface-variant hover:bg-accent/15 hover:text-accent"
+            onClick={onDownload}
+          >
+            <Icon name="download" size={18} />
+          </IconButton>
+        ) : null}
         {someSelected ? (
           <IconButton
             label={t("modal.logs.delete_selected")}
@@ -519,9 +556,11 @@ interface LogFileRowProps {
   opening?: boolean;
   timedOut?: boolean;
   openingBudget?: { budgetMs: number; remainingMs: number } | null;
-  onToggleSelected: () => void;
+  /** Omitted when the list has a single file: no checkbox. */
+  onToggleSelected?: () => void;
   onOpen: () => void;
   onRetry: () => void;
+  onDownload: () => void;
   onDelete: () => void;
 }
 
@@ -536,6 +575,7 @@ function LogFileRow({
   onToggleSelected,
   onOpen,
   onRetry,
+  onDownload,
   onDelete,
 }: LogFileRowProps) {
   const { t } = useTranslation();
@@ -552,14 +592,16 @@ function LogFileRow({
         .filter(Boolean)
         .join(" ")}
     >
-      <input
-        id={checkboxId}
-        type="checkbox"
-        checked={checked}
-        disabled={selectionDisabled}
-        onChange={onToggleSelected}
-        className={[logCheckboxClass, "disabled:opacity-40"].join(" ")}
-      />
+      {onToggleSelected ? (
+        <input
+          id={checkboxId}
+          type="checkbox"
+          checked={checked}
+          disabled={selectionDisabled}
+          onChange={onToggleSelected}
+          className={[logCheckboxClass, "disabled:opacity-40"].join(" ")}
+        />
+      ) : null}
       <button
         type="button"
         disabled={selectionDisabled}
@@ -611,16 +653,28 @@ function LogFileRow({
           {t("action.retry")}
         </Button>
       ) : (
-        <IconButton
-          label={t("action.delete")}
-          size="row"
-          variant="row-action"
-          disabled={selectionDisabled}
-          className="-mr-1 shrink-0 text-on-surface-variant hover:bg-error-container/20 hover:text-on-error-container disabled:opacity-40"
-          onClick={onDelete}
-        >
-          <Icon name="trash" size={18} />
-        </IconButton>
+        <>
+          <IconButton
+            label={t("action.download")}
+            size="row"
+            variant="row-action"
+            disabled={selectionDisabled}
+            className="-mr-1 shrink-0 text-on-surface-variant hover:bg-accent/15 hover:text-accent disabled:opacity-40"
+            onClick={onDownload}
+          >
+            <Icon name="download" size={18} />
+          </IconButton>
+          <IconButton
+            label={t("action.delete")}
+            size="row"
+            variant="row-action"
+            disabled={selectionDisabled}
+            className="-mr-1 shrink-0 text-on-surface-variant hover:bg-error-container/20 hover:text-on-error-container disabled:opacity-40"
+            onClick={onDelete}
+          >
+            <Icon name="trash" size={18} />
+          </IconButton>
+        </>
       )}
     </li>
   );

@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import {
+  backupDeleteConfirmPhrase,
   backupEntryFileName,
   backupEntryKey,
   formatBackupDate,
   formatBytes,
+  matchesBackupDeleteConfirmation,
   type VaultBackupEntry,
   type VaultListItem,
 } from "@upriv/shared";
@@ -29,12 +31,6 @@ interface VaultBackupsModalProps {
   onDownloadNotice?: (message: string) => void;
 }
 
-function matchesDeleteConfirmation(input: string, count: number, vaultId: string): boolean {
-  const trimmed = input.trim();
-  if (count === 1) return trimmed === vaultId;
-  return trimmed.toLowerCase() === `delete ${count}`;
-}
-
 export function VaultBackupsModal({
   vault,
   open,
@@ -44,7 +40,7 @@ export function VaultBackupsModal({
 }: VaultBackupsModalProps) {
   const { locale, t } = useTranslation();
   const { colors, typography } = useTheme();
-  const { message: toastMessage, show: showToast, dismiss: dismissToast } = useToast();
+  const { toast, show: showToast, dismiss: dismissToast } = useToast();
   const backupService = useBackupService();
   const vaultId = vault?.id ?? null;
   const { backups, deleteBackups, promoteToSave, isLoading, isBusy, error } = useVaultBackups(
@@ -66,13 +62,17 @@ export function VaultBackupsModal({
   );
   const allSelected = backups.length > 0 && rowKeys.every((key) => selected.has(key));
   const someSelected = selected.size > 0;
+  /** A single backup has nothing to multi-select: row actions cover it. */
+  const selectable = backups.length > 1;
+  const selectedStandardKeys = standardBackups
+    .map((entry) => backupEntryKey(entry, vaultId ?? ""))
+    .filter((key) => selected.has(key));
   const deleteCount = deleteTargets?.length ?? 0;
-  const isSingleDelete = deleteCount === 1;
   const canConfirmDelete =
     vault !== null &&
     deleteTargets !== null &&
     deleteCount > 0 &&
-    matchesDeleteConfirmation(confirmText, deleteCount, vault.id);
+    matchesBackupDeleteConfirmation(confirmText, vault.displayName, deleteCount);
 
   useEffect(() => {
     if (!open) {
@@ -150,16 +150,13 @@ export function VaultBackupsModal({
   };
 
   const handlePromoteToSave = (stamp: string) => {
-    void promoteToSave(stamp).catch((err) => {
+    void promoteToSave([stamp]).catch((err) => {
       showToast(t(mobileErrorI18nKey(err, "toast.backup_promote_failed")));
     });
   };
 
-  const handleDownload = () => {
-    const targets = someSelected
-      ? backups.filter((entry) => selected.has(backupEntryKey(entry, vault.id)))
-      : backups;
-    startDownload(targets);
+  const handleDownloadSelected = () => {
+    startDownload(backups.filter((entry) => selected.has(backupEntryKey(entry, vault.id))));
   };
 
   const handleDownloadOne = (key: string) => {
@@ -193,7 +190,7 @@ export function VaultBackupsModal({
       contextTitle={vault.displayName}
       onClose={handleClose}
       panelClassName="max-w-2xl"
-      overlay={<Toast message={toastMessage} onDismiss={dismissToast} />}
+      overlay={<Toast toast={toast} onDismiss={dismissToast} />}
     >
       <Text style={[typography.bodyMuted, styles.hint]}>{t("modal.backup.hint")}</Text>
 
@@ -207,13 +204,20 @@ export function VaultBackupsModal({
         <Text style={[typography.mono, styles.empty]}>{t("modal.backup.empty")}</Text>
       ) : (
         <View style={styles.list}>
-          {deleteTargets === null ? (
+          {deleteTargets === null && selectable ? (
             <BackupListToolbar
               allSelected={allSelected}
               someSelected={someSelected}
               selectedCount={selected.size}
               onToggleSelectAll={toggleSelectAll}
-              onDownload={handleDownload}
+              promoteCount={selectedStandardKeys.length}
+              promoteDisabled={isBusy}
+              onPromoteSelected={() => {
+                void promoteToSave(selectedStandardKeys).catch((err) => {
+                  showToast(t(mobileErrorI18nKey(err, "toast.backup_promote_failed")));
+                });
+              }}
+              onDownload={handleDownloadSelected}
               onDeleteSelected={() => beginDelete(Array.from(selected))}
             />
           ) : null}
@@ -227,7 +231,7 @@ export function VaultBackupsModal({
             vaultId={vault?.id ?? ""}
             selected={selected}
             selectionDisabled={deleteTargets !== null}
-            onToggleSelected={toggleSelected}
+            onToggleSelected={selectable ? toggleSelected : undefined}
             onDownload={handleDownloadOne}
             onDelete={(stamp) => beginDelete([stamp])}
             onCreateVaultFromBackup={onCreateVaultFromBackup}
@@ -241,7 +245,7 @@ export function VaultBackupsModal({
             vaultId={vault?.id ?? ""}
             selected={selected}
             selectionDisabled={deleteTargets !== null}
-            onToggleSelected={toggleSelected}
+            onToggleSelected={selectable ? toggleSelected : undefined}
             onDownload={handleDownloadOne}
             onDelete={(stamp) => beginDelete([stamp])}
             onCreateVaultFromBackup={onCreateVaultFromBackup}
@@ -251,24 +255,12 @@ export function VaultBackupsModal({
       )}
 
       {deleteTargets !== null ? (
-        <View
-          style={[
-            styles.confirmCard,
-            {
-              backgroundColor: colors.surfaceContainer,
-              borderColor: colorAlpha(colors.outlineVariant, 0.2),
-            },
-          ]}
-        >
+        <View style={[styles.confirmCard, { backgroundColor: colors.surfaceContainer }]}>
           <Text style={typography.bodyMuted}>
-            {isSingleDelete
-              ? t("modal.backup.delete_confirm_one")
-              : t("modal.backup.delete_confirm_many", { count: String(deleteCount) })}
+            {t("modal.backup.delete_confirm", { count: String(deleteCount) })}
           </Text>
           <Text style={[typography.mono, styles.confirmPhrase]}>
-            {isSingleDelete
-              ? vault.id
-              : t("modal.backup.delete_phrase_many", { count: String(deleteCount) })}
+            {backupDeleteConfirmPhrase(vault.displayName, deleteCount)}
           </Text>
           <ThemedInput
             value={confirmText}
@@ -303,7 +295,7 @@ interface BackupSectionProps {
   vaultId: string;
   selected: Set<string>;
   selectionDisabled: boolean;
-  onToggleSelected: (stamp: string) => void;
+  onToggleSelected?: (stamp: string) => void;
   onDownload: (stamp: string) => void;
   onDelete: (stamp: string) => void;
   onCreateVaultFromBackup?: (stamp: string, fileName: string, saved?: boolean) => void;
@@ -353,9 +345,9 @@ function BackupSection({
                 entry={entry}
                 locale={locale}
                 fileName={fileName}
-                checked={selected.has(key)}
+                checked={Boolean(onToggleSelected) && selected.has(key)}
                 selectionDisabled={selectionDisabled}
-                onToggleSelected={() => onToggleSelected(key)}
+                onToggleSelected={onToggleSelected ? () => onToggleSelected(key) : undefined}
                 onDownload={() => onDownload(key)}
                 onDelete={() => onDelete(key)}
                 onCreateVaultFromBackup={
@@ -377,7 +369,11 @@ interface BackupListToolbarProps {
   allSelected: boolean;
   someSelected: boolean;
   selectedCount: number;
+  /** Selected standard backups that "Save" would promote. */
+  promoteCount: number;
+  promoteDisabled: boolean;
   onToggleSelectAll: () => void;
+  onPromoteSelected: () => void;
   onDownload: () => void;
   onDeleteSelected: () => void;
 }
@@ -386,7 +382,10 @@ function BackupListToolbar({
   allSelected,
   someSelected,
   selectedCount,
+  promoteCount,
+  promoteDisabled,
   onToggleSelectAll,
+  onPromoteSelected,
   onDownload,
   onDeleteSelected,
 }: BackupListToolbarProps) {
@@ -410,14 +409,24 @@ function BackupListToolbar({
             {t("modal.backup.selected_count", { count: String(selectedCount) })}
           </Text>
         ) : null}
-        <Button
-          variant="secondary"
-          size="sm"
-          label={
-            someSelected ? t("modal.backup.download_selected") : t("modal.backup.download_all")
-          }
-          onPress={onDownload}
-        />
+        {promoteCount > 0 ? (
+          <Button
+            variant="secondary"
+            size="sm"
+            disabled={promoteDisabled}
+            label={t("modal.backup.promote_to_save")}
+            onPress={onPromoteSelected}
+          />
+        ) : null}
+        {someSelected ? (
+          <IconButton
+            label={t("modal.backup.download_selected")}
+            icon="download"
+            size={18}
+            tone="muted"
+            onPress={onDownload}
+          />
+        ) : null}
         {someSelected ? (
           <IconButton
             label={t("modal.backup.delete_selected")}
@@ -438,7 +447,8 @@ interface BackupRowProps {
   fileName: string;
   checked: boolean;
   selectionDisabled: boolean;
-  onToggleSelected: () => void;
+  /** Omitted when the list has a single entry: no checkbox. */
+  onToggleSelected?: () => void;
   onDownload: () => void;
   onDelete: () => void;
   onCreateVaultFromBackup?: () => void;
@@ -472,16 +482,22 @@ function BackupRow({
       ]}
       pointerEvents={selectionDisabled ? "none" : "auto"}
     >
-      <Checkbox
-        checked={checked}
-        disabled={selectionDisabled}
-        onChange={onToggleSelected}
-        label={fileName}
-      />
+      {onToggleSelected ? (
+        <Checkbox
+          checked={checked}
+          disabled={selectionDisabled}
+          onChange={onToggleSelected}
+          label={fileName}
+        />
+      ) : null}
       <View style={[styles.rowIcon, { backgroundColor: colors.surfaceContainerHighest }]}>
         <Icon name="archive" size={18} color={colors.onSurfaceVariant} />
       </View>
-      <Pressable style={styles.rowCopy} onPress={onToggleSelected} disabled={selectionDisabled}>
+      <Pressable
+        style={styles.rowCopy}
+        onPress={onToggleSelected}
+        disabled={selectionDisabled || !onToggleSelected}
+      >
         <View style={styles.rowTitleRow}>
           <Text
             style={[typography.mono, styles.rowTitle, { color: colors.onSurface }]}
@@ -623,7 +639,6 @@ const styles = StyleSheet.create({
   confirmCard: {
     marginTop: spacing.lg,
     borderRadius: radii.md,
-    borderWidth: 1,
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.lg,
     gap: spacing.sm,

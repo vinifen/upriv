@@ -41,21 +41,6 @@ describe("workspaceSnapshot", () => {
     expect(parsed?.activeTabPath).toBe("/b.md");
   });
 
-  it("ignores legacy treeSplitPercent in older snapshots", () => {
-    const parsed = parseWorkspaceSnapshot(
-      JSON.stringify({
-        format_version: 1,
-        openTabs: ["/a.md"],
-        activeTabPath: "/a.md",
-        expandedPaths: ["/"],
-        selectedPath: "/a.md",
-        treeSplitPercent: 40,
-      }),
-    );
-    expect(parsed?.openTabs).toEqual(["/a.md"]);
-    expect(parsed && "treeSplitPercent" in parsed).toBe(false);
-  });
-
   it("rejects corrupt or wrong version", () => {
     expect(parseWorkspaceSnapshot("not-json")).toBeNull();
     expect(parseWorkspaceSnapshot('{"format_version":99,"openTabs":[]}')).toBeNull();

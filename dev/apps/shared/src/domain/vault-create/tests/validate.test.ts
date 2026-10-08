@@ -6,7 +6,16 @@ import {
   validateCreateVaultStep,
   validateAllCreateVaultSteps,
 } from "..";
+import { vaultWorkspace } from "../../workspace";
 import { createVaultDraftFixture } from "./fixtures";
+
+function mountOnLinux(path: string) {
+  return {
+    ...vaultWorkspace(),
+    custom_file_manager_folder: true,
+    linux: { place: "unset" as const, path },
+  };
+}
 
 describe("validateCreateVaultStep", () => {
   it("requires source on source step", () => {
@@ -386,23 +395,23 @@ describe("canSubmitCreateVault", () => {
 
   it("rejects a relative custom mount path", () => {
     const draft = createVaultDraftFixture([], {
-      mount: { workspace_path: "relative/path" },
+      mount: mountOnLinux("relative/path"),
     });
     expect(validateCreateVaultStep("advanced", draft, [])).toContain("mount_path_not_absolute");
     expect(canSubmitCreateVault(draft, [])).toBe(false);
   });
 
-  it("rejects an empty custom mount path", () => {
+  it("accepts an empty mount path because it inherits the app folder", () => {
     const draft = createVaultDraftFixture([], {
-      mount: { workspace_path: "" },
+      mount: vaultWorkspace(),
     });
-    expect(validateCreateVaultStep("advanced", draft, [])).toContain("mount_path_empty");
-    expect(canSubmitCreateVault(draft, [])).toBe(false);
+    expect(validateCreateVaultStep("advanced", draft, [], [], "/data")).toEqual([]);
+    expect(canSubmitCreateVault(draft, [], [], "/data")).toBe(true);
   });
 
   it("rejects a reserved path under vault-root", () => {
     const draft = createVaultDraftFixture([], {
-      mount: { workspace_path: "/data/.upriv/vaults" },
+      mount: mountOnLinux("/data/.upriv/vaults"),
     });
     expect(validateCreateVaultStep("advanced", draft, [], [], "/data")).toContain(
       "mount_path_reserved",
@@ -412,7 +421,7 @@ describe("canSubmitCreateVault", () => {
 
   it("rejects absolute custom mount when vault-root is unknown", () => {
     const draft = createVaultDraftFixture([], {
-      mount: { workspace_path: "/home/user/workspace" },
+      mount: mountOnLinux("/home/user/workspace"),
     });
     expect(validateCreateVaultStep("advanced", draft, [], [], null)).toContain(
       "mount_path_root_unknown",
@@ -430,7 +439,7 @@ describe("canSubmitCreateVault", () => {
 
   it("still submits when mount is default", () => {
     const draft = createVaultDraftFixture([], {
-      mount: { workspace_path: "default" },
+      mount: vaultWorkspace(),
     });
     expect(validateCreateVaultStep("advanced", draft, [], [], "/data")).toEqual([]);
     expect(canSubmitCreateVault(draft, [], [], "/data")).toBe(true);

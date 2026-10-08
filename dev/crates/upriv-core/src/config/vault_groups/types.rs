@@ -12,7 +12,7 @@ fn default_grouped_vault_sort_direction() -> String {
 
 /// One vault group — organizational only (not a vault).
 ///
-/// `display_name` is the list title. Omitted on old files fills from `id`.
+/// `display_name` is the list title. An omitted name fills from `id`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct VaultGroup {
@@ -27,12 +27,11 @@ pub struct VaultGroup {
     #[serde(default)]
     pub hidden: bool,
     /// Vault ids in this group — array order is the manual in-group order
-    /// (`grouped_vault_sort = "order"`). Legacy key `members` is accepted on load.
-    #[serde(default, alias = "members")]
+    /// (`grouped_vault_sort = "order"`).
+    #[serde(default)]
     pub grouped_vaults: Vec<String>,
     /// In-group vault sort mode: `order` | `name` | `state` | `last_accessed`.
-    /// Legacy key `member_sort` is accepted on load.
-    #[serde(default = "default_grouped_vault_sort", alias = "member_sort")]
+    #[serde(default = "default_grouped_vault_sort")]
     pub grouped_vault_sort: String,
     #[serde(default = "default_grouped_vault_sort_direction")]
     pub grouped_vault_sort_direction: String,

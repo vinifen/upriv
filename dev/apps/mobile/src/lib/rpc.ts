@@ -6,21 +6,25 @@ import {
   isLifecyclePasswordPresent,
   normalizeAppSettings,
   normalizeVaultSettingsConfig,
+  vaultSettingsForDaemon,
   parseAppLogFile,
   parseEmbeddedVaultSettings,
   parseDefaultRootStatus,
   parseVaultGroupListResult,
   parseVaultGroupWire,
   parseVaultListItemWire,
+  parseVaultClosePhase,
   parseVaultListResult,
   parseVaultRenameResult,
   parseVaultRootInspect,
+  parseVaultRootPrivateRoot,
   parseVaultRootResolve,
   vaultImportProbeTimeoutMs,
   backupSnapshotFileName,
   bytesFromContentB64,
   parsePathWriteResult,
   type CloseVaultOutcome,
+  type VaultClosePhase,
   type AllowlistedUiLogEvent,
   type AppLogFile,
   type AppSettingsConfig,
@@ -95,8 +99,36 @@ export async function nativeInvokeRaw(
     throw new RpcError(BRIDGE.BRIDGE_INVOKE_FAILED, "UprivCore native module not loaded");
   }
 
-  const paramsJson = JSON.stringify(params ?? {});
-  const invocation = Promise.resolve(native.invoke(method, paramsJson)).then((raw) => {
+  return settleInvocation(method, timeoutMs, native.invoke(method, JSON.stringify(params ?? {})));
+}
+
+/**
+ * Read-only probe beside a long `invoke` (Expo runs `invoke` on one thread).
+ * Returns `null` on native builds without `invokeProbe`.
+ * @throws {RpcError}
+ */
+export async function nativeInvokeProbeRaw(
+  method: string,
+  params?: Record<string, unknown>,
+): Promise<unknown | null> {
+  const native = getUprivCoreNative();
+  if (!native?.invokeProbe) return null;
+  const timeoutMs =
+    (CORE_RPC_TIMEOUT_MS as Record<string, number | undefined>)[method] ??
+    DEFAULT_INVOKE_TIMEOUT_MS;
+  return settleInvocation(
+    method,
+    timeoutMs,
+    native.invokeProbe(method, JSON.stringify(params ?? {})),
+  );
+}
+
+async function settleInvocation(
+  method: string,
+  timeoutMs: number,
+  pending: Promise<string>,
+): Promise<unknown> {
+  const invocation = Promise.resolve(pending).then((raw) => {
     try {
       return unwrapInvokeEnvelope(JSON.parse(raw));
     } catch (error) {
@@ -269,8 +301,14 @@ export async function rpcVaultRootSetupPath(
     replaceIncomplete?: boolean;
     replacePolicy?: "delete" | "rename";
     bootstrap?: VaultRootBootstrapPrefs | null;
+    /** Copy the private app-folder `.upriv` into a mounted grant before init. */
+    adoptPrivateRoot?: boolean;
   },
-): Promise<{ rootPath: string; aliasPath: string }> {
+): Promise<{
+  rootPath: string;
+  aliasPath: string;
+  privateRoot?: "none" | "moved" | "left_behind";
+}> {
   const replaceIncomplete = options?.replaceIncomplete ?? false;
   if (replaceIncomplete && options?.replacePolicy == null) {
     throw new RpcError(
@@ -283,6 +321,7 @@ export async function rpcVaultRootSetupPath(
     replaceIncomplete,
     replacePolicy: options?.replacePolicy ?? null,
     bootstrap: options?.bootstrap ?? null,
+    ...(options?.adoptPrivateRoot ? { adoptPrivateRoot: true } : {}),
   });
   if (
     typeof raw !== "object" ||
@@ -299,6 +338,7 @@ export async function rpcVaultRootSetupPath(
   return {
     rootPath: (raw as { rootPath: string }).rootPath,
     aliasPath: (raw as { aliasPath: string }).aliasPath,
+    privateRoot: parseVaultRootPrivateRoot((raw as { privateRoot?: unknown }).privateRoot),
   };
 }
 
@@ -494,7 +534,7 @@ export async function rpcVaultCreate(input: CreateVaultInput): Promise<VaultList
   const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_CREATE, {
     password: input.password,
     unlockPreset: input.unlockPreset,
-    settings: input.settings,
+    settings: vaultSettingsForDaemon(input.settings),
   });
   if (typeof raw !== "object" || raw === null) {
     throw new RpcError(BRIDGE.INVALID_RESPONSE, "vault_create: expected object", raw);
@@ -575,6 +615,12 @@ function parseCloseVaultOutcome(raw: unknown): CloseVaultOutcome {
   return { backupFailed: (raw as { backupFailed?: unknown }).backupFailed === true };
 }
 
+export async function rpcVaultClosePhase(id: string): Promise<VaultClosePhase | null> {
+  return parseVaultClosePhase(
+    await nativeInvokeProbeRaw(CORE_RPC_COMMANDS.VAULT_CLOSE_PHASE, { id }),
+  );
+}
+
 export async function rpcVaultStoreSize(id: string): Promise<number> {
   const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_STORE_SIZE, { id });
   if (typeof raw !== "object" || raw === null) {
@@ -600,7 +646,10 @@ export async function rpcVaultConfigGet(id: string): Promise<VaultSettingsConfig
 }
 
 export async function rpcVaultConfigSave(id: string, settings: VaultSettingsConfig): Promise<void> {
-  await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_CONFIG_SAVE, { id, settings });
+  await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_CONFIG_SAVE, {
+    id,
+    settings: vaultSettingsForDaemon(settings),
+  });
 }
 
 export async function rpcVaultRename(id: string, displayName: string): Promise<VaultRenameResult> {
@@ -691,7 +740,7 @@ export async function rpcVaultExportToPath(
 export async function rpcVaultImportZip(input: CreateVaultInput): Promise<VaultListItem> {
   const pkg = input.importPackage;
   const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_IMPORT_ZIP, {
-    settings: input.settings,
+    settings: vaultSettingsForDaemon(input.settings),
     archivePath: pkg?.archivePath,
     contentB64: pkg?.contentB64,
   });
@@ -701,7 +750,7 @@ export async function rpcVaultImportZip(input: CreateVaultInput): Promise<VaultL
 export async function rpcVaultImport7z(input: CreateVaultInput): Promise<VaultListItem> {
   const pkg = input.importPackage;
   const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_IMPORT_7Z, {
-    settings: input.settings,
+    settings: vaultSettingsForDaemon(input.settings),
     password: input.password,
     unlockPreset: input.unlockPreset,
     archivePath: pkg?.archivePath,
@@ -714,7 +763,7 @@ export async function rpcVaultImport7z(input: CreateVaultInput): Promise<VaultLi
 export async function rpcVaultImportFilesZip(input: CreateVaultInput): Promise<VaultListItem> {
   const pkg = input.importPackage;
   const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_IMPORT_FILES_ZIP, {
-    settings: input.settings,
+    settings: vaultSettingsForDaemon(input.settings),
     password: input.password,
     unlockPreset: input.unlockPreset,
     archivePath: pkg?.archivePath,
@@ -726,7 +775,7 @@ export async function rpcVaultImportFilesZip(input: CreateVaultInput): Promise<V
 export async function rpcVaultImportOsPath(input: CreateVaultInput): Promise<VaultListItem> {
   const pkg = input.importPackage;
   const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_IMPORT_OS_PATH, {
-    settings: input.settings,
+    settings: vaultSettingsForDaemon(input.settings),
     password: input.password,
     unlockPreset: input.unlockPreset,
     archivePath: pkg?.archivePath,
@@ -831,6 +880,7 @@ export async function rpcVaultFsImportOsFile(
   parentPath: string,
   name: string,
   osPath: string,
+  deferIndex?: boolean,
 ): Promise<{ path: string; revision: number }> {
   return requirePathRevision(
     await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_FS_IMPORT_OS_FILE, {
@@ -838,8 +888,17 @@ export async function rpcVaultFsImportOsFile(
       parentPath,
       name,
       osPath,
+      ...(deferIndex ? { deferIndex: true } : {}),
     }),
     "vault_fs_import_os_file",
+  );
+}
+
+/** Seal the index for files staged with `deferIndex` or a content URI. */
+export async function rpcVaultFsImportSeal(id: string): Promise<number> {
+  return requireRevision(
+    await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_FS_IMPORT_SEAL, { id }),
+    "vault_fs_import_seal",
   );
 }
 

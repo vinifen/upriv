@@ -56,6 +56,7 @@ export function VaultListPage() {
     createVault,
     importDrop,
     exportVault,
+    onCloseVaultAfterUnsaved,
   } = screen;
 
   return (
@@ -138,7 +139,7 @@ export function VaultListPage() {
         ) : null}
       </div>
       <VaultLifecycleLayer {...lifecycle} />
-      <Toast message={toast.message} onDismiss={toast.onDismiss} />
+      <Toast toast={toast.toast} onDismiss={toast.onDismiss} />
       <VaultNoteModal
         vault={note.vault}
         open={note.open}
@@ -184,7 +185,10 @@ export function VaultListPage() {
         onDelete={groupSettings.onDelete}
         onBusyTimeout={groupSettings.onBusyTimeout}
       />
-      <FileManagerLayer pipelineListStatus={list.pipelineListStatus} />
+      <FileManagerLayer
+        pipelineListStatus={list.pipelineListStatus}
+        onCloseVault={onCloseVaultAfterUnsaved}
+      />
       <AppSettingsModal
         open={appSettings.open}
         onClose={appSettings.onClose}

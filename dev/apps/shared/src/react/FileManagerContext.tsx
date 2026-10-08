@@ -18,7 +18,6 @@ import {
   type VaultListItem,
   type VaultWorkspaceAction,
 } from "@upriv/shared";
-import { loadPersistedWorkspaceState } from "./useWorkspacePersistence";
 
 export interface FileManagerContextValue {
   entries: Record<string, FileManagerEntry>;
@@ -63,14 +62,6 @@ export function FileManagerProvider({
     entriesRef.current = state.entries;
   }, [state.entries]);
 
-  const loadGenByVault = useRef<Record<string, number>>({});
-
-  const bumpLoadGen = (vaultId: string): number => {
-    const next = (loadGenByVault.current[vaultId] ?? 0) + 1;
-    loadGenByVault.current[vaultId] = next;
-    return next;
-  };
-
   const persistEntrySnapshot = useCallback(
     (vaultId: string) => {
       const entry = entriesRef.current[vaultId];
@@ -93,27 +84,15 @@ export function FileManagerProvider({
     [fs],
   );
 
-  const openFromVault = useCallback(
-    (vault: VaultListItem) => {
-      const existing = entriesRef.current[vault.id];
-      if (existing?.workspace) {
-        bumpLoadGen(vault.id);
-        dispatch({ type: "open_from_vault", vault, workspace: existing.workspace });
-        return;
-      }
-      const gen = bumpLoadGen(vault.id);
-      void loadPersistedWorkspaceState(fs, vault.id)
-        .then((workspace) => {
-          if (loadGenByVault.current[vault.id] !== gen) return;
-          dispatch({ type: "open_from_vault", vault, workspace: workspace ?? undefined });
-        })
-        .catch(() => {
-          if (loadGenByVault.current[vault.id] !== gen) return;
-          dispatch({ type: "open_from_vault", vault });
-        });
-    },
-    [fs],
-  );
+  const openFromVault = useCallback((vault: VaultListItem) => {
+    // Show the shell now. Layout hydration reads the vault file after paint.
+    const existing = entriesRef.current[vault.id];
+    dispatch({
+      type: "open_from_vault",
+      vault,
+      workspace: existing?.workspace,
+    });
+  }, []);
 
   const minimize = useCallback((vaultId: string) => {
     dispatch({ type: "minimize", vaultId });
@@ -133,7 +112,6 @@ export function FileManagerProvider({
 
   const purgeForVaultClose = useCallback(
     (vaultId: string) => {
-      bumpLoadGen(vaultId);
       fs.resetSession(vaultId);
       dispatch({ type: "purge_for_vault_close", vaultId });
     },
@@ -148,7 +126,6 @@ export function FileManagerProvider({
       const knownIds = new Set(vaults.map((vault) => vault.id));
       for (const vaultId of orderRef.current) {
         if (!knownIds.has(vaultId) || !openIds.has(vaultId)) {
-          bumpLoadGen(vaultId);
           fs.resetSession(vaultId);
         }
       }

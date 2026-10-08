@@ -9,7 +9,7 @@ import { useAppSettingsContext } from "./AppSettingsContext";
 export function SettingsPersistErrorToast() {
   const { persistErrorSignal, persistError } = useAppSettingsContext();
   const { t } = useTranslation();
-  const { message, show, dismiss } = useToast();
+  const { toast, show, dismiss } = useToast();
 
   useEffect(() => {
     if (persistErrorSignal === 0) return;
@@ -17,5 +17,5 @@ export function SettingsPersistErrorToast() {
     show(t(key));
   }, [persistError, persistErrorSignal, show, t]);
 
-  return <Toast message={message} onDismiss={dismiss} />;
+  return <Toast toast={toast} onDismiss={dismiss} />;
 }

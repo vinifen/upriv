@@ -29,6 +29,7 @@
     "vault_create",
     "vault_open",
     "vault_close",
+    "vault_close_phase",
     "vault_config_get",
     "vault_store_size",
     "vault_config_save",
@@ -53,6 +54,7 @@
     "vault_fs_write",
     "vault_fs_write_range",
     "vault_fs_import_os_file",
+    "vault_fs_import_seal",
     "vault_fs_truncate",
     "vault_fs_mkdir",
     "vault_fs_create_file",
@@ -74,6 +76,7 @@
     "pick_file",
     "pick_save_file",
     "reveal_in_file_manager",
+    "reveal_os_path",
     "open_in_terminal"
   ]
 }

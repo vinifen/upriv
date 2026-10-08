@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { InfoTranslate } from "../../info";
 import { createDefaultAppSettings } from "../../app-settings";
+import { appWorkspace } from "../../workspace";
 import { buildSystemInfoSections } from "../build";
 import type { SystemInfoSnapshot } from "../types";
 
@@ -15,7 +16,11 @@ function snapshot(overrides: Partial<SystemInfoSnapshot> = {}): SystemInfoSnapsh
     inventory: { vaultsTotal: 3, vaultsOpen: 1, groupsTotal: 2 },
     ui: settings.ui,
     logging: settings.logging,
-    workspace: { path: "/data/workspace" },
+    workspace: {
+      ...appWorkspace(),
+      linux: { place: "custom", path: "/data/chosen" },
+    },
+    workspaceSystem: "linux",
     lastOpenedVault: "notes",
     paths: { logsDir: "/data/.upriv/logs", appHome: "/data" },
     ...overrides,
@@ -79,17 +84,48 @@ describe("buildSystemInfoSections", () => {
     expect(ids).toContain("alias_path");
     expect(ids).toContain("default_root_anchor");
     expect(ids).not.toContain("root_path");
+    const anchor = sections
+      .flatMap((section) => section.fields)
+      .find((field) => field.id === "default_root_anchor");
+    expect(anchor?.openPath).toBe("/home");
+    const alias = sections
+      .flatMap((section) => section.fields)
+      .find((field) => field.id === "alias_path");
+    expect(alias?.openPath).toBe("/home/.upriv-root");
+  });
+
+  it("omits the mount switch on a phone row", () => {
+    const sections = buildSystemInfoSections(snapshot({ workspaceSystem: "android" }), t);
+    expect(fieldIds(sections)).not.toContain("workspace_mount");
+    expect(fieldIds(sections)).toContain("workspace_global_path");
   });
 
   it("renders empty search and workspace as a dash", () => {
     const settings = createDefaultAppSettings();
     const sections = buildSystemInfoSections(
-      snapshot({ ui: { ...settings.ui, vault_list_search: "" }, workspace: { path: "" } }),
+      snapshot({ ui: { ...settings.ui, vault_list_search: "" }, workspace: appWorkspace() }),
       t,
     );
     const search = sections
       .flatMap((section) => section.fields)
       .find((field) => field.id === "search_query");
     expect(search?.value).toBe("—");
+    const workspace = sections
+      .flatMap((section) => section.fields)
+      .find((field) => field.id === "workspace_global_path");
+    expect(workspace?.value).toBe("—");
+    expect(workspace?.openPath).toBeUndefined();
+  });
+
+  it("attaches open paths for absolute locations", () => {
+    const sections = buildSystemInfoSections(snapshot(), t);
+    const byId = Object.fromEntries(
+      sections.flatMap((section) => section.fields).map((field) => [field.id, field.openPath]),
+    );
+    expect(byId.root_path).toBe("/data");
+    expect(byId.workspace_global_path).toBe("/data/chosen/workspace");
+    expect(byId.app_home).toBe("/data");
+    expect(byId.logs_path).toBe("/data/.upriv/logs");
+    expect(byId.version).toBeUndefined();
   });
 });

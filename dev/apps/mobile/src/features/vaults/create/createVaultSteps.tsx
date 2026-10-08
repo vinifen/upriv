@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import { Platform, StyleSheet, Text, View } from "react-native";
 import {
   createVaultChoosesKdf,
@@ -29,14 +29,20 @@ import {
   type SecurityUiMode,
   type StorageMode,
   type VaultGroup,
+  type WorkspaceTable,
 } from "@upriv/shared";
-import { releasePendingImport } from "@/platform/native/contentTreeImport";
+import {
+  importFolderListingError,
+  releasePendingImport,
+  subscribeImportFolderListing,
+} from "@/platform/native/contentTreeImport";
 import { useCreateVaultService } from "@/platform/services";
 import { useTranslation, type I18nKey } from "@/i18n";
 import { useTheme } from "@/theme";
 import { spacing } from "@/theme/tokens";
+import { PathField } from "@/components/PathField";
 import { Button, Select } from "@/components/ui";
-import { PolicyRadioOption, SettingsAccordionSection } from "@/components/settings";
+import { IntegerInput, PolicyRadioOption, SettingsAccordionSection } from "@/components/settings";
 import {
   FieldHint,
   FieldLabel,
@@ -67,6 +73,7 @@ interface StepProps extends Partial<CreateVaultStepFocusProps> {
   includeHidden?: boolean;
   /** Resolved vault-root for mount reserved checks (from wizard / CreateVaultModal). */
   vaultRootPath?: string | null;
+  appWorkspace?: WorkspaceTable;
   /** Display names already on the vault list, so a picked file can take `name 2`. */
   existingDisplayNames?: readonly string[];
 }
@@ -130,6 +137,12 @@ function CreateVaultSourceStep({ draft, errors, onChange, existingDisplayNames =
   const { colors, typography } = useTheme();
   const createVaultService = useCreateVaultService();
   const [pickError, setPickError] = useState<"file" | "folder" | null>(null);
+  const folderListingFailed = useSyncExternalStore(
+    subscribeImportFolderListing,
+    () =>
+      draft.importShape === "directory" && importFolderListingError(draft.importFilePath) != null,
+    () => false,
+  );
 
   const changeSource = (patch: Partial<CreateVaultDraft>) => {
     invalidateImportPicks();
@@ -196,11 +209,11 @@ function CreateVaultSourceStep({ draft, errors, onChange, existingDisplayNames =
 
   const importFilePicker = (
     <View style={styles.fields}>
-      <ThemedInput
+      <PathField
         value={draft.source === "import" ? draft.importFileName : ""}
+        openPath={draft.source === "import" ? draft.importFilePath : ""}
         editable={false}
         placeholder={t("vault.create.import_file_placeholder")}
-        mono
       />
       <Button
         label={t("vault.create.action.choose_file")}
@@ -214,15 +227,15 @@ function CreateVaultSourceStep({ draft, errors, onChange, existingDisplayNames =
           onPress={chooseImportFolder}
         />
       ) : null}
-      {pickError ? (
+      {pickError || folderListingFailed ? (
         <Text
           accessibilityRole="alert"
           style={[typography.caption, { color: colors.onErrorContainer }]}
         >
           {t(
-            pickError === "folder"
-              ? "vault.create.import_folder_unreadable"
-              : "error.import_source_unreadable",
+            pickError === "file"
+              ? "error.import_source_unreadable"
+              : "vault.create.import_folder_unreadable",
           )}
         </Text>
       ) : null}
@@ -246,6 +259,13 @@ function CreateVaultSourceStep({ draft, errors, onChange, existingDisplayNames =
       {draft.source === "import" && draft.importShape === "directory" ? (
         <Text style={[typography.caption, { color: colors.onSurfaceVariant }]}>
           {t("vault.create.option.import_folder_note")}
+        </Text>
+      ) : null}
+      {draft.source === "import" &&
+      draft.importShape === "directory" &&
+      draft.importFilePath.startsWith("content:") ? (
+        <Text style={[typography.caption, { color: colors.onSurfaceVariant }]}>
+          {t("vault.create.option.import_folder_dot_note")}
         </Text>
       ) : null}
       {extractOn && archiveName.endsWith(".7z") ? (
@@ -332,7 +352,7 @@ function CreateVaultIdentityStep({
   onChange,
   bindFieldRef,
   onFieldFocus,
-  onAdvanceStep,
+  onFieldSubmit,
 }: StepProps) {
   const { t } = useTranslation();
   const { typography } = useTheme();
@@ -355,7 +375,8 @@ function CreateVaultIdentityStep({
         onFocus={() => onFieldFocus?.("displayName")}
         onChangeText={(displayName) => onChange({ displayName })}
         returnKeyType="next"
-        onSubmitEditing={() => onAdvanceStep?.()}
+        submitBehavior="submit"
+        onSubmitEditing={() => onFieldSubmit?.("displayName")}
       />
       <DisplayNameFieldError name={draft.displayName} allowEmpty />
       <FieldErrors
@@ -386,7 +407,7 @@ function CreateVaultPasswordStep({
   testingPassword = false,
   bindFieldRef,
   onFieldFocus,
-  onAdvanceStep,
+  onFieldSubmit,
 }: StepProps & { onTestImportPassword?: () => void; testingPassword?: boolean }) {
   const { t } = useTranslation();
   const { colors, typography } = useTheme();
@@ -417,8 +438,9 @@ function CreateVaultPasswordStep({
             ref={bindFieldRef?.("password")}
             autoComplete="password-new"
             onFocus={() => onFieldFocus?.("password")}
-            onSubmitEditing={() => onAdvanceStep?.()}
+            onSubmitEditing={() => onFieldSubmit?.("password")}
             returnKeyType="next"
+            submitBehavior="submit"
             onChangeText={(password) =>
               onChange({
                 password,
@@ -439,8 +461,9 @@ function CreateVaultPasswordStep({
             ref={bindFieldRef?.("passwordConfirm")}
             autoComplete="password-new"
             onFocus={() => onFieldFocus?.("passwordConfirm")}
-            onSubmitEditing={() => onAdvanceStep?.()}
+            onSubmitEditing={() => onFieldSubmit?.("passwordConfirm")}
             returnKeyType="next"
+            submitBehavior="submit"
             onChangeText={(passwordConfirm) => onChange({ passwordConfirm })}
           />
           <FieldErrors errors={createVaultErrorsForField(errors, "passwordConfirm")} />
@@ -473,6 +496,9 @@ function CreateVaultPasswordStep({
         maxLength={VAULT_PASSWORD_HINT_MAX_LENGTH}
         onFocus={() => onFieldFocus?.("passwordHint")}
         onChangeText={(passwordHint) => onChange({ passwordHint })}
+        returnKeyType="next"
+        submitBehavior="submit"
+        onSubmitEditing={() => onFieldSubmit?.("passwordHint")}
       />
     </View>
   );
@@ -512,36 +538,26 @@ function CreateVaultGeneralStep({
           <FieldLabel disabled={!draft.auto_close.enabled}>
             {t("modal.settings.field.auto_close.idle_minutes")}
           </FieldLabel>
-          <ThemedInput
-            keyboardType="number-pad"
+          <IntegerInput
+            min={1}
+            max={1440}
             disabled={!draft.auto_close.enabled}
-            value={String(draft.auto_close.idle_minutes)}
-            onChangeText={(raw) =>
-              onChange({
-                auto_close: {
-                  ...draft.auto_close,
-                  idle_minutes: Math.min(1440, Math.max(1, Number.parseInt(raw, 10) || 1)),
-                },
-              })
+            value={draft.auto_close.idle_minutes}
+            onChange={(idle_minutes) =>
+              onChange({ auto_close: { ...draft.auto_close, idle_minutes } })
             }
-            mono
           />
           <FieldLabel disabled={!draft.auto_close.enabled}>
             {t("modal.settings.field.auto_close.warn_before_seconds")}
           </FieldLabel>
-          <ThemedInput
-            keyboardType="number-pad"
+          <IntegerInput
+            min={0}
+            max={300}
             disabled={!draft.auto_close.enabled}
-            value={String(draft.auto_close.warn_before_seconds)}
-            onChangeText={(raw) =>
-              onChange({
-                auto_close: {
-                  ...draft.auto_close,
-                  warn_before_seconds: Math.min(300, Math.max(0, Number.parseInt(raw, 10) || 0)),
-                },
-              })
+            value={draft.auto_close.warn_before_seconds}
+            onChange={(warn_before_seconds) =>
+              onChange({ auto_close: { ...draft.auto_close, warn_before_seconds } })
             }
-            mono
           />
         </View>
       </SettingsAccordionSection>
@@ -566,19 +582,12 @@ function CreateVaultGeneralStep({
           <FieldLabel disabled={!draft.backup.enabled || draft.backup.mode !== "keep_last"}>
             {t("modal.settings.field.backup.keep_last")}
           </FieldLabel>
-          <ThemedInput
-            keyboardType="number-pad"
+          <IntegerInput
+            min={1}
+            max={99}
             disabled={!draft.backup.enabled || draft.backup.mode !== "keep_last"}
-            value={String(draft.backup.keep_last)}
-            onChangeText={(raw) =>
-              onChange({
-                backup: {
-                  ...draft.backup,
-                  keep_last: Math.min(99, Math.max(1, Number.parseInt(raw, 10) || 1)),
-                },
-              })
-            }
-            mono
+            value={draft.backup.keep_last}
+            onChange={(keep_last) => onChange({ backup: { ...draft.backup, keep_last } })}
           />
         </View>
       </SettingsAccordionSection>
@@ -646,6 +655,7 @@ function CreateVaultAdvancedStep({
   onChange,
   groups = NO_VAULT_GROUPS,
   vaultRootPath = null,
+  appWorkspace,
 }: StepProps) {
   const { t } = useTranslation();
   const { typography } = useTheme();
@@ -672,12 +682,7 @@ function CreateVaultAdvancedStep({
         <View style={styles.fields}>
           <FieldLabel>{t("modal.settings.field.vault.order")}</FieldLabel>
           <FieldHint>{t("modal.settings.field.vault.order_help")}</FieldHint>
-          <ThemedInput
-            keyboardType="number-pad"
-            value={String(draft.order)}
-            onChangeText={(raw) => onChange({ order: Math.max(0, Number.parseInt(raw, 10) || 0) })}
-            mono
-          />
+          <IntegerInput min={0} value={draft.order} onChange={(order) => onChange({ order })} />
           <SwitchRow
             label={t("modal.settings.field.vault.hidden")}
             hint={
@@ -731,6 +736,8 @@ function CreateVaultAdvancedStep({
         <VaultSettingsMountSection
           config={draft.mount}
           vaultRootPath={vaultRootPath}
+          plaintext={draft.storage.mode === "upriv_plain"}
+          appWorkspace={appWorkspace}
           onChange={(patch) => onChange({ mount: { ...draft.mount, ...patch } })}
         />
         <FieldErrors errors={createVaultErrorsForField(errors, "mount")} />

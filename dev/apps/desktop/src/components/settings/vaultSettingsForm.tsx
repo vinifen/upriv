@@ -1,5 +1,7 @@
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, type ReactNode } from "react";
+import { PathField } from "@/components/PathField";
 import { Button, Select, SwitchRow } from "@/components/ui";
+import { useRevealWhen } from "@/hooks/useRevealWhen";
 import {
   COMPRESSION_PRESETS,
   KDF_UNLOCK_OPTION_META,
@@ -8,13 +10,16 @@ import {
   VAULT_DISPLAY_NAME_MAX_LENGTH,
   VAULT_NOTE_MAX_LENGTH,
   VAULT_PASSWORD_HINT_MAX_LENGTH,
-  WORKSPACE_PATH_DEFAULT,
+  workspaceSystemsCurrentFirst,
+  appWorkspace,
+  appWorkspacePlace,
   compressionPresetFromSevenZip,
-  normalizeMountWorkspacePath,
   securityUiModesForStorage,
   sevenZipPatchFromCompressionPreset,
   storageModeIsPlaintext,
-  validateMountWorkspacePath,
+  validateWorkspaceTable,
+  currentWorkspaceSystem,
+  workspaceSystemHasShortcut,
   workspacePathIssueI18nKey,
   type CompressionPreset,
   type KdfUnlockPreset,
@@ -23,7 +28,10 @@ import {
   type StorageMode,
   type VaultGroup,
   type VaultSettingsConfig,
+  type WorkspaceOsEntry,
   type WorkspacePathIssue,
+  type WorkspaceSystem,
+  type WorkspaceTable,
   groupsForAssignmentPicker,
   groupAssignmentClearOption,
   requireVaultConfigEditLockedI18nKey,
@@ -34,6 +42,7 @@ import { useTranslation } from "@/i18n";
 import { useVaultRootService } from "@/platform/services";
 import { useErrorToast } from "@/hooks/useErrorToast";
 import { securityModeToUi, type SecurityUiMode, uiToSecurityMode } from "@upriv/shared";
+import { IntegerInput } from "./IntegerInput";
 
 export const settingsControlClass =
   "w-full rounded-lg border-0 bg-surface-container-highest px-2.5 py-2 text-sm text-on-surface outline-none ring-0 focus:ring-2 focus:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-60 sm:px-3 sm:py-2.5";
@@ -160,15 +169,11 @@ export function VaultSettingsVaultSection({
         hint={t("modal.settings.field.vault.order_help")}
         htmlFor={orderId}
       >
-        <input
+        <IntegerInput
           id={orderId}
-          type="number"
           min={0}
-          step={1}
           value={config.order}
-          onChange={(e) =>
-            onChange({ order: Math.max(0, Number.parseInt(e.target.value, 10) || 0) })
-          }
+          onChange={(order) => onChange({ order })}
           className={[settingsControlClass, "font-mono tabular-nums"].join(" ")}
         />
       </SettingsField>
@@ -285,6 +290,10 @@ interface VaultSettingsMountSectionProps extends SectionPatchProps<"mount"> {
   onPathIssueChange?: (issue: WorkspacePathIssue | null) => void;
   /** `mount.workspace_path` requires vault_quiet. */
   controlsDisabled?: boolean;
+  /** Plain text writes files in the folder and has no file manager folder switch. */
+  plaintext?: boolean;
+  /** App workspace, so "Use the app folder" can follow that file manager folder. */
+  appWorkspace?: WorkspaceTable;
 }
 
 export function VaultSettingsMountSection({
@@ -293,30 +302,13 @@ export function VaultSettingsMountSection({
   vaultRootPath = null,
   onPathIssueChange,
   controlsDisabled = false,
+  plaintext = false,
+  appWorkspace: appFolders = appWorkspace(),
 }: VaultSettingsMountSectionProps) {
   const { t } = useTranslation();
-  const { showError } = useErrorToast();
-  const mountGroup = useId();
   const pathId = useId();
-  const vaultRootService = useVaultRootService();
-  const customDraftRef = useRef("");
-  const storedIsDefault =
-    normalizeMountWorkspacePath(config.workspace_path) === WORKSPACE_PATH_DEFAULT;
-  const [uiMode, setUiMode] = useState<"default" | "custom">(
-    storedIsDefault ? "default" : "custom",
-  );
-
-  useEffect(() => {
-    if (!storedIsDefault) setUiMode("custom");
-  }, [storedIsDefault]);
-
-  const customPath = storedIsDefault ? "" : config.workspace_path;
-  const pathIssue: WorkspacePathIssue | null =
-    uiMode === "custom"
-      ? !customPath.trim()
-        ? "empty"
-        : validateMountWorkspacePath(customPath, vaultRootPath)
-      : null;
+  const current = currentWorkspaceSystem();
+  const pathIssue = validateWorkspaceTable(config, vaultRootPath);
 
   useEffect(() => {
     onPathIssueChange?.(pathIssue);
@@ -332,102 +324,236 @@ export function VaultSettingsMountSection({
           {t(requireVaultConfigEditLockedI18nKey("mount.workspace_path"))}
         </p>
       ) : null}
+      {workspaceSystemsCurrentFirst().map((system) => {
+        const active = system === current && !controlsDisabled;
+        const entry = config[system];
+        return (
+          <SettingsField
+            key={system}
+            label={t(`modal.app_settings.field.workspace.system.${system}`)}
+            hint={
+              system === current
+                ? t(
+                    plaintext
+                      ? "modal.settings.field.mount.plain_help"
+                      : workspaceSystemHasShortcut(system)
+                        ? "modal.settings.field.mount.path_help"
+                        : "modal.settings.field.mount.phone_help",
+                  )
+                : t("modal.app_settings.field.workspace.other_system")
+            }
+            htmlFor={system === current ? pathId : undefined}
+            disabled={!active}
+          >
+            {system === current ? (
+              <CurrentVaultFolderChoices
+                system={system}
+                entry={entry}
+                appEntry={appFolders[system]}
+                appShortcutOn={appFolders.file_manager_folder}
+                vaultAppShortcut={config.app_file_manager_folder}
+                vaultCustomShortcut={config.custom_file_manager_folder}
+                active={active}
+                plaintext={plaintext}
+                pathId={pathId}
+                onChange={onChange}
+              />
+            ) : (
+              <div className="flex flex-col gap-2 opacity-60">
+                <PathField
+                  value={entry.path}
+                  disabled
+                  placeholder={t("modal.settings.field.mount.inherit")}
+                />
+              </div>
+            )}
+          </SettingsField>
+        );
+      })}
+      {pathIssue ? (
+        <p className="text-xs text-on-error-container" role="alert">
+          {t(workspacePathIssueI18nKey(pathIssue))}
+        </p>
+      ) : null}
+    </SettingsFormGrid>
+  );
+}
 
-      <div role="radiogroup" aria-label={t("modal.settings.section.mount")} className="grid gap-2">
+function CurrentVaultFolderChoices({
+  system,
+  entry,
+  appEntry,
+  appShortcutOn,
+  vaultAppShortcut,
+  vaultCustomShortcut,
+  active,
+  plaintext,
+  pathId,
+  onChange,
+}: {
+  system: WorkspaceSystem;
+  entry: WorkspaceOsEntry;
+  appEntry: WorkspaceOsEntry;
+  appShortcutOn: boolean;
+  vaultAppShortcut: VaultSettingsConfig["mount"]["app_file_manager_folder"];
+  vaultCustomShortcut: boolean;
+  active: boolean;
+  plaintext: boolean;
+  pathId: string;
+  onChange: (patch: Partial<VaultSettingsConfig["mount"]>) => void;
+}) {
+  const { t } = useTranslation();
+  const { showError } = useErrorToast();
+  const placeGroup = useId();
+  const shortcutGroup = useId();
+  const vaultRootService = useVaultRootService();
+  const trimmed = entry.path.trim();
+  const custom = trimmed !== "";
+  const showShortcut = workspaceSystemHasShortcut(system) && !plaintext;
+  const workspaceReady = appWorkspacePlace(appEntry) !== "unset";
+  const shortcutLocked = !active || !workspaceReady;
+  const radiosDisabled = shortcutLocked || custom;
+  const appFolderTitle = workspaceReady
+    ? t("modal.settings.field.mount.inherit")
+    : `${t("modal.settings.field.mount.inherit")} (${t("modal.app_settings.field.workspace.unset")})`;
+  const followTitle = workspaceReady
+    ? `${t("modal.settings.field.mount.shortcut_inherit")} (${t(
+        appShortcutOn
+          ? "modal.settings.field.mount.shortcut_on"
+          : "modal.settings.field.mount.shortcut_off",
+      )})`
+    : t("modal.settings.field.mount.shortcut_inherit");
+
+  function writePath(path: string) {
+    onChange({ [system]: { ...entry, path: path.trim() } });
+  }
+
+  function pickFolder(initial: string | null) {
+    if (!active) return;
+    void (async () => {
+      try {
+        const picked = await vaultRootService.pickFolder(
+          initial,
+          t("modal.app_settings.action.pick_workspace_folder"),
+        );
+        if (!picked?.trim()) return;
+        onChange({ [system]: { ...entry, path: picked.trim() } });
+      } catch (error) {
+        showError(error, "error.unexpected");
+      }
+    })();
+  }
+
+  return (
+    <div className={active ? "flex flex-col gap-2" : "flex flex-col gap-2 opacity-60"}>
+      <div
+        role="radiogroup"
+        aria-label={t(`modal.app_settings.field.workspace.system.${system}`)}
+        className="grid gap-2"
+      >
         <PolicyRadioOption
-          groupName={mountGroup}
-          value="default"
-          checked={uiMode === "default"}
-          disabled={controlsDisabled}
-          title={t("modal.settings.field.mount.use_default")}
-          description={t("modal.settings.field.mount.use_default_desc")}
-          badge="default"
+          groupName={placeGroup}
+          value="inherit"
+          checked={!custom}
+          title={appFolderTitle}
+          description={t("modal.settings.field.mount.inherit_desc")}
+          disabled={!active}
+          muted={!workspaceReady}
           onSelect={() => {
-            if (controlsDisabled) return;
-            if (!storedIsDefault && config.workspace_path.trim()) {
-              customDraftRef.current = config.workspace_path.trim();
-            }
-            setUiMode("default");
-            onChange({ workspace_path: WORKSPACE_PATH_DEFAULT });
-          }}
-        />
-        <PolicyRadioOption
-          groupName={mountGroup}
-          value="custom"
-          checked={uiMode === "custom"}
-          disabled={controlsDisabled}
-          title={t("modal.settings.field.mount.custom")}
-          description={t("modal.settings.field.mount.custom_desc")}
-          onSelect={() => {
-            if (controlsDisabled) return;
-            setUiMode("custom");
-            if (storedIsDefault) {
-              onChange({ workspace_path: customDraftRef.current });
-            }
+            if (!active) return;
+            onChange({ [system]: { ...entry, path: "" } });
           }}
           footer={
-            uiMode === "custom" ? (
-              <div className="space-y-2">
-                <SettingsField
-                  label={t("modal.settings.field.mount.path")}
-                  hint={t("modal.settings.field.mount.path_help")}
-                  htmlFor={pathId}
-                  disabled={controlsDisabled}
-                >
-                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                    <input
-                      id={pathId}
-                      type="text"
-                      value={customPath}
-                      disabled={controlsDisabled}
-                      placeholder={t("modal.app_settings.field.workspace.path_placeholder")}
-                      onChange={(e) => {
-                        const next = e.target.value;
-                        customDraftRef.current = next.trim();
-                        onChange({ workspace_path: next });
-                      }}
-                      className={[
-                        settingsControlClass,
-                        "font-mono text-xs sm:min-w-0 sm:flex-1",
-                      ].join(" ")}
-                    />
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      size="md"
-                      className="w-full shrink-0 sm:w-auto"
-                      disabled={controlsDisabled}
-                      onClick={() => {
-                        void (async () => {
-                          try {
-                            const picked = await vaultRootService.pickFolder(
-                              customPath.trim() || null,
-                              t("modal.app_settings.action.pick_workspace_folder"),
-                            );
-                            if (!picked?.trim()) return;
-                            customDraftRef.current = picked.trim();
-                            onChange({ workspace_path: picked.trim() });
-                          } catch (error) {
-                            showError(error, "error.unexpected");
-                          }
-                        })();
-                      }}
-                    >
-                      {t("modal.app_settings.action.pick_workspace_folder")}
-                    </Button>
-                  </div>
-                  {pathIssue ? (
-                    <p className="text-xs text-on-error-container" role="alert">
-                      {t(workspacePathIssueI18nKey(pathIssue))}
-                    </p>
-                  ) : null}
-                </SettingsField>
+            showShortcut ? (
+              <div
+                role="radiogroup"
+                aria-label={t("modal.settings.field.mount.mount")}
+                className="grid gap-2"
+              >
+                <div>
+                  <p className="text-sm font-medium leading-snug text-on-surface">
+                    {t("modal.settings.field.mount.mount")}
+                  </p>
+                  <p className="mt-1 text-xs leading-relaxed text-on-surface-variant">
+                    {t(
+                      workspaceReady
+                        ? "modal.settings.field.mount.inherit_shortcut_help"
+                        : "modal.settings.field.mount.shortcut_unset",
+                    )}
+                  </p>
+                </div>
+                {(["inherit", "on", "off"] as const).map((mode) => (
+                  <PolicyRadioOption
+                    key={mode}
+                    groupName={shortcutGroup}
+                    value={mode}
+                    checked={vaultAppShortcut === mode}
+                    disabled={shortcutLocked}
+                    title={
+                      mode === "inherit"
+                        ? followTitle
+                        : t(`modal.settings.field.mount.shortcut_${mode}`)
+                    }
+                    onSelect={() => {
+                      if (radiosDisabled) return;
+                      onChange({ app_file_manager_folder: mode });
+                    }}
+                  />
+                ))}
               </div>
-            ) : undefined
+            ) : null
+          }
+        />
+        <PolicyRadioOption
+          groupName={placeGroup}
+          value="custom"
+          checked={custom}
+          title={t("modal.settings.field.mount.custom")}
+          description={t("modal.settings.field.mount.custom_desc")}
+          disabled={!active}
+          onSelect={() => {
+            if (!active || custom) return;
+            pickFolder(null);
+          }}
+          footer={
+            <div className="flex flex-col gap-3">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                <PathField
+                  id={pathId}
+                  className="sm:flex-1"
+                  value={entry.path}
+                  disabled={!active || !custom}
+                  placeholder={t("modal.settings.field.mount.path_placeholder")}
+                  onChange={(path) => {
+                    if (!active) return;
+                    writePath(path);
+                  }}
+                />
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="md"
+                  className="w-full shrink-0 sm:w-auto"
+                  disabled={!active}
+                  onClick={() => pickFolder(trimmed || null)}
+                >
+                  {t("modal.app_settings.action.pick_workspace_folder")}
+                </Button>
+              </div>
+              {showShortcut ? (
+                <SwitchRow
+                  checked={vaultCustomShortcut}
+                  disabled={!active || !custom}
+                  onChange={(checked) => onChange({ custom_file_manager_folder: checked })}
+                  label={t("modal.settings.field.mount.mount")}
+                  hint={t("modal.settings.field.mount.mount_help")}
+                />
+              ) : null}
+            </div>
           }
         />
       </div>
-    </SettingsFormGrid>
+    </div>
   );
 }
 
@@ -541,18 +667,13 @@ export function VaultSettingsCloseSection({
           htmlFor={idleId}
           disabled={!autoClose.enabled}
         >
-          <input
+          <IntegerInput
             id={idleId}
-            type="number"
             min={1}
             max={1440}
             value={autoClose.idle_minutes}
             disabled={!autoClose.enabled}
-            onChange={(e) =>
-              onAutoCloseChange({
-                idle_minutes: Math.min(1440, Math.max(1, Number.parseInt(e.target.value, 10) || 1)),
-              })
-            }
+            onChange={(idle_minutes) => onAutoCloseChange({ idle_minutes })}
             className={[settingsControlClass, "font-mono tabular-nums"].join(" ")}
           />
         </SettingsField>
@@ -561,21 +682,13 @@ export function VaultSettingsCloseSection({
           htmlFor={warnId}
           disabled={!autoClose.enabled}
         >
-          <input
+          <IntegerInput
             id={warnId}
-            type="number"
             min={0}
             max={300}
             value={autoClose.warn_before_seconds}
             disabled={!autoClose.enabled}
-            onChange={(e) =>
-              onAutoCloseChange({
-                warn_before_seconds: Math.min(
-                  300,
-                  Math.max(0, Number.parseInt(e.target.value, 10) || 0),
-                ),
-              })
-            }
+            onChange={(warn_before_seconds) => onAutoCloseChange({ warn_before_seconds })}
             className={[settingsControlClass, "font-mono tabular-nums"].join(" ")}
           />
         </SettingsField>
@@ -627,17 +740,13 @@ export function VaultSettingsBackupSection({ config, onChange }: SectionPatchPro
         htmlFor={keepId}
         disabled={!config.enabled || config.mode !== "keep_last"}
       >
-        <input
+        <IntegerInput
           id={keepId}
-          type="number"
           min={1}
           max={99}
           value={config.keep_last}
           disabled={!config.enabled || config.mode !== "keep_last"}
-          onChange={(e) => {
-            const keepLast = Math.min(99, Math.max(1, Number.parseInt(e.target.value, 10) || 1));
-            onChange({ keep_last: keepLast });
-          }}
+          onChange={(keep_last) => onChange({ keep_last })}
           className={[settingsControlClass, "font-mono tabular-nums"].join(" ")}
         />
       </SettingsField>
@@ -1008,6 +1117,8 @@ interface PolicyRadioOptionProps {
   icon?: ReactNode;
   description?: string;
   disabled?: boolean;
+  /** Gray, still selectable. The file manager folder inside can stay locked. */
+  muted?: boolean;
   badge?: PolicyRadioBadge;
   tone?: "default" | "less-secure" | "insecure";
   /**
@@ -1030,6 +1141,7 @@ export function PolicyRadioOption({
   icon,
   description,
   disabled = false,
+  muted = false,
   badge,
   tone = "default",
   attention = false,
@@ -1069,6 +1181,7 @@ export function PolicyRadioOption({
       className={[
         "block select-none rounded-xl p-2.5 transition-colors sm:p-3",
         disabled ? "cursor-not-allowed opacity-60" : "cursor-pointer",
+        muted && !disabled ? "opacity-60" : "",
         cardBgClass,
         borderClass,
         !checked && !disabled ? cardHoverClass : "",
@@ -1157,6 +1270,7 @@ export function VaultSettingsDangerZoneSection({
   onConfirmChange,
 }: VaultSettingsDangerZoneSectionProps) {
   const { t } = useTranslation();
+  const confirmRef = useRevealWhen<HTMLDivElement>(deleteOpen);
 
   if (!deleteOpen) {
     return (
@@ -1180,7 +1294,7 @@ export function VaultSettingsDangerZoneSection({
   }
 
   return (
-    <div className="space-y-3">
+    <div ref={confirmRef} className="space-y-3">
       <p className="text-sm text-on-surface-variant">{t("modal.settings.delete_confirm")}</p>
       <p className="font-mono text-xs text-on-surface-variant/80">{vaultId}</p>
       <input
@@ -1188,7 +1302,6 @@ export function VaultSettingsDangerZoneSection({
         type="text"
         value={deleteConfirm}
         onChange={(event) => onConfirmChange(event.target.value)}
-        autoFocus
         autoComplete="off"
         spellCheck={false}
         disabled={busy}

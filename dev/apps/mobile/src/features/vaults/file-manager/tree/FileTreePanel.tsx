@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  AccessibilityInfo,
+  Animated,
   Clipboard,
+  Easing,
   FlatList,
   PanResponder,
   StyleSheet,
   Text,
   TextInput,
   View,
-  type DimensionValue,
   type GestureResponderEvent,
   type ListRenderItem,
   type ViewStyle,
@@ -31,15 +33,21 @@ import {
   type FileTreeNode,
 } from "@upriv/shared";
 import { Icon } from "@/components/icons";
-import { DropdownPanel, IconButton, MenuActionItem } from "@/components/ui";
+import {
+  Button,
+  DropdownPanel,
+  IconButton,
+  MenuActionItem,
+  type DropdownPanelHandle,
+} from "@/components/ui";
 import { useTranslation } from "@/i18n";
 import { useTheme } from "@/theme";
 import { colorAlpha, radii } from "@/theme/tokens";
+import { useDoubleTap } from "../hooks/useDoubleTap";
 import type { FileManagerApi } from "../hooks/useVaultFileManager";
 import { measurePageRect, type PageRect } from "../lib/measurePageRect";
 import {
   pickImportFiles,
-  pickImportFolder,
   DocumentPickerUnavailableError,
   FolderPickerUnavailableError,
   type MobileImportPick,
@@ -47,9 +55,6 @@ import {
 
 interface FileTreePanelProps {
   fm: FileManagerApi;
-  layout: "column" | "row";
-  /** Pixel height (column) or width (row) from workspace split. */
-  splitExtent?: number;
 }
 
 interface FlatEntry {
@@ -90,7 +95,7 @@ function dropFolderForRow(path: string, folderPaths: Set<string>): string {
   return folderPaths.has(path) ? path : getParentPath(path);
 }
 
-export function FileTreePanel({ fm, layout, splitExtent }: FileTreePanelProps) {
+export function FileTreePanel({ fm }: FileTreePanelProps) {
   const { t } = useTranslation();
   const { colors } = useTheme();
   const { workspace, dispatch, commitRename, movePath } = fm;
@@ -102,6 +107,18 @@ export function FileTreePanel({ fm, layout, splitExtent }: FileTreePanelProps) {
     }
     return out;
   }, [fm.displayTree, workspace.expandedPaths]);
+
+  const listRef = useRef<FlatList<FlatEntry>>(null);
+  const entriesRef = useRef(entries);
+  entriesRef.current = entries;
+
+  /* Rename can start from a tab, where the row may be scrolled out of view. */
+  useEffect(() => {
+    const path = workspace.renamingPath;
+    if (!path) return;
+    const index = entriesRef.current.findIndex((entry) => entry.path === path);
+    if (index >= 0) listRef.current?.scrollToIndex({ index, viewPosition: 0.5 });
+  }, [workspace.renamingPath]);
 
   const dropViewsRef = useRef(new Map<string, View>());
   const dropRectsRef = useRef(new Map<string, PageRect>());
@@ -288,7 +305,6 @@ export function FileTreePanel({ fm, layout, splitExtent }: FileTreePanelProps) {
       sessionCreatedPaths: workspace.sessionCreatedPaths,
       sessionModifiedPaths: workspace.sessionModifiedPaths,
       importBusy: fm.importBusy,
-      importTimedOut: fm.importTimedOut,
       displayTree: fm.displayTree,
     }),
     [
@@ -302,7 +318,6 @@ export function FileTreePanel({ fm, layout, splitExtent }: FileTreePanelProps) {
       workspace.sessionCreatedPaths,
       workspace.sessionModifiedPaths,
       fm.importBusy,
-      fm.importTimedOut,
       fm.displayTree,
     ],
   );
@@ -382,18 +397,7 @@ export function FileTreePanel({ fm, layout, splitExtent }: FileTreePanelProps) {
     );
   };
 
-  const paneStyle: ViewStyle =
-    layout === "column"
-      ? {
-          height: (splitExtent ?? "20%") as DimensionValue,
-          width: "100%",
-          flexShrink: 0,
-        }
-      : {
-          width: (splitExtent ?? "20%") as DimensionValue,
-          height: "100%",
-          flexShrink: 0,
-        };
+  const paneStyle: ViewStyle = { flex: 1, minHeight: 0, minWidth: 0 };
 
   return (
     <View style={[styles.panel, paneStyle, { backgroundColor: colors.surfaceContainer }]}>
@@ -438,20 +442,10 @@ export function FileTreePanel({ fm, layout, splitExtent }: FileTreePanelProps) {
             size={14}
             tone="muted"
             onPress={() => {
-              void runImport(pickImportFolder);
+              void fm.importPickedFolder(createTargetPath(fm));
             }}
             style={styles.toolBtn}
           />
-          {fm.importTimedOut ? (
-            <IconButton
-              label={t("action.retry")}
-              icon="refresh"
-              size={14}
-              tone="muted"
-              onPress={fm.retryImport}
-              style={styles.toolBtn}
-            />
-          ) : null}
         </View>
       </View>
       <View
@@ -460,19 +454,94 @@ export function FileTreePanel({ fm, layout, splitExtent }: FileTreePanelProps) {
         collapsable={false}
         style={[styles.listShell, rootDropActive ? { borderColor: colors.accent } : null]}
       >
-        <FlatList
-          data={entries}
-          extraData={treeListExtraData}
-          keyExtractor={(item) => item.path}
-          renderItem={renderItem}
-          scrollEnabled={!isDragging}
-          keyboardShouldPersistTaps="handled"
-          keyboardDismissMode="none"
-          style={styles.list}
-          contentContainerStyle={styles.listContent}
-        />
+        {fm.treeStatus === "loading" ? (
+          <FileTreeSkeleton label={t("modal.file_manager.explorer.loading")} />
+        ) : fm.treeStatus === "error" ? (
+          <View accessibilityRole="alert" style={styles.loadError}>
+            <Text style={[styles.loadErrorText, { color: colors.onSurfaceVariant }]}>
+              {t("modal.file_manager.explorer.load_failed")}
+            </Text>
+            <Button label={t("action.retry")} variant="ghost" size="sm" onPress={fm.retryTree} />
+          </View>
+        ) : (
+          <FlatList
+            ref={listRef}
+            data={entries}
+            onScrollToIndexFailed={({ index, averageItemLength }) =>
+              listRef.current?.scrollToOffset({ offset: index * averageItemLength })
+            }
+            extraData={treeListExtraData}
+            keyExtractor={(item) => item.path}
+            renderItem={renderItem}
+            scrollEnabled={!isDragging}
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="none"
+            style={styles.list}
+            contentContainerStyle={styles.listContent}
+          />
+        )}
       </View>
     </View>
+  );
+}
+
+const TREE_SKELETON_ROWS = [
+  { depth: 0, width: 96 },
+  { depth: 0, width: 128 },
+  { depth: 1, width: 80 },
+  { depth: 1, width: 112 },
+  { depth: 0, width: 64 },
+  { depth: 0, width: 96 },
+] as const;
+
+/** Desktop `animate-pulse`: opacity 1 → 0.5 → 1 every 2 s, off with Reduce Motion. */
+function useSkeletonPulse() {
+  const pulse = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    let loop: Animated.CompositeAnimation | null = null;
+    let cancelled = false;
+    const step = (toValue: number) =>
+      Animated.timing(pulse, {
+        toValue,
+        duration: 1000,
+        easing: Easing.bezier(0.4, 0, 0.6, 1),
+        useNativeDriver: true,
+      });
+    void AccessibilityInfo.isReduceMotionEnabled().then((reduce) => {
+      if (cancelled || reduce) return;
+      loop = Animated.loop(Animated.sequence([step(0.5), step(1)]));
+      loop.start();
+    });
+    return () => {
+      cancelled = true;
+      loop?.stop();
+    };
+  }, [pulse]);
+
+  return pulse;
+}
+
+function FileTreeSkeleton({ label }: { label: string }) {
+  const { colors } = useTheme();
+  const pulse = useSkeletonPulse();
+  const fill = { backgroundColor: colorAlpha(colors.onSurfaceVariant, 0.2) };
+  return (
+    <Animated.View
+      accessible
+      accessibilityRole="progressbar"
+      accessibilityLabel={label}
+      accessibilityState={{ busy: true }}
+      style={{ opacity: pulse }}
+    >
+      {TREE_SKELETON_ROWS.map((row, index) => (
+        <View key={index} style={[styles.row, { paddingLeft: row.depth * DEPTH_INDENT + 2 }]}>
+          <View style={{ width: TWISTIE }} />
+          <View style={[styles.skeletonIcon, fill]} />
+          <View style={[styles.skeletonBar, fill, { width: row.width }]} />
+        </View>
+      ))}
+    </Animated.View>
   );
 }
 
@@ -538,7 +607,6 @@ function FileTreeRow({
   const renameError = isRenaming ? liveFileNameError(renameValue) : null;
   const parentForCreate = isFolder ? path : getParentPath(path);
   const isPending = fm.isImportPending(path);
-  const isPendingTimedOut = fm.isImportTimedOut(path);
   const isWalkPlaceholder = fm.isImportWalkPlaceholder(path);
   const isQueueSlot = fm.isImportQueueSlot(path);
   const isProcessing = fm.isImportProcessing(path) || isWalkPlaceholder || isQueueSlot;
@@ -558,6 +626,8 @@ function FileTreeRow({
   const movedRef = useRef(false);
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const touchStartRef = useRef<{ x: number; y: number } | null>(null);
+  const menuRef = useRef<DropdownPanelHandle>(null);
+  const isDoubleTap = useDoubleTap();
   const callbacksRef = useRef({
     path,
     isRenaming,
@@ -677,6 +747,7 @@ function FileTreeRow({
     const wasArmed = armedRef.current;
     const panHadGrant = panGrantedRef.current;
     const wasMoved = movedRef.current;
+    const tapAt = touchStartRef.current;
     clearLongPressTimer();
     touchStartRef.current = null;
     movedRef.current = false;
@@ -694,6 +765,10 @@ function FileTreeRow({
 
     armedRef.current = false;
     if (!wasMoved && !callbacksRef.current.isRenaming && !callbacksRef.current.dragActive) {
+      if (tapAt && isDoubleTap()) {
+        menuRef.current?.open({ pageX: tapAt.x, pageY: tapAt.y });
+        return;
+      }
       callbacksRef.current.onActivate();
     }
   };
@@ -725,15 +800,7 @@ function FileTreeRow({
         {
           paddingLeft: depth * DEPTH_INDENT + 2,
           backgroundColor: isSelected ? selectedBg : "transparent",
-          opacity: isDragging
-            ? 0.5
-            : isPending && isPendingTimedOut
-              ? 0.6
-              : isProcessing
-                ? 0.75
-                : isPending
-                  ? 0.45
-                  : 1,
+          opacity: isDragging ? 0.5 : isProcessing ? 0.75 : isPending ? 0.45 : 1,
         },
       ]}
     >
@@ -829,7 +896,7 @@ function FileTreeRow({
               <View
                 style={[
                   styles.skeletonBar,
-                  { backgroundColor: colors.onSurfaceVariant, opacity: 0.2 },
+                  { backgroundColor: colorAlpha(colors.onSurfaceVariant, 0.2) },
                 ]}
               />
             ) : (
@@ -850,6 +917,7 @@ function FileTreeRow({
       {!isRenaming && !dragActive && !isPending && !isQueueSlot ? (
         // No “open in terminal” on mobile — desktop-only (SDD §9.5).
         <DropdownPanel
+          ref={menuRef}
           label={name}
           heading={name}
           align="right"
@@ -970,6 +1038,9 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   skeletonBar: { height: 10, width: 96, borderRadius: 4 },
+  skeletonIcon: { width: 14, height: 14, borderRadius: 3 },
+  loadError: { alignItems: "flex-start", gap: 8, paddingHorizontal: 12, paddingVertical: 8 },
+  loadErrorText: { fontSize: 12, lineHeight: 16 },
   renameWrap: { flex: 1, minWidth: 0 },
   renameError: { marginTop: 2, fontSize: 10, lineHeight: 13 },
   dirtyDot: {

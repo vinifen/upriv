@@ -70,7 +70,7 @@ When implementing `seven_zip` + close pipeline:
 4. **Ban `DevPlaintext`** (or any “dump store to workspace”) in builds users can run — mount failure → fail closed.
 5. Hard `ensure_encrypted_dir` / `ensure_plain` on every open/close path so modes cannot mix.
 6. Automated tests (RF-49 / RF-45):
-   - After mount write: no regular files under real `workspace/<id>/` on the vault volume.
+   - After mount write: no regular files under the real file manager folder on the vault volume.
    - Ciphertext present in `store/` (write-through).
    - After close: no leftover plaintext staging under OS temp (or only documented tmpfs that is wiped).
    - CI fails if release `encrypted_dir` paths call `export_logical_tree` to ordinary disk.

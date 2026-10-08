@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use upriv_core::host_fs::HostFsQuery;
 use upriv_core::logging::{
     clear_logging_session, delete_session_log_files, ensure_logging_session,
     list_session_log_files, log_app_start, log_event, log_vault_root_entered,
@@ -19,21 +20,24 @@ use upriv_core::logging::{
     Logger,
 };
 use upriv_core::{
-    app_home_dir, close_vault, create_vault, create_vault_group_with_sort,
+    app_home_dir, close_phase, close_vault, create_vault, create_vault_group_with_sort,
     deactivate_vault_root_alias_everywhere, delete_vault_group, discover_bootstrap_root,
     inspect_vault_root_at, known_vault_ids, list_vaults, load_app_settings, load_vault_config,
     load_vault_groups, open_import_session, open_or_initialize_vault_root, open_vault,
-    parse_settings_toml_str, read_vault_root_alias, rename_vault,
+    parse_settings_toml_str, read_vault_root_alias, relocate_upriv_dir, rename_vault,
     reorder_vault_group_grouped_vaults, reorder_vault_groups, repair_vault_groups,
     resolve_vault_root, save_app_settings_session_with_alias_sync, serialize_settings_toml_str,
     suggested_vault_root, update_vault_group, vault_list_item, vault_store_on_disk_bytes,
     write_vault_root_alias_for_root, AppSettings, IncompleteReplacePolicy, KdfUnlockPreset,
-    ResolveVaultRoot, ResolveVaultRootOptions, UpdateVaultGroupParams, VaultConfig, VaultGroup,
-    VaultListItem, VaultRootBootstrapPrefs, VaultRootDirStatus, VaultRootMode, VaultRootSource,
-    VaultStorageMode, VAULT_ROOT_ALIAS_FILE,
+    ResolveVaultRoot, ResolveVaultRootOptions, UpdateVaultGroupParams, UprivDirRelocate,
+    VaultConfig, VaultGroup, VaultListItem, VaultRootBootstrapPrefs, VaultRootDirStatus,
+    VaultRootMode, VaultRootSource, VaultStorageMode, VAULT_ROOT_ALIAS_FILE,
 };
 
+mod secret;
 mod vault_ops;
+
+use secret::SecretString;
 pub use vault_ops::ingest_content_fd;
 
 #[derive(Debug, Deserialize)]
@@ -95,6 +99,11 @@ struct PathParams {
     replace_policy: Option<String>,
     #[serde(default)]
     bootstrap: Option<BootstrapPrefsParams>,
+    /// Android: copy the private app-folder `.upriv` into the mounted grant
+    /// before init. Desktop omits this. A destination that already has `.upriv`
+    /// is left as-is.
+    #[serde(default)]
+    adopt_private_root: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -145,6 +154,7 @@ pub fn handle_rpc(req: RpcRequest) -> RpcResponse {
         "vault_create" => vault_create(req.params),
         "vault_open" => vault_open(req.params),
         "vault_close" => vault_close(req.params),
+        "vault_close_phase" => vault_close_phase(req.params),
         "vault_export_capabilities" => vault_ops::vault_export_capabilities(req.params),
         "vault_config_get" => vault_config_get(req.params),
         "vault_store_size" => vault_store_size(req.params),
@@ -169,6 +179,7 @@ pub fn handle_rpc(req: RpcRequest) -> RpcResponse {
         "vault_fs_write" => vault_ops::vault_fs_write(req.params),
         "vault_fs_write_range" => vault_ops::vault_fs_write_range(req.params),
         "vault_fs_import_os_file" => vault_ops::vault_fs_import_os_file(req.params),
+        "vault_fs_import_seal" => vault_ops::vault_fs_import_seal(req.params),
         "vault_fs_truncate" => vault_ops::vault_fs_truncate(req.params),
         "vault_fs_mkdir" => vault_ops::vault_fs_mkdir(req.params),
         "vault_fs_create_file" => vault_ops::vault_fs_create_file(req.params),
@@ -191,6 +202,68 @@ fn path_utf8(path: &Path) -> Result<String, RpcResponse> {
     path.to_str()
         .map(|s| s.to_string())
         .ok_or_else(|| err("invalid_path_encoding", "path is not valid UTF-8".into()))
+}
+
+/// Electron sets these when a Windows install directory still holds `.upriv`
+/// or the move out of that directory failed. Absent on every other launch.
+fn relocate_notice() -> Option<(&'static str, String)> {
+    let notice = std::env::var("UPRIV_VAULT_RELOCATE_NOTICE").unwrap_or_default();
+    let path = std::env::var("UPRIV_VAULT_RELOCATE_PATH").unwrap_or_default();
+    let notice = match notice.as_str() {
+        "left_behind" => "left_behind",
+        "move_failed" => "move_failed",
+        _ => return None,
+    };
+    if path.is_empty() {
+        return None;
+    }
+    Some((notice, path))
+}
+
+fn with_relocate_notice(mut body: Value) -> Value {
+    if let Some((notice, path)) = relocate_notice() {
+        if let Some(object) = body.as_object_mut() {
+            object.insert("relocateNotice".into(), json!(notice));
+            object.insert("relocatePath".into(), json!(path));
+        }
+    }
+    body
+}
+
+fn adopt_private_root_into_grant(path: &Path) -> Result<&'static str, RpcResponse> {
+    if path != Path::new(upriv_core::host_fs::SAF_VAULT_ROOT) {
+        return Err(err(
+            "invalid_request",
+            "adoptPrivateRoot requires the mounted data folder".into(),
+        ));
+    }
+    if !upriv_core::host_fs::is_bridge_path(path) {
+        return Err(err(
+            "invalid_request",
+            "adoptPrivateRoot requires a mounted data folder".into(),
+        ));
+    }
+    let home = match app_home_dir() {
+        Ok(dir) => dir,
+        Err(error) => return Err(map_core_err(error)),
+    };
+    match relocate_upriv_dir(&home, path) {
+        Ok(UprivDirRelocate::Absent) => Ok("none"),
+        Ok(UprivDirRelocate::Moved) => Ok("moved"),
+        Ok(UprivDirRelocate::DestinationOccupied) => Ok("left_behind"),
+        Err(error) => Err(map_core_err(error)),
+    }
+}
+
+/// Put a moved private `.upriv` back when setup does not finish.
+///
+/// The caller remounts the previous folder on error. Leaving the only copy in
+/// the new grant would drop it from the folder the app still uses.
+fn restore_adopted_private_root(home: &Path, grant: &Path) {
+    if home.join(".upriv").host_is_dir() {
+        return;
+    }
+    let _ = relocate_upriv_dir(grant, home);
 }
 
 fn vault_root_resolve(params: Value) -> RpcResponse {
@@ -245,11 +318,11 @@ fn vault_root_resolve(params: Value) -> RpcResponse {
                     "vault_root_resolve",
                     &[("status", "found"), ("source", source)],
                 );
-                ok(json!({
+                ok(with_relocate_notice(json!({
                     "status": "found",
                     "rootPath": root_path,
                     "source": source,
-                }))
+                })))
             }
             Ok(ResolveVaultRoot::NeedsSetup {
                 alias_path,
@@ -266,12 +339,12 @@ fn vault_root_resolve(params: Value) -> RpcResponse {
                 };
                 // No vault-root yet — drop any stale writer so it cannot recreate `.upriv/logs`.
                 clear_logging_session();
-                ok(json!({
+                ok(with_relocate_notice(json!({
                     "status": "needs_setup",
                     "aliasPath": alias,
                     "defaultRootAnchor": default_root,
                     "distribution": upriv_core::distribution_str(distribution),
-                }))
+                })))
             }
             Err(error) => fail_loud_vault_root_resolve(error),
         },
@@ -550,19 +623,52 @@ fn vault_root_setup_path(params: Value) -> RpcResponse {
         Err(response) => return response,
     };
     // Init writes `[ui].locale` atomically on create — no separate stamp step
-    // (A2/A3). If alias write fails, `.upriv/` at `path` already carries the
-    // correct locale, so retrying setup is safe.
+    // (A2/A3). A private folder that was moved into the grant is put back if
+    // init or the alias write fails, because the caller remounts the previous
+    // folder. A folder created in the grant stays there, so retrying that path
+    // is safe.
+    let private_home = if parsed.adopt_private_root {
+        match app_home_dir() {
+            Ok(dir) => Some(dir),
+            Err(error) => return map_core_err(error),
+        }
+    } else {
+        None
+    };
+    let private_root = if parsed.adopt_private_root {
+        match adopt_private_root_into_grant(&path) {
+            Ok(status) => Some(status),
+            Err(response) => return response,
+        }
+    } else {
+        None
+    };
+    let moved_private = private_root == Some("moved");
+    let restore_private = |grant: &Path| {
+        if moved_private {
+            if let Some(home) = private_home.as_ref() {
+                restore_adopted_private_root(home, grant);
+            }
+        }
+    };
     let prior_status = inspect_vault_root_at(&path);
     let opened = match open_or_initialize_vault_root(&path, replace, prefs.as_ref()) {
         Ok(opened) => opened,
-        Err(error) => return map_core_err(error),
+        Err(error) => {
+            restore_private(&path);
+            return map_core_err(error);
+        }
     };
     let root = opened.root;
     let home = match upriv_core::app_home_dir() {
         Ok(dir) => dir,
-        Err(error) => return map_core_err(error),
+        Err(error) => {
+            restore_private(root.root());
+            return map_core_err(error);
+        }
     };
     if let Err(error) = write_vault_root_alias_for_root(&home, &root) {
+        restore_private(root.root());
         return map_core_err(error);
     }
     let alias_path = home.join(VAULT_ROOT_ALIAS_FILE);
@@ -588,10 +694,14 @@ fn vault_root_setup_path(params: Value) -> RpcResponse {
         &root_path,
         from_path.as_deref(),
     );
-    ok(json!({
+    let mut body = json!({
         "rootPath": root_path,
         "aliasPath": alias,
-    }))
+    });
+    if let Some(status) = private_root {
+        body["privateRoot"] = json!(status);
+    }
+    ok(body)
 }
 
 fn vault_root_read_alias() -> RpcResponse {
@@ -1171,7 +1281,7 @@ fn vault_list() -> RpcResponse {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct VaultCreateParams {
-    password: String,
+    password: SecretString,
     #[serde(default)]
     unlock_preset: Option<KdfUnlockPreset>,
     settings: VaultConfig,
@@ -1207,7 +1317,7 @@ fn vault_create(params: Value) -> RpcResponse {
 struct VaultIdPasswordParams {
     id: String,
     #[serde(default)]
-    password: Option<String>,
+    password: Option<SecretString>,
 }
 
 fn vault_open(params: Value) -> RpcResponse {
@@ -1258,7 +1368,7 @@ fn vault_close(params: Value) -> RpcResponse {
         .password
         .as_ref()
         .filter(|value| !value.is_empty())
-        .map(|value| value.as_bytes());
+        .map(SecretString::as_bytes);
     let root = match require_vault_root() {
         Ok(root) => root,
         Err(response) => return response,
@@ -1273,6 +1383,21 @@ fn vault_close(params: Value) -> RpcResponse {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct VaultIdParams {
     id: String,
+}
+
+fn vault_close_phase(params: Value) -> RpcResponse {
+    let parsed: VaultIdParams = match serde_json::from_value(params) {
+        Ok(value) => value,
+        Err(error) => return err("invalid_request", error.to_string()),
+    };
+    let root = match require_vault_root() {
+        Ok(root) => root,
+        Err(response) => return response,
+    };
+    match close_phase(&root, parsed.id.trim()) {
+        Ok(phase) => ok(json!({ "phase": phase.map(|p| p.as_str()) })),
+        Err(error) => map_core_err(error),
+    }
 }
 
 fn vault_store_size(params: Value) -> RpcResponse {
@@ -1303,7 +1428,10 @@ fn vault_config_get(params: Value) -> RpcResponse {
         Ok(dir) => dir,
         Err(error) => return map_core_err(error),
     };
-    if !dir.is_dir() {
+    // `Path::is_dir` / `exists` look at the real filesystem. A storage-access
+    // vault lives at the logical `/upriv-saf-root/...` path, so those checks
+    // are false even when the vault is listed.
+    if !dir.host_is_dir() {
         return map_core_err(upriv_core::UprivError::VaultNotFound(dir));
     }
     match load_vault_config(&dir) {
@@ -1311,7 +1439,7 @@ fn vault_config_get(params: Value) -> RpcResponse {
             Ok(settings) => ok(json!({ "settings": settings })),
             Err(error) => err("invalid_request", error.to_string()),
         },
-        Err(upriv_core::UprivError::VaultConfigInvalid { path, .. }) if !path.exists() => {
+        Err(upriv_core::UprivError::VaultConfigInvalid { path, .. }) if !path.host_exists() => {
             map_core_err(upriv_core::UprivError::VaultNotFound(dir))
         }
         Err(error) => map_core_err(error),
@@ -1339,7 +1467,7 @@ fn vault_config_save(params: Value) -> RpcResponse {
         Ok(dir) => dir,
         Err(error) => return map_core_err(error),
     };
-    if !dir.is_dir() {
+    if !dir.host_is_dir() {
         return map_core_err(upriv_core::UprivError::VaultNotFound(dir));
     }
     match upriv_core::save_vault_config_checked(&dir, &parsed.settings) {
@@ -1723,6 +1851,44 @@ fn err_with_details(code: &str, message: String, details: Option<Value>) -> RpcR
 }
 
 #[cfg(test)]
+mod adopt_restore_tests {
+    use super::restore_adopted_private_root;
+
+    #[test]
+    fn restore_moves_the_data_folder_back_to_the_app_home() {
+        let home = tempfile::tempdir().unwrap();
+        let grant = tempfile::tempdir().unwrap();
+        let marker = home.path().join(".upriv/marker.txt");
+        std::fs::create_dir_all(marker.parent().unwrap()).unwrap();
+        std::fs::write(&marker, b"vault").unwrap();
+        upriv_core::relocate_upriv_dir(home.path(), grant.path()).unwrap();
+        assert!(!marker.exists());
+        restore_adopted_private_root(home.path(), grant.path());
+        assert_eq!(std::fs::read(&marker).unwrap(), b"vault");
+        assert!(!grant.path().join(".upriv").exists());
+    }
+
+    #[test]
+    fn restore_does_not_replace_a_private_data_folder() {
+        let home = tempfile::tempdir().unwrap();
+        let grant = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(home.path().join(".upriv")).unwrap();
+        std::fs::write(home.path().join(".upriv/marker.txt"), b"private").unwrap();
+        std::fs::create_dir_all(grant.path().join(".upriv")).unwrap();
+        std::fs::write(grant.path().join(".upriv/marker.txt"), b"grant").unwrap();
+        restore_adopted_private_root(home.path(), grant.path());
+        assert_eq!(
+            std::fs::read(home.path().join(".upriv/marker.txt")).unwrap(),
+            b"private"
+        );
+        assert_eq!(
+            std::fs::read(grant.path().join(".upriv/marker.txt")).unwrap(),
+            b"grant"
+        );
+    }
+}
+
+#[cfg(test)]
 mod log_redaction_tests {
     use super::rpc_error_log_fields;
 
@@ -1777,6 +1943,7 @@ mod contract_tests {
         "vault_create",
         "vault_open",
         "vault_close",
+        "vault_close_phase",
         "vault_export_capabilities",
         "vault_config_get",
         "vault_store_size",
@@ -1801,6 +1968,7 @@ mod contract_tests {
         "vault_fs_write",
         "vault_fs_write_range",
         "vault_fs_import_os_file",
+        "vault_fs_import_seal",
         "vault_fs_truncate",
         "vault_fs_mkdir",
         "vault_fs_create_file",

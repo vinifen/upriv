@@ -3,6 +3,7 @@ import { vaultRowFixture } from "../../vault/tests/fixtures.shared";
 import {
   createEmptyFileManagerState,
   fileManagerBlockingPrompt,
+  vaultCloseBlockingPrompt,
   fileManagerDismissIntent,
   fileManagerReducer,
 } from "../dockReducer";
@@ -143,6 +144,11 @@ describe("fileManagerReducer", () => {
     );
     expect(fileManagerBlockingPrompt("import_in_progress")).toEqual({
       type: "import_in_progress",
+    });
+    expect(fileManagerBlockingPrompt("unsaved")).toEqual({ type: "dismiss_workspace" });
+    expect(vaultCloseBlockingPrompt("unsaved")).toEqual({ type: "close_vault" });
+    expect(vaultCloseBlockingPrompt("import_in_progress")).toEqual({
+      type: "close_vault_import",
     });
     expect(fileManagerDismissIntent({ importInFlight: false, workspace })).toBe("unsaved");
     expect(

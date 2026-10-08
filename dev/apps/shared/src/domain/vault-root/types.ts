@@ -7,6 +7,10 @@ import type { VaultRootMode } from "../app-settings";
  */
 export type VaultRootResolveSource = "explicit" | "custom_root" | "default_root";
 
+export type VaultRootRelocateNotice = "left_behind" | "move_failed";
+
+export type VaultRootPrivateRoot = "none" | "moved" | "left_behind";
+
 /** How the desktop app was distributed (packaging). */
 export type AppDistribution = "portable" | "installed" | "dev";
 
@@ -34,6 +38,9 @@ export type VaultRootResolveResult =
       status: "found";
       rootPath: string;
       source: VaultRootResolveSource;
+      /** Set when a Windows install directory still holds `.upriv`, or the move failed. */
+      relocateNotice?: VaultRootRelocateNotice;
+      relocatePath?: string;
     }
   | {
       status: "needs_setup";
@@ -45,6 +52,8 @@ export type VaultRootResolveResult =
       /** `default_root` create target (app home for all distributions). */
       defaultRootAnchor: string;
       distribution: AppDistribution;
+      relocateNotice?: VaultRootRelocateNotice;
+      relocatePath?: string;
     };
 
 /** Contents of `.upriv-root` when the file exists (active or inactive). */

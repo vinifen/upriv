@@ -7,6 +7,7 @@ import {
   type MouseEvent,
 } from "react";
 import { Icon } from "@/components/icons";
+import { Button } from "@/components/ui";
 import { useTranslation } from "@/i18n";
 import { useErrorToast } from "@/hooks/useErrorToast";
 import {
@@ -67,7 +68,6 @@ function FileTreeRow({ node, path, depth, fm }: FileTreeRowProps) {
   const isDropTarget = workspace.dropTargetPath === path && isFolder;
   const isRoot = path === "/";
   const isPending = fm.isImportPending(path);
-  const isPendingTimedOut = fm.isImportTimedOut(path);
   const isWalkPlaceholder = fm.isImportWalkPlaceholder(path);
   const isQueueSlot = fm.isImportQueueSlot(path);
   const isProcessing = fm.isImportProcessing(path) || isWalkPlaceholder || isQueueSlot;
@@ -246,15 +246,9 @@ function FileTreeRow({ node, path, depth, fm }: FileTreeRowProps) {
           ? "bg-[color-mix(in_srgb,var(--on-surface)_6%,transparent)] text-on-surface hover:bg-surface-container-highest"
           : "text-on-surface-variant hover:bg-surface-container-highest hover:text-on-surface",
         isDragging ? "opacity-50" : "",
-        isPendingTimedOut
-          ? "opacity-60"
-          : isProcessing
-            ? "animate-pulse"
-            : isPending
-              ? "opacity-75"
-              : "",
+        isProcessing ? "animate-pulse" : isPending ? "opacity-75" : "",
       ].join(" ")}
-      aria-busy={isProcessing && !isPendingTimedOut ? true : undefined}
+      aria-busy={isProcessing ? true : undefined}
       style={{
         gridTemplateColumns: ROW_GRID,
         paddingLeft: `${depth * DEPTH_INDENT_PX + 2}px`,
@@ -331,7 +325,7 @@ function FileTreeRow({ node, path, depth, fm }: FileTreeRowProps) {
               {t("modal.file_manager.import.folder_pending")}
             </span>
           ) : isWalkPlaceholder ? (
-            <span className="h-2.5 w-24 shrink-0 rounded bg-on-surface/15" aria-hidden />
+            <span className="h-2.5 w-24 shrink-0 rounded bg-on-surface-variant/20" aria-hidden />
           ) : (
             <span className="min-w-0 truncate">{node.name}</span>
           )}
@@ -367,6 +361,37 @@ function FileTreeRow({ node, path, depth, fm }: FileTreeRowProps) {
             />
           ))
         : null}
+    </div>
+  );
+}
+
+const TREE_SKELETON_ROWS = [
+  { depth: 0, width: "w-24" },
+  { depth: 0, width: "w-32" },
+  { depth: 1, width: "w-20" },
+  { depth: 1, width: "w-28" },
+  { depth: 0, width: "w-16" },
+  { depth: 0, width: "w-24" },
+] as const;
+
+function FileTreeSkeleton({ label }: { label: string }) {
+  return (
+    <div role="status" aria-label={label} className="animate-pulse motion-reduce:animate-none">
+      {TREE_SKELETON_ROWS.map((row, index) => (
+        <div
+          key={index}
+          aria-hidden
+          className="grid items-center gap-x-0.5 py-1"
+          style={{
+            gridTemplateColumns: ROW_GRID,
+            paddingLeft: `${row.depth * DEPTH_INDENT_PX + 2}px`,
+          }}
+        >
+          <span />
+          <span className="size-3.5 rounded-sm bg-on-surface-variant/20" />
+          <span className={`h-2.5 rounded bg-on-surface-variant/20 ${row.width}`} />
+        </div>
+      ))}
     </div>
   );
 }
@@ -547,17 +572,6 @@ export function FileTreePanel({ fm, splitPercent, layout }: FileTreePanelProps) 
           >
             <Icon name="archive" size={14} />
           </button>
-          {fm.importTimedOut ? (
-            <button
-              type="button"
-              className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-on-surface-variant transition-colors hover:bg-surface-container-highest hover:text-on-surface"
-              onClick={fm.retryImport}
-              aria-label={t("action.retry")}
-              title={t("action.retry")}
-            >
-              <Icon name="refresh" size={14} />
-            </button>
-          ) : null}
         </div>
       </div>
       <nav
@@ -570,8 +584,22 @@ export function FileTreePanel({ fm, splitPercent, layout }: FileTreePanelProps) 
         onDragEnter={handleNavDragOver}
         onDragOver={handleNavDragOver}
         onDrop={handleNavDrop}
+        aria-busy={fm.treeStatus === "loading" ? true : undefined}
       >
-        <FileTreeRoot tree={fm.displayTree} fm={fm} />
+        {fm.treeStatus === "loading" ? (
+          <FileTreeSkeleton label={t("modal.file_manager.explorer.loading")} />
+        ) : fm.treeStatus === "error" ? (
+          <div role="alert" className="flex flex-col items-start gap-2 px-3 py-2">
+            <p className="text-xs text-on-surface-variant">
+              {t("modal.file_manager.explorer.load_failed")}
+            </p>
+            <Button variant="ghost" size="sm" onClick={fm.retryTree}>
+              {t("action.retry")}
+            </Button>
+          </div>
+        ) : (
+          <FileTreeRoot tree={fm.displayTree} fm={fm} />
+        )}
       </nav>
     </aside>
   );

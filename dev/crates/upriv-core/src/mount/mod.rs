@@ -1,6 +1,8 @@
 //! Virtual workspace mount (FUSE / WinFsp). The in-app file manager does not
 //! depend on a successful mount — mount failure is a degraded desktop mode.
 
+#[allow(unused_imports)]
+use crate::host_fs::HostFsQuery;
 use std::path::{Path, PathBuf};
 
 use crate::error::{Result, UprivError};
@@ -36,7 +38,7 @@ impl Drop for MountedVault {
             self.session.take();
         }
         if force_unmount(&self.mount_point).is_ok() {
-            let _ = std::fs::remove_dir(&self.mount_point);
+            let _ = crate::host_fs::remove_dir(&self.mount_point);
         }
     }
 }
@@ -44,7 +46,7 @@ impl Drop for MountedVault {
 /// Force-unmount a leftover mountpoint after a dirty exit.
 ///
 /// Linux detaches a dead Upriv FUSE leaf (`fusermount -uz`, then `umount2`).
-/// Do not gate that on `path.exists()`: a killed FUSE daemon makes `stat`
+/// Do not gate that on `path.host_exists()`: a killed FUSE daemon makes `stat`
 /// return ENOTCONN, and `exists()` is then false. A path that is not an Upriv
 /// mount is left alone. Windows and Android have no OS mount, so this is a
 /// no-op there. Missing paths succeed so the launch sweep is idempotent.
@@ -77,21 +79,30 @@ pub fn mount_encrypted_dir(
     }
     #[cfg(target_os = "linux")]
     {
+        // A `content://` address is not an OS path. `create_dir_all` would
+        // otherwise create that relative tree in the process working directory.
+        if !mount_point.is_absolute()
+            || crate::paths::path_is_under_reserved_upriv_tree(&mount_point)
+        {
+            return Err(UprivError::VaultMountFailed(
+                "mount path must be an absolute folder outside .upriv".into(),
+            ));
+        }
         if let Some(parent) = mount_point.parent() {
-            std::fs::create_dir_all(parent)?;
+            crate::host_fs::create_dir_all(parent)?;
         }
         // Detach a leftover or disconnected FUSE leaf before creating the directory.
         // `create_dir` on that path returns ENOTCONN, which is not `AlreadyExists`.
         if force_unmount(&mount_point).is_ok() {
-            let _ = std::fs::remove_dir(&mount_point);
+            let _ = crate::host_fs::remove_dir(&mount_point);
         }
-        match std::fs::create_dir(&mount_point) {
+        match crate::host_fs::create_dir(&mount_point) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
                 if force_unmount(&mount_point).is_ok() {
-                    let _ = std::fs::remove_dir(&mount_point);
+                    let _ = crate::host_fs::remove_dir(&mount_point);
                 }
-                if std::fs::create_dir(&mount_point).is_err() {
+                if crate::host_fs::create_dir(&mount_point).is_err() {
                     return Err(UprivError::VaultMountFailed(format!(
                         "mount point busy: {}",
                         mount_point.display()
@@ -184,7 +195,7 @@ enum MountKind {
 
 #[cfg(target_os = "linux")]
 fn upriv_mount_kind(path: &Path) -> MountKind {
-    let Ok(text) = std::fs::read_to_string("/proc/self/mountinfo") else {
+    let Ok(text) = crate::host_fs::read_to_string("/proc/self/mountinfo") else {
         return MountKind::Unknown;
     };
     classify_mount_point(path, &text)
@@ -255,6 +266,8 @@ fn unescape_mount_field(field: &str) -> String {
 #[cfg(all(test, target_os = "linux"))]
 mod mountinfo_tests {
     use super::{classify_mount_point, MountKind};
+    #[allow(unused_imports)]
+    use crate::host_fs::HostFsQuery;
     use std::path::Path;
 
     const SAMPLE: &str = "\

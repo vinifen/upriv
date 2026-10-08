@@ -7,13 +7,9 @@ import {
   useRef,
   useState,
 } from "react";
+import { PathField } from "@/components/PathField";
 import { Button } from "@/components/ui";
-import {
-  PolicyRadioOption,
-  settingsControlClass,
-  SettingsField,
-  SettingsFormGrid,
-} from "@/components/settings";
+import { PolicyRadioOption, SettingsField, SettingsFormGrid } from "@/components/settings";
 import { useTranslation } from "@/i18n";
 import {
   VAULT_ROOT_ALIAS_FILE,
@@ -306,9 +302,7 @@ export function VaultRootLocationSection({
             footer={
               <div className="space-y-2">
                 {defaultRootAnchor ? (
-                  <p className="break-all rounded-md bg-surface-container-highest px-3 py-2 font-mono text-xs text-on-surface">
-                    {defaultRootAnchor}
-                  </p>
+                  <PathField value={defaultRootAnchor} readOnly />
                 ) : (
                   <p className="text-xs leading-relaxed text-on-surface-variant" role="status">
                     {t("modal.app_settings.field.upriv_root_loading")}
@@ -433,15 +427,11 @@ export function VaultRootLocationSection({
                   </>
                 ) : null}
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-stretch">
-                  <input
-                    type="text"
-                    readOnly
+                  <PathField
+                    className="sm:flex-1"
                     value={config.upriv_root_path}
+                    readOnly
                     placeholder={t("modal.app_settings.field.upriv_root_placeholder")}
-                    className={[
-                      settingsControlClass,
-                      "font-mono text-xs sm:min-w-0 sm:flex-1",
-                    ].join(" ")}
                   />
                   <Button
                     type="button"

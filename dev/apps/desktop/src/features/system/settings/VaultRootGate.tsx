@@ -17,6 +17,16 @@ import {
 import { VaultRootAliasRecoveryModal } from "./VaultRootAliasRecoveryModal";
 import { VaultRootRepairModal } from "./VaultRootRepairModal";
 import { VaultRootSetupModal } from "./VaultRootSetupModal";
+import { AppBootCover } from "./AppBootCover";
+
+function BootSpinner() {
+  return (
+    <span
+      className="inline-block h-8 w-8 animate-spin rounded-full border-2 border-accent/30 border-t-accent"
+      aria-hidden
+    />
+  );
+}
 
 interface VaultRootGateProps {
   children: ReactNode;
@@ -47,6 +57,8 @@ function pathFromRpcError(error: unknown): string {
  * After Setup/Repair/Recovery success, shows a non-dismissible applying overlay until
  * resolve confirms `found`.
  * While settings are still loading, shows a distinct loading overlay (not applying).
+ * On launch, `AppBootCover` hides everything (in the default theme) until settings and
+ * the first resolve settle, so saved theme/locale never flip in after the first paint.
  */
 export function VaultRootGate({ children }: VaultRootGateProps) {
   const { t } = useTranslation();
@@ -56,7 +68,10 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
   const { settings, settingsReady, settingsLoadFailed, vaultRootEpoch, reloadSettings } =
     useAppSettingsContext();
   const [ready, setReady] = useState(false);
-  const [applying, setApplying] = useState(false);
+  /** Starts true so the launch resolve runs under the `vaultRootResolve` budget. */
+  const [applying, setApplying] = useState(true);
+  /** Latched once the launch settles; `AppBootCover` covers everything until then. */
+  const [booted, setBooted] = useState(false);
   const [setup, setSetup] = useState<{
     presentation: VaultRootPresentationState;
     distribution: AppDistribution;
@@ -68,6 +83,12 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
   const [resolveError, setResolveError] = useState<string | null>(null);
   /** Non-blocking notice when env/CLI sets an explicit vault-root override. */
   const [envOverridePath, setEnvOverridePath] = useState<string | null>(null);
+  const [relocateNotice, setRelocateNotice] = useState<{
+    kind: "left_behind" | "move_failed";
+    path: string;
+  } | null>(null);
+  /** The launch notice stays dismissed for the rest of this process. */
+  const relocateSeen = useRef(false);
   const [settingsLoadTimedOut, setSettingsLoadTimedOut] = useState(false);
   const resolveGen = useRef(0);
   const childrenWrapRef = useRef<HTMLDivElement>(null);
@@ -122,6 +143,10 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
           explicitPath: null,
         });
         if (gen !== resolveGen.current) return;
+        if (!relocateSeen.current && result.relocateNotice && result.relocatePath) {
+          relocateSeen.current = true;
+          setRelocateNotice({ kind: result.relocateNotice, path: result.relocatePath });
+        }
         if (result.status === "found") {
           validDefaultRootRetryRef.current = false;
           setSetup(null);
@@ -286,13 +311,17 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
 
         const gone = isVaultRootGoneError(error);
         if (gone) {
+          // An active `.upriv-root` keeps every other RPC on the broken path, so a valid
+          // default_root probe must not count as ready — the user picks a folder in Setup.
+          const aliasBroken =
+            isRpcError(error) && error.code === VAULT_ROOT_ERROR_CODES.ALIAS_INVALID;
           try {
             const result = await vaultRoot.resolve({
               vaultRootMode: "default_root",
               explicitPath: null,
             });
             if (gen !== resolveGen.current) return;
-            if (result.status === "found") {
+            if (result.status === "found" && !aliasBroken) {
               validDefaultRootRetryRef.current = false;
               setSetup(null);
               setRepair(null);
@@ -330,6 +359,19 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
               setReady(false);
               return;
             }
+            if (aliasBroken) {
+              setSetup({
+                presentation: {
+                  mode: "default_root",
+                  defaultRootAnchor: result.rootPath,
+                  aliasPath: "",
+                  rememberedAliasTarget: rememberedAliasTarget ?? (pathFromRpcError(error) || null),
+                },
+                distribution: "portable",
+              });
+              setReady(false);
+              return;
+            }
           } catch {
             if (gen !== resolveGen.current) return;
           }
@@ -338,7 +380,7 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
               mode: "default_root",
               defaultRootAnchor: "",
               aliasPath: "",
-              rememberedAliasTarget: null,
+              rememberedAliasTarget: aliasBroken ? pathFromRpcError(error) || null : null,
             },
             distribution: "portable",
           });
@@ -500,12 +542,34 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
     setResolveError(tRef.current("modal.vault_root_setup.error_timeout"));
   }, [applyingBudget.timedOut, showApplying]);
 
+  const bootSettled =
+    settingsReady &&
+    !applying &&
+    (ready ||
+      setup !== null ||
+      repair !== null ||
+      aliasInvalidPath !== null ||
+      resolveError !== null);
+
+  useEffect(() => {
+    if (bootSettled) setBooted(true);
+  }, [bootSettled]);
+
   const retrySettingsLoad = () => {
     setSettingsLoadTimedOut(false);
     void reloadSettings().catch(() => {
       // Context sets settingsLoadFailed; Gate stays on Retry until a successful load.
     });
   };
+
+  const settingsLoadStuck = settingsLoadTimedOut || settingsLoadFailed;
+  const settingsLoadVisible = showLoadingSettings && (settingsBudget.visible || settingsLoadStuck);
+  const applyingVisible = showApplying && applyingBudget.visible;
+  const settingsLoadMessage = settingsLoadTimedOut
+    ? t("loading.timed_out")
+    : settingsLoadFailed
+      ? t("error.service_unavailable")
+      : t("modal.vault_root_setup.loading_settings");
 
   // `aria-hidden` does not take the list out of tab order. Without `inert`,
   // Electron focuses the first header button (⋮) on launch.
@@ -579,8 +643,44 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
           setRepair({ targetPath: path, mode: "custom_root" });
         }}
       />
-      {showLoadingSettings &&
-      (settingsBudget.visible || settingsLoadTimedOut || settingsLoadFailed) ? (
+      <AppBootCover
+        done={booted}
+        status={
+          booted ? null : settingsLoadVisible ? (
+            <>
+              {settingsLoadStuck ? null : <BootSpinner />}
+              <p
+                className="max-w-sm text-sm leading-relaxed text-on-surface-variant"
+                role={settingsLoadStuck ? "alert" : "status"}
+              >
+                {settingsLoadMessage}
+              </p>
+              {settingsLoadStuck ? (
+                <Button variant="primary" size="md" onClick={retrySettingsLoad}>
+                  {t("action.retry")}
+                </Button>
+              ) : (
+                <LoadingBudgetHint
+                  budgetMs={settingsBudget.budgetMs}
+                  remainingMs={settingsBudget.remainingMs}
+                />
+              )}
+            </>
+          ) : applyingVisible ? (
+            <>
+              <BootSpinner />
+              <p className="max-w-sm text-sm leading-relaxed text-on-surface-variant" role="status">
+                {t("modal.vault_root_setup.busy")}
+              </p>
+              <LoadingBudgetHint
+                budgetMs={applyingBudget.budgetMs}
+                remainingMs={applyingBudget.remainingMs}
+              />
+            </>
+          ) : null
+        }
+      />
+      {booted && settingsLoadVisible ? (
         <Modal
           open
           title={t("modal.vault_root_setup.title")}
@@ -590,7 +690,7 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
           panelClassName="max-w-lg"
           rootClassName="z-[200]"
           footer={
-            settingsLoadTimedOut || settingsLoadFailed ? (
+            settingsLoadStuck ? (
               <div className="flex justify-end">
                 <Button variant="primary" size="md" onClick={retrySettingsLoad}>
                   {t("action.retry")}
@@ -600,13 +700,9 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
           }
         >
           <p className="text-sm leading-relaxed text-on-surface-variant" role="status">
-            {settingsLoadTimedOut
-              ? t("loading.timed_out")
-              : settingsLoadFailed
-                ? t("error.service_unavailable")
-                : t("modal.vault_root_setup.loading_settings")}
+            {settingsLoadMessage}
           </p>
-          {!settingsLoadTimedOut && !settingsLoadFailed ? (
+          {!settingsLoadStuck ? (
             <LoadingBudgetHint
               budgetMs={settingsBudget.budgetMs}
               remainingMs={settingsBudget.remainingMs}
@@ -614,7 +710,7 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
           ) : null}
         </Modal>
       ) : null}
-      {showApplying && applyingBudget.visible ? (
+      {booted && applyingVisible ? (
         <Modal
           open
           title={t("modal.vault_root_setup.title")}
@@ -631,6 +727,33 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
             budgetMs={applyingBudget.budgetMs}
             remainingMs={applyingBudget.remainingMs}
           />
+        </Modal>
+      ) : null}
+      {relocateNotice && settingsReady ? (
+        <Modal
+          open
+          title={t("modal.vault_root_setup.title")}
+          titleIcon="folder"
+          onClose={() => setRelocateNotice(null)}
+          dismissible
+          panelClassName="max-w-lg"
+          rootClassName="z-[200]"
+          footer={
+            <div className="flex justify-end">
+              <Button variant="primary" size="md" onClick={() => setRelocateNotice(null)}>
+                {t("action.continue")}
+              </Button>
+            </div>
+          }
+        >
+          <p className="text-sm leading-relaxed text-on-surface-variant" role="status">
+            {t(
+              relocateNotice.kind === "left_behind"
+                ? "modal.vault_root_setup.relocate_left_behind"
+                : "modal.vault_root_setup.relocate_move_failed",
+              { path: relocateNotice.path },
+            )}
+          </p>
         </Modal>
       ) : null}
       {envOverridePath && ready && settingsReady ? (

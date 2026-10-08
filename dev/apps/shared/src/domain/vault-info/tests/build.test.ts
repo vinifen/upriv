@@ -3,6 +3,7 @@ import type { InfoTranslate } from "../../info";
 import { formatIsoDate } from "../../format/datetime";
 import { vaultListItemFixture } from "../../vault-list/tests/fixtures";
 import { vaultSettingsFixture } from "../../vault-settings/tests/fixtures";
+import { vaultWorkspace } from "../../workspace";
 import { buildVaultInfoSections } from "../build";
 import type { VaultInfoSnapshot } from "../types";
 
@@ -44,6 +45,7 @@ function snapshot(overrides: Partial<VaultInfoSnapshot> = {}): VaultInfoSnapshot
     passwordInSession: true,
     workspacePath: "/data/workspace/Notes",
     workspacePathIsActive: true,
+    workspaceSystem: "linux",
     storePath: "/data/.upriv/vaults/notes/store/",
     backupsPath: "/data/.upriv/vaults/notes/backups/",
     locale: "en",
@@ -108,12 +110,37 @@ describe("buildVaultInfoSections", () => {
     expect(field(sections, "group")).toBe("Work");
     expect(field(sections, "hidden")).toBe("modal.info.value.no");
     expect(field(sections, "hidden_locked_by_group")).toBe("modal.info.value.no");
-    expect(field(sections, "password_hint_storage")).toBe(
-      "modal.info.value.password_hint_plaintext",
-    );
     expect(field(sections, "last_accessed")).toBe(formatIsoDate("2026-06-01T12:00:00.000Z", "en"));
     expect(field(sections, "last_accessed_at")).toBe("2026-06-01T12:00:00.000Z");
     expect(field(sections, "display_status")).toBe("vault.status.open");
+    const storage = sections.flatMap((section) => section.fields);
+    expect(storage.find((entry) => entry.id === "store_path")?.openPath).toBe(
+      "/data/.upriv/vaults/notes/store/",
+    );
+    expect(storage.find((entry) => entry.id === "backups_path")?.openPath).toBe(
+      "/data/.upriv/vaults/notes/backups/",
+    );
+    expect(storage.find((entry) => entry.id === "workspace_path")?.openPath).toBe(
+      "/data/workspace/Notes",
+    );
+    expect(storage.find((entry) => entry.id === "mount_workspace_path")?.openPath).toBeUndefined();
+    const customMount = buildVaultInfoSections(
+      snapshot({
+        settings: {
+          ...vaultSettingsFixture(),
+          mount: {
+            ...vaultWorkspace(),
+            custom_file_manager_folder: true,
+            linux: { place: "unset", path: "/mnt/vaults" },
+          },
+        },
+      }),
+      t,
+    );
+    const mount = customMount
+      .flatMap((section) => section.fields)
+      .find((entry) => entry.id === "mount_workspace_path");
+    expect(mount?.openPath).toBe("/mnt/vaults");
   });
 
   it("keeps session and display_status on Closing together", () => {
@@ -124,6 +151,15 @@ describe("buildVaultInfoSections", () => {
     expect(field(sections, "display_status")).toBe("vault.status.closing");
     expect(field(sections, "session")).toBe("modal.info.value.session.closing");
     expect(field(sections, "file_manager")).toBe("modal.info.value.not_eligible");
+  });
+
+  it("labels a closing vault in its backup phase as backing up", () => {
+    const sections = buildVaultInfoSections(
+      snapshot({ vault: vaultListItemFixture({ id: "notes", session: "open" }) }),
+      t,
+      { closingVaultIds: ["notes"], backingUpVaultIds: ["notes"] },
+    );
+    expect(field(sections, "display_status")).toBe("vault.status.backing_up");
   });
 
   it("treats display_status open as file-manager eligible even if pipeline is empty", () => {

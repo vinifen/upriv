@@ -3,6 +3,8 @@ import type {
   AppDistribution,
   DefaultRootStatusResult,
   VaultRootInspectResult,
+  VaultRootPrivateRoot,
+  VaultRootRelocateNotice,
   VaultRootResolveResult,
   VaultRootResolveSource,
 } from "./types";
@@ -12,6 +14,27 @@ const INVALID_RESPONSE = "invalid_response";
 function normalizeVaultRootSource(value: unknown): VaultRootResolveSource | null {
   if (value === "explicit" || value === "custom_root" || value === "default_root") return value;
   return null;
+}
+
+function relocateFields(record: Record<string, unknown>): {
+  relocateNotice?: VaultRootRelocateNotice;
+  relocatePath?: string;
+} {
+  const notice = record.relocateNotice;
+  const relocatePath = record.relocatePath;
+  if (
+    (notice === "left_behind" || notice === "move_failed") &&
+    typeof relocatePath === "string" &&
+    relocatePath.trim().length > 0
+  ) {
+    return { relocateNotice: notice, relocatePath };
+  }
+  return {};
+}
+
+export function parseVaultRootPrivateRoot(value: unknown): VaultRootPrivateRoot | undefined {
+  if (value === "none" || value === "moved" || value === "left_behind") return value;
+  return undefined;
 }
 
 function isAppDistribution(value: unknown): value is AppDistribution {
@@ -39,7 +62,12 @@ export function parseVaultRootResolve(raw: unknown): VaultRootResolveResult {
     if (typeof record.rootPath !== "string" || source == null) {
       throw new RpcError(INVALID_RESPONSE, "vault_root_resolve: invalid found payload", raw);
     }
-    return { status: "found", rootPath: record.rootPath, source };
+    return {
+      status: "found",
+      rootPath: record.rootPath,
+      source,
+      ...relocateFields(record),
+    };
   }
   if (record.status === "needs_setup") {
     const defaultRootAnchor =
@@ -56,6 +84,7 @@ export function parseVaultRootResolve(raw: unknown): VaultRootResolveResult {
       aliasPath: record.aliasPath,
       defaultRootAnchor,
       distribution: record.distribution,
+      ...relocateFields(record),
     };
   }
   throw new RpcError(INVALID_RESPONSE, "vault_root_resolve: unknown status", raw);

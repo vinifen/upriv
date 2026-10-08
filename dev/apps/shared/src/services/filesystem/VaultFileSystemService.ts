@@ -33,12 +33,16 @@ export interface VaultFileSystemService {
     fileName: string,
     source: VaultBinaryByteSource,
   ): Promise<string | null>;
-  /** Daemon/FFI streams `osPath` into `store/` (no renderer/JSON file bytes). */
+  /**
+   * Daemon/FFI streams `osPath` into `store/` (no renderer/JSON file bytes).
+   * `deferIndex` leaves the sealed index for a later batch seal.
+   */
   importFileFromOsPath(
     vaultId: string,
     parentPath: string,
     fileName: string,
     osPath: string,
+    deferIndex?: boolean,
   ): Promise<string | null>;
   createFolder(vaultId: string, parentPath: string, baseName: string): Promise<string | null>;
   ensureFolder(vaultId: string, parentPath: string, folderName: string): Promise<string | null>;

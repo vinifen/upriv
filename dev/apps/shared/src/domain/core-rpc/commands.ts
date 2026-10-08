@@ -53,6 +53,8 @@ export const CORE_RPC_COMMANDS = {
   VAULT_CREATE: "vault_create",
   VAULT_OPEN: "vault_open",
   VAULT_CLOSE: "vault_close",
+  /** Phase of an in-flight `vault_close` (`flush` | `backup` | null). Light; polled while closing. */
+  VAULT_CLOSE_PHASE: "vault_close_phase",
   VAULT_CONFIG_GET: "vault_config_get",
   /** Sum of regular-file lengths under `store/`. Metadata only; not the vault list. */
   VAULT_STORE_SIZE: "vault_store_size",
@@ -89,6 +91,8 @@ export const CORE_RPC_COMMANDS = {
    * Desktop drop / picker with a real path; mobile `file://` cache copies.
    */
   VAULT_FS_IMPORT_OS_FILE: "vault_fs_import_os_file",
+  /** Seal the index for files staged by a batch import. */
+  VAULT_FS_IMPORT_SEAL: "vault_fs_import_seal",
   VAULT_FS_TRUNCATE: "vault_fs_truncate",
   VAULT_FS_MKDIR: "vault_fs_mkdir",
   VAULT_FS_CREATE_FILE: "vault_fs_create_file",
@@ -126,6 +130,8 @@ export const SHELL_ONLY_RPC_COMMANDS = {
   PICK_SAVE_FILE: "pick_save_file",
   /** Open the vault mount path in Finder / Explorer / the desktop file manager. */
   REVEAL_IN_FILE_MANAGER: "reveal_in_file_manager",
+  /** Open an absolute OS path in Finder / Explorer / the desktop file manager. */
+  REVEAL_OS_PATH: "reveal_os_path",
   /** Open a system terminal at the vault mount path (desktop only). */
   OPEN_IN_TERMINAL: "open_in_terminal",
 } as const;

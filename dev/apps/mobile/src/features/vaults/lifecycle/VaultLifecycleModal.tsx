@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { StyleSheet, Text, View } from "react-native";
+import { useEffect, useRef, useState } from "react";
+import { StyleSheet, Text, TextInput, View } from "react-native";
 import {
   LOADING_BUDGET_MS,
   lifecycleBusyLabelKey,
@@ -69,6 +69,7 @@ export function VaultLifecycleModal({
   const lifecycleService = useVaultLifecycleService();
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const passwordRef = useRef<TextInput>(null);
   // Unlock always needs a password — do not wait on settings (desktop parity).
   const [requiresPassword, setRequiresPassword] = useState(intent === "unlock");
   const [settingsLoading, setSettingsLoading] = useState(false);
@@ -108,7 +109,10 @@ export function VaultLifecycleModal({
   }, [open, vault, intent, vaultService]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      setPassword("");
+      return;
+    }
     setPassword(initialPassword ?? "");
     setError(null);
   }, [open, vault?.id, intent, initialPassword]);
@@ -117,6 +121,15 @@ export function VaultLifecycleModal({
     if (!verifyErrorKey) return;
     setError(t(verifyErrorKey));
   }, [t, verifyErrorKey]);
+
+  useEffect(() => {
+    if (!open || !requiresPassword) return;
+    // Android shows the dialog with FLAG_NOT_FOCUSABLE and clears that flag
+    // only after Dialog.show() returns. autoFocus lands in that window, so
+    // the field looks focused and the keyboard never opens.
+    const id = setTimeout(() => passwordRef.current?.focus(), 100);
+    return () => clearTimeout(id);
+  }, [open, requiresPassword, vault?.id, intent]);
 
   const budget = useLoadingBudget(
     open && submitting && budgetStartedAt != null,
@@ -191,15 +204,13 @@ export function VaultLifecycleModal({
           <View style={styles.passwordField}>
             <FieldLabel>{t("unlock.password")}</FieldLabel>
             <PasswordInput
+              ref={passwordRef}
               value={password}
               onChangeText={(value) => {
-                // Keep the field selectable/copyable while opening; ignore edits.
-                if (submitting) return;
                 setPassword(value);
                 setError(null);
               }}
-              autoFocus
-              showSoftInputOnFocus={!submitting}
+              showSoftInputOnFocus
               onSubmitEditing={() => {
                 if (canSubmit) handleConfirm();
               }}

@@ -6,7 +6,6 @@ export {
   createDefaultWorkspaceState,
   hasUnsavedWorkspaceChanges,
   isPathDirty,
-  isPathSessionModified,
   sessionPathKind,
   type SessionPathKind,
 } from "./workspaceTypes";
@@ -18,6 +17,8 @@ export type VaultWorkspaceAction =
   | { type: "open_file"; path: string }
   | { type: "request_close_tab"; path: string }
   | { type: "close_tab"; path: string }
+  | { type: "request_close_tabs"; paths: string[] }
+  | { type: "close_tabs"; paths: string[] }
   | { type: "request_active_tab"; path: string }
   | { type: "set_active_tab"; path: string }
   | { type: "reorder_tabs"; fromPath: string; toPath: string }
@@ -40,7 +41,8 @@ export type VaultWorkspaceAction =
   | { type: "set_drag"; source: string | null; target: string | null }
   | { type: "remap_paths"; map: Record<string, string> }
   | { type: "remove_paths"; paths: string[] }
-  | { type: "discard_unsaved_and"; next: VaultWorkspaceAction };
+  | { type: "discard_unsaved_and"; next: VaultWorkspaceAction }
+  | { type: "discard_all_dirty" };
 
 function mergeUniquePaths(existing: readonly string[], added: readonly string[]): string[] {
   if (added.length === 0) return existing.slice();
@@ -156,6 +158,21 @@ function applyPathRemoval(state: VaultWorkspaceState, paths: string[]): VaultWor
 
 function needsUnsavedPrompt(state: VaultWorkspaceState, path: string | null): boolean {
   return Boolean(path && state.dirtyPaths.includes(path));
+}
+
+function unsavedPromptPaths(state: VaultWorkspaceState): readonly string[] {
+  const prompt = state.unsavedPrompt;
+  switch (prompt?.type) {
+    case "close_tab":
+      return [prompt.path];
+    case "close_tabs":
+      return prompt.paths;
+    case "dismiss_workspace":
+    case "close_vault":
+      return state.dirtyPaths;
+    default:
+      return [];
+  }
 }
 
 function expandUnlessUserCollapsed(state: VaultWorkspaceState, paths: readonly string[]): string[] {
@@ -284,6 +301,19 @@ export function vaultWorkspaceReducer(
         unsavedPrompt: null,
       };
     }
+    case "request_close_tabs": {
+      const paths = action.paths.filter((path) => state.openTabs.includes(path));
+      if (paths.length === 0) return state;
+      if (paths.some((path) => needsUnsavedPrompt(state, path))) {
+        return { ...state, unsavedPrompt: { type: "close_tabs", paths } };
+      }
+      return vaultWorkspaceReducer(state, { type: "close_tabs", paths });
+    }
+    case "close_tabs":
+      return action.paths.reduce(
+        (next, path) => vaultWorkspaceReducer(next, { type: "close_tab", path }),
+        state,
+      );
     case "request_active_tab": {
       if (action.path === state.activeTabPath) return state;
       /* VS Code-style: dirty drafts stay in RAM; switching tabs never prompts. */
@@ -335,8 +365,17 @@ export function vaultWorkspaceReducer(
         /* Drop from modified if somehow present — created wins. */
         sessionModifiedPaths: state.sessionModifiedPaths.filter((p) => !action.paths.includes(p)),
       };
-    case "start_rename":
-      return { ...state, renamingPath: action.path, contextMenu: null };
+    case "start_rename": {
+      /* Rename happens in the explorer row, so the row must be visible (e.g. rename from a tab). */
+      const ancestors = ancestorFolderPaths(action.path);
+      return {
+        ...state,
+        renamingPath: action.path,
+        contextMenu: null,
+        expandedPaths: mergeExpanded(state.expandedPaths, ancestors),
+        userCollapsedPaths: state.userCollapsedPaths.filter((p) => !ancestors.includes(p)),
+      };
+    }
     case "cancel_rename":
       return { ...state, renamingPath: null };
     case "set_context_menu":
@@ -352,16 +391,11 @@ export function vaultWorkspaceReducer(
     case "remove_paths":
       return applyPathRemoval(state, action.paths);
     case "discard_unsaved_and": {
-      const dirtyPath = state.unsavedPrompt?.type === "close_tab" ? state.unsavedPrompt.path : null;
-      const dirtyPaths =
-        state.unsavedPrompt?.type === "dismiss_workspace"
-          ? state.dirtyPaths
-          : dirtyPath
-            ? [dirtyPath]
-            : [];
-      const next = discardDirtyPaths(state, dirtyPaths);
+      const next = discardDirtyPaths(state, unsavedPromptPaths(state));
       return vaultWorkspaceReducer(next, action.next);
     }
+    case "discard_all_dirty":
+      return discardDirtyPaths(state, state.dirtyPaths);
     default:
       return state;
   }
@@ -374,7 +408,11 @@ export function resolveUnsavedPrompt(
   switch (prompt.type) {
     case "close_tab":
       return { type: "close_tab", path: prompt.path };
+    case "close_tabs":
+      return { type: "close_tabs", paths: prompt.paths };
     case "dismiss_workspace":
+    case "close_vault":
+    case "close_vault_import":
     case "import_in_progress":
       return { type: "set_unsaved_prompt", prompt: null };
   }

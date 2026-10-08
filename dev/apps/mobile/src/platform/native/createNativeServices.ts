@@ -8,24 +8,18 @@ import type {
   VaultRootService,
 } from "@upriv/shared";
 import {
-  createDefaultAppSettings,
   createUnavailableVaultSecurityService,
   isRpcError,
   normalizeAppSettings,
-  RpcError,
-  SUPPORTED_LOCALES,
-  type LocaleId,
 } from "@upriv/shared";
 import {
   rpcAppSettingsGet,
   rpcAppSettingsParseToml,
   rpcAppSettingsSave,
-  rpcAppSettingsSerializeToml,
   rpcLogDelete,
   rpcLogEvent,
   rpcLogGet,
   rpcLogList,
-  rpcVaultRootDeactivateAlias,
   rpcVaultRootDefaultRootStatus,
   rpcVaultRootInspectPath,
   rpcVaultRootReadAlias,
@@ -40,18 +34,19 @@ import { nativeVaultService } from "./vaultService";
 import { nativeVaultFileSystemService } from "./vaultFileSystemService";
 import { nativeBackupService } from "./backupService";
 import { nativeCreateVaultService } from "./createVaultService";
+import { isSafLogicalRoot, SAF_VAULT_ROOT } from "./androidVaultHome";
 import { isAndroidSafUri, pickVaultRootFolder } from "./pickVaultRootFolder";
 import {
   isSafTreeUri,
+  mountSafRoot,
+  safDocumentsInitialUri,
   safGetActiveUri,
   safInspectRoot,
   safPersist,
-  safRelease,
   safReadSettings,
+  safRelease,
   safSetActiveUri,
-  safSetupRoot,
-  safWriteSettings,
-  toSafRpcError,
+  unmountSafRoot,
   type SafInspectStatus,
 } from "./safVaultRoot";
 
@@ -76,22 +71,6 @@ const nativeLogService: LogService = {
     await rpcLogEvent("import_cache_wipe_failed");
   },
 };
-
-function rpcErrorForSafInspect(status: SafInspectStatus, safUri: string): RpcError {
-  if (status === "unauthorized" || status === "unreadable") {
-    return new RpcError("vault_root_alias_invalid", `SAF tree ${safUri} is ${status}`, {
-      path: safUri,
-    });
-  }
-  if (status === "incomplete") {
-    return new RpcError("vault_root_incomplete", `SAF tree ${safUri} has an incomplete .upriv/`, {
-      path: safUri,
-    });
-  }
-  return new RpcError("vault_root_not_found", `SAF tree ${safUri} has no .upriv/`, {
-    path: safUri,
-  });
-}
 
 /**
  * Kotlin `valid` only means non-empty UTF-8. Schema `valid` prefers Rust parse.
@@ -127,6 +106,7 @@ async function inspectSafWithSchema(safUri: string): Promise<SafInspectStatus> {
 
 function clearActiveSafUri(): void {
   const previousUri = safGetActiveUri();
+  unmountSafRoot();
   if (!previousUri) return;
   safSetActiveUri(null);
   if (isSafTreeUri(previousUri)) {
@@ -138,36 +118,36 @@ function clearActiveSafUri(): void {
   }
 }
 
-async function parseSafTomlOrThrow(toml: string, safUri: string): Promise<AppSettingsConfig> {
-  try {
-    return await rpcAppSettingsParseToml(toml);
-  } catch (error) {
-    if (isRpcError(error) && error.code === "unknown_method") {
-      if (staleFfiTomlFallbackAllowed() && looksLikeUprivSettingsToml(toml)) {
-        return normalizeAppSettings({
-          ...createDefaultAppSettings(),
-          app: {
-            ...createDefaultAppSettings().app,
-            vault_root_mode: "custom_root",
-            upriv_root_path: safUri,
-          },
-        });
-      }
-      throw error;
+function mountActiveSafUri(): string | null {
+  const uri = safGetActiveUri();
+  if (!uri) return null;
+  mountSafRoot(uri);
+  return uri;
+}
+
+/** Put the bridge back on the folder that was active before a failed switch. */
+function restoreSafMount(previous: string | null, attempted: string): void {
+  if (previous && previous !== attempted) {
+    try {
+      mountSafRoot(previous);
+    } catch {
+      unmountSafRoot();
     }
-    throw new RpcError(
-      "vault_root_incomplete",
-      `SAF settings.toml is not a valid marker at ${safUri}`,
-      { path: safUri },
-    );
+    return;
   }
+  if (!previous) unmountSafRoot();
+}
+
+function withLogicalRoot(config: AppSettingsConfig): AppSettingsConfig {
+  return {
+    ...config,
+    app: { ...config.app, upriv_root_path: SAF_VAULT_ROOT },
+  };
 }
 
 /**
- * SAF-aware settings adapter — falls back to the Rust `.upriv/settings.toml`
- * path when no SAF tree is active. When SAF is active, TOML round-trips
- * happen through the Kotlin DocumentFile bridge, with `upriv-core` still
- * owning the TOML → wire mapping via `app_settings_*_toml` RPCs.
+ * Settings follow the active data folder. A picked `content://` tree is
+ * mounted at the logical root before Rust reads or writes it.
  */
 function createSafAwareAppSettingsService(): AppSettingsService {
   const rustLoad = async (): Promise<AppSettingsLoadResult> => {
@@ -191,69 +171,58 @@ function createSafAwareAppSettingsService(): AppSettingsService {
 
   return {
     async load(): Promise<AppSettingsLoadResult> {
-      const safUri = safGetActiveUri();
-      if (!safUri) return rustLoad();
-
-      const status = await inspectSafWithSchema(safUri);
-      if (status !== "valid") {
-        throw rpcErrorForSafInspect(status, safUri);
-      }
-      const toml = safReadSettings(safUri);
-      if (toml == null) {
-        throw new RpcError("vault_root_not_found", `SAF tree ${safUri} has no settings.toml`, {
-          path: safUri,
-        });
-      }
-      const parsed = await parseSafTomlOrThrow(toml, safUri);
-      return {
-        settings: normalizeAppSettings({
-          ...parsed,
-          app: {
-            ...parsed.app,
-            vault_root_mode: "custom_root",
-            upriv_root_path: safUri,
+      const uri = mountActiveSafUri();
+      const loaded = await rustLoad();
+      const pointed = loaded.settings.app.upriv_root_path.trim() || (loaded.rootPath ?? "").trim();
+      if (uri && isSafLogicalRoot(pointed)) {
+        return {
+          ...loaded,
+          rootPath: uri,
+          settings: {
+            ...loaded.settings,
+            app: {
+              ...loaded.settings.app,
+              vault_root_mode: "custom_root",
+              upriv_root_path: uri,
+            },
           },
-        }),
-        onDisk: true,
-        rootPath: safUri,
-      };
+        };
+      }
+      if (uri) clearActiveSafUri();
+      return loaded;
     },
 
     async save(config: AppSettingsConfig, options?: AppSettingsSaveOptions): Promise<boolean> {
       const normalized = normalizeAppSettings(config);
       const treeUri = normalized.app.upriv_root_path.trim();
-      const wantsSaf = normalized.app.vault_root_mode === "custom_root" && isSafTreeUri(treeUri);
-
-      // SAF custom root — Rust `std::fs` rejects `content://` (not absolute).
-      // Payload path is authoritative; keep the SharedPreferences alias in sync.
-      if (wantsSaf) {
+      if (normalized.app.vault_root_mode === "custom_root" && isSafTreeUri(treeUri)) {
+        const previous = safGetActiveUri();
+        safPersist(treeUri);
+        mountSafRoot(treeUri);
+        let wrote: boolean;
         try {
-          safPersist(treeUri);
-        } catch {
-          /* Expo picker usually already persisted */
-        }
-        let status: SafInspectStatus;
-        try {
-          status = await inspectSafWithSchema(treeUri);
+          wrote = await rustSave(withLogicalRoot(normalized), options);
         } catch (error) {
-          if (isRpcError(error)) throw error;
-          throw toSafRpcError(error, treeUri);
+          restoreSafMount(previous, treeUri);
+          throw error;
         }
-        if (status !== "valid") {
-          throw rpcErrorForSafInspect(status, treeUri);
+        if (!wrote) {
+          restoreSafMount(previous, treeUri);
+          return false;
         }
-        const previous = safReadSettings(treeUri);
-        const body = await rpcAppSettingsSerializeToml(normalized, previous);
-        safWriteSettings(treeUri, body);
+        if (previous && previous !== treeUri) {
+          try {
+            safRelease(previous);
+          } catch {
+            /* the new grant is the data folder */
+          }
+        }
         safSetActiveUri(treeUri);
-        return true;
+        return wrote;
       }
 
-      // Leaving SAF (default_root or filesystem custom_root).
-      // Release the grant only after Rust returns — a thrown save must not
-      // drop persistable permission. Soft `wrote: false` (empty custom_root
-      // bootstrap) is still a successful leave: resolve() prefers the active
-      // SAF URI, so a leftover grant would shadow the intended root.
+      // Leaving a picked folder. Release only after Rust returns — a thrown
+      // save must not drop persistable permission. Soft `wrote: false` is still a leave.
       const wrote = await rustSave(normalized, options);
       clearActiveSafUri();
       return wrote;
@@ -262,37 +231,19 @@ function createSafAwareAppSettingsService(): AppSettingsService {
 }
 
 /**
- * Coerce a raw bootstrap locale string to a supported [`LocaleId`].
- *
- * Rust rejects an empty/whitespace-only locale from `bootstrap.locale` with a
- * typed `invalid_request`; here we do the same shape check before writing the
- * SAF `.upriv/settings.toml` seed so the two paths behave the same. Unknown
- * locales fall back to `null` (keeps the built-in `"en"` default).
- */
-function coerceLocale(candidate: string | null | undefined): LocaleId | null {
-  if (!candidate) return null;
-  const trimmed = candidate.trim();
-  if (!trimmed) return null;
-  return SUPPORTED_LOCALES.includes(trimmed as LocaleId) ? (trimmed as LocaleId) : null;
-}
-
-/**
- * SAF-aware VaultRootService — wraps the Rust vault_root_* RPCs and adds a
- * short-circuit for the Android `content://` custom root. Filesystem paths
- * still go through Rust unchanged (desktop behavior).
+ * Vault-root service. A picked `content://` folder is mounted, then Rust
+ * creates and edits vaults there. Other paths go straight to Rust.
  */
 function createNativeVaultRootService(): VaultRootService {
   return {
     async resolve(options) {
-      const safUri = safGetActiveUri();
-      if (safUri) {
-        const status = await inspectSafWithSchema(safUri);
-        if (status === "valid") {
-          return { status: "found", rootPath: safUri, source: "custom_root" };
-        }
-        throw rpcErrorForSafInspect(status, safUri);
+      const uri = mountActiveSafUri();
+      const result = await rpcVaultRootResolve(options);
+      if (uri && result.status === "found" && isSafLogicalRoot(result.rootPath)) {
+        return { ...result, rootPath: uri };
       }
-      return rpcVaultRootResolve(options);
+      if (uri) clearActiveSafUri();
+      return result;
     },
 
     async setupDefaultRoot(options) {
@@ -306,86 +257,31 @@ function createNativeVaultRootService(): VaultRootService {
     async setupAtPath(path, options) {
       const trimmed = path.trim();
       if (!isSafTreeUri(trimmed)) {
-        return rpcVaultRootSetupPath(trimmed, options);
+        const result = await rpcVaultRootSetupPath(trimmed, options);
+        clearActiveSafUri();
+        return result;
       }
-      // SAF branch — Rust vault_root_setup_path rejects content:// with
-      // "invalid_request: path must be absolute", so we own this end-to-end.
-      const locale = options?.bootstrap?.locale ?? null;
-      // Persist is best-effort — Expo's picker usually already took the grant;
-      // a second takePersistableUriPermission can throw on some OEMs.
+      const previous = safGetActiveUri();
       try {
         safPersist(trimmed);
-      } catch (error) {
-        let afterPersist: ReturnType<typeof safInspectRoot> | null = null;
-        try {
-          afterPersist = safInspectRoot(trimmed);
-        } catch (inspectError) {
-          throw toSafRpcError(inspectError, trimmed);
-        }
-        if (afterPersist === "unauthorized") {
-          throw toSafRpcError(error, trimmed);
-        }
-      }
-
-      const before = await inspectSafWithSchema(trimmed);
-      if (before === "unauthorized") {
-        throw new RpcError("saf_unauthorized", `SAF tree ${trimmed} is unauthorized`, {
-          path: trimmed,
+        mountSafRoot(trimmed);
+        const result = await rpcVaultRootSetupPath(SAF_VAULT_ROOT, {
+          ...options,
+          adoptPrivateRoot: true,
         });
-      }
-      if (before === "unreadable") {
-        throw new RpcError("io_error", `SAF tree ${trimmed} is unreadable`, { path: trimmed });
-      }
-      // Selecting an already-valid root: activate only — do not rewrite settings.
-      if (before === "valid") {
-        try {
-          await rpcVaultRootDeactivateAlias();
-        } catch {
-          /* SAF pointer is SharedPreferences; filesystem alias is optional. */
+        if (previous && previous !== trimmed) {
+          try {
+            safRelease(previous);
+          } catch {
+            /* the new grant is the data folder */
+          }
         }
         safSetActiveUri(trimmed);
-        return { rootPath: trimmed, aliasPath: `saf://${trimmed}` };
-      }
-      if (before === "incomplete") {
-        if (!options?.replaceIncomplete || !options.replacePolicy) {
-          throw new RpcError(
-            "vault_root_incomplete",
-            `SAF tree ${trimmed} has an incomplete .upriv/ — choose replace policy`,
-            { path: trimmed },
-          );
-        }
-      }
-
-      let seedToml: string | null = null;
-      try {
-        const seed = createDefaultAppSettings();
-        const seedLocale = coerceLocale(locale);
-        if (seedLocale) seed.ui.locale = seedLocale;
-        seedToml = await rpcAppSettingsSerializeToml(seed);
-      } catch {
-        seedToml = null;
-      }
-      const replacePolicy =
-        before === "incomplete" && options?.replacePolicy ? options.replacePolicy : null;
-      try {
-        safSetupRoot(trimmed, locale, seedToml, replacePolicy);
+        return { ...result, rootPath: trimmed };
       } catch (error) {
-        // Previous attempt may have written a complete `.upriv/`.
-        const existing = await inspectSafWithSchema(trimmed);
-        if (existing !== "valid") {
-          throw toSafRpcError(error, trimmed);
-        }
+        restoreSafMount(previous, trimmed);
+        throw error;
       }
-
-      // Trust a successful native write. A follow-up listing can miss hidden
-      // `.upriv/` (Download / Music / DCIM) and must not undo a good setup.
-      try {
-        await rpcVaultRootDeactivateAlias();
-      } catch {
-        /* SAF pointer is SharedPreferences; filesystem alias is optional. */
-      }
-      safSetActiveUri(trimmed);
-      return { rootPath: trimmed, aliasPath: `saf://${trimmed}` };
     },
 
     async readAlias() {
@@ -410,7 +306,7 @@ function createNativeVaultRootService(): VaultRootService {
     },
 
     async suggestedCustomRootPath() {
-      return rpcVaultRootSuggestedCustomPath();
+      return safDocumentsInitialUri() ?? rpcVaultRootSuggestedCustomPath();
     },
 
     async pickFolder(defaultPath, _title) {
@@ -421,12 +317,10 @@ function createNativeVaultRootService(): VaultRootService {
 
 /**
  * Native adapters → in-process `upriv-ffi` (same split as desktop
- * `createDesktopServices`): live vault-root / settings / logs / vault list /
- * create / open / close / groups when the root is a filesystem path. A SAF
- * `content://` tree must not call those path RPCs (no copy to `filesDir`).
- * Import, backups, and file manager use path RPCs when the root is a filesystem
- * path. A SAF `content://` tree skips those RPCs (`vault_saf_unavailable`).
- * Change-password / KDF rewrap is not implemented. Expo Go never reaches this factory.
+ * `createDesktopServices`). A picked `content://` folder is mounted at
+ * `/upriv-saf-root` before path RPCs, so create, open, edit, import, and
+ * backup write on that grant. Change-password / KDF rewrap is not implemented.
+ * Expo Go never reaches this factory.
  */
 export function createNativeServices(): AppServices {
   return {

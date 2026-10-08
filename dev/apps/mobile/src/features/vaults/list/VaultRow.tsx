@@ -15,6 +15,7 @@ import {
   vaultDisplayLetters,
   vaultLastAccessedLabel,
   vaultStatusI18nKey,
+  vaultStatusLabelKey,
   VAULT_ROW_DENSITY,
   type VaultDisplayStatus,
   type VaultListItem,
@@ -102,6 +103,7 @@ export function VaultRow({
   const { colors, typography, theme } = useTheme();
   const { settings: appSettings } = useAppSettingsContext();
   const status = resolveVaultListStatus(vault, pipelineListStatus);
+  const statusLabelKey = vaultStatusLabelKey(status, vault.id, pipelineListStatus);
   const isOpen = status === "open";
   const isLastOpened = appSettings.app.last_opened_vault.trim() === vault.id;
   const density = VAULT_ROW_DENSITY[viewMode === "blocks" ? "default" : viewMode];
@@ -194,7 +196,7 @@ export function VaultRow({
         <VaultHiddenIndicator hidden={vault.hidden} />
       </View>
       <View style={styles.metaRow}>
-        <VaultStatusBadge status={status} />
+        <VaultStatusBadge status={status} labelKey={statusLabelKey} />
         <View style={styles.metaWhen} accessible accessibilityLabel={lastAccessedLabel}>
           {!comfortable ? <Icon name="clock" size={12} color={colors.onSurfaceVariant} /> : null}
           {lastAccessedOrBudget}
@@ -220,7 +222,7 @@ export function VaultRow({
         </View>
       </View>
       <View style={styles.blockMetaRow}>
-        <VaultStatusBadge status={status} />
+        <VaultStatusBadge status={status} labelKey={statusLabelKey} />
         <View style={styles.metaWhen} accessible accessibilityLabel={lastAccessedLabel}>
           {lastAccessedOrBudget}
         </View>

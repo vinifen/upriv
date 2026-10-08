@@ -1330,6 +1330,7 @@ dependencies = [
  "tempfile",
  "upriv-core",
  "upriv-rpc",
+ "zeroize",
 ]
 
 [[package]]
@@ -1340,6 +1341,7 @@ dependencies = [
  "uniffi",
  "upriv-core",
  "upriv-rpc",
+ "zeroize",
 ]
 
 [[package]]
@@ -1351,6 +1353,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "upriv-core",
+ "zeroize",
 ]
 
 [[package]]

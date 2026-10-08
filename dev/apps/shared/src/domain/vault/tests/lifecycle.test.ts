@@ -19,10 +19,6 @@ describe("requiresPasswordForLifecycle", () => {
     expect(requiresPasswordForLifecycle(openVault, "close", "always_prompt")).toBe(true);
   });
 
-  it("legacy ram_on_close_only does not require password on close", () => {
-    expect(requiresPasswordForLifecycle(openVault, "close", "ram_on_close_only")).toBe(false);
-  });
-
   it("session_ram and disk modes skip password on close", () => {
     expect(requiresPasswordForLifecycle(openVault, "close", "session_ram")).toBe(false);
     expect(requiresPasswordForLifecycle(openVault, "close", "disk_close")).toBe(false);
@@ -56,7 +52,6 @@ describe("canRunIdleAutoClose", () => {
   it("returns true when lock does not need a password", () => {
     const vault = vaultRowFixture({ session: "open", storageMode: "encrypted_dir" });
     expect(canRunIdleAutoClose(vault, "session_ram")).toBe(true);
-    expect(canRunIdleAutoClose(vault, "ram_on_close_only")).toBe(true);
     expect(canRunIdleAutoClose(vault, "disk_close")).toBe(true);
   });
 });

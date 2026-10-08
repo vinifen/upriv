@@ -11,30 +11,30 @@ import expo.modules.kotlin.exception.CodedException
 import java.io.File
 
 /**
- * Open an existing OS path in the system Files app / a folder viewer.
+ * Open a path the user already sees (data folder, import file, store ciphertext,
+ * mount, or `content://` tree) in the system Files app.
  *
- * Encrypted vaults have no OS folder on Android (in-app file manager only).
- * This helper is for a real mount / `upriv_plain` workspace when one exists.
+ * Encrypted vault bytes stay in `store/`. This only hands the Files app a
+ * read-only view of an existing location.
  */
 internal fun revealInFileManager(context: Context, osPath: String) {
   val trimmed = osPath.trim()
-  if (trimmed.isEmpty() || !(trimmed.startsWith("/") || trimmed.startsWith("content://"))) {
+  if (trimmed.isEmpty() || trimmed.any { it.code < 0x20 }) {
     throw RevealCodedException("open_path_failed", "path must be absolute")
   }
-  if (trimmed.startsWith("content://")) {
+  if (trimmed.startsWith("content://", ignoreCase = true)) {
     startViewIntent(context, Uri.parse(trimmed), DocumentsContract.Document.MIME_TYPE_DIR)
     return
   }
+  if (!trimmed.startsWith("/")) {
+    throw RevealCodedException("open_path_failed", "path must be absolute")
+  }
   var current = File(trimmed)
   while (!current.exists()) {
-    val parent = current.parentFile ?: throw RevealCodedException(
+    current = current.parentFile ?: throw RevealCodedException(
       "open_path_failed",
       "item is not on disk",
     )
-    if (parent == current) {
-      throw RevealCodedException("open_path_failed", "item is not on disk")
-    }
-    current = parent
   }
   if (current.isDirectory) {
     openDirectory(context, current)
@@ -45,7 +45,11 @@ internal fun revealInFileManager(context: Context, osPath: String) {
 
 private fun shareableUri(context: Context, file: File): Uri {
   val authority = "${context.packageName}.uprivcore.fileprovider"
-  return FileProvider.getUriForFile(context, authority, file)
+  try {
+    return FileProvider.getUriForFile(context, authority, file)
+  } catch (error: IllegalArgumentException) {
+    throw RevealCodedException("open_path_failed", error.message ?: "path is not shareable")
+  }
 }
 
 private fun openDirectory(context: Context, dir: File) {

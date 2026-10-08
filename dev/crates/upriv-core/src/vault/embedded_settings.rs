@@ -29,7 +29,7 @@ pub struct EmbeddedVaultSettings {
 
 /// Settings bytes for a store zip or a backup: on-disk `config.toml` plus the header preset.
 pub(crate) fn snapshot_settings_bytes(vault_dir: &Path, store_dir: &Path) -> Result<Vec<u8>> {
-    let raw = std::fs::read_to_string(vault_config_path(vault_dir))?;
+    let raw = crate::host_fs::read_to_string(vault_config_path(vault_dir))?;
     Ok(settings_archive_bytes(&raw, probe_unlock_preset(store_dir)))
 }
 

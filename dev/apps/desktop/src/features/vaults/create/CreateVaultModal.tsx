@@ -225,6 +225,7 @@ export function CreateVaultModal({
             includeHidden,
             existingDisplayNames,
             vaultRootPath,
+            appWorkspace: appSettings.workspace,
             onTestImportPassword: handleTestImportPassword,
             testingPassword,
             ...stepFocus,

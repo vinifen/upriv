@@ -4,6 +4,8 @@
 //! files can share a stamp. `name.zip` selects `backups/`; `saves/name.zip`
 //! selects the pin. A bare stamp selects the only store zip with that stamp.
 
+#[allow(unused_imports)]
+use crate::host_fs::HostFsQuery;
 use std::path::{Path, PathBuf};
 
 use super::embedded_settings::snapshot_settings_bytes;
@@ -25,7 +27,7 @@ pub struct BackupEntry {
 
 pub fn list_backups(root: &VaultRoot, vault_id: &str) -> Result<Vec<BackupEntry>> {
     let vault_dir = root.vault_dir(vault_id)?;
-    if !vault_dir.is_dir() {
+    if !vault_dir.host_is_dir() {
         return Err(UprivError::VaultNotFound(vault_dir));
     }
     let backups = vault_dir.join("backups");
@@ -41,10 +43,10 @@ pub fn list_backups(root: &VaultRoot, vault_id: &str) -> Result<Vec<BackupEntry>
 }
 
 fn collect_backup_dir(dir: &Path, saved: bool, out: &mut Vec<BackupEntry>) -> Result<()> {
-    if !dir.is_dir() {
+    if !dir.host_is_dir() {
         return Ok(());
     }
-    for entry in std::fs::read_dir(dir)? {
+    for entry in crate::host_fs::read_dir(dir)? {
         let entry = entry?;
         let Some(name) = entry.file_name().to_str().map(str::to_string) else {
             continue;
@@ -55,13 +57,16 @@ fn collect_backup_dir(dir: &Path, saved: bool, out: &mut Vec<BackupEntry>) -> Re
         let Ok(kind) = entry.file_type() else {
             continue;
         };
-        if !kind.is_file() {
+        if !kind.host_is_file() {
             continue;
         }
         if !super::zip_io::zip_contains_store_header(&entry.path()) {
             continue;
         }
-        let size = entry.metadata()?.len();
+        let size = match entry.known_len() {
+            Some(len) => len,
+            None => entry.metadata()?.len(),
+        };
         let created_at = stamp_to_iso(&stamp).unwrap_or_default();
         out.push(BackupEntry {
             stamp,
@@ -162,16 +167,16 @@ fn ambiguous_backup(key: &str) -> UprivError {
 }
 
 fn store_zips_in(dir: &Path, pred: impl Fn(&str) -> bool) -> Result<Vec<PathBuf>> {
-    if !dir.is_dir() {
+    if !dir.host_is_dir() {
         return Ok(Vec::new());
     }
     let mut found = Vec::new();
-    for entry in std::fs::read_dir(dir)? {
+    for entry in crate::host_fs::read_dir(dir)? {
         let entry = entry?;
         let Ok(kind) = entry.file_type() else {
             continue;
         };
-        if !kind.is_file() {
+        if !kind.host_is_file() {
             continue;
         }
         let Some(name) = entry.file_name().to_str().map(str::to_string) else {
@@ -247,28 +252,9 @@ fn unsaved_key(key: &BackupKey) -> Option<BackupKey> {
     }
 }
 
-fn backup_file_with_stamp(dir: &Path, stamp: &str) -> Option<PathBuf> {
-    let entries = std::fs::read_dir(dir).ok()?;
-    for entry in entries.flatten() {
-        let Ok(kind) = entry.file_type() else {
-            continue;
-        };
-        if !kind.is_file() {
-            continue;
-        }
-        let file_name = entry.file_name();
-        let Some(name) = file_name.to_str() else {
-            continue;
-        };
-        if stamp_from_zip_name(name).as_deref() == Some(stamp) {
-            return Some(entry.path());
-        }
-    }
-    None
-}
-
-fn partial_with_stamp(dir: &Path, stamp: &str) -> bool {
-    let Ok(entries) = std::fs::read_dir(dir) else {
+/// One listing per directory. A stamp is taken by a finished zip or a `.partial`.
+fn dir_has_stamp(dir: &Path, stamp: &str) -> bool {
+    let Ok(entries) = crate::host_fs::read_dir(dir) else {
         return false;
     };
     for entry in entries.flatten() {
@@ -279,15 +265,17 @@ fn partial_with_stamp(dir: &Path, stamp: &str) -> bool {
         if stamp_from_partial_name(name).as_deref() == Some(stamp) {
             return true;
         }
+        if stamp_from_zip_name(name).as_deref() == Some(stamp)
+            && entry.file_type().is_ok_and(|kind| kind.host_is_file())
+        {
+            return true;
+        }
     }
     false
 }
 
 fn stamp_is_used(backups: &Path, stamp: &str) -> bool {
-    backup_file_with_stamp(backups, stamp).is_some()
-        || partial_with_stamp(backups, stamp)
-        || backup_file_with_stamp(&backups.join("saves"), stamp).is_some()
-        || partial_with_stamp(&backups.join("saves"), stamp)
+    dir_has_stamp(backups, stamp) || dir_has_stamp(&backups.join("saves"), stamp)
 }
 
 pub fn backup_zip_file(root: &VaultRoot, vault_id: &str, stamp: &str) -> Result<PathBuf> {
@@ -305,7 +293,7 @@ pub fn backup_on_close(root: &VaultRoot, vault_id: &str) -> Result<Option<String
         return Ok(None);
     }
     let backups = vault_dir.join("backups");
-    std::fs::create_dir_all(&backups)?;
+    crate::host_fs::create_dir_all(&backups)?;
     let stamp = unused_backup_stamp(&backups, utc_filename_stamp())?;
     let name = backup_zip_filename(&stamp, vault_id)?;
     let partial = backups.join(format!("{name}.partial"));
@@ -316,19 +304,23 @@ pub fn backup_on_close(root: &VaultRoot, vault_id: &str) -> Result<Option<String
     if let Err(error) =
         super::zip_io::zip_store_with_config_to_path(&store, &settings, &stamp, &partial)
     {
-        let _ = std::fs::remove_file(&partial);
+        let _ = crate::host_fs::remove_file(&partial);
         return Err(error);
     }
-    if let Err(error) = std::fs::File::open(&partial).and_then(|file| file.sync_all()) {
-        let _ = std::fs::remove_file(&partial);
-        return Err(error.into());
+    // The storage-access provider persists the zip when the write fd closes.
+    // Opening it again only to skip `fsync` is another full round trip.
+    if !crate::host_fs::is_bridge_path(&partial) {
+        if let Err(error) = crate::host_fs::File::open(&partial).and_then(|file| file.sync_all()) {
+            let _ = crate::host_fs::remove_file(&partial);
+            return Err(error.into());
+        }
     }
     if let Err(error) = super::zip_io::verify_store_zip_copies(&partial) {
-        let _ = std::fs::remove_file(&partial);
+        let _ = crate::host_fs::remove_file(&partial);
         return Err(error);
     }
-    if let Err(error) = std::fs::rename(&partial, &dest) {
-        let _ = std::fs::remove_file(&partial);
+    if let Err(error) = crate::host_fs::rename(&partial, &dest) {
+        let _ = crate::host_fs::remove_file(&partial);
         return Err(error.into());
     }
     // The new stamp must be durable before `prune_backups` unlinks the previous
@@ -359,7 +351,7 @@ pub fn delete_backups(root: &VaultRoot, vault_id: &str, stamps: &[String]) -> Re
         }
     }
     for path in paths {
-        std::fs::remove_file(path)?;
+        crate::host_fs::remove_file(path)?;
     }
     Ok(())
 }
@@ -368,7 +360,7 @@ pub fn promote_backup_save(root: &VaultRoot, vault_id: &str, stamp: &str) -> Res
     let vault_dir = root.vault_dir(vault_id)?;
     let backups = vault_dir.join("backups");
     let saves = backups.join("saves");
-    std::fs::create_dir_all(&saves)?;
+    crate::host_fs::create_dir_all(&saves)?;
     let parsed = parse_backup_key(stamp)?;
     let Some(source) = unsaved_key(&parsed) else {
         return Err(UprivError::VaultPathNotFound(stamp.into()));
@@ -382,15 +374,15 @@ pub fn promote_backup_save(root: &VaultRoot, vault_id: &str, stamp: &str) -> Res
     if !dest.starts_with(&saves) {
         return Err(UprivError::VaultPathNotFound(stamp.into()));
     }
-    match std::fs::symlink_metadata(&dest) {
-        Ok(meta) if meta.file_type().is_file() => {
+    match crate::host_fs::symlink_metadata(&dest) {
+        Ok(meta) if meta.file_type().host_is_file() => {
             if !super::zip_io::zip_contains_store_header(&dest) {
                 return Err(UprivError::VaultStoreInvalid {
                     path: dest,
                     detail: "backup pin name is already taken".into(),
                 });
             }
-            std::fs::remove_file(&src)?;
+            crate::host_fs::remove_file(&src)?;
             return Ok(());
         }
         Ok(_) => {
@@ -399,7 +391,7 @@ pub fn promote_backup_save(root: &VaultRoot, vault_id: &str, stamp: &str) -> Res
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(error.into()),
     }
-    std::fs::rename(&src, &dest)?;
+    crate::host_fs::rename(&src, &dest)?;
     Ok(())
 }
 
@@ -468,14 +460,14 @@ pub fn export_backups_to_path(
     super::zip_io::zip_files_to_path(&borrowed, dest)
 }
 
-fn read_backup_file(path: &Path) -> Result<std::fs::File> {
+fn read_backup_file(path: &Path) -> Result<crate::host_fs::File> {
     crate::paths::open_nofollow(path, crate::paths::NofollowMode::Read).map_err(UprivError::from)
 }
 
 fn write_one_backup_zip(root: &VaultRoot, vault_id: &str, stamp: &str, dest: &Path) -> Result<u64> {
     let path = locate_backup_zip(root, vault_id, stamp)?;
     let mut input = read_backup_file(&path)?;
-    let mut output = std::fs::File::create(dest)?;
+    let mut output = crate::host_fs::File::create(dest)?;
     let copied = std::io::copy(&mut input, &mut output)?;
     output.sync_all()?;
     Ok(copied)
@@ -494,16 +486,16 @@ fn prune_backups(vault_dir: &Path, mode: VaultBackupMode, keep_last: u32) -> Res
         return Ok(());
     }
     let backups = vault_dir.join("backups");
-    if !backups.is_dir() {
+    if !backups.host_is_dir() {
         return Ok(());
     }
     let mut files = Vec::new();
-    for entry in std::fs::read_dir(&backups)? {
+    for entry in crate::host_fs::read_dir(&backups)? {
         let entry = entry?;
         let Ok(kind) = entry.file_type() else {
             continue;
         };
-        if !kind.is_file() {
+        if !kind.host_is_file() {
             continue;
         }
         let Some(name) = entry.file_name().to_str().map(str::to_string) else {
@@ -525,7 +517,7 @@ fn prune_backups(vault_dir: &Path, mode: VaultBackupMode, keep_last: u32) -> Res
     }
     let drop_count = files.len() - keep;
     for (_stamp, _name, path) in files.into_iter().take(drop_count) {
-        std::fs::remove_file(path)?;
+        crate::host_fs::remove_file(path)?;
     }
     Ok(())
 }
@@ -545,8 +537,8 @@ fn unused_backup_stamp(backups: &Path, mut stamp: String) -> Result<String> {
 }
 
 pub(crate) fn copy_ciphertext_tree(src: &Path, dst: &Path) -> Result<()> {
-    std::fs::create_dir_all(dst)?;
-    for entry in std::fs::read_dir(src)? {
+    crate::host_fs::create_dir_all(dst)?;
+    for entry in crate::host_fs::read_dir(src)? {
         let entry = entry?;
         let to = dst.join(entry.file_name());
         let ft = entry.file_type()?;
@@ -556,9 +548,9 @@ pub(crate) fn copy_ciphertext_tree(src: &Path, dst: &Path) -> Result<()> {
                 detail: "refusing to copy a symlink into a backup".into(),
             });
         }
-        if ft.is_dir() {
+        if ft.host_is_dir() {
             copy_ciphertext_tree(&entry.path(), &to)?;
-        } else if ft.is_file() {
+        } else if ft.host_is_file() {
             copy_regular_nofollow(&entry.path(), &to)?;
         } else {
             return Err(UprivError::VaultStoreInvalid {
@@ -574,11 +566,16 @@ pub(crate) fn copy_ciphertext_tree(src: &Path, dst: &Path) -> Result<()> {
 }
 
 /// Persist a directory entry. No-op off Unix, where opening a directory for
-/// `sync_all` is not the same call.
+/// `sync_all` is not the same call. A storage-access directory open is a local
+/// stand-in, so syncing it neither publishes the rename nor should fail the
+/// write after the provider already returned.
 fn sync_dir(path: &Path) -> Result<()> {
+    if crate::host_fs::is_bridge_path(path) {
+        return Ok(());
+    }
     #[cfg(unix)]
     {
-        let dir = std::fs::File::open(path)?;
+        let dir = crate::host_fs::File::open(path)?;
         dir.sync_all()?;
     }
     #[cfg(not(unix))]
@@ -592,7 +589,7 @@ fn copy_regular_nofollow(src: &Path, dst: &Path) -> Result<()> {
     #[cfg(unix)]
     let mut input = {
         use std::os::unix::fs::OpenOptionsExt;
-        std::fs::OpenOptions::new()
+        crate::host_fs::OpenOptions::new()
             .read(true)
             .custom_flags(libc::O_NOFOLLOW)
             .open(src)
@@ -602,15 +599,15 @@ fn copy_regular_nofollow(src: &Path, dst: &Path) -> Result<()> {
             })?
     };
     #[cfg(not(unix))]
-    let mut input = std::fs::File::open(src)?;
+    let mut input = crate::host_fs::File::open(src)?;
     let meta = input.metadata()?;
-    if !meta.is_file() {
+    if !meta.host_is_file() {
         return Err(UprivError::VaultStoreInvalid {
             path: src.to_path_buf(),
             detail: "refusing to copy a non-regular file into a backup".into(),
         });
     }
-    let mut output = std::fs::File::create(dst)?;
+    let mut output = crate::host_fs::File::create(dst)?;
     std::io::copy(&mut input, &mut output)?;
     output.sync_all()?;
     Ok(())
@@ -619,6 +616,8 @@ fn copy_regular_nofollow(src: &Path, dst: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[allow(unused_imports)]
+    use crate::host_fs::HostFsQuery;
     use crate::store::KdfUnlockPreset;
     use crate::test_support::vault_root_with;
     use crate::vault::create_vault;
@@ -649,7 +648,7 @@ mode = "encrypted_dir"
         .unwrap();
         let vault_dir = root.vault_dir("notes").unwrap();
         let store = vault_dir.join(crate::paths::STORE_DIR_NAME);
-        assert!(store.is_dir());
+        assert!(store.host_is_dir());
         for bad in ["../store", "/etc", "saves/../store", "2026/01"] {
             assert!(
                 promote_backup_save(&root, "notes", bad).is_err(),
@@ -660,25 +659,25 @@ mode = "encrypted_dir"
                 "get must reject {bad}"
             );
         }
-        assert!(store.is_dir());
+        assert!(store.host_is_dir());
     }
 
     #[test]
     fn copy_ciphertext_tree_preserves_bytes() {
         let tmp = tempfile::tempdir().unwrap();
         let src = tmp.path().join("store");
-        std::fs::create_dir_all(src.join("header")).unwrap();
-        std::fs::create_dir_all(src.join("data")).unwrap();
-        std::fs::write(src.join("header").join("vault.header"), b"header-bytes").unwrap();
-        std::fs::write(src.join("data").join("a.blob"), b"cipher-bytes").unwrap();
+        crate::host_fs::create_dir_all(src.join("header")).unwrap();
+        crate::host_fs::create_dir_all(src.join("data")).unwrap();
+        crate::host_fs::write(src.join("header").join("vault.header"), b"header-bytes").unwrap();
+        crate::host_fs::write(src.join("data").join("a.blob"), b"cipher-bytes").unwrap();
         let dst = tmp.path().join("frozen");
         copy_ciphertext_tree(&src, &dst).unwrap();
         assert_eq!(
-            std::fs::read(dst.join("header").join("vault.header")).unwrap(),
+            crate::host_fs::read(dst.join("header").join("vault.header")).unwrap(),
             b"header-bytes"
         );
         assert_eq!(
-            std::fs::read(dst.join("data").join("a.blob")).unwrap(),
+            crate::host_fs::read(dst.join("data").join("a.blob")).unwrap(),
             b"cipher-bytes"
         );
     }
@@ -698,41 +697,41 @@ mode = "encrypted_dir"
             .unwrap()
             .join(crate::paths::STORE_DIR_NAME)
             .join(crate::store::STORE_DANGER_FILE_NAME);
-        let notice_bytes = std::fs::read(&notice).unwrap();
-        std::fs::remove_file(&notice).unwrap();
+        let notice_bytes = crate::host_fs::read(&notice).unwrap();
+        crate::host_fs::remove_file(&notice).unwrap();
         let stamp = backup_on_close(&root, "notes").unwrap().expect("stamp");
-        assert_eq!(std::fs::read(&notice).unwrap(), notice_bytes);
+        assert_eq!(crate::host_fs::read(&notice).unwrap(), notice_bytes);
         let zip = root
             .vault_dir("notes")
             .unwrap()
             .join("backups")
             .join(format!("{stamp}-notes.zip"));
-        assert!(zip.is_file());
+        assert!(zip.host_is_file());
         let listed = list_backups(&root, "notes").unwrap();
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].stamp, stamp);
         assert_eq!(listed[0].file_name, format!("{stamp}-notes.zip"));
         assert!(!listed[0].saved);
         let backups = zip.parent().unwrap();
-        std::fs::write(backups.join(format!("{stamp}.zip")), b"not-a-backup").unwrap();
-        std::fs::write(backups.join(format!("{stamp}-Notes.zip")), b"bad-id").unwrap();
+        crate::host_fs::write(backups.join(format!("{stamp}.zip")), b"not-a-backup").unwrap();
+        crate::host_fs::write(backups.join(format!("{stamp}-Notes.zip")), b"bad-id").unwrap();
         let listed = list_backups(&root, "notes").unwrap();
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].file_name, format!("{stamp}-notes.zip"));
         let out = tempfile::tempdir().unwrap();
         let extracted = out.path().join("store");
         super::super::zip_io::unzip_store_path(&zip, &extracted).unwrap();
-        assert!(extracted.join("header").join("vault.header").is_file());
+        assert!(extracted.join("header").join("vault.header").host_is_file());
         let notice_name = crate::store::STORE_DANGER_FILE_NAME;
         let packed = format!("{}/{notice_name}", crate::paths::STORE_DIR_NAME);
-        let mut archive = zip::ZipArchive::new(std::fs::File::open(&zip).unwrap()).unwrap();
+        let mut archive = zip::ZipArchive::new(crate::host_fs::File::open(&zip).unwrap()).unwrap();
         let mut found = false;
         for index in 0..archive.len() {
             let mut entry = archive.by_index(index).unwrap();
             if entry.name() == packed {
                 let mut body = Vec::new();
                 std::io::Read::read_to_end(&mut entry, &mut body).unwrap();
-                let on_disk = std::fs::read(
+                let on_disk = crate::host_fs::read(
                     root.vault_dir("notes")
                         .unwrap()
                         .join(crate::paths::STORE_DIR_NAME)
@@ -744,14 +743,14 @@ mode = "encrypted_dir"
             }
         }
         assert!(found, "backup zip keeps the store danger notice");
-        let index = std::fs::read(
+        let index = crate::host_fs::read(
             extracted
                 .join(crate::store::INDEX_DIR_NAME)
                 .join(crate::store::INDEX_FILE_NAME),
         )
         .unwrap();
         assert_eq!(
-            std::fs::read(
+            crate::host_fs::read(
                 extracted
                     .join(crate::store::INDEX_DIR_NAME)
                     .join(crate::store::INDEX_COPY_FILE_NAME),
@@ -759,10 +758,10 @@ mode = "encrypted_dir"
             .unwrap(),
             index
         );
-        assert!(!extracted.join("config.toml").exists());
-        assert!(!extracted.join("README.md").exists());
+        assert!(!extracted.join("config.toml").host_exists());
+        assert!(!extracted.join("README.md").host_exists());
         let readme = super::super::zip_io::read_zip_root_entry(
-            std::fs::File::open(&zip).unwrap(),
+            crate::host_fs::File::open(&zip).unwrap(),
             super::super::embedded_settings::ZIP_README_ENTRY,
         )
         .unwrap()
@@ -778,7 +777,7 @@ mode = "encrypted_dir"
             super::super::embedded_settings::store_zip_readme(&stamp, store_bytes).unwrap();
         assert_eq!(readme, expected.into_bytes());
         let embedded =
-            super::super::zip_io::read_zip_config_toml(std::fs::File::open(&zip).unwrap())
+            super::super::zip_io::read_zip_config_toml(crate::host_fs::File::open(&zip).unwrap())
                 .unwrap()
                 .expect("config.toml");
         let parsed = super::super::embedded_settings::parse_embedded_settings(&embedded).unwrap();
@@ -791,8 +790,8 @@ mode = "encrypted_dir"
             .join("backups")
             .join("saves")
             .join(format!("{stamp}-notes.zip"));
-        assert!(saved.is_file());
-        assert!(!zip.is_file());
+        assert!(saved.host_is_file());
+        assert!(!zip.host_is_file());
         let listed = list_backups(&root, "notes").unwrap();
         assert_eq!(listed.len(), 1);
         assert!(listed[0].saved);
@@ -814,8 +813,8 @@ mode = "encrypted_dir"
         let backups = root.vault_dir("notes").unwrap().join("backups");
         let original = backups.join(format!("{stamp}-notes.zip"));
         let other = backups.join(format!("{stamp}-other.zip"));
-        std::fs::copy(&original, &other).unwrap();
-        std::fs::write(backups.join(format!("{stamp}-extra.zip")), b"not-a-vault").unwrap();
+        crate::host_fs::copy(&original, &other).unwrap();
+        crate::host_fs::write(backups.join(format!("{stamp}-extra.zip")), b"not-a-vault").unwrap();
         let listed = list_backups(&root, "notes").unwrap();
         let names: Vec<String> = listed.iter().map(|entry| entry.file_name.clone()).collect();
         assert_eq!(
@@ -827,8 +826,8 @@ mode = "encrypted_dir"
         let err = backup_zip_file(&root, "notes", &stamp).unwrap_err();
         assert!(matches!(err, UprivError::VaultStoreInvalid { .. }));
         delete_backups(&root, "notes", &[format!("{stamp}-other.zip")]).unwrap();
-        assert!(!other.exists());
-        assert!(original.is_file());
+        assert!(!other.host_exists());
+        assert!(original.host_is_file());
         assert_eq!(list_backups(&root, "notes").unwrap().len(), 1);
     }
 
@@ -847,9 +846,9 @@ mode = "encrypted_dir"
         let name = format!("{stamp}-notes.zip");
         let original = backups.join(&name);
         let saves = backups.join("saves");
-        std::fs::create_dir_all(&saves).unwrap();
+        crate::host_fs::create_dir_all(&saves).unwrap();
         let pinned = saves.join(&name);
-        std::fs::copy(&original, &pinned).unwrap();
+        crate::host_fs::copy(&original, &pinned).unwrap();
         let listed = list_backups(&root, "notes").unwrap();
         assert_eq!(listed.len(), 2);
         assert_eq!(listed.iter().filter(|entry| entry.saved).count(), 1);
@@ -868,7 +867,8 @@ mode = "encrypted_dir"
             &bundle,
         )
         .unwrap();
-        let mut archive = zip::ZipArchive::new(std::fs::File::open(&bundle).unwrap()).unwrap();
+        let mut archive =
+            zip::ZipArchive::new(crate::host_fs::File::open(&bundle).unwrap()).unwrap();
         let mut packed = Vec::new();
         for index in 0..archive.len() {
             packed.push(archive.by_index(index).unwrap().name().to_string());
@@ -876,8 +876,8 @@ mode = "encrypted_dir"
         packed.sort();
         assert_eq!(packed, vec![name.clone(), format!("saves-{name}")]);
         delete_backups(&root, "notes", &[name.clone(), name.clone()]).unwrap();
-        assert!(!original.exists());
-        assert!(pinned.is_file());
+        assert!(!original.host_exists());
+        assert!(pinned.host_is_file());
         assert_eq!(list_backups(&root, "notes").unwrap().len(), 1);
         assert!(list_backups(&root, "notes").unwrap()[0].saved);
     }
@@ -897,11 +897,11 @@ mode = "encrypted_dir"
         let name = format!("{stamp}-notes.zip");
         let original = backups.join(&name);
         let saves = backups.join("saves");
-        std::fs::create_dir_all(&saves).unwrap();
-        std::fs::write(saves.join(&name), b"not-a-vault").unwrap();
+        crate::host_fs::create_dir_all(&saves).unwrap();
+        crate::host_fs::write(saves.join(&name), b"not-a-vault").unwrap();
         let err = promote_backup_save(&root, "notes", &name).unwrap_err();
         assert!(matches!(err, UprivError::VaultStoreInvalid { .. }));
-        assert!(original.is_file());
+        assert!(original.host_is_file());
         assert_eq!(list_backups(&root, "notes").unwrap().len(), 1);
     }
 
@@ -921,7 +921,7 @@ mode = "encrypted_dir"
         let name = format!("{stamp}-notes.zip");
         let original = backups.join(&name);
         let hold = backups.join("hold.zip");
-        std::fs::rename(&original, &hold).unwrap();
+        crate::host_fs::rename(&original, &hold).unwrap();
         std::os::unix::fs::symlink(&hold, &original).unwrap();
         assert!(list_backups(&root, "notes").unwrap().is_empty());
         assert!(backup_zip_file(&root, "notes", &name).is_err());

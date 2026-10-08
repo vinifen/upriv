@@ -5,6 +5,7 @@
  */
 export interface AppLogFile {
   filename: string;
+  /** `0` when the filename is not a canonical log name (no sequence number). */
   seq: number;
   isCurrent: boolean;
   /** ISO-8601 UTC (`…T hh:mm:ss.000Z` from filename stamp when canonical). */

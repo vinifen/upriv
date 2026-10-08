@@ -11,9 +11,7 @@ use crate::paths::{
 };
 
 use super::toml::{parse_settings_toml, ui_settings_from_toml, write_settings_toml_only};
-use super::types::{
-    AppSectionSettings, AppSettings, LoadedAppSettings, LoggingSettings, WorkspaceSettings,
-};
+use super::types::{AppSectionSettings, AppSettings, LoadedAppSettings, LoggingSettings};
 
 /// Serializes load-modify-save of settings.toml + alias (UniFFI may dispatch RPCs concurrently).
 static SETTINGS_WRITE_LOCK: Mutex<()> = Mutex::new(());
@@ -28,11 +26,15 @@ fn lock_settings_write() -> MutexGuard<'static, ()> {
 ///
 /// When `.upriv-root` is **active**, a failed open is returned as an error (no default_root
 /// fallback) so settings load/save cannot silently use a different root while the UI
-/// still shows custom_root mode.
+/// still shows custom_root mode. The logical storage-access path is absent until the
+/// phone grant is mounted; that absence is not a failed read.
 pub fn discover_bootstrap_root() -> Result<Option<VaultRoot>> {
     let home = app_home_dir()?;
     if let Some(alias) = read_vault_root_alias(&home)? {
         if alias.active {
+            if crate::host_fs::is_unmounted_saf_root(Path::new(&alias.path)) {
+                return Ok(None);
+            }
             return match VaultRoot::discover(&alias.path) {
                 Ok(root) => Ok(Some(root)),
                 Err(error @ UprivError::VaultRootIncomplete { .. }) => Err(error),
@@ -130,7 +132,7 @@ pub fn load_app_settings_at(root: &Path) -> Result<LoadedAppSettings> {
     // Same marker rules as discover / inspect (reject incomplete before serde defaults).
     crate::paths::validate_existing_vault_root(root)?;
     let path = root.join(VAULT_ROOT_SETTINGS_REL);
-    let raw = std::fs::read_to_string(&path).map_err(UprivError::from)?;
+    let raw = crate::host_fs::read_to_string(&path).map_err(UprivError::from)?;
     let parsed = parse_settings_toml(&raw, &path)?;
 
     let mut settings = AppSettings {
@@ -148,9 +150,7 @@ pub fn load_app_settings_at(root: &Path) -> Result<LoadedAppSettings> {
             upriv_root_path: String::new(),
             last_opened_vault: parsed.app.last_opened_vault.trim().to_string(),
         },
-        workspace: WorkspaceSettings {
-            path: parsed.workspace.path.trim().to_string(),
-        },
+        workspace: parsed.workspace,
     };
 
     apply_alias_to_app_settings(&mut settings);
@@ -179,7 +179,7 @@ pub fn save_app_settings_with_alias_sync(
     sync_alias: bool,
 ) -> Result<()> {
     let _guard = lock_settings_write();
-    crate::paths::validate_workspace_global_path(&settings.workspace.path, Some(root))?;
+    crate::paths::validate_workspace_table(&settings.workspace, Some(root))?;
     if sync_alias {
         sync_alias_with_app_settings(settings)?;
     }
@@ -272,7 +272,7 @@ mod tests {
         settings.app.vault_root_mode = VaultRootMode::DefaultRoot;
         save_app_settings(dir.path(), &settings).unwrap();
 
-        let raw = std::fs::read_to_string(dir.path().join(".upriv/settings.toml")).unwrap();
+        let raw = crate::host_fs::read_to_string(dir.path().join(".upriv/settings.toml")).unwrap();
         assert!(
             !raw.contains("vault_root_mode") && !raw.contains("upriv_root_path"),
             "mode/path must not be persisted in settings.toml"
@@ -301,19 +301,19 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         initialize_vault_root(dir.path()).unwrap();
         let settings_path = dir.path().join(".upriv/settings.toml");
-        let mut raw = std::fs::read_to_string(&settings_path).unwrap();
+        let mut raw = crate::host_fs::read_to_string(&settings_path).unwrap();
         raw = raw.replace("level = \"info\"", "level = \"ERROR\"");
         if !raw.contains("level = \"ERROR\"") {
             // Fresh default may use different formatting — force a logging section.
             raw.push_str("\n[logging]\nenabled = true\nlevel = \"ERROR\"\nentries_per_file = 1000\nkeep_last_entries = 10000\n");
         }
-        std::fs::write(&settings_path, raw).unwrap();
+        crate::host_fs::write(&settings_path, raw).unwrap();
 
         let loaded = load_app_settings_at(dir.path()).unwrap();
         assert_eq!(loaded.settings.logging.level, "error");
 
         save_app_settings(dir.path(), &loaded.settings).unwrap();
-        let persisted = std::fs::read_to_string(&settings_path).unwrap();
+        let persisted = crate::host_fs::read_to_string(&settings_path).unwrap();
         assert!(
             persisted.contains("level = \"error\""),
             "persisted={persisted}"
@@ -341,7 +341,7 @@ mod tests {
         assert!(alias.active);
         assert_eq!(alias.path, root.path().canonicalize().unwrap());
 
-        let raw = std::fs::read_to_string(root.path().join(".upriv/settings.toml")).unwrap();
+        let raw = crate::host_fs::read_to_string(root.path().join(".upriv/settings.toml")).unwrap();
         assert!(!raw.contains("vault_root_mode") && !raw.contains("upriv_root_path"));
 
         settings.app.vault_root_mode = VaultRootMode::DefaultRoot;
@@ -366,7 +366,7 @@ mod tests {
 
         // Unknown `[app]` keys must not override `.upriv-root` (alias wins).
         let settings_path = root.path().join(".upriv/settings.toml");
-        std::fs::write(
+        crate::host_fs::write(
             &settings_path,
             r#"
 [package]
@@ -407,7 +407,7 @@ obsolete_vault_root_flag = true
         let missing = home.path().join("gone-custom");
         initialize_vault_root(default_root.path()).unwrap();
         let alias_path = home.path().join(".upriv-root");
-        std::fs::write(
+        crate::host_fs::write(
             &alias_path,
             format!("status=active\n{}\n", missing.display()),
         )
@@ -452,7 +452,7 @@ obsolete_vault_root_flag = true
         std::env::remove_var("APPIMAGE");
         std::env::set_var("UPRIV_DEFAULT_ROOT_ANCHOR", home.path());
 
-        std::fs::write(
+        crate::host_fs::write(
             custom.path().join(".upriv/settings.toml"),
             r#"
 [package]
@@ -473,10 +473,10 @@ enabled = true
         assert!(save_app_settings_session(&settings).unwrap());
 
         let default_root_raw =
-            std::fs::read_to_string(home.path().join(".upriv/settings.toml")).unwrap();
+            crate::host_fs::read_to_string(home.path().join(".upriv/settings.toml")).unwrap();
         assert!(default_root_raw.contains("pt-BR"));
         let custom_raw =
-            std::fs::read_to_string(custom.path().join(".upriv/settings.toml")).unwrap();
+            crate::host_fs::read_to_string(custom.path().join(".upriv/settings.toml")).unwrap();
         assert!(!custom_raw.contains("pt-BR"));
 
         std::env::remove_var("UPRIV_DEFAULT_ROOT_ANCHOR");
@@ -496,7 +496,7 @@ enabled = true
         settings.app.vault_root_mode = VaultRootMode::DefaultRoot;
         assert!(save_app_settings_session(&settings).unwrap());
 
-        std::fs::remove_dir_all(home.path().join(".upriv")).unwrap();
+        crate::host_fs::remove_dir_all(home.path().join(".upriv")).unwrap();
 
         let err = save_app_settings_session(&settings).unwrap_err();
         assert!(
@@ -530,7 +530,7 @@ enabled = true
         let home = tempfile::tempdir().unwrap();
         std::env::remove_var("APPIMAGE");
         std::env::set_var("UPRIV_DEFAULT_ROOT_ANCHOR", home.path());
-        std::fs::create_dir_all(home.path().join(".upriv")).unwrap();
+        crate::host_fs::create_dir_all(home.path().join(".upriv")).unwrap();
 
         let mut settings = AppSettings::default();
         settings.app.vault_root_mode = VaultRootMode::DefaultRoot;

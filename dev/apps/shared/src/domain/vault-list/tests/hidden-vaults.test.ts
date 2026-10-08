@@ -10,6 +10,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { createDefaultAppSettings } from "../../app-settings";
+import { appWorkspace } from "../../workspace";
 import { createEmptyCreateVaultDraft, buildCreateVaultResult } from "../../vault-create";
 import { createVaultDraftFixture } from "../../vault-create/tests/fixtures";
 import { applyVaultListHierarchySort, filterVaultListRowsBySearch } from "../../vault-groups";
@@ -129,7 +130,11 @@ describe("hidden vaults", () => {
         inventory: { vaultsTotal: 1, vaultsOpen: 0, groupsTotal: 0 },
         ui: settings.ui,
         logging: settings.logging,
-        workspace: { path: "/data/workspace" },
+        workspace: {
+          ...appWorkspace(),
+          linux: { place: "custom", path: "/data/workspace" },
+        },
+        workspaceSystem: "linux",
         lastOpenedVault: "",
         paths: { logsDir: "/data/.upriv/logs", appHome: "/data" },
       },

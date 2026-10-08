@@ -5,6 +5,8 @@ use crate::config::{
     vault_config_path,
 };
 use crate::error::{Result, UprivError};
+#[allow(unused_imports)]
+use crate::host_fs::HostFsQuery;
 use crate::logging::{log_event, LogLevel};
 use crate::paths::{VaultRoot, STORE_DIR_NAME};
 use crate::session::{
@@ -48,7 +50,7 @@ fn clear_last_opened(root: &VaultRoot, vault_id: &str) -> Result<()> {
 pub fn delete_vault(root: &VaultRoot, vault_id: &str) -> Result<()> {
     let vault_id = vault_id.trim();
     let vault_dir = root.vault_dir(vault_id)?;
-    if !vault_dir.is_dir() {
+    if !vault_dir.host_is_dir() {
         return Err(UprivError::VaultNotFound(vault_dir));
     }
     refuse_if_busy(&vault_dir)?;
@@ -67,7 +69,7 @@ pub fn delete_vault(root: &VaultRoot, vault_id: &str) -> Result<()> {
         {
             let path = std::path::PathBuf::from(mount);
             if crate::mount::force_unmount(&path).is_ok() {
-                let _ = std::fs::remove_dir(&path);
+                let _ = crate::host_fs::remove_dir(&path);
             }
         }
         let lock_path = root.runtime_lock_path(vault_id)?;
@@ -104,10 +106,10 @@ fn remove_vault_tree(vault_dir: &std::path::Path, opts: &WipeOptions) -> Result<
     let _ = secure_wipe_path(&store.join(INDEX_DIR_NAME), opts);
     let _ = secure_wipe_path(&vault_config_path(vault_dir), opts);
     let _ = secure_wipe_path(&vault_dir.join("persistence.json"), opts);
-    if vault_dir.exists() {
-        std::fs::remove_dir_all(vault_dir)?;
+    if vault_dir.host_exists() {
+        crate::host_fs::remove_dir_all(vault_dir)?;
     }
-    if vault_dir.exists() {
+    if vault_dir.host_exists() {
         return Err(UprivError::VaultStoreInvalid {
             path: vault_dir.to_path_buf(),
             detail: "vault directory still exists after delete".into(),
@@ -119,6 +121,8 @@ fn remove_vault_tree(vault_dir: &std::path::Path, opts: &WipeOptions) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[allow(unused_imports)]
+    use crate::host_fs::HostFsQuery;
     use crate::store::KdfUnlockPreset;
     use crate::test_support::vault_root_with;
     use crate::vault::create_vault;
@@ -148,10 +152,10 @@ mode = "encrypted_dir"
         )
         .unwrap();
         let dir = root.vault_dir("gone").unwrap();
-        assert!(dir.is_dir());
-        std::fs::write(dir.join("leftover.bin"), vec![7u8; 4096]).unwrap();
+        assert!(dir.host_is_dir());
+        crate::host_fs::write(dir.join("leftover.bin"), vec![7u8; 4096]).unwrap();
         delete_vault(&root, "gone").unwrap();
-        assert!(!dir.exists());
+        assert!(!dir.host_exists());
     }
 
     #[test]
@@ -168,6 +172,6 @@ mode = "encrypted_dir"
         let _lock = crate::lockfile::acquire_vault_lock(lock_path).unwrap();
         let err = delete_vault(&root, "held").unwrap_err();
         assert!(matches!(err, UprivError::VaultLocked(_)));
-        assert!(root.vault_dir("held").unwrap().is_dir());
+        assert!(root.vault_dir("held").unwrap().host_is_dir());
     }
 }

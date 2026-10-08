@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { VaultSettingsSection } from "@/components/settings";
 import { InfoFieldList } from "@/features/system/info/InfoFieldList";
-import { Button, Modal } from "@/components/ui";
+import { Button, ContentSkeleton, Modal } from "@/components/ui";
 import { useAppSettingsContext } from "@/features/system/settings";
 import {
   useBackupService,
@@ -49,7 +49,7 @@ export function VaultInfoModal({
     lifecycleService,
     vaultRootService,
     vaultRootMode: settings.app.vault_root_mode,
-    workspaceGlobalPath: settings.workspace.path,
+    workspace: settings.workspace,
     fallbackVaultRootBase: "",
   });
 
@@ -95,7 +95,7 @@ export function VaultInfoModal({
           </Button>
         </div>
       ) : (
-        <p className="font-mono text-sm text-on-surface-variant">{t("modal.info.loading")}</p>
+        <ContentSkeleton label={t("modal.info.loading")} />
       )}
     </Modal>
   );

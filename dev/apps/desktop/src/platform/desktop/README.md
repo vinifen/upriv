@@ -45,7 +45,7 @@ platform/desktop/
 | Packaged `.deb` / NSIS / system  | `installed`          | User data dir                 | Same as app home             |
 | Daemon without Electron env      | inferred             | writable exe dir or user data | distribution-aware           |
 
-First-run setup defaults to **`default_root`** for all distributions (beside the app when portable; user data dir when installed).
+First-run setup defaults to **`default_root`** for all distributions (beside the app when portable; user data dir when installed). A Windows NSIS install is **installed** even when its folder is writable, so `.upriv` is not created inside the directory the uninstaller deletes.
 
 **Strict vs loose:** Electron always sets `UPRIV_DEFAULT_ROOT_ANCHOR` when unpackaged or packaged, so portable installs and `electron .` are strict — a sibling folder with `.upriv` next to the AppImage is **not** auto-imported; use `custom_root` mode / create in the default data folder. Loose walk (`discover_vault_root_upward`) is the fallback when the env is absent. Repo `prod-example/` is a layout reference only — **not** auto-discovered in `electron:dev` (use `UPRIV_VAULT_ROOT` to point at it).
 

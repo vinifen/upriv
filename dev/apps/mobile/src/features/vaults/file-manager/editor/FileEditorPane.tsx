@@ -10,7 +10,7 @@ import {
   type TextInputScrollEventData,
 } from "react-native";
 import { fileBaseName } from "@upriv/shared";
-import { Button, LoadingBudgetHint } from "@/components/ui";
+import { LoadingBudgetHint } from "@/components/ui";
 import { useTranslation } from "@/i18n";
 import { useTheme } from "@/theme";
 import { spacing } from "@/theme/tokens";
@@ -155,9 +155,7 @@ export function FileEditorPane({ fm }: FileEditorPaneProps) {
     isFileImage,
     isImportPending,
     isImportProcessing,
-    isImportTimedOut,
     importBudget,
-    retryImport,
   } = fm;
   const activeTabPath = workspace.activeTabPath;
 
@@ -177,26 +175,6 @@ export function FileEditorPane({ fm }: FileEditorPaneProps) {
   const loadError = fileLoadError(activeTabPath);
   const importing = isImportPending(activeTabPath);
   const processing = isImportProcessing(activeTabPath);
-
-  if (importing && isImportTimedOut(activeTabPath)) {
-    return (
-      <EmptyState
-        kicker={t("modal.file_manager.import.loading_kicker")}
-        body={t("loading.timed_out")}
-      >
-        <Button label={t("action.retry")} variant="primary" onPress={retryImport} />
-      </EmptyState>
-    );
-  }
-
-  if (importing && processing && importBudget.timedOut) {
-    return (
-      <EmptyState
-        kicker={t("modal.file_manager.import.loading_kicker")}
-        body={t("loading.timed_out")}
-      />
-    );
-  }
 
   if (importing) {
     return (

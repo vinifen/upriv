@@ -144,7 +144,7 @@ export function createVaultImportPackage(
   const archivePath =
     result.importKind === "backup"
       ? path || undefined
-      : isAbsoluteOsFilesystemPath(path) || (shapeOf(result) === "directory" && isContentUri(path))
+      : isAbsoluteOsFilesystemPath(path) || isContentUri(path)
         ? path
         : undefined;
   return {

@@ -1,16 +1,21 @@
 import { describe, expect, it } from "vitest";
 import {
-  WORKSPACE_PATH_DEFAULT,
+  appWorkspace,
+  currentWorkspaceSystem,
+  hostPlatformFromSignals,
+  appWorkspacePlace,
+  encryptedShortcutActive,
+  resolvedWorkspaceParent,
   isAbsoluteFilesystemPath,
   isAbsoluteOsFilesystemPath,
   isReservedUprivWorkspacePath,
-  needsWorkspaceSetupOnOpen,
-  normalizeMountWorkspacePath,
-  resolveMountParentPath,
+  normalizeWorkspaceTable,
   resolveVaultMountPoint,
   suggestedDefaultWorkspacePath,
-  validateMountWorkspacePath,
+  workspaceContainerPath,
   validateWorkspaceGlobalPath,
+  vaultWorkspace,
+  workspaceSystemsCurrentFirst,
 } from "../index";
 
 describe("workspace path validation", () => {
@@ -54,45 +59,181 @@ describe("workspace path validation", () => {
   it("blocks reserved .upriv tree without vault-root (default_root / SAF parity)", () => {
     expect(validateWorkspaceGlobalPath("/tmp/foo/.upriv/vaults/x")).toBe("reserved");
     expect(validateWorkspaceGlobalPath("/tmp/foo/.UPRIV/Vaults")).toBe("reserved");
-    expect(validateMountWorkspacePath("/data/.upriv/logs")).toBe("reserved");
+    expect(validateWorkspaceGlobalPath("/data/.upriv/logs")).toBe("reserved");
     expect(validateWorkspaceGlobalPath("/tmp/foo/.upriv/workspace")).toBe("reserved");
     expect(validateWorkspaceGlobalPath("/tmp/foo/.upriv")).toBe("reserved");
+    expect(
+      isReservedUprivWorkspacePath("content://com.android/tree/primary%3AUpriv%2F.upriv", null),
+    ).toBe(true);
+    expect(isReservedUprivWorkspacePath("content://com.android/tree/primary%3A.upriv", null)).toBe(
+      true,
+    );
+    expect(
+      isReservedUprivWorkspacePath("content://com.android/tree/primary%253A%252Eupriv", null),
+    ).toBe(true);
+    expect(isReservedUprivWorkspacePath("content://com.android/tree/primary%3AUpriv", null)).toBe(
+      false,
+    );
   });
 
-  it("normalizes mount path default", () => {
-    expect(normalizeMountWorkspacePath("")).toBe(WORKSPACE_PATH_DEFAULT);
-    expect(normalizeMountWorkspacePath("DEFAULT")).toBe(WORKSPACE_PATH_DEFAULT);
-    expect(normalizeMountWorkspacePath("/tmp/open")).toBe("/tmp/open");
+  it("reads the system from a browser user agent when Node process is absent", () => {
+    expect(hostPlatformFromSignals({ userAgent: "Mozilla/5.0 (X11; Linux x86_64)" })).toBe("linux");
+    expect(hostPlatformFromSignals({ userAgentDataPlatform: "Windows" })).toBe("win32");
+    expect(hostPlatformFromSignals({ platform: "MacIntel" })).toBe("darwin");
+    expect(
+      hostPlatformFromSignals({
+        userAgent: "Mozilla/5.0 (Linux; Android 14; Pixel) AppleWebKit/537.36",
+      }),
+    ).toBe("android");
+    expect(hostPlatformFromSignals({ userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0)" })).toBe(
+      "ios",
+    );
+    expect(currentWorkspaceSystem("android")).toBe("android");
+    expect(workspaceSystemsCurrentFirst("linux")[0]).toBe("linux");
+    expect(workspaceSystemsCurrentFirst("android")).toEqual([
+      "android",
+      "linux",
+      "windows",
+      "macos",
+      "ios",
+    ]);
+    expect(hostPlatformFromSignals({})).toBeUndefined();
   });
 
-  it("validates mount override", () => {
-    expect(validateMountWorkspacePath("default")).toBeNull();
-    expect(validateMountWorkspacePath("rel")).toBe("not_absolute");
-    expect(validateMountWorkspacePath("/ok")).toBeNull();
+  it("reads only the per-system rows", () => {
+    const ignored = normalizeWorkspaceTable({ path: "/home/me/workspace" }, "app");
+    expect(ignored.linux.path).toBe("");
+    expect(ignored.linux.place).toBe("unset");
+    const kept = normalizeWorkspaceTable(
+      { path: "/other", linux: { place: "custom", path: "/already" } },
+      "app",
+    );
+    expect(kept.linux.path).toBe("/already");
   });
 
-  it("resolves mount parent and point", () => {
-    expect(resolveMountParentPath("", "default")).toBeNull();
-    expect(resolveMountParentPath("/global", "default")).toBe("/global");
-    expect(resolveMountParentPath("/global", "/override")).toBe("/override");
-    expect(resolveVaultMountPoint("/global", "default", "Notes")).toBe("/global/Notes");
+  it("inherits the app path and shows the folder when the app file_manager_folder is on", () => {
+    const app = {
+      ...appWorkspace(),
+      file_manager_folder: true,
+      linux: { place: "custom" as const, path: "/app" },
+    };
+    const vault = vaultWorkspace();
+    expect(resolvedWorkspaceParent(app, vault, "linux", "/data/root")).toBe("/app");
+    expect(encryptedShortcutActive(app, vault, "linux")).toBe(true);
+    expect(encryptedShortcutActive(app, vault, "windows")).toBe(false);
+    const forcedOn = { ...vault, app_file_manager_folder: "on" as const };
+    const appOff = { ...app, file_manager_folder: false };
+    expect(encryptedShortcutActive(appOff, forcedOn, "linux")).toBe(true);
+    const forcedOff = { ...vault, app_file_manager_folder: "off" as const };
+    expect(encryptedShortcutActive(app, forcedOff, "linux")).toBe(false);
+    const override = {
+      ...vault,
+      custom_file_manager_folder: true,
+      linux: { place: "unset" as const, path: "/vault" },
+    };
+    expect(resolvedWorkspaceParent(app, override, "linux", "/data/root")).toBe("/vault");
+    expect(
+      encryptedShortcutActive(app, { ...override, custom_file_manager_folder: false }, "linux"),
+    ).toBe(false);
+    expect(encryptedShortcutActive(app, vault, "android")).toBe(false);
+    const beside = {
+      ...appWorkspace(),
+      file_manager_folder: true,
+      linux: { place: "beside" as const, path: "" },
+    };
+    expect(encryptedShortcutActive(beside, vaultWorkspace(), "linux")).toBe(true);
+    expect(resolvedWorkspaceParent(beside, vaultWorkspace(), "linux", "/data/root")).toBe(
+      "/data/root",
+    );
+    const unset = {
+      ...appWorkspace(),
+      file_manager_folder: true,
+      linux: { place: "unset" as const, path: "" },
+    };
+    expect(encryptedShortcutActive(unset, vaultWorkspace(), "linux")).toBe(false);
+    expect(unset.file_manager_folder).toBe(true);
+    expect(resolvedWorkspaceParent(unset, vaultWorkspace(), "linux", "/data/root")).toBe("");
+    expect(resolvedWorkspaceParent(app, vaultWorkspace(), "linux", "/data/root")).toBe("/app");
+    expect(
+      resolveVaultMountPoint(
+        resolvedWorkspaceParent(beside, vault, "linux", "/data/root"),
+        "Notes",
+      ),
+    ).toBe("/data/root/workspace/Notes");
+    const readBeside = normalizeWorkspaceTable(
+      { file_manager_folder: true, linux: { place: "beside", path: "/stale" } },
+      "app",
+    );
+    expect(appWorkspacePlace(readBeside.linux)).toBe("beside");
+    expect(readBeside.linux.path).toBe("");
+    expect(readBeside.file_manager_folder).toBe(true);
+    const readExplicitUnset = normalizeWorkspaceTable(
+      { file_manager_folder: true, linux: { place: "unset", path: "/stale" } },
+      "app",
+    );
+    expect(appWorkspacePlace(readExplicitUnset.linux)).toBe("unset");
+    expect(readExplicitUnset.linux.path).toBe("");
+    expect(readExplicitUnset.file_manager_folder).toBe(true);
+    const readUnset = normalizeWorkspaceTable({ linux: { path: "" } }, "app");
+    expect(appWorkspacePlace(readUnset.linux)).toBe("unset");
+    expect(readUnset.file_manager_folder).toBe(false);
+    const vaultShortcut = normalizeWorkspaceTable({ app_file_manager_folder: "inherit" }, "vault");
+    expect(vaultShortcut.app_file_manager_folder).toBe("inherit");
+    expect(vaultShortcut.file_manager_folder).toBe(false);
+    const vaultOff = normalizeWorkspaceTable(
+      { app_file_manager_folder: "off", linux: { path: "", app_file_manager_folder: "on" } },
+      "vault",
+    );
+    expect(vaultOff.app_file_manager_folder).toBe("off");
+    const both = normalizeWorkspaceTable(
+      {
+        app_file_manager_folder: "inherit",
+        custom_file_manager_folder: true,
+        linux: { path: "/vault" },
+      },
+      "vault",
+    );
+    expect(both.app_file_manager_folder).toBe("inherit");
+    expect(both.custom_file_manager_folder).toBe(true);
+    expect(both.linux.path).toBe("/vault");
+    expect(encryptedShortcutActive(app, both, "linux")).toBe(true);
+    expect(workspaceContainerPath("/data/chosen")).toBe("/data/chosen/workspace");
+    expect(workspaceContainerPath("content://tree")).toBe("content://tree");
+    expect(resolveVaultMountPoint("/global", "Notes")).toBe("/global/workspace/Notes");
+    expect(resolveVaultMountPoint("/home/me/Documents", "test", true)).toBe(
+      "/home/me/Documents/test",
+    );
+    const tree = "content://com.android.externalstorage.documents/tree/primary%3AUpriv";
+    expect(resolveVaultMountPoint(tree, "Notes")).toBe(
+      "content://com.android.externalstorage.documents/tree/primary%3AUpriv/document/primary%3AUpriv%2Fworkspace%2FNotes",
+    );
+    expect(resolveVaultMountPoint(tree, "Notes", true)).toBe(
+      "content://com.android.externalstorage.documents/tree/primary%3AUpriv/document/primary%3AUpriv%2FNotes",
+    );
+    expect(resolveVaultMountPoint("content://not-a-tree", "Notes")).toBeNull();
+    expect(resolveVaultMountPoint("", "Notes")).toBeNull();
   });
 
   it("suggests default beside vault-root", () => {
     expect(suggestedDefaultWorkspacePath("/data/upriv-root")).toBe("/data/upriv-root/workspace");
     expect(suggestedDefaultWorkspacePath("")).toBe("");
+    const tree = "content://com.android.externalstorage.documents/tree/primary%3AUpriv";
+    const beside = suggestedDefaultWorkspacePath(tree);
+    expect(beside).toBe(
+      "content://com.android.externalstorage.documents/tree/primary%3AUpriv/document/primary%3AUpriv%2Fworkspace",
+    );
+    expect(validateWorkspaceGlobalPath(beside, tree)).toBeNull();
+    expect(suggestedDefaultWorkspacePath(`${tree}/document/primary%3AUpriv`)).toBe(beside);
+    const documents = "content://com.android.externalstorage.documents/tree/primary%3ADocuments";
+    expect(suggestedDefaultWorkspacePath(documents)).toBe(
+      "content://com.android.externalstorage.documents/tree/primary%3ADocuments/document/primary%3ADocuments%2FUpriv%2Fworkspace",
+    );
     expect(
-      suggestedDefaultWorkspacePath(
-        "content://com.android.externalstorage.documents/tree/primary%3AUpriv",
-      ),
+      validateWorkspaceGlobalPath(suggestedDefaultWorkspacePath(documents), documents),
+    ).toBeNull();
+    expect(
+      suggestedDefaultWorkspacePath("content://com.android.externalstorage.documents/document/1"),
     ).toBe("");
-  });
-
-  it("needs setup on open only when mount is default and global unset", () => {
-    expect(needsWorkspaceSetupOnOpen("", "default")).toBe(true);
-    expect(needsWorkspaceSetupOnOpen(null, "default")).toBe(true);
-    expect(needsWorkspaceSetupOnOpen("/global", "default")).toBe(false);
-    expect(needsWorkspaceSetupOnOpen("", "/override")).toBe(false);
   });
 
   it("accepts Android SAF content:// paths (vault-root pattern)", () => {
@@ -102,7 +243,7 @@ describe("workspace path validation", () => {
       ),
     ).toBeNull();
     expect(
-      validateMountWorkspacePath(
+      validateWorkspaceGlobalPath(
         "content://com.android.externalstorage.documents/tree/primary%3ADocs",
       ),
     ).toBeNull();
@@ -112,7 +253,7 @@ describe("workspace path validation", () => {
       ),
     ).toBe("saf_tree_child");
     expect(
-      validateMountWorkspacePath(
+      validateWorkspaceGlobalPath(
         "content://com.android.externalstorage.documents/tree/primary%3ADocs/workspace",
       ),
     ).toBe("saf_tree_child");
@@ -124,8 +265,8 @@ describe("workspace path validation", () => {
   });
 
   it("sanitizes mount leaf like Rust", () => {
-    expect(resolveVaultMountPoint("/g", "default", "Notes")).toBe("/g/Notes");
-    expect(resolveVaultMountPoint("/g", "default", "..")).toBe("/g/_");
-    expect(resolveVaultMountPoint("/g", "default", "a/b")).toBe("/g/_");
+    expect(resolveVaultMountPoint("/g", "Notes")).toBe("/g/workspace/Notes");
+    expect(resolveVaultMountPoint("/g", "..")).toBe("/g/workspace/_");
+    expect(resolveVaultMountPoint("/g", "a/b")).toBe("/g/workspace/_");
   });
 });

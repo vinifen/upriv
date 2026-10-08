@@ -1,4 +1,5 @@
 import { useId } from "react";
+import { PathField } from "@/components/PathField";
 import { Button, PasswordInput, SwitchRow } from "@/components/ui";
 import {
   createVaultChoosesKdf,
@@ -21,6 +22,7 @@ import {
   type CreateVaultStepId,
   type CreateVaultValidationCode,
   type VaultGroup,
+  type WorkspaceTable,
 } from "@upriv/shared";
 import type { CreateVaultStepFocusProps } from "@upriv/shared/react";
 import { useCreateVaultService } from "@/platform/services";
@@ -29,6 +31,7 @@ import {
   DisplayNameFieldError,
   PolicyRadioOption,
   SecurityModeRadioGroup,
+  IntegerInput,
   settingsControlClass,
   SettingsField,
   SettingsFormGrid,
@@ -52,6 +55,8 @@ interface StepProps extends Partial<CreateVaultStepFocusProps> {
   includeHidden?: boolean;
   /** Resolved vault-root for mount reserved checks (from wizard / CreateVaultModal). */
   vaultRootPath?: string | null;
+  /** App workspace, so a new vault can follow that file manager folder. */
+  appWorkspace?: WorkspaceTable;
   /** Display names already on the vault list, so a picked file can take `name 2`. */
   existingDisplayNames?: readonly string[];
 }
@@ -143,12 +148,11 @@ function CreateVaultSourceStep({ draft, errors, onChange, existingDisplayNames =
 
   const importFilePicker = (
     <div className="space-y-2">
-      <input
-        type="text"
-        readOnly
+      <PathField
         value={draft.source === "import" ? draft.importFileName : ""}
+        openPath={draft.source === "import" ? draft.importFilePath : ""}
+        readOnly
         placeholder={t("vault.create.import_file_placeholder")}
-        className={[settingsControlClass, "font-mono text-xs"].join(" ")}
       />
       <div className="flex flex-wrap items-center gap-2">
         <Button type="button" variant="secondary" size="md" onClick={handleImportFile}>
@@ -264,7 +268,7 @@ function CreateVaultIdentityStep({
   onChange,
   bindFieldRef,
   onFieldFocus,
-  onAdvanceStep,
+  onFieldSubmit,
 }: StepProps) {
   const { t } = useTranslation();
   const nameId = useId();
@@ -293,7 +297,7 @@ function CreateVaultIdentityStep({
           onKeyDown={(event) => {
             if (event.key === "Enter") {
               event.preventDefault();
-              onAdvanceStep?.();
+              onFieldSubmit?.("displayName");
             }
           }}
           autoComplete="off"
@@ -336,7 +340,7 @@ function CreateVaultPasswordStep({
   testingPassword = false,
   bindFieldRef,
   onFieldFocus,
-  onAdvanceStep,
+  onFieldSubmit,
 }: StepProps & { onTestImportPassword?: () => void; testingPassword?: boolean }) {
   const { t } = useTranslation();
   const passwordId = useId();
@@ -372,7 +376,7 @@ function CreateVaultPasswordStep({
             onKeyDown={(event) => {
               if (event.key === "Enter") {
                 event.preventDefault();
-                onAdvanceStep?.();
+                onFieldSubmit?.("password");
               }
             }}
             onChange={(e) =>
@@ -401,7 +405,7 @@ function CreateVaultPasswordStep({
             onKeyDown={(event) => {
               if (event.key === "Enter") {
                 event.preventDefault();
-                onAdvanceStep?.();
+                onFieldSubmit?.("passwordConfirm");
               }
             }}
             onChange={(e) => onChange({ passwordConfirm: e.target.value })}
@@ -439,6 +443,12 @@ function CreateVaultPasswordStep({
           value={draft.passwordHint}
           maxLength={VAULT_PASSWORD_HINT_MAX_LENGTH}
           onFocus={() => onFieldFocus?.("passwordHint")}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              onFieldSubmit?.("passwordHint");
+            }
+          }}
           onChange={(e) => onChange({ passwordHint: e.target.value })}
           className={settingsControlClass}
         />
@@ -476,22 +486,15 @@ function CreateVaultGeneralStep({
               htmlFor={idleId}
               disabled={!draft.auto_close.enabled}
             >
-              <input
+              <IntegerInput
                 id={idleId}
-                type="number"
                 min={1}
                 max={1440}
                 value={draft.auto_close.idle_minutes}
                 disabled={!draft.auto_close.enabled}
-                onChange={(e) =>
+                onChange={(idle_minutes) =>
                   onChange({
-                    auto_close: {
-                      ...draft.auto_close,
-                      idle_minutes: Math.min(
-                        1440,
-                        Math.max(1, Number.parseInt(e.target.value, 10) || 1),
-                      ),
-                    },
+                    auto_close: { ...draft.auto_close, idle_minutes },
                   })
                 }
                 className={[settingsControlClass, "font-mono tabular-nums"].join(" ")}
@@ -502,22 +505,15 @@ function CreateVaultGeneralStep({
               htmlFor={warnId}
               disabled={!draft.auto_close.enabled}
             >
-              <input
+              <IntegerInput
                 id={warnId}
-                type="number"
                 min={0}
                 max={300}
                 value={draft.auto_close.warn_before_seconds}
                 disabled={!draft.auto_close.enabled}
-                onChange={(e) =>
+                onChange={(warn_before_seconds) =>
                   onChange({
-                    auto_close: {
-                      ...draft.auto_close,
-                      warn_before_seconds: Math.min(
-                        300,
-                        Math.max(0, Number.parseInt(e.target.value, 10) || 0),
-                      ),
-                    },
+                    auto_close: { ...draft.auto_close, warn_before_seconds },
                   })
                 }
                 className={[settingsControlClass, "font-mono tabular-nums"].join(" ")}
@@ -584,6 +580,7 @@ function CreateVaultAdvancedStep({
   onChange,
   groups = NO_VAULT_GROUPS,
   vaultRootPath = null,
+  appWorkspace,
 }: StepProps) {
   const { t } = useTranslation();
   const orderId = useId();
@@ -617,15 +614,11 @@ function CreateVaultAdvancedStep({
             hint={t("modal.settings.field.vault.order_help")}
             htmlFor={orderId}
           >
-            <input
+            <IntegerInput
               id={orderId}
-              type="number"
               min={0}
-              step={1}
               value={draft.order}
-              onChange={(e) =>
-                onChange({ order: Math.max(0, Number.parseInt(e.target.value, 10) || 0) })
-              }
+              onChange={(order) => onChange({ order })}
               className={[settingsControlClass, "font-mono tabular-nums"].join(" ")}
             />
           </SettingsField>
@@ -658,6 +651,8 @@ function CreateVaultAdvancedStep({
         <VaultSettingsMountSection
           config={draft.mount}
           vaultRootPath={vaultRootPath}
+          plaintext={draft.storage.mode === "upriv_plain"}
+          appWorkspace={appWorkspace}
           onChange={(patch) => onChange({ mount: { ...draft.mount, ...patch } })}
         />
         <FieldErrors errors={createVaultErrorsForField(errors, "mount")} />

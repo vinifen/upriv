@@ -15,6 +15,7 @@ export {
   compareLogFilesNewestFirst,
   formatLogFileDate,
   logCreatedAtFromFilename,
+  logSeqRange,
   parseLogLine,
   sortLogFilesNewestFirst,
 } from "./format";

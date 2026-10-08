@@ -34,6 +34,19 @@ export interface MobileImportPick {
   releaseSafTree?: string;
 }
 
+/** Names known so far. Published before the rest of the tree is classified. */
+export interface ListedImportFolder {
+  files: MobileImportFile[];
+  directories: string[];
+}
+
+export interface ListGrantedImportFolderOptions {
+  /** Called as each directory's names are known, before the walk finishes. */
+  onSnapshot?: (snapshot: ListedImportFolder) => void;
+  /** Stop before the next directory. Rows already reported stay listed. */
+  shouldStop?: () => boolean;
+}
+
 export class DocumentPickerUnavailableError extends Error {
   constructor() {
     super("DOCUMENT_PICKER_UNAVAILABLE");
@@ -108,12 +121,6 @@ export async function finishMobileImportSession(
   if (releaseSafTree) safReleaseImportTree(releaseSafTree);
 }
 
-function importReadError(name: string): Error {
-  const error = new Error(name);
-  error.name = "ImportReadError";
-  return error;
-}
-
 /** `file://` / absolute path the native core can `File::open`. Not `content://`. */
 export function nativeOsPathFromImportUri(uri: string): string | null {
   const trimmed = uri.trim();
@@ -186,7 +193,7 @@ export async function pickImportFiles(): Promise<MobileImportPick | null> {
     result = await DocumentPicker.getDocumentAsync({
       type: "*/*",
       multiple: true,
-      copyToCacheDirectory: true,
+      copyToCacheDirectory: Platform.OS !== "android",
     });
   } catch (error) {
     if (isNativeModuleMissing(error)) throw new DocumentPickerUnavailableError();
@@ -209,29 +216,45 @@ export async function pickImportFiles(): Promise<MobileImportPick | null> {
   return { files: out, skippedUnsupported: 0 };
 }
 
+/**
+ * A content URI is a folder when its children can be listed.
+ * `getInfoAsync` reports every openable content URI as a file, so a folder
+ * would be stored as a document and the read would fail.
+ */
 async function isSafDirectory(uri: string): Promise<boolean> {
-  try {
-    const info = await getInfoAsync(uri);
-    if (info.exists && typeof info.isDirectory === "boolean") return info.isDirectory;
-  } catch {
-    /* Some SAF documents reject getInfoAsync — try listing. */
+  if (uri.startsWith("content:")) {
+    try {
+      await StorageAccessFramework.readDirectoryAsync(uri);
+      return true;
+    } catch {
+      return false;
+    }
   }
   try {
-    await StorageAccessFramework.readDirectoryAsync(uri);
-    return true;
+    const info = await getInfoAsync(uri);
+    return Boolean(info.exists && info.isDirectory);
   } catch {
     return false;
   }
+}
+
+function publishListedFolder(
+  options: ListGrantedImportFolderOptions | undefined,
+  files: readonly MobileImportFile[],
+  directories: readonly string[],
+): void {
+  options?.onSnapshot?.({ files: [...files], directories: [...directories] });
 }
 
 async function collectSafTree(
   dirUri: string,
   prefix: string,
   out: MobileImportFile[],
-  firstFailedName: { current: string | null },
   directories: string[],
   failClosed: boolean,
+  options?: ListGrantedImportFolderOptions,
 ): Promise<void> {
+  if (options?.shouldStop?.()) return;
   let children: string[];
   try {
     children = await StorageAccessFramework.readDirectoryAsync(dirUri);
@@ -239,47 +262,53 @@ async function collectSafTree(
     if (failClosed) throw new Error("import folder is unreadable");
     return;
   }
+  if (options?.shouldStop?.()) return;
+
+  const provisional: MobileImportFile[] = [];
   for (const childUri of children) {
     const rawName = safDocumentName(childUri);
-    if (await isSafDirectory(childUri)) {
-      const folderName = sanitizeLogicalFileName(rawName, "folder");
-      const nextPrefix = prefix ? `${prefix}/${folderName}` : folderName;
-      directories.push(nextPrefix);
-      await collectSafTree(childUri, nextPrefix, out, firstFailedName, directories, failClosed);
-      continue;
-    }
     const name = sanitizeLogicalFileName(rawName, "file");
-    try {
-      out.push({
-        name,
-        relativePath: prefix ? `${prefix}/${name}` : name,
-        uri: childUri,
-        size: await uriSize(childUri),
-      });
-    } catch {
-      if (failClosed) throw new Error("import folder is unreadable");
-      firstFailedName.current ??= name;
-    }
+    const file: MobileImportFile = {
+      name,
+      relativePath: prefix ? `${prefix}/${name}` : name,
+      uri: childUri,
+      size: 0,
+    };
+    provisional.push(file);
+    out.push(file);
+  }
+  if (provisional.length > 0) publishListedFolder(options, out, directories);
+
+  const nested: { uri: string; prefix: string }[] = [];
+  for (const file of provisional) {
+    if (options?.shouldStop?.()) return;
+    if (!(await isSafDirectory(file.uri))) continue;
+    const at = out.indexOf(file);
+    if (at >= 0) out.splice(at, 1);
+    const folderName = sanitizeLogicalFileName(safDocumentName(file.uri), "folder");
+    const nextPrefix = prefix ? `${prefix}/${folderName}` : folderName;
+    directories.push(nextPrefix);
+    nested.push({ uri: file.uri, prefix: nextPrefix });
+  }
+  for (const dir of nested) {
+    if (options?.shouldStop?.()) return;
+    await collectSafTree(dir.uri, dir.prefix, out, directories, failClosed, options);
   }
 }
 
 /**
- * Android SAF directory picker — desktop `webkitdirectory` parity.
- * Relative paths include the picked folder name (same as Chromium).
- * iOS has no directory SAF equivalent in Expo.
- * Returns `null` when the user cancels.
- *
- * Expo always takes a persistable grant. The caller drops it when the read is
- * finished, unless this tree is the active custom vault-root.
+ * System folder picker. Does not walk the tree.
+ * Returns `null` when the user cancels. iOS has no directory picker here.
+ * The caller drops the persistable grant when the read finishes, unless this
+ * tree is the active vault-root.
  */
-export async function pickImportFolder(options?: {
-  /** A listing failure fails the pick. File-manager imports keep going. */
-  failClosed?: boolean;
-}): Promise<MobileImportPick | null> {
+export async function pickImportFolderGrant(): Promise<{
+  directoryUri: string;
+  folderName: string;
+} | null> {
   if (Platform.OS !== "android") {
     throw new FolderPickerUnavailableError();
   }
-
   let directoryUri: string | null = null;
   try {
     const result = await StorageAccessFramework.requestDirectoryPermissionsAsync();
@@ -289,32 +318,48 @@ export async function pickImportFolder(options?: {
     throw new FolderPickerUnavailableError();
   }
   if (!directoryUri) return null;
+  return {
+    directoryUri,
+    folderName: sanitizeLogicalFileName(safDocumentName(directoryUri), "folder"),
+  };
+}
 
+/** Walk a folder the user already granted. */
+export async function listGrantedImportFolder(
+  directoryUri: string,
+  folderName: string,
+  failClosed: boolean,
+  options?: ListGrantedImportFolderOptions,
+): Promise<MobileImportPick> {
+  const out: MobileImportFile[] = [];
+  const directories: string[] = [];
   try {
-    const folderName = sanitizeLogicalFileName(safDocumentName(directoryUri), "folder");
-    const out: MobileImportFile[] = [];
-    const directories: string[] = [];
-    const firstFailedName = { current: null as string | null };
-    await collectSafTree(
-      directoryUri,
-      folderName,
-      out,
-      firstFailedName,
-      directories,
-      options?.failClosed === true,
-    );
-    if (out.length === 0 && firstFailedName.current) {
-      throw importReadError(firstFailedName.current);
-    }
-    return {
-      files: out,
-      directories,
-      folderName,
-      skippedUnsupported: 0,
-      releaseSafTree: directoryUri,
-    };
+    await collectSafTree(directoryUri, folderName, out, directories, failClosed, options);
   } catch (error) {
     safReleaseImportTree(directoryUri);
     throw error;
   }
+  if (!options?.shouldStop?.()) {
+    options?.onSnapshot?.({ files: [...out], directories: [...directories] });
+  }
+  return {
+    files: out,
+    directories,
+    folderName,
+    skippedUnsupported: 0,
+    releaseSafTree: directoryUri,
+  };
+}
+
+export async function pickImportFolder(options?: {
+  /** A listing failure fails the pick. File-manager imports keep going. */
+  failClosed?: boolean;
+}): Promise<MobileImportPick | null> {
+  const grant = await pickImportFolderGrant();
+  if (!grant) return null;
+  return listGrantedImportFolder(
+    grant.directoryUri,
+    grant.folderName,
+    options?.failClosed === true,
+  );
 }

@@ -264,6 +264,23 @@ describe("createVaultImportPackage", () => {
       archivePassword: undefined,
     });
     expect(
+      createVaultImportPackage(
+        {
+          source: "import",
+          importKind: "file",
+          importShape: "file",
+          importFileName: "notes.pdf",
+          importFilePath: "content://doc/notes.pdf",
+          zipLayout: null,
+        },
+        "secret",
+      ),
+    ).toEqual({
+      kind: "os_tree",
+      archivePath: "content://doc/notes.pdf",
+      archivePassword: undefined,
+    });
+    expect(
       createVaultImportNeedsArchivePassword({
         source: "import",
         importKind: "file",

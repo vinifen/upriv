@@ -19,14 +19,20 @@ import {
   type VaultRootMode,
   type VaultRootSettingsGate,
 } from "@upriv/shared";
+import { PathField } from "@/components/PathField";
 import { useVaultRootService } from "@/platform/services";
 import { useTranslation } from "@/i18n";
 import { useTheme } from "@/theme";
-import { radii, spacing } from "@/theme/tokens";
+import { spacing } from "@/theme/tokens";
 import { Button } from "@/components/ui";
-import { FieldHint, FieldLabel, PolicyRadioOption, ThemedInput } from "@/components/settings";
+import { FieldHint, FieldLabel, PolicyRadioOption } from "@/components/settings";
 import { getMobileAppVersion } from "@/lib/appVersion";
 import { isAndroidSafUri } from "@/platform/native/pickVaultRootFolder";
+import {
+  isAndroidDocumentsDefaultGrant,
+  rememberedCustomFolderPath,
+} from "@/platform/native/documentsGrant";
+import { releaseIfDocumentsRoot } from "./dataFolderGrant";
 import { VaultRootIncompleteReplacePanel } from "./VaultRootIncompleteReplacePanel";
 
 interface VaultRootLocationSectionProps {
@@ -70,7 +76,11 @@ export function VaultRootLocationSection({
   const { t } = useTranslation();
   const { colors, typography } = useTheme();
   const vaultRootService = useVaultRootService();
-  const useDefaultRoot = config.vault_root_mode === "default_root";
+  const android = Platform.OS === "android";
+  const useDefaultRoot = android
+    ? config.vault_root_mode === "default_root" ||
+      isAndroidDocumentsDefaultGrant(config.upriv_root_path)
+    : config.vault_root_mode === "default_root";
   const aliasLoadGen = useRef(0);
   const checkGen = useRef(0);
   const draftIdentityRef = useRef({
@@ -83,6 +93,7 @@ export function VaultRootLocationSection({
   const [replacePolicy, setReplacePolicy] = useState<IncompleteReplacePolicy | null>(null);
   const [customPathLoading, setCustomPathLoading] = useState(false);
   const [defaultRootAnchor, setDefaultRootAnchor] = useState("");
+  const [pickError, setPickError] = useState<string | null>(null);
   const [distribution, setDistribution] = useState<AppDistribution>(
     () => getMobileAppVersion().distribution,
   );
@@ -110,10 +121,14 @@ export function VaultRootLocationSection({
     distribution === "installed"
       ? "modal.app_settings.option.upriv_root.default_root_installed"
       : "modal.app_settings.option.upriv_root.default_root";
-  const defaultRootDescKey =
-    distribution === "installed"
+  const defaultRootDescKey = android
+    ? "modal.app_settings.option.upriv_root.default_root_desc_android"
+    : distribution === "installed"
       ? "modal.app_settings.option.upriv_root.default_root_desc_installed"
       : "modal.app_settings.option.upriv_root.default_root_desc";
+  const customRootDescKey = android
+    ? "modal.app_settings.option.upriv_root.custom_root_desc_android"
+    : "modal.app_settings.option.upriv_root.custom_root_desc";
 
   const dirty =
     forceDirty ||
@@ -157,6 +172,11 @@ export function VaultRootLocationSection({
     }
 
     const gen = ++checkGen.current;
+
+    if (config.vault_root_mode === "default_root" && android) {
+      setDisk("will_create");
+      return;
+    }
 
     if (config.vault_root_mode === "default_root") {
       setDisk("checking");
@@ -206,12 +226,17 @@ export function VaultRootLocationSection({
     customPathLoading,
     vaultRootService,
     inspectNonce,
+    android,
   ]);
 
   const retryDiskCheck = useCallback(() => {
     setDisk("checking");
     checkGen.current += 1;
     const gen = checkGen.current;
+    if (config.vault_root_mode === "default_root" && android) {
+      setDisk("will_create");
+      return;
+    }
     if (config.vault_root_mode === "default_root") {
       void vaultRootService
         .defaultRootStatus()
@@ -249,7 +274,7 @@ export function VaultRootLocationSection({
         if (gen !== checkGen.current) return;
         setDisk("unreadable");
       });
-  }, [config.upriv_root_path, config.vault_root_mode, vaultRootService]);
+  }, [android, config.upriv_root_path, config.vault_root_mode, vaultRootService]);
 
   const pickCustomFolder = useCallback(() => {
     if (controlsDisabled) return;
@@ -267,6 +292,11 @@ export function VaultRootLocationSection({
         t("modal.vault_root_setup.pick_folder_title"),
       );
       if (!picked?.trim()) return;
+      if (releaseIfDocumentsRoot(picked)) {
+        setPickError(t("modal.vault_root_setup.documents_grant_rejected"));
+        return;
+      }
+      setPickError(null);
       onChange({
         vault_root_mode: "custom_root",
         upriv_root_path: picked.trim(),
@@ -322,17 +352,13 @@ export function VaultRootLocationSection({
           }}
           footer={
             <View style={styles.footerCol}>
-              {defaultRootAnchor ? (
-                <Text
-                  style={[
-                    typography.mono,
-                    styles.pathBox,
-                    { backgroundColor: colors.surfaceContainerHighest, color: colors.onSurface },
-                  ]}
-                  selectable
-                >
-                  {defaultRootAnchor}
-                </Text>
+              {android ? (
+                <PathField
+                  value={t("modal.app_settings.option.upriv_root.android_documents_path")}
+                  editable={false}
+                />
+              ) : defaultRootAnchor ? (
+                <PathField value={defaultRootAnchor} editable={false} />
               ) : (
                 <Text style={typography.caption}>
                   {t("modal.app_settings.field.upriv_root_loading")}
@@ -347,12 +373,14 @@ export function VaultRootLocationSection({
                   ) : null}
                   {disk === "will_create" ? (
                     <Text style={typography.caption}>
-                      {t(
-                        primaryAction === "apply"
-                          ? "modal.app_settings.upriv_root.switch_default_root_create_notice_apply"
-                          : "modal.app_settings.upriv_root.switch_default_root_create_notice_continue",
-                        { file: VAULT_ROOT_ALIAS_FILE },
-                      )}
+                      {android
+                        ? t("modal.app_settings.upriv_root.android_default_confirm_notice")
+                        : t(
+                            primaryAction === "apply"
+                              ? "modal.app_settings.upriv_root.switch_default_root_create_notice_apply"
+                              : "modal.app_settings.upriv_root.switch_default_root_create_notice_continue",
+                            { file: VAULT_ROOT_ALIAS_FILE },
+                          )}
                     </Text>
                   ) : null}
                   {disk === "unreadable" || disk === "unauthorized" ? (
@@ -391,19 +419,19 @@ export function VaultRootLocationSection({
           checked={!useDefaultRoot}
           attention={!useDefaultRoot && vaultRootGate.blocksPrimary && disk !== "checking"}
           title={t("modal.app_settings.option.upriv_root.custom_root")}
-          description={t("modal.app_settings.option.upriv_root.custom_root_desc", {
+          description={t(customRootDescKey, {
             file: VAULT_ROOT_ALIAS_FILE,
           })}
           disabled={controlsDisabled}
           onSelect={() => {
             if (controlsDisabled) return;
-            const current = config.upriv_root_path.trim();
+            const current = rememberedCustomFolderPath(config.upriv_root_path);
             setReplacePolicy(null);
             if (current) {
               onChange({ vault_root_mode: "custom_root", upriv_root_path: current });
               return;
             }
-            const stashed = draftCustomPathRef.current.trim();
+            const stashed = rememberedCustomFolderPath(draftCustomPathRef.current);
             if (stashed) {
               onChange({ vault_root_mode: "custom_root", upriv_root_path: stashed });
               return;
@@ -415,9 +443,11 @@ export function VaultRootLocationSection({
               .readAlias()
               .then((alias) => {
                 if (gen !== aliasLoadGen.current) return;
+                const aliasPath = rememberedCustomFolderPath(alias?.path ?? "");
+                if (!aliasPath) return;
                 onChange({
                   vault_root_mode: "custom_root",
-                  upriv_root_path: alias?.path.trim() || "",
+                  upriv_root_path: aliasPath,
                 });
               })
               .finally(() => {
@@ -447,24 +477,28 @@ export function VaultRootLocationSection({
                   ) : null}
                 </>
               ) : null}
-              <ThemedInput
+              <PathField
                 value={config.upriv_root_path}
                 editable={false}
                 selectTextOnFocus={!pathIsSaf}
                 placeholder={t("modal.app_settings.field.upriv_root_placeholder")}
-                mono
               />
               <Button
                 size="sm"
                 variant="ghost"
                 label={t("modal.app_settings.action.choose_folder")}
-                disabled={controlsDisabled || customPathLoading || Platform.OS !== "android"}
+                disabled={controlsDisabled || Platform.OS !== "android"}
                 onPress={pickCustomFolder}
               />
-              {showCustomExtras && pathIsSaf ? (
-                <Text style={typography.caption}>{t("modal.vault_root_setup.saf_notice")}</Text>
+              {pickError ? (
+                <Text
+                  style={[typography.caption, styles.errorText, { color: colors.onErrorContainer }]}
+                  accessibilityRole="alert"
+                >
+                  {pickError}
+                </Text>
               ) : null}
-              {showCustomExtras && Platform.OS !== "android" && !config.upriv_root_path.trim() ? (
+              {showCustomExtras && !config.upriv_root_path.trim() && Platform.OS !== "android" ? (
                 <Text style={typography.caption}>{t("error.unsupported_platform")}</Text>
               ) : null}
               {showCustomExtras && (disk === "unreadable" || disk === "unauthorized") ? (
@@ -510,11 +544,6 @@ const styles = StyleSheet.create({
   wrap: { gap: spacing.sm },
   options: { gap: spacing.sm },
   footerCol: { gap: spacing.sm },
-  pathBox: {
-    borderRadius: radii.sm,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-  },
   errorRow: {
     flexDirection: "column",
     gap: spacing.sm,

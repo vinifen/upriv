@@ -1,6 +1,6 @@
 import { useCallback, useMemo } from "react";
 import { VaultSettingsSection } from "@/components/settings";
-import { Button, Modal } from "@/components/ui";
+import { Button, ContentSkeleton, Modal } from "@/components/ui";
 import { useAppSettingsContext } from "@/features/system/settings";
 import { useTranslation } from "@/i18n";
 import { APP_VERSION, getAppVersion, getSessionAppVersion } from "@/lib";
@@ -81,7 +81,7 @@ export function SystemInfoModal({ open, onClose, vaults, groups }: SystemInfoMod
           </Button>
         </div>
       ) : (
-        <p className="font-mono text-sm text-on-surface-variant">{t("modal.info.loading")}</p>
+        <ContentSkeleton label={t("modal.info.loading")} />
       )}
     </Modal>
   );

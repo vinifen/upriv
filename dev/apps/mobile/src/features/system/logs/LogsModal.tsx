@@ -6,6 +6,7 @@ import {
   LOADING_BUDGET_MS,
   MODAL_CLOSE_MS,
   parseLogLine,
+  logSeqRange,
   shouldBumpVaultRootEpoch,
   sortLogFilesNewestFirst,
   type AppLogFile,
@@ -19,6 +20,7 @@ import { useTheme } from "@/theme";
 import { colorAlpha, radii, spacing } from "@/theme/tokens";
 import {
   Button,
+  ContentSkeleton,
   Checkbox,
   IconButton,
   LoadingBudgetHint,
@@ -42,10 +44,10 @@ interface LogsModalProps {
  */
 export function LogsModal({ open, onClose }: LogsModalProps) {
   const { t, locale } = useTranslation();
-  const { typography } = useTheme();
+  const { colors, typography } = useTheme();
   const logService = useLogService();
   const { reportVaultRootIntegrityFailure } = useAppSettingsContext();
-  const { message: toastMessage, show: showToast, dismiss: dismissToast } = useToast();
+  const { toast, show: showToast, dismiss: dismissToast } = useToast();
 
   const [files, setFiles] = useState<AppLogFile[]>([]);
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
@@ -79,6 +81,8 @@ export function LogsModal({ open, onClose }: LogsModalProps) {
   const allSelected =
     allFilenames.length > 0 && allFilenames.every((filename) => selected.has(filename));
   const someSelected = selected.size > 0;
+  /** A single log has nothing to multi-select: row actions cover it. */
+  const selectable = files.length > 1;
   const activeFileMeta = activeFilename
     ? files.find((entry) => entry.filename === activeFilename)
     : undefined;
@@ -318,8 +322,8 @@ export function LogsModal({ open, onClose }: LogsModalProps) {
     }
   };
 
-  const handleDownload = async () => {
-    const targets = someSelected ? files.filter((entry) => selected.has(entry.filename)) : files;
+  const handleDownload = async (filenames: ReadonlySet<string>) => {
+    const targets = files.filter((entry) => filenames.has(entry.filename));
     if (targets.length === 0) return;
     try {
       const withContent = await Promise.all(
@@ -338,6 +342,18 @@ export function LogsModal({ open, onClose }: LogsModalProps) {
   };
 
   const showDeleteConfirm = deleteTargets !== null && !activeFilename;
+  const deleteSeqRange =
+    deleteTargets && deleteTargets.length > 1 ? logSeqRange(files, deleteTargets) : null;
+  const deleteQuestion =
+    deleteTargets?.length === 1
+      ? t("modal.logs.delete_confirm_one")
+      : deleteSeqRange
+        ? t("modal.logs.delete_confirm_many_range", {
+            count: String(deleteTargets?.length ?? 0),
+            first: String(deleteSeqRange.first),
+            last: String(deleteSeqRange.last),
+          })
+        : t("modal.logs.delete_confirm_many", { count: String(deleteTargets?.length ?? 0) });
 
   const backToList = () => {
     viewerGen.current += 1;
@@ -352,11 +368,15 @@ export function LogsModal({ open, onClose }: LogsModalProps) {
   const footer =
     showDeleteConfirm && deleteTargets ? (
       <View style={styles.footerCol}>
-        <Text style={[typography.bodyMuted, styles.confirmCopy]}>
-          {deleteTargets.length === 1
-            ? t("modal.logs.delete_confirm_one")
-            : t("modal.logs.delete_confirm_many", { count: String(deleteTargets.length) })}
-        </Text>
+        <View style={styles.confirmBlock}>
+          <Text style={[typography.bodyMuted, styles.confirmCopy]}>{deleteQuestion}</Text>
+          {deleteTargets.length === 1 ? (
+            <Text style={[typography.mono, { color: colors.onSurface }]}>{deleteTargets[0]}</Text>
+          ) : null}
+          <Text style={[typography.bodyMuted, styles.confirmCopy]}>
+            {t("modal.logs.delete_confirm_irreversible")}
+          </Text>
+        </View>
         <ModalFooterActions layout="confirm">
           <Button
             label={t("action.delete")}
@@ -397,7 +417,7 @@ export function LogsModal({ open, onClose }: LogsModalProps) {
       panelClassName="max-w-5xl"
       bodyScroll={!activeFile}
       footer={footer}
-      overlay={<Toast message={toastMessage} onDismiss={dismissToast} />}
+      overlay={<Toast toast={toast} onDismiss={dismissToast} />}
     >
       {activeFile ? (
         <LogFileViewer file={activeFile} />
@@ -434,13 +454,13 @@ export function LogsModal({ open, onClose }: LogsModalProps) {
           ) : !listLoading && files.length === 0 ? (
             <Text style={[typography.mono, styles.empty]}>{t("modal.logs.empty")}</Text>
           ) : listLoading && files.length === 0 ? (
-            <View style={styles.placeholder} accessibilityState={{ busy: true }} />
+            <ContentSkeleton label={t("modal.logs.loading")} />
           ) : (
             <View
               style={styles.list}
               accessibilityState={{ busy: viewerLoading || Boolean(openingFilename) }}
             >
-              {deleteTargets === null ? (
+              {deleteTargets === null && selectable ? (
                 <LogListToolbar
                   allSelected={allSelected}
                   someSelected={someSelected}
@@ -448,7 +468,7 @@ export function LogsModal({ open, onClose }: LogsModalProps) {
                   onToggleSelectAll={toggleSelectAll}
                   onDeleteSelected={() => beginDelete(Array.from(selected))}
                   onDownload={() => {
-                    void handleDownload();
+                    void handleDownload(selected);
                   }}
                 />
               ) : null}
@@ -458,7 +478,7 @@ export function LogsModal({ open, onClose }: LogsModalProps) {
                   key={entry.filename}
                   entry={entry}
                   locale={locale}
-                  checked={selected.has(entry.filename)}
+                  checked={selectable && selected.has(entry.filename)}
                   selectionDisabled={deleteTargets !== null || Boolean(openingFilename)}
                   opening={openingFilename === entry.filename}
                   timedOut={viewerTimedOutFilename === entry.filename}
@@ -470,9 +490,12 @@ export function LogsModal({ open, onClose }: LogsModalProps) {
                         }
                       : null
                   }
-                  onToggleSelected={() => toggleSelected(entry.filename)}
+                  onToggleSelected={selectable ? () => toggleSelected(entry.filename) : undefined}
                   onOpen={() => openLogFile(entry.filename)}
                   onRetry={() => retryViewer(entry.filename)}
+                  onDownload={() => {
+                    void handleDownload(new Set([entry.filename]));
+                  }}
                   onDelete={() => beginDelete([entry.filename])}
                 />
               ))}
@@ -521,12 +544,15 @@ function LogListToolbar({
             {t("modal.logs.selected_count", { count: String(selectedCount) })}
           </Text>
         ) : null}
-        <Button
-          variant="secondary"
-          size="sm"
-          label={someSelected ? t("modal.logs.download_selected") : t("modal.logs.download_all")}
-          onPress={onDownload}
-        />
+        {someSelected ? (
+          <IconButton
+            label={t("modal.logs.download_selected")}
+            icon="download"
+            size={18}
+            tone="muted"
+            onPress={onDownload}
+          />
+        ) : null}
         {someSelected ? (
           <IconButton
             label={t("modal.logs.delete_selected")}
@@ -549,9 +575,11 @@ interface LogFileRowProps {
   opening?: boolean;
   timedOut?: boolean;
   openingBudget?: { budgetMs: number; remainingMs: number } | null;
-  onToggleSelected: () => void;
+  /** Omitted when the list has a single file: no checkbox. */
+  onToggleSelected?: () => void;
   onOpen: () => void;
   onRetry: () => void;
+  onDownload: () => void;
   onDelete: () => void;
 }
 
@@ -566,6 +594,7 @@ function LogFileRow({
   onToggleSelected,
   onOpen,
   onRetry,
+  onDownload,
   onDelete,
 }: LogFileRowProps) {
   const { t } = useTranslation();
@@ -583,12 +612,14 @@ function LogFileRow({
         },
       ]}
     >
-      <Checkbox
-        checked={checked}
-        disabled={selectionDisabled}
-        onChange={onToggleSelected}
-        label={entry.filename}
-      />
+      {onToggleSelected ? (
+        <Checkbox
+          checked={checked}
+          disabled={selectionDisabled}
+          onChange={onToggleSelected}
+          label={entry.filename}
+        />
+      ) : null}
       <Pressable
         disabled={selectionDisabled}
         onPress={onOpen}
@@ -640,14 +671,24 @@ function LogFileRow({
       {timedOut ? (
         <Button label={t("action.retry")} variant="secondary" size="sm" onPress={onRetry} />
       ) : (
-        <IconButton
-          label={t("action.delete")}
-          icon="trash"
-          size={18}
-          tone="muted"
-          disabled={selectionDisabled}
-          onPress={onDelete}
-        />
+        <>
+          <IconButton
+            label={t("action.download")}
+            icon="download"
+            size={18}
+            tone="muted"
+            disabled={selectionDisabled}
+            onPress={onDownload}
+          />
+          <IconButton
+            label={t("action.delete")}
+            icon="trash"
+            size={18}
+            tone="muted"
+            disabled={selectionDisabled}
+            onPress={onDelete}
+          />
+        </>
       )}
     </View>
   );
@@ -655,12 +696,15 @@ function LogFileRow({
 
 function LogFileViewer({ file }: { file: AppLogFile }) {
   const { colors, typography } = useTheme();
-  const listRef = useRef<FlatList<ParsedLogLine>>(null);
-  const lines = useMemo(() => file.content.trimEnd().split("\n").map(parseLogLine), [file.content]);
+  /* Newest line first in an inverted list: the viewer opens at the end of the log (desktop parity). */
+  const lines = useMemo(
+    () => file.content.trimEnd().split("\n").map(parseLogLine).reverse(),
+    [file.content],
+  );
 
   return (
     <FlatList
-      ref={listRef}
+      inverted
       style={styles.viewerScroll}
       data={lines}
       keyExtractor={(_, index) => `${file.filename}:${index}`}
@@ -676,9 +720,6 @@ function LogFileViewer({ file }: { file: AppLogFile }) {
       nestedScrollEnabled
       keyboardShouldPersistTaps="handled"
       keyboardDismissMode="none"
-      onContentSizeChange={() => {
-        listRef.current?.scrollToEnd({ animated: false });
-      }}
     />
   );
 }
@@ -728,7 +769,6 @@ const styles = StyleSheet.create({
   list: { gap: spacing.sm },
   empty: { textAlign: "center", paddingVertical: 40 },
   center: { gap: spacing.md, alignItems: "center", paddingVertical: 40 },
-  placeholder: { minHeight: 80 },
   toolbar: {
     minHeight: 56,
     flexDirection: "row",
@@ -784,6 +824,7 @@ const styles = StyleSheet.create({
     letterSpacing: 0.4,
   },
   footerCol: { gap: spacing.md },
+  confirmBlock: { gap: spacing.xs },
   confirmCopy: { fontSize: 14 },
   viewerScroll: { flexGrow: 1, maxHeight: 420 },
   viewer: {

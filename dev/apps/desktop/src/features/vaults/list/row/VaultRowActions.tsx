@@ -1,8 +1,11 @@
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
+import { useToast } from "@upriv/shared/react";
 import { Icon } from "@/components/icons";
-import { DropdownMenu, IconButton } from "@/components/ui";
+import { DropdownMenu, IconButton, Toast } from "@/components/ui";
 import { useAppSettingsContext } from "@/features/system/settings";
 import { useTranslation } from "@/i18n";
+import { revealFailureKey } from "@/lib/revealInOs";
+import { rpcRevealInFileManager } from "@/lib/rpc";
 import { useVaultService } from "@/platform/services";
 import {
   resolveVaultListStatus,
@@ -53,6 +56,7 @@ export function VaultRowActions({
   onUnlockVault,
 }: VaultRowActionsProps) {
   const { t } = useTranslation();
+  const { toast, show, dismiss } = useToast();
   const { settings } = useAppSettingsContext();
   const vaultService = useVaultService();
   const showVaultMore = settings.ui.vault_list_show_vault_more_button !== false;
@@ -67,6 +71,11 @@ export function VaultRowActions({
     ? { size: "sm" as const, variant: "row-action" as const }
     : rowActionProps;
   const actionIconSize = stacked ? 18 : 20;
+
+  const openOsMount = useCallback(async () => {
+    const failure = await revealFailureKey(() => rpcRevealInFileManager(vault.id, "/"));
+    if (failure) show(t(failure));
+  }, [show, t, vault.id]);
 
   const settingsItems = useMemo(
     () =>
@@ -106,6 +115,14 @@ export function VaultRowActions({
               icon: <Icon name="file-manager" size={18} />,
               onSelect: () => {
                 window.requestAnimationFrame(() => onOpenFileManager(vault));
+              },
+            },
+            {
+              id: "open_os",
+              label: t("action.open_file_manager"),
+              icon: <Icon name="folder" size={18} />,
+              onSelect: () => {
+                window.requestAnimationFrame(() => void openOsMount());
               },
             },
           ]
@@ -157,6 +174,7 @@ export function VaultRowActions({
       onOpenBackups,
       onOpenFileManager,
       onOpenNote,
+      openOsMount,
       onOpenVaultInfo,
       onUnlockVault,
       t,
@@ -202,6 +220,7 @@ export function VaultRowActions({
           items={settingsItems}
         />
       ) : null}
+      <Toast toast={toast} onDismiss={dismiss} />
     </div>
   );
 }

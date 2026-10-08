@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
-import { Button, LoadingBudgetHint, Modal } from "@/components/ui";
+import { Button, ContentSkeleton, LoadingBudgetHint, Modal } from "@/components/ui";
 import { useTranslation, type I18nKey } from "@/i18n";
 import { useErrorToast } from "@/hooks/useErrorToast";
 import { useLoadingBudget } from "@upriv/shared/react";
@@ -31,6 +31,7 @@ import type {
   VaultSettingsConfig,
   VaultSettingsListPatch,
   VaultSettingsSectionId,
+  WorkspaceTable,
   VaultPipelineListStatus,
   KdfUnlockPreset,
 } from "@upriv/shared";
@@ -52,6 +53,7 @@ import {
   resolveVaultListStatus,
   selectedGroupIdAfterAssignment,
   normalizeVaultSettingsConfig,
+  peekVaultSettings,
   vaultSettingsEqual,
   vaultSettingsEqualIgnoringIdentity,
   patchStorageMode,
@@ -144,6 +146,8 @@ export function VaultSettingsModal({
   const confirmInputId = useId();
   const savedHideRef = useRef<ReturnType<typeof setTimeout>>();
   const openedForVaultRef = useRef<string | null>(null);
+  const draftTouchedRef = useRef(false);
+  const [seededFor, setSeededFor] = useState<string | null>(null);
   /** Skip draft wipe / settings reload when save remounts onto the new id. */
   const identityMigratingRef = useRef(false);
   const identityMigratingToRef = useRef<string | null>(null);
@@ -305,7 +309,7 @@ export function VaultSettingsModal({
       }
     }
     openedForVaultRef.current = vaultId;
-    setDraft(null);
+    draftTouchedRef.current = false;
     setSelectedGroupId(
       groupsRef.current.find((group) => group.groupedVaults.includes(vaultId))?.id ?? "",
     );
@@ -315,7 +319,11 @@ export function VaultSettingsModal({
   useEffect(() => {
     if (!open || !config || !vaultId) return;
     if (openedForVaultRef.current !== vaultId) return;
-    setDraft((current) => current ?? normalizeVaultSettingsConfig(config));
+    setDraft((current) => {
+      const next = normalizeVaultSettingsConfig(config);
+      if (draftTouchedRef.current && current) return current;
+      return next;
+    });
   }, [open, vaultId, config]);
 
   useEffect(() => {
@@ -648,8 +656,23 @@ export function VaultSettingsModal({
     setSaveConfirmOpen(false);
   }, []);
 
+  const formConfig = draft ?? config;
+  if (open && vaultId && seededFor !== vaultId) {
+    const migrating = identityMigratingRef.current && identityMigratingToRef.current === vaultId;
+    if (!migrating) {
+      draftTouchedRef.current = false;
+      const remembered = peekVaultSettings(vaultId);
+      setDraft(remembered ? normalizeVaultSettingsConfig(remembered) : null);
+    }
+    setSeededFor(vaultId);
+  }
+  if (!open && seededFor !== null) {
+    setSeededFor(null);
+  }
+
   const patchDraft = useCallback(
     <S extends keyof VaultSettingsConfig>(section: S, patch: Partial<VaultSettingsConfig[S]>) => {
+      draftTouchedRef.current = true;
       setDiscardConfirmOpen(false);
       setSaveConfirmOpen(false);
       setDraft((current) => {
@@ -791,7 +814,6 @@ export function VaultSettingsModal({
     }
   };
 
-  const formConfig = draft ?? config;
   if (!open || !vault || !activeArea) return null;
 
   const modalTitle = t(vaultSettingsAreaTitleKey(activeArea));
@@ -942,7 +964,7 @@ export function VaultSettingsModal({
               </Button>
             </div>
           </div>
-        ) : loadError ? (
+        ) : loadError && !formConfig ? (
           <div className="py-10 text-center text-sm text-on-surface-variant">
             <p role="alert">{t(desktopErrorI18nKey(loadError))}</p>
             <div className="mt-4 flex justify-center">
@@ -951,7 +973,7 @@ export function VaultSettingsModal({
               </Button>
             </div>
           </div>
-        ) : settingsLoading && loadBudget.visible ? (
+        ) : settingsLoading && loadBudget.visible && !formConfig ? (
           <div className="py-10 text-center font-mono text-sm text-on-surface-variant">
             <LoadingBudgetHint
               budgetMs={loadBudget.budgetMs}
@@ -985,16 +1007,12 @@ export function VaultSettingsModal({
                         resolvedRootPath,
                       ),
                       setMountPathIssue,
+                      appSettings.workspace,
                     )}
                   </VaultSettingsSection>
                 ))}
 
-                <VaultSettingsSection
-                  key={deleteOpen ? "danger-zone-open" : "danger-zone"}
-                  title={t("modal.settings.danger_zone")}
-                  tone="danger"
-                  defaultOpen={deleteOpen}
-                >
+                <VaultSettingsSection title={t("modal.settings.danger_zone")} tone="danger">
                   <VaultSettingsDangerZoneSection
                     vaultId={vault.id}
                     deleteOpen={deleteOpen}
@@ -1062,7 +1080,7 @@ export function VaultSettingsModal({
             ) : null}
           </>
         ) : (
-          <div className="py-10" aria-busy="true" />
+          <ContentSkeleton label={t("modal.info.loading")} />
         )}
       </div>
     </Modal>
@@ -1085,6 +1103,7 @@ function renderPreferenceSection(
   },
   vaultRootPath: string | null,
   onMountPathIssue: (invalid: boolean) => void,
+  appWorkspace: WorkspaceTable,
 ) {
   switch (sectionId) {
     case "vault":
@@ -1110,6 +1129,8 @@ function renderPreferenceSection(
           config={draft.mount}
           vaultRootPath={vaultRootPath}
           controlsDisabled={locks.mountLocked}
+          plaintext={draft.storage.mode === "upriv_plain"}
+          appWorkspace={appWorkspace}
           onPathIssueChange={(issue) => onMountPathIssue(issue != null)}
           onChange={(patch) => patchDraft("mount", patch)}
         />

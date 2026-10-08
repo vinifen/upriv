@@ -34,10 +34,10 @@ pub fn create_vault(
         &config.vault.display_name,
     )?;
     let dest = root.vault_dir(&id)?;
-    std::fs::create_dir_all(root.vaults_dir())?;
+    crate::host_fs::create_dir_all(root.vaults_dir())?;
     // Registry lock only around `create_dir` so Argon2 does not block rename.
     with_vault_registry_lock(|| {
-        with_vault_dir_lock(&dest, || match std::fs::create_dir(&dest) {
+        with_vault_dir_lock(&dest, || match crate::host_fs::create_dir(&dest) {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == ErrorKind::AlreadyExists => {
                 Err(UprivError::VaultAlreadyExists(dest.clone()))
@@ -49,7 +49,7 @@ pub fn create_vault(
     let _preparing = match PreparingGuard::enter(&dest) {
         Ok(guard) => guard,
         Err(error) => {
-            let _ = std::fs::remove_dir_all(&dest);
+            let _ = crate::host_fs::remove_dir_all(&dest);
             return Err(error);
         }
     };
@@ -59,7 +59,7 @@ pub fn create_vault(
             let store = dest.join(crate::paths::STORE_DIR_NAME);
             // Same process-wide Argon2 gate as `open_vault` — never two KDFs at once.
             with_unlock_lock(|| create_seeded_store(&store, password, preset))?;
-            std::fs::create_dir_all(dest.join("backups"))?;
+            crate::host_fs::create_dir_all(dest.join("backups"))?;
             let hash = content_hash_hex(&store)?;
             save_vault_persistence(
                 &dest,
@@ -72,7 +72,7 @@ pub fn create_vault(
             Ok(())
         })();
         if created.is_err() {
-            let _ = std::fs::remove_dir_all(&dest);
+            let _ = crate::host_fs::remove_dir_all(&dest);
         }
         created
     })?;

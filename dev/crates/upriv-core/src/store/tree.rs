@@ -1,5 +1,7 @@
 //! Logical tree mutations on a [`VaultIndex`]. Chunk I/O stays in `chunk`.
 
+#[allow(unused_imports)]
+use crate::host_fs::HostFsQuery;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
@@ -455,6 +457,8 @@ pub fn build_file_tree(index: &VaultIndex, root_name: &str) -> FileTreeNode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[allow(unused_imports)]
+    use crate::host_fs::HostFsQuery;
     use crate::store::{
         create_empty_store, flush_index, open_store, write_logical_file, KdfUnlockPreset,
     };

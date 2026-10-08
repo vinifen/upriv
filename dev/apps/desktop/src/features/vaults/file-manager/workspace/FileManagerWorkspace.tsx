@@ -30,6 +30,7 @@ interface FileManagerWorkspaceProps {
   active?: boolean;
   writesLocked?: boolean;
   onDismissConfirmed: () => void;
+  onVaultCloseConfirmed?: () => void;
 }
 
 export function FileManagerWorkspace({
@@ -37,6 +38,7 @@ export function FileManagerWorkspace({
   active = true,
   writesLocked = false,
   onDismissConfirmed,
+  onVaultCloseConfirmed,
 }: FileManagerWorkspaceProps) {
   const { dispatchWorkspace } = useFileManager();
   const { settings, patchSettings } = useAppSettingsContext();
@@ -72,6 +74,7 @@ export function FileManagerWorkspace({
     entry,
     dispatch,
     onDismissConfirmed,
+    onVaultCloseConfirmed,
     writesLocked,
   });
 
@@ -195,6 +198,8 @@ export function FileManagerWorkspace({
           <FileManagerTabBar
             workspace={entry.workspace}
             onWorkspaceAction={dispatch}
+            onDelete={fm.requestDelete}
+            isPathPending={fm.isImportPending}
             showSave={hasUnsavedEditableTabs(fm)}
             onSave={fm.saveAllFiles}
           />

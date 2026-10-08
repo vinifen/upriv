@@ -1,5 +1,7 @@
 //! `.upriv/state.json` — volatile open-session records (never `persistence.json`).
 
+#[allow(unused_imports)]
+use crate::host_fs::HostFsQuery;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Mutex;
@@ -35,10 +37,10 @@ impl RuntimeState {
 
 pub fn load_runtime_state(root: &VaultRoot) -> Result<RuntimeState> {
     let path = root.state_path();
-    if !path.is_file() {
+    if !path.host_is_file() {
         return Ok(RuntimeState::closed());
     }
-    let raw = std::fs::read_to_string(&path)?;
+    let raw = crate::host_fs::read_to_string(&path)?;
     serde_json::from_str(&raw).map_err(|error| UprivError::VaultStoreInvalid {
         path,
         detail: format!("invalid state.json: {error}"),
@@ -48,7 +50,7 @@ pub fn load_runtime_state(root: &VaultRoot) -> Result<RuntimeState> {
 pub fn save_runtime_state(root: &VaultRoot, state: &RuntimeState) -> Result<()> {
     let path = root.state_path();
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+        crate::host_fs::create_dir_all(parent)?;
     }
     let body =
         serde_json::to_string_pretty(state).map_err(|error| UprivError::VaultStoreInvalid {
@@ -115,7 +117,7 @@ pub fn release_recorded_mount(root: &VaultRoot, vault_id: &str) {
     // `remove_dir` stats the path. On a dead FUSE leaf that stat is the
     // "Transport endpoint is not connected" dialog, so only remove after detach.
     if crate::mount::force_unmount(path).is_ok() {
-        let _ = std::fs::remove_dir(path);
+        let _ = crate::host_fs::remove_dir(path);
     }
 }
 
@@ -173,7 +175,7 @@ pub fn sweep_stale_mount_leaves(root: &VaultRoot) -> Result<Vec<String>> {
         let path = Path::new(mount);
         match crate::mount::force_unmount(path) {
             Ok(()) => {
-                let _ = std::fs::remove_dir(path);
+                let _ = crate::host_fs::remove_dir(path);
                 swept.push(id.clone());
             }
             Err(_) => {
@@ -188,6 +190,8 @@ pub fn sweep_stale_mount_leaves(root: &VaultRoot) -> Result<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[allow(unused_imports)]
+    use crate::host_fs::HostFsQuery;
     use crate::store::KdfUnlockPreset;
     use crate::test_support::vault_root_with;
     use crate::vault::{close_vault, create_vault, open_vault};
@@ -218,11 +222,11 @@ mode = "encrypted_dir"
         .unwrap();
         open_vault(&root, "notes", b"pass-word-ok").unwrap();
         let mount = root.root().join("live-mount");
-        std::fs::create_dir(&mount).unwrap();
+        crate::host_fs::create_dir(&mount).unwrap();
         mark_session_open(&root, "notes", Some(mount.display().to_string())).unwrap();
         let swept = sweep_stale_mount_leaves(&root).unwrap();
         assert!(swept.is_empty());
-        assert!(mount.is_dir());
+        assert!(mount.host_is_dir());
         close_vault(&root, "notes", None).unwrap();
     }
 
@@ -230,10 +234,10 @@ mode = "encrypted_dir"
     fn sweep_removes_mount_dir_when_session_and_lock_are_gone() {
         let (_tmp, root) = vault_root_with(&[]);
         let mount = root.root().join("stale-mount");
-        std::fs::create_dir(&mount).unwrap();
+        crate::host_fs::create_dir(&mount).unwrap();
         mark_session_open(&root, "notes", Some(mount.display().to_string())).unwrap();
         let swept = sweep_stale_mount_leaves(&root).unwrap();
         assert_eq!(swept, ["notes"]);
-        assert!(!mount.exists());
+        assert!(!mount.host_exists());
     }
 }
