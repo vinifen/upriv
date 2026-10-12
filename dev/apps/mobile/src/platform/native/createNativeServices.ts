@@ -10,6 +10,7 @@ import type {
 import {
   createUnavailableVaultSecurityService,
   isRpcError,
+  isVaultRootUnreachableError,
   normalizeAppSettings,
 } from "@upriv/shared";
 import {
@@ -23,6 +24,7 @@ import {
   rpcVaultRootDefaultRootStatus,
   rpcVaultRootInspectPath,
   rpcVaultRootReadAlias,
+  rpcVaultRootRememberCustom,
   rpcVaultRootResolve,
   rpcVaultRootSetupDefaultRoot,
   rpcVaultRootSetupPath,
@@ -35,6 +37,7 @@ import { nativeVaultFileSystemService } from "./vaultFileSystemService";
 import { nativeBackupService } from "./backupService";
 import { nativeCreateVaultService } from "./createVaultService";
 import { isSafLogicalRoot, SAF_VAULT_ROOT } from "./androidVaultHome";
+import { planSafSwitch, rememberedCustomFolderPath } from "./documentsGrant";
 import { isAndroidSafUri, pickVaultRootFolder } from "./pickVaultRootFolder";
 import {
   isSafTreeUri,
@@ -104,17 +107,29 @@ async function inspectSafWithSchema(safUri: string): Promise<SafInspectStatus> {
   }
 }
 
+/** Point the active grant at `next`, then release only the folder the plan names. */
+function commitSafSwitch(previous: string | null, next: string): void {
+  const plan = planSafSwitch(previous, next);
+  if (next) safSetActiveUri(next);
+  if (!plan.releaseUri) return;
+  try {
+    safRelease(plan.releaseUri);
+  } catch {
+    /* best-effort release */
+  }
+}
+
 function clearActiveSafUri(): void {
   const previousUri = safGetActiveUri();
   unmountSafRoot();
   if (!previousUri) return;
+  const plan = planSafSwitch(previousUri, "");
   safSetActiveUri(null);
-  if (isSafTreeUri(previousUri)) {
-    try {
-      safRelease(previousUri);
-    } catch {
-      /* best-effort release */
-    }
+  if (!plan.releaseUri) return;
+  try {
+    safRelease(plan.releaseUri);
+  } catch {
+    /* best-effort release */
   }
 }
 
@@ -122,6 +137,23 @@ function mountActiveSafUri(): string | null {
   const uri = safGetActiveUri();
   if (!uri) return null;
   mountSafRoot(uri);
+  return uri;
+}
+
+/**
+ * Mount the active grant for a settings read. An unplugged drive leaves the
+ * bridge unmounted, so Rust answers from `.upriv-root` (custom_root, not on disk)
+ * and the pointer survives until the drive is back.
+ */
+function mountActiveSafUriForLoad(): string | null {
+  const uri = safGetActiveUri();
+  if (!uri) return null;
+  try {
+    mountSafRoot(uri);
+  } catch (error) {
+    if (!isVaultRootUnreachableError(error)) throw error;
+    unmountSafRoot();
+  }
   return uri;
 }
 
@@ -171,7 +203,7 @@ function createSafAwareAppSettingsService(): AppSettingsService {
 
   return {
     async load(): Promise<AppSettingsLoadResult> {
-      const uri = mountActiveSafUri();
+      const uri = mountActiveSafUriForLoad();
       const loaded = await rustLoad();
       const pointed = loaded.settings.app.upriv_root_path.trim() || (loaded.rootPath ?? "").trim();
       if (uri && isSafLogicalRoot(pointed)) {
@@ -210,19 +242,26 @@ function createSafAwareAppSettingsService(): AppSettingsService {
           restoreSafMount(previous, treeUri);
           return false;
         }
-        if (previous && previous !== treeUri) {
+        const plan = planSafSwitch(previous, treeUri);
+        if (plan.rememberCustomUri) {
           try {
-            safRelease(previous);
-          } catch {
-            /* the new grant is the data folder */
+            await rpcVaultRootRememberCustom(plan.rememberCustomUri);
+          } catch (error) {
+            // Settings are already on this tree. The next launch must mount it.
+            // Keep the previous grant until `custom=` is written.
+            safSetActiveUri(treeUri);
+            throw error;
           }
         }
-        safSetActiveUri(treeUri);
+        commitSafSwitch(previous, treeUri);
         return wrote;
       }
 
-      // Leaving a picked folder. Release only after Rust returns — a thrown
-      // save must not drop persistable permission. Soft `wrote: false` is still a leave.
+      // Record the Custom folder before the save. If that write fails, settings
+      // stay unchanged and this folder stays mounted. If the save fails after
+      // it, `custom=` is already stored.
+      const leaving = rememberedCustomFolderPath(safGetActiveUri() ?? "");
+      if (leaving) await rpcVaultRootRememberCustom(leaving);
       const wrote = await rustSave(normalized, options);
       clearActiveSafUri();
       return wrote;
@@ -233,6 +272,9 @@ function createSafAwareAppSettingsService(): AppSettingsService {
 /**
  * Vault-root service. A picked `content://` folder is mounted, then Rust
  * creates and edits vaults there. Other paths go straight to Rust.
+ *
+ * Resolve only reads. It never releases the grant: an unplugged drive throws
+ * `vault_root_unreachable`, and only choosing another data folder drops it.
  */
 function createNativeVaultRootService(): VaultRootService {
   return {
@@ -242,13 +284,12 @@ function createNativeVaultRootService(): VaultRootService {
       if (uri && result.status === "found" && isSafLogicalRoot(result.rootPath)) {
         return { ...result, rootPath: uri };
       }
-      if (uri) clearActiveSafUri();
       return result;
     },
 
     async setupDefaultRoot(options) {
-      // Switching to default_root always clears the SAF pref so the two
-      // sources of truth cannot disagree (Rust alias for FS, SAF pref for URIs).
+      const leaving = rememberedCustomFolderPath(safGetActiveUri() ?? "");
+      if (leaving) await rpcVaultRootRememberCustom(leaving);
       const result = await rpcVaultRootSetupDefaultRoot(options);
       clearActiveSafUri();
       return result;
@@ -257,26 +298,23 @@ function createNativeVaultRootService(): VaultRootService {
     async setupAtPath(path, options) {
       const trimmed = path.trim();
       if (!isSafTreeUri(trimmed)) {
+        const leaving = rememberedCustomFolderPath(safGetActiveUri() ?? "");
+        if (leaving) await rpcVaultRootRememberCustom(leaving);
         const result = await rpcVaultRootSetupPath(trimmed, options);
         clearActiveSafUri();
         return result;
       }
       const previous = safGetActiveUri();
+      const plan = planSafSwitch(previous, trimmed);
       try {
         safPersist(trimmed);
         mountSafRoot(trimmed);
         const result = await rpcVaultRootSetupPath(SAF_VAULT_ROOT, {
           ...options,
           adoptPrivateRoot: true,
+          ...(plan.rememberCustomUri ? { customUri: plan.rememberCustomUri } : {}),
         });
-        if (previous && previous !== trimmed) {
-          try {
-            safRelease(previous);
-          } catch {
-            /* the new grant is the data folder */
-          }
-        }
-        safSetActiveUri(trimmed);
+        commitSafSwitch(previous, trimmed);
         return { ...result, rootPath: trimmed };
       } catch (error) {
         restoreSafMount(previous, trimmed);
@@ -285,11 +323,18 @@ function createNativeVaultRootService(): VaultRootService {
     },
 
     async readAlias() {
-      const safUri = safGetActiveUri();
-      if (safUri) {
-        return { path: safUri, active: true };
+      const file = await rpcVaultRootReadAlias();
+      const saved = rememberedCustomFolderPath(file?.customPath ?? "");
+      const live = safGetActiveUri();
+      const liveCustom = rememberedCustomFolderPath(live ?? "");
+      if (liveCustom) {
+        return { path: liveCustom, active: true, customPath: liveCustom };
       }
-      return rpcVaultRootReadAlias();
+      if (saved) {
+        return { path: saved, active: false, customPath: saved };
+      }
+      if (live) return { path: live, active: true };
+      return file;
     },
 
     async defaultRootStatus() {

@@ -38,6 +38,8 @@ export const CORE_RPC_COMMANDS = {
    */
   VAULT_ROOT_DEACTIVATE_ALIAS: "vault_root_deactivate_alias",
   VAULT_ROOT_READ_ALIAS: "vault_root_read_alias",
+  /** Write `custom=` on `.upriv-root` — the last Android Custom folder. Does not switch mode. */
+  VAULT_ROOT_REMEMBER_CUSTOM: "vault_root_remember_custom",
   VAULT_ROOT_DEFAULT_ROOT_STATUS: "vault_root_default_root_status",
   VAULT_ROOT_INSPECT_PATH: "vault_root_inspect_path",
   VAULT_ROOT_SUGGESTED_CUSTOM_PATH: "vault_root_suggested_custom_path",

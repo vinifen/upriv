@@ -1,6 +1,6 @@
 import { findNode, type FileTreeNode } from "../file-tree";
-import type { VaultWorkspaceState } from "./workspaceTypes";
-import { createDefaultWorkspaceState } from "./workspaceTypes";
+import type { MarkdownViewMode, VaultWorkspaceState } from "./workspaceTypes";
+import { createDefaultWorkspaceState, markdownViewMode } from "./workspaceTypes";
 
 /** Logical file at vault root — encrypted in `store/` with the rest of the vault. */
 export const UPRIV_WORKSPACE_FILE_NAME = ".upriv-workspace.json";
@@ -14,6 +14,12 @@ export interface WorkspaceSnapshotV1 {
   activeTabPath: string | null;
   expandedPaths: string[];
   selectedPath: string | null;
+  /** Missing or any value other than `source` loads as `preview`. */
+  markdownView: MarkdownViewMode;
+  /** Missing or anything but `true` loads as shown. */
+  explorerCollapsed: boolean;
+  /** Missing or anything but `true` loads as hidden. */
+  markdownOutlineOpen: boolean;
 }
 
 export type WorkspaceSnapshot = WorkspaceSnapshotV1;
@@ -90,6 +96,9 @@ export function parseWorkspaceSnapshot(raw: string): WorkspaceSnapshot | null {
     activeTabPath,
     expandedPaths,
     selectedPath,
+    markdownView: markdownViewMode(obj.markdownView),
+    explorerCollapsed: obj.explorerCollapsed === true,
+    markdownOutlineOpen: obj.markdownOutlineOpen === true,
   };
 }
 
@@ -142,6 +151,9 @@ export function sanitizeWorkspaceSnapshot(
     activeTabPath,
     expandedPaths,
     selectedPath,
+    markdownView: markdownViewMode(snapshot.markdownView),
+    explorerCollapsed: snapshot.explorerCollapsed === true,
+    markdownOutlineOpen: snapshot.markdownOutlineOpen === true,
   };
 }
 
@@ -154,6 +166,9 @@ export function workspaceSnapshotFromState(state: VaultWorkspaceState): Workspac
     expandedPaths: state.expandedPaths.length > 0 ? state.expandedPaths : ["/"],
     selectedPath:
       state.selectedPath && !isInternalVaultPath(state.selectedPath) ? state.selectedPath : null,
+    markdownView: markdownViewMode(state.markdownView),
+    explorerCollapsed: state.explorerCollapsed,
+    markdownOutlineOpen: state.markdownOutlineOpen,
   };
 }
 
@@ -166,6 +181,9 @@ export function workspaceStateFromSnapshot(snapshot: WorkspaceSnapshot): VaultWo
     activeTabPath: snapshot.activeTabPath,
     expandedPaths: snapshot.expandedPaths,
     selectedPath: snapshot.selectedPath,
+    markdownView: markdownViewMode(snapshot.markdownView),
+    explorerCollapsed: snapshot.explorerCollapsed === true,
+    markdownOutlineOpen: snapshot.markdownOutlineOpen === true,
   };
 }
 
@@ -177,12 +195,14 @@ export function snapshotsEqual(a: WorkspaceSnapshot, b: WorkspaceSnapshot): bool
     a.openTabs.length === b.openTabs.length &&
     a.openTabs.every((path, index) => path === b.openTabs[index]) &&
     a.expandedPaths.length === b.expandedPaths.length &&
-    a.expandedPaths.every((path, index) => path === b.expandedPaths[index])
+    a.expandedPaths.every((path, index) => path === b.expandedPaths[index]) &&
+    a.markdownView === b.markdownView &&
+    a.explorerCollapsed === b.explorerCollapsed &&
+    a.markdownOutlineOpen === b.markdownOutlineOpen
   );
 }
 
-/** Cold-open layout: no tabs, root expanded, nothing selected. */
-export function isDefaultWorkspaceSnapshot(snapshot: WorkspaceSnapshot): boolean {
+function fileLayoutIsCold(snapshot: WorkspaceSnapshot): boolean {
   return (
     snapshot.openTabs.length === 0 &&
     snapshot.activeTabPath === null &&
@@ -192,21 +212,60 @@ export function isDefaultWorkspaceSnapshot(snapshot: WorkspaceSnapshot): boolean
   );
 }
 
+function sameFileLayout(a: WorkspaceSnapshot, b: WorkspaceSnapshot): boolean {
+  return (
+    a.activeTabPath === b.activeTabPath &&
+    a.selectedPath === b.selectedPath &&
+    a.openTabs.length === b.openTabs.length &&
+    a.openTabs.every((path, index) => path === b.openTabs[index]) &&
+    a.expandedPaths.length === b.expandedPaths.length &&
+    a.expandedPaths.every((path, index) => path === b.expandedPaths[index])
+  );
+}
+
 /**
- * Apply a loaded snapshot only when memory is still the cold-open layout.
+ * Saved layout to apply, or null when tabs, folders, or selection already changed.
+ *
+ * Read/Code, hide explorer, and the outline can be toggled while the file is
+ * still loading. Those flags stay as the user left them. The saved tabs are
+ * still applied, so that click does not replace the file with an empty layout.
+ */
+export function workspaceSnapshotToHydrate(
+  mount: WorkspaceSnapshot,
+  current: WorkspaceSnapshot,
+  loaded: WorkspaceSnapshot,
+): WorkspaceSnapshot | null {
+  if (!fileLayoutIsCold(current) || !sameFileLayout(mount, current)) return null;
+  const merged: WorkspaceSnapshot = {
+    ...loaded,
+    markdownView:
+      current.markdownView !== mount.markdownView ? current.markdownView : loaded.markdownView,
+    explorerCollapsed:
+      current.explorerCollapsed !== mount.explorerCollapsed
+        ? current.explorerCollapsed
+        : loaded.explorerCollapsed,
+    markdownOutlineOpen:
+      current.markdownOutlineOpen !== mount.markdownOutlineOpen
+        ? current.markdownOutlineOpen
+        : loaded.markdownOutlineOpen,
+  };
+  if (snapshotsEqual(current, merged)) return null;
+  return merged;
+}
+
+/**
+ * Apply a loaded snapshot only when memory is still the cold-open file layout.
  * Host seed or user edits (open file / expand folder) must win — including when
  * a parent re-render recaptures “mount” as the already-edited layout.
+ * Chrome toggled during the load (Read/Code, explorer, outline) does not count
+ * as that edit.
  */
 export function shouldHydratePersistedWorkspace(
   mount: WorkspaceSnapshot,
   current: WorkspaceSnapshot,
   loaded: WorkspaceSnapshot,
 ): boolean {
-  return (
-    isDefaultWorkspaceSnapshot(current) &&
-    snapshotsEqual(current, mount) &&
-    !snapshotsEqual(current, loaded)
-  );
+  return workspaceSnapshotToHydrate(mount, current, loaded) != null;
 }
 
 export function serializedLayoutSnapshot(

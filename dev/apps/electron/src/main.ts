@@ -20,6 +20,7 @@ import {
 import { ELECTRON_IPC_METHODS } from "./ipcMethods";
 import { retrievePortalTransferPaths } from "./portalFileTransfer";
 import { isAbsoluteOsPath, revealOsPathInFileManager } from "./revealInFileManager";
+import { externalNavigationUrl } from "./externalNavigation";
 import { createDefaultTerminalHost, openOsPathInTerminal } from "./openInTerminal";
 
 const isDev = process.argv.includes("--dev") || process.env.UPRIV_DEV === "1";
@@ -356,7 +357,8 @@ async function createWindow(): Promise<void> {
   hardenProductionWindow(mainWindow);
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (/^https?:\/\//i.test(url)) void shell.openExternal(url);
+    const allowed = externalNavigationUrl(url);
+    if (allowed) void shell.openExternal(allowed);
     return { action: "deny" };
   });
   mainWindow.webContents.on("will-navigate", (event, url) => {

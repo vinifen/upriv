@@ -12,13 +12,26 @@ use crate::session::{
 use crate::store::{content_hash_hex, create_seeded_store, KdfUnlockPreset};
 
 use super::persistence::{save_vault_persistence, VaultPersistence};
+use super::welcome::VaultWelcome;
 
-/// Scratch create: registry + Argon2id header + seed chunk. Import/copy is later.
+/// Registry + Argon2id header + seed chunk. Import paths call this, stream
+/// content in, then add the welcome note with [`super::welcome::seal_welcome_if_absent`].
 pub fn create_vault(
+    root: &VaultRoot,
+    config: VaultConfig,
+    password: &[u8],
+    preset: KdfUnlockPreset,
+) -> Result<()> {
+    create_vault_with_welcome(root, config, password, preset, None)
+}
+
+/// Scratch create. `welcome` is sealed in the same pass as the seed chunk.
+pub fn create_vault_with_welcome(
     root: &VaultRoot,
     mut config: VaultConfig,
     password: &[u8],
     preset: KdfUnlockPreset,
+    welcome: Option<VaultWelcome<'_>>,
 ) -> Result<()> {
     if password.is_empty() {
         return Err(UprivError::WrongPassword);
@@ -26,6 +39,10 @@ pub fn create_vault(
     if config.storage_mode() == VaultStorageMode::UprivPlain {
         return Err(UprivError::UprivPlainUnavailable);
     }
+    let initial_files = match welcome {
+        Some(welcome) => welcome.files()?.to_vec(),
+        None => Vec::new(),
+    };
     // Folder is `vaults/<trimmed>/` (`vault_id_component`). Persist that same id
     // so list does not skip the row (`[vault].id` must match the directory name).
     let id = config.vault.id.trim().to_string();
@@ -58,7 +75,7 @@ pub fn create_vault(
             save_vault_config(&dest, &config)?;
             let store = dest.join(crate::paths::STORE_DIR_NAME);
             // Same process-wide Argon2 gate as `open_vault` — never two KDFs at once.
-            with_unlock_lock(|| create_seeded_store(&store, password, preset))?;
+            with_unlock_lock(|| create_seeded_store(&store, password, preset, &initial_files))?;
             crate::host_fs::create_dir_all(dest.join("backups"))?;
             let hash = content_hash_hex(&store)?;
             save_vault_persistence(

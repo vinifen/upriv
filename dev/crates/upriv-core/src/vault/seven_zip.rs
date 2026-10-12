@@ -2,11 +2,13 @@
 //! tree on ordinary disk. Export packing lives in `seven_zip_pack` (same crate).
 //!
 //! A path is streamed from the file. In-memory bytes are only the mobile/RPC
-//! payload. Members stream into `store/` through `fs_write_from_reader`.
+//! payload. Members stream into `store/` in waves. Each full wave seals the
+//! index; the tail is sealed after the last member.
 //! Plaintext is capped at 64 times the archive length, the same factor as a
 //! files zip.
 
 use crate::host_fs::File;
+use std::collections::HashSet;
 use std::io::{Cursor, ErrorKind, Read, Seek};
 use std::path::{Path, PathBuf};
 
@@ -20,12 +22,15 @@ use crate::store::{file_name, KdfUnlockPreset, INTERNAL_WORKSPACE_FILE, SEED_LOG
 
 use super::create::create_vault;
 use super::files_zip::FILES_ZIP_EXPAND_FACTOR;
-use super::fs::{fs_ensure_folder, fs_write_from_reader};
+use super::fs::{
+    fs_ensure_folder_path_staged, fs_seal_staged_imports, fs_seal_staged_wave, fs_write_staged,
+};
 use super::open_close::{abandon_failed_import, close_vault, open_vault_for_ingest};
 use super::seven_zip_pack::{
     ensure_seven_zip_export_ram, seven_zip_decode_budget, sevenz_member_name_unsafe,
     sevenz_password,
 };
+use super::welcome::{seal_welcome_if_absent, VaultWelcome};
 
 fn map_sevenz_read_error(error: sevenz_rust2::Error) -> UprivError {
     match error {
@@ -182,33 +187,11 @@ fn logical_is_reserved(logical: &str) -> bool {
     logical == SEED_LOGICAL_PATH || file_name(logical) == INTERNAL_WORKSPACE_FILE
 }
 
-fn ensure_folder_path(root: &VaultRoot, vault_id: &str, logical: &str) -> Result<()> {
-    let parts: Vec<&str> = logical.split('/').filter(|part| !part.is_empty()).collect();
-    let mut parent = "/".to_string();
-    for part in parts {
-        let (created, _) = fs_ensure_folder(root, vault_id, &parent, part)?;
-        parent = created;
-    }
-    Ok(())
-}
-
-fn ensure_parent_dirs(root: &VaultRoot, vault_id: &str, logical: &str) -> Result<()> {
-    let parts: Vec<&str> = logical.split('/').filter(|part| !part.is_empty()).collect();
-    if parts.len() < 2 {
-        return Ok(());
-    }
-    let mut parent_ui = "/".to_string();
-    for part in &parts[..parts.len() - 1] {
-        let (created, _) = fs_ensure_folder(root, vault_id, &parent_ui, part)?;
-        parent_ui = created;
-    }
-    Ok(())
-}
-
 fn budget_exceeded() -> UprivError {
     archive_layout_error("7z expanded plaintext exceeds the archive budget")
 }
 
+/// Stages the member. The caller seals each full wave, then the tail.
 fn ingest_archive_member(
     root: &VaultRoot,
     vault_id: &str,
@@ -216,21 +199,26 @@ fn ingest_archive_member(
     payload: &mut dyn Read,
     outer: &mut Option<String>,
     budget: &mut u64,
+    folders: &mut HashSet<String>,
 ) -> Result<()> {
     match classify_archive_member(entry, outer)? {
         ArchiveMember::Directory(None) => Ok(()),
         ArchiveMember::Directory(Some(logical)) if logical_is_reserved(&logical) => Ok(()),
-        ArchiveMember::Directory(Some(logical)) => ensure_folder_path(root, vault_id, &logical),
+        ArchiveMember::Directory(Some(logical)) => {
+            fs_ensure_folder_path_staged(root, vault_id, &logical, folders)
+        }
         ArchiveMember::File(logical) => {
             if entry.size > *budget {
                 return Err(budget_exceeded());
             }
-            ensure_parent_dirs(root, vault_id, &logical)?;
+            if let Some((parent, _)) = logical.rsplit_once('/') {
+                fs_ensure_folder_path_staged(root, vault_id, parent, folders)?;
+            }
             let mut limited = BudgetReader {
                 inner: payload,
                 budget: *budget,
             };
-            fs_write_from_reader(root, vault_id, &format!("/{logical}"), &mut limited)?;
+            fs_write_staged(root, vault_id, &format!("/{logical}"), &mut limited)?;
             *budget = limited.budget;
             Ok(())
         }
@@ -309,9 +297,13 @@ fn import_reader<R: Read + Seek>(
     preset: KdfUnlockPreset,
     mut reader: ArchiveReader<R>,
     archive_len: u64,
+    welcome: Option<VaultWelcome<'_>>,
 ) -> Result<String> {
     if new_password.is_empty() {
         return Err(UprivError::WrongPassword);
+    }
+    if let Some(welcome) = welcome {
+        welcome.files()?;
     }
     create_vault(root, config.clone(), new_password, preset)?;
     let id = config.vault.id.trim().to_string();
@@ -320,13 +312,28 @@ fn import_reader<R: Read + Seek>(
         let mut budget = plaintext_budget(archive_len);
         let mut write_error: Option<UprivError> = None;
         let mut outer = None;
+        let mut folders = HashSet::new();
         reader
             .for_each_entries(|entry, payload| {
                 if write_error.is_some() {
                     return Ok(false);
                 }
-                match ingest_archive_member(root, &id, entry, payload, &mut outer, &mut budget) {
-                    Ok(()) => Ok(true),
+                match ingest_archive_member(
+                    root,
+                    &id,
+                    entry,
+                    payload,
+                    &mut outer,
+                    &mut budget,
+                    &mut folders,
+                ) {
+                    Ok(()) => match fs_seal_staged_wave(root, &id) {
+                        Ok(()) => Ok(true),
+                        Err(error) => {
+                            write_error = Some(error);
+                            Ok(false)
+                        }
+                    },
                     Err(error) => {
                         write_error = Some(error);
                         Ok(false)
@@ -339,6 +346,10 @@ fn import_reader<R: Read + Seek>(
         }
         if outer.is_none() {
             return Err(archive_layout_error("missing .7z outer folder"));
+        }
+        fs_seal_staged_imports(root, &id)?;
+        if let Some(welcome) = welcome {
+            seal_welcome_if_absent(root, &id, welcome)?;
         }
         Ok(())
     })();
@@ -358,6 +369,7 @@ pub fn import_logical_seven_zip(
     preset: KdfUnlockPreset,
     archive_bytes: &[u8],
     archive_password: &[u8],
+    welcome: Option<VaultWelcome<'_>>,
 ) -> Result<String> {
     let reader = open_archive_reader(archive_bytes, archive_password)?;
     import_reader(
@@ -367,6 +379,7 @@ pub fn import_logical_seven_zip(
         preset,
         reader,
         archive_bytes.len() as u64,
+        welcome,
     )
 }
 
@@ -378,9 +391,10 @@ pub fn import_logical_seven_zip_path(
     preset: KdfUnlockPreset,
     archive_path: &Path,
     archive_password: &[u8],
+    welcome: Option<VaultWelcome<'_>>,
 ) -> Result<String> {
     let (reader, len) = open_archive_path(archive_path, archive_password)?;
-    import_reader(root, config, new_password, preset, reader, len)
+    import_reader(root, config, new_password, preset, reader, len, welcome)
 }
 
 #[cfg(test)]
@@ -439,7 +453,13 @@ mode = "encrypted_dir"
         create_vault(&root, config, b"pass-word-ok", KdfUnlockPreset::M32).unwrap();
         open_vault(&root, "notes", b"pass-word-ok").unwrap();
         crate::vault::fs::fs_create_named_file(&root, "notes", "/", "docs").unwrap();
-        let err = ensure_parent_dirs(&root, "notes", "docs/a.txt").unwrap_err();
+        let err = crate::vault::fs::fs_ensure_folder_path_staged(
+            &root,
+            "notes",
+            "docs",
+            &mut HashSet::new(),
+        )
+        .unwrap_err();
         assert!(matches!(err, UprivError::VaultPathExists(_)));
         close_vault(&root, "notes", None).unwrap();
     }

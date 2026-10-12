@@ -5,7 +5,7 @@ import {
   serializedLayoutSnapshot,
   serializeWorkspaceSnapshot,
   snapshotsEqual,
-  shouldHydratePersistedWorkspace,
+  workspaceSnapshotToHydrate,
   UPRIV_WORKSPACE_PATH,
   workspaceSnapshotFromState,
   workspaceStateFromSnapshot,
@@ -108,23 +108,29 @@ export function useWorkspacePersistence({
         if (cancelled) return;
         const sanitized = sanitizeWorkspaceSnapshot(parsed, tree);
         const current = workspaceSnapshotFromState(layoutRef.current.workspace);
-        if (!shouldHydratePersistedWorkspace(mountSnapshot, current, sanitized)) {
-          if (!snapshotsEqual(current, sanitized)) {
-            lastWrittenRef.current = null;
-            persistAfterDivergence = true;
-          } else {
-            lastWrittenRef.current = serializeWorkspaceSnapshot(sanitized);
-          }
+        const merged = workspaceSnapshotToHydrate(mountSnapshot, current, sanitized);
+        if (merged) {
+          // Keep the on-disk bytes as last-written until the overlay differs,
+          // so a chrome toggle made during the load is saved with the tabs.
+          lastWrittenRef.current = serializeWorkspaceSnapshot(sanitized);
+          activeDispatch({
+            type: "hydrate_persisted",
+            openTabs: merged.openTabs,
+            activeTabPath: merged.activeTabPath,
+            expandedPaths: merged.expandedPaths,
+            selectedPath: merged.selectedPath,
+            markdownView: merged.markdownView,
+            explorerCollapsed: merged.explorerCollapsed,
+            markdownOutlineOpen: merged.markdownOutlineOpen,
+          });
           return;
         }
-        lastWrittenRef.current = serializeWorkspaceSnapshot(sanitized);
-        activeDispatch({
-          type: "hydrate_persisted",
-          openTabs: sanitized.openTabs,
-          activeTabPath: sanitized.activeTabPath,
-          expandedPaths: sanitized.expandedPaths,
-          selectedPath: sanitized.selectedPath,
-        });
+        if (!snapshotsEqual(current, sanitized)) {
+          lastWrittenRef.current = null;
+          persistAfterDivergence = true;
+        } else {
+          lastWrittenRef.current = serializeWorkspaceSnapshot(sanitized);
+        }
       } catch {
         /* Missing / corrupt layout → start clean. Persist still enabled. */
       } finally {
@@ -159,6 +165,9 @@ export function useWorkspacePersistence({
     workspace.activeTabPath,
     workspace.expandedPaths,
     workspace.selectedPath,
+    workspace.markdownView,
+    workspace.explorerCollapsed,
+    workspace.markdownOutlineOpen,
     workspace.dragSourcePath,
     workspace.dropTargetPath,
     suspend,

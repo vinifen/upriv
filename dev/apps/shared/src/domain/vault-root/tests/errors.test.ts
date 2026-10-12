@@ -4,6 +4,7 @@ import {
   VAULT_ROOT_ERROR_CODES,
   isVaultRootErrorCode,
   isVaultRootGoneError,
+  isVaultRootUnreachableError,
   shouldBumpVaultRootEpoch,
   vaultRootGoneRpcError,
 } from "../errors";
@@ -37,11 +38,19 @@ describe("shouldBumpVaultRootEpoch", () => {
     expect(shouldBumpVaultRootEpoch(new RpcError(VAULT_ROOT_ERROR_CODES.BUSY, "open"))).toBe(false);
   });
 
-  it("bumps Gate for SAF lost-grant and write/create failures", () => {
+  it("bumps Gate for a lost SAF grant", () => {
     expect(shouldBumpVaultRootEpoch(new RpcError("saf_unauthorized", "grant gone"))).toBe(true);
     expect(shouldBumpVaultRootEpoch(new RpcError("saf_invalid_tree", "bad tree"))).toBe(true);
-    expect(shouldBumpVaultRootEpoch(new RpcError("saf_write_failed", "write"))).toBe(true);
-    expect(shouldBumpVaultRootEpoch(new RpcError("saf_create_failed", "create"))).toBe(true);
+  });
+
+  it("bumps Gate for an unreachable data folder without calling it integrity", () => {
+    const unplugged = new RpcError(VAULT_ROOT_ERROR_CODES.UNREACHABLE, "unplugged");
+    expect(shouldBumpVaultRootEpoch(unplugged)).toBe(true);
+    expect(isVaultRootUnreachableError(unplugged)).toBe(true);
+    expect(isVaultRootErrorCode(VAULT_ROOT_ERROR_CODES.UNREACHABLE)).toBe(false);
+    expect(isVaultRootUnreachableError(new RpcError(VAULT_ROOT_ERROR_CODES.IO_ERROR, "disk"))).toBe(
+      false,
+    );
   });
 });
 
@@ -60,8 +69,9 @@ describe("isVaultRootGoneError", () => {
       false,
     );
     expect(isVaultRootGoneError(new RpcError(VAULT_ROOT_ERROR_CODES.IO_ERROR, "disk"))).toBe(false);
-    expect(isVaultRootGoneError(new RpcError("saf_write_failed", "write"))).toBe(false);
-    expect(isVaultRootGoneError(new RpcError("saf_create_failed", "create"))).toBe(false);
+    expect(isVaultRootGoneError(new RpcError(VAULT_ROOT_ERROR_CODES.UNREACHABLE, "drive"))).toBe(
+      false,
+    );
     expect(isVaultRootGoneError(new RpcError("vault_not_found", "missing vault"))).toBe(false);
     expect(isVaultRootGoneError(new Error("boom"))).toBe(false);
   });

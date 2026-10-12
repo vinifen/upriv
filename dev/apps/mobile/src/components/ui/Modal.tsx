@@ -349,7 +349,7 @@ export function Modal({
               </Animated.View>
             </View>
             {overlay ? (
-              <View pointerEvents="box-none" style={StyleSheet.absoluteFill}>
+              <View pointerEvents="box-none" style={styles.overlay}>
                 {overlay}
               </View>
             ) : null}
@@ -362,6 +362,10 @@ export function Modal({
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
+  overlay: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 2,
+  },
   frame: {
     flex: 1,
     justifyContent: "center",

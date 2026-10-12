@@ -15,7 +15,6 @@ export const VAULT_ERROR_I18N_KEYS = {
   vault_rewrap_unavailable: "error.vault_rewrap_unavailable",
   vault_groups_invalid: "error.vault_groups_invalid",
   vault_group_not_found: "error.vault_group_not_found",
-  vault_saf_unavailable: "error.vault_saf_unavailable",
   upriv_plain_unavailable: "error.upriv_plain_unavailable",
   vault_config_busy: "error.vault_config_busy",
   vault_path_not_found: "error.vault_path_not_found",

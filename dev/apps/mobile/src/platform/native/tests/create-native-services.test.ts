@@ -4,12 +4,13 @@ import { RpcError, createDefaultAppSettings } from "@upriv/shared";
 const safState = {
   activeUri: "content://tree/old",
   documentsUri: "content://documents/Upriv" as string | null,
-  inspectQueue: [] as Array<"absent" | "valid" | "incomplete" | "unauthorized" | "unreadable">,
+  inspectQueue: [] as Array<
+    "absent" | "valid" | "incomplete" | "unauthorized" | "unreadable" | "unreachable"
+  >,
   readSettings: '[package]\nlabel = "Upriv"\n',
 };
 
 const safRelease = vi.fn();
-const safSetupRoot = vi.fn();
 const safPersist = vi.fn();
 const mountSafRoot = vi.fn();
 const unmountSafRoot = vi.fn();
@@ -37,6 +38,7 @@ vi.mock("@/lib/rpc", () => ({
   })),
   rpcVaultRootInspectPath: vi.fn(async () => ({ status: "valid", path: "/tmp" })),
   rpcVaultRootReadAlias: vi.fn(async () => null),
+  rpcVaultRootRememberCustom: vi.fn(async () => undefined),
   rpcVaultRootResolve: vi.fn(async () => ({
     status: "found",
     rootPath: "/tmp",
@@ -109,8 +111,6 @@ vi.mock("@/platform/native/safVaultRoot", () => ({
   safSetActiveUri: (uri: string | null) => {
     safState.activeUri = uri ?? "";
   },
-  safSetupRoot,
-  safWriteSettings: vi.fn(),
   toSafRpcError,
 }));
 
@@ -127,21 +127,24 @@ describe("createNativeServices", () => {
     safState.inspectQueue = [];
     safState.readSettings = '[package]\nlabel = "Upriv"\n';
     safRelease.mockReset();
-    safSetupRoot.mockReset();
     safPersist.mockReset();
     mountSafRoot.mockReset();
     unmountSafRoot.mockReset();
     toSafRpcError.mockClear();
   });
 
-  it("releases previous SAF URI when leaving SAF mode", async () => {
+  it("keeps the last custom folder when leaving SAF mode", async () => {
     const { createNativeServices } = await importModule(true);
+    const rpc = await import("@/lib/rpc");
+    vi.mocked(rpc.rpcVaultRootRememberCustom).mockClear();
     const services = createNativeServices();
     const settings = createDefaultAppSettings();
     settings.app.vault_root_mode = "default_root";
     settings.app.upriv_root_path = "";
     await services.appSettings.save(settings);
-    expect(safRelease).toHaveBeenCalledWith("content://tree/old");
+    expect(safRelease).not.toHaveBeenCalled();
+    expect(safState.activeUri).toBe("");
+    expect(rpc.rpcVaultRootRememberCustom).toHaveBeenCalledWith("content://tree/old");
   });
 
   it("sets up a filesystem path through rust", async () => {
@@ -186,10 +189,28 @@ describe("createNativeServices", () => {
     expect(rpc.rpcVaultRootSetupPath).toHaveBeenCalledWith("/upriv-saf-root", {
       bootstrap: { locale: "en" },
       adoptPrivateRoot: true,
+      customUri: "content://tree/new",
     });
-    expect(safSetupRoot).not.toHaveBeenCalled();
     expect(safState.activeUri).toBe("content://tree/new");
     expect(safRelease).toHaveBeenCalledWith("content://tree/old");
+  });
+
+  it("keeps the previous custom grant when the next folder is Documents", async () => {
+    const { createNativeServices } = await importModule(true);
+    const rpc = await import("@/lib/rpc");
+    const documents =
+      "content://com.android.externalstorage.documents/tree/primary%3ADocuments%2FUpriv";
+    const usb = "content://com.android.externalstorage.documents/tree/ABCD-1234%3A";
+    safState.activeUri = usb;
+    const services = createNativeServices();
+    await services.vaultRoot.setupAtPath(documents, { bootstrap: { locale: "en" } });
+    expect(safRelease).not.toHaveBeenCalled();
+    expect(safState.activeUri).toBe(documents);
+    expect(rpc.rpcVaultRootSetupPath).toHaveBeenCalledWith("/upriv-saf-root", {
+      bootstrap: { locale: "en" },
+      adoptPrivateRoot: true,
+      customUri: usb,
+    });
   });
 
   it("starts the folder confirmation on Documents", async () => {
@@ -279,16 +300,36 @@ describe("createNativeServices", () => {
   it("does not release SAF when leaving SAF if rustSave fails", async () => {
     const { createNativeServices } = await importModule(true);
     const rpc = await import("@/lib/rpc");
+    vi.mocked(rpc.rpcVaultRootRememberCustom).mockClear();
     vi.mocked(rpc.rpcAppSettingsSave).mockRejectedValueOnce(new RpcError("io_error", "disk"));
     const services = createNativeServices();
     const settings = createDefaultAppSettings();
     settings.app.vault_root_mode = "default_root";
     settings.app.upriv_root_path = "";
     await expect(services.appSettings.save(settings)).rejects.toMatchObject({ code: "io_error" });
+    expect(rpc.rpcVaultRootRememberCustom).toHaveBeenCalledWith("content://tree/old");
+    expect(safState.activeUri).toBe("content://tree/old");
     expect(safRelease).not.toHaveBeenCalled();
   });
 
-  it("releases SAF when leaving SAF even if rustSave returns wrote: false", async () => {
+  it("does not leave SAF when recording the custom folder fails", async () => {
+    const { createNativeServices } = await importModule(true);
+    const rpc = await import("@/lib/rpc");
+    vi.mocked(rpc.rpcAppSettingsSave).mockClear();
+    vi.mocked(rpc.rpcVaultRootRememberCustom).mockRejectedValueOnce(
+      new RpcError("io_error", "disk"),
+    );
+    const services = createNativeServices();
+    const settings = createDefaultAppSettings();
+    settings.app.vault_root_mode = "default_root";
+    settings.app.upriv_root_path = "";
+    await expect(services.appSettings.save(settings)).rejects.toMatchObject({ code: "io_error" });
+    expect(rpc.rpcAppSettingsSave).not.toHaveBeenCalled();
+    expect(safState.activeUri).toBe("content://tree/old");
+    expect(safRelease).not.toHaveBeenCalled();
+  });
+
+  it("keeps the custom grant when leaving SAF even if rustSave returns wrote: false", async () => {
     const { createNativeServices } = await importModule(true);
     const rpc = await import("@/lib/rpc");
     vi.mocked(rpc.rpcAppSettingsSave).mockResolvedValueOnce({ wrote: false });
@@ -297,7 +338,27 @@ describe("createNativeServices", () => {
     settings.app.vault_root_mode = "default_root";
     settings.app.upriv_root_path = "";
     await expect(services.appSettings.save(settings)).resolves.toBe(false);
-    expect(safRelease).toHaveBeenCalledWith("content://tree/old");
+    expect(safRelease).not.toHaveBeenCalled();
+    expect(safState.activeUri).toBe("");
+    expect(rpc.rpcVaultRootRememberCustom).toHaveBeenCalledWith("content://tree/old");
+  });
+
+  it("keeps the new folder mounted when recording it fails after the settings write", async () => {
+    const { createNativeServices } = await importModule(true);
+    const rpc = await import("@/lib/rpc");
+    safState.activeUri = "content://tree/old";
+    vi.mocked(rpc.rpcVaultRootRememberCustom).mockRejectedValueOnce(
+      new RpcError("io_error", "disk"),
+    );
+    const services = createNativeServices();
+    const settings = createDefaultAppSettings();
+    settings.app.vault_root_mode = "custom_root";
+    settings.app.upriv_root_path = "content://tree/new";
+    await expect(services.appSettings.save(settings)).rejects.toMatchObject({ code: "io_error" });
+    expect(mountSafRoot).toHaveBeenCalledTimes(1);
+    expect(mountSafRoot).toHaveBeenCalledWith("content://tree/new");
+    expect(safState.activeUri).toBe("content://tree/new");
+    expect(safRelease).not.toHaveBeenCalled();
   });
 
   it("remounts the previous folder when a storage-access save fails", async () => {
@@ -354,8 +415,10 @@ describe("createNativeServices", () => {
     expect(safState.activeUri).toBe("content://tree/x");
   });
 
-  it("drops a stale storage-access grant when the alias is not the saf root", async () => {
+  it("resolve keeps the grant; a settings load drops it when the alias is not the saf root", async () => {
     const { createNativeServices } = await importModule(true);
+    const rpc = await import("@/lib/rpc");
+    vi.mocked(rpc.rpcVaultRootRememberCustom).mockClear();
     safState.activeUri = "content://tree/x";
     const services = createNativeServices();
     await expect(
@@ -365,12 +428,61 @@ describe("createNativeServices", () => {
       rootPath: "/tmp",
       source: "default_root",
     });
-    expect(safState.activeUri).toBe("");
-    safState.activeUri = "content://tree/x";
+    expect(safState.activeUri).toBe("content://tree/x");
+    expect(safRelease).not.toHaveBeenCalled();
     const loaded = await services.appSettings.load();
     expect(safState.activeUri).toBe("");
+    expect(rpc.rpcVaultRootRememberCustom).not.toHaveBeenCalled();
+    expect(safRelease).not.toHaveBeenCalled();
     expect(loaded.rootPath).toBe("/tmp/root");
     expect(loaded.settings.app.upriv_root_path.startsWith("content://")).toBe(false);
+  });
+
+  it("keeps an unplugged drive as the data folder", async () => {
+    const { createNativeServices } = await importModule(true);
+    const rpc = await import("@/lib/rpc");
+    safState.activeUri = "content://usb/tree/A1B2";
+    const unplugged = new RpcError("vault_root_unreachable", "data folder is not reachable", {
+      path: "content://usb/tree/A1B2",
+    });
+    mountSafRoot.mockImplementation(() => {
+      throw unplugged;
+    });
+    vi.mocked(rpc.rpcAppSettingsGet).mockResolvedValueOnce({
+      settings: {
+        ...createDefaultAppSettings(),
+        app: {
+          ...createDefaultAppSettings().app,
+          vault_root_mode: "custom_root",
+          upriv_root_path: "/upriv-saf-root",
+        },
+      },
+      rootPath: null,
+      onDisk: false,
+    });
+    const services = createNativeServices();
+
+    const loaded = await services.appSettings.load();
+    expect(loaded.onDisk).toBe(false);
+    expect(loaded.settings.app.vault_root_mode).toBe("custom_root");
+    expect(loaded.settings.app.upriv_root_path).toBe("content://usb/tree/A1B2");
+    expect(unmountSafRoot).toHaveBeenCalled();
+
+    await expect(services.vaultRoot.resolve({ vaultRootMode: "custom_root" })).rejects.toBe(
+      unplugged,
+    );
+    expect(safState.activeUri).toBe("content://usb/tree/A1B2");
+    expect(safRelease).not.toHaveBeenCalled();
+  });
+
+  it("still fails a settings load when the mount fails for another reason", async () => {
+    const { createNativeServices } = await importModule(true);
+    mountSafRoot.mockImplementation(() => {
+      throw new RpcError("saf_not_ready", "cannot store vaults");
+    });
+    const services = createNativeServices();
+    await expect(services.appSettings.load()).rejects.toMatchObject({ code: "saf_not_ready" });
+    expect(safState.activeUri).toBe("content://tree/old");
   });
 
   it("presents the picked folder when rust is on the logical saf root", async () => {

@@ -461,6 +461,7 @@ mode = "encrypted_dir"
             KdfUnlockPreset::M32,
             &bytes,
             b"pass-word-ok",
+            None,
         )
         .unwrap();
         open_vault(&root, &imported, b"pass-word-ok").unwrap();
@@ -497,11 +498,59 @@ mode = "encrypted_dir"
             KdfUnlockPreset::M32,
             &bytes,
             b"pass-word-ok",
+            None,
         )
         .unwrap();
         open_vault(&root, &imported, b"pass-word-ok").unwrap();
         let listed = fs_list_tree(&root, &imported).unwrap();
         assert!(listed.children.unwrap().is_empty());
+        close_vault(&root, &imported, None).unwrap();
+    }
+
+    #[test]
+    fn seven_zip_reimport_keeps_one_readme() {
+        let (_tmp, root) = vault_root_with(&[]);
+        let first = crate::vault::VaultWelcome {
+            readme: "# First note\n",
+            workspace: "{\"format_version\":1}\n",
+        };
+        crate::vault::create_vault_with_welcome(
+            &root,
+            sample_config("notes", "Notes"),
+            b"pass-word-ok",
+            KdfUnlockPreset::M32,
+            Some(first),
+        )
+        .unwrap();
+        let bytes = export_logical_seven_zip(&root, "notes", b"pass-word-ok", None).unwrap();
+        let second = crate::vault::VaultWelcome {
+            readme: "# Second note\n",
+            workspace: "{\"format_version\":1,\"openTabs\":[\"/README.md\"]}\n",
+        };
+        let imported = import_logical_seven_zip(
+            &root,
+            sample_config("notes-7z", "Notes 7z"),
+            b"pass-word-ok",
+            KdfUnlockPreset::M32,
+            &bytes,
+            b"pass-word-ok",
+            Some(second),
+        )
+        .unwrap();
+        open_vault(&root, &imported, b"pass-word-ok").unwrap();
+        let names: Vec<String> = fs_list_tree(&root, &imported)
+            .unwrap()
+            .children
+            .unwrap_or_default()
+            .into_iter()
+            .map(|child| child.name)
+            .collect();
+        assert_eq!(names, vec!["README.md".to_string()]);
+        let readme = crate::vault::fs::fs_read_file(&root, &imported, "/README.md").unwrap();
+        assert_eq!(readme, b"# First note\n");
+        let layout =
+            crate::vault::fs::fs_read_file(&root, &imported, "/.upriv-workspace.json").unwrap();
+        assert_ne!(layout, second.workspace.as_bytes());
         close_vault(&root, &imported, None).unwrap();
     }
 
@@ -531,6 +580,7 @@ mode = "encrypted_dir"
             KdfUnlockPreset::M32,
             &bytes,
             b"pass-word-ok",
+            None,
         )
         .unwrap();
         open_vault(&root, &imported, b"pass-word-ok").unwrap();

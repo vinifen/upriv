@@ -51,7 +51,7 @@ import {
 import { useVaultFileSystemService } from "@/platform/services";
 import { useToast, useLoadingBudget, useVaultFileTree } from "@upriv/shared/react";
 import { useFileManager } from "../FileManagerContext";
-import { useTranslation } from "@/i18n";
+import { useTranslation, type I18nKey } from "@/i18n";
 import { useAppSettingsContext } from "@/features/system/settings";
 import { isElectronRenderer } from "@/lib/invoke";
 import { rpcOpenInTerminal, rpcRevealInFileManager, rpcVaultFsImportSeal } from "@/lib/rpc";
@@ -63,6 +63,8 @@ import {
   type OsDropSnapshot,
 } from "../lib/osFileDrop";
 import { binarySourceFromDropped } from "../lib/vaultFileImport";
+
+const MOUNT_FAILED_KEY: I18nKey = "error.vault_mount_failed";
 
 type ImportFileOptions = {
   openFirstViewable?: boolean;
@@ -321,9 +323,28 @@ export function useVaultFileManager({
     workspace.treeRevision,
   ]);
 
+  /** Live OS mount for this vault — gates "Open in file manager" / "Open in terminal". */
+  const [osFolderAvailable, setOsFolderAvailable] = useState(false);
+  useEffect(() => {
+    if (!isElectronRenderer()) return;
+    let cancelled = false;
+    fs.osPath(vaultId, "/").then(
+      () => {
+        if (!cancelled) setOsFolderAvailable(true);
+      },
+      () => {
+        if (!cancelled) setOsFolderAvailable(false);
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [fs, vaultId]);
+
   const openInSystemFileManager = useCallback(
     async (logicalPath: string) => {
       const failure = await revealFailureKey(() => rpcRevealInFileManager(vaultId, logicalPath));
+      if (failure === MOUNT_FAILED_KEY) setOsFolderAvailable(false);
       if (failure) showToast(t(failure));
     },
     [showToast, t, vaultId],
@@ -338,7 +359,9 @@ export function useVaultFileManager({
       try {
         await rpcOpenInTerminal(vaultId, logicalPath);
       } catch (error) {
-        showToast(t(desktopErrorI18nKey(error, "modal.file_manager.toast.open_terminal_failed")));
+        const key = desktopErrorI18nKey(error, "modal.file_manager.toast.open_terminal_failed");
+        if (key === MOUNT_FAILED_KEY) setOsFolderAvailable(false);
+        showToast(t(key));
       }
     },
     [showToast, t, vaultId],
@@ -994,6 +1017,7 @@ export function useVaultFileManager({
     importBudget,
     cancelImportAndClose,
     toast,
+    osFolderAvailable,
     openInSystemFileManager,
     openInTerminal,
     showToast,

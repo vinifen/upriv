@@ -86,7 +86,7 @@ When implementing `seven_zip` + close pipeline:
 | Destination `.7z` / Upriv `.zip` package (export payload) | Yes — ciphertext |
 | `upriv_plain` mode `workspace/` while open + wipe on close | Yes, with UI warning |
 | OS tempfile / vault `workspace/` full decrypted tree in `encrypted_dir` (including “temp for 7zz”, crash leftover) | **No — ship blocker** |
-| External editor caches/thumbnails outside mount | Document (RF-52); do not claim absolute zero OS side effects |
+| External editor caches/thumbnails outside mount | Linux file-manager folder: freedesktop previews are overwritten on `OPEN_PURGE_INTERVAL` while the folder is mounted, and again when it is detached. Flash is best-effort. Windows and macOS mounts, when they exist, must do the same for their own caches and must not wipe the global cache. Do not claim absolute zero OS side effects (RF-52). |
 
 ---
 

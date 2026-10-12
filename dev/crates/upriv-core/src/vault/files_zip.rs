@@ -21,9 +21,12 @@ use crate::store::{
 };
 
 use super::create::create_vault;
-use super::fs::{fs_ensure_folder, fs_write_from_reader};
+use super::fs::{
+    fs_ensure_folder_path_staged, fs_seal_staged_imports, fs_seal_staged_wave, fs_write_staged,
+};
 use super::open_close::{abandon_failed_import, close_vault, open_vault_for_ingest};
 use super::seven_zip_pack::sevenz_member_name_unsafe;
+use super::welcome::{seal_welcome_if_absent, VaultWelcome};
 
 /// Deflate of text can be well above the store-zip factor. Still finite.
 pub(crate) const FILES_ZIP_EXPAND_FACTOR: u64 = 64;
@@ -173,11 +176,10 @@ pub(crate) fn plan_files_zip(
     let mut usable = Vec::new();
     for entry in entries {
         let name = normalize_entry_name(&entry.name);
-        if name.is_empty() || is_os_junk(&name) {
+        // A link is never followed or stored (e.g. `node_modules/.bin`); the
+        // rest of the archive still imports.
+        if name.is_empty() || is_os_junk(&name) || entry.symlink {
             continue;
-        }
-        if entry.symlink {
-            return Err(layout_error("refusing a zip symlink"));
         }
         if sevenz_member_name_unsafe(&name) {
             return Err(layout_error("refusing an unsafe zip entry path"));
@@ -269,16 +271,9 @@ impl<R: Read> Read for BudgetReader<R> {
     }
 }
 
-fn ensure_folder_path(root: &VaultRoot, vault_id: &str, logical: &str) -> Result<()> {
-    let parts: Vec<&str> = logical.split('/').filter(|part| !part.is_empty()).collect();
-    let mut parent = "/".to_string();
-    for part in parts {
-        let (created, _) = fs_ensure_folder(root, vault_id, &parent, part)?;
-        parent = created;
-    }
-    Ok(())
-}
-
+/// Stage every entry. A full wave seals the index, and the tail is sealed once
+/// at the end. A returned error still abandons the new vault. A kill keeps the
+/// last sealed wave.
 fn ingest_planned<R: Read + Seek>(
     root: &VaultRoot,
     vault_id: &str,
@@ -287,23 +282,28 @@ fn ingest_planned<R: Read + Seek>(
     source_len: u64,
 ) -> Result<()> {
     let mut budget = source_len.saturating_mul(FILES_ZIP_EXPAND_FACTOR);
+    let mut folders = HashSet::new();
     for entry in planned {
         match entry {
-            PlannedZipEntry::Directory(logical) => ensure_folder_path(root, vault_id, logical)?,
+            PlannedZipEntry::Directory(logical) => {
+                fs_ensure_folder_path_staged(root, vault_id, logical, &mut folders)?
+            }
             PlannedZipEntry::File { index, logical } => {
                 if let Some((parent, _)) = logical.rsplit_once('/') {
-                    ensure_folder_path(root, vault_id, parent)?;
+                    fs_ensure_folder_path_staged(root, vault_id, parent, &mut folders)?;
                 }
                 let mut file = archive.by_index(*index).map_err(map_zip_error)?;
                 let mut reader = BudgetReader {
                     inner: &mut file,
                     budget,
                 };
-                fs_write_from_reader(root, vault_id, &format!("/{logical}"), &mut reader)?;
+                fs_write_staged(root, vault_id, &format!("/{logical}"), &mut reader)?;
                 budget = reader.budget;
             }
         }
+        fs_seal_staged_wave(root, vault_id)?;
     }
+    fs_seal_staged_imports(root, vault_id)?;
     Ok(())
 }
 
@@ -314,18 +314,34 @@ fn import_reader<R: Read + Seek>(
     preset: KdfUnlockPreset,
     reader: R,
     source_len: u64,
+    welcome: Option<VaultWelcome<'_>>,
 ) -> Result<String> {
     if new_password.is_empty() {
         return Err(UprivError::WrongPassword);
     }
+    if let Some(welcome) = welcome {
+        welcome.files()?;
+    }
     let mut archive = ZipArchive::new(reader).map_err(map_zip_error)?;
     let entries = collect_entries(&mut archive)?;
     let planned = plan_files_zip(&entries, source_len)?;
+    let links = entries.iter().filter(|entry| entry.symlink).count();
+    if links > 0 {
+        log_event(
+            LogLevel::Info,
+            "import_symlinks_skipped",
+            &[("count", links.to_string().as_str())],
+        );
+    }
     create_vault(root, config.clone(), new_password, preset)?;
     let id = config.vault.id.trim().to_string();
     let ingest = (|| {
         open_vault_for_ingest(root, &id, new_password)?;
-        ingest_planned(root, &id, &mut archive, &planned, source_len)
+        ingest_planned(root, &id, &mut archive, &planned, source_len)?;
+        if let Some(welcome) = welcome {
+            seal_welcome_if_absent(root, &id, welcome)?;
+        }
+        Ok(())
     })();
     if let Err(ingest_error) = ingest {
         return Err(abandon_failed_import(root, &id, ingest_error));
@@ -342,6 +358,7 @@ pub fn import_logical_files_zip(
     new_password: &[u8],
     preset: KdfUnlockPreset,
     zip_bytes: &[u8],
+    welcome: Option<VaultWelcome<'_>>,
 ) -> Result<String> {
     import_reader(
         root,
@@ -350,6 +367,7 @@ pub fn import_logical_files_zip(
         preset,
         Cursor::new(zip_bytes),
         zip_bytes.len() as u64,
+        welcome,
     )
 }
 
@@ -360,6 +378,7 @@ pub fn import_logical_files_zip_path(
     new_password: &[u8],
     preset: KdfUnlockPreset,
     zip_path: &Path,
+    welcome: Option<VaultWelcome<'_>>,
 ) -> Result<String> {
     if !zip_path.is_absolute() || !zip_path.host_is_file() {
         return Err(UprivError::ImportArchiveNotFound(zip_path.to_path_buf()));
@@ -367,7 +386,7 @@ pub fn import_logical_files_zip_path(
     let file = crate::host_fs::File::open(zip_path)
         .map_err(|error| super::import::map_archive_open_error(zip_path, error))?;
     let len = file.metadata()?.len();
-    import_reader(root, config, new_password, preset, file, len)
+    import_reader(root, config, new_password, preset, file, len, welcome)
 }
 
 #[cfg(test)]
@@ -526,13 +545,21 @@ mode = "encrypted_dir"
             b"pass-word-ok",
             KdfUnlockPreset::M32,
             &rejected,
+            None,
         )
         .unwrap_err();
         assert!(matches!(err, UprivError::VaultStoreInvalid { .. }));
         assert!(!root.vault_dir("notes").unwrap().host_exists());
 
-        import_logical_files_zip(&root, config, b"pass-word-ok", KdfUnlockPreset::M32, &bytes)
-            .unwrap();
+        import_logical_files_zip(
+            &root,
+            config,
+            b"pass-word-ok",
+            KdfUnlockPreset::M32,
+            &bytes,
+            None,
+        )
+        .unwrap();
         crate::open_vault(&root, "notes", b"pass-word-ok").unwrap();
         let body = crate::vault::fs::fs_read_file(&root, "notes", "/docs/hi.txt").unwrap();
         assert_eq!(body, b"hello-files");
@@ -543,5 +570,108 @@ mode = "encrypted_dir"
         assert!(!json.contains("_hi.txt"), "{json}");
         assert!(!json.contains("MACOSX"), "{json}");
         crate::close_vault(&root, "notes", None).unwrap();
+    }
+
+    #[test]
+    fn symlink_entries_are_skipped_and_the_rest_imports() {
+        let (_tmp, root) = crate::test_support::vault_root_with(&[]);
+        let config: VaultConfig = toml::from_str(
+            "[vault]\nid = \"notes\"\ndisplay_name = \"Notes\"\norder = 1\n[storage]\nmode = \"encrypted_dir\"\n",
+        )
+        .expect("config");
+        let mut zip = ZipWriter::new(Cursor::new(Vec::new()));
+        zip.start_file("app/index.js", stored_options()).unwrap();
+        zip.write_all(b"console.log(1)").unwrap();
+        zip.add_symlink(
+            "app/node_modules/.bin/tsc",
+            "../typescript/bin/tsc",
+            stored_options(),
+        )
+        .unwrap();
+        zip.add_symlink("app/escape", "/etc/passwd", stored_options())
+            .unwrap();
+        let bytes = zip.finish().unwrap().into_inner();
+
+        assert_eq!(
+            classify_import_zip_bytes(&bytes).unwrap(),
+            ZipImportClass::Files
+        );
+        import_logical_files_zip(
+            &root,
+            config,
+            b"pass-word-ok",
+            KdfUnlockPreset::M32,
+            &bytes,
+            None,
+        )
+        .unwrap();
+        crate::open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        assert_eq!(
+            crate::vault::fs::fs_read_file(&root, "notes", "/index.js").unwrap(),
+            b"console.log(1)"
+        );
+        let json = serde_json::to_string(&crate::vault::fs::fs_list_tree(&root, "notes").unwrap())
+            .unwrap();
+        assert!(!json.contains("tsc"), "{json}");
+        assert!(!json.contains("escape"), "{json}");
+        crate::close_vault(&root, "notes", None).unwrap();
+    }
+
+    #[test]
+    fn welcome_readme_is_added_only_when_the_root_has_none() {
+        let (_tmp, root) = crate::test_support::vault_root_with(&[]);
+        let config = |id: &str| -> VaultConfig {
+            toml::from_str(&format!(
+                "[vault]\nid = \"{id}\"\ndisplay_name = \"{id}\"\norder = 1\n[storage]\nmode = \"encrypted_dir\"\n"
+            ))
+            .expect("config")
+        };
+        let welcome = crate::vault::VaultWelcome {
+            readme: "# Welcome\n",
+            workspace: "{\"format_version\":1}\n",
+        };
+
+        let docs = zip_with(&[("Notes/docs/hi.txt", b"hello")]);
+        import_logical_files_zip(
+            &root,
+            config("plain"),
+            b"pass-word-ok",
+            KdfUnlockPreset::M32,
+            &docs,
+            Some(welcome),
+        )
+        .unwrap();
+        crate::open_vault(&root, "plain", b"pass-word-ok").unwrap();
+        let readme = crate::vault::fs::fs_read_file(&root, "plain", "/README.md").unwrap();
+        assert_eq!(readme, b"# Welcome\n");
+        let layout =
+            crate::vault::fs::fs_read_file(&root, "plain", "/.upriv-workspace.json").unwrap();
+        assert_eq!(layout, welcome.workspace.as_bytes());
+        crate::close_vault(&root, "plain", None).unwrap();
+
+        let has_readme = zip_with(&[("Notes/readme.md", b"mine")]);
+        import_logical_files_zip(
+            &root,
+            config("own"),
+            b"pass-word-ok",
+            KdfUnlockPreset::M32,
+            &has_readme,
+            Some(welcome),
+        )
+        .unwrap();
+        crate::open_vault(&root, "own", b"pass-word-ok").unwrap();
+        let listed = crate::vault::fs::fs_list_tree(&root, "own").unwrap();
+        let json = serde_json::to_string(&listed).unwrap();
+        assert!(!json.contains("README.md"), "{json}");
+        assert_eq!(
+            crate::vault::fs::fs_read_file(&root, "own", "/readme.md").unwrap(),
+            b"mine"
+        );
+        assert!(
+            crate::vault::fs::fs_read_file(&root, "own", "/.upriv-workspace.json")
+                .unwrap()
+                .is_empty()
+        );
+        crate::close_vault(&root, "own", None).unwrap();
     }
 }

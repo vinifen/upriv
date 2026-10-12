@@ -15,6 +15,7 @@ describe("createDefaultWorkspaceState", () => {
     expect(state.openTabs).toEqual([]);
     expect(state.sessionCreatedPaths).toEqual([]);
     expect(state.sessionModifiedPaths).toEqual([]);
+    expect(state.markdownView).toBe("preview");
     expect(hasUnsavedWorkspaceChanges(state)).toBe(false);
   });
 });
@@ -322,11 +323,70 @@ describe("vaultWorkspaceReducer", () => {
       activeTabPath: "/a.md",
       expandedPaths: ["/", "/notes"],
       selectedPath: "/a.md",
+      markdownView: "source",
+      explorerCollapsed: true,
+      markdownOutlineOpen: true,
     });
     expect(state.openTabs).toEqual(["/a.md"]);
     expect(state.activeTabPath).toBe("/a.md");
     expect(state.expandedPaths).toEqual(["/", "/notes"]);
+    expect(state.markdownView).toBe("source");
+    expect(state.explorerCollapsed).toBe(true);
+    expect(state.markdownOutlineOpen).toBe(true);
     expect(state.dirtyPaths).toEqual(["/tmp.md"]);
+  });
+
+  it("keeps one markdown view for the vault and ignores a repeat", () => {
+    const initial = createDefaultWorkspaceState();
+    const source = vaultWorkspaceReducer(initial, { type: "set_markdown_view", view: "source" });
+    expect(source.markdownView).toBe("source");
+    expect(source).not.toBe(initial);
+    const again = vaultWorkspaceReducer(source, { type: "set_markdown_view", view: "source" });
+    expect(again).toBe(source);
+    const preview = vaultWorkspaceReducer(source, { type: "set_markdown_view", view: "preview" });
+    expect(preview.markdownView).toBe("preview");
+  });
+
+  it("hides and shows the explorer and ignores a repeat", () => {
+    const initial = createDefaultWorkspaceState();
+    expect(initial.explorerCollapsed).toBe(false);
+    const hidden = vaultWorkspaceReducer(
+      { ...initial, contextMenu: { x: 1, y: 1, path: "/a.md" } },
+      { type: "set_explorer_collapsed", collapsed: true },
+    );
+    expect(hidden.explorerCollapsed).toBe(true);
+    expect(hidden.contextMenu).toBeNull();
+    const again = vaultWorkspaceReducer(hidden, {
+      type: "set_explorer_collapsed",
+      collapsed: true,
+    });
+    expect(again).toBe(hidden);
+    const shown = vaultWorkspaceReducer(hidden, {
+      type: "set_explorer_collapsed",
+      collapsed: false,
+    });
+    expect(shown.explorerCollapsed).toBe(false);
+  });
+
+  it("opens and closes the markdown outline and ignores a repeat", () => {
+    const initial = createDefaultWorkspaceState();
+    expect(initial.markdownOutlineOpen).toBe(false);
+    const open = vaultWorkspaceReducer(initial, { type: "set_markdown_outline_open", open: true });
+    expect(open.markdownOutlineOpen).toBe(true);
+    expect(vaultWorkspaceReducer(open, { type: "set_markdown_outline_open", open: true })).toBe(
+      open,
+    );
+    const closed = vaultWorkspaceReducer(open, { type: "set_markdown_outline_open", open: false });
+    expect(closed.markdownOutlineOpen).toBe(false);
+  });
+
+  it("start_rename shows a hidden explorer so the name field is visible", () => {
+    let state = createDefaultWorkspaceState();
+    state = vaultWorkspaceReducer(state, { type: "open_file", path: "/a.md" });
+    state = vaultWorkspaceReducer(state, { type: "set_explorer_collapsed", collapsed: true });
+    state = vaultWorkspaceReducer(state, { type: "start_rename", path: "/a.md" });
+    expect(state.explorerCollapsed).toBe(false);
+    expect(state.renamingPath).toBe("/a.md");
   });
 
   it("closes other clean tabs and activates the kept one", () => {

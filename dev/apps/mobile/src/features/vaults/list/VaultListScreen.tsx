@@ -1334,6 +1334,7 @@ export function VaultListScreen() {
         title={t("vault.group.settings.title")}
         titleIcon="layers"
         contextTitle={settingsGroup?.displayName}
+        panelClassName="max-w-3xl"
         onClose={() => {
           setSettingsGroup(null);
           setGroupDeleteOpen(false);

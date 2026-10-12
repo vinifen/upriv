@@ -1,77 +1,44 @@
 import { describe, expect, it } from "vitest";
-import {
-  isAndroidDocumentsDefaultGrant,
-  isAndroidDocumentsUprivFolder,
-  isAndroidSharedDocumentsRoot,
-  rememberedCustomFolderPath,
-} from "../documentsGrant";
+import { planSafSwitch, rememberedCustomFolderPath } from "../documentsGrant";
 
-describe("isAndroidSharedDocumentsRoot", () => {
-  it("matches the Documents directory and not a folder inside it", () => {
-    expect(
-      isAndroidSharedDocumentsRoot(
-        "content://com.android.externalstorage.documents/tree/primary%3ADocuments",
-      ),
-    ).toBe(true);
-    expect(
-      isAndroidSharedDocumentsRoot(
-        "content://com.android.externalstorage.documents/tree/primary%3ADocuments/document/primary%3ADocuments",
-      ),
-    ).toBe(true);
-    expect(
-      isAndroidSharedDocumentsRoot(
-        "content://com.android.externalstorage.documents/tree/home%3ADocuments",
-      ),
-    ).toBe(true);
-    expect(
-      isAndroidSharedDocumentsRoot(
-        "content://com.android.externalstorage.documents/tree/primary%3ADocuments%2FUpriv/document/primary%3ADocuments%2FUpriv",
-      ),
-    ).toBe(false);
+const USB = "content://com.android.externalstorage.documents/tree/ABCD-1234%3A";
+const OTHER = "content://com.android.externalstorage.documents/tree/primary%3ADownload";
+const DOCUMENTS =
+  "content://com.android.externalstorage.documents/tree/primary%3ADocuments%2FUpriv";
+
+describe("rememberedCustomFolderPath", () => {
+  it("drops the Documents default grant", () => {
+    expect(rememberedCustomFolderPath(DOCUMENTS)).toBe("");
+    expect(rememberedCustomFolderPath(USB)).toBe(USB);
+  });
+});
+
+describe("planSafSwitch", () => {
+  it("keeps the custom grant when the next folder is the default", () => {
+    expect(planSafSwitch(USB, DOCUMENTS)).toEqual({
+      rememberCustomUri: USB,
+      releaseUri: null,
+    });
   });
 
-  it("matches Documents/Upriv and not the Documents directory", () => {
-    expect(
-      isAndroidDocumentsUprivFolder(
-        "content://com.android.externalstorage.documents/tree/primary%3ADocuments%2FUpriv/document/primary%3ADocuments%2FUpriv",
-      ),
-    ).toBe(true);
-    expect(
-      isAndroidDocumentsUprivFolder(
-        "content://com.android.externalstorage.documents/tree/home%3ADocuments%2FUpriv",
-      ),
-    ).toBe(true);
-    expect(
-      isAndroidDocumentsUprivFolder(
-        "content://com.android.externalstorage.documents/tree/primary%3ADocuments",
-      ),
-    ).toBe(false);
+  it("keeps the custom grant when the active folder is cleared", () => {
+    expect(planSafSwitch(USB, "")).toEqual({
+      rememberCustomUri: USB,
+      releaseUri: null,
+    });
   });
 
-  it("treats Documents and Documents/Upriv as the default grant", () => {
-    expect(
-      isAndroidDocumentsDefaultGrant(
-        "content://com.android.externalstorage.documents/tree/primary%3ADocuments",
-      ),
-    ).toBe(true);
-    expect(
-      isAndroidDocumentsDefaultGrant(
-        "content://com.android.externalstorage.documents/tree/primary%3ADocuments%2FUpriv",
-      ),
-    ).toBe(true);
-    expect(
-      isAndroidDocumentsDefaultGrant(
-        "content://com.android.externalstorage.documents/tree/primary%3ADownload",
-      ),
-    ).toBe(false);
+  it("replaces the custom grant when another custom folder is chosen", () => {
+    expect(planSafSwitch(USB, OTHER)).toEqual({
+      rememberCustomUri: OTHER,
+      releaseUri: USB,
+    });
   });
 
-  it("does not restore the Documents default grant as a custom folder", () => {
-    const documents = "content://com.android.externalstorage.documents/tree/primary%3ADocuments";
-    const download = "content://com.android.externalstorage.documents/tree/primary%3ADownload";
-    expect(rememberedCustomFolderPath(documents)).toBe("");
-    expect(rememberedCustomFolderPath(`  ${documents}  `)).toBe("");
-    expect(rememberedCustomFolderPath("")).toBe("");
-    expect(rememberedCustomFolderPath(download)).toBe(download);
+  it("does not release the Documents grant when a custom folder is chosen", () => {
+    expect(planSafSwitch(DOCUMENTS, USB)).toEqual({
+      rememberCustomUri: USB,
+      releaseUri: null,
+    });
   });
 });

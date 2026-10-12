@@ -6,6 +6,7 @@ import {
   sanitizeWorkspaceSnapshot,
   serializeWorkspaceSnapshot,
   shouldHydratePersistedWorkspace,
+  workspaceSnapshotToHydrate,
   UPRIV_WORKSPACE_PATH,
   workspaceSnapshotFromState,
   workspaceStateFromSnapshot,
@@ -35,10 +36,46 @@ describe("workspaceSnapshot", () => {
       activeTabPath: "/b.md",
       expandedPaths: ["/", "/notes"],
       selectedPath: "/b.md",
+      markdownView: "source",
+      explorerCollapsed: true,
+      markdownOutlineOpen: true,
     });
     const parsed = parseWorkspaceSnapshot(raw);
     expect(parsed?.openTabs).toEqual(["/a.md", "/b.md"]);
     expect(parsed?.activeTabPath).toBe("/b.md");
+    expect(parsed?.markdownView).toBe("source");
+    expect(parsed?.explorerCollapsed).toBe(true);
+    expect(parsed?.markdownOutlineOpen).toBe(true);
+  });
+
+  it("loads a missing or non-true outline flag as hidden", () => {
+    expect(parseWorkspaceSnapshot('{"format_version":1,"openTabs":[]}')?.markdownOutlineOpen).toBe(
+      false,
+    );
+    expect(
+      parseWorkspaceSnapshot('{"format_version":1,"openTabs":[],"markdownOutlineOpen":1}')
+        ?.markdownOutlineOpen,
+    ).toBe(false);
+  });
+
+  it("loads a missing or non-true explorer flag as shown", () => {
+    expect(parseWorkspaceSnapshot('{"format_version":1,"openTabs":[]}')?.explorerCollapsed).toBe(
+      false,
+    );
+    expect(
+      parseWorkspaceSnapshot('{"format_version":1,"openTabs":[],"explorerCollapsed":"yes"}')
+        ?.explorerCollapsed,
+    ).toBe(false);
+  });
+
+  it("loads a missing or invalid markdown view as preview", () => {
+    expect(parseWorkspaceSnapshot('{"format_version":1,"openTabs":[]}')?.markdownView).toBe(
+      "preview",
+    );
+    expect(
+      parseWorkspaceSnapshot('{"format_version":1,"openTabs":[],"markdownView":"nope"}')
+        ?.markdownView,
+    ).toBe("preview");
   });
 
   it("rejects corrupt or wrong version", () => {
@@ -54,6 +91,9 @@ describe("workspaceSnapshot", () => {
         activeTabPath: "/gone.md",
         expandedPaths: ["/", "/notes", "/missing"],
         selectedPath: "/gone.md",
+        markdownView: "source",
+        explorerCollapsed: true,
+        markdownOutlineOpen: true,
       },
       tree,
     );
@@ -61,6 +101,9 @@ describe("workspaceSnapshot", () => {
     expect(sanitized.activeTabPath).toBe("/notes/nested.md");
     expect(sanitized.expandedPaths).toEqual(["/", "/notes"]);
     expect(sanitized.selectedPath).toBe("/notes/nested.md");
+    expect(sanitized.markdownView).toBe("source");
+    expect(sanitized.explorerCollapsed).toBe(true);
+    expect(sanitized.markdownOutlineOpen).toBe(true);
   });
 
   it("omits internal file from explorer tree", () => {
@@ -77,6 +120,9 @@ describe("workspaceSnapshot", () => {
       activeTabPath: "/a.md",
       selectedPath: "/a.md",
       expandedPaths: ["/", "/notes"],
+      markdownView: "source",
+      explorerCollapsed: true,
+      markdownOutlineOpen: true,
       dirtyPaths: ["/a.md"],
       editorDrafts: { "/a.md": "draft" },
     };
@@ -84,6 +130,9 @@ describe("workspaceSnapshot", () => {
     expect(snap.openTabs).toEqual(["/a.md"]);
     const restored = workspaceStateFromSnapshot(snap);
     expect(restored.openTabs).toEqual(["/a.md"]);
+    expect(restored.markdownView).toBe("source");
+    expect(restored.explorerCollapsed).toBe(true);
+    expect(restored.markdownOutlineOpen).toBe(true);
     expect(restored.dirtyPaths).toEqual([]);
     expect(restored.editorDrafts).toEqual({});
   });
@@ -96,5 +145,30 @@ describe("workspaceSnapshot", () => {
     expect(shouldHydratePersistedWorkspace(loaded, loaded, loaded)).toBe(false);
     expect(shouldHydratePersistedWorkspace(empty, edited, loaded)).toBe(false);
     expect(shouldHydratePersistedWorkspace(edited, edited, empty)).toBe(false);
+    const sourceOnly = { ...empty, markdownView: "source" as const };
+    expect(shouldHydratePersistedWorkspace(empty, empty, sourceOnly)).toBe(true);
+    expect(shouldHydratePersistedWorkspace(empty, sourceOnly, sourceOnly)).toBe(false);
+    const hiddenOnly = { ...empty, explorerCollapsed: true };
+    expect(shouldHydratePersistedWorkspace(empty, empty, hiddenOnly)).toBe(true);
+    expect(shouldHydratePersistedWorkspace(empty, hiddenOnly, hiddenOnly)).toBe(false);
+    const outlineOnly = { ...empty, markdownOutlineOpen: true };
+    expect(shouldHydratePersistedWorkspace(empty, empty, outlineOnly)).toBe(true);
+  });
+
+  it("keeps a chrome toggle made while tabs are still loading", () => {
+    const empty = workspaceSnapshotFromState(createDefaultWorkspaceState());
+    const hidden = { ...empty, explorerCollapsed: true };
+    const saved = {
+      ...empty,
+      openTabs: ["/a.md"],
+      activeTabPath: "/a.md",
+      selectedPath: "/a.md",
+      markdownView: "source" as const,
+    };
+    expect(workspaceSnapshotToHydrate(empty, hidden, saved)).toEqual({
+      ...saved,
+      explorerCollapsed: true,
+    });
+    expect(shouldHydratePersistedWorkspace(empty, hidden, saved)).toBe(true);
   });
 });

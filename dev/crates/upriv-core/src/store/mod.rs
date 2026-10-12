@@ -87,23 +87,32 @@ pub fn create_empty_store(
 }
 
 /// Create `store/` plus a non-secret seed chunk (`upriv-seed.txt` in the index).
+///
+/// `initial_files` are `(logical_path, plaintext)` pairs sealed beside the seed
+/// before the first index write — plaintext never leaves RAM.
 pub fn create_seeded_store(
     store_dir: impl AsRef<Path>,
     password: &[u8],
     preset: KdfUnlockPreset,
+    initial_files: &[(&str, &[u8])],
 ) -> Result<VaultHeader> {
     let store_dir = store_dir.as_ref();
     let (header, content_key, index_key) = create_store_core(store_dir, password, preset)?;
     let mut index = Index::empty();
-    let (_retired, mutation) = chunk::write_logical_file(
-        store_dir,
-        &header,
-        &content_key,
-        &mut index,
-        SEED_LOGICAL_PATH,
-        &seed_plaintext(header.content_identity),
-    )?;
-    mutation.sync_before_index()?;
+    let seed = seed_plaintext(header.content_identity);
+    let files =
+        std::iter::once((SEED_LOGICAL_PATH, seed.as_slice())).chain(initial_files.iter().copied());
+    for (logical_path, plaintext) in files {
+        let (_retired, mutation) = chunk::write_logical_file(
+            store_dir,
+            &header,
+            &content_key,
+            &mut index,
+            logical_path,
+            plaintext,
+        )?;
+        mutation.sync_before_index()?;
+    }
     save_sealed_index(store_dir, &header, &index_key, &index)?;
     Ok(header)
 }
@@ -326,7 +335,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().join(crate::paths::STORE_DIR_NAME);
         let password = b"seed-round-trip-ok";
-        create_seeded_store(&dir, password, KdfUnlockPreset::M32).expect("create");
+        create_seeded_store(&dir, password, KdfUnlockPreset::M32, &[]).expect("create");
         let opened = open_store(&dir, password).expect("open");
         let expected = seed_plaintext(opened.header.content_identity);
         let got = read_logical_file(
@@ -339,6 +348,31 @@ mod tests {
         .expect("seed");
         assert_eq!(got, expected);
         assert_eq!(opened.index.nodes.len(), 1);
+    }
+
+    #[test]
+    fn create_seeded_store_seals_initial_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join(crate::paths::STORE_DIR_NAME);
+        let password = b"seed-initial-files";
+        create_seeded_store(
+            &dir,
+            password,
+            KdfUnlockPreset::M32,
+            &[("README.md", b"# Hello\n")],
+        )
+        .expect("create");
+        let opened = open_store(&dir, password).expect("open");
+        let got = read_logical_file(
+            &dir,
+            &opened.header,
+            &opened.content_key,
+            &opened.index,
+            "README.md",
+        )
+        .expect("readme");
+        assert_eq!(got, b"# Hello\n");
+        assert_eq!(opened.index.nodes.len(), 2);
     }
 
     #[test]

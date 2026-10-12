@@ -47,7 +47,8 @@ function isVaultRootDirStatus(value: unknown): value is DefaultRootStatusResult[
     value === "valid" ||
     value === "incomplete" ||
     value === "unreadable" ||
-    value === "unauthorized"
+    value === "unauthorized" ||
+    value === "unreachable"
   );
 }
 

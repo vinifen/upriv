@@ -15,7 +15,7 @@
  */
 
 import type { I18nKey } from "../../i18n/catalog";
-import type { IncompleteReplacePolicy } from "./types";
+import type { IncompleteReplacePolicy, VaultRootDirStatus } from "./types";
 
 /** Continue (blocking gates) vs Apply (Data folder). */
 export type VaultRootConfirmAction = "continue" | "apply";
@@ -30,6 +30,14 @@ export type VaultRootDiskStatus =
   | "unreadable"
   /** SAF permission gone — user must re-pick the folder. */
   | "unauthorized"
+  /**
+   * Saved folder stays selected, but its volume does not answer.
+   * Android SAF inspect is the only producer today (grant still held).
+   * iOS security-scoped bookmarks reuse this when the bookmark is still valid
+   * and the volume is gone. Desktop does not emit it: a missing path is the
+   * same signal as a deleted folder, so that stays alias recovery.
+   */
+  | "unreachable"
   /**
    * `content://` tree. Vault create and edit need a filesystem path, so this
    * folder must not become the data folder.
@@ -63,7 +71,7 @@ export function isVaultRootDraftDirty(
 
 function confirmNoteKeys(
   primaryAction: VaultRootConfirmAction,
-  kind: "delete" | "rename" | "create",
+  kind: IncompleteReplacePolicy | "create",
 ): I18nKey {
   if (primaryAction === "apply") {
     return `modal.data_folder.apply_confirm_note.${kind}`;
@@ -76,9 +84,54 @@ export function confirmNotesForReplacePolicy(
   policy: IncompleteReplacePolicy | null | undefined,
   primaryAction: VaultRootConfirmAction = "continue",
 ): readonly I18nKey[] | undefined {
-  if (policy === "delete") return [confirmNoteKeys(primaryAction, "delete")] as const;
-  if (policy === "rename") return [confirmNoteKeys(primaryAction, "rename")] as const;
-  return undefined;
+  if (policy == null) return undefined;
+  return [confirmNoteKeys(primaryAction, policy)] as const;
+}
+
+/** Disk status for an inspect / default-root probe. `valid` is ready to use. */
+export function diskFromDirStatus(status: VaultRootDirStatus): VaultRootDiskStatus {
+  switch (status) {
+    case "incomplete":
+      return "incomplete";
+    case "unreadable":
+      return "unreadable";
+    case "unauthorized":
+      return "unauthorized";
+    case "unreachable":
+      return "unreachable";
+    case "absent":
+      return "will_create";
+    case "valid":
+      return "ready";
+  }
+}
+
+/** Copy for a disk check that blocks the primary action. Null when the row has no error. */
+export function vaultRootDiskProblemKey(disk: VaultRootDiskStatus): I18nKey | null {
+  if (disk === "unauthorized") return "modal.vault_root_setup.error_saf_unauthorized";
+  if (disk === "unreachable") return "modal.vault_root_setup.error_unreachable";
+  if (disk === "unreadable") return "modal.vault_root_setup.error_io";
+  return null;
+}
+
+/** Identity of the draft a disk check belongs to. Path whitespace matches dirty checks. */
+export function vaultRootDraftKey(mode: string, path: string): string {
+  return `${mode}\0${path.trim()}`;
+}
+
+/**
+ * Disk status for the draft on screen.
+ * A result from another mode or path stays hidden until this draft is checked.
+ */
+export function visibleVaultRootDisk(
+  disk: VaultRootDiskStatus,
+  checkedKey: string,
+  draftKey: string,
+  dirty: boolean,
+): VaultRootDiskStatus {
+  if (!dirty) return "ready";
+  if (checkedKey !== draftKey) return "checking";
+  return disk;
 }
 
 export function vaultRootGateFromState(args: {
@@ -96,6 +149,7 @@ export function vaultRootGateFromState(args: {
     disk === "checking" ||
     disk === "unreadable" ||
     disk === "unauthorized" ||
+    disk === "unreachable" ||
     disk === "not_vault_capable" ||
     disk === "needs_folder"
   ) {

@@ -6,6 +6,7 @@ import {
   Easing,
   FlatList,
   PanResponder,
+  Pressable,
   StyleSheet,
   Text,
   TextInput,
@@ -55,6 +56,42 @@ import {
 
 interface FileTreePanelProps {
   fm: FileManagerApi;
+}
+
+/** Icon + "Explorer" hide the explorer; the icon alone (in the tab bar) shows it again. */
+export function ExplorerToggle({ fm, showLabel }: { fm: FileManagerApi; showLabel: boolean }) {
+  const { t } = useTranslation();
+  const { colors } = useTheme();
+  const collapsed = fm.workspace.explorerCollapsed;
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={t(
+        collapsed ? "modal.file_manager.explorer.show" : "modal.file_manager.explorer.hide",
+      )}
+      accessibilityState={{ expanded: !collapsed }}
+      hitSlop={6}
+      onPress={() => fm.dispatch({ type: "set_explorer_collapsed", collapsed: !collapsed })}
+      style={({ pressed }) => [
+        styles.explorerToggle,
+        showLabel ? styles.explorerToggleLabeled : styles.explorerToggleBare,
+        { opacity: pressed ? 0.7 : 1 },
+      ]}
+    >
+      <View style={styles.explorerToggleIcon}>
+        <Icon name="sidebar" size={14} color={colors.onSurfaceVariant} />
+      </View>
+      {showLabel ? (
+        <Text
+          style={[styles.toolbarLabel, { color: colors.onSurfaceVariant }]}
+          numberOfLines={1}
+          ellipsizeMode="tail"
+        >
+          {t("modal.file_manager.explorer.title")}
+        </Text>
+      ) : null}
+    </Pressable>
+  );
 }
 
 interface FlatEntry {
@@ -401,14 +438,9 @@ export function FileTreePanel({ fm }: FileTreePanelProps) {
 
   return (
     <View style={[styles.panel, paneStyle, { backgroundColor: colors.surfaceContainer }]}>
+      {/* Label truncates first; once only the icon is left, the actions wrap to a second row. */}
       <View style={styles.toolbar}>
-        <Text
-          style={[styles.toolbarLabel, { color: colors.onSurfaceVariant }]}
-          numberOfLines={1}
-          ellipsizeMode="tail"
-        >
-          {t("modal.file_manager.explorer.title")}
-        </Text>
+        <ExplorerToggle fm={fm} showLabel />
         <View style={styles.toolbarActions}>
           <IconButton
             label={t("modal.file_manager.context.new_file")}
@@ -957,13 +989,15 @@ function FileTreeRow({
             label={t("modal.file_manager.context.copy_path")}
             onPress={copyPath}
           />
-          <MenuActionItem
-            icon="file-manager"
-            label={t("modal.file_manager.context.open_system")}
-            onPress={() => {
-              void fm.openInSystemFileManager(path);
-            }}
-          />
+          {fm.osFolderAvailable ? (
+            <MenuActionItem
+              icon="file-manager"
+              label={t("modal.file_manager.context.open_system")}
+              onPress={() => {
+                void fm.openInSystemFileManager(path);
+              }}
+            />
+          ) : null}
           <MenuActionItem
             icon="trash"
             label={t("modal.file_manager.context.delete")}
@@ -980,16 +1014,37 @@ const styles = StyleSheet.create({
   panel: { minHeight: 0, minWidth: 0, overflow: "hidden" },
   toolbar: {
     flexDirection: "row",
+    flexWrap: "wrap",
     alignItems: "center",
-    gap: 4,
-    paddingHorizontal: 8,
-    paddingTop: 8,
-    paddingBottom: 4,
+    rowGap: 2,
+    paddingHorizontal: 4,
+    paddingTop: 4,
+    paddingBottom: 2,
     flexShrink: 0,
   },
+  explorerToggle: {
+    flexDirection: "row",
+    alignItems: "center",
+    height: 24,
+    borderRadius: 4,
+  },
+  explorerToggleLabeled: {
+    // Wrapping is decided on the icon-only basis, so the label truncates away entirely before the actions wrap.
+    flexBasis: 24,
+    flexGrow: 1,
+    flexShrink: 1,
+    minWidth: 24,
+  },
+  explorerToggleBare: {
+    width: 32,
+    height: "100%",
+    justifyContent: "center",
+    borderRadius: 0,
+    flexShrink: 0,
+  },
+  explorerToggleIcon: { width: 24, alignItems: "center", justifyContent: "center", flexShrink: 0 },
   toolbarLabel: {
-    flex: 1,
-    minWidth: 0,
+    flexShrink: 1,
     fontSize: 10,
     fontWeight: "500",
     fontFamily: "monospace",
@@ -997,7 +1052,12 @@ const styles = StyleSheet.create({
     letterSpacing: 1.6,
     includeFontPadding: false,
   },
-  toolbarActions: { flexDirection: "row", alignItems: "center", gap: 2, flexShrink: 0 },
+  toolbarActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    flexShrink: 0,
+    marginLeft: "auto",
+  },
   toolBtn: { width: 24, height: 24, minWidth: 24, minHeight: 24, padding: 0 },
   listShell: { flex: 1, minHeight: 0, borderWidth: 1, borderColor: "transparent" },
   list: { flex: 1, minHeight: 0 },

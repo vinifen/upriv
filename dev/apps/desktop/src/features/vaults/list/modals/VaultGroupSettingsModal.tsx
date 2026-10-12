@@ -180,7 +180,7 @@ export function VaultGroupSettingsModal({
       contextTitle={group.displayName}
       onClose={close}
       dismissible={!busy}
-      panelClassName="max-w-xl"
+      panelClassName="max-w-3xl"
       footer={
         <div className="flex justify-end gap-2">
           <Button variant="ghost" size="md" onClick={close} disabled={busy}>

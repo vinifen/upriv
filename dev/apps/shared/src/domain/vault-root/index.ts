@@ -24,6 +24,7 @@ export {
   VAULT_ROOT_ERROR_CODES,
   isVaultRootErrorCode,
   isVaultRootGoneError,
+  isVaultRootUnreachableError,
   shouldBumpVaultRootEpoch,
   vaultRootGoneRpcError,
 } from "./errors";
@@ -41,7 +42,11 @@ export {
   VAULT_ROOT_GATE_IDLE,
   confirmNotesForReplacePolicy,
   isVaultRootDraftDirty,
+  diskFromDirStatus,
+  vaultRootDiskProblemKey,
+  vaultRootDraftKey,
   vaultRootGateFromState,
+  visibleVaultRootDisk,
 } from "./settingsIntent";
 export type {
   VaultRootConfirmAction,

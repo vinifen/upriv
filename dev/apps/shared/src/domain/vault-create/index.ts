@@ -61,6 +61,14 @@ export {
   type CreateVaultWizardView,
 } from "./wizardState";
 export { createVaultErrorI18nKey, type CreateVaultErrorI18nKey } from "./errorMessages";
+export {
+  buildVaultWelcomeFiles,
+  isRootWelcomeReadmePath,
+  vaultGetsWelcomeReadme,
+  VAULT_WELCOME_README_PATH,
+  type VaultWelcomeContext,
+  type VaultWelcomeFiles,
+} from "./welcomeReadme";
 export { createVaultErrorsForField, type CreateVaultErrorField } from "./fieldErrors";
 export {
   CREATE_VAULT_STEPS,

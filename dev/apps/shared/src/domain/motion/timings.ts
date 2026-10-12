@@ -26,10 +26,15 @@ export const FILE_MANAGER_LONG_PRESS_MS = 450;
 export const FILE_MANAGER_LONG_PRESS_MOVE_PX = 6;
 /** Second tap within this window opens the explorer / tab menu on mobile (desktop right-click). */
 export const FILE_MANAGER_DOUBLE_TAP_MS = 300;
+/** Second click/tap on the same code value within this window copies it (Markdown Read view). */
+export const MARKDOWN_COPY_DOUBLE_TAP_MS = 500;
 /** Hover dwell before expanding a folder under a mobile explorer drop. */
 export const FILE_MANAGER_DROP_EXPAND_MS = 400;
 /** Retry OS-picker cache deletes while the file manager is mounted. */
 export const FILE_MANAGER_PICKER_CACHE_WIPE_RETRY_MS = 8000;
+
+/** Glide for a mouse-wheel notch the app scrolls itself (tab strip, outline sideways). */
+export const WHEEL_SCROLL_MS = 160;
 
 /** Vault-list grip: pointer must move this far before a drag (and drop) starts. */
 export const VAULT_LIST_DRAG_THRESHOLD_PX = 8;

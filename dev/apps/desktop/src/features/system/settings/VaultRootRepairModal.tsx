@@ -6,7 +6,9 @@ import { useTranslation } from "@/i18n";
 import {
   SUPPORTED_LOCALES,
   confirmNotesForReplacePolicy,
+  diskFromDirStatus,
   sameVaultRootPath,
+  vaultRootDiskProblemKey,
   vaultRootGateFromState,
   type IncompleteReplacePolicy,
   type LocaleId,
@@ -47,9 +49,9 @@ type DiskApplied = {
 /**
  * Blocking when a chosen vault-root has incomplete/corrupt `.upriv/`.
  *
- * Same rich-field pattern as Data folder / Setup: rename / delete on the current
- * path, or expand “choose another folder” with picker + inspect. Incomplete
- * other folders show rename/delete **inside** that expansion. Destructive
+ * Same rich-field pattern as Data folder / Setup: reset settings / rename / delete
+ * on the current path, or expand “choose another folder” with picker + inspect.
+ * Incomplete other folders show the same policies **inside** that expansion. Destructive
  * delete is warned via the red footer note only — no second confirm step.
  */
 export function VaultRootRepairModal({
@@ -63,7 +65,7 @@ export function VaultRootRepairModal({
   const { settings, patchSettings } = useAppSettingsContext();
   const policyGroup = useId();
   const otherRepairGroup = useId();
-  const [policy, setPolicy] = useState<PolicyChoice>("rename");
+  const [policy, setPolicy] = useState<PolicyChoice>("reset_settings");
   const [busy, setBusy] = useState(false);
   const [picking, setPicking] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -80,7 +82,7 @@ export function VaultRootRepairModal({
 
   useEffect(() => {
     if (!open) return;
-    setPolicy("rename");
+    setPolicy("reset_settings");
     setBusy(false);
     setPicking(false);
     setError(null);
@@ -117,11 +119,7 @@ export function VaultRootRepairModal({
       .inspectAtPath(path)
       .then((result) => {
         if (gen !== otherCheckGen.current) return;
-        if (result.status === "incomplete") setOtherDisk("incomplete");
-        else if (result.status === "unreadable") setOtherDisk("unreadable");
-        else if (result.status === "unauthorized") setOtherDisk("unauthorized");
-        else if (result.status === "absent") setOtherDisk("will_create");
-        else setOtherDisk("ready");
+        setOtherDisk(diskFromDirStatus(result.status));
       })
       .catch(() => {
         if (gen !== otherCheckGen.current) return;
@@ -331,9 +329,8 @@ export function VaultRootRepairModal({
   }, [busy, picking, confirmOpen, otherGate.blocksPrimary, policy]);
 
   const noteKeys =
-    policy === "choose_other"
-      ? otherGate.confirmNotes
-      : confirmNotesForReplacePolicy(policy === "delete" || policy === "rename" ? policy : null);
+    policy === "choose_other" ? otherGate.confirmNotes : confirmNotesForReplacePolicy(policy);
+  const otherProblemKey = vaultRootDiskProblemKey(otherDisk);
 
   return (
     <Modal
@@ -408,11 +405,22 @@ export function VaultRootRepairModal({
         >
           <PolicyRadioOption
             groupName={policyGroup}
+            value="reset_settings"
+            checked={policy === "reset_settings"}
+            title={t("modal.vault_root_repair.option_reset_settings")}
+            description={t("modal.vault_root_repair.reset_settings_hint")}
+            badge="default"
+            onSelect={() => {
+              setPolicy("reset_settings");
+              setError(null);
+            }}
+          />
+          <PolicyRadioOption
+            groupName={policyGroup}
             value="rename"
             checked={policy === "rename"}
             title={t("modal.vault_root_repair.option_rename")}
             description={t("modal.vault_root_repair.rename_hint")}
-            badge="default"
             onSelect={() => {
               setPolicy("rename");
               setError(null);
@@ -471,12 +479,12 @@ export function VaultRootRepairModal({
                     {t("modal.vault_root_setup.error_path_required")}
                   </p>
                 ) : null}
-                {policy === "choose_other" && otherDisk === "unreadable" ? (
+                {policy === "choose_other" && otherProblemKey ? (
                   <p
                     className="rounded-md bg-error-container/10 px-3 py-2 text-xs leading-relaxed text-on-error-container"
                     role="alert"
                   >
-                    {t("modal.vault_root_setup.error_io")}
+                    {t(otherProblemKey)}
                   </p>
                 ) : null}
                 {policy === "choose_other" && otherDisk === "incomplete" ? (

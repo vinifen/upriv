@@ -114,6 +114,9 @@ export const ICON_GLYPHS: Record<IconName, readonly IconShape[]> = {
   "chevron-down": [
     p("M6 9l6 6 6-6", { strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round" }),
   ],
+  "chevron-right": [
+    p("M9 6l6 6-6 6", { strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round" }),
+  ],
   clock: [c(12, 12, 8, stroke), p("M12 8v4l3 2", roundJoin)],
   close: [p("M6 6l12 12M18 6L6 18", round)],
   copy: [r(9, 9, 11, 11, { rx: 2, strokeWidth: 1.75 }), p("M5 15V5a2 2 0 0 1 2-2h10", roundJoin)],
@@ -188,6 +191,12 @@ export const ICON_GLYPHS: Record<IconName, readonly IconShape[]> = {
     }),
     p("M11 9h6M11 13h4", round),
   ],
+  outline: [
+    c(5, 6, 1.25, { fill: "current" }),
+    c(9, 12, 1.25, { fill: "current" }),
+    c(9, 18, 1.25, { fill: "current" }),
+    p("M9 6h11M13 12h7M13 18h7", round),
+  ],
   pencil: [
     p("M12 20h9", round),
     p("M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z", roundJoin),
@@ -205,6 +214,7 @@ export const ICON_GLYPHS: Record<IconName, readonly IconShape[]> = {
     p("M7 3v5h8", roundJoin),
   ],
   settings: [c(12, 12, 3, stroke), p(PATH_SETTINGS, roundJoin)],
+  sidebar: [r(3, 4, 18, 16, { rx: 2, strokeWidth: 1.75 }), p("M9 4v16", stroke)],
   terminal: [r(3, 5, 18, 14, { rx: 2, strokeWidth: 1.75 }), p("M7 10l3 3-3 3M12 16h5", roundJoin)],
   sort: [p("M4 8h8M4 12h6M4 16h4", round), p("M16 6v12M13 9l3-3 3 3M13 15l3 3 3-3", roundJoin)],
   "layout-grid": [

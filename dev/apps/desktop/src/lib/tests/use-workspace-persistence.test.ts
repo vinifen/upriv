@@ -76,6 +76,50 @@ describe("useWorkspacePersistence", () => {
     });
   });
 
+  it("restores saved tabs when the explorer is hidden during the load", async () => {
+    const empty = createDefaultWorkspaceState();
+    const hidden = { ...empty, explorerCollapsed: true };
+    const loaded = {
+      ...empty,
+      openTabs: ["/a.md"],
+      activeTabPath: "/a.md",
+      selectedPath: "/a.md",
+    };
+    let resolveRead: (value: { content: string; language: "text" }) => void = () => undefined;
+    const setFileContent = vi.fn(async () => 1);
+    const fs = stubFs({
+      getFileContent: () =>
+        new Promise<{ content: string; language: "text" }>((resolve) => {
+          resolveRead = resolve;
+        }),
+      setFileContent,
+    });
+    const dispatch = vi.fn();
+    const { rerender } = renderHook(
+      (props: { workspace: VaultWorkspaceState }) =>
+        useWorkspacePersistence({
+          vaultId: "notes",
+          workspace: props.workspace,
+          fs,
+          dispatch,
+        }),
+      { initialProps: { workspace: empty } },
+    );
+    rerender({ workspace: hidden });
+    await act(async () => {
+      resolveRead({
+        language: "text",
+        content: serializeWorkspaceSnapshot(workspaceSnapshotFromState(loaded)),
+      });
+    });
+    await waitFor(() => expect(hydrateCalls(dispatch)).toHaveLength(1));
+    expect(hydrateCalls(dispatch)[0]).toMatchObject({
+      openTabs: ["/a.md"],
+      explorerCollapsed: true,
+    });
+    expect(setFileContent).not.toHaveBeenCalled();
+  });
+
   it("does not close an opened tab when dispatch identity changes mid-load", async () => {
     let resolveRead: (value: { content: string; language: "text" }) => void = () => undefined;
     const getFileContent = vi.fn(
@@ -162,5 +206,89 @@ describe("useWorkspacePersistence", () => {
       workspace: { ...empty, dropTargetPath: null, expandedPaths: ["/", "/photos"] },
     });
     await waitFor(() => expect(setFileContent).toHaveBeenCalled());
+  });
+
+  it("writes markdownView when the vault-wide choice changes", async () => {
+    const setFileContent = vi.fn<VaultFileSystemService["setFileContent"]>(async () => 1);
+    const getFileContent = vi.fn(async () => null);
+    const fs = stubFs({ setFileContent, getFileContent });
+    const empty = createDefaultWorkspaceState();
+    const { rerender } = renderHook(
+      (props: { workspace: VaultWorkspaceState }) =>
+        useWorkspacePersistence({
+          vaultId: "notes",
+          workspace: props.workspace,
+          fs,
+          dispatch: vi.fn(),
+        }),
+      { initialProps: { workspace: empty } },
+    );
+
+    await waitFor(() => expect(getFileContent).toHaveBeenCalled());
+    await act(async () => {
+      await Promise.resolve();
+    });
+    setFileContent.mockClear();
+
+    rerender({ workspace: { ...empty, markdownView: "source" } });
+    await waitFor(() => expect(setFileContent).toHaveBeenCalled());
+    const written = setFileContent.mock.calls.at(-1)?.[2] ?? "";
+    expect(written).toContain('"markdownView": "source"');
+  });
+
+  it("writes explorerCollapsed when the explorer is hidden", async () => {
+    const setFileContent = vi.fn<VaultFileSystemService["setFileContent"]>(async () => 1);
+    const getFileContent = vi.fn(async () => null);
+    const fs = stubFs({ setFileContent, getFileContent });
+    const empty = createDefaultWorkspaceState();
+    const { rerender } = renderHook(
+      (props: { workspace: VaultWorkspaceState }) =>
+        useWorkspacePersistence({
+          vaultId: "notes",
+          workspace: props.workspace,
+          fs,
+          dispatch: vi.fn(),
+        }),
+      { initialProps: { workspace: empty } },
+    );
+
+    await waitFor(() => expect(getFileContent).toHaveBeenCalled());
+    await act(async () => {
+      await Promise.resolve();
+    });
+    setFileContent.mockClear();
+
+    rerender({ workspace: { ...empty, explorerCollapsed: true } });
+    await waitFor(() => expect(setFileContent).toHaveBeenCalled());
+    const written = setFileContent.mock.calls.at(-1)?.[2] ?? "";
+    expect(written).toContain('"explorerCollapsed": true');
+  });
+
+  it("writes markdownOutlineOpen when the outline is shown", async () => {
+    const setFileContent = vi.fn<VaultFileSystemService["setFileContent"]>(async () => 1);
+    const getFileContent = vi.fn(async () => null);
+    const fs = stubFs({ setFileContent, getFileContent });
+    const empty = createDefaultWorkspaceState();
+    const { rerender } = renderHook(
+      (props: { workspace: VaultWorkspaceState }) =>
+        useWorkspacePersistence({
+          vaultId: "notes",
+          workspace: props.workspace,
+          fs,
+          dispatch: vi.fn(),
+        }),
+      { initialProps: { workspace: empty } },
+    );
+
+    await waitFor(() => expect(getFileContent).toHaveBeenCalled());
+    await act(async () => {
+      await Promise.resolve();
+    });
+    setFileContent.mockClear();
+
+    rerender({ workspace: { ...empty, markdownOutlineOpen: true } });
+    await waitFor(() => expect(setFileContent).toHaveBeenCalled());
+    const written = setFileContent.mock.calls.at(-1)?.[2] ?? "";
+    expect(written).toContain('"markdownOutlineOpen": true');
   });
 });

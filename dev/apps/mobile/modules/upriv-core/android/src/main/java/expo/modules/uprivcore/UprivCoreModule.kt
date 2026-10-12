@@ -117,48 +117,10 @@ class UprivCoreModule : Module() {
       runSafOrThrow { SafVaultRoot.inspect(requireContext(), treeUri).wire() }
     }
 
-    /**
-     * Create `.upriv/settings.toml` + `{vaults,logs,app,runtime}/` at the SAF tree.
-     *
-     * `replacePolicy` is `null` (idempotent: keep settings, still ensure
-     * `{vaults,logs,app,runtime}/` exist),
-     * `"delete"` (wipe marker dir in place — SAF cannot recreate the same
-     * display name after `DocumentFile.delete()`), or `"rename"` (`.upriv` →
-     * `.upriv-invalidated-<stamp>`). Callers must only pass delete/rename when
-     * the tree is incomplete — selecting a valid root should skip this RPC.
-     */
-    Function("safSetupRoot") {
-        treeUri: String,
-        locale: String?,
-        settingsTomlOverride: String?,
-        replacePolicy: String?,
-      ->
-      ensureRuntimeConfigured()
-      runSafOrThrow {
-        SafVaultRoot.setupRoot(
-          requireContext(),
-          treeUri,
-          locale,
-          settingsTomlOverride,
-          replacePolicy,
-        )
-      }
-    }
-
     /** Read `.upriv/settings.toml` body as UTF-8. Returns null when absent. */
     Function("safReadSettings") { treeUri: String ->
       ensureRuntimeConfigured()
       runSafOrThrow { SafVaultRoot.readSettings(requireContext(), treeUri) }
-    }
-
-    /**
-     * Overwrite `.upriv/settings.toml` under the SAF tree. Requires `.upriv/`
-     * to already exist — call `safSetupRoot` first (mirrors Rust
-     * `write_settings_toml_only`, which refuses to recreate `.upriv`).
-     */
-    Function("safWriteSettings") { treeUri: String, contents: String ->
-      ensureRuntimeConfigured()
-      runSafOrThrow { SafVaultRoot.writeSettings(requireContext(), treeUri, contents) }
     }
 
     /**
@@ -188,6 +150,14 @@ class UprivCoreModule : Module() {
       }
       val ctx = requireContext()
       runSafOrThrow {
+        // An unplugged drive keeps its grant. Report it as unreachable, not as
+        // a folder that cannot store vaults.
+        if (!SafFs.isReachable(ctx, trimmed)) {
+          if (!SafVaultRoot.hasGrant(ctx, trimmed)) {
+            throw SafException("saf_unauthorized", "pick the data folder again")
+          }
+          throw SafException("saf_unreachable", "data folder is not reachable")
+        }
         SafFs.bind(ctx, trimmed)
         mountSafFs(
           object : SafFsCallback {

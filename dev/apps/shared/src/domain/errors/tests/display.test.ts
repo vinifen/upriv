@@ -23,9 +23,6 @@ describe("errorDisplayI18nKey", () => {
     expect(errorDisplayI18nKey(new RpcError("vault_rewrap_unavailable", "p0"))).toBe(
       "error.vault_rewrap_unavailable",
     );
-    expect(errorDisplayI18nKey(new RpcError("vault_saf_unavailable", "saf"))).toBe(
-      "error.vault_saf_unavailable",
-    );
     expect(errorDisplayI18nKey(new RpcError("upriv_plain_unavailable", "plain"))).toBe(
       "error.upriv_plain_unavailable",
     );
@@ -61,6 +58,12 @@ describe("errorDisplayI18nKey", () => {
   it("maps vault_root_busy to the data-folder activity key", () => {
     expect(errorDisplayI18nKey(new RpcError("vault_root_busy", "sessions"))).toBe(
       "modal.data_folder.blocked_vault_activity",
+    );
+  });
+
+  it("maps vault_root_unreachable to the reconnect key", () => {
+    expect(errorDisplayI18nKey(new RpcError("vault_root_unreachable", "unplugged"))).toBe(
+      "modal.vault_root_setup.error_unreachable",
     );
   });
 

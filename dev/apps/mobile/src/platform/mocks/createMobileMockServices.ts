@@ -12,6 +12,8 @@ import {
   DEFAULT_KDF_UNLOCK_PRESET,
   displayNameToVaultId,
   normalizeStoredName,
+  UPRIV_WORKSPACE_PATH,
+  VAULT_WELCOME_README_PATH,
   type AppLogFile,
   type AppServices,
   type AppSettingsLoadResult,
@@ -32,8 +34,12 @@ import {
   createMockVaultGroupService,
   createMockVaultSecurityService,
   getMockVaultUnlockPreset,
+  importVaultFile,
   mockVaultExportBytes,
+  resetVaultFileSession,
+  resetVaultWorkspaceSnapshots,
   setMockVaultUnlockPreset,
+  setVaultFileContent,
 } from "@upriv/shared/testing";
 import {
   knownMockVaultIds,
@@ -298,6 +304,12 @@ export function createMobileMockServices(): AppServices {
         if (existing >= 0) extraCreatedVaults.splice(existing, 1);
         extraCreatedVaults.push(item);
         registerMockVaultId(item.id);
+        if (input.welcome) {
+          resetVaultFileSession(id);
+          resetVaultWorkspaceSnapshots(id);
+          importVaultFile(id, "/", VAULT_WELCOME_README_PATH.slice(1), input.welcome.readme);
+          setVaultFileContent(id, UPRIV_WORKSPACE_PATH, input.welcome.workspace);
+        }
         return item;
       },
       async storeOnDiskBytes() {

@@ -38,13 +38,15 @@ export function sameSafTreeUri(left: string, right: string): boolean {
 
 /**
  * Persistable grant from the import-folder picker should be dropped after the
- * read, except when that tree is the active custom vault-root.
+ * read, except when that tree is the active vault-root or the saved custom folder.
  */
 export function shouldReleaseImportTreePermission(
   importUri: string,
   activeVaultRootUri: string | null | undefined,
+  rememberedCustomUri?: string | null,
 ): boolean {
   if (!importUri.trim().startsWith("content://")) return false;
-  if (!activeVaultRootUri?.trim()) return true;
-  return !sameSafTreeUri(importUri, activeVaultRootUri);
+  if (activeVaultRootUri?.trim() && sameSafTreeUri(importUri, activeVaultRootUri)) return false;
+  if (rememberedCustomUri?.trim() && sameSafTreeUri(importUri, rememberedCustomUri)) return false;
+  return true;
 }

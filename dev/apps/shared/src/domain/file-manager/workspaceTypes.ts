@@ -23,6 +23,13 @@ export type UnsavedPromptAction =
 /** VS Code-style explorer cue: created (green) outranks modified (accent). */
 export type SessionPathKind = "created" | "modified";
 
+/** Vault-wide markdown surface. One choice applies to every `.md` file. */
+export type MarkdownViewMode = "preview" | "source";
+
+export function markdownViewMode(value: unknown): MarkdownViewMode {
+  return value === "source" ? "source" : "preview";
+}
+
 export interface VaultWorkspaceState {
   expandedPaths: string[];
   /**
@@ -54,6 +61,21 @@ export interface VaultWorkspaceState {
   unsavedPrompt: UnsavedPromptAction | null;
   dragSourcePath: string | null;
   dropTargetPath: string | null;
+  /**
+   * Preview or source for every Markdown file in this vault.
+   * Persisted on `.upriv-workspace.json`. RAM default is preview.
+   */
+  markdownView: MarkdownViewMode;
+  /**
+   * Explorer hidden behind its toggle button. Per vault, persisted on
+   * `.upriv-workspace.json`. RAM default is shown.
+   */
+  explorerCollapsed: boolean;
+  /**
+   * Heading outline beside Markdown files (both views). Per vault, persisted on
+   * `.upriv-workspace.json`. RAM default is hidden.
+   */
+  markdownOutlineOpen: boolean;
 }
 
 export function createDefaultWorkspaceState(): VaultWorkspaceState {
@@ -74,6 +96,9 @@ export function createDefaultWorkspaceState(): VaultWorkspaceState {
     unsavedPrompt: null,
     dragSourcePath: null,
     dropTargetPath: null,
+    markdownView: "preview",
+    explorerCollapsed: false,
+    markdownOutlineOpen: false,
   };
 }
 

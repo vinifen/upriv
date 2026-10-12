@@ -1,11 +1,15 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { RpcError } from "@upriv/shared";
 
-vi.mock("upriv-core", () => ({
-  getUprivCoreNative: () => null,
+const native = vi.hoisted(() => ({
+  current: null as null | { mountSafRoot: (uri: string) => void },
 }));
 
-import { isSafTreeUri, toSafRpcError } from "../safVaultRoot";
+vi.mock("upriv-core", () => ({
+  getUprivCoreNative: () => native.current,
+}));
+
+import { isSafTreeUri, mountSafRoot, toSafRpcError } from "../safVaultRoot";
 
 describe("isSafTreeUri", () => {
   it("accepts content URIs and rejects filesystem paths", () => {
@@ -34,12 +38,42 @@ describe("toSafRpcError", () => {
     const error = toSafRpcError(new Error("Permission denied for SAF tree"), "content://x");
     expect(error.code).toBe("saf_unauthorized");
   });
+});
 
-  it("maps cannot-create-.upriv copy to saf_create_failed", () => {
-    const error = toSafRpcError(
-      new Error("cannot create .upriv/ under the chosen folder"),
-      "content://tree",
+describe("mountSafRoot", () => {
+  beforeEach(() => {
+    native.current = null;
+  });
+
+  it("turns an unplugged drive into vault_root_unreachable with the tree path", () => {
+    native.current = {
+      mountSafRoot: () => {
+        throw new Error(
+          "Call to function 'UprivCore.mountSafRoot' has been rejected. saf_unreachable",
+        );
+      },
+    };
+    let caught: unknown;
+    try {
+      mountSafRoot("content://usb/tree/A1B2");
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(RpcError);
+    expect(caught).toMatchObject({
+      code: "vault_root_unreachable",
+      details: { path: "content://usb/tree/A1B2" },
+    });
+  });
+
+  it("keeps other mount failures as their SAF code", () => {
+    native.current = {
+      mountSafRoot: () => {
+        throw new Error("saf_not_ready: chosen folder cannot store vaults");
+      },
+    };
+    expect(() => mountSafRoot("content://tree")).toThrow(
+      expect.objectContaining({ code: "saf_not_ready" }),
     );
-    expect(error.code).toBe("saf_create_failed");
   });
 });

@@ -23,6 +23,13 @@ use crate::vault::fs as vfs;
 use super::MountedVault;
 
 const TTL: Duration = Duration::from_secs(1);
+/// Empty mount-root file so Tracker skips the tree. Not a vault node and not
+/// written into `store/`. A real `.nomedia` in the index wins.
+const TRACKER_NOMEDIA: &str = ".nomedia";
+
+fn synthetic_tracker_nomedia(logical: &str, in_index: bool) -> bool {
+    logical == TRACKER_NOMEDIA && !in_index
+}
 
 struct EncryptedFs {
     root: VaultRoot,
@@ -147,6 +154,9 @@ impl EncryptedFs {
         }
         let ino = inodes.ino_for(logical);
         drop(inodes);
+        if self.is_synthetic_nomedia(logical)? {
+            return Ok(self.file_attr(ino, 0, UNIX_EPOCH));
+        }
         self.with_index(|index| {
             let node = index
                 .find(logical)
@@ -202,6 +212,19 @@ impl EncryptedFs {
         }
     }
 
+    fn is_synthetic_nomedia(&self, logical: &str) -> Result<bool, i32> {
+        if logical != TRACKER_NOMEDIA {
+            return Ok(false);
+        }
+        let in_index = self.index_contains(logical)?;
+        Ok(synthetic_tracker_nomedia(logical, in_index))
+    }
+
+    fn index_contains(&self, logical: &str) -> Result<bool, i32> {
+        self.with_index(|index| Ok(index.find(logical).is_some()))
+            .map_err(map_err)
+    }
+
     fn remove_node(&mut self, parent: u64, name: &OsStr, reply: ReplyEmpty) {
         let Some(name) = name.to_str() else {
             reply.error(EPERM);
@@ -218,6 +241,17 @@ impl EncryptedFs {
         } else {
             format!("{parent_path}/{name}")
         };
+        match self.is_synthetic_nomedia(&logical) {
+            Ok(true) => {
+                reply.error(EPERM);
+                return;
+            }
+            Ok(false) => {}
+            Err(code) => {
+                reply.error(code);
+                return;
+            }
+        }
         match vfs::fs_delete(&self.root, &self.vault_id, &ui(&logical)) {
             Ok(_) => {
                 self.inodes
@@ -339,6 +373,10 @@ impl Filesystem for EncryptedFs {
             };
             entries.push((child_ino, kind, name));
         }
+        if parent.is_empty() && !entries.iter().any(|(_, _, name)| name == TRACKER_NOMEDIA) {
+            let ino = table.ino_for(TRACKER_NOMEDIA);
+            entries.push((ino, FileType::RegularFile, TRACKER_NOMEDIA.into()));
+        }
         drop(table);
         for (i, (child_ino, kind, name)) in entries.into_iter().enumerate().skip(offset as usize) {
             if reply.add(child_ino, (i + 1) as i64, kind, name) {
@@ -374,6 +412,17 @@ impl Filesystem for EncryptedFs {
             return;
         };
         drop(inodes);
+        match self.is_synthetic_nomedia(&path) {
+            Ok(true) => {
+                reply.data(&[]);
+                return;
+            }
+            Ok(false) => {}
+            Err(code) => {
+                reply.error(code);
+                return;
+            }
+        }
         match vfs::fs_read_range(
             &self.root,
             &self.vault_id,
@@ -404,6 +453,17 @@ impl Filesystem for EncryptedFs {
             return;
         };
         drop(inodes);
+        match self.is_synthetic_nomedia(&path) {
+            Ok(true) => {
+                reply.error(EPERM);
+                return;
+            }
+            Ok(false) => {}
+            Err(code) => {
+                reply.error(code);
+                return;
+            }
+        }
         match vfs::fs_write_range(&self.root, &self.vault_id, &ui(&path), offset as u64, data) {
             Ok(_) => reply.written(data.len() as u32),
             Err(error) => reply.error(map_err(error)),
@@ -434,6 +494,17 @@ impl Filesystem for EncryptedFs {
         } else {
             format!("{parent_path}/{name}")
         };
+        match self.is_synthetic_nomedia(&logical) {
+            Ok(true) => {
+                reply.error(EPERM);
+                return;
+            }
+            Ok(false) => {}
+            Err(code) => {
+                reply.error(code);
+                return;
+            }
+        }
         match vfs::fs_mkdir(&self.root, &self.vault_id, &ui(&logical)) {
             Ok(_) => match self.attr_for(&logical) {
                 Ok(attr) => reply.entry(&TTL, &attr, 0),
@@ -468,6 +539,17 @@ impl Filesystem for EncryptedFs {
         } else {
             format!("{parent_path}/{name}")
         };
+        match self.is_synthetic_nomedia(&logical) {
+            Ok(true) => {
+                reply.error(EPERM);
+                return;
+            }
+            Ok(false) => {}
+            Err(code) => {
+                reply.error(code);
+                return;
+            }
+        }
         match vfs::fs_create_named_file(&self.root, &self.vault_id, &ui(&parent_path), name) {
             Ok(_) => match self.attr_for(&logical) {
                 Ok(attr) => reply.created(&TTL, &attr, 0, 0, 0),
@@ -576,6 +658,25 @@ impl Filesystem for EncryptedFs {
             format!("{parent_path}/{name}")
         };
         let replace = flags & libc::RENAME_NOREPLACE == 0;
+        let dest_logical = if new_parent.is_empty() {
+            newname.to_string()
+        } else {
+            format!("{new_parent}/{newname}")
+        };
+        match (
+            self.is_synthetic_nomedia(&from),
+            self.is_synthetic_nomedia(&dest_logical),
+        ) {
+            (Ok(true), _) | (_, Ok(true)) => {
+                reply.error(EPERM);
+                return;
+            }
+            (Err(code), _) | (_, Err(code)) => {
+                reply.error(code);
+                return;
+            }
+            (Ok(false), Ok(false)) => {}
+        }
         match vfs::fs_relocate(
             &self.root,
             &self.vault_id,
@@ -585,15 +686,10 @@ impl Filesystem for EncryptedFs {
             replace,
         ) {
             Ok(_) => {
-                let dest = if new_parent.is_empty() {
-                    newname.to_string()
-                } else {
-                    format!("{new_parent}/{newname}")
-                };
                 self.inodes
                     .lock()
                     .unwrap_or_else(|p| p.into_inner())
-                    .remap_path(&from, &dest);
+                    .remap_path(&from, &dest_logical);
                 reply.ok();
             }
             Err(error) => {
@@ -635,6 +731,17 @@ impl Filesystem for EncryptedFs {
         };
         drop(inodes);
         if let Some(size) = size {
+            match self.is_synthetic_nomedia(&path) {
+                Ok(true) => {
+                    reply.error(EPERM);
+                    return;
+                }
+                Ok(false) => {}
+                Err(code) => {
+                    reply.error(code);
+                    return;
+                }
+            }
             if let Err(error) = vfs::fs_truncate(&self.root, &self.vault_id, &ui(&path), size) {
                 reply.error(map_err(error));
                 return;
@@ -687,10 +794,12 @@ pub(super) fn spawn(
             mount_point.display()
         ))
     })?;
-    Ok(MountedVault {
+    let mounted = MountedVault {
         mount_point,
         session: Some(session),
-    })
+    };
+    super::watch_open_mount(mounted.mount_point());
+    Ok(mounted)
 }
 
 #[cfg(test)]
@@ -711,6 +820,14 @@ mod inode_tests {
         assert_eq!(table.by_path.get("inbox/a.txt").copied(), Some(file));
         assert!(!table.by_path.contains_key("docs/a.txt"));
         assert_eq!(table.path(sibling).as_deref(), Some("other.txt"));
+    }
+
+    #[test]
+    fn tracker_nomedia_is_only_a_missing_mount_root_file() {
+        assert!(synthetic_tracker_nomedia(".nomedia", false));
+        assert!(!synthetic_tracker_nomedia(".nomedia", true));
+        assert!(!synthetic_tracker_nomedia("docs/.nomedia", false));
+        assert!(!synthetic_tracker_nomedia("notes.txt", false));
     }
 
     #[test]

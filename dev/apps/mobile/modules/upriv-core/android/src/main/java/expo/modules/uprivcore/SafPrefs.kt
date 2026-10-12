@@ -6,14 +6,14 @@ import android.content.Context
  * Persist the currently active SAF tree URI (custom vault-root chosen by the
  * user through `ACTION_OPEN_DOCUMENT_TREE`).
  *
- * Rust `.upriv-root` alias file lives under `filesDir/upriv/` and only accepts
- * absolute `std::fs` paths — it cannot hold a `content://` URI. This preference
- * plays the analogous role for the SAF flow on Android, kept **outside**
- * the vault-root itself so the app can still find the root at launch.
+ * Rust `.upriv-root` stores the logical mount path plus, on Android, the last
+ * Custom folder on a `custom=` line. This preference is only which tree is
+ * mounted right now, so the app can remount it at launch.
  *
  * Content:
  * - `active_uri`: current tree URI (empty = SAF mode inactive)
  *
+ * The last Custom folder is `custom=` in the app-home `.upriv-root`, not here.
  * Stored via Android SharedPreferences (per-app private XML in `data/data/…/shared_prefs/`).
  * Not encrypted — the URI is just a pointer, never a secret.
  */

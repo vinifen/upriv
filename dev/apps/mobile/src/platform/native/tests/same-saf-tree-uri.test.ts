@@ -37,6 +37,10 @@ describe("shouldReleaseImportTreePermission", () => {
     expect(shouldReleaseImportTreePermission(NOTES, DOWNLOAD)).toBe(true);
   });
 
+  it("keeps a different folder's grant when that folder is the remembered custom root", () => {
+    expect(shouldReleaseImportTreePermission(NOTES, DOWNLOAD, NOTES)).toBe(false);
+  });
+
   it("ignores non-content URIs", () => {
     expect(shouldReleaseImportTreePermission("/storage/emulated/0/Download", null)).toBe(false);
   });
