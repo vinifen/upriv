@@ -789,30 +789,4 @@ show_header_more_button = false
         let err = parse_settings_toml_str("[package\nversion = 1\n").unwrap_err();
         assert!(matches!(err, UprivError::VaultRootIncomplete { .. }));
     }
-
-    #[test]
-    fn kotlin_saf_template_matches_core_defaults() {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(
-            "../../apps/mobile/modules/upriv-core/android/src/main/java/expo/modules/uprivcore/SafVaultRoot.kt",
-        );
-        let src = crate::host_fs::read_to_string(&path)
-            .unwrap_or_else(|err| panic!("read {}: {err}", path.display()));
-        let marker = "DEFAULT_SETTINGS_TOML_TEMPLATE = \"\"\"";
-        let start = src
-            .find(marker)
-            .unwrap_or_else(|| panic!("missing {marker} in {}", path.display()));
-        let after = &src[start + marker.len()..];
-        let end = after
-            .find("\"\"\"")
-            .expect("unclosed DEFAULT_SETTINGS_TOML_TEMPLATE");
-        let template = after[..end].replace("__LOCALE__", "en");
-        let from_kotlin = parse_settings_toml_str(&template).expect("kotlin template parses");
-        let from_core = parse_settings_toml_str(
-            &serialize_settings_toml_str(&AppSettings::default(), None).unwrap(),
-        )
-        .expect("core serialize parses");
-        assert_eq!(from_kotlin.ui, from_core.ui);
-        assert_eq!(from_kotlin.logging, from_core.logging);
-        assert_eq!(from_kotlin.workspace, from_core.workspace);
-    }
 }

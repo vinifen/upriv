@@ -2,6 +2,7 @@ import type { KdfUnlockPreset } from "../../domain/vault-settings/kdf";
 import type { VaultExportRequest, VaultListItem } from "../../domain/vault-list";
 import type { VaultSettingsConfig } from "../../domain/vault-settings";
 import type { VaultRow } from "../../domain/vault";
+import type { VaultWelcomeFiles } from "../../domain/vault-create/welcomeReadme";
 import type { VaultPathWriteResult } from "../backup/createLiveBackupService";
 
 export type VaultImportPackageKind = "store_zip" | "seven_zip" | "files_zip" | "os_tree";
@@ -22,6 +23,12 @@ export interface CreateVaultInput {
   unlockPreset?: KdfUnlockPreset;
   settings: VaultSettingsConfig;
   importPackage?: VaultImportPackage;
+  /**
+   * Welcome `README.md` + layout (`buildVaultWelcomeFiles`). Scratch and
+   * ordinary-file imports; core skips it when the root already has a README.
+   * A store `.zip` / backup import never sends it.
+   */
+  welcome?: VaultWelcomeFiles;
 }
 
 /** Result of `vault_rename` (display name + optional folder id migration). */
@@ -44,7 +51,11 @@ export interface VaultService {
   /** All vault rows for the list screen. */
   listVaults(): Promise<VaultListItem[]>;
 
-  /** Scratch create: writes `config.toml` + seeded `store/` (password is not stored). */
+  /**
+   * Scratch create: writes `config.toml` + seeded `store/` (password is not stored).
+   * `input.importPackage` routes to an import instead. `input.welcome` adds
+   * `README.md` and the layout that opens it.
+   */
   createVault(input: CreateVaultInput): Promise<VaultListItem>;
 
   /** Load `vaults/<id>/config.toml` equivalent. */

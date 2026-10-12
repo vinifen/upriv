@@ -19,7 +19,8 @@ mod persistence;
 mod rename;
 mod seven_zip;
 mod seven_zip_pack;
-mod wipe;
+mod welcome;
+pub(crate) mod wipe;
 mod zip_io;
 
 use std::collections::HashSet;
@@ -30,13 +31,13 @@ use crate::error::{Result, UprivError};
 use crate::paths::VaultRoot;
 use crate::runtime_state::{dirty_close_ids, sweep_stale_mount_leaves};
 use crate::session::is_vault_open_at;
-use crate::store::{probe_unlock_preset, KdfUnlockPreset};
+use crate::store::{content_hash_hex, probe_unlock_preset, KdfUnlockPreset};
 
 pub use backup::{
     backup_on_close, backup_zip_file, delete_backups, export_backups_to_path, list_backups,
     promote_backup_save, read_backup_zip_bytes, BackupEntry,
 };
-pub use create::create_vault;
+pub use create::{create_vault, create_vault_with_welcome};
 pub use delete::delete_vault;
 pub use embedded_settings::{parse_embedded_settings, EmbeddedVaultSettings};
 pub use export::{
@@ -70,6 +71,7 @@ pub use seven_zip::{
     probe_logical_seven_zip_path,
 };
 pub use seven_zip_pack::seven_zip_export_available;
+pub use welcome::{VaultWelcome, WELCOME_FILE_MAX_BYTES, WELCOME_README_LOGICAL_PATH};
 pub use zip_io::{
     probe_store_zip, probe_store_zip_path, read_zip_config_toml, zip_directory_to_bytes,
     zip_directory_to_path, zip_store_with_config_to_bytes, zip_store_with_config_to_path,
@@ -197,9 +199,12 @@ pub(crate) fn list_vault_entries(root: &VaultRoot) -> Result<Vec<VaultListEntry>
     Ok(entries)
 }
 
-fn persistence_last_accessed(vault_dir: &std::path::Path, id: &str) -> Option<String> {
+fn listed_persistence(
+    vault_dir: &std::path::Path,
+    id: &str,
+) -> Option<persistence::VaultPersistence> {
     match persistence::load_vault_persistence(vault_dir) {
-        Ok(value) => value.and_then(|p| p.last_close_ok_at),
+        Ok(value) => value,
         Err(error) => {
             eprintln!(
                 "upriv-core: vault {id} has invalid persistence.json (listed anyway): {error}"
@@ -214,12 +219,39 @@ fn persistence_last_accessed(vault_dir: &std::path::Path, id: &str) -> Option<St
     }
 }
 
+/// Recovery A: `persistence.json` recorded the header and sealed index from the
+/// last successful close. A different `store/` (an older folder put back, including
+/// a backup unpacked over the live one) uses the same recovery session as a dirty
+/// close. Unlock still opens that `store/`; the next close records its hash.
+///
+/// A missing hash, or a read error while hashing, is not a mismatch. Chunk files
+/// are not part of the hash. An open session stays `open` — this only applies
+/// while the vault is closed, which is what the open action reads.
+fn content_hash_mismatch(vault_dir: &Path, saved: Option<&str>) -> bool {
+    let Some(saved) = saved else {
+        return false;
+    };
+    let store = vault_dir.join(crate::paths::STORE_DIR_NAME);
+    match content_hash_hex(&store) {
+        Ok(now) => now != saved,
+        Err(_) => false,
+    }
+}
+
 fn list_item_from_entry(entry: &VaultListEntry, dirty: &HashSet<String>) -> VaultListItem {
-    let last_accessed_at = persistence_last_accessed(&entry.vault_dir, &entry.id);
+    let saved = listed_persistence(&entry.vault_dir, &entry.id);
+    let last_accessed_at = saved
+        .as_ref()
+        .and_then(|item| item.last_close_ok_at.clone());
     let unlock_preset = probe_unlock_preset(entry.vault_dir.join(crate::paths::STORE_DIR_NAME));
     let session = if is_vault_open_at(&entry.vault_dir) {
         Some("open")
-    } else if dirty.contains(&entry.id) {
+    } else if dirty.contains(&entry.id)
+        || content_hash_mismatch(
+            &entry.vault_dir,
+            saved.as_ref().and_then(|item| item.content_hash.as_deref()),
+        )
+    {
         Some("recovery")
     } else {
         None

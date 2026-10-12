@@ -1,11 +1,11 @@
 //! Session-backed logical file operations. Mutations seal the index.
 //! One OS import seals before it returns. A batch stages each file and seals
-//! the index for the whole batch, so later files do not rewrite a growing index.
+//! a full wave of them, then the tail, so a crash keeps the last finished wave.
 
 use crate::host_fs::File;
 #[allow(unused_imports)]
 use crate::host_fs::HostFsQuery;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{Condvar, LazyLock, Mutex};
@@ -685,6 +685,25 @@ fn staged_revision(dir: &Path, mutation: ChunkBlobMutation) -> Result<u64> {
     with_open_session(dir, |session| Ok(session.tree_revision))
 }
 
+/// Staged files and folders sealed together during a vault import.
+///
+/// A kill keeps this prefix in the index. Blobs from the unfinished wave are
+/// not named there; open drops those unreferenced blobs.
+const STAGED_IMPORT_WAVE: u64 = 32;
+
+/// Seal the open import wave once it is full. A short tail stays staged until
+/// [`fs_seal_staged_imports`].
+pub(crate) fn fs_seal_staged_wave(root: &VaultRoot, vault_id: &str) -> Result<()> {
+    let dir = require_open(root, vault_id)?;
+    let due = with_open_session(&dir, |session| {
+        Ok(session.unsealed_imports >= STAGED_IMPORT_WAVE)
+    })?;
+    if due {
+        fs_seal_staged_imports(root, vault_id)?;
+    }
+    Ok(())
+}
+
 /// Flush the blobs staged since the last seal, then write the index once.
 pub fn fs_seal_staged_imports(root: &VaultRoot, vault_id: &str) -> Result<u64> {
     let dir = require_open(root, vault_id)?;
@@ -695,6 +714,57 @@ pub fn fs_seal_staged_imports(root: &VaultRoot, vault_id: &str) -> Result<u64> {
         commit(session)?;
         Ok(session.tree_revision)
     })
+}
+
+/// Create `logical` and its missing parents without sealing the index.
+/// [`fs_seal_staged_imports`] seals them with the staged files. `known` holds
+/// folders this batch already ensured, so a deep tree does not rescan the
+/// index for every file.
+pub(crate) fn fs_ensure_folder_path_staged(
+    root: &VaultRoot,
+    vault_id: &str,
+    logical: &str,
+    known: &mut HashSet<String>,
+) -> Result<()> {
+    let logical = logical.trim_matches('/');
+    if logical.is_empty() || known.contains(logical) {
+        return Ok(());
+    }
+    let dir = require_open(root, vault_id)?;
+    with_open_session(&dir, |session| {
+        let mut parent = String::new();
+        for part in logical.split('/').filter(|part| !part.is_empty()) {
+            let path = child_logical_path(&parent, part)?;
+            if !known.contains(&path) {
+                require_user_visible_logical(&path)?;
+                match session.index.find(&path) {
+                    Some(node) if node.is_dir() => {}
+                    Some(_) => return Err(UprivError::VaultPathExists(path)),
+                    None => {
+                        mkdir_logical(&mut session.index, &path)?;
+                        session.dirty = true;
+                        session.unsealed_imports = session.unsealed_imports.saturating_add(1);
+                    }
+                }
+                known.insert(path.clone());
+            }
+            parent = path;
+        }
+        Ok(())
+    })
+}
+
+/// Stream one file into a batch without sealing the index.
+/// [`fs_seal_staged_wave`] seals a full wave; [`fs_seal_staged_imports`] seals the tail.
+pub(crate) fn fs_write_staged(
+    root: &VaultRoot,
+    vault_id: &str,
+    ui_path: &str,
+    reader: &mut (impl Read + ?Sized),
+) -> Result<()> {
+    let dir = require_open(root, vault_id)?;
+    let path = logical(ui_path)?;
+    write_reader_ahead(&dir, &path, reader, true).map(|_| ())
 }
 
 /// Flush each staged blob, then the directory that names it.
@@ -1545,6 +1615,87 @@ mode = "encrypted_dir"
         close_vault(&root, "notes", None).unwrap();
     }
 
+    fn root_file_names(tree: &FileTreeNode) -> Vec<String> {
+        tree.children
+            .iter()
+            .flatten()
+            .map(|child| child.name.clone())
+            .collect()
+    }
+
+    #[test]
+    fn scratch_create_seals_welcome_readme_and_layout() {
+        let (_tmp, root) = vault_root_with(&[]);
+        let readme = "# Welcome-note-plaintext\n";
+        let workspace = "{\"format_version\":1,\"openTabs\":[\"/README.md\"]}\n";
+        crate::vault::create_vault_with_welcome(
+            &root,
+            sample_config("notes", "Notes"),
+            b"pass-word-ok",
+            KdfUnlockPreset::M32,
+            Some(crate::vault::VaultWelcome { readme, workspace }),
+        )
+        .unwrap();
+        let vault_dir = root.vault_dir("notes").unwrap();
+        for entry in walkdir_files(&vault_dir) {
+            let bytes = crate::host_fs::read(&entry).unwrap_or_default();
+            assert!(
+                !bytes
+                    .windows(b"Welcome-note-plaintext".len())
+                    .any(|w| w == b"Welcome-note-plaintext"),
+                "plaintext leaked at {}",
+                entry.display()
+            );
+        }
+        open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        let tree = fs_list_tree(&root, "notes").unwrap();
+        assert_eq!(root_file_names(&tree), vec!["README.md".to_string()]);
+        assert_eq!(
+            fs_read_file(&root, "notes", "/README.md").unwrap(),
+            readme.as_bytes()
+        );
+        assert_eq!(
+            fs_read_file(&root, "notes", "/.upriv-workspace.json").unwrap(),
+            workspace.as_bytes()
+        );
+        close_vault(&root, "notes", None).unwrap();
+    }
+
+    #[test]
+    fn plain_create_has_no_welcome_readme() {
+        let (_tmp, root) = vault_root_with(&[]);
+        create_vault(
+            &root,
+            sample_config("notes", "Notes"),
+            b"pass-word-ok",
+            KdfUnlockPreset::M32,
+        )
+        .unwrap();
+        open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        let tree = fs_list_tree(&root, "notes").unwrap();
+        assert!(root_file_names(&tree).is_empty());
+        close_vault(&root, "notes", None).unwrap();
+    }
+
+    #[test]
+    fn oversized_welcome_is_refused_before_the_folder_exists() {
+        let (_tmp, root) = vault_root_with(&[]);
+        let readme = "x".repeat(crate::vault::WELCOME_FILE_MAX_BYTES + 1);
+        let err = crate::vault::create_vault_with_welcome(
+            &root,
+            sample_config("notes", "Notes"),
+            b"pass-word-ok",
+            KdfUnlockPreset::M32,
+            Some(crate::vault::VaultWelcome {
+                readme: &readme,
+                workspace: "{}",
+            }),
+        )
+        .unwrap_err();
+        assert!(matches!(err, UprivError::VaultFileTooLarge { .. }));
+        assert!(!root.vault_dir("notes").unwrap().host_exists());
+    }
+
     #[test]
     fn write_is_durable_before_close() {
         let (_tmp, root) = vault_root_with(&[]);
@@ -2122,6 +2273,54 @@ mode = "encrypted_dir"
             let got = fs_read_file(&root, "notes", &format!("/d{index}.txt")).unwrap();
             assert_eq!(got, format!("body-{index}").into_bytes());
         }
+        close_vault(&root, "notes", None).unwrap();
+    }
+
+    #[test]
+    fn a_full_import_wave_is_sealed_before_the_importer_returns() {
+        let (_tmp, root) = vault_root_with(&[]);
+        create_vault(
+            &root,
+            sample_config("notes", "Notes"),
+            b"pass-word-ok",
+            KdfUnlockPreset::M32,
+        )
+        .unwrap();
+        open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        for index in 0..STAGED_IMPORT_WAVE {
+            let mut body = b"wave".as_slice();
+            fs_write_staged(&root, "notes", &format!("/w{index}.txt"), &mut body).unwrap();
+            fs_seal_staged_wave(&root, "notes").unwrap();
+        }
+        let dir = root.vault_dir("notes").unwrap();
+        crate::session::with_open_session(&dir, |session| {
+            let store = store_dir(session);
+            assert!(crate::store::sealed_index_contains(
+                &store,
+                &session.header,
+                &session.index_key,
+                "w0.txt",
+            )
+            .unwrap());
+            assert_eq!(session.unsealed_imports, 0);
+            Ok(())
+        })
+        .unwrap();
+        let mut tail = b"tail".as_slice();
+        fs_write_staged(&root, "notes", "/tail.txt", &mut tail).unwrap();
+        crate::session::with_open_session(&dir, |session| {
+            let store = store_dir(session);
+            assert!(!crate::store::sealed_index_contains(
+                &store,
+                &session.header,
+                &session.index_key,
+                "tail.txt",
+            )
+            .unwrap());
+            assert_eq!(session.unsealed_imports, 1);
+            Ok(())
+        })
+        .unwrap();
         close_vault(&root, "notes", None).unwrap();
     }
 

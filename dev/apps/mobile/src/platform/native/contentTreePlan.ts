@@ -1,4 +1,4 @@
-import type { CreateVaultInput, VaultListItem } from "@upriv/shared";
+import { isRootWelcomeReadmePath, type CreateVaultInput, type VaultListItem } from "@upriv/shared";
 
 export interface ContentImportFile {
   logicalPath: string;
@@ -197,16 +197,22 @@ export function createContentTreeRegistry() {
 /**
  * Create the vault, stream the folder in, then close it.
  * A failure deletes the new vault instead of leaving it open or half-filled.
+ * The welcome note is sealed at create, so it is dropped up front when the
+ * picked tree already has a root `README.md` file or folder (same rule as core).
  */
 export async function importContentTree(
   input: CreateVaultInput,
   tree: ContentImportTree,
   io: ContentTreeImportIo,
 ): Promise<VaultListItem> {
+  const hasOwnReadme =
+    tree.files.some((file) => isRootWelcomeReadmePath(file.logicalPath)) ||
+    tree.directories.some((dir) => isRootWelcomeReadmePath(dir));
   const created = await io.createVault({
     password: input.password,
     unlockPreset: input.unlockPreset,
     settings: input.settings,
+    welcome: hasOwnReadme ? undefined : input.welcome,
   });
   try {
     await io.openSession(created.id, input.password);

@@ -38,10 +38,12 @@ pub(crate) use init::{
 };
 pub use relocate::{relocate_upriv_dir, UprivDirRelocate};
 pub use resolve::{
-    app_home_dir, binary_dir, deactivate_vault_root_alias_everywhere, discover_vault_root_upward,
-    read_vault_root_alias, resolve_vault_root, setup_default_root_anchor, vault_root_alias_path,
-    write_vault_root_alias, write_vault_root_alias_for_root, ResolveVaultRoot,
-    ResolveVaultRootOptions, VaultRootAlias, VaultRootMode, VaultRootSource, VAULT_ROOT_ALIAS_FILE,
+    active_alias_is_unmounted_saf, app_home_dir, binary_dir,
+    deactivate_vault_root_alias_everywhere, discover_vault_root_upward, read_vault_root_alias,
+    remember_vault_root_custom_uri, resolve_vault_root, setup_default_root_anchor,
+    vault_root_alias_path, write_vault_root_alias, write_vault_root_alias_for_root,
+    write_vault_root_alias_for_root_with_custom, ResolveVaultRoot, ResolveVaultRootOptions,
+    VaultRootAlias, VaultRootMode, VaultRootSource, VAULT_ROOT_ALIAS_FILE,
 };
 pub use slug_alloc::display_name_to_vault_id;
 pub use workspace::{
@@ -111,8 +113,8 @@ const RUNTIME_DIR_REL: &str = ".upriv/runtime";
 pub const STORE_DIR_NAME: &str = "store";
 
 /// Atomically write `bytes` to `path` (temp + `sync_all` + rename + parent fsync).
-/// On a storage-access folder, a provider that refuses to rename onto an
-/// existing document is overwritten in place from the same bytes.
+/// The destination is never truncated in place, on a storage-access folder
+/// too: a drive pulled mid-write keeps the previous bytes.
 /// On failure, best-effort removes the temp file.
 /// After rename, fsync the parent directory on Unix and return that error.
 ///
@@ -277,12 +279,6 @@ fn write_bytes_atomic_inner(path: &Path, bytes: &[u8], create_parents: bool) -> 
             return Err(UprivError::VaultRootNotFound(path.to_path_buf()));
         }
     }
-    // A storage-access provider will not rename onto a file that already
-    // exists, so the temp file was a full extra copy of a growing index.
-    // Overwrite that document once.
-    if crate::host_fs::is_bridge_path(path) && path.host_is_file() {
-        return overwrite_bridge_file(path, bytes);
-    }
     let nonce = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
@@ -292,19 +288,8 @@ fn write_bytes_atomic_inner(path: &Path, bytes: &[u8], create_parents: bool) -> 
         let mut file = crate::host_fs::File::create(&tmp)?;
         file.write_all(bytes)?;
         file.sync_all()?;
-        if let Err(error) = crate::host_fs::rename(&tmp, path) {
-            if !crate::host_fs::is_bridge_path(path) {
-                return Err(UprivError::from(error));
-            }
-            // The provider will not rename onto an existing document. The temp
-            // file already holds the new bytes.
-            if let Err(overwrite_error) = overwrite_bridge_file(path, bytes) {
-                if path.host_is_file() || crate::host_fs::rename(&tmp, path).is_err() {
-                    return Err(overwrite_error);
-                }
-            }
-            let _ = crate::host_fs::remove_file(&tmp);
-        }
+        drop(file);
+        crate::host_fs::rename(&tmp, path)?;
         // The file body is durable before the rename. The directory entry is
         // not, until the parent is synced. A failure here is a failed write:
         // ignoring it reported success for a rename a crash could still drop.
@@ -315,42 +300,9 @@ fn write_bytes_atomic_inner(path: &Path, bytes: &[u8], create_parents: bool) -> 
         Ok(())
     })();
     if result.is_err() {
-        // A storage-access replace may already have removed the destination.
-        // Keep the temp file in that case; it still holds the new bytes.
-        let destination_missing = crate::host_fs::is_bridge_path(path) && !path.host_is_file();
-        if !destination_missing {
-            let _ = crate::host_fs::remove_file(&tmp);
-        }
+        let _ = crate::host_fs::remove_file(&tmp);
     }
     result
-}
-
-/// Replace one storage-access document. Used when rename cannot take a name
-/// that already exists. Callers keep the temp file until this returns `Ok`.
-fn overwrite_bridge_file(path: &Path, bytes: &[u8]) -> Result<()> {
-    use std::io::Write;
-    let mut file = crate::host_fs::File::create(path)?;
-    file.write_all(bytes)?;
-    file.sync_all()?;
-    drop(file);
-    match crate::host_fs::metadata(path) {
-        Ok(meta) if meta.len() == bytes.len() as u64 => return Ok(()),
-        _ => {}
-    }
-    // `"wt"` opened the old document without truncating it. Replace the
-    // document so the previous bytes cannot stay after the new write.
-    let _ = crate::host_fs::remove_file(path);
-    let mut file = crate::host_fs::File::create(path)?;
-    file.write_all(bytes)?;
-    file.sync_all()?;
-    drop(file);
-    let meta = crate::host_fs::metadata(path)?;
-    if meta.len() != bytes.len() as u64 {
-        return Err(UprivError::Io(std::io::Error::other(
-            "storage-access replace left a different length",
-        )));
-    }
-    Ok(())
 }
 
 /// True when `path` contains the Upriv vault-root marker (`.upriv/settings.toml`).

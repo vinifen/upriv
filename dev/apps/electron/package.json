@@ -81,7 +81,10 @@
       "category": "Utility",
       "maintainer": "Upriv <upriv@users.noreply.github.com>",
       "icon": "build/icons",
-      "artifactName": "${productName}-${version}-${os}-${arch}.${ext}"
+      "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
+      "desktop": {
+        "StartupWMClass": "upriv-electron"
+      }
     },
     "deb": {
       "afterInstall": "build/linux/afterInstall.tpl"

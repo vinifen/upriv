@@ -183,6 +183,8 @@ struct VaultImport7zParams {
     archive_path: Option<String>,
     #[serde(default)]
     archive_password: Option<SecretString>,
+    #[serde(default)]
+    welcome: Option<super::VaultWelcomeParams>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -196,6 +198,8 @@ struct VaultImportFilesZipParams {
     content_b64: Option<String>,
     #[serde(default)]
     archive_path: Option<String>,
+    #[serde(default)]
+    welcome: Option<super::VaultWelcomeParams>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -882,6 +886,10 @@ pub(super) fn vault_import_7z(params: Value) -> RpcResponse {
     };
     let archive_pw = secret_bytes(parsed.archive_password.as_ref());
     let preset = parsed.unlock_preset.unwrap_or(KdfUnlockPreset::M256);
+    let welcome = parsed
+        .welcome
+        .as_ref()
+        .map(super::VaultWelcomeParams::as_core);
     let imported = if let Some(path) = parsed
         .archive_path
         .as_deref()
@@ -895,6 +903,7 @@ pub(super) fn vault_import_7z(params: Value) -> RpcResponse {
             preset,
             Path::new(path),
             archive_pw,
+            welcome,
         )
     } else {
         let bytes = match load_archive_bytes(parsed.content_b64.as_deref(), None) {
@@ -908,6 +917,7 @@ pub(super) fn vault_import_7z(params: Value) -> RpcResponse {
             preset,
             &bytes,
             archive_pw,
+            welcome,
         )
     };
     match imported {
@@ -932,6 +942,10 @@ pub(super) fn vault_import_files_zip(params: Value) -> RpcResponse {
         Err(response) => return response,
     };
     let preset = parsed.unlock_preset.unwrap_or(KdfUnlockPreset::M256);
+    let welcome = parsed
+        .welcome
+        .as_ref()
+        .map(super::VaultWelcomeParams::as_core);
     let path = parsed
         .archive_path
         .as_deref()
@@ -944,6 +958,7 @@ pub(super) fn vault_import_files_zip(params: Value) -> RpcResponse {
             parsed.password.as_bytes(),
             preset,
             Path::new(path),
+            welcome,
         )
     } else {
         match load_archive_bytes(parsed.content_b64.as_deref(), None) {
@@ -953,6 +968,7 @@ pub(super) fn vault_import_files_zip(params: Value) -> RpcResponse {
                 parsed.password.as_bytes(),
                 preset,
                 &bytes,
+                welcome,
             ),
             Err(response) => return response,
         }
@@ -993,6 +1009,10 @@ pub(super) fn vault_import_os_path(params: Value) -> RpcResponse {
         parsed.password.as_bytes(),
         preset,
         Path::new(path),
+        parsed
+            .welcome
+            .as_ref()
+            .map(super::VaultWelcomeParams::as_core),
     ) {
         Ok(id) => match vault_list_item(&root, &id) {
             Ok(item) => ok(json!({ "vault": super::vault_list_item_json(&item) })),

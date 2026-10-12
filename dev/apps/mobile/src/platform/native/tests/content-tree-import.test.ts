@@ -165,6 +165,33 @@ describe("importContentTree", () => {
     expect(steps).toEqual(["create", "open", "dir:empty", "file:a.txt:content://doc/a", "close"]);
   });
 
+  it("sends the welcome note unless the picked root already has a README", async () => {
+    const welcome = { readme: "# Hi\n", workspace: "{}\n" };
+    const sent: (typeof welcome | undefined)[] = [];
+    const capture = (base: ContentTreeImportIo): ContentTreeImportIo => ({
+      ...base,
+      createVault: async (createInput) => {
+        sent.push(createInput.welcome);
+        return { id: "notes" } as VaultListItem;
+      },
+    });
+    await importContentTree({ ...input, welcome }, tree, capture(io([])));
+    const withReadme = contentTreeFromFolderPick({
+      folderName: "Photos",
+      releaseSafTree: "content://tree/photos",
+      files: [{ relativePath: "Photos/Readme.md", uri: "content://doc/r" }],
+    });
+    await importContentTree({ ...input, welcome }, withReadme, capture(io([])));
+    const withReadmeDir = contentTreeFromFolderPick({
+      folderName: "Photos",
+      releaseSafTree: "content://tree/photos",
+      directories: ["Photos/README.md"],
+      files: [{ relativePath: "Photos/note.txt", uri: "content://doc/n" }],
+    });
+    await importContentTree({ ...input, welcome }, withReadmeDir, capture(io([])));
+    expect(sent).toEqual([welcome, undefined, undefined]);
+  });
+
   it("deletes the new vault when a file fails and does not close it", async () => {
     const steps: string[] = [];
     await expect(importContentTree(input, tree, io(steps, "file"))).rejects.toThrow("file");

@@ -30,6 +30,7 @@ import {
   type AppSettingsConfig,
   type CreateVaultInput,
   type DefaultRootStatusResult,
+  type IncompleteReplacePolicy,
   type VaultBackupEntry,
   type VaultExportRequest,
   type VaultGroup,
@@ -266,7 +267,7 @@ export async function rpcVaultRootResolve(options?: {
 
 export async function rpcVaultRootSetupDefaultRoot(options?: {
   replaceIncomplete?: boolean;
-  replacePolicy?: "delete" | "rename";
+  replacePolicy?: IncompleteReplacePolicy;
   bootstrap?: VaultRootBootstrapPrefs | null;
 }): Promise<{ rootPath: string }> {
   const replaceIncomplete = options?.replaceIncomplete ?? false;
@@ -299,10 +300,12 @@ export async function rpcVaultRootSetupPath(
   path: string,
   options?: {
     replaceIncomplete?: boolean;
-    replacePolicy?: "delete" | "rename";
+    replacePolicy?: IncompleteReplacePolicy;
     bootstrap?: VaultRootBootstrapPrefs | null;
     /** Copy the private app-folder `.upriv` into a mounted grant before init. */
     adoptPrivateRoot?: boolean;
+    /** Last Android Custom folder, written to `.upriv-root`. */
+    customUri?: string;
   },
 ): Promise<{
   rootPath: string;
@@ -322,6 +325,7 @@ export async function rpcVaultRootSetupPath(
     replacePolicy: options?.replacePolicy ?? null,
     bootstrap: options?.bootstrap ?? null,
     ...(options?.adoptPrivateRoot ? { adoptPrivateRoot: true } : {}),
+    ...(options?.customUri ? { customUri: options.customUri } : {}),
   });
   if (
     typeof raw !== "object" ||
@@ -346,6 +350,10 @@ export async function rpcVaultRootDeactivateAlias(): Promise<void> {
   await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_ROOT_DEACTIVATE_ALIAS);
 }
 
+export async function rpcVaultRootRememberCustom(path: string): Promise<void> {
+  await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_ROOT_REMEMBER_CUSTOM, { path });
+}
+
 export async function rpcVaultRootReadAlias(): Promise<VaultRootAliasInfo | null> {
   const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_ROOT_READ_ALIAS);
   if (raw === null || raw === undefined) return null;
@@ -360,9 +368,13 @@ export async function rpcVaultRootReadAlias(): Promise<VaultRootAliasInfo | null
       raw,
     );
   }
+  const record = raw as { path: string; active: boolean; customPath?: unknown };
   return {
-    path: (raw as { path: string }).path,
-    active: (raw as { active: boolean }).active,
+    path: record.path,
+    active: record.active,
+    ...(typeof record.customPath === "string" && record.customPath.trim()
+      ? { customPath: record.customPath.trim() }
+      : {}),
   };
 }
 
@@ -535,6 +547,7 @@ export async function rpcVaultCreate(input: CreateVaultInput): Promise<VaultList
     password: input.password,
     unlockPreset: input.unlockPreset,
     settings: vaultSettingsForDaemon(input.settings),
+    welcome: input.welcome,
   });
   if (typeof raw !== "object" || raw === null) {
     throw new RpcError(BRIDGE.INVALID_RESPONSE, "vault_create: expected object", raw);
@@ -756,6 +769,7 @@ export async function rpcVaultImport7z(input: CreateVaultInput): Promise<VaultLi
     archivePath: pkg?.archivePath,
     contentB64: pkg?.contentB64,
     archivePassword: pkg?.archivePassword ?? input.password,
+    welcome: input.welcome,
   });
   return parseVaultResult(raw, "vault_import_7z");
 }
@@ -768,6 +782,7 @@ export async function rpcVaultImportFilesZip(input: CreateVaultInput): Promise<V
     unlockPreset: input.unlockPreset,
     archivePath: pkg?.archivePath,
     contentB64: pkg?.contentB64,
+    welcome: input.welcome,
   });
   return parseVaultResult(raw, "vault_import_files_zip");
 }
@@ -779,6 +794,7 @@ export async function rpcVaultImportOsPath(input: CreateVaultInput): Promise<Vau
     password: input.password,
     unlockPreset: input.unlockPreset,
     archivePath: pkg?.archivePath,
+    welcome: input.welcome,
   });
   return parseVaultResult(raw, "vault_import_os_path");
 }

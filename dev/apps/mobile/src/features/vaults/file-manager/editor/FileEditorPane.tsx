@@ -1,4 +1,4 @@
-import { useMemo, useRef, type ReactNode } from "react";
+import { useMemo, useRef, type ReactNode, type RefObject } from "react";
 import {
   Image,
   ScrollView,
@@ -9,15 +9,21 @@ import {
   type NativeSyntheticEvent,
   type TextInputScrollEventData,
 } from "react-native";
-import { fileBaseName } from "@upriv/shared";
+import { fileBaseName, vaultFileLanguageFromPath } from "@upriv/shared";
 import { LoadingBudgetHint } from "@/components/ui";
 import { useTranslation } from "@/i18n";
 import { useTheme } from "@/theme";
 import { spacing } from "@/theme/tokens";
 import type { FileManagerApi } from "../hooks/useVaultFileManager";
+import { EditorPathBar } from "./EditorPathBar";
+import { MarkdownOutlinePanel, MarkdownOutlineToggle } from "./MarkdownOutline";
+import { MarkdownPreview, type MarkdownPreviewHandle } from "./MarkdownPreview";
+import { MarkdownViewToggle } from "./MarkdownViewToggle";
 
 interface FileEditorPaneProps {
   fm: FileManagerApi;
+  /** Vault display name — first crumb of the path row. */
+  vaultName: string;
 }
 
 const EDITOR_FONT_SIZE = 13;
@@ -37,11 +43,13 @@ function EditorWithLineNumbers({
   ariaLabel,
   readOnly = false,
   onChange,
+  inputRef,
 }: {
   content: string;
   ariaLabel: string;
   readOnly?: boolean;
   onChange: (content: string) => void;
+  inputRef: RefObject<TextInput>;
 }) {
   const { colors } = useTheme();
   const gutterRef = useRef<ScrollView>(null);
@@ -79,6 +87,7 @@ function EditorWithLineNumbers({
         </Text>
       </ScrollView>
       <TextInput
+        ref={inputRef}
         collapsable={false}
         value={content}
         editable={!readOnly}
@@ -142,7 +151,7 @@ function EmptyState({
   );
 }
 
-export function FileEditorPane({ fm }: FileEditorPaneProps) {
+export function FileEditorPane({ fm, vaultName }: FileEditorPaneProps) {
   const { t } = useTranslation();
   const {
     workspace,
@@ -158,6 +167,8 @@ export function FileEditorPane({ fm }: FileEditorPaneProps) {
     importBudget,
   } = fm;
   const activeTabPath = workspace.activeTabPath;
+  const previewRef = useRef<MarkdownPreviewHandle>(null);
+  const inputRef = useRef<TextInput>(null);
 
   if (!activeTabPath) {
     return (
@@ -176,86 +187,137 @@ export function FileEditorPane({ fm }: FileEditorPaneProps) {
   const importing = isImportPending(activeTabPath);
   const processing = isImportProcessing(activeTabPath);
 
-  if (importing) {
-    return (
-      <EmptyState
-        kicker={t(
-          processing
-            ? "modal.file_manager.import.loading_kicker"
-            : "modal.file_manager.import.queued_kicker",
-        )}
-        body={
-          processing
-            ? t("modal.file_manager.import.loading_body")
-            : t("modal.file_manager.import.queued_body", { name: fileName })
-        }
-      >
-        {processing && importBudget.visible ? (
-          <LoadingBudgetHint
-            budgetMs={importBudget.budgetMs}
-            remainingMs={importBudget.remainingMs}
-          />
-        ) : null}
+  const fileNotice = (kicker: string, body: string, extra?: ReactNode) => (
+    <View style={styles.editorColumn}>
+      <EditorPathBar vaultName={vaultName} path={activeTabPath} />
+      <EmptyState kicker={kicker} body={body}>
+        {extra}
       </EmptyState>
+    </View>
+  );
+
+  if (importing) {
+    return fileNotice(
+      t(
+        processing
+          ? "modal.file_manager.import.loading_kicker"
+          : "modal.file_manager.import.queued_kicker",
+      ),
+      processing
+        ? t("modal.file_manager.import.loading_body")
+        : t("modal.file_manager.import.queued_body", { name: fileName }),
+      processing && importBudget.visible ? (
+        <LoadingBudgetHint
+          budgetMs={importBudget.budgetMs}
+          remainingMs={importBudget.remainingMs}
+        />
+      ) : null,
     );
   }
 
   if (!isFileContentReady(activeTabPath)) {
-    return (
-      <EmptyState
-        kicker={t("modal.file_manager.viewer.loading_kicker")}
-        body={t("modal.file_manager.viewer.loading_body", { name: fileName })}
-      />
+    return fileNotice(
+      t("modal.file_manager.viewer.loading_kicker"),
+      t("modal.file_manager.viewer.loading_body", { name: fileName }),
     );
   }
 
-  if (!viewable) {
-    return (
-      <EmptyState
-        kicker={t("modal.file_manager.viewer.preview_unavailable_kicker")}
-        body={t("modal.file_manager.viewer.preview_unavailable_body", { name: fileName })}
-      />
+  if (!viewable || (isImage && !loadError && !content)) {
+    return fileNotice(
+      t("modal.file_manager.viewer.preview_unavailable_kicker"),
+      t("modal.file_manager.viewer.preview_unavailable_body", { name: fileName }),
     );
   }
 
   if (loadError) {
-    return (
-      <EmptyState kicker={t("modal.file_manager.viewer.read_failed_kicker")} body={loadError} />
-    );
+    return fileNotice(t("modal.file_manager.viewer.read_failed_kicker"), loadError);
   }
 
   if (isImage) {
-    if (!content) {
-      return (
-        <EmptyState
-          kicker={t("modal.file_manager.viewer.preview_unavailable_kicker")}
-          body={t("modal.file_manager.viewer.preview_unavailable_body", { name: fileName })}
-        />
-      );
-    }
     return (
-      <ImagePreview
-        src={content}
-        ariaLabel={t("modal.file_manager.viewer.image_label", { name: fileName })}
-      />
+      <View style={styles.editorColumn}>
+        <EditorPathBar vaultName={vaultName} path={activeTabPath} />
+        <ImagePreview
+          src={content}
+          ariaLabel={t("modal.file_manager.viewer.image_label", { name: fileName })}
+        />
+      </View>
     );
   }
 
+  const markdownFile = vaultFileLanguageFromPath(activeTabPath) === "markdown";
+  const showPreview = markdownFile && workspace.markdownView === "preview";
+  const showOutline = markdownFile && workspace.markdownOutlineOpen;
+
   return (
-    <EditorWithLineNumbers
-      key={activeTabPath}
-      content={content}
-      ariaLabel={t("modal.file_manager.viewer.editor_label", { name: fileName })}
-      readOnly={writesLocked}
-      onChange={(next) => {
-        if (writesLocked) return;
-        dispatch({ type: "set_editor_draft", path: activeTabPath, content: next });
-      }}
-    />
+    <View style={styles.editorColumn}>
+      <EditorPathBar vaultName={vaultName} path={activeTabPath}>
+        {markdownFile ? (
+          <>
+            <MarkdownViewToggle
+              mode={workspace.markdownView}
+              onChange={(view) => dispatch({ type: "set_markdown_view", view })}
+            />
+            <MarkdownOutlineToggle
+              open={workspace.markdownOutlineOpen}
+              onChange={(open) => dispatch({ type: "set_markdown_outline_open", open })}
+            />
+          </>
+        ) : null}
+      </EditorPathBar>
+      <View style={styles.editorRow}>
+        <View style={styles.editorColumn}>
+          {showPreview ? (
+            <MarkdownPreview
+              key={activeTabPath}
+              ref={previewRef}
+              markdown={content}
+              onCopyFailed={() => fm.showToast(t("modal.file_manager.markdown.copy_failed"))}
+              onChange={
+                writesLocked
+                  ? undefined
+                  : (next) =>
+                      dispatch({ type: "set_editor_draft", path: activeTabPath, content: next })
+              }
+            />
+          ) : (
+            <EditorWithLineNumbers
+              key={activeTabPath}
+              inputRef={inputRef}
+              content={content}
+              ariaLabel={t("modal.file_manager.viewer.editor_label", { name: fileName })}
+              readOnly={writesLocked}
+              onChange={(next) => {
+                if (writesLocked) return;
+                dispatch({ type: "set_editor_draft", path: activeTabPath, content: next });
+              }}
+            />
+          )}
+        </View>
+        {showOutline ? (
+          <MarkdownOutlinePanel
+            markdown={content}
+            onSelect={(index, entry) => {
+              if (showPreview) {
+                previewRef.current?.scrollToHeading(index);
+                return;
+              }
+              /* TextInput has no scrollTo; a focused caret is scrolled into view by the OS. */
+              const input = inputRef.current;
+              if (!input) return;
+              input.focus();
+              input.setSelection(entry.offset, entry.offset);
+            }}
+          />
+        ) : null}
+      </View>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  editorColumn: { flex: 1, minHeight: 0, minWidth: 0 },
+  editorRow: { flex: 1, minHeight: 0, flexDirection: "row" },
   empty: {
     flex: 1,
     minHeight: 0,
@@ -292,7 +354,7 @@ const styles = StyleSheet.create({
     zIndex: 1,
   },
   gutterContent: {
-    paddingTop: 8,
+    paddingTop: 4,
     paddingBottom: 8,
     alignItems: "center",
   },
@@ -307,7 +369,7 @@ const styles = StyleSheet.create({
   /* Absolute fill — TextInput must not grow with line count (nested scroll). */
   editor: {
     ...StyleSheet.absoluteFillObject,
-    paddingTop: 8,
+    paddingTop: 4,
     paddingBottom: 8,
     paddingRight: 12,
     fontFamily: "monospace",

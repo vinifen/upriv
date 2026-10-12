@@ -16,7 +16,7 @@ export type CreateVaultImportDraft = Pick<
   | "importZipProbeFailed"
 >;
 
-type ImportDecision = Partial<CreateVaultImportDraft> & {
+export type ImportDecision = Partial<CreateVaultImportDraft> & {
   source: CreateVaultDraft["source"];
   importFileName?: string;
 };

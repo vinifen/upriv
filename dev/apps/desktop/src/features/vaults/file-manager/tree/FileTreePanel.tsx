@@ -416,6 +416,44 @@ function FileTreeRoot({ tree, fm }: { tree: FileTreeNode; fm: FileManagerApi }) 
   return <FileTreeRow node={tree} path="/" depth={0} fm={fm} />;
 }
 
+/** Icon + "Explorer" hide the explorer; the icon alone (in the tab bar) shows it again. */
+export function ExplorerToggle({ fm, showLabel }: { fm: FileManagerApi; showLabel: boolean }) {
+  const { t } = useTranslation();
+  const collapsed = fm.workspace.explorerCollapsed;
+  const label = t(
+    collapsed ? "modal.file_manager.explorer.show" : "modal.file_manager.explorer.hide",
+  );
+  return (
+    <button
+      type="button"
+      onClick={() => fm.dispatch({ type: "set_explorer_collapsed", collapsed: !collapsed })}
+      aria-label={label}
+      aria-expanded={!collapsed}
+      title={label}
+      className={[
+        "flex text-on-surface-variant transition-colors hover:bg-surface-container-highest hover:text-on-surface",
+        // Wrapping is decided on the icon-only basis, so the label truncates away entirely before the actions wrap.
+        showLabel
+          ? "h-6 min-w-6 max-w-max flex-[1_1_1.5rem] items-center rounded"
+          : "w-8 shrink-0 self-stretch items-start justify-center",
+      ].join(" ")}
+    >
+      <span
+        className={["flex w-6 shrink-0 justify-center", showLabel ? "" : "h-8 items-center"].join(
+          " ",
+        )}
+      >
+        <Icon name="sidebar" size={14} />
+      </span>
+      {showLabel ? (
+        <span className="min-w-0 truncate font-mono text-[10px] font-medium uppercase tracking-widest">
+          {t("modal.file_manager.explorer.title")}
+        </span>
+      ) : null}
+    </button>
+  );
+}
+
 export function FileTreePanel({ fm, splitPercent, layout }: FileTreePanelProps) {
   const { t } = useTranslation();
   const { showError } = useErrorToast();
@@ -507,14 +545,10 @@ export function FileTreePanel({ fm, splitPercent, layout }: FileTreePanelProps) 
       style={paneStyle}
       className="flex min-h-0 shrink-0 flex-col overflow-hidden bg-surface-container"
     >
-      <div className="flex shrink-0 items-center gap-1 px-2 pb-1 pt-2">
-        <p
-          className="min-w-0 flex-1 truncate font-mono text-[10px] font-medium uppercase tracking-widest text-on-surface-variant"
-          title={t("modal.file_manager.explorer.title")}
-        >
-          {t("modal.file_manager.explorer.title")}
-        </p>
-        <div className="flex shrink-0 items-center gap-0.5">
+      {/* Label truncates first; once only the icon is left, the actions wrap to a second row. */}
+      <div className="flex shrink-0 flex-wrap items-center gap-y-0.5 px-1 pb-0.5 pt-1">
+        <ExplorerToggle fm={fm} showLabel />
+        <div className="ml-auto flex shrink-0 items-center">
           <input
             ref={importFilesInputRef}
             type="file"

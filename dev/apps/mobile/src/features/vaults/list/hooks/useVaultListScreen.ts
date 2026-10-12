@@ -34,6 +34,7 @@ import {
   RpcError,
   shouldBumpVaultRootEpoch,
   isVaultRootGoneError,
+  isVaultRootUnreachableError,
   shouldRecordVaultHidden,
   validateDisplayName,
   VAULT_DISPLAY_NAME_MAX_LENGTH,
@@ -41,6 +42,7 @@ import {
   VAULT_NOTE_MAX_LENGTH,
   VAULT_ROW_DENSITY,
   vaultBlocksColumnCount,
+  buildVaultWelcomeFiles,
   createVaultImportPackage,
   createVaultImportPackageKind,
   type CreateVaultDraft,
@@ -92,7 +94,7 @@ function claimsContentTree(result: CreateVaultResult): boolean {
 }
 
 export function useVaultListScreen() {
-  const { t } = useTranslation();
+  const { t, locale } = useTranslation();
   const vaultService = useVaultService();
   const vaultGroupService = useVaultGroupService();
   const lifecycleService = useVaultLifecycleService();
@@ -319,8 +321,9 @@ export function useVaultListScreen() {
       }
       return list;
     } catch (error) {
-      if (isVaultRootGoneError(error) && !settingsOnDisk) {
-        // Children stay mounted under Gate; first-run is not mid-session integrity.
+      if (!settingsOnDisk && (isVaultRootGoneError(error) || isVaultRootUnreachableError(error))) {
+        // Children stay mounted under Gate. First-run and an already-unplugged
+        // folder are not a new integrity failure (that would loop the epoch).
       } else if (shouldBumpVaultRootEpoch(error)) {
         void reportVaultRootIntegrityFailure(error);
       } else {
@@ -998,6 +1001,7 @@ export function useVaultListScreen() {
       void releaseImportCache(result.importFilePath ?? "").catch(() => undefined);
     };
 
+    const welcome = buildVaultWelcomeFiles(result, { t, locale });
     const started = lifecycle.startCreatePipeline(
       result.vaultId,
       async () => {
@@ -1009,6 +1013,7 @@ export function useVaultListScreen() {
           unlockPreset: result.unlockPreset,
           settings: result.settings,
           importPackage: createVaultImportPackage(result, password),
+          welcome,
         });
       },
       {

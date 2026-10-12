@@ -1,4 +1,4 @@
-import { RpcError } from "@upriv/shared";
+import { RpcError, VAULT_ROOT_ERROR_CODES } from "@upriv/shared";
 import { getUprivCoreNative, type SafRootStatus, type UprivCoreNativeModule } from "upriv-core";
 import { shouldReleaseImportTreePermission } from "./sameSafTreeUri";
 
@@ -7,11 +7,12 @@ import { shouldReleaseImportTreePermission } from "./sameSafTreeUri";
  *
  * A picked `content://` folder is the data folder. Rust addresses it as
  * `/upriv-saf-root` and this module mounts that path onto the grant
- * (`mountSafRoot`). Inspect still reads `.upriv/settings.toml` through SAF.
+ * (`mountSafRoot`). Inspect of a picked folder reads `.upriv/settings.toml`
+ * through SAF without mounting it, so an open vault keeps its mount.
  *
  * Layering:
- * - Kotlin (`SafVaultRoot.kt`): DocumentsContract I/O + persistable perm
- * - Rust (`app_settings_parse_toml` / `app_settings_serialize_toml`): TOML shape
+ * - Kotlin (`SafVaultRoot.kt`): grants and read-only probes
+ * - Kotlin (`SafFs.kt`): the bridge Rust writes through
  * - TS (this file): glue + narrow error boundary
  *
  * See SDD §9.4, ARCHITECTURE §6.
@@ -52,16 +53,7 @@ function extractSafCode(error: unknown): string | null {
     if (match) return match[0];
   }
   const text = blobs.join(" ").toLowerCase();
-  if (text.includes("cannot create") && text.includes(".upriv")) {
-    return "saf_create_failed";
-  }
-  if (
-    text.includes("permission denied") ||
-    text.includes("not writable") ||
-    text.includes("saf tree is not writable")
-  ) {
-    return "saf_unauthorized";
-  }
+  if (text.includes("permission denied")) return "saf_unauthorized";
   return null;
 }
 
@@ -123,34 +115,14 @@ export function safReleaseImportTree(treeUri: string): void {
   }
 }
 
-/**
- * Create `.upriv/settings.toml` + `{vaults,logs,app,runtime}` subfolders at the tree.
- * `settingsTomlOverride` (from `rpcAppSettingsSerializeToml`) atomically
- * seeds a fresh marker; falls back to the built-in template with `[ui].locale`
- * when null (parity with Rust `initial_settings_toml_for`).
- * `replacePolicy` mirrors Rust incomplete replace (`delete` | `rename`).
- */
-export function safSetupRoot(
-  treeUri: string,
-  locale: string | null,
-  settingsTomlOverride: string | null,
-  replacePolicy: "delete" | "rename" | null = null,
-): void {
-  requireNative().safSetupRoot(treeUri, locale, settingsTomlOverride, replacePolicy);
-}
-
 export function safReadSettings(treeUri: string): string | null {
   return requireNative().safReadSettings(treeUri);
 }
 
-export function safWriteSettings(treeUri: string, contents: string): void {
-  requireNative().safWriteSettings(treeUri, contents);
-}
-
 /**
- * Get the persisted "active SAF tree URI" pref (empty string / null = inactive).
- * Stored in Android SharedPreferences by Kotlin, outside the vault-root itself
- * (analogous to the Rust `.upriv-root` alias, but for `content://` URIs).
+ * The tree mounted at `/upriv-saf-root` (empty string / null = nothing mounted).
+ * SharedPreferences store only this pointer. The last Custom folder is the
+ * `custom=` line in the app-home `.upriv-root`.
  */
 export function safGetActiveUri(): string | null {
   const native = getUprivCoreNative();
@@ -163,16 +135,20 @@ export function safSetActiveUri(uri: string | null): void {
   requireNative().safSetActiveUri(uri ?? "");
 }
 
-/** Point Rust `/upriv-saf-root` at this persisted tree. */
+/**
+ * Point Rust `/upriv-saf-root` at this persisted tree.
+ * An unplugged drive throws `vault_root_unreachable`: the grant and the
+ * pointer are kept so a reconnect works without picking the folder again.
+ */
 export function mountSafRoot(treeUri: string): void {
-  const native = requireNative();
-  if (!native.mountSafRoot) {
-    throw new RpcError("saf_not_ready", "This build cannot use a chosen data folder");
-  }
   try {
-    native.mountSafRoot(treeUri);
+    requireNative().mountSafRoot(treeUri);
   } catch (error) {
-    throw toSafRpcError(error, treeUri);
+    const rpc = toSafRpcError(error, treeUri);
+    if (rpc.code === "saf_unreachable") {
+      throw new RpcError(VAULT_ROOT_ERROR_CODES.UNREACHABLE, rpc.message, { path: treeUri });
+    }
+    throw rpc;
   }
 }
 
@@ -180,7 +156,7 @@ export function mountSafRoot(treeUri: string): void {
 export function unmountSafRoot(): void {
   const native = getUprivCoreNative();
   try {
-    native?.unmountSafRoot?.();
+    native?.unmountSafRoot();
   } catch {
     /* already unmounted */
   }

@@ -280,13 +280,32 @@ export function useVaultFileManager({
     workspace.treeRevision,
   ]);
 
+  /** Real OS folder for this vault — gates "Open in file manager". */
+  const [osFolderAvailable, setOsFolderAvailable] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    fs.osPath(vaultId, "/").then(
+      () => {
+        if (!cancelled) setOsFolderAvailable(true);
+      },
+      () => {
+        if (!cancelled) setOsFolderAvailable(false);
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [fs, vaultId]);
+
   const openInSystemFileManager = useCallback(
     async (logicalPath: string) => {
       try {
         const osPath = await fs.osPath(vaultId, logicalPath);
         await revealInOsFileManager(osPath);
       } catch (error) {
-        showToast(t(mobileErrorI18nKey(error, "modal.file_manager.toast.open_system_failed")));
+        const key = mobileErrorI18nKey(error, "modal.file_manager.toast.open_system_failed");
+        if (key === "error.vault_mount_failed") setOsFolderAvailable(false);
+        showToast(t(key));
       }
     },
     [fs, showToast, t, vaultId],
@@ -966,6 +985,7 @@ export function useVaultFileManager({
     requestDelete,
     confirmDelete,
     toast,
+    osFolderAvailable,
     openInSystemFileManager,
     showToast,
     dismissToast,

@@ -26,6 +26,7 @@ export const ELECTRON_IPC_METHODS = [
   "vault_root_setup_path",
   "vault_root_deactivate_alias",
   "vault_root_read_alias",
+  "vault_root_remember_custom",
   "vault_root_default_root_status",
   "vault_root_inspect_path",
   "vault_root_suggested_custom_path",

@@ -442,6 +442,7 @@ The Android default data folder is **Documents/Upriv**. `.upriv/` is not created
 
 - Do **not** request `MANAGE_EXTERNAL_STORAGE`. Do not treat `/storage` or `/sdcard` as a path Rust can open.
 - Mount the grant before any path RPC while that folder is the data folder. A leftover grant is dropped when the alias is not `/upriv-saf-root`.
+- Inspect status `unreachable` means the grant is held and the volume does not answer. Shared UI already maps that status to the reconnect copy and blocks Continue. Only Android produces it today. iOS bookmarks return the same status when the bookmark is still valid and the volume is gone. Desktop must not: a missing path is alias recovery, because a deleted folder is indistinguishable.
 - Android setup confirms Documents. The data folder created inside it is Documents/Upriv. Desktop custom paths stay filesystem paths. A Windows installer uses the user-data directory even when the install folder is writable. Portable exe and AppImage stay beside the program.
 - A picker result that cannot host vaults fails at selection time and does not become the active root.
 - Encrypted open does not create or require a workspace folder. A phone path, if the user sets one, is a storage-access document URI (`…/tree/<id>/document/<id>%2F…`), not `<tree-uri>/workspace`. A Documents grant would use `…/document/<id>%2FUpriv%2F…`, because the data folder is the `Upriv` child. The private app folder is not a workspace.

@@ -6,7 +6,7 @@ import { FileEditorPane } from "../editor/FileEditorPane";
 import { FileManagerDialogs } from "../dialogs/FileManagerDialogs";
 import { FileManagerTabBar } from "../editor/FileManagerTabBar";
 import { FileTreeContextMenu } from "../tree/FileTreeContextMenu";
-import { FileTreePanel } from "../tree/FileTreePanel";
+import { ExplorerToggle, FileTreePanel } from "../tree/FileTreePanel";
 import { PaneResizeHandle } from "./PaneResizeHandle";
 import {
   clampCanonicalTreeSplitPercent,
@@ -148,6 +148,7 @@ export function FileManagerWorkspace({
   }, [persistSplitPercent]);
 
   const splitPercent = displayTreeSplitPercent(livePercent, dragSize ?? containerSize, axis);
+  const explorerCollapsed = entry.workspace.explorerCollapsed;
 
   useNativeOsFileDrop({
     enabled: active,
@@ -185,17 +186,26 @@ export function FileManagerWorkspace({
         onDragOver={active ? handleWorkspaceDragOver : undefined}
         onDrop={active ? handleWorkspaceDrop : undefined}
       >
-        <FileTreePanel fm={fm} splitPercent={splitPercent} layout={isMobile ? "column" : "row"} />
-        <PaneResizeHandle
-          axis={axis}
-          value={livePercent}
-          onDragStart={handleSplitDragStart}
-          onDrag={handleSplitDrag}
-          onDragEnd={handleSplitDragEnd}
-          onNudge={persistSplitPercent}
-        />
+        {explorerCollapsed ? null : (
+          <>
+            <FileTreePanel
+              fm={fm}
+              splitPercent={splitPercent}
+              layout={isMobile ? "column" : "row"}
+            />
+            <PaneResizeHandle
+              axis={axis}
+              value={livePercent}
+              onDragStart={handleSplitDragStart}
+              onDrag={handleSplitDrag}
+              onDragEnd={handleSplitDragEnd}
+              onNudge={persistSplitPercent}
+            />
+          </>
+        )}
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
           <FileManagerTabBar
+            leading={explorerCollapsed ? <ExplorerToggle fm={fm} showLabel={false} /> : null}
             workspace={entry.workspace}
             onWorkspaceAction={dispatch}
             onDelete={fm.requestDelete}
@@ -203,7 +213,7 @@ export function FileManagerWorkspace({
             showSave={hasUnsavedEditableTabs(fm)}
             onSave={fm.saveAllFiles}
           />
-          <FileEditorPane fm={fm} />
+          <FileEditorPane fm={fm} vaultName={entry.displayName} />
         </div>
       </div>
       <FileTreeContextMenu fm={fm} tree={fm.tree} />

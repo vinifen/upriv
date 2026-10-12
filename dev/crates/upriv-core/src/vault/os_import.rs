@@ -1,7 +1,8 @@
 //! Import one OS file, or the contents of one OS folder, into a new vault.
 //!
 //! A real filesystem path is streamed straight into `store/`. Symlinks are
-//! refused rather than followed. Android folder picks have no filesystem path:
+//! never followed: a chosen link is refused, a link inside the folder is
+//! skipped. Android folder picks have no filesystem path:
 //! the app creates the vault, opens an ingest session (no mount), and streams
 //! each content URI through [`ingest_import_reader`]. Neither path copies the
 //! source tree onto disk.
@@ -9,6 +10,7 @@
 #[allow(unused_imports)]
 use crate::host_fs::HostFsQuery;
 use crate::host_fs::{self as fs, File};
+use std::collections::HashSet;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
@@ -19,11 +21,15 @@ use crate::paths::VaultRoot;
 use crate::store::{file_name, KdfUnlockPreset, INTERNAL_WORKSPACE_FILE, SEED_LOGICAL_PATH};
 
 use super::create::create_vault;
-use super::fs::{fs_ensure_folder, fs_write_from_reader, fs_write_send_reader};
+use super::fs::{
+    fs_ensure_folder, fs_ensure_folder_path_staged, fs_seal_staged_imports, fs_seal_staged_wave,
+    fs_write_send_reader, fs_write_staged,
+};
 use super::open_close::{
     abandon_failed_import, close_vault, delete_failed_import, open_vault_for_ingest,
 };
 use super::seven_zip_pack::sevenz_member_name_unsafe;
+use super::welcome::{seal_welcome_if_absent, VaultWelcome};
 
 enum PlannedOsEntry {
     Directory(String),
@@ -68,6 +74,8 @@ fn ensure_folder_path(root: &VaultRoot, vault_id: &str, logical: &str) -> Result
 }
 
 /// Names and source paths only. File bytes stay on the user's disk until ingest.
+/// Links inside a folder are skipped, never followed. The chosen path itself
+/// must not be a link.
 fn plan_os_path(source: &Path) -> Result<Vec<PlannedOsEntry>> {
     if !source.is_absolute() {
         return Err(layout_error(source, "choose an absolute file or folder"));
@@ -91,6 +99,7 @@ fn plan_os_path(source: &Path) -> Result<Vec<PlannedOsEntry>> {
     }
 
     let mut planned = Vec::new();
+    let mut links = 0usize;
     let mut stack = vec![(source.to_path_buf(), String::new())];
     while let Some((dir, prefix)) = stack.pop() {
         let dir_meta = fs::symlink_metadata(&dir).map_err(|_| source_unreadable(&dir))?;
@@ -106,7 +115,8 @@ fn plan_os_path(source: &Path) -> Result<Vec<PlannedOsEntry>> {
             let path = entry.path();
             let child_meta = fs::symlink_metadata(&path).map_err(|_| source_unreadable(&path))?;
             if child_meta.file_type().is_symlink() {
-                return Err(layout_error(&path, "refusing a symlink"));
+                links += 1;
+                continue;
             }
             let name = os_name(&path)?;
             let logical = if prefix.is_empty() {
@@ -130,6 +140,13 @@ fn plan_os_path(source: &Path) -> Result<Vec<PlannedOsEntry>> {
             }
         }
     }
+    if links > 0 {
+        log_event(
+            LogLevel::Info,
+            "import_symlinks_skipped",
+            &[("count", links.to_string().as_str())],
+        );
+    }
     Ok(planned)
 }
 
@@ -149,19 +166,27 @@ fn open_regular_file(path: &Path) -> Result<File> {
     }
 }
 
+/// Stage every entry. A full wave seals the index, and the tail is sealed once
+/// at the end. A returned error still abandons the new vault. A kill keeps the
+/// last sealed wave.
 fn ingest_planned(root: &VaultRoot, vault_id: &str, planned: &[PlannedOsEntry]) -> Result<()> {
+    let mut folders = HashSet::new();
     for entry in planned {
         match entry {
-            PlannedOsEntry::Directory(logical) => ensure_folder_path(root, vault_id, logical)?,
+            PlannedOsEntry::Directory(logical) => {
+                fs_ensure_folder_path_staged(root, vault_id, logical, &mut folders)?
+            }
             PlannedOsEntry::File { logical, source } => {
                 if let Some((parent, _)) = logical.rsplit_once('/') {
-                    ensure_folder_path(root, vault_id, parent)?;
+                    fs_ensure_folder_path_staged(root, vault_id, parent, &mut folders)?;
                 }
                 let mut file = open_regular_file(source)?;
-                fs_write_from_reader(root, vault_id, &format!("/{logical}"), &mut file)?;
+                fs_write_staged(root, vault_id, &format!("/{logical}"), &mut file)?;
             }
         }
+        fs_seal_staged_wave(root, vault_id)?;
     }
+    fs_seal_staged_imports(root, vault_id)?;
     Ok(())
 }
 
@@ -175,16 +200,24 @@ pub fn import_logical_os_path(
     new_password: &[u8],
     preset: KdfUnlockPreset,
     source: &Path,
+    welcome: Option<VaultWelcome<'_>>,
 ) -> Result<String> {
     if new_password.is_empty() {
         return Err(UprivError::WrongPassword);
+    }
+    if let Some(welcome) = welcome {
+        welcome.files()?;
     }
     let planned = plan_os_path(source)?;
     create_vault(root, config.clone(), new_password, preset)?;
     let id = config.vault.id.trim().to_string();
     let ingest = (|| {
         open_vault_for_ingest(root, &id, new_password)?;
-        ingest_planned(root, &id, &planned)
+        ingest_planned(root, &id, &planned)?;
+        if let Some(welcome) = welcome {
+            seal_welcome_if_absent(root, &id, welcome)?;
+        }
+        Ok(())
     })();
     if let Err(ingest_error) = ingest {
         return Err(abandon_failed_import(root, &id, ingest_error));
@@ -303,6 +336,7 @@ mode = "encrypted_dir"
             b"pass-word-ok",
             KdfUnlockPreset::M32,
             &single,
+            None,
         )
         .unwrap();
         crate::open_vault(&root, "notes", b"pass-word-ok").unwrap();
@@ -313,12 +347,27 @@ mode = "encrypted_dir"
         crate::close_vault(&root, "notes", None).unwrap();
         crate::delete_vault(&root, "notes").unwrap();
 
-        import_logical_os_path(&root, config(), b"pass-word-ok", KdfUnlockPreset::M32, &dir)
-            .unwrap();
+        let welcome = crate::vault::VaultWelcome {
+            readme: "# Welcome\n",
+            workspace: "{\"format_version\":1}\n",
+        };
+        import_logical_os_path(
+            &root,
+            config(),
+            b"pass-word-ok",
+            KdfUnlockPreset::M32,
+            &dir,
+            Some(welcome),
+        )
+        .unwrap();
         crate::open_vault(&root, "notes", b"pass-word-ok").unwrap();
         assert_eq!(
             crate::vault::fs::fs_read_file(&root, "notes", "/trip/a.txt").unwrap(),
             b"alpha"
+        );
+        assert_eq!(
+            crate::vault::fs::fs_read_file(&root, "notes", "/README.md").unwrap(),
+            b"# Welcome\n"
         );
         let listed = crate::vault::fs::fs_list_tree(&root, "notes").unwrap();
         let json = serde_json::to_string(&listed).unwrap();
@@ -337,6 +386,7 @@ mode = "encrypted_dir"
             b"pass-word-ok",
             KdfUnlockPreset::M32,
             &missing,
+            None,
         )
         .unwrap_err();
         assert!(matches!(err, UprivError::ImportSourceUnreadable(_)));
@@ -345,18 +395,57 @@ mode = "encrypted_dir"
 
     #[cfg(unix)]
     #[test]
-    fn a_symlink_is_refused_and_leaves_no_vault() {
+    fn a_symlink_inside_the_folder_is_skipped_not_followed() {
         let (_tmp, root) = crate::test_support::vault_root_with(&[]);
         let dir = _tmp.path().join("Album");
-        fs::create_dir(&dir).unwrap();
+        fs::create_dir_all(dir.join("bin")).unwrap();
+        fs::write(dir.join("photo.txt"), b"kept").unwrap();
         let real = _tmp.path().join("secret.txt");
         let mut file = fs::File::create(&real).unwrap();
-        file.write_all(b"nope").unwrap();
+        file.write_all(b"outside-the-folder").unwrap();
         std::os::unix::fs::symlink(&real, dir.join("link.txt")).unwrap();
+        std::os::unix::fs::symlink(_tmp.path(), dir.join("bin/up")).unwrap();
 
-        let err =
-            import_logical_os_path(&root, config(), b"pass-word-ok", KdfUnlockPreset::M32, &dir)
-                .unwrap_err();
+        import_logical_os_path(
+            &root,
+            config(),
+            b"pass-word-ok",
+            KdfUnlockPreset::M32,
+            &dir,
+            None,
+        )
+        .unwrap();
+        crate::open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        assert_eq!(
+            crate::vault::fs::fs_read_file(&root, "notes", "/photo.txt").unwrap(),
+            b"kept"
+        );
+        let json = serde_json::to_string(&crate::vault::fs::fs_list_tree(&root, "notes").unwrap())
+            .unwrap();
+        assert!(json.contains("bin"), "{json}");
+        assert!(!json.contains("link.txt"), "{json}");
+        assert!(!json.contains("\"up\""), "{json}");
+        crate::close_vault(&root, "notes", None).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_chosen_symlink_is_refused_and_leaves_no_vault() {
+        let (_tmp, root) = crate::test_support::vault_root_with(&[]);
+        let real = _tmp.path().join("Album");
+        fs::create_dir(&real).unwrap();
+        let link = _tmp.path().join("Shortcut");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        let err = import_logical_os_path(
+            &root,
+            config(),
+            b"pass-word-ok",
+            KdfUnlockPreset::M32,
+            &link,
+            None,
+        )
+        .unwrap_err();
         assert!(matches!(err, UprivError::VaultStoreInvalid { .. }));
         assert!(!root.vault_dir("notes").unwrap().host_exists());
     }

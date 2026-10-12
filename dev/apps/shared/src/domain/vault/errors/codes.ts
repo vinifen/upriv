@@ -22,8 +22,6 @@ export const VAULT_ERROR_CODES = {
   /** Corrupt `.upriv/vault_groups.toml` (list soft-fails with `invalid: true`; mutations may Err). */
   GROUPS_INVALID: "vault_groups_invalid",
   GROUP_NOT_FOUND: "vault_group_not_found",
-  /** Android SAF tree is the active root — path `vault_*` RPCs must not run. */
-  SAF_UNAVAILABLE: "vault_saf_unavailable",
   /** `upriv_plain` workspace extract/wipe is not implemented. */
   PLAIN_UNAVAILABLE: "upriv_plain_unavailable",
   /** Config save refused while session open / mid-close (edit-policy quiet targets). */

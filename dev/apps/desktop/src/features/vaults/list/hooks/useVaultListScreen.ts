@@ -16,6 +16,7 @@ import {
   applyPendingCreateGroupEffect,
   buildCreatingVaultListItem,
   buildPendingCreateGroupEffect,
+  buildVaultWelcomeFiles,
   createDraftFromImportPackage,
   createVaultImportPackage,
   canDeleteVaultNow,
@@ -31,6 +32,7 @@ import {
   normalizeVaultListSearch,
   shouldBumpVaultRootEpoch,
   isVaultRootGoneError,
+  isVaultRootUnreachableError,
   shouldRecordVaultHidden,
   vaultIdsInHiddenGroups,
   vaultIdsUnhiddenByGroups,
@@ -54,7 +56,7 @@ import { useVaultImportDrop } from "./useVaultImportDrop";
 import type { VaultListDropSource } from "../lib/vaultImportDrop";
 
 export function useVaultListScreen() {
-  const { t } = useTranslation();
+  const { t, locale } = useTranslation();
   const vaultService = useVaultService();
   const vaultGroupService = useVaultGroupService();
   const logService = useLogService();
@@ -402,6 +404,9 @@ export function useVaultListScreen() {
   const { isRefreshing, refresh } = useAppRefresh({
     applyVaultList,
     onError: (error) => {
+      if (!settingsOnDisk && (isVaultRootGoneError(error) || isVaultRootUnreachableError(error))) {
+        return;
+      }
       if (shouldBumpVaultRootEpoch(error)) {
         void reportVaultRootIntegrityFailure(error);
         return;
@@ -431,7 +436,12 @@ export function useVaultListScreen() {
         if (cancelled) return;
         // Children stay mounted under Gate. First-run has no `.upriv` yet — do not
         // treat that as mid-session integrity (epoch bump / Setup "lost").
-        if (isVaultRootGoneError(error) && !settingsOnDisk) return;
+        if (
+          !settingsOnDisk &&
+          (isVaultRootGoneError(error) || isVaultRootUnreachableError(error))
+        ) {
+          return;
+        }
         if (shouldBumpVaultRootEpoch(error)) {
           void reportVaultRootIntegrityFailure(error);
           return;
@@ -542,6 +552,7 @@ export function useVaultListScreen() {
         setGroups((current) => applyPendingCreateGroupEffect(current, groupEffect));
       }
 
+      const welcome = buildVaultWelcomeFiles(result, { t, locale });
       const started = lifecycle.startCreatePipeline(
         result.vaultId,
         async () => {
@@ -550,6 +561,7 @@ export function useVaultListScreen() {
             unlockPreset: result.unlockPreset,
             settings: result.settings,
             importPackage: createVaultImportPackage(result, password),
+            welcome,
           });
         },
         {
@@ -655,6 +667,7 @@ export function useVaultListScreen() {
       applyGroupListResult,
       applyVaultList,
       lifecycle,
+      locale,
       recordVaultHiddenIfNeeded,
       reloadGroups,
       removeVault,

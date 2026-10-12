@@ -307,13 +307,9 @@ pub fn backup_on_close(root: &VaultRoot, vault_id: &str) -> Result<Option<String
         let _ = crate::host_fs::remove_file(&partial);
         return Err(error);
     }
-    // The storage-access provider persists the zip when the write fd closes.
-    // Opening it again only to skip `fsync` is another full round trip.
-    if !crate::host_fs::is_bridge_path(&partial) {
-        if let Err(error) = crate::host_fs::File::open(&partial).and_then(|file| file.sync_all()) {
-            let _ = crate::host_fs::remove_file(&partial);
-            return Err(error.into());
-        }
+    if let Err(error) = crate::host_fs::File::open(&partial).and_then(|file| file.sync_all()) {
+        let _ = crate::host_fs::remove_file(&partial);
+        return Err(error.into());
     }
     if let Err(error) = super::zip_io::verify_store_zip_copies(&partial) {
         let _ = crate::host_fs::remove_file(&partial);

@@ -13,6 +13,11 @@ export const VAULT_ROOT_ERROR_CODES = {
   ALIAS_INVALID: "vault_root_alias_invalid",
   /** Open session or in-flight Argon2 — refuse data-folder switch (not Gate A/B). */
   BUSY: "vault_root_busy",
+  /**
+   * The data folder's volume is gone (drive unplugged) but the pointer is kept.
+   * Not integrity: nothing on disk is wrong, so never Setup or Repair.
+   */
+  UNREACHABLE: "vault_root_unreachable",
   IO_ERROR: "io_error",
 } as const;
 
@@ -39,22 +44,16 @@ export function isVaultRootErrorCode(code: string): code is VaultRootIntegrityCo
 const SAF_VAULT_ROOT_GONE_CODES = new Set(["saf_unauthorized", "saf_invalid_tree"]);
 
 /**
- * Android SAF I/O that still needs Gate to re-resolve, but keep RAM prefs
- * (not first-run Setup). Write/create failures are not “folder gone”.
- */
-const SAF_VAULT_ROOT_EPOCH_ONLY_CODES = new Set(["saf_write_failed", "saf_create_failed"]);
-
-/**
  * Mid-session A/B (missing / incomplete / alias): Gate must re-resolve.
  * Transport `io_error` and case C (`vault_not_found`) do **not** bump epoch.
- * SAF lost-grant / write-create failures also bump so the Gate does not keep a dead tree.
+ * A lost SAF grant also bumps so the Gate does not keep a dead tree.
+ * An unreachable data folder bumps so the Gate shows the reconnect prompt.
  */
 export function shouldBumpVaultRootEpoch(error: unknown): boolean {
   if (!isRpcError(error)) return false;
   if (isVaultRootErrorCode(error.code)) return true;
-  return (
-    SAF_VAULT_ROOT_GONE_CODES.has(error.code) || SAF_VAULT_ROOT_EPOCH_ONLY_CODES.has(error.code)
-  );
+  if (isVaultRootUnreachableError(error)) return true;
+  return SAF_VAULT_ROOT_GONE_CODES.has(error.code);
 }
 
 /**
@@ -69,6 +68,11 @@ export function isVaultRootGoneError(error: unknown): boolean {
     error.code === VAULT_ROOT_ERROR_CODES.ALIAS_INVALID ||
     SAF_VAULT_ROOT_GONE_CODES.has(error.code)
   );
+}
+
+/** The data folder is kept but cannot be reached right now (reconnect the drive). */
+export function isVaultRootUnreachableError(error: unknown): boolean {
+  return isRpcError(error) && error.code === VAULT_ROOT_ERROR_CODES.UNREACHABLE;
 }
 
 /** Wire error for mid-session missing `.upriv` (toast `modal.vault_root_setup.lost`). */

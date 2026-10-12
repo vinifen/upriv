@@ -20,6 +20,8 @@ internal object SafFs {
   private const val TAG = "UprivSafFs"
   private const val MIME_DIR = DocumentsContract.Document.MIME_TYPE_DIR
   private const val MIME_FILE = "application/octet-stream"
+  private const val REPLACING_SUFFIX = ".replacing"
+  private val MISS_CODES = setOf("not_found", "other")
 
   private val treeUri = AtomicReference("")
 
@@ -36,6 +38,12 @@ internal object SafFs {
   private var appContext: Context? = null
 
   private val gate = Any()
+
+  /**
+   * True while a replace has the previous document under its aside name.
+   * Lookups then must not restore that copy. Only read and written under [gate].
+   */
+  private var replacing = false
 
   fun bind(context: Context, uri: String) {
     synchronized(gate) {
@@ -58,12 +66,46 @@ internal object SafFs {
     synchronized(gate) { dispatchLocked(op, payload) }
 
   private fun dispatchLocked(op: String, payload: String): String {
+    val context = appContext ?: return err("permission_denied", "data folder is not mounted")
+    val tree = treeUri.get().trim()
+    if (!tree.startsWith("content://")) {
+      return err("permission_denied", "data folder is not mounted")
+    }
+    val result = runOp(context, tree, op, payload)
+    // A removed drive answers every lookup as a miss. Rust must not read that
+    // as a deleted file, so a miss on an unreachable tree is `unavailable`.
+    if (isMissOrFailure(result) && !isTreeReachable(context, tree)) {
+      return err("unavailable", "data folder is not reachable")
+    }
+    return result
+  }
+
+  /** True when the persisted tree's own document still answers a query. */
+  fun isReachable(context: Context, uri: String): Boolean =
+    synchronized(gate) { isTreeReachable(context, uri.trim()) }
+
+  private fun isTreeReachable(context: Context, tree: String): Boolean {
+    val parsed = Uri.parse(tree)
+    val treeId = try {
+      DocumentsContract.getTreeDocumentId(parsed)
+    } catch (_: Throwable) {
+      return false
+    }
+    return queryNode(context, DocumentsContract.buildDocumentUriUsingTree(parsed, treeId)) != null
+  }
+
+  private fun isMissOrFailure(result: String): Boolean {
+    val json = try {
+      JSONObject(result)
+    } catch (_: Throwable) {
+      return true
+    }
+    if (json.optBoolean("ok")) return json.optString("kind") == "missing"
+    return json.optString("err") in MISS_CODES
+  }
+
+  private fun runOp(context: Context, tree: String, op: String, payload: String): String {
     return try {
-      val context = appContext ?: return err("permission_denied", "data folder is not mounted")
-      val tree = treeUri.get().trim()
-      if (!tree.startsWith("content://")) {
-        return err("permission_denied", "data folder is not mounted")
-      }
       val json = if (payload.isBlank()) JSONObject() else JSONObject(payload)
       when (op) {
         "stat" -> stat(context, tree, json.optString("rel"))
@@ -182,47 +224,55 @@ internal object SafFs {
       return ok()
     }
     // DocumentsContract will not rename onto a name that already exists.
-    // Settings saves write a temp file and rename it to settings.toml, so
-    // move the current document aside first, then put it back if the rename fails.
+    // Every atomic write renames a temp file onto its target, so move the
+    // current document aside first, then put it back if the rename fails.
+    // A crash between the two renames leaves the aside copy, which the next
+    // lookup of that name restores (see restoreInterruptedReplace).
     val existing = if (fromRel == toRel) {
       null
     } else {
       findChild(context, tree, toParent, toName, toRel)
     }
-    var backupRel: String? = null
-    var backupUri: Uri? = null
-    if (existing != null && !sameDocument(existing.uri, from.uri)) {
-      if (existing.dir) return err("is_a_directory", "destination is a directory")
-      val backupName = "$toName.${System.nanoTime()}.replacing"
-      val asideRel = if (toParentRel.isEmpty()) backupName else "$toParentRel/$backupName"
-      val aside = renameOrFind(context, tree, toParent, asideRel, existing.uri, backupName)
-        ?: return err("other", "cannot replace")
-      forget(toRel)
-      dropChildIndex(toParent)
-      backupRel = asideRel
-      backupUri = aside
-    }
-    val renamed = renameOrFind(context, tree, toParent, toRel, from.uri, toName)
-    if (renamed == null) {
-      val asideRel = backupRel
-      val asideUri = backupUri
-      if (asideRel != null && asideUri != null) {
-        renameOrFind(context, tree, toParent, toRel, asideUri, toName)
-        forget(asideRel)
+    val wasReplacing = replacing
+    replacing = true
+    try {
+      var backupRel: String? = null
+      var backupUri: Uri? = null
+      if (existing != null && !sameDocument(existing.uri, from.uri)) {
+        if (existing.dir) return err("is_a_directory", "destination is a directory")
+        val backupName = asideName(toName)
+        val asideRel = if (toParentRel.isEmpty()) backupName else "$toParentRel/$backupName"
+        val aside = renameOrFind(context, tree, toParent, asideRel, existing.uri, backupName)
+          ?: return err("other", "cannot replace")
+        forget(toRel)
         dropChildIndex(toParent)
+        backupRel = asideRel
+        backupUri = aside
       }
-      return err("other", "cannot rename")
-    }
-    if (backupUri != null) {
-      if (!deleteDocument(context, backupUri)) {
-        Log.w(TAG, "replaced $toRel but could not delete the previous document")
+      val renamed = renameOrFind(context, tree, toParent, toRel, from.uri, toName)
+      if (renamed == null) {
+        val asideRel = backupRel
+        val asideUri = backupUri
+        if (asideRel != null && asideUri != null) {
+          renameOrFind(context, tree, toParent, toRel, asideUri, toName)
+          forget(asideRel)
+          dropChildIndex(toParent)
+        }
+        return err("other", "cannot rename")
       }
-      backupRel?.let { forget(it) }
+      if (backupUri != null) {
+        if (!deleteDocument(context, backupUri)) {
+          Log.w(TAG, "replaced $toRel but could not delete the previous document")
+        }
+        backupRel?.let { forget(it) }
+      }
+      forget(fromRel)
+      dropChildIndex(toParent)
+      remember(toRel, Node(renamed, from.dir, from.len))
+      return ok()
+    } finally {
+      replacing = wasReplacing
     }
-    forget(fromRel)
-    dropChildIndex(toParent)
-    remember(toRel, Node(renamed, from.dir, from.len))
-    return ok()
   }
 
   /**
@@ -366,30 +416,36 @@ internal object SafFs {
     name: String,
     rel: String,
   ): String {
-    val backupName = "$name.${System.nanoTime()}.replacing"
+    val backupName = asideName(name)
     val backupRel = if (parentRel.isEmpty()) backupName else "$parentRel/$backupName"
-    val aside = renameOrFind(context, tree, parent, backupRel, node.uri, backupName)
-      ?: return err("other", "cannot open file")
-    forget(rel)
-    dropChildIndex(parent)
-    val created = createDocument(context, parent.uri, MIME_FILE, name)
-    if (created == null) {
-      restoreReplaced(context, tree, parent, rel, backupRel, aside, name)
-      return err("other", "cannot open file")
+    val wasReplacing = replacing
+    replacing = true
+    try {
+      val aside = renameOrFind(context, tree, parent, backupRel, node.uri, backupName)
+        ?: return err("other", "cannot open file")
+      forget(rel)
+      dropChildIndex(parent)
+      val created = createDocument(context, parent.uri, MIME_FILE, name)
+      if (created == null) {
+        restoreReplaced(context, tree, parent, rel, backupRel, aside, name)
+        return err("other", "cannot open file")
+      }
+      val opened = openFd(context, created, "rw")
+      if (opened == null) {
+        deleteDocument(context, created)
+        restoreReplaced(context, tree, parent, rel, backupRel, aside, name)
+        return err("other", "cannot open file")
+      }
+      if (!deleteDocument(context, aside)) {
+        Log.w(TAG, "replaced $rel but could not delete the previous document")
+      }
+      forget(backupRel)
+      dropChildIndex(parent)
+      remember(rel, Node(created, false, -1L))
+      return opened
+    } finally {
+      replacing = wasReplacing
     }
-    val opened = openFd(context, created, "rw")
-    if (opened == null) {
-      deleteDocument(context, created)
-      restoreReplaced(context, tree, parent, rel, backupRel, aside, name)
-      return err("other", "cannot open file")
-    }
-    if (!deleteDocument(context, aside)) {
-      Log.w(TAG, "replaced $rel but could not delete the previous document")
-    }
-    forget(backupRel)
-    dropChildIndex(parent)
-    remember(rel, Node(created, false, -1L))
-    return opened
   }
 
   private fun restoreReplaced(
@@ -500,26 +556,60 @@ internal object SafFs {
       remember(childRel, node)
       return node
     }
-    val listed = childFromListing(context, tree, parent, name) ?: return null
+    val children = listing(context, tree, parent) ?: return null
+    val listed = children[name]
+      ?: (if (replacing) null else restoreInterruptedReplace(context, parent, name, children))
+      ?: return null
     remember(childRel, listed)
     return listed
   }
 
   /** Cached children of `parent`. A failed listing is not cached. */
-  private fun childFromListing(
-    context: Context,
-    tree: String,
-    parent: Node,
-    name: String,
-  ): Node? {
+  private fun listing(context: Context, tree: String, parent: Node): Map<String, Node>? {
     val key = parent.uri.toString()
-    val cached = childIndex[key]
-    if (cached != null) return cached[name]
+    childIndex[key]?.let { return it }
     val listed = listChildrenResult(context, tree, parent)
     if (!listed.ok) return null
     val map = indexByDisplayName(listed.children) ?: return null
-    val stored = childIndex.putIfAbsent(key, map) ?: map
-    return stored[name]
+    return childIndex.putIfAbsent(key, map) ?: map
+  }
+
+  private fun asideName(name: String): String =
+    "$name.${System.currentTimeMillis()}$REPLACING_SUFFIX"
+
+  /**
+   * A replace interrupted between its two renames (drive pulled, app killed)
+   * leaves the only copy of `name` under its aside name. Rename the newest
+   * aside copy back so the file is not reported missing.
+   */
+  private fun restoreInterruptedReplace(
+    context: Context,
+    parent: Node,
+    name: String,
+    children: Map<String, Node>,
+  ): Node? {
+    val prefix = "$name."
+    val aside = children.entries
+      .filter { (child, node) ->
+        !node.dir &&
+          child.startsWith(prefix) &&
+          child.endsWith(REPLACING_SUFFIX) &&
+          child.substring(prefix.length, child.length - REPLACING_SUFFIX.length).toLongOrNull() != null
+      }
+      .maxByOrNull { (child, _) ->
+        child.substring(prefix.length, child.length - REPLACING_SUFFIX.length).toLong()
+      }
+      ?.value
+      ?: return null
+    val restored = try {
+      DocumentsContract.renameDocument(context.contentResolver, aside.uri, name)
+    } catch (error: Throwable) {
+      Log.w(TAG, "restore interrupted replace: ${error.message}")
+      null
+    } ?: return null
+    Log.i(TAG, "restored $name from an interrupted replace")
+    dropChildIndex(parent)
+    return Node(restored, false, aside.len)
   }
 
   /**

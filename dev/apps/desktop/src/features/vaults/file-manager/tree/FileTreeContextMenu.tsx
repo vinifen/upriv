@@ -55,27 +55,36 @@ export function FileTreeContextMenu({ fm, tree }: FileTreeContextMenuProps) {
       onSelect: () => fm.dispatch({ type: "start_rename", path }),
     });
   }
-  items.push(
-    {
-      id: "copy",
-      icon: "copy",
-      label: t("modal.file_manager.context.copy_path"),
-      onSelect: () => void copyPath(),
-    },
-    {
-      id: "open-system",
-      icon: "file-manager",
-      label: t("modal.file_manager.context.open_system"),
-      onSelect: () => void fm.openInSystemFileManager(path),
-    },
-    {
-      id: "open-terminal",
-      icon: "terminal",
-      label: t("modal.file_manager.context.open_terminal"),
-      onSelect: () => void fm.openInTerminal(path),
-    },
-  );
-  if (!isRoot) {
+  items.push({
+    id: "copy",
+    icon: "copy",
+    label: t("modal.file_manager.context.copy_path"),
+    onSelect: () => void copyPath(),
+  });
+  if (fm.osFolderAvailable) {
+    items.push(
+      {
+        id: "open-system",
+        icon: "file-manager",
+        label: t("modal.file_manager.context.open_system"),
+        onSelect: () => void fm.openInSystemFileManager(path),
+      },
+      {
+        id: "open-terminal",
+        icon: "terminal",
+        label: t("modal.file_manager.context.open_terminal"),
+        onSelect: () => void fm.openInTerminal(path),
+      },
+    );
+  }
+  if (isRoot) {
+    items.push({
+      id: "hide-explorer",
+      icon: "sidebar",
+      label: t("modal.file_manager.explorer.hide"),
+      onSelect: () => fm.dispatch({ type: "set_explorer_collapsed", collapsed: true }),
+    });
+  } else {
     items.push({
       id: "delete",
       icon: "trash",

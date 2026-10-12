@@ -5,6 +5,7 @@ import {
   VAULT_ROOT_ERROR_CODES,
   isRpcError,
   isVaultRootGoneError,
+  isVaultRootUnreachableError,
   type AppDistribution,
   type VaultRootMode,
   type VaultRootPresentationState,
@@ -50,6 +51,8 @@ function pathFromRpcError(error: unknown): string {
  * - `needs_setup` → Setup
  * - `incomplete` → Repair
  * - `alias_invalid` / missing `.upriv` → first-run Setup (not Recovery)
+ * - `vault_root_unreachable` (drive unplugged) → Setup, Custom kept selected; the pointer is kept
+ * - inspect `unreachable` → that same Setup (grant held, volume gone)
  * - inspect `unreadable` / `io_error` → AliasRecovery
  * - custom_root empty path → recover from active alias or run recovery
  * - M8: needs_setup + valid default root → single retry
@@ -76,6 +79,8 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
   const [setup, setSetup] = useState<{
     presentation: VaultRootPresentationState;
     distribution: AppDistribution;
+    /** Drive unplugged. Setup stays on Custom until the user changes it. */
+    reconnect?: boolean;
   } | null>(null);
   const [repair, setRepair] = useState<RepairState | null>(null);
   const [aliasInvalidPath, setAliasInvalidPath] = useState<string | null>(null);
@@ -94,13 +99,13 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
   /** One retry when needs_setup but defaultRootStatus reports valid (M8). */
   const validDefaultRootRetryRef = useRef(false);
 
-  const runResolve = useCallback(() => {
-    if (!settingsReady) return;
+  const runResolve = useCallback((): Promise<void> => {
+    if (!settingsReady) return Promise.resolve();
     const gen = ++resolveGen.current;
     const app = settingsRef.current.app;
     let wireOrAliasPath = app.vault_root_mode === "custom_root" ? app.upriv_root_path.trim() : "";
 
-    void (async () => {
+    return (async () => {
       if (app.vault_root_mode === "custom_root" && !wireOrAliasPath) {
         try {
           const alias = await vaultRoot.readAlias();
@@ -178,6 +183,25 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
               setResolveError(null);
               setApplying(false);
               setReady(false);
+              return;
+            }
+            if (inspected.status === "unreachable") {
+              setRepair(null);
+              setAliasInvalidPath(null);
+              setRecoveryPresentation(null);
+              setResolveError(null);
+              setApplying(false);
+              setReady(false);
+              setSetup({
+                presentation: {
+                  mode: "custom_root",
+                  defaultRootAnchor: "",
+                  aliasPath: "",
+                  rememberedAliasTarget: wireOrAliasPath || null,
+                },
+                distribution: "installed",
+                reconnect: true,
+              });
               return;
             }
             if (inspected.status === "unreadable") {
@@ -330,6 +354,27 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
         setReady(false);
       } catch (error) {
         if (gen !== resolveGen.current) return;
+
+        if (isVaultRootUnreachableError(error)) {
+          const remembered = pathFromRpcError(error) || wireOrAliasPath;
+          setRepair(null);
+          setAliasInvalidPath(null);
+          setRecoveryPresentation(null);
+          setResolveError(null);
+          setApplying(false);
+          setReady(false);
+          setSetup({
+            presentation: {
+              mode: "custom_root",
+              defaultRootAnchor: "",
+              aliasPath: "",
+              rememberedAliasTarget: remembered || null,
+            },
+            distribution: "installed",
+            reconnect: true,
+          });
+          return;
+        }
 
         const gone = isVaultRootGoneError(error);
         if (gone) {
@@ -550,7 +595,7 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
       }
     }
     if (!settingsReady) return;
-    runResolveRef.current();
+    void runResolveRef.current();
   }, [settingsReady, vaultRootEpoch]);
 
   const clearBlocking = useCallback(() => {
@@ -561,7 +606,7 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
     setResolveError(null);
     setApplying(true);
     setReady(false);
-    runResolveRef.current();
+    void runResolveRef.current();
   }, []);
 
   const blocking = !ready || !settingsReady || applying;
@@ -614,6 +659,22 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
   useEffect(() => {
     if (bootSettled) setBooted(true);
   }, [bootSettled]);
+
+  /**
+   * Drive was unplugged and Setup is still on that Custom folder.
+   * Read settings again, then resolve. A found root leaves Setup.
+   * Still unreachable keeps Setup open (the user has not picked another folder).
+   */
+  const resumeReconnect = useCallback(async () => {
+    const gen = resolveGen.current;
+    try {
+      await reloadSettings();
+    } catch {
+      // Context sets settingsLoadFailed; resolve below reports the folder state.
+    }
+    if (gen !== resolveGen.current) return;
+    await runResolveRef.current();
+  }, [reloadSettings]);
 
   const retrySettingsLoad = () => {
     setSettingsLoadTimedOut(false);
@@ -683,6 +744,8 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
         }
         distribution={setup?.distribution ?? "installed"}
         onConfigured={() => clearBlocking()}
+        reconnectNotice={setup?.reconnect === true}
+        onReconnect={resumeReconnect}
       />
 
       <VaultRootAliasRecoveryModal
@@ -775,7 +838,7 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
               style={modalFooterConfirmBtnStyle}
               onPress={() => {
                 setResolveError(null);
-                runResolveRef.current();
+                void runResolveRef.current();
               }}
             />
           </ModalFooterActions>

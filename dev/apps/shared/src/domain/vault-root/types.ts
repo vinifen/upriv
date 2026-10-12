@@ -60,6 +60,8 @@ export type VaultRootResolveResult =
 export type VaultRootAliasInfo = {
   path: string;
   active: boolean;
+  /** Android last Custom folder (`content://` on `custom=`). Absent when none is saved. */
+  customPath?: string;
 };
 
 /** Status of `.upriv/` at the default-root anchor. */
@@ -69,7 +71,14 @@ export type VaultRootDirStatus =
   | "incomplete"
   | "unreadable"
   /** SAF tree permission revoked — re-pick required (Android). */
-  | "unauthorized";
+  | "unauthorized"
+  /**
+   * Grant or bookmark is held, but the volume does not answer. The pointer stays.
+   * Not a writable-location failure and not a missing folder.
+   * Only Android SAF inspect returns this today. iOS bookmarks reuse it.
+   * Desktop Rust inspect does not: a missing path stays alias recovery.
+   */
+  | "unreachable";
 
 export type DefaultRootStatusResult = {
   status: VaultRootDirStatus;
@@ -82,8 +91,13 @@ export type VaultRootInspectResult = {
   path: string;
 };
 
-/** How to replace an incomplete `.upriv/` when the UI confirms repair. */
-export type IncompleteReplacePolicy = "delete" | "rename";
+/**
+ * How to repair an incomplete `.upriv/` when the UI confirms.
+ * `reset_settings` writes a fresh `settings.toml` and keeps vaults, backups,
+ * and groups (the usual damage from a pulled drive). `rename` moves the old
+ * folder aside; `delete` removes it.
+ */
+export type IncompleteReplacePolicy = "reset_settings" | "rename" | "delete";
 
 /**
  * Bootstrap UI prefs applied **only when creating** a new `.upriv/` (absent

@@ -38,6 +38,8 @@ interface FileManagerTabBarProps {
   isPathPending: (path: string) => boolean;
   onSave?: () => void;
   showSave?: boolean;
+  /** Pinned before the tabs (show-explorer toggle while the explorer is hidden). */
+  leading?: ReactNode;
 }
 
 /** Same breakpoint as desktop `md:` / `useMediaQuery("(max-width: 767px)")`. */
@@ -52,6 +54,7 @@ export function FileManagerTabBar({
   isPathPending,
   onSave,
   showSave = false,
+  leading,
 }: FileManagerTabBarProps) {
   const { t } = useTranslation();
   const { colors, typography } = useTheme();
@@ -158,12 +161,15 @@ export function FileManagerTabBar({
     [clearDrag, hitTabPath, onWorkspaceAction],
   );
 
+  const leadingSlot = leading ? <View style={styles.leading}>{leading}</View> : null;
+
   if (openTabs.length === 0) {
     return (
       <View
         style={[styles.emptyBar, { height: barHeight, backgroundColor: colors.surfaceContainer }]}
       >
-        <Text style={[typography.caption, { color: colors.onSurfaceVariant }]}>
+        {leadingSlot}
+        <Text style={[typography.caption, styles.emptyText, { color: colors.onSurfaceVariant }]}>
           {t("modal.file_manager.tabs.empty")}
         </Text>
       </View>
@@ -174,6 +180,7 @@ export function FileManagerTabBar({
 
   return (
     <View style={[styles.bar, { height: barHeight, backgroundColor: colors.surfaceContainer }]}>
+      {leadingSlot}
       <ScrollView
         horizontal
         scrollEnabled={!isDragging}
@@ -512,9 +519,11 @@ function TabChip({
 
 const styles = StyleSheet.create({
   emptyBar: {
-    justifyContent: "center",
-    paddingHorizontal: 12,
+    flexDirection: "row",
+    alignItems: "center",
   },
+  emptyText: { paddingHorizontal: 12 },
+  leading: { flexShrink: 0, alignSelf: "stretch" },
   bar: {
     flexDirection: "row",
     alignItems: "stretch",
@@ -557,16 +566,14 @@ const styles = StyleSheet.create({
     flexShrink: 0,
   },
   saveWrap: {
-    justifyContent: "center",
-    alignItems: "center",
-    paddingHorizontal: 4,
     flexShrink: 0,
   },
   saveButton: {
-    width: 36,
-    height: 32,
-    minWidth: 36,
-    minHeight: 32,
+    width: 52,
+    height: "100%",
+    minWidth: 52,
+    minHeight: 0,
     padding: 0,
+    borderRadius: 0,
   },
 });

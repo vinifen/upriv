@@ -55,27 +55,53 @@ struct PackageTomlRequired {
     vaults_dir: String,
 }
 
+/// Kind of `path` after following a symlink, `None` when it does not exist.
+/// Any other failure stays an I/O error so an unreachable folder is not read
+/// as a missing one.
+fn entry_kind_or_absent(path: &Path) -> Result<Option<crate::host_fs::EntryKind>> {
+    use crate::host_fs::EntryKind;
+
+    let absent = |error: &std::io::Error| error.kind() == std::io::ErrorKind::NotFound;
+    match crate::host_fs::entry_kind(path) {
+        Ok(EntryKind::Symlink) => match crate::host_fs::metadata(path) {
+            Ok(meta) if meta.is_dir() => Ok(Some(EntryKind::Dir)),
+            Ok(meta) if meta.is_file() => Ok(Some(EntryKind::File)),
+            Ok(_) => Ok(Some(EntryKind::Symlink)),
+            Err(error) if absent(&error) => Ok(None),
+            Err(error) => Err(error.into()),
+        },
+        Ok(kind) => Ok(Some(kind)),
+        Err(error) if absent(&error) => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
 /// Validate an existing `.upriv/` tree. Does not create or overwrite files.
 ///
 /// Fails when `.upriv` exists but required pieces are missing/corrupt so callers
 /// can alert the user instead of silently rewriting settings.
 pub fn validate_existing_vault_root(dir: impl AsRef<Path>) -> Result<()> {
+    use crate::host_fs::EntryKind;
+
     let dir = dir.as_ref();
     let upriv = dir.join(".upriv");
-    if !upriv.host_exists() {
-        return Err(UprivError::VaultRootNotFound(
-            dir.join(VAULT_ROOT_SETTINGS_REL),
-        ));
-    }
-    if !upriv.host_is_dir() {
-        return Err(UprivError::VaultRootIncomplete {
-            path: upriv,
-            detail: ".upriv exists but is not a directory".into(),
-        });
+    match entry_kind_or_absent(&upriv)? {
+        None => {
+            return Err(UprivError::VaultRootNotFound(
+                dir.join(VAULT_ROOT_SETTINGS_REL),
+            ))
+        }
+        Some(EntryKind::Dir) => {}
+        Some(_) => {
+            return Err(UprivError::VaultRootIncomplete {
+                path: upriv,
+                detail: ".upriv exists but is not a directory".into(),
+            })
+        }
     }
 
     let settings = dir.join(VAULT_ROOT_SETTINGS_REL);
-    if !settings.host_is_file() {
+    if entry_kind_or_absent(&settings)? != Some(EntryKind::File) {
         return Err(UprivError::VaultRootIncomplete {
             path: settings,
             detail: "missing .upriv/settings.toml".into(),
@@ -149,21 +175,20 @@ pub enum VaultRootDirStatus {
 
 /// Inspect whether `dir` already has a usable default_root vault-root.
 pub fn inspect_vault_root_at(dir: impl AsRef<Path>) -> VaultRootDirStatus {
-    let dir = dir.as_ref();
-    let upriv = dir.join(".upriv");
-    if !upriv.host_exists() {
-        return VaultRootDirStatus::Absent;
-    }
     match validate_existing_vault_root(dir) {
         Ok(()) => VaultRootDirStatus::Valid,
+        Err(UprivError::VaultRootNotFound(_)) => VaultRootDirStatus::Absent,
         Err(UprivError::Io(_)) => VaultRootDirStatus::Unreadable,
         Err(_) => VaultRootDirStatus::Incomplete,
     }
 }
 
-/// How to dispose of a broken default_root `.upriv/` before creating a fresh one.
+/// How to handle a broken `.upriv/` (its `settings.toml` is missing or unreadable).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IncompleteReplacePolicy {
+    /// Keep everything under `.upriv/` (vaults, backups, logs, groups) and
+    /// write a fresh `settings.toml`. App settings go back to defaults.
+    ResetSettings,
     /// Delete `.upriv/` permanently, then create a fresh layout.
     Delete,
     /// Rename `.upriv` → `.upriv-invalidated-<timestamp>` (append more stamps on collision).
@@ -195,7 +220,8 @@ pub(crate) fn open_or_initialize_vault_root_with_options(
 #[derive(Debug)]
 pub struct OpenedVaultRoot {
     pub root: VaultRoot,
-    /// True when this call created a new `.upriv/` (absent init or incomplete→replace).
+    /// True when this call created a new `.upriv/` (absent init, or incomplete
+    /// renamed / deleted). Reset settings keeps the existing `.upriv/`: false.
     pub created: bool,
 }
 
@@ -221,10 +247,12 @@ pub(crate) fn open_or_initialize_vault_root_with_policy(
 /// - Valid existing root → `created = false`; `prefs` is ignored and
 ///   `settings.toml` is **not** rewritten (AGENT.md contract — selecting an
 ///   existing `.upriv` must not clobber its UI prefs).
-/// - Absent / Incomplete→replace → `created = true`; prefs (trimmed, non-empty
-///   locale today) are written atomically as part of the initial settings.toml
-///   — no separate post-create stamp is required, so a partial stamp failure
-///   cannot leave a fresh root stuck on the built-in defaults.
+/// - Absent / Incomplete→rename or delete → `created = true`; prefs (trimmed,
+///   non-empty locale today) are written atomically as part of the initial
+///   settings.toml — no separate post-create stamp is required, so a partial
+///   stamp failure cannot leave a fresh root stuck on the built-in defaults.
+/// - Incomplete→reset settings → `created = false`; the same prefs seed the
+///   rewritten settings.toml and the rest of `.upriv/` is kept.
 #[cfg(test)]
 pub(crate) fn open_or_initialize_vault_root_with_policy_and_bootstrap(
     dir: impl AsRef<Path>,
@@ -275,20 +303,38 @@ fn open_or_initialize_vault_root_impl(
                 }
             };
             let upriv = dir.join(".upriv");
-            if upriv.host_exists() {
-                match policy {
-                    IncompleteReplacePolicy::Delete => {
-                        // Refuse to recursively delete if `.upriv` or any entry under it
-                        // is a symlink (could escape the vault-root). Prefer Rename.
-                        // `workspace/` is intentionally left in place — only the broken
-                        // `.upriv/` tree is removed when safe.
+            match policy {
+                IncompleteReplacePolicy::ResetSettings => {
+                    return Ok(OpenedVaultRoot {
+                        root: reset_settings_in_place(dir, prefs)?,
+                        created: false,
+                    });
+                }
+                IncompleteReplacePolicy::Delete if upriv.host_exists() => {
+                    // Refuse to recursively delete if `.upriv` or any entry under it
+                    // is a symlink (could escape the vault-root). Prefer Rename.
+                    // `workspace/` is intentionally left in place — only the broken
+                    // `.upriv/` tree is removed when safe. A file named `.upriv`
+                    // is not a tree; remove that file so Repair can recreate it.
+                    let meta =
+                        crate::host_fs::symlink_metadata(&upriv).map_err(UprivError::from)?;
+                    if meta.file_type().is_symlink() {
+                        return Err(UprivError::Io(std::io::Error::new(
+                            std::io::ErrorKind::InvalidInput,
+                            "refusing to delete a symlinked .upriv; use Rename",
+                        )));
+                    }
+                    if meta.is_file() {
+                        crate::host_fs::remove_file(&upriv)?;
+                    } else {
                         refuse_delete_if_symlinks_under(&upriv)?;
                         crate::host_fs::remove_dir_all(&upriv)?;
                     }
-                    IncompleteReplacePolicy::Rename => {
-                        rename_incomplete_upriv(&upriv)?;
-                    }
                 }
+                IncompleteReplacePolicy::Rename if upriv.host_exists() => {
+                    rename_incomplete_upriv(&upriv)?;
+                }
+                IncompleteReplacePolicy::Delete | IncompleteReplacePolicy::Rename => {}
             }
             Ok(OpenedVaultRoot {
                 root: initialize_vault_root_with_bootstrap(dir, prefs)?,
@@ -296,6 +342,25 @@ fn open_or_initialize_vault_root_impl(
             })
         }
     }
+}
+
+/// Write a fresh `settings.toml` into an existing `.upriv/` directory and keep
+/// everything else in it. Refuses when `.upriv` is not a directory.
+fn reset_settings_in_place(
+    dir: &Path,
+    prefs: Option<&VaultRootBootstrapPrefs>,
+) -> Result<VaultRoot> {
+    let upriv = dir.join(".upriv");
+    if entry_kind_or_absent(&upriv)? != Some(crate::host_fs::EntryKind::Dir) {
+        return Err(UprivError::VaultRootIncomplete {
+            path: upriv,
+            detail: ".upriv is not a directory; rename or delete it instead".into(),
+        });
+    }
+    let bytes = initial_settings_toml_for(prefs)?;
+    crate::paths::write_bytes_atomic_existing_parent(&dir.join(VAULT_ROOT_SETTINGS_REL), &bytes)?;
+    ensure_standard_dirs(dir)?;
+    VaultRoot::discover(dir)
 }
 
 /// Walk `upriv` with `symlink_metadata` (do not follow links). Refuse Delete when
@@ -585,6 +650,20 @@ vaults_dir = ".upriv/vaults"
     }
 
     #[test]
+    fn replace_incomplete_delete_removes_a_file_named_upriv() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::host_fs::write(dir.path().join(".upriv"), b"not a directory").unwrap();
+        let opened = open_or_initialize_vault_root_with_policy(
+            dir.path(),
+            Some(IncompleteReplacePolicy::Delete),
+        )
+        .unwrap();
+        assert!(opened.created);
+        assert!(dir.path().join(".upriv").host_is_dir());
+        assert!(opened.root.settings_path().host_is_file());
+    }
+
+    #[test]
     fn replace_incomplete_delete_removes_and_recreates() {
         let dir = tempfile::tempdir().unwrap();
         crate::host_fs::create_dir_all(dir.path().join(".upriv")).unwrap();
@@ -751,6 +830,76 @@ vaults_dir = ".upriv/vaults"
         let after = crate::host_fs::read_to_string(&settings).unwrap();
         assert_eq!(before, after);
         assert!(after.contains("locale = \"en\""));
+    }
+
+    /// A drive pulled during a settings write left a 0-byte `settings.toml`
+    /// beside healthy vaults. Reset settings keeps every vault and backup.
+    #[test]
+    fn reset_settings_keeps_vaults_beside_an_empty_settings_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = initialize_vault_root(dir.path()).unwrap();
+        let vault_config = root.vaults_dir().join("notes/config.toml");
+        crate::host_fs::create_dir_all(vault_config.parent().unwrap()).unwrap();
+        crate::host_fs::write(&vault_config, b"[vault]\nid = \"notes\"\n").unwrap();
+        crate::host_fs::write(dir.path().join(".upriv/vault_groups.toml"), b"# groups\n").unwrap();
+        crate::host_fs::write(root.settings_path(), b"").unwrap();
+        assert_eq!(
+            inspect_vault_root_at(dir.path()),
+            VaultRootDirStatus::Incomplete
+        );
+
+        let opened = open_or_initialize_vault_root_with_policy_and_bootstrap(
+            dir.path(),
+            Some(IncompleteReplacePolicy::ResetSettings),
+            Some(&bootstrap_locale("pt-BR")),
+        )
+        .unwrap();
+
+        assert!(!opened.created);
+        assert_eq!(inspect_vault_root_at(dir.path()), VaultRootDirStatus::Valid);
+        let raw = crate::host_fs::read_to_string(opened.root.settings_path()).unwrap();
+        assert!(raw.contains("locale = \"pt-BR\""));
+        assert_eq!(
+            crate::host_fs::read(&vault_config).unwrap(),
+            b"[vault]\nid = \"notes\"\n"
+        );
+        assert!(dir.path().join(".upriv/vault_groups.toml").host_is_file());
+        let invalidated = crate::host_fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .any(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with(".upriv-invalidated-")
+            });
+        assert!(!invalidated);
+    }
+
+    #[test]
+    fn reset_settings_refuses_when_upriv_is_a_file() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::host_fs::write(dir.path().join(".upriv"), b"not a folder").unwrap();
+        let err = open_or_initialize_vault_root_with_policy(
+            dir.path(),
+            Some(IncompleteReplacePolicy::ResetSettings),
+        )
+        .unwrap_err();
+        assert!(matches!(err, UprivError::VaultRootIncomplete { .. }));
+        assert_eq!(
+            crate::host_fs::read(dir.path().join(".upriv")).unwrap(),
+            b"not a folder"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_upriv_folder_still_validates() {
+        let target = tempfile::tempdir().unwrap();
+        initialize_vault_root(target.path()).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(target.path().join(".upriv"), dir.path().join(".upriv"))
+            .unwrap();
+        assert_eq!(inspect_vault_root_at(dir.path()), VaultRootDirStatus::Valid);
     }
 
     #[test]

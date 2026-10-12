@@ -22,7 +22,12 @@ pub trait SafBridge: Send + Sync {
     /// `rename`, `list`, or `open`. `payload` and the returned text are JSON.
     /// Failures are `{"ok":false,"err":"...","message":"..."}` with `err` one of
     /// `not_found`, `already_exists`, `is_a_directory`, `not_a_directory`,
-    /// `not_empty`, `permission_denied`, `invalid_input`, `other`.
+    /// `not_empty`, `permission_denied`, `invalid_input`, `unavailable`, `other`.
+    /// `unavailable` means the tree itself cannot be reached (a removed drive),
+    /// so a lookup miss is not evidence that a file is gone.
+    ///
+    /// `rename` onto an existing file replaces it. The previous document stays
+    /// under another name until the new one holds the destination name.
     fn dispatch(&self, op: &str, payload: &str) -> io::Result<String>;
 }
 
@@ -82,8 +87,8 @@ fn probe_file(file: &mut File) -> io::Result<()> {
     exclusive_lock(file)
 }
 
-/// `flock` / `fsync` on a storage-access fd often returns these. The bytes
-/// still persist when the fd is closed.
+/// `flock` / `fsync` on a storage-access fd often returns these when the
+/// provider hands out a descriptor that cannot sync or lock (a pipe).
 pub(crate) fn unsupported_fs_op(error: &io::Error) -> bool {
     #[cfg(unix)]
     {
@@ -448,9 +453,35 @@ fn bridge_error(value: &serde_json::Value) -> io::Error {
         "not_empty" => io::ErrorKind::DirectoryNotEmpty,
         "permission_denied" => io::ErrorKind::PermissionDenied,
         "invalid_input" => io::ErrorKind::InvalidInput,
+        "unavailable" => {
+            return io::Error::new(
+                io::ErrorKind::NotConnected,
+                DataFolderUnreachable(message.to_owned()),
+            )
+        }
         _ => io::ErrorKind::Other,
     };
     io::Error::new(kind, message)
+}
+
+/// Payload of the bridge `unavailable` error.
+#[derive(Debug)]
+struct DataFolderUnreachable(String);
+
+impl std::fmt::Display for DataFolderUnreachable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for DataFolderUnreachable {}
+
+/// The mounted data folder could not be reached (a removed drive), as opposed
+/// to a path that is missing inside a reachable folder.
+pub fn is_unreachable(error: &io::Error) -> bool {
+    error
+        .get_ref()
+        .is_some_and(|inner| inner.is::<DataFolderUnreachable>())
 }
 
 fn stat_bridge(bridge: &dyn SafBridge, rel: &str) -> io::Result<NodeStat> {
@@ -1059,7 +1090,7 @@ fn open_routed(
 pub struct File {
     inner: std::fs::File,
     /// Opened through the storage-access bridge. `fsync` / `ftruncate` may be
-    /// unsupported; the provider persists the bytes when the fd is closed.
+    /// unsupported on that descriptor.
     bridge: bool,
 }
 
@@ -1112,20 +1143,19 @@ impl File {
         })
     }
 
+    /// A removable drive behind the bridge drops unflushed bytes when it is
+    /// pulled, so this syncs like a local file. Callers sync once per commit
+    /// point, not per chunk.
     pub fn sync_all(&self) -> io::Result<()> {
-        if self.bridge {
-            // The storage provider persists the bytes when the fd is closed.
-            // Calling fsync here stalls every chunk write on shared storage.
-            return Ok(());
-        }
-        self.inner.sync_all()
+        self.inner
+            .sync_all()
+            .or_else(|error| self.ignore_bridge_unsupported(error))
     }
 
     pub fn sync_data(&self) -> io::Result<()> {
-        if self.bridge {
-            return Ok(());
-        }
-        self.inner.sync_data()
+        self.inner
+            .sync_data()
+            .or_else(|error| self.ignore_bridge_unsupported(error))
     }
 
     pub fn set_permissions(&self, perm: Permissions) -> io::Result<()> {
@@ -1273,23 +1303,36 @@ impl std::os::unix::fs::OpenOptionsExt for OpenOptions {
 #[cfg(test)]
 mod tests {
     use std::path::{Path, PathBuf};
-    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
     use std::sync::{Arc, Mutex};
 
     static TEST_MOUNT: Mutex<()> = Mutex::new(());
 
     use super::{mount_bridge, unmount, SafBridge, SAF_VAULT_ROOT};
 
+    /// Local stand-in for `SafFs`. Rename replaces an existing file, as the
+    /// Android bridge does.
     struct TempBridge {
         root: PathBuf,
-        /// Android's document provider rejects rename when the destination name
-        /// already exists. Local `rename` replaces, so tests opt into the refusal.
-        refuse_rename_over: bool,
+        /// Every op answers `unavailable`, like a pulled drive.
+        unreachable: AtomicBool,
         stats: AtomicU32,
         opens: AtomicU32,
+        /// Truncating opens of a file that already existed.
+        truncated_in_place: AtomicU32,
     }
 
     impl TempBridge {
+        fn new(root: &Path) -> Self {
+            Self {
+                root: root.to_path_buf(),
+                unreachable: AtomicBool::new(false),
+                stats: AtomicU32::new(0),
+                opens: AtomicU32::new(0),
+                truncated_in_place: AtomicU32::new(0),
+            }
+        }
+
         fn path(&self, rel: &str) -> PathBuf {
             if rel.is_empty() {
                 self.root.clone()
@@ -1316,6 +1359,9 @@ mod tests {
             let err = |code: &str| {
                 Ok(serde_json::json!({ "ok": false, "err": code, "message": code }).to_string())
             };
+            if self.unreachable.load(Ordering::Relaxed) {
+                return err("unavailable");
+            }
             match op {
                 "stat" => {
                     self.stats.fetch_add(1, Ordering::Relaxed);
@@ -1365,9 +1411,6 @@ mod tests {
                     );
                     let to =
                         self.path(value.get("to").and_then(|item| item.as_str()).unwrap_or(""));
-                    if self.refuse_rename_over && to.exists() {
-                        return err("other");
-                    }
                     match std::fs::rename(&from, &to) {
                         Ok(()) => ok(serde_json::json!({})),
                         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -1423,6 +1466,9 @@ mod tests {
                         .get("create_new")
                         .and_then(|item| item.as_bool())
                         .unwrap_or(false);
+                    if truncate && path.is_file() {
+                        self.truncated_in_place.fetch_add(1, Ordering::Relaxed);
+                    }
                     opts.read(read || write)
                         .write(write)
                         .truncate(truncate)
@@ -1448,22 +1494,21 @@ mod tests {
         }
     }
 
-    struct Mounted(tempfile::TempDir);
+    struct Mounted {
+        dir: tempfile::TempDir,
+        bridge: Arc<TempBridge>,
+    }
 
     impl Mounted {
         fn new() -> Self {
             let dir = tempfile::tempdir().unwrap();
-            mount_bridge(Arc::new(TempBridge {
-                root: dir.path().to_path_buf(),
-                refuse_rename_over: false,
-                stats: AtomicU32::new(0),
-                opens: AtomicU32::new(0),
-            }));
-            Self(dir)
+            let bridge = Arc::new(TempBridge::new(dir.path()));
+            mount_bridge(bridge.clone());
+            Self { dir, bridge }
         }
 
         fn root(&self) -> &Path {
-            self.0.path()
+            self.dir.path()
         }
     }
 
@@ -1503,21 +1548,10 @@ mod tests {
 
         let absent = crate::config::discover_bootstrap_root().unwrap();
         assert!(absent.is_none());
+        assert!(crate::paths::active_alias_is_unmounted_saf());
 
-        let dir = tempfile::tempdir().unwrap();
-        mount_bridge(Arc::new(TempBridge {
-            root: dir.path().to_path_buf(),
-            refuse_rename_over: false,
-            stats: AtomicU32::new(0),
-            opens: AtomicU32::new(0),
-        }));
-        struct Unmount;
-        impl Drop for Unmount {
-            fn drop(&mut self) {
-                unmount();
-            }
-        }
-        let _unmount = Unmount;
+        let _mounted = Mounted::new();
+        assert!(!crate::paths::active_alias_is_unmounted_saf());
         let logical = Path::new(SAF_VAULT_ROOT);
         crate::paths::initialize_vault_root(logical).unwrap();
         let found = crate::config::discover_bootstrap_root().unwrap().unwrap();
@@ -1525,32 +1559,64 @@ mod tests {
         std::env::remove_var("UPRIV_DEFAULT_ROOT_ANCHOR");
     }
 
+    /// A pulled drive keeps the old bytes only if the live document is never
+    /// truncated: every rewrite goes to a new document that replaces it.
     #[test]
-    fn bridge_replace_when_provider_refuses_rename_over_existing() {
+    fn bridge_rewrite_never_truncates_the_live_file() {
         let _guard = TEST_MOUNT.lock().unwrap();
-        let dir = tempfile::tempdir().unwrap();
-        mount_bridge(Arc::new(TempBridge {
-            root: dir.path().to_path_buf(),
-            refuse_rename_over: true,
-            stats: AtomicU32::new(0),
-            opens: AtomicU32::new(0),
-        }));
-        struct Unmount;
-        impl Drop for Unmount {
-            fn drop(&mut self) {
-                unmount();
-            }
-        }
-        let _unmount = Unmount;
+        let mounted = Mounted::new();
         let logical = Path::new(SAF_VAULT_ROOT).join(".upriv/settings.toml");
         crate::paths::write_bytes_atomic(&logical, b"theme = \"dark\"\nlocale = \"en\"\n").unwrap();
         crate::paths::write_bytes_atomic(&logical, b"theme = \"light\"\n").unwrap();
         assert_eq!(super::read(&logical).unwrap(), b"theme = \"light\"\n");
-        let names: Vec<_> = std::fs::read_dir(dir.path().join(".upriv"))
+        assert_eq!(mounted.bridge.truncated_in_place.load(Ordering::Relaxed), 0);
+        let names: Vec<_> = std::fs::read_dir(mounted.root().join(".upriv"))
             .unwrap()
             .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
             .collect();
         assert_eq!(names, vec!["settings.toml".to_string()]);
+    }
+
+    /// A removed drive is an I/O failure of the data folder, not a deleted `.upriv`.
+    #[test]
+    fn unreachable_bridge_is_not_a_missing_vault_root() {
+        let _guard = TEST_MOUNT.lock().unwrap();
+        let mounted = Mounted::new();
+        let logical = Path::new(SAF_VAULT_ROOT);
+        crate::paths::initialize_vault_root(logical).unwrap();
+        mounted.bridge.unreachable.store(true, Ordering::Relaxed);
+
+        match crate::paths::validate_existing_vault_root(logical) {
+            Err(crate::UprivError::Io(error)) => assert!(super::is_unreachable(&error)),
+            other => panic!("expected an unreachable I/O error, got {other:?}"),
+        }
+        assert_eq!(
+            crate::paths::inspect_vault_root_at(logical),
+            crate::paths::VaultRootDirStatus::Unreadable
+        );
+        match crate::paths::VaultRoot::discover(logical) {
+            Err(crate::UprivError::Io(error)) => assert!(super::is_unreachable(&error)),
+            other => panic!("expected an unreachable I/O error, got {other:?}"),
+        }
+
+        mounted.bridge.unreachable.store(false, Ordering::Relaxed);
+        assert_eq!(
+            crate::paths::inspect_vault_root_at(logical),
+            crate::paths::VaultRootDirStatus::Valid
+        );
+    }
+
+    #[test]
+    fn unreachable_marker_is_specific_to_the_bridge() {
+        let stale_mount = std::io::Error::from(std::io::ErrorKind::NotConnected);
+        assert!(!super::is_unreachable(&stale_mount));
+        let bridge = super::bridge_error(&serde_json::json!({
+            "ok": false,
+            "err": "unavailable",
+            "message": "data folder is not reachable",
+        }));
+        assert!(super::is_unreachable(&bridge));
+        assert_eq!(bridge.to_string(), "data folder is not reachable");
     }
 
     #[test]
@@ -1629,21 +1695,8 @@ mode = "encrypted_dir"
     #[test]
     fn file_check_does_not_open_and_parent_dir_still_reaches_the_root() {
         let _guard = TEST_MOUNT.lock().unwrap();
-        let dir = tempfile::tempdir().unwrap();
-        let bridge = Arc::new(TempBridge {
-            root: dir.path().to_path_buf(),
-            refuse_rename_over: false,
-            stats: AtomicU32::new(0),
-            opens: AtomicU32::new(0),
-        });
-        mount_bridge(bridge.clone());
-        struct Unmount;
-        impl Drop for Unmount {
-            fn drop(&mut self) {
-                unmount();
-            }
-        }
-        let _unmount = Unmount;
+        let mounted = Mounted::new();
+        let bridge = &mounted.bridge;
 
         let logical = Path::new(SAF_VAULT_ROOT).join("note.txt");
         super::write(&logical, b"hi").unwrap();
@@ -1669,22 +1722,9 @@ mode = "encrypted_dir"
     #[test]
     fn climbing_out_of_the_logical_root_does_not_touch_the_disk() {
         let _guard = TEST_MOUNT.lock().unwrap();
-        let dir = tempfile::tempdir().unwrap();
-        mount_bridge(Arc::new(TempBridge {
-            root: dir.path().to_path_buf(),
-            refuse_rename_over: false,
-            stats: AtomicU32::new(0),
-            opens: AtomicU32::new(0),
-        }));
-        struct Unmount;
-        impl Drop for Unmount {
-            fn drop(&mut self) {
-                unmount();
-            }
-        }
-        let _unmount = Unmount;
+        let mounted = Mounted::new();
 
-        let spilled = dir.path().join("left-the-root");
+        let spilled = mounted.root().join("left-the-root");
         let mut escaped_logical = PathBuf::from(SAF_VAULT_ROOT);
         escaped_logical.push("..");
         for component in spilled.components() {

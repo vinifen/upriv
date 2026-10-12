@@ -8,6 +8,7 @@ import type {
   AppLogFile,
   CreateVaultInput,
   DefaultRootStatusResult,
+  IncompleteReplacePolicy,
   VaultBackupEntry,
   VaultExportRequest,
   VaultGroup,
@@ -198,7 +199,7 @@ export async function rpcVaultRootResolve(options?: {
 
 export async function rpcVaultRootSetupDefaultRoot(options?: {
   replaceIncomplete?: boolean;
-  replacePolicy?: "delete" | "rename";
+  replacePolicy?: IncompleteReplacePolicy;
   bootstrap?: VaultRootBootstrapPrefs | null;
 }): Promise<{ rootPath: string }> {
   const replaceIncomplete = options?.replaceIncomplete ?? false;
@@ -231,7 +232,7 @@ export async function rpcVaultRootSetupPath(
   path: string,
   options?: {
     replaceIncomplete?: boolean;
-    replacePolicy?: "delete" | "rename";
+    replacePolicy?: IncompleteReplacePolicy;
     bootstrap?: VaultRootBootstrapPrefs | null;
   },
 ): Promise<{ rootPath: string; aliasPath: string }> {
@@ -284,9 +285,13 @@ export async function rpcVaultRootReadAlias(): Promise<VaultRootAliasInfo | null
       raw,
     );
   }
+  const record = raw as { path: string; active: boolean; customPath?: unknown };
   return {
-    path: (raw as { path: string }).path,
-    active: (raw as { active: boolean }).active,
+    path: record.path,
+    active: record.active,
+    ...(typeof record.customPath === "string" && record.customPath.trim()
+      ? { customPath: record.customPath.trim() }
+      : {}),
   };
 }
 
@@ -481,6 +486,7 @@ export async function rpcVaultCreate(input: CreateVaultInput): Promise<VaultList
     password: input.password,
     unlockPreset: input.unlockPreset,
     settings: vaultSettingsForDaemon(input.settings),
+    welcome: input.welcome,
   });
   if (typeof raw !== "object" || raw === null) {
     throw new RpcError(BRIDGE_ERROR_CODES.INVALID_RESPONSE, "vault_create: expected object", raw);
@@ -670,6 +676,7 @@ export async function rpcVaultImport7z(input: CreateVaultInput): Promise<VaultLi
     archivePath: pkg?.archivePath,
     contentB64: pkg?.contentB64,
     archivePassword: pkg?.archivePassword ?? input.password,
+    welcome: input.welcome,
   });
   return parseVaultResult(raw, "vault_import_7z");
 }
@@ -682,6 +689,7 @@ export async function rpcVaultImportFilesZip(input: CreateVaultInput): Promise<V
     unlockPreset: input.unlockPreset,
     archivePath: pkg?.archivePath,
     contentB64: pkg?.contentB64,
+    welcome: input.welcome,
   });
   return parseVaultResult(raw, "vault_import_files_zip");
 }
@@ -693,6 +701,7 @@ export async function rpcVaultImportOsPath(input: CreateVaultInput): Promise<Vau
     password: input.password,
     unlockPreset: input.unlockPreset,
     archivePath: pkg?.archivePath,
+    welcome: input.welcome,
   });
   return parseVaultResult(raw, "vault_import_os_path");
 }

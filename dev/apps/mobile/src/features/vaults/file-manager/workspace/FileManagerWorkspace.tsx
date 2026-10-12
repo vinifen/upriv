@@ -18,7 +18,7 @@ import { FileManagerDialogs } from "../dialogs/FileManagerDialogs";
 import { FileEditorPane } from "../editor/FileEditorPane";
 import { FileManagerTabBar } from "../editor/FileManagerTabBar";
 import { hasUnsavedEditableTabs, useVaultFileManager } from "../hooks/useVaultFileManager";
-import { FileTreePanel } from "../tree/FileTreePanel";
+import { ExplorerToggle, FileTreePanel } from "../tree/FileTreePanel";
 import { PaneResizeHandle } from "./PaneResizeHandle";
 
 /** Same breakpoint as desktop `md:` / `useMediaQuery("(max-width: 767px)")`. */
@@ -155,6 +155,7 @@ export function FileManagerWorkspace({
     applyTreeExtent(Math.round((size * shown) / 100), axis === "y");
   });
 
+  const explorerCollapsed = entry.workspace.explorerCollapsed;
   const sizeForSplit = dragSize ?? containerSize;
   const splitPercent = displayTreeSplitPercent(livePercent, sizeForSplit, axis);
   const treeExtent = sizeForSplit > 0 ? Math.round((sizeForSplit * splitPercent) / 100) : undefined;
@@ -178,17 +179,22 @@ export function FileManagerWorkspace({
           applyContainerSize(axis === "y" ? height : width);
         }}
       >
-        <View ref={treeSlotRef} collapsable={false} style={[styles.treeSlot, treeSlotStyle]}>
-          <FileTreePanel fm={fm} />
-        </View>
-        <PaneResizeHandle
-          axis={axis}
-          onDragStart={handleSplitDragStart}
-          onDrag={handleSplitDrag}
-          onDragEnd={handleSplitDragEnd}
-        />
+        {explorerCollapsed ? null : (
+          <>
+            <View ref={treeSlotRef} collapsable={false} style={[styles.treeSlot, treeSlotStyle]}>
+              <FileTreePanel fm={fm} />
+            </View>
+            <PaneResizeHandle
+              axis={axis}
+              onDragStart={handleSplitDragStart}
+              onDrag={handleSplitDrag}
+              onDragEnd={handleSplitDragEnd}
+            />
+          </>
+        )}
         <View style={[styles.editorCol, { backgroundColor: colors.surfaceContainerHigh }]}>
           <FileManagerTabBar
+            leading={explorerCollapsed ? <ExplorerToggle fm={fm} showLabel={false} /> : null}
             workspace={entry.workspace}
             onWorkspaceAction={dispatch}
             onDelete={fm.requestDelete}
@@ -196,7 +202,7 @@ export function FileManagerWorkspace({
             showSave={hasUnsavedEditableTabs(fm)}
             onSave={fm.saveAllFiles}
           />
-          <FileEditorPane fm={fm} />
+          <FileEditorPane fm={fm} vaultName={entry.displayName} />
         </View>
       </View>
       <FileManagerDialogs fm={fm} promptsOpen={active} />

@@ -1,6 +1,7 @@
 export type {
   FileContextMenuState,
   FileDeleteTarget,
+  MarkdownViewMode,
   UnsavedPromptAction,
   VaultWorkspaceState,
 } from "./workspaceTypes";
@@ -8,6 +9,7 @@ export {
   createDefaultWorkspaceState,
   hasUnsavedWorkspaceChanges,
   isPathDirty,
+  markdownViewMode,
   sessionPathKind,
 } from "./workspaceTypes";
 export type { SessionPathKind } from "./workspaceTypes";
@@ -53,6 +55,24 @@ export {
 } from "./importLogicalFiles";
 export { currentImportFileSlots, importFileSlots } from "./importSlots";
 export { yieldToPaint } from "./yieldToPaint";
+export { markdownLinkHref } from "./markdownLink";
+export { breadcrumbShrink, pathBreadcrumbs } from "./pathBreadcrumbs";
+export {
+  MARKDOWN_PREVIEW_MAX_CHARS,
+  markdownOutline,
+  parseMarkdownDocument,
+  toggleMarkdownTask,
+} from "./markdownDocument";
+export type {
+  MarkdownAlign,
+  MarkdownBlock,
+  MarkdownFootnote,
+  MarkdownInline,
+  MarkdownListItem,
+  MarkdownOutlineEntry,
+  MarkdownOutlineModel,
+  MarkdownPreviewModel,
+} from "./markdownDocument";
 export {
   UPRIV_WORKSPACE_FILE_NAME,
   UPRIV_WORKSPACE_PATH,
@@ -68,8 +88,8 @@ export {
   workspaceSnapshotFromState,
   workspaceStateFromSnapshot,
   snapshotsEqual,
-  isDefaultWorkspaceSnapshot,
   shouldHydratePersistedWorkspace,
+  workspaceSnapshotToHydrate,
   type WorkspaceSnapshot,
   type WorkspaceSnapshotV1,
 } from "./workspaceSnapshot";

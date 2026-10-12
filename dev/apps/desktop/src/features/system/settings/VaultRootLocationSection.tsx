@@ -1,5 +1,6 @@
 import {
   type ReactNode,
+  useCallback,
   useEffect,
   useId,
   useLayoutEffect,
@@ -13,8 +14,12 @@ import { PolicyRadioOption, SettingsField, SettingsFormGrid } from "@/components
 import { useTranslation } from "@/i18n";
 import {
   VAULT_ROOT_ALIAS_FILE,
+  diskFromDirStatus,
   isVaultRootDraftDirty,
+  vaultRootDiskProblemKey,
+  vaultRootDraftKey,
   vaultRootGateFromState,
+  visibleVaultRootDisk,
   type AppDistribution,
   type AppSettingsConfig,
   type IncompleteReplacePolicy,
@@ -75,12 +80,45 @@ export function VaultRootLocationSection({
   const draftCustomPathRef = useRef("");
 
   const [disk, setDisk] = useState<VaultRootDiskStatus>("ready");
+  /** Draft key the current `disk` value was checked for. Empty until that check starts. */
+  const [diskKey, setDiskKey] = useState("");
+  const [recheckNonce, setRecheckNonce] = useState(0);
   const [replacePolicy, setReplacePolicy] = useState<IncompleteReplacePolicy | null>(null);
   const [customPathLoading, setCustomPathLoading] = useState(false);
   const [defaultRootAnchor, setDefaultRootAnchor] = useState("");
+  const [rememberedCustomPath, setRememberedCustomPath] = useState("");
+  const [recallError, setRecallError] = useState(false);
   const [distribution, setDistribution] = useState<AppDistribution>(
     () => getSessionAppVersion()?.distribution ?? "portable",
   );
+
+  useEffect(() => {
+    const fromDraft = config.upriv_root_path.trim();
+    if (fromDraft) {
+      draftCustomPathRef.current = fromDraft;
+      setRememberedCustomPath(fromDraft);
+      setRecallError(false);
+      return;
+    }
+    if (draftCustomPathRef.current.trim()) return;
+    let cancelled = false;
+    void vaultRootService
+      .readAlias()
+      .then((alias) => {
+        if (cancelled) return;
+        const path = alias?.path.trim() ?? "";
+        if (!path) return;
+        draftCustomPathRef.current = path;
+        setRememberedCustomPath(path);
+        setRecallError(false);
+      })
+      .catch(() => {
+        if (!cancelled) setRecallError(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [config.upriv_root_path, vaultRootService]);
 
   useEffect(() => {
     let cancelled = false;
@@ -124,10 +162,28 @@ export function VaultRootLocationSection({
       savedVaultRootMode,
       savedRootPath,
     );
-  const vaultRootGate = useMemo(
-    () => vaultRootGateFromState({ dirty, disk, replacePolicy, primaryAction }),
-    [dirty, disk, primaryAction, replacePolicy],
+  const draftKey = vaultRootDraftKey(config.vault_root_mode, config.upriv_root_path);
+  const visibleDisk = visibleVaultRootDisk(disk, diskKey, draftKey, dirty);
+  const diskProblemKey = vaultRootDiskProblemKey(visibleDisk);
+  const noteDisk = useCallback(
+    (status: VaultRootDiskStatus) => {
+      setDiskKey(draftKey);
+      setDisk(status);
+    },
+    [draftKey],
   );
+  const vaultRootGate = useMemo(
+    () => vaultRootGateFromState({ dirty, disk: visibleDisk, replacePolicy, primaryAction }),
+    [dirty, visibleDisk, primaryAction, replacePolicy],
+  );
+
+  /** Drop the previous draft's result and check again, even when the path string is unchanged. */
+  const requestRecheck = () => {
+    checkGen.current += 1;
+    setDiskKey("");
+    setDisk("checking");
+    setRecheckNonce((n) => n + 1);
+  };
 
   useLayoutEffect(() => {
     onVaultRootGateChange(vaultRootGate);
@@ -136,7 +192,7 @@ export function VaultRootLocationSection({
   useEffect(() => {
     if (!dirty) {
       checkGen.current += 1;
-      setDisk("ready");
+      noteDisk("ready");
       setReplacePolicy(null);
       draftIdentityRef.current = {
         mode: config.vault_root_mode,
@@ -159,45 +215,37 @@ export function VaultRootLocationSection({
     const gen = ++checkGen.current;
 
     if (config.vault_root_mode === "default_root") {
-      setDisk("checking");
+      noteDisk("checking");
       void vaultRootService
         .defaultRootStatus()
         .then((result) => {
           if (gen !== checkGen.current) return;
           setDefaultRootAnchor(result.defaultRootAnchor);
-          if (result.status === "incomplete") setDisk("incomplete");
-          else if (result.status === "unreadable") setDisk("unreadable");
-          else if (result.status === "unauthorized") setDisk("unauthorized");
-          else if (result.status === "absent") setDisk("will_create");
-          else setDisk("ready");
+          noteDisk(diskFromDirStatus(result.status));
         })
         .catch(() => {
           if (gen !== checkGen.current) return;
-          setDisk("unreadable");
+          noteDisk("unreadable");
         });
       return;
     }
 
     const path = config.upriv_root_path.trim();
     if (!path) {
-      setDisk(customPathLoading ? "checking" : "needs_folder");
+      noteDisk(customPathLoading ? "checking" : "needs_folder");
       return;
     }
 
-    setDisk("checking");
+    noteDisk("checking");
     void vaultRootService
       .inspectAtPath(path)
       .then((result) => {
         if (gen !== checkGen.current) return;
-        if (result.status === "incomplete") setDisk("incomplete");
-        else if (result.status === "unreadable") setDisk("unreadable");
-        else if (result.status === "unauthorized") setDisk("unauthorized");
-        else if (result.status === "absent") setDisk("will_create");
-        else setDisk("ready");
+        noteDisk(diskFromDirStatus(result.status));
       })
       .catch(() => {
         if (gen !== checkGen.current) return;
-        setDisk("unreadable");
+        noteDisk("unreadable");
       });
   }, [
     config.vault_root_mode,
@@ -206,10 +254,12 @@ export function VaultRootLocationSection({
     customPathLoading,
     vaultRootService,
     inspectNonce,
+    noteDisk,
+    recheckNonce,
   ]);
 
   const retryDiskCheck = () => {
-    setDisk("checking");
+    noteDisk("checking");
     checkGen.current += 1;
     const gen = checkGen.current;
     if (config.vault_root_mode === "default_root") {
@@ -218,44 +268,68 @@ export function VaultRootLocationSection({
         .then((result) => {
           if (gen !== checkGen.current) return;
           setDefaultRootAnchor(result.defaultRootAnchor);
-          if (result.status === "incomplete") setDisk("incomplete");
-          else if (result.status === "unreadable") setDisk("unreadable");
-          else if (result.status === "unauthorized") setDisk("unauthorized");
-          else if (result.status === "absent") setDisk("will_create");
-          else setDisk("ready");
+          noteDisk(diskFromDirStatus(result.status));
         })
         .catch(() => {
           if (gen !== checkGen.current) return;
-          setDisk("unreadable");
+          noteDisk("unreadable");
         });
       return;
     }
     const path = config.upriv_root_path.trim();
     if (!path) {
-      setDisk("needs_folder");
+      noteDisk("needs_folder");
       return;
     }
     void vaultRootService
       .inspectAtPath(path)
       .then((result) => {
         if (gen !== checkGen.current) return;
-        if (result.status === "incomplete") setDisk("incomplete");
-        else if (result.status === "unreadable") setDisk("unreadable");
-        else if (result.status === "unauthorized") setDisk("unauthorized");
-        else if (result.status === "absent") setDisk("will_create");
-        else setDisk("ready");
+        noteDisk(diskFromDirStatus(result.status));
       })
       .catch(() => {
         if (gen !== checkGen.current) return;
-        setDisk("unreadable");
+        noteDisk("unreadable");
       });
   };
 
   const showDefaultRootExtras = useDefaultRoot && dirty;
   const showCustomExtras = !useDefaultRoot;
+  const customFieldPath = config.upriv_root_path.trim() || rememberedCustomPath;
+
+  const retryRecall = () => {
+    const stashed = draftCustomPathRef.current.trim();
+    if (stashed) {
+      setRememberedCustomPath(stashed);
+      setRecallError(false);
+      onChange({ vault_root_mode: "custom_root", upriv_root_path: stashed });
+      return;
+    }
+    const gen = ++aliasLoadGen.current;
+    setCustomPathLoading(true);
+    setRecallError(false);
+    void vaultRootService
+      .readAlias()
+      .then((alias) => {
+        if (gen !== aliasLoadGen.current) return;
+        const aliasPath = alias?.path.trim() || "";
+        if (!aliasPath) return;
+        draftCustomPathRef.current = aliasPath;
+        setRememberedCustomPath(aliasPath);
+        onChange({ vault_root_mode: "custom_root", upriv_root_path: aliasPath });
+      })
+      .catch(() => {
+        if (gen !== aliasLoadGen.current) return;
+        setRecallError(true);
+      })
+      .finally(() => {
+        if (gen !== aliasLoadGen.current) return;
+        setCustomPathLoading(false);
+      });
+  };
 
   const incompletePanel =
-    dirty && disk === "incomplete" ? (
+    dirty && visibleDisk === "incomplete" ? (
       <VaultRootIncompleteReplacePanel
         context={
           useDefaultRoot
@@ -285,7 +359,7 @@ export function VaultRootLocationSection({
             groupName={rootModeGroup}
             value="default_root"
             checked={useDefaultRoot}
-            attention={useDefaultRoot && vaultRootGate.blocksPrimary && disk !== "checking"}
+            attention={useDefaultRoot && vaultRootGate.blocksPrimary && visibleDisk !== "checking"}
             title={t(defaultRootTitleKey)}
             description={t(defaultRootDescKey)}
             badge="default"
@@ -295,8 +369,13 @@ export function VaultRootLocationSection({
               aliasLoadGen.current += 1;
               setCustomPathLoading(false);
               setReplacePolicy(null);
+              requestRecheck();
               const current = config.upriv_root_path.trim();
-              if (current) draftCustomPathRef.current = current;
+              if (current) {
+                draftCustomPathRef.current = current;
+                setRememberedCustomPath(current);
+                setRecallError(false);
+              }
               onChange({ vault_root_mode: "default_root", upriv_root_path: "" });
             }}
             footer={
@@ -310,12 +389,12 @@ export function VaultRootLocationSection({
                 )}
                 {showDefaultRootExtras ? (
                   <>
-                    {disk === "checking" ? (
+                    {visibleDisk === "checking" ? (
                       <p className="text-xs leading-relaxed text-on-surface-variant" role="status">
                         {t("modal.app_settings.field.upriv_root_loading")}
                       </p>
                     ) : null}
-                    {disk === "will_create" ? (
+                    {visibleDisk === "will_create" ? (
                       <p
                         className="rounded-md bg-surface-container px-3 py-2 text-xs leading-relaxed text-on-surface"
                         role="status"
@@ -330,17 +409,13 @@ export function VaultRootLocationSection({
                         )}
                       </p>
                     ) : null}
-                    {disk === "unreadable" || disk === "unauthorized" ? (
+                    {diskProblemKey ? (
                       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                         <p
                           className="rounded-md bg-error-container/10 px-3 py-2 text-xs leading-relaxed text-on-error-container"
                           role="alert"
                         >
-                          {t(
-                            disk === "unauthorized"
-                              ? "modal.vault_root_setup.error_saf_unauthorized"
-                              : "modal.vault_root_setup.error_io",
-                          )}
+                          {t(diskProblemKey)}
                         </p>
                         <Button
                           type="button"
@@ -364,7 +439,7 @@ export function VaultRootLocationSection({
             groupName={rootModeGroup}
             value="custom_root"
             checked={!useDefaultRoot}
-            attention={!useDefaultRoot && vaultRootGate.blocksPrimary && disk !== "checking"}
+            attention={!useDefaultRoot && vaultRootGate.blocksPrimary && visibleDisk !== "checking"}
             title={t("modal.app_settings.option.upriv_root.custom_root")}
             description={t("modal.app_settings.option.upriv_root.custom_root_desc", {
               file: VAULT_ROOT_ALIAS_FILE,
@@ -374,30 +449,42 @@ export function VaultRootLocationSection({
               if (controlsDisabled) return;
               const current = config.upriv_root_path.trim();
               setReplacePolicy(null);
+              requestRecheck();
               if (current) {
+                draftCustomPathRef.current = current;
+                setRememberedCustomPath(current);
+                setRecallError(false);
                 onChange({ vault_root_mode: "custom_root", upriv_root_path: current });
                 return;
               }
               const stashed = draftCustomPathRef.current.trim();
               if (stashed) {
+                setRememberedCustomPath(stashed);
+                setRecallError(false);
                 onChange({ vault_root_mode: "custom_root", upriv_root_path: stashed });
                 return;
               }
               const gen = ++aliasLoadGen.current;
               setCustomPathLoading(true);
+              setRecallError(false);
               onChange({ vault_root_mode: "custom_root", upriv_root_path: "" });
               void vaultRootService
                 .readAlias()
                 .then((alias) => {
                   if (gen !== aliasLoadGen.current) return;
+                  const aliasPath = alias?.path.trim() || "";
+                  if (aliasPath) {
+                    draftCustomPathRef.current = aliasPath;
+                    setRememberedCustomPath(aliasPath);
+                  }
                   onChange({
                     vault_root_mode: "custom_root",
-                    upriv_root_path: alias?.path.trim() || "",
+                    upriv_root_path: aliasPath,
                   });
                 })
-                .catch((error) => {
+                .catch(() => {
                   if (gen !== aliasLoadGen.current) return;
-                  showError(error, "error.unexpected");
+                  setRecallError(true);
                 })
                 .finally(() => {
                   if (gen !== aliasLoadGen.current) return;
@@ -419,17 +506,22 @@ export function VaultRootLocationSection({
                           file: VAULT_ROOT_ALIAS_FILE,
                         })}
                       </p>
-                    ) : customPathLoading || disk === "checking" ? (
+                    ) : customPathLoading || visibleDisk === "checking" ? (
                       <p className="text-xs leading-relaxed text-on-surface-variant" role="status">
                         {t("modal.app_settings.field.upriv_root_loading")}
                       </p>
                     ) : null}
                   </>
                 ) : null}
+                {useDefaultRoot && customFieldPath ? (
+                  <p className="text-xs leading-relaxed text-on-surface-variant">
+                    {t("modal.app_settings.field.upriv_root_kept_with_default")}
+                  </p>
+                ) : null}
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-stretch">
                   <PathField
                     className="sm:flex-1"
-                    value={config.upriv_root_path}
+                    value={customFieldPath}
                     readOnly
                     placeholder={t("modal.app_settings.field.upriv_root_placeholder")}
                   />
@@ -440,7 +532,7 @@ export function VaultRootLocationSection({
                     className="w-full shrink-0 sm:w-auto"
                     disabled={customPathLoading || controlsDisabled}
                     onClick={() => {
-                      const suggested = config.upriv_root_path.trim();
+                      const suggested = customFieldPath.trim();
                       setReplacePolicy(null);
                       void (async () => {
                         try {
@@ -456,6 +548,10 @@ export function VaultRootLocationSection({
                             t("modal.vault_root_setup.pick_folder_title"),
                           );
                           if (!picked?.trim()) return;
+                          draftCustomPathRef.current = picked.trim();
+                          setRememberedCustomPath(picked.trim());
+                          setRecallError(false);
+                          requestRecheck();
                           onChange({
                             vault_root_mode: "custom_root",
                             upriv_root_path: picked.trim(),
@@ -469,17 +565,33 @@ export function VaultRootLocationSection({
                     {t("modal.app_settings.action.choose_folder")}
                   </Button>
                 </div>
-                {showCustomExtras && (disk === "unreadable" || disk === "unauthorized") ? (
+                {recallError ? (
                   <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                     <p
                       className="rounded-md bg-error-container/10 px-3 py-2 text-xs leading-relaxed text-on-error-container"
                       role="alert"
                     >
-                      {t(
-                        disk === "unauthorized"
-                          ? "modal.vault_root_setup.error_saf_unauthorized"
-                          : "modal.vault_root_setup.error_io",
-                      )}
+                      {t("modal.vault_root_setup.error_io")}
+                    </p>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="md"
+                      className="w-full shrink-0 sm:w-auto"
+                      disabled={controlsDisabled}
+                      onClick={retryRecall}
+                    >
+                      {t("action.retry")}
+                    </Button>
+                  </div>
+                ) : null}
+                {showCustomExtras && diskProblemKey ? (
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                    <p
+                      className="rounded-md bg-error-container/10 px-3 py-2 text-xs leading-relaxed text-on-error-container"
+                      role="alert"
+                    >
+                      {t(diskProblemKey)}
                     </p>
                     <Button
                       type="button"
@@ -493,7 +605,7 @@ export function VaultRootLocationSection({
                     </Button>
                   </div>
                 ) : null}
-                {showCustomExtras && disk === "needs_folder" ? (
+                {showCustomExtras && visibleDisk === "needs_folder" ? (
                   <p className="text-xs leading-relaxed text-on-surface-variant" role="status">
                     {t("modal.vault_root_setup.error_path_required")}
                   </p>

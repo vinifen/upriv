@@ -9,6 +9,9 @@ use crate::error::{Result, UprivError};
 
 #[cfg(target_os = "linux")]
 mod fuse_linux;
+mod thumbnails;
+
+pub(crate) use thumbnails::{purge_mount_thumbnails, unwatch_open_mount, watch_open_mount};
 
 /// Held while a vault is mounted. Unmounts and removes the leaf on drop.
 pub struct MountedVault {
@@ -36,6 +39,7 @@ impl Drop for MountedVault {
         #[cfg(target_os = "linux")]
         {
             self.session.take();
+            unwatch_open_mount(&self.mount_point);
         }
         if force_unmount(&self.mount_point).is_ok() {
             let _ = crate::host_fs::remove_dir(&self.mount_point);
@@ -138,6 +142,8 @@ fn linux_umount(path: &Path) -> Result<()> {
         }
         // Not a mount. `umount2` on that path returns EPERM here, which is not
         // "not a mount", so do not call it. The empty leaf can still be removed.
+        // This return does not wipe previews. A recorded leftover path is wiped
+        // by the caller (`sweep_stale_mount_leaves`, `release_recorded_mount`).
         MountKind::NotListed => return Ok(()),
         MountKind::Upriv | MountKind::Unknown => {}
     }
@@ -152,6 +158,7 @@ fn linux_umount(path: &Path) -> Result<()> {
             .stderr(std::process::Stdio::null())
             .status();
         if matches!(status, Ok(code) if code.success()) {
+            purge_mount_thumbnails(path);
             return Ok(());
         }
     }
@@ -159,6 +166,7 @@ fn linux_umount(path: &Path) -> Result<()> {
     const MNT_DETACH: libc::c_int = 2;
     let rc = unsafe { libc::umount2(c_path.as_ptr(), MNT_DETACH) };
     if rc == 0 {
+        purge_mount_thumbnails(path);
         return Ok(());
     }
     let err = std::io::Error::last_os_error();
@@ -168,6 +176,7 @@ fn linux_umount(path: &Path) -> Result<()> {
     }
     let forced = unsafe { libc::umount2(c_path.as_ptr(), MNT_FORCE | MNT_DETACH) };
     if forced == 0 {
+        purge_mount_thumbnails(path);
         return Ok(());
     }
     let forced_err = std::io::Error::last_os_error();

@@ -41,6 +41,11 @@ pub fn load_runtime_state(root: &VaultRoot) -> Result<RuntimeState> {
         return Ok(RuntimeState::closed());
     }
     let raw = crate::host_fs::read_to_string(&path)?;
+    // A write torn by a pulled drive leaves an empty file. The records are
+    // volatile, and dirty-close detection also uses the lock files.
+    if raw.trim().is_empty() {
+        return Ok(RuntimeState::closed());
+    }
     serde_json::from_str(&raw).map_err(|error| UprivError::VaultStoreInvalid {
         path,
         detail: format!("invalid state.json: {error}"),
@@ -117,6 +122,9 @@ pub fn release_recorded_mount(root: &VaultRoot, vault_id: &str) {
     // `remove_dir` stats the path. On a dead FUSE leaf that stat is the
     // "Transport endpoint is not connected" dialog, so only remove after detach.
     if crate::mount::force_unmount(path).is_ok() {
+        // Already unmounted (a reboot) returns success without a wipe. The
+        // path was this vault's folder, so drop its previews either way.
+        crate::mount::purge_mount_thumbnails(path);
         let _ = crate::host_fs::remove_dir(path);
     }
 }
@@ -175,6 +183,9 @@ pub fn sweep_stale_mount_leaves(root: &VaultRoot) -> Result<Vec<String>> {
         let path = Path::new(mount);
         match crate::mount::force_unmount(path) {
             Ok(()) => {
+                // A leftover that is no longer in the mount table still has
+                // previews. Unmount itself only wipes when it detaches a leaf.
+                crate::mount::purge_mount_thumbnails(path);
                 let _ = crate::host_fs::remove_dir(path);
                 swept.push(id.clone());
             }
@@ -228,6 +239,28 @@ mode = "encrypted_dir"
         assert!(swept.is_empty());
         assert!(mount.host_is_dir());
         close_vault(&root, "notes", None).unwrap();
+    }
+
+    #[test]
+    fn empty_state_file_reads_as_no_open_sessions() {
+        let (_tmp, root) = vault_root_with(&[]);
+        crate::host_fs::write(root.state_path(), b"").unwrap();
+        assert!(load_runtime_state(&root).unwrap().vaults.is_empty());
+        mark_session_open(&root, "notes", None).unwrap();
+        assert!(load_runtime_state(&root)
+            .unwrap()
+            .vaults
+            .contains_key("notes"));
+    }
+
+    #[test]
+    fn garbage_state_file_is_still_an_error() {
+        let (_tmp, root) = vault_root_with(&[]);
+        crate::host_fs::write(root.state_path(), b"{not json").unwrap();
+        assert!(matches!(
+            load_runtime_state(&root),
+            Err(UprivError::VaultStoreInvalid { .. })
+        ));
     }
 
     #[test]

@@ -183,6 +183,7 @@ There is **no** Seal sidecar, **no** durable `archive/` twin, and **no** `archiv
 | Condition | Action |
 |-----------|--------|
 | Dirty close / leftover `upriv_plain` workspace | `recovery` |
+| `content_hash` differs from header + sealed index | `recovery` (same session). Unlock still opens that `store/`; close records its hash. A missing hash or a read error while hashing does not select recovery |
 | Header/index unreadable | Create new vault from backup only |
 | One chunk tag fail | That file; vault still opens |
 | Successful close | Update `content_hash` + `last_close_ok_at` |
@@ -204,6 +205,31 @@ Related: PRD **RF-53**, **RF-53b**.
 **v1:** mount implementation **Linux (FUSE) + Windows (WinFsp)**. DocumentProvider (Android) in later phases (PRD §3.5).
 
 **Invariant:** in `encrypted_dir`, **never** create persistent regular files in the file manager folder on the vault volume.
+
+**Linux mount:** the FUSE root exposes an empty `.nomedia` that is not a vault file, so Tracker does not index the tree while it is open. A real `.nomedia` in the vault is that file instead. While that folder is mounted, on `OPEN_PURGE_INTERVAL` in the thumbnail module, and again when the mount is detached, Upriv overwrites freedesktop thumbnail-cache PNGs whose `Thumb::URI` is under the mount, syncs that write, then unlinks them (one random pass, the same wipe as §2.10; flash is best-effort). Detaching a leftover Upriv mount does the same purge once, so a killed session does not keep those previews. The cache is outside `store/`. The scan starts and returns at once, with a file-count and time budget, so a bad cache cannot hold close, open, or unmount. A finished wipe of one or more previews writes one info line (`vault_thumbnail_wiped`, with the count and no path). A problem is one warning (`vault_thumbnail_purge_failed`). Neither fails the close or the unmount. A vault with no OS folder does not run this sweep.
+
+**Windows and macOS mounts (not built yet).** Shipping either mount includes thumbnail cleanup for that OS. Do not reuse the freedesktop PNG scanner. Do not wipe a global cache. The same rules apply: only while that vault's OS folder is mounted, on `OPEN_PURGE_INTERVAL`, and once more when the folder is detached; the work returns immediately; one info line with a count and no path when something was removed; one warning when the cleanup cannot finish; close and open still succeed. One overwrite plus sync plus unlink where the cache is a normal file. Flash stays best-effort.
+
+**Windows, when WinFsp exists.** Explorer stores previews in `%LocalAppData%\Microsoft\Windows\Explorer\thumbcache_*.db` (and an index). Each entry starts with `CMMM` and is keyed by a hash, not by a path. Explorer keeps those databases open. Deleting a source file does not remove its preview. There is no per-folder delete, so deleting the `thumbcache_*.db` files is forbidden: that would wipe every thumbnail on the machine. Older Windows, and some network folders, also write a `Thumbs.db` inside the folder. The mount must refuse to create or keep a `Thumbs.db` on the vault folder.
+
+Steps for the Windows mount:
+
+1. Choose WinFsp options so Explorer treats the folder the way a network location is treated, where content thumbnails stay off unless the user turns them on. Confirm that with a picture on the mount and Explorer's extra-large icons. Record the option that did it.
+2. If that default holds, the sweep still has to exist for the case where the user turns network thumbnails on. The period is `OPEN_PURGE_INTERVAL`. Do not skip the sweep because the default is off.
+3. Find a way to drop only the entries for this mount's paths from the open `thumbcache_*.db` files, then overwrite the freed image bytes before the database reuses them. If Explorer's lock or the hash key makes a per-path delete unsafe, stop. The mount must then prevent thumbnail generation. Do not delete or rebuild the whole cache as a fallback.
+4. Refuse `Thumbs.db` (and `thumbs.db`) created on the mount, the same way the Linux root refuses a write to the synthetic `.nomedia`.
+5. Hook the sweep to the mount lifetime already used on Linux: start when the folder is attached, stop when it is dropped, and queue one immediate pass on detach and on a leftover mount at the next vault list. One worker. A second request for a path that is already scanning runs one more pass when that scan finishes. A later request, while a scan has already been running for 30 seconds, logs `vault_thumbnail_purge_failed` once.
+
+**macOS, when a mount exists (macFUSE or FSKit).** Finder and Quick Look store previews under the per-user Darwin cache directory, `com.apple.quicklook.ThumbnailsAgent/com.apple.QuickLook.thumbnailcache/` (`index.sqlite` plus `thumbnails.data` on current macOS). That is not one PNG per file. `qlmanage -r cache` deletes every Quick Look preview on the Mac and must not be called. From Mojave onward that cache sits in a DataVault, so another process may be unable to edit it. `.metadata_never_index` is the Spotlight analogue of `.nomedia`. It does not clear Quick Look. Finder also keeps recently shown thumbnails in memory for about two or three days; that copy is outside this wipe.
+
+Steps for the macOS mount:
+
+1. Add `.metadata_never_index` at the mount root the same way Linux adds a synthetic `.nomedia`: not a vault file, and a real vault file of that name wins. That only addresses Spotlight.
+2. Confirm whether the mount can be kept out of Quick Look (a mount flag or a file Quick Look already skips). Confirm with a picture on the mount, icon view, and Space.
+3. If previews are still written, delete only the rows and bitmap bytes for this mount's paths from `index.sqlite` and `thumbnails.data`. Overwrite those bitmap bytes before the space is reused. If the DataVault or the packed data file makes a per-path delete impossible, stop. The mount must then prevent Quick Look from reading the folder. Do not call `qlmanage -r cache`.
+4. Use the same lifetime, worker, `OPEN_PURGE_INTERVAL` period, detach pass, log lines, and 30-second stuck warning as Windows and Linux.
+
+**iOS and Android** have no OS folder for an encrypted vault. The in-app file manager does not write these caches. Do not add a sweeper there. Android `.nomedia` matters only for files on shared storage, which this mode does not use.
 
 **RAM:** session serves decrypted bytes from RAM; the full unlocked vault working set must fit available memory (see **`warning.encrypted_dir_ram`** and §3.2.2).
 
@@ -933,7 +959,7 @@ Exposed to desktop via `upriv-daemon` stdio JSON-RPC and to mobile via React Nat
 - Close does not create a `.7z`. Export is a separate action.
 - Members are decoded in RAM and written into `store/` through the logical file API. Never extract a decrypted tree under `workspace/` or OS temp.
 - One outer folder (sanitized display name). Vault files sit directly under it, including a user `config.toml`. No settings sidecar. The seed file and `.upriv-workspace.json` are skipped.
-- The same import option examines a `.zip`. `store/header/vault.header` is the store-zip copy (`README.md` and `config.toml` sit beside `store/` and are not copied into the new vault). Any other `.zip` streams ordinary documents into a new `store/`.
+- The same import option examines a `.zip`. `store/header/vault.header` is the store-zip copy (`README.md` and `config.toml` sit beside `store/` and are not copied into the new vault). Any other `.zip` streams ordinary documents into a new `store/`. A symlink inside a `.zip` or a folder is not stored and not followed. A symlink chosen as the source path is refused. The rest of the import continues. Files are sealed in waves, so a crash keeps the last finished wave in `store/`.
 
 ### 5.2 What not to run
 
@@ -1349,6 +1375,12 @@ Upriv (installed)
 
 **Abstraction in `upriv-core`:** there is no `VaultStorage` trait. Desktop paths use `std::fs`. A picked Android folder is a `content://` tree. Rust addresses it as `/upriv-saf-root`. `host_fs` sends that prefix to the mounted `SafFs` bridge, which opens documents on the grant and returns detached file descriptors. The logical path is not created on disk. Do not copy a vault into `filesDir` or OS temp to fake a mount.
 
+**Writes on the bridge:** every rewrite of an existing file (settings, configs, `state.json`, persistence) is a temp file, `fsync`, then rename onto the name — the live file is never truncated in place. DocumentsContract cannot rename onto an existing name, so `SafFs` renames the old document to `<name>.<unix-ms>.replacing`, renames the temp onto `<name>`, then deletes the aside copy. If the drive is pulled between those renames, the next lookup of `<name>` renames the newest aside copy back. Directory `fsync` is not available through the bridge.
+
+**Unplugged drive:** a removed volume answers every lookup as a miss. When an operation misses and the tree's own root document no longer answers, `SafFs` reports `unavailable`. `host_fs` maps that to `NotConnected` with a bridge-only marker, and RPC returns `vault_root_unreachable` (not `vault_root_not_found`). `mountSafRoot` throws `saf_unreachable` before probing. The grant, the active-URI pref, and `.upriv-root` are kept: settings load from `.upriv-root` (custom_root, not on disk). The Gate opens Setup with Custom still selected, shows the error in that screen and in a toast above it, and keeps the grant. Opening the app again with the drive connected continues straight in while that Custom choice is unchanged. Switching to the Documents default keeps that custom grant on the `custom=` line of `.upriv-root` and still shows the folder on the Custom option. If checking that folder finds the volume gone, inspect reports `unreachable` (the reconnect copy, not a writable-location failure) and Retry tries again. A later vault list while that grant is unmounted returns `vault_root_unreachable`, not `vault_root_not_found`. Choosing a different custom folder replaces `custom=` and releases the previous custom grant.
+
+**Who reports `unreachable`:** only Android inspect, when the persistable grant is held and the volume does not answer. The shared disk status and the reconnect copy are not Android-only. iOS security-scoped bookmarks (§9.11) return the same inspect status when the bookmark is still valid and the volume is gone. Do not add a second status. Desktop location, Repair, and Recovery already show that copy if inspect returns `unreachable`. Desktop Rust inspect does not return it. A missing filesystem path is not found. Resolve treats that as an invalid alias, and the Gate opens alias recovery. A deleted folder looks the same, so desktop must not map every missing path to `unreachable`.
+
 ### 9.5 Android — open session (no FUSE)
 
 Same vault body as desktop: rest is `vaults/<id>/store/`. There is **no** OS mount and **no** extract-to-workspace of ciphertext as plaintext tree.
@@ -1361,7 +1393,7 @@ Same vault body as desktop: rest is `vaults/<id>/store/`. There is **no** OS mou
 
 **open (Android):** unlock session against `vault.header`; browse/edit via in-app file manager (or `upriv_plain` workspace). Never copy the vault into `filesDir` / OS temp to fake a mount (SECURITY-PLAINTEXT).
 
-**In-app file manager context menu (mobile vs desktop):** row ⋯ on mobile / right-click on desktop share the same actions (new file/folder, rename, copy path, open in system files, delete last in red) except **Open in terminal** — **desktop only**. Phones have no useful “open folder in terminal” target; keep the action off the React Native menu.
+**In-app file manager context menu (mobile vs desktop):** row ⋯ on mobile / right-click on desktop share the same actions (new file/folder, rename, copy path, open in system files, delete last in red) except **Open in terminal** — **desktop only**. Phones have no useful “open folder in terminal” target; keep the action off the React Native menu. Open in system files and Open in terminal show only when the vault has a real OS folder: when the file manager opens it calls `vault_fs_os_path` on `/`, and a `vault_mount_failed` there or on a later click hides both items. That covers mount disabled, mount failed, and mobile without a mount.
 
 **Explorer selection / dirty cues (desktop + mobile):** the active editor file stays highlighted in the tree with a soft square on-surface wash (~6%, weaker than hover); hover uses `surface-container-highest`. Unsaved editable drafts show a small white dot after the file name (tabs and explorer). Session icon colors (RAM-only): **created** this session (create/import) → `vault-status-open` (green); **modified** (save/rename/move/dirty of an existing path) → accent. Folders inherit from descendants with **created outranking modified** (VS Code-style). A created file that is later edited stays green.
 
@@ -1371,17 +1403,21 @@ Same vault body as desktop: rest is `vaults/<id>/store/`. There is **no** OS mou
 
 **Explorer → editor:** single-click (desktop) / tap (mobile) a file in the tree opens or activates it in the editor (adds a tab if needed, expands ancestor folders, scrolls the tab into view) — same as VS Code reveal.
 
+**Markdown notes (desktop + mobile):** a new file is created as `.md`. A row under the tabs shows the open file's path as breadcrumbs that always start with the vault name (for example `Personal › notes › bank.md`). Each name truncates on its own; when the row is too narrow, earlier crumbs give up width first so the file name stays readable. On `.md` tabs that row also holds a Code | Read control (Code on the left) and, to its right, an outline button. The outline button shows or hides a sidebar on the right of the note, in both views. It lists the note's top-level headings (not those inside quotes, lists or footnotes) in order, each indented under the nearest shallower heading above it. Clicking an entry scrolls Read to that heading, or puts the Code cursor on its line (mobile Code: focus + caret, the OS scrolls it into view). Notes over the preview size cap show no headings. A note the parser cannot read is shown as source in Read, and the outline says it could not be read. Open/closed is per vault (`markdownOutlineOpen`). The choice is one vault-wide `markdownView` (`preview` = Read, `source` = Code) on `.upriv-workspace.json`. Missing and invalid values load as `preview`. Read draws the current draft (CommonMark plus GFM tables, strikethrough, task lists, autolinks, and footnotes) and does not accept typing. A task checkbox toggles its own `[ ]` / `[x]` in the draft, which marks the file unsaved like an edit in Code; read-only notes keep the checkboxes disabled. Inline code and fenced blocks copy on a second click (desktop) or tap (mobile) on the same value within `MARKDOWN_COPY_DOUBLE_TAP_MS` (500 ms, longer than the explorer's 300 ms double-tap), or with one press on their copy control. Images are not loaded — the alt text is shown. A link opens only when clicked, and only for `http`, `https`, and `mailto`. Raw HTML is shown as text. Code is the existing editor.
+
 **Open-tab reorder (desktop + mobile):** drag a tab onto another tab to change strip order (`openTabs`). Desktop: HTML5 DnD. Mobile: long-press (~450ms) then pan. Order is part of `.upriv-workspace.json` persistence. Does not change the active file unless the user also activates a tab.
 
 **Workspace layout persistence (`.upriv-workspace.json`):** logical file at the vault root (encrypted with the vault body in `store/`). Hidden from the in-app explorer/editor (reserved name; create/rename/delete/move/open blocked). **Source of truth = vault tree**, not the JSON — on load, drop tabs/folders/selection that no longer exist; corrupt/unknown `format_version` → start clean. Host mounts FM with `key={vaultId}` so vault switches remount persistence cleanly. Explorer/editor **split %** is **not** per-vault — it lives in app `[ui].file_manager_tree_split_percent` (default 20, clamp 15–65), shared by every vault; dragging the FM grip patches settings on pointer-up (same pattern as dock expand).
 
 | Persist (vault `.upriv-workspace.json`) | Persist (app `settings.toml` `[ui]`) | Do not persist |
 |---------|----------------|----------------|
-| `openTabs` (+ order), `activeTabPath`, `expandedPaths`, `selectedPath` | `file_manager_tree_split_percent` | Unsaved drafts, dirty dots, session created/modified cues, modal UI |
+| `openTabs` (+ order), `activeTabPath`, `expandedPaths`, `selectedPath`, `markdownView` (`preview` or `source`; missing → `preview`), `explorerCollapsed` (missing or not `true` → shown), `markdownOutlineOpen` (missing or not `true` → hidden) | `file_manager_tree_split_percent` | Unsaved drafts, dirty dots, session created/modified cues, modal UI |
 
-**When to write (product):** on each layout action (open/close/reorder tab, expand folder, selection) while the FM is open — skip write if the sanitized snapshot is unchanged. Also flush on FM dismiss, unmount (minimize), and vault close/purge. Split writes to app settings on drag end. Does **not** write on every editor keystroke (drafts are not persisted here).
+**Hide explorer (desktop + mobile):** the explorer header starts with one button: a sidebar icon plus the "Explorer" label. It hides the explorer and its resize grip with no leftover strip; the icon alone moves to the start of the tab bar, and pressing it shows the explorer again. As the header narrows, the label truncates with an ellipsis; once only the icon is left, the four actions (new file, new folder, import files, import folder) wrap to a second row. On desktop, the explorer's right-click menu (empty area / root) also has **Hide explorer**. Per vault (`explorerCollapsed`), because each vault keeps its own layout. Rename and new file/folder type the name in the explorer row, so they show a hidden explorer. The split % is unchanged while hidden.
 
-**When to restore:** when the user **opens the file manager** for that vault (not auto-open on unlock). The shell paints immediately from memory. Hydration reads `.upriv-workspace.json` after paint and applies it only while memory is still the cold-open layout, so an edit made before that read wins. Tabs/folders/focus come back as last saved for that vault; split comes from app settings.
+**When to write (product):** on each layout action (open/close/reorder tab, expand folder, selection, markdown Read/Code, hide/show explorer, show/hide outline) while the FM is open — skip write if the sanitized snapshot is unchanged. Also flush on FM dismiss, unmount (minimize), and vault close/purge. Split writes to app settings on drag end. Does **not** write on every editor keystroke (drafts are not persisted here).
+
+**When to restore:** when the user **opens the file manager** for that vault (not auto-open on unlock). The shell paints immediately from memory. Hydration reads `.upriv-workspace.json` after paint and applies it only while memory is still the cold-open layout, so an edit made before that read wins. Tabs, folders, focus, the markdown Read/Code choice, whether the explorer is hidden, and whether the outline is open come back as last saved for that vault; split comes from app settings.
 
 **Current stage:** layout persistence is live on `store/` via `vault_fs_*` (hidden reserved file; missing/corrupt → start clean). FUSE and the in-app explorer omit `.upriv-workspace.json` and the seed file. Portable `.7z` skips `.upriv-workspace.json` and the seed file; a `.zip` of `store/` keeps the ciphertext as-is.
 
@@ -1413,7 +1449,7 @@ The in-app explorer (copy, move, rename, delete) is the v1 editor on Android. Op
 
 ### 9.8 Android — app config (outside vault)
 
-The persistable grant is held by Android. Rust addresses the chosen folder as `/upriv-saf-root`. The app-home alias `.upriv-root` stores that logical path, not the `content://` URI. `settings.toml` does not store the grant.
+The persistable grant is held by Android. Rust addresses the chosen folder as `/upriv-saf-root`. The app-home alias `.upriv-root` stores that logical path. A `custom=` line in the same file is the last Custom folder (`content://`). `settings.toml` does not store the grant. SharedPreferences keep only `active_uri` (the folder mounted now). Switching to Documents/Upriv keeps `custom=` and that grant. Choosing a different custom folder replaces the line and releases the previous grant.
 
 **Do not** store password. Optional: `last_opened_vault = "vault-example-1"`.
 
@@ -1421,9 +1457,11 @@ The persistable grant is held by Android. Rust addresses the chosen folder as `/
 
 | Event | Detection | Action |
 |-------|-----------|--------|
-| USB disconnected with vault open | `workspace/` exists at previous URI but tree inaccessible | On reconnect: Recovery screen |
-| App killed during close | `<id>.7z.new` present | Recovery: complete or discard `.new` |
-| Orphan workspace | `workspace/` without app in foreground | `7z t` + close or discard |
+| Drive unplugged (app running or at launch) | `vault_root_unreachable` (see §9.4) | Gate opens Setup with Custom still selected. Reopen with the drive connected continues when that choice is unchanged. The grant stays. |
+| Drive pulled during a replace | `<name>.<unix-ms>.replacing` beside a missing `<name>` | Next lookup restores the newest aside copy |
+| `settings.toml` empty or unparseable | `.upriv/` is incomplete | Repair; default **Reset settings, keep vaults** writes a fresh `settings.toml` and keeps `vaults/`, backups, groups, logs. Rename / delete stay available |
+| Empty `state.json` | Torn write | Read as no open sessions; dirty close still uses lock files |
+| App killed with a vault open | `state.json` open record + stale lock | Recovery (dirty close) on next list |
 
 ### 9.10 Android — manual E2E tests
 
@@ -1431,6 +1469,8 @@ The persistable grant is held by Android. Rust addresses the chosen folder as `/
 - [ ] “Open folder” button opens manager at `workspace/` (≥2 apps)
 - [ ] Edit file in manager → close vault → reopen → change persisted in `store/`
 - [ ] Disconnect OTG with vault open → reconnect → recovery
+- [ ] Data folder on OTG → unplug → restart app → Setup with Custom still selected → reconnect → reopen opens the same folder when that choice was not changed
+- [ ] Switch that data folder to the Documents default → Custom still shows the previous folder → unplug that drive → select Custom → Retry → plug it back → Retry opens it
 - [ ] Plan B: export `.7z` → ZArchiver opens it with the vault password
 - [ ] Wrong password on lock (`always_prompt`) does not change `store/`
 
@@ -1439,6 +1479,7 @@ The persistable grant is held by Android. Rust addresses the chosen folder as `/
 - Same vault layout on HD/cloud visible to Files.
 - App **only** via App Store / TestFlight — **no** `app/iOS` binary on HD.
 - Folder access via **UIDocumentPicker** / security-scoped bookmarks (analogous to SAF).
+- A held bookmark whose volume is gone uses the same inspect status `unreachable` and reconnect copy as Android (§9.4). A revoked bookmark is `unauthorized`. Do not add an iOS-only status.
 - Workspace on accessible volume when permission allows; Intent/limitations differ from Android.
 
 ---

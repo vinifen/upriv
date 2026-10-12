@@ -34,7 +34,9 @@ pub fn relocate_upriv_dir(source_parent: &Path, dest_parent: &Path) -> Result<Up
     if !dir_exists_nofollow(&source)? {
         return Ok(UprivDirRelocate::Absent);
     }
-    if dir_exists_nofollow(&dest)? {
+    // A file (or anything else that is not a missing path) already occupies the
+    // destination. Leave it so Repair can rename or delete it. A symlink is refused.
+    if destination_occupied(&dest)? {
         return Ok(UprivDirRelocate::DestinationOccupied);
     }
     if same_dir(source_parent, dest_parent) {
@@ -61,6 +63,16 @@ pub fn relocate_upriv_dir(source_parent: &Path, dest_parent: &Path) -> Result<Up
     }
     crate::host_fs::remove_dir_all(&source).map_err(UprivError::Io)?;
     Ok(UprivDirRelocate::Moved)
+}
+
+/// True when `path` exists and is not a symlink. A symlink is an error.
+fn destination_occupied(path: &Path) -> Result<bool> {
+    match crate::host_fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_symlink() => Err(io_other("refusing a symlink")),
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(UprivError::Io(error)),
+    }
 }
 
 fn dir_exists_nofollow(path: &Path) -> Result<bool> {
@@ -264,6 +276,21 @@ mod tests {
         assert_eq!(
             crate::host_fs::read(dst_parent.path().join(".upriv/settings.toml")).unwrap(),
             b"already\n"
+        );
+    }
+
+    #[test]
+    fn file_at_destination_stays_so_repair_can_remove_it() {
+        let src_parent = tempfile::tempdir().unwrap();
+        let dst_parent = tempfile::tempdir().unwrap();
+        write_tree(src_parent.path());
+        crate::host_fs::write(dst_parent.path().join(".upriv"), b"not a directory").unwrap();
+        let outcome = relocate_upriv_dir(src_parent.path(), dst_parent.path()).unwrap();
+        assert_eq!(outcome, UprivDirRelocate::DestinationOccupied);
+        assert!(src_parent.path().join(".upriv/settings.toml").is_file());
+        assert_eq!(
+            crate::host_fs::read(dst_parent.path().join(".upriv")).unwrap(),
+            b"not a directory"
         );
     }
 

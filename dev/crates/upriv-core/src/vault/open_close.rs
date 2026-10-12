@@ -25,6 +25,19 @@ use crate::store::{
 use super::backup::{backup_on_close, list_backups};
 use super::persistence::{load_vault_persistence, save_vault_persistence, VaultPersistence};
 
+/// Unmount, then start thumbnail cleanup for that path.
+/// The cache lives outside the mount. Cleanup returns immediately, so a bad
+/// cache cannot hold this close open.
+fn discard_mount(mount: Option<crate::mount::MountedVault>) {
+    let path = mount
+        .as_ref()
+        .map(|mounted| mounted.mount_point().to_path_buf());
+    drop(mount);
+    if let Some(path) = path {
+        crate::mount::purge_mount_thumbnails(&path);
+    }
+}
+
 fn vault_dir_or_not_found(root: &VaultRoot, vault_id: &str) -> Result<std::path::PathBuf> {
     let dir = root.vault_dir(vault_id)?;
     if !dir.host_is_dir() {
@@ -62,10 +75,11 @@ fn try_attach_mount(root: &VaultRoot, vault_id: &str, vault_dir: &std::path::Pat
             }) {
                 Ok(()) => {
                     if let Err(error) = mark_session_open(root, vault_id, Some(path)) {
-                        let _ = with_open_session(vault_dir, |session| {
-                            drop(session.mount.take());
-                            Ok(())
-                        });
+                        let mount =
+                            with_open_session(vault_dir, |session| Ok(session.mount.take()))
+                                .ok()
+                                .flatten();
+                        discard_mount(mount);
                         let _ = take_session(vault_dir);
                         let _ = mark_session_closed(root, vault_id);
                         return Err(error);
@@ -74,6 +88,10 @@ fn try_attach_mount(root: &VaultRoot, vault_id: &str, vault_dir: &std::path::Pat
                 }
                 Err(error) => {
                     log_event(LogLevel::Warn, "vault_mount_failed", &[("id", vault_id)]);
+                    let mount = with_open_session(vault_dir, |session| Ok(session.mount.take()))
+                        .ok()
+                        .flatten();
+                    discard_mount(mount);
                     let _ = take_session(vault_dir);
                     let _ = mark_session_closed(root, vault_id);
                     Err(error)
@@ -304,8 +322,9 @@ fn close_vault_inner(
     if let Err(error) = persist {
         if matches!(kind, CloseKind::Shutdown) {
             // Quit must exit. Drop the session and its mount; do not put them back.
-            drop(session.mount.take());
+            let mount = session.mount.take();
             drop(session);
+            discard_mount(mount);
             return Err(error);
         }
         let _ = insert_session(session);
@@ -316,16 +335,16 @@ fn close_vault_inner(
     let mount = session.mount.take();
     if let Err(error) = mark_session_closed(root, vault_id) {
         if matches!(kind, CloseKind::Shutdown) {
-            drop(mount);
             drop(session);
+            discard_mount(mount);
             return Err(error);
         }
         session.mount = mount;
         let _ = insert_session(session);
         return Err(error);
     }
-    drop(mount);
     drop(session);
+    discard_mount(mount);
     log_event(LogLevel::Info, "vault_closed", &[("id", vault_id)]);
     Ok(CloseVaultOutcome { backup_failed })
 }
@@ -522,5 +541,215 @@ mode = "encrypted_dir"
                 .map(|entry| &entry.file_name)
                 .collect::<Vec<_>>()
         );
+    }
+
+    fn listed_session(root: &crate::paths::VaultRoot, id: &str) -> Option<&'static str> {
+        crate::vault::list_vaults(root)
+            .unwrap()
+            .into_iter()
+            .find(|item| item.id == id)
+            .expect("vault row")
+            .session
+    }
+
+    fn copy_tree(src: &std::path::Path, dst: &std::path::Path) {
+        std::fs::create_dir_all(dst).unwrap();
+        for entry in std::fs::read_dir(src).unwrap() {
+            let entry = entry.unwrap();
+            let file_type = entry.file_type().unwrap();
+            let to = dst.join(entry.file_name());
+            if file_type.is_symlink() {
+                continue;
+            }
+            if file_type.is_dir() {
+                copy_tree(&entry.path(), &to);
+            } else if file_type.is_file() {
+                std::fs::copy(entry.path(), &to).unwrap();
+            }
+        }
+    }
+
+    fn replace_tree(src: &std::path::Path, dst: &std::path::Path) {
+        std::fs::remove_dir_all(dst).unwrap();
+        copy_tree(src, dst);
+    }
+
+    #[test]
+    fn rolled_back_store_is_recovery_and_unlock_keeps_that_store() {
+        let (tmp, root) = vault_root_with(&[]);
+        create_vault(
+            &root,
+            sample_config("notes", "Notes"),
+            b"pass-word-ok",
+            KdfUnlockPreset::M32,
+        )
+        .unwrap();
+        open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        crate::vault::fs_write_file(&root, "notes", "/notes.txt", b"generation-one").unwrap();
+        close_vault(&root, "notes", None).unwrap();
+        assert_eq!(listed_session(&root, "notes"), None);
+
+        let store = root.vault_store_dir("notes").unwrap();
+        let snapshot = tmp.path().join("store-generation-one");
+        copy_tree(&store, &snapshot);
+
+        open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        crate::vault::fs_write_file(&root, "notes", "/notes.txt", b"generation-two").unwrap();
+        close_vault(&root, "notes", None).unwrap();
+        let newer = crate::vault::load_vault_persistence(root.vault_dir("notes").unwrap())
+            .unwrap()
+            .expect("persistence")
+            .content_hash
+            .expect("content_hash");
+        let rolled_back_hash = crate::store::content_hash_hex(&snapshot).unwrap();
+        assert_ne!(rolled_back_hash, newer);
+
+        replace_tree(&snapshot, &store);
+        let persistence = crate::vault::load_vault_persistence(root.vault_dir("notes").unwrap())
+            .unwrap()
+            .expect("persistence");
+        assert_eq!(persistence.content_hash.as_deref(), Some(newer.as_str()));
+        assert_eq!(listed_session(&root, "notes"), Some("recovery"));
+
+        open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        assert_eq!(
+            crate::vault::fs_read_file(&root, "notes", "/notes.txt").unwrap(),
+            b"generation-one"
+        );
+        assert_eq!(listed_session(&root, "notes"), Some("open"));
+        let during_open = crate::vault::load_vault_persistence(root.vault_dir("notes").unwrap())
+            .unwrap()
+            .expect("persistence")
+            .content_hash;
+        assert_eq!(during_open.as_deref(), Some(newer.as_str()));
+        close_vault(&root, "notes", None).unwrap();
+
+        assert_eq!(listed_session(&root, "notes"), None);
+        let accepted = crate::vault::load_vault_persistence(root.vault_dir("notes").unwrap())
+            .unwrap()
+            .expect("persistence")
+            .content_hash
+            .expect("content_hash");
+        assert_eq!(accepted, crate::store::content_hash_hex(&store).unwrap());
+        assert_ne!(accepted, newer);
+        open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        assert_eq!(
+            crate::vault::fs_read_file(&root, "notes", "/notes.txt").unwrap(),
+            b"generation-one"
+        );
+        close_vault(&root, "notes", None).unwrap();
+    }
+
+    #[test]
+    fn a_damaged_chunk_is_not_content_hash_recovery() {
+        let (_tmp, root) = vault_root_with(&[]);
+        create_vault(
+            &root,
+            sample_config("notes", "Notes"),
+            b"pass-word-ok",
+            KdfUnlockPreset::M32,
+        )
+        .unwrap();
+        let store = root.vault_store_dir("notes").unwrap();
+        let before = crate::store::content_hash_hex(&store).unwrap();
+        let mut flipped = false;
+        let mut pending = vec![store.join(crate::store::DATA_DIR_NAME)];
+        while let Some(dir) = pending.pop() {
+            for entry in std::fs::read_dir(&dir).unwrap() {
+                let entry = entry.unwrap();
+                let path = entry.path();
+                let file_type = entry.file_type().unwrap();
+                if file_type.is_dir() {
+                    pending.push(path);
+                    continue;
+                }
+                if path.extension().and_then(|ext| ext.to_str()) != Some("blob") {
+                    continue;
+                }
+                let mut bytes = std::fs::read(&path).unwrap();
+                assert!(!bytes.is_empty());
+                let last = bytes.len() - 1;
+                bytes[last] ^= 0xff;
+                std::fs::write(&path, bytes).unwrap();
+                flipped = true;
+                break;
+            }
+            if flipped {
+                break;
+            }
+        }
+        assert!(flipped);
+        assert_eq!(crate::store::content_hash_hex(&store).unwrap(), before);
+        assert_eq!(listed_session(&root, "notes"), None);
+    }
+
+    #[test]
+    fn a_missing_content_hash_or_unreadable_store_is_not_recovery() {
+        let (_tmp, root) = vault_root_with(&[]);
+        create_vault(
+            &root,
+            sample_config("notes", "Notes"),
+            b"pass-word-ok",
+            KdfUnlockPreset::M32,
+        )
+        .unwrap();
+        let vault_dir = root.vault_dir("notes").unwrap();
+        let mut persistence = crate::vault::load_vault_persistence(&vault_dir)
+            .unwrap()
+            .expect("persistence");
+        persistence.content_hash = None;
+        super::save_vault_persistence(&vault_dir, &persistence).unwrap();
+        let store = root.vault_store_dir("notes").unwrap();
+        let index = store
+            .join(crate::store::INDEX_DIR_NAME)
+            .join(crate::store::INDEX_FILE_NAME);
+        std::fs::write(&index, b"torn").unwrap();
+        assert_eq!(listed_session(&root, "notes"), None);
+
+        let header = store
+            .join(crate::store::HEADER_DIR_NAME)
+            .join(crate::store::HEADER_FILE_NAME);
+        std::fs::remove_file(&header).unwrap();
+        std::fs::remove_file(
+            store
+                .join(crate::store::HEADER_DIR_NAME)
+                .join(format!("{}.copy", crate::store::HEADER_FILE_NAME)),
+        )
+        .unwrap();
+        assert!(crate::store::content_hash_hex(&store).is_err());
+        assert_eq!(listed_session(&root, "notes"), None);
+    }
+
+    #[test]
+    fn a_torn_primary_index_still_unlocks_and_close_clears_recovery() {
+        let (_tmp, root) = vault_root_with(&[]);
+        create_vault(
+            &root,
+            sample_config("notes", "Notes"),
+            b"pass-word-ok",
+            KdfUnlockPreset::M32,
+        )
+        .unwrap();
+        open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        crate::vault::fs_write_file(&root, "notes", "/notes.txt", b"kept").unwrap();
+        close_vault(&root, "notes", None).unwrap();
+        assert_eq!(listed_session(&root, "notes"), None);
+
+        let store = root.vault_store_dir("notes").unwrap();
+        let index = store
+            .join(crate::store::INDEX_DIR_NAME)
+            .join(crate::store::INDEX_FILE_NAME);
+        let original = std::fs::read(&index).unwrap();
+        std::fs::write(&index, b"torn").unwrap();
+        assert_eq!(listed_session(&root, "notes"), Some("recovery"));
+
+        open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        assert_eq!(
+            crate::vault::fs_read_file(&root, "notes", "/notes.txt").unwrap(),
+            b"kept"
+        );
+        assert_eq!(std::fs::read(&index).unwrap(), original);
+        close_vault(&root, "notes", None).unwrap();
+        assert_eq!(listed_session(&root, "notes"), None);
     }
 }

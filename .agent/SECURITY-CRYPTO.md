@@ -148,6 +148,8 @@ Keep: `content_hash`, `last_close_ok_at` (recovery A). `open` is session, not a 
 
 **`content_hash`** = SHA-256 of `vault.header` bytes **concatenated with** the primary sealed index (`root.idx.enc`, or `root.idx.enc.copy` when the primary file is absent). Chunk bytes are **not** in the hash. It is a dirty-close / recovery signal, **not** a MAC of the whole tree. Bitrot inside one `*.blob` is a per-chunk tag fail (recovery B), not a `content_hash` mismatch.
 
+The vault list recomputes this hash while the vault is closed. A mismatch uses the same recovery session as a dirty close. `open_vault` still unlocks that `store/`; the next successful close records the hash of the store that was unlocked. A missing `content_hash`, or a read error while hashing, does not select recovery. `persistence.json` is ordinary files beside `store/`, so this catches a replaced folder (including a backup unpacked over the live store). It is not a MAC: someone who can edit both the store and the hash can make them match.
+
 PRD/SDD still mention Seal — **this file wins.**
 
 ### Recovery (no archive twin)

@@ -20,13 +20,13 @@ interface VaultRootIncompleteReplacePanelProps {
    * No default — callers must choose so Apply/Continue copy cannot drift by accident.
    */
   primaryAction: VaultRootConfirmAction;
-  /** Disable rename/delete radios while parent commit is busy or blocked. */
+  /** Disable the policy radios while parent commit is busy or blocked. */
   disabled?: boolean;
 }
 
 /**
  * Shared “incomplete `.upriv/`” panel (Data folder, Setup, Repair).
- * Rename / delete radios under the active vault-root option — not a separate modal step.
+ * Reset settings / rename / delete radios under the active vault-root option — not a separate modal step.
  */
 export function VaultRootIncompleteReplacePanel({
   context,
@@ -68,11 +68,20 @@ export function VaultRootIncompleteReplacePanel({
       >
         <PolicyRadioOption
           groupName={repairPolicyGroup}
+          value="reset_settings"
+          checked={replacePolicy === "reset_settings"}
+          title={t("modal.vault_root_repair.option_reset_settings")}
+          description={t("modal.vault_root_repair.reset_settings_hint")}
+          badge="default"
+          disabled={disabled}
+          onSelect={() => onReplacePolicyChange("reset_settings")}
+        />
+        <PolicyRadioOption
+          groupName={repairPolicyGroup}
           value="rename"
           checked={replacePolicy === "rename"}
           title={t("modal.vault_root_repair.option_rename")}
           description={t("modal.vault_root_repair.rename_hint")}
-          badge="default"
           disabled={disabled}
           onSelect={() => onReplacePolicyChange("rename")}
         />

@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState, type DragEvent } from "react";
+import { useEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
 import { Icon } from "@/components/icons";
 import { ContextMenu, IconButton, type ContextMenuItem } from "@/components/ui";
 import { useTranslation } from "@/i18n";
+import { createSmoothScroller, wheelDeltaPx } from "@/lib/smoothWheelScroll";
 import {
   fileBaseName,
   fileTabMenuAction,
@@ -19,6 +20,8 @@ interface FileManagerTabBarProps {
   isPathPending: (path: string) => boolean;
   onSave?: () => void;
   showSave?: boolean;
+  /** Pinned before the tabs (show-explorer toggle while the explorer is hidden). */
+  leading?: ReactNode;
 }
 
 interface TabMenuState {
@@ -34,6 +37,7 @@ export function FileManagerTabBar({
   isPathPending,
   onSave,
   showSave = false,
+  leading,
 }: FileManagerTabBarProps) {
   const { t } = useTranslation();
   const { openTabs, activeTabPath } = workspace;
@@ -55,22 +59,22 @@ export function FileManagerTabBar({
     const el = tablistRef.current;
     if (!el) return;
 
+    const scroller = createSmoothScroller(el);
     const onWheel = (event: WheelEvent) => {
-      const maxScroll = el.scrollWidth - el.clientWidth;
-      if (maxScroll <= 0) return;
+      if (el.scrollWidth <= el.clientWidth) return;
 
-      const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
+      const { x, y } = wheelDeltaPx(event, el);
+      const delta = Math.abs(x) > Math.abs(y) ? x : y;
       if (delta === 0) return;
 
-      const next = Math.min(maxScroll, Math.max(0, el.scrollLeft + delta));
-      if (next === el.scrollLeft) return;
-
-      el.scrollLeft = next;
-      event.preventDefault();
+      if (scroller.scrollBy(delta, 0)) event.preventDefault();
     };
 
     el.addEventListener("wheel", onWheel, { passive: false });
-    return () => el.removeEventListener("wheel", onWheel);
+    return () => {
+      el.removeEventListener("wheel", onWheel);
+      scroller.dispose();
+    };
   }, [openTabs.length]);
 
   const clearTabDrag = () => {
@@ -79,10 +83,15 @@ export function FileManagerTabBar({
     setDropTargetPath(null);
   };
 
+  const leadingSlot = leading ? (
+    <div className="flex min-h-8 shrink-0 self-stretch bg-surface-container">{leading}</div>
+  ) : null;
+
   if (openTabs.length === 0) {
     return (
-      <div className="flex h-8 shrink-0 items-center bg-surface-container-high px-3 md:px-4">
-        <span className="text-xs text-on-surface-variant">
+      <div className="flex h-8 shrink-0 items-center bg-surface-container-high">
+        {leadingSlot}
+        <span className="px-3 text-xs text-on-surface-variant md:px-4">
           {t("modal.file_manager.tabs.empty")}
         </span>
       </div>
@@ -92,6 +101,7 @@ export function FileManagerTabBar({
   return (
     /* min-h-8 (not fixed h-8): thin overflow scrollbar grows the tab strip downward into the editor. */
     <div className="flex min-h-8 shrink-0 items-stretch bg-surface-container-high">
+      {leadingSlot}
       <div
         ref={tablistRef}
         className="file-manager-tab-scroll flex min-h-8 min-w-0 flex-1 items-stretch bg-surface-container"
@@ -172,7 +182,8 @@ export function FileManagerTabBar({
                   onWorkspaceAction({ type: "set_active_tab", path });
                 }}
                 className={[
-                  "flex min-w-0 flex-1 cursor-grab items-center gap-1.5 px-2 text-left text-xs transition-colors active:cursor-grabbing",
+                  "flex min-w-0 flex-1 items-center gap-1.5 px-2 text-left text-xs transition-colors",
+                  dragSourcePath ? "cursor-grabbing" : "cursor-pointer",
                   isActive
                     ? "text-on-surface"
                     : "text-on-surface-variant hover:bg-surface-container-highest hover:text-on-surface",
@@ -216,12 +227,12 @@ export function FileManagerTabBar({
         })}
       </div>
       {showSave && onSave ? (
-        <div className="flex min-w-0 shrink-0 items-center justify-center self-stretch bg-surface-container-high px-1.5">
+        <div className="flex min-w-0 shrink-0 self-stretch bg-surface-container-high">
           <IconButton
             label={saveLabel}
             size="sm"
             variant="ghost"
-            className="!h-7 !w-8 !min-h-7 !min-w-8"
+            className="!h-auto !min-h-8 !w-[3.25rem] !min-w-[3.25rem] !rounded-none self-stretch hover:!bg-surface-container-highest"
             onClick={onSave}
           >
             <Icon name="save" size={14} />

@@ -1,14 +1,28 @@
-import { useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type DragEvent,
+  type ReactNode,
+  type RefObject,
+} from "react";
 import { useTranslation } from "@/i18n";
 import { useErrorToast } from "@/hooks/useErrorToast";
-import { fileBaseName } from "@upriv/shared";
+import { fileBaseName, vaultFileLanguageFromPath } from "@upriv/shared";
 import { LoadingBudgetHint } from "@/components/ui";
 import { allowFileManagerDrop, beginOsFileImport } from "../lib/osFileDrop";
 import { osFileImportParentPath } from "../lib/osFileImportTarget";
 import type { FileManagerApi } from "../hooks/useVaultFileManager";
+import { EditorPathBar } from "./EditorPathBar";
+import { MarkdownOutlinePanel, MarkdownOutlineToggle } from "./MarkdownOutline";
+import { MarkdownPreview, type MarkdownPreviewHandle } from "./MarkdownPreview";
+import { MarkdownViewToggle } from "./MarkdownViewToggle";
 
 interface FileEditorPaneProps {
   fm: FileManagerApi;
+  /** Vault display name — first crumb of the path row. */
+  vaultName: string;
 }
 
 const EDITOR_LINE_CLASS = "font-mono text-[13px] leading-5";
@@ -20,12 +34,59 @@ function lineCount(content: string): number {
   return content.split("\n").length;
 }
 
+const MIRROR_STYLE_PROPS = [
+  "paddingTop",
+  "paddingRight",
+  "paddingBottom",
+  "paddingLeft",
+  "fontFamily",
+  "fontSize",
+  "fontWeight",
+  "fontStyle",
+  "letterSpacing",
+  "lineHeight",
+  "tabSize",
+  "wordSpacing",
+] as const;
+
+/** Top of the line holding `offset`. The textarea soft-wraps, so measure a hidden copy. */
+function textareaLineTop(textarea: HTMLTextAreaElement, offset: number): number {
+  const style = window.getComputedStyle(textarea);
+  const mirror = document.createElement("div");
+  for (const prop of MIRROR_STYLE_PROPS) mirror.style[prop] = style[prop];
+  Object.assign(mirror.style, {
+    position: "absolute",
+    visibility: "hidden",
+    top: "0",
+    left: "-99999px",
+    boxSizing: "border-box",
+    width: `${textarea.clientWidth}px`,
+    whiteSpace: "pre-wrap",
+    overflowWrap: "break-word",
+  });
+  mirror.textContent = textarea.value.slice(0, offset);
+  const marker = document.createElement("span");
+  marker.textContent = "\u200b";
+  mirror.appendChild(marker);
+  document.body.appendChild(mirror);
+  const top = marker.offsetTop - (parseFloat(style.paddingTop) || 0);
+  mirror.remove();
+  return top;
+}
+
+function jumpTextareaTo(textarea: HTMLTextAreaElement, offset: number) {
+  textarea.focus({ preventScroll: true });
+  textarea.setSelectionRange(offset, offset);
+  textarea.scrollTo({ top: Math.max(0, textareaLineTop(textarea, offset)), behavior: "smooth" });
+}
+
 interface EditorWithLineNumbersProps {
   content: string;
   fileName: string;
   ariaLabel: string;
   readOnly?: boolean;
   onChange: (content: string) => void;
+  textareaRef: RefObject<HTMLTextAreaElement>;
 }
 
 function EditorWithLineNumbers({
@@ -34,8 +95,8 @@ function EditorWithLineNumbers({
   ariaLabel,
   readOnly = false,
   onChange,
+  textareaRef,
 }: EditorWithLineNumbersProps) {
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const gutterRef = useRef<HTMLDivElement>(null);
 
   const lines = useMemo(() => lineCount(content), [content]);
@@ -61,7 +122,7 @@ function EditorWithLineNumbers({
         style={{
           left: GUTTER_INSET,
           width: `${gutterWidthCh}ch`,
-          paddingTop: "0.5rem",
+          paddingTop: "0.25rem",
           paddingBottom: "0.5rem",
         }}
       >
@@ -81,7 +142,7 @@ function EditorWithLineNumbers({
         }}
         className={[
           /* Absolute fill — only this pane scrolls; parent must not grow with line count. */
-          "absolute inset-0 h-full w-full resize-none overflow-x-hidden overflow-y-auto bg-transparent py-2 pr-4 text-on-surface outline-none md:pr-5",
+          "absolute inset-0 h-full w-full resize-none overflow-x-hidden overflow-y-auto bg-transparent pb-2 pr-4 pt-1 text-on-surface outline-none md:pr-5",
           EDITOR_LINE_CLASS,
         ].join(" ")}
         aria-label={ariaLabel}
@@ -158,7 +219,27 @@ function ViewerDropZone({ fm, children }: { fm: FileManagerApi; children: ReactN
   );
 }
 
-export function FileEditorPane({ fm }: FileEditorPaneProps) {
+function ViewerNotice({
+  kicker,
+  body,
+  children,
+}: {
+  kicker: string;
+  body: string;
+  children?: ReactNode;
+}) {
+  return (
+    <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 bg-surface-container-high px-6 text-center">
+      <p className="font-mono text-[10px] uppercase tracking-widest text-on-surface-variant">
+        {kicker}
+      </p>
+      <p className="max-w-sm text-sm text-on-surface-variant">{body}</p>
+      {children}
+    </div>
+  );
+}
+
+export function FileEditorPane({ fm, vaultName }: FileEditorPaneProps) {
   const { t } = useTranslation();
   const {
     workspace,
@@ -176,6 +257,8 @@ export function FileEditorPane({ fm }: FileEditorPaneProps) {
     importBudget,
   } = fm;
   const activeTabPath = workspace.activeTabPath;
+  const previewRef = useRef<MarkdownPreviewHandle>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     if (!activeTabPath) return;
@@ -192,14 +275,10 @@ export function FileEditorPane({ fm }: FileEditorPaneProps) {
   if (!activeTabPath) {
     return (
       <ViewerDropZone fm={fm}>
-        <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 bg-surface-container-high px-6 text-center">
-          <p className="font-mono text-[10px] uppercase tracking-widest text-on-surface-variant">
-            {t("modal.file_manager.viewer.empty_kicker")}
-          </p>
-          <p className="max-w-sm text-sm text-on-surface-variant">
-            {t("modal.file_manager.viewer.empty_body")}
-          </p>
-        </div>
+        <ViewerNotice
+          kicker={t("modal.file_manager.viewer.empty_kicker")}
+          body={t("modal.file_manager.viewer.empty_body")}
+        />
       </ViewerDropZone>
     );
   }
@@ -212,93 +291,56 @@ export function FileEditorPane({ fm }: FileEditorPaneProps) {
   const importing = isImportPending(activeTabPath);
   const processing = isImportProcessing(activeTabPath);
 
+  const fileNotice = (kicker: string, body: string, extra?: ReactNode) => (
+    <ViewerDropZone fm={fm}>
+      <EditorPathBar vaultName={vaultName} path={activeTabPath} />
+      <ViewerNotice kicker={kicker} body={body}>
+        {extra}
+      </ViewerNotice>
+    </ViewerDropZone>
+  );
+
   if (importing) {
-    return (
-      <ViewerDropZone fm={fm}>
-        <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 bg-surface-container-high px-6 text-center">
-          <p className="font-mono text-[10px] uppercase tracking-widest text-on-surface-variant">
-            {t(
-              processing
-                ? "modal.file_manager.import.loading_kicker"
-                : "modal.file_manager.import.queued_kicker",
-            )}
-          </p>
-          <p className="max-w-sm text-sm text-on-surface-variant">
-            {processing
-              ? t("modal.file_manager.import.loading_body")
-              : t("modal.file_manager.import.queued_body", { name: fileName })}
-          </p>
-          {processing && importBudget.visible ? (
-            <LoadingBudgetHint
-              budgetMs={importBudget.budgetMs}
-              remainingMs={importBudget.remainingMs}
-            />
-          ) : null}
-        </div>
-      </ViewerDropZone>
+    return fileNotice(
+      t(
+        processing
+          ? "modal.file_manager.import.loading_kicker"
+          : "modal.file_manager.import.queued_kicker",
+      ),
+      processing
+        ? t("modal.file_manager.import.loading_body")
+        : t("modal.file_manager.import.queued_body", { name: fileName }),
+      processing && importBudget.visible ? (
+        <LoadingBudgetHint
+          budgetMs={importBudget.budgetMs}
+          remainingMs={importBudget.remainingMs}
+        />
+      ) : null,
     );
   }
 
   if (!isFileContentReady(activeTabPath)) {
-    return (
-      <ViewerDropZone fm={fm}>
-        <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 bg-surface-container-high px-6 text-center">
-          <p className="font-mono text-[10px] uppercase tracking-widest text-on-surface-variant">
-            {t("modal.file_manager.viewer.loading_kicker")}
-          </p>
-          <p className="max-w-sm text-sm text-on-surface-variant">
-            {t("modal.file_manager.viewer.loading_body", { name: fileName })}
-          </p>
-        </div>
-      </ViewerDropZone>
+    return fileNotice(
+      t("modal.file_manager.viewer.loading_kicker"),
+      t("modal.file_manager.viewer.loading_body", { name: fileName }),
     );
   }
 
-  if (!viewable) {
-    return (
-      <ViewerDropZone fm={fm}>
-        <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 bg-surface-container-high px-6 text-center">
-          <p className="font-mono text-[10px] uppercase tracking-widest text-on-surface-variant">
-            {t("modal.file_manager.viewer.preview_unavailable_kicker")}
-          </p>
-          <p className="max-w-sm text-sm text-on-surface-variant">
-            {t("modal.file_manager.viewer.preview_unavailable_body", { name: fileName })}
-          </p>
-        </div>
-      </ViewerDropZone>
+  if (!viewable || (isImage && !loadError && !content)) {
+    return fileNotice(
+      t("modal.file_manager.viewer.preview_unavailable_kicker"),
+      t("modal.file_manager.viewer.preview_unavailable_body", { name: fileName }),
     );
   }
 
   if (loadError) {
-    return (
-      <ViewerDropZone fm={fm}>
-        <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 bg-surface-container-high px-6 text-center">
-          <p className="font-mono text-[10px] uppercase tracking-widest text-on-surface-variant">
-            {t("modal.file_manager.viewer.read_failed_kicker")}
-          </p>
-          <p className="max-w-sm text-sm text-on-surface-variant">{loadError}</p>
-        </div>
-      </ViewerDropZone>
-    );
+    return fileNotice(t("modal.file_manager.viewer.read_failed_kicker"), loadError);
   }
 
   if (isImage) {
-    if (!content) {
-      return (
-        <ViewerDropZone fm={fm}>
-          <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 bg-surface-container-high px-6 text-center">
-            <p className="font-mono text-[10px] uppercase tracking-widest text-on-surface-variant">
-              {t("modal.file_manager.viewer.preview_unavailable_kicker")}
-            </p>
-            <p className="max-w-sm text-sm text-on-surface-variant">
-              {t("modal.file_manager.viewer.preview_unavailable_body", { name: fileName })}
-            </p>
-          </div>
-        </ViewerDropZone>
-      );
-    }
     return (
       <ViewerDropZone fm={fm}>
+        <EditorPathBar vaultName={vaultName} path={activeTabPath} />
         <ImagePreview
           src={content}
           fileName={fileName}
@@ -308,19 +350,66 @@ export function FileEditorPane({ fm }: FileEditorPaneProps) {
     );
   }
 
+  const markdownFile = vaultFileLanguageFromPath(activeTabPath) === "markdown";
+  const showPreview = markdownFile && workspace.markdownView === "preview";
+  const showOutline = markdownFile && workspace.markdownOutlineOpen;
+
   return (
     <ViewerDropZone fm={fm}>
-      <EditorWithLineNumbers
-        key={activeTabPath}
-        content={content}
-        fileName={fileName}
-        ariaLabel={t("modal.file_manager.viewer.editor_label", { name: fileName })}
-        readOnly={writesLocked}
-        onChange={(next) => {
-          if (writesLocked) return;
-          dispatch({ type: "set_editor_draft", path: activeTabPath, content: next });
-        }}
-      />
+      <EditorPathBar vaultName={vaultName} path={activeTabPath}>
+        {markdownFile ? (
+          <>
+            <MarkdownViewToggle
+              mode={workspace.markdownView}
+              onChange={(view) => dispatch({ type: "set_markdown_view", view })}
+            />
+            <MarkdownOutlineToggle
+              open={workspace.markdownOutlineOpen}
+              onChange={(open) => dispatch({ type: "set_markdown_outline_open", open })}
+            />
+          </>
+        ) : null}
+      </EditorPathBar>
+      <div className="flex min-h-0 flex-1 overflow-hidden">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+          {showPreview ? (
+            <MarkdownPreview
+              key={activeTabPath}
+              ref={previewRef}
+              markdown={content}
+              onCopyFailed={() => fm.showToast(t("modal.file_manager.markdown.copy_failed"))}
+              onChange={
+                writesLocked
+                  ? undefined
+                  : (next) =>
+                      dispatch({ type: "set_editor_draft", path: activeTabPath, content: next })
+              }
+            />
+          ) : (
+            <EditorWithLineNumbers
+              key={activeTabPath}
+              textareaRef={textareaRef}
+              content={content}
+              fileName={fileName}
+              ariaLabel={t("modal.file_manager.viewer.editor_label", { name: fileName })}
+              readOnly={writesLocked}
+              onChange={(next) => {
+                if (writesLocked) return;
+                dispatch({ type: "set_editor_draft", path: activeTabPath, content: next });
+              }}
+            />
+          )}
+        </div>
+        {showOutline ? (
+          <MarkdownOutlinePanel
+            markdown={content}
+            onSelect={(index, entry) => {
+              if (showPreview) previewRef.current?.scrollToHeading(index);
+              else if (textareaRef.current) jumpTextareaTo(textareaRef.current, entry.offset);
+            }}
+          />
+        ) : null}
+      </div>
     </ViewerDropZone>
   );
 }

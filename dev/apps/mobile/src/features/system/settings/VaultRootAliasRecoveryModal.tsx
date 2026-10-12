@@ -5,8 +5,10 @@ import {
   VAULT_ROOT_ALIAS_FILE,
   VAULT_ROOT_ERROR_CODES,
   RpcError,
+  diskFromDirStatus,
   isRpcError,
   sameVaultRootPath,
+  vaultRootDiskProblemKey,
   type LocaleId,
   type VaultRootDiskStatus,
   type VaultRootMode,
@@ -142,11 +144,7 @@ export function VaultRootAliasRecoveryModal({
       .inspectAtPath(path)
       .then((result) => {
         if (gen !== customCheckGen.current) return;
-        if (result.status === "incomplete") setCustomDisk("incomplete");
-        else if (result.status === "unreadable") setCustomDisk("unreadable");
-        else if (result.status === "unauthorized") setCustomDisk("unauthorized");
-        else if (result.status === "absent") setCustomDisk("will_create");
-        else setCustomDisk("ready");
+        setCustomDisk(diskFromDirStatus(result.status));
       })
       .catch(() => {
         if (gen !== customCheckGen.current) return;
@@ -366,6 +364,8 @@ export function VaultRootAliasRecoveryModal({
     (mode === "custom_root" &&
       (customDisk === "checking" ||
         customDisk === "unreadable" ||
+        customDisk === "unauthorized" ||
+        customDisk === "unreachable" ||
         customDisk === "not_vault_capable" ||
         customDisk === "needs_folder"));
 
@@ -373,6 +373,8 @@ export function VaultRootAliasRecoveryModal({
     if (busy || blocked || confirmOpen) return;
     setConfirmOpen(true);
   }, [blocked, busy, confirmOpen]);
+
+  const customProblemKey = vaultRootDiskProblemKey(customDisk);
 
   const localeOptions: SelectOption<LocaleId>[] = SUPPORTED_LOCALES.map((loc) => ({
     value: loc as LocaleId,
@@ -518,12 +520,12 @@ export function VaultRootAliasRecoveryModal({
                     })}
                   </Text>
                 ) : null}
-                {mode === "custom_root" && customDisk === "unreadable" ? (
+                {mode === "custom_root" && customProblemKey ? (
                   <Text
                     style={[typography.caption, { color: colors.onErrorContainer }]}
                     accessibilityRole="alert"
                   >
-                    {t("modal.vault_root_setup.error_io")}
+                    {t(customProblemKey)}
                   </Text>
                 ) : null}
               </View>
