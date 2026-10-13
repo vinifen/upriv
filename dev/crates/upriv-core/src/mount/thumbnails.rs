@@ -1,4 +1,4 @@
-//! Freedesktop thumbnail cache cleanup for a vault mount.
+//! Freedesktop thumbnail cache cleanup for a Linux vault mount.
 //!
 //! Nautilus treats a `fuse` mount as local and writes PNG previews under
 //! `$XDG_CACHE_HOME/thumbnails`. Those files stay after the mount is gone.
@@ -6,6 +6,12 @@
 //! is under that mount. While the folder is mounted, the same wipe runs on
 //! [`OPEN_PURGE_INTERVAL`]. The scan does not run on the close or open path. A
 //! wipe writes one info line with the count. A bad cache writes one warning.
+//!
+//! Windows does not use this scanner. Explorer's `thumbcache_*.db` is a
+//! machine-wide hash cache, so the WinFsp mount prevents preview generation
+//! instead of editing those files. See `explorer`.
+
+#![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 
 use std::collections::{HashSet, VecDeque};
 use std::fs::File;
@@ -37,6 +43,14 @@ static SCHEDULE_CV: Condvar = Condvar::new();
 /// Remember `mount_point` until [`unwatch_open_mount`]. The wipe then runs on
 /// [`OPEN_PURGE_INTERVAL`]. A relative path or `/` is ignored.
 pub(crate) fn watch_open_mount(mount_point: &Path) {
+    #[cfg(target_os = "linux")]
+    watch_open_mount_linux(mount_point);
+    #[cfg(not(target_os = "linux"))]
+    let _ = mount_point;
+}
+
+#[cfg(target_os = "linux")]
+fn watch_open_mount_linux(mount_point: &Path) {
     if !mount_is_specific(mount_point) {
         return;
     }
@@ -52,6 +66,14 @@ pub(crate) fn watch_open_mount(mount_point: &Path) {
 
 /// Stop the periodic wipe for `mount_point`. A purge already queued still runs.
 pub(crate) fn unwatch_open_mount(mount_point: &Path) {
+    #[cfg(target_os = "linux")]
+    unwatch_open_mount_linux(mount_point);
+    #[cfg(not(target_os = "linux"))]
+    let _ = mount_point;
+}
+
+#[cfg(target_os = "linux")]
+fn unwatch_open_mount_linux(mount_point: &Path) {
     let mut schedule = schedule_lock();
     schedule.unwatch(mount_point);
     drop(schedule);
@@ -67,6 +89,14 @@ pub(crate) fn unwatch_open_mount(mount_point: &Path) {
 /// that cannot be read, a wipe that cannot finish, or a scan that hits its
 /// budget, is a separate warning. Close and open do not wait and do not fail.
 pub(crate) fn purge_mount_thumbnails(mount_point: &Path) {
+    #[cfg(target_os = "linux")]
+    purge_mount_thumbnails_linux(mount_point);
+    #[cfg(not(target_os = "linux"))]
+    let _ = mount_point;
+}
+
+#[cfg(target_os = "linux")]
+fn purge_mount_thumbnails_linux(mount_point: &Path) {
     if !mount_is_specific(mount_point) {
         return;
     }
@@ -186,6 +216,7 @@ impl Schedule {
         }
     }
 
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     fn watch(&mut self, path: PathBuf, now: Instant) {
         if !mount_is_specific(&path) {
             return;
@@ -197,6 +228,7 @@ impl Schedule {
         }
     }
 
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     fn unwatch(&mut self, path: &Path) {
         self.mounts.remove(path);
         if self.mounts.is_empty() {
@@ -595,12 +627,20 @@ mod tests {
         scan.removed
     }
 
+    fn absolute_mount(name: &str) -> PathBuf {
+        if cfg!(windows) {
+            PathBuf::from(format!(r"C:\mnt\{name}"))
+        } else {
+            PathBuf::from(format!("/mnt/{name}"))
+        }
+    }
+
     #[test]
     fn open_mount_purge_waits_one_interval_then_queues_each_mount_once() {
         let start = Instant::now();
         let mut schedule = Schedule::new();
-        let first = PathBuf::from("/mnt/vault");
-        let second = PathBuf::from("/mnt/other");
+        let first = absolute_mount("vault");
+        let second = absolute_mount("other");
         schedule.watch(first.clone(), start);
         schedule.watch(second.clone(), start);
         schedule.enqueue_due(start);
@@ -627,7 +667,7 @@ mod tests {
     fn a_repeated_purge_request_queues_one_extra_pass() {
         let now = Instant::now();
         let mut schedule = Schedule::new();
-        let mount = PathBuf::from("/mnt/vault");
+        let mount = absolute_mount("vault");
         assert!(!schedule.request(PathBuf::from("relative"), now));
         assert!(!schedule.request(PathBuf::from("/"), now));
         assert!(schedule.pending.is_empty());
@@ -653,7 +693,7 @@ mod tests {
     fn a_long_running_scan_is_reported_once() {
         let start = Instant::now();
         let mut schedule = Schedule::new();
-        let mount = PathBuf::from("/mnt/vault");
+        let mount = absolute_mount("vault");
         schedule.request(mount.clone(), start);
         schedule.pop_job(start);
         assert!(!schedule.request(mount.clone(), start + Duration::from_secs(29)));

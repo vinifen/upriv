@@ -89,6 +89,25 @@ export async function rpcPickDirectory(
   return raw;
 }
 
+export async function rpcWinFspStatus(): Promise<{ applicable: boolean; installed: boolean }> {
+  const raw = await desktopInvokeRaw(SHELL_COMMANDS.WINFSP_STATUS, {});
+  if (!raw || typeof raw !== "object") {
+    throw new RpcError(
+      BRIDGE_ERROR_CODES.INVALID_RESPONSE,
+      "winfsp_status: expected an object",
+      raw,
+    );
+  }
+  const row = raw as { applicable?: unknown; installed?: unknown };
+  return { applicable: row.applicable === true, installed: row.installed === true };
+}
+
+export async function rpcWinFspInstall(): Promise<boolean> {
+  const raw = await desktopInvokeRaw(SHELL_COMMANDS.WINFSP_INSTALL, {});
+  if (!raw || typeof raw !== "object") return false;
+  return (raw as { ok?: unknown }).ok === true;
+}
+
 export async function rpcPickFile(options?: {
   title?: string | null;
   filters?: { name: string; extensions: string[] }[];
@@ -902,17 +921,14 @@ export async function rpcVaultFsMove(
   );
 }
 
-export async function rpcVaultFsOsPath(id: string, path: string): Promise<{ osPath: string }> {
+export async function rpcVaultFsOsPath(
+  id: string,
+  path: string,
+): Promise<{ osPath: string | null }> {
   const raw = await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_FS_OS_PATH, { id, path });
   const record = requireRecord(raw, "vault_fs_os_path");
-  if (typeof record.osPath !== "string" || !record.osPath.trim()) {
-    throw new RpcError(
-      BRIDGE_ERROR_CODES.INVALID_RESPONSE,
-      "vault_fs_os_path: expected osPath",
-      raw,
-    );
-  }
-  return { osPath: record.osPath };
+  const osPath = typeof record.osPath === "string" ? record.osPath.trim() : "";
+  return { osPath: osPath || null };
 }
 
 /** Open the vault mount (Finder / Explorer / desktop file manager) at `path`. */

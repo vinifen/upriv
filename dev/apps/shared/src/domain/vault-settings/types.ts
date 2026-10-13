@@ -197,7 +197,13 @@ export interface VaultSettingsConfig {
    * is the another-folder switch and starts off.
    */
   mount: WorkspaceTable;
-  backup: { enabled: boolean; mode: BackupMode; keep_last: number };
+  backup: {
+    enabled: boolean;
+    mode: BackupMode;
+    keep_last: number;
+    /** Close skips a zip when vault files match the last backup still on disk. */
+    skip_unchanged: boolean;
+  };
   security: {
     mode: SecurityMode;
     secure_wipe_workspace: boolean;

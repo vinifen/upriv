@@ -33,15 +33,26 @@ export function useToast(defaultMs = TOAST_DEFAULT_MS) {
       const id = idRef.current;
       const duration = Math.max(0, durationMs);
       setToast({ message, durationMs: duration, id });
-      if (duration > 0) {
-        cancelRef.current = scheduleTimeout(() => {
-          cancelRef.current = null;
-          setToast((current) => (current?.id === id ? null : current));
-        }, duration);
-      }
     },
     [clearTimer, defaultMs],
   );
+
+  // Start the dismiss clock after paint, with the progress line. A timer
+  // started inside `show` runs while React is still rendering, so the toast
+  // disappears before the bar finishes.
+  useEffect(() => {
+    if (!toast || toast.durationMs <= 0) return;
+    const id = toast.id;
+    const cancel = scheduleTimeout(() => {
+      cancelRef.current = null;
+      setToast((current) => (current?.id === id ? null : current));
+    }, toast.durationMs);
+    cancelRef.current = cancel;
+    return () => {
+      cancel();
+      if (cancelRef.current === cancel) cancelRef.current = null;
+    };
+  }, [toast]);
 
   useEffect(() => () => clearTimer(), [clearTimer]);
 

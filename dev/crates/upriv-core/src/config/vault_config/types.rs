@@ -95,6 +95,11 @@ pub struct VaultBackupSection {
     pub mode: VaultBackupMode,
     #[serde(default = "default_keep_last")]
     pub keep_last: u32,
+    /// Close skips a new zip when vault files match the last backup still on
+    /// disk. `.upriv-workspace.json` is not a change. `false` writes a zip on
+    /// every close.
+    #[serde(default = "default_true")]
+    pub skip_unchanged: bool,
 }
 
 impl Default for VaultBackupSection {
@@ -103,6 +108,7 @@ impl Default for VaultBackupSection {
             enabled: true,
             mode: VaultBackupMode::KeepLast,
             keep_last: 1,
+            skip_unchanged: true,
         }
     }
 }

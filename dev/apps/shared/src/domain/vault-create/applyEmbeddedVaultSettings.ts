@@ -150,6 +150,7 @@ export function parseEmbeddedVaultSettings(
     return null;
   }
   const enabled = bool(settings.backup.enabled);
+  const skipUnchanged = bool(settings.backup.skip_unchanged);
   const hidden = bool(settings.vault.hidden);
   const secureWipe = bool(settings.security.secure_wipe_workspace);
   const autoEnabled = bool(settings.auto_close.enabled);
@@ -161,6 +162,7 @@ export function parseEmbeddedVaultSettings(
   const unmountSleep = bool(settings.policy.require_unmount_on_sleep);
   if (
     enabled === null ||
+    skipUnchanged === null ||
     hidden === null ||
     secureWipe === null ||
     autoEnabled === null ||
@@ -191,6 +193,7 @@ export function parseEmbeddedVaultSettings(
         enabled,
         mode: backupMode,
         keep_last: keepLast,
+        skip_unchanged: skipUnchanged,
       },
       security: {
         mode: securityMode,

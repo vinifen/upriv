@@ -37,8 +37,12 @@ export function Toast({ toast, onDismiss, className }: ToastProps) {
         <span
           key={toast.id}
           aria-hidden
-          className="toast-progress pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-accent"
+          className="toast-progress pointer-events-none absolute bottom-0 left-0 h-0.5 w-full origin-left bg-accent"
           style={{ animationDuration: `${toast.durationMs}ms` }}
+          onAnimationEnd={(event) => {
+            if (event.currentTarget !== event.target) return;
+            onDismiss();
+          }}
         />
       ) : null}
     </div>,

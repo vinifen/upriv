@@ -50,9 +50,9 @@ export interface VaultFileSystemService {
   deletePath(vaultId: string, path: string): Promise<boolean>;
   movePath(vaultId: string, fromPath: string, toFolderPath: string): Promise<string | null>;
   /**
-   * Absolute OS path of `path` on the live FUSE/WinFsp (or `upriv_plain`) mount.
-   * Throws `vault_mount_failed` when this vault is not mounted in the OS.
+   * Absolute OS path of `path` on the live FUSE/WinFsp mount.
+   * `null` when this vault has no OS folder (switch off, macOS, or mobile).
    */
-  osPath(vaultId: string, path: string): Promise<string>;
+  osPath(vaultId: string, path: string): Promise<string | null>;
   languageFromPath(path: string): VaultFileLanguage;
 }

@@ -7,10 +7,15 @@ use std::path::{Path, PathBuf};
 
 use crate::error::{Result, UprivError};
 
+#[cfg_attr(not(windows), allow(dead_code))]
+mod explorer;
 #[cfg(target_os = "linux")]
 mod fuse_linux;
 mod thumbnails;
+#[cfg(windows)]
+mod winfsp_windows;
 
+#[cfg_attr(not(target_os = "linux"), allow(unused_imports))]
 pub(crate) use thumbnails::{purge_mount_thumbnails, unwatch_open_mount, watch_open_mount};
 
 /// Held while a vault is mounted. Unmounts and removes the leaf on drop.
@@ -18,6 +23,8 @@ pub struct MountedVault {
     pub(crate) mount_point: PathBuf,
     #[cfg(target_os = "linux")]
     pub(crate) session: Option<fuser::BackgroundSession>,
+    #[cfg(windows)]
+    pub(crate) winfsp: Option<winfsp_windows::WinFspVolume>,
 }
 
 impl std::fmt::Debug for MountedVault {
@@ -36,6 +43,11 @@ impl MountedVault {
 
 impl Drop for MountedVault {
     fn drop(&mut self) {
+        #[cfg(windows)]
+        {
+            // Stop WinFsp before removing the directory. The host unmounts on drop.
+            self.winfsp.take();
+        }
         #[cfg(target_os = "linux")]
         {
             self.session.take();
@@ -52,8 +64,9 @@ impl Drop for MountedVault {
 /// Linux detaches a dead Upriv FUSE leaf (`fusermount -uz`, then `umount2`).
 /// Do not gate that on `path.host_exists()`: a killed FUSE daemon makes `stat`
 /// return ENOTCONN, and `exists()` is then false. A path that is not an Upriv
-/// mount is left alone. Windows and Android have no OS mount, so this is a
-/// no-op there. Missing paths succeed so the launch sweep is idempotent.
+/// mount is left alone. A dead WinFsp process drops its volume with the
+/// process, so Windows only needs the empty leaf removed by the caller.
+/// Missing paths succeed so the launch sweep is idempotent.
 pub fn force_unmount(path: &Path) -> Result<()> {
     #[cfg(target_os = "linux")]
     {
@@ -72,51 +85,122 @@ pub fn mount_encrypted_dir(
     vault_id: String,
     mount_point: PathBuf,
 ) -> Result<MountedVault> {
-    // Only Linux attaches an OS folder. Creating the leaf first on Windows or
-    // Android would leave a real empty directory after the mount is refused.
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", windows)))]
     {
         let _ = (root, vault_id, mount_point);
         return Err(UprivError::VaultMountFailed(
             "OS mount is not enabled on this platform; use the in-app file manager".into(),
         ));
     }
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", windows))]
     {
-        // A `content://` address is not an OS path. `create_dir_all` would
-        // otherwise create that relative tree in the process working directory.
-        if !mount_point.is_absolute()
-            || crate::paths::path_is_under_reserved_upriv_tree(&mount_point)
-        {
-            return Err(UprivError::VaultMountFailed(
-                "mount path must be an absolute folder outside .upriv".into(),
-            ));
-        }
-        if let Some(parent) = mount_point.parent() {
-            crate::host_fs::create_dir_all(parent)?;
-        }
-        // Detach a leftover or disconnected FUSE leaf before creating the directory.
-        // `create_dir` on that path returns ENOTCONN, which is not `AlreadyExists`.
-        if force_unmount(&mount_point).is_ok() {
+        prepare_mount_directory(&mount_point)?;
+        let mounted = mount_prepared(root, vault_id, mount_point.clone());
+        if mounted.is_err() {
             let _ = crate::host_fs::remove_dir(&mount_point);
         }
-        match crate::host_fs::create_dir(&mount_point) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                if force_unmount(&mount_point).is_ok() {
-                    let _ = crate::host_fs::remove_dir(&mount_point);
-                }
-                if crate::host_fs::create_dir(&mount_point).is_err() {
-                    return Err(UprivError::VaultMountFailed(format!(
-                        "mount point busy: {}",
-                        mount_point.display()
-                    )));
-                }
-            }
-            Err(error) => return Err(error.into()),
-        }
-        fuse_linux::spawn(root, vault_id, mount_point)
+        mounted
     }
+}
+
+/// Parent folder outside `.upriv`.
+///
+/// Linux mounts onto an empty directory that already exists. WinFsp creates the
+/// leaf itself and returns `STATUS_OBJECT_NAME_COLLISION` (`0xC0000035`) when
+/// that name is already there, so Windows only removes an empty leftover.
+#[cfg(any(target_os = "linux", windows))]
+fn prepare_mount_directory(mount_point: &Path) -> Result<()> {
+    // A `content://` address is not an OS path. `create_dir_all` would
+    // otherwise create that relative tree in the process working directory.
+    if !mount_point.is_absolute() || crate::paths::path_is_under_reserved_upriv_tree(mount_point) {
+        return Err(UprivError::VaultMountFailed(
+            "mount path must be an absolute folder outside .upriv".into(),
+        ));
+    }
+    if let Some(parent) = mount_point.parent() {
+        crate::host_fs::create_dir_all(parent)?;
+    }
+    #[cfg(windows)]
+    {
+        return clear_windows_mount_leaf(mount_point);
+    }
+    #[cfg(target_os = "linux")]
+    {
+        prepare_linux_mount_leaf(mount_point)
+    }
+}
+
+/// Detach a leftover FUSE leaf, then create an empty directory for the mount.
+#[cfg(target_os = "linux")]
+fn prepare_linux_mount_leaf(mount_point: &Path) -> Result<()> {
+    // `create_dir` on a disconnected FUSE leaf returns ENOTCONN, which is not
+    // `AlreadyExists`.
+    if force_unmount(mount_point).is_ok() {
+        let _ = crate::host_fs::remove_dir(mount_point);
+    }
+    match crate::host_fs::create_dir(mount_point) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            if force_unmount(mount_point).is_ok() {
+                let _ = crate::host_fs::remove_dir(mount_point);
+            }
+            if crate::host_fs::create_dir(mount_point).is_err() {
+                return Err(UprivError::VaultMountFailed(format!(
+                    "mount point busy: {}",
+                    mount_point.display()
+                )));
+            }
+            Ok(())
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
+/// WinFsp refuses a directory that already exists. An empty leftover is removed.
+/// A directory that already has files stays, and the mount fails.
+#[cfg(windows)]
+fn clear_windows_mount_leaf(mount_point: &Path) -> Result<()> {
+    match crate::host_fs::symlink_metadata(mount_point) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+        Ok(meta) if !meta.is_dir() => {
+            return Err(UprivError::VaultMountFailed(format!(
+                "mount point busy: {}",
+                mount_point.display()
+            )));
+        }
+        Ok(_) => {}
+    }
+    let empty = match crate::host_fs::read_dir(mount_point) {
+        Ok(entries) => entries.flatten().next().is_none(),
+        // A leftover junction whose target is gone still occupies the name.
+        Err(_) => true,
+    };
+    if empty && crate::host_fs::remove_dir(mount_point).is_ok() {
+        return Ok(());
+    }
+    Err(UprivError::VaultMountFailed(format!(
+        "mount point busy: {}",
+        mount_point.display()
+    )))
+}
+
+#[cfg(target_os = "linux")]
+fn mount_prepared(
+    root: crate::paths::VaultRoot,
+    vault_id: String,
+    mount_point: PathBuf,
+) -> Result<MountedVault> {
+    fuse_linux::spawn(root, vault_id, mount_point)
+}
+
+#[cfg(windows)]
+fn mount_prepared(
+    root: crate::paths::VaultRoot,
+    vault_id: String,
+    mount_point: PathBuf,
+) -> Result<MountedVault> {
+    winfsp_windows::spawn(root, vault_id, mount_point)
 }
 
 #[cfg(target_os = "linux")]

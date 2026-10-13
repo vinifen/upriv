@@ -5,13 +5,24 @@ import {
   LIVE_CLOSING_PIPELINE_STEP_COUNT,
   LIVE_OPENING_PIPELINE_STEP_COUNT,
   borrowSessionRamPassword,
+  currentWorkspaceSystem,
+  encryptedShortcutActive,
   isLifecyclePasswordPresent,
   isVaultPipelineError,
   resolveVaultMountPoint,
   watchClosePhase,
   type VaultLifecycleService,
 } from "@upriv/shared";
-import { rpcVaultClose, rpcVaultClosePhase, rpcVaultOpen } from "@/lib/rpc";
+import { isElectronRenderer } from "@/lib/invoke";
+import {
+  rpcAppSettingsGet,
+  rpcVaultClose,
+  rpcVaultClosePhase,
+  rpcVaultConfigGet,
+  rpcVaultOpen,
+  rpcWinFspInstall,
+  rpcWinFspStatus,
+} from "@/lib/rpc";
 
 /** Session RAM only — never persist. */
 const vaultPasswordInRam = new Map<string, string>();
@@ -35,6 +46,7 @@ export const desktopVaultLifecycleService: VaultLifecycleService = {
 
   async runOpeningPipeline(vaultId, onStep) {
     onStep(0);
+    await installWinFspWhenFolderNeeded(vaultId);
     const password = borrowSessionRamPassword(vaultPasswordInRam, vaultId);
     await rpcVaultOpen(vaultId, password);
     // Do not put the string back here — hooks restore only for modes that
@@ -68,3 +80,21 @@ export const desktopVaultLifecycleService: VaultLifecycleService = {
     return error.code;
   },
 };
+
+/**
+ * A vault that already wants the file manager folder asks for the driver here.
+ * Declining leaves the saved switch unchanged and the vault still opens in the app.
+ */
+async function installWinFspWhenFolderNeeded(vaultId: string): Promise<void> {
+  if (currentWorkspaceSystem() !== "windows" || !isElectronRenderer()) return;
+  try {
+    const status = await rpcWinFspStatus();
+    if (!status.applicable || status.installed) return;
+    const [app, vault] = await Promise.all([rpcAppSettingsGet(), rpcVaultConfigGet(vaultId)]);
+    if (vault.storage.mode !== "encrypted_dir") return;
+    if (!encryptedShortcutActive(app.settings.workspace, vault.mount, "windows")) return;
+    await rpcWinFspInstall();
+  } catch {
+    // Open continues. A missing driver leaves the in-app file manager.
+  }
+}

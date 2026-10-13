@@ -2,7 +2,7 @@
 
 **Product:** portable encrypted vault manager (`store/` at rest; export a `.zip` of that ciphertext or a `.7z`).  
 **Repo:** monorepo with `dev/` (implementation), `prod-example/` (static vault-root demo — **layout is stale**; see that folder’s README).  
-**Status:** v0.2-beta — Electron desktop + Expo mobile; vault-root / settings / **vault list + create + open/close**, **in-app file manager**, **Linux FUSE**, **zip/7z export**, **import**, and **backups** talk to `upriv-core` (`store/` wrap + index + chunks, `format_version` 1 only). WinFsp is still a stub. Change-password is **not** implemented. Portable `.7z` export/import pack and unpack logical files **in RAM** (export fails closed if RAM is insufficient); zip of `store/` is always available.
+**Status:** v0.2-beta — Electron desktop + Expo mobile; vault-root / settings / **vault list + create + open/close**, **in-app file manager**, **Linux FUSE**, **Windows WinFsp** (the Windows packages carry the official installer and ask when the file manager folder is turned on; declining leaves the switch unchanged), **zip/7z export**, **import**, and **backups** talk to `upriv-core` (`store/` wrap + index + chunks, `format_version` 1 only). A missing WinFsp DLL fails only the OS folder; the in-app file manager still works. Change-password is **not** implemented. Portable `.7z` export/import pack and unpack logical files **in RAM** (export fails closed if RAM is insufficient); zip of `store/` is always available.
 
 **Greenfield.** `dev/` is the first product, not a successor. Nothing older shipped. One store format (`format_version` 1). One backup file (`backups/<stamp>-<id>.zip`). Do not add a reader, migrator, or dual path for drafts, Seal, `archive/`, unpacked backup folders, `.7z` backups, or demo trees. If a doc, review, or example still describes an older layout, ignore it and implement the current path only — no compatibility shim beside the real one. [SECURITY-CRYPTO.md](SECURITY-CRYPTO.md) states that rule and **wins** over stale PRD/SDD sections.
 
@@ -26,7 +26,7 @@
 
 ## Current development phase (read this first)
 
-We are **past the Tauri → Electron migration** and **past UI/lifecycle scaffolding**. Vault-root / settings / **vault list + create + open/close**, **in-app file manager**, **Linux FUSE**, **export/import**, and **backups** talk to **`upriv-daemon`**. WinFsp is still a stub. Change-password is not live.
+We are **past the Tauri → Electron migration** and **past UI/lifecycle scaffolding**. Vault-root / settings / **vault list + create + open/close**, **in-app file manager**, **Linux FUSE**, **Windows WinFsp**, **export/import**, and **backups** talk to **`upriv-daemon`**. Without the WinFsp runtime the vault still opens and the in-app file manager is the folder. Change-password is not live.
 
 | Layer | State in `dev/` (active) |
 |-------|---------------------------|
@@ -35,15 +35,14 @@ We are **past the Tauri → Electron migration** and **past UI/lifecycle scaffol
 | **Electron** | Shell, preload, daemon spawn, IPC timeouts, packaging scaffold |
 | **upriv-rpc / upriv-ffi** | Shared CORE RPC handlers; UniFFI `invoke` + Expo module `modules/upriv-core` |
 | **upriv-daemon** | stdio JSON-RPC — thin wrapper over `upriv-rpc` (same handlers as mobile) |
-| **upriv-core** | `logging`, `time`, `app_version()`, **`paths/`**, **`config/`**, **`store/`** (Argon2id wrap + AES-SIV index + XChaCha chunks), **`vault/`** list / create / open / close / rename / fs / export / import / backup, **Linux FUSE** (WinFsp stub) |
+| **upriv-core** | `logging`, `time`, `app_version()`, **`paths/`**, **`config/`**, **`store/`** (Argon2id wrap + AES-SIV index + XChaCha chunks), **`vault/`** list / create / open / close / rename / fs / export / import / backup, **Linux FUSE**, **Windows WinFsp** (dynamic `winfsp-*.dll`; the Windows packages carry the official installer and ask when the folder is turned on; declining leaves the switch; missing DLL → mount fails, vault stays open) |
 | **Integration** | Desktop: `createDesktopServices()` → live root/settings/logs/vaults/FM/export; Mobile: `createServices()` → native if bridge linked, else mocks |
 
 **What to build next (default order):**
 
-1. WinFsp mount on Windows (Linux FUSE already live)  
-2. Change-password (not implemented; keep the current chunk AAD, which does not bind KDF params)  
-3. Remaining RPCs from SDD §8.2–8.3  
-4. SAF-backed vault I/O on Android (currently filesystem vault-root only)  
+1. Change-password (not implemented; keep the current chunk AAD, which does not bind KDF params)  
+2. Remaining RPCs from SDD §8.2–8.3  
+3. SAF-backed vault I/O on Android (currently filesystem vault-root only)  
 
 Vault list / create / open / close + groups are already live. **Do not** re-implement vault logic in TypeScript.  
 **Do not** reimplement vault-root resolution in TS — use existing `vault_root_*` RPCs / `VaultRootService`.  
@@ -98,7 +97,7 @@ The repo may contain **`temp/upriv/`** on disk — a **frozen snapshot of an old
 | Aspect | `temp/upriv/` (snapshot) | `dev/` (active) |
 |--------|------------------------|-----------------|
 | Desktop shell | Tauri 2 (`src-tauri/`) | Electron + `upriv-daemon` |
-| `upriv-core` | Large — vault, crypto, `seven_zip`, mount, session, … | Growing: paths, config, `store/` crypto, vault list/create/open/close/fs/export/import/backup, Linux FUSE. WinFsp and change-password still not live |
+| `upriv-core` | Large — vault, crypto, `seven_zip`, mount, session, … | Paths, config, `store/` crypto, vault list/create/open/close/fs/export/import/backup, Linux FUSE, Windows WinFsp. Change-password still not live |
 | UI wiring | Often **real** Tauri commands | Live root/settings/list/create/open/close/FM/export; change-password still blocked |
 | Code quality | Grew fast; **inconsistent, shortcuts, debt** | Intentional boundaries, reviews, typed errors |
 
@@ -157,7 +156,7 @@ When temp and canonical docs conflict, **`dev/docs/` wins**. When porting an ide
 
 ## Product summary (storage / rest: SECURITY-CRYPTO wins over stale PRD/SDD)
 
-- **At rest:** `store/` (Argon2id + XChaCha20-Poly1305). **No `archive/`.** **No Seal.** A backup is `backups/<stamp>-<id>.zip` — a Stored zip with `README.md` and `config.toml` beside `store/` (`header/`, `index/`, `data/`, `DANGER-DO-NOT-EDIT-PERMANENT-DATA-LOSS.md`), no zip password (pins: `backups/saves/<stamp>-<id>.zip`). `README.md` records the UTC time that copy was written, the same instant as `<stamp>`, and the rounded size of the files in `store/` (not the exact length of the zip). **Greenfield** — no unpacked backup tree, no `.7z` backup, no migrator from demo `archive/`+`store/`. Create-from-backup and a store `.zip` import pre-fill the wizard from that `config.toml` and write `DANGER-DO-NOT-EDIT-PERMANENT-DATA-LOSS.md` into the new `store/`. The new vault does not keep `README.md`. A `.7z` does not. Export and backup write that warning file before packing so the zip keeps it inside `store/`.
+- **At rest:** `store/` (Argon2id + XChaCha20-Poly1305). **No `archive/`.** **No Seal.** A backup is `backups/<stamp>-<id>.zip` — a Stored zip with `README.md` and `config.toml` beside `store/` (`header/`, `index/`, `data/`, `DANGER-DO-NOT-EDIT-PERMANENT-DATA-LOSS.md`), no zip password (pins: `backups/saves/<stamp>-<id>.zip`). Close writes that zip when `[backup] enabled`. `skip_unchanged` defaults on: the zip is skipped when vault files match the last backup still on disk, and `.upriv-workspace.json` is not a change. Off writes a zip on every close. `README.md` records the UTC time that copy was written, the same instant as `<stamp>`, and the rounded size of the files in `store/` (not the exact length of the zip). **Greenfield** — no unpacked backup tree, no `.7z` backup, no migrator from demo `archive/`+`store/`. Create-from-backup and a store `.zip` import pre-fill the wizard from that `config.toml` and write `DANGER-DO-NOT-EDIT-PERMANENT-DATA-LOSS.md` into the new `store/`. The new vault does not keep `README.md`. A `.7z` does not. Export and backup write that warning file before packing so the zip keeps it inside `store/`.
 - **Argon2id:** user picks cost at create; default **256 MiB / 3 passes**; also 32 MiB (less-secure), 64 MiB, 128 MiB, 1 GiB, and 2 GiB. UI explains **security + RAM to unlock**, not device class. Header params apply everywhere — never auto-downgrade.
 - **Modes:** **`encrypted_dir`** (default — plaintext in RAM only: FUSE/WinFsp on desktop, **in-app file manager on mobile**) and **`upriv_plain`** (plaintext `workspace/` on disk while open; wipe on close; **Insecure**). Dropped: `store_only`, `upriv_only`, `ram_only`, `plain`, `plain_only`. Same `store/` on every OS.
 - **States:** `open` = unlocked session (runtime). Where plaintext lives is the **mode**, not the word “open”. On disk: `closed` only. **No Seal.**
@@ -222,7 +221,7 @@ upriv/
 | **Mobile FFI** | `dev/crates/upriv-ffi/` | UniFFI `invoke` / `app_version` | UI |
 | **Core** | `dev/crates/upriv-core/` | Crypto, 7z, paths, state machine, FUSE, recovery | Depend on Electron |
 
-**Desktop UI:** Electron (`createDesktopServices`) talks to `upriv-daemon` for vault-root, settings, logs, vault list/create/open/close/`vault_rename`, groups, `vault_config_save`, in-app file manager (`vault_fs_*`), export/import, and backups. There is no desktop in-memory vault list. Linux FUSE is live in core; WinFsp is still a stub. Change-password remains blocked. Notable conventions:
+**Desktop UI:** Electron (`createDesktopServices`) talks to `upriv-daemon` for vault-root, settings, logs, vault list/create/open/close/`vault_rename`, groups, `vault_config_save`, in-app file manager (`vault_fs_*`), export/import, and backups. There is no desktop in-memory vault list. Linux FUSE and Windows WinFsp are live in core. "Open in file manager" and "Open in terminal" follow the OS path when the mount succeeded. Change-password remains blocked. Notable conventions:
 
 - **Pipeline:** `useVaultPipelineRun` enforces SDD §8.2.2 — one open/close at a time (`isRunning`). No Seal.
 - **Auto-close:** at most one close per idle tick; warn toast once per vault per idle cycle; respects `isPipelineRunning`.
@@ -370,7 +369,7 @@ Work in this order unless the user explicitly reprioritizes:
 8. Windows packaging (`7zz`, `.exe`, WinFsp deps)  
 9. Later: macOS, RN Android, iOS  
 
-Current scaffold: vault list / create / open / close / `vault_rename` + groups + `vault_config_save` + in-app file manager + Linux FUSE + zip/7z export/import + backups are live on Electron and native FFI (filesystem vault-root only). **Next:** WinFsp, then change-password. See § Current development phase. **Do not** re-implement list/create/open/close/rename in TypeScript.
+Current scaffold: vault list / create / open / close / `vault_rename` + groups + `vault_config_save` + in-app file manager + Linux FUSE + Windows WinFsp + zip/7z export/import + backups are live on Electron and native FFI (filesystem vault-root only). **Next:** change-password. See § Current development phase. **Do not** re-implement list/create/open/close/rename in TypeScript.
 
 **Import:** desktop native picker + `vault_import_probe` (live). OS drop still pre-fills the create wizard when the shell provides a path.
 
@@ -387,21 +386,21 @@ npm install --prefix apps/desktop
 npm install --prefix apps/electron
 npm run dev --prefix apps/desktop          # Vite http://localhost:1420
 npm run electron:dev                       # Electron + upriv-daemon
-./run desktop                              # wipe Vite cache, then electron:dev
-./run mobile                               # wipe Metro/Expo cache, then expo start --clear
-./run mobile --android                     # same, open Android
+./r d                                       # wipe Vite cache, then electron:dev
+./r m                                       # wipe Metro/Expo cache, then expo start --clear
+./r m -a                                    # same, open Android
 cargo test -p upriv-core
 npm run rust:lint                          # rustfmt --check + clippy
 npm run rust:fix                           # rustfmt + clippy --fix
-./run lint                                 # all linters (TS + Rust)
-./run lint-fix                             # auto-fix where supported
-./run test                                 # cargo test --workspace + shared/desktop vitest
-./run check                                # lint + test
+./r l                                       # all linters (TS + Rust)
+./r f                                       # auto-fix where supported
+./r t                                       # cargo test --workspace + shared/desktop vitest
+./r c                                       # lint + test
 cargo build -p upriv-daemon --release
 
 # Mobile
 npm install --prefix apps/mobile
-./run mobile                               # from dev/; or npm run start --prefix apps/mobile
+./r m                                       # from dev/; or npm run start --prefix apps/mobile
 npm run typecheck --prefix apps/mobile
 ```
 

@@ -4,6 +4,18 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { packagedVaultHome, relocateInstallDirVault } from "../installVaultHome";
 
+/** Windows refuses symlink creation without Developer Mode. The check still runs on Linux. */
+function symlinkOrSkip(target: string, link: string): boolean {
+  try {
+    fs.symlinkSync(target, link);
+    return true;
+  } catch (error) {
+    const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+    if (code === "EPERM") return false;
+    throw error;
+  }
+}
+
 describe("packagedVaultHome", () => {
   it("keeps a portable exe and an AppImage beside the program", () => {
     expect(
@@ -77,18 +89,21 @@ describe("relocateInstallDirVault", () => {
 
   it("keeps the install folder when the data folder contains a symlink", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "upriv-relocate-"));
-    const install = path.join(root, "install");
-    const userData = path.join(root, "user");
-    fs.mkdirSync(path.join(install, ".upriv"), { recursive: true });
-    fs.writeFileSync(path.join(install, ".upriv", "settings.toml"), "ok\n");
-    fs.symlinkSync("settings.toml", path.join(install, ".upriv", "link"));
+    try {
+      const install = path.join(root, "install");
+      const userData = path.join(root, "user");
+      fs.mkdirSync(path.join(install, ".upriv"), { recursive: true });
+      fs.writeFileSync(path.join(install, ".upriv", "settings.toml"), "ok\n");
+      if (!symlinkOrSkip("settings.toml", path.join(install, ".upriv", "link"))) return;
 
-    const result = relocateInstallDirVault(install, userData);
+      const result = relocateInstallDirVault(install, userData);
 
-    expect(result.notice).toBe("move_failed");
-    expect(result.anchor).toBe(path.resolve(install));
-    expect(fs.readFileSync(path.join(install, ".upriv", "settings.toml"), "utf8")).toBe("ok\n");
-    expect(fs.existsSync(path.join(userData, ".upriv"))).toBe(false);
-    fs.rmSync(root, { recursive: true, force: true });
+      expect(result.notice).toBe("move_failed");
+      expect(result.anchor).toBe(path.resolve(install));
+      expect(fs.readFileSync(path.join(install, ".upriv", "settings.toml"), "utf8")).toBe("ok\n");
+      expect(fs.existsSync(path.join(userData, ".upriv"))).toBe(false);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });

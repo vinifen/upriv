@@ -987,13 +987,14 @@ export async function rpcVaultFsMove(
   );
 }
 
-export async function rpcVaultFsOsPath(id: string, path: string): Promise<{ osPath: string }> {
+export async function rpcVaultFsOsPath(
+  id: string,
+  path: string,
+): Promise<{ osPath: string | null }> {
   const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_FS_OS_PATH, { id, path });
   const record = requireRecord(raw, "vault_fs_os_path");
-  if (typeof record.osPath !== "string" || !record.osPath.trim()) {
-    throw new RpcError(BRIDGE.INVALID_RESPONSE, "vault_fs_os_path: expected osPath", raw);
-  }
-  return { osPath: record.osPath };
+  const osPath = typeof record.osPath === "string" ? record.osPath.trim() : "";
+  return { osPath: osPath || null };
 }
 
 function parseBackupEntry(raw: unknown, vaultId: string): VaultBackupEntry {

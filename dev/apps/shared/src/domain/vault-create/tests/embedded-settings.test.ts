@@ -23,7 +23,7 @@ function settings(patch: Partial<VaultSettingsConfig> = {}): VaultSettingsConfig
       custom_file_manager_folder: true,
       linux: { place: "unset", path: "/data/vaults" },
     },
-    backup: { enabled: false, mode: "keep_all", keep_last: 3 },
+    backup: { enabled: false, mode: "keep_all", keep_last: 3, skip_unchanged: false },
     security: {
       mode: "always_prompt",
       secure_wipe_workspace: false,
@@ -78,6 +78,7 @@ describe("applyEmbeddedVaultSettings", () => {
     expect(next.passwordHint).toBe("pet");
     expect(next.hidden).toBe(true);
     expect(next.backup.mode).toBe("keep_all");
+    expect(next.backup.skip_unchanged).toBe(false);
     expect(next.security.wipe_passes).toBe(2);
     expect(next.seven_zip.solid).toBe(true);
     expect(next.kdf.unlock_preset).toBe("128mib");
@@ -87,7 +88,7 @@ describe("applyEmbeddedVaultSettings", () => {
   it("keeps a backup mode the user already changed", () => {
     const snapshot = {
       ...createEmptyCreateVaultDraft([]),
-      backup: { enabled: true, mode: "keep_all" as const, keep_last: 1 },
+      backup: { enabled: true, mode: "keep_all" as const, keep_last: 1, skip_unchanged: true },
     };
     const draft = {
       ...snapshot,

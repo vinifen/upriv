@@ -43,6 +43,7 @@ describe("buildSystemInfoSections", () => {
       "workspace",
       "paths",
     ]);
+    expect(fieldIds(sections)).not.toContain("winfsp");
     expect(fieldIds(sections)).toEqual(
       expect.arrayContaining([
         "version",
@@ -66,6 +67,18 @@ describe("buildSystemInfoSections", () => {
         "logs_path",
       ]),
     );
+  });
+
+  it("shows the WinFsp notice on Windows", () => {
+    const sections = buildSystemInfoSections(snapshot({ workspaceSystem: "windows" }), t);
+    const winfsp = sections
+      .flatMap((section) => section.fields)
+      .find((field) => field.id === "winfsp");
+    expect(winfsp).toMatchObject({
+      label: "modal.info.field.winfsp",
+      value: "WinFsp - Windows File System Proxy, Copyright (C) Bill Zissimopoulos",
+      href: "https://github.com/winfsp/winfsp",
+    });
   });
 
   it("shows needs-setup fields instead of root_path", () => {

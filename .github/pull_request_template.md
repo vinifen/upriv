@@ -12,7 +12,7 @@
 ## Checklist
 
 - [ ] No passwords, secrets, or vault material in the diff
-- [ ] Tests ran (`./run check` from `dev/`, or note what you ran)
+- [ ] Tests ran (`./r c` from `dev/`, or note what you ran)
 
 <!--
 Do NOT credit an AI, model, or editor in this PR.

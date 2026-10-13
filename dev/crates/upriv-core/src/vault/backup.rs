@@ -307,9 +307,9 @@ pub fn backup_on_close(root: &VaultRoot, vault_id: &str) -> Result<Option<String
         let _ = crate::host_fs::remove_file(&partial);
         return Err(error);
     }
-    if let Err(error) = crate::host_fs::File::open(&partial).and_then(|file| file.sync_all()) {
+    if let Err(error) = sync_closed_file(&partial) {
         let _ = crate::host_fs::remove_file(&partial);
-        return Err(error.into());
+        return Err(error);
     }
     if let Err(error) = super::zip_io::verify_store_zip_copies(&partial) {
         let _ = crate::host_fs::remove_file(&partial);
@@ -561,6 +561,16 @@ pub(crate) fn copy_ciphertext_tree(src: &Path, dst: &Path) -> Result<()> {
     Ok(())
 }
 
+/// `FlushFileBuffers` needs write access. A read-only open syncs on Unix and
+/// fails on Windows, which would discard the close backup.
+fn sync_closed_file(path: &Path) -> Result<()> {
+    #[cfg(windows)]
+    let file = crate::host_fs::OpenOptions::new().write(true).open(path)?;
+    #[cfg(not(windows))]
+    let file = crate::host_fs::File::open(path)?;
+    file.sync_all().map_err(Into::into)
+}
+
 /// Persist a directory entry. No-op off Unix, where opening a directory for
 /// `sync_all` is not the same call. A storage-access directory open is a local
 /// stand-in, so syncing it neither publishes the rename nor should fail the
@@ -710,7 +720,7 @@ mode = "encrypted_dir"
         assert!(!listed[0].saved);
         let backups = zip.parent().unwrap();
         crate::host_fs::write(backups.join(format!("{stamp}.zip")), b"not-a-backup").unwrap();
-        crate::host_fs::write(backups.join(format!("{stamp}-Notes.zip")), b"bad-id").unwrap();
+        crate::host_fs::write(backups.join(format!("{stamp}-nope.zip")), b"bad-id").unwrap();
         let listed = list_backups(&root, "notes").unwrap();
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].file_name, format!("{stamp}-notes.zip"));

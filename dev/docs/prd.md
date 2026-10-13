@@ -211,7 +211,7 @@ encrypted_dir / upriv_plain:
 | RF-04c | (`encrypted_dir`) Require sufficient RAM for the **entire unlocked vault** while open; fail open/edit/close with user-visible error if not; UI **`warning.encrypted_dir_ram`** (RF-UI-17) | P0 |
 | RF-05 | On close: verify **open session / `vault.header`** before backup or flush — failure aborts; `store/` unchanged. Do **not** rewrap the header from a typed close password. Optional `always_prompt` re-asks as a **presence check** against that session only | P0 |
 | RF-06 | Atomic write of `store/` (header + index + chunks); never a durable `.7z` twin beside `store/` | P0 |
-| RF-07 | Backup on close: Stored zip of `store/` at `backups/<stamp>-<id>.zip` if `[backup] enabled` (no zip password) | P1 |
+| RF-07 | Backup on close: Stored zip of `store/` at `backups/<stamp>-<id>.zip` if `[backup] enabled` (no zip password). `skip_unchanged` (default on) skips the zip when vault files match the last backup still on disk; file-manager layout is not a change | P1 |
 | RF-07b | Modes: `keep_last` (only latest backup) or `keep_all` (history) | P1 |
 | RF-08 | Recovery UI if workspace/marker exists with vault logically "closed" | P0 |
 | RF-09 | Open existing vault via `--vault <path>` or dialog | P0 |

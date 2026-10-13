@@ -205,4 +205,10 @@ describe("createLiveVaultFileSystemService", () => {
     await expect(fs.osPath("v", "/a.txt")).resolves.toBe("/mnt/Notes/a.txt");
     expect(osPath).toHaveBeenCalledWith("v", "/a.txt");
   });
+
+  it("treats a missing OS folder as no path", async () => {
+    const osPath = vi.fn(async () => ({ osPath: null }));
+    const fs = createLiveVaultFileSystemService(rpcStub({ osPath }));
+    await expect(fs.osPath("v", "/")).resolves.toBeNull();
+  });
 });

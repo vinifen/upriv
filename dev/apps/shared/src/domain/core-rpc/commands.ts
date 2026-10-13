@@ -105,7 +105,7 @@ export const CORE_RPC_COMMANDS = {
   VAULT_FS_MOVE: "vault_fs_move",
   /**
    * Absolute OS path of a logical item on the live FUSE/WinFsp mount.
-   * Missing mount (mobile, WinFsp stub) → `vault_mount_failed`.
+   * Missing mount (mobile, WinFsp not installed, FUSE failure) → `vault_mount_failed`.
    */
   VAULT_FS_OS_PATH: "vault_fs_os_path",
   BACKUP_LIST: "backup_list",
@@ -136,6 +136,10 @@ export const SHELL_ONLY_RPC_COMMANDS = {
   REVEAL_OS_PATH: "reveal_os_path",
   /** Open a system terminal at the vault mount path (desktop only). */
   OPEN_IN_TERMINAL: "open_in_terminal",
+  /** Windows: whether the WinFsp runtime DLL is already installed. */
+  WINFSP_STATUS: "winfsp_status",
+  /** Windows: install the bundled WinFsp runtime. Waits on the permission prompt. */
+  WINFSP_INSTALL: "winfsp_install",
 } as const;
 
 export type CoreRpcCommand = (typeof CORE_RPC_COMMANDS)[keyof typeof CORE_RPC_COMMANDS];

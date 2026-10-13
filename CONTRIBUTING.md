@@ -16,7 +16,7 @@ Please write issues, commits, and PR text in **English**. The app UI is translat
 
 ## Development setup
 
-From `dev/`: Node 22.12+ (`nvm use`), Rust 1.94.0. There **is** a `package.json` at `dev/` (scripts such as `npm run check` / `npm run desktop`) but **no** root `node_modules` — install each app with `--prefix`. Commands: `./run help`, `./run check`. Details in [`dev/README.md`](dev/README.md).
+From `dev/`: Node 22.12+ (`nvm use`), Rust 1.94.0. There **is** a `package.json` at `dev/` (scripts such as `npm run check` / `npm run desktop`) but **no** root `node_modules` — install each app with `--prefix`. Commands: `./r h`, `./r c`. Details in [`dev/README.md`](dev/README.md).
 
 Do not copy patterns from a local `temp/` tree if you have one — that snapshot is not the product contract.
 

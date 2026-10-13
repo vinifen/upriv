@@ -1,4 +1,4 @@
-import { StyleSheet, Text, View } from "react-native";
+import { Linking, StyleSheet, Text, View } from "react-native";
 import type { InfoField } from "@upriv/shared";
 import { RevealPathButton } from "@/components/RevealPathButton";
 import { useTheme } from "@/theme";
@@ -19,7 +19,23 @@ export function InfoFieldList({ fields }: InfoFieldListProps) {
             {field.label}
           </Text>
           <View style={styles.valueRow}>
-            <Text selectable style={[typography.mono, styles.value, { color: colors.onSurface }]}>
+            <Text
+              selectable
+              accessibilityRole={field.href ? "link" : "text"}
+              onPress={
+                field.href
+                  ? () => {
+                      void Linking.openURL(field.href ?? "");
+                    }
+                  : undefined
+              }
+              style={[
+                typography.mono,
+                styles.value,
+                { color: colors.onSurface },
+                field.href ? styles.link : undefined,
+              ]}
+            >
               {field.value}
             </Text>
             <RevealPathButton path={field.openPath} />
@@ -48,5 +64,8 @@ const styles = StyleSheet.create({
   value: {
     flex: 1,
     flexShrink: 1,
+  },
+  link: {
+    textDecorationLine: "underline",
   },
 });

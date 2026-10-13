@@ -51,7 +51,7 @@ describe("openOsPathInTerminal", () => {
   it("prefers Windows Terminal when wt is on PATH", async () => {
     const spawn = vi.fn(() => startedChild());
     await openOsPathInTerminal(
-      "/workspace/Notes",
+      "C:\\workspace\\Notes",
       existingDir,
       host({
         platform: "win32",
@@ -61,29 +61,29 @@ describe("openOsPathInTerminal", () => {
     );
     expect(spawn).toHaveBeenCalledWith(
       "wt",
-      ["-d", "/workspace/Notes"],
-      expect.objectContaining({ cwd: "/workspace/Notes" }),
+      ["-d", "C:\\workspace\\Notes"],
+      expect.objectContaining({ cwd: "C:\\workspace\\Notes" }),
     );
   });
 
   it("starts cmd.exe with cwd set and does not put the path on the command line", async () => {
     const spawn = vi.fn(() => startedChild());
     await openOsPathInTerminal(
-      "/vaults/notes&calc",
+      "C:\\vaults\\notes&calc",
       existingDir,
       host({ platform: "win32", env: { ComSpec: "cmd.exe" }, spawn }),
     );
     expect(spawn).toHaveBeenCalledWith(
       "cmd.exe",
       ["/c", "start", "", "cmd.exe"],
-      expect.objectContaining({ cwd: "/vaults/notes&calc", windowsHide: false }),
+      expect.objectContaining({ cwd: "C:\\vaults\\notes&calc", windowsHide: false }),
     );
   });
 
   it("falls through to cmd when wt fails to spawn", async () => {
     const spawn = vi.fn((command: string) => (command === "wt" ? failingChild() : startedChild()));
     await openOsPathInTerminal(
-      "/workspace/Notes",
+      "C:\\workspace\\Notes",
       existingDir,
       host({
         platform: "win32",
@@ -92,7 +92,12 @@ describe("openOsPathInTerminal", () => {
         spawn,
       }),
     );
-    expect(spawn).toHaveBeenNthCalledWith(1, "wt", ["-d", "/workspace/Notes"], expect.anything());
+    expect(spawn).toHaveBeenNthCalledWith(
+      1,
+      "wt",
+      ["-d", "C:\\workspace\\Notes"],
+      expect.anything(),
+    );
     expect(spawn).toHaveBeenNthCalledWith(
       2,
       "cmd.exe",

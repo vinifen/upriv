@@ -21,6 +21,12 @@ import { ELECTRON_IPC_METHODS } from "./ipcMethods";
 import { retrievePortalTransferPaths } from "./portalFileTransfer";
 import { isAbsoluteOsPath, revealOsPathInFileManager } from "./revealInFileManager";
 import { externalNavigationUrl } from "./externalNavigation";
+import {
+  runBundledWinFspInstaller,
+  winfspInstallSucceeded,
+  winfspRuntimeDllPaths,
+  winfspScriptCandidates,
+} from "./ensureWinFsp";
 import { createDefaultTerminalHost, openOsPathInTerminal } from "./openInTerminal";
 
 const isDev = process.argv.includes("--dev") || process.env.UPRIV_DEV === "1";
@@ -527,10 +533,38 @@ ipcMain.handle(
       return null;
     }
 
+    if (method === "winfsp_status") {
+      return {
+        applicable: process.platform === "win32",
+        installed: winFspRuntimeInstalled(),
+      };
+    }
+
+    if (method === "winfsp_install") {
+      if (process.platform !== "win32" || winFspRuntimeInstalled()) {
+        return { ok: true };
+      }
+      const script = winfspScriptCandidates(process.resourcesPath, app.getAppPath()).find((file) =>
+        fs.existsSync(file),
+      );
+      if (!script) return { ok: false };
+      const code = await runBundledWinFspInstaller(script);
+      return { ok: winfspInstallSucceeded(code) && winFspRuntimeInstalled() };
+    }
+
     const activeDaemon = await ensureDaemon();
     return daemonRpc(activeDaemon, method, params, finiteTimeoutMs(timeoutMs));
   },
 );
+
+function winFspRuntimeInstalled(): boolean {
+  if (process.platform !== "win32") return true;
+  return winfspRuntimeDllPaths({
+    arch: process.arch,
+    programFiles: process.env.ProgramFiles,
+    programFilesX86: process.env["ProgramFiles(x86)"],
+  }).some((file) => fs.existsSync(file));
+}
 
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 // Single-instance is the concurrency guard for vault-root mutations (setup / alias write).

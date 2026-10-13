@@ -33,6 +33,7 @@ import {
   type VaultListItem,
 } from "@upriv/shared";
 import { GroupedVaultPicker } from "@/features/vaults/list/modals/GroupedVaultPicker";
+import { FileManagerDriverNotice, useWinFspDriver } from "@/features/system/settings/winFspDriver";
 import { useErrorToast } from "@/hooks/useErrorToast";
 
 interface SectionPatchProps<S extends keyof AppSettingsConfig> {
@@ -498,6 +499,7 @@ export function AppSettingsWorkspaceSection({
   const showShortcut = workspaceSystemHasShortcut(current);
   const pathIssue = validateWorkspaceTable(config, vaultRootPath);
   const defaultWorkspacePath = suggestedDefaultWorkspacePath(vaultRootPath);
+  const driver = useWinFspDriver();
 
   return (
     <SettingsFormGrid>
@@ -646,13 +648,25 @@ export function AppSettingsWorkspaceSection({
         );
       })}
       {showShortcut ? (
-        <SwitchRow
-          label={t("modal.app_settings.field.workspace.mount")}
-          hint={t("modal.app_settings.field.workspace.mount_help")}
-          checked={config.file_manager_folder}
-          disabled={clearDisabled || currentPlace === "unset"}
-          onChange={(file_manager_folder) => onChange({ file_manager_folder })}
-        />
+        <>
+          <SwitchRow
+            label={t("modal.app_settings.field.workspace.mount")}
+            hint={t("modal.app_settings.field.workspace.mount_help")}
+            checked={config.file_manager_folder}
+            disabled={clearDisabled || currentPlace === "unset" || driver.busy || !driver.known}
+            onChange={(file_manager_folder) => {
+              void (async () => {
+                if (file_manager_folder && !(await driver.ensureInstalled())) return;
+                onChange({ file_manager_folder });
+              })();
+            }}
+          />
+          <FileManagerDriverNotice
+            missing={driver.missing}
+            busy={driver.busy}
+            onInstall={driver.ensureInstalled}
+          />
+        </>
       ) : null}
       {clearDisabled ? (
         <p className="text-xs text-on-surface-variant">

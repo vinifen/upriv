@@ -13,6 +13,7 @@ describe("normalizeVaultSettingsConfig", () => {
     expect(normalized.security.mode).toBe("session_ram");
     expect(normalized.seven_zip.compression_level).toBe(0);
     expect(normalized.backup.enabled).toBe(true);
+    expect(normalized.backup.skip_unchanged).toBe(true);
   });
 
   it("collapses extra spaces in the vault display name", () => {

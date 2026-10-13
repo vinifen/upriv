@@ -122,7 +122,7 @@ gh pr create --title "type(scope): summary" --body "$(cat <<'EOF'
 
 ## Checklist
 - [ ] No passwords, secrets, or vault material in the diff
-- [ ] Tests ran (`./run check` from `dev/`, or note what you ran)
+- [ ] Tests ran (`./r c` from `dev/`, or note what you ran)
 EOF
 )"
 ```

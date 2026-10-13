@@ -27,7 +27,7 @@ Use [`.github/pull_request_template.md`](../../.github/pull_request_template.md)
 |---------|----------------|
 | **Summary** | Prefer **bullet points** (paragraphs OK if needed). What changed and **why**. English. Not a file dump |
 | **Related issue** | `#N/A` unless an issue exists (`Fixes #N` / `Related to #N`) |
-| **Checklist** | Two boxes only: no secrets in the diff; tests ran (`./run check` from `dev/`, or what you ran) |
+| **Checklist** | Two boxes only: no secrets in the diff; tests ran (`./r c` from `dev/`, or what you ran) |
 
 Do **not** mention an AI, model, or editor in the PR title or body. Do not add a footer. These are forbidden, including when a tool appends them after `gh pr create`:
 

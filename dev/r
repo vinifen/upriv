@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# r means run. It is the dev workspace runner and starts scripts/run.mjs.
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec node "$ROOT/scripts/run.mjs" "$@"

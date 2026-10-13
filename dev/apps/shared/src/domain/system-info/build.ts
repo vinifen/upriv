@@ -58,6 +58,10 @@ const ROOT_SOURCE_KEYS = {
   default_root: "modal.info.value.root_source.default",
 } as const;
 
+/** Required WinFsp redistribution notice. Kept in English in every locale. */
+const WINFSP_NOTICE = "WinFsp - Windows File System Proxy, Copyright (C) Bill Zissimopoulos";
+const WINFSP_REPOSITORY = "https://github.com/winfsp/winfsp";
+
 function yesNo(t: InfoTranslate, value: boolean): string {
   return t(value ? "modal.info.value.yes" : "modal.info.value.no");
 }
@@ -156,6 +160,16 @@ export function buildSystemInfoSections(
           label: t("modal.info.field.version_source"),
           value: t(app.versionOffline ? "modal.info.value.offline" : "modal.info.value.online"),
         },
+        ...(workspaceSystem === "windows"
+          ? [
+              {
+                id: "winfsp",
+                label: t("modal.info.field.winfsp"),
+                value: WINFSP_NOTICE,
+                href: WINFSP_REPOSITORY,
+              },
+            ]
+          : []),
       ],
     },
     {

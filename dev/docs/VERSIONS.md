@@ -2,7 +2,7 @@
 
 **Policy:** exact versions in `package.json` / `Cargo.toml`; refresh only after testing desktop (`npm run build`, `npm run electron:build`) and mobile (`npm run typecheck`, `expo start`). Product specs: `dev/docs/` (`prd.md`, `sdd.md`, `ARCHITECTURE.md`).
 
-**Product version:** edit **`VERSION`** at the repository root only, then run `npm run sync-version --prefix dev` (or `build` / `electron:build`, which sync automatically). CI runs `scripts/check-version.mjs` via `./run lint` to catch drift.
+**Product version:** edit **`VERSION`** at the repository root only, then run `npm run sync-version --prefix dev` (or `build` / `electron:build`, which sync automatically). CI runs `scripts/check-version.mjs` via `./r l` to catch drift.
 
 **Last reviewed:** 2026-10-05 (Android data folder is `/upriv-saf-root` via `SafFs`; in-app file manager. No `VaultStorage` trait.)
 

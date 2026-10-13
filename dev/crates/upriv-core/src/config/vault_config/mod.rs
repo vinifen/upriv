@@ -418,6 +418,7 @@ display_name = "X"
         .expect("minimal config");
         assert!(cfg.backup.enabled);
         assert_eq!(cfg.backup.keep_last, 1);
+        assert!(cfg.backup.skip_unchanged);
         assert_eq!(cfg.security.mode, VaultSecurityMode::SessionRam);
         assert!(cfg.security.secure_wipe_workspace);
         assert!(!cfg.auto_close.enabled);
@@ -528,6 +529,7 @@ path = "relative/mount"
                 enabled: false,
                 mode: VaultBackupMode::KeepAll,
                 keep_last: 5,
+                skip_unchanged: false,
             },
             security: VaultSecuritySection {
                 mode: VaultSecurityMode::AlwaysPrompt,
@@ -583,6 +585,10 @@ path = "relative/mount"
         assert!(
             raw.contains("hidden = true"),
             "hidden must be serialized, got:\n{raw}"
+        );
+        assert!(
+            raw.contains("skip_unchanged = false"),
+            "skip_unchanged must be serialized, got:\n{raw}"
         );
     }
 

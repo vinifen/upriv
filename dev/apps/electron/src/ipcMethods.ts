@@ -11,6 +11,8 @@ export const ELECTRON_IPC_METHODS = [
   "reveal_in_file_manager",
   "reveal_os_path",
   "open_in_terminal",
+  "winfsp_status",
+  "winfsp_install",
   "app_shutdown",
   "app_version",
   "app_settings_get",

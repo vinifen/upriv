@@ -285,8 +285,8 @@ export function useVaultFileManager({
   useEffect(() => {
     let cancelled = false;
     fs.osPath(vaultId, "/").then(
-      () => {
-        if (!cancelled) setOsFolderAvailable(true);
+      (osPath) => {
+        if (!cancelled) setOsFolderAvailable(Boolean(osPath));
       },
       () => {
         if (!cancelled) setOsFolderAvailable(false);
@@ -301,6 +301,11 @@ export function useVaultFileManager({
     async (logicalPath: string) => {
       try {
         const osPath = await fs.osPath(vaultId, logicalPath);
+        if (!osPath) {
+          setOsFolderAvailable(false);
+          showToast(t("error.vault_mount_failed"));
+          return;
+        }
         await revealInOsFileManager(osPath);
       } catch (error) {
         const key = mobileErrorI18nKey(error, "modal.file_manager.toast.open_system_failed");
