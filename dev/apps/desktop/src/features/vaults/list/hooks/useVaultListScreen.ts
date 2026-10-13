@@ -73,6 +73,19 @@ export function useVaultListScreen() {
   const { toast: toastState, show: showToast, showError, dismiss: dismissToast } = useErrorToast();
   const daemonReady = useDaemonReady();
   const noteSaveGenerationRef = useRef<Map<string, number>>(new Map());
+  const rewrapActivityRef = useRef<{ vaultId: string; kind: "password" | "kdf" } | null>(null);
+  const [rewrapRun, setRewrapRun] = useState<{ vaultId: string; kind: "password" | "kdf" } | null>(
+    null,
+  );
+  const blockOpenVaultIdsRef = useRef(new Set<string>());
+  blockOpenVaultIdsRef.current = new Set(rewrapRun ? [rewrapRun.vaultId] : []);
+  const onRewrapRunChange = useCallback(
+    (run: { vaultId: string; kind: "password" | "kdf" } | null) => {
+      rewrapActivityRef.current = run;
+      setRewrapRun(run);
+    },
+    [],
+  );
   const groupedOrderGenRef = useRef<Map<string, number>>(new Map());
   const groupCollapsedGenRef = useRef<Map<string, number>>(new Map());
   /** Shared across root reorder + assign/ungroup + create-vault group apply. */
@@ -470,6 +483,12 @@ export function useVaultListScreen() {
 
   const settingsPersistVaultIdsRef = useRef(new Set<string>());
 
+  useEffect(() => {
+    const request = modals.lifecycleRequest;
+    if (!rewrapRun || request?.intent !== "unlock" || request.vaultId !== rewrapRun.vaultId) return;
+    modals.setLifecycleRequest(null);
+  }, [modals.lifecycleRequest, modals.setLifecycleRequest, rewrapRun]);
+
   const lifecycle = useVaultLifecycleActions({
     vaults,
     setVaultRuntimeState,
@@ -479,6 +498,7 @@ export function useVaultListScreen() {
     dismissToast,
     t,
     settingsPersistVaultIdsRef,
+    blockOpenVaultIdsRef,
   });
 
   const handleSortChange = useCallback(
@@ -508,6 +528,14 @@ export function useVaultListScreen() {
   const visibleVaults = useMemo(
     () => filterVisibleVaults(vaults, showHiddenVaults),
     [showHiddenVaults, vaults],
+  );
+  const pipelineListStatus = useMemo(
+    () => ({
+      ...lifecycle.pipelineListStatus,
+      passwordChangeVaultIds: rewrapRun?.kind === "password" ? [rewrapRun.vaultId] : undefined,
+      kdfChangeVaultIds: rewrapRun?.kind === "kdf" ? [rewrapRun.vaultId] : undefined,
+    }),
+    [lifecycle.pipelineListStatus, rewrapRun],
   );
 
   const recordVaultHiddenIfNeeded = useCallback(
@@ -841,7 +869,7 @@ export function useVaultListScreen() {
       const target = vaults.find((vault) => vault.id === vaultId);
       if (
         !target ||
-        !canDeleteVaultNow(resolveVaultListStatus(target, lifecycle.pipelineListStatus))
+        !canDeleteVaultNow(resolveVaultListStatus(target, pipelineListStatus))
       ) {
         showToast(t("modal.settings.delete_only_closed"));
         return;
@@ -872,7 +900,18 @@ export function useVaultListScreen() {
         modals.setRecoveryVaultId(null);
       }
     },
-    [lifecycle, modals, reloadGroups, removeVault, showError, showToast, t, vaultService, vaults],
+    [
+      lifecycle,
+      modals,
+      pipelineListStatus,
+      reloadGroups,
+      removeVault,
+      showError,
+      showToast,
+      t,
+      vaultService,
+      vaults,
+    ],
   );
 
   const handleCreateGroup = useCallback(
@@ -1108,7 +1147,7 @@ export function useVaultListScreen() {
       onNewVault: () => {
         openCreateVaultWithDraft(createDraftForScratchSource(existingOrders), "source");
       },
-      pipelineListStatus: lifecycle.pipelineListStatus,
+      pipelineListStatus,
       isVaultPipelineBusy: lifecycle.pipeline.isVaultPipelineBusy,
       allVaultsHidden: !searchActive && vaults.length > 0 && visibleVaults.length === 0,
       searchNoMatches,
@@ -1138,6 +1177,15 @@ export function useVaultListScreen() {
       onOpenNote: modals.setNoteVaultId,
       onOpenVaultInfo: modals.setVaultInfoVaultId,
       onOpenSettings: (vaultId: string, area: VaultSettingsAreaId) => {
+        const run = rewrapActivityRef.current;
+        if (
+          run &&
+          (area === "password" || area === "kdf") &&
+          (run.vaultId !== vaultId || run.kind !== area)
+        ) {
+          showToast(t("vault.rewrap.busy"));
+          return;
+        }
         modals.setSettingsVaultId(vaultId);
         modals.setSettingsArea(area);
       },
@@ -1224,6 +1272,8 @@ export function useVaultListScreen() {
         settingsPersistVaultIdsRef.current = new Set(vaultIds ?? []);
       },
       onVaultDelete: handleVaultDelete,
+      onNotice: showToast,
+      onRewrapRunChange,
       groups,
       onCommitGroupAssignment: async (vaultId: string, assignment: CreateVaultGroupAssignment) => {
         if (assignment.kind === "create") {

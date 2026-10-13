@@ -68,6 +68,7 @@ export { isVaultErrorCode, VAULT_ERROR_CODES } from "./errors/codes";
 export type { VaultErrorCode } from "./errors/codes";
 export {
   isVaultCredentialChallengeI18nKey,
+  rewrapErrorOnPasswordField,
   requireVaultErrorI18nKey,
   vaultErrorI18nKey,
 } from "./errors/messages";

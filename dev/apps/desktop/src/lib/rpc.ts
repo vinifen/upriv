@@ -525,6 +525,30 @@ export async function rpcVaultClose(id: string, password?: string): Promise<Clos
   return parseCloseVaultOutcome(raw);
 }
 
+export async function rpcVaultChangePassword(
+  id: string,
+  currentPassword: string,
+  newPassword: string,
+): Promise<void> {
+  await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_CHANGE_PASSWORD, {
+    id,
+    currentPassword,
+    newPassword,
+  });
+}
+
+export async function rpcVaultChangeKdf(
+  id: string,
+  currentPassword: string,
+  unlockPreset: string,
+): Promise<void> {
+  await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_CHANGE_KDF, {
+    id,
+    currentPassword,
+    unlockPreset,
+  });
+}
+
 function parseCloseVaultOutcome(raw: unknown): CloseVaultOutcome {
   if (typeof raw !== "object" || raw === null) {
     return { backupFailed: false };

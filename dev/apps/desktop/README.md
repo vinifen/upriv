@@ -33,7 +33,7 @@ Artifacts: `dev/target/release/bundle/electron/`. On Linux: `.deb` + `.AppImage`
 
 **Linux note:** on Ubuntu 23.10+ the Electron shell uses `--no-sandbox` (AppArmor blocks Chromium user namespaces). Renderer `sandbox: true` still applies. Optional: configure `chrome-sandbox` as root 4755 — see [Electron Linux docs](https://www.electronjs.org/docs/latest/tutorial/sandbox).
 
-**Services:** `createServices()` always returns `createDesktopServices()` — vault-root, settings, logs, list, create, open/close, groups, file manager, export/import, and backups talk to `upriv-daemon`. Change-password / KDF rewrap is not implemented. There is no in-memory vault list.
+**Services:** `createServices()` always returns `createDesktopServices()` — vault-root, settings, logs, list, create, open/close, groups, file manager, export/import, backups, and password / unlock-RAM change talk to `upriv-daemon`. There is no in-memory vault list.
 
 ## Source layout
 

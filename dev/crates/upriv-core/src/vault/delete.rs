@@ -174,4 +174,21 @@ mode = "encrypted_dir"
         assert!(matches!(err, UprivError::VaultLocked(_)));
         assert!(root.vault_dir("held").unwrap().host_is_dir());
     }
+
+    #[test]
+    fn delete_refuses_while_export_or_rewrap_holds_the_vault() {
+        let (_tmp, root) = vault_root_with(&[]);
+        create_vault(
+            &root,
+            sample_config("busy", "Busy"),
+            b"pass-word-ok",
+            KdfUnlockPreset::M32,
+        )
+        .unwrap();
+        let dir = root.vault_dir("busy").unwrap();
+        let _hold = crate::session::PreparingGuard::enter_exclusive(&dir).expect("hold");
+        let err = delete_vault(&root, "busy").unwrap_err();
+        assert!(matches!(err, UprivError::VaultConfigBusy { .. }));
+        assert!(dir.host_is_dir());
+    }
 }

@@ -42,6 +42,7 @@ export function applyVaultSettingsListPatch(
     hidden: patch.hidden,
     passwordHint: patch.passwordHint,
     storageMode: patch.storageMode,
+    unlockPreset: patch.unlockPreset ?? vault.unlockPreset,
   };
 }
 

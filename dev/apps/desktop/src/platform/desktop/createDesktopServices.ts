@@ -1,4 +1,4 @@
-import { createUnavailableVaultSecurityService, type AppServices } from "@upriv/shared";
+import type { AppServices } from "@upriv/shared";
 import { desktopAppSettingsService } from "./services/appSettingsService";
 import { desktopBackupService } from "./services/backupService";
 import { desktopCreateVaultService } from "./services/createVaultService";
@@ -7,12 +7,10 @@ import { desktopVaultFileSystemService } from "./services/vaultFileSystemService
 import { desktopVaultGroupService } from "./services/vaultGroupService";
 import { desktopVaultLifecycleService } from "./services/vaultLifecycleService";
 import { desktopVaultRootService } from "./services/vaultRootService";
+import { desktopVaultSecurityService } from "./services/vaultSecurityService";
 import { desktopVaultService } from "./services/vaultService";
 
-/**
- * Desktop adapters → upriv-daemon.
- * Change-password / KDF rewrap is not implemented.
- */
+/** Desktop adapters → upriv-daemon. */
 export function createDesktopServices(): AppServices {
   return {
     vaultRoot: desktopVaultRootService,
@@ -24,6 +22,6 @@ export function createDesktopServices(): AppServices {
     filesystem: desktopVaultFileSystemService,
     backups: desktopBackupService,
     createVault: desktopCreateVaultService,
-    vaultSecurity: createUnavailableVaultSecurityService(),
+    vaultSecurity: desktopVaultSecurityService,
   };
 }

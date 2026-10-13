@@ -83,16 +83,6 @@ export interface VaultService {
   recoverDirtyClose(vaultId: string): Promise<void>;
 
   /**
-   * Argon2id unlock preset from `store/header/vault.header` (not `config.toml`).
-   * Prefer `VaultListItem.unlockPreset` — live adapters do not relist for this field.
-   * `undefined` when the header is missing or the probe is unavailable.
-   */
-  getUnlockPreset(vaultId: string): Promise<KdfUnlockPreset | undefined>;
-
-  /** Mock / post-rewrap: update the in-memory header preset after `changeKdfPreset`. */
-  setUnlockPreset(vaultId: string, preset: KdfUnlockPreset): Promise<void>;
-
-  /**
    * Export bytes for `{display_name}.zip` or `{display_name}.7z`.
    * Zip = envelope of `store/` (no zip password). `.7z` = logical stream (never `.enc` blobs).
    * Prefer `exportToPath` so large archives skip the NDJSON cap.

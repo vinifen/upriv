@@ -505,18 +505,45 @@ pub fn ensure_danger_notice(store_dir: &Path) -> Result<()> {
     paths::write_bytes_atomic(&path, DANGER_NOTICE.as_bytes())
 }
 
-pub fn save_header(store_dir: impl AsRef<Path>, header: &VaultHeader) -> Result<()> {
-    let store_dir = store_dir.as_ref();
-    let path = VaultHeader::path(store_dir);
+pub fn header_bytes(header: &VaultHeader) -> Result<Vec<u8>> {
     let body =
         serde_json::to_string_pretty(header).map_err(|error| UprivError::VaultStoreInvalid {
-            path: path.clone(),
+            path: PathBuf::from(HEADER_FILE_NAME),
             detail: format!("serialize vault.header: {error}"),
         })?;
-    let bytes = body.as_bytes();
-    paths::write_bytes_atomic(&path, bytes)?;
-    paths::write_bytes_atomic(&VaultHeader::copy_path(store_dir), bytes)?;
+    Ok(body.into_bytes())
+}
+
+pub fn save_header(store_dir: impl AsRef<Path>, header: &VaultHeader) -> Result<()> {
+    let store_dir = store_dir.as_ref();
+    let bytes = header_bytes(header)?;
+    paths::write_bytes_atomic(&VaultHeader::path(store_dir), &bytes)?;
+    paths::write_bytes_atomic(&VaultHeader::copy_path(store_dir), &bytes)?;
     ensure_danger_notice(store_dir)
+}
+
+/// New salt and a new wrap of the same master key. File chunks stay valid
+/// because chunk AAD does not include the salt or the KDF cost.
+pub fn rewrap_header(
+    header: &VaultHeader,
+    master: &[u8; MASTER_KEY_LEN],
+    password: &[u8],
+    memory_kib: u32,
+    time_cost: u32,
+    parallelism: u32,
+) -> Result<VaultHeader> {
+    let salt = super::aead::random_bytes::<SALT_LEN>();
+    let mut next = header.clone();
+    next.kdf.memory_kib = memory_kib;
+    next.kdf.time_cost = time_cost;
+    next.kdf.parallelism = parallelism;
+    next.kdf.salt_b64 = B64.encode(salt);
+    next.wrapped_master_key_b64.clear();
+    let kek = derive_kek(password, &salt, memory_kib, time_cost, parallelism)?;
+    let aad = next.wrap_aad()?;
+    let wrapped = wrap_master_key(&kek, master, &aad)?;
+    next.wrapped_master_key_b64 = B64.encode(wrapped);
+    Ok(next)
 }
 
 pub fn create_header(

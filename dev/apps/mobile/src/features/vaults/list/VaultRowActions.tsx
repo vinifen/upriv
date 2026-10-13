@@ -1,14 +1,20 @@
-import { useCallback } from "react";
-import { View } from "react-native";
+import { useCallback, useEffect, useState } from "react";
+import { Platform, View } from "react-native";
 import { useToast } from "@upriv/shared/react";
 import {
+  currentWorkspaceSystem,
+  osFileManagerFolderEnabled,
+  peekVaultSettings,
+  isVaultListRowUnlockTarget,
   resolveVaultListStatus,
+  storageModeIsPlaintext,
   vaultCanExport,
   VAULT_SETTINGS_AREA_ICON,
   VAULT_SETTINGS_AREA_I18N,
-  VAULT_SETTINGS_AREAS,
+  vaultSettingsMenuAreas,
   type VaultListItem,
   type VaultSettingsAreaId,
+  type WorkspaceTable,
 } from "@upriv/shared";
 import { DropdownPanel, FloatingToast, IconButton, MenuActionItem } from "@/components/ui";
 import { useAppSettingsContext } from "@/features/system/settings";
@@ -91,7 +97,38 @@ export function VaultRowActions({
   const showVaultSettings = settings.ui.vault_list_show_vault_settings_button !== false;
   const listStatus = resolveVaultListStatus(vault, pipelineListStatus);
   const isOpen = listStatus === "open";
+  const canUnlock = isVaultListRowUnlockTarget(listStatus);
   const canUseOpenWorkspace = listStatus === "open";
+  const plaintext = storageModeIsPlaintext(vault.storageMode);
+  const rememberedMount = peekVaultSettings(vault.id)?.mount;
+  const [fetchedMount, setFetchedMount] = useState<WorkspaceTable | undefined>(rememberedMount);
+  useEffect(() => {
+    if (!canUseOpenWorkspace || plaintext) return;
+    if (rememberedMount) {
+      setFetchedMount(rememberedMount);
+      return;
+    }
+    let cancelled = false;
+    void vaultService.getSettings(vault.id).then(
+      (next) => {
+        if (!cancelled) setFetchedMount(next?.mount);
+      },
+      () => {
+        if (!cancelled) setFetchedMount(undefined);
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [canUseOpenWorkspace, plaintext, rememberedMount, vault.id, vaultService]);
+  const showOsFileManager =
+    canUseOpenWorkspace &&
+    osFileManagerFolderEnabled(
+      plaintext,
+      settings.workspace,
+      rememberedMount ?? fetchedMount,
+      currentWorkspaceSystem(Platform.OS),
+    );
   const canExport = vaultService.canExportVault && vaultCanExport(vault, pipelineListStatus);
 
   const stacked = layout === "column";
@@ -126,7 +163,7 @@ export function VaultRowActions({
             />
           }
         >
-          {includeLockAction ? (
+          {includeLockAction && (isOpen || canUnlock) ? (
             <MenuActionItem
               icon={isOpen ? "lock" : "lock-open"}
               label={isOpen ? t("action.lock") : t("action.unlock")}
@@ -142,12 +179,14 @@ export function VaultRowActions({
                 disabled={disabled}
                 onPress={() => onOpenFileManager(vault)}
               />
-              <MenuActionItem
-                icon="folder"
-                label={t("action.open_file_manager")}
-                disabled={disabled}
-                onPress={openOsMount}
-              />
+              {showOsFileManager ? (
+                <MenuActionItem
+                  icon="folder"
+                  label={t("action.open_file_manager")}
+                  disabled={disabled}
+                  onPress={openOsMount}
+                />
+              ) : null}
             </>
           ) : null}
           {canExport ? (
@@ -194,7 +233,7 @@ export function VaultRowActions({
             />
           }
         >
-          {VAULT_SETTINGS_AREAS.map((area) => (
+          {vaultSettingsMenuAreas(vault, pipelineListStatus).map((area) => (
             <MenuActionItem
               key={area}
               icon={VAULT_SETTINGS_AREA_ICON[area]}

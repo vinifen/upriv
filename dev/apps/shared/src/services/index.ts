@@ -45,5 +45,4 @@ export type {
   ChangeVaultPasswordInput,
   VaultSecurityService,
 } from "./vault-security/VaultSecurityService";
-export { createUnavailableVaultSecurityService } from "./vault-security/createUnavailableVaultSecurityService";
 export type { AppServices } from "./types";

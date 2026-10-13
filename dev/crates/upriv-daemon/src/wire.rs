@@ -58,7 +58,12 @@ pub fn is_argon2_bound_method(method: &str, _params: &Value) -> bool {
 pub fn is_lifecycle_io_method(method: &str) -> bool {
     matches!(
         method,
-        "vault_close" | "vault_delete" | "backup_get" | "vault_discard_import"
+        "vault_close"
+            | "vault_delete"
+            | "backup_get"
+            | "vault_discard_import"
+            | "vault_change_password"
+            | "vault_change_kdf"
     )
 }
 
@@ -162,6 +167,10 @@ mod tests {
         assert!(is_long_io_method("vault_import_zip", &empty));
         assert!(is_long_io_method("vault_import_7z", &empty));
         assert!(is_lifecycle_io_method("vault_close"));
+        assert!(is_lifecycle_io_method("vault_change_password"));
+        assert!(is_lifecycle_io_method("vault_change_kdf"));
+        assert!(!is_argon2_bound_method("vault_change_password", &empty));
+        assert!(!is_argon2_bound_method("vault_change_kdf", &empty));
         assert!(is_lifecycle_io_method("vault_delete"));
         assert!(is_lifecycle_io_method("backup_get"));
         assert_eq!(
@@ -235,6 +244,8 @@ mod tests {
         }
         let expected = [
             "backup_get",
+            "vault_change_kdf",
+            "vault_change_password",
             "vault_close",
             "vault_create",
             "vault_delete",

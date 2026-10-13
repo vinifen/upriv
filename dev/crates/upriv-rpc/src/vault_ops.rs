@@ -676,7 +676,10 @@ pub(super) fn vault_fs_os_path(params: Value) -> RpcResponse {
         },
         // The in-app file manager asks on every open. No OS folder is normal
         // when the switch is off, and on macOS and mobile there is never one.
-        Err(upriv_core::UprivError::VaultMountFailed(_)) => ok(json!({ "osPath": null })),
+        Err(upriv_core::UprivError::VaultMountFailed(detail)) => {
+            let reason = upriv_core::mount::mount_failure_reason(&detail);
+            ok(json!({ "osPath": null, "reason": reason }))
+        }
         Err(error) => map_core_err(error),
     }
 }

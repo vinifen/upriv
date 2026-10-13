@@ -68,5 +68,8 @@ export function vaultCanExport(
   if (pipeline.closingVaultIds?.includes(vault.id)) return false;
   if (pipeline.creatingVaultIds?.includes(vault.id)) return false;
   if (pipeline.queuedVaultIds?.includes(vault.id)) return false;
+  if (pipeline.exportingVaultIds?.includes(vault.id)) return false;
+  if (pipeline.passwordChangeVaultIds?.includes(vault.id)) return false;
+  if (pipeline.kdfChangeVaultIds?.includes(vault.id)) return false;
   return vault.session !== "open" && vault.session !== "closing" && vault.session !== "recovery";
 }

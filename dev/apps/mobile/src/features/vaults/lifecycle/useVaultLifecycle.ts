@@ -55,6 +55,8 @@ interface UseVaultLifecycleOptions {
   onOpenFileManager?: (vault: VaultListItem) => void;
   /** Vault ids whose settings persist is in flight — Open/Unlock must wait. */
   settingsPersistVaultIdsRef?: MutableRefObject<Set<string>>;
+  /** Export, password change, or unlock-RAM change — open must wait. */
+  blockOpenVaultIdsRef?: MutableRefObject<Set<string>>;
 }
 
 export function useVaultLifecycle({
@@ -68,6 +70,7 @@ export function useVaultLifecycle({
   onFlushWorkspace,
   onOpenFileManager,
   settingsPersistVaultIdsRef,
+  blockOpenVaultIdsRef,
 }: UseVaultLifecycleOptions) {
   const { t } = useTranslation();
   const { settings, patchSettings, getSettingsSnapshot } = useAppSettingsContext();
@@ -229,6 +232,7 @@ export function useVaultLifecycle({
   const startOpenPipeline = useCallback(
     (vaultId: string): boolean => {
       if (settingsPersistVaultIdsRef?.current.has(vaultId)) return false;
+      if (blockOpenVaultIdsRef?.current.has(vaultId)) return false;
       if (pipeline.isVaultPipelineBusy(vaultId)) return false;
       closingHold.cancel(vaultId);
       pipelineBackgroundRef.current = false;
@@ -344,6 +348,7 @@ export function useVaultLifecycle({
       onOpenFileManager,
       pipeline,
       setLifecycleRequest,
+      blockOpenVaultIdsRef,
       settingsPersistVaultIdsRef,
       showToast,
       t,
@@ -575,6 +580,10 @@ export function useVaultLifecycle({
         return;
       }
       if (pipeline.isVaultPipelineBusy(vaultId)) return;
+      if (intent === "unlock" && blockOpenVaultIdsRef?.current.has(vaultId)) {
+        showToast(t("error.vault_busy"));
+        return;
+      }
       if (intent === "unlock" && settingsPersistVaultIdsRef?.current.has(vaultId)) return;
       if (intent === "close" && closingHold.holdIds.includes(vaultId)) {
         showToast(t("toast.pipeline_busy"));
@@ -623,6 +632,7 @@ export function useVaultLifecycle({
       setLifecycleRequest({ vaultId, intent: "unlock" });
     },
     [
+      blockOpenVaultIdsRef,
       closingHold.holdIds,
       markCredentialVerify,
       pipeline,
@@ -817,6 +827,11 @@ export function useVaultLifecycle({
       const closeModalOnSubmit = getSettingsSnapshot().ui.lifecycle_close_modal_on_submit === true;
       submittingRef.current = true;
       if (intent === "unlock" || password) {
+        if (intent === "unlock" && blockOpenVaultIdsRef?.current.has(vaultId)) {
+          submittingRef.current = false;
+          showToast(t("error.vault_busy"));
+          return;
+        }
         if (pipeline.isVaultPipelineBusy(vaultId)) {
           submittingRef.current = false;
           showToast(t("toast.pipeline_busy"));
@@ -868,6 +883,7 @@ export function useVaultLifecycle({
       setLifecycleRequest(null);
     },
     [
+      blockOpenVaultIdsRef,
       clearCredentialVerify,
       getSettingsSnapshot,
       lifecycleRequest,

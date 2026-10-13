@@ -118,6 +118,24 @@ describe("resolveVaultListStatus", () => {
     expect(isVaultListRowUnlockTarget("open")).toBe(false);
     expect(isVaultListRowActivatable("closing")).toBe(false);
   });
+
+  it("names export and rewrap and refuses open", () => {
+    const row = vaultRowFixture({ id: "a", session: null });
+    expect(resolveVaultListStatus(row, { exportingVaultIds: ["a"] })).toBe("exporting");
+    expect(resolveVaultListStatus(row, { passwordChangeVaultIds: ["a"] })).toBe(
+      "changing_password",
+    );
+    expect(resolveVaultListStatus(row, { kdfChangeVaultIds: ["a"] })).toBe("changing_kdf");
+    expect(isVaultListRowActivatable("exporting")).toBe(false);
+    expect(isVaultListRowActivatable("changing_password")).toBe(false);
+    expect(isVaultListRowActivatable("changing_kdf")).toBe(false);
+    expect(isVaultListRowUnlockTarget("exporting")).toBe(false);
+    expect(isVaultPipelineDisplayBusy("exporting")).toBe(true);
+    expect(isVaultPipelineDisplayBusy("changing_password")).toBe(true);
+    expect(isVaultPipelineDisplayBusy("changing_kdf")).toBe(true);
+    expect(canDeleteVaultNow("exporting")).toBe(false);
+    expect(isVaultListClosed(row, { exportingVaultIds: ["a"] })).toBe(false);
+  });
 });
 
 describe("isVaultFileManagerEligible", () => {

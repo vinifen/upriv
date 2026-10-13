@@ -106,14 +106,6 @@ export function createLiveVaultService(rpc: LiveVaultRpc): VaultService {
       await rpc.recoverDirtyClose(vaultId);
     },
 
-    async getUnlockPreset() {
-      return undefined;
-    },
-
-    async setUnlockPreset() {
-      notImplemented("Vault unlock preset change");
-    },
-
     async getExportBytes(vault: VaultRow, request: VaultExportRequest) {
       if (!rpc.exportVault) {
         notImplemented("Vault export");

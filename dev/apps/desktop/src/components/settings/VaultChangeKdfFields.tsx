@@ -17,7 +17,11 @@ interface VaultChangeKdfFieldsProps {
   rewrapBlocked: boolean;
   fields: ChangeKdfFieldsState;
   onChange: (patch: Partial<ChangeKdfFieldsState>) => void;
+  /** Wrong current password — ring and message on that field. */
+  passwordFieldError?: string | null;
   error?: string | null;
+  /** This change is already running. */
+  busy?: boolean;
 }
 
 export function VaultChangeKdfFields({
@@ -25,7 +29,9 @@ export function VaultChangeKdfFields({
   rewrapBlocked,
   fields,
   onChange,
+  passwordFieldError,
   error,
+  busy = false,
 }: VaultChangeKdfFieldsProps) {
   const { t } = useTranslation();
   const passwordId = useId();
@@ -33,6 +39,7 @@ export function VaultChangeKdfFields({
 
   const presetChanged = fields.nextPreset !== currentPreset;
   const downgrade = changeKdfFormIsDowngrade(currentPreset, fields.nextPreset);
+  const locked = rewrapBlocked || busy;
 
   return (
     <div className="space-y-3">
@@ -52,19 +59,29 @@ export function VaultChangeKdfFields({
       <SettingsField
         label={t("vault.change_kdf.current")}
         htmlFor={passwordId}
-        disabled={rewrapBlocked}
+        disabled={locked}
       >
         <PasswordInput
           id={passwordId}
           value={fields.password}
-          disabled={rewrapBlocked}
+          disabled={locked}
+          aria-invalid={passwordFieldError ? true : undefined}
+          aria-errormessage={passwordFieldError ? `${passwordId}-error` : undefined}
           onChange={(e) => onChange({ password: e.target.value })}
           autoComplete="current-password"
-          inputClassName={settingsControlClass}
+          inputClassName={[
+            settingsControlClass,
+            "aria-invalid:ring-2 aria-invalid:ring-on-error-container aria-invalid:focus:ring-on-error-container",
+          ].join(" ")}
         />
+        {passwordFieldError ? (
+          <p id={`${passwordId}-error`} role="alert" className="text-xs text-on-error-container">
+            {passwordFieldError}
+          </p>
+        ) : null}
       </SettingsField>
 
-      <SettingsField label={t("modal.settings.field.kdf.unlock_preset")} disabled={rewrapBlocked}>
+      <SettingsField label={t("modal.settings.field.kdf.unlock_preset")} disabled={locked}>
         <div
           role="radiogroup"
           aria-label={t("modal.settings.field.kdf.unlock_preset")}
@@ -78,7 +95,7 @@ export function VaultChangeKdfFields({
                 groupName={presetGroup}
                 value={preset}
                 checked={fields.nextPreset === preset}
-                disabled={rewrapBlocked}
+                disabled={locked}
                 title={t(meta.titleKey)}
                 description={t(meta.descKey)}
                 badge={meta.badge}

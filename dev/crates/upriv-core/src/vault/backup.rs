@@ -292,6 +292,26 @@ pub fn backup_on_close(root: &VaultRoot, vault_id: &str) -> Result<Option<String
     if !config.backup.enabled {
         return Ok(None);
     }
+    let stamp = write_backup_zip(&vault_dir, vault_id)?;
+    finish_backup_prune(&vault_dir, config.backup.mode, config.backup.keep_last)?;
+    Ok(Some(stamp))
+}
+
+/// One zip of the current `store/`, even when backups are off or a close would
+/// skip because the file tree is unchanged. That skip compares file names, not
+/// the header, so an older zip can still be sealed with a previous password.
+/// Prune runs only when backups are enabled.
+pub(crate) fn backup_before_rewrap(root: &VaultRoot, vault_id: &str) -> Result<()> {
+    let vault_dir = root.vault_dir(vault_id)?;
+    let config = load_vault_config(&vault_dir)?;
+    write_backup_zip(&vault_dir, vault_id)?;
+    if config.backup.enabled {
+        finish_backup_prune(&vault_dir, config.backup.mode, config.backup.keep_last)?;
+    }
+    Ok(())
+}
+
+fn write_backup_zip(vault_dir: &Path, vault_id: &str) -> Result<String> {
     let backups = vault_dir.join("backups");
     crate::host_fs::create_dir_all(&backups)?;
     let stamp = unused_backup_stamp(&backups, utc_filename_stamp())?;
@@ -300,7 +320,7 @@ pub fn backup_on_close(root: &VaultRoot, vault_id: &str) -> Result<Option<String
     let dest = backups.join(&name);
     let store = vault_dir.join(crate::paths::STORE_DIR_NAME);
     crate::store::ensure_danger_notice(&store)?;
-    let settings = snapshot_settings_bytes(&vault_dir, &store)?;
+    let settings = snapshot_settings_bytes(vault_dir, &store)?;
     if let Err(error) =
         super::zip_io::zip_store_with_config_to_path(&store, &settings, &stamp, &partial)
     {
@@ -322,14 +342,18 @@ pub fn backup_on_close(root: &VaultRoot, vault_id: &str) -> Result<Option<String
     // The new stamp must be durable before `prune_backups` unlinks the previous
     // one. Otherwise a crash can publish the deletion and lose the new copy.
     sync_dir(&backups)?;
-    prune_backups(&vault_dir, config.backup.mode, config.backup.keep_last)?;
-    sync_dir(&backups)?;
     log_event(
         LogLevel::Info,
         "vault_backup_created",
         &[("id", vault_id), ("stamp", stamp.as_str())],
     );
-    Ok(Some(stamp))
+    Ok(stamp)
+}
+
+fn finish_backup_prune(vault_dir: &Path, mode: VaultBackupMode, keep_last: u32) -> Result<()> {
+    let backups = vault_dir.join("backups");
+    prune_backups(vault_dir, mode, keep_last)?;
+    sync_dir(&backups)
 }
 
 pub fn delete_backups(root: &VaultRoot, vault_id: &str, stamps: &[String]) -> Result<()> {

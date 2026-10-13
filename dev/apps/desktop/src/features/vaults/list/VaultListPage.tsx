@@ -171,6 +171,8 @@ export function VaultListPage() {
         onVaultSettingsSaved={settings.onVaultSettingsSaved}
         onPersistBusyChange={settings.onPersistBusyChange}
         onVaultDelete={settings.onVaultDelete}
+        onNotice={settings.onNotice}
+        onRewrapRunChange={settings.onRewrapRunChange}
         groups={settings.groups}
         onCommitGroupAssignment={settings.onCommitGroupAssignment}
       />

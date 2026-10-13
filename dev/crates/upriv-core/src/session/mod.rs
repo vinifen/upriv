@@ -228,27 +228,31 @@ pub fn open_session_ids() -> Vec<String> {
     ids
 }
 
-/// Refuse export of this vault while it is open, closing, or seeding.
+/// Refuse export and rewrap while this vault is open, closing, or already held.
 pub fn ensure_vault_session_closed(vault_dir: &Path) -> Result<()> {
-    if is_vault_open_at(vault_dir)
-        || is_vault_closing_at(vault_dir)
-        || is_vault_preparing_at(vault_dir)
-    {
-        Err(UprivError::VaultMustBeClosed)
-    } else {
-        Ok(())
+    if is_vault_open_at(vault_dir) || is_vault_closing_at(vault_dir) {
+        return Err(UprivError::VaultMustBeClosed);
     }
+    if is_vault_preparing_at(vault_dir) {
+        return Err(UprivError::VaultBusy);
+    }
+    Ok(())
 }
 
-/// Refuse vault-root switch while any vault is open, mid-close, or Argon2 is in flight.
+/// Refuse vault-root switch while any vault is open, mid-close, held for
+/// export / rewrap / open / create, or Argon2 is in flight.
 ///
 /// UI also blocks queued opening/creating rows before core work starts. This is
-/// the process-side backstop so setup RPCs cannot race unlock / flush.
+/// the process-side backstop so setup RPCs cannot race unlock, flush, export,
+/// or a password / unlock-RAM rewrite.
 pub fn vault_activity_blocks_root_switch() -> bool {
     if !open_session_ids().is_empty() {
         return true;
     }
     if any_closing() {
+        return true;
+    }
+    if any_preparing() {
         return true;
     }
     is_unlock_in_flight()
@@ -265,6 +269,13 @@ pub fn is_unlock_in_flight() -> bool {
 
 fn any_closing() -> bool {
     CLOSING.lock().map(|g| !g.is_empty()).unwrap_or(true)
+}
+
+fn any_preparing() -> bool {
+    PREPARING
+        .lock()
+        .map(|g| g.values().any(|count| *count > 0))
+        .unwrap_or(true)
 }
 
 pub fn is_vault_closing_at(vault_dir: &Path) -> bool {
@@ -338,7 +349,7 @@ impl Drop for ClosingGuard {
     }
 }
 
-/// Mark `vault_dir` as preparing until dropped (open Argon2 / create seed).
+/// Mark `vault_dir` as preparing until dropped (open, create, export, or rewrap).
 pub(crate) struct PreparingGuard {
     vault_dir: PathBuf,
 }
@@ -348,6 +359,20 @@ impl PreparingGuard {
         let mut guard = PREPARING
             .lock()
             .map_err(|_| session_lock_poisoned("preparing lock poisoned"))?;
+        *guard.entry(vault_dir.to_path_buf()).or_insert(0) += 1;
+        Ok(Self {
+            vault_dir: vault_dir.to_path_buf(),
+        })
+    }
+
+    /// One holder. Open, export, and rewrap use this so they cannot overlap.
+    pub(crate) fn enter_exclusive(vault_dir: &Path) -> Result<Self> {
+        let mut guard = PREPARING
+            .lock()
+            .map_err(|_| session_lock_poisoned("preparing lock poisoned"))?;
+        if guard.get(vault_dir).is_some_and(|count| *count > 0) {
+            return Err(UprivError::VaultBusy);
+        }
         *guard.entry(vault_dir.to_path_buf()).or_insert(0) += 1;
         Ok(Self {
             vault_dir: vault_dir.to_path_buf(),
@@ -539,6 +564,26 @@ mod tests {
         // Do not assert process-wide idle — parallel Argon2 holds UNLOCK_GATE.
         let _guard = ClosingGuard::enter(&dir).expect("enter closing");
         assert!(vault_activity_blocks_root_switch());
+    }
+
+    #[test]
+    fn preparing_mark_blocks_root_switch() {
+        let dir = PathBuf::from(format!(
+            "/upriv-test-preparing-mark-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        assert!(!is_vault_preparing_at(&dir));
+        let held = PreparingGuard::enter_exclusive(&dir).expect("enter preparing");
+        assert!(is_vault_preparing_at(&dir));
+        assert!(matches!(
+            PreparingGuard::enter_exclusive(&dir),
+            Err(UprivError::VaultBusy)
+        ));
+        // Positive only: another test may also hold the unlock gate.
+        assert!(vault_activity_blocks_root_switch());
+        drop(held);
+        assert!(!is_vault_preparing_at(&dir));
     }
 
     #[test]

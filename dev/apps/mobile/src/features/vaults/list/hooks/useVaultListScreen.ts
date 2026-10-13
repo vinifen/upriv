@@ -248,6 +248,7 @@ export function useVaultListScreen() {
 
   const sessionWritesRef = useRef(new Map<string, number>());
   const settingsPersistVaultIdsRef = useRef(new Set<string>());
+  const blockOpenVaultIdsRef = useRef(new Set<string>());
   const prevVaultRootEpochRef = useRef(vaultRootEpoch);
   const vaultRootEpochRef = useRef(vaultRootEpoch);
   vaultRootEpochRef.current = vaultRootEpoch;
@@ -280,6 +281,7 @@ export function useVaultListScreen() {
     onFlushWorkspace: flushWorkspaceSnapshot,
     onOpenFileManager: openFromVault,
     settingsPersistVaultIdsRef,
+    blockOpenVaultIdsRef,
   });
 
   const reload = useCallback(async (): Promise<VaultListItem[]> => {
@@ -370,11 +372,33 @@ export function useVaultListScreen() {
     syncWithVaultList(vaults);
   }, [syncWithVaultList, vaults]);
 
+  const [rewrapRun, setRewrapRun] = useState<{ vaultId: string; kind: "password" | "kdf" } | null>(
+    null,
+  );
+  const onRewrapRunChange = useCallback(
+    (run: { vaultId: string; kind: "password" | "kdf" } | null) => {
+      setRewrapRun(run);
+    },
+    [],
+  );
+  blockOpenVaultIdsRef.current = new Set(
+    [exportJob?.vaultId, rewrapRun?.vaultId].filter((id): id is string => id != null),
+  );
+
+  useEffect(() => {
+    if (!lifecycleRequest || lifecycleRequest.intent !== "unlock") return;
+    if (!blockOpenVaultIdsRef.current.has(lifecycleRequest.vaultId)) return;
+    setLifecycleRequest(null);
+  }, [exportJob, lifecycleRequest, rewrapRun, setLifecycleRequest]);
+
   const pipelineStatus = useMemo(
     () => ({
       openingVaultIds: [...lifecycle.openingVaultIds],
       closingVaultIds: [...lifecycle.closingVaultIds],
       backingUpVaultIds: [...lifecycle.backingUpVaultIds],
+      exportingVaultIds: exportJob ? [exportJob.vaultId] : [],
+      passwordChangeVaultIds: rewrapRun?.kind === "password" ? [rewrapRun.vaultId] : undefined,
+      kdfChangeVaultIds: rewrapRun?.kind === "kdf" ? [rewrapRun.vaultId] : undefined,
       creatingVaultIds: [...lifecycle.creatingVaultIds],
       queuedVaultIds: [...lifecycle.queuedVaultIds],
       queuedOpenVaultIds: [...lifecycle.queuedOpenVaultIds],
@@ -387,9 +411,11 @@ export function useVaultListScreen() {
       lifecycle.backingUpVaultIds,
       lifecycle.closingVaultIds,
       lifecycle.creatingVaultIds,
+      exportJob,
       lifecycle.openingVaultIds,
       lifecycle.queuedOpenVaultIds,
       lifecycle.queuedVaultIds,
+      rewrapRun,
     ],
   );
 
@@ -458,7 +484,10 @@ export function useVaultListScreen() {
         listStatus === "opening" ||
         listStatus === "closing" ||
         listStatus === "creating" ||
-        listStatus === "queued"
+        listStatus === "queued" ||
+        listStatus === "exporting" ||
+        listStatus === "changing_password" ||
+        listStatus === "changing_kdf"
       ) {
         show(t("vault.export.blocked_opening"));
         return;
@@ -1118,6 +1147,8 @@ export function useVaultListScreen() {
     openCreate,
     closeCreate,
     pipelineStatus,
+    onRewrapRunChange,
+    rewrapRun,
     handleConfirmExportVault,
     handleRowExport,
     handleExportTimeout,

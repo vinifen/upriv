@@ -18,6 +18,18 @@ mod winfsp_windows;
 #[cfg_attr(not(target_os = "linux"), allow(unused_imports))]
 pub(crate) use thumbnails::{purge_mount_thumbnails, unwatch_open_mount, watch_open_mount};
 
+/// Why a saved file-manager folder still has no OS path.
+///
+/// `unsupported_filesystem` means the disk cannot hold a Windows directory junction.
+/// An empty string is every other missing mount.
+pub fn mount_failure_reason(detail: &str) -> &'static str {
+    if detail == "unsupported_filesystem" {
+        "unsupported_filesystem"
+    } else {
+        ""
+    }
+}
+
 /// Held while a vault is mounted. Unmounts and removes the leaf on drop.
 pub struct MountedVault {
     pub(crate) mount_point: PathBuf,
@@ -405,5 +417,19 @@ mod mountinfo_tests {
             classify_mount_point(Path::new("/"), SAMPLE),
             MountKind::Other
         );
+    }
+}
+
+#[cfg(test)]
+mod failure_reason_tests {
+    use super::mount_failure_reason;
+
+    #[test]
+    fn names_the_unsupported_filesystem_detail() {
+        assert_eq!(
+            mount_failure_reason("unsupported_filesystem"),
+            "unsupported_filesystem"
+        );
+        assert_eq!(mount_failure_reason("WinFsp is not installed"), "");
     }
 }

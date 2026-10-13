@@ -142,7 +142,7 @@ fn open_unlocked_session(
         return Err(UprivError::WrongPassword);
     }
     let vault_dir = vault_dir_or_not_found(root, vault_id)?;
-    let _preparing = PreparingGuard::enter(&vault_dir)?;
+    let _preparing = PreparingGuard::enter_exclusive(&vault_dir)?;
     with_vault_dir_lock(&vault_dir, || {
         if !vault_dir.host_is_dir() {
             return Err(UprivError::VaultNotFound(vault_dir.clone()));
@@ -466,6 +466,22 @@ mode = "encrypted_dir"
 "#
         ))
         .expect("config")
+    }
+
+    #[test]
+    fn open_refuses_while_the_vault_is_held() {
+        let (_tmp, root) = vault_root_with(&[]);
+        create_vault(
+            &root,
+            sample_config("notes", "Notes"),
+            b"pass-word-ok",
+            KdfUnlockPreset::M32,
+        )
+        .unwrap();
+        let vault_dir = root.vault_dir("notes").unwrap();
+        let _held = PreparingGuard::enter(&vault_dir).unwrap();
+        let err = open_vault(&root, "notes", b"pass-word-ok").unwrap_err();
+        assert!(matches!(err, UprivError::VaultBusy));
     }
 
     #[test]

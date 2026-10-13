@@ -44,6 +44,8 @@ export const ELECTRON_IPC_METHODS = [
   "vault_create",
   "vault_open",
   "vault_close",
+  "vault_change_password",
+  "vault_change_kdf",
   "vault_close_phase",
   "vault_config_get",
   "vault_store_size",

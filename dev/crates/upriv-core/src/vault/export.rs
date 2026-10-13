@@ -8,8 +8,9 @@ use crate::host_fs::HostFsQuery;
 use crate::paths::seven_zip_outer_folder;
 use crate::paths::VaultRoot;
 use crate::session::{
-    check_unlock_allowed, ensure_vault_session_closed, record_unlock_failure,
-    record_unlock_success, with_unlock_lock,
+    check_unlock_allowed, ensure_vault_session_closed, is_vault_closing_at, is_vault_open_at,
+    record_unlock_failure, record_unlock_success, with_unlock_lock, with_vault_dir_lock,
+    PreparingGuard,
 };
 use crate::store::{
     file_name, open_store, probe_store_password, VaultHeader, VaultIndex, INTERNAL_WORKSPACE_FILE,
@@ -39,6 +40,38 @@ fn closed_vault_paths(
     Ok((vault_dir, store))
 }
 
+/// Closed vault plus the exclusive hold that refuses open until the export returns.
+struct ClosedVaultHold {
+    vault_dir: std::path::PathBuf,
+    store: std::path::PathBuf,
+    _preparing: PreparingGuard,
+}
+
+fn hold_closed_vault(root: &VaultRoot, vault_id: &str) -> Result<ClosedVaultHold> {
+    let (vault_dir, store) = closed_vault_paths(root, vault_id)?;
+    let preparing = PreparingGuard::enter_exclusive(&vault_dir)?;
+    Ok(ClosedVaultHold {
+        vault_dir,
+        store,
+        _preparing: preparing,
+    })
+}
+
+/// Read the closed vault while holding its directory lock. Delete and rename
+/// take the same lock and re-check the preparing mark, so they cannot wipe or
+/// move `store/` under this read.
+fn with_held_vault<T>(hold: &ClosedVaultHold, f: impl FnOnce() -> Result<T>) -> Result<T> {
+    with_vault_dir_lock(&hold.vault_dir, || {
+        if !hold.vault_dir.host_is_dir() {
+            return Err(UprivError::VaultNotFound(hold.vault_dir.clone()));
+        }
+        if is_vault_open_at(&hold.vault_dir) || is_vault_closing_at(&hold.vault_dir) {
+            return Err(UprivError::VaultMustBeClosed);
+        }
+        f()
+    })
+}
+
 fn unlock_closed_store<T>(
     vault_dir: &std::path::Path,
     password: &[u8],
@@ -65,10 +98,12 @@ fn unlock_closed_store<T>(
 
 /// Zip of `store/` plus `README.md` and `config.toml` (no zip password). This vault must be closed.
 pub fn export_store_zip(root: &VaultRoot, vault_id: &str) -> Result<Vec<u8>> {
-    let (vault_dir, store) = closed_vault_paths(root, vault_id)?;
-    crate::store::ensure_danger_notice(&store)?;
-    let settings = snapshot_settings_bytes(&vault_dir, &store)?;
-    zip_store_with_config_to_bytes(&store, &settings, &utc_filename_stamp())
+    let hold = hold_closed_vault(root, vault_id)?;
+    with_held_vault(&hold, || {
+        crate::store::ensure_danger_notice(&hold.store)?;
+        let settings = snapshot_settings_bytes(&hold.vault_dir, &hold.store)?;
+        zip_store_with_config_to_bytes(&hold.store, &settings, &utc_filename_stamp())
+    })
 }
 
 /// Zip of `store/` plus `README.md` and `config.toml` written to `dest` (no zip password).
@@ -77,10 +112,12 @@ pub fn export_store_zip_to_path(
     vault_id: &str,
     dest: &std::path::Path,
 ) -> Result<u64> {
-    let (vault_dir, store) = closed_vault_paths(root, vault_id)?;
-    crate::store::ensure_danger_notice(&store)?;
-    let settings = snapshot_settings_bytes(&vault_dir, &store)?;
-    zip_store_with_config_to_path(&store, &settings, &utc_filename_stamp(), dest)
+    let hold = hold_closed_vault(root, vault_id)?;
+    with_held_vault(&hold, || {
+        crate::store::ensure_danger_notice(&hold.store)?;
+        let settings = snapshot_settings_bytes(&hold.vault_dir, &hold.store)?;
+        zip_store_with_config_to_path(&hold.store, &settings, &utc_filename_stamp(), dest)
+    })
 }
 
 fn skip_export_path(path: &str) -> bool {
@@ -155,18 +192,27 @@ fn with_logical_store<T>(
     archive_password: &[u8],
     f: impl FnOnce(&std::path::Path, &VaultHeader, &[u8; 32], &VaultIndex) -> Result<T>,
 ) -> Result<T> {
-    let (vault_dir, store) = closed_vault_paths(root, vault_id)?;
-    let opened = unlock_closed_store(&vault_dir, archive_password, || {
-        open_store(&store, archive_password)
-    })?;
-    f(&store, &opened.header, &opened.content_key, &opened.index)
+    let hold = hold_closed_vault(root, vault_id)?;
+    with_held_vault(&hold, || {
+        let opened = unlock_closed_store(&hold.vault_dir, archive_password, || {
+            open_store(&hold.store, archive_password)
+        })?;
+        f(
+            &hold.store,
+            &opened.header,
+            &opened.content_key,
+            &opened.index,
+        )
+    })
 }
 
 /// Argon2id wrap check for a closed vault. Does not pack a `.7z` or load the index.
 pub fn probe_export_password(root: &VaultRoot, vault_id: &str, password: &[u8]) -> Result<()> {
-    let (vault_dir, store) = closed_vault_paths(root, vault_id)?;
-    unlock_closed_store(&vault_dir, password, || {
-        probe_store_password(&store, password)
+    let hold = hold_closed_vault(root, vault_id)?;
+    with_held_vault(&hold, || {
+        unlock_closed_store(&hold.vault_dir, password, || {
+            probe_store_password(&hold.store, password)
+        })
     })
 }
 
@@ -589,6 +635,22 @@ mode = "encrypted_dir"
             assert!(json.contains(name), "{json}");
         }
         close_vault(&root, &imported, None).unwrap();
+    }
+
+    #[test]
+    fn export_refuses_while_the_vault_is_held() {
+        let (_tmp, root) = vault_root_with(&[]);
+        create_vault(
+            &root,
+            sample_config("notes", "Notes"),
+            b"pass-word-ok",
+            KdfUnlockPreset::M32,
+        )
+        .unwrap();
+        let vault_dir = root.vault_dir("notes").unwrap();
+        let _held = PreparingGuard::enter(&vault_dir).unwrap();
+        let err = export_store_zip(&root, "notes").unwrap_err();
+        assert!(matches!(err, UprivError::VaultBusy));
     }
 
     #[test]

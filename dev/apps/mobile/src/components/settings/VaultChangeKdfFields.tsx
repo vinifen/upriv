@@ -17,18 +17,23 @@ export function VaultChangeKdfFields({
   rewrapBlocked,
   fields,
   onChange,
+  passwordFieldError,
   error,
+  busy = false,
 }: {
   /** Current unlock cost from `store/header/vault.header`. */
   currentPreset: KdfUnlockPreset;
   rewrapBlocked: boolean;
   fields: ChangeKdfFieldsState;
   onChange: (patch: Partial<ChangeKdfFieldsState>) => void;
+  passwordFieldError?: string | null;
   error?: string | null;
+  busy?: boolean;
 }) {
   const { t } = useTranslation();
   const presetChanged = fields.nextPreset !== currentPreset;
   const downgrade = changeKdfFormIsDowngrade(currentPreset, fields.nextPreset);
+  const locked = rewrapBlocked || busy;
 
   return (
     <View style={{ gap: spacing.md }}>
@@ -37,15 +42,17 @@ export function VaultChangeKdfFields({
       ) : null}
       <FieldHint>{t("modal.settings.change_kdf_intro")}</FieldHint>
       <FieldHint>{t("warning.kdf_change_backups")}</FieldHint>
-      <FieldLabel disabled={rewrapBlocked}>{t("vault.change_kdf.current")}</FieldLabel>
+      <FieldLabel disabled={locked}>{t("vault.change_kdf.current")}</FieldLabel>
       <PasswordInput
         value={fields.password}
-        disabled={rewrapBlocked}
+        disabled={locked}
+        invalid={Boolean(passwordFieldError)}
         onChangeText={(password) => onChange({ password })}
         autoCapitalize="none"
         autoCorrect={false}
       />
-      <FieldLabel disabled={rewrapBlocked}>
+      {passwordFieldError ? <Warning>{passwordFieldError}</Warning> : null}
+      <FieldLabel disabled={locked}>
         {t("modal.settings.field.kdf.unlock_preset")}
       </FieldLabel>
       <RadioGroup>
@@ -56,7 +63,7 @@ export function VaultChangeKdfFields({
               key={preset}
               value={preset}
               checked={fields.nextPreset === preset}
-              disabled={rewrapBlocked}
+              disabled={locked}
               title={t(meta.titleKey)}
               description={t(meta.descKey)}
               badge={meta.badge}

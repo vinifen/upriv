@@ -332,12 +332,6 @@ export function createMobileMockServices(): AppServices {
         removeRemappedMockSeedVault(vaultId);
       },
       async recoverDirtyClose() {},
-      async getUnlockPreset(vaultId) {
-        return getMockVaultUnlockPreset(vaultId);
-      },
-      async setUnlockPreset(vaultId, preset) {
-        setMockVaultUnlockPreset(vaultId, preset);
-      },
       async getExportBytes(vault, request) {
         return mockVaultExportBytes(vault, request);
       },
@@ -573,7 +567,18 @@ export function createMobileMockServices(): AppServices {
       },
     },
 
-    vaultSecurity: createMockVaultSecurityService(),
+    vaultSecurity: createMockVaultSecurityService({
+      onPasswordChanged(vaultId) {
+        const settings = getMockVaultSettings(vaultId);
+        registerMockVaultSettings({
+          ...settings,
+          security: {
+            ...settings.security,
+            password_changed_at: new Date().toISOString(),
+          },
+        });
+      },
+    }),
 
     createVault: {
       async testImportPackagePassword(password) {

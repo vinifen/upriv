@@ -54,6 +54,7 @@ export {
   VAULT_SETTINGS_AREA_I18N,
   VAULT_SETTINGS_AREAS,
   vaultSettingsAreaTitleKey,
+  vaultSettingsMenuAreas,
   vaultSettingsPreferenceSections,
   type VaultSettingsAreaId,
 } from "./areas";

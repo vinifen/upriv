@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState, type MutableRefObject } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
 import {
   canRunIdleAutoClose,
   isVaultCredentialChallengeI18nKey,
@@ -56,6 +56,8 @@ interface UseVaultLifecycleActionsOptions {
   t: (key: I18nKey, params?: Record<string, string>) => string;
   /** Vault ids whose settings persist is in flight — Open/Unlock must wait. */
   settingsPersistVaultIdsRef?: MutableRefObject<Set<string>>;
+  /** Closed-vault work (password / unlock RAM) that must refuse open. */
+  blockOpenVaultIdsRef?: MutableRefObject<Set<string>>;
 }
 
 export function useVaultLifecycleActions({
@@ -67,6 +69,7 @@ export function useVaultLifecycleActions({
   dismissToast,
   t,
   settingsPersistVaultIdsRef,
+  blockOpenVaultIdsRef,
 }: UseVaultLifecycleActionsOptions) {
   const vaultService = useVaultService();
   const fs = useVaultFileSystemService();
@@ -153,11 +156,27 @@ export function useVaultLifecycleActions({
   const lifecycleRequestRef = useRef(lifecycleRequest);
   lifecycleRequestRef.current = lifecycleRequest;
 
+  const vaultOpenHeld = useCallback(
+    (vaultId: string) =>
+      exportJobVaultId === vaultId || (blockOpenVaultIdsRef?.current.has(vaultId) ?? false),
+    [blockOpenVaultIdsRef, exportJobVaultId],
+  );
+
+  useEffect(() => {
+    const request = lifecycleRequest;
+    if (!exportJobVaultId || request?.intent !== "unlock" || request.vaultId !== exportJobVaultId) {
+      return;
+    }
+    // Close a leftover unlock dialog. The busy toast stays on the open attempt.
+    setLifecycleRequest(null);
+  }, [exportJobVaultId, lifecycleRequest, setLifecycleRequest]);
+
   const pipelineListStatus = useMemo(
     () => ({
       openingVaultIds: pipeline.openingVaultIds,
       closingVaultIds: [...new Set([...pipeline.closingVaultIds, ...closingHold.holdIds])],
       backingUpVaultIds: pipeline.backingUpVaultIds,
+      exportingVaultIds: exportJobVaultId ? [exportJobVaultId] : [],
       creatingVaultIds: pipeline.creatingVaultIds,
       queuedVaultIds: pipeline.queuedVaultIds,
       queuedOpenVaultIds: pipeline.queuedOpenVaultIds,
@@ -166,6 +185,7 @@ export function useVaultLifecycleActions({
     }),
     [
       closingHold.holdIds,
+      exportJobVaultId,
       pipeline.backingUpVaultIds,
       pipeline.closingVaultIds,
       pipeline.creatingVaultIds,
@@ -271,6 +291,7 @@ export function useVaultLifecycleActions({
   const startOpenPipeline = useCallback(
     (vaultId: string): boolean => {
       if (settingsPersistVaultIdsRef?.current.has(vaultId)) return false;
+      if (vaultOpenHeld(vaultId)) return false;
       if (pipeline.isVaultPipelineBusy(vaultId)) return false;
       closingHold.cancel(vaultId);
       pipelineBackgroundRef.current = false;
@@ -390,6 +411,7 @@ export function useVaultLifecycleActions({
       settingsPersistVaultIdsRef,
       showToast,
       t,
+      vaultOpenHeld,
       vaultService,
     ],
   );
@@ -891,6 +913,10 @@ export function useVaultLifecycleActions({
         return;
       }
       if (pipeline.isVaultPipelineBusy(vault.id)) return;
+      if (vaultOpenHeld(vault.id)) {
+        showToast(t("error.vault_busy"));
+        return;
+      }
       if (settingsPersistVaultIdsRef?.current.has(vault.id)) return;
       if (resolveVaultDisplayStatus(vault) === "recovery") {
         setRecoveryVaultId(vault.id);
@@ -906,6 +932,9 @@ export function useVaultLifecycleActions({
       setLifecycleRequest,
       setRecoveryVaultId,
       settingsPersistVaultIdsRef,
+      showToast,
+      t,
+      vaultOpenHeld,
     ],
   );
 
@@ -926,7 +955,10 @@ export function useVaultLifecycleActions({
           listStatus === "opening" ||
           listStatus === "closing" ||
           listStatus === "creating" ||
-          listStatus === "queued"
+          listStatus === "queued" ||
+          listStatus === "exporting" ||
+          listStatus === "changing_password" ||
+          listStatus === "changing_kdf"
         ) {
           showToast(t("vault.export.blocked_opening"));
           return;
@@ -1050,6 +1082,10 @@ export function useVaultLifecycleActions({
       const closeModalOnSubmit = getSettingsSnapshot().ui.lifecycle_close_modal_on_submit === true;
 
       if (intent === "unlock") {
+        if (vaultOpenHeld(vaultId)) {
+          showToast(t("error.vault_busy"));
+          return;
+        }
         if (pipeline.isVaultPipelineBusy(vaultId)) {
           showToast(t("toast.pipeline_busy"));
           return;
@@ -1132,6 +1168,7 @@ export function useVaultLifecycleActions({
       startClosePipeline,
       startOpenPipeline,
       t,
+      vaultOpenHeld,
     ],
   );
 

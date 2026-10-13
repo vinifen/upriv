@@ -17,6 +17,7 @@ mod open_close;
 mod os_import;
 mod persistence;
 mod rename;
+mod rewrap;
 mod seven_zip;
 mod seven_zip_pack;
 mod welcome;
@@ -66,6 +67,7 @@ pub use os_import::{
 };
 pub use persistence::{load_vault_persistence, VaultPersistence};
 pub use rename::{rename_vault, VaultRenameResult};
+pub use rewrap::{change_vault_kdf, change_vault_password};
 pub use seven_zip::{
     import_logical_seven_zip, import_logical_seven_zip_path, probe_logical_seven_zip,
     probe_logical_seven_zip_path,

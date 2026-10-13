@@ -10,6 +10,7 @@ export {
   detectHostPlatform,
   appWorkspacePlace,
   encryptedShortcutActive,
+  osFileManagerFolderEnabled,
   hostPlatformFromSignals,
   normalizeWorkspaceTable,
   resolvedWorkspaceParent,

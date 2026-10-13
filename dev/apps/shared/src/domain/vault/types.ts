@@ -29,9 +29,20 @@ export function storageModeIsPlaintext(mode: StorageMode): boolean {
  * `creating` / `opening` / `closing` / `queued` are list/runtime badges (row +
  * unlock/lock modal hints), not a full-screen pipeline overlay.
  * `queued` = FIFO job waiting; active job uses opening/closing/creating.
+ * `exporting` / `changing_password` / `changing_kdf` are closed-vault work.
+ * The row names that work and open stays refused until it finishes.
  */
 export type VaultDisplayStatus =
-  "open" | "closed" | "recovery" | "closing" | "opening" | "creating" | "queued";
+  | "open"
+  | "closed"
+  | "recovery"
+  | "closing"
+  | "opening"
+  | "creating"
+  | "queued"
+  | "exporting"
+  | "changing_password"
+  | "changing_kdf";
 
 /**
  * In-flight or queued open / close / create (renderer FIFO, not `vault_list`).
@@ -50,6 +61,12 @@ export type VaultPipelineListStatus = {
   queuedOpenVaultIds?: readonly string[];
   /** Active close that core reports is writing the close backup. Still displays `closing`. */
   backingUpVaultIds?: readonly string[];
+  /** Closed vault whose export is in flight. Displays `exporting`. */
+  exportingVaultIds?: readonly string[];
+  /** Closed vault whose password rewrap is in flight. */
+  passwordChangeVaultIds?: readonly string[];
+  /** Closed vault whose unlock-RAM rewrap is in flight. */
+  kdfChangeVaultIds?: readonly string[];
   /** Active FIFO job — shared clock for modal + row budget hints. */
   activeVaultId?: string;
   activeStartedAt?: number;
@@ -85,7 +102,13 @@ export function vaultPipelineRowBudget(
 
 export function isVaultPipelineDisplayBusy(status: VaultDisplayStatus): boolean {
   return (
-    status === "opening" || status === "closing" || status === "creating" || status === "queued"
+    status === "opening" ||
+    status === "closing" ||
+    status === "creating" ||
+    status === "queued" ||
+    status === "exporting" ||
+    status === "changing_password" ||
+    status === "changing_kdf"
   );
 }
 
@@ -235,12 +258,22 @@ export function resolveVaultListStatus(
   if (pipeline.openingVaultIds?.includes(row.id)) return "opening";
   if (pipeline.closingVaultIds?.includes(row.id)) return "closing";
   if (pipeline.queuedVaultIds?.includes(row.id)) return "queued";
+  if (pipeline.exportingVaultIds?.includes(row.id)) return "exporting";
+  if (pipeline.passwordChangeVaultIds?.includes(row.id)) return "changing_password";
+  if (pipeline.kdfChangeVaultIds?.includes(row.id)) return "changing_kdf";
   return resolveVaultDisplayStatus(row);
 }
 
 /** True when list status has no open session and no open/close in flight. Recovery OK. */
 export function isVaultDisplayStatusQuiet(status: VaultDisplayStatus): boolean {
-  return status !== "open" && status !== "opening" && status !== "closing";
+  return (
+    status !== "open" &&
+    status !== "opening" &&
+    status !== "closing" &&
+    status !== "exporting" &&
+    status !== "changing_password" &&
+    status !== "changing_kdf"
+  );
 }
 
 /** True when this vault has no open session and no open/close in flight. Recovery OK. */

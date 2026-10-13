@@ -262,6 +262,22 @@ export function encryptedShortcutActive(
   return app.file_manager_folder;
 }
 
+/**
+ * OS file manager for this vault on this system.
+ * `upriv_plain` uses its workspace while open. Encrypted vaults use the file manager folder.
+ * Unknown mount settings stay off until the vault config is loaded.
+ */
+export function osFileManagerFolderEnabled(
+  plaintext: boolean,
+  app: WorkspaceTable,
+  vault: WorkspaceTable | undefined,
+  system: WorkspaceSystem,
+): boolean {
+  if (plaintext) return true;
+  if (!vault) return false;
+  return encryptedShortcutActive(app, vault, system);
+}
+
 /** Mount table sent to the daemon. Both file manager folder fields are stored once. */
 export function vaultMountForDaemon(table: WorkspaceTable): {
   app_file_manager_folder: VaultShortcut;

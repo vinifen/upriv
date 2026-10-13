@@ -1,7 +1,7 @@
 # Store crypto — Argon2id + XChaCha20-Poly1305
 
 **Audience:** anyone implementing vault store, backups, key wrap, or `.7z` export in `upriv-core`.  
-**Status:** implementation invariant **and** the bar for shipping `store/`. `dev/` has one store format (`format_version` 1): header wrap + AES-SIV index + XChaCha chunks (create writes a seed file). Chunk AAD does not bind KDF params. **Change-password is not implemented.** Any other `format_version` fails closed as an unreadable store.
+**Status:** implementation invariant **and** the bar for shipping `store/`. `dev/` has one store format (`format_version` 1): header wrap + AES-SIV index + XChaCha chunks (create writes a seed file). Chunk AAD does not bind KDF params. Password change and unlock-RAM change (`change_vault_password`, `change_vault_kdf`) keep the same master key, mint a new salt, and reseal the header wrap and the name index. File blobs stay. The vault must be closed. A backup zip of the current body is written first; if that zip fails, `store/` is left unchanged. Any other `format_version` fails closed as an unreadable store.
 
 **Greenfield.** Nothing shipped before this layout. `dev/` is the first product. Do not add a reader, migrator, or second code path for an older header, an older chunk layout, an unpacked `backups/<stamp>/` tree, a `.7z` backup, Seal, `archive/`, or the demo trees under `temp/` and `prod-example/`. Create and open use `format_version` 1 only. A backup is only `backups/<stamp>-<id>.zip` (pin: `backups/saves/<stamp>-<id>.zip`). That number is the vault body, not the app version. Wrap, index, and chunks all carry it; they are not separate versions. When a choice is between a compatibility shim and the direct current path, take the direct path and make that path the efficient one (no per-file full-index clone, chunk authentication that does not force a rewrite of the whole file). Do not keep two implementations. Stale sentences in PRD/SDD are not a reason to keep the old shape.  
 **Related:** PRD **RF-55**; SDD **§2.4.1**, **§6**; [SECURITY-PLAINTEXT.md](SECURITY-PLAINTEXT.md).  
@@ -312,7 +312,7 @@ password → Argon2id (header salt + m/t/p) → KEK → unwrap MASTER KEY
 | **Open** | Yes (once) | **Read** nonce already stored on wrap + each chunk. Do not generate. |
 | **Edit / flush chunk** | No | **Generate** 192-bit CSPRNG nonce, encrypt, store `nonce \|\| ciphertext\|\|tag`. Unchanged files keep old blobs. |
 | **Close** | No | Only dirty objects get new messages (new nonces). Then wipe keys from RAM. |
-| **Change password** | Yes (new KEK) | Not implemented. A future rewrap uses a new wrap nonce and the **same** master key, so chunks stay. Chunk AAD already omits salt/`m`/`t`/`p`. Do not put those fields, or `file_size`, back. |
+| **Change password / unlock RAM** | Yes, twice, sequential (old KEK, then new KEK). The unlock gate is held only for each derive. | New wrap nonce and a **new salt**. The **same** master key, so chunks stay. Header wrap and the name index are resealed (both bind salt/`m`/`t`/`p`). Chunk AAD already omits those fields and `file_size`. Do not put them back. A backup zip of the current body is written before any header byte changes. |
 
 Editing does **not** weaken XChaCha or “re-run Argon2.” Primitive fatigue is not a thing. Bugs on this path are **ours**: nonce reuse, plaintext staging, missing AAD, torn `.enc` writes (atomic replace), encrypting with the password instead of the content key.
 
@@ -356,7 +356,7 @@ Applied review 2026-09-12. Confidentiality of closed `store/` passed for wrap + 
 
 | Id | Issue | Do |
 |----|--------|----|
-| **P0** | Chunk AAD must not bind header `salt`/`m`/`t`/`p` or `file_size`. This format (`format_version` 1) already omits them. Wrap and index still bind the KDF params. | Do not add those fields back. Do not add a reader for another `format_version`. Change-password is not implemented; when it is, rewrap the header only and keep the same master key. |
+| **P0** | Chunk AAD must not bind header `salt`/`m`/`t`/`p` or `file_size`. This format (`format_version` 1) already omits them. Wrap and index still bind the KDF params. | Do not add those fields back. Do not add a reader for another `format_version`. Password and unlock-RAM change reseal the header and the name index only, with a new salt and the same master key. Do not rewrite file blobs. |
 | **P1** | AAD comment once said maps were sorted. Reality = struct field order. | Do **not** “fix” serialization to RFC 8785. Keep golden vectors. Never reorder AAD struct fields without a version bump. |
 | **P1** | `load_header` / `derive_kek` must refuse absurd `m`/`t`/`p` (DoS / OOM). Editing `m` on an existing wrap does **not** cheapen that wrap (AAD + different KEK). | Bounds: `m` in **32 MiB..=2 GiB**, `t` in **1..=16**, `p` **= 1**. Fail closed before Argon2. |
 | **P2** | Argon2 version **0x13** is hardcoded, not in header/AAD. | Keep hardcoded + test. Putting it in AAD is a format bump. |
@@ -411,5 +411,5 @@ Applied review 2026-09-12. Confidentiality of closed `store/` passed for wrap + 
 7. Plaintext vault bytes on ordinary disk **only** if the user chose `upriv_plain` and the vault is open. Transitional phases (import, export, backup, password, recovery) must stream or copy ciphertext — never a convenience extract.
 8. Surface anti-brute-force lives in **`upriv-core` RAM**: serialize `open`; **5** failures in **60 s** → **60 s** block. Not the UI, not a JSON counter. Do not market it as stopping offline guessing.
 9. Password unlocks the master key **once** per open. Saves = content key + new CSPRNG 192-bit nonce, not Argon2. Never RAM counters or password-derived nonces. Close flushes with those session keys — do **not** rewrap `vault.header` from a typed lock password (`always_prompt` is a presence check only). Open-session OS leaks ≠ “XChaCha failed while editing.”
-10. One store format. Do not add a reader for another `format_version`. Do not put KDF salt/`m`/`t`/`p` or `file_size` into chunk AAD. Change-password is not implemented. Do not reorder AAD struct fields. Do not claim VeraCrypt equivalence or “prevents brute force.”
+10. One store format. Do not add a reader for another `format_version`. Do not put KDF salt/`m`/`t`/`p` or `file_size` into chunk AAD. Password and unlock-RAM change keep this chunk AAD and the same master key. Do not reorder AAD struct fields. Do not claim VeraCrypt equivalence or “prevents brute force.”
 11. Header `m`/`t`/`p` out of shipping bounds → fail closed. Do not lower `m` to make open snappy (that is the attacker’s optimization).

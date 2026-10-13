@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useToast } from "@upriv/shared/react";
 import { Icon } from "@/components/icons";
 import { DropdownMenu, IconButton, Toast } from "@/components/ui";
@@ -8,13 +8,19 @@ import { revealFailureKey } from "@/lib/revealInOs";
 import { rpcRevealInFileManager } from "@/lib/rpc";
 import { useVaultService } from "@/platform/services";
 import {
+  currentWorkspaceSystem,
+  osFileManagerFolderEnabled,
+  peekVaultSettings,
+  isVaultListRowUnlockTarget,
   resolveVaultListStatus,
+  storageModeIsPlaintext,
   vaultCanExport,
   VAULT_SETTINGS_AREA_ICON,
   VAULT_SETTINGS_AREA_I18N,
-  VAULT_SETTINGS_AREAS,
+  vaultSettingsMenuAreas,
   type VaultListItem,
   type VaultSettingsAreaId,
+  type WorkspaceTable,
 } from "@upriv/shared";
 
 const rowActionProps = {
@@ -63,7 +69,38 @@ export function VaultRowActions({
   const showVaultSettings = settings.ui.vault_list_show_vault_settings_button !== false;
   const listStatus = resolveVaultListStatus(vault, pipelineListStatus);
   const isOpen = listStatus === "open";
+  const canUnlock = isVaultListRowUnlockTarget(listStatus);
   const canUseOpenWorkspace = listStatus === "open";
+  const plaintext = storageModeIsPlaintext(vault.storageMode);
+  const rememberedMount = peekVaultSettings(vault.id)?.mount;
+  const [fetchedMount, setFetchedMount] = useState<WorkspaceTable | undefined>(rememberedMount);
+  useEffect(() => {
+    if (!canUseOpenWorkspace || plaintext) return;
+    if (rememberedMount) {
+      setFetchedMount(rememberedMount);
+      return;
+    }
+    let cancelled = false;
+    void vaultService.getSettings(vault.id).then(
+      (next) => {
+        if (!cancelled) setFetchedMount(next?.mount);
+      },
+      () => {
+        if (!cancelled) setFetchedMount(undefined);
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [canUseOpenWorkspace, plaintext, rememberedMount, vault.id, vaultService]);
+  const showOsFileManager =
+    canUseOpenWorkspace &&
+    osFileManagerFolderEnabled(
+      plaintext,
+      settings.workspace,
+      rememberedMount ?? fetchedMount,
+      currentWorkspaceSystem(),
+    );
   const canExport = vaultService.canExportVault && vaultCanExport(vault, pipelineListStatus);
 
   const stacked = layout === "column";
@@ -79,7 +116,7 @@ export function VaultRowActions({
 
   const settingsItems = useMemo(
     () =>
-      VAULT_SETTINGS_AREAS.map((area) => ({
+      vaultSettingsMenuAreas(vault, pipelineListStatus).map((area) => ({
         id: area,
         label: t(VAULT_SETTINGS_AREA_I18N[area]),
         icon: <Icon name={VAULT_SETTINGS_AREA_ICON[area]} size={18} />,
@@ -87,12 +124,12 @@ export function VaultRowActions({
           window.requestAnimationFrame(() => onOpenSettings(vault.id, area));
         },
       })),
-    [onOpenSettings, t, vault.id],
+    [onOpenSettings, pipelineListStatus, t, vault],
   );
 
   const moreItems = useMemo(
     () => [
-      ...(includeLockAction
+      ...(includeLockAction && (isOpen || canUnlock)
         ? [
             {
               id: isOpen ? "lock" : "unlock",
@@ -117,14 +154,18 @@ export function VaultRowActions({
                 window.requestAnimationFrame(() => onOpenFileManager(vault));
               },
             },
-            {
-              id: "open_os",
-              label: t("action.open_file_manager"),
-              icon: <Icon name="folder" size={18} />,
-              onSelect: () => {
-                window.requestAnimationFrame(() => void openOsMount());
-              },
-            },
+            ...(showOsFileManager
+              ? [
+                  {
+                    id: "open_os",
+                    label: t("action.open_file_manager"),
+                    icon: <Icon name="folder" size={18} />,
+                    onSelect: () => {
+                      window.requestAnimationFrame(() => void openOsMount());
+                    },
+                  },
+                ]
+              : []),
           ]
         : []),
       ...(canExport
@@ -166,7 +207,9 @@ export function VaultRowActions({
     ],
     [
       canExport,
+      canUnlock,
       canUseOpenWorkspace,
+      showOsFileManager,
       includeLockAction,
       isOpen,
       onExportVault,

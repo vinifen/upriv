@@ -292,6 +292,8 @@ export function VaultListScreen() {
     openCreate,
     closeCreate,
     pipelineStatus,
+    onRewrapRunChange,
+    rewrapRun,
     handleConfirmExportVault,
     handleRowExport,
     handleExportTimeout,
@@ -595,6 +597,15 @@ export function VaultListScreen() {
         onDragCancel={clearDrag}
         onOpenFileManager={openFromVault}
         onOpenSettings={(rowVault, area) => {
+          const run = rewrapRun;
+          if (
+            run &&
+            (area === "password" || area === "kdf") &&
+            (run.vaultId !== rowVault.id || run.kind !== area)
+          ) {
+            show(t("vault.rewrap.busy"));
+            return;
+          }
           setSettingsVault(rowVault);
           setSettingsArea(area);
         }}
@@ -1305,6 +1316,7 @@ export function VaultListScreen() {
         }}
         pipelineListStatus={pipelineStatus}
         showToast={show}
+        onRewrapRunChange={onRewrapRunChange}
         groups={groups}
         onCommitGroupAssignment={handleCommitGroupAssignment}
         onVaultDelete={(vaultId) => {

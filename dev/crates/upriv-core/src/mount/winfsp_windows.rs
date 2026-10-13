@@ -37,6 +37,8 @@ const FILE_DELETE_ON_CLOSE: u32 = 0x0000_1000;
 const FSP_CLEANUP_DELETE: u32 = 0x01;
 
 const STATUS_SUCCESS: i32 = 0;
+/// `ERROR_INVALID_FUNCTION` from `FSCTL_SET_REPARSE_POINT` on exFAT and FAT.
+const STATUS_NOT_IMPLEMENTED: i32 = 0xC000_0002_u32 as i32;
 const STATUS_ACCESS_DENIED: u32 = 0xC000_0022;
 const STATUS_OBJECT_NAME_INVALID: u32 = 0xC000_0033;
 const STATUS_OBJECT_NAME_NOT_FOUND: u32 = 0xC000_0034;
@@ -63,6 +65,48 @@ const NOT_INSTALLED: &str = "WinFsp is not installed; use the in-app file manage
 extern "system" {
     fn LoadLibraryW(name: *const u16) -> *mut c_void;
     fn GetProcAddress(module: *mut c_void, name: *const i8) -> *mut c_void;
+    fn GetVolumePathNameW(file: *const u16, buffer: *mut u16, size: u32) -> i32;
+    fn GetVolumeInformationW(
+        root: *const u16,
+        volume_name: *mut u16,
+        volume_name_size: u32,
+        serial: *mut u32,
+        max_component: *mut u32,
+        flags: *mut u32,
+        fs_name: *mut u16,
+        fs_name_size: u32,
+    ) -> i32;
+}
+
+/// Directory mounts are junctions. Only NTFS and ReFS accept them.
+pub(super) fn volume_allows_directory_mount(path: &Path) -> bool {
+    let wide = wide_z_os(path);
+    let mut root = [0u16; 260];
+    if unsafe { GetVolumePathNameW(wide.as_ptr(), root.as_mut_ptr(), root.len() as u32) } == 0 {
+        return true;
+    }
+    let mut fs_name = [0u16; 32];
+    if unsafe {
+        GetVolumeInformationW(
+            root.as_ptr(),
+            std::ptr::null_mut(),
+            0,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            fs_name.as_mut_ptr(),
+            fs_name.len() as u32,
+        )
+    } == 0
+    {
+        return true;
+    }
+    let end = fs_name
+        .iter()
+        .position(|unit| *unit == 0)
+        .unwrap_or(fs_name.len());
+    let name = String::from_utf16_lossy(&fs_name[..end]);
+    name.eq_ignore_ascii_case("NTFS") || name.eq_ignore_ascii_case("ReFS")
 }
 
 fn nt(code: u32) -> i32 {
@@ -1495,6 +1539,11 @@ pub(super) fn spawn(
     if status != STATUS_SUCCESS {
         unsafe { (api.delete)(file_system) };
         drop(unsafe { Box::from_raw(context) });
+        if status == STATUS_NOT_IMPLEMENTED && !volume_allows_directory_mount(&mount_point) {
+            return Err(UprivError::VaultMountFailed(
+                "unsupported_filesystem".into(),
+            ));
+        }
         return Err(mount_failed(&mount_point, status));
     }
     let status = unsafe { (api.start_dispatcher)(file_system, 0) };
@@ -1575,6 +1624,17 @@ mod tests {
         assert_eq!(allocation_size(1), 4096);
         assert_eq!(allocation_size(4096), 4096);
         assert_eq!(allocation_size(4097), 8192);
+    }
+
+    #[test]
+    fn an_installed_winfsp_dll_loads_the_symbols_we_call() {
+        if dll_candidates()
+            .iter()
+            .all(|path| load_module(path).is_none())
+        {
+            return;
+        }
+        assert!(load_api().is_some());
     }
 
     #[test]

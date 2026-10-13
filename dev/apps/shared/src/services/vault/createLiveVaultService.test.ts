@@ -3,15 +3,12 @@ import { createLiveVaultService } from "./createLiveVaultService";
 import { forgetVaultSettings, peekVaultSettings } from "./vaultSettingsMemory";
 
 describe("createLiveVaultService", () => {
-  it("does not relist for unlock preset", async () => {
-    const listVaults = vi.fn(async () => []);
+  it("starts without settings persist until saveSettings is wired", () => {
     const service = createLiveVaultService({
-      listVaults,
+      listVaults: vi.fn(async () => []),
       createVault: vi.fn(),
       getSettings: vi.fn(),
     });
-    await expect(service.getUnlockPreset("notes")).resolves.toBeUndefined();
-    expect(listVaults).not.toHaveBeenCalled();
     expect(service.canPersistSettings).toBe(false);
   });
 

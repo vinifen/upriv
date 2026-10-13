@@ -191,6 +191,16 @@ pub fn decode_index(bytes: &[u8]) -> Result<VaultIndex> {
     })
 }
 
+pub fn sealed_index_bytes(
+    header: &VaultHeader,
+    index_key: &[u8; INDEX_KEY_LEN],
+    index: &VaultIndex,
+) -> Result<Vec<u8>> {
+    let aad = index_aad(header)?;
+    let plain = encode_index(index)?;
+    seal_index(index_key, &plain, &aad)
+}
+
 pub fn save_sealed_index(
     store_dir: impl AsRef<Path>,
     header: &VaultHeader,
@@ -202,9 +212,7 @@ pub fn save_sealed_index(
     if let Some(parent) = path.parent() {
         crate::host_fs::create_dir_all(parent)?;
     }
-    let aad = index_aad(header)?;
-    let plain = encode_index(index)?;
-    let sealed = seal_index(index_key, &plain, &aad)?;
+    let sealed = sealed_index_bytes(header, index_key, index)?;
     // Copy first. The primary file is the commit, so a crash before that write
     // still opens the previous tree.
     paths::write_bytes_atomic(&index_copy_path(store_dir), &sealed)?;

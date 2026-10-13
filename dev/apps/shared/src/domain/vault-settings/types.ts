@@ -1,4 +1,5 @@
 import type { StorageMode } from "../vault/types";
+import type { KdfUnlockPreset } from "./kdf";
 import { normalizeStoredName } from "../format/storedName";
 import { normalizeWorkspaceTable, vaultMountForDaemon, type WorkspaceTable } from "../workspace";
 
@@ -266,4 +267,6 @@ export interface VaultSettingsListPatch {
   hidden: boolean;
   passwordHint?: string;
   storageMode: StorageMode;
+  /** Set after an unlock-RAM rewrap. Omitted saves leave the list row's preset. */
+  unlockPreset?: KdfUnlockPreset;
 }

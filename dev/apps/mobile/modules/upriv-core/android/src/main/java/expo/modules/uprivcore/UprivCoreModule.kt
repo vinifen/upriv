@@ -268,7 +268,8 @@ private object CoreLanes {
 
   fun dispatcher(method: String): CoroutineDispatcher = when (method) {
     "vault_open", "vault_create", "vault_export_probe", "vault_ingest_open" -> argon2
-    "vault_close", "vault_delete", "backup_get", "vault_discard_import" -> lifecycle
+    "vault_close", "vault_delete", "backup_get", "vault_discard_import",
+    "vault_change_password", "vault_change_kdf" -> lifecycle
     "vault_fs_import_os_file", "vault_fs_import_seal" -> importFiles
     "vault_import_zip",
     "vault_import_7z",

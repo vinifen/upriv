@@ -107,9 +107,9 @@ export const ThemedInput = forwardRef<
 /** Masked field with show/hide — eye sits inside the same chrome as desktop `PasswordInput`. */
 export const PasswordInput = forwardRef<
   TextInput,
-  Omit<TextInputProps, "secureTextEntry"> & { disabled?: boolean }
+  Omit<TextInputProps, "secureTextEntry"> & { disabled?: boolean; invalid?: boolean }
 >(function PasswordInput(
-  { style, editable = true, disabled = false, onFocus, onBlur, ...rest },
+  { style, editable = true, disabled = false, invalid = false, onFocus, onBlur, ...rest },
   ref,
 ) {
   const { colors, typography } = useTheme();
@@ -126,7 +126,9 @@ export const PasswordInput = forwardRef<
         {
           backgroundColor: fill,
           opacity: isEditable ? 1 : 0.6,
-          ...controlFocusRing(colors.accent, fill, focused && isEditable),
+          ...(invalid
+            ? { borderWidth: 2 as const, borderColor: colors.onErrorContainer }
+            : controlFocusRing(colors.accent, fill, focused && isEditable)),
         },
       ]}
     >
@@ -134,6 +136,7 @@ export const PasswordInput = forwardRef<
         ref={ref}
         collapsable={false}
         {...rest}
+        aria-invalid={invalid || undefined}
         editable={isEditable}
         secureTextEntry={!visible}
         blurOnSubmit={rest.blurOnSubmit ?? false}
