@@ -47,4 +47,3 @@ describe("winfspInstallSucceeded", () => {
     expect(winfspInstallSucceeded(1602)).toBe(false);
   });
 });
-

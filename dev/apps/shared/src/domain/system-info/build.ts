@@ -59,8 +59,7 @@ const ROOT_SOURCE_KEYS = {
 } as const;
 
 /** Required WinFsp redistribution notice. Kept in English in every locale. */
-const WINFSP_NOTICE =
-  "WinFsp - Windows File System Proxy, Copyright (C) Bill Zissimopoulos";
+const WINFSP_NOTICE = "WinFsp - Windows File System Proxy, Copyright (C) Bill Zissimopoulos";
 const WINFSP_REPOSITORY = "https://github.com/winfsp/winfsp";
 
 function yesNo(t: InfoTranslate, value: boolean): string {
