@@ -45,6 +45,9 @@ export const METHOD_TIMEOUT_MS: Partial<Record<string, number>> = {
   [SHELL_ONLY_RPC_COMMANDS.REVEAL_IN_FILE_MANAGER]: 10_000,
   [SHELL_ONLY_RPC_COMMANDS.REVEAL_OS_PATH]: 10_000,
   [SHELL_ONLY_RPC_COMMANDS.OPEN_IN_TERMINAL]: 10_000,
+  [SHELL_ONLY_RPC_COMMANDS.WINFSP_STATUS]: 10_000,
+  /** Windows permission prompt. `0` waits until the user answers. */
+  [SHELL_ONLY_RPC_COMMANDS.WINFSP_INSTALL]: 0,
 };
 
 /** Normalize Electron/preload invoke failures into `RpcError` (wire `code: message`). */

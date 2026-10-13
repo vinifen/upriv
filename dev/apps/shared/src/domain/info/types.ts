@@ -8,6 +8,8 @@ export interface InfoField {
   value: string;
   /** Absolute OS path or `content://` URI the system file manager can open. */
   openPath?: string;
+  /** HTTPS page opened from this row. */
+  href?: string;
 }
 
 export interface InfoSection {

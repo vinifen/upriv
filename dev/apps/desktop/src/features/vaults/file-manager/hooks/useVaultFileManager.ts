@@ -329,8 +329,8 @@ export function useVaultFileManager({
     if (!isElectronRenderer()) return;
     let cancelled = false;
     fs.osPath(vaultId, "/").then(
-      () => {
-        if (!cancelled) setOsFolderAvailable(true);
+      (osPath) => {
+        if (!cancelled) setOsFolderAvailable(Boolean(osPath));
       },
       () => {
         if (!cancelled) setOsFolderAvailable(false);

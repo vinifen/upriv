@@ -162,6 +162,7 @@ keep_last = 3
         assert_eq!(parsed.config.vault.password_hint, "pet");
         assert!(parsed.config.vault.hidden);
         assert!(!parsed.config.backup.enabled);
+        assert!(parsed.config.backup.skip_unchanged);
         assert_eq!(parsed.unlock_preset, Some(KdfUnlockPreset::M128));
         let earlier = format!("# {PRESET_MARK} 32mib\n{text}");
         let last = parse_embedded_settings(earlier.as_bytes()).unwrap();

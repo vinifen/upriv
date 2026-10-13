@@ -38,4 +38,4 @@ jobs:
           npm ci --prefix apps/desktop
           npm ci --prefix apps/electron
           npm ci --prefix apps/mobile
-          ./run check
+          ./r c

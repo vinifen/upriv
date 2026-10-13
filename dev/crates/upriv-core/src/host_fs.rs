@@ -1026,8 +1026,9 @@ fn open_bridge_file(
 fn open_routed(
     path: &Path,
     flags: &OpenFlags,
-    unix_mode: Option<u32>,
-    unix_custom: Option<i32>,
+    #[cfg(unix)] unix_mode: Option<u32>,
+    #[cfg(unix)] unix_custom: Option<i32>,
+    #[cfg(windows)] windows_custom: Option<u32>,
 ) -> io::Result<File> {
     match route(path)? {
         Route::Local => {
@@ -1048,9 +1049,12 @@ fn open_routed(
                     opts.custom_flags(custom);
                 }
             }
-            #[cfg(not(unix))]
+            #[cfg(windows)]
             {
-                let _ = (unix_mode, unix_custom);
+                use std::os::windows::fs::OpenOptionsExt;
+                if let Some(custom) = windows_custom {
+                    opts.custom_flags(custom);
+                }
             }
             opts.open(path).map(File::local)
         }
@@ -1208,6 +1212,13 @@ impl std::os::fd::AsFd for File {
     }
 }
 
+#[cfg(windows)]
+impl std::os::windows::io::AsRawHandle for File {
+    fn as_raw_handle(&self) -> std::os::windows::io::RawHandle {
+        self.inner.as_raw_handle()
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct OpenOptions {
     flags: OpenFlags,
@@ -1269,14 +1280,27 @@ impl OpenOptions {
         self
     }
 
+    /// Stable stand-in for `OpenOptionsExt::custom_flags`. Rust 1.94's Windows
+    /// trait also requires unstable `freeze_last_*` methods, so this wrapper
+    /// cannot implement the trait.
+    #[cfg(windows)]
+    pub(crate) fn custom_flags(&mut self, flags: u32) -> &mut Self {
+        self.custom_flags = Some(flags);
+        self
+    }
+
     pub fn open<P: AsRef<Path>>(&self, path: P) -> io::Result<File> {
         #[cfg(unix)]
         {
             open_routed(path.as_ref(), &self.flags, self.mode, self.custom_flags)
         }
-        #[cfg(not(unix))]
+        #[cfg(windows)]
         {
-            open_routed(path.as_ref(), &self.flags, None, None)
+            open_routed(path.as_ref(), &self.flags, self.custom_flags)
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            open_routed(path.as_ref(), &self.flags)
         }
     }
 }
@@ -1476,8 +1500,21 @@ mod tests {
                         .create_new(create_new);
                     match opts.open(&path) {
                         Ok(file) => {
-                            use std::os::fd::IntoRawFd;
-                            let fd = file.into_raw_fd();
+                            #[cfg(unix)]
+                            let fd = {
+                                use std::os::fd::IntoRawFd;
+                                file.into_raw_fd() as isize
+                            };
+                            #[cfg(windows)]
+                            let fd = {
+                                use std::os::windows::io::IntoRawHandle;
+                                file.into_raw_handle() as isize
+                            };
+                            #[cfg(not(any(unix, windows)))]
+                            let fd = {
+                                drop(file);
+                                0isize
+                            };
                             ok(serde_json::json!({ "fd": fd }))
                         }
                         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -1769,29 +1806,5 @@ mode = "encrypted_dir"
             .map(|entry| entry.unwrap().file_name().into_string().unwrap())
             .collect();
         assert_eq!(names, vec!["note.txt".to_string()]);
-    }
-}
-
-#[cfg(windows)]
-impl std::os::windows::fs::OpenOptionsExt for OpenOptions {
-    fn access_mode(&mut self, _access: u32) -> &mut Self {
-        self
-    }
-
-    fn share_mode(&mut self, _share: u32) -> &mut Self {
-        self
-    }
-
-    fn custom_flags(&mut self, flags: u32) -> &mut Self {
-        self.custom_flags = Some(flags);
-        self
-    }
-
-    fn attributes(&mut self, _attributes: u32) -> &mut Self {
-        self
-    }
-
-    fn security_qos_flags(&mut self, _flags: u32) -> &mut Self {
-        self
     }
 }

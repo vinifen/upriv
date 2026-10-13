@@ -179,7 +179,6 @@ pub(crate) fn open_nofollow(
     }
     #[cfg(windows)]
     {
-        use std::os::windows::fs::OpenOptionsExt;
         const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
         opts.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
     }

@@ -98,8 +98,20 @@ fn try_attach_mount(root: &VaultRoot, vault_id: &str, vault_dir: &std::path::Pat
                 }
             }
         }
-        Err(_) => {
-            log_event(LogLevel::Warn, "vault_mount_failed", &[("id", vault_id)]);
+        Err(error) => {
+            let detail = match &error {
+                UprivError::VaultMountFailed(detail) => detail.clone(),
+                other => other.to_string(),
+            };
+            log_event(
+                LogLevel::Warn,
+                "vault_mount_failed",
+                &[("id", vault_id), ("detail", detail.as_str())],
+            );
+            let _ = with_open_session(vault_dir, |session| {
+                session.mount_failure = Some(detail);
+                Ok(())
+            });
             Ok(())
         }
     }
@@ -271,6 +283,11 @@ fn close_vault_inner(
         }
         let hash = content_hash_hex(&store)?;
         let logical_hash = index_logical_hash(&session.index);
+        // An unreadable config is not the default "skip". The backup attempt
+        // reports that failure. A readable config with the key omitted is on.
+        let skip_when_unchanged = load_vault_config(&vault_dir)
+            .map(|config| config.backup.skip_unchanged)
+            .unwrap_or(false);
         let previous = load_vault_persistence(&vault_dir).ok().flatten();
         let previous_backup = previous
             .as_ref()
@@ -287,13 +304,15 @@ fn close_vault_inner(
         persistence.backed_up_stamp = previous_stamp.clone();
         save_vault_persistence(&vault_dir, &persistence)?;
         if !session.skip_close_backup {
-            let already_backed_up = logical_hash.as_ref().is_some_and(|hash| {
-                previous_backup.as_deref() == Some(hash.as_str())
-                    && previous_stamp.as_deref().is_some_and(|stamp| {
-                        list_backups(root, vault_id)
-                            .is_ok_and(|entries| entries.iter().any(|entry| entry.stamp == stamp))
-                    })
-            });
+            let already_backed_up = skip_when_unchanged
+                && logical_hash.as_ref().is_some_and(|hash| {
+                    previous_backup.as_deref() == Some(hash.as_str())
+                        && previous_stamp.as_deref().is_some_and(|stamp| {
+                            list_backups(root, vault_id).is_ok_and(|entries| {
+                                entries.iter().any(|entry| entry.stamp == stamp)
+                            })
+                        })
+                });
             if !already_backed_up {
                 closing.set_phase(ClosePhase::Backup);
                 match backup_on_close(root, vault_id) {
@@ -496,6 +515,58 @@ mode = "encrypted_dir"
         let second = list_backups(&root, "notes").unwrap();
         assert_eq!(second.len(), 1);
         assert_eq!(second[0].file_name, first[0].file_name);
+    }
+
+    #[test]
+    fn workspace_layout_does_not_create_a_backup() {
+        let (_tmp, root) = vault_root_with(&[]);
+        create_vault(
+            &root,
+            sample_config("notes", "Notes"),
+            b"pass-word-ok",
+            KdfUnlockPreset::M32,
+        )
+        .unwrap();
+        open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        close_vault(&root, "notes", None).unwrap();
+        let first = list_backups(&root, "notes").unwrap();
+        assert_eq!(first.len(), 1);
+
+        open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        crate::vault::fs_write_file(
+            &root,
+            "notes",
+            "/.upriv-workspace.json",
+            br#"{"openTabs":["/README.md"],"activeTabPath":"/README.md"}"#,
+        )
+        .unwrap();
+        close_vault(&root, "notes", None).unwrap();
+        let after_layout = list_backups(&root, "notes").unwrap();
+        assert_eq!(after_layout.len(), 1);
+        assert_eq!(after_layout[0].file_name, first[0].file_name);
+
+        open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        crate::vault::fs_write_file(&root, "notes", "/note.txt", b"edited").unwrap();
+        close_vault(&root, "notes", None).unwrap();
+        let after_edit = list_backups(&root, "notes").unwrap();
+        assert_eq!(after_edit.len(), 1);
+        assert_ne!(after_edit[0].file_name, first[0].file_name);
+    }
+
+    #[test]
+    fn close_writes_a_backup_on_every_close_when_skip_unchanged_is_off() {
+        let (_tmp, root) = vault_root_with(&[]);
+        let mut config = sample_config("notes", "Notes");
+        config.backup.skip_unchanged = false;
+        config.backup.keep_last = 5;
+        create_vault(&root, config, b"pass-word-ok", KdfUnlockPreset::M32).unwrap();
+        open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        close_vault(&root, "notes", None).unwrap();
+        open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        close_vault(&root, "notes", None).unwrap();
+        let backups = list_backups(&root, "notes").unwrap();
+        assert_eq!(backups.len(), 2);
+        assert_ne!(backups[0].file_name, backups[1].file_name);
     }
 
     #[test]

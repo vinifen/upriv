@@ -76,7 +76,13 @@ export function VaultRowActions({
   const openOsMount = useCallback(() => {
     void fs
       .osPath(vault.id, "/")
-      .then((osPath) => revealInOsFileManager(osPath))
+      .then((osPath) => {
+        if (!osPath) {
+          show(t("error.vault_mount_failed"));
+          return;
+        }
+        return revealInOsFileManager(osPath);
+      })
       .catch((error: unknown) => {
         show(t(mobileErrorI18nKey(error, "modal.file_manager.toast.open_system_failed")));
       });

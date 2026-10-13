@@ -59,8 +59,8 @@ export interface LiveVaultFileSystemRpc {
     fromPath: string,
     toFolderPath: string,
   ): Promise<{ path: string; revision: number }>;
-  /** Absolute OS path on the live mount; throws `vault_mount_failed` when none. */
-  osPath(id: string, path: string): Promise<{ osPath: string }>;
+  /** Absolute OS path on the live mount. `osPath` is null when there is no OS folder. */
+  osPath(id: string, path: string): Promise<{ osPath: string | null }>;
 }
 
 function b64ToBytes(b64: string): Uint8Array {

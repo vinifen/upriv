@@ -27,6 +27,7 @@ describe("revealOsPathInFileManager", () => {
         statSync: () => ({ isDirectory: () => true }),
       },
       { openPath, showItemInFolder },
+      "linux",
     );
     expect(openPath).toHaveBeenCalledWith("/workspace/Notes");
     expect(showItemInFolder).not.toHaveBeenCalled();
@@ -42,6 +43,7 @@ describe("revealOsPathInFileManager", () => {
         statSync: () => ({ isDirectory: () => false }),
       },
       { openPath, showItemInFolder },
+      "linux",
     );
     expect(showItemInFolder).toHaveBeenCalledWith("/workspace/Notes/a.txt");
     expect(openPath).not.toHaveBeenCalled();
@@ -56,6 +58,7 @@ describe("revealOsPathInFileManager", () => {
         statSync: () => ({ isDirectory: () => true }),
       },
       { openPath, showItemInFolder: vi.fn() },
+      "linux",
     );
     expect(openPath).toHaveBeenCalledWith("/workspace/Notes");
   });

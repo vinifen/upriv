@@ -9,7 +9,7 @@
 | **Mobile** | Expo / React Native + UniFFI (`upriv-ffi`) |
 | **UI languages** | English · Português (Brasil) · Español |
 
-> **Today:** greenfield. One store format (`format_version` 1). Vault root setup, settings, vault list, create, groups, open/close, the in-app file manager, Linux FUSE, zip and `.7z` import/export, and backups talk to live `upriv-core`. There is no importer for an older vault layout. WinFsp and change-password are not in this build.
+> **Today:** greenfield. One store format (`format_version` 1). Vault root setup, settings, vault list, create, groups, open/close, the in-app file manager, Linux FUSE, the Windows vault folder (WinFsp, installed when that folder is turned on), zip and `.7z` import/export, and backups talk to live `upriv-core`. There is no importer for an older vault layout. Change-password is not in this build.
 
 ---
 
@@ -55,22 +55,22 @@ There is **no** `npm install` at the `dev/` root.
 ```bash
 cd dev
 
-./run desktop              # Electron + Vite + upriv-daemon (wipes Vite cache)
-./run mobile               # Expo / Metro (wipes cache)
-./run mobile --android     # same, then open Android
+./r d                # Electron + Vite + upriv-daemon (wipes Vite cache)
+./r m                # Expo / Metro (wipes cache)
+./r m -a             # same, then open Android
 
-./run help                 # all commands
+./r h                # all commands
 ```
 
-Same via npm: `npm run desktop` · `npm run mobile` · `npm run mobile:android`.
+Same via npm: `npm run desktop` · `npm run mobile`. `npm run mobile -- -a` opens Android. `npm run mobile:android` is a native rebuild, not that command.
 
 | Want… | Command |
 |--------|---------|
-| Desktop app | `./run desktop` |
-| Mobile (Expo) | `./run mobile` |
-| Mobile on Android | `./run mobile --android` |
+| Desktop app | `./r d` |
+| Mobile (Expo) | `./r m` |
+| Mobile on Android | `./r m -a` |
 | Browser UI only (mocks, no Electron) | `npm run dev` (from `dev/`) |
-| Lint + tests | `./run check` |
+| Lint + tests | `./r c` |
 
 ---
 
@@ -116,9 +116,9 @@ Needs a linked native FFI build for real vault I/O (dev-client / release), not E
 
 ```bash
 cd dev
-./run check     # rustfmt + clippy + tsc + eslint + prettier + cargo/vitest tests
-./run lint-fix # auto-fix formatters where possible
-./run test      # tests only
+./r c     # rustfmt + clippy + tsc + eslint + prettier + cargo/vitest tests
+./r f     # auto-fix formatters where possible
+./r t     # tests only
 ```
 
 ---
@@ -135,7 +135,7 @@ upriv/
 ├── docs/gitflow/             # branches, commits, PRs
 └── dev/                      # ← all implementation
     ├── README.md             # deep workspace / packaging notes
-    ├── run                   # ./run desktop | mobile | check | …
+    ├── r, r.cmd, r.ps1       # ./r d | m | c | … (bash, cmd, PowerShell)
     ├── apps/
     │   ├── desktop/          # React UI
     │   ├── electron/         # Electron shell
@@ -150,6 +150,10 @@ upriv/
 ```
 
 ---
+
+## Third-party notice
+
+WinFsp - Windows File System Proxy, Copyright (C) Bill Zissimopoulos. The Windows setup and the portable app ship the official unmodified WinFsp installer and ask to install it when the file manager folder is turned on. Declining leaves that switch unchanged. Repository: https://github.com/winfsp/winfsp
 
 ## 📚 Docs
 
@@ -184,5 +188,5 @@ cd dev && nvm use && \
   npm install --prefix apps/desktop && \
   npm install --prefix apps/electron && \
   npm install --prefix apps/mobile && \
-  ./run check && ./run desktop
+  ./r c && ./r d
 ```

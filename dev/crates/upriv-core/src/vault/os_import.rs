@@ -302,6 +302,7 @@ mod tests {
     #[allow(unused_imports)]
     use crate::host_fs::HostFsQuery;
     use std::fs;
+    #[cfg(unix)]
     use std::io::Write;
 
     use super::*;

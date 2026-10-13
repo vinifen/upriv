@@ -40,6 +40,9 @@ pub struct OpenSession {
     /// the process lock file is released.
     #[zeroize(skip)]
     pub mount: Option<crate::mount::MountedVault>,
+    /// Why `mount` is missing after an open that tried to attach one.
+    #[zeroize(skip)]
+    pub mount_failure: Option<String>,
     /// Process lockfile; released when the session is dropped.
     #[zeroize(skip)]
     pub lock: Option<crate::lockfile::VaultLock>,
@@ -88,6 +91,7 @@ impl OpenSession {
             dirty: false,
             tree_revision: 0,
             mount: None,
+            mount_failure: None,
             lock: None,
             skip_close_backup: false,
             unsealed_imports: 0,

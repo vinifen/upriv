@@ -60,6 +60,7 @@ pub(crate) fn sevenz_member_name_unsafe(name: &str) -> bool {
         .any(|part| part.is_empty() || part == "." || part == "..")
 }
 
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub(crate) fn parse_mem_available_bytes(meminfo: &str) -> Option<u64> {
     for line in meminfo.lines() {
         let Some(rest) = line.strip_prefix("MemAvailable:") else {

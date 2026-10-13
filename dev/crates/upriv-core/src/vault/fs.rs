@@ -1312,6 +1312,7 @@ pub fn fs_create_file(
 }
 
 /// Create `parent/name` exactly. FUSE uses this; in-app "New file" uses [`fs_create_file`].
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub fn fs_create_named_file(
     root: &VaultRoot,
     vault_id: &str,
@@ -1409,6 +1410,7 @@ pub fn fs_delete(root: &VaultRoot, vault_id: &str, ui_path: &str) -> Result<u64>
     })
 }
 
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub fn fs_rmdir(root: &VaultRoot, vault_id: &str, ui_path: &str) -> Result<u64> {
     let dir = require_open(root, vault_id)?;
     let path = logical(ui_path)?;
@@ -1466,6 +1468,7 @@ pub fn fs_move(
     })
 }
 
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub fn fs_relocate(
     root: &VaultRoot,
     vault_id: &str,
@@ -1521,16 +1524,18 @@ pub(crate) fn join_logical_under_mount(mount: &Path, logical: &str) -> Result<Pa
 
 /// Absolute OS path of a logical item on the live FUSE/WinFsp mount.
 ///
-/// Does not create files. Missing mount (mobile, WinFsp stub, FUSE failure)
+/// Does not create files. Missing mount (mobile, WinFsp not installed, FUSE failure)
 /// returns [`UprivError::VaultMountFailed`] — never a plaintext extract.
 pub fn fs_os_path(root: &VaultRoot, vault_id: &str, ui_path: &str) -> Result<PathBuf> {
     let dir = require_open(root, vault_id)?;
     let logical = logical(ui_path)?;
     with_open_session(&dir, |session| {
         let Some(mount) = session.mount.as_ref() else {
-            return Err(UprivError::VaultMountFailed(
-                "OS mount is not available; use the in-app file manager".into(),
-            ));
+            let detail = session
+                .mount_failure
+                .clone()
+                .unwrap_or_else(|| "OS mount is not available; use the in-app file manager".into());
+            return Err(UprivError::VaultMountFailed(detail));
         };
         join_logical_under_mount(mount.mount_point(), &logical)
     })

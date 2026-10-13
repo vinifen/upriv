@@ -43,6 +43,7 @@ import { useVaultRootService } from "@/platform/services";
 import { useErrorToast } from "@/hooks/useErrorToast";
 import { securityModeToUi, type SecurityUiMode, uiToSecurityMode } from "@upriv/shared";
 import { IntegerInput } from "./IntegerInput";
+import { FileManagerDriverNotice, useWinFspDriver } from "@/features/system/settings/winFspDriver";
 
 export const settingsControlClass =
   "w-full rounded-lg border-0 bg-surface-container-highest px-2.5 py-2 text-sm text-on-surface outline-none ring-0 focus:ring-2 focus:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-60 sm:px-3 sm:py-2.5";
@@ -288,6 +289,8 @@ interface VaultSettingsMountSectionProps extends SectionPatchProps<"mount"> {
   vaultRootPath?: string | null;
   /** Notifies parent when the mount path UI is invalid (blocks save / create). */
   onPathIssueChange?: (issue: WorkspacePathIssue | null) => void;
+  /** Selected file-manager choice still needs the WinFsp driver. Blocks save. */
+  onDriverAttentionChange?: (active: boolean) => void;
   /** `mount.workspace_path` requires vault_quiet. */
   controlsDisabled?: boolean;
   /** Plain text writes files in the folder and has no file manager folder switch. */
@@ -301,6 +304,7 @@ export function VaultSettingsMountSection({
   onChange,
   vaultRootPath = null,
   onPathIssueChange,
+  onDriverAttentionChange,
   controlsDisabled = false,
   plaintext = false,
   appWorkspace: appFolders = appWorkspace(),
@@ -309,10 +313,23 @@ export function VaultSettingsMountSection({
   const pathId = useId();
   const current = currentWorkspaceSystem();
   const pathIssue = validateWorkspaceTable(config, vaultRootPath);
+  const driver = useWinFspDriver();
+
+  const choiceNeedsDriver =
+    !plaintext &&
+    workspaceSystemHasShortcut(current) &&
+    (config[current].path.trim() !== "" || config.app_file_manager_folder === "on");
+  // Unknown status still blocks save, so a click cannot land before the check returns.
+  const driverAttention = choiceNeedsDriver && (!driver.known || driver.missing);
 
   useEffect(() => {
     onPathIssueChange?.(pathIssue);
   }, [onPathIssueChange, pathIssue]);
+
+  useEffect(() => {
+    onDriverAttentionChange?.(driverAttention);
+    return () => onDriverAttentionChange?.(false);
+  }, [onDriverAttentionChange, driverAttention]);
 
   return (
     <SettingsFormGrid>
@@ -355,6 +372,9 @@ export function VaultSettingsMountSection({
                 vaultCustomShortcut={config.custom_file_manager_folder}
                 active={active}
                 plaintext={plaintext}
+                driverMissing={driver.missing}
+                driverBusy={driver.busy || !driver.known}
+                ensureDriver={driver.ensureInstalled}
                 pathId={pathId}
                 onChange={onChange}
               />
@@ -388,6 +408,9 @@ function CurrentVaultFolderChoices({
   vaultCustomShortcut,
   active,
   plaintext,
+  driverMissing,
+  driverBusy,
+  ensureDriver,
   pathId,
   onChange,
 }: {
@@ -399,6 +422,9 @@ function CurrentVaultFolderChoices({
   vaultCustomShortcut: boolean;
   active: boolean;
   plaintext: boolean;
+  driverMissing: boolean;
+  driverBusy: boolean;
+  ensureDriver: () => Promise<boolean>;
   pathId: string;
   onChange: (patch: Partial<VaultSettingsConfig["mount"]>) => void;
 }) {
@@ -413,6 +439,8 @@ function CurrentVaultFolderChoices({
   const workspaceReady = appWorkspacePlace(appEntry) !== "unset";
   const shortcutLocked = !active || !workspaceReady;
   const radiosDisabled = shortcutLocked || custom;
+  const onNeedsDriver = showShortcut && !custom && vaultAppShortcut === "on" && driverMissing;
+  const customNeedsDriver = showShortcut && custom && driverMissing;
   const appFolderTitle = workspaceReady
     ? t("modal.settings.field.mount.inherit")
     : `${t("modal.settings.field.mount.inherit")} (${t("modal.app_settings.field.workspace.unset")})`;
@@ -459,6 +487,7 @@ function CurrentVaultFolderChoices({
           description={t("modal.settings.field.mount.inherit_desc")}
           disabled={!active}
           muted={!workspaceReady}
+          attention={onNeedsDriver}
           onSelect={() => {
             if (!active) return;
             onChange({ [system]: { ...entry, path: "" } });
@@ -488,16 +517,26 @@ function CurrentVaultFolderChoices({
                     groupName={shortcutGroup}
                     value={mode}
                     checked={vaultAppShortcut === mode}
-                    disabled={shortcutLocked}
+                    disabled={shortcutLocked || driverBusy}
+                    attention={mode === "on" && onNeedsDriver}
                     title={
                       mode === "inherit"
                         ? followTitle
                         : t(`modal.settings.field.mount.shortcut_${mode}`)
                     }
                     onSelect={() => {
-                      if (radiosDisabled) return;
+                      if (radiosDisabled || driverBusy) return;
                       onChange({ app_file_manager_folder: mode });
                     }}
+                    footer={
+                      mode === "on" && onNeedsDriver ? (
+                        <FileManagerDriverNotice
+                          missing
+                          busy={driverBusy}
+                          onInstall={ensureDriver}
+                        />
+                      ) : undefined
+                    }
                   />
                 ))}
               </div>
@@ -511,6 +550,7 @@ function CurrentVaultFolderChoices({
           title={t("modal.settings.field.mount.custom")}
           description={t("modal.settings.field.mount.custom_desc")}
           disabled={!active}
+          attention={customNeedsDriver}
           onSelect={() => {
             if (!active || custom) return;
             pickFolder(null);
@@ -543,11 +583,19 @@ function CurrentVaultFolderChoices({
               {showShortcut ? (
                 <SwitchRow
                   checked={vaultCustomShortcut}
-                  disabled={!active || !custom}
-                  onChange={(checked) => onChange({ custom_file_manager_folder: checked })}
+                  disabled={!active || !custom || driverBusy}
+                  onChange={(checked) => {
+                    void (async () => {
+                      if (checked && !(await ensureDriver())) return;
+                      onChange({ custom_file_manager_folder: checked });
+                    })();
+                  }}
                   label={t("modal.settings.field.mount.mount")}
                   hint={t("modal.settings.field.mount.mount_help")}
                 />
+              ) : null}
+              {customNeedsDriver ? (
+                <FileManagerDriverNotice missing busy={driverBusy} onInstall={ensureDriver} />
               ) : null}
             </div>
           }
@@ -709,6 +757,7 @@ export function VaultSettingsBackupSection({ config, onChange }: SectionPatchPro
   const modeId = useId();
   const keepId = useId();
   const enabledId = useId();
+  const skipId = useId();
 
   return (
     <SettingsFormGrid>
@@ -717,6 +766,14 @@ export function VaultSettingsBackupSection({ config, onChange }: SectionPatchPro
         checked={config.enabled}
         onChange={(enabled) => onChange({ enabled })}
         label={t("modal.settings.field.backup.enabled")}
+      />
+      <SwitchRow
+        id={skipId}
+        checked={config.skip_unchanged}
+        disabled={!config.enabled}
+        onChange={(skip_unchanged) => onChange({ skip_unchanged })}
+        label={t("modal.settings.field.backup.skip_unchanged")}
+        hint={t("modal.settings.field.backup.skip_unchanged_help")}
       />
       <SettingsField
         label={t("modal.settings.field.backup.mode")}

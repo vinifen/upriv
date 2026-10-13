@@ -201,12 +201,17 @@ pub fn content_hash_hex(store_dir: impl AsRef<Path>) -> Result<String> {
     Ok(format!("sha256:{:x}", hasher.finalize()))
 }
 
-/// Stable id of the logical index. Sealed bytes change on every flush because
-/// the nonce is random; this hash does not, so an unchanged vault can skip a
-/// new backup zip. `None` when the index cannot be serialized — that close
-/// must still write a backup.
+/// Stable id of the vault files used to decide whether a close needs a new
+/// backup zip. Sealed bytes change on every flush because the nonce is random;
+/// this hash does not. `.upriv-workspace.json` is omitted: file-manager layout
+/// is not a vault change. `None` when the index cannot be serialized — that
+/// close must still write a backup.
 pub fn index_logical_hash(index: &VaultIndex) -> Option<String> {
-    let bytes = serde_json::to_vec(index).ok()?;
+    let mut content = index.clone();
+    content
+        .nodes
+        .retain(|node| node.path != INTERNAL_WORKSPACE_FILE);
+    let bytes = serde_json::to_vec(&content).ok()?;
     let mut hasher = Sha256::new();
     hasher.update(&bytes);
     Some(format!("sha256:{:x}", hasher.finalize()))
@@ -234,6 +239,42 @@ mod tests {
             index_logical_hash(&opened.index).as_deref(),
             Some(hash.as_str())
         );
+    }
+
+    #[test]
+    fn index_logical_hash_ignores_workspace_layout() {
+        let mut with_layout = VaultIndex::empty();
+        with_layout.nodes.push(VaultNode::file(
+            "note.txt",
+            "file".into(),
+            4,
+            vec!["v1".into()],
+            vec![0],
+        ));
+        with_layout.nodes.push(VaultNode::file(
+            INTERNAL_WORKSPACE_FILE,
+            "layout".into(),
+            2,
+            vec!["w1".into()],
+            vec![0],
+        ));
+        let mut other_layout = with_layout.clone();
+        other_layout.nodes[1] = VaultNode::file(
+            INTERNAL_WORKSPACE_FILE,
+            "layout".into(),
+            40,
+            vec!["w2".into()],
+            vec![80],
+        );
+        let same = index_logical_hash(&with_layout).expect("hash");
+        assert_eq!(
+            index_logical_hash(&other_layout).as_deref(),
+            Some(same.as_str())
+        );
+
+        let mut edited = with_layout;
+        edited.nodes[0] = VaultNode::file("note.txt", "file".into(), 5, vec!["v2".into()], vec![0]);
+        assert_ne!(index_logical_hash(&edited).as_deref(), Some(same.as_str()));
     }
 
     #[test]

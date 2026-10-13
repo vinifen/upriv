@@ -57,6 +57,8 @@ interface StepProps extends Partial<CreateVaultStepFocusProps> {
   vaultRootPath?: string | null;
   /** App workspace, so a new vault can follow that file manager folder. */
   appWorkspace?: WorkspaceTable;
+  /** Selected file-manager choice still needs the WinFsp driver. */
+  onDriverAttentionChange?: (active: boolean) => void;
   /** Display names already on the vault list, so a picked file can take `name 2`. */
   existingDisplayNames?: readonly string[];
 }
@@ -581,6 +583,7 @@ function CreateVaultAdvancedStep({
   groups = NO_VAULT_GROUPS,
   vaultRootPath = null,
   appWorkspace,
+  onDriverAttentionChange,
 }: StepProps) {
   const { t } = useTranslation();
   const orderId = useId();
@@ -653,6 +656,7 @@ function CreateVaultAdvancedStep({
           vaultRootPath={vaultRootPath}
           plaintext={draft.storage.mode === "upriv_plain"}
           appWorkspace={appWorkspace}
+          onDriverAttentionChange={onDriverAttentionChange}
           onChange={(patch) => onChange({ mount: { ...draft.mount, ...patch } })}
         />
         <FieldErrors errors={createVaultErrorsForField(errors, "mount")} />

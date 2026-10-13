@@ -255,6 +255,11 @@ export function buildVaultInfoSections(
           value: yesNo(t, settings.backup.enabled),
         },
         {
+          id: "backup_skip_unchanged",
+          label: t("modal.settings.field.backup.skip_unchanged"),
+          value: yesNo(t, settings.backup.skip_unchanged),
+        },
+        {
           id: "backup_keep_last",
           label: t("modal.settings.field.backup.keep_last"),
           value: String(settings.backup.keep_last),

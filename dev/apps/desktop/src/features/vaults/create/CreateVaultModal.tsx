@@ -49,6 +49,7 @@ export function CreateVaultModal({
   const vaultRootService = useVaultRootService();
   const [resolvedRootPath, setResolvedRootPath] = useState<string | null>(null);
   const [createError, setCreateError] = useState<string | null>(null);
+  const [driverAttention, setDriverAttention] = useState(false);
 
   useEffect(() => {
     if (!open) {
@@ -131,7 +132,10 @@ export function CreateVaultModal({
   } = wizard;
 
   useEffect(() => {
-    if (!open) setCreateError(null);
+    if (!open) {
+      setCreateError(null);
+      setDriverAttention(false);
+    }
     invalidateImportPicks();
   }, [open]);
 
@@ -172,8 +176,9 @@ export function CreateVaultModal({
               <Button
                 variant="primary"
                 size="md"
-                disabled={!canCreate}
+                disabled={!canCreate || driverAttention}
                 onClick={() => {
+                  if (driverAttention) return;
                   setCreateError(null);
                   try {
                     void handleCreate();
@@ -226,6 +231,7 @@ export function CreateVaultModal({
             existingDisplayNames,
             vaultRootPath,
             appWorkspace: appSettings.workspace,
+            onDriverAttentionChange: setDriverAttention,
             onTestImportPassword: handleTestImportPassword,
             testingPassword,
             ...stepFocus,

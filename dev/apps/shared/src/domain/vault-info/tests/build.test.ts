@@ -75,6 +75,7 @@ describe("buildVaultInfoSections", () => {
     expect(field(sections, "storage_mode")).toBe("modal.settings.option.storage.encrypted_dir");
     expect(field(sections, "kdf_preset")).toBe("modal.settings.option.kdf.256mib");
     expect(field(sections, "file_manager")).toBe("modal.info.value.eligible");
+    expect(field(sections, "backup_skip_unchanged")).toBe("modal.info.value.yes");
     expect(field(sections, "backup_count")).toBe("2");
     expect(field(sections, "backup_latest")).toBe("20260529120000-notes.zip");
     const unnamed = buildVaultInfoSections(

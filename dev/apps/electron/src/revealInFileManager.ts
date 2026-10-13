@@ -31,15 +31,24 @@ export function isAbsoluteOsPath(
   return path.posix.isAbsolute(trimmed);
 }
 
+function osPath(platform: NodeJS.Platform): path.PlatformPath {
+  return platform === "win32" ? path.win32 : path.posix;
+}
+
 /** Walk up from a missing leaf to an existing path on disk. */
-export function resolveExistingOsPath(target: string, fs: RevealFs): string {
+export function resolveExistingOsPath(
+  target: string,
+  fs: RevealFs,
+  platform: NodeJS.Platform = process.platform,
+): string {
   const trimmed = target.trim();
-  if (!trimmed || !isAbsoluteOsPath(trimmed)) {
+  if (!trimmed || !isAbsoluteOsPath(trimmed, platform)) {
     throw new Error("open_path_failed: path must be absolute");
   }
-  let current = path.resolve(trimmed);
+  const os = osPath(platform);
+  let current = os.resolve(trimmed);
   while (!fs.existsSync(current)) {
-    const parent = path.dirname(current);
+    const parent = os.dirname(current);
     if (parent === current) {
       throw new Error("open_path_failed: item is not on disk");
     }
@@ -49,10 +58,14 @@ export function resolveExistingOsPath(target: string, fs: RevealFs): string {
 }
 
 /** Directory to use as cwd: the path itself, or its parent when it is a file. */
-export function resolveExistingOsDirectory(target: string, fs: RevealFs): string {
-  const existing = resolveExistingOsPath(target, fs);
+export function resolveExistingOsDirectory(
+  target: string,
+  fs: RevealFs,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  const existing = resolveExistingOsPath(target, fs, platform);
   if (fs.statSync(existing).isDirectory()) return existing;
-  return path.dirname(existing);
+  return osPath(platform).dirname(existing);
 }
 
 /**
@@ -64,8 +77,9 @@ export async function revealOsPathInFileManager(
   target: string,
   fs: RevealFs,
   shell: RevealShell,
+  platform: NodeJS.Platform = process.platform,
 ): Promise<void> {
-  const current = resolveExistingOsPath(target, fs);
+  const current = resolveExistingOsPath(target, fs, platform);
   const stat = fs.statSync(current);
   if (stat.isDirectory()) {
     const err = await shell.openPath(current);

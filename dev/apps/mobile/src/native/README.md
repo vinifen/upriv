@@ -72,7 +72,7 @@ cargo run -p upriv-ffi --features=cli --bin uniffi-bindgen -- generate \
 The Expo/TS surface in `modules/upriv-core/src/index.ts` is **hand-written**. When
 you change UniFFI exports (`app_version`, `invoke`, `configure_runtime`, …),
 update that file in the same change as the generated
-`uniffi/upriv_ffi/upriv_ffi.kt`. `./run lint` diffs the Kotlin against a fresh
+`uniffi/upriv_ffi/upriv_ffi.kt`. `./r l` diffs the Kotlin against a fresh
 bindgen output so the `.kt` cannot drift silently.
 
 - `modules/upriv-core` — Expo module + `isNativeBridgeAvailable()`

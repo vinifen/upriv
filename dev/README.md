@@ -29,7 +29,7 @@ dev/
 
 1. **Node.js 22.12+** — `nvm use` in this folder (see `.nvmrc`)
 2. **Rust 1.94.0** — `cd dev` (rustup reads `rust-toolchain.toml`) or `rustup toolchain install 1.94.0`
-3. **Linux vault mount (optional):** `libfuse3-dev` (and typically `fuse3`) to compile `upriv-core`'s FUSE session. The in-app file manager works without a successful mount. Windows WinFsp is not wired yet.
+3. **Linux vault mount (optional):** `libfuse3-dev` (and typically `fuse3`) to compile `upriv-core`'s FUSE session. The in-app file manager works without a successful mount. **Windows vault folder while developing:** install [WinFsp](https://winfsp.dev/) once on this PC, or turn the file manager folder on after `apps/electron/scripts/fetch-winfsp.cjs` has the MSI. The Windows setup and the portable app carry that installer and ask when the folder is turned on. Declining leaves the switch unchanged. Without the driver the app still runs and the in-app file manager is the folder. WinFsp - Windows File System Proxy, Copyright (C) Bill Zissimopoulos — https://github.com/winfsp/winfsp
 
 ## Node dependencies
 
@@ -44,20 +44,22 @@ npm install --prefix apps/electron
 npm install --prefix apps/mobile
 ```
 
-`./run lint` needs `js-lint/node_modules` plus each app’s `node_modules` (React ESLint plugins live in desktop/mobile/shared; `tsc`/vitest use the app installs). Electron now runs ESLint + Prettier as well. Rust fmt/clippy do not live in `js-lint/`.
+`./r l` needs `js-lint/node_modules` plus each app’s `node_modules` (React ESLint plugins live in desktop/mobile/shared; `tsc`/vitest use the app installs). Electron now runs ESLint + Prettier as well. Rust fmt/clippy do not live in `js-lint/`.
 
 ## Commands
 
 ```bash
 cd dev
-./run help                 # list all run commands
-./run lint                 # version + rustfmt/clippy + tsc/eslint/prettier (see ./run help)
-./run lint-fix             # rustfmt/clippy --fix + prettier --write + eslint --fix + tsc
-./run test                 # cargo test --workspace + shared/desktop/electron/mobile vitest
-./run check                # lint + test
-./run desktop              # wipe Vite cache, then Electron + upriv-daemon
-./run mobile               # wipe Metro/Expo cache, then expo start --clear
-./run mobile --android     # same, then open Android
+./r h                 # list all commands
+./r l                 # version + rustfmt/clippy + tsc/eslint/prettier (see ./r h)
+./r f                 # rustfmt/clippy --fix + prettier --write + eslint --fix + tsc
+./r t                 # cargo test --workspace + shared/desktop/electron/mobile vitest
+./r c                 # lint + test
+./r d                 # wipe Vite cache, then Electron + upriv-daemon
+./r m                 # wipe Metro/Expo cache, then expo start --clear
+./r m -a              # same, then open Android
+# Full names work too: ./r desktop, ./r lint, ./r check, ./r mobile -a
+# Windows: ./r uses r.ps1 in PowerShell and r.cmd in cmd. The commands live in scripts/run.mjs.
 
 # Same via npm:
 npm run lint

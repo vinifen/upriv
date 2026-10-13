@@ -137,6 +137,7 @@ export function VaultSettingsModal({
   const [sectionBusy, setSectionBusy] = useState(false);
   const [loadTimedOut, setLoadTimedOut] = useState(false);
   const [mountPathIssue, setMountPathIssue] = useState(false);
+  const [mountDriverAttention, setMountDriverAttention] = useState(false);
   const [resolvedRootPath, setResolvedRootPath] = useState<string | null>(null);
   /** Invalidates a submit whose loading budget already expired. */
   const sectionBusyGenRef = useRef(0);
@@ -186,6 +187,7 @@ export function VaultSettingsModal({
     if (!open) {
       setResolvedRootPath(null);
       setMountPathIssue(false);
+      setMountDriverAttention(false);
       return;
     }
     let cancelled = false;
@@ -747,7 +749,7 @@ export function VaultSettingsModal({
   };
 
   const handleSaveClick = () => {
-    if (!activeArea || !areaDirty || sectionBusy) return;
+    if (!activeArea || !areaDirty || sectionBusy || mountPathIssue || mountDriverAttention) return;
 
     if (activeArea === "preferences" && draft) {
       const validation = validateDisplayName(draft.vault.display_name);
@@ -764,7 +766,7 @@ export function VaultSettingsModal({
   const handleConfirmSave = () => {
     if (!activeArea || sectionBusy) return;
     if (activeArea === "preferences") {
-      if (!draft || !preferencesDirty) return;
+      if (!draft || !preferencesDirty || mountPathIssue || mountDriverAttention) return;
       void persistPreferences(draft);
       return;
     }
@@ -835,6 +837,7 @@ export function VaultSettingsModal({
     sectionBusy ||
     !areaDirty ||
     mountPathIssue ||
+    mountDriverAttention ||
     (activeArea === "preferences" && !vaultService.canPersistSettings) ||
     (activeArea === "password" && !passwordCanSubmit) ||
     (activeArea === "kdf" && !kdfCanSubmit);
@@ -1007,6 +1010,7 @@ export function VaultSettingsModal({
                         resolvedRootPath,
                       ),
                       setMountPathIssue,
+                      setMountDriverAttention,
                       appSettings.workspace,
                     )}
                   </VaultSettingsSection>
@@ -1103,6 +1107,7 @@ function renderPreferenceSection(
   },
   vaultRootPath: string | null,
   onMountPathIssue: (invalid: boolean) => void,
+  onDriverAttentionChange: (active: boolean) => void,
   appWorkspace: WorkspaceTable,
 ) {
   switch (sectionId) {
@@ -1132,6 +1137,7 @@ function renderPreferenceSection(
           plaintext={draft.storage.mode === "upriv_plain"}
           appWorkspace={appWorkspace}
           onPathIssueChange={(issue) => onMountPathIssue(issue != null)}
+          onDriverAttentionChange={onDriverAttentionChange}
           onChange={(patch) => patchDraft("mount", patch)}
         />
       );

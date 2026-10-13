@@ -569,6 +569,15 @@ function CreateVaultGeneralStep({
             value={draft.backup.enabled}
             onValueChange={(enabled) => onChange({ backup: { ...draft.backup, enabled } })}
           />
+          <SwitchRow
+            label={t("modal.settings.field.backup.skip_unchanged")}
+            hint={t("modal.settings.field.backup.skip_unchanged_help")}
+            value={draft.backup.skip_unchanged}
+            disabled={!draft.backup.enabled}
+            onValueChange={(skip_unchanged) =>
+              onChange({ backup: { ...draft.backup, skip_unchanged } })
+            }
+          />
           <Select
             label={t("modal.settings.field.backup.mode")}
             value={draft.backup.mode}

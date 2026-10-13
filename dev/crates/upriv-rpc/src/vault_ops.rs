@@ -14,15 +14,17 @@ use upriv_core::{
     fs_tree_revision, fs_truncate, fs_write_file, import_logical_files_zip,
     import_logical_files_zip_path, import_logical_os_path, import_logical_seven_zip,
     import_logical_seven_zip_path, import_store_from_archive_path, import_store_zip,
-    ingest_import_directory, ingest_import_reader_staged, list_backups, parse_backup_import_path,
-    parse_embedded_settings, probe_export_password, probe_logical_seven_zip,
-    probe_logical_seven_zip_path, probe_store_zip, promote_backup_save, read_backup_zip_bytes,
-    read_import_archive_bytes, read_import_zip_settings, read_zip_config_toml,
-    seven_zip_export_available, vault_list_item, KdfUnlockPreset, VaultConfig, ZipImportClass,
+    ingest_import_directory, list_backups, parse_backup_import_path, parse_embedded_settings,
+    probe_export_password, probe_logical_seven_zip, probe_logical_seven_zip_path, probe_store_zip,
+    promote_backup_save, read_backup_zip_bytes, read_import_archive_bytes,
+    read_import_zip_settings, read_zip_config_toml, seven_zip_export_available, vault_list_item,
+    KdfUnlockPreset, VaultConfig, ZipImportClass,
 };
 
 use super::secret::{secret_bytes, SecretString};
 use super::{err, map_core_err, ok, optional_vault_root, require_vault_root, RpcResponse};
+#[cfg(unix)]
+use upriv_core::ingest_import_reader_staged;
 
 fn b64_encode(bytes: &[u8]) -> String {
     use base64::Engine;
@@ -256,7 +258,18 @@ fn parse_dest_path(raw: Option<&str>) -> Result<Option<std::path::PathBuf>, RpcR
 }
 
 fn fsync_path(path: &std::path::Path) -> std::io::Result<()> {
-    std::fs::File::open(path)?.sync_all()
+    // Windows `FlushFileBuffers` requires write access. Read-only open fails.
+    #[cfg(windows)]
+    {
+        return std::fs::OpenOptions::new()
+            .write(true)
+            .open(path)?
+            .sync_all();
+    }
+    #[cfg(not(windows))]
+    {
+        std::fs::File::open(path)?.sync_all()
+    }
 }
 
 /// Install `tmp` at `dest`. Unix `rename` replaces a file atomically. Windows
@@ -661,6 +674,9 @@ pub(super) fn vault_fs_os_path(params: Value) -> RpcResponse {
             Some(os_path) => ok(json!({ "osPath": os_path })),
             None => err("vault_mount_failed", "mount path is not valid UTF-8".into()),
         },
+        // The in-app file manager asks on every open. No OS folder is normal
+        // when the switch is off, and on macOS and mobile there is never one.
+        Err(upriv_core::UprivError::VaultMountFailed(_)) => ok(json!({ "osPath": null })),
         Err(error) => map_core_err(error),
     }
 }

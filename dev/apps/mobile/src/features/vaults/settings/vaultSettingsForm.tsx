@@ -674,6 +674,13 @@ function BackupSection({
         value={config.enabled}
         onValueChange={(enabled) => onChange({ enabled })}
       />
+      <SwitchRow
+        label={t("modal.settings.field.backup.skip_unchanged")}
+        hint={t("modal.settings.field.backup.skip_unchanged_help")}
+        value={config.skip_unchanged}
+        disabled={!config.enabled}
+        onValueChange={(skip_unchanged) => onChange({ skip_unchanged })}
+      />
       <Select
         label={t("modal.settings.field.backup.mode")}
         value={config.mode}

@@ -24,7 +24,7 @@ export function vaultSettingsFixture(
     },
     storage: { mode: storageMode },
     mount: vaultWorkspace(),
-    backup: { enabled: true, mode: "keep_last", keep_last: 1 },
+    backup: { enabled: true, mode: "keep_last", keep_last: 1, skip_unchanged: true },
     security: {
       mode: overrides.securityMode ?? "session_ram",
       secure_wipe_workspace: true,

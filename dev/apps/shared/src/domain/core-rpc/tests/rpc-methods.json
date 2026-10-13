@@ -78,6 +78,8 @@
     "pick_save_file",
     "reveal_in_file_manager",
     "reveal_os_path",
-    "open_in_terminal"
+    "open_in_terminal",
+    "winfsp_status",
+    "winfsp_install"
   ]
 }

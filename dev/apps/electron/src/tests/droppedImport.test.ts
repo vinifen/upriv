@@ -9,6 +9,18 @@ import {
   statListFitsInFreeMemory,
 } from "../droppedImport";
 
+/** Windows refuses symlink creation without Developer Mode. The check still runs on Linux. */
+async function symlinkOrSkip(target: string, link: string): Promise<boolean> {
+  try {
+    await fs.symlink(target, link);
+    return true;
+  } catch (error) {
+    const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+    if (code === "EPERM") return false;
+    throw error;
+  }
+}
+
 describe("classifyDroppedPath", () => {
   it("distinguishes a file, a folder, a symlink, and a missing path", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "upriv-drop-"));
@@ -19,10 +31,11 @@ describe("classifyDroppedPath", () => {
       await fs.writeFile(file, "hi");
       await fs.mkdir(folder);
       await fs.writeFile(real, "secret");
-      await fs.symlink(folder, path.join(dir, "link"));
+      const link = path.join(dir, "link");
+      const linked = await symlinkOrSkip(folder, link);
       expect(await classifyDroppedPath(file)).toBe("file");
       expect(await classifyDroppedPath(folder)).toBe("directory");
-      expect(await classifyDroppedPath(path.join(dir, "link"))).toBe("other");
+      if (linked) expect(await classifyDroppedPath(link)).toBe("other");
       expect(await classifyDroppedPath(path.join(dir, "missing"))).toBe("other");
       expect(await classifyDroppedPath("")).toBe("other");
       expect(await classifyDroppedPath("notes.txt")).toBe("other");
@@ -77,7 +90,7 @@ describe("statDroppedImportPaths", () => {
       const real = path.join(dir, "real.txt");
       await fs.writeFile(real, "secret");
       const link = path.join(dir, "link.txt");
-      await fs.symlink(real, link);
+      if (!(await symlinkOrSkip(real, link))) return;
       const result = await statDroppedImportPaths([dir]);
       expect(result.files).toEqual([]);
       expect(result.symlinks).toEqual([link]);
@@ -95,10 +108,12 @@ describe("readDroppedPathRange", () => {
       const real = path.join(dir, "real.txt");
       await fs.writeFile(real, "secret");
       const link = path.join(dir, "link.txt");
-      await fs.symlink(real, link);
+      const linked = await symlinkOrSkip(real, link);
       const read = await readDroppedPathRange(real, 0, 6);
       expect(Buffer.from(read.contentB64, "base64").toString()).toBe("secret");
-      await expect(readDroppedPathRange(link, 0, 6)).rejects.toThrow("refusing a symlink");
+      if (linked) {
+        await expect(readDroppedPathRange(link, 0, 6)).rejects.toThrow("refusing a symlink");
+      }
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
     }

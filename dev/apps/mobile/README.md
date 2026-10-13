@@ -15,8 +15,8 @@ Paths in mocks use `content://upriv.mock/...` (SAF-shaped), not desktop filesyst
 
 ```bash
 cd dev
-./run mobile                 # wipe Metro/Expo cache, expo start --clear
-./run mobile --android       # same, then open Android
+./r m                        # wipe Metro/Expo cache, expo start --clear
+./r m -a                     # same, then open Android
 # or, without cache wipe:
 cd apps/mobile
 npm install

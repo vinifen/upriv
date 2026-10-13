@@ -178,7 +178,7 @@ export async function openOsPathInTerminal(
 ): Promise<void> {
   let dir: string;
   try {
-    dir = resolveExistingOsDirectory(target, disk);
+    dir = resolveExistingOsDirectory(target, disk, host.platform);
   } catch (error) {
     const detail =
       error instanceof Error

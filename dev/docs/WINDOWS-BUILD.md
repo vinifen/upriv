@@ -47,7 +47,7 @@ Install once on the machine that will run the Windows build.
 
 Optional:
 
-- **WinFsp** — not wired yet. Desktop vault mount on Windows is a stub; the in-app file manager does not need a mount.
+- **WinFsp** — runtime for the desktop vault folder. `dist:win` downloads the official unmodified installer `winfsp-2.1.25156.msi` (SHA-256 `073a70e00f77423e34bed98b86e600def93393ba5822204fac57a29324db9f7a`) into both the NSIS setup and the portable exe. Upriv does not install it at startup. Turning the file manager folder on, or opening a vault that already wants that folder, asks Windows to install `winfsp-x64.dll` (ARM64: `winfsp-a64.dll`, 32-bit: `winfsp-x86.dll`) when it is missing. Windows shows one administrator prompt, because the driver is installed for the machine. Declining that prompt leaves the switch unchanged, shows a notice with an install button, and the in-app file manager keeps working. Uninstalling Upriv leaves WinFsp installed. A development `./r d` launch can run the same installer from `apps/electron/build/winfsp/` after `fetch-winfsp.cjs`. The daemon loads the DLL from `PATH`, then `C:\Program Files (x86)\WinFsp\bin`, then `C:\Program Files\WinFsp\bin`. The volume is a disk mount on the directory you chose (`WinFsp.Disk`). A network WinFsp volume cannot be mounted on a directory. WinFsp - Windows File System Proxy, Copyright (C) Bill Zissimopoulos — https://github.com/winfsp/winfsp
 - **Windows Developer Mode** — only needed if you turn `signAndEditExecutable` back to `true` (electron-builder’s `winCodeSign` cache uses symlinks). Current packaging does **not** require it (see [Icons](#windows-icons-exe--start--taskbar)).
 
 ### MSVC environment (required for `cargo`)
@@ -122,6 +122,7 @@ apps/electron ──tsc──► dist/main.js + preload
                • packs renderer + main into win-unpacked/
                • extraResources: daemon → resources/bin/
                • extraResources: icons → resources/icons/
+               • win extraResources: official WinFsp MSI → resources/winfsp/
                • afterPack: embed icon.ico into Upriv.exe (rcedit)
                • NSIS setup + portable wrappers
 ```
@@ -274,6 +275,8 @@ DMG only, **on a Mac** (`electron-builder --mac`). Not produced by `electron:bui
 | `dev/package.json` → `electron:build:win` | Orchestrates sync + renderer + daemon + dist |
 | `dev/apps/desktop/scripts/build-electron.mjs` | Cross-platform Electron renderer build |
 | `dev/apps/electron/package.json` → `"build"` | electron-builder targets, icons, `signAndEditExecutable` |
+| `dev/apps/electron/scripts/fetch-winfsp.cjs` | Downloads the pinned official WinFsp MSI before `dist:win` |
+| `dev/apps/electron/build/winfsp/install-winfsp.ps1` | Elevated `msiexec` of that MSI, run when the file manager folder is turned on |
 | `dev/apps/electron/scripts/afterPack.cjs` | Windows icon embed + Linux AppImage wrap |
 | `dev/apps/electron/build/icons/` | PNG/ICO brand assets |
 | `dev/apps/electron/src/main.ts` | Window icon, AppUserModelId, setAppDetails |

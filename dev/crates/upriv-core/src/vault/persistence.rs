@@ -21,7 +21,8 @@ pub struct VaultPersistence {
     pub sync_generation: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_hash: Option<String>,
-    /// Logical index hash of the last backup that finished. Absent until one does.
+    /// Logical index hash of the last backup that finished, ignoring
+    /// `.upriv-workspace.json`. Absent until one does.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backed_up_index_hash: Option<String>,
     /// Stamp of that zip. A later close skips a new zip only while this file is still listed.

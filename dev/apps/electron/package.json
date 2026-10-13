@@ -19,12 +19,12 @@
     "lint:fix": "node ../../js-lint/bin/run.mjs eslint . --fix",
     "format": "node ../../js-lint/bin/run.mjs prettier --write .",
     "format:check": "node ../../js-lint/bin/run.mjs prettier --check .",
-    "dev": "concurrently -k \"npm run dev --prefix ../desktop\" \"wait-on -t 30000 http-get://127.0.0.1:1420 && npm run build:main && electron . --dev --no-sandbox\"",
+    "dev": "concurrently -k \"npm run dev --prefix ../desktop\" \"wait-on -t 30000 http-get://localhost:1420 && npm run build:main && electron . --dev --no-sandbox\"",
     "start": "npm run build:main && electron . --no-sandbox",
     "pack": "npm run build:main && electron-builder --dir",
     "dist": "npm run build:main && electron-builder",
     "dist:linux": "npm run build:main && electron-builder --linux deb AppImage",
-    "dist:win": "npm run build:main && electron-builder --win nsis portable"
+    "dist:win": "node ./scripts/fetch-winfsp.cjs && npm run build:main && electron-builder --win nsis portable"
   },
   "devDependencies": {
     "@types/node": "22.15.3",
@@ -93,6 +93,16 @@
       "target": [
         "nsis",
         "portable"
+      ],
+      "extraResources": [
+        {
+          "from": "build/winfsp",
+          "to": "winfsp",
+          "filter": [
+            "winfsp-2.1.25156.msi",
+            "install-winfsp.ps1"
+          ]
+        }
       ],
       "icon": "build/icons/icon.ico",
       "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",

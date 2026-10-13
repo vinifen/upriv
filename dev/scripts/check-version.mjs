@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Fail if repo-root VERSION diverges from synced manifests.
- * Run via: node dev/scripts/check-version.mjs  (also wired into ./run lint/check)
+ * Run via: node dev/scripts/check-version.mjs  (also wired into ./r l and ./r c)
  */
 import fs from "node:fs";
 import path from "node:path";

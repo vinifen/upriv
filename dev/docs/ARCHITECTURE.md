@@ -275,7 +275,7 @@ See SDD §9.4 for Android SAF flow.
 | OS | Phase | UI | Mount / workspace | Status |
 |----|-------|-----|-------------------|--------|
 | Linux x86_64 / ARM64 | v1 | Electron + React | FUSE → encrypted store | In development |
-| Windows x86_64 / ARM64 | v1 | Electron + React | WinFsp or equivalent | Planned |
+| Windows x86_64 / ARM64 | v1 | Electron + React | WinFsp.Disk on the vault folder | In development |
 | macOS | v1.1 | Electron + React | Platform mount | Planned |
 | Android | v2 | React Native | SAF; `workspace/` on OTG HD | Planned |
 | iOS | v3 | React Native | Document picker + SAF-like APIs | Planned |

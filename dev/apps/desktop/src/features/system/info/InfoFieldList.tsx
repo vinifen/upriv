@@ -16,7 +16,13 @@ export function InfoFieldList({ fields }: InfoFieldListProps) {
           <dt className="text-xs text-on-surface-variant">{field.label}</dt>
           <dd className="flex min-w-0 items-start gap-1">
             <span className="min-w-0 flex-1 break-all font-mono text-sm text-on-surface">
-              {field.value}
+              {field.href ? (
+                <a href={field.href} target="_blank" rel="noreferrer" className="underline">
+                  {field.value}
+                </a>
+              ) : (
+                field.value
+              )}
             </span>
             <RevealPathButton path={field.openPath} />
           </dd>
