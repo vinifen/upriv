@@ -3,10 +3,11 @@
 //! Speaks newline-delimited JSON over stdin/stdout (no TCP port). The Electron
 //! main process spawns this binary with piped stdio and proxies renderer calls.
 //!
-//! **Concurrency:** Four off-stdin lanes, so a long import does not sit in
+//! **Concurrency:** Off-stdin lanes, so a long import or rewrap does not sit in
 //! front of a lock.
 //! - `upriv-argon2`: short unlocks (`vault_open`, `vault_create`, export probe).
 //! - `upriv-fs-io`: close, delete, backup download.
+//! - `upriv-rewrap`: password and unlock-RAM change (safety zip plus header commit).
 //! - `upriv-pack`: zip and `.7z` import, and export. One at a time.
 //! - `upriv-import`: file imports. One thread per import slot (one file on a
 //!   single core, up to four on a large desktop).
@@ -178,6 +179,7 @@ fn run() -> io::Result<()> {
     let stdout = Arc::new(Mutex::new(io::stdout()));
     let (argon2_tx, argon2_join) = spawn_named_worker("upriv-argon2", Arc::clone(&stdout));
     let (lifecycle_tx, lifecycle_join) = spawn_named_worker("upriv-fs-io", Arc::clone(&stdout));
+    let (rewrap_tx, rewrap_join) = spawn_named_worker("upriv-rewrap", Arc::clone(&stdout));
     let (pack_tx, pack_join) = spawn_named_worker("upriv-pack", Arc::clone(&stdout));
     let import_count = upriv_core::import_slots();
     let (import_tx, import_joins) =
@@ -256,10 +258,11 @@ fn run() -> io::Result<()> {
             WireIn::Request { id, method, params } => {
                 if is_heavy_method(&method, &params) {
                     let lane = heavy_lane(&method, &params)
-                        .expect("heavy method is argon2, lifecycle, pack, or import");
+                        .expect("heavy method is argon2, lifecycle, rewrap, pack, or import");
                     let tx = match lane {
                         HeavyLane::Argon2 => &argon2_tx,
                         HeavyLane::Lifecycle => &lifecycle_tx,
+                        HeavyLane::Rewrap => &rewrap_tx,
                         HeavyLane::Pack => &pack_tx,
                         HeavyLane::Import => &import_tx,
                     };
@@ -291,6 +294,11 @@ fn run() -> io::Result<()> {
     drop(lifecycle_tx);
     if let Err(error) = lifecycle_join.join() {
         eprintln!("[upriv-daemon] fs-io worker join panicked: {error:?}");
+    }
+    let _ = rewrap_tx.send(HeavyJob::Shutdown);
+    drop(rewrap_tx);
+    if let Err(error) = rewrap_join.join() {
+        eprintln!("[upriv-daemon] rewrap worker join panicked: {error:?}");
     }
     let _ = pack_tx.send(HeavyJob::Shutdown);
     drop(pack_tx);

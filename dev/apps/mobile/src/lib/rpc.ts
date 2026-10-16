@@ -3,7 +3,6 @@ import {
   CORE_RPC_TIMEOUT_MS,
   RpcError,
   isRpcError,
-  isLifecyclePasswordPresent,
   normalizeAppSettings,
   normalizeVaultSettingsConfig,
   vaultSettingsForDaemon,
@@ -613,12 +612,36 @@ export async function rpcImportContentUri(
   }
 }
 
-export async function rpcVaultClose(id: string, password?: string): Promise<CloseVaultOutcome> {
-  const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_CLOSE, {
-    id,
-    password: password && isLifecyclePasswordPresent(password) ? password : undefined,
-  });
+export async function rpcVaultClose(
+  id: string,
+  reason: "user" | "auto" = "user",
+): Promise<CloseVaultOutcome> {
+  const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_CLOSE, { id, reason });
   return parseCloseVaultOutcome(raw);
+}
+
+export async function rpcVaultChangePassword(
+  id: string,
+  currentPassword: string,
+  newPassword: string,
+): Promise<void> {
+  await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_CHANGE_PASSWORD, {
+    id,
+    currentPassword,
+    newPassword,
+  });
+}
+
+export async function rpcVaultChangeKdf(
+  id: string,
+  currentPassword: string,
+  unlockPreset: string,
+): Promise<void> {
+  await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_CHANGE_KDF, {
+    id,
+    currentPassword,
+    unlockPreset,
+  });
 }
 
 function parseCloseVaultOutcome(raw: unknown): CloseVaultOutcome {

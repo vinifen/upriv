@@ -49,16 +49,14 @@ export const desktopVaultLifecycleService: VaultLifecycleService = {
     await installWinFspWhenFolderNeeded(vaultId);
     const password = borrowSessionRamPassword(vaultPasswordInRam, vaultId);
     await rpcVaultOpen(vaultId, password);
-    // Do not put the string back here — hooks restore only for modes that
-    // may lock without retyping (`shouldRetainSessionRamPassword`).
+    // Hooks put the string back after a successful open.
     onStep(1);
   },
 
-  async runClosingPipeline(vaultId, onStep) {
+  async runClosingPipeline(vaultId, onStep, reason = "user") {
     onStep(CLOSING_FLUSH_STEP);
-    const password = vaultPasswordInRam.get(vaultId);
     const outcome = await watchClosePhase(
-      rpcVaultClose(vaultId, password),
+      rpcVaultClose(vaultId, reason),
       () => rpcVaultClosePhase(vaultId),
       () => onStep(CLOSING_BACKUP_STEP),
     );

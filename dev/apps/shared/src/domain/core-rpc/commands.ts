@@ -55,6 +55,10 @@ export const CORE_RPC_COMMANDS = {
   VAULT_CREATE: "vault_create",
   VAULT_OPEN: "vault_open",
   VAULT_CLOSE: "vault_close",
+  /** Rewrap the closed vault under a new password. Same master key; files stay. */
+  VAULT_CHANGE_PASSWORD: "vault_change_password",
+  /** Rewrap the closed vault at a new Argon2id unlock cost. The password stays. */
+  VAULT_CHANGE_KDF: "vault_change_kdf",
   /** Phase of an in-flight `vault_close` (`flush` | `backup` | null). Light; polled while closing. */
   VAULT_CLOSE_PHASE: "vault_close_phase",
   VAULT_CONFIG_GET: "vault_config_get",
@@ -140,6 +144,10 @@ export const SHELL_ONLY_RPC_COMMANDS = {
   WINFSP_STATUS: "winfsp_status",
   /** Windows: install the bundled WinFsp runtime. Waits on the permission prompt. */
   WINFSP_INSTALL: "winfsp_install",
+  /** Linux: whether `fusermount3` and `/dev/fuse` are already usable. */
+  FUSE_STATUS: "fuse_status",
+  /** Linux: install the distro `fuse3` package. Waits on the permission prompt. */
+  FUSE_INSTALL: "fuse_install",
 } as const;
 
 export type CoreRpcCommand = (typeof CORE_RPC_COMMANDS)[keyof typeof CORE_RPC_COMMANDS];

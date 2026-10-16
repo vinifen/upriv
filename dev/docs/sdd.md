@@ -34,7 +34,7 @@ No `archive/` layer. Portable `.zip` / `.7z` are **export files**, not rest layo
 4. **Declarative config** — `.upriv/settings.toml` + per-vault `vaults/<id>/config.toml`; safe defaults if missing.
 5. **Mutable config** — TOML is source of truth; the app re-reads before open/close (not “create and lock”). **Not all** fields are anytime: `[vault].display_name` / `id` only via `vault_rename` while closed; password/KDF while closed. See the mutability table in §3.2.4 and edit-policy.
 6. **Fail safe** — never overwrite `store/` without verification; atomic writes. Never leave a durable `.7z` twin beside `store/`.
-7. **Password default in RAM (v1)** — default `session_ram` (lock does not re-ask); optional `disk_*` modes write **encrypted** `session.enc` (never plaintext password); after reboot without `session.enc`, remount with password. `always_prompt` is an opt-in presence check on lock, not a rewrap.
+7. **Session keys in RAM** — unlock asks for the password once. Lock flushes with those keys. Quit or reboot asks again.
 8. **Close = flush session into `store/`** — never pack `.enc` blobs into a `.7z` as rest. Export `.7z` streams **logical** content.
 9. **Recovery** — dirty close → unlock the encrypted vault (`store/`). Leftover `upriv_plain` workspace → wipe or resume. Dead header → create from backup / store zip (Backups or New vault). No archive-vs-store picker; create-from-backup is not a dirty-close peer.
 10. **Unified states** — `open` (runtime) | `closed` (rest).
@@ -136,10 +136,10 @@ Transient: `closing`, `opening`, `recovery` — do not expose in UI as resting s
 9. Update `runtime/state.json` → `vaults.<id>.session = "open"`.
 
 **close (v1):**
-1. Use keys from `SessionHandle` in RAM (or `session.enc` in disk modes). Prompt the UI **only** for `always_prompt` — a presence check against the open session / `vault.header`, never a new wrap. Default lock has no password field.
+1. Use the open session keys in RAM. Lock does not ask for the password and does not rewrap `vault.header`.
 2. Flush the session into `store/` (header + index + chunks). Never pack `.enc` blobs into a `.7z` as rest.
 3. If `[backup] enabled`: write a Stored zip of `store/` to `backups/<stamp>-<id>.zip` (no zip password). `skip_unchanged` (default on) skips that zip when vault files match the last backup still on disk. `.upriv-workspace.json` is not a change. Off writes a zip on every close.
-4. `upriv_plain`: `secure_wipe_workspace` and remove the plaintext folder (UI confirms wipe on manual lock).
+4. `upriv_plain`: overwrite the plaintext folder, then remove it (UI confirms wipe on manual lock).
 5. Unmount the file manager folder; release `runtime/<id>.lock`; remove entry in `state.json`.
 6. `zeroize` password/keys in RAM.
 
@@ -153,13 +153,12 @@ Transient: `closing`, `opening`, `recovery` — do not expose in UI as resting s
 
 | Situation | Behavior |
 |-----------|----------|
-| Default / `session_ram` / `disk_*` | Lock with session keys (or `session.enc`); no password field |
-| `always_prompt` + wrong password | `error.wrong_password`; `store/` and backups **unchanged** (presence check only) |
-| `always_prompt` + correct password | Same flush as default — still the **open** session, not a rewrap |
+| Encrypted vault | Lock with the open session keys; no password field |
+| Open `upriv_plain` | Same flush, plus a wipe confirmation. No password |
 | Session gone (crash / process exit) | Recovery against `store/` — do not ask a close password to “finish” a dead session |
 | First close of a vault created this session | Header already written at create; validate session key |
 
-Related: PRD **RF-05**, **RF-39**; checklist §12; tests §13.2 (“wrong password on close” = `always_prompt` presence check).
+Related: PRD **RF-05**, **RF-39**; checklist §12. Close does not take a password.
 
 ### 2.2 Persistence / integrity (no Seal twin)
 
@@ -208,7 +207,7 @@ Related: PRD **RF-53**, **RF-53b**.
 
 **Linux mount:** the FUSE root exposes an empty `.nomedia` that is not a vault file, so Tracker does not index the tree while it is open. A real `.nomedia` in the vault is that file instead. While that folder is mounted, on `OPEN_PURGE_INTERVAL` in the thumbnail module, and again when the mount is detached, Upriv overwrites freedesktop thumbnail-cache PNGs whose `Thumb::URI` is under the mount, syncs that write, then unlinks them (one random pass, the same wipe as §2.10; flash is best-effort). Detaching a leftover Upriv mount does the same purge once, so a killed session does not keep those previews. The cache is outside `store/`. The scan starts and returns at once, with a file-count and time budget, so a bad cache cannot hold close, open, or unmount. A finished wipe of one or more previews writes one info line (`vault_thumbnail_wiped`, with the count and no path). A problem is one warning (`vault_thumbnail_purge_failed`). Neither fails the close or the unmount. A vault with no OS folder does not run this sweep.
 
-**Windows mount.** The volume is `WinFsp.Disk` on the directory the user chose. `WinFsp.Net` cannot mount on a directory: Windows only allows a drive letter for a network file system. A disk folder would normally let Explorer build content thumbnails, so each file reports `FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS`. That tells the shell that reading the bytes is a fetch, and Explorer does not open the file to draw a preview. The mount refuses `Thumbs.db` in any case, and it refuses Windows device names (`CON`, `NUL`, `COM1`, and the same with an extension). `%LocalAppData%\Microsoft\Windows\Explorer\thumbcache_*.db` is not opened or deleted. Entries there are hash keys, Explorer keeps the databases open, and removing them would wipe every thumbnail on the machine. The Linux freedesktop scanner does not run on Windows, and the periodic sweep is a no-op there, so it does not log `vault_thumbnail_purge_failed` on each interval. WinFsp creates that directory and returns `STATUS_OBJECT_NAME_COLLISION` (`0xC0000035`) when the name already exists. An existing empty directory is removed first; a directory that already has files is left in place and the mount fails. A canonical `\\?\` path is passed as a plain directory, because WinFsp treats `\\?\C:` as a Mount Manager path. The Windows setup and the portable exe carry the official unmodified WinFsp installer. Upriv asks to install it when the file manager folder is turned on, and again when a vault that already wants that folder is opened. Declining leaves the switch unchanged and shows a notice with a button to try again. A missing DLL fails the mount and leaves the vault open for the in-app file manager. Uninstalling Upriv leaves WinFsp installed. Case-insensitive lookup keeps the stored spelling. Explorer extra-large-icon behavior still needs a machine that has WinFsp installed; it was not confirmed here.
+**Windows mount.** The volume is `WinFsp.Disk` on the directory the user chose. `WinFsp.Net` cannot mount on a directory: Windows only allows a drive letter for a network file system. A disk folder would normally let Explorer build content thumbnails, so each file reports `FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS`. That tells the shell that reading the bytes is a fetch, and Explorer does not open the file to draw a preview. The mount refuses `Thumbs.db` in any case, and it refuses Windows device names (`CON`, `NUL`, `COM1`, and the same with an extension). `%LocalAppData%\Microsoft\Windows\Explorer\thumbcache_*.db` is not opened or deleted. Entries there are hash keys, Explorer keeps the databases open, and removing them would wipe every thumbnail on the machine. The Linux freedesktop scanner does not run on Windows, and the periodic sweep is a no-op there, so it does not log `vault_thumbnail_purge_failed` on each interval. WinFsp creates that directory and returns `STATUS_OBJECT_NAME_COLLISION` (`0xC0000035`) when the name already exists. An existing empty directory is removed first; a directory that already has files is left in place and the mount fails. A canonical `\\?\` path is passed as a plain directory, because WinFsp treats `\\?\C:` as a Mount Manager path. The Windows setup and the portable exe carry the official unmodified WinFsp installer. Upriv asks to install it when the file manager folder is turned on, and again when a vault that already wants that folder is opened. Declining leaves the switch unchanged and shows a notice with a button to try again. A missing DLL fails the mount and leaves the vault open for the in-app file manager. The folder is a directory junction (`FSCTL_SET_REPARSE_POINT`). exFAT and FAT return `STATUS_NOT_IMPLEMENTED` (`0xC0000002`), so the mount fails with `vault_mount_filesystem` and Open in file manager asks for a different folder on an NTFS or ReFS disk. The vault still opens in the in-app file manager. Ciphertext can stay on the original disk; only the file manager folder needs the other location. A WinFsp drive letter would not need the junction. That fallback is not implemented. Uninstalling Upriv leaves WinFsp installed. Case-insensitive lookup keeps the stored spelling. Explorer extra-large-icon behavior still needs a machine that has WinFsp installed; it was not confirmed here.
 
 **macOS mount (not built yet).** Shipping that mount includes thumbnail cleanup for that OS. Do not reuse the freedesktop PNG scanner. Do not wipe a global cache. The same rules apply: only while that vault's OS folder is mounted, on `OPEN_PURGE_INTERVAL`, and once more when the folder is detached; the work returns immediately; one info line with a count and no path when something was removed; one warning when the cleanup cannot finish; close and open still succeed. One overwrite plus sync plus unlink where the cache is a normal file. Flash stays best-effort.
 
@@ -309,12 +308,9 @@ Related: PRD **RF-45**, **RF-50**.
 
 Related: PRD **RF-51**.
 
-### 2.8 External editors
+### 2.8 Who can open the files
 
-- Open files via mount path (do not copy outside by default).
-- Optional hook: `warning.external_editor` on first open with external app.
-- Config `allow_external_editors` / `restrict_to_internal_viewer` (see `prod/.upriv/vaults/*/config.toml`).
-- Do not block user editing by default; inform about `%TEMP%`, thumbnails, etc. risk.
+The file manager folder is the switch. Off keeps the open vault in Upriv. On places a folder on this computer while the vault is open, and any app that can see that path can read the files. There is no second policy for “only Upriv” on top of an open folder, and no mount-layer block on copies to Desktop, USB, or temp.
 
 Related: PRD **RF-52**.
 
@@ -377,15 +373,12 @@ Linux: may delegate to `shred -u -n {passes} --random-source=/dev/urandom` if av
 
 ```toml
 [security]
-mode = "session_ram"
-secure_wipe_workspace = true   # default
 wipe_passes = 1                # HDD: 1–3; more = slower, marginally stronger
 wipe_pattern = "random"        # "random" | "zeros"
 ```
 
 | Field | Default | Notes |
 |-------|---------|-------|
-| `secure_wipe_workspace` | `true` | If `false`, only `unlink` — **warn in UI** |
 | `wipe_passes` | `1` | 3 passes on HDD for paranoia; unnecessary in many cases |
 | `wipe_pattern` | `random` | `zeros` faster, slightly weaker |
 
@@ -393,7 +386,7 @@ wipe_pattern = "random"        # "random" | "zeros"
 
 | Flow | Wipe? |
 |------|-------|
-| Successful `close()` | **Yes** (required if `secure_wipe_workspace`) |
+| Successful `close()` of `upriv_plain` | **Yes** — overwrite the folder, then remove it |
 | `DiscardWorkspace` (recovery) | **Yes** |
 | Auto-close | Same as `close()` |
 | Failure before step 7 (e.g. `7z t` failed) | **No** — workspace intact |
@@ -408,7 +401,7 @@ wipe_pattern = "random"        # "random" | "zeros"
 | Unallocated volume space | Out of scope — does not wipe entire disk |
 | External copies | Not affected |
 
-**Do not:** `rm -rf workspace` without wipe when `secure_wipe_workspace = true`.
+**Do not:** `rm -rf workspace` without overwriting the plaintext folder first.
 
 Related: PRD **RF-41–RF-44**; tests §13.2 (`secure_wipe` mock verifies overwrite before unlink).
 
@@ -558,8 +551,6 @@ keep_last = 1
 skip_unchanged = true   # default; off writes a zip on every close. Layout file is not a change.
 
 [security]
-mode = "session_ram"              # default; lock uses session keys (no password). UI: 4 password-memory choices (§3.2.3a)
-secure_wipe_workspace = true      # UI: Security
 wipe_passes = 1                   # hidden default
 wipe_pattern = "random"           # hidden default
 # password_changed_at = "..."     # set by app on change-password; omit until first change
@@ -567,8 +558,6 @@ wipe_pattern = "random"           # hidden default
 [auto_close]
 enabled = true
 idle_minutes = 15
-warn_before_seconds = 60
-close_on_app_exit = false
 
 [seven_zip]
 encrypt_file_names = true
@@ -642,31 +631,29 @@ User-facing metadata that is **not** sync state:
 
 Available in vault settings (**Security** / password area in UI; stored fields span `[vault]` hint + `[security]` metadata). Edit-policy gate is **`vault_closed`** — vault must be **closed** (not open, opening, closing, or recovery). User **always** enters the **current password** (never inferred from session alone).
 
-**Why closed-only:** rewrap replaces `store/` keys; an open session must not race mid-rewrap. Recovery is out of this flow (same as `action.change_password` / `change_kdf` in `edit-policy.json`). SDD formerly allowed “open or closed”; that is **deprecated** — see AGENT config edit policy.
+**Why closed-only:** an open session must not race the header rewrite. Recovery is out of this flow (same as `action.change_password` / `change_kdf` in `edit-policy.json`). File blobs stay. The master key stays. See SECURITY-CRYPTO.
 
 | Step | Action |
 |------|--------|
-| 1 | User enters **current password**, **new password**, **confirm new password** (new ≠ current) |
+| 1 | User enters **current password**, **new password**, **confirm new password** (new ≠ current; bytes exactly as typed) |
 | 2 | UI shows **`warning.password_change_backups`** — existing `backups/<stamp>-<id>.zip` keep the password from when each snapshot was created |
-| 3 | **`upriv-core`:** validate current password against `store/` header; re-wrap keys (no open session) |
-| 4 | Decrypt/re-encrypt in controlled RAM / encrypted temp only — do not leave plaintext on disk when `encrypted_dir` |
-| 5 | **Optional (recommended):** snapshot current main store into `backups/` **before** replace (uses **old** password — consistent with backup semantics) |
-| 6 | Re-encrypt `store/` with the **new** password (same atomic flush as close) |
-| 7 | Secure-delete superseded session temp; remove stale plaintext |
-| 8 | Update `persistence.json` hashes / `sync_generation`; set `[security] password_changed_at` (ISO 8601 UTC) |
-| 9 | **Do not** re-encrypt or delete existing `backups/` files automatically |
+| 3 | **`upriv-core`:** vault closed; verify the current password (same 5/60s unlock throttle as open). Same password is rejected |
+| 4 | Write one backup zip of the current body **before** any header byte changes. If that zip fails, leave `store/` unchanged |
+| 5 | New salt, same master key. Reseal the header wrap and the name index (both bind salt/`m`/`t`/`p`). Do not rewrite file blobs |
+| 6 | Commit order: new index copy, new header primary, new header copy, new index primary. A crash in the middle still opens with one of the two passwords |
+| 7 | Update `persistence` content hash. Set `[security] password_changed_at` (ISO 8601 UTC, millisecond precision) |
+| 8 | After the header commit succeeds, apply this vault's backup retention to standard zips. Disabled backups and `keep_all` do not delete zips. Pins under `backups/saves/` stay. A failed commit leaves the previous zips and the safety zip. Do not mark this safety zip as the close-backup stamp |
 
 **Config after change:**
 
 ```toml
 [security]
-mode = "session_ram"
 password_changed_at = "2026-05-30T18:00:00Z"   # omitted or empty until first change
 ```
 
 Backups opened via Plan B or Upriv backups modal still require the **password active when that backup was taken**. Document in vault settings and backups modal footer.
 
-**Desktop UI (v1, implemented in mock):** expandable panel under Security — `vault.change_password.*`, `warning.password_change_backups`, `modal.settings.change_password_help`. Submit calls `vault_change_password` RPC when wired.
+**Desktop and mobile UI:** password area — `warning.password_change_backups`, `modal.settings.change_password_help`. Submit calls `vault_change_password`. Unlock RAM calls `vault_change_kdf` (same backup and commit; the password stays; `password_changed_at` is not updated).
 
 Related: PRD **RF-58**, **RF-59**; i18n `vault.change_password.*`, `warning.password_change_backups`.
 
@@ -678,13 +665,12 @@ Settings modal edits `config.toml` but **does not mirror every key** — advance
 |--------------|-------------|----------------------------------|
 | `[vault]` | `display_name`, `order`, `note`, `password_hint` | `id` (folder slug; derived/normalized on rename migration). Layout dirs `store/` and `backups/` are not TOML keys. |
 | `[storage]` | `mode` (`encrypted_dir` / `upriv_plain`) + contextual warnings | — |
-| `[auto_close]` + `[security].secure_wipe_workspace` | **Preferences / Lock and idle:** secure wipe, idle auto-close | — |
-| `[security]` | **`mode` (password in memory — 4 UI options for all storage modes)** | `wipe_passes`, `wipe_pattern`, `password_changed_at` (set by app). `secure_wipe_workspace` is shown under Lock and idle, not as a `[security]` form field. |
+| `[auto_close]` | **Preferences / Auto-close:** close after idle time inside Upriv | — |
+| `[security]` | — | `wipe_passes`, `wipe_pattern`, `password_changed_at` (set by app). Plaintext close always overwrites the open folder. |
 | Password / Unlock RAM | Settings **areas** (not TOML sections): change password; change Argon2id preset | Cost lives in `store/header/vault.header`, never a `[kdf]` section |
 | `[seven_zip]` | compression preset (**none/low/medium/high** → `archive_mode` + `compression_level`), `encrypt_file_names` | `method`, `solid` (defaults: `lzma2`, `false`) |
-| `[policy]` | `allow_external_editors`, `disallow_copy_outside_mount` (two radio groups) | `require_unmount_on_sleep` |
 
-**Password in memory (UI):** `session_ram` (lock without retyping), Never save (`always_prompt` — presence check on lock; does not rewrap), `disk_close` (less secure), `disk_open_close` (insecure) — **same list for all storage modes**. Disk modes use `auth/<id>/.session.enc` (encrypted key blob).
+**Lock:** session keys stay in RAM while the vault is open. Lock flushes with those keys.
 
 **Storage mode warnings (UI):**
 
@@ -736,8 +722,8 @@ impl ConfigStore {
 |-----------------|--------------|------------|
 | `[seven_zip]` (`archive_mode`, levels) | Next **close** | Next **close** (warn in UI) |
 | `[backup]` | Next close | Next close |
-| `[auto_close]` | Immediate on timer (recalculate `auto_close_at`) | Immediate |
-| `[security]` (`secure_wipe_workspace`, `wipe_passes`, …) | Next **close** / discard | Immediate if only `mode`; wipe on close |
+| `[auto_close]` | Next open | Next settings read while open (about 15 s). The current idle clock is kept |
+| `[security]` (`wipe_passes`, `wipe_pattern`, …) | Next **close** / discard | Wipe on close |
 | `[vault] password_hint`, `[vault] note`, `[vault] order` | Immediate (UI / list) | Immediate |
 | `[security] password_changed_at` | Set when change-password succeeds (**vault closed**) | **Blocked** — close vault first (`vault_closed`) |
 | `[vault] display_name` | Only via **`vault_rename`** (updates the label; folder/`id` migration when the slug changes) | **Block** — close vault first |
@@ -778,7 +764,6 @@ fn validate_vault_id(id: &str, vault_root: &Path) -> Result<()> {
 |------|-----|
 | `vaults/<id>/store/` | Vault body at rest |
 | `vaults/<id>/backups/<stamp>-<id>.zip` | Stored zip of `store/` (`[backup]`) |
-| `auth/<id>/.session.enc` | Encrypted session (`disk_*` modes; hidden) |
 
 **Open workspaces:** the file manager folder exists only while open; `runtime/state.json` lists open vaults (demo: several at once).
 
@@ -789,66 +774,19 @@ fn validate_vault_id(id: &str, vault_root: &Path) -> Result<()> {
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `enabled` | bool | `false` | Enable automatic close |
-| `idle_minutes` | u32 | `15` | Idle time until close (min. 1, max. 1440 suggested) |
-| `warn_before_seconds` | u32 | `60` | Toast/dialog N seconds before; `0` = close directly |
-| `close_on_app_exit` | bool | `false` | If true, close open vaults when the app quits (independent of idle timer) |
+| `idle_minutes` | u32 | `15` | Idle time until close. The app uses 1..=1440. A save writes that range |
 
-**What resets the inactivity timer:**
+Sixty seconds before the lock, the app shows one notice. That lead is fixed; it is not a vault setting. A 1-minute idle warns 30 seconds before, so the notice is not shown on every action. Several vaults that reach the notice together share one toast. A notice waits while another idle toast is still on screen.
 
-1. Any Upriv UI action with that vault in focus.
-2. Filesystem event in the file manager folder (create, modify, delete, rename) — debounce 2–5 s.
-3. Return focus to app window with vault open (desktop).
+The clock is the device time since the last action inside Upriv. It lives in the app process, not in `runtime/state.json` and not in the daemon. There is no separate idle detector.
 
-**What does not reset:** editing another vault; mouse outside; HD merely connected.
+**What resets the clock:** pointer, key, and scroll on the desktop; touch and typing on the phone. One action resets every open vault that is not already due.
 
-**Runtime (`.upriv/runtime/state.json` per open vault):**
+**What does not reset:** focus, opening the app, returning from another app, and edits in the mounted folder.
 
-```json
-{
-  "last_activity_at": "2026-05-27T15:12:00-03:00",
-  "auto_close_at": "2026-05-27T15:27:00-03:00"
-}
-```
+**Sleep and time away.** General setting `lifecycle_keep_open_on_wake` (default off). Off: that time counts, and a vault can already be auto-closed when the user comes back. On: only time the process is actually running counts. Desktop sleep is `powerMonitor` suspend/resume. The phone treats leaving the app as a pause. A vault that was already due while Upriv was on screen still closes. Killing the process is a dirty close, not an auto-close.
 
-Recalculate `auto_close_at = last_activity_at + idle_minutes` on each activity.
-
-**Flow on trigger:**
-
-```
-idle expired
-  → if warn_before_seconds > 0: notify; user can "action.continue" (resets timer)
-  → else or after countdown: VaultManager::close(vault_id)
-  → same pipeline as manual close (7z t, <id>.7z.new, remove the file manager folder)
-```
-
-**Suggested implementation (`upriv-core`):**
-
-```rust
-struct AutoCloseConfig {
-    enabled: bool,
-    idle: Duration,
-    warn_before: Duration,
-    close_on_app_exit: bool,
-}
-
-struct AutoCloseHandle {
-    vault_id: String,
-    last_activity: Instant,
-    deadline: Instant,
-}
-
-// Desktop daemon: tokio interval 30s or notify + debounce on watcher
-fn tick_auto_close(mgr: &mut VaultManager) {
-    for c in mgr.open_vaults() {
-        if !c.auto_close.enabled { continue; }
-        if c.last_activity.elapsed() >= c.auto_close.idle {
-            mgr.close_auto(c.id);
-        }
-    }
-}
-```
-
-**Android:** timer in foreground service or `WorkManager` with care in Doze; filesystem via slower SAF polling — document limitation.
+**When the deadline is reached:** wait for an import or a pipeline job already running for that vault. Save unsaved editor drafts, then run the same close as a manual lock (`reason=auto` on `vault_closed`). No dialog. A failure restarts that vault's clock only. After a successful auto-close the row says Auto-closed until the vault is opened again or locked by hand.
 
 ### 3.3 Path resolution
 
@@ -897,8 +835,8 @@ If a vault folder exists without `.upriv/settings.toml` → **Import vault** wiz
 |-------|-----|
 | `serde`, `toml` | Config |
 | `zeroize` | Clear password in memory |
-| `argon2` or `scrypt` | Derive key for `session.enc` |
-| `aes-gcm`, `rand` | Encrypt session blob |
+| `argon2` | Argon2id for vault unlock |
+| `aes-gcm`, `rand` | Store AEAD (XChaCha20-Poly1305 via the pinned crates) |
 | `anyhow`, `thiserror` | Errors |
 | *(logging)* | Structured `.upriv/logs/` via `logging::Logger` / `log_event` (no passwords) |
 | `directories` | App config (`last_vault`) outside vault |
@@ -912,7 +850,7 @@ upriv-core/
 ├── logging/      # Logger / log_event → `.upriv/logs/`; session, store, writer; RPC log_*
 ├── vault/        # VaultManager: open, close, status
 ├── seven_zip/    # in-process .7z via sevenz-rust2 (no 7zz spawn)
-├── session/      # session.enc, SecurityMode
+├── session/      # open session keys in RAM
 ├── recovery/     # detect orphan, UI actions
 ├── paths/        # VaultRoot, canonicalize
 ├── mount/        # Virtual workspace trait; FUSE (Linux), WinFsp (Windows)
@@ -933,7 +871,7 @@ impl VaultManager {
     pub fn discover(path: &Path) -> Result<Self>;
     pub fn create_new(root: &Path, password: &[u8]) -> Result<Self>;
     pub fn open(&mut self, password: &[u8]) -> Result<()>;
-    pub fn close(&mut self, password: Option<&[u8]>) -> Result<()>; // None = session keys; Some = always_prompt check only
+    pub fn close(&mut self) -> Result<()>; // flush with the open session keys; no password
     pub fn status(&self) -> VaultState;
     pub fn recovery_info(&self) -> Option<RecoveryInfo>;
     pub fn workspace_path(&self) -> PathBuf;
@@ -981,7 +919,7 @@ Do not expose to user in v1; read from `config/<id>.toml` with defaults:
 
 ---
 
-## 6. Session and security modes
+## 6. Session
 
 ### 6.1 `SessionHandle` (RAM)
 
@@ -994,38 +932,15 @@ struct SessionHandle {
 
 Drop → zeroize.
 
-### 6.2 `session.enc` (disk modes)
+### 6.2 Close
 
-Suggested format (v0.1):
+Lock flushes the open session with the keys already in RAM.
 
-```
-[magic: 4 bytes "VHDS"]
-[version: u8]
-[salt: 16 bytes]
-[nonce: 12 bytes]
-[ciphertext: variable]  // contains random session key (32 bytes)
-```
+| | open | close | reboot |
+|--|------|-------|--------|
+| session | ask for the password; keep session keys in RAM | use those keys; no prompt | keys are gone; ask again |
 
-- Derivation: Argon2id(password, salt) → key.
-- Cipher: AES-256-GCM of session key.
-- **Never** store UTF-8 password in `session.enc`.
-- **Both storage modes:** `session.enc` allowed when `security.mode` is `disk_close` or `disk_open_close`; forbidden for RAM-only modes. `.quick-auth` never stores plaintext password.
-
-### 6.3 Mode → behavior matrix
-
-| Mode | open() | close() | reboot |
-|------|--------|---------|--------|
-| always_prompt | prompt password; do not retain the **string** | prompt as presence check against the open session (do not rewrap); idle auto-close skipped | recovery prompts password |
-| session_ram | retain SessionHandle | use handle; **no prompt** | handle lost, prompt password |
-| disk_close | prompt; write session.enc | use session.enc; **no prompt** | session.enc allows close |
-| disk_open_close | session.enc after first unlock | use session.enc; **no prompt** | same |
-
-**`encrypted_dir` + disk session modes:**
-
-- `disk_close` / `disk_open_close` are **allowed** (user opt-in; UI badges less-secure / insecure).
-- **Default** remains `session_ram`.
-- Store encryption and encrypted file names are **unchanged** — disk modes only affect password/session convenience via `auth/`.
-- Never write UTF-8 password to `session.enc` or settings files.
+The password string stays in the app after a successful unlock, until lock or quit. It is not written to settings or to disk.
 
 ---
 
@@ -1195,7 +1110,7 @@ click(Backups|Config)      → stopPropagation; open respective modal
 | **Closing** | Row badge + modal (if open) + finite budget | During flush into `store/` |
 | **Opening** | Row badge + unlock dialog (while open) + finite budget | During Argon2 unlock |
 
-**Open/close pipelines (v1):** one global **FIFO queue** — only one open/close/create runs at a time; further requests wait. Progress lives on the **row** (and the unlock/lock dialog while it is open); there is **no** blocking full-screen pipeline overlay and no **Continue in background**. Queued vaults show `opening` / `closing` / `creating` until their turn completes. No mid-pipeline cancel (abort would risk inconsistent disk state). Desktop/mobile UI implements the FIFO queue in `useVaultPipelineRun`; live open/close call `vault_open` / `vault_close`.
+**Open/close pipelines (v1):** one global **FIFO queue** — only one open/close/create runs at a time; further requests wait. Progress lives on the **row** (and the unlock/lock dialog while it is open); there is **no** blocking full-screen pipeline overlay and no **Continue in background**. Queued vaults show `opening` / `closing` / `creating` until their turn completes. No mid-pipeline cancel (abort would risk inconsistent disk state). Desktop/mobile UI implements the FIFO queue in `useVaultPipelineRun`; live open/close call `vault_open` / `vault_close`. While a closed vault is exporting, changing its password, or changing unlock RAM, the row names that work and `vault_open` is refused until it finishes. That same hold refuses a data-folder switch. Close already shows Backing up… while its backup zip is written.
 
 **Pipeline — erros e anti-travamento:**
 
@@ -1288,9 +1203,7 @@ fn log_delete(filenames: Vec<String>) -> Result<(), String>; // active current-*
 
 ```rust
 fn vault_open(vault_path: String, password: String) -> Result<(), String>;
-// password: Some only for `always_prompt` presence check; None = use SessionHandle / session.enc.
-// Never rewrap vault.header from this value.
-fn vault_close(vault_path: String, password: Option<String>) -> Result<(), String>;
+fn vault_close(vault_path: String) -> Result<(), String>;
 fn vault_open_workspace(vault_path: String) -> Result<(), String>;  // xdg-open / explorer
 fn vault_status(vault_path: String) -> Result<VaultStatusDto, String>;
 ```
@@ -1465,7 +1378,6 @@ The persistable grant is held by Android. Rust addresses the chosen folder as `/
 - [ ] Data folder on OTG → unplug → restart app → Setup with Custom still selected → reconnect → reopen opens the same folder when that choice was not changed
 - [ ] Switch that data folder to the Documents default → Custom still shows the previous folder → unplug that drive → select Custom → Retry → plug it back → Retry opens it
 - [ ] Plan B: export `.7z` → ZArchiver opens it with the vault password
-- [ ] Wrong password on lock (`always_prompt`) does not change `store/`
 
 ### 9.11 iOS (later phase, summary)
 
@@ -1515,13 +1427,10 @@ vault_path = "/media/user/HD/my-vault"
 - [ ] Atomic write `.7z.new`
 - [ ] `zeroize` password after close
 - [ ] Logs without password or full sensitive paths
-- [ ] `session.enc` never contains plaintext password
-- [ ] UI warning for `disk_*` modes
 - [ ] Do not follow symlinks when deleting workspace without care
-- [ ] `secure_wipe_workspace` before removing the file manager folder (default on)
+- [ ] Overwrite the file manager folder before removing it
 - [ ] `fsync` after each file overwrite (HDD)
-- [ ] UI warns if `secure_wipe_workspace = false`
-- [ ] Recovery `DiscardWorkspace` uses same wipe
+- [ ] Recovery `DiscardWorkspace` uses the same wipe
 
 ---
 
@@ -1536,7 +1445,7 @@ vault_path = "/media/user/HD/my-vault"
 ### 13.2 Integration
 
 - Create vault temp dir → open → touch file → close → reopen
-- Wrong password on lock (`always_prompt`) → `store/` unchanged
+- Close without a password → `store/` holds the open session
 - Orphan workspace → recovery close
 - Kill during close → orphan `.new`, original vault intact
 - After close with wipe on HDD → forensic recovery **does not** restore workspace files (manual test with recovery tool)
@@ -1554,15 +1463,14 @@ vault_path = "/media/user/HD/my-vault"
 
 1. **`upriv-core`**: config load, paths, in-process `.7z` (no plaintext temp).
 2. **Virtual mount** (`mount/` trait + platform backends): **FUSE** (Linux) and **WinFsp** (Windows) — the file manager folder → write-through to `store/` (`encrypted_dir` only).
-2b. **`plain/` module**: extract → real file manager folder → close from that folder + **`secure_wipe_workspace`** (no virtual mount).
+2b. **`plain/` module**: extract → real file manager folder → close from that folder and overwrite it before removal (no virtual mount).
 3. **open/close** happy path without UI — **both** `encrypted_dir` and `upriv_plain` (Linux + Windows).
 4. **Recovery** detector + discard.
 5. **Unlock** checks the password with Argon2id before any write.
 6. **Electron** minimal: vault list (§8.2), Lock/Unlock, config/backups modals, row click → workspace.
 7. **Linux packaging**: `Upriv-linux`, `hd-bundle` template. No `7zz` binary.
 8. **Windows packaging**: `Upriv.exe`, WinFsp runtime/deps. No `7zz` binary.
-9. **session.enc** + disk modes (v0.2).
-10. **macOS** (v1.1).
+9. **macOS** (v1.1).
 11. **React Native Android** (`dev/apps/mobile/`): native module → `upriv-core`; SAF; workspace on HD; open/close; Intent “Open folder”; single APK.
 11b. **Auto-close**: timer + FS watch per vault; warning UI.
 12. **React Native iOS**: document picker + same core.
@@ -1581,15 +1489,15 @@ vault_path = "/media/user/HD/my-vault"
 | UI security boundary | Presentation only in JS/TS | Crypto, RAM, disk, 7z in `upriv-core` only |
 | v1 platform | Linux + Windows desktop | Desktop parity from day one; shared `mount/` trait (FUSE / WinFsp); portable vault format |
 | Config | TOML + defaults | Readable, cross-platform |
-| Password on HD | Only `session.enc` | Never plaintext |
+| Password on HD | Never | Session keys stay in RAM |
 | Vault location | `--vault` path | HD + system folder |
 | Android workspace | On HD (SAF) | Desktop parity; Intent for external FM |
 | Android distribution | APK in `.upriv/app/Android/` | Mandatory install; not loose “folder app” |
 | Vault root | `.upriv/` groups system | UX: `workspace/` + 3 launchers at root |
 | Android file editing | Intent to manager | Avoid full FM in Upriv v1 |
 | Hint + note storage | `config.toml` `[vault]` | User metadata; survives seal; not sync manifest |
-| Change password | Open **or** closed; current password required; re-encrypt archive + store in RAM/temp; backups unchanged | Historical snapshots keep old password by design |
-| Settings UI (v1) | Subset of TOML; explicit save/discard | Hide `id`, paths, session mode, 7z tuning, wipe passes |
+| Change password | Closed vault only; current password required; backup zip first; same master key; header and name index resealed; file blobs stay | Snapshots keep the password from when they were written |
+| Settings UI (v1) | Subset of TOML; explicit save/discard | Hide `id`, paths, 7z tuning, wipe passes |
 
 ---
 

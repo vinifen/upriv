@@ -26,17 +26,6 @@ pub enum VaultBackupMode {
     KeepAll,
 }
 
-/// `[security] mode`. Close uses session keys except `always_prompt`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum VaultSecurityMode {
-    AlwaysPrompt,
-    #[default]
-    SessionRam,
-    DiskClose,
-    DiskOpenClose,
-}
-
 /// `[security] wipe_pattern`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -65,6 +54,7 @@ pub enum VaultSevenZipMethod {
 
 /// `[vault]` identity section (required for a listable vault).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct VaultIdentitySection {
     pub id: String,
     pub display_name: String,
@@ -79,6 +69,7 @@ pub struct VaultIdentitySection {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct VaultStorageSection {
     #[serde(default)]
     pub mode: VaultStorageMode,
@@ -88,6 +79,7 @@ pub use crate::paths::VaultMountSection;
 
 /// `[backup]`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct VaultBackupSection {
     #[serde(default = "default_true")]
     pub enabled: bool,
@@ -113,13 +105,10 @@ impl Default for VaultBackupSection {
     }
 }
 
-/// `[security]`.
+/// `[security]`. Wipe settings for a plaintext workspace.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct VaultSecuritySection {
-    #[serde(default)]
-    pub mode: VaultSecurityMode,
-    #[serde(default = "default_true")]
-    pub secure_wipe_workspace: bool,
     #[serde(default = "default_wipe_passes")]
     pub wipe_passes: u32,
     #[serde(default)]
@@ -131,8 +120,6 @@ pub struct VaultSecuritySection {
 impl Default for VaultSecuritySection {
     fn default() -> Self {
         Self {
-            mode: VaultSecurityMode::SessionRam,
-            secure_wipe_workspace: true,
             wipe_passes: 1,
             wipe_pattern: VaultWipePattern::Random,
             password_changed_at: None,
@@ -140,17 +127,23 @@ impl Default for VaultSecuritySection {
     }
 }
 
-/// `[auto_close]`.
+/// Settings control and the idle clock share this range.
+pub const IDLE_MINUTES_MIN: u32 = 1;
+pub const IDLE_MINUTES_MAX: u32 = 1440;
+
+pub(crate) fn clamp_idle_minutes(minutes: u32) -> u32 {
+    minutes.clamp(IDLE_MINUTES_MIN, IDLE_MINUTES_MAX)
+}
+
+/// `[auto_close]`. Minutes without activity inside Upriv before this vault closes.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct VaultAutoCloseSection {
     #[serde(default)]
     pub enabled: bool,
+    /// Load and save clamp this to [`IDLE_MINUTES_MIN`]..=[`IDLE_MINUTES_MAX`].
     #[serde(default = "default_idle_minutes")]
     pub idle_minutes: u32,
-    #[serde(default = "default_warn_before_seconds")]
-    pub warn_before_seconds: u32,
-    #[serde(default)]
-    pub close_on_app_exit: bool,
 }
 
 impl Default for VaultAutoCloseSection {
@@ -158,14 +151,13 @@ impl Default for VaultAutoCloseSection {
         Self {
             enabled: false,
             idle_minutes: 15,
-            warn_before_seconds: 60,
-            close_on_app_exit: false,
         }
     }
 }
 
 /// `[seven_zip]`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct VaultSevenZipSection {
     #[serde(default = "default_true")]
     pub encrypt_file_names: bool,
@@ -191,27 +183,6 @@ impl Default for VaultSevenZipSection {
     }
 }
 
-/// `[policy]`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct VaultPolicySection {
-    #[serde(default)]
-    pub allow_external_editors: bool,
-    #[serde(default = "default_true")]
-    pub disallow_copy_outside_mount: bool,
-    #[serde(default = "default_true")]
-    pub require_unmount_on_sleep: bool,
-}
-
-impl Default for VaultPolicySection {
-    fn default() -> Self {
-        Self {
-            allow_external_editors: false,
-            disallow_copy_outside_mount: true,
-            require_unmount_on_sleep: true,
-        }
-    }
-}
-
 fn default_true() -> bool {
     true
 }
@@ -228,14 +199,11 @@ fn default_idle_minutes() -> u32 {
     15
 }
 
-fn default_warn_before_seconds() -> u32 {
-    60
-}
-
 /// Full vault `config.toml` model — must stay aligned with TS `VaultSettingsConfig`
 /// **before** settings write becomes a real RPC, or a full-file save drops sections.
 /// `[kdf]` stays out: unlock cost lives in `vault.header`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct VaultConfig {
     pub vault: VaultIdentitySection,
     #[serde(default)]
@@ -250,8 +218,6 @@ pub struct VaultConfig {
     pub auto_close: VaultAutoCloseSection,
     #[serde(default)]
     pub seven_zip: VaultSevenZipSection,
-    #[serde(default)]
-    pub policy: VaultPolicySection,
 }
 
 impl VaultConfig {

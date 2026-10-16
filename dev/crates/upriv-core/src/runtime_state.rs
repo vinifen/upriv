@@ -238,7 +238,7 @@ mode = "encrypted_dir"
         let swept = sweep_stale_mount_leaves(&root).unwrap();
         assert!(swept.is_empty());
         assert!(mount.host_is_dir());
-        close_vault(&root, "notes", None).unwrap();
+        close_vault(&root, "notes").unwrap();
     }
 
     #[test]

@@ -29,7 +29,7 @@ pub use edit_policy::{
 pub use vault_config::{
     load_vault_config, load_vault_config_raw, save_vault_config, serialize_vault_config_toml,
     set_vault_hidden, vault_config_path, VaultBackupMode, VaultConfig, VaultIdentitySection,
-    VaultSecurityMode, VaultStorageMode, VaultStorageSection, VAULT_CONFIG_TOML_GROUPS_NOTE,
+    VaultStorageMode, VaultStorageSection, VAULT_CONFIG_TOML_GROUPS_NOTE,
 };
 pub use vault_groups::{
     create_vault_group_with_sort, delete_vault_group, known_vault_ids, load_vault_groups,

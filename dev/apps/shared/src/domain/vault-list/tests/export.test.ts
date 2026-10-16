@@ -87,6 +87,14 @@ describe("vaultCanExport", () => {
     expect(vaultCanExport(vault, { queuedVaultIds: ["a"] })).toBe(false);
     expect(vaultCanExport(vault, { openingVaultIds: ["other"] })).toBe(true);
   });
+
+  it("blocks export, password change, and unlock-RAM change", () => {
+    const vault = vaultListItemFixture({ id: "a", session: null });
+    expect(vaultCanExport(vault, { exportingVaultIds: ["a"] })).toBe(false);
+    expect(vaultCanExport(vault, { passwordChangeVaultIds: ["a"] })).toBe(false);
+    expect(vaultCanExport(vault, { kdfChangeVaultIds: ["a"] })).toBe(false);
+    expect(vaultCanExport(vault, { exportingVaultIds: ["other"] })).toBe(true);
+  });
 });
 
 describe("exportFilenameSanitizeKind", () => {

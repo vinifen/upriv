@@ -15,6 +15,8 @@ describe("METHOD_TIMEOUT_MS", () => {
     expect(METHOD_TIMEOUT_MS.open_in_terminal).toBe(10_000);
     expect(METHOD_TIMEOUT_MS.winfsp_status).toBe(10_000);
     expect(METHOD_TIMEOUT_MS.winfsp_install).toBe(0);
+    expect(METHOD_TIMEOUT_MS.fuse_status).toBe(10_000);
+    expect(METHOD_TIMEOUT_MS.fuse_install).toBe(0);
     expect(METHOD_TIMEOUT_MS.app_shutdown).toBe(LOADING_BUDGET_MS.vaultPipeline);
     expect(METHOD_TIMEOUT_MS.app_exit).toBe(LOADING_BUDGET_MS.vaultPipeline);
     expect(METHOD_TIMEOUT_MS.vault_root_setup_path).toBeGreaterThan(0);

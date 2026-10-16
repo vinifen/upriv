@@ -187,6 +187,22 @@ describe("buildVaultInfoSections", () => {
     expect(field(sections, "display_status")).toBe("vault.status.queued");
   });
 
+  it("labels export and rewrap on the closed vault", () => {
+    const vault = snapshot({ vault: vaultListItemFixture({ id: "notes", session: null }) });
+    expect(
+      field(buildVaultInfoSections(vault, t, { exportingVaultIds: ["notes"] }), "display_status"),
+    ).toBe("vault.status.exporting");
+    expect(
+      field(
+        buildVaultInfoSections(vault, t, { passwordChangeVaultIds: ["notes"] }),
+        "display_status",
+      ),
+    ).toBe("vault.status.changing_password");
+    expect(
+      field(buildVaultInfoSections(vault, t, { kdfChangeVaultIds: ["notes"] }), "display_status"),
+    ).toBe("vault.status.changing_kdf");
+  });
+
   it("falls back when settings and kdf are missing", () => {
     const sections = buildVaultInfoSections(
       snapshot({

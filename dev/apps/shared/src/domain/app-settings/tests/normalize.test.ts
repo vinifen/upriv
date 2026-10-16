@@ -52,6 +52,18 @@ describe("normalizeAppSettings", () => {
     expect(normalizeAppSettings(settings).ui.lifecycle_close_modal_on_submit).toBe(true);
   });
 
+  it("defaults lifecycle_keep_open_on_wake to false", () => {
+    const settings = createDefaultAppSettings();
+    expect(settings.ui.lifecycle_keep_open_on_wake).toBe(false);
+    const omitted = {
+      ...settings,
+      ui: { ...settings.ui, lifecycle_keep_open_on_wake: undefined as unknown as boolean },
+    };
+    expect(normalizeAppSettings(omitted).ui.lifecycle_keep_open_on_wake).toBe(false);
+    settings.ui.lifecycle_keep_open_on_wake = true;
+    expect(normalizeAppSettings(settings).ui.lifecycle_keep_open_on_wake).toBe(true);
+  });
+
   it("defaults lifecycle_open_file_manager_on_open to false", () => {
     const settings = createDefaultAppSettings();
     expect(settings.ui.lifecycle_open_file_manager_on_open).toBe(false);

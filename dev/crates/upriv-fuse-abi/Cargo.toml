@@ -1,0 +1,11 @@
+[package]
+name = "upriv-fuse-abi"
+version.workspace = true
+description = "C ABI shared by the daemon and the Linux FUSE helper"
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+libc = "=0.2.186"

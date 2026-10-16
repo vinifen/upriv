@@ -89,6 +89,9 @@ pub struct UiSettings {
     /// After unlock succeeds, open the file manager if no other modal is open. Default false.
     #[serde(default = "default_false")]
     pub lifecycle_open_file_manager_on_open: bool,
+    /// Sleep and phone freeze do not count as inactivity. Default false — that time counts.
+    #[serde(default = "default_false")]
+    pub lifecycle_keep_open_on_wake: bool,
     /// Confirm before deleting files/folders in the file manager. Default true.
     #[serde(default = "default_true")]
     pub file_manager_confirm_delete: bool,
@@ -147,6 +150,7 @@ impl Default for AppSettings {
                 file_manager_tree_split_percent: default_file_manager_tree_split_percent(),
                 lifecycle_close_modal_on_submit: false,
                 lifecycle_open_file_manager_on_open: false,
+                lifecycle_keep_open_on_wake: false,
                 file_manager_confirm_delete: true,
             },
             logging: LoggingSettings {

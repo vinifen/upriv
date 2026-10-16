@@ -20,8 +20,11 @@ describe("errorDisplayI18nKey", () => {
     expect(errorDisplayI18nKey(new RpcError("open_terminal_failed", "no terminal"))).toBe(
       "modal.file_manager.toast.open_terminal_failed",
     );
-    expect(errorDisplayI18nKey(new RpcError("vault_rewrap_unavailable", "p0"))).toBe(
-      "error.vault_rewrap_unavailable",
+    expect(errorDisplayI18nKey(new RpcError("vault_backup_failed", "zip"))).toBe(
+      "error.vault_backup_failed",
+    );
+    expect(errorDisplayI18nKey(new RpcError("vault_mount_filesystem", "exfat"))).toBe(
+      "error.vault_mount_filesystem",
     );
     expect(errorDisplayI18nKey(new RpcError("upriv_plain_unavailable", "plain"))).toBe(
       "error.upriv_plain_unavailable",
@@ -44,6 +47,7 @@ describe("errorDisplayI18nKey", () => {
     expect(errorDisplayI18nKey(new RpcError("vault_must_be_closed", "open"))).toBe(
       "error.vault_must_be_closed",
     );
+    expect(errorDisplayI18nKey(new RpcError("vault_busy", "held"))).toBe("error.vault_busy");
   });
 
   it("maps insufficient_ram to the unlock-preset RAM key", () => {
@@ -71,6 +75,18 @@ describe("errorDisplayI18nKey", () => {
     expect(errorDisplayI18nKey(new RpcError("vault_config_busy", "quiet"))).toBe(
       "error.vault_config_busy",
     );
+  });
+
+  it("maps an unchanged rewrap to the must-be-different copy", () => {
+    expect(errorDisplayI18nKey(new RpcError("rewrap_password_unchanged", "same"))).toBe(
+      "vault.change_password.same_as_current",
+    );
+    expect(errorDisplayI18nKey(new RpcError("rewrap_kdf_unchanged", "same"))).toBe(
+      "vault.change_kdf.same_as_current",
+    );
+    expect(
+      errorDisplayI18nKey(new RpcError("vault_config_invalid", "rewrap changes nothing")),
+    ).toBe(null);
   });
 
   it("returns null for unknown errors", () => {

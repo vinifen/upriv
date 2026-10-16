@@ -19,6 +19,7 @@ import {
   resolveVaultDisplayStatus,
   resolveVaultListStatus,
   vaultPipelineRowBudget,
+  vaultStatusLabelKey,
 } from "..";
 import { LOADING_BUDGET_MS } from "../../loading/budget";
 import { vaultRowFixture } from "./fixtures.shared";
@@ -118,6 +119,24 @@ describe("resolveVaultListStatus", () => {
     expect(isVaultListRowUnlockTarget("open")).toBe(false);
     expect(isVaultListRowActivatable("closing")).toBe(false);
   });
+
+  it("names export and rewrap and refuses open", () => {
+    const row = vaultRowFixture({ id: "a", session: null });
+    expect(resolveVaultListStatus(row, { exportingVaultIds: ["a"] })).toBe("exporting");
+    expect(resolveVaultListStatus(row, { passwordChangeVaultIds: ["a"] })).toBe(
+      "changing_password",
+    );
+    expect(resolveVaultListStatus(row, { kdfChangeVaultIds: ["a"] })).toBe("changing_kdf");
+    expect(isVaultListRowActivatable("exporting")).toBe(false);
+    expect(isVaultListRowActivatable("changing_password")).toBe(false);
+    expect(isVaultListRowActivatable("changing_kdf")).toBe(false);
+    expect(isVaultListRowUnlockTarget("exporting")).toBe(false);
+    expect(isVaultPipelineDisplayBusy("exporting")).toBe(true);
+    expect(isVaultPipelineDisplayBusy("changing_password")).toBe(true);
+    expect(isVaultPipelineDisplayBusy("changing_kdf")).toBe(true);
+    expect(canDeleteVaultNow("exporting")).toBe(false);
+    expect(isVaultListClosed(row, { exportingVaultIds: ["a"] })).toBe(false);
+  });
 });
 
 describe("isVaultFileManagerEligible", () => {
@@ -183,5 +202,29 @@ describe("vaultPipelineRowBudget", () => {
     expect(vaultPipelineRowBudget("opening", pipeline, "b").active).toBe(false);
     expect(vaultPipelineRowBudget("closing", pipeline, "a").active).toBe(false);
     expect(vaultPipelineRowBudget("queued", pipeline, "a").active).toBe(false);
+  });
+
+  it("counts a password or unlock-RAM change from its own start", () => {
+    const pipeline = { rewrapStartedAt: 40 };
+    expect(vaultPipelineRowBudget("changing_password", pipeline, "a")).toEqual({
+      active: true,
+      budgetMs: LOADING_BUDGET_MS.vaultRewrap,
+      startedAt: 40,
+    });
+    expect(vaultPipelineRowBudget("changing_kdf", pipeline, "a")).toEqual({
+      active: true,
+      budgetMs: LOADING_BUDGET_MS.vaultRewrap,
+      startedAt: 40,
+    });
+    expect(vaultPipelineRowBudget("changing_password", {}, "a").active).toBe(false);
+    expect(vaultPipelineRowBudget("opening", pipeline, "a").active).toBe(false);
+  });
+});
+
+describe("vaultStatusLabelKey", () => {
+  it("says auto-closed only for a closed vault that idle lock just finished", () => {
+    expect(vaultStatusLabelKey("closed", "notes", {}, true)).toBe("vault.status.auto_closed");
+    expect(vaultStatusLabelKey("closed", "notes")).toBe("vault.status.closed");
+    expect(vaultStatusLabelKey("open", "notes", {}, true)).toBe("vault.status.open");
   });
 });

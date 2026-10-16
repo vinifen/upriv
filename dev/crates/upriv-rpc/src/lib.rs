@@ -20,16 +20,16 @@ use upriv_core::logging::{
     Logger,
 };
 use upriv_core::{
-    active_alias_is_unmounted_saf, app_home_dir, close_phase, close_vault,
-    create_vault_group_with_sort, create_vault_with_welcome,
-    deactivate_vault_root_alias_everywhere, delete_vault_group, discover_bootstrap_root,
-    inspect_vault_root_at, known_vault_ids, list_vaults, load_app_settings, load_vault_config,
-    load_vault_groups, open_import_session, open_or_initialize_vault_root, open_vault,
-    parse_settings_toml_str, read_vault_root_alias, relocate_upriv_dir,
-    remember_vault_root_custom_uri, rename_vault, reorder_vault_group_grouped_vaults,
-    reorder_vault_groups, repair_vault_groups, resolve_vault_root,
-    save_app_settings_session_with_alias_sync, serialize_settings_toml_str, suggested_vault_root,
-    update_vault_group, vault_list_item, vault_store_on_disk_bytes,
+    active_alias_is_unmounted_saf, app_home_dir, change_vault_kdf, change_vault_password,
+    close_phase, close_vault, close_vault_auto, create_vault_group_with_sort,
+    create_vault_with_welcome, deactivate_vault_root_alias_everywhere, delete_vault_group,
+    discover_bootstrap_root, inspect_vault_root_at, known_vault_ids, list_vaults,
+    load_app_settings, load_vault_config, load_vault_groups, open_import_session,
+    open_or_initialize_vault_root, open_vault, parse_settings_toml_str, read_vault_root_alias,
+    relocate_upriv_dir, remember_vault_root_custom_uri, rename_vault,
+    reorder_vault_group_grouped_vaults, reorder_vault_groups, repair_vault_groups,
+    resolve_vault_root, save_app_settings_session_with_alias_sync, serialize_settings_toml_str,
+    suggested_vault_root, update_vault_group, vault_list_item, vault_store_on_disk_bytes,
     write_vault_root_alias_for_root, write_vault_root_alias_for_root_with_custom, AppSettings,
     IncompleteReplacePolicy, KdfUnlockPreset, ResolveVaultRoot, ResolveVaultRootOptions,
     UpdateVaultGroupParams, UprivDirRelocate, VaultConfig, VaultGroup, VaultListItem,
@@ -162,6 +162,8 @@ pub fn handle_rpc(req: RpcRequest) -> RpcResponse {
         "vault_create" => vault_create(req.params),
         "vault_open" => vault_open(req.params),
         "vault_close" => vault_close(req.params),
+        "vault_change_password" => vault_change_password(req.params),
+        "vault_change_kdf" => vault_change_kdf(req.params),
         "vault_close_phase" => vault_close_phase(req.params),
         "vault_export_capabilities" => vault_ops::vault_export_capabilities(req.params),
         "vault_config_get" => vault_config_get(req.params),
@@ -453,7 +455,7 @@ fn refuse_root_switch_if_busy() -> Option<RpcResponse> {
         return None;
     }
     const MSG: &str =
-        "close vaults that are open, opening, closing, or creating before switching data folder";
+        "wait until open, close, create, export, password change, and unlock-RAM change finish before switching data folder";
     log_event(
         LogLevel::Warn,
         "rpc_error",
@@ -1448,24 +1450,94 @@ fn vault_ingest_open(params: Value) -> RpcResponse {
     }
 }
 
-fn vault_close(params: Value) -> RpcResponse {
-    let parsed: VaultIdPasswordParams = match serde_json::from_value(params) {
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct VaultChangePasswordParams {
+    id: String,
+    current_password: SecretString,
+    new_password: SecretString,
+}
+
+fn vault_change_password(params: Value) -> RpcResponse {
+    let parsed: VaultChangePasswordParams = match serde_json::from_value(params) {
         Ok(value) => value,
         Err(error) => return err("invalid_request", error.to_string()),
     };
-    let password = parsed
-        .password
-        .as_ref()
-        .filter(|value| !value.is_empty())
-        .map(SecretString::as_bytes);
     let root = match require_vault_root() {
         Ok(root) => root,
         Err(response) => return response,
     };
-    match close_vault(&root, parsed.id.trim(), password) {
+    match change_vault_password(
+        &root,
+        parsed.id.trim(),
+        parsed.current_password.as_bytes(),
+        parsed.new_password.as_bytes(),
+    ) {
+        Ok(()) => ok(json!(null)),
+        Err(error) => map_core_err(error),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct VaultChangeKdfParams {
+    id: String,
+    current_password: SecretString,
+    unlock_preset: KdfUnlockPreset,
+}
+
+fn vault_change_kdf(params: Value) -> RpcResponse {
+    let parsed: VaultChangeKdfParams = match serde_json::from_value(params) {
+        Ok(value) => value,
+        Err(error) => return err("invalid_request", error.to_string()),
+    };
+    let root = match require_vault_root() {
+        Ok(root) => root,
+        Err(response) => return response,
+    };
+    match change_vault_kdf(
+        &root,
+        parsed.id.trim(),
+        parsed.current_password.as_bytes(),
+        parsed.unlock_preset,
+    ) {
+        Ok(()) => ok(json!(null)),
+        Err(error) => map_core_err(error),
+    }
+}
+
+fn vault_close(params: Value) -> RpcResponse {
+    let parsed: VaultCloseParams = match serde_json::from_value(params) {
+        Ok(value) => value,
+        Err(error) => return err("invalid_request", error.to_string()),
+    };
+    let root = match require_vault_root() {
+        Ok(root) => root,
+        Err(response) => return response,
+    };
+    let id = parsed.id.trim();
+    let closed = match parsed.reason.as_deref().unwrap_or("user") {
+        "user" => close_vault(&root, id),
+        "auto" => close_vault_auto(&root, id),
+        other => {
+            return err(
+                "invalid_request",
+                format!("vault_close reason must be user or auto, got {other}"),
+            );
+        }
+    };
+    match closed {
         Ok(outcome) => ok(json!({ "backupFailed": outcome.backup_failed })),
         Err(error) => map_core_err(error),
     }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct VaultCloseParams {
+    id: String,
+    #[serde(default)]
+    reason: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1889,6 +1961,14 @@ fn map_core_err_response(error: upriv_core::UprivError, emit_log: bool) -> RpcRe
             ("import_source_unreadable", Some(p.as_path()))
         }
         upriv_core::UprivError::VaultMustBeClosed => ("vault_must_be_closed", None),
+        upriv_core::UprivError::VaultBusy => ("vault_busy", None),
+        upriv_core::UprivError::VaultBackupFailed => ("vault_backup_failed", None),
+        upriv_core::UprivError::RewrapUnchanged(upriv_core::RewrapUnchangedKind::Password) => {
+            ("rewrap_password_unchanged", None)
+        }
+        upriv_core::UprivError::RewrapUnchanged(upriv_core::RewrapUnchangedKind::UnlockRam) => {
+            ("rewrap_kdf_unchanged", None)
+        }
         upriv_core::UprivError::Io(io) if upriv_core::host_fs::is_unreachable(io) => {
             ("vault_root_unreachable", None)
         }
@@ -1897,7 +1977,11 @@ fn map_core_err_response(error: upriv_core::UprivError, emit_log: bool) -> RpcRe
     let message = error.to_string();
     if emit_log {
         let level = match code {
-            "vault_root_incomplete" | "wrong_password" | "vault_unlock_blocked" => LogLevel::Warn,
+            "vault_root_incomplete"
+            | "wrong_password"
+            | "vault_unlock_blocked"
+            | "rewrap_password_unchanged"
+            | "rewrap_kdf_unchanged" => LogLevel::Warn,
             _ => LogLevel::Error,
         };
         // `message` stays on the RPC response for the person at the screen.
@@ -2058,6 +2142,8 @@ mod contract_tests {
         "vault_create",
         "vault_open",
         "vault_close",
+        "vault_change_password",
+        "vault_change_kdf",
         "vault_close_phase",
         "vault_export_capabilities",
         "vault_config_get",
@@ -2386,7 +2472,6 @@ level = \"info\"
             security: Default::default(),
             auto_close: Default::default(),
             seven_zip: Default::default(),
-            policy: Default::default(),
         };
         upriv_core::create_vault(
             &root,
@@ -2420,7 +2505,7 @@ level = \"info\"
             "{blocked_path:?}"
         );
 
-        upriv_core::close_vault(&root, "busy-root", None).expect("close");
+        upriv_core::close_vault(&root, "busy-root").expect("close");
         let after = handle_rpc(RpcRequest {
             method: "vault_root_setup_path".into(),
             params: json!({

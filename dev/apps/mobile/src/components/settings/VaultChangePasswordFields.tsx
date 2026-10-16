@@ -11,43 +11,50 @@ import { FieldHint, FieldLabel, PasswordInput, Warning } from "./settingsFields"
 export function VaultChangePasswordFields({
   fields,
   onChange,
+  passwordFieldError,
   error,
   rewrapBlocked = false,
+  busy = false,
 }: {
   fields: ChangePasswordFieldsState;
   onChange: (patch: Partial<ChangePasswordFieldsState>) => void;
+  passwordFieldError?: string | null;
   error?: string | null;
   rewrapBlocked?: boolean;
+  busy?: boolean;
 }) {
   const { t } = useTranslation();
   const passwordsMatch =
     fields.newPassword.length > 0 && fields.newPassword === fields.confirmPassword;
+  const locked = rewrapBlocked || busy;
 
   return (
     <View style={{ gap: spacing.md }}>
       {rewrapBlocked ? (
         <FieldHint>{t(requireVaultConfigEditLockedI18nKey("action.change_password"))}</FieldHint>
       ) : null}
-      <FieldLabel disabled={rewrapBlocked}>{t("vault.change_password.current")}</FieldLabel>
+      <FieldLabel disabled={locked}>{t("vault.change_password.current")}</FieldLabel>
       <PasswordInput
         value={fields.currentPassword}
-        disabled={rewrapBlocked}
+        disabled={locked}
+        invalid={Boolean(passwordFieldError)}
         onChangeText={(currentPassword) => onChange({ currentPassword })}
         autoCapitalize="none"
         autoCorrect={false}
       />
-      <FieldLabel disabled={rewrapBlocked}>{t("vault.change_password.new")}</FieldLabel>
+      {passwordFieldError ? <Warning>{passwordFieldError}</Warning> : null}
+      <FieldLabel disabled={locked}>{t("vault.change_password.new")}</FieldLabel>
       <PasswordInput
         value={fields.newPassword}
-        disabled={rewrapBlocked}
+        disabled={locked}
         onChangeText={(newPassword) => onChange({ newPassword })}
         autoCapitalize="none"
         autoCorrect={false}
       />
-      <FieldLabel disabled={rewrapBlocked}>{t("vault.change_password.confirm")}</FieldLabel>
+      <FieldLabel disabled={locked}>{t("vault.change_password.confirm")}</FieldLabel>
       <PasswordInput
         value={fields.confirmPassword}
-        disabled={rewrapBlocked}
+        disabled={locked}
         onChangeText={(confirmPassword) => onChange({ confirmPassword })}
         autoCapitalize="none"
         autoCorrect={false}

@@ -13,9 +13,11 @@ export function packagedVaultHome(input: {
   platform: NodeJS.Platform;
   portableExecutableDir?: string;
   appImageFile?: boolean;
+  portableFile?: boolean;
 }): PackagedVaultHome {
   const portableDir = input.portableExecutableDir?.trim() ?? "";
   if (input.platform === "win32" && portableDir.length > 0) return "portable";
+  if (input.portableFile) return "portable";
   if (input.appImageFile) return "portable";
   return "installed";
 }

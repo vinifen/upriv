@@ -27,7 +27,6 @@ import type {
 import {
   backupSnapshotFileName,
   bytesFromContentB64,
-  isLifecyclePasswordPresent,
   normalizeAppSettings,
   normalizeVaultSettingsConfig,
   vaultSettingsForDaemon,
@@ -104,6 +103,21 @@ export async function rpcWinFspStatus(): Promise<{ applicable: boolean; installe
 
 export async function rpcWinFspInstall(): Promise<boolean> {
   const raw = await desktopInvokeRaw(SHELL_COMMANDS.WINFSP_INSTALL, {});
+  if (!raw || typeof raw !== "object") return false;
+  return (raw as { ok?: unknown }).ok === true;
+}
+
+export async function rpcFuseStatus(): Promise<{ applicable: boolean; installed: boolean }> {
+  const raw = await desktopInvokeRaw(SHELL_COMMANDS.FUSE_STATUS, {});
+  if (!raw || typeof raw !== "object") {
+    throw new RpcError(BRIDGE_ERROR_CODES.INVALID_RESPONSE, "fuse_status: expected an object", raw);
+  }
+  const row = raw as { applicable?: unknown; installed?: unknown };
+  return { applicable: row.applicable === true, installed: row.installed === true };
+}
+
+export async function rpcFuseInstall(): Promise<boolean> {
+  const raw = await desktopInvokeRaw(SHELL_COMMANDS.FUSE_INSTALL, {});
   if (!raw || typeof raw !== "object") return false;
   return (raw as { ok?: unknown }).ok === true;
 }
@@ -517,12 +531,36 @@ export async function rpcVaultOpen(id: string, password: string): Promise<void> 
   await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_OPEN, { id, password });
 }
 
-export async function rpcVaultClose(id: string, password?: string): Promise<CloseVaultOutcome> {
-  const raw = await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_CLOSE, {
-    id,
-    password: password && isLifecyclePasswordPresent(password) ? password : undefined,
-  });
+export async function rpcVaultClose(
+  id: string,
+  reason: "user" | "auto" = "user",
+): Promise<CloseVaultOutcome> {
+  const raw = await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_CLOSE, { id, reason });
   return parseCloseVaultOutcome(raw);
+}
+
+export async function rpcVaultChangePassword(
+  id: string,
+  currentPassword: string,
+  newPassword: string,
+): Promise<void> {
+  await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_CHANGE_PASSWORD, {
+    id,
+    currentPassword,
+    newPassword,
+  });
+}
+
+export async function rpcVaultChangeKdf(
+  id: string,
+  currentPassword: string,
+  unlockPreset: string,
+): Promise<void> {
+  await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_CHANGE_KDF, {
+    id,
+    currentPassword,
+    unlockPreset,
+  });
 }
 
 function parseCloseVaultOutcome(raw: unknown): CloseVaultOutcome {

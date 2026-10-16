@@ -1,6 +1,6 @@
 import { normalizeWorkspaceTable } from "../workspace";
 import { uniqueDisplayName } from "../vault/displayName";
-import { parseKdfUnlockPreset, normalizeSecurityModeForStorage } from "../vault-settings";
+import { parseKdfUnlockPreset } from "../vault-settings";
 import type { KdfUnlockPreset, VaultSettingsConfig } from "../vault-settings";
 import { createVaultChoosesKdf } from "../vault-settings/kdf";
 import type { CreateVaultDraft } from "./types";
@@ -33,8 +33,6 @@ export function applyEmbeddedVaultSettings(
 ): CreateVaultDraft {
   const source = embedded.settings;
   const security = {
-    mode: normalizeSecurityModeForStorage(source.storage.mode, source.security.mode),
-    secure_wipe_workspace: source.security.secure_wipe_workspace,
     wipe_passes: source.security.wipe_passes,
     wipe_pattern: source.security.wipe_pattern,
   };
@@ -58,7 +56,6 @@ export function applyEmbeddedVaultSettings(
     auto_close: unchanged(draft.auto_close, snapshot.auto_close, { ...source.auto_close }),
     security: unchanged(draft.security, snapshot.security, security),
     seven_zip: unchanged(draft.seven_zip, snapshot.seven_zip, { ...source.seven_zip }),
-    policy: unchanged(draft.policy, snapshot.policy, { ...source.policy }),
     archiveUnlockPreset: embedded.unlockPreset,
   };
   if (embedded.unlockPreset && createVaultChoosesKdf(next)) {
@@ -103,16 +100,10 @@ export function parseEmbeddedVaultSettings(
   ) {
     return null;
   }
-  if (!isRecord(settings.seven_zip) || !isRecord(settings.policy)) return null;
+  if (!isRecord(settings.seven_zip)) return null;
   const displayName = str(settings.vault.display_name);
   const mode = oneOf(str(settings.storage.mode) ?? "", ["encrypted_dir", "upriv_plain"] as const);
   const backupMode = oneOf(str(settings.backup.mode) ?? "", ["keep_last", "keep_all"] as const);
-  const securityMode = oneOf(str(settings.security.mode) ?? "", [
-    "always_prompt",
-    "session_ram",
-    "disk_close",
-    "disk_open_close",
-  ] as const);
   const wipePattern = oneOf(str(settings.security.wipe_pattern) ?? "", [
     "random",
     "zeros",
@@ -122,28 +113,18 @@ export function parseEmbeddedVaultSettings(
     "encrypt_only",
   ] as const);
   const method = oneOf(str(settings.seven_zip.method) ?? "", ["lzma2"] as const);
-  if (
-    !displayName ||
-    !mode ||
-    !backupMode ||
-    !securityMode ||
-    !wipePattern ||
-    !archiveMode ||
-    !method
-  ) {
+  if (!displayName || !mode || !backupMode || !wipePattern || !archiveMode || !method) {
     return null;
   }
   const keepLast = num(settings.backup.keep_last);
   const wipePasses = num(settings.security.wipe_passes);
   const idle = num(settings.auto_close.idle_minutes);
-  const warn = num(settings.auto_close.warn_before_seconds);
   const compression = num(settings.seven_zip.compression_level);
   const order = num(settings.vault.order);
   if (
     keepLast === null ||
     wipePasses === null ||
     idle === null ||
-    warn === null ||
     compression === null ||
     order === null
   ) {
@@ -152,26 +133,16 @@ export function parseEmbeddedVaultSettings(
   const enabled = bool(settings.backup.enabled);
   const skipUnchanged = bool(settings.backup.skip_unchanged);
   const hidden = bool(settings.vault.hidden);
-  const secureWipe = bool(settings.security.secure_wipe_workspace);
   const autoEnabled = bool(settings.auto_close.enabled);
-  const closeOnExit = bool(settings.auto_close.close_on_app_exit);
   const encryptNames = bool(settings.seven_zip.encrypt_file_names);
   const solid = bool(settings.seven_zip.solid);
-  const allowEditors = bool(settings.policy.allow_external_editors);
-  const disallowCopy = bool(settings.policy.disallow_copy_outside_mount);
-  const unmountSleep = bool(settings.policy.require_unmount_on_sleep);
   if (
     enabled === null ||
     skipUnchanged === null ||
     hidden === null ||
-    secureWipe === null ||
     autoEnabled === null ||
-    closeOnExit === null ||
     encryptNames === null ||
-    solid === null ||
-    allowEditors === null ||
-    disallowCopy === null ||
-    unmountSleep === null
+    solid === null
   ) {
     return null;
   }
@@ -196,16 +167,12 @@ export function parseEmbeddedVaultSettings(
         skip_unchanged: skipUnchanged,
       },
       security: {
-        mode: securityMode,
-        secure_wipe_workspace: secureWipe,
         wipe_passes: wipePasses,
         wipe_pattern: wipePattern,
       },
       auto_close: {
         enabled: autoEnabled,
         idle_minutes: idle,
-        warn_before_seconds: warn,
-        close_on_app_exit: closeOnExit,
       },
       seven_zip: {
         encrypt_file_names: encryptNames,
@@ -213,11 +180,6 @@ export function parseEmbeddedVaultSettings(
         compression_level: compression,
         solid,
         method,
-      },
-      policy: {
-        allow_external_editors: allowEditors,
-        disallow_copy_outside_mount: disallowCopy,
-        require_unmount_on_sleep: unmountSleep,
       },
     },
   };

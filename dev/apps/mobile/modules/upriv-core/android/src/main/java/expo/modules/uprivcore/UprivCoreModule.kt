@@ -237,12 +237,12 @@ private val PROBE_METHODS = setOf("vault_close_phase")
 
 /**
  * Same lanes as the desktop daemon (`upriv-daemon` `wire.rs`), plus a light
- * lane for everything else. Argon2, close, and pack are one thread each.
+ * lane for everything else. Argon2, close, rewrap, and pack are one thread each.
  * File import uses up to two threads, the phone cap in `import_slots_for`.
  * A one-core phone uses one thread.
  *
  * Method names match `is_argon2_bound_method`, `is_lifecycle_io_method`,
- * `is_import_io_method`, and `is_pack_io_method`.
+ * `is_rewrap_io_method`, `is_import_io_method`, and `is_pack_io_method`.
  */
 private object CoreLanes {
   private fun single(name: String): CoroutineDispatcher =
@@ -253,6 +253,7 @@ private object CoreLanes {
   private val light = single("upriv-rpc")
   private val argon2 = single("upriv-argon2")
   private val lifecycle = single("upriv-fs-io")
+  private val rewrap = single("upriv-rewrap")
   val pack = single("upriv-pack")
   private val importNames = AtomicInteger()
   val importFiles: CoroutineDispatcher =
@@ -269,6 +270,7 @@ private object CoreLanes {
   fun dispatcher(method: String): CoroutineDispatcher = when (method) {
     "vault_open", "vault_create", "vault_export_probe", "vault_ingest_open" -> argon2
     "vault_close", "vault_delete", "backup_get", "vault_discard_import" -> lifecycle
+    "vault_change_password", "vault_change_kdf" -> rewrap
     "vault_fs_import_os_file", "vault_fs_import_seal" -> importFiles
     "vault_import_zip",
     "vault_import_7z",

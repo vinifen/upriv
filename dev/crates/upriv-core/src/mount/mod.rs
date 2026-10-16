@@ -10,7 +10,7 @@ use crate::error::{Result, UprivError};
 #[cfg_attr(not(windows), allow(dead_code))]
 mod explorer;
 #[cfg(target_os = "linux")]
-mod fuse_linux;
+mod fuse_host;
 mod thumbnails;
 #[cfg(windows)]
 mod winfsp_windows;
@@ -18,11 +18,23 @@ mod winfsp_windows;
 #[cfg_attr(not(target_os = "linux"), allow(unused_imports))]
 pub(crate) use thumbnails::{purge_mount_thumbnails, unwatch_open_mount, watch_open_mount};
 
+/// Why a saved file-manager folder still has no OS path.
+///
+/// `unsupported_filesystem` means the disk cannot hold a Windows directory junction.
+/// An empty string is every other missing mount.
+pub fn mount_failure_reason(detail: &str) -> &'static str {
+    if detail == "unsupported_filesystem" {
+        "unsupported_filesystem"
+    } else {
+        ""
+    }
+}
+
 /// Held while a vault is mounted. Unmounts and removes the leaf on drop.
 pub struct MountedVault {
     pub(crate) mount_point: PathBuf,
     #[cfg(target_os = "linux")]
-    pub(crate) session: Option<fuser::BackgroundSession>,
+    pub(crate) fuse: Option<fuse_host::FuseSession>,
     #[cfg(windows)]
     pub(crate) winfsp: Option<winfsp_windows::WinFspVolume>,
 }
@@ -50,7 +62,7 @@ impl Drop for MountedVault {
         }
         #[cfg(target_os = "linux")]
         {
-            self.session.take();
+            self.fuse.take();
             unwatch_open_mount(&self.mount_point);
         }
         if force_unmount(&self.mount_point).is_ok() {
@@ -191,7 +203,7 @@ fn mount_prepared(
     vault_id: String,
     mount_point: PathBuf,
 ) -> Result<MountedVault> {
-    fuse_linux::spawn(root, vault_id, mount_point)
+    fuse_host::spawn(root, vault_id, mount_point)
 }
 
 #[cfg(windows)]
@@ -405,5 +417,19 @@ mod mountinfo_tests {
             classify_mount_point(Path::new("/"), SAMPLE),
             MountKind::Other
         );
+    }
+}
+
+#[cfg(test)]
+mod failure_reason_tests {
+    use super::mount_failure_reason;
+
+    #[test]
+    fn names_the_unsupported_filesystem_detail() {
+        assert_eq!(
+            mount_failure_reason("unsupported_filesystem"),
+            "unsupported_filesystem"
+        );
+        assert_eq!(mount_failure_reason("WinFsp is not installed"), "");
     }
 }

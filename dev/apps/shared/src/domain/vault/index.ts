@@ -2,6 +2,8 @@ export type {
   StorageMode,
   VaultDisplayStatus,
   VaultPipelineListStatus,
+  VaultRewrapKind,
+  VaultRewrapRun,
   VaultRow,
   VaultSession,
 } from "./types";
@@ -31,11 +33,32 @@ export {
   vaultPipelineRowBudget,
 } from "./types";
 export type { VaultLifecycleIntent, VaultLifecycleRequest } from "./lifecycle";
+export { canRunIdleAutoClose, requiresCloseDialog } from "./lifecycle";
+export type {
+  IdleAutoCloseDecision,
+  IdleAutoClosePlan,
+  IdleAutoCloseTarget,
+  IdleAutoCloseWarning,
+  IdleLockResult,
+  IdleVaultClock,
+} from "./idleAutoClose";
 export {
-  canRunIdleAutoClose,
-  requiresCloseDialog,
-  requiresPasswordForLifecycle,
-} from "./lifecycle";
+  applyIdleActivity,
+  capIdleTimerMs,
+  decideIdleAutoClose,
+  IDLE_AUTO_CLOSE_MAX_TIMER_MS,
+  IDLE_AUTO_CLOSE_MINUTES_MAX,
+  IDLE_AUTO_CLOSE_MINUTES_MIN,
+  IDLE_AUTO_CLOSE_WARN_SECONDS,
+  idleLimitMs,
+  idleWarnLeadMs,
+  idleWarnLeadSeconds,
+  idleWarningText,
+  planIdleAutoClose,
+  restartIdleClock,
+  shiftIdleClocksForWake,
+  syncIdleClocks,
+} from "./idleAutoClose";
 export {
   VAULT_DISPLAY_NAME_MAX_LENGTH,
   VAULT_NOTE_MAX_LENGTH,
@@ -68,6 +91,7 @@ export { isVaultErrorCode, VAULT_ERROR_CODES } from "./errors/codes";
 export type { VaultErrorCode } from "./errors/codes";
 export {
   isVaultCredentialChallengeI18nKey,
+  rewrapErrorOnPasswordField,
   requireVaultErrorI18nKey,
   vaultErrorI18nKey,
 } from "./errors/messages";

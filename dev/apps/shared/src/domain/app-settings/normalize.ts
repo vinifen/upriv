@@ -66,6 +66,7 @@ export function createDefaultAppSettings(): AppSettingsConfig {
       file_manager_tree_split_percent: TREE_SPLIT_DEFAULT_PERCENT,
       lifecycle_close_modal_on_submit: false,
       lifecycle_open_file_manager_on_open: false,
+      lifecycle_keep_open_on_wake: false,
       file_manager_confirm_delete: true,
     },
     logging: {
@@ -117,6 +118,7 @@ export function normalizeAppSettings(config: AppSettingsConfig): AppSettingsConf
       ),
       lifecycle_close_modal_on_submit: config.ui.lifecycle_close_modal_on_submit === true,
       lifecycle_open_file_manager_on_open: config.ui.lifecycle_open_file_manager_on_open === true,
+      lifecycle_keep_open_on_wake: config.ui.lifecycle_keep_open_on_wake === true,
       file_manager_confirm_delete: config.ui.file_manager_confirm_delete !== false,
     },
     logging,

@@ -10,6 +10,7 @@ import {
   type TextInputScrollEventData,
 } from "react-native";
 import { fileBaseName, vaultFileLanguageFromPath } from "@upriv/shared";
+import { noteIdleActivity } from "@/lib/idleActivity";
 import { LoadingBudgetHint } from "@/components/ui";
 import { useTranslation } from "@/i18n";
 import { useTheme } from "@/theme";
@@ -91,7 +92,10 @@ function EditorWithLineNumbers({
         collapsable={false}
         value={content}
         editable={!readOnly}
-        onChangeText={onChange}
+        onChangeText={(text) => {
+          noteIdleActivity();
+          onChange(text);
+        }}
         onScroll={syncGutter}
         multiline
         scrollEnabled

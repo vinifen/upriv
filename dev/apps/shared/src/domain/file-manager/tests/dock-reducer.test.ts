@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { vaultRowFixture } from "../../vault/tests/fixtures.shared";
 import {
   createEmptyFileManagerState,
+  closeIntentAfterUnsavedResolved,
   fileManagerBlockingPrompt,
   vaultCloseBlockingPrompt,
   fileManagerDismissIntent,
@@ -150,6 +151,9 @@ describe("fileManagerReducer", () => {
     expect(vaultCloseBlockingPrompt("import_in_progress")).toEqual({
       type: "close_vault_import",
     });
+    expect(closeIntentAfterUnsavedResolved("unsaved", true)).toBe("dismiss");
+    expect(closeIntentAfterUnsavedResolved("import_in_progress", true)).toBe("import_in_progress");
+    expect(closeIntentAfterUnsavedResolved("unsaved", false)).toBe("unsaved");
     expect(fileManagerDismissIntent({ importInFlight: false, workspace })).toBe("unsaved");
     expect(
       fileManagerDismissIntent({

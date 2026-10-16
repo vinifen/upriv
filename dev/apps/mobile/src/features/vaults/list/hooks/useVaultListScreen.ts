@@ -5,6 +5,7 @@ import {
   applyPendingCreateGroupEffect,
   applyVaultListHierarchySort,
   applyVaultSettingsListPatch,
+  applyVaultUnlockPreset,
   buildCreatingVaultListItem,
   buildPendingCreateGroupEffect,
   assignVaultToGroup,
@@ -29,6 +30,7 @@ import {
   vaultIdsInHiddenGroups,
   vaultIdsUnhiddenByGroups,
   canDeleteVaultNow,
+  vaultRowControls,
   resolveVaultListStatus,
   vaultCanExport,
   RpcError,
@@ -52,7 +54,9 @@ import {
   type PendingCreateGroupEffect,
   type VaultExportRequest,
   type VaultGroup,
+  type KdfUnlockPreset,
   type VaultListItem,
+  type VaultRewrapRun,
   type VaultSession,
 } from "@upriv/shared";
 import {
@@ -248,6 +252,7 @@ export function useVaultListScreen() {
 
   const sessionWritesRef = useRef(new Map<string, number>());
   const settingsPersistVaultIdsRef = useRef(new Set<string>());
+  const blockOpenVaultIdsRef = useRef(new Set<string>());
   const prevVaultRootEpochRef = useRef(vaultRootEpoch);
   const vaultRootEpochRef = useRef(vaultRootEpoch);
   vaultRootEpochRef.current = vaultRootEpoch;
@@ -259,6 +264,7 @@ export function useVaultListScreen() {
         session: VaultSession | null;
         lastAccessedAt?: string;
         lastAccessedWhen?: string;
+        autoClosed?: boolean;
       },
     ) => {
       sessionWritesRef.current.set(vaultId, Date.now());
@@ -280,6 +286,7 @@ export function useVaultListScreen() {
     onFlushWorkspace: flushWorkspaceSnapshot,
     onOpenFileManager: openFromVault,
     settingsPersistVaultIdsRef,
+    blockOpenVaultIdsRef,
   });
 
   const reload = useCallback(async (): Promise<VaultListItem[]> => {
@@ -370,11 +377,29 @@ export function useVaultListScreen() {
     syncWithVaultList(vaults);
   }, [syncWithVaultList, vaults]);
 
+  const [rewrapRun, setRewrapRun] = useState<VaultRewrapRun | null>(null);
+  const onRewrapRunChange = useCallback((run: VaultRewrapRun | null) => {
+    setRewrapRun(run);
+  }, []);
+  blockOpenVaultIdsRef.current = new Set(
+    [exportJob?.vaultId, rewrapRun?.vaultId].filter((id): id is string => id != null),
+  );
+
+  useEffect(() => {
+    if (!lifecycleRequest || lifecycleRequest.intent !== "unlock") return;
+    if (!blockOpenVaultIdsRef.current.has(lifecycleRequest.vaultId)) return;
+    setLifecycleRequest(null);
+  }, [exportJob, lifecycleRequest, rewrapRun, setLifecycleRequest]);
+
   const pipelineStatus = useMemo(
     () => ({
       openingVaultIds: [...lifecycle.openingVaultIds],
       closingVaultIds: [...lifecycle.closingVaultIds],
       backingUpVaultIds: [...lifecycle.backingUpVaultIds],
+      exportingVaultIds: exportJob ? [exportJob.vaultId] : [],
+      passwordChangeVaultIds: rewrapRun?.kind === "password" ? [rewrapRun.vaultId] : undefined,
+      kdfChangeVaultIds: rewrapRun?.kind === "kdf" ? [rewrapRun.vaultId] : undefined,
+      rewrapStartedAt: rewrapRun?.startedAt,
       creatingVaultIds: [...lifecycle.creatingVaultIds],
       queuedVaultIds: [...lifecycle.queuedVaultIds],
       queuedOpenVaultIds: [...lifecycle.queuedOpenVaultIds],
@@ -387,9 +412,11 @@ export function useVaultListScreen() {
       lifecycle.backingUpVaultIds,
       lifecycle.closingVaultIds,
       lifecycle.creatingVaultIds,
+      exportJob,
       lifecycle.openingVaultIds,
       lifecycle.queuedOpenVaultIds,
       lifecycle.queuedVaultIds,
+      rewrapRun,
     ],
   );
 
@@ -458,7 +485,10 @@ export function useVaultListScreen() {
         listStatus === "opening" ||
         listStatus === "closing" ||
         listStatus === "creating" ||
-        listStatus === "queued"
+        listStatus === "queued" ||
+        listStatus === "exporting" ||
+        listStatus === "changing_password" ||
+        listStatus === "changing_kdf"
       ) {
         show(t("vault.export.blocked_opening"));
         return;
@@ -582,7 +612,11 @@ export function useVaultListScreen() {
 
   const persistVaultRootOrders = (nextVaults: VaultListItem[], previous: VaultListItem[]) => {
     const orders = nextVaults
-      .filter((vault) => previous.find((item) => item.id === vault.id)?.order !== vault.order)
+      .filter(
+        (vault) =>
+          previous.find((item) => item.id === vault.id)?.order !== vault.order &&
+          !vaultRowControls(vault, pipelineStatus).dragBlocked,
+      )
       .map((vault) => ({ id: vault.id, order: vault.order ?? 0 }));
     if (orders.length === 0 || !vaultService.canPersistSettings) return;
     const generation = ++vaultOrderGenRef.current;
@@ -804,7 +838,6 @@ export function useVaultListScreen() {
     }
 
     lifecycle.cancelClosingHold(vaultId);
-    lifecycle.invalidateOpenRetain(vaultId);
 
     groupBusyGenRef.current += 1;
     try {
@@ -836,6 +869,8 @@ export function useVaultListScreen() {
 
   const handleNoteChange = useCallback(
     async (vaultId: string, note: string): Promise<boolean> => {
+      const heldRow = vaults.find((vault) => vault.id === vaultId);
+      if (heldRow && vaultRowControls(heldRow, pipelineStatus).noteBlocked) return false;
       if (!vaultService.canPersistSettings) {
         show(t("error.not_implemented"));
         return false;
@@ -891,7 +926,7 @@ export function useVaultListScreen() {
       if (noteSaveGenerationRef.current.get(vaultId) !== nextGeneration) return false;
       return true;
     },
-    [setVaults, show, t, vaultService],
+    [pipelineStatus, setVaults, show, t, vaultService, vaults],
   );
 
   const vaultsRef = useRef(vaults);
@@ -935,6 +970,20 @@ export function useVaultListScreen() {
       settings.app.last_opened_vault,
       vaults,
     ],
+  );
+
+  const handleUnlockPresetSaved = useCallback(
+    (vaultId: string, unlockPreset: KdfUnlockPreset) => {
+      setVaults((prev) =>
+        prev.map((vault) =>
+          vault.id === vaultId ? applyVaultUnlockPreset(vault, unlockPreset) : vault,
+        ),
+      );
+      setSettingsVault((current) =>
+        current && current.id === vaultId ? applyVaultUnlockPreset(current, unlockPreset) : current,
+      );
+    },
+    [setSettingsVault, setVaults],
   );
 
   const handlePersistBusyChange = useCallback((vaultIds: readonly string[] | null) => {
@@ -1118,10 +1167,11 @@ export function useVaultListScreen() {
     openCreate,
     closeCreate,
     pipelineStatus,
+    onRewrapRunChange,
+    rewrapRun,
     handleConfirmExportVault,
     handleRowExport,
     handleExportTimeout,
-    isVaultPipelineBusy,
     rowDensity,
     rowPaddingY,
     rowPaddingX,
@@ -1142,6 +1192,7 @@ export function useVaultListScreen() {
     handleNoteChange,
     vaultsRef,
     handleVaultSettingsSaved,
+    handleUnlockPresetSaved,
     handlePersistBusyChange,
     handleCreateVault,
     vaultGroupService,

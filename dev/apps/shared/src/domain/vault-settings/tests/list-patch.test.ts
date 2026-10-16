@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   applyVaultSettingsListPatch,
+  applyVaultUnlockPreset,
   remapVaultIdInGroups,
   vaultSettingsIdentityListPatch,
   vaultSettingsToListPatch,
@@ -56,6 +57,24 @@ describe("vaultSettingsToListPatch", () => {
       order: 2,
       note: "n",
     });
+  });
+
+  it("updates only the unlock preset", () => {
+    const row = vaultListItemFixture({
+      id: "notes",
+      displayName: "Notes",
+      note: "keep",
+      hidden: true,
+      unlockPreset: "256mib",
+    });
+    expect(applyVaultUnlockPreset(row, "64mib")).toMatchObject({
+      id: "notes",
+      displayName: "Notes",
+      note: "keep",
+      hidden: true,
+      unlockPreset: "64mib",
+    });
+    expect(applyVaultUnlockPreset(row, "256mib")).toBe(row);
   });
 
   it("remaps vault id inside groups", () => {

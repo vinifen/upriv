@@ -33,8 +33,6 @@ export function createEmptyCreateVaultDraft(existingOrders: readonly number[]): 
     auto_close: {
       enabled: false,
       idle_minutes: 15,
-      warn_before_seconds: 60,
-      close_on_app_exit: false,
     },
     backup: {
       enabled: true,
@@ -47,17 +45,10 @@ export function createEmptyCreateVaultDraft(existingOrders: readonly number[]): 
     storage: { mode: "encrypted_dir" },
     mount: vaultWorkspace(),
     security: {
-      mode: "session_ram",
-      secure_wipe_workspace: true,
       wipe_passes: 1,
       wipe_pattern: "random",
     },
     seven_zip: { ...DEFAULT_SEVEN_ZIP },
-    policy: {
-      allow_external_editors: false,
-      disallow_copy_outside_mount: true,
-      require_unmount_on_sleep: true,
-    },
     order: defaultOrderAtEnd(existingOrders),
     hidden: false,
     groupMode: "none",

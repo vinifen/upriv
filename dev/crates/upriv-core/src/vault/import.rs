@@ -338,7 +338,7 @@ mode = "encrypted_dir"
         )
         .unwrap();
         open_vault(&root, "notes", b"pass-word-ok").unwrap();
-        close_vault(&root, "notes", None).unwrap();
+        close_vault(&root, "notes").unwrap();
         let backups = list_backups(&root, "notes").unwrap();
         assert!(!backups.is_empty(), "close should freeze a backup");
         let stamp = backups[0].stamp.clone();
@@ -404,7 +404,7 @@ mode = "encrypted_dir"
         let new_id =
             import_store_zip(&root, sample_config("copy", "Copy"), &zip).expect("file import");
         assert_eq!(new_id, "copy");
-        close_vault(&root, "other", None).unwrap();
+        close_vault(&root, "other").unwrap();
     }
 
     #[test]
@@ -418,7 +418,7 @@ mode = "encrypted_dir"
         )
         .unwrap();
         open_vault(&root, "notes", b"pass-word-ok").unwrap();
-        close_vault(&root, "notes", None).unwrap();
+        close_vault(&root, "notes").unwrap();
         let stamp = list_backups(&root, "notes").unwrap()[0].stamp.clone();
         open_vault(&root, "notes", b"pass-word-ok").unwrap();
         let new_id = import_from_backup(
@@ -429,7 +429,7 @@ mode = "encrypted_dir"
         )
         .unwrap();
         assert_eq!(new_id, "notes-backup");
-        close_vault(&root, "notes", None).unwrap();
+        close_vault(&root, "notes").unwrap();
     }
 
     #[test]
@@ -450,7 +450,7 @@ mode = "encrypted_dir"
         )
         .unwrap();
         open_vault(&root, "notes", b"pass-word-ok").unwrap();
-        close_vault(&root, "notes", None).unwrap();
+        close_vault(&root, "notes").unwrap();
         let stamp = list_backups(&root, "notes").unwrap()[0].stamp.clone();
         open_vault(&root, "other", b"pass-word-ok").unwrap();
         let new_id = import_from_backup(
@@ -461,6 +461,6 @@ mode = "encrypted_dir"
         )
         .unwrap();
         assert_eq!(new_id, "notes-backup");
-        close_vault(&root, "other", None).unwrap();
+        close_vault(&root, "other").unwrap();
     }
 }

@@ -14,16 +14,12 @@ const DEFAULTS: VaultSettingsConfig = {
   mount: vaultWorkspace(),
   backup: { enabled: true, mode: "keep_last", keep_last: 1, skip_unchanged: true },
   security: {
-    mode: "session_ram",
-    secure_wipe_workspace: true,
     wipe_passes: 1,
     wipe_pattern: "random",
   },
   auto_close: {
     enabled: false,
     idle_minutes: 15,
-    warn_before_seconds: 60,
-    close_on_app_exit: false,
   },
   seven_zip: {
     encrypt_file_names: true,
@@ -31,11 +27,6 @@ const DEFAULTS: VaultSettingsConfig = {
     compression_level: 0,
     solid: false,
     method: "lzma2",
-  },
-  policy: {
-    allow_external_editors: false,
-    disallow_copy_outside_mount: true,
-    require_unmount_on_sleep: true,
   },
 };
 
@@ -124,6 +115,5 @@ export function getMockVaultSettings(vaultId: string): VaultSettingsConfig {
     security: { ...DEFAULTS.security, ...custom?.security },
     auto_close: { ...DEFAULTS.auto_close, ...custom?.auto_close },
     seven_zip: { ...DEFAULTS.seven_zip, ...custom?.seven_zip },
-    policy: { ...DEFAULTS.policy, ...custom?.policy },
   };
 }

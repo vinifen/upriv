@@ -79,7 +79,6 @@ export type { VaultPipelineListStatus } from "@upriv/shared";
 interface VaultListProps {
   rows: VaultListRootRow[];
   pipelineListStatus?: VaultPipelineListStatus;
-  isVaultPipelineBusy?: (vaultId: string) => boolean;
   allVaultsHidden?: boolean;
   searchNoMatches?: boolean;
   viewMode: VaultListViewMode;
@@ -107,7 +106,6 @@ interface VaultListProps {
 export function VaultList({
   rows,
   pipelineListStatus = {},
-  isVaultPipelineBusy = () => false,
   allVaultsHidden = false,
   searchNoMatches = false,
   viewMode,
@@ -259,8 +257,7 @@ export function VaultList({
         vault={vault}
         dropKey={drag.dropKey}
         pipelineListStatus={pipelineListStatus}
-        isPipelineBusy={isVaultPipelineBusy(vault.id)}
-        dragDisabled={drag.dragDisabled || isVaultPipelineBusy(vault.id)}
+        dragDisabled={drag.dragDisabled}
         dragHandleLabel={drag.dragHandleLabel}
         isDragging={draggingId === drag.dropKey}
         isDragOver={isDropOver(drag.dropKey)}
@@ -382,7 +379,6 @@ export function VaultList({
               isDragOver={isDropOver(key)}
               isDropBlocked={dropOverBlocked}
               isReorderActive={draggingId !== null}
-              isPipelineBusy={isVaultPipelineBusy(row.vault.id)}
               pointerDrag={pointerDrag}
               onOpenBackups={onOpenBackups}
               onOpenNote={onOpenNote}
@@ -446,7 +442,6 @@ export function VaultList({
                       isDragOver={isDropOver(groupedVaultKey)}
                       isDropBlocked={dropOverBlocked}
                       isReorderActive={draggingId !== null}
-                      isPipelineBusy={isVaultPipelineBusy(vault.id)}
                       pointerDrag={pointerDrag}
                       onOpenBackups={onOpenBackups}
                       onOpenNote={onOpenNote}

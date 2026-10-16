@@ -9,8 +9,6 @@ describe("buildCreateVaultResult", () => {
         displayName: "My Vault",
         storage: { mode: "upriv_plain" },
         security: {
-          mode: "session_ram",
-          secure_wipe_workspace: true,
           wipe_passes: 1,
           wipe_pattern: "random",
         },
@@ -23,7 +21,6 @@ describe("buildCreateVaultResult", () => {
     expect(result.settings.storage.mode).toBe("upriv_plain");
     expect(result.settings.vault.display_name).toBe("My Vault");
     expect(result.unlockPreset).toBe("256mib");
-    expect(result.settings.security.mode).toBe("session_ram");
     expect(result.settings.vault.order).toBe(3);
     expect(result.groupAssignment).toEqual({ kind: "none" });
     expect(result.source).toBe("scratch");
@@ -134,8 +131,6 @@ describe("buildCreateVaultResult", () => {
     const result = buildCreateVaultResult(
       createVaultDraftFixture([], {
         security: {
-          mode: "always_prompt",
-          secure_wipe_workspace: false,
           wipe_passes: 3,
           wipe_pattern: "zeros",
         },

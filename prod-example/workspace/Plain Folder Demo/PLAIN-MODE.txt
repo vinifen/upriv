@@ -1,7 +1,7 @@
 PLAIN mode demo — plain-folder-demo / Plain Folder Demo
 ===============================
 
-Listed in .upriv/state.json as storage_mode=plain, security_mode=disk_open_close (not encrypted_dir / RAM store).
+Listed in .upriv/state.json as storage_mode=upriv_plain.
 
 Files here are LITERAL plaintext on the HD/SSD:
   workspace/Plain Folder Demo/
@@ -9,11 +9,9 @@ Files here are LITERAL plaintext on the HD/SSD:
 Flow:
   open  → extract Plain Folder Demo.7z to this folder (plaintext)
   edit  → saves stay here in clear until seal
-  seal  → new .7z + secure_wipe_workspace + remove this tree
+  seal  → new .7z, overwrite this folder, then remove it
 
-Local password (HD, not RAM-only):
-  .upriv/vaults/plain-folder-demo/auth/.session.enc
-  .upriv/vaults/plain-folder-demo/auth/.quick-auth
+Lock uses the open session in RAM. It does not ask for the password.
 
 No encrypted store:
   (no .upriv/vaults/plain-folder-demo/store/)

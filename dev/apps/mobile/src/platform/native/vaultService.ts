@@ -49,8 +49,8 @@ const contentIo: ContentTreeImportIo = {
   addFile(id, logicalPath, uri) {
     return rpcImportContentUri(id, logicalPath, uri);
   },
-  close(id, password) {
-    return rpcVaultClose(id, password).then(() => undefined);
+  close(id) {
+    return rpcVaultClose(id).then(() => undefined);
   },
   abort(id) {
     return rpcVaultDiscardImport(id);

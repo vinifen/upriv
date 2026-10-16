@@ -1,0 +1,20 @@
+[package]
+name = "upriv-fuse"
+version.workspace = true
+description = "Linux FUSE helper loaded by the daemon only when a vault folder is mounted"
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "upriv_fuse"
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[dependencies]
+upriv-fuse-abi = { path = "../upriv-fuse-abi" }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+fuser = "=0.15.1"
+libc = "=0.2.186"

@@ -7,12 +7,7 @@ import type {
   LogService,
   VaultRootService,
 } from "@upriv/shared";
-import {
-  createUnavailableVaultSecurityService,
-  isRpcError,
-  isVaultRootUnreachableError,
-  normalizeAppSettings,
-} from "@upriv/shared";
+import { isRpcError, isVaultRootUnreachableError, normalizeAppSettings } from "@upriv/shared";
 import {
   rpcAppSettingsGet,
   rpcAppSettingsParseToml,
@@ -36,6 +31,7 @@ import { nativeVaultService } from "./vaultService";
 import { nativeVaultFileSystemService } from "./vaultFileSystemService";
 import { nativeBackupService } from "./backupService";
 import { nativeCreateVaultService } from "./createVaultService";
+import { nativeVaultSecurityService } from "./vaultSecurityService";
 import { isSafLogicalRoot, SAF_VAULT_ROOT } from "./androidVaultHome";
 import { planSafSwitch, rememberedCustomFolderPath } from "./documentsGrant";
 import { isAndroidSafUri, pickVaultRootFolder } from "./pickVaultRootFolder";
@@ -364,8 +360,7 @@ function createNativeVaultRootService(): VaultRootService {
  * Native adapters → in-process `upriv-ffi` (same split as desktop
  * `createDesktopServices`). A picked `content://` folder is mounted at
  * `/upriv-saf-root` before path RPCs, so create, open, edit, import, and
- * backup write on that grant. Change-password / KDF rewrap is not implemented.
- * Expo Go never reaches this factory.
+ * backup write on that grant. Expo Go never reaches this factory.
  */
 export function createNativeServices(): AppServices {
   return {
@@ -378,7 +373,7 @@ export function createNativeServices(): AppServices {
     filesystem: nativeVaultFileSystemService,
     backups: nativeBackupService,
     createVault: nativeCreateVaultService,
-    vaultSecurity: createUnavailableVaultSecurityService(),
+    vaultSecurity: nativeVaultSecurityService,
   };
 }
 

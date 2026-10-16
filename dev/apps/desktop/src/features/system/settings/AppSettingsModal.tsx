@@ -433,7 +433,6 @@ export function AppSettingsModal({
           <VaultSettingsSection
             key={sectionId}
             title={t(`modal.app_settings.section.${sectionId}`)}
-            defaultOpen={sectionId === "language"}
           >
             {renderAppSettingsSection(
               sectionId,

@@ -32,11 +32,5 @@ export function rebaseQuietLockedVaultSettings(
       storage: { ...next.storage, mode: baseline.storage.mode },
     };
   }
-  if (!vaultConfigEditAllowed("security.mode", row, pipeline)) {
-    next = {
-      ...next,
-      security: { ...next.security, mode: baseline.security.mode },
-    };
-  }
   return next;
 }

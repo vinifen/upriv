@@ -25,6 +25,7 @@ describe("packagedVaultHome", () => {
       }),
     ).toBe("portable");
     expect(packagedVaultHome({ platform: "linux", appImageFile: true })).toBe("portable");
+    expect(packagedVaultHome({ platform: "linux", portableFile: true })).toBe("portable");
   });
 
   it("uses user data for an installer, including a writable install folder", () => {

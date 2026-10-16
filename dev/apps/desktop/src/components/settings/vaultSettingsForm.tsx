@@ -7,6 +7,8 @@ import {
   KDF_UNLOCK_OPTION_META,
   KDF_UNLOCK_PRESETS,
   POLICY_RADIO_BADGE_I18N,
+  IDLE_AUTO_CLOSE_MINUTES_MAX,
+  IDLE_AUTO_CLOSE_MINUTES_MIN,
   VAULT_DISPLAY_NAME_MAX_LENGTH,
   VAULT_NOTE_MAX_LENGTH,
   VAULT_PASSWORD_HINT_MAX_LENGTH,
@@ -14,9 +16,7 @@ import {
   appWorkspace,
   appWorkspacePlace,
   compressionPresetFromSevenZip,
-  securityUiModesForStorage,
   sevenZipPatchFromCompressionPreset,
-  storageModeIsPlaintext,
   validateWorkspaceTable,
   currentWorkspaceSystem,
   workspaceSystemHasShortcut,
@@ -24,8 +24,6 @@ import {
   type CompressionPreset,
   type KdfUnlockPreset,
   type PolicyRadioBadge,
-  type SecurityMode,
-  type StorageMode,
   type VaultGroup,
   type VaultSettingsConfig,
   type WorkspaceOsEntry,
@@ -41,9 +39,12 @@ import {
 import { useTranslation } from "@/i18n";
 import { useVaultRootService } from "@/platform/services";
 import { useErrorToast } from "@/hooks/useErrorToast";
-import { securityModeToUi, type SecurityUiMode, uiToSecurityMode } from "@upriv/shared";
 import { IntegerInput } from "./IntegerInput";
-import { FileManagerDriverNotice, useWinFspDriver } from "@/features/system/settings/winFspDriver";
+import {
+  FileManagerDriverNotice,
+  useFileManagerMountHost,
+  type MountHostKind,
+} from "@/features/system/settings/fileManagerMountHost";
 
 export const settingsControlClass =
   "w-full rounded-lg border-0 bg-surface-container-highest px-2.5 py-2 text-sm text-on-surface outline-none ring-0 focus:ring-2 focus:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-60 sm:px-3 sm:py-2.5";
@@ -134,6 +135,7 @@ export function VaultSettingsVaultSection({
   const { t } = useTranslation();
   const displayNameId = useId();
   const orderId = useId();
+  const hintId = useId();
   const noteId = useId();
   const hiddenId = useId();
 
@@ -176,6 +178,21 @@ export function VaultSettingsVaultSection({
           value={config.order}
           onChange={(order) => onChange({ order })}
           className={[settingsControlClass, "font-mono tabular-nums"].join(" ")}
+        />
+      </SettingsField>
+      <SettingsField
+        label={t("modal.settings.password_hint")}
+        htmlFor={hintId}
+        hint={t("modal.settings.field.vault.password_hint_help")}
+      >
+        <input
+          id={hintId}
+          type="text"
+          value={config.password_hint}
+          maxLength={VAULT_PASSWORD_HINT_MAX_LENGTH}
+          onChange={(e) => onChange({ password_hint: e.target.value })}
+          className={settingsControlClass}
+          autoComplete="off"
         />
       </SettingsField>
       <SettingsField
@@ -313,7 +330,7 @@ export function VaultSettingsMountSection({
   const pathId = useId();
   const current = currentWorkspaceSystem();
   const pathIssue = validateWorkspaceTable(config, vaultRootPath);
-  const driver = useWinFspDriver();
+  const driver = useFileManagerMountHost();
 
   const choiceNeedsDriver =
     !plaintext &&
@@ -372,6 +389,7 @@ export function VaultSettingsMountSection({
                 vaultCustomShortcut={config.custom_file_manager_folder}
                 active={active}
                 plaintext={plaintext}
+                driverKind={driver.kind}
                 driverMissing={driver.missing}
                 driverBusy={driver.busy || !driver.known}
                 ensureDriver={driver.ensureInstalled}
@@ -408,6 +426,7 @@ function CurrentVaultFolderChoices({
   vaultCustomShortcut,
   active,
   plaintext,
+  driverKind,
   driverMissing,
   driverBusy,
   ensureDriver,
@@ -422,6 +441,7 @@ function CurrentVaultFolderChoices({
   vaultCustomShortcut: boolean;
   active: boolean;
   plaintext: boolean;
+  driverKind: MountHostKind;
   driverMissing: boolean;
   driverBusy: boolean;
   ensureDriver: () => Promise<boolean>;
@@ -439,7 +459,8 @@ function CurrentVaultFolderChoices({
   const workspaceReady = appWorkspacePlace(appEntry) !== "unset";
   const shortcutLocked = !active || !workspaceReady;
   const radiosDisabled = shortcutLocked || custom;
-  const onNeedsDriver = showShortcut && !custom && vaultAppShortcut === "on" && driverMissing;
+  const driverNeededForOn = showShortcut && !custom && driverMissing;
+  const onNeedsDriver = driverNeededForOn && vaultAppShortcut === "on";
   const customNeedsDriver = showShortcut && custom && driverMissing;
   const appFolderTitle = workspaceReady
     ? t("modal.settings.field.mount.inherit")
@@ -518,7 +539,7 @@ function CurrentVaultFolderChoices({
                     value={mode}
                     checked={vaultAppShortcut === mode}
                     disabled={shortcutLocked || driverBusy}
-                    attention={mode === "on" && onNeedsDriver}
+                    attention={mode === "on" && driverNeededForOn}
                     title={
                       mode === "inherit"
                         ? followTitle
@@ -526,11 +547,19 @@ function CurrentVaultFolderChoices({
                     }
                     onSelect={() => {
                       if (radiosDisabled || driverBusy) return;
-                      onChange({ app_file_manager_folder: mode });
+                      if (mode !== "on") {
+                        onChange({ app_file_manager_folder: mode });
+                        return;
+                      }
+                      void (async () => {
+                        if (!(await ensureDriver())) return;
+                        onChange({ app_file_manager_folder: "on" });
+                      })();
                     }}
                     footer={
-                      mode === "on" && onNeedsDriver ? (
+                      mode === "on" && driverNeededForOn ? (
                         <FileManagerDriverNotice
+                          kind={driverKind}
                           missing
                           busy={driverBusy}
                           onInstall={ensureDriver}
@@ -595,7 +624,12 @@ function CurrentVaultFolderChoices({
                 />
               ) : null}
               {customNeedsDriver ? (
-                <FileManagerDriverNotice missing busy={driverBusy} onInstall={ensureDriver} />
+                <FileManagerDriverNotice
+                  kind={driverKind}
+                  missing
+                  busy={driverBusy}
+                  onInstall={ensureDriver}
+                />
               ) : null}
             </div>
           }
@@ -667,87 +701,41 @@ export function VaultSettingsKdfSection({
 
 interface VaultSettingsCloseSectionProps {
   autoClose: VaultSettingsConfig["auto_close"];
-  secureWipe: boolean;
-  requireUnmountOnSleep: boolean;
   onAutoCloseChange: (patch: Partial<VaultSettingsConfig["auto_close"]>) => void;
-  onSecureWipeChange: (secureWipe: boolean) => void;
-  onRequireUnmountOnSleepChange: (requireUnmountOnSleep: boolean) => void;
 }
 
 export function VaultSettingsCloseSection({
   autoClose,
-  secureWipe,
-  requireUnmountOnSleep,
   onAutoCloseChange,
-  onSecureWipeChange,
-  onRequireUnmountOnSleepChange,
 }: VaultSettingsCloseSectionProps) {
   const { t } = useTranslation();
   const enabledId = useId();
   const idleId = useId();
-  const warnId = useId();
-  const sleepId = useId();
-  const wipeId = useId();
 
   return (
     <SettingsFormGrid>
-      <SwitchRow
-        id={wipeId}
-        checked={secureWipe}
-        onChange={onSecureWipeChange}
-        label={t("modal.settings.field.close.secure_wipe")}
-      />
-      {!secureWipe ? (
-        <p className="text-xs leading-relaxed text-on-surface-variant">
-          {t("modal.settings.field.close.secure_wipe_warn")}
-        </p>
-      ) : null}
-
       <SwitchRow
         id={enabledId}
         checked={autoClose.enabled}
         onChange={(enabled) => onAutoCloseChange({ enabled })}
         label={t("modal.settings.field.auto_close.enabled")}
       />
-      <div className="grid gap-4 sm:grid-cols-2">
-        <SettingsField
-          label={t("modal.settings.field.auto_close.idle_minutes")}
-          htmlFor={idleId}
+      <SettingsField
+        label={t("modal.settings.field.auto_close.idle_minutes")}
+        hint={t("modal.settings.field.auto_close.idle_minutes_help")}
+        htmlFor={idleId}
+        disabled={!autoClose.enabled}
+      >
+        <IntegerInput
+          id={idleId}
+          min={IDLE_AUTO_CLOSE_MINUTES_MIN}
+          max={IDLE_AUTO_CLOSE_MINUTES_MAX}
+          value={autoClose.idle_minutes}
           disabled={!autoClose.enabled}
-        >
-          <IntegerInput
-            id={idleId}
-            min={1}
-            max={1440}
-            value={autoClose.idle_minutes}
-            disabled={!autoClose.enabled}
-            onChange={(idle_minutes) => onAutoCloseChange({ idle_minutes })}
-            className={[settingsControlClass, "font-mono tabular-nums"].join(" ")}
-          />
-        </SettingsField>
-        <SettingsField
-          label={t("modal.settings.field.auto_close.warn_before_seconds")}
-          htmlFor={warnId}
-          disabled={!autoClose.enabled}
-        >
-          <IntegerInput
-            id={warnId}
-            min={0}
-            max={300}
-            value={autoClose.warn_before_seconds}
-            disabled={!autoClose.enabled}
-            onChange={(warn_before_seconds) => onAutoCloseChange({ warn_before_seconds })}
-            className={[settingsControlClass, "font-mono tabular-nums"].join(" ")}
-          />
-        </SettingsField>
-      </div>
-      <SwitchRow
-        id={sleepId}
-        checked={requireUnmountOnSleep}
-        onChange={onRequireUnmountOnSleepChange}
-        label={t("modal.settings.field.close.require_unmount_on_sleep")}
-        hint={t("modal.settings.field.close.require_unmount_on_sleep_help")}
-      />
+          onChange={(idle_minutes) => onAutoCloseChange({ idle_minutes })}
+          className={[settingsControlClass, "font-mono tabular-nums"].join(" ")}
+        />
+      </SettingsField>
     </SettingsFormGrid>
   );
 }
@@ -805,129 +793,6 @@ export function VaultSettingsBackupSection({ config, onChange }: SectionPatchPro
           disabled={!config.enabled || config.mode !== "keep_last"}
           onChange={(keep_last) => onChange({ keep_last })}
           className={[settingsControlClass, "font-mono tabular-nums"].join(" ")}
-        />
-      </SettingsField>
-    </SettingsFormGrid>
-  );
-}
-
-interface VaultSettingsSecuritySectionProps extends SectionPatchProps<"security"> {
-  storageMode: VaultSettingsConfig["storage"]["mode"];
-  passwordHint: string;
-  onPasswordHintChange: (passwordHint: string) => void;
-  /** `security.mode` requires vault_quiet. */
-  securityModeLocked?: boolean;
-}
-
-function securityOptionMeta(uiMode: SecurityUiMode): {
-  badge?: PolicyRadioBadge;
-  tone?: "default" | "less-secure" | "insecure";
-} {
-  switch (uiMode) {
-    case "session_ram":
-      return { badge: "recommended" };
-    case "prompt_open_close":
-      return { badge: "more-secure" };
-    case "disk_close":
-      return { badge: "less-secure", tone: "less-secure" };
-    case "disk_open_close":
-      return { badge: "insecure", tone: "insecure" };
-    default:
-      return {};
-  }
-}
-
-export interface SecurityModeRadioGroupProps {
-  storageMode: StorageMode;
-  securityMode: SecurityMode;
-  groupName: string;
-  onSelectMode: (mode: SecurityMode) => void;
-  disabled?: boolean;
-}
-
-export function SecurityModeRadioGroup({
-  storageMode,
-  securityMode,
-  groupName,
-  onSelectMode,
-  disabled = false,
-}: SecurityModeRadioGroupProps) {
-  const { t } = useTranslation();
-  const selectedUi = securityModeToUi(securityMode);
-  const modes = securityUiModesForStorage(storageMode);
-
-  return (
-    <>
-      {modes.map((uiMode) => {
-        const meta = securityOptionMeta(uiMode);
-        return (
-          <PolicyRadioOption
-            key={uiMode}
-            groupName={groupName}
-            value={uiMode}
-            checked={selectedUi === uiMode}
-            disabled={disabled}
-            title={t(`modal.settings.option.security.${uiMode}`)}
-            description={t(`modal.settings.option.security.${uiMode}_desc`)}
-            badge={meta.badge}
-            tone={meta.tone}
-            onSelect={() => onSelectMode(uiToSecurityMode(uiMode))}
-          />
-        );
-      })}
-    </>
-  );
-}
-
-export function VaultSettingsSecuritySection({
-  config,
-  onChange,
-  storageMode,
-  passwordHint,
-  onPasswordHintChange,
-  securityModeLocked = false,
-}: VaultSettingsSecuritySectionProps) {
-  const { t } = useTranslation();
-  const passwordMemoryGroup = useId();
-
-  return (
-    <SettingsFormGrid>
-      <SettingsField
-        label={t("modal.settings.field.security.mode")}
-        disabled={securityModeLocked}
-        hint={
-          securityModeLocked
-            ? t(requireVaultConfigEditLockedI18nKey("security.mode"))
-            : storageModeIsPlaintext(storageMode)
-              ? t("modal.settings.field.security.mode_help_plain")
-              : t("modal.settings.field.security.mode_help")
-        }
-      >
-        <div
-          role="radiogroup"
-          aria-label={t("modal.settings.field.security.mode")}
-          className="grid gap-2"
-        >
-          <SecurityModeRadioGroup
-            storageMode={storageMode}
-            securityMode={config.mode}
-            groupName={passwordMemoryGroup}
-            disabled={securityModeLocked}
-            onSelectMode={(mode) => onChange({ mode })}
-          />
-        </div>
-      </SettingsField>
-      <SettingsField
-        label={t("modal.settings.password_hint")}
-        hint={t("modal.settings.field.security.password_hint_help")}
-      >
-        <input
-          type="text"
-          value={passwordHint}
-          maxLength={VAULT_PASSWORD_HINT_MAX_LENGTH}
-          onChange={(e) => onPasswordHintChange(e.target.value)}
-          className={settingsControlClass}
-          autoComplete="off"
         />
       </SettingsField>
     </SettingsFormGrid>
@@ -999,90 +864,6 @@ export function VaultSettingsSevenZipSection({
       {!disabled && !config.encrypt_file_names ? (
         <p className="text-xs leading-relaxed text-on-surface-variant">
           {t("modal.settings.field.seven_zip.encrypt_file_names_off_warn")}
-        </p>
-      ) : null}
-    </SettingsFormGrid>
-  );
-}
-
-export function VaultSettingsPolicySection({ config, onChange }: SectionPatchProps<"policy">) {
-  const { t } = useTranslation();
-  const editorsGroup = useId();
-  const copyGroup = useId();
-  const externalBlockCopy = config.allow_external_editors && config.disallow_copy_outside_mount;
-
-  return (
-    <SettingsFormGrid>
-      <SettingsField
-        label={t("modal.settings.field.policy.external_editors")}
-        hint={t("modal.settings.field.policy.external_editors_help")}
-      >
-        <div
-          role="radiogroup"
-          aria-label={t("modal.settings.field.policy.external_editors")}
-          className="grid gap-2"
-        >
-          <PolicyRadioOption
-            groupName={editorsGroup}
-            value="false"
-            checked={!config.allow_external_editors}
-            title={t("modal.settings.option.policy.external_editors_no")}
-            description={t("modal.settings.option.policy.external_editors_no_desc")}
-            badge="recommended"
-            onSelect={() => onChange({ allow_external_editors: false })}
-          />
-          <PolicyRadioOption
-            groupName={editorsGroup}
-            value="true"
-            checked={config.allow_external_editors}
-            title={t("modal.settings.option.policy.external_editors_yes")}
-            description={t("modal.settings.option.policy.external_editors_yes_desc")}
-            badge="less-secure"
-            tone="less-secure"
-            onSelect={() => onChange({ allow_external_editors: true })}
-          />
-        </div>
-      </SettingsField>
-
-      <SettingsField
-        label={t("modal.settings.field.policy.copy_outside")}
-        hint={t("modal.settings.field.policy.copy_outside_help")}
-      >
-        <div
-          role="radiogroup"
-          aria-label={t("modal.settings.field.policy.copy_outside")}
-          className="grid gap-2"
-        >
-          <PolicyRadioOption
-            groupName={copyGroup}
-            value="block"
-            checked={config.disallow_copy_outside_mount}
-            title={t("modal.settings.option.policy.copy_block")}
-            description={t("modal.settings.option.policy.copy_block_desc")}
-            badge="recommended"
-            onSelect={() => onChange({ disallow_copy_outside_mount: true })}
-          />
-          <PolicyRadioOption
-            groupName={copyGroup}
-            value="allow"
-            checked={!config.disallow_copy_outside_mount}
-            title={t("modal.settings.option.policy.copy_allow")}
-            description={t("modal.settings.option.policy.copy_allow_desc")}
-            badge="less-secure"
-            tone="less-secure"
-            onSelect={() => onChange({ disallow_copy_outside_mount: false })}
-          />
-        </div>
-      </SettingsField>
-
-      {config.allow_external_editors ? (
-        <p className="text-xs leading-relaxed text-on-surface-variant">
-          {t("warning.external_editor")}
-        </p>
-      ) : null}
-      {externalBlockCopy ? (
-        <p className="text-xs leading-relaxed text-on-surface-variant">
-          {t("warning.policy.external_block_copy")}
         </p>
       ) : null}
     </SettingsFormGrid>

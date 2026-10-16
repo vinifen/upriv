@@ -14,19 +14,15 @@ import {
   isHiddenGroup,
   groupsForAssignmentPicker,
   groupAssignmentClearOption,
+  IDLE_AUTO_CLOSE_MINUTES_MAX,
+  IDLE_AUTO_CLOSE_MINUTES_MIN,
   NO_VAULT_GROUPS,
-  normalizeSecurityModeForStorage,
-  securityModeToUi,
-  securityUiModesForStorage,
-  storageModeIsPlaintext,
-  uiToSecurityMode,
   VAULT_DISPLAY_NAME_MAX_LENGTH,
   VAULT_NOTE_MAX_LENGTH,
   VAULT_PASSWORD_HINT_MAX_LENGTH,
   type CreateVaultDraft,
   type CreateVaultStepId,
   type CreateVaultValidationCode,
-  type SecurityUiMode,
   type StorageMode,
   type VaultGroup,
   type WorkspaceTable,
@@ -119,17 +115,6 @@ function FieldErrors({ errors }: { errors: readonly CreateVaultValidationCode[] 
       ))}
     </View>
   );
-}
-
-function securityOptionMeta(uiMode: SecurityUiMode): {
-  badge?: "recommended" | "less-secure" | "insecure" | "default" | "more-secure";
-  tone?: "default" | "less-secure" | "insecure";
-} {
-  if (uiMode === "session_ram") return { badge: "recommended" };
-  if (uiMode === "prompt_open_close") return { badge: "more-secure" };
-  if (uiMode === "disk_open_close") return { badge: "insecure", tone: "insecure" };
-  if (uiMode === "disk_close") return { badge: "less-secure", tone: "less-secure" };
-  return {};
 }
 
 function CreateVaultSourceStep({ draft, errors, onChange, existingDisplayNames = [] }: StepProps) {
@@ -528,38 +513,13 @@ function CreateVaultGeneralStep({
     <View style={styles.fields}>
       <Text style={typography.bodyMuted}>{t("vault.create.general_intro")}</Text>
 
-      <SettingsAccordionSection title={t("modal.settings.section.auto_close")} defaultOpen>
-        <View style={styles.fields}>
-          <SwitchRow
-            label={t("modal.settings.field.auto_close.enabled")}
-            value={draft.auto_close.enabled}
-            onValueChange={(enabled) => onChange({ auto_close: { ...draft.auto_close, enabled } })}
-          />
-          <FieldLabel disabled={!draft.auto_close.enabled}>
-            {t("modal.settings.field.auto_close.idle_minutes")}
-          </FieldLabel>
-          <IntegerInput
-            min={1}
-            max={1440}
-            disabled={!draft.auto_close.enabled}
-            value={draft.auto_close.idle_minutes}
-            onChange={(idle_minutes) =>
-              onChange({ auto_close: { ...draft.auto_close, idle_minutes } })
-            }
-          />
-          <FieldLabel disabled={!draft.auto_close.enabled}>
-            {t("modal.settings.field.auto_close.warn_before_seconds")}
-          </FieldLabel>
-          <IntegerInput
-            min={0}
-            max={300}
-            disabled={!draft.auto_close.enabled}
-            value={draft.auto_close.warn_before_seconds}
-            onChange={(warn_before_seconds) =>
-              onChange({ auto_close: { ...draft.auto_close, warn_before_seconds } })
-            }
-          />
-        </View>
+      <SettingsAccordionSection title={t("modal.settings.section.kdf")} defaultOpen>
+        <KdfSection
+          config={draft.kdf}
+          choosesPreset={createVaultChoosesKdf(draft)}
+          archivePreset={draft.archiveUnlockPreset}
+          onChange={(patch) => onChange({ kdf: { ...draft.kdf, ...patch } })}
+        />
       </SettingsAccordionSection>
 
       <SettingsAccordionSection title={t("modal.settings.section.backup")} defaultOpen>
@@ -597,6 +557,31 @@ function CreateVaultGeneralStep({
             disabled={!draft.backup.enabled || draft.backup.mode !== "keep_last"}
             value={draft.backup.keep_last}
             onChange={(keep_last) => onChange({ backup: { ...draft.backup, keep_last } })}
+          />
+        </View>
+      </SettingsAccordionSection>
+
+      <SettingsAccordionSection title={t("modal.settings.section.auto_close")} defaultOpen>
+        <View style={styles.fields}>
+          <SwitchRow
+            label={t("modal.settings.field.auto_close.enabled")}
+            value={draft.auto_close.enabled}
+            onValueChange={(enabled) => onChange({ auto_close: { ...draft.auto_close, enabled } })}
+          />
+          <FieldLabel disabled={!draft.auto_close.enabled}>
+            {t("modal.settings.field.auto_close.idle_minutes")}
+          </FieldLabel>
+          <FieldHint disabled={!draft.auto_close.enabled}>
+            {t("modal.settings.field.auto_close.idle_minutes_help")}
+          </FieldHint>
+          <IntegerInput
+            min={IDLE_AUTO_CLOSE_MINUTES_MIN}
+            max={IDLE_AUTO_CLOSE_MINUTES_MAX}
+            disabled={!draft.auto_close.enabled}
+            value={draft.auto_close.idle_minutes}
+            onChange={(idle_minutes) =>
+              onChange({ auto_close: { ...draft.auto_close, idle_minutes } })
+            }
           />
         </View>
       </SettingsAccordionSection>
@@ -645,15 +630,6 @@ function CreateVaultGeneralStep({
           <FieldHint>{t("vault.create.group_create_help")}</FieldHint>
         </View>
       </SettingsAccordionSection>
-
-      <SettingsAccordionSection title={t("modal.settings.section.kdf")} defaultOpen>
-        <KdfSection
-          config={draft.kdf}
-          choosesPreset={createVaultChoosesKdf(draft)}
-          archivePreset={draft.archiveUnlockPreset}
-          onChange={(patch) => onChange({ kdf: { ...draft.kdf, ...patch } })}
-        />
-      </SettingsAccordionSection>
     </View>
   );
 }
@@ -668,18 +644,10 @@ function CreateVaultAdvancedStep({
 }: StepProps) {
   const { t } = useTranslation();
   const { typography } = useTheme();
-  const selectedSecurityUi = securityModeToUi(draft.security.mode);
-  const securityModes = securityUiModesForStorage(draft.storage.mode);
   const hiddenLocked = draft.groupMode === "existing" && isHiddenGroup(groups, draft.groupId);
 
   const setStorageMode = (mode: StorageMode) => {
-    onChange({
-      storage: { mode },
-      security: {
-        ...draft.security,
-        mode: normalizeSecurityModeForStorage(mode, draft.security.mode),
-      },
-    });
+    onChange({ storage: { mode } });
   };
 
   return (
@@ -750,104 +718,6 @@ function CreateVaultAdvancedStep({
           onChange={(patch) => onChange({ mount: { ...draft.mount, ...patch } })}
         />
         <FieldErrors errors={createVaultErrorsForField(errors, "mount")} />
-      </SettingsAccordionSection>
-
-      <SettingsAccordionSection title={t("modal.settings.section.security")}>
-        <View style={styles.fields}>
-          <SwitchRow
-            label={t("modal.settings.field.close.secure_wipe")}
-            value={draft.security.secure_wipe_workspace}
-            onValueChange={(secure_wipe_workspace) =>
-              onChange({ security: { ...draft.security, secure_wipe_workspace } })
-            }
-          />
-          <FieldLabel>{t("modal.settings.field.security.mode")}</FieldLabel>
-          <FieldHint>
-            {storageModeIsPlaintext(draft.storage.mode)
-              ? t("modal.settings.field.security.mode_help_plain")
-              : t("modal.settings.field.security.mode_help")}
-          </FieldHint>
-          <RadioGroup>
-            {securityModes.map((uiMode) => {
-              const meta = securityOptionMeta(uiMode);
-              return (
-                <PolicyRadioOption
-                  key={uiMode}
-                  value={uiMode}
-                  checked={selectedSecurityUi === uiMode}
-                  title={t(`modal.settings.option.security.${uiMode}` as I18nKey)}
-                  description={t(`modal.settings.option.security.${uiMode}_desc` as I18nKey)}
-                  badge={meta.badge}
-                  tone={meta.tone}
-                  onSelect={() =>
-                    onChange({ security: { ...draft.security, mode: uiToSecurityMode(uiMode) } })
-                  }
-                />
-              );
-            })}
-          </RadioGroup>
-        </View>
-      </SettingsAccordionSection>
-
-      <SettingsAccordionSection title={t("modal.settings.section.policy")}>
-        <View style={styles.fields}>
-          <FieldLabel>{t("modal.settings.field.policy.external_editors")}</FieldLabel>
-          <RadioGroup>
-            <PolicyRadioOption
-              value="no"
-              checked={!draft.policy.allow_external_editors}
-              title={t("modal.settings.option.policy.external_editors_no")}
-              description={t("modal.settings.option.policy.external_editors_no_desc")}
-              badge="recommended"
-              onSelect={() =>
-                onChange({ policy: { ...draft.policy, allow_external_editors: false } })
-              }
-            />
-            <PolicyRadioOption
-              value="yes"
-              checked={draft.policy.allow_external_editors}
-              title={t("modal.settings.option.policy.external_editors_yes")}
-              description={t("modal.settings.option.policy.external_editors_yes_desc")}
-              badge="less-secure"
-              tone="less-secure"
-              onSelect={() =>
-                onChange({ policy: { ...draft.policy, allow_external_editors: true } })
-              }
-            />
-          </RadioGroup>
-          <FieldLabel>{t("modal.settings.field.policy.copy_outside")}</FieldLabel>
-          <RadioGroup>
-            <PolicyRadioOption
-              value="block"
-              checked={draft.policy.disallow_copy_outside_mount}
-              title={t("modal.settings.option.policy.copy_block")}
-              description={t("modal.settings.option.policy.copy_block_desc")}
-              badge="recommended"
-              onSelect={() =>
-                onChange({ policy: { ...draft.policy, disallow_copy_outside_mount: true } })
-              }
-            />
-            <PolicyRadioOption
-              value="allow"
-              checked={!draft.policy.disallow_copy_outside_mount}
-              title={t("modal.settings.option.policy.copy_allow")}
-              description={t("modal.settings.option.policy.copy_allow_desc")}
-              badge="less-secure"
-              tone="less-secure"
-              onSelect={() =>
-                onChange({ policy: { ...draft.policy, disallow_copy_outside_mount: false } })
-              }
-            />
-          </RadioGroup>
-          <SwitchRow
-            label={t("modal.settings.field.close.require_unmount_on_sleep")}
-            hint={t("modal.settings.field.close.require_unmount_on_sleep_help")}
-            value={draft.policy.require_unmount_on_sleep}
-            onValueChange={(require_unmount_on_sleep) =>
-              onChange({ policy: { ...draft.policy, require_unmount_on_sleep } })
-            }
-          />
-        </View>
       </SettingsAccordionSection>
     </View>
   );

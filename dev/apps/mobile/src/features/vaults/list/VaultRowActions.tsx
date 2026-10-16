@@ -1,14 +1,21 @@
-import { useCallback } from "react";
-import { View } from "react-native";
+import { useCallback, useEffect, useState } from "react";
+import { Platform, View } from "react-native";
 import { useToast } from "@upriv/shared/react";
 import {
+  currentWorkspaceSystem,
+  osFileManagerFolderEnabled,
+  peekVaultSettings,
+  isVaultListRowUnlockTarget,
   resolveVaultListStatus,
+  storageModeIsPlaintext,
   vaultCanExport,
   VAULT_SETTINGS_AREA_ICON,
   VAULT_SETTINGS_AREA_I18N,
-  VAULT_SETTINGS_AREAS,
+  vaultRowControls,
+  vaultSettingsMenuAreas,
   type VaultListItem,
   type VaultSettingsAreaId,
+  type WorkspaceTable,
 } from "@upriv/shared";
 import { DropdownPanel, FloatingToast, IconButton, MenuActionItem } from "@/components/ui";
 import { useAppSettingsContext } from "@/features/system/settings";
@@ -39,7 +46,6 @@ const columnIconStyle = {
 interface VaultRowActionsProps {
   vault: VaultListItem;
   pipelineListStatus?: import("@upriv/shared").VaultPipelineListStatus;
-  disabled?: boolean;
   includeLockAction?: boolean;
   onOpenBackups: (vault: VaultListItem) => void;
   onOpenNote: (vault: VaultListItem) => void;
@@ -56,7 +62,6 @@ interface VaultRowActionsProps {
 export function VaultRowActions({
   vault,
   pipelineListStatus,
-  disabled = false,
   includeLockAction = false,
   onOpenBackups,
   onOpenNote,
@@ -91,8 +96,40 @@ export function VaultRowActions({
   const showVaultSettings = settings.ui.vault_list_show_vault_settings_button !== false;
   const listStatus = resolveVaultListStatus(vault, pipelineListStatus);
   const isOpen = listStatus === "open";
+  const canUnlock = isVaultListRowUnlockTarget(listStatus);
   const canUseOpenWorkspace = listStatus === "open";
+  const plaintext = storageModeIsPlaintext(vault.storageMode);
+  const rememberedMount = peekVaultSettings(vault.id)?.mount;
+  const [fetchedMount, setFetchedMount] = useState<WorkspaceTable | undefined>(rememberedMount);
+  useEffect(() => {
+    if (!canUseOpenWorkspace || plaintext) return;
+    if (rememberedMount) {
+      setFetchedMount(rememberedMount);
+      return;
+    }
+    let cancelled = false;
+    void vaultService.getSettings(vault.id).then(
+      (next) => {
+        if (!cancelled) setFetchedMount(next?.mount);
+      },
+      () => {
+        if (!cancelled) setFetchedMount(undefined);
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [canUseOpenWorkspace, plaintext, rememberedMount, vault.id, vaultService]);
+  const showOsFileManager =
+    canUseOpenWorkspace &&
+    osFileManagerFolderEnabled(
+      plaintext,
+      settings.workspace,
+      rememberedMount ?? fetchedMount,
+      currentWorkspaceSystem(Platform.OS),
+    );
   const canExport = vaultService.canExportVault && vaultCanExport(vault, pipelineListStatus);
+  const controls = vaultRowControls(vault, pipelineListStatus);
 
   const stacked = layout === "column";
   const iconStyle = stacked ? columnIconStyle : rowIconStyle;
@@ -121,16 +158,16 @@ export function VaultRowActions({
               label={t("app.menu.more")}
               icon="more-horizontal"
               size={iconSize}
-              disabled={disabled}
+              disabled={controls.moreMenuBlocked}
               style={iconStyle}
             />
           }
         >
-          {includeLockAction ? (
+          {includeLockAction && (isOpen || canUnlock) ? (
             <MenuActionItem
               icon={isOpen ? "lock" : "lock-open"}
               label={isOpen ? t("action.lock") : t("action.unlock")}
-              disabled={disabled}
+              disabled={controls.moreMenuBlocked}
               onPress={() => (isOpen ? onLockVault(vault) : onUnlockVault(vault))}
             />
           ) : null}
@@ -139,41 +176,43 @@ export function VaultRowActions({
               <MenuActionItem
                 icon="file-manager"
                 label={t("action.open_upriv")}
-                disabled={disabled}
+                disabled={controls.moreMenuBlocked}
                 onPress={() => onOpenFileManager(vault)}
               />
-              <MenuActionItem
-                icon="folder"
-                label={t("action.open_file_manager")}
-                disabled={disabled}
-                onPress={openOsMount}
-              />
+              {showOsFileManager ? (
+                <MenuActionItem
+                  icon="folder"
+                  label={t("action.open_file_manager")}
+                  disabled={controls.moreMenuBlocked}
+                  onPress={openOsMount}
+                />
+              ) : null}
             </>
           ) : null}
           {canExport ? (
             <MenuActionItem
               icon="download"
               label={t("action.export_vault")}
-              disabled={disabled}
+              disabled={controls.moreMenuBlocked}
               onPress={() => onExportVault(vault)}
             />
           ) : null}
           <MenuActionItem
             icon="archive"
             label={t("action.backups")}
-            disabled={disabled}
+            disabled={controls.moreMenuBlocked}
             onPress={() => onOpenBackups(vault)}
           />
           <MenuActionItem
             icon="note"
             label={t("action.note")}
-            disabled={disabled}
+            disabled={controls.noteBlocked}
             onPress={() => onOpenNote(vault)}
           />
           <MenuActionItem
             icon="info"
             label={t("action.vault_info")}
-            disabled={disabled}
+            disabled={controls.moreMenuBlocked}
             onPress={() => onOpenVaultInfo(vault)}
           />
         </DropdownPanel>
@@ -189,17 +228,17 @@ export function VaultRowActions({
               label={t("action.settings")}
               icon="settings"
               size={iconSize}
-              disabled={disabled}
+              disabled={controls.settingsGearBlocked}
               style={iconStyle}
             />
           }
         >
-          {VAULT_SETTINGS_AREAS.map((area) => (
+          {vaultSettingsMenuAreas(vault, pipelineListStatus).map((area) => (
             <MenuActionItem
               key={area}
               icon={VAULT_SETTINGS_AREA_ICON[area]}
               label={t(VAULT_SETTINGS_AREA_I18N[area])}
-              disabled={disabled}
+              disabled={controls.settingsGearBlocked}
               onPress={() => onOpenSettings(vault, area)}
             />
           ))}

@@ -2,6 +2,7 @@
 export { FileManagerProvider, useFileManager } from "./FileManagerContext";
 export { FileManagerLayer } from "./FileManagerLayer";
 export {
+  closeIntentAfterUnsavedResolved,
   fileManagerDismissIntent,
   hasUnsavedWorkspaceChanges,
   vaultCloseBlockingPrompt,

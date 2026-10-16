@@ -1617,7 +1617,7 @@ mode = "encrypted_dir"
         .unwrap();
         let got = fs_read_file(&root, "notes", "/.upriv-workspace.json").unwrap();
         assert_eq!(got, b"{\"format_version\":1}\n");
-        close_vault(&root, "notes", None).unwrap();
+        close_vault(&root, "notes").unwrap();
     }
 
     fn root_file_names(tree: &FileTreeNode) -> Vec<String> {
@@ -1663,7 +1663,7 @@ mode = "encrypted_dir"
             fs_read_file(&root, "notes", "/.upriv-workspace.json").unwrap(),
             workspace.as_bytes()
         );
-        close_vault(&root, "notes", None).unwrap();
+        close_vault(&root, "notes").unwrap();
     }
 
     #[test]
@@ -1679,7 +1679,7 @@ mode = "encrypted_dir"
         open_vault(&root, "notes", b"pass-word-ok").unwrap();
         let tree = fs_list_tree(&root, "notes").unwrap();
         assert!(root_file_names(&tree).is_empty());
-        close_vault(&root, "notes", None).unwrap();
+        close_vault(&root, "notes").unwrap();
     }
 
     #[test]
@@ -1731,7 +1731,7 @@ mode = "encrypted_dir"
                 entry.display()
             );
         }
-        close_vault(&root, "notes", None).unwrap();
+        close_vault(&root, "notes").unwrap();
         let opened = open_store(&store, b"pass-word-ok").unwrap();
         let got = crate::store::read_logical_file(
             &store,
@@ -1783,7 +1783,7 @@ mode = "encrypted_dir"
         let moved =
             fs_relocate(&root, "notes", "/exact.txt", "/inbox", "renamed.txt", false).unwrap();
         assert_eq!(moved.0, "/inbox/renamed.txt");
-        close_vault(&root, "notes", None).unwrap();
+        close_vault(&root, "notes").unwrap();
     }
 
     #[test]
@@ -1816,7 +1816,7 @@ mode = "encrypted_dir"
             Ok(())
         })
         .unwrap();
-        close_vault(&root, "notes", None).unwrap();
+        close_vault(&root, "notes").unwrap();
     }
 
     #[test]
@@ -1861,7 +1861,7 @@ mode = "encrypted_dir"
         assert!(matches!(err, UprivError::Io(_)));
         let got = fs_read_file(&root, "notes", "/notes.txt").unwrap();
         assert_eq!(got, b"generation-one");
-        close_vault(&root, "notes", None).unwrap();
+        close_vault(&root, "notes").unwrap();
         let store = root.vault_store_dir("notes").unwrap();
         let opened = open_store(&store, b"pass-word-ok").unwrap();
         let durable = crate::store::read_logical_file(
@@ -1899,12 +1899,12 @@ mode = "encrypted_dir"
         let write = fs_write_range(&root, "notes", "/notes.txt", 0, b"generation-two");
         crate::host_fs::set_permissions(&index_dir, restore).unwrap();
         if write.is_ok() {
-            close_vault(&root, "notes", None).unwrap();
+            close_vault(&root, "notes").unwrap();
             return;
         }
         let got = fs_read_file(&root, "notes", "/notes.txt").unwrap();
         assert_eq!(got, b"generation-one");
-        close_vault(&root, "notes", None).unwrap();
+        close_vault(&root, "notes").unwrap();
         let opened = open_store(&store, b"pass-word-ok").unwrap();
         let durable = crate::store::read_logical_file(
             &store,
@@ -1982,7 +1982,7 @@ mode = "encrypted_dir"
             assert!(matches!(via_store, UprivError::ImportSourceUnreadable(_)));
         }
 
-        close_vault(&root, "notes", None).unwrap();
+        close_vault(&root, "notes").unwrap();
     }
 
     #[test]
@@ -2026,7 +2026,7 @@ mode = "encrypted_dir"
             Ok(())
         })
         .unwrap();
-        close_vault(&root, "notes", None).unwrap();
+        close_vault(&root, "notes").unwrap();
     }
 
     #[test]
@@ -2060,7 +2060,7 @@ mode = "encrypted_dir"
         ];
         bodies.sort();
         assert_eq!(bodies, [b"alpha-file".to_vec(), b"beta-file!!".to_vec()]);
-        close_vault(&root, "notes", None).unwrap();
+        close_vault(&root, "notes").unwrap();
     }
 
     #[test]
@@ -2148,7 +2148,7 @@ mode = "encrypted_dir"
             fs_read_file(&root, "notes", "/right.txt").unwrap(),
             b"beta-file-two!"
         );
-        close_vault(&root, "notes", None).unwrap();
+        close_vault(&root, "notes").unwrap();
     }
 
     #[test]
@@ -2177,14 +2177,14 @@ mode = "encrypted_dir"
             let live = fs_read_file(&root, "notes", &path).unwrap();
             assert_eq!(live, body.as_bytes());
         }
-        close_vault(&root, "notes", None).unwrap();
+        close_vault(&root, "notes").unwrap();
         open_vault(&root, "notes", b"pass-word-ok").unwrap();
         for index in 0..count {
             let path = format!("/photos/f{index}.txt");
             let got = fs_read_file(&root, "notes", &path).unwrap();
             assert_eq!(got, format!("body-{index}").into_bytes());
         }
-        close_vault(&root, "notes", None).unwrap();
+        close_vault(&root, "notes").unwrap();
     }
 
     #[test]
@@ -2217,7 +2217,7 @@ mode = "encrypted_dir"
             Ok(())
         })
         .unwrap();
-        close_vault(&root, "notes", None).unwrap();
+        close_vault(&root, "notes").unwrap();
     }
 
     #[test]
@@ -2272,13 +2272,13 @@ mode = "encrypted_dir"
         })
         .unwrap();
         fs_seal_staged_imports(&root, "notes").unwrap();
-        close_vault(&root, "notes", None).unwrap();
+        close_vault(&root, "notes").unwrap();
         open_vault(&root, "notes", b"pass-word-ok").unwrap();
         for index in 0..3 {
             let got = fs_read_file(&root, "notes", &format!("/d{index}.txt")).unwrap();
             assert_eq!(got, format!("body-{index}").into_bytes());
         }
-        close_vault(&root, "notes", None).unwrap();
+        close_vault(&root, "notes").unwrap();
     }
 
     #[test]
@@ -2326,7 +2326,7 @@ mode = "encrypted_dir"
             Ok(())
         })
         .unwrap();
-        close_vault(&root, "notes", None).unwrap();
+        close_vault(&root, "notes").unwrap();
     }
 
     #[test]
@@ -2374,6 +2374,6 @@ mode = "encrypted_dir"
             }
             Err(error) => panic!("{error}"),
         }
-        close_vault(&root, "notes", None).unwrap();
+        close_vault(&root, "notes").unwrap();
     }
 }

@@ -89,6 +89,8 @@ pub(super) struct UiToml {
     pub(super) lifecycle_close_modal_on_submit: bool,
     /// After unlock succeeds, open the file manager if idle. Default false.
     pub(super) lifecycle_open_file_manager_on_open: bool,
+    /// Sleep and phone freeze do not count as inactivity. Default false.
+    pub(super) lifecycle_keep_open_on_wake: bool,
     /// Confirm before deleting in the file manager. Default true.
     #[serde(default = "default_true")]
     pub(super) file_manager_confirm_delete: bool,
@@ -118,6 +120,7 @@ impl Default for UiToml {
             vault_list_show_group_settings_button: true,
             lifecycle_close_modal_on_submit: false,
             lifecycle_open_file_manager_on_open: false,
+            lifecycle_keep_open_on_wake: false,
             file_manager_confirm_delete: true,
         }
     }
@@ -148,6 +151,7 @@ fn ui_toml_from_settings(ui: &UiSettings) -> UiToml {
         vault_list_show_group_settings_button: ui.vault_list_show_group_settings_button,
         lifecycle_close_modal_on_submit: ui.lifecycle_close_modal_on_submit,
         lifecycle_open_file_manager_on_open: ui.lifecycle_open_file_manager_on_open,
+        lifecycle_keep_open_on_wake: ui.lifecycle_keep_open_on_wake,
         file_manager_confirm_delete: ui.file_manager_confirm_delete,
     }
 }
@@ -197,6 +201,7 @@ pub(super) fn ui_settings_from_toml(ui: &UiToml) -> UiSettings {
         ),
         lifecycle_close_modal_on_submit: ui.lifecycle_close_modal_on_submit,
         lifecycle_open_file_manager_on_open: ui.lifecycle_open_file_manager_on_open,
+        lifecycle_keep_open_on_wake: ui.lifecycle_keep_open_on_wake,
         file_manager_confirm_delete: ui.file_manager_confirm_delete,
     }
 }
@@ -498,6 +503,7 @@ last_opened_vault = "kept"
         // Omitted lifecycle prefs default false.
         assert!(!settings.ui.lifecycle_close_modal_on_submit);
         assert!(!settings.ui.lifecycle_open_file_manager_on_open);
+        assert!(!settings.ui.lifecycle_keep_open_on_wake);
         assert!(settings.ui.file_manager_confirm_delete);
         assert_eq!(settings.ui.file_manager_tree_split_percent, 20);
         assert_eq!(settings.logging.level, "warn");
@@ -523,15 +529,18 @@ locale = "en"
 theme = "dark"
 lifecycle_close_modal_on_submit = true
 lifecycle_open_file_manager_on_open = true
+lifecycle_keep_open_on_wake = true
 file_manager_confirm_delete = false
 "#;
         let settings = parse_settings_toml_str(raw).unwrap();
         assert!(settings.ui.lifecycle_close_modal_on_submit);
         assert!(settings.ui.lifecycle_open_file_manager_on_open);
+        assert!(settings.ui.lifecycle_keep_open_on_wake);
         assert!(!settings.ui.file_manager_confirm_delete);
         let written = serialize_settings_toml_str(&settings, None).unwrap();
         assert!(written.contains("lifecycle_close_modal_on_submit = true"));
         assert!(written.contains("lifecycle_open_file_manager_on_open = true"));
+        assert!(written.contains("lifecycle_keep_open_on_wake = true"));
         assert!(written.contains("file_manager_confirm_delete = false"));
         assert!(written.contains("file_manager_tree_split_percent = 20"));
     }

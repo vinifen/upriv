@@ -4,4 +4,4 @@
 0004 2026-05-29T12:00:00.130Z INFO  vault_discovered   vault=cold-storage persistence=sealed
 0005 2026-05-29T12:00:00.135Z INFO  vault_discovered   vault=plain-folder-demo persistence=closed
 0006 2026-05-29T12:01:15.402Z INFO  vault_open         vault=my-encrypted-notes storage_mode=encrypted_dir
-0007 2026-05-29T12:01:18.900Z INFO  vault_open         vault=plain-folder-demo storage_mode=plain security_mode=disk_open_close
+0007 2026-05-29T12:01:18.900Z INFO  vault_open         vault=plain-folder-demo storage_mode=upriv_plain

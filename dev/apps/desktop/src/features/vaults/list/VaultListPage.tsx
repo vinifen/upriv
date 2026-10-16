@@ -103,7 +103,6 @@ export function VaultListPage() {
         <VaultList
           rows={list.displayRows}
           pipelineListStatus={list.pipelineListStatus}
-          isVaultPipelineBusy={list.isVaultPipelineBusy}
           allVaultsHidden={list.allVaultsHidden}
           searchNoMatches={list.searchNoMatches}
           viewMode={list.viewMode}
@@ -145,6 +144,7 @@ export function VaultListPage() {
         open={note.open}
         onClose={note.onClose}
         onNoteChange={note.onNoteChange}
+        saveHeld={note.saveHeld}
       />
       <VaultBackupsModal
         vault={backups.vault}
@@ -169,8 +169,11 @@ export function VaultListPage() {
         onClose={settings.onClose}
         pipelineListStatus={list.pipelineListStatus}
         onVaultSettingsSaved={settings.onVaultSettingsSaved}
+        onUnlockPresetSaved={settings.onUnlockPresetSaved}
         onPersistBusyChange={settings.onPersistBusyChange}
         onVaultDelete={settings.onVaultDelete}
+        onNotice={settings.onNotice}
+        onRewrapRunChange={settings.onRewrapRunChange}
         groups={settings.groups}
         onCommitGroupAssignment={settings.onCommitGroupAssignment}
       />

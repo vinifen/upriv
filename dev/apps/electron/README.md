@@ -42,7 +42,7 @@ The renderer talks to main only through **`window.upriv`** (preload bridge), not
 Chromium’s OS SUID sandbox often fails under AppArmor / AppImage (`setuid_sandbox_host.cc`).
 
 - **Dev only:** `npm run dev` / `npm start` pass `--no-sandbox` on the CLI. That is **not** the production policy.
-- **Packaged Linux:** `afterPack` renames the Electron binary to `*.bin` and installs a bash wrapper for **all** linux-unpacked trees (AppImage and `.deb` share that tree). The wrapper adds `--no-sandbox` **only when `$APPIMAGE` names an existing file**. `.deb` keeps the real chrome-sandbox. `main.ts` mirrors the same file check (spoofed `APPIMAGE=1` does not disable sandbox).
+- **Packaged Linux:** `afterPack` renames the Electron binary to `*.bin` and installs a bash wrapper for **all** linux-unpacked trees (AppImage and `.deb` share that tree). The wrapper adds `--no-sandbox` **only when `$APPIMAGE` names an existing file**. `.deb` keeps the real chrome-sandbox. `main.ts` mirrors the same file check (spoofed `APPIMAGE=1` does not disable sandbox). `afterAllArtifactBuild` wraps the finished `.AppImage` so opening it extracts and runs without system `libfuse2`, and sets `UPRIV_PORTABLE_FILE` so the data folder stays beside the download. The `.deb` does not depend on `fuse3`.
 - **macOS DMG:** experimental scaffold — **not notarized**; Gatekeeper will reject unsigned builds until signing is added. Packaged macOS always uses `installed` (Application Support), never portable-beside-`.app`.
 - **Windows portable:** Electron uses `PORTABLE_EXECUTABLE_DIR` when set so data stays beside the stable `.exe`, not under `%TEMP%` extract.
 - Do **not** put `executableArgs: ["--no-sandbox"]` in `package.json` — that forced no-sandbox onto `.deb` as well.
@@ -54,9 +54,9 @@ Chromium’s OS SUID sandbox often fails under AppArmor / AppImage (`setuid_sand
 
 ## RPC contract
 
-Method name constants: **`@upriv/shared` `CORE_RPC_COMMANDS`** (and desktop `lib/commands.ts`). Execution gate: **`upriv-rpc`** via **`upriv-daemon`**. Electron main special-cases `app_exit`, `pick_directory`, and `pick_file`.
+Method name constants: **`@upriv/shared` `CORE_RPC_COMMANDS`** (and desktop `lib/commands.ts`). Execution gate: **`upriv-rpc`** via **`upriv-daemon`**. Electron main handles the shell-only methods (`app_exit`, file dialogs, reveal, terminal, `winfsp_*`, `fuse_*`) and does not send them to the daemon.
 
-Logs (daemon): `log_list` / `log_get` / `log_delete` — no Electron allowlist; all methods go to the daemon.
+Logs (daemon): `log_list` / `log_get` / `log_delete` are core methods and go to the daemon.
 
 ## Layout
 

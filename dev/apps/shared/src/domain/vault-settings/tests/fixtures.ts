@@ -6,7 +6,6 @@ import type { VaultSettingsConfig } from "..";
 export function vaultSettingsFixture(
   overrides: {
     storageMode?: StorageMode;
-    securityMode?: VaultSettingsConfig["security"]["mode"];
     sevenZip?: Partial<VaultSettingsConfig["seven_zip"]>;
     vault?: Partial<VaultSettingsConfig["vault"]>;
   } = {},
@@ -26,16 +25,12 @@ export function vaultSettingsFixture(
     mount: vaultWorkspace(),
     backup: { enabled: true, mode: "keep_last", keep_last: 1, skip_unchanged: true },
     security: {
-      mode: overrides.securityMode ?? "session_ram",
-      secure_wipe_workspace: true,
       wipe_passes: 1,
       wipe_pattern: "random",
     },
     auto_close: {
       enabled: false,
       idle_minutes: 15,
-      warn_before_seconds: 60,
-      close_on_app_exit: false,
     },
     seven_zip: {
       encrypt_file_names: true,
@@ -44,11 +39,6 @@ export function vaultSettingsFixture(
       solid: false,
       method: "lzma2",
       ...overrides.sevenZip,
-    },
-    policy: {
-      allow_external_editors: false,
-      disallow_copy_outside_mount: true,
-      require_unmount_on_sleep: true,
     },
   };
 }

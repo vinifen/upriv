@@ -2,7 +2,7 @@
 
 **Product:** portable encrypted vault manager (`store/` at rest; export a `.zip` of that ciphertext or a `.7z`).  
 **Repo:** monorepo with `dev/` (implementation), `prod-example/` (static vault-root demo — **layout is stale**; see that folder’s README).  
-**Status:** v0.2-beta — Electron desktop + Expo mobile; vault-root / settings / **vault list + create + open/close**, **in-app file manager**, **Linux FUSE**, **Windows WinFsp** (the Windows packages carry the official installer and ask when the file manager folder is turned on; declining leaves the switch unchanged), **zip/7z export**, **import**, and **backups** talk to `upriv-core` (`store/` wrap + index + chunks, `format_version` 1 only). A missing WinFsp DLL fails only the OS folder; the in-app file manager still works. Change-password is **not** implemented. Portable `.7z` export/import pack and unpack logical files **in RAM** (export fails closed if RAM is insufficient); zip of `store/` is always available.
+**Status:** v0.2-beta — Electron desktop + Expo mobile; vault-root / settings / **vault list + create + open/close**, **in-app file manager**, **Linux FUSE**, **Windows WinFsp** (Windows packages carry the official installer and ask when the file manager folder is turned on; declining leaves the switch unchanged. Linux asks to install the distro `fuse3` package at that same moment; declining leaves the switch unchanged. `upriv-daemon` does not link `libfuse`; the AppImage starts without system `libfuse2`), **zip/7z export**, **import**, and **backups** talk to `upriv-core` (`store/` wrap + index + chunks, `format_version` 1 only). A missing WinFsp DLL or a missing `fuse3` fails only the OS folder; the in-app file manager still works. Password change and unlock-RAM change are live on a closed vault (`vault_change_password`, `vault_change_kdf`): same master key, new salt, header and name index resealed, file blobs unchanged, backup zip first. Portable `.7z` export/import pack and unpack logical files **in RAM** (export fails closed if RAM is insufficient); zip of `store/` is always available.
 
 **Greenfield.** `dev/` is the first product, not a successor. Nothing older shipped. One store format (`format_version` 1). One backup file (`backups/<stamp>-<id>.zip`). Do not add a reader, migrator, or dual path for drafts, Seal, `archive/`, unpacked backup folders, `.7z` backups, or demo trees. If a doc, review, or example still describes an older layout, ignore it and implement the current path only — no compatibility shim beside the real one. [SECURITY-CRYPTO.md](SECURITY-CRYPTO.md) states that rule and **wins** over stale PRD/SDD sections.
 
@@ -15,7 +15,7 @@
 | Fact | Detail |
 |------|--------|
 | **Product promise** | Default mode never leaves decrypted vault files on HD/SSD (PRD RF-45, RF-49; SDD §2.6). |
-| **`dev/` today** | Vault create/open/close persist **`store/`**. Live in-app file manager (`vault_fs_*`) + Linux FUSE; zip export of `store/`; `.7z` export/import in RAM (no plaintext disk). Export of a vault requires **that** vault closed; file zip/7z import and create-from-backup may run while other vaults stay open. Change-password is not implemented. RF-49 still applies to every new I/O. |
+| **`dev/` today** | Vault create/open/close persist **`store/`**. Live in-app file manager (`vault_fs_*`) + Linux FUSE; zip export of `store/`; `.7z` export/import in RAM (no plaintext disk). Export of a vault requires **that** vault closed; file zip/7z import and create-from-backup may run while other vaults stay open. Password and unlock-RAM change also require that vault closed; they do not rewrite file blobs. RF-49 still applies to every new I/O. |
 | **`temp/upriv/` (research snapshot)** | FUSE session OK; **close/materialize/password/recovery write full plaintext trees to OS tempfile** via `export_logical_tree` + `create_from_dir`. **Do not port that pattern.** |
 | **Ship blocker** | Real open/close must persist **`store/`** without a plaintext tree on disk. Export/import `.7z` pack and unpack logical content in RAM (fail if RAM is insufficient). No `DevPlaintext` in user builds. No `7zz -p` on argv. |
 | **Exception** | `upriv_plain` may use real `workspace/` plaintext **with** UI warning + wipe — never confuse with default mode. |
@@ -26,7 +26,7 @@
 
 ## Current development phase (read this first)
 
-We are **past the Tauri → Electron migration** and **past UI/lifecycle scaffolding**. Vault-root / settings / **vault list + create + open/close**, **in-app file manager**, **Linux FUSE**, **Windows WinFsp**, **export/import**, and **backups** talk to **`upriv-daemon`**. Without the WinFsp runtime the vault still opens and the in-app file manager is the folder. Change-password is not live.
+We are **past the Tauri → Electron migration** and **past UI/lifecycle scaffolding**. Vault-root / settings / **vault list + create + open/close**, **in-app file manager**, **Linux FUSE**, **Windows WinFsp**, **export/import**, and **backups** talk to **`upriv-daemon`**. Without `fuse3` or the WinFsp runtime the vault still opens and the in-app file manager is the folder. Password and unlock-RAM change are live (`vault_change_password`, `vault_change_kdf`).
 
 | Layer | State in `dev/` (active) |
 |-------|---------------------------|
@@ -35,14 +35,13 @@ We are **past the Tauri → Electron migration** and **past UI/lifecycle scaffol
 | **Electron** | Shell, preload, daemon spawn, IPC timeouts, packaging scaffold |
 | **upriv-rpc / upriv-ffi** | Shared CORE RPC handlers; UniFFI `invoke` + Expo module `modules/upriv-core` |
 | **upriv-daemon** | stdio JSON-RPC — thin wrapper over `upriv-rpc` (same handlers as mobile) |
-| **upriv-core** | `logging`, `time`, `app_version()`, **`paths/`**, **`config/`**, **`store/`** (Argon2id wrap + AES-SIV index + XChaCha chunks), **`vault/`** list / create / open / close / rename / fs / export / import / backup, **Linux FUSE**, **Windows WinFsp** (dynamic `winfsp-*.dll`; the Windows packages carry the official installer and ask when the folder is turned on; declining leaves the switch; missing DLL → mount fails, vault stays open) |
+| **upriv-core** | `logging`, `time`, `app_version()`, **`paths/`**, **`config/`**, **`store/`** (Argon2id wrap + AES-SIV index + XChaCha chunks), **`vault/`** list / create / open / close / rename / fs / export / import / backup, **Linux FUSE** (`libupriv_fuse.so` loaded at mount; `fuse3` is asked when the folder is turned on; declining leaves the switch), **Windows WinFsp** (dynamic `winfsp-*.dll`; the Windows packages carry the official installer and ask when the folder is turned on; declining leaves the switch; missing DLL → mount fails, vault stays open) |
 | **Integration** | Desktop: `createDesktopServices()` → live root/settings/logs/vaults/FM/export; Mobile: `createServices()` → native if bridge linked, else mocks |
 
 **What to build next (default order):**
 
-1. Change-password (not implemented; keep the current chunk AAD, which does not bind KDF params)  
-2. Remaining RPCs from SDD §8.2–8.3  
-3. SAF-backed vault I/O on Android (currently filesystem vault-root only)  
+1. Remaining RPCs from SDD §8.2–8.3  
+2. SAF-backed vault I/O on Android (currently filesystem vault-root only)  
 
 Vault list / create / open / close + groups are already live. **Do not** re-implement vault logic in TypeScript.  
 **Do not** reimplement vault-root resolution in TS — use existing `vault_root_*` RPCs / `VaultRootService`.  
@@ -97,8 +96,8 @@ The repo may contain **`temp/upriv/`** on disk — a **frozen snapshot of an old
 | Aspect | `temp/upriv/` (snapshot) | `dev/` (active) |
 |--------|------------------------|-----------------|
 | Desktop shell | Tauri 2 (`src-tauri/`) | Electron + `upriv-daemon` |
-| `upriv-core` | Large — vault, crypto, `seven_zip`, mount, session, … | Paths, config, `store/` crypto, vault list/create/open/close/fs/export/import/backup, Linux FUSE, Windows WinFsp. Change-password still not live |
-| UI wiring | Often **real** Tauri commands | Live root/settings/list/create/open/close/FM/export; change-password still blocked |
+| `upriv-core` | Large — vault, crypto, `seven_zip`, mount, session, … | Paths, config, `store/` crypto, vault list/create/open/close/fs/export/import/backup, password and unlock-RAM rewrap, Linux FUSE, Windows WinFsp |
+| UI wiring | Often **real** Tauri commands | Live root/settings/list/create/open/close/FM/export/password/unlock RAM |
 | Code quality | Grew fast; **inconsistent, shortcuts, debt** | Intentional boundaries, reviews, typed errors |
 
 **How agents may use `temp/`:**
@@ -221,12 +220,11 @@ upriv/
 | **Mobile FFI** | `dev/crates/upriv-ffi/` | UniFFI `invoke` / `app_version` | UI |
 | **Core** | `dev/crates/upriv-core/` | Crypto, 7z, paths, state machine, FUSE, recovery | Depend on Electron |
 
-**Desktop UI:** Electron (`createDesktopServices`) talks to `upriv-daemon` for vault-root, settings, logs, vault list/create/open/close/`vault_rename`, groups, `vault_config_save`, in-app file manager (`vault_fs_*`), export/import, and backups. There is no desktop in-memory vault list. Linux FUSE and Windows WinFsp are live in core. "Open in file manager" and "Open in terminal" follow the OS path when the mount succeeded. Change-password remains blocked. Notable conventions:
+**Desktop UI:** Electron (`createDesktopServices`) talks to `upriv-daemon` for vault-root, settings, logs, vault list/create/open/close/`vault_rename`, groups, `vault_config_save`, in-app file manager (`vault_fs_*`), export/import, and backups. There is no desktop in-memory vault list. Linux FUSE and Windows WinFsp are live in core. "Open in file manager" and "Open in terminal" follow the OS path when the mount succeeded. Password and unlock-RAM change go through `vault_change_password` / `vault_change_kdf`. Notable conventions:
 
 - **Pipeline:** `useVaultPipelineRun` enforces SDD §8.2.2 — one open/close at a time (`isRunning`). No Seal.
 - **Auto-close:** at most one close per idle tick; warn toast once per vault per idle cycle; respects `isPipelineRunning`.
 - **Settings ↔ list:** vault settings save goes through `vault_config_save`; list patch includes `storageMode` only (no `canSeal`).
-- **Hidden until wired:** `close_on_app_exit` UI not exposed yet (`before-quit` runs daemon shutdown; vault `close_all` RPC still TODO).
 - **Feature module boundaries:** each `features/vaults/*` and `features/system/*` folder has one `index.ts` — see [`dev/apps/desktop/README.md`](../dev/apps/desktop/README.md).
 
 Electron already uses `desktopInvoke()` → `upriv-daemon` → `upriv-core` for list/create/open/close. Do not treat the renderer password `Map` as the unlock store — session keys live in `upriv-core`.
@@ -241,7 +239,7 @@ Mobile:   RN     ──JNI/FFI──► libupriv_core.so ──► upriv_core::*
 
 ### Rust workspace
 
-- Build from `dev/`: `cargo build -p upriv-daemon`, `cargo test -p upriv-core`, `npm run rust:lint` (rustfmt + clippy).
+- Build from `dev/`: `cargo build -p upriv-daemon -p upriv-fuse`, `cargo test -p upriv-core`, `npm run rust:lint` (rustfmt + clippy).
 - Vault crypto crates live in **`dev/vendor/`** (`[patch]`). Refresh is the checklist in `dev/vendor/MANIFEST.txt`; do not `cargo generate-lockfile`. See [`SECURITY-CRYPTO.md`](SECURITY-CRYPTO.md) agent rule 2.
 - Artifacts go to **`dev/target/`** only — **never commit** `target/`, `node_modules/`, `dist/`, `.expo/`.
 - `upriv-daemon/src/main.rs` is entry only; do not add vault logic there — use `upriv-core`.
@@ -254,9 +252,9 @@ Rest layout and crypto bar: [`SECURITY-CRYPTO.md`](SECURITY-CRYPTO.md). No Seal,
 upriv-core/src/
 ├── lib.rs
 ├── config/       # app settings.toml + vaults/*/config.toml (load)
-├── vault/        # list / create / open / close / rename (recovery / rewrap later)
+├── vault/        # list / create / open / close / rename / password + unlock-RAM rewrap
 ├── seven_zip/    # in-RAM .7z pack/unpack (export/import only — not rest)
-├── session/      # RAM session, security modes
+├── session/      # open session keys in RAM
 ├── recovery/     # dirty close / leftover upriv_plain workspace
 ├── paths/        # VaultRoot + store/ paths
 ├── mount/        # Virtual workspace trait; FUSE (Linux), WinFsp (Windows)
@@ -291,7 +289,7 @@ Marker: **`.upriv/settings.toml`** at vault-root. Per-vault: **`vaults/<vault_id
 |------|---------|
 | `.upriv/settings.toml` | App/drive settings |
 | `.upriv/state.json` | Open sessions only (volatile) |
-| `.upriv/vaults/<id>/config.toml` | Vault config (list/name/policy; no password) |
+| `.upriv/vaults/<id>/config.toml` | Vault config (list/name; no password) |
 | `.upriv/vaults/<id>/persistence.json` | Persisted `closed` only (+ sync metadata; **no `sealed`**) |
 | `.upriv/vaults/<id>/store/` | Vault body at rest (`header/vault.header` + `header/vault.header.copy` + `index/root.idx.enc` + `index/root.idx.enc.copy` + `data/`) |
 | `.upriv/vaults/<id>/backups/<stamp>-<id>.zip` | Frozen Stored zip of `store/` (pins under `backups/saves/`) |
@@ -310,7 +308,7 @@ Distinct from vault-root / `store/`. One folder per system, because `settings.to
 | `vaults/<id>/config.toml` | `[mount]` `app_file_manager_folder` + `custom_file_manager_folder` | Two choices for every system. `app_file_manager_folder` is `inherit`, `on`, or `off` for Use the app folder and starts `inherit`. `custom_file_manager_folder` is the Another folder switch and starts off. |
 | `vaults/<id>/config.toml` | `[mount.<os>]` `path` | Empty path follows the app place. The vault screen does not store `place`. |
 
-`unset` is the start: nothing is created, and plain text has no folder until the user chooses. `beside` creates `<data folder>/workspace/{vault name}`, next to `.upriv`. `custom` uses `{path}/workspace/{vault name}`. A vault's own folder uses `{path}/{vault name}` at that folder's root. A missing `place` with an empty path reads as `unset`. A missing `place` with a path reads as `custom`. `workspace` is where every app-folder file manager folder lives. Paths stay per system. The app stores one `file_manager_folder`. A vault stores `app_file_manager_folder` and `custom_file_manager_folder` once. The screen calls this the file manager folder. It runs only on desktop, and only when that system's place is chosen. An empty vault path follows the app place and needs the app file manager folder on, unless this vault set `on` or `off`. `app_file_manager_folder` is `inherit`, `on`, or `off` and starts as `inherit`. `on` still needs a chosen place. An own path uses `custom_file_manager_folder`, which starts off and creates that vault's folder on its own. Both choices stay saved when you switch folders. Opening an encrypted vault never waits for a folder. The in-app file manager is always available. Plain text uses the chosen place as the real folder and ignores `file_manager_folder`. Linux is the live folder; Windows and macOS save the flag until their folder exists. Phones never show a file manager folder and never mount one. A phone save keeps the shared flags.
+`unset` is the start: nothing is created, and plain text has no folder until the user chooses. `beside` creates `<data folder>/workspace/{vault name}`, next to `.upriv`. `custom` uses `{path}/workspace/{vault name}`. A vault's own folder uses `{path}/{vault name}` at that folder's root. A missing `place` with an empty path reads as `unset`. A missing `place` with a path reads as `custom`. `workspace` is where every app-folder file manager folder lives. Paths stay per system. The app stores one `file_manager_folder`. A vault stores `app_file_manager_folder` and `custom_file_manager_folder` once. The screen calls this the file manager folder. It runs only on desktop, and only when that system's place is chosen. An empty vault path follows the app place and needs the app file manager folder on, unless this vault set `on` or `off`. `app_file_manager_folder` is `inherit`, `on`, or `off` and starts as `inherit`. `on` still needs a chosen place. An own path uses `custom_file_manager_folder`, which starts off and creates that vault's folder on its own. Both choices stay saved when you switch folders. Opening an encrypted vault never waits for a folder. The in-app file manager is always available. Plain text uses the chosen place as the real folder and ignores `file_manager_folder`. Linux and Windows mount that folder. macOS saves the flag until its folder exists. On Windows the folder is a directory junction. exFAT and FAT cannot hold one: the mount fails with `vault_mount_filesystem`, the vault stays open in the in-app file manager, and Open in file manager asks for a different folder on an NTFS or ReFS disk. Ciphertext can stay where it is. A drive-letter mount is not used. Phones never show a file manager folder and never mount one. A phone save keeps the shared flags.
 
 Do not create the folder at vault-root init. Paths under `.upriv/` are reserved. The gate does not validate workspace; save does.
 
@@ -332,7 +330,7 @@ Order in `upriv-core` `paths::resolve_vault_root`:
 | Launch | Distribution | App home (`.upriv-root`) | Default vault folder (`default_root`) |
 |--------|--------------|--------------------------|----------------------------------------|
 | `npm run electron:dev` | `dev` | `dev/` via `UPRIV_DEFAULT_ROOT_ANCHOR` | Same as app home |
-| Packaged AppImage / portable exe | `portable` | Beside binary / `$APPIMAGE` | Same as app home |
+| Packaged AppImage / portable exe | `portable` | Beside the downloaded file (`UPRIV_PORTABLE_FILE`), else `$APPIMAGE` / the exe | Same as app home |
 | Packaged system install (`.deb`, NSIS, macOS DMG, …) | `installed` | User data (`~/.local/share/upriv`, …) | Same as app home |
 
 **Portable packaging exists only on Linux (AppImage) and Windows (portable exe).** macOS is always `installed` (Application Support). Android (later) has no portable mode — app sandbox / SAF only. See `dev/README.md` packaging matrix.
@@ -349,7 +347,7 @@ Pre-root UI prefs are carried by the **bootstrap prefs bag** — a named payload
 
 **Data folder switch:** UI blocks apply while any vault is not `closed` / `recovery` (also `opening` / `closing` / `creating`). Modal stays open read-only — no bulk-close. Core refuses `vault_root_setup_*` with `vault_root_busy` while a session is open, mid-close flush, or Argon2 unlock/create holds the process gate.
 
-**Config edit policy:** `@upriv/shared` `domain/edit-policy` (contract `edit-policy.json`) is the table for what may change while a vault is busy (`anytime` / `vault_quiet` / `vault_closed` / `vault_closed_or_recovery` / `root_idle` / `no_open_session`). Hybrid default: list/next-close prefs anytime; mount / storage / `security.mode` need **quiet** (no open/opening/closing; recovery OK; **creating and queued-open are still quiet** at this gate); `vault.display_name` / `vault.id` need **closed or recovery** (not creating/queued — those wait on create Argon2 or a queued open). Change-password / KDF need **strictly closed** (not recovery). App targets stay coarse (`ui` / `logging` / …) until fine field locks are needed. SDD §3.2.3 “open or closed” for rewrap is **deprecated**. Rewrap still unavailable in core until SECURITY-CRYPTO P0. **Rust** `save_vault_config_checked` / RPC `vault_config_save` refuse quiet-gated field changes (mount / storage / `security.mode`) while the session is open, mid-close, or Argon2 is in flight (`vault_config_busy`) — same targets as `rustConfigSaveQuietTargets` in the JSON contract (UI may also refuse edits while list status is **opening** — that is pipeline UX, not the quiet predicate). Display name and folder id change **only** via RPC `vault_rename` (never `vault_config_save`; a live save of those fields is `VaultConfigInvalid`). `rename_vault` also refuses while this vault is open, mid-close, or preparing (open/create seed). Quiet gate allows creating and a queued open on a closed vault. A queued close on an open session is not quiet. Waiting close shows `queued` until it starts; waiting create stays `creating`. Row UI usually hides settings while pipeline-busy. Locked-field copy comes from `lockedI18n` in that contract (`vaultConfigEditLockedI18nKey`).
+**Config edit policy:** `@upriv/shared` `domain/edit-policy` (contract `edit-policy.json`) is the table for what may change while a vault is busy (`anytime` / `vault_quiet` / `vault_closed` / `vault_closed_or_recovery` / `root_idle` / `no_open_session`). Hybrid default: list/next-close prefs anytime; mount / storage need **quiet** (no open/opening/closing; recovery OK; **creating and queued-open are still quiet** at this gate); `vault.display_name` / `vault.id` need **closed or recovery** (not creating/queued — those wait on create Argon2 or a queued open). Change-password / KDF need **strictly closed** (not recovery). App targets stay coarse (`ui` / `logging` / …) until fine field locks are needed. Rewrap is closed-only: same master key, new salt, header and name index only. See SECURITY-CRYPTO. **Rust** `save_vault_config_checked` / RPC `vault_config_save` refuse quiet-gated field changes (mount / storage) while the session is open, mid-close, or Argon2 is in flight (`vault_config_busy`) — same targets as `rustConfigSaveQuietTargets` in the JSON contract (UI may also refuse edits while list status is **opening** — that is pipeline UX, not the quiet predicate). Display name and folder id change **only** via RPC `vault_rename` (never `vault_config_save`; a live save of those fields is `VaultConfigInvalid`). `rename_vault` also refuses while this vault is open, mid-close, or preparing (open/create seed). Quiet gate allows creating and a queued open on a closed vault. A queued close on an open session is not quiet. Waiting close shows `queued` until it starts; waiting create stays `creating`. Row UI usually hides settings while pipeline-busy. Locked-field copy comes from `lockedI18n` in that contract (`vaultConfigEditLockedI18nKey`).
 
 ---
 
@@ -359,7 +357,7 @@ Work in this order unless the user explicitly reprioritizes:
 
 1. `upriv-core`: config load, paths, `SevenZip` wrapper + tests — **include `create_from_logical` / stream path; do not ship directory-only close that needs plaintext staging** (RF-45)  
 2. Virtual mount (`mount/` trait): **FUSE** (Linux) + **WinFsp** (Windows) — `workspace/` → session over `store/` (`encrypted_dir`)  
-2b. `plain/` module: real `workspace/` extract → close + `secure_wipe_workspace`  
+2b. `plain/` module: real `workspace/` extract → close overwrites that folder, then removes it  
 3. open/close happy path without UI — **both modes** (Linux + Windows); **RF-49/RF-45 tests are part of “done” for encrypted_dir close** — see [`SECURITY-PLAINTEXT.md`](SECURITY-PLAINTEXT.md)  
 
 4. Recovery detector (dirty close / leftover `upriv_plain` workspace — not Seal)  
@@ -369,7 +367,7 @@ Work in this order unless the user explicitly reprioritizes:
 8. Windows packaging (`7zz`, `.exe`, WinFsp deps)  
 9. Later: macOS, RN Android, iOS  
 
-Current scaffold: vault list / create / open / close / `vault_rename` + groups + `vault_config_save` + in-app file manager + Linux FUSE + Windows WinFsp + zip/7z export/import + backups are live on Electron and native FFI (filesystem vault-root only). **Next:** change-password. See § Current development phase. **Do not** re-implement list/create/open/close/rename in TypeScript.
+Current scaffold: vault list / create / open / close / `vault_rename` + groups + `vault_config_save` + in-app file manager + Linux FUSE + Windows WinFsp + zip/7z export/import + backups + password and unlock-RAM change are live on Electron and native FFI (filesystem vault-root only). See § Current development phase. **Do not** re-implement list/create/open/close/rename/rewrap in TypeScript.
 
 **Import:** desktop native picker + `vault_import_probe` (live). OS drop still pre-fills the create wizard when the shell provides a path.
 
@@ -396,7 +394,7 @@ npm run rust:fix                           # rustfmt + clippy --fix
 ./r f                                       # auto-fix where supported
 ./r t                                       # cargo test --workspace + shared/desktop vitest
 ./r c                                       # lint + test
-cargo build -p upriv-daemon --release
+cargo build -p upriv-daemon -p upriv-fuse --release
 
 # Mobile
 npm install --prefix apps/mobile
@@ -496,7 +494,7 @@ Details: [`dev/docs/ARCHITECTURE.md`](../dev/docs/ARCHITECTURE.md) §2.4.
 - §1 Vision, modes, states, v1 flow  
 - §2 Use cases  
 - §3 Functional requirements (+ §3.6 Android, §3.7 Desktop UX)  
-- §4 Password/session modes  
+- §4 Session  
 - §5 Vault structure  
 - §6 NFR (Rust core, UI presentation-only)  
 - §9 Roadmap  

@@ -8,16 +8,26 @@ import { settingsControlClass, SettingsField } from "./vaultSettingsForm";
 interface VaultChangePasswordFieldsProps {
   fields: ChangePasswordFieldsState;
   onChange: (patch: Partial<ChangePasswordFieldsState>) => void;
+  /** Wrong current password — ring and message on that field. */
+  passwordFieldError?: string | null;
+  /** Form-level failure (backup, closed vault, mismatch). */
   error?: string | null;
   /** Blocked when vault is not strictly closed (`vault_closed` gate). */
   rewrapBlocked?: boolean;
+  /** This change is already running. */
+  busy?: boolean;
 }
+
+const invalidPasswordClass =
+  "aria-invalid:ring-2 aria-invalid:ring-on-error-container aria-invalid:focus:ring-on-error-container";
 
 export function VaultChangePasswordFields({
   fields,
   onChange,
+  passwordFieldError,
   error,
   rewrapBlocked = false,
+  busy = false,
 }: VaultChangePasswordFieldsProps) {
   const { t } = useTranslation();
   const currentId = useId();
@@ -26,6 +36,7 @@ export function VaultChangePasswordFields({
 
   const passwordsMatch =
     fields.newPassword.length > 0 && fields.newPassword === fields.confirmPassword;
+  const locked = rewrapBlocked || busy;
 
   return (
     <div className="space-y-3">
@@ -37,27 +48,30 @@ export function VaultChangePasswordFields({
       <SettingsField
         label={t("vault.change_password.current")}
         htmlFor={currentId}
-        disabled={rewrapBlocked}
+        disabled={locked}
       >
         <PasswordInput
           id={currentId}
           value={fields.currentPassword}
-          disabled={rewrapBlocked}
+          disabled={locked}
+          aria-invalid={passwordFieldError ? true : undefined}
+          aria-errormessage={passwordFieldError ? `${currentId}-error` : undefined}
           onChange={(e) => onChange({ currentPassword: e.target.value })}
           autoComplete="current-password"
-          inputClassName={settingsControlClass}
+          inputClassName={[settingsControlClass, invalidPasswordClass].join(" ")}
         />
+        {passwordFieldError ? (
+          <p id={`${currentId}-error`} role="alert" className="text-xs text-on-error-container">
+            {passwordFieldError}
+          </p>
+        ) : null}
       </SettingsField>
 
-      <SettingsField
-        label={t("vault.change_password.new")}
-        htmlFor={newId}
-        disabled={rewrapBlocked}
-      >
+      <SettingsField label={t("vault.change_password.new")} htmlFor={newId} disabled={locked}>
         <PasswordInput
           id={newId}
           value={fields.newPassword}
-          disabled={rewrapBlocked}
+          disabled={locked}
           onChange={(e) => onChange({ newPassword: e.target.value })}
           autoComplete="new-password"
           inputClassName={settingsControlClass}
@@ -67,12 +81,12 @@ export function VaultChangePasswordFields({
       <SettingsField
         label={t("vault.change_password.confirm")}
         htmlFor={confirmId}
-        disabled={rewrapBlocked}
+        disabled={locked}
       >
         <PasswordInput
           id={confirmId}
           value={fields.confirmPassword}
-          disabled={rewrapBlocked}
+          disabled={locked}
           onChange={(e) => onChange({ confirmPassword: e.target.value })}
           autoComplete="new-password"
           inputClassName={settingsControlClass}

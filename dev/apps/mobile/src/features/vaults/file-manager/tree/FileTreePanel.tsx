@@ -34,6 +34,7 @@ import {
   type FileTreeNode,
 } from "@upriv/shared";
 import { Icon } from "@/components/icons";
+import { noteIdleActivity } from "@/lib/idleActivity";
 import {
   Button,
   DropdownPanel,
@@ -874,7 +875,10 @@ function FileTreeRow({
               autoFocus
               value={renameValue}
               maxLength={LOGICAL_FILE_NAME_MAX_LENGTH}
-              onChangeText={setRenameValue}
+              onChangeText={(text) => {
+                noteIdleActivity();
+                setRenameValue(text);
+              }}
               selection={renameSelection}
               onSelectionChange={(event) => setRenameSelection(event.nativeEvent.selection)}
               onFocus={() => setRenameSelection(renameBasenameSelection(renameValue || name))}

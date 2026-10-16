@@ -15,7 +15,7 @@ Canonical layout for the product — see **`dev/docs/sdd.md`** §3 and **`.agent
 | File | Scope | Contents |
 |------|--------|----------|
 | **`.upriv/settings.toml`** | App / drive | Marker, paths, UI, logging, app preferences |
-| **`vaults/<id>/config.toml`** | One vault | Vault config: storage mode, security, backup, 7z, policies, optional **`order`**, **`password_hint`**, **`note`**, and **`hidden`** |
+| **`vaults/<id>/config.toml`** | One vault | Vault config: storage mode, security, backup, 7z, optional **`order`**, **`password_hint`**, **`note`**, and **`hidden`** |
 
 Same word **config**, different **folder** — no collision. Discovery: scan `vaults/*/config.toml` on app start.
 
@@ -63,12 +63,12 @@ Closed vaults **2** and **3** are registered but **not** listed in `state.json` 
 
 ### Open in `state.json` (this demo)
 
-| Vault | `storage_mode` | `security_mode` |
-|-------|----------------|-----------------|
-| `my-encrypted-notes` | `encrypted_dir` | `session_ram` |
-| `plain-folder-demo` | `upriv_plain` | `disk_open_close` |
+| Vault | `storage_mode` |
+|-------|----------------|
+| `my-encrypted-notes` | `encrypted_dir` |
+| `plain-folder-demo` | `upriv_plain` |
 
-Example entry fields: `workspace`, `vault_root`, `archive_path`, `store_path` (encrypted_dir) or `auth_path` (plain), `opened_at`, `last_activity_at`.
+Example entry fields: `workspace`, `vault_root`, `store_path`, `opened_at`, `last_activity_at`.
 
 Lockfiles (implementation): `.upriv/<id>.lock` — not shipped in this static bundle.
 
@@ -180,11 +180,9 @@ Two tiers under `backups/`:
 - **Example 1 (`my-encrypted-notes`, `keep_last`):** save `backups/saves/20260401T100000-my-encrypted-notes.7z` + standard `20260515T090000-…` and `20260528T120000-…` (oldest standard removed when over limit).
 - **Example 2 (`vault-example-2`, `keep_all`):** save `backups/saves/20260501T080000-vault-example-2.7z` + standard `20260528T*-vault-example-2.7z`; main archive `archive/Vault ExaMple 2.7z` (user name).
 
-### Auth (example 4 only)
+### Auth
 
-Local session for **`upriv_plain`** + **`disk_open_close`**: `.upriv/vaults/plain-folder-demo/auth/`.
-
-Forbidden in `encrypted_dir` / `session_ram` vaults.
+Lock uses the open session keys in RAM.
 
 ### Password hint, note, and change password
 
@@ -204,9 +202,9 @@ Stored in **`config.toml`** (not `persistence.json`):
 
 **Create new vault (not import):** wizard asks for password, confirm password, optional hint, optional note.
 
-**Change password:** vault settings → **Security**; requires current + new + confirm; works with vault **open or closed** (current password always required). `upriv-core` validates, re-encrypts archive + store in RAM/temp, replaces files atomically. UI warns (**`warning.password_change_backups`**) that files in `backups/` keep the password from when each snapshot was created — only the main archive and future backups use the new password. See SDD §3.2.3.
+**Change password:** vault settings → **Security**; the vault must be **closed**. Requires current + new + confirm (current password always required). `upriv-core` writes a backup zip of `store/` first, keeps the same master key, and reseals the header and the name index. File blobs stay. UI warns (**`warning.password_change_backups`**) that files in `backups/` keep the password from when each snapshot was created — `store/` and future backups use the new password. See SDD §3.2.3.
 
-**Settings UI (v1):** subset of `config.toml` — see SDD §3.2.3a (e.g. no vault `id`/paths in form; `session_ram` fixed; explicit Save/discard on close).
+**Settings UI (v1):** subset of `config.toml` — see SDD §3.2.3a (e.g. no vault `id`/paths in form; explicit Save/discard on close).
 
 Example (vault 3): `prod/.upriv/vaults/cold-storage/config.toml`.
 
@@ -230,11 +228,10 @@ What the **user** sees while a vault is open.
 
 ### `upriv_plain` (4 only)
 
-- Listed in `state.json` as `upriv_plain` / `disk_open_close`.
+- Listed in `state.json` as `upriv_plain`.
 - **Literal plaintext** in `workspace/Plain Folder Demo/` until **close**.
-- **Local password on disk:** `.upriv/vaults/plain-folder-demo/auth/`.
 - **No** `store/` for this vault.
-- On close: `secure_wipe_workspace` + remove workspace tree.
+- On close: overwrite the folder, then remove it.
 
 See `workspace/Plain Folder Demo/PLAIN-MODE.txt` and `workspace/My Encrypted Notes/STORE-WRITE-MAP.txt`.
 

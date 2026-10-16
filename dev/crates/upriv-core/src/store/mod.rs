@@ -29,11 +29,12 @@ pub use chunk::{
     VAULT_FS_MAX_INLINE_BYTES,
 };
 pub use header::{
-    ensure_danger_notice, load_header, unlock_header, VaultHeader, CHUNK_SIZE, FORMAT_VERSION,
-    HEADER_DIR_NAME, HEADER_FILE_NAME, STORE_DANGER_FILE_NAME,
+    ensure_danger_notice, header_bytes, load_header, rewrap_header, unlock_header, VaultHeader,
+    CHUNK_SIZE, FORMAT_VERSION, HEADER_DIR_NAME, HEADER_FILE_NAME, STORE_DANGER_FILE_NAME,
 };
 pub use index::{
-    VaultIndex, VaultNode, DATA_DIR_NAME, INDEX_COPY_FILE_NAME, INDEX_DIR_NAME, INDEX_FILE_NAME,
+    sealed_index_bytes, VaultIndex, VaultNode, DATA_DIR_NAME, INDEX_COPY_FILE_NAME, INDEX_DIR_NAME,
+    INDEX_FILE_NAME,
 };
 pub use kdf::KdfUnlockPreset;
 pub use tree::{

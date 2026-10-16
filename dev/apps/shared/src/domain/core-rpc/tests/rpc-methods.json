@@ -30,6 +30,8 @@
     "vault_create",
     "vault_open",
     "vault_close",
+    "vault_change_password",
+    "vault_change_kdf",
     "vault_close_phase",
     "vault_config_get",
     "vault_store_size",
@@ -80,6 +82,8 @@
     "reveal_os_path",
     "open_in_terminal",
     "winfsp_status",
-    "winfsp_install"
+    "winfsp_install",
+    "fuse_status",
+    "fuse_install"
   ]
 }

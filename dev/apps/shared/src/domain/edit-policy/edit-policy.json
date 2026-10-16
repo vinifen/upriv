@@ -21,7 +21,6 @@
     "vault.display_name": "vault_closed_or_recovery",
     "mount.workspace_path": "vault_quiet",
     "storage.mode": "vault_quiet",
-    "security.mode": "vault_quiet",
     "vault.id": "vault_closed_or_recovery",
     "action.change_password": "vault_closed",
     "action.change_kdf": "vault_closed"
@@ -38,9 +37,8 @@
     "vault.display_name": "modal.settings.field.vault.display_name_locked",
     "mount.workspace_path": "modal.settings.field.mount.locked",
     "storage.mode": "modal.settings.field.storage.mode_locked",
-    "security.mode": "modal.settings.field.security.mode_locked",
     "action.change_password": "vault.change_password.vault_open",
     "action.change_kdf": "vault.change_kdf.vault_open"
   },
-  "rustConfigSaveQuietTargets": ["mount.workspace_path", "storage.mode", "security.mode"]
+  "rustConfigSaveQuietTargets": ["mount.workspace_path", "storage.mode"]
 }

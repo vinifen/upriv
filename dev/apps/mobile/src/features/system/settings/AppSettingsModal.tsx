@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Platform, StyleSheet, Text, View } from "react-native";
 import {
   APP_SETTINGS_ERROR_I18N_KEYS,
@@ -456,7 +456,6 @@ export function AppSettingsModal({
             <SettingsAccordionSection
               key={sectionId}
               title={t(`modal.app_settings.section.${sectionId}`)}
-              defaultOpen={sectionId === "language"}
             >
               {sectionId === "language" ? (
                 <LanguageFields
@@ -608,6 +607,12 @@ function GeneralFields({
         }
       />
       <SwitchRow
+        label={t("modal.app_settings.field.lifecycle_keep_open_on_wake")}
+        hint={t("modal.app_settings.field.lifecycle_keep_open_on_wake_help")}
+        value={config.lifecycle_keep_open_on_wake}
+        onValueChange={(lifecycle_keep_open_on_wake) => onChange({ lifecycle_keep_open_on_wake })}
+      />
+      <SwitchRow
         label={t("modal.app_settings.field.file_manager_confirm_delete")}
         hint={t("modal.app_settings.field.file_manager_confirm_delete_help")}
         value={config.file_manager_confirm_delete}
@@ -642,6 +647,9 @@ function WorkspaceFields({
   return (
     <View style={styles.fields}>
       <FieldHint>{t("modal.app_settings.section.workspace_intro")}</FieldHint>
+      {clearDisabled ? (
+        <FieldHint>{t("modal.app_settings.action.clear_workspace_path_blocked_open")}</FieldHint>
+      ) : null}
       {workspaceSystemsCurrentFirst(Platform.OS).map((system) => {
         const active = system === current && !clearDisabled;
         const entry = config[system];
@@ -649,144 +657,145 @@ function WorkspaceFields({
         const place =
           system === current && customPending && storedPlace === "unset" ? "custom" : storedPlace;
         return (
-          <View key={system} style={active ? undefined : { opacity: 0.6 }}>
-            <FieldLabel disabled={!active}>
-              {t(`modal.app_settings.field.workspace.system.${system}`)}
-            </FieldLabel>
-            <FieldHint disabled={!active}>
-              {system === current
-                ? t(
-                    showShortcut
-                      ? "modal.app_settings.field.workspace.path_help"
-                      : "modal.app_settings.field.workspace.phone_help",
-                  )
-                : t("modal.app_settings.field.workspace.other_system")}
-            </FieldHint>
-            {system === current ? (
-              <View style={styles.fields}>
-                <PolicyRadioOption
-                  value="unset"
-                  checked={place === "unset"}
-                  title={t("modal.app_settings.field.workspace.unset")}
-                  description={t("modal.app_settings.field.workspace.unset_desc")}
-                  disabled={!active}
-                  onSelect={() => {
-                    if (!active) return;
-                    setCustomPending(false);
-                    onChange({ [system]: { ...entry, place: "unset", path: "" } });
-                  }}
-                />
-                <PolicyRadioOption
-                  value="beside"
-                  checked={place === "beside"}
-                  title={t("modal.app_settings.field.workspace.default")}
-                  description={t("modal.app_settings.field.workspace.default_desc")}
-                  disabled={!active}
-                  onSelect={() => {
-                    if (!active) return;
-                    setCustomPending(false);
-                    onChange({ [system]: { ...entry, place: "beside", path: "" } });
-                  }}
-                  footer={<PathField value={defaultWorkspacePath} editable={false} />}
-                />
-                <PolicyRadioOption
-                  value="custom"
-                  checked={place === "custom"}
-                  title={t("modal.app_settings.field.workspace.custom")}
-                  description={t("modal.app_settings.field.workspace.custom_desc")}
-                  disabled={!active}
-                  onSelect={() => {
-                    if (!active || place === "custom") return;
-                    if (Platform.OS !== "android") {
-                      setCustomPending(true);
-                      return;
-                    }
-                    void (async () => {
-                      setPickError(null);
-                      try {
-                        const picked = await vaultRootService.pickFolder(
-                          null,
-                          t("modal.app_settings.action.pick_workspace_folder"),
-                        );
-                        if (!picked?.trim()) return;
-                        onChange({ [system]: { ...entry, place: "custom", path: picked.trim() } });
-                      } catch (error) {
-                        setPickError(t(mobileErrorI18nKey(error, "error.unexpected")));
+          <Fragment key={system}>
+            <View style={active ? undefined : { opacity: 0.6 }}>
+              <FieldLabel disabled={!active}>
+                {t(`modal.app_settings.field.workspace.system.${system}`)}
+              </FieldLabel>
+              <FieldHint disabled={!active}>
+                {system === current
+                  ? t(
+                      showShortcut
+                        ? "modal.app_settings.field.workspace.path_help"
+                        : "modal.app_settings.field.workspace.phone_help",
+                    )
+                  : t("modal.app_settings.field.workspace.other_system")}
+              </FieldHint>
+              {system === current ? (
+                <View style={styles.fields}>
+                  <PolicyRadioOption
+                    value="unset"
+                    checked={place === "unset"}
+                    title={t("modal.app_settings.field.workspace.unset")}
+                    description={t("modal.app_settings.field.workspace.unset_desc")}
+                    disabled={!active}
+                    onSelect={() => {
+                      if (!active) return;
+                      setCustomPending(false);
+                      onChange({ [system]: { ...entry, place: "unset", path: "" } });
+                    }}
+                  />
+                  <PolicyRadioOption
+                    value="beside"
+                    checked={place === "beside"}
+                    title={t("modal.app_settings.field.workspace.default")}
+                    description={t("modal.app_settings.field.workspace.default_desc")}
+                    disabled={!active}
+                    onSelect={() => {
+                      if (!active) return;
+                      setCustomPending(false);
+                      onChange({ [system]: { ...entry, place: "beside", path: "" } });
+                    }}
+                    footer={<PathField value={defaultWorkspacePath} editable={false} />}
+                  />
+                  <PolicyRadioOption
+                    value="custom"
+                    checked={place === "custom"}
+                    title={t("modal.app_settings.field.workspace.custom")}
+                    description={t("modal.app_settings.field.workspace.custom_desc")}
+                    disabled={!active}
+                    onSelect={() => {
+                      if (!active || place === "custom") return;
+                      if (Platform.OS !== "android") {
+                        setCustomPending(true);
+                        return;
                       }
-                    })();
-                  }}
-                  footer={
-                    <View style={styles.fields}>
-                      <PathField
-                        value={entry.path}
-                        disabled={!active || place !== "custom"}
-                        placeholder={t("modal.app_settings.field.workspace.path_placeholder")}
-                        onChangeText={(path) => {
-                          if (!active) return;
-                          if (path.trim()) setCustomPending(false);
+                      void (async () => {
+                        setPickError(null);
+                        try {
+                          const picked = await vaultRootService.pickFolder(
+                            null,
+                            t("modal.app_settings.action.pick_workspace_folder"),
+                          );
+                          if (!picked?.trim()) return;
                           onChange({
-                            [system]: {
-                              ...entry,
-                              place: path.trim() ? "custom" : "unset",
-                              path,
-                            },
+                            [system]: { ...entry, place: "custom", path: picked.trim() },
                           });
-                        }}
-                      />
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        label={t("modal.app_settings.action.pick_workspace_folder")}
-                        disabled={!active || Platform.OS !== "android"}
-                        onPress={() => {
-                          if (!active) return;
-                          void (async () => {
-                            setPickError(null);
-                            try {
-                              const picked = await vaultRootService.pickFolder(
-                                entry.path.trim() || null,
-                                t("modal.app_settings.action.pick_workspace_folder"),
-                              );
-                              if (!picked?.trim()) return;
-                              onChange({
-                                [system]: { ...entry, place: "custom", path: picked.trim() },
-                              });
-                            } catch (error) {
-                              setPickError(t(mobileErrorI18nKey(error, "error.unexpected")));
-                            }
-                          })();
-                        }}
-                      />
-                    </View>
+                        } catch (error) {
+                          setPickError(t(mobileErrorI18nKey(error, "error.unexpected")));
+                        }
+                      })();
+                    }}
+                    footer={
+                      <View style={styles.fields}>
+                        <PathField
+                          value={entry.path}
+                          disabled={!active || place !== "custom"}
+                          placeholder={t("modal.app_settings.field.workspace.path_placeholder")}
+                          onChangeText={(path) => {
+                            if (!active) return;
+                            if (path.trim()) setCustomPending(false);
+                            onChange({
+                              [system]: {
+                                ...entry,
+                                place: path.trim() ? "custom" : "unset",
+                                path,
+                              },
+                            });
+                          }}
+                        />
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          label={t("modal.app_settings.action.pick_workspace_folder")}
+                          disabled={!active || Platform.OS !== "android"}
+                          onPress={() => {
+                            if (!active) return;
+                            void (async () => {
+                              setPickError(null);
+                              try {
+                                const picked = await vaultRootService.pickFolder(
+                                  entry.path.trim() || null,
+                                  t("modal.app_settings.action.pick_workspace_folder"),
+                                );
+                                if (!picked?.trim()) return;
+                                onChange({
+                                  [system]: { ...entry, place: "custom", path: picked.trim() },
+                                });
+                              } catch (error) {
+                                setPickError(t(mobileErrorI18nKey(error, "error.unexpected")));
+                              }
+                            })();
+                          }}
+                        />
+                      </View>
+                    }
+                  />
+                </View>
+              ) : (
+                <PathField
+                  value={
+                    appWorkspacePlace(entry) === "beside"
+                      ? t("modal.app_settings.field.workspace.default")
+                      : entry.path
                   }
+                  disabled
+                  placeholder={t("modal.app_settings.field.workspace.unset")}
                 />
-              </View>
-            ) : (
-              <PathField
-                value={
-                  appWorkspacePlace(entry) === "beside"
-                    ? t("modal.app_settings.field.workspace.default")
-                    : entry.path
-                }
-                disabled
-                placeholder={t("modal.app_settings.field.workspace.unset")}
+              )}
+            </View>
+            {system === current && showShortcut ? (
+              <SwitchRow
+                label={t("modal.app_settings.field.workspace.mount")}
+                hint={t("modal.app_settings.field.workspace.mount_help")}
+                value={config.file_manager_folder}
+                disabled={clearDisabled || currentPlace === "unset"}
+                onValueChange={(file_manager_folder) => onChange({ file_manager_folder })}
               />
-            )}
-          </View>
+            ) : null}
+          </Fragment>
         );
       })}
-      {showShortcut ? (
-        <SwitchRow
-          label={t("modal.app_settings.field.workspace.mount")}
-          hint={t("modal.app_settings.field.workspace.mount_help")}
-          value={config.file_manager_folder}
-          disabled={clearDisabled || currentPlace === "unset"}
-          onValueChange={(file_manager_folder) => onChange({ file_manager_folder })}
-        />
-      ) : null}
-      {clearDisabled ? (
-        <FieldHint>{t("modal.app_settings.action.clear_workspace_path_blocked_open")}</FieldHint>
-      ) : null}
       {pathIssue ? (
         <Text
           style={[typography.caption, { color: colors.onErrorContainer }]}

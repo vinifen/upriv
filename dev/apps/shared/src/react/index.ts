@@ -22,6 +22,11 @@ export {
 export { useVaultRootIntegrityClose } from "./useVaultRootIntegrityClose";
 export { useClosingDisplayHold } from "./useClosingDisplayHold";
 export {
+  useIdleAutoClose,
+  type IdleSessionEvent,
+  type UseIdleAutoCloseOptions,
+} from "./useIdleAutoClose";
+export {
   useVaultPipelineRun,
   type QueuedPipelineJob,
   type VaultPipelineFailureMode,

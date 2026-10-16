@@ -1720,7 +1720,7 @@ mode = "encrypted_dir"
         assert_eq!(got, expected);
         crate::vault::open_vault(&root, "notes", b"pass-word-ok").unwrap();
         crate::vault::fs_write_file(&root, "notes", "hello.txt", b"hello").unwrap();
-        crate::vault::close_vault(&root, "notes", Some(b"pass-word-ok")).unwrap();
+        crate::vault::close_vault(&root, "notes").unwrap();
         assert!(mounted
             .root()
             .join(".upriv/vaults/notes/config.toml")

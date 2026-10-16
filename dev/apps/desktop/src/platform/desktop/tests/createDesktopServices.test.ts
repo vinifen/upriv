@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { VAULT_ERROR_CODES } from "@upriv/shared";
 import { createDesktopServices } from "../createDesktopServices";
 import { desktopAppSettingsService } from "../services/appSettingsService";
 import { desktopBackupService } from "../services/backupService";
@@ -9,10 +8,11 @@ import { desktopVaultFileSystemService } from "../services/vaultFileSystemServic
 import { desktopVaultGroupService } from "../services/vaultGroupService";
 import { desktopVaultLifecycleService } from "../services/vaultLifecycleService";
 import { desktopVaultRootService } from "../services/vaultRootService";
+import { desktopVaultSecurityService } from "../services/vaultSecurityService";
 import { desktopVaultService } from "../services/vaultService";
 
 describe("createDesktopServices", () => {
-  it("uses live daemon adapters for every service", async () => {
+  it("uses live daemon adapters for every service", () => {
     const services = createDesktopServices();
     expect(services.vault).toBe(desktopVaultService);
     expect(services.lifecycle).toBe(desktopVaultLifecycleService);
@@ -23,11 +23,6 @@ describe("createDesktopServices", () => {
     expect(services.filesystem).toBe(desktopVaultFileSystemService);
     expect(services.backups).toBe(desktopBackupService);
     expect(services.createVault).toBe(desktopCreateVaultService);
-    await expect(
-      services.vaultSecurity.changePassword("notes", {
-        currentPassword: "a",
-        newPassword: "b",
-      }),
-    ).rejects.toMatchObject({ code: VAULT_ERROR_CODES.REWRAP_UNAVAILABLE });
+    expect(services.vaultSecurity).toBe(desktopVaultSecurityService);
   });
 });

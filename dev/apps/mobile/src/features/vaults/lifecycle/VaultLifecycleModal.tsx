@@ -4,7 +4,6 @@ import {
   LOADING_BUDGET_MS,
   lifecycleBusyLabelKey,
   requireVaultErrorI18nKey,
-  requiresPasswordForLifecycle,
   resolveVaultPasswordHint,
   storageModeIsPlaintext,
   VAULT_ERROR_CODES,
@@ -12,7 +11,7 @@ import {
   type VaultListItem,
 } from "@upriv/shared";
 import { useLoadingBudget } from "@upriv/shared/react";
-import { useVaultLifecycleService, useVaultService } from "@/platform/services";
+import { useVaultLifecycleService } from "@/platform/services";
 import { useTranslation, type I18nKey } from "@/i18n";
 import { Button, LoadingBudgetHint, Modal, ModalFooterActions } from "@/components/ui";
 import { FieldLabel, PasswordInput } from "@/components/settings/settingsFields";
@@ -65,48 +64,11 @@ export function VaultLifecycleModal({
 }: VaultLifecycleModalProps) {
   const { t } = useTranslation();
   const { colors, typography } = useTheme();
-  const vaultService = useVaultService();
   const lifecycleService = useVaultLifecycleService();
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const passwordRef = useRef<TextInput>(null);
-  // Unlock always needs a password — do not wait on settings (desktop parity).
-  const [requiresPassword, setRequiresPassword] = useState(intent === "unlock");
-  const [settingsLoading, setSettingsLoading] = useState(false);
-
-  useEffect(() => {
-    if (!open || !vault || !intent) {
-      setRequiresPassword(false);
-      setSettingsLoading(false);
-      return;
-    }
-    setRequiresPassword(intent === "unlock");
-    if (intent === "unlock") {
-      setSettingsLoading(false);
-      return;
-    }
-    let cancelled = false;
-    setSettingsLoading(true);
-    void vaultService
-      .getSettings(vault.id)
-      .then((settings) => {
-        if (cancelled) return;
-        if (!settings) {
-          setRequiresPassword(true);
-          return;
-        }
-        setRequiresPassword(requiresPasswordForLifecycle(vault, intent, settings.security.mode));
-      })
-      .catch(() => {
-        if (!cancelled) setRequiresPassword(true);
-      })
-      .finally(() => {
-        if (!cancelled) setSettingsLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [open, vault, intent, vaultService]);
+  const requiresPassword = Boolean(open && intent === "unlock");
 
   useEffect(() => {
     if (!open) {
@@ -151,9 +113,7 @@ export function VaultLifecycleModal({
   };
 
   const canSubmit =
-    !submitting &&
-    !settingsLoading &&
-    (!requiresPassword || lifecycleService.validateLifecyclePassword(password));
+    !submitting && (!requiresPassword || lifecycleService.validateLifecyclePassword(password));
   const passwordHint = resolveVaultPasswordHint(vault);
 
   return (
@@ -185,18 +145,11 @@ export function VaultLifecycleModal({
         </ModalFooterActions>
       }
     >
-      {intent === "close" ? (
-        <>
-          {storageModeIsPlaintext(vault.storageMode) ? (
-            <Text style={typography.bodyMuted}>{t("close.dialog.close_hint_plain")}</Text>
-          ) : null}
-          {requiresPassword ? (
-            <Text style={typography.bodyMuted}>{t("close.dialog.close_hint_prompt")}</Text>
-          ) : null}
-          {!storageModeIsPlaintext(vault.storageMode) && !requiresPassword ? (
-            <Text style={typography.bodyMuted}>{t("close.dialog.close_hint")}</Text>
-          ) : null}
-        </>
+      {intent === "close" && storageModeIsPlaintext(vault.storageMode) ? (
+        <Text style={typography.bodyMuted}>{t("close.dialog.close_hint_plain")}</Text>
+      ) : null}
+      {intent === "close" && !storageModeIsPlaintext(vault.storageMode) ? (
+        <Text style={typography.bodyMuted}>{t("close.dialog.close_hint")}</Text>
       ) : null}
 
       {requiresPassword ? (

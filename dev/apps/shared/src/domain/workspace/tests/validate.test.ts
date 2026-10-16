@@ -5,6 +5,7 @@ import {
   hostPlatformFromSignals,
   appWorkspacePlace,
   encryptedShortcutActive,
+  osFileManagerFolderEnabled,
   resolvedWorkspaceParent,
   isAbsoluteFilesystemPath,
   isAbsoluteOsFilesystemPath,
@@ -136,6 +137,11 @@ describe("workspace path validation", () => {
       encryptedShortcutActive(app, { ...override, custom_file_manager_folder: false }, "linux"),
     ).toBe(false);
     expect(encryptedShortcutActive(app, vault, "android")).toBe(false);
+    expect(osFileManagerFolderEnabled(false, app, vault, "linux")).toBe(true);
+    expect(osFileManagerFolderEnabled(false, app, forcedOff, "linux")).toBe(false);
+    expect(osFileManagerFolderEnabled(false, app, undefined, "linux")).toBe(false);
+    expect(osFileManagerFolderEnabled(true, app, undefined, "android")).toBe(true);
+    expect(osFileManagerFolderEnabled(false, app, vault, "android")).toBe(false);
     const beside = {
       ...appWorkspace(),
       file_manager_folder: true,

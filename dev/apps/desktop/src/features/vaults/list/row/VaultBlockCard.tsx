@@ -1,6 +1,7 @@
 import { LoadingBudgetHint } from "@/components/ui";
 import { useTranslation } from "@/i18n";
 import {
+  vaultRowControls,
   resolveVaultListStatus,
   isVaultListRowActivatable,
   isVaultListRowUnlockTarget,
@@ -37,7 +38,6 @@ interface VaultBlockCardProps {
   isDragOver?: boolean;
   isDropBlocked?: boolean;
   isReorderActive?: boolean;
-  isPipelineBusy?: boolean;
   pointerDrag: VaultListPointerDragHandlers;
   onOpenBackups: (vaultId: string) => void;
   onOpenNote: (vaultId: string) => void;
@@ -59,7 +59,6 @@ export function VaultBlockCard({
   isDragOver = false,
   isDropBlocked = false,
   isReorderActive = false,
-  isPipelineBusy = false,
   pointerDrag,
   onOpenBackups,
   onOpenNote,
@@ -73,12 +72,18 @@ export function VaultBlockCard({
   const { t, locale } = useTranslation();
   const { settings: appSettings } = useAppSettingsContext();
   const status = resolveVaultListStatus(vault, pipelineListStatus);
-  const statusLabelKey = vaultStatusLabelKey(status, vault.id, pipelineListStatus);
+  const statusLabelKey = vaultStatusLabelKey(
+    status,
+    vault.id,
+    pipelineListStatus,
+    vault.autoClosed === true,
+  );
   const rowBudget = vaultPipelineRowBudget(status, pipelineListStatus, vault.id);
   const openingBudget = useLoadingBudget(rowBudget.active, rowBudget.budgetMs, {
     startedAt: rowBudget.startedAt,
   });
   const isOpen = status === "open";
+  const dragHeld = vaultRowControls(vault, pipelineListStatus).dragBlocked;
   const isLastOpened = appSettings.app.last_opened_vault.trim() === vault.id;
 
   const resumeOpen = isVaultOpenResumeTarget(status, vault.id, pipelineListStatus);
@@ -126,7 +131,7 @@ export function VaultBlockCard({
       <div className="flex min-w-0 items-start gap-2">
         {!dragDisabled ? (
           <VaultDragHandle
-            disabled={isPipelineBusy}
+            disabled={dragHeld}
             dropKey={dropKey}
             label={dragHandleLabel}
             onPointerDragStart={pointerDrag.onStart}
@@ -179,7 +184,6 @@ export function VaultBlockCard({
             vault={vault}
             layout="column"
             pipelineListStatus={pipelineListStatus}
-            disabled={isPipelineBusy}
             onOpenBackups={onOpenBackups}
             onOpenNote={onOpenNote}
             onOpenVaultInfo={onOpenVaultInfo}

@@ -5,11 +5,13 @@ import {
   type VaultListViewMode,
   type VaultSession,
   type VaultSettingsListPatch,
+  type KdfUnlockPreset,
   type VaultListItem,
   type VaultGroup,
   type VaultListRootRow,
   applyVaultListHierarchySort,
   applyVaultSettingsListPatch,
+  applyVaultUnlockPreset,
   remapVaultIdInGroups,
   mergeVaultListSnapshot,
   canReorderGroupedVaults,
@@ -264,6 +266,14 @@ export function useVaultListState(
     setDragOverId((id) => (dragKeyRefersToVaultId(id, vaultId) ? null : id));
   }, []);
 
+  const updateVaultUnlockPreset = useCallback((vaultId: string, unlockPreset: KdfUnlockPreset) => {
+    setVaults((current) =>
+      current.map((vault) =>
+        vault.id === vaultId ? applyVaultUnlockPreset(vault, unlockPreset) : vault,
+      ),
+    );
+  }, []);
+
   const updateVaultSettings = useCallback((vaultId: string, patch: VaultSettingsListPatch) => {
     const nextId = patch.id || vaultId;
     setVaults((current) => {
@@ -312,6 +322,7 @@ export function useVaultListState(
         session: VaultSession | null;
         lastAccessedAt?: string;
         lastAccessedWhen?: string;
+        autoClosed?: boolean;
       },
     ) => {
       sessionWritesRef.current.set(vaultId, Date.now());
@@ -473,6 +484,7 @@ export function useVaultListState(
     touchSessionWrite,
     setVaultRuntimeState,
     updateVaultSettings,
+    updateVaultUnlockPreset,
     markVaultsHidden,
     setGroupCollapsed,
     setGroups,

@@ -18,7 +18,7 @@ export interface ContentTreeImportIo {
   openSession(id: string, password: string): Promise<void>;
   addDirectory(id: string, logicalPath: string): Promise<void>;
   addFile(id: string, logicalPath: string, uri: string): Promise<void>;
-  close(id: string, password: string): Promise<void>;
+  close(id: string): Promise<void>;
   abort(id: string): Promise<void>;
 }
 
@@ -222,7 +222,7 @@ export async function importContentTree(
     for (const file of tree.files) {
       await io.addFile(created.id, file.logicalPath, file.uri);
     }
-    await io.close(created.id, input.password);
+    await io.close(created.id);
     return created;
   } catch (error) {
     await io.abort(created.id);

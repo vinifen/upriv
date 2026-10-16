@@ -81,6 +81,11 @@ export interface AppSettingsConfig {
      */
     lifecycle_open_file_manager_on_open: boolean;
     /**
+     * When true, time the computer is asleep or the phone has Upriv frozen
+     * does not count as inactivity. Default false — that time counts.
+     */
+    lifecycle_keep_open_on_wake: boolean;
+    /**
      * When true, deleting a file/folder in the file manager asks for confirmation.
      * Default true. The delete dialog can turn this off via “don’t ask again”.
      */
@@ -148,6 +153,7 @@ export function appSettingsEqual(a: AppSettingsConfig, b: AppSettingsConfig): bo
     a.ui.file_manager_tree_split_percent === b.ui.file_manager_tree_split_percent &&
     a.ui.lifecycle_close_modal_on_submit === b.ui.lifecycle_close_modal_on_submit &&
     a.ui.lifecycle_open_file_manager_on_open === b.ui.lifecycle_open_file_manager_on_open &&
+    a.ui.lifecycle_keep_open_on_wake === b.ui.lifecycle_keep_open_on_wake &&
     a.ui.file_manager_confirm_delete === b.ui.file_manager_confirm_delete &&
     a.logging.enabled === b.logging.enabled &&
     a.logging.level === b.logging.level &&

@@ -15,11 +15,7 @@ export {
   runTimedPipeline,
 } from "./pipeline";
 export { MIN_CLOSING_DISPLAY_MS, remainingClosingDisplayMs } from "./closingDisplay";
-export {
-  borrowSessionRamPassword,
-  commitSessionRamPasswordAfterOpen,
-  shouldRetainSessionRamPassword,
-} from "./sessionRamPassword";
+export { borrowSessionRamPassword } from "./sessionRamPassword";
 export {
   CLOSING_BACKUP_STEP,
   CLOSING_DONE_STEP,

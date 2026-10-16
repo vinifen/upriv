@@ -4,12 +4,11 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::{Arc, LazyLock, Mutex, TryLockError};
 use std::time::{Duration, Instant};
 
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
-use crate::config::VaultSecurityMode;
 use crate::error::{Result, UprivError};
 use crate::store::{OpenedStore, VaultHeader, VaultIndex};
 
@@ -29,8 +28,6 @@ pub struct OpenSession {
     pub index_key: [u8; 64],
     #[zeroize(skip)]
     pub index: VaultIndex,
-    #[zeroize(skip)]
-    pub security_mode: VaultSecurityMode,
     /// Writers must set this; `close_vault` reseals the index regardless until then.
     pub dirty: bool,
     /// Explorer cache invalidation — bumped on every committed mutation.
@@ -67,12 +64,7 @@ pub struct OpenSession {
 }
 
 impl OpenSession {
-    pub fn from_opened(
-        vault_id: String,
-        vault_dir: PathBuf,
-        security_mode: VaultSecurityMode,
-        opened: OpenedStore,
-    ) -> Self {
+    pub fn from_opened(vault_id: String, vault_dir: PathBuf, opened: OpenedStore) -> Self {
         let mut master_key = [0u8; 32];
         master_key.copy_from_slice(opened.master_key.as_ref());
         let mut content_key = [0u8; 32];
@@ -87,7 +79,6 @@ impl OpenSession {
             content_key,
             index_key,
             index: opened.index,
-            security_mode,
             dirty: false,
             tree_revision: 0,
             mount: None,
@@ -145,19 +136,36 @@ pub fn with_unlock_lock<T>(f: impl FnOnce() -> Result<T>) -> Result<T> {
     f()
 }
 
+fn vault_dir_gate(vault_dir: &Path) -> Result<Arc<Mutex<()>>> {
+    let mut map = VAULT_DIR_GATES
+        .lock()
+        .map_err(|_| session_lock_poisoned("vault-dir gate lock poisoned"))?;
+    Ok(map
+        .entry(vault_dir.to_path_buf())
+        .or_insert_with(|| Arc::new(Mutex::new(())))
+        .clone())
+}
+
 /// Exclusive critical section for one vault directory (create TOCTOU).
 pub fn with_vault_dir_lock<T>(vault_dir: &Path, f: impl FnOnce() -> Result<T>) -> Result<T> {
-    let gate = {
-        let mut map = VAULT_DIR_GATES
-            .lock()
-            .map_err(|_| session_lock_poisoned("vault-dir gate lock poisoned"))?;
-        map.entry(vault_dir.to_path_buf())
-            .or_insert_with(|| Arc::new(Mutex::new(())))
-            .clone()
-    };
+    let gate = vault_dir_gate(vault_dir)?;
     let _held = gate
         .lock()
         .map_err(|_| session_lock_poisoned("vault-dir lock poisoned"))?;
+    f()
+}
+
+/// Same section as [`with_vault_dir_lock`], without waiting.
+/// A holder (rewrap, open, rename) makes the caller return [`UprivError::VaultBusy`].
+pub fn try_with_vault_dir_lock<T>(vault_dir: &Path, f: impl FnOnce() -> Result<T>) -> Result<T> {
+    let gate = vault_dir_gate(vault_dir)?;
+    let _held = match gate.try_lock() {
+        Ok(guard) => guard,
+        Err(TryLockError::WouldBlock) => return Err(UprivError::VaultBusy),
+        Err(TryLockError::Poisoned(_)) => {
+            return Err(session_lock_poisoned("vault-dir lock poisoned"));
+        }
+    };
     f()
 }
 
@@ -228,27 +236,31 @@ pub fn open_session_ids() -> Vec<String> {
     ids
 }
 
-/// Refuse export of this vault while it is open, closing, or seeding.
+/// Refuse export and rewrap while this vault is open, closing, or already held.
 pub fn ensure_vault_session_closed(vault_dir: &Path) -> Result<()> {
-    if is_vault_open_at(vault_dir)
-        || is_vault_closing_at(vault_dir)
-        || is_vault_preparing_at(vault_dir)
-    {
-        Err(UprivError::VaultMustBeClosed)
-    } else {
-        Ok(())
+    if is_vault_open_at(vault_dir) || is_vault_closing_at(vault_dir) {
+        return Err(UprivError::VaultMustBeClosed);
     }
+    if is_vault_preparing_at(vault_dir) {
+        return Err(UprivError::VaultBusy);
+    }
+    Ok(())
 }
 
-/// Refuse vault-root switch while any vault is open, mid-close, or Argon2 is in flight.
+/// Refuse vault-root switch while any vault is open, mid-close, held for
+/// export / rewrap / open / create, or Argon2 is in flight.
 ///
 /// UI also blocks queued opening/creating rows before core work starts. This is
-/// the process-side backstop so setup RPCs cannot race unlock / flush.
+/// the process-side backstop so setup RPCs cannot race unlock, flush, export,
+/// or a password / unlock-RAM rewrite.
 pub fn vault_activity_blocks_root_switch() -> bool {
     if !open_session_ids().is_empty() {
         return true;
     }
     if any_closing() {
+        return true;
+    }
+    if any_preparing() {
         return true;
     }
     is_unlock_in_flight()
@@ -265,6 +277,13 @@ pub fn is_unlock_in_flight() -> bool {
 
 fn any_closing() -> bool {
     CLOSING.lock().map(|g| !g.is_empty()).unwrap_or(true)
+}
+
+fn any_preparing() -> bool {
+    PREPARING
+        .lock()
+        .map(|g| g.values().any(|count| *count > 0))
+        .unwrap_or(true)
 }
 
 pub fn is_vault_closing_at(vault_dir: &Path) -> bool {
@@ -338,7 +357,7 @@ impl Drop for ClosingGuard {
     }
 }
 
-/// Mark `vault_dir` as preparing until dropped (open Argon2 / create seed).
+/// Mark `vault_dir` as preparing until dropped (open, create, export, or rewrap).
 pub(crate) struct PreparingGuard {
     vault_dir: PathBuf,
 }
@@ -348,6 +367,20 @@ impl PreparingGuard {
         let mut guard = PREPARING
             .lock()
             .map_err(|_| session_lock_poisoned("preparing lock poisoned"))?;
+        *guard.entry(vault_dir.to_path_buf()).or_insert(0) += 1;
+        Ok(Self {
+            vault_dir: vault_dir.to_path_buf(),
+        })
+    }
+
+    /// One holder. Open, export, and rewrap use this so they cannot overlap.
+    pub(crate) fn enter_exclusive(vault_dir: &Path) -> Result<Self> {
+        let mut guard = PREPARING
+            .lock()
+            .map_err(|_| session_lock_poisoned("preparing lock poisoned"))?;
+        if guard.get(vault_dir).is_some_and(|count| *count > 0) {
+            return Err(UprivError::VaultBusy);
+        }
         *guard.entry(vault_dir.to_path_buf()).or_insert(0) += 1;
         Ok(Self {
             vault_dir: vault_dir.to_path_buf(),
@@ -539,6 +572,26 @@ mod tests {
         // Do not assert process-wide idle — parallel Argon2 holds UNLOCK_GATE.
         let _guard = ClosingGuard::enter(&dir).expect("enter closing");
         assert!(vault_activity_blocks_root_switch());
+    }
+
+    #[test]
+    fn preparing_mark_blocks_root_switch() {
+        let dir = PathBuf::from(format!(
+            "/upriv-test-preparing-mark-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        assert!(!is_vault_preparing_at(&dir));
+        let held = PreparingGuard::enter_exclusive(&dir).expect("enter preparing");
+        assert!(is_vault_preparing_at(&dir));
+        assert!(matches!(
+            PreparingGuard::enter_exclusive(&dir),
+            Err(UprivError::VaultBusy)
+        ));
+        // Positive only: another test may also hold the unlock gate.
+        assert!(vault_activity_blocks_root_switch());
+        drop(held);
+        assert!(!is_vault_preparing_at(&dir));
     }
 
     #[test]

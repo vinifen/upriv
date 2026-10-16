@@ -127,12 +127,32 @@ pub enum UprivError {
     #[error("import source unreadable: {0}")]
     ImportSourceUnreadable(PathBuf),
 
-    /// This vault must be closed first (export of this vault).
+    /// This vault must be closed first (export, or password / unlock-RAM rewrap).
     #[error("close this vault first")]
     VaultMustBeClosed,
+
+    /// Export, password change, or unlock-RAM change already holds this vault.
+    #[error("vault is busy")]
+    VaultBusy,
+
+    /// The safety zip could not be written, so the live `store/` was not rewritten.
+    #[error("could not write a backup, so the vault was left unchanged")]
+    VaultBackupFailed,
+
+    /// Password or unlock-RAM change asked for the value already in the header.
+    /// Not a broken `config.toml` and not a broken `vault.header`.
+    #[error("rewrap changes nothing")]
+    RewrapUnchanged(RewrapUnchangedKind),
 
     #[error(transparent)]
     Io(#[from] std::io::Error),
 }
 
 pub type Result<T> = std::result::Result<T, UprivError>;
+
+/// Which rewrap was a no-op. The wire code picks the matching "must be different" string.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RewrapUnchangedKind {
+    Password,
+    UnlockRam,
+}

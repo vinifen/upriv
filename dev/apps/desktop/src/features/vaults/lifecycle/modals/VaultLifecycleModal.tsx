@@ -5,7 +5,6 @@ import type { I18nKey } from "@/i18n/types";
 import {
   LOADING_BUDGET_MS,
   lifecycleBusyLabelKey,
-  requiresPasswordForLifecycle,
   requireVaultErrorI18nKey,
   resolveVaultPasswordHint,
   storageModeIsPlaintext,
@@ -14,7 +13,7 @@ import {
   type VaultLifecycleIntent,
 } from "@upriv/shared";
 import { useLoadingBudget } from "@upriv/shared/react";
-import { useVaultLifecycleService, useVaultService } from "@/platform/services";
+import { useVaultLifecycleService } from "@/platform/services";
 import { VaultPasswordHintCallout } from "./VaultPasswordHintCallout";
 import { SettingsField } from "@/components/settings";
 
@@ -66,48 +65,11 @@ export function VaultLifecycleModal({
   onConfirm,
 }: VaultLifecycleModalProps) {
   const { t } = useTranslation();
-  const vaultService = useVaultService();
   const lifecycleService = useVaultLifecycleService();
   const passwordId = useId();
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
-  // Unlock always needs a password (`requiresPasswordForLifecycle`) — do not wait on settings.
-  const [requiresPassword, setRequiresPassword] = useState(intent === "unlock");
-  const [settingsLoading, setSettingsLoading] = useState(false);
-
-  useEffect(() => {
-    if (!open || !vault || !intent) {
-      setRequiresPassword(false);
-      setSettingsLoading(false);
-      return;
-    }
-    setRequiresPassword(intent === "unlock");
-    if (intent === "unlock") {
-      setSettingsLoading(false);
-      return;
-    }
-    let cancelled = false;
-    setSettingsLoading(true);
-    vaultService
-      .getSettings(vault.id)
-      .then((settings) => {
-        if (cancelled) return;
-        if (!settings) {
-          setRequiresPassword(true);
-          return;
-        }
-        setRequiresPassword(requiresPasswordForLifecycle(vault, intent, settings.security.mode));
-      })
-      .catch(() => {
-        if (!cancelled) setRequiresPassword(true);
-      })
-      .finally(() => {
-        if (!cancelled) setSettingsLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [open, vault, intent, vaultService]);
+  const requiresPassword = Boolean(open && intent === "unlock");
 
   useEffect(() => {
     if (!open) {
@@ -143,9 +105,7 @@ export function VaultLifecycleModal({
   };
 
   const canSubmit =
-    !submitting &&
-    !settingsLoading &&
-    (!requiresPassword || lifecycleService.validateLifecyclePassword(password));
+    !submitting && (!requiresPassword || lifecycleService.validateLifecyclePassword(password));
   const passwordHint = resolveVaultPasswordHint(vault);
 
   return (
@@ -175,24 +135,15 @@ export function VaultLifecycleModal({
       }
     >
       <div className="space-y-4 px-0.5 pb-1">
-        {intent === "close" ? (
-          <>
-            {storageModeIsPlaintext(vault.storageMode) ? (
-              <p className="text-sm leading-relaxed text-on-surface-variant">
-                {t("close.dialog.close_hint_plain")}
-              </p>
-            ) : null}
-            {requiresPassword ? (
-              <p className="text-sm leading-relaxed text-on-surface-variant">
-                {t("close.dialog.close_hint_prompt")}
-              </p>
-            ) : null}
-            {!storageModeIsPlaintext(vault.storageMode) && !requiresPassword ? (
-              <p className="text-sm leading-relaxed text-on-surface-variant">
-                {t("close.dialog.close_hint")}
-              </p>
-            ) : null}
-          </>
+        {intent === "close" && storageModeIsPlaintext(vault.storageMode) ? (
+          <p className="text-sm leading-relaxed text-on-surface-variant">
+            {t("close.dialog.close_hint_plain")}
+          </p>
+        ) : null}
+        {intent === "close" && !storageModeIsPlaintext(vault.storageMode) ? (
+          <p className="text-sm leading-relaxed text-on-surface-variant">
+            {t("close.dialog.close_hint")}
+          </p>
         ) : null}
         {requiresPassword ? (
           <div className="space-y-2">

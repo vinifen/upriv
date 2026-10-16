@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { app, BrowserWindow, dialog, ipcMain, Menu } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, powerMonitor } from "electron";
 import { nativeImage, session, shell } from "electron";
 import {
   connectDaemonEvents,
@@ -27,6 +27,12 @@ import {
   winfspRuntimeDllPaths,
   winfspScriptCandidates,
 } from "./ensureWinFsp";
+import {
+  fuseInstallPlan,
+  fuseRuntimeReady,
+  resolveSystemBinary,
+  runFuseInstall,
+} from "./ensureFuse";
 import { createDefaultTerminalHost, openOsPathInTerminal } from "./openInTerminal";
 
 const isDev = process.argv.includes("--dev") || process.env.UPRIV_DEV === "1";
@@ -217,13 +223,15 @@ async function resolveVaultMountOsPath(
     { id: vaultId, path: logicalPath },
     timeoutMs,
   );
-  const osPath =
-    typeof resolved === "object" &&
-    resolved !== null &&
-    typeof (resolved as { osPath?: unknown }).osPath === "string"
-      ? (resolved as { osPath: string }).osPath.trim()
-      : "";
+  const record =
+    typeof resolved === "object" && resolved !== null
+      ? (resolved as { osPath?: unknown; reason?: unknown })
+      : {};
+  const osPath = typeof record.osPath === "string" ? record.osPath.trim() : "";
   if (!osPath) {
+    if (record.reason === "unsupported_filesystem") {
+      throw new Error("vault_mount_filesystem: the disk cannot hold the file manager folder");
+    }
     throw new Error("vault_mount_failed: OS mount is not available");
   }
   return osPath;
@@ -552,6 +560,29 @@ ipcMain.handle(
       return { ok: winfspInstallSucceeded(code) && winFspRuntimeInstalled() };
     }
 
+    if (method === "fuse_status") {
+      return {
+        applicable: process.platform === "linux",
+        installed: fuseRuntimePresent(),
+      };
+    }
+
+    if (method === "fuse_install") {
+      if (process.platform !== "linux" || fuseRuntimePresent()) {
+        return { ok: true };
+      }
+      let osRelease = "";
+      try {
+        osRelease = fs.readFileSync("/etc/os-release", "utf8");
+      } catch {
+        return { ok: false };
+      }
+      const plan = fuseInstallPlan({ osRelease, canExecute: canExecuteFile });
+      if (!plan) return { ok: false };
+      const code = await runFuseInstall(plan);
+      return { ok: code === 0 && fuseRuntimePresent() };
+    }
+
     const activeDaemon = await ensureDaemon();
     return daemonRpc(activeDaemon, method, params, finiteTimeoutMs(timeoutMs));
   },
@@ -564,6 +595,27 @@ function winFspRuntimeInstalled(): boolean {
     programFiles: process.env.ProgramFiles,
     programFilesX86: process.env["ProgramFiles(x86)"],
   }).some((file) => fs.existsSync(file));
+}
+
+function fuseRuntimePresent(): boolean {
+  if (process.platform !== "linux") return true;
+  return fuseRuntimeReady({
+    fusermount3: resolveSystemBinary("fusermount3", canExecuteFile) !== null,
+    fuseDeviceWritable: canAccessFile("/dev/fuse", fs.constants.R_OK | fs.constants.W_OK),
+  });
+}
+
+function canExecuteFile(file: string): boolean {
+  return canAccessFile(file, fs.constants.X_OK);
+}
+
+function canAccessFile(file: string, mode: number): boolean {
+  try {
+    fs.accessSync(file, mode);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
@@ -582,8 +634,16 @@ if (!gotSingleInstanceLock) {
   });
 }
 
+function sendPower(payload: "suspend" | "resume"): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) win.webContents.send("upriv-event", "power", payload);
+  }
+}
+
 app.whenReady().then(() => {
   if (!gotSingleInstanceLock) return;
+  powerMonitor.on("suspend", () => sendPower("suspend"));
+  powerMonitor.on("resume", () => sendPower("resume"));
   if (process.platform === "win32") {
     app.setAppUserModelId("com.upriv.desktop");
   }

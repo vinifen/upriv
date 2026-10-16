@@ -9,7 +9,7 @@
 | **Mobile** | Expo / React Native + UniFFI (`upriv-ffi`) |
 | **UI languages** | English · Português (Brasil) · Español |
 
-> **Today:** greenfield. One store format (`format_version` 1). Vault root setup, settings, vault list, create, groups, open/close, the in-app file manager, Linux FUSE, the Windows vault folder (WinFsp, installed when that folder is turned on), zip and `.7z` import/export, and backups talk to live `upriv-core`. There is no importer for an older vault layout. Change-password is not in this build.
+> **Today:** greenfield. One store format (`format_version` 1). Vault root setup, settings, vault list, create, groups, open/close, the in-app file manager, Linux FUSE, the Windows vault folder (WinFsp, installed when that folder is turned on), zip and `.7z` import/export, and backups talk to live `upriv-core`. There is no importer for an older vault layout. Password change and unlock-RAM change are live on a closed vault.
 
 ---
 
@@ -86,8 +86,8 @@ npm run electron:build
 
 | Artifact | Use |
 |----------|-----|
-| **`.deb`** | Ubuntu / Debian install (preferred — no FUSE) |
-| **`.AppImage`** | Portable; needs libfuse |
+| **`.deb`** | Ubuntu / Debian install (preferred; does not install `fuse3`) |
+| **`.AppImage`** | Portable; starts without system `libfuse2` |
 
 ### Desktop (Windows)
 

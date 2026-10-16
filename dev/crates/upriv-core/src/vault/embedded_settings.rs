@@ -85,10 +85,10 @@ pub fn parse_embedded_settings(bytes: &[u8]) -> Result<EmbeddedVaultSettings> {
         path: std::path::PathBuf::from(ZIP_CONFIG_ENTRY),
         detail: "embedded vault settings are not utf-8".into(),
     })?;
-    let config = toml::from_str(text).map_err(|error| UprivError::VaultConfigInvalid {
-        path: std::path::PathBuf::from(ZIP_CONFIG_ENTRY),
-        detail: error.to_string(),
-    })?;
+    let (config, _) = crate::config::vault_config::parse_vault_config_toml(
+        text,
+        std::path::Path::new(ZIP_CONFIG_ENTRY),
+    )?;
     Ok(EmbeddedVaultSettings {
         config,
         unlock_preset: unlock_preset_comment(text),
@@ -167,6 +167,30 @@ keep_last = 3
         let earlier = format!("# {PRESET_MARK} 32mib\n{text}");
         let last = parse_embedded_settings(earlier.as_bytes()).unwrap();
         assert_eq!(last.unlock_preset, Some(KdfUnlockPreset::M128));
+    }
+
+    #[test]
+    fn incorrect_keys_are_dropped_and_an_invalid_value_is_not() {
+        let raw = r#"
+[vault]
+id = "notes"
+display_name = "Notes"
+
+[security]
+wipe_passes = 2
+not_a_field = true
+
+[auto_close]
+idle_minutes = 30
+
+[policy]
+allow_external_editors = true
+"#;
+        let parsed = parse_embedded_settings(raw.as_bytes()).unwrap();
+        assert_eq!(parsed.config.security.wipe_passes, 2);
+        assert_eq!(parsed.config.auto_close.idle_minutes, 30);
+        let invalid = raw.replace("idle_minutes = 30", "idle_minutes = \"soon\"");
+        assert!(parse_embedded_settings(invalid.as_bytes()).is_err());
     }
 
     #[test]

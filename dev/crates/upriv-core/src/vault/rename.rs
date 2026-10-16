@@ -556,7 +556,7 @@ mode = "encrypted_dir"
         open_vault(&root, "notes", b"pass-word-ok").expect("open");
         let err = rename_vault(&root, "notes", "Renamed").unwrap_err();
         assert!(matches!(err, UprivError::VaultConfigBusy { .. }));
-        close_vault(&root, "notes", None).expect("close");
+        close_vault(&root, "notes").expect("close");
     }
 
     #[test]
@@ -582,7 +582,7 @@ mode = "encrypted_dir"
         // Same slug path ("Notes" → "NOTES") must also refuse while open.
         let err = rename_vault(&root, "notes", "NOTES").unwrap_err();
         assert!(matches!(err, UprivError::VaultConfigBusy { .. }));
-        close_vault(&root, "notes", None).expect("close");
+        close_vault(&root, "notes").expect("close");
     }
 
     #[test]

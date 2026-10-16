@@ -1,4 +1,4 @@
-# Vault config — storage, security, backup, 7z, policies
+# Vault config — storage, security, backup, 7z
 # Example 2 — compress + encrypt, keep_all backups, auto-close with warning
 
 [vault]
@@ -17,17 +17,12 @@ enabled = true
 mode = "keep_all"
 
 [security]
-# Session — password retention (PRD §4); v1 encrypted_dir → session_ram
-mode = "session_ram"
-secure_wipe_workspace = true
 wipe_passes = 1
 wipe_pattern = "random"
 
 [auto_close]
 enabled = true
 idle_minutes = 15
-warn_before_seconds = 60
-close_on_app_exit = false
 
 [seven_zip]
 encrypt_file_names = true
@@ -36,7 +31,3 @@ compression_level = 5
 solid = false
 method = "lzma2"
 
-[policy]
-allow_external_editors = true
-disallow_copy_outside_mount = true
-require_unmount_on_sleep = true

@@ -16,9 +16,8 @@ export interface ChangeVaultKdfInput {
  * reject with `RpcError(VAULT_ERROR_CODES.WRONG_PASSWORD)` so callers can map
  * it through `errorDisplayI18nKey`.
  *
- * Live change-password / KDF change is **not implemented**. Use
- * `createUnavailableVaultSecurityService` in desktop/native factories — never
- * the mock that reports success without rewriting `store/`.
+ * The vault must be closed. File blobs stay; the header and the name index
+ * are resealed. Expo Go uses the mock, which does not touch a real `store/`.
  */
 export interface VaultSecurityService {
   /** Rewraps `vault.header` + `store/` under a new password. */

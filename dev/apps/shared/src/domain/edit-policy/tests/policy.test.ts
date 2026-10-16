@@ -66,6 +66,9 @@ describe("configEditGateAllows", () => {
     expect(configEditGateAllows("vault_quiet", { vaultStatus: "open" })).toBe(false);
     expect(configEditGateAllows("vault_quiet", { vaultStatus: "opening" })).toBe(false);
     expect(configEditGateAllows("vault_quiet", { vaultStatus: "closing" })).toBe(false);
+    expect(configEditGateAllows("vault_quiet", { vaultStatus: "exporting" })).toBe(false);
+    expect(configEditGateAllows("vault_quiet", { vaultStatus: "changing_password" })).toBe(false);
+    expect(configEditGateAllows("vault_quiet", { vaultStatus: "changing_kdf" })).toBe(false);
   });
 
   it("vault_closed allows only closed", () => {

@@ -297,6 +297,11 @@ export function buildSystemInfoSections(
           value: yesNo(t, ui.lifecycle_open_file_manager_on_open),
         },
         {
+          id: "lifecycle_keep_open_on_wake",
+          label: t("modal.info.field.lifecycle_keep_open_on_wake"),
+          value: yesNo(t, ui.lifecycle_keep_open_on_wake),
+        },
+        {
           id: "file_manager_confirm_delete",
           label: t("modal.info.field.file_manager_confirm_delete"),
           value: yesNo(t, ui.file_manager_confirm_delete),

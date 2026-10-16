@@ -10,6 +10,9 @@ export const vaultStatusColorVar = {
   opening: "--vault-status-closed",
   creating: "--vault-status-closed",
   queued: "--vault-status-closed",
+  exporting: "--vault-status-closed",
+  changing_password: "--vault-status-closed",
+  changing_kdf: "--vault-status-closed",
 } as const satisfies Record<VaultDisplayStatus, string>;
 
 /** i18n keys for status labels — maps display status → catalog key. */
@@ -21,6 +24,9 @@ export const vaultStatusI18nKey = {
   opening: "vault.status.opening",
   creating: "vault.status.creating",
   queued: "vault.status.queued",
+  exporting: "vault.status.exporting",
+  changing_password: "vault.status.changing_password",
+  changing_kdf: "vault.status.changing_kdf",
 } as const satisfies Record<VaultDisplayStatus, string>;
 
 /** Row / badge / Info label. A closing vault in its backup phase says so. */
@@ -28,10 +34,12 @@ export function vaultStatusLabelKey(
   status: VaultDisplayStatus,
   vaultId: string,
   pipeline: VaultPipelineListStatus = {},
+  autoClosed = false,
 ): I18nKey {
   if (status === "closing" && pipeline.backingUpVaultIds?.includes(vaultId)) {
     return "vault.status.backing_up";
   }
+  if (status === "closed" && autoClosed) return "vault.status.auto_closed";
   return vaultStatusI18nKey[status];
 }
 

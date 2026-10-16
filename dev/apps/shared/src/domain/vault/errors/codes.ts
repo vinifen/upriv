@@ -17,8 +17,6 @@ export const VAULT_ERROR_CODES = {
   /** Portable `.7z` export could not keep logical bytes in RAM. */
   INSUFFICIENT_RAM_EXPORT: "insufficient_ram_export",
   VAULT_STORE_INVALID: "vault_store_invalid",
-  /** Change-password / KDF rewrap is not implemented. */
-  REWRAP_UNAVAILABLE: "vault_rewrap_unavailable",
   /** Corrupt `.upriv/vault_groups.toml` (list soft-fails with `invalid: true`; mutations may Err). */
   GROUPS_INVALID: "vault_groups_invalid",
   GROUP_NOT_FOUND: "vault_group_not_found",
@@ -31,12 +29,22 @@ export const VAULT_ERROR_CODES = {
   FILE_TOO_LARGE: "vault_file_too_large",
   VAULT_LOCKED: "vault_locked",
   MOUNT_FAILED: "vault_mount_failed",
+  /** Windows directory mount needs NTFS or ReFS. exFAT and FAT cannot hold it. */
+  MOUNT_FILESYSTEM: "vault_mount_filesystem",
   /** Dropped/picked `.zip` / `.7z` path is missing, relative, or unreadable. */
   IMPORT_ARCHIVE_NOT_FOUND: "import_archive_not_found",
   /** File-manager OS path is relative, missing, a symlink, or inside `store/`. */
   IMPORT_SOURCE_UNREADABLE: "import_source_unreadable",
-  /** Export of this vault refused while it is open or closing. */
+  /** Export or rewrap of this vault refused while it is open or closing. */
   VAULT_MUST_BE_CLOSED: "vault_must_be_closed",
+  /** Open refused while export, password change, or unlock-RAM change holds the vault. */
+  VAULT_BUSY: "vault_busy",
+  /** Safety zip failed, so the password and unlock RAM were left unchanged. */
+  VAULT_BACKUP_FAILED: "vault_backup_failed",
+  /** New password matches the current one. Not a broken vault header. */
+  REWRAP_PASSWORD_UNCHANGED: "rewrap_password_unchanged",
+  /** Unlock RAM preset matches the header. Not a broken vault header. */
+  REWRAP_KDF_UNCHANGED: "rewrap_kdf_unchanged",
 } as const;
 
 export type VaultErrorCode = (typeof VAULT_ERROR_CODES)[keyof typeof VAULT_ERROR_CODES];
