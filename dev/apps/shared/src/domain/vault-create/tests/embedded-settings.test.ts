@@ -25,16 +25,12 @@ function settings(patch: Partial<VaultSettingsConfig> = {}): VaultSettingsConfig
     },
     backup: { enabled: false, mode: "keep_all", keep_last: 3, skip_unchanged: false },
     security: {
-      mode: "always_prompt",
-      secure_wipe_workspace: false,
       wipe_passes: 2,
       wipe_pattern: "zeros",
     },
     auto_close: {
       enabled: true,
       idle_minutes: 5,
-      warn_before_seconds: 30,
-      close_on_app_exit: true,
     },
     seven_zip: {
       encrypt_file_names: false,
@@ -42,11 +38,6 @@ function settings(patch: Partial<VaultSettingsConfig> = {}): VaultSettingsConfig
       compression_level: 5,
       solid: true,
       method: "lzma2",
-    },
-    policy: {
-      allow_external_editors: true,
-      disallow_copy_outside_mount: false,
-      require_unmount_on_sleep: false,
     },
     ...patch,
   };

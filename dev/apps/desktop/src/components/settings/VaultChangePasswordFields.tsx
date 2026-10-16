@@ -67,11 +67,7 @@ export function VaultChangePasswordFields({
         ) : null}
       </SettingsField>
 
-      <SettingsField
-        label={t("vault.change_password.new")}
-        htmlFor={newId}
-        disabled={locked}
-      >
+      <SettingsField label={t("vault.change_password.new")} htmlFor={newId} disabled={locked}>
         <PasswordInput
           id={newId}
           value={fields.newPassword}

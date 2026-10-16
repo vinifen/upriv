@@ -356,7 +356,7 @@ fn import_reader<R: Read + Seek>(
     if let Err(ingest_error) = ingest {
         return Err(abandon_failed_import(root, &id, ingest_error));
     }
-    close_vault(root, &id, Some(new_password))?;
+    close_vault(root, &id)?;
     log_event(LogLevel::Info, "vault_imported", &[("id", id.as_str())]);
     Ok(id)
 }
@@ -461,7 +461,7 @@ mode = "encrypted_dir"
         )
         .unwrap_err();
         assert!(matches!(err, UprivError::VaultPathExists(_)));
-        close_vault(&root, "notes", None).unwrap();
+        close_vault(&root, "notes").unwrap();
     }
 
     #[test]

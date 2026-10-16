@@ -12,9 +12,9 @@ import {
   importSetsVaultPassword,
   importZipWrapsDocuments,
   isHiddenGroup,
+  IDLE_AUTO_CLOSE_MINUTES_MAX,
+  IDLE_AUTO_CLOSE_MINUTES_MIN,
   NO_VAULT_GROUPS,
-  normalizeSecurityModeForStorage,
-  storageModeIsPlaintext,
   VAULT_DISPLAY_NAME_MAX_LENGTH,
   VAULT_NOTE_MAX_LENGTH,
   VAULT_PASSWORD_HINT_MAX_LENGTH,
@@ -30,7 +30,6 @@ import { useTranslation } from "@/i18n";
 import {
   DisplayNameFieldError,
   PolicyRadioOption,
-  SecurityModeRadioGroup,
   IntegerInput,
   settingsControlClass,
   SettingsField,
@@ -39,7 +38,6 @@ import {
   VaultSettingsGroupSection,
   VaultSettingsKdfSection,
   VaultSettingsMountSection,
-  VaultSettingsPolicySection,
   VaultSettingsSection,
   VaultSettingsStorageSection,
 } from "@/components/settings";
@@ -469,10 +467,25 @@ function CreateVaultGeneralStep({
   const { t } = useTranslation();
   const autoCloseId = useId();
   const idleId = useId();
-  const warnId = useId();
   return (
     <div className="space-y-1.5 sm:space-y-2">
       <p className="text-sm text-on-surface-variant">{t("vault.create.general_intro")}</p>
+
+      <VaultSettingsSection title={t("modal.settings.section.kdf")} defaultOpen>
+        <VaultSettingsKdfSection
+          config={draft.kdf}
+          choosesPreset={createVaultChoosesKdf(draft)}
+          archivePreset={draft.archiveUnlockPreset}
+          onChange={(patch) => onChange({ kdf: { ...draft.kdf, ...patch } })}
+        />
+      </VaultSettingsSection>
+
+      <VaultSettingsSection title={t("modal.settings.section.backup")} defaultOpen>
+        <VaultSettingsBackupSection
+          config={draft.backup}
+          onChange={(patch) => onChange({ backup: { ...draft.backup, ...patch } })}
+        />
+      </VaultSettingsSection>
 
       <VaultSettingsSection title={t("modal.settings.section.auto_close")} defaultOpen>
         <SettingsFormGrid>
@@ -482,54 +495,27 @@ function CreateVaultGeneralStep({
             onChange={(enabled) => onChange({ auto_close: { ...draft.auto_close, enabled } })}
             label={t("modal.settings.field.auto_close.enabled")}
           />
-          <div className="grid gap-4 sm:grid-cols-2">
-            <SettingsField
-              label={t("modal.settings.field.auto_close.idle_minutes")}
-              htmlFor={idleId}
+          <SettingsField
+            label={t("modal.settings.field.auto_close.idle_minutes")}
+            hint={t("modal.settings.field.auto_close.idle_minutes_help")}
+            htmlFor={idleId}
+            disabled={!draft.auto_close.enabled}
+          >
+            <IntegerInput
+              id={idleId}
+              min={IDLE_AUTO_CLOSE_MINUTES_MIN}
+              max={IDLE_AUTO_CLOSE_MINUTES_MAX}
+              value={draft.auto_close.idle_minutes}
               disabled={!draft.auto_close.enabled}
-            >
-              <IntegerInput
-                id={idleId}
-                min={1}
-                max={1440}
-                value={draft.auto_close.idle_minutes}
-                disabled={!draft.auto_close.enabled}
-                onChange={(idle_minutes) =>
-                  onChange({
-                    auto_close: { ...draft.auto_close, idle_minutes },
-                  })
-                }
-                className={[settingsControlClass, "font-mono tabular-nums"].join(" ")}
-              />
-            </SettingsField>
-            <SettingsField
-              label={t("modal.settings.field.auto_close.warn_before_seconds")}
-              htmlFor={warnId}
-              disabled={!draft.auto_close.enabled}
-            >
-              <IntegerInput
-                id={warnId}
-                min={0}
-                max={300}
-                value={draft.auto_close.warn_before_seconds}
-                disabled={!draft.auto_close.enabled}
-                onChange={(warn_before_seconds) =>
-                  onChange({
-                    auto_close: { ...draft.auto_close, warn_before_seconds },
-                  })
-                }
-                className={[settingsControlClass, "font-mono tabular-nums"].join(" ")}
-              />
-            </SettingsField>
-          </div>
+              onChange={(idle_minutes) =>
+                onChange({
+                  auto_close: { ...draft.auto_close, idle_minutes },
+                })
+              }
+              className={[settingsControlClass, "font-mono tabular-nums"].join(" ")}
+            />
+          </SettingsField>
         </SettingsFormGrid>
-      </VaultSettingsSection>
-
-      <VaultSettingsSection title={t("modal.settings.section.backup")} defaultOpen>
-        <VaultSettingsBackupSection
-          config={draft.backup}
-          onChange={(patch) => onChange({ backup: { ...draft.backup, ...patch } })}
-        />
       </VaultSettingsSection>
 
       <VaultSettingsSection title={t("vault.group.assignment.section")} defaultOpen>
@@ -563,15 +549,6 @@ function CreateVaultGeneralStep({
         />
         <FieldErrors errors={createVaultErrorsForField(errors, "group")} />
       </VaultSettingsSection>
-
-      <VaultSettingsSection title={t("modal.settings.section.kdf")} defaultOpen>
-        <VaultSettingsKdfSection
-          config={draft.kdf}
-          choosesPreset={createVaultChoosesKdf(draft)}
-          archivePreset={draft.archiveUnlockPreset}
-          onChange={(patch) => onChange({ kdf: { ...draft.kdf, ...patch } })}
-        />
-      </VaultSettingsSection>
     </div>
   );
 }
@@ -588,19 +565,10 @@ function CreateVaultAdvancedStep({
   const { t } = useTranslation();
   const orderId = useId();
   const hiddenId = useId();
-  const securityGroup = useId();
-  const wipeId = useId();
-  const sleepId = useId();
   const hiddenLocked = draft.groupMode === "existing" && isHiddenGroup(groups, draft.groupId);
 
   const setStorageMode = (mode: CreateVaultDraft["storage"]["mode"]) => {
-    onChange({
-      storage: { mode },
-      security: {
-        ...draft.security,
-        mode: normalizeSecurityModeForStorage(mode, draft.security.mode),
-      },
-    });
+    onChange({ storage: { mode } });
   };
 
   return (
@@ -660,58 +628,6 @@ function CreateVaultAdvancedStep({
           onChange={(patch) => onChange({ mount: { ...draft.mount, ...patch } })}
         />
         <FieldErrors errors={createVaultErrorsForField(errors, "mount")} />
-      </VaultSettingsSection>
-
-      <VaultSettingsSection title={t("modal.settings.section.security")}>
-        <SettingsFormGrid>
-          <SwitchRow
-            id={wipeId}
-            checked={draft.security.secure_wipe_workspace}
-            onChange={(secure_wipe_workspace) =>
-              onChange({
-                security: { ...draft.security, secure_wipe_workspace },
-              })
-            }
-            label={t("modal.settings.field.close.secure_wipe")}
-          />
-          <SettingsField
-            label={t("modal.settings.field.security.mode")}
-            hint={
-              storageModeIsPlaintext(draft.storage.mode)
-                ? t("modal.settings.field.security.mode_help_plain")
-                : t("modal.settings.field.security.mode_help")
-            }
-          >
-            <div role="radiogroup" className="grid gap-2">
-              <SecurityModeRadioGroup
-                storageMode={draft.storage.mode}
-                securityMode={draft.security.mode}
-                groupName={securityGroup}
-                onSelectMode={(mode) => onChange({ security: { ...draft.security, mode } })}
-              />
-            </div>
-          </SettingsField>
-        </SettingsFormGrid>
-      </VaultSettingsSection>
-
-      <VaultSettingsSection title={t("modal.settings.section.policy")}>
-        <SettingsFormGrid>
-          <VaultSettingsPolicySection
-            config={draft.policy}
-            onChange={(patch) => onChange({ policy: { ...draft.policy, ...patch } })}
-          />
-          <SwitchRow
-            id={sleepId}
-            checked={draft.policy.require_unmount_on_sleep}
-            onChange={(require_unmount_on_sleep) =>
-              onChange({
-                policy: { ...draft.policy, require_unmount_on_sleep },
-              })
-            }
-            label={t("modal.settings.field.close.require_unmount_on_sleep")}
-            hint={t("modal.settings.field.close.require_unmount_on_sleep_help")}
-          />
-        </SettingsFormGrid>
       </VaultSettingsSection>
     </div>
   );

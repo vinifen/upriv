@@ -1,6 +1,7 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { Animated, Easing, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { normalizeVaultListSearch } from "@upriv/shared";
+import { noteIdleActivity } from "@/lib/idleActivity";
 import { Icon } from "@/components/icons";
 import { useTranslation } from "@/i18n";
 import { useTheme } from "@/theme";
@@ -106,7 +107,10 @@ export const VaultListSearch = forwardRef<VaultListSearchHandle, VaultListSearch
               ref={inputRef}
               collapsable={false}
               value={value}
-              onChangeText={(next) => onChange(normalizeVaultListSearch(next))}
+              onChangeText={(next) => {
+                noteIdleActivity();
+                onChange(normalizeVaultListSearch(next));
+              }}
               onFocus={() => setFocused(true)}
               onBlur={() => {
                 const trimmed = value.trim();

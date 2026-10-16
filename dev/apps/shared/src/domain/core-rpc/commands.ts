@@ -144,6 +144,10 @@ export const SHELL_ONLY_RPC_COMMANDS = {
   WINFSP_STATUS: "winfsp_status",
   /** Windows: install the bundled WinFsp runtime. Waits on the permission prompt. */
   WINFSP_INSTALL: "winfsp_install",
+  /** Linux: whether `fusermount3` and `/dev/fuse` are already usable. */
+  FUSE_STATUS: "fuse_status",
+  /** Linux: install the distro `fuse3` package. Waits on the permission prompt. */
+  FUSE_INSTALL: "fuse_install",
 } as const;
 
 export type CoreRpcCommand = (typeof CORE_RPC_COMMANDS)[keyof typeof CORE_RPC_COMMANDS];

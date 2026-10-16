@@ -34,10 +34,12 @@ export function vaultStatusLabelKey(
   status: VaultDisplayStatus,
   vaultId: string,
   pipeline: VaultPipelineListStatus = {},
+  autoClosed = false,
 ): I18nKey {
   if (status === "closing" && pipeline.backingUpVaultIds?.includes(vaultId)) {
     return "vault.status.backing_up";
   }
+  if (status === "closed" && autoClosed) return "vault.status.auto_closed";
   return vaultStatusI18nKey[status];
 }
 

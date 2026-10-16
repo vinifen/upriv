@@ -38,12 +38,12 @@ platform/desktop/
 
 ### Dev vs prod default_root create
 
-| Mode                             | `UPRIV_DISTRIBUTION` | App home                      | Default vault (default_root) |
-| -------------------------------- | -------------------- | ----------------------------- | ---------------------------- |
-| Unpackaged Electron              | `dev`                | `upriv/dev/`                  | Same                         |
-| Packaged AppImage / portable exe | `portable`           | Beside `$APPIMAGE` / exe      | Same                         |
-| Packaged `.deb` / NSIS / system  | `installed`          | User data dir                 | Same as app home             |
-| Daemon without Electron env      | inferred             | writable exe dir or user data | distribution-aware           |
+| Mode                             | `UPRIV_DISTRIBUTION` | App home                         | Default vault (default_root) |
+| -------------------------------- | -------------------- | -------------------------------- | ---------------------------- |
+| Unpackaged Electron              | `dev`                | `upriv/dev/`                     | Same                         |
+| Packaged AppImage / portable exe | `portable`           | Beside the downloaded file / exe | Same                         |
+| Packaged `.deb` / NSIS / system  | `installed`          | User data dir                    | Same as app home             |
+| Daemon without Electron env      | inferred             | writable exe dir or user data    | distribution-aware           |
 
 First-run setup defaults to **`default_root`** for all distributions (beside the app when portable; user data dir when installed). A Windows NSIS install is **installed** even when its folder is writable, so `.upriv` is not created inside the directory the uninstaller deletes.
 

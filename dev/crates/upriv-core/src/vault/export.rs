@@ -354,7 +354,7 @@ mode = "encrypted_dir"
         .unwrap();
         open_vault(&root, "notes", b"pass-word-ok").unwrap();
         fs_write_file(&root, "notes", "/secret.txt", b"plain-secret").unwrap();
-        close_vault(&root, "notes", None).unwrap();
+        close_vault(&root, "notes").unwrap();
         let zip = export_store_zip(&root, "notes").unwrap();
         assert_eq!(&zip[..2], b"PK");
         let as_text = String::from_utf8_lossy(&zip);
@@ -481,7 +481,7 @@ mode = "encrypted_dir"
             b"{\"format_version\":1}\n",
         )
         .unwrap();
-        close_vault(&root, "notes", None).unwrap();
+        close_vault(&root, "notes").unwrap();
         let bytes = export_logical_seven_zip(&root, "notes", b"pass-word-ok", None)
             .expect("in-RAM .7z export");
         assert_eq!(&bytes[..2], b"7z");
@@ -523,7 +523,7 @@ mode = "encrypted_dir"
         let workspace =
             crate::vault::fs::fs_read_file(&root, &imported, "/.upriv-workspace.json").unwrap();
         assert!(workspace.is_empty());
-        close_vault(&root, &imported, None).unwrap();
+        close_vault(&root, &imported).unwrap();
     }
 
     #[test]
@@ -550,7 +550,7 @@ mode = "encrypted_dir"
         open_vault(&root, &imported, b"pass-word-ok").unwrap();
         let listed = fs_list_tree(&root, &imported).unwrap();
         assert!(listed.children.unwrap().is_empty());
-        close_vault(&root, &imported, None).unwrap();
+        close_vault(&root, &imported).unwrap();
     }
 
     #[test]
@@ -597,7 +597,7 @@ mode = "encrypted_dir"
         let layout =
             crate::vault::fs::fs_read_file(&root, &imported, "/.upriv-workspace.json").unwrap();
         assert_ne!(layout, second.workspace.as_bytes());
-        close_vault(&root, &imported, None).unwrap();
+        close_vault(&root, &imported).unwrap();
     }
 
     #[test]
@@ -617,7 +617,7 @@ mode = "encrypted_dir"
         fs_mkdir(&root, "notes", "/docs").unwrap();
         fs_mkdir(&root, "notes", "/docs/blank").unwrap();
         fs_write_file(&root, "notes", "/docs/hi.txt", b"hello-export").unwrap();
-        close_vault(&root, "notes", None).unwrap();
+        close_vault(&root, "notes").unwrap();
         let bytes = export_logical_seven_zip(&root, "notes", b"pass-word-ok", None).unwrap();
         let imported = import_logical_seven_zip(
             &root,
@@ -634,7 +634,7 @@ mode = "encrypted_dir"
         for name in ["empty", "only", "inner", "blank", "hi.txt"] {
             assert!(json.contains(name), "{json}");
         }
-        close_vault(&root, &imported, None).unwrap();
+        close_vault(&root, &imported).unwrap();
     }
 
     #[test]
@@ -668,7 +668,7 @@ mode = "encrypted_dir"
         assert!(matches!(err, UprivError::VaultMustBeClosed));
         let err = export_logical_seven_zip(&root, "notes", b"pass-word-ok", None).unwrap_err();
         assert!(matches!(err, UprivError::VaultMustBeClosed));
-        close_vault(&root, "notes", None).unwrap();
+        close_vault(&root, "notes").unwrap();
     }
 
     #[test]
@@ -691,6 +691,6 @@ mode = "encrypted_dir"
         open_vault(&root, "other", b"pass-word-ok").unwrap();
         let zip = export_store_zip(&root, "notes").unwrap();
         assert_eq!(&zip[..2], b"PK");
-        close_vault(&root, "other", None).unwrap();
+        close_vault(&root, "other").unwrap();
     }
 }

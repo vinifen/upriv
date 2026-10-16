@@ -35,14 +35,11 @@ export function buildCreateVaultResult(
     mount: { ...draft.mount },
     backup: { ...draft.backup },
     security: {
-      mode: draft.security.mode,
-      secure_wipe_workspace: draft.security.secure_wipe_workspace,
       wipe_passes: draft.security.wipe_passes,
       wipe_pattern: draft.security.wipe_pattern,
     },
     auto_close: { ...draft.auto_close },
     seven_zip: { ...draft.seven_zip },
-    policy: { ...draft.policy },
   });
 
   return {

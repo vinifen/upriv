@@ -31,6 +31,7 @@ import {
   vaultSettingsIdentityListPatch,
   vaultRootPathForWorkspaceValidation,
   vaultConfigEditAllowed,
+  vaultRowControls,
   rebaseQuietLockedVaultSettings,
   normalizeStoredName,
   type CreateVaultGroupAssignment,
@@ -43,6 +44,7 @@ import {
   type VaultSettingsAreaId,
   type VaultSettingsConfig,
   type KdfUnlockPreset,
+  type VaultRewrapRun,
 } from "@upriv/shared";
 import { useVaultRootService, useVaultSecurityService, useVaultService } from "@/platform/services";
 import { useTranslation } from "@/i18n";
@@ -73,9 +75,9 @@ function cloneSettings(config: VaultSettingsConfig): VaultSettingsConfig {
   return JSON.parse(JSON.stringify(config)) as VaultSettingsConfig;
 }
 
-type RewrapKind = "password" | "kdf";
+type RewrapKind = VaultRewrapRun["kind"];
 
-type RewrapRun = { vaultId: string; kind: RewrapKind; startedAt: number };
+type RewrapRun = VaultRewrapRun;
 
 type RewrapFailure = {
   vaultId: string;
@@ -95,10 +97,12 @@ interface VaultSettingsModalProps {
   /** List pipeline — blocks KDF/password/storage changes while open/opening/closing. */
   pipelineListStatus?: VaultPipelineListStatus;
   onSaved: (vaultId: string, patch: ReturnType<typeof vaultSettingsToListPatch>) => void;
+  /** Unlock-RAM success. Updates that vault's preset only. */
+  onUnlockPresetSaved?: (vaultId: string, unlockPreset: KdfUnlockPreset) => void;
   onPersistBusyChange?: (vaultIds: readonly string[] | null) => void;
   showToast: (message: string) => void;
   /** Lets the list refuse a second password or unlock-RAM screen. */
-  onRewrapRunChange?: (run: { vaultId: string; kind: RewrapKind } | null) => void;
+  onRewrapRunChange?: (run: VaultRewrapRun | null) => void;
   groups?: readonly VaultGroup[];
   onCommitGroupAssignment?: (
     vaultId: string,
@@ -114,6 +118,7 @@ export function VaultSettingsModal({
   onClose,
   pipelineListStatus = {},
   onSaved,
+  onUnlockPresetSaved,
   onPersistBusyChange,
   showToast,
   onRewrapRunChange,
@@ -129,13 +134,15 @@ export function VaultSettingsModal({
   const { settings: appSettings, showHiddenVaultsSession } = useAppSettingsContext();
   const vaultId = vault?.id ?? null;
   const vaultListStatus = vault ? resolveVaultListStatus(vault, pipelineListStatus) : "closed";
+  const settingsSaveBlocked = Boolean(
+    vault && vaultRowControls(vault, pipelineListStatus).settingsSaveBlocked,
+  );
   const canDeleteNow = canDeleteVaultNow(vaultListStatus);
   const editAllowed = (target: Parameters<typeof vaultConfigEditAllowed>[0]) =>
     vault != null && vaultConfigEditAllowed(target, vault, pipelineListStatus);
   const storageModeLocked = !editAllowed("storage.mode");
   const displayNameLocked = !editAllowed("vault.display_name");
   const mountLocked = !editAllowed("mount.workspace_path");
-  const securityModeLocked = !editAllowed("security.mode");
   const rewrapBlocked = Boolean(
     vault && !vaultConfigEditAllowed("action.change_password", vault, pipelineListStatus),
   );
@@ -482,9 +489,6 @@ export function VaultSettingsModal({
           return current;
         }
         if (section === "mount" && mountLocked) return current;
-        if (section === "security" && "mode" in patch && securityModeLocked) {
-          return current;
-        }
 
         return {
           ...current,
@@ -492,12 +496,10 @@ export function VaultSettingsModal({
         };
       });
     },
-    [storageModeLocked, displayNameLocked, mountLocked, securityModeLocked],
+    [storageModeLocked, displayNameLocked, mountLocked],
   );
 
-  const submitBudgetMs = nameDirty
-    ? LOADING_BUDGET_MS.vaultRename
-    : LOADING_BUDGET_MS.settingsSave;
+  const submitBudgetMs = nameDirty ? LOADING_BUDGET_MS.vaultRename : LOADING_BUDGET_MS.settingsSave;
   const submitBudget = useLoadingBudget(busy, submitBudgetMs);
   const rewrapBudget = useLoadingBudget(rewrapRun !== null, LOADING_BUDGET_MS.vaultRewrap, {
     startedAt: rewrapRun?.startedAt,
@@ -526,7 +528,7 @@ export function VaultSettingsModal({
   }, [resetKdfForm, resetPasswordForm, rewrapBudget.timedOut, showToast, t]);
 
   useEffect(() => {
-    onRewrapRunChange?.(rewrapRun ? { vaultId: rewrapRun.vaultId, kind: rewrapRun.kind } : null);
+    onRewrapRunChange?.(rewrapRun);
   }, [onRewrapRunChange, rewrapRun]);
 
   const flashSaved = useCallback(() => {
@@ -546,6 +548,7 @@ export function VaultSettingsModal({
       !vaultService.canPersistSettings
     )
       return;
+    if (vaultRowControls(vault, pipelineListStatus).settingsSaveBlocked) return;
     if (submitInFlightRef.current) return;
     submitInFlightRef.current = true;
     const generation = (busyGenRef.current += 1);
@@ -775,25 +778,32 @@ export function VaultSettingsModal({
         clearTimeout(savedHideRef.current);
         savedHideRef.current = setTimeout(() => setSavedVisible(false), SAVED_INDICATOR_MS);
         setSaveConfirmOpen(false);
-      }
-      try {
-        const fresh = await vaultService.getSettings(vault.id);
-        if (!fresh) return;
-        const normalized = cloneSettings(normalizeVaultSettingsConfig(fresh));
-        setBaseline(normalized);
-        setDraft((current) =>
-          current
-            ? {
-                ...current,
-                security: {
-                  ...current.security,
-                  password_changed_at: normalized.security.password_changed_at,
-                },
-              }
-            : current,
-        );
-      } catch {
-        // The password already changed. A settings refresh must not hide that.
+        try {
+          const fresh = await vaultService.getSettings(vault.id);
+          if (!fresh) return;
+          if (
+            !openRef.current ||
+            vaultIdRef.current !== vault.id ||
+            areaRef.current !== "password"
+          ) {
+            return;
+          }
+          const normalized = cloneSettings(normalizeVaultSettingsConfig(fresh));
+          setBaseline(normalized);
+          setDraft((current) =>
+            current
+              ? {
+                  ...current,
+                  security: {
+                    ...current.security,
+                    password_changed_at: normalized.security.password_changed_at,
+                  },
+                }
+              : current,
+          );
+        } catch {
+          // The password already changed. A settings refresh must not hide that.
+        }
       }
     } catch (caught) {
       if (!rewrapStillCurrent(generation)) return;
@@ -832,35 +842,25 @@ export function VaultSettingsModal({
         openRef.current && vaultIdRef.current === vault.id && areaRef.current === "kdf";
       if (!openRef.current || vaultIdRef.current === vault.id) resetKdfForm();
       showToast(t("vault.change_kdf.success"));
-      setHeaderUnlockPreset(nextPreset);
-      try {
-        if (baseline) {
-          onSaved(vault.id, {
-            ...vaultSettingsToListPatch(baseline),
-            unlockPreset: nextPreset,
-          });
-        }
-      } catch {
-        // Unlock RAM already changed. A list refresh must not hide that.
-      }
       if (showing) {
+        setHeaderUnlockPreset(nextPreset);
         setSavedVisible(true);
         clearTimeout(savedHideRef.current);
         savedHideRef.current = setTimeout(() => setSavedVisible(false), SAVED_INDICATOR_MS);
         setSaveConfirmOpen(false);
       }
+      onUnlockPresetSaved?.(vault.id, nextPreset);
     } catch (caught) {
       if (!rewrapStillCurrent(generation)) return;
       clearRewrapRun();
       recordRewrapFailure(vault.id, "kdf", caught);
     }
   }, [
-    baseline,
     beginRewrap,
     clearRewrapRun,
     kdfCanSubmit,
     kdfFields,
-    onSaved,
+    onUnlockPresetSaved,
     recordRewrapFailure,
     resetKdfForm,
     rewrapStillCurrent,
@@ -939,6 +939,7 @@ export function VaultSettingsModal({
   };
 
   const handleSaveClick = () => {
+    if (settingsSaveBlocked) return;
     if (!activeArea || !areaDirty || busy) return;
     if (activeArea === "preferences" && draft) {
       const validation = validateDisplayName(draft.vault.display_name);
@@ -953,6 +954,7 @@ export function VaultSettingsModal({
   };
 
   const handleConfirmSave = () => {
+    if (settingsSaveBlocked) return;
     if (!activeArea || busy) return;
     if (activeArea === "preferences") {
       void persistPreferences();
@@ -979,7 +981,10 @@ export function VaultSettingsModal({
     (activeArea === "password" && passwordRewrapRunning) ||
     (activeArea === "kdf" && kdfRewrapRunning);
   const failureForArea =
-    rewrapFailure && vault && rewrapFailure.vaultId === vault.id && rewrapFailure.kind === activeArea
+    rewrapFailure &&
+    vault &&
+    rewrapFailure.vaultId === vault.id &&
+    rewrapFailure.kind === activeArea
       ? rewrapFailure
       : null;
   const passwordFieldError = failureForArea?.onPasswordField ? failureForArea.message : null;
@@ -1000,6 +1005,7 @@ export function VaultSettingsModal({
           : t("modal.settings.save");
 
   const saveDisabled =
+    settingsSaveBlocked ||
     busy ||
     !areaDirty ||
     mountPathIssue ||
@@ -1153,7 +1159,6 @@ export function VaultSettingsModal({
               storageModeLocked={storageModeLocked}
               displayNameLocked={displayNameLocked}
               mountLocked={mountLocked}
-              securityModeLocked={securityModeLocked}
               vaultRootPath={vaultRootPathForWorkspaceValidation(
                 appSettings.app.vault_root_mode,
                 appSettings.app.upriv_root_path,

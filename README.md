@@ -86,8 +86,8 @@ npm run electron:build
 
 | Artifact | Use |
 |----------|-----|
-| **`.deb`** | Ubuntu / Debian install (preferred — no FUSE) |
-| **`.AppImage`** | Portable; needs libfuse |
+| **`.deb`** | Ubuntu / Debian install (preferred; does not install `fuse3`) |
+| **`.AppImage`** | Portable; starts without system `libfuse2` |
 
 ### Desktop (Windows)
 

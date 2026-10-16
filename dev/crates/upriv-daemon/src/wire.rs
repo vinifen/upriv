@@ -54,17 +54,19 @@ pub fn is_argon2_bound_method(method: &str, _params: &Value) -> bool {
 }
 
 /// Close, delete, and backup download. Own worker so a lock is not stuck
-/// behind a multi-minute import or export.
+/// behind a multi-minute import, export, or rewrap.
 pub fn is_lifecycle_io_method(method: &str) -> bool {
     matches!(
         method,
-        "vault_close"
-            | "vault_delete"
-            | "backup_get"
-            | "vault_discard_import"
-            | "vault_change_password"
-            | "vault_change_kdf"
+        "vault_close" | "vault_delete" | "backup_get" | "vault_discard_import"
     )
+}
+
+/// Password and unlock-RAM change. Own worker: the safety zip of `store/`
+/// must not sit ahead of another vault's close. Argon2 inside the call still
+/// takes `with_unlock_lock` only for the derive.
+pub fn is_rewrap_io_method(method: &str) -> bool {
+    matches!(method, "vault_change_password" | "vault_change_kdf")
 }
 
 /// Zip and `.7z` import, and portable export.
@@ -87,7 +89,10 @@ pub fn is_import_io_method(method: &str) -> bool {
 
 /// Long contents I/O that would stall stdin if run inline.
 pub fn is_long_io_method(method: &str, _params: &Value) -> bool {
-    is_lifecycle_io_method(method) || is_pack_io_method(method) || is_import_io_method(method)
+    is_lifecycle_io_method(method)
+        || is_rewrap_io_method(method)
+        || is_pack_io_method(method)
+        || is_import_io_method(method)
 }
 
 /// Which off-stdin worker runs this method.
@@ -97,6 +102,7 @@ pub fn is_long_io_method(method: &str, _params: &Value) -> bool {
 pub enum HeavyLane {
     Argon2,
     Lifecycle,
+    Rewrap,
     Pack,
     Import,
 }
@@ -107,6 +113,9 @@ pub fn heavy_lane(method: &str, params: &Value) -> Option<HeavyLane> {
     }
     if is_lifecycle_io_method(method) {
         return Some(HeavyLane::Lifecycle);
+    }
+    if is_rewrap_io_method(method) {
+        return Some(HeavyLane::Rewrap);
     }
     if is_import_io_method(method) {
         return Some(HeavyLane::Import);
@@ -167,10 +176,24 @@ mod tests {
         assert!(is_long_io_method("vault_import_zip", &empty));
         assert!(is_long_io_method("vault_import_7z", &empty));
         assert!(is_lifecycle_io_method("vault_close"));
-        assert!(is_lifecycle_io_method("vault_change_password"));
-        assert!(is_lifecycle_io_method("vault_change_kdf"));
+        assert!(!is_lifecycle_io_method("vault_change_password"));
+        assert!(!is_lifecycle_io_method("vault_change_kdf"));
+        assert!(is_rewrap_io_method("vault_change_password"));
+        assert!(is_rewrap_io_method("vault_change_kdf"));
         assert!(!is_argon2_bound_method("vault_change_password", &empty));
         assert!(!is_argon2_bound_method("vault_change_kdf", &empty));
+        assert_eq!(
+            heavy_lane("vault_change_password", &empty),
+            Some(HeavyLane::Rewrap)
+        );
+        assert_eq!(
+            heavy_lane("vault_change_kdf", &empty),
+            Some(HeavyLane::Rewrap)
+        );
+        assert_ne!(
+            heavy_lane("vault_close", &empty),
+            heavy_lane("vault_change_password", &empty)
+        );
         assert!(is_lifecycle_io_method("vault_delete"));
         assert!(is_lifecycle_io_method("backup_get"));
         assert_eq!(

@@ -1304,7 +1304,6 @@ dependencies = [
  "argon2",
  "base64",
  "chacha20poly1305",
- "fuser",
  "hkdf",
  "libc",
  "rand",
@@ -1316,6 +1315,7 @@ dependencies = [
  "thiserror 2.0.18",
  "toml 0.8.23",
  "unicode-normalization",
+ "upriv-fuse-abi",
  "uuid",
  "zeroize",
  "zip",
@@ -1342,6 +1342,22 @@ dependencies = [
  "upriv-core",
  "upriv-rpc",
  "zeroize",
+]
+
+[[package]]
+name = "upriv-fuse"
+version = "0.2.2-beta"
+dependencies = [
+ "fuser",
+ "libc",
+ "upriv-fuse-abi",
+]
+
+[[package]]
+name = "upriv-fuse-abi"
+version = "0.2.2-beta"
+dependencies = [
+ "libc",
 ]
 
 [[package]]

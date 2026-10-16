@@ -1,5 +1,11 @@
 import type { VaultListItem } from "./types";
 
+/** An idle lock stays visible across a list refresh until the vault is open again. */
+function carryAutoClosed(row: VaultListItem, previous: VaultListItem | undefined): VaultListItem {
+  if (!previous?.autoClosed || row.session != null) return row;
+  return { ...row, autoClosed: true };
+}
+
 function keepLocalSession(row: VaultListItem, previous: VaultListItem): VaultListItem {
   return {
     ...row,
@@ -37,25 +43,26 @@ export function mergeVaultListSnapshot(
 
     // Renderer-only `closing` must survive until `revealClosed`, regardless of
     // whether core still reports open or has already dropped the session.
+    let chosen: VaultListItem;
     if (previous.session === "closing" && row.session !== "closing") {
-      return keepLocalSession(row, previous);
-    }
-
-    if (previous.session === "open" && row.session === "open") {
-      return {
+      chosen = keepLocalSession(row, previous);
+    } else if (previous.session === "open" && row.session === "open") {
+      chosen = {
         ...row,
         lastAccessedAt: previous.lastAccessedAt || row.lastAccessedAt,
         lastAccessedWhen: previous.lastAccessedWhen || row.lastAccessedWhen,
       };
+    } else {
+      const writtenAt = sessionWrites.get(row.id) ?? 0;
+      if (writtenAt <= fetchStartedAt) {
+        chosen = row;
+      } else if (previous.session === "open" || previous.session === "closing") {
+        chosen = keepLocalSession(row, previous);
+      } else {
+        chosen = { ...row, session: previous.session };
+      }
     }
-
-    const writtenAt = sessionWrites.get(row.id) ?? 0;
-    if (writtenAt <= fetchStartedAt) return row;
-
-    if (previous.session === "open" || previous.session === "closing") {
-      return keepLocalSession(row, previous);
-    }
-    return { ...row, session: previous.session };
+    return carryAutoClosed(chosen, previous);
   });
 
   for (const previous of current) {

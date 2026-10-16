@@ -1,4 +1,4 @@
-# Vault config — storage, security, backup, 7z, policies
+# Vault config — storage, security, backup, 7z
 # Example — upriv_plain: plaintext workspace while open; rest = store/
 
 [vault]
@@ -17,23 +17,14 @@ enabled = false
 mode = "keep_last"
 
 [security]
-# Session — password retention (PRD §4); disk modes allowed in all storage modes
-mode = "disk_open_close"
-secure_wipe_workspace = true
 wipe_passes = 1
 wipe_pattern = "random"
 
 [auto_close]
 enabled = false
 idle_minutes = 30
-warn_before_seconds = 120
-close_on_app_exit = false
 
 [seven_zip]
 encrypt_file_names = true
 archive_mode = "encrypt_only"
 
-[policy]
-allow_external_editors = true
-disallow_copy_outside_mount = false
-require_unmount_on_sleep = false

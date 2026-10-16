@@ -4,7 +4,6 @@ export { VaultChangePasswordFields } from "./VaultChangePasswordFields";
 export { VaultChangeKdfFields } from "./VaultChangeKdfFields";
 export {
   PolicyRadioOption,
-  SecurityModeRadioGroup,
   settingsControlClass,
   SettingsField,
   SettingsFormGrid,
@@ -14,11 +13,8 @@ export {
   VaultSettingsDangerZoneSection,
   VaultSettingsKdfSection,
   VaultSettingsMountSection,
-  VaultSettingsPolicySection,
-  VaultSettingsSecuritySection,
   VaultSettingsSevenZipSection,
   VaultSettingsStorageSection,
   VaultSettingsVaultSection,
   VaultSettingsGroupSection,
 } from "./vaultSettingsForm";
-export type { SecurityModeRadioGroupProps } from "./vaultSettingsForm";

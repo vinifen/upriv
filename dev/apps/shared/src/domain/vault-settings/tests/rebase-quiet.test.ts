@@ -24,7 +24,6 @@ describe("rebaseQuietLockedVaultSettings", () => {
       ...baseline,
       vault: { ...baseline.vault, display_name: "Renamed", note: "keep" },
       storage: { mode: "upriv_plain" as const },
-      security: { ...baseline.security, mode: "always_prompt" as const },
       mount: {
         ...vaultWorkspace(),
         custom_file_manager_folder: true,
@@ -35,7 +34,6 @@ describe("rebaseQuietLockedVaultSettings", () => {
     expect(rebased.vault.display_name).toBe("Notes");
     expect(rebased.vault.note).toBe("keep");
     expect(rebased.storage.mode).toBe("encrypted_dir");
-    expect(rebased.security.mode).toBe("session_ram");
     expect(rebased.mount.linux.path).toBe("");
   });
 

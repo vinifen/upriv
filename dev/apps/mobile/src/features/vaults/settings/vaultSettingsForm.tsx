@@ -3,6 +3,8 @@ import { Platform, StyleSheet, Text, View } from "react-native";
 import {
   KDF_UNLOCK_OPTION_META,
   KDF_UNLOCK_PRESETS,
+  IDLE_AUTO_CLOSE_MINUTES_MAX,
+  IDLE_AUTO_CLOSE_MINUTES_MIN,
   VAULT_DISPLAY_NAME_MAX_LENGTH,
   VAULT_NOTE_MAX_LENGTH,
   VAULT_PASSWORD_HINT_MAX_LENGTH,
@@ -11,16 +13,11 @@ import {
   workspaceSystemHasShortcut,
   appWorkspace,
   appWorkspacePlace,
-  securityModeToUi,
-  securityUiModesForStorage,
-  storageModeIsPlaintext,
-  uiToSecurityMode,
   validateWorkspaceTable,
   vaultSettingsPreferenceSections,
   workspacePathIssueI18nKey,
   type KdfUnlockPreset,
   type PolicyRadioBadge,
-  type SecurityUiMode,
   type StorageMode,
   type VaultGroup,
   type VaultSettingsConfig,
@@ -69,31 +66,12 @@ const STORAGE_WARNING: Partial<Record<StorageMode, I18nKey>> = {
   upriv_plain: "warning.upriv_plain",
 };
 
-function securityOptionMeta(uiMode: SecurityUiMode): {
-  badge?: PolicyRadioBadge;
-  tone?: "default" | "less-secure" | "insecure";
-} {
-  switch (uiMode) {
-    case "session_ram":
-      return { badge: "recommended" };
-    case "prompt_open_close":
-      return { badge: "more-secure" };
-    case "disk_close":
-      return { badge: "less-secure", tone: "less-secure" };
-    case "disk_open_close":
-      return { badge: "insecure", tone: "insecure" };
-    default:
-      return {};
-  }
-}
-
 interface VaultSettingsFormProps {
   draft: VaultSettingsConfig;
   patchDraft: PatchDraft;
   storageModeLocked?: boolean;
   displayNameLocked?: boolean;
   mountLocked?: boolean;
-  securityModeLocked?: boolean;
   /** Resolved vault-root for reserved mount-path checks. */
   vaultRootPath?: string | null;
   onPathIssueChange?: (issue: WorkspacePathIssue | null) => void;
@@ -108,7 +86,6 @@ export function VaultSettingsForm({
   storageModeLocked = false,
   displayNameLocked = false,
   mountLocked = false,
-  securityModeLocked = false,
   vaultRootPath = null,
   onPathIssueChange,
   appWorkspace: appFolders = appWorkspace(),
@@ -120,7 +97,6 @@ export function VaultSettingsForm({
     storageModeLocked,
     displayNameLocked,
     mountLocked,
-    securityModeLocked,
     hiddenLocked,
   };
 
@@ -130,7 +106,6 @@ export function VaultSettingsForm({
         <SettingsAccordionSection
           key={sectionId}
           title={t(`modal.settings.section.${sectionId}` as I18nKey)}
-          defaultOpen={sectionId === "vault"}
         >
           {renderSection(
             sectionId,
@@ -156,7 +131,6 @@ function renderSection(
     storageModeLocked: boolean;
     displayNameLocked: boolean;
     mountLocked: boolean;
-    securityModeLocked: boolean;
     hiddenLocked: boolean;
   },
   vaultRootPath: string | null,
@@ -197,35 +171,12 @@ function renderSection(
       return (
         <AutoCloseSection
           autoClose={draft.auto_close}
-          secureWipe={draft.security.secure_wipe_workspace}
-          requireUnmountOnSleep={draft.policy.require_unmount_on_sleep}
           onAutoCloseChange={(patch) => patchDraft("auto_close", patch)}
-          onSecureWipeChange={(secure_wipe_workspace) =>
-            patchDraft("security", { secure_wipe_workspace })
-          }
-          onRequireUnmountOnSleepChange={(require_unmount_on_sleep) =>
-            patchDraft("policy", { require_unmount_on_sleep })
-          }
         />
       );
     case "backup":
       return (
         <BackupSection config={draft.backup} onChange={(patch) => patchDraft("backup", patch)} />
-      );
-    case "security":
-      return (
-        <SecuritySection
-          storageMode={draft.storage.mode}
-          config={draft.security}
-          passwordHint={draft.vault.password_hint}
-          securityModeLocked={locks.securityModeLocked}
-          onChange={(patch) => patchDraft("security", patch)}
-          onPasswordHintChange={(password_hint) => patchDraft("vault", { password_hint })}
-        />
-      );
-    case "policy":
-      return (
-        <PolicySection config={draft.policy} onChange={(patch) => patchDraft("policy", patch)} />
       );
     default:
       return null;
@@ -264,6 +215,13 @@ function VaultSection({
       <FieldLabel>{t("modal.settings.field.vault.order")}</FieldLabel>
       <FieldHint>{t("modal.settings.field.vault.order_help")}</FieldHint>
       <IntegerInput min={0} value={config.order} onChange={(order) => onChange({ order })} />
+      <FieldLabel>{t("modal.settings.password_hint")}</FieldLabel>
+      <FieldHint>{t("modal.settings.field.vault.password_hint_help")}</FieldHint>
+      <ThemedInput
+        value={config.password_hint}
+        maxLength={VAULT_PASSWORD_HINT_MAX_LENGTH}
+        onChangeText={(password_hint) => onChange({ password_hint })}
+      />
       <FieldLabel>{t("modal.settings.note")}</FieldLabel>
       <FieldHint>
         {t("modal.settings.field.vault.note_help", { max: String(VAULT_NOTE_MAX_LENGTH) })}
@@ -597,32 +555,15 @@ function CurrentVaultFolderChoices({
 
 function AutoCloseSection({
   autoClose,
-  secureWipe,
-  requireUnmountOnSleep,
   onAutoCloseChange,
-  onSecureWipeChange,
-  onRequireUnmountOnSleepChange,
 }: {
   autoClose: VaultSettingsConfig["auto_close"];
-  secureWipe: boolean;
-  requireUnmountOnSleep: boolean;
   onAutoCloseChange: (patch: Partial<VaultSettingsConfig["auto_close"]>) => void;
-  onSecureWipeChange: (secureWipe: boolean) => void;
-  onRequireUnmountOnSleepChange: (requireUnmountOnSleep: boolean) => void;
 }) {
   const { t } = useTranslation();
 
   return (
     <View style={styles.fields}>
-      <SwitchRow
-        label={t("modal.settings.field.close.secure_wipe")}
-        value={secureWipe}
-        onValueChange={onSecureWipeChange}
-      />
-      {!secureWipe ? (
-        <FieldHint>{t("modal.settings.field.close.secure_wipe_warn")}</FieldHint>
-      ) : null}
-
       <SwitchRow
         label={t("modal.settings.field.auto_close.enabled")}
         value={autoClose.enabled}
@@ -631,29 +572,15 @@ function AutoCloseSection({
       <FieldLabel disabled={!autoClose.enabled}>
         {t("modal.settings.field.auto_close.idle_minutes")}
       </FieldLabel>
+      <FieldHint disabled={!autoClose.enabled}>
+        {t("modal.settings.field.auto_close.idle_minutes_help")}
+      </FieldHint>
       <IntegerInput
-        min={1}
-        max={1440}
+        min={IDLE_AUTO_CLOSE_MINUTES_MIN}
+        max={IDLE_AUTO_CLOSE_MINUTES_MAX}
         disabled={!autoClose.enabled}
         value={autoClose.idle_minutes}
         onChange={(idle_minutes) => onAutoCloseChange({ idle_minutes })}
-      />
-      <FieldLabel disabled={!autoClose.enabled}>
-        {t("modal.settings.field.auto_close.warn_before_seconds")}
-      </FieldLabel>
-      <IntegerInput
-        min={0}
-        max={300}
-        disabled={!autoClose.enabled}
-        value={autoClose.warn_before_seconds}
-        onChange={(warn_before_seconds) => onAutoCloseChange({ warn_before_seconds })}
-      />
-
-      <SwitchRow
-        label={t("modal.settings.field.close.require_unmount_on_sleep")}
-        hint={t("modal.settings.field.close.require_unmount_on_sleep_help")}
-        value={requireUnmountOnSleep}
-        onValueChange={onRequireUnmountOnSleepChange}
       />
     </View>
   );
@@ -705,65 +632,6 @@ function BackupSection({
   );
 }
 
-function SecuritySection({
-  storageMode,
-  config,
-  passwordHint,
-  onChange,
-  onPasswordHintChange,
-  securityModeLocked = false,
-}: {
-  storageMode: StorageMode;
-  config: VaultSettingsConfig["security"];
-  passwordHint: string;
-  onChange: (patch: Partial<VaultSettingsConfig["security"]>) => void;
-  onPasswordHintChange: (passwordHint: string) => void;
-  securityModeLocked?: boolean;
-}) {
-  const { t } = useTranslation();
-  const selectedUi = securityModeToUi(config.mode);
-  const modes = securityUiModesForStorage(storageMode);
-  return (
-    <View style={styles.fields}>
-      <FieldLabel disabled={securityModeLocked}>
-        {t("modal.settings.field.security.mode")}
-      </FieldLabel>
-      <FieldHint disabled={securityModeLocked}>
-        {securityModeLocked
-          ? t(requireVaultConfigEditLockedI18nKey("security.mode"))
-          : storageModeIsPlaintext(storageMode)
-            ? t("modal.settings.field.security.mode_help_plain")
-            : t("modal.settings.field.security.mode_help")}
-      </FieldHint>
-      <RadioGroup>
-        {modes.map((uiMode) => {
-          const meta = securityOptionMeta(uiMode);
-          return (
-            <PolicyRadioOption
-              key={uiMode}
-              value={uiMode}
-              checked={selectedUi === uiMode}
-              disabled={securityModeLocked}
-              title={t(`modal.settings.option.security.${uiMode}` as I18nKey)}
-              description={t(`modal.settings.option.security.${uiMode}_desc` as I18nKey)}
-              badge={meta.badge}
-              tone={meta.tone}
-              onSelect={() => onChange({ mode: uiToSecurityMode(uiMode) })}
-            />
-          );
-        })}
-      </RadioGroup>
-      <FieldLabel>{t("modal.settings.password_hint")}</FieldLabel>
-      <FieldHint>{t("modal.settings.field.security.password_hint_help")}</FieldHint>
-      <ThemedInput
-        value={passwordHint}
-        maxLength={VAULT_PASSWORD_HINT_MAX_LENGTH}
-        onChangeText={onPasswordHintChange}
-      />
-    </View>
-  );
-}
-
 export function KdfSection({
   config,
   onChange,
@@ -805,65 +673,6 @@ export function KdfSection({
       {!choosesPreset ? (
         <FieldHint>{t("modal.settings.field.kdf.import_package")}</FieldHint>
       ) : null}
-    </View>
-  );
-}
-
-function PolicySection({
-  config,
-  onChange,
-}: {
-  config: VaultSettingsConfig["policy"];
-  onChange: (patch: Partial<VaultSettingsConfig["policy"]>) => void;
-}) {
-  const { t } = useTranslation();
-  const externalBlockCopy = config.allow_external_editors && config.disallow_copy_outside_mount;
-  return (
-    <View style={styles.fields}>
-      <FieldLabel>{t("modal.settings.field.policy.external_editors")}</FieldLabel>
-      <FieldHint>{t("modal.settings.field.policy.external_editors_help")}</FieldHint>
-      <RadioGroup>
-        <PolicyRadioOption
-          value="no"
-          checked={!config.allow_external_editors}
-          title={t("modal.settings.option.policy.external_editors_no")}
-          description={t("modal.settings.option.policy.external_editors_no_desc")}
-          badge="recommended"
-          onSelect={() => onChange({ allow_external_editors: false })}
-        />
-        <PolicyRadioOption
-          value="yes"
-          checked={config.allow_external_editors}
-          title={t("modal.settings.option.policy.external_editors_yes")}
-          description={t("modal.settings.option.policy.external_editors_yes_desc")}
-          badge="less-secure"
-          tone="less-secure"
-          onSelect={() => onChange({ allow_external_editors: true })}
-        />
-      </RadioGroup>
-      <FieldLabel>{t("modal.settings.field.policy.copy_outside")}</FieldLabel>
-      <FieldHint>{t("modal.settings.field.policy.copy_outside_help")}</FieldHint>
-      <RadioGroup>
-        <PolicyRadioOption
-          value="block"
-          checked={config.disallow_copy_outside_mount}
-          title={t("modal.settings.option.policy.copy_block")}
-          description={t("modal.settings.option.policy.copy_block_desc")}
-          badge="recommended"
-          onSelect={() => onChange({ disallow_copy_outside_mount: true })}
-        />
-        <PolicyRadioOption
-          value="allow"
-          checked={!config.disallow_copy_outside_mount}
-          title={t("modal.settings.option.policy.copy_allow")}
-          description={t("modal.settings.option.policy.copy_allow_desc")}
-          badge="less-secure"
-          tone="less-secure"
-          onSelect={() => onChange({ disallow_copy_outside_mount: false })}
-        />
-      </RadioGroup>
-      {config.allow_external_editors ? <FieldHint>{t("warning.external_editor")}</FieldHint> : null}
-      {externalBlockCopy ? <FieldHint>{t("warning.policy.external_block_copy")}</FieldHint> : null}
     </View>
   );
 }

@@ -56,11 +56,7 @@ export function VaultChangeKdfFields({
         {t("warning.kdf_change_backups")}
       </p>
 
-      <SettingsField
-        label={t("vault.change_kdf.current")}
-        htmlFor={passwordId}
-        disabled={locked}
-      >
+      <SettingsField label={t("vault.change_kdf.current")} htmlFor={passwordId} disabled={locked}>
         <PasswordInput
           id={passwordId}
           value={fields.password}

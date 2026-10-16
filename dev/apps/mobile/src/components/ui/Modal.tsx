@@ -26,6 +26,7 @@ import {
 import { useTheme } from "@/theme";
 import { MODAL_MAX_HEIGHT_RATIO, modalShadow, radii, spacing } from "@/theme/tokens";
 import { useTranslation } from "@/i18n";
+import { noteIdleActivity } from "@/lib/idleActivity";
 import { DropdownOverlayProvider } from "./DropdownOverlayHost";
 import { ScrimDismiss } from "./ScrimDismiss";
 
@@ -240,7 +241,13 @@ export function Modal({
         behavior={Platform.OS === "ios" ? "padding" : undefined}
       >
         <DropdownOverlayProvider>
-          <View style={styles.root}>
+          <View
+            style={styles.root}
+            onStartShouldSetResponderCapture={() => {
+              noteIdleActivity();
+              return false;
+            }}
+          >
             <Animated.View
               pointerEvents="none"
               style={[StyleSheet.absoluteFill, { backgroundColor: colors.modalScrim, opacity }]}

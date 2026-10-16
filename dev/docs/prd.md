@@ -117,9 +117,9 @@ encrypted_dir / upriv_plain:
 |-------|--------|
 | 1 | **Open:** decrypt `store/` into the plaintext folder (required path). |
 | 2 | **Edit:** real files on disk (UI warning). |
-| 3 | **Lock:** always **close** → encrypt workspace into `store/` → **`secure_wipe_workspace`** → **`closed`**. |
+| 3 | **Lock:** always **close** → encrypt workspace into `store/` → overwrite the plaintext folder, then remove it → **`closed`**. |
 
-**Accepted trade-off (v1):** after reboot, the user **must re-enter the password** to open again (default `session_ram`). Data in `store/` is not lost. Crash while `upriv_plain` is **open** leaves plaintext on disk until close/wipe.
+**Accepted trade-off (v1):** after reboot, the user **must re-enter the password** to open again. Data in `store/` is not lost. Crash while `upriv_plain` is **open** leaves plaintext on disk until close/wipe.
 
 **Export (separate action):** user chooses `.zip` of `store/` (Recommended) or portable `.7z`. **This vault must be closed** (other vaults may stay open). File zip/7z import and create-from-backup copy a frozen tree; they do not require the source vault closed. `.7z` never stores `.enc` blobs; zip envelope has **no** zip password.
 
@@ -132,7 +132,7 @@ encrypted_dir / upriv_plain:
 | 3 | Direct writes to `workspace/` on HD (`encrypted_dir`) | **Virtual** mount (FUSE/WinFsp) or in-app FM; tests that forbid persistent plaintext |
 | 4 | Plaintext temp when exporting `.7z` | Pack in process with `sevenz-rust2`; never stage a decrypted tree |
 | 5 | Swap/hibernation | **Minimize** swap of sensitive buffers (`mlock`, RAM buffers); do not promise 100% on all OSes |
-| 6 | External apps (Word, etc.) | Editing via mount allowed; warn about copies in `%TEMP%`; "internal editor only" option for critical files |
+| 6 | External apps (Word, etc.) | The file manager folder is the switch. Off keeps the files in Upriv. On is a folder on this computer, and apps that can see that path can read the files |
 | 7 | Encrypted traces on SSD | Ciphertext in `store/` / `backups/`; `upriv_plain` wipe is best-effort on flash |
 | 8 | Two PCs on same HD | `runtime/<id>.lock` + warning; simultaneous use remains user responsibility |
 | 9 | `plain` mode | Strong UI warning; wipe on close (documented SSD limits) |
@@ -207,9 +207,9 @@ encrypted_dir / upriv_plain:
 | RF-02 | Open vault (`encrypted_dir` default): validate password, mount the file manager folder when it is on, load encrypted store | P0 |
 | RF-03 | Expose `workspace` to user (button `action.open_folder` → OS file manager) | P0 |
 | RF-04 | Close vault (`encrypted_dir`): unmount the file manager folder, flush session into `store/` using **session keys** (not a newly typed password), clear session keys. Default lock has **no password prompt** | P0 |
-| RF-04h | `upriv_plain` mode: rest = `store/`; while open plaintext `workspace/`; UI **`warning.upriv_plain`** + badge **insecure**; lock always **close** + wipe workspace → `closed`. UI confirms wipe; password only if `always_prompt` | P1 |
+| RF-04h | `upriv_plain` mode: rest = `store/`; while open plaintext `workspace/`; UI **`warning.upriv_plain`** + badge **insecure**; lock always **close** + wipe workspace → `closed`. UI confirms the wipe. Lock does not ask for the password | P1 |
 | RF-04c | (`encrypted_dir`) Require sufficient RAM for the **entire unlocked vault** while open; fail open/edit/close with user-visible error if not; UI **`warning.encrypted_dir_ram`** (RF-UI-17) | P0 |
-| RF-05 | On close: verify **open session / `vault.header`** before backup or flush — failure aborts; `store/` unchanged. Do **not** rewrap the header from a typed close password. Optional `always_prompt` re-asks as a **presence check** against that session only | P0 |
+| RF-05 | On close: verify **open session / `vault.header`** before backup or flush — failure aborts; `store/` unchanged. Flush uses the open session keys. Lock does not ask for the password and does not rewrap the header | P0 |
 | RF-06 | Atomic write of `store/` (header + index + chunks); never a durable `.7z` twin beside `store/` | P0 |
 | RF-07 | Backup on close: Stored zip of `store/` at `backups/<stamp>-<id>.zip` if `[backup] enabled` (no zip password). `skip_unchanged` (default on) skips the zip when vault files match the last backup still on disk; file-manager layout is not a change | P1 |
 | RF-07b | Modes: `keep_last` (only latest backup) or `keep_all` (history) | P1 |
@@ -236,37 +236,34 @@ encrypted_dir / upriv_plain:
 | RF-20 | `settings.toml` (`[package]`, `[ui]`, `[app]`; Upriv marker) | P0 |
 | RF-21 | `config/*.toml` per vault (security, 7z, backup, auto-close) — **editable after creation** | P0 |
 | RF-22 | Secure defaults if config files missing (`archive_mode` = `encrypt_only`, etc.) | P0 |
-| RF-23 | Configurable password/session retention modes (see §4) | P1 |
 | RF-24 | Never persist password in plaintext in vault files | P0 |
 | RF-24b | **Password hint** may be stored in plaintext in `config.toml` (user-provided reminder only); UI warns it must not repeat the password | P0 |
-| RF-58 | **Change password** (vault settings / Security UI): require **current** + new + confirm; works with vault **open or closed**; `upriv-core` validates current password, re-encrypts main archive and store (RAM/temp pipeline), atomically replaces files | P1 |
+| RF-58 | **Change password** (vault settings): current + new + confirm; vault must be **closed**. Verify the current password, write a backup zip of `store/` first, keep the same master key, and reseal the header and the name index only. File blobs stay. The same password is rejected. Unlock RAM uses the same closed-vault path (`vault_change_kdf`) | P1 |
 | RF-59 | On change password: **warn** (`warning.password_change_backups`) that existing `backups/` keep the **previous** password(s); `store/` and **future** backups use the new password | P1 |
 | RF-25 | **Vault config editable at any time** (app UI or edit `config/<id>.toml`) — not a "create and never change" model | P0 |
 | RF-26 | App **reloads** TOML on startup, on vault focus, and when file changes (idempotent reload) | P0 |
-| RF-27 | Changes to `[seven_zip]`, `[backup]`, `[auto_close]`, `[security]` apply on **next** relevant cycle (close/open), with UI warning if vault is open | P0 |
+| RF-27 | `[seven_zip]`, `[backup]`, and `[security]` apply on the next close. `[auto_close]` is read again while open (about 15 s) and keeps the current idle clock | P0 |
 | RF-28 | Changing `id` requires **explicit migration** (vault closed); silent rename forbidden with an open session | P1 |
 
-**Product principle:** creating a vault defines initial layout; **all behavior options** (`archive_mode`, backup, auto-close, session, etc.) remain **reconfigurable** for the vault's lifetime.
+**Product principle:** creating a vault defines initial layout; **behavior options** (`archive_mode`, backup, auto-close) remain **reconfigurable** for the vault's lifetime.
 
 ### 3.3 Security and UX
 
 | ID | Requirement | Priority |
 |----|-----------|------------|
-| RF-30 | Password in RAM during session (default mode); zero on close | P0 |
+| RF-30 | Session keys in RAM while open; zero on close. Lock does not ask for the password | P0 |
 | RF-31 | Conservative 7z parameters in both modes: `-mhe=on`, AES-256, `-ms=off` | P0 |
 | RF-31b | Per vault: compression on close — UI presets **none / low / medium / high** mapping to `archive_mode` + `compression_level` (`encrypt_only`+0 / `compress_encrypt`+1/5/9); **default none (`encrypt_only`)** | P1 |
 | RF-32 | Warning on exit with vault open | P1 |
-| RF-33 | Session security levels (5 modes) — see SDD | P2 |
-| RF-34 | `session.enc` for disk modes (encrypted session key, not password) | P2 |
-| RF-34b | `session.enc` (encrypted session key, never plaintext password) allowed in **both** storage modes when user picks `disk_close` or `disk_open_close`; default remains `session_ram`; UI badges less-secure / insecure | P0 |
+| RF-33 | Session keys stay in RAM. Lock flushes with those keys | P0 |
 | RF-35 | **Auto-close per vault:** `[auto_close]` in `config/<id>.toml` | P1 |
-| RF-36 | Auto-close after `idle_minutes` without activity on open vault | P1 |
-| RF-37 | Activity = app UI + changes in the file manager folder (virtual filesystem watch) | P1 |
-| RF-38 | Optional `warn_before_seconds` warning before auto-close | P2 |
+| RF-36 | Auto-close after `idle_minutes` with no activity inside Upriv. The clock is the device time. The interval is 1 to 1440 minutes. One vault failing does not reset the others | P1 |
+| RF-37 | Activity that resets the clock is input inside Upriv. Focus, returning to the app, and edits in the mounted folder do not reset it | P1 |
+| RF-38 | One notice 60 seconds before idle auto-close (30 seconds when idle is 1 minute). Fixed; not a vault setting | P2 |
 | RF-39 | Auto-close uses the same close as a user close: flush `store/`, unmount, drop the session. No `.7z` pack | P0 |
 | RF-40 | Global default: `enabled = false` if section missing | P0 |
-| RF-41 | **`secure_wipe_workspace`** (`upriv_plain`): on close/discard, overwrite plaintext files before delete | P1 |
-| RF-42 | Default `secure_wipe_workspace = true` in exception mode; configurable `wipe_passes` (1–3 on HD) | P1 |
+| RF-41 | `upriv_plain` close and discard overwrite the plaintext folder before delete | P1 |
+| RF-42 | Plaintext close always does that overwrite. Pass count is a hidden default of 1, not a screen | P1 |
 | RF-43 | Wipe also on recovery **DiscardWorkspace** in exception mode | P1 |
 | RF-44 | Document limit: SSD/flash **do not** guarantee physical wipe in exception mode | P1 |
 | RF-45 | (`encrypted_dir`) Flush / export `.7z` using **logical content stream** (do not pack `.enc` blobs; no plaintext temp) | P0 |
@@ -277,7 +274,7 @@ encrypted_dir / upriv_plain:
 | RF-49b | **Write-through:** every committed write via mount persists immediately to `store/`; what user saves in session is not "RAM only" | P0 |
 | RF-50 | Export `.7z`: in-process `sevenz-rust2` pack of logical content. Fail with insufficient RAM instead of a plaintext temp | P1 |
 | RF-51 | **Minimize swap** of session data buffers (`mlock` / per-OS policies where supported) | P1 |
-| RF-52 | **External editor policy:** allow editing via mount; warn temp-outside-vault risk; option to restrict to integrated editor | P1 |
+| RF-52 | Who can open files while the vault is open is the file manager folder. Off keeps them in Upriv. On is a folder on this computer; apps that can see that path can read the files. No separate copy-out block | P1 |
 | RF-53 | **Lock = close** for both modes → **`closed`** (`store/` at rest). **`upriv_plain`** also wipes workspace. | P0 |
 | RF-53b | **`persistence.json`:** `persistence: "closed"` only (never `open`). Session is runtime: `"open" \| "closing" \| "recovery"`. UI `vault.status.open` = runtime only | P0 |
 | RF-53c | Lock UI is **`action.lock` / `action.close` only** | P0 |
@@ -325,14 +322,14 @@ While a vault is **open**, plaintext exists only in **session RAM** (desktop: FU
 | No persistent plaintext workspace in `encrypted_dir` | OS swap/hibernation |
 | `store/` always encrypted at rest | External app cache/temp |
 | File and folder names encrypted in the store (AES-SIV index; opaque `data/` blobs — forensic tools cannot map blobs to logical paths without the password) | Registry metadata still visible (`display_name`, vault folder id) |
-| No remember-password on HD except explicit disk memory modes | Compromised host (keylogger) |
+| Password stays in session RAM and is never written to disk | Compromised host (keylogger) |
 | Export streams logical content or copies ciphertext; never stages a decrypted tree | Last write if power loss during write |
-| Close + optional `secure_wipe_workspace` (`upriv_plain`) | Old encrypted versions on SSD |
+| Close of `upriv_plain` overwrites the plaintext folder, then removes it | Old encrypted versions on SSD |
 | Swap minimization (RF-51) | 100% anti-swap on all OSes (platform limitation) |
 
 **Encrypted traces on SSD:** do not expose content without the password; old ciphertext versions may remain until rotation — acceptable for confidentiality, document in UI.
 
-**Exception mode `upriv_plain`:** plaintext `workspace/` on HD **while open**; mitigation = UI warning + `secure_wipe_workspace` on close (RF-41–44). Never use that path as a helper for `encrypted_dir`.
+**Exception mode `upriv_plain`:** plaintext `workspace/` on HD **while open**; mitigation = UI warning + overwrite of that folder on close (RF-41–44). Never use that path as a helper for `encrypted_dir`.
 
 ### 3.5 Platforms
 
@@ -439,10 +436,9 @@ Opened by **`action.backups`** on vault row.
 Opened by **`action.settings`** on vault row.
 
 - Edits vault `config.toml` via a **subset** of sections (RF-UI-04, SDD §3.2.3a). **Explicit Save** when dirty (with confirm); closing with unsaved edits prompts **discard all and close**.
-- **`[vault]` in UI:** `display_name`, optional **`order`** (same as drag-and-drop reorder), optional **`note`**. **Not shown:** `id` (folder slug; migrates when display name normalizes).
-- **`[security]` in UI:** optional **`password_hint`** (stored in `[vault]` in TOML), **`mode`** (password-memory — same four choices for all storage modes; see §4), **`action.change_password`** (current + new + confirm; **open or closed** vault). **`secure_wipe_workspace`** is edited under the **Close** section. **Not shown in v1:** `wipe_passes`, `wipe_pattern`.
+- **`[vault]` in UI:** `display_name`, optional **`order`** (same as drag-and-drop reorder), optional **`note`**, optional **`password_hint`**. **Not shown:** `id` (folder slug; migrates when display name normalizes).
+- **`[security]` in UI:** nothing. Change password is the Password area (vault closed). Plaintext close always overwrites the open folder. **Not shown:** `wipe_passes`, `wipe_pattern`.
 - **`[seven_zip]` in UI:** compression preset (**none / low / medium / high**) + `encrypt_file_names` (`method`/`solid` = defaults; level derived from preset).
-- **`[policy]` in UI:** `allow_external_editors` and `disallow_copy_outside_mount` as separate radio groups (four combinations).
 - **`modal.settings.danger_zone` section:** **`modal.settings.delete_vault`** — confirmation with text field; user must **type vault name** (`id`) to confirm deletion (removes `.7z`, store, config entries, and backups per policy).
 
 ### 3.7.4 Interface requirements (RF-UI)
@@ -458,7 +454,7 @@ Opened by **`action.settings`** on vault row.
 | RF-UI-07 | Row click (outside buttons) opens workspace when `open` | P0 |
 | RF-UI-08 | **Export** (`action.export_vault`) from the overflow menu. User chooses `.zip` of `store/` (Recommended) or `.7z` | P0 |
 | RF-UI-09 | Row buttons do not propagate click to row (stop propagation) | P0 |
-| RF-UI-10 | Transient screens: unlock (password), recovery; open/close progress on the **row** (and unlock/lock dialog while open) with a finite time budget — **no** blocking full-screen pipeline overlay. Lock confirmation: **`always_prompt`** (password **presence** check, not a second Argon2) and **`upriv_plain`** (wipe). Default `encrypted_dir` lock starts the close pipeline immediately. **One pipeline at a time** — open/close/create are **queued** (FIFO); no cancel mid-flush | P0 |
+| RF-UI-10 | Transient screens: unlock (password), recovery; open/close progress on the **row** (and unlock/lock dialog while open) with a finite time budget — **no** blocking full-screen pipeline overlay. Lock confirmation is the **`upriv_plain`** wipe. Encrypted lock starts the close pipeline immediately and does not ask for the password. **One pipeline at a time** — open/close/create are **queued** (FIFO); no cancel mid-flush | P0 |
 | RF-UI-11 | **Create vault** modal/wizard: name, password, confirm password, optional hint, optional note | P0 |
 | RF-UI-12 | Unlock screen may show **`password_hint`** from config when non-empty (never auto-fill password) | P1 |
 | RF-UI-13 | **Reorder vault list:** drag-and-drop rows (press/hold + drag); persist new positions to `[vault] order` in each affected `config.toml` | P1 |
@@ -473,32 +469,16 @@ When the user minimizes a per-vault file manager, a **dock** (bottom-right) list
 
 ---
 
-## 4. Password/session security modes
+## 4. Session
 
-Configurable in `config/<id>.toml` as `security.mode`.
+Unlock asks for the password once. Session keys stay in RAM. Lock flushes with those keys. Quit or reboot asks again. Change password is a separate flow.
 
-Close uses **session keys** already in RAM (or `session.enc`). It does **not** re-encrypt `store/` with a newly typed password. Change password is a separate flow.
+The password string stays in the app after a successful unlock, until lock or quit. A wrong password or a dismissed attempt does not stay.
 
-| Mode | ID | Summary behavior |
-|------|-----|------------------------|
-| 1 — Opt-in | `always_prompt` | Prompt on open **and lock** as a presence check against the open session; do not retain the password **string** in RAM. Session keys still stay in RAM while the vault is open. Typed close password must **not** rewrap `vault.header`. Idle auto-close cannot run (would need a prompt). |
-| 2 — Default | `session_ram` | One password per session in RAM; **lock does not ask again**; after reboot prompt again |
-| 3 | `disk_close` | `session.enc` on disk to lock without retyping; open always prompts |
-| 4 — Less secure | `disk_open_close` | `session.enc` to open and close without retyping |
+**Warnings:**
 
-**Recommended default:** `session_ram` (mode 2).
-
-**v1 desktop UI:** four password-memory choices for **all storage modes** — **`session_ram`** (recommended), **Never save** (`always_prompt`; more-secure badge — presence check on lock), **`disk_close`** (less secure), **`disk_open_close`** (insecure). Disk modes only affect how the **unlock password** is retained via `auth/<id>/.session.enc`.
-
-**Global rule:** no mode writes password in plaintext in the vault.
-
-**Defaults and warnings:**
-
-- **Default:** `session_ram` — password in RAM until app exit or vault lock; lock uses that session.
 - **RAM capacity:** show **`warning.encrypted_dir_ram`** when `encrypted_dir` (settings + create wizard). Insufficient memory → open/edit/close may fail (no silent spill to plaintext disk).
-- **`upriv_plain`:** show **`warning.upriv_plain`** (plaintext while open); radio badge **insecure**. Lock shows a wipe confirmation (no password unless `always_prompt`).
-- **Disk session modes** are optional user choices (badges less-secure / insecure); `session.enc` holds an **encrypted session key**, not the password string.
-- Hide **Close → keep encrypted cache** in settings; lock always **closes** (no Seal). See RF-53c.
+- **`upriv_plain`:** show **`warning.upriv_plain`** (plaintext while open); radio badge **insecure**. Lock shows a wipe confirmation and does not ask for the password.
 
 ---
 
@@ -565,7 +545,7 @@ Close uses **session keys** already in RAM (or `session.enc`). It does **not** r
 
 - User creates vault, adds files, closes and reopens on another PC with same `.7z`.
 - After simulating crash (orphan workspace), recovery closes vault without corrupting `store/`.
-- Wrong password on lock (`always_prompt` presence check) **does not** change `store/`.
+- A wrong unlock password does not change `store/`. Lock does not ask for the password.
 - Opening an exported `{display_name}.7z` with external 7-Zip works with same password.
 
 ---
@@ -581,7 +561,7 @@ Close uses **session keys** already in RAM (or `session.enc`). It does **not** r
 | Poorly implemented virtual workspace | RF-49 + integration tests |
 | `.7z` export RAM | RF-50 (in-process pack, or fail — no plaintext temp) |
 | Swap leaks session | RF-51 (minimize; document limit) |
-| External apps create copies | RF-52 (warnings + optional restricted mode) |
+| External apps read an open folder | File manager folder off keeps files in Upriv (RF-52) |
 | Encrypted traces / old versions | `full` close + wipe (RF-53); accept in `normal` close |
 | Two PCs on same USB | RF-54 lockfile + warning |
 | External 7-Zip vs in-app export | Do not spawn `7zz`; pack with `sevenz-rust2` |
@@ -604,13 +584,12 @@ Close uses **session keys** already in RAM (or `session.enc`). It does **not** r
 - `settings.toml` + defaults
 - Basic recovery + `manifest` (RF-47–48)
 - States `open` / `closed`
-- RAM-only session; no password persistence on HD
+- Session keys in RAM; lock does not ask; no password file on disk
 - Virtual mount + anti-plaintext tests (RF-49)
 - Vault list UI + dark theme (RF-UI-01–10; §3.7)
 
 ### v0.2
 - Backup in `backup/<id>/` (`keep_last` / `keep_all`)
-- 4 security UI modes + `session.enc` (opt-in disk modes)
 - Settings UI
 
 ### v0.3

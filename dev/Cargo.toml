@@ -1,6 +1,13 @@
 [workspace]
 resolver = "2"
-members = ["crates/upriv-core", "crates/upriv-daemon", "crates/upriv-rpc", "crates/upriv-ffi"]
+members = [
+    "crates/upriv-core",
+    "crates/upriv-daemon",
+    "crates/upriv-rpc",
+    "crates/upriv-ffi",
+    "crates/upriv-fuse-abi",
+    "crates/upriv-fuse",
+]
 
 [workspace.package]
 version = "0.2.2-beta"

@@ -41,6 +41,10 @@ export const VAULT_ERROR_CODES = {
   VAULT_BUSY: "vault_busy",
   /** Safety zip failed, so the password and unlock RAM were left unchanged. */
   VAULT_BACKUP_FAILED: "vault_backup_failed",
+  /** New password matches the current one. Not a broken vault header. */
+  REWRAP_PASSWORD_UNCHANGED: "rewrap_password_unchanged",
+  /** Unlock RAM preset matches the header. Not a broken vault header. */
+  REWRAP_KDF_UNCHANGED: "rewrap_kdf_unchanged",
 } as const;
 
 export type VaultErrorCode = (typeof VAULT_ERROR_CODES)[keyof typeof VAULT_ERROR_CODES];

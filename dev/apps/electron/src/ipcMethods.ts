@@ -13,6 +13,8 @@ export const ELECTRON_IPC_METHODS = [
   "open_in_terminal",
   "winfsp_status",
   "winfsp_install",
+  "fuse_status",
+  "fuse_install",
   "app_shutdown",
   "app_version",
   "app_settings_get",

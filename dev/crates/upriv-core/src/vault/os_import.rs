@@ -222,7 +222,7 @@ pub fn import_logical_os_path(
     if let Err(ingest_error) = ingest {
         return Err(abandon_failed_import(root, &id, ingest_error));
     }
-    close_vault(root, &id, Some(new_password))?;
+    close_vault(root, &id)?;
     log_event(LogLevel::Info, "vault_imported", &[("id", id.as_str())]);
     Ok(id)
 }
@@ -345,7 +345,7 @@ mode = "encrypted_dir"
             crate::vault::fs::fs_read_file(&root, "notes", "/note.txt").unwrap(),
             b"one-file"
         );
-        crate::close_vault(&root, "notes", None).unwrap();
+        crate::close_vault(&root, "notes").unwrap();
         crate::delete_vault(&root, "notes").unwrap();
 
         let welcome = crate::vault::VaultWelcome {
@@ -374,7 +374,7 @@ mode = "encrypted_dir"
         let json = serde_json::to_string(&listed).unwrap();
         assert!(json.contains("empty"), "{json}");
         assert!(!json.contains("Photos"), "{json}");
-        crate::close_vault(&root, "notes", None).unwrap();
+        crate::close_vault(&root, "notes").unwrap();
     }
 
     #[test]
@@ -426,7 +426,7 @@ mode = "encrypted_dir"
         assert!(json.contains("bin"), "{json}");
         assert!(!json.contains("link.txt"), "{json}");
         assert!(!json.contains("\"up\""), "{json}");
-        crate::close_vault(&root, "notes", None).unwrap();
+        crate::close_vault(&root, "notes").unwrap();
     }
 
     #[cfg(unix)]
@@ -458,7 +458,7 @@ mode = "encrypted_dir"
         open_import_session(&root, "notes", b"pass-word-ok").unwrap();
         ingest_import_directory(&root, "notes", "empty").unwrap();
         ingest_import_reader(&root, "notes", "trip/a.txt", &mut &b"alpha"[..]).unwrap();
-        crate::close_vault(&root, "notes", Some(b"pass-word-ok")).unwrap();
+        crate::close_vault(&root, "notes").unwrap();
         let backups = root.vault_dir("notes").unwrap().join("backups");
         let zip_count = backups.read_dir().map_or(0, |entries| {
             entries
@@ -478,7 +478,7 @@ mode = "encrypted_dir"
         let listed = crate::vault::fs::fs_list_tree(&root, "notes").unwrap();
         let json = serde_json::to_string(&listed).unwrap();
         assert!(json.contains("empty"), "{json}");
-        crate::close_vault(&root, "notes", None).unwrap();
+        crate::close_vault(&root, "notes").unwrap();
     }
 
     #[test]

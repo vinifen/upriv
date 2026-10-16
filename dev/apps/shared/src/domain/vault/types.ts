@@ -67,9 +67,24 @@ export type VaultPipelineListStatus = {
   passwordChangeVaultIds?: readonly string[];
   /** Closed vault whose unlock-RAM rewrap is in flight. */
   kdfChangeVaultIds?: readonly string[];
+  /**
+   * Clock for the in-flight password or unlock-RAM rewrap.
+   * Shared by the settings screen and the row hint. Not the FIFO open/create clock.
+   */
+  rewrapStartedAt?: number;
   /** Active FIFO job — shared clock for modal + row budget hints. */
   activeVaultId?: string;
   activeStartedAt?: number;
+};
+
+/** Password or unlock-RAM rewrap started from vault settings. */
+export type VaultRewrapKind = "password" | "kdf";
+
+/** In-flight rewrap. `startedAt` is the clock for `LOADING_BUDGET_MS.vaultRewrap`. */
+export type VaultRewrapRun = {
+  vaultId: string;
+  kind: VaultRewrapKind;
+  startedAt: number;
 };
 
 /** Start time of the in-flight job for this vault, if it is the active run. */
@@ -81,12 +96,23 @@ export function pipelineActiveStartedAt(
   return pipeline.activeStartedAt;
 }
 
-/** Row budget hint — only the active FIFO job, opening or creating. */
+/**
+ * Row budget hint.
+ * Opening and creating use the active FIFO clock.
+ * Password and unlock-RAM changes use `rewrapStartedAt` and `vaultRewrap`.
+ */
 export function vaultPipelineRowBudget(
   status: VaultDisplayStatus,
   pipeline: VaultPipelineListStatus,
   vaultId: string,
 ): { active: boolean; budgetMs: number; startedAt?: number } {
+  if (status === "changing_password" || status === "changing_kdf") {
+    const startedAt = pipeline.rewrapStartedAt;
+    if (startedAt == null) {
+      return { active: false, budgetMs: LOADING_BUDGET_MS.vaultRewrap };
+    }
+    return { active: true, budgetMs: LOADING_BUDGET_MS.vaultRewrap, startedAt };
+  }
   const startedAt = pipelineActiveStartedAt(pipeline, vaultId);
   if (startedAt == null) {
     return { active: false, budgetMs: LOADING_BUDGET_MS.vaultPipeline };

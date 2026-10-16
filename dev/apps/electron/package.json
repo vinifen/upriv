@@ -41,6 +41,7 @@
     "productName": "Upriv",
     "icon": "build/icons/icon.png",
     "afterPack": "./scripts/afterPack.cjs",
+    "afterAllArtifactBuild": "./scripts/wrap-appimage.cjs",
     "directories": {
       "output": "../../target/release/bundle/electron"
     },
@@ -61,7 +62,8 @@
         "to": "bin",
         "filter": [
           "upriv-daemon",
-          "upriv-daemon.exe"
+          "upriv-daemon.exe",
+          "libupriv_fuse.so"
         ]
       },
       {

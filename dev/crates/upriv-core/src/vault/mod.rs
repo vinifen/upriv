@@ -60,7 +60,9 @@ pub use import::{
     parse_backup_import_path, read_import_archive_bytes, read_import_zip_settings,
 };
 pub use import_slots::{import_slots, import_slots_for};
-pub use open_close::{close_all_vaults, close_phase, close_vault, open_vault, CloseVaultOutcome};
+pub use open_close::{
+    close_all_vaults, close_phase, close_vault, close_vault_auto, open_vault, CloseVaultOutcome,
+};
 pub use os_import::{
     abort_import_vault, import_logical_os_path, ingest_import_directory, ingest_import_reader,
     ingest_import_reader_staged, open_import_session,
@@ -543,11 +545,11 @@ mode = "encrypted_dir"
         open_vault(&root, "notes", b"pass-word-ok").expect("open");
         let listed = list_vaults(&root).expect("list");
         assert_eq!(listed[0].session, Some("open"));
-        close_vault(&root, "notes", None).expect("close");
+        close_vault(&root, "notes").expect("close");
         let listed = list_vaults(&root).expect("list");
         assert_eq!(listed[0].session, None);
         open_vault(&root, "notes", b"pass-word-ok").expect("reopen");
-        close_vault(&root, "notes", None).expect("close2");
+        close_vault(&root, "notes").expect("close2");
     }
 
     #[test]
@@ -558,26 +560,8 @@ mode = "encrypted_dir"
         // Do not assert idle here: parallel tests may hold UNLOCK_GATE during Argon2.
         open_vault(&root, "notes", b"pass-word-ok").expect("open");
         assert!(crate::vault_activity_blocks_root_switch());
-        close_vault(&root, "notes", None).expect("close");
+        close_vault(&root, "notes").expect("close");
         // Session gone; may still be busy if another test holds the unlock gate.
-        assert!(!crate::session::is_vault_open_at(
-            &root.vault_dir("notes").unwrap()
-        ));
-    }
-
-    #[test]
-    fn always_prompt_close_is_presence_only_not_argon2() {
-        let (_tmp, root) = vault_root_with(&[]);
-        let mut cfg = sample_config("notes", "Notes");
-        cfg.security.mode = crate::config::VaultSecurityMode::AlwaysPrompt;
-        create_vault(&root, cfg, b"pass-word-ok", KdfUnlockPreset::M32).expect("create");
-        open_vault(&root, "notes", b"pass-word-ok").expect("open");
-        let missing = close_vault(&root, "notes", None).unwrap_err();
-        assert!(matches!(missing, crate::error::UprivError::WrongPassword));
-        assert!(crate::session::is_vault_open_at(
-            &root.vault_dir("notes").unwrap()
-        ));
-        close_vault(&root, "notes", Some(b"any-non-empty")).expect("presence ok");
         assert!(!crate::session::is_vault_open_at(
             &root.vault_dir("notes").unwrap()
         ));
@@ -694,7 +678,7 @@ mode = "upriv_plain"
         crate::session::clear_throttle_key_for_tests(&notes);
         open_vault(&root, "notes", b"pass-word-ok")
             .expect("clearing process RAM throttle is a full bypass");
-        close_vault(&root, "notes", None).unwrap();
+        close_vault(&root, "notes").unwrap();
     }
 
     #[test]
@@ -758,7 +742,7 @@ mode = "upriv_plain"
 
         open_vault(&root, "notes2", b"pass-word-ok")
             .expect("same ciphertext under a new folder id is a new throttle key (in-app only)");
-        close_vault(&root, "notes2", None).unwrap();
+        close_vault(&root, "notes2").unwrap();
     }
 
     fn copy_tree(src: &std::path::Path, dst: &std::path::Path) {

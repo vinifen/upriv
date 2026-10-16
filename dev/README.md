@@ -15,6 +15,8 @@ dev/
 │   └── shared/         # @upriv/shared — domain types, service interfaces, and `./react` hooks (apps supply React)
 ├── crates/
 │   ├── upriv-core/     # Shared Rust API (all platforms)
+│   ├── upriv-fuse-abi/ # C callbacks for the Linux mount helper
+│   ├── upriv-fuse/     # libupriv_fuse.so, loaded when a folder is opened
 │   ├── upriv-rpc/      # Shared CORE RPC handlers (daemon + ffi)
 │   ├── upriv-daemon/   # Desktop stdio NDJSON sidecar → upriv-rpc
 │   └── upriv-ffi/      # UniFFI cdylib for mobile (libupriv_ffi.so)
@@ -29,7 +31,7 @@ dev/
 
 1. **Node.js 22.12+** — `nvm use` in this folder (see `.nvmrc`)
 2. **Rust 1.94.0** — `cd dev` (rustup reads `rust-toolchain.toml`) or `rustup toolchain install 1.94.0`
-3. **Linux vault mount (optional):** `libfuse3-dev` (and typically `fuse3`) to compile `upriv-core`'s FUSE session. The in-app file manager works without a successful mount. **Windows vault folder while developing:** install [WinFsp](https://winfsp.dev/) once on this PC, or turn the file manager folder on after `apps/electron/scripts/fetch-winfsp.cjs` has the MSI. The Windows setup and the portable app carry that installer and ask when the folder is turned on. Declining leaves the switch unchanged. Without the driver the app still runs and the in-app file manager is the folder. WinFsp - Windows File System Proxy, Copyright (C) Bill Zissimopoulos — https://github.com/winfsp/winfsp
+3. **Linux vault mount (optional):** `libfuse3-dev` to compile the mount helper (`upriv-fuse`). The app and `upriv-daemon` start without `fuse3`. Turning the file manager folder on looks for `fusermount3` and `/dev/fuse`, then asks once to install the distro `fuse3` package. Declining leaves the switch unchanged. The in-app file manager works either way. **Windows vault folder while developing:** install [WinFsp](https://winfsp.dev/) once on this PC, or turn the file manager folder on after `apps/electron/scripts/fetch-winfsp.cjs` has the MSI. The Windows setup and the portable app carry that installer and ask when the folder is turned on. Declining leaves the switch unchanged. Without the driver the app still runs and the in-app file manager is the folder. WinFsp - Windows File System Proxy, Copyright (C) Bill Zissimopoulos — https://github.com/winfsp/winfsp
 
 ## Node dependencies
 
@@ -90,7 +92,7 @@ npm run electron:build
 npm run electron:build:win
 ```
 
-On Ubuntu, prefer the **`.deb`** for “download and open” (Software Install / double-click) — no FUSE and no terminal. AppImage stays for portable USB-style use when `libfuse` is available.
+On Ubuntu, prefer the **`.deb`** for “download and open” (Software Install / double-click). The `.deb` does not install `fuse3`. The AppImage is the portable file: it starts without system `libfuse2`, and the data folder stays beside that file.
 
 ## Versions
 
@@ -117,8 +119,8 @@ Where vault data lives (`UPRIV_DISTRIBUTION`) — **portable is only a desktop p
 
 | Artifact        | Best for                | Notes                                                                                                                                                                        |
 | --------------- | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **`.deb`**      | Ubuntu / Debian install | Double-click → Software Install. No FUSE. Upriv icons in hicolor (16–512) + menu entry. Data folder defaults to `~/.local/share/upriv` (install dir `/opt` is not writable). |
-| **`.AppImage`** | Portable / no install   | Needs **libfuse**. Sandbox wrapper only when `$APPIMAGE` is set. Data beside the `.AppImage` when that folder is writable.                                                   |
+| **`.deb`**      | Ubuntu / Debian install | Double-click → Software Install. Does not install `fuse3`. Upriv icons in hicolor (16–512) + menu entry. Data folder defaults to `~/.local/share/upriv` (install dir `/opt` is not writable). |
+| **`.AppImage`** | Portable / no install   | Starts without system `libfuse2`. Data stays beside the downloaded file. The OS folder still asks for `fuse3` when that folder is turned on. Sandbox wrapper only when `$APPIMAGE` is set. |
 
 Build: `npm run electron:build` (or `electron:build:linux`).
 
@@ -154,10 +156,10 @@ Build **on a Mac** only (`electron-builder --mac`). Not cross-built from Linux/W
 
 | Symptom                                                                             | Likely cause                                             | Fix                                                                                                                                                 |
 | ----------------------------------------------------------------------------------- | -------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Want no terminal / no FUSE                                                          | AppImage needs fuse                                      | Use the **`.deb`** on Ubuntu                                                                                                                        |
-| AppImage: needs FUSE                                                                | AppImage mounts via libfuse                              | Prefer `.deb`; or `sudo apt install libfuse2` / `libfuse2t64`                                                                                       |
+| Want the OS folder                                                                      | `fuse3` is not installed yet                             | Turn the file manager folder on. One system password dialog installs `fuse3`. Declining leaves the switch off.                                      |
+| AppImage: still asks for libfuse2                                                       | An older file, built before the extract-and-run wrapper | Rebuild. The current AppImage starts without system `libfuse2`.                                                                                    |
 | AppImage: `setuid_sandbox_host` / Trace/breakpoint trap under `/tmp/.mount_Upriv-*` | FUSE mount is `nosuid` → `chrome-sandbox` useless        | Rebuild (wrapper disables sandbox **only when `$APPIMAGE` is set**). Old AppImages: `./Upriv-*.AppImage --no-sandbox`. `.deb` keeps chrome-sandbox. |
 | AppImage won't start / sandbox error                                                | Chromium sandbox vs AppArmor                             | Same as above; renderer sandbox stays on. Dev `npm run electron:dev` always uses `--no-sandbox` (dev-only).                                         |
 | `upriv-daemon not found`                                                            | Release binary missing before pack                       | Run `npm run daemon:build:release` or full `npm run electron:build`                                                                                 |
 | Blank window on first `electron:dev`                                                | Vite still compiling                                     | Wait for port 1420 or reload once                                                                                                                   |
-| FUSE / vault mount                                                                  | User not in `fuse` group, or `libfuse3` missing at build | `sudo apt install libfuse3-dev fuse3`; `sudo usermod -aG fuse $USER` then re-login. In-app file manager still works if the mount fails.             |
+| FUSE / vault mount                                                                  | `/dev/fuse` not writable, or the mount helper missing    | Turning the folder on installs `fuse3`. If the device stays unusable, `sudo usermod -aG fuse $USER` and re-login. `libfuse3-dev` is only for compiling the helper. The in-app file manager still works. |

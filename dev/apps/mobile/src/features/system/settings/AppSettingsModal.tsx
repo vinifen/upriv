@@ -456,7 +456,6 @@ export function AppSettingsModal({
             <SettingsAccordionSection
               key={sectionId}
               title={t(`modal.app_settings.section.${sectionId}`)}
-              defaultOpen={sectionId === "language"}
             >
               {sectionId === "language" ? (
                 <LanguageFields
@@ -606,6 +605,12 @@ function GeneralFields({
         onValueChange={(lifecycle_open_file_manager_on_open) =>
           onChange({ lifecycle_open_file_manager_on_open })
         }
+      />
+      <SwitchRow
+        label={t("modal.app_settings.field.lifecycle_keep_open_on_wake")}
+        hint={t("modal.app_settings.field.lifecycle_keep_open_on_wake_help")}
+        value={config.lifecycle_keep_open_on_wake}
+        onValueChange={(lifecycle_keep_open_on_wake) => onChange({ lifecycle_keep_open_on_wake })}
       />
       <SwitchRow
         label={t("modal.app_settings.field.file_manager_confirm_delete")}

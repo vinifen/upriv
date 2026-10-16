@@ -52,9 +52,7 @@ export function VaultChangeKdfFields({
         autoCorrect={false}
       />
       {passwordFieldError ? <Warning>{passwordFieldError}</Warning> : null}
-      <FieldLabel disabled={locked}>
-        {t("modal.settings.field.kdf.unlock_preset")}
-      </FieldLabel>
+      <FieldLabel disabled={locked}>{t("modal.settings.field.kdf.unlock_preset")}</FieldLabel>
       <RadioGroup>
         {KDF_UNLOCK_PRESETS.map((preset) => {
           const meta = KDF_UNLOCK_OPTION_META[preset];

@@ -16,15 +16,13 @@ export {
   parseKdfUnlockPreset,
 } from "./kdf";
 
-/** TOML section ids in `vaults/<id>/config.toml`. Lock is always close. */
+/** Preference screens in vault settings. Lock is always close. */
 export const VAULT_SETTINGS_SECTIONS = [
   "vault",
   "storage",
   "mount",
   "auto_close",
   "backup",
-  "security",
-  "policy",
 ] as const;
 
 export type VaultSettingsSectionId = (typeof VAULT_SETTINGS_SECTIONS)[number];
@@ -49,52 +47,6 @@ export const COMPRESSION_PRESETS = [
   "medium",
   "high",
 ] as const satisfies readonly CompressionPreset[];
-
-/** Persisted `[security] mode`. Close uses session keys except `always_prompt`. */
-export type SecurityMode = "always_prompt" | "session_ram" | "disk_close" | "disk_open_close";
-
-/** Password-memory choices in vault settings (all storage modes). */
-export const SECURITY_UI_MODES = [
-  "session_ram",
-  "prompt_open_close",
-  "disk_close",
-  "disk_open_close",
-] as const;
-
-export type SecurityUiMode = (typeof SECURITY_UI_MODES)[number];
-
-export function uiToSecurityMode(ui: SecurityUiMode): SecurityMode {
-  switch (ui) {
-    case "session_ram":
-      return "session_ram";
-    case "prompt_open_close":
-      return "always_prompt";
-    case "disk_close":
-      return "disk_close";
-    case "disk_open_close":
-      return "disk_open_close";
-  }
-}
-
-export function securityModeToUi(mode: SecurityMode): SecurityUiMode {
-  if (mode === "disk_open_close") return "disk_open_close";
-  if (mode === "disk_close") return "disk_close";
-  if (mode === "always_prompt") return "prompt_open_close";
-  return "session_ram";
-}
-
-/** Password UI options — same list for every storage mode (PRD §4, SDD §3.2.3a). */
-export function securityUiModesForStorage(_storageMode: StorageMode): readonly SecurityUiMode[] {
-  return SECURITY_UI_MODES;
-}
-
-/** Persist the chosen mode. The same list applies to every storage mode. */
-export function normalizeSecurityModeForStorage(
-  _storageMode: StorageMode,
-  securityMode: SecurityMode,
-): SecurityMode {
-  return securityMode;
-}
 
 /** Derive UI compression preset from persisted `[seven_zip]` fields. */
 export function compressionPresetFromSevenZip(sevenZip: {
@@ -139,7 +91,7 @@ export function sevenZipPatchFromCompressionPreset(
   }
 }
 
-/** Normalize security mode, mount path, and seven_zip. */
+/** Normalize display name, mount path, and seven_zip. */
 export function normalizeVaultSettingsConfig(config: VaultSettingsConfig): VaultSettingsConfig {
   return {
     ...config,
@@ -148,10 +100,6 @@ export function normalizeVaultSettingsConfig(config: VaultSettingsConfig): Vault
       display_name: normalizeStoredName(config.vault.display_name),
     },
     mount: normalizeWorkspaceTable(config.mount, "vault"),
-    security: {
-      ...config.security,
-      mode: normalizeSecurityModeForStorage(config.storage.mode, config.security.mode),
-    },
     seven_zip: normalizeSevenZipSection(config.seven_zip),
   };
 }
@@ -169,10 +117,6 @@ export function patchStorageMode(
   return normalizeVaultSettingsConfig({
     ...config,
     storage: { mode },
-    security: {
-      ...config.security,
-      mode: normalizeSecurityModeForStorage(mode, config.security.mode),
-    },
   });
 }
 
@@ -206,8 +150,6 @@ export interface VaultSettingsConfig {
     skip_unchanged: boolean;
   };
   security: {
-    mode: SecurityMode;
-    secure_wipe_workspace: boolean;
     wipe_passes: number;
     wipe_pattern: WipePattern;
     /** ISO 8601 UTC; set by app on change-password — not shown in settings UI. */
@@ -215,9 +157,8 @@ export interface VaultSettingsConfig {
   };
   auto_close: {
     enabled: boolean;
+    /** Minutes without activity inside Upriv before this vault closes. */
     idle_minutes: number;
-    warn_before_seconds: number;
-    close_on_app_exit: boolean;
   };
   seven_zip: {
     encrypt_file_names: boolean;
@@ -225,11 +166,6 @@ export interface VaultSettingsConfig {
     compression_level: number;
     solid: boolean;
     method: SevenZipMethod;
-  };
-  policy: {
-    allow_external_editors: boolean;
-    disallow_copy_outside_mount: boolean;
-    require_unmount_on_sleep: boolean;
   };
 }
 

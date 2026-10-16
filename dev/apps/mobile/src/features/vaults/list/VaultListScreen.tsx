@@ -37,6 +37,7 @@ import {
   resolveListDrop,
   resolveVaultDisplayStatus,
   validateDisplayName,
+  vaultRowControls,
   VAULT_DISPLAY_NAME_MAX_LENGTH,
   GROUPED_VAULT_SORT_MODES,
   vaultBlocksGroupInnerColumns,
@@ -51,6 +52,7 @@ import {
 } from "@upriv/shared";
 import { type I18nKey } from "@/i18n";
 import { mobileErrorI18nKey } from "@/lib/errorMessages";
+import { noteIdleActivity } from "@/lib/idleActivity";
 import { useTheme } from "@/theme";
 import {
   CONTROL_HEIGHT_MD,
@@ -297,7 +299,6 @@ export function VaultListScreen() {
     handleConfirmExportVault,
     handleRowExport,
     handleExportTimeout,
-    isVaultPipelineBusy,
     rowDensity,
     rowPaddingY,
     rowPaddingX,
@@ -318,6 +319,7 @@ export function VaultListScreen() {
     handleNoteChange,
     vaultsRef,
     handleVaultSettingsSaved,
+    handleUnlockPresetSaved,
     handlePersistBusyChange,
     handleCreateVault,
     vaultGroupService,
@@ -589,7 +591,6 @@ export function VaultListScreen() {
         isDragging={draggingId === dropKey}
         isDragOver={isDropOver(dropKey)}
         isDropBlocked={dropOverBlocked}
-        isPipelineBusy={isVaultPipelineBusy(vault.id)}
         dropTargetProps={bindDropTarget(dropKey)}
         onDragStart={(x, y) => onRowDragStart(dropKey, x, y)}
         onDragMove={onRowDragMove}
@@ -847,7 +848,14 @@ export function VaultListScreen() {
   return (
     <View
       style={[styles.root, { backgroundColor: colors.background }]}
-      onTouchStart={blurVaultListSearchIfOutside}
+      onStartShouldSetResponderCapture={() => {
+        noteIdleActivity();
+        return false;
+      }}
+      onTouchStart={(event) => {
+        noteIdleActivity();
+        blurVaultListSearchIfOutside(event);
+      }}
     >
       <CenteredPanel maxWidth={MAX_WIDTH_VAULT_LIST}>
         <View style={styles.listHost}>
@@ -1270,6 +1278,7 @@ export function VaultListScreen() {
         open={noteVaultId !== null}
         onClose={() => setNoteVaultId(null)}
         onNoteChange={handleNoteChange}
+        saveHeld={noteVault != null && vaultRowControls(noteVault, pipelineStatus).noteBlocked}
       />
 
       <CloseAllUnsavedModal
@@ -1324,6 +1333,7 @@ export function VaultListScreen() {
         }}
         onPersistBusyChange={handlePersistBusyChange}
         onSaved={handleVaultSettingsSaved}
+        onUnlockPresetSaved={handleUnlockPresetSaved}
       />
 
       <ExportVaultModal

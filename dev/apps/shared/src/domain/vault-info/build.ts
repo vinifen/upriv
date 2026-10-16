@@ -4,9 +4,9 @@ import { formatBytes } from "../format/bytes";
 import { formatIsoDate } from "../format/datetime";
 import { vaultLastAccessedLabel } from "../vault-list/lastAccessed";
 import { withOpenPath, type InfoSection, type InfoTranslate } from "../info";
-import { securityModeToUi } from "../vault-settings/types";
 import { KDF_UNLOCK_OPTION_META } from "../vault-settings/kdf";
 import {
+  idleWarnLeadSeconds,
   resolveVaultListStatus,
   vaultStatusLabelKey,
   type VaultPipelineListStatus,
@@ -22,13 +22,6 @@ const SESSION_KEYS = {
 const STORAGE_KEYS = {
   encrypted_dir: "modal.settings.option.storage.encrypted_dir",
   upriv_plain: "modal.settings.option.storage.upriv_plain",
-} as const;
-
-const SECURITY_UI_KEYS = {
-  session_ram: "modal.settings.option.security.session_ram",
-  prompt_open_close: "modal.settings.option.security.prompt_open_close",
-  disk_close: "modal.settings.option.security.disk_close",
-  disk_open_close: "modal.settings.option.security.disk_open_close",
 } as const;
 
 function yesNo(t: InfoTranslate, value: boolean): string {
@@ -115,7 +108,7 @@ export function buildVaultInfoSections(
     {
       id: "display_status",
       label: t("modal.info.field.display_status"),
-      value: t(vaultStatusLabelKey(displayStatus, vault.id, pipeline)),
+      value: t(vaultStatusLabelKey(displayStatus, vault.id, pipeline, vault.autoClosed === true)),
     },
     {
       id: "session",
@@ -268,43 +261,11 @@ export function buildVaultInfoSections(
           id: "auto_close",
           label: t("modal.info.field.auto_close"),
           value: settings.auto_close.enabled
-            ? t("modal.info.value.auto_close_on", {
+            ? t("modal.info.value.auto_close_on_warn", {
                 minutes: String(settings.auto_close.idle_minutes),
+                seconds: String(idleWarnLeadSeconds(settings.auto_close.idle_minutes)),
               })
             : t("modal.info.value.no"),
-        },
-        {
-          id: "security_mode",
-          label: t("modal.info.field.security_mode"),
-          value: t(SECURITY_UI_KEYS[securityModeToUi(settings.security.mode)]),
-        },
-        {
-          id: "policy_external_apps",
-          label: t("modal.settings.field.policy.external_editors"),
-          value: t(
-            settings.policy.allow_external_editors
-              ? "modal.settings.option.policy.external_editors_yes"
-              : "modal.settings.option.policy.external_editors_no",
-          ),
-        },
-        {
-          id: "policy_copy_out",
-          label: t("modal.settings.field.policy.copy_outside"),
-          value: t(
-            settings.policy.disallow_copy_outside_mount
-              ? "modal.settings.option.policy.copy_block"
-              : "modal.settings.option.policy.copy_allow",
-          ),
-        },
-        {
-          id: "require_unmount_on_sleep",
-          label: t("modal.settings.field.close.require_unmount_on_sleep"),
-          value: yesNo(t, settings.policy.require_unmount_on_sleep),
-        },
-        {
-          id: "secure_wipe",
-          label: t("modal.settings.field.close.secure_wipe"),
-          value: yesNo(t, settings.security.secure_wipe_workspace),
         },
       ]
     : [{ id: "config_unavailable", label: t("modal.info.field.config"), value: "—" }];

@@ -108,6 +108,22 @@ describe("mergeVaultListSnapshot", () => {
     expect(merged.map((row) => row.id)).toEqual(["notes", "travel"]);
   });
 
+  it("keeps an idle-lock label across a newer closed snapshot", () => {
+    const current = [vaultListItemFixture({ id: "notes", session: null, autoClosed: true })];
+    const incoming = [vaultListItemFixture({ id: "notes", session: null })];
+    const merged = mergeVaultListSnapshot(current, incoming, new Map(), 100);
+    expect(merged[0]?.session).toBeNull();
+    expect(merged[0]?.autoClosed).toBe(true);
+  });
+
+  it("drops the idle-lock label once the vault is open again", () => {
+    const current = [vaultListItemFixture({ id: "notes", session: "open", autoClosed: true })];
+    const incoming = [vaultListItemFixture({ id: "notes", session: "open" })];
+    const merged = mergeVaultListSnapshot(current, incoming, new Map([["notes", 50]]), 100);
+    expect(merged[0]?.session).toBe("open");
+    expect(merged[0]?.autoClosed).toBeUndefined();
+  });
+
   it("drops a local-only row when the fetch is newer than the write", () => {
     const current = [vaultListItemFixture({ id: "notes" }), vaultListItemFixture({ id: "travel" })];
     const incoming = [vaultListItemFixture({ id: "notes" })];

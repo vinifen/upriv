@@ -33,7 +33,10 @@ import {
   type VaultListItem,
 } from "@upriv/shared";
 import { GroupedVaultPicker } from "@/features/vaults/list/modals/GroupedVaultPicker";
-import { FileManagerDriverNotice, useWinFspDriver } from "@/features/system/settings/winFspDriver";
+import {
+  FileManagerDriverNotice,
+  useFileManagerMountHost,
+} from "@/features/system/settings/fileManagerMountHost";
 import { useErrorToast } from "@/hooks/useErrorToast";
 
 interface SectionPatchProps<S extends keyof AppSettingsConfig> {
@@ -81,6 +84,7 @@ export function AppSettingsGeneralSection({ config, onChange }: SectionPatchProp
   const showHeaderMoreId = useId();
   const closeModalOnSubmitId = useId();
   const openFileManagerOnOpenId = useId();
+  const keepOpenOnWakeId = useId();
   const confirmDeleteId = useId();
 
   return (
@@ -138,6 +142,13 @@ export function AppSettingsGeneralSection({ config, onChange }: SectionPatchProp
         }
         label={t("modal.app_settings.field.lifecycle_open_file_manager_on_open")}
         hint={t("modal.app_settings.field.lifecycle_open_file_manager_on_open_help")}
+      />
+      <SwitchRow
+        id={keepOpenOnWakeId}
+        checked={config.lifecycle_keep_open_on_wake}
+        onChange={(lifecycle_keep_open_on_wake) => onChange({ lifecycle_keep_open_on_wake })}
+        label={t("modal.app_settings.field.lifecycle_keep_open_on_wake")}
+        hint={t("modal.app_settings.field.lifecycle_keep_open_on_wake_help")}
       />
       <SwitchRow
         id={confirmDeleteId}
@@ -499,7 +510,7 @@ export function AppSettingsWorkspaceSection({
   const showShortcut = workspaceSystemHasShortcut(current);
   const pathIssue = validateWorkspaceTable(config, vaultRootPath);
   const defaultWorkspacePath = suggestedDefaultWorkspacePath(vaultRootPath);
-  const driver = useWinFspDriver();
+  const driver = useFileManagerMountHost();
 
   return (
     <SettingsFormGrid>
@@ -667,6 +678,7 @@ export function AppSettingsWorkspaceSection({
                   }}
                 />
                 <FileManagerDriverNotice
+                  kind={driver.kind}
                   missing={driver.missing}
                   busy={driver.busy}
                   onInstall={driver.ensureInstalled}

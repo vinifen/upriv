@@ -19,9 +19,17 @@ interface VaultNoteModalProps {
   open: boolean;
   onClose: () => void;
   onNoteChange: (vaultId: string, note: string) => Promise<boolean>;
+  /** Export or rewrap holds the vault, so a note write would only fail in the console. */
+  saveHeld?: boolean;
 }
 
-export function VaultNoteModal({ vault, open, onClose, onNoteChange }: VaultNoteModalProps) {
+export function VaultNoteModal({
+  vault,
+  open,
+  onClose,
+  onNoteChange,
+  saveHeld = false,
+}: VaultNoteModalProps) {
   const { t } = useTranslation();
   const { colors, typography } = useTheme();
   const [draft, setDraft] = useState("");
@@ -42,7 +50,7 @@ export function VaultNoteModal({ vault, open, onClose, onNoteChange }: VaultNote
 
   const persistNote = useCallback(
     async (note: string): Promise<void> => {
-      if (!vaultId) return;
+      if (!vaultId || saveHeld) return;
       const trimmed = normalizeNote(note).slice(0, VAULT_NOTE_MAX_LENGTH);
       const persisted = await onNoteChange(vaultId, trimmed);
       if (!persisted) return;
@@ -50,11 +58,11 @@ export function VaultNoteModal({ vault, open, onClose, onNoteChange }: VaultNote
       clearTimeout(savedHideRef.current);
       savedHideRef.current = setTimeout(() => setSavedVisible(false), SAVED_INDICATOR_MS);
     },
-    [vaultId, onNoteChange],
+    [saveHeld, vaultId, onNoteChange],
   );
 
   useEffect(() => {
-    if (!open || !vaultId) return;
+    if (!open || !vaultId || saveHeld) return;
     clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
       const trimmed = draft.slice(0, VAULT_NOTE_MAX_LENGTH);
@@ -63,10 +71,10 @@ export function VaultNoteModal({ vault, open, onClose, onNoteChange }: VaultNote
       }
     }, DEBOUNCE_MS);
     return () => clearTimeout(debounceRef.current);
-  }, [draft, open, vaultId, savedNote, persistNote]);
+  }, [draft, open, saveHeld, vaultId, savedNote, persistNote]);
 
   const handleClose = useCallback(() => {
-    if (vaultId) {
+    if (vaultId && !saveHeld) {
       clearTimeout(debounceRef.current);
       const trimmed = draft.slice(0, VAULT_NOTE_MAX_LENGTH);
       if (trimmed !== savedNote) {
@@ -74,7 +82,7 @@ export function VaultNoteModal({ vault, open, onClose, onNoteChange }: VaultNote
       }
     }
     onClose();
-  }, [vaultId, draft, savedNote, onNoteChange, onClose]);
+  }, [saveHeld, vaultId, draft, savedNote, onNoteChange, onClose]);
 
   useEffect(() => {
     return () => {
@@ -98,6 +106,7 @@ export function VaultNoteModal({ vault, open, onClose, onNoteChange }: VaultNote
       </Text>
       <ThemedInput
         value={draft}
+        editable={!saveHeld}
         onChangeText={setDraft}
         maxLength={VAULT_NOTE_MAX_LENGTH}
         placeholder={t("modal.note.placeholder")}

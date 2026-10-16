@@ -1,6 +1,6 @@
 //! Open / close against `store/` with an in-process session.
 
-use crate::config::{load_app_settings_at, load_vault_config, VaultSecurityMode, VaultStorageMode};
+use crate::config::{load_app_settings_at, load_vault_config, VaultStorageMode};
 use crate::error::{Result, UprivError};
 #[allow(unused_imports)]
 use crate::host_fs::HostFsQuery;
@@ -174,12 +174,8 @@ fn open_unlocked_session(
                 Err(other) => return Err(other),
             };
             record_unlock_success(&vault_dir);
-            let mut session = OpenSession::from_opened(
-                vault_id.to_string(),
-                vault_dir.clone(),
-                config.security.mode,
-                opened,
-            );
+            let mut session =
+                OpenSession::from_opened(vault_id.to_string(), vault_dir.clone(), opened);
             session.lock = Some(lock);
             session.skip_close_backup = !attach_mount;
             insert_session(session)?;
@@ -199,7 +195,18 @@ fn open_unlocked_session(
 #[derive(Clone, Copy)]
 enum CloseKind {
     User,
+    Auto,
     Shutdown,
+}
+
+impl CloseKind {
+    fn reason(self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::Auto => "auto",
+            Self::Shutdown => "shutdown",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -216,19 +223,11 @@ pub fn close_phase(root: &VaultRoot, vault_id: &str) -> Result<Option<ClosePhase
 fn close_vault_inner(
     root: &VaultRoot,
     vault_id: &str,
-    password: Option<&[u8]>,
     kind: CloseKind,
 ) -> Result<CloseVaultOutcome> {
     let vault_dir = vault_dir_or_not_found(root, vault_id)?;
     let closing = ClosingGuard::enter(&vault_dir)?;
     let mut session = take_session(&vault_dir)?;
-    if matches!(kind, CloseKind::User) && session.security_mode == VaultSecurityMode::AlwaysPrompt {
-        let present = password.is_some_and(|p| !p.is_empty());
-        if !present {
-            insert_session(session)?;
-            return Err(UprivError::WrongPassword);
-        }
-    }
     let store = vault_dir.join(crate::paths::STORE_DIR_NAME);
     let mut backup_failed = false;
     let persist = (|| {
@@ -364,30 +363,31 @@ fn close_vault_inner(
     }
     drop(session);
     discard_mount(mount);
-    log_event(LogLevel::Info, "vault_closed", &[("id", vault_id)]);
+    log_event(
+        LogLevel::Info,
+        "vault_closed",
+        &[("id", vault_id), ("reason", kind.reason())],
+    );
     Ok(CloseVaultOutcome { backup_failed })
 }
 
-/// Flush the empty (or dirty) index and drop the session.
-///
-/// `password` is required only for `always_prompt` as a **presence** check
-/// (non-empty bytes). Do not re-run Argon2 / `open_store` — that would be a
-/// second multi-minute unlock, not a lock gate (SECURITY-CRYPTO / TS lifecycle).
-pub fn close_vault(
-    root: &VaultRoot,
-    vault_id: &str,
-    password: Option<&[u8]>,
-) -> Result<CloseVaultOutcome> {
-    close_vault_inner(root, vault_id, password, CloseKind::User)
+/// Flush the open session into `store/`. A manual lock.
+pub fn close_vault(root: &VaultRoot, vault_id: &str) -> Result<CloseVaultOutcome> {
+    close_vault_inner(root, vault_id, CloseKind::User)
 }
 
-/// Flush every open vault. Used by `app_shutdown` (skips always_prompt).
+/// Same flush as [`close_vault`]. The log line records `reason=auto`.
+pub fn close_vault_auto(root: &VaultRoot, vault_id: &str) -> Result<CloseVaultOutcome> {
+    close_vault_inner(root, vault_id, CloseKind::Auto)
+}
+
+/// Flush every open vault. Used by `app_shutdown`.
 pub fn close_all_vaults(root: &VaultRoot) -> Result<Vec<String>> {
     let ids = open_session_ids();
     let mut closed = Vec::new();
     let mut first_err = None;
     for id in ids {
-        match close_vault_inner(root, &id, None, CloseKind::Shutdown) {
+        match close_vault_inner(root, &id, CloseKind::Shutdown) {
             Ok(_) => closed.push(id),
             Err(error) => {
                 if first_err.is_none() {
@@ -501,7 +501,7 @@ mode = "encrypted_dir"
             crate::host_fs::remove_dir_all(&backups).unwrap();
         }
         crate::host_fs::write(&backups, b"not-a-directory").unwrap();
-        let outcome = close_vault(&root, "notes", None).unwrap();
+        let outcome = close_vault(&root, "notes").unwrap();
         assert!(
             outcome.backup_failed,
             "close must report the failed snapshot"
@@ -523,11 +523,11 @@ mode = "encrypted_dir"
         )
         .unwrap();
         open_vault(&root, "notes", b"pass-word-ok").unwrap();
-        close_vault(&root, "notes", None).unwrap();
+        close_vault(&root, "notes").unwrap();
         let first = list_backups(&root, "notes").unwrap();
         assert_eq!(first.len(), 1);
         open_vault(&root, "notes", b"pass-word-ok").unwrap();
-        close_vault(&root, "notes", None).unwrap();
+        close_vault(&root, "notes").unwrap();
         let second = list_backups(&root, "notes").unwrap();
         assert_eq!(second.len(), 1);
         assert_eq!(second[0].file_name, first[0].file_name);
@@ -544,7 +544,7 @@ mode = "encrypted_dir"
         )
         .unwrap();
         open_vault(&root, "notes", b"pass-word-ok").unwrap();
-        close_vault(&root, "notes", None).unwrap();
+        close_vault(&root, "notes").unwrap();
         let first = list_backups(&root, "notes").unwrap();
         assert_eq!(first.len(), 1);
 
@@ -556,14 +556,14 @@ mode = "encrypted_dir"
             br#"{"openTabs":["/README.md"],"activeTabPath":"/README.md"}"#,
         )
         .unwrap();
-        close_vault(&root, "notes", None).unwrap();
+        close_vault(&root, "notes").unwrap();
         let after_layout = list_backups(&root, "notes").unwrap();
         assert_eq!(after_layout.len(), 1);
         assert_eq!(after_layout[0].file_name, first[0].file_name);
 
         open_vault(&root, "notes", b"pass-word-ok").unwrap();
         crate::vault::fs_write_file(&root, "notes", "/note.txt", b"edited").unwrap();
-        close_vault(&root, "notes", None).unwrap();
+        close_vault(&root, "notes").unwrap();
         let after_edit = list_backups(&root, "notes").unwrap();
         assert_eq!(after_edit.len(), 1);
         assert_ne!(after_edit[0].file_name, first[0].file_name);
@@ -577,9 +577,9 @@ mode = "encrypted_dir"
         config.backup.keep_last = 5;
         create_vault(&root, config, b"pass-word-ok", KdfUnlockPreset::M32).unwrap();
         open_vault(&root, "notes", b"pass-word-ok").unwrap();
-        close_vault(&root, "notes", None).unwrap();
+        close_vault(&root, "notes").unwrap();
         open_vault(&root, "notes", b"pass-word-ok").unwrap();
-        close_vault(&root, "notes", None).unwrap();
+        close_vault(&root, "notes").unwrap();
         let backups = list_backups(&root, "notes").unwrap();
         assert_eq!(backups.len(), 2);
         assert_ne!(backups[0].file_name, backups[1].file_name);
@@ -593,13 +593,13 @@ mode = "encrypted_dir"
         create_vault(&root, config, b"pass-word-ok", KdfUnlockPreset::M32).unwrap();
         open_vault(&root, "notes", b"pass-word-ok").unwrap();
         crate::vault::fs_write_file(&root, "notes", "/a.txt", b"one").unwrap();
-        close_vault(&root, "notes", None).unwrap();
+        close_vault(&root, "notes").unwrap();
         let first = list_backups(&root, "notes").unwrap();
         assert_eq!(first.len(), 1);
 
         open_vault(&root, "notes", b"pass-word-ok").unwrap();
         crate::vault::fs_write_file(&root, "notes", "/a.txt", b"two").unwrap();
-        close_vault(&root, "notes", None).unwrap();
+        close_vault(&root, "notes").unwrap();
         let both = list_backups(&root, "notes").unwrap();
         assert_eq!(both.len(), 2);
         let newest = both[0].file_name.clone();
@@ -611,13 +611,13 @@ mode = "encrypted_dir"
         assert_eq!(after_delete[0].file_name, older);
 
         open_vault(&root, "notes", b"pass-word-ok").unwrap();
-        close_vault(&root, "notes", None).unwrap();
+        close_vault(&root, "notes").unwrap();
         let replaced = list_backups(&root, "notes").unwrap();
         assert_eq!(replaced.len(), 2);
         assert!(replaced.iter().any(|entry| entry.file_name == older));
 
         open_vault(&root, "notes", b"pass-word-ok").unwrap();
-        close_vault(&root, "notes", None).unwrap();
+        close_vault(&root, "notes").unwrap();
         let kept = list_backups(&root, "notes").unwrap();
         assert_eq!(
             kept.iter()
@@ -673,7 +673,7 @@ mode = "encrypted_dir"
         .unwrap();
         open_vault(&root, "notes", b"pass-word-ok").unwrap();
         crate::vault::fs_write_file(&root, "notes", "/notes.txt", b"generation-one").unwrap();
-        close_vault(&root, "notes", None).unwrap();
+        close_vault(&root, "notes").unwrap();
         assert_eq!(listed_session(&root, "notes"), None);
 
         let store = root.vault_store_dir("notes").unwrap();
@@ -682,7 +682,7 @@ mode = "encrypted_dir"
 
         open_vault(&root, "notes", b"pass-word-ok").unwrap();
         crate::vault::fs_write_file(&root, "notes", "/notes.txt", b"generation-two").unwrap();
-        close_vault(&root, "notes", None).unwrap();
+        close_vault(&root, "notes").unwrap();
         let newer = crate::vault::load_vault_persistence(root.vault_dir("notes").unwrap())
             .unwrap()
             .expect("persistence")
@@ -709,7 +709,7 @@ mode = "encrypted_dir"
             .expect("persistence")
             .content_hash;
         assert_eq!(during_open.as_deref(), Some(newer.as_str()));
-        close_vault(&root, "notes", None).unwrap();
+        close_vault(&root, "notes").unwrap();
 
         assert_eq!(listed_session(&root, "notes"), None);
         let accepted = crate::vault::load_vault_persistence(root.vault_dir("notes").unwrap())
@@ -724,7 +724,7 @@ mode = "encrypted_dir"
             crate::vault::fs_read_file(&root, "notes", "/notes.txt").unwrap(),
             b"generation-one"
         );
-        close_vault(&root, "notes", None).unwrap();
+        close_vault(&root, "notes").unwrap();
     }
 
     #[test]
@@ -819,7 +819,7 @@ mode = "encrypted_dir"
         .unwrap();
         open_vault(&root, "notes", b"pass-word-ok").unwrap();
         crate::vault::fs_write_file(&root, "notes", "/notes.txt", b"kept").unwrap();
-        close_vault(&root, "notes", None).unwrap();
+        close_vault(&root, "notes").unwrap();
         assert_eq!(listed_session(&root, "notes"), None);
 
         let store = root.vault_store_dir("notes").unwrap();
@@ -836,7 +836,7 @@ mode = "encrypted_dir"
             b"kept"
         );
         assert_eq!(std::fs::read(&index).unwrap(), original);
-        close_vault(&root, "notes", None).unwrap();
+        close_vault(&root, "notes").unwrap();
         assert_eq!(listed_session(&root, "notes"), None);
     }
 }

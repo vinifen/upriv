@@ -1,5 +1,6 @@
 import type { VaultGroup } from "../vault-groups/types";
 import type { VaultListItem } from "../vault-list/types";
+import type { KdfUnlockPreset } from "./kdf";
 import type { VaultSettingsConfig, VaultSettingsListPatch } from "./types";
 
 /** List fields synced from `[vault]` on save (`vault_config_save` / `vault_rename`). */
@@ -26,6 +27,15 @@ export function vaultSettingsIdentityListPatch(
     ...baseline,
     vault: { ...baseline.vault, id, display_name: displayName },
   });
+}
+
+/** List row after an unlock-RAM rewrap. Other fields stay as they are on the row. */
+export function applyVaultUnlockPreset(
+  vault: VaultListItem,
+  unlockPreset: KdfUnlockPreset,
+): VaultListItem {
+  if (vault.unlockPreset === unlockPreset) return vault;
+  return { ...vault, unlockPreset };
 }
 
 /** Apply settings save patch onto one list row (`fromId` → `patch.id` when renamed). */

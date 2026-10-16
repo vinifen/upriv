@@ -40,6 +40,7 @@ export type {
 } from "./dockReducer";
 export {
   createEmptyFileManagerState,
+  closeIntentAfterUnsavedResolved,
   fileManagerBlockingPrompt,
   fileManagerDismissIntent,
   vaultCloseBlockingPrompt,

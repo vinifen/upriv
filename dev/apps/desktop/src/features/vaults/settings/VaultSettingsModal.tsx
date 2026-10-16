@@ -11,8 +11,6 @@ import {
   VaultSettingsCloseSection,
   VaultSettingsDangerZoneSection,
   VaultSettingsMountSection,
-  VaultSettingsPolicySection,
-  VaultSettingsSecuritySection,
   VaultSettingsStorageSection,
   VaultSettingsVaultSection,
   VaultSettingsGroupSection,
@@ -34,6 +32,7 @@ import type {
   WorkspaceTable,
   VaultPipelineListStatus,
   KdfUnlockPreset,
+  VaultRewrapRun,
 } from "@upriv/shared";
 import {
   VAULT_DISPLAY_NAME_MAX_LENGTH,
@@ -66,6 +65,7 @@ import {
   vaultSettingsIdentityListPatch,
   vaultRootPathForWorkspaceValidation,
   vaultConfigEditAllowed,
+  vaultRowControls,
   rebaseQuietLockedVaultSettings,
   normalizeStoredName,
 } from "@upriv/shared";
@@ -73,13 +73,9 @@ import { createVaultErrorI18nKey, desktopErrorI18nKey } from "@/lib/errorMessage
 
 const SAVED_INDICATOR_MS = 1500;
 
-type RewrapKind = "password" | "kdf";
+type RewrapKind = VaultRewrapRun["kind"];
 
-type RewrapRun = {
-  vaultId: string;
-  kind: RewrapKind;
-  startedAt: number;
-};
+type RewrapRun = VaultRewrapRun;
 
 type RewrapFailure = {
   vaultId: string;
@@ -98,6 +94,8 @@ interface VaultSettingsModalProps {
   pipelineListStatus?: VaultPipelineListStatus;
   groups?: readonly VaultGroup[];
   onVaultSettingsSaved?: (vaultId: string, patch: VaultSettingsListPatch) => void;
+  /** Unlock-RAM success. Updates that vault's preset only. */
+  onUnlockPresetSaved?: (vaultId: string, unlockPreset: KdfUnlockPreset) => void;
   /** Block Open/Unlock for these vault ids while preferences persist is in flight. */
   onPersistBusyChange?: (vaultIds: readonly string[] | null) => void;
   onCommitGroupAssignment?: (
@@ -108,7 +106,7 @@ interface VaultSettingsModalProps {
   /** List toast. A rewrap can finish after this modal closes. */
   onNotice?: (message: string) => void;
   /** Lets the list refuse a second password or unlock-RAM screen. */
-  onRewrapRunChange?: (run: { vaultId: string; kind: RewrapKind } | null) => void;
+  onRewrapRunChange?: (run: VaultRewrapRun | null) => void;
 }
 
 export function VaultSettingsModal({
@@ -119,6 +117,7 @@ export function VaultSettingsModal({
   pipelineListStatus = {},
   groups = NO_VAULT_GROUPS,
   onVaultSettingsSaved,
+  onUnlockPresetSaved,
   onPersistBusyChange,
   onCommitGroupAssignment,
   onVaultDelete,
@@ -129,11 +128,14 @@ export function VaultSettingsModal({
   const { showError, show } = useErrorToast();
   const onNoticeRef = useRef(onNotice);
   onNoticeRef.current = onNotice;
-  const notice = useCallback((message: string) => {
-    const report = onNoticeRef.current;
-    if (report) report(message);
-    else show(message);
-  }, [show]);
+  const notice = useCallback(
+    (message: string) => {
+      const report = onNoticeRef.current;
+      if (report) report(message);
+      else show(message);
+    },
+    [show],
+  );
   const { settings: appSettings, showHiddenVaultsSession } = useAppSettingsContext();
   const vaultService = useVaultService();
   const vaultRootService = useVaultRootService();
@@ -253,13 +255,15 @@ export function VaultSettingsModal({
 
   const canConfirmDelete = vault !== null && deleteConfirm.trim() === vault.id;
   const vaultListStatus = vault ? resolveVaultListStatus(vault, pipelineListStatus) : "closed";
+  const settingsSaveBlocked = Boolean(
+    vault && vaultRowControls(vault, pipelineListStatus).settingsSaveBlocked,
+  );
   const canDeleteNow = canDeleteVaultNow(vaultListStatus);
   const editAllowed = (target: Parameters<typeof vaultConfigEditAllowed>[0]) =>
     vault != null && vaultConfigEditAllowed(target, vault, pipelineListStatus);
   const storageModeLocked = !editAllowed("storage.mode");
   const displayNameLocked = !editAllowed("vault.display_name");
   const mountLocked = !editAllowed("mount.workspace_path");
-  const securityModeLocked = !editAllowed("security.mode");
   /** password / KDF — `vault_closed`. */
   const rewrapBlocked = Boolean(
     vault && !vaultConfigEditAllowed("action.change_password", vault, pipelineListStatus),
@@ -434,6 +438,7 @@ export function VaultSettingsModal({
   const persistPreferences = useCallback(
     async (next: VaultSettingsConfig) => {
       if (!vaultId || !baseline || !vault || !vaultService.canPersistSettings) return;
+      if (vaultRowControls(vault, pipelineListStatus).settingsSaveBlocked) return;
       if (submitInFlightRef.current) return;
       submitInFlightRef.current = true;
       const rebased = rebaseQuietLockedVaultSettings(next, baseline, vault, pipelineListStatus);
@@ -665,25 +670,32 @@ export function VaultSettingsModal({
       if (showing) {
         flashSaved();
         setSaveConfirmOpen(false);
-      }
-      try {
-        const fresh = await vaultService.getSettings(vaultId);
-        if (!fresh) return;
-        const normalized = normalizeVaultSettingsConfig(fresh);
-        replaceConfig(normalized);
-        setDraft((current) =>
-          current
-            ? {
-                ...current,
-                security: {
-                  ...current.security,
-                  password_changed_at: normalized.security.password_changed_at,
-                },
-              }
-            : current,
-        );
-      } catch {
-        // The password already changed. A settings refresh must not hide that.
+        try {
+          const fresh = await vaultService.getSettings(vaultId);
+          if (!fresh) return;
+          if (
+            !openRef.current ||
+            vaultIdRef.current !== vaultId ||
+            areaRef.current !== "password"
+          ) {
+            return;
+          }
+          const normalized = normalizeVaultSettingsConfig(fresh);
+          replaceConfig(normalized);
+          setDraft((current) =>
+            current
+              ? {
+                  ...current,
+                  security: {
+                    ...current.security,
+                    password_changed_at: normalized.security.password_changed_at,
+                  },
+                }
+              : current,
+          );
+        } catch {
+          // The password already changed. A settings refresh must not hide that.
+        }
       }
     } catch (error) {
       if (!rewrapStillCurrent(generation)) return;
@@ -720,36 +732,27 @@ export function VaultSettingsModal({
       });
       if (!rewrapStillCurrent(generation)) return;
       clearRewrapRun();
-      const showing = openRef.current && vaultIdRef.current === vaultId && areaRef.current === "kdf";
+      const showing =
+        openRef.current && vaultIdRef.current === vaultId && areaRef.current === "kdf";
       if (!openRef.current || vaultIdRef.current === vaultId) resetKdfForm();
       notice(t("vault.change_kdf.success"));
       if (showing) {
         flashSaved();
         setSaveConfirmOpen(false);
+        setHeaderUnlockPreset(nextPreset);
       }
-      setHeaderUnlockPreset(nextPreset);
-      try {
-        if (baseline) {
-          onVaultSettingsSaved?.(vaultId, {
-            ...vaultSettingsToListPatch(baseline),
-            unlockPreset: nextPreset,
-          });
-        }
-      } catch {
-        // Unlock RAM already changed. A list refresh must not hide that.
-      }
+      onUnlockPresetSaved?.(vaultId, nextPreset);
     } catch (error) {
       if (!rewrapStillCurrent(generation)) return;
       clearRewrapRun();
       recordRewrapFailure(vaultId, "kdf", error);
     }
   }, [
-    baseline,
     beginRewrap,
     clearRewrapRun,
     kdfCanSubmit,
     kdfFields,
-    onVaultSettingsSaved,
+    onUnlockPresetSaved,
     recordRewrapFailure,
     notice,
     resetKdfForm,
@@ -802,9 +805,7 @@ export function VaultSettingsModal({
   }, [notice, resetKdfForm, resetPasswordForm, rewrapBudget.timedOut, t]);
 
   useEffect(() => {
-    onRewrapRunChange?.(
-      rewrapRun ? { vaultId: rewrapRun.vaultId, kind: rewrapRun.kind } : null,
-    );
+    onRewrapRunChange?.(rewrapRun);
   }, [onRewrapRunChange, rewrapRun]);
 
   const dismissFooterConfirm = useCallback(() => {
@@ -842,9 +843,6 @@ export function VaultSettingsModal({
           return current;
         }
         if (section === "mount" && mountLocked) return current;
-        if (section === "security" && "mode" in patch && securityModeLocked) {
-          return current;
-        }
 
         return {
           ...current,
@@ -852,7 +850,7 @@ export function VaultSettingsModal({
         };
       });
     },
-    [storageModeLocked, displayNameLocked, mountLocked, securityModeLocked],
+    [storageModeLocked, displayNameLocked, mountLocked],
   );
 
   const resetActiveAreaDraft = useCallback(() => {
@@ -908,6 +906,7 @@ export function VaultSettingsModal({
   };
 
   const handleSaveClick = () => {
+    if (settingsSaveBlocked) return;
     if (!activeArea || !areaDirty || sectionBusy || mountPathIssue || mountDriverAttention) return;
 
     if (activeArea === "preferences" && draft) {
@@ -923,6 +922,7 @@ export function VaultSettingsModal({
   };
 
   const handleConfirmSave = () => {
+    if (settingsSaveBlocked) return;
     if (!activeArea || sectionBusy) return;
     if (activeArea === "preferences") {
       if (!draft || !preferencesDirty || mountPathIssue || mountDriverAttention) return;
@@ -983,7 +983,10 @@ export function VaultSettingsModal({
     (activeArea === "password" && passwordRewrapRunning) ||
     (activeArea === "kdf" && kdfRewrapRunning);
   const failureForArea =
-    rewrapFailure && vaultId && rewrapFailure.vaultId === vaultId && rewrapFailure.kind === activeArea
+    rewrapFailure &&
+    vaultId &&
+    rewrapFailure.vaultId === vaultId &&
+    rewrapFailure.kind === activeArea
       ? rewrapFailure
       : null;
   const passwordFieldError = failureForArea?.onPasswordField ? failureForArea.message : null;
@@ -1004,6 +1007,7 @@ export function VaultSettingsModal({
           : t("modal.settings.save");
 
   const saveDisabled =
+    settingsSaveBlocked ||
     sectionBusy ||
     !areaDirty ||
     mountPathIssue ||
@@ -1166,7 +1170,6 @@ export function VaultSettingsModal({
                   <VaultSettingsSection
                     key={sectionId}
                     title={t(`modal.settings.section.${sectionId}` as I18nKey)}
-                    defaultOpen={sectionId === "vault"}
                   >
                     {renderPreferenceSection(
                       sectionId,
@@ -1176,7 +1179,6 @@ export function VaultSettingsModal({
                         storageModeLocked,
                         displayNameLocked,
                         mountLocked,
-                        securityModeLocked,
                         hiddenLocked,
                       },
                       vaultRootPathForWorkspaceValidation(
@@ -1297,7 +1299,6 @@ function renderPreferenceSection(
     storageModeLocked: boolean;
     displayNameLocked: boolean;
     mountLocked: boolean;
-    securityModeLocked: boolean;
     hiddenLocked: boolean;
   },
   vaultRootPath: string | null,
@@ -1340,15 +1341,7 @@ function renderPreferenceSection(
       return (
         <VaultSettingsCloseSection
           autoClose={draft.auto_close}
-          secureWipe={draft.security.secure_wipe_workspace}
-          requireUnmountOnSleep={draft.policy.require_unmount_on_sleep}
           onAutoCloseChange={(patch) => patchDraft("auto_close", patch)}
-          onSecureWipeChange={(secure_wipe_workspace) =>
-            patchDraft("security", { secure_wipe_workspace })
-          }
-          onRequireUnmountOnSleepChange={(require_unmount_on_sleep) =>
-            patchDraft("policy", { require_unmount_on_sleep })
-          }
         />
       );
     case "backup":
@@ -1356,24 +1349,6 @@ function renderPreferenceSection(
         <VaultSettingsBackupSection
           config={draft.backup}
           onChange={(patch) => patchDraft("backup", patch)}
-        />
-      );
-    case "security":
-      return (
-        <VaultSettingsSecuritySection
-          storageMode={draft.storage.mode}
-          config={draft.security}
-          passwordHint={draft.vault.password_hint}
-          securityModeLocked={locks.securityModeLocked}
-          onChange={(patch) => patchDraft("security", patch)}
-          onPasswordHintChange={(password_hint) => patchDraft("vault", { password_hint })}
-        />
-      );
-    case "policy":
-      return (
-        <VaultSettingsPolicySection
-          config={draft.policy}
-          onChange={(patch) => patchDraft("policy", patch)}
         />
       );
     default:

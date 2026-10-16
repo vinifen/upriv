@@ -1,7 +1,5 @@
 import type { VaultRow } from "./types";
 import { resolveVaultDisplayStatus, storageModeIsPlaintext } from "./types";
-import type { SecurityMode } from "../vault-settings/types";
-import { securityModeToUi } from "../vault-settings/types";
 
 export type VaultLifecycleIntent = "unlock" | "close";
 
@@ -10,34 +8,20 @@ export interface VaultLifecycleRequest {
   intent: VaultLifecycleIntent;
 }
 
-/** Whether idle auto-close can run without prompting the user. */
-export function canRunIdleAutoClose(vault: VaultRow, securityMode: SecurityMode): boolean {
-  return !requiresPasswordForLifecycle(vault, "close", securityMode);
+/**
+ * Idle auto-close runs for every open vault, including a future `upriv_plain`
+ * session. The lock is the normal close, so plaintext wipes its folder.
+ * Callers must not consult `requiresCloseDialog` — that confirm is only for a
+ * manual lock.
+ */
+export function canRunIdleAutoClose(vault: VaultRow): boolean {
+  return resolveVaultDisplayStatus(vault) === "open";
 }
 
 /**
- * Close uses session keys already in RAM (or `session.enc`). The password string
- * is only required to unlock, or as an opt-in presence check (`always_prompt`).
- * A typed close password must never rewrap `vault.header`.
+ * Show a lock dialog only to confirm wiping an open `upriv_plain` folder.
+ * Encrypted lock starts the pipeline immediately.
  */
-export function requiresPasswordForLifecycle(
-  vault: VaultRow,
-  intent: VaultLifecycleIntent,
-  securityMode: SecurityMode,
-): boolean {
-  if (intent === "unlock") return true;
-
-  const status = resolveVaultDisplayStatus(vault);
-  if (status !== "open") return false;
-
-  return securityModeToUi(securityMode) === "prompt_open_close";
-}
-
-/**
- * Show a lock dialog: password presence-check (`always_prompt`) and/or wipe
- * confirm for `upriv_plain`. Default `encrypted_dir` lock starts the pipeline.
- */
-export function requiresCloseDialog(vault: VaultRow, securityMode: SecurityMode): boolean {
-  if (requiresPasswordForLifecycle(vault, "close", securityMode)) return true;
+export function requiresCloseDialog(vault: VaultRow): boolean {
   return storageModeIsPlaintext(vault.storageMode) && resolveVaultDisplayStatus(vault) === "open";
 }

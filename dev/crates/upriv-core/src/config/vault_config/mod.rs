@@ -6,13 +6,14 @@ mod types;
 
 use std::path::{Path, PathBuf};
 
+use serde::Deserialize;
+
 use crate::error::{Result, UprivError};
 
 pub use types::{
     VaultArchiveMode, VaultAutoCloseSection, VaultBackupMode, VaultBackupSection, VaultConfig,
-    VaultIdentitySection, VaultMountSection, VaultPolicySection, VaultSecurityMode,
-    VaultSecuritySection, VaultSevenZipMethod, VaultSevenZipSection, VaultStorageMode,
-    VaultStorageSection, VaultWipePattern,
+    VaultIdentitySection, VaultMountSection, VaultSecuritySection, VaultSevenZipMethod,
+    VaultSevenZipSection, VaultStorageMode, VaultStorageSection, VaultWipePattern,
 };
 
 const CONFIG_FILE_NAME: &str = "config.toml";
@@ -61,6 +62,9 @@ fn map_mount_validate_error(path: &Path, error: UprivError) -> UprivError {
 
 /// Parse + identity/storage validate; normalizes mount path. **Does not** validate
 /// mount absolute/reserved — use for list so a bad mount does not hide the vault.
+///
+/// A key that is not part of this config is removed and the file is saved without
+/// it. A known key with an invalid value still fails, and that file is left as it was.
 pub fn load_vault_config_raw(vault_dir: impl AsRef<Path>) -> Result<VaultConfig> {
     let vault_dir = vault_dir.as_ref();
     let path = vault_config_path(vault_dir);
@@ -71,11 +75,7 @@ pub fn load_vault_config_raw(vault_dir: impl AsRef<Path>) -> Result<VaultConfig>
         });
     }
     let raw = crate::host_fs::read_to_string(&path).map_err(UprivError::from)?;
-    let mut parsed: VaultConfig =
-        toml::from_str(&raw).map_err(|error| UprivError::VaultConfigInvalid {
-            path: path.clone(),
-            detail: format!("invalid config.toml: {error}"),
-        })?;
+    let (mut parsed, dropped) = parse_vault_config_toml(&raw, &path)?;
 
     if parsed.vault.id.trim().is_empty() {
         return Err(UprivError::VaultConfigInvalid {
@@ -105,19 +105,114 @@ pub fn load_vault_config_raw(vault_dir: impl AsRef<Path>) -> Result<VaultConfig>
         });
     }
 
-    Ok(VaultConfig {
-        vault: parsed.vault,
-        storage: parsed.storage,
-        mount: parsed.mount,
-        backup: parsed.backup,
-        security: VaultSecuritySection {
-            mode: parsed.security.mode,
-            ..parsed.security
-        },
-        auto_close: parsed.auto_close,
-        seven_zip: parsed.seven_zip,
-        policy: parsed.policy,
+    if dropped && save_vault_config_unchecked(vault_dir, &parsed).is_err() {
+        crate::logging::log_event(
+            crate::logging::LogLevel::Warn,
+            "vault_config_rewrite_failed",
+            &[("id", parsed.id())],
+        );
+    }
+
+    Ok(parsed)
+}
+
+/// Parse `config.toml` text.
+///
+/// Keys that are not part of this config are removed first. The `bool` is true
+/// when any were present. A known key with an invalid value still fails.
+pub(crate) fn parse_vault_config_toml(raw: &str, path: &Path) -> Result<(VaultConfig, bool)> {
+    let mut doc: toml::Table = toml::from_str(raw).map_err(|error| invalid_config(path, &error))?;
+    let dropped = drop_incorrect_keys(&mut doc, path)?;
+    let mut parsed = VaultConfig::deserialize(toml::Value::Table(doc))
+        .map_err(|error| invalid_config(path, &error))?;
+    parsed.auto_close.idle_minutes = types::clamp_idle_minutes(parsed.auto_close.idle_minutes);
+    Ok((parsed, dropped))
+}
+
+/// Remove keys the config structs reject. Stops on any other parse error.
+fn drop_incorrect_keys(doc: &mut toml::Table, path: &Path) -> Result<bool> {
+    let mut dropped = false;
+    for _ in 0..64 {
+        match VaultConfig::deserialize(toml::Value::Table(doc.clone())) {
+            Ok(_) => return Ok(dropped),
+            Err(error) => {
+                let Some(key_path) = incorrect_key_path(&error) else {
+                    return Err(invalid_config(path, &error));
+                };
+                if !remove_key_path(doc, &key_path) {
+                    return Err(invalid_config(path, &error));
+                }
+                dropped = true;
+            }
+        }
+    }
+    Err(UprivError::VaultConfigInvalid {
+        path: path.to_path_buf(),
+        detail: "invalid config.toml: too many incorrect keys".into(),
     })
+}
+
+fn invalid_config(path: &Path, error: &toml::de::Error) -> UprivError {
+    UprivError::VaultConfigInvalid {
+        path: path.to_path_buf(),
+        detail: format!("invalid config.toml: {error}"),
+    }
+}
+
+/// Path of a key the config structs do not have. Any other parse error returns None.
+fn incorrect_key_path(error: &toml::de::Error) -> Option<Vec<String>> {
+    let message = error.message();
+    if !message.contains("unknown field") {
+        return None;
+    }
+    let name = field_name(message)?;
+    let mut key_path = path_after_in(&error.to_string()).unwrap_or_default();
+    key_path.push(name);
+    Some(key_path)
+}
+
+fn path_after_in(rendered: &str) -> Option<Vec<String>> {
+    let marker = "in `";
+    let start = rendered.rfind(marker)?;
+    let rest = &rendered[start + marker.len()..];
+    let end = rest.find('`')?;
+    let key_path = rest[..end].trim();
+    if key_path.is_empty() {
+        return None;
+    }
+    Some(key_path.split('.').map(str::to_string).collect())
+}
+
+fn field_name(message: &str) -> Option<String> {
+    let marker = "unknown field `";
+    let start = message.find(marker)? + marker.len();
+    let rest = &message[start..];
+    let end = rest.find('`')?;
+    let name = &rest[..end];
+    if name.is_empty() {
+        None
+    } else {
+        Some(name.to_string())
+    }
+}
+
+fn remove_key_path(doc: &mut toml::Table, key_path: &[String]) -> bool {
+    let Some((name, rest)) = key_path.split_first() else {
+        return false;
+    };
+    if rest.is_empty() {
+        return doc.remove(name).is_some();
+    }
+    let Some(toml::Value::Table(child)) = doc.get_mut(name) else {
+        return false;
+    };
+    remove_key_path(child, rest)
+}
+
+fn save_vault_config_unchecked(vault_dir: &Path, config: &VaultConfig) -> Result<()> {
+    let path = vault_config_path(vault_dir);
+    let body = serialize_vault_config_toml_unchecked(config)?;
+    crate::paths::write_bytes_atomic_existing_parent(&path, body.as_bytes())
 }
 
 /// Trim, collapse internal whitespace, and reject empty / illegal / reserved names.
@@ -219,6 +314,7 @@ pub fn serialize_vault_config_toml(config: &VaultConfig) -> Result<String> {
 fn serialize_vault_config_toml_unchecked(config: &VaultConfig) -> Result<String> {
     let mut config = config.clone();
     config.vault.display_name = crate::paths::normalize_stored_name(&config.vault.display_name);
+    config.auto_close.idle_minutes = types::clamp_idle_minutes(config.auto_close.idle_minutes);
     let body = toml::to_string_pretty(&config).map_err(|error| UprivError::VaultConfigInvalid {
         path: PathBuf::from("config.toml"),
         detail: format!("serialize config.toml: {error}"),
@@ -407,6 +503,165 @@ display_name = "X"
     }
 
     #[test]
+    fn unknown_security_fields_are_rejected() {
+        toml::from_str::<VaultSecuritySection>("not_a_field = true")
+            .expect_err("unknown security field");
+    }
+
+    #[test]
+    fn unknown_auto_close_fields_are_rejected() {
+        toml::from_str::<VaultAutoCloseSection>("not_a_field = true")
+            .expect_err("unknown auto-close field");
+        toml::from_str::<VaultAutoCloseSection>("warn_before_seconds = 60")
+            .expect_err("warning seconds are not a vault setting");
+    }
+
+    #[test]
+    fn load_drops_incorrect_keys_and_saves_the_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let vault_dir = tmp.path().join("notes");
+        crate::host_fs::create_dir_all(&vault_dir).unwrap();
+        let original = r#"
+[vault]
+id = "notes"
+display_name = "Notes"
+note = "keep me"
+order = 4
+
+[storage]
+mode = "encrypted_dir"
+extra = true
+
+[security]
+mode = "session_ram"
+wipe_passes = 2
+
+[auto_close]
+enabled = true
+idle_minutes = 30
+warn_before_seconds = 60
+
+[policy]
+allow_external_editors = true
+
+[mount.linux]
+path = "/tmp/notes"
+place = "custom"
+"#;
+        crate::host_fs::write(vault_dir.join("config.toml"), original).unwrap();
+        let cfg = load_vault_config_raw(&vault_dir).unwrap();
+        assert_eq!(cfg.vault.note, "keep me");
+        assert_eq!(cfg.vault.order, 4);
+        assert_eq!(cfg.storage_mode(), VaultStorageMode::EncryptedDir);
+        assert_eq!(cfg.security.wipe_passes, 2);
+        assert!(cfg.auto_close.enabled);
+        assert_eq!(cfg.auto_close.idle_minutes, 30);
+        assert_eq!(cfg.mount.linux.path, "/tmp/notes");
+
+        let saved = crate::host_fs::read_to_string(vault_dir.join("config.toml")).unwrap();
+        assert!(!saved.contains("warn_before_seconds"));
+        assert!(!saved.contains("session_ram"));
+        assert!(!saved.contains("[policy]"));
+        assert!(!saved.contains("allow_external_editors"));
+        assert!(!saved.contains("extra"));
+        assert!(!saved.contains("place"));
+        assert!(saved.contains("wipe_passes"));
+        assert!(saved.contains("idle_minutes"));
+        assert!(saved.contains("encrypted_dir"));
+
+        let again = load_vault_config_raw(&vault_dir).unwrap();
+        assert_eq!(again, cfg);
+        let after = crate::host_fs::read_to_string(vault_dir.join("config.toml")).unwrap();
+        assert_eq!(after, saved);
+    }
+
+    #[test]
+    fn load_leaves_a_current_config_untouched() {
+        let tmp = tempfile::tempdir().unwrap();
+        let vault_dir = tmp.path().join("notes");
+        crate::host_fs::create_dir_all(&vault_dir).unwrap();
+        let original = "\
+[vault]
+id = \"notes\"
+display_name = \"Notes\"
+";
+        let path = vault_dir.join("config.toml");
+        crate::host_fs::write(&path, original).unwrap();
+        load_vault_config_raw(&vault_dir).unwrap();
+        let saved = crate::host_fs::read_to_string(&path).unwrap();
+        assert_eq!(saved, original);
+    }
+
+    #[test]
+    fn load_leaves_an_invalid_value_untouched() {
+        let tmp = tempfile::tempdir().unwrap();
+        let vault_dir = tmp.path().join("notes");
+        crate::host_fs::create_dir_all(&vault_dir).unwrap();
+        let original = r#"
+[vault]
+id = "notes"
+display_name = "Notes"
+
+[auto_close]
+idle_minutes = "soon"
+"#;
+        let path = vault_dir.join("config.toml");
+        crate::host_fs::write(&path, original).unwrap();
+        let err = load_vault_config_raw(&vault_dir).unwrap_err();
+        assert!(matches!(err, UprivError::VaultConfigInvalid { .. }));
+        let saved = crate::host_fs::read_to_string(&path).unwrap();
+        assert_eq!(saved, original);
+    }
+
+    #[test]
+    fn load_clamps_idle_minutes_without_rewriting() {
+        let tmp = tempfile::tempdir().unwrap();
+        let vault_dir = tmp.path().join("notes");
+        crate::host_fs::create_dir_all(&vault_dir).unwrap();
+        let original = "\
+[vault]
+id = \"notes\"
+display_name = \"Notes\"
+
+[auto_close]
+enabled = true
+idle_minutes = 40000
+";
+        let path = vault_dir.join("config.toml");
+        crate::host_fs::write(&path, original).unwrap();
+        let cfg = load_vault_config_raw(&vault_dir).unwrap();
+        assert_eq!(cfg.auto_close.idle_minutes, types::IDLE_MINUTES_MAX);
+        assert_eq!(crate::host_fs::read_to_string(&path).unwrap(), original);
+
+        crate::host_fs::write(
+            &path,
+            original.replace("idle_minutes = 40000", "idle_minutes = 0"),
+        )
+        .unwrap();
+        let raised = load_vault_config_raw(&vault_dir).unwrap();
+        assert_eq!(raised.auto_close.idle_minutes, types::IDLE_MINUTES_MIN);
+        assert!(crate::host_fs::read_to_string(&path)
+            .unwrap()
+            .contains("idle_minutes = 0"));
+        let saved = serialize_vault_config_toml_unchecked(&raised).unwrap();
+        assert!(saved.contains("idle_minutes = 1"));
+    }
+
+    #[test]
+    fn unknown_config_sections_are_rejected() {
+        toml::from_str::<VaultConfig>(
+            r#"
+[vault]
+id = "x"
+display_name = "X"
+[not_a_section]
+not_a_field = true
+"#,
+        )
+        .expect_err("unknown config section");
+    }
+
+    #[test]
     fn missing_optional_sections_use_ts_defaults() {
         let cfg: VaultConfig = toml::from_str(
             r#"
@@ -419,15 +674,10 @@ display_name = "X"
         assert!(cfg.backup.enabled);
         assert_eq!(cfg.backup.keep_last, 1);
         assert!(cfg.backup.skip_unchanged);
-        assert_eq!(cfg.security.mode, VaultSecurityMode::SessionRam);
-        assert!(cfg.security.secure_wipe_workspace);
         assert!(!cfg.auto_close.enabled);
         assert_eq!(cfg.auto_close.idle_minutes, 15);
         assert!(cfg.seven_zip.encrypt_file_names);
         assert_eq!(cfg.seven_zip.archive_mode, VaultArchiveMode::EncryptOnly);
-        assert!(!cfg.policy.allow_external_editors);
-        assert!(cfg.policy.disallow_copy_outside_mount);
-        assert!(cfg.policy.require_unmount_on_sleep);
         assert!(cfg.mount.linux.path.is_empty());
         assert_eq!(
             cfg.mount.app_file_manager_folder,
@@ -500,7 +750,6 @@ path = "relative/mount"
             security: VaultSecuritySection::default(),
             auto_close: VaultAutoCloseSection::default(),
             seven_zip: VaultSevenZipSection::default(),
-            policy: VaultPolicySection::default(),
         };
         let err = serialize_vault_config_toml(&cfg).unwrap_err();
         assert!(matches!(err, UprivError::VaultConfigInvalid { .. }));
@@ -532,8 +781,6 @@ path = "relative/mount"
                 skip_unchanged: false,
             },
             security: VaultSecuritySection {
-                mode: VaultSecurityMode::AlwaysPrompt,
-                secure_wipe_workspace: false,
                 wipe_passes: 2,
                 wipe_pattern: VaultWipePattern::Zeros,
                 password_changed_at: Some("2026-01-01T00:00:00Z".into()),
@@ -541,8 +788,6 @@ path = "relative/mount"
             auto_close: VaultAutoCloseSection {
                 enabled: true,
                 idle_minutes: 30,
-                warn_before_seconds: 90,
-                close_on_app_exit: true,
             },
             seven_zip: VaultSevenZipSection {
                 encrypt_file_names: false,
@@ -550,11 +795,6 @@ path = "relative/mount"
                 compression_level: 5,
                 solid: true,
                 method: VaultSevenZipMethod::Lzma2,
-            },
-            policy: VaultPolicySection {
-                allow_external_editors: true,
-                disallow_copy_outside_mount: false,
-                require_unmount_on_sleep: false,
             },
         };
         let tmp = tempfile::tempdir().unwrap();
@@ -567,7 +807,6 @@ path = "relative/mount"
             "[security]",
             "[auto_close]",
             "[seven_zip]",
-            "[policy]",
             "[mount.linux]",
         ] {
             assert!(raw.contains(section), "missing {section} in:\n{raw}");
@@ -579,7 +818,6 @@ path = "relative/mount"
         assert_eq!(loaded.security, cfg.security);
         assert_eq!(loaded.auto_close, cfg.auto_close);
         assert_eq!(loaded.seven_zip, cfg.seven_zip);
-        assert_eq!(loaded.policy, cfg.policy);
         assert_eq!(loaded.mount.linux.path, "/tmp/open");
         assert!(loaded.vault.hidden);
         assert!(

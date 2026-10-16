@@ -9,6 +9,7 @@ import {
   type TextInputProps,
 } from "react-native";
 import { Icon } from "@/components/icons";
+import { noteIdleActivity } from "@/lib/idleActivity";
 import { useTranslation } from "@/i18n";
 import { useTheme } from "@/theme";
 import { controlFocusRing, radii, spacing } from "@/theme/tokens";
@@ -64,7 +65,7 @@ export const ThemedInput = forwardRef<
   TextInput,
   TextInputProps & { mono?: boolean; disabled?: boolean }
 >(function ThemedInput(
-  { mono, style, editable = true, disabled = false, onFocus, onBlur, ...rest },
+  { mono, style, editable = true, disabled = false, onFocus, onBlur, onChangeText, ...rest },
   ref,
 ) {
   const { colors, typography } = useTheme();
@@ -88,6 +89,10 @@ export const ThemedInput = forwardRef<
         setFocused(false);
         onBlur?.(event);
       }}
+      onChangeText={(text) => {
+        noteIdleActivity();
+        onChangeText?.(text);
+      }}
       style={[
         mono ? typography.mono : typography.body,
         styles.input,
@@ -109,7 +114,16 @@ export const PasswordInput = forwardRef<
   TextInput,
   Omit<TextInputProps, "secureTextEntry"> & { disabled?: boolean; invalid?: boolean }
 >(function PasswordInput(
-  { style, editable = true, disabled = false, invalid = false, onFocus, onBlur, ...rest },
+  {
+    style,
+    editable = true,
+    disabled = false,
+    invalid = false,
+    onFocus,
+    onBlur,
+    onChangeText,
+    ...rest
+  },
   ref,
 ) {
   const { colors, typography } = useTheme();
@@ -149,6 +163,10 @@ export const PasswordInput = forwardRef<
         onBlur={(event) => {
           setFocused(false);
           onBlur?.(event);
+        }}
+        onChangeText={(text) => {
+          noteIdleActivity();
+          onChangeText?.(text);
         }}
         style={[typography.body, styles.passwordText, { color: colors.onSurface }, style]}
       />

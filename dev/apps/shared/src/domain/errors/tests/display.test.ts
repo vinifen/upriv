@@ -77,6 +77,18 @@ describe("errorDisplayI18nKey", () => {
     );
   });
 
+  it("maps an unchanged rewrap to the must-be-different copy", () => {
+    expect(errorDisplayI18nKey(new RpcError("rewrap_password_unchanged", "same"))).toBe(
+      "vault.change_password.same_as_current",
+    );
+    expect(errorDisplayI18nKey(new RpcError("rewrap_kdf_unchanged", "same"))).toBe(
+      "vault.change_kdf.same_as_current",
+    );
+    expect(
+      errorDisplayI18nKey(new RpcError("vault_config_invalid", "rewrap changes nothing")),
+    ).toBe(null);
+  });
+
   it("returns null for unknown errors", () => {
     expect(errorDisplayI18nKey(new Error("nope"))).toBeNull();
   });

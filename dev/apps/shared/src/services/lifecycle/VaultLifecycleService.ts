@@ -24,6 +24,7 @@ export interface VaultLifecycleService {
   runClosingPipeline(
     vaultId: string,
     onStep: (stepIndex: number) => void,
+    reason?: "user" | "auto",
   ): Promise<CloseVaultOutcome>;
 
   /** Virtual mount path shown until the platform opens the OS file manager. */

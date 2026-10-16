@@ -3,6 +3,7 @@ import { Icon } from "@/components/icons";
 import { LoadingBudgetHint } from "@/components/ui";
 import { useTranslation } from "@/i18n";
 import {
+  vaultRowControls,
   resolveVaultListStatus,
   isVaultListRowActivatable,
   isVaultListRowUnlockTarget,
@@ -44,7 +45,6 @@ interface VaultRowProps {
   isDragOver: boolean;
   isDropBlocked?: boolean;
   isReorderActive: boolean;
-  isPipelineBusy: boolean;
   pointerDrag: VaultListPointerDragHandlers;
   onOpenBackups: (vaultId: string) => void;
   onOpenNote: (vaultId: string) => void;
@@ -72,7 +72,6 @@ export function VaultRow({
   isDragOver,
   isDropBlocked = false,
   isReorderActive,
-  isPipelineBusy,
   pointerDrag,
   onOpenBackups,
   onOpenNote,
@@ -86,8 +85,14 @@ export function VaultRow({
   const { t, locale } = useTranslation();
   const { settings: appSettings } = useAppSettingsContext();
   const status = resolveVaultListStatus(vault, pipelineListStatus);
-  const statusLabelKey = vaultStatusLabelKey(status, vault.id, pipelineListStatus);
+  const statusLabelKey = vaultStatusLabelKey(
+    status,
+    vault.id,
+    pipelineListStatus,
+    vault.autoClosed === true,
+  );
   const isOpen = status === "open";
+  const dragHeld = vaultRowControls(vault, pipelineListStatus).dragBlocked;
   const isLastOpened = appSettings.app.last_opened_vault.trim() === vault.id;
   const density =
     viewMode === "blocks" ? vaultRowDensityClass.default : vaultRowDensityClass[viewMode];
@@ -153,7 +158,7 @@ export function VaultRow({
       <div className="flex min-w-0 flex-1 items-center gap-2 sm:gap-3">
         {!dragDisabled ? (
           <VaultDragHandle
-            disabled={isPipelineBusy}
+            disabled={dragHeld}
             dropKey={dropKey}
             label={dragHandleLabel}
             onPointerDragStart={pointerDrag.onStart}
@@ -221,7 +226,6 @@ export function VaultRow({
         <VaultRowActions
           vault={vault}
           pipelineListStatus={pipelineListStatus}
-          disabled={isPipelineBusy}
           includeLockAction={false}
           onOpenBackups={onOpenBackups}
           onOpenNote={onOpenNote}

@@ -96,7 +96,7 @@ That script runs, in order:
 
 1. `node scripts/sync-version.mjs` — sync repo-root `VERSION` into manifests  
 2. `npm run build:electron --prefix apps/desktop` — typecheck + Vite Electron renderer → `apps/desktop/renderer-out/`  
-3. `npm run daemon:build:release` — `cargo build --release -p upriv-daemon` → `target/release/upriv-daemon.exe`  
+3. `npm run daemon:build:release` — `cargo build --release -p upriv-daemon -p upriv-fuse` → `target/release/upriv-daemon.exe` (the Linux package also copies `libupriv_fuse.so` from that directory; Windows does not ship the helper)  
 4. `npm run dist:win --prefix apps/electron` — compile Electron main (`tsc`) + `electron-builder --win nsis portable`
 
 Rebuild **packaging only** (renderer + daemon already fresh):

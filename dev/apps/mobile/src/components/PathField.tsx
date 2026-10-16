@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { StyleSheet, TextInput, View } from "react-native";
 import { RevealPathButton } from "@/components/RevealPathButton";
+import { noteIdleActivity } from "@/lib/idleActivity";
 import { useTheme } from "@/theme";
 import { controlFocusRing, radii, spacing } from "@/theme/tokens";
 
@@ -48,7 +49,10 @@ export function PathField({
         underlineColorAndroid="transparent"
         onFocus={() => setFocused(true)}
         onBlur={() => setFocused(false)}
-        onChangeText={onChangeText}
+        onChangeText={(text) => {
+          noteIdleActivity();
+          onChangeText?.(text);
+        }}
         style={[typography.mono, styles.input, { color: colors.onSurface }]}
       />
       <RevealPathButton path={openPath ?? value} inset />

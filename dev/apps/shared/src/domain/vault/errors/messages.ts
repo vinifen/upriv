@@ -27,6 +27,8 @@ export const VAULT_ERROR_I18N_KEYS = {
   vault_must_be_closed: "error.vault_must_be_closed",
   vault_busy: "error.vault_busy",
   vault_backup_failed: "error.vault_backup_failed",
+  rewrap_password_unchanged: "vault.change_password.same_as_current",
+  rewrap_kdf_unchanged: "vault.change_kdf.same_as_current",
 } as const satisfies Record<VaultErrorCode, I18nKey>;
 
 export type VaultErrorI18nKey = (typeof VAULT_ERROR_I18N_KEYS)[VaultErrorCode];

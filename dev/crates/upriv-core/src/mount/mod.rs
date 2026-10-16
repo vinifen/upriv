@@ -10,7 +10,7 @@ use crate::error::{Result, UprivError};
 #[cfg_attr(not(windows), allow(dead_code))]
 mod explorer;
 #[cfg(target_os = "linux")]
-mod fuse_linux;
+mod fuse_host;
 mod thumbnails;
 #[cfg(windows)]
 mod winfsp_windows;
@@ -34,7 +34,7 @@ pub fn mount_failure_reason(detail: &str) -> &'static str {
 pub struct MountedVault {
     pub(crate) mount_point: PathBuf,
     #[cfg(target_os = "linux")]
-    pub(crate) session: Option<fuser::BackgroundSession>,
+    pub(crate) fuse: Option<fuse_host::FuseSession>,
     #[cfg(windows)]
     pub(crate) winfsp: Option<winfsp_windows::WinFspVolume>,
 }
@@ -62,7 +62,7 @@ impl Drop for MountedVault {
         }
         #[cfg(target_os = "linux")]
         {
-            self.session.take();
+            self.fuse.take();
             unwatch_open_mount(&self.mount_point);
         }
         if force_unmount(&self.mount_point).is_ok() {
@@ -203,7 +203,7 @@ fn mount_prepared(
     vault_id: String,
     mount_point: PathBuf,
 ) -> Result<MountedVault> {
-    fuse_linux::spawn(root, vault_id, mount_point)
+    fuse_host::spawn(root, vault_id, mount_point)
 }
 
 #[cfg(windows)]

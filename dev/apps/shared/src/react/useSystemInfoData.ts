@@ -160,6 +160,7 @@ export function useSystemInfoData({
     ui.file_manager_tree_split_percent,
     ui.lifecycle_close_modal_on_submit,
     ui.lifecycle_open_file_manager_on_open,
+    ui.lifecycle_keep_open_on_wake,
     ui.file_manager_confirm_delete,
     ui.always_show_hidden_vaults,
     logging.enabled,

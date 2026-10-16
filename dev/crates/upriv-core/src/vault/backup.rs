@@ -300,15 +300,25 @@ pub fn backup_on_close(root: &VaultRoot, vault_id: &str) -> Result<Option<String
 /// One zip of the current `store/`, even when backups are off or a close would
 /// skip because the file tree is unchanged. That skip compares file names, not
 /// the header, so an older zip can still be sealed with a previous password.
-/// Prune runs only when backups are enabled.
+/// Retention is [`prune_after_rewrap`], after the header commit. A failed
+/// rewrap keeps this zip and the older ones.
 pub(crate) fn backup_before_rewrap(root: &VaultRoot, vault_id: &str) -> Result<()> {
     let vault_dir = root.vault_dir(vault_id)?;
-    let config = load_vault_config(&vault_dir)?;
+    // A broken config fails before a zip is written.
+    load_vault_config(&vault_dir)?;
     write_backup_zip(&vault_dir, vault_id)?;
-    if config.backup.enabled {
-        finish_backup_prune(&vault_dir, config.backup.mode, config.backup.keep_last)?;
-    }
     Ok(())
+}
+
+/// Apply this vault's backup retention to the safety zip. Call only after the header commit.
+/// Disabled backups and `keep_all` leave every zip in place.
+pub(crate) fn prune_after_rewrap(root: &VaultRoot, vault_id: &str) -> Result<()> {
+    let vault_dir = root.vault_dir(vault_id)?;
+    let config = load_vault_config(&vault_dir)?;
+    if !config.backup.enabled {
+        return Ok(());
+    }
+    finish_backup_prune(&vault_dir, config.backup.mode, config.backup.keep_last)
 }
 
 fn write_backup_zip(vault_dir: &Path, vault_id: &str) -> Result<String> {

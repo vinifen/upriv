@@ -38,12 +38,8 @@ describe("isVaultCredentialChallengeI18nKey", () => {
       false,
     );
     expect(rewrapErrorOnPasswordField(requireVaultErrorI18nKey("wrong_password"))).toBe(true);
-    expect(rewrapErrorOnPasswordField(requireVaultErrorI18nKey("vault_unlock_blocked"))).toBe(
-      true,
-    );
+    expect(rewrapErrorOnPasswordField(requireVaultErrorI18nKey("vault_unlock_blocked"))).toBe(true);
     expect(rewrapErrorOnPasswordField(requireVaultErrorI18nKey("insufficient_ram"))).toBe(false);
-    expect(rewrapErrorOnPasswordField(requireVaultErrorI18nKey("vault_backup_failed"))).toBe(
-      false,
-    );
+    expect(rewrapErrorOnPasswordField(requireVaultErrorI18nKey("vault_backup_failed"))).toBe(false);
   });
 });

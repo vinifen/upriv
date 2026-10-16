@@ -20,6 +20,7 @@ import {
   createDraftFromImportPackage,
   createVaultImportPackage,
   canDeleteVaultNow,
+  vaultRowControls,
   displayNameToGroupId,
   resolveVaultDisplayStatus,
   resolveVaultListStatus,
@@ -42,6 +43,7 @@ import {
   type VaultListSort,
   type VaultListSortDirection,
   type VaultListViewMode,
+  type VaultRewrapRun,
   type VaultSettingsAreaId,
 } from "@upriv/shared";
 import { useFileManager } from "@/features/vaults/file-manager";
@@ -73,20 +75,16 @@ export function useVaultListScreen() {
   const { toast: toastState, show: showToast, showError, dismiss: dismissToast } = useErrorToast();
   const daemonReady = useDaemonReady();
   const noteSaveGenerationRef = useRef<Map<string, number>>(new Map());
-  const rewrapActivityRef = useRef<{ vaultId: string; kind: "password" | "kdf" } | null>(null);
-  const [rewrapRun, setRewrapRun] = useState<{ vaultId: string; kind: "password" | "kdf" } | null>(
-    null,
-  );
+  const rewrapActivityRef = useRef<VaultRewrapRun | null>(null);
+  const [rewrapRun, setRewrapRun] = useState<VaultRewrapRun | null>(null);
   const blockOpenVaultIdsRef = useRef(new Set<string>());
   blockOpenVaultIdsRef.current = new Set(rewrapRun ? [rewrapRun.vaultId] : []);
-  const onRewrapRunChange = useCallback(
-    (run: { vaultId: string; kind: "password" | "kdf" } | null) => {
-      rewrapActivityRef.current = run;
-      setRewrapRun(run);
-    },
-    [],
-  );
+  const onRewrapRunChange = useCallback((run: VaultRewrapRun | null) => {
+    rewrapActivityRef.current = run;
+    setRewrapRun(run);
+  }, []);
   const groupedOrderGenRef = useRef<Map<string, number>>(new Map());
+  const rowControlsRef = useRef(new Map<string, ReturnType<typeof vaultRowControls>>());
   const groupCollapsedGenRef = useRef<Map<string, number>>(new Map());
   /** Shared across root reorder + assign/ungroup + create-vault group apply. */
   const groupsMutateGenRef = useRef(0);
@@ -222,6 +220,7 @@ export function useVaultListScreen() {
         try {
           for (const { id, order } of orders) {
             if (vaultOrderGenRef.current !== generation) return;
+            if (rowControlsRef.current.get(id)?.dragBlocked) continue;
             const settings = await vaultService.getSettings(id);
             if (!settings) continue;
             if (settings.vault.order === order) continue;
@@ -323,6 +322,7 @@ export function useVaultListScreen() {
     touchSessionWrite,
     setVaultRuntimeState,
     updateVaultSettings,
+    updateVaultUnlockPreset,
     markVaultsHidden,
     setGroupCollapsed,
     setGroups,
@@ -480,14 +480,20 @@ export function useVaultListScreen() {
   }, [syncWithVaultList, vaults]);
 
   const modals = useVaultListModals(vaults, groups);
+  const { lifecycleRequest, setLifecycleRequest } = modals;
 
   const settingsPersistVaultIdsRef = useRef(new Set<string>());
 
   useEffect(() => {
-    const request = modals.lifecycleRequest;
-    if (!rewrapRun || request?.intent !== "unlock" || request.vaultId !== rewrapRun.vaultId) return;
-    modals.setLifecycleRequest(null);
-  }, [modals.lifecycleRequest, modals.setLifecycleRequest, rewrapRun]);
+    if (
+      !rewrapRun ||
+      lifecycleRequest?.intent !== "unlock" ||
+      lifecycleRequest.vaultId !== rewrapRun.vaultId
+    ) {
+      return;
+    }
+    setLifecycleRequest(null);
+  }, [lifecycleRequest, setLifecycleRequest, rewrapRun]);
 
   const lifecycle = useVaultLifecycleActions({
     vaults,
@@ -534,8 +540,12 @@ export function useVaultListScreen() {
       ...lifecycle.pipelineListStatus,
       passwordChangeVaultIds: rewrapRun?.kind === "password" ? [rewrapRun.vaultId] : undefined,
       kdfChangeVaultIds: rewrapRun?.kind === "kdf" ? [rewrapRun.vaultId] : undefined,
+      rewrapStartedAt: rewrapRun?.startedAt,
     }),
     [lifecycle.pipelineListStatus, rewrapRun],
+  );
+  rowControlsRef.current = new Map(
+    vaults.map((vault) => [vault.id, vaultRowControls(vault, pipelineListStatus)]),
   );
 
   const recordVaultHiddenIfNeeded = useCallback(
@@ -741,6 +751,13 @@ export function useVaultListScreen() {
     ],
   );
 
+  const handleUnlockPresetSaved = useCallback(
+    (vaultId: string, unlockPreset: Parameters<typeof updateVaultUnlockPreset>[1]) => {
+      updateVaultUnlockPreset(vaultId, unlockPreset);
+    },
+    [updateVaultUnlockPreset],
+  );
+
   const handleCreateVaultFromBackup = useCallback(
     (stamp: string, fileName: string, saved = false) => {
       if (!modals.backupVault) return;
@@ -821,6 +838,7 @@ export function useVaultListScreen() {
 
   const handleNoteChange = useCallback(
     async (vaultId: string, note: string): Promise<boolean> => {
+      if (rowControlsRef.current.get(vaultId)?.noteBlocked) return false;
       if (!vaultService.canPersistSettings) {
         showError(
           new RpcError("not_implemented", "Vault note save is not implemented"),
@@ -867,10 +885,7 @@ export function useVaultListScreen() {
         throw error;
       }
       const target = vaults.find((vault) => vault.id === vaultId);
-      if (
-        !target ||
-        !canDeleteVaultNow(resolveVaultListStatus(target, pipelineListStatus))
-      ) {
+      if (!target || !canDeleteVaultNow(resolveVaultListStatus(target, pipelineListStatus))) {
         showToast(t("modal.settings.delete_only_closed"));
         return;
       }
@@ -1148,7 +1163,6 @@ export function useVaultListScreen() {
         openCreateVaultWithDraft(createDraftForScratchSource(existingOrders), "source");
       },
       pipelineListStatus,
-      isVaultPipelineBusy: lifecycle.pipeline.isVaultPipelineBusy,
       allVaultsHidden: !searchActive && vaults.length > 0 && visibleVaults.length === 0,
       searchNoMatches,
       canReorder,
@@ -1240,6 +1254,9 @@ export function useVaultListScreen() {
       open: modals.noteVaultId !== null,
       onClose: () => modals.setNoteVaultId(null),
       onNoteChange: handleNoteChange,
+      saveHeld:
+        modals.noteVault != null &&
+        vaultRowControls(modals.noteVault, pipelineListStatus).noteBlocked,
     },
     backups: {
       vault: modals.backupVault,
@@ -1268,6 +1285,7 @@ export function useVaultListScreen() {
         modals.setSettingsArea(null);
       },
       onVaultSettingsSaved: handleVaultSettingsSaved,
+      onUnlockPresetSaved: handleUnlockPresetSaved,
       onPersistBusyChange: (vaultIds: readonly string[] | null) => {
         settingsPersistVaultIdsRef.current = new Set(vaultIds ?? []);
       },

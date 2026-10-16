@@ -346,7 +346,7 @@ fn import_reader<R: Read + Seek>(
     if let Err(ingest_error) = ingest {
         return Err(abandon_failed_import(root, &id, ingest_error));
     }
-    close_vault(root, &id, Some(new_password))?;
+    close_vault(root, &id)?;
     log_event(LogLevel::Info, "vault_imported", &[("id", id.as_str())]);
     Ok(id)
 }
@@ -569,7 +569,7 @@ mode = "encrypted_dir"
         let json = serde_json::to_string(&listed).unwrap();
         assert!(!json.contains("_hi.txt"), "{json}");
         assert!(!json.contains("MACOSX"), "{json}");
-        crate::close_vault(&root, "notes", None).unwrap();
+        crate::close_vault(&root, "notes").unwrap();
     }
 
     #[test]
@@ -614,7 +614,7 @@ mode = "encrypted_dir"
             .unwrap();
         assert!(!json.contains("tsc"), "{json}");
         assert!(!json.contains("escape"), "{json}");
-        crate::close_vault(&root, "notes", None).unwrap();
+        crate::close_vault(&root, "notes").unwrap();
     }
 
     #[test]
@@ -647,7 +647,7 @@ mode = "encrypted_dir"
         let layout =
             crate::vault::fs::fs_read_file(&root, "plain", "/.upriv-workspace.json").unwrap();
         assert_eq!(layout, welcome.workspace.as_bytes());
-        crate::close_vault(&root, "plain", None).unwrap();
+        crate::close_vault(&root, "plain").unwrap();
 
         let has_readme = zip_with(&[("Notes/readme.md", b"mine")]);
         import_logical_files_zip(
@@ -672,6 +672,6 @@ mode = "encrypted_dir"
                 .unwrap()
                 .is_empty()
         );
-        crate::close_vault(&root, "own", None).unwrap();
+        crate::close_vault(&root, "own").unwrap();
     }
 }

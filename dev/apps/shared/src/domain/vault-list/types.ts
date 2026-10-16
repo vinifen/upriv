@@ -13,4 +13,9 @@ export interface VaultListItem extends VaultRow {
   note: string;
   /** From `store/header/vault.header` when readable without the password. */
   unlockPreset?: KdfUnlockPreset;
+  /**
+   * Set after an idle lock in this session. Cleared when the vault is opened
+   * or locked by hand. Not part of `vault_list`.
+   */
+  autoClosed?: boolean;
 }

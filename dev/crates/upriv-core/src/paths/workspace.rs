@@ -377,6 +377,7 @@ struct RawOs {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct VaultRawWorkspace {
     #[serde(default)]
     app_file_manager_folder: VaultShortcut,
@@ -395,6 +396,7 @@ struct VaultRawWorkspace {
 }
 
 #[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 struct VaultRawOs {
     #[serde(default)]
     path: String,

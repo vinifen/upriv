@@ -1,9 +1,8 @@
-//! Linux FUSE adapter over the open-session file API (no plaintext tree).
+//! FUSE session over daemon callbacks. Plaintext stays in the reply buffers.
 
-#[allow(unused_imports)]
-use crate::host_fs::HostFsQuery;
 use std::collections::HashMap;
-use std::ffi::OsStr;
+use std::ffi::{CStr, CString, OsStr};
+use std::os::unix::ffi::OsStrExt;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -12,28 +11,37 @@ use fuser::{
     FileAttr, FileType, Filesystem, MountOption, ReplyAttr, ReplyCreate, ReplyData, ReplyDirectory,
     ReplyEmpty, ReplyEntry, ReplyWrite, Request, FUSE_ROOT_ID,
 };
-use libc::{EEXIST, EIO, ENOENT, ENOTDIR, ENOTEMPTY, EPERM};
-
-use crate::error::UprivError;
-use crate::paths::VaultRoot;
-use crate::session::with_open_session;
-use crate::store::{file_name, parent_logical, INTERNAL_WORKSPACE_FILE, SEED_LOGICAL_PATH};
-use crate::vault::fs as vfs;
-
-use super::MountedVault;
+use libc::{c_char, EEXIST, EINVAL, ENOENT, EPERM};
+use upriv_fuse_abi::{FuseHost, FuseStat};
 
 const TTL: Duration = Duration::from_secs(1);
-/// Empty mount-root file so Tracker skips the tree. Not a vault node and not
-/// written into `store/`. A real `.nomedia` in the index wins.
+/// Empty mount-root file so Tracker skips the tree. Not a vault node.
 const TRACKER_NOMEDIA: &str = ".nomedia";
+const INTERNAL_WORKSPACE_FILE: &str = ".upriv-workspace.json";
+const SEED_LOGICAL_PATH: &str = "upriv-seed.txt";
 
 fn synthetic_tracker_nomedia(logical: &str, in_index: bool) -> bool {
     logical == TRACKER_NOMEDIA && !in_index
 }
 
+fn parent_logical(path: &str) -> Option<&str> {
+    path.rsplit_once('/').map(|(parent, _)| parent)
+}
+
+fn file_name(path: &str) -> &str {
+    path.rsplit('/').next().unwrap_or(path)
+}
+
+/// Same reserved paths as the daemon: the seed file only at the mount root,
+/// and the workspace file in every directory.
+fn hidden_from_mount(logical: &str) -> bool {
+    file_name(logical) == INTERNAL_WORKSPACE_FILE || logical == SEED_LOGICAL_PATH
+}
+
 struct EncryptedFs {
-    root: VaultRoot,
-    vault_id: String,
+    host: FuseHost,
+    root: CString,
+    vault_id: CString,
     uid: u32,
     gid: u32,
     inodes: Mutex<InodeTable>,
@@ -110,7 +118,7 @@ impl InodeTable {
         let children: Vec<String> = self
             .by_path
             .keys()
-            .filter(|p| p.starts_with(&prefix))
+            .filter(|path| path.starts_with(&prefix))
             .cloned()
             .collect();
         for child in children {
@@ -121,55 +129,59 @@ impl InodeTable {
     }
 }
 
-fn ui(logical: &str) -> String {
-    crate::store::to_ui_path(logical)
-}
-
-fn map_err(error: UprivError) -> i32 {
-    match error {
-        UprivError::VaultPathNotFound(_) | UprivError::VaultNotOpen(_) => ENOENT,
-        UprivError::VaultPathExists(_) => EEXIST,
-        UprivError::VaultFileTooLarge { .. } => libc::EFBIG,
-        _ => EIO,
-    }
-}
-
-fn time_from_millis(ms: u64) -> SystemTime {
-    UNIX_EPOCH + Duration::from_millis(ms)
+fn logical_c(logical: &str) -> Result<CString, i32> {
+    CString::new(logical).map_err(|_| EINVAL)
 }
 
 impl EncryptedFs {
-    fn with_index<T>(
-        &self,
-        f: impl FnOnce(&crate::store::VaultIndex) -> Result<T, UprivError>,
-    ) -> Result<T, UprivError> {
-        let dir = self.root.vault_dir(&self.vault_id)?;
-        with_open_session(&dir, |session| f(&session.index))
+    fn stat(&self, logical: &str) -> Result<FuseStat, i32> {
+        let logical = logical_c(logical)?;
+        let mut out = FuseStat {
+            size: 0,
+            modified_ms: 0,
+            found: 0,
+            is_dir: 0,
+        };
+        let rc = unsafe {
+            (self.host.stat)(
+                self.root.as_ptr(),
+                self.vault_id.as_ptr(),
+                logical.as_ptr(),
+                &mut out,
+            )
+        };
+        if rc == 0 {
+            Ok(out)
+        } else {
+            Err(rc)
+        }
     }
 
-    fn attr_for(&self, logical: &str) -> Result<FileAttr, i32> {
-        let mut inodes = self.inodes.lock().unwrap_or_else(|p| p.into_inner());
-        if logical.is_empty() {
-            return Ok(self.dir_attr(FUSE_ROOT_ID, UNIX_EPOCH));
+    fn list(&self, parent: &str) -> Result<Vec<(String, bool)>, i32> {
+        let parent = logical_c(parent)?;
+        let mut out = Vec::new();
+        let rc = unsafe {
+            (self.host.list)(
+                self.root.as_ptr(),
+                self.vault_id.as_ptr(),
+                parent.as_ptr(),
+                list_visit,
+                (&mut out as *mut Vec<(String, bool)>).cast(),
+            )
+        };
+        if rc == 0 {
+            Ok(out)
+        } else {
+            Err(rc)
         }
-        let ino = inodes.ino_for(logical);
-        drop(inodes);
-        if self.is_synthetic_nomedia(logical)? {
-            return Ok(self.file_attr(ino, 0, UNIX_EPOCH));
+    }
+
+    fn is_synthetic_nomedia(&self, logical: &str) -> Result<bool, i32> {
+        if logical != TRACKER_NOMEDIA {
+            return Ok(false);
         }
-        self.with_index(|index| {
-            let node = index
-                .find(logical)
-                .ok_or_else(|| UprivError::VaultPathNotFound(logical.into()))?;
-            let atime = time_from_millis(node.modified_at);
-            if node.is_dir() {
-                Ok(self.dir_attr(ino, atime))
-            } else {
-                let size = node.as_file().map(|(_, size, _)| size).unwrap_or(0);
-                Ok(self.file_attr(ino, size, atime))
-            }
-        })
-        .map_err(map_err)
+        let stat = self.stat(logical)?;
+        Ok(synthetic_tracker_nomedia(logical, stat.found != 0))
     }
 
     fn dir_attr(&self, ino: u64, time: SystemTime) -> FileAttr {
@@ -212,17 +224,29 @@ impl EncryptedFs {
         }
     }
 
-    fn is_synthetic_nomedia(&self, logical: &str) -> Result<bool, i32> {
-        if logical != TRACKER_NOMEDIA {
-            return Ok(false);
+    fn attr_for(&self, logical: &str) -> Result<FileAttr, i32> {
+        let mut inodes = self
+            .inodes
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if logical.is_empty() {
+            return Ok(self.dir_attr(FUSE_ROOT_ID, UNIX_EPOCH));
         }
-        let in_index = self.index_contains(logical)?;
-        Ok(synthetic_tracker_nomedia(logical, in_index))
-    }
-
-    fn index_contains(&self, logical: &str) -> Result<bool, i32> {
-        self.with_index(|index| Ok(index.find(logical).is_some()))
-            .map_err(map_err)
+        let ino = inodes.ino_for(logical);
+        drop(inodes);
+        if self.is_synthetic_nomedia(logical)? {
+            return Ok(self.file_attr(ino, 0, UNIX_EPOCH));
+        }
+        let stat = self.stat(logical)?;
+        if stat.found == 0 {
+            return Err(ENOENT);
+        }
+        let time = UNIX_EPOCH + Duration::from_millis(stat.modified_ms);
+        if stat.is_dir != 0 {
+            Ok(self.dir_attr(ino, time))
+        } else {
+            Ok(self.file_attr(ino, stat.size, time))
+        }
     }
 
     fn remove_node(&mut self, parent: u64, name: &OsStr, reply: ReplyEmpty) {
@@ -230,17 +254,16 @@ impl EncryptedFs {
             reply.error(EPERM);
             return;
         };
-        let inodes = self.inodes.lock().unwrap_or_else(|p| p.into_inner());
+        let inodes = self
+            .inodes
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let Some(parent_path) = inodes.path(parent) else {
             reply.error(ENOENT);
             return;
         };
         drop(inodes);
-        let logical = if parent_path.is_empty() {
-            name.to_string()
-        } else {
-            format!("{parent_path}/{name}")
-        };
+        let logical = child_path(&parent_path, name);
         match self.is_synthetic_nomedia(&logical) {
             Ok(true) => {
                 reply.error(EPERM);
@@ -252,32 +275,202 @@ impl EncryptedFs {
                 return;
             }
         }
-        match vfs::fs_delete(&self.root, &self.vault_id, &ui(&logical)) {
-            Ok(_) => {
+        match self.delete(&logical) {
+            Ok(()) => {
                 self.inodes
                     .lock()
-                    .unwrap_or_else(|p| p.into_inner())
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
                     .forget_path(&logical);
                 reply.ok();
             }
-            Err(error) => {
-                let code = match error {
-                    UprivError::VaultStoreInvalid { detail, .. }
-                        if detail.contains("not empty") =>
-                    {
-                        ENOTEMPTY
-                    }
-                    UprivError::VaultStoreInvalid { detail, .. }
-                        if detail.contains("directory") =>
-                    {
-                        ENOTDIR
-                    }
-                    other => map_err(other),
-                };
-                reply.error(code);
-            }
+            Err(code) => reply.error(code),
         }
     }
+
+    fn delete(&self, logical: &str) -> Result<(), i32> {
+        let logical = logical_c(logical)?;
+        let rc = unsafe {
+            (self.host.delete)(self.root.as_ptr(), self.vault_id.as_ptr(), logical.as_ptr())
+        };
+        if rc == 0 {
+            Ok(())
+        } else {
+            Err(rc)
+        }
+    }
+
+    fn rmdir_at(&self, logical: &str) -> Result<(), i32> {
+        let logical = logical_c(logical)?;
+        let rc = unsafe {
+            (self.host.rmdir)(self.root.as_ptr(), self.vault_id.as_ptr(), logical.as_ptr())
+        };
+        if rc == 0 {
+            Ok(())
+        } else {
+            Err(rc)
+        }
+    }
+
+    fn mkdir_at(&self, logical: &str) -> Result<(), i32> {
+        let logical = logical_c(logical)?;
+        let rc = unsafe {
+            (self.host.mkdir)(self.root.as_ptr(), self.vault_id.as_ptr(), logical.as_ptr())
+        };
+        if rc == 0 {
+            Ok(())
+        } else {
+            Err(rc)
+        }
+    }
+
+    fn create_at(&self, parent: &str, name: &str) -> Result<(), i32> {
+        let parent = logical_c(parent)?;
+        let name = logical_c(name)?;
+        let rc = unsafe {
+            (self.host.create_file)(
+                self.root.as_ptr(),
+                self.vault_id.as_ptr(),
+                parent.as_ptr(),
+                name.as_ptr(),
+            )
+        };
+        if rc == 0 {
+            Ok(())
+        } else {
+            Err(rc)
+        }
+    }
+
+    fn truncate_at(&self, logical: &str, size: u64) -> Result<(), i32> {
+        let logical = logical_c(logical)?;
+        let rc = unsafe {
+            (self.host.truncate)(
+                self.root.as_ptr(),
+                self.vault_id.as_ptr(),
+                logical.as_ptr(),
+                size,
+            )
+        };
+        if rc == 0 {
+            Ok(())
+        } else {
+            Err(rc)
+        }
+    }
+
+    fn read_at(&self, logical: &str, offset: u64, size: u64) -> Result<OwnedBuf, i32> {
+        let logical = logical_c(logical)?;
+        let mut ptr = std::ptr::null_mut();
+        let mut len = 0usize;
+        let rc = unsafe {
+            (self.host.read_range)(
+                self.root.as_ptr(),
+                self.vault_id.as_ptr(),
+                logical.as_ptr(),
+                offset,
+                size,
+                &mut ptr,
+                &mut len,
+            )
+        };
+        if rc != 0 {
+            return Err(rc);
+        }
+        Ok(OwnedBuf {
+            free_buf: self.host.free_buf,
+            ptr,
+            len,
+        })
+    }
+
+    fn write_at(&self, logical: &str, offset: u64, data: &[u8]) -> Result<(), i32> {
+        let logical = logical_c(logical)?;
+        let rc = unsafe {
+            (self.host.write_range)(
+                self.root.as_ptr(),
+                self.vault_id.as_ptr(),
+                logical.as_ptr(),
+                offset,
+                data.as_ptr(),
+                data.len(),
+            )
+        };
+        if rc == 0 {
+            Ok(())
+        } else {
+            Err(rc)
+        }
+    }
+
+    fn relocate_at(
+        &self,
+        from: &str,
+        new_parent: &str,
+        new_name: &str,
+        replace: bool,
+    ) -> Result<(), i32> {
+        let from = logical_c(from)?;
+        let new_parent = logical_c(new_parent)?;
+        let new_name = logical_c(new_name)?;
+        let rc = unsafe {
+            (self.host.relocate)(
+                self.root.as_ptr(),
+                self.vault_id.as_ptr(),
+                from.as_ptr(),
+                new_parent.as_ptr(),
+                new_name.as_ptr(),
+                u8::from(replace),
+            )
+        };
+        if rc == 0 {
+            Ok(())
+        } else {
+            Err(rc)
+        }
+    }
+}
+
+struct OwnedBuf {
+    free_buf: unsafe extern "C" fn(*mut u8, usize),
+    ptr: *mut u8,
+    len: usize,
+}
+
+impl OwnedBuf {
+    fn as_slice(&self) -> &[u8] {
+        if self.ptr.is_null() || self.len == 0 {
+            &[]
+        } else {
+            unsafe { std::slice::from_raw_parts(self.ptr, self.len) }
+        }
+    }
+}
+
+impl Drop for OwnedBuf {
+    fn drop(&mut self) {
+        unsafe { (self.free_buf)(self.ptr, self.len) };
+        self.ptr = std::ptr::null_mut();
+        self.len = 0;
+    }
+}
+
+fn child_path(parent: &str, name: &str) -> String {
+    if parent.is_empty() {
+        name.to_string()
+    } else {
+        format!("{parent}/{name}")
+    }
+}
+
+unsafe extern "C" fn list_visit(ctx: *mut libc::c_void, path: *const c_char, is_dir: u8) {
+    if ctx.is_null() || path.is_null() {
+        return;
+    }
+    let list = unsafe { &mut *ctx.cast::<Vec<(String, bool)>>() };
+    let Ok(path) = unsafe { CStr::from_ptr(path) }.to_str() else {
+        return;
+    };
+    list.push((path.to_string(), is_dir != 0));
 }
 
 impl Filesystem for EncryptedFs {
@@ -286,21 +479,20 @@ impl Filesystem for EncryptedFs {
             reply.error(ENOENT);
             return;
         };
-        if name == INTERNAL_WORKSPACE_FILE || name == SEED_LOGICAL_PATH {
-            reply.error(ENOENT);
-            return;
-        }
-        let inodes = self.inodes.lock().unwrap_or_else(|p| p.into_inner());
+        let inodes = self
+            .inodes
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let Some(parent_path) = inodes.path(parent) else {
             reply.error(ENOENT);
             return;
         };
         drop(inodes);
-        let logical = if parent_path.is_empty() {
-            name.to_string()
-        } else {
-            format!("{parent_path}/{name}")
-        };
+        let logical = child_path(&parent_path, name);
+        if hidden_from_mount(&logical) {
+            reply.error(ENOENT);
+            return;
+        }
         match self.attr_for(&logical) {
             Ok(attr) => reply.entry(&TTL, &attr, 0),
             Err(code) => reply.error(code),
@@ -308,7 +500,10 @@ impl Filesystem for EncryptedFs {
     }
 
     fn getattr(&mut self, _req: &Request<'_>, ino: u64, _fh: Option<u64>, reply: ReplyAttr) {
-        let inodes = self.inodes.lock().unwrap_or_else(|p| p.into_inner());
+        let inodes = self
+            .inodes
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let Some(path) = inodes.path(ino) else {
             reply.error(ENOENT);
             return;
@@ -328,37 +523,29 @@ impl Filesystem for EncryptedFs {
         offset: i64,
         mut reply: ReplyDirectory,
     ) {
-        let inodes = self.inodes.lock().unwrap_or_else(|p| p.into_inner());
+        let inodes = self
+            .inodes
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let Some(parent) = inodes.path(ino) else {
             reply.error(ENOENT);
             return;
         };
         drop(inodes);
-        let children = match self.with_index(|index| {
-            let mut out = Vec::new();
-            for node in &index.nodes {
-                if file_name(&node.path) == INTERNAL_WORKSPACE_FILE
-                    || node.path == SEED_LOGICAL_PATH
-                {
-                    continue;
-                }
-                let p = parent_logical(&node.path).unwrap_or("");
-                if p == parent {
-                    out.push((node.path.clone(), node.is_dir()));
-                }
-            }
-            Ok(out)
-        }) {
-            Ok(c) => c,
-            Err(error) => {
-                reply.error(map_err(error));
+        let children = match self.list(&parent) {
+            Ok(children) => children,
+            Err(code) => {
+                reply.error(code);
                 return;
             }
         };
         let mut entries: Vec<(u64, FileType, String)> = Vec::new();
-        let mut table = self.inodes.lock().unwrap_or_else(|p| p.into_inner());
+        let mut table = self
+            .inodes
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let parent_ino = match parent_logical(&parent) {
-            Some(p) => table.ino_for(p),
+            Some(path) => table.ino_for(path),
             None => FUSE_ROOT_ID,
         };
         entries.push((ino, FileType::Directory, ".".into()));
@@ -374,12 +561,14 @@ impl Filesystem for EncryptedFs {
             entries.push((child_ino, kind, name));
         }
         if parent.is_empty() && !entries.iter().any(|(_, _, name)| name == TRACKER_NOMEDIA) {
-            let ino = table.ino_for(TRACKER_NOMEDIA);
-            entries.push((ino, FileType::RegularFile, TRACKER_NOMEDIA.into()));
+            let nomedia = table.ino_for(TRACKER_NOMEDIA);
+            entries.push((nomedia, FileType::RegularFile, TRACKER_NOMEDIA.into()));
         }
         drop(table);
-        for (i, (child_ino, kind, name)) in entries.into_iter().enumerate().skip(offset as usize) {
-            if reply.add(child_ino, (i + 1) as i64, kind, name) {
+        for (index, (child_ino, kind, name)) in
+            entries.into_iter().enumerate().skip(offset as usize)
+        {
+            if reply.add(child_ino, (index + 1) as i64, kind, name) {
                 break;
             }
         }
@@ -387,7 +576,10 @@ impl Filesystem for EncryptedFs {
     }
 
     fn open(&mut self, _req: &Request<'_>, ino: u64, _flags: i32, reply: fuser::ReplyOpen) {
-        let inodes = self.inodes.lock().unwrap_or_else(|p| p.into_inner());
+        let inodes = self
+            .inodes
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if inodes.path(ino).is_none() {
             reply.error(ENOENT);
             return;
@@ -406,7 +598,10 @@ impl Filesystem for EncryptedFs {
         _lock: Option<u64>,
         reply: ReplyData,
     ) {
-        let inodes = self.inodes.lock().unwrap_or_else(|p| p.into_inner());
+        let inodes = self
+            .inodes
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let Some(path) = inodes.path(ino) else {
             reply.error(ENOENT);
             return;
@@ -423,15 +618,9 @@ impl Filesystem for EncryptedFs {
                 return;
             }
         }
-        match vfs::fs_read_range(
-            &self.root,
-            &self.vault_id,
-            &ui(&path),
-            offset as u64,
-            size as u64,
-        ) {
-            Ok(bytes) => reply.data(&bytes),
-            Err(error) => reply.error(map_err(error)),
+        match self.read_at(&path, offset as u64, size as u64) {
+            Ok(bytes) => reply.data(bytes.as_slice()),
+            Err(code) => reply.error(code),
         }
     }
 
@@ -447,7 +636,10 @@ impl Filesystem for EncryptedFs {
         _lock: Option<u64>,
         reply: ReplyWrite,
     ) {
-        let inodes = self.inodes.lock().unwrap_or_else(|p| p.into_inner());
+        let inodes = self
+            .inodes
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let Some(path) = inodes.path(ino) else {
             reply.error(ENOENT);
             return;
@@ -464,9 +656,9 @@ impl Filesystem for EncryptedFs {
                 return;
             }
         }
-        match vfs::fs_write_range(&self.root, &self.vault_id, &ui(&path), offset as u64, data) {
-            Ok(_) => reply.written(data.len() as u32),
-            Err(error) => reply.error(map_err(error)),
+        match self.write_at(&path, offset as u64, data) {
+            Ok(()) => reply.written(data.len() as u32),
+            Err(code) => reply.error(code),
         }
     }
 
@@ -483,17 +675,16 @@ impl Filesystem for EncryptedFs {
             reply.error(EPERM);
             return;
         };
-        let inodes = self.inodes.lock().unwrap_or_else(|p| p.into_inner());
+        let inodes = self
+            .inodes
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let Some(parent_path) = inodes.path(parent) else {
             reply.error(ENOENT);
             return;
         };
         drop(inodes);
-        let logical = if parent_path.is_empty() {
-            name.to_string()
-        } else {
-            format!("{parent_path}/{name}")
-        };
+        let logical = child_path(&parent_path, name);
         match self.is_synthetic_nomedia(&logical) {
             Ok(true) => {
                 reply.error(EPERM);
@@ -505,12 +696,12 @@ impl Filesystem for EncryptedFs {
                 return;
             }
         }
-        match vfs::fs_mkdir(&self.root, &self.vault_id, &ui(&logical)) {
-            Ok(_) => match self.attr_for(&logical) {
+        match self.mkdir_at(&logical) {
+            Ok(()) => match self.attr_for(&logical) {
                 Ok(attr) => reply.entry(&TTL, &attr, 0),
                 Err(code) => reply.error(code),
             },
-            Err(error) => reply.error(map_err(error)),
+            Err(code) => reply.error(code),
         }
     }
 
@@ -528,17 +719,16 @@ impl Filesystem for EncryptedFs {
             reply.error(EPERM);
             return;
         };
-        let inodes = self.inodes.lock().unwrap_or_else(|p| p.into_inner());
+        let inodes = self
+            .inodes
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let Some(parent_path) = inodes.path(parent) else {
             reply.error(ENOENT);
             return;
         };
         drop(inodes);
-        let logical = if parent_path.is_empty() {
-            name.to_string()
-        } else {
-            format!("{parent_path}/{name}")
-        };
+        let logical = child_path(&parent_path, name);
         match self.is_synthetic_nomedia(&logical) {
             Ok(true) => {
                 reply.error(EPERM);
@@ -550,19 +740,17 @@ impl Filesystem for EncryptedFs {
                 return;
             }
         }
-        match vfs::fs_create_named_file(&self.root, &self.vault_id, &ui(&parent_path), name) {
-            Ok(_) => match self.attr_for(&logical) {
+        match self.create_at(&parent_path, name) {
+            Ok(()) => match self.attr_for(&logical) {
                 Ok(attr) => reply.created(&TTL, &attr, 0, 0, 0),
                 Err(code) => reply.error(code),
             },
-            Err(UprivError::VaultPathExists(_)) if flags & libc::O_EXCL == 0 => {
+            Err(code) if code == EEXIST && flags & libc::O_EXCL == 0 => {
                 match self.attr_for(&logical) {
                     Ok(attr) if attr.kind == FileType::RegularFile => {
                         if flags & libc::O_TRUNC != 0 {
-                            if let Err(error) =
-                                vfs::fs_truncate(&self.root, &self.vault_id, &ui(&logical), 0)
-                            {
-                                reply.error(map_err(error));
+                            if let Err(code) = self.truncate_at(&logical, 0) {
+                                reply.error(code);
                                 return;
                             }
                             match self.attr_for(&logical) {
@@ -577,7 +765,7 @@ impl Filesystem for EncryptedFs {
                     Err(code) => reply.error(code),
                 }
             }
-            Err(error) => reply.error(map_err(error)),
+            Err(code) => reply.error(code),
         }
     }
 
@@ -590,41 +778,25 @@ impl Filesystem for EncryptedFs {
             reply.error(EPERM);
             return;
         };
-        let inodes = self.inodes.lock().unwrap_or_else(|p| p.into_inner());
+        let inodes = self
+            .inodes
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let Some(parent_path) = inodes.path(parent) else {
             reply.error(ENOENT);
             return;
         };
         drop(inodes);
-        let logical = if parent_path.is_empty() {
-            name.to_string()
-        } else {
-            format!("{parent_path}/{name}")
-        };
-        match vfs::fs_rmdir(&self.root, &self.vault_id, &ui(&logical)) {
-            Ok(_) => {
+        let logical = child_path(&parent_path, name);
+        match self.rmdir_at(&logical) {
+            Ok(()) => {
                 self.inodes
                     .lock()
-                    .unwrap_or_else(|p| p.into_inner())
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
                     .forget_path(&logical);
                 reply.ok();
             }
-            Err(error) => {
-                let code = match error {
-                    UprivError::VaultStoreInvalid { detail, .. }
-                        if detail.contains("not empty") =>
-                    {
-                        ENOTEMPTY
-                    }
-                    UprivError::VaultStoreInvalid { detail, .. }
-                        if detail.contains("directory") =>
-                    {
-                        ENOTDIR
-                    }
-                    other => map_err(other),
-                };
-                reply.error(code);
-            }
+            Err(code) => reply.error(code),
         }
     }
 
@@ -642,7 +814,10 @@ impl Filesystem for EncryptedFs {
             reply.error(EPERM);
             return;
         };
-        let inodes = self.inodes.lock().unwrap_or_else(|p| p.into_inner());
+        let inodes = self
+            .inodes
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let Some(parent_path) = inodes.path(parent) else {
             reply.error(ENOENT);
             return;
@@ -652,17 +827,9 @@ impl Filesystem for EncryptedFs {
             return;
         };
         drop(inodes);
-        let from = if parent_path.is_empty() {
-            name.to_string()
-        } else {
-            format!("{parent_path}/{name}")
-        };
+        let from = child_path(&parent_path, name);
         let replace = flags & libc::RENAME_NOREPLACE == 0;
-        let dest_logical = if new_parent.is_empty() {
-            newname.to_string()
-        } else {
-            format!("{new_parent}/{newname}")
-        };
+        let dest_logical = child_path(&new_parent, newname);
         match (
             self.is_synthetic_nomedia(&from),
             self.is_synthetic_nomedia(&dest_logical),
@@ -677,32 +844,15 @@ impl Filesystem for EncryptedFs {
             }
             (Ok(false), Ok(false)) => {}
         }
-        match vfs::fs_relocate(
-            &self.root,
-            &self.vault_id,
-            &ui(&from),
-            &ui(&new_parent),
-            newname,
-            replace,
-        ) {
-            Ok(_) => {
+        match self.relocate_at(&from, &new_parent, newname, replace) {
+            Ok(()) => {
                 self.inodes
                     .lock()
-                    .unwrap_or_else(|p| p.into_inner())
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
                     .remap_path(&from, &dest_logical);
                 reply.ok();
             }
-            Err(error) => {
-                let code = match error {
-                    UprivError::VaultStoreInvalid { detail, .. }
-                        if detail.contains("not empty") =>
-                    {
-                        ENOTEMPTY
-                    }
-                    other => map_err(other),
-                };
-                reply.error(code);
-            }
+            Err(code) => reply.error(code),
         }
     }
 
@@ -724,7 +874,10 @@ impl Filesystem for EncryptedFs {
         _flags: Option<u32>,
         reply: ReplyAttr,
     ) {
-        let inodes = self.inodes.lock().unwrap_or_else(|p| p.into_inner());
+        let inodes = self
+            .inodes
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let Some(path) = inodes.path(ino) else {
             reply.error(ENOENT);
             return;
@@ -742,8 +895,8 @@ impl Filesystem for EncryptedFs {
                     return;
                 }
             }
-            if let Err(error) = vfs::fs_truncate(&self.root, &self.vault_id, &ui(&path), size) {
-                reply.error(map_err(error));
+            if let Err(code) = self.truncate_at(&path, size) {
+                reply.error(code);
                 return;
             }
         }
@@ -769,14 +922,53 @@ impl Filesystem for EncryptedFs {
     }
 }
 
-pub(super) fn spawn(
-    root: VaultRoot,
-    vault_id: String,
-    mount_point: PathBuf,
-) -> crate::error::Result<MountedVault> {
+struct LiveMount {
+    _session: fuser::BackgroundSession,
+}
+
+fn write_error(buf: *mut u8, cap: usize, message: &str) {
+    if buf.is_null() || cap == 0 {
+        return;
+    }
+    let bytes = message.as_bytes();
+    let len = bytes.len().min(cap - 1);
+    unsafe {
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf, len);
+        *buf.add(len) = 0;
+    }
+}
+
+/// Mount `mount_point`. Null means failure; `error_buf` then holds the reason.
+///
+/// # Safety
+/// `host` is a live [`FuseHost`] for the rest of the process. The three strings
+/// are nul-terminated. `error_buf` has `error_cap` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn upriv_fuse_mount(
+    host: *const FuseHost,
+    root: *const c_char,
+    vault_id: *const c_char,
+    mount_point: *const c_char,
+    error_buf: *mut u8,
+    error_cap: usize,
+) -> *mut libc::c_void {
+    if host.is_null() || root.is_null() || vault_id.is_null() || mount_point.is_null() {
+        write_error(
+            error_buf,
+            error_cap,
+            "FUSE mount helper was called without a session",
+        );
+        return std::ptr::null_mut();
+    }
+    let root = unsafe { CStr::from_ptr(root) }.to_owned();
+    let vault_id = unsafe { CStr::from_ptr(vault_id) }.to_owned();
+    let point = PathBuf::from(OsStr::from_bytes(
+        unsafe { CStr::from_ptr(mount_point) }.to_bytes(),
+    ));
     let uid = unsafe { libc::getuid() };
     let gid = unsafe { libc::getgid() };
     let fs = EncryptedFs {
+        host: unsafe { *host },
         root,
         vault_id,
         uid,
@@ -788,25 +980,34 @@ pub(super) fn spawn(
         MountOption::DefaultPermissions,
         MountOption::NoAtime,
     ];
-    let session = fuser::spawn_mount2(fs, &mount_point, &options).map_err(|error| {
-        UprivError::VaultMountFailed(format!(
-            "FUSE mount failed at {}: {error}",
-            mount_point.display()
-        ))
-    })?;
-    let mounted = MountedVault {
-        mount_point,
-        session: Some(session),
-    };
-    super::watch_open_mount(mounted.mount_point());
-    Ok(mounted)
+    match fuser::spawn_mount2(fs, &point, &options) {
+        Ok(session) => Box::into_raw(Box::new(LiveMount { _session: session })).cast(),
+        Err(error) => {
+            write_error(
+                error_buf,
+                error_cap,
+                &format!("FUSE mount failed at {}: {error}", point.display()),
+            );
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// Unmount the session returned by [`upriv_fuse_mount`].
+///
+/// # Safety
+/// `raw` is null or a pointer returned by [`upriv_fuse_mount`] and not yet freed.
+#[no_mangle]
+pub unsafe extern "C" fn upriv_fuse_unmount(raw: *mut libc::c_void) {
+    if raw.is_null() {
+        return;
+    }
+    drop(unsafe { Box::from_raw(raw.cast::<LiveMount>()) });
 }
 
 #[cfg(test)]
 mod inode_tests {
     use super::*;
-    #[allow(unused_imports)]
-    use crate::host_fs::HostFsQuery;
 
     #[test]
     fn remap_keeps_ino_and_rewrites_children() {
@@ -820,6 +1021,15 @@ mod inode_tests {
         assert_eq!(table.by_path.get("inbox/a.txt").copied(), Some(file));
         assert!(!table.by_path.contains_key("docs/a.txt"));
         assert_eq!(table.path(sibling).as_deref(), Some("other.txt"));
+    }
+
+    #[test]
+    fn seed_file_is_hidden_only_at_the_mount_root() {
+        assert!(hidden_from_mount("upriv-seed.txt"));
+        assert!(hidden_from_mount(".upriv-workspace.json"));
+        assert!(hidden_from_mount("notes/.upriv-workspace.json"));
+        assert!(!hidden_from_mount("notes/upriv-seed.txt"));
+        assert!(!hidden_from_mount("notes.txt"));
     }
 
     #[test]

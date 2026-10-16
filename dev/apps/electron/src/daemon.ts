@@ -113,13 +113,21 @@ function isDirWritable(dir: string): boolean {
 
 /** True when `$APPIMAGE` names an existing file (AppImageKit). Spoofed values ignored. */
 function isRealAppImageEnv(): boolean {
-  const appImage = process.env.APPIMAGE;
-  if (!appImage) return false;
+  return existingFileDirectory(process.env.APPIMAGE) !== null;
+}
+
+/** Directory of an existing absolute file, or null. Used for the portable download path. */
+function existingFileDirectory(file: string | undefined): string | null {
+  const trimmed = file?.trim() ?? "";
+  if (!path.isAbsolute(trimmed)) return null;
   try {
-    return fs.existsSync(appImage) && fs.statSync(appImage).isFile();
+    if (fs.existsSync(trimmed) && fs.statSync(trimmed).isFile()) {
+      return path.dirname(trimmed);
+    }
   } catch {
-    return false;
+    return null;
   }
+  return null;
 }
 
 /**
@@ -171,6 +179,8 @@ function daemonEnv(): NodeJS.ProcessEnv {
     "APPIMAGE",
     "APPDIR",
     "OWD",
+    // Portable wrapper path. The runtime rewrites APPIMAGE to the cache extract.
+    "UPRIV_PORTABLE_FILE",
     // electron-builder Windows portable — stable dir of the .exe (not %TEMP% extract).
     "PORTABLE_EXECUTABLE_DIR",
     "PORTABLE_EXECUTABLE_FILE",
@@ -239,9 +249,13 @@ function daemonEnv(): NodeJS.ProcessEnv {
     } else {
       let candidate: string;
       const portableDir = process.env.PORTABLE_EXECUTABLE_DIR?.trim();
+      const portableFileDir = existingFileDirectory(process.env.UPRIV_PORTABLE_FILE);
       if (process.platform === "win32" && portableDir) {
         // electron-builder portable: exe may run from %TEMP%; this env is the stable folder.
         candidate = portableDir;
+      } else if (portableFileDir) {
+        // The launcher records the downloaded file. APPIMAGE then points at the cache copy.
+        candidate = portableFileDir;
       } else if (isRealAppImageEnv()) {
         // `$APPIMAGE` is the real file on disk; `current_exe` is under /tmp/.mount_*.
         candidate = path.dirname(process.env.APPIMAGE as string);
@@ -252,6 +266,7 @@ function daemonEnv(): NodeJS.ProcessEnv {
         platform: process.platform,
         portableExecutableDir: portableDir,
         appImageFile: isRealAppImageEnv(),
+        portableFile: portableFileDir !== null,
       });
       if (homeKind === "portable") {
         cleanupWriteProbes(candidate);

@@ -46,6 +46,18 @@ export function fileManagerDismissIntent(
   return "dismiss";
 }
 
+/**
+ * Drafts were already saved or discarded. The workspace ref can still say
+ * unsaved until the next render. An import still blocks.
+ */
+export function closeIntentAfterUnsavedResolved(
+  intent: FileManagerDismissIntent,
+  unsavedResolved: boolean,
+): FileManagerDismissIntent {
+  if (unsavedResolved && intent === "unsaved") return "dismiss";
+  return intent;
+}
+
 export function fileManagerBlockingPrompt(
   intent: FileManagerDismissIntent,
 ): UnsavedPromptAction | null {

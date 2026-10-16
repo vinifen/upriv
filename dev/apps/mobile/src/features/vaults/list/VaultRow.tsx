@@ -7,6 +7,7 @@ import {
   type ViewStyle,
 } from "react-native";
 import {
+  vaultRowControls,
   resolveVaultListStatus,
   isVaultListRowActivatable,
   isVaultListRowUnlockTarget,
@@ -57,7 +58,6 @@ interface VaultRowProps {
   isDragging: boolean;
   isDragOver: boolean;
   isDropBlocked?: boolean;
-  isPipelineBusy: boolean;
   dropTargetProps?: VaultRowDropTargetProps;
   onDragStart: (x: number, y: number) => void;
   onDragMove: (x: number, y: number) => void;
@@ -84,7 +84,6 @@ export function VaultRow({
   isDragging,
   isDragOver,
   isDropBlocked = false,
-  isPipelineBusy,
   dropTargetProps,
   onDragStart,
   onDragMove,
@@ -103,7 +102,12 @@ export function VaultRow({
   const { colors, typography, theme } = useTheme();
   const { settings: appSettings } = useAppSettingsContext();
   const status = resolveVaultListStatus(vault, pipelineListStatus);
-  const statusLabelKey = vaultStatusLabelKey(status, vault.id, pipelineListStatus);
+  const statusLabelKey = vaultStatusLabelKey(
+    status,
+    vault.id,
+    pipelineListStatus,
+    vault.autoClosed === true,
+  );
   const isOpen = status === "open";
   const isLastOpened = appSettings.app.last_opened_vault.trim() === vault.id;
   const density = VAULT_ROW_DENSITY[viewMode === "blocks" ? "default" : viewMode];
@@ -130,7 +134,7 @@ export function VaultRow({
     </Text>
   );
   const showGrip = dragEnabled;
-  const gripDisabled = isPipelineBusy;
+  const gripDisabled = vaultRowControls(vault, pipelineListStatus).dragBlocked;
   const iconTone = vaultStatusIconColors(status, colors);
   const letters = vaultDisplayLetters(vault.displayName);
   const avatarSize = variant === "block" ? 36 : density.icon;
@@ -168,7 +172,6 @@ export function VaultRow({
     <VaultRowActions
       vault={vault}
       pipelineListStatus={pipelineListStatus}
-      disabled={isPipelineBusy}
       includeLockAction={false}
       layout={variant === "block" ? "column" : "row"}
       onOpenBackups={onOpenBackups}

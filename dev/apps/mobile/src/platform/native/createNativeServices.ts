@@ -7,11 +7,7 @@ import type {
   LogService,
   VaultRootService,
 } from "@upriv/shared";
-import {
-  isRpcError,
-  isVaultRootUnreachableError,
-  normalizeAppSettings,
-} from "@upriv/shared";
+import { isRpcError, isVaultRootUnreachableError, normalizeAppSettings } from "@upriv/shared";
 import {
   rpcAppSettingsGet,
   rpcAppSettingsParseToml,

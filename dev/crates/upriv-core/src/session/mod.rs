@@ -4,12 +4,11 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::{Arc, LazyLock, Mutex, TryLockError};
 use std::time::{Duration, Instant};
 
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
-use crate::config::VaultSecurityMode;
 use crate::error::{Result, UprivError};
 use crate::store::{OpenedStore, VaultHeader, VaultIndex};
 
@@ -29,8 +28,6 @@ pub struct OpenSession {
     pub index_key: [u8; 64],
     #[zeroize(skip)]
     pub index: VaultIndex,
-    #[zeroize(skip)]
-    pub security_mode: VaultSecurityMode,
     /// Writers must set this; `close_vault` reseals the index regardless until then.
     pub dirty: bool,
     /// Explorer cache invalidation — bumped on every committed mutation.
@@ -67,12 +64,7 @@ pub struct OpenSession {
 }
 
 impl OpenSession {
-    pub fn from_opened(
-        vault_id: String,
-        vault_dir: PathBuf,
-        security_mode: VaultSecurityMode,
-        opened: OpenedStore,
-    ) -> Self {
+    pub fn from_opened(vault_id: String, vault_dir: PathBuf, opened: OpenedStore) -> Self {
         let mut master_key = [0u8; 32];
         master_key.copy_from_slice(opened.master_key.as_ref());
         let mut content_key = [0u8; 32];
@@ -87,7 +79,6 @@ impl OpenSession {
             content_key,
             index_key,
             index: opened.index,
-            security_mode,
             dirty: false,
             tree_revision: 0,
             mount: None,
@@ -145,19 +136,36 @@ pub fn with_unlock_lock<T>(f: impl FnOnce() -> Result<T>) -> Result<T> {
     f()
 }
 
+fn vault_dir_gate(vault_dir: &Path) -> Result<Arc<Mutex<()>>> {
+    let mut map = VAULT_DIR_GATES
+        .lock()
+        .map_err(|_| session_lock_poisoned("vault-dir gate lock poisoned"))?;
+    Ok(map
+        .entry(vault_dir.to_path_buf())
+        .or_insert_with(|| Arc::new(Mutex::new(())))
+        .clone())
+}
+
 /// Exclusive critical section for one vault directory (create TOCTOU).
 pub fn with_vault_dir_lock<T>(vault_dir: &Path, f: impl FnOnce() -> Result<T>) -> Result<T> {
-    let gate = {
-        let mut map = VAULT_DIR_GATES
-            .lock()
-            .map_err(|_| session_lock_poisoned("vault-dir gate lock poisoned"))?;
-        map.entry(vault_dir.to_path_buf())
-            .or_insert_with(|| Arc::new(Mutex::new(())))
-            .clone()
-    };
+    let gate = vault_dir_gate(vault_dir)?;
     let _held = gate
         .lock()
         .map_err(|_| session_lock_poisoned("vault-dir lock poisoned"))?;
+    f()
+}
+
+/// Same section as [`with_vault_dir_lock`], without waiting.
+/// A holder (rewrap, open, rename) makes the caller return [`UprivError::VaultBusy`].
+pub fn try_with_vault_dir_lock<T>(vault_dir: &Path, f: impl FnOnce() -> Result<T>) -> Result<T> {
+    let gate = vault_dir_gate(vault_dir)?;
+    let _held = match gate.try_lock() {
+        Ok(guard) => guard,
+        Err(TryLockError::WouldBlock) => return Err(UprivError::VaultBusy),
+        Err(TryLockError::Poisoned(_)) => {
+            return Err(session_lock_poisoned("vault-dir lock poisoned"));
+        }
+    };
     f()
 }
 

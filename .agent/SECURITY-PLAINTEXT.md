@@ -3,7 +3,7 @@
 **Audience:** coding agents and humans implementing vault open/close/mount/7z.  
 **Status:** ship-blocking invariant for the default product mode.  
 **Canonical requirements:** PRD **RF-45**, **RF-49**, **RF-49b**, **RF-50**; SDD **§2.4**, **§2.6**.  
-**Product exception:** `storage.mode = upriv_plain` may write plaintext under `workspace/` **only** with the matching UI warning and close wipe (`secure_wipe_workspace`). That is the **only** product choice that may expose vault file bytes on ordinary disk. (`plain` / `plain_only` in PRD are dropped — see [SECURITY-CRYPTO.md](SECURITY-CRYPTO.md).)
+**Product exception:** `storage.mode = upriv_plain` may write plaintext under `workspace/` **only** with the matching UI warning. Close overwrites that folder and then removes it. That is the **only** product choice that may expose vault file bytes on ordinary disk. (`plain` / `plain_only` in PRD are dropped — see [SECURITY-CRYPTO.md](SECURITY-CRYPTO.md).)
 
 ---
 
