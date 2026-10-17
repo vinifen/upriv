@@ -144,9 +144,9 @@ mod local {
     // `libc::stat` field widths differ across Unix; the casts are no-ops on Linux.
     #[allow(clippy::unnecessary_cast)]
     fn from_raw(st: &libc::stat) -> Stat {
-        let kind = match st.st_mode & libc::S_IFMT {
-            libc::S_IFREG => Kind::File,
-            libc::S_IFDIR => Kind::Dir,
+        let kind = match (st.st_mode as u32) & (libc::S_IFMT as u32) {
+            mode if mode == libc::S_IFREG as u32 => Kind::File,
+            mode if mode == libc::S_IFDIR as u32 => Kind::Dir,
             _ => Kind::Other,
         };
         let dev = st.st_dev as u64;
