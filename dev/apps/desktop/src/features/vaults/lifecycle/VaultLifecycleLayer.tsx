@@ -1,8 +1,16 @@
 import type { I18nKey } from "@/i18n/types";
 import type { VaultLifecycleIntent, VaultListItem } from "@upriv/shared";
 import { CloseAllUnsavedModal } from "./modals/CloseAllUnsavedModal";
+import { PlainHeldModal, PlainPlaceModal } from "./modals/PlainFolderModals";
 import { VaultLifecycleModal } from "./modals/VaultLifecycleModal";
-import { VaultRecoveryModal, type RecoveryAction } from "./modals/VaultRecoveryModal";
+import { VaultRecoveryModal } from "./modals/VaultRecoveryModal";
+import type {
+  PlainFolderClass,
+  PlainLeftover,
+  PlainPlaceChoice,
+  PlainRecoveryAction,
+} from "@upriv/shared";
+
 interface VaultLifecycleLayerProps {
   lifecycleVault: VaultListItem | null;
   lifecycleIntent: VaultLifecycleIntent | null;
@@ -15,10 +23,26 @@ interface VaultLifecycleLayerProps {
   onLifecycleClose: () => void;
   onLifecycleConfirm: (password: string | null) => void;
   recoveryVault: VaultListItem | null;
+  recoveryLeftover: PlainLeftover | null | undefined;
   recoveryOpen: boolean;
   recoverySubmitting: boolean;
   onRecoveryClose: () => void;
-  onRecoveryAction: (action: RecoveryAction) => void;
+  onRecoveryAction: (action: PlainRecoveryAction) => void;
+  placeOpen: boolean;
+  placeVaultName: string;
+  placeWorkspaceChoices: boolean;
+  placeSubmitting: boolean;
+  placeWarningClass: PlainFolderClass | null;
+  onPlaceClose: () => void;
+  onPlaceContinue: (choice: PlainPlaceChoice, path: string) => void;
+  onPlaceAcceptWarning: () => void;
+  heldOpen: boolean;
+  heldCount: number;
+  heldPaths: readonly string[];
+  heldSubmitting: boolean;
+  onHeldApply: () => void;
+  onHeldRestore: () => void;
+  closeHolderNames: readonly string[];
   closeAllUnsavedOpen: boolean;
   closeAllUnsavedSaving: boolean;
   onCloseAllUnsavedCancel: () => void;
@@ -40,10 +64,26 @@ export function VaultLifecycleLayer({
   onLifecycleClose,
   onLifecycleConfirm,
   recoveryVault,
+  recoveryLeftover,
   recoveryOpen,
   recoverySubmitting,
   onRecoveryClose,
   onRecoveryAction,
+  placeOpen,
+  placeVaultName,
+  placeWorkspaceChoices,
+  placeSubmitting,
+  placeWarningClass,
+  onPlaceClose,
+  onPlaceContinue,
+  onPlaceAcceptWarning,
+  heldOpen,
+  heldCount,
+  heldPaths,
+  heldSubmitting,
+  onHeldApply,
+  onHeldRestore,
+  closeHolderNames,
   closeAllUnsavedOpen,
   closeAllUnsavedSaving,
   onCloseAllUnsavedCancel,
@@ -56,14 +96,33 @@ export function VaultLifecycleLayer({
       <VaultLifecycleModal
         vault={lifecycleVault}
         intent={lifecycleIntent}
-        open={lifecycleOpen}
+        open={lifecycleOpen && !placeOpen}
         submitting={lifecycleSubmitting}
         pipelineStep={lifecyclePipelineStep}
         budgetStartedAt={lifecycleBudgetStartedAt}
         verifyErrorKey={lifecycleVerifyErrorKey}
         initialPassword={lifecycleFieldPassword}
+        holderNames={closeHolderNames}
         onClose={onLifecycleClose}
         onConfirm={onLifecycleConfirm}
+      />
+      <PlainPlaceModal
+        open={placeOpen}
+        vaultName={placeVaultName}
+        workspaceChoices={placeWorkspaceChoices}
+        submitting={placeSubmitting}
+        warningClass={placeWarningClass}
+        onClose={onPlaceClose}
+        onContinue={onPlaceContinue}
+        onAcceptWarning={onPlaceAcceptWarning}
+      />
+      <PlainHeldModal
+        open={heldOpen}
+        count={heldCount}
+        paths={heldPaths}
+        submitting={heldSubmitting}
+        onApply={onHeldApply}
+        onRestore={onHeldRestore}
       />
       <CloseAllUnsavedModal
         open={closeAllUnsavedOpen}
@@ -75,6 +134,7 @@ export function VaultLifecycleLayer({
       />
       <VaultRecoveryModal
         vault={recoveryVault}
+        leftover={recoveryLeftover}
         open={recoveryOpen}
         submitting={recoverySubmitting}
         onClose={onRecoveryClose}

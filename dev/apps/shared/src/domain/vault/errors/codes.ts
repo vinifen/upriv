@@ -20,8 +20,12 @@ export const VAULT_ERROR_CODES = {
   /** Corrupt `.upriv/vault_groups.toml` (list soft-fails with `invalid: true`; mutations may Err). */
   GROUPS_INVALID: "vault_groups_invalid",
   GROUP_NOT_FOUND: "vault_group_not_found",
-  /** `upriv_plain` workspace extract/wipe is not implemented. */
-  PLAIN_UNAVAILABLE: "upriv_plain_unavailable",
+  PLAIN_DESTINATION_UNCONFIRMED: "plain_destination_unconfirmed",
+  PLAIN_DESTINATION_INVALID: "plain_destination_invalid",
+  PLAIN_LEFTOVER: "plain_leftover",
+  PLAIN_NAMES_UNSUPPORTED: "plain_names_unsupported",
+  PLAIN_SPACE_SHORT: "plain_space_short",
+  PLAIN_FOLDER_UNWRITABLE: "plain_folder_unwritable",
   /** Config save refused while session open / mid-close (edit-policy quiet targets). */
   CONFIG_BUSY: "vault_config_busy",
   PATH_NOT_FOUND: "vault_path_not_found",

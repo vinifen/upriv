@@ -18,7 +18,7 @@ use crate::config::VaultConfig;
 use crate::error::{Result, UprivError};
 use crate::logging::{log_event, LogLevel};
 use crate::paths::VaultRoot;
-use crate::store::{file_name, KdfUnlockPreset, INTERNAL_WORKSPACE_FILE, SEED_LOGICAL_PATH};
+use crate::store::{is_plain_internal, is_reserved_logical, KdfUnlockPreset};
 
 use super::create::create_vault;
 use super::fs::{
@@ -34,6 +34,10 @@ use super::welcome::{seal_welcome_if_absent, VaultWelcome};
 enum PlannedOsEntry {
     Directory(String),
     File { logical: String, source: PathBuf },
+}
+
+struct PlannedOs {
+    entries: Vec<PlannedOsEntry>,
 }
 
 fn layout_error(path: &Path, detail: impl Into<String>) -> UprivError {
@@ -58,9 +62,7 @@ fn os_name(path: &Path) -> Result<String> {
 }
 
 fn logical_name_rejected(logical: &str) -> bool {
-    sevenz_member_name_unsafe(logical)
-        || logical == SEED_LOGICAL_PATH
-        || file_name(logical) == INTERNAL_WORKSPACE_FILE
+    sevenz_member_name_unsafe(logical) || is_reserved_logical(logical)
 }
 
 fn ensure_folder_path(root: &VaultRoot, vault_id: &str, logical: &str) -> Result<()> {
@@ -75,8 +77,8 @@ fn ensure_folder_path(root: &VaultRoot, vault_id: &str, logical: &str) -> Result
 
 /// Names and source paths only. File bytes stay on the user's disk until ingest.
 /// Links inside a folder are skipped, never followed. The chosen path itself
-/// must not be a link.
-fn plan_os_path(source: &Path) -> Result<Vec<PlannedOsEntry>> {
+/// must not be a link. Plaintext-folder names are skipped in every mode.
+fn plan_os_path(source: &Path) -> Result<PlannedOs> {
     if !source.is_absolute() {
         return Err(layout_error(source, "choose an absolute file or folder"));
     }
@@ -89,16 +91,20 @@ fn plan_os_path(source: &Path) -> Result<Vec<PlannedOsEntry>> {
         if logical_name_rejected(&logical) {
             return Err(layout_error(source, "reserved or unsafe file name"));
         }
-        return Ok(vec![PlannedOsEntry::File {
-            logical,
-            source: source.to_path_buf(),
-        }]);
+        return Ok(PlannedOs {
+            entries: vec![PlannedOsEntry::File {
+                logical,
+                source: source.to_path_buf(),
+            }],
+        });
     }
     if !meta.host_is_dir() {
         return Err(layout_error(source, "choose a file or a folder"));
     }
 
-    let mut planned = Vec::new();
+    let mut planned = PlannedOs {
+        entries: Vec::new(),
+    };
     let mut links = 0usize;
     let mut stack = vec![(source.to_path_buf(), String::new())];
     while let Some((dir, prefix)) = stack.pop() {
@@ -124,19 +130,27 @@ fn plan_os_path(source: &Path) -> Result<Vec<PlannedOsEntry>> {
             } else {
                 format!("{prefix}/{name}")
             };
-            if logical_name_rejected(&logical) {
-                return Err(layout_error(&path, "reserved or unsafe file name"));
+            if is_plain_internal(&logical) {
+                continue;
+            }
+            let supported = child_meta.host_is_dir() || child_meta.host_is_file();
+            if !supported || logical_name_rejected(&logical) {
+                return Err(if supported {
+                    layout_error(&path, "reserved or unsafe file name")
+                } else {
+                    layout_error(&path, "unsupported file type")
+                });
             }
             if child_meta.host_is_dir() {
-                planned.push(PlannedOsEntry::Directory(logical.clone()));
+                planned
+                    .entries
+                    .push(PlannedOsEntry::Directory(logical.clone()));
                 stack.push((path, logical));
-            } else if child_meta.host_is_file() {
-                planned.push(PlannedOsEntry::File {
+            } else {
+                planned.entries.push(PlannedOsEntry::File {
                     logical,
                     source: path,
                 });
-            } else {
-                return Err(layout_error(&path, "unsupported file type"));
             }
         }
     }
@@ -177,10 +191,10 @@ fn ingest_planned(root: &VaultRoot, vault_id: &str, planned: &[PlannedOsEntry]) 
                 fs_ensure_folder_path_staged(root, vault_id, logical, &mut folders)?
             }
             PlannedOsEntry::File { logical, source } => {
+                let mut file = open_regular_file(source)?;
                 if let Some((parent, _)) = logical.rsplit_once('/') {
                     fs_ensure_folder_path_staged(root, vault_id, parent, &mut folders)?;
                 }
-                let mut file = open_regular_file(source)?;
                 fs_write_staged(root, vault_id, &format!("/{logical}"), &mut file)?;
             }
         }
@@ -188,6 +202,34 @@ fn ingest_planned(root: &VaultRoot, vault_id: &str, planned: &[PlannedOsEntry]) 
     }
     fs_seal_staged_imports(root, vault_id)?;
     Ok(())
+}
+
+/// Create the vault, stream `planned` into it, and close it. A failure deletes
+/// the new vault.
+fn import_planned(
+    root: &VaultRoot,
+    config: VaultConfig,
+    new_password: &[u8],
+    preset: KdfUnlockPreset,
+    planned: &PlannedOs,
+    welcome: Option<VaultWelcome<'_>>,
+) -> Result<String> {
+    create_vault(root, config.clone(), new_password, preset)?;
+    let id = config.vault.id.trim().to_string();
+    let ingest = (|| {
+        open_vault_for_ingest(root, &id, new_password)?;
+        ingest_planned(root, &id, &planned.entries)?;
+        if let Some(welcome) = welcome {
+            seal_welcome_if_absent(root, &id, welcome)?;
+        }
+        Ok(())
+    })();
+    if let Err(ingest_error) = ingest {
+        return Err(abandon_failed_import(root, &id, ingest_error));
+    }
+    close_vault(root, &id)?;
+    log_event(LogLevel::Info, "vault_imported", &[("id", id.as_str())]);
+    Ok(id)
 }
 
 /// Create a vault and stream `source` into it.
@@ -209,22 +251,7 @@ pub fn import_logical_os_path(
         welcome.files()?;
     }
     let planned = plan_os_path(source)?;
-    create_vault(root, config.clone(), new_password, preset)?;
-    let id = config.vault.id.trim().to_string();
-    let ingest = (|| {
-        open_vault_for_ingest(root, &id, new_password)?;
-        ingest_planned(root, &id, &planned)?;
-        if let Some(welcome) = welcome {
-            seal_welcome_if_absent(root, &id, welcome)?;
-        }
-        Ok(())
-    })();
-    if let Err(ingest_error) = ingest {
-        return Err(abandon_failed_import(root, &id, ingest_error));
-    }
-    close_vault(root, &id)?;
-    log_event(LogLevel::Info, "vault_imported", &[("id", id.as_str())]);
-    Ok(id)
+    import_planned(root, config, new_password, preset, &planned, welcome)
 }
 
 /// Unlock a vault that was just created so files can be streamed in.

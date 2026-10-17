@@ -76,7 +76,8 @@ pub fn delete_vault(root: &VaultRoot, vault_id: &str) -> Result<()> {
         // Hold the cross-process lock for the wipe. A live flock means another
         // Upriv still has this vault open; do not unlink that lock file.
         let _lock = crate::lockfile::acquire_vault_lock(lock_path)?;
-        let _ = crate::runtime_state::mark_session_closed(root, vault_id);
+        super::plain::clear_for_delete(root, vault_id, &vault_dir)?;
+        let _ = crate::runtime_state::forget_vault(root, vault_id);
         record_unlock_success(&vault_dir);
 
         let opts = config

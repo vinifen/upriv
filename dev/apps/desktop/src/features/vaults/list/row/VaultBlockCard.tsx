@@ -21,6 +21,7 @@ import { VaultDragHandle } from "./VaultDragHandle";
 import { VaultFileManagerIndicator } from "./VaultFileManagerIndicator";
 import { VaultHiddenIndicator } from "./VaultHiddenIndicator";
 import { VaultLastOpenedIndicator } from "./VaultLastOpenedIndicator";
+import { VaultPlaintextIndicator } from "./VaultPlaintextIndicator";
 import { VaultLockButton } from "./VaultLockButton";
 import { VaultRowActions } from "./VaultRowActions";
 import { VaultStatusBadge } from "./VaultStatusBadge";
@@ -155,6 +156,7 @@ export function VaultBlockCard({
             </div>
             <h3 className="flex min-w-0 flex-1 items-center gap-1.5 text-sm font-semibold leading-snug text-on-surface sm:text-base">
               <span className="line-clamp-2 min-w-0 flex-1">{vault.displayName}</span>
+              <VaultPlaintextIndicator storageMode={vault.storageMode} size={13} />
               <VaultLastOpenedIndicator active={isLastOpened} size={13} />
               <VaultFileManagerIndicator vaultId={vault.id} size={13} />
               <VaultHiddenIndicator hidden={vault.hidden} size={13} />

@@ -13,8 +13,7 @@ use crate::session::{
     PreparingGuard,
 };
 use crate::store::{
-    file_name, open_store, probe_store_password, VaultHeader, VaultIndex, INTERNAL_WORKSPACE_FILE,
-    SEED_LOGICAL_PATH,
+    is_reserved_logical, open_store, probe_store_password, VaultHeader, VaultIndex,
 };
 use crate::time::utc_filename_stamp;
 
@@ -120,10 +119,6 @@ pub fn export_store_zip_to_path(
     })
 }
 
-fn skip_export_path(path: &str) -> bool {
-    path == SEED_LOGICAL_PATH || file_name(path) == INTERNAL_WORKSPACE_FILE
-}
-
 fn pack_logical_seven_zip_to_path(
     source: LogicalSevenZipSource<'_>,
     archive_password: &[u8],
@@ -131,7 +126,7 @@ fn pack_logical_seven_zip_to_path(
     outer: &str,
     dest: &std::path::Path,
 ) -> Result<u64> {
-    let sizes = logical_export_size(source.index, skip_export_path);
+    let sizes = logical_export_size(source.index, is_reserved_logical);
     let budget = seven_zip_pack_budget(sizes, opts, SevenZipSink::File);
     ensure_seven_zip_export_ram(budget.ram)?;
     let file = crate::host_fs::File::create(dest)?;
@@ -142,7 +137,7 @@ fn pack_logical_seven_zip_to_path(
         opts,
         outer,
         budget.threads,
-        skip_export_path,
+        is_reserved_logical,
     ) {
         Ok(mut file) => {
             use std::io::Write;
@@ -165,7 +160,7 @@ fn pack_logical_seven_zip_in_memory(
     opts: &VaultSevenZipSection,
     outer: &str,
 ) -> Result<Vec<u8>> {
-    let sizes = logical_export_size(index, skip_export_path);
+    let sizes = logical_export_size(index, is_reserved_logical);
     let budget = seven_zip_pack_budget(sizes, opts, SevenZipSink::Memory);
     ensure_seven_zip_export_ram(budget.ram)?;
     let buf = try_vec_with_capacity(seven_zip_archive_vec_budget(sizes))?;
@@ -181,7 +176,7 @@ fn pack_logical_seven_zip_in_memory(
         opts,
         outer,
         budget.threads,
-        skip_export_path,
+        is_reserved_logical,
     )?;
     Ok(cursor.into_inner())
 }
@@ -291,7 +286,7 @@ mod tests {
     use crate::error::UprivError;
     #[allow(unused_imports)]
     use crate::host_fs::HostFsQuery;
-    use crate::store::KdfUnlockPreset;
+    use crate::store::{KdfUnlockPreset, SEED_LOGICAL_PATH};
     use crate::test_support::vault_root_with;
     use crate::vault::create::create_vault;
     use crate::vault::fs::{fs_list_tree, fs_mkdir, fs_write_file};

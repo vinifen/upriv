@@ -1,5 +1,6 @@
 import type { I18nKey } from "../../i18n/catalog";
 import { isRpcError } from "../core-rpc/errors";
+import { PLAIN_OPEN_CANCELLED } from "../vault-plain";
 import { isVaultPipelineError } from "../vault-lifecycle/errors/codes";
 import { vaultPipelineErrorI18nKey } from "../vault-lifecycle/errors/messages";
 import { isVaultErrorCode, vaultErrorI18nKey } from "../vault";
@@ -13,6 +14,9 @@ import { isWorkspaceErrorCode, workspaceErrorI18nKey } from "../workspace/errors
  * Returns `null` for internal/log-only errors — log `error.message` (English) instead.
  */
 export function errorDisplayI18nKey(error: unknown): I18nKey | null {
+  if (isRpcError(error) && error.code === PLAIN_OPEN_CANCELLED) {
+    return "plain.open.cancelled";
+  }
   if (isRpcError(error) && error.code === "log_file_too_large") {
     return "toast.logs_file_too_large";
   }

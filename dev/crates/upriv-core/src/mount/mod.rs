@@ -16,7 +16,9 @@ mod thumbnails;
 mod winfsp_windows;
 
 #[cfg_attr(not(target_os = "linux"), allow(unused_imports))]
-pub(crate) use thumbnails::{purge_mount_thumbnails, unwatch_open_mount, watch_open_mount};
+pub(crate) use thumbnails::{
+    purge_folder_thumbnails, unwatch_vault_folder, uri_is_under_folder, watch_vault_folder,
+};
 
 /// Why a saved file-manager folder still has no OS path.
 ///
@@ -63,7 +65,7 @@ impl Drop for MountedVault {
         #[cfg(target_os = "linux")]
         {
             self.fuse.take();
-            unwatch_open_mount(&self.mount_point);
+            unwatch_vault_folder(&self.mount_point);
         }
         if force_unmount(&self.mount_point).is_ok() {
             let _ = crate::host_fs::remove_dir(&self.mount_point);
@@ -254,7 +256,7 @@ fn linux_umount(path: &Path) -> Result<()> {
             .stderr(std::process::Stdio::null())
             .status();
         if matches!(status, Ok(code) if code.success()) {
-            purge_mount_thumbnails(path);
+            purge_folder_thumbnails(path);
             return Ok(());
         }
     }
@@ -262,7 +264,7 @@ fn linux_umount(path: &Path) -> Result<()> {
     const MNT_DETACH: libc::c_int = 2;
     let rc = unsafe { libc::umount2(c_path.as_ptr(), MNT_DETACH) };
     if rc == 0 {
-        purge_mount_thumbnails(path);
+        purge_folder_thumbnails(path);
         return Ok(());
     }
     let err = std::io::Error::last_os_error();
@@ -272,7 +274,7 @@ fn linux_umount(path: &Path) -> Result<()> {
     }
     let forced = unsafe { libc::umount2(c_path.as_ptr(), MNT_FORCE | MNT_DETACH) };
     if forced == 0 {
-        purge_mount_thumbnails(path);
+        purge_folder_thumbnails(path);
         return Ok(());
     }
     let forced_err = std::io::Error::last_os_error();

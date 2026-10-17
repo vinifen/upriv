@@ -18,7 +18,7 @@ use crate::config::VaultConfig;
 use crate::error::{Result, UprivError};
 use crate::logging::{log_event, LogLevel};
 use crate::paths::VaultRoot;
-use crate::store::{file_name, KdfUnlockPreset, INTERNAL_WORKSPACE_FILE, SEED_LOGICAL_PATH};
+use crate::store::{is_plain_internal, is_reserved_logical, KdfUnlockPreset};
 
 use super::create::create_vault;
 use super::files_zip::FILES_ZIP_EXPAND_FACTOR;
@@ -177,14 +177,10 @@ fn classify_archive_member(
         return Ok(ArchiveMember::Directory(Some(parts[1..].join("/"))));
     }
     let logical = parts[1..].join("/");
-    if logical == SEED_LOGICAL_PATH || file_name(&logical) == INTERNAL_WORKSPACE_FILE {
+    if is_reserved_logical(&logical) && !is_plain_internal(&logical) {
         return Err(archive_layout_error("reserved internal file in .7z"));
     }
     Ok(ArchiveMember::File(logical))
-}
-
-fn logical_is_reserved(logical: &str) -> bool {
-    logical == SEED_LOGICAL_PATH || file_name(logical) == INTERNAL_WORKSPACE_FILE
 }
 
 fn budget_exceeded() -> UprivError {
@@ -203,7 +199,7 @@ fn ingest_archive_member(
 ) -> Result<()> {
     match classify_archive_member(entry, outer)? {
         ArchiveMember::Directory(None) => Ok(()),
-        ArchiveMember::Directory(Some(logical)) if logical_is_reserved(&logical) => Ok(()),
+        ArchiveMember::Directory(Some(logical)) if is_reserved_logical(&logical) => Ok(()),
         ArchiveMember::Directory(Some(logical)) => {
             fs_ensure_folder_path_staged(root, vault_id, &logical, folders)
         }
@@ -211,14 +207,18 @@ fn ingest_archive_member(
             if entry.size > *budget {
                 return Err(budget_exceeded());
             }
-            if let Some((parent, _)) = logical.rsplit_once('/') {
-                fs_ensure_folder_path_staged(root, vault_id, parent, folders)?;
-            }
             let mut limited = BudgetReader {
                 inner: payload,
                 budget: *budget,
             };
-            fs_write_staged(root, vault_id, &format!("/{logical}"), &mut limited)?;
+            if is_plain_internal(&logical) {
+                std::io::copy(&mut limited, &mut std::io::sink())?;
+            } else {
+                if let Some((parent, _)) = logical.rsplit_once('/') {
+                    fs_ensure_folder_path_staged(root, vault_id, parent, folders)?;
+                }
+                fs_write_staged(root, vault_id, &format!("/{logical}"), &mut limited)?;
+            }
             *budget = limited.budget;
             Ok(())
         }

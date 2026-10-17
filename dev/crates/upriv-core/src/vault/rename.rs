@@ -162,20 +162,36 @@ fn migrate_closed_mount_leaf(
     if !old_mount.host_is_dir() {
         return Ok(None);
     }
-    if new_mount.host_exists() {
+    let skip = if new_mount.host_exists() {
+        Some("dest_exists")
+    } else if crate::host_fs::read_dir(&old_mount)?.next().is_some() {
+        // Files there are not this vault's to move.
+        Some("not_empty")
+    } else {
+        None
+    };
+    if let Some(reason) = skip {
         log_event(
             LogLevel::Warn,
             "vault_rename_mount_skipped",
             &[
                 ("previous_id", previous_id),
                 ("id", next_id),
-                ("reason", "dest_exists"),
+                ("reason", reason),
             ],
         );
         return Ok(None);
     }
     crate::host_fs::rename(&old_mount, &new_mount)?;
     Ok(Some((old_mount, new_mount)))
+}
+
+/// A plaintext folder from an earlier session blocks a rename. The empty
+/// folder a clean close left goes, since its marker names the old id.
+fn clear_plain_folder(root: &VaultRoot, vault_id: &str, config: &VaultConfig) -> Result<()> {
+    super::plain::ensure_no_leftover(root, vault_id)?;
+    super::plain::clear_closed_leaf(root, vault_id, config);
+    Ok(())
 }
 
 fn rollback_error(old_dir: &Path, parts: Vec<String>) -> UprivError {
@@ -301,6 +317,7 @@ pub fn rename_vault(
             }
             let prior_persistence = load_vault_persistence(&old_dir)?;
             let prior_display = prior_config.vault.display_name.clone();
+            clear_plain_folder(root, old_id, &prior_config)?;
 
             let mut next_config = prior_config.clone();
             next_config.vault.id = new_id.clone();
@@ -403,6 +420,7 @@ fn rename_display_name_only(
         let prior_config = config.clone();
         let prior_persistence = load_vault_persistence(old_dir)?;
         let prior_display = config.vault.display_name.clone();
+        clear_plain_folder(root, old_id, &prior_config)?;
         config.vault.display_name = display_name.to_string();
         save_vault_config(old_dir, &config)?;
         if let Some(mut persistence) = load_vault_persistence(old_dir)? {

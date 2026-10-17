@@ -21,7 +21,7 @@
 |----|-------------|------|---------|
 | `store` | `upriv_core::store` (planned) | `vaults/<id>/store/` (ciphertext) | — |
 | `session` | `upriv_core::session` (planned) | — | mount + RAM (`encrypted_dir`). App folder: `{place}/workspace/{display_name}/`. Own folder: `{path}/{display_name}/` |
-| `plain` | `upriv_core::plain` (planned) | `{parent}/{display_name}/` in plaintext | only when `storage.mode = upriv_plain` |
+| `plain` | `upriv_core::vault::plain` | `{parent}/{display_name}/` while open | only when `storage.mode = upriv_plain` |
 
 No `archive/` layer. Portable `.zip` / `.7z` are **export files**, not rest layout. See PRD §1.6 and SECURITY-CRYPTO.
 
@@ -36,7 +36,7 @@ No `archive/` layer. Portable `.zip` / `.7z` are **export files**, not rest layo
 6. **Fail safe** — never overwrite `store/` without verification; atomic writes. Never leave a durable `.7z` twin beside `store/`.
 7. **Session keys in RAM** — unlock asks for the password once. Lock flushes with those keys. Quit or reboot asks again.
 8. **Close = flush session into `store/`** — never pack `.enc` blobs into a `.7z` as rest. Export `.7z` streams **logical** content.
-9. **Recovery** — dirty close → unlock the encrypted vault (`store/`). Leftover `upriv_plain` workspace → wipe or resume. Dead header → create from backup / store zip (Backups or New vault). No archive-vs-store picker; create-from-backup is not a dirty-close peer.
+9. **Recovery** — dirty close → unlock the encrypted vault (`store/`). Leftover `upriv_plain` folder → recovery until the user wipes it. The leftover is not the open session. Dead header → create from backup / store zip (Backups or New vault). No archive-vs-store picker; create-from-backup is not a dirty-close peer.
 10. **Unified states** — `open` (runtime) | `closed` (rest).
 11. **Virtual mount** — in `encrypted_dir`, `workspace/` is not a data folder; I/O goes to encrypted `store/`.
 12. **Lockfile** — one open per vault at a time.
@@ -130,16 +130,16 @@ Transient: `closing`, `opening`, `recovery` — do not expose in UI as resting s
 3. Try to acquire `runtime/<id>.lock` — failure → `error.vault_already_open`.
 4. Read `header/vault.header` (or `vault.header.copy` when the primary cannot be used); derive master key (Argon2id from header params) — failure → abort.
 5. Verify index / chunk tags needed for the session.
-6. If dirty close: **recovery** → unlock the encrypted vault. If leftover `upriv_plain` workspace: wipe or resume. If header/index dead: create from backup / store zip (not a dirty-close peer).
+6. If dirty close: **recovery** → unlock the encrypted vault. If a leftover `upriv_plain` folder is still there: wipe it. If header/index dead: create from backup / store zip (not a dirty-close peer).
 7. `encrypted_dir`: mount the file manager folder when it is on — FUSE (Linux) + WinFsp (Windows); mobile uses the in-app file manager (no FUSE).
-8. `upriv_plain`: decrypt into the plaintext folder.
+8. `upriv_plain`: after the place is confirmed, stream `store/` into that folder. No FUSE/WinFsp.
 9. Update `runtime/state.json` → `vaults.<id>.session = "open"`.
 
 **close (v1):**
 1. Use the open session keys in RAM. Lock does not ask for the password and does not rewrap `vault.header`.
 2. Flush the session into `store/` (header + index + chunks). Never pack `.enc` blobs into a `.7z` as rest.
 3. If `[backup] enabled`: write a Stored zip of `store/` to `backups/<stamp>-<id>.zip` (no zip password). `skip_unchanged` (default on) skips that zip when vault files match the last backup still on disk. `.upriv-workspace.json` is not a change. Off writes a zip on every close.
-4. `upriv_plain`: overwrite the plaintext folder, then remove it (UI confirms wipe on manual lock).
+4. `upriv_plain`: save the folder into `store/`, wipe the files, and remove the folder. Lock starts immediately.
 5. Unmount the file manager folder; release `runtime/<id>.lock`; remove entry in `state.json`.
 6. `zeroize` password/keys in RAM.
 
@@ -154,7 +154,7 @@ Transient: `closing`, `opening`, `recovery` — do not expose in UI as resting s
 | Situation | Behavior |
 |-----------|----------|
 | Encrypted vault | Lock with the open session keys; no password field |
-| Open `upriv_plain` | Same flush, plus a wipe confirmation. No password |
+| Open `upriv_plain` | Same flush, then wipe the folder. No password |
 | Session gone (crash / process exit) | Recovery against `store/` — do not ask a close password to “finish” a dead session |
 | First close of a vault created this session | Header already written at create; validate session key |
 
@@ -968,7 +968,7 @@ fn detect_recovery(root: &VaultRoot) -> Option<RecoveryInfo> {
 | Action | Effect |
 |--------|--------|
 | `CloseWithPassword` | `7z t` → normal close |
-| `DiscardWorkspace` | `secure_wipe` + delete leftover plaintext `workspace/`; keep `vaults/<id>/store/` |
+| `PlainRemove` | wipe a leftover plaintext folder after the user confirms; keep `vaults/<id>/store/` |
 | `RestoreBackup` | unpack `backups/<stamp>-<id>.zip` into a **new** vault — never overwrite the source |
 
 ### 7.3 Reopen after crash (no RAM session, `store/` still on disk)
@@ -1350,7 +1350,7 @@ The in-app explorer (copy, move, rename, delete) is the v1 editor on Android. Op
 | 1 | Welcome | Select vault / Last vault |
 | 2 | Unlock | Password |
 | 3 | Open | In-app file manager; **Close vault** |
-| 4 | Recovery | Unlock encrypted vault; **`recovery.discard_workspace`** only for leftover plaintext (`upriv_plain`) |
+| 4 | Recovery | Unlock encrypted vault. A leftover plaintext folder shows a warning, then **Remove the folder** wipes it |
 | 5 | Closing | Progress while `store/` flushes |
 
 ### 9.8 Android — app config (outside vault)

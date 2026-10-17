@@ -23,7 +23,7 @@ const FIELD_CODES: Record<CreateVaultErrorField, readonly CreateVaultValidationC
   passwordConfirm: ["password_mismatch"],
   group: ["group_missing"],
   groupName: ["group_name_empty", "group_name_too_long", "group_name_invalid"],
-  storage: ["plain_not_available"],
+  storage: [],
   mount: [
     "mount_path_empty",
     "mount_path_not_absolute",

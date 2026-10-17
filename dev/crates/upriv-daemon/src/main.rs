@@ -15,6 +15,7 @@
 //! Light RPCs stay on the stdin loop. Electron matches responses by `id`.
 //! One Argon2 at a time: single worker + core `with_unlock_lock`.
 
+mod plain_watch;
 mod wire;
 
 use std::io::{self, BufRead, Write};
@@ -175,6 +176,7 @@ fn run() -> io::Result<()> {
     }));
     // Pin distribution once after spawn env is in place (Electron sets UPRIV_*).
     let _ = upriv_core::init_app_distribution();
+    plain_watch::install();
 
     let stdout = Arc::new(Mutex::new(io::stdout()));
     let (argon2_tx, argon2_join) = spawn_named_worker("upriv-argon2", Arc::clone(&stdout));

@@ -2,7 +2,7 @@
 
 use std::io::ErrorKind;
 
-use crate::config::{save_vault_config, VaultConfig, VaultStorageMode};
+use crate::config::{save_vault_config, VaultConfig};
 use crate::error::{Result, UprivError};
 use crate::logging::{log_event, LogLevel};
 use crate::paths::VaultRoot;
@@ -35,9 +35,6 @@ pub fn create_vault_with_welcome(
 ) -> Result<()> {
     if password.is_empty() {
         return Err(UprivError::WrongPassword);
-    }
-    if config.storage_mode() == VaultStorageMode::UprivPlain {
-        return Err(UprivError::UprivPlainUnavailable);
     }
     let initial_files = match welcome {
         Some(welcome) => welcome.files()?.to_vec(),

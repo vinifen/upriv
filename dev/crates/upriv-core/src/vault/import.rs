@@ -7,7 +7,7 @@ use crate::host_fs::HostFsQuery;
 use std::io::{ErrorKind, Read};
 use std::path::Path;
 
-use crate::config::{known_vault_ids, save_vault_config, VaultConfig, VaultStorageMode};
+use crate::config::{known_vault_ids, save_vault_config, VaultConfig};
 use crate::error::{Result, UprivError};
 use crate::logging::{log_event, LogLevel};
 use crate::paths::{display_name_to_vault_id, VaultRoot};
@@ -61,9 +61,6 @@ fn archive_open_unreadable(error: &std::io::Error) -> bool {
 }
 
 fn prepare_imported_id(root: &VaultRoot, config: &mut VaultConfig) -> Result<String> {
-    if config.storage_mode() == VaultStorageMode::UprivPlain {
-        return Err(UprivError::UprivPlainUnavailable);
-    }
     config.vault.display_name = crate::config::vault_config::normalize_and_validate_display_name(
         &config.vault.display_name,
     )?;

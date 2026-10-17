@@ -19,13 +19,13 @@ use crate::paths::VaultRoot;
 use crate::session::{with_open_session, OpenSession};
 use crate::store::{
     blobs_need_pack, build_file_tree, child_logical_path, delete_empty_directory,
-    delete_logical_path, ensure_folder, file_name, flush_index_parts, from_ui_path, mkdir_logical,
-    move_logical_path, mutation_blob_ids, pack_blob_waste, read_logical_file, read_logical_range,
-    record_imported_file, relocate_logical_path, relocate_replacing, remove_file_chunks,
-    rename_logical_path, seal_import_chunk, to_ui_path, truncate_logical_file, unique_file_name,
-    unique_folder_name, write_logical_file, write_logical_range, BlobPackMode, ChunkBlobMutation,
-    FileTreeNode, ImportBlob, RetiredFileChunks, VaultIndex, INTERNAL_WORKSPACE_FILE,
-    SEED_LOGICAL_PATH, VAULT_FS_MAX_INLINE_BYTES,
+    delete_logical_path, ensure_folder, file_name, flush_index_parts, from_ui_path,
+    is_plain_internal, is_reserved_logical, mkdir_logical, move_logical_path, mutation_blob_ids,
+    pack_blob_waste, read_logical_file, read_logical_range, record_imported_file,
+    relocate_logical_path, relocate_replacing, remove_file_chunks, rename_logical_path,
+    seal_import_chunk, to_ui_path, truncate_logical_file, unique_file_name, unique_folder_name,
+    write_logical_file, write_logical_range, BlobPackMode, ChunkBlobMutation, FileTreeNode,
+    ImportBlob, RetiredFileChunks, VaultIndex, INTERNAL_WORKSPACE_FILE, VAULT_FS_MAX_INLINE_BYTES,
 };
 
 use super::import_slots::import_slots;
@@ -34,7 +34,17 @@ fn store_dir(session: &OpenSession) -> std::path::PathBuf {
     session.vault_dir.join(crate::paths::STORE_DIR_NAME)
 }
 
+/// Seal the index. An open plaintext folder is told the store changed, so the
+/// change reaches the folder too.
 fn commit(session: &mut OpenSession) -> Result<()> {
+    seal_index(session)?;
+    if session.plain.is_some() {
+        super::plain::store_changed(&session.vault_dir);
+    }
+    Ok(())
+}
+
+fn seal_index(session: &mut OpenSession) -> Result<()> {
     sync_staged_blobs(&session.staged_blobs)?;
     let store = store_dir(session);
     flush_index_parts(&store, &session.header, &session.index_key, &session.index)?;
@@ -169,8 +179,21 @@ fn require_open(root: &VaultRoot, vault_id: &str) -> Result<std::path::PathBuf> 
     Ok(dir)
 }
 
+/// A plaintext-folder name is never addressable from the app, so the confirmed
+/// place cannot be read or replaced through a file call.
 fn logical(ui_path: &str) -> Result<String> {
-    from_ui_path(ui_path)
+    let path = from_ui_path(ui_path)?;
+    if is_plain_internal(&path) {
+        return Err(reserved_path(&path));
+    }
+    Ok(path)
+}
+
+fn reserved_path(path: &str) -> UprivError {
+    UprivError::VaultStoreInvalid {
+        path: std::path::PathBuf::from(path),
+        detail: "reserved internal path".into(),
+    }
 }
 
 /// Missing layout file is “start clean”, not a user-visible path error (SDD).
@@ -181,11 +204,8 @@ fn is_missing_internal_workspace(err: &UprivError, logical: &str) -> bool {
 /// Explorer/FUSE/create/rename/delete must not touch reserved internal files.
 /// Reads/writes of `.upriv-workspace.json` stay allowed for layout persistence.
 fn require_user_visible_logical(path: &str) -> Result<()> {
-    if file_name(path) == INTERNAL_WORKSPACE_FILE || path == SEED_LOGICAL_PATH {
-        return Err(UprivError::VaultStoreInvalid {
-            path: std::path::PathBuf::from(path),
-            detail: "reserved internal path".into(),
-        });
+    if is_reserved_logical(path) {
+        return Err(reserved_path(path));
     }
     Ok(())
 }
@@ -1202,20 +1222,11 @@ fn import_os_file_at(
     })
 }
 
+/// A link swapped in after the path was checked is refused on every system,
+/// including a Windows reparse point.
 fn open_import_source(path: &Path) -> Result<File> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        crate::host_fs::OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(path)
-            .map_err(|_| UprivError::ImportSourceUnreadable(path.to_path_buf()))
-    }
-    #[cfg(not(unix))]
-    {
-        File::open(path).map_err(|_| UprivError::ImportSourceUnreadable(path.to_path_buf()))
-    }
+    crate::paths::open_nofollow(path, crate::paths::NofollowMode::Read)
+        .map_err(|_| UprivError::ImportSourceUnreadable(path.to_path_buf()))
 }
 
 fn reject_unreadable(path: &Path) -> UprivError {
@@ -1503,6 +1514,182 @@ pub fn fs_relocate(
     })
 }
 
+/// A folder file encrypted into a new blob of this vault, not yet named in
+/// the index. Dropping it deletes the blob.
+pub(super) struct SealedFile {
+    file_id: String,
+    /// `None` for an empty file, which has no blob.
+    prepared: Option<PreparedImport>,
+}
+
+/// Encrypt `reader` into a new blob without holding the session lock. The
+/// blob is flushed with the next index seal, like a staged import.
+pub(super) fn seal_reader(
+    dir: &Path,
+    reader: &mut (impl Read + ?Sized),
+    map_read: impl FnOnce(std::io::Error) -> UprivError,
+) -> Result<SealedFile> {
+    let (header, key) = session_secrets(dir)?;
+    let file_id = uuid::Uuid::new_v4().to_string();
+    let store = dir.join(crate::paths::STORE_DIR_NAME);
+    let prepared = seal_into_new_blob(&store, &header, &key, &file_id, reader, map_read, false)?;
+    Ok(SealedFile { file_id, prepared })
+}
+
+/// Name `sealed` at `path`, replacing a file there. The replaced blob is
+/// returned; unlink it only after [`seal_staged_sync`] succeeds.
+pub(super) fn stage_sealed(
+    session: &mut OpenSession,
+    path: &str,
+    mut sealed: SealedFile,
+) -> Result<Option<RetiredFileChunks>> {
+    let (size, versions, offsets, mutation) = match sealed.prepared.as_mut() {
+        Some(prepared) => (
+            prepared.size,
+            std::mem::take(&mut prepared.versions),
+            std::mem::take(&mut prepared.offsets),
+            std::mem::take(&mut prepared.mutation),
+        ),
+        None => (0, Vec::new(), Vec::new(), ChunkBlobMutation::default()),
+    };
+    match record_imported_file(
+        &mut session.index,
+        path,
+        std::mem::take(&mut sealed.file_id),
+        size,
+        versions,
+        offsets,
+    ) {
+        Ok(retired) => {
+            session
+                .staged_blobs
+                .extend(mutation.created.iter().cloned());
+            session.dirty = true;
+            Ok(retired)
+        }
+        Err(error) => {
+            mutation.discard_created();
+            Err(error)
+        }
+    }
+}
+
+/// Add an empty folder. Its parent must already be a folder.
+pub(super) fn stage_mkdir(session: &mut OpenSession, path: &str) -> Result<()> {
+    mkdir_logical(&mut session.index, path)?;
+    session.dirty = true;
+    Ok(())
+}
+
+/// Drop `path` (and anything under it). Unlink the returned blobs only after
+/// [`seal_staged_sync`] succeeds.
+pub(super) fn stage_delete(
+    session: &mut OpenSession,
+    path: &str,
+) -> Result<Vec<RetiredFileChunks>> {
+    let retired = delete_logical_path(&mut session.index, path)?;
+    session.dirty = true;
+    Ok(retired)
+}
+
+/// Drop one folder that holds nothing.
+pub(super) fn stage_remove_empty_dir(session: &mut OpenSession, path: &str) -> Result<()> {
+    delete_empty_directory(&mut session.index, path)?;
+    session.dirty = true;
+    Ok(())
+}
+
+/// Rename or move one file. No ciphertext is rewritten.
+pub(super) fn stage_move(session: &mut OpenSession, from: &str, to: &str) -> Result<()> {
+    let parent = crate::store::parent_logical(to).unwrap_or("");
+    relocate_logical_path(&mut session.index, from, parent, file_name(to))?;
+    session.dirty = true;
+    Ok(())
+}
+
+/// Seal every staged change, then unlink the blobs no index names any more.
+/// The folder is not poked: these changes came from it.
+pub(super) fn seal_staged_sync(
+    session: &mut OpenSession,
+    retired: &[RetiredFileChunks],
+) -> Result<()> {
+    seal_index(session)?;
+    let store = store_dir(session);
+    for item in retired {
+        if remove_file_chunks(&store, &item.file_id, item.chunk_count).is_err() {
+            log_event(
+                LogLevel::Warn,
+                "vault_fs_leftover_blobs",
+                &[
+                    ("vault_id", session.vault_id.as_str()),
+                    ("file_id", item.file_id.as_str()),
+                    ("chunk_count", &item.chunk_count.to_string()),
+                ],
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Plaintext of `len` bytes of one store file, for the folder copy.
+pub(super) fn read_store_range(
+    session: &OpenSession,
+    path: &str,
+    offset: u64,
+    len: u64,
+) -> Result<Vec<u8>> {
+    read_logical_range(
+        store_dir(session),
+        &session.header,
+        &session.content_key,
+        &session.index,
+        path,
+        offset,
+        len,
+    )
+}
+
+/// An internal store file (the plaintext policy). `None` when it is absent.
+pub(super) fn read_internal(session: &OpenSession, path: &str) -> Result<Option<Vec<u8>>> {
+    if session.index.find(path).is_none() {
+        return Ok(None);
+    }
+    read_logical_file(
+        store_dir(session),
+        &session.header,
+        &session.content_key,
+        &session.index,
+        path,
+    )
+    .map(Some)
+}
+
+/// Replace an internal store file and seal the index.
+pub(super) fn write_internal(session: &mut OpenSession, path: &str, bytes: &[u8]) -> Result<()> {
+    session.dirty = true;
+    let before = session.index.clone();
+    let (retired, mutation) = write_logical_file(
+        store_dir(session),
+        &session.header,
+        &session.content_key,
+        &mut session.index,
+        path,
+        bytes,
+    )?;
+    commit_mutation(session, before, mutation, retired)
+}
+
+/// Remove an internal store file when it exists, and seal the index.
+pub(super) fn remove_internal(session: &mut OpenSession, path: &str) -> Result<()> {
+    if session.index.find(path).is_none() {
+        return Ok(());
+    }
+    session.dirty = true;
+    let before = session.index.clone();
+    let retired = delete_logical_path(&mut session.index, path)?;
+    commit_then_unlink(session, before, retired)
+}
+
 /// Join a validated logical path (`notes/a.txt`, or `""` for the mount root)
 /// onto an OS mount point. Rejects `.` / `..` / empty components.
 pub(crate) fn join_logical_under_mount(mount: &Path, logical: &str) -> Result<PathBuf> {
@@ -1522,7 +1709,8 @@ pub(crate) fn join_logical_under_mount(mount: &Path, logical: &str) -> Result<Pa
     Ok(out)
 }
 
-/// Absolute OS path of a logical item on the live FUSE/WinFsp mount.
+/// Absolute OS path of a logical item: in the plaintext folder of an open
+/// `upriv_plain` vault, or on the live FUSE/WinFsp mount.
 ///
 /// Does not create files. Missing mount (mobile, WinFsp not installed, FUSE failure)
 /// returns [`UprivError::VaultMountFailed`] — never a plaintext extract.
@@ -1530,6 +1718,9 @@ pub fn fs_os_path(root: &VaultRoot, vault_id: &str, ui_path: &str) -> Result<Pat
     let dir = require_open(root, vault_id)?;
     let logical = logical(ui_path)?;
     with_open_session(&dir, |session| {
+        if let Some(folder) = session.plain.as_ref().map(|plain| plain.folder()) {
+            return join_logical_under_mount(folder, &logical);
+        }
         let Some(mount) = session.mount.as_ref() else {
             let detail = session
                 .mount_failure

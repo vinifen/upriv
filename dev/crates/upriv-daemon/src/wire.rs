@@ -58,7 +58,13 @@ pub fn is_argon2_bound_method(method: &str, _params: &Value) -> bool {
 pub fn is_lifecycle_io_method(method: &str) -> bool {
     matches!(
         method,
-        "vault_close" | "vault_delete" | "backup_get" | "vault_discard_import"
+        "vault_close"
+            | "vault_delete"
+            | "backup_get"
+            | "vault_discard_import"
+            | "vault_plain_confirm"
+            | "vault_plain_remove"
+            | "vault_plain_sync"
     )
 }
 
@@ -283,6 +289,9 @@ mod tests {
             "vault_import_zip",
             "vault_ingest_open",
             "vault_open",
+            "vault_plain_confirm",
+            "vault_plain_remove",
+            "vault_plain_sync",
         ];
         let expected: std::collections::BTreeSet<_> = expected
             .iter()

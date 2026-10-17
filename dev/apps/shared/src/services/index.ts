@@ -9,7 +9,16 @@ export type {
   VaultFileSystemService,
   VaultBinaryByteSource,
 } from "./filesystem/VaultFileSystemService";
-export type { VaultLifecycleService, CloseVaultOutcome } from "./lifecycle/VaultLifecycleService";
+export type {
+  VaultLifecycleService,
+  CloseVaultOutcome,
+  BackupFailureReason,
+} from "./lifecycle/VaultLifecycleService";
+export {
+  BACKUP_CLOSE_TOAST_MS,
+  parseBackupFailure,
+  backupCloseFailureToastKey,
+} from "./lifecycle/VaultLifecycleService";
 export type { LogService } from "./logs/LogService";
 export type {
   CreateVaultInput,

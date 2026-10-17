@@ -50,6 +50,7 @@ vi.mock("@/lib/rpc", () => ({
   rpcVaultList: vi.fn(async () => []),
   rpcVaultCreate: vi.fn(),
   rpcVaultOpen: vi.fn(),
+  rpcVaultPlainConfirm: vi.fn(async () => undefined),
   rpcVaultClose: vi.fn(),
   rpcVaultConfigGet: vi.fn(),
   rpcVaultStoreSize: vi.fn(async () => 0),

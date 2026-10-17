@@ -1325,6 +1325,7 @@ dependencies = [
 name = "upriv-daemon"
 version = "0.2.2-beta"
 dependencies = [
+ "libc",
  "serde",
  "serde_json",
  "tempfile",

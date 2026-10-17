@@ -32,8 +32,7 @@ export type CreateVaultValidationCode =
   | "mount_path_not_absolute"
   | "mount_path_saf_tree"
   | "mount_path_reserved"
-  | "mount_path_root_unknown"
-  | "plain_not_available";
+  | "mount_path_root_unknown";
 
 /** Mock lifecycle unlock (`trim().length >= 4`). Live create/open only reject empty. */
 export const CREATE_VAULT_PASSWORD_MIN_LENGTH = 4;
@@ -152,7 +151,6 @@ export function validateCreateVaultStep(
     }
     case "advanced": {
       const errors: CreateVaultValidationCode[] = [];
-      if (draft.storage.mode === "upriv_plain") errors.push("plain_not_available");
       const root = typeof vaultRootPath === "string" ? vaultRootPath.trim() : "";
       for (const system of ["linux", "windows", "macos", "android", "ios"] as const) {
         const raw = draft.mount[system].path.trim();
