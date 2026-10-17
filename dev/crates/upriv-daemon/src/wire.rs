@@ -58,7 +58,13 @@ pub fn is_argon2_bound_method(method: &str, _params: &Value) -> bool {
 pub fn is_lifecycle_io_method(method: &str) -> bool {
     matches!(
         method,
-        "vault_close" | "vault_delete" | "backup_get" | "vault_discard_import"
+        "vault_close"
+            | "vault_delete"
+            | "backup_get"
+            | "vault_discard_import"
+            | "vault_plain_confirm"
+            | "vault_plain_remove"
+            | "vault_plain_sync"
     )
 }
 
@@ -78,6 +84,7 @@ pub fn is_pack_io_method(method: &str) -> bool {
             | "vault_import_7z"
             | "vault_import_files_zip"
             | "vault_import_os_path"
+            | "vault_plain_import"
             | "vault_export"
     )
 }

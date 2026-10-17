@@ -7,8 +7,10 @@ import {
   borrowSessionRamPassword,
   currentWorkspaceSystem,
   encryptedShortcutActive,
+  finishPlainOpen,
   isLifecyclePasswordPresent,
   isVaultPipelineError,
+  parsePendingPlainConfirm,
   resolveVaultMountPoint,
   watchClosePhase,
   type VaultLifecycleService,
@@ -20,6 +22,7 @@ import {
   rpcVaultClosePhase,
   rpcVaultConfigGet,
   rpcVaultOpen,
+  rpcVaultPlainConfirm,
   rpcWinFspInstall,
   rpcWinFspStatus,
 } from "@/lib/rpc";
@@ -48,7 +51,14 @@ export const desktopVaultLifecycleService: VaultLifecycleService = {
     onStep(0);
     await installWinFspWhenFolderNeeded(vaultId);
     const password = borrowSessionRamPassword(vaultPasswordInRam, vaultId);
-    await rpcVaultOpen(vaultId, password);
+    await finishPlainOpen({
+      vaultId,
+      password,
+      open: rpcVaultOpen,
+      confirm: rpcVaultPlainConfirm,
+      close: (id) => rpcVaultClose(id, "user").then(() => undefined),
+      pendingOf: parsePendingPlainConfirm,
+    });
     // Hooks put the string back after a successful open.
     onStep(1);
   },

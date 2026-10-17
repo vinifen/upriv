@@ -505,6 +505,9 @@ export function useVaultListScreen() {
     t,
     settingsPersistVaultIdsRef,
     blockOpenVaultIdsRef,
+    onListReload: () => {
+      void refresh();
+    },
   });
 
   const handleSortChange = useCallback(
@@ -1237,6 +1240,22 @@ export function useVaultListScreen() {
         if (!modals.recoverySubmitting) modals.setRecoveryVaultId(null);
       },
       onRecoveryAction: lifecycle.handleRecoveryAction,
+      recoveryLeftover: lifecycle.recoveryLeftover,
+      closeHolderNames: lifecycle.closeHolderNames,
+      placeOpen: lifecycle.placeOpen,
+      placeVaultName: lifecycle.placeVaultName,
+      placeWorkspaceChoices: lifecycle.placeWorkspaceChoices,
+      placeSubmitting: lifecycle.placeSubmitting,
+      placeWarningClass: lifecycle.placeWarningClass,
+      onPlaceClose: lifecycle.onPlaceClose,
+      onPlaceContinue: lifecycle.onPlaceContinue,
+      onPlaceAcceptWarning: lifecycle.onPlaceAcceptWarning,
+      heldOpen: lifecycle.heldOpen,
+      heldCount: lifecycle.heldCount,
+      heldPaths: lifecycle.heldPaths,
+      heldSubmitting: lifecycle.heldSubmitting,
+      onHeldApply: lifecycle.onHeldApply,
+      onHeldRestore: lifecycle.onHeldRestore,
       closeAllUnsavedOpen: lifecycle.closeAllUnsavedOpen,
       closeAllUnsavedSaving: lifecycle.closeAllUnsavedSaving,
       onCloseAllUnsavedCancel: lifecycle.cancelCloseAllUnsaved,

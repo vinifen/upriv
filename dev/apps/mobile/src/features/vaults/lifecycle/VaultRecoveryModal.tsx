@@ -1,31 +1,33 @@
 import { useEffect, useState } from "react";
 import { StyleSheet, Text, View } from "react-native";
-import { storageModeIsPlaintext, type VaultListItem } from "@upriv/shared";
+import {
+  plainRecoveryOffers,
+  storageModeIsPlaintext,
+  type PlainLeftover,
+  type PlainRecoveryAction,
+  type VaultListItem,
+} from "@upriv/shared";
 import { Button, Modal, ModalFooterActions } from "@/components/ui";
 import { PolicyRadioOption, ThemedInput } from "@/components/settings";
 import { useTranslation } from "@/i18n";
 import { useTheme } from "@/theme";
 import { spacing } from "@/theme/tokens";
 
-export type RecoveryAction = "resume_store" | "discard_workspace";
-
-type PlainChoice = RecoveryAction;
+type Choice = "resume_store" | "remove_folder" | "new_vault";
 
 interface VaultRecoveryModalProps {
   vault: VaultListItem | null;
+  leftover: PlainLeftover | null | undefined;
   open: boolean;
   submitting?: boolean;
   onClose: () => void;
-  onAction: (action: RecoveryAction) => void;
+  onAction: (action: PlainRecoveryAction) => void;
 }
 
-/**
- * Dirty-close recovery — desktop `VaultRecoveryModal` parity.
- * - `encrypted_dir`: unlock the encrypted vault only.
- * - `upriv_plain`: resume or wipe leftover plaintext workspace.
- */
+/** Dirty-close recovery. A leftover plaintext folder offers Remove or a new vault. */
 export function VaultRecoveryModal({
   vault,
+  leftover,
   open,
   submitting = false,
   onClose,
@@ -33,42 +35,42 @@ export function VaultRecoveryModal({
 }: VaultRecoveryModalProps) {
   const { t } = useTranslation();
   const { colors, typography } = useTheme();
-  const [choice, setChoice] = useState<PlainChoice>("resume_store");
-  const [view, setView] = useState<"actions" | "discard_confirm">("actions");
-  const [discardText, setDiscardText] = useState("");
-
   const isPlain = vault ? storageModeIsPlaintext(vault.storageMode) : false;
+  const pending = isPlain && leftover === undefined;
+  const offers = plainRecoveryOffers(pending ? null : (leftover ?? null));
+  const [choice, setChoice] = useState<Choice>(offers.defaultChoice);
+  const [view, setView] = useState<"actions" | "remove_confirm" | "new_vault">("actions");
+  const [typedId, setTypedId] = useState("");
+  const [displayName, setDisplayName] = useState("");
+  const [password, setPassword] = useState("");
 
   useEffect(() => {
     if (!open) {
-      setChoice("resume_store");
+      setChoice(offers.defaultChoice);
       setView("actions");
-      setDiscardText("");
+      setTypedId("");
+      setDisplayName("");
+      setPassword("");
     }
-  }, [open, vault?.id]);
+  }, [open, vault?.id, offers.defaultChoice]);
 
   if (!open || !vault) return null;
 
-  const canConfirmDiscard = discardText.trim() === vault.id;
+  const canRemove = typedId.trim() === vault.id;
+  const canCreate = displayName.trim().length > 0 && password.trim().length >= 4;
 
   const runPrimary = () => {
-    if (submitting) return;
-    if (!isPlain) {
-      onAction("resume_store");
+    if (submitting || pending) return;
+    if (choice === "remove_folder") {
+      setView("remove_confirm");
       return;
     }
-    if (choice === "discard_workspace") {
-      setView("discard_confirm");
+    if (choice === "new_vault") {
+      setView("new_vault");
       return;
     }
-    onAction("resume_store");
+    onAction({ kind: "resume_store" });
   };
-
-  const footerCtaLabel = submitting
-    ? t("close.dialog.submitting")
-    : isPlain
-      ? t("action.continue")
-      : t("action.unlock");
 
   return (
     <Modal
@@ -82,24 +84,7 @@ export function VaultRecoveryModal({
       dismissible={!submitting}
       panelClassName="max-w-lg"
       footer={
-        view === "discard_confirm" ? (
-          <ModalFooterActions layout="dialog">
-            <Button
-              label={t("action.cancel")}
-              variant="ghost"
-              size="sm"
-              disabled={submitting}
-              onPress={() => setView("actions")}
-            />
-            <Button
-              label={submitting ? t("close.dialog.submitting") : t("recovery.discard_workspace")}
-              variant="danger"
-              size="sm"
-              disabled={!canConfirmDiscard || submitting}
-              onPress={() => onAction("discard_workspace")}
-            />
-          </ModalFooterActions>
-        ) : (
+        view === "actions" ? (
           <ModalFooterActions layout="dialog">
             <Button
               label={t("action.cancel")}
@@ -109,64 +94,106 @@ export function VaultRecoveryModal({
               onPress={onClose}
             />
             <Button
-              label={footerCtaLabel}
+              label={submitting ? t("close.dialog.submitting") : t("action.continue")}
               variant="primary"
               size="sm"
-              disabled={submitting}
+              disabled={submitting || pending}
               onPress={runPrimary}
             />
+          </ModalFooterActions>
+        ) : (
+          <ModalFooterActions layout="dialog">
+            <Button
+              label={t("action.cancel")}
+              variant="ghost"
+              size="sm"
+              disabled={submitting}
+              onPress={() => setView("actions")}
+            />
+            {view === "remove_confirm" ? (
+              <Button
+                label={submitting ? t("close.dialog.submitting") : t("recovery.remove")}
+                variant="danger"
+                size="sm"
+                disabled={!canRemove || submitting}
+                onPress={() => onAction({ kind: "remove_folder" })}
+              />
+            ) : (
+              <Button
+                label={submitting ? t("close.dialog.submitting") : t("recovery.new_vault")}
+                variant="primary"
+                size="sm"
+                disabled={!canCreate || submitting}
+                onPress={() =>
+                  onAction({
+                    kind: "new_vault",
+                    displayName: displayName.trim(),
+                    password,
+                  })
+                }
+              />
+            )}
           </ModalFooterActions>
         )
       }
     >
-      {view === "discard_confirm" ? (
+      {view === "remove_confirm" ? (
         <View style={styles.stack}>
-          <Text style={typography.bodyMuted}>{t("recovery.discard_confirm")}</Text>
+          <Text style={typography.bodyMuted}>{t("recovery.remove_confirm")}</Text>
           <Text style={[typography.mono, { color: colors.onSurfaceVariant }]}>{vault.id}</Text>
           <ThemedInput
-            value={discardText}
-            onChangeText={setDiscardText}
+            value={typedId}
+            onChangeText={setTypedId}
             autoFocus
             autoCapitalize="none"
             autoCorrect={false}
             spellCheck={false}
           />
         </View>
-      ) : isPlain ? (
+      ) : null}
+      {view === "new_vault" ? (
+        <View style={styles.stack}>
+          <Text style={typography.bodyMuted}>{t("recovery.new_vault_desc")}</Text>
+          <Text style={typography.bodyMuted}>{t("recovery.new_vault_name")}</Text>
+          <ThemedInput value={displayName} onChangeText={setDisplayName} autoFocus />
+          <Text style={typography.bodyMuted}>{t("recovery.new_vault_password")}</Text>
+          <ThemedInput
+            value={password}
+            onChangeText={setPassword}
+            secureTextEntry
+            autoCapitalize="none"
+          />
+        </View>
+      ) : null}
+      {view === "actions" && !pending && offers.remove ? (
         <View style={styles.stack}>
           <Text style={typography.bodyMuted}>
-            {t("recovery.hint_plain", { name: vault.displayName })}
+            {t("recovery.hint_plain", { name: vault.displayName, since: leftover?.since ?? "" })}
           </Text>
-          <View
-            accessibilityRole="radiogroup"
-            accessibilityLabel={t("recovery.title")}
-            style={styles.actions}
-          >
+          <View accessibilityRole="radiogroup" style={styles.actions}>
             <PolicyRadioOption
-              value="resume_store"
-              checked={choice === "resume_store"}
-              title={t("recovery.resume_store")}
-              description={t("recovery.resume_store_desc")}
+              value="remove_folder"
+              checked={choice === "remove_folder"}
+              title={t("recovery.remove")}
+              description={t("recovery.remove_desc")}
               badge="recommended"
-              onSelect={() => setChoice("resume_store")}
+              onSelect={() => setChoice("remove_folder")}
             />
-            <PolicyRadioOption
-              value="discard_workspace"
-              checked={choice === "discard_workspace"}
-              title={t("recovery.discard_workspace")}
-              description={t("recovery.discard_workspace_desc")}
-              tone="less-secure"
-              onSelect={() => setChoice("discard_workspace")}
-            />
+            {offers.create ? (
+              <PolicyRadioOption
+                value="new_vault"
+                checked={choice === "new_vault"}
+                title={t("recovery.new_vault")}
+                description={t("recovery.new_vault_desc")}
+                onSelect={() => setChoice("new_vault")}
+              />
+            ) : null}
           </View>
         </View>
-      ) : (
-        <View style={styles.stack}>
-          <Text style={typography.bodyMuted}>
-            {t("recovery.hint", { name: vault.displayName })}
-          </Text>
-        </View>
-      )}
+      ) : null}
+      {view === "actions" && !pending && !offers.remove ? (
+        <Text style={typography.bodyMuted}>{t("recovery.hint", { name: vault.displayName })}</Text>
+      ) : null}
     </Modal>
   );
 }

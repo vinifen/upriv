@@ -6,6 +6,7 @@
 
 #[allow(unused_imports)]
 use crate::host_fs::HostFsQuery;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use super::embedded_settings::snapshot_settings_bytes;
@@ -295,6 +296,99 @@ pub fn backup_on_close(root: &VaultRoot, vault_id: &str) -> Result<Option<String
     let stamp = write_backup_zip(&vault_dir, vault_id)?;
     finish_backup_prune(&vault_dir, config.backup.mode, config.backup.keep_last)?;
     Ok(Some(stamp))
+}
+
+/// Why a close backup failed, without a filesystem path.
+///
+/// `reason` is `disk_full`, `permission`, or `other`. `kind` names the error
+/// (`io`, `store`, `config`, `path`, `other`). `os` is the raw code when one exists.
+pub(crate) fn classify_backup_failure(error: &UprivError) -> BackupFailureClass {
+    let kind = match error {
+        UprivError::Io(_) => "io",
+        UprivError::VaultStoreInvalid { .. } => "store",
+        UprivError::VaultConfigInvalid { .. } => "config",
+        UprivError::VaultPathNotFound(_) => "path",
+        _ => "other",
+    };
+    let reason = if failure_is_disk_full(error) {
+        "disk_full"
+    } else if failure_is_permission(error) {
+        "permission"
+    } else {
+        "other"
+    };
+    BackupFailureClass {
+        reason,
+        kind,
+        os: failure_os_code(error),
+    }
+}
+
+pub(crate) struct BackupFailureClass {
+    pub reason: &'static str,
+    pub kind: &'static str,
+    pub os: Option<i32>,
+}
+
+fn failure_is_disk_full(error: &UprivError) -> bool {
+    match error {
+        UprivError::Io(io) => io_is_disk_full(io),
+        UprivError::VaultStoreInvalid { detail, .. } => text_is_disk_full(detail),
+        _ => false,
+    }
+}
+
+fn failure_is_permission(error: &UprivError) -> bool {
+    match error {
+        UprivError::Io(io) => io_is_permission(io),
+        UprivError::VaultStoreInvalid { detail, .. } => text_is_permission(detail),
+        _ => false,
+    }
+}
+
+fn failure_os_code(error: &UprivError) -> Option<i32> {
+    match error {
+        UprivError::Io(io) => io.raw_os_error(),
+        UprivError::VaultStoreInvalid { detail, .. } => os_code_in_text(detail),
+        _ => None,
+    }
+}
+
+fn io_is_disk_full(error: &std::io::Error) -> bool {
+    error.kind() == ErrorKind::StorageFull
+        || matches!(error.raw_os_error(), Some(28 | 112 | 39))
+        || text_is_disk_full(&error.to_string())
+}
+
+fn io_is_permission(error: &std::io::Error) -> bool {
+    error.kind() == ErrorKind::PermissionDenied
+        || matches!(error.raw_os_error(), Some(13 | 1 | 5))
+        || text_is_permission(&error.to_string())
+}
+
+fn text_is_disk_full(detail: &str) -> bool {
+    let lower = detail.to_ascii_lowercase();
+    lower.contains("no space left")
+        || lower.contains("not enough space")
+        || lower.contains("disk full")
+        || lower.contains("os error 28")
+        || lower.contains("os error 112")
+        || lower.contains("os error 39")
+}
+
+fn text_is_permission(detail: &str) -> bool {
+    let lower = detail.to_ascii_lowercase();
+    lower.contains("permission denied")
+        || lower.contains("access is denied")
+        || lower.contains("os error 13")
+        || lower.contains("os error 5")
+}
+
+fn os_code_in_text(detail: &str) -> Option<i32> {
+    let lower = detail.to_ascii_lowercase();
+    let rest = lower.split("os error ").nth(1)?;
+    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+    digits.parse().ok()
 }
 
 /// One zip of the current `store/`, even when backups are off or a close would
@@ -661,6 +755,34 @@ mod tests {
     use crate::store::KdfUnlockPreset;
     use crate::test_support::vault_root_with;
     use crate::vault::create_vault;
+
+    #[test]
+    fn classifies_a_full_disk_without_a_path() {
+        let io = UprivError::Io(std::io::Error::from_raw_os_error(28));
+        let class = classify_backup_failure(&io);
+        assert_eq!(class.reason, "disk_full");
+        assert_eq!(class.kind, "io");
+        assert_eq!(class.os, Some(28));
+
+        let wrapped = UprivError::VaultStoreInvalid {
+            path: std::path::PathBuf::from("/secret/store/file"),
+            detail: "No space left on device (os error 28)".into(),
+        };
+        let class = classify_backup_failure(&wrapped);
+        assert_eq!(class.reason, "disk_full");
+        assert_eq!(class.kind, "store");
+        assert_eq!(class.os, Some(28));
+    }
+
+    #[test]
+    fn classifies_permission_and_leaves_other_failures_generic() {
+        let denied = UprivError::Io(std::io::Error::from(std::io::ErrorKind::PermissionDenied));
+        assert_eq!(classify_backup_failure(&denied).reason, "permission");
+        let other = UprivError::Io(std::io::Error::from(std::io::ErrorKind::AlreadyExists));
+        let class = classify_backup_failure(&other);
+        assert_eq!(class.reason, "other");
+        assert_eq!(class.kind, "io");
+    }
 
     fn sample_config(id: &str, name: &str) -> crate::config::VaultConfig {
         toml::from_str(&format!(

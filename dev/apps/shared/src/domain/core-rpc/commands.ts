@@ -54,6 +54,23 @@ export const CORE_RPC_COMMANDS = {
   VAULT_LIST: "vault_list",
   VAULT_CREATE: "vault_create",
   VAULT_OPEN: "vault_open",
+  /** Fill a plaintext folder after unlock, using the path the user confirmed. */
+  VAULT_PLAIN_CONFIRM: "vault_plain_confirm",
+  /** The folder an unlock would write, and what kind of place it is. */
+  VAULT_PLAIN_DESTINATION: "vault_plain_destination",
+  /** Leftover plaintext folder for recovery, or null. */
+  VAULT_PLAIN_LEFTOVER: "vault_plain_leftover",
+  /** Wipe a leftover plaintext folder (recovery Remove). */
+  VAULT_PLAIN_REMOVE: "vault_plain_remove",
+  /** New vault from a leftover plaintext folder. */
+  VAULT_PLAIN_IMPORT: "vault_plain_import",
+  /** One sync pass of an open plaintext folder. Mobile calls this on foreground. */
+  VAULT_PLAIN_SYNC: "vault_plain_sync",
+  VAULT_PLAIN_STATUS: "vault_plain_status",
+  /** Apply or restore held mass deletions. */
+  VAULT_PLAIN_DELETIONS: "vault_plain_deletions",
+  /** Apps still holding files in the open plaintext folder. */
+  VAULT_PLAIN_HOLDERS: "vault_plain_holders",
   VAULT_CLOSE: "vault_close",
   /** Rewrap the closed vault under a new password. Same master key; files stay. */
   VAULT_CHANGE_PASSWORD: "vault_change_password",

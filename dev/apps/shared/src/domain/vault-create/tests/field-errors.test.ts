@@ -15,10 +15,8 @@ describe("createVaultErrorsForField", () => {
     expect(createVaultErrorsForField(["password_empty"], "displayName")).toEqual([]);
   });
 
-  it("keeps plain-unavailable under storage", () => {
-    expect(createVaultErrorsForField(["plain_not_available", "password_empty"], "storage")).toEqual(
-      ["plain_not_available"],
-    );
+  it("has no storage-step codes", () => {
+    expect(createVaultErrorsForField(["password_empty"], "storage")).toEqual([]);
   });
 
   it("keeps mount path codes under mount", () => {

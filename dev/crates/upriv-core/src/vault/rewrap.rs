@@ -12,7 +12,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::config::{load_vault_config, save_vault_config, VaultStorageMode};
+use crate::config::{load_vault_config, save_vault_config};
 use crate::error::{Result, RewrapUnchangedKind, UprivError};
 use crate::host_fs::HostFsQuery;
 use crate::logging::{log_event, LogLevel};
@@ -95,10 +95,7 @@ fn rewrap(
         if is_vault_open_at(&vault_dir) || is_vault_closing_at(&vault_dir) {
             return Err(UprivError::VaultMustBeClosed);
         }
-        let config = load_vault_config(&vault_dir)?;
-        if config.storage_mode() == VaultStorageMode::UprivPlain {
-            return Err(UprivError::UprivPlainUnavailable);
-        }
+        super::plain::ensure_no_leftover(root, vault_id)?;
         let store = vault_dir.join(crate::paths::STORE_DIR_NAME);
         let opened = with_unlock_lock(|| unlock_current(&vault_dir, &store, current_password))?;
         let master = opened.master_key.clone();
@@ -640,7 +637,7 @@ mode = "encrypted_dir"
         let vault_dir = root.vault_dir("notes").unwrap();
         let mut saved = load_vault_config(&vault_dir).unwrap();
         saved.vault.note = "kept".into();
-        crate::config::save_vault_config_checked(&vault_dir, &saved).unwrap();
+        crate::config::save_vault_config_checked(&root, "notes", &saved).unwrap();
         change_vault_password(&root, "notes", OLD, NEW).unwrap();
         let after = load_vault_config(&vault_dir).unwrap();
         assert_eq!(after.vault.note, "kept");

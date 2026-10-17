@@ -8,9 +8,9 @@ describe("requiresCloseDialog", () => {
     expect(requiresCloseDialog(vault)).toBe(false);
   });
 
-  it("shows the dialog to confirm an open plaintext wipe", () => {
+  it("starts lock immediately for an open plaintext vault", () => {
     const vault = vaultRowFixture({ session: "open", storageMode: "upriv_plain" });
-    expect(requiresCloseDialog(vault)).toBe(true);
+    expect(requiresCloseDialog(vault)).toBe(false);
   });
 
   it("skips the dialog when a plaintext vault is already closed", () => {
@@ -33,6 +33,6 @@ describe("canRunIdleAutoClose", () => {
   it("runs for an open plaintext vault so the future wipe uses the same close", () => {
     const vault = vaultRowFixture({ session: "open", storageMode: "upriv_plain" });
     expect(canRunIdleAutoClose(vault)).toBe(true);
-    expect(requiresCloseDialog(vault)).toBe(true);
+    expect(requiresCloseDialog(vault)).toBe(false);
   });
 });

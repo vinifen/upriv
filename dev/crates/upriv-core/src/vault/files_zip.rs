@@ -16,8 +16,7 @@ use crate::error::{Result, UprivError};
 use crate::logging::{log_event, LogLevel};
 use crate::paths::{VaultRoot, STORE_DIR_NAME};
 use crate::store::{
-    file_name, KdfUnlockPreset, HEADER_DIR_NAME, HEADER_FILE_NAME, INTERNAL_WORKSPACE_FILE,
-    SEED_LOGICAL_PATH,
+    is_plain_internal, is_reserved_logical, KdfUnlockPreset, HEADER_DIR_NAME, HEADER_FILE_NAME,
 };
 
 use super::create::create_vault;
@@ -96,10 +95,6 @@ fn is_upriv_store_entry(name: &str) -> bool {
         && parts[n - 3] == STORE_DIR_NAME
         && parts[n - 2] == HEADER_DIR_NAME
         && parts[n - 1] == HEADER_FILE_NAME
-}
-
-fn is_reserved_logical(logical: &str) -> bool {
-    logical == SEED_LOGICAL_PATH || file_name(logical) == INTERNAL_WORKSPACE_FILE
 }
 
 /// One shared top folder is removed when every file lives under it.
@@ -206,6 +201,9 @@ pub(crate) fn plan_files_zip(
         let Some(logical) = strip_root(name, root) else {
             continue;
         };
+        if is_plain_internal(logical) {
+            continue;
+        }
         if is_reserved_logical(logical) {
             return Err(layout_error("reserved internal file in files .zip"));
         }

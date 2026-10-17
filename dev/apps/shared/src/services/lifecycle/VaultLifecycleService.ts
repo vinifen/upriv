@@ -1,3 +1,4 @@
+import type { PlainCloseSummary } from "../../domain/vault-plain";
 import type {
   VaultPipelineError,
   VaultPipelineErrorCode,
@@ -7,8 +8,31 @@ import type {
 export type { VaultPipelineKind };
 
 /** Outcome of `vault_close`. Close still succeeds if the optional close-backup copy fails. */
+export type BackupFailureReason = "disk_full" | "permission" | "other";
+
 export interface CloseVaultOutcome {
   backupFailed: boolean;
+  /** Why the close backup was not written. Null when it succeeded or was skipped. */
+  backupFailure: BackupFailureReason | null;
+  plain: PlainCloseSummary | null;
+}
+
+export const BACKUP_CLOSE_TOAST_MS = 12000;
+
+export function parseBackupFailure(value: unknown): BackupFailureReason | null {
+  if (value === "disk_full" || value === "permission" || value === "other") return value;
+  return null;
+}
+
+export function backupCloseFailureToastKey(
+  reason: BackupFailureReason | null,
+):
+  | "toast.backup_on_close_failed.disk_full"
+  | "toast.backup_on_close_failed.permission"
+  | "toast.backup_on_close_failed" {
+  if (reason === "disk_full") return "toast.backup_on_close_failed.disk_full";
+  if (reason === "permission") return "toast.backup_on_close_failed.permission";
+  return "toast.backup_on_close_failed";
 }
 
 /** Vault session password and open/close pipelines (mock or desktop → upriv-core). */

@@ -3,7 +3,6 @@ import { vaultConfigEditAllowed } from "../edit-policy";
 import type { IconName } from "../icons";
 import {
   resolveVaultListStatus,
-  storageModeIsPlaintext,
   type StorageMode,
   type VaultDisplayStatus,
   type VaultPipelineListStatus,
@@ -28,9 +27,10 @@ export function vaultSettingsAreaTitleKey(area: VaultSettingsAreaId): I18nKey {
 }
 
 /**
- * Gear-menu screens. Password and unlock RAM need a closed encrypted vault
- * (`action.change_password` / `action.change_kdf`). Open, recovery, pipeline,
- * and `upriv_plain` omit those two entries.
+ * Gear-menu screens. Password and unlock RAM need a closed vault
+ * (`action.change_password` / `action.change_kdf`). Open, recovery, and a
+ * pipeline omit those two entries. The mode does not: both storage modes
+ * unlock `store/` with the same password and unlock RAM.
  * The one rewrap already running stays in the menu so that screen can reopen
  * and show the same countdown.
  */
@@ -38,19 +38,15 @@ export function vaultSettingsMenuAreas(
   vault: VaultRow,
   pipeline: VaultPipelineListStatus = {},
 ): readonly VaultSettingsAreaId[] {
-  const plaintext = storageModeIsPlaintext(vault.storageMode);
   const rewrapAllowed =
-    !plaintext &&
     vaultConfigEditAllowed("action.change_password", vault, pipeline) &&
     vaultConfigEditAllowed("action.change_kdf", vault, pipeline);
   if (rewrapAllowed) return VAULT_SETTINGS_AREAS;
-  const inFlight = plaintext
-    ? null
-    : pipeline.passwordChangeVaultIds?.includes(vault.id)
-      ? "password"
-      : pipeline.kdfChangeVaultIds?.includes(vault.id)
-        ? "kdf"
-        : null;
+  const inFlight = pipeline.passwordChangeVaultIds?.includes(vault.id)
+    ? "password"
+    : pipeline.kdfChangeVaultIds?.includes(vault.id)
+      ? "kdf"
+      : null;
   return VAULT_SETTINGS_AREAS.filter((area) => {
     if (area !== "password" && area !== "kdf") return true;
     return area === inFlight;

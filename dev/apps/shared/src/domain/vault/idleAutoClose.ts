@@ -5,7 +5,7 @@
  * separate detector: when a vault's own minutes have passed, that vault closes.
  * Sleep and time away count unless the app is set to keep vaults open on wake.
  * Returning to the app is not activity. A vault that is already due keeps its
- * deadline. A future `upriv_plain` session uses this same plan; the lock is the
+ * deadline. An `upriv_plain` session uses this same plan; the lock is the
  * normal close (wipe included), not the manual wipe confirm.
  */
 

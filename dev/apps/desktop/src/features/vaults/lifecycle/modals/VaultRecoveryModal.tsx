@@ -2,27 +2,33 @@ import { useEffect, useId, useState } from "react";
 import { Button, Modal } from "@/components/ui";
 import { PolicyRadioOption } from "@/components/settings";
 import { useTranslation } from "@/i18n";
-import { storageModeIsPlaintext, type VaultListItem } from "@upriv/shared";
+import {
+  plainRecoveryOffers,
+  storageModeIsPlaintext,
+  type PlainLeftover,
+  type PlainRecoveryAction,
+  type VaultListItem,
+} from "@upriv/shared";
 
-export type RecoveryAction = "resume_store" | "discard_workspace";
-
-type PlainChoice = RecoveryAction;
+type Choice = "resume_store" | "remove_folder" | "new_vault";
 
 interface VaultRecoveryModalProps {
   vault: VaultListItem | null;
+  leftover: PlainLeftover | null | undefined;
   open: boolean;
   submitting?: boolean;
   onClose: () => void;
-  onAction: (action: RecoveryAction) => void;
+  onAction: (action: PlainRecoveryAction) => void;
 }
 
 /**
  * Dirty-close recovery.
- * - `encrypted_dir`: unlock the encrypted vault only (no discard / create-from-backup).
- * - `upriv_plain`: choose resume or wipe leftover plaintext workspace.
+ * Encrypted, or a plaintext vault with no leftover folder: unlock the store.
+ * A leftover folder: Remove (default) or save it as a new vault.
  */
 export function VaultRecoveryModal({
   vault,
+  leftover,
   open,
   submitting = false,
   onClose,
@@ -30,45 +36,45 @@ export function VaultRecoveryModal({
 }: VaultRecoveryModalProps) {
   const { t } = useTranslation();
   const choiceGroup = useId();
-  const discardConfirmId = useId();
-  const discardHelpId = useId();
-  const discardVaultId = useId();
-  const [choice, setChoice] = useState<PlainChoice>("resume_store");
-  const [view, setView] = useState<"actions" | "discard_confirm">("actions");
-  const [discardText, setDiscardText] = useState("");
-
+  const confirmId = useId();
+  const nameId = useId();
+  const passwordId = useId();
   const isPlain = vault ? storageModeIsPlaintext(vault.storageMode) : false;
+  const pending = isPlain && leftover === undefined;
+  const offers = plainRecoveryOffers(pending ? null : (leftover ?? null));
+  const [choice, setChoice] = useState<Choice>(offers.defaultChoice);
+  const [view, setView] = useState<"actions" | "remove_confirm" | "new_vault">("actions");
+  const [typedId, setTypedId] = useState("");
+  const [displayName, setDisplayName] = useState("");
+  const [password, setPassword] = useState("");
 
   useEffect(() => {
     if (!open) {
-      setChoice("resume_store");
+      setChoice(offers.defaultChoice);
       setView("actions");
-      setDiscardText("");
+      setTypedId("");
+      setDisplayName("");
+      setPassword("");
     }
-  }, [open, vault?.id]);
+  }, [open, vault?.id, offers.defaultChoice]);
 
   if (!open || !vault) return null;
 
-  const canConfirmDiscard = discardText.trim() === vault.id;
+  const canRemove = typedId.trim() === vault.id;
+  const canCreate = displayName.trim().length > 0 && password.trim().length >= 4;
 
   const runPrimary = () => {
-    if (submitting) return;
-    if (!isPlain) {
-      onAction("resume_store");
+    if (submitting || pending) return;
+    if (choice === "remove_folder") {
+      setView("remove_confirm");
       return;
     }
-    if (choice === "discard_workspace") {
-      setView("discard_confirm");
+    if (choice === "new_vault") {
+      setView("new_vault");
       return;
     }
-    onAction("resume_store");
+    onAction({ kind: "resume_store" });
   };
-
-  const footerCtaLabel = submitting
-    ? t("close.dialog.submitting")
-    : isPlain
-      ? t("action.continue")
-      : t("action.unlock");
 
   return (
     <Modal
@@ -81,7 +87,16 @@ export function VaultRecoveryModal({
       }}
       panelClassName="max-w-lg"
       footer={
-        view === "discard_confirm" ? (
+        view === "actions" ? (
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button variant="ghost" size="sm" disabled={submitting} onClick={onClose}>
+              {t("action.cancel")}
+            </Button>
+            <Button variant="primary" size="sm" disabled={submitting || pending} onClick={runPrimary}>
+              {submitting ? t("close.dialog.submitting") : t("action.continue")}
+            </Button>
+          </div>
+        ) : (
           <div className="flex flex-wrap justify-end gap-2">
             <Button
               variant="ghost"
@@ -91,84 +106,118 @@ export function VaultRecoveryModal({
             >
               {t("action.cancel")}
             </Button>
-            <Button
-              variant="danger"
-              size="sm"
-              disabled={!canConfirmDiscard || submitting}
-              onClick={() => onAction("discard_workspace")}
-            >
-              {submitting ? t("close.dialog.submitting") : t("recovery.discard_workspace")}
-            </Button>
-          </div>
-        ) : (
-          <div className="flex flex-wrap justify-end gap-2">
-            <Button variant="ghost" size="sm" disabled={submitting} onClick={onClose}>
-              {t("action.cancel")}
-            </Button>
-            <Button variant="primary" size="sm" disabled={submitting} onClick={runPrimary}>
-              {footerCtaLabel}
-            </Button>
+            {view === "remove_confirm" ? (
+              <Button
+                variant="danger"
+                size="sm"
+                disabled={!canRemove || submitting}
+                onClick={() => onAction({ kind: "remove_folder" })}
+              >
+                {submitting ? t("close.dialog.submitting") : t("recovery.remove")}
+              </Button>
+            ) : (
+              <Button
+                variant="primary"
+                size="sm"
+                disabled={!canCreate || submitting}
+                onClick={() =>
+                  onAction({
+                    kind: "new_vault",
+                    displayName: displayName.trim(),
+                    password,
+                  })
+                }
+              >
+                {submitting ? t("close.dialog.submitting") : t("recovery.new_vault")}
+              </Button>
+            )}
           </div>
         )
       }
     >
-      {view === "discard_confirm" ? (
+      {view === "remove_confirm" ? (
         <div className="space-y-3">
-          <label
-            htmlFor={discardConfirmId}
-            id={discardHelpId}
-            className="block text-sm text-on-surface-variant"
-          >
-            {t("recovery.discard_confirm")}
+          <label htmlFor={confirmId} className="block text-sm text-on-surface-variant">
+            {t("recovery.remove_confirm")}
           </label>
-          <p id={discardVaultId} className="font-mono text-xs text-on-surface-variant">
-            {vault.id}
-          </p>
+          <p className="font-mono text-xs text-on-surface-variant">{vault.id}</p>
           <input
-            id={discardConfirmId}
+            id={confirmId}
             type="text"
-            value={discardText}
-            onChange={(e) => setDiscardText(e.target.value)}
+            value={typedId}
+            onChange={(event) => setTypedId(event.target.value)}
             autoFocus
             autoComplete="off"
             spellCheck={false}
-            aria-describedby={`${discardHelpId} ${discardVaultId}`}
             className="w-full rounded-lg border-0 bg-surface-container-highest px-3 py-2.5 text-sm text-on-surface outline-none ring-1 ring-outline-variant/40 focus:ring-accent/50"
           />
         </div>
-      ) : isPlain ? (
+      ) : null}
+      {view === "new_vault" ? (
+        <div className="space-y-3">
+          <p className="text-sm leading-relaxed text-on-surface-variant">
+            {t("recovery.new_vault_desc")}
+          </p>
+          <label htmlFor={nameId} className="block text-sm text-on-surface-variant">
+            {t("recovery.new_vault_name")}
+          </label>
+          <input
+            id={nameId}
+            type="text"
+            value={displayName}
+            onChange={(event) => setDisplayName(event.target.value)}
+            autoFocus
+            className="w-full rounded-lg border-0 bg-surface-container-highest px-3 py-2.5 text-sm text-on-surface outline-none ring-1 ring-outline-variant/40 focus:ring-accent/50"
+          />
+          <label htmlFor={passwordId} className="block text-sm text-on-surface-variant">
+            {t("recovery.new_vault_password")}
+          </label>
+          <input
+            id={passwordId}
+            type="password"
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+            autoComplete="new-password"
+            className="w-full rounded-lg border-0 bg-surface-container-highest px-3 py-2.5 text-sm text-on-surface outline-none ring-1 ring-outline-variant/40 focus:ring-accent/50"
+          />
+        </div>
+      ) : null}
+      {view === "actions" && !pending && offers.remove ? (
         <div className="space-y-4">
           <p className="text-sm leading-relaxed text-on-surface-variant">
-            {t("recovery.hint_plain", { name: vault.displayName })}
+            {t("recovery.hint_plain", {
+              name: vault.displayName,
+              since: leftover?.since ?? "",
+            })}
           </p>
           <div role="radiogroup" aria-label={t("recovery.title")} className="grid gap-2">
             <PolicyRadioOption
               groupName={choiceGroup}
-              value="resume_store"
-              checked={choice === "resume_store"}
-              title={t("recovery.resume_store")}
-              description={t("recovery.resume_store_desc")}
+              value="remove_folder"
+              checked={choice === "remove_folder"}
+              title={t("recovery.remove")}
+              description={t("recovery.remove_desc")}
               badge="recommended"
-              onSelect={() => setChoice("resume_store")}
+              onSelect={() => setChoice("remove_folder")}
             />
-            <PolicyRadioOption
-              groupName={choiceGroup}
-              value="discard_workspace"
-              checked={choice === "discard_workspace"}
-              title={t("recovery.discard_workspace")}
-              description={t("recovery.discard_workspace_desc")}
-              tone="less-secure"
-              onSelect={() => setChoice("discard_workspace")}
-            />
+            {offers.create ? (
+              <PolicyRadioOption
+                groupName={choiceGroup}
+                value="new_vault"
+                checked={choice === "new_vault"}
+                title={t("recovery.new_vault")}
+                description={t("recovery.new_vault_desc")}
+                onSelect={() => setChoice("new_vault")}
+              />
+            ) : null}
           </div>
         </div>
-      ) : (
-        <div className="space-y-4">
-          <p className="text-sm leading-relaxed text-on-surface-variant">
-            {t("recovery.hint", { name: vault.displayName })}
-          </p>
-        </div>
-      )}
+      ) : null}
+      {view === "actions" && !pending && !offers.remove ? (
+        <p className="text-sm leading-relaxed text-on-surface-variant">
+          {t("recovery.hint", { name: vault.displayName })}
+        </p>
+      ) : null}
     </Modal>
   );
 }

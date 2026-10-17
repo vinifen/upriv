@@ -40,6 +40,9 @@ pub struct OpenSession {
     /// Why `mount` is missing after an open that tried to attach one.
     #[zeroize(skip)]
     pub mount_failure: Option<String>,
+    /// The plain-file folder of an open `upriv_plain` vault.
+    #[zeroize(skip)]
+    pub(crate) plain: Option<crate::vault::PlainSession>,
     /// Process lockfile; released when the session is dropped.
     #[zeroize(skip)]
     pub lock: Option<crate::lockfile::VaultLock>,
@@ -83,6 +86,7 @@ impl OpenSession {
             tree_revision: 0,
             mount: None,
             mount_failure: None,
+            plain: None,
             lock: None,
             skip_close_backup: false,
             unsealed_imports: 0,

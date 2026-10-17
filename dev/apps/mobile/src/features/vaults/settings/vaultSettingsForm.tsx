@@ -273,7 +273,7 @@ function StorageSection({
             key={mode}
             value={mode}
             checked={config.mode === mode}
-            disabled={locked || mode === "upriv_plain"}
+            disabled={locked}
             title={t(`modal.settings.option.storage.${mode}` as I18nKey)}
             description={t(`modal.settings.option.storage.${mode}_desc` as I18nKey)}
             badge={badge}
@@ -283,7 +283,6 @@ function StorageSection({
         ))}
       </RadioGroup>
       {warning ? <FieldHint>{t(warning)}</FieldHint> : null}
-      <FieldHint>{t("error.upriv_plain_unavailable")}</FieldHint>
     </View>
   );
 }

@@ -30,6 +30,7 @@ interface VaultLifecycleModalProps {
   verifyErrorKey?: I18nKey | null;
   /** Prefill after a failed attempt — the field, not the session RAM map. */
   initialPassword?: string;
+  holderNames?: readonly string[];
   onClose: () => void;
   onConfirm: (password: string | null) => void;
 }
@@ -61,6 +62,7 @@ export function VaultLifecycleModal({
   budgetStartedAt,
   verifyErrorKey = null,
   initialPassword,
+  holderNames = [],
   onClose,
   onConfirm,
 }: VaultLifecycleModalProps) {
@@ -138,6 +140,11 @@ export function VaultLifecycleModal({
         {intent === "close" && storageModeIsPlaintext(vault.storageMode) ? (
           <p className="text-sm leading-relaxed text-on-surface-variant">
             {t("close.dialog.close_hint_plain")}
+          </p>
+        ) : null}
+        {intent === "close" && holderNames.length > 0 ? (
+          <p className="text-sm leading-relaxed text-on-surface-variant">
+            {t("close.dialog.holders", { names: holderNames.join(", ") })}
           </p>
         ) : null}
         {intent === "close" && !storageModeIsPlaintext(vault.storageMode) ? (

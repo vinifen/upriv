@@ -420,6 +420,8 @@ enum NodeKind {
 
 struct NodeStat {
     kind: NodeKind,
+    len: Option<u64>,
+    modified_ms: Option<i64>,
 }
 
 fn bridge_call(
@@ -495,7 +497,39 @@ fn stat_bridge(bridge: &dyn SafBridge, rel: &str) -> io::Result<NodeStat> {
         "dir" => NodeKind::Dir,
         _ => NodeKind::Missing,
     };
-    Ok(NodeStat { kind })
+    Ok(NodeStat {
+        kind,
+        len: value.get("len").and_then(|item| item.as_u64()),
+        modified_ms: value.get("mtime").and_then(|item| item.as_i64()),
+    })
+}
+
+/// Kind, length, and last change the storage-access provider reports for one
+/// entry, without opening it. `None` fields were not reported.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ListedStat {
+    pub dir: bool,
+    pub len: Option<u64>,
+    /// Milliseconds since the Unix epoch.
+    pub modified_ms: Option<i64>,
+}
+
+/// `None` for a local path. Otherwise the provider's answer for `path`:
+/// `Ok(None)` when nothing is there.
+pub fn bridge_stat(path: &Path) -> Option<io::Result<Option<ListedStat>>> {
+    let (rel, bridge) = match route(path) {
+        Ok(Route::Local) => return None,
+        Ok(Route::Bridge { rel, bridge, .. }) => (rel, bridge),
+        Err(error) => return Some(Err(error)),
+    };
+    Some(stat_bridge(bridge.as_ref(), &rel).map(|stat| match stat.kind {
+        NodeKind::Missing => None,
+        NodeKind::File | NodeKind::Dir => Some(ListedStat {
+            dir: stat.kind == NodeKind::Dir,
+            len: stat.len,
+            modified_ms: stat.modified_ms,
+        }),
+    }))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -761,6 +795,257 @@ pub fn rename<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> io::Result<()> 
     }
 }
 
+/// Rename `from` to `to` only while `to` does not exist: `AlreadyExists`
+/// otherwise, including a name the filesystem treats as the same one
+/// (`README.txt` and `readme.txt` on a case-insensitive volume). A
+/// storage-access folder checks the name and then renames.
+pub fn rename_no_replace<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> io::Result<()> {
+    let from = from.as_ref();
+    let to = to.as_ref();
+    match (route(from)?, route(to)?) {
+        (Route::Local, Route::Local) => rename_local_no_replace(from, to),
+        (
+            Route::Bridge {
+                rel: from_rel,
+                bridge,
+                ..
+            },
+            Route::Bridge { rel: to_rel, .. },
+        ) => {
+            if stat_bridge(bridge.as_ref(), &to_rel)?.kind != NodeKind::Missing {
+                return Err(io::Error::from(io::ErrorKind::AlreadyExists));
+            }
+            bridge_call(
+                bridge.as_ref(),
+                "rename",
+                serde_json::json!({ "from": from_rel, "to": to_rel }),
+            )
+            .map(|_| ())
+        }
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "cannot rename across the data folder boundary",
+        )),
+    }
+}
+
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+fn rename_local_no_replace(from: &Path, to: &Path) -> io::Result<()> {
+    let from_c = unix_cstring(from)?;
+    let to_c = unix_cstring(to)?;
+    let rc = unsafe {
+        libc::renameat2(
+            libc::AT_FDCWD,
+            from_c.as_ptr(),
+            libc::AT_FDCWD,
+            to_c.as_ptr(),
+            libc::RENAME_NOREPLACE,
+        )
+    };
+    if rc == 0 {
+        return Ok(());
+    }
+    let error = io::Error::last_os_error();
+    // Some filesystems (older FUSE, network mounts) have no exclusive rename.
+    if matches!(error.raw_os_error(), Some(libc::EINVAL | libc::ENOSYS)) {
+        return link_then_unlink(from, to);
+    }
+    Err(error)
+}
+
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+fn rename_local_no_replace(from: &Path, to: &Path) -> io::Result<()> {
+    let from_c = unix_cstring(from)?;
+    let to_c = unix_cstring(to)?;
+    let rc = unsafe { libc::renamex_np(from_c.as_ptr(), to_c.as_ptr(), libc::RENAME_EXCL) };
+    if rc == 0 {
+        return Ok(());
+    }
+    let error = io::Error::last_os_error();
+    if matches!(error.raw_os_error(), Some(libc::ENOTSUP | libc::EINVAL)) {
+        return link_then_unlink(from, to);
+    }
+    Err(error)
+}
+
+#[cfg(all(
+    unix,
+    not(any(
+        all(target_os = "linux", target_env = "gnu"),
+        target_os = "macos",
+        target_os = "ios"
+    ))
+))]
+fn rename_local_no_replace(from: &Path, to: &Path) -> io::Result<()> {
+    link_then_unlink(from, to)
+}
+
+#[cfg(unix)]
+fn unix_cstring(path: &Path) -> io::Result<std::ffi::CString> {
+    use std::os::unix::ffi::OsStrExt;
+    std::ffi::CString::new(path.as_os_str().as_bytes())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "path has a NUL byte"))
+}
+
+/// A new hard link fails when the name is taken, so it is the exclusive
+/// step. A filesystem with no hard links (FAT, exFAT) checks, then renames.
+#[cfg(unix)]
+fn link_then_unlink(from: &Path, to: &Path) -> io::Result<()> {
+    match std::fs::hard_link(from, to) {
+        Ok(()) => std::fs::remove_file(from),
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Err(error),
+        Err(_) => {
+            if std::fs::symlink_metadata(to).is_ok() {
+                return Err(io::Error::from(io::ErrorKind::AlreadyExists));
+            }
+            std::fs::rename(from, to)
+        }
+    }
+}
+
+#[cfg(windows)]
+fn rename_local_no_replace(from: &Path, to: &Path) -> io::Result<()> {
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn MoveFileExW(existing: *const u16, new: *const u16, flags: u32) -> i32;
+    }
+    let from_w = windows_verbatim_wide(from);
+    let to_w = windows_verbatim_wide(to);
+    // No MOVEFILE_REPLACE_EXISTING: a taken name fails with ERROR_ALREADY_EXISTS.
+    let ok = unsafe { MoveFileExW(from_w.as_ptr(), to_w.as_ptr(), 0) };
+    if ok == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// NUL-terminated wide path with the `\\?\` prefix, so a path past
+/// `MAX_PATH` still works the way it does through `std::fs`.
+#[cfg(windows)]
+pub(crate) fn windows_verbatim_wide(path: &Path) -> Vec<u16> {
+    use std::os::windows::ffi::OsStrExt;
+    let raw: Vec<u16> = path.as_os_str().encode_wide().collect();
+    let text = String::from_utf16_lossy(&raw);
+    let prefixed: Vec<u16> = if text.starts_with(r"\\?\") || text.starts_with(r"\\.\") {
+        raw
+    } else if let Some(share) = text.strip_prefix(r"\\") {
+        format!(r"\\?\UNC\{share}").encode_utf16().collect()
+    } else if path.is_absolute() {
+        format!(r"\\?\{text}").encode_utf16().collect()
+    } else {
+        raw
+    };
+    prefixed.into_iter().chain(std::iter::once(0)).collect()
+}
+
+/// What Windows reports for one open file or folder.
+#[cfg(windows)]
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct WindowsFileInfo {
+    pub attributes: u32,
+    pub volume_serial: u32,
+    pub links: u32,
+    pub len: u64,
+    pub index: u64,
+    /// Last content write (FILETIME ticks).
+    pub last_write: i64,
+    /// Last change to the content or the attributes (FILETIME ticks). No app
+    /// can set it back the way it can set the write time.
+    pub change: i64,
+}
+
+#[cfg(windows)]
+pub(crate) const WINDOWS_FILE_ATTRIBUTE_DIRECTORY: u32 = 0x10;
+#[cfg(windows)]
+pub(crate) const WINDOWS_FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+
+#[cfg(windows)]
+pub(crate) fn windows_file_info(
+    file: &impl std::os::windows::io::AsRawHandle,
+) -> io::Result<WindowsFileInfo> {
+    // FILETIME is two DWORDs (4-byte aligned), not a u64.
+    #[repr(C)]
+    #[derive(Default)]
+    struct ByHandleFileInformation {
+        file_attributes: u32,
+        _creation_time: [u32; 2],
+        _last_access_time: [u32; 2],
+        _last_write_time: [u32; 2],
+        volume_serial: u32,
+        size_high: u32,
+        size_low: u32,
+        number_of_links: u32,
+        index_high: u32,
+        index_low: u32,
+    }
+    /// `FILE_BASIC_INFO`: LARGE_INTEGER times, 8-byte aligned.
+    #[repr(C)]
+    #[derive(Default)]
+    struct FileBasicInfo {
+        _creation_time: i64,
+        _last_access_time: i64,
+        last_write_time: i64,
+        change_time: i64,
+        _file_attributes: u32,
+    }
+    const FILE_BASIC_INFO_CLASS: i32 = 0;
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetFileInformationByHandle(
+            file: *mut core::ffi::c_void,
+            info: *mut ByHandleFileInformation,
+        ) -> i32;
+        fn GetFileInformationByHandleEx(
+            file: *mut core::ffi::c_void,
+            class: i32,
+            info: *mut core::ffi::c_void,
+            size: u32,
+        ) -> i32;
+    }
+    let handle = file.as_raw_handle() as *mut core::ffi::c_void;
+    let mut info = ByHandleFileInformation::default();
+    if unsafe { GetFileInformationByHandle(handle, &mut info) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let mut basic = FileBasicInfo::default();
+    let ok = unsafe {
+        GetFileInformationByHandleEx(
+            handle,
+            FILE_BASIC_INFO_CLASS,
+            (&mut basic as *mut FileBasicInfo).cast(),
+            std::mem::size_of::<FileBasicInfo>() as u32,
+        )
+    };
+    if ok == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(WindowsFileInfo {
+        attributes: info.file_attributes,
+        volume_serial: info.volume_serial,
+        links: info.number_of_links,
+        len: (u64::from(info.size_high) << 32) | u64::from(info.size_low),
+        index: (u64::from(info.index_high) << 32) | u64::from(info.index_low),
+        last_write: basic.last_write_time,
+        change: basic.change_time,
+    })
+}
+
+/// `path` itself, opened to read its attributes: a link or junction is not
+/// followed, and no other app's sharing mode can refuse it.
+#[cfg(windows)]
+pub(crate) fn windows_open_attributes(path: &Path) -> io::Result<std::fs::File> {
+    use std::os::windows::fs::OpenOptionsExt;
+    const FILE_READ_ATTRIBUTES: u32 = 0x80;
+    const FILE_SHARE_ALL: u32 = 0x1 | 0x2 | 0x4;
+    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    std::fs::OpenOptions::new()
+        .access_mode(FILE_READ_ATTRIBUTES)
+        .share_mode(FILE_SHARE_ALL)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)
+}
+
 pub fn copy<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> io::Result<u64> {
     let mut input = File::open(from)?;
     let mut output = File::create(to)?;
@@ -837,6 +1122,8 @@ enum DirEntryKind {
         /// `None` when the provider did not report a length. `Some(0)` is an
         /// empty file, not an unknown size.
         len: Option<u64>,
+        /// Milliseconds since the Unix epoch, when the provider reported it.
+        modified_ms: Option<i64>,
     },
 }
 
@@ -866,6 +1153,15 @@ impl DirEntry {
     pub fn known_len(&self) -> Option<u64> {
         match &self.kind {
             DirEntryKind::Named { len, .. } => *len,
+            DirEntryKind::Disk(_) => None,
+        }
+    }
+
+    /// Last change from the listing, in milliseconds since the Unix epoch.
+    /// `None` for a local entry, or when the provider omitted it.
+    pub fn known_modified_ms(&self) -> Option<i64> {
+        match &self.kind {
+            DirEntryKind::Named { modified_ms, .. } => *modified_ms,
             DirEntryKind::Disk(_) => None,
         }
     }
@@ -925,12 +1221,14 @@ pub fn read_dir<P: AsRef<Path>>(path: P) -> io::Result<ReadDir> {
                 // Missing or negative: the provider did not report a size.
                 // Zero stays `Some(0)` so an empty file is not opened again.
                 let len = entry.get("len").and_then(|item| item.as_u64());
+                let modified_ms = entry.get("mtime").and_then(|item| item.as_i64());
                 listed.push(DirEntry {
                     kind: DirEntryKind::Named {
                         path: logical.join(name),
                         name: std::ffi::OsString::from(name),
                         listed: listed_kind,
                         len,
+                        modified_ms,
                     },
                 });
             }

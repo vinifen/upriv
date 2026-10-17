@@ -35,6 +35,7 @@ import { DropOverRing } from "./DropOverRing";
 import { VaultDragHandle } from "./VaultDragHandle";
 import { VaultHiddenIndicator } from "./VaultHiddenIndicator";
 import { VaultLastOpenedIndicator } from "./VaultLastOpenedIndicator";
+import { VaultPlaintextIndicator } from "./VaultPlaintextIndicator";
 import { VaultLockButton } from "./VaultLockButton";
 import { VaultRowActions } from "./VaultRowActions";
 import { VaultStatusBadge } from "./VaultStatusBadge";
@@ -194,6 +195,7 @@ export function VaultRow({
         >
           {vault.displayName}
         </Text>
+        <VaultPlaintextIndicator storageMode={vault.storageMode} />
         <VaultLastOpenedIndicator active={isLastOpened} />
         <VaultFileManagerIndicator vaultId={vault.id} />
         <VaultHiddenIndicator hidden={vault.hidden} />
@@ -219,6 +221,7 @@ export function VaultRow({
           >
             {vault.displayName}
           </Text>
+          <VaultPlaintextIndicator storageMode={vault.storageMode} size={13} />
           <VaultLastOpenedIndicator active={isLastOpened} size={13} />
           <VaultFileManagerIndicator vaultId={vault.id} size={13} />
           <VaultHiddenIndicator hidden={vault.hidden} size={13} />

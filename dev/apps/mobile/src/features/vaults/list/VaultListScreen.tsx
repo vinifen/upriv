@@ -76,6 +76,8 @@ import { VaultNoteModal } from "@/features/vaults/list/VaultNoteModal";
 import { GroupedVaultPicker } from "@/features/vaults/list/GroupedVaultPicker";
 import {
   CloseAllUnsavedModal,
+  PlainHeldModal,
+  PlainPlaceModal,
   VaultLifecycleModal,
   VaultRecoveryModal,
 } from "@/features/vaults/lifecycle";
@@ -1309,10 +1311,29 @@ export function VaultListScreen() {
 
       <VaultRecoveryModal
         vault={lifecycle.recoveryVault}
+        leftover={lifecycle.recoveryLeftover}
         open={lifecycle.recoveryOpen}
         submitting={lifecycle.recoverySubmitting}
         onClose={lifecycle.cancelRecovery}
         onAction={lifecycle.handleRecoveryAction}
+      />
+
+      <PlainPlaceModal
+        open={lifecycle.placeOpen}
+        vaultName={lifecycle.placeVaultName}
+        workspaceChoices={lifecycle.placeWorkspaceChoices}
+        submitting={lifecycle.placeSubmitting}
+        warningClass={lifecycle.placeWarningClass}
+        onClose={lifecycle.onPlaceClose}
+        onContinue={lifecycle.onPlaceContinue}
+        onAcceptWarning={lifecycle.onPlaceAcceptWarning}
+      />
+      <PlainHeldModal
+        open={lifecycle.heldOpen}
+        count={lifecycle.heldCount}
+        submitting={lifecycle.heldSubmitting}
+        onApply={lifecycle.onHeldApply}
+        onRestore={lifecycle.onHeldRestore}
       />
 
       <VaultSettingsModal

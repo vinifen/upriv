@@ -13,6 +13,7 @@ use std::path::Path;
 
 use crate::config::VaultConfig;
 use crate::error::{Result, UprivError};
+use crate::paths::VaultRoot;
 use crate::session::{
     is_unlock_in_flight, is_vault_closing_at, is_vault_open_at, is_vault_preparing_at,
     try_with_vault_dir_lock,
@@ -68,8 +69,12 @@ pub fn refuse_config_save_if_busy(
 /// save budget is 30 seconds; rewrap can hold that lock for minutes.
 /// `password_changed_at` stays the value already on disk. Only a password
 /// rewrap writes it, so a stale settings form cannot clear it.
-pub fn save_vault_config_checked(vault_dir: impl AsRef<Path>, after: &VaultConfig) -> Result<()> {
-    let vault_dir = vault_dir.as_ref();
+///
+/// A plaintext folder left by an earlier session blocks a new folder path or
+/// mode. When either changes, the empty folder a clean close left goes.
+pub fn save_vault_config_checked(root: &VaultRoot, vault_id: &str, after: &VaultConfig) -> Result<()> {
+    let vault_dir = root.vault_dir(vault_id)?;
+    let vault_dir = vault_dir.as_path();
     if is_vault_preparing_at(vault_dir) {
         return Err(UprivError::VaultBusy);
     }
@@ -96,9 +101,17 @@ pub fn save_vault_config_checked(vault_dir: impl AsRef<Path>, after: &VaultConfi
             });
         }
         refuse_config_save_if_busy(vault_dir, &before, after)?;
+        let moves_folder = !quiet_targets_changed(&before, after).is_empty();
+        if moves_folder {
+            crate::vault::ensure_no_leftover(root, vault_id)?;
+        }
         let mut stored = after.clone();
-        stored.security.password_changed_at = before.security.password_changed_at;
-        crate::config::save_vault_config(vault_dir, &stored)
+        stored.security.password_changed_at = before.security.password_changed_at.clone();
+        crate::config::save_vault_config(vault_dir, &stored)?;
+        if moves_folder {
+            crate::vault::clear_closed_leaf(root, vault_id, &before);
+        }
+        Ok(())
     })
 }
 
@@ -163,7 +176,7 @@ mode = "encrypted_dir"
         let dir = root.vault_dir("notes").unwrap();
         let mut after = crate::config::load_vault_config_raw(&dir).unwrap();
         after.vault.display_name = "Renamed".into();
-        let err = save_vault_config_checked(&dir, &after).unwrap_err();
+        let err = save_vault_config_checked(&root, "notes", &after).unwrap_err();
         assert!(
             matches!(err, UprivError::VaultConfigInvalid { .. }),
             "display_name change must not use vault_config_save: {err:?}"
@@ -177,7 +190,7 @@ mode = "encrypted_dir"
             !crate::session::is_vault_closing_at(&dir),
             "closing mark must clear after close"
         );
-        let err = save_vault_config_checked(&dir, &after).unwrap_err();
+        let err = save_vault_config_checked(&root, "notes", &after).unwrap_err();
         assert!(
             matches!(err, UprivError::VaultConfigInvalid { .. }),
             "display_name change stays blocked when closed: {err:?}"
@@ -193,7 +206,7 @@ mode = "encrypted_dir"
         let mut after = crate::config::load_vault_config_raw(&dir).unwrap();
         after.vault.note = "ok when closed".into();
         if !crate::session::is_unlock_in_flight() {
-            save_vault_config_checked(&dir, &after).expect("note when closed");
+            save_vault_config_checked(&root, "notes", &after).expect("note when closed");
         }
     }
 
@@ -206,7 +219,7 @@ mode = "encrypted_dir"
         let dir = root.vault_dir("notes").unwrap();
         let mut after = crate::config::load_vault_config_raw(&dir).unwrap();
         after.vault.note = "ok while open".into();
-        save_vault_config_checked(&dir, &after).expect("note anytime");
+        save_vault_config_checked(&root, "notes", &after).expect("note anytime");
         close_vault(&root, "notes").expect("close");
     }
 
@@ -234,7 +247,7 @@ mode = "encrypted_dir"
         let dir = root.vault_dir("notes").unwrap();
         let mut after = crate::config::load_vault_config_raw(&dir).unwrap();
         after.vault.id = "other".into();
-        let err = save_vault_config_checked(&dir, &after).unwrap_err();
+        let err = save_vault_config_checked(&root, "notes", &after).unwrap_err();
         assert!(
             matches!(err, UprivError::VaultConfigInvalid { .. }),
             "id change must not surface as vault_config_busy: {err:?}"
@@ -285,7 +298,7 @@ mode = "encrypted_dir"
         let _preparing = PreparingGuard::enter_exclusive(&dir).unwrap();
         let mut after = before.clone();
         after.vault.note = "during rewrap".into();
-        let err = save_vault_config_checked(&dir, &after).unwrap_err();
+        let err = save_vault_config_checked(&root, "notes", &after).unwrap_err();
         assert!(matches!(err, UprivError::VaultBusy));
         let saved = crate::config::load_vault_config_raw(&dir).unwrap();
         assert_eq!(saved.vault.note, before.vault.note);
@@ -317,7 +330,7 @@ mode = "encrypted_dir"
             .expect("directory lock held");
         let mut after = crate::config::load_vault_config_raw(&dir).unwrap();
         after.vault.note = "while locked".into();
-        let err = save_vault_config_checked(&dir, &after).unwrap_err();
+        let err = save_vault_config_checked(&root, "notes", &after).unwrap_err();
         assert!(matches!(err, UprivError::VaultBusy));
         let _ = release_tx.send(());
         join.join().expect("lock thread").expect("directory lock");
@@ -342,7 +355,7 @@ mode = "encrypted_dir"
         let mut after = crate::config::load_vault_config_raw(&dir).unwrap();
         after.vault.note = "kept".into();
         after.security.password_changed_at = None;
-        save_vault_config_checked(&dir, &after).unwrap();
+        save_vault_config_checked(&root, "notes", &after).unwrap();
         let saved = crate::config::load_vault_config_raw(&dir).unwrap();
         assert_eq!(saved.vault.note, "kept");
         assert_eq!(

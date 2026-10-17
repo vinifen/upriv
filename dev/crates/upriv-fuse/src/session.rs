@@ -19,6 +19,7 @@ const TTL: Duration = Duration::from_secs(1);
 const TRACKER_NOMEDIA: &str = ".nomedia";
 const INTERNAL_WORKSPACE_FILE: &str = ".upriv-workspace.json";
 const SEED_LOGICAL_PATH: &str = "upriv-seed.txt";
+const PLAIN_RESERVED_PREFIX: &str = ".upriv-plain";
 
 fn synthetic_tracker_nomedia(logical: &str, in_index: bool) -> bool {
     logical == TRACKER_NOMEDIA && !in_index
@@ -32,10 +33,15 @@ fn file_name(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
 }
 
-/// Same reserved paths as the daemon: the seed file only at the mount root,
-/// and the workspace file in every directory.
+/// Same reserved paths as `is_reserved_logical` in upriv-core: the seed file
+/// only at the mount root, the workspace file in every directory, and any
+/// name that starts with `.upriv-plain`.
 fn hidden_from_mount(logical: &str) -> bool {
-    file_name(logical) == INTERNAL_WORKSPACE_FILE || logical == SEED_LOGICAL_PATH
+    file_name(logical) == INTERNAL_WORKSPACE_FILE
+        || logical == SEED_LOGICAL_PATH
+        || logical
+            .split('/')
+            .any(|part| part.starts_with(PLAIN_RESERVED_PREFIX))
 }
 
 struct EncryptedFs {

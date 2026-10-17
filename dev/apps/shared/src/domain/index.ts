@@ -18,6 +18,7 @@ export * from "./motion";
 export * from "./modal";
 export * from "./logs";
 export * from "./vault";
+export * from "./vault-plain";
 export * from "./vault-create";
 export * from "./vault-groups";
 export * from "./vault-lifecycle";

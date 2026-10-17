@@ -551,7 +551,7 @@ export function createMobileMockServices(): AppServices {
             throw new VaultPipelineError(VAULT_PIPELINE_ERROR_CODES.HEADER_TEST_FAILED);
           }
         });
-        return { backupFailed: false };
+        return { backupFailed: false, backupFailure: null, plain: null };
       },
       resolveWorkspacePath(displayName, parentPath) {
         return resolveVaultMountPoint(parentPath ?? "", displayName) ?? "";

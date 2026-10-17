@@ -5,13 +5,15 @@ import {
   LIVE_CLOSING_PIPELINE_STEP_COUNT,
   LIVE_OPENING_PIPELINE_STEP_COUNT,
   borrowSessionRamPassword,
+  finishPlainOpen,
   isLifecyclePasswordPresent,
   isVaultPipelineError,
+  parsePendingPlainConfirm,
   resolveVaultMountPoint,
   watchClosePhase,
   type VaultLifecycleService,
 } from "@upriv/shared";
-import { rpcVaultClose, rpcVaultClosePhase, rpcVaultOpen } from "@/lib/rpc";
+import { rpcVaultClose, rpcVaultClosePhase, rpcVaultOpen, rpcVaultPlainConfirm } from "@/lib/rpc";
 
 /** Session RAM only — never persist. */
 const vaultPasswordInRam = new Map<string, string>();
@@ -36,7 +38,14 @@ export const nativeVaultLifecycleService: VaultLifecycleService = {
   async runOpeningPipeline(vaultId, onStep) {
     onStep(0);
     const password = borrowSessionRamPassword(vaultPasswordInRam, vaultId);
-    await rpcVaultOpen(vaultId, password);
+    await finishPlainOpen({
+      vaultId,
+      password,
+      open: rpcVaultOpen,
+      confirm: rpcVaultPlainConfirm,
+      close: (id) => rpcVaultClose(id, "user").then(() => undefined),
+      pendingOf: parsePendingPlainConfirm,
+    });
     // Hooks put the string back after a successful open.
     onStep(1);
   },

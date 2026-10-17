@@ -40,8 +40,10 @@ pub use kdf::KdfUnlockPreset;
 pub use tree::{
     build_file_tree, child_logical_path, delete_empty_directory, delete_logical_path,
     ensure_folder, file_name, from_ui_path, mkdir_logical, move_logical_path, parent_logical,
-    relocate_logical_path, relocate_replacing, rename_logical_path, to_ui_path, unique_file_name,
-    unique_folder_name, FileTreeNode, INTERNAL_WORKSPACE_FILE, LOGICAL_NAME_MAX,
+    is_plain_internal, is_reserved_logical, relocate_logical_path, relocate_replacing,
+    rename_logical_path,
+    to_ui_path, unique_file_name, unique_folder_name, FileTreeNode, INTERNAL_WORKSPACE_FILE,
+    LOGICAL_NAME_MAX, PLAIN_POLICY_FILE, PLAIN_RESERVED_PREFIX,
 };
 
 use aead::{derive_layer_keys, random_master_key, ContentKey, INDEX_KEY_LEN, MASTER_KEY_LEN};
@@ -204,14 +206,15 @@ pub fn content_hash_hex(store_dir: impl AsRef<Path>) -> Result<String> {
 
 /// Stable id of the vault files used to decide whether a close needs a new
 /// backup zip. Sealed bytes change on every flush because the nonce is random;
-/// this hash does not. `.upriv-workspace.json` is omitted: file-manager layout
-/// is not a vault change. `None` when the index cannot be serialized — that
-/// close must still write a backup.
+/// this hash does not. `.upriv-workspace.json` and the root plaintext policy are
+/// omitted: file-manager layout and the confirmed plaintext place are not vault
+/// changes. `None` when the index cannot be serialized — that close must still
+/// write a backup.
 pub fn index_logical_hash(index: &VaultIndex) -> Option<String> {
     let mut content = index.clone();
     content
         .nodes
-        .retain(|node| node.path != INTERNAL_WORKSPACE_FILE);
+        .retain(|node| node.path != INTERNAL_WORKSPACE_FILE && node.path != PLAIN_POLICY_FILE);
     let bytes = serde_json::to_vec(&content).ok()?;
     let mut hasher = Sha256::new();
     hasher.update(&bytes);
@@ -276,6 +279,42 @@ mod tests {
         let mut edited = with_layout;
         edited.nodes[0] = VaultNode::file("note.txt", "file".into(), 5, vec!["v2".into()], vec![0]);
         assert_ne!(index_logical_hash(&edited).as_deref(), Some(same.as_str()));
+    }
+
+    #[test]
+    fn index_logical_hash_ignores_the_root_plain_policy_only() {
+        let mut index = VaultIndex::empty();
+        index.nodes.push(VaultNode::file(
+            "note.txt",
+            "file".into(),
+            4,
+            vec!["v1".into()],
+            vec![0],
+        ));
+        let before = index_logical_hash(&index).expect("hash");
+        let mut with_policy = index.clone();
+        with_policy.nodes.push(VaultNode::file(
+            PLAIN_POLICY_FILE,
+            "policy".into(),
+            9,
+            vec!["p1".into()],
+            vec![0],
+        ));
+        assert_eq!(
+            index_logical_hash(&with_policy).as_deref(),
+            Some(before.as_str())
+        );
+
+        let mut nested = index;
+        nested.nodes.push(VaultNode::dir("docs"));
+        nested.nodes.push(VaultNode::file(
+            &format!("docs/{PLAIN_POLICY_FILE}"),
+            "nested".into(),
+            9,
+            vec!["p1".into()],
+            vec![0],
+        ));
+        assert_ne!(index_logical_hash(&nested).as_deref(), Some(before.as_str()));
     }
 
     #[test]
