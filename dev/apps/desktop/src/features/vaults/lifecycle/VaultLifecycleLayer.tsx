@@ -4,7 +4,12 @@ import { CloseAllUnsavedModal } from "./modals/CloseAllUnsavedModal";
 import { PlainHeldModal, PlainPlaceModal } from "./modals/PlainFolderModals";
 import { VaultLifecycleModal } from "./modals/VaultLifecycleModal";
 import { VaultRecoveryModal } from "./modals/VaultRecoveryModal";
-import type { PlainFolderClass, PlainLeftover, PlainPlaceChoice, PlainRecoveryAction } from "@upriv/shared";
+import type {
+  PlainFolderClass,
+  PlainLeftover,
+  PlainPlaceChoice,
+  PlainRecoveryAction,
+} from "@upriv/shared";
 
 interface VaultLifecycleLayerProps {
   lifecycleVault: VaultListItem | null;

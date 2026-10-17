@@ -62,8 +62,6 @@ export const CORE_RPC_COMMANDS = {
   VAULT_PLAIN_LEFTOVER: "vault_plain_leftover",
   /** Wipe a leftover plaintext folder (recovery Remove). */
   VAULT_PLAIN_REMOVE: "vault_plain_remove",
-  /** New vault from a leftover plaintext folder. */
-  VAULT_PLAIN_IMPORT: "vault_plain_import",
   /** One sync pass of an open plaintext folder. Mobile calls this on foreground. */
   VAULT_PLAIN_SYNC: "vault_plain_sync",
   VAULT_PLAIN_STATUS: "vault_plain_status",

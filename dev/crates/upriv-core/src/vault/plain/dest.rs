@@ -170,7 +170,9 @@ pub(super) enum Leaf {
     /// permissions.
     Empty,
     /// This vault's folder from an earlier session, wiped at close.
-    Closed { made_folder: bool },
+    Closed {
+        made_folder: bool,
+    },
 }
 
 impl Leaf {
@@ -245,8 +247,7 @@ fn owned_by_current_user(folder: &Path) -> bool {
     if crate::host_fs::is_bridge_path(folder) {
         return true;
     }
-    std::fs::symlink_metadata(folder)
-        .is_ok_and(|meta| meta.uid() == unsafe { libc::geteuid() })
+    std::fs::symlink_metadata(folder).is_ok_and(|meta| meta.uid() == unsafe { libc::geteuid() })
 }
 
 #[cfg(not(unix))]
@@ -330,7 +331,10 @@ fn resolve_existing(path: &Path) -> PathBuf {
         if let Ok(real) = std::fs::canonicalize(&existing) {
             return rest.iter().rev().fold(real, |acc, part| acc.join(part));
         }
-        match (existing.file_name().map(|name| name.to_os_string()), existing.parent()) {
+        match (
+            existing.file_name().map(|name| name.to_os_string()),
+            existing.parent(),
+        ) {
             (Some(name), Some(parent)) => {
                 rest.push(name);
                 existing = parent.to_path_buf();
@@ -396,7 +400,12 @@ mod tests {
                 "{error:?}"
             );
         }
-        check(&root, "notes", &dest(root.root().join("workspace").join("Notes"))).unwrap();
+        check(
+            &root,
+            "notes",
+            &dest(root.root().join("workspace").join("Notes")),
+        )
+        .unwrap();
     }
 
     #[test]
@@ -419,7 +428,11 @@ mod tests {
         std::fs::create_dir_all(&other).unwrap();
         crate::runtime_state::mark_session_open(&root, "other", Some(other.display().to_string()))
             .unwrap();
-        for folder in [other.join("Notes"), other.clone(), tmp.path().join("places")] {
+        for folder in [
+            other.join("Notes"),
+            other.clone(),
+            tmp.path().join("places"),
+        ] {
             let error = check(&root, "notes", &dest(folder)).unwrap_err();
             assert!(
                 matches!(
@@ -432,7 +445,12 @@ mod tests {
                 "{error:?}"
             );
         }
-        check(&root, "notes", &dest(tmp.path().join("places").join("Notes"))).unwrap();
+        check(
+            &root,
+            "notes",
+            &dest(tmp.path().join("places").join("Notes")),
+        )
+        .unwrap();
     }
 
     #[test]

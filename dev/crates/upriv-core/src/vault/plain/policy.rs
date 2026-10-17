@@ -90,12 +90,11 @@ pub(super) fn confirm(session: &mut OpenSession, source: &PlaceSource) -> Result
     }
     file.format_version = POLICY_FORMAT;
     file.systems.insert(key, wanted);
-    let bytes = serde_json::to_vec(&file).map_err(|error| {
-        crate::error::UprivError::VaultStoreInvalid {
+    let bytes =
+        serde_json::to_vec(&file).map_err(|error| crate::error::UprivError::VaultStoreInvalid {
             path: PLAIN_POLICY_FILE.into(),
             detail: error.to_string(),
-        }
-    })?;
+        })?;
     write_internal(session, PLAIN_POLICY_FILE, &bytes)
 }
 

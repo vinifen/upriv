@@ -166,7 +166,6 @@ pub fn handle_rpc(req: RpcRequest) -> RpcResponse {
         "vault_plain_destination" => plain_ops::vault_plain_destination(req.params),
         "vault_plain_leftover" => plain_ops::vault_plain_leftover(req.params),
         "vault_plain_remove" => plain_ops::vault_plain_remove(req.params),
-        "vault_plain_import" => plain_ops::vault_plain_import(req.params),
         "vault_plain_sync" => plain_ops::vault_plain_sync(req.params),
         "vault_plain_status" => plain_ops::vault_plain_status(req.params),
         "vault_plain_deletions" => plain_ops::vault_plain_deletions(req.params),
@@ -1421,7 +1420,6 @@ struct VaultIdPasswordParams {
     password: Option<SecretString>,
 }
 
-
 /// Unlock for streaming an import. No desktop mount, so the file manager stays closed.
 fn vault_ingest_open(params: Value) -> RpcResponse {
     let parsed: VaultIdPasswordParams = match serde_json::from_value(params) {
@@ -1936,7 +1934,6 @@ fn map_core_err_response(error: upriv_core::UprivError, emit_log: bool) -> RpcRe
             ("plain_destination_invalid", Some(path.as_path()))
         }
         upriv_core::UprivError::PlainLeftover => ("plain_leftover", None),
-        upriv_core::UprivError::PlainLeftoverGone => ("plain_leftover_gone", None),
         upriv_core::UprivError::PlainNamesUnsupported { .. } => ("plain_names_unsupported", None),
         upriv_core::UprivError::PlainSpaceShort { .. } => ("plain_space_short", None),
         upriv_core::UprivError::PlainFolderUnwritable { .. } => ("plain_folder_unwritable", None),
@@ -2166,7 +2163,6 @@ mod contract_tests {
         "vault_plain_destination",
         "vault_plain_leftover",
         "vault_plain_remove",
-        "vault_plain_import",
         "vault_plain_sync",
         "vault_plain_status",
         "vault_plain_deletions",

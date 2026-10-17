@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  parsePendingPlainConfirm,
-  parsePlainCloseSummary,
-  plainRecoveryOffers,
-} from "..";
+import { parsePendingPlainConfirm, parsePlainCloseSummary, plainRecoveryOffers } from "..";
 
 describe("parsePendingPlainConfirm", () => {
   it("reads the folder core is waiting to write", () => {
@@ -21,7 +17,7 @@ describe("parsePendingPlainConfirm", () => {
 });
 
 describe("plainRecoveryOffers", () => {
-  it("offers Remove and a new vault when the folder is still there", () => {
+  it("wipes the folder when it is still there", () => {
     expect(
       plainRecoveryOffers({
         path: "/data/workspace/Notes",
@@ -30,16 +26,11 @@ describe("plainRecoveryOffers", () => {
         files: 2,
         bytes: 10,
       }),
-    ).toEqual({
-      resume: false,
-      remove: true,
-      create: true,
-      defaultChoice: "remove_folder",
-    });
+    ).toEqual({ remove: true });
   });
 
   it("offers unlock when no leftover folder is on this computer", () => {
-    expect(plainRecoveryOffers(null).defaultChoice).toBe("resume_store");
+    expect(plainRecoveryOffers(null)).toEqual({ remove: false });
     expect(
       plainRecoveryOffers({
         path: "/gone",
@@ -47,8 +38,8 @@ describe("plainRecoveryOffers", () => {
         found: false,
         files: 0,
         bytes: 0,
-      }).create,
-    ).toBe(false);
+      }),
+    ).toEqual({ remove: false });
   });
 });
 

@@ -49,7 +49,6 @@ export const ELECTRON_IPC_METHODS = [
   "vault_plain_destination",
   "vault_plain_leftover",
   "vault_plain_remove",
-  "vault_plain_import",
   "vault_plain_sync",
   "vault_plain_status",
   "vault_plain_deletions",

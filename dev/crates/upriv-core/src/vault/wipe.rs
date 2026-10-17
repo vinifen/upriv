@@ -5,9 +5,9 @@
 //! preview with a hard link loses its bytes too. A plaintext folder other apps
 //! can write uses `plain::sweep`, which does not overwrite through a link.
 
+use crate::host_fs as fs;
 #[allow(unused_imports)]
 use crate::host_fs::HostFsQuery;
-use crate::host_fs as fs;
 use std::io::{self, Seek, SeekFrom, Write};
 use std::path::Path;
 

@@ -89,14 +89,9 @@ pub enum UprivError {
     },
 
     /// A plaintext folder from an earlier session still holds files. The vault
-    /// is in recovery until that folder is removed or saved as a new vault.
+    /// is in recovery until that folder is removed.
     #[error("a plaintext folder from an earlier session is still on disk")]
     PlainLeftover,
-
-    /// Recovery asked for a leftover plaintext folder that is no longer
-    /// there, or no longer this vault's.
-    #[error("the plaintext folder from the earlier session is gone")]
-    PlainLeftoverGone,
 
     /// Some vault names cannot be written as files on this system.
     #[error("{count} file names cannot be written to the plaintext folder")]

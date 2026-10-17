@@ -1,7 +1,6 @@
 //! A plaintext folder that outlived its session: a crash, a power cut, or a
 //! wipe that could not finish. The store stays the truth. The vault lists as
-//! recovery until the user removes the folder (the default) or makes a new
-//! vault from it. Opening never wipes it on its own.
+//! recovery until the user removes the folder. Opening never wipes it on its own.
 
 use std::path::Path;
 
@@ -15,10 +14,9 @@ use crate::config::{load_vault_config, VaultConfig};
 use crate::error::{Result, UprivError};
 use crate::paths::VaultRoot;
 use crate::runtime_state::{self, PlainRecord};
-use crate::store::KdfUnlockPreset;
 use crate::vault::wipe::WipeOptions;
 
-/// `vault_plain_leftover`: what recovery shows before the user picks.
+/// `vault_plain_leftover`: what recovery shows for this computer.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlainLeftover {
@@ -26,7 +24,7 @@ pub struct PlainLeftover {
     /// UTC time the folder was made (RFC 3339).
     pub since: String,
     /// The folder is there and carries this vault's marker. When false,
-    /// Remove only forgets it and nothing can be saved from it.
+    /// Remove only forgets the record.
     pub found: bool,
     pub files: u64,
     pub bytes: u64,
@@ -39,17 +37,6 @@ pub struct PlainLeftover {
 pub struct PlainWipe {
     pub wiped: u32,
     pub kept: u32,
-}
-
-/// `vault_import_plain_leftover`: the new vault, and what happened to the
-/// folder it was made from.
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PlainLeftoverImport {
-    pub id: String,
-    /// Links, special files, and names a vault cannot hold.
-    pub skipped: usize,
-    pub wipe: PlainWipe,
 }
 
 /// The leftover folder this computer can reach for `vault_id`.
@@ -86,43 +73,12 @@ pub fn remove_plain_leftover(root: &VaultRoot, vault_id: &str) -> Result<PlainWi
         let Some(record) = runtime_state::reachable_plain_record(root, vault_id)? else {
             return Ok(PlainWipe::default());
         };
-        wipe_recorded(root, vault_id, &record, &WipeOptions::for_vault_dir(&vault_dir))
-    })
-}
-
-/// New vault: copy the leftover folder into a new vault through the same
-/// reader a folder import uses, then wipe the folder. The new vault keeps
-/// every file even when the wipe after it falls short.
-pub fn import_plain_leftover(
-    root: &VaultRoot,
-    vault_id: &str,
-    config: VaultConfig,
-    new_password: &[u8],
-    preset: KdfUnlockPreset,
-) -> Result<PlainLeftoverImport> {
-    let vault_dir = root.vault_dir(vault_id)?;
-    crate::session::with_vault_dir_lock(&vault_dir, || {
-        ensure_closed(root, vault_id)?;
-        let record =
-            runtime_state::reachable_plain_record(root, vault_id)?.ok_or(UprivError::PlainLeftoverGone)?;
-        let folder = record.folder(root);
-        let marker =
-            verified_marker(&folder, vault_id, &record.token).ok_or(UprivError::PlainLeftoverGone)?;
-        let helpers: Vec<String> = marker
-            .trusted_helpers()
-            .into_iter()
-            .map(str::to_string)
-            .collect();
-        let (id, skipped) = crate::vault::os_import::import_plain_leftover_folder(
+        wipe_recorded(
             root,
-            config,
-            new_password,
-            preset,
-            &folder,
-            &helpers,
-        )?;
-        let wipe = wipe_recorded(root, vault_id, &record, &WipeOptions::for_vault_dir(&vault_dir))?;
-        Ok(PlainLeftoverImport { id, skipped, wipe })
+            vault_id,
+            &record,
+            &WipeOptions::for_vault_dir(&vault_dir),
+        )
     })
 }
 
@@ -340,10 +296,8 @@ fn remove_closed_leaf(folder: &Path, vault_id: &str) {
     if disk::set_folder_writable(folder, true).is_err() {
         return;
     }
-    if marker::remove(folder).is_ok() && made_folder {
-        if crate::host_fs::remove_dir(folder).is_ok() {
-            remove_empty_workspace_dir(folder);
-        }
+    if marker::remove(folder).is_ok() && made_folder && crate::host_fs::remove_dir(folder).is_ok() {
+        remove_empty_workspace_dir(folder);
     }
 }
 
@@ -374,17 +328,11 @@ fn ensure_closed(root: &VaultRoot, vault_id: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::KdfUnlockPreset;
     use crate::test_support::{vault_root_with, VaultSpec};
 
     fn plain_root() -> (tempfile::TempDir, VaultRoot) {
         vault_root_with(&[VaultSpec::upriv_plain("notes", "Notes", 1)])
-    }
-
-    fn encrypted_config(id: &str, name: &str) -> VaultConfig {
-        toml::from_str(&format!(
-            "[vault]\nid = \"{id}\"\ndisplay_name = \"{name}\"\norder = 1\n[storage]\nmode = \"encrypted_dir\"\n"
-        ))
-        .expect("config")
     }
 
     fn leftover(folder: &Path, vault_id: &str, token: &str) {
@@ -431,35 +379,12 @@ mod tests {
         runtime_state::adopt_plain_record(&root, "notes", record(&folder, "t1")).unwrap();
 
         assert!(!plain_leftover(&root, "notes").unwrap().unwrap().found);
-        assert_eq!(remove_plain_leftover(&root, "notes").unwrap(), PlainWipe::default());
+        assert_eq!(
+            remove_plain_leftover(&root, "notes").unwrap(),
+            PlainWipe::default()
+        );
         assert!(plain_leftover(&root, "notes").unwrap().is_none());
         assert_eq!(std::fs::read(folder.join("a.txt")).unwrap(), b"secret a");
-    }
-
-    #[test]
-    fn a_new_vault_keeps_the_files_and_the_folder_is_wiped() {
-        let (tmp, root) = plain_root();
-        let folder = tmp.path().join("places").join("Notes");
-        leftover(&folder, "notes", "t1");
-        runtime_state::adopt_plain_record(&root, "notes", record(&folder, "t1")).unwrap();
-
-        let made = import_plain_leftover(
-            &root,
-            "notes",
-            encrypted_config("saved", "Saved"),
-            b"new-password",
-            KdfUnlockPreset::M32,
-        )
-        .unwrap();
-        assert_eq!(made.wipe.kept, 0);
-        assert!(plain_leftover(&root, "notes").unwrap().is_none());
-
-        crate::open_vault(&root, &made.id, b"new-password").unwrap();
-        let read = |path: &str| crate::vault::fs_read_file(&root, &made.id, path);
-        assert_eq!(read("a.txt").unwrap(), b"secret a");
-        assert_eq!(read("sub/b.txt").unwrap(), b"secret b");
-        assert!(read(".nomedia").is_err());
-        crate::close_vault(&root, &made.id).unwrap();
     }
 
     #[test]
@@ -469,8 +394,10 @@ mod tests {
         std::fs::create_dir_all(&base).unwrap();
         let vault_dir = root.vault_dir("notes").unwrap();
         let mut config = load_vault_config(&vault_dir).unwrap();
-        config.mount.row_mut(crate::paths::WorkspaceSystem::current()).path =
-            base.display().to_string();
+        config
+            .mount
+            .row_mut(crate::paths::WorkspaceSystem::current())
+            .path = base.display().to_string();
         crate::config::save_vault_config(&vault_dir, &config).unwrap();
         let folder = base.join("Notes");
         leftover(&folder, "notes", "t9");
@@ -483,7 +410,11 @@ mod tests {
     }
 
     fn own_folder_config(id: &str, name: &str, parent: &Path, plain: bool) -> VaultConfig {
-        let mode = if plain { "upriv_plain" } else { "encrypted_dir" };
+        let mode = if plain {
+            "upriv_plain"
+        } else {
+            "encrypted_dir"
+        };
         let mut config: VaultConfig = toml::from_str(&format!(
             "[vault]\nid = \"{id}\"\ndisplay_name = \"{name}\"\norder = 1\n[storage]\nmode = \"{mode}\"\n"
         ))

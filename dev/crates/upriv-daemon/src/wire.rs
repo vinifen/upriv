@@ -84,7 +84,6 @@ pub fn is_pack_io_method(method: &str) -> bool {
             | "vault_import_7z"
             | "vault_import_files_zip"
             | "vault_import_os_path"
-            | "vault_plain_import"
             | "vault_export"
     )
 }
@@ -290,6 +289,9 @@ mod tests {
             "vault_import_zip",
             "vault_ingest_open",
             "vault_open",
+            "vault_plain_confirm",
+            "vault_plain_remove",
+            "vault_plain_sync",
         ];
         let expected: std::collections::BTreeSet<_> = expected
             .iter()

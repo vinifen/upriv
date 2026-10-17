@@ -36,36 +36,8 @@ enum PlannedOsEntry {
     File { logical: String, source: PathBuf },
 }
 
-/// What a walk does with an entry an import cannot store as a document.
-#[derive(Clone, Copy)]
-enum PlanRules<'a> {
-    /// The user chose this file or folder. An unsafe name or an unsupported
-    /// file type fails the import, so nothing is dropped without a word.
-    Strict,
-    /// A plaintext folder a crash left behind. Those entries are skipped and
-    /// counted, so one odd file cannot block saving the rest. `skip_root`
-    /// names the helper files Upriv wrote at the top of that folder.
-    Leftover { skip_root: &'a [String] },
-}
-
-impl PlanRules<'_> {
-    fn lenient(self) -> bool {
-        matches!(self, Self::Leftover { .. })
-    }
-
-    fn skips_root_name(self, name: &str) -> bool {
-        match self {
-            Self::Strict => false,
-            Self::Leftover { skip_root } => skip_root.iter().any(|skip| skip == name),
-        }
-    }
-}
-
 struct PlannedOs {
     entries: Vec<PlannedOsEntry>,
-    /// Entries a lenient walk left out: links, special files, names a vault
-    /// cannot hold, or files that vanished during the walk.
-    skipped: usize,
 }
 
 fn layout_error(path: &Path, detail: impl Into<String>) -> UprivError {
@@ -106,7 +78,7 @@ fn ensure_folder_path(root: &VaultRoot, vault_id: &str, logical: &str) -> Result
 /// Names and source paths only. File bytes stay on the user's disk until ingest.
 /// Links inside a folder are skipped, never followed. The chosen path itself
 /// must not be a link. Plaintext-folder names are skipped in every mode.
-fn plan_os_path(source: &Path, rules: PlanRules<'_>) -> Result<PlannedOs> {
+fn plan_os_path(source: &Path) -> Result<PlannedOs> {
     if !source.is_absolute() {
         return Err(layout_error(source, "choose an absolute file or folder"));
     }
@@ -124,7 +96,6 @@ fn plan_os_path(source: &Path, rules: PlanRules<'_>) -> Result<PlannedOs> {
                 logical,
                 source: source.to_path_buf(),
             }],
-            skipped: 0,
         });
     }
     if !meta.host_is_dir() {
@@ -133,7 +104,6 @@ fn plan_os_path(source: &Path, rules: PlanRules<'_>) -> Result<PlannedOs> {
 
     let mut planned = PlannedOs {
         entries: Vec::new(),
-        skipped: 0,
     };
     let mut links = 0usize;
     let mut stack = vec![(source.to_path_buf(), String::new())];
@@ -149,29 +119,12 @@ fn plan_os_path(source: &Path, rules: PlanRules<'_>) -> Result<PlannedOs> {
         children.sort_by_key(|entry| entry.file_name());
         for entry in children {
             let path = entry.path();
-            let child_meta = match fs::symlink_metadata(&path) {
-                Ok(meta) => meta,
-                Err(_) if rules.lenient() => {
-                    planned.skipped += 1;
-                    continue;
-                }
-                Err(_) => return Err(source_unreadable(&path)),
-            };
+            let child_meta = fs::symlink_metadata(&path).map_err(|_| source_unreadable(&path))?;
             if child_meta.file_type().is_symlink() {
                 links += 1;
                 continue;
             }
-            let name = match os_name(&path) {
-                Ok(name) => name,
-                Err(_) if rules.lenient() => {
-                    planned.skipped += 1;
-                    continue;
-                }
-                Err(error) => return Err(error),
-            };
-            if prefix.is_empty() && rules.skips_root_name(&name) {
-                continue;
-            }
+            let name = os_name(&path)?;
             let logical = if prefix.is_empty() {
                 name
             } else {
@@ -182,10 +135,6 @@ fn plan_os_path(source: &Path, rules: PlanRules<'_>) -> Result<PlannedOs> {
             }
             let supported = child_meta.host_is_dir() || child_meta.host_is_file();
             if !supported || logical_name_rejected(&logical) {
-                if rules.lenient() {
-                    planned.skipped += 1;
-                    continue;
-                }
                 return Err(if supported {
                     layout_error(&path, "reserved or unsafe file name")
                 } else {
@@ -233,30 +182,16 @@ fn open_regular_file(path: &Path) -> Result<File> {
 
 /// Stage every entry. A full wave seals the index, and the tail is sealed once
 /// at the end. A returned error still abandons the new vault. A kill keeps the
-/// last sealed wave. A lenient walk skips a file that turned into a link or a
-/// special file after planning and returns how many it skipped.
-fn ingest_planned(
-    root: &VaultRoot,
-    vault_id: &str,
-    planned: &[PlannedOsEntry],
-    rules: PlanRules<'_>,
-) -> Result<usize> {
+/// last sealed wave.
+fn ingest_planned(root: &VaultRoot, vault_id: &str, planned: &[PlannedOsEntry]) -> Result<()> {
     let mut folders = HashSet::new();
-    let mut skipped = 0usize;
     for entry in planned {
         match entry {
             PlannedOsEntry::Directory(logical) => {
                 fs_ensure_folder_path_staged(root, vault_id, logical, &mut folders)?
             }
             PlannedOsEntry::File { logical, source } => {
-                let mut file = match open_regular_file(source) {
-                    Ok(file) => file,
-                    Err(UprivError::VaultStoreInvalid { .. }) if rules.lenient() => {
-                        skipped += 1;
-                        continue;
-                    }
-                    Err(error) => return Err(error),
-                };
+                let mut file = open_regular_file(source)?;
                 if let Some((parent, _)) = logical.rsplit_once('/') {
                     fs_ensure_folder_path_staged(root, vault_id, parent, &mut folders)?;
                 }
@@ -266,37 +201,35 @@ fn ingest_planned(
         fs_seal_staged_wave(root, vault_id)?;
     }
     fs_seal_staged_imports(root, vault_id)?;
-    Ok(skipped)
+    Ok(())
 }
 
 /// Create the vault, stream `planned` into it, and close it. A failure deletes
-/// the new vault. Returns the new id and how many files ingest skipped.
+/// the new vault.
 fn import_planned(
     root: &VaultRoot,
     config: VaultConfig,
     new_password: &[u8],
     preset: KdfUnlockPreset,
     planned: &PlannedOs,
-    rules: PlanRules<'_>,
     welcome: Option<VaultWelcome<'_>>,
-) -> Result<(String, usize)> {
+) -> Result<String> {
     create_vault(root, config.clone(), new_password, preset)?;
     let id = config.vault.id.trim().to_string();
     let ingest = (|| {
         open_vault_for_ingest(root, &id, new_password)?;
-        let skipped = ingest_planned(root, &id, &planned.entries, rules)?;
+        ingest_planned(root, &id, &planned.entries)?;
         if let Some(welcome) = welcome {
             seal_welcome_if_absent(root, &id, welcome)?;
         }
-        Ok(skipped)
+        Ok(())
     })();
-    let skipped = match ingest {
-        Ok(skipped) => skipped,
-        Err(ingest_error) => return Err(abandon_failed_import(root, &id, ingest_error)),
-    };
+    if let Err(ingest_error) = ingest {
+        return Err(abandon_failed_import(root, &id, ingest_error));
+    }
     close_vault(root, &id)?;
     log_event(LogLevel::Info, "vault_imported", &[("id", id.as_str())]);
-    Ok((id, skipped))
+    Ok(id)
 }
 
 /// Create a vault and stream `source` into it.
@@ -317,39 +250,8 @@ pub fn import_logical_os_path(
     if let Some(welcome) = welcome {
         welcome.files()?;
     }
-    let planned = plan_os_path(source, PlanRules::Strict)?;
-    import_planned(
-        root,
-        config,
-        new_password,
-        preset,
-        &planned,
-        PlanRules::Strict,
-        welcome,
-    )
-    .map(|(id, _)| id)
-}
-
-/// Create a vault from a plaintext folder a crash left behind.
-///
-/// Reads the folder like a chosen folder, except that links, special files,
-/// and names a vault cannot hold are skipped, as are the `helpers` Upriv wrote
-/// at its top. Returns the new id and the number of skipped entries.
-pub(super) fn import_plain_leftover_folder(
-    root: &VaultRoot,
-    config: VaultConfig,
-    new_password: &[u8],
-    preset: KdfUnlockPreset,
-    folder: &Path,
-    helpers: &[String],
-) -> Result<(String, usize)> {
-    if new_password.is_empty() {
-        return Err(UprivError::WrongPassword);
-    }
-    let rules = PlanRules::Leftover { skip_root: helpers };
-    let planned = plan_os_path(folder, rules)?;
-    let (id, skipped) = import_planned(root, config, new_password, preset, &planned, rules, None)?;
-    Ok((id, planned.skipped + skipped))
+    let planned = plan_os_path(source)?;
+    import_planned(root, config, new_password, preset, &planned, welcome)
 }
 
 /// Unlock a vault that was just created so files can be streamed in.

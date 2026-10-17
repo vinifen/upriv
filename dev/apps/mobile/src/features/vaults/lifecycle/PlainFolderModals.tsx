@@ -155,7 +155,8 @@ export function PlainPlaceModal({
               disabled={submitting || !canContinue || !choice}
               onPress={() => {
                 if (!choice || !canContinue) return;
-                const path = choice === "custom" ? customPath : choice === "vault_only" ? vaultPath : "";
+                const path =
+                  choice === "custom" ? customPath : choice === "vault_only" ? vaultPath : "";
                 onContinue(choice, path.trim());
               }}
             />
@@ -180,7 +181,9 @@ export function PlainPlaceModal({
               disabled={submitting || !workspaceChoices}
               onSelect={() => setChoice("default")}
               footer={
-                choice === "default" ? <PathField value={defaultPath} editable={false} /> : undefined
+                choice === "default" ? (
+                  <PathField value={defaultPath} editable={false} />
+                ) : undefined
               }
             />
             <PolicyRadioOption
@@ -220,7 +223,9 @@ export function PlainPlaceModal({
               }
             />
             {pickError ? (
-              <Text style={[typography.caption, { color: colors.onErrorContainer }]}>{pickError}</Text>
+              <Text style={[typography.caption, { color: colors.onErrorContainer }]}>
+                {pickError}
+              </Text>
             ) : null}
           </View>
         )}
@@ -268,7 +273,13 @@ interface PlainHeldModalProps {
   onRestore: () => void;
 }
 
-export function PlainHeldModal({ open, count, submitting, onApply, onRestore }: PlainHeldModalProps) {
+export function PlainHeldModal({
+  open,
+  count,
+  submitting,
+  onApply,
+  onRestore,
+}: PlainHeldModalProps) {
   const { t } = useTranslation();
   const { typography } = useTheme();
   return (

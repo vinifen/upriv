@@ -17,7 +17,6 @@ export const VAULT_ERROR_I18N_KEYS = {
   plain_destination_unconfirmed: "error.plain_destination_unconfirmed",
   plain_destination_invalid: "error.plain_destination_invalid",
   plain_leftover: "error.plain_leftover",
-  plain_leftover_gone: "error.plain_leftover_gone",
   plain_names_unsupported: "error.plain_names_unsupported",
   plain_space_short: "error.plain_space_short",
   plain_folder_unwritable: "error.plain_folder_unwritable",

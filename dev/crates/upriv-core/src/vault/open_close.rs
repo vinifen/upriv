@@ -140,7 +140,11 @@ pub fn open_vault(root: &VaultRoot, vault_id: &str, password: &[u8]) -> Result<O
 
 /// Fill the folder of a plaintext vault that is already unlocked, once the
 /// user agreed to `plain_path`. Close drops the keys if they cancel.
-pub fn confirm_plain_destination(root: &VaultRoot, vault_id: &str, plain_path: &Path) -> Result<()> {
+pub fn confirm_plain_destination(
+    root: &VaultRoot,
+    vault_id: &str,
+    plain_path: &Path,
+) -> Result<()> {
     let vault_dir = vault_dir_or_not_found(root, vault_id)?;
     if !is_vault_open_at(&vault_dir) {
         return Err(UprivError::VaultNotOpen(vault_id.to_string()));
@@ -266,7 +270,9 @@ fn open_unlocked_session(
             // other vaults must still open meanwhile.
             match super::plain::activate(root, vault_id, &vault_dir, consent) {
                 Ok(()) => {}
-                Err(UprivError::PlainDestinationUnconfirmed { path, class }) if consent.is_none() => {
+                Err(UprivError::PlainDestinationUnconfirmed { path, class })
+                    if consent.is_none() =>
+                {
                     log_event(LogLevel::Info, "vault_opened", &[("id", vault_id)]);
                     return Ok(OpenVaultOutcome::PlainConfirm { path, class });
                 }

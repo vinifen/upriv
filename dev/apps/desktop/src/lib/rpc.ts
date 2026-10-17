@@ -549,7 +549,11 @@ export async function rpcVaultPlainDestination(id: string): Promise<PlainDestina
   const raw = await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_PLAIN_DESTINATION, { id });
   const dest = parsePlainDestination(raw);
   if (!dest) {
-    throw new RpcError(BRIDGE_ERROR_CODES.INVALID_RESPONSE, "vault_plain_destination: expected path", raw);
+    throw new RpcError(
+      BRIDGE_ERROR_CODES.INVALID_RESPONSE,
+      "vault_plain_destination: expected path",
+      raw,
+    );
   }
   return dest;
 }
@@ -559,27 +563,17 @@ export async function rpcVaultPlainLeftover(id: string): Promise<PlainLeftover |
   if (raw === null) return null;
   const leftover = parsePlainLeftover(raw);
   if (!leftover) {
-    throw new RpcError(BRIDGE_ERROR_CODES.INVALID_RESPONSE, "vault_plain_leftover: expected object", raw);
+    throw new RpcError(
+      BRIDGE_ERROR_CODES.INVALID_RESPONSE,
+      "vault_plain_leftover: expected object",
+      raw,
+    );
   }
   return leftover;
 }
 
 export async function rpcVaultPlainRemove(id: string): Promise<void> {
   await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_PLAIN_REMOVE, { id });
-}
-
-export async function rpcVaultPlainImport(
-  id: string,
-  password: string,
-  unlockPreset: string,
-  settings: VaultSettingsConfig,
-): Promise<void> {
-  await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_PLAIN_IMPORT, {
-    id,
-    password,
-    unlockPreset,
-    settings: vaultSettingsForDaemon(settings),
-  });
 }
 
 export async function rpcVaultPlainSync(id: string): Promise<void> {

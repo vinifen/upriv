@@ -54,6 +54,7 @@ impl Marker {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn closed(&self) -> Self {
         Self {
             state: MarkerState::Closed,
@@ -89,7 +90,10 @@ pub(super) fn read(folder: &Path) -> io::Result<Option<Marker>> {
         .take(MARKER_MAX_BYTES + 1)
         .read_to_end(&mut bytes)?;
     if bytes.len() as u64 > MARKER_MAX_BYTES {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "marker too large"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "marker too large",
+        ));
     }
     let marker: Marker = serde_json::from_slice(&bytes)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
@@ -104,8 +108,8 @@ pub(super) fn read(folder: &Path) -> io::Result<Option<Marker>> {
 
 /// Replace the marker in `folder` in one rename.
 pub(super) fn write(folder: &Path, marker: &Marker) -> io::Result<()> {
-    let bytes =
-        serde_json::to_vec(marker).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    let bytes = serde_json::to_vec(marker)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
     let (temp, mut file) = disk::create_temp(folder)?;
     let written = (|| {
         file.write_all(&bytes)?;

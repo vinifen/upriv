@@ -595,20 +595,6 @@ export async function rpcVaultPlainRemove(id: string): Promise<void> {
   await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_PLAIN_REMOVE, { id });
 }
 
-export async function rpcVaultPlainImport(
-  id: string,
-  password: string,
-  unlockPreset: string,
-  settings: VaultSettingsConfig,
-): Promise<void> {
-  await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_PLAIN_IMPORT, {
-    id,
-    password,
-    unlockPreset,
-    settings: vaultSettingsForDaemon(settings),
-  });
-}
-
 export async function rpcVaultPlainSync(id: string): Promise<void> {
   await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_PLAIN_SYNC, { id });
 }

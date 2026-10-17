@@ -75,7 +75,8 @@ mod platform {
             return false;
         };
         fds.flatten().any(|fd| {
-            std::fs::read_link(fd.path()).is_ok_and(|target| target != folder && target.starts_with(folder))
+            std::fs::read_link(fd.path())
+                .is_ok_and(|target| target != folder && target.starts_with(folder))
         })
     }
 }
@@ -184,7 +185,13 @@ mod platform {
             let mut len = capacity as u32;
             let mut reasons = 0u32;
             let status = unsafe {
-                RmGetList(session, &mut needed, &mut len, info.as_mut_ptr(), &mut reasons)
+                RmGetList(
+                    session,
+                    &mut needed,
+                    &mut len,
+                    info.as_mut_ptr(),
+                    &mut reasons,
+                )
             };
             if status == ERROR_MORE_DATA && (needed as usize) > capacity && capacity < 1024 {
                 capacity = needed as usize;
@@ -196,7 +203,11 @@ mod platform {
             return info[..len as usize]
                 .iter()
                 .map(|app| {
-                    let end = app.app_name.iter().position(|unit| *unit == 0).unwrap_or(256);
+                    let end = app
+                        .app_name
+                        .iter()
+                        .position(|unit| *unit == 0)
+                        .unwrap_or(256);
                     PlainHolder {
                         name: String::from_utf16_lossy(&app.app_name[..end]),
                         pid: app.process.pid,
@@ -269,7 +280,10 @@ mod tests {
         let found = holders(&folder);
         let _ = child.kill();
         let _ = child.wait();
-        assert!(found.iter().any(|holder| holder.pid == child.id()), "{found:?}");
+        assert!(
+            found.iter().any(|holder| holder.pid == child.id()),
+            "{found:?}"
+        );
         assert!(holders(&tmp.path().join("Other")).is_empty());
     }
 }

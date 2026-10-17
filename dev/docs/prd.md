@@ -28,7 +28,7 @@ Differentiators vs. manual 7-Zip use:
 - **Standardized** vault-oriented layout (`.upriv/settings.toml`, `vaults/<vault_id>/` per vault)
 - Works on **external HD, local system folder, or synced cloud** (as long as the vault is a folder)
 - **Plan B:** export a `.7z` that opens in 7-Zip / ZArchiver (weaker offline guessing than `store/`; honest copy — not “more secure than 7-Zip”)
-- Recovery after dirty close (unlock the encrypted vault). A leftover `upriv_plain` folder stays until the user chooses Remove (default) or a new encrypted vault from that folder
+- Recovery after dirty close (unlock the encrypted vault). A leftover `upriv_plain` folder stays until the user removes it
 
 ### 1.2 Problem it solves
 
@@ -88,7 +88,7 @@ encrypted_dir / upriv_plain:
 - Implementation transients: `closing`, `opening`, `recovery` (not resting UI states).
 - **`open`:** active lock + mount (or plaintext workspace) + session key in RAM. Folders on disk are **not** sufficient.
 - **`closed`:** `store/` + `persistence.json` `closed` + no active session.
-- **Recovery:** dirty close → unlock the encrypted vault. A leftover `upriv_plain` folder is not adopted as the open session: Remove is the default, or encrypt that folder into a new vault and then wipe it. Dead header/index → create a **new** vault from backup (do not dual-pick archive vs store).
+- **Recovery:** dirty close → unlock the encrypted vault. A leftover `upriv_plain` folder is not adopted as the open session: recovery wipes that folder. Dead header/index → create a **new** vault from backup (do not dual-pick archive vs store).
 
 **Detection on startup (per vault):**
 
@@ -127,7 +127,7 @@ encrypted_dir / upriv_plain:
 
 | # | Risk | Product mitigation |
 |---|--------|----------------------|
-| 1 | Incomplete close | Recovery: unlock the encrypted vault again (`resume_store`). A leftover plaintext folder offers Remove (default) or a new encrypted vault from that folder. Create-from-backup is for a dead store (row 2), not a dirty-close peer |
+| 1 | Incomplete close | Recovery: unlock the encrypted vault again (`resume_store`). A leftover plaintext folder is wiped. Create-from-backup is for a dead store (row 2), not a dirty-close peer |
 | 2 | Dead `vault.header` / index | New vault from a `backups/<stamp>-<id>.zip` — not a dual store/`.7z` picker |
 | 3 | Direct writes to `workspace/` on HD (`encrypted_dir`) | **Virtual** mount (FUSE/WinFsp) or in-app FM; tests that forbid persistent plaintext |
 | 4 | Plaintext temp when exporting `.7z` | Pack in process with `sevenz-rust2`; never stage a decrypted tree |
@@ -269,7 +269,7 @@ encrypted_dir / upriv_plain:
 | RF-45 | (`encrypted_dir`) Flush / export `.7z` using **logical content stream** (do not pack `.enc` blobs; no plaintext temp) | P0 |
 | RF-46 | (`encrypted_dir`) After reboot: reopen requires password; data preserved in `store/` | P0 |
 | RF-47 | **`persistence.json`** per vault: last OK close timestamp; content identity lives in `vault.header` | P0 |
-| RF-48 | Recovery UI for dirty close: **`recovery.resume_store`** unlocks the encrypted vault. A leftover plaintext folder offers **Remove** (default) or a new encrypted vault from that folder. Create-from-backup is via Backups / New vault when the store is dead — not a dirty-close peer. No silent overwrite; no fake archive-vs-store compare | P0 |
+| RF-48 | Recovery UI for dirty close: **`recovery.resume_store`** unlocks the encrypted vault. A leftover plaintext folder shows a warning, and **Remove the folder** wipes it. Create-from-backup is via Backups / New vault when the store is dead — not a dirty-close peer. No silent overwrite; no fake archive-vs-store compare | P0 |
 | RF-49 | The encrypted file manager folder is **virtual mount only** — forbid plaintext persistence on HD; automated tests | P0 |
 | RF-49b | **Write-through:** every committed write via mount persists immediately to `store/`; what user saves in session is not "RAM only" | P0 |
 | RF-50 | Export `.7z`: in-process `sevenz-rust2` pack of logical content. Fail with insufficient RAM instead of a plaintext temp | P1 |

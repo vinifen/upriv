@@ -25,7 +25,9 @@ pub const PLAIN_POLICY_FILE: &str = ".upriv-plain-policy.json";
 /// layout in every folder, and anything under a [`PLAIN_RESERVED_PREFIX`] name.
 /// They are never listed, mounted, exported, or written to a plaintext folder.
 pub fn is_reserved_logical(path: &str) -> bool {
-    path == SEED_LOGICAL_PATH || file_name(path) == INTERNAL_WORKSPACE_FILE || is_plain_internal(path)
+    path == SEED_LOGICAL_PATH
+        || file_name(path) == INTERNAL_WORKSPACE_FILE
+        || is_plain_internal(path)
 }
 
 /// True when any part of `path` starts with [`PLAIN_RESERVED_PREFIX`].

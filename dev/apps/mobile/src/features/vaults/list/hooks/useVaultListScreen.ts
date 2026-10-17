@@ -256,7 +256,6 @@ export function useVaultListScreen() {
   const prevVaultRootEpochRef = useRef(vaultRootEpoch);
   const vaultRootEpochRef = useRef(vaultRootEpoch);
   vaultRootEpochRef.current = vaultRootEpoch;
-  const reloadRef = useRef<() => Promise<unknown>>(async () => undefined);
 
   const setVaultRuntimeState = useCallback(
     (
@@ -284,9 +283,6 @@ export function useVaultListScreen() {
     showToast: show,
     dismissToast: dismiss,
     onDiscardWorkspace: purgeForVaultClose,
-    onListReload: () => {
-      void reloadRef.current();
-    },
     onFlushWorkspace: flushWorkspaceSnapshot,
     onOpenFileManager: openFromVault,
     settingsPersistVaultIdsRef,
@@ -359,7 +355,6 @@ export function useVaultListScreen() {
     vaultGroupService,
     vaultService,
   ]);
-  reloadRef.current = reload;
 
   useEffect(() => {
     if (!settingsReady) return;

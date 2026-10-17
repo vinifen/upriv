@@ -72,7 +72,11 @@ pub fn refuse_config_save_if_busy(
 ///
 /// A plaintext folder left by an earlier session blocks a new folder path or
 /// mode. When either changes, the empty folder a clean close left goes.
-pub fn save_vault_config_checked(root: &VaultRoot, vault_id: &str, after: &VaultConfig) -> Result<()> {
+pub fn save_vault_config_checked(
+    root: &VaultRoot,
+    vault_id: &str,
+    after: &VaultConfig,
+) -> Result<()> {
     let vault_dir = root.vault_dir(vault_id)?;
     let vault_dir = vault_dir.as_path();
     if is_vault_preparing_at(vault_dir) {

@@ -670,7 +670,8 @@ impl EncryptedFs {
         let dir = self.vault_dir()?;
         with_open_session(&dir, |session| {
             Ok(session.index.nodes.iter().any(|node| {
-                !is_reserved_logical(&node.path) && parent_logical(&node.path).unwrap_or("") == logical
+                !is_reserved_logical(&node.path)
+                    && parent_logical(&node.path).unwrap_or("") == logical
             }))
         })
         .map_err(map_err)

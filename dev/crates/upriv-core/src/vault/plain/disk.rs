@@ -113,7 +113,8 @@ pub(super) fn scan(folder: &Path, skip_root: &[&str]) -> io::Result<Scan> {
                 scan.skipped += 1;
                 continue;
             };
-            if name.starts_with(PLAIN_RESERVED_PREFIX) || (rel.is_empty() && skip_root.contains(&name))
+            if name.starts_with(PLAIN_RESERVED_PREFIX)
+                || (rel.is_empty() && skip_root.contains(&name))
             {
                 continue;
             }
@@ -203,13 +204,15 @@ pub(super) fn stamp_at(path: &Path) -> io::Result<Option<Seen>> {
             Err(error) => return Err(error),
         };
         let info = host_fs::windows_file_info(&file)?;
-        Ok(if info.attributes & host_fs::WINDOWS_FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-            None
-        } else if info.attributes & host_fs::WINDOWS_FILE_ATTRIBUTE_DIRECTORY != 0 {
-            Some(Seen::Dir)
-        } else {
-            Some(Seen::File(stamp_of_info(&info)))
-        })
+        Ok(
+            if info.attributes & host_fs::WINDOWS_FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+                None
+            } else if info.attributes & host_fs::WINDOWS_FILE_ATTRIBUTE_DIRECTORY != 0 {
+                Some(Seen::Dir)
+            } else {
+                Some(Seen::File(stamp_of_info(&info)))
+            },
+        )
     }
     #[cfg(not(windows))]
     {
@@ -619,7 +622,10 @@ mod tests {
         let scan = scan(folder, &[".nomedia"]).unwrap();
         let mut paths: Vec<&str> = scan.entries.keys().map(String::as_str).collect();
         paths.sort_unstable();
-        assert_eq!(paths, vec!["docs", "docs/a.txt", "docs/deep", "docs/deep/b.txt"]);
+        assert_eq!(
+            paths,
+            vec!["docs", "docs/a.txt", "docs/deep", "docs/deep/b.txt"]
+        );
         assert!(matches!(scan.entries["docs/deep/b.txt"], Seen::File(stamp) if stamp.len == 2));
         #[cfg(unix)]
         assert_eq!(scan.skipped, 2);

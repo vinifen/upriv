@@ -5,8 +5,6 @@ import {
   applyPlainPlaceChoice,
   canRunIdleAutoClose,
   currentWorkspaceSystem,
-  DEFAULT_KDF_UNLOCK_PRESET,
-  displayNameToVaultId,
   idleWarningText,
   type IdleAutoCloseWarning,
   type IdleLockResult,
@@ -43,11 +41,7 @@ import {
 import { useAppSettingsContext } from "@/features/system/settings";
 import { useTranslation, type I18nKey } from "@/i18n";
 import { mobileErrorI18nKey } from "@/lib/errorMessages";
-import {
-  useVaultFileSystemService,
-  useVaultLifecycleService,
-  useVaultService,
-} from "@/platform/services";
+import { useVaultFileSystemService, useVaultLifecycleService } from "@/platform/services";
 import { TOAST_DEFAULT_MS, useClosingDisplayHold, useVaultPipelineRun } from "@upriv/shared/react";
 import { useFileManager } from "@/features/vaults/file-manager";
 import {
@@ -56,7 +50,6 @@ import {
   rpcVaultPlainDeletions,
   rpcVaultPlainDestination,
   rpcVaultPlainHeld,
-  rpcVaultPlainImport,
   rpcVaultPlainLeftover,
   rpcVaultPlainRemove,
   rpcVaultPlainSync,
@@ -82,8 +75,6 @@ interface UseVaultLifecycleOptions {
   dismissToast: () => void;
   /** Close in-app file manager when recovery discards a vault session. */
   onDiscardWorkspace?: (vaultId: string) => void;
-  /** Refresh the vault list after a leftover folder becomes a new vault. */
-  onListReload?: () => void;
   /** Flush layout into the open session before `vault_close`. */
   onFlushWorkspace?: (vaultId: string) => Promise<void>;
   /** Open the in-app file manager after a successful unlock (settings-gated). */
@@ -102,7 +93,6 @@ export function useVaultLifecycle({
   showToast,
   dismissToast,
   onDiscardWorkspace,
-  onListReload,
   onFlushWorkspace,
   onOpenFileManager,
   settingsPersistVaultIdsRef,
@@ -112,7 +102,6 @@ export function useVaultLifecycle({
   const { settings, patchSettings, getSettingsSnapshot } = useAppSettingsContext();
   const lifecycleService = useVaultLifecycleService();
   const fs = useVaultFileSystemService();
-  const vaultService = useVaultService();
   const { entries, maximize, dispatchWorkspace } = useFileManager();
   const pipeline = useVaultPipelineRun(mobileErrorI18nKey);
   const closingHold = useClosingDisplayHold();
@@ -1101,40 +1090,12 @@ export function useVaultLifecycle({
       setRecoverySubmitting(true);
       void (async () => {
         try {
-          if (action.kind === "remove_folder") {
-            await rpcVaultPlainRemove(vaultId);
-            onDiscardWorkspace?.(vaultId);
-            lifecycleService.clearPasswordInSession(vaultId);
-            setVaultRuntimeState(vaultId, { session: null, autoClosed: false });
-            setRecoveryVaultId(null);
-            showToast(t("toast.recovery_discarded"));
-            return;
-          }
-          const source = await rpcVaultConfigGet(vaultId);
-          const existingIds = vaultsRef.current.map((vault) => vault.id);
-          const id = displayNameToVaultId(action.displayName, existingIds);
-          const system = currentWorkspaceSystem();
-          const settings = normalizeVaultSettingsConfig({
-            ...source,
-            vault: {
-              ...source.vault,
-              id,
-              display_name: action.displayName,
-              password_hint: "",
-              note: "",
-              order: source.vault.order + 1,
-            },
-            storage: { mode: "encrypted_dir" },
-            mount: {
-              ...source.mount,
-              [system]: { ...source.mount[system], place: "unset", path: "" },
-            },
-          });
-          await rpcVaultPlainImport(vaultId, action.password, DEFAULT_KDF_UNLOCK_PRESET, settings);
+          await rpcVaultPlainRemove(vaultId);
+          onDiscardWorkspace?.(vaultId);
+          lifecycleService.clearPasswordInSession(vaultId);
           setVaultRuntimeState(vaultId, { session: null, autoClosed: false });
           setRecoveryVaultId(null);
-          onListReload?.();
-          showToast(t("recovery.new_vault"));
+          showToast(t("toast.recovery_discarded"));
         } catch {
           showToast(t("error.unexpected"));
         } finally {
@@ -1145,7 +1106,6 @@ export function useVaultLifecycle({
     [
       lifecycleService,
       onDiscardWorkspace,
-      onListReload,
       pipeline,
       recoveryVaultId,
       setLifecycleRequest,

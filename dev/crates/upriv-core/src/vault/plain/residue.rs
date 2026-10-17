@@ -188,7 +188,10 @@ mod linux {
 
     /// The home Trash, and the Trash folders at the top of the folder's drive.
     fn trash_dirs(folder: &Path) -> Vec<PathBuf> {
-        let mut dirs: Vec<PathBuf> = data_home().map(|home| home.join("Trash")).into_iter().collect();
+        let mut dirs: Vec<PathBuf> = data_home()
+            .map(|home| home.join("Trash"))
+            .into_iter()
+            .collect();
         if let Some(top) = super::super::volume::mount_root(folder) {
             let uid = unsafe { libc::geteuid() };
             let shared = top.join(".Trash");
@@ -203,9 +206,8 @@ mod linux {
 
     fn is_sticky_dir(path: &Path) -> bool {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::symlink_metadata(path).is_ok_and(|meta| {
-            meta.file_type().is_dir() && meta.permissions().mode() & 0o1000 != 0
-        })
+        std::fs::symlink_metadata(path)
+            .is_ok_and(|meta| meta.file_type().is_dir() && meta.permissions().mode() & 0o1000 != 0)
     }
 
     /// Wipe each Trash item that was deleted from inside `folder`.
@@ -235,7 +237,8 @@ mod linux {
             else {
                 continue;
             };
-            let Some(original) = read_small(&info).and_then(|text| trashed_path(&text, &top)) else {
+            let Some(original) = read_small(&info).and_then(|text| trashed_path(&text, &top))
+            else {
                 continue;
             };
             if !original.starts_with(folder) {
@@ -266,7 +269,11 @@ mod linux {
         let raw = text.lines().find_map(|line| line.strip_prefix("Path="))?;
         let decoded = percent_decode(raw.trim())?;
         let path = PathBuf::from(decoded);
-        Some(if path.is_absolute() { path } else { top.join(path) })
+        Some(if path.is_absolute() {
+            path
+        } else {
+            top.join(path)
+        })
     }
 
     fn percent_decode(raw: &str) -> Option<String> {
@@ -336,7 +343,9 @@ mod linux {
         let mut rest = text;
         let mut dropped = 0;
         while let Some(start) = rest.find("<bookmark ") {
-            let Some(end) = rest[start..].find("</bookmark>").map(|end| start + end + "</bookmark>".len())
+            let Some(end) = rest[start..]
+                .find("</bookmark>")
+                .map(|end| start + end + "</bookmark>".len())
             else {
                 break;
             };
@@ -466,7 +475,10 @@ mod linux {
                 trashed_path(absolute, Path::new("/")),
                 Some(PathBuf::from("/home/a/Notes/x.txt"))
             );
-            assert_eq!(trashed_path("[Trash Info]\nPath=%zz\n", Path::new("/")), None);
+            assert_eq!(
+                trashed_path("[Trash Info]\nPath=%zz\n", Path::new("/")),
+                None
+            );
         }
 
         #[test]
@@ -476,7 +488,10 @@ mod linux {
             std::fs::create_dir_all(trash.join("info")).unwrap();
             std::fs::create_dir_all(trash.join("files")).unwrap();
             let folder = tmp.path().join("Notes");
-            for (name, original) in [("a.txt", folder.join("a.txt")), ("b.txt", tmp.path().join("b.txt"))] {
+            for (name, original) in [
+                ("a.txt", folder.join("a.txt")),
+                ("b.txt", tmp.path().join("b.txt")),
+            ] {
                 std::fs::write(trash.join("files").join(name), b"secret").unwrap();
                 std::fs::write(
                     trash.join("info").join(format!("{name}.trashinfo")),
@@ -529,7 +544,10 @@ mod windows {
         if unsafe { GetVolumePathNameW(wide.as_ptr(), root.as_mut_ptr(), root.len() as u32) } == 0 {
             return;
         }
-        let end = root.iter().position(|unit| *unit == 0).unwrap_or(root.len());
+        let end = root
+            .iter()
+            .position(|unit| *unit == 0)
+            .unwrap_or(root.len());
         let root = String::from_utf16_lossy(&root[..end]);
         let root = root.strip_prefix(r"\\?\").unwrap_or(&root).to_string();
         let prefix = comparable(&folder.to_string_lossy());
@@ -546,7 +564,9 @@ mod windows {
                 let Some(suffix) = name.strip_prefix("$I") else {
                     continue;
                 };
-                let Some(original) = std::fs::read(item.path()).ok().and_then(|bytes| recycled_path(&bytes))
+                let Some(original) = std::fs::read(item.path())
+                    .ok()
+                    .and_then(|bytes| recycled_path(&bytes))
                 else {
                     continue;
                 };
@@ -571,7 +591,9 @@ mod windows {
 
     fn comparable(path: &str) -> String {
         let path = path.strip_prefix(r"\\?\").unwrap_or(path);
-        path.replace('/', "\\").trim_end_matches('\\').to_lowercase()
+        path.replace('/', "\\")
+            .trim_end_matches('\\')
+            .to_lowercase()
     }
 
     /// The original path in a `$I` file: version 1 (Vista to 8) keeps a fixed

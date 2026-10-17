@@ -43,10 +43,12 @@ export function parsePlainDestination(raw: unknown): PlainDestination | null {
   const body = record(raw);
   if (!body) return null;
   const folderClass = parseFolderClass(body.class);
-  const place = typeof body.place === "string" && PLACES.has(body.place as PlainPlace)
-    ? (body.place as PlainPlace)
-    : null;
-  if (typeof body.path !== "string" || body.path.length === 0 || !folderClass || !place) return null;
+  const place =
+    typeof body.place === "string" && PLACES.has(body.place as PlainPlace)
+      ? (body.place as PlainPlace)
+      : null;
+  if (typeof body.path !== "string" || body.path.length === 0 || !folderClass || !place)
+    return null;
   return { path: body.path, place, class: folderClass };
 }
 
@@ -99,15 +101,9 @@ export function parsePlainHolders(raw: unknown): PlainHolder[] {
   });
 }
 
-/**
- * A folder that is still there is recovery: Remove (default) or a new vault.
- * No folder means unlock the encrypted vault.
- */
+/** A folder that is still there is wiped. No folder means unlock the encrypted vault. */
 export function plainRecoveryOffers(leftover: PlainLeftover | null): PlainRecoveryOffers {
-  if (leftover?.found) {
-    return { resume: false, remove: true, create: true, defaultChoice: "remove_folder" };
-  }
-  return { resume: true, remove: false, create: false, defaultChoice: "resume_store" };
+  return { remove: leftover?.found === true };
 }
 
 /** Warning shown before writing a folder that may leave this computer. Local needs none. */

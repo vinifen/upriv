@@ -6,13 +6,13 @@ use std::path::Path;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use upriv_core::{
-    confirm_plain_destination, import_plain_leftover, open_vault, open_vault_confirmed,
-    plain_deletions, plain_destination, plain_holders, plain_leftover, plain_status, plain_sync,
-    remove_plain_leftover, vault_list_item, KdfUnlockPreset, OpenVaultOutcome, VaultConfig,
+    confirm_plain_destination, open_vault, open_vault_confirmed, plain_deletions,
+    plain_destination, plain_holders, plain_leftover, plain_status, plain_sync,
+    remove_plain_leftover, OpenVaultOutcome,
 };
 
 use super::secret::SecretString;
-use super::{err, map_core_err, ok, require_vault_root, vault_list_item_json, RpcResponse};
+use super::{err, map_core_err, ok, require_vault_root, RpcResponse};
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -42,16 +42,6 @@ struct VaultPlainConfirmParams {
 struct VaultPlainDeletionsParams {
     id: String,
     apply: bool,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct VaultPlainImportParams {
-    id: String,
-    password: SecretString,
-    #[serde(default)]
-    unlock_preset: Option<KdfUnlockPreset>,
-    settings: VaultConfig,
 }
 
 pub(super) fn vault_open(params: Value) -> RpcResponse {
@@ -146,38 +136,6 @@ pub(super) fn vault_plain_remove(params: Value) -> RpcResponse {
     };
     match remove_plain_leftover(&root, parsed.id.trim()) {
         Ok(wipe) => ok(serde_json::to_value(wipe).unwrap_or(json!(null))),
-        Err(error) => map_core_err(error),
-    }
-}
-
-pub(super) fn vault_plain_import(params: Value) -> RpcResponse {
-    let parsed: VaultPlainImportParams = match serde_json::from_value(params) {
-        Ok(value) => value,
-        Err(error) => return err("invalid_request", error.to_string()),
-    };
-    if parsed.password.is_empty() {
-        return err("invalid_request", "password is required".into());
-    }
-    let root = match require_vault_root() {
-        Ok(root) => root,
-        Err(response) => return response,
-    };
-    let preset = parsed.unlock_preset.unwrap_or(KdfUnlockPreset::M256);
-    match import_plain_leftover(
-        &root,
-        parsed.id.trim(),
-        parsed.settings,
-        parsed.password.as_bytes(),
-        preset,
-    ) {
-        Ok(made) => match vault_list_item(&root, &made.id) {
-            Ok(item) => ok(json!({
-                "vault": vault_list_item_json(&item),
-                "skipped": made.skipped,
-                "wipe": made.wipe,
-            })),
-            Err(error) => map_core_err(error),
-        },
         Err(error) => map_core_err(error),
     }
 }

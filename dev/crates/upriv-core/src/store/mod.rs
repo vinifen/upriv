@@ -39,11 +39,10 @@ pub use index::{
 pub use kdf::KdfUnlockPreset;
 pub use tree::{
     build_file_tree, child_logical_path, delete_empty_directory, delete_logical_path,
-    ensure_folder, file_name, from_ui_path, mkdir_logical, move_logical_path, parent_logical,
-    is_plain_internal, is_reserved_logical, relocate_logical_path, relocate_replacing,
-    rename_logical_path,
-    to_ui_path, unique_file_name, unique_folder_name, FileTreeNode, INTERNAL_WORKSPACE_FILE,
-    LOGICAL_NAME_MAX, PLAIN_POLICY_FILE, PLAIN_RESERVED_PREFIX,
+    ensure_folder, file_name, from_ui_path, is_plain_internal, is_reserved_logical, mkdir_logical,
+    move_logical_path, parent_logical, relocate_logical_path, relocate_replacing,
+    rename_logical_path, to_ui_path, unique_file_name, unique_folder_name, FileTreeNode,
+    INTERNAL_WORKSPACE_FILE, LOGICAL_NAME_MAX, PLAIN_POLICY_FILE, PLAIN_RESERVED_PREFIX,
 };
 
 use aead::{derive_layer_keys, random_master_key, ContentKey, INDEX_KEY_LEN, MASTER_KEY_LEN};
@@ -314,7 +313,10 @@ mod tests {
             vec!["p1".into()],
             vec![0],
         ));
-        assert_ne!(index_logical_hash(&nested).as_deref(), Some(before.as_str()));
+        assert_ne!(
+            index_logical_hash(&nested).as_deref(),
+            Some(before.as_str())
+        );
     }
 
     #[test]

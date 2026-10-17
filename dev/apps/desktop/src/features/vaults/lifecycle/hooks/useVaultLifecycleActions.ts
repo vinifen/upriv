@@ -4,8 +4,6 @@ import {
   applyPlainPlaceChoice,
   canRunIdleAutoClose,
   currentWorkspaceSystem,
-  DEFAULT_KDF_UNLOCK_PRESET,
-  displayNameToVaultId,
   idleWarningText,
   type IdleAutoCloseWarning,
   type IdleLockResult,
@@ -62,7 +60,6 @@ import {
   rpcVaultPlainDestination,
   rpcVaultPlainHeld,
   rpcVaultPlainHolders,
-  rpcVaultPlainImport,
   rpcVaultPlainLeftover,
   rpcVaultPlainRemove,
 } from "@/lib/rpc";
@@ -88,8 +85,6 @@ interface UseVaultLifecycleActionsOptions {
   settingsPersistVaultIdsRef?: MutableRefObject<Set<string>>;
   /** Closed-vault work (password / unlock RAM) that must refuse open. */
   blockOpenVaultIdsRef?: MutableRefObject<Set<string>>;
-  /** Refresh the vault list after a leftover folder becomes a new vault. */
-  onListReload?: () => void;
 }
 
 export function useVaultLifecycleActions({
@@ -102,7 +97,6 @@ export function useVaultLifecycleActions({
   t,
   settingsPersistVaultIdsRef,
   blockOpenVaultIdsRef,
-  onListReload,
 }: UseVaultLifecycleActionsOptions) {
   const vaultService = useVaultService();
   const fs = useVaultFileSystemService();
@@ -192,9 +186,7 @@ export function useVaultLifecycleActions({
     paths: string[];
   } | null>(null);
   const [heldSubmitting, setHeldSubmitting] = useState(false);
-  const [recoveryLeftover, setRecoveryLeftover] = useState<PlainLeftover | null | undefined>(
-    null,
-  );
+  const [recoveryLeftover, setRecoveryLeftover] = useState<PlainLeftover | null | undefined>(null);
   const [closeHolderNames, setCloseHolderNames] = useState<string[]>([]);
 
   useEffect(() => {
@@ -1291,40 +1283,12 @@ export function useVaultLifecycleActions({
       setRecoverySubmitting(true);
       void (async () => {
         try {
-          if (action.kind === "remove_folder") {
-            await rpcVaultPlainRemove(vaultId);
-            purgeForVaultClose(vaultId);
-            lifecycleService.clearPasswordInSession(vaultId);
-            setVaultRuntimeState(vaultId, { session: null, autoClosed: false });
-            setRecoveryVaultId(null);
-            showToast(t("toast.recovery_discarded"));
-            return;
-          }
-          const source = await rpcVaultConfigGet(vaultId);
-          const existingIds = vaultsRef.current.map((vault) => vault.id);
-          const id = displayNameToVaultId(action.displayName, existingIds);
-          const system = currentWorkspaceSystem();
-          const settings = normalizeVaultSettingsConfig({
-            ...source,
-            vault: {
-              ...source.vault,
-              id,
-              display_name: action.displayName,
-              password_hint: "",
-              note: "",
-              order: source.vault.order + 1,
-            },
-            storage: { mode: "encrypted_dir" },
-            mount: {
-              ...source.mount,
-              [system]: { ...source.mount[system], place: "unset", path: "" },
-            },
-          });
-          await rpcVaultPlainImport(vaultId, action.password, DEFAULT_KDF_UNLOCK_PRESET, settings);
+          await rpcVaultPlainRemove(vaultId);
+          purgeForVaultClose(vaultId);
+          lifecycleService.clearPasswordInSession(vaultId);
           setVaultRuntimeState(vaultId, { session: null, autoClosed: false });
           setRecoveryVaultId(null);
-          onListReload?.();
-          showToast(t("recovery.new_vault"));
+          showToast(t("toast.recovery_discarded"));
         } catch (error) {
           showError(error, "error.unexpected");
         } finally {
@@ -1344,7 +1308,6 @@ export function useVaultLifecycleActions({
       showError,
       showToast,
       t,
-      onListReload,
     ],
   );
 

@@ -199,7 +199,11 @@ fn mark_session_closed_locked(root: &VaultRoot, vault_id: &str) -> Result<()> {
 
 /// Record a plaintext folder before any of it is written. The vault's session
 /// must already be recorded as open.
-pub(crate) fn add_plain_record(root: &VaultRoot, vault_id: &str, record: PlainRecord) -> Result<()> {
+pub(crate) fn add_plain_record(
+    root: &VaultRoot,
+    vault_id: &str,
+    record: PlainRecord,
+) -> Result<()> {
     with_state_lock(|| {
         let mut state = load_runtime_state(root)?;
         let entry = state
@@ -214,7 +218,11 @@ pub(crate) fn add_plain_record(root: &VaultRoot, vault_id: &str, record: PlainRe
 
 /// Record a plaintext folder found on disk without a record, for a vault
 /// that is not open. Its entry is made when missing.
-pub(crate) fn adopt_plain_record(root: &VaultRoot, vault_id: &str, record: PlainRecord) -> Result<()> {
+pub(crate) fn adopt_plain_record(
+    root: &VaultRoot,
+    vault_id: &str,
+    record: PlainRecord,
+) -> Result<()> {
     with_state_lock(|| {
         let mut state = load_runtime_state(root)?;
         state.format_version = 1;
@@ -260,7 +268,10 @@ pub(crate) fn plain_records(root: &VaultRoot, vault_id: &str) -> Result<Vec<Plai
 }
 
 /// The plaintext folder this computer can reach, if one is recorded.
-pub(crate) fn reachable_plain_record(root: &VaultRoot, vault_id: &str) -> Result<Option<PlainRecord>> {
+pub(crate) fn reachable_plain_record(
+    root: &VaultRoot,
+    vault_id: &str,
+) -> Result<Option<PlainRecord>> {
     let host = this_host();
     Ok(plain_records(root, vault_id)?
         .into_iter()

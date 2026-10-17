@@ -117,7 +117,9 @@ fn find(dir: &Path) -> Option<Arc<Worker>> {
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 impl Worker {
@@ -127,7 +129,11 @@ impl Worker {
     }
 
     fn poke_folder(&self) {
-        Due::poke(&mut lock(&self.schedule).folder, FOLDER_QUIET, FOLDER_MAX_WAIT);
+        Due::poke(
+            &mut lock(&self.schedule).folder,
+            FOLDER_QUIET,
+            FOLDER_MAX_WAIT,
+        );
         self.wake.notify_one();
     }
 

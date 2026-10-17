@@ -23,7 +23,6 @@ export const VAULT_ERROR_CODES = {
   PLAIN_DESTINATION_UNCONFIRMED: "plain_destination_unconfirmed",
   PLAIN_DESTINATION_INVALID: "plain_destination_invalid",
   PLAIN_LEFTOVER: "plain_leftover",
-  PLAIN_LEFTOVER_GONE: "plain_leftover_gone",
   PLAIN_NAMES_UNSUPPORTED: "plain_names_unsupported",
   PLAIN_SPACE_SHORT: "plain_space_short",
   PLAIN_FOLDER_UNWRITABLE: "plain_folder_unwritable",

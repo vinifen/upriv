@@ -522,14 +522,16 @@ pub fn bridge_stat(path: &Path) -> Option<io::Result<Option<ListedStat>>> {
         Ok(Route::Bridge { rel, bridge, .. }) => (rel, bridge),
         Err(error) => return Some(Err(error)),
     };
-    Some(stat_bridge(bridge.as_ref(), &rel).map(|stat| match stat.kind {
-        NodeKind::Missing => None,
-        NodeKind::File | NodeKind::Dir => Some(ListedStat {
-            dir: stat.kind == NodeKind::Dir,
-            len: stat.len,
-            modified_ms: stat.modified_ms,
+    Some(
+        stat_bridge(bridge.as_ref(), &rel).map(|stat| match stat.kind {
+            NodeKind::Missing => None,
+            NodeKind::File | NodeKind::Dir => Some(ListedStat {
+                dir: stat.kind == NodeKind::Dir,
+                len: stat.len,
+                modified_ms: stat.modified_ms,
+            }),
         }),
-    }))
+    )
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

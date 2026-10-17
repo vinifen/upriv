@@ -129,97 +129,98 @@ export function PlainPlaceModal({
         }}
         panelClassName="max-w-lg"
         rootClassName="z-[140]"
-      footer={
-        <div className="flex flex-wrap justify-end gap-2">
-          <Button variant="ghost" size="sm" disabled={submitting} onClick={onClose}>
-            {t("action.cancel")}
-          </Button>
+        footer={
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button variant="ghost" size="sm" disabled={submitting} onClick={onClose}>
+              {t("action.cancel")}
+            </Button>
+            {warningKey ? (
+              <Button variant="primary" size="sm" disabled={submitting} onClick={onAcceptWarning}>
+                {t("plain.confirm.action")}
+              </Button>
+            ) : (
+              <Button
+                variant="primary"
+                size="sm"
+                disabled={submitting || !canContinue || !choice}
+                onClick={() => {
+                  if (!choice || !canContinue) return;
+                  const path =
+                    choice === "custom" ? customPath : choice === "vault_only" ? vaultPath : "";
+                  onContinue(choice, path.trim());
+                }}
+              >
+                {t("action.continue")}
+              </Button>
+            )}
+          </div>
+        }
+      >
+        <div className="space-y-4">
+          <p className="text-sm leading-relaxed text-on-surface-variant">{t("plain.place.body")}</p>
           {warningKey ? (
-            <Button variant="primary" size="sm" disabled={submitting} onClick={onAcceptWarning}>
-              {t("plain.confirm.action")}
-            </Button>
+            <p className="text-sm leading-relaxed text-on-surface-variant">{t(warningKey)}</p>
           ) : (
-            <Button
-              variant="primary"
-              size="sm"
-              disabled={submitting || !canContinue || !choice}
-              onClick={() => {
-                if (!choice || !canContinue) return;
-                const path = choice === "custom" ? customPath : choice === "vault_only" ? vaultPath : "";
-                onContinue(choice, path.trim());
-              }}
-            >
-              {t("action.continue")}
-            </Button>
+            <div role="radiogroup" aria-label={t("plain.place.title")} className="grid gap-2">
+              {!workspaceChoices ? (
+                <p className="text-sm leading-relaxed text-on-surface-variant">
+                  {t("plain.place.workspace_locked")}
+                </p>
+              ) : null}
+              <PolicyRadioOption
+                groupName={group}
+                value="default"
+                checked={choice === "default"}
+                title={t("plain.place.default")}
+                description={t("plain.place.default_desc")}
+                disabled={submitting || !workspaceChoices}
+                onSelect={() => setChoice("default")}
+                footer={
+                  choice === "default" ? <PathField value={defaultPath} readOnly /> : undefined
+                }
+              />
+              <PolicyRadioOption
+                groupName={group}
+                value="custom"
+                checked={choice === "custom"}
+                title={t("plain.place.custom")}
+                description={t("plain.place.custom_desc")}
+                disabled={submitting || !workspaceChoices}
+                onSelect={() => selectFolderChoice("custom", customPath, setCustomPath)}
+                footer={
+                  choice === "custom" ? (
+                    <PlacePathEditor
+                      value={customPath}
+                      disabled={submitting}
+                      onChange={setCustomPath}
+                      onPick={() => pickInto(setCustomPath, customPath)}
+                    />
+                  ) : undefined
+                }
+              />
+              <PolicyRadioOption
+                groupName={group}
+                value="vault_only"
+                checked={choice === "vault_only"}
+                title={t("plain.place.vault_only")}
+                description={t("plain.place.vault_only_desc")}
+                disabled={submitting}
+                onSelect={() => selectFolderChoice("vault_only", vaultPath, setVaultPath)}
+                footer={
+                  choice === "vault_only" ? (
+                    <PlacePathEditor
+                      value={vaultPath}
+                      disabled={submitting}
+                      onChange={setVaultPath}
+                      onPick={() => pickInto(setVaultPath, vaultPath)}
+                    />
+                  ) : undefined
+                }
+              />
+            </div>
           )}
         </div>
-      }
-    >
-      <div className="space-y-4">
-        <p className="text-sm leading-relaxed text-on-surface-variant">{t("plain.place.body")}</p>
-        {warningKey ? (
-          <p className="text-sm leading-relaxed text-on-surface-variant">{t(warningKey)}</p>
-        ) : (
-          <div role="radiogroup" aria-label={t("plain.place.title")} className="grid gap-2">
-            {!workspaceChoices ? (
-              <p className="text-sm leading-relaxed text-on-surface-variant">
-                {t("plain.place.workspace_locked")}
-              </p>
-            ) : null}
-            <PolicyRadioOption
-              groupName={group}
-              value="default"
-              checked={choice === "default"}
-              title={t("plain.place.default")}
-              description={t("plain.place.default_desc")}
-              disabled={submitting || !workspaceChoices}
-              onSelect={() => setChoice("default")}
-              footer={
-                choice === "default" ? <PathField value={defaultPath} readOnly /> : undefined
-              }
-            />
-            <PolicyRadioOption
-              groupName={group}
-              value="custom"
-              checked={choice === "custom"}
-              title={t("plain.place.custom")}
-              description={t("plain.place.custom_desc")}
-              disabled={submitting || !workspaceChoices}
-              onSelect={() => selectFolderChoice("custom", customPath, setCustomPath)}
-              footer={
-                choice === "custom" ? (
-                  <PlacePathEditor
-                    value={customPath}
-                    disabled={submitting}
-                    onChange={setCustomPath}
-                    onPick={() => pickInto(setCustomPath, customPath)}
-                  />
-                ) : undefined
-              }
-            />
-            <PolicyRadioOption
-              groupName={group}
-              value="vault_only"
-              checked={choice === "vault_only"}
-              title={t("plain.place.vault_only")}
-              description={t("plain.place.vault_only_desc")}
-              disabled={submitting}
-              onSelect={() => selectFolderChoice("vault_only", vaultPath, setVaultPath)}
-              footer={
-                choice === "vault_only" ? (
-                  <PlacePathEditor
-                    value={vaultPath}
-                    disabled={submitting}
-                    onChange={setVaultPath}
-                    onPick={() => pickInto(setVaultPath, vaultPath)}
-                  />
-                ) : undefined
-              }
-            />
-          </div>
-        )}
-      </div>
-    </Modal>
+      </Modal>
       <Toast toast={toast} onDismiss={dismiss} className="z-[160]" />
     </>
   );

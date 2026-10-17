@@ -43,10 +43,7 @@ use crate::vault::wipe::WipeOptions;
 
 pub use dest::{plain_destination, PlainDestination, PlainPlace};
 pub use holders::PlainHolder;
-pub use leftover::{
-    import_plain_leftover, plain_leftover, remove_plain_leftover, PlainLeftover,
-    PlainLeftoverImport, PlainWipe,
-};
+pub use leftover::{plain_leftover, remove_plain_leftover, PlainLeftover, PlainWipe};
 pub use volume::PlainFolderClass;
 pub use worker::{set_plain_observer, PlainObserver};
 
@@ -84,7 +81,13 @@ pub(crate) struct PlainSession {
 }
 
 impl PlainSession {
-    fn new(folder: PathBuf, token: String, helpers: Vec<String>, made_folder: bool, rules: NameRules) -> Self {
+    fn new(
+        folder: PathBuf,
+        token: String,
+        helpers: Vec<String>,
+        made_folder: bool,
+        rules: NameRules,
+    ) -> Self {
         Self {
             bridge: crate::host_fs::is_bridge_path(&folder),
             folder,
@@ -200,7 +203,11 @@ pub struct PlainCloseSummary {
 
 /// Before the unlock: a leftover folder, a place this system cannot use, or
 /// a folder that is not free stops the open before the key is derived.
-pub(crate) fn check_before_unlock(root: &VaultRoot, vault_id: &str, config: &VaultConfig) -> Result<()> {
+pub(crate) fn check_before_unlock(
+    root: &VaultRoot,
+    vault_id: &str,
+    config: &VaultConfig,
+) -> Result<()> {
     leftover::ensure_no_leftover(root, vault_id)?;
     let dest = dest::resolve(root, config)?;
     dest::check(root, vault_id, &dest)?;
@@ -243,7 +250,10 @@ pub(crate) fn activate(
     if !unsupported.is_empty() {
         return Err(UprivError::PlainNamesUnsupported {
             count: unsupported.len(),
-            examples: unsupported.into_iter().take(names::MAX_NAME_EXAMPLES).collect(),
+            examples: unsupported
+                .into_iter()
+                .take(names::MAX_NAME_EXAMPLES)
+                .collect(),
         });
     }
     dest::ensure_parent(root, &dest)?;
@@ -256,16 +266,24 @@ pub(crate) fn activate(
     let token = uuid::Uuid::new_v4().simple().to_string();
     let record = PlainRecord {
         host: crate::lockfile::hostname()?,
-        path: leftover::record_path(root, &dest).ok_or_else(|| UprivError::WorkspacePathInvalid {
-            path: dest.folder.clone(),
-            detail: "folder path is not valid UTF-8".into(),
+        path: leftover::record_path(root, &dest).ok_or_else(|| {
+            UprivError::WorkspacePathInvalid {
+                path: dest.folder.clone(),
+                detail: "folder path is not valid UTF-8".into(),
+            }
         })?,
         in_data_folder: dest.in_data_folder(),
         token: token.clone(),
         since: crate::time::utc_timestamp_iso_millis(),
     };
     runtime_state::add_plain_record(root, vault_id, record)?;
-    let plain = PlainSession::new(dest.folder.clone(), token, helpers, leaf.made_by_upriv(), rules);
+    let plain = PlainSession::new(
+        dest.folder.clone(),
+        token,
+        helpers,
+        leaf.made_by_upriv(),
+        rules,
+    );
     let marker = Marker::open(vault_id, &plain.token, &plain.helpers, plain.made_folder);
     if let Err(error) = with_open_session(vault_dir, |session| {
         session.plain = Some(plain);
@@ -398,7 +416,11 @@ pub(crate) fn resume_after_failed_close(vault_dir: &Path, vault_id: &str) {
     let wipe = WipeOptions::for_vault_dir(vault_dir);
     let worker = worker::register(vault_id, vault_dir, wipe);
     if worker::start(&worker, &folder).is_err() {
-        log_event(LogLevel::Warn, "vault_plain_sync_stopped", &[("id", vault_id)]);
+        log_event(
+            LogLevel::Warn,
+            "vault_plain_sync_stopped",
+            &[("id", vault_id)],
+        );
     }
 }
 
@@ -448,7 +470,12 @@ pub(crate) fn after_close(
 /// Only files whose stamp is the one the last pass saw are wiped, so this
 /// runs even when the marker is gone: a folder put in its place holds none
 /// of them.
-fn wipe_session(root: &VaultRoot, vault_id: &str, plain: &PlainSession, opts: &WipeOptions) -> PlainWipe {
+fn wipe_session(
+    root: &VaultRoot,
+    vault_id: &str,
+    plain: &PlainSession,
+    opts: &WipeOptions,
+) -> PlainWipe {
     let folder = plain.folder.as_path();
     let marker = marker::read(folder)
         .ok()

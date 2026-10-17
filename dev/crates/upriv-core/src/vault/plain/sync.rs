@@ -389,7 +389,9 @@ fn unix_nanos_now() -> i128 {
 }
 
 /// Positions of the entries whose key no other entry shares.
-fn unique_keys<K: Eq + std::hash::Hash>(keys: impl Iterator<Item = Option<K>>) -> HashMap<K, usize> {
+fn unique_keys<K: Eq + std::hash::Hash>(
+    keys: impl Iterator<Item = Option<K>>,
+) -> HashMap<K, usize> {
     let mut seen: HashMap<K, Option<usize>> = HashMap::new();
     for (index, key) in keys.enumerate() {
         if let Some(key) = key {
@@ -404,9 +406,7 @@ fn unique_keys<K: Eq + std::hash::Hash>(keys: impl Iterator<Item = Option<K>>) -
 }
 
 fn move_key(stamp: &DiskStamp) -> Option<((u64, u64), u64, i128)> {
-    stamp
-        .inode
-        .map(|inode| (inode, stamp.len, stamp.modified))
+    stamp.inode.map(|inode| (inode, stamp.len, stamp.modified))
 }
 
 /// A file that left one folder path and appeared at another with the same
@@ -637,10 +637,7 @@ impl Pass<'_> {
 }
 
 fn plain_mut(session: &mut OpenSession) -> &mut PlainSession {
-    session
-        .plain
-        .as_mut()
-        .expect("checked by Pass::with_plain")
+    session.plain.as_mut().expect("checked by Pass::with_plain")
 }
 
 /// Run one pass. `closing` only saves the folder's changes into the store.
@@ -852,7 +849,8 @@ fn settle_conflict(
     let from = pass.os(&conflict.path);
     let moved = aside.as_ref().and_then(|aside| {
         let to = pass.os(aside);
-        let unchanged = matches!(disk::stamp_at(&from), Ok(Some(Seen::File(now))) if now == conflict.disk);
+        let unchanged =
+            matches!(disk::stamp_at(&from), Ok(Some(Seen::File(now))) if now == conflict.disk);
         if !unchanged || crate::host_fs::rename_no_replace(&from, &to).is_err() {
             return None;
         }
@@ -917,7 +915,8 @@ fn conflict_name(path: &str, stamp: &str, taken: impl Fn(&str) -> bool) -> Optio
         while !stem.is_char_boundary(cut) {
             cut -= 1;
         }
-        let candidate = child_logical_path(parent, &format!("{}{suffix}{ext}", &stem[..cut])).ok()?;
+        let candidate =
+            child_logical_path(parent, &format!("{}{suffix}{ext}", &stem[..cut])).ok()?;
         (!taken(&candidate)).then_some(candidate)
     })
 }
@@ -977,7 +976,9 @@ fn add_store_dir(pass: &mut Pass<'_>, dir: &str) -> Result<()> {
     let made = pass.with_plain(|session| {
         let made = ensure_store_dirs(session, dir)?;
         if made {
-            plain_mut(session).synced.insert(dir.to_string(), Synced::Dir);
+            plain_mut(session)
+                .synced
+                .insert(dir.to_string(), Synced::Dir);
         }
         Ok(made)
     })?;
@@ -1076,10 +1077,9 @@ fn import_file(pass: &mut Pass<'_>, import: &Import) -> Result<bool> {
         let retired = stage_sealed(session, &import.path, sealed)?;
         let node = node_stamp_at(&session.index, &import.path)
             .ok_or_else(|| UprivError::VaultPathNotFound(import.path.clone()))?;
-        plain_mut(session).synced.insert(
-            import.path.clone(),
-            Synced::File { node, disk: opened },
-        );
+        plain_mut(session)
+            .synced
+            .insert(import.path.clone(), Synced::File { node, disk: opened });
         Ok(Some(retired))
     })?;
     let Some(retired) = saved else {
@@ -1286,7 +1286,9 @@ fn replace_checked(
     // reachable for the overwrite after the name points at the new file.
     #[cfg(unix)]
     if !pass.bridge {
-        if let Ok(mut old) = crate::paths::open_nofollow(target, crate::paths::NofollowMode::ReadWrite) {
+        if let Ok(mut old) =
+            crate::paths::open_nofollow(target, crate::paths::NofollowMode::ReadWrite)
+        {
             if disk::stamp_of_file(&old)? != *expected {
                 return Err(folder_copy_changed());
             }
@@ -1335,7 +1337,11 @@ fn replace_via_aside(
     Ok(())
 }
 
-fn delete_in_store(pass: &mut Pass<'_>, files: &[(String, NodeStamp)], dirs: &[String]) -> Result<()> {
+fn delete_in_store(
+    pass: &mut Pass<'_>,
+    files: &[(String, NodeStamp)],
+    dirs: &[String],
+) -> Result<()> {
     if files.is_empty() && dirs.is_empty() {
         return Ok(());
     }
@@ -1374,7 +1380,11 @@ fn delete_in_store(pass: &mut Pass<'_>, files: &[(String, NodeStamp)], dirs: &[S
     pass.seal(true)
 }
 
-fn delete_in_folder(pass: &mut Pass<'_>, files: &[(String, DiskStamp)], dirs: &[String]) -> Result<()> {
+fn delete_in_folder(
+    pass: &mut Pass<'_>,
+    files: &[(String, DiskStamp)],
+    dirs: &[String],
+) -> Result<()> {
     for (path, disk) in files {
         match sweep::wipe_one(pass.folder, path, disk, pass.wipe) {
             Ok(true) => {
@@ -1410,7 +1420,10 @@ pub(super) fn settle_held(session: &mut OpenSession, apply: bool) -> Result<u32>
         .ok_or_else(|| UprivError::VaultNotOpen(session.vault_id.clone()))?;
     let mut doomed = Vec::new();
     for path in std::mem::take(&mut plain.held) {
-        let gone = matches!(disk::stamp_at(&disk::os_path(&plain.folder, &path)), Ok(None));
+        let gone = matches!(
+            disk::stamp_at(&disk::os_path(&plain.folder, &path)),
+            Ok(None)
+        );
         if !gone {
             continue;
         }
@@ -1567,7 +1580,10 @@ mod tests {
         let plan = plan(
             &view(&[("a.txt", file("a2")), ("b.txt", file("b"))]),
             &plain,
-            &scan(&[("a.txt", Seen::File(old)), ("c.txt", Seen::File(stamp(2, 3, 4)))]),
+            &scan(&[
+                ("a.txt", Seen::File(old)),
+                ("c.txt", Seen::File(stamp(2, 3, 4))),
+            ]),
             true,
             LATER,
         );
@@ -1580,7 +1596,10 @@ mod tests {
     fn a_rename_in_the_folder_moves_the_store_file() {
         let disk = stamp(1, 10, 7);
         let plain = session(&[("old.txt", synced_file("a", disk))]);
-        let renamed = DiskStamp { changed: 99, ..disk };
+        let renamed = DiskStamp {
+            changed: 99,
+            ..disk
+        };
         let plan = plan(
             &view(&[("old.txt", file("a"))]),
             &plain,
@@ -1598,7 +1617,10 @@ mod tests {
     #[test]
     fn two_files_with_the_same_move_key_are_not_matched() {
         let disk = stamp(1, 10, 7);
-        let plain = session(&[("a.txt", synced_file("a", disk)), ("b.txt", synced_file("b", disk))]);
+        let plain = session(&[
+            ("a.txt", synced_file("a", disk)),
+            ("b.txt", synced_file("b", disk)),
+        ]);
         let plan = plan(
             &view(&[("a.txt", file("a")), ("b.txt", file("b"))]),
             &plain,
@@ -1636,7 +1658,10 @@ mod tests {
             .iter()
             .map(|name| (name.as_str(), synced_file(name, disk)))
             .collect();
-        let store: Vec<(&str, Side)> = names.iter().map(|name| (name.as_str(), file(name))).collect();
+        let store: Vec<(&str, Side)> = names
+            .iter()
+            .map(|name| (name.as_str(), file(name)))
+            .collect();
         let plain = session(&synced);
 
         let held = plan(&view(&store), &plain, &scan(&[]), false, LATER);
@@ -1665,7 +1690,13 @@ mod tests {
             LATER,
         );
         assert_eq!(back.unhold, vec!["a.txt".to_string()]);
-        let still = plan(&view(&[("a.txt", file("a"))]), &plain, &scan(&[]), false, LATER);
+        let still = plan(
+            &view(&[("a.txt", file("a"))]),
+            &plain,
+            &scan(&[]),
+            false,
+            LATER,
+        );
         assert!(still.unhold.is_empty());
         assert!(still.store_deletes.is_empty());
         assert!(still.hold.is_empty());
@@ -1677,7 +1708,13 @@ mod tests {
         let plain = session(&[("docs/a.txt", synced_file("a", disk))]);
         let mut seen = scan(&[]);
         seen.unreadable.push("docs".into());
-        let plan = plan(&view(&[("docs/a.txt", file("a"))]), &plain, &seen, false, LATER);
+        let plan = plan(
+            &view(&[("docs/a.txt", file("a"))]),
+            &plain,
+            &seen,
+            false,
+            LATER,
+        );
         assert!(plan.store_deletes.is_empty());
         assert!(plan.hold.is_empty());
         assert!(plan.exports.is_empty());
@@ -1689,17 +1726,35 @@ mod tests {
     }
 
     fn plan_for(plain: &PlainSession, seen: &Scan) -> Plan {
-        plan(&view(&[("docs/a.txt", file("a"))]), plain, seen, false, LATER)
+        plan(
+            &view(&[("docs/a.txt", file("a"))]),
+            plain,
+            seen,
+            false,
+            LATER,
+        )
     }
 
     #[test]
     fn a_folder_copy_is_deleted_only_while_unchanged() {
         let disk = stamp(1, 10, 1);
         let plain = session(&[("a.txt", synced_file("a", disk))]);
-        let unchanged = plan(&view(&[]), &plain, &scan(&[("a.txt", Seen::File(disk))]), false, LATER);
+        let unchanged = plan(
+            &view(&[]),
+            &plain,
+            &scan(&[("a.txt", Seen::File(disk))]),
+            false,
+            LATER,
+        );
         assert_eq!(unchanged.folder_deletes.len(), 1);
         let edited = stamp(2, 20, 1);
-        let changed = plan(&view(&[]), &plain, &scan(&[("a.txt", Seen::File(edited))]), false, LATER);
+        let changed = plan(
+            &view(&[]),
+            &plain,
+            &scan(&[("a.txt", Seen::File(edited))]),
+            false,
+            LATER,
+        );
         assert!(changed.folder_deletes.is_empty());
         assert_eq!(changed.imports.len(), 1);
     }
@@ -1737,7 +1792,10 @@ mod tests {
     #[test]
     fn an_emptied_folder_tree_leaves_the_store_and_a_kept_one_comes_back() {
         let disk = stamp(1, 10, 1);
-        let plain = session(&[("docs", Synced::Dir), ("docs/a.txt", synced_file("a", disk))]);
+        let plain = session(&[
+            ("docs", Synced::Dir),
+            ("docs/a.txt", synced_file("a", disk)),
+        ]);
         let gone = plan(
             &view(&[("docs", Side::Dir), ("docs/a.txt", file("a"))]),
             &plain,
@@ -1767,7 +1825,10 @@ mod tests {
     fn reserved_store_paths_never_reach_the_folder() {
         let mut index = VaultIndex::empty();
         crate::store::mkdir_logical(&mut index, "docs").unwrap();
-        for (path, file_id) in [("docs/a.txt", "a"), (crate::store::PLAIN_POLICY_FILE, "policy")] {
+        for (path, file_id) in [
+            ("docs/a.txt", "a"),
+            (crate::store::PLAIN_POLICY_FILE, "policy"),
+        ] {
             crate::store::record_imported_file(
                 &mut index,
                 path,

@@ -141,6 +141,8 @@ mod local {
         }
     }
 
+    // `libc::stat` field widths differ across Unix; the casts are no-ops on Linux.
+    #[allow(clippy::unnecessary_cast)]
     fn from_raw(st: &libc::stat) -> Stat {
         let kind = match st.st_mode & libc::S_IFMT {
             libc::S_IFREG => Kind::File,
@@ -251,7 +253,11 @@ mod local {
         }
 
         fn open_file(&self, name: &CStr, write: bool) -> io::Result<std::fs::File> {
-            let access = if write { libc::O_WRONLY } else { libc::O_RDONLY };
+            let access = if write {
+                libc::O_WRONLY
+            } else {
+                libc::O_RDONLY
+            };
             let flags =
                 access | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_NOCTTY | libc::O_CLOEXEC;
             let fd = unsafe { libc::openat(self.fd.as_raw_fd(), name.as_ptr(), flags) };
@@ -395,7 +401,11 @@ mod local {
         }
     }
 
-    pub(super) fn wipe_one(path: &Path, expected: &DiskStamp, opts: &WipeOptions) -> io::Result<bool> {
+    pub(super) fn wipe_one(
+        path: &Path,
+        expected: &DiskStamp,
+        opts: &WipeOptions,
+    ) -> io::Result<bool> {
         let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
             return Ok(false);
         };
@@ -530,7 +540,13 @@ mod local {
         }
     }
 
-    fn sweep_child_dir(path: &Path, rel: &str, volume: u32, depth: usize, walk: &mut Walk<'_>) -> bool {
+    fn sweep_child_dir(
+        path: &Path,
+        rel: &str,
+        volume: u32,
+        depth: usize,
+        walk: &mut Walk<'_>,
+    ) -> bool {
         if depth + 1 > MAX_DEPTH {
             walk.out.keep(rel);
             return false;
@@ -642,7 +658,11 @@ mod local {
         }
         let mut streams = Vec::new();
         loop {
-            let end = data.name.iter().position(|&unit| unit == 0).unwrap_or(MAX_STREAM_NAME);
+            let end = data
+                .name
+                .iter()
+                .position(|&unit| unit == 0)
+                .unwrap_or(MAX_STREAM_NAME);
             let full = String::from_utf16_lossy(&data.name[..end]);
             // `:name:$DATA`; the main stream is `::$DATA`.
             if let Some(name) = full
@@ -660,7 +680,11 @@ mod local {
         Ok(streams)
     }
 
-    pub(super) fn wipe_one(path: &Path, expected: &DiskStamp, opts: &WipeOptions) -> io::Result<bool> {
+    pub(super) fn wipe_one(
+        path: &Path,
+        expected: &DiskStamp,
+        opts: &WipeOptions,
+    ) -> io::Result<bool> {
         let info = match inspect(path) {
             Ok(info) => info,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
@@ -686,7 +710,11 @@ mod local {
         Err(io::Error::from(io::ErrorKind::Unsupported))
     }
 
-    pub(super) fn wipe_one(_path: &Path, _expected: &DiskStamp, _opts: &WipeOptions) -> io::Result<bool> {
+    pub(super) fn wipe_one(
+        _path: &Path,
+        _expected: &DiskStamp,
+        _opts: &WipeOptions,
+    ) -> io::Result<bool> {
         Err(io::Error::from(io::ErrorKind::Unsupported))
     }
 }
@@ -766,7 +794,11 @@ mod bridge {
         crate::vault::wipe::wipe_file_then_unlink(path, opts)
     }
 
-    pub(super) fn wipe_one(path: &Path, expected: &DiskStamp, opts: &WipeOptions) -> io::Result<bool> {
+    pub(super) fn wipe_one(
+        path: &Path,
+        expected: &DiskStamp,
+        opts: &WipeOptions,
+    ) -> io::Result<bool> {
         match disk::stamp_at(path)? {
             Some(disk::Seen::File(stamp)) if stamp == *expected => {
                 wipe_file(path, opts)?;
@@ -825,7 +857,10 @@ mod tests {
         assert!(swept.kept.is_empty());
         assert!(std::fs::symlink_metadata(folder.join("dir-link")).is_err());
         assert!(std::fs::symlink_metadata(folder.join("file-link")).is_err());
-        assert_eq!(std::fs::read(outside.join("keep.txt")).unwrap(), b"not vault data");
+        assert_eq!(
+            std::fs::read(outside.join("keep.txt")).unwrap(),
+            b"not vault data"
+        );
     }
 
     #[test]

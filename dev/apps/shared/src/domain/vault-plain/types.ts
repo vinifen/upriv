@@ -47,16 +47,11 @@ export interface PlainHolder {
 
 /** What recovery offers once the leftover lookup has finished. */
 export interface PlainRecoveryOffers {
-  resume: boolean;
+  /** A leftover folder is still there and recovery wipes it. */
   remove: boolean;
-  create: boolean;
-  defaultChoice: "resume_store" | "remove_folder";
 }
 
-export type PlainRecoveryAction =
-  | { kind: "resume_store" }
-  | { kind: "remove_folder" }
-  | { kind: "new_vault"; displayName: string; password: string };
+export type PlainRecoveryAction = { kind: "resume_store" } | { kind: "remove_folder" };
 
 /** Unlock was dismissed while core waited for the folder confirm. Not a failure. */
 export const PLAIN_OPEN_CANCELLED = "plain_open_cancelled";

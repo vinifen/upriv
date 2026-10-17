@@ -505,9 +505,6 @@ export function useVaultListScreen() {
     t,
     settingsPersistVaultIdsRef,
     blockOpenVaultIdsRef,
-    onListReload: () => {
-      void refresh();
-    },
   });
 
   const handleSortChange = useCallback(
