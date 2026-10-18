@@ -670,6 +670,47 @@ pub fn read_logical_file(
     Ok(out)
 }
 
+/// `sha256:<hex>` of one file's plaintext, one chunk in RAM at a time.
+/// Tag / AAD failure returns an error and no digest.
+pub(crate) fn plaintext_sha256(
+    store_dir: &Path,
+    header: &VaultHeader,
+    content_key: &[u8; CONTENT_KEY_LEN],
+    node: &VaultNode,
+) -> Result<String> {
+    use sha2::{Digest, Sha256};
+    use zeroize::Zeroize;
+    let not_a_file = || UprivError::VaultStoreInvalid {
+        path: PathBuf::from(&node.path),
+        detail: "logical path is a directory".into(),
+    };
+    let (file_id, size, chunk_versions) = node.as_file().ok_or_else(not_a_file)?;
+    let chunk_offsets = node.chunk_offsets().ok_or_else(not_a_file)?;
+    let count = chunk_count(size, header.chunk_size);
+    require_chunk_lists(&node.path, count, chunk_versions, chunk_offsets)?;
+    let mut hasher = Sha256::new();
+    if count > 0 {
+        let mut blob = open_blob_read(store_dir, file_id)?;
+        for chunk_index in 0..count {
+            let mut plain = decrypt_one_chunk(
+                &mut blob,
+                header,
+                content_key,
+                SealedChunk {
+                    file_id,
+                    index: chunk_index,
+                    plain_len: chunk_plain_len(size, chunk_index, header.chunk_size),
+                    version: &chunk_versions[chunk_index as usize],
+                    offset: chunk_offsets[chunk_index as usize],
+                },
+            )?;
+            hasher.update(&plain);
+            plain.zeroize();
+        }
+    }
+    Ok(format!("sha256:{:x}", hasher.finalize()))
+}
+
 struct BlobRead {
     file: crate::host_fs::File,
     path: PathBuf,

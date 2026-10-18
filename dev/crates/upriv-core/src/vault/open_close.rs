@@ -21,7 +21,7 @@ use crate::session::{
 };
 use crate::store::{
     content_hash_hex, flush_index_parts, index_logical_hash, open_store, pack_blob_waste,
-    BlobPackMode, ChunkBlobMutation,
+    refresh_content_digests, BlobPackMode, ChunkBlobMutation,
 };
 
 use super::backup::{backup_on_close, classify_backup_failure, list_backups, promote_backup_save};
@@ -404,6 +404,14 @@ fn close_vault_inner(
             super::fs::sync_staged_blobs(&session.staged_blobs)?;
             session.staged_blobs.clear();
         }
+        // Before the seal, so the digests are stored and the next close reads
+        // only the files written after this one.
+        refresh_content_digests(
+            &store,
+            &session.header,
+            &session.content_key,
+            &mut session.index,
+        );
         if let Err(error) =
             flush_index_parts(&store, &session.header, &session.index_key, &session.index)
         {
@@ -733,6 +741,96 @@ mode = "encrypted_dir"
         let after_edit = list_backups(&root, "notes").unwrap();
         assert_eq!(after_edit.len(), 1);
         assert_ne!(after_edit[0].file_name, first[0].file_name);
+    }
+
+    fn backup_names(root: &crate::paths::VaultRoot) -> Vec<String> {
+        list_backups(root, "notes")
+            .unwrap()
+            .into_iter()
+            .map(|entry| entry.file_name)
+            .collect()
+    }
+
+    #[test]
+    fn rewriting_the_same_bytes_does_not_create_a_backup() {
+        let (_tmp, root) = vault_root_with(&[]);
+        let mut config = sample_config("notes", "Notes");
+        config.backup.keep_last = 9;
+        create_vault(&root, config, b"pass-word-ok", KdfUnlockPreset::M32).unwrap();
+        open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        crate::vault::fs_write_file(&root, "notes", "/a.txt", b"alpha").unwrap();
+        crate::vault::fs_write_file(&root, "notes", "/b.txt", b"beta").unwrap();
+        close_vault(&root, "notes").unwrap();
+        let first = backup_names(&root);
+        assert_eq!(first.len(), 1);
+
+        // New blob, chunk versions, and timestamps; the node also moves in the index.
+        open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        crate::vault::fs_write_file(&root, "notes", "/a.txt", b"alpha").unwrap();
+        crate::vault::fs_write_file(&root, "notes", "/a.txt", b"alpha").unwrap();
+        close_vault(&root, "notes").unwrap();
+        assert_eq!(backup_names(&root), first);
+
+        // Same size, different bytes.
+        open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        crate::vault::fs_write_file(&root, "notes", "/a.txt", b"ALPHA").unwrap();
+        close_vault(&root, "notes").unwrap();
+        assert_eq!(backup_names(&root).len(), 2);
+    }
+
+    #[test]
+    fn close_seals_a_current_digest_for_every_file() {
+        let (_tmp, root) = vault_root_with(&[]);
+        create_vault(
+            &root,
+            sample_config("notes", "Notes"),
+            b"pass-word-ok",
+            KdfUnlockPreset::M32,
+        )
+        .unwrap();
+        open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        crate::vault::fs_write_file(&root, "notes", "/a.txt", b"alpha").unwrap();
+        crate::vault::fs_write_file(&root, "notes", "/empty.txt", b"").unwrap();
+        close_vault(&root, "notes").unwrap();
+        let store = root
+            .vault_dir("notes")
+            .unwrap()
+            .join(crate::paths::STORE_DIR_NAME);
+        let opened = open_store(&store, b"pass-word-ok").unwrap();
+        for path in ["a.txt", "empty.txt"] {
+            let node = opened.index.find(path).expect(path);
+            assert!(node.current_digest().is_some(), "{path} has a digest");
+        }
+        assert!(index_logical_hash(&opened.index).is_some());
+    }
+
+    #[test]
+    fn close_reads_only_files_whose_storage_moved() {
+        let (_tmp, root) = vault_root_with(&[]);
+        let mut config = sample_config("notes", "Notes");
+        config.backup.keep_last = 9;
+        create_vault(&root, config, b"pass-word-ok", KdfUnlockPreset::M32).unwrap();
+        open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        crate::vault::fs_write_file(&root, "notes", "/a.txt", b"alpha").unwrap();
+        close_vault(&root, "notes").unwrap();
+        let first = backup_names(&root);
+        assert_eq!(first.len(), 1);
+
+        // Break a.txt on disk. A close that decrypted it would get no digest
+        // and write a backup; an untouched file keeps its sealed digest.
+        let store = root
+            .vault_dir("notes")
+            .unwrap()
+            .join(crate::paths::STORE_DIR_NAME);
+        let opened = open_store(&store, b"pass-word-ok").unwrap();
+        let (file_id, _, _) = opened.index.find("a.txt").unwrap().as_file().unwrap();
+        let blob = crate::store::blob_path(&store, file_id).unwrap();
+        let len = crate::host_fs::read(&blob).unwrap().len();
+        crate::host_fs::write(&blob, vec![0u8; len]).unwrap();
+
+        open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        close_vault(&root, "notes").unwrap();
+        assert_eq!(backup_names(&root), first);
     }
 
     #[test]

@@ -49,6 +49,20 @@ pub struct VaultNode {
     /// Unix epoch milliseconds (see `crate::time::unix_millis`).
     pub created_at: u64,
     pub modified_at: u64,
+    /// Plaintext digest for the close backup check. Close fills it for each
+    /// file whose storage moved since it was computed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_digest: Option<ContentDigest>,
+}
+
+/// SHA-256 of a file's plaintext, bound to the storage it was read from.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ContentDigest {
+    /// `sha256:<hex>` of the plaintext bytes.
+    pub sha256: String,
+    /// [`VaultNode::storage_tag`] when it was computed. A rewrite, pack, or
+    /// truncate moves the tag, so a stale digest is never reused.
+    pub storage: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -89,6 +103,7 @@ impl VaultNode {
             },
             created_at: now,
             modified_at: now,
+            content_digest: None,
         }
     }
 
@@ -99,7 +114,33 @@ impl VaultNode {
             kind: VaultNodeKind::Dir,
             created_at: now,
             modified_at: now,
+            content_digest: None,
         }
+    }
+
+    /// Where a file's ciphertext lives: blob id, size, chunk versions and
+    /// offsets. Chunk AAD binds the id and versions, so the same tag means the
+    /// same plaintext. `None` for a directory.
+    pub fn storage_tag(&self) -> Option<String> {
+        use sha2::{Digest, Sha256};
+        let VaultNodeKind::File {
+            file_id,
+            size,
+            chunk_versions,
+            chunk_offsets,
+        } = &self.kind
+        else {
+            return None;
+        };
+        let bytes = serde_json::to_vec(&(file_id, size, chunk_versions, chunk_offsets)).ok()?;
+        Some(format!("sha256:{:x}", Sha256::digest(&bytes)))
+    }
+
+    /// The plaintext digest when it still matches this file's storage.
+    pub fn current_digest(&self) -> Option<&str> {
+        let digest = self.content_digest.as_ref()?;
+        (Some(digest.storage.as_str()) == self.storage_tag().as_deref())
+            .then_some(digest.sha256.as_str())
     }
 
     pub fn is_dir(&self) -> bool {
