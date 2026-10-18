@@ -50,7 +50,8 @@ pub use tree::{
 
 use aead::{derive_layer_keys, random_master_key, ContentKey, INDEX_KEY_LEN, MASTER_KEY_LEN};
 use header::{create_header, save_header};
-use index::{load_sealed_index, save_sealed_index, VaultIndex as Index};
+pub(crate) use index::load_sealed_index;
+use index::{save_sealed_index, VaultIndex as Index};
 
 pub struct OpenedStore {
     pub header: VaultHeader,

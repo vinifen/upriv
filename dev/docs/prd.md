@@ -271,7 +271,7 @@ encrypted_dir / upriv_plain:
 | RF-47 | **`persistence.json`** per vault: last OK close timestamp; content identity lives in `vault.header` | P0 |
 | RF-48 | Recovery UI for dirty close: **`recovery.resume_store`** unlocks the encrypted vault. A leftover plaintext folder shows a warning, and **Remove the folder** wipes it. Create-from-backup is via Backups / New vault when the store is dead — not a dirty-close peer. No silent overwrite; no fake archive-vs-store compare | P0 |
 | RF-49 | The encrypted file manager folder is **virtual mount only** — forbid plaintext persistence on HD; automated tests | P0 |
-| RF-49b | **Write-through:** every committed write via mount persists immediately to `store/`; what user saves in session is not "RAM only" | P0 |
+| RF-49b | **Write-through:** every write via mount puts its encrypted chunk in `store/` at once; the index naming it is sealed when the file is flushed, closed, or fsynced, and within about 2 s otherwise. What the user saves never waits for vault close; a crash loses at most writes from the last 2 s that were not flushed | P0 |
 | RF-50 | Export `.7z`: in-process `sevenz-rust2` pack of logical content. Fail with insufficient RAM instead of a plaintext temp | P1 |
 | RF-51 | **Minimize swap** of session data buffers (`mlock` / per-OS policies where supported) | P1 |
 | RF-52 | Who can open files while the vault is open is the file manager folder. Off keeps them in Upriv. On is a folder on this computer; apps that can see that path can read the files. No separate copy-out block | P1 |
@@ -297,7 +297,7 @@ At rest the vault body is **`store/`** (`header/vault.header`, `header/vault.hea
 2. Ciphertext lives in `vaults/<id>/store/`
 3. `upriv_plain` workspace wiped if that mode was used
 
-**During `open`:** write-through updates `store/` immediately (RF-49b). UI state = **`vault.status.open`** (runtime).
+**During `open`:** write-through puts each write's ciphertext in `store/` at once and seals it on flush, close, fsync, or within about 2 s (RF-49b). UI state = **`vault.status.open`** (runtime).
 
 **After OK close:** session keys dropped; `store/` is the rest body.
 

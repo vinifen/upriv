@@ -64,6 +64,21 @@ pub struct OpenSession {
     /// Blob files named in the session and not yet flushed with the index.
     #[zeroize(skip)]
     pub staged_blobs: Vec<PathBuf>,
+    /// Range writes waiting for the next index seal. Every seal clears it.
+    #[zeroize(skip)]
+    pub deferred: Option<DeferredWrites>,
+}
+
+/// Range writes whose chunks are already in their blobs while the sealed index
+/// still names the bytes from before them.
+#[derive(Debug, Clone)]
+pub struct DeferredWrites {
+    /// Names this batch, so a timer seals only the batch it was started for.
+    pub batch: u64,
+    /// Plaintext bytes written in the batch.
+    pub bytes: u64,
+    /// Blobs the batch wrote to, checked for dead ciphertext after the seal.
+    pub blob_ids: Vec<String>,
 }
 
 impl OpenSession {
@@ -94,6 +109,7 @@ impl OpenSession {
             import_seq: 0,
             sealing: false,
             staged_blobs: Vec::new(),
+            deferred: None,
         }
     }
 }

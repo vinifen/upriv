@@ -1204,6 +1204,9 @@ unsafe extern "C" fn cleanup_file(
         };
         let marked = opened.delete_on_cleanup.load(Ordering::Relaxed);
         if flags & FSP_CLEANUP_DELETE == 0 && !marked {
+            // The handle is closing: seal what it wrote. Cleanup cannot report
+            // an error; a failed seal stays pending for the next one or close.
+            let _ = vfs::fs_flush(&fs.root, &fs.vault_id);
             return;
         }
         fs.delete_opened(opened);
@@ -1297,10 +1300,12 @@ unsafe extern "C" fn flush_file(
     file_info: *mut FileInfo,
 ) -> i32 {
     catch_status(|| {
+        let fs = vault(fs)?;
+        // FlushFileBuffers on a file, or a flush of the whole volume.
+        vfs::fs_flush(&fs.root, &fs.vault_id).map_err(map_err)?;
         if context.is_null() {
             return Ok(());
         }
-        let fs = vault(fs)?;
         let opened = opened(context)?;
         let logical = fs.path_of(opened.id)?;
         write_info(file_info, fs.file_info_of(&fs.find_node(&logical)?));

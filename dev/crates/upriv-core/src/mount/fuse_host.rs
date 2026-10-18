@@ -201,6 +201,7 @@ const HOST: FuseHost = FuseHost {
     delete: host_delete,
     rmdir: host_rmdir,
     relocate: host_relocate,
+    flush: host_flush,
 };
 
 fn io_errno(error: &UprivError) -> i32 {
@@ -512,6 +513,17 @@ unsafe extern "C" fn host_relocate(
         new_name,
         replace != 0,
     ) {
+        Ok(_) => 0,
+        Err(error) => io_errno(&error),
+    }
+}
+
+unsafe extern "C" fn host_flush(root: *const c_char, vault_id: *const c_char) -> i32 {
+    let (root, vault_id) = match (vault_root(root), text(vault_id)) {
+        (Ok(root), Ok(vault_id)) => (root, vault_id),
+        _ => return libc::EINVAL,
+    };
+    match vfs::fs_flush(&root, vault_id) {
         Ok(_) => 0,
         Err(error) => io_errno(&error),
     }

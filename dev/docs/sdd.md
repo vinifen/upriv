@@ -236,12 +236,13 @@ App / Explorer  →  file manager folder/nota.txt  (logical path)
 - Write: caller → encrypt stream → chunk in `store/` (**write-through**).
 - `workspace/` is empty mountpoint until `open()`; after `close()`, unmounted (directory may exist empty).
 
-**Write-through invariant (RF-49b):** after a successful `write()` / file `close()` on the mount, the corresponding logical content **is already** in `store/` on disk — there is no “RAM-only version” as source of truth.
+**Write-through invariant (RF-49b):** each `write()` on the mount puts its encrypted chunk in `store/` before it returns; plaintext never waits in RAM for close. The sealed index that names those chunks is written on the handle's flush/`close`, on `fsync`, with any other committed change, after 64 MiB of pending writes, and at the latest about 2 s after the first pending write. Until then the sealed index still names the previous bytes, and no later write overwrites them, so a crash loses at most that batch and never a sealed file. Batching keeps a large copy from resealing the whole index on every write.
 
 | Event | Minimum guarantee |
 |-------|-------------------|
-| App writes and flush/`close` on handle | Updated encrypted chunk in `store/` |
+| App writes and flush/`close` on handle | Updated encrypted chunk in `store/`, named by the sealed index |
 | `fsync` on file (OS/editor) | Encrypted data on disk (not only app buffer) |
+| Writes, then no flush for about 2 s | Same as a flush |
 | Vault close | Global flush of session into `store/` |
 
 **Do not confuse:** read cache in RAM ≠ authoritative copy; on-disk authority is always `store/` after committed write.

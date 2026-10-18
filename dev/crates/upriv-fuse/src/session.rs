@@ -408,6 +408,16 @@ impl EncryptedFs {
         }
     }
 
+    /// Seal the writes the daemon left for the next index seal.
+    fn flush_store(&self) -> Result<(), i32> {
+        let rc = unsafe { (self.host.flush)(self.root.as_ptr(), self.vault_id.as_ptr()) };
+        if rc == 0 {
+            Ok(())
+        } else {
+            Err(rc)
+        }
+    }
+
     fn relocate_at(
         &self,
         from: &str,
@@ -912,6 +922,40 @@ impl Filesystem for EncryptedFs {
         }
     }
 
+    /// Each `close` of a descriptor. The writes made through it reach the
+    /// sealed index before `close` returns (SDD write-through, RF-49b).
+    fn flush(
+        &mut self,
+        _req: &Request<'_>,
+        _ino: u64,
+        _fh: u64,
+        _lock_owner: u64,
+        reply: ReplyEmpty,
+    ) {
+        match self.flush_store() {
+            Ok(()) => reply.ok(),
+            Err(code) => reply.error(code),
+        }
+    }
+
+    /// The last descriptor and mapping are gone. Pages written back from a
+    /// mapping after the final `flush` land here.
+    fn release(
+        &mut self,
+        _req: &Request<'_>,
+        _ino: u64,
+        _fh: u64,
+        _flags: i32,
+        _lock_owner: Option<u64>,
+        _flush: bool,
+        reply: ReplyEmpty,
+    ) {
+        match self.flush_store() {
+            Ok(()) => reply.ok(),
+            Err(code) => reply.error(code),
+        }
+    }
+
     fn fsync(
         &mut self,
         _req: &Request<'_>,
@@ -920,7 +964,10 @@ impl Filesystem for EncryptedFs {
         _datasync: bool,
         reply: ReplyEmpty,
     ) {
-        reply.ok();
+        match self.flush_store() {
+            Ok(()) => reply.ok(),
+            Err(code) => reply.error(code),
+        }
     }
 
     fn statfs(&mut self, _req: &Request<'_>, _ino: u64, reply: fuser::ReplyStatfs) {
