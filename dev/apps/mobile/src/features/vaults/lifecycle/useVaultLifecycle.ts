@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
-import { AppState } from "react-native";
+import { AppState, Platform } from "react-native";
 import {
   appConfigEditAllowed,
   applyPlainPlaceChoice,
@@ -1130,7 +1130,7 @@ export function useVaultLifecycle({
       const vaultId = placeVaultId;
       setPlaceSubmitting(true);
       try {
-        const system = currentWorkspaceSystem();
+        const system = currentWorkspaceSystem(Platform.OS);
         await applyPlainPlaceChoice({
           choice,
           path,
@@ -1156,8 +1156,8 @@ export function useVaultLifecycle({
           return;
         }
         openPasswordAfterPlace(vaultId);
-      } catch {
-        showToast(t("error.unexpected"));
+      } catch (error) {
+        showToast(t(mobileErrorI18nKey(error, "error.unexpected")));
       } finally {
         setPlaceSubmitting(false);
       }

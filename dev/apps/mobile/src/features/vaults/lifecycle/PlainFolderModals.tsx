@@ -3,6 +3,7 @@ import { StyleSheet, Text, View } from "react-native";
 import {
   plainFolderClassI18nKey,
   suggestedDefaultWorkspacePath,
+  workspacePathDisplay,
   vaultRootPathForWorkspaceValidation,
   type PlainFolderClass,
   type PlainPlaceChoice,
@@ -182,7 +183,7 @@ export function PlainPlaceModal({
               onSelect={() => setChoice("default")}
               footer={
                 choice === "default" ? (
-                  <PathField value={defaultPath} editable={false} />
+                  <PathField value={workspacePathDisplay(defaultPath)} editable={false} />
                 ) : undefined
               }
             />

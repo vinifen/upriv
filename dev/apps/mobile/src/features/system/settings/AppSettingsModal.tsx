@@ -18,6 +18,7 @@ import {
   appWorkspacePlace,
   validateWorkspaceTable,
   suggestedDefaultWorkspacePath,
+  workspacePathDisplay,
   workspaceTablesEqual,
   workspaceSystemFromHost,
   workspaceSystemHasShortcut,
@@ -696,7 +697,12 @@ function WorkspaceFields({
                       setCustomPending(false);
                       onChange({ [system]: { ...entry, place: "beside", path: "" } });
                     }}
-                    footer={<PathField value={defaultWorkspacePath} editable={false} />}
+                    footer={
+                      <PathField
+                        value={workspacePathDisplay(defaultWorkspacePath)}
+                        editable={false}
+                      />
+                    }
                   />
                   <PolicyRadioOption
                     value="custom"
