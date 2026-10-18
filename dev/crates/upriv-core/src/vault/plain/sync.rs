@@ -1836,6 +1836,7 @@ mod tests {
                 0,
                 Vec::new(),
                 Vec::new(),
+                None,
             )
             .unwrap();
         }

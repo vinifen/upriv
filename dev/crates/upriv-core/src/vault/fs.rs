@@ -393,6 +393,8 @@ struct PreparedImport {
     versions: Vec<String>,
     offsets: Vec<u64>,
     size: u64,
+    /// Digest of the plaintext read, when the session tracks digests.
+    sha256: Option<String>,
 }
 
 impl Drop for PreparedImport {
@@ -403,6 +405,8 @@ impl Drop for PreparedImport {
 
 /// Read, encrypt, and write this file's blob. The session lock stays free so
 /// other imports can do the same work at the same time. `None` is an empty file.
+/// With `hash`, the plaintext digest is taken from the same buffer.
+#[allow(clippy::too_many_arguments)]
 fn seal_into_new_blob(
     store: &Path,
     header: &crate::store::VaultHeader,
@@ -411,7 +415,9 @@ fn seal_into_new_blob(
     reader: &mut (impl Read + ?Sized),
     map_read: impl FnOnce(std::io::Error) -> UprivError,
     sync_dir: bool,
+    hash: bool,
 ) -> Result<Option<PreparedImport>> {
+    use sha2::Digest;
     let chunk_size = header.chunk_size as usize;
     if chunk_size == 0 {
         return Err(UprivError::VaultStoreInvalid {
@@ -425,12 +431,16 @@ fn seal_into_new_blob(
     let mut offsets = Vec::new();
     let mut size = 0u64;
     let mut index = 0u32;
+    let mut hasher = hash.then(sha2::Sha256::new);
     let outcome = loop {
         let n = match read_full_chunk(reader, &mut buf) {
             Ok(0) => break Ok(()),
             Ok(n) => n,
             Err(error) => break Err(map_read(error)),
         };
+        if let Some(hasher) = hasher.as_mut() {
+            hasher.update(&buf[..n]);
+        }
         let piece = match seal_import_chunk(header, content_key, file_id, index, &buf[..n]) {
             Ok(piece) => piece,
             Err(error) => {
@@ -485,18 +495,28 @@ fn seal_into_new_blob(
         versions,
         offsets,
         size,
+        sha256: hasher.map(crate::store::sha256_hex),
     }))
 }
 
+/// Header, content key, and whether this session keeps plaintext digests.
 fn session_secrets(
     dir: &Path,
-) -> Result<(crate::store::VaultHeader, zeroize::Zeroizing<[u8; 32]>)> {
-    let (header, mut raw_key) = with_open_session(dir, |session| {
-        Ok((session.header.clone(), session.content_key))
+) -> Result<(
+    crate::store::VaultHeader,
+    zeroize::Zeroizing<[u8; 32]>,
+    bool,
+)> {
+    let (header, mut raw_key, hash) = with_open_session(dir, |session| {
+        Ok((
+            session.header.clone(),
+            session.content_key,
+            session.index.writes.track_digests,
+        ))
     })?;
     let key = zeroize::Zeroizing::new(raw_key);
     raw_key.zeroize();
-    Ok((header, key))
+    Ok((header, key, hash))
 }
 
 fn commit_prepared(
@@ -519,6 +539,7 @@ fn commit_prepared(
         size,
         versions,
         offsets,
+        prepared.sha256.take(),
     ) {
         Ok(retired) => {
             let committed = commit_mutation(session, before, mutation, retired);
@@ -674,6 +695,7 @@ fn publish_prepared(
             prepared.size,
             std::mem::take(&mut prepared.versions),
             std::mem::take(&mut prepared.offsets),
+            prepared.sha256.take(),
         ) {
             mutation.discard_created();
             return Err(error);
@@ -896,7 +918,7 @@ fn write_reader_ahead(
 ) -> Result<u64> {
     let guard = ImportGuard::enter(dir);
     with_open_session(dir, |_| require_user_visible_logical(path))?;
-    let (header, key) = session_secrets(dir)?;
+    let (header, key, hash) = session_secrets(dir)?;
     let file_id = uuid::Uuid::new_v4().to_string();
     let store = dir.join(crate::paths::STORE_DIR_NAME);
     let prepared = seal_into_new_blob(
@@ -907,6 +929,7 @@ fn write_reader_ahead(
         reader,
         |error| error.into(),
         !defer_index,
+        hash,
     )?;
     match prepared {
         Some(prepared) => publish_prepared(dir, path, &file_id, prepared, &guard, defer_index),
@@ -926,7 +949,7 @@ fn import_os_file_ahead(
     defer_index: bool,
 ) -> Result<(String, u64)> {
     let guard = ImportGuard::enter(dir);
-    let (header, key) = session_secrets(dir)?;
+    let (header, key, hash) = session_secrets(dir)?;
     let file_id = uuid::Uuid::new_v4().to_string();
     let store = dir.join(crate::paths::STORE_DIR_NAME);
     let source_seal = source.to_path_buf();
@@ -938,6 +961,7 @@ fn import_os_file_ahead(
         &mut file,
         |_| UprivError::ImportSourceUnreadable(source_seal),
         !defer_index,
+        hash,
     )?;
     let Some(mut prepared) = prepared else {
         return with_open_session(dir, |session| {
@@ -955,6 +979,7 @@ fn import_os_file_ahead(
             prepared.size,
             std::mem::take(&mut prepared.versions),
             std::mem::take(&mut prepared.offsets),
+            prepared.sha256.take(),
         ) {
             mutation.discard_created();
             return Err(error);
@@ -1529,10 +1554,12 @@ pub(super) fn seal_reader(
     reader: &mut (impl Read + ?Sized),
     map_read: impl FnOnce(std::io::Error) -> UprivError,
 ) -> Result<SealedFile> {
-    let (header, key) = session_secrets(dir)?;
+    let (header, key, hash) = session_secrets(dir)?;
     let file_id = uuid::Uuid::new_v4().to_string();
     let store = dir.join(crate::paths::STORE_DIR_NAME);
-    let prepared = seal_into_new_blob(&store, &header, &key, &file_id, reader, map_read, false)?;
+    let prepared = seal_into_new_blob(
+        &store, &header, &key, &file_id, reader, map_read, false, hash,
+    )?;
     Ok(SealedFile { file_id, prepared })
 }
 
@@ -1543,14 +1570,28 @@ pub(super) fn stage_sealed(
     path: &str,
     mut sealed: SealedFile,
 ) -> Result<Option<RetiredFileChunks>> {
-    let (size, versions, offsets, mutation) = match sealed.prepared.as_mut() {
+    let (size, versions, offsets, mutation, sha256) = match sealed.prepared.as_mut() {
         Some(prepared) => (
             prepared.size,
             std::mem::take(&mut prepared.versions),
             std::mem::take(&mut prepared.offsets),
             std::mem::take(&mut prepared.mutation),
+            prepared.sha256.take(),
         ),
-        None => (0, Vec::new(), Vec::new(), ChunkBlobMutation::default()),
+        None => {
+            let empty = session
+                .index
+                .writes
+                .track_digests
+                .then(|| crate::store::sha256_hex(<sha2::Sha256 as sha2::Digest>::new()));
+            (
+                0,
+                Vec::new(),
+                Vec::new(),
+                ChunkBlobMutation::default(),
+                empty,
+            )
+        }
     };
     match record_imported_file(
         &mut session.index,
@@ -1559,6 +1600,7 @@ pub(super) fn stage_sealed(
         size,
         versions,
         offsets,
+        sha256,
     ) {
         Ok(retired) => {
             session

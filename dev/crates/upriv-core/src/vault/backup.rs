@@ -279,6 +279,23 @@ fn stamp_is_used(backups: &Path, stamp: &str) -> bool {
     dir_has_stamp(backups, stamp) || dir_has_stamp(&backups.join("saves"), stamp)
 }
 
+/// True when a store zip with `stamp` is still in `backups/` or `saves/`.
+/// Lists both folders and opens only the zips named with that stamp, so a close
+/// with many backups does not read every zip's directory.
+pub(crate) fn backup_stamp_present(root: &VaultRoot, vault_id: &str, stamp: &str) -> bool {
+    if !is_backup_stamp(stamp) {
+        return false;
+    }
+    let Ok(vault_dir) = root.vault_dir(vault_id) else {
+        return false;
+    };
+    let key = BackupKey::Stamp {
+        stamp: stamp.to_string(),
+        saved: None,
+    };
+    matching_store_zips(&vault_dir.join("backups"), &key).is_ok_and(|found| !found.is_empty())
+}
+
 pub fn backup_zip_file(root: &VaultRoot, vault_id: &str, stamp: &str) -> Result<PathBuf> {
     locate_backup_zip(root, vault_id, stamp)
 }

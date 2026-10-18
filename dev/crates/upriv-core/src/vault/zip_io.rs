@@ -78,22 +78,17 @@ fn probe_store_zip_reader<R: Read + Seek>(reader: R) -> Result<()> {
 
 /// A vault zip is recognized by `store/header/vault.header`, including one outer folder.
 /// A symlink at the final component is not a vault zip.
+/// Reads only the central directory, buffered: one zip of a large vault is a
+/// few reads, not a seek per entry.
 pub(crate) fn zip_contains_store_header(path: &Path) -> bool {
     let Ok(file) = crate::paths::open_nofollow(path, crate::paths::NofollowMode::Read) else {
         return false;
     };
-    let Ok(mut archive) = ZipArchive::new(file) else {
+    let Ok(archive) = ZipArchive::new(std::io::BufReader::new(file)) else {
         return false;
     };
-    for index in 0..archive.len() {
-        let Ok(entry) = archive.by_index(index) else {
-            continue;
-        };
-        if zip_entry_is_store_header(entry.name()) {
-            return true;
-        }
-    }
-    false
+    let found = archive.file_names().any(zip_entry_is_store_header);
+    found
 }
 
 fn zip_entry_is_store_header(name: &str) -> bool {

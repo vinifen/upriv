@@ -15,13 +15,14 @@ use crate::host_fs::HostFsQuery;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use super::aead::{
     decrypt_xchacha, encrypt_xchacha, random_bytes, CONTENT_KEY_LEN, XCHACHA_NONCE_LEN,
 };
 use super::header::{chunk_aad, VaultHeader};
-use super::index::{DeadBlobSpan, VaultIndex, VaultNode, DATA_DIR_NAME};
+use super::index::{sha256_hex, DeadBlobSpan, VaultIndex, VaultNode, DATA_DIR_NAME};
 use crate::error::{Result, UprivError};
 
 /// Poly1305 tag appended by XChaCha20-Poly1305. Blob length is nonce + plaintext + tag.
@@ -37,6 +38,16 @@ pub const VAULT_FS_MAX_INLINE_BYTES: u64 = 4 * 1024 * 1024;
 
 /// Bytes of CSPRNG behind each chunk's replay guard (hex-encoded in the index).
 const CHUNK_VERSION_LEN: usize = 8;
+
+/// The zero bytes a write past the end fills in.
+fn hash_zeros(hasher: &mut Sha256, mut len: u64) {
+    const ZEROS: [u8; 4096] = [0; 4096];
+    while len > 0 {
+        let n = len.min(ZEROS.len() as u64) as usize;
+        hasher.update(&ZEROS[..n]);
+        len -= n as u64;
+    }
+}
 
 /// Fresh identifier for one chunk write. Recorded in the index and bound into
 /// that chunk's AAD, so rewriting a chunk invalidates the blob it replaced.
@@ -401,6 +412,7 @@ struct PackNodeRollback {
     file_id: String,
     chunk_offsets: Vec<u64>,
     chunk_versions: Vec<String>,
+    content_digest: Option<super::index::ContentDigest>,
 }
 
 /// Blobs created by a mutation, plus objects the sealed index no longer names.
@@ -429,6 +441,7 @@ impl ChunkBlobMutation {
             let Some(node) = index.find_mut(&item.logical_path) else {
                 continue;
             };
+            let mut packed_id = None;
             if let crate::store::index::VaultNodeKind::File {
                 file_id,
                 chunk_offsets,
@@ -436,9 +449,15 @@ impl ChunkBlobMutation {
                 ..
             } = &mut node.kind
             {
-                *file_id = item.file_id.clone();
+                packed_id = Some(std::mem::replace(file_id, item.file_id.clone()));
                 *chunk_offsets = item.chunk_offsets.clone();
                 *chunk_versions = item.chunk_versions.clone();
+            }
+            node.content_digest = item.content_digest.clone();
+            if let Some(packed_id) = packed_id {
+                index.writes.moved_blob(&packed_id, &item.file_id);
+                // The old blob still holds its dead bytes.
+                index.writes.rewritten_blobs.insert(item.file_id.clone());
             }
         }
     }
@@ -589,12 +608,13 @@ pub fn write_logical_file(
         mutation
     };
 
-    if previous.is_some() {
+    if let Some((retired, _)) = &previous {
         index.remove(logical_path);
+        index.writes.forget_stream(&retired.file_id);
     }
     let mut node = VaultNode::file(
         logical_path,
-        file_id,
+        file_id.clone(),
         file_size,
         chunk_versions,
         chunk_offsets,
@@ -602,7 +622,17 @@ pub fn write_logical_file(
     if let Some(created_at) = created_at {
         node.created_at = created_at;
     }
+    let hasher = index.writes.track_digests.then(|| {
+        let mut hasher = Sha256::new();
+        hasher.update(plaintext);
+        node.bind_digest(sha256_hex(hasher.clone()));
+        hasher
+    });
     index.nodes.push(node);
+    if let Some(hasher) = hasher {
+        // A later write at the end keeps extending this digest.
+        index.put_digest_stream(&file_id, hasher, file_size);
+    }
     Ok((previous.map(|(retired, _)| retired), mutation))
 }
 
@@ -668,47 +698,6 @@ pub fn read_logical_file(
         });
     }
     Ok(out)
-}
-
-/// `sha256:<hex>` of one file's plaintext, one chunk in RAM at a time.
-/// Tag / AAD failure returns an error and no digest.
-pub(crate) fn plaintext_sha256(
-    store_dir: &Path,
-    header: &VaultHeader,
-    content_key: &[u8; CONTENT_KEY_LEN],
-    node: &VaultNode,
-) -> Result<String> {
-    use sha2::{Digest, Sha256};
-    use zeroize::Zeroize;
-    let not_a_file = || UprivError::VaultStoreInvalid {
-        path: PathBuf::from(&node.path),
-        detail: "logical path is a directory".into(),
-    };
-    let (file_id, size, chunk_versions) = node.as_file().ok_or_else(not_a_file)?;
-    let chunk_offsets = node.chunk_offsets().ok_or_else(not_a_file)?;
-    let count = chunk_count(size, header.chunk_size);
-    require_chunk_lists(&node.path, count, chunk_versions, chunk_offsets)?;
-    let mut hasher = Sha256::new();
-    if count > 0 {
-        let mut blob = open_blob_read(store_dir, file_id)?;
-        for chunk_index in 0..count {
-            let mut plain = decrypt_one_chunk(
-                &mut blob,
-                header,
-                content_key,
-                SealedChunk {
-                    file_id,
-                    index: chunk_index,
-                    plain_len: chunk_plain_len(size, chunk_index, header.chunk_size),
-                    version: &chunk_versions[chunk_index as usize],
-                    offset: chunk_offsets[chunk_index as usize],
-                },
-            )?;
-            hasher.update(&plain);
-            plain.zeroize();
-        }
-    }
-    Ok(format!("sha256:{:x}", hasher.finalize()))
 }
 
 struct BlobRead {
@@ -857,7 +846,8 @@ impl ImportBlob {
     }
 }
 
-/// Record a file whose chunks are already in its blob.
+/// Record a file whose chunks are already in its blob. `content_sha256` is the
+/// digest of the plaintext the sealer read, when it hashed it.
 pub(crate) fn record_imported_file(
     index: &mut VaultIndex,
     logical_path: &str,
@@ -865,6 +855,7 @@ pub(crate) fn record_imported_file(
     file_size: u64,
     chunk_versions: Vec<String>,
     chunk_offsets: Vec<u64>,
+    content_sha256: Option<String>,
 ) -> Result<Option<RetiredFileChunks>> {
     validate_logical_path(logical_path)?;
     if let Some(node) = index.find(logical_path) {
@@ -887,8 +878,9 @@ pub(crate) fn record_imported_file(
         })
     });
     let created_at = previous.as_ref().map(|(_, created_at)| *created_at);
-    if previous.is_some() {
+    if let Some((retired, _)) = &previous {
         index.remove(logical_path);
+        index.writes.forget_stream(&retired.file_id);
     }
     let mut node = VaultNode::file(
         logical_path,
@@ -899,6 +891,9 @@ pub(crate) fn record_imported_file(
     );
     if let Some(created_at) = created_at {
         node.created_at = created_at;
+    }
+    if let Some(sha256) = content_sha256 {
+        node.bind_digest(sha256);
     }
     index.nodes.push(node);
     Ok(previous.map(|(retired, _)| retired))
@@ -1131,6 +1126,9 @@ pub fn write_logical_range(
             })();
             mutation = blob.mutation();
             appended?;
+            if !abandoned.is_empty() {
+                index.writes.rewritten_blobs.insert(file_id.clone());
+            }
             for (offset, len) in abandoned {
                 index.dead_until_seal.push(DeadBlobSpan {
                     file_id: file_id.clone(),
@@ -1146,6 +1144,28 @@ pub fn write_logical_range(
         return Err(error);
     }
 
+    // A write at or past the end extends the running digest with the bytes in
+    // hand; close binds it to the file. Any other change drops it, and the
+    // file counts by its storage.
+    let changed = !(data.is_empty() && offset <= old_size);
+    let digest = if changed && offset >= old_size && index.writes.track_digests {
+        let hasher = if old_size == 0 {
+            Some(Sha256::new())
+        } else {
+            index.writes.take_stream(&file_id, old_size)
+        };
+        hasher.map(|mut hasher| {
+            hash_zeros(&mut hasher, offset - old_size);
+            hasher.update(data);
+            hasher
+        })
+    } else {
+        None
+    };
+    if changed && digest.is_none() {
+        index.writes.forget_stream(&file_id);
+    }
+    let stream_id = file_id.clone();
     if let Some(node) = index.find_mut(logical_path) {
         node.modified_at = crate::time::unix_millis();
         node.created_at = created_at;
@@ -1155,6 +1175,12 @@ pub fn write_logical_range(
             chunk_versions: versions,
             chunk_offsets: offsets,
         };
+        if changed {
+            node.content_digest = None;
+        }
+    }
+    if let Some(hasher) = digest {
+        index.put_digest_stream(&stream_id, hasher, new_size);
     }
     Ok(mutation)
 }
@@ -1367,6 +1393,16 @@ pub fn truncate_logical_file(
     }
     versions.truncate(new_count as usize);
     offsets.truncate(new_count as usize);
+    // The dropped chunks stay in the blob until a pack. Empty, it is superseded.
+    if new_count > 0 {
+        index.writes.rewritten_blobs.insert(file_id.clone());
+    }
+    // Emptied, the file has a known digest and appends start a new one.
+    let empty = (new_size == 0 && index.writes.track_digests).then(Sha256::new);
+    if empty.is_none() {
+        index.writes.forget_stream(&file_id);
+    }
+    let stream_id = file_id.clone();
     if let Some(node) = index.find_mut(logical_path) {
         node.modified_at = crate::time::unix_millis();
         node.created_at = created_at;
@@ -1376,6 +1412,13 @@ pub fn truncate_logical_file(
             chunk_versions: versions,
             chunk_offsets: offsets,
         };
+        node.content_digest = None;
+        if let Some(hasher) = &empty {
+            node.bind_digest(sha256_hex(hasher.clone()));
+        }
+    }
+    if let Some(hasher) = empty {
+        index.put_digest_stream(&stream_id, hasher, 0);
     }
     Ok(mutation)
 }
@@ -1454,14 +1497,13 @@ pub(crate) fn blobs_need_pack(
     if matches!(only, Some(ids) if ids.is_empty()) {
         return false;
     }
+    let only = only_set(only);
     index.nodes.iter().any(|node| {
         let Some((file_id, _, _)) = node.as_file() else {
             return false;
         };
-        if let Some(ids) = only {
-            if !ids.iter().any(|id| id == file_id) {
-                return false;
-            }
+        if !wanted(&only, file_id) {
+            return false;
         }
         match measure_blob(store_dir, header, node) {
             Ok(Some(measure)) => should_pack(mode, measure.dead, measure.live),
@@ -1496,10 +1538,13 @@ pub(crate) fn pack_blob_waste(
     if matches!(only, Some(ids) if ids.is_empty()) {
         return Ok(ChunkBlobMutation::default());
     }
-    let mut shared: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+    let only = only_set(only);
+    let mut shared: std::collections::HashMap<&str, u32> = std::collections::HashMap::new();
     for node in &index.nodes {
         if let Some((file_id, _, _)) = node.as_file() {
-            *shared.entry(file_id.to_string()).or_default() += 1;
+            if wanted(&only, file_id) {
+                *shared.entry(file_id).or_default() += 1;
+            }
         }
     }
     let mut planned: Vec<PackedBlob> = Vec::new();
@@ -1510,11 +1555,6 @@ pub(crate) fn pack_blob_waste(
             };
             if shared.get(file_id).copied().unwrap_or(0) != 1 {
                 continue;
-            }
-            if let Some(ids) = only {
-                if !ids.iter().any(|id| id == file_id) {
-                    continue;
-                }
             }
             let Some(measure) = measure_blob(store_dir, header, node)? else {
                 continue;
@@ -1541,7 +1581,11 @@ pub(crate) fn pack_blob_waste(
     }
     let mut mutation = ChunkBlobMutation::default();
     for item in planned {
+        let mut moved = None;
         if let Some(node) = index.find_mut(&item.logical_path) {
+            // Same bytes in a new blob: the digest carries over.
+            let carried = node.current_digest().map(str::to_owned);
+            let content_digest = node.content_digest.clone();
             if let crate::store::index::VaultNodeKind::File {
                 file_id,
                 chunk_offsets,
@@ -1554,16 +1598,32 @@ pub(crate) fn pack_blob_waste(
                     file_id: file_id.clone(),
                     chunk_offsets: chunk_offsets.clone(),
                     chunk_versions: chunk_versions.clone(),
+                    content_digest,
                 });
+                moved = Some((file_id.clone(), item.new_file_id.clone()));
                 *file_id = item.new_file_id;
                 *chunk_offsets = item.new_offsets;
                 *chunk_versions = item.new_versions;
             }
+            if let Some(sha256) = carried {
+                node.bind_digest(sha256);
+            }
+        }
+        if let Some((from, to)) = moved {
+            index.writes.moved_blob(&from, &to);
         }
         mutation.created.push(item.new_path);
         mutation.superseded.push(item.old_path);
     }
     Ok(mutation)
+}
+
+fn only_set(only: Option<&[String]>) -> Option<std::collections::HashSet<&str>> {
+    only.map(|ids| ids.iter().map(String::as_str).collect())
+}
+
+fn wanted(only: &Option<std::collections::HashSet<&str>>, file_id: &str) -> bool {
+    only.as_ref().is_none_or(|ids| ids.contains(file_id))
 }
 
 fn repack_live_blob(
