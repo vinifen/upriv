@@ -882,7 +882,11 @@ fn rename_local_no_replace(from: &Path, to: &Path) -> io::Result<()> {
     link_then_unlink(from, to)
 }
 
-#[cfg(unix)]
+#[cfg(any(
+    all(target_os = "linux", target_env = "gnu"),
+    target_os = "macos",
+    target_os = "ios"
+))]
 fn unix_cstring(path: &Path) -> io::Result<std::ffi::CString> {
     use std::os::unix::ffi::OsStrExt;
     std::ffi::CString::new(path.as_os_str().as_bytes())

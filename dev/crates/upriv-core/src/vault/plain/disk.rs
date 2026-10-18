@@ -318,6 +318,7 @@ pub(super) fn same_file(a: &DiskStamp, b: &DiskStamp) -> bool {
 
 /// True when no other name points at the open file, so overwriting it cannot
 /// reach a file outside the folder.
+#[cfg_attr(not(unix), allow(dead_code))]
 pub(super) fn single_name(file: &host_fs::File) -> io::Result<bool> {
     #[cfg(windows)]
     {
@@ -372,6 +373,7 @@ pub(super) fn make_dir(path: &Path) -> io::Result<()> {
     if host_fs::is_bridge_path(path) {
         return host_fs::create_dir(path);
     }
+    #[cfg_attr(not(unix), allow(unused_mut))]
     let mut builder = std::fs::DirBuilder::new();
     #[cfg(unix)]
     {

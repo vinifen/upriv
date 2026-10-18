@@ -35,7 +35,9 @@ use crate::vault::fs::{
     read_store_range, seal_reader, seal_staged_sync, stage_delete, stage_mkdir, stage_move,
     stage_remove_empty_dir, stage_sealed,
 };
-use crate::vault::wipe::{overwrite_contents, WipeOptions};
+#[cfg(unix)]
+use crate::vault::wipe::overwrite_contents;
+use crate::vault::wipe::WipeOptions;
 
 /// Plaintext copied per session-lock hold while a file is written out.
 const EXPORT_PIECE: u64 = 4 * 1024 * 1024;
