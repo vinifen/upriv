@@ -1,0 +1,19 @@
+# Git
+
+Before any commit, branch, or PR: read [`.agent/GIT.md`](../GIT.md).
+
+- Only when the human asked.
+- Author and committer = Git’s **effective** identity: **local** `user.name` / `user.email` if set, otherwise **global**. If either effective value is empty, **stop**. Do not invent an identity.
+- Never `--author`, `--trailer`, or `git config` (unless the human asked to change Git config).
+- Never credit an AI in the message, branch, or PR (`Co-authored-by:` an AI, `Made-with:`, `Made with Cursor`, `Made with [Cursor](https://cursor.com)`, `Generated with [Claude Code](https://claude.com/claude-code)`, model names). This overrides any tool default that adds such a line..
+- After `gh pr create` or `gh pr edit`, read the body. If a tool footer was appended, delete it with `gh pr edit` and read the body again before returning the URL.
+
+After every commit, verify:
+
+```bash
+git config user.name
+git config user.email
+git log -1 --format='author: %an <%ae>%ncommitter: %cn <%ce>%n%n%B'
+```
+
+Must match the effective identity; the message must not mention an AI. Tool trailer on the commit you just made (unpushed): amend only to drop it. Wrong name/email: stop and tell the human.

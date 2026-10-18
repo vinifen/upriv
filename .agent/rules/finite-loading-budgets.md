@@ -1,0 +1,45 @@
+# Finite loading budgets (visible to the user)
+
+## Hard rule
+
+Every **blocking** loading / busy / applying overlay in the desktop (and later mobile) UI must:
+
+1. Use a **finite** timeout from `LOADING_BUDGET_MS` in `@upriv/shared` (`domain/loading/budget.ts`) — keep Electron invoke timeouts in sync for the same operation.
+2. **Show** the budget to the user (`LoadingBudgetHint` + `useLoadingBudget`): max duration **and** countdown remaining, so the wait never looks endless.
+3. Delay first paint via `useLoadingBudget().visible` — `LOADING_APPEAR_DELAY_MS` (1s) for short budgets; `LOADING_LONG_HINT_APPEAR_DELAY_MS` (10s) for 10-minute budgets so "up to 10 min" does not scare on a fast unlock. Budget/timeout still count from when the op started. Open modal + row share `pipeline.run.startedAt`.
+4. On timeout: **clear** the spinner / applying / `busy` state and offer **retry** (or a clear error). Never leave `applying` / `busy` stuck forever.
+5. Also **invalidate** the in-flight attempt: bump a generation token (`busyGen` on Setup / Repair / Data folder / Alias recovery; `resolveGen` on Gate applying) so a late RPC success cannot re-apply root / `setReady` / clear the timeout error.
+6. Electron **main** must honor the same map: renderer passes `METHOD_TIMEOUT_MS[method]` (CORE values from `@upriv/shared` `CORE_RPC_TIMEOUT_MS`, plus desktop `pick_directory` / `app_exit` / `app_shutdown` in `invoke.ts`) through preload into `daemonRpc` (unmapped methods fall back to 30s — do not leave long vault-root ops on that default).
+
+## Budgets (current)
+
+| Key | Default | Use |
+|-----|---------|-----|
+| `vaultRoot` | 10 min | Data-folder setup / Repair / ConfirmFooter busy |
+| `vaultRootResolve` | 1 min | Gate applying while waiting on `vault_root_resolve` |
+| `settingsLoad` | 1 min | First settings load overlay |
+| `logs` | 1 min | Logs list / viewer |
+| `vaultRewrap` | 10 min | Vault settings password / KDF change |
+| `vaultCreate` | 10 min | Scratch create in the vault pipeline queue (Argon2id wrap + seed) |
+| `vaultPipeline` | 10 min | Open/close progress (password modal if open + row hint; Argon2id unlock + flush) |
+| `vaultExport` | 10 min | Export zip of `store/` or portable `.7z` |
+| `vaultFsImport` | 10 min | In-app FM OS drop / picker. Explorer skeletons at the drop target (appear immediately). Editor loading + countdown only for the file currently being written (`LOADING_APPEAR_DELAY_MS`, that write's `startedAt`) — queued files in the same batch do not show the 10 min clock. Overlapping drops are allowed (one session per batch). Close and cancel stops queued files; the write already in flight still finishes (do not gen-kill a late successful write). On RPC/invoke failure drop the remaining skeletons for that batch. |
+| `vaultRename` | 2 min | Deep vault rename (`vault_rename` folder + id remap) |
+| `settingsSave` | 30 s | Settings Save / workspace path persist (`app_settings_save`) |
+| `vaultDelete` | 10 min | Delete a closed or recovery vault (`vault_delete`). Not `settingsSave`. |
+| `default` | 2 min | Generic modal / list work |
+
+Do **not** swap `vaultRoot` and `vaultRootResolve` — setup/repair can be huge; resolve probe must fail sooner.
+
+Prefer a larger budget over an infinite wait. “Massive” is OK; infinite is not.
+
+## `timeoutMs: 0`
+
+Contract (renderer `invoke` + Electron `daemonRpc`): `timeoutMs <= 0` means **no deadline**. Use only for native dialogs that wait on the user (e.g. `pick_directory`). Never use `0` for vault-root busy / applying overlays — those must stay on `LOADING_BUDGET_MS`.
+
+## Do not
+
+- Ship a full-screen or modal spinner with no remaining-time copy.
+- Soft-block the Gate (`applying`) without a budget + timeout recovery + `resolveGen` bump.
+- Clear `busy` on timeout without bumping `busyGen` (late success would still run UI side effects).
+- Invent ad-hoc `setTimeout` budgets in feature code — extend `LOADING_BUDGET_MS` instead.

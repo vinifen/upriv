@@ -45,8 +45,8 @@ We are **past the Tauri → Electron migration** and **past UI/lifecycle scaffol
 
 Vault list / create / open / close + groups are already live. **Do not** re-implement vault logic in TypeScript.  
 **Do not** reimplement vault-root resolution in TS — use existing `vault_root_*` RPCs / `VaultRootService`.  
-**Do not** ship infinite loading overlays — every blocking busy/applying UI uses `LOADING_BUDGET_MS` + visible countdown (`LoadingBudgetHint` / `useLoadingBudget`); on timeout clear state, bump generation tokens (`busyGen` / `resolveGen`), and offer retry. See `.cursor/rules/finite-loading-budgets.mdc`.  
-**Do not** leave **Info** modals stale when changing settings, vault DTOs, root paths, or diagnostics mocks — extend `domain/system-info` / `domain/vault-info` in the same change. See `.cursor/rules/info-modals-sync.mdc`.
+**Do not** ship infinite loading overlays — every blocking busy/applying UI uses `LOADING_BUDGET_MS` + visible countdown (`LoadingBudgetHint` / `useLoadingBudget`); on timeout clear state, bump generation tokens (`busyGen` / `resolveGen`), and offer retry. See [`rules/finite-loading-budgets.md`](rules/finite-loading-budgets.md).  
+**Do not** leave **Info** modals stale when changing settings, vault DTOs, root paths, or diagnostics mocks — extend `domain/system-info` / `domain/vault-info` in the same change. See [`rules/info-modals-sync.md`](rules/info-modals-sync.md).
 
 **Logging notes** (app `.log` under `.upriv/logs/` — not vault plaintext; never dump vault trees into logs or OS temp for export):
 
@@ -411,7 +411,7 @@ npm run typecheck --prefix apps/mobile
 3. **Security:** No passwords/secrets in logs, commits, or UI persistence. Use `zeroize` in Rust for sensitive buffers.
 4. **Config:** TOML is source of truth; mutable at runtime; re-read before open/close.
 5. **Fail safe:** No overwrite of `store/` without verification and atomic write.
-6. **Git:** Read [`GIT.md`](GIT.md) before commit/PR. Never commit `dev/target/`, `node_modules/`, `dist/`, `.env`, large binaries. Commit `Cargo.lock` in workspace. **Never** set the AI as Git author or co-author — use Git’s effective `user.name` / `user.email` (local if set, else global). After each commit, verify identity and that the message has no AI credit. After every PR create or edit, read the body and delete a `Made with Cursor` / `Made with [Cursor](https://cursor.com)` footer if the host appended one.
+6. **Git:** Read [`GIT.md`](GIT.md) before commit/PR. Never commit `dev/target/`, `node_modules/`, `dist/`, `.env`, large binaries. Commit `Cargo.lock` in workspace. **Never** set the AI as Git author or co-author — use Git’s effective `user.name` / `user.email` (local if set, else global). After each commit, verify identity and that the message has no AI credit. After every PR create or edit, read the body and delete any AI tool footer (`Made with Cursor`, `Generated with [Claude Code](…)`, …) if the host appended one.
 7. **Design:** Shipped UI follows PRD §3.7 + SDD §8.2 + i18n.
 
 ---
