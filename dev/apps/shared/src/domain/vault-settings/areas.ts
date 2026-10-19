@@ -75,11 +75,13 @@ const SETTINGS_GEAR_BLOCKED = new Set<VaultDisplayStatus>([
   "queued",
   "closing",
   "exporting",
+  "backing_up",
 ]);
 
-/** `vault_config_save` returns `vault_busy` while export or rewrap holds the vault. */
+/** `vault_config_save` returns `vault_busy` while export, a backup, or rewrap holds the vault. */
 const CONFIG_WRITE_BLOCKED = new Set<VaultDisplayStatus>([
   "exporting",
+  "backing_up",
   "changing_password",
   "changing_kdf",
 ]);

@@ -277,7 +277,8 @@ private object CoreLanes {
     "vault_import_7z",
     "vault_import_files_zip",
     "vault_import_os_path",
-    "vault_export" -> pack
+    "vault_export",
+    "backup_save" -> pack
     else -> light
   }
 }

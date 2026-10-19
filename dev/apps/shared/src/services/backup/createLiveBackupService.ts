@@ -10,6 +10,7 @@ export interface LiveBackupRpc {
   listBackups: (vaultId: string) => Promise<VaultBackupEntry[]>;
   deleteBackups: (vaultId: string, stamps: readonly string[]) => Promise<void>;
   promoteToSave: (vaultId: string, stamp: string) => Promise<void>;
+  saveNow: (vaultId: string) => Promise<VaultBackupEntry>;
   getBackupBytes: (vaultId: string, stamp: string) => Promise<Uint8Array>;
   exportToPath: (vaultId: string, stamp: string, destPath: string) => Promise<VaultPathWriteResult>;
   exportSnapshotsToPath: (
@@ -48,6 +49,7 @@ export function createLiveBackupService(rpc: LiveBackupRpc): BackupService {
     listBackups: (vaultId) => rpc.listBackups(vaultId),
     deleteBackups: (vaultId, stamps) => rpc.deleteBackups(vaultId, stamps),
     promoteToSave: (vaultId, stamp) => rpc.promoteToSave(vaultId, stamp),
+    saveNow: (vaultId) => rpc.saveNow(vaultId),
     getBackupBytes: (vaultId, entry) => rpc.getBackupBytes(vaultId, backupEntryKey(entry, vaultId)),
     exportToPath: (vaultId, entry, destPath) =>
       rpc.exportToPath(vaultId, backupEntryKey(entry, vaultId), destPath),

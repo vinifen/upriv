@@ -149,6 +149,11 @@ export function VaultListPage() {
       <VaultBackupsModal
         vault={backups.vault}
         open={backups.open}
+        canSaveNow={backups.canSaveNow}
+        saving={backups.saving}
+        saveStartedAt={backups.saveStartedAt}
+        onSaveNow={backups.onSaveNow}
+        listRefreshToken={backups.listRefreshToken}
         onClose={backups.onClose}
         onCreateVaultFromBackup={backups.onCreateVaultFromBackup}
         onDownloadNotice={backups.onDownloadNotice}

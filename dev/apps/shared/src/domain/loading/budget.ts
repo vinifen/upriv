@@ -39,6 +39,11 @@ export const LOADING_BUDGET_MS = {
    */
   vaultExport: 600_000,
   /**
+   * Backups → Back up now (`backup_save`): a zip of the closed vault's `store/`
+   * into `backups/saves/`. Same work as a store-zip export.
+   */
+  vaultBackupSave: 600_000,
+  /**
    * In-app file manager import (OS drop / picker). Desktop streams the OS path
    * in the daemon (`vault_fs_import_os_file`); explorer skeletons appear at the
    * drop target immediately. Editor countdown only for the file currently

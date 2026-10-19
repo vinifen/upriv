@@ -1110,6 +1110,11 @@ export async function rpcBackupPromote(id: string, stamp: string): Promise<void>
   await nativeInvokeRaw(CORE_RPC_COMMANDS.BACKUP_PROMOTE, { id, stamp });
 }
 
+export async function rpcBackupSave(id: string): Promise<VaultBackupEntry> {
+  const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.BACKUP_SAVE, { id });
+  return parseBackupEntry(requireRecord(raw, "backup_save").backup, id);
+}
+
 export async function rpcBackupGet(id: string, stamp: string): Promise<Uint8Array> {
   return bytesFromContentB64(await nativeInvokeRaw(CORE_RPC_COMMANDS.BACKUP_GET, { id, stamp }));
 }

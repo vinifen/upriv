@@ -211,6 +211,7 @@ pub fn handle_rpc(req: RpcRequest) -> RpcResponse {
         "backup_list" => vault_ops::backup_list(req.params),
         "backup_delete" => vault_ops::backup_delete(req.params),
         "backup_promote" => vault_ops::backup_promote(req.params),
+        "backup_save" => vault_ops::backup_save(req.params),
         "backup_get" => vault_ops::backup_get(req.params),
         other => err("unknown_method", format!("unknown method: {other}")),
     }
@@ -2208,6 +2209,7 @@ mod contract_tests {
         "backup_list",
         "backup_delete",
         "backup_promote",
+        "backup_save",
         "backup_get",
     ];
 

@@ -123,11 +123,15 @@ describe("resolveVaultListStatus", () => {
   it("names export and rewrap and refuses open", () => {
     const row = vaultRowFixture({ id: "a", session: null });
     expect(resolveVaultListStatus(row, { exportingVaultIds: ["a"] })).toBe("exporting");
+    expect(resolveVaultListStatus(row, { backupJobVaultIds: ["a"] })).toBe("backing_up");
     expect(resolveVaultListStatus(row, { passwordChangeVaultIds: ["a"] })).toBe(
       "changing_password",
     );
     expect(resolveVaultListStatus(row, { kdfChangeVaultIds: ["a"] })).toBe("changing_kdf");
     expect(isVaultListRowActivatable("exporting")).toBe(false);
+    expect(isVaultListRowActivatable("backing_up")).toBe(false);
+    expect(isVaultListRowUnlockTarget("backing_up")).toBe(false);
+    expect(isVaultPipelineDisplayBusy("backing_up")).toBe(true);
     expect(isVaultListRowActivatable("changing_password")).toBe(false);
     expect(isVaultListRowActivatable("changing_kdf")).toBe(false);
     expect(isVaultListRowUnlockTarget("exporting")).toBe(false);
@@ -218,6 +222,16 @@ describe("vaultPipelineRowBudget", () => {
     });
     expect(vaultPipelineRowBudget("changing_password", {}, "a").active).toBe(false);
     expect(vaultPipelineRowBudget("opening", pipeline, "a").active).toBe(false);
+  });
+
+  it("counts Back up now from its own start", () => {
+    const pipeline = { backupJobStartedAt: 12 };
+    expect(vaultPipelineRowBudget("backing_up", pipeline, "a")).toEqual({
+      active: true,
+      budgetMs: LOADING_BUDGET_MS.vaultBackupSave,
+      startedAt: 12,
+    });
+    expect(vaultPipelineRowBudget("backing_up", {}, "a").active).toBe(false);
   });
 });
 

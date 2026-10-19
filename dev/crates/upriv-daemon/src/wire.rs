@@ -75,7 +75,7 @@ pub fn is_rewrap_io_method(method: &str) -> bool {
     matches!(method, "vault_change_password" | "vault_change_kdf")
 }
 
-/// Zip and `.7z` import, and portable export.
+/// Zip and `.7z` import, portable export, and a save of the closed `store/`.
 /// File imports use [`is_import_io_method`] so they can run beside each other.
 pub fn is_pack_io_method(method: &str) -> bool {
     matches!(
@@ -85,6 +85,7 @@ pub fn is_pack_io_method(method: &str) -> bool {
             | "vault_import_files_zip"
             | "vault_import_os_path"
             | "vault_export"
+            | "backup_save"
     )
 }
 
@@ -223,6 +224,7 @@ mod tests {
             heavy_lane("vault_import_zip", &empty),
             Some(HeavyLane::Pack)
         );
+        assert_eq!(heavy_lane("backup_save", &empty), Some(HeavyLane::Pack));
         assert_ne!(
             heavy_lane("vault_close", &empty),
             heavy_lane("vault_import_7z", &empty)
@@ -273,6 +275,7 @@ mod tests {
         }
         let expected = [
             "backup_get",
+            "backup_save",
             "vault_change_kdf",
             "vault_change_password",
             "vault_close",

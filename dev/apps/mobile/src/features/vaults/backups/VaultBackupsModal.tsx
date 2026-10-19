@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import {
   backupDeleteConfirmPhrase,
@@ -6,6 +6,7 @@ import {
   backupEntryKey,
   formatBackupDate,
   formatBytes,
+  LOADING_BUDGET_MS,
   matchesBackupDeleteConfirmation,
   type VaultBackupEntry,
   type VaultListItem,
@@ -13,18 +14,34 @@ import {
 import { useBackupService } from "@/platform/services";
 import { useTranslation } from "@/i18n";
 import { mobileErrorI18nKey } from "@/lib/errorMessages";
-import { Button, Checkbox, IconButton, Modal, ModalFooterActions, Toast } from "@/components/ui";
+import {
+  Button,
+  Checkbox,
+  IconButton,
+  LoadingBudgetHint,
+  Modal,
+  ModalFooterActions,
+  Toast,
+} from "@/components/ui";
 import { ThemedInput } from "@/components/settings";
 import { Icon } from "@/components/icons";
 import { useTheme } from "@/theme";
 import { colorAlpha, radii, spacing } from "@/theme/tokens";
-import { useToast } from "@upriv/shared/react";
+import { useLoadingBudget, useToast } from "@upriv/shared/react";
 import { useVaultBackups } from "@upriv/shared/react";
 import { shareBackupsZip } from "./shareBackupsZip";
 
 interface VaultBackupsModalProps {
   vault: VaultListItem | null;
   open: boolean;
+  /** Back up now runs only while this vault is closed and idle (`vaultCanSaveBackupNow`). */
+  canSaveNow: boolean;
+  /** This vault's list-owned Back up now is in flight. Survives closing the modal. */
+  saving: boolean;
+  saveStartedAt: number | null;
+  onSaveNow: () => void;
+  /** Bumped when that job finishes so the open list reloads. */
+  listRefreshToken: number;
   onClose: () => void;
   onCreateVaultFromBackup?: (stamp: string, fileName: string, saved?: boolean) => void;
   /** List-level toast so a download can finish after this modal closes. */
@@ -34,6 +51,11 @@ interface VaultBackupsModalProps {
 export function VaultBackupsModal({
   vault,
   open,
+  canSaveNow,
+  saving,
+  saveStartedAt,
+  onSaveNow,
+  listRefreshToken,
   onClose,
   onCreateVaultFromBackup,
   onDownloadNotice,
@@ -47,7 +69,11 @@ export function VaultBackupsModal({
     backupService,
     vaultId,
     open,
+    listRefreshToken,
   );
+  const saveBudget = useLoadingBudget(saving, LOADING_BUDGET_MS.vaultBackupSave, {
+    startedAt: saveStartedAt ?? undefined,
+  });
 
   const savedBackups = useMemo(() => backups.filter((entry) => entry.saved), [backups]);
   const standardBackups = useMemo(() => backups.filter((entry) => !entry.saved), [backups]);
@@ -200,8 +226,6 @@ export function VaultBackupsModal({
         <Text style={[styles.empty, { color: colors.onErrorContainer }]}>
           {t(mobileErrorI18nKey(error, "modal.backup.load_failed"))}
         </Text>
-      ) : backups.length === 0 ? (
-        <Text style={[typography.mono, styles.empty]}>{t("modal.backup.empty")}</Text>
       ) : (
         <View style={styles.list}>
           {deleteTargets === null && selectable ? (
@@ -225,6 +249,29 @@ export function VaultBackupsModal({
           <BackupSection
             title={t("modal.backup.section.saves")}
             help={t("modal.backup.section.saves_help")}
+            action={
+              <Button
+                label={saving ? t("modal.backup.backup_now_running") : t("modal.backup.backup_now")}
+                variant="secondary"
+                size="sm"
+                busy={saving}
+                disabled={saving || !canSaveNow || isBusy || deleteTargets !== null}
+                onPress={onSaveNow}
+              />
+            }
+            notice={
+              saving ? (
+                saveBudget.visible ? (
+                  <LoadingBudgetHint
+                    budgetMs={saveBudget.budgetMs}
+                    remainingMs={saveBudget.remainingMs}
+                    layout="inline"
+                  />
+                ) : null
+              ) : canSaveNow ? null : (
+                <Text style={typography.caption}>{t("modal.backup.backup_now_blocked")}</Text>
+              )
+            }
             emptyLabel={t("modal.backup.saves_empty")}
             entries={savedBackups}
             locale={locale}
@@ -289,6 +336,10 @@ export function VaultBackupsModal({
 interface BackupSectionProps {
   title: string;
   help: string;
+  /** Beside the title, e.g. Back up now. */
+  action?: ReactNode;
+  /** Under the help text, e.g. why the action is unavailable. */
+  notice?: ReactNode;
   emptyLabel: string;
   entries: VaultBackupEntry[];
   locale: string;
@@ -305,6 +356,8 @@ interface BackupSectionProps {
 function BackupSection({
   title,
   help,
+  action,
+  notice,
   emptyLabel,
   entries,
   locale,
@@ -320,9 +373,13 @@ function BackupSection({
   const { colors, typography } = useTheme();
   return (
     <View style={styles.section}>
-      <View>
-        <Text style={[typography.body, { fontWeight: "500" }]}>{title}</Text>
-        <Text style={[typography.caption, styles.sectionHelp]}>{help}</Text>
+      <View style={styles.sectionHeader}>
+        <View style={styles.sectionCopy}>
+          <Text style={[typography.body, { fontWeight: "500" }]}>{title}</Text>
+          <Text style={[typography.caption, styles.sectionHelp]}>{help}</Text>
+          {notice ? <View style={styles.sectionNotice}>{notice}</View> : null}
+        </View>
+        {action}
       </View>
       {entries.length === 0 ? (
         <Text
@@ -587,7 +644,10 @@ const styles = StyleSheet.create({
   },
   selectedCount: { paddingRight: spacing.xs },
   section: { gap: spacing.sm },
+  sectionHeader: { flexDirection: "row", alignItems: "flex-start", gap: spacing.md },
+  sectionCopy: { flex: 1, minWidth: 0 },
   sectionHelp: { marginTop: 2, lineHeight: 18 },
+  sectionNotice: { marginTop: spacing.xs },
   sectionEmpty: {
     borderRadius: radii.md,
     paddingHorizontal: spacing.lg,

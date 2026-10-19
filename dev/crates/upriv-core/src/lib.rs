@@ -77,12 +77,13 @@ pub use vault::{
     probe_logical_seven_zip, probe_logical_seven_zip_path, probe_store_zip, probe_store_zip_path,
     promote_backup_save, read_backup_zip_bytes, read_import_archive_bytes,
     read_import_zip_settings, read_zip_config_toml, remove_plain_leftover, rename_vault,
-    set_plain_observer, seven_zip_export_available, vault_list_item, vault_store_on_disk_bytes,
-    zip_directory_to_bytes, zip_directory_to_path, BackupEntry, CloseVaultOutcome,
-    EmbeddedVaultSettings, OpenVaultOutcome, PlainCloseSummary, PlainDestination, PlainFolderClass,
-    PlainHolder, PlainLeftover, PlainObserver, PlainPlace, PlainStatus, PlainSyncReport,
-    PlainTotals, PlainWipe, VaultListItem, VaultPersistence, VaultRenameResult, VaultWelcome,
-    ZipImportClass, WELCOME_FILE_MAX_BYTES, WELCOME_README_LOGICAL_PATH,
+    save_backup_now, set_plain_observer, seven_zip_export_available, vault_list_item,
+    vault_store_on_disk_bytes, zip_directory_to_bytes, zip_directory_to_path, BackupEntry,
+    CloseVaultOutcome, EmbeddedVaultSettings, OpenVaultOutcome, PlainCloseSummary,
+    PlainDestination, PlainFolderClass, PlainHolder, PlainLeftover, PlainObserver, PlainPlace,
+    PlainStatus, PlainSyncReport, PlainTotals, PlainWipe, VaultListItem, VaultPersistence,
+    VaultRenameResult, VaultWelcome, ZipImportClass, WELCOME_FILE_MAX_BYTES,
+    WELCOME_README_LOGICAL_PATH,
 };
 
 /// Application version (from repo-root `VERSION`, set in build.rs).

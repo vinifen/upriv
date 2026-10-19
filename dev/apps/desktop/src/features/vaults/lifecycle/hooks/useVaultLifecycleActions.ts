@@ -1011,6 +1011,7 @@ export function useVaultLifecycleActions({
           listStatus === "creating" ||
           listStatus === "queued" ||
           listStatus === "exporting" ||
+          listStatus === "backing_up" ||
           listStatus === "changing_password" ||
           listStatus === "changing_kdf"
         ) {

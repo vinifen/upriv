@@ -33,6 +33,7 @@ import {
   vaultRowControls,
   resolveVaultListStatus,
   vaultCanExport,
+  vaultCanSaveBackupNow,
   RpcError,
   shouldBumpVaultRootEpoch,
   isVaultRootGoneError,
@@ -60,6 +61,7 @@ import {
   type VaultSession,
 } from "@upriv/shared";
 import {
+  useBackupService,
   useLogService,
   useVaultGroupService,
   useVaultLifecycleService,
@@ -68,7 +70,7 @@ import {
 import { useAppSettingsContext } from "@/features/system/settings";
 import { useTranslation } from "@/i18n";
 import { mobileErrorI18nKey } from "@/lib/errorMessages";
-import { useLoadingBudget, useToast } from "@upriv/shared/react";
+import { useLoadingBudget, useToast, useVaultBackupJob } from "@upriv/shared/react";
 import { CONTROL_HEIGHT_MD, MAX_WIDTH_VAULT_LIST, spacing } from "@/theme/tokens";
 import { exportVaultPackage } from "@/features/vaults/list/exportVaultPackage";
 import { useVaultLifecycle } from "@/features/vaults/lifecycle";
@@ -381,15 +383,32 @@ export function useVaultListScreen() {
   const onRewrapRunChange = useCallback((run: VaultRewrapRun | null) => {
     setRewrapRun(run);
   }, []);
+  const backupService = useBackupService();
+  const [backupListRefresh, setBackupListRefresh] = useState(0);
+  const backupJob = useVaultBackupJob(backupService, {
+    onSaved: (vaultId) => {
+      const name = vaults.find((vault) => vault.id === vaultId)?.displayName ?? vaultId;
+      show(t("toast.backup_now_saved", { name }));
+      setBackupListRefresh((token) => token + 1);
+    },
+    onFailed: (_vaultId, error) => {
+      show(t(mobileErrorI18nKey(error, "toast.backup_now_failed")));
+    },
+    onTimedOut: () => {
+      show(t("error.operation_timed_out"));
+    },
+  });
   blockOpenVaultIdsRef.current = new Set(
-    [exportJob?.vaultId, rewrapRun?.vaultId].filter((id): id is string => id != null),
+    [exportJob?.vaultId, rewrapRun?.vaultId, backupJob.job?.vaultId].filter(
+      (id): id is string => id != null,
+    ),
   );
 
   useEffect(() => {
     if (!lifecycleRequest || lifecycleRequest.intent !== "unlock") return;
     if (!blockOpenVaultIdsRef.current.has(lifecycleRequest.vaultId)) return;
     setLifecycleRequest(null);
-  }, [exportJob, lifecycleRequest, rewrapRun, setLifecycleRequest]);
+  }, [backupJob.job, exportJob, lifecycleRequest, rewrapRun, setLifecycleRequest]);
 
   const pipelineStatus = useMemo(
     () => ({
@@ -397,6 +416,8 @@ export function useVaultListScreen() {
       closingVaultIds: [...lifecycle.closingVaultIds],
       backingUpVaultIds: [...lifecycle.backingUpVaultIds],
       exportingVaultIds: exportJob ? [exportJob.vaultId] : [],
+      backupJobVaultIds: backupJob.job ? [backupJob.job.vaultId] : undefined,
+      backupJobStartedAt: backupJob.job?.startedAt,
       passwordChangeVaultIds: rewrapRun?.kind === "password" ? [rewrapRun.vaultId] : undefined,
       kdfChangeVaultIds: rewrapRun?.kind === "kdf" ? [rewrapRun.vaultId] : undefined,
       rewrapStartedAt: rewrapRun?.startedAt,
@@ -412,6 +433,7 @@ export function useVaultListScreen() {
       lifecycle.backingUpVaultIds,
       lifecycle.closingVaultIds,
       lifecycle.creatingVaultIds,
+      backupJob.job,
       exportJob,
       lifecycle.openingVaultIds,
       lifecycle.queuedOpenVaultIds,
@@ -419,6 +441,18 @@ export function useVaultListScreen() {
       rewrapRun,
     ],
   );
+
+  const backupSaving = backupJob.job !== null && backupJob.job.vaultId === backupsVaultId;
+  const handleBackupSaveNow = useCallback(() => {
+    const vault = backupsVault;
+    if (!vault) return;
+    if (backupJob.job) {
+      if (backupJob.job.vaultId !== vault.id) show(t("toast.backup_now_busy"));
+      return;
+    }
+    if (!vaultCanSaveBackupNow(vault, pipelineStatus)) return;
+    backupJob.start(vault.id);
+  }, [backupJob, backupsVault, pipelineStatus, show, t]);
 
   const handleConfirmExportVault = useCallback(
     (request: VaultExportRequest) => {
@@ -487,6 +521,7 @@ export function useVaultListScreen() {
         listStatus === "creating" ||
         listStatus === "queued" ||
         listStatus === "exporting" ||
+        listStatus === "backing_up" ||
         listStatus === "changing_password" ||
         listStatus === "changing_kdf"
       ) {
@@ -1158,6 +1193,10 @@ export function useVaultListScreen() {
     noteVault,
     vaultInfoVault,
     backupsVault,
+    backupSaving,
+    backupSaveStartedAt: backupSaving ? (backupJob.job?.startedAt ?? null) : null,
+    backupListRefresh,
+    handleBackupSaveNow,
     displayRowsRef,
     searchNoMatches,
     visibleVaults,

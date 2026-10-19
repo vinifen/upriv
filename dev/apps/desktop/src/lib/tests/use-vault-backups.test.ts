@@ -16,18 +16,26 @@ function entry(stamp: string): VaultBackupEntry {
   return { stamp, createdAt: "2026-01-01T00:00:00.000Z" };
 }
 
+function serviceWith(overrides: Partial<BackupService>): BackupService {
+  return {
+    listBackups: async () => [],
+    deleteBackups: async () => undefined,
+    promoteToSave: async () => undefined,
+    saveNow: async () => ({ ...entry("saved"), saved: true }),
+    getBackupBytes: async () => new Uint8Array(),
+    exportToPath: async (_vaultId, _entry, destPath) => ({ path: destPath, size: 0 }),
+    exportSnapshotsToPath: async (_vaultId, _stamps, destPath) => ({ path: destPath, size: 0 }),
+    ...overrides,
+  };
+}
+
 describe("useVaultBackups", () => {
   it("ignores a stale listBackups response after the vault id changes", async () => {
     const first = deferred<VaultBackupEntry[]>();
     const second = deferred<VaultBackupEntry[]>();
-    const backupService: BackupService = {
+    const backupService = serviceWith({
       listBackups: (vaultId) => (vaultId === "vault-a" ? first.promise : second.promise),
-      deleteBackups: async () => undefined,
-      promoteToSave: async () => undefined,
-      getBackupBytes: async () => new Uint8Array(),
-      exportToPath: async (_vaultId, _entry, destPath) => ({ path: destPath, size: 0 }),
-      exportSnapshotsToPath: async (_vaultId, _stamps, destPath) => ({ path: destPath, size: 0 }),
-    };
+    });
 
     const { result, rerender } = renderHook(
       ({ vaultId }: { vaultId: string }) => useVaultBackups(backupService, vaultId, true),
@@ -47,14 +55,10 @@ describe("useVaultBackups", () => {
 
   it("clears isBusy when the modal closes during deleteBackups", async () => {
     const hang = deferred<void>();
-    const backupService: BackupService = {
+    const backupService = serviceWith({
       listBackups: async () => [entry("s1")],
       deleteBackups: () => hang.promise,
-      promoteToSave: async () => undefined,
-      getBackupBytes: async () => new Uint8Array(),
-      exportToPath: async (_vaultId, _entry, destPath) => ({ path: destPath, size: 0 }),
-      exportSnapshotsToPath: async (_vaultId, _stamps, destPath) => ({ path: destPath, size: 0 }),
-    };
+    });
 
     const { result, rerender } = renderHook(
       ({ vaultId, open }: { vaultId: string | null; open: boolean }) =>
@@ -80,5 +84,29 @@ describe("useVaultBackups", () => {
       await deleteDone;
     });
     expect(result.current.isBusy).toBe(false);
+  });
+
+  it("reloads an open list when refreshToken changes", async () => {
+    let calls = 0;
+    const backupService = serviceWith({
+      listBackups: async () => {
+        calls += 1;
+        return [entry(calls === 1 ? "first" : "second")];
+      },
+    });
+
+    const { result, rerender } = renderHook(
+      ({ token }: { token: number }) => useVaultBackups(backupService, "vault-a", true, token),
+      { initialProps: { token: 0 } },
+    );
+
+    await waitFor(() => {
+      expect(result.current.backups.map((row) => row.stamp)).toEqual(["first"]);
+    });
+
+    rerender({ token: 1 });
+    await waitFor(() => {
+      expect(result.current.backups.map((row) => row.stamp)).toEqual(["second"]);
+    });
   });
 });

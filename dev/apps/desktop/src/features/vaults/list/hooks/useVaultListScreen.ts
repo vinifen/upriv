@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useVaultGroupService, useLogService, useVaultService } from "@/platform/services";
+import {
+  useBackupService,
+  useVaultGroupService,
+  useLogService,
+  useVaultService,
+} from "@/platform/services";
 import { useAppSettingsContext } from "@/features/system/settings";
 import { useAppRefresh } from "@/features/system/refresh";
 import type { CreateVaultGroupAssignment, CreateVaultResult } from "@upriv/shared";
@@ -20,6 +25,7 @@ import {
   createDraftFromImportPackage,
   createVaultImportPackage,
   canDeleteVaultNow,
+  vaultCanSaveBackupNow,
   vaultRowControls,
   displayNameToGroupId,
   resolveVaultDisplayStatus,
@@ -50,7 +56,7 @@ import { useFileManager } from "@/features/vaults/file-manager";
 import { useTranslation } from "@/i18n";
 import { useVaultLifecycleActions } from "@/features/vaults/lifecycle";
 import { useErrorToast } from "@/hooks/useErrorToast";
-import { useLoadingBudget } from "@upriv/shared/react";
+import { useLoadingBudget, useVaultBackupJob } from "@upriv/shared/react";
 import { useDaemonReady } from "@/lib/useDaemonReady";
 import { useVaultListState } from "./useVaultListState";
 import { useVaultListModals } from "./useVaultListModals";
@@ -78,7 +84,6 @@ export function useVaultListScreen() {
   const rewrapActivityRef = useRef<VaultRewrapRun | null>(null);
   const [rewrapRun, setRewrapRun] = useState<VaultRewrapRun | null>(null);
   const blockOpenVaultIdsRef = useRef(new Set<string>());
-  blockOpenVaultIdsRef.current = new Set(rewrapRun ? [rewrapRun.vaultId] : []);
   const onRewrapRunChange = useCallback((run: VaultRewrapRun | null) => {
     rewrapActivityRef.current = run;
     setRewrapRun(run);
@@ -481,19 +486,37 @@ export function useVaultListScreen() {
 
   const modals = useVaultListModals(vaults, groups);
   const { lifecycleRequest, setLifecycleRequest } = modals;
+  const backupService = useBackupService();
+  const [backupListRefresh, setBackupListRefresh] = useState(0);
+  const backupJob = useVaultBackupJob(backupService, {
+    onSaved: (vaultId) => {
+      const name = vaults.find((vault) => vault.id === vaultId)?.displayName ?? vaultId;
+      showToast(t("toast.backup_now_saved", { name }));
+      setBackupListRefresh((token) => token + 1);
+    },
+    onFailed: (_vaultId, error) => {
+      showError(error, "toast.backup_now_failed");
+    },
+    onTimedOut: () => {
+      showToast(t("error.operation_timed_out"));
+    },
+  });
+  blockOpenVaultIdsRef.current = new Set(
+    [rewrapRun?.vaultId, backupJob.job?.vaultId].filter((id): id is string => id != null),
+  );
 
   const settingsPersistVaultIdsRef = useRef(new Set<string>());
 
   useEffect(() => {
     if (
-      !rewrapRun ||
-      lifecycleRequest?.intent !== "unlock" ||
-      lifecycleRequest.vaultId !== rewrapRun.vaultId
+      !lifecycleRequest ||
+      lifecycleRequest.intent !== "unlock" ||
+      !blockOpenVaultIdsRef.current.has(lifecycleRequest.vaultId)
     ) {
       return;
     }
     setLifecycleRequest(null);
-  }, [lifecycleRequest, setLifecycleRequest, rewrapRun]);
+  }, [backupJob.job, lifecycleRequest, rewrapRun, setLifecycleRequest]);
 
   const lifecycle = useVaultLifecycleActions({
     vaults,
@@ -541,8 +564,10 @@ export function useVaultListScreen() {
       passwordChangeVaultIds: rewrapRun?.kind === "password" ? [rewrapRun.vaultId] : undefined,
       kdfChangeVaultIds: rewrapRun?.kind === "kdf" ? [rewrapRun.vaultId] : undefined,
       rewrapStartedAt: rewrapRun?.startedAt,
+      backupJobVaultIds: backupJob.job ? [backupJob.job.vaultId] : undefined,
+      backupJobStartedAt: backupJob.job?.startedAt,
     }),
-    [lifecycle.pipelineListStatus, rewrapRun],
+    [backupJob.job, lifecycle.pipelineListStatus, rewrapRun],
   );
   rowControlsRef.current = new Map(
     vaults.map((vault) => [vault.id, vaultRowControls(vault, pipelineListStatus)]),
@@ -1277,6 +1302,25 @@ export function useVaultListScreen() {
     backups: {
       vault: modals.backupVault,
       open: modals.backupVaultId !== null,
+      canSaveNow:
+        modals.backupVault !== null &&
+        vaultCanSaveBackupNow(modals.backupVault, pipelineListStatus),
+      saving: backupJob.job !== null && backupJob.job.vaultId === modals.backupVault?.id,
+      saveStartedAt:
+        backupJob.job !== null && backupJob.job.vaultId === modals.backupVault?.id
+          ? backupJob.job.startedAt
+          : null,
+      onSaveNow: () => {
+        const vault = modals.backupVault;
+        if (!vault) return;
+        if (backupJob.job) {
+          if (backupJob.job.vaultId !== vault.id) showToast(t("toast.backup_now_busy"));
+          return;
+        }
+        if (!vaultCanSaveBackupNow(vault, pipelineListStatus)) return;
+        backupJob.start(vault.id);
+      },
+      listRefreshToken: backupListRefresh,
       onClose: () => modals.setBackupVaultId(null),
       onCreateVaultFromBackup: handleCreateVaultFromBackup,
       onDownloadNotice: showToast,

@@ -94,5 +94,6 @@ export const ELECTRON_IPC_METHODS = [
   "backup_list",
   "backup_delete",
   "backup_promote",
+  "backup_save",
   "backup_get",
 ] as const;

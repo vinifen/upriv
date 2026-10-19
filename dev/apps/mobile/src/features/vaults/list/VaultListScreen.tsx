@@ -37,6 +37,7 @@ import {
   resolveListDrop,
   resolveVaultDisplayStatus,
   validateDisplayName,
+  vaultCanSaveBackupNow,
   vaultRowControls,
   VAULT_DISPLAY_NAME_MAX_LENGTH,
   GROUPED_VAULT_SORT_MODES,
@@ -243,6 +244,10 @@ export function VaultListScreen() {
     exportSubmitting,
     exportJob,
     backupsVault,
+    backupSaving,
+    backupSaveStartedAt,
+    backupListRefresh,
+    handleBackupSaveNow,
     setBackupsVault,
     settingsGroup,
     setSettingsGroup,
@@ -1576,6 +1581,11 @@ export function VaultListScreen() {
       <VaultBackupsModal
         vault={backupsVault}
         open={backupsVault !== null}
+        canSaveNow={backupsVault !== null && vaultCanSaveBackupNow(backupsVault, pipelineStatus)}
+        saving={backupSaving}
+        saveStartedAt={backupSaveStartedAt}
+        onSaveNow={handleBackupSaveNow}
+        listRefreshToken={backupListRefresh}
         onClose={() => setBackupsVault(null)}
         onCreateVaultFromBackup={(stamp, fileName, saved = false) => {
           if (!backupsVault) return;

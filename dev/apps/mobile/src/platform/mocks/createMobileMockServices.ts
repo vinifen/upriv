@@ -486,6 +486,19 @@ export function createMobileMockServices(): AppServices {
           }
         }
       },
+      async saveNow(vaultId) {
+        const createdAt = new Date().toISOString();
+        const stamp = createdAt.slice(0, 19).replace(/[-T:]/g, "");
+        const entry: VaultBackupEntry = {
+          stamp,
+          fileName: `${stamp}-${vaultId}.zip`,
+          createdAt,
+          sizeBytes: 128_000,
+          saved: true,
+        };
+        MOCK_BACKUPS[vaultId] = [entry, ...(MOCK_BACKUPS[vaultId] ?? [])];
+        return { ...entry };
+      },
       async getBackupBytes(_vaultId, entry) {
         const header = `[Upriv mock backup]\n${entry.stamp}\n${entry.saved ? "saved\n" : ""}`;
         return new TextEncoder().encode(header);

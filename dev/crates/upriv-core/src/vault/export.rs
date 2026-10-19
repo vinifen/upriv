@@ -39,14 +39,15 @@ fn closed_vault_paths(
     Ok((vault_dir, store))
 }
 
-/// Closed vault plus the exclusive hold that refuses open until the export returns.
-struct ClosedVaultHold {
-    vault_dir: std::path::PathBuf,
-    store: std::path::PathBuf,
+/// Closed vault plus the exclusive hold that refuses open until the export
+/// or save that took it returns.
+pub(super) struct ClosedVaultHold {
+    pub(super) vault_dir: std::path::PathBuf,
+    pub(super) store: std::path::PathBuf,
     _preparing: PreparingGuard,
 }
 
-fn hold_closed_vault(root: &VaultRoot, vault_id: &str) -> Result<ClosedVaultHold> {
+pub(super) fn hold_closed_vault(root: &VaultRoot, vault_id: &str) -> Result<ClosedVaultHold> {
     let (vault_dir, store) = closed_vault_paths(root, vault_id)?;
     let preparing = PreparingGuard::enter_exclusive(&vault_dir)?;
     Ok(ClosedVaultHold {
@@ -59,7 +60,10 @@ fn hold_closed_vault(root: &VaultRoot, vault_id: &str) -> Result<ClosedVaultHold
 /// Read the closed vault while holding its directory lock. Delete and rename
 /// take the same lock and re-check the preparing mark, so they cannot wipe or
 /// move `store/` under this read.
-fn with_held_vault<T>(hold: &ClosedVaultHold, f: impl FnOnce() -> Result<T>) -> Result<T> {
+pub(super) fn with_held_vault<T>(
+    hold: &ClosedVaultHold,
+    f: impl FnOnce() -> Result<T>,
+) -> Result<T> {
     with_vault_dir_lock(&hold.vault_dir, || {
         if !hold.vault_dir.host_is_dir() {
             return Err(UprivError::VaultNotFound(hold.vault_dir.clone()));

@@ -6,6 +6,8 @@ export function useVaultBackups(
   backupService: BackupService,
   vaultId: string | null,
   open: boolean,
+  /** Bumped when a list-owned Back up now finishes, so an open modal reloads. */
+  refreshToken = 0,
 ) {
   const [backups, setBackups] = useState<VaultBackupEntry[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -64,6 +66,14 @@ export function useVaultBackups(
       busyGenRef.current += 1;
     };
   }, [invalidate, open, reload, vaultId]);
+
+  const appliedRefreshRef = useRef(refreshToken);
+  useEffect(() => {
+    if (appliedRefreshRef.current === refreshToken) return;
+    appliedRefreshRef.current = refreshToken;
+    if (!open || !vaultId) return;
+    void reload().catch(() => undefined);
+  }, [open, refreshToken, reload, vaultId]);
 
   const deleteBackups = useCallback(
     async (stamps: readonly string[]) => {

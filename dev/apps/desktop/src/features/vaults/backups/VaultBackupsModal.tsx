@@ -1,13 +1,14 @@
-import { useEffect, useId, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useId, useMemo, useState } from "react";
 import { useBackupService } from "@/platform/services";
 import { Icon } from "@/components/icons";
-import { Button, IconButton, Modal } from "@/components/ui";
+import { Button, IconButton, LoadingBudgetHint, Modal, Toast } from "@/components/ui";
 import {
   backupDeleteConfirmPhrase,
   backupEntryFileName,
   backupEntryKey,
   formatBytes,
   formatBackupDate,
+  LOADING_BUDGET_MS,
   matchesBackupDeleteConfirmation,
   type VaultBackupEntry,
   type VaultListItem,
@@ -16,7 +17,7 @@ import { useTranslation } from "@/i18n";
 import { useErrorToast } from "@/hooks/useErrorToast";
 import { useRevealWhen } from "@/hooks/useRevealWhen";
 import { settingsControlClass } from "@/components/settings";
-import { useVaultBackups } from "@upriv/shared/react";
+import { useLoadingBudget, useVaultBackups } from "@upriv/shared/react";
 import { pickBackupDownload } from "./downloadBackupsZip";
 
 const backupCheckboxClass =
@@ -25,6 +26,14 @@ const backupCheckboxClass =
 interface VaultBackupsModalProps {
   vault: VaultListItem | null;
   open: boolean;
+  /** Back up now runs only while this vault is closed and idle (`vaultCanSaveBackupNow`). */
+  canSaveNow: boolean;
+  /** This vault's list-owned Back up now is in flight. Survives closing the modal. */
+  saving: boolean;
+  saveStartedAt: number | null;
+  onSaveNow: () => void;
+  /** Bumped when that job finishes so the open list reloads. */
+  listRefreshToken: number;
   onClose: () => void;
   onCreateVaultFromBackup?: (stamp: string, fileName: string, saved?: boolean) => void;
   /** List-level toast so a download can finish after this modal closes. */
@@ -34,19 +43,28 @@ interface VaultBackupsModalProps {
 export function VaultBackupsModal({
   vault,
   open,
+  canSaveNow,
+  saving,
+  saveStartedAt,
+  onSaveNow,
+  listRefreshToken,
   onClose,
   onCreateVaultFromBackup,
   onDownloadNotice,
 }: VaultBackupsModalProps) {
   const { locale, t } = useTranslation();
-  const { showError, errorText } = useErrorToast();
+  const { toast, dismiss, showError, errorText } = useErrorToast();
   const backupService = useBackupService();
   const vaultId = vault?.id ?? null;
   const { backups, deleteBackups, promoteToSave, isLoading, isBusy, error } = useVaultBackups(
     backupService,
     vaultId,
     open,
+    listRefreshToken,
   );
+  const saveBudget = useLoadingBudget(saving, LOADING_BUDGET_MS.vaultBackupSave, {
+    startedAt: saveStartedAt ?? undefined,
+  });
 
   const savedBackups = useMemo(() => backups.filter((entry) => entry.saved), [backups]);
   const standardBackups = useMemo(() => backups.filter((entry) => !entry.saved), [backups]);
@@ -211,10 +229,6 @@ export function VaultBackupsModal({
         <p className="py-10 text-center text-sm text-on-error-container">
           {errorText(error, "modal.backup.load_failed")}
         </p>
-      ) : backups.length === 0 ? (
-        <p className="py-10 text-center font-mono text-sm text-on-surface-variant">
-          {t("modal.backup.empty")}
-        </p>
       ) : (
         <>
           {deleteTargets === null && selectable ? (
@@ -239,6 +253,32 @@ export function VaultBackupsModal({
             <BackupSection
               title={t("modal.backup.section.saves")}
               help={t("modal.backup.section.saves_help")}
+              action={
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  className="shrink-0"
+                  disabled={saving || !canSaveNow || isBusy || deleteTargets !== null}
+                  onClick={onSaveNow}
+                >
+                  {saving ? t("modal.backup.backup_now_running") : t("modal.backup.backup_now")}
+                </Button>
+              }
+              notice={
+                saving ? (
+                  saveBudget.visible ? (
+                    <LoadingBudgetHint
+                      budgetMs={saveBudget.budgetMs}
+                      remainingMs={saveBudget.remainingMs}
+                      layout="inline"
+                    />
+                  ) : null
+                ) : canSaveNow ? null : (
+                  <p className="text-xs text-on-surface-variant">
+                    {t("modal.backup.backup_now_blocked")}
+                  </p>
+                )
+              }
               emptyLabel={t("modal.backup.saves_empty")}
               entries={savedBackups}
               locale={locale}
@@ -301,6 +341,7 @@ export function VaultBackupsModal({
           </div>
         </div>
       ) : null}
+      <Toast toast={toast} onDismiss={dismiss} />
     </Modal>
   );
 }
@@ -308,6 +349,10 @@ export function VaultBackupsModal({
 interface BackupSectionProps {
   title: string;
   help: string;
+  /** Beside the title, e.g. Back up now. */
+  action?: ReactNode;
+  /** Under the help text, e.g. why the action is unavailable. */
+  notice?: ReactNode;
   emptyLabel: string;
   entries: VaultBackupEntry[];
   locale: string;
@@ -324,6 +369,8 @@ interface BackupSectionProps {
 function BackupSection({
   title,
   help,
+  action,
+  notice,
   emptyLabel,
   entries,
   locale,
@@ -338,9 +385,13 @@ function BackupSection({
 }: BackupSectionProps) {
   return (
     <section className="space-y-2">
-      <div>
-        <h3 className="text-sm font-medium text-on-surface">{title}</h3>
-        <p className="mt-0.5 text-xs leading-relaxed text-on-surface-variant">{help}</p>
+      <div className="flex items-start gap-3">
+        <div className="min-w-0 flex-1">
+          <h3 className="text-sm font-medium text-on-surface">{title}</h3>
+          <p className="mt-0.5 text-xs leading-relaxed text-on-surface-variant">{help}</p>
+          {notice ? <div className="mt-1">{notice}</div> : null}
+        </div>
+        {action}
       </div>
       {entries.length === 0 ? (
         <p className="rounded-xl bg-surface-container px-4 py-6 text-center text-xs text-on-surface-variant">

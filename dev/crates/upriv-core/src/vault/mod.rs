@@ -37,7 +37,7 @@ use crate::store::{content_hash_hex, probe_unlock_preset, KdfUnlockPreset};
 
 pub use backup::{
     backup_on_close, backup_zip_file, delete_backups, export_backups_to_path, list_backups,
-    promote_backup_save, read_backup_zip_bytes, BackupEntry,
+    promote_backup_save, read_backup_zip_bytes, save_backup_now, BackupEntry,
 };
 pub use create::{create_vault, create_vault_with_welcome};
 pub use delete::delete_vault;

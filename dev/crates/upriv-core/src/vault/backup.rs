@@ -310,9 +310,32 @@ pub fn backup_on_close(root: &VaultRoot, vault_id: &str) -> Result<Option<String
     if !config.backup.enabled {
         return Ok(None);
     }
-    let stamp = write_backup_zip(&vault_dir, vault_id)?;
+    let stamp = write_backup_zip(&vault_dir, vault_id, BackupDir::Standard)?;
     finish_backup_prune(&vault_dir, config.backup.mode, config.backup.keep_last)?;
     Ok(Some(stamp))
+}
+
+/// Zip this closed vault's `store/` straight into `backups/saves/`. A save is
+/// never pruned and is written even when close backups are off. Open, delete,
+/// and rename of this vault wait until the zip is written.
+pub fn save_backup_now(root: &VaultRoot, vault_id: &str) -> Result<BackupEntry> {
+    let hold = super::export::hold_closed_vault(root, vault_id)?;
+    super::export::with_held_vault(&hold, || {
+        let stamp = write_backup_zip(&hold.vault_dir, vault_id, BackupDir::Saves)?;
+        let file_name = backup_zip_filename(&stamp, vault_id)?;
+        let path = hold
+            .vault_dir
+            .join("backups")
+            .join("saves")
+            .join(&file_name);
+        Ok(BackupEntry {
+            created_at: stamp_to_iso(&stamp).unwrap_or_default(),
+            size_bytes: crate::host_fs::metadata(&path)?.len(),
+            stamp,
+            file_name,
+            saved: true,
+        })
+    })
 }
 
 /// Why a close backup failed, without a filesystem path.
@@ -417,7 +440,7 @@ pub(crate) fn backup_before_rewrap(root: &VaultRoot, vault_id: &str) -> Result<(
     let vault_dir = root.vault_dir(vault_id)?;
     // A broken config fails before a zip is written.
     load_vault_config(&vault_dir)?;
-    write_backup_zip(&vault_dir, vault_id)?;
+    write_backup_zip(&vault_dir, vault_id, BackupDir::Standard)?;
     Ok(())
 }
 
@@ -432,13 +455,25 @@ pub(crate) fn prune_after_rewrap(root: &VaultRoot, vault_id: &str) -> Result<()>
     finish_backup_prune(&vault_dir, config.backup.mode, config.backup.keep_last)
 }
 
-fn write_backup_zip(vault_dir: &Path, vault_id: &str) -> Result<String> {
+/// Where a new zip goes: `backups/`, rotated by retention, or `backups/saves/`.
+#[derive(Clone, Copy)]
+enum BackupDir {
+    Standard,
+    Saves,
+}
+
+fn write_backup_zip(vault_dir: &Path, vault_id: &str, into: BackupDir) -> Result<String> {
     let backups = vault_dir.join("backups");
-    crate::host_fs::create_dir_all(&backups)?;
+    let dir = match into {
+        BackupDir::Standard => backups.clone(),
+        BackupDir::Saves => backups.join("saves"),
+    };
+    crate::host_fs::create_dir_all(&dir)?;
+    // One stamp across both folders, so a save never shares a name with a backup.
     let stamp = unused_backup_stamp(&backups, utc_filename_stamp())?;
     let name = backup_zip_filename(&stamp, vault_id)?;
-    let partial = backups.join(format!("{name}.partial"));
-    let dest = backups.join(&name);
+    let partial = dir.join(format!("{name}.partial"));
+    let dest = dir.join(&name);
     let store = vault_dir.join(crate::paths::STORE_DIR_NAME);
     crate::store::ensure_danger_notice(&store)?;
     let settings = snapshot_settings_bytes(vault_dir, &store)?;
@@ -462,10 +497,18 @@ fn write_backup_zip(vault_dir: &Path, vault_id: &str) -> Result<String> {
     }
     // The new stamp must be durable before `prune_backups` unlinks the previous
     // one. Otherwise a crash can publish the deletion and lose the new copy.
-    sync_dir(&backups)?;
+    sync_dir(&dir)?;
+    if matches!(into, BackupDir::Saves) {
+        // `saves/` itself may be new.
+        sync_dir(&backups)?;
+    }
+    let event = match into {
+        BackupDir::Standard => "vault_backup_created",
+        BackupDir::Saves => "vault_backup_saved",
+    };
     log_event(
         LogLevel::Info,
-        "vault_backup_created",
+        event,
         &[("id", vault_id), ("stamp", stamp.as_str())],
     );
     Ok(stamp)
@@ -976,6 +1019,71 @@ mode = "encrypted_dir"
         assert!(listed[0].saved);
         assert_eq!(listed[0].file_name, format!("{stamp}-notes.zip"));
         assert_eq!(backup_zip_file(&root, "notes", &stamp).unwrap(), saved);
+    }
+
+    #[test]
+    fn save_now_pins_a_zip_that_close_retention_keeps() {
+        let (_tmp, root) = vault_root_with(&[]);
+        create_vault(
+            &root,
+            sample_config("notes", "Notes"),
+            b"pass-word-ok",
+            KdfUnlockPreset::M32,
+        )
+        .unwrap();
+        let saved = save_backup_now(&root, "notes").unwrap();
+        assert!(saved.saved);
+        let zip = root
+            .vault_dir("notes")
+            .unwrap()
+            .join("backups")
+            .join("saves")
+            .join(&saved.file_name);
+        assert!(super::super::zip_io::zip_contains_store_header(&zip));
+        let zip_len = crate::host_fs::metadata(&zip).unwrap().len();
+        assert_eq!(saved.size_bytes, zip_len);
+        assert_eq!(list_backups(&root, "notes").unwrap(), vec![saved.clone()]);
+
+        // `keep_last = 1` rotates standard backups only.
+        backup_on_close(&root, "notes").unwrap().expect("stamp");
+        backup_on_close(&root, "notes").unwrap().expect("stamp");
+        let listed = list_backups(&root, "notes").unwrap();
+        assert_eq!(listed.len(), 2);
+        assert!(listed.contains(&saved));
+
+        // Two saves within one second still get their own stamps.
+        let again = save_backup_now(&root, "notes").unwrap();
+        assert_ne!(again.stamp, saved.stamp);
+        assert_eq!(list_backups(&root, "notes").unwrap().len(), 3);
+    }
+
+    #[test]
+    fn save_now_works_with_close_backups_off() {
+        let (_tmp, root) = vault_root_with(&[]);
+        let mut config = sample_config("notes", "Notes");
+        config.backup.enabled = false;
+        create_vault(&root, config, b"pass-word-ok", KdfUnlockPreset::M32).unwrap();
+        let saved = save_backup_now(&root, "notes").unwrap();
+        assert_eq!(list_backups(&root, "notes").unwrap(), vec![saved]);
+    }
+
+    #[test]
+    fn save_now_refuses_an_open_vault_and_leaves_no_file() {
+        use crate::vault::{close_vault, open_vault};
+
+        let (_tmp, root) = vault_root_with(&[]);
+        let mut config = sample_config("notes", "Notes");
+        config.backup.enabled = false;
+        create_vault(&root, config, b"pass-word-ok", KdfUnlockPreset::M32).unwrap();
+        open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        let err = save_backup_now(&root, "notes").unwrap_err();
+        assert!(matches!(err, UprivError::VaultMustBeClosed));
+        let backups = root.vault_dir("notes").unwrap().join("backups");
+        assert!(!backups.join("saves").host_exists());
+        assert!(list_backups(&root, "notes").unwrap().is_empty());
+
+        close_vault(&root, "notes").unwrap();
+        assert!(save_backup_now(&root, "notes").unwrap().saved);
     }
 
     #[test]

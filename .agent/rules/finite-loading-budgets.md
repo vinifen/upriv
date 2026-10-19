@@ -23,6 +23,7 @@ Every **blocking** loading / busy / applying overlay in the desktop (and later m
 | `vaultCreate` | 10 min | Scratch create in the vault pipeline queue (Argon2id wrap + seed) |
 | `vaultPipeline` | 10 min | Open/close progress (password modal if open + row hint; Argon2id unlock + flush) |
 | `vaultExport` | 10 min | Export zip of `store/` or portable `.7z` |
+| `vaultBackupSave` | 10 min | Backups → Back up now (`backup_save`): zip of the closed `store/` into `backups/saves/` |
 | `vaultFsImport` | 10 min | In-app FM OS drop / picker. Explorer skeletons at the drop target (appear immediately). Editor loading + countdown only for the file currently being written (`LOADING_APPEAR_DELAY_MS`, that write's `startedAt`) — queued files in the same batch do not show the 10 min clock. Overlapping drops are allowed (one session per batch). Close and cancel stops queued files; the write already in flight still finishes (do not gen-kill a late successful write). On RPC/invoke failure drop the remaining skeletons for that batch. |
 | `vaultRename` | 2 min | Deep vault rename (`vault_rename` folder + id remap) |
 | `settingsSave` | 30 s | Settings Save / workspace path persist (`app_settings_save`) |

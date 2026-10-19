@@ -17,8 +17,8 @@ use upriv_core::{
     ingest_import_directory, list_backups, parse_backup_import_path, parse_embedded_settings,
     probe_export_password, probe_logical_seven_zip, probe_logical_seven_zip_path, probe_store_zip,
     promote_backup_save, read_backup_zip_bytes, read_import_archive_bytes,
-    read_import_zip_settings, read_zip_config_toml, seven_zip_export_available, vault_list_item,
-    KdfUnlockPreset, VaultConfig, ZipImportClass,
+    read_import_zip_settings, read_zip_config_toml, save_backup_now, seven_zip_export_available,
+    vault_list_item, BackupEntry, KdfUnlockPreset, VaultConfig, ZipImportClass,
 };
 
 use super::secret::{secret_bytes, SecretString};
@@ -1137,14 +1137,34 @@ pub(super) fn backup_list(params: Value) -> RpcResponse {
     };
     match list_backups(&root, parsed.id.trim()) {
         Ok(entries) => ok(json!({
-            "backups": entries.iter().map(|e| json!({
-                "stamp": e.stamp,
-                "fileName": e.file_name,
-                "createdAt": e.created_at,
-                "sizeBytes": e.size_bytes,
-                "saved": e.saved,
-            })).collect::<Vec<_>>(),
+            "backups": entries.iter().map(backup_entry_json).collect::<Vec<_>>(),
         })),
+        Err(error) => map_core_err(error),
+    }
+}
+
+fn backup_entry_json(entry: &BackupEntry) -> Value {
+    json!({
+        "stamp": entry.stamp,
+        "fileName": entry.file_name,
+        "createdAt": entry.created_at,
+        "sizeBytes": entry.size_bytes,
+        "saved": entry.saved,
+    })
+}
+
+/// Zip the closed vault into `backups/saves/` now. Returns the new save.
+pub(super) fn backup_save(params: Value) -> RpcResponse {
+    let parsed: VaultIdParams = match serde_json::from_value(params) {
+        Ok(v) => v,
+        Err(error) => return err("invalid_request", error.to_string()),
+    };
+    let root = match require_vault_root() {
+        Ok(root) => root,
+        Err(response) => return response,
+    };
+    match save_backup_now(&root, parsed.id.trim()) {
+        Ok(entry) => ok(json!({ "backup": backup_entry_json(&entry) })),
         Err(error) => map_core_err(error),
     }
 }

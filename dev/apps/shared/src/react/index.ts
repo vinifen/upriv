@@ -12,6 +12,11 @@ export {
 } from "./useExportPasswordCheck";
 export { TOAST_DEFAULT_MS, useToast, type ToastState } from "./useToast";
 export { useVaultBackups } from "./useVaultBackups";
+export {
+  useVaultBackupJob,
+  type VaultBackupJob,
+  type VaultBackupJobEvents,
+} from "./useVaultBackupJob";
 export { useVaultFileTree } from "./useVaultFileTree";
 export { useVaultInfoData, type UseVaultInfoDataOptions } from "./useVaultInfoData";
 export {

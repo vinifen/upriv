@@ -7,3 +7,4 @@ export {
   formatBackupDate,
 } from "./format";
 export { backupDeleteConfirmPhrase, matchesBackupDeleteConfirmation } from "./deleteConfirm";
+export { vaultCanSaveBackupNow } from "./saveNow";

@@ -130,6 +130,8 @@ export const CORE_RPC_COMMANDS = {
   BACKUP_LIST: "backup_list",
   BACKUP_DELETE: "backup_delete",
   BACKUP_PROMOTE: "backup_promote",
+  /** Zip the closed vault straight into `backups/saves/`. */
+  BACKUP_SAVE: "backup_save",
   BACKUP_GET: "backup_get",
 } as const;
 
