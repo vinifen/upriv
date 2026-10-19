@@ -3,8 +3,11 @@
 //! Desktop paths use `std::fs`. On Android a user-chosen data folder is a
 //! storage-access tree (`content://`), which is not a path `std::fs` can open.
 //! While that folder is mounted, every path under [`SAF_VAULT_ROOT`] is sent to
-//! the bridge. The logical path is never created on disk.
+//! the bridge. The logical path is never created on disk. Export data folder
+//! writes its zip into a second tree the user picks, mounted the same way at
+//! [`SAF_EXPORT_ROOT`].
 
+use std::ffi::OsStr;
 use std::fs::OpenOptions as StdOpenOptions;
 use std::io::{self, Read, Seek, Write};
 use std::path::{Component, Path, PathBuf};
@@ -16,7 +19,12 @@ pub use std::fs::{FileType, Metadata, Permissions};
 /// Not a directory on disk. Bytes live in the mounted bridge.
 pub const SAF_VAULT_ROOT: &str = "/upriv-saf-root";
 
-/// Android (or a test) implementation of the mounted data folder.
+/// Logical folder Export data folder writes its zip into, while a second
+/// storage-access tree is mounted for that export. Not a directory on disk.
+pub const SAF_EXPORT_ROOT: &str = "/upriv-saf-export";
+
+/// Android (or a test) implementation of a mounted storage-access tree: the
+/// data folder, or the folder an export writes into.
 pub trait SafBridge: Send + Sync {
     /// `op` is `stat`, `mkdir`, `remove_file`, `remove_dir`, `remove_dir_all`,
     /// `rename`, `list`, or `open`. `payload` and the returned text are JSON.
@@ -31,7 +39,6 @@ pub trait SafBridge: Send + Sync {
     fn dispatch(&self, op: &str, payload: &str) -> io::Result<String>;
 }
 
-#[derive(Clone)]
 enum Mounted {
     Bridge(Arc<dyn SafBridge>),
 }
@@ -57,6 +64,45 @@ pub fn unmount() {
 /// Whether a storage-access tree is currently attached at [`SAF_VAULT_ROOT`].
 pub fn is_saf_mounted() -> bool {
     mount_lock().is_some()
+}
+
+/// The export destination and the `content://` tree it serves.
+struct ExportMount {
+    bridge: Arc<dyn SafBridge>,
+    tree_uri: String,
+}
+
+static EXPORT_MOUNT: Mutex<Option<ExportMount>> = Mutex::new(None);
+
+fn export_mount_lock() -> std::sync::MutexGuard<'static, Option<ExportMount>> {
+    EXPORT_MOUNT
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Send later I/O under [`SAF_EXPORT_ROOT`] to `bridge`, which serves the
+/// storage-access tree `tree_uri`. The data folder mount is not touched.
+pub fn mount_export_bridge(bridge: Arc<dyn SafBridge>, tree_uri: &str) {
+    *export_mount_lock() = Some(ExportMount {
+        bridge,
+        tree_uri: tree_uri.trim().to_owned(),
+    });
+}
+
+/// Drop the export destination. Later I/O under [`SAF_EXPORT_ROOT`] fails.
+pub fn unmount_export() {
+    *export_mount_lock() = None;
+}
+
+/// The `content://` tree behind `path` when it names the mounted export
+/// destination, so a folder inside a `.upriv` can be refused by its address.
+pub fn export_tree_uri(path: &Path) -> Option<String> {
+    match classify_saf(path) {
+        Ok(SafPath::Inside(SafRoot::Export, _)) => export_mount_lock()
+            .as_ref()
+            .map(|mount| mount.tree_uri.clone()),
+        _ => None,
+    }
 }
 
 /// The alias path is the logical root, and no grant is mounted yet.
@@ -285,36 +331,76 @@ enum Route {
         rel: String,
         bridge: Arc<dyn SafBridge>,
         logical: PathBuf,
+        root: SafRoot,
     },
 }
 
 fn route(path: &Path) -> io::Result<Route> {
-    let logical = match classify_saf(path)? {
+    let (root, logical) = match classify_saf(path)? {
         SafPath::Outside => return Ok(Route::Local),
-        SafPath::Inside(logical) => logical,
+        SafPath::Inside(root, logical) => (root, logical),
     };
-    let mounted = mount_lock().clone();
+    let mounted = match root {
+        SafRoot::Data => mount_lock()
+            .as_ref()
+            .map(|Mounted::Bridge(bridge)| bridge.clone()),
+        SafRoot::Export => export_mount_lock()
+            .as_ref()
+            .map(|mount| mount.bridge.clone()),
+    };
     match mounted {
-        Some(Mounted::Bridge(bridge)) => Ok(Route::Bridge {
-            rel: rel_of(&logical)?,
+        Some(bridge) => Ok(Route::Bridge {
+            rel: rel_of(root, &logical)?,
             bridge,
             logical,
+            root,
         }),
         None => Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
-            "storage-access data folder is not mounted",
+            match root {
+                SafRoot::Data => "storage-access data folder is not mounted",
+                SafRoot::Export => "storage-access export folder is not mounted",
+            },
         )),
     }
 }
 
-enum SafPath {
-    /// Not under the logical data folder. Desktop paths use the real disk.
-    Outside,
-    /// Normalizes to a child of [`SAF_VAULT_ROOT`].
-    Inside(PathBuf),
+/// A logical folder the bridge serves.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SafRoot {
+    /// [`SAF_VAULT_ROOT`], the data folder.
+    Data,
+    /// [`SAF_EXPORT_ROOT`], where Export data folder writes its zip.
+    Export,
 }
 
-/// A path that names the logical root and then climbs out of it is rejected.
+impl SafRoot {
+    fn named(part: &OsStr) -> Option<Self> {
+        if part == "upriv-saf-root" {
+            Some(Self::Data)
+        } else if part == "upriv-saf-export" {
+            Some(Self::Export)
+        } else {
+            None
+        }
+    }
+
+    fn path(self) -> &'static Path {
+        Path::new(match self {
+            Self::Data => SAF_VAULT_ROOT,
+            Self::Export => SAF_EXPORT_ROOT,
+        })
+    }
+}
+
+enum SafPath {
+    /// Not under a logical root. Desktop paths use the real disk.
+    Outside,
+    /// Normalizes to `root` or a child of it.
+    Inside(SafRoot, PathBuf),
+}
+
+/// A path that names a logical root and then climbs out of it is rejected.
 /// Falling through to `std::fs` would create that file on the real disk.
 fn classify_saf(path: &Path) -> io::Result<SafPath> {
     if !path.is_absolute() {
@@ -334,7 +420,7 @@ fn classify_saf(path: &Path) -> io::Result<SafPath> {
             Component::RootDir | Component::CurDir | Component::Normal(_) => {}
         }
     }
-    if !climbed && first_normal.is_none_or(|part| part != "upriv-saf-root") {
+    if !climbed && first_normal.and_then(SafRoot::named).is_none() {
         return Ok(SafPath::Outside);
     }
 
@@ -344,13 +430,13 @@ fn classify_saf(path: &Path) -> io::Result<SafPath> {
         match component {
             Component::RootDir | Component::CurDir => {}
             Component::ParentDir => {
-                if parts.len() == 1 && parts[0] == "upriv-saf-root" {
+                if parts.len() == 1 && SafRoot::named(&parts[0]).is_some() {
                     escaped = true;
                 }
                 parts.pop();
             }
             Component::Normal(part) => {
-                if parts.is_empty() && part == "upriv-saf-root" {
+                if parts.is_empty() && SafRoot::named(part).is_some() {
                     escaped = false;
                 }
                 parts.push(part.to_os_string());
@@ -364,18 +450,18 @@ fn classify_saf(path: &Path) -> io::Result<SafPath> {
             "path is outside the data folder",
         ));
     }
-    if parts.first().is_none_or(|part| part != "upriv-saf-root") {
+    let Some(root) = parts.first().and_then(|part| SafRoot::named(part)) else {
         return Ok(SafPath::Outside);
-    }
+    };
     let mut out = PathBuf::from("/");
     for part in parts {
         out.push(part);
     }
-    Ok(SafPath::Inside(out))
+    Ok(SafPath::Inside(root, out))
 }
 
-fn rel_of(logical: &Path) -> io::Result<String> {
-    let root = Path::new(SAF_VAULT_ROOT);
+fn rel_of(root: SafRoot, logical: &Path) -> io::Result<String> {
+    let root = root.path();
     if logical == root {
         return Ok(String::new());
     }
@@ -652,7 +738,7 @@ fn bridge_kind(path: &Path) -> Option<io::Result<NodeKind>> {
     }
 }
 
-/// True when `path` is served by the mounted storage-access bridge.
+/// True when `path` is served by a mounted storage-access bridge.
 pub fn is_bridge_path(path: &Path) -> bool {
     matches!(route(path), Ok(Route::Bridge { .. }))
 }
@@ -781,10 +867,15 @@ pub fn rename<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> io::Result<()> 
             Route::Bridge {
                 rel: from_rel,
                 bridge,
+                root: from_root,
                 ..
             },
-            Route::Bridge { rel: to_rel, .. },
-        ) => bridge_call(
+            Route::Bridge {
+                rel: to_rel,
+                root: to_root,
+                ..
+            },
+        ) if from_root == to_root => bridge_call(
             bridge.as_ref(),
             "rename",
             serde_json::json!({ "from": from_rel, "to": to_rel }),
@@ -810,10 +901,15 @@ pub fn rename_no_replace<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> io::
             Route::Bridge {
                 rel: from_rel,
                 bridge,
+                root: from_root,
                 ..
             },
-            Route::Bridge { rel: to_rel, .. },
-        ) => {
+            Route::Bridge {
+                rel: to_rel,
+                root: to_root,
+                ..
+            },
+        ) if from_root == to_root => {
             if stat_bridge(bridge.as_ref(), &to_rel)?.kind != NodeKind::Missing {
                 return Err(io::Error::from(io::ErrorKind::AlreadyExists));
             }
@@ -1139,6 +1235,7 @@ pub fn canonicalize<P: AsRef<Path>>(path: P) -> io::Result<PathBuf> {
             logical,
             bridge,
             rel,
+            ..
         } => match stat_bridge(bridge.as_ref(), &rel)?.kind {
             NodeKind::Missing => Err(io::Error::new(
                 io::ErrorKind::NotFound,
@@ -1262,6 +1359,7 @@ pub fn read_dir<P: AsRef<Path>>(path: P) -> io::Result<ReadDir> {
             rel,
             bridge,
             logical,
+            ..
         } => {
             let value = bridge_call(bridge.as_ref(), "list", serde_json::json!({ "rel": rel }))?;
             let entries = value
@@ -1699,7 +1797,7 @@ mod tests {
 
     static TEST_MOUNT: Mutex<()> = Mutex::new(());
 
-    use super::{free_bytes, mount_bridge, unmount, SafBridge, SAF_VAULT_ROOT};
+    use super::{free_bytes, mount_bridge, unmount, SafBridge, SAF_EXPORT_ROOT, SAF_VAULT_ROOT};
 
     #[test]
     fn free_bytes_reports_a_number_for_a_missing_leaf() {
@@ -2150,6 +2248,184 @@ mode = "encrypted_dir"
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
         assert!(!spilled.exists());
         assert!(!super::is_bridge_path(&escaped_logical));
+    }
+
+    /// A second tree mounted at [`SAF_EXPORT_ROOT`], dropped with the value.
+    struct ExportMounted {
+        dir: tempfile::TempDir,
+    }
+
+    impl ExportMounted {
+        fn new(tree_uri: &str) -> Self {
+            let dir = tempfile::tempdir().unwrap();
+            super::mount_export_bridge(Arc::new(TempBridge::new(dir.path())), tree_uri);
+            Self { dir }
+        }
+
+        fn names(&self) -> Vec<String> {
+            let mut names: Vec<_> = std::fs::read_dir(self.dir.path())
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+                .collect();
+            names.sort();
+            names
+        }
+    }
+
+    impl Drop for ExportMounted {
+        fn drop(&mut self) {
+            super::unmount_export();
+        }
+    }
+
+    const DOWNLOAD_TREE: &str =
+        "content://com.android.externalstorage.documents/tree/primary%3ADownload";
+
+    #[test]
+    fn unmounted_export_root_is_not_created_on_disk() {
+        let _guard = TEST_MOUNT.lock().unwrap();
+        let _data = Mounted::new();
+        super::unmount_export();
+        let error = super::create_dir_all(SAF_EXPORT_ROOT).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+        let error = super::write(Path::new(SAF_EXPORT_ROOT).join("a.zip"), b"no").unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+        assert!(!Path::new(SAF_EXPORT_ROOT).exists());
+        assert!(super::export_tree_uri(Path::new(SAF_EXPORT_ROOT)).is_none());
+    }
+
+    #[test]
+    fn export_root_is_its_own_tree() {
+        let _guard = TEST_MOUNT.lock().unwrap();
+        let data = Mounted::new();
+        let export = ExportMounted::new(DOWNLOAD_TREE);
+        let in_data = Path::new(SAF_VAULT_ROOT).join("note.txt");
+        let in_export = Path::new(SAF_EXPORT_ROOT).join("note.txt");
+        super::write(&in_data, b"data").unwrap();
+        super::write(&in_export, b"export").unwrap();
+        assert_eq!(
+            std::fs::read(data.root().join("note.txt")).unwrap(),
+            b"data"
+        );
+        assert_eq!(
+            std::fs::read(export.dir.path().join("note.txt")).unwrap(),
+            b"export"
+        );
+        assert!(super::is_dir(Path::new(SAF_EXPORT_ROOT)));
+        assert_eq!(
+            super::export_tree_uri(Path::new(SAF_EXPORT_ROOT)).as_deref(),
+            Some(DOWNLOAD_TREE)
+        );
+        assert!(super::export_tree_uri(Path::new(SAF_VAULT_ROOT)).is_none());
+
+        // One tree's provider cannot move a document into the other tree.
+        let error =
+            super::rename(&in_data, Path::new(SAF_EXPORT_ROOT).join("moved.txt")).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+        let error =
+            super::rename_no_replace(&in_export, Path::new(SAF_VAULT_ROOT).join("moved.txt"))
+                .unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(data.root().join("note.txt").is_file());
+        assert_eq!(export.names(), vec!["note.txt".to_string()]);
+
+        // Unmounting the data folder leaves the export folder mounted.
+        drop(data);
+        assert_eq!(super::read(&in_export).unwrap(), b"export");
+    }
+
+    #[test]
+    fn data_folder_zip_lands_in_the_picked_tree() {
+        let _env = crate::paths::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _guard = TEST_MOUNT.lock().unwrap();
+        let data = Mounted::new();
+        let root = crate::paths::initialize_vault_root(Path::new(SAF_VAULT_ROOT)).unwrap();
+        let export = ExportMounted::new(DOWNLOAD_TREE);
+
+        let written = crate::export_data_folder(&root, Path::new(SAF_EXPORT_ROOT)).unwrap();
+        let name = written
+            .path
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        assert_eq!(written.path, Path::new(SAF_EXPORT_ROOT).join(&name));
+        assert_eq!(export.names(), vec![name.clone()]);
+        let zip_path = export.dir.path().join(&name);
+        assert_eq!(written.size, std::fs::metadata(&zip_path).unwrap().len());
+        let top = name.strip_suffix(".zip").unwrap();
+        let archive = zip::ZipArchive::new(std::fs::File::open(&zip_path).unwrap()).unwrap();
+        let marker = format!("{top}/.upriv/settings.toml");
+        assert!(archive.file_names().any(|entry| entry == marker));
+        // Nothing was written beside the data folder.
+        assert!(!data.root().join(&name).exists());
+        assert!(!Path::new(SAF_EXPORT_ROOT).exists());
+    }
+
+    #[test]
+    fn a_picked_tree_inside_a_upriv_is_refused() {
+        let _env = crate::paths::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _guard = TEST_MOUNT.lock().unwrap();
+        let _data = Mounted::new();
+        let root = crate::paths::initialize_vault_root(Path::new(SAF_VAULT_ROOT)).unwrap();
+        let export = ExportMounted::new(
+            "content://com.android.externalstorage.documents/tree/primary%3ADocuments%2FUpriv%2F.upriv",
+        );
+        assert!(matches!(
+            crate::export_data_folder(&root, Path::new(SAF_EXPORT_ROOT)),
+            Err(crate::UprivError::DataFolderExportDestinationReserved(_))
+        ));
+        assert!(export.names().is_empty());
+    }
+
+    /// A pulled card under the export folder fails the export. It must not
+    /// send the person to reconnect a data folder that still answers.
+    #[test]
+    fn an_unreachable_export_folder_is_not_an_unreachable_data_folder() {
+        let _env = crate::paths::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _guard = TEST_MOUNT.lock().unwrap();
+        let _data = Mounted::new();
+        let root = crate::paths::initialize_vault_root(Path::new(SAF_VAULT_ROOT)).unwrap();
+
+        /// Answers until the zip is created, then stops answering.
+        struct GoneOnOpen(TempBridge);
+        impl SafBridge for GoneOnOpen {
+            fn dispatch(&self, op: &str, payload: &str) -> std::io::Result<String> {
+                if op == "open" {
+                    return Ok(r#"{"ok":false,"err":"unavailable","message":"gone"}"#.into());
+                }
+                self.0.dispatch(op, payload)
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        super::mount_export_bridge(
+            Arc::new(GoneOnOpen(TempBridge::new(dir.path()))),
+            DOWNLOAD_TREE,
+        );
+        struct Unmount;
+        impl Drop for Unmount {
+            fn drop(&mut self) {
+                super::unmount_export();
+            }
+        }
+        let _unmount = Unmount;
+
+        match crate::export_data_folder(&root, Path::new(SAF_EXPORT_ROOT)) {
+            Err(crate::UprivError::Io(error)) => {
+                assert_eq!(error.to_string(), "gone");
+                assert!(!super::is_unreachable(&error));
+            }
+            other => panic!("expected an I/O error, got {other:?}"),
+        }
+        assert!(crate::data_folder_export_status(root.root()).is_none());
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
     }
 
     struct DotDotList;

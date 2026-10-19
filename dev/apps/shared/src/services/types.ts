@@ -22,8 +22,9 @@ export interface AppServices {
   appSettings: AppSettingsService;
   backups: BackupService;
   /**
-   * Export data folder. Desktop only for now: a phone data folder is a
-   * storage-access grant, and the zip would need a second grant to land in.
+   * Export data folder. Desktop and the Android native build. On a phone the
+   * zip lands in a second folder the user picks, mounted beside the data
+   * folder for that one export. Mocks leave it out.
    */
   dataFolder?: DataFolderService;
   logs: LogService;

@@ -66,6 +66,7 @@ import {
 } from "@/theme/tokens";
 import { AppSettingsModal } from "@/features/system/settings/AppSettingsModal";
 import { VaultRootDataFolderModal } from "@/features/system/settings/VaultRootDataFolderModal";
+import { DataFolderExportModal } from "@/features/system/data-folder-export";
 import { LogsModal } from "@/features/system/logs/LogsModal";
 import { HelpModal } from "@/features/system/help/HelpModal";
 import { SystemInfoModal } from "@/features/system/info/SystemInfoModal";
@@ -217,6 +218,8 @@ export function VaultListScreen() {
     setDataFolderOpen,
     dataFolderDirty,
     setDataFolderDirty,
+    dataFolderExportOpen,
+    setDataFolderExportOpen,
     groupsOpen,
     setGroupsOpen,
     groupsDirty,
@@ -248,6 +251,12 @@ export function VaultListScreen() {
     backupSaveStartedAt,
     backupListRefresh,
     handleBackupSaveNow,
+    showExportDataFolder,
+    dataFolderExportJob,
+    dataFolderExportCanStart,
+    dataFolderExportWritten,
+    handleStartDataFolderExport,
+    stopDataFolderExport,
     setBackupsVault,
     settingsGroup,
     setSettingsGroup,
@@ -1275,6 +1284,13 @@ export function VaultListScreen() {
                   setDataFolderOpen(true);
                 }}
               />
+              {showExportDataFolder ? (
+                <MenuActionItem
+                  icon="archive"
+                  label={t("app.menu.export_data_folder")}
+                  onPress={() => setDataFolderExportOpen(true)}
+                />
+              ) : null}
             </DropdownPanel>
           </View>
         </View>
@@ -1633,6 +1649,15 @@ export function VaultListScreen() {
         onClose={() => setDataFolderOpen(false)}
         onDirtyChange={setDataFolderDirty}
         vaultActivityBlocksChange={!appConfigEditAllowed("data_folder", vaults, pipelineStatus)}
+      />
+      <DataFolderExportModal
+        open={dataFolderExportOpen}
+        canStart={dataFolderExportCanStart}
+        job={dataFolderExportJob}
+        written={dataFolderExportWritten}
+        onClose={() => setDataFolderExportOpen(false)}
+        onStart={handleStartDataFolderExport}
+        onStop={stopDataFolderExport}
       />
       <LogsModal open={logsOpen} onClose={() => setLogsOpen(false)} />
       <HelpModal open={helpOpen} onClose={() => setHelpOpen(false)} />

@@ -16,12 +16,30 @@ import org.json.JSONObject
  * relative path into a document under the persisted tree and hands Rust a
  * detached file descriptor. Nothing is copied into app storage.
  */
-internal object SafFs {
-  private const val TAG = "UprivSafFs"
-  private const val MIME_DIR = DocumentsContract.Document.MIME_TYPE_DIR
-  private const val MIME_FILE = "application/octet-stream"
-  private const val REPLACING_SUFFIX = ".replacing"
-  private val MISS_CODES = setOf("not_found", "other")
+internal object SafFs : SafTreeFs("data folder", documentsHoldsUpriv = true)
+
+/**
+ * The folder picked for Export data folder. Rust addresses it as
+ * `/upriv-saf-export` and writes the zip straight into it.
+ */
+internal object SafExportFs : SafTreeFs("export folder", documentsHoldsUpriv = false)
+
+/**
+ * One mounted storage-access tree. [what] names it in error messages. When
+ * [documentsHoldsUpriv] is set, a shared Documents grant is served through
+ * its `Upriv` child, as the data folder is.
+ */
+internal abstract class SafTreeFs(
+  private val what: String,
+  private val documentsHoldsUpriv: Boolean,
+) {
+  private companion object {
+    const val TAG = "UprivSafFs"
+    const val MIME_DIR = DocumentsContract.Document.MIME_TYPE_DIR
+    const val MIME_FILE = "application/octet-stream"
+    const val REPLACING_SUFFIX = ".replacing"
+    val MISS_CODES = setOf("not_found", "other")
+  }
 
   private val treeUri = AtomicReference("")
 
@@ -66,16 +84,16 @@ internal object SafFs {
     synchronized(gate) { dispatchLocked(op, payload) }
 
   private fun dispatchLocked(op: String, payload: String): String {
-    val context = appContext ?: return err("permission_denied", "data folder is not mounted")
+    val context = appContext ?: return err("permission_denied", "$what is not mounted")
     val tree = treeUri.get().trim()
     if (!tree.startsWith("content://")) {
-      return err("permission_denied", "data folder is not mounted")
+      return err("permission_denied", "$what is not mounted")
     }
     val result = runOp(context, tree, op, payload)
     // A removed drive answers every lookup as a miss. Rust must not read that
     // as a deleted file, so a miss on an unreachable tree is `unavailable`.
     if (isMissOrFailure(result) && !isTreeReachable(context, tree)) {
-      return err("unavailable", "data folder is not reachable")
+      return err("unavailable", "$what is not reachable")
     }
     return result
   }
@@ -505,6 +523,7 @@ internal object SafFs {
     }
     val uri = DocumentsContract.buildDocumentUriUsingTree(parsed, treeId)
     val base = Node(uri, true, 0)
+    if (!documentsHoldsUpriv) return base
     if (treeId != "primary:Documents" && treeId != "home:Documents") return base
     // The remember key is not a vault path. A file named Upriv inside the
     // data folder must not reuse this cache entry.

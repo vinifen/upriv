@@ -746,6 +746,10 @@ internal open class UniffiVTableCallbackInterfaceSafFsCallback(
 
 
 
+
+
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -772,10 +776,14 @@ internal interface UniffiLib : Library {
     ): RustBuffer.ByValue
     fun uniffi_upriv_ffi_fn_func_invoke(`method`: RustBuffer.ByValue,`paramsJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    fun uniffi_upriv_ffi_fn_func_mount_saf_export_fs(`treeUri`: RustBuffer.ByValue,`callback`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
     fun uniffi_upriv_ffi_fn_func_mount_saf_fs(`callback`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_upriv_ffi_fn_func_probe_saf_fs(uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
+    fun uniffi_upriv_ffi_fn_func_unmount_saf_export_fs(uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
     fun uniffi_upriv_ffi_fn_func_unmount_saf_fs(uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun ffi_upriv_ffi_rustbuffer_alloc(`size`: Long,uniffi_out_err: UniffiRustCallStatus, 
@@ -898,9 +906,13 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_upriv_ffi_checksum_func_invoke(
     ): Short
+    fun uniffi_upriv_ffi_checksum_func_mount_saf_export_fs(
+    ): Short
     fun uniffi_upriv_ffi_checksum_func_mount_saf_fs(
     ): Short
     fun uniffi_upriv_ffi_checksum_func_probe_saf_fs(
+    ): Short
+    fun uniffi_upriv_ffi_checksum_func_unmount_saf_export_fs(
     ): Short
     fun uniffi_upriv_ffi_checksum_func_unmount_saf_fs(
     ): Short
@@ -935,10 +947,16 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_upriv_ffi_checksum_func_invoke() != 41611.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_upriv_ffi_checksum_func_mount_saf_export_fs() != 38999.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_upriv_ffi_checksum_func_mount_saf_fs() != 24976.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_upriv_ffi_checksum_func_probe_saf_fs() != 28953.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_upriv_ffi_checksum_func_unmount_saf_export_fs() != 45379.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_upriv_ffi_checksum_func_unmount_saf_fs() != 28751.toShort()) {
@@ -1244,6 +1262,20 @@ public object FfiConverterTypeSafFsCallback: FfiConverterCallbackInterface<SafFs
     
 
         /**
+         * Mount `/upriv-saf-export` onto the folder picked for Export data folder.
+         *
+         * `tree_uri` is that folder's `content://` tree. The export refuses it when
+         * it lies inside a `.upriv`. The data folder mount is left as it is.
+         */ fun `mountSafExportFs`(`treeUri`: kotlin.String, `callback`: SafFsCallback)
+        = 
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_upriv_ffi_fn_func_mount_saf_export_fs(
+        FfiConverterString.lower(`treeUri`),FfiConverterTypeSafFsCallback.lower(`callback`),_status)
+}
+    
+    
+
+        /**
          * Mount `/upriv-saf-root` onto the storage-access tree `callback` addresses.
          */ fun `mountSafFs`(`callback`: SafFsCallback)
         = 
@@ -1264,6 +1296,17 @@ public object FfiConverterTypeSafFsCallback: FfiConverterCallbackInterface<SafFs
 }
     )
     }
+    
+
+        /**
+         * Drop the export folder mount.
+         */ fun `unmountSafExportFs`()
+        = 
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_upriv_ffi_fn_func_unmount_saf_export_fs(
+        _status)
+}
+    
     
 
         /**

@@ -30,6 +30,7 @@ import { nativeVaultLifecycleService } from "./vaultLifecycleService";
 import { nativeVaultService } from "./vaultService";
 import { nativeVaultFileSystemService } from "./vaultFileSystemService";
 import { nativeBackupService } from "./backupService";
+import { nativeDataFolderService } from "./dataFolderService";
 import { nativeCreateVaultService } from "./createVaultService";
 import { nativeVaultSecurityService } from "./vaultSecurityService";
 import { isSafLogicalRoot, SAF_VAULT_ROOT } from "./androidVaultHome";
@@ -360,7 +361,8 @@ function createNativeVaultRootService(): VaultRootService {
  * Native adapters → in-process `upriv-ffi` (same split as desktop
  * `createDesktopServices`). A picked `content://` folder is mounted at
  * `/upriv-saf-root` before path RPCs, so create, open, edit, import, and
- * backup write on that grant. Expo Go never reaches this factory.
+ * backup write on that grant. Export data folder mounts the folder picked for
+ * its zip at `/upriv-saf-export`. Expo Go never reaches this factory.
  */
 export function createNativeServices(): AppServices {
   return {
@@ -372,6 +374,7 @@ export function createNativeServices(): AppServices {
     vaultGroups: nativeVaultGroupService,
     filesystem: nativeVaultFileSystemService,
     backups: nativeBackupService,
+    dataFolder: nativeDataFolderService,
     createVault: nativeCreateVaultService,
     vaultSecurity: nativeVaultSecurityService,
   };

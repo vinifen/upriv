@@ -12,4 +12,10 @@ export interface DataFolderService {
   exportProgress(): Promise<DataFolderExportProgress | null>;
   /** Stop the running export. Its partial zip is removed. False when none ran. */
   cancelExport(): Promise<boolean>;
+  /**
+   * A picked folder no export will use: replaced by another pick, or the
+   * window closed first. Android drops the access the folder picker took.
+   * The running export's own folder is released when it ends.
+   */
+  releaseDestination?(destDir: string): void;
 }

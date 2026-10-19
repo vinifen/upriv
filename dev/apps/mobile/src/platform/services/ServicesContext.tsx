@@ -31,6 +31,10 @@ export function useAppSettingsService() {
 export function useBackupService() {
   return useServices().backups;
 }
+/** Export data folder. Undefined where the build cannot write the zip (Expo Go mocks). */
+export function useDataFolderService() {
+  return useServices().dataFolder;
+}
 export function useLogService() {
   return useServices().logs;
 }

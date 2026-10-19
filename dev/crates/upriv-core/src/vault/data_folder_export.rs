@@ -51,7 +51,12 @@ const ZIP_SLACK: u64 = 1024 * 1024;
 /// or in recovery, and no other work may hold one.
 pub fn export_data_folder(root: &VaultRoot, dest_dir: &Path) -> Result<DataFolderExport> {
     crate::paths::validate_existing_vault_root(root.root())?;
+    // A picked Android folder is the logical export root. Its tree address
+    // says whether it sits inside a `.upriv`.
+    let picked_tree = crate::host_fs::export_tree_uri(dest_dir);
     if crate::paths::path_is_under_reserved_upriv_tree(dest_dir)
+        || picked_tree
+            .is_some_and(|uri| crate::paths::path_is_under_reserved_upriv_tree(Path::new(&uri)))
         || crate::paths::is_reserved_upriv_workspace_path(dest_dir, root.root())
     {
         return Err(UprivError::DataFolderExportDestinationReserved(
@@ -62,9 +67,22 @@ pub fn export_data_folder(root: &VaultRoot, dest_dir: &Path) -> Result<DataFolde
         return Err(std::io::Error::new(ErrorKind::NotFound, "export folder not found").into());
     }
     let held = hold_data_folder(root)?;
-    let written = write_data_folder_zip(root, dest_dir, &held.running);
+    let written = write_data_folder_zip(root, dest_dir, &held.running)
+        .map_err(|error| destination_unreachable_as_io(error, root));
     log_outcome(&written, held.vaults.len());
     written
+}
+
+/// A picked Android folder whose drive stops answering fails this export like
+/// any write error. Only a data folder that stops answering stays unreachable,
+/// which asks the person to reconnect it.
+fn destination_unreachable_as_io(error: UprivError, root: &VaultRoot) -> UprivError {
+    match error {
+        UprivError::Io(io) if crate::host_fs::is_unreachable(&io) && root.root().host_is_dir() => {
+            UprivError::Io(std::io::Error::new(io.kind(), io.to_string()))
+        }
+        other => other,
+    }
 }
 
 /// The export mark plus one exclusive hold per vault folder.

@@ -30,6 +30,8 @@ import {
   vaultIdsInHiddenGroups,
   vaultIdsUnhiddenByGroups,
   canDeleteVaultNow,
+  dataFolderCanExport,
+  dataFolderZipName,
   vaultRowControls,
   resolveVaultListStatus,
   vaultCanExport,
@@ -62,15 +64,22 @@ import {
 } from "@upriv/shared";
 import {
   useBackupService,
+  useDataFolderService,
   useLogService,
   useVaultGroupService,
   useVaultLifecycleService,
   useVaultService,
 } from "@/platform/services";
 import { useAppSettingsContext } from "@/features/system/settings";
+import type { DataFolderExportWritten } from "@/features/system/data-folder-export";
 import { useTranslation } from "@/i18n";
 import { mobileErrorI18nKey } from "@/lib/errorMessages";
-import { useLoadingBudget, useToast, useVaultBackupJob } from "@upriv/shared/react";
+import {
+  useDataFolderExportJob,
+  useLoadingBudget,
+  useToast,
+  useVaultBackupJob,
+} from "@upriv/shared/react";
 import { CONTROL_HEIGHT_MD, MAX_WIDTH_VAULT_LIST, spacing } from "@/theme/tokens";
 import { exportVaultPackage } from "@/features/vaults/list/exportVaultPackage";
 import { useVaultLifecycle } from "@/features/vaults/lifecycle";
@@ -194,13 +203,48 @@ export function useVaultListScreen() {
   const existingOrders = useMemo(() => vaults.map((vault) => vault.order ?? 0), [vaults]);
   const existingDisplayNames = useMemo(() => vaults.map((vault) => vault.displayName), [vaults]);
 
+  const dataFolderService = useDataFolderService();
+  const [dataFolderExportWritten, setDataFolderExportWritten] =
+    useState<DataFolderExportWritten | null>(null);
+  /** The folder the running export writes into, shown once the zip is there. */
+  const dataFolderExportFolderRef = useRef("");
+  const {
+    job: dataFolderExportJob,
+    start: startDataFolderExport,
+    stop: stopDataFolderExport,
+  } = useDataFolderExportJob(dataFolderService, {
+    onExported: (written) => {
+      const name = dataFolderZipName(written.path);
+      setDataFolderExportWritten({ name, folder: dataFolderExportFolderRef.current });
+      show(t("toast.data_folder_exported", { name }));
+    },
+    onFailed: (error) => {
+      if (shouldBumpVaultRootEpoch(error)) {
+        void reportVaultRootIntegrityFailure(error);
+        return;
+      }
+      show(t(mobileErrorI18nKey(error, "toast.data_folder_export_failed")));
+    },
+    onCancelled: () => {
+      show(t("toast.data_folder_export_cancelled"));
+    },
+    onTimedOut: () => {
+      show(t("error.operation_timed_out"));
+    },
+  });
+
   const openCreate = useCallback(
     (draft: CreateVaultDraft | null = null, step: CreateVaultStepId | null = null) => {
+      // A new vault would land beside a data-folder copy in progress. Core refuses it too.
+      if (dataFolderExportJob) {
+        show(t("error.data_folder_export_busy"));
+        return;
+      }
       setCreateDraft(draft);
       setCreateStep(step);
       setCreateOpen(true);
     },
-    [setCreateDraft, setCreateOpen, setCreateStep],
+    [dataFolderExportJob, setCreateDraft, setCreateOpen, setCreateStep, show, t],
   );
 
   const closeCreate = useCallback(() => {
@@ -398,17 +442,28 @@ export function useVaultListScreen() {
       show(t("error.operation_timed_out"));
     },
   });
+  // The data folder export holds every vault: none may open until it ends.
   blockOpenVaultIdsRef.current = new Set(
-    [exportJob?.vaultId, rewrapRun?.vaultId, backupJob.job?.vaultId].filter(
-      (id): id is string => id != null,
-    ),
+    [
+      exportJob?.vaultId,
+      rewrapRun?.vaultId,
+      backupJob.job?.vaultId,
+      ...(dataFolderExportJob ? vaults.map((vault) => vault.id) : []),
+    ].filter((id): id is string => id != null),
   );
 
   useEffect(() => {
     if (!lifecycleRequest || lifecycleRequest.intent !== "unlock") return;
     if (!blockOpenVaultIdsRef.current.has(lifecycleRequest.vaultId)) return;
     setLifecycleRequest(null);
-  }, [backupJob.job, exportJob, lifecycleRequest, rewrapRun, setLifecycleRequest]);
+  }, [
+    backupJob.job,
+    dataFolderExportJob,
+    exportJob,
+    lifecycleRequest,
+    rewrapRun,
+    setLifecycleRequest,
+  ]);
 
   const pipelineStatus = useMemo(
     () => ({
@@ -426,6 +481,7 @@ export function useVaultListScreen() {
       queuedOpenVaultIds: [...lifecycle.queuedOpenVaultIds],
       activeVaultId: lifecycle.activePipelineVaultId ?? undefined,
       activeStartedAt: lifecycle.activePipelineStartedAt ?? undefined,
+      dataFolderExporting: dataFolderExportJob !== null,
     }),
     [
       lifecycle.activePipelineStartedAt,
@@ -434,12 +490,29 @@ export function useVaultListScreen() {
       lifecycle.closingVaultIds,
       lifecycle.creatingVaultIds,
       backupJob.job,
+      dataFolderExportJob,
       exportJob,
       lifecycle.openingVaultIds,
       lifecycle.queuedOpenVaultIds,
       lifecycle.queuedVaultIds,
       rewrapRun,
     ],
+  );
+
+  const dataFolderExportCanStart = dataFolderCanExport(vaults, pipelineStatus);
+  // Hidden while it cannot start; shown while it runs so the window can be reopened.
+  const showExportDataFolder =
+    dataFolderService !== undefined && (dataFolderExportJob !== null || dataFolderExportCanStart);
+
+  const handleStartDataFolderExport = useCallback(
+    (destDir: string): boolean => {
+      if (!dataFolderExportCanStart) return false;
+      dataFolderExportFolderRef.current = destDir;
+      if (!startDataFolderExport(destDir)) return false;
+      setDataFolderExportWritten(null);
+      return true;
+    },
+    [dataFolderExportCanStart, startDataFolderExport],
   );
 
   const backupSaving = backupJob.job !== null && backupJob.job.vaultId === backupsVaultId;
@@ -506,6 +579,10 @@ export function useVaultListScreen() {
     (vault: VaultListItem) => {
       const listStatus = resolveVaultListStatus(vault, pipelineStatus);
       if (!vaultService.canExportVault) return;
+      if (dataFolderExportJob) {
+        show(t("error.data_folder_export_busy"));
+        return;
+      }
       if (exportJob && exportJob.vaultId !== vault.id) {
         show(t("vault.export.busy"));
         return;
@@ -534,7 +611,16 @@ export function useVaultListScreen() {
       }
       setExportVault(vault);
     },
-    [exportJob, pipelineStatus, setExportVault, show, t, vaultService.canExportVault, vaults],
+    [
+      dataFolderExportJob,
+      exportJob,
+      pipelineStatus,
+      setExportVault,
+      show,
+      t,
+      vaultService.canExportVault,
+      vaults,
+    ],
   );
 
   const isVaultPipelineBusy = lifecycle.isVaultPipelineBusy;
@@ -1197,6 +1283,12 @@ export function useVaultListScreen() {
     backupSaveStartedAt: backupSaving ? (backupJob.job?.startedAt ?? null) : null,
     backupListRefresh,
     handleBackupSaveNow,
+    showExportDataFolder,
+    dataFolderExportJob,
+    dataFolderExportCanStart,
+    dataFolderExportWritten,
+    handleStartDataFolderExport,
+    stopDataFolderExport,
     displayRowsRef,
     searchNoMatches,
     visibleVaults,

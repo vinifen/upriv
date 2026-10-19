@@ -14,6 +14,9 @@ const safRelease = vi.fn();
 const safPersist = vi.fn();
 const mountSafRoot = vi.fn();
 const unmountSafRoot = vi.fn();
+const mountSafExport = vi.fn();
+const unmountSafExport = vi.fn();
+const safReleaseImportTree = vi.fn();
 const toSafRpcError = vi.fn((error: unknown, treeUri: string) => {
   return new RpcError("io_error", `setup failed: ${String(error)} @ ${treeUri}`);
 });
@@ -84,6 +87,9 @@ vi.mock("@/lib/rpc", () => ({
   rpcBackupPromote: vi.fn(),
   rpcBackupGet: vi.fn(),
   rpcBackupExportToPath: vi.fn(),
+  rpcDataFolderExport: vi.fn(async () => ({ path: "/upriv-saf-export/upriv.zip", size: 1 })),
+  rpcDataFolderExportStatus: vi.fn(async () => null),
+  rpcDataFolderExportCancel: vi.fn(async () => false),
   rpcVaultGroupList: vi.fn(async () => ({ groups: [], invalid: false })),
   rpcVaultGroupCreate: vi.fn(),
   rpcVaultGroupUpdate: vi.fn(),
@@ -106,7 +112,10 @@ vi.mock("@/platform/native/safVaultRoot", () => ({
   safPersist,
   mountSafRoot,
   unmountSafRoot,
+  mountSafExport,
+  unmountSafExport,
   safRelease,
+  safReleaseImportTree,
   safDocumentsInitialUri: () => safState.documentsUri,
   safReadSettings: () => safState.readSettings,
   safSetActiveUri: (uri: string | null) => {
@@ -239,6 +248,24 @@ describe("createNativeServices", () => {
     expect(rpc.rpcVaultList).toHaveBeenCalled();
     expect(services.lifecycle.validateLifecyclePassword("  secret  ")).toBe(true);
     expect(services.lifecycle.validateLifecyclePassword("   ")).toBe(false);
+  });
+
+  it("exports the data folder into a picked tree beside the data folder mount", async () => {
+    const { createNativeServices } = await importModule(true);
+    const rpc = await import("@/lib/rpc");
+    vi.mocked(rpc.rpcDataFolderExport).mockClear();
+    mountSafExport.mockClear();
+    unmountSafExport.mockClear();
+    safReleaseImportTree.mockClear();
+    const services = createNativeServices();
+    expect(services.dataFolder).toBeDefined();
+    await services.dataFolder?.exportTo("content://tree/backup-drive");
+    expect(mountSafExport).toHaveBeenCalledWith("content://tree/backup-drive");
+    expect(rpc.rpcDataFolderExport).toHaveBeenCalledWith("/upriv-saf-export");
+    expect(unmountSafExport).toHaveBeenCalledTimes(1);
+    expect(safReleaseImportTree).toHaveBeenCalledWith("content://tree/backup-drive");
+    expect(mountSafRoot).not.toHaveBeenCalled();
+    expect(unmountSafRoot).not.toHaveBeenCalled();
   });
 
   it("calls path vault RPCs while a SAF tree is active", async () => {
