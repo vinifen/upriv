@@ -94,12 +94,19 @@ pub fn is_import_io_method(method: &str) -> bool {
     matches!(method, "vault_fs_import_os_file" | "vault_fs_import_seal")
 }
 
+/// The zip of the whole data folder. Own worker: an import, export, or backup
+/// it refuses answers at once instead of queuing behind a copy of every vault.
+pub fn is_data_folder_io_method(method: &str) -> bool {
+    method == "data_folder_export"
+}
+
 /// Long contents I/O that would stall stdin if run inline.
 pub fn is_long_io_method(method: &str, _params: &Value) -> bool {
     is_lifecycle_io_method(method)
         || is_rewrap_io_method(method)
         || is_pack_io_method(method)
         || is_import_io_method(method)
+        || is_data_folder_io_method(method)
 }
 
 /// Which off-stdin worker runs this method.
@@ -112,6 +119,7 @@ pub enum HeavyLane {
     Rewrap,
     Pack,
     Import,
+    DataFolder,
 }
 
 pub fn heavy_lane(method: &str, params: &Value) -> Option<HeavyLane> {
@@ -129,6 +137,9 @@ pub fn heavy_lane(method: &str, params: &Value) -> Option<HeavyLane> {
     }
     if is_pack_io_method(method) {
         return Some(HeavyLane::Pack);
+    }
+    if is_data_folder_io_method(method) {
+        return Some(HeavyLane::DataFolder);
     }
     None
 }
@@ -225,6 +236,12 @@ mod tests {
             Some(HeavyLane::Pack)
         );
         assert_eq!(heavy_lane("backup_save", &empty), Some(HeavyLane::Pack));
+        assert_eq!(
+            heavy_lane("data_folder_export", &empty),
+            Some(HeavyLane::DataFolder)
+        );
+        assert_eq!(heavy_lane("data_folder_export_status", &empty), None);
+        assert_eq!(heavy_lane("data_folder_export_cancel", &empty), None);
         assert_ne!(
             heavy_lane("vault_close", &empty),
             heavy_lane("vault_import_7z", &empty)
@@ -276,6 +293,7 @@ mod tests {
         let expected = [
             "backup_get",
             "backup_save",
+            "data_folder_export",
             "vault_change_kdf",
             "vault_change_password",
             "vault_close",

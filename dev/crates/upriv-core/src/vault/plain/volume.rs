@@ -3,12 +3,13 @@
 //! to a cloud service. The last one is only a warning for the user: a file
 //! there may leave the computer while the vault is open.
 
-use std::path::{Component, Path, PathBuf};
+#[cfg(target_os = "linux")]
+use std::path::PathBuf;
+use std::path::{Component, Path};
 
 use serde::Serialize;
 
-#[allow(unused_imports)]
-use crate::host_fs::HostFsQuery;
+use crate::host_fs::nearest_existing;
 
 /// Where the folder physically is, as far as this computer can tell.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -54,25 +55,6 @@ pub(super) fn inspect(folder: &Path) -> Volume {
         volume.class = PlainFolderClass::Cloud;
     }
     volume
-}
-
-/// Bytes the current user may still write on the folder's filesystem.
-/// `None` when the system does not say.
-pub(super) fn free_bytes(folder: &Path) -> Option<u64> {
-    if crate::host_fs::is_bridge_path(folder) {
-        return None;
-    }
-    free_bytes_local(&nearest_existing(folder))
-}
-
-fn nearest_existing(path: &Path) -> PathBuf {
-    let mut current = path.to_path_buf();
-    while !current.host_exists() {
-        if !current.pop() {
-            break;
-        }
-    }
-    current
 }
 
 /// Folders cloud clients sync by default, compared without case.
@@ -302,48 +284,6 @@ fn inspect_local(_path: &Path) -> Volume {
     }
 }
 
-#[cfg(unix)]
-fn free_bytes_local(path: &Path) -> Option<u64> {
-    use std::os::unix::ffi::OsStrExt;
-    let c_path = std::ffi::CString::new(path.as_os_str().as_bytes()).ok()?;
-    let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
-    if unsafe { libc::statvfs(c_path.as_ptr(), &mut st) } != 0 {
-        return None;
-    }
-    #[allow(clippy::unnecessary_cast)]
-    let (available, fragment) = (st.f_bavail as u64, st.f_frsize as u64);
-    Some(available.saturating_mul(fragment))
-}
-
-#[cfg(windows)]
-fn free_bytes_local(path: &Path) -> Option<u64> {
-    #[link(name = "kernel32")]
-    extern "system" {
-        fn GetDiskFreeSpaceExW(
-            dir: *const u16,
-            free_to_caller: *mut u64,
-            total: *mut u64,
-            total_free: *mut u64,
-        ) -> i32;
-    }
-    let wide = crate::host_fs::windows_verbatim_wide(path);
-    let mut available = 0u64;
-    let ok = unsafe {
-        GetDiskFreeSpaceExW(
-            wide.as_ptr(),
-            &mut available,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-        )
-    };
-    (ok != 0).then_some(available)
-}
-
-#[cfg(not(any(unix, windows)))]
-fn free_bytes_local(_path: &Path) -> Option<u64> {
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -357,12 +297,6 @@ mod tests {
         )));
         assert!(!in_cloud_folder(Path::new("/home/a/Documents/Notes")));
         assert!(!in_cloud_folder(Path::new("/home/a/toolbox/Notes")));
-    }
-
-    #[test]
-    fn free_bytes_reports_a_number_for_a_temp_folder() {
-        let tmp = tempfile::tempdir().unwrap();
-        assert!(free_bytes(&tmp.path().join("missing/leaf")).is_some_and(|bytes| bytes > 0));
     }
 
     #[cfg(target_os = "linux")]

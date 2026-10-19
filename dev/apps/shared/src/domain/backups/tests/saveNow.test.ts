@@ -30,4 +30,9 @@ describe("vaultCanSaveBackupNow", () => {
     }
     expect(vaultCanSaveBackupNow(vault, { openingVaultIds: ["another"] })).toBe(true);
   });
+
+  it("refuses while the data folder is exported", () => {
+    const vault = vaultListItemFixture({ session: null });
+    expect(vaultCanSaveBackupNow(vault, { dataFolderExporting: true })).toBe(false);
+  });
 });

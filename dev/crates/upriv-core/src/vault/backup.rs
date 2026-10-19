@@ -14,6 +14,7 @@ use crate::config::{load_vault_config, VaultBackupMode};
 use crate::error::{Result, UprivError};
 use crate::logging::{log_event, LogLevel};
 use crate::paths::VaultRoot;
+use crate::session::{ensure_data_folder_export_idle, with_vault_dir_lock};
 use crate::time::utc_filename_stamp;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -520,28 +521,51 @@ fn finish_backup_prune(vault_dir: &Path, mode: VaultBackupMode, keep_last: u32) 
     sync_dir(&backups)
 }
 
+/// Delete and pin run under the vault's directory lock and refuse while the
+/// data folder is being exported. The export copies each vault under the same
+/// lock, so its zip holds every backup once, before or after the change.
+fn with_backups_settled<T>(
+    root: &VaultRoot,
+    vault_dir: &Path,
+    f: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    ensure_data_folder_export_idle(root.root())?;
+    with_vault_dir_lock(vault_dir, || {
+        ensure_data_folder_export_idle(root.root())?;
+        f()
+    })
+}
+
 pub fn delete_backups(root: &VaultRoot, vault_id: &str, stamps: &[String]) -> Result<()> {
     let vault_dir = root.vault_dir(vault_id)?;
-    let backups = vault_dir.join("backups");
-    let mut paths = Vec::new();
-    let mut seen = std::collections::BTreeSet::new();
-    for key in stamps {
-        let Ok(parsed) = parse_backup_key(key) else {
-            continue;
-        };
-        let path = one_store_zip(&backups, &parsed, key)?;
-        if seen.insert(path.clone()) {
-            paths.push(path);
+    with_backups_settled(root, &vault_dir, || {
+        let backups = vault_dir.join("backups");
+        let mut paths = Vec::new();
+        let mut seen = std::collections::BTreeSet::new();
+        for key in stamps {
+            let Ok(parsed) = parse_backup_key(key) else {
+                continue;
+            };
+            let path = one_store_zip(&backups, &parsed, key)?;
+            if seen.insert(path.clone()) {
+                paths.push(path);
+            }
         }
-    }
-    for path in paths {
-        crate::host_fs::remove_file(path)?;
-    }
-    Ok(())
+        for path in paths {
+            crate::host_fs::remove_file(path)?;
+        }
+        Ok(())
+    })
 }
 
 pub fn promote_backup_save(root: &VaultRoot, vault_id: &str, stamp: &str) -> Result<()> {
     let vault_dir = root.vault_dir(vault_id)?;
+    with_backups_settled(root, &vault_dir, || {
+        promote_backup_save_in(&vault_dir, stamp)
+    })
+}
+
+fn promote_backup_save_in(vault_dir: &Path, stamp: &str) -> Result<()> {
     let backups = vault_dir.join("backups");
     let saves = backups.join("saves");
     crate::host_fs::create_dir_all(&saves)?;

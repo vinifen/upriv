@@ -383,10 +383,15 @@ fn infer_import_kind(kind: Option<&str>, archive_path: Option<&str>) -> &'static
 
 pub(super) fn app_shutdown() -> RpcResponse {
     match optional_vault_root() {
-        Ok(Some(root)) => match close_all_vaults(&root) {
-            Ok(_) => ok(json!(null)),
-            Err(error) => map_core_err(error),
-        },
+        Ok(Some(root)) => {
+            // The daemon waits for its workers before it exits. A cancelled
+            // data-folder export stops within one buffer and removes its file.
+            upriv_core::cancel_data_folder_export(root.root());
+            match close_all_vaults(&root) {
+                Ok(_) => ok(json!(null)),
+                Err(error) => map_core_err(error),
+            }
+        }
         Ok(None) => ok(json!(null)),
         Err(response) => response,
     }

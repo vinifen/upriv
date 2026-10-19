@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   useBackupService,
+  useDataFolderService,
   useVaultGroupService,
   useLogService,
   useVaultService,
@@ -25,6 +26,8 @@ import {
   createDraftFromImportPackage,
   createVaultImportPackage,
   canDeleteVaultNow,
+  dataFolderCanExport,
+  dataFolderZipName,
   vaultCanSaveBackupNow,
   vaultRowControls,
   displayNameToGroupId,
@@ -49,6 +52,7 @@ import {
   type VaultListSort,
   type VaultListSortDirection,
   type VaultListViewMode,
+  type VaultPathWriteResult,
   type VaultRewrapRun,
   type VaultSettingsAreaId,
 } from "@upriv/shared";
@@ -56,7 +60,7 @@ import { useFileManager } from "@/features/vaults/file-manager";
 import { useTranslation } from "@/i18n";
 import { useVaultLifecycleActions } from "@/features/vaults/lifecycle";
 import { useErrorToast } from "@/hooks/useErrorToast";
-import { useLoadingBudget, useVaultBackupJob } from "@upriv/shared/react";
+import { useDataFolderExportJob, useLoadingBudget, useVaultBackupJob } from "@upriv/shared/react";
 import { useDaemonReady } from "@/lib/useDaemonReady";
 import { useVaultListState } from "./useVaultListState";
 import { useVaultListModals } from "./useVaultListModals";
@@ -501,8 +505,35 @@ export function useVaultListScreen() {
       showToast(t("error.operation_timed_out"));
     },
   });
+  const dataFolderService = useDataFolderService();
+  const [dataFolderExportWritten, setDataFolderExportWritten] =
+    useState<VaultPathWriteResult | null>(null);
+  const dataFolderExport = useDataFolderExportJob(dataFolderService, {
+    onExported: (written) => {
+      setDataFolderExportWritten(written);
+      showToast(t("toast.data_folder_exported", { name: dataFolderZipName(written.path) }));
+    },
+    onFailed: (error) => {
+      if (shouldBumpVaultRootEpoch(error)) {
+        void reportVaultRootIntegrityFailure(error);
+        return;
+      }
+      showError(error, "toast.data_folder_export_failed");
+    },
+    onCancelled: () => {
+      showToast(t("toast.data_folder_export_cancelled"));
+    },
+    onTimedOut: () => {
+      showToast(t("error.operation_timed_out"));
+    },
+  });
+  // The export holds every vault: none may open until it ends.
   blockOpenVaultIdsRef.current = new Set(
-    [rewrapRun?.vaultId, backupJob.job?.vaultId].filter((id): id is string => id != null),
+    [
+      rewrapRun?.vaultId,
+      backupJob.job?.vaultId,
+      ...(dataFolderExport.job ? vaults.map((vault) => vault.id) : []),
+    ].filter((id): id is string => id != null),
   );
 
   const settingsPersistVaultIdsRef = useRef(new Set<string>());
@@ -516,7 +547,7 @@ export function useVaultListScreen() {
       return;
     }
     setLifecycleRequest(null);
-  }, [backupJob.job, lifecycleRequest, rewrapRun, setLifecycleRequest]);
+  }, [backupJob.job, dataFolderExport.job, lifecycleRequest, rewrapRun, setLifecycleRequest]);
 
   const lifecycle = useVaultLifecycleActions({
     vaults,
@@ -566,9 +597,11 @@ export function useVaultListScreen() {
       rewrapStartedAt: rewrapRun?.startedAt,
       backupJobVaultIds: backupJob.job ? [backupJob.job.vaultId] : undefined,
       backupJobStartedAt: backupJob.job?.startedAt,
+      dataFolderExporting: dataFolderExport.job !== null,
     }),
-    [backupJob.job, lifecycle.pipelineListStatus, rewrapRun],
+    [backupJob.job, dataFolderExport.job, lifecycle.pipelineListStatus, rewrapRun],
   );
+  const dataFolderExportCanStart = dataFolderCanExport(vaults, pipelineListStatus);
   rowControlsRef.current = new Map(
     vaults.map((vault) => [vault.id, vaultRowControls(vault, pipelineListStatus)]),
   );
@@ -783,9 +816,17 @@ export function useVaultListScreen() {
     [updateVaultUnlockPreset],
   );
 
+  /** A new vault would land beside a data-folder copy in progress. Core refuses it too. */
+  const refuseCreateWhileDataFolderExports = useCallback((): boolean => {
+    if (!dataFolderExport.job) return false;
+    showToast(t("error.data_folder_export_busy"));
+    return true;
+  }, [dataFolderExport.job, showToast, t]);
+
   const handleCreateVaultFromBackup = useCallback(
     (stamp: string, fileName: string, saved = false) => {
       if (!modals.backupVault) return;
+      if (refuseCreateWhileDataFolderExports()) return;
       modals.setCreateVaultInitialDraft(
         createDraftFromBackup(
           stamp,
@@ -802,16 +843,17 @@ export function useVaultListScreen() {
       modals.setBackupVaultId(null);
       modals.setCreateVaultOpen(true);
     },
-    [existingDisplayNames, existingOrders, groups, modals],
+    [existingDisplayNames, existingOrders, groups, modals, refuseCreateWhileDataFolderExports],
   );
 
   const openCreateVaultWithDraft = useCallback(
     (draft: ReturnType<typeof createDraftFromImportPackage>, step: "source" | null = "source") => {
+      if (refuseCreateWhileDataFolderExports()) return;
       modals.setCreateVaultInitialDraft(draft);
       modals.setCreateVaultInitialStep(step);
       modals.setCreateVaultOpen(true);
     },
-    [modals],
+    [modals, refuseCreateWhileDataFolderExports],
   );
 
   const handleCreateFromScratch = useCallback(() => {
@@ -846,6 +888,7 @@ export function useVaultListScreen() {
     modals.settingsGroupId ||
     modals.appSettingsOpen ||
     modals.dataFolderOpen ||
+    modals.dataFolderExportOpen ||
     modals.logsOpen ||
     modals.helpOpen ||
     modals.noteVaultId ||
@@ -1165,6 +1208,11 @@ export function useVaultListScreen() {
           );
         }
       },
+      // Hidden while it cannot start; shown while it runs so the window can be reopened.
+      showExportDataFolder:
+        dataFolderService !== undefined &&
+        (dataFolderExport.job !== null || dataFolderExportCanStart),
+      onOpenExportDataFolder: () => modals.setDataFolderExportOpen(true),
       showCloseAllVaults:
         vaults.filter((vault) => resolveVaultDisplayStatus(vault) === "open").length > 1,
       onCloseAllVaults: () => {
@@ -1230,7 +1278,13 @@ export function useVaultListScreen() {
       },
       onOpenGroupSettings: modals.setSettingsGroupId,
       onToggleGroupCollapsed: handleToggleGroupCollapsed,
-      onExportVault: lifecycle.handleExportVault,
+      onExportVault: (vault: VaultListItem) => {
+        if (dataFolderExport.job) {
+          showToast(t("error.data_folder_export_busy"));
+          return;
+        }
+        lifecycle.handleExportVault(vault);
+      },
       onLockVault: lifecycle.handleLockVault,
       onUnlockVault: lifecycle.handleUnlockVault,
     },
@@ -1401,6 +1455,19 @@ export function useVaultListScreen() {
         void modals.setDataFolderOpen(false);
       },
       onDirtyChange: modals.setDataFolderDirty,
+    },
+    dataFolderExport: {
+      open: modals.dataFolderExportOpen,
+      canStart: dataFolderExportCanStart,
+      job: dataFolderExport.job,
+      written: dataFolderExportWritten,
+      onClose: () => modals.setDataFolderExportOpen(false),
+      onStart: (destDir: string) => {
+        if (!dataFolderExportCanStart) return;
+        setDataFolderExportWritten(null);
+        dataFolderExport.start(destDir);
+      },
+      onStop: dataFolderExport.stop,
     },
     logs: {
       open: modals.logsOpen,

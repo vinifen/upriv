@@ -78,6 +78,8 @@ export function configEditGateAllows(gate: ConfigEditGate, ctx: ConfigEditContex
       return status === "closed" || status === "recovery";
     }
     case "root_idle":
+      // An export copies the whole data folder, even one with no vaults.
+      if (ctx.pipeline?.dataFolderExporting) return false;
       return !listHasVaultBlockingDataFolderChange(ctx.vaults ?? [], ctx.pipeline);
     case "no_open_session":
       return !listHasVaultBlockingWorkspaceClear(ctx.vaults ?? [], ctx.pipeline);

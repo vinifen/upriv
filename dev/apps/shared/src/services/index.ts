@@ -5,6 +5,7 @@ export type {
 } from "./app-settings/AppSettingsService";
 export type { BackupService } from "./backup/BackupService";
 export type { CreateVaultService } from "./vault-create/CreateVaultService";
+export type { DataFolderService } from "./data-folder/DataFolderService";
 export type {
   VaultFileSystemService,
   VaultBinaryByteSource,

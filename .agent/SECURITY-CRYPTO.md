@@ -165,9 +165,11 @@ Do not invent a second body or a 7z repair picker.
 
 **Not modes:** import/export (`.zip` of `store/` **Recommended**, or `.7z`), in-app backup (`backups/<stamp>-<id>.zip`), create-from-backup. Available in both remaining modes.
 
-### Export is per vault
+### Export is per vault, or the whole data folder
 
-No System settings bulk zip of many vaults. Copy **one vault at a time** from that vault’s row (`.zip` of `store/` or `.7z`). To move several vaults, export each (or copy `store/` / a `backups/<stamp>-<id>.zip`).
+A vault export copies **one vault at a time** from that vault’s row (`.zip` of `store/` or `.7z`). There is no zip of a chosen set of vaults.
+
+**Export data folder** (Settings menu) is the one whole copy: `upriv-YYYY-MM-DD-HHmmss.zip` (UTC), Stored, no zip password, holding `upriv-YYYY-MM-DD-HHmmss/.upriv/`. Unzipped, that folder is chosen in Data folder as it is. It copies every file under `.upriv` as it sits on disk (`store/` ciphertext, backups, settings, groups, logs, `state.json` with its recovery records) and never decrypts. It leaves out the `runtime/` locks and unfinished writes (`*.tmp`, `*.tmp.*`, `*.partial`, `*.upriv-part`), and refuses a symlink or a special file. Every vault must be closed or in recovery (`data_folder_busy` otherwise). Core holds each vault for the whole copy, and refuses a new vault, an import, a backup delete or pin, a second export, and a data-folder switch until it ends (`data_folder_export_busy` / `vault_root_busy`). The zip is written beside itself as `.upriv-part` and renamed once its central directory lists every entry. A destination inside a `.upriv` is refused.
 
 **This vault must be closed to export.** Close writes the session into `store/`; then copy/stream. An open, opening, closing, or recovery session on **this** vault cannot export. Other vaults may stay open. File zip/7z import and create-from-backup copy a frozen tree; they do not require the source vault closed.
 
@@ -176,7 +178,7 @@ No System settings bulk zip of many vaults. Copy **one vault at a time** from th
 | `.zip` of `store/` | Copy `store/` — **no password** |
 | `.7z` | Ask password; decrypt from `store/` |
 
-Do not reintroduce Seal, a durable `.7z` beside `store/`, a zip-of-many-vaults settings section, or the dropped ids in new UI/core. PRD/SDD may still mention seven modes — **this file wins** until that docs PR.
+Do not reintroduce Seal, a durable `.7z` beside `store/`, a zip of a chosen set of vaults, or the dropped ids in new UI/core. PRD/SDD may still mention seven modes — **this file wins** until that docs PR.
 
 ---
 

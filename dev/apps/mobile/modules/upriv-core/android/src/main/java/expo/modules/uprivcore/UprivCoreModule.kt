@@ -255,6 +255,7 @@ private object CoreLanes {
   private val lifecycle = single("upriv-fs-io")
   private val rewrap = single("upriv-rewrap")
   val pack = single("upriv-pack")
+  private val dataFolder = single("upriv-data-folder")
   private val importNames = AtomicInteger()
   val importFiles: CoroutineDispatcher =
     Executors.newFixedThreadPool(phoneImportThreads()) { runnable ->
@@ -279,6 +280,7 @@ private object CoreLanes {
     "vault_import_os_path",
     "vault_export",
     "backup_save" -> pack
+    "data_folder_export" -> dataFolder
     else -> light
   }
 }

@@ -24,6 +24,7 @@ Every **blocking** loading / busy / applying overlay in the desktop (and later m
 | `vaultPipeline` | 10 min | Open/close progress (password modal if open + row hint; Argon2id unlock + flush) |
 | `vaultExport` | 10 min | Export zip of `store/` or portable `.7z` |
 | `vaultBackupSave` | 10 min | Backups → Back up now (`backup_save`): zip of the closed `store/` into `backups/saves/` |
+| `dataFolderExport` | 60 min | Export data folder (`data_folder_export`): zip of the whole `.upriv`. Progress from `data_folder_export_status`. On timeout the job asks core to stop (`data_folder_export_cancel`), which removes the partial zip. |
 | `vaultFsImport` | 10 min | In-app FM OS drop / picker. Explorer skeletons at the drop target (appear immediately). Editor loading + countdown only for the file currently being written (`LOADING_APPEAR_DELAY_MS`, that write's `startedAt`) — queued files in the same batch do not show the 10 min clock. Overlapping drops are allowed (one session per batch). Close and cancel stops queued files; the write already in flight still finishes (do not gen-kill a late successful write). On RPC/invoke failure drop the remaining skeletons for that batch. |
 | `vaultRename` | 2 min | Deep vault rename (`vault_rename` folder + id remap) |
 | `settingsSave` | 30 s | Settings Save / workspace path persist (`app_settings_save`) |

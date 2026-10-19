@@ -1,6 +1,7 @@
 import type { AppSettingsService } from "./app-settings/AppSettingsService";
 import type { BackupService } from "./backup/BackupService";
 import type { CreateVaultService } from "./vault-create/CreateVaultService";
+import type { DataFolderService } from "./data-folder/DataFolderService";
 import type { VaultFileSystemService } from "./filesystem/VaultFileSystemService";
 import type { VaultLifecycleService } from "./lifecycle/VaultLifecycleService";
 import type { LogService } from "./logs/LogService";
@@ -20,6 +21,11 @@ export interface AppServices {
   vaultRoot: VaultRootService;
   appSettings: AppSettingsService;
   backups: BackupService;
+  /**
+   * Export data folder. Desktop only for now: a phone data folder is a
+   * storage-access grant, and the zip would need a second grant to land in.
+   */
+  dataFolder?: DataFolderService;
   logs: LogService;
   filesystem: VaultFileSystemService;
   lifecycle: VaultLifecycleService;

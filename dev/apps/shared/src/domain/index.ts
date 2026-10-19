@@ -3,6 +3,7 @@ export * from "./core-rpc";
 export * from "./errors";
 export * from "./app-settings";
 export * from "./backups";
+export * from "./data-folder-export";
 export * from "./edit-policy";
 export * from "./file-tree";
 export * from "./file-manager";

@@ -11,6 +11,12 @@ export {
   type UseExportPasswordCheckOptions,
 } from "./useExportPasswordCheck";
 export { TOAST_DEFAULT_MS, useToast, type ToastState } from "./useToast";
+export {
+  DATA_FOLDER_EXPORT_POLL_MS,
+  useDataFolderExportJob,
+  type DataFolderExportJob,
+  type DataFolderExportJobEvents,
+} from "./useDataFolderExportJob";
 export { useVaultBackups } from "./useVaultBackups";
 export {
   useVaultBackupJob,

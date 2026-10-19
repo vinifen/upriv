@@ -1,13 +1,15 @@
 //! Create a new vault directory + `config.toml` + seeded `store/`.
 
 use std::io::ErrorKind;
+use std::path::Path;
 
 use crate::config::{save_vault_config, VaultConfig};
 use crate::error::{Result, UprivError};
 use crate::logging::{log_event, LogLevel};
 use crate::paths::VaultRoot;
 use crate::session::{
-    with_unlock_lock, with_vault_dir_lock, with_vault_registry_lock, PreparingGuard,
+    ensure_data_folder_export_idle, with_unlock_lock, with_vault_dir_lock,
+    with_vault_registry_lock, PreparingGuard,
 };
 use crate::store::{content_hash_hex, create_seeded_store, KdfUnlockPreset};
 
@@ -49,24 +51,7 @@ pub fn create_vault_with_welcome(
     )?;
     let dest = root.vault_dir(&id)?;
     crate::host_fs::create_dir_all(root.vaults_dir())?;
-    // Registry lock only around `create_dir` so Argon2 does not block rename.
-    with_vault_registry_lock(|| {
-        with_vault_dir_lock(&dest, || match crate::host_fs::create_dir(&dest) {
-            Ok(()) => Ok(()),
-            Err(error) if error.kind() == ErrorKind::AlreadyExists => {
-                Err(UprivError::VaultAlreadyExists(dest.clone()))
-            }
-            Err(error) => Err(error.into()),
-        })
-    })?;
-    // After mkdir so `rename_vault` of this id refuses during Argon2 seed.
-    let _preparing = match PreparingGuard::enter(&dest) {
-        Ok(guard) => guard,
-        Err(error) => {
-            let _ = crate::host_fs::remove_dir_all(&dest);
-            return Err(error);
-        }
-    };
+    let _preparing = claim_new_vault_dir(root, &dest)?;
     with_vault_dir_lock(&dest, || {
         let created: Result<()> = (|| {
             save_vault_config(&dest, &config)?;
@@ -95,4 +80,25 @@ pub fn create_vault_with_welcome(
         log_event(LogLevel::Info, "vault_hidden", &[]);
     }
     Ok(())
+}
+
+/// Make `vaults/<id>/` and mark it preparing in one registry section. The
+/// registry lock covers only that, so Argon2 does not block rename. A
+/// data-folder export takes the same section: it either sees this vault on
+/// its way in, or this create refuses while the export runs.
+pub(super) fn claim_new_vault_dir(root: &VaultRoot, dest: &Path) -> Result<PreparingGuard> {
+    with_vault_registry_lock(|| {
+        ensure_data_folder_export_idle(root.root())?;
+        with_vault_dir_lock(dest, || match crate::host_fs::create_dir(dest) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => {
+                Err(UprivError::VaultAlreadyExists(dest.to_path_buf()))
+            }
+            Err(error) => Err(error.into()),
+        })?;
+        // The mark makes `rename_vault` of this id refuse during Argon2 seed.
+        PreparingGuard::enter(dest).inspect_err(|_| {
+            let _ = crate::host_fs::remove_dir_all(dest);
+        })
+    })
 }

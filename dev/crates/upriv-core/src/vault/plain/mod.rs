@@ -257,7 +257,7 @@ pub(crate) fn activate(
         });
     }
     dest::ensure_parent(root, &dest)?;
-    if let Some(available) = volume::free_bytes(&dest.folder) {
+    if let Some(available) = crate::host_fs::free_bytes(&dest.folder) {
         if available < needed {
             return Err(UprivError::PlainSpaceShort { needed, available });
         }

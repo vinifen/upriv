@@ -6,6 +6,7 @@
 use crate::host_fs::HostFsQuery;
 mod backup;
 mod create;
+mod data_folder_export;
 mod delete;
 mod embedded_settings;
 mod export;
@@ -40,6 +41,7 @@ pub use backup::{
     promote_backup_save, read_backup_zip_bytes, save_backup_now, BackupEntry,
 };
 pub use create::{create_vault, create_vault_with_welcome};
+pub use data_folder_export::{export_data_folder, DataFolderExport};
 pub use delete::delete_vault;
 pub use embedded_settings::{parse_embedded_settings, EmbeddedVaultSettings};
 pub use export::{

@@ -37,6 +37,7 @@ use upriv_core::{
     VaultWelcome, VAULT_ROOT_ALIAS_FILE,
 };
 
+mod data_folder_ops;
 mod plain_ops;
 mod secret;
 mod vault_ops;
@@ -213,6 +214,9 @@ pub fn handle_rpc(req: RpcRequest) -> RpcResponse {
         "backup_promote" => vault_ops::backup_promote(req.params),
         "backup_save" => vault_ops::backup_save(req.params),
         "backup_get" => vault_ops::backup_get(req.params),
+        "data_folder_export" => data_folder_ops::export(req.params),
+        "data_folder_export_status" => data_folder_ops::export_status(),
+        "data_folder_export_cancel" => data_folder_ops::export_cancel(),
         other => err("unknown_method", format!("unknown method: {other}")),
     }
 }
@@ -1973,6 +1977,15 @@ fn map_core_err_response(error: upriv_core::UprivError, emit_log: bool) -> RpcRe
         upriv_core::UprivError::RewrapUnchanged(upriv_core::RewrapUnchangedKind::UnlockRam) => {
             ("rewrap_kdf_unchanged", None)
         }
+        upriv_core::UprivError::DataFolderBusy => ("data_folder_busy", None),
+        upriv_core::UprivError::DataFolderExportBusy => ("data_folder_export_busy", None),
+        upriv_core::UprivError::DataFolderExportCancelled => ("data_folder_export_cancelled", None),
+        upriv_core::UprivError::DataFolderExportSpaceShort { .. } => {
+            ("data_folder_export_space_short", None)
+        }
+        upriv_core::UprivError::DataFolderExportDestinationReserved(p) => {
+            ("data_folder_export_destination_reserved", Some(p.as_path()))
+        }
         upriv_core::UprivError::Io(io) if upriv_core::host_fs::is_unreachable(io) => {
             ("vault_root_unreachable", None)
         }
@@ -1985,7 +1998,8 @@ fn map_core_err_response(error: upriv_core::UprivError, emit_log: bool) -> RpcRe
             | "wrong_password"
             | "vault_unlock_blocked"
             | "rewrap_password_unchanged"
-            | "rewrap_kdf_unchanged" => LogLevel::Warn,
+            | "rewrap_kdf_unchanged"
+            | "data_folder_export_cancelled" => LogLevel::Warn,
             _ => LogLevel::Error,
         };
         // `message` stays on the RPC response for the person at the screen.
@@ -2013,7 +2027,8 @@ fn map_core_err_response(error: upriv_core::UprivError, emit_log: bool) -> RpcRe
         upriv_core::UprivError::PlainNamesUnsupported { count, examples } => {
             Some(json!({ "count": count, "examples": examples }))
         }
-        upriv_core::UprivError::PlainSpaceShort { needed, available } => {
+        upriv_core::UprivError::PlainSpaceShort { needed, available }
+        | upriv_core::UprivError::DataFolderExportSpaceShort { needed, available } => {
             Some(json!({ "needed": needed, "available": available }))
         }
         upriv_core::UprivError::PlainFolderUnwritable { count } => Some(json!({ "count": count })),
@@ -2211,6 +2226,9 @@ mod contract_tests {
         "backup_promote",
         "backup_save",
         "backup_get",
+        "data_folder_export",
+        "data_folder_export_status",
+        "data_folder_export_cancel",
     ];
 
     #[test]

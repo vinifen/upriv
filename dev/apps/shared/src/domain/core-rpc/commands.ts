@@ -133,6 +133,15 @@ export const CORE_RPC_COMMANDS = {
   /** Zip the closed vault straight into `backups/saves/`. */
   BACKUP_SAVE: "backup_save",
   BACKUP_GET: "backup_get",
+  /**
+   * Zip the whole `.upriv` into `upriv-<stamp>.zip` in the chosen folder. Every
+   * vault must be closed or in recovery; they stay held until the zip is written.
+   */
+  DATA_FOLDER_EXPORT: "data_folder_export",
+  /** Bytes copied by the running data-folder export, or `running: false`. */
+  DATA_FOLDER_EXPORT_STATUS: "data_folder_export_status",
+  /** Stop the running data-folder export. Its partial zip is removed. */
+  DATA_FOLDER_EXPORT_CANCEL: "data_folder_export_cancel",
 } as const;
 
 /**

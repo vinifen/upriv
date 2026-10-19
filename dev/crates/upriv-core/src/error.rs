@@ -174,6 +174,29 @@ pub enum UprivError {
     #[error("rewrap changes nothing")]
     RewrapUnchanged(RewrapUnchangedKind),
 
+    /// A vault in this data folder is open, closing, or held by other work, so
+    /// the data folder cannot be exported now.
+    #[error("close every vault and wait for its work to finish before exporting the data folder")]
+    DataFolderBusy,
+
+    /// The data folder is being exported. Another export, a new vault, and a
+    /// backup delete or pin wait until it ends.
+    #[error("the data folder is being exported")]
+    DataFolderExportBusy,
+
+    /// The user stopped the data-folder export. Its partial zip was removed.
+    #[error("data folder export cancelled")]
+    DataFolderExportCancelled,
+
+    /// The chosen folder's drive does not have room for the data-folder zip.
+    #[error("data folder export needs {needed} bytes, {available} free")]
+    DataFolderExportSpaceShort { needed: u64, available: u64 },
+
+    /// The data-folder zip cannot go inside a `.upriv` folder: the copy would
+    /// contain itself, or write into another data folder.
+    #[error("data folder export cannot write inside .upriv: {0}")]
+    DataFolderExportDestinationReserved(PathBuf),
+
     #[error(transparent)]
     Io(#[from] std::io::Error),
 }

@@ -64,6 +64,11 @@ export type VaultPipelineListStatus = {
   backingUpVaultIds?: readonly string[];
   /** Closed vault whose export is in flight. Displays `exporting`. */
   exportingVaultIds?: readonly string[];
+  /**
+   * Export data folder is copying every vault into one zip. Every row displays
+   * `exporting` and refuses to open until it ends.
+   */
+  dataFolderExporting?: boolean;
   /** Closed vault whose Back up now zip is in flight. Displays `backing_up`. */
   backupJobVaultIds?: readonly string[];
   /**
@@ -300,7 +305,9 @@ export function resolveVaultListStatus(
   if (pipeline.openingVaultIds?.includes(row.id)) return "opening";
   if (pipeline.closingVaultIds?.includes(row.id)) return "closing";
   if (pipeline.queuedVaultIds?.includes(row.id)) return "queued";
-  if (pipeline.exportingVaultIds?.includes(row.id)) return "exporting";
+  if (pipeline.exportingVaultIds?.includes(row.id) || pipeline.dataFolderExporting) {
+    return "exporting";
+  }
   if (pipeline.backupJobVaultIds?.includes(row.id)) return "backing_up";
   if (pipeline.passwordChangeVaultIds?.includes(row.id)) return "changing_password";
   if (pipeline.kdfChangeVaultIds?.includes(row.id)) return "changing_kdf";

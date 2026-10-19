@@ -49,7 +49,9 @@ import {
   parsePlainHolders,
   parsePlainLeftover,
   parseBackupFailure,
+  parseDataFolderExportStatus,
   type CloseVaultOutcome,
+  type DataFolderExportProgress,
   type PlainDestination,
   type PlainHeldStatus,
   type PlainHolder,
@@ -1085,6 +1087,33 @@ export async function rpcBackupPromote(id: string, stamp: string): Promise<void>
 export async function rpcBackupSave(id: string): Promise<VaultBackupEntry> {
   const raw = await desktopInvokeRaw(DAEMON_COMMANDS.BACKUP_SAVE, { id });
   return parseBackupEntry(requireRecord(raw, "backup_save").backup, id);
+}
+
+/** Zip the whole `.upriv` into `upriv-<stamp>.zip` inside `destDir`. */
+export async function rpcDataFolderExport(
+  destDir: string,
+): Promise<{ path: string; size: number }> {
+  const raw = await desktopInvokeRaw(DAEMON_COMMANDS.DATA_FOLDER_EXPORT, { destDir });
+  const written = parsePathWriteResult(raw);
+  if (!written) {
+    throw new RpcError(
+      BRIDGE_ERROR_CODES.INVALID_RESPONSE,
+      "data_folder_export: expected path+size",
+      raw,
+    );
+  }
+  return written;
+}
+
+export async function rpcDataFolderExportStatus(): Promise<DataFolderExportProgress | null> {
+  return parseDataFolderExportStatus(
+    await desktopInvokeRaw(DAEMON_COMMANDS.DATA_FOLDER_EXPORT_STATUS, {}),
+  );
+}
+
+export async function rpcDataFolderExportCancel(): Promise<boolean> {
+  const raw = await desktopInvokeRaw(DAEMON_COMMANDS.DATA_FOLDER_EXPORT_CANCEL, {});
+  return requireRecord(raw, "data_folder_export_cancel").cancelled === true;
 }
 
 export async function rpcBackupGet(id: string, stamp: string): Promise<Uint8Array> {

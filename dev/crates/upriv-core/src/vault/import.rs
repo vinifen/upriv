@@ -11,10 +11,11 @@ use crate::config::{known_vault_ids, save_vault_config, VaultConfig};
 use crate::error::{Result, UprivError};
 use crate::logging::{log_event, LogLevel};
 use crate::paths::{display_name_to_vault_id, VaultRoot};
-use crate::session::{with_vault_dir_lock, with_vault_registry_lock, PreparingGuard};
+use crate::session::with_vault_dir_lock;
 use crate::store::{content_hash_hex, load_header, INDEX_DIR_NAME};
 
 use super::backup::{backup_locator_from_leaf, backup_zip_file, copy_ciphertext_tree};
+use super::create::claim_new_vault_dir;
 use super::embedded_settings::{parse_embedded_settings, EmbeddedVaultSettings};
 use super::persistence::{save_vault_persistence, VaultPersistence};
 use super::seven_zip_pack::{ensure_seven_zip_export_ram, try_vec_with_capacity};
@@ -83,22 +84,7 @@ fn materialize_imported_store(
     let id = prepare_imported_id(root, &mut config)?;
     let dest = root.vault_dir(&id)?;
     crate::host_fs::create_dir_all(root.vaults_dir())?;
-    with_vault_registry_lock(|| {
-        with_vault_dir_lock(&dest, || match crate::host_fs::create_dir(&dest) {
-            Ok(()) => Ok(()),
-            Err(error) if error.kind() == ErrorKind::AlreadyExists => {
-                Err(UprivError::VaultAlreadyExists(dest.clone()))
-            }
-            Err(error) => Err(error.into()),
-        })
-    })?;
-    let _preparing = match PreparingGuard::enter(&dest) {
-        Ok(guard) => guard,
-        Err(error) => {
-            let _ = crate::host_fs::remove_dir_all(&dest);
-            return Err(error);
-        }
-    };
+    let _preparing = claim_new_vault_dir(root, &dest)?;
     with_vault_dir_lock(&dest, || {
         let created: Result<()> = (|| {
             save_vault_config(&dest, &config)?;

@@ -925,6 +925,69 @@ fn rename_local_no_replace(from: &Path, to: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// Bytes the current user may still write on the filesystem that holds
+/// `path`, or its nearest existing parent. `None` when the system does not
+/// say, including a storage-access folder.
+pub(crate) fn free_bytes(path: &Path) -> Option<u64> {
+    if is_bridge_path(path) {
+        return None;
+    }
+    free_bytes_local(&nearest_existing(path))
+}
+
+/// `path`, or its nearest parent that exists.
+pub(crate) fn nearest_existing(path: &Path) -> PathBuf {
+    let mut current = path.to_path_buf();
+    while !current.host_exists() {
+        if !current.pop() {
+            break;
+        }
+    }
+    current
+}
+
+#[cfg(unix)]
+fn free_bytes_local(path: &Path) -> Option<u64> {
+    use std::os::unix::ffi::OsStrExt;
+    let c_path = std::ffi::CString::new(path.as_os_str().as_bytes()).ok()?;
+    let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
+    if unsafe { libc::statvfs(c_path.as_ptr(), &mut st) } != 0 {
+        return None;
+    }
+    #[allow(clippy::unnecessary_cast)]
+    let (available, fragment) = (st.f_bavail as u64, st.f_frsize as u64);
+    Some(available.saturating_mul(fragment))
+}
+
+#[cfg(windows)]
+fn free_bytes_local(path: &Path) -> Option<u64> {
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetDiskFreeSpaceExW(
+            dir: *const u16,
+            free_to_caller: *mut u64,
+            total: *mut u64,
+            total_free: *mut u64,
+        ) -> i32;
+    }
+    let wide = windows_verbatim_wide(path);
+    let mut available = 0u64;
+    let ok = unsafe {
+        GetDiskFreeSpaceExW(
+            wide.as_ptr(),
+            &mut available,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
+    (ok != 0).then_some(available)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn free_bytes_local(_path: &Path) -> Option<u64> {
+    None
+}
+
 /// NUL-terminated wide path with the `\\?\` prefix, so a path past
 /// `MAX_PATH` still works the way it does through `std::fs`.
 #[cfg(windows)]
@@ -1636,7 +1699,13 @@ mod tests {
 
     static TEST_MOUNT: Mutex<()> = Mutex::new(());
 
-    use super::{mount_bridge, unmount, SafBridge, SAF_VAULT_ROOT};
+    use super::{free_bytes, mount_bridge, unmount, SafBridge, SAF_VAULT_ROOT};
+
+    #[test]
+    fn free_bytes_reports_a_number_for_a_missing_leaf() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(free_bytes(&tmp.path().join("missing/leaf")).is_some_and(|bytes| bytes > 0));
+    }
 
     /// Local stand-in for `SafFs`. Rename replaces an existing file, as the
     /// Android bridge does.

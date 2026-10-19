@@ -52,8 +52,9 @@ pub use paths::{
 };
 pub use runtime_state::{acknowledge_dirty_close, dirty_close_ids, sweep_stale_mount_leaves};
 pub use session::{
+    cancel_data_folder_export, data_folder_export_status, is_data_folder_export_running,
     is_unlock_in_flight, is_vault_open, open_session_ids, vault_activity_blocks_root_switch,
-    ClosePhase,
+    ClosePhase, DataFolderExportStatus,
 };
 pub use store::{KdfUnlockPreset, FORMAT_VERSION as STORE_FORMAT_VERSION};
 pub use time::{utc_filename_stamp, utc_timestamp_iso_millis, utc_ymdhms};
@@ -62,13 +63,13 @@ pub use vault::{
     classify_import_zip_bytes, classify_import_zip_path, close_all_vaults, close_phase,
     close_vault, close_vault_auto, confirm_plain_destination, create_vault,
     create_vault_with_welcome, delete_backups, delete_vault, export_backups_to_path,
-    export_logical_seven_zip, export_logical_seven_zip_to_path, export_store_zip,
-    export_store_zip_to_path, fs_create_file, fs_create_folder, fs_delete, fs_ensure_folder,
-    fs_import_from_os_path, fs_import_from_os_path_deferred, fs_list_tree, fs_mkdir, fs_move,
-    fs_os_path, fs_read_file, fs_read_range, fs_rename, fs_seal_staged_imports, fs_tree_revision,
-    fs_truncate, fs_write_file, fs_write_from_reader, fs_write_range, import_from_backup,
-    import_logical_files_zip, import_logical_files_zip_path, import_logical_os_path,
-    import_logical_seven_zip, import_logical_seven_zip_path, import_slots,
+    export_data_folder, export_logical_seven_zip, export_logical_seven_zip_to_path,
+    export_store_zip, export_store_zip_to_path, fs_create_file, fs_create_folder, fs_delete,
+    fs_ensure_folder, fs_import_from_os_path, fs_import_from_os_path_deferred, fs_list_tree,
+    fs_mkdir, fs_move, fs_os_path, fs_read_file, fs_read_range, fs_rename, fs_seal_staged_imports,
+    fs_tree_revision, fs_truncate, fs_write_file, fs_write_from_reader, fs_write_range,
+    import_from_backup, import_logical_files_zip, import_logical_files_zip_path,
+    import_logical_os_path, import_logical_seven_zip, import_logical_seven_zip_path, import_slots,
     import_store_from_archive_path, import_store_tree, import_store_zip, ingest_import_directory,
     ingest_import_reader, ingest_import_reader_staged, list_backups, list_vaults,
     load_vault_persistence, open_import_session, open_vault, open_vault_confirmed,
@@ -79,10 +80,10 @@ pub use vault::{
     read_import_zip_settings, read_zip_config_toml, remove_plain_leftover, rename_vault,
     save_backup_now, set_plain_observer, seven_zip_export_available, vault_list_item,
     vault_store_on_disk_bytes, zip_directory_to_bytes, zip_directory_to_path, BackupEntry,
-    CloseVaultOutcome, EmbeddedVaultSettings, OpenVaultOutcome, PlainCloseSummary,
-    PlainDestination, PlainFolderClass, PlainHolder, PlainLeftover, PlainObserver, PlainPlace,
-    PlainStatus, PlainSyncReport, PlainTotals, PlainWipe, VaultListItem, VaultPersistence,
-    VaultRenameResult, VaultWelcome, ZipImportClass, WELCOME_FILE_MAX_BYTES,
+    CloseVaultOutcome, DataFolderExport, EmbeddedVaultSettings, OpenVaultOutcome,
+    PlainCloseSummary, PlainDestination, PlainFolderClass, PlainHolder, PlainLeftover,
+    PlainObserver, PlainPlace, PlainStatus, PlainSyncReport, PlainTotals, PlainWipe, VaultListItem,
+    VaultPersistence, VaultRenameResult, VaultWelcome, ZipImportClass, WELCOME_FILE_MAX_BYTES,
     WELCOME_README_LOGICAL_PATH,
 };
 

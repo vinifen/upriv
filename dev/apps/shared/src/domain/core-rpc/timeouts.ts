@@ -94,6 +94,9 @@ export const CORE_RPC_TIMEOUT_MS = {
   [CORE_RPC_COMMANDS.BACKUP_PROMOTE]: LOADING_BUDGET_MS.default,
   [CORE_RPC_COMMANDS.BACKUP_SAVE]: LOADING_BUDGET_MS.vaultBackupSave,
   [CORE_RPC_COMMANDS.BACKUP_GET]: LOADING_BUDGET_MS.vaultExport,
+  [CORE_RPC_COMMANDS.DATA_FOLDER_EXPORT]: LOADING_BUDGET_MS.dataFolderExport,
+  [CORE_RPC_COMMANDS.DATA_FOLDER_EXPORT_STATUS]: CHEAP_RPC_MS,
+  [CORE_RPC_COMMANDS.DATA_FOLDER_EXPORT_CANCEL]: CHEAP_RPC_MS,
 } as const satisfies Record<CoreRpcCommand, number>;
 
 /** Same rule as the daemon: `seven_zip` / `7z`, or a `.7z` path when kind is omitted. */
