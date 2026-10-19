@@ -395,16 +395,35 @@ fn failure_os_code(error: &UprivError) -> Option<i32> {
     }
 }
 
+/// This system's codes for a full disk. The same number means something else
+/// on another system (Linux 39 is a folder that is not empty).
+#[cfg(unix)]
+const DISK_FULL_CODES: &[i32] = &[libc::ENOSPC];
+/// `ERROR_HANDLE_DISK_FULL`, `ERROR_DISK_FULL`.
+#[cfg(windows)]
+const DISK_FULL_CODES: &[i32] = &[39, 112];
+#[cfg(not(any(unix, windows)))]
+const DISK_FULL_CODES: &[i32] = &[];
+
+#[cfg(unix)]
+const PERMISSION_CODES: &[i32] = &[libc::EACCES, libc::EPERM];
+/// `ERROR_ACCESS_DENIED`.
+#[cfg(windows)]
+const PERMISSION_CODES: &[i32] = &[5];
+#[cfg(not(any(unix, windows)))]
+const PERMISSION_CODES: &[i32] = &[];
+
+/// An error that only kept its text names the code as `os error N`.
+fn text_names_code(detail: &str, codes: &[i32]) -> bool {
+    os_code_in_text(detail).is_some_and(|code| codes.contains(&code))
+}
+
 fn io_is_disk_full(error: &std::io::Error) -> bool {
-    error.kind() == ErrorKind::StorageFull
-        || matches!(error.raw_os_error(), Some(28 | 112 | 39))
-        || text_is_disk_full(&error.to_string())
+    error.kind() == ErrorKind::StorageFull || text_is_disk_full(&error.to_string())
 }
 
 fn io_is_permission(error: &std::io::Error) -> bool {
-    error.kind() == ErrorKind::PermissionDenied
-        || matches!(error.raw_os_error(), Some(13 | 1 | 5))
-        || text_is_permission(&error.to_string())
+    error.kind() == ErrorKind::PermissionDenied || text_is_permission(&error.to_string())
 }
 
 fn text_is_disk_full(detail: &str) -> bool {
@@ -412,17 +431,14 @@ fn text_is_disk_full(detail: &str) -> bool {
     lower.contains("no space left")
         || lower.contains("not enough space")
         || lower.contains("disk full")
-        || lower.contains("os error 28")
-        || lower.contains("os error 112")
-        || lower.contains("os error 39")
+        || text_names_code(&lower, DISK_FULL_CODES)
 }
 
 fn text_is_permission(detail: &str) -> bool {
     let lower = detail.to_ascii_lowercase();
     lower.contains("permission denied")
         || lower.contains("access is denied")
-        || lower.contains("os error 13")
-        || lower.contains("os error 5")
+        || text_names_code(&lower, PERMISSION_CODES)
 }
 
 fn os_code_in_text(detail: &str) -> Option<i32> {
@@ -840,22 +856,24 @@ mod tests {
     use crate::test_support::vault_root_with;
     use crate::vault::create_vault;
 
+    #[cfg(any(unix, windows))]
     #[test]
     fn classifies_a_full_disk_without_a_path() {
-        let io = UprivError::Io(std::io::Error::from_raw_os_error(28));
+        let code = DISK_FULL_CODES[0];
+        let io = UprivError::Io(std::io::Error::from_raw_os_error(code));
         let class = classify_backup_failure(&io);
         assert_eq!(class.reason, "disk_full");
         assert_eq!(class.kind, "io");
-        assert_eq!(class.os, Some(28));
+        assert_eq!(class.os, Some(code));
 
         let wrapped = UprivError::VaultStoreInvalid {
             path: std::path::PathBuf::from("/secret/store/file"),
-            detail: "No space left on device (os error 28)".into(),
+            detail: format!("write failed (os error {code})"),
         };
         let class = classify_backup_failure(&wrapped);
         assert_eq!(class.reason, "disk_full");
         assert_eq!(class.kind, "store");
-        assert_eq!(class.os, Some(28));
+        assert_eq!(class.os, Some(code));
     }
 
     #[test]
@@ -866,6 +884,30 @@ mod tests {
         let class = classify_backup_failure(&other);
         assert_eq!(class.reason, "other");
         assert_eq!(class.kind, "io");
+    }
+
+    /// The same number is a different error on another system.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_codes_that_mean_something_else_on_windows_stay_generic() {
+        for code in [libc::ENOTEMPTY, libc::EIO] {
+            let io = UprivError::Io(std::io::Error::from_raw_os_error(code));
+            assert_eq!(classify_backup_failure(&io).reason, "other", "errno {code}");
+            let wrapped = UprivError::VaultStoreInvalid {
+                path: std::path::PathBuf::new(),
+                detail: format!("failed (os error {code})"),
+            };
+            assert_eq!(
+                classify_backup_failure(&wrapped).reason,
+                "other",
+                "errno {code}"
+            );
+        }
+        let longer = UprivError::VaultStoreInvalid {
+            path: std::path::PathBuf::new(),
+            detail: "failed (os error 130)".into(),
+        };
+        assert_eq!(classify_backup_failure(&longer).reason, "other");
     }
 
     fn sample_config(id: &str, name: &str) -> crate::config::VaultConfig {
