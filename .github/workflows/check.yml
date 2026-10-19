@@ -26,6 +26,8 @@ jobs:
         with:
           toolchain: 1.94.0
           components: rustfmt, clippy
+          # `./r c` runs clippy for each of these (Windows, Android, macOS).
+          targets: x86_64-pc-windows-gnu, aarch64-linux-android, aarch64-apple-darwin
       # `fuser` links libfuse3 on Linux (`upriv-core` vault mount).
       - name: Install libfuse3
         run: |

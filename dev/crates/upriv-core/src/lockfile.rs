@@ -227,7 +227,7 @@ fn try_exclusive_lock(file: &File) -> Result<bool> {
         };
         let ok = unsafe {
             LockFileEx(
-                file.as_raw_handle() as *mut core::ffi::c_void,
+                file.as_raw_handle(),
                 LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY,
                 0,
                 1,
@@ -242,7 +242,7 @@ fn try_exclusive_lock(file: &File) -> Result<bool> {
         if err.raw_os_error() == Some(33) {
             return Ok(false);
         }
-        return Err(err.into());
+        Err(err.into())
     }
     #[cfg(not(any(unix, windows)))]
     {

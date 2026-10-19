@@ -139,11 +139,11 @@ fn mem_available_bytes() -> Option<u64> {
     }
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     {
-        return apple_mem_available_bytes();
+        apple_mem_available_bytes()
     }
     #[cfg(windows)]
     {
-        return windows_mem_available_bytes();
+        windows_mem_available_bytes()
     }
     #[cfg(not(any(
         target_os = "linux",
@@ -159,9 +159,18 @@ fn mem_available_bytes() -> Option<u64> {
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 fn apple_mem_available_bytes() -> Option<u64> {
+    // libSystem. `libc` deprecates its own Mach port bindings.
+    extern "C" {
+        static mach_task_self_: libc::mach_port_t;
+        fn mach_host_self() -> libc::host_t;
+        fn mach_port_deallocate(
+            task: libc::mach_port_t,
+            name: libc::mach_port_t,
+        ) -> libc::kern_return_t;
+    }
     let mut stats: libc::vm_statistics64 = unsafe { std::mem::zeroed() };
     let mut count = libc::HOST_VM_INFO64_COUNT;
-    let host = unsafe { libc::mach_host_self() };
+    let host = unsafe { mach_host_self() };
     let rc = unsafe {
         libc::host_statistics64(
             host,
@@ -170,6 +179,8 @@ fn apple_mem_available_bytes() -> Option<u64> {
             &mut count,
         )
     };
+    // Each `mach_host_self` call adds a reference to the host port.
+    unsafe { mach_port_deallocate(mach_task_self_, host) };
     if rc != libc::KERN_SUCCESS {
         return None;
     }

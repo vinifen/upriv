@@ -261,10 +261,10 @@ fn fsync_path(path: &std::path::Path) -> std::io::Result<()> {
     // Windows `FlushFileBuffers` requires write access. Read-only open fails.
     #[cfg(windows)]
     {
-        return std::fs::OpenOptions::new()
+        std::fs::OpenOptions::new()
             .write(true)
             .open(path)?
-            .sync_all();
+            .sync_all()
     }
     #[cfg(not(windows))]
     {

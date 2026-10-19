@@ -48,12 +48,18 @@ npm install --prefix apps/mobile
 
 `./r l` needs `js-lint/node_modules` plus each app’s `node_modules` (React ESLint plugins live in desktop/mobile/shared; `tsc`/vitest use the app installs). Electron now runs ESLint + Prettier as well. Rust fmt/clippy do not live in `js-lint/`.
 
+`./r l` also runs clippy for Windows, Android, and macOS, so code behind those `cfg`s is linted on a Linux machine. It skips a target rustup does not have; CI installs all three. To run them locally:
+
+```bash
+rustup target add x86_64-pc-windows-gnu aarch64-linux-android aarch64-apple-darwin
+```
+
 ## Commands
 
 ```bash
 cd dev
 ./r h                 # list all commands
-./r l                 # version + rustfmt/clippy + tsc/eslint/prettier (see ./r h)
+./r l                 # version + rustfmt/clippy (host + Windows/Android/macOS) + tsc/eslint/prettier
 ./r f                 # rustfmt/clippy --fix + prettier --write + eslint --fix + tsc
 ./r t                 # cargo test --workspace + shared/desktop/electron/mobile vitest
 ./r c                 # lint + test

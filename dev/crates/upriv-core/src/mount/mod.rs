@@ -102,9 +102,9 @@ pub fn mount_encrypted_dir(
     #[cfg(not(any(target_os = "linux", windows)))]
     {
         let _ = (root, vault_id, mount_point);
-        return Err(UprivError::VaultMountFailed(
+        Err(UprivError::VaultMountFailed(
             "OS mount is not enabled on this platform; use the in-app file manager".into(),
-        ));
+        ))
     }
     #[cfg(any(target_os = "linux", windows))]
     {
@@ -136,7 +136,7 @@ fn prepare_mount_directory(mount_point: &Path) -> Result<()> {
     }
     #[cfg(windows)]
     {
-        return clear_windows_mount_leaf(mount_point);
+        clear_windows_mount_leaf(mount_point)
     }
     #[cfg(target_os = "linux")]
     {

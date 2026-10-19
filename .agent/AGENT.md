@@ -240,6 +240,7 @@ Mobile:   RN     ──JNI/FFI──► libupriv_core.so ──► upriv_core::*
 ### Rust workspace
 
 - Build from `dev/`: `cargo build -p upriv-daemon -p upriv-fuse`, `cargo test -p upriv-core`, `npm run rust:lint` (rustfmt + clippy).
+- `./r l` also runs clippy for `x86_64-pc-windows-gnu`, `aarch64-linux-android`, and `aarch64-apple-darwin` (skipped locally when rustup lacks the target; CI installs all three). Code behind a platform `cfg` must pass there too.
 - Vault crypto crates live in **`dev/vendor/`** (`[patch]`). Refresh is the checklist in `dev/vendor/MANIFEST.txt`; do not `cargo generate-lockfile`. See [`SECURITY-CRYPTO.md`](SECURITY-CRYPTO.md) agent rule 2.
 - Artifacts go to **`dev/target/`** only — **never commit** `target/`, `node_modules/`, `dist/`, `.expo/`.
 - `upriv-daemon/src/main.rs` is entry only; do not add vault logic there — use `upriv-core`.

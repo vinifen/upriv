@@ -1167,7 +1167,7 @@ pub(crate) fn windows_file_info(
             size: u32,
         ) -> i32;
     }
-    let handle = file.as_raw_handle() as *mut core::ffi::c_void;
+    let handle = file.as_raw_handle();
     let mut info = ByHandleFileInformation::default();
     if unsafe { GetFileInformationByHandle(handle, &mut info) } == 0 {
         return Err(io::Error::last_os_error());
@@ -1250,8 +1250,10 @@ pub struct ReadDir {
     inner: ReadDirInner,
 }
 
+/// `std` listings and entries are boxed: on Windows and macOS each one holds
+/// the whole OS record (hundreds of bytes), and every entry is moved by value.
 enum ReadDirInner {
-    Std(std::fs::ReadDir),
+    Std(Box<std::fs::ReadDir>),
     Listed(std::vec::IntoIter<DirEntry>),
 }
 
@@ -1278,7 +1280,7 @@ enum ListedKind {
 }
 
 enum DirEntryKind {
-    Disk(std::fs::DirEntry),
+    Disk(Box<std::fs::DirEntry>),
     /// Kind and length came from the directory listing, so `file_type` does not
     /// open the document.
     Named {
@@ -1296,7 +1298,7 @@ enum DirEntryKind {
 impl DirEntry {
     fn from_disk(entry: std::fs::DirEntry) -> Self {
         Self {
-            kind: DirEntryKind::Disk(entry),
+            kind: DirEntryKind::Disk(Box::new(entry)),
         }
     }
 
@@ -1353,7 +1355,7 @@ pub fn read_dir<P: AsRef<Path>>(path: P) -> io::Result<ReadDir> {
     let path = path.as_ref();
     match route(path)? {
         Route::Local => Ok(ReadDir {
-            inner: ReadDirInner::Std(std::fs::read_dir(path)?),
+            inner: ReadDirInner::Std(Box::new(std::fs::read_dir(path)?)),
         }),
         Route::Bridge {
             rel,

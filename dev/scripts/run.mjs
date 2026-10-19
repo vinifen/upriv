@@ -32,6 +32,8 @@ What each command runs:
   lint
     • Version:  check-version.mjs (VERSION vs manifests)
     • Rust:     rustfmt --check, clippy (-D warnings)
+    • Rust:     clippy for Windows, Android, and macOS (each target that
+                rustup has installed; CI installs all three)
     • UniFFI:   regenerate Kotlin and diff vs crates/upriv-ffi
     • Shared:   tsc --noEmit, eslint, prettier --check
     • Desktop:  tsc, eslint, prettier --check
@@ -196,11 +198,48 @@ function lintFixJsApp(label, app) {
   }
 }
 
+// Code behind `cfg(windows)`, `cfg(target_os = "android")`, or the Apple
+// targets is only linted when clippy checks that target.
+const CROSS_CLIPPY_TARGETS = [
+  ["Windows", "x86_64-pc-windows-gnu"],
+  ["Android", "aarch64-linux-android"],
+  ["macOS", "aarch64-apple-darwin"],
+];
+
+function installedRustTargets() {
+  const result = spawnSync("rustup", ["target", "list", "--installed"], {
+    cwd: devRoot,
+    encoding: "utf8",
+  });
+  if (result.error || result.status !== 0) return new Set();
+  return new Set(result.stdout.split(/\r?\n/).map((line) => line.trim()));
+}
+
+function crossClippySteps() {
+  const installed = installedRustTargets();
+  for (const [label, target] of CROSS_CLIPPY_TARGETS) {
+    const name = `Rust clippy (${label})`;
+    if (installed.has(target)) {
+      const args = ["clippy", "--workspace", "--all-targets", "--target", target];
+      step(name, () => run("cargo", [...args, "--", "-D", "warnings"]));
+    } else if (process.env.CI) {
+      step(name, () => {
+        console.error(`Missing Rust target ${target}`);
+        return false;
+      });
+    } else {
+      console.log("");
+      console.log(`SKIP ${name} — rustup target add ${target}`);
+    }
+  }
+}
+
 function lintSteps() {
   step("Version (check-version.mjs)", () =>
     run(process.execPath, ["scripts/check-version.mjs"]),
   );
   step("Rust (rustfmt + clippy)", () => run(npmBin(), ["run", "rust:lint"]));
+  crossClippySteps();
   step("UniFFI Kotlin (diff vs crates/upriv-ffi)", () =>
     run(bashExecutable(), ["scripts/check-uniffi-kotlin.sh"]),
   );
