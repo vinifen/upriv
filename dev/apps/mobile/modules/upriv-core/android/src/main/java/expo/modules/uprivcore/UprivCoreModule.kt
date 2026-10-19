@@ -20,8 +20,10 @@ import uniffi.upriv_ffi.appVersion
 import uniffi.upriv_ffi.configureRuntime
 import uniffi.upriv_ffi.importContentFd
 import uniffi.upriv_ffi.invoke
+import uniffi.upriv_ffi.mountSafExportFs
 import uniffi.upriv_ffi.mountSafFs
 import uniffi.upriv_ffi.probeSafFs
+import uniffi.upriv_ffi.unmountSafExportFs
 import uniffi.upriv_ffi.unmountSafFs
 
 /**
@@ -179,6 +181,41 @@ class UprivCoreModule : Module() {
     }
 
     /**
+     * Point Rust `/upriv-saf-export` at the folder picked for Export data
+     * folder. The zip is written straight into that tree, never staged in app
+     * storage. The data folder mount stays as it is.
+     */
+    Function("mountSafExport") { uri: String ->
+      ensureRuntimeConfigured()
+      val trimmed = uri.trim()
+      if (!trimmed.startsWith("content://")) {
+        throw SafCodedException("saf_invalid_tree", "export folder must be a content tree")
+      }
+      val ctx = requireContext()
+      runSafOrThrow {
+        if (!SafExportFs.isReachable(ctx, trimmed)) {
+          if (!SafVaultRoot.hasGrant(ctx, trimmed)) {
+            throw SafException("saf_unauthorized", "pick the export folder again")
+          }
+          throw SafException("saf_unreachable", "export folder is not reachable")
+        }
+        SafExportFs.bind(ctx, trimmed)
+        mountSafExportFs(
+          trimmed,
+          object : SafFsCallback {
+            override fun dispatch(op: String, payload: String): String = SafExportFs.dispatch(op, payload)
+          },
+        )
+      }
+    }
+
+    /** Drop the export mount. The picked folder's grant stays until it is released. */
+    Function("unmountSafExport") {
+      unmountSafExportFs()
+      SafExportFs.clear()
+    }
+
+    /**
      * Open a user-visible filesystem path or `content://` tree in the system Files app.
      * Does not decrypt `store/`. Callers pass a location the UI already shows.
      */
@@ -255,6 +292,7 @@ private object CoreLanes {
   private val lifecycle = single("upriv-fs-io")
   private val rewrap = single("upriv-rewrap")
   val pack = single("upriv-pack")
+  private val dataFolder = single("upriv-data-folder")
   private val importNames = AtomicInteger()
   val importFiles: CoroutineDispatcher =
     Executors.newFixedThreadPool(phoneImportThreads()) { runnable ->
@@ -269,14 +307,18 @@ private object CoreLanes {
 
   fun dispatcher(method: String): CoroutineDispatcher = when (method) {
     "vault_open", "vault_create", "vault_export_probe", "vault_ingest_open" -> argon2
-    "vault_close", "vault_delete", "backup_get", "vault_discard_import" -> lifecycle
+    "vault_close", "vault_delete", "backup_get", "vault_discard_import",
+    "vault_plain_confirm", "vault_plain_remove", "vault_plain_sync",
+    "vault_plain_deletions" -> lifecycle
     "vault_change_password", "vault_change_kdf" -> rewrap
     "vault_fs_import_os_file", "vault_fs_import_seal" -> importFiles
     "vault_import_zip",
     "vault_import_7z",
     "vault_import_files_zip",
     "vault_import_os_path",
-    "vault_export" -> pack
+    "vault_export",
+    "backup_save" -> pack
+    "data_folder_export" -> dataFolder
     else -> light
   }
 }

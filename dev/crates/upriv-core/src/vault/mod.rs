@@ -6,6 +6,7 @@
 use crate::host_fs::HostFsQuery;
 mod backup;
 mod create;
+mod data_folder_export;
 mod delete;
 mod embedded_settings;
 mod export;
@@ -16,6 +17,7 @@ mod import_slots;
 mod open_close;
 mod os_import;
 mod persistence;
+mod plain;
 mod rename;
 mod rewrap;
 mod seven_zip;
@@ -36,9 +38,10 @@ use crate::store::{content_hash_hex, probe_unlock_preset, KdfUnlockPreset};
 
 pub use backup::{
     backup_on_close, backup_zip_file, delete_backups, export_backups_to_path, list_backups,
-    promote_backup_save, read_backup_zip_bytes, BackupEntry,
+    promote_backup_save, read_backup_zip_bytes, save_backup_now, BackupEntry,
 };
 pub use create::{create_vault, create_vault_with_welcome};
+pub use data_folder_export::{export_data_folder, DataFolderExport};
 pub use delete::delete_vault;
 pub use embedded_settings::{parse_embedded_settings, EmbeddedVaultSettings};
 pub use export::{
@@ -61,13 +64,21 @@ pub use import::{
 };
 pub use import_slots::{import_slots, import_slots_for};
 pub use open_close::{
-    close_all_vaults, close_phase, close_vault, close_vault_auto, open_vault, CloseVaultOutcome,
+    close_all_vaults, close_phase, close_vault, close_vault_auto, confirm_plain_destination,
+    open_vault, open_vault_confirmed, CloseVaultOutcome, OpenVaultOutcome,
 };
 pub use os_import::{
     abort_import_vault, import_logical_os_path, ingest_import_directory, ingest_import_reader,
     ingest_import_reader_staged, open_import_session,
 };
 pub use persistence::{load_vault_persistence, VaultPersistence};
+pub(crate) use plain::{ensure_no_leftover, PlainSession};
+pub use plain::{
+    plain_deletions, plain_destination, plain_leftover, plain_status, plain_sync,
+    remove_plain_leftover, set_plain_observer, PlainCloseSummary, PlainDestination,
+    PlainFolderClass, PlainLeftover, PlainObserver, PlainPlace, PlainStatus, PlainSyncReport,
+    PlainTotals, PlainWipe,
+};
 pub use rename::{rename_vault, VaultRenameResult};
 pub use rewrap::{change_vault_kdf, change_vault_password};
 pub use seven_zip::{
@@ -277,11 +288,12 @@ fn list_item_from_entry(entry: &VaultListEntry, dirty: &HashSet<String>) -> Vaul
 /// Public list: scan + persistence timestamps + session + header KDF preset.
 pub fn list_vaults(root: &VaultRoot) -> Result<Vec<VaultListItem>> {
     let _ = sweep_stale_mount_leaves(root);
+    let entries = list_vault_entries(root)?;
+    plain::adopt_orphans(root, &entries);
     let dirty: HashSet<String> = dirty_close_ids(root)
         .unwrap_or_default()
         .into_iter()
         .collect();
-    let entries = list_vault_entries(root)?;
     Ok(entries
         .iter()
         .map(|e| list_item_from_entry(e, &dirty))
@@ -564,38 +576,6 @@ mode = "encrypted_dir"
         // Session gone; may still be busy if another test holds the unlock gate.
         assert!(!crate::session::is_vault_open_at(
             &root.vault_dir("notes").unwrap()
-        ));
-    }
-
-    #[test]
-    fn create_rejects_upriv_plain_until_wipe_exists() {
-        let (_tmp, root) = vault_root_with(&[]);
-        let cfg = toml::from_str(
-            r#"
-[vault]
-id = "plain"
-display_name = "Plain"
-order = 1
-[storage]
-mode = "upriv_plain"
-"#,
-        )
-        .expect("config");
-        let err = create_vault(&root, cfg, b"pass-word-ok", KdfUnlockPreset::M32).unwrap_err();
-        assert!(matches!(
-            err,
-            crate::error::UprivError::UprivPlainUnavailable
-        ));
-        assert!(!root.vault_dir("plain").unwrap().host_is_dir());
-    }
-
-    #[test]
-    fn open_rejects_upriv_plain_until_wipe_exists() {
-        let (_tmp, root) = vault_root_with(&[VaultSpec::upriv_plain("plain", "Plain", 1)]);
-        let err = open_vault(&root, "plain", b"pass-word-ok").unwrap_err();
-        assert!(matches!(
-            err,
-            crate::error::UprivError::UprivPlainUnavailable
         ));
     }
 

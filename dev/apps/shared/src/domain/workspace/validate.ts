@@ -246,6 +246,35 @@ export function workspaceContainerPath(parent: string | null | undefined): strin
 }
 
 /**
+ * Folder a person can read. A storage-access URI keeps the document id after
+ * the volume name, so `primary:Documents/Upriv/workspace` shows as
+ * `Documents/Upriv/workspace`.
+ */
+export function workspacePathDisplay(path: string | null | undefined): string {
+  const trimmed = trimPath(path);
+  if (!trimmed.toLowerCase().startsWith("content://")) return trimmed;
+  const lower = trimmed.toLowerCase();
+  const marker = "/document/";
+  const documentAt = lower.indexOf(marker);
+  let id = "";
+  if (documentAt >= 0) {
+    const encoded = trimmed.slice(documentAt + marker.length);
+    const cut = encoded.search(/[?#]/);
+    const piece = cut >= 0 ? encoded.slice(0, cut) : encoded;
+    try {
+      id = decodeURIComponent(piece);
+    } catch {
+      id = piece;
+    }
+  } else {
+    id = parseSafTree(trimmed)?.treeId ?? "";
+  }
+  const colon = id.indexOf(":");
+  const rest = (colon >= 0 ? id.slice(colon + 1) : id).replace(/^\/+/, "");
+  return rest || trimmed;
+}
+
+/**
  * Suggested default for app `[workspace].path`: `<vaultRoot>/workspace`.
  * A storage-access tree uses the document URI of that child. Empty vault-root → `""`.
  */

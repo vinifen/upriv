@@ -23,7 +23,6 @@ import {
   rpcVaultIngestDirectory,
   rpcVaultIngestOpen,
   rpcVaultList,
-  rpcVaultRecoverAck,
   rpcVaultRename,
   rpcVaultClose,
 } from "@/lib/rpc";
@@ -125,8 +124,5 @@ export const nativeVaultService = createLiveVaultService({
       return Promise.reject(new RpcError("invalid_request", "import folder is unavailable"));
     }
     return finishImport(path, () => rpcVaultImportOsPath(input));
-  },
-  recoverDirtyClose: async (vaultId) => {
-    await rpcVaultRecoverAck(vaultId);
   },
 });

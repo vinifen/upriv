@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
 import {
   AccessibilityInfo,
   Animated,
@@ -147,6 +147,9 @@ export function FileTreePanel({ fm }: FileTreePanelProps) {
   }, [fm.displayTree, workspace.expandedPaths]);
 
   const listRef = useRef<FlatList<FlatEntry>>(null);
+  /** Content offset and drag state while a finger is down, so a scroll is not a tap. */
+  const listOffsetRef = useRef(0);
+  const listScrollingRef = useRef(false);
   const entriesRef = useRef(entries);
   entriesRef.current = entries;
 
@@ -420,6 +423,8 @@ export function FileTreePanel({ fm }: FileTreePanelProps) {
         onDragMove={onDragMove}
         onDragEnd={onDragEnd}
         onDragCancel={clearDrag}
+        listOffsetRef={listOffsetRef}
+        listScrollingRef={listScrollingRef}
         onActivate={() => {
           if (isRenaming || isDragging) return;
           if (fm.isImportWalkPlaceholder(item.path) || fm.isImportQueueSlot(item.path)) return;
@@ -507,6 +512,19 @@ export function FileTreePanel({ fm }: FileTreePanelProps) {
             keyExtractor={(item) => item.path}
             renderItem={renderItem}
             scrollEnabled={!isDragging}
+            onScroll={(event) => {
+              listOffsetRef.current = event.nativeEvent.contentOffset.y;
+            }}
+            onScrollBeginDrag={() => {
+              listScrollingRef.current = true;
+            }}
+            onScrollEndDrag={() => {
+              listScrollingRef.current = false;
+            }}
+            onMomentumScrollEnd={() => {
+              listScrollingRef.current = false;
+            }}
+            scrollEventThrottle={16}
             keyboardShouldPersistTaps="handled"
             keyboardDismissMode="none"
             style={styles.list}
@@ -600,6 +618,8 @@ interface FileTreeRowProps {
   onDragMove: (pageX: number, pageY: number) => void;
   onDragEnd: (pageX: number, pageY: number) => void;
   onDragCancel: () => void;
+  listOffsetRef: MutableRefObject<number>;
+  listScrollingRef: MutableRefObject<boolean>;
   onActivate: () => void;
   onCommitRename: (name: string) => void;
   onCancelRename: () => void;
@@ -627,6 +647,8 @@ function FileTreeRow({
   onDragMove,
   onDragEnd,
   onDragCancel,
+  listOffsetRef,
+  listScrollingRef,
   onActivate,
   onCommitRename,
   onCancelRename,
@@ -657,6 +679,7 @@ function FileTreeRow({
   const armedRef = useRef(false);
   const panGrantedRef = useRef(false);
   const movedRef = useRef(false);
+  const offsetAtTouchRef = useRef(0);
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const touchStartRef = useRef<{ x: number; y: number } | null>(null);
   const menuRef = useRef<DropdownPanelHandle>(null);
@@ -751,6 +774,7 @@ function FileTreeRow({
       return;
     const { pageX, pageY } = event.nativeEvent;
     touchStartRef.current = { x: pageX, y: pageY };
+    offsetAtTouchRef.current = listOffsetRef.current;
     armedRef.current = false;
     panGrantedRef.current = false;
     movedRef.current = false;
@@ -776,11 +800,23 @@ function FileTreeRow({
     }
   };
 
-  const onTouchEndOrCancel = () => {
+  const finishTouch = (cancelled: boolean, pageX: number | null, pageY: number | null) => {
     const wasArmed = armedRef.current;
     const panHadGrant = panGrantedRef.current;
-    const wasMoved = movedRef.current;
-    const tapAt = touchStartRef.current;
+    const start = touchStartRef.current;
+    let wasMoved = movedRef.current;
+    if (
+      start &&
+      pageX != null &&
+      pageY != null &&
+      (Math.abs(pageX - start.x) > FILE_MANAGER_LONG_PRESS_MOVE_PX ||
+        Math.abs(pageY - start.y) > FILE_MANAGER_LONG_PRESS_MOVE_PX)
+    ) {
+      wasMoved = true;
+    }
+    if (Math.abs(listOffsetRef.current - offsetAtTouchRef.current) > 1) {
+      wasMoved = true;
+    }
     clearLongPressTimer();
     touchStartRef.current = null;
     movedRef.current = false;
@@ -797,13 +833,21 @@ function FileTreeRow({
     }
 
     armedRef.current = false;
-    if (!wasMoved && !callbacksRef.current.isRenaming && !callbacksRef.current.dragActive) {
-      if (tapAt && isDoubleTap()) {
-        menuRef.current?.open({ pageX: tapAt.x, pageY: tapAt.y });
-        return;
-      }
-      callbacksRef.current.onActivate();
+    // A scroll steals the touch. That cancel is not a tap, so the file stays closed.
+    if (
+      cancelled ||
+      wasMoved ||
+      listScrollingRef.current ||
+      callbacksRef.current.isRenaming ||
+      callbacksRef.current.dragActive
+    ) {
+      return;
     }
+    if (start && isDoubleTap()) {
+      menuRef.current?.open({ pageX: start.x, pageY: start.y });
+      return;
+    }
+    callbacksRef.current.onActivate();
   };
 
   const copyPath = () => {
@@ -854,8 +898,8 @@ function FileTreeRow({
         {...pan.panHandlers}
         onTouchStart={onTouchStart}
         onTouchMove={onTouchMove}
-        onTouchEnd={onTouchEndOrCancel}
-        onTouchCancel={onTouchEndOrCancel}
+        onTouchEnd={(event) => finishTouch(false, event.nativeEvent.pageX, event.nativeEvent.pageY)}
+        onTouchCancel={() => finishTouch(true, null, null)}
         style={styles.rowMain}
         accessibilityRole="button"
         accessibilityState={isFolder ? { expanded: isExpanded } : undefined}

@@ -175,7 +175,9 @@ pub(crate) fn open_nofollow(
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
-        opts.custom_flags(libc::O_NOFOLLOW);
+        // A FIFO swapped in after the kind check would block a plain open.
+        // Non-blocking has no effect on a regular file.
+        opts.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
     }
     #[cfg(windows)]
     {
@@ -254,7 +256,7 @@ fn sync_handle(file: &crate::host_fs::File) -> Result<()> {
         if rc != 0 {
             file.sync_all()?;
         }
-        return Ok(());
+        Ok(())
     }
     #[cfg(not(any(target_os = "macos", target_os = "ios")))]
     {

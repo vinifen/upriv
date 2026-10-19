@@ -28,6 +28,8 @@ export const vaultStatusRowClass = {
     "border-l-2 border-vault-closed/60 bg-surface-container opacity-95 hover:bg-surface-row-hover [&:has(button:hover)]:bg-surface-container",
   exporting:
     "border-l-2 border-vault-closed/60 bg-surface-container opacity-95 hover:bg-surface-row-hover [&:has(button:hover)]:bg-surface-container",
+  backing_up:
+    "border-l-2 border-vault-closed/60 bg-surface-container opacity-95 hover:bg-surface-row-hover [&:has(button:hover)]:bg-surface-container",
   changing_password:
     "border-l-2 border-vault-closed/60 bg-surface-container opacity-95 hover:bg-surface-row-hover [&:has(button:hover)]:bg-surface-container",
   changing_kdf:
@@ -44,6 +46,7 @@ export const vaultStatusBadgeClass = {
   creating: "bg-surface-container-highest text-on-surface-variant animate-pulse",
   queued: "bg-surface-container-highest text-on-surface-variant animate-pulse",
   exporting: "bg-surface-container-highest text-on-surface-variant animate-pulse",
+  backing_up: "bg-surface-container-highest text-on-surface-variant animate-pulse",
   changing_password: "bg-surface-container-highest text-on-surface-variant animate-pulse",
   changing_kdf: "bg-surface-container-highest text-on-surface-variant animate-pulse",
 } as const satisfies Record<VaultDisplayStatus, string>;
@@ -58,6 +61,7 @@ export const vaultStatusIconClass = {
   creating: "bg-surface-container-highest text-on-surface-variant",
   queued: "bg-surface-container-highest text-on-surface-variant",
   exporting: "bg-surface-container-highest text-on-surface-variant",
+  backing_up: "bg-surface-container-highest text-on-surface-variant",
   changing_password: "bg-surface-container-highest text-on-surface-variant",
   changing_kdf: "bg-surface-container-highest text-on-surface-variant",
 } as const satisfies Record<VaultDisplayStatus, string>;

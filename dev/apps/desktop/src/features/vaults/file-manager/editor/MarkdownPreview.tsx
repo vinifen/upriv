@@ -84,6 +84,7 @@ function MarkdownPreviewBody({
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const copyGeneration = useRef(0);
   const lastClick = useRef<{ key: string; at: number } | null>(null);
+  const seenMarkdown = useRef<string | null>(null);
 
   useEffect(
     () => () => {
@@ -94,6 +95,9 @@ function MarkdownPreviewBody({
   );
 
   useEffect(() => {
+    const previous = seenMarkdown.current;
+    seenMarkdown.current = markdown;
+    if (previous === null || previous === markdown) return;
     copyGeneration.current += 1;
     setCopiedKey(null);
   }, [markdown]);

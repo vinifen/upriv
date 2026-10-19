@@ -15,9 +15,7 @@ use zeroize::Zeroize;
 use crate::error::{Result, UprivError};
 use crate::paths::VaultRoot;
 use crate::session::with_open_session;
-use crate::store::{
-    file_name, parent_logical, to_ui_path, INTERNAL_WORKSPACE_FILE, SEED_LOGICAL_PATH,
-};
+use crate::store::{is_reserved_logical, parent_logical, to_ui_path};
 use crate::vault::fs as vfs;
 
 const FUSE_LIBRARY_NAME: &str = "libupriv_fuse.so";
@@ -72,7 +70,7 @@ pub(crate) fn spawn(
             unmount: api.unmount,
         }),
     };
-    super::watch_open_mount(mounted.mount_point());
+    super::watch_vault_folder(mounted.mount_point());
     Ok(mounted)
 }
 
@@ -203,6 +201,7 @@ const HOST: FuseHost = FuseHost {
     delete: host_delete,
     rmdir: host_rmdir,
     relocate: host_relocate,
+    flush: host_flush,
 };
 
 fn io_errno(error: &UprivError) -> i32 {
@@ -223,13 +222,9 @@ fn io_errno(error: &UprivError) -> i32 {
     }
 }
 
-fn hidden_logical(logical: &str) -> bool {
-    file_name(logical) == INTERNAL_WORKSPACE_FILE || logical == SEED_LOGICAL_PATH
-}
-
 /// The new name is a path under `new_parent`, the same check create uses.
 fn relocate_refused(from: &str, new_parent: &str, new_name: &str) -> bool {
-    hidden_logical(from) || hidden_logical(&child_logical(new_parent, new_name))
+    is_reserved_logical(from) || is_reserved_logical(&child_logical(new_parent, new_name))
 }
 
 fn child_logical(parent: &str, name: &str) -> String {
@@ -276,7 +271,7 @@ unsafe extern "C" fn host_stat(
         (Ok(root), Ok(vault_id), Ok(logical)) => (root, vault_id, logical),
         _ => return libc::EINVAL,
     };
-    if hidden_logical(logical) {
+    if is_reserved_logical(logical) {
         return 0;
     }
     let dir = match root.vault_dir(vault_id) {
@@ -319,7 +314,7 @@ unsafe extern "C" fn host_list(
     let children = match with_open_session(&dir, |session| {
         let mut out = Vec::new();
         for node in &session.index.nodes {
-            if hidden_logical(&node.path) {
+            if is_reserved_logical(&node.path) {
                 continue;
             }
             let node_parent = parent_logical(&node.path).unwrap_or("");
@@ -361,7 +356,7 @@ unsafe extern "C" fn host_read_range(
         (Ok(root), Ok(vault_id), Ok(logical)) => (root, vault_id, logical),
         _ => return libc::EINVAL,
     };
-    if hidden_logical(logical) {
+    if is_reserved_logical(logical) {
         return libc::ENOENT;
     }
     let mut bytes = match vfs::fs_read_range(&root, vault_id, &to_ui_path(logical), offset, size) {
@@ -409,7 +404,7 @@ unsafe extern "C" fn host_write_range(
         (Ok(root), Ok(vault_id), Ok(logical)) => (root, vault_id, logical),
         _ => return libc::EINVAL,
     };
-    if hidden_logical(logical) {
+    if is_reserved_logical(logical) {
         return libc::EPERM;
     }
     if data.is_null() && len > 0 {
@@ -447,7 +442,7 @@ unsafe extern "C" fn host_create_file(
             (Ok(root), Ok(vault_id), Ok(parent), Ok(name)) => (root, vault_id, parent, name),
             _ => return libc::EINVAL,
         };
-    if hidden_logical(&child_logical(parent, name)) {
+    if is_reserved_logical(&child_logical(parent, name)) {
         return libc::EPERM;
     }
     match vfs::fs_create_named_file(&root, vault_id, &to_ui_path(parent), name) {
@@ -523,6 +518,17 @@ unsafe extern "C" fn host_relocate(
     }
 }
 
+unsafe extern "C" fn host_flush(root: *const c_char, vault_id: *const c_char) -> i32 {
+    let (root, vault_id) = match (vault_root(root), text(vault_id)) {
+        (Ok(root), Ok(vault_id)) => (root, vault_id),
+        _ => return libc::EINVAL,
+    };
+    match vfs::fs_flush(&root, vault_id) {
+        Ok(_) => 0,
+        Err(error) => io_errno(&error),
+    }
+}
+
 fn call_logical(
     root: *const c_char,
     vault_id: *const c_char,
@@ -533,7 +539,7 @@ fn call_logical(
         (Ok(root), Ok(vault_id), Ok(logical)) => (root, vault_id, logical),
         _ => return libc::EINVAL,
     };
-    if hidden_logical(logical) {
+    if is_reserved_logical(logical) {
         return libc::EPERM;
     }
     match op(&root, vault_id, logical) {
@@ -544,10 +550,7 @@ fn call_logical(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        child_logical, hidden_logical, io_errno, library_beside, library_error, relocate_refused,
-        FUSE_NOT_INSTALLED,
-    };
+    use super::{io_errno, library_beside, library_error, relocate_refused, FUSE_NOT_INSTALLED};
     use crate::error::UprivError;
     use std::path::Path;
 
@@ -566,21 +569,6 @@ mod tests {
             FUSE_NOT_INSTALLED
         );
         assert!(library_error("libupriv_fuse.so: undefined symbol").contains("failed to load"));
-    }
-
-    #[test]
-    fn hidden_layout_files_stay_out_of_the_folder() {
-        assert!(hidden_logical(".upriv-workspace.json"));
-        assert!(hidden_logical("notes/.upriv-workspace.json"));
-        assert!(hidden_logical("upriv-seed.txt"));
-        assert!(hidden_logical(&child_logical("", "upriv-seed.txt")));
-        assert!(!hidden_logical("notes/upriv-seed.txt"));
-        assert!(!hidden_logical(&child_logical("notes", "upriv-seed.txt")));
-        assert!(hidden_logical(&child_logical(
-            "notes",
-            ".upriv-workspace.json"
-        )));
-        assert!(!hidden_logical("notes.txt"));
     }
 
     #[test]

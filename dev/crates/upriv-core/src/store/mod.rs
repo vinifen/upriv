@@ -19,6 +19,8 @@ use zeroize::Zeroizing;
 
 use crate::error::{Result, UprivError};
 
+#[cfg(test)]
+pub(crate) use chunk::blob_path;
 pub(crate) use chunk::{
     blobs_need_pack, mutation_blob_ids, pack_blob_waste, record_imported_file, remove_file_chunks,
     seal_import_chunk, BlobPackMode, ChunkBlobMutation, ImportBlob,
@@ -32,21 +34,24 @@ pub use header::{
     ensure_danger_notice, header_bytes, load_header, rewrap_header, unlock_header, VaultHeader,
     CHUNK_SIZE, FORMAT_VERSION, HEADER_DIR_NAME, HEADER_FILE_NAME, STORE_DANGER_FILE_NAME,
 };
+pub(crate) use index::sha256_hex;
 pub use index::{
-    sealed_index_bytes, VaultIndex, VaultNode, DATA_DIR_NAME, INDEX_COPY_FILE_NAME, INDEX_DIR_NAME,
-    INDEX_FILE_NAME,
+    sealed_index_bytes, ContentDigest, VaultIndex, VaultNode, DATA_DIR_NAME, INDEX_COPY_FILE_NAME,
+    INDEX_DIR_NAME, INDEX_FILE_NAME,
 };
 pub use kdf::KdfUnlockPreset;
 pub use tree::{
     build_file_tree, child_logical_path, delete_empty_directory, delete_logical_path,
-    ensure_folder, file_name, from_ui_path, mkdir_logical, move_logical_path, parent_logical,
-    relocate_logical_path, relocate_replacing, rename_logical_path, to_ui_path, unique_file_name,
-    unique_folder_name, FileTreeNode, INTERNAL_WORKSPACE_FILE, LOGICAL_NAME_MAX,
+    ensure_folder, file_name, from_ui_path, is_plain_internal, is_reserved_logical, mkdir_logical,
+    move_logical_path, parent_logical, relocate_logical_path, relocate_replacing,
+    rename_logical_path, to_ui_path, unique_file_name, unique_folder_name, FileTreeNode,
+    INTERNAL_WORKSPACE_FILE, LOGICAL_NAME_MAX, PLAIN_POLICY_FILE, PLAIN_RESERVED_PREFIX,
 };
 
 use aead::{derive_layer_keys, random_master_key, ContentKey, INDEX_KEY_LEN, MASTER_KEY_LEN};
 use header::{create_header, save_header};
-use index::{load_sealed_index, save_sealed_index, VaultIndex as Index};
+pub(crate) use index::load_sealed_index;
+use index::{save_sealed_index, VaultIndex as Index};
 
 pub struct OpenedStore {
     pub header: VaultHeader,
@@ -202,20 +207,51 @@ pub fn content_hash_hex(store_dir: impl AsRef<Path>) -> Result<String> {
     Ok(format!("sha256:{:x}", hasher.finalize()))
 }
 
-/// Stable id of the vault files used to decide whether a close needs a new
-/// backup zip. Sealed bytes change on every flush because the nonce is random;
-/// this hash does not. `.upriv-workspace.json` is omitted: file-manager layout
-/// is not a vault change. `None` when the index cannot be serialized — that
-/// close must still write a backup.
-pub fn index_logical_hash(index: &VaultIndex) -> Option<String> {
-    let mut content = index.clone();
-    content
+/// `.upriv-workspace.json` and the root plaintext policy: file-manager layout
+/// and the confirmed plaintext place are not vault changes.
+fn counts_as_vault_content(node: &VaultNode) -> bool {
+    node.path != INTERNAL_WORKSPACE_FILE && node.path != PLAIN_POLICY_FILE
+}
+
+/// Stable id of the vault contents used to decide whether a close needs a new
+/// backup zip: each path, whether it is a folder, and each file's size and
+/// plaintext digest. Blob ids, chunk versions, offsets, timestamps, and node
+/// order are not part of it, so writing the same bytes again is not a change.
+/// [`counts_as_vault_content`] decides which files count.
+///
+/// Writers keep digests from bytes they already hold, so nothing is read here.
+/// A file without a current digest (written at random offsets, shrunk, or not
+/// written since digests existed) counts by its storage instead: the same
+/// storage is the same bytes, and different storage only costs one more zip.
+pub fn index_logical_hash(index: &VaultIndex) -> String {
+    let mut content: Vec<&VaultNode> = index
         .nodes
-        .retain(|node| node.path != INTERNAL_WORKSPACE_FILE);
-    let bytes = serde_json::to_vec(&content).ok()?;
+        .iter()
+        .filter(|node| counts_as_vault_content(node))
+        .collect();
+    content.sort_unstable_by(|left, right| left.path.cmp(&right.path));
     let mut hasher = Sha256::new();
-    hasher.update(&bytes);
-    Some(format!("sha256:{:x}", hasher.finalize()))
+    for node in content {
+        hasher.update(node.path.as_bytes());
+        hasher.update([0]);
+        let Some((_, size, _)) = node.as_file() else {
+            hasher.update(b"dir\0");
+            continue;
+        };
+        hasher.update(size.to_le_bytes());
+        match node.current_digest() {
+            Some(sha256) => {
+                hasher.update(b"content\0");
+                hasher.update(sha256.as_bytes());
+            }
+            None => {
+                hasher.update(b"storage\0");
+                hasher.update(node.storage_tag().unwrap_or_default().as_bytes());
+            }
+        }
+        hasher.update([0]);
+    }
+    format!("sha256:{:x}", hasher.finalize())
 }
 
 #[cfg(test)]
@@ -234,23 +270,104 @@ mod tests {
         let opened = open_store(&dir, password).expect("open");
         assert!(opened.index.nodes.is_empty());
         assert_eq!(opened.header.unlock_preset(), Some(KdfUnlockPreset::M32));
-        let hash = index_logical_hash(&opened.index).expect("logical hash");
+        let hash = index_logical_hash(&opened.index);
         assert!(hash.starts_with("sha256:"));
-        assert_eq!(
-            index_logical_hash(&opened.index).as_deref(),
-            Some(hash.as_str())
-        );
+        assert_eq!(index_logical_hash(&opened.index), hash);
+    }
+
+    /// A file node whose digest matches its storage.
+    fn digested(mut node: VaultNode, sha256: &str) -> VaultNode {
+        node.content_digest = Some(ContentDigest {
+            sha256: sha256.into(),
+            storage: node.storage_tag().expect("file"),
+        });
+        node
     }
 
     #[test]
-    fn index_logical_hash_ignores_workspace_layout() {
-        let mut with_layout = VaultIndex::empty();
-        with_layout.nodes.push(VaultNode::file(
+    fn index_logical_hash_ignores_storage_timestamps_and_order() {
+        let mut index = VaultIndex::empty();
+        index.nodes.push(VaultNode::dir("docs"));
+        index.nodes.push(digested(
+            VaultNode::file("docs/a.txt", "file-a".into(), 4, vec!["v1".into()], vec![0]),
+            "sha256:aaaa",
+        ));
+        index.nodes.push(digested(
+            VaultNode::file("b.txt", "file-b".into(), 2, vec!["v1".into()], vec![0]),
+            "sha256:bbbb",
+        ));
+        let before = index_logical_hash(&index);
+        let same = |other: &VaultIndex| index_logical_hash(other) == before;
+
+        // Same bytes written again: new blob, versions, offsets, times, and the
+        // rewritten node moved to the end of the list.
+        let mut rewritten = index.clone();
+        let again = VaultNode::file("docs/a.txt", "a2".into(), 4, vec!["v9".into()], vec![64]);
+        let mut again = digested(again, "sha256:aaaa");
+        again.created_at += 1_000;
+        again.modified_at += 5_000;
+        rewritten.nodes.remove(1);
+        rewritten.nodes.push(again);
+        assert!(same(&rewritten));
+
+        let mut edited = index.clone();
+        edited.nodes[2] = digested(
+            VaultNode::file("b.txt", "file-b".into(), 2, vec!["v2".into()], vec![0]),
+            "sha256:cccc",
+        );
+        assert!(!same(&edited));
+
+        let mut renamed = index.clone();
+        renamed.nodes[2].path = "c.txt".into();
+        assert!(!same(&renamed));
+
+        let mut folder = index.clone();
+        folder.nodes.push(VaultNode::dir("empty"));
+        assert!(!same(&folder));
+    }
+
+    #[test]
+    fn a_file_without_a_current_digest_counts_by_its_storage() {
+        let mut index = VaultIndex::empty();
+        index.nodes.push(VaultNode::file(
             "note.txt",
             "file".into(),
             4,
             vec!["v1".into()],
             vec![0],
+        ));
+        let by_storage = index_logical_hash(&index);
+        // Untouched, it is stable.
+        assert_eq!(index_logical_hash(&index), by_storage);
+
+        // A chunk rewrite with no digest is a change, even if the bytes match.
+        let mut rewritten = index.clone();
+        if let index::VaultNodeKind::File { chunk_versions, .. } = &mut rewritten.nodes[0].kind {
+            chunk_versions[0] = "v2".into();
+        }
+        assert_ne!(index_logical_hash(&rewritten), by_storage);
+
+        // A digest left from older storage is ignored, not trusted.
+        let mut stale = digested(index.nodes[0].clone(), "sha256:aaaa");
+        if let index::VaultNodeKind::File { chunk_versions, .. } = &mut stale.kind {
+            chunk_versions[0] = "v2".into();
+        }
+        assert!(stale.current_digest().is_none());
+        rewritten.nodes[0] = stale;
+        assert_ne!(index_logical_hash(&rewritten), by_storage);
+
+        // The same file once it has a digest is a different id: one more zip.
+        let mut digested_index = index.clone();
+        digested_index.nodes[0] = digested(index.nodes[0].clone(), "sha256:aaaa");
+        assert_ne!(index_logical_hash(&digested_index), by_storage);
+    }
+
+    #[test]
+    fn index_logical_hash_ignores_workspace_layout() {
+        let mut with_layout = VaultIndex::empty();
+        with_layout.nodes.push(digested(
+            VaultNode::file("note.txt", "file".into(), 4, vec!["v1".into()], vec![0]),
+            "sha256:aaaa",
         ));
         with_layout.nodes.push(VaultNode::file(
             INTERNAL_WORKSPACE_FILE,
@@ -267,15 +384,48 @@ mod tests {
             vec!["w2".into()],
             vec![80],
         );
-        let same = index_logical_hash(&with_layout).expect("hash");
-        assert_eq!(
-            index_logical_hash(&other_layout).as_deref(),
-            Some(same.as_str())
-        );
+        let same = index_logical_hash(&with_layout);
+        assert_eq!(index_logical_hash(&other_layout), same);
 
         let mut edited = with_layout;
-        edited.nodes[0] = VaultNode::file("note.txt", "file".into(), 5, vec!["v2".into()], vec![0]);
-        assert_ne!(index_logical_hash(&edited).as_deref(), Some(same.as_str()));
+        edited.nodes[0] = digested(
+            VaultNode::file("note.txt", "file".into(), 5, vec!["v2".into()], vec![0]),
+            "sha256:bbbb",
+        );
+        assert_ne!(index_logical_hash(&edited), same);
+    }
+
+    #[test]
+    fn index_logical_hash_ignores_the_root_plain_policy_only() {
+        let mut index = VaultIndex::empty();
+        index.nodes.push(digested(
+            VaultNode::file("note.txt", "file".into(), 4, vec!["v1".into()], vec![0]),
+            "sha256:aaaa",
+        ));
+        let before = index_logical_hash(&index);
+        let mut with_policy = index.clone();
+        with_policy.nodes.push(VaultNode::file(
+            PLAIN_POLICY_FILE,
+            "policy".into(),
+            9,
+            vec!["p1".into()],
+            vec![0],
+        ));
+        assert_eq!(index_logical_hash(&with_policy), before);
+
+        let mut nested = index;
+        nested.nodes.push(VaultNode::dir("docs"));
+        nested.nodes.push(digested(
+            VaultNode::file(
+                &format!("docs/{PLAIN_POLICY_FILE}"),
+                "nested".into(),
+                9,
+                vec!["p1".into()],
+                vec![0],
+            ),
+            "sha256:pppp",
+        ));
+        assert_ne!(index_logical_hash(&nested), before);
     }
 
     #[test]

@@ -43,7 +43,9 @@ impl Drop for VaultLock {
     }
 }
 
-fn hostname() -> Result<String> {
+/// This computer's host name. Vault locks and plaintext folder records name
+/// the computer that wrote them with it.
+pub(crate) fn hostname() -> Result<String> {
     let name = os_hostname().map_err(|error| UprivError::VaultStoreInvalid {
         path: PathBuf::from("runtime"),
         detail: format!("could not read OS hostname for vault lock: {error}"),
@@ -225,7 +227,7 @@ fn try_exclusive_lock(file: &File) -> Result<bool> {
         };
         let ok = unsafe {
             LockFileEx(
-                file.as_raw_handle() as *mut core::ffi::c_void,
+                file.as_raw_handle(),
                 LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY,
                 0,
                 1,
@@ -240,7 +242,7 @@ fn try_exclusive_lock(file: &File) -> Result<bool> {
         if err.raw_os_error() == Some(33) {
             return Ok(false);
         }
-        return Err(err.into());
+        Err(err.into())
     }
     #[cfg(not(any(unix, windows)))]
     {
@@ -271,58 +273,20 @@ fn identity_of_path(path: &Path) -> std::io::Result<FileIdentity> {
 
 #[cfg(windows)]
 fn identity_of_file(file: &File) -> Result<FileIdentity> {
-    use std::os::windows::io::AsRawHandle;
-    windows_file_identity(file.as_raw_handle() as *mut core::ffi::c_void).map_err(Into::into)
+    windows_file_identity(file).map_err(Into::into)
 }
 
 #[cfg(windows)]
 fn identity_of_path(path: &Path) -> std::io::Result<FileIdentity> {
-    use std::os::windows::io::AsRawHandle;
-    let file = File::open(path)?;
-    windows_file_identity(file.as_raw_handle() as *mut core::ffi::c_void)
+    windows_file_identity(&File::open(path)?)
 }
 
 #[cfg(windows)]
-fn windows_file_identity(handle: *mut core::ffi::c_void) -> std::io::Result<FileIdentity> {
-    #[repr(C)]
-    struct ByHandleFileInformation {
-        file_attributes: u32,
-        creation_time: u64,
-        last_access_time: u64,
-        last_write_time: u64,
-        volume_serial: u32,
-        size_high: u32,
-        size_low: u32,
-        number_of_links: u32,
-        index_high: u32,
-        index_low: u32,
-    }
-    #[link(name = "kernel32")]
-    extern "system" {
-        fn GetFileInformationByHandle(
-            file: *mut core::ffi::c_void,
-            info: *mut ByHandleFileInformation,
-        ) -> i32;
-    }
-    let mut info = ByHandleFileInformation {
-        file_attributes: 0,
-        creation_time: 0,
-        last_access_time: 0,
-        last_write_time: 0,
-        volume_serial: 0,
-        size_high: 0,
-        size_low: 0,
-        number_of_links: 0,
-        index_high: 0,
-        index_low: 0,
-    };
-    let ok = unsafe { GetFileInformationByHandle(handle, &mut info) };
-    if ok == 0 {
-        return Err(std::io::Error::last_os_error());
-    }
+fn windows_file_identity(file: &File) -> std::io::Result<FileIdentity> {
+    let info = crate::host_fs::windows_file_info(file)?;
     Ok(FileIdentity {
         dev: u64::from(info.volume_serial),
-        ino: (u64::from(info.index_high) << 32) | u64::from(info.index_low),
+        ino: info.index,
     })
 }
 

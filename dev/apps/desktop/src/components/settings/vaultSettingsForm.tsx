@@ -276,7 +276,7 @@ export function VaultSettingsStorageSection({
             groupName={storageModeGroup}
             value="upriv_plain"
             checked={config.mode === "upriv_plain"}
-            disabled
+            disabled={storageModeLocked}
             title={t("modal.settings.option.storage.upriv_plain")}
             description={t("modal.settings.option.storage.upriv_plain_desc")}
             badge="insecure"
@@ -284,9 +284,6 @@ export function VaultSettingsStorageSection({
             onSelect={() => onChange({ mode: "upriv_plain" })}
           />
         </div>
-        <p className="text-xs leading-relaxed text-on-surface-variant">
-          {t("error.upriv_plain_unavailable")}
-        </p>
       </SettingsField>
       {config.mode === "encrypted_dir" ? (
         <p className="text-xs leading-relaxed text-on-surface-variant">

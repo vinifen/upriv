@@ -25,7 +25,6 @@ export const CREATE_VAULT_ERROR_I18N_KEYS = {
   mount_path_saf_tree: "modal.workspace.error.saf_tree_child",
   mount_path_reserved: "modal.workspace.error.reserved",
   mount_path_root_unknown: "modal.workspace.error.unavailable",
-  plain_not_available: "vault.create.error.plain_not_available",
 } as const satisfies Record<CreateVaultValidationCode, I18nKey>;
 
 export type CreateVaultErrorI18nKey =

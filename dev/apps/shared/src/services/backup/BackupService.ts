@@ -5,6 +5,8 @@ export interface BackupService {
   listBackups(vaultId: string): Promise<VaultBackupEntry[]>;
   deleteBackups(vaultId: string, stamps: readonly string[]): Promise<void>;
   promoteToSave(vaultId: string, stamp: string): Promise<void>;
+  /** Zip the closed vault straight into Saves. Refused while it is open or busy. */
+  saveNow(vaultId: string): Promise<VaultBackupEntry>;
   getBackupBytes(vaultId: string, entry: VaultBackupEntry): Promise<Uint8Array>;
   /** Stream a zip of the frozen `store/` tree to `destPath` (no NDJSON payload). */
   exportToPath(

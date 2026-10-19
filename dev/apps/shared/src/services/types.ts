@@ -1,6 +1,7 @@
 import type { AppSettingsService } from "./app-settings/AppSettingsService";
 import type { BackupService } from "./backup/BackupService";
 import type { CreateVaultService } from "./vault-create/CreateVaultService";
+import type { DataFolderService } from "./data-folder/DataFolderService";
 import type { VaultFileSystemService } from "./filesystem/VaultFileSystemService";
 import type { VaultLifecycleService } from "./lifecycle/VaultLifecycleService";
 import type { LogService } from "./logs/LogService";
@@ -20,6 +21,12 @@ export interface AppServices {
   vaultRoot: VaultRootService;
   appSettings: AppSettingsService;
   backups: BackupService;
+  /**
+   * Export data folder. Desktop and the Android native build. On a phone the
+   * zip lands in a second folder the user picks, mounted beside the data
+   * folder for that one export. Mocks leave it out.
+   */
+  dataFolder?: DataFolderService;
   logs: LogService;
   filesystem: VaultFileSystemService;
   lifecycle: VaultLifecycleService;

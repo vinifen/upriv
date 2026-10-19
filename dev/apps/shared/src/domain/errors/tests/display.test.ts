@@ -26,8 +26,8 @@ describe("errorDisplayI18nKey", () => {
     expect(errorDisplayI18nKey(new RpcError("vault_mount_filesystem", "exfat"))).toBe(
       "error.vault_mount_filesystem",
     );
-    expect(errorDisplayI18nKey(new RpcError("upriv_plain_unavailable", "plain"))).toBe(
-      "error.upriv_plain_unavailable",
+    expect(errorDisplayI18nKey(new RpcError("plain_leftover", "plain"))).toBe(
+      "error.plain_leftover",
     );
   });
 

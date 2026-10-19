@@ -133,6 +133,25 @@ pub fn unmount_saf_fs() {
     upriv_core::host_fs::unmount();
 }
 
+/// Mount `/upriv-saf-export` onto the folder picked for Export data folder.
+///
+/// `tree_uri` is that folder's `content://` tree. The export refuses it when
+/// it lies inside a `.upriv`. The data folder mount is left as it is.
+#[uniffi::export]
+pub fn mount_saf_export_fs(tree_uri: String, callback: Box<dyn SafFsCallback>) {
+    install_panic_hook();
+    upriv_core::host_fs::mount_export_bridge(
+        std::sync::Arc::new(SafFsAdapter(callback)),
+        &tree_uri,
+    );
+}
+
+/// Drop the export folder mount.
+#[uniffi::export]
+pub fn unmount_saf_export_fs() {
+    upriv_core::host_fs::unmount_export();
+}
+
 /// True when the mounted folder can store a vault file (write + exclusive lock).
 #[uniffi::export]
 pub fn probe_saf_fs() -> bool {

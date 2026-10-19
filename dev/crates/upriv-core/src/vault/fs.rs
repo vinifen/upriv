@@ -1,6 +1,8 @@
 //! Session-backed logical file operations. Mutations seal the index.
 //! One OS import seals before it returns. A batch stages each file and seals
 //! a full wave of them, then the tail, so a crash keeps the last finished wave.
+//! A range write into an existing file waits for the next seal; see
+//! [`fs_write_range`].
 
 use crate::host_fs::File;
 #[allow(unused_imports)]
@@ -8,24 +10,25 @@ use crate::host_fs::HostFsQuery;
 use std::collections::{HashMap, HashSet};
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Condvar, LazyLock, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use zeroize::Zeroize;
 
 use crate::error::{Result, UprivError};
 use crate::logging::{log_event, LogLevel};
 use crate::paths::VaultRoot;
-use crate::session::{with_open_session, OpenSession};
+use crate::session::{with_open_session, DeferredWrites, OpenSession};
 use crate::store::{
     blobs_need_pack, build_file_tree, child_logical_path, delete_empty_directory,
-    delete_logical_path, ensure_folder, file_name, flush_index_parts, from_ui_path, mkdir_logical,
-    move_logical_path, mutation_blob_ids, pack_blob_waste, read_logical_file, read_logical_range,
-    record_imported_file, relocate_logical_path, relocate_replacing, remove_file_chunks,
-    rename_logical_path, seal_import_chunk, to_ui_path, truncate_logical_file, unique_file_name,
-    unique_folder_name, write_logical_file, write_logical_range, BlobPackMode, ChunkBlobMutation,
-    FileTreeNode, ImportBlob, RetiredFileChunks, VaultIndex, INTERNAL_WORKSPACE_FILE,
-    SEED_LOGICAL_PATH, VAULT_FS_MAX_INLINE_BYTES,
+    delete_logical_path, ensure_folder, file_name, flush_index_parts, from_ui_path,
+    is_plain_internal, is_reserved_logical, mkdir_logical, move_logical_path, mutation_blob_ids,
+    pack_blob_waste, read_logical_file, read_logical_range, record_imported_file,
+    relocate_logical_path, relocate_replacing, remove_file_chunks, rename_logical_path,
+    seal_import_chunk, to_ui_path, truncate_logical_file, unique_file_name, unique_folder_name,
+    write_logical_file, write_logical_range, BlobPackMode, ChunkBlobMutation, FileTreeNode,
+    ImportBlob, RetiredFileChunks, VaultIndex, INTERNAL_WORKSPACE_FILE, VAULT_FS_MAX_INLINE_BYTES,
 };
 
 use super::import_slots::import_slots;
@@ -34,7 +37,17 @@ fn store_dir(session: &OpenSession) -> std::path::PathBuf {
     session.vault_dir.join(crate::paths::STORE_DIR_NAME)
 }
 
+/// Seal the index. An open plaintext folder is told the store changed, so the
+/// change reaches the folder too.
 fn commit(session: &mut OpenSession) -> Result<()> {
+    seal_index(session)?;
+    if session.plain.is_some() {
+        super::plain::store_changed(&session.vault_dir);
+    }
+    Ok(())
+}
+
+fn seal_index(session: &mut OpenSession) -> Result<()> {
     sync_staged_blobs(&session.staged_blobs)?;
     let store = store_dir(session);
     flush_index_parts(&store, &session.header, &session.index_key, &session.index)?;
@@ -43,6 +56,7 @@ fn commit(session: &mut OpenSession) -> Result<()> {
     session.sealed_seq = session.import_seq;
     session.unsealed_imports = 0;
     session.sealing = false;
+    session.deferred = None;
     session.dirty = false;
     session.tree_revision = session.tree_revision.saturating_add(1);
     import_wave_notify();
@@ -107,7 +121,7 @@ fn commit_mutation(
                 let _ =
                     remove_file_chunks(&store_dir(session), &retired.file_id, retired.chunk_count);
             }
-            pack_sealed_waste(session, &mutation);
+            pack_sealed_waste(session, &mutation_blob_ids(&mutation));
             Ok(())
         }
         Err(error) => {
@@ -118,15 +132,15 @@ fn commit_mutation(
     }
 }
 
-fn pack_sealed_waste(session: &mut OpenSession, mutation: &ChunkBlobMutation) {
-    let ids = mutation_blob_ids(mutation);
+/// After a seal, pack any of these blobs that holds enough dead ciphertext.
+fn pack_sealed_waste(session: &mut OpenSession, ids: &[String]) {
     let store = store_dir(session);
     if !blobs_need_pack(
         &store,
         &session.header,
         &session.index,
         BlobPackMode::SessionWaste,
-        Some(&ids),
+        Some(ids),
     ) {
         return;
     }
@@ -136,7 +150,7 @@ fn pack_sealed_waste(session: &mut OpenSession, mutation: &ChunkBlobMutation) {
         &session.content_key,
         &mut session.index,
         BlobPackMode::SessionWaste,
-        Some(&ids),
+        Some(ids),
     ) {
         Ok(packed) if packed.created.is_empty() => {}
         Ok(packed) => match packed.sync_before_index().and_then(|_| commit(session)) {
@@ -169,8 +183,21 @@ fn require_open(root: &VaultRoot, vault_id: &str) -> Result<std::path::PathBuf> 
     Ok(dir)
 }
 
+/// A plaintext-folder name is never addressable from the app, so the confirmed
+/// place cannot be read or replaced through a file call.
 fn logical(ui_path: &str) -> Result<String> {
-    from_ui_path(ui_path)
+    let path = from_ui_path(ui_path)?;
+    if is_plain_internal(&path) {
+        return Err(reserved_path(&path));
+    }
+    Ok(path)
+}
+
+fn reserved_path(path: &str) -> UprivError {
+    UprivError::VaultStoreInvalid {
+        path: std::path::PathBuf::from(path),
+        detail: "reserved internal path".into(),
+    }
 }
 
 /// Missing layout file is “start clean”, not a user-visible path error (SDD).
@@ -181,11 +208,8 @@ fn is_missing_internal_workspace(err: &UprivError, logical: &str) -> bool {
 /// Explorer/FUSE/create/rename/delete must not touch reserved internal files.
 /// Reads/writes of `.upriv-workspace.json` stay allowed for layout persistence.
 fn require_user_visible_logical(path: &str) -> Result<()> {
-    if file_name(path) == INTERNAL_WORKSPACE_FILE || path == SEED_LOGICAL_PATH {
-        return Err(UprivError::VaultStoreInvalid {
-            path: std::path::PathBuf::from(path),
-            detail: "reserved internal path".into(),
-        });
+    if is_reserved_logical(path) {
+        return Err(reserved_path(path));
     }
     Ok(())
 }
@@ -318,6 +342,16 @@ pub fn fs_write_file(root: &VaultRoot, vault_id: &str, ui_path: &str, data: &[u8
     })
 }
 
+/// Write `data` at `offset`. A write past the end fills the gap with zeros.
+///
+/// In an existing file the chunks land in its blob now and the index entry
+/// waits for the next seal: [`fs_flush`] (a mount flush, fsync, or handle
+/// close), any other committed change, [`DEFERRED_SEAL_BYTES`] of pending
+/// writes, [`DEFERRED_SEAL_AFTER`], or close. Until then the sealed index
+/// still names the previous bytes, which no later write overwrites, so a crash
+/// loses at most that batch. A write that creates the file seals at once.
+/// When the size cap seals and that seal fails, the error is returned and the
+/// batch, this write included, stays pending for the next seal.
 pub fn fs_write_range(
     root: &VaultRoot,
     vault_id: &str,
@@ -335,8 +369,23 @@ pub fn fs_write_range(
     let dir = require_open(root, vault_id)?;
     let path = logical(ui_path)?;
     with_open_session(&dir, |session| {
-        session.dirty = true;
-        let before = session.index.clone();
+        if session.index.find(&path).is_none() {
+            // A new name changes the tree, which is sealed before it is shown.
+            session.dirty = true;
+            let before = session.index.clone();
+            let mutation = write_logical_range(
+                store_dir(session),
+                &session.header,
+                &session.content_key,
+                &mut session.index,
+                &path,
+                offset,
+                data,
+            )?;
+            commit_mutation(session, before, mutation, None)?;
+            return Ok(session.tree_revision);
+        }
+        // A failed range write leaves the index as it was, so no copy is kept.
         let mutation = write_logical_range(
             store_dir(session),
             &session.header,
@@ -346,9 +395,228 @@ pub fn fs_write_range(
             offset,
             data,
         )?;
-        commit_mutation(session, before, mutation, None)?;
+        defer_range_write(session, &mutation, data.len() as u64)?;
         Ok(session.tree_revision)
     })
+}
+
+/// Pending range writes past this many plaintext bytes seal at once. This
+/// also caps the dead ciphertext a batch of rewrites keeps until its seal.
+const DEFERRED_SEAL_BYTES: u64 = 64 * 1024 * 1024;
+
+/// A batch no flush, fsync, handle close, or other change sealed first is
+/// sealed this long after its first write. Tests wait longer, so a slow machine
+/// does not seal a batch while a test still expects it pending.
+const DEFERRED_SEAL_AFTER: Duration = if cfg!(test) {
+    Duration::from_secs(30)
+} else {
+    Duration::from_secs(2)
+};
+
+/// Longest pause between retries of a timed seal that failed.
+const DEFERRED_RETRY_MAX: Duration = Duration::from_secs(32);
+
+/// Batch numbers are unique in the process, so a timer left from a closed
+/// session never matches a batch of a session opened later.
+static DEFERRED_BATCH: AtomicU64 = AtomicU64::new(0);
+
+/// Queue a range write that already landed in its blob for the next seal.
+fn defer_range_write(
+    session: &mut OpenSession,
+    mutation: &ChunkBlobMutation,
+    len: u64,
+) -> Result<()> {
+    session.dirty = true;
+    let touched = mutation
+        .created
+        .iter()
+        .chain(mutation.truncate_to.iter().map(|(path, _)| path));
+    for path in touched {
+        if !session.staged_blobs.contains(path) {
+            session.staged_blobs.push(path.clone());
+        }
+    }
+    let ids = mutation_blob_ids(mutation);
+    let started = session.deferred.is_none();
+    let pending = session.deferred.get_or_insert_with(|| DeferredWrites {
+        batch: DEFERRED_BATCH.fetch_add(1, Ordering::Relaxed) + 1,
+        bytes: 0,
+        blob_ids: Vec::new(),
+    });
+    pending.bytes = pending.bytes.saturating_add(len);
+    for id in ids {
+        if !pending.blob_ids.contains(&id) {
+            pending.blob_ids.push(id);
+        }
+    }
+    if started {
+        schedule_deferred_seal(session.vault_dir.clone(), pending.batch);
+    }
+    if pending.bytes >= DEFERRED_SEAL_BYTES {
+        return seal_deferred(session);
+    }
+    Ok(())
+}
+
+/// Seal the pending batch with the rest of the index, then pack the blobs it
+/// wrote that now hold enough dead ciphertext. A failed seal keeps the batch.
+fn seal_deferred(session: &mut OpenSession) -> Result<()> {
+    let ids = session
+        .deferred
+        .as_ref()
+        .map(|pending| pending.blob_ids.clone())
+        .unwrap_or_default();
+    commit(session)?;
+    pack_sealed_waste(session, &ids);
+    Ok(())
+}
+
+/// Seal range writes still waiting for the index. A mount calls this on flush,
+/// fsync, and handle close; with nothing pending it touches no disk.
+#[cfg_attr(not(any(target_os = "linux", windows)), allow(dead_code))]
+pub fn fs_flush(root: &VaultRoot, vault_id: &str) -> Result<u64> {
+    let dir = require_open(root, vault_id)?;
+    with_open_session(&dir, |session| {
+        if session.deferred.is_some() {
+            seal_deferred(session)?;
+        }
+        Ok(session.tree_revision)
+    })
+}
+
+/// One timed seal: the newest batch of one vault.
+struct DeferredDue {
+    dir: PathBuf,
+    batch: u64,
+    at: Instant,
+    /// Wait before the next try once a seal failed.
+    retry: Duration,
+    failed: bool,
+}
+
+/// Timed seals for every vault, served by one worker thread that exits when
+/// none is left. A vault has at most one entry: its newest batch.
+struct DeferredTimers {
+    due: Vec<DeferredDue>,
+    worker_alive: bool,
+}
+
+static DEFERRED_TIMERS: LazyLock<(Mutex<DeferredTimers>, Condvar)> = LazyLock::new(|| {
+    let timers = DeferredTimers {
+        due: Vec::new(),
+        worker_alive: false,
+    };
+    (Mutex::new(timers), Condvar::new())
+});
+
+fn deferred_timers() -> std::sync::MutexGuard<'static, DeferredTimers> {
+    DEFERRED_TIMERS
+        .0
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Seal `batch` [`DEFERRED_SEAL_AFTER`] after it started, unless something
+/// sealed it first. Without the worker thread the batch still seals on a
+/// flush, fsync, handle close, other change, the size cap, or close.
+fn schedule_deferred_seal(dir: PathBuf, batch: u64) {
+    schedule_deferred_seal_in(dir, batch, DEFERRED_SEAL_AFTER);
+}
+
+fn schedule_deferred_seal_in(dir: PathBuf, batch: u64, delay: Duration) {
+    let mut timers = deferred_timers();
+    timers.due.retain(|due| due.dir != dir);
+    timers.due.push(DeferredDue {
+        dir,
+        batch,
+        at: Instant::now() + delay,
+        retry: delay,
+        failed: false,
+    });
+    if timers.worker_alive {
+        // The worker may be waiting for a later retry; this one comes first.
+        DEFERRED_TIMERS.1.notify_one();
+        return;
+    }
+    timers.worker_alive = true;
+    let spawned = std::thread::Builder::new()
+        .name("upriv-deferred-seal".into())
+        .spawn(run_deferred_timers);
+    if spawned.is_err() {
+        timers.worker_alive = false;
+        log_event(LogLevel::Warn, "vault_fs_deferred_timer_skipped", &[]);
+    }
+}
+
+fn run_deferred_timers() {
+    let (_, wake) = &*DEFERRED_TIMERS;
+    let mut timers = deferred_timers();
+    loop {
+        let Some(next) = timers.due.iter().map(|due| due.at).min() else {
+            timers.worker_alive = false;
+            return;
+        };
+        let now = Instant::now();
+        if next > now {
+            timers = wake
+                .wait_timeout(timers, next - now)
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .0;
+            continue;
+        }
+        let (ready, waiting) = std::mem::take(&mut timers.due)
+            .into_iter()
+            .partition(|due: &DeferredDue| due.at <= now);
+        timers.due = waiting;
+        drop(timers);
+        let mut retries = Vec::new();
+        for mut due in ready {
+            if seal_deferred_batch(&due.dir, due.batch, !due.failed) == DeferredTimer::Retry {
+                due.failed = true;
+                due.retry = (due.retry * 2).min(DEFERRED_RETRY_MAX);
+                due.at = Instant::now() + due.retry;
+                retries.push(due);
+            }
+        }
+        timers = deferred_timers();
+        for due in retries {
+            // A newer batch of the same vault replaces the retry; its seal
+            // covers these writes too.
+            if !timers.due.iter().any(|other| other.dir == due.dir) {
+                timers.due.push(due);
+            }
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum DeferredTimer {
+    /// Sealed, sealed by something else, replaced by a newer batch, or closed.
+    Done,
+    /// The seal failed and the batch is still pending.
+    Retry,
+}
+
+/// One timer step. Only the first failure of a batch is logged.
+fn seal_deferred_batch(dir: &Path, batch: u64, log_failure: bool) -> DeferredTimer {
+    let step = with_open_session(dir, |session| {
+        if session.deferred.as_ref().map(|pending| pending.batch) != Some(batch) {
+            return Ok(DeferredTimer::Done);
+        }
+        if seal_deferred(session).is_ok() {
+            return Ok(DeferredTimer::Done);
+        }
+        if log_failure {
+            log_event(
+                LogLevel::Warn,
+                "vault_fs_deferred_seal_failed",
+                &[("id", session.vault_id.as_str())],
+            );
+        }
+        Ok(DeferredTimer::Retry)
+    });
+    // A closed vault was sealed by its close, or by recovery after a crash.
+    step.unwrap_or(DeferredTimer::Done)
 }
 
 /// Fill one store chunk. A pipe or content file often returns a short read;
@@ -373,6 +641,8 @@ struct PreparedImport {
     versions: Vec<String>,
     offsets: Vec<u64>,
     size: u64,
+    /// Digest of the plaintext read, when the session tracks digests.
+    sha256: Option<String>,
 }
 
 impl Drop for PreparedImport {
@@ -383,6 +653,8 @@ impl Drop for PreparedImport {
 
 /// Read, encrypt, and write this file's blob. The session lock stays free so
 /// other imports can do the same work at the same time. `None` is an empty file.
+/// With `hash`, the plaintext digest is taken from the same buffer.
+#[allow(clippy::too_many_arguments)]
 fn seal_into_new_blob(
     store: &Path,
     header: &crate::store::VaultHeader,
@@ -391,7 +663,9 @@ fn seal_into_new_blob(
     reader: &mut (impl Read + ?Sized),
     map_read: impl FnOnce(std::io::Error) -> UprivError,
     sync_dir: bool,
+    hash: bool,
 ) -> Result<Option<PreparedImport>> {
+    use sha2::Digest;
     let chunk_size = header.chunk_size as usize;
     if chunk_size == 0 {
         return Err(UprivError::VaultStoreInvalid {
@@ -405,12 +679,16 @@ fn seal_into_new_blob(
     let mut offsets = Vec::new();
     let mut size = 0u64;
     let mut index = 0u32;
+    let mut hasher = hash.then(sha2::Sha256::new);
     let outcome = loop {
         let n = match read_full_chunk(reader, &mut buf) {
             Ok(0) => break Ok(()),
             Ok(n) => n,
             Err(error) => break Err(map_read(error)),
         };
+        if let Some(hasher) = hasher.as_mut() {
+            hasher.update(&buf[..n]);
+        }
         let piece = match seal_import_chunk(header, content_key, file_id, index, &buf[..n]) {
             Ok(piece) => piece,
             Err(error) => {
@@ -465,18 +743,28 @@ fn seal_into_new_blob(
         versions,
         offsets,
         size,
+        sha256: hasher.map(crate::store::sha256_hex),
     }))
 }
 
+/// Header, content key, and whether this session keeps plaintext digests.
 fn session_secrets(
     dir: &Path,
-) -> Result<(crate::store::VaultHeader, zeroize::Zeroizing<[u8; 32]>)> {
-    let (header, mut raw_key) = with_open_session(dir, |session| {
-        Ok((session.header.clone(), session.content_key))
+) -> Result<(
+    crate::store::VaultHeader,
+    zeroize::Zeroizing<[u8; 32]>,
+    bool,
+)> {
+    let (header, mut raw_key, hash) = with_open_session(dir, |session| {
+        Ok((
+            session.header.clone(),
+            session.content_key,
+            session.index.writes.track_digests,
+        ))
     })?;
     let key = zeroize::Zeroizing::new(raw_key);
     raw_key.zeroize();
-    Ok((header, key))
+    Ok((header, key, hash))
 }
 
 fn commit_prepared(
@@ -499,6 +787,7 @@ fn commit_prepared(
         size,
         versions,
         offsets,
+        prepared.sha256.take(),
     ) {
         Ok(retired) => {
             let committed = commit_mutation(session, before, mutation, retired);
@@ -654,6 +943,7 @@ fn publish_prepared(
             prepared.size,
             std::mem::take(&mut prepared.versions),
             std::mem::take(&mut prepared.offsets),
+            prepared.sha256.take(),
         ) {
             mutation.discard_created();
             return Err(error);
@@ -876,7 +1166,7 @@ fn write_reader_ahead(
 ) -> Result<u64> {
     let guard = ImportGuard::enter(dir);
     with_open_session(dir, |_| require_user_visible_logical(path))?;
-    let (header, key) = session_secrets(dir)?;
+    let (header, key, hash) = session_secrets(dir)?;
     let file_id = uuid::Uuid::new_v4().to_string();
     let store = dir.join(crate::paths::STORE_DIR_NAME);
     let prepared = seal_into_new_blob(
@@ -887,6 +1177,7 @@ fn write_reader_ahead(
         reader,
         |error| error.into(),
         !defer_index,
+        hash,
     )?;
     match prepared {
         Some(prepared) => publish_prepared(dir, path, &file_id, prepared, &guard, defer_index),
@@ -906,7 +1197,7 @@ fn import_os_file_ahead(
     defer_index: bool,
 ) -> Result<(String, u64)> {
     let guard = ImportGuard::enter(dir);
-    let (header, key) = session_secrets(dir)?;
+    let (header, key, hash) = session_secrets(dir)?;
     let file_id = uuid::Uuid::new_v4().to_string();
     let store = dir.join(crate::paths::STORE_DIR_NAME);
     let source_seal = source.to_path_buf();
@@ -918,6 +1209,7 @@ fn import_os_file_ahead(
         &mut file,
         |_| UprivError::ImportSourceUnreadable(source_seal),
         !defer_index,
+        hash,
     )?;
     let Some(mut prepared) = prepared else {
         return with_open_session(dir, |session| {
@@ -935,6 +1227,7 @@ fn import_os_file_ahead(
             prepared.size,
             std::mem::take(&mut prepared.versions),
             std::mem::take(&mut prepared.offsets),
+            prepared.sha256.take(),
         ) {
             mutation.discard_created();
             return Err(error);
@@ -1202,20 +1495,11 @@ fn import_os_file_at(
     })
 }
 
+/// A link swapped in after the path was checked is refused on every system,
+/// including a Windows reparse point.
 fn open_import_source(path: &Path) -> Result<File> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        crate::host_fs::OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(path)
-            .map_err(|_| UprivError::ImportSourceUnreadable(path.to_path_buf()))
-    }
-    #[cfg(not(unix))]
-    {
-        File::open(path).map_err(|_| UprivError::ImportSourceUnreadable(path.to_path_buf()))
-    }
+    crate::paths::open_nofollow(path, crate::paths::NofollowMode::Read)
+        .map_err(|_| UprivError::ImportSourceUnreadable(path.to_path_buf()))
 }
 
 fn reject_unreadable(path: &Path) -> UprivError {
@@ -1503,6 +1787,199 @@ pub fn fs_relocate(
     })
 }
 
+/// A folder file encrypted into a new blob of this vault, not yet named in
+/// the index. Dropping it deletes the blob.
+pub(super) struct SealedFile {
+    file_id: String,
+    /// `None` for an empty file, which has no blob.
+    prepared: Option<PreparedImport>,
+}
+
+/// Encrypt `reader` into a new blob without holding the session lock. The
+/// blob is flushed with the next index seal, like a staged import.
+pub(super) fn seal_reader(
+    dir: &Path,
+    reader: &mut (impl Read + ?Sized),
+    map_read: impl FnOnce(std::io::Error) -> UprivError,
+) -> Result<SealedFile> {
+    let (header, key, hash) = session_secrets(dir)?;
+    let file_id = uuid::Uuid::new_v4().to_string();
+    let store = dir.join(crate::paths::STORE_DIR_NAME);
+    let prepared = seal_into_new_blob(
+        &store, &header, &key, &file_id, reader, map_read, false, hash,
+    )?;
+    Ok(SealedFile { file_id, prepared })
+}
+
+/// Name `sealed` at `path`, replacing a file there. The replaced blob is
+/// returned; unlink it only after [`seal_staged_sync`] succeeds.
+pub(super) fn stage_sealed(
+    session: &mut OpenSession,
+    path: &str,
+    mut sealed: SealedFile,
+) -> Result<Option<RetiredFileChunks>> {
+    let (size, versions, offsets, mutation, sha256) = match sealed.prepared.as_mut() {
+        Some(prepared) => (
+            prepared.size,
+            std::mem::take(&mut prepared.versions),
+            std::mem::take(&mut prepared.offsets),
+            std::mem::take(&mut prepared.mutation),
+            prepared.sha256.take(),
+        ),
+        None => {
+            let empty = session
+                .index
+                .writes
+                .track_digests
+                .then(|| crate::store::sha256_hex(<sha2::Sha256 as sha2::Digest>::new()));
+            (
+                0,
+                Vec::new(),
+                Vec::new(),
+                ChunkBlobMutation::default(),
+                empty,
+            )
+        }
+    };
+    match record_imported_file(
+        &mut session.index,
+        path,
+        std::mem::take(&mut sealed.file_id),
+        size,
+        versions,
+        offsets,
+        sha256,
+    ) {
+        Ok(retired) => {
+            session
+                .staged_blobs
+                .extend(mutation.created.iter().cloned());
+            session.dirty = true;
+            Ok(retired)
+        }
+        Err(error) => {
+            mutation.discard_created();
+            Err(error)
+        }
+    }
+}
+
+/// Add an empty folder. Its parent must already be a folder.
+pub(super) fn stage_mkdir(session: &mut OpenSession, path: &str) -> Result<()> {
+    mkdir_logical(&mut session.index, path)?;
+    session.dirty = true;
+    Ok(())
+}
+
+/// Drop `path` (and anything under it). Unlink the returned blobs only after
+/// [`seal_staged_sync`] succeeds.
+pub(super) fn stage_delete(
+    session: &mut OpenSession,
+    path: &str,
+) -> Result<Vec<RetiredFileChunks>> {
+    let retired = delete_logical_path(&mut session.index, path)?;
+    session.dirty = true;
+    Ok(retired)
+}
+
+/// Drop one folder that holds nothing.
+pub(super) fn stage_remove_empty_dir(session: &mut OpenSession, path: &str) -> Result<()> {
+    delete_empty_directory(&mut session.index, path)?;
+    session.dirty = true;
+    Ok(())
+}
+
+/// Rename or move one file. No ciphertext is rewritten.
+pub(super) fn stage_move(session: &mut OpenSession, from: &str, to: &str) -> Result<()> {
+    let parent = crate::store::parent_logical(to).unwrap_or("");
+    relocate_logical_path(&mut session.index, from, parent, file_name(to))?;
+    session.dirty = true;
+    Ok(())
+}
+
+/// Seal every staged change, then unlink the blobs no index names any more.
+/// The folder is not poked: these changes came from it.
+pub(super) fn seal_staged_sync(
+    session: &mut OpenSession,
+    retired: &[RetiredFileChunks],
+) -> Result<()> {
+    seal_index(session)?;
+    let store = store_dir(session);
+    for item in retired {
+        if remove_file_chunks(&store, &item.file_id, item.chunk_count).is_err() {
+            log_event(
+                LogLevel::Warn,
+                "vault_fs_leftover_blobs",
+                &[
+                    ("vault_id", session.vault_id.as_str()),
+                    ("file_id", item.file_id.as_str()),
+                    ("chunk_count", &item.chunk_count.to_string()),
+                ],
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Plaintext of `len` bytes of one store file, for the folder copy.
+pub(super) fn read_store_range(
+    session: &OpenSession,
+    path: &str,
+    offset: u64,
+    len: u64,
+) -> Result<Vec<u8>> {
+    read_logical_range(
+        store_dir(session),
+        &session.header,
+        &session.content_key,
+        &session.index,
+        path,
+        offset,
+        len,
+    )
+}
+
+/// An internal store file (the plaintext policy). `None` when it is absent.
+pub(super) fn read_internal(session: &OpenSession, path: &str) -> Result<Option<Vec<u8>>> {
+    if session.index.find(path).is_none() {
+        return Ok(None);
+    }
+    read_logical_file(
+        store_dir(session),
+        &session.header,
+        &session.content_key,
+        &session.index,
+        path,
+    )
+    .map(Some)
+}
+
+/// Replace an internal store file and seal the index.
+pub(super) fn write_internal(session: &mut OpenSession, path: &str, bytes: &[u8]) -> Result<()> {
+    session.dirty = true;
+    let before = session.index.clone();
+    let (retired, mutation) = write_logical_file(
+        store_dir(session),
+        &session.header,
+        &session.content_key,
+        &mut session.index,
+        path,
+        bytes,
+    )?;
+    commit_mutation(session, before, mutation, retired)
+}
+
+/// Remove an internal store file when it exists, and seal the index.
+pub(super) fn remove_internal(session: &mut OpenSession, path: &str) -> Result<()> {
+    if session.index.find(path).is_none() {
+        return Ok(());
+    }
+    session.dirty = true;
+    let before = session.index.clone();
+    let retired = delete_logical_path(&mut session.index, path)?;
+    commit_then_unlink(session, before, retired)
+}
+
 /// Join a validated logical path (`notes/a.txt`, or `""` for the mount root)
 /// onto an OS mount point. Rejects `.` / `..` / empty components.
 pub(crate) fn join_logical_under_mount(mount: &Path, logical: &str) -> Result<PathBuf> {
@@ -1522,7 +1999,8 @@ pub(crate) fn join_logical_under_mount(mount: &Path, logical: &str) -> Result<Pa
     Ok(out)
 }
 
-/// Absolute OS path of a logical item on the live FUSE/WinFsp mount.
+/// Absolute OS path of a logical item: in the plaintext folder of an open
+/// `upriv_plain` vault, or on the live FUSE/WinFsp mount.
 ///
 /// Does not create files. Missing mount (mobile, WinFsp not installed, FUSE failure)
 /// returns [`UprivError::VaultMountFailed`] — never a plaintext extract.
@@ -1530,6 +2008,9 @@ pub fn fs_os_path(root: &VaultRoot, vault_id: &str, ui_path: &str) -> Result<Pat
     let dir = require_open(root, vault_id)?;
     let logical = logical(ui_path)?;
     with_open_session(&dir, |session| {
+        if let Some(folder) = session.plain.as_ref().map(|plain| plain.folder()) {
+            return join_logical_under_mount(folder, &logical);
+        }
         let Some(mount) = session.mount.as_ref() else {
             let detail = session
                 .mount_failure
@@ -1875,12 +2356,8 @@ mode = "encrypted_dir"
         assert_eq!(durable, b"generation-one");
     }
 
-    #[cfg(unix)]
-    #[test]
-    fn range_write_restores_index_when_flush_fails() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let (_tmp, root) = vault_root_with(&[]);
+    fn open_notes() -> (tempfile::TempDir, VaultRoot) {
+        let (tmp, root) = vault_root_with(&[]);
         create_vault(
             &root,
             sample_config("notes", "Notes"),
@@ -1889,24 +2366,124 @@ mode = "encrypted_dir"
         )
         .unwrap();
         open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        (tmp, root)
+    }
+
+    /// What a crash now would keep: the file as the sealed index on disk names
+    /// it, read with the session keys so no unlock runs.
+    fn sealed_bytes(root: &VaultRoot, path: &str) -> Vec<u8> {
+        with_open_session(&root.vault_dir("notes").unwrap(), |session| {
+            let store = store_dir(session);
+            let sealed =
+                crate::store::load_sealed_index(&store, &session.header, &session.index_key)?;
+            read_logical_file(&store, &session.header, &session.content_key, &sealed, path)
+        })
+        .unwrap()
+    }
+
+    fn pending_batch(root: &VaultRoot) -> Option<u64> {
+        with_open_session(&root.vault_dir("notes").unwrap(), |session| {
+            Ok(session.deferred.as_ref().map(|pending| pending.batch))
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn a_range_write_waits_for_flush_and_a_crash_keeps_the_sealed_bytes() {
+        let (_tmp, root) = open_notes();
         fs_write_file(&root, "notes", "/notes.txt", b"generation-one").unwrap();
-        let store = root.vault_store_dir("notes").unwrap();
-        let index_dir = store.join(crate::store::INDEX_DIR_NAME);
-        let restore = crate::host_fs::metadata(&index_dir).unwrap().permissions();
-        let mut locked = restore.clone();
-        locked.set_mode(0o555);
-        crate::host_fs::set_permissions(&index_dir, locked).unwrap();
-        let write = fs_write_range(&root, "notes", "/notes.txt", 0, b"generation-two");
-        crate::host_fs::set_permissions(&index_dir, restore).unwrap();
-        if write.is_ok() {
-            close_vault(&root, "notes").unwrap();
-            return;
-        }
-        let got = fs_read_file(&root, "notes", "/notes.txt").unwrap();
-        assert_eq!(got, b"generation-one");
+        let sealed_revision = fs_tree_revision(&root, "notes").unwrap();
+
+        let revision = fs_write_range(&root, "notes", "/notes.txt", 0, b"generation-two").unwrap();
+        assert_eq!(revision, sealed_revision, "nothing was sealed");
+        assert_eq!(
+            fs_read_file(&root, "notes", "/notes.txt").unwrap(),
+            b"generation-two"
+        );
+        assert_eq!(sealed_bytes(&root, "notes.txt"), b"generation-one");
+        assert!(pending_batch(&root).is_some());
+
+        assert!(fs_flush(&root, "notes").unwrap() > sealed_revision);
+        assert_eq!(sealed_bytes(&root, "notes.txt"), b"generation-two");
+        assert_eq!(pending_batch(&root), None);
+        // Nothing pending: no seal, so the revision stays.
+        let flushed = fs_tree_revision(&root, "notes").unwrap();
+        assert_eq!(fs_flush(&root, "notes").unwrap(), flushed);
         close_vault(&root, "notes").unwrap();
+    }
+
+    #[test]
+    fn unsealed_rewrites_never_reuse_space_the_sealed_index_names() {
+        let (_tmp, root) = open_notes();
+        // Three chunks, the last one partial.
+        let original: Vec<u8> = (0..600 * 1024).map(|i| (i % 251) as u8).collect();
+        fs_write_file(&root, "notes", "/big.bin", &original).unwrap();
+        let mut expected = original.clone();
+        // Each rewrite of chunk 0 abandons a span the sealed index still names.
+        for round in 0..6u8 {
+            let patch = vec![round; 1000];
+            fs_write_range(&root, "notes", "/big.bin", 10, &patch).unwrap();
+            expected[10..1010].copy_from_slice(&patch);
+            assert_eq!(sealed_bytes(&root, "big.bin"), original, "round {round}");
+        }
+        let tail = vec![0xEE; 300 * 1024];
+        fs_write_range(&root, "notes", "/big.bin", 500 * 1024, &tail).unwrap();
+        expected.truncate(500 * 1024);
+        expected.extend_from_slice(&tail);
+        assert_eq!(sealed_bytes(&root, "big.bin"), original);
+        assert_eq!(
+            fs_read_range(&root, "notes", "/big.bin", 0, expected.len() as u64).unwrap(),
+            expected
+        );
+
+        fs_flush(&root, "notes").unwrap();
+        assert_eq!(sealed_bytes(&root, "big.bin"), expected);
+
+        // After the seal the older spans are free again, and these rewrites may
+        // land in them. The bytes the new seal names stay intact.
+        let sealed = expected.clone();
+        for round in 0..6u8 {
+            let patch = vec![0x80 | round; 2000];
+            fs_write_range(&root, "notes", "/big.bin", 300 * 1024, &patch).unwrap();
+            expected[300 * 1024..300 * 1024 + 2000].copy_from_slice(&patch);
+            assert_eq!(sealed_bytes(&root, "big.bin"), sealed, "round {round}");
+        }
+        fs_flush(&root, "notes").unwrap();
+        assert_eq!(sealed_bytes(&root, "big.bin"), expected);
+        close_vault(&root, "notes").unwrap();
+    }
+
+    #[test]
+    fn a_range_write_that_creates_a_file_seals_at_once() {
+        let (_tmp, root) = open_notes();
+        let before = fs_tree_revision(&root, "notes").unwrap();
+        let revision = fs_write_range(&root, "notes", "/fresh.txt", 0, b"fresh").unwrap();
+        assert!(revision > before);
+        assert_eq!(sealed_bytes(&root, "fresh.txt"), b"fresh");
+        assert_eq!(pending_batch(&root), None);
+        close_vault(&root, "notes").unwrap();
+    }
+
+    #[test]
+    fn any_committed_change_seals_the_pending_range_writes() {
+        let (_tmp, root) = open_notes();
+        fs_write_file(&root, "notes", "/notes.txt", b"generation-one").unwrap();
+        fs_write_range(&root, "notes", "/notes.txt", 0, b"generation-two").unwrap();
+        fs_mkdir(&root, "notes", "/inbox").unwrap();
+        assert_eq!(sealed_bytes(&root, "notes.txt"), b"generation-two");
+        assert_eq!(pending_batch(&root), None);
+        close_vault(&root, "notes").unwrap();
+    }
+
+    #[test]
+    fn close_seals_the_pending_range_writes() {
+        let (_tmp, root) = open_notes();
+        fs_write_file(&root, "notes", "/notes.txt", b"generation-one").unwrap();
+        fs_write_range(&root, "notes", "/notes.txt", 0, b"generation-two").unwrap();
+        close_vault(&root, "notes").unwrap();
+        let store = root.vault_store_dir("notes").unwrap();
         let opened = open_store(&store, b"pass-word-ok").unwrap();
-        let durable = crate::store::read_logical_file(
+        let durable = read_logical_file(
             &store,
             &opened.header,
             &opened.content_key,
@@ -1914,7 +2491,147 @@ mode = "encrypted_dir"
             "notes.txt",
         )
         .unwrap();
-        assert_eq!(durable, b"generation-one");
+        assert_eq!(durable, b"generation-two");
+    }
+
+    #[test]
+    fn a_full_batch_seals_without_a_flush() {
+        let (_tmp, root) = open_notes();
+        fs_write_file(&root, "notes", "/notes.txt", b"generation-one").unwrap();
+        fs_write_range(&root, "notes", "/notes.txt", 0, b"g").unwrap();
+        with_open_session(&root.vault_dir("notes").unwrap(), |session| {
+            session.deferred.as_mut().unwrap().bytes = DEFERRED_SEAL_BYTES - 1;
+            Ok(())
+        })
+        .unwrap();
+        fs_write_range(&root, "notes", "/notes.txt", 1, b"E").unwrap();
+        assert_eq!(pending_batch(&root), None);
+        assert_eq!(sealed_bytes(&root, "notes.txt"), b"gEneration-one");
+        close_vault(&root, "notes").unwrap();
+    }
+
+    #[test]
+    fn a_timer_seals_only_the_batch_it_was_started_for() {
+        let (_tmp, root) = open_notes();
+        fs_write_file(&root, "notes", "/notes.txt", b"generation-one").unwrap();
+        fs_write_range(&root, "notes", "/notes.txt", 0, b"generation-two").unwrap();
+        let batch = pending_batch(&root).unwrap();
+        let dir = root.vault_dir("notes").unwrap();
+
+        assert_eq!(
+            seal_deferred_batch(&dir, batch + 1_000, true),
+            DeferredTimer::Done
+        );
+        assert_eq!(pending_batch(&root), Some(batch));
+        assert_eq!(sealed_bytes(&root, "notes.txt"), b"generation-one");
+
+        assert_eq!(seal_deferred_batch(&dir, batch, true), DeferredTimer::Done);
+        assert_eq!(pending_batch(&root), None);
+        assert_eq!(sealed_bytes(&root, "notes.txt"), b"generation-two");
+
+        close_vault(&root, "notes").unwrap();
+        assert_eq!(seal_deferred_batch(&dir, batch, true), DeferredTimer::Done);
+    }
+
+    #[test]
+    fn the_timer_seals_a_batch_nothing_else_sealed() {
+        let (_tmp, root) = open_notes();
+        fs_write_file(&root, "notes", "/notes.txt", b"generation-one").unwrap();
+        fs_write_range(&root, "notes", "/notes.txt", 0, b"generation-two").unwrap();
+        let batch = pending_batch(&root).unwrap();
+        // The write scheduled its seal for the test window; bring it forward.
+        let dir = root.vault_dir("notes").unwrap();
+        schedule_deferred_seal_in(dir, batch, Duration::from_millis(100));
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while pending_batch(&root).is_some() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert_eq!(pending_batch(&root), None, "the timer sealed the batch");
+        assert_eq!(sealed_bytes(&root, "notes.txt"), b"generation-two");
+        close_vault(&root, "notes").unwrap();
+    }
+
+    #[test]
+    fn a_vault_keeps_one_timed_seal_for_its_newest_batch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("not-open");
+        schedule_deferred_seal(dir.clone(), 7);
+        schedule_deferred_seal(dir.clone(), 8);
+        let batches: Vec<u64> = deferred_timers()
+            .due
+            .iter()
+            .filter(|due| due.dir == dir)
+            .map(|due| due.batch)
+            .collect();
+        assert_eq!(batches, vec![8]);
+        // A vault that is not open has nothing to seal: the timer just ends.
+        assert_eq!(seal_deferred_batch(&dir, 8, true), DeferredTimer::Done);
+    }
+
+    /// Write timings on this machine. Needs about 400 MiB free in the temp dir:
+    /// `cargo test --release -p upriv-core --lib write_cost_report -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn write_cost_report() {
+        let (_tmp, root) = open_notes();
+        fs_mkdir(&root, "notes", "/small").unwrap();
+        for i in 0..2000 {
+            let path = format!("/small/{i}.txt");
+            fs_write_file(&root, "notes", &path, &[b'x'; 1024]).unwrap();
+        }
+        let piece: Vec<u8> = (0..128 * 1024).map(|i| (i % 251) as u8).collect();
+        let pieces = 512u64;
+        let write_all = |path: &str, flush_each: bool| {
+            fs_write_range(&root, "notes", path, 0, &piece).unwrap();
+            let started = Instant::now();
+            for i in 1..pieces {
+                let offset = i * piece.len() as u64;
+                fs_write_range(&root, "notes", path, offset, &piece).unwrap();
+                if flush_each {
+                    fs_flush(&root, "notes").unwrap();
+                }
+            }
+            fs_flush(&root, "notes").unwrap();
+            started.elapsed()
+        };
+        let batched = write_all("/batched.bin", false);
+        let sealed_each = write_all("/sealed-each.bin", true);
+        eprintln!("64 MiB in 128 KiB writes, 2000 files: {batched:?} batched");
+        eprintln!("same with a seal after every write: {sealed_each:?}");
+        close_vault(&root, "notes").unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_flush_keeps_the_batch_for_the_next_seal() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (_tmp, root) = open_notes();
+        fs_write_file(&root, "notes", "/notes.txt", b"generation-one").unwrap();
+        fs_write_range(&root, "notes", "/notes.txt", 0, b"generation-two").unwrap();
+        let store = root.vault_store_dir("notes").unwrap();
+        let index_dir = store.join(crate::store::INDEX_DIR_NAME);
+        let restore = crate::host_fs::metadata(&index_dir).unwrap().permissions();
+        let mut locked = restore.clone();
+        locked.set_mode(0o555);
+        crate::host_fs::set_permissions(&index_dir, locked).unwrap();
+        let flushed = fs_flush(&root, "notes");
+        crate::host_fs::set_permissions(&index_dir, restore).unwrap();
+        if flushed.is_ok() {
+            // Running as root: the lock did not apply.
+            close_vault(&root, "notes").unwrap();
+            return;
+        }
+        assert_eq!(
+            fs_read_file(&root, "notes", "/notes.txt").unwrap(),
+            b"generation-two"
+        );
+        assert_eq!(sealed_bytes(&root, "notes.txt"), b"generation-one");
+        assert!(pending_batch(&root).is_some());
+
+        fs_flush(&root, "notes").unwrap();
+        assert_eq!(sealed_bytes(&root, "notes.txt"), b"generation-two");
+        close_vault(&root, "notes").unwrap();
     }
 
     #[test]

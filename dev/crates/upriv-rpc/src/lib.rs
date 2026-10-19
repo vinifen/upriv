@@ -25,7 +25,7 @@ use upriv_core::{
     create_vault_with_welcome, deactivate_vault_root_alias_everywhere, delete_vault_group,
     discover_bootstrap_root, inspect_vault_root_at, known_vault_ids, list_vaults,
     load_app_settings, load_vault_config, load_vault_groups, open_import_session,
-    open_or_initialize_vault_root, open_vault, parse_settings_toml_str, read_vault_root_alias,
+    open_or_initialize_vault_root, parse_settings_toml_str, read_vault_root_alias,
     relocate_upriv_dir, remember_vault_root_custom_uri, rename_vault,
     reorder_vault_group_grouped_vaults, reorder_vault_groups, repair_vault_groups,
     resolve_vault_root, save_app_settings_session_with_alias_sync, serialize_settings_toml_str,
@@ -37,6 +37,8 @@ use upriv_core::{
     VaultWelcome, VAULT_ROOT_ALIAS_FILE,
 };
 
+mod data_folder_ops;
+mod plain_ops;
 mod secret;
 mod vault_ops;
 
@@ -160,7 +162,14 @@ pub fn handle_rpc(req: RpcRequest) -> RpcResponse {
         "vault_group_repair" => vault_group_repair(),
         "vault_list" => vault_list(),
         "vault_create" => vault_create(req.params),
-        "vault_open" => vault_open(req.params),
+        "vault_open" => plain_ops::vault_open(req.params),
+        "vault_plain_confirm" => plain_ops::vault_plain_confirm(req.params),
+        "vault_plain_destination" => plain_ops::vault_plain_destination(req.params),
+        "vault_plain_leftover" => plain_ops::vault_plain_leftover(req.params),
+        "vault_plain_remove" => plain_ops::vault_plain_remove(req.params),
+        "vault_plain_sync" => plain_ops::vault_plain_sync(req.params),
+        "vault_plain_status" => plain_ops::vault_plain_status(req.params),
+        "vault_plain_deletions" => plain_ops::vault_plain_deletions(req.params),
         "vault_close" => vault_close(req.params),
         "vault_change_password" => vault_change_password(req.params),
         "vault_change_kdf" => vault_change_kdf(req.params),
@@ -171,7 +180,6 @@ pub fn handle_rpc(req: RpcRequest) -> RpcResponse {
         "vault_config_save" => vault_config_save(req.params),
         "vault_rename" => vault_rename(req.params),
         "vault_delete" => vault_ops::vault_delete(req.params),
-        "vault_recover_ack" => vault_ops::vault_recover_ack(req.params),
         "vault_export" => vault_ops::vault_export(req.params),
         "vault_export_probe" => vault_ops::vault_export_probe(req.params),
         "vault_import_zip" => vault_ops::vault_import_zip(req.params),
@@ -202,7 +210,11 @@ pub fn handle_rpc(req: RpcRequest) -> RpcResponse {
         "backup_list" => vault_ops::backup_list(req.params),
         "backup_delete" => vault_ops::backup_delete(req.params),
         "backup_promote" => vault_ops::backup_promote(req.params),
+        "backup_save" => vault_ops::backup_save(req.params),
         "backup_get" => vault_ops::backup_get(req.params),
+        "data_folder_export" => data_folder_ops::export(req.params),
+        "data_folder_export_status" => data_folder_ops::export_status(),
+        "data_folder_export_cancel" => data_folder_ops::export_cancel(),
         other => err("unknown_method", format!("unknown method: {other}")),
     }
 }
@@ -1411,25 +1423,6 @@ struct VaultIdPasswordParams {
     password: Option<SecretString>,
 }
 
-fn vault_open(params: Value) -> RpcResponse {
-    let parsed: VaultIdPasswordParams = match serde_json::from_value(params) {
-        Ok(value) => value,
-        Err(error) => return err("invalid_request", error.to_string()),
-    };
-    let password = match parsed.password {
-        Some(ref value) if !value.is_empty() => value.as_bytes(),
-        _ => return err("invalid_request", "password is required".into()),
-    };
-    let root = match require_vault_root() {
-        Ok(root) => root,
-        Err(response) => return response,
-    };
-    match open_vault(&root, parsed.id.trim(), password) {
-        Ok(()) => ok(json!(null)),
-        Err(error) => map_core_err(error),
-    }
-}
-
 /// Unlock for streaming an import. No desktop mount, so the file manager stays closed.
 fn vault_ingest_open(params: Value) -> RpcResponse {
     let parsed: VaultIdPasswordParams = match serde_json::from_value(params) {
@@ -1527,7 +1520,11 @@ fn vault_close(params: Value) -> RpcResponse {
         }
     };
     match closed {
-        Ok(outcome) => ok(json!({ "backupFailed": outcome.backup_failed })),
+        Ok(outcome) => ok(json!({
+            "backupFailed": outcome.backup_failed,
+            "backupFailure": outcome.backup_failure,
+            "plain": outcome.plain,
+        })),
         Err(error) => map_core_err(error),
     }
 }
@@ -1631,7 +1628,7 @@ fn vault_config_save(params: Value) -> RpcResponse {
     if !dir.host_is_dir() {
         return map_core_err(upriv_core::UprivError::VaultNotFound(dir));
     }
-    match upriv_core::save_vault_config_checked(&dir, &parsed.settings) {
+    match upriv_core::save_vault_config_checked(&root, id, &parsed.settings) {
         Ok(()) => ok(json!({ "id": id })),
         Err(error) => map_core_err(error),
     }
@@ -1933,7 +1930,16 @@ fn map_core_err_response(error: upriv_core::UprivError, emit_log: bool) -> RpcRe
         upriv_core::UprivError::VaultStoreInvalid { path, .. } => {
             ("vault_store_invalid", Some(path.as_path()))
         }
-        upriv_core::UprivError::UprivPlainUnavailable => ("upriv_plain_unavailable", None),
+        upriv_core::UprivError::PlainDestinationUnconfirmed { path, .. } => {
+            ("plain_destination_unconfirmed", Some(path.as_path()))
+        }
+        upriv_core::UprivError::PlainDestinationInvalid { path, .. } => {
+            ("plain_destination_invalid", Some(path.as_path()))
+        }
+        upriv_core::UprivError::PlainLeftover => ("plain_leftover", None),
+        upriv_core::UprivError::PlainNamesUnsupported { .. } => ("plain_names_unsupported", None),
+        upriv_core::UprivError::PlainSpaceShort { .. } => ("plain_space_short", None),
+        upriv_core::UprivError::PlainFolderUnwritable { .. } => ("plain_folder_unwritable", None),
         upriv_core::UprivError::WorkspacePathInvalid { path, .. } => {
             ("workspace_path_invalid", Some(path.as_path()))
         }
@@ -1969,6 +1975,15 @@ fn map_core_err_response(error: upriv_core::UprivError, emit_log: bool) -> RpcRe
         upriv_core::UprivError::RewrapUnchanged(upriv_core::RewrapUnchangedKind::UnlockRam) => {
             ("rewrap_kdf_unchanged", None)
         }
+        upriv_core::UprivError::DataFolderBusy => ("data_folder_busy", None),
+        upriv_core::UprivError::DataFolderExportBusy => ("data_folder_export_busy", None),
+        upriv_core::UprivError::DataFolderExportCancelled => ("data_folder_export_cancelled", None),
+        upriv_core::UprivError::DataFolderExportSpaceShort { .. } => {
+            ("data_folder_export_space_short", None)
+        }
+        upriv_core::UprivError::DataFolderExportDestinationReserved(p) => {
+            ("data_folder_export_destination_reserved", Some(p.as_path()))
+        }
         upriv_core::UprivError::Io(io) if upriv_core::host_fs::is_unreachable(io) => {
             ("vault_root_unreachable", None)
         }
@@ -1981,7 +1996,8 @@ fn map_core_err_response(error: upriv_core::UprivError, emit_log: bool) -> RpcRe
             | "wrong_password"
             | "vault_unlock_blocked"
             | "rewrap_password_unchanged"
-            | "rewrap_kdf_unchanged" => LogLevel::Warn,
+            | "rewrap_kdf_unchanged"
+            | "data_folder_export_cancelled" => LogLevel::Warn,
             _ => LogLevel::Error,
         };
         // `message` stays on the RPC response for the person at the screen.
@@ -1998,6 +2014,22 @@ fn map_core_err_response(error: upriv_core::UprivError, emit_log: bool) -> RpcRe
         upriv_core::UprivError::VaultFileTooLarge { size, max, .. } => {
             Some(json!({ "size": size, "max": max }))
         }
+        upriv_core::UprivError::PlainDestinationUnconfirmed { class, .. } => {
+            let path = path.and_then(|p| p.to_str()).unwrap_or("");
+            Some(json!({ "path": path, "class": class }))
+        }
+        upriv_core::UprivError::PlainDestinationInvalid { reason, .. } => {
+            let path = path.and_then(|p| p.to_str()).unwrap_or("");
+            Some(json!({ "path": path, "reason": reason.as_str() }))
+        }
+        upriv_core::UprivError::PlainNamesUnsupported { count, examples } => {
+            Some(json!({ "count": count, "examples": examples }))
+        }
+        upriv_core::UprivError::PlainSpaceShort { needed, available }
+        | upriv_core::UprivError::DataFolderExportSpaceShort { needed, available } => {
+            Some(json!({ "needed": needed, "available": available }))
+        }
+        upriv_core::UprivError::PlainFolderUnwritable { count } => Some(json!({ "count": count })),
         _ => path.and_then(|p| p.to_str().map(|s| json!({ "path": s }))),
     };
     err_with_details(code, message, details)
@@ -2141,6 +2173,13 @@ mod contract_tests {
         "vault_list",
         "vault_create",
         "vault_open",
+        "vault_plain_confirm",
+        "vault_plain_destination",
+        "vault_plain_leftover",
+        "vault_plain_remove",
+        "vault_plain_sync",
+        "vault_plain_status",
+        "vault_plain_deletions",
         "vault_close",
         "vault_change_password",
         "vault_change_kdf",
@@ -2151,7 +2190,6 @@ mod contract_tests {
         "vault_config_save",
         "vault_rename",
         "vault_delete",
-        "vault_recover_ack",
         "vault_export",
         "vault_export_probe",
         "vault_import_zip",
@@ -2182,7 +2220,11 @@ mod contract_tests {
         "backup_list",
         "backup_delete",
         "backup_promote",
+        "backup_save",
         "backup_get",
+        "data_folder_export",
+        "data_folder_export_status",
+        "data_folder_export_cancel",
     ];
 
     #[test]

@@ -1,4 +1,7 @@
 //! `.upriv/state.json` — volatile open-session records (never `persistence.json`).
+//!
+//! Plaintext folder records are the one durable part: a record stays until its
+//! folder is wiped, so a crash or a failed wipe keeps the vault in recovery.
 
 #[allow(unused_imports)]
 use crate::host_fs::HostFsQuery;
@@ -24,6 +27,47 @@ pub struct RuntimeVaultEntry {
     pub session: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mount_point: Option<String>,
+    /// Plaintext folders this vault wrote, at most one per computer.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub plain: Vec<PlainRecord>,
+}
+
+/// A plaintext folder a vault wrote on some computer.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PlainRecord {
+    /// Host name of the computer that wrote the folder.
+    pub host: String,
+    /// Relative to the data folder (`/` separators) when [`Self::in_data_folder`],
+    /// so a data folder on a removable drive still finds it under another mount.
+    pub path: String,
+    pub in_data_folder: bool,
+    /// Also in the folder's marker. A folder without this token is never wiped.
+    pub token: String,
+    /// UTC time the folder was made (RFC 3339).
+    pub since: String,
+}
+
+impl PlainRecord {
+    /// A folder inside the data folder is reachable from any computer that has
+    /// the data folder. Any other folder only from the computer that wrote it.
+    pub fn reachable_here(&self, this_host: Option<&str>) -> bool {
+        self.in_data_folder || this_host == Some(self.host.as_str())
+    }
+
+    pub fn folder(&self, root: &VaultRoot) -> std::path::PathBuf {
+        if self.in_data_folder {
+            self.path
+                .split('/')
+                .filter(|part| !part.is_empty())
+                .fold(root.root().to_path_buf(), |path, part| path.join(part))
+        } else {
+            std::path::PathBuf::from(&self.path)
+        }
+    }
+}
+
+fn this_host() -> Option<String> {
+    crate::lockfile::hostname().ok()
 }
 
 impl RuntimeState {
@@ -89,11 +133,17 @@ fn mark_session_open_locked(
 ) -> Result<()> {
     let mut state = load_runtime_state(root)?;
     state.format_version = 1;
+    let plain = state
+        .vaults
+        .remove(vault_id)
+        .map(|entry| entry.plain)
+        .unwrap_or_default();
     state.vaults.insert(
         vault_id.to_string(),
         RuntimeVaultEntry {
             session: "open".into(),
             mount_point,
+            plain,
         },
     );
     save_runtime_state(root, &state)
@@ -124,19 +174,123 @@ pub fn release_recorded_mount(root: &VaultRoot, vault_id: &str) {
     if crate::mount::force_unmount(path).is_ok() {
         // Already unmounted (a reboot) returns success without a wipe. The
         // path was this vault's folder, so drop its previews either way.
-        crate::mount::purge_mount_thumbnails(path);
+        crate::mount::purge_folder_thumbnails(path);
         let _ = crate::host_fs::remove_dir(path);
     }
 }
 
+/// The session is over. A plaintext record outlives it, so its entry stays.
 fn mark_session_closed_locked(root: &VaultRoot, vault_id: &str) -> Result<()> {
     let mut state = load_runtime_state(root)?;
-    state.vaults.remove(vault_id);
+    let keep_plain = state
+        .vaults
+        .get(vault_id)
+        .is_some_and(|entry| !entry.plain.is_empty());
+    if keep_plain {
+        if let Some(entry) = state.vaults.get_mut(vault_id) {
+            entry.session = "closed".into();
+            entry.mount_point = None;
+        }
+    } else {
+        state.vaults.remove(vault_id);
+    }
     save_runtime_state(root, &state)
 }
 
+/// Record a plaintext folder before any of it is written. The vault's session
+/// must already be recorded as open.
+pub(crate) fn add_plain_record(
+    root: &VaultRoot,
+    vault_id: &str,
+    record: PlainRecord,
+) -> Result<()> {
+    with_state_lock(|| {
+        let mut state = load_runtime_state(root)?;
+        let entry = state
+            .vaults
+            .get_mut(vault_id)
+            .ok_or_else(|| UprivError::VaultNotOpen(vault_id.to_string()))?;
+        entry.plain.retain(|item| item.token != record.token);
+        entry.plain.push(record);
+        save_runtime_state(root, &state)
+    })
+}
+
+/// Record a plaintext folder found on disk without a record, for a vault
+/// that is not open. Its entry is made when missing.
+pub(crate) fn adopt_plain_record(
+    root: &VaultRoot,
+    vault_id: &str,
+    record: PlainRecord,
+) -> Result<()> {
+    with_state_lock(|| {
+        let mut state = load_runtime_state(root)?;
+        state.format_version = 1;
+        let entry = state
+            .vaults
+            .entry(vault_id.to_string())
+            .or_insert_with(|| RuntimeVaultEntry {
+                session: "closed".into(),
+                mount_point: None,
+                plain: Vec::new(),
+            });
+        if entry.plain.iter().any(|item| item.token == record.token) {
+            return Ok(());
+        }
+        entry.plain.push(record);
+        save_runtime_state(root, &state)
+    })
+}
+
+/// Forget one plaintext folder after it was wiped. An entry with no session
+/// and no other folder goes away.
+pub(crate) fn remove_plain_record(root: &VaultRoot, vault_id: &str, token: &str) -> Result<()> {
+    with_state_lock(|| {
+        let mut state = load_runtime_state(root)?;
+        let Some(entry) = state.vaults.get_mut(vault_id) else {
+            return Ok(());
+        };
+        entry.plain.retain(|item| item.token != token);
+        if entry.plain.is_empty() && entry.session != "open" {
+            state.vaults.remove(vault_id);
+        }
+        save_runtime_state(root, &state)
+    })
+}
+
+/// Plaintext folders recorded for `vault_id`, from every computer.
+pub(crate) fn plain_records(root: &VaultRoot, vault_id: &str) -> Result<Vec<PlainRecord>> {
+    Ok(load_runtime_state(root)?
+        .vaults
+        .remove(vault_id)
+        .map(|entry| entry.plain)
+        .unwrap_or_default())
+}
+
+/// The plaintext folder this computer can reach, if one is recorded.
+pub(crate) fn reachable_plain_record(
+    root: &VaultRoot,
+    vault_id: &str,
+) -> Result<Option<PlainRecord>> {
+    let host = this_host();
+    Ok(plain_records(root, vault_id)?
+        .into_iter()
+        .find(|record| record.reachable_here(host.as_deref())))
+}
+
+/// Drop every record of a deleted vault.
+pub(crate) fn forget_vault(root: &VaultRoot, vault_id: &str) -> Result<()> {
+    with_state_lock(|| {
+        let mut state = load_runtime_state(root)?;
+        if state.vaults.remove(vault_id).is_some() {
+            save_runtime_state(root, &state)?;
+        }
+        Ok(())
+    })
+}
+
 /// True when this process holds the session or a live lock still owns the vault.
-fn vault_lock_or_session_live(root: &VaultRoot, id: &str) -> bool {
+pub(crate) fn vault_is_live(root: &VaultRoot, id: &str) -> bool {
     if let Ok(dir) = root.vault_dir(id) {
         if crate::session::is_vault_open_at(&dir) {
             return true;
@@ -148,16 +302,22 @@ fn vault_lock_or_session_live(root: &VaultRoot, id: &str) -> bool {
     }
 }
 
-/// Vault ids listed as open in `state.json` that are not live in this process
-/// and whose lock is missing or stale (dead PID on this host).
+/// Vault ids that need recovery and are not live in this process or behind a
+/// live lock: a session recorded as open (a crash), or a plaintext folder this
+/// computer can reach that was never wiped.
 pub fn dirty_close_ids(root: &VaultRoot) -> Result<Vec<String>> {
     let state = load_runtime_state(root)?;
+    let host = this_host();
     let mut dirty = Vec::new();
     for (id, entry) in state.vaults {
-        if entry.session != "open" {
+        let leftover = entry
+            .plain
+            .iter()
+            .any(|record| record.reachable_here(host.as_deref()));
+        if entry.session != "open" && !leftover {
             continue;
         }
-        if vault_lock_or_session_live(root, &id) {
+        if vault_is_live(root, &id) {
             continue;
         }
         dirty.push(id);
@@ -165,8 +325,10 @@ pub fn dirty_close_ids(root: &VaultRoot) -> Result<Vec<String>> {
     Ok(dirty)
 }
 
-/// Clear a dirty-close record after the user discards recovery (no plaintext to wipe).
-pub fn acknowledge_dirty_close(root: &VaultRoot, vault_id: &str) -> Result<()> {
+/// Clear a dirty-close record once a leftover plaintext folder was wiped: the
+/// store was saved after every change, so the crash left nothing else to
+/// decide. Other plaintext records stay; only a wipe of that folder removes one.
+pub(crate) fn acknowledge_dirty_close(root: &VaultRoot, vault_id: &str) -> Result<()> {
     mark_session_closed(root, vault_id)
 }
 
@@ -177,7 +339,7 @@ pub fn sweep_stale_mount_leaves(root: &VaultRoot) -> Result<Vec<String>> {
         let Some(mount) = entry.mount_point.as_deref() else {
             continue;
         };
-        if vault_lock_or_session_live(root, id) {
+        if vault_is_live(root, id) {
             continue;
         }
         let path = Path::new(mount);
@@ -185,7 +347,7 @@ pub fn sweep_stale_mount_leaves(root: &VaultRoot) -> Result<Vec<String>> {
             Ok(()) => {
                 // A leftover that is no longer in the mount table still has
                 // previews. Unmount itself only wipes when it detaches a leaf.
-                crate::mount::purge_mount_thumbnails(path);
+                crate::mount::purge_folder_thumbnails(path);
                 let _ = crate::host_fs::remove_dir(path);
                 swept.push(id.clone());
             }

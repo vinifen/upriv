@@ -57,18 +57,21 @@ export type VaultExportPipelineStatus = VaultPipelineListStatus;
 
 /**
  * Single-vault export (`.zip` of `store/` or `.7z`). This vault must be
- * closed. Opening, closing, creating, queued, recovery, and an open session
- * cannot export. Other vaults may stay open.
+ * closed. Opening, closing, creating, queued, recovery, an open session, and
+ * an export, backup, or rewrap already running cannot export. Neither can any
+ * vault while the data folder is exported. Other vaults may stay open.
  */
 export function vaultCanExport(
   vault: Pick<VaultRow, "id" | "session">,
   pipeline: VaultExportPipelineStatus = {},
 ): boolean {
+  if (pipeline.dataFolderExporting) return false;
   if (pipeline.openingVaultIds?.includes(vault.id)) return false;
   if (pipeline.closingVaultIds?.includes(vault.id)) return false;
   if (pipeline.creatingVaultIds?.includes(vault.id)) return false;
   if (pipeline.queuedVaultIds?.includes(vault.id)) return false;
   if (pipeline.exportingVaultIds?.includes(vault.id)) return false;
+  if (pipeline.backupJobVaultIds?.includes(vault.id)) return false;
   if (pipeline.passwordChangeVaultIds?.includes(vault.id)) return false;
   if (pipeline.kdfChangeVaultIds?.includes(vault.id)) return false;
   return vault.session !== "open" && vault.session !== "closing" && vault.session !== "recovery";

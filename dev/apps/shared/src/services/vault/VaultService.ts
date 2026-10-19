@@ -79,9 +79,6 @@ export interface VaultService {
   /** Remove the vault folder (wipe) via `vault_delete`. */
   unregisterSettings(vaultId: string): Promise<void>;
 
-  /** Clear dirty-close recovery (`vault_recover_ack`). */
-  recoverDirtyClose(vaultId: string): Promise<void>;
-
   /**
    * Export bytes for `{display_name}.zip` or `{display_name}.7z`.
    * Zip = envelope of `store/` (no zip password). `.7z` = logical stream (never `.enc` blobs).

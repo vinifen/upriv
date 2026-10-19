@@ -45,8 +45,8 @@ We are **past the Tauri → Electron migration** and **past UI/lifecycle scaffol
 
 Vault list / create / open / close + groups are already live. **Do not** re-implement vault logic in TypeScript.  
 **Do not** reimplement vault-root resolution in TS — use existing `vault_root_*` RPCs / `VaultRootService`.  
-**Do not** ship infinite loading overlays — every blocking busy/applying UI uses `LOADING_BUDGET_MS` + visible countdown (`LoadingBudgetHint` / `useLoadingBudget`); on timeout clear state, bump generation tokens (`busyGen` / `resolveGen`), and offer retry. See `.cursor/rules/finite-loading-budgets.mdc`.  
-**Do not** leave **Info** modals stale when changing settings, vault DTOs, root paths, or diagnostics mocks — extend `domain/system-info` / `domain/vault-info` in the same change. See `.cursor/rules/info-modals-sync.mdc`.
+**Do not** ship infinite loading overlays — every blocking busy/applying UI uses `LOADING_BUDGET_MS` + visible countdown (`LoadingBudgetHint` / `useLoadingBudget`); on timeout clear state, bump generation tokens (`busyGen` / `resolveGen`), and offer retry. See [`rules/finite-loading-budgets.md`](rules/finite-loading-budgets.md).  
+**Do not** leave **Info** modals stale when changing settings, vault DTOs, root paths, or diagnostics mocks — extend `domain/system-info` / `domain/vault-info` in the same change. See [`rules/info-modals-sync.md`](rules/info-modals-sync.md).
 
 **Logging notes** (app `.log` under `.upriv/logs/` — not vault plaintext; never dump vault trees into logs or OS temp for export):
 
@@ -160,7 +160,7 @@ When temp and canonical docs conflict, **`dev/docs/` wins**. When porting an ide
 - **Modes:** **`encrypted_dir`** (default — plaintext in RAM only: FUSE/WinFsp on desktop, **in-app file manager on mobile**) and **`upriv_plain`** (plaintext `workspace/` on disk while open; wipe on close; **Insecure**). Dropped: `store_only`, `upriv_only`, `ram_only`, `plain`, `plain_only`. Same `store/` on every OS.
 - **States:** `open` = unlocked session (runtime). Where plaintext lives is the **mode**, not the word “open”. On disk: `closed` only. **No Seal.**
 - **Recovery:** dirty close (A) or leftover `upriv_plain` workspace (D). One bad chunk = file error (B). Dead header/index = create-from-backup only (C).
-- **`.zip` / `.7z`:** import/export outside `.upriv`. One import option. A chosen `.zip` is examined: `store/header/vault.header` means a **zip of `store/`** (Recommended; copy ciphertext, settings kept from the root `config.toml`). Anything else is ordinary documents wrapped into a new `store/` (new password and unlock RAM; one shared top folder is stripped). A `.7z` is one outer folder named from the display name; the vault's files sit directly under that folder. It does not carry the store-zip envelope. Export is **per vault** (user chooses; store zip is default). Suggested file = `{display_name}.zip` or `{display_name}.7z`. Export requires **that** vault closed (other vaults may stay open). File zip/7z import and create-from-backup copy a frozen tree — they do not require the source vault closed. No bulk download of several vaults.
+- **`.zip` / `.7z`:** import/export outside `.upriv`. One import option. A chosen `.zip` is examined: `store/header/vault.header` means a **zip of `store/`** (Recommended; copy ciphertext, settings kept from the root `config.toml`). Anything else is ordinary documents wrapped into a new `store/` (new password and unlock RAM; one shared top folder is stripped). A `.7z` is one outer folder named from the display name; the vault's files sit directly under that folder. It does not carry the store-zip envelope. Export is **per vault** (user chooses; store zip is default). Suggested file = `{display_name}.zip` or `{display_name}.7z`. Export requires **that** vault closed (other vaults may stay open). File zip/7z import and create-from-backup copy a frozen tree — they do not require the source vault closed. No zip of a chosen set of vaults: **Export data folder** (Settings menu) is the one whole copy, `upriv-<stamp>.zip` holding `upriv-<stamp>/.upriv/`, ready to choose as a data folder once unzipped. Every vault must be closed or in recovery, and core holds them all until the zip is written (see SECURITY-CRYPTO).
 - **Compression UI:** presets none/low/medium/high apply to **export** `.7z` (`[seven_zip]`).
 - **Close:** write `store/` from the session (stream / mount buffers). Export `.7z` is a separate action — stream logical content; never pack `.enc` blobs.
 - **Passwords:** RAM only in v1 default; never in `localStorage`, UI config, or logs.
@@ -220,7 +220,7 @@ upriv/
 | **Mobile FFI** | `dev/crates/upriv-ffi/` | UniFFI `invoke` / `app_version` | UI |
 | **Core** | `dev/crates/upriv-core/` | Crypto, 7z, paths, state machine, FUSE, recovery | Depend on Electron |
 
-**Desktop UI:** Electron (`createDesktopServices`) talks to `upriv-daemon` for vault-root, settings, logs, vault list/create/open/close/`vault_rename`, groups, `vault_config_save`, in-app file manager (`vault_fs_*`), export/import, and backups. There is no desktop in-memory vault list. Linux FUSE and Windows WinFsp are live in core. "Open in file manager" and "Open in terminal" follow the OS path when the mount succeeded. Password and unlock-RAM change go through `vault_change_password` / `vault_change_kdf`. Notable conventions:
+**Desktop UI:** Electron (`createDesktopServices`) talks to `upriv-daemon` for vault-root, settings, logs, vault list/create/open/close/`vault_rename`, groups, `vault_config_save`, in-app file manager (`vault_fs_*`), export/import, backups, and Export data folder (`data_folder_export*`). There is no desktop in-memory vault list. Linux FUSE and Windows WinFsp are live in core. "Open in file manager" and "Open in terminal" follow the OS path when the mount succeeded. Password and unlock-RAM change go through `vault_change_password` / `vault_change_kdf`. Notable conventions:
 
 - **Pipeline:** `useVaultPipelineRun` enforces SDD §8.2.2 — one open/close at a time (`isRunning`). No Seal.
 - **Auto-close:** at most one close per idle tick; warn toast once per vault per idle cycle; respects `isPipelineRunning`.
@@ -240,6 +240,7 @@ Mobile:   RN     ──JNI/FFI──► libupriv_core.so ──► upriv_core::*
 ### Rust workspace
 
 - Build from `dev/`: `cargo build -p upriv-daemon -p upriv-fuse`, `cargo test -p upriv-core`, `npm run rust:lint` (rustfmt + clippy).
+- `./r l` also runs clippy for `x86_64-pc-windows-gnu`, `aarch64-linux-android`, and `aarch64-apple-darwin` (skipped locally when rustup lacks the target; CI installs all three). Code behind a platform `cfg` must pass there too.
 - Vault crypto crates live in **`dev/vendor/`** (`[patch]`). Refresh is the checklist in `dev/vendor/MANIFEST.txt`; do not `cargo generate-lockfile`. See [`SECURITY-CRYPTO.md`](SECURITY-CRYPTO.md) agent rule 2.
 - Artifacts go to **`dev/target/`** only — **never commit** `target/`, `node_modules/`, `dist/`, `.expo/`.
 - `upriv-daemon/src/main.rs` is entry only; do not add vault logic there — use `upriv-core`.
@@ -411,7 +412,7 @@ npm run typecheck --prefix apps/mobile
 3. **Security:** No passwords/secrets in logs, commits, or UI persistence. Use `zeroize` in Rust for sensitive buffers.
 4. **Config:** TOML is source of truth; mutable at runtime; re-read before open/close.
 5. **Fail safe:** No overwrite of `store/` without verification and atomic write.
-6. **Git:** Read [`GIT.md`](GIT.md) before commit/PR. Never commit `dev/target/`, `node_modules/`, `dist/`, `.env`, large binaries. Commit `Cargo.lock` in workspace. **Never** set the AI as Git author or co-author — use Git’s effective `user.name` / `user.email` (local if set, else global). After each commit, verify identity and that the message has no AI credit. After every PR create or edit, read the body and delete a `Made with Cursor` / `Made with [Cursor](https://cursor.com)` footer if the host appended one.
+6. **Git:** Read [`GIT.md`](GIT.md) before commit/PR. Never commit `dev/target/`, `node_modules/`, `dist/`, `.env`, large binaries. Commit `Cargo.lock` in workspace. **Never** set the AI as Git author or co-author — use Git’s effective `user.name` / `user.email` (local if set, else global). After each commit, verify identity and that the message has no AI credit. After every PR create or edit, read the body and delete any AI tool footer (`Made with Cursor`, `Generated with [Claude Code](…)`, …) if the host appended one.
 7. **Design:** Shipped UI follows PRD §3.7 + SDD §8.2 + i18n.
 
 ---
@@ -442,6 +443,7 @@ The Android default data folder is **Documents/Upriv**. `.upriv/` is not created
 - Inspect status `unreachable` means the grant is held and the volume does not answer. Shared UI already maps that status to the reconnect copy and blocks Continue. Only Android produces it today. iOS bookmarks return the same status when the bookmark is still valid and the volume is gone. Desktop must not: a missing path is alias recovery, because a deleted folder is indistinguishable.
 - Android setup confirms Documents. The data folder created inside it is Documents/Upriv. Desktop custom paths stay filesystem paths. A Windows installer uses the user-data directory even when the install folder is writable. Portable exe and AppImage stay beside the program.
 - A picker result that cannot host vaults fails at selection time and does not become the active root.
+- Export data folder writes its zip straight into a second folder the user picks. Rust addresses it as `/upriv-saf-export` (Kotlin `SafExportFs`), mounted beside the data folder for that one export and dropped once core reports no export running. The picker's grant is released then, or when the pick is replaced or the window closes. A picked tree inside a `.upriv` is refused by its address. A drive that stops answering under that folder fails the export; it is not the data folder's reconnect case. Never stage the zip in `filesDir` or OS temp.
 - Encrypted open does not create or require a workspace folder. A phone path, if the user sets one, is a storage-access document URI (`…/tree/<id>/document/<id>%2F…`), not `<tree-uri>/workspace`. A Documents grant would use `…/document/<id>%2FUpriv%2F…`, because the data folder is the `Upriv` child. The private app folder is not a workspace.
 
 ---

@@ -28,7 +28,7 @@ Differentiators vs. manual 7-Zip use:
 - **Standardized** vault-oriented layout (`.upriv/settings.toml`, `vaults/<vault_id>/` per vault)
 - Works on **external HD, local system folder, or synced cloud** (as long as the vault is a folder)
 - **Plan B:** export a `.7z` that opens in 7-Zip / ZArchiver (weaker offline guessing than `store/`; honest copy — not “more secure than 7-Zip”)
-- Recovery after dirty close or leftover `upriv_plain` workspace (unlock / wipe), or a dead header (create from backup)
+- Recovery after dirty close (unlock the encrypted vault). A leftover `upriv_plain` folder stays until the user removes it
 
 ### 1.2 Problem it solves
 
@@ -88,7 +88,7 @@ encrypted_dir / upriv_plain:
 - Implementation transients: `closing`, `opening`, `recovery` (not resting UI states).
 - **`open`:** active lock + mount (or plaintext workspace) + session key in RAM. Folders on disk are **not** sufficient.
 - **`closed`:** `store/` + `persistence.json` `closed` + no active session.
-- **Recovery:** dirty close → unlock the encrypted vault; leftover `upriv_plain` workspace → wipe or resume; dead header/index → create a **new** vault from backup (do not dual-pick archive vs store).
+- **Recovery:** dirty close → unlock the encrypted vault. A leftover `upriv_plain` folder is not adopted as the open session: recovery wipes that folder. Dead header/index → create a **new** vault from backup (do not dual-pick archive vs store).
 
 **Detection on startup (per vault):**
 
@@ -115,9 +115,9 @@ encrypted_dir / upriv_plain:
 
 | Step | What |
 |-------|--------|
-| 1 | **Open:** decrypt `store/` into the plaintext folder (required path). |
-| 2 | **Edit:** real files on disk (UI warning). |
-| 3 | **Lock:** always **close** → encrypt workspace into `store/` → overwrite the plaintext folder, then remove it → **`closed`**. |
+| 1 | **Open:** stream `store/` into the folder already chosen. No FUSE/WinFsp, even when the file manager folder is on. |
+| 2 | **Edit:** the folder is the working copy. `store/` stays the source of truth. Outside edits are saved after the folder is quiet, on a two-minute pass, and on close. |
+| 3 | **Lock:** the same triggers as RAM mode. Lock starts the close immediately. A clean wipe removes the folder. |
 
 **Accepted trade-off (v1):** after reboot, the user **must re-enter the password** to open again. Data in `store/` is not lost. Crash while `upriv_plain` is **open** leaves plaintext on disk until close/wipe.
 
@@ -127,7 +127,7 @@ encrypted_dir / upriv_plain:
 
 | # | Risk | Product mitigation |
 |---|--------|----------------------|
-| 1 | Incomplete close | Recovery: unlock the encrypted vault again (`resume_store`). Wipe leftover plaintext only for `upriv_plain`. Create-from-backup is for a dead store (row 2), not a dirty-close peer |
+| 1 | Incomplete close | Recovery: unlock the encrypted vault again (`resume_store`). A leftover plaintext folder is wiped. Create-from-backup is for a dead store (row 2), not a dirty-close peer |
 | 2 | Dead `vault.header` / index | New vault from a `backups/<stamp>-<id>.zip` — not a dual store/`.7z` picker |
 | 3 | Direct writes to `workspace/` on HD (`encrypted_dir`) | **Virtual** mount (FUSE/WinFsp) or in-app FM; tests that forbid persistent plaintext |
 | 4 | Plaintext temp when exporting `.7z` | Pack in process with `sevenz-rust2`; never stage a decrypted tree |
@@ -207,7 +207,7 @@ encrypted_dir / upriv_plain:
 | RF-02 | Open vault (`encrypted_dir` default): validate password, mount the file manager folder when it is on, load encrypted store | P0 |
 | RF-03 | Expose `workspace` to user (button `action.open_folder` → OS file manager) | P0 |
 | RF-04 | Close vault (`encrypted_dir`): unmount the file manager folder, flush session into `store/` using **session keys** (not a newly typed password), clear session keys. Default lock has **no password prompt** | P0 |
-| RF-04h | `upriv_plain` mode: rest = `store/`; while open plaintext `workspace/`; UI **`warning.upriv_plain`** + badge **insecure**; lock always **close** + wipe workspace → `closed`. UI confirms the wipe. Lock does not ask for the password | P1 |
+| RF-04h | `upriv_plain` mode: rest = `store/`; while open plaintext `workspace/`; UI **`warning.upriv_plain`** + badge **insecure**; lock always **close** + wipe workspace → `closed`. Lock starts immediately and does not ask for the password | P1 |
 | RF-04c | (`encrypted_dir`) Require sufficient RAM for the **entire unlocked vault** while open; fail open/edit/close with user-visible error if not; UI **`warning.encrypted_dir_ram`** (RF-UI-17) | P0 |
 | RF-05 | On close: verify **open session / `vault.header`** before backup or flush — failure aborts; `store/` unchanged. Flush uses the open session keys. Lock does not ask for the password and does not rewrap the header | P0 |
 | RF-06 | Atomic write of `store/` (header + index + chunks); never a durable `.7z` twin beside `store/` | P0 |
@@ -269,9 +269,9 @@ encrypted_dir / upriv_plain:
 | RF-45 | (`encrypted_dir`) Flush / export `.7z` using **logical content stream** (do not pack `.enc` blobs; no plaintext temp) | P0 |
 | RF-46 | (`encrypted_dir`) After reboot: reopen requires password; data preserved in `store/` | P0 |
 | RF-47 | **`persistence.json`** per vault: last OK close timestamp; content identity lives in `vault.header` | P0 |
-| RF-48 | Recovery UI for dirty close: **`recovery.resume_store`** (unlock the encrypted vault). **`recovery.discard_workspace`** only when leftover plaintext remains (`upriv_plain`). Create-from-backup is via Backups / New vault when the store is dead — not a dirty-close peer. No silent overwrite; no fake archive-vs-store compare | P0 |
+| RF-48 | Recovery UI for dirty close: **Continue** (`resume_store`) unlocks the encrypted vault. A leftover plaintext folder shows a warning, and **Remove the folder** wipes it. Create-from-backup is via Backups / New vault when the store is dead — not a dirty-close peer. No silent overwrite; no fake archive-vs-store compare | P0 |
 | RF-49 | The encrypted file manager folder is **virtual mount only** — forbid plaintext persistence on HD; automated tests | P0 |
-| RF-49b | **Write-through:** every committed write via mount persists immediately to `store/`; what user saves in session is not "RAM only" | P0 |
+| RF-49b | **Write-through:** every write via mount puts its encrypted chunk in `store/` at once; the index naming it is sealed when the file is flushed, closed, or fsynced, and within about 2 s otherwise. What the user saves never waits for vault close; a crash loses at most writes from the last 2 s that were not flushed | P0 |
 | RF-50 | Export `.7z`: in-process `sevenz-rust2` pack of logical content. Fail with insufficient RAM instead of a plaintext temp | P1 |
 | RF-51 | **Minimize swap** of session data buffers (`mlock` / per-OS policies where supported) | P1 |
 | RF-52 | Who can open files while the vault is open is the file manager folder. Off keeps them in Upriv. On is a folder on this computer; apps that can see that path can read the files. No separate copy-out block | P1 |
@@ -297,7 +297,7 @@ At rest the vault body is **`store/`** (`header/vault.header`, `header/vault.hea
 2. Ciphertext lives in `vaults/<id>/store/`
 3. `upriv_plain` workspace wiped if that mode was used
 
-**During `open`:** write-through updates `store/` immediately (RF-49b). UI state = **`vault.status.open`** (runtime).
+**During `open`:** write-through puts each write's ciphertext in `store/` at once and seals it on flush, close, fsync, or within about 2 s (RF-49b). UI state = **`vault.status.open`** (runtime).
 
 **After OK close:** session keys dropped; `store/` is the rest body.
 
@@ -454,7 +454,7 @@ Opened by **`action.settings`** on vault row.
 | RF-UI-07 | Row click (outside buttons) opens workspace when `open` | P0 |
 | RF-UI-08 | **Export** (`action.export_vault`) from the overflow menu. User chooses `.zip` of `store/` (Recommended) or `.7z` | P0 |
 | RF-UI-09 | Row buttons do not propagate click to row (stop propagation) | P0 |
-| RF-UI-10 | Transient screens: unlock (password), recovery; open/close progress on the **row** (and unlock/lock dialog while open) with a finite time budget — **no** blocking full-screen pipeline overlay. Lock confirmation is the **`upriv_plain`** wipe. Encrypted lock starts the close pipeline immediately and does not ask for the password. **One pipeline at a time** — open/close/create are **queued** (FIFO); no cancel mid-flush | P0 |
+| RF-UI-10 | Transient screens: unlock (password), recovery; open/close progress on the **row** (and unlock dialog while open) with a finite time budget — **no** blocking full-screen pipeline overlay. Lock starts the close pipeline immediately and does not ask for the password. **One pipeline at a time** — open/close/create are **queued** (FIFO); no cancel mid-flush | P0 |
 | RF-UI-11 | **Create vault** modal/wizard: name, password, confirm password, optional hint, optional note | P0 |
 | RF-UI-12 | Unlock screen may show **`password_hint`** from config when non-empty (never auto-fill password) | P1 |
 | RF-UI-13 | **Reorder vault list:** drag-and-drop rows (press/hold + drag); persist new positions to `[vault] order` in each affected `config.toml` | P1 |
@@ -478,7 +478,7 @@ The password string stays in the app after a successful unlock, until lock or qu
 **Warnings:**
 
 - **RAM capacity:** show **`warning.encrypted_dir_ram`** when `encrypted_dir` (settings + create wizard). Insufficient memory → open/edit/close may fail (no silent spill to plaintext disk).
-- **`upriv_plain`:** show **`warning.upriv_plain`** (plaintext while open); radio badge **insecure**. Lock shows a wipe confirmation and does not ask for the password.
+- **`upriv_plain`:** show **`warning.upriv_plain`** (plaintext while open); radio badge **insecure**. Lock starts the close immediately and does not ask for the password.
 
 ---
 

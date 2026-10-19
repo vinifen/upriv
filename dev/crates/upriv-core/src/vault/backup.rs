@@ -6,6 +6,7 @@
 
 #[allow(unused_imports)]
 use crate::host_fs::HostFsQuery;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use super::embedded_settings::snapshot_settings_bytes;
@@ -13,6 +14,7 @@ use crate::config::{load_vault_config, VaultBackupMode};
 use crate::error::{Result, UprivError};
 use crate::logging::{log_event, LogLevel};
 use crate::paths::VaultRoot;
+use crate::session::{ensure_data_folder_export_idle, with_vault_dir_lock};
 use crate::time::utc_filename_stamp;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -278,6 +280,23 @@ fn stamp_is_used(backups: &Path, stamp: &str) -> bool {
     dir_has_stamp(backups, stamp) || dir_has_stamp(&backups.join("saves"), stamp)
 }
 
+/// True when a store zip with `stamp` is still in `backups/` or `saves/`.
+/// Lists both folders and opens only the zips named with that stamp, so a close
+/// with many backups does not read every zip's directory.
+pub(crate) fn backup_stamp_present(root: &VaultRoot, vault_id: &str, stamp: &str) -> bool {
+    if !is_backup_stamp(stamp) {
+        return false;
+    }
+    let Ok(vault_dir) = root.vault_dir(vault_id) else {
+        return false;
+    };
+    let key = BackupKey::Stamp {
+        stamp: stamp.to_string(),
+        saved: None,
+    };
+    matching_store_zips(&vault_dir.join("backups"), &key).is_ok_and(|found| !found.is_empty())
+}
+
 pub fn backup_zip_file(root: &VaultRoot, vault_id: &str, stamp: &str) -> Result<PathBuf> {
     locate_backup_zip(root, vault_id, stamp)
 }
@@ -292,9 +311,141 @@ pub fn backup_on_close(root: &VaultRoot, vault_id: &str) -> Result<Option<String
     if !config.backup.enabled {
         return Ok(None);
     }
-    let stamp = write_backup_zip(&vault_dir, vault_id)?;
+    let stamp = write_backup_zip(&vault_dir, vault_id, BackupDir::Standard)?;
     finish_backup_prune(&vault_dir, config.backup.mode, config.backup.keep_last)?;
     Ok(Some(stamp))
+}
+
+/// Zip this closed vault's `store/` straight into `backups/saves/`. A save is
+/// never pruned and is written even when close backups are off. Open, delete,
+/// and rename of this vault wait until the zip is written.
+pub fn save_backup_now(root: &VaultRoot, vault_id: &str) -> Result<BackupEntry> {
+    let hold = super::export::hold_closed_vault(root, vault_id)?;
+    super::export::with_held_vault(&hold, || {
+        let stamp = write_backup_zip(&hold.vault_dir, vault_id, BackupDir::Saves)?;
+        let file_name = backup_zip_filename(&stamp, vault_id)?;
+        let path = hold
+            .vault_dir
+            .join("backups")
+            .join("saves")
+            .join(&file_name);
+        Ok(BackupEntry {
+            created_at: stamp_to_iso(&stamp).unwrap_or_default(),
+            size_bytes: crate::host_fs::metadata(&path)?.len(),
+            stamp,
+            file_name,
+            saved: true,
+        })
+    })
+}
+
+/// Why a close backup failed, without a filesystem path.
+///
+/// `reason` is `disk_full`, `permission`, or `other`. `kind` names the error
+/// (`io`, `store`, `config`, `path`, `other`). `os` is the raw code when one exists.
+pub(crate) fn classify_backup_failure(error: &UprivError) -> BackupFailureClass {
+    let kind = match error {
+        UprivError::Io(_) => "io",
+        UprivError::VaultStoreInvalid { .. } => "store",
+        UprivError::VaultConfigInvalid { .. } => "config",
+        UprivError::VaultPathNotFound(_) => "path",
+        _ => "other",
+    };
+    let reason = if failure_is_disk_full(error) {
+        "disk_full"
+    } else if failure_is_permission(error) {
+        "permission"
+    } else {
+        "other"
+    };
+    BackupFailureClass {
+        reason,
+        kind,
+        os: failure_os_code(error),
+    }
+}
+
+pub(crate) struct BackupFailureClass {
+    pub reason: &'static str,
+    pub kind: &'static str,
+    pub os: Option<i32>,
+}
+
+fn failure_is_disk_full(error: &UprivError) -> bool {
+    match error {
+        UprivError::Io(io) => io_is_disk_full(io),
+        UprivError::VaultStoreInvalid { detail, .. } => text_is_disk_full(detail),
+        _ => false,
+    }
+}
+
+fn failure_is_permission(error: &UprivError) -> bool {
+    match error {
+        UprivError::Io(io) => io_is_permission(io),
+        UprivError::VaultStoreInvalid { detail, .. } => text_is_permission(detail),
+        _ => false,
+    }
+}
+
+fn failure_os_code(error: &UprivError) -> Option<i32> {
+    match error {
+        UprivError::Io(io) => io.raw_os_error(),
+        UprivError::VaultStoreInvalid { detail, .. } => os_code_in_text(detail),
+        _ => None,
+    }
+}
+
+/// This system's codes for a full disk. The same number means something else
+/// on another system (Linux 39 is a folder that is not empty).
+#[cfg(unix)]
+const DISK_FULL_CODES: &[i32] = &[libc::ENOSPC];
+/// `ERROR_HANDLE_DISK_FULL`, `ERROR_DISK_FULL`.
+#[cfg(windows)]
+const DISK_FULL_CODES: &[i32] = &[39, 112];
+#[cfg(not(any(unix, windows)))]
+const DISK_FULL_CODES: &[i32] = &[];
+
+#[cfg(unix)]
+const PERMISSION_CODES: &[i32] = &[libc::EACCES, libc::EPERM];
+/// `ERROR_ACCESS_DENIED`.
+#[cfg(windows)]
+const PERMISSION_CODES: &[i32] = &[5];
+#[cfg(not(any(unix, windows)))]
+const PERMISSION_CODES: &[i32] = &[];
+
+/// An error that only kept its text names the code as `os error N`.
+fn text_names_code(detail: &str, codes: &[i32]) -> bool {
+    os_code_in_text(detail).is_some_and(|code| codes.contains(&code))
+}
+
+fn io_is_disk_full(error: &std::io::Error) -> bool {
+    error.kind() == ErrorKind::StorageFull || text_is_disk_full(&error.to_string())
+}
+
+fn io_is_permission(error: &std::io::Error) -> bool {
+    error.kind() == ErrorKind::PermissionDenied || text_is_permission(&error.to_string())
+}
+
+fn text_is_disk_full(detail: &str) -> bool {
+    let lower = detail.to_ascii_lowercase();
+    lower.contains("no space left")
+        || lower.contains("not enough space")
+        || lower.contains("disk full")
+        || text_names_code(&lower, DISK_FULL_CODES)
+}
+
+fn text_is_permission(detail: &str) -> bool {
+    let lower = detail.to_ascii_lowercase();
+    lower.contains("permission denied")
+        || lower.contains("access is denied")
+        || text_names_code(&lower, PERMISSION_CODES)
+}
+
+fn os_code_in_text(detail: &str) -> Option<i32> {
+    let lower = detail.to_ascii_lowercase();
+    let rest = lower.split("os error ").nth(1)?;
+    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+    digits.parse().ok()
 }
 
 /// One zip of the current `store/`, even when backups are off or a close would
@@ -306,7 +457,7 @@ pub(crate) fn backup_before_rewrap(root: &VaultRoot, vault_id: &str) -> Result<(
     let vault_dir = root.vault_dir(vault_id)?;
     // A broken config fails before a zip is written.
     load_vault_config(&vault_dir)?;
-    write_backup_zip(&vault_dir, vault_id)?;
+    write_backup_zip(&vault_dir, vault_id, BackupDir::Standard)?;
     Ok(())
 }
 
@@ -321,13 +472,25 @@ pub(crate) fn prune_after_rewrap(root: &VaultRoot, vault_id: &str) -> Result<()>
     finish_backup_prune(&vault_dir, config.backup.mode, config.backup.keep_last)
 }
 
-fn write_backup_zip(vault_dir: &Path, vault_id: &str) -> Result<String> {
+/// Where a new zip goes: `backups/`, rotated by retention, or `backups/saves/`.
+#[derive(Clone, Copy)]
+enum BackupDir {
+    Standard,
+    Saves,
+}
+
+fn write_backup_zip(vault_dir: &Path, vault_id: &str, into: BackupDir) -> Result<String> {
     let backups = vault_dir.join("backups");
-    crate::host_fs::create_dir_all(&backups)?;
+    let dir = match into {
+        BackupDir::Standard => backups.clone(),
+        BackupDir::Saves => backups.join("saves"),
+    };
+    crate::host_fs::create_dir_all(&dir)?;
+    // One stamp across both folders, so a save never shares a name with a backup.
     let stamp = unused_backup_stamp(&backups, utc_filename_stamp())?;
     let name = backup_zip_filename(&stamp, vault_id)?;
-    let partial = backups.join(format!("{name}.partial"));
-    let dest = backups.join(&name);
+    let partial = dir.join(format!("{name}.partial"));
+    let dest = dir.join(&name);
     let store = vault_dir.join(crate::paths::STORE_DIR_NAME);
     crate::store::ensure_danger_notice(&store)?;
     let settings = snapshot_settings_bytes(vault_dir, &store)?;
@@ -351,10 +514,18 @@ fn write_backup_zip(vault_dir: &Path, vault_id: &str) -> Result<String> {
     }
     // The new stamp must be durable before `prune_backups` unlinks the previous
     // one. Otherwise a crash can publish the deletion and lose the new copy.
-    sync_dir(&backups)?;
+    sync_dir(&dir)?;
+    if matches!(into, BackupDir::Saves) {
+        // `saves/` itself may be new.
+        sync_dir(&backups)?;
+    }
+    let event = match into {
+        BackupDir::Standard => "vault_backup_created",
+        BackupDir::Saves => "vault_backup_saved",
+    };
     log_event(
         LogLevel::Info,
-        "vault_backup_created",
+        event,
         &[("id", vault_id), ("stamp", stamp.as_str())],
     );
     Ok(stamp)
@@ -366,28 +537,51 @@ fn finish_backup_prune(vault_dir: &Path, mode: VaultBackupMode, keep_last: u32) 
     sync_dir(&backups)
 }
 
+/// Delete and pin run under the vault's directory lock and refuse while the
+/// data folder is being exported. The export copies each vault under the same
+/// lock, so its zip holds every backup once, before or after the change.
+fn with_backups_settled<T>(
+    root: &VaultRoot,
+    vault_dir: &Path,
+    f: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    ensure_data_folder_export_idle(root.root())?;
+    with_vault_dir_lock(vault_dir, || {
+        ensure_data_folder_export_idle(root.root())?;
+        f()
+    })
+}
+
 pub fn delete_backups(root: &VaultRoot, vault_id: &str, stamps: &[String]) -> Result<()> {
     let vault_dir = root.vault_dir(vault_id)?;
-    let backups = vault_dir.join("backups");
-    let mut paths = Vec::new();
-    let mut seen = std::collections::BTreeSet::new();
-    for key in stamps {
-        let Ok(parsed) = parse_backup_key(key) else {
-            continue;
-        };
-        let path = one_store_zip(&backups, &parsed, key)?;
-        if seen.insert(path.clone()) {
-            paths.push(path);
+    with_backups_settled(root, &vault_dir, || {
+        let backups = vault_dir.join("backups");
+        let mut paths = Vec::new();
+        let mut seen = std::collections::BTreeSet::new();
+        for key in stamps {
+            let Ok(parsed) = parse_backup_key(key) else {
+                continue;
+            };
+            let path = one_store_zip(&backups, &parsed, key)?;
+            if seen.insert(path.clone()) {
+                paths.push(path);
+            }
         }
-    }
-    for path in paths {
-        crate::host_fs::remove_file(path)?;
-    }
-    Ok(())
+        for path in paths {
+            crate::host_fs::remove_file(path)?;
+        }
+        Ok(())
+    })
 }
 
 pub fn promote_backup_save(root: &VaultRoot, vault_id: &str, stamp: &str) -> Result<()> {
     let vault_dir = root.vault_dir(vault_id)?;
+    with_backups_settled(root, &vault_dir, || {
+        promote_backup_save_in(&vault_dir, stamp)
+    })
+}
+
+fn promote_backup_save_in(vault_dir: &Path, stamp: &str) -> Result<()> {
     let backups = vault_dir.join("backups");
     let saves = backups.join("saves");
     crate::host_fs::create_dir_all(&saves)?;
@@ -662,6 +856,60 @@ mod tests {
     use crate::test_support::vault_root_with;
     use crate::vault::create_vault;
 
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn classifies_a_full_disk_without_a_path() {
+        let code = DISK_FULL_CODES[0];
+        let io = UprivError::Io(std::io::Error::from_raw_os_error(code));
+        let class = classify_backup_failure(&io);
+        assert_eq!(class.reason, "disk_full");
+        assert_eq!(class.kind, "io");
+        assert_eq!(class.os, Some(code));
+
+        let wrapped = UprivError::VaultStoreInvalid {
+            path: std::path::PathBuf::from("/secret/store/file"),
+            detail: format!("write failed (os error {code})"),
+        };
+        let class = classify_backup_failure(&wrapped);
+        assert_eq!(class.reason, "disk_full");
+        assert_eq!(class.kind, "store");
+        assert_eq!(class.os, Some(code));
+    }
+
+    #[test]
+    fn classifies_permission_and_leaves_other_failures_generic() {
+        let denied = UprivError::Io(std::io::Error::from(std::io::ErrorKind::PermissionDenied));
+        assert_eq!(classify_backup_failure(&denied).reason, "permission");
+        let other = UprivError::Io(std::io::Error::from(std::io::ErrorKind::AlreadyExists));
+        let class = classify_backup_failure(&other);
+        assert_eq!(class.reason, "other");
+        assert_eq!(class.kind, "io");
+    }
+
+    /// The same number is a different error on another system.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_codes_that_mean_something_else_on_windows_stay_generic() {
+        for code in [libc::ENOTEMPTY, libc::EIO] {
+            let io = UprivError::Io(std::io::Error::from_raw_os_error(code));
+            assert_eq!(classify_backup_failure(&io).reason, "other", "errno {code}");
+            let wrapped = UprivError::VaultStoreInvalid {
+                path: std::path::PathBuf::new(),
+                detail: format!("failed (os error {code})"),
+            };
+            assert_eq!(
+                classify_backup_failure(&wrapped).reason,
+                "other",
+                "errno {code}"
+            );
+        }
+        let longer = UprivError::VaultStoreInvalid {
+            path: std::path::PathBuf::new(),
+            detail: "failed (os error 130)".into(),
+        };
+        assert_eq!(classify_backup_failure(&longer).reason, "other");
+    }
+
     fn sample_config(id: &str, name: &str) -> crate::config::VaultConfig {
         toml::from_str(&format!(
             r#"
@@ -837,6 +1085,71 @@ mode = "encrypted_dir"
         assert!(listed[0].saved);
         assert_eq!(listed[0].file_name, format!("{stamp}-notes.zip"));
         assert_eq!(backup_zip_file(&root, "notes", &stamp).unwrap(), saved);
+    }
+
+    #[test]
+    fn save_now_pins_a_zip_that_close_retention_keeps() {
+        let (_tmp, root) = vault_root_with(&[]);
+        create_vault(
+            &root,
+            sample_config("notes", "Notes"),
+            b"pass-word-ok",
+            KdfUnlockPreset::M32,
+        )
+        .unwrap();
+        let saved = save_backup_now(&root, "notes").unwrap();
+        assert!(saved.saved);
+        let zip = root
+            .vault_dir("notes")
+            .unwrap()
+            .join("backups")
+            .join("saves")
+            .join(&saved.file_name);
+        assert!(super::super::zip_io::zip_contains_store_header(&zip));
+        let zip_len = crate::host_fs::metadata(&zip).unwrap().len();
+        assert_eq!(saved.size_bytes, zip_len);
+        assert_eq!(list_backups(&root, "notes").unwrap(), vec![saved.clone()]);
+
+        // `keep_last = 1` rotates standard backups only.
+        backup_on_close(&root, "notes").unwrap().expect("stamp");
+        backup_on_close(&root, "notes").unwrap().expect("stamp");
+        let listed = list_backups(&root, "notes").unwrap();
+        assert_eq!(listed.len(), 2);
+        assert!(listed.contains(&saved));
+
+        // Two saves within one second still get their own stamps.
+        let again = save_backup_now(&root, "notes").unwrap();
+        assert_ne!(again.stamp, saved.stamp);
+        assert_eq!(list_backups(&root, "notes").unwrap().len(), 3);
+    }
+
+    #[test]
+    fn save_now_works_with_close_backups_off() {
+        let (_tmp, root) = vault_root_with(&[]);
+        let mut config = sample_config("notes", "Notes");
+        config.backup.enabled = false;
+        create_vault(&root, config, b"pass-word-ok", KdfUnlockPreset::M32).unwrap();
+        let saved = save_backup_now(&root, "notes").unwrap();
+        assert_eq!(list_backups(&root, "notes").unwrap(), vec![saved]);
+    }
+
+    #[test]
+    fn save_now_refuses_an_open_vault_and_leaves_no_file() {
+        use crate::vault::{close_vault, open_vault};
+
+        let (_tmp, root) = vault_root_with(&[]);
+        let mut config = sample_config("notes", "Notes");
+        config.backup.enabled = false;
+        create_vault(&root, config, b"pass-word-ok", KdfUnlockPreset::M32).unwrap();
+        open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        let err = save_backup_now(&root, "notes").unwrap_err();
+        assert!(matches!(err, UprivError::VaultMustBeClosed));
+        let backups = root.vault_dir("notes").unwrap().join("backups");
+        assert!(!backups.join("saves").host_exists());
+        assert!(list_backups(&root, "notes").unwrap().is_empty());
+
+        close_vault(&root, "notes").unwrap();
+        assert!(save_backup_now(&root, "notes").unwrap().saved);
     }
 
     #[test]

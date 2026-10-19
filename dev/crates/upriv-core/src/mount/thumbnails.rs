@@ -1,11 +1,13 @@
-//! Freedesktop thumbnail cache cleanup for a Linux vault mount.
+//! Freedesktop thumbnail cache cleanup for a Linux vault folder: a
+//! file-manager mount or a plaintext vault's folder.
 //!
 //! Nautilus treats a `fuse` mount as local and writes PNG previews under
-//! `$XDG_CACHE_HOME/thumbnails`. Those files stay after the mount is gone.
-//! Close overwrites those PNGs, syncs, and unlinks the ones whose `Thumb::URI`
-//! is under that mount. While the folder is mounted, the same wipe runs on
-//! [`OPEN_PURGE_INTERVAL`]. The scan does not run on the close or open path. A
-//! wipe writes one info line with the count. A bad cache writes one warning.
+//! `$XDG_CACHE_HOME/thumbnails`; it does the same for any plaintext folder.
+//! Those files stay after the folder is gone. Close overwrites those PNGs,
+//! syncs, and unlinks the ones whose `Thumb::URI` is under that folder. While
+//! the vault is open, the same wipe runs on [`OPEN_PURGE_INTERVAL`]. The scan
+//! does not run on the close or open path. A wipe writes one info line with
+//! the count. A bad cache writes one warning.
 //!
 //! Windows does not use this scanner. Explorer's `thumbcache_*.db` is a
 //! machine-wide hash cache, so the WinFsp mount prevents preview generation
@@ -33,29 +35,29 @@ const MAX_PNG_CHUNKS: u32 = 32;
 const MAX_CACHE_ENTRIES: u32 = 50_000;
 const MAX_PNG_LEN: u64 = 8 * 1024 * 1024;
 const PURGE_BUDGET: Duration = Duration::from_secs(20);
-/// How often to wipe previews while a file-manager folder is mounted.
+/// How often to wipe previews while a vault folder is open.
 const OPEN_PURGE_INTERVAL: Duration = Duration::from_secs(2 * 60);
 /// One blocked read must not be silent forever. Later requests log once.
 const PURGE_STUCK_AFTER: Duration = Duration::from_secs(30);
 
 static SCHEDULE_CV: Condvar = Condvar::new();
 
-/// Remember `mount_point` until [`unwatch_open_mount`]. The wipe then runs on
+/// Remember `folder` until [`unwatch_vault_folder`]. The wipe then runs on
 /// [`OPEN_PURGE_INTERVAL`]. A relative path or `/` is ignored.
-pub(crate) fn watch_open_mount(mount_point: &Path) {
+pub(crate) fn watch_vault_folder(folder: &Path) {
     #[cfg(target_os = "linux")]
-    watch_open_mount_linux(mount_point);
+    watch_vault_folder_linux(folder);
     #[cfg(not(target_os = "linux"))]
-    let _ = mount_point;
+    let _ = folder;
 }
 
 #[cfg(target_os = "linux")]
-fn watch_open_mount_linux(mount_point: &Path) {
-    if !mount_is_specific(mount_point) {
+fn watch_vault_folder_linux(folder: &Path) {
+    if !folder_is_specific(folder) {
         return;
     }
     let mut schedule = schedule_lock();
-    schedule.watch(mount_point.to_path_buf(), Instant::now());
+    schedule.watch(folder.to_path_buf(), Instant::now());
     let failed = ensure_worker(&mut schedule);
     drop(schedule);
     SCHEDULE_CV.notify_one();
@@ -64,44 +66,44 @@ fn watch_open_mount_linux(mount_point: &Path) {
     }
 }
 
-/// Stop the periodic wipe for `mount_point`. A purge already queued still runs.
-pub(crate) fn unwatch_open_mount(mount_point: &Path) {
+/// Stop the periodic wipe for `folder`. A purge already queued still runs.
+pub(crate) fn unwatch_vault_folder(folder: &Path) {
     #[cfg(target_os = "linux")]
-    unwatch_open_mount_linux(mount_point);
+    unwatch_vault_folder_linux(folder);
     #[cfg(not(target_os = "linux"))]
-    let _ = mount_point;
+    let _ = folder;
 }
 
 #[cfg(target_os = "linux")]
-fn unwatch_open_mount_linux(mount_point: &Path) {
+fn unwatch_vault_folder_linux(folder: &Path) {
     let mut schedule = schedule_lock();
-    schedule.unwatch(mount_point);
+    schedule.unwatch(folder);
     drop(schedule);
     SCHEDULE_CV.notify_one();
 }
 
-/// Delete thumbnail-cache PNGs whose URI is under `mount_point`.
+/// Delete thumbnail-cache PNGs whose URI is under `folder`.
 ///
 /// Returns before the scan finishes. A relative path or `/` is ignored so a
-/// bad mount point cannot wipe the whole cache. Each matching PNG is
+/// bad folder cannot wipe the whole cache. Each matching PNG is
 /// overwritten and synced before its name is removed. When at least one
 /// preview is wiped, an info line records the count and not the file. A cache
 /// that cannot be read, a wipe that cannot finish, or a scan that hits its
 /// budget, is a separate warning. Close and open do not wait and do not fail.
-pub(crate) fn purge_mount_thumbnails(mount_point: &Path) {
+pub(crate) fn purge_folder_thumbnails(folder: &Path) {
     #[cfg(target_os = "linux")]
-    purge_mount_thumbnails_linux(mount_point);
+    purge_folder_thumbnails_linux(folder);
     #[cfg(not(target_os = "linux"))]
-    let _ = mount_point;
+    let _ = folder;
 }
 
 #[cfg(target_os = "linux")]
-fn purge_mount_thumbnails_linux(mount_point: &Path) {
-    if !mount_is_specific(mount_point) {
+fn purge_folder_thumbnails_linux(folder: &Path) {
+    if !folder_is_specific(folder) {
         return;
     }
     let mut schedule = schedule_lock();
-    let stuck = schedule.request(mount_point.to_path_buf(), Instant::now());
+    let stuck = schedule.request(folder.to_path_buf(), Instant::now());
     let failed = ensure_worker(&mut schedule);
     drop(schedule);
     SCHEDULE_CV.notify_one();
@@ -218,7 +220,7 @@ impl Schedule {
 
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     fn watch(&mut self, path: PathBuf, now: Instant) {
-        if !mount_is_specific(&path) {
+        if !folder_is_specific(&path) {
             return;
         }
         let first = self.mounts.is_empty();
@@ -240,7 +242,7 @@ impl Schedule {
     /// more pass when that scan finishes. Returns true when that scan has been
     /// running longer than [`PURGE_STUCK_AFTER`].
     fn request(&mut self, path: PathBuf, now: Instant) -> bool {
-        if !mount_is_specific(&path) {
+        if !folder_is_specific(&path) {
             return false;
         }
         let stuck = self.note_stuck(now);
@@ -354,7 +356,7 @@ fn purge_thumbnail_caches(
     caches: &[PathBuf],
     limit: &ScanLimit,
 ) -> ThumbnailScan {
-    if !mount_is_specific(mount_point) {
+    if !folder_is_specific(mount_point) {
         return ThumbnailScan {
             removed: 0,
             fault: None,
@@ -396,8 +398,8 @@ fn discard_thumbnail_file(path: &Path) -> Result<(), ()> {
     }
 }
 
-fn mount_is_specific(mount_point: &Path) -> bool {
-    mount_point.is_absolute() && mount_point != Path::new("/")
+fn folder_is_specific(folder: &Path) -> bool {
+    folder.is_absolute() && folder != Path::new("/")
 }
 
 fn purge_thumbnail_dir(
@@ -458,7 +460,7 @@ fn purge_thumbnail_dir(
         let Some(uri) = png_thumb_uri(&mut file) else {
             continue;
         };
-        if !uri_is_under_mount(&uri, mount_point) {
+        if !uri_is_under_folder(&uri, mount_point) {
             continue;
         }
         match discard_thumbnail_file(&path) {
@@ -541,16 +543,17 @@ fn png_crc(kind: &[u8], data: &[u8]) -> u32 {
     !crc
 }
 
-fn uri_is_under_mount(uri: &str, mount_point: &Path) -> bool {
+/// True when `uri` is a `file://` URI for `folder` or a path inside it.
+pub(crate) fn uri_is_under_folder(uri: &str, folder: &Path) -> bool {
     let Some(path) = file_uri_path(uri) else {
         return false;
     };
-    let mount = normalize_absolute(mount_point);
+    let folder = normalize_absolute(folder);
     let candidate = normalize_absolute(&path);
-    if mount.as_os_str().is_empty() || candidate.as_os_str().is_empty() {
+    if folder.as_os_str().is_empty() || candidate.as_os_str().is_empty() {
         return false;
     }
-    candidate == mount || candidate.starts_with(&mount)
+    candidate == folder || candidate.starts_with(&folder)
 }
 
 fn file_uri_path(uri: &str) -> Option<PathBuf> {

@@ -6,6 +6,7 @@ import {
   rpcBackupGet,
   rpcBackupList,
   rpcBackupPromote,
+  rpcBackupSave,
 } from "@/lib/rpc";
 
 /** Native → `upriv-ffi` `backup_*` (skipped on SAF trees). */
@@ -18,6 +19,9 @@ export const nativeBackupService = createLiveBackupService({
   },
   async promoteToSave(vaultId, stamp) {
     return rpcBackupPromote(vaultId, stamp);
+  },
+  async saveNow(vaultId) {
+    return rpcBackupSave(vaultId);
   },
   async getBackupBytes(vaultId, stamp) {
     return rpcBackupGet(vaultId, stamp);

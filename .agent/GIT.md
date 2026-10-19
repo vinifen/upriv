@@ -1,6 +1,6 @@
 # Git — agent cheat sheet
 
-Read this **before** any commit, branch, or PR. Human spec: [`docs/gitflow/`](../docs/gitflow/README.md). Cursor reminder: [`.cursor/rules/git-workflow.mdc`](../.cursor/rules/git-workflow.mdc).
+Read this **before** any commit, branch, or PR. Human spec: [`docs/gitflow/`](../docs/gitflow/README.md). Short rule: [`rules/git-workflow.md`](rules/git-workflow.md).
 
 Do **not** commit, push, or open a PR unless the human asked.
 

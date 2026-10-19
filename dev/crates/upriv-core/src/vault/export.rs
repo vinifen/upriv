@@ -13,8 +13,7 @@ use crate::session::{
     PreparingGuard,
 };
 use crate::store::{
-    file_name, open_store, probe_store_password, VaultHeader, VaultIndex, INTERNAL_WORKSPACE_FILE,
-    SEED_LOGICAL_PATH,
+    is_reserved_logical, open_store, probe_store_password, VaultHeader, VaultIndex,
 };
 use crate::time::utc_filename_stamp;
 
@@ -40,14 +39,15 @@ fn closed_vault_paths(
     Ok((vault_dir, store))
 }
 
-/// Closed vault plus the exclusive hold that refuses open until the export returns.
-struct ClosedVaultHold {
-    vault_dir: std::path::PathBuf,
-    store: std::path::PathBuf,
+/// Closed vault plus the exclusive hold that refuses open until the export
+/// or save that took it returns.
+pub(super) struct ClosedVaultHold {
+    pub(super) vault_dir: std::path::PathBuf,
+    pub(super) store: std::path::PathBuf,
     _preparing: PreparingGuard,
 }
 
-fn hold_closed_vault(root: &VaultRoot, vault_id: &str) -> Result<ClosedVaultHold> {
+pub(super) fn hold_closed_vault(root: &VaultRoot, vault_id: &str) -> Result<ClosedVaultHold> {
     let (vault_dir, store) = closed_vault_paths(root, vault_id)?;
     let preparing = PreparingGuard::enter_exclusive(&vault_dir)?;
     Ok(ClosedVaultHold {
@@ -60,7 +60,10 @@ fn hold_closed_vault(root: &VaultRoot, vault_id: &str) -> Result<ClosedVaultHold
 /// Read the closed vault while holding its directory lock. Delete and rename
 /// take the same lock and re-check the preparing mark, so they cannot wipe or
 /// move `store/` under this read.
-fn with_held_vault<T>(hold: &ClosedVaultHold, f: impl FnOnce() -> Result<T>) -> Result<T> {
+pub(super) fn with_held_vault<T>(
+    hold: &ClosedVaultHold,
+    f: impl FnOnce() -> Result<T>,
+) -> Result<T> {
     with_vault_dir_lock(&hold.vault_dir, || {
         if !hold.vault_dir.host_is_dir() {
             return Err(UprivError::VaultNotFound(hold.vault_dir.clone()));
@@ -120,10 +123,6 @@ pub fn export_store_zip_to_path(
     })
 }
 
-fn skip_export_path(path: &str) -> bool {
-    path == SEED_LOGICAL_PATH || file_name(path) == INTERNAL_WORKSPACE_FILE
-}
-
 fn pack_logical_seven_zip_to_path(
     source: LogicalSevenZipSource<'_>,
     archive_password: &[u8],
@@ -131,7 +130,7 @@ fn pack_logical_seven_zip_to_path(
     outer: &str,
     dest: &std::path::Path,
 ) -> Result<u64> {
-    let sizes = logical_export_size(source.index, skip_export_path);
+    let sizes = logical_export_size(source.index, is_reserved_logical);
     let budget = seven_zip_pack_budget(sizes, opts, SevenZipSink::File);
     ensure_seven_zip_export_ram(budget.ram)?;
     let file = crate::host_fs::File::create(dest)?;
@@ -142,7 +141,7 @@ fn pack_logical_seven_zip_to_path(
         opts,
         outer,
         budget.threads,
-        skip_export_path,
+        is_reserved_logical,
     ) {
         Ok(mut file) => {
             use std::io::Write;
@@ -165,7 +164,7 @@ fn pack_logical_seven_zip_in_memory(
     opts: &VaultSevenZipSection,
     outer: &str,
 ) -> Result<Vec<u8>> {
-    let sizes = logical_export_size(index, skip_export_path);
+    let sizes = logical_export_size(index, is_reserved_logical);
     let budget = seven_zip_pack_budget(sizes, opts, SevenZipSink::Memory);
     ensure_seven_zip_export_ram(budget.ram)?;
     let buf = try_vec_with_capacity(seven_zip_archive_vec_budget(sizes))?;
@@ -181,7 +180,7 @@ fn pack_logical_seven_zip_in_memory(
         opts,
         outer,
         budget.threads,
-        skip_export_path,
+        is_reserved_logical,
     )?;
     Ok(cursor.into_inner())
 }
@@ -291,7 +290,7 @@ mod tests {
     use crate::error::UprivError;
     #[allow(unused_imports)]
     use crate::host_fs::HostFsQuery;
-    use crate::store::KdfUnlockPreset;
+    use crate::store::{KdfUnlockPreset, SEED_LOGICAL_PATH};
     use crate::test_support::vault_root_with;
     use crate::vault::create::create_vault;
     use crate::vault::fs::{fs_list_tree, fs_mkdir, fs_write_file};

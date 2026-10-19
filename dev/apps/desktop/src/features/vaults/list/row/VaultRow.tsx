@@ -26,6 +26,7 @@ import { VaultDragHandle } from "./VaultDragHandle";
 import { VaultFileManagerIndicator } from "./VaultFileManagerIndicator";
 import { VaultHiddenIndicator } from "./VaultHiddenIndicator";
 import { VaultLastOpenedIndicator } from "./VaultLastOpenedIndicator";
+import { VaultPlaintextIndicator } from "./VaultPlaintextIndicator";
 import { VaultLockButton } from "./VaultLockButton";
 import { VaultRowActions } from "./VaultRowActions";
 import { VaultStatusBadge } from "./VaultStatusBadge";
@@ -188,6 +189,7 @@ export function VaultRow({
               ].join(" ")}
             >
               <span className="truncate">{vault.displayName}</span>
+              <VaultPlaintextIndicator storageMode={vault.storageMode} />
               <VaultLastOpenedIndicator active={isLastOpened} />
               <VaultFileManagerIndicator vaultId={vault.id} />
               <VaultHiddenIndicator hidden={vault.hidden} />

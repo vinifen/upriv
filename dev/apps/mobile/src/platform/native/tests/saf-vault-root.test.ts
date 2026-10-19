@@ -2,14 +2,17 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { RpcError } from "@upriv/shared";
 
 const native = vi.hoisted(() => ({
-  current: null as null | { mountSafRoot: (uri: string) => void },
+  current: null as null | {
+    mountSafRoot?: (uri: string) => void;
+    mountSafExport?: (uri: string) => void;
+  },
 }));
 
 vi.mock("upriv-core", () => ({
   getUprivCoreNative: () => native.current,
 }));
 
-import { isSafTreeUri, mountSafRoot, toSafRpcError } from "../safVaultRoot";
+import { isSafTreeUri, mountSafExport, mountSafRoot, toSafRpcError } from "../safVaultRoot";
 
 describe("isSafTreeUri", () => {
   it("accepts content URIs and rejects filesystem paths", () => {
@@ -74,6 +77,26 @@ describe("mountSafRoot", () => {
     };
     expect(() => mountSafRoot("content://tree")).toThrow(
       expect.objectContaining({ code: "saf_not_ready" }),
+    );
+  });
+});
+
+describe("mountSafExport", () => {
+  beforeEach(() => {
+    native.current = null;
+  });
+
+  it("keeps an unplugged export drive as its own SAF code, not the data folder's", () => {
+    native.current = {
+      mountSafExport: () => {
+        throw new Error("saf_unreachable: export folder is not reachable");
+      },
+    };
+    expect(() => mountSafExport("content://usb/tree/A1B2")).toThrow(
+      expect.objectContaining({
+        code: "saf_unreachable",
+        details: { path: "content://usb/tree/A1B2" },
+      }),
     );
   });
 });

@@ -99,7 +99,8 @@ export function safRelease(treeUri: string): void {
 }
 
 /**
- * Drop the persistable grant from a one-shot folder pick (file-manager import).
+ * Drop the persistable grant from a one-shot folder pick (file-manager import,
+ * Export data folder).
  * No-op when native is missing (Expo Go) or when the URI is the active vault-root.
  * Native `safReleasePermission` also refuses to drop the active tree.
  */
@@ -157,6 +158,28 @@ export function unmountSafRoot(): void {
   const native = getUprivCoreNative();
   try {
     native?.unmountSafRoot();
+  } catch {
+    /* already unmounted */
+  }
+}
+
+/**
+ * Point Rust `/upriv-saf-export` at a folder picked for Export data folder.
+ * The data folder mount is left as it is. An unplugged drive stays
+ * `saf_unreachable`: it is the export folder that is gone, not the data folder.
+ */
+export function mountSafExport(treeUri: string): void {
+  try {
+    requireNative().mountSafExport(treeUri);
+  } catch (error) {
+    throw toSafRpcError(error, treeUri);
+  }
+}
+
+/** Drop the export mount. */
+export function unmountSafExport(): void {
+  try {
+    getUprivCoreNative()?.unmountSafExport();
   } catch {
     /* already unmounted */
   }

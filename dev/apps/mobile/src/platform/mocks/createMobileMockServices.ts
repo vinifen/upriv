@@ -331,7 +331,6 @@ export function createMobileMockServices(): AppServices {
         suppressMockSeedVaultId(vaultId);
         removeRemappedMockSeedVault(vaultId);
       },
-      async recoverDirtyClose() {},
       async getExportBytes(vault, request) {
         return mockVaultExportBytes(vault, request);
       },
@@ -486,6 +485,19 @@ export function createMobileMockServices(): AppServices {
           }
         }
       },
+      async saveNow(vaultId) {
+        const createdAt = new Date().toISOString();
+        const stamp = createdAt.slice(0, 19).replace(/[-T:]/g, "");
+        const entry: VaultBackupEntry = {
+          stamp,
+          fileName: `${stamp}-${vaultId}.zip`,
+          createdAt,
+          sizeBytes: 128_000,
+          saved: true,
+        };
+        MOCK_BACKUPS[vaultId] = [entry, ...(MOCK_BACKUPS[vaultId] ?? [])];
+        return { ...entry };
+      },
       async getBackupBytes(_vaultId, entry) {
         const header = `[Upriv mock backup]\n${entry.stamp}\n${entry.saved ? "saved\n" : ""}`;
         return new TextEncoder().encode(header);
@@ -551,7 +563,7 @@ export function createMobileMockServices(): AppServices {
             throw new VaultPipelineError(VAULT_PIPELINE_ERROR_CODES.HEADER_TEST_FAILED);
           }
         });
-        return { backupFailed: false };
+        return { backupFailed: false, backupFailure: null, plain: null };
       },
       resolveWorkspacePath(displayName, parentPath) {
         return resolveVaultMountPoint(parentPath ?? "", displayName) ?? "";

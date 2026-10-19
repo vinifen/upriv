@@ -53,12 +53,20 @@ pub fn is_argon2_bound_method(method: &str, _params: &Value) -> bool {
     )
 }
 
-/// Close, delete, and backup download. Own worker so a lock is not stuck
-/// behind a multi-minute import, export, or rewrap.
+/// Close, delete, backup download, and plaintext-folder work that waits for a
+/// sync pass. Own worker so a lock is not stuck behind a multi-minute import,
+/// export, or rewrap, and stdin is not stuck behind a pass.
 pub fn is_lifecycle_io_method(method: &str) -> bool {
     matches!(
         method,
-        "vault_close" | "vault_delete" | "backup_get" | "vault_discard_import"
+        "vault_close"
+            | "vault_delete"
+            | "backup_get"
+            | "vault_discard_import"
+            | "vault_plain_confirm"
+            | "vault_plain_remove"
+            | "vault_plain_sync"
+            | "vault_plain_deletions"
     )
 }
 
@@ -69,7 +77,7 @@ pub fn is_rewrap_io_method(method: &str) -> bool {
     matches!(method, "vault_change_password" | "vault_change_kdf")
 }
 
-/// Zip and `.7z` import, and portable export.
+/// Zip and `.7z` import, portable export, and a save of the closed `store/`.
 /// File imports use [`is_import_io_method`] so they can run beside each other.
 pub fn is_pack_io_method(method: &str) -> bool {
     matches!(
@@ -79,6 +87,7 @@ pub fn is_pack_io_method(method: &str) -> bool {
             | "vault_import_files_zip"
             | "vault_import_os_path"
             | "vault_export"
+            | "backup_save"
     )
 }
 
@@ -87,12 +96,19 @@ pub fn is_import_io_method(method: &str) -> bool {
     matches!(method, "vault_fs_import_os_file" | "vault_fs_import_seal")
 }
 
+/// The zip of the whole data folder. Own worker: an import, export, or backup
+/// it refuses answers at once instead of queuing behind a copy of every vault.
+pub fn is_data_folder_io_method(method: &str) -> bool {
+    method == "data_folder_export"
+}
+
 /// Long contents I/O that would stall stdin if run inline.
 pub fn is_long_io_method(method: &str, _params: &Value) -> bool {
     is_lifecycle_io_method(method)
         || is_rewrap_io_method(method)
         || is_pack_io_method(method)
         || is_import_io_method(method)
+        || is_data_folder_io_method(method)
 }
 
 /// Which off-stdin worker runs this method.
@@ -105,6 +121,7 @@ pub enum HeavyLane {
     Rewrap,
     Pack,
     Import,
+    DataFolder,
 }
 
 pub fn heavy_lane(method: &str, params: &Value) -> Option<HeavyLane> {
@@ -122,6 +139,9 @@ pub fn heavy_lane(method: &str, params: &Value) -> Option<HeavyLane> {
     }
     if is_pack_io_method(method) {
         return Some(HeavyLane::Pack);
+    }
+    if is_data_folder_io_method(method) {
+        return Some(HeavyLane::DataFolder);
     }
     None
 }
@@ -217,6 +237,13 @@ mod tests {
             heavy_lane("vault_import_zip", &empty),
             Some(HeavyLane::Pack)
         );
+        assert_eq!(heavy_lane("backup_save", &empty), Some(HeavyLane::Pack));
+        assert_eq!(
+            heavy_lane("data_folder_export", &empty),
+            Some(HeavyLane::DataFolder)
+        );
+        assert_eq!(heavy_lane("data_folder_export_status", &empty), None);
+        assert_eq!(heavy_lane("data_folder_export_cancel", &empty), None);
         assert_ne!(
             heavy_lane("vault_close", &empty),
             heavy_lane("vault_import_7z", &empty)
@@ -267,6 +294,8 @@ mod tests {
         }
         let expected = [
             "backup_get",
+            "backup_save",
+            "data_folder_export",
             "vault_change_kdf",
             "vault_change_password",
             "vault_close",
@@ -283,6 +312,10 @@ mod tests {
             "vault_import_zip",
             "vault_ingest_open",
             "vault_open",
+            "vault_plain_confirm",
+            "vault_plain_deletions",
+            "vault_plain_remove",
+            "vault_plain_sync",
         ];
         let expected: std::collections::BTreeSet<_> = expected
             .iter()

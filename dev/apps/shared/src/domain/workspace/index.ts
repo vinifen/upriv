@@ -37,6 +37,7 @@ export {
   resolveVaultMountPoint,
   sanitizeMountLeaf,
   suggestedDefaultWorkspacePath,
+  workspacePathDisplay,
   workspaceContainerPath,
   validateWorkspaceGlobalPath,
   validateWorkspaceTable,

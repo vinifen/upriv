@@ -13,6 +13,7 @@ import {
   normalizeWorkspaceTable,
   resolveVaultMountPoint,
   suggestedDefaultWorkspacePath,
+  workspacePathDisplay,
   workspaceContainerPath,
   validateWorkspaceGlobalPath,
   vaultWorkspace,
@@ -234,6 +235,10 @@ describe("workspace path validation", () => {
     expect(suggestedDefaultWorkspacePath(documents)).toBe(
       "content://com.android.externalstorage.documents/tree/primary%3ADocuments/document/primary%3ADocuments%2FUpriv%2Fworkspace",
     );
+    expect(workspacePathDisplay(suggestedDefaultWorkspacePath(documents))).toBe(
+      "Documents/Upriv/workspace",
+    );
+    expect(workspacePathDisplay("/data/upriv-root/workspace")).toBe("/data/upriv-root/workspace");
     expect(
       validateWorkspaceGlobalPath(suggestedDefaultWorkspacePath(documents), documents),
     ).toBeNull();

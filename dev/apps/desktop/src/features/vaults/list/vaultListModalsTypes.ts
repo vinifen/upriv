@@ -38,6 +38,9 @@ export interface VaultListModalsHandle {
   /** Returns false when System settings or Data folder has unsaved edits. */
   setGroupsOpen: (open: boolean) => boolean;
   setGroupsDirty: (dirty: boolean) => void;
+  /** Export data folder. Closing it leaves a running export in place. */
+  dataFolderExportOpen: boolean;
+  setDataFolderExportOpen: (open: boolean) => void;
   logsOpen: boolean;
   setLogsOpen: (open: boolean) => void;
   helpOpen: boolean;

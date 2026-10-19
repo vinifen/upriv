@@ -72,9 +72,39 @@ pub enum UprivError {
     #[error("vault store invalid at {path}: {detail}")]
     VaultStoreInvalid { path: PathBuf, detail: String },
 
-    /// `upriv_plain` workspace extract/wipe is not implemented — refuse create/open.
-    #[error("upriv_plain is not implemented")]
-    UprivPlainUnavailable,
+    /// This system has not confirmed the plaintext folder at `path` for this
+    /// vault. Nothing was written. The app shows the path and what kind of
+    /// place it is, and opens again with that path once the user agrees.
+    #[error("confirm the plaintext folder at {path}")]
+    PlainDestinationUnconfirmed {
+        path: PathBuf,
+        class: crate::vault::PlainFolderClass,
+    },
+
+    /// The plaintext folder cannot be placed at `path`.
+    #[error("plaintext folder refused at {path}: {}", reason.as_str())]
+    PlainDestinationInvalid {
+        path: PathBuf,
+        reason: PlainDestinationReason,
+    },
+
+    /// A plaintext folder from an earlier session still holds files. The vault
+    /// is in recovery until that folder is removed.
+    #[error("a plaintext folder from an earlier session is still on disk")]
+    PlainLeftover,
+
+    /// Some vault names cannot be written as files on this system.
+    #[error("{count} file names cannot be written to the plaintext folder")]
+    PlainNamesUnsupported { count: usize, examples: Vec<String> },
+
+    /// The plaintext folder's drive does not have room for the vault's files.
+    #[error("plaintext folder needs {needed} bytes, {available} free")]
+    PlainSpaceShort { needed: u64, available: u64 },
+
+    /// The plaintext folder refused `count` of the vault's files on open.
+    /// What was written is wiped again.
+    #[error("{count} files could not be written to the plaintext folder")]
+    PlainFolderUnwritable { count: usize },
 
     /// Workspace / mount path is not absolute or otherwise invalid.
     #[error("workspace path invalid at {path}: {detail}")]
@@ -144,6 +174,29 @@ pub enum UprivError {
     #[error("rewrap changes nothing")]
     RewrapUnchanged(RewrapUnchangedKind),
 
+    /// A vault in this data folder is open, closing, or held by other work, so
+    /// the data folder cannot be exported now.
+    #[error("close every vault and wait for its work to finish before exporting the data folder")]
+    DataFolderBusy,
+
+    /// The data folder is being exported. Another export, a new vault, and a
+    /// backup delete or pin wait until it ends.
+    #[error("the data folder is being exported")]
+    DataFolderExportBusy,
+
+    /// The user stopped the data-folder export. Its partial zip was removed.
+    #[error("data folder export cancelled")]
+    DataFolderExportCancelled,
+
+    /// The chosen folder's drive does not have room for the data-folder zip.
+    #[error("data folder export needs {needed} bytes, {available} free")]
+    DataFolderExportSpaceShort { needed: u64, available: u64 },
+
+    /// The data-folder zip cannot go inside a `.upriv` folder: the copy would
+    /// contain itself, or write into another data folder.
+    #[error("data folder export cannot write inside .upriv: {0}")]
+    DataFolderExportDestinationReserved(PathBuf),
+
     #[error(transparent)]
     Io(#[from] std::io::Error),
 }
@@ -155,4 +208,34 @@ pub type Result<T> = std::result::Result<T, UprivError>;
 pub enum RewrapUnchangedKind {
     Password,
     UnlockRam,
+}
+
+/// Why a plaintext folder cannot be placed. Wire `details.reason`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlainDestinationReason {
+    /// Inside `.upriv`, or the folder would contain the data folder.
+    Reserved,
+    /// A drive root or the home folder itself.
+    SystemFolder,
+    /// Inside, around, or the same as another vault's folder.
+    Overlap,
+    /// The folder already holds files that are not this vault's.
+    Occupied,
+    /// The path is a file, a link, or not a real folder.
+    NotAFolder,
+    /// App-private storage on a phone. Other apps could not open the files.
+    PrivateStorage,
+}
+
+impl PlainDestinationReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Reserved => "reserved",
+            Self::SystemFolder => "system_folder",
+            Self::Overlap => "overlap",
+            Self::Occupied => "occupied",
+            Self::NotAFolder => "not_a_folder",
+            Self::PrivateStorage => "private_storage",
+        }
+    }
 }

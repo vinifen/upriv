@@ -4,6 +4,7 @@ export {
   useAppSettingsService,
   useBackupService,
   useCreateVaultService,
+  useDataFolderService,
   useLogService,
   useServices,
   useVaultFileSystemService,

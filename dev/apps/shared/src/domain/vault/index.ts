@@ -33,7 +33,7 @@ export {
   vaultPipelineRowBudget,
 } from "./types";
 export type { VaultLifecycleIntent, VaultLifecycleRequest } from "./lifecycle";
-export { canRunIdleAutoClose, requiresCloseDialog } from "./lifecycle";
+export { canRunIdleAutoClose } from "./lifecycle";
 export type {
   IdleAutoCloseDecision,
   IdleAutoClosePlan,

@@ -201,6 +201,14 @@ export const ICON_GLYPHS: Record<IconName, readonly IconShape[]> = {
     p("M12 20h9", round),
     p("M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z", roundJoin),
   ],
+  plaintext: [
+    p("M8 4h6l4 4v12a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z", {
+      strokeWidth: 1.75,
+      strokeLinejoin: "round",
+    }),
+    p("M14 4v4h4", { strokeWidth: 1.75, strokeLinejoin: "round" }),
+    p("M9 13h6M9 16.5h4", round),
+  ],
   refresh: [
     p("M4 12a8 8 0 0 1 13.5-5.7", round),
     p("M20 3v5h-5", roundJoin),

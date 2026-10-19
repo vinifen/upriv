@@ -11,6 +11,7 @@ export const vaultStatusColorVar = {
   creating: "--vault-status-closed",
   queued: "--vault-status-closed",
   exporting: "--vault-status-closed",
+  backing_up: "--vault-status-closed",
   changing_password: "--vault-status-closed",
   changing_kdf: "--vault-status-closed",
 } as const satisfies Record<VaultDisplayStatus, string>;
@@ -25,6 +26,7 @@ export const vaultStatusI18nKey = {
   creating: "vault.status.creating",
   queued: "vault.status.queued",
   exporting: "vault.status.exporting",
+  backing_up: "vault.status.backing_up",
   changing_password: "vault.status.changing_password",
   changing_kdf: "vault.status.changing_kdf",
 } as const satisfies Record<VaultDisplayStatus, string>;

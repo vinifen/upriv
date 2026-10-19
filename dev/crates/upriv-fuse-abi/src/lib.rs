@@ -86,4 +86,7 @@ pub struct FuseHost {
         new_name: *const c_char,
         replace: u8,
     ) -> i32,
+    /// Seal writes that [`Self::write_range`] left for the next index seal.
+    /// Called on `flush` (each `close` of a descriptor), `release`, and `fsync`.
+    pub flush: unsafe extern "C" fn(root: *const c_char, vault_id: *const c_char) -> i32,
 }

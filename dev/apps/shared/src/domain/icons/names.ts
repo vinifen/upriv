@@ -30,6 +30,7 @@ export const ICON_NAMES = [
   "note",
   "outline",
   "pencil",
+  "plaintext",
   "layout-grid",
   "layers",
   "list-rows",

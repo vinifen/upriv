@@ -257,13 +257,15 @@ export function Modal({
     };
 
     // Recover when focus escapes the dialog (e.g. Continue unmounted mid-step).
-    // Ignore focus moving into another portaled UI (Select listbox).
+    // Leave focus alone when it moved into another dialog or a portaled list.
     const recoverIfFocusLeft = () => {
       const active = document.activeElement;
       if (active instanceof Node && panel.contains(active)) return;
       if (active instanceof Element) {
         const role = active.getAttribute("role");
         if (role === "listbox" || role === "option") return;
+        const dialog = active.closest("[role='dialog']");
+        if (dialog && dialog !== panel) return;
       }
       panel.focus({ preventScroll: true });
     };

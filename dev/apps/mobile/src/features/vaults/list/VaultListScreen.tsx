@@ -37,6 +37,7 @@ import {
   resolveListDrop,
   resolveVaultDisplayStatus,
   validateDisplayName,
+  vaultCanSaveBackupNow,
   vaultRowControls,
   VAULT_DISPLAY_NAME_MAX_LENGTH,
   GROUPED_VAULT_SORT_MODES,
@@ -65,6 +66,7 @@ import {
 } from "@/theme/tokens";
 import { AppSettingsModal } from "@/features/system/settings/AppSettingsModal";
 import { VaultRootDataFolderModal } from "@/features/system/settings/VaultRootDataFolderModal";
+import { DataFolderExportModal } from "@/features/system/data-folder-export";
 import { LogsModal } from "@/features/system/logs/LogsModal";
 import { HelpModal } from "@/features/system/help/HelpModal";
 import { SystemInfoModal } from "@/features/system/info/SystemInfoModal";
@@ -76,6 +78,8 @@ import { VaultNoteModal } from "@/features/vaults/list/VaultNoteModal";
 import { GroupedVaultPicker } from "@/features/vaults/list/GroupedVaultPicker";
 import {
   CloseAllUnsavedModal,
+  PlainHeldModal,
+  PlainPlaceModal,
   VaultLifecycleModal,
   VaultRecoveryModal,
 } from "@/features/vaults/lifecycle";
@@ -214,6 +218,8 @@ export function VaultListScreen() {
     setDataFolderOpen,
     dataFolderDirty,
     setDataFolderDirty,
+    dataFolderExportOpen,
+    setDataFolderExportOpen,
     groupsOpen,
     setGroupsOpen,
     groupsDirty,
@@ -241,6 +247,16 @@ export function VaultListScreen() {
     exportSubmitting,
     exportJob,
     backupsVault,
+    backupSaving,
+    backupSaveStartedAt,
+    backupListRefresh,
+    handleBackupSaveNow,
+    showExportDataFolder,
+    dataFolderExportJob,
+    dataFolderExportCanStart,
+    dataFolderExportWritten,
+    handleStartDataFolderExport,
+    stopDataFolderExport,
     setBackupsVault,
     settingsGroup,
     setSettingsGroup,
@@ -1268,6 +1284,13 @@ export function VaultListScreen() {
                   setDataFolderOpen(true);
                 }}
               />
+              {showExportDataFolder ? (
+                <MenuActionItem
+                  icon="archive"
+                  label={t("app.menu.export_data_folder")}
+                  onPress={() => setDataFolderExportOpen(true)}
+                />
+              ) : null}
             </DropdownPanel>
           </View>
         </View>
@@ -1292,7 +1315,6 @@ export function VaultListScreen() {
 
       <VaultLifecycleModal
         vault={lifecycle.lifecycleVault}
-        intent={lifecycle.lifecycleIntent}
         open={lifecycleRequest !== null}
         submitting={lifecycle.credentialBusy}
         pipelineStep={lifecycle.credentialPipelineStep}
@@ -1309,10 +1331,29 @@ export function VaultListScreen() {
 
       <VaultRecoveryModal
         vault={lifecycle.recoveryVault}
+        leftover={lifecycle.recoveryLeftover}
         open={lifecycle.recoveryOpen}
         submitting={lifecycle.recoverySubmitting}
         onClose={lifecycle.cancelRecovery}
         onAction={lifecycle.handleRecoveryAction}
+      />
+
+      <PlainPlaceModal
+        open={lifecycle.placeOpen}
+        vaultName={lifecycle.placeVaultName}
+        workspaceChoices={lifecycle.placeWorkspaceChoices}
+        submitting={lifecycle.placeSubmitting}
+        warningClass={lifecycle.placeWarningClass}
+        onClose={lifecycle.onPlaceClose}
+        onContinue={lifecycle.onPlaceContinue}
+        onAcceptWarning={lifecycle.onPlaceAcceptWarning}
+      />
+      <PlainHeldModal
+        open={lifecycle.heldOpen}
+        count={lifecycle.heldCount}
+        submitting={lifecycle.heldSubmitting}
+        onApply={lifecycle.onHeldApply}
+        onRestore={lifecycle.onHeldRestore}
       />
 
       <VaultSettingsModal
@@ -1555,6 +1596,11 @@ export function VaultListScreen() {
       <VaultBackupsModal
         vault={backupsVault}
         open={backupsVault !== null}
+        canSaveNow={backupsVault !== null && vaultCanSaveBackupNow(backupsVault, pipelineStatus)}
+        saving={backupSaving}
+        saveStartedAt={backupSaveStartedAt}
+        onSaveNow={handleBackupSaveNow}
+        listRefreshToken={backupListRefresh}
         onClose={() => setBackupsVault(null)}
         onCreateVaultFromBackup={(stamp, fileName, saved = false) => {
           if (!backupsVault) return;
@@ -1602,6 +1648,15 @@ export function VaultListScreen() {
         onClose={() => setDataFolderOpen(false)}
         onDirtyChange={setDataFolderDirty}
         vaultActivityBlocksChange={!appConfigEditAllowed("data_folder", vaults, pipelineStatus)}
+      />
+      <DataFolderExportModal
+        open={dataFolderExportOpen}
+        canStart={dataFolderExportCanStart}
+        job={dataFolderExportJob}
+        written={dataFolderExportWritten}
+        onClose={() => setDataFolderExportOpen(false)}
+        onStart={handleStartDataFolderExport}
+        onStop={stopDataFolderExport}
       />
       <LogsModal open={logsOpen} onClose={() => setLogsOpen(false)} />
       <HelpModal open={helpOpen} onClose={() => setHelpOpen(false)} />

@@ -2,6 +2,7 @@ import type { AppServices } from "@upriv/shared";
 import { desktopAppSettingsService } from "./services/appSettingsService";
 import { desktopBackupService } from "./services/backupService";
 import { desktopCreateVaultService } from "./services/createVaultService";
+import { desktopDataFolderService } from "./services/dataFolderService";
 import { desktopLogService } from "./services/logService";
 import { desktopVaultFileSystemService } from "./services/vaultFileSystemService";
 import { desktopVaultGroupService } from "./services/vaultGroupService";
@@ -21,6 +22,7 @@ export function createDesktopServices(): AppServices {
     vaultGroups: desktopVaultGroupService,
     filesystem: desktopVaultFileSystemService,
     backups: desktopBackupService,
+    dataFolder: desktopDataFolderService,
     createVault: desktopCreateVaultService,
     vaultSecurity: desktopVaultSecurityService,
   };

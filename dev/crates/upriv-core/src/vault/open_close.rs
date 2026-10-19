@@ -1,5 +1,7 @@
 //! Open / close against `store/` with an in-process session.
 
+use std::path::Path;
+
 use crate::config::{load_app_settings_at, load_vault_config, VaultStorageMode};
 use crate::error::{Result, UprivError};
 #[allow(unused_imports)]
@@ -22,7 +24,10 @@ use crate::store::{
     BlobPackMode, ChunkBlobMutation,
 };
 
-use super::backup::{backup_on_close, list_backups};
+use super::backup::{
+    backup_on_close, backup_stamp_present, classify_backup_failure, list_backups,
+    promote_backup_save,
+};
 use super::persistence::{load_vault_persistence, save_vault_persistence, VaultPersistence};
 
 /// Unmount, then start thumbnail cleanup for that path.
@@ -34,7 +39,7 @@ fn discard_mount(mount: Option<crate::mount::MountedVault>) {
         .map(|mounted| mounted.mount_point().to_path_buf());
     drop(mount);
     if let Some(path) = path {
-        crate::mount::purge_mount_thumbnails(&path);
+        crate::mount::purge_folder_thumbnails(&path);
     }
 }
 
@@ -117,27 +122,94 @@ fn try_attach_mount(root: &VaultRoot, vault_id: &str, vault_dir: &std::path::Pat
     }
 }
 
-/// Unlock into a RAM session and attach the FUSE mount. Password bytes are used exactly as given.
-pub fn open_vault(root: &VaultRoot, vault_id: &str, password: &[u8]) -> Result<()> {
-    open_unlocked_session(root, vault_id, password, true)
+/// What [`open_vault`] did. A plaintext vault whose place is not yet confirmed
+/// stays unlocked until [`confirm_plain_destination`] or close.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OpenVaultOutcome {
+    Opened,
+    /// Unlock succeeded. Nothing was written. Confirm this path, or close.
+    PlainConfirm {
+        path: std::path::PathBuf,
+        class: super::plain::PlainFolderClass,
+    },
 }
 
-/// Unlock for an in-process ingest (portable `.7z` import). No FUSE mount:
-/// a half-written vault must not appear on the desktop where a file manager can block on it.
+/// Unlock into a RAM session. An encrypted vault attaches its file-manager
+/// mount when that is on; a plaintext vault fills its folder. Password bytes
+/// are used exactly as given.
+pub fn open_vault(root: &VaultRoot, vault_id: &str, password: &[u8]) -> Result<OpenVaultOutcome> {
+    open_unlocked_session(root, vault_id, password, OpenKind::User { consent: None })
+}
+
+/// Fill the folder of a plaintext vault that is already unlocked, once the
+/// user agreed to `plain_path`. Close drops the keys if they cancel.
+pub fn confirm_plain_destination(
+    root: &VaultRoot,
+    vault_id: &str,
+    plain_path: &Path,
+) -> Result<()> {
+    let vault_dir = vault_dir_or_not_found(root, vault_id)?;
+    if !is_vault_open_at(&vault_dir) {
+        return Err(UprivError::VaultNotOpen(vault_id.to_string()));
+    }
+    let already = with_open_session(&vault_dir, |session| Ok(session.plain.is_some()))?;
+    if already {
+        return Ok(());
+    }
+    if let Err(error) = super::plain::activate(root, vault_id, &vault_dir, Some(plain_path)) {
+        drop_unfinished_session(root, vault_id, &vault_dir);
+        return Err(error);
+    }
+    Ok(())
+}
+
+/// [`open_vault`] once the user agreed to put a plaintext vault's files at
+/// `plain_path`, the path [`UprivError::PlainDestinationUnconfirmed`] named.
+pub fn open_vault_confirmed(
+    root: &VaultRoot,
+    vault_id: &str,
+    password: &[u8],
+    plain_path: &Path,
+) -> Result<OpenVaultOutcome> {
+    let vault_dir = root.vault_dir(vault_id)?;
+    if is_vault_open_at(&vault_dir) {
+        confirm_plain_destination(root, vault_id, plain_path)?;
+        return Ok(OpenVaultOutcome::Opened);
+    }
+    open_unlocked_session(
+        root,
+        vault_id,
+        password,
+        OpenKind::User {
+            consent: Some(plain_path),
+        },
+    )
+}
+
+/// Unlock for an in-process ingest (an import). Nothing appears outside the
+/// app: no FUSE mount a file manager can block on, and no plaintext folder.
 pub(crate) fn open_vault_for_ingest(
     root: &VaultRoot,
     vault_id: &str,
     password: &[u8],
 ) -> Result<()> {
-    open_unlocked_session(root, vault_id, password, false)
+    open_unlocked_session(root, vault_id, password, OpenKind::Ingest).map(|_| ())
+}
+
+#[derive(Clone, Copy)]
+enum OpenKind<'a> {
+    /// The user opens the vault. `consent` confirms a plaintext folder.
+    User { consent: Option<&'a Path> },
+    /// An import streams files into a vault it just made.
+    Ingest,
 }
 
 fn open_unlocked_session(
     root: &VaultRoot,
     vault_id: &str,
     password: &[u8],
-    attach_mount: bool,
-) -> Result<()> {
+    kind: OpenKind<'_>,
+) -> Result<OpenVaultOutcome> {
     if password.is_empty() {
         return Err(UprivError::WrongPassword);
     }
@@ -146,6 +218,17 @@ fn open_unlocked_session(
     with_vault_dir_lock(&vault_dir, || {
         if !vault_dir.host_is_dir() {
             return Err(UprivError::VaultNotFound(vault_dir.clone()));
+        }
+        let config = load_vault_config(&vault_dir)?;
+        let consent = match kind {
+            OpenKind::User { consent } => Some(consent),
+            OpenKind::Ingest => None,
+        };
+        let plain = consent.is_some() && config.storage_mode() == VaultStorageMode::UprivPlain;
+        // A vault another process holds is not a leftover: the lock below
+        // refuses it with the right error.
+        if plain && !crate::runtime_state::vault_is_live(root, vault_id) {
+            super::plain::check_before_unlock(root, vault_id, &config)?;
         }
         with_unlock_lock(|| {
             check_unlock_allowed(&vault_dir)?;
@@ -156,10 +239,6 @@ fn open_unlocked_session(
                 return Err(UprivError::VaultConfigBusy {
                     target: "action.open".into(),
                 });
-            }
-            let config = load_vault_config(&vault_dir)?;
-            if config.storage_mode() == VaultStorageMode::UprivPlain {
-                return Err(UprivError::UprivPlainUnavailable);
             }
             let lock = acquire_vault_lock(root.runtime_lock_path(vault_id)?)?;
             // This process now owns the lock, so any recorded mount is stale.
@@ -176,20 +255,61 @@ fn open_unlocked_session(
             record_unlock_success(&vault_dir);
             let mut session =
                 OpenSession::from_opened(vault_id.to_string(), vault_dir.clone(), opened);
+            // Writes hash only when a close will compare contents. Turning the
+            // skip on later costs one zip, not a re-read.
+            session.index.writes.track_digests =
+                config.backup.enabled && config.backup.skip_unchanged;
             session.lock = Some(lock);
-            session.skip_close_backup = !attach_mount;
+            session.skip_close_backup = consent.is_none();
             insert_session(session)?;
             if let Err(error) = mark_session_open(root, vault_id, None) {
                 let _ = take_session(&vault_dir);
                 return Err(error);
             }
-            if attach_mount {
+            if consent.is_some() && !plain {
+                forget_plain_place(&vault_dir, vault_id);
                 try_attach_mount(root, vault_id, &vault_dir)?;
             }
-            log_event(LogLevel::Info, "vault_opened", &[("id", vault_id)]);
             Ok(())
-        })
+        })?;
+        if let (true, Some(consent)) = (plain, consent) {
+            // Outside the unlock lock: filling a folder can take minutes, and
+            // other vaults must still open meanwhile.
+            match super::plain::activate(root, vault_id, &vault_dir, consent) {
+                Ok(()) => {}
+                Err(UprivError::PlainDestinationUnconfirmed { path, class })
+                    if consent.is_none() =>
+                {
+                    log_event(LogLevel::Info, "vault_opened", &[("id", vault_id)]);
+                    return Ok(OpenVaultOutcome::PlainConfirm { path, class });
+                }
+                Err(error) => {
+                    drop_unfinished_session(root, vault_id, &vault_dir);
+                    return Err(error);
+                }
+            }
+        }
+        log_event(LogLevel::Info, "vault_opened", &[("id", vault_id)]);
+        Ok(OpenVaultOutcome::Opened)
     })
+}
+
+/// An unlock in encrypted mode forgets the plaintext place the user agreed
+/// to, so switching back to plain text asks again.
+fn forget_plain_place(vault_dir: &Path, vault_id: &str) {
+    if with_open_session(vault_dir, super::plain::forget_plain_policy).is_err() {
+        log_event(
+            LogLevel::Warn,
+            "vault_plain_policy_kept",
+            &[("id", vault_id)],
+        );
+    }
+}
+
+/// Drop a session whose open did not finish.
+fn drop_unfinished_session(root: &VaultRoot, vault_id: &str, vault_dir: &Path) {
+    drop(take_session(vault_dir));
+    let _ = mark_session_closed(root, vault_id);
 }
 
 #[derive(Clone, Copy)]
@@ -212,6 +332,23 @@ impl CloseKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CloseVaultOutcome {
     pub backup_failed: bool,
+    /// `disk_full`, `permission`, or `other` when the close backup was not written.
+    pub backup_failure: Option<&'static str>,
+    /// What happened to a plaintext vault's folder.
+    pub plain: Option<super::plain::PlainCloseSummary>,
+}
+
+/// Keep the newest backup for good: it holds the vault from before a session
+/// in which other apps changed most of it. True when it is kept.
+fn pin_newest_backup(root: &VaultRoot, vault_id: &str) -> bool {
+    match list_backups(root, vault_id) {
+        Ok(entries) => match entries.first() {
+            Some(entry) if entry.saved => true,
+            Some(entry) => promote_backup_save(root, vault_id, &entry.stamp).is_ok(),
+            None => false,
+        },
+        Err(_) => false,
+    }
 }
 
 /// Phase of a `close_vault` still running for this vault. `None` when idle.
@@ -227,17 +364,33 @@ fn close_vault_inner(
 ) -> Result<CloseVaultOutcome> {
     let vault_dir = vault_dir_or_not_found(root, vault_id)?;
     let closing = ClosingGuard::enter(&vault_dir)?;
+    let plain_pass = super::plain::before_close(&vault_dir);
     let mut session = take_session(&vault_dir)?;
+    let pin_backup = session
+        .plain
+        .as_ref()
+        .is_some_and(super::plain::wants_pinned_backup);
     let store = vault_dir.join(crate::paths::STORE_DIR_NAME);
     let mut backup_failed = false;
+    let mut backup_failure: Option<&'static str> = None;
+    let mut backup_pinned = false;
     let persist = (|| {
+        // Only blobs this session left dead bytes in. Every other blob was
+        // already measured by the close after its last write.
+        let rewritten: Vec<String> = session
+            .index
+            .writes
+            .rewritten_blobs
+            .iter()
+            .cloned()
+            .collect();
         let packed = match pack_blob_waste(
             &store,
             &session.header,
             &session.content_key,
             &mut session.index,
             BlobPackMode::Close,
-            None,
+            Some(&rewritten),
         ) {
             Ok(mutation) => mutation,
             Err(_error) => {
@@ -267,6 +420,8 @@ fn close_vault_inner(
             super::fs::sync_staged_blobs(&session.staged_blobs)?;
             session.staged_blobs.clear();
         }
+        // Before the seal, so the digests of files written in order are stored.
+        session.index.settle_digest_streams();
         if let Err(error) =
             flush_index_parts(&store, &session.header, &session.index_key, &session.index)
         {
@@ -281,12 +436,18 @@ fn close_vault_inner(
             packed.delete_superseded();
         }
         let hash = content_hash_hex(&store)?;
-        let logical_hash = index_logical_hash(&session.index);
-        // An unreadable config is not the default "skip". The backup attempt
+        // An unreadable config is not the default "skip": the backup attempt
         // reports that failure. A readable config with the key omitted is on.
-        let skip_when_unchanged = load_vault_config(&vault_dir)
-            .map(|config| config.backup.skip_unchanged)
-            .unwrap_or(false);
+        let backup_config = load_vault_config(&vault_dir)
+            .ok()
+            .map(|config| config.backup);
+        let backups_off = backup_config.as_ref().is_some_and(|backup| !backup.enabled);
+        let skip_when_unchanged = backup_config
+            .as_ref()
+            .is_some_and(|backup| backup.enabled && backup.skip_unchanged);
+        // Only a close that may skip its zip needs the contents id.
+        let logical_hash = (skip_when_unchanged && !session.skip_close_backup)
+            .then(|| index_logical_hash(&session.index));
         let previous = load_vault_persistence(&vault_dir).ok().flatten();
         let previous_backup = previous
             .as_ref()
@@ -302,16 +463,16 @@ fn close_vault_inner(
         persistence.backed_up_index_hash = previous_backup.clone();
         persistence.backed_up_stamp = previous_stamp.clone();
         save_vault_persistence(&vault_dir, &persistence)?;
-        if !session.skip_close_backup {
-            let already_backed_up = skip_when_unchanged
-                && logical_hash.as_ref().is_some_and(|hash| {
-                    previous_backup.as_deref() == Some(hash.as_str())
-                        && previous_stamp.as_deref().is_some_and(|stamp| {
-                            list_backups(root, vault_id).is_ok_and(|entries| {
-                                entries.iter().any(|entry| entry.stamp == stamp)
-                            })
-                        })
-                });
+        if pin_backup {
+            backup_pinned = pin_newest_backup(root, vault_id);
+        }
+        if !session.skip_close_backup && !backups_off {
+            let already_backed_up = logical_hash.as_ref().is_some_and(|hash| {
+                previous_backup.as_deref() == Some(hash.as_str())
+                    && previous_stamp
+                        .as_deref()
+                        .is_some_and(|stamp| backup_stamp_present(root, vault_id, stamp))
+            });
             if !already_backed_up {
                 closing.set_phase(ClosePhase::Backup);
                 match backup_on_close(root, vault_id) {
@@ -323,14 +484,20 @@ fn close_vault_inner(
                         }
                     }
                     Ok(None) => {}
-                    Err(_error) => {
+                    Err(error) => {
                         backup_failed = true;
-                        // No `detail`: `UprivError`'s Display text includes filesystem paths.
-                        log_event(
-                            LogLevel::Warn,
-                            "vault_backup_on_close_failed",
-                            &[("id", vault_id)],
-                        );
+                        let class = classify_backup_failure(&error);
+                        backup_failure = Some(class.reason);
+                        let os = class.os.map(|code| code.to_string());
+                        let mut fields = vec![
+                            ("id", vault_id),
+                            ("reason", class.reason),
+                            ("kind", class.kind),
+                        ];
+                        if let Some(code) = os.as_deref() {
+                            fields.push(("os", code));
+                        }
+                        log_event(LogLevel::Warn, "vault_backup_on_close_failed", &fields);
                     }
                 }
             }
@@ -339,13 +506,14 @@ fn close_vault_inner(
     })();
     if let Err(error) = persist {
         if matches!(kind, CloseKind::Shutdown) {
-            // Quit must exit. Drop the session and its mount; do not put them back.
+            // Quit must exit. Drop the session and its mount; do not put them
+            // back. A plaintext folder stays recorded for recovery.
             let mount = session.mount.take();
             drop(session);
             discard_mount(mount);
             return Err(error);
         }
-        let _ = insert_session(session);
+        reinsert_after_failed_close(session, &vault_dir, vault_id);
         return Err(error);
     }
     // Keep the mount until the close is recorded. Dropping it first and then
@@ -358,9 +526,14 @@ fn close_vault_inner(
             return Err(error);
         }
         session.mount = mount;
-        let _ = insert_session(session);
+        reinsert_after_failed_close(session, &vault_dir, vault_id);
         return Err(error);
     }
+    // Wipe the folder while the lock file is still held, so another process
+    // cannot fill it again meanwhile.
+    let plain = session.plain.take().map(|plain| {
+        super::plain::after_close(root, vault_id, &vault_dir, plain, plain_pass, backup_pinned)
+    });
     drop(session);
     discard_mount(mount);
     log_event(
@@ -368,7 +541,20 @@ fn close_vault_inner(
         "vault_closed",
         &[("id", vault_id), ("reason", kind.reason())],
     );
-    Ok(CloseVaultOutcome { backup_failed })
+    Ok(CloseVaultOutcome {
+        backup_failed,
+        backup_failure,
+        plain,
+    })
+}
+
+/// Put back a session whose close could not save it. A plaintext vault
+/// syncs again.
+fn reinsert_after_failed_close(session: OpenSession, vault_dir: &Path, vault_id: &str) {
+    let plain = session.plain.is_some();
+    if insert_session(session).is_ok() && plain {
+        super::plain::resume_after_failed_close(vault_dir, vault_id);
+    }
 }
 
 /// Flush the open session into `store/`. A manual lock.
@@ -506,6 +692,7 @@ mode = "encrypted_dir"
             outcome.backup_failed,
             "close must report the failed snapshot"
         );
+        assert_eq!(outcome.backup_failure, Some("other"));
         assert!(
             !crate::session::is_vault_open_at(&vault_dir),
             "session must still drop when the close backup fails"
@@ -567,6 +754,259 @@ mode = "encrypted_dir"
         let after_edit = list_backups(&root, "notes").unwrap();
         assert_eq!(after_edit.len(), 1);
         assert_ne!(after_edit[0].file_name, first[0].file_name);
+    }
+
+    /// Close timings on this machine. Needs about 200 MiB free in the temp dir:
+    /// `cargo test --release -p upriv-core --lib close_cost_report -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn close_cost_report() {
+        let (_tmp, root) = vault_root_with(&[]);
+        let mut config = sample_config("notes", "Notes");
+        config.backup.keep_last = 50;
+        create_vault(&root, config, b"pass-word-ok", KdfUnlockPreset::M32).unwrap();
+        let timed_close = |label: &str| {
+            let started = std::time::Instant::now();
+            close_vault(&root, "notes").unwrap();
+            let zips = backup_names(&root).len();
+            eprintln!("close {label}: {:?} ({zips} backups)", started.elapsed());
+        };
+
+        open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        crate::vault::fs_mkdir(&root, "notes", "/small").unwrap();
+        for i in 0..2000 {
+            let path = format!("/small/{i}.txt");
+            crate::vault::fs_write_file(&root, "notes", &path, &[b'x'; 1024]).unwrap();
+        }
+        timed_close("after 2000 new small files");
+        open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        timed_close("unchanged, 2000 files");
+
+        let big: Vec<u8> = (0..64 * 1024 * 1024).map(|i| (i % 251) as u8).collect();
+        open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        write_in_pieces(&root, "/big.bin", &big, 128 * 1024);
+        timed_close("after 64 MiB written in order");
+        open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        crate::vault::fs_truncate(&root, "notes", "/big.bin", 0).unwrap();
+        write_in_pieces(&root, "/big.bin", &big, 128 * 1024);
+        timed_close("after the same 64 MiB written again");
+        open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        timed_close("unchanged, all files");
+    }
+
+    fn backup_names(root: &crate::paths::VaultRoot) -> Vec<String> {
+        list_backups(root, "notes")
+            .unwrap()
+            .into_iter()
+            .map(|entry| entry.file_name)
+            .collect()
+    }
+
+    #[test]
+    fn rewriting_the_same_bytes_does_not_create_a_backup() {
+        let (_tmp, root) = vault_root_with(&[]);
+        let mut config = sample_config("notes", "Notes");
+        config.backup.keep_last = 9;
+        create_vault(&root, config, b"pass-word-ok", KdfUnlockPreset::M32).unwrap();
+        open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        crate::vault::fs_write_file(&root, "notes", "/a.txt", b"alpha").unwrap();
+        crate::vault::fs_write_file(&root, "notes", "/b.txt", b"beta").unwrap();
+        close_vault(&root, "notes").unwrap();
+        let first = backup_names(&root);
+        assert_eq!(first.len(), 1);
+
+        // New blob, chunk versions, and timestamps; the node also moves in the index.
+        open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        crate::vault::fs_write_file(&root, "notes", "/a.txt", b"alpha").unwrap();
+        crate::vault::fs_write_file(&root, "notes", "/a.txt", b"alpha").unwrap();
+        close_vault(&root, "notes").unwrap();
+        assert_eq!(backup_names(&root), first);
+
+        // Same size, different bytes.
+        open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        crate::vault::fs_write_file(&root, "notes", "/a.txt", b"ALPHA").unwrap();
+        close_vault(&root, "notes").unwrap();
+        assert_eq!(backup_names(&root).len(), 2);
+    }
+
+    fn sha256_of(bytes: &[u8]) -> String {
+        use sha2::Digest;
+        let mut hasher = sha2::Sha256::new();
+        hasher.update(bytes);
+        crate::store::sha256_hex(hasher)
+    }
+
+    fn sealed_digest(root: &crate::paths::VaultRoot, path: &str) -> Option<String> {
+        let store = root
+            .vault_dir("notes")
+            .unwrap()
+            .join(crate::paths::STORE_DIR_NAME);
+        let opened = open_store(&store, b"pass-word-ok").unwrap();
+        let node = opened.index.find(path).expect(path);
+        node.current_digest().map(str::to_owned)
+    }
+
+    /// FUSE and WinFsp write a file as ranges in order, after a truncate.
+    fn write_in_pieces(root: &crate::paths::VaultRoot, path: &str, bytes: &[u8], piece: usize) {
+        for (i, part) in bytes.chunks(piece).enumerate() {
+            crate::vault::fs_write_range(root, "notes", path, (i * piece) as u64, part).unwrap();
+        }
+    }
+
+    #[test]
+    fn close_seals_the_digest_each_writer_already_held() {
+        let (_tmp, root) = vault_root_with(&[]);
+        create_vault(
+            &root,
+            sample_config("notes", "Notes"),
+            b"pass-word-ok",
+            KdfUnlockPreset::M32,
+        )
+        .unwrap();
+        // Crosses chunk boundaries, and ends mid-chunk.
+        let big: Vec<u8> = (0..700 * 1024).map(|i| (i % 251) as u8).collect();
+        open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        crate::vault::fs_write_file(&root, "notes", "/a.txt", b"alpha").unwrap();
+        crate::vault::fs_write_file(&root, "notes", "/empty.txt", b"").unwrap();
+        write_in_pieces(&root, "/big.bin", &big, 96 * 1024);
+        crate::vault::fs_write_file(&root, "notes", "/gone.txt", b"to empty").unwrap();
+        crate::vault::fs_truncate(&root, "notes", "/gone.txt", 0).unwrap();
+        // A gap past the end is zero-filled.
+        crate::vault::fs_write_range(&root, "notes", "/gap.bin", 0, b"ab").unwrap();
+        crate::vault::fs_write_range(&root, "notes", "/gap.bin", 5, b"cd").unwrap();
+        close_vault(&root, "notes").unwrap();
+
+        assert_eq!(sealed_digest(&root, "a.txt"), Some(sha256_of(b"alpha")));
+        assert_eq!(sealed_digest(&root, "empty.txt"), Some(sha256_of(b"")));
+        assert_eq!(sealed_digest(&root, "big.bin"), Some(sha256_of(&big)));
+        assert_eq!(sealed_digest(&root, "gone.txt"), Some(sha256_of(b"")));
+        assert_eq!(
+            sealed_digest(&root, "gap.bin"),
+            Some(sha256_of(b"ab\0\0\0cd"))
+        );
+    }
+
+    #[test]
+    fn a_write_in_the_middle_drops_the_digest() {
+        let (_tmp, root) = vault_root_with(&[]);
+        let mut config = sample_config("notes", "Notes");
+        config.backup.keep_last = 9;
+        create_vault(&root, config, b"pass-word-ok", KdfUnlockPreset::M32).unwrap();
+        open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        crate::vault::fs_write_file(&root, "notes", "/a.txt", b"abcdef").unwrap();
+        crate::vault::fs_write_range(&root, "notes", "/a.txt", 2, b"XY").unwrap();
+        crate::vault::fs_truncate(&root, "notes", "/a.txt", 5).unwrap();
+        close_vault(&root, "notes").unwrap();
+        assert_eq!(sealed_digest(&root, "a.txt"), None);
+        let first = backup_names(&root);
+        assert_eq!(first.len(), 1);
+
+        // No digest: the file counts by its storage, which did not move.
+        open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        close_vault(&root, "notes").unwrap();
+        assert_eq!(backup_names(&root), first);
+
+        // Rewriting it in place with the same bytes cannot be told apart: one zip.
+        open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        crate::vault::fs_write_range(&root, "notes", "/a.txt", 2, b"XY").unwrap();
+        close_vault(&root, "notes").unwrap();
+        assert_eq!(backup_names(&root).len(), 2);
+    }
+
+    #[test]
+    fn streamed_rewrite_of_the_same_bytes_does_not_create_a_backup() {
+        let (_tmp, root) = vault_root_with(&[]);
+        let mut config = sample_config("notes", "Notes");
+        config.backup.keep_last = 9;
+        create_vault(&root, config, b"pass-word-ok", KdfUnlockPreset::M32).unwrap();
+        let big: Vec<u8> = (0..600 * 1024).map(|i| (i % 241) as u8).collect();
+        open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        write_in_pieces(&root, "/big.bin", &big, 128 * 1024);
+        close_vault(&root, "notes").unwrap();
+        let first = backup_names(&root);
+        assert_eq!(first.len(), 1);
+
+        open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        crate::vault::fs_truncate(&root, "notes", "/big.bin", 0).unwrap();
+        write_in_pieces(&root, "/big.bin", &big, 100 * 1024);
+        close_vault(&root, "notes").unwrap();
+        assert_eq!(backup_names(&root), first);
+    }
+
+    #[test]
+    fn a_packed_file_keeps_its_digest() {
+        let (_tmp, root) = vault_root_with(&[]);
+        let mut config = sample_config("notes", "Notes");
+        config.backup.keep_last = 9;
+        create_vault(&root, config, b"pass-word-ok", KdfUnlockPreset::M32).unwrap();
+        open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        // The second piece rewrites chunk 0, so close packs this small blob.
+        write_in_pieces(&root, "/a.txt", b"hello world", 5);
+        let before_pack = with_open_session(&root.vault_dir("notes").unwrap(), |session| {
+            let node = session.index.find("a.txt").unwrap();
+            Ok(node.as_file().unwrap().0.to_string())
+        })
+        .unwrap();
+        close_vault(&root, "notes").unwrap();
+        let store = root
+            .vault_dir("notes")
+            .unwrap()
+            .join(crate::paths::STORE_DIR_NAME);
+        let opened = open_store(&store, b"pass-word-ok").unwrap();
+        let node = opened.index.find("a.txt").unwrap();
+        assert_ne!(node.as_file().unwrap().0, before_pack, "close packed it");
+        let expected = sha256_of(b"hello world");
+        assert_eq!(node.current_digest(), Some(expected.as_str()));
+        let first = backup_names(&root);
+
+        open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        crate::vault::fs_write_file(&root, "notes", "/a.txt", b"hello world").unwrap();
+        close_vault(&root, "notes").unwrap();
+        assert_eq!(backup_names(&root), first);
+    }
+
+    #[test]
+    fn writes_skip_hashing_when_no_close_compares() {
+        let (_tmp, root) = vault_root_with(&[]);
+        let mut config = sample_config("notes", "Notes");
+        config.backup.skip_unchanged = false;
+        create_vault(&root, config, b"pass-word-ok", KdfUnlockPreset::M32).unwrap();
+        open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        crate::vault::fs_write_file(&root, "notes", "/a.txt", b"alpha").unwrap();
+        write_in_pieces(&root, "/b.txt", b"streamed", 3);
+        close_vault(&root, "notes").unwrap();
+        assert_eq!(sealed_digest(&root, "a.txt"), None);
+        assert_eq!(sealed_digest(&root, "b.txt"), None);
+        assert_eq!(backup_names(&root).len(), 1);
+    }
+
+    #[test]
+    fn close_reads_no_file_contents() {
+        let (_tmp, root) = vault_root_with(&[]);
+        let mut config = sample_config("notes", "Notes");
+        config.backup.keep_last = 9;
+        create_vault(&root, config, b"pass-word-ok", KdfUnlockPreset::M32).unwrap();
+        open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        crate::vault::fs_write_file(&root, "notes", "/a.txt", b"alpha").unwrap();
+        close_vault(&root, "notes").unwrap();
+        let first = backup_names(&root);
+        assert_eq!(first.len(), 1);
+
+        // Break a.txt on disk. Close never decrypts a file, so the sealed
+        // digest still decides and no backup is written.
+        let store = root
+            .vault_dir("notes")
+            .unwrap()
+            .join(crate::paths::STORE_DIR_NAME);
+        let opened = open_store(&store, b"pass-word-ok").unwrap();
+        let (file_id, _, _) = opened.index.find("a.txt").unwrap().as_file().unwrap();
+        let blob = crate::store::blob_path(&store, file_id).unwrap();
+        let len = crate::host_fs::read(&blob).unwrap().len();
+        crate::host_fs::write(&blob, vec![0u8; len]).unwrap();
+
+        open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        close_vault(&root, "notes").unwrap();
+        assert_eq!(backup_names(&root), first);
     }
 
     #[test]

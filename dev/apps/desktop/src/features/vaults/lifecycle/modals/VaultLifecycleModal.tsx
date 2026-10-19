@@ -7,10 +7,8 @@ import {
   lifecycleBusyLabelKey,
   requireVaultErrorI18nKey,
   resolveVaultPasswordHint,
-  storageModeIsPlaintext,
   VAULT_ERROR_CODES,
   type VaultListItem,
-  type VaultLifecycleIntent,
 } from "@upriv/shared";
 import { useLoadingBudget } from "@upriv/shared/react";
 import { useVaultLifecycleService } from "@/platform/services";
@@ -22,7 +20,6 @@ const lifecyclePasswordClass =
 
 interface VaultLifecycleModalProps {
   vault: VaultListItem | null;
-  intent: VaultLifecycleIntent | null;
   open: boolean;
   submitting?: boolean;
   pipelineStep?: number;
@@ -31,30 +28,12 @@ interface VaultLifecycleModalProps {
   /** Prefill after a failed attempt — the field, not the session RAM map. */
   initialPassword?: string;
   onClose: () => void;
-  onConfirm: (password: string | null) => void;
+  onConfirm: (password: string) => void;
 }
 
-function modalTitleKey(intent: VaultLifecycleIntent): I18nKey {
-  switch (intent) {
-    case "unlock":
-      return "unlock.title";
-    case "close":
-      return "close.dialog.title";
-  }
-}
-
-function confirmLabelKey(intent: VaultLifecycleIntent): I18nKey {
-  switch (intent) {
-    case "unlock":
-      return "unlock.submit";
-    case "close":
-      return "action.lock";
-  }
-}
-
+/** Unlock password dialog. Lock starts the close without a dialog. */
 export function VaultLifecycleModal({
   vault,
-  intent,
   open,
   submitting = false,
   pipelineStep = 0,
@@ -69,7 +48,6 @@ export function VaultLifecycleModal({
   const passwordId = useId();
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const requiresPassword = Boolean(open && intent === "unlock");
 
   useEffect(() => {
     if (!open) {
@@ -78,7 +56,7 @@ export function VaultLifecycleModal({
     }
     setPassword(initialPassword ?? "");
     setError(null);
-  }, [open, vault?.id, intent, initialPassword]);
+  }, [open, vault?.id, initialPassword]);
 
   useEffect(() => {
     if (!verifyErrorKey) return;
@@ -93,33 +71,32 @@ export function VaultLifecycleModal({
     },
   );
 
-  if (!open || !vault || !intent) return null;
+  if (!open || !vault) return null;
 
   const handleConfirm = () => {
-    if (requiresPassword && !lifecycleService.validateLifecyclePassword(password)) {
+    if (!lifecycleService.validateLifecyclePassword(password)) {
       setError(t(requireVaultErrorI18nKey(VAULT_ERROR_CODES.WRONG_PASSWORD)));
       return;
     }
     setError(null);
-    onConfirm(requiresPassword ? password : null);
+    onConfirm(password);
   };
 
-  const canSubmit =
-    !submitting && (!requiresPassword || lifecycleService.validateLifecyclePassword(password));
+  const canSubmit = !submitting && lifecycleService.validateLifecyclePassword(password);
   const passwordHint = resolveVaultPasswordHint(vault);
 
   return (
     <Modal
       open={open}
-      title={t(modalTitleKey(intent))}
-      titleIcon={intent === "unlock" ? "lock-open" : "lock"}
+      title={t("unlock.title")}
+      titleIcon="lock-open"
       contextTitle={vault.displayName}
       onClose={onClose}
       dismissible
       panelClassName="max-w-md"
       footer={
         <div className="flex flex-wrap justify-end gap-2">
-          {submitting && intent === "unlock" ? null : (
+          {submitting ? null : (
             <Button variant="ghost" size="sm" onClick={onClose}>
               {t("action.cancel")}
             </Button>
@@ -127,45 +104,33 @@ export function VaultLifecycleModal({
           <Button variant="primary" size="sm" disabled={!canSubmit} onClick={handleConfirm}>
             {submitting
               ? budgetStartedAt != null
-                ? t(lifecycleBusyLabelKey(intent, pipelineStep))
+                ? t(lifecycleBusyLabelKey("unlock", pipelineStep))
                 : t("vault.status.queued")
-              : t(confirmLabelKey(intent))}
+              : t("unlock.submit")}
           </Button>
         </div>
       }
     >
       <div className="space-y-4 px-0.5 pb-1">
-        {intent === "close" && storageModeIsPlaintext(vault.storageMode) ? (
-          <p className="text-sm leading-relaxed text-on-surface-variant">
-            {t("close.dialog.close_hint_plain")}
-          </p>
-        ) : null}
-        {intent === "close" && !storageModeIsPlaintext(vault.storageMode) ? (
-          <p className="text-sm leading-relaxed text-on-surface-variant">
-            {t("close.dialog.close_hint")}
-          </p>
-        ) : null}
-        {requiresPassword ? (
-          <div className="space-y-2">
-            <SettingsField label={t("unlock.password")} htmlFor={passwordId}>
-              <PasswordInput
-                id={passwordId}
-                value={password}
-                onChange={(event) => {
-                  setPassword(event.target.value);
-                  setError(null);
-                }}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" && canSubmit) handleConfirm();
-                }}
-                autoComplete={intent === "unlock" ? "current-password" : "off"}
-                autoFocus
-                inputClassName={lifecyclePasswordClass}
-              />
-            </SettingsField>
-            {passwordHint ? <VaultPasswordHintCallout hint={passwordHint} /> : null}
-          </div>
-        ) : null}
+        <div className="space-y-2">
+          <SettingsField label={t("unlock.password")} htmlFor={passwordId}>
+            <PasswordInput
+              id={passwordId}
+              value={password}
+              onChange={(event) => {
+                setPassword(event.target.value);
+                setError(null);
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && canSubmit) handleConfirm();
+              }}
+              autoComplete="current-password"
+              autoFocus
+              inputClassName={lifecyclePasswordClass}
+            />
+          </SettingsField>
+          {passwordHint ? <VaultPasswordHintCallout hint={passwordHint} /> : null}
+        </div>
         {error ? <p className="text-sm text-on-error-container">{error}</p> : null}
         {budget.visible ? (
           <LoadingBudgetHint budgetMs={budget.budgetMs} remainingMs={budget.remainingMs} />

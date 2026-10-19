@@ -22,11 +22,11 @@ const ZIP_WRITE_BUFFER: usize = 256 * 1024;
 
 /// Batches small zip headers and stored bytes. A storage-access file pays for
 /// each write; seeking flushes first so the zip offsets stay correct.
-struct SeekBufWriter<W: Write + Seek> {
+pub(super) struct SeekBufWriter<W: Write + Seek> {
     inner: BufWriter<W>,
 }
 
-fn buffered_zip_file(file: File) -> SeekBufWriter<File> {
+pub(super) fn buffered_zip_file(file: File) -> SeekBufWriter<File> {
     SeekBufWriter {
         inner: BufWriter::with_capacity(ZIP_WRITE_BUFFER, file),
     }
@@ -49,7 +49,7 @@ impl<W: Write + Seek> Seek for SeekBufWriter<W> {
     }
 }
 
-fn zip_err(path: &Path, error: impl std::fmt::Display) -> UprivError {
+pub(super) fn zip_err(path: &Path, error: impl std::fmt::Display) -> UprivError {
     UprivError::VaultStoreInvalid {
         path: path.to_path_buf(),
         detail: error.to_string(),
@@ -78,22 +78,17 @@ fn probe_store_zip_reader<R: Read + Seek>(reader: R) -> Result<()> {
 
 /// A vault zip is recognized by `store/header/vault.header`, including one outer folder.
 /// A symlink at the final component is not a vault zip.
+/// Reads only the central directory, buffered: one zip of a large vault is a
+/// few reads, not a seek per entry.
 pub(crate) fn zip_contains_store_header(path: &Path) -> bool {
     let Ok(file) = crate::paths::open_nofollow(path, crate::paths::NofollowMode::Read) else {
         return false;
     };
-    let Ok(mut archive) = ZipArchive::new(file) else {
+    let Ok(archive) = ZipArchive::new(std::io::BufReader::new(file)) else {
         return false;
     };
-    for index in 0..archive.len() {
-        let Ok(entry) = archive.by_index(index) else {
-            continue;
-        };
-        if zip_entry_is_store_header(entry.name()) {
-            return true;
-        }
-    }
-    false
+    let found = archive.file_names().any(zip_entry_is_store_header);
+    found
 }
 
 fn zip_entry_is_store_header(name: &str) -> bool {
@@ -353,7 +348,7 @@ fn add_dir<W: Write + std::io::Seek>(
     Ok(())
 }
 
-fn open_regular_nofollow(src: &Path) -> Result<File> {
+pub(super) fn open_regular_nofollow(src: &Path) -> Result<File> {
     match crate::paths::open_nofollow(src, crate::paths::NofollowMode::Read) {
         Ok(file) => Ok(file),
         Err(error) => match crate::paths::nofollow_reject(&error) {

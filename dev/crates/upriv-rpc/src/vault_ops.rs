@@ -5,20 +5,20 @@ use std::path::Path;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use upriv_core::{
-    abort_import_vault, acknowledge_dirty_close, classify_import_zip_bytes,
-    classify_import_zip_path, close_all_vaults, delete_backups, delete_vault,
-    export_backups_to_path, export_logical_seven_zip, export_logical_seven_zip_to_path,
-    export_store_zip, export_store_zip_to_path, fs_create_file, fs_create_folder, fs_delete,
-    fs_ensure_folder, fs_import_from_os_path, fs_import_from_os_path_deferred, fs_list_tree,
-    fs_mkdir, fs_move, fs_os_path, fs_read_file, fs_read_range, fs_rename, fs_seal_staged_imports,
-    fs_tree_revision, fs_truncate, fs_write_file, import_logical_files_zip,
-    import_logical_files_zip_path, import_logical_os_path, import_logical_seven_zip,
-    import_logical_seven_zip_path, import_store_from_archive_path, import_store_zip,
-    ingest_import_directory, list_backups, parse_backup_import_path, parse_embedded_settings,
-    probe_export_password, probe_logical_seven_zip, probe_logical_seven_zip_path, probe_store_zip,
-    promote_backup_save, read_backup_zip_bytes, read_import_archive_bytes,
-    read_import_zip_settings, read_zip_config_toml, seven_zip_export_available, vault_list_item,
-    KdfUnlockPreset, VaultConfig, ZipImportClass,
+    abort_import_vault, classify_import_zip_bytes, classify_import_zip_path, close_all_vaults,
+    delete_backups, delete_vault, export_backups_to_path, export_logical_seven_zip,
+    export_logical_seven_zip_to_path, export_store_zip, export_store_zip_to_path, fs_create_file,
+    fs_create_folder, fs_delete, fs_ensure_folder, fs_import_from_os_path,
+    fs_import_from_os_path_deferred, fs_list_tree, fs_mkdir, fs_move, fs_os_path, fs_read_file,
+    fs_read_range, fs_rename, fs_seal_staged_imports, fs_tree_revision, fs_truncate, fs_write_file,
+    import_logical_files_zip, import_logical_files_zip_path, import_logical_os_path,
+    import_logical_seven_zip, import_logical_seven_zip_path, import_store_from_archive_path,
+    import_store_zip, ingest_import_directory, list_backups, parse_backup_import_path,
+    parse_embedded_settings, probe_export_password, probe_logical_seven_zip,
+    probe_logical_seven_zip_path, probe_store_zip, promote_backup_save, read_backup_zip_bytes,
+    read_import_archive_bytes, read_import_zip_settings, read_zip_config_toml, save_backup_now,
+    seven_zip_export_available, vault_list_item, BackupEntry, KdfUnlockPreset, VaultConfig,
+    ZipImportClass,
 };
 
 use super::secret::{secret_bytes, SecretString};
@@ -261,10 +261,10 @@ fn fsync_path(path: &std::path::Path) -> std::io::Result<()> {
     // Windows `FlushFileBuffers` requires write access. Read-only open fails.
     #[cfg(windows)]
     {
-        return std::fs::OpenOptions::new()
+        std::fs::OpenOptions::new()
             .write(true)
             .open(path)?
-            .sync_all();
+            .sync_all()
     }
     #[cfg(not(windows))]
     {
@@ -383,10 +383,15 @@ fn infer_import_kind(kind: Option<&str>, archive_path: Option<&str>) -> &'static
 
 pub(super) fn app_shutdown() -> RpcResponse {
     match optional_vault_root() {
-        Ok(Some(root)) => match close_all_vaults(&root) {
-            Ok(_) => ok(json!(null)),
-            Err(error) => map_core_err(error),
-        },
+        Ok(Some(root)) => {
+            // The daemon waits for its workers before it exits. A cancelled
+            // data-folder export stops within one buffer and removes its file.
+            upriv_core::cancel_data_folder_export(root.root());
+            match close_all_vaults(&root) {
+                Ok(_) => ok(json!(null)),
+                Err(error) => map_core_err(error),
+            }
+        }
         Ok(None) => ok(json!(null)),
         Err(response) => response,
     }
@@ -779,21 +784,6 @@ pub fn ingest_content_fd(vault_id: &str, logical_path: &str, fd: i32) -> RpcResp
     }
 }
 
-pub(super) fn vault_recover_ack(params: Value) -> RpcResponse {
-    let parsed: VaultIdParams = match serde_json::from_value(params) {
-        Ok(v) => v,
-        Err(error) => return err("invalid_request", error.to_string()),
-    };
-    let root = match require_vault_root() {
-        Ok(root) => root,
-        Err(response) => return response,
-    };
-    match acknowledge_dirty_close(&root, parsed.id.trim()) {
-        Ok(()) => ok(json!(null)),
-        Err(error) => map_core_err(error),
-    }
-}
-
 pub(super) fn vault_export_capabilities(_params: Value) -> RpcResponse {
     ok(json!({ "sevenZip": seven_zip_export_available() }))
 }
@@ -1137,14 +1127,34 @@ pub(super) fn backup_list(params: Value) -> RpcResponse {
     };
     match list_backups(&root, parsed.id.trim()) {
         Ok(entries) => ok(json!({
-            "backups": entries.iter().map(|e| json!({
-                "stamp": e.stamp,
-                "fileName": e.file_name,
-                "createdAt": e.created_at,
-                "sizeBytes": e.size_bytes,
-                "saved": e.saved,
-            })).collect::<Vec<_>>(),
+            "backups": entries.iter().map(backup_entry_json).collect::<Vec<_>>(),
         })),
+        Err(error) => map_core_err(error),
+    }
+}
+
+fn backup_entry_json(entry: &BackupEntry) -> Value {
+    json!({
+        "stamp": entry.stamp,
+        "fileName": entry.file_name,
+        "createdAt": entry.created_at,
+        "sizeBytes": entry.size_bytes,
+        "saved": entry.saved,
+    })
+}
+
+/// Zip the closed vault into `backups/saves/` now. Returns the new save.
+pub(super) fn backup_save(params: Value) -> RpcResponse {
+    let parsed: VaultIdParams = match serde_json::from_value(params) {
+        Ok(v) => v,
+        Err(error) => return err("invalid_request", error.to_string()),
+    };
+    let root = match require_vault_root() {
+        Ok(root) => root,
+        Err(response) => return response,
+    };
+    match save_backup_now(&root, parsed.id.trim()) {
+        Ok(entry) => ok(json!({ "backup": backup_entry_json(&entry) })),
         Err(error) => map_core_err(error),
     }
 }

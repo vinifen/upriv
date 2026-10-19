@@ -36,6 +36,10 @@ export function useBackupService(): AppServices["backups"] {
   return useServices().backups;
 }
 
+export function useDataFolderService(): AppServices["dataFolder"] {
+  return useServices().dataFolder;
+}
+
 export function useLogService(): AppServices["logs"] {
   return useServices().logs;
 }

@@ -69,8 +69,14 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
   tRef.current = t;
   const { colors, typography } = useTheme();
   const vaultRoot = useVaultRootService();
-  const { settings, settingsReady, settingsLoadFailed, vaultRootEpoch, reloadSettings } =
-    useAppSettingsContext();
+  const {
+    settings,
+    settingsReady,
+    settingsLoadFailed,
+    vaultRootEpoch,
+    reloadSettings,
+    getSettingsSnapshot,
+  } = useAppSettingsContext();
   const [ready, setReady] = useState(false);
   /** Starts true so the launch resolve runs under the `vaultRootResolve` budget. */
   const [applying, setApplying] = useState(true);
@@ -91,8 +97,6 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
   const [envOverridePath, setEnvOverridePath] = useState<string | null>(null);
   const [settingsLoadTimedOut, setSettingsLoadTimedOut] = useState(false);
   const resolveGen = useRef(0);
-  const settingsRef = useRef(settings);
-  settingsRef.current = settings;
   const readyRef = useRef(ready);
   readyRef.current = ready;
   const prevEpochRef = useRef(vaultRootEpoch);
@@ -102,7 +106,10 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
   const runResolve = useCallback((): Promise<void> => {
     if (!settingsReady) return Promise.resolve();
     const gen = ++resolveGen.current;
-    const app = settingsRef.current.app;
+    // The context snapshot, not this render's `settings`: Setup, Repair, and
+    // Recovery call back right after reloading the new folder's settings,
+    // before the Gate re-renders. A stale mode would resolve the old folder.
+    const app = getSettingsSnapshot().app;
     let wireOrAliasPath = app.vault_root_mode === "custom_root" ? app.upriv_root_path.trim() : "";
 
     return (async () => {
@@ -580,7 +587,7 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
         setResolveError(tRef.current(mobileErrorI18nKey(error, "error.service_unavailable")));
       }
     })();
-  }, [settingsReady, vaultRoot]);
+  }, [getSettingsSnapshot, settingsReady, vaultRoot]);
 
   const runResolveRef = useRef(runResolve);
   runResolveRef.current = runResolve;

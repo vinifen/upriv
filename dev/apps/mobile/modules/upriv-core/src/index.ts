@@ -57,6 +57,15 @@ export type UprivCoreNativeModule = {
   /** Drop that mount. */
   unmountSafRoot(): void;
   /**
+   * Mount Rust `/upriv-saf-export` on a folder picked for Export data folder,
+   * beside the data folder mount. The zip is written straight into that tree.
+   * Throws `saf_unreachable` when its volume is gone, `saf_unauthorized` when
+   * the grant is.
+   */
+  mountSafExport(treeUri: string): void;
+  /** Drop the export mount. */
+  unmountSafExport(): void;
+  /**
    * Open an existing OS path in the system Files app (Android).
    * Encrypted vaults have no OS folder — only a live mount / `upriv_plain` path.
    * Optional: Expo Go and older native builds omit this method.

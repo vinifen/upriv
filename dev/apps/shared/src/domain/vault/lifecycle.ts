@@ -1,27 +1,20 @@
 import type { VaultRow } from "./types";
-import { resolveVaultDisplayStatus, storageModeIsPlaintext } from "./types";
+import { resolveVaultDisplayStatus } from "./types";
 
 export type VaultLifecycleIntent = "unlock" | "close";
 
+/**
+ * The unlock password dialog for one vault. Lock never opens a dialog: it
+ * starts the close at once, since a plaintext folder was checked at open.
+ */
 export interface VaultLifecycleRequest {
   vaultId: string;
-  intent: VaultLifecycleIntent;
 }
 
 /**
- * Idle auto-close runs for every open vault, including a future `upriv_plain`
- * session. The lock is the normal close, so plaintext wipes its folder.
- * Callers must not consult `requiresCloseDialog` — that confirm is only for a
- * manual lock.
+ * Idle auto-close runs for every open vault, including `upriv_plain`.
+ * The lock is the normal close, so plaintext wipes its folder.
  */
 export function canRunIdleAutoClose(vault: VaultRow): boolean {
   return resolveVaultDisplayStatus(vault) === "open";
-}
-
-/**
- * Show a lock dialog only to confirm wiping an open `upriv_plain` folder.
- * Encrypted lock starts the pipeline immediately.
- */
-export function requiresCloseDialog(vault: VaultRow): boolean {
-  return storageModeIsPlaintext(vault.storageMode) && resolveVaultDisplayStatus(vault) === "open";
 }

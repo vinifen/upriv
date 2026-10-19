@@ -102,6 +102,13 @@ describe("configEditGateAllows", () => {
     expect(appConfigEditAllowed("workspace.path", [closed])).toBe(true);
     expect(appConfigEditAllowed("workspace.path", [open])).toBe(false);
   });
+
+  it("root_idle waits for a data-folder export, with or without vaults", () => {
+    const closed = vaultRowFixture({ id: "a" });
+    const exporting = { dataFolderExporting: true };
+    expect(appConfigEditAllowed("data_folder", [closed], exporting)).toBe(false);
+    expect(appConfigEditAllowed("data_folder", [], exporting)).toBe(false);
+  });
 });
 
 describe("vaultConfigEditAllowed", () => {

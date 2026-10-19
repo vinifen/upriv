@@ -38,6 +38,95 @@ pub struct VaultIndex {
     /// Not sealed. Cleared after the index that abandoned these spans is flushed.
     #[serde(skip)]
     pub dead_until_seal: Vec<DeadBlobSpan>,
+    /// Not sealed. What this session's writes left for close to look at.
+    #[serde(skip)]
+    pub writes: SessionWrites,
+}
+
+/// Most files appended from byte 0 at the same time that keep a running digest.
+/// Past this the oldest stream is bound to its file as it is; a later append
+/// to that file counts by its storage.
+const MAX_DIGEST_STREAMS: usize = 16;
+
+/// RAM-only bookkeeping of one open session, so close needs no extra disk reads.
+#[derive(Clone)]
+pub struct SessionWrites {
+    /// Writers hash plaintext they already hold. Off when no close compares it.
+    pub track_digests: bool,
+    /// Blobs a range write or truncate left dead bytes in. Close packs only these.
+    pub rewritten_blobs: std::collections::BTreeSet<String>,
+    /// Running digest of files written in order from byte 0, by `file_id`.
+    streams: Vec<DigestStream>,
+}
+
+#[derive(Clone)]
+struct DigestStream {
+    file_id: String,
+    hasher: sha2::Sha256,
+    len: u64,
+}
+
+impl Default for SessionWrites {
+    fn default() -> Self {
+        Self {
+            track_digests: true,
+            rewritten_blobs: Default::default(),
+            streams: Vec::new(),
+        }
+    }
+}
+
+impl std::fmt::Debug for SessionWrites {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SessionWrites")
+            .field("track_digests", &self.track_digests)
+            .field("rewritten_blobs", &self.rewritten_blobs)
+            .field("streams", &self.streams.len())
+            .finish()
+    }
+}
+
+/// Hasher state is not compared: two trackers over the same files and lengths
+/// are the same bookkeeping.
+impl PartialEq for SessionWrites {
+    fn eq(&self, other: &Self) -> bool {
+        self.track_digests == other.track_digests
+            && self.rewritten_blobs == other.rewritten_blobs
+            && self.streams.len() == other.streams.len()
+            && self
+                .streams
+                .iter()
+                .zip(&other.streams)
+                .all(|(a, b)| a.file_id == b.file_id && a.len == b.len)
+    }
+}
+
+impl Eq for SessionWrites {}
+
+pub(crate) fn sha256_hex(hasher: sha2::Sha256) -> String {
+    use sha2::Digest;
+    format!("sha256:{:x}", hasher.finalize())
+}
+
+impl SessionWrites {
+    /// The running digest of `file_id` when it covers exactly `len` bytes.
+    pub(crate) fn take_stream(&mut self, file_id: &str, len: u64) -> Option<sha2::Sha256> {
+        let at = self.streams.iter().position(|s| s.file_id == file_id)?;
+        let stream = self.streams.remove(at);
+        (stream.len == len).then_some(stream.hasher)
+    }
+
+    pub(crate) fn forget_stream(&mut self, file_id: &str) {
+        self.streams.retain(|s| s.file_id != file_id);
+    }
+
+    /// A pack moved this file to a new blob without changing its bytes.
+    pub(crate) fn moved_blob(&mut self, from: &str, to: &str) {
+        if let Some(stream) = self.streams.iter_mut().find(|s| s.file_id == from) {
+            stream.file_id = to.to_string();
+        }
+        self.rewritten_blobs.remove(from);
+    }
 }
 
 /// One logical entry — a file or a directory. Directories are stored explicitly
@@ -49,6 +138,20 @@ pub struct VaultNode {
     /// Unix epoch milliseconds (see `crate::time::unix_millis`).
     pub created_at: u64,
     pub modified_at: u64,
+    /// Plaintext digest for the close backup check, set by the write that
+    /// already held the bytes. A digest bound to older storage is ignored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_digest: Option<ContentDigest>,
+}
+
+/// SHA-256 of a file's plaintext, bound to the storage it was written to.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ContentDigest {
+    /// `sha256:<hex>` of the plaintext bytes.
+    pub sha256: String,
+    /// [`VaultNode::storage_tag`] when it was computed. A rewrite, pack, or
+    /// truncate moves the tag, so a stale digest is never reused.
+    pub storage: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -89,6 +192,7 @@ impl VaultNode {
             },
             created_at: now,
             modified_at: now,
+            content_digest: None,
         }
     }
 
@@ -99,7 +203,49 @@ impl VaultNode {
             kind: VaultNodeKind::Dir,
             created_at: now,
             modified_at: now,
+            content_digest: None,
         }
+    }
+
+    /// Where a file's ciphertext lives: blob id, size, chunk versions and
+    /// offsets. Chunk AAD binds the id and versions, so the same tag means the
+    /// same plaintext. `None` for a directory.
+    pub fn storage_tag(&self) -> Option<String> {
+        use sha2::{Digest, Sha256};
+        let VaultNodeKind::File {
+            file_id,
+            size,
+            chunk_versions,
+            chunk_offsets,
+        } = &self.kind
+        else {
+            return None;
+        };
+        let mut hasher = Sha256::new();
+        hasher.update(file_id.as_bytes());
+        hasher.update(size.to_le_bytes());
+        for version in chunk_versions {
+            hasher.update([0]);
+            hasher.update(version.as_bytes());
+        }
+        for offset in chunk_offsets {
+            hasher.update(offset.to_le_bytes());
+        }
+        Some(format!("sha256:{:x}", hasher.finalize()))
+    }
+
+    /// The plaintext digest when it still matches this file's storage.
+    pub fn current_digest(&self) -> Option<&str> {
+        let digest = self.content_digest.as_ref()?;
+        (Some(digest.storage.as_str()) == self.storage_tag().as_deref())
+            .then_some(digest.sha256.as_str())
+    }
+
+    /// Record `sha256` as the digest of this file's current storage.
+    pub(crate) fn bind_digest(&mut self, sha256: String) {
+        self.content_digest = self
+            .storage_tag()
+            .map(|storage| ContentDigest { sha256, storage });
     }
 
     pub fn is_dir(&self) -> bool {
@@ -134,11 +280,47 @@ impl VaultIndex {
             format_version: super::header::FORMAT_VERSION,
             nodes: Vec::new(),
             dead_until_seal: Vec::new(),
+            writes: SessionWrites::default(),
         }
     }
 
     pub fn clear_unsealed_holes(&mut self) {
         self.dead_until_seal.clear();
+    }
+
+    /// Keep `hasher` as the running digest of `file_id`, which now holds `len`
+    /// bytes. Past the cap, the oldest stream becomes its file's digest now.
+    pub(crate) fn put_digest_stream(&mut self, file_id: &str, hasher: sha2::Sha256, len: u64) {
+        self.writes.forget_stream(file_id);
+        if self.writes.streams.len() >= MAX_DIGEST_STREAMS {
+            let oldest = self.writes.streams.remove(0);
+            self.bind_stream(oldest);
+        }
+        self.writes.streams.push(DigestStream {
+            file_id: file_id.to_string(),
+            hasher,
+            len,
+        });
+    }
+
+    /// Before close seals the index: each running digest becomes its file's
+    /// digest. Binding once here keeps appends from re-hashing the chunk list.
+    pub(crate) fn settle_digest_streams(&mut self) {
+        for stream in std::mem::take(&mut self.writes.streams) {
+            self.bind_stream(stream);
+        }
+    }
+
+    fn bind_stream(&mut self, stream: DigestStream) {
+        let sha256 = sha256_hex(stream.hasher);
+        for node in &mut self.nodes {
+            let covers = node
+                .as_file()
+                .is_some_and(|(id, size, _)| id == stream.file_id && size == stream.len);
+            if covers {
+                node.bind_digest(sha256.clone());
+            }
+        }
     }
 
     pub fn find(&self, path: &str) -> Option<&VaultNode> {

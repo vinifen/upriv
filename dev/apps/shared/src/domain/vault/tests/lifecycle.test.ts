@@ -1,23 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { canRunIdleAutoClose, requiresCloseDialog } from "..";
+import { canRunIdleAutoClose } from "..";
 import { vaultRowFixture } from "./fixtures.shared";
-
-describe("requiresCloseDialog", () => {
-  it("skips the dialog for an encrypted vault", () => {
-    const vault = vaultRowFixture({ session: "open", storageMode: "encrypted_dir" });
-    expect(requiresCloseDialog(vault)).toBe(false);
-  });
-
-  it("shows the dialog to confirm an open plaintext wipe", () => {
-    const vault = vaultRowFixture({ session: "open", storageMode: "upriv_plain" });
-    expect(requiresCloseDialog(vault)).toBe(true);
-  });
-
-  it("skips the dialog when a plaintext vault is already closed", () => {
-    const vault = vaultRowFixture({ session: null, storageMode: "upriv_plain" });
-    expect(requiresCloseDialog(vault)).toBe(false);
-  });
-});
 
 describe("canRunIdleAutoClose", () => {
   it("runs for an open vault", () => {
@@ -30,9 +13,8 @@ describe("canRunIdleAutoClose", () => {
     expect(canRunIdleAutoClose(vault)).toBe(false);
   });
 
-  it("runs for an open plaintext vault so the future wipe uses the same close", () => {
+  it("runs for an open plaintext vault, whose close wipes its folder", () => {
     const vault = vaultRowFixture({ session: "open", storageMode: "upriv_plain" });
     expect(canRunIdleAutoClose(vault)).toBe(true);
-    expect(requiresCloseDialog(vault)).toBe(true);
   });
 });

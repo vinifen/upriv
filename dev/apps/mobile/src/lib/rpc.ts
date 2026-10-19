@@ -22,7 +22,17 @@ import {
   backupSnapshotFileName,
   bytesFromContentB64,
   parsePathWriteResult,
+  parsePlainCloseSummary,
+  parsePlainDestination,
+  parsePlainHeldStatus,
+  parsePlainLeftover,
+  parseBackupFailure,
+  parseDataFolderExportStatus,
   type CloseVaultOutcome,
+  type DataFolderExportProgress,
+  type PlainDestination,
+  type PlainHeldStatus,
+  type PlainLeftover,
   type VaultClosePhase,
   type AllowlistedUiLogEvent,
   type AppLogFile,
@@ -554,8 +564,47 @@ export async function rpcVaultCreate(input: CreateVaultInput): Promise<VaultList
   return parseVaultListItemWire((raw as { vault?: unknown }).vault);
 }
 
-export async function rpcVaultOpen(id: string, password: string): Promise<void> {
-  await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_OPEN, { id, password });
+export async function rpcVaultOpen(id: string, password: string): Promise<unknown> {
+  return nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_OPEN, { id, password });
+}
+
+export async function rpcVaultPlainConfirm(id: string, path: string): Promise<void> {
+  await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_PLAIN_CONFIRM, { id, path });
+}
+
+export async function rpcVaultPlainDestination(id: string): Promise<PlainDestination> {
+  const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_PLAIN_DESTINATION, { id });
+  const dest = parsePlainDestination(raw);
+  if (!dest) {
+    throw new RpcError(BRIDGE.INVALID_RESPONSE, "vault_plain_destination: expected path", raw);
+  }
+  return dest;
+}
+
+export async function rpcVaultPlainLeftover(id: string): Promise<PlainLeftover | null> {
+  const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_PLAIN_LEFTOVER, { id });
+  if (raw === null) return null;
+  const leftover = parsePlainLeftover(raw);
+  if (!leftover) {
+    throw new RpcError(BRIDGE.INVALID_RESPONSE, "vault_plain_leftover: expected object", raw);
+  }
+  return leftover;
+}
+
+export async function rpcVaultPlainRemove(id: string): Promise<void> {
+  await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_PLAIN_REMOVE, { id });
+}
+
+export async function rpcVaultPlainSync(id: string): Promise<void> {
+  await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_PLAIN_SYNC, { id });
+}
+
+export async function rpcVaultPlainHeld(id: string): Promise<PlainHeldStatus> {
+  return parsePlainHeldStatus(await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_PLAIN_STATUS, { id }));
+}
+
+export async function rpcVaultPlainDeletions(id: string, apply: boolean): Promise<void> {
+  await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_PLAIN_DELETIONS, { id, apply });
 }
 
 /** Unlock a just-created vault so files can be streamed. Does not mount. */
@@ -646,9 +695,15 @@ export async function rpcVaultChangeKdf(
 
 function parseCloseVaultOutcome(raw: unknown): CloseVaultOutcome {
   if (typeof raw !== "object" || raw === null) {
-    return { backupFailed: false };
+    return { backupFailed: false, backupFailure: null, plain: null };
   }
-  return { backupFailed: (raw as { backupFailed?: unknown }).backupFailed === true };
+  const body = raw as { backupFailed?: unknown; backupFailure?: unknown; plain?: unknown };
+  const backupFailed = body.backupFailed === true;
+  return {
+    backupFailed,
+    backupFailure: backupFailed ? (parseBackupFailure(body.backupFailure) ?? "other") : null,
+    plain: parsePlainCloseSummary(body.plain),
+  };
 }
 
 export async function rpcVaultClosePhase(id: string): Promise<VaultClosePhase | null> {
@@ -724,10 +779,6 @@ function parseVaultResult(raw: unknown, label: string): VaultListItem {
 
 export async function rpcVaultDelete(id: string): Promise<void> {
   await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_DELETE, { id });
-}
-
-export async function rpcVaultRecoverAck(id: string): Promise<void> {
-  await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_RECOVER_ACK, { id });
 }
 
 export async function rpcVaultExportCapabilities(): Promise<{ sevenZip: boolean }> {
@@ -1049,6 +1100,34 @@ export async function rpcBackupDelete(id: string, stamps: readonly string[]): Pr
 
 export async function rpcBackupPromote(id: string, stamp: string): Promise<void> {
   await nativeInvokeRaw(CORE_RPC_COMMANDS.BACKUP_PROMOTE, { id, stamp });
+}
+
+export async function rpcBackupSave(id: string): Promise<VaultBackupEntry> {
+  const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.BACKUP_SAVE, { id });
+  return parseBackupEntry(requireRecord(raw, "backup_save").backup, id);
+}
+
+/** Zip the whole `.upriv` into `upriv-<stamp>.zip` inside `destDir`. */
+export async function rpcDataFolderExport(
+  destDir: string,
+): Promise<{ path: string; size: number }> {
+  const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.DATA_FOLDER_EXPORT, { destDir });
+  const written = parsePathWriteResult(raw);
+  if (!written) {
+    throw new RpcError(BRIDGE.INVALID_RESPONSE, "data_folder_export: expected path+size", raw);
+  }
+  return written;
+}
+
+export async function rpcDataFolderExportStatus(): Promise<DataFolderExportProgress | null> {
+  return parseDataFolderExportStatus(
+    await nativeInvokeRaw(CORE_RPC_COMMANDS.DATA_FOLDER_EXPORT_STATUS, {}),
+  );
+}
+
+export async function rpcDataFolderExportCancel(): Promise<boolean> {
+  const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.DATA_FOLDER_EXPORT_CANCEL, {});
+  return requireRecord(raw, "data_folder_export_cancel").cancelled === true;
 }
 
 export async function rpcBackupGet(id: string, stamp: string): Promise<Uint8Array> {

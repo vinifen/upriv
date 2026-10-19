@@ -54,6 +54,19 @@ export const CORE_RPC_COMMANDS = {
   VAULT_LIST: "vault_list",
   VAULT_CREATE: "vault_create",
   VAULT_OPEN: "vault_open",
+  /** Fill a plaintext folder after unlock, using the path the user confirmed. */
+  VAULT_PLAIN_CONFIRM: "vault_plain_confirm",
+  /** The folder an unlock would write, and what kind of place it is. */
+  VAULT_PLAIN_DESTINATION: "vault_plain_destination",
+  /** Leftover plaintext folder for recovery, or null. */
+  VAULT_PLAIN_LEFTOVER: "vault_plain_leftover",
+  /** Wipe a leftover plaintext folder (recovery Remove). */
+  VAULT_PLAIN_REMOVE: "vault_plain_remove",
+  /** One sync pass of an open plaintext folder. Mobile calls this on foreground. */
+  VAULT_PLAIN_SYNC: "vault_plain_sync",
+  VAULT_PLAIN_STATUS: "vault_plain_status",
+  /** Apply or restore held mass deletions. */
+  VAULT_PLAIN_DELETIONS: "vault_plain_deletions",
   VAULT_CLOSE: "vault_close",
   /** Rewrap the closed vault under a new password. Same master key; files stay. */
   VAULT_CHANGE_PASSWORD: "vault_change_password",
@@ -68,7 +81,6 @@ export const CORE_RPC_COMMANDS = {
   /** Deep rename: display name + folder/`[vault].id` migration (vault closed). */
   VAULT_RENAME: "vault_rename",
   VAULT_DELETE: "vault_delete",
-  VAULT_RECOVER_ACK: "vault_recover_ack",
   VAULT_EXPORT: "vault_export",
   VAULT_EXPORT_CAPABILITIES: "vault_export_capabilities",
   /** Argon2id unlock of a closed vault. Does not pack an export. */
@@ -115,7 +127,18 @@ export const CORE_RPC_COMMANDS = {
   BACKUP_LIST: "backup_list",
   BACKUP_DELETE: "backup_delete",
   BACKUP_PROMOTE: "backup_promote",
+  /** Zip the closed vault straight into `backups/saves/`. */
+  BACKUP_SAVE: "backup_save",
   BACKUP_GET: "backup_get",
+  /**
+   * Zip the whole `.upriv` into `upriv-<stamp>.zip` in the chosen folder. Every
+   * vault must be closed or in recovery; they stay held until the zip is written.
+   */
+  DATA_FOLDER_EXPORT: "data_folder_export",
+  /** Bytes copied by the running data-folder export, or `running: false`. */
+  DATA_FOLDER_EXPORT_STATUS: "data_folder_export_status",
+  /** Stop the running data-folder export. Its partial zip is removed. */
+  DATA_FOLDER_EXPORT_CANCEL: "data_folder_export_cancel",
 } as const;
 
 /**

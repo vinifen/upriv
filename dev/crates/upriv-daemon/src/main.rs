@@ -9,12 +9,15 @@
 //! - `upriv-fs-io`: close, delete, backup download.
 //! - `upriv-rewrap`: password and unlock-RAM change (safety zip plus header commit).
 //! - `upriv-pack`: zip and `.7z` import, and export. One at a time.
+//! - `upriv-data-folder`: the zip of the whole data folder. Work it refuses on
+//!   the other lanes answers at once instead of waiting behind the copy.
 //! - `upriv-import`: file imports. One thread per import slot (one file on a
 //!   single core, up to four on a large desktop).
 //!
 //! Light RPCs stay on the stdin loop. Electron matches responses by `id`.
 //! One Argon2 at a time: single worker + core `with_unlock_lock`.
 
+mod plain_watch;
 mod wire;
 
 use std::io::{self, BufRead, Write};
@@ -175,12 +178,15 @@ fn run() -> io::Result<()> {
     }));
     // Pin distribution once after spawn env is in place (Electron sets UPRIV_*).
     let _ = upriv_core::init_app_distribution();
+    plain_watch::install();
 
     let stdout = Arc::new(Mutex::new(io::stdout()));
     let (argon2_tx, argon2_join) = spawn_named_worker("upriv-argon2", Arc::clone(&stdout));
     let (lifecycle_tx, lifecycle_join) = spawn_named_worker("upriv-fs-io", Arc::clone(&stdout));
     let (rewrap_tx, rewrap_join) = spawn_named_worker("upriv-rewrap", Arc::clone(&stdout));
     let (pack_tx, pack_join) = spawn_named_worker("upriv-pack", Arc::clone(&stdout));
+    let (data_folder_tx, data_folder_join) =
+        spawn_named_worker("upriv-data-folder", Arc::clone(&stdout));
     let import_count = upriv_core::import_slots();
     let (import_tx, import_joins) =
         spawn_worker_pool(import_count, "upriv-import", Arc::clone(&stdout));
@@ -257,14 +263,14 @@ fn run() -> io::Result<()> {
         match inbound {
             WireIn::Request { id, method, params } => {
                 if is_heavy_method(&method, &params) {
-                    let lane = heavy_lane(&method, &params)
-                        .expect("heavy method is argon2, lifecycle, rewrap, pack, or import");
+                    let lane = heavy_lane(&method, &params).expect("heavy method has a lane");
                     let tx = match lane {
                         HeavyLane::Argon2 => &argon2_tx,
                         HeavyLane::Lifecycle => &lifecycle_tx,
                         HeavyLane::Rewrap => &rewrap_tx,
                         HeavyLane::Pack => &pack_tx,
                         HeavyLane::Import => &import_tx,
+                        HeavyLane::DataFolder => &data_folder_tx,
                     };
                     if tx.send(HeavyJob::Request { id, method, params }).is_err() {
                         write_out(&stdout, &internal_error_response(id))?;
@@ -304,6 +310,11 @@ fn run() -> io::Result<()> {
     drop(pack_tx);
     if let Err(error) = pack_join.join() {
         eprintln!("[upriv-daemon] pack worker join panicked: {error:?}");
+    }
+    let _ = data_folder_tx.send(HeavyJob::Shutdown);
+    drop(data_folder_tx);
+    if let Err(error) = data_folder_join.join() {
+        eprintln!("[upriv-daemon] data-folder worker join panicked: {error:?}");
     }
     for _ in 0..import_joins.len() {
         let _ = import_tx.send(HeavyJob::Shutdown);

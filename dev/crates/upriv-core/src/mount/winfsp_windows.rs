@@ -20,8 +20,7 @@ use crate::error::{Result, UprivError};
 use crate::paths::VaultRoot;
 use crate::session::with_open_session;
 use crate::store::{
-    file_name, parent_logical, to_ui_path, INTERNAL_WORKSPACE_FILE, SEED_LOGICAL_PATH,
-    VAULT_FS_MAX_INLINE_BYTES,
+    file_name, is_reserved_logical, parent_logical, to_ui_path, VAULT_FS_MAX_INLINE_BYTES,
 };
 use crate::vault::fs as vfs;
 
@@ -554,7 +553,7 @@ impl EncryptedFs {
     }
 
     fn find_node(&self, requested: &str) -> std::result::Result<NodeSnap, i32> {
-        if is_hidden(requested) {
+        if is_reserved_logical(requested) {
             return Err(nt(STATUS_OBJECT_NAME_NOT_FOUND));
         }
         if requested.is_empty() {
@@ -641,7 +640,7 @@ impl EncryptedFs {
             let parent_snap = snap_in(session, parent)?;
             let mut children = Vec::new();
             for node in &session.index.nodes {
-                if is_hidden(&node.path) {
+                if is_reserved_logical(&node.path) {
                     continue;
                 }
                 if parent_logical(&node.path).unwrap_or("") != logical {
@@ -671,7 +670,8 @@ impl EncryptedFs {
         let dir = self.vault_dir()?;
         with_open_session(&dir, |session| {
             Ok(session.index.nodes.iter().any(|node| {
-                !is_hidden(&node.path) && parent_logical(&node.path).unwrap_or("") == logical
+                !is_reserved_logical(&node.path)
+                    && parent_logical(&node.path).unwrap_or("") == logical
             }))
         })
         .map_err(map_err)
@@ -782,7 +782,7 @@ impl EncryptedFs {
         let Ok(logical) = self.path_of(opened.id) else {
             return;
         };
-        if logical.is_empty() || is_hidden(&logical) {
+        if logical.is_empty() || is_reserved_logical(&logical) {
             return;
         }
         let ui = to_ui_path(&logical);
@@ -795,7 +795,7 @@ impl EncryptedFs {
 
     fn ensure_deletable(&self, opened: &Opened) -> std::result::Result<(), i32> {
         let logical = self.path_of(opened.id)?;
-        if logical.is_empty() || is_hidden(&logical) {
+        if logical.is_empty() || is_reserved_logical(&logical) {
             return Err(nt(STATUS_ACCESS_DENIED));
         }
         if opened.is_dir && self.has_user_child(&logical)? {
@@ -816,7 +816,7 @@ impl EncryptedFs {
 
     fn relocate(&self, opened: &Opened, dest: &str, replace: bool) -> std::result::Result<(), i32> {
         let from = self.path_of(opened.id)?;
-        if from.is_empty() || is_hidden(&from) {
+        if from.is_empty() || is_reserved_logical(&from) {
             return Err(nt(STATUS_ACCESS_DENIED));
         }
         refuse_leaf(dest)?;
@@ -847,7 +847,7 @@ fn snap_in(
     session: &mut crate::session::OpenSession,
     logical: &str,
 ) -> std::result::Result<NodeSnap, UprivError> {
-    if is_hidden(logical) {
+    if is_reserved_logical(logical) {
         return Err(UprivError::VaultPathNotFound(logical.to_string()));
     }
     if logical.is_empty() {
@@ -872,10 +872,6 @@ fn snap_from(node: &crate::store::VaultNode) -> NodeSnap {
         created_at: node.created_at,
         modified_at: node.modified_at,
     }
-}
-
-fn is_hidden(logical: &str) -> bool {
-    file_name(logical) == INTERNAL_WORKSPACE_FILE || logical == SEED_LOGICAL_PATH
 }
 
 fn allocation_size(size: u64) -> u64 {
@@ -951,7 +947,7 @@ fn refuse_leaf(logical: &str) -> std::result::Result<(), i32> {
         return Ok(());
     }
     match rejected_file_name(file_name(logical)) {
-        None if !is_hidden(logical) => Ok(()),
+        None if !is_reserved_logical(logical) => Ok(()),
         Some(RejectedName::Invalid) => Err(nt(STATUS_OBJECT_NAME_INVALID)),
         _ => Err(nt(STATUS_ACCESS_DENIED)),
     }
@@ -1208,6 +1204,9 @@ unsafe extern "C" fn cleanup_file(
         };
         let marked = opened.delete_on_cleanup.load(Ordering::Relaxed);
         if flags & FSP_CLEANUP_DELETE == 0 && !marked {
+            // The handle is closing: seal what it wrote. Cleanup cannot report
+            // an error; a failed seal stays pending for the next one or close.
+            let _ = vfs::fs_flush(&fs.root, &fs.vault_id);
             return;
         }
         fs.delete_opened(opened);
@@ -1301,10 +1300,12 @@ unsafe extern "C" fn flush_file(
     file_info: *mut FileInfo,
 ) -> i32 {
     catch_status(|| {
+        let fs = vault(fs)?;
+        // FlushFileBuffers on a file, or a flush of the whole volume.
+        vfs::fs_flush(&fs.root, &fs.vault_id).map_err(map_err)?;
         if context.is_null() {
             return Ok(());
         }
-        let fs = vault(fs)?;
         let opened = opened(context)?;
         let logical = fs.path_of(opened.id)?;
         write_info(file_info, fs.file_info_of(&fs.find_node(&logical)?));

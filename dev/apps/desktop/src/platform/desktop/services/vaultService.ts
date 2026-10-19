@@ -13,7 +13,6 @@ import {
   rpcVaultImportOsPath,
   rpcVaultImportZip,
   rpcVaultList,
-  rpcVaultRecoverAck,
   rpcVaultRename,
   rpcVaultStoreSize,
 } from "@/lib/rpc";
@@ -36,5 +35,4 @@ export const desktopVaultService = createLiveVaultService({
   import7z: (input) => rpcVaultImport7z(input),
   importFilesZip: (input) => rpcVaultImportFilesZip(input),
   importOsPath: (input) => rpcVaultImportOsPath(input),
-  recoverDirtyClose: (vaultId) => rpcVaultRecoverAck(vaultId),
 });

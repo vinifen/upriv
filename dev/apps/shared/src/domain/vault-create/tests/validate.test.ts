@@ -429,12 +429,12 @@ describe("canSubmitCreateVault", () => {
     expect(canSubmitCreateVault(draft, [], [], null)).toBe(false);
   });
 
-  it("refuses upriv_plain until wipe exists", () => {
+  it("allows upriv_plain on the advanced step", () => {
     const draft = createVaultDraftFixture([], {
       storage: { mode: "upriv_plain" },
     });
-    expect(validateCreateVaultStep("advanced", draft, [])).toContain("plain_not_available");
-    expect(canSubmitCreateVault(draft, [])).toBe(false);
+    expect(validateCreateVaultStep("advanced", draft, [])).toEqual([]);
+    expect(canSubmitCreateVault(draft, [])).toBe(true);
   });
 
   it("still submits when mount is default", () => {

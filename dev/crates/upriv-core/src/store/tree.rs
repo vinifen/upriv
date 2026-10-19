@@ -14,6 +14,31 @@ use crate::error::{Result, UprivError};
 /// Hidden from the explorer; still a real logical file in `store/`.
 pub const INTERNAL_WORKSPACE_FILE: &str = ".upriv-workspace.json";
 
+/// Names that start with this belong to plaintext folder mode: the folder
+/// marker, its temporary files, and [`PLAIN_POLICY_FILE`].
+pub const PLAIN_RESERVED_PREFIX: &str = ".upriv-plain";
+
+/// Encrypted record of the place a plaintext folder was confirmed for, per system.
+pub const PLAIN_POLICY_FILE: &str = ".upriv-plain-policy.json";
+
+/// Paths the vault keeps for itself: the seed at the root, the file-manager
+/// layout in every folder, and anything under a [`PLAIN_RESERVED_PREFIX`] name.
+/// They are never listed, mounted, exported, or written to a plaintext folder.
+pub fn is_reserved_logical(path: &str) -> bool {
+    path == SEED_LOGICAL_PATH
+        || file_name(path) == INTERNAL_WORKSPACE_FILE
+        || is_plain_internal(path)
+}
+
+/// True when any part of `path` starts with [`PLAIN_RESERVED_PREFIX`].
+///
+/// Imports skip these paths instead of failing: a copy of a plaintext folder
+/// carries its marker, and the marker is not vault data.
+pub fn is_plain_internal(path: &str) -> bool {
+    path.split('/')
+        .any(|part| part.starts_with(PLAIN_RESERVED_PREFIX))
+}
+
 /// Windows component limit; matches `@upriv/shared` `LOGICAL_FILE_NAME_MAX_LENGTH`.
 pub const LOGICAL_NAME_MAX: usize = 255;
 
@@ -413,7 +438,7 @@ pub fn build_file_tree(index: &VaultIndex, root_name: &str) -> FileTreeNode {
     let mut paths: Vec<&VaultNode> = index.nodes.iter().collect();
     paths.sort_by(|a, b| a.path.cmp(&b.path));
     for node in paths {
-        if file_name(&node.path) == INTERNAL_WORKSPACE_FILE || node.path == SEED_LOGICAL_PATH {
+        if is_reserved_logical(&node.path) {
             continue;
         }
         let mut cur = &mut root;
@@ -464,6 +489,20 @@ mod tests {
     };
 
     const PW: &[u8] = b"tree-ops-password";
+
+    #[test]
+    fn reserved_paths_are_the_seed_the_layout_and_plaintext_names() {
+        assert!(is_reserved_logical(".upriv-workspace.json"));
+        assert!(is_reserved_logical("notes/.upriv-workspace.json"));
+        assert!(is_reserved_logical("upriv-seed.txt"));
+        assert!(!is_reserved_logical("notes/upriv-seed.txt"));
+        assert!(is_reserved_logical(".upriv-plain"));
+        assert!(is_reserved_logical(PLAIN_POLICY_FILE));
+        assert!(is_reserved_logical("notes/.upriv-plain-tmp-1"));
+        assert!(is_reserved_logical(".upriv-plain-x/inside.txt"));
+        assert!(!is_reserved_logical("notes.txt"));
+        assert!(!is_reserved_logical("notes/upriv-plain.txt"));
+    }
 
     #[test]
     fn mkdir_rename_move_delete_round_trip() {

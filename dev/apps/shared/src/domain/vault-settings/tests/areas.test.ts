@@ -4,13 +4,10 @@ import { vaultRowControls, vaultSettingsMenuAreas, type VaultRowControls } from 
 import type { VaultPipelineListStatus } from "../../vault/types";
 
 describe("vaultSettingsMenuAreas", () => {
-  it("includes password and unlock RAM only for a closed encrypted vault", () => {
-    expect(vaultSettingsMenuAreas(vaultRowFixture())).toEqual([
-      "preferences",
-      "password",
-      "kdf",
-      "group",
-    ]);
+  it("includes password and unlock RAM for a closed vault of either mode", () => {
+    const areas = ["preferences", "password", "kdf", "group"] as const;
+    expect(vaultSettingsMenuAreas(vaultRowFixture())).toEqual(areas);
+    expect(vaultSettingsMenuAreas(vaultRowFixture({ storageMode: "upriv_plain" }))).toEqual(areas);
   });
 
   it("omits both when the vault cannot rewrap", () => {
@@ -22,9 +19,6 @@ describe("vaultSettingsMenuAreas", () => {
       preferencesAndGroup,
     );
     expect(vaultSettingsMenuAreas(vaultRowFixture({ session: "closing" }))).toEqual(
-      preferencesAndGroup,
-    );
-    expect(vaultSettingsMenuAreas(vaultRowFixture({ storageMode: "upriv_plain" }))).toEqual(
       preferencesAndGroup,
     );
     expect(vaultSettingsMenuAreas(vaultRowFixture(), { openingVaultIds: ["demo"] })).toEqual(
@@ -48,7 +42,7 @@ describe("vaultSettingsMenuAreas", () => {
       vaultSettingsMenuAreas(vaultRowFixture({ storageMode: "upriv_plain" }), {
         passwordChangeVaultIds: ["demo"],
       }),
-    ).toEqual(["preferences", "group"]);
+    ).toEqual(["preferences", "password", "group"]);
   });
 });
 

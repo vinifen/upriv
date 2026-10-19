@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useVaultGroupService, useLogService, useVaultService } from "@/platform/services";
+import {
+  useBackupService,
+  useDataFolderService,
+  useVaultGroupService,
+  useLogService,
+  useVaultService,
+} from "@/platform/services";
 import { useAppSettingsContext } from "@/features/system/settings";
 import { useAppRefresh } from "@/features/system/refresh";
 import type { CreateVaultGroupAssignment, CreateVaultResult } from "@upriv/shared";
@@ -20,6 +26,9 @@ import {
   createDraftFromImportPackage,
   createVaultImportPackage,
   canDeleteVaultNow,
+  dataFolderCanExport,
+  dataFolderZipName,
+  vaultCanSaveBackupNow,
   vaultRowControls,
   displayNameToGroupId,
   resolveVaultDisplayStatus,
@@ -43,6 +52,7 @@ import {
   type VaultListSort,
   type VaultListSortDirection,
   type VaultListViewMode,
+  type VaultPathWriteResult,
   type VaultRewrapRun,
   type VaultSettingsAreaId,
 } from "@upriv/shared";
@@ -50,7 +60,7 @@ import { useFileManager } from "@/features/vaults/file-manager";
 import { useTranslation } from "@/i18n";
 import { useVaultLifecycleActions } from "@/features/vaults/lifecycle";
 import { useErrorToast } from "@/hooks/useErrorToast";
-import { useLoadingBudget } from "@upriv/shared/react";
+import { useDataFolderExportJob, useLoadingBudget, useVaultBackupJob } from "@upriv/shared/react";
 import { useDaemonReady } from "@/lib/useDaemonReady";
 import { useVaultListState } from "./useVaultListState";
 import { useVaultListModals } from "./useVaultListModals";
@@ -78,7 +88,6 @@ export function useVaultListScreen() {
   const rewrapActivityRef = useRef<VaultRewrapRun | null>(null);
   const [rewrapRun, setRewrapRun] = useState<VaultRewrapRun | null>(null);
   const blockOpenVaultIdsRef = useRef(new Set<string>());
-  blockOpenVaultIdsRef.current = new Set(rewrapRun ? [rewrapRun.vaultId] : []);
   const onRewrapRunChange = useCallback((run: VaultRewrapRun | null) => {
     rewrapActivityRef.current = run;
     setRewrapRun(run);
@@ -481,19 +490,58 @@ export function useVaultListScreen() {
 
   const modals = useVaultListModals(vaults, groups);
   const { lifecycleRequest, setLifecycleRequest } = modals;
+  const backupService = useBackupService();
+  const [backupListRefresh, setBackupListRefresh] = useState(0);
+  const backupJob = useVaultBackupJob(backupService, {
+    onSaved: (vaultId) => {
+      const name = vaults.find((vault) => vault.id === vaultId)?.displayName ?? vaultId;
+      showToast(t("toast.backup_now_saved", { name }));
+      setBackupListRefresh((token) => token + 1);
+    },
+    onFailed: (_vaultId, error) => {
+      showError(error, "toast.backup_now_failed");
+    },
+    onTimedOut: () => {
+      showToast(t("error.operation_timed_out"));
+    },
+  });
+  const dataFolderService = useDataFolderService();
+  const [dataFolderExportWritten, setDataFolderExportWritten] =
+    useState<VaultPathWriteResult | null>(null);
+  const dataFolderExport = useDataFolderExportJob(dataFolderService, {
+    onExported: (written) => {
+      setDataFolderExportWritten(written);
+      showToast(t("toast.data_folder_exported", { name: dataFolderZipName(written.path) }));
+    },
+    onFailed: (error) => {
+      if (shouldBumpVaultRootEpoch(error)) {
+        void reportVaultRootIntegrityFailure(error);
+        return;
+      }
+      showError(error, "toast.data_folder_export_failed");
+    },
+    onCancelled: () => {
+      showToast(t("toast.data_folder_export_cancelled"));
+    },
+    onTimedOut: () => {
+      showToast(t("error.operation_timed_out"));
+    },
+  });
+  // The export holds every vault: none may open until it ends.
+  blockOpenVaultIdsRef.current = new Set(
+    [
+      rewrapRun?.vaultId,
+      backupJob.job?.vaultId,
+      ...(dataFolderExport.job ? vaults.map((vault) => vault.id) : []),
+    ].filter((id): id is string => id != null),
+  );
 
   const settingsPersistVaultIdsRef = useRef(new Set<string>());
 
   useEffect(() => {
-    if (
-      !rewrapRun ||
-      lifecycleRequest?.intent !== "unlock" ||
-      lifecycleRequest.vaultId !== rewrapRun.vaultId
-    ) {
-      return;
-    }
+    if (!lifecycleRequest || !blockOpenVaultIdsRef.current.has(lifecycleRequest.vaultId)) return;
     setLifecycleRequest(null);
-  }, [lifecycleRequest, setLifecycleRequest, rewrapRun]);
+  }, [backupJob.job, dataFolderExport.job, lifecycleRequest, rewrapRun, setLifecycleRequest]);
 
   const lifecycle = useVaultLifecycleActions({
     vaults,
@@ -541,9 +589,13 @@ export function useVaultListScreen() {
       passwordChangeVaultIds: rewrapRun?.kind === "password" ? [rewrapRun.vaultId] : undefined,
       kdfChangeVaultIds: rewrapRun?.kind === "kdf" ? [rewrapRun.vaultId] : undefined,
       rewrapStartedAt: rewrapRun?.startedAt,
+      backupJobVaultIds: backupJob.job ? [backupJob.job.vaultId] : undefined,
+      backupJobStartedAt: backupJob.job?.startedAt,
+      dataFolderExporting: dataFolderExport.job !== null,
     }),
-    [lifecycle.pipelineListStatus, rewrapRun],
+    [backupJob.job, dataFolderExport.job, lifecycle.pipelineListStatus, rewrapRun],
   );
+  const dataFolderExportCanStart = dataFolderCanExport(vaults, pipelineListStatus);
   rowControlsRef.current = new Map(
     vaults.map((vault) => [vault.id, vaultRowControls(vault, pipelineListStatus)]),
   );
@@ -758,9 +810,17 @@ export function useVaultListScreen() {
     [updateVaultUnlockPreset],
   );
 
+  /** A new vault would land beside a data-folder copy in progress. Core refuses it too. */
+  const refuseCreateWhileDataFolderExports = useCallback((): boolean => {
+    if (!dataFolderExport.job) return false;
+    showToast(t("error.data_folder_export_busy"));
+    return true;
+  }, [dataFolderExport.job, showToast, t]);
+
   const handleCreateVaultFromBackup = useCallback(
     (stamp: string, fileName: string, saved = false) => {
       if (!modals.backupVault) return;
+      if (refuseCreateWhileDataFolderExports()) return;
       modals.setCreateVaultInitialDraft(
         createDraftFromBackup(
           stamp,
@@ -777,16 +837,17 @@ export function useVaultListScreen() {
       modals.setBackupVaultId(null);
       modals.setCreateVaultOpen(true);
     },
-    [existingDisplayNames, existingOrders, groups, modals],
+    [existingDisplayNames, existingOrders, groups, modals, refuseCreateWhileDataFolderExports],
   );
 
   const openCreateVaultWithDraft = useCallback(
     (draft: ReturnType<typeof createDraftFromImportPackage>, step: "source" | null = "source") => {
+      if (refuseCreateWhileDataFolderExports()) return;
       modals.setCreateVaultInitialDraft(draft);
       modals.setCreateVaultInitialStep(step);
       modals.setCreateVaultOpen(true);
     },
-    [modals],
+    [modals, refuseCreateWhileDataFolderExports],
   );
 
   const handleCreateFromScratch = useCallback(() => {
@@ -821,6 +882,7 @@ export function useVaultListScreen() {
     modals.settingsGroupId ||
     modals.appSettingsOpen ||
     modals.dataFolderOpen ||
+    modals.dataFolderExportOpen ||
     modals.logsOpen ||
     modals.helpOpen ||
     modals.noteVaultId ||
@@ -1140,6 +1202,11 @@ export function useVaultListScreen() {
           );
         }
       },
+      // Hidden while it cannot start; shown while it runs so the window can be reopened.
+      showExportDataFolder:
+        dataFolderService !== undefined &&
+        (dataFolderExport.job !== null || dataFolderExportCanStart),
+      onOpenExportDataFolder: () => modals.setDataFolderExportOpen(true),
       showCloseAllVaults:
         vaults.filter((vault) => resolveVaultDisplayStatus(vault) === "open").length > 1,
       onCloseAllVaults: () => {
@@ -1205,14 +1272,19 @@ export function useVaultListScreen() {
       },
       onOpenGroupSettings: modals.setSettingsGroupId,
       onToggleGroupCollapsed: handleToggleGroupCollapsed,
-      onExportVault: lifecycle.handleExportVault,
+      onExportVault: (vault: VaultListItem) => {
+        if (dataFolderExport.job) {
+          showToast(t("error.data_folder_export_busy"));
+          return;
+        }
+        lifecycle.handleExportVault(vault);
+      },
       onLockVault: lifecycle.handleLockVault,
       onUnlockVault: lifecycle.handleUnlockVault,
     },
     importDrop,
     lifecycle: {
       lifecycleVault: modals.lifecycleVault,
-      lifecycleIntent: modals.lifecycleRequest?.intent ?? null,
       lifecycleOpen: modals.lifecycleRequest !== null,
       lifecycleSubmitting: lifecycle.credentialBusy,
       lifecyclePipelineStep:
@@ -1237,6 +1309,21 @@ export function useVaultListScreen() {
         if (!modals.recoverySubmitting) modals.setRecoveryVaultId(null);
       },
       onRecoveryAction: lifecycle.handleRecoveryAction,
+      recoveryLeftover: lifecycle.recoveryLeftover,
+      placeOpen: lifecycle.placeOpen,
+      placeVaultName: lifecycle.placeVaultName,
+      placeWorkspaceChoices: lifecycle.placeWorkspaceChoices,
+      placeSubmitting: lifecycle.placeSubmitting,
+      placeWarningClass: lifecycle.placeWarningClass,
+      onPlaceClose: lifecycle.onPlaceClose,
+      onPlaceContinue: lifecycle.onPlaceContinue,
+      onPlaceAcceptWarning: lifecycle.onPlaceAcceptWarning,
+      heldOpen: lifecycle.heldOpen,
+      heldCount: lifecycle.heldCount,
+      heldPaths: lifecycle.heldPaths,
+      heldSubmitting: lifecycle.heldSubmitting,
+      onHeldApply: lifecycle.onHeldApply,
+      onHeldRestore: lifecycle.onHeldRestore,
       closeAllUnsavedOpen: lifecycle.closeAllUnsavedOpen,
       closeAllUnsavedSaving: lifecycle.closeAllUnsavedSaving,
       onCloseAllUnsavedCancel: lifecycle.cancelCloseAllUnsaved,
@@ -1261,6 +1348,25 @@ export function useVaultListScreen() {
     backups: {
       vault: modals.backupVault,
       open: modals.backupVaultId !== null,
+      canSaveNow:
+        modals.backupVault !== null &&
+        vaultCanSaveBackupNow(modals.backupVault, pipelineListStatus),
+      saving: backupJob.job !== null && backupJob.job.vaultId === modals.backupVault?.id,
+      saveStartedAt:
+        backupJob.job !== null && backupJob.job.vaultId === modals.backupVault?.id
+          ? backupJob.job.startedAt
+          : null,
+      onSaveNow: () => {
+        const vault = modals.backupVault;
+        if (!vault) return;
+        if (backupJob.job) {
+          if (backupJob.job.vaultId !== vault.id) showToast(t("toast.backup_now_busy"));
+          return;
+        }
+        if (!vaultCanSaveBackupNow(vault, pipelineListStatus)) return;
+        backupJob.start(vault.id);
+      },
+      listRefreshToken: backupListRefresh,
       onClose: () => modals.setBackupVaultId(null),
       onCreateVaultFromBackup: handleCreateVaultFromBackup,
       onDownloadNotice: showToast,
@@ -1341,6 +1447,19 @@ export function useVaultListScreen() {
         void modals.setDataFolderOpen(false);
       },
       onDirtyChange: modals.setDataFolderDirty,
+    },
+    dataFolderExport: {
+      open: modals.dataFolderExportOpen,
+      canStart: dataFolderExportCanStart,
+      job: dataFolderExport.job,
+      written: dataFolderExportWritten,
+      onClose: () => modals.setDataFolderExportOpen(false),
+      onStart: (destDir: string) => {
+        if (!dataFolderExportCanStart) return;
+        setDataFolderExportWritten(null);
+        dataFolderExport.start(destDir);
+      },
+      onStop: dataFolderExport.stop,
     },
     logs: {
       open: modals.logsOpen,

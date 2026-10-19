@@ -21,7 +21,7 @@
 |----|-------------|------|---------|
 | `store` | `upriv_core::store` (planned) | `vaults/<id>/store/` (ciphertext) | — |
 | `session` | `upriv_core::session` (planned) | — | mount + RAM (`encrypted_dir`). App folder: `{place}/workspace/{display_name}/`. Own folder: `{path}/{display_name}/` |
-| `plain` | `upriv_core::plain` (planned) | `{parent}/{display_name}/` in plaintext | only when `storage.mode = upriv_plain` |
+| `plain` | `upriv_core::vault::plain` | `{parent}/{display_name}/` while open | only when `storage.mode = upriv_plain` |
 
 No `archive/` layer. Portable `.zip` / `.7z` are **export files**, not rest layout. See PRD §1.6 and SECURITY-CRYPTO.
 
@@ -36,7 +36,7 @@ No `archive/` layer. Portable `.zip` / `.7z` are **export files**, not rest layo
 6. **Fail safe** — never overwrite `store/` without verification; atomic writes. Never leave a durable `.7z` twin beside `store/`.
 7. **Session keys in RAM** — unlock asks for the password once. Lock flushes with those keys. Quit or reboot asks again.
 8. **Close = flush session into `store/`** — never pack `.enc` blobs into a `.7z` as rest. Export `.7z` streams **logical** content.
-9. **Recovery** — dirty close → unlock the encrypted vault (`store/`). Leftover `upriv_plain` workspace → wipe or resume. Dead header → create from backup / store zip (Backups or New vault). No archive-vs-store picker; create-from-backup is not a dirty-close peer.
+9. **Recovery** — dirty close → unlock the encrypted vault (`store/`). Leftover `upriv_plain` folder → recovery until the user wipes it. The leftover is not the open session. Dead header → create from backup / store zip (Backups or New vault). No archive-vs-store picker; create-from-backup is not a dirty-close peer.
 10. **Unified states** — `open` (runtime) | `closed` (rest).
 11. **Virtual mount** — in `encrypted_dir`, `workspace/` is not a data folder; I/O goes to encrypted `store/`.
 12. **Lockfile** — one open per vault at a time.
@@ -130,16 +130,16 @@ Transient: `closing`, `opening`, `recovery` — do not expose in UI as resting s
 3. Try to acquire `runtime/<id>.lock` — failure → `error.vault_already_open`.
 4. Read `header/vault.header` (or `vault.header.copy` when the primary cannot be used); derive master key (Argon2id from header params) — failure → abort.
 5. Verify index / chunk tags needed for the session.
-6. If dirty close: **recovery** → unlock the encrypted vault. If leftover `upriv_plain` workspace: wipe or resume. If header/index dead: create from backup / store zip (not a dirty-close peer).
+6. If dirty close: **recovery** → unlock the encrypted vault. If a leftover `upriv_plain` folder is still there: wipe it. If header/index dead: create from backup / store zip (not a dirty-close peer).
 7. `encrypted_dir`: mount the file manager folder when it is on — FUSE (Linux) + WinFsp (Windows); mobile uses the in-app file manager (no FUSE).
-8. `upriv_plain`: decrypt into the plaintext folder.
+8. `upriv_plain`: after the place is confirmed, stream `store/` into that folder. No FUSE/WinFsp.
 9. Update `runtime/state.json` → `vaults.<id>.session = "open"`.
 
 **close (v1):**
 1. Use the open session keys in RAM. Lock does not ask for the password and does not rewrap `vault.header`.
 2. Flush the session into `store/` (header + index + chunks). Never pack `.enc` blobs into a `.7z` as rest.
 3. If `[backup] enabled`: write a Stored zip of `store/` to `backups/<stamp>-<id>.zip` (no zip password). `skip_unchanged` (default on) skips that zip when vault files match the last backup still on disk. `.upriv-workspace.json` is not a change. Off writes a zip on every close.
-4. `upriv_plain`: overwrite the plaintext folder, then remove it (UI confirms wipe on manual lock).
+4. `upriv_plain`: save the folder into `store/`, wipe the files, and remove the folder. Lock starts immediately.
 5. Unmount the file manager folder; release `runtime/<id>.lock`; remove entry in `state.json`.
 6. `zeroize` password/keys in RAM.
 
@@ -154,7 +154,7 @@ Transient: `closing`, `opening`, `recovery` — do not expose in UI as resting s
 | Situation | Behavior |
 |-----------|----------|
 | Encrypted vault | Lock with the open session keys; no password field |
-| Open `upriv_plain` | Same flush, plus a wipe confirmation. No password |
+| Open `upriv_plain` | Same flush, then wipe the folder. No password |
 | Session gone (crash / process exit) | Recovery against `store/` — do not ask a close password to “finish” a dead session |
 | First close of a vault created this session | Header already written at create; validate session key |
 
@@ -236,12 +236,13 @@ App / Explorer  →  file manager folder/nota.txt  (logical path)
 - Write: caller → encrypt stream → chunk in `store/` (**write-through**).
 - `workspace/` is empty mountpoint until `open()`; after `close()`, unmounted (directory may exist empty).
 
-**Write-through invariant (RF-49b):** after a successful `write()` / file `close()` on the mount, the corresponding logical content **is already** in `store/` on disk — there is no “RAM-only version” as source of truth.
+**Write-through invariant (RF-49b):** each `write()` on the mount puts its encrypted chunk in `store/` before it returns; plaintext never waits in RAM for close. The sealed index that names those chunks is written on the handle's flush/`close`, on `fsync`, with any other committed change, after 64 MiB of pending writes, and at the latest about 2 s after the first pending write. Until then the sealed index still names the previous bytes, and no later write overwrites them, so a crash loses at most that batch and never a sealed file. Batching keeps a large copy from resealing the whole index on every write.
 
 | Event | Minimum guarantee |
 |-------|-------------------|
-| App writes and flush/`close` on handle | Updated encrypted chunk in `store/` |
+| App writes and flush/`close` on handle | Updated encrypted chunk in `store/`, named by the sealed index |
 | `fsync` on file (OS/editor) | Encrypted data on disk (not only app buffer) |
+| Writes, then no flush for about 2 s | Same as a flush |
 | Vault close | Global flush of session into `store/` |
 
 **Do not confuse:** read cache in RAM ≠ authoritative copy; on-disk authority is always `store/` after committed write.
@@ -436,7 +437,7 @@ file_manager_dock_expanded = false
 # vault_list_view = "default"                # optional
 # vault_list_search = ""                     # optional
 # vault_list_show_create_button = true       # optional
-# lifecycle_close_modal_on_submit = false    # optional; close unlock/lock dialog on Confirm
+# lifecycle_close_modal_on_submit = false    # optional; close the unlock dialog on Confirm
 # lifecycle_open_file_manager_on_open = false # optional; open file manager after unlock if no other modal
 # file_manager_confirm_delete = true # optional; confirm before deleting in file manager
 
@@ -467,7 +468,7 @@ last_opened_vault = "my-encrypted-notes"
 | `locale` | `[ui].locale` | Yes (Language) | Explicit **Save** in System settings |
 | `theme` | `[ui].theme` | Yes (General) | Explicit **Save** in System settings |
 | `vault_list_show_header_more_button` | `[ui].show_header_more_button` | Yes (General) | Explicit **Save** in System settings. Default `true`. Shows the header overflow (⋮) menu. |
-| `lifecycle_close_modal_on_submit` | `[ui].lifecycle_close_modal_on_submit` | Yes (General) | Explicit **Save** in System settings. Default `false`. When `true`, unlock/lock password dialog closes on Confirm (progress on the row). |
+| `lifecycle_close_modal_on_submit` | `[ui].lifecycle_close_modal_on_submit` | Yes (General) | Explicit **Save** in System settings. Default `false`. When `true`, the unlock password dialog closes on Confirm (progress on the row). |
 | `lifecycle_open_file_manager_on_open` | `[ui].lifecycle_open_file_manager_on_open` | Yes (General) | Explicit **Save** in System settings. Default `false`. When `true`, after unlock succeeds open the in-app file manager if no other modal is open. |
 | `file_manager_confirm_delete` | `[ui].file_manager_confirm_delete` | Yes (General) | Explicit **Save** in System settings. Default `true`. When `true`, deleting a file/folder in the file manager asks for confirmation. |
 | `file_manager_dock_expanded` | `[ui].file_manager_dock_expanded` | **No** | When user **expands or collapses** the minimized file-manager dock (bottom-right chip list). Restored on next app launch. Default `false` (collapsed — count button only). |
@@ -968,7 +969,7 @@ fn detect_recovery(root: &VaultRoot) -> Option<RecoveryInfo> {
 | Action | Effect |
 |--------|--------|
 | `CloseWithPassword` | `7z t` → normal close |
-| `DiscardWorkspace` | `secure_wipe` + delete leftover plaintext `workspace/`; keep `vaults/<id>/store/` |
+| `PlainRemove` | wipe a leftover plaintext folder after the user confirms; keep `vaults/<id>/store/` |
 | `RestoreBackup` | unpack `backups/<stamp>-<id>.zip` into a **new** vault — never overwrite the source |
 
 ### 7.3 Reopen after crash (no RAM session, `store/` still on disk)
@@ -1110,7 +1111,7 @@ click(Backups|Config)      → stopPropagation; open respective modal
 | **Closing** | Row badge + modal (if open) + finite budget | During flush into `store/` |
 | **Opening** | Row badge + unlock dialog (while open) + finite budget | During Argon2 unlock |
 
-**Open/close pipelines (v1):** one global **FIFO queue** — only one open/close/create runs at a time; further requests wait. Progress lives on the **row** (and the unlock/lock dialog while it is open); there is **no** blocking full-screen pipeline overlay and no **Continue in background**. Queued vaults show `opening` / `closing` / `creating` until their turn completes. No mid-pipeline cancel (abort would risk inconsistent disk state). Desktop/mobile UI implements the FIFO queue in `useVaultPipelineRun`; live open/close call `vault_open` / `vault_close`. While a closed vault is exporting, changing its password, or changing unlock RAM, the row names that work and `vault_open` is refused until it finishes. That same hold refuses a data-folder switch. Close already shows Backing up… while its backup zip is written.
+**Open/close pipelines (v1):** one global **FIFO queue** — only one open/close/create runs at a time; further requests wait. Progress lives on the **row** (and the unlock dialog while it is open; lock opens no dialog); there is **no** blocking full-screen pipeline overlay and no **Continue in background**. Queued vaults show `opening` / `closing` / `creating` until their turn completes. No mid-pipeline cancel (abort would risk inconsistent disk state). Desktop/mobile UI implements the FIFO queue in `useVaultPipelineRun`; live open/close call `vault_open` / `vault_close`. While a closed vault is exporting, changing its password, or changing unlock RAM, the row names that work and `vault_open` is refused until it finishes. That same hold refuses a data-folder switch. Close already shows Backing up… while its backup zip is written.
 
 **Pipeline — erros e anti-travamento:**
 
@@ -1285,6 +1286,8 @@ Upriv (installed)
 
 **Unplugged drive:** a removed volume answers every lookup as a miss. When an operation misses and the tree's own root document no longer answers, `SafFs` reports `unavailable`. `host_fs` maps that to `NotConnected` with a bridge-only marker, and RPC returns `vault_root_unreachable` (not `vault_root_not_found`). `mountSafRoot` throws `saf_unreachable` before probing. The grant, the active-URI pref, and `.upriv-root` are kept: settings load from `.upriv-root` (custom_root, not on disk). The Gate opens Setup with Custom still selected, shows the error in that screen and in a toast above it, and keeps the grant. Opening the app again with the drive connected continues straight in while that Custom choice is unchanged. Switching to the Documents default keeps that custom grant on the `custom=` line of `.upriv-root` and still shows the folder on the Custom option. If checking that folder finds the volume gone, inspect reports `unreachable` (the reconnect copy, not a writable-location failure) and Retry tries again. A later vault list while that grant is unmounted returns `vault_root_unreachable`, not `vault_root_not_found`. Choosing a different custom folder replaces `custom=` and releases the previous custom grant.
 
+**Export data folder:** the zip is written straight into a second folder the user picks with `ACTION_OPEN_DOCUMENT_TREE`. `mountSafExport` binds `SafExportFs` (the same bridge as `SafFs`, without the Documents → `Upriv` step) and Rust addresses that tree as `/upriv-saf-export`, beside the data folder mount. `host_fs` keeps the two trees apart: a rename between them is refused. Core refuses a picked tree whose address has a `.upriv` segment. The mobile adapter keeps the tree mounted until `data_folder_export_status` reports no export, so a timed-out call still lets core remove its `.upriv-part`. It then unmounts and releases the picker's grant (never the data folder's). A pick that is replaced, or left when the window closes, is released too. An export folder that stops answering fails the export as `io_error`; only the data folder answers `vault_root_unreachable`.
+
 **Who reports `unreachable`:** only Android inspect, when the persistable grant is held and the volume does not answer. The shared disk status and the reconnect copy are not Android-only. iOS security-scoped bookmarks (§9.11) return the same inspect status when the bookmark is still valid and the volume is gone. Do not add a second status. Desktop location, Repair, and Recovery already show that copy if inspect returns `unreachable`. Desktop Rust inspect does not return it. A missing filesystem path is not found. Resolve treats that as an invalid alias, and the Gate opens alias recovery. A deleted folder looks the same, so desktop must not map every missing path to `unreachable`.
 
 ### 9.5 Android — open session (no FUSE)
@@ -1350,7 +1353,7 @@ The in-app explorer (copy, move, rename, delete) is the v1 editor on Android. Op
 | 1 | Welcome | Select vault / Last vault |
 | 2 | Unlock | Password |
 | 3 | Open | In-app file manager; **Close vault** |
-| 4 | Recovery | Unlock encrypted vault; **`recovery.discard_workspace`** only for leftover plaintext (`upriv_plain`) |
+| 4 | Recovery | Unlock encrypted vault. A leftover plaintext folder shows a warning, then **Remove the folder** wipes it |
 | 5 | Closing | Progress while `store/` flushes |
 
 ### 9.8 Android — app config (outside vault)
