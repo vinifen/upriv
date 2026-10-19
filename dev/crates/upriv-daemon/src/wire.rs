@@ -53,8 +53,9 @@ pub fn is_argon2_bound_method(method: &str, _params: &Value) -> bool {
     )
 }
 
-/// Close, delete, and backup download. Own worker so a lock is not stuck
-/// behind a multi-minute import, export, or rewrap.
+/// Close, delete, backup download, and plaintext-folder work that waits for a
+/// sync pass. Own worker so a lock is not stuck behind a multi-minute import,
+/// export, or rewrap, and stdin is not stuck behind a pass.
 pub fn is_lifecycle_io_method(method: &str) -> bool {
     matches!(
         method,
@@ -65,6 +66,7 @@ pub fn is_lifecycle_io_method(method: &str) -> bool {
             | "vault_plain_confirm"
             | "vault_plain_remove"
             | "vault_plain_sync"
+            | "vault_plain_deletions"
     )
 }
 
@@ -311,6 +313,7 @@ mod tests {
             "vault_ingest_open",
             "vault_open",
             "vault_plain_confirm",
+            "vault_plain_deletions",
             "vault_plain_remove",
             "vault_plain_sync",
         ];
