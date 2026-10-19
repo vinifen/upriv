@@ -40,11 +40,6 @@ export interface PlainHeldStatus {
   heldCount: number;
 }
 
-export interface PlainHolder {
-  name: string;
-  pid: number;
-}
-
 /** What recovery offers once the leftover lookup has finished. */
 export interface PlainRecoveryOffers {
   /** A leftover folder is still there and recovery wipes it. */

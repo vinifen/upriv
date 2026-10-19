@@ -33,7 +33,6 @@ export interface LiveVaultRpc {
   import7z?: (input: CreateVaultInput) => Promise<VaultListItem>;
   importFilesZip?: (input: CreateVaultInput) => Promise<VaultListItem>;
   importOsPath?: (input: CreateVaultInput) => Promise<VaultListItem>;
-  recoverDirtyClose?: (vaultId: string) => Promise<void>;
 }
 
 /** Shared live adapter — desktop daemon and native FFI pass their `rpc*` fns. */
@@ -97,13 +96,6 @@ export function createLiveVaultService(rpc: LiveVaultRpc): VaultService {
       }
       await rpc.deleteVault(vaultId);
       forgetVaultSettings(vaultId);
-    },
-
-    async recoverDirtyClose(vaultId) {
-      if (!rpc.recoverDirtyClose) {
-        notImplemented("Vault recovery");
-      }
-      await rpc.recoverDirtyClose(vaultId);
     },
 
     async getExportBytes(vault: VaultRow, request: VaultExportRequest) {

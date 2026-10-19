@@ -317,23 +317,11 @@ pub(super) fn same_file(a: &DiskStamp, b: &DiskStamp) -> bool {
 }
 
 /// True when no other name points at the open file, so overwriting it cannot
-/// reach a file outside the folder.
-#[cfg_attr(not(unix), allow(dead_code))]
+/// reach a file outside the folder. Only the Unix in-place replace asks.
+#[cfg(unix)]
 pub(super) fn single_name(file: &host_fs::File) -> io::Result<bool> {
-    #[cfg(windows)]
-    {
-        Ok(host_fs::windows_file_info(file)?.links <= 1)
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        Ok(file.metadata()?.nlink() <= 1)
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        let _ = file;
-        Ok(false)
-    }
+    use std::os::unix::fs::MetadataExt;
+    Ok(file.metadata()?.nlink() <= 1)
 }
 
 /// Open a file to read it into the vault, without following a link.
@@ -522,26 +510,6 @@ fn restrict_to_owner(path: &Path) -> io::Result<()> {
         return Err(io::Error::from_raw_os_error(status as i32));
     }
     Ok(())
-}
-
-/// Owner-only access to the folder (`0700`), or list-only (`0500`) when a
-/// folder left from an earlier close has to be unlocked before it is removed.
-/// Unix only: other systems have no mode bits for this.
-pub(super) fn set_folder_writable(path: &Path, writable: bool) -> io::Result<()> {
-    #[cfg(unix)]
-    {
-        if host_fs::is_bridge_path(path) {
-            return Ok(());
-        }
-        use std::os::unix::fs::PermissionsExt;
-        let mode = if writable { 0o700 } else { 0o500 };
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = (path, writable);
-        Ok(())
-    }
 }
 
 /// True when the folder holds nothing but the names in `allowed`.

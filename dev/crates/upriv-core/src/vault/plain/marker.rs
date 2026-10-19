@@ -1,5 +1,6 @@
 //! `.upriv-plain` at the top of a plaintext folder: which vault and session
-//! wrote the folder, and whether that session finished its wipe.
+//! wrote the folder. The session removes it once its wipe finishes, so a
+//! marker that is still there means that session's files may be too.
 //!
 //! The same token is recorded in `state.json` before anything is written to
 //! the folder. A folder is wiped only when both agree, so a folder the user
@@ -20,22 +21,12 @@ const MARKER_MAX_BYTES: u64 = 16 * 1024;
 /// naming anything else is not trusted for it.
 pub(super) const KNOWN_HELPERS: &[&str] = &[".nomedia", ".metadata_never_index"];
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(super) enum MarkerState {
-    /// A session wrote vault files here and has not finished wiping them.
-    Open,
-    /// The last session wiped every file; only this marker is left.
-    Closed,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Marker {
     pub format_version: u32,
     pub vault_id: String,
     pub token: String,
-    pub state: MarkerState,
     pub helpers: Vec<String>,
     /// Upriv made the folder itself. A folder the user made is emptied, never
     /// removed, and keeps its permissions.
@@ -48,17 +39,8 @@ impl Marker {
             format_version: MARKER_FORMAT,
             vault_id: vault_id.to_string(),
             token: token.to_string(),
-            state: MarkerState::Open,
             helpers: helpers.to_vec(),
             made_folder,
-        }
-    }
-
-    #[cfg(test)]
-    pub(super) fn closed(&self) -> Self {
-        Self {
-            state: MarkerState::Closed,
-            ..self.clone()
         }
     }
 
@@ -137,7 +119,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn marker_round_trips_and_closes() {
+    fn marker_round_trips_and_is_removed() {
         let tmp = tempfile::tempdir().unwrap();
         let marker = Marker::open("notes", "token-1", &[".nomedia".to_string()], true);
         write(tmp.path(), &marker).unwrap();
@@ -146,17 +128,15 @@ mod tests {
         assert!(read_back.written_by("notes", "token-1"));
         assert!(!read_back.written_by("notes", "token-2"));
         assert!(!read_back.written_by("other", "token-1"));
-
-        write(tmp.path(), &marker.closed()).unwrap();
-        assert_eq!(
-            read(tmp.path()).unwrap().expect("marker").state,
-            MarkerState::Closed
-        );
         let names: Vec<_> = std::fs::read_dir(tmp.path())
             .unwrap()
             .map(|entry| entry.unwrap().file_name())
             .collect();
         assert_eq!(names, vec![std::ffi::OsString::from(MARKER_NAME)]);
+
+        remove(tmp.path()).unwrap();
+        assert_eq!(read(tmp.path()).unwrap(), None);
+        remove(tmp.path()).unwrap();
     }
 
     #[test]

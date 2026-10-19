@@ -5,7 +5,6 @@ import type {
   PlainDestination,
   PlainFolderClass,
   PlainHeldStatus,
-  PlainHolder,
   PlainLeftover,
   PlainPlace,
   PlainRecoveryOffers,
@@ -90,15 +89,6 @@ export function parsePlainHeldStatus(raw: unknown): PlainHeldStatus {
     ? body.heldDeletions.filter((path): path is string => typeof path === "string")
     : [];
   return { heldDeletions: listed, heldCount: finite(body?.heldCount) };
-}
-
-export function parsePlainHolders(raw: unknown): PlainHolder[] {
-  if (!Array.isArray(raw)) return [];
-  return raw.flatMap((item) => {
-    const body = record(item);
-    if (!body || typeof body.name !== "string" || body.name.length === 0) return [];
-    return [{ name: body.name, pid: finite(body.pid) }];
-  });
 }
 
 /** A folder that is still there is wiped. No folder means unlock the encrypted vault. */

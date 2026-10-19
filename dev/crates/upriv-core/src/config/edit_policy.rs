@@ -112,9 +112,6 @@ pub fn save_vault_config_checked(
         let mut stored = after.clone();
         stored.security.password_changed_at = before.security.password_changed_at.clone();
         crate::config::save_vault_config(vault_dir, &stored)?;
-        if moves_folder {
-            crate::vault::clear_closed_leaf(root, vault_id, &before);
-        }
         Ok(())
     })
 }

@@ -269,7 +269,7 @@ encrypted_dir / upriv_plain:
 | RF-45 | (`encrypted_dir`) Flush / export `.7z` using **logical content stream** (do not pack `.enc` blobs; no plaintext temp) | P0 |
 | RF-46 | (`encrypted_dir`) After reboot: reopen requires password; data preserved in `store/` | P0 |
 | RF-47 | **`persistence.json`** per vault: last OK close timestamp; content identity lives in `vault.header` | P0 |
-| RF-48 | Recovery UI for dirty close: **`recovery.resume_store`** unlocks the encrypted vault. A leftover plaintext folder shows a warning, and **Remove the folder** wipes it. Create-from-backup is via Backups / New vault when the store is dead — not a dirty-close peer. No silent overwrite; no fake archive-vs-store compare | P0 |
+| RF-48 | Recovery UI for dirty close: **Continue** (`resume_store`) unlocks the encrypted vault. A leftover plaintext folder shows a warning, and **Remove the folder** wipes it. Create-from-backup is via Backups / New vault when the store is dead — not a dirty-close peer. No silent overwrite; no fake archive-vs-store compare | P0 |
 | RF-49 | The encrypted file manager folder is **virtual mount only** — forbid plaintext persistence on HD; automated tests | P0 |
 | RF-49b | **Write-through:** every write via mount puts its encrypted chunk in `store/` at once; the index naming it is sealed when the file is flushed, closed, or fsynced, and within about 2 s otherwise. What the user saves never waits for vault close; a crash loses at most writes from the last 2 s that were not flushed | P0 |
 | RF-50 | Export `.7z`: in-process `sevenz-rust2` pack of logical content. Fail with insufficient RAM instead of a plaintext temp | P1 |

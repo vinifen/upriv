@@ -7,10 +7,9 @@ use std::path::Path;
 use serde::Serialize;
 
 use super::disk;
-use super::marker::{self, Marker, MarkerState, MARKER_NAME};
+use super::marker::{self, Marker, MARKER_NAME};
 use super::sweep::{self, Visit};
 use super::{dest, residue};
-use crate::config::{load_vault_config, VaultConfig};
 use crate::error::{Result, UprivError};
 use crate::paths::VaultRoot;
 use crate::runtime_state::{self, PlainRecord};
@@ -86,11 +85,6 @@ pub fn remove_plain_leftover(root: &VaultRoot, vault_id: &str) -> Result<PlainWi
 /// marker. A record whose folder is gone, or whose marker does not match, is
 /// forgotten: unlock can continue.
 pub(crate) fn ensure_no_leftover(root: &VaultRoot, vault_id: &str) -> Result<()> {
-    if let Ok(vault_dir) = root.vault_dir(vault_id) {
-        if let Ok(config) = load_vault_config(&vault_dir) {
-            clear_closed_leaf(root, vault_id, &config);
-        }
-    }
     forget_stale_record(root, vault_id)?;
     match runtime_state::reachable_plain_record(root, vault_id)? {
         Some(_) => Err(UprivError::PlainLeftover),
@@ -110,29 +104,17 @@ fn forget_stale_record(root: &VaultRoot, vault_id: &str) -> Result<()> {
     Ok(())
 }
 
-/// Before a vault is deleted: wipe its leftover folder, or the empty folder
-/// a clean close left. A folder that cannot be fully wiped stops the delete.
+/// Before a vault is deleted: wipe its leftover folder. A folder that cannot
+/// be fully wiped stops the delete.
 pub(crate) fn clear_for_delete(root: &VaultRoot, vault_id: &str, vault_dir: &Path) -> Result<()> {
+    let Some(record) = runtime_state::reachable_plain_record(root, vault_id)? else {
+        return Ok(());
+    };
     let wipe = WipeOptions::for_vault_dir(vault_dir);
-    if let Some(record) = runtime_state::reachable_plain_record(root, vault_id)? {
-        if wipe_recorded(root, vault_id, &record, &wipe)?.kept > 0 {
-            return Err(UprivError::PlainLeftover);
-        }
-    }
-    if let Ok(config) = load_vault_config(vault_dir) {
-        if let Ok(dest) = dest::resolve(root, &config) {
-            remove_closed_leaf(&dest.folder, vault_id);
-        }
+    if wipe_recorded(root, vault_id, &record, &wipe)?.kept > 0 {
+        return Err(UprivError::PlainLeftover);
     }
     Ok(())
-}
-
-/// Before a vault's name or folder setting changes: the empty folder a clean
-/// close left at the old place goes, so no folder of it stays behind.
-pub(crate) fn clear_closed_leaf(root: &VaultRoot, vault_id: &str, config: &VaultConfig) {
-    if let Ok(dest) = dest::resolve(root, config) {
-        remove_closed_leaf(&dest.folder, vault_id);
-    }
 }
 
 /// Record again a folder a crash left whose record is gone (a lost
@@ -164,7 +146,7 @@ pub(crate) fn adopt_orphans(root: &VaultRoot, vaults: &[crate::vault::VaultListE
         let Ok(Some(marker)) = marker::read(&dest.folder) else {
             continue;
         };
-        if marker.vault_id != id || marker.state != MarkerState::Open {
+        if marker.vault_id != id {
             continue;
         }
         let Some(record) = record_for(root, &dest, &marker, host.as_deref()) else {
@@ -246,7 +228,6 @@ fn wipe_recorded(
 /// Wipe everything under a folder this vault wrote, then leave it the way
 /// [`finish_folder`] does.
 fn wipe_folder(folder: &Path, marker: &Marker, opts: &WipeOptions) -> Result<PlainWipe> {
-    disk::set_folder_writable(folder, true)?;
     let swept = sweep::sweep_folder(folder, &[MARKER_NAME], opts, &mut |_, _| Visit::Wipe)?;
     let wipe = PlainWipe {
         wiped: swept.wiped,
@@ -263,7 +244,6 @@ fn wipe_folder(folder: &Path, marker: &Marker, opts: &WipeOptions) -> Result<Pla
 /// goes with it, and an empty `workspace/` directory created for that folder
 /// goes too. A folder the user made is left empty, with their permissions.
 pub(super) fn finish_folder(folder: &Path, marker: &Marker) -> std::io::Result<()> {
-    let _ = disk::set_folder_writable(folder, true);
     marker::remove(folder)?;
     if marker.made_folder {
         crate::host_fs::remove_dir(folder)?;
@@ -285,20 +265,6 @@ fn remove_empty_workspace_dir(leaf: &Path) {
         return;
     }
     let _ = crate::host_fs::remove_dir(parent);
-}
-
-/// Remove the empty folder a clean close left at `folder`, when it holds
-/// nothing but this vault's closed marker.
-fn remove_closed_leaf(folder: &Path, vault_id: &str) {
-    let Ok(dest::Leaf::Closed { made_folder }) = dest::inspect_leaf(folder, vault_id) else {
-        return;
-    };
-    if disk::set_folder_writable(folder, true).is_err() {
-        return;
-    }
-    if marker::remove(folder).is_ok() && made_folder && crate::host_fs::remove_dir(folder).is_ok() {
-        remove_empty_workspace_dir(folder);
-    }
 }
 
 fn verified_marker(folder: &Path, vault_id: &str, token: &str) -> Option<Marker> {
@@ -328,6 +294,7 @@ fn ensure_closed(root: &VaultRoot, vault_id: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::{load_vault_config, VaultConfig};
     use crate::store::KdfUnlockPreset;
     use crate::test_support::{vault_root_with, VaultSpec};
 
@@ -459,6 +426,34 @@ mod tests {
             b"secret"
         );
         crate::close_vault(&root, "notes").unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_folder_the_user_made_stays_empty_with_its_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let (tmp, root) = vault_root_with(&[]);
+        let parent = tmp.path().join("places");
+        let folder = parent.join("Notes");
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o750)).unwrap();
+        crate::create_vault(
+            &root,
+            own_folder_config("notes", "Notes", &parent, true),
+            b"pass-word-ok",
+            KdfUnlockPreset::M32,
+        )
+        .unwrap();
+        crate::open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        crate::confirm_plain_destination(&root, "notes", &folder).unwrap();
+        crate::vault::fs_write_file(&root, "notes", "/hello.txt", b"secret").unwrap();
+        crate::plain_sync(&root, "notes").unwrap();
+
+        let closed = crate::close_vault(&root, "notes").unwrap();
+        assert_eq!(closed.plain.unwrap().kept, 0);
+        assert!(disk::holds_only(&folder, &[]).unwrap());
+        let mode = std::fs::metadata(&folder).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o750);
     }
 
     #[test]

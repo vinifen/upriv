@@ -72,12 +72,12 @@ pub use os_import::{
     ingest_import_reader_staged, open_import_session,
 };
 pub use persistence::{load_vault_persistence, VaultPersistence};
-pub(crate) use plain::{clear_closed_leaf, ensure_no_leftover, PlainSession};
+pub(crate) use plain::{ensure_no_leftover, PlainSession};
 pub use plain::{
-    plain_deletions, plain_destination, plain_holders, plain_leftover, plain_status, plain_sync,
+    plain_deletions, plain_destination, plain_leftover, plain_status, plain_sync,
     remove_plain_leftover, set_plain_observer, PlainCloseSummary, PlainDestination,
-    PlainFolderClass, PlainHolder, PlainLeftover, PlainObserver, PlainPlace, PlainStatus,
-    PlainSyncReport, PlainTotals, PlainWipe,
+    PlainFolderClass, PlainLeftover, PlainObserver, PlainPlace, PlainStatus, PlainSyncReport,
+    PlainTotals, PlainWipe,
 };
 pub use rename::{rename_vault, VaultRenameResult};
 pub use rewrap::{change_vault_kdf, change_vault_password};

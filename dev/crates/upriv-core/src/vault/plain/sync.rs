@@ -20,7 +20,7 @@ use sha2::{Digest, Sha256};
 use zeroize::Zeroize;
 
 use super::disk::{self, DiskStamp, Scan, Seen};
-use super::marker::{self, MarkerState};
+use super::marker;
 use super::names::NameRules;
 use super::sweep;
 use super::{PlainSession, PlainSyncReport};
@@ -665,7 +665,7 @@ pub(super) fn run(
     let mut report = PlainSyncReport::default();
     let ours = matches!(
         marker::read(&folder),
-        Ok(Some(found)) if found.written_by(&vault_id, &token) && found.state == MarkerState::Open
+        Ok(Some(found)) if found.written_by(&vault_id, &token)
     );
     let skip: Vec<&str> = helpers.iter().map(String::as_str).collect();
     let scan = match ours.then(|| disk::scan(&folder, &skip)) {

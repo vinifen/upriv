@@ -186,14 +186,6 @@ fn migrate_closed_mount_leaf(
     Ok(Some((old_mount, new_mount)))
 }
 
-/// A plaintext folder from an earlier session blocks a rename. The empty
-/// folder a clean close left goes, since its marker names the old id.
-fn clear_plain_folder(root: &VaultRoot, vault_id: &str, config: &VaultConfig) -> Result<()> {
-    super::plain::ensure_no_leftover(root, vault_id)?;
-    super::plain::clear_closed_leaf(root, vault_id, config);
-    Ok(())
-}
-
 fn rollback_error(old_dir: &Path, parts: Vec<String>) -> UprivError {
     UprivError::VaultStoreInvalid {
         path: old_dir.to_path_buf(),
@@ -317,7 +309,7 @@ pub fn rename_vault(
             }
             let prior_persistence = load_vault_persistence(&old_dir)?;
             let prior_display = prior_config.vault.display_name.clone();
-            clear_plain_folder(root, old_id, &prior_config)?;
+            super::plain::ensure_no_leftover(root, old_id)?;
 
             let mut next_config = prior_config.clone();
             next_config.vault.id = new_id.clone();
@@ -420,7 +412,7 @@ fn rename_display_name_only(
         let prior_config = config.clone();
         let prior_persistence = load_vault_persistence(old_dir)?;
         let prior_display = config.vault.display_name.clone();
-        clear_plain_folder(root, old_id, &prior_config)?;
+        super::plain::ensure_no_leftover(root, old_id)?;
         config.vault.display_name = display_name.to_string();
         save_vault_config(old_dir, &config)?;
         if let Some(mut persistence) = load_vault_persistence(old_dir)? {

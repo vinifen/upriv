@@ -7,8 +7,8 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use upriv_core::{
     confirm_plain_destination, open_vault, open_vault_confirmed, plain_deletions,
-    plain_destination, plain_holders, plain_leftover, plain_status, plain_sync,
-    remove_plain_leftover, OpenVaultOutcome,
+    plain_destination, plain_leftover, plain_status, plain_sync, remove_plain_leftover,
+    OpenVaultOutcome,
 };
 
 use super::secret::SecretString;
@@ -181,21 +181,6 @@ pub(super) fn vault_plain_deletions(params: Value) -> RpcResponse {
     };
     match plain_deletions(&root, parsed.id.trim(), parsed.apply) {
         Ok(status) => ok(serde_json::to_value(status).unwrap_or(json!(null))),
-        Err(error) => map_core_err(error),
-    }
-}
-
-pub(super) fn vault_plain_holders(params: Value) -> RpcResponse {
-    let parsed: VaultIdParams = match serde_json::from_value(params) {
-        Ok(value) => value,
-        Err(error) => return err("invalid_request", error.to_string()),
-    };
-    let root = match require_vault_root() {
-        Ok(root) => root,
-        Err(response) => return response,
-    };
-    match plain_holders(&root, parsed.id.trim()) {
-        Ok(holders) => ok(serde_json::to_value(holders).unwrap_or(json!(null))),
         Err(error) => map_core_err(error),
     }
 }

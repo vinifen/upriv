@@ -19,7 +19,7 @@ mod linux {
     use std::sync::mpsc::{self, Receiver, Sender};
     use std::sync::Arc;
 
-    use upriv_core::{set_plain_observer, PlainObserver, PlainSyncReport};
+    use upriv_core::{set_plain_observer, PlainObserver};
 
     pub fn install() {
         if let Some(watch) = LinuxWatch::spawn() {
@@ -27,13 +27,11 @@ mod linux {
         }
     }
 
-    #[cfg(target_os = "linux")]
     struct LinuxWatch {
         tx: Sender<Cmd>,
         wake: libc::c_int,
     }
 
-    #[cfg(target_os = "linux")]
     enum Cmd {
         Watch {
             vault_id: String,
@@ -45,7 +43,6 @@ mod linux {
         },
     }
 
-    #[cfg(target_os = "linux")]
     #[derive(Clone)]
     struct Watched {
         vault_id: String,
@@ -53,7 +50,6 @@ mod linux {
         changed: Arc<dyn Fn() + Send + Sync>,
     }
 
-    #[cfg(target_os = "linux")]
     const INTEREST: u32 = libc::IN_ATTRIB
         | libc::IN_CLOSE_WRITE
         | libc::IN_CREATE
@@ -66,7 +62,6 @@ mod linux {
         | libc::IN_ONLYDIR
         | libc::IN_EXCL_UNLINK;
 
-    #[cfg(target_os = "linux")]
     impl LinuxWatch {
         fn spawn() -> Option<Self> {
             let (tx, rx) = mpsc::channel();
@@ -105,7 +100,6 @@ mod linux {
         }
     }
 
-    #[cfg(target_os = "linux")]
     impl PlainObserver for LinuxWatch {
         fn watch(&self, vault_id: &str, folder: &Path, changed: Arc<dyn Fn() + Send + Sync>) {
             if self
@@ -132,15 +126,11 @@ mod linux {
                 self.signal();
             }
         }
-
-        fn report(&self, _vault_id: &str, _report: &PlainSyncReport) {}
     }
 
-    #[cfg(target_os = "linux")]
     #[repr(C, align(8))]
     struct Aligned([u8; 8192]);
 
-    #[cfg(target_os = "linux")]
     fn run(inotify: libc::c_int, wake: libc::c_int, rx: Receiver<Cmd>) {
         let mut by_wd: HashMap<i32, Watched> = HashMap::new();
         loop {
@@ -192,7 +182,6 @@ mod linux {
         }
     }
 
-    #[cfg(target_os = "linux")]
     fn drain_inotify(inotify: libc::c_int, by_wd: &mut HashMap<i32, Watched>) {
         let mut buf = Aligned([0u8; 8192]);
         let mut notify: Vec<Arc<dyn Fn() + Send + Sync>> = Vec::new();
@@ -226,7 +215,6 @@ mod linux {
         }
     }
 
-    #[cfg(target_os = "linux")]
     fn handle_event(
         inotify: libc::c_int,
         by_wd: &mut HashMap<i32, Watched>,
@@ -264,7 +252,6 @@ mod linux {
         notify.push(watched.changed);
     }
 
-    #[cfg(target_os = "linux")]
     fn event_name(bytes: &[u8]) -> Option<&OsStr> {
         let end = bytes
             .iter()
@@ -277,7 +264,6 @@ mod linux {
         }
     }
 
-    #[cfg(target_os = "linux")]
     fn add_tree(
         by_wd: &mut HashMap<i32, Watched>,
         inotify: libc::c_int,
@@ -316,7 +302,6 @@ mod linux {
         }
     }
 
-    #[cfg(target_os = "linux")]
     fn drop_vault(by_wd: &mut HashMap<i32, Watched>, inotify: libc::c_int, vault_id: &str) {
         let stale: Vec<i32> = by_wd
             .iter()

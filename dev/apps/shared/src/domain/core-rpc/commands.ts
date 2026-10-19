@@ -67,8 +67,6 @@ export const CORE_RPC_COMMANDS = {
   VAULT_PLAIN_STATUS: "vault_plain_status",
   /** Apply or restore held mass deletions. */
   VAULT_PLAIN_DELETIONS: "vault_plain_deletions",
-  /** Apps still holding files in the open plaintext folder. */
-  VAULT_PLAIN_HOLDERS: "vault_plain_holders",
   VAULT_CLOSE: "vault_close",
   /** Rewrap the closed vault under a new password. Same master key; files stay. */
   VAULT_CHANGE_PASSWORD: "vault_change_password",
@@ -83,7 +81,6 @@ export const CORE_RPC_COMMANDS = {
   /** Deep rename: display name + folder/`[vault].id` migration (vault closed). */
   VAULT_RENAME: "vault_rename",
   VAULT_DELETE: "vault_delete",
-  VAULT_RECOVER_ACK: "vault_recover_ack",
   VAULT_EXPORT: "vault_export",
   VAULT_EXPORT_CAPABILITIES: "vault_export_capabilities",
   /** Argon2id unlock of a closed vault. Does not pack an export. */

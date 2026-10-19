@@ -44,7 +44,8 @@ pub struct VaultIndex {
 }
 
 /// Most files appended from byte 0 at the same time that keep a running digest.
-/// Past this the oldest stream is dropped and that file counts by its storage.
+/// Past this the oldest stream is bound to its file as it is; a later append
+/// to that file counts by its storage.
 const MAX_DIGEST_STREAMS: usize = 16;
 
 /// RAM-only bookkeeping of one open session, so close needs no extra disk reads.

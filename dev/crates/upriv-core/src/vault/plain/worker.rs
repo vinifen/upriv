@@ -28,16 +28,15 @@ const FOLDER_MAX_WAIT: Duration = Duration::from_secs(30);
 /// A pass runs at least this often, with or without notifications.
 const PERIODIC: Duration = Duration::from_secs(2 * 60);
 
-/// Tells the vault when something under a plaintext folder changed, and
-/// hears how each pass went. The desktop daemon backs it with the system's
-/// file watcher. Without one, the periodic pass still runs.
+/// Tells the vault when something under a plaintext folder changed. The
+/// desktop daemon backs it with the system's file watcher. Without one, the
+/// periodic pass still runs. The app reads how passes went from
+/// `vault_plain_status`.
 pub trait PlainObserver: Send + Sync {
     /// Call `changed` whenever something under `folder` changes, until
     /// [`Self::unwatch`] for the same vault.
     fn watch(&self, vault_id: &str, folder: &Path, changed: Arc<dyn Fn() + Send + Sync>);
     fn unwatch(&self, vault_id: &str);
-    /// A pass that changed something or needs the user finished.
-    fn report(&self, vault_id: &str, report: &PlainSyncReport);
 }
 
 /// Install the observer for this process. Later folders use it.
@@ -223,13 +222,7 @@ fn run_loop(weak: Weak<Worker>) {
             schedule.folder = None;
         }
         match worker.pass() {
-            Ok(report) => {
-                if !report.is_quiet() {
-                    if let Some(observer) = observer() {
-                        observer.report(&worker.vault_id, &report);
-                    }
-                }
-            }
+            Ok(_) => {}
             Err(UprivError::VaultNotOpen(_)) => return,
             Err(_) => log_event(
                 LogLevel::Warn,

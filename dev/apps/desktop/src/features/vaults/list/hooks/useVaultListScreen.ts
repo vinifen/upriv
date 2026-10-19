@@ -539,13 +539,7 @@ export function useVaultListScreen() {
   const settingsPersistVaultIdsRef = useRef(new Set<string>());
 
   useEffect(() => {
-    if (
-      !lifecycleRequest ||
-      lifecycleRequest.intent !== "unlock" ||
-      !blockOpenVaultIdsRef.current.has(lifecycleRequest.vaultId)
-    ) {
-      return;
-    }
+    if (!lifecycleRequest || !blockOpenVaultIdsRef.current.has(lifecycleRequest.vaultId)) return;
     setLifecycleRequest(null);
   }, [backupJob.job, dataFolderExport.job, lifecycleRequest, rewrapRun, setLifecycleRequest]);
 
@@ -1291,7 +1285,6 @@ export function useVaultListScreen() {
     importDrop,
     lifecycle: {
       lifecycleVault: modals.lifecycleVault,
-      lifecycleIntent: modals.lifecycleRequest?.intent ?? null,
       lifecycleOpen: modals.lifecycleRequest !== null,
       lifecycleSubmitting: lifecycle.credentialBusy,
       lifecyclePipelineStep:
@@ -1317,7 +1310,6 @@ export function useVaultListScreen() {
       },
       onRecoveryAction: lifecycle.handleRecoveryAction,
       recoveryLeftover: lifecycle.recoveryLeftover,
-      closeHolderNames: lifecycle.closeHolderNames,
       placeOpen: lifecycle.placeOpen,
       placeVaultName: lifecycle.placeVaultName,
       placeWorkspaceChoices: lifecycle.placeWorkspaceChoices,

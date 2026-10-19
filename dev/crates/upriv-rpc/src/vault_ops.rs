@@ -5,20 +5,20 @@ use std::path::Path;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use upriv_core::{
-    abort_import_vault, acknowledge_dirty_close, classify_import_zip_bytes,
-    classify_import_zip_path, close_all_vaults, delete_backups, delete_vault,
-    export_backups_to_path, export_logical_seven_zip, export_logical_seven_zip_to_path,
-    export_store_zip, export_store_zip_to_path, fs_create_file, fs_create_folder, fs_delete,
-    fs_ensure_folder, fs_import_from_os_path, fs_import_from_os_path_deferred, fs_list_tree,
-    fs_mkdir, fs_move, fs_os_path, fs_read_file, fs_read_range, fs_rename, fs_seal_staged_imports,
-    fs_tree_revision, fs_truncate, fs_write_file, import_logical_files_zip,
-    import_logical_files_zip_path, import_logical_os_path, import_logical_seven_zip,
-    import_logical_seven_zip_path, import_store_from_archive_path, import_store_zip,
-    ingest_import_directory, list_backups, parse_backup_import_path, parse_embedded_settings,
-    probe_export_password, probe_logical_seven_zip, probe_logical_seven_zip_path, probe_store_zip,
-    promote_backup_save, read_backup_zip_bytes, read_import_archive_bytes,
-    read_import_zip_settings, read_zip_config_toml, save_backup_now, seven_zip_export_available,
-    vault_list_item, BackupEntry, KdfUnlockPreset, VaultConfig, ZipImportClass,
+    abort_import_vault, classify_import_zip_bytes, classify_import_zip_path, close_all_vaults,
+    delete_backups, delete_vault, export_backups_to_path, export_logical_seven_zip,
+    export_logical_seven_zip_to_path, export_store_zip, export_store_zip_to_path, fs_create_file,
+    fs_create_folder, fs_delete, fs_ensure_folder, fs_import_from_os_path,
+    fs_import_from_os_path_deferred, fs_list_tree, fs_mkdir, fs_move, fs_os_path, fs_read_file,
+    fs_read_range, fs_rename, fs_seal_staged_imports, fs_tree_revision, fs_truncate, fs_write_file,
+    import_logical_files_zip, import_logical_files_zip_path, import_logical_os_path,
+    import_logical_seven_zip, import_logical_seven_zip_path, import_store_from_archive_path,
+    import_store_zip, ingest_import_directory, list_backups, parse_backup_import_path,
+    parse_embedded_settings, probe_export_password, probe_logical_seven_zip,
+    probe_logical_seven_zip_path, probe_store_zip, promote_backup_save, read_backup_zip_bytes,
+    read_import_archive_bytes, read_import_zip_settings, read_zip_config_toml, save_backup_now,
+    seven_zip_export_available, vault_list_item, BackupEntry, KdfUnlockPreset, VaultConfig,
+    ZipImportClass,
 };
 
 use super::secret::{secret_bytes, SecretString};
@@ -781,21 +781,6 @@ pub fn ingest_content_fd(vault_id: &str, logical_path: &str, fd: i32) -> RpcResp
     {
         let _ = (vault_id, logical_path, fd);
         err("not_implemented", "content import is unavailable".into())
-    }
-}
-
-pub(super) fn vault_recover_ack(params: Value) -> RpcResponse {
-    let parsed: VaultIdParams = match serde_json::from_value(params) {
-        Ok(v) => v,
-        Err(error) => return err("invalid_request", error.to_string()),
-    };
-    let root = match require_vault_root() {
-        Ok(root) => root,
-        Err(response) => return response,
-    };
-    match acknowledge_dirty_close(&root, parsed.id.trim()) {
-        Ok(()) => ok(json!(null)),
-        Err(error) => map_core_err(error),
     }
 }
 

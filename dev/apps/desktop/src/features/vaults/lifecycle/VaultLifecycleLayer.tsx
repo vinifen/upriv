@@ -1,5 +1,5 @@
 import type { I18nKey } from "@/i18n/types";
-import type { VaultLifecycleIntent, VaultListItem } from "@upriv/shared";
+import type { VaultListItem } from "@upriv/shared";
 import { CloseAllUnsavedModal } from "./modals/CloseAllUnsavedModal";
 import { PlainHeldModal, PlainPlaceModal } from "./modals/PlainFolderModals";
 import { VaultLifecycleModal } from "./modals/VaultLifecycleModal";
@@ -13,7 +13,6 @@ import type {
 
 interface VaultLifecycleLayerProps {
   lifecycleVault: VaultListItem | null;
-  lifecycleIntent: VaultLifecycleIntent | null;
   lifecycleOpen: boolean;
   lifecycleSubmitting?: boolean;
   lifecyclePipelineStep?: number;
@@ -21,7 +20,7 @@ interface VaultLifecycleLayerProps {
   lifecycleVerifyErrorKey?: I18nKey | null;
   lifecycleFieldPassword?: string;
   onLifecycleClose: () => void;
-  onLifecycleConfirm: (password: string | null) => void;
+  onLifecycleConfirm: (password: string) => void;
   recoveryVault: VaultListItem | null;
   recoveryLeftover: PlainLeftover | null | undefined;
   recoveryOpen: boolean;
@@ -42,7 +41,6 @@ interface VaultLifecycleLayerProps {
   heldSubmitting: boolean;
   onHeldApply: () => void;
   onHeldRestore: () => void;
-  closeHolderNames: readonly string[];
   closeAllUnsavedOpen: boolean;
   closeAllUnsavedSaving: boolean;
   onCloseAllUnsavedCancel: () => void;
@@ -51,10 +49,9 @@ interface VaultLifecycleLayerProps {
   onCloseAllUnsavedTimeout: () => void;
 }
 
-/** Unlock/close password dialog, close-all unsaved prompt, and recovery. */
+/** Unlock password dialog, plaintext folder prompts, close-all unsaved prompt, and recovery. */
 export function VaultLifecycleLayer({
   lifecycleVault,
-  lifecycleIntent,
   lifecycleOpen,
   lifecycleSubmitting = false,
   lifecyclePipelineStep = 0,
@@ -83,7 +80,6 @@ export function VaultLifecycleLayer({
   heldSubmitting,
   onHeldApply,
   onHeldRestore,
-  closeHolderNames,
   closeAllUnsavedOpen,
   closeAllUnsavedSaving,
   onCloseAllUnsavedCancel,
@@ -95,14 +91,12 @@ export function VaultLifecycleLayer({
     <>
       <VaultLifecycleModal
         vault={lifecycleVault}
-        intent={lifecycleIntent}
         open={lifecycleOpen && !placeOpen}
         submitting={lifecycleSubmitting}
         pipelineStep={lifecyclePipelineStep}
         budgetStartedAt={lifecycleBudgetStartedAt}
         verifyErrorKey={lifecycleVerifyErrorKey}
         initialPassword={lifecycleFieldPassword}
-        holderNames={closeHolderNames}
         onClose={onLifecycleClose}
         onConfirm={onLifecycleConfirm}
       />

@@ -50,7 +50,7 @@ pub use paths::{
     VaultRootAlias, VaultRootBootstrapPrefs, VaultRootDirStatus, VaultRootMode, VaultRootSource,
     VAULT_ROOT_ALIAS_FILE, VAULT_ROOT_SETTINGS_REL,
 };
-pub use runtime_state::{acknowledge_dirty_close, dirty_close_ids, sweep_stale_mount_leaves};
+pub use runtime_state::{dirty_close_ids, sweep_stale_mount_leaves};
 pub use session::{
     cancel_data_folder_export, data_folder_export_status, is_data_folder_export_running,
     is_unlock_in_flight, is_vault_open, open_session_ids, vault_activity_blocks_root_switch,
@@ -74,14 +74,13 @@ pub use vault::{
     ingest_import_reader, ingest_import_reader_staged, list_backups, list_vaults,
     load_vault_persistence, open_import_session, open_vault, open_vault_confirmed,
     parse_backup_import_path, parse_embedded_settings, plain_deletions, plain_destination,
-    plain_holders, plain_leftover, plain_status, plain_sync, probe_export_password,
-    probe_logical_seven_zip, probe_logical_seven_zip_path, probe_store_zip, probe_store_zip_path,
-    promote_backup_save, read_backup_zip_bytes, read_import_archive_bytes,
-    read_import_zip_settings, read_zip_config_toml, remove_plain_leftover, rename_vault,
-    save_backup_now, set_plain_observer, seven_zip_export_available, vault_list_item,
-    vault_store_on_disk_bytes, zip_directory_to_bytes, zip_directory_to_path, BackupEntry,
-    CloseVaultOutcome, DataFolderExport, EmbeddedVaultSettings, OpenVaultOutcome,
-    PlainCloseSummary, PlainDestination, PlainFolderClass, PlainHolder, PlainLeftover,
+    plain_leftover, plain_status, plain_sync, probe_export_password, probe_logical_seven_zip,
+    probe_logical_seven_zip_path, probe_store_zip, probe_store_zip_path, promote_backup_save,
+    read_backup_zip_bytes, read_import_archive_bytes, read_import_zip_settings,
+    read_zip_config_toml, remove_plain_leftover, rename_vault, save_backup_now, set_plain_observer,
+    seven_zip_export_available, vault_list_item, vault_store_on_disk_bytes, zip_directory_to_bytes,
+    zip_directory_to_path, BackupEntry, CloseVaultOutcome, DataFolderExport, EmbeddedVaultSettings,
+    OpenVaultOutcome, PlainCloseSummary, PlainDestination, PlainFolderClass, PlainLeftover,
     PlainObserver, PlainPlace, PlainStatus, PlainSyncReport, PlainTotals, PlainWipe, VaultListItem,
     VaultPersistence, VaultRenameResult, VaultWelcome, ZipImportClass, WELCOME_FILE_MAX_BYTES,
     WELCOME_README_LOGICAL_PATH,

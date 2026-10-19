@@ -1315,7 +1315,6 @@ export function VaultListScreen() {
 
       <VaultLifecycleModal
         vault={lifecycle.lifecycleVault}
-        intent={lifecycle.lifecycleIntent}
         open={lifecycleRequest !== null}
         submitting={lifecycle.credentialBusy}
         pipelineStep={lifecycle.credentialPipelineStep}

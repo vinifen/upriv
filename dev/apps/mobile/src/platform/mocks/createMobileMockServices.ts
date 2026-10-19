@@ -331,7 +331,6 @@ export function createMobileMockServices(): AppServices {
         suppressMockSeedVaultId(vaultId);
         removeRemappedMockSeedVault(vaultId);
       },
-      async recoverDirtyClose() {},
       async getExportBytes(vault, request) {
         return mockVaultExportBytes(vault, request);
       },

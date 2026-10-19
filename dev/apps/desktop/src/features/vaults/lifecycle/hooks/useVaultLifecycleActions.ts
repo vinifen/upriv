@@ -12,7 +12,6 @@ import {
   LOADING_BUDGET_MS,
   normalizeVaultSettingsConfig,
   plainFolderClassI18nKey,
-  requiresCloseDialog,
   storageModeIsPlaintext,
   BACKUP_CLOSE_TOAST_MS,
   backupCloseFailureToastKey,
@@ -59,7 +58,6 @@ import {
   rpcVaultPlainDeletions,
   rpcVaultPlainDestination,
   rpcVaultPlainHeld,
-  rpcVaultPlainHolders,
   rpcVaultPlainLeftover,
   rpcVaultPlainRemove,
 } from "@/lib/rpc";
@@ -137,8 +135,6 @@ export function useVaultLifecycleActions({
     password: string;
   } | null>(null);
   const credentialVerifyIdsRef = useRef(new Set<string>());
-  /** Close that used a just-typed password — drop it from RAM if that attempt fails. */
-  const typedClosePasswordRef = useRef<string | null>(null);
   /** Unlock passwords to put back in session RAM after a successful open. */
   const unlockRetainPasswordsRef = useRef(new Map<string, string>());
   /** Drops a stale close-all loop when the user starts another. */
@@ -187,7 +183,6 @@ export function useVaultLifecycleActions({
   } | null>(null);
   const [heldSubmitting, setHeldSubmitting] = useState(false);
   const [recoveryLeftover, setRecoveryLeftover] = useState<PlainLeftover | null | undefined>(null);
-  const [closeHolderNames, setCloseHolderNames] = useState<string[]>([]);
 
   useEffect(() => {
     if (!recoveryVaultId) {
@@ -212,31 +207,6 @@ export function useVaultLifecycleActions({
       cancelled = true;
     };
   }, [recoveryVaultId, showError]);
-
-  useEffect(() => {
-    const vaultId = lifecycleRequest?.vaultId;
-    const vault = vaultId ? vaultsRef.current.find((item) => item.id === vaultId) : undefined;
-    if (
-      lifecycleRequest?.intent !== "close" ||
-      !vaultId ||
-      !vault ||
-      !storageModeIsPlaintext(vault.storageMode)
-    ) {
-      setCloseHolderNames([]);
-      return;
-    }
-    let cancelled = false;
-    void rpcVaultPlainHolders(vaultId)
-      .then((holders) => {
-        if (!cancelled) setCloseHolderNames(holders.map((holder) => holder.name));
-      })
-      .catch(() => {
-        if (!cancelled) setCloseHolderNames([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [lifecycleRequest]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -268,10 +238,7 @@ export function useVaultLifecycleActions({
   );
 
   useEffect(() => {
-    const request = lifecycleRequest;
-    if (!exportJobVaultId || request?.intent !== "unlock" || request.vaultId !== exportJobVaultId) {
-      return;
-    }
+    if (!exportJobVaultId || lifecycleRequest?.vaultId !== exportJobVaultId) return;
     // Close a leftover unlock dialog. The busy toast stays on the open attempt.
     setLifecycleRequest(null);
   }, [exportJobVaultId, lifecycleRequest, setLifecycleRequest]);
@@ -649,10 +616,6 @@ export function useVaultLifecycleActions({
         },
         onComplete: () => {
           if (closeDeferredRef.current.delete(vault.id)) {
-            if (typedClosePasswordRef.current === vault.id) {
-              lifecycleService.clearPasswordInSession(vault.id);
-              typedClosePasswordRef.current = null;
-            }
             if (isCredentialVerifying(vault.id)) {
               clearCredentialVerify(vault.id);
             }
@@ -669,7 +632,6 @@ export function useVaultLifecycleActions({
               setCredentialErrorKey(null);
             }
           }
-          typedClosePasswordRef.current = null;
           setTypedCredential((current) => (current?.vaultId === vault.id ? null : current));
           if (lifecycleRequestRef.current?.vaultId === vault.id) setLifecycleRequest(null);
           releaseClosedSession(vault.id);
@@ -705,11 +667,6 @@ export function useVaultLifecycleActions({
           });
         },
         onError: (errorI18nKey) => {
-          const typedClose = typedClosePasswordRef.current === vault.id;
-          if (typedClose) {
-            lifecycleService.clearPasswordInSession(vault.id);
-            typedClosePasswordRef.current = null;
-          }
           if (isCredentialVerifying(vault.id)) {
             clearCredentialVerify(vault.id);
             if (lifecycleRequestRef.current?.vaultId === vault.id) {
@@ -776,13 +733,9 @@ export function useVaultLifecycleActions({
         showToast(t("toast.pipeline_busy"));
         return;
       }
-      if (requiresCloseDialog(vault)) {
-        setLifecycleRequest({ vaultId: vault.id, intent: "close" });
-        return;
-      }
       startClosePipeline(vault, "close");
     },
-    [closingHold.holdIds, pipeline, setLifecycleRequest, showToast, startClosePipeline, t],
+    [closingHold.holdIds, pipeline, showToast, startClosePipeline, t],
   );
 
   const closeAllOpenVaults = useCallback(
@@ -805,17 +758,12 @@ export function useVaultLifecycleActions({
         }
       }
       const alreadyRunning = pipeline.isRunningNow();
-      const needsConfirm: VaultListItem[] = [];
       let started = 0;
       let queuedName = "";
       for (const vault of open) {
         if (generation !== closeAllGenRef.current) return;
         if (pipeline.isVaultPipelineBusy(vault.id)) continue;
         if (closingHold.holdIds.includes(vault.id)) continue;
-        if (requiresCloseDialog(vault)) {
-          needsConfirm.push(vault);
-          continue;
-        }
         if (
           startClosePipeline(vault, "close", {
             quietQueue: true,
@@ -827,15 +775,6 @@ export function useVaultLifecycleActions({
         }
       }
       if (generation !== closeAllGenRef.current) return;
-      const pendingConfirm = needsConfirm[0];
-      if (pendingConfirm) {
-        setLifecycleRequest({ vaultId: pendingConfirm.id, intent: "close" });
-      }
-      const leftBehind = needsConfirm.length - (pendingConfirm ? 1 : 0);
-      if (leftBehind > 0) {
-        showToast(t("toast.close_all_needs_confirm", { count: String(leftBehind) }));
-        return;
-      }
       if (started > 1) {
         showToast(t("toast.close_all_queued", { count: String(started) }));
         return;
@@ -844,15 +783,7 @@ export function useVaultLifecycleActions({
         showToast(t("toast.pipeline_queued", { name: queuedName }));
       }
     },
-    [
-      closingHold.holdIds,
-      dispatchWorkspace,
-      pipeline,
-      setLifecycleRequest,
-      showToast,
-      startClosePipeline,
-      t,
-    ],
+    [closingHold.holdIds, dispatchWorkspace, pipeline, showToast, startClosePipeline, t],
   );
 
   const closeVaultAfterUnsaved = useCallback(
@@ -864,13 +795,9 @@ export function useVaultLifecycleActions({
         showToast(t("toast.pipeline_busy"));
         return;
       }
-      if (requiresCloseDialog(vault)) {
-        setLifecycleRequest({ vaultId: vault.id, intent: "close" });
-        return;
-      }
       startClosePipeline(vault, "close", { unsavedResolved: true });
     },
-    [closingHold.holdIds, pipeline, setLifecycleRequest, showToast, startClosePipeline, t],
+    [closingHold.holdIds, pipeline, showToast, startClosePipeline, t],
   );
 
   const cancelCloseAllUnsaved = useCallback(() => {
@@ -947,7 +874,7 @@ export function useVaultLifecycleActions({
         markCredentialVerify(vault.id);
         setCredentialBusy(true);
         setCredentialErrorKey(null);
-        setLifecycleRequest({ vaultId: vault.id, intent: "unlock" });
+        setLifecycleRequest({ vaultId: vault.id });
         return;
       }
       if (pipeline.isVaultPipelineBusy(vault.id)) return;
@@ -962,13 +889,13 @@ export function useVaultLifecycleActions({
         return;
       }
       if (!storageModeIsPlaintext(vault.storageMode)) {
-        setLifecycleRequest({ vaultId: vault.id, intent: "unlock" });
+        setLifecycleRequest({ vaultId: vault.id });
         return;
       }
       void (async () => {
         try {
           await rpcVaultPlainDestination(vault.id);
-          setLifecycleRequest({ vaultId: vault.id, intent: "unlock" });
+          setLifecycleRequest({ vaultId: vault.id });
         } catch (error) {
           if (isRpcError(error) && error.code === WORKSPACE_ERROR_CODES.UNSET) {
             setPlaceWarningClass(null);
@@ -1168,84 +1095,42 @@ export function useVaultLifecycleActions({
   scheduleIdleRetryRef.current = idleAutoClose.scheduleIdleRetry;
 
   const handleLifecycleConfirm = useCallback(
-    (password: string | null) => {
+    (password: string) => {
       if (!lifecycleRequest || !lifecycleVault) return;
-      const { vaultId, intent } = lifecycleRequest;
+      const { vaultId } = lifecycleRequest;
       const closeModalOnSubmit = getSettingsSnapshot().ui.lifecycle_close_modal_on_submit === true;
-
-      if (intent === "unlock") {
-        if (vaultOpenHeld(vaultId)) {
-          showToast(t("error.vault_busy"));
-          return;
-        }
-        if (pipeline.isVaultPipelineBusy(vaultId)) {
-          showToast(t("toast.pipeline_busy"));
-          return;
-        }
-        if (password) {
-          lifecycleService.setPasswordInSession(vaultId, password);
-          setTypedCredential({ vaultId, password });
-          unlockRetainPasswordsRef.current.set(vaultId, password);
-        }
-        setCredentialErrorKey(null);
-        setCredentialBusy(true);
-        markCredentialVerify(vaultId);
-        const hadActiveJob = pipeline.isRunningNow();
-        const started = startOpenPipeline(vaultId);
-        if (!started) {
-          clearCredentialVerify(vaultId);
-          unlockRetainPasswordsRef.current.delete(vaultId);
-          setCredentialBusy(false);
-          setTypedCredential((current) => (current?.vaultId === vaultId ? null : current));
-          lifecycleService.clearPasswordInSession(vaultId);
-          showToast(t("toast.pipeline_busy"));
-          return;
-        }
-        if (hadActiveJob) {
-          showToast(t("toast.pipeline_queued", { name: lifecycleVault.displayName }));
-        }
-        if (closeModalOnSubmit) {
-          setLifecycleRequest(null);
-          setCredentialBusy(false);
-        }
+      if (vaultOpenHeld(vaultId)) {
+        showToast(t("error.vault_busy"));
         return;
       }
-
-      if (password) {
-        if (pipeline.isVaultPipelineBusy(vaultId)) {
-          showToast(t("toast.pipeline_busy"));
-          return;
-        }
-        lifecycleService.setPasswordInSession(vaultId, password);
-        typedClosePasswordRef.current = vaultId;
-        setTypedCredential({ vaultId, password });
-        setCredentialErrorKey(null);
-        setCredentialBusy(true);
-        markCredentialVerify(vaultId);
-        const started = startClosePipeline(lifecycleVault, intent);
-        if (!started) {
-          clearCredentialVerify(vaultId);
-          typedClosePasswordRef.current = null;
-          setTypedCredential((current) => (current?.vaultId === vaultId ? null : current));
-          setCredentialBusy(false);
-          lifecycleService.clearPasswordInSession(vaultId);
-          showToast(t("toast.pipeline_busy"));
-          return;
-        }
-        if (closeModalOnSubmit) {
-          setLifecycleRequest(null);
-          setCredentialBusy(false);
-        }
-        return;
-      }
-
-      // Close without password: keep the dialog if start fails (hold / busy).
-      const started = startClosePipeline(lifecycleVault, intent);
-      if (!started) {
+      if (pipeline.isVaultPipelineBusy(vaultId)) {
         showToast(t("toast.pipeline_busy"));
         return;
       }
-      setLifecycleRequest(null);
+      lifecycleService.setPasswordInSession(vaultId, password);
+      setTypedCredential({ vaultId, password });
+      unlockRetainPasswordsRef.current.set(vaultId, password);
+      setCredentialErrorKey(null);
+      setCredentialBusy(true);
+      markCredentialVerify(vaultId);
+      const hadActiveJob = pipeline.isRunningNow();
+      const started = startOpenPipeline(vaultId);
+      if (!started) {
+        clearCredentialVerify(vaultId);
+        unlockRetainPasswordsRef.current.delete(vaultId);
+        setCredentialBusy(false);
+        setTypedCredential((current) => (current?.vaultId === vaultId ? null : current));
+        lifecycleService.clearPasswordInSession(vaultId);
+        showToast(t("toast.pipeline_busy"));
+        return;
+      }
+      if (hadActiveJob) {
+        showToast(t("toast.pipeline_queued", { name: lifecycleVault.displayName }));
+      }
+      if (closeModalOnSubmit) {
+        setLifecycleRequest(null);
+        setCredentialBusy(false);
+      }
     },
     [
       clearCredentialVerify,
@@ -1257,7 +1142,6 @@ export function useVaultLifecycleActions({
       pipeline,
       setLifecycleRequest,
       showToast,
-      startClosePipeline,
       startOpenPipeline,
       t,
       vaultOpenHeld,
@@ -1277,7 +1161,7 @@ export function useVaultLifecycleActions({
         setRecoveryVaultId(null);
         setCredentialErrorKey(null);
         setCredentialBusy(false);
-        setLifecycleRequest({ vaultId, intent: "unlock" });
+        setLifecycleRequest({ vaultId });
         return;
       }
 
@@ -1316,7 +1200,7 @@ export function useVaultLifecycleActions({
     (vaultId: string) => {
       setPlaceVaultId(null);
       setPlaceWarningClass(null);
-      setLifecycleRequest({ vaultId, intent: "unlock" });
+      setLifecycleRequest({ vaultId });
     },
     [setLifecycleRequest],
   );
@@ -1401,7 +1285,6 @@ export function useVaultLifecycleActions({
           pipelineBackgroundRef.current = true;
         } else {
           lifecycleService.clearPasswordInSession(modalVaultId);
-          typedClosePasswordRef.current = null;
           unlockRetainPasswordsRef.current.delete(modalVaultId);
           setTypedCredential((current) => (current?.vaultId === modalVaultId ? null : current));
         }
@@ -1435,7 +1318,6 @@ export function useVaultLifecycleActions({
     handleRecoveryAction,
     handleVaultDelete,
     recoveryLeftover,
-    closeHolderNames,
     placeOpen: placeVaultId !== null,
     placeVaultName: placeVault?.displayName ?? "",
     placeWorkspaceChoices: appConfigEditAllowed("workspace.path", vaults, pipelineListStatus),

@@ -325,9 +325,10 @@ pub fn dirty_close_ids(root: &VaultRoot) -> Result<Vec<String>> {
     Ok(dirty)
 }
 
-/// Clear a dirty-close record after the user discards recovery. Plaintext
-/// records stay: only a wipe of that folder removes one.
-pub fn acknowledge_dirty_close(root: &VaultRoot, vault_id: &str) -> Result<()> {
+/// Clear a dirty-close record once a leftover plaintext folder was wiped: the
+/// store was saved after every change, so the crash left nothing else to
+/// decide. Other plaintext records stay; only a wipe of that folder removes one.
+pub(crate) fn acknowledge_dirty_close(root: &VaultRoot, vault_id: &str) -> Result<()> {
     mark_session_closed(root, vault_id)
 }
 

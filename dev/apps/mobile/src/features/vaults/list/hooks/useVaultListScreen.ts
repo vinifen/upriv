@@ -453,8 +453,7 @@ export function useVaultListScreen() {
   );
 
   useEffect(() => {
-    if (!lifecycleRequest || lifecycleRequest.intent !== "unlock") return;
-    if (!blockOpenVaultIdsRef.current.has(lifecycleRequest.vaultId)) return;
+    if (!lifecycleRequest || !blockOpenVaultIdsRef.current.has(lifecycleRequest.vaultId)) return;
     setLifecycleRequest(null);
   }, [
     backupJob.job,

@@ -437,7 +437,7 @@ file_manager_dock_expanded = false
 # vault_list_view = "default"                # optional
 # vault_list_search = ""                     # optional
 # vault_list_show_create_button = true       # optional
-# lifecycle_close_modal_on_submit = false    # optional; close unlock/lock dialog on Confirm
+# lifecycle_close_modal_on_submit = false    # optional; close the unlock dialog on Confirm
 # lifecycle_open_file_manager_on_open = false # optional; open file manager after unlock if no other modal
 # file_manager_confirm_delete = true # optional; confirm before deleting in file manager
 
@@ -468,7 +468,7 @@ last_opened_vault = "my-encrypted-notes"
 | `locale` | `[ui].locale` | Yes (Language) | Explicit **Save** in System settings |
 | `theme` | `[ui].theme` | Yes (General) | Explicit **Save** in System settings |
 | `vault_list_show_header_more_button` | `[ui].show_header_more_button` | Yes (General) | Explicit **Save** in System settings. Default `true`. Shows the header overflow (⋮) menu. |
-| `lifecycle_close_modal_on_submit` | `[ui].lifecycle_close_modal_on_submit` | Yes (General) | Explicit **Save** in System settings. Default `false`. When `true`, unlock/lock password dialog closes on Confirm (progress on the row). |
+| `lifecycle_close_modal_on_submit` | `[ui].lifecycle_close_modal_on_submit` | Yes (General) | Explicit **Save** in System settings. Default `false`. When `true`, the unlock password dialog closes on Confirm (progress on the row). |
 | `lifecycle_open_file_manager_on_open` | `[ui].lifecycle_open_file_manager_on_open` | Yes (General) | Explicit **Save** in System settings. Default `false`. When `true`, after unlock succeeds open the in-app file manager if no other modal is open. |
 | `file_manager_confirm_delete` | `[ui].file_manager_confirm_delete` | Yes (General) | Explicit **Save** in System settings. Default `true`. When `true`, deleting a file/folder in the file manager asks for confirmation. |
 | `file_manager_dock_expanded` | `[ui].file_manager_dock_expanded` | **No** | When user **expands or collapses** the minimized file-manager dock (bottom-right chip list). Restored on next app launch. Default `false` (collapsed — count button only). |
@@ -1111,7 +1111,7 @@ click(Backups|Config)      → stopPropagation; open respective modal
 | **Closing** | Row badge + modal (if open) + finite budget | During flush into `store/` |
 | **Opening** | Row badge + unlock dialog (while open) + finite budget | During Argon2 unlock |
 
-**Open/close pipelines (v1):** one global **FIFO queue** — only one open/close/create runs at a time; further requests wait. Progress lives on the **row** (and the unlock/lock dialog while it is open); there is **no** blocking full-screen pipeline overlay and no **Continue in background**. Queued vaults show `opening` / `closing` / `creating` until their turn completes. No mid-pipeline cancel (abort would risk inconsistent disk state). Desktop/mobile UI implements the FIFO queue in `useVaultPipelineRun`; live open/close call `vault_open` / `vault_close`. While a closed vault is exporting, changing its password, or changing unlock RAM, the row names that work and `vault_open` is refused until it finishes. That same hold refuses a data-folder switch. Close already shows Backing up… while its backup zip is written.
+**Open/close pipelines (v1):** one global **FIFO queue** — only one open/close/create runs at a time; further requests wait. Progress lives on the **row** (and the unlock dialog while it is open; lock opens no dialog); there is **no** blocking full-screen pipeline overlay and no **Continue in background**. Queued vaults show `opening` / `closing` / `creating` until their turn completes. No mid-pipeline cancel (abort would risk inconsistent disk state). Desktop/mobile UI implements the FIFO queue in `useVaultPipelineRun`; live open/close call `vault_open` / `vault_close`. While a closed vault is exporting, changing its password, or changing unlock RAM, the row names that work and `vault_open` is refused until it finishes. That same hold refuses a data-folder switch. Close already shows Backing up… while its backup zip is written.
 
 **Pipeline — erros e anti-travamento:**
 

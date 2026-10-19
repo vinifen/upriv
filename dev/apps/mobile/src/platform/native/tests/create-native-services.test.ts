@@ -67,7 +67,6 @@ vi.mock("@/lib/rpc", () => ({
   rpcVaultImportZip: vi.fn(),
   rpcVaultImport7z: vi.fn(),
   rpcVaultImportProbe: vi.fn(async () => ({ ok: true, kind: "seven_zip" })),
-  rpcVaultRecoverAck: vi.fn(),
   rpcVaultFsList: vi.fn(),
   rpcVaultFsRevision: vi.fn(),
   rpcVaultFsRead: vi.fn(),

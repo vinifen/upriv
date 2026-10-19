@@ -10,7 +10,7 @@ use std::path::{Component, Path, PathBuf};
 
 use serde::Serialize;
 
-use super::marker::{self, MarkerState};
+use super::marker;
 use super::volume::{self, PlainFolderClass};
 use crate::config::{load_app_settings_at, load_vault_config, VaultConfig};
 use crate::error::{PlainDestinationReason, Result, UprivError};
@@ -165,28 +165,15 @@ pub(super) fn check(root: &VaultRoot, vault_id: &str, dest: &Destination) -> Res
 /// What is at the folder path before open writes anything.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Leaf {
+    /// Open makes the folder, and close removes it.
     Missing,
-    /// An empty folder the user made. Open never removes it or changes its
-    /// permissions.
+    /// An empty folder the user made. Open and close never remove it or
+    /// change its permissions.
     Empty,
-    /// This vault's folder from an earlier session, wiped at close.
-    Closed {
-        made_folder: bool,
-    },
 }
 
-impl Leaf {
-    pub(super) fn made_by_upriv(self) -> bool {
-        match self {
-            Self::Missing => true,
-            Self::Empty => false,
-            Self::Closed { made_folder } => made_folder,
-        }
-    }
-}
-
-/// The folder may be missing, empty, or hold only this vault's closed marker.
-/// A folder with this vault's open marker is a crash leftover.
+/// The folder may be missing or empty. A folder with this vault's marker is a
+/// crash leftover; one with another vault's marker belongs to that vault.
 pub(super) fn inspect_leaf(folder: &Path, vault_id: &str) -> Result<Leaf> {
     let not_a_folder = || refused(folder, PlainDestinationReason::NotAFolder);
     let occupied = || refused(folder, PlainDestinationReason::Occupied);
@@ -199,24 +186,15 @@ pub(super) fn inspect_leaf(folder: &Path, vault_id: &str) -> Result<Leaf> {
     if !owned_by_current_user(folder) {
         return Err(not_a_folder());
     }
-    let marker = marker::read(folder).map_err(|_| occupied())?;
-    let leaf = match &marker {
-        None => Leaf::Empty,
-        Some(found) if found.vault_id != vault_id => return Err(occupied()),
-        Some(found) if found.state == MarkerState::Open => return Err(UprivError::PlainLeftover),
-        Some(found) => Leaf::Closed {
-            made_folder: found.made_folder,
-        },
-    };
-    let allowed: &[&str] = if marker.is_some() {
-        &[marker::MARKER_NAME]
-    } else {
-        &[]
-    };
-    if !super::disk::holds_only(folder, allowed)? {
+    match marker::read(folder).map_err(|_| occupied())? {
+        None => {}
+        Some(found) if found.vault_id == vault_id => return Err(UprivError::PlainLeftover),
+        Some(_) => return Err(occupied()),
+    }
+    if !super::disk::holds_only(folder, &[])? {
         return Err(occupied());
     }
-    Ok(leaf)
+    Ok(Leaf::Empty)
 }
 
 /// Make `workspace/` under the chosen place when it is missing. The place
@@ -454,7 +432,7 @@ mod tests {
     }
 
     #[test]
-    fn the_leaf_must_be_missing_empty_or_this_vaults_closed_folder() {
+    fn the_leaf_must_be_missing_or_empty() {
         let tmp = tempfile::tempdir().unwrap();
         let folder = tmp.path().join("Notes");
         assert_eq!(inspect_leaf(&folder, "notes").unwrap(), Leaf::Missing);
@@ -476,12 +454,7 @@ mod tests {
             })
         ));
 
-        marker::write(&folder, &open.closed()).unwrap();
-        assert_eq!(
-            inspect_leaf(&folder, "notes").unwrap(),
-            Leaf::Closed { made_folder: true }
-        );
-
+        marker::remove(&folder).unwrap();
         std::fs::write(folder.join("someone-else.txt"), b"x").unwrap();
         assert!(matches!(
             inspect_leaf(&folder, "notes"),

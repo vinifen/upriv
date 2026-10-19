@@ -225,8 +225,6 @@ pub enum PlainDestinationReason {
     NotAFolder,
     /// App-private storage on a phone. Other apps could not open the files.
     PrivateStorage,
-    /// This system cannot hold a plaintext folder at that kind of place.
-    Unsupported,
 }
 
 impl PlainDestinationReason {
@@ -238,7 +236,6 @@ impl PlainDestinationReason {
             Self::Occupied => "occupied",
             Self::NotAFolder => "not_a_folder",
             Self::PrivateStorage => "private_storage",
-            Self::Unsupported => "unsupported",
         }
     }
 }

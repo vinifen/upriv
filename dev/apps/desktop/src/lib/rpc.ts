@@ -46,7 +46,6 @@ import {
   parsePlainCloseSummary,
   parsePlainDestination,
   parsePlainHeldStatus,
-  parsePlainHolders,
   parsePlainLeftover,
   parseBackupFailure,
   parseDataFolderExportStatus,
@@ -54,7 +53,6 @@ import {
   type DataFolderExportProgress,
   type PlainDestination,
   type PlainHeldStatus,
-  type PlainHolder,
   type PlainLeftover,
   type VaultClosePhase,
 } from "@upriv/shared";
@@ -590,10 +588,6 @@ export async function rpcVaultPlainDeletions(id: string, apply: boolean): Promis
   await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_PLAIN_DELETIONS, { id, apply });
 }
 
-export async function rpcVaultPlainHolders(id: string): Promise<PlainHolder[]> {
-  return parsePlainHolders(await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_PLAIN_HOLDERS, { id }));
-}
-
 export async function rpcVaultClose(
   id: string,
   reason: "user" | "auto" = "user",
@@ -730,10 +724,6 @@ function parseVaultResult(raw: unknown, label: string): VaultListItem {
 
 export async function rpcVaultDelete(id: string): Promise<void> {
   await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_DELETE, { id });
-}
-
-export async function rpcVaultRecoverAck(id: string): Promise<void> {
-  await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_RECOVER_ACK, { id });
 }
 
 export async function rpcVaultExportProbe(id: string, password: string): Promise<boolean> {

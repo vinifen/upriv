@@ -10,7 +10,6 @@
 
 mod dest;
 mod disk;
-mod holders;
 mod leftover;
 mod marker;
 mod names;
@@ -42,12 +41,11 @@ use crate::store::{is_reserved_logical, VaultIndex};
 use crate::vault::wipe::WipeOptions;
 
 pub use dest::{plain_destination, PlainDestination, PlainPlace};
-pub use holders::PlainHolder;
 pub use leftover::{plain_leftover, remove_plain_leftover, PlainLeftover, PlainWipe};
 pub use volume::PlainFolderClass;
 pub use worker::{set_plain_observer, PlainObserver};
 
-pub(crate) use leftover::{adopt_orphans, clear_closed_leaf, clear_for_delete, ensure_no_leftover};
+pub(crate) use leftover::{adopt_orphans, clear_for_delete, ensure_no_leftover};
 pub(crate) use policy::forget as forget_plain_policy;
 pub(crate) use worker::store_changed;
 
@@ -147,18 +145,6 @@ pub struct PlainSyncReport {
     pub retry: u32,
     /// The folder or its marker is gone. Nothing synced.
     pub folder_missing: bool,
-}
-
-impl PlainSyncReport {
-    /// Nothing changed and nothing needs the user.
-    pub fn is_quiet(&self) -> bool {
-        self.saved == 0
-            && self.written == 0
-            && self.conflicts == 0
-            && self.held_deletions == 0
-            && self.unwritable == 0
-            && !self.folder_missing
-    }
 }
 
 /// What other apps did this session, as saved into the store.
@@ -281,7 +267,7 @@ pub(crate) fn activate(
         dest.folder.clone(),
         token,
         helpers,
-        leaf.made_by_upriv(),
+        leaf == dest::Leaf::Missing,
         rules,
     );
     let marker = Marker::open(vault_id, &plain.token, &plain.helpers, plain.made_folder);
@@ -331,10 +317,8 @@ fn fill(
     worker: &worker::Worker,
 ) -> Result<Filled> {
     let folder = dest.folder.as_path();
-    match leaf {
-        dest::Leaf::Missing => disk::make_leaf(folder)?,
-        dest::Leaf::Closed { .. } => disk::set_folder_writable(folder, true)?,
-        dest::Leaf::Empty => {}
+    if leaf == dest::Leaf::Missing {
+        disk::make_leaf(folder)?;
     }
     marker::write(folder, marker)?;
     residue::protect_folder(folder, &marker.helpers);
@@ -570,14 +554,4 @@ pub fn plain_deletions(root: &VaultRoot, vault_id: &str, apply: bool) -> Result<
     );
     store_changed(&vault_dir);
     plain_status(root, vault_id)
-}
-
-/// `vault_plain_holders`: apps with files of the open folder still open.
-pub fn plain_holders(root: &VaultRoot, vault_id: &str) -> Result<Vec<PlainHolder>> {
-    let vault_dir = plain_vault_dir(root, vault_id)?;
-    let folder = with_open_session(&vault_dir, |session| {
-        Ok(session.plain.as_ref().map(|plain| plain.folder.clone()))
-    })?
-    .ok_or_else(|| UprivError::VaultNotOpen(vault_id.to_string()))?;
-    Ok(holders::holders(&folder))
 }

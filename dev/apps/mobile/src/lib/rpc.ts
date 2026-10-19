@@ -25,7 +25,6 @@ import {
   parsePlainCloseSummary,
   parsePlainDestination,
   parsePlainHeldStatus,
-  parsePlainHolders,
   parsePlainLeftover,
   parseBackupFailure,
   parseDataFolderExportStatus,
@@ -33,7 +32,6 @@ import {
   type DataFolderExportProgress,
   type PlainDestination,
   type PlainHeldStatus,
-  type PlainHolder,
   type PlainLeftover,
   type VaultClosePhase,
   type AllowlistedUiLogEvent,
@@ -609,10 +607,6 @@ export async function rpcVaultPlainDeletions(id: string, apply: boolean): Promis
   await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_PLAIN_DELETIONS, { id, apply });
 }
 
-export async function rpcVaultPlainHolders(id: string): Promise<PlainHolder[]> {
-  return parsePlainHolders(await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_PLAIN_HOLDERS, { id }));
-}
-
 /** Unlock a just-created vault so files can be streamed. Does not mount. */
 export async function rpcVaultIngestOpen(id: string, password: string): Promise<void> {
   await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_INGEST_OPEN, { id, password });
@@ -785,10 +779,6 @@ function parseVaultResult(raw: unknown, label: string): VaultListItem {
 
 export async function rpcVaultDelete(id: string): Promise<void> {
   await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_DELETE, { id });
-}
-
-export async function rpcVaultRecoverAck(id: string): Promise<void> {
-  await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_RECOVER_ACK, { id });
 }
 
 export async function rpcVaultExportCapabilities(): Promise<{ sevenZip: boolean }> {
