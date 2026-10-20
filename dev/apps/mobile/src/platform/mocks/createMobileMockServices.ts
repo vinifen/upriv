@@ -108,10 +108,6 @@ function mockOpenRamFails(vaultId: string): boolean {
   return vaultId === "cold-storage";
 }
 
-function mockCloseGateFails(vaultId: string): boolean {
-  return vaultPasswordInRam.get(vaultId) === "gatefail";
-}
-
 const MOCK_BACKUPS: Record<string, VaultBackupEntry[]> = {
   "my-encrypted-notes": [
     {
@@ -558,11 +554,7 @@ export function createMobileMockServices(): AppServices {
         });
       },
       async runClosingPipeline(vaultId, onStep) {
-        await runTimedPipeline(CLOSING_PIPELINE_STEP_COUNT, onStep, (stepIndex) => {
-          if (stepIndex === 0 && mockCloseGateFails(vaultId)) {
-            throw new VaultPipelineError(VAULT_PIPELINE_ERROR_CODES.HEADER_TEST_FAILED);
-          }
-        });
+        await runTimedPipeline(CLOSING_PIPELINE_STEP_COUNT, onStep);
         return { backupFailed: false, backupFailure: null, plain: null };
       },
       resolveWorkspacePath(displayName, parentPath) {

@@ -1,12 +1,6 @@
 import { describe, expect, it } from "vitest";
-import {
-  applyImportedFilesToWorkspace,
-  importBatchIsReadFailure,
-  importBatchIsWriteFailure,
-  importLogicalFiles,
-} from "../importLogicalFiles";
+import { importLogicalFiles } from "../importLogicalFiles";
 import { importFileSlots } from "../importSlots";
-import type { VaultWorkspaceAction } from "../workspaceReducer";
 
 describe("importLogicalFiles", () => {
   it("imports PDFs and notes through importFile when there is no byte importer", async () => {
@@ -148,7 +142,6 @@ describe("importLogicalFiles", () => {
     expect(written).toEqual(["a.txt"]);
     expect(result.importedPaths).toEqual(["/a.txt"]);
     expect(result.writeFailureName).toBe("b.txt");
-    expect(importBatchIsWriteFailure(result)).toBe(false);
   });
 
   it("stops queued files when the abort signal fires after the current write", async () => {
@@ -243,7 +236,7 @@ describe("importLogicalFiles", () => {
       ensureFolder: () => "/",
       importFile: () => "/a.txt",
     });
-    expect(importBatchIsReadFailure(result)).toBe(true);
+    expect(result.importedPaths).toEqual([]);
     expect(result.readFailureName).toBe("a.txt");
   });
 
@@ -282,30 +275,8 @@ describe("importLogicalFiles", () => {
         throw new Error("write failed");
       },
     });
-    expect(importBatchIsWriteFailure(result)).toBe(true);
     expect(result.writeFailureName).toBe("a.txt");
     expect(result.importedPaths).toEqual([]);
-  });
-
-  it("does not dispatch workspace actions when nothing imported", async () => {
-    const actions: VaultWorkspaceAction[] = [];
-    await applyImportedFilesToWorkspace(
-      {
-        importedPaths: [],
-        foldersToExpand: ["/docs"],
-        skippedInvalid: 1,
-        skippedUnsupported: 0,
-        readFailureName: null,
-        writeFailureName: null,
-      },
-      (action) => {
-        actions.push(action);
-      },
-      () => {
-        actions.push({ type: "tree_mutated", revision: 1 });
-      },
-    );
-    expect(actions).toEqual([]);
   });
 
   it("keeps two byte imports in flight and returns paths in start order", async () => {

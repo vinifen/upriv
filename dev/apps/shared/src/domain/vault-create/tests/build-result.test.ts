@@ -139,7 +139,6 @@ describe("buildCreateVaultResult", () => {
           archive_mode: "compress_encrypt",
           compression_level: 9,
           solid: true,
-          method: "lzma2",
         },
       }),
       [],

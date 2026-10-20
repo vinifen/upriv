@@ -1,8 +1,11 @@
 import {
   CORE_RPC_COMMANDS,
   CORE_RPC_TIMEOUT_MS,
+  MOBILE_ONLY_RPC_COMMANDS,
+  MOBILE_ONLY_RPC_TIMEOUT_MS,
   RpcError,
   isRpcError,
+  appWorkspaceForDaemon,
   normalizeAppSettings,
   normalizeVaultSettingsConfig,
   vaultSettingsForDaemon,
@@ -65,6 +68,12 @@ const BRIDGE = {
 
 const DEFAULT_INVOKE_TIMEOUT_MS = 30_000;
 
+/** Budget for every RPC this app sends to Rust. */
+const RPC_TIMEOUT_MS: Partial<Record<string, number>> = {
+  ...CORE_RPC_TIMEOUT_MS,
+  ...MOBILE_ONLY_RPC_TIMEOUT_MS,
+};
+
 function unwrapInvokeEnvelope(envelope: unknown): unknown {
   if (typeof envelope !== "object" || envelope === null) {
     throw new RpcError(BRIDGE.INVALID_RESPONSE, "invoke: expected envelope object", envelope);
@@ -95,14 +104,13 @@ function invokeFailure(error: unknown): RpcError {
 
 /**
  * Call CORE RPC through UniFFI `invoke`. Same envelope as desktop daemon.
- * Honors `CORE_RPC_TIMEOUT_MS` / `LOADING_BUDGET_MS` like desktop `desktopInvokeRaw`.
+ * Honors the shared RPC budgets (`LOADING_BUDGET_MS`) like desktop `desktopInvokeRaw`.
  * @throws {RpcError}
  */
 export async function nativeInvokeRaw(
   method: string,
   params?: Record<string, unknown>,
-  timeoutMs = (CORE_RPC_TIMEOUT_MS as Record<string, number | undefined>)[method] ??
-    DEFAULT_INVOKE_TIMEOUT_MS,
+  timeoutMs = RPC_TIMEOUT_MS[method] ?? DEFAULT_INVOKE_TIMEOUT_MS,
 ): Promise<unknown> {
   const native = getUprivCoreNative();
   if (!native) {
@@ -114,7 +122,7 @@ export async function nativeInvokeRaw(
 
 /**
  * Read-only probe beside a long `invoke` (Expo runs `invoke` on one thread).
- * Returns `null` on native builds without `invokeProbe`.
+ * Returns `null` without the native module (Expo Go).
  * @throws {RpcError}
  */
 export async function nativeInvokeProbeRaw(
@@ -122,10 +130,8 @@ export async function nativeInvokeProbeRaw(
   params?: Record<string, unknown>,
 ): Promise<unknown | null> {
   const native = getUprivCoreNative();
-  if (!native?.invokeProbe) return null;
-  const timeoutMs =
-    (CORE_RPC_TIMEOUT_MS as Record<string, number | undefined>)[method] ??
-    DEFAULT_INVOKE_TIMEOUT_MS;
+  if (!native) return null;
+  const timeoutMs = RPC_TIMEOUT_MS[method] ?? DEFAULT_INVOKE_TIMEOUT_MS;
   return settleInvocation(
     method,
     timeoutMs,
@@ -196,7 +202,7 @@ export async function rpcAppSettingsSave(
   options?: { syncAlias?: boolean },
 ): Promise<{ wrote: boolean }> {
   const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.APP_SETTINGS_SAVE, {
-    settings,
+    settings: { ...settings, workspace: appWorkspaceForDaemon(settings.workspace) },
     syncAlias: options?.syncAlias ?? true,
   });
   if (
@@ -217,7 +223,7 @@ export async function rpcAppSettingsSave(
  * desktop stay identical downstream of the wire shape.
  */
 export async function rpcAppSettingsParseToml(toml: string): Promise<AppSettingsConfig> {
-  const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.APP_SETTINGS_PARSE_TOML, { toml });
+  const raw = await nativeInvokeRaw(MOBILE_ONLY_RPC_COMMANDS.APP_SETTINGS_PARSE_TOML, { toml });
   if (typeof raw !== "object" || raw === null) {
     throw new RpcError(BRIDGE.INVALID_RESPONSE, "app_settings_parse_toml: expected object", raw);
   }
@@ -230,34 +236,6 @@ export async function rpcAppSettingsParseToml(toml: string): Promise<AppSettings
     );
   }
   return normalizeAppSettings(settings as AppSettingsConfig);
-}
-
-/**
- * Pure `AppSettingsConfig` → `settings.toml` serialization preserving
- * `[package]` from `previousToml` (when provided). `[app].last_opened_vault`
- * comes from `settings` (empty clears). Symmetric with
- * [`rpcAppSettingsParseToml`] for the Android SAF flow.
- */
-export async function rpcAppSettingsSerializeToml(
-  settings: AppSettingsConfig,
-  previousToml?: string | null,
-): Promise<string> {
-  const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.APP_SETTINGS_SERIALIZE_TOML, {
-    settings,
-    previous: previousToml ?? null,
-  });
-  if (
-    typeof raw !== "object" ||
-    raw === null ||
-    typeof (raw as { toml?: unknown }).toml !== "string"
-  ) {
-    throw new RpcError(
-      BRIDGE.INVALID_RESPONSE,
-      "app_settings_serialize_toml: expected { toml }",
-      raw,
-    );
-  }
-  return (raw as { toml: string }).toml;
 }
 
 export async function rpcVaultRootResolve(options?: {
@@ -360,7 +338,7 @@ export async function rpcVaultRootDeactivateAlias(): Promise<void> {
 }
 
 export async function rpcVaultRootRememberCustom(path: string): Promise<void> {
-  await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_ROOT_REMEMBER_CUSTOM, { path });
+  await nativeInvokeRaw(MOBILE_ONLY_RPC_COMMANDS.VAULT_ROOT_REMEMBER_CUSTOM, { path });
 }
 
 export async function rpcVaultRootReadAlias(): Promise<VaultRootAliasInfo | null> {
@@ -609,17 +587,17 @@ export async function rpcVaultPlainDeletions(id: string, apply: boolean): Promis
 
 /** Unlock a just-created vault so files can be streamed. Does not mount. */
 export async function rpcVaultIngestOpen(id: string, password: string): Promise<void> {
-  await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_INGEST_OPEN, { id, password });
+  await nativeInvokeRaw(MOBILE_ONLY_RPC_COMMANDS.VAULT_INGEST_OPEN, { id, password });
 }
 
 /** One folder, including parents, inside an import session. */
 export async function rpcVaultIngestDirectory(id: string, path: string): Promise<void> {
-  await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_INGEST_DIRECTORY, { id, path });
+  await nativeInvokeRaw(MOBILE_ONLY_RPC_COMMANDS.VAULT_INGEST_DIRECTORY, { id, path });
 }
 
 /** Delete a vault whose import failed. Drops an open ingest session first. */
 export async function rpcVaultDiscardImport(id: string): Promise<void> {
-  await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_DISCARD_IMPORT, { id });
+  await nativeInvokeRaw(MOBILE_ONLY_RPC_COMMANDS.VAULT_DISCARD_IMPORT, { id });
 }
 
 /** Stream one Android `content://` file into the open import session. */
@@ -629,8 +607,8 @@ export async function rpcImportContentUri(
   contentUri: string,
 ): Promise<void> {
   const native = getUprivCoreNative();
-  if (!native?.importContentUri) {
-    throw new RpcError(BRIDGE.BRIDGE_INVOKE_FAILED, "content import is unavailable");
+  if (!native) {
+    throw new RpcError(BRIDGE.BRIDGE_INVOKE_FAILED, "UprivCore native module not loaded");
   }
   const timeoutMs = CORE_RPC_TIMEOUT_MS[CORE_RPC_COMMANDS.VAULT_FS_IMPORT_OS_FILE];
   const invocation = Promise.resolve(

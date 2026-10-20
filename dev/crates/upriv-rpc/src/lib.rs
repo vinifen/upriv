@@ -1,5 +1,6 @@
 //! Shared RPC method handlers — keep in sync with `@upriv/shared`
-//! `CORE_RPC_COMMANDS` + `DESKTOP_ONLY_RPC_COMMANDS`. Protocol error codes —
+//! `CORE_RPC_COMMANDS` and `MOBILE_ONLY_RPC_COMMANDS`. Electron main sends
+//! `app_shutdown` before SIGTERM. Protocol error codes —
 //! keep in sync with `@upriv/shared` `RPC_PROTOCOL_ERROR_CODES`.
 //!
 //! Desktop: `upriv-daemon` wraps this over stdio NDJSON.
@@ -22,14 +23,14 @@ use upriv_core::logging::{
 use upriv_core::{
     active_alias_is_unmounted_saf, app_home_dir, change_vault_kdf, change_vault_password,
     close_phase, close_vault, close_vault_auto, create_vault_group_with_sort,
-    create_vault_with_welcome, deactivate_vault_root_alias_everywhere, delete_vault_group,
+    create_vault_with_welcome, deactivate_app_home_alias, delete_vault_group,
     discover_bootstrap_root, inspect_vault_root_at, known_vault_ids, list_vaults,
     load_app_settings, load_vault_config, load_vault_groups, open_import_session,
     open_or_initialize_vault_root, parse_settings_toml_str, read_vault_root_alias,
     relocate_upriv_dir, remember_vault_root_custom_uri, rename_vault,
     reorder_vault_group_grouped_vaults, reorder_vault_groups, repair_vault_groups,
-    resolve_vault_root, save_app_settings_session_with_alias_sync, serialize_settings_toml_str,
-    suggested_vault_root, update_vault_group, vault_list_item, vault_store_on_disk_bytes,
+    resolve_vault_root, save_app_settings_session_with_alias_sync, suggested_vault_root,
+    update_vault_group, vault_list_item, vault_store_on_disk_bytes,
     write_vault_root_alias_for_root, write_vault_root_alias_for_root_with_custom, AppSettings,
     IncompleteReplacePolicy, KdfUnlockPreset, ResolveVaultRoot, ResolveVaultRootOptions,
     UpdateVaultGroupParams, UprivDirRelocate, VaultConfig, VaultGroup, VaultListItem,
@@ -138,7 +139,6 @@ pub fn handle_rpc(req: RpcRequest) -> RpcResponse {
         "app_settings_get" => app_settings_get(),
         "app_settings_save" => app_settings_save(req.params),
         "app_settings_parse_toml" => app_settings_parse_toml(req.params),
-        "app_settings_serialize_toml" => app_settings_serialize_toml(req.params),
         "vault_root_resolve" => vault_root_resolve(req.params),
         "vault_root_setup_default_root" => vault_root_setup_default_root(req.params),
         "vault_root_setup_path" => vault_root_setup_path(req.params),
@@ -199,7 +199,6 @@ pub fn handle_rpc(req: RpcRequest) -> RpcResponse {
         "vault_fs_import_os_file" => vault_ops::vault_fs_import_os_file(req.params),
         "vault_fs_import_seal" => vault_ops::vault_fs_import_seal(req.params),
         "vault_fs_truncate" => vault_ops::vault_fs_truncate(req.params),
-        "vault_fs_mkdir" => vault_ops::vault_fs_mkdir(req.params),
         "vault_fs_create_file" => vault_ops::vault_fs_create_file(req.params),
         "vault_fs_create_folder" => vault_ops::vault_fs_create_folder(req.params),
         "vault_fs_ensure_folder" => vault_ops::vault_fs_ensure_folder(req.params),
@@ -520,7 +519,7 @@ fn vault_root_setup_default_root(params: Value) -> RpcResponse {
     // Partial-failure / retry-safe contract: init may succeed before deactivate.
     // If deactivate fails, `.upriv/` at the anchor is already correctly stamped —
     // UI should retry deactivate / re-enter setup (no automatic rollback).
-    if let Err(error) = deactivate_vault_root_alias_everywhere() {
+    if let Err(error) = deactivate_app_home_alias() {
         return map_core_err(error);
     }
     match path_utf8(root.root()) {
@@ -598,9 +597,9 @@ fn vault_root_suggested_custom_path() -> RpcResponse {
     }
 }
 
-/// Deactivate `.upriv-root` aliases only. Does not create, open, or require a vault-root.
+/// Deactivate the app home's `.upriv-root` only. Does not create, open, or require a vault-root.
 fn vault_root_deactivate_alias() -> RpcResponse {
-    match deactivate_vault_root_alias_everywhere() {
+    match deactivate_app_home_alias() {
         Ok(()) => ok(json!(null)),
         Err(error) => map_core_err(error),
     }
@@ -1773,28 +1772,6 @@ fn app_settings_parse_toml(params: Value) -> RpcResponse {
     }
 }
 
-/// Params for `app_settings_serialize_toml` — RAM-only TOML serialization
-/// preserving `[package]` and `[app].last_opened_vault` from `previous` when
-/// provided (mirrors `write_settings_toml_only`).
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct SerializeSettingsTomlParams {
-    settings: AppSettings,
-    #[serde(default)]
-    previous: Option<String>,
-}
-
-fn app_settings_serialize_toml(params: Value) -> RpcResponse {
-    let parsed: SerializeSettingsTomlParams = match serde_json::from_value(params) {
-        Ok(value) => value,
-        Err(error) => return err("invalid_request", error.to_string()),
-    };
-    match serialize_settings_toml_str(&parsed.settings, parsed.previous.as_deref()) {
-        Ok(body) => ok(json!({ "toml": body })),
-        Err(error) => map_core_err(error),
-    }
-}
-
 fn source_str(source: VaultRootSource) -> &'static str {
     match source {
         VaultRootSource::Explicit => "explicit",
@@ -2065,6 +2042,19 @@ fn err_with_details(code: &str, message: String, details: Option<Value>) -> RpcR
     }
 }
 
+/// Pin `default_root` to one temporary app home for the whole test process.
+/// `cargo test` runs inside `dev/`, where discovery would otherwise reach the
+/// developer's own data folder. Call it before a test touches `upriv_core`.
+#[cfg(test)]
+pub(crate) fn isolate_app_home() {
+    static APP_HOME: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
+    APP_HOME.get_or_init(|| {
+        let home = tempfile::tempdir().expect("test app home");
+        std::env::set_var("UPRIV_DEFAULT_ROOT_ANCHOR", home.path());
+        home
+    });
+}
+
 #[cfg(test)]
 mod bootstrap_absence_tests {
     use super::{classify_bootstrap_absence, BootstrapAbsence};
@@ -2092,6 +2082,7 @@ mod adopt_restore_tests {
 
     #[test]
     fn restore_moves_the_data_folder_back_to_the_app_home() {
+        crate::isolate_app_home();
         let home = tempfile::tempdir().unwrap();
         let grant = tempfile::tempdir().unwrap();
         let marker = home.path().join(".upriv/marker.txt");
@@ -2106,6 +2097,7 @@ mod adopt_restore_tests {
 
     #[test]
     fn restore_does_not_replace_a_private_data_folder() {
+        crate::isolate_app_home();
         let home = tempfile::tempdir().unwrap();
         let grant = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(home.path().join(".upriv")).unwrap();
@@ -2141,12 +2133,18 @@ mod log_redaction_tests {
     }
 }
 
-/// Keep in sync with `@upriv/shared` `CORE_RPC_COMMANDS` + `DESKTOP_ONLY_RPC_COMMANDS`.
+/// Registered methods match `rpc-methods.json` (`core`, `mobileOnly`, `desktopOnly`).
 #[cfg(test)]
 mod contract_tests {
     use super::*;
     use serde::Deserialize;
     use serde_json::json;
+
+    /// [`super::handle_rpc`] inside the test app home ([`crate::isolate_app_home`]).
+    fn handle_rpc(req: RpcRequest) -> RpcResponse {
+        crate::isolate_app_home();
+        super::handle_rpc(req)
+    }
 
     const REGISTERED_METHODS: &[&str] = &[
         "app_version",
@@ -2154,7 +2152,6 @@ mod contract_tests {
         "app_settings_get",
         "app_settings_save",
         "app_settings_parse_toml",
-        "app_settings_serialize_toml",
         "vault_root_resolve",
         "vault_root_setup_default_root",
         "vault_root_setup_path",
@@ -2215,7 +2212,6 @@ mod contract_tests {
         "vault_fs_import_os_file",
         "vault_fs_import_seal",
         "vault_fs_truncate",
-        "vault_fs_mkdir",
         "vault_fs_create_file",
         "vault_fs_create_folder",
         "vault_fs_ensure_folder",
@@ -2279,6 +2275,8 @@ mod contract_tests {
         #[derive(Deserialize)]
         struct RpcMethodContract {
             core: Vec<String>,
+            #[serde(rename = "mobileOnly")]
+            mobile_only: Vec<String>,
             #[serde(rename = "desktopOnly")]
             desktop_only: Vec<String>,
         }
@@ -2287,6 +2285,7 @@ mod contract_tests {
         ))
         .expect("rpc-methods.json");
         let mut expected = contract.core;
+        expected.extend(contract.mobile_only);
         expected.extend(contract.desktop_only);
         expected.sort();
         let mut registered: Vec<String> = REGISTERED_METHODS
@@ -2298,11 +2297,10 @@ mod contract_tests {
     }
 
     #[test]
-    fn app_settings_parse_and_serialize_toml_roundtrip() {
+    fn app_settings_parse_toml_reads_ui_prefs() {
         let toml = "\
 [package]
 version = 1
-label = \"Upriv\"
 [ui]
 locale = \"pt-BR\"
 [logging]
@@ -2316,20 +2314,6 @@ level = \"info\"
         assert!(parsed.ok, "{parsed:?}");
         let settings = parsed.result.as_ref().unwrap()["settings"].clone();
         assert_eq!(settings["ui"]["locale"], "pt-BR");
-
-        let serialized = handle_rpc(RpcRequest {
-            method: "app_settings_serialize_toml".into(),
-            params: json!({ "settings": settings, "previous": toml }),
-        });
-        assert!(serialized.ok, "{serialized:?}");
-        let body = serialized.result.as_ref().unwrap()["toml"]
-            .as_str()
-            .expect("toml string");
-        assert!(body.contains("pt-BR"), "body={body}");
-        assert!(
-            !body.contains("vault_root_mode") && !body.contains("upriv_root_path"),
-            "mode/path must not be persisted, body={body}"
-        );
     }
 
     #[test]
@@ -2420,6 +2404,7 @@ level = \"info\"
     /// A2/A3 create path: absent `.upriv/` at target → bootstrap.locale required before disk.
     #[test]
     fn bootstrap_prefs_for_dir_requires_locale_when_absent() {
+        crate::isolate_app_home();
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(
             inspect_vault_root_at(dir.path()),
@@ -2440,6 +2425,7 @@ level = \"info\"
     /// bootstrap prefs (settings.toml is not rewritten on this path).
     #[test]
     fn bootstrap_prefs_for_dir_none_when_valid() {
+        crate::isolate_app_home();
         let dir = tempfile::tempdir().unwrap();
         upriv_core::initialize_vault_root(dir.path()).unwrap();
         assert_eq!(inspect_vault_root_at(dir.path()), VaultRootDirStatus::Valid);
@@ -2455,6 +2441,7 @@ level = \"info\"
     /// still required before disk (incomplete→replace path also creates).
     #[test]
     fn bootstrap_prefs_for_dir_requires_locale_when_incomplete() {
+        crate::isolate_app_home();
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join(".upriv")).unwrap();
         assert_eq!(
@@ -2492,6 +2479,7 @@ level = \"info\"
     /// Settings emptied by a pulled drive: the reset policy keeps the vaults.
     #[test]
     fn vault_root_setup_path_reset_settings_keeps_vaults() {
+        crate::isolate_app_home();
         let dir = tempfile::tempdir().unwrap();
         upriv_core::initialize_vault_root(dir.path()).unwrap();
         let vault_dir = dir.path().join(".upriv/vaults/notes");
@@ -2513,6 +2501,7 @@ level = \"info\"
 
     #[test]
     fn vault_root_setup_refuses_while_vault_session_open() {
+        crate::isolate_app_home();
         let dir = tempfile::tempdir().unwrap();
         upriv_core::initialize_vault_root(dir.path()).unwrap();
         let root = upriv_core::VaultRoot::discover(dir.path()).unwrap();

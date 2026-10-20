@@ -124,8 +124,7 @@ fn stdio_unknown_method_returns_structured_error() {
 
 #[test]
 fn stdio_light_rpc_completes_while_vault_create_runs() {
-    // Argon2 create used to block the stdin loop — settings/version waited behind it.
-    // Heavy work is offloaded; light RPCs must answer before create finishes.
+    // Argon2 create runs off the stdin loop, so light RPCs answer before it finishes.
     let root = tempfile::tempdir().expect("tempdir");
     upriv_core::initialize_vault_root(root.path()).expect("initialize vault root");
     let anchor = root.path().to_str().expect("utf8 path");

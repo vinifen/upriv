@@ -41,6 +41,7 @@ impl LogConfig {
         }
     }
 
+    #[cfg(test)]
     pub fn disabled(logs_dir: impl Into<PathBuf>) -> Self {
         Self {
             enabled: false,

@@ -9,7 +9,7 @@ Raster sources for `electron-builder` (AppImage + `.deb` + Windows `.exe` + wind
 | `16x16.png` … `512x512.png`    | Linux hicolor theme sizes (menu / dock / launcher)              |
 | `Upriv.svg` / `Upriv-icon.svg` | Vector sources                                                  |
 
-Copied from brand assets (`prod-example/.upriv/app/assets/`). Do not reference `prod-example/` at runtime.
+Copied from the brand sources in `dev/docs/brand/`.
 
 **Windows:** `afterPack` embeds `icon.ico` into `Upriv.exe` via the `rcedit` npm devDependency (avoids `winCodeSign` symlink / Developer Mode). NSIS installer icons also use `icon.ico`.
 

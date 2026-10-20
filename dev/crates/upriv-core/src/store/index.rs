@@ -165,7 +165,7 @@ pub enum VaultNodeKind {
         /// that chunk is rewritten and bound into its AAD, so a stale blob
         /// cannot be replayed without the index key.
         chunk_versions: Vec<String>,
-        /// Byte offset of that chunk inside `store/data/<file_id>.blob`.
+        /// Byte offset of that chunk inside `store/data/<hh>/<file_id>.blob`.
         /// A rewrite stores the new ciphertext in a free span, or appends one.
         /// Bytes the index no longer names stay until that index is sealed,
         /// then they are packed when the waste is large enough to copy.
@@ -265,7 +265,7 @@ impl VaultNode {
         }
     }
 
-    /// Byte offset of each chunk inside `store/data/<file_id>.blob`.
+    /// Byte offset of each chunk inside `store/data/<hh>/<file_id>.blob`.
     pub fn chunk_offsets(&self) -> Option<&[u64]> {
         match &self.kind {
             VaultNodeKind::Dir => None,
@@ -336,12 +336,6 @@ impl VaultIndex {
         let before = self.nodes.len();
         self.nodes.retain(|node| node.path != path);
         self.nodes.len() != before
-    }
-
-    pub fn logical_paths(&self) -> Vec<String> {
-        let mut paths: Vec<String> = self.nodes.iter().map(|node| node.path.clone()).collect();
-        paths.sort();
-        paths
     }
 }
 

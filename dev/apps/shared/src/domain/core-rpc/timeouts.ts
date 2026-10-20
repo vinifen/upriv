@@ -1,5 +1,10 @@
 import { LOADING_BUDGET_MS } from "../loading/budget";
-import { CORE_RPC_COMMANDS, type CoreRpcCommand } from "./commands";
+import {
+  CORE_RPC_COMMANDS,
+  MOBILE_ONLY_RPC_COMMANDS,
+  type CoreRpcCommand,
+  type MobileOnlyRpcCommand,
+} from "./commands";
 
 /** Cheap RPCs (parse, inspect, alias). Never use `0` here. */
 const CHEAP_RPC_MS = 10_000;
@@ -7,15 +12,12 @@ const CHEAP_RPC_MS = 10_000;
 /**
  * Invoke timeout for every CORE RPC. `satisfies Record<CoreRpcCommand, number>`
  * fails the typecheck if a command is added without a budget.
- * Desktop adds `app_shutdown` / `app_exit` / `pick_directory` / `pick_file` /
- * `pick_save_file` / `reveal_in_file_manager` / `reveal_os_path` / `open_in_terminal` in `invoke.ts`.
+ * Desktop adds the shell-only commands in `invoke.ts`.
  */
 export const CORE_RPC_TIMEOUT_MS = {
   [CORE_RPC_COMMANDS.APP_VERSION]: CHEAP_RPC_MS,
   [CORE_RPC_COMMANDS.APP_SETTINGS_GET]: LOADING_BUDGET_MS.settingsLoad,
   [CORE_RPC_COMMANDS.APP_SETTINGS_SAVE]: LOADING_BUDGET_MS.settingsSave,
-  [CORE_RPC_COMMANDS.APP_SETTINGS_PARSE_TOML]: CHEAP_RPC_MS,
-  [CORE_RPC_COMMANDS.APP_SETTINGS_SERIALIZE_TOML]: CHEAP_RPC_MS,
   [CORE_RPC_COMMANDS.LOG_LIST]: LOADING_BUDGET_MS.logs,
   [CORE_RPC_COMMANDS.LOG_GET]: LOADING_BUDGET_MS.logs,
   [CORE_RPC_COMMANDS.LOG_DELETE]: LOADING_BUDGET_MS.logs,
@@ -25,7 +27,6 @@ export const CORE_RPC_TIMEOUT_MS = {
   [CORE_RPC_COMMANDS.VAULT_ROOT_SETUP_PATH]: LOADING_BUDGET_MS.vaultRoot,
   [CORE_RPC_COMMANDS.VAULT_ROOT_DEACTIVATE_ALIAS]: CHEAP_RPC_MS,
   [CORE_RPC_COMMANDS.VAULT_ROOT_READ_ALIAS]: CHEAP_RPC_MS,
-  [CORE_RPC_COMMANDS.VAULT_ROOT_REMEMBER_CUSTOM]: CHEAP_RPC_MS,
   [CORE_RPC_COMMANDS.VAULT_ROOT_DEFAULT_ROOT_STATUS]: CHEAP_RPC_MS,
   [CORE_RPC_COMMANDS.VAULT_ROOT_INSPECT_PATH]: CHEAP_RPC_MS,
   [CORE_RPC_COMMANDS.VAULT_ROOT_SUGGESTED_CUSTOM_PATH]: CHEAP_RPC_MS,
@@ -64,10 +65,6 @@ export const CORE_RPC_TIMEOUT_MS = {
   [CORE_RPC_COMMANDS.VAULT_IMPORT_7Z]: LOADING_BUDGET_MS.vaultCreate,
   [CORE_RPC_COMMANDS.VAULT_IMPORT_FILES_ZIP]: LOADING_BUDGET_MS.vaultCreate,
   [CORE_RPC_COMMANDS.VAULT_IMPORT_OS_PATH]: LOADING_BUDGET_MS.vaultCreate,
-  /** Argon2id unlock of a vault that was just created. Same budget as `vault_open`. */
-  [CORE_RPC_COMMANDS.VAULT_INGEST_OPEN]: LOADING_BUDGET_MS.vaultPipeline,
-  [CORE_RPC_COMMANDS.VAULT_INGEST_DIRECTORY]: LOADING_BUDGET_MS.default,
-  [CORE_RPC_COMMANDS.VAULT_DISCARD_IMPORT]: LOADING_BUDGET_MS.vaultDelete,
   /** Store-zip probe. `.7z` uses `vaultImportProbeTimeoutMs`. */
   [CORE_RPC_COMMANDS.VAULT_IMPORT_PROBE]: LOADING_BUDGET_MS.default,
   [CORE_RPC_COMMANDS.VAULT_FS_LIST]: LOADING_BUDGET_MS.default,
@@ -79,7 +76,6 @@ export const CORE_RPC_TIMEOUT_MS = {
   [CORE_RPC_COMMANDS.VAULT_FS_IMPORT_OS_FILE]: LOADING_BUDGET_MS.vaultFsImport,
   [CORE_RPC_COMMANDS.VAULT_FS_IMPORT_SEAL]: LOADING_BUDGET_MS.vaultFsImport,
   [CORE_RPC_COMMANDS.VAULT_FS_TRUNCATE]: LOADING_BUDGET_MS.default,
-  [CORE_RPC_COMMANDS.VAULT_FS_MKDIR]: LOADING_BUDGET_MS.default,
   [CORE_RPC_COMMANDS.VAULT_FS_CREATE_FILE]: LOADING_BUDGET_MS.default,
   [CORE_RPC_COMMANDS.VAULT_FS_CREATE_FOLDER]: LOADING_BUDGET_MS.default,
   [CORE_RPC_COMMANDS.VAULT_FS_ENSURE_FOLDER]: LOADING_BUDGET_MS.default,
@@ -96,6 +92,16 @@ export const CORE_RPC_TIMEOUT_MS = {
   [CORE_RPC_COMMANDS.DATA_FOLDER_EXPORT_STATUS]: CHEAP_RPC_MS,
   [CORE_RPC_COMMANDS.DATA_FOLDER_EXPORT_CANCEL]: CHEAP_RPC_MS,
 } as const satisfies Record<CoreRpcCommand, number>;
+
+/** Invoke timeout for every mobile-only RPC. */
+export const MOBILE_ONLY_RPC_TIMEOUT_MS = {
+  [MOBILE_ONLY_RPC_COMMANDS.APP_SETTINGS_PARSE_TOML]: CHEAP_RPC_MS,
+  [MOBILE_ONLY_RPC_COMMANDS.VAULT_ROOT_REMEMBER_CUSTOM]: CHEAP_RPC_MS,
+  /** Argon2id unlock of a vault that was just created. Same budget as `vault_open`. */
+  [MOBILE_ONLY_RPC_COMMANDS.VAULT_INGEST_OPEN]: LOADING_BUDGET_MS.vaultPipeline,
+  [MOBILE_ONLY_RPC_COMMANDS.VAULT_INGEST_DIRECTORY]: LOADING_BUDGET_MS.default,
+  [MOBILE_ONLY_RPC_COMMANDS.VAULT_DISCARD_IMPORT]: LOADING_BUDGET_MS.vaultDelete,
+} as const satisfies Record<MobileOnlyRpcCommand, number>;
 
 /** Same rule as the daemon: `seven_zip` / `7z`, or a `.7z` path when kind is omitted. */
 export function vaultImportProbeTimeoutMs(params: { kind?: string; archivePath?: string }): number {

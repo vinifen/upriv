@@ -9,20 +9,21 @@ cargo test -p upriv-core
 
 See `dev/docs/ARCHITECTURE.md` and `dev/docs/sdd.md` §4.
 
-## Current surface
+## Modules
 
 | Module | Role |
 |--------|------|
+| `config/` | App `.upriv/settings.toml`, per-vault `vaults/<id>/config.toml`, vault groups, edit policy |
+| `vault/` | List / create / open / close / rename / delete, in-app file manager (`fs`), export / import, backups, password and unlock-RAM rewrap, `plain/` (`upriv_plain` folders), in-RAM `.7z`, data-folder export |
+| `store/` | At-rest ciphertext: header (Argon2id wrap), sealed index (AES-SIV names), XChaCha20-Poly1305 chunks |
+| `session/` | Open session keys in RAM, unlock throttle |
+| `mount/` | Linux FUSE host, Windows WinFsp |
+| `paths/` | Layout, vault-root resolve, `.upriv-root` alias, workspace paths, `initialize_vault_root` |
 | `logging/` | Structured `.upriv/logs/` writers |
-| `time/` | UTC stamps (`std` only) |
-| `error` | `UprivError` / `Result` |
-| `paths/` | Layout helpers, resolve, `.upriv-root` alias, `initialize_vault_root` |
-| `config/app_settings` | **App** `.upriv/settings.toml` load/save (system prefs) |
-| `config/vault_config` | **Per-vault** `vaults/<id>/config.toml` load (list stub) |
-| `vault/` | `list_vault_entries` scan (**crate-internal** until `vault_list` RPC) |
+| `runtime_state` / `lockfile` | `.upriv/state.json` open records and `runtime/<id>.lock` (dirty-close recovery) |
+| `host_fs` | Filesystem access, including Android storage-access trees |
+| `time/`, `error` | UTC stamps; `UprivError` / `Result` |
 | `app_version()` | From repo-root `VERSION` via `build.rs` |
-
-Next: `vault_list` RPC → open/close pipeline.
 
 ## Vault-root resolve
 
@@ -73,11 +74,11 @@ Installed default_root search does **not** walk cwd/parents — only the app-hom
 
 - Switching to default_root **deactivates** the alias (keeps path); custom_root reactivates / rewrites it  
 - File is created only when the user first chooses another folder  
-- Prefer `deactivate_vault_root_alias_everywhere` for mode switches (single-home helper is crate-internal)  
+- Mode switches call `deactivate_app_home_alias` (the helper that takes a home is crate-internal)  
 
 ## Logging
 
-Structured **app** logs via **`log_event` / `Logger`** under `.upriv/logs/` (React reads via `LogService` / RPC). Format/names: `prod-example/README.md` § Logs. Mid-session integrity: `.agent/AGENT.md`.
+Structured **app** logs via **`log_event` / `Logger`** under `.upriv/logs/` (React reads via `LogService` / RPC). Format/names: SDD §3.1 Logs. Mid-session integrity: `.agent/AGENT.md`.
 
 ```rust
 use upriv_core::logging::{ensure_logging_session, log_event, LogConfig, LogLevel, Logger};

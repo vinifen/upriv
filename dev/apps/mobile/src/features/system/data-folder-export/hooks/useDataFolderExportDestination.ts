@@ -6,11 +6,11 @@ import { createDestinationGrant } from "../destinationGrant";
 import type { DataFolderExportDestination } from "../dataFolderExportTypes";
 
 /**
- * A picked folder holds a storage-access grant. It stays for the next export
- * while the window is open, and is let go when another is picked, when the
- * window closes, and when the vault list goes away; the service waits for an
- * export still using it. A pick that answers after the window closed is let go
- * at once. Phone folders come from the picker only: a typed path is not a grant.
+ * A picked folder holds a storage-access grant. It stays for the next export,
+ * also when the window closes, and is let go when another is picked and when
+ * the vault list goes away; the service waits for an export still using it. A
+ * pick that answers after the window closed is let go at once. Phone folders
+ * come from the picker only: a typed path is not a grant.
  */
 export function useDataFolderExportDestination(): DataFolderExportDestination {
   const { t } = useTranslation();
@@ -25,7 +25,7 @@ export function useDataFolderExportDestination(): DataFolderExportDestination {
   const [picking, setPicking] = useState(false);
   const [pickFailed, setPickFailed] = useState(false);
   const [zipName, setZipName] = useState(() => dataFolderZipDefaultName(new Date()));
-  /** Bumped by `clear`, so a pick still open when the window closed is not kept. */
+  /** Bumped by `cancelPick`, so a pick still open when the window closed is not kept. */
   const pickGen = useRef(0);
 
   useEffect(() => () => grant.clear(), [grant]);
@@ -52,12 +52,10 @@ export function useDataFolderExportDestination(): DataFolderExportDestination {
       .finally(() => setPicking(false));
   }, [grant, t, vaultRoot]);
 
-  const clear = useCallback(() => {
+  const cancelPick = useCallback(() => {
     pickGen.current += 1;
-    grant.clear();
-    setDestDir(null);
     setPickFailed(false);
-  }, [grant]);
+  }, []);
 
   const resetZipName = useCallback(() => setZipName(dataFolderZipDefaultName(new Date())), []);
 
@@ -66,7 +64,7 @@ export function useDataFolderExportDestination(): DataFolderExportDestination {
     picking,
     pickFailed,
     choose,
-    clear,
+    cancelPick,
     zipName,
     setZipName,
     resetZipName,

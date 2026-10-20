@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   CORE_RPC_COMMANDS,
-  DESKTOP_ONLY_RPC_COMMANDS,
   SHELL_ONLY_RPC_COMMANDS,
 } from "../../../shared/src/domain/core-rpc/commands";
+import contract from "../../../shared/src/domain/core-rpc/tests/rpc-methods.json";
 import { ELECTRON_IPC_METHODS } from "../ipcMethods";
 import {
   MAX_STDOUT_BUFFER_CHARS,
+  SHUTDOWN_METHOD,
   SHUTDOWN_TIMEOUT_MS,
   formatRpcError,
   parseDaemonStdoutLine,
@@ -16,14 +17,15 @@ import {
 } from "../daemonProtocol";
 
 describe("ELECTRON_IPC_METHODS", () => {
-  it("is the union of CORE + desktop-only + shell-only", () => {
+  it("is the union of CORE + shell-only", () => {
     expect([...ELECTRON_IPC_METHODS].sort()).toEqual(
-      [
-        ...Object.values(CORE_RPC_COMMANDS),
-        ...Object.values(DESKTOP_ONLY_RPC_COMMANDS),
-        ...Object.values(SHELL_ONLY_RPC_COMMANDS),
-      ].sort(),
+      [...Object.values(CORE_RPC_COMMANDS), ...Object.values(SHELL_ONLY_RPC_COMMANDS)].sort(),
     );
+  });
+
+  it("shuts the daemon down with its desktop-only method, which the renderer cannot send", () => {
+    expect(contract.desktopOnly).toEqual([SHUTDOWN_METHOD]);
+    expect(ELECTRON_IPC_METHODS).not.toContain(SHUTDOWN_METHOD);
   });
 });
 

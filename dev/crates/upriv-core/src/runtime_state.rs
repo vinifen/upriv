@@ -14,9 +14,11 @@ use serde::{Deserialize, Serialize};
 use crate::error::{Result, UprivError};
 use crate::paths::{self, VaultRoot};
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+/// The only `state.json` format.
+const STATE_FORMAT: u32 = 1;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeState {
-    #[serde(default)]
     pub format_version: u32,
     #[serde(default)]
     pub vaults: BTreeMap<String, RuntimeVaultEntry>,
@@ -73,7 +75,7 @@ fn this_host() -> Option<String> {
 impl RuntimeState {
     fn closed() -> Self {
         Self {
-            format_version: 1,
+            format_version: STATE_FORMAT,
             vaults: BTreeMap::new(),
         }
     }
@@ -90,10 +92,21 @@ pub fn load_runtime_state(root: &VaultRoot) -> Result<RuntimeState> {
     if raw.trim().is_empty() {
         return Ok(RuntimeState::closed());
     }
-    serde_json::from_str(&raw).map_err(|error| UprivError::VaultStoreInvalid {
-        path,
-        detail: format!("invalid state.json: {error}"),
-    })
+    let state: RuntimeState =
+        serde_json::from_str(&raw).map_err(|error| UprivError::VaultStoreInvalid {
+            path: path.clone(),
+            detail: format!("invalid state.json: {error}"),
+        })?;
+    if state.format_version != STATE_FORMAT {
+        return Err(UprivError::VaultStoreInvalid {
+            path,
+            detail: format!(
+                "state.json format_version is {}, not {STATE_FORMAT}",
+                state.format_version
+            ),
+        });
+    }
+    Ok(state)
 }
 
 pub fn save_runtime_state(root: &VaultRoot, state: &RuntimeState) -> Result<()> {
@@ -132,7 +145,6 @@ fn mark_session_open_locked(
     mount_point: Option<String>,
 ) -> Result<()> {
     let mut state = load_runtime_state(root)?;
-    state.format_version = 1;
     let plain = state
         .vaults
         .remove(vault_id)
@@ -225,7 +237,6 @@ pub(crate) fn adopt_plain_record(
 ) -> Result<()> {
     with_state_lock(|| {
         let mut state = load_runtime_state(root)?;
-        state.format_version = 1;
         let entry = state
             .vaults
             .entry(vault_id.to_string())
@@ -416,13 +427,25 @@ mode = "encrypted_dir"
     }
 
     #[test]
-    fn garbage_state_file_is_still_an_error() {
+    fn a_garbage_state_file_is_an_error() {
         let (_tmp, root) = vault_root_with(&[]);
         crate::host_fs::write(root.state_path(), b"{not json").unwrap();
         assert!(matches!(
             load_runtime_state(&root),
             Err(UprivError::VaultStoreInvalid { .. })
         ));
+    }
+
+    #[test]
+    fn a_state_file_of_another_format_is_an_error() {
+        let (_tmp, root) = vault_root_with(&[]);
+        for body in [r#"{"format_version":2,"vaults":{}}"#, r#"{"vaults":{}}"#] {
+            crate::host_fs::write(root.state_path(), body.as_bytes()).unwrap();
+            assert!(matches!(
+                load_runtime_state(&root),
+                Err(UprivError::VaultStoreInvalid { .. })
+            ));
+        }
     }
 
     #[test]

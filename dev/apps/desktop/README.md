@@ -65,7 +65,7 @@ src/
 │       └── help/            # Help modal + search
 │
 ├── components/
-│   ├── ui/                  # Reusable primitives (Button, Modal, StatusDot, …)
+│   ├── ui/                  # Reusable primitives (Button, Modal, Switch, …)
 │   ├── icons/               # Icon component + SVG assets
 │   ├── brand/               # UprivWordmark (theme prop from feature layer)
 │   ├── settings/            # Shared settings form kit (sections, fields, password panel)
@@ -75,7 +75,7 @@ src/
 │
 ├── i18n/                    # Locale loading, context, `useTranslation`
 ├── theme/                   # Design tokens, vault status → color/i18n mapping
-├── lib/                     # shell bridge (invoke, rpc, commands) + utilities
+├── lib/                     # shell bridge (invoke, rpc) + utilities
 ├── hooks/                   # Shared React hooks
 └── styles/                  # globals.css, CSS variables, fonts
 ```
@@ -86,7 +86,7 @@ src/
 | ------------------- | ------------------------------------------------------------------------------------------------------------------ |
 | UI copy             | `dev/apps/shared/locales/*.json` via `useTranslation()` — never hardcode sentences                                 |
 | Vault status colors | `theme/vault-status.ts` + CSS vars from `@upriv/shared` (`applyDocumentTheme`)                                     |
-| Desktop RPC         | `lib/commands.ts` — names match `crates/upriv-daemon`                                                              |
+| Desktop RPC         | `lib/rpc.ts` — `CORE_RPC_COMMANDS` and `SHELL_ONLY_RPC_COMMANDS` from `@upriv/shared`                              |
 | Domain types        | `@upriv/shared` (`shared/`) — `VaultRow`, settings, list sort/view                                                 |
 | Service layer       | `platform/services/` — factory + React context; live adapters in `platform/desktop/`                               |
 | App layout          | `AppShell` + `VaultListHeader` on the vault list home screen                                                       |

@@ -8,7 +8,6 @@ import {
   workspaceSnapshotToHydrate,
   UPRIV_WORKSPACE_PATH,
   workspaceSnapshotFromState,
-  workspaceStateFromSnapshot,
   type VaultFileSystemService,
   type VaultWorkspaceAction,
   type VaultWorkspaceState,
@@ -33,27 +32,6 @@ async function writeWorkspaceSnapshot(
   if (lastWrittenRef.current === raw) return;
   await fs.setFileContent(vaultId, UPRIV_WORKSPACE_PATH, raw);
   lastWrittenRef.current = raw;
-}
-
-/** Read when opening FM for a vault with no in-memory entry yet (avoids empty→hydrate flash). */
-export async function loadPersistedWorkspaceState(
-  fs: VaultFileSystemService,
-  vaultId: string,
-): Promise<VaultWorkspaceState | null> {
-  try {
-    const file = await fs.getFileContent(vaultId, UPRIV_WORKSPACE_PATH);
-    if (!file?.content) return null;
-    const parsed = parseWorkspaceSnapshot(file.content);
-    if (!parsed) return null;
-    try {
-      const tree = await fs.getFileTree(vaultId);
-      return workspaceStateFromSnapshot(sanitizeWorkspaceSnapshot(parsed, tree));
-    } catch {
-      return workspaceStateFromSnapshot(parsed);
-    }
-  } catch {
-    return null;
-  }
 }
 
 /**

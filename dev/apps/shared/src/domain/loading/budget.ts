@@ -92,8 +92,6 @@ export function loadingAppearDelayMs(budgetMs: number): number {
   return budgetMs >= 600_000 ? LOADING_LONG_HINT_APPEAR_DELAY_MS : LOADING_APPEAR_DELAY_MS;
 }
 
-export type LoadingBudgetKey = keyof typeof LOADING_BUDGET_MS;
-
 export function formatLoadingRemaining(remainingMs: number): string {
   const totalSec = Math.max(0, Math.ceil(remainingMs / 1000));
   const minutes = Math.floor(totalSec / 60);

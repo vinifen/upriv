@@ -710,11 +710,7 @@ mod tests {
         let root = temp_logs_dir();
         let upriv = root.path().join(".upriv");
         fs::create_dir_all(&upriv).expect("mkdir .upriv");
-        fs::write(
-            upriv.join("settings.toml"),
-            "[package]\nversion = 1\nvaults_dir = \".upriv/vaults\"\n",
-        )
-        .expect("settings");
+        fs::write(upriv.join("settings.toml"), "[package]\nversion = 1\n").expect("settings");
         let logs = upriv.join("logs");
         let logger = Logger::open(LogConfig {
             enabled: true,

@@ -3,11 +3,11 @@
 **Audience:** anyone implementing vault store, backups, key wrap, or `.7z` export in `upriv-core`.  
 **Status:** implementation invariant **and** the bar for shipping `store/`. `dev/` has one store format (`format_version` 1): header wrap + AES-SIV index + XChaCha chunks (create writes a seed file). Chunk AAD does not bind KDF params. Password change and unlock-RAM change (`change_vault_password`, `change_vault_kdf`) keep the same master key, mint a new salt, and reseal the header wrap and the name index. File blobs stay. The vault must be closed. A backup zip of the current body is written first; if that zip fails, `store/` is left unchanged. Any other `format_version` fails closed as an unreadable store.
 
-**Greenfield.** Nothing shipped before this layout. `dev/` is the first product. Do not add a reader, migrator, or second code path for an older header, an older chunk layout, an unpacked `backups/<stamp>/` tree, a `.7z` backup, Seal, `archive/`, or the demo trees under `temp/` and `prod-example/`. Create and open use `format_version` 1 only. A backup is only `backups/<stamp>-<id>.zip` (pin: `backups/saves/<stamp>-<id>.zip`). That number is the vault body, not the app version. Wrap, index, and chunks all carry it; they are not separate versions. When a choice is between a compatibility shim and the direct current path, take the direct path and make that path the efficient one (no per-file full-index clone, chunk authentication that does not force a rewrite of the whole file). Do not keep two implementations. Stale sentences in PRD/SDD are not a reason to keep the old shape.  
+**Greenfield.** Nothing shipped before this layout. `dev/` is the first product. Do not add a reader, migrator, or second code path for any other header, chunk, backup, or rest layout. Create and open use `format_version` 1 only. A backup is only `backups/<stamp>-<id>.zip` (pin: `backups/saves/<stamp>-<id>.zip`). That number is the vault body, not the app version. Wrap, index, and chunks all carry it; they are not separate versions. When a choice is between a compatibility shim and the direct current path, take the direct path and make that path the efficient one (no per-file full-index clone, chunk authentication that does not force a rewrite of the whole file). Do not keep two implementations.  
 **Related:** PRD **RF-55**; SDD **§2.4.1**, **§6**; [SECURITY-PLAINTEXT.md](SECURITY-PLAINTEXT.md).  
-**Product split:** at rest the vault body is **`store/`** (Argon2id + AEAD). **Backups** are copies of that body. Portable files: an ordinary **`.zip` of `store/`** (**Recommended**; zip is an envelope, no zip password) or **`.7z`** (logical Plan B, weaker guessing). Neither lives in `.upriv` as rest. **No `archive/`.**
+**Product split:** at rest the vault body is **`store/`** (Argon2id + AEAD). **Backups** are copies of that body. Portable files: an ordinary **`.zip` of `store/`** (**Recommended**; zip is an envelope, no zip password) or **`.7z`** (logical Plan B, weaker guessing). Neither lives in `.upriv` as rest.
 
-Sketch on disk: `temp/upriv/prod-example/.upriv/vaults/teste/` + that bundle’s `LAYOUT-STORE.md` (gitignored research tree; not canonical `prod-example/` yet). **Greenfield:** implement only this layout. No reader for old `archive/` + `store/` / Seal — those were unfinished demos, not a shipping format to migrate.
+**Greenfield:** implement only this layout.
 
 This note records a reviewed crypto stance: primitives are strong; **the protocol around them is the real risk**. Round-trip encrypt/decrypt proves almost nothing.
 
@@ -44,7 +44,7 @@ A 20–30 character random password in a well-made `.7z` is still extremely hard
 | **XChaCha20-Poly1305** | Confidentiality + authenticity of **content chunks** (192-bit nonce → random nonces are practical). |
 | **AES-SIV** (`name_cipher`) | Encrypted path index — logical names must not appear as plaintext filenames under `store/data/` (SDD §2.4.1). |
 | **Poly1305 / AEAD tag** | Detects alteration. Decryption must **not** return plaintext if the tag fails (libsodium-style: authenticate first). A flipped bit on disk → hard fail, not silent garbage. |
-| **`.7z` (AES-256 + SHA-256)** | **Export only** — one portable file for 7-Zip / ZArchiver. Weaker against offline guessing than the store; do not leave it as a permanent twin of the store. |
+| **`.7z` (AES-256 + SHA-256)** | **Export only** — one portable file for 7-Zip / ZArchiver. Weaker against offline guessing than the store; never kept at rest. |
 
 7z is a **file format** (compress + encrypt). Argon2id + XChaCha20-Poly1305 is a **construction**. We must define our own on-disk protocol (`vault.header` + chunks). That protocol is where we can lose to 7-Zip even with better primitives.
 
@@ -69,9 +69,9 @@ HKDF-SHA256 (IKM = master, salt = None, RFC 5869)
 
 Wrap uses the Argon2 **KEK**, not a third HKDF output. HKDF `salt=None` is intentional: IKM is a 32-byte CSPRNG master. Do not add a public HKDF salt without a `format_version` bump.
 
-**At rest:** `store/` only (`vault.header` + `index/` + `data/`). Lock = close. No Seal, no `archive/`.  
+**At rest:** `store/` only (`vault.header` + `index/` + `data/`). Lock = close.  
 **On-disk zones:** plaintext `config.toml` + `persistence.json` at `vaults/<id>/` (list/name **without** the password). Ciphertext only under `store/`.  
-**Snapshots (backup):** a `backups/<stamp>-<id>.zip` (or `backups/saves/<stamp>-<id>.zip`) is a **Stored** zip with `README.md` and `config.toml` (the public vault settings, plus a comment naming the unlock preset) beside `store/` (`header/`, `index/`, `data/`, and `DANGER-DO-NOT-EDIT-PERMANENT-DATA-LOSS.md`). `README.md` records the UTC time that copy was written and the rounded size of the files in `store/` (not the exact length of the zip). No zip password. Close writes one when `[backup] enabled`. `skip_unchanged` defaults on and skips that zip when the vault files match the last backup still on disk; `.upriv-workspace.json` is not a change. Off writes a zip on every close. Copy ciphertext; do not decrypt-then-re-encrypt. Unpack copies the ciphertext tree (`header/`, `index/`, `data/`). `README.md` and `config.toml` stay beside `store/`. The new vault writes its own `config.toml` beside `store/`, and writes `DANGER-DO-NOT-EDIT-PERMANENT-DATA-LOSS.md` into `store/` when that store is created. Export and backup write that same file before packing, so the zip keeps it inside `store/`. **No `snapshot.toml`.** Kind = path (`backups/` vs `saves/`); time = the stamp in the file name (the same instant as `README.md`). Pins are not named via a sidecar (UI can show the stamp).  
+**Snapshots (backup):** a `backups/<stamp>-<id>.zip` (or `backups/saves/<stamp>-<id>.zip`) is a **Stored** zip with `README.md` and `config.toml` (the public vault settings, plus a comment naming the unlock preset) beside `store/` (`header/`, `index/`, `data/`, and `DANGER-DO-NOT-EDIT-PERMANENT-DATA-LOSS.md`). `README.md` records the UTC time that copy was written and the rounded size of the files in `store/` (not the exact length of the zip). No zip password. Close writes one when `[backup] enabled`. `skip_unchanged` defaults on and skips that zip when the vault files match the last backup still on disk; `.upriv-workspace.json` is not a change. Off writes a zip on every close. Copy ciphertext; do not decrypt-then-re-encrypt. Unpack copies the ciphertext tree (`header/`, `index/`, `data/`). `README.md` and `config.toml` stay beside `store/`. The new vault writes its own `config.toml` beside `store/`, and writes `DANGER-DO-NOT-EDIT-PERMANENT-DATA-LOSS.md` into `store/` when that store is created. Export and backup write that same file before packing, so the zip keeps it inside `store/`. Kind = path (`backups/` vs `saves/`); time = the stamp in the file name (the same instant as `README.md`), which the UI shows.  
 
 ### Import / export
 
@@ -110,24 +110,16 @@ Same as **create from a store `.zip`**: **new vault**, source unchanged. The sna
 
 **No in-place restore.** Do not overwrite the live `store/` with a snapshot.
 
-**Identity / AAD:** registry id (`config.toml` / folder name) **may be new**. Do **not** rewrite `vault.header` or chunks on copy (that would break AEAD). Bind AAD to a **content identity** stored in the header and copied with the snapshot — not to the registry slug. Prototype `vault.header.vault_id` is a sketch; shipping protocol must not require rewriting ciphertext to fork a backup into a new list row.
+**Identity / AAD:** registry id (`config.toml` / folder name) **may be new**. Do **not** rewrite `vault.header` or chunks on copy (that would break AEAD). Bind AAD to a **content identity** stored in the header and copied with the snapshot — not to the registry slug, so a backup becomes a new list row without rewriting ciphertext.
 
-### Storage modes (collapse)
+### Storage modes
 
-The old seven modes mixed **where the vault rests** (store vs `.7z` vs both) with **what lock does** (close vs Seal). Rest is always `store/`; Seal and `archive/` are gone; `.7z` is an **action** (import/export), not a resting twin. Only **how the vault is open** remains.
+Rest is always `store/`; `.7z` is an **action** (import/export), never kept at rest. A mode only says **how the vault is open**:
 
-| Keep | Id | While open | At rest |
+| Mode | Id | While open | At rest |
 |------|-----|------------|---------|
 | **Default** | `encrypted_dir` | Decrypt in RAM only. **Desktop:** FUSE (Linux) / WinFsp (Windows) folder. **Mobile:** in-app file manager (same session — no OS mount). | `store/` |
 | **Large / insecure** | `upriv_plain` | Real plaintext `workspace/` (UI warning) | `store/`; wipe workspace on close |
-
-| Drop | Why |
-|------|-----|
-| `store_only` | “No `.7z` until Seal” — no Seal, no twin; same as default |
-| `upriv_only` | “Store only, More secure” — that **is** default rest now |
-| `ram_only` | Survived only by Sealing into `.7z`; nowhere to persist |
-| `plain` | Open = plaintext **+** `.7z` twin; without the twin = `upriv_plain` |
-| `plain_only` | Open = plaintext; rest was Seal → `.7z`; rest is now `store/` = `upriv_plain` |
 
 **States:** `open` is a **runtime session** (unlocked), not a disk enum. Where plaintext lives while open depends on mode — not on “open” itself:
 
@@ -138,28 +130,24 @@ The old seven modes mixed **where the vault rests** (store vs `.7z` vs both) wit
 
 **Mobile is the same vault.** `store/`, header, chunks, import/export, backups, KDF — one `upriv-core` via FFI. There is **no FUSE** on Android/iOS; “open” still means an unlocked session, not a system folder. Do **not** copy the vault into `filesDir` / iOS tmp to fake a mount (plaintext spill). Android vault-root bytes go through SAF (`content://`); chunk I/O must stream, not extract a tree. Opening a file in an **external** app is not a FUSE path — stream (e.g. Android content URI) or refuse; a cache dump is `upriv_plain` behavior.
 
-On disk, persistence is only **`closed`**. **No `sealed`.** No Seal action, no `canSeal`, no close/seal dropdown.
+### On-disk schema
 
-### On-disk schema (no Seal)
+On disk, persistence is only **`closed`**. Lock is always **close**, with one action: `store/` stays, `persistence = "closed"`.
 
-Drop from config / persistence / list DTO / UI: `sealed`, `canSeal`, `action.seal`, `[close] default_action`, `archive_hash`, `storageModeCanSeal` / `storageModeSealOnly`. Lock is always **close** → `store/` stays, `persistence = "closed"`.
-
-Keep: `content_hash`, `last_close_ok_at` (recovery A). `open` is session, not a persisted enum.
+`persistence.json` holds `content_hash` and `last_close_ok_at` (recovery A), plus `backed_up_index_hash` / `backed_up_stamp` for `skip_unchanged`. `open` is session, not a persisted enum.
 
 **`content_hash`** = SHA-256 of `vault.header` bytes **concatenated with** the primary sealed index (`root.idx.enc`, or `root.idx.enc.copy` when the primary file is absent). Chunk bytes are **not** in the hash. It is a dirty-close / recovery signal, **not** a MAC of the whole tree. Bitrot inside one `*.blob` is a per-chunk tag fail (recovery B), not a `content_hash` mismatch.
 
 The vault list recomputes this hash while the vault is closed. A mismatch uses the same recovery session as a dirty close. `open_vault` still unlocks that `store/`; the next successful close records the hash of the store that was unlocked. A missing `content_hash`, or a read error while hashing, does not select recovery. `persistence.json` is ordinary files beside `store/`, so this catches a replaced folder (including a backup unpacked over the live store). It is not a MAC: someone who can edit both the store and the hash can make them match.
 
-PRD/SDD still mention Seal — **this file wins.**
-
-### Recovery (no archive twin)
+### Recovery
 
 | Case | What happened | UI |
 |------|----------------|-----|
-| **A — Dirty close** | Crash/kill mid-write: torn chunk, index/data mismatch, `last_close_ok` false / `content_hash` mismatch | Vault **recovery**: last close did not finish. Offer **unlock the encrypted vault** (`store/` as last flushed). Create-from-backup belongs to case **C**, not as a peer here. Never in-place overwrite live `store/` with a snapshot. |
+| **A — Dirty close** | Crash or kill while open (`state.json` still records the session, no live lock), or `store/` differs from the last close (`content_hash` mismatch) | Vault **recovery**: last close did not finish. Offer **unlock the encrypted vault** (`store/` as last flushed). Create-from-backup belongs to case **C**, not as a peer here. Never in-place overwrite live `store/` with a snapshot. |
 | **B — Chunk tag fail** | Bitrot / one blob | Vault **opens**. Toast/error on **that file**. Not vault-level recovery. Restore that file only via backup/package. |
 | **C — Header or index dead** | Cannot unlock, or both index copies fail to open | Cannot repair in place. Only **create vault from backup / store `.zip`**. One damaged header file or one damaged index file is restored on open. |
-| **D — `upriv_plain` crash** | Leftover plaintext `workspace/`; `store/` may be stale | Vault **recovery**: leftover clear files from the last session. Offer **resume as open** (workspace is the live tree) or **wipe workspace** and keep `store/` (unsynced edits may be lost). |
+| **D — `upriv_plain` crash** | Leftover plaintext folder; `store/` holds every change saved before the crash | Vault **recovery**: leftover clear files from the last session. One action, **Remove the folder**: wipe it and keep `store/` (files never saved into the vault are lost). Unlock refuses until then (`plain_leftover`). |
 
 Do not invent a second body or a 7z repair picker.
 
@@ -178,7 +166,7 @@ A vault export copies **one vault at a time** from that vault’s row (`.zip` of
 | `.zip` of `store/` | Copy `store/` — **no password** |
 | `.7z` | Ask password; decrypt from `store/` |
 
-Do not reintroduce Seal, a durable `.7z` beside `store/`, a zip of a chosen set of vaults, or the dropped ids in new UI/core. PRD/SDD may still mention seven modes — **this file wins** until that docs PR.
+Do not add a `.7z` kept beside `store/`, a zip of a chosen set of vaults, a lock action other than close, or a storage mode besides `encrypted_dir` and `upriv_plain`.
 
 ---
 
@@ -209,8 +197,6 @@ Do not reintroduce Seal, a durable `.7z` beside `store/`, a zip of a chosen set 
 
 - **Forbidden:** dropping to a few MiB because the UI feels snappy; auto-selecting a preset from “we are on mobile”; auto-downgrading the header on open.
 - Do not reuse one derived key for wrapping + content + names without HKDF (or equivalent) domain separation.
-
-Sketch in `prod-example` (`memory_kib = 131072`) is a **placeholder**, not the shipping default (`262144` KiB = 256 MiB).
 
 ### Surface anti-brute-force (official `open` only)
 
@@ -257,7 +243,7 @@ This is the only store format (`format_version` 1).
 | Header files | `store/header/vault.header` and byte-identical `store/header/vault.header.copy` — **JSON** (UTF-8), versioned (`format_version`). `warning` is not in the wrap AAD. Open uses the copy when the primary file is unusable, or when its sealed key fails and the copy opens with the same password. A successful open rewrites the file that did not match and logs `vault_header_restored` with the vault id and the file name. |
 | Content identity | UUID in the header; copied with backups/packages; **not** the registry folder id |
 | Chunk size | **256 KiB** logical plaintext per chunk (last chunk may be shorter; empty file = no data chunks) |
-| Chunk bytes | `store/data/<file_id>.blob` — one OS file per logical file. Chunks are concatenated `nonce \|\| ciphertext \|\| tag`. The index stores each chunk's byte offset. A rewrite writes the new ciphertext into a free span, or appends one, and the file is flushed before the index is sealed. Bytes the sealed index still names are not overwritten. After that seal, dead ciphertext is packed into a new blob when the waste is large enough to be worth a copy. |
+| Chunk bytes | `store/data/<hh>/<file_id>.blob` (`<hh>` = first two hex digits of the id) — one OS file per logical file. Chunks are concatenated `nonce \|\| ciphertext \|\| tag`. The index stores each chunk's byte offset. A rewrite writes the new ciphertext into a free span, or appends one, and the file is flushed before the index is sealed. Bytes the sealed index still names are not overwritten. After that seal, dead ciphertext is packed into a new blob when the waste is large enough to be worth a copy. |
 | Index | `store/index/root.idx.enc` and byte-identical `store/index/root.idx.enc.copy` — AES-SIV sealed tree. The copy is written first; the primary file is the commit. Open uses the copy when the primary does not unseal, rewrites the file that did not match, and logs `vault_index_restored`. Logical names never appear as plaintext paths under `data/`. |
 | Wrap | Argon2id (`m`/`t`/`p` + 16-byte salt from header, version **0x13** hardcoded) → 32-byte KEK → XChaCha unwrap of 32-byte master. Blob = nonce(24) ‖ ct ‖ tag(16) |
 | HKDF | SHA-256, `salt=None` (IKM is CSPRNG master), info `upriv-content-key-v1` (32 B) / `upriv-index-key-v1` (64 B) |
@@ -296,7 +282,7 @@ Closed `store/` + a correct protocol → attack is password guessing (Argon2). T
 | **Plaintext in `/tmp`** | `export_logical_tree` / extract-then-`7zz` writes the logical tree to OS temp. Crash, undelete, other users, swap. Stream only; cancel/crash must not leave an extract (SECURITY-PLAINTEXT). |
 | **Password on argv** | `7zz -p…` appears in `ps`, `/proc/…/cmdline`, shell history, audit logs. Pass via stdin / a restricted fd, never argv, never logs. |
 
-`temp/` close/export used tempfile trees and often `-p` on argv — **do not port**. Prototype `encrypt_chunk` has **no AAD** — do not ship that.
+`temp/` close/export used tempfile trees and often `-p` on argv, and its `encrypt_chunk` has **no AAD** — **do not port** either.
 
 ### Password, master key, edits, nonces
 
@@ -409,7 +395,7 @@ Applied review 2026-09-12. Confidentiality of closed `store/` passed for wrap + 
 3. Do not treat `.7z` as the vault’s security story or as the backup format. On disk a backup is `backups/<stamp>-<id>.zip` (pin: `backups/saves/<stamp>-<id>.zip`): a **Stored** zip of `store/`, no zip password, no unpacked tree, no `.7z`. Download copies that file, or bundles several of them into one zip. The portable export of the live vault is a separate `.zip` of `store/` (Recommended) or `.7z` (guessing warning). Restore = new vault from a backup zip, a store zip, or a `.7z`.
 4. Argon2id cost is chosen **at create** (default **256 MiB / 3 passes**). Shipping presets include **32 MiB** (less-secure opt-in) and **128 MiB** (mid). Presets are security + unlock RAM, not device type. Never auto-select or downgrade the header from the current OS.
 5. Do not ship store I/O without the tamper/truncation tests above.
-6. When PRD/SDD still describe Seal, dual store+`.7z` rest, or seven storage modes, **this file wins** for rest layout, backups, and modes (`encrypted_dir` + `upriv_plain` only). Product docs catch up in a dedicated PRD/SDD edit.
+6. For rest layout, backups, and storage modes (`encrypted_dir` + `upriv_plain` only), **this file wins** over PRD/SDD.
 7. Plaintext vault bytes on ordinary disk **only** if the user chose `upriv_plain` and the vault is open. Transitional phases (import, export, backup, password, recovery) must stream or copy ciphertext — never a convenience extract.
 8. Surface anti-brute-force lives in **`upriv-core` RAM**: serialize `open`; **5** failures in **60 s** → **60 s** block. Not the UI, not a JSON counter. Do not market it as stopping offline guessing.
 9. Password unlocks the master key **once** per open. Saves = content key + new CSPRNG 192-bit nonce, not Argon2. Never RAM counters or password-derived nonces. Close flushes with those session keys and does not ask for the password. Open-session OS leaks ≠ “XChaCha failed while editing.”

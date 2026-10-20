@@ -6,16 +6,16 @@ In default mode `encrypted_dir`, **never** write or read decrypted vault file tr
 
 **Transitional phases** (import, export, backup copy, password, recovery, cancel/crash) are the usual leak. A temp extract “just for 7zz / zip” is still a spill. Fail the op rather than write plaintext.
 
-The **only** product exception: `upriv_plain` may use real plaintext `workspace/` **while open**, with UI warning + wipe on close. Never use that path as a helper for `encrypted_dir`. (`plain` / `plain_only` are dropped.)
+The **only** product exception: `upriv_plain` may use real plaintext `workspace/` **while open**, with UI warning + wipe on close. Never use that path as a helper for `encrypted_dir`.
 
 ## Do not port from `temp/upriv/`
 
-Legacy `finalize_close` / `materialize_store_from_archive` / change-password use `tempfile` + `export_logical_tree` + `create_from_dir` — **full plaintext trees on OS temp**. That pattern is **forbidden** in `dev/`.
+The snapshot's `finalize_close` / `materialize_store_from_archive` / change-password use `tempfile` + `export_logical_tree` + `create_from_dir` — **full plaintext trees on OS temp**. That pattern is **forbidden** in `dev/`.
 
 Also ban: `DevPlaintext` dump-to-workspace; `7zz -p` on argv.
 
 ## When implementing vault I/O
 
-Prefer `create_from_logical` / pipe. If a directory is unavoidable: tmpfs+noswap + RAII wipe only. Add RF-49 tests. Fail closed on mount/RAM failure — never silent spill.
+Stream logical bytes in RAM (as `.7z` export/import do). If a directory is unavoidable: tmpfs+noswap + RAII wipe only. Add RF-49 tests. Fail closed on mount/RAM failure — never silent spill.
 
 Full detail: [`.agent/SECURITY-PLAINTEXT.md`](../SECURITY-PLAINTEXT.md).

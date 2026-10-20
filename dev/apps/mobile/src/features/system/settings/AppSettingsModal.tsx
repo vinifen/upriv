@@ -39,7 +39,6 @@ import {
   LoadingBudgetHint,
   Modal,
   ModalFooterActions,
-  modalFooterConfirmBtnStyle,
   Select,
   Toast,
   type SelectOption,
@@ -408,13 +407,11 @@ export function AppSettingsModal({
           <Button
             variant="danger"
             label={t("modal.settings.discard_confirm_action")}
-            style={modalFooterConfirmBtnStyle}
             onPress={handleDiscardAndClose}
           />
           <Button
             variant="ghost"
             label={t("modal.settings.discard_keep_editing")}
-            style={modalFooterConfirmBtnStyle}
             onPress={dismissFooterConfirm}
           />
         </ModalFooterActions>
@@ -425,7 +422,6 @@ export function AppSettingsModal({
             label={
               saveConfirmOpen ? t("modal.settings.save_confirm_action") : t("modal.settings.save")
             }
-            style={modalFooterConfirmBtnStyle}
             disabled={saveConfirmOpen ? saveBusy : saveBlocked}
             onPress={saveConfirmOpen ? commitSave : handleSaveClick}
           />
@@ -433,7 +429,6 @@ export function AppSettingsModal({
             <Button
               variant="ghost"
               label={t("modal.settings.save_cancel")}
-              style={modalFooterConfirmBtnStyle}
               disabled={saveBusy}
               onPress={dismissFooterConfirm}
             />

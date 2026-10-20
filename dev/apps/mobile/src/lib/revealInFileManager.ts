@@ -14,7 +14,7 @@ export async function revealInOsFileManager(osPath: string): Promise<void> {
     throw new RpcError(OPEN_FAILED, "path must be absolute");
   }
   const native = getUprivCoreNative();
-  if (native && typeof native.revealInFileManager === "function") {
+  if (native) {
     try {
       native.revealInFileManager(location);
       return;

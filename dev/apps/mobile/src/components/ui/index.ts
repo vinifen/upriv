@@ -14,7 +14,6 @@ export { Collapse } from "./Collapse";
 export {
   ModalFooterActions,
   ModalFooterNav,
-  modalFooterConfirmBtnStyle,
   type ModalFooterActionsLayout,
 } from "./ModalFooterActions";
 export { Select, type SelectOption, type SelectOptionTone } from "./Select";

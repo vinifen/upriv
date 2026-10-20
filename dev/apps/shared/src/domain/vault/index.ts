@@ -16,7 +16,6 @@ export {
   canDeleteVaultNow,
   isVaultListClosed,
   isVaultDisplayStatusQuiet,
-  isVaultQuiet,
   isVaultPipelineDisplayBusy,
   isVaultOpenCredentialResumeStatus,
   isVaultOpenResumeTarget,
@@ -80,7 +79,6 @@ export {
 export { displayNameErrorI18nKey, DISPLAY_NAME_ERROR_I18N_KEYS } from "./errors/nameMessages";
 export type { DisplayNameErrorI18nKey } from "./errors/nameMessages";
 export {
-  brandColors,
   vaultStatusColorVar,
   vaultStatusI18nKey,
   vaultStatusLabelKey,

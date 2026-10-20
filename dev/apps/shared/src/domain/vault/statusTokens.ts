@@ -54,11 +54,3 @@ export function vaultCloseActivityLabelKey(
   if (pipeline.backingUpVaultIds?.includes(vaultId)) return "vault.status.backing_up";
   return "vault.status.closing";
 }
-
-/** Brand wordmark variants (SDD §8.2.1). */
-export const brandColors = {
-  wordmarkWhite: "#FFFFFF",
-  wordmarkBlack: "#000000",
-  wordmarkNavy: "#0B0E1E",
-  iconBg: "#0f172a",
-} as const;

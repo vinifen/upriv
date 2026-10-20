@@ -280,4 +280,3 @@ DMG only, **on a Mac** (`electron-builder --mac`). Not produced by `electron:bui
 | `dev/apps/electron/scripts/afterPack.cjs` | Windows icon embed + Linux AppImage wrap |
 | `dev/apps/electron/build/icons/` | PNG/ICO brand assets |
 | `dev/apps/electron/src/main.ts` | Window icon, AppUserModelId, setAppDetails |
-| `dev/.gitignore` | Ignores `apps/electron/build/tools/` (legacy download cache; unused) |

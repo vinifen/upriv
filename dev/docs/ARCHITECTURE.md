@@ -4,7 +4,7 @@
 
 **Version:** 0.2  
 **Date:** 2026-05-31  
-**Status:** Approved direction (replaces Flutter mobile stack in SDD §9.1)  
+**Status:** Approved direction  
 **Companion:** `prd.md`, `sdd.md`
 
 > **Rest layout, storage modes, backups, and export:** [`.agent/SECURITY-CRYPTO.md`](../../.agent/SECURITY-CRYPTO.md). Rest = `store/`; lock = close (flush the session); portable `.7z` is packed **in RAM** (`sevenz-rust2`).
@@ -32,7 +32,7 @@ The UI layer **must not** implement:
 - Password derivation or key handling (beyond collecting input and passing it to Rust)
 - Disk I/O on vault paths (read/write/delete)
 - FUSE / mount / SAF file operations
-- `7zz` invocation
+- `.7z` packing or unpacking
 - Session state persistence on disk
 
 The UI **does**:
@@ -51,13 +51,13 @@ Single crate, compiled per target triple:
 |---------|--------|
 | RAM session, `zeroize` passwords | `upriv-core` |
 | Crypto (Argon2id + XChaCha20-Poly1305) | `upriv-core` |
-| Disk / SAF via `VaultStorage` trait | `upriv-core` |
+| Disk / SAF via `host_fs` (Android trees under `/upriv-saf-root`) | `upriv-core` |
 | In-process `.7z` pack/unpack in RAM (`sevenz-rust2`; fail if RAM is insufficient) | `upriv-core` |
 | Vault state machine (`open` / `closed`) | `upriv-core` |
 | Recovery, manifest, lockfile | `upriv-core` |
 | FUSE mount (Linux desktop) | `upriv-core` + platform module |
 
-Platform-specific code lives behind **`#[cfg(...)]`** or the **`VaultStorage`** trait — not in separate “business logic” crates.
+Platform-specific code lives behind **`#[cfg(...)]`** or **`host_fs`** — not in separate “business logic” crates.
 
 ### 2.3 Bridge (UI ↔ Rust)
 
@@ -76,7 +76,7 @@ The bridge is **code inside the same package** (same `.exe` or same APK) — not
 |-------|---------|
 | Renderer | `contextIsolation`, `sandbox: true`, no `nodeIntegration`; CSP in production (`default-src 'self'`) |
 | Preload | Exposes only `invoke` + `onEvent` — no raw `ipcRenderer` |
-| Main process | **`app_exit` only** — everything else forwarded to daemon; `upriv-rpc` rejects unknown methods |
+| Main process | Handles `SHELL_ONLY_RPC_COMMANDS` (`app_exit`, dialogs, reveal, terminal, WinFsp, FUSE); forwards the rest of the allowlist to the daemon; `upriv-rpc` rejects unknown methods |
 | `upriv-daemon` | Child process; **stdio pipes only** (no TCP port); env whitelist (`PATH`, `HOME`, `LANG`, `XDG_*`); graceful `app_shutdown` before SIGTERM |
 | Linux shell | `--no-sandbox` on Chromium process (AppArmor); renderer sandbox remains enabled |
 
@@ -88,11 +88,11 @@ Vault crypto and disk I/O never run in the renderer. When vault RPCs ship, passw
 |------|-------|---------|
 | `window.upriv.invoke()` | Preload → renderer | Raw IPC entry exposed by `contextBridge` |
 | `desktopInvokeRaw()` | React (`lib/invoke.ts`) | IPC wrapper with timeout; throws `RpcError` |
-| `rpcAppVersion()` / `rpcAppShutdown()` | React (`lib/rpc.ts`) | Per-method helpers with response validation |
-| `CORE_RPC_COMMANDS` | `@upriv/shared` | Rust ops — desktop + mobile (`app_version`, future `vault_*`) |
-| `DESKTOP_ONLY_RPC_COMMANDS` | `@upriv/shared` | Daemon ops — Electron only (`app_shutdown`); not mobile JNI |
-| `SHELL_ONLY_RPC_COMMANDS` | `@upriv/shared` | Main process only (`app_exit`, `pick_directory`); never sent to daemon |
-| `lib/commands.ts` | Desktop | Re-exports shared enums as `DAEMON_COMMANDS` / `SHELL_COMMANDS` |
+| `rpcAppVersion()` / `rpcPickDirectory()` | React (`lib/rpc.ts`) | Per-method helpers with response validation |
+| `CORE_RPC_COMMANDS` | `@upriv/shared` | Rust ops the desktop renderer and mobile both call |
+| `MOBILE_ONLY_RPC_COMMANDS` | `@upriv/shared` | Rust ops only mobile calls (storage-access settings parse, import ingest) |
+| `SHELL_ONLY_RPC_COMMANDS` | `@upriv/shared` | Electron main only (`app_exit`, dialogs, reveal, terminal, WinFsp, FUSE) |
+| `app_shutdown` | Electron main → daemon | Flush open vaults and exit the daemon before SIGTERM. Absent from the renderer allowlist |
 | `RpcErrorBody` / `RpcError` | `@upriv/shared` (`core-rpc/errors.ts`) | Wire envelope + protocol codes |
 | `VAULT_ERROR_CODES` | `@upriv/shared` (`vault/errors/codes.ts`) | upriv-core domain wire codes (`snake_case`) |
 | `VAULT_ERROR_I18N_KEYS` / `vaultErrorI18nKey()` | `@upriv/shared` (`vault/errors/messages.ts`) | User UI: vault wire code → i18n |
@@ -148,9 +148,12 @@ One **native executable** per OS/architecture. Bundled inside or beside it:
 - `upriv-daemon` sidecar + `upriv-core`
 - Portable `.7z` via `sevenz-rust2` inside `upriv-core` (no bundled `7zz`). Close flushes `store/`
 
-**Validated builds (2026-07-03):**
+**Packages** (`dev/target/release/bundle/electron/`):
 
-- Linux: `dev/target/release/bundle/electron/Upriv-*.AppImage` (portable), `upriv-electron_*.deb` (system install)
+- Linux: `Upriv-<version>-linux-<arch>.AppImage` (portable), `Upriv-<version>-linux-<arch>.deb` (installed)
+- Windows: `Upriv-<version>-portable-x64.exe` (portable), `Upriv-<version>-setup-x64.exe` (installed)
+
+Portable means one file, no install, and the data folder beside that file (PRD §3.5.1).
 
 Build commands: see `dev/README.md` and `dev/apps/desktop/README.md`.
 
@@ -224,30 +227,19 @@ Otherwise keep files at the module root.
 | Shared (`shared/`) | Platform-specific |
 |-----------------------------|-------------------|
 | TypeScript types (`VaultRow`, settings DTOs) | Markup: `<div>` vs `<View>` |
-| i18n keys and loaders | Styling: Tailwind vs StyleSheet / NativeWind |
+| i18n keys and loaders | Styling: Tailwind vs StyleSheet |
 | State hooks and flow logic | Modals, navigation, gestures |
 | API function signatures (call into Rust) | `desktopInvoke` vs RN native module |
 
-**Same component tree concept** (App → VaultList → VaultRow → modals), **different implementations** per platform (`.tsx` web vs `.native.tsx` or shared props + platform files).
+**Same component tree concept** (App → VaultList → VaultRow → modals), **different implementations** per platform: `apps/desktop` renders DOM, `apps/mobile` renders React Native, and both take types, hooks, and services from `@upriv/shared`.
 
 Do **not** expect to copy `dev/apps/desktop/src/App.tsx` verbatim into React Native.
 
 ---
 
-## 6. `VaultStorage` abstraction
+## 6. Storage access (`host_fs`)
 
-Required from day one in `upriv-core` so desktop and mobile share logic:
-
-```rust
-trait VaultStorage {
-    fn read_file(&self, relative: &str) -> Result<Vec<u8>>;
-    fn write_file(&self, relative: &str, data: &[u8]) -> Result<()>;
-    fn list_dir(&self, relative: &str) -> Result<Vec<String>>;
-    fn delete_tree(&self, relative: &str) -> Result<()>;
-}
-// Desktop: std::fs::Path
-// Android: SAF (DocumentFile + ContentResolver) — URIs, not /storage/… paths
-```
+Desktop and mobile share the same vault logic. `upriv-core` reaches disk through `host_fs`: desktop paths use `std::fs`; an Android storage-access tree is addressed as `/upriv-saf-root` (and `/upriv-saf-export` for a data-folder export), and `host_fs` sends those paths to the Kotlin `SafFs` bridge — URIs, never `/storage/…` paths.
 
 See SDD §9.4 for Android SAF flow.
 
@@ -259,9 +251,9 @@ See SDD §9.4 for Android SAF flow.
 |----|----------|--------|--------|
 | ADR-01 | Desktop UI | React web + Electron | Stable Chromium on Linux/Win/Mac; AppImage validated (2026-07-03) |
 | ADR-02 | Mobile UI | React Native + TypeScript | Close to React mental model; max reuse of TS structure with desktop; one APK with Rust inside |
-| ADR-03 | Mobile UI (rejected) | ~~Flutter~~ | Superseded by ADR-02; team prefers React ecosystem for shared structure |
-| ADR-04 | Mobile shell (rejected) | ~~Tauri Android~~ | Experimental; not acceptable for production vault app |
-| ADR-05 | Desktop UI (rejected) | ~~React Native desktop for Linux~~ | No official stable RN for Linux; Electron is the desktop path |
+| ADR-03 | Mobile UI (rejected) | Flutter | React Native shares the TypeScript structure with desktop |
+| ADR-04 | Mobile shell (rejected) | Tauri Android | Experimental; not acceptable for production vault app |
+| ADR-05 | Desktop UI (rejected) | React Native desktop for Linux | No official stable RN for Linux; Electron is the desktop path |
 | ADR-06 | Core | Single `upriv-core` crate | One implementation of crypto, 7z, states; compile to `.so`/`.dll`/linked exe per target |
 | ADR-07 | Security boundary | UI = presentation; Rust = secrets + I/O | Minimize attack surface in JS; passwords never persisted in UI layer |
 | ADR-08 | Android packaging | Single APK | RN + UniFFI bridge + `libupriv_ffi.so` (`sevenz-rust2` for export `.7z`) in one installable package |
@@ -282,15 +274,9 @@ See SDD §9.4 for Android SAF flow.
 
 ---
 
-## 9. Implementation order
+## 9. Build status
 
-1. Implement **`dev/crates/upriv-core/`** (`store/` crypto, open/close flush, export `.zip` / `.7z`).
-2. Implement **`VaultStorage`** (desktop `std::fs` first).
-3. Wire RPC handlers in `upriv-rpc` (shared by `upriv-daemon` + `upriv-ffi`) to `upriv-core` only.
-4. **`dev/apps/shared/`** (`@upriv/shared`) — domain types, service interfaces, and UI locale catalogs (`locales/`).
-5. Complete desktop v1 (Linux FUSE + Windows WinFsp, open/close into `store/`).
-6. **`dev/apps/mobile/`** — native module → `upriv-core` (JNI / UniFFI).
-7. Android: SAF adapter, APK packaging, OTG flows (PRD §3.6).
+See SDD §14.
 
 ---
 
@@ -298,9 +284,9 @@ See SDD §9.4 for Android SAF flow.
 
 - [Electron](https://www.electronjs.org/)
 - [React Native](https://reactnative.dev/)
-- [uniffi](https://mozilla.github.io/uniffi-rs/) (candidate for RN ↔ Rust)
+- [uniffi](https://mozilla.github.io/uniffi-rs/) (RN ↔ Rust bridge)
 - PRD §3.5–3.6, SDD §4, §8, §9
 
 ---
 
-*When this document conflicts with older SDD mentions of Flutter, **this document wins** for stack choice (2026-05-31). Rest layout, modes, backups, and export: SECURITY-CRYPTO wins. Product requirements in PRD §3.6 (SAF, APK, workspace on HD) are unchanged.*
+*This document is the source for stack choice. Rest layout, modes, backups, and export: SECURITY-CRYPTO. Product requirements: PRD §3.6 (SAF, APK, workspace on HD).*

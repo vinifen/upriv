@@ -1,19 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { formatIsoDate } from "../../format/datetime";
-import { formatLastAccessedWhen, vaultLastAccessedLabel } from "../lastAccessed";
-
-describe("formatLastAccessedWhen", () => {
-  it("returns a dash when the stamp is missing", () => {
-    expect(formatLastAccessedWhen("", "en")).toBe("—");
-    expect(formatLastAccessedWhen(undefined, "en")).toBe("—");
-  });
-
-  it("formats a valid ISO stamp", () => {
-    expect(formatLastAccessedWhen("2026-09-11T12:00:00.000Z", "en")).toBe(
-      formatIsoDate("2026-09-11T12:00:00.000Z", "en"),
-    );
-  });
-});
+import { vaultLastAccessedLabel } from "../lastAccessed";
 
 describe("vaultLastAccessedLabel", () => {
   it("prefers a localized ISO stamp over a relative mock label", () => {
@@ -23,6 +10,10 @@ describe("vaultLastAccessedLabel", () => {
         "en",
       ),
     ).toBe(formatIsoDate("2026-09-11T12:00:00.000Z", "en"));
+  });
+
+  it("shows a dash when there is no stamp or label", () => {
+    expect(vaultLastAccessedLabel({}, "en")).toBe("—");
   });
 
   it("falls back to the mock label when there is no ISO stamp", () => {

@@ -85,7 +85,7 @@ pub fn parse_embedded_settings(bytes: &[u8]) -> Result<EmbeddedVaultSettings> {
         path: std::path::PathBuf::from(ZIP_CONFIG_ENTRY),
         detail: "embedded vault settings are not utf-8".into(),
     })?;
-    let (config, _) = crate::config::vault_config::parse_vault_config_toml(
+    let config = crate::config::vault_config::parse_vault_config_toml(
         text,
         std::path::Path::new(ZIP_CONFIG_ENTRY),
     )?;
@@ -170,7 +170,7 @@ keep_last = 3
     }
 
     #[test]
-    fn incorrect_keys_are_dropped_and_an_invalid_value_is_not() {
+    fn an_unknown_key_or_an_invalid_value_is_rejected() {
         let raw = r#"
 [vault]
 id = "notes"
@@ -178,14 +178,12 @@ display_name = "Notes"
 
 [security]
 wipe_passes = 2
-not_a_field = true
 
 [auto_close]
 idle_minutes = 30
-
-[policy]
-allow_external_editors = true
 "#;
+        let unknown = raw.replace("wipe_passes = 2", "wipe_passes = 2\nnot_a_field = true");
+        assert!(parse_embedded_settings(unknown.as_bytes()).is_err());
         let parsed = parse_embedded_settings(raw.as_bytes()).unwrap();
         assert_eq!(parsed.config.security.wipe_passes, 2);
         assert_eq!(parsed.config.auto_close.idle_minutes, 30);

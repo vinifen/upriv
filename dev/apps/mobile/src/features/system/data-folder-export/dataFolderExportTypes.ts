@@ -15,8 +15,8 @@ export interface DataFolderExportControls {
 
 /**
  * Where the next zip goes and what it is called. The folder, and its
- * storage-access grant, stay across exports while the Data folder window is
- * open; the name starts fresh.
+ * storage-access grant, stay while the vault list is up, across exports and
+ * when the Data folder window closes; the name starts fresh.
  */
 export interface DataFolderExportDestination {
   destDir: string | null;
@@ -24,8 +24,8 @@ export interface DataFolderExportDestination {
   pickFailed: boolean;
   /** Opens the folder picker. Only the Choose folder button calls it. */
   choose: () => void;
-  /** The window closed: let the folder go once no export uses it. */
-  clear: () => void;
+  /** The window closed: drop a pick still open. The folder and its grant stay. */
+  cancelPick: () => void;
   /** As typed. Starts as `upriv-<UTC stamp>`. */
   zipName: string;
   setZipName: (name: string) => void;

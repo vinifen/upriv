@@ -62,7 +62,7 @@ describe("useDataFolderExportDestination", () => {
     const { result } = renderHook(() => useDataFolderExportDestination());
 
     act(() => result.current.choose());
-    act(() => result.current.clear());
+    act(() => result.current.cancelPick());
     await act(async () => {
       pick.resolve("/media/usb");
     });
@@ -100,7 +100,7 @@ describe("useDataFolderExportDestination", () => {
     );
   });
 
-  it("forgets the folder only when the window closes", async () => {
+  it("keeps the folder after an export and when the window closes", async () => {
     pickFolder.mockResolvedValue("/media/usb");
     const { result } = renderHook(() => useDataFolderExportDestination());
 
@@ -108,7 +108,7 @@ describe("useDataFolderExportDestination", () => {
     await waitFor(() => expect(result.current.destDir).toBe("/media/usb"));
     act(() => result.current.resetZipName());
     expect(result.current.destDir).toBe("/media/usb");
-    act(() => result.current.clear());
-    expect(result.current.destDir).toBeNull();
+    act(() => result.current.cancelPick());
+    expect(result.current.destDir).toBe("/media/usb");
   });
 });

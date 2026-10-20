@@ -47,14 +47,11 @@ export {
   fileManagerReducer,
 } from "./dockReducer";
 export {
-  applyImportedFilesToWorkspace,
-  importBatchIsReadFailure,
-  importBatchIsWriteFailure,
   importLogicalFiles,
   type ImportLogicalFile,
   type ImportLogicalResult,
 } from "./importLogicalFiles";
-export { currentImportFileSlots, importFileSlots } from "./importSlots";
+export { importFileSlots } from "./importSlots";
 export { yieldToPaint } from "./yieldToPaint";
 export { markdownLinkHref } from "./markdownLink";
 export { breadcrumbShrink, pathBreadcrumbs } from "./pathBreadcrumbs";
@@ -87,10 +84,7 @@ export {
   serializeWorkspaceSnapshot,
   sanitizeWorkspaceSnapshot,
   workspaceSnapshotFromState,
-  workspaceStateFromSnapshot,
   snapshotsEqual,
-  shouldHydratePersistedWorkspace,
   workspaceSnapshotToHydrate,
   type WorkspaceSnapshot,
-  type WorkspaceSnapshotV1,
 } from "./workspaceSnapshot";

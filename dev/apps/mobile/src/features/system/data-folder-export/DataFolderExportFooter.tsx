@@ -1,6 +1,6 @@
 import { dataFolderExportPending, dataFolderZipNameFromInput } from "@upriv/shared";
 import { Button } from "@/components/ui";
-import { ModalFooterActions, modalFooterConfirmBtnStyle } from "@/components/ui/ModalFooterActions";
+import { ModalFooterActions } from "@/components/ui/ModalFooterActions";
 import { useTranslation } from "@/i18n";
 import type {
   DataFolderExportControls,
@@ -37,7 +37,6 @@ export function DataFolderExportFooter({ controls, destination }: DataFolderExpo
               ? t("modal.data_folder_export.stopping")
               : t("modal.data_folder_export.stop")
           }
-          style={modalFooterConfirmBtnStyle}
           disabled={job.stopping}
           busy={job.stopping}
           onPress={onStop}
@@ -46,7 +45,6 @@ export function DataFolderExportFooter({ controls, destination }: DataFolderExpo
         <Button
           variant="primary"
           label={t("modal.data_folder_export.confirm")}
-          style={modalFooterConfirmBtnStyle}
           disabled={!ready}
           onPress={start}
         />

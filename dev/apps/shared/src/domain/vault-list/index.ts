@@ -28,7 +28,7 @@ export {
   vaultBlocksGroupInnerColumns,
   vaultRowChrome,
 } from "./rowChrome";
-export { reorderVaultList, sortVaultsByOrder } from "./order";
+export { sortVaultsByOrder } from "./order";
 export type {
   VaultExportRequest,
   VaultExportFormat,
@@ -43,11 +43,7 @@ export {
   vaultExportFilename,
 } from "./export";
 export { resolveVaultPasswordHint } from "./passwordHint";
-export {
-  formatLastAccessedWhen,
-  touchVaultLastAccessed,
-  vaultLastAccessedLabel,
-} from "./lastAccessed";
+export { touchVaultLastAccessed, vaultLastAccessedLabel } from "./lastAccessed";
 export { filterVisibleVaults } from "./visibility";
 export {
   applyPendingCreateGroupEffect,

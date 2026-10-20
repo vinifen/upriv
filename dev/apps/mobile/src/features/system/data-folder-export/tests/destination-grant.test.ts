@@ -18,7 +18,7 @@ describe("createDestinationGrant", () => {
     expect(grant.held()).toBe(SD);
   });
 
-  it("keeps holding the folder until the window lets it go", () => {
+  it("keeps holding the folder until the vault list lets it go", () => {
     const release = vi.fn();
     const grant = createDestinationGrant(release);
 
@@ -27,7 +27,7 @@ describe("createDestinationGrant", () => {
     expect(release).not.toHaveBeenCalled();
   });
 
-  it("lets the folder go once when the window closes", () => {
+  it("lets the folder go once when the vault list goes away", () => {
     const release = vi.fn();
     const grant = createDestinationGrant(release);
 

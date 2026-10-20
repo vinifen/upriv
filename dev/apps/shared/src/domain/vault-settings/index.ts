@@ -5,7 +5,6 @@ export type {
   CompressionPreset,
   KdfParams,
   KdfUnlockPreset,
-  SevenZipMethod,
   VaultSectionConfig,
   VaultSettingsConfig,
   VaultSettingsListPatch,

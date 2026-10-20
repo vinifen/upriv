@@ -55,7 +55,6 @@ import {
   LoadingBudgetHint,
   Modal,
   ModalFooterActions,
-  modalFooterConfirmBtnStyle,
 } from "@/components/ui";
 import { useLoadingBudget } from "@upriv/shared/react";
 import { useTheme } from "@/theme";
@@ -1054,7 +1053,6 @@ export function VaultSettingsModal({
             variant="danger"
             size="md"
             label={t("modal.settings.discard_confirm_action")}
-            style={modalFooterConfirmBtnStyle}
             disabled={busy}
             onPress={handleDiscardConfirmed}
           />
@@ -1062,7 +1060,6 @@ export function VaultSettingsModal({
             variant="ghost"
             size="md"
             label={t("modal.settings.discard_keep_editing")}
-            style={modalFooterConfirmBtnStyle}
             disabled={busy}
             onPress={dismissFooterConfirm}
           />
@@ -1073,7 +1070,6 @@ export function VaultSettingsModal({
             size="md"
             variant="primary"
             label={saveLabel}
-            style={modalFooterConfirmBtnStyle}
             onPress={() => {
               if (saveConfirmOpen) void handleConfirmSave();
               else handleSaveClick();
@@ -1086,7 +1082,6 @@ export function VaultSettingsModal({
               size="md"
               variant="ghost"
               label={t("modal.settings.save_cancel")}
-              style={modalFooterConfirmBtnStyle}
               disabled={busy}
               onPress={dismissFooterConfirm}
             />

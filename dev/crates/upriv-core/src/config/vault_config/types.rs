@@ -44,14 +44,6 @@ pub enum VaultArchiveMode {
     EncryptOnly,
 }
 
-/// `[seven_zip] method` (only lzma2 today).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum VaultSevenZipMethod {
-    #[default]
-    Lzma2,
-}
-
 /// `[vault]` identity section (required for a listable vault).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -167,8 +159,6 @@ pub struct VaultSevenZipSection {
     pub compression_level: u8,
     #[serde(default)]
     pub solid: bool,
-    #[serde(default)]
-    pub method: VaultSevenZipMethod,
 }
 
 impl Default for VaultSevenZipSection {
@@ -178,7 +168,6 @@ impl Default for VaultSevenZipSection {
             archive_mode: VaultArchiveMode::EncryptOnly,
             compression_level: 0,
             solid: false,
-            method: VaultSevenZipMethod::Lzma2,
         }
     }
 }

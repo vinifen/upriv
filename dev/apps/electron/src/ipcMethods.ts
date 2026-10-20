@@ -1,7 +1,7 @@
 /**
  * Defense in depth: reject unknown IPC methods before they reach the daemon.
  * Product gate remains `upriv-rpc` `handle_rpc` (`unknown_method`).
- * Keep in sync with `@upriv/shared` CORE / DESKTOP_ONLY / SHELL_ONLY command maps.
+ * The renderer may send the CORE and SHELL_ONLY methods of `@upriv/shared`, nothing else.
  */
 export const ELECTRON_IPC_METHODS = [
   "app_exit",
@@ -15,12 +15,9 @@ export const ELECTRON_IPC_METHODS = [
   "winfsp_install",
   "fuse_status",
   "fuse_install",
-  "app_shutdown",
   "app_version",
   "app_settings_get",
   "app_settings_save",
-  "app_settings_parse_toml",
-  "app_settings_serialize_toml",
   "log_list",
   "log_get",
   "log_delete",
@@ -30,7 +27,6 @@ export const ELECTRON_IPC_METHODS = [
   "vault_root_setup_path",
   "vault_root_deactivate_alias",
   "vault_root_read_alias",
-  "vault_root_remember_custom",
   "vault_root_default_root_status",
   "vault_root_inspect_path",
   "vault_root_suggested_custom_path",
@@ -68,9 +64,6 @@ export const ELECTRON_IPC_METHODS = [
   "vault_import_7z",
   "vault_import_files_zip",
   "vault_import_os_path",
-  "vault_ingest_open",
-  "vault_ingest_directory",
-  "vault_discard_import",
   "vault_import_probe",
   "vault_fs_list",
   "vault_fs_revision",
@@ -81,7 +74,6 @@ export const ELECTRON_IPC_METHODS = [
   "vault_fs_import_os_file",
   "vault_fs_import_seal",
   "vault_fs_truncate",
-  "vault_fs_mkdir",
   "vault_fs_create_file",
   "vault_fs_create_folder",
   "vault_fs_ensure_folder",

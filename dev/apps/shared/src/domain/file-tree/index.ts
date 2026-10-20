@@ -1,12 +1,6 @@
 export type { FileTreeNode, FileTreeNodeType, VaultFileContent, VaultFileLanguage } from "./types";
 export { parseFileTreeNode } from "./parse";
-export {
-  vaultFileLanguageFromPath,
-  isVaultImportUnsupported,
-  isImportableBinaryPath,
-  imageMimeFromPath,
-  imageDataUrlFromBase64,
-} from "./language";
+export { vaultFileLanguageFromPath, imageMimeFromPath, imageDataUrlFromBase64 } from "./language";
 export {
   validateFileName,
   liveFileNameError,
@@ -18,7 +12,7 @@ export {
 export type { FileNameValidationResult } from "./fileNameValidation";
 export { renameBasenameSelection } from "./renameSelection";
 export { fileNameErrorI18nKey, type FileNameErrorCode } from "./errorMessages";
-export { joinPath, fileBaseName, findNode, isFolderPath } from "./treeUtils";
+export { joinPath, fileBaseName, findNode } from "./treeUtils";
 export {
   getParentPath,
   ancestorFolderPaths,
@@ -44,7 +38,6 @@ export {
   clampCanonicalTreeSplitPercent,
   persistableTreeSplitPercent,
   displayTreeSplitPercent,
-  percentFromPointer,
   percentFromDelta,
   treeSplitMinPx,
   treeSplitVisualMinPercent,
@@ -68,7 +61,6 @@ export {
   pendingEntriesForExplorer,
   plannedImportPathMap,
   pendingEntriesFromRelativePaths,
-  plannedImportPath,
   replaceSessionPending,
   dropSessionPending,
   ensureNodeAtPath,

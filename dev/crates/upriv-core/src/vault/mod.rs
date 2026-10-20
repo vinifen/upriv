@@ -88,8 +88,8 @@ pub use seven_zip::{
 pub use seven_zip_pack::seven_zip_export_available;
 pub use welcome::{VaultWelcome, WELCOME_FILE_MAX_BYTES, WELCOME_README_LOGICAL_PATH};
 pub use zip_io::{
-    probe_store_zip, probe_store_zip_path, read_zip_config_toml, zip_directory_to_bytes,
-    zip_directory_to_path, zip_store_with_config_to_bytes, zip_store_with_config_to_path,
+    probe_store_zip, read_zip_config_toml, zip_store_with_config_to_bytes,
+    zip_store_with_config_to_path,
 };
 
 /// Wire DTO for `vault_list`.
@@ -444,7 +444,7 @@ mod tests {
 id = "bad-demo"
 display_name = "Bad"
 [storage]
-mode = "plain_only"
+mode = "not_a_mode"
 "#,
         )
         .unwrap();

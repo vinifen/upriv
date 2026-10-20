@@ -81,6 +81,7 @@ fn create_store_core(
     Ok((header, content_key, index_key))
 }
 
+#[cfg(test)]
 pub fn create_empty_store(
     store_dir: impl AsRef<Path>,
     password: &[u8],
@@ -155,6 +156,7 @@ pub fn probe_unlock_preset(store_dir: impl AsRef<Path>) -> Option<KdfUnlockPrese
     load_header(store_dir).ok().and_then(|h| h.unlock_preset())
 }
 
+#[cfg(test)]
 pub fn flush_index(store_dir: impl AsRef<Path>, store: &mut OpenedStore) -> Result<()> {
     flush_index_parts(store_dir, &store.header, &store.index_key, &store.index)?;
     store.index.clear_unsealed_holes();

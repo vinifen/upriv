@@ -6,7 +6,8 @@ import type { DataFolderExportDestination } from "../dataFolderExportTypes";
 
 /**
  * Desktop folders hold no grant, so the folder is a path the person types or
- * picks. A pick that answers after the window closed is dropped.
+ * picks. It stays while the vault list is up, across exports and when the
+ * window closes. A pick that answers after the window closed is dropped.
  */
 export function useDataFolderExportDestination(): DataFolderExportDestination {
   const { t } = useTranslation();
@@ -17,7 +18,7 @@ export function useDataFolderExportDestination(): DataFolderExportDestination {
   const [zipName, setZipName] = useState(() => dataFolderZipDefaultName(new Date()));
   const destDirRef = useRef(destDir);
   destDirRef.current = destDir;
-  /** Bumped by `clear`, so a pick still open when the window closed is not kept. */
+  /** Bumped by `cancelPick`, so a pick still open when the window closed is not kept. */
   const pickGen = useRef(0);
 
   const setDestDir = useCallback((path: string) => {
@@ -41,9 +42,8 @@ export function useDataFolderExportDestination(): DataFolderExportDestination {
       .finally(() => setPicking(false));
   }, [t, vaultRoot]);
 
-  const clear = useCallback(() => {
+  const cancelPick = useCallback(() => {
     pickGen.current += 1;
-    setDestDirState(null);
     setPickFailed(false);
   }, []);
 
@@ -55,7 +55,7 @@ export function useDataFolderExportDestination(): DataFolderExportDestination {
     picking,
     pickFailed,
     choose,
-    clear,
+    cancelPick,
     zipName,
     setZipName,
     resetZipName,

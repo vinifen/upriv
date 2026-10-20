@@ -10,7 +10,7 @@ import {
   mergePendingIntoTree,
   pendingEntriesForExplorer,
   pendingEntriesFromRelativePaths,
-  plannedImportPath,
+  plannedImportPathMap,
   replaceSessionPending,
   walkPlaceholderEntries,
   upsertActiveImportWrite,
@@ -44,7 +44,7 @@ describe("pendingEntriesFromRelativePaths", () => {
       { path: "/other/a.png", type: "file", sessionId: 1 },
       { path: "/other/b.txt", type: "file", sessionId: 1 },
     ]);
-    expect(plannedImportPath("/", "other/a.png")).toBe("/other/a.png");
+    expect(plannedImportPathMap("/", ["other/a.png"]).get("other/a.png")).toBe("/other/a.png");
   });
 
   it("plans a unique file name and does not mark an existing file pending", () => {

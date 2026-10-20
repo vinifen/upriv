@@ -5,7 +5,7 @@ Shared CORE JSON-RPC method handlers used by:
 - **`upriv-daemon`** — desktop stdio NDJSON
 - **`upriv-ffi`** — mobile UniFFI `invoke(method, params_json)`
 
-Keep method names in sync with `@upriv/shared` `CORE_RPC_COMMANDS` (+ desktop-only `app_shutdown`).
+Keep method names in sync with `@upriv/shared` `CORE_RPC_COMMANDS` and `MOBILE_ONLY_RPC_COMMANDS`. Electron main sends `app_shutdown`.
 
 ```bash
 cd dev

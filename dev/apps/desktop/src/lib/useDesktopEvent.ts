@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { isDesktop } from "./invoke";
+import { isElectronRenderer } from "./invoke";
 
 /**
  * Subscribe to a single daemon/event name without leaking listeners when the handler changes.
@@ -10,7 +10,7 @@ export function useDesktopEvent(eventName: string, handler: (payload: unknown) =
   handlerRef.current = handler;
 
   useEffect(() => {
-    if (!isDesktop()) return undefined;
+    if (!isElectronRenderer()) return undefined;
     const api = window.upriv;
     if (!api) return undefined;
 

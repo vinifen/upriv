@@ -234,18 +234,10 @@ fn lock_throttle() -> Result<std::sync::MutexGuard<'static, HashMap<PathBuf, Unl
     })
 }
 
-pub fn session_key(vault_dir: impl Into<PathBuf>) -> PathBuf {
-    vault_dir.into()
-}
-
 pub fn is_vault_open_at(vault_dir: &Path) -> bool {
     lock_sessions()
         .map(|g| g.contains_key(vault_dir))
         .unwrap_or(false)
-}
-
-pub fn is_vault_open(vault_dir: impl AsRef<Path>) -> bool {
-    is_vault_open_at(vault_dir.as_ref())
 }
 
 pub fn open_session_ids() -> Vec<String> {
@@ -613,12 +605,6 @@ pub fn with_open_session<T>(
         .lock()
         .map_err(|_| session_lock_poisoned("open session poisoned"))?;
     f(&mut session)
-}
-
-pub fn get_session_vault_id(vault_dir: &Path) -> Option<String> {
-    let guard = lock_sessions().ok()?;
-    let arc = guard.get(vault_dir)?;
-    arc.lock().ok().map(|s| s.vault_id.clone())
 }
 
 /// Fail closed if this vault is in the 60 s block window.

@@ -1,8 +1,0 @@
-{
-  "format_version": 1,
-  "vault_id": "vault-example-2",
-  "display_name": "Vault ExaMple 2",
-  "sync_generation": 2,
-  "last_close_ok_at": "2026-05-28T14:30:00Z",
-  "persistence": "closed"
-}

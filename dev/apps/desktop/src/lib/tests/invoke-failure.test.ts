@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { BRIDGE_ERROR_CODES, RpcError } from "../errors";
-import { isDesktop, isElectronRenderer, parseInvokeFailure } from "../invoke";
+import { isElectronRenderer, parseInvokeFailure } from "../invoke";
 
 describe("parseInvokeFailure", () => {
   it("passes through RpcError", () => {
@@ -17,12 +17,12 @@ describe("parseInvokeFailure", () => {
     expect(err.message).toBe("not open");
   });
 
-  it("maps timeout: prefix to rpc_timeout", () => {
+  it("parses the main-process rpc_timeout message", () => {
     const err = parseInvokeFailure(
-      new Error("Error invoking remote method 'x': Error: timeout: slow"),
+      new Error("Error invoking remote method 'x': Error: rpc_timeout: daemon RPC timeout: x"),
     );
     expect(err.code).toBe(BRIDGE_ERROR_CODES.RPC_TIMEOUT);
-    expect(err.message).toBe("slow");
+    expect(err.message).toBe("daemon RPC timeout: x");
   });
 
   it("keeps multiline daemon messages", () => {
@@ -53,9 +53,8 @@ describe("parseInvokeFailure", () => {
   });
 });
 
-describe("isElectronRenderer / isDesktop", () => {
+describe("isElectronRenderer", () => {
   it("is false without window.upriv", () => {
     expect(isElectronRenderer()).toBe(false);
-    expect(isDesktop()).toBe(false);
   });
 });

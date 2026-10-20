@@ -26,7 +26,6 @@ const DEFAULTS: VaultSettingsConfig = {
     archive_mode: "encrypt_only",
     compression_level: 0,
     solid: false,
-    method: "lzma2",
   },
 };
 
@@ -52,7 +51,6 @@ const MOCK_BY_VAULT: Record<string, VaultSettingsOverrides> = {
       display_name: "Vault ExaMple 2",
       order: 2,
       password_hint: "Example passphrase reminder",
-      note: "Mock demo: unlock with gatefail, then lock to see the header test error.",
       id: "vault-example-2",
     },
     backup: { enabled: true, mode: "keep_all" },

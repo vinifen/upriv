@@ -34,9 +34,6 @@ export const RPC_PROTOCOL_ERROR_CODES = {
   INTERNAL_ERROR: "internal_error",
 } as const;
 
-export type RpcProtocolErrorCode =
-  (typeof RPC_PROTOCOL_ERROR_CODES)[keyof typeof RPC_PROTOCOL_ERROR_CODES];
-
 /**
  * Duck-typed: Vite may load `@upriv/shared` more than once, so `instanceof RpcError` is unreliable.
  */

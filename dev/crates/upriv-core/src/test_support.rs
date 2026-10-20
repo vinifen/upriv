@@ -1,6 +1,4 @@
 //! Tempfile vault-root fixtures for crate tests.
-//!
-//! Tests must not read `prod-example/` — that bundle is a stale layout demo.
 
 use std::path::{Path, PathBuf};
 
@@ -71,7 +69,7 @@ pub fn vault_root_with(specs: &[VaultSpec]) -> (TempDir, VaultRoot) {
     crate::host_fs::create_dir_all(&vaults_dir).unwrap();
     crate::host_fs::write(
         root_path.join(".upriv/settings.toml"),
-        "[package]\nvaults_dir = \".upriv/vaults\"\n",
+        "[package]\nversion = 1\n",
     )
     .unwrap();
     for spec in specs {

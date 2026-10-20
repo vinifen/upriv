@@ -1,11 +1,8 @@
-export {
-  RESERVED_UPRIV_WORKSPACE_CHILDREN,
-  type ReservedUprivWorkspaceChild,
-  type WorkspacePathIssue,
-} from "./types";
+export type { WorkspacePathIssue } from "./types";
 export {
   WORKSPACE_SYSTEMS,
   appWorkspace,
+  appWorkspaceForDaemon,
   appWorkspaceChoice,
   currentWorkspaceSystem,
   detectHostPlatform,

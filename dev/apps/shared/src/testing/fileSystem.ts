@@ -18,7 +18,7 @@ import {
   uniqueFolderName,
   uniqueName,
   acceptedLogicalFileName,
-  vaultFileLanguageFromPath as languageFromPathShared,
+  vaultFileLanguageFromPath as languageFromPath,
 } from "../domain/file-tree";
 import {
   isInternalVaultFileName,
@@ -48,15 +48,6 @@ const sessions = new Map<string, VaultFileSession>();
  * The live file manager stores this snapshot as a logical file in `store/`.
  */
 const durableWorkspaceSnapshots = new Map<string, string>();
-
-function languageFromPath(path: string): VaultFileLanguage {
-  return languageFromPathShared(path);
-}
-
-/** @deprecated Use `@upriv/shared` vaultFileLanguageFromPath */
-export function vaultFileLanguageFromPath(path: string): VaultFileLanguage {
-  return languageFromPathShared(path);
-}
 
 function loadInitialContents(vaultId: string, tree: FileTreeNode): VaultFileSession {
   const contents: Record<string, string> = {};
@@ -448,6 +439,6 @@ export function createAsyncVaultFileSystemService(): VaultFileSystemService {
         "OS mount is not available in the in-memory file manager",
       );
     },
-    languageFromPath: vaultFileLanguageFromPath,
+    languageFromPath: (path: string) => languageFromPath(path),
   };
 }

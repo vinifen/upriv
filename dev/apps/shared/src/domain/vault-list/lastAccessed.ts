@@ -1,12 +1,5 @@
 import { formatIsoDate } from "../format/datetime";
 
-/** Localized last-access copy from an ISO stamp, or "—" when missing. */
-export function formatLastAccessedWhen(iso: string | undefined, locale: string): string {
-  const trimmed = iso?.trim() ?? "";
-  if (!trimmed) return "—";
-  return formatIsoDate(trimmed, locale);
-}
-
 /** Prefer `lastAccessedAt` (locale-formatted). Fall back to a mock relative label. */
 export function vaultLastAccessedLabel(
   vault: { lastAccessedAt?: string; lastAccessedWhen?: string },

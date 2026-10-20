@@ -9,7 +9,7 @@ Every **blocking** loading / busy / applying overlay in the desktop (and later m
 3. Delay first paint via `useLoadingBudget().visible` — `LOADING_APPEAR_DELAY_MS` (1s) for short budgets; `LOADING_LONG_HINT_APPEAR_DELAY_MS` (10s) for 10-minute budgets so "up to 10 min" does not scare on a fast unlock. Budget/timeout still count from when the op started. Open modal + row share `pipeline.run.startedAt`.
 4. On timeout: **clear** the spinner / applying / `busy` state and offer **retry** (or a clear error). Never leave `applying` / `busy` stuck forever.
 5. Also **invalidate** the in-flight attempt: bump a generation token (`busyGen` on Setup / Repair / Data folder / Alias recovery; `resolveGen` on Gate applying) so a late RPC success cannot re-apply root / `setReady` / clear the timeout error.
-6. Electron **main** must honor the same map: renderer passes `METHOD_TIMEOUT_MS[method]` (CORE values from `@upriv/shared` `CORE_RPC_TIMEOUT_MS`, plus desktop `pick_directory` / `app_exit` / `app_shutdown` in `invoke.ts`) through preload into `daemonRpc` (unmapped methods fall back to 30s — do not leave long vault-root ops on that default).
+6. Electron **main** must honor the same map: renderer passes `METHOD_TIMEOUT_MS[method]` (CORE values from `@upriv/shared` `CORE_RPC_TIMEOUT_MS`, plus the `SHELL_ONLY_RPC_COMMANDS` entries in `invoke.ts`) through preload into `daemonRpc` (unmapped methods fall back to 30s — do not leave long vault-root ops on that default). Electron main sends `app_shutdown` with its own `SHUTDOWN_TIMEOUT_MS`.
 
 ## Budgets (current)
 

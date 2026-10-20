@@ -19,7 +19,7 @@ export interface VaultImportDropHandlers {
  * Accept an OS file or folder drop on the vault list when no blocking UI is open.
  * Same sources as create-vault Import: any file, or one folder.
  *
- * The path comes from the same OS drop snapshot as the file manager (File path,
+ * The path comes from the same OS drop snapshot as the file manager (`getPathForFile`,
  * `text/uri-list`, Nautilus, XDG portal). A drop of several items uses the first
  * root only. A folder's children are that one folder.
  */

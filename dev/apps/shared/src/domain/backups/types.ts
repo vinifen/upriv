@@ -1,4 +1,4 @@
-/** Row in backups modal — mirrors future `backup_list` DTO. */
+/** Row in backups modal — mirrors the `backup_list` DTO. */
 export interface VaultBackupEntry {
   /** Stamp of `vaults/<id>/backups/<stamp>-<id>.zip` (under `backups/saves/` when pinned). */
   stamp: string;

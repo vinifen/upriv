@@ -23,7 +23,7 @@ export function compareDisplayName(a: string, b: string): number {
   return a.localeCompare(b, undefined, { sensitivity: "base" });
 }
 
-/** Future: max(last_store_write_at, last_close_ok_at) from persistence.json */
+/** `lastAccessedAt` in ms, or 0 when it is missing or unreadable. */
 export function lastAccessedMs(vault: VaultListItem): number {
   const parsed = Date.parse(vault.lastAccessedAt);
   return Number.isFinite(parsed) ? parsed : 0;

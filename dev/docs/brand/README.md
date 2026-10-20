@@ -7,7 +7,7 @@
 | `Upriv.svg` / `Upriv.png` | App icon, 512×512 PNG |
 | `Upriv-icon.svg` / `Upriv-icon.png` | Monogram **U** (favicon, tray) |
 
-PNG files are rasterized from SVG (`cairosvg`). Documented in **SDD §8.2.1** and **PRD §3.7**.
+PNG files are rasterized from SVG (`cairosvg`). Documented in **SDD §8.2.1** and **PRD §3.7**. The apps carry their own copies: `dev/apps/desktop/assets/`, `dev/apps/desktop/public/`, `dev/apps/mobile/assets/brand/`, and `dev/apps/electron/build/icons/`.
 
 | Variant | Hex |
 |---------|-----|

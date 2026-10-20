@@ -61,16 +61,6 @@ pub fn probe_store_zip(bytes: &[u8]) -> Result<()> {
     probe_store_zip_reader(Cursor::new(bytes))
 }
 
-/// Probe a zip file without reading every entry into RAM.
-pub fn probe_store_zip_path(path: &Path) -> Result<()> {
-    if !path.is_absolute() || !path.host_is_file() {
-        return Err(UprivError::ImportArchiveNotFound(path.to_path_buf()));
-    }
-    let file =
-        File::open(path).map_err(|error| super::import::map_archive_open_error(path, error))?;
-    probe_store_zip_reader(file)
-}
-
 fn probe_store_zip_reader<R: Read + Seek>(reader: R) -> Result<()> {
     ZipArchive::new(reader).map_err(|e| zip_err(Path::new("zip"), e))?;
     Ok(())
@@ -180,17 +170,6 @@ fn read_zip_entry_checked(
     Ok(if keep { Some(kept) } else { None })
 }
 
-fn write_zip<W: Write + std::io::Seek>(src: &Path, writer: W) -> Result<()> {
-    if !src.host_is_dir() {
-        return Err(UprivError::VaultPathNotFound(src.display().to_string()));
-    }
-    let mut zip = ZipWriter::new(writer);
-    let options = FileOptions::default().compression_method(CompressionMethod::Stored);
-    add_dir(&mut zip, src, Path::new(""), options)?;
-    zip.finish().map_err(|e| zip_err(src, e))?;
-    Ok(())
-}
-
 /// `README.md` and `config.toml` beside `store/`.
 ///
 /// The warning file already in `store/` is copied with the tree.
@@ -286,20 +265,6 @@ pub(crate) fn read_zip_root_entry<R: Read + Seek>(
         return Ok(Some(bytes));
     }
     Ok(None)
-}
-
-/// Pack `src` (typically `store/` or a backup of it) into a `.zip` in memory.
-pub fn zip_directory_to_bytes(src: &Path) -> Result<Vec<u8>> {
-    let mut cursor = Cursor::new(Vec::new());
-    write_zip(src, &mut cursor)?;
-    Ok(cursor.into_inner())
-}
-
-/// Pack `src` into `dest` without holding the zip in an extra buffer.
-pub fn zip_directory_to_path(src: &Path, dest: &Path) -> Result<u64> {
-    let file = buffered_zip_file(File::create(dest)?);
-    write_zip(src, file)?;
-    Ok(crate::host_fs::metadata(dest)?.len())
 }
 
 fn add_dir<W: Write + std::io::Seek>(
@@ -559,6 +524,14 @@ mod tests {
 
     use super::*;
 
+    /// Stored zip of `src` with its entries at the zip root.
+    fn zip_dir(src: &Path) -> Vec<u8> {
+        let mut zip = ZipWriter::new(Cursor::new(Vec::new()));
+        let options = FileOptions::default().compression_method(CompressionMethod::Stored);
+        add_dir(&mut zip, src, Path::new(""), options).unwrap();
+        zip.finish().unwrap().into_inner()
+    }
+
     #[test]
     fn zip_round_trip_preserves_bytes() {
         let tmp = tempfile::tempdir().unwrap();
@@ -567,11 +540,7 @@ mod tests {
         crate::host_fs::create_dir_all(src.join("data")).unwrap();
         crate::host_fs::write(src.join("header").join("vault.header"), b"header-bytes").unwrap();
         crate::host_fs::write(src.join("data").join("a.blob"), b"cipher").unwrap();
-        let dest_file = tmp.path().join("packed.zip");
-        let size = zip_directory_to_path(&src, &dest_file).unwrap();
-        let zipped = zip_directory_to_bytes(&src).unwrap();
-        assert_eq!(size as usize, zipped.len());
-        assert_eq!(crate::host_fs::read(&dest_file).unwrap(), zipped);
+        let zipped = zip_dir(&src);
         let dest = tmp.path().join("out");
         unzip_store_bytes(&zipped, &dest).unwrap();
         assert_eq!(

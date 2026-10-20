@@ -56,13 +56,6 @@ export function isLifecyclePasswordPresent(password: string): boolean {
   return password.trim().length > 0;
 }
 
-export function vaultIdForCreateDraft(
-  draft: CreateVaultDraft,
-  existingIds: readonly string[],
-): string {
-  return displayNameToVaultId(draft.displayName, existingIds);
-}
-
 function importSourcePathAccepted(draft: CreateVaultDraft): boolean {
   if (!draft.importFileName.trim()) return false;
   if (draft.importShape === "directory") {

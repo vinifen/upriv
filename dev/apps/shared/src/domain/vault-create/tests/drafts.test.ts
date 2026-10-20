@@ -123,7 +123,7 @@ describe("createVaultImportPackage", () => {
       createVaultImportNeedsArchivePassword({
         source: "import",
         importKind: "backup",
-        importFileName: "20260528T120000",
+        importFileName: "20260528120000-notes.zip",
       }),
     ).toBe(false);
     expect(
@@ -146,15 +146,15 @@ describe("createVaultImportPackage", () => {
         {
           source: "import",
           importKind: "backup",
-          importFileName: "20260528T120000",
-          importFilePath: "vaults/notes/backups/20260528T120000",
+          importFileName: "20260528120000-notes.zip",
+          importFilePath: "vaults/notes/backups/20260528120000-notes.zip",
           zipLayout: null,
         },
         "secret",
       ),
     ).toEqual({
       kind: "store_zip",
-      archivePath: "vaults/notes/backups/20260528T120000",
+      archivePath: "vaults/notes/backups/20260528120000-notes.zip",
       archivePassword: undefined,
     });
     expect(

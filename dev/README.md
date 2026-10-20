@@ -46,7 +46,7 @@ npm install --prefix apps/electron
 npm install --prefix apps/mobile
 ```
 
-`./r l` needs `js-lint/node_modules` plus each app’s `node_modules` (React ESLint plugins live in desktop/mobile/shared; `tsc`/vitest use the app installs). Electron now runs ESLint + Prettier as well. Rust fmt/clippy do not live in `js-lint/`.
+`./r l` needs `js-lint/node_modules` plus each app’s `node_modules` (React ESLint plugins live in desktop/mobile/shared; `tsc`/vitest use the app installs). Electron runs ESLint + Prettier as well. Rust fmt/clippy do not live in `js-lint/`.
 
 `./r l` also runs clippy for Windows, Android, and macOS, so code behind those `cfg`s is linted on a Linux machine. It skips a target rustup does not have; CI installs all three. To run them locally:
 
@@ -117,9 +117,9 @@ Where vault data lives (`UPRIV_DISTRIBUTION`) — **portable is only a desktop p
 | **Linux**   | `.deb` → `~/.local/share/upriv`                                              | `.AppImage` (writable folder)                    | This Linux machine                          |
 | **Windows** | NSIS setup → `%LOCALAPPDATA%\Upriv`                                          | portable `.exe` (uses `PORTABLE_EXECUTABLE_DIR`) | Windows PC / Windows VM / CI                |
 | **macOS**   | DMG → Application Support (`installed` always; never portable-beside-`.app`) | **No**                                           | Mac only (experimental / unsigned scaffold) |
-| **Android** | App sandbox / SAF (later RN)                                                 | **No** — no “USB beside APK” model; not Electron | Android toolchain later                     |
+| **Android** | Storage-access grant, Documents/Upriv by default                             | **No** — no “USB beside APK” model; not Electron | Android SDK + NDK (`scripts/build-android-ffi.sh`) |
 
-`custom_root` (pick any folder) still exists on desktop when the app ships; it is not the same as portable packaging.
+`custom_root` (pick any folder) works with either packaging; it is not the same as portable packaging.
 
 ## Linux packaging
 
@@ -156,15 +156,14 @@ Build **on a Mac** only (`electron-builder --mac`). Not cross-built from Linux/W
 
 ## Android
 
-**No portable distribution.** Future RN app uses the OS app sandbox / SAF for vault storage — not “folder beside the binary”. See PRD §3.6 / SDD §9 when that phase starts.
+**No portable distribution.** The RN app keeps its data folder in a storage-access grant (Documents/Upriv by default), not beside the binary. Build and run: [`apps/mobile/README.md`](apps/mobile/README.md); requirements: PRD §3.6 / SDD §9.
 
 ## Linux troubleshooting (AppImage / .deb)
 
 | Symptom                                                                             | Likely cause                                             | Fix                                                                                                                                                 |
 | ----------------------------------------------------------------------------------- | -------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Want the OS folder                                                                      | `fuse3` is not installed yet                             | Turn the file manager folder on. One system password dialog installs `fuse3`. Declining leaves the switch off.                                      |
-| AppImage: still asks for libfuse2                                                       | An older file, built before the extract-and-run wrapper | Rebuild. The current AppImage starts without system `libfuse2`.                                                                                    |
-| AppImage: `setuid_sandbox_host` / Trace/breakpoint trap under `/tmp/.mount_Upriv-*` | FUSE mount is `nosuid` → `chrome-sandbox` useless        | Rebuild (wrapper disables sandbox **only when `$APPIMAGE` is set**). Old AppImages: `./Upriv-*.AppImage --no-sandbox`. `.deb` keeps chrome-sandbox. |
+| AppImage: `setuid_sandbox_host` / Trace/breakpoint trap under `/tmp/.mount_Upriv-*` | Started without the wrapper; the FUSE mount is `nosuid` → `chrome-sandbox` useless | Start the `.AppImage` file itself: the wrapper disables the sandbox **only when `$APPIMAGE` is set**. `.deb` keeps chrome-sandbox. |
 | AppImage won't start / sandbox error                                                | Chromium sandbox vs AppArmor                             | Same as above; renderer sandbox stays on. Dev `npm run electron:dev` always uses `--no-sandbox` (dev-only).                                         |
 | `upriv-daemon not found`                                                            | Release binary missing before pack                       | Run `npm run daemon:build:release` or full `npm run electron:build`                                                                                 |
 | Blank window on first `electron:dev`                                                | Vite still compiling                                     | Wait for port 1420 or reload once                                                                                                                   |

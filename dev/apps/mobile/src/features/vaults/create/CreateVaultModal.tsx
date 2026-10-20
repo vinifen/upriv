@@ -22,13 +22,7 @@ import { useTranslation } from "@/i18n";
 import { mobileErrorI18nKey } from "@/lib/errorMessages";
 import { useTheme } from "@/theme";
 import { MODAL_MAX_HEIGHT_RATIO, spacing } from "@/theme/tokens";
-import {
-  Button,
-  Modal,
-  ModalFooterActions,
-  ModalFooterNav,
-  modalFooterConfirmBtnStyle,
-} from "@/components/ui";
+import { Button, Modal, ModalFooterActions, ModalFooterNav } from "@/components/ui";
 import { useTapNotPan } from "@/components/ui/ScrimDismiss";
 import { CreateVaultStepNav } from "./CreateVaultStepNav";
 import { invalidateImportPicks, renderCreateVaultStep } from "./createVaultSteps";
@@ -205,13 +199,11 @@ export function CreateVaultModal({
             <Button
               variant="danger"
               label={t("modal.settings.discard_confirm_action")}
-              style={modalFooterConfirmBtnStyle}
               onPress={handleDiscardAndClose}
             />
             <Button
               variant="ghost"
               label={t("modal.settings.discard_keep_editing")}
-              style={modalFooterConfirmBtnStyle}
               onPress={dismissFooterConfirm}
             />
           </ModalFooterActions>
@@ -222,24 +214,17 @@ export function CreateVaultModal({
             <Button
               variant="ghost"
               label={t("vault.create.action.back")}
-              style={modalFooterConfirmBtnStyle}
               disabled={isFirstStep}
               onPress={handleBack}
             />
           }
           trailing={
             <>
-              <Button
-                variant="ghost"
-                label={t("action.cancel")}
-                style={modalFooterConfirmBtnStyle}
-                onPress={requestClose}
-              />
+              <Button variant="ghost" label={t("action.cancel")} onPress={requestClose} />
               {isLastStep ? (
                 <Button
                   variant="primary"
                   label={t("vault.create.action.create")}
-                  style={modalFooterConfirmBtnStyle}
                   disabled={!canCreate || folderListingFailed}
                   onPress={() => {
                     setCreateError(null);
@@ -254,7 +239,6 @@ export function CreateVaultModal({
                 <Button
                   variant="primary"
                   label={t("vault.create.action.next")}
-                  style={modalFooterConfirmBtnStyle}
                   disabled={folderListingFailed}
                   onPress={() => {
                     if (folderListingFailed) return;

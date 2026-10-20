@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { clearSessionAppVersion } from "./appVersion";
-import { isDesktop } from "./invoke";
+import { isElectronRenderer } from "./invoke";
 import { rpcAppVersion } from "./rpc";
 import { useDesktopEvent } from "./useDesktopEvent";
 
@@ -10,7 +10,7 @@ import { useDesktopEvent } from "./useDesktopEvent";
  * Clears the session version cache when the main process reports `daemon_exited`.
  */
 export function useDaemonReady(): boolean {
-  const [ready, setReady] = useState(() => !isDesktop());
+  const [ready, setReady] = useState(() => !isElectronRenderer());
 
   useDesktopEvent("daemon_ready", () => {
     setReady(true);
@@ -22,7 +22,7 @@ export function useDaemonReady(): boolean {
   });
 
   useEffect(() => {
-    if (!isDesktop() || ready) return;
+    if (!isElectronRenderer() || ready) return;
     let cancelled = false;
     void rpcAppVersion()
       .then(() => {

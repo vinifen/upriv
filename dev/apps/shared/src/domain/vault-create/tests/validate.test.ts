@@ -195,8 +195,8 @@ describe("validateCreateVaultStep", () => {
         createVaultDraftFixture([], {
           source: "import",
           importKind: "backup",
-          importFileName: "20260528T120000",
-          importFilePath: "vaults/notes/backups/20260528T120000",
+          importFileName: "20260528120000-notes.zip",
+          importFilePath: "vaults/notes/backups/20260528120000-notes.zip",
         }),
         [],
       ),
@@ -210,8 +210,8 @@ describe("validateCreateVaultStep", () => {
         createVaultDraftFixture([], {
           source: "import",
           importKind: "backup",
-          importFileName: "20260528T120000",
-          importFilePath: "vaults/notes/backups/20260528T120000",
+          importFileName: "20260528120000-notes.zip",
+          importFilePath: "vaults/notes/backups/20260528120000-notes.zip",
         }),
         [],
       ),
@@ -321,8 +321,8 @@ describe("validateCreateVaultStep", () => {
         createVaultDraftFixture([], {
           source: "import",
           importKind: "backup",
-          importFileName: "20260528T120000",
-          importFilePath: "vaults/notes/backups/20260528T120000",
+          importFileName: "20260528120000-notes.zip",
+          importFilePath: "vaults/notes/backups/20260528120000-notes.zip",
           password: "",
           passwordValidated: false,
         }),

@@ -7,7 +7,7 @@ declare global {
         timeoutMs?: number,
       ): Promise<unknown>;
       onEvent(callback: (name: string, payload: unknown) => void): () => void;
-      /** Absolute path of an OS-dropped File (Electron 32+). */
+      /** Absolute path of an OS-dropped File (`webUtils.getPathForFile`). */
       getPathForFile?(file: File): string | undefined;
       /** `lstat` of one dropped path. Missing paths and symlinks are `other`. */
       classifyDroppedPath?(osPath: string): Promise<"file" | "directory" | "other">;

@@ -1,6 +1,6 @@
 import type { AppDistribution } from "@upriv/shared";
 import { rpcAppVersion } from "./rpc";
-import { isDesktop } from "./invoke";
+import { isElectronRenderer } from "./invoke";
 
 /** Product version from repo-root `VERSION` (injected by Vite as `__UPRIV_APP_VERSION__`). */
 export const APP_VERSION = __UPRIV_APP_VERSION__;
@@ -29,7 +29,7 @@ export function clearSessionAppVersion(): void {
 
 /** Shell version from upriv-daemon when in Electron; otherwise repo-root `VERSION`. */
 export async function getAppVersion(): Promise<AppVersionInfo> {
-  if (!isDesktop()) {
+  if (!isElectronRenderer()) {
     return { version: APP_VERSION, source: "version-file" };
   }
   if (sessionVersion?.source === "daemon") {

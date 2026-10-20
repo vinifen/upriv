@@ -65,7 +65,7 @@ export function VaultRootDataFolderModal({
   /** Export a copy is the chosen radio. A running export keeps it chosen. */
   const [exportChosen, setExportChosen] = useState(false);
   const exportDestination = useDataFolderExportDestination();
-  const { clear: clearExportDestination, resetZipName: resetExportZipName } = exportDestination;
+  const { cancelPick: cancelExportPick, resetZipName: resetExportZipName } = exportDestination;
   const exportSelected = exportControls != null && (exportChosen || exportControls.job != null);
   const exportWritten = exportControls?.written ?? null;
   // Chosen and still missing its folder or a usable name: the step left before Export.
@@ -111,7 +111,7 @@ export function VaultRootDataFolderModal({
       setAppliedVisible(false);
       setError(null);
       setExportChosen(false);
-      clearExportDestination();
+      cancelExportPick();
       submitLock.current = false;
       busyGen.current += 1;
       clearTimeout(appliedHideRef.current);
@@ -135,7 +135,7 @@ export function VaultRootDataFolderModal({
       setPath(settings.app.upriv_root_path);
     }
   }, [
-    clearExportDestination,
+    cancelExportPick,
     open,
     draftDirty,
     resetExportZipName,

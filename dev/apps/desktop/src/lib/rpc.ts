@@ -1,4 +1,3 @@
-import { DAEMON_COMMANDS, SHELL_COMMANDS } from "./commands";
 import { BRIDGE_ERROR_CODES, RpcError, isRpcError } from "./errors";
 import { desktopInvokeRaw } from "./invoke";
 import { parseAppVersionResult, type AppVersionResult } from "./types";
@@ -25,8 +24,11 @@ import type {
   VaultSettingsConfig,
 } from "@upriv/shared";
 import {
+  CORE_RPC_COMMANDS,
+  SHELL_ONLY_RPC_COMMANDS,
   backupSnapshotFileName,
   bytesFromContentB64,
+  appWorkspaceForDaemon,
   normalizeAppSettings,
   normalizeVaultSettingsConfig,
   vaultSettingsForDaemon,
@@ -60,7 +62,7 @@ import {
 /** Fetch product version from upriv-daemon. */
 export async function rpcAppVersion(): Promise<AppVersionResult> {
   try {
-    const raw = await desktopInvokeRaw(DAEMON_COMMANDS.APP_VERSION);
+    const raw = await desktopInvokeRaw(CORE_RPC_COMMANDS.APP_VERSION);
     return parseAppVersionResult(raw);
   } catch (error) {
     if (isRpcError(error)) throw error;
@@ -68,22 +70,12 @@ export async function rpcAppVersion(): Promise<AppVersionResult> {
   }
 }
 
-/** Graceful daemon shutdown (`close_all` into `store/`). */
-export async function rpcAppShutdown(): Promise<void> {
-  await desktopInvokeRaw(DAEMON_COMMANDS.APP_SHUTDOWN);
-}
-
-/** Request app exit — main warns if a vault is open, then awaits daemon teardown. */
-export async function rpcAppExit(): Promise<void> {
-  await desktopInvokeRaw(SHELL_COMMANDS.APP_EXIT);
-}
-
 /** Native directory picker (Electron main). Optional `defaultPath` opens near that folder. */
 export async function rpcPickDirectory(
   defaultPath?: string | null,
   title?: string | null,
 ): Promise<string | null> {
-  const raw = await desktopInvokeRaw(SHELL_COMMANDS.PICK_DIRECTORY, {
+  const raw = await desktopInvokeRaw(SHELL_ONLY_RPC_COMMANDS.PICK_DIRECTORY, {
     defaultPath: defaultPath?.trim() || null,
     title: title?.trim() || null,
   });
@@ -99,7 +91,7 @@ export async function rpcPickDirectory(
 }
 
 export async function rpcWinFspStatus(): Promise<{ applicable: boolean; installed: boolean }> {
-  const raw = await desktopInvokeRaw(SHELL_COMMANDS.WINFSP_STATUS, {});
+  const raw = await desktopInvokeRaw(SHELL_ONLY_RPC_COMMANDS.WINFSP_STATUS, {});
   if (!raw || typeof raw !== "object") {
     throw new RpcError(
       BRIDGE_ERROR_CODES.INVALID_RESPONSE,
@@ -112,13 +104,13 @@ export async function rpcWinFspStatus(): Promise<{ applicable: boolean; installe
 }
 
 export async function rpcWinFspInstall(): Promise<boolean> {
-  const raw = await desktopInvokeRaw(SHELL_COMMANDS.WINFSP_INSTALL, {});
+  const raw = await desktopInvokeRaw(SHELL_ONLY_RPC_COMMANDS.WINFSP_INSTALL, {});
   if (!raw || typeof raw !== "object") return false;
   return (raw as { ok?: unknown }).ok === true;
 }
 
 export async function rpcFuseStatus(): Promise<{ applicable: boolean; installed: boolean }> {
-  const raw = await desktopInvokeRaw(SHELL_COMMANDS.FUSE_STATUS, {});
+  const raw = await desktopInvokeRaw(SHELL_ONLY_RPC_COMMANDS.FUSE_STATUS, {});
   if (!raw || typeof raw !== "object") {
     throw new RpcError(BRIDGE_ERROR_CODES.INVALID_RESPONSE, "fuse_status: expected an object", raw);
   }
@@ -127,7 +119,7 @@ export async function rpcFuseStatus(): Promise<{ applicable: boolean; installed:
 }
 
 export async function rpcFuseInstall(): Promise<boolean> {
-  const raw = await desktopInvokeRaw(SHELL_COMMANDS.FUSE_INSTALL, {});
+  const raw = await desktopInvokeRaw(SHELL_ONLY_RPC_COMMANDS.FUSE_INSTALL, {});
   if (!raw || typeof raw !== "object") return false;
   return (raw as { ok?: unknown }).ok === true;
 }
@@ -136,7 +128,7 @@ export async function rpcPickFile(options?: {
   title?: string | null;
   filters?: { name: string; extensions: string[] }[];
 }): Promise<string | null> {
-  const raw = await desktopInvokeRaw(SHELL_COMMANDS.PICK_FILE, {
+  const raw = await desktopInvokeRaw(SHELL_ONLY_RPC_COMMANDS.PICK_FILE, {
     title: options?.title?.trim() || null,
     filters: options?.filters ?? null,
   });
@@ -156,7 +148,7 @@ export async function rpcPickSaveFile(options?: {
   defaultPath?: string | null;
   filters?: { name: string; extensions: string[] }[];
 }): Promise<string | null> {
-  const raw = await desktopInvokeRaw(SHELL_COMMANDS.PICK_SAVE_FILE, {
+  const raw = await desktopInvokeRaw(SHELL_ONLY_RPC_COMMANDS.PICK_SAVE_FILE, {
     title: options?.title?.trim() || null,
     defaultPath: options?.defaultPath?.trim() || null,
     filters: options?.filters ?? null,
@@ -188,7 +180,7 @@ export async function rpcAppSettingsGet(): Promise<{
   rootPath: string | null;
   onDisk: boolean;
 }> {
-  const raw = await desktopInvokeRaw(DAEMON_COMMANDS.APP_SETTINGS_GET);
+  const raw = await desktopInvokeRaw(CORE_RPC_COMMANDS.APP_SETTINGS_GET);
   if (typeof raw !== "object" || raw === null) {
     throw new RpcError(
       BRIDGE_ERROR_CODES.INVALID_RESPONSE,
@@ -208,8 +200,8 @@ export async function rpcAppSettingsSave(
   settings: AppSettingsConfig,
   options?: { syncAlias?: boolean },
 ): Promise<{ wrote: boolean }> {
-  const raw = await desktopInvokeRaw(DAEMON_COMMANDS.APP_SETTINGS_SAVE, {
-    settings,
+  const raw = await desktopInvokeRaw(CORE_RPC_COMMANDS.APP_SETTINGS_SAVE, {
+    settings: { ...settings, workspace: appWorkspaceForDaemon(settings.workspace) },
     // Default true — omit only when vault-root setup already synced the alias.
     syncAlias: options?.syncAlias ?? true,
   });
@@ -232,7 +224,7 @@ export async function rpcVaultRootResolve(options?: {
   explicitPath?: string | null;
   binaryDir?: string | null;
 }): Promise<VaultRootResolveResult> {
-  const raw = await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_ROOT_RESOLVE, {
+  const raw = await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_ROOT_RESOLVE, {
     vaultRootMode: options?.vaultRootMode ?? "default_root",
     explicitPath: options?.explicitPath ?? null,
     binaryDir: options?.binaryDir ?? null,
@@ -252,7 +244,7 @@ export async function rpcVaultRootSetupDefaultRoot(options?: {
       "replacePolicy is required when replaceIncomplete is true",
     );
   }
-  const raw = await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_ROOT_SETUP_DEFAULT_ROOT, {
+  const raw = await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_ROOT_SETUP_DEFAULT_ROOT, {
     replaceIncomplete,
     replacePolicy: options?.replacePolicy ?? null,
     bootstrap: options?.bootstrap ?? null,
@@ -286,7 +278,7 @@ export async function rpcVaultRootSetupPath(
       "replacePolicy is required when replaceIncomplete is true",
     );
   }
-  const raw = await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_ROOT_SETUP_PATH, {
+  const raw = await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_ROOT_SETUP_PATH, {
     path,
     replaceIncomplete,
     replacePolicy: options?.replacePolicy ?? null,
@@ -311,11 +303,11 @@ export async function rpcVaultRootSetupPath(
 }
 
 export async function rpcVaultRootDeactivateAlias(): Promise<void> {
-  await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_ROOT_DEACTIVATE_ALIAS);
+  await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_ROOT_DEACTIVATE_ALIAS);
 }
 
 export async function rpcVaultRootReadAlias(): Promise<VaultRootAliasInfo | null> {
-  const raw = await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_ROOT_READ_ALIAS);
+  const raw = await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_ROOT_READ_ALIAS);
   if (raw === null || raw === undefined) return null;
   if (
     typeof raw !== "object" ||
@@ -339,7 +331,7 @@ export async function rpcVaultRootReadAlias(): Promise<VaultRootAliasInfo | null
 }
 
 export async function rpcVaultRootSuggestedCustomPath(): Promise<string> {
-  const raw = await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_ROOT_SUGGESTED_CUSTOM_PATH);
+  const raw = await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_ROOT_SUGGESTED_CUSTOM_PATH);
   if (
     typeof raw !== "object" ||
     raw === null ||
@@ -356,13 +348,13 @@ export async function rpcVaultRootSuggestedCustomPath(): Promise<string> {
 
 export async function rpcVaultRootDefaultRootStatus(): Promise<DefaultRootStatusResult> {
   return parseDefaultRootStatus(
-    await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_ROOT_DEFAULT_ROOT_STATUS),
+    await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_ROOT_DEFAULT_ROOT_STATUS),
   );
 }
 
 export async function rpcVaultRootInspectPath(path: string): Promise<VaultRootInspectResult> {
   return parseVaultRootInspect(
-    await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_ROOT_INSPECT_PATH, { path }),
+    await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_ROOT_INSPECT_PATH, { path }),
   );
 }
 
@@ -380,7 +372,7 @@ function parseAppLogFileOrThrow(raw: unknown): AppLogFile {
 
 /** List `.upriv/logs/*.log` metadata (content empty until `log_get`). */
 export async function rpcLogList(): Promise<AppLogFile[]> {
-  const raw = await desktopInvokeRaw(DAEMON_COMMANDS.LOG_LIST);
+  const raw = await desktopInvokeRaw(CORE_RPC_COMMANDS.LOG_LIST);
   if (
     typeof raw !== "object" ||
     raw === null ||
@@ -393,7 +385,7 @@ export async function rpcLogList(): Promise<AppLogFile[]> {
 
 /** Read one log file including content. */
 export async function rpcLogGet(filename: string): Promise<AppLogFile | undefined> {
-  const raw = await desktopInvokeRaw(DAEMON_COMMANDS.LOG_GET, { filename });
+  const raw = await desktopInvokeRaw(CORE_RPC_COMMANDS.LOG_GET, { filename });
   if (typeof raw !== "object" || raw === null) {
     throw new RpcError(BRIDGE_ERROR_CODES.INVALID_RESPONSE, "log_get: expected object", raw);
   }
@@ -404,21 +396,21 @@ export async function rpcLogGet(filename: string): Promise<AppLogFile | undefine
 
 /** Delete log files by basename (active `current-*` allowed). */
 export async function rpcLogDelete(filenames: readonly string[]): Promise<void> {
-  await desktopInvokeRaw(DAEMON_COMMANDS.LOG_DELETE, { filenames: [...filenames] });
+  await desktopInvokeRaw(CORE_RPC_COMMANDS.LOG_DELETE, { filenames: [...filenames] });
 }
 
 /** Append allowlisted session log event (no id, name, or path fields). */
 export async function rpcLogEvent(event: AllowlistedUiLogEvent): Promise<void> {
-  await desktopInvokeRaw(DAEMON_COMMANDS.LOG_EVENT, { event });
+  await desktopInvokeRaw(CORE_RPC_COMMANDS.LOG_EVENT, { event });
 }
 
 export async function rpcVaultGroupList(): Promise<VaultGroupListResult> {
-  const raw = await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_GROUP_LIST);
+  const raw = await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_GROUP_LIST);
   return parseVaultGroupListResult(raw);
 }
 
 export async function rpcVaultGroupCreate(input: VaultGroupCreateInput): Promise<VaultGroup> {
-  const raw = await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_GROUP_CREATE, {
+  const raw = await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_GROUP_CREATE, {
     id: input.id,
     displayName: input.displayName,
     groupedVaults: input.groupedVaults ?? [],
@@ -437,7 +429,7 @@ export async function rpcVaultGroupCreate(input: VaultGroupCreateInput): Promise
 }
 
 export async function rpcVaultGroupUpdate(input: VaultGroupUpdateInput): Promise<VaultGroup> {
-  const raw = await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_GROUP_UPDATE, {
+  const raw = await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_GROUP_UPDATE, {
     id: input.id,
     displayName: input.displayName,
     collapsed: input.collapsed,
@@ -458,14 +450,17 @@ export async function rpcVaultGroupUpdate(input: VaultGroupUpdateInput): Promise
 }
 
 export async function rpcVaultGroupDelete(id: string): Promise<void> {
-  await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_GROUP_DELETE, { id });
+  await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_GROUP_DELETE, { id });
 }
 
 export async function rpcVaultGroupSetCollapsed(
   id: string,
   collapsed: boolean,
 ): Promise<VaultGroup> {
-  const raw = await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_GROUP_SET_COLLAPSED, { id, collapsed });
+  const raw = await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_GROUP_SET_COLLAPSED, {
+    id,
+    collapsed,
+  });
   if (typeof raw !== "object" || raw === null) {
     throw new RpcError(
       BRIDGE_ERROR_CODES.INVALID_RESPONSE,
@@ -480,7 +475,7 @@ export async function rpcVaultGroupReorderGroupedVaults(
   id: string,
   groupedVaults: string[],
 ): Promise<VaultGroup> {
-  const raw = await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_GROUP_REORDER_GROUPED_VAULTS, {
+  const raw = await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_GROUP_REORDER_GROUPED_VAULTS, {
     id,
     groupedVaults,
   });
@@ -497,7 +492,7 @@ export async function rpcVaultGroupReorderGroupedVaults(
 export async function rpcVaultGroupReorder(
   orders: { id: string; order: number }[],
 ): Promise<VaultGroup[]> {
-  const raw = await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_GROUP_REORDER, { orders });
+  const raw = await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_GROUP_REORDER, { orders });
   if (typeof raw !== "object" || raw === null) {
     throw new RpcError(
       BRIDGE_ERROR_CODES.INVALID_RESPONSE,
@@ -517,15 +512,15 @@ export async function rpcVaultGroupReorder(
 }
 
 export async function rpcVaultGroupRepair(): Promise<void> {
-  await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_GROUP_REPAIR);
+  await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_GROUP_REPAIR);
 }
 
 export async function rpcVaultList(): Promise<VaultListItem[]> {
-  return parseVaultListResult(await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_LIST));
+  return parseVaultListResult(await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_LIST));
 }
 
 export async function rpcVaultCreate(input: CreateVaultInput): Promise<VaultListItem> {
-  const raw = await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_CREATE, {
+  const raw = await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_CREATE, {
     password: input.password,
     unlockPreset: input.unlockPreset,
     settings: vaultSettingsForDaemon(input.settings),
@@ -538,15 +533,15 @@ export async function rpcVaultCreate(input: CreateVaultInput): Promise<VaultList
 }
 
 export async function rpcVaultOpen(id: string, password: string): Promise<unknown> {
-  return desktopInvokeRaw(DAEMON_COMMANDS.VAULT_OPEN, { id, password });
+  return desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_OPEN, { id, password });
 }
 
 export async function rpcVaultPlainConfirm(id: string, path: string): Promise<void> {
-  await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_PLAIN_CONFIRM, { id, path });
+  await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_PLAIN_CONFIRM, { id, path });
 }
 
 export async function rpcVaultPlainDestination(id: string): Promise<PlainDestination> {
-  const raw = await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_PLAIN_DESTINATION, { id });
+  const raw = await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_PLAIN_DESTINATION, { id });
   const dest = parsePlainDestination(raw);
   if (!dest) {
     throw new RpcError(
@@ -559,7 +554,7 @@ export async function rpcVaultPlainDestination(id: string): Promise<PlainDestina
 }
 
 export async function rpcVaultPlainLeftover(id: string): Promise<PlainLeftover | null> {
-  const raw = await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_PLAIN_LEFTOVER, { id });
+  const raw = await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_PLAIN_LEFTOVER, { id });
   if (raw === null) return null;
   const leftover = parsePlainLeftover(raw);
   if (!leftover) {
@@ -573,26 +568,26 @@ export async function rpcVaultPlainLeftover(id: string): Promise<PlainLeftover |
 }
 
 export async function rpcVaultPlainRemove(id: string): Promise<void> {
-  await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_PLAIN_REMOVE, { id });
+  await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_PLAIN_REMOVE, { id });
 }
 
 export async function rpcVaultPlainSync(id: string): Promise<void> {
-  await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_PLAIN_SYNC, { id });
+  await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_PLAIN_SYNC, { id });
 }
 
 export async function rpcVaultPlainHeld(id: string): Promise<PlainHeldStatus> {
-  return parsePlainHeldStatus(await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_PLAIN_STATUS, { id }));
+  return parsePlainHeldStatus(await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_PLAIN_STATUS, { id }));
 }
 
 export async function rpcVaultPlainDeletions(id: string, apply: boolean): Promise<void> {
-  await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_PLAIN_DELETIONS, { id, apply });
+  await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_PLAIN_DELETIONS, { id, apply });
 }
 
 export async function rpcVaultClose(
   id: string,
   reason: "user" | "auto" = "user",
 ): Promise<CloseVaultOutcome> {
-  const raw = await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_CLOSE, { id, reason });
+  const raw = await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_CLOSE, { id, reason });
   return parseCloseVaultOutcome(raw);
 }
 
@@ -601,7 +596,7 @@ export async function rpcVaultChangePassword(
   currentPassword: string,
   newPassword: string,
 ): Promise<void> {
-  await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_CHANGE_PASSWORD, {
+  await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_CHANGE_PASSWORD, {
     id,
     currentPassword,
     newPassword,
@@ -613,7 +608,7 @@ export async function rpcVaultChangeKdf(
   currentPassword: string,
   unlockPreset: string,
 ): Promise<void> {
-  await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_CHANGE_KDF, {
+  await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_CHANGE_KDF, {
     id,
     currentPassword,
     unlockPreset,
@@ -634,11 +629,11 @@ function parseCloseVaultOutcome(raw: unknown): CloseVaultOutcome {
 }
 
 export async function rpcVaultClosePhase(id: string): Promise<VaultClosePhase | null> {
-  return parseVaultClosePhase(await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_CLOSE_PHASE, { id }));
+  return parseVaultClosePhase(await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_CLOSE_PHASE, { id }));
 }
 
 export async function rpcVaultStoreSize(id: string): Promise<number> {
-  const raw = await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_STORE_SIZE, { id });
+  const raw = await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_STORE_SIZE, { id });
   if (typeof raw !== "object" || raw === null) {
     throw new RpcError(
       BRIDGE_ERROR_CODES.INVALID_RESPONSE,
@@ -658,7 +653,7 @@ export async function rpcVaultStoreSize(id: string): Promise<number> {
 }
 
 export async function rpcVaultConfigGet(id: string): Promise<VaultSettingsConfig> {
-  const raw = await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_CONFIG_GET, { id });
+  const raw = await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_CONFIG_GET, { id });
   if (typeof raw !== "object" || raw === null) {
     throw new RpcError(
       BRIDGE_ERROR_CODES.INVALID_RESPONSE,
@@ -678,14 +673,14 @@ export async function rpcVaultConfigGet(id: string): Promise<VaultSettingsConfig
 }
 
 export async function rpcVaultConfigSave(id: string, settings: VaultSettingsConfig): Promise<void> {
-  await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_CONFIG_SAVE, {
+  await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_CONFIG_SAVE, {
     id,
     settings: vaultSettingsForDaemon(settings),
   });
 }
 
 export async function rpcVaultRename(id: string, displayName: string): Promise<VaultRenameResult> {
-  const raw = await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_RENAME, { id, displayName });
+  const raw = await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_RENAME, { id, displayName });
   return parseVaultRenameResult(raw);
 }
 
@@ -723,17 +718,17 @@ function parseVaultResult(raw: unknown, label: string): VaultListItem {
 }
 
 export async function rpcVaultDelete(id: string): Promise<void> {
-  await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_DELETE, { id });
+  await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_DELETE, { id });
 }
 
 export async function rpcVaultExportProbe(id: string, password: string): Promise<boolean> {
-  const raw = await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_EXPORT_PROBE, { id, password });
+  const raw = await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_EXPORT_PROBE, { id, password });
   const record = requireRecord(raw, "vault_export_probe");
   return record.ok === true;
 }
 
 export async function rpcVaultExportCapabilities(): Promise<{ sevenZip: boolean }> {
-  const raw = await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_EXPORT_CAPABILITIES, {});
+  const raw = await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_EXPORT_CAPABILITIES, {});
   if (typeof raw !== "object" || raw === null) {
     return { sevenZip: false };
   }
@@ -741,7 +736,7 @@ export async function rpcVaultExportCapabilities(): Promise<{ sevenZip: boolean 
 }
 
 export async function rpcVaultExport(id: string, request: VaultExportRequest): Promise<Uint8Array> {
-  const raw = await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_EXPORT, {
+  const raw = await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_EXPORT, {
     id,
     format: request.format,
     password: request.password,
@@ -755,7 +750,7 @@ export async function rpcVaultExportToPath(
   request: VaultExportRequest,
   destPath: string,
 ): Promise<{ path: string; size: number }> {
-  const raw = await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_EXPORT, {
+  const raw = await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_EXPORT, {
     id,
     format: request.format,
     password: request.password,
@@ -775,7 +770,7 @@ export async function rpcVaultExportToPath(
 
 export async function rpcVaultImportZip(input: CreateVaultInput): Promise<VaultListItem> {
   const pkg = input.importPackage;
-  const raw = await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_IMPORT_ZIP, {
+  const raw = await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_IMPORT_ZIP, {
     settings: vaultSettingsForDaemon(input.settings),
     archivePath: pkg?.archivePath,
     contentB64: pkg?.contentB64,
@@ -785,7 +780,7 @@ export async function rpcVaultImportZip(input: CreateVaultInput): Promise<VaultL
 
 export async function rpcVaultImport7z(input: CreateVaultInput): Promise<VaultListItem> {
   const pkg = input.importPackage;
-  const raw = await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_IMPORT_7Z, {
+  const raw = await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_IMPORT_7Z, {
     settings: vaultSettingsForDaemon(input.settings),
     password: input.password,
     unlockPreset: input.unlockPreset,
@@ -799,7 +794,7 @@ export async function rpcVaultImport7z(input: CreateVaultInput): Promise<VaultLi
 
 export async function rpcVaultImportFilesZip(input: CreateVaultInput): Promise<VaultListItem> {
   const pkg = input.importPackage;
-  const raw = await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_IMPORT_FILES_ZIP, {
+  const raw = await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_IMPORT_FILES_ZIP, {
     settings: vaultSettingsForDaemon(input.settings),
     password: input.password,
     unlockPreset: input.unlockPreset,
@@ -812,7 +807,7 @@ export async function rpcVaultImportFilesZip(input: CreateVaultInput): Promise<V
 
 export async function rpcVaultImportOsPath(input: CreateVaultInput): Promise<VaultListItem> {
   const pkg = input.importPackage;
-  const raw = await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_IMPORT_OS_PATH, {
+  const raw = await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_IMPORT_OS_PATH, {
     settings: vaultSettingsForDaemon(input.settings),
     password: input.password,
     unlockPreset: input.unlockPreset,
@@ -833,7 +828,7 @@ export async function rpcVaultImportProbe(params: {
   embedded: ReturnType<typeof parseEmbeddedVaultSettings>;
 }> {
   const raw = await desktopInvokeRaw(
-    DAEMON_COMMANDS.VAULT_IMPORT_PROBE,
+    CORE_RPC_COMMANDS.VAULT_IMPORT_PROBE,
     params,
     vaultImportProbeTimeoutMs(params),
   );
@@ -846,20 +841,20 @@ export async function rpcVaultImportProbe(params: {
 }
 
 export async function rpcVaultFsList(id: string): Promise<{ tree: unknown; revision: number }> {
-  const raw = await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_FS_LIST, { id });
+  const raw = await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_FS_LIST, { id });
   const record = requireRecord(raw, "vault_fs_list");
   return { tree: record.tree, revision: requireRevision(raw, "vault_fs_list") };
 }
 
 export async function rpcVaultFsRevision(id: string): Promise<number> {
   return requireRevision(
-    await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_FS_REVISION, { id }),
+    await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_FS_REVISION, { id }),
     "vault_fs_revision",
   );
 }
 
 export async function rpcVaultFsRead(id: string, path: string): Promise<{ contentB64: string }> {
-  const raw = await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_FS_READ, { id, path });
+  const raw = await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_FS_READ, { id, path });
   const record = requireRecord(raw, "vault_fs_read");
   if (typeof record.contentB64 !== "string") {
     throw new RpcError(
@@ -877,7 +872,7 @@ export async function rpcVaultFsWrite(
   contentB64: string,
 ): Promise<number> {
   return requireRevision(
-    await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_FS_WRITE, { id, path, contentB64 }),
+    await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_FS_WRITE, { id, path, contentB64 }),
     "vault_fs_write",
   );
 }
@@ -888,7 +883,7 @@ export async function rpcVaultFsReadRange(
   offset: number,
   len: number,
 ): Promise<{ contentB64: string }> {
-  const raw = await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_FS_READ_RANGE, {
+  const raw = await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_FS_READ_RANGE, {
     id,
     path,
     offset,
@@ -912,7 +907,7 @@ export async function rpcVaultFsWriteRange(
   contentB64: string,
 ): Promise<number> {
   return requireRevision(
-    await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_FS_WRITE_RANGE, {
+    await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_FS_WRITE_RANGE, {
       id,
       path,
       offset,
@@ -930,7 +925,7 @@ export async function rpcVaultFsImportOsFile(
   deferIndex?: boolean,
 ): Promise<{ path: string; revision: number }> {
   return requirePathRevision(
-    await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_FS_IMPORT_OS_FILE, {
+    await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_FS_IMPORT_OS_FILE, {
       id,
       parentPath,
       name,
@@ -944,14 +939,14 @@ export async function rpcVaultFsImportOsFile(
 /** Seal the index for files staged with `deferIndex`. */
 export async function rpcVaultFsImportSeal(id: string): Promise<number> {
   return requireRevision(
-    await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_FS_IMPORT_SEAL, { id }),
+    await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_FS_IMPORT_SEAL, { id }),
     "vault_fs_import_seal",
   );
 }
 
 export async function rpcVaultFsTruncate(id: string, path: string, size: number): Promise<number> {
   return requireRevision(
-    await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_FS_TRUNCATE, { id, path, size }),
+    await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_FS_TRUNCATE, { id, path, size }),
     "vault_fs_truncate",
   );
 }
@@ -962,7 +957,7 @@ export async function rpcVaultFsCreateFile(
   name: string,
 ): Promise<{ path: string; revision: number }> {
   return requirePathRevision(
-    await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_FS_CREATE_FILE, { id, parentPath, name }),
+    await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_FS_CREATE_FILE, { id, parentPath, name }),
     "vault_fs_create_file",
   );
 }
@@ -973,7 +968,7 @@ export async function rpcVaultFsCreateFolder(
   name: string,
 ): Promise<{ path: string; revision: number }> {
   return requirePathRevision(
-    await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_FS_CREATE_FOLDER, { id, parentPath, name }),
+    await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_FS_CREATE_FOLDER, { id, parentPath, name }),
     "vault_fs_create_folder",
   );
 }
@@ -984,14 +979,14 @@ export async function rpcVaultFsEnsureFolder(
   name: string,
 ): Promise<{ path: string; revision: number }> {
   return requirePathRevision(
-    await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_FS_ENSURE_FOLDER, { id, parentPath, name }),
+    await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_FS_ENSURE_FOLDER, { id, parentPath, name }),
     "vault_fs_ensure_folder",
   );
 }
 
 export async function rpcVaultFsDelete(id: string, path: string): Promise<number> {
   return requireRevision(
-    await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_FS_DELETE, { id, path }),
+    await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_FS_DELETE, { id, path }),
     "vault_fs_delete",
   );
 }
@@ -1002,7 +997,7 @@ export async function rpcVaultFsRename(
   newName: string,
 ): Promise<{ path: string; revision: number }> {
   return requirePathRevision(
-    await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_FS_RENAME, { id, path, newName }),
+    await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_FS_RENAME, { id, path, newName }),
     "vault_fs_rename",
   );
 }
@@ -1013,7 +1008,7 @@ export async function rpcVaultFsMove(
   toFolderPath: string,
 ): Promise<{ path: string; revision: number }> {
   return requirePathRevision(
-    await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_FS_MOVE, { id, fromPath, toFolderPath }),
+    await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_FS_MOVE, { id, fromPath, toFolderPath }),
     "vault_fs_move",
   );
 }
@@ -1022,7 +1017,7 @@ export async function rpcVaultFsOsPath(
   id: string,
   path: string,
 ): Promise<{ osPath: string | null }> {
-  const raw = await desktopInvokeRaw(DAEMON_COMMANDS.VAULT_FS_OS_PATH, { id, path });
+  const raw = await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_FS_OS_PATH, { id, path });
   const record = requireRecord(raw, "vault_fs_os_path");
   const osPath = typeof record.osPath === "string" ? record.osPath.trim() : "";
   return { osPath: osPath || null };
@@ -1030,17 +1025,17 @@ export async function rpcVaultFsOsPath(
 
 /** Open the vault mount (Finder / Explorer / desktop file manager) at `path`. */
 export async function rpcRevealInFileManager(vaultId: string, path: string): Promise<void> {
-  await desktopInvokeRaw(SHELL_COMMANDS.REVEAL_IN_FILE_MANAGER, { vaultId, path });
+  await desktopInvokeRaw(SHELL_ONLY_RPC_COMMANDS.REVEAL_IN_FILE_MANAGER, { vaultId, path });
 }
 
 /** Open an absolute OS path in Finder / Explorer / the desktop file manager. */
 export async function rpcRevealOsPath(path: string): Promise<void> {
-  await desktopInvokeRaw(SHELL_COMMANDS.REVEAL_OS_PATH, { path });
+  await desktopInvokeRaw(SHELL_ONLY_RPC_COMMANDS.REVEAL_OS_PATH, { path });
 }
 
 /** Open a system terminal at the vault mount path (cwd = folder, or parent of a file). */
 export async function rpcOpenInTerminal(vaultId: string, path: string): Promise<void> {
-  await desktopInvokeRaw(SHELL_COMMANDS.OPEN_IN_TERMINAL, { vaultId, path });
+  await desktopInvokeRaw(SHELL_ONLY_RPC_COMMANDS.OPEN_IN_TERMINAL, { vaultId, path });
 }
 
 function parseBackupEntry(raw: unknown, vaultId: string): VaultBackupEntry {
@@ -1057,7 +1052,7 @@ function parseBackupEntry(raw: unknown, vaultId: string): VaultBackupEntry {
 }
 
 export async function rpcBackupList(id: string): Promise<VaultBackupEntry[]> {
-  const raw = await desktopInvokeRaw(DAEMON_COMMANDS.BACKUP_LIST, { id });
+  const raw = await desktopInvokeRaw(CORE_RPC_COMMANDS.BACKUP_LIST, { id });
   const record = requireRecord(raw, "backup_list");
   const backups = record.backups;
   if (!Array.isArray(backups)) {
@@ -1067,15 +1062,15 @@ export async function rpcBackupList(id: string): Promise<VaultBackupEntry[]> {
 }
 
 export async function rpcBackupDelete(id: string, stamps: readonly string[]): Promise<void> {
-  await desktopInvokeRaw(DAEMON_COMMANDS.BACKUP_DELETE, { id, stamps: [...stamps] });
+  await desktopInvokeRaw(CORE_RPC_COMMANDS.BACKUP_DELETE, { id, stamps: [...stamps] });
 }
 
 export async function rpcBackupPromote(id: string, stamp: string): Promise<void> {
-  await desktopInvokeRaw(DAEMON_COMMANDS.BACKUP_PROMOTE, { id, stamp });
+  await desktopInvokeRaw(CORE_RPC_COMMANDS.BACKUP_PROMOTE, { id, stamp });
 }
 
 export async function rpcBackupSave(id: string): Promise<VaultBackupEntry> {
-  const raw = await desktopInvokeRaw(DAEMON_COMMANDS.BACKUP_SAVE, { id });
+  const raw = await desktopInvokeRaw(CORE_RPC_COMMANDS.BACKUP_SAVE, { id });
   return parseBackupEntry(requireRecord(raw, "backup_save").backup, id);
 }
 
@@ -1084,7 +1079,7 @@ export async function rpcDataFolderExport(
   destDir: string,
   name: string,
 ): Promise<{ path: string; size: number }> {
-  const raw = await desktopInvokeRaw(DAEMON_COMMANDS.DATA_FOLDER_EXPORT, { destDir, name });
+  const raw = await desktopInvokeRaw(CORE_RPC_COMMANDS.DATA_FOLDER_EXPORT, { destDir, name });
   const written = parsePathWriteResult(raw);
   if (!written) {
     throw new RpcError(
@@ -1098,17 +1093,17 @@ export async function rpcDataFolderExport(
 
 export async function rpcDataFolderExportStatus(): Promise<DataFolderExportProgress | null> {
   return parseDataFolderExportStatus(
-    await desktopInvokeRaw(DAEMON_COMMANDS.DATA_FOLDER_EXPORT_STATUS, {}),
+    await desktopInvokeRaw(CORE_RPC_COMMANDS.DATA_FOLDER_EXPORT_STATUS, {}),
   );
 }
 
 export async function rpcDataFolderExportCancel(): Promise<boolean> {
-  const raw = await desktopInvokeRaw(DAEMON_COMMANDS.DATA_FOLDER_EXPORT_CANCEL, {});
+  const raw = await desktopInvokeRaw(CORE_RPC_COMMANDS.DATA_FOLDER_EXPORT_CANCEL, {});
   return requireRecord(raw, "data_folder_export_cancel").cancelled === true;
 }
 
 export async function rpcBackupGet(id: string, stamp: string): Promise<Uint8Array> {
-  return bytesFromContentB64(await desktopInvokeRaw(DAEMON_COMMANDS.BACKUP_GET, { id, stamp }));
+  return bytesFromContentB64(await desktopInvokeRaw(CORE_RPC_COMMANDS.BACKUP_GET, { id, stamp }));
 }
 
 export async function rpcBackupExportToPath(
@@ -1125,7 +1120,7 @@ export async function rpcBackupExportStampsToPath(
   destPath: string,
 ): Promise<{ path: string; size: number }> {
   const raw = await desktopInvokeRaw(
-    DAEMON_COMMANDS.BACKUP_GET,
+    CORE_RPC_COMMANDS.BACKUP_GET,
     stamps.length === 1
       ? { id, stamp: stamps[0], destPath }
       : { id, stamps: [...stamps], destPath },

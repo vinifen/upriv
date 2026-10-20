@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   appWorkspace,
+  appWorkspaceForDaemon,
   appWorkspaceChoice,
   normalizeWorkspaceTable,
   validateWorkspaceTable,
@@ -51,6 +52,21 @@ describe("a folder option chosen before its path", () => {
     expect(validateWorkspaceTable({ ...vaultWorkspace(), linux: vaultFolderRow("") })).toBe(
       "empty",
     );
+  });
+
+  it("sends the app place without the vault file-manager flags", () => {
+    const draft = {
+      ...withLinux(appWorkspace(), "beside", ""),
+      app_file_manager_folder: "on" as const,
+      custom_file_manager_folder: true,
+    };
+    const wire = appWorkspaceForDaemon(draft);
+    expect(wire).not.toHaveProperty("app_file_manager_folder");
+    expect(wire).not.toHaveProperty("custom_file_manager_folder");
+    expect(wire.linux).toEqual({ place: "beside", path: "" });
+    expect(wire.file_manager_folder).toBe(false);
+    const readBack = normalizeWorkspaceTable(wire, "app");
+    expect(appWorkspaceChoice(readBack.linux)).toBe("beside");
   });
 
   it("keeps a typed path whole until it is saved", () => {

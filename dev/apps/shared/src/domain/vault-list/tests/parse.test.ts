@@ -44,7 +44,7 @@ describe("parseVaultListItemWire", () => {
       parseVaultListItemWire({
         id: "notes",
         displayName: "Notes",
-        storageMode: "plain_only",
+        storageMode: "not_a_mode",
       }),
     ).toThrow(RpcError);
   });
