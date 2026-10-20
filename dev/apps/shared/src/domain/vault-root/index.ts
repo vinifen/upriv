@@ -40,6 +40,7 @@ export {
 } from "./parse";
 export {
   VAULT_ROOT_GATE_IDLE,
+  VAULT_ROOT_PATH_CHECK_DELAY_MS,
   confirmNotesForReplacePolicy,
   isVaultRootDraftDirty,
   diskFromDirStatus,

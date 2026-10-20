@@ -16,6 +16,7 @@ export {
   useDataFolderExportJob,
   type DataFolderExportJob,
   type DataFolderExportJobEvents,
+  type DataFolderExportWritten,
 } from "./useDataFolderExportJob";
 export { useVaultBackups } from "./useVaultBackups";
 export {

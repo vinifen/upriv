@@ -1984,6 +1984,12 @@ fn map_core_err_response(error: upriv_core::UprivError, emit_log: bool) -> RpcRe
         upriv_core::UprivError::DataFolderExportDestinationReserved(p) => {
             ("data_folder_export_destination_reserved", Some(p.as_path()))
         }
+        upriv_core::UprivError::DataFolderExportNameInvalid => {
+            ("data_folder_export_name_invalid", None)
+        }
+        upriv_core::UprivError::DataFolderExportNameTaken(p) => {
+            ("data_folder_export_name_taken", Some(p.as_path()))
+        }
         upriv_core::UprivError::Io(io) if upriv_core::host_fs::is_unreachable(io) => {
             ("vault_root_unreachable", None)
         }
@@ -2252,6 +2258,19 @@ mod contract_tests {
         assert_eq!(
             response.error.as_ref().map(|e| e.code.as_str()),
             Some("unknown_method")
+        );
+    }
+
+    #[test]
+    fn data_folder_export_needs_a_zip_name() {
+        let dest = std::env::temp_dir();
+        let response = handle_rpc(RpcRequest {
+            method: "data_folder_export".into(),
+            params: json!({ "destDir": dest.to_str().expect("utf-8 temp dir") }),
+        });
+        assert_eq!(
+            response.error.as_ref().map(|e| e.code.as_str()),
+            Some("invalid_request")
         );
     }
 

@@ -21,7 +21,8 @@ export type VaultShortcut = "inherit" | "on" | "off";
 export interface WorkspaceOsEntry {
   /**
    * `unset` creates nothing. `beside` is workspace next to `.upriv`.
-   * `custom` uses `path`. Vault rows leave this `unset` and use `path` only.
+   * `custom` uses `path`. Vault rows store `path` only; a vault draft marks
+   * `custom` while Another folder is chosen and its path is still empty.
    */
   place: WorkspacePlace;
   path: string;
@@ -157,6 +158,28 @@ export function appWorkspacePlace(entry: WorkspaceOsEntry): WorkspacePlace {
   return entry.path.trim() ? "custom" : "unset";
 }
 
+/**
+ * The app option a draft shows as chosen. `custom` with no path yet stays
+ * custom: the path is the step left, and `validateWorkspaceTable` holds Save
+ * until it is there. Otherwise the same as {@link appWorkspacePlace}.
+ */
+export function appWorkspaceChoice(entry: WorkspaceOsEntry): WorkspacePlace {
+  return entry.place === "custom" ? "custom" : appWorkspacePlace(entry);
+}
+
+/** The vault's own folder is chosen, with its path or with the path still to enter. */
+export function vaultFolderChosen(entry: WorkspaceOsEntry): boolean {
+  return entry.place === "custom" || entry.path.trim() !== "";
+}
+
+/**
+ * Vault row for a typed or picked path. The `custom` mark stays only while the
+ * path is empty, so a saved row reads back the same as the draft.
+ */
+export function vaultFolderRow(path: string): WorkspaceOsEntry {
+  return { place: path.trim() ? "unset" : "custom", path };
+}
+
 /** App default: no paths, file manager folder off. */
 export function appWorkspace(): WorkspaceTable {
   return emptyTable();
@@ -174,7 +197,7 @@ export function workspaceTablesEqual(a: WorkspaceTable, b: WorkspaceTable): bool
     a.custom_file_manager_folder === b.custom_file_manager_folder &&
     WORKSPACE_SYSTEMS.every(
       (system) =>
-        appWorkspacePlace(a[system]) === appWorkspacePlace(b[system]) &&
+        appWorkspaceChoice(a[system]) === appWorkspaceChoice(b[system]) &&
         a[system].path.trim() === b[system].path.trim(),
     )
   );
@@ -290,8 +313,9 @@ export function vaultMountForDaemon(table: WorkspaceTable): {
     app_file_manager_folder: VaultShortcut;
     custom_file_manager_folder: boolean;
   } & Record<WorkspaceSystem, { path: string }>;
+  // The draft keeps the path as typed; the saved row is trimmed.
   for (const system of WORKSPACE_SYSTEMS) {
-    mount[system] = { path: table[system].path };
+    mount[system] = { path: table[system].path.trim() };
   }
   return mount;
 }

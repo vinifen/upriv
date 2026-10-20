@@ -6,7 +6,7 @@ import {
   validateCreateVaultStep,
   validateAllCreateVaultSteps,
 } from "..";
-import { vaultWorkspace } from "../../workspace";
+import { vaultFolderRow, vaultWorkspace } from "../../workspace";
 import { createVaultDraftFixture } from "./fixtures";
 
 function mountOnLinux(path: string) {
@@ -407,6 +407,16 @@ describe("canSubmitCreateVault", () => {
     });
     expect(validateCreateVaultStep("advanced", draft, [], [], "/data")).toEqual([]);
     expect(canSubmitCreateVault(draft, [], [], "/data")).toBe(true);
+  });
+
+  it("waits for the path when Another folder is chosen without one", () => {
+    const draft = createVaultDraftFixture([], {
+      mount: { ...vaultWorkspace(), linux: vaultFolderRow("") },
+    });
+    expect(validateCreateVaultStep("advanced", draft, [], [], "/data")).toEqual([
+      "mount_path_empty",
+    ]);
+    expect(canSubmitCreateVault(draft, [], [], "/data")).toBe(false);
   });
 
   it("rejects a reserved path under vault-root", () => {

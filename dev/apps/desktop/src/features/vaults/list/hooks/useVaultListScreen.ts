@@ -46,13 +46,13 @@ import {
   shouldRecordVaultHidden,
   vaultIdsInHiddenGroups,
   vaultIdsUnhiddenByGroups,
+  vaultRootDraftKey,
   type GroupedVaultSortMode,
   type PendingCreateGroupEffect,
   type VaultListItem,
   type VaultListSort,
   type VaultListSortDirection,
   type VaultListViewMode,
-  type VaultPathWriteResult,
   type VaultRewrapRun,
   type VaultSettingsAreaId,
 } from "@upriv/shared";
@@ -506,27 +506,28 @@ export function useVaultListScreen() {
     },
   });
   const dataFolderService = useDataFolderService();
-  const [dataFolderExportWritten, setDataFolderExportWritten] =
-    useState<VaultPathWriteResult | null>(null);
-  const dataFolderExport = useDataFolderExportJob(dataFolderService, {
-    onExported: (written) => {
-      setDataFolderExportWritten(written);
-      showToast(t("toast.data_folder_exported", { name: dataFolderZipName(written.path) }));
+  const dataFolderExport = useDataFolderExportJob(
+    dataFolderService,
+    {
+      onExported: (written) => {
+        showToast(t("toast.data_folder_exported", { name: dataFolderZipName(written.path) }));
+      },
+      onFailed: (error) => {
+        if (shouldBumpVaultRootEpoch(error)) {
+          void reportVaultRootIntegrityFailure(error);
+          return;
+        }
+        showError(error, "toast.data_folder_export_failed");
+      },
+      onCancelled: () => {
+        showToast(t("toast.data_folder_export_cancelled"));
+      },
+      onTimedOut: () => {
+        showToast(t("error.operation_timed_out"));
+      },
     },
-    onFailed: (error) => {
-      if (shouldBumpVaultRootEpoch(error)) {
-        void reportVaultRootIntegrityFailure(error);
-        return;
-      }
-      showError(error, "toast.data_folder_export_failed");
-    },
-    onCancelled: () => {
-      showToast(t("toast.data_folder_export_cancelled"));
-    },
-    onTimedOut: () => {
-      showToast(t("error.operation_timed_out"));
-    },
-  });
+    vaultRootDraftKey(settings.app.vault_root_mode, settings.app.upriv_root_path),
+  );
   // The export holds every vault: none may open until it ends.
   blockOpenVaultIdsRef.current = new Set(
     [
@@ -882,7 +883,6 @@ export function useVaultListScreen() {
     modals.settingsGroupId ||
     modals.appSettingsOpen ||
     modals.dataFolderOpen ||
-    modals.dataFolderExportOpen ||
     modals.logsOpen ||
     modals.helpOpen ||
     modals.noteVaultId ||
@@ -1202,11 +1202,6 @@ export function useVaultListScreen() {
           );
         }
       },
-      // Hidden while it cannot start; shown while it runs so the window can be reopened.
-      showExportDataFolder:
-        dataFolderService !== undefined &&
-        (dataFolderExport.job !== null || dataFolderExportCanStart),
-      onOpenExportDataFolder: () => modals.setDataFolderExportOpen(true),
       showCloseAllVaults:
         vaults.filter((vault) => resolveVaultDisplayStatus(vault) === "open").length > 1,
       onCloseAllVaults: () => {
@@ -1447,19 +1442,16 @@ export function useVaultListScreen() {
         void modals.setDataFolderOpen(false);
       },
       onDirtyChange: modals.setDataFolderDirty,
-    },
-    dataFolderExport: {
-      open: modals.dataFolderExportOpen,
-      canStart: dataFolderExportCanStart,
-      job: dataFolderExport.job,
-      written: dataFolderExportWritten,
-      onClose: () => modals.setDataFolderExportOpen(false),
-      onStart: (destDir: string) => {
-        if (!dataFolderExportCanStart) return;
-        setDataFolderExportWritten(null);
-        dataFolderExport.start(destDir);
-      },
-      onStop: dataFolderExport.stop,
+      exportControls: dataFolderService
+        ? {
+            canStart: dataFolderExportCanStart,
+            job: dataFolderExport.job,
+            written: dataFolderExport.written,
+            onStart: (destDir: string, name: string) =>
+              dataFolderExportCanStart && dataFolderExport.start(destDir, name),
+            onStop: dataFolderExport.stop,
+          }
+        : undefined,
     },
     logs: {
       open: modals.logsOpen,

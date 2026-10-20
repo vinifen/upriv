@@ -258,10 +258,13 @@ describe("createNativeServices", () => {
     safReleaseImportTree.mockClear();
     const services = createNativeServices();
     expect(services.dataFolder).toBeDefined();
-    await services.dataFolder?.exportTo("content://tree/backup-drive");
+    await services.dataFolder?.exportTo("content://tree/backup-drive", "phone-copy");
     expect(mountSafExport).toHaveBeenCalledWith("content://tree/backup-drive");
-    expect(rpc.rpcDataFolderExport).toHaveBeenCalledWith("/upriv-saf-export");
+    expect(rpc.rpcDataFolderExport).toHaveBeenCalledWith("/upriv-saf-export", "phone-copy");
     expect(unmountSafExport).toHaveBeenCalledTimes(1);
+    // The Data folder window keeps the pick for the next export.
+    expect(safReleaseImportTree).not.toHaveBeenCalled();
+    services.dataFolder?.releaseDestination?.("content://tree/backup-drive");
     expect(safReleaseImportTree).toHaveBeenCalledWith("content://tree/backup-drive");
     expect(mountSafRoot).not.toHaveBeenCalled();
     expect(unmountSafRoot).not.toHaveBeenCalled();

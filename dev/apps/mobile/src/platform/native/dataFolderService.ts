@@ -20,7 +20,7 @@ const SETTLE_POLL_MS = 1_000;
 
 /** Bridge calls the adapter uses. Injected so tests run without Android. */
 export interface NativeDataFolderIo {
-  exportTo(destDir: string): Promise<VaultPathWriteResult>;
+  exportTo(destDir: string, name: string): Promise<VaultPathWriteResult>;
   exportProgress(): Promise<DataFolderExportProgress | null>;
   cancelExport(): Promise<boolean>;
   /** Mount Rust `/upriv-saf-export` on a picked `content://` tree. Throws when it cannot. */
@@ -41,14 +41,19 @@ function timer(ms: number): Promise<void> {
  *
  * A picked `content://` folder is mounted at `/upriv-saf-export` for one
  * export, so Rust writes the zip straight into it. Nothing is staged in app
- * storage. The mount and the picker's access are dropped only once core no
- * longer runs the export: after a timed-out call, core may still be removing
- * its partial zip through that mount. A filesystem path goes to Rust as it is.
+ * storage. The mount is dropped only once core no longer runs the export:
+ * after a timed-out call, core may still be removing its partial zip through
+ * that mount. The picker's access belongs to the Data folder window, which
+ * keeps the folder for the next export; when it lets the folder go during an
+ * export, the access is dropped once that export ends. A filesystem path goes
+ * to Rust as it is.
  */
 export function createNativeDataFolderService(io: NativeDataFolderIo): DataFolderService {
   const wait = io.wait ?? timer;
   /** The tree mounted for the running export. */
   let mounted: string | null = null;
+  /** The window let the mounted tree go; it is released when the export ends. */
+  let releaseWhenDone = false;
 
   const untilCoreIdle = async (): Promise<void> => {
     const deadline = Date.now() + LOADING_BUDGET_MS.dataFolderExport;
@@ -65,9 +70,9 @@ export function createNativeDataFolderService(io: NativeDataFolderIo): DataFolde
   };
 
   return {
-    async exportTo(destDir) {
+    async exportTo(destDir, name) {
       const target = destDir.trim();
-      if (!isSafContentUri(target)) return io.exportTo(target);
+      if (!isSafContentUri(target)) return io.exportTo(target, name);
       if (mounted !== null) {
         // Mounting another tree would send the running export's writes there.
         throw new RpcError(
@@ -76,27 +81,33 @@ export function createNativeDataFolderService(io: NativeDataFolderIo): DataFolde
         );
       }
       mounted = target;
+      releaseWhenDone = false;
       try {
         io.mountExportTree(target);
       } catch (error) {
+        // The window still holds the pick; it can try again or choose another.
         mounted = null;
-        io.releaseTree(target);
         throw error;
       }
       try {
-        return await io.exportTo(SAF_EXPORT_ROOT);
+        return await io.exportTo(SAF_EXPORT_ROOT, name);
       } finally {
         await untilCoreIdle();
         io.unmountExportTree();
-        io.releaseTree(target);
         mounted = null;
+        if (releaseWhenDone) io.releaseTree(target);
+        releaseWhenDone = false;
       }
     },
     exportProgress: () => io.exportProgress(),
     cancelExport: () => io.cancelExport(),
     releaseDestination(destDir) {
       const target = destDir.trim();
-      if (!isSafContentUri(target) || target === mounted) return;
+      if (!isSafContentUri(target)) return;
+      if (target === mounted) {
+        releaseWhenDone = true;
+        return;
+      }
       io.releaseTree(target);
     },
   };
@@ -104,7 +115,7 @@ export function createNativeDataFolderService(io: NativeDataFolderIo): DataFolde
 
 /** Native → `upriv-ffi` `data_folder_export*` with the picked folder mounted. */
 export const nativeDataFolderService = createNativeDataFolderService({
-  exportTo: (destDir) => rpcDataFolderExport(destDir),
+  exportTo: (destDir, name) => rpcDataFolderExport(destDir, name),
   exportProgress: () => rpcDataFolderExportStatus(),
   cancelExport: () => rpcDataFolderExportCancel(),
   mountExportTree: (treeUri) => mountSafExport(treeUri),

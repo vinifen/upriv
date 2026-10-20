@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { RpcError } from "../../core-rpc/errors";
 import { errorDisplayI18nKey } from "../../errors";
 import { resolveVaultListStatus, type VaultRow } from "../../vault/types";
-import { dataFolderCanExport } from "../canExport";
+import { dataFolderCanExport, dataFolderExportPending } from "../canExport";
 import { DATA_FOLDER_EXPORT_ERROR_CODES, isDataFolderExportCancelled } from "../errors";
 import { dataFolderExportPercent, dataFolderZipName, parseDataFolderExportStatus } from "../types";
 
@@ -75,6 +75,29 @@ describe("dataFolderCanExport", () => {
   });
 });
 
+describe("dataFolderExportPending", () => {
+  const name = "upriv-2026-10-19-101500";
+
+  it("needs a folder first, then an absolute one", () => {
+    expect(dataFolderExportPending(null, name)).toBe("folder");
+    expect(dataFolderExportPending("  ", name)).toBe("folder");
+    expect(dataFolderExportPending("Downloads", name)).toBe("folder_not_absolute");
+  });
+
+  it("takes a typed or picked folder, a phone tree, and a name every system holds", () => {
+    expect(dataFolderExportPending(" /media/usb ", name)).toBeNull();
+    expect(dataFolderExportPending("E:\\Copies", name)).toBeNull();
+    expect(
+      dataFolderExportPending(
+        "content://com.android.externalstorage.documents/tree/primary%3ADownload",
+        name,
+      ),
+    ).toBeNull();
+    expect(dataFolderExportPending("/media/usb", "trip/copy")).toBe("name");
+    expect(dataFolderExportPending("/media/usb", "")).toBe("name");
+  });
+});
+
 describe("rows during a data-folder export", () => {
   it("show every vault as exporting", () => {
     const pipeline = { dataFolderExporting: true };
@@ -91,6 +114,9 @@ describe("data-folder export errors", () => {
     expect(
       errorDisplayI18nKey(new RpcError(DATA_FOLDER_EXPORT_ERROR_CODES.SPACE_SHORT, "space")),
     ).toBe("error.data_folder_export_space_short");
+    expect(
+      errorDisplayI18nKey(new RpcError(DATA_FOLDER_EXPORT_ERROR_CODES.NAME_TAKEN, "taken")),
+    ).toBe("error.data_folder_export_name_taken");
   });
 
   it("recognize a stop by the user", () => {

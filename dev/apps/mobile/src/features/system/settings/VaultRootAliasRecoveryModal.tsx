@@ -375,6 +375,14 @@ export function VaultRootAliasRecoveryModal({
   }, [blocked, busy, confirmOpen]);
 
   const customProblemKey = vaultRootDiskProblemKey(customDisk);
+  // Chosen and still missing a usable folder (not while a check runs), as in Data folder.
+  const customNeedsStep =
+    mode === "custom_root" &&
+    customDisk !== "checking" &&
+    (!pathInput.trim() ||
+      customDisk === "needs_folder" ||
+      customDisk === "not_vault_capable" ||
+      customProblemKey !== null);
 
   const localeOptions: SelectOption<LocaleId>[] = SUPPORTED_LOCALES.map((loc) => ({
     value: loc as LocaleId,
@@ -472,6 +480,7 @@ export function VaultRootAliasRecoveryModal({
           <PolicyRadioOption
             value="custom_root"
             checked={mode === "custom_root"}
+            attention={customNeedsStep}
             title={t("modal.app_settings.option.upriv_root.custom_root")}
             description={t(
               Platform.OS === "android"

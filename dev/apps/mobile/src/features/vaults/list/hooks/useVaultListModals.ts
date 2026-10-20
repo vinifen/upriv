@@ -15,8 +15,6 @@ export function useVaultListModals() {
   const [settingsDirty, setSettingsDirty] = useState(false);
   const [dataFolderOpen, setDataFolderOpen] = useState(false);
   const [dataFolderDirty, setDataFolderDirty] = useState(false);
-  /** Export data folder. Closing it leaves a running export in place. */
-  const [dataFolderExportOpen, setDataFolderExportOpen] = useState(false);
   const [groupsOpen, setGroupsOpen] = useState(false);
   const [groupsDirty, setGroupsDirty] = useState(false);
   const [logsOpen, setLogsOpen] = useState(false);
@@ -59,8 +57,6 @@ export function useVaultListModals() {
     setDataFolderOpen,
     dataFolderDirty,
     setDataFolderDirty,
-    dataFolderExportOpen,
-    setDataFolderExportOpen,
     groupsOpen,
     setGroupsOpen,
     groupsDirty,

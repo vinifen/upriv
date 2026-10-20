@@ -7,6 +7,7 @@ import {
   KDF_UNLOCK_OPTION_META,
   KDF_UNLOCK_PRESETS,
   POLICY_RADIO_BADGE_I18N,
+  policyRadioBadgeList,
   IDLE_AUTO_CLOSE_MINUTES_MAX,
   IDLE_AUTO_CLOSE_MINUTES_MIN,
   VAULT_DISPLAY_NAME_MAX_LENGTH,
@@ -18,6 +19,8 @@ import {
   compressionPresetFromSevenZip,
   sevenZipPatchFromCompressionPreset,
   validateWorkspaceTable,
+  vaultFolderChosen,
+  vaultFolderRow,
   currentWorkspaceSystem,
   workspaceSystemHasShortcut,
   workspacePathIssueI18nKey,
@@ -451,7 +454,10 @@ function CurrentVaultFolderChoices({
   const shortcutGroup = useId();
   const vaultRootService = useVaultRootService();
   const trimmed = entry.path.trim();
-  const custom = trimmed !== "";
+  // Another folder can be chosen before its path is typed or picked: that path
+  // is the step left, so the option carries the attention border and Save waits.
+  const custom = vaultFolderChosen(entry);
+  const customPathMissing = custom && trimmed === "";
   const showShortcut = workspaceSystemHasShortcut(system) && !plaintext;
   const workspaceReady = appWorkspacePlace(appEntry) !== "unset";
   const shortcutLocked = !active || !workspaceReady;
@@ -470,8 +476,9 @@ function CurrentVaultFolderChoices({
       )})`
     : t("modal.settings.field.mount.shortcut_inherit");
 
+  // Kept as typed, so a space inside a folder name survives; saving trims it.
   function writePath(path: string) {
-    onChange({ [system]: { ...entry, path: path.trim() } });
+    onChange({ [system]: vaultFolderRow(path) });
   }
 
   function pickFolder(initial: string | null) {
@@ -483,7 +490,7 @@ function CurrentVaultFolderChoices({
           t("modal.app_settings.action.pick_workspace_folder"),
         );
         if (!picked?.trim()) return;
-        onChange({ [system]: { ...entry, path: picked.trim() } });
+        writePath(picked.trim());
       } catch (error) {
         showError(error, "error.unexpected");
       }
@@ -508,7 +515,7 @@ function CurrentVaultFolderChoices({
           attention={onNeedsDriver}
           onSelect={() => {
             if (!active) return;
-            onChange({ [system]: { ...entry, path: "" } });
+            onChange({ [system]: { place: "unset", path: "" } });
           }}
           footer={
             showShortcut ? (
@@ -576,10 +583,10 @@ function CurrentVaultFolderChoices({
           title={t("modal.settings.field.mount.custom")}
           description={t("modal.settings.field.mount.custom_desc")}
           disabled={!active}
-          attention={customNeedsDriver}
+          attention={customNeedsDriver || customPathMissing}
           onSelect={() => {
             if (!active || custom) return;
-            pickFolder(null);
+            writePath("");
           }}
           footer={
             <div className="flex flex-col gap-3">
@@ -589,7 +596,7 @@ function CurrentVaultFolderChoices({
                   className="sm:flex-1"
                   value={entry.path}
                   disabled={!active || !custom}
-                  placeholder={t("modal.settings.field.mount.path_placeholder")}
+                  placeholder={t("modal.folder_field.placeholder")}
                   onChange={(path) => {
                     if (!active) return;
                     writePath(path);
@@ -935,6 +942,8 @@ const POLICY_RADIO_BADGE_CLASS: Record<PolicyRadioBadge, string> = {
     "rounded bg-[color-mix(in_srgb,var(--accent)_15%,transparent)] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-accent",
   "more-secure":
     "rounded bg-[color-mix(in_srgb,var(--vault-status-open)_20%,transparent)] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-vault-open",
+  "in-use":
+    "rounded bg-[color-mix(in_srgb,var(--vault-status-open)_20%,transparent)] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-vault-open",
   default:
     "rounded bg-[color-mix(in_srgb,var(--accent)_15%,transparent)] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-accent",
   "less-secure":
@@ -954,7 +963,8 @@ interface PolicyRadioOptionProps {
   disabled?: boolean;
   /** Gray, still selectable. The file manager folder inside can stay locked. */
   muted?: boolean;
-  badge?: PolicyRadioBadge;
+  /** One badge, or several shown in this order. */
+  badge?: PolicyRadioBadge | readonly PolicyRadioBadge[];
   tone?: "default" | "less-secure" | "insecure";
   /**
    * Yellow/amber border while this option still needs follow-up config
@@ -1046,11 +1056,11 @@ export function PolicyRadioOption({
               <span className="inline-flex shrink-0 text-on-surface-variant">{icon}</span>
             ) : null}
             <span className="text-sm font-medium leading-snug text-on-surface">{title}</span>
-            {badge ? (
-              <span className={POLICY_RADIO_BADGE_CLASS[badge]}>
-                {t(POLICY_RADIO_BADGE_I18N[badge])}
+            {policyRadioBadgeList(badge).map((item) => (
+              <span key={item} className={POLICY_RADIO_BADGE_CLASS[item]}>
+                {t(POLICY_RADIO_BADGE_I18N[item])}
               </span>
-            ) : null}
+            ))}
           </span>
           {description ? (
             <span className="mt-1.5 block text-xs leading-relaxed text-on-surface-variant">

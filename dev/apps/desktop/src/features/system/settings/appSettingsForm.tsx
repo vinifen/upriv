@@ -21,6 +21,7 @@ import {
   liveDisplayNameError,
   logFileCountForKeepLast,
   workspaceSystemsCurrentFirst,
+  appWorkspaceChoice,
   appWorkspacePlace,
   validateWorkspaceTable,
   suggestedDefaultWorkspacePath,
@@ -525,7 +526,8 @@ export function AppSettingsWorkspaceSection({
       {workspaceSystemsCurrentFirst().map((system) => {
         const active = system === current && !clearDisabled;
         const entry = config[system];
-        const place = appWorkspacePlace(entry);
+        const place = appWorkspaceChoice(entry);
+        const customMissing = place === "custom" && !entry.path.trim();
         return (
           <Fragment key={system}>
             <SettingsField
@@ -579,25 +581,14 @@ export function AppSettingsWorkspaceSection({
                       groupName={placeGroup}
                       value="custom"
                       checked={place === "custom"}
+                      attention={customMissing}
                       title={t("modal.app_settings.field.workspace.custom")}
                       description={t("modal.app_settings.field.workspace.custom_desc")}
                       disabled={!active}
                       onSelect={() => {
                         if (!active || place === "custom") return;
-                        void (async () => {
-                          try {
-                            const picked = await vaultRootService.pickFolder(
-                              null,
-                              t("modal.app_settings.action.pick_workspace_folder"),
-                            );
-                            if (!picked?.trim()) return;
-                            onChange({
-                              [system]: { ...entry, place: "custom", path: picked.trim() },
-                            });
-                          } catch (error) {
-                            showError(error, "error.unexpected");
-                          }
-                        })();
+                        // The folder is the step left: Save waits for it (`empty`).
+                        onChange({ [system]: { ...entry, place: "custom", path: "" } });
                       }}
                       footer={
                         <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
@@ -606,16 +597,10 @@ export function AppSettingsWorkspaceSection({
                             className="sm:flex-1"
                             value={entry.path}
                             disabled={!active || place !== "custom"}
-                            placeholder={t("modal.app_settings.field.workspace.path_placeholder")}
+                            placeholder={t("modal.folder_field.placeholder")}
                             onChange={(path) => {
                               if (!active) return;
-                              onChange({
-                                [system]: {
-                                  ...entry,
-                                  place: path.trim() ? "custom" : "unset",
-                                  path,
-                                },
-                              });
+                              onChange({ [system]: { ...entry, place: "custom", path } });
                             }}
                           />
                           <Button

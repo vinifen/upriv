@@ -17,7 +17,8 @@ import { createNativeDataFolderService, type NativeDataFolderIo } from "../dataF
 
 const PICKED = "content://com.android.externalstorage.documents/tree/primary%3ADownload";
 const OTHER = "content://com.android.externalstorage.documents/tree/primary%3AMusic";
-const WRITTEN = { path: "/upriv-saf-export/upriv-2026-10-19-031500.zip", size: 4096 };
+const NAME = "phone-copy";
+const WRITTEN = { path: `/upriv-saf-export/${NAME}.zip`, size: 4096 };
 
 interface FakeIo extends NativeDataFolderIo {
   calls: string[];
@@ -29,8 +30,8 @@ function fakeIo(exportTo: (destDir: string) => Promise<typeof WRITTEN>): FakeIo 
   const io: FakeIo = {
     calls: [],
     progress: [],
-    exportTo: (destDir) => {
-      io.calls.push(`export ${destDir}`);
+    exportTo: (destDir, name) => {
+      io.calls.push(`export ${destDir} as ${name}`);
       return exportTo(destDir);
     },
     exportProgress: async () => {
@@ -67,26 +68,31 @@ function heldExport() {
 }
 
 describe("createNativeDataFolderService", () => {
-  it("writes into the picked tree through the export mount, then lets it go", async () => {
+  it("writes into the picked tree through the export mount and keeps the pick", async () => {
     const io = fakeIo(async () => WRITTEN);
     const service = createNativeDataFolderService(io);
 
-    await expect(service.exportTo(` ${PICKED} `)).resolves.toEqual(WRITTEN);
+    await expect(service.exportTo(` ${PICKED} `, NAME)).resolves.toEqual(WRITTEN);
     expect(io.calls).toEqual([
       `mount ${PICKED}`,
-      "export /upriv-saf-export",
+      `export /upriv-saf-export as ${NAME}`,
       "status",
       "unmount",
-      `release ${PICKED}`,
     ]);
+
+    // The window still holds it: the next export writes there again.
+    io.calls = [];
+    await service.exportTo(PICKED, NAME);
+    expect(io.calls[0]).toBe(`mount ${PICKED}`);
+    expect(io.calls).not.toContain(`release ${PICKED}`);
   });
 
   it("sends a filesystem folder to rust without a mount", async () => {
     const io = fakeIo(async () => WRITTEN);
     const service = createNativeDataFolderService(io);
 
-    await service.exportTo("/storage/emulated/0/Download");
-    expect(io.calls).toEqual(["export /storage/emulated/0/Download"]);
+    await service.exportTo("/storage/emulated/0/Download", NAME);
+    expect(io.calls).toEqual([`export /storage/emulated/0/Download as ${NAME}`]);
   });
 
   it("keeps the tree mounted until core stops after a timed-out call", async () => {
@@ -100,30 +106,30 @@ describe("createNativeDataFolderService", () => {
     ];
     const service = createNativeDataFolderService(io);
 
-    await expect(service.exportTo(PICKED)).rejects.toBe(timeout);
+    await expect(service.exportTo(PICKED, NAME)).rejects.toBe(timeout);
     // Core is still removing its partial zip through the mount until it reports no export.
     expect(io.calls).toEqual([
       `mount ${PICKED}`,
-      "export /upriv-saf-export",
+      `export /upriv-saf-export as ${NAME}`,
       "status",
       "wait",
       "status",
       "wait",
       "status",
       "unmount",
-      `release ${PICKED}`,
     ]);
   });
 
-  it("lets the tree go after a stopped export", async () => {
+  it("unmounts after a stopped export and leaves the pick to the window", async () => {
     const stopped = new RpcError(DATA_FOLDER_EXPORT_ERROR_CODES.CANCELLED, "stopped");
     const io = fakeIo(async () => {
       throw stopped;
     });
     const service = createNativeDataFolderService(io);
 
-    await expect(service.exportTo(PICKED)).rejects.toBe(stopped);
-    expect(io.calls.slice(-2)).toEqual(["unmount", `release ${PICKED}`]);
+    await expect(service.exportTo(PICKED, NAME)).rejects.toBe(stopped);
+    expect(io.calls.slice(-1)).toEqual(["unmount"]);
+    expect(io.calls).not.toContain(`release ${PICKED}`);
   });
 
   it("refuses a second export instead of moving the running one's writes", async () => {
@@ -131,13 +137,13 @@ describe("createNativeDataFolderService", () => {
     const io = fakeIo(held.exportTo);
     const service = createNativeDataFolderService(io);
 
-    const first = service.exportTo(PICKED);
-    const second = service.exportTo(OTHER);
+    const first = service.exportTo(PICKED, NAME);
+    const second = service.exportTo(OTHER, NAME);
     await expect(second).rejects.toSatisfy(
       (error: unknown) =>
         isRpcError(error) && error.code === DATA_FOLDER_EXPORT_ERROR_CODES.EXPORT_BUSY,
     );
-    expect(io.calls).toEqual([`mount ${PICKED}`, "export /upriv-saf-export"]);
+    expect(io.calls).toEqual([`mount ${PICKED}`, `export /upriv-saf-export as ${NAME}`]);
 
     held.settle(WRITTEN);
     await expect(first).resolves.toEqual(WRITTEN);
@@ -145,7 +151,7 @@ describe("createNativeDataFolderService", () => {
     expect(io.calls).not.toContain(`release ${OTHER}`);
   });
 
-  it("drops the pick when the tree cannot be mounted, and can export again", async () => {
+  it("keeps the pick when the tree cannot be mounted, and can export again", async () => {
     const unreachable = new RpcError("saf_unreachable", "export folder is not reachable");
     const io = fakeIo(async () => WRITTEN);
     let mountFails = true;
@@ -155,25 +161,29 @@ describe("createNativeDataFolderService", () => {
     };
     const service = createNativeDataFolderService(io);
 
-    await expect(service.exportTo(PICKED)).rejects.toBe(unreachable);
-    expect(io.calls).toEqual([`mount ${PICKED}`, `release ${PICKED}`]);
+    await expect(service.exportTo(PICKED, NAME)).rejects.toBe(unreachable);
+    expect(io.calls).toEqual([`mount ${PICKED}`]);
 
     mountFails = false;
     io.calls = [];
-    await expect(service.exportTo(OTHER)).resolves.toEqual(WRITTEN);
-    expect(io.calls[0]).toBe(`mount ${OTHER}`);
+    await expect(service.exportTo(PICKED, NAME)).resolves.toEqual(WRITTEN);
+    expect(io.calls[0]).toBe(`mount ${PICKED}`);
   });
 
-  it("releases an unused pick but never the running export's tree", async () => {
+  it("lets go of a pick the window drops, waiting for an export still using it", async () => {
     const held = heldExport();
     const io = fakeIo(held.exportTo);
     const service = createNativeDataFolderService(io);
 
-    const running = service.exportTo(PICKED);
+    const running = service.exportTo(PICKED, NAME);
     service.releaseDestination?.(PICKED);
     service.releaseDestination?.(OTHER);
     service.releaseDestination?.("/storage/emulated/0/Download");
-    expect(io.calls).toEqual([`mount ${PICKED}`, "export /upriv-saf-export", `release ${OTHER}`]);
+    expect(io.calls).toEqual([
+      `mount ${PICKED}`,
+      `export /upriv-saf-export as ${NAME}`,
+      `release ${OTHER}`,
+    ]);
 
     held.settle(WRITTEN);
     await running;

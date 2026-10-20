@@ -195,16 +195,20 @@ export function VaultRowActions({
           window.requestAnimationFrame(() => onOpenBackups(vault.id));
         },
       },
-      {
-        id: "note",
-        label: t("action.note"),
-        icon: <Icon name="note" size={18} />,
-        disabled: controls.noteBlocked,
-        onSelect: () => {
-          if (controls.noteBlocked) return;
-          window.requestAnimationFrame(() => onOpenNote(vault.id));
-        },
-      },
+      ...(controls.noteHidden
+        ? []
+        : [
+            {
+              id: "note",
+              label: t("action.note"),
+              icon: <Icon name="note" size={18} />,
+              disabled: controls.noteBlocked,
+              onSelect: () => {
+                if (controls.noteBlocked) return;
+                window.requestAnimationFrame(() => onOpenNote(vault.id));
+              },
+            },
+          ]),
       {
         id: "vault-info",
         label: t("action.vault_info"),
@@ -228,6 +232,7 @@ export function VaultRowActions({
       onOpenBackups,
       onOpenFileManager,
       controls.noteBlocked,
+      controls.noteHidden,
       onOpenNote,
       openOsMount,
       onOpenVaultInfo,

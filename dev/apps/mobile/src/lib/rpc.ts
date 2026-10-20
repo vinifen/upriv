@@ -1107,11 +1107,12 @@ export async function rpcBackupSave(id: string): Promise<VaultBackupEntry> {
   return parseBackupEntry(requireRecord(raw, "backup_save").backup, id);
 }
 
-/** Zip the whole `.upriv` into `upriv-<stamp>.zip` inside `destDir`. */
+/** Zip the whole `.upriv` into `<name>.zip` inside `destDir`. */
 export async function rpcDataFolderExport(
   destDir: string,
+  name: string,
 ): Promise<{ path: string; size: number }> {
-  const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.DATA_FOLDER_EXPORT, { destDir });
+  const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.DATA_FOLDER_EXPORT, { destDir, name });
   const written = parsePathWriteResult(raw);
   if (!written) {
     throw new RpcError(BRIDGE.INVALID_RESPONSE, "data_folder_export: expected path+size", raw);

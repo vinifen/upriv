@@ -1,5 +1,6 @@
-//! Copy the whole `.upriv` into one zip that unzips to `upriv-<stamp>/.upriv/`,
-//! ready to select as a data folder.
+//! Copy the whole `.upriv` into one zip, `<name>.zip`, that unzips to
+//! `<name>/.upriv/`, ready to select as a data folder. The person picks the
+//! name; the window fills in `upriv-<UTC stamp>`.
 //!
 //! Vault bodies are already ciphertext, so the zip is Stored and has no
 //! password, like a backup zip. Every vault stays held until the zip is
@@ -46,10 +47,18 @@ const PART_SUFFIX: &str = ".upriv-part";
 const COPY_BUFFER: usize = 256 * 1024;
 /// End records, zip64 records, and room for a log that grows while copied.
 const ZIP_SLACK: u64 = 1024 * 1024;
+/// Longest zip name, in bytes of UTF-8. `<name>.zip.upriv-part` still fits the
+/// 255 a file name may hold on every system.
+const DATA_FOLDER_ZIP_NAME_MAX_BYTES: usize = 200;
 
-/// Zip `.upriv` into `dest_dir/upriv-<stamp>.zip`. Every vault must be closed
-/// or in recovery, and no other work may hold one.
-pub fn export_data_folder(root: &VaultRoot, dest_dir: &Path) -> Result<DataFolderExport> {
+/// Zip `.upriv` into `dest_dir/<name>.zip`. Every vault must be closed or in
+/// recovery, and no other work may hold one.
+pub fn export_data_folder(
+    root: &VaultRoot,
+    dest_dir: &Path,
+    name: &str,
+) -> Result<DataFolderExport> {
+    validate_data_folder_zip_name(name)?;
     crate::paths::validate_existing_vault_root(root.root())?;
     // A picked Android folder is the logical export root. Its tree address
     // says whether it sits inside a `.upriv`.
@@ -66,11 +75,56 @@ pub fn export_data_folder(root: &VaultRoot, dest_dir: &Path) -> Result<DataFolde
     if !dest_dir.host_is_dir() {
         return Err(std::io::Error::new(ErrorKind::NotFound, "export folder not found").into());
     }
+    // Asked before the vaults are held; the write itself refuses a late arrival.
+    let target = ZipTarget::new(dest_dir, name);
+    if target.dest.host_exists() || target.partial.host_exists() {
+        return Err(UprivError::DataFolderExportNameTaken(target.dest));
+    }
     let held = hold_data_folder(root)?;
-    let written = write_data_folder_zip(root, dest_dir, &held.running)
+    let written = write_data_folder_zip(root, &target, &held.running)
         .map_err(|error| destination_unreachable_as_io(error, root));
     log_outcome(&written, held.vaults.len());
     written
+}
+
+/// The name a data-folder zip and the folder inside it share. Portable rules,
+/// so the copy unzips the same on Linux, Windows, macOS, and Android: no
+/// characters any of them refuse, no Windows device name, no leading dot that
+/// would hide it, and no trailing dot or space that Windows drops.
+fn validate_data_folder_zip_name(name: &str) -> Result<()> {
+    let refused = name.is_empty()
+        || name.len() > DATA_FOLDER_ZIP_NAME_MAX_BYTES
+        || name.trim() != name
+        || name.starts_with('.')
+        || name.ends_with('.')
+        || name
+            .chars()
+            .any(|c| c.is_control() || r#"<>:"/\|?*"#.contains(c))
+        || crate::paths::is_windows_reserved_device_name(name);
+    if refused {
+        return Err(UprivError::DataFolderExportNameInvalid);
+    }
+    Ok(())
+}
+
+/// Where one export writes: the zip, and the partial it is renamed from.
+struct ZipTarget {
+    dir: PathBuf,
+    /// The folder inside the zip, named like the zip.
+    top: String,
+    dest: PathBuf,
+    partial: PathBuf,
+}
+
+impl ZipTarget {
+    fn new(dest_dir: &Path, name: &str) -> Self {
+        Self {
+            dir: dest_dir.to_path_buf(),
+            top: name.to_string(),
+            dest: dest_dir.join(format!("{name}.zip")),
+            partial: dest_dir.join(format!("{name}.zip{PART_SUFFIX}")),
+        }
+    }
 }
 
 /// A picked Android folder whose drive stops answering fails this export like
@@ -134,10 +188,15 @@ fn vault_dirs(vaults_dir: &Path) -> Result<Vec<PathBuf>> {
 
 fn write_data_folder_zip(
     root: &VaultRoot,
-    dest_dir: &Path,
+    target: &ZipTarget,
     running: &DataFolderExportGuard,
 ) -> Result<DataFolderExport> {
-    let top = format!("upriv-{}", export_stamp());
+    let ZipTarget {
+        dir,
+        top,
+        dest,
+        partial,
+    } = target;
     let upriv = root.root().join(UPRIV_DIR_NAME);
     let tree = DataFolderTree {
         upriv: &upriv,
@@ -145,36 +204,43 @@ fn write_data_folder_zip(
         vaults_dir: root.vaults_dir(),
     };
     let mut size = SizeSink::default();
-    tree.walk(&top, &mut size)?;
+    tree.walk(top, &mut size)?;
     running.set_total(size.bytes);
     let needed = size
         .bytes
         .saturating_add(size.overhead)
         .saturating_add(ZIP_SLACK);
-    if let Some(available) = crate::host_fs::free_bytes(dest_dir) {
+    if let Some(available) = crate::host_fs::free_bytes(dir) {
         if available < needed {
             return Err(UprivError::DataFolderExportSpaceShort { needed, available });
         }
     }
-    let dest = dest_dir.join(format!("{top}.zip"));
-    let partial = dest_dir.join(format!("{top}.zip{PART_SUFFIX}"));
+    // Another export may have taken this name since it was checked.
+    let taken = |error: std::io::Error| match error.kind() {
+        ErrorKind::AlreadyExists => UprivError::DataFolderExportNameTaken(dest.clone()),
+        _ => error.into(),
+    };
     let file = OpenOptions::new()
         .write(true)
         .create_new(true)
-        .open(&partial)?;
+        .open(partial)
+        .map_err(taken)?;
     let installed = (|| {
-        let entries = write_zip(&tree, &top, file, running)?;
-        crate::paths::sync_file_durable(&partial)?;
-        verify_zip(&partial, &top, entries)?;
-        crate::host_fs::rename_no_replace(&partial, &dest)?;
+        let entries = write_zip(&tree, top, file, running)?;
+        crate::paths::sync_file_durable(partial)?;
+        verify_zip(partial, top, entries)?;
+        crate::host_fs::rename_no_replace(partial, dest).map_err(taken)?;
         Ok(())
     })();
     if let Err(error) = installed {
-        let _ = crate::host_fs::remove_file(&partial);
+        let _ = crate::host_fs::remove_file(partial);
         return Err(error);
     }
-    let size = crate::host_fs::metadata(&dest)?.len();
-    Ok(DataFolderExport { path: dest, size })
+    let size = crate::host_fs::metadata(dest)?.len();
+    Ok(DataFolderExport {
+        path: dest.clone(),
+        size,
+    })
 }
 
 fn write_zip(
@@ -238,18 +304,6 @@ fn log_outcome(written: &Result<DataFolderExport>, vaults: usize) {
             log_event(LogLevel::Warn, "data_folder_export_failed", &fields);
         }
     }
-}
-
-/// `YYYY-MM-DD-HHmmss` in UTC, as in `upriv-2026-10-18-143012`.
-fn export_stamp() -> String {
-    let stamp = crate::time::utc_filename_stamp();
-    format!(
-        "{}-{}-{}-{}",
-        &stamp[0..4],
-        &stamp[4..6],
-        &stamp[6..8],
-        &stamp[8..14]
-    )
 }
 
 /// Left behind by a write that did not finish: an atomic replace, a backup or
@@ -480,6 +534,7 @@ mod tests {
     use crate::vault::open_close::{close_vault, open_vault};
 
     const PASSWORD: &[u8] = b"pass-word-ok";
+    const NAME: &str = "upriv-2026-10-19-101500";
 
     fn sample_config(id: &str, name: &str) -> VaultConfig {
         toml::from_str(&format!(
@@ -517,11 +572,9 @@ mod tests {
     fn the_unzipped_copy_opens_as_a_data_folder() {
         let (_tmp, root) = notes_root();
         let dest = tempfile::tempdir().unwrap();
-        let export = export_data_folder(&root, dest.path()).unwrap();
-        let file_name = export.path.file_name().unwrap().to_str().unwrap();
-        let top = file_name.strip_suffix(".zip").unwrap();
-        assert!(top.starts_with("upriv-20"), "{file_name}");
-        assert_eq!(top.len(), "upriv-2026-10-18-143012".len());
+        let export = export_data_folder(&root, dest.path(), NAME).unwrap();
+        assert_eq!(export.path, dest.path().join(format!("{NAME}.zip")));
+        let top = NAME;
         assert_eq!(
             export.size,
             crate::host_fs::metadata(&export.path).unwrap().len()
@@ -572,14 +625,8 @@ mod tests {
             crate::host_fs::write(path, body).unwrap();
         }
         let dest = tempfile::tempdir().unwrap();
-        let export = export_data_folder(&root, dest.path()).unwrap();
-        let top = export
-            .path
-            .file_stem()
-            .unwrap()
-            .to_str()
-            .unwrap()
-            .to_string();
+        let export = export_data_folder(&root, dest.path(), NAME).unwrap();
+        let top = NAME;
         let names = zip_names(&export.path);
         for kept in [
             format!("{top}/"),
@@ -603,7 +650,7 @@ mod tests {
         open_vault(&root, "notes", PASSWORD).unwrap();
         let dest = tempfile::tempdir().unwrap();
         assert!(matches!(
-            export_data_folder(&root, dest.path()),
+            export_data_folder(&root, dest.path(), NAME),
             Err(UprivError::DataFolderBusy)
         ));
         assert!(data_folder_export_status(root.root()).is_none());
@@ -635,7 +682,7 @@ mod tests {
             Err(UprivError::DataFolderExportBusy)
         ));
         assert!(matches!(
-            export_data_folder(&root, dest.path()),
+            export_data_folder(&root, dest.path(), NAME),
             Err(UprivError::DataFolderExportBusy)
         ));
         assert!(crate::session::vault_activity_blocks_root_switch());
@@ -652,7 +699,7 @@ mod tests {
         let (_tmp, root) = notes_root();
         let dest = tempfile::tempdir().unwrap();
         let held = hold_data_folder(&root).unwrap();
-        write_data_folder_zip(&root, dest.path(), &held.running).unwrap();
+        write_data_folder_zip(&root, &ZipTarget::new(dest.path(), NAME), &held.running).unwrap();
         let status = data_folder_export_status(root.root()).unwrap();
         assert!(status.bytes_total > 0);
         assert_eq!(status.bytes_done, status.bytes_total);
@@ -665,7 +712,7 @@ mod tests {
         let held = hold_data_folder(&root).unwrap();
         assert!(cancel_data_folder_export(root.root()));
         assert!(matches!(
-            write_data_folder_zip(&root, dest.path(), &held.running),
+            write_data_folder_zip(&root, &ZipTarget::new(dest.path(), NAME), &held.running),
             Err(UprivError::DataFolderExportCancelled)
         ));
         assert_eq!(entry_count(dest.path()), 0);
@@ -679,14 +726,14 @@ mod tests {
         let inside = root.root().join(".upriv/app");
         crate::host_fs::create_dir_all(&inside).unwrap();
         assert!(matches!(
-            export_data_folder(&root, &inside),
+            export_data_folder(&root, &inside, NAME),
             Err(UprivError::DataFolderExportDestinationReserved(_))
         ));
         let other = tempfile::tempdir().unwrap();
         let other_upriv = other.path().join(".upriv");
         crate::host_fs::create_dir_all(&other_upriv).unwrap();
         assert!(matches!(
-            export_data_folder(&root, &other_upriv),
+            export_data_folder(&root, &other_upriv, NAME),
             Err(UprivError::DataFolderExportDestinationReserved(_))
         ));
         assert_eq!(entry_count(&inside), 0);
@@ -700,10 +747,97 @@ mod tests {
         std::os::unix::fs::symlink(elsewhere.path(), root.root().join(".upriv/app")).unwrap();
         let dest = tempfile::tempdir().unwrap();
         assert!(matches!(
-            export_data_folder(&root, dest.path()),
+            export_data_folder(&root, dest.path(), NAME),
             Err(UprivError::VaultStoreInvalid { .. })
         ));
         assert_eq!(entry_count(dest.path()), 0);
+    }
+
+    #[test]
+    fn zip_names_follow_the_shared_rules() {
+        let cases: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../apps/shared/src/domain/data-folder-export/zip-name-cases.json"
+        ))
+        .expect("zip-name-cases.json");
+        for name in cases["valid"].as_array().expect("valid") {
+            let name = name.as_str().expect("str");
+            assert!(validate_data_folder_zip_name(name).is_ok(), "{name:?}");
+        }
+        for name in cases["invalid"].as_array().expect("invalid") {
+            let name = name.as_str().expect("str");
+            assert!(
+                matches!(
+                    validate_data_folder_zip_name(name),
+                    Err(UprivError::DataFolderExportNameInvalid)
+                ),
+                "{name:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_zip_name_is_measured_in_bytes() {
+        let longest = "a".repeat(DATA_FOLDER_ZIP_NAME_MAX_BYTES);
+        assert!(validate_data_folder_zip_name(&longest).is_ok());
+        assert!(validate_data_folder_zip_name(&format!("{longest}a")).is_err());
+        // Two bytes each in UTF-8.
+        let accented = "é".repeat(DATA_FOLDER_ZIP_NAME_MAX_BYTES / 2);
+        assert!(validate_data_folder_zip_name(&accented).is_ok());
+        assert!(validate_data_folder_zip_name(&format!("{accented}é")).is_err());
+    }
+
+    #[test]
+    fn an_invalid_name_writes_nothing() {
+        let (_tmp, root) = notes_root();
+        let dest = tempfile::tempdir().unwrap();
+        assert!(matches!(
+            export_data_folder(&root, dest.path(), "../escape"),
+            Err(UprivError::DataFolderExportNameInvalid)
+        ));
+        assert_eq!(entry_count(dest.path()), 0);
+        assert!(data_folder_export_status(root.root()).is_none());
+    }
+
+    #[test]
+    fn a_name_already_in_the_folder_is_kept_and_refused() {
+        let (_tmp, root) = notes_root();
+        let dest = tempfile::tempdir().unwrap();
+        let existing = dest.path().join(format!("{NAME}.zip"));
+        crate::host_fs::write(&existing, "kept").unwrap();
+        assert!(matches!(
+            export_data_folder(&root, dest.path(), NAME),
+            Err(UprivError::DataFolderExportNameTaken(path)) if path == existing
+        ));
+        assert_eq!(crate::host_fs::read(&existing).unwrap(), b"kept");
+        assert_eq!(entry_count(dest.path()), 1);
+        assert!(data_folder_export_status(root.root()).is_none());
+
+        // A zip of that name still being written holds the name too.
+        let other = tempfile::tempdir().unwrap();
+        let partial = other.path().join(format!("{NAME}.zip{PART_SUFFIX}"));
+        crate::host_fs::write(&partial, "half").unwrap();
+        assert!(matches!(
+            export_data_folder(&root, other.path(), NAME),
+            Err(UprivError::DataFolderExportNameTaken(_))
+        ));
+        assert_eq!(crate::host_fs::read(&partial).unwrap(), b"half");
+    }
+
+    #[test]
+    fn a_name_taken_during_the_copy_is_refused() {
+        let (_tmp, root) = notes_root();
+        let dest = tempfile::tempdir().unwrap();
+        let target = ZipTarget::new(dest.path(), NAME);
+        crate::host_fs::write(&target.partial, "another export").unwrap();
+        let held = hold_data_folder(&root).unwrap();
+        assert!(matches!(
+            write_data_folder_zip(&root, &target, &held.running),
+            Err(UprivError::DataFolderExportNameTaken(_))
+        ));
+        assert_eq!(
+            crate::host_fs::read(&target.partial).unwrap(),
+            b"another export"
+        );
     }
 
     #[test]

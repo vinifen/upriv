@@ -44,21 +44,24 @@ export function PlainPlaceModal({
   const group = useId();
   const warningKey = warningClass ? plainFolderClassI18nKey(warningClass) : null;
   const [choice, setChoice] = useState<PlainPlaceChoice | null>(null);
-  const [defaultPath, setDefaultPath] = useState("");
+  /** `null` while the folder beside the data folder is still being worked out. */
+  const [defaultPath, setDefaultPath] = useState<string | null>(null);
   const [customPath, setCustomPath] = useState("");
   const [vaultPath, setVaultPath] = useState("");
 
   useEffect(() => {
     if (open) return;
     setChoice(null);
-    setDefaultPath("");
+    setDefaultPath(null);
     setCustomPath("");
     setVaultPath("");
   }, [open]);
 
+  // The first option starts chosen. With the shared workspace locked, only this
+  // vault's own folder is left.
   useEffect(() => {
-    if (!open || workspaceChoices) return;
-    setChoice("vault_only");
+    if (!open) return;
+    setChoice((current) => (workspaceChoices ? (current ?? "default") : "vault_only"));
   }, [open, workspaceChoices]);
 
   useEffect(() => {
@@ -89,10 +92,15 @@ export function PlainPlaceModal({
     };
   }, [open, settings.app.upriv_root_path, settings.app.vault_root_mode, vaultRootService]);
 
+  // A chosen option that still lacks its folder carries the attention border
+  // and holds Continue; choosing it opens nothing.
+  const defaultMissing = defaultPath !== null && defaultPath.trim() === "";
+  const customMissing = customPath.trim() === "";
+  const vaultMissing = vaultPath.trim() === "";
   const canContinue =
-    (workspaceChoices && choice === "default" && defaultPath.trim() !== "") ||
-    (workspaceChoices && choice === "custom" && customPath.trim() !== "") ||
-    (choice === "vault_only" && vaultPath.trim() !== "");
+    (workspaceChoices && choice === "default" && Boolean(defaultPath?.trim())) ||
+    (workspaceChoices && choice === "custom" && !customMissing) ||
+    (choice === "vault_only" && !vaultMissing);
 
   const pickInto = (apply: (path: string) => void, current: string) => {
     void (async () => {
@@ -106,15 +114,6 @@ export function PlainPlaceModal({
         showError(error, "error.unexpected");
       }
     })();
-  };
-
-  const selectFolderChoice = (
-    next: "custom" | "vault_only",
-    current: string,
-    apply: (path: string) => void,
-  ) => {
-    setChoice(next);
-    if (!current.trim()) pickInto(apply, current);
   };
 
   return (
@@ -171,22 +170,26 @@ export function PlainPlaceModal({
                 groupName={group}
                 value="default"
                 checked={choice === "default"}
+                attention={defaultMissing}
                 title={t("plain.place.default")}
                 description={t("plain.place.default_desc")}
                 disabled={submitting || !workspaceChoices}
                 onSelect={() => setChoice("default")}
                 footer={
-                  choice === "default" ? <PathField value={defaultPath} readOnly /> : undefined
+                  choice === "default" ? (
+                    <PathField value={defaultPath ?? ""} readOnly />
+                  ) : undefined
                 }
               />
               <PolicyRadioOption
                 groupName={group}
                 value="custom"
                 checked={choice === "custom"}
+                attention={customMissing}
                 title={t("plain.place.custom")}
                 description={t("plain.place.custom_desc")}
                 disabled={submitting || !workspaceChoices}
-                onSelect={() => selectFolderChoice("custom", customPath, setCustomPath)}
+                onSelect={() => setChoice("custom")}
                 footer={
                   choice === "custom" ? (
                     <PlacePathEditor
@@ -202,10 +205,11 @@ export function PlainPlaceModal({
                 groupName={group}
                 value="vault_only"
                 checked={choice === "vault_only"}
+                attention={vaultMissing}
                 title={t("plain.place.vault_only")}
                 description={t("plain.place.vault_only_desc")}
                 disabled={submitting}
-                onSelect={() => selectFolderChoice("vault_only", vaultPath, setVaultPath)}
+                onSelect={() => setChoice("vault_only")}
                 footer={
                   choice === "vault_only" ? (
                     <PlacePathEditor
@@ -244,7 +248,7 @@ function PlacePathEditor({
         className="sm:flex-1"
         value={value}
         disabled={disabled}
-        placeholder={t("modal.app_settings.field.workspace.path_placeholder")}
+        placeholder={t("modal.folder_field.placeholder")}
         onChange={onChange}
       />
       <Button

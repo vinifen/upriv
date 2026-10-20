@@ -14,6 +14,8 @@ import {
   appWorkspace,
   appWorkspacePlace,
   validateWorkspaceTable,
+  vaultFolderChosen,
+  vaultFolderRow,
   vaultSettingsPreferenceSections,
   workspacePathIssueI18nKey,
   type KdfUnlockPreset,
@@ -400,9 +402,11 @@ function CurrentVaultFolderChoices({
   const { colors, typography } = useTheme();
   const vaultRootService = useVaultRootService();
   const trimmed = entry.path.trim();
-  const [customPending, setCustomPending] = useState(false);
   const [pickError, setPickError] = useState<string | null>(null);
-  const custom = trimmed !== "" || customPending;
+  // Another folder can be chosen before its path is picked: that path is the
+  // step left, so the option carries the attention border and Save waits.
+  const custom = vaultFolderChosen(entry);
+  const customPathMissing = custom && trimmed === "";
   const showShortcut = workspaceSystemHasShortcut(system) && !plaintext;
   const workspaceReady = appWorkspacePlace(appEntry) !== "unset";
   const shortcutLocked = !active || !workspaceReady;
@@ -418,10 +422,9 @@ function CurrentVaultFolderChoices({
       )})`
     : t("modal.settings.field.mount.shortcut_inherit");
 
+  // Kept as typed, so a space inside a folder name survives; saving trims it.
   function writePath(path: string) {
-    const next = path.trim();
-    if (!next) setCustomPending(false);
-    onChange({ [system]: { ...entry, path: next } });
+    onChange({ [system]: vaultFolderRow(path) });
   }
 
   function pickFolder(initial: string | null) {
@@ -434,8 +437,7 @@ function CurrentVaultFolderChoices({
           t("modal.app_settings.action.pick_workspace_folder"),
         );
         if (!picked?.trim()) return;
-        setCustomPending(false);
-        onChange({ [system]: { ...entry, path: picked.trim() } });
+        writePath(picked.trim());
       } catch (error) {
         setPickError(t(mobileErrorI18nKey(error, "error.unexpected")));
       }
@@ -453,8 +455,7 @@ function CurrentVaultFolderChoices({
         muted={!workspaceReady}
         onSelect={() => {
           if (!active) return;
-          setCustomPending(false);
-          onChange({ [system]: { ...entry, path: "" } });
+          onChange({ [system]: { place: "unset", path: "" } });
         }}
         footer={
           showShortcut ? (
@@ -499,16 +500,13 @@ function CurrentVaultFolderChoices({
       <PolicyRadioOption
         value="custom"
         checked={custom}
+        attention={customPathMissing}
         title={t("modal.settings.field.mount.custom")}
         description={t("modal.settings.field.mount.custom_desc")}
         disabled={!active}
         onSelect={() => {
           if (!active || custom) return;
-          if (!canPick) {
-            setCustomPending(true);
-            return;
-          }
-          pickFolder(null);
+          writePath("");
         }}
         footer={
           <View style={styles.fields}>

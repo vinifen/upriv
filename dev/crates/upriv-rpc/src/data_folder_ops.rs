@@ -15,10 +15,12 @@ use super::{
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct DataFolderExportParams {
     dest_dir: String,
+    /// Zip name without `.zip`; it also names the folder inside the zip.
+    name: String,
 }
 
-/// Write `upriv-<stamp>.zip` into the chosen folder. Returns when the zip is
-/// in place, when it fails, or when `data_folder_export_cancel` stops it.
+/// Write `<name>.zip` into the chosen folder. Returns when the zip is in
+/// place, when it fails, or when `data_folder_export_cancel` stops it.
 pub(super) fn export(params: Value) -> RpcResponse {
     let parsed: DataFolderExportParams = match serde_json::from_value(params) {
         Ok(value) => value,
@@ -35,7 +37,7 @@ pub(super) fn export(params: Value) -> RpcResponse {
         Ok(root) => root,
         Err(response) => return response,
     };
-    match export_data_folder(&root, &dest_dir) {
+    match export_data_folder(&root, &dest_dir, &parsed.name) {
         Ok(export) => match path_utf8(&export.path) {
             Ok(path) => ok(json!({ "path": path, "size": export.size })),
             Err(response) => response,

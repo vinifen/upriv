@@ -20,7 +20,6 @@ export function useVaultListModals(
   const [settingsGroupId, setSettingsGroupId] = useState<string | null>(null);
   const [appSettingsOpen, setAppSettingsOpen] = useState(false);
   const [dataFolderOpen, setDataFolderOpen] = useState(false);
-  const [dataFolderExportOpen, setDataFolderExportOpen] = useState(false);
   const [logsOpen, setLogsOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [systemInfoOpen, setSystemInfoOpen] = useState(false);
@@ -148,8 +147,6 @@ export function useVaultListModals(
     groupsDirty,
     setGroupsOpen: setGroupsOpenExclusive,
     setGroupsDirty,
-    dataFolderExportOpen,
-    setDataFolderExportOpen,
     logsOpen,
     setLogsOpen,
     helpOpen,

@@ -203,12 +203,14 @@ export function VaultRowActions({
             disabled={controls.moreMenuBlocked}
             onPress={() => onOpenBackups(vault)}
           />
-          <MenuActionItem
-            icon="note"
-            label={t("action.note")}
-            disabled={controls.noteBlocked}
-            onPress={() => onOpenNote(vault)}
-          />
+          {controls.noteHidden ? null : (
+            <MenuActionItem
+              icon="note"
+              label={t("action.note")}
+              disabled={controls.noteBlocked}
+              onPress={() => onOpenNote(vault)}
+            />
+          )}
           <MenuActionItem
             icon="info"
             label={t("action.vault_info")}

@@ -53,28 +53,30 @@ describe("data folder export rpc", () => {
     native.invoke.mockReset();
   });
 
-  it("sends the folder and reads the written zip", async () => {
+  it("sends the folder and the zip name, and reads the written zip", async () => {
     native.invoke.mockResolvedValueOnce(
       JSON.stringify({
         ok: true,
-        result: { path: "/upriv-saf-export/upriv-2026-10-19-031500.zip", size: 2048 },
+        result: { path: "/upriv-saf-export/phone-copy.zip", size: 2048 },
       }),
     );
     const { rpcDataFolderExport } = await import("../rpc");
-    await expect(rpcDataFolderExport("/upriv-saf-export")).resolves.toEqual({
-      path: "/upriv-saf-export/upriv-2026-10-19-031500.zip",
+    await expect(rpcDataFolderExport("/upriv-saf-export", "phone-copy")).resolves.toEqual({
+      path: "/upriv-saf-export/phone-copy.zip",
       size: 2048,
     });
     expect(native.invoke).toHaveBeenCalledWith(
       "data_folder_export",
-      JSON.stringify({ destDir: "/upriv-saf-export" }),
+      JSON.stringify({ destDir: "/upriv-saf-export", name: "phone-copy" }),
     );
   });
 
   it("refuses an answer without the written zip", async () => {
     native.invoke.mockResolvedValueOnce(JSON.stringify({ ok: true, result: { size: 1 } }));
     const { rpcDataFolderExport } = await import("../rpc");
-    await expect(rpcDataFolderExport("/upriv-saf-export")).rejects.toBeInstanceOf(RpcError);
+    await expect(rpcDataFolderExport("/upriv-saf-export", "phone-copy")).rejects.toBeInstanceOf(
+      RpcError,
+    );
   });
 
   it("reads progress only while an export runs", async () => {

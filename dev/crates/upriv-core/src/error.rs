@@ -197,6 +197,15 @@ pub enum UprivError {
     #[error("data folder export cannot write inside .upriv: {0}")]
     DataFolderExportDestinationReserved(PathBuf),
 
+    /// The zip name breaks a rule of some system the copy may unzip on.
+    #[error("the data folder zip name is not a portable file name")]
+    DataFolderExportNameInvalid,
+
+    /// The chosen folder already holds a zip with this name, or one still
+    /// being written. Nothing is replaced.
+    #[error("the chosen folder already has {0}")]
+    DataFolderExportNameTaken(PathBuf),
+
     #[error(transparent)]
     Io(#[from] std::io::Error),
 }

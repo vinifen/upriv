@@ -15,6 +15,7 @@ import {
   logFileCountForKeepLast,
   normalizeAppSettings,
   workspaceSystemsCurrentFirst,
+  appWorkspaceChoice,
   appWorkspacePlace,
   validateWorkspaceTable,
   suggestedDefaultWorkspacePath,
@@ -643,7 +644,6 @@ function WorkspaceFields({
   const pathIssue = validateWorkspaceTable(config, vaultRootPath);
   const defaultWorkspacePath = suggestedDefaultWorkspacePath(vaultRootPath);
   const [pickError, setPickError] = useState<string | null>(null);
-  const [customPending, setCustomPending] = useState(false);
 
   return (
     <View style={styles.fields}>
@@ -654,9 +654,9 @@ function WorkspaceFields({
       {workspaceSystemsCurrentFirst(Platform.OS).map((system) => {
         const active = system === current && !clearDisabled;
         const entry = config[system];
-        const storedPlace = appWorkspacePlace(entry);
-        const place =
-          system === current && customPending && storedPlace === "unset" ? "custom" : storedPlace;
+        const place = appWorkspaceChoice(entry);
+        // Chosen before its folder: the folder is the step left, and Save waits (`empty`).
+        const customMissing = place === "custom" && !entry.path.trim();
         return (
           <Fragment key={system}>
             <View style={active ? undefined : { opacity: 0.6 }}>
@@ -682,7 +682,6 @@ function WorkspaceFields({
                     disabled={!active}
                     onSelect={() => {
                       if (!active) return;
-                      setCustomPending(false);
                       onChange({ [system]: { ...entry, place: "unset", path: "" } });
                     }}
                   />
@@ -694,7 +693,6 @@ function WorkspaceFields({
                     disabled={!active}
                     onSelect={() => {
                       if (!active) return;
-                      setCustomPending(false);
                       onChange({ [system]: { ...entry, place: "beside", path: "" } });
                     }}
                     footer={
@@ -707,30 +705,13 @@ function WorkspaceFields({
                   <PolicyRadioOption
                     value="custom"
                     checked={place === "custom"}
+                    attention={customMissing}
                     title={t("modal.app_settings.field.workspace.custom")}
                     description={t("modal.app_settings.field.workspace.custom_desc")}
                     disabled={!active}
                     onSelect={() => {
                       if (!active || place === "custom") return;
-                      if (Platform.OS !== "android") {
-                        setCustomPending(true);
-                        return;
-                      }
-                      void (async () => {
-                        setPickError(null);
-                        try {
-                          const picked = await vaultRootService.pickFolder(
-                            null,
-                            t("modal.app_settings.action.pick_workspace_folder"),
-                          );
-                          if (!picked?.trim()) return;
-                          onChange({
-                            [system]: { ...entry, place: "custom", path: picked.trim() },
-                          });
-                        } catch (error) {
-                          setPickError(t(mobileErrorI18nKey(error, "error.unexpected")));
-                        }
-                      })();
+                      onChange({ [system]: { ...entry, place: "custom", path: "" } });
                     }}
                     footer={
                       <View style={styles.fields}>
@@ -740,14 +721,7 @@ function WorkspaceFields({
                           placeholder={t("modal.app_settings.field.workspace.path_placeholder")}
                           onChangeText={(path) => {
                             if (!active) return;
-                            if (path.trim()) setCustomPending(false);
-                            onChange({
-                              [system]: {
-                                ...entry,
-                                place: path.trim() ? "custom" : "unset",
-                                path,
-                              },
-                            });
+                            onChange({ [system]: { ...entry, place: "custom", path } });
                           }}
                         />
                         <Button

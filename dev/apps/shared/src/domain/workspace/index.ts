@@ -6,6 +6,7 @@ export {
 export {
   WORKSPACE_SYSTEMS,
   appWorkspace,
+  appWorkspaceChoice,
   currentWorkspaceSystem,
   detectHostPlatform,
   appWorkspacePlace,
@@ -14,6 +15,8 @@ export {
   hostPlatformFromSignals,
   normalizeWorkspaceTable,
   resolvedWorkspaceParent,
+  vaultFolderChosen,
+  vaultFolderRow,
   vaultMountForDaemon,
   vaultWorkspace,
   workspaceSystemFromHost,

@@ -1,6 +1,11 @@
 import { type ReactNode } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
-import { mixHex, POLICY_RADIO_BADGE_I18N, type PolicyRadioBadge } from "@upriv/shared";
+import {
+  mixHex,
+  POLICY_RADIO_BADGE_I18N,
+  policyRadioBadgeList,
+  type PolicyRadioBadge,
+} from "@upriv/shared";
 import { useTranslation } from "@/i18n";
 import { useTheme, type ThemeColors } from "@/theme";
 import { colorAlpha, radii, spacing } from "@/theme/tokens";
@@ -17,7 +22,8 @@ interface PolicyRadioOptionProps {
   disabled?: boolean;
   /** Gray, still selectable. The file manager folder inside can stay locked. */
   muted?: boolean;
-  badge?: PolicyRadioBadge;
+  /** One badge, or several shown in this order. */
+  badge?: PolicyRadioBadge | readonly PolicyRadioBadge[];
   tone?: Tone;
   /**
    * Yellow/amber border while this option still needs follow-up config
@@ -36,6 +42,7 @@ function policyRadioBadgeColors(
 ): { backgroundColor: string; color: string } {
   switch (badge) {
     case "more-secure":
+    case "in-use":
       return {
         backgroundColor: colorAlpha(colors.vaultStatusOpen, 0.2),
         color: colors.vaultStatusOpen,
@@ -99,9 +106,6 @@ export function PolicyRadioOption({
       ? mixHex(colors.surfaceContainer, colors.errorContainer, 0.07)
       : colors.surfaceContainer;
 
-  const badgeLabel = badge ? t(POLICY_RADIO_BADGE_I18N[badge]) : null;
-  const badgeTone = badge ? policyRadioBadgeColors(badge, colors) : null;
-
   return (
     <View style={styles.wrap}>
       <View
@@ -149,13 +153,19 @@ export function PolicyRadioOption({
                 >
                   {title}
                 </Text>
-                {badgeLabel && badgeTone ? (
-                  <View style={[styles.badge, { backgroundColor: badgeTone.backgroundColor }]}>
-                    <Text style={[styles.badgeText, { color: badgeTone.color }]}>
-                      {badgeLabel.toLocaleUpperCase()}
-                    </Text>
-                  </View>
-                ) : null}
+                {policyRadioBadgeList(badge).map((item) => {
+                  const tone = policyRadioBadgeColors(item, colors);
+                  return (
+                    <View
+                      key={item}
+                      style={[styles.badge, { backgroundColor: tone.backgroundColor }]}
+                    >
+                      <Text style={[styles.badgeText, { color: tone.color }]}>
+                        {t(POLICY_RADIO_BADGE_I18N[item]).toLocaleUpperCase()}
+                      </Text>
+                    </View>
+                  );
+                })}
               </View>
               {description ? (
                 <Text

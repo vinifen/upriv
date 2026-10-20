@@ -55,7 +55,11 @@ export {
   type VaultSettingsAreaId,
 } from "./areas";
 export { KDF_UNLOCK_OPTION_META, type KdfUnlockOptionMeta } from "./kdf";
-export { POLICY_RADIO_BADGE_I18N, type PolicyRadioBadge } from "./policyRadioBadge";
+export {
+  POLICY_RADIO_BADGE_I18N,
+  policyRadioBadgeList,
+  type PolicyRadioBadge,
+} from "./policyRadioBadge";
 export {
   EMPTY_CHANGE_PASSWORD_FIELDS,
   changeKdfFormCanSubmit,

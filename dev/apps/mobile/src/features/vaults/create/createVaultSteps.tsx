@@ -9,6 +9,7 @@ import {
   createVaultImportSelectionPatch,
   importExtractApplies,
   importExtractEnabled,
+  validateCreateVaultStep,
   importSetsVaultPassword,
   importZipWrapsDocuments,
   isHiddenGroup,
@@ -191,6 +192,10 @@ function CreateVaultSourceStep({ draft, errors, onChange, existingDisplayNames =
   const extractOn = importExtractEnabled(draft);
   const archiveName = draft.importFileName.trim().toLowerCase();
   const showFolder = Platform.OS === "android" && Boolean(createVaultService.selectImportFolder);
+  // Import chosen and still missing a usable file or folder (not while a zip is being read).
+  const importNeedsStep =
+    draft.source === "import" &&
+    validateCreateVaultStep("source", draft, []).some((code) => code !== "import_zip_pending");
 
   const importFilePicker = (
     <View style={styles.fields}>
@@ -302,6 +307,7 @@ function CreateVaultSourceStep({ draft, errors, onChange, existingDisplayNames =
         <PolicyRadioOption
           value="import"
           checked={draft.source === "import"}
+          attention={importNeedsStep}
           title={t("vault.create.option.import")}
           description={t("vault.create.option.import_desc")}
           footer={importFilePicker}

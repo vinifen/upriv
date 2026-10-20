@@ -20,6 +20,12 @@ export interface DataFolderExportJob {
   stopping: boolean;
 }
 
+/** The zip an export wrote, and the folder the user chose for it. */
+export interface DataFolderExportWritten {
+  result: VaultPathWriteResult;
+  destDir: string;
+}
+
 export interface DataFolderExportJobEvents {
   onExported: (result: VaultPathWriteResult) => void;
   onFailed: (error: unknown) => void;
@@ -33,16 +39,26 @@ export interface DataFolderExportJobEvents {
  * Export data folder, owned by the vault list so it keeps running when its
  * modal closes. While `job` is set every row shows `exporting` and refuses to
  * open, and new vaults wait.
+ *
+ * `dataFolderKey` names the data folder in use. `written` is the last zip
+ * until another export starts, and only while that data folder stays in use.
  */
 export function useDataFolderExportJob(
   service: DataFolderService | undefined,
   events: DataFolderExportJobEvents,
+  dataFolderKey: string,
 ) {
   const [job, setJob] = useState<DataFolderExportJob | null>(null);
+  const [written, setWritten] = useState<{
+    dataFolderKey: string;
+    zip: DataFolderExportWritten;
+  } | null>(null);
   const jobRef = useRef(job);
   const genRef = useRef(0);
   const eventsRef = useRef(events);
   eventsRef.current = events;
+  const dataFolderKeyRef = useRef(dataFolderKey);
+  dataFolderKeyRef.current = dataFolderKey;
   const running = job !== null;
   const budget = useLoadingBudget(running, LOADING_BUDGET_MS.dataFolderExport, {
     startedAt: job?.startedAt,
@@ -62,17 +78,22 @@ export function useDataFolderExportJob(
     [commit],
   );
 
-  /** Start an export into `destDir`. False while one runs. */
+  /** Start an export of `<name>.zip` into `destDir`. False while one runs. */
   const start = useCallback(
-    (destDir: string): boolean => {
+    (destDir: string, name: string): boolean => {
       if (!service || jobRef.current) return false;
       const gen = ++genRef.current;
+      // A data folder switch waits for the export, so this is the folder copied.
+      const copiedKey = dataFolderKeyRef.current;
+      setWritten(null);
       commit({ startedAt: Date.now(), progress: null, stopping: false });
       void service
-        .exportTo(destDir)
+        .exportTo(destDir, name)
         .then(
           (result) => {
-            if (gen === genRef.current) eventsRef.current.onExported(result);
+            if (gen !== genRef.current) return;
+            setWritten({ dataFolderKey: copiedKey, zip: { result, destDir } });
+            eventsRef.current.onExported(result);
           },
           (error: unknown) => {
             if (gen !== genRef.current) return;
@@ -133,5 +154,10 @@ export function useDataFolderExportJob(
     eventsRef.current.onTimedOut();
   }, [budget.timedOut, commit, running, service]);
 
-  return { job, start, stop };
+  return {
+    job,
+    written: written?.dataFolderKey === dataFolderKey ? written.zip : null,
+    start,
+    stop,
+  };
 }
