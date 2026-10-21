@@ -80,15 +80,17 @@ export interface VaultService {
   unregisterSettings(vaultId: string): Promise<void>;
 
   /**
-   * Write `{display_name}.zip` or `{display_name}.7z` to `destPath` in core,
-   * as the job `job`. Zip = envelope of `store/` (no zip password). `.7z` =
-   * logical stream (never `.enc` blobs). Rejects with `job_cancelled` after
-   * `JobService.cancel`; the file at `destPath` is then left as it was.
+   * Write `{display_name}.zip` or `{display_name}.7z` into the folder
+   * `destDir` in core, as the job `job`. Zip = envelope of `store/` (no zip
+   * password). `.7z` = logical stream (never `.enc` blobs). When that name is
+   * already in the folder the file gets the next free number
+   * (`{display_name} 2.zip`, see `vaultExportSavedAs`); nothing is replaced.
+   * Rejects with `job_cancelled` after `JobService.cancel`.
    */
-  exportToPath(
+  exportToFolder(
     vault: VaultRow,
     request: VaultExportRequest,
-    destPath: string,
+    destDir: string,
     job: string,
   ): Promise<VaultPathWriteResult>;
 

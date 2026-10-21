@@ -1960,8 +1960,8 @@ fn map_core_err_response(error: upriv_core::UprivError, emit_log: bool) -> RpcRe
         upriv_core::UprivError::DataFolderExportSpaceShort { .. } => {
             ("data_folder_export_space_short", None)
         }
-        upriv_core::UprivError::DataFolderExportDestinationReserved(p) => {
-            ("data_folder_export_destination_reserved", Some(p.as_path()))
+        upriv_core::UprivError::ExportDestinationReserved(p) => {
+            ("export_destination_reserved", Some(p.as_path()))
         }
         upriv_core::UprivError::DataFolderExportNameInvalid => {
             ("data_folder_export_name_invalid", None)
@@ -2305,17 +2305,19 @@ mod contract_tests {
     }
 
     #[test]
-    fn a_vault_export_needs_a_file_to_write() {
+    fn a_vault_export_needs_a_folder_to_write_into() {
         let response = call(
             "vault_export",
             json!({ "id": "notes", "job": "rpc-export" }),
         );
         assert_eq!(error_code(&response), Some("invalid_request"));
-        let blank = call(
-            "vault_export",
-            json!({ "id": "notes", "destPath": "  ", "job": "rpc-export" }),
-        );
-        assert_eq!(error_code(&blank), Some("invalid_request"));
+        for dest_dir in ["  ", "relative/folder"] {
+            let refused = call(
+                "vault_export",
+                json!({ "id": "notes", "destDir": dest_dir, "job": "rpc-export" }),
+            );
+            assert_eq!(error_code(&refused), Some("invalid_request"), "{dest_dir}");
+        }
     }
 
     #[test]

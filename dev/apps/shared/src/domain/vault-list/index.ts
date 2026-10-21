@@ -33,15 +33,19 @@ export type {
   VaultExportRequest,
   VaultExportFormat,
   VaultExportPipelineStatus,
+  VaultExportPending,
   ExportFilenameSanitizeKind,
 } from "./export";
 export {
   DEFAULT_VAULT_EXPORT_FORMAT,
+  VAULT_EXPORT_PROGRESS_COPY,
   exportFilenameSanitizeKind,
   sanitizeExportFilenameBase,
   vaultCanExport,
   vaultExportFilename,
   vaultExportMenuShown,
+  vaultExportPending,
+  vaultExportSavedAs,
 } from "./export";
 export { resolveVaultPasswordHint } from "./passwordHint";
 export { touchVaultLastAccessed, vaultLastAccessedLabel } from "./lastAccessed";

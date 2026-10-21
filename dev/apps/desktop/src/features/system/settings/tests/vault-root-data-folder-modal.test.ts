@@ -37,6 +37,7 @@ function controls(patch: Partial<DataFolderExportControls> = {}): DataFolderExpo
     canStart: true,
     job: null,
     written: null,
+    clearWritten: vi.fn(),
     onStart: vi.fn(() => true),
     onStop: vi.fn(),
     ...patch,
@@ -93,7 +94,12 @@ function nameInput(): HTMLInputElement {
 }
 
 function folderInput(): HTMLInputElement {
-  return screen.getByLabelText("modal.data_folder_export.folder_label");
+  return screen.getByLabelText("modal.export_folder.label");
+}
+
+/** Disabled by itself or by the option's fieldset. */
+function inactive(element: HTMLElement): boolean {
+  return element.matches(":disabled");
 }
 
 /** The option's card wears the attention border: chosen and a step is left. */
@@ -130,9 +136,19 @@ describe("VaultRootDataFolderModal export choice", () => {
     expect(footerButton("modal.data_folder_export.confirm")).not.toBeNull();
   });
 
+  it("shows Export a copy's fields before it is chosen, inactive until then", () => {
+    show(controls());
+    expect(inactive(nameInput())).toBe(true);
+    expect(inactive(folderInput())).toBe(true);
+    expect(inactive(screen.getByRole("button", { name: "modal.export_folder.choose" }))).toBe(true);
+
+    fireEvent.click(screen.getByText(EXPORT_TITLE));
+    expect(inactive(nameInput())).toBe(false);
+    expect(inactive(folderInput())).toBe(false);
+  });
+
   it("opens nothing when Export a copy is chosen, and marks it until a folder is set", () => {
     show(controls());
-    expect(screen.queryByLabelText("modal.data_folder_export.name_label")).toBeNull();
 
     fireEvent.click(screen.getByText(EXPORT_TITLE));
     expect(pickFolder).not.toHaveBeenCalled();
@@ -149,7 +165,7 @@ describe("VaultRootDataFolderModal export choice", () => {
     show(controls());
     fireEvent.click(screen.getByText(EXPORT_TITLE));
 
-    fireEvent.click(screen.getByRole("button", { name: "modal.data_folder_export.choose_folder" }));
+    fireEvent.click(screen.getByRole("button", { name: "modal.export_folder.choose" }));
     await waitFor(() => expect(folderInput().value).toBe("/media/usb"));
 
     fireEvent.change(folderInput(), { target: { value: "Downloads" } });
@@ -189,7 +205,7 @@ describe("VaultRootDataFolderModal export choice", () => {
         onClose: () => {},
         exportControls: {
           ...exportControls,
-          written: { result: { path: "/media/usb/trip copy.zip", size: 1 }, destDir: "/media/usb" },
+          written: { path: "/media/usb/trip copy.zip", size: 1 },
         },
       }),
     );
@@ -236,11 +252,28 @@ describe("VaultRootDataFolderModal export choice", () => {
         onClose: () => {},
         exportControls: {
           ...exportControls,
-          written: { result: { path: "/media/usb/trip copy.zip", size: 1 }, destDir: "/media/usb" },
+          written: { path: "/media/usb/trip copy.zip", size: 1 },
         },
       }),
     );
     expect(nameInput().value).toMatch(DEFAULT_NAME);
+  });
+
+  it("says the zip was saved by name, without its path", () => {
+    show(controls({ written: { path: "/media/usb/trip copy.zip", size: 1 } }));
+    expect(screen.getByText("modal.data_folder_export.done")).toBeDefined();
+    expect(screen.queryByDisplayValue("/media/usb/trip copy.zip")).toBeNull();
+  });
+
+  it("drops the saved line when the window opens and when it closes", () => {
+    const exportControls = controls();
+    const view = show(exportControls);
+    expect(exportControls.clearWritten).toHaveBeenCalledTimes(1);
+
+    view.rerender(
+      createElement(VaultRootDataFolderModal, { open: false, onClose: () => {}, exportControls }),
+    );
+    expect(exportControls.clearWritten).toHaveBeenCalledTimes(2);
   });
 
   it("keeps Export a copy chosen while it runs and offers Stop", () => {

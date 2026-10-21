@@ -223,7 +223,7 @@ encrypted_dir / upriv_plain:
 | RF-15 | **Unique `vault_id`:** normalized slug for `vaults/<vault_id>/`; `display_name` for UI / export file name / `workspace/` | P0 |
 | RF-15b | **Validate `display_name`:** reject `\ / : * ? " < > \|`, controls, empty, trailing space/`.`, reserved Windows stems, length > 128; allow Unicode accents and spaces | P0 |
 | RF-15c | **`vault_id` slug:** normalize from `display_name` (lowercase, spaces→`-`, strip forbidden, optional accent fold); max 64 chars; collision suffix | P0 |
-| RF-15d | **Export:** default `{display_name}.zip` (ordinary zip of encrypted `store/`) or `{display_name}.7z`; if save path invalid, block or minimal sanitize filename only; source `display_name` unchanged | P1 |
+| RF-15d | **Export:** each option (`.zip` of encrypted `store/`, or `.7z`) has its own folder field, chosen before Export and kept for the session; the file is `{display_name}.zip` / `{display_name}.7z` in that folder, with characters a system refuses replaced in the file name only; a file already using that name is never replaced: the export gets the next free number (`{display_name} 2.zip`) and the toast names it; source `display_name` unchanged | P1 |
 | RF-15e | **Import `.zip` / `.7z` → new vault:** stem → `display_name` in the create wizard; an invalid stem is pre-filled with a valid suggestion (`suggestValidDisplayName`), and a name already in use gets ` 2`, ` 3`, … (`suggestedImportDisplayName`); the user can edit it before Create | P0 |
 | RF-15f | **`[vault] order`:** optional non-negative integer in `config.toml`; vault list sorted ascending by `order`, tie-break by `display_name`; editable in vault settings and via drag-and-drop on list | P1 |
 | RF-16 | Create/import picks a free `id` (`-2`, `-3`, …); core refuses a create whose `vaults/<id>/` already exists (`vault_already_exists`) | P0 |
@@ -252,7 +252,7 @@ encrypted_dir / upriv_plain:
 | ID | Requirement | Priority |
 |----|-----------|------------|
 | RF-30 | Session keys in RAM while open; zero on close. Lock does not ask for the password | P0 |
-| RF-31 | Conservative `.7z` export defaults: AES-256, encrypted file names (`encrypt_file_names = true`), non-solid (`solid = false`) | P0 |
+| RF-31 | Conservative `.7z` export defaults: AES-256, encrypted file names (`encrypt_file_names = true`), blocks of up to 64 MiB (`solid = false`; a larger file gets its own block), each block and the header with its own random salt and IV | P0 |
 | RF-31b | Per vault: `.7z` export compression — UI presets **none / low / medium / high** mapping to `archive_mode` + `compression_level` (`encrypt_only`+0 / `compress_encrypt`+1/5/9); **default none (`encrypt_only`)** | P1 |
 | RF-32 | Warning on exit with vault open | P1 |
 | RF-33 | Session keys stay in RAM. Lock flushes with those keys | P0 |
@@ -272,7 +272,7 @@ encrypted_dir / upriv_plain:
 | RF-48 | Recovery UI for dirty close: **Continue** (`resume_store`) unlocks the encrypted vault. A leftover plaintext folder shows a warning, and **Remove the folder** wipes it. Create-from-backup is via Backups / New vault when the store is dead — not a dirty-close peer. No silent overwrite; no fake archive-vs-store compare | P0 |
 | RF-49 | The encrypted file manager folder is **virtual mount only** — forbid plaintext persistence on HD; automated tests | P0 |
 | RF-49b | **Write-through:** every write via mount puts its encrypted chunk in `store/` at once; the index naming it is sealed when the file is flushed, closed, or fsynced, and within about 2 s otherwise. What the user saves never waits for vault close; a crash loses at most writes from the last 2 s that were not flushed | P0 |
-| RF-50 | Export `.7z`: in-process `sevenz-rust2` pack of logical content. Fail with insufficient RAM instead of a plaintext temp | P1 |
+| RF-50 | Export `.7z`: in-process `sevenz-rust2` pack of logical content, streamed from `store/` one chunk at a time, with progress. Fail with insufficient RAM instead of a plaintext temp | P1 |
 | RF-51 | **Minimize swap** of session data buffers (`mlock` / per-OS policies where supported) | P1 |
 | RF-52 | Who can open files while the vault is open is the file manager folder. Off keeps them in Upriv. On is a folder on this computer; apps that can see that path can read the files. No separate copy-out block | P1 |
 | RF-53 | **Lock = close** for both modes → **`closed`** (`store/` at rest). **`upriv_plain`** also wipes workspace. | P0 |

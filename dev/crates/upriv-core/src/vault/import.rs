@@ -382,9 +382,10 @@ mode = "encrypted_dir"
             KdfUnlockPreset::M32,
         )
         .unwrap();
-        let zip_path = _tmp.path().join("Notes.zip");
-        crate::vault::export_store_zip_to_path(&root, "notes", &zip_path, &test_job_id()).unwrap();
-        let zip = crate::host_fs::read(&zip_path).unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let exported =
+            crate::vault::export_store_zip(&root, "notes", out.path(), &test_job_id()).unwrap();
+        let zip = crate::host_fs::read(&exported.path).unwrap();
         open_vault(&root, "other", b"pass-word-ok").unwrap();
         let new_id =
             import_store_zip(&root, sample_config("copy", "Copy"), &zip).expect("file import");

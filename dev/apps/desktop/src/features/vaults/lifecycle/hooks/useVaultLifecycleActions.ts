@@ -12,6 +12,8 @@ import {
   isVaultCredentialChallengeI18nKey,
   LOADING_BUDGET_MS,
   newJobId,
+  vaultExportFilename,
+  vaultExportSavedAs,
   normalizeVaultSettingsConfig,
   plainFolderClassI18nKey,
   storageModeIsPlaintext,
@@ -45,7 +47,6 @@ import {
   useVaultService,
 } from "@/platform/services";
 import { useAppSettingsContext } from "@/features/system/settings";
-import { exportVaultPackage } from "@/features/vaults/list";
 import type { VaultListLifecycleModals } from "@/features/vaults/list";
 import {
   closeIntentAfterUnsavedResolved,
@@ -116,11 +117,8 @@ export function useVaultLifecycleActions({
   const closingHold = useClosingDisplayHold();
   const pipelineBackgroundRef = useRef(false);
   const exportBusyGenRef = useRef(0);
-  /**
-   * The export in flight: aborted on timeout so a save dialog left open never
-   * starts it, and its job told to stop so core removes the partial file.
-   */
-  const exportRunRef = useRef<{ abort: AbortController; job: string } | null>(null);
+  /** The job of the export in flight, told to stop on timeout so core removes the partial file. */
+  const exportJobRef = useRef<string | null>(null);
   const vaultsRef = useRef(vaults);
   vaultsRef.current = vaults;
   const entriesRef = useRef(entries);
@@ -967,37 +965,38 @@ export function useVaultLifecycleActions({
     ],
   );
 
+  /** Write the export into the folder chosen in its window, named after the vault. */
   const handleConfirmExportVault = useCallback(
-    (request: VaultExportRequest) => {
+    (request: VaultExportRequest, destDir: string) => {
       if (!exportVault || exportJobVaultId) return;
       const vault = exportVault;
       const gen = ++exportBusyGenRef.current;
-      exportRunRef.current?.abort.abort();
-      const run = { abort: new AbortController(), job: newJobId() };
-      exportRunRef.current = run;
-      setExportJob({ vaultId: vault.id, startedAt: Date.now() });
+      const job = newJobId();
+      exportJobRef.current = job;
+      setExportJob({ id: job, vaultId: vault.id, startedAt: Date.now() });
       setExportSubmitting(true);
-      void exportVaultPackage(
-        vault,
-        {
-          exportToPath: (row, exportRequest, destPath, job) =>
-            vaultService.exportToPath(row, exportRequest, destPath, job),
-        },
-        request,
-        run.job,
-        run.abort.signal,
-      )
-        .then((outcome) => {
+      void vaultService
+        .exportToFolder(vault, request, destDir, job)
+        .then((written) => {
           if (gen !== exportBusyGenRef.current) return;
-          if (outcome === "cancelled") return;
-          showToast(t("vault.export.success", { name: vault.displayName }));
+          // A file already used the name: core saved this one with a number.
+          const savedAs = vaultExportSavedAs(vault.displayName, request.format, written.path);
+          showToast(
+            savedAs
+              ? t("vault.export.success_numbered", {
+                  filename: vaultExportFilename(vault.displayName, request.format),
+                  name: vault.displayName,
+                  saved: savedAs,
+                })
+              : t("vault.export.success", { name: vault.displayName }),
+          );
           setExportVaultId(null);
         })
         .catch((error) => {
           if (gen !== exportBusyGenRef.current) return;
           if (isRpcTimeout(error)) {
             // The call gave up before the budget did; core still writes the file.
-            void jobs.cancel(run.job, "timeout").catch(() => {
+            void jobs.cancel(job, "timeout").catch(() => {
               /* The export result is ignored either way. */
             });
           }
@@ -1005,7 +1004,7 @@ export function useVaultLifecycleActions({
         })
         .finally(() => {
           if (gen !== exportBusyGenRef.current) return;
-          exportRunRef.current = null;
+          exportJobRef.current = null;
           setExportSubmitting(false);
           setExportJob(null);
         });
@@ -1026,11 +1025,10 @@ export function useVaultLifecycleActions({
 
   const handleExportTimeout = useCallback(() => {
     exportBusyGenRef.current += 1;
-    const run = exportRunRef.current;
-    exportRunRef.current = null;
-    if (run) {
-      run.abort.abort();
-      void jobs.cancel(run.job, "timeout").catch(() => {
+    const job = exportJobRef.current;
+    exportJobRef.current = null;
+    if (job) {
+      void jobs.cancel(job, "timeout").catch(() => {
         /* The export result is ignored either way. */
       });
     }

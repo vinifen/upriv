@@ -45,6 +45,21 @@ function needsStep(value: string): boolean {
   return radio(value).closest("label")?.className.includes("vault-status-recovery") ?? false;
 }
 
+/** The folder field inside an option's card. */
+function folderField(value: string): HTMLInputElement {
+  const field = radio(value)
+    .closest("label")
+    ?.querySelector<HTMLInputElement>('input[type="text"]');
+  if (!field) throw new Error(`no folder field in ${value}`);
+  return field;
+}
+
+function pickButton(value: string): HTMLButtonElement {
+  const button = radio(value).closest("label")?.querySelector("button");
+  if (!button) throw new Error(`no pick button in ${value}`);
+  return button;
+}
+
 beforeAll(() => {
   window.matchMedia = ((query: string) => ({
     matches: false,
@@ -87,27 +102,29 @@ describe("PlainPlaceModal", () => {
     expect(needsStep("custom")).toBe(true);
     expect(continueButton).toHaveProperty("disabled", true);
 
-    fireEvent.change(screen.getByPlaceholderText("modal.folder_field.placeholder"), {
-      target: { value: " /media/files " },
-    });
+    fireEvent.change(folderField("custom"), { target: { value: " /media/files " } });
     expect(needsStep("custom")).toBe(false);
     fireEvent.click(continueButton);
     expect(onContinue).toHaveBeenCalledWith("custom", "/media/files");
+  });
+
+  it("shows every option's folder, inactive until that option is chosen", () => {
+    show(true);
+    expect(folderField("custom").matches(":disabled")).toBe(true);
+    expect(folderField("vault_only").matches(":disabled")).toBe(true);
+    expect(pickButton("vault_only").matches(":disabled")).toBe(true);
+
+    fireEvent.click(radio("vault_only"));
+    expect(folderField("vault_only").matches(":disabled")).toBe(false);
+    expect(folderField("custom").matches(":disabled")).toBe(true);
   });
 
   it("still opens the folder picker from its button", async () => {
     pickFolder.mockResolvedValueOnce("/media/picked");
     show(true);
     fireEvent.click(radio("vault_only"));
-    fireEvent.click(
-      screen.getByRole("button", { name: "modal.app_settings.action.pick_workspace_folder" }),
-    );
-    await waitFor(() =>
-      expect(screen.getByPlaceholderText("modal.folder_field.placeholder")).toHaveProperty(
-        "value",
-        "/media/picked",
-      ),
-    );
+    fireEvent.click(pickButton("vault_only"));
+    await waitFor(() => expect(folderField("vault_only").value).toBe("/media/picked"));
     expect(needsStep("vault_only")).toBe(false);
   });
 });

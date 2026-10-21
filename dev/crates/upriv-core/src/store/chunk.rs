@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
+use zeroize::Zeroizing;
 
 use super::aead::{
     decrypt_xchacha, encrypt_xchacha, random_bytes, CONTENT_KEY_LEN, XCHACHA_NONCE_LEN,
@@ -608,6 +609,51 @@ pub fn write_logical_file(
     Ok((previous.map(|(retired, _)| retired), mutation))
 }
 
+/// Decrypt the file `node` one chunk at a time, in order, and hand each chunk
+/// to `sink`. A chunk reaches `sink` only after its tag and AAD check out, and
+/// its buffer is wiped when `sink` drops it. Each chunk has the length the
+/// index records for it, so the chunks add up to the file size.
+pub(crate) fn read_file_chunks(
+    store_dir: &Path,
+    header: &VaultHeader,
+    content_key: &[u8; CONTENT_KEY_LEN],
+    node: &VaultNode,
+    mut sink: impl FnMut(Zeroizing<Vec<u8>>) -> Result<()>,
+) -> Result<()> {
+    let directory = || UprivError::VaultStoreInvalid {
+        path: PathBuf::from(&node.path),
+        detail: "logical path is a directory".into(),
+    };
+    let (file_id, size, chunk_versions) = node.as_file().ok_or_else(directory)?;
+    let chunk_offsets = node.chunk_offsets().ok_or_else(directory)?;
+    parse_file_id(file_id)?;
+    let chunk_size = header.chunk_size;
+    let count = chunk_count(size, chunk_size);
+    // The sealed index is the authority on length. A list that disagrees with
+    // the recorded size fails before any blob is opened.
+    require_chunk_lists(&node.path, count, chunk_versions, chunk_offsets)?;
+    if count == 0 {
+        return Ok(());
+    }
+    let mut blob = open_blob_read(store_dir, file_id)?;
+    for chunk_index in 0..count {
+        let plain = decrypt_one_chunk(
+            &mut blob,
+            header,
+            content_key,
+            SealedChunk {
+                file_id,
+                index: chunk_index,
+                plain_len: chunk_plain_len(size, chunk_index, chunk_size),
+                version: &chunk_versions[chunk_index as usize],
+                offset: chunk_offsets[chunk_index as usize],
+            },
+        )?;
+        sink(Zeroizing::new(plain))?;
+    }
+    Ok(())
+}
+
 /// Decrypt one logical file into RAM. Tag / AAD failure returns no plaintext.
 pub fn read_logical_file(
     store_dir: impl AsRef<Path>,
@@ -616,59 +662,15 @@ pub fn read_logical_file(
     index: &VaultIndex,
     logical_path: &str,
 ) -> Result<Vec<u8>> {
-    let store_dir = store_dir.as_ref();
     let node = index
         .find(logical_path)
         .ok_or_else(|| UprivError::VaultPathNotFound(logical_path.into()))?;
-    let (file_id, size, chunk_versions) =
-        node.as_file()
-            .ok_or_else(|| UprivError::VaultStoreInvalid {
-                path: PathBuf::from(logical_path),
-                detail: "logical path is a directory".into(),
-            })?;
-    let chunk_offsets = node
-        .chunk_offsets()
-        .ok_or_else(|| UprivError::VaultStoreInvalid {
-            path: PathBuf::from(logical_path),
-            detail: "logical path is a directory".into(),
-        })?;
-    let _ = Uuid::parse_str(file_id).map_err(|_| UprivError::VaultStoreInvalid {
-        path: PathBuf::from(DATA_DIR_NAME),
-        detail: "file_id is not a UUID".into(),
+    let size = node.as_file().map_or(0, |(_, size, _)| size);
+    let mut out = Vec::with_capacity(usize::try_from(size).unwrap_or(0));
+    read_file_chunks(store_dir.as_ref(), header, content_key, node, |chunk| {
+        out.extend_from_slice(&chunk);
+        Ok(())
     })?;
-    let chunk_size = header.chunk_size;
-    let count = chunk_count(size, chunk_size);
-    // The sealed index is the authority on length. A list that disagrees with
-    // the recorded size fails before any blob is opened.
-    require_chunk_lists(logical_path, count, chunk_versions, chunk_offsets)?;
-    let mut out = Vec::with_capacity(size as usize);
-    let mut blob = if count == 0 {
-        None
-    } else {
-        Some(open_blob_read(store_dir, file_id)?)
-    };
-    for chunk_index in 0..count {
-        let expected_len = chunk_plain_len(size, chunk_index, chunk_size);
-        let plain = decrypt_one_chunk(
-            blob.as_mut().expect("opened for a non-empty file"),
-            header,
-            content_key,
-            SealedChunk {
-                file_id,
-                index: chunk_index,
-                plain_len: expected_len,
-                version: &chunk_versions[chunk_index as usize],
-                offset: chunk_offsets[chunk_index as usize],
-            },
-        )?;
-        out.extend_from_slice(&plain);
-    }
-    if out.len() as u64 != size {
-        return Err(UprivError::VaultStoreInvalid {
-            path: PathBuf::from(logical_path),
-            detail: "reassembled file size mismatch".into(),
-        });
-    }
     Ok(out)
 }
 

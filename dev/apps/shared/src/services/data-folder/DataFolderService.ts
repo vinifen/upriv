@@ -9,11 +9,4 @@ export interface DataFolderService {
    * and with `data_folder_export_name_taken` when that zip is already there.
    */
   exportTo(destDir: string, name: string, job: string): Promise<VaultPathWriteResult>;
-  /**
-   * A picked folder the window no longer holds: replaced by another pick, or
-   * the window closed. Android drops the access the folder picker took; a
-   * folder an export is still writing into is released when that export ends.
-   * An export never releases its folder by itself, so it stays for the next one.
-   */
-  releaseDestination?(destDir: string): void;
 }

@@ -3,7 +3,13 @@ import { RpcError } from "../../core-rpc/errors";
 import { errorDisplayI18nKey } from "../../errors";
 import { JOB_ERROR_CODES, isJobCancelled } from "../errors";
 import { newJobId } from "../jobId";
-import { jobProgressFinishing, jobProgressPercent, parseJobStatus } from "../progress";
+import { VAULT_EXPORT_PROGRESS_COPY } from "../../vault-list/export";
+import {
+  jobProgressFinishing,
+  jobProgressLine,
+  jobProgressPercent,
+  parseJobStatus,
+} from "../progress";
 
 /** Same rule as core `is_valid_job_id`. */
 const CORE_JOB_ID = /^[A-Za-z0-9_-]{1,64}$/;
@@ -54,6 +60,27 @@ describe("jobProgressFinishing", () => {
     expect(jobProgressFinishing({ bytesDone: 2, bytesTotal: 3 })).toBe(false);
     expect(jobProgressFinishing({ bytesDone: 0, bytesTotal: 0 })).toBe(false);
     expect(jobProgressFinishing(null)).toBe(false);
+  });
+});
+
+describe("jobProgressLine", () => {
+  const copy = VAULT_EXPORT_PROGRESS_COPY;
+
+  it("measures until core reports a total", () => {
+    expect(jobProgressLine(null, copy)).toEqual({ key: copy.measuring });
+    expect(jobProgressLine({ bytesDone: 0, bytesTotal: 0 }, copy)).toEqual({
+      key: copy.measuring,
+    });
+  });
+
+  it("shows the bytes done of the total, then finishing", () => {
+    expect(jobProgressLine({ bytesDone: 512, bytesTotal: 2048 }, copy)).toEqual({
+      key: copy.copying,
+      params: { done: "512 B", total: "2.0 KB" },
+    });
+    expect(jobProgressLine({ bytesDone: 2048, bytesTotal: 2048 }, copy)).toEqual({
+      key: copy.finishing,
+    });
   });
 });
 

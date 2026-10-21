@@ -5,6 +5,7 @@ export {
   useBackupService,
   useCreateVaultService,
   useDataFolderService,
+  useExportFolderGrants,
   useJobService,
   useLogService,
   useServices,

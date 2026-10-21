@@ -971,7 +971,10 @@ interface PolicyRadioOptionProps {
    * (e.g. vault-root incomplete policy). Overrides the accent border when checked.
    */
   attention?: boolean;
-  /** Extra controls under the description — always visible; inactive until this option is selected. */
+  /**
+   * The option's own controls under the description. Pass them whether or not
+   * the option is chosen: they always show, disabled until it is.
+   */
   footer?: ReactNode;
   /** Click on an already-selected card (not its footer controls). */
   onCardPress?: () => void;
@@ -1070,15 +1073,19 @@ export function PolicyRadioOption({
         </span>
       </span>
       {footer ? (
-        <div
-          className={["mt-3 pl-6 sm:pl-7", checked ? "" : "pointer-events-none opacity-60"]
+        // Always shown. Until the option is chosen every control in it is
+        // disabled (the fieldset reaches keyboard focus too), and a click on
+        // it falls through to the card, which chooses the option.
+        <fieldset
+          disabled={!checked}
+          className={["mt-3 min-w-0 pl-6 sm:pl-7", checked ? "" : "pointer-events-none opacity-60"]
             .filter(Boolean)
             .join(" ")}
           onMouseDown={(event) => event.stopPropagation()}
           onClick={(event) => event.stopPropagation()}
         >
           {footer}
-        </div>
+        </fieldset>
       ) : null}
     </label>
   );

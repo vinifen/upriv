@@ -307,6 +307,8 @@ export function VaultListScreen() {
     handleConfirmExportVault,
     handleRowExport,
     handleExportTimeout,
+    exportFolders,
+    exportProgress,
     rowDensity,
     rowPaddingY,
     rowPaddingX,
@@ -1367,6 +1369,8 @@ export function VaultListScreen() {
         open={exportVault !== null}
         submitting={exportSubmitting}
         startedAt={exportJob?.startedAt ?? null}
+        progress={exportProgress}
+        folders={exportFolders}
         onClose={() => {
           setExportVault(null);
         }}

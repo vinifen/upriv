@@ -34,10 +34,12 @@ export const LOADING_BUDGET_MS = {
    */
   vaultPipeline: 600_000,
   /**
-   * Export `{display_name}.zip` of `store/` or portable `.7z` (flush + pack).
-   * Same family as `vaultRewrap`. Keep invoke in sync when the export RPC lands.
+   * Export `{display_name}.zip` of `store/` or portable `.7z` (`vault_export`).
+   * A large vault packed with LZMA2, or written from a phone, can run long, so
+   * it shares the `dataFolderExport` ceiling; the Export window shows progress
+   * from `job_status`.
    */
-  vaultExport: 600_000,
+  vaultExport: 3_600_000,
   /**
    * Backups → Back up now (`backup_save`): a zip of the closed vault's `store/`
    * into `backups/saves/`. Same work as a store-zip export.
@@ -45,8 +47,7 @@ export const LOADING_BUDGET_MS = {
   vaultBackupSave: 600_000,
   /**
    * Export data folder (`data_folder_export`): one zip of the whole `.upriv`,
-   * every vault and backup included. Often far larger than one vault, so it
-   * gets a longer ceiling than `vaultExport`.
+   * every vault and backup included. Progress from `job_status`.
    */
   dataFolderExport: 3_600_000,
   /**

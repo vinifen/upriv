@@ -5,8 +5,37 @@ import {
   vaultCanExport,
   vaultExportFilename,
   vaultExportMenuShown,
+  vaultExportPending,
+  vaultExportSavedAs,
 } from "..";
 import { vaultListItemFixture } from "./fixtures";
+
+describe("vaultExportPending", () => {
+  it("asks for the folder the file goes into", () => {
+    expect(vaultExportPending("store_zip", null, false)).toBe("folder");
+    expect(vaultExportPending("store_zip", "  ", false)).toBe("folder");
+    expect(vaultExportPending("store_zip", "Downloads", false)).toBe("folder_not_absolute");
+    expect(vaultExportPending("store_zip", " /media/usb ", false)).toBeNull();
+    expect(vaultExportPending("store_zip", "E:\\Copies", false)).toBeNull();
+  });
+
+  it("takes a picked phone folder", () => {
+    expect(
+      vaultExportPending(
+        "store_zip",
+        "content://com.android.externalstorage.documents/tree/primary%3ADownload",
+        false,
+      ),
+    ).toBeNull();
+  });
+
+  it("asks a .7z for its checked password before its folder", () => {
+    expect(vaultExportPending("seven_zip", null, false)).toBe("password");
+    expect(vaultExportPending("seven_zip", "/media/usb", false)).toBe("password");
+    expect(vaultExportPending("seven_zip", null, true)).toBe("folder");
+    expect(vaultExportPending("seven_zip", "/media/usb", true)).toBeNull();
+  });
+});
 
 describe("vaultExportFilename", () => {
   it("uses the display name, not a slug", () => {
@@ -20,6 +49,28 @@ describe("vaultExportFilename", () => {
 
   it("collapses extra spaces in the display name", () => {
     expect(vaultExportFilename("My    notes", "store_zip")).toBe("My notes.zip");
+  });
+
+  it("adds the number core gives a taken name", () => {
+    expect(vaultExportFilename("My notes", "store_zip", 1)).toBe("My notes.zip");
+    expect(vaultExportFilename("My notes", "store_zip", 2)).toBe("My notes 2.zip");
+    expect(vaultExportFilename("My notes", "seven_zip", 12)).toBe("My notes 12.7z");
+  });
+});
+
+describe("vaultExportSavedAs", () => {
+  it("is null while the export kept its own name", () => {
+    expect(vaultExportSavedAs("My notes", "store_zip", "/media/usb/My notes.zip")).toBeNull();
+    expect(vaultExportSavedAs("My notes", "seven_zip", "E:\\Copies\\My notes.7z")).toBeNull();
+  });
+
+  it("names the numbered file core saved instead", () => {
+    expect(vaultExportSavedAs("My notes", "store_zip", "/media/usb/My notes 2.zip")).toBe(
+      "My notes 2.zip",
+    );
+    expect(vaultExportSavedAs("My notes", "seven_zip", "/upriv-saf-export/My notes 3.7z")).toBe(
+      "My notes 3.7z",
+    );
   });
 
   it("replaces illegal path characters instead of dropping the name", () => {

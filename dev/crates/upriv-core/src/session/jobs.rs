@@ -8,7 +8,7 @@
 //! when that removal fails.
 
 use std::collections::{HashMap, VecDeque};
-use std::io::{Seek, SeekFrom, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 
@@ -141,6 +141,11 @@ impl Job {
     pub(crate) fn writer<W: Write>(&self, inner: W) -> JobWriter<'_, W> {
         JobWriter { inner, job: self }
     }
+
+    /// `inner`, counting each byte read as done.
+    pub(crate) fn progress_reader<R: Read>(&self, inner: R) -> ProgressReader<'_, R> {
+        ProgressReader { inner, job: self }
+    }
 }
 
 impl Drop for Job {
@@ -183,6 +188,20 @@ impl<W: Write> Write for JobWriter<'_, W> {
 impl<W: Seek> Seek for JobWriter<'_, W> {
     fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
         self.inner.seek(pos)
+    }
+}
+
+/// Moves its job's progress by the bytes read through it.
+pub(crate) struct ProgressReader<'a, R> {
+    inner: R,
+    job: &'a Job,
+}
+
+impl<R: Read> Read for ProgressReader<'_, R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let read = self.inner.read(buf)?;
+        self.job.advance(read as u64);
+        Ok(read)
     }
 }
 
@@ -349,6 +368,25 @@ mod tests {
         let failed: Result<()> = Err(UprivError::VaultBackupFailed);
         assert!(matches!(job.settle(failed), Err(UprivError::JobCancelled)));
         assert!(job.settle(Ok(())).is_ok());
+    }
+
+    #[test]
+    fn the_progress_reader_counts_what_it_reads() {
+        let id = test_job_id();
+        let job = Job::start(&id).unwrap();
+        job.set_total(11);
+        let mut read = Vec::new();
+        job.progress_reader(&b"hello world"[..])
+            .read_to_end(&mut read)
+            .unwrap();
+        assert_eq!(read, b"hello world");
+        assert_eq!(
+            job_status(&id),
+            Some(JobStatus {
+                bytes_done: 11,
+                bytes_total: 11
+            })
+        );
     }
 
     #[test]

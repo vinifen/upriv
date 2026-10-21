@@ -4,22 +4,10 @@ import { errorDisplayI18nKey } from "../../errors";
 import { resolveVaultListStatus, type VaultRow } from "../../vault/types";
 import { dataFolderCanExport, dataFolderExportPending } from "../canExport";
 import { DATA_FOLDER_EXPORT_ERROR_CODES } from "../errors";
-import { dataFolderZipName } from "../types";
 
 function row(id: string, session: VaultRow["session"] = null): VaultRow {
   return { id, displayName: id, session, storageMode: "encrypted_dir" };
 }
-
-describe("dataFolderZipName", () => {
-  it("takes the last part of a Linux or Windows path", () => {
-    expect(dataFolderZipName("/media/usb/upriv-2026-10-19-101500.zip")).toBe(
-      "upriv-2026-10-19-101500.zip",
-    );
-    expect(dataFolderZipName("E:\\Backups\\upriv-2026-10-19-101500.zip")).toBe(
-      "upriv-2026-10-19-101500.zip",
-    );
-  });
-});
 
 describe("dataFolderCanExport", () => {
   it("allows closed vaults, vaults in recovery, and an empty data folder", () => {

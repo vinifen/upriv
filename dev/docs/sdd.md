@@ -297,8 +297,8 @@ Related: PRD **RF-54**.
 ### 2.6 `.7z` export
 
 - Close flushes `store/`. It does not pack a `.7z`.
-- Portable `.7z` export is a separate action. `upriv-core` packs it in process with `sevenz-rust2` (logical content in RAM, ciphertext only on disk). No `7zz` binary, no `-p` on a command line, no plaintext temp directory.
-- If RAM is not enough for that pack, return `InsufficientRam` and do not spill a decrypted tree.
+- Portable `.7z` export is a separate action. `upriv-core` packs it in process with `sevenz-rust2` (logical content in RAM, streamed from `store/` one chunk at a time; ciphertext only on disk). No `7zz` binary, no `-p` on a command line, no plaintext temp directory. Detail in §5.1.
+- If RAM is not enough for that pack, return `InsufficientRamExport` and do not spill a decrypted tree.
 - Never use the file manager folder as export staging.
 
 Related: PRD **RF-45**, **RF-50**.
@@ -554,7 +554,7 @@ vaults/<vault_id>/              # vault_id = normalized slug (filesystem-safe)
 
 **`vault_id`:** always normalized slug (§3.2 table); generated from `display_name`; max 64 chars; collision suffix `-2`, …
 
-**Export** (save outside vault): default `{display_name}.zip` (zip of encrypted `store/`) or `{display_name}.7z`; if destination filename invalid, block or offer minimal sanitize (`-` replacement); **do not** change source vault `display_name`.
+**Export** (save outside vault): `{display_name}.zip` (zip of encrypted `store/`) or `{display_name}.7z`, written into the folder chosen in that export option; characters a system refuses become `_` in the file name; a file already using the name is never replaced: the export takes the next free number (`{display_name} 2.zip`); **do not** change source vault `display_name`.
 
 **Import** (external `.zip` of `store/` or `.7z` → new vault): stem → proposed `display_name`; if invalid, dialog with `sanitize_minimal(stem)` pre-fill; user confirms. Name rules: PRD RF-15b.
 
@@ -587,7 +587,7 @@ idle_minutes = 15
 encrypt_file_names = true
 archive_mode = "compress_encrypt"   # compress_encrypt | encrypt_only
 compression_level = 5     # ignored if archive_mode = encrypt_only
-solid = false
+solid = false             # blocks of up to 64 MiB; true = one block
 ```
 
 **`archive_mode` / `compression_level`** apply when a `.7z` is exported. **Default:** `encrypt_only` + level ignored (UI preset **none**).
@@ -859,7 +859,11 @@ Exposed to desktop via `upriv-daemon` stdio JSON-RPC and to mobile via the `upri
 
 - Pack and unpack with the `sevenz-rust2` crate inside `upriv-core`. Do not bundle or spawn `7zz`.
 - Close does not create a `.7z`. Export is a separate action.
-- Members are decoded in RAM and written into `store/` through the logical file API. Never extract a decrypted tree under `workspace/` or OS temp.
+- Export streams: a worker thread decrypts the files from `store/` in archive order, one 256 KiB chunk at a time, into a queue of eight chunks that the encoder reads. Plaintext in RAM does not grow with the size of a file. The archive reaches its file through a 1 MiB buffer.
+- Files are grouped into 7z blocks. A block closes before the file that would take it past 64 MiB, so a larger file gets a block of its own; with several LZMA2 workers a block also holds at least one chunk (the LZMA2 window) per worker. `solid = true` puts every file in one block. Each block, and the encrypted header, gets its own random AES salt and IV. 7-Zip derives the AES key (2^19 SHA-256 rounds) once per block.
+- The RAM check runs before the vault is decrypted: the decrypt queue, the write buffer, the archive header (a fixed part per member plus its name), and the coder. A copy-only archive has no coder cost. One LZMA2 worker streams with one encoder (window, match finder, coder state, as `lzma-rust2` 0.16 allocates them). Several workers each keep an encoder and share a queue that takes a whole block of plaintext ahead of them, so the largest block counts twice. LZMA2 gets as many workers as fit in free RAM (at most 8), and one when no more fit; export fails with `InsufficientRamExport` when even one does not.
+- Export progress counts the logical bytes the encoder has taken (`job_status`).
+- Members are decoded in RAM and written into `store/` through the logical file API. The archive file is read through a 1 MiB buffer. Never extract a decrypted tree under `workspace/` or OS temp.
 - One outer folder (sanitized display name). Vault files sit directly under it, including a user `config.toml`. No settings sidecar. The seed file and `.upriv-workspace.json` are skipped.
 - The same import option examines a `.zip`. `store/header/vault.header` is the store-zip copy (`README.md` and `config.toml` sit beside `store/` and are not copied into the new vault). Any other `.zip` streams ordinary documents into a new `store/`. A symlink inside a `.zip` or a folder is not stored and not followed. A symlink chosen as the source path is refused. The rest of the import continues. Files are sealed in waves, so a crash keeps the last finished wave in `store/`.
 
@@ -876,17 +880,19 @@ Do not shell out to 7-Zip. These commands are not the implementation (they put t
 ### 5.3 Password
 
 - The archive password stays in process memory and is passed to `sevenz-rust2`. It is not an argument of a child process.
+- `sevenz-rust2` keeps its own copy of the password for each block, and `sevenz-rust2` and `lzma-rust2` keep their own working buffers of plaintext. The crates free them without a wipe. Upriv's decrypted chunks are wiped when the encoder has read them.
 - A wrong password fails the probe before a new vault is kept.
 
-### 5.4 Fixed parameters (v1)
+### 5.4 Parameters
 
-Do not expose to user in v1; read from `vaults/<id>/config.toml` with defaults:
+`[seven_zip]` in `vaults/<id>/config.toml`, used by the next `.7z` export:
 
-| Field | Default |
-|-------|---------|
-| `encrypt_file_names` | `true` |
-| `archive_mode` | **`encrypt_only`** |
-| `compression_level` | `5` (only with `compress_encrypt`) |
+| Field | Default | Set by |
+|-------|---------|--------|
+| `encrypt_file_names` | `true` | Vault settings and the Export window |
+| `archive_mode` | **`encrypt_only`** | Compression preset (`none` = `encrypt_only`) |
+| `compression_level` | `0` (`low` / `medium` / `high` = 1 / 5 / 9 with `compress_encrypt`) | Compression preset |
+| `solid` | `false` (blocks of up to 64 MiB) | Not shown; `true` = one block |
 
 ---
 
@@ -1150,7 +1156,9 @@ ui/
 | Mobile only | `app_settings_parse_toml`, `vault_root_remember_custom`, `vault_ingest_open`, `vault_ingest_directory`, `vault_discard_import` |
 | Electron main | `app_exit`, `pick_directory`, `pick_file`, `pick_save_file`, `reveal_in_file_manager`, `reveal_os_path`, `open_in_terminal`, `winfsp_status`, `winfsp_install`, `fuse_status`, `fuse_install`; main sends `app_shutdown` to the daemon itself |
 
-**Jobs.** `vault_export` (always to a `destPath`), `backup_save`, and `data_folder_export` each carry a `job` id the UI makes with `newJobId`. `job_status` reports the bytes that job has done; `job_cancel` stops it, and a stop for a job still waiting for its lane is kept, so it ends as soon as it starts. A stopped job fails with `job_cancelled` and leaves no file: the export's `.upriv-part`, the save's `.partial`, or the data folder's `.zip.upriv-part` is removed. When the UI gives up on one of these, by its budget or by the call's own `rpc_timeout` (whichever comes first), it sends `job_cancel` for it, so core does not keep holding the vault. `app_shutdown` stops every running job, and any that starts after it. The log records each stop (`job_cancel` with `by=user|timeout`, `jobs_stopped_on_quit`), how the job ended (`vault_export_cancelled|failed`, `vault_backup_save_cancelled|failed`, `data_folder_export_cancelled|failed`, with the failure reason and no path), and the removal of its unfinished file (`partial_removed`, or `partial_remove_failed` when the file stays).
+**Vault export.** `vault_export` takes the folder chosen in the export option (`destDir`) and writes `{display_name}.zip` or `.7z` there (`vault_export_file_stem`). It never replaces a file, or a partial one, already using that name: it takes the next free number (`{display_name} 2.zip`, `{display_name} 3.zip`, …, also when a file arrives under the name while it writes) and logs `vault_export_numbered` (`format`, `id`, `number`; no name or path). It refuses a folder inside a `.upriv` (`export_destination_reserved`). The answer is the written `path` and `size`; the UI names a numbered file in its toast (`vaultExportSavedAs`).
+
+**Jobs.** `vault_export`, `backup_save`, and `data_folder_export` each carry a `job` id the UI makes with `newJobId`. `job_status` reports the bytes that job has done; `job_cancel` stops it, and a stop for a job still waiting for its lane is kept, so it ends as soon as it starts. A stopped job fails with `job_cancelled` and leaves no file: the export's `.upriv-part`, the save's `.partial`, or the data folder's `.zip.upriv-part` is removed. When the UI gives up on one of these, by its budget or by the call's own `rpc_timeout` (whichever comes first), it sends `job_cancel` for it, so core does not keep holding the vault. `app_shutdown` stops every running job, and any that starts after it. The log records each stop (`job_cancel` with `by=user|timeout`, `jobs_stopped_on_quit`), how the job ended (`vault_export_cancelled|failed`, `vault_backup_save_cancelled|failed`, `data_folder_export_cancelled|failed`, with the failure reason and no path), and the removal of its unfinished file (`partial_removed`, or `partial_remove_failed` when the file stays).
 
 ### 8.4 Launch
 
@@ -1214,7 +1222,7 @@ Upriv (installed)
 
 **Unplugged drive:** a removed volume answers every lookup as a miss. When an operation misses and the tree's own root document no longer answers, `SafFs` reports `unavailable`. `host_fs` maps that to `NotConnected` with a bridge-only marker, and RPC returns `vault_root_unreachable` (not `vault_root_not_found`). `mountSafRoot` throws `saf_unreachable` before probing. The grant, the active-URI pref, and `.upriv-root` are kept: settings load from `.upriv-root` (custom_root, not on disk). The Gate opens Setup with Custom still selected, shows the error in that screen and in a toast above it, and keeps the grant. Opening the app again with the drive connected continues straight in while that Custom choice is unchanged. Switching to the Documents default keeps that custom grant on the `custom=` line of `.upriv-root` and still shows the folder on the Custom option. If checking that folder finds the volume gone, inspect reports `unreachable` (the reconnect copy, not a writable-location failure) and Retry tries again. A later vault list while that grant is unmounted returns `vault_root_unreachable`, not `vault_root_not_found`. Choosing a different custom folder replaces `custom=` and releases the previous custom grant.
 
-**Export data folder:** the zip is written straight into a second folder the user picks with `ACTION_OPEN_DOCUMENT_TREE`. `mountSafExport` binds `SafExportFs` (the same bridge as `SafFs`, without the Documents → `Upriv` step) and Rust addresses that tree as `/upriv-saf-export`, beside the data folder mount. `host_fs` keeps the two trees apart: a rename between them is refused. Core refuses a picked tree whose address has a `.upriv` segment. The mobile adapter keeps the tree mounted until `job_status` reports that export's job ended, so a timed-out call still lets core remove its `.upriv-part`, then unmounts it. The picker's grant (never the data folder's) belongs to the Data folder window, which keeps the folder for the next export, also after the window closes: it is released when the pick is replaced or the vault list goes away, and when that happens during an export, once the export ends. An export folder that stops answering fails the export as `io_error`; only the data folder answers `vault_root_unreachable`.
+**Export folders:** Export data folder and the vault export write straight into a folder the user picks with `ACTION_OPEN_DOCUMENT_TREE`. `mountSafExport` binds `SafExportFs` (the same bridge as `SafFs`, without the Documents → `Upriv` step) and Rust addresses that tree as `/upriv-saf-export`, beside the data folder mount. `host_fs` keeps the two trees apart: a rename between them is refused. Core refuses a picked tree whose address has a `.upriv` segment. One mobile adapter (`SafExportMount`) serves both exports, one at a time: it keeps the tree mounted until `job_status` reports that export's job ended, so a timed-out call still lets core remove its `.upriv-part`, then unmounts it. Each field that keeps a picked folder (Export a copy, the vault `.zip`, the vault `.7z`) holds its grant (`ExportFolderGrants`, never the data folder's), so the folder stays for the next export, also after its window closes. The grant is released once no field holds that folder (another pick replaced it, or the vault list went away) and no export is writing there. An export folder that stops answering fails the export as `io_error`; only the data folder answers `vault_root_unreachable`.
 
 **Who reports `unreachable`:** only Android inspect, when the persistable grant is held and the volume does not answer. The shared disk status and the reconnect copy are not Android-only. iOS security-scoped bookmarks (§9.11) return the same inspect status when the bookmark is still valid and the volume is gone. Do not add a second status. Desktop location, Repair, and Recovery already show that copy if inspect returns `unreachable`. Desktop Rust inspect does not return it. A missing filesystem path is not found. Resolve treats that as an invalid alias, and the Gate opens alias recovery. A deleted folder looks the same, so desktop must not map every missing path to `unreachable`.
 

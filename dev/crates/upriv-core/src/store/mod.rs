@@ -22,8 +22,8 @@ use crate::error::{Result, UprivError};
 #[cfg(test)]
 pub(crate) use chunk::blob_path;
 pub(crate) use chunk::{
-    blobs_need_pack, mutation_blob_ids, pack_blob_waste, record_imported_file, remove_file_chunks,
-    seal_import_chunk, BlobPackMode, ChunkBlobMutation, ImportBlob,
+    blobs_need_pack, mutation_blob_ids, pack_blob_waste, read_file_chunks, record_imported_file,
+    remove_file_chunks, seal_import_chunk, BlobPackMode, ChunkBlobMutation, ImportBlob,
 };
 pub use chunk::{
     read_logical_file, read_logical_range, seed_plaintext, truncate_logical_file,

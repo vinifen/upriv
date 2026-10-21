@@ -197,10 +197,10 @@ pub enum UprivError {
     #[error("data folder export needs {needed} bytes, {available} free")]
     DataFolderExportSpaceShort { needed: u64, available: u64 },
 
-    /// The data-folder zip cannot go inside a `.upriv` folder: the copy would
-    /// contain itself, or write into another data folder.
-    #[error("data folder export cannot write inside .upriv: {0}")]
-    DataFolderExportDestinationReserved(PathBuf),
+    /// An export cannot go inside a `.upriv` folder: a data-folder copy would
+    /// contain itself, and any export would write into a data folder.
+    #[error("an export cannot write inside .upriv: {0}")]
+    ExportDestinationReserved(PathBuf),
 
     /// The zip name breaks a rule of some system the copy may unzip on.
     #[error("the data folder zip name is not a portable file name")]

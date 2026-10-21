@@ -30,7 +30,11 @@ interface PolicyRadioOptionProps {
    * (e.g. vault-root incomplete policy). Overrides the accent border when checked.
    */
   attention?: boolean;
-  /** Extra controls under the description — always visible; inactive until this option is selected. */
+  /**
+   * The option's own controls under the description. Pass them whether or not
+   * the option is chosen: they always show, inactive until it is, and a tap
+   * on them chooses the option.
+   */
   footer?: ReactNode;
   onSelect: () => void;
   accessibilityLabel?: string;

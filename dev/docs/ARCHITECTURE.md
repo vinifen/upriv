@@ -239,7 +239,7 @@ Do **not** expect to copy `dev/apps/desktop/src/App.tsx` verbatim into React Nat
 
 ## 6. Storage access (`host_fs`)
 
-Desktop and mobile share the same vault logic. `upriv-core` reaches disk through `host_fs`: desktop paths use `std::fs`; an Android storage-access tree is addressed as `/upriv-saf-root` (and `/upriv-saf-export` for a data-folder export), and `host_fs` sends those paths to the Kotlin `SafFs` bridge — URIs, never `/storage/…` paths.
+Desktop and mobile share the same vault logic. `upriv-core` reaches disk through `host_fs`: desktop paths use `std::fs`; an Android storage-access tree is addressed as `/upriv-saf-root` (and `/upriv-saf-export` for the folder an export writes into), and `host_fs` sends those paths to the Kotlin `SafFs` bridge — URIs, never `/storage/…` paths.
 
 See SDD §9.4 for Android SAF flow.
 

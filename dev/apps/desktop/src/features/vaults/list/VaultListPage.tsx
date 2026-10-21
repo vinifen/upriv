@@ -163,6 +163,8 @@ export function VaultListPage() {
         open={exportVault.open}
         submitting={exportVault.submitting}
         startedAt={exportVault.startedAt}
+        progress={exportVault.progress}
+        folders={exportVault.folders}
         onClose={exportVault.onClose}
         onConfirm={exportVault.onConfirm}
         onTimeout={exportVault.onTimeout}

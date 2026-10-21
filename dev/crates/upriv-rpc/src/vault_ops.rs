@@ -7,10 +7,10 @@ use serde_json::{json, Value};
 use upriv_core::{
     abort_import_vault, classify_import_zip_bytes, classify_import_zip_path, close_all_vaults,
     delete_backups, delete_vault, discard_partial, export_backups_to_path,
-    export_logical_seven_zip_to_path, export_store_zip_to_path, fs_create_file, fs_create_folder,
-    fs_delete, fs_ensure_folder, fs_import_from_os_path, fs_import_from_os_path_deferred,
-    fs_list_tree, fs_move, fs_os_path, fs_read_file, fs_read_range, fs_rename,
-    fs_seal_staged_imports, fs_tree_revision, fs_truncate, fs_write_file, import_logical_files_zip,
+    export_logical_seven_zip, export_store_zip, fs_create_file, fs_create_folder, fs_delete,
+    fs_ensure_folder, fs_import_from_os_path, fs_import_from_os_path_deferred, fs_list_tree,
+    fs_move, fs_os_path, fs_read_file, fs_read_range, fs_rename, fs_seal_staged_imports,
+    fs_tree_revision, fs_truncate, fs_write_file, import_logical_files_zip,
     import_logical_files_zip_path, import_logical_os_path, import_logical_seven_zip,
     import_logical_seven_zip_path, import_store_from_archive_path, import_store_zip,
     ingest_import_directory, list_backups, parse_backup_import_path, parse_embedded_settings,
@@ -21,7 +21,9 @@ use upriv_core::{
 };
 
 use super::secret::{secret_bytes, SecretString};
-use super::{err, map_core_err, ok, optional_vault_root, require_vault_root, RpcResponse};
+use super::{
+    err, map_core_err, ok, optional_vault_root, path_utf8, require_vault_root, RpcResponse,
+};
 #[cfg(unix)]
 use upriv_core::ingest_import_reader_staged;
 
@@ -157,7 +159,8 @@ struct VaultExportParams {
     password: Option<SecretString>,
     #[serde(default)]
     seven_zip: Option<upriv_core::config::vault_config::VaultSevenZipSection>,
-    dest_path: String,
+    /// The folder the export file goes into, named after the vault.
+    dest_dir: String,
     /// Names this export for `job_status` and `job_cancel`.
     job: String,
 }
@@ -792,34 +795,38 @@ pub(super) fn vault_export_capabilities(_params: Value) -> RpcResponse {
     ok(json!({ "sevenZip": seven_zip_export_available() }))
 }
 
+/// Write `{display_name}.zip` or `.7z` into the chosen folder. Returns when the
+/// file is in place, when it fails, or when `job_cancel` stops it.
 pub(super) fn vault_export(params: Value) -> RpcResponse {
     let parsed: VaultExportParams = match serde_json::from_value(params) {
         Ok(v) => v,
         Err(error) => return err("invalid_request", error.to_string()),
     };
-    let dest = match parse_dest_path(Some(&parsed.dest_path)) {
-        Ok(Some(dest)) => dest,
-        Ok(None) => return err("invalid_request", "destPath is required".into()),
-        Err(response) => return response,
-    };
+    let dest_dir = std::path::PathBuf::from(parsed.dest_dir.trim());
+    if !dest_dir.is_absolute() {
+        return err("invalid_request", "destDir must be an absolute path".into());
+    }
     let root = match require_vault_root() {
         Ok(root) => root,
         Err(response) => return response,
     };
-    match parsed.format.as_deref().unwrap_or("store_zip") {
-        "seven_zip" => write_atomic_dest(&dest, PartialWork::VaultExport, |tmp| {
-            export_logical_seven_zip_to_path(
-                &root,
-                parsed.id.trim(),
-                secret_bytes(parsed.password.as_ref()),
-                parsed.seven_zip.as_ref(),
-                tmp,
-                &parsed.job,
-            )
-        }),
-        _ => write_atomic_dest(&dest, PartialWork::VaultExport, |tmp| {
-            export_store_zip_to_path(&root, parsed.id.trim(), tmp, &parsed.job)
-        }),
+    let exported = match parsed.format.as_deref().unwrap_or("store_zip") {
+        "seven_zip" => export_logical_seven_zip(
+            &root,
+            parsed.id.trim(),
+            secret_bytes(parsed.password.as_ref()),
+            parsed.seven_zip.as_ref(),
+            &dest_dir,
+            &parsed.job,
+        ),
+        _ => export_store_zip(&root, parsed.id.trim(), &dest_dir, &parsed.job),
+    };
+    match exported {
+        Ok(file) => match path_utf8(&file.path) {
+            Ok(path) => ok(json!({ "path": path, "size": file.size })),
+            Err(response) => response,
+        },
+        Err(error) => map_core_err(error),
     }
 }
 

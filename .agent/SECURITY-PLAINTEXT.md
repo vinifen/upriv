@@ -62,7 +62,7 @@ Research snapshot Tauri tree under `temp/upriv/` (gitignored). FUSE session path
 
 ## Design in `dev/`
 
-1. **`.7z`** export packs logical files in RAM (`sevenz-rust2`, `vault/seven_zip_pack.rs`) and fails closed when RAM is short; import unpacks in RAM (`vault/seven_zip.rs`). There is no `7zz` process, so no password on argv.
+1. **`.7z`** export packs logical files in RAM (`sevenz-rust2`, `vault/seven_zip_pack.rs`): a worker thread decrypts `store/` one chunk at a time into a short queue the encoder reads, and the pack fails closed when the RAM check refuses it. Import unpacks in RAM (`vault/seven_zip.rs`). There is no `7zz` process, so no password on argv.
 2. **Import, export, backup, recovery** copy ciphertext or stream logical bytes in RAM — no decrypted tree on disk in `encrypted_dir`. **Password and unlock-RAM change** reseal the header and name index only (`vault/rewrap.rs`); file blobs are not decrypted.
 3. **No dump store to workspace** in any build. A mount failure leaves the vault open in the in-app file manager and writes nothing.
 4. **Modes stay apart:** open writes a plaintext folder only for `upriv_plain` with the user's consent (`vault/open_close.rs`, `vault/plain/`).

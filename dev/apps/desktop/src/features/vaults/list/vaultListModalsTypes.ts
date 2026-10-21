@@ -70,8 +70,17 @@ export interface VaultListModalsHandle {
   setExportSubmitting: (submitting: boolean) => void;
   /** Vault whose export is still writing, even if the dialog is hidden. */
   exportJobVaultId: string | null;
+  /** The job id of that export (`job_status`, `job_cancel`). */
+  exportJobId: string | null;
   exportStartedAt: number | null;
-  setExportJob: (job: { vaultId: string; startedAt: number } | null) => void;
+  setExportJob: (job: VaultExportJob | null) => void;
+}
+
+/** The vault export in flight. */
+export interface VaultExportJob {
+  id: string;
+  vaultId: string;
+  startedAt: number;
 }
 
 /** Subset of modal handles that vault lifecycle actions need. */

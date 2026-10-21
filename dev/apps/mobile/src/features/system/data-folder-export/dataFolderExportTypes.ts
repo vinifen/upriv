@@ -1,4 +1,6 @@
-import type { DataFolderExportJob, DataFolderExportWritten } from "@upriv/shared/react";
+import type { VaultPathWriteResult } from "@upriv/shared";
+import type { DataFolderExportJob } from "@upriv/shared/react";
+import type { ExportFolder } from "@/hooks/useExportFolder";
 
 /** Export data folder, owned by the vault list so it keeps running while Data folder is closed. */
 export interface DataFolderExportControls {
@@ -6,8 +8,10 @@ export interface DataFolderExportControls {
   canStart: boolean;
   /** The export in flight. */
   job: DataFolderExportJob | null;
-  /** The zip the last export wrote, until another one starts or the data folder changes. */
-  written: DataFolderExportWritten | null;
+  /** The zip the last export wrote, until another one starts or `clearWritten`. */
+  written: VaultPathWriteResult | null;
+  /** The Data folder window opened or closed: its saved line goes. */
+  clearWritten: () => void;
   /** True when the export of `<name>.zip` started and took the folder. */
   onStart: (destDir: string, name: string) => boolean;
   onStop: () => void;
@@ -19,13 +23,7 @@ export interface DataFolderExportControls {
  * when the Data folder window closes; the name starts fresh.
  */
 export interface DataFolderExportDestination {
-  destDir: string | null;
-  picking: boolean;
-  pickFailed: boolean;
-  /** Opens the folder picker. Only the Choose folder button calls it. */
-  choose: () => void;
-  /** The window closed: drop a pick still open. The folder and its grant stay. */
-  cancelPick: () => void;
+  folder: ExportFolder;
   /** As typed. Starts as `upriv-<UTC stamp>`. */
   zipName: string;
   setZipName: (name: string) => void;

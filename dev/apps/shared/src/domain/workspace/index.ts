@@ -28,6 +28,7 @@ export {
   type WorkspaceTable,
 } from "./os";
 export {
+  exportFolderIssue,
   isAbsoluteFilesystemPath,
   isAbsoluteOsFilesystemPath,
   isContentUri,
@@ -42,6 +43,7 @@ export {
   validateWorkspaceGlobalPath,
   validateWorkspaceTable,
   vaultRootPathForWorkspaceValidation,
+  type ExportFolderIssue,
 } from "./validate";
 export {
   WORKSPACE_ERROR_CODES,

@@ -65,14 +65,16 @@ export function VaultRootDataFolderModal({
   /** Export a copy is the chosen radio. A running export keeps it chosen. */
   const [exportChosen, setExportChosen] = useState(false);
   const exportDestination = useDataFolderExportDestination();
-  const { cancelPick: cancelExportPick, resetZipName: resetExportZipName } = exportDestination;
+  const { resetZipName: resetExportZipName } = exportDestination;
+  const { cancelPick: cancelExportPick } = exportDestination.folder;
   const exportSelected = exportControls != null && (exportChosen || exportControls.job != null);
   const exportWritten = exportControls?.written ?? null;
+  const clearExportWritten = exportControls?.clearWritten;
   // Chosen and still missing its folder or a usable name: the step left before Export.
   const exportNeedsStep =
     exportSelected &&
     exportControls?.job == null &&
-    dataFolderExportPending(exportDestination.destDir, exportDestination.zipName) !== null;
+    dataFolderExportPending(exportDestination.folder.path, exportDestination.zipName) !== null;
   const submitLock = useRef(false);
   const busyGen = useRef(0);
   const openedRef = useRef(false);
@@ -112,6 +114,8 @@ export function VaultRootDataFolderModal({
       setError(null);
       setExportChosen(false);
       cancelExportPick();
+      // The saved line belongs to this opening of the window; the folder stays.
+      clearExportWritten?.();
       submitLock.current = false;
       busyGen.current += 1;
       clearTimeout(appliedHideRef.current);
@@ -127,6 +131,8 @@ export function VaultRootDataFolderModal({
       setAppliedVisible(false);
       setError(null);
       resetExportZipName();
+      // An export that finished while the window was closed already had its toast.
+      clearExportWritten?.();
       return;
     }
     // Context reloaded vault-root while open: adopt if user has no local draft.
@@ -136,6 +142,7 @@ export function VaultRootDataFolderModal({
     }
   }, [
     cancelExportPick,
+    clearExportWritten,
     open,
     draftDirty,
     resetExportZipName,
@@ -420,13 +427,13 @@ export function VaultRootDataFolderModal({
                     appliedVisible ||
                     (exportControls.job == null && !exportControls.canStart),
                   onSelect: selectExport,
-                  // Like any choice that needs settings, they show once it is chosen.
-                  footer: exportSelected ? (
+                  // Shown always, and inactive until the option is chosen.
+                  footer: (
                     <DataFolderExportPanel
                       controls={exportControls}
                       destination={exportDestination}
                     />
-                  ) : undefined,
+                  ),
                 }
               : undefined
           }

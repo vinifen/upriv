@@ -35,6 +35,10 @@ export function useBackupService() {
 export function useDataFolderService() {
   return useServices().dataFolder;
 }
+/** Grants behind picked export folders. Undefined outside the Android native build. */
+export function useExportFolderGrants() {
+  return useServices().exportFolderGrants;
+}
 export function useJobService() {
   return useServices().jobs;
 }

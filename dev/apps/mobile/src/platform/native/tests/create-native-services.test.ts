@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { RpcError, createDefaultAppSettings } from "@upriv/shared";
+import { RpcError, createDefaultAppSettings, type VaultRow } from "@upriv/shared";
 
 const safState = {
   activeUri: "content://tree/old",
@@ -59,8 +59,7 @@ vi.mock("@/lib/rpc", () => ({
   rpcVaultConfigSave: vi.fn(),
   rpcVaultRename: vi.fn(),
   rpcVaultDelete: vi.fn(),
-  rpcVaultExport: vi.fn(),
-  rpcVaultExportToPath: vi.fn(),
+  rpcVaultExportToFolder: vi.fn(async () => ({ path: "/upriv-saf-export/Notes.zip", size: 1 })),
   rpcVaultExportCapabilities: vi.fn(async () => ({ sevenZip: true })),
   rpcVaultExportProbe: vi.fn(async () => true),
   rpcVaultImportZip: vi.fn(),
@@ -247,28 +246,46 @@ describe("createNativeServices", () => {
     expect(services.lifecycle.validateLifecyclePassword("   ")).toBe(false);
   });
 
-  it("exports the data folder into a picked tree beside the data folder mount", async () => {
+  it("exports the data folder and a vault into a picked tree beside the data folder mount", async () => {
     const { createNativeServices } = await importModule();
     const rpc = await import("@/lib/rpc");
     vi.mocked(rpc.rpcDataFolderExport).mockClear();
+    vi.mocked(rpc.rpcVaultExportToFolder).mockClear();
     mountSafExport.mockClear();
     unmountSafExport.mockClear();
     safReleaseImportTree.mockClear();
     const services = createNativeServices();
     expect(services.dataFolder).toBeDefined();
-    await services.dataFolder?.exportTo("content://tree/backup-drive", "phone-copy", "job-1");
-    expect(mountSafExport).toHaveBeenCalledWith("content://tree/backup-drive");
+    const picked = "content://tree/backup-drive";
+    // Export a copy and the vault .zip field both keep the folder.
+    services.exportFolderGrants?.hold(picked);
+    services.exportFolderGrants?.hold(picked);
+
+    await services.dataFolder?.exportTo(picked, "phone-copy", "job-1");
+    expect(mountSafExport).toHaveBeenCalledWith(picked);
     expect(rpc.rpcDataFolderExport).toHaveBeenCalledWith(
       "/upriv-saf-export",
       "phone-copy",
       "job-1",
     );
     expect(rpc.rpcJobStatus).toHaveBeenCalledWith("job-1");
-    expect(unmountSafExport).toHaveBeenCalledTimes(1);
-    // The Data folder window keeps the pick for the next export.
+
+    const vault = { id: "notes", displayName: "Notes" } as VaultRow;
+    await services.vault.exportToFolder(vault, { format: "store_zip" }, picked, "job-2");
+    expect(rpc.rpcVaultExportToFolder).toHaveBeenCalledWith(
+      "notes",
+      { format: "store_zip" },
+      "/upriv-saf-export",
+      "job-2",
+    );
+    expect(unmountSafExport).toHaveBeenCalledTimes(2);
+
+    // The fields keep the pick for the next export; it goes once both let it go.
     expect(safReleaseImportTree).not.toHaveBeenCalled();
-    services.dataFolder?.releaseDestination?.("content://tree/backup-drive");
-    expect(safReleaseImportTree).toHaveBeenCalledWith("content://tree/backup-drive");
+    services.exportFolderGrants?.release(picked);
+    expect(safReleaseImportTree).not.toHaveBeenCalled();
+    services.exportFolderGrants?.release(picked);
+    expect(safReleaseImportTree).toHaveBeenCalledWith(picked);
     expect(mountSafRoot).not.toHaveBeenCalled();
     expect(unmountSafRoot).not.toHaveBeenCalled();
   });

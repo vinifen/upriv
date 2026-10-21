@@ -9,7 +9,7 @@
 
 use crate::host_fs::File;
 use std::collections::HashSet;
-use std::io::{Cursor, ErrorKind, Read, Seek};
+use std::io::{BufReader, Cursor, ErrorKind, Read, Seek};
 use std::path::{Path, PathBuf};
 
 use sevenz_rust2::{ArchiveEntry, ArchiveReader};
@@ -31,6 +31,8 @@ use super::seven_zip_pack::{
     sevenz_password,
 };
 use super::welcome::{seal_welcome_if_absent, VaultWelcome};
+
+const ARCHIVE_READ_BUFFER: usize = 1024 * 1024;
 
 fn map_sevenz_read_error(error: sevenz_rust2::Error) -> UprivError {
     match error {
@@ -82,14 +84,20 @@ fn open_archive_reader<'a>(
     )
 }
 
-fn open_archive_path(path: &Path, archive_password: &[u8]) -> Result<(ArchiveReader<File>, u64)> {
+fn open_archive_path(
+    path: &Path,
+    archive_password: &[u8],
+) -> Result<(ArchiveReader<BufReader<File>>, u64)> {
     if !path.is_absolute() {
         return Err(UprivError::ImportArchiveNotFound(path.to_path_buf()));
     }
     let file = crate::paths::open_nofollow(path, crate::paths::NofollowMode::Read)
         .map_err(|error| super::import::map_archive_open_error(path, error))?;
     let len = file.metadata()?.len();
-    let reader = open_prepared_reader(file, archive_password, len)?;
+    // The AES decoder asks for 512 bytes at a time, and a storage-access file
+    // pays for each read.
+    let buffered = BufReader::with_capacity(ARCHIVE_READ_BUFFER, file);
+    let reader = open_prepared_reader(buffered, archive_password, len)?;
     Ok((reader, len))
 }
 

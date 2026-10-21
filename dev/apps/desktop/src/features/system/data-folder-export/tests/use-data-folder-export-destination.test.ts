@@ -8,65 +8,17 @@ const pickFolder = vi.fn<(initial: string | null, title: string) => Promise<stri
 vi.mock("@/i18n", () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock("@/platform/services", () => ({ useVaultRootService: () => ({ pickFolder }) }));
 
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((next) => {
-    resolve = next;
-  });
-  return { promise, resolve };
-}
-
 afterEach(() => {
   pickFolder.mockReset();
 });
 
 describe("useDataFolderExportDestination", () => {
-  it("keeps the picked folder and offers it on the next pick", async () => {
-    pickFolder.mockResolvedValue(" /media/usb ");
+  it("picks its folder under the data folder zip title", () => {
+    pickFolder.mockReturnValue(new Promise(() => undefined));
     const { result } = renderHook(() => useDataFolderExportDestination());
 
-    act(() => result.current.choose());
-    await waitFor(() => expect(result.current.destDir).toBe("/media/usb"));
-    expect(result.current.picking).toBe(false);
-
-    act(() => result.current.choose());
-    expect(pickFolder).toHaveBeenLastCalledWith(
-      "/media/usb",
-      "modal.data_folder_export.picker_title",
-    );
-  });
-
-  it("keeps the folder when the picker is cancelled", async () => {
-    pickFolder.mockResolvedValueOnce("/media/usb").mockResolvedValueOnce(null);
-    const { result } = renderHook(() => useDataFolderExportDestination());
-
-    act(() => result.current.choose());
-    await waitFor(() => expect(result.current.destDir).toBe("/media/usb"));
-    act(() => result.current.choose());
-    await waitFor(() => expect(result.current.picking).toBe(false));
-    expect(result.current.destDir).toBe("/media/usb");
-  });
-
-  it("reports a picker failure", async () => {
-    pickFolder.mockRejectedValue(new Error("dialog"));
-    const { result } = renderHook(() => useDataFolderExportDestination());
-
-    act(() => result.current.choose());
-    await waitFor(() => expect(result.current.pickFailed).toBe(true));
-    expect(result.current.destDir).toBeNull();
-  });
-
-  it("drops a pick that answers after the window closed", async () => {
-    const pick = deferred<string | null>();
-    pickFolder.mockReturnValue(pick.promise);
-    const { result } = renderHook(() => useDataFolderExportDestination());
-
-    act(() => result.current.choose());
-    act(() => result.current.cancelPick());
-    await act(async () => {
-      pick.resolve("/media/usb");
-    });
-    expect(result.current.destDir).toBeNull();
+    act(() => result.current.folder.choose());
+    expect(pickFolder).toHaveBeenLastCalledWith(null, "modal.data_folder_export.picker_title");
   });
 
   it("starts the name from the clock in UTC and resets it to the time of the reset", () => {
@@ -87,28 +39,13 @@ describe("useDataFolderExportDestination", () => {
     }
   });
 
-  it("takes a typed folder as it is, and offers it to the picker", () => {
-    pickFolder.mockReturnValue(new Promise(() => undefined));
-    const { result } = renderHook(() => useDataFolderExportDestination());
-
-    act(() => result.current.setDestDir("/media/My Copies "));
-    expect(result.current.destDir).toBe("/media/My Copies ");
-    act(() => result.current.choose());
-    expect(pickFolder).toHaveBeenLastCalledWith(
-      "/media/My Copies",
-      "modal.data_folder_export.picker_title",
-    );
-  });
-
-  it("keeps the folder after an export and when the window closes", async () => {
+  it("keeps the folder when the name starts over", async () => {
     pickFolder.mockResolvedValue("/media/usb");
     const { result } = renderHook(() => useDataFolderExportDestination());
 
-    act(() => result.current.choose());
-    await waitFor(() => expect(result.current.destDir).toBe("/media/usb"));
+    act(() => result.current.folder.choose());
+    await waitFor(() => expect(result.current.folder.path).toBe("/media/usb"));
     act(() => result.current.resetZipName());
-    expect(result.current.destDir).toBe("/media/usb");
-    act(() => result.current.cancelPick());
-    expect(result.current.destDir).toBe("/media/usb");
+    expect(result.current.folder.path).toBe("/media/usb");
   });
 });

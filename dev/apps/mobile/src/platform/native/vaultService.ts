@@ -1,6 +1,7 @@
 import {
   createLiveVaultService,
   isContentUri,
+  LOADING_BUDGET_MS,
   RpcError,
   type CreateVaultInput,
 } from "@upriv/shared";
@@ -14,7 +15,7 @@ import {
   rpcVaultDiscardImport,
   rpcVaultExportCapabilities,
   rpcVaultExportProbe,
-  rpcVaultExportToPath,
+  rpcVaultExportToFolder,
   rpcVaultImport7z,
   rpcVaultImportFilesZip,
   rpcVaultImportOsPath,
@@ -33,6 +34,7 @@ import {
   type ContentTreeImportIo,
 } from "./contentTreeImport";
 import { releaseImportCache } from "./importCache";
+import { nativeSafExportMount } from "./safExportMount";
 
 const contentIo: ContentTreeImportIo = {
   createVault(input) {
@@ -95,8 +97,14 @@ export const nativeVaultService = createLiveVaultService({
   async deleteVault(vaultId) {
     await rpcVaultDelete(vaultId);
   },
-  async exportVaultToPath(vaultId, request, destPath, job) {
-    return rpcVaultExportToPath(vaultId, request, destPath, job);
+  // A picked folder is mounted for the export, so Rust writes the file straight into it.
+  async exportVaultToFolder(vaultId, request, destDir, job) {
+    return nativeSafExportMount.withExportFolder(
+      destDir,
+      job,
+      LOADING_BUDGET_MS.vaultExport,
+      (dir) => rpcVaultExportToFolder(vaultId, request, dir, job),
+    );
   },
   async exportCapabilities() {
     return rpcVaultExportCapabilities();

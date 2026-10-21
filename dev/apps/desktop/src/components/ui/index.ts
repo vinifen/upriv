@@ -23,5 +23,6 @@ export { Switch, SwitchRow, type SwitchProps, type SwitchRowProps } from "./Swit
 export { Toast, type ToastProps } from "./Toast";
 export { Select, type SelectOption, type SelectOptionTone } from "./Select";
 export { LoadingBudgetHint } from "./LoadingBudgetHint";
+export { JobProgressBar } from "./JobProgressBar";
 export { ContentSkeleton } from "./ContentSkeleton";
 export { Collapse } from "./Collapse";

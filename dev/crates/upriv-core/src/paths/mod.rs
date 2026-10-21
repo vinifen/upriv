@@ -414,8 +414,14 @@ pub(crate) fn sanitize_display_leaf(name: &str) -> String {
     }
 }
 
-/// Outer folder inside a portable `.7z`. Same rules as the suggested export filename.
+/// Outer folder inside a portable `.7z`. Same rules as the export file name.
 pub(crate) fn seven_zip_outer_folder(display_name: &str) -> String {
+    sanitize_filename_base(display_name)
+}
+
+/// The name a vault export file starts from, before its extension: the
+/// display name kept recognizable (`vaultExportFilename` in `@upriv/shared`).
+pub(crate) fn vault_export_file_stem(display_name: &str) -> String {
     sanitize_filename_base(display_name)
 }
 
@@ -576,6 +582,13 @@ mod tests {
         assert_eq!(seven_zip_outer_folder("  "), "vault");
         assert_eq!(seven_zip_outer_folder("CON"), "vault");
         assert_eq!(seven_zip_outer_folder("My    notes"), "My notes");
+    }
+
+    #[test]
+    fn the_export_file_is_named_after_the_vault() {
+        assert_eq!(vault_export_file_stem("Notes: 2026"), "Notes_ 2026");
+        assert_eq!(vault_export_file_stem("My notes"), "My notes");
+        assert_eq!(vault_export_file_stem("NUL"), "vault");
     }
 
     #[test]

@@ -21,10 +21,10 @@ export interface LiveVaultRpc {
   /** Deep rename via `vault_rename` (display name + optional folder migration). */
   rename?: (vaultId: string, displayName: string) => Promise<VaultRenameResult>;
   deleteVault?: (vaultId: string) => Promise<void>;
-  exportVaultToPath?: (
+  exportVaultToFolder?: (
     vaultId: string,
     request: VaultExportRequest,
-    destPath: string,
+    destDir: string,
     job: string,
   ) => Promise<VaultPathWriteResult>;
   exportCapabilities?: () => Promise<{ sevenZip: boolean }>;
@@ -39,7 +39,7 @@ export interface LiveVaultRpc {
 export function createLiveVaultService(rpc: LiveVaultRpc): VaultService {
   const canPersist = typeof rpc.saveSettings === "function";
   const canDelete = typeof rpc.deleteVault === "function";
-  const canExport = typeof rpc.exportVaultToPath === "function";
+  const canExport = typeof rpc.exportVaultToFolder === "function";
   return {
     canPersistSettings: canPersist,
     canDeleteVault: canDelete,
@@ -98,16 +98,16 @@ export function createLiveVaultService(rpc: LiveVaultRpc): VaultService {
       forgetVaultSettings(vaultId);
     },
 
-    async exportToPath(
+    async exportToFolder(
       vault: VaultRow,
       request: VaultExportRequest,
-      destPath: string,
+      destDir: string,
       job: string,
     ) {
-      if (!rpc.exportVaultToPath) {
+      if (!rpc.exportVaultToFolder) {
         notImplemented("Vault export");
       }
-      return rpc.exportVaultToPath(vault.id, request, destPath, job);
+      return rpc.exportVaultToFolder(vault.id, request, destDir, job);
     },
 
     async exportCapabilities() {

@@ -23,7 +23,7 @@ Every **blocking** loading / busy / applying overlay in the desktop (and later m
 | `vaultRewrap` | 10 min | Vault settings password / KDF change |
 | `vaultCreate` | 10 min | Scratch create in the vault pipeline queue (Argon2id wrap + seed) |
 | `vaultPipeline` | 10 min | Open/close progress (password modal if open + row hint; Argon2id unlock + flush) |
-| `vaultExport` | 10 min | Export zip of `store/` or portable `.7z` (`vault_export`). On timeout the UI asks core to stop that job (`job_cancel`), which removes the partial file. |
+| `vaultExport` | 60 min | Export zip of `store/` or portable `.7z` (`vault_export`). The Export window shows progress from `job_status` (`useJobProgress`). On timeout the UI asks core to stop that job (`job_cancel`), which removes the partial file. |
 | `vaultBackupSave` | 10 min | Backups → Back up now (`backup_save`): zip of the closed `store/` into `backups/saves/`. On timeout the UI asks core to stop that job (`job_cancel`). |
 | `dataFolderExport` | 60 min | Export data folder (`data_folder_export`): zip of the whole `.upriv`. Progress from `job_status`. On timeout the job asks core to stop (`job_cancel`), which removes the partial zip. |
 | `vaultFsImport` | 10 min | In-app FM OS drop / picker. Explorer skeletons at the drop target (appear immediately). Editor loading + countdown only for the file currently being written (`LOADING_APPEAR_DELAY_MS`, that write's `startedAt`) — queued files in the same batch do not show the 10 min clock. Overlapping drops are allowed (one session per batch). Close and cancel stops queued files; the write already in flight still finishes (do not gen-kill a late successful write). On RPC/invoke failure drop the remaining skeletons for that batch. |

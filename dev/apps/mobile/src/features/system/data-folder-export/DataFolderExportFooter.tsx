@@ -15,16 +15,16 @@ interface DataFolderExportFooterProps {
 /** Data folder footer while Export a copy is chosen: Export, or Stop export while it runs. */
 export function DataFolderExportFooter({ controls, destination }: DataFolderExportFooterProps) {
   const { canStart, job, onStart, onStop } = controls;
+  const { folder } = destination;
   const { t } = useTranslation();
   const ready =
     canStart &&
-    !destination.picking &&
-    dataFolderExportPending(destination.destDir, destination.zipName) === null;
+    !folder.picking &&
+    dataFolderExportPending(folder.path, destination.zipName) === null;
 
   // The folder stays chosen for the next export; the name starts over once this one is written.
   const start = () => {
-    const folder = destination.destDir?.trim();
-    if (ready && folder) onStart(folder, dataFolderZipNameFromInput(destination.zipName));
+    if (ready) onStart(folder.path.trim(), dataFolderZipNameFromInput(destination.zipName));
   };
 
   return (

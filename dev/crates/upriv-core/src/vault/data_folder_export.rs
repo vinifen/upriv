@@ -32,6 +32,9 @@ use crate::session::{
 };
 
 use super::backup::log_job_error;
+use super::export_folder::{
+    check_export_folder, name_taken_as, unreachable_folder_as_io, ExportFile, PART_SUFFIX,
+};
 use super::partial::{discard_partial, PartialWork};
 use super::zip_io::{buffered_zip_file, open_regular_nofollow, zip_err};
 
@@ -46,8 +49,6 @@ const UPRIV_DIR_NAME: &str = ".upriv";
 /// Locks of open vault sessions. They belong to the process that holds them,
 /// so the copy keeps the folder and leaves its files out.
 const RUNTIME_DIR_NAME: &str = "runtime";
-/// Same suffix as a vault export that is still being written.
-const PART_SUFFIX: &str = ".upriv-part";
 const COPY_BUFFER: usize = 256 * 1024;
 /// End records, zip64 records, and room for a log that grows while copied.
 const ZIP_SLACK: u64 = 1024 * 1024;
@@ -66,29 +67,15 @@ pub fn export_data_folder(
     let job = Job::start(job_id)?;
     validate_data_folder_zip_name(name)?;
     crate::paths::validate_existing_vault_root(root.root())?;
-    // A picked Android folder is the logical export root. Its tree address
-    // says whether it sits inside a `.upriv`.
-    let picked_tree = crate::host_fs::export_tree_uri(dest_dir);
-    if crate::paths::path_is_under_reserved_upriv_tree(dest_dir)
-        || picked_tree
-            .is_some_and(|uri| crate::paths::path_is_under_reserved_upriv_tree(Path::new(&uri)))
-        || crate::paths::is_reserved_upriv_workspace_path(dest_dir, root.root())
-    {
-        return Err(UprivError::DataFolderExportDestinationReserved(
-            dest_dir.to_path_buf(),
-        ));
-    }
-    if !dest_dir.host_is_dir() {
-        return Err(std::io::Error::new(ErrorKind::NotFound, "export folder not found").into());
-    }
+    check_export_folder(root, dest_dir)?;
     // Asked before the vaults are held; the write itself refuses a late arrival.
     let target = ZipTarget::new(dest_dir, name);
-    if target.dest.host_exists() || target.partial.host_exists() {
-        return Err(UprivError::DataFolderExportNameTaken(target.dest));
+    if target.file.is_taken() {
+        return Err(UprivError::DataFolderExportNameTaken(target.file.dest));
     }
     let held = hold_data_folder(root)?;
     let written = write_data_folder_zip(root, &target, &job)
-        .map_err(|error| destination_unreachable_as_io(error, root));
+        .map_err(|error| unreachable_folder_as_io(error, root));
     log_outcome(&written, held.vaults.len());
     written
 }
@@ -113,35 +100,19 @@ fn validate_data_folder_zip_name(name: &str) -> Result<()> {
     Ok(())
 }
 
-/// Where one export writes: the zip, and the partial it is renamed from.
+/// Where one export writes: `<name>.zip`, which unzips to `<name>/`.
 struct ZipTarget {
-    dir: PathBuf,
     /// The folder inside the zip, named like the zip.
     top: String,
-    dest: PathBuf,
-    partial: PathBuf,
+    file: ExportFile,
 }
 
 impl ZipTarget {
     fn new(dest_dir: &Path, name: &str) -> Self {
         Self {
-            dir: dest_dir.to_path_buf(),
             top: name.to_string(),
-            dest: dest_dir.join(format!("{name}.zip")),
-            partial: dest_dir.join(format!("{name}.zip{PART_SUFFIX}")),
+            file: ExportFile::new(dest_dir, &format!("{name}.zip")),
         }
-    }
-}
-
-/// A picked Android folder whose drive stops answering fails this export like
-/// any write error. Only a data folder that stops answering stays unreachable,
-/// which asks the person to reconnect it.
-fn destination_unreachable_as_io(error: UprivError, root: &VaultRoot) -> UprivError {
-    match error {
-        UprivError::Io(io) if crate::host_fs::is_unreachable(&io) && root.root().host_is_dir() => {
-            UprivError::Io(std::io::Error::new(io.kind(), io.to_string()))
-        }
-        other => other,
     }
 }
 
@@ -200,12 +171,7 @@ fn write_data_folder_zip(
     target: &ZipTarget,
     job: &Job,
 ) -> Result<DataFolderExport> {
-    let ZipTarget {
-        dir,
-        top,
-        dest,
-        partial,
-    } = target;
+    let ZipTarget { top, file: target } = target;
     let upriv = root.root().join(UPRIV_DIR_NAME);
     let tree = DataFolderTree {
         upriv: &upriv,
@@ -219,36 +185,33 @@ fn write_data_folder_zip(
         .bytes
         .saturating_add(size.overhead)
         .saturating_add(ZIP_SLACK);
-    if let Some(available) = crate::host_fs::free_bytes(dir) {
+    if let Some(available) = crate::host_fs::free_bytes(&target.dir) {
         if available < needed {
             return Err(UprivError::DataFolderExportSpaceShort { needed, available });
         }
     }
     // Another export may have taken this name since it was checked.
-    let taken = |error: std::io::Error| match error.kind() {
-        ErrorKind::AlreadyExists => UprivError::DataFolderExportNameTaken(dest.clone()),
-        _ => error.into(),
-    };
+    let taken = || UprivError::DataFolderExportNameTaken(target.dest.clone());
     let file = OpenOptions::new()
         .write(true)
         .create_new(true)
-        .open(partial)
-        .map_err(taken)?;
+        .open(&target.partial)
+        .map_err(|error| name_taken_as(error.into(), taken))?;
     let installed = (|| {
         let entries = write_zip(&tree, top, file, job)?;
-        crate::paths::sync_file_durable(partial)?;
-        verify_zip(partial, top, entries)?;
+        verify_zip(&target.partial, top, entries)?;
         job.ensure_running()?;
-        crate::host_fs::rename_no_replace(partial, dest).map_err(taken)?;
-        Ok(())
+        target
+            .install()
+            .map_err(|error| name_taken_as(error, taken))
     })();
     if let Err(error) = installed {
-        discard_partial(partial, PartialWork::DataFolderExport);
+        discard_partial(&target.partial, PartialWork::DataFolderExport);
         return Err(error);
     }
-    let size = crate::host_fs::metadata(dest)?.len();
+    let size = crate::host_fs::metadata(&target.dest)?.len();
     Ok(DataFolderExport {
-        path: dest.clone(),
+        path: target.dest.clone(),
         size,
     })
 }
@@ -752,14 +715,14 @@ mod tests {
         crate::host_fs::create_dir_all(&inside).unwrap();
         assert!(matches!(
             export_data_folder(&root, &inside, NAME, &test_job_id()),
-            Err(UprivError::DataFolderExportDestinationReserved(_))
+            Err(UprivError::ExportDestinationReserved(_))
         ));
         let other = tempfile::tempdir().unwrap();
         let other_upriv = other.path().join(".upriv");
         crate::host_fs::create_dir_all(&other_upriv).unwrap();
         assert!(matches!(
             export_data_folder(&root, &other_upriv, NAME, &test_job_id()),
-            Err(UprivError::DataFolderExportDestinationReserved(_))
+            Err(UprivError::ExportDestinationReserved(_))
         ));
         assert_eq!(entry_count(&inside), 0);
     }
@@ -855,7 +818,7 @@ mod tests {
         let (_tmp, root) = notes_root();
         let dest = tempfile::tempdir().unwrap();
         let target = ZipTarget::new(dest.path(), NAME);
-        crate::host_fs::write(&target.partial, "another export").unwrap();
+        crate::host_fs::write(&target.file.partial, "another export").unwrap();
         let job = Job::start(&test_job_id()).unwrap();
         let _held = hold_data_folder(&root).unwrap();
         assert!(matches!(
@@ -863,7 +826,7 @@ mod tests {
             Err(UprivError::DataFolderExportNameTaken(_))
         ));
         assert_eq!(
-            crate::host_fs::read(&target.partial).unwrap(),
+            crate::host_fs::read(&target.file.partial).unwrap(),
             b"another export"
         );
     }

@@ -1,10 +1,10 @@
-export { dataFolderZipName } from "./types";
 export {
   DATA_FOLDER_EXPORT_ERROR_CODES,
   dataFolderExportErrorI18nKey,
   isDataFolderExportErrorCode,
 } from "./errors";
 export {
+  DATA_FOLDER_EXPORT_PROGRESS_COPY,
   dataFolderCanExport,
   dataFolderExportPending,
   type DataFolderExportPending,

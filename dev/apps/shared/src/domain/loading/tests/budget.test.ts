@@ -17,8 +17,8 @@ describe("LOADING_BUDGET_MS", () => {
     expect(LOADING_BUDGET_MS.vaultRootResolve).toBe(60_000);
     expect(LOADING_BUDGET_MS.vaultCreate).toBe(LOADING_BUDGET_MS.vaultRewrap);
     expect(LOADING_BUDGET_MS.vaultPipeline).toBe(LOADING_BUDGET_MS.vaultRewrap);
-    expect(LOADING_BUDGET_MS.vaultExport).toBe(LOADING_BUDGET_MS.vaultRewrap);
-    expect(LOADING_BUDGET_MS.vaultFsImport).toBe(LOADING_BUDGET_MS.vaultExport);
+    expect(LOADING_BUDGET_MS.vaultExport).toBe(LOADING_BUDGET_MS.dataFolderExport);
+    expect(LOADING_BUDGET_MS.vaultFsImport).toBe(LOADING_BUDGET_MS.vaultRewrap);
     expect(LOADING_BUDGET_MS.settingsSave).toBe(30_000);
     expect(LOADING_BUDGET_MS.vaultDelete).toBe(LOADING_BUDGET_MS.vaultRoot);
     expect(LOADING_BUDGET_MS.settingsSave).toBeLessThan(LOADING_BUDGET_MS.default);

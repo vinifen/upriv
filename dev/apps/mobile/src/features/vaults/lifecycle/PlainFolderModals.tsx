@@ -182,9 +182,7 @@ export function PlainPlaceModal({
               disabled={submitting || !workspaceChoices}
               onSelect={() => setChoice("default")}
               footer={
-                choice === "default" ? (
-                  <PathField value={workspacePathDisplay(defaultPath ?? "")} editable={false} />
-                ) : undefined
+                <PathField value={workspacePathDisplay(defaultPath ?? "")} editable={false} />
               }
             />
             <PolicyRadioOption
@@ -196,14 +194,12 @@ export function PlainPlaceModal({
               disabled={submitting || !workspaceChoices}
               onSelect={() => setChoice("custom")}
               footer={
-                choice === "custom" ? (
-                  <PlacePathEditor
-                    value={customPath}
-                    disabled={submitting}
-                    onChange={setCustomPath}
-                    onPick={() => pickInto(setCustomPath, customPath)}
-                  />
-                ) : undefined
+                <PlacePathEditor
+                  value={customPath}
+                  disabled={submitting}
+                  onChange={setCustomPath}
+                  onPick={() => pickInto(setCustomPath, customPath)}
+                />
               }
             />
             <PolicyRadioOption
@@ -215,14 +211,12 @@ export function PlainPlaceModal({
               disabled={submitting}
               onSelect={() => setChoice("vault_only")}
               footer={
-                choice === "vault_only" ? (
-                  <PlacePathEditor
-                    value={vaultPath}
-                    disabled={submitting}
-                    onChange={setVaultPath}
-                    onPick={() => pickInto(setVaultPath, vaultPath)}
-                  />
-                ) : undefined
+                <PlacePathEditor
+                  value={vaultPath}
+                  disabled={submitting}
+                  onChange={setVaultPath}
+                  onPick={() => pickInto(setVaultPath, vaultPath)}
+                />
               }
             />
             {pickError ? (

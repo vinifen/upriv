@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   LOADING_BUDGET_MS,
   isJobCancelled,
@@ -7,11 +7,8 @@ import {
   type JobProgress,
 } from "../domain";
 import type { DataFolderService, JobService, VaultPathWriteResult } from "../services";
+import { useJobProgress } from "./useJobProgress";
 import { useLoadingBudget } from "./useLoadingBudget";
-import { scheduleInterval } from "./schedule";
-
-/** How often a running export is asked how far it got. */
-export const DATA_FOLDER_EXPORT_POLL_MS = 1_000;
 
 /** The export in flight. */
 export interface DataFolderExportJob {
@@ -24,11 +21,7 @@ export interface DataFolderExportJob {
   stopping: boolean;
 }
 
-/** The zip an export wrote, and the folder the user chose for it. */
-export interface DataFolderExportWritten {
-  result: VaultPathWriteResult;
-  destDir: string;
-}
+type RunningExport = Omit<DataFolderExportJob, "progress">;
 
 export interface DataFolderExportJobEvents {
   onExported: (result: VaultPathWriteResult) => void;
@@ -47,44 +40,31 @@ export interface DataFolderExportJobEvents {
  * modal closes. While `job` is set every row shows `exporting` and refuses to
  * open, and new vaults wait.
  *
- * `dataFolderKey` names the data folder in use. `written` is the last zip
- * until another export starts, and only while that data folder stays in use.
+ * `written` is the last zip until another export starts or `clearWritten`
+ * drops it: the Data folder window drops it when it opens and when it closes,
+ * so its saved line belongs to the window that saw the export finish.
  */
 export function useDataFolderExportJob(
   service: DataFolderService | undefined,
   jobs: JobService,
   events: DataFolderExportJobEvents,
-  dataFolderKey: string,
 ) {
-  const [job, setJob] = useState<DataFolderExportJob | null>(null);
-  const [written, setWritten] = useState<{
-    dataFolderKey: string;
-    zip: DataFolderExportWritten;
-  } | null>(null);
-  const jobRef = useRef(job);
+  const [running, setRunning] = useState<RunningExport | null>(null);
+  const [written, setWritten] = useState<VaultPathWriteResult | null>(null);
+  const jobRef = useRef(running);
   const genRef = useRef(0);
   const eventsRef = useRef(events);
   eventsRef.current = events;
-  const dataFolderKeyRef = useRef(dataFolderKey);
-  dataFolderKeyRef.current = dataFolderKey;
-  const running = job !== null;
-  const budget = useLoadingBudget(running, LOADING_BUDGET_MS.dataFolderExport, {
-    startedAt: job?.startedAt,
+  const progress = useJobProgress(jobs, running?.id ?? null);
+  const job = useMemo(() => (running ? { ...running, progress } : null), [running, progress]);
+  const budget = useLoadingBudget(running !== null, LOADING_BUDGET_MS.dataFolderExport, {
+    startedAt: running?.startedAt,
   });
 
-  const commit = useCallback((next: DataFolderExportJob | null) => {
+  const commit = useCallback((next: RunningExport | null) => {
     jobRef.current = next;
-    setJob(next);
+    setRunning(next);
   }, []);
-
-  const patch = useCallback(
-    (gen: number, change: Partial<DataFolderExportJob>) => {
-      const current = jobRef.current;
-      if (!current || gen !== genRef.current) return;
-      commit({ ...current, ...change });
-    },
-    [commit],
-  );
 
   /** Tell core to stop `id` after a timeout. Its result is ignored. */
   const stopInCore = useCallback(
@@ -102,16 +82,14 @@ export function useDataFolderExportJob(
       if (!service || jobRef.current) return false;
       const gen = ++genRef.current;
       const id = newJobId();
-      // A data folder switch waits for the export, so this is the folder copied.
-      const copiedKey = dataFolderKeyRef.current;
       setWritten(null);
-      commit({ id, startedAt: Date.now(), progress: null, stopping: false });
+      commit({ id, startedAt: Date.now(), stopping: false });
       void service
         .exportTo(destDir, name, id)
         .then(
           (result) => {
             if (gen !== genRef.current) return;
-            setWritten({ dataFolderKey: copiedKey, zip: { result, destDir } });
+            setWritten(result);
             eventsRef.current.onExported(result);
           },
           (error: unknown) => {
@@ -139,37 +117,11 @@ export function useDataFolderExportJob(
   const stop = useCallback(() => {
     const current = jobRef.current;
     if (!current || current.stopping) return;
-    patch(genRef.current, { stopping: true });
+    commit({ ...current, stopping: true });
     void jobs.cancel(current.id, "user").catch(() => {
       /* The export result still settles the job. */
     });
-  }, [jobs, patch]);
-
-  const runningId = job?.id ?? null;
-  useEffect(() => {
-    if (runningId === null) return;
-    const gen = genRef.current;
-    let asking = false;
-    const ask = () => {
-      if (asking) return;
-      asking = true;
-      void jobs
-        .status(runningId)
-        .then(
-          (progress) => {
-            if (progress) patch(gen, { progress });
-          },
-          () => {
-            /* Progress is advisory. The export result reports failures. */
-          },
-        )
-        .finally(() => {
-          asking = false;
-        });
-    };
-    ask();
-    return scheduleInterval(ask, DATA_FOLDER_EXPORT_POLL_MS);
-  }, [jobs, patch, runningId]);
+  }, [commit, jobs]);
 
   useEffect(() => {
     const current = jobRef.current;
@@ -180,10 +132,7 @@ export function useDataFolderExportJob(
     eventsRef.current.onTimedOut();
   }, [budget.timedOut, commit, stopInCore]);
 
-  return {
-    job,
-    written: written?.dataFolderKey === dataFolderKey ? written.zip : null,
-    start,
-    stop,
-  };
+  const clearWritten = useCallback(() => setWritten(null), []);
+
+  return { job, written, clearWritten, start, stop };
 }

@@ -173,12 +173,14 @@ fn read_zip_entry_checked(
 
 /// `README.md` and `config.toml` beside `store/`.
 ///
-/// The warning file already in `store/` is copied with the tree.
+/// The warning file already in `store/` is copied with the tree, and each
+/// byte copied from `store/` counts toward `job`.
 fn write_zip_with_config<W: Write + std::io::Seek>(
     src: &Path,
     config_toml: &[u8],
     readme: &str,
     writer: W,
+    job: &Job,
 ) -> Result<W> {
     if !src.host_is_dir() {
         return Err(UprivError::VaultPathNotFound(src.display().to_string()));
@@ -195,12 +197,13 @@ fn write_zip_with_config<W: Write + std::io::Seek>(
     let store_rel = Path::new(STORE_DIR_NAME);
     zip.add_directory(format!("{STORE_DIR_NAME}/"), options)
         .map_err(|e| zip_err(src, e))?;
-    add_dir(&mut zip, src, store_rel, options)?;
+    add_dir(&mut zip, src, store_rel, options, job)?;
     zip.finish().map_err(|e| zip_err(src, e))
 }
 
 /// Zip of `store/` plus `README.md` and `config.toml`, written to `dest`.
-/// Each write fails once `job` is asked to stop.
+/// Each write fails once `job` is asked to stop. Its progress counts the
+/// bytes of `store/` copied.
 ///
 /// `created_stamp` is UTC `YYYYMMDDHHmmss` and is written into `README.md`.
 pub(super) fn zip_store_with_config_to_path(
@@ -210,9 +213,11 @@ pub(super) fn zip_store_with_config_to_path(
     dest: &Path,
     job: &Job,
 ) -> Result<u64> {
-    let readme = store_zip_readme(created_stamp, super::sum_regular_file_bytes(store)?)?;
+    let store_bytes = super::sum_regular_file_bytes(store)?;
+    job.set_total(store_bytes);
+    let readme = store_zip_readme(created_stamp, store_bytes)?;
     let file = job.writer(buffered_zip_file(File::create(dest)?));
-    let mut file = write_zip_with_config(store, config_toml, &readme, file)?;
+    let mut file = write_zip_with_config(store, config_toml, &readme, file, job)?;
     // Position on the fd we already hold. A new open would be another
     // storage-access round trip just to read the length.
     match file.stream_position() {
@@ -261,6 +266,7 @@ fn add_dir<W: Write + std::io::Seek>(
     abs: &Path,
     rel: &Path,
     options: FileOptions,
+    job: &Job,
 ) -> Result<()> {
     let mut entries: Vec<_> = crate::host_fs::read_dir(abs)?
         .filter_map(|e| e.ok())
@@ -285,12 +291,12 @@ fn add_dir<W: Write + std::io::Seek>(
             let dir_name = format!("{}/", child_rel.to_string_lossy().replace('\\', "/"));
             zip.add_directory(&dir_name, options)
                 .map_err(|e| zip_err(&child_abs, e))?;
-            add_dir(zip, &child_abs, &child_rel, options)?;
+            add_dir(zip, &child_abs, &child_rel, options, job)?;
         } else if ft.host_is_file() {
             let zip_name = child_rel.to_string_lossy().replace('\\', "/");
             zip.start_file(&zip_name, options)
                 .map_err(|e| zip_err(&child_abs, e))?;
-            let mut file = open_regular_nofollow(&child_abs)?;
+            let mut file = job.progress_reader(open_regular_nofollow(&child_abs)?);
             std::io::copy(&mut file, zip).map_err(|e| zip_err(&child_abs, e))?;
         } else {
             return Err(UprivError::VaultStoreInvalid {
@@ -517,8 +523,25 @@ mod tests {
     fn zip_dir(src: &Path) -> Vec<u8> {
         let mut zip = ZipWriter::new(Cursor::new(Vec::new()));
         let options = FileOptions::default().compression_method(CompressionMethod::Stored);
-        add_dir(&mut zip, src, Path::new(""), options).unwrap();
+        add_dir(&mut zip, src, Path::new(""), options, &Job::untracked()).unwrap();
         zip.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn store_zip_progress_counts_the_store_bytes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join(crate::paths::STORE_DIR_NAME);
+        crate::host_fs::create_dir_all(src.join("header")).unwrap();
+        crate::host_fs::create_dir_all(src.join("data")).unwrap();
+        crate::host_fs::write(src.join("header").join("vault.header"), b"header-bytes").unwrap();
+        crate::host_fs::write(src.join("data").join("a.blob"), vec![1u8; 300_000]).unwrap();
+        let id = crate::test_support::test_job_id();
+        let job = Job::start(&id).unwrap();
+        let out = tmp.path().join("store.zip");
+        zip_store_with_config_to_path(&src, b"[vault]\n", "20260529120000", &out, &job).unwrap();
+        let status = crate::session::job_status(&id).unwrap();
+        assert_eq!(status.bytes_total, 300_012);
+        assert_eq!(status.bytes_done, 300_012);
     }
 
     #[test]

@@ -108,13 +108,13 @@ Each feature folder under `features/vaults/*` and `features/system/*` has **one*
 3. **`hooks/` per feature** — custom hooks live in `<feature>/hooks/` (functions `use*` only). Types use `<feature>Types.ts` or `vaultListModalsTypes.ts` at the feature root, not inside `hooks/`. No `hooks/index.ts`.
 4. **No umbrella index** — there is no `features/vaults/index.ts` or `features/system/index.ts`. Each sub-feature (`list/`, `lifecycle/`, `settings/`, …) owns its boundary.
 5. **Domain types from `@upriv/shared`** — import `VaultListItem`, settings helpers, sort types, etc. from `@upriv/shared`, not re-exported through feature indexes. Feature indexes expose **UI, hooks, and desktop-only adapters** consumed elsewhere.
-6. **Prefer the barrel over deep paths** — outside code imports `@/features/vaults/list`, not `@/features/vaults/list/exportVaultPackage`. If something is used outside, add it to that folder’s `index.ts` and import from there.
+6. **Prefer the barrel over deep paths** — outside code imports `@/features/vaults/list`, not `@/features/vaults/list/VaultListPage`. If something is used outside, add it to that folder’s `index.ts` and import from there.
 
 **Current public APIs** (maintain this table when adding exports)
 
 | Module                       | Import path                            | Exports                                                                                                                              |
 | ---------------------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `vaults/list/`               | `@/features/vaults/list`               | `VaultListPage`, `exportVaultPackage`, `VaultListLifecycleModals`                                                                    |
+| `vaults/list/`               | `@/features/vaults/list`               | `VaultListPage`, `VaultListLifecycleModals`                                                                                          |
 | `vaults/lifecycle/`          | `@/features/vaults/lifecycle`          | `VaultLifecycleLayer`, `useVaultLifecycleActions`, `VaultLifecycleRequest`                                                           |
 | `vaults/settings/`           | `@/features/vaults/settings`           | `VaultSettingsModal`                                                                                                                 |
 | `vaults/create/`             | `@/features/vaults/create`             | `CreateVaultModal`                                                                                                                   |

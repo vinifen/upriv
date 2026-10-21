@@ -175,11 +175,7 @@ export function PlainPlaceModal({
                 description={t("plain.place.default_desc")}
                 disabled={submitting || !workspaceChoices}
                 onSelect={() => setChoice("default")}
-                footer={
-                  choice === "default" ? (
-                    <PathField value={defaultPath ?? ""} readOnly />
-                  ) : undefined
-                }
+                footer={<PathField value={defaultPath ?? ""} readOnly />}
               />
               <PolicyRadioOption
                 groupName={group}
@@ -191,14 +187,12 @@ export function PlainPlaceModal({
                 disabled={submitting || !workspaceChoices}
                 onSelect={() => setChoice("custom")}
                 footer={
-                  choice === "custom" ? (
-                    <PlacePathEditor
-                      value={customPath}
-                      disabled={submitting}
-                      onChange={setCustomPath}
-                      onPick={() => pickInto(setCustomPath, customPath)}
-                    />
-                  ) : undefined
+                  <PlacePathEditor
+                    value={customPath}
+                    disabled={submitting}
+                    onChange={setCustomPath}
+                    onPick={() => pickInto(setCustomPath, customPath)}
+                  />
                 }
               />
               <PolicyRadioOption
@@ -211,14 +205,12 @@ export function PlainPlaceModal({
                 disabled={submitting}
                 onSelect={() => setChoice("vault_only")}
                 footer={
-                  choice === "vault_only" ? (
-                    <PlacePathEditor
-                      value={vaultPath}
-                      disabled={submitting}
-                      onChange={setVaultPath}
-                      onPick={() => pickInto(setVaultPath, vaultPath)}
-                    />
-                  ) : undefined
+                  <PlacePathEditor
+                    value={vaultPath}
+                    disabled={submitting}
+                    onChange={setVaultPath}
+                    onPick={() => pickInto(setVaultPath, vaultPath)}
+                  />
                 }
               />
             </div>

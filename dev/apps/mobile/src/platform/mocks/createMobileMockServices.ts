@@ -1,5 +1,3 @@
-import { fromByteArray } from "base64-js";
-import { EncodingType, writeAsStringAsync } from "expo-file-system";
 import {
   CLOSING_PIPELINE_STEP_COUNT,
   OPENING_PIPELINE_STEP_COUNT,
@@ -16,6 +14,7 @@ import {
   normalizeStoredName,
   UPRIV_WORKSPACE_PATH,
   VAULT_WELCOME_README_PATH,
+  vaultExportFilename,
   type AppLogFile,
   type AppServices,
   type AppSettingsLoadResult,
@@ -329,12 +328,13 @@ export function createMobileMockServices(): AppServices {
         suppressMockSeedVaultId(vaultId);
         removeRemappedMockSeedVault(vaultId);
       },
-      async exportToPath(vault, request, destPath) {
-        const data = mockVaultExportBytes(vault, request);
-        await writeAsStringAsync(`file://${destPath}`, fromByteArray(data), {
-          encoding: EncodingType.Base64,
-        });
-        return { path: destPath, size: data.byteLength };
+      // A mock pick is not a real folder: report the file core would write there.
+      async exportToFolder(vault, request, destDir) {
+        const filename = vaultExportFilename(vault.displayName, request.format);
+        return {
+          path: `${destDir.replace(/\/+$/, "")}/${filename}`,
+          size: mockVaultExportBytes(vault, request).byteLength,
+        };
       },
       async exportCapabilities() {
         return { sevenZip: true };

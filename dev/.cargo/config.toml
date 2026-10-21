@@ -1,0 +1,10 @@
+# ARMv8 AES instructions on 64-bit ARM (Android phones, Apple silicon, ARM
+# Linux) for the vendored `aes` 0.8, which keeps that backend behind the
+# `aes_armv8` cfg. It is picked at run time (`getauxval` on Linux and Android,
+# `sysctl` on Apple); any other CPU or system keeps the constant-time software
+# AES. The software path is several times slower; the ciphertext is the same.
+# It serves the AES-SIV name index and the AES of a portable `.7z`.
+# A `RUSTFLAGS` set in the environment replaces this. vendor/MANIFEST.txt says
+# what to check when `aes` is refreshed.
+[target.'cfg(target_arch = "aarch64")']
+rustflags = ["--cfg", "aes_armv8"]

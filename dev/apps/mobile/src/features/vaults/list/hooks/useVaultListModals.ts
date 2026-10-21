@@ -30,7 +30,12 @@ export function useVaultListModals() {
   const [noteVaultId, setNoteVaultId] = useState<string | null>(null);
   const [exportVault, setExportVault] = useState<VaultListItem | null>(null);
   const [exportSubmitting, setExportSubmitting] = useState(false);
-  const [exportJob, setExportJob] = useState<{ vaultId: string; startedAt: number } | null>(null);
+  /** The export in flight: its job id (`job_status`, `job_cancel`), vault, and start. */
+  const [exportJob, setExportJob] = useState<{
+    id: string;
+    vaultId: string;
+    startedAt: number;
+  } | null>(null);
   const [backupsVault, setBackupsVault] = useState<VaultListItem | null>(null);
   const [settingsGroup, setSettingsGroup] = useState<VaultGroup | null>(null);
   const settingsGroupOpenRef = useRef(false);

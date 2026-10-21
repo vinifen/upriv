@@ -2401,7 +2401,7 @@ mode = "encrypted_dir"
         );
         assert!(matches!(
             crate::export_data_folder(&root, Path::new(SAF_EXPORT_ROOT), "phone-copy", &job),
-            Err(crate::UprivError::DataFolderExportDestinationReserved(_))
+            Err(crate::UprivError::ExportDestinationReserved(_))
         ));
         assert!(export.names().is_empty());
     }
