@@ -15,18 +15,11 @@ use zeroize::Zeroizing;
 
 use crate::config::vault_config::{VaultArchiveMode, VaultSevenZipSection};
 use crate::error::{Result, UprivError};
+use crate::session::Job;
 use crate::store::{read_logical_file, VaultHeader, VaultIndex, VaultNode};
 
 const ARCHIVE_HEADER_SLACK: u64 = 1024 * 1024;
 const ENCODER_SLACK: u64 = 32 * 1024 * 1024;
-
-#[derive(Clone, Copy)]
-pub(crate) enum SevenZipSink {
-    /// NDJSON / bytes path: ciphertext archive stays in a `Vec`.
-    Memory,
-    /// User dest path: ciphertext streams to a `File`.
-    File,
-}
 
 pub fn seven_zip_export_available() -> bool {
     true
@@ -246,35 +239,22 @@ fn lzma_dict_bytes(level: u8) -> u64 {
     PRESETS[usize::from(level.min(9))]
 }
 
-fn pack_fixed_bytes(
-    sizes: LogicalExportSize,
-    opts: &VaultSevenZipSection,
-    sink: SevenZipSink,
-) -> u64 {
+/// Plaintext held at once, plus the archive header. The archive itself
+/// streams to its file.
+fn pack_fixed_bytes(sizes: LogicalExportSize, opts: &VaultSevenZipSection) -> u64 {
     let plaintext = if opts.solid {
         sizes.total
     } else {
         sizes.largest
     };
-    let archive = match sink {
-        SevenZipSink::Memory => sizes
-            .total
-            .saturating_add(ARCHIVE_HEADER_SLACK)
-            .saturating_add(sizes.files.saturating_mul(4096)),
-        SevenZipSink::File => ARCHIVE_HEADER_SLACK,
-    };
     plaintext
-        .saturating_add(archive)
+        .saturating_add(ARCHIVE_HEADER_SLACK)
         .saturating_add(ENCODER_SLACK)
 }
 
 /// LZMA2 workers for this pack. Copy-only archives stay on one thread.
 /// Each extra worker adds one dictionary to the RAM budget.
-pub(crate) fn seven_zip_pack_threads(
-    sizes: LogicalExportSize,
-    opts: &VaultSevenZipSection,
-    sink: SevenZipSink,
-) -> u32 {
+pub(crate) fn seven_zip_pack_threads(sizes: LogicalExportSize, opts: &VaultSevenZipSection) -> u32 {
     if opts.archive_mode == VaultArchiveMode::EncryptOnly {
         return 1;
     }
@@ -282,7 +262,7 @@ pub(crate) fn seven_zip_pack_threads(
         seven_zip_cpu_threads(),
         mem_available_bytes(),
         lzma_dict_bytes(opts.compression_level),
-        pack_fixed_bytes(sizes, opts, sink),
+        pack_fixed_bytes(sizes, opts),
     )
 }
 
@@ -328,9 +308,8 @@ pub(crate) struct SevenZipPackBudget {
 pub(crate) fn seven_zip_pack_budget(
     sizes: LogicalExportSize,
     opts: &VaultSevenZipSection,
-    sink: SevenZipSink,
 ) -> SevenZipPackBudget {
-    let threads = seven_zip_pack_threads(sizes, opts, sink);
+    let threads = seven_zip_pack_threads(sizes, opts);
     let dicts = if opts.archive_mode == VaultArchiveMode::EncryptOnly {
         0
     } else {
@@ -338,15 +317,8 @@ pub(crate) fn seven_zip_pack_budget(
     };
     SevenZipPackBudget {
         threads,
-        ram: pack_fixed_bytes(sizes, opts, sink).saturating_add(dicts),
+        ram: pack_fixed_bytes(sizes, opts).saturating_add(dicts),
     }
-}
-
-pub(crate) fn seven_zip_archive_vec_budget(sizes: LogicalExportSize) -> u64 {
-    sizes
-        .total
-        .saturating_add(ARCHIVE_HEADER_SLACK)
-        .saturating_add(sizes.files.saturating_mul(4096))
 }
 
 pub(crate) fn ensure_available_ram(available: Option<u64>, needed: u64) -> Result<()> {
@@ -510,6 +482,9 @@ pub(crate) struct LogicalSevenZipSource<'a> {
     pub index: &'a VaultIndex,
 }
 
+/// Pack the vault's files into `dest`. `job` is checked before each file is
+/// read, and every archive write fails once it is asked to stop.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn pack_logical_seven_zip_to_writer<W: Write + Seek>(
     dest: W,
     source: LogicalSevenZipSource<'_>,
@@ -518,9 +493,10 @@ pub(crate) fn pack_logical_seven_zip_to_writer<W: Write + Seek>(
     outer_folder: &str,
     threads: u32,
     skip: impl Fn(&str) -> bool,
+    job: &Job,
 ) -> Result<W> {
     let password = sevenz_password(archive_password)?;
-    let mut writer = ArchiveWriter::new(dest).map_err(map_sevenz_error)?;
+    let mut writer = ArchiveWriter::new(job.writer(dest)).map_err(map_sevenz_error)?;
     writer.set_encrypt_header(opts.encrypt_file_names);
     writer.set_content_methods(content_methods(opts, password, threads));
     let dirs = export_dir_nodes(source.index, &skip);
@@ -538,6 +514,7 @@ pub(crate) fn pack_logical_seven_zip_to_writer<W: Write + Seek>(
     if opts.solid {
         let mut files = Vec::with_capacity(nodes.len());
         for node in nodes {
+            job.ensure_running()?;
             files.push(read_export_file(
                 source.store_dir,
                 source.header,
@@ -550,6 +527,7 @@ pub(crate) fn pack_logical_seven_zip_to_writer<W: Write + Seek>(
         push_solid(&mut writer, &files)?;
     } else {
         for node in nodes {
+            job.ensure_running()?;
             let (name, data) = read_export_file(
                 source.store_dir,
                 source.header,
@@ -561,7 +539,10 @@ pub(crate) fn pack_logical_seven_zip_to_writer<W: Write + Seek>(
             push_one(&mut writer, &name, data.as_slice())?;
         }
     }
-    writer.finish().map_err(map_io_error)
+    writer
+        .finish()
+        .map(|out| out.into_inner())
+        .map_err(map_io_error)
 }
 
 #[cfg(test)]
@@ -589,11 +570,8 @@ mod tests {
             largest: 800,
             files: 2,
         };
-        assert_eq!(seven_zip_pack_threads(sizes, &opts, SevenZipSink::File), 1);
-        assert_eq!(
-            seven_zip_pack_budget(sizes, &opts, SevenZipSink::File).threads,
-            1
-        );
+        assert_eq!(seven_zip_pack_threads(sizes, &opts), 1);
+        assert_eq!(seven_zip_pack_budget(sizes, &opts).threads, 1);
     }
 
     #[test]
@@ -657,17 +635,25 @@ mod tests {
     }
 
     #[test]
-    fn ram_needed_memory_sink_includes_archive() {
-        let opts = VaultSevenZipSection::default();
+    fn ram_needed_covers_the_plaintext_held_at_once() {
         let sizes = LogicalExportSize {
             total: 1000,
             largest: 800,
             files: 2,
         };
-        let memory = seven_zip_pack_budget(sizes, &opts, SevenZipSink::Memory).ram;
-        let file = seven_zip_pack_budget(sizes, &opts, SevenZipSink::File).ram;
-        assert!(memory > file);
-        assert!(memory >= sizes.total + sizes.largest);
+        let solid = VaultSevenZipSection {
+            solid: true,
+            ..VaultSevenZipSection::default()
+        };
+        let one_at_a_time = VaultSevenZipSection {
+            solid: false,
+            ..VaultSevenZipSection::default()
+        };
+        assert_eq!(
+            pack_fixed_bytes(sizes, &solid) - pack_fixed_bytes(sizes, &one_at_a_time),
+            sizes.total - sizes.largest
+        );
+        assert!(seven_zip_pack_budget(sizes, &solid).ram >= sizes.total);
     }
 
     #[test]

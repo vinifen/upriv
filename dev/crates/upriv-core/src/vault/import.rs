@@ -263,7 +263,7 @@ mod tests {
     #[allow(unused_imports)]
     use crate::host_fs::HostFsQuery;
     use crate::store::KdfUnlockPreset;
-    use crate::test_support::vault_root_with;
+    use crate::test_support::{test_job_id, vault_root_with};
     use crate::vault::{close_vault, create_vault, list_backups, open_vault};
 
     fn sample_config(id: &str, name: &str) -> VaultConfig {
@@ -382,7 +382,9 @@ mode = "encrypted_dir"
             KdfUnlockPreset::M32,
         )
         .unwrap();
-        let zip = crate::vault::export_store_zip(&root, "notes").unwrap();
+        let zip_path = _tmp.path().join("Notes.zip");
+        crate::vault::export_store_zip_to_path(&root, "notes", &zip_path, &test_job_id()).unwrap();
+        let zip = crate::host_fs::read(&zip_path).unwrap();
         open_vault(&root, "other", b"pass-word-ok").unwrap();
         let new_id =
             import_store_zip(&root, sample_config("copy", "Copy"), &zip).expect("file import");

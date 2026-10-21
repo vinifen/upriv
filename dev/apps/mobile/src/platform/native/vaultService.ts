@@ -12,7 +12,6 @@ import {
   rpcVaultCreate,
   rpcVaultDelete,
   rpcVaultDiscardImport,
-  rpcVaultExport,
   rpcVaultExportCapabilities,
   rpcVaultExportProbe,
   rpcVaultExportToPath,
@@ -96,11 +95,8 @@ export const nativeVaultService = createLiveVaultService({
   async deleteVault(vaultId) {
     await rpcVaultDelete(vaultId);
   },
-  async exportVault(vaultId, request) {
-    return rpcVaultExport(vaultId, request);
-  },
-  async exportVaultToPath(vaultId, request, destPath) {
-    return rpcVaultExportToPath(vaultId, request, destPath);
+  async exportVaultToPath(vaultId, request, destPath, job) {
+    return rpcVaultExportToPath(vaultId, request, destPath, job);
   },
   async exportCapabilities() {
     return rpcVaultExportCapabilities();

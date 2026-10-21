@@ -1,3 +1,5 @@
+import { fromByteArray } from "base64-js";
+import { EncodingType, writeAsStringAsync } from "expo-file-system";
 import {
   CLOSING_PIPELINE_STEP_COUNT,
   OPENING_PIPELINE_STEP_COUNT,
@@ -327,11 +329,11 @@ export function createMobileMockServices(): AppServices {
         suppressMockSeedVaultId(vaultId);
         removeRemappedMockSeedVault(vaultId);
       },
-      async getExportBytes(vault, request) {
-        return mockVaultExportBytes(vault, request);
-      },
       async exportToPath(vault, request, destPath) {
         const data = mockVaultExportBytes(vault, request);
+        await writeAsStringAsync(`file://${destPath}`, fromByteArray(data), {
+          encoding: EncodingType.Base64,
+        });
         return { path: destPath, size: data.byteLength };
       },
       async exportCapabilities() {
@@ -343,6 +345,14 @@ export function createMobileMockServices(): AppServices {
     },
 
     vaultGroups: mockGroups.service,
+
+    // Mock exports and saves finish at once: nothing runs to watch or stop.
+    jobs: {
+      async status() {
+        return null;
+      },
+      async cancel() {},
+    },
 
     vaultRoot: {
       async resolve(options = {}) {

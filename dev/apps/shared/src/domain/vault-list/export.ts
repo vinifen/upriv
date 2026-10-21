@@ -8,7 +8,7 @@ export type VaultExportFormat = "store_zip" | "seven_zip";
 /** Ordinary `.zip` of `store/` — not a custom file type (SECURITY-CRYPTO). */
 export const DEFAULT_VAULT_EXPORT_FORMAT: VaultExportFormat = "store_zip";
 
-/** Format + 7z options for `getExportBytes` (zip ignores `sevenZip` / `password`). */
+/** Format + 7z options for `exportToPath` (zip ignores `sevenZip` / `password`). */
 export interface VaultExportRequest {
   format: VaultExportFormat;
   sevenZip?: VaultSettingsConfig["seven_zip"];
@@ -75,4 +75,16 @@ export function vaultCanExport(
   if (pipeline.passwordChangeVaultIds?.includes(vault.id)) return false;
   if (pipeline.kdfChangeVaultIds?.includes(vault.id)) return false;
   return vault.session !== "open" && vault.session !== "closing" && vault.session !== "recovery";
+}
+
+/**
+ * Whether the row menu lists Export: this vault can start one, or its own
+ * export is running and the item opens that export's window again.
+ */
+export function vaultExportMenuShown(
+  vault: Pick<VaultRow, "id" | "session">,
+  pipeline: VaultExportPipelineStatus = {},
+): boolean {
+  if (pipeline.exportingVaultIds?.includes(vault.id)) return true;
+  return vaultCanExport(vault, pipeline);
 }

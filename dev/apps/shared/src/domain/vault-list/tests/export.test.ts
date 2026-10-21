@@ -4,6 +4,7 @@ import {
   exportFilenameSanitizeKind,
   vaultCanExport,
   vaultExportFilename,
+  vaultExportMenuShown,
 } from "..";
 import { vaultListItemFixture } from "./fixtures";
 
@@ -94,6 +95,22 @@ describe("vaultCanExport", () => {
     expect(vaultCanExport(vault, { passwordChangeVaultIds: ["a"] })).toBe(false);
     expect(vaultCanExport(vault, { kdfChangeVaultIds: ["a"] })).toBe(false);
     expect(vaultCanExport(vault, { exportingVaultIds: ["other"] })).toBe(true);
+  });
+});
+
+describe("vaultExportMenuShown", () => {
+  it("lists Export while this vault exports, so the menu reopens that export", () => {
+    const vault = vaultListItemFixture({ id: "a", session: null });
+    expect(vaultExportMenuShown(vault, { exportingVaultIds: ["a"] })).toBe(true);
+  });
+
+  it("follows vaultCanExport otherwise", () => {
+    const closed = vaultListItemFixture({ id: "a", session: null });
+    expect(vaultExportMenuShown(closed)).toBe(true);
+    expect(vaultExportMenuShown(closed, { exportingVaultIds: ["other"] })).toBe(true);
+    expect(vaultExportMenuShown(closed, { backupJobVaultIds: ["a"] })).toBe(false);
+    expect(vaultExportMenuShown(closed, { dataFolderExporting: true })).toBe(false);
+    expect(vaultExportMenuShown(vaultListItemFixture({ id: "a", session: "open" }))).toBe(false);
   });
 });
 

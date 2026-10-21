@@ -1,6 +1,7 @@
 //! Tempfile vault-root fixtures for crate tests.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use tempfile::TempDir;
 
@@ -77,4 +78,10 @@ pub fn vault_root_with(specs: &[VaultSpec]) -> (TempDir, VaultRoot) {
     }
     let root = VaultRoot::discover(root_path).unwrap();
     (tmp, root)
+}
+
+/// A job id no other test uses. Jobs share one process-wide registry.
+pub fn test_job_id() -> String {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    format!("test-{}", NEXT.fetch_add(1, Ordering::Relaxed))
 }

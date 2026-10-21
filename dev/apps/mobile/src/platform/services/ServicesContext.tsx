@@ -35,6 +35,9 @@ export function useBackupService() {
 export function useDataFolderService() {
   return useServices().dataFolder;
 }
+export function useJobService() {
+  return useServices().jobs;
+}
 export function useLogService() {
   return useServices().logs;
 }

@@ -2344,10 +2344,12 @@ mode = "encrypted_dir"
         let _guard = TEST_MOUNT.lock().unwrap();
         let data = Mounted::new();
         let root = crate::paths::initialize_vault_root(Path::new(SAF_VAULT_ROOT)).unwrap();
+        let job = crate::test_support::test_job_id();
         let export = ExportMounted::new(DOWNLOAD_TREE);
 
         let written =
-            crate::export_data_folder(&root, Path::new(SAF_EXPORT_ROOT), "phone-copy").unwrap();
+            crate::export_data_folder(&root, Path::new(SAF_EXPORT_ROOT), "phone-copy", &job)
+                .unwrap();
         let name = "phone-copy.zip";
         assert_eq!(written.path, Path::new(SAF_EXPORT_ROOT).join(name));
         assert_eq!(export.names(), vec![name.to_string()]);
@@ -2370,11 +2372,12 @@ mode = "encrypted_dir"
         let _guard = TEST_MOUNT.lock().unwrap();
         let _data = Mounted::new();
         let root = crate::paths::initialize_vault_root(Path::new(SAF_VAULT_ROOT)).unwrap();
+        let job = crate::test_support::test_job_id();
         let export = ExportMounted::new(DOWNLOAD_TREE);
         std::fs::write(export.dir.path().join("phone-copy.zip"), b"kept").unwrap();
 
         assert!(matches!(
-            crate::export_data_folder(&root, Path::new(SAF_EXPORT_ROOT), "phone-copy"),
+            crate::export_data_folder(&root, Path::new(SAF_EXPORT_ROOT), "phone-copy", &job),
             Err(crate::UprivError::DataFolderExportNameTaken(_))
         ));
         assert_eq!(
@@ -2392,11 +2395,12 @@ mode = "encrypted_dir"
         let _guard = TEST_MOUNT.lock().unwrap();
         let _data = Mounted::new();
         let root = crate::paths::initialize_vault_root(Path::new(SAF_VAULT_ROOT)).unwrap();
+        let job = crate::test_support::test_job_id();
         let export = ExportMounted::new(
             "content://com.android.externalstorage.documents/tree/primary%3ADocuments%2FUpriv%2F.upriv",
         );
         assert!(matches!(
-            crate::export_data_folder(&root, Path::new(SAF_EXPORT_ROOT), "phone-copy"),
+            crate::export_data_folder(&root, Path::new(SAF_EXPORT_ROOT), "phone-copy", &job),
             Err(crate::UprivError::DataFolderExportDestinationReserved(_))
         ));
         assert!(export.names().is_empty());
@@ -2412,6 +2416,7 @@ mode = "encrypted_dir"
         let _guard = TEST_MOUNT.lock().unwrap();
         let _data = Mounted::new();
         let root = crate::paths::initialize_vault_root(Path::new(SAF_VAULT_ROOT)).unwrap();
+        let job = crate::test_support::test_job_id();
 
         /// Answers until the zip is created, then stops answering.
         struct GoneOnOpen(TempBridge);
@@ -2436,14 +2441,14 @@ mode = "encrypted_dir"
         }
         let _unmount = Unmount;
 
-        match crate::export_data_folder(&root, Path::new(SAF_EXPORT_ROOT), "phone-copy") {
+        match crate::export_data_folder(&root, Path::new(SAF_EXPORT_ROOT), "phone-copy", &job) {
             Err(crate::UprivError::Io(error)) => {
                 assert_eq!(error.to_string(), "gone");
                 assert!(!super::is_unreachable(&error));
             }
             other => panic!("expected an I/O error, got {other:?}"),
         }
-        assert!(crate::data_folder_export_status(root.root()).is_none());
+        assert!(crate::job_status(&job).is_none());
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
     }
 

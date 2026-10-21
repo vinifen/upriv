@@ -3,40 +3,12 @@ import { RpcError } from "../../core-rpc/errors";
 import { errorDisplayI18nKey } from "../../errors";
 import { resolveVaultListStatus, type VaultRow } from "../../vault/types";
 import { dataFolderCanExport, dataFolderExportPending } from "../canExport";
-import { DATA_FOLDER_EXPORT_ERROR_CODES, isDataFolderExportCancelled } from "../errors";
-import { dataFolderExportPercent, dataFolderZipName, parseDataFolderExportStatus } from "../types";
+import { DATA_FOLDER_EXPORT_ERROR_CODES } from "../errors";
+import { dataFolderZipName } from "../types";
 
 function row(id: string, session: VaultRow["session"] = null): VaultRow {
   return { id, displayName: id, session, storageMode: "encrypted_dir" };
 }
-
-describe("parseDataFolderExportStatus", () => {
-  it("reads a running export", () => {
-    expect(parseDataFolderExportStatus({ running: true, bytesDone: 5, bytesTotal: 10 })).toEqual({
-      bytesDone: 5,
-      bytesTotal: 10,
-    });
-  });
-
-  it("is null when nothing runs or the answer is not an object", () => {
-    expect(parseDataFolderExportStatus({ running: false, bytesDone: 0, bytesTotal: 0 })).toBeNull();
-    expect(parseDataFolderExportStatus(null)).toBeNull();
-    expect(parseDataFolderExportStatus("running")).toBeNull();
-  });
-});
-
-describe("dataFolderExportPercent", () => {
-  it("is null until the size is measured", () => {
-    expect(dataFolderExportPercent(null)).toBeNull();
-    expect(dataFolderExportPercent({ bytesDone: 0, bytesTotal: 0 })).toBeNull();
-  });
-
-  it("rounds down and stays within 0 to 100", () => {
-    expect(dataFolderExportPercent({ bytesDone: 1, bytesTotal: 3 })).toBe(33);
-    expect(dataFolderExportPercent({ bytesDone: 3, bytesTotal: 3 })).toBe(100);
-    expect(dataFolderExportPercent({ bytesDone: 9, bytesTotal: 3 })).toBe(100);
-  });
-});
 
 describe("dataFolderZipName", () => {
   it("takes the last part of a Linux or Windows path", () => {
@@ -117,13 +89,5 @@ describe("data-folder export errors", () => {
     expect(
       errorDisplayI18nKey(new RpcError(DATA_FOLDER_EXPORT_ERROR_CODES.NAME_TAKEN, "taken")),
     ).toBe("error.data_folder_export_name_taken");
-  });
-
-  it("recognize a stop by the user", () => {
-    expect(
-      isDataFolderExportCancelled(new RpcError(DATA_FOLDER_EXPORT_ERROR_CODES.CANCELLED, "x")),
-    ).toBe(true);
-    expect(isDataFolderExportCancelled(new RpcError("io_error", "x"))).toBe(false);
-    expect(isDataFolderExportCancelled(new Error("x"))).toBe(false);
   });
 });

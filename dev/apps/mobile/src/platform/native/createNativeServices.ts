@@ -31,6 +31,7 @@ import { nativeVaultService } from "./vaultService";
 import { nativeVaultFileSystemService } from "./vaultFileSystemService";
 import { nativeBackupService } from "./backupService";
 import { nativeDataFolderService } from "./dataFolderService";
+import { nativeJobService } from "./jobService";
 import { nativeCreateVaultService } from "./createVaultService";
 import { nativeVaultSecurityService } from "./vaultSecurityService";
 import { isSafLogicalRoot, SAF_VAULT_ROOT } from "./androidVaultHome";
@@ -361,6 +362,7 @@ export function createNativeServices(): AppServices {
     filesystem: nativeVaultFileSystemService,
     backups: nativeBackupService,
     dataFolder: nativeDataFolderService,
+    jobs: nativeJobService,
     createVault: nativeCreateVaultService,
     vaultSecurity: nativeVaultSecurityService,
   };

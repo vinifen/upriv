@@ -3,10 +3,13 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   DATA_FOLDER_EXPORT_ERROR_CODES,
+  JOB_ERROR_CODES,
   LOADING_BUDGET_MS,
+  RPC_TIMEOUT_CODE,
   RpcError,
-  type DataFolderExportProgress,
   type DataFolderService,
+  type JobProgress,
+  type JobService,
   type VaultPathWriteResult,
 } from "@upriv/shared";
 import {
@@ -33,18 +36,23 @@ const written: VaultPathWriteResult = {
 const DATA_FOLDER = "default_root\0";
 const ZIP = "upriv-2026-10-19-101500";
 
-function service(
-  exportTo: DataFolderService["exportTo"],
-  progress: DataFolderExportProgress | null = null,
-): DataFolderService & {
-  exportProgress: ReturnType<typeof vi.fn>;
-  cancelExport: ReturnType<typeof vi.fn>;
+function service(exportTo: DataFolderService["exportTo"]): DataFolderService {
+  return { exportTo };
+}
+
+function jobs(progress: JobProgress | null = null): JobService & {
+  status: ReturnType<typeof vi.fn>;
+  cancel: ReturnType<typeof vi.fn>;
 } {
   return {
-    exportTo,
-    exportProgress: vi.fn(async () => progress),
-    cancelExport: vi.fn(async () => true),
+    status: vi.fn(async () => progress),
+    cancel: vi.fn(async () => undefined),
   };
+}
+
+/** The job id the export ran as. */
+function jobOf(exportTo: { mock: { calls: unknown[][] } }, call = 0): string {
+  return exportTo.mock.calls[call][2] as string;
 }
 
 function events(): DataFolderExportJobEvents & {
@@ -68,15 +76,17 @@ describe("useDataFolderExportJob", () => {
 
   it("holds the job until the zip is written, then reports it", async () => {
     const run = deferred<VaultPathWriteResult>();
-    const exportTo = vi.fn(() => run.promise);
+    const exportTo = vi.fn<DataFolderService["exportTo"]>(() => run.promise);
     const on = events();
-    const { result } = renderHook(() => useDataFolderExportJob(service(exportTo), on, DATA_FOLDER));
+    const { result } = renderHook(() =>
+      useDataFolderExportJob(service(exportTo), jobs(), on, DATA_FOLDER),
+    );
 
     act(() => {
       expect(result.current.start("/media/usb", ZIP)).toBe(true);
     });
-    expect(exportTo).toHaveBeenCalledWith("/media/usb", ZIP);
-    expect(result.current.job).not.toBeNull();
+    expect(exportTo).toHaveBeenCalledWith("/media/usb", ZIP, jobOf(exportTo));
+    expect(result.current.job?.id).toBe(jobOf(exportTo));
     act(() => {
       expect(result.current.start("/elsewhere", ZIP)).toBe(false);
     });
@@ -91,15 +101,16 @@ describe("useDataFolderExportJob", () => {
     expect(result.current.written).toEqual({ result: written, destDir: "/media/usb" });
   });
 
-  it("drops the written zip when the next export starts", async () => {
+  it("runs each export as its own job", async () => {
     const first = deferred<VaultPathWriteResult>();
     const second = deferred<VaultPathWriteResult>();
     const exportTo = vi
       .fn<DataFolderService["exportTo"]>()
       .mockReturnValueOnce(first.promise)
       .mockReturnValueOnce(second.promise);
-    const backend = service(exportTo);
-    const { result } = renderHook(() => useDataFolderExportJob(backend, events(), DATA_FOLDER));
+    const { result } = renderHook(() =>
+      useDataFolderExportJob(service(exportTo), jobs(), events(), DATA_FOLDER),
+    );
 
     act(() => {
       result.current.start("/media/usb", ZIP);
@@ -113,13 +124,15 @@ describe("useDataFolderExportJob", () => {
       result.current.start("/media/other", ZIP);
     });
     expect(result.current.written).toBeNull();
+    expect(jobOf(exportTo, 1)).not.toBe(jobOf(exportTo, 0));
   });
 
   it("shows the written zip only while the same data folder is in use", async () => {
     const run = deferred<VaultPathWriteResult>();
     const backend = service(() => run.promise);
+    const runner = jobs();
     const { result, rerender } = renderHook(
-      ({ folder }) => useDataFolderExportJob(backend, events(), folder),
+      ({ folder }) => useDataFolderExportJob(backend, runner, events(), folder),
       { initialProps: { folder: DATA_FOLDER } },
     );
 
@@ -137,11 +150,16 @@ describe("useDataFolderExportJob", () => {
     expect(result.current.written?.result).toEqual(written);
   });
 
-  it("shows the progress core reports while it runs", async () => {
+  it("shows the progress core reports for its job", async () => {
     vi.useFakeTimers();
     const progress = { bytesDone: 10, bytesTotal: 40 };
-    const backend = service(() => new Promise<VaultPathWriteResult>(() => undefined), progress);
-    const { result } = renderHook(() => useDataFolderExportJob(backend, events(), DATA_FOLDER));
+    const exportTo = vi.fn<DataFolderService["exportTo"]>(
+      () => new Promise<VaultPathWriteResult>(() => undefined),
+    );
+    const runner = jobs(progress);
+    const { result } = renderHook(() =>
+      useDataFolderExportJob(service(exportTo), runner, events(), DATA_FOLDER),
+    );
 
     act(() => {
       result.current.start("/media/usb", ZIP);
@@ -150,14 +168,18 @@ describe("useDataFolderExportJob", () => {
       await vi.advanceTimersByTimeAsync(DATA_FOLDER_EXPORT_POLL_MS);
     });
     expect(result.current.job?.progress).toEqual(progress);
-    expect(backend.exportProgress.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(runner.status.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(runner.status).toHaveBeenCalledWith(jobOf(exportTo));
   });
 
-  it("asks core to stop, then reports a stop rather than a failure", async () => {
+  it("asks core to stop its job, then reports a stop rather than a failure", async () => {
     const run = deferred<VaultPathWriteResult>();
-    const backend = service(() => run.promise);
+    const exportTo = vi.fn<DataFolderService["exportTo"]>(() => run.promise);
+    const runner = jobs();
     const on = events();
-    const { result } = renderHook(() => useDataFolderExportJob(backend, on, DATA_FOLDER));
+    const { result } = renderHook(() =>
+      useDataFolderExportJob(service(exportTo), runner, on, DATA_FOLDER),
+    );
 
     act(() => {
       result.current.start("/media/usb", ZIP);
@@ -165,11 +187,15 @@ describe("useDataFolderExportJob", () => {
     act(() => {
       result.current.stop();
     });
+    act(() => {
+      result.current.stop();
+    });
     expect(result.current.job?.stopping).toBe(true);
-    expect(backend.cancelExport).toHaveBeenCalledTimes(1);
+    expect(runner.cancel).toHaveBeenCalledTimes(1);
+    expect(runner.cancel).toHaveBeenCalledWith(jobOf(exportTo), "user");
 
     await act(async () => {
-      run.reject(new RpcError(DATA_FOLDER_EXPORT_ERROR_CODES.CANCELLED, "cancelled"));
+      run.reject(new RpcError(JOB_ERROR_CODES.CANCELLED, "cancelled"));
     });
     await waitFor(() => expect(result.current.job).toBeNull());
     expect(on.onCancelled).toHaveBeenCalledTimes(1);
@@ -180,8 +206,14 @@ describe("useDataFolderExportJob", () => {
   it("reports a failure and frees the job", async () => {
     const run = deferred<VaultPathWriteResult>();
     const on = events();
-    const backend = service(() => run.promise);
-    const { result } = renderHook(() => useDataFolderExportJob(backend, on, DATA_FOLDER));
+    const { result } = renderHook(() =>
+      useDataFolderExportJob(
+        service(() => run.promise),
+        jobs(),
+        on,
+        DATA_FOLDER,
+      ),
+    );
 
     act(() => {
       result.current.start("/media/usb", ZIP);
@@ -196,12 +228,15 @@ describe("useDataFolderExportJob", () => {
     expect(result.current.written).toBeNull();
   });
 
-  it("gives up after the budget, stops core, and ignores a late result", async () => {
+  it("gives up after the budget, stops its job in core, and ignores a late result", async () => {
     vi.useFakeTimers();
     const run = deferred<VaultPathWriteResult>();
-    const backend = service(() => run.promise);
+    const exportTo = vi.fn<DataFolderService["exportTo"]>(() => run.promise);
+    const runner = jobs();
     const on = events();
-    const { result } = renderHook(() => useDataFolderExportJob(backend, on, DATA_FOLDER));
+    const { result } = renderHook(() =>
+      useDataFolderExportJob(service(exportTo), runner, on, DATA_FOLDER),
+    );
 
     act(() => {
       result.current.start("/media/usb", ZIP);
@@ -211,7 +246,8 @@ describe("useDataFolderExportJob", () => {
     });
     expect(result.current.job).toBeNull();
     expect(on.onTimedOut).toHaveBeenCalledTimes(1);
-    expect(backend.cancelExport).toHaveBeenCalledTimes(1);
+    expect(runner.cancel).toHaveBeenCalledTimes(1);
+    expect(runner.cancel).toHaveBeenCalledWith(jobOf(exportTo), "timeout");
 
     await act(async () => {
       run.resolve(written);
@@ -221,8 +257,31 @@ describe("useDataFolderExportJob", () => {
     expect(result.current.written).toBeNull();
   });
 
+  it("stops its job in core when the call times out before the budget", async () => {
+    const run = deferred<VaultPathWriteResult>();
+    const exportTo = vi.fn<DataFolderService["exportTo"]>(() => run.promise);
+    const runner = jobs();
+    const on = events();
+    const { result } = renderHook(() =>
+      useDataFolderExportJob(service(exportTo), runner, on, DATA_FOLDER),
+    );
+
+    act(() => {
+      result.current.start("/media/usb", ZIP);
+    });
+    await act(async () => {
+      run.reject(new RpcError(RPC_TIMEOUT_CODE, "invoke timeout"));
+    });
+    await waitFor(() => expect(result.current.job).toBeNull());
+    expect(runner.cancel).toHaveBeenCalledWith(jobOf(exportTo), "timeout");
+    expect(on.onTimedOut).toHaveBeenCalledTimes(1);
+    expect(on.onFailed).not.toHaveBeenCalled();
+  });
+
   it("does nothing without a service", () => {
-    const { result } = renderHook(() => useDataFolderExportJob(undefined, events(), DATA_FOLDER));
+    const { result } = renderHook(() =>
+      useDataFolderExportJob(undefined, jobs(), events(), DATA_FOLDER),
+    );
     act(() => {
       expect(result.current.start("/media/usb", ZIP)).toBe(false);
     });

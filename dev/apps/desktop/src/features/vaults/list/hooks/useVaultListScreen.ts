@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   useBackupService,
   useDataFolderService,
+  useJobService,
   useVaultGroupService,
   useLogService,
   useVaultService,
@@ -491,8 +492,9 @@ export function useVaultListScreen() {
   const modals = useVaultListModals(vaults, groups);
   const { lifecycleRequest, setLifecycleRequest } = modals;
   const backupService = useBackupService();
+  const jobs = useJobService();
   const [backupListRefresh, setBackupListRefresh] = useState(0);
-  const backupJob = useVaultBackupJob(backupService, {
+  const backupJob = useVaultBackupJob(backupService, jobs, {
     onSaved: (vaultId) => {
       const name = vaults.find((vault) => vault.id === vaultId)?.displayName ?? vaultId;
       showToast(t("toast.backup_now_saved", { name }));
@@ -508,6 +510,7 @@ export function useVaultListScreen() {
   const dataFolderService = useDataFolderService();
   const dataFolderExport = useDataFolderExportJob(
     dataFolderService,
+    jobs,
     {
       onExported: (written) => {
         showToast(t("toast.data_folder_exported", { name: dataFolderZipName(written.path) }));

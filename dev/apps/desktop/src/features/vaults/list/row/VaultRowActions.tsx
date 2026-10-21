@@ -14,7 +14,7 @@ import {
   isVaultListRowUnlockTarget,
   resolveVaultListStatus,
   storageModeIsPlaintext,
-  vaultCanExport,
+  vaultExportMenuShown,
   VAULT_SETTINGS_AREA_ICON,
   VAULT_SETTINGS_AREA_I18N,
   vaultRowControls,
@@ -100,7 +100,7 @@ export function VaultRowActions({
       rememberedMount ?? fetchedMount,
       currentWorkspaceSystem(),
     );
-  const canExport = vaultService.canExportVault && vaultCanExport(vault, pipelineListStatus);
+  const canExport = vaultService.canExportVault && vaultExportMenuShown(vault, pipelineListStatus);
   const controls = vaultRowControls(vault, pipelineListStatus);
 
   const stacked = layout === "column";

@@ -9,6 +9,9 @@
 //! `data_folder_export_busy`. Settings, groups, and logs keep working: each
 //! write replaces its file whole or appends to it, so the copy holds one
 //! complete version of every file.
+//!
+//! The UI watches and stops the copy by its job id (`job_status`,
+//! `job_cancel`); a stopped copy leaves no file.
 
 use std::io::{BufReader, ErrorKind, Read, Seek, Write};
 use std::path::{Path, PathBuf};
@@ -25,10 +28,11 @@ use crate::logging::{log_event, LogLevel};
 use crate::paths::VaultRoot;
 use crate::session::{
     any_preparing_under, any_session_under, is_vault_closing_at, is_vault_open_at,
-    with_vault_dir_lock, with_vault_registry_lock, DataFolderExportGuard, PreparingGuard,
+    with_vault_dir_lock, with_vault_registry_lock, DataFolderExportGuard, Job, PreparingGuard,
 };
 
-use super::backup::classify_backup_failure;
+use super::backup::log_job_error;
+use super::partial::{discard_partial, PartialWork};
 use super::zip_io::{buffered_zip_file, open_regular_nofollow, zip_err};
 
 /// The data-folder zip written by [`export_data_folder`].
@@ -51,13 +55,15 @@ const ZIP_SLACK: u64 = 1024 * 1024;
 /// 255 a file name may hold on every system.
 const DATA_FOLDER_ZIP_NAME_MAX_BYTES: usize = 200;
 
-/// Zip `.upriv` into `dest_dir/<name>.zip`. Every vault must be closed or in
-/// recovery, and no other work may hold one.
+/// Zip `.upriv` into `dest_dir/<name>.zip` as the job `job_id`. Every vault
+/// must be closed or in recovery, and no other work may hold one.
 pub fn export_data_folder(
     root: &VaultRoot,
     dest_dir: &Path,
     name: &str,
+    job_id: &str,
 ) -> Result<DataFolderExport> {
+    let job = Job::start(job_id)?;
     validate_data_folder_zip_name(name)?;
     crate::paths::validate_existing_vault_root(root.root())?;
     // A picked Android folder is the logical export root. Its tree address
@@ -81,7 +87,7 @@ pub fn export_data_folder(
         return Err(UprivError::DataFolderExportNameTaken(target.dest));
     }
     let held = hold_data_folder(root)?;
-    let written = write_data_folder_zip(root, &target, &held.running)
+    let written = write_data_folder_zip(root, &target, &job)
         .map_err(|error| destination_unreachable_as_io(error, root));
     log_outcome(&written, held.vaults.len());
     written
@@ -141,7 +147,7 @@ fn destination_unreachable_as_io(error: UprivError, root: &VaultRoot) -> UprivEr
 
 /// The export mark plus one exclusive hold per vault folder.
 struct HeldDataFolder {
-    running: DataFolderExportGuard,
+    _running: DataFolderExportGuard,
     vaults: Vec<PreparingGuard>,
 }
 
@@ -166,7 +172,10 @@ fn hold_data_folder(root: &VaultRoot) -> Result<HeldDataFolder> {
         if any_session_under(&vaults_dir) {
             return Err(UprivError::DataFolderBusy);
         }
-        Ok(HeldDataFolder { running, vaults })
+        Ok(HeldDataFolder {
+            _running: running,
+            vaults,
+        })
     })
 }
 
@@ -189,7 +198,7 @@ fn vault_dirs(vaults_dir: &Path) -> Result<Vec<PathBuf>> {
 fn write_data_folder_zip(
     root: &VaultRoot,
     target: &ZipTarget,
-    running: &DataFolderExportGuard,
+    job: &Job,
 ) -> Result<DataFolderExport> {
     let ZipTarget {
         dir,
@@ -205,7 +214,7 @@ fn write_data_folder_zip(
     };
     let mut size = SizeSink::default();
     tree.walk(top, &mut size)?;
-    running.set_total(size.bytes);
+    job.set_total(size.bytes);
     let needed = size
         .bytes
         .saturating_add(size.overhead)
@@ -226,14 +235,15 @@ fn write_data_folder_zip(
         .open(partial)
         .map_err(taken)?;
     let installed = (|| {
-        let entries = write_zip(&tree, top, file, running)?;
+        let entries = write_zip(&tree, top, file, job)?;
         crate::paths::sync_file_durable(partial)?;
         verify_zip(partial, top, entries)?;
+        job.ensure_running()?;
         crate::host_fs::rename_no_replace(partial, dest).map_err(taken)?;
         Ok(())
     })();
     if let Err(error) = installed {
-        let _ = crate::host_fs::remove_file(partial);
+        discard_partial(partial, PartialWork::DataFolderExport);
         return Err(error);
     }
     let size = crate::host_fs::metadata(dest)?.len();
@@ -243,15 +253,10 @@ fn write_data_folder_zip(
     })
 }
 
-fn write_zip(
-    tree: &DataFolderTree<'_>,
-    top: &str,
-    file: File,
-    running: &DataFolderExportGuard,
-) -> Result<usize> {
+fn write_zip(tree: &DataFolderTree<'_>, top: &str, file: File, job: &Job) -> Result<usize> {
     let mut sink = ZipSink {
         zip: ZipWriter::new(buffered_zip_file(file)),
-        running,
+        job,
         buf: vec![0; COPY_BUFFER],
         entries: 0,
     };
@@ -291,18 +296,12 @@ fn log_outcome(written: &Result<DataFolderExport>, vaults: usize) {
                 &[("vaults", vaults.as_str()), ("bytes", bytes.as_str())],
             );
         }
-        Err(UprivError::DataFolderExportCancelled) => {
-            log_event(LogLevel::Info, "data_folder_export_cancelled", &[]);
-        }
-        Err(error) => {
-            let class = classify_backup_failure(error);
-            let os = class.os.map(|code| code.to_string());
-            let mut fields = vec![("reason", class.reason), ("kind", class.kind)];
-            if let Some(code) = os.as_deref() {
-                fields.push(("os", code));
-            }
-            log_event(LogLevel::Warn, "data_folder_export_failed", &fields);
-        }
+        Err(error) => log_job_error(
+            "data_folder_export_cancelled",
+            "data_folder_export_failed",
+            &[],
+            error,
+        ),
     }
 }
 
@@ -438,14 +437,14 @@ fn entry_overhead(name: &str) -> u64 {
 
 struct ZipSink<'a, W: Write + Seek> {
     zip: ZipWriter<W>,
-    running: &'a DataFolderExportGuard,
+    job: &'a Job,
     buf: Vec<u8>,
     entries: usize,
 }
 
 impl<W: Write + Seek> Sink for ZipSink<'_, W> {
     fn dir(&mut self, name: &str, meta: &Metadata) -> Result<()> {
-        self.running.ensure_not_cancelled()?;
+        self.job.ensure_running()?;
         self.zip
             .add_directory(name, entry_options(meta))
             .map_err(|error| zip_err(Path::new(name), error))?;
@@ -454,7 +453,7 @@ impl<W: Write + Seek> Sink for ZipSink<'_, W> {
     }
 
     fn file(&mut self, path: &Path, name: &str, _listed: &Metadata) -> Result<()> {
-        self.running.ensure_not_cancelled()?;
+        self.job.ensure_running()?;
         // A file replaced whole since the listing is copied as it is now.
         let mut file = match open_regular_nofollow(path) {
             Ok(file) => file,
@@ -467,7 +466,7 @@ impl<W: Write + Seek> Sink for ZipSink<'_, W> {
             .start_file(name, options)
             .map_err(|error| zip_err(path, error))?;
         loop {
-            self.running.ensure_not_cancelled()?;
+            self.job.ensure_running()?;
             let read = match file.read(&mut self.buf) {
                 Ok(0) => break,
                 Ok(read) => read,
@@ -477,7 +476,7 @@ impl<W: Write + Seek> Sink for ZipSink<'_, W> {
             self.zip
                 .write_all(&self.buf[..read])
                 .map_err(|error| zip_err(path, error))?;
-            self.running.advance(read as u64);
+            self.job.advance(read as u64);
         }
         self.entries += 1;
         Ok(())
@@ -524,9 +523,9 @@ fn zip_time(meta: &Metadata) -> Option<DateTime> {
 mod tests {
     use super::*;
     use crate::config::VaultConfig;
-    use crate::session::{cancel_data_folder_export, data_folder_export_status};
+    use crate::session::{cancel_job, ensure_data_folder_export_idle, job_status};
     use crate::store::KdfUnlockPreset;
-    use crate::test_support::vault_root_with;
+    use crate::test_support::{test_job_id, vault_root_with};
     use crate::vault::backup::delete_backups;
     use crate::vault::create::create_vault;
     use crate::vault::fs::{fs_read_file, fs_write_file};
@@ -572,7 +571,7 @@ mod tests {
     fn the_unzipped_copy_opens_as_a_data_folder() {
         let (_tmp, root) = notes_root();
         let dest = tempfile::tempdir().unwrap();
-        let export = export_data_folder(&root, dest.path(), NAME).unwrap();
+        let export = export_data_folder(&root, dest.path(), NAME, &test_job_id()).unwrap();
         assert_eq!(export.path, dest.path().join(format!("{NAME}.zip")));
         let top = NAME;
         assert_eq!(
@@ -625,7 +624,7 @@ mod tests {
             crate::host_fs::write(path, body).unwrap();
         }
         let dest = tempfile::tempdir().unwrap();
-        let export = export_data_folder(&root, dest.path(), NAME).unwrap();
+        let export = export_data_folder(&root, dest.path(), NAME, &test_job_id()).unwrap();
         let top = NAME;
         let names = zip_names(&export.path);
         for kept in [
@@ -649,11 +648,13 @@ mod tests {
         let (_tmp, root) = notes_root();
         open_vault(&root, "notes", PASSWORD).unwrap();
         let dest = tempfile::tempdir().unwrap();
+        let job = test_job_id();
         assert!(matches!(
-            export_data_folder(&root, dest.path(), NAME),
+            export_data_folder(&root, dest.path(), NAME, &job),
             Err(UprivError::DataFolderBusy)
         ));
-        assert!(data_folder_export_status(root.root()).is_none());
+        assert!(job_status(&job).is_none());
+        ensure_data_folder_export_idle(root.root()).unwrap();
         close_vault(&root, "notes").unwrap();
         assert_eq!(entry_count(dest.path()), 0);
     }
@@ -682,14 +683,17 @@ mod tests {
             Err(UprivError::DataFolderExportBusy)
         ));
         assert!(matches!(
-            export_data_folder(&root, dest.path(), NAME),
+            export_data_folder(&root, dest.path(), NAME, &test_job_id()),
             Err(UprivError::DataFolderExportBusy)
         ));
         assert!(crate::session::vault_activity_blocks_root_switch());
-        assert!(data_folder_export_status(root.root()).is_some());
+        assert!(matches!(
+            ensure_data_folder_export_idle(root.root()),
+            Err(UprivError::DataFolderExportBusy)
+        ));
 
         drop(held);
-        assert!(data_folder_export_status(root.root()).is_none());
+        ensure_data_folder_export_idle(root.root()).unwrap();
         open_vault(&root, "notes", PASSWORD).unwrap();
         close_vault(&root, "notes").unwrap();
     }
@@ -698,9 +702,11 @@ mod tests {
     fn progress_reaches_the_measured_total() {
         let (_tmp, root) = notes_root();
         let dest = tempfile::tempdir().unwrap();
-        let held = hold_data_folder(&root).unwrap();
-        write_data_folder_zip(&root, &ZipTarget::new(dest.path(), NAME), &held.running).unwrap();
-        let status = data_folder_export_status(root.root()).unwrap();
+        let id = test_job_id();
+        let job = Job::start(&id).unwrap();
+        let _held = hold_data_folder(&root).unwrap();
+        write_data_folder_zip(&root, &ZipTarget::new(dest.path(), NAME), &job).unwrap();
+        let status = job_status(&id).unwrap();
         assert!(status.bytes_total > 0);
         assert_eq!(status.bytes_done, status.bytes_total);
     }
@@ -709,15 +715,34 @@ mod tests {
     fn a_cancelled_export_leaves_no_zip() {
         let (_tmp, root) = notes_root();
         let dest = tempfile::tempdir().unwrap();
+        let id = test_job_id();
+        let job = Job::start(&id).unwrap();
         let held = hold_data_folder(&root).unwrap();
-        assert!(cancel_data_folder_export(root.root()));
+        assert!(cancel_job(&id));
         assert!(matches!(
-            write_data_folder_zip(&root, &ZipTarget::new(dest.path(), NAME), &held.running),
-            Err(UprivError::DataFolderExportCancelled)
+            write_data_folder_zip(&root, &ZipTarget::new(dest.path(), NAME), &job),
+            Err(UprivError::JobCancelled)
         ));
         assert_eq!(entry_count(dest.path()), 0);
         drop(held);
-        assert!(!cancel_data_folder_export(root.root()));
+        drop(job);
+        assert!(job_status(&id).is_none());
+    }
+
+    #[test]
+    fn an_export_stopped_before_it_starts_holds_nothing() {
+        let (_tmp, root) = notes_root();
+        let dest = tempfile::tempdir().unwrap();
+        let job = test_job_id();
+        cancel_job(&job);
+        assert!(matches!(
+            export_data_folder(&root, dest.path(), NAME, &job),
+            Err(UprivError::JobCancelled)
+        ));
+        assert_eq!(entry_count(dest.path()), 0);
+        ensure_data_folder_export_idle(root.root()).unwrap();
+        open_vault(&root, "notes", PASSWORD).unwrap();
+        close_vault(&root, "notes").unwrap();
     }
 
     #[test]
@@ -726,14 +751,14 @@ mod tests {
         let inside = root.root().join(".upriv/app");
         crate::host_fs::create_dir_all(&inside).unwrap();
         assert!(matches!(
-            export_data_folder(&root, &inside, NAME),
+            export_data_folder(&root, &inside, NAME, &test_job_id()),
             Err(UprivError::DataFolderExportDestinationReserved(_))
         ));
         let other = tempfile::tempdir().unwrap();
         let other_upriv = other.path().join(".upriv");
         crate::host_fs::create_dir_all(&other_upriv).unwrap();
         assert!(matches!(
-            export_data_folder(&root, &other_upriv, NAME),
+            export_data_folder(&root, &other_upriv, NAME, &test_job_id()),
             Err(UprivError::DataFolderExportDestinationReserved(_))
         ));
         assert_eq!(entry_count(&inside), 0);
@@ -747,7 +772,7 @@ mod tests {
         std::os::unix::fs::symlink(elsewhere.path(), root.root().join(".upriv/app")).unwrap();
         let dest = tempfile::tempdir().unwrap();
         assert!(matches!(
-            export_data_folder(&root, dest.path(), NAME),
+            export_data_folder(&root, dest.path(), NAME, &test_job_id()),
             Err(UprivError::VaultStoreInvalid { .. })
         ));
         assert_eq!(entry_count(dest.path()), 0);
@@ -790,12 +815,13 @@ mod tests {
     fn an_invalid_name_writes_nothing() {
         let (_tmp, root) = notes_root();
         let dest = tempfile::tempdir().unwrap();
+        let job = test_job_id();
         assert!(matches!(
-            export_data_folder(&root, dest.path(), "../escape"),
+            export_data_folder(&root, dest.path(), "../escape", &job),
             Err(UprivError::DataFolderExportNameInvalid)
         ));
         assert_eq!(entry_count(dest.path()), 0);
-        assert!(data_folder_export_status(root.root()).is_none());
+        assert!(job_status(&job).is_none());
     }
 
     #[test]
@@ -804,20 +830,21 @@ mod tests {
         let dest = tempfile::tempdir().unwrap();
         let existing = dest.path().join(format!("{NAME}.zip"));
         crate::host_fs::write(&existing, "kept").unwrap();
+        let job = test_job_id();
         assert!(matches!(
-            export_data_folder(&root, dest.path(), NAME),
+            export_data_folder(&root, dest.path(), NAME, &job),
             Err(UprivError::DataFolderExportNameTaken(path)) if path == existing
         ));
         assert_eq!(crate::host_fs::read(&existing).unwrap(), b"kept");
         assert_eq!(entry_count(dest.path()), 1);
-        assert!(data_folder_export_status(root.root()).is_none());
+        assert!(job_status(&job).is_none());
 
         // A zip of that name still being written holds the name too.
         let other = tempfile::tempdir().unwrap();
         let partial = other.path().join(format!("{NAME}.zip{PART_SUFFIX}"));
         crate::host_fs::write(&partial, "half").unwrap();
         assert!(matches!(
-            export_data_folder(&root, other.path(), NAME),
+            export_data_folder(&root, other.path(), NAME, &test_job_id()),
             Err(UprivError::DataFolderExportNameTaken(_))
         ));
         assert_eq!(crate::host_fs::read(&partial).unwrap(), b"half");
@@ -829,9 +856,10 @@ mod tests {
         let dest = tempfile::tempdir().unwrap();
         let target = ZipTarget::new(dest.path(), NAME);
         crate::host_fs::write(&target.partial, "another export").unwrap();
-        let held = hold_data_folder(&root).unwrap();
+        let job = Job::start(&test_job_id()).unwrap();
+        let _held = hold_data_folder(&root).unwrap();
         assert!(matches!(
-            write_data_folder_zip(&root, &target, &held.running),
+            write_data_folder_zip(&root, &target, &job),
             Err(UprivError::DataFolderExportNameTaken(_))
         ));
         assert_eq!(

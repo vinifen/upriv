@@ -10,6 +10,7 @@ use zip::write::FileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
 use crate::error::{Result, UprivError};
+use crate::session::Job;
 
 use super::embedded_settings::{store_zip_readme, ZIP_CONFIG_ENTRY, ZIP_README_ENTRY};
 use crate::paths::STORE_DIR_NAME;
@@ -198,31 +199,19 @@ fn write_zip_with_config<W: Write + std::io::Seek>(
     zip.finish().map_err(|e| zip_err(src, e))
 }
 
-/// Zip of `store/` plus `README.md` and `config.toml`.
-///
-/// `created_stamp` is UTC `YYYYMMDDHHmmss` and is written into `README.md`.
-pub fn zip_store_with_config_to_bytes(
-    store: &Path,
-    config_toml: &[u8],
-    created_stamp: &str,
-) -> Result<Vec<u8>> {
-    let readme = store_zip_readme(created_stamp, super::sum_regular_file_bytes(store)?)?;
-    let cursor = Cursor::new(Vec::new());
-    let cursor = write_zip_with_config(store, config_toml, &readme, cursor)?;
-    Ok(cursor.into_inner())
-}
-
 /// Zip of `store/` plus `README.md` and `config.toml`, written to `dest`.
+/// Each write fails once `job` is asked to stop.
 ///
 /// `created_stamp` is UTC `YYYYMMDDHHmmss` and is written into `README.md`.
-pub fn zip_store_with_config_to_path(
+pub(super) fn zip_store_with_config_to_path(
     store: &Path,
     config_toml: &[u8],
     created_stamp: &str,
     dest: &Path,
+    job: &Job,
 ) -> Result<u64> {
     let readme = store_zip_readme(created_stamp, super::sum_regular_file_bytes(store)?)?;
-    let file = buffered_zip_file(File::create(dest)?);
+    let file = job.writer(buffered_zip_file(File::create(dest)?));
     let mut file = write_zip_with_config(store, config_toml, &readme, file)?;
     // Position on the fd we already hold. A new open would be another
     // storage-access round trip just to read the length.
@@ -561,7 +550,10 @@ mod tests {
         crate::host_fs::write(src.join("header").join("vault.header"), b"header-bytes").unwrap();
         crate::host_fs::write(src.join(STORE_DANGER_FILE_NAME), b"notice").unwrap();
         let config = b"[vault]\nid = \"notes\"\ndisplay_name = \"Notes\"\nnote = \"kept\"\n";
-        let zipped = zip_store_with_config_to_bytes(&src, config, "20260529120000").unwrap();
+        let out = tmp.path().join("store.zip");
+        zip_store_with_config_to_path(&src, config, "20260529120000", &out, &Job::untracked())
+            .unwrap();
+        let zipped = crate::host_fs::read(&out).unwrap();
         let read = read_zip_config_toml(Cursor::new(zipped.clone()))
             .unwrap()
             .unwrap();

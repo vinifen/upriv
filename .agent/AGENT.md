@@ -216,7 +216,7 @@ upriv/
 | **Mobile FFI** | `dev/crates/upriv-ffi/` | UniFFI `invoke` / `app_version` | UI |
 | **Core** | `dev/crates/upriv-core/` | Crypto, 7z, paths, state machine, FUSE, recovery | Depend on Electron |
 
-**Desktop UI:** Electron (`createDesktopServices`) talks to `upriv-daemon` for vault-root, settings, logs, vault list/create/open/close/`vault_rename`, groups, `vault_config_save`, in-app file manager (`vault_fs_*`), export/import, backups, and Export data folder (`data_folder_export*`). There is no desktop in-memory vault list. Linux FUSE and Windows WinFsp are live in core. "Open in file manager" and "Open in terminal" follow the OS path when the mount succeeded. Password and unlock-RAM change go through `vault_change_password` / `vault_change_kdf`. Notable conventions:
+**Desktop UI:** Electron (`createDesktopServices`) talks to `upriv-daemon` for vault-root, settings, logs, vault list/create/open/close/`vault_rename`, groups, `vault_config_save`, in-app file manager (`vault_fs_*`), export/import, backups, Export data folder (`data_folder_export`), and the job calls that watch or stop a long export or save (`job_status` / `job_cancel`). There is no desktop in-memory vault list. Linux FUSE and Windows WinFsp are live in core. "Open in file manager" and "Open in terminal" follow the OS path when the mount succeeded. Password and unlock-RAM change go through `vault_change_password` / `vault_change_kdf`. Notable conventions:
 
 - **Pipeline:** `useVaultPipelineRun` enforces SDD §8.2.2 — one open/close at a time (`isRunning`).
 - **Auto-close:** `useIdleAutoClose` (`@upriv/shared/react`) closes each opted-in vault from the device clock; one notice per vault entering its warning window; an import or busy pipeline retries after 5 s. See SDD §3.2.5.

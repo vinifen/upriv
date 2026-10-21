@@ -7,12 +7,13 @@ import {
   DATA_FOLDER_ZIP_NAME_MAX_BYTES,
   LOADING_BUDGET_MS,
   dataFolderExportPending,
-  dataFolderExportPercent,
   dataFolderZipName,
   dataFolderZipNameFromInput,
   dataFolderZipNameIssue,
   dataFolderZipNameIssueI18nKey,
   formatBytes,
+  jobProgressFinishing,
+  jobProgressPercent,
 } from "@upriv/shared";
 import { useLoadingBudget } from "@upriv/shared/react";
 import type {
@@ -41,9 +42,20 @@ export function DataFolderExportPanel({ controls, destination }: DataFolderExpor
     startedAt: job?.startedAt,
   });
   const progress = job?.progress ?? null;
-  const percent = dataFolderExportPercent(progress);
+  const percent = jobProgressPercent(progress);
   const nameIssue = dataFolderZipNameIssue(dataFolderZipNameFromInput(destination.zipName));
   const nameIssueKey = nameIssue ? dataFolderZipNameIssueI18nKey(nameIssue) : null;
+
+  const progressLine = () => {
+    if (jobProgressFinishing(progress)) return t("modal.data_folder_export.finishing");
+    if (progress && progress.bytesTotal > 0) {
+      return t("modal.data_folder_export.progress", {
+        done: formatBytes(progress.bytesDone),
+        total: formatBytes(progress.bytesTotal),
+      });
+    }
+    return t("modal.data_folder_export.measuring");
+  };
 
   return (
     <div className="space-y-3">
@@ -69,12 +81,7 @@ export function DataFolderExportPanel({ controls, destination }: DataFolderExpor
             />
           </div>
           <p className="text-sm text-on-surface" role="status">
-            {progress && progress.bytesTotal > 0
-              ? t("modal.data_folder_export.progress", {
-                  done: formatBytes(progress.bytesDone),
-                  total: formatBytes(progress.bytesTotal),
-                })
-              : t("modal.data_folder_export.measuring")}
+            {progressLine()}
           </p>
           <p className="text-xs leading-relaxed text-on-surface-variant">
             {t("modal.data_folder_export.background_note")}

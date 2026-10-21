@@ -43,7 +43,12 @@ function controls(patch: Partial<DataFolderExportControls> = {}): DataFolderExpo
   };
 }
 
-const running: DataFolderExportJob = { startedAt: Date.now(), progress: null, stopping: false };
+const running: DataFolderExportJob = {
+  id: "job-running",
+  startedAt: Date.now(),
+  progress: null,
+  stopping: false,
+};
 
 function show(
   exportControls: DataFolderExportControls,
@@ -249,6 +254,27 @@ describe("VaultRootDataFolderModal export choice", () => {
       footerButton("modal.data_folder_export.stop")?.click();
     });
     expect(exportControls.onStop).toHaveBeenCalledTimes(1);
+  });
+
+  it("says what the running copy is doing", () => {
+    const lines = [
+      "modal.data_folder_export.measuring",
+      "modal.data_folder_export.progress",
+      "modal.data_folder_export.finishing",
+    ];
+    const shown = () => lines.filter((line) => screen.queryByText(line) !== null);
+    const at = (progress: DataFolderExportJob["progress"]) =>
+      createElement(VaultRootDataFolderModal, {
+        open: true,
+        onClose: () => {},
+        exportControls: controls({ canStart: false, job: { ...running, progress } }),
+      });
+    const view = render(at(null));
+    expect(shown()).toEqual(["modal.data_folder_export.measuring"]);
+    view.rerender(at({ bytesDone: 10, bytesTotal: 40 }));
+    expect(shown()).toEqual(["modal.data_folder_export.progress"]);
+    view.rerender(at({ bytesDone: 40, bytesTotal: 40 }));
+    expect(shown()).toEqual(["modal.data_folder_export.finishing"]);
   });
 
   it("marks the folder in use", () => {

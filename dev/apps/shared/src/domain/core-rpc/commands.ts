@@ -110,14 +110,20 @@ export const CORE_RPC_COMMANDS = {
   BACKUP_SAVE: "backup_save",
   BACKUP_GET: "backup_get",
   /**
-   * Zip the whole `.upriv` into `upriv-<stamp>.zip` in the chosen folder. Every
-   * vault must be closed or in recovery; they stay held until the zip is written.
+   * Zip the whole `.upriv` into `<name>.zip` in the chosen folder. Every vault
+   * must be closed or in recovery; they stay held until the zip is written.
    */
   DATA_FOLDER_EXPORT: "data_folder_export",
-  /** Bytes copied by the running data-folder export, or `running: false`. */
-  DATA_FOLDER_EXPORT_STATUS: "data_folder_export_status",
-  /** Stop the running data-folder export. Its partial zip is removed. */
-  DATA_FOLDER_EXPORT_CANCEL: "data_folder_export_cancel",
+  /**
+   * Bytes done by the job a `vault_export`, `backup_save`, or
+   * `data_folder_export` request names, or `running: false`. Light; polled.
+   */
+  JOB_STATUS: "job_status",
+  /**
+   * Stop that job. Its request fails with `job_cancelled` and leaves no file.
+   * A job still waiting for its lane ends as soon as it starts.
+   */
+  JOB_CANCEL: "job_cancel",
 } as const;
 
 /**

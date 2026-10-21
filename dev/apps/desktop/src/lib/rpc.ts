@@ -50,9 +50,10 @@ import {
   parsePlainHeldStatus,
   parsePlainLeftover,
   parseBackupFailure,
-  parseDataFolderExportStatus,
+  parseJobStatus,
   type CloseVaultOutcome,
-  type DataFolderExportProgress,
+  type JobProgress,
+  type JobStopBy,
   type PlainDestination,
   type PlainHeldStatus,
   type PlainLeftover,
@@ -735,20 +736,11 @@ export async function rpcVaultExportCapabilities(): Promise<{ sevenZip: boolean 
   return { sevenZip: (raw as { sevenZip?: unknown }).sevenZip === true };
 }
 
-export async function rpcVaultExport(id: string, request: VaultExportRequest): Promise<Uint8Array> {
-  const raw = await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_EXPORT, {
-    id,
-    format: request.format,
-    password: request.password,
-    sevenZip: request.sevenZip,
-  });
-  return bytesFromContentB64(raw);
-}
-
 export async function rpcVaultExportToPath(
   id: string,
   request: VaultExportRequest,
   destPath: string,
+  job: string,
 ): Promise<{ path: string; size: number }> {
   const raw = await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_EXPORT, {
     id,
@@ -756,6 +748,7 @@ export async function rpcVaultExportToPath(
     password: request.password,
     sevenZip: request.sevenZip,
     destPath,
+    job,
   });
   const written = parsePathWriteResult(raw);
   if (!written) {
@@ -1069,17 +1062,22 @@ export async function rpcBackupPromote(id: string, stamp: string): Promise<void>
   await desktopInvokeRaw(CORE_RPC_COMMANDS.BACKUP_PROMOTE, { id, stamp });
 }
 
-export async function rpcBackupSave(id: string): Promise<VaultBackupEntry> {
-  const raw = await desktopInvokeRaw(CORE_RPC_COMMANDS.BACKUP_SAVE, { id });
+export async function rpcBackupSave(id: string, job: string): Promise<VaultBackupEntry> {
+  const raw = await desktopInvokeRaw(CORE_RPC_COMMANDS.BACKUP_SAVE, { id, job });
   return parseBackupEntry(requireRecord(raw, "backup_save").backup, id);
 }
 
-/** Zip the whole `.upriv` into `<name>.zip` inside `destDir`. */
+/** Zip the whole `.upriv` into `<name>.zip` inside `destDir`, as the job `job`. */
 export async function rpcDataFolderExport(
   destDir: string,
   name: string,
+  job: string,
 ): Promise<{ path: string; size: number }> {
-  const raw = await desktopInvokeRaw(CORE_RPC_COMMANDS.DATA_FOLDER_EXPORT, { destDir, name });
+  const raw = await desktopInvokeRaw(CORE_RPC_COMMANDS.DATA_FOLDER_EXPORT, {
+    destDir,
+    name,
+    job,
+  });
   const written = parsePathWriteResult(raw);
   if (!written) {
     throw new RpcError(
@@ -1091,15 +1089,12 @@ export async function rpcDataFolderExport(
   return written;
 }
 
-export async function rpcDataFolderExportStatus(): Promise<DataFolderExportProgress | null> {
-  return parseDataFolderExportStatus(
-    await desktopInvokeRaw(CORE_RPC_COMMANDS.DATA_FOLDER_EXPORT_STATUS, {}),
-  );
+export async function rpcJobStatus(job: string): Promise<JobProgress | null> {
+  return parseJobStatus(await desktopInvokeRaw(CORE_RPC_COMMANDS.JOB_STATUS, { job }));
 }
 
-export async function rpcDataFolderExportCancel(): Promise<boolean> {
-  const raw = await desktopInvokeRaw(CORE_RPC_COMMANDS.DATA_FOLDER_EXPORT_CANCEL, {});
-  return requireRecord(raw, "data_folder_export_cancel").cancelled === true;
+export async function rpcJobCancel(job: string, by: JobStopBy): Promise<void> {
+  await desktopInvokeRaw(CORE_RPC_COMMANDS.JOB_CANCEL, { job, by });
 }
 
 export async function rpcBackupGet(id: string, stamp: string): Promise<Uint8Array> {

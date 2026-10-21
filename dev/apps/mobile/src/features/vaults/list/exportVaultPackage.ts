@@ -1,12 +1,9 @@
-import { fromByteArray } from "base64-js";
 import {
   cacheDirectory,
   deleteAsync,
-  EncodingType,
   getInfoAsync,
   makeDirectoryAsync,
   readDirectoryAsync,
-  writeAsStringAsync,
 } from "expo-file-system";
 import { isAvailableAsync, shareAsync } from "expo-sharing";
 import {
@@ -24,11 +21,11 @@ const EXPORT_CACHE_DIR = "upriv-exports/";
 const EXPORT_CACHE_TTL_MS = 10 * 60 * 1000;
 
 export interface ExportVaultPackageFns {
-  getExportBytes: (vault: VaultRow, request: VaultExportRequest) => Promise<Uint8Array>;
   exportToPath: (
     vault: VaultRow,
     request: VaultExportRequest,
     destPath: string,
+    job: string,
   ) => Promise<VaultPathWriteResult>;
 }
 
@@ -78,8 +75,8 @@ async function fileExists(uri: string): Promise<boolean> {
 }
 
 /**
- * Write `{display_name}.zip` / `.7z` in core (or mock bytes) then open the share sheet.
- * Prefer `exportToPath` so the archive never crosses the JS bridge.
+ * Write `{display_name}.zip` / `.7z` in core as the job `job`, then open the
+ * share sheet. The archive never crosses the JS bridge.
  *
  * `signal` is aborted when the caller's loading budget expires: an export that
  * outlived its overlay must not pop a share sheet over an unrelated screen.
@@ -88,6 +85,7 @@ export async function exportVaultPackage(
   vault: VaultRow,
   fns: ExportVaultPackageFns,
   request: VaultExportRequest,
+  job: string,
   signal?: AbortSignal,
 ): Promise<"written" | "cancelled"> {
   const filename = vaultExportFilename(vault.displayName, request.format);
@@ -102,23 +100,13 @@ export async function exportVaultPackage(
   if (signal?.aborted) return "cancelled";
 
   const uri = `${dir}${filename}`;
-  const destPath = fsPathFromFileUri(uri);
-  let staged = false;
-  try {
-    await fns.exportToPath(vault, request, destPath);
-    staged = await fileExists(uri);
-  } catch {
-    staged = false;
-  }
-  if (!staged) {
-    const data = await fns.getExportBytes(vault, request);
-    if (signal?.aborted) return "cancelled";
-    await writeAsStringAsync(uri, fromByteArray(data), { encoding: EncodingType.Base64 });
-  }
-
+  await fns.exportToPath(vault, request, fsPathFromFileUri(uri), job);
   if (signal?.aborted) {
     await deleteAsync(uri, { idempotent: true }).catch(() => undefined);
     return "cancelled";
+  }
+  if (!(await fileExists(uri))) {
+    throw new Error("export file was not written");
   }
 
   if (!(await isAvailableAsync())) {

@@ -3,6 +3,7 @@ import {
   CORE_RPC_TIMEOUT_MS,
   MOBILE_ONLY_RPC_COMMANDS,
   MOBILE_ONLY_RPC_TIMEOUT_MS,
+  RPC_TIMEOUT_CODE,
   RpcError,
   isRpcError,
   appWorkspaceForDaemon,
@@ -30,9 +31,10 @@ import {
   parsePlainHeldStatus,
   parsePlainLeftover,
   parseBackupFailure,
-  parseDataFolderExportStatus,
+  parseJobStatus,
   type CloseVaultOutcome,
-  type DataFolderExportProgress,
+  type JobProgress,
+  type JobStopBy,
   type PlainDestination,
   type PlainHeldStatus,
   type PlainLeftover,
@@ -63,7 +65,7 @@ import { getUprivCoreNative } from "upriv-core";
 const BRIDGE = {
   INVALID_RESPONSE: "invalid_response",
   BRIDGE_INVOKE_FAILED: "bridge_invoke_failed",
-  RPC_TIMEOUT: "rpc_timeout",
+  RPC_TIMEOUT: RPC_TIMEOUT_CODE,
 } as const;
 
 const DEFAULT_INVOKE_TIMEOUT_MS = 30_000;
@@ -773,20 +775,11 @@ export async function rpcVaultExportProbe(id: string, password: string): Promise
   return record.ok === true;
 }
 
-export async function rpcVaultExport(id: string, request: VaultExportRequest): Promise<Uint8Array> {
-  const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_EXPORT, {
-    id,
-    format: request.format,
-    password: request.password,
-    sevenZip: request.sevenZip,
-  });
-  return bytesFromContentB64(raw);
-}
-
 export async function rpcVaultExportToPath(
   id: string,
   request: VaultExportRequest,
   destPath: string,
+  job: string,
 ): Promise<{ path: string; size: number }> {
   const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_EXPORT, {
     id,
@@ -794,6 +787,7 @@ export async function rpcVaultExportToPath(
     password: request.password,
     sevenZip: request.sevenZip,
     destPath,
+    job,
   });
   const written = parsePathWriteResult(raw);
   if (!written) {
@@ -1080,17 +1074,22 @@ export async function rpcBackupPromote(id: string, stamp: string): Promise<void>
   await nativeInvokeRaw(CORE_RPC_COMMANDS.BACKUP_PROMOTE, { id, stamp });
 }
 
-export async function rpcBackupSave(id: string): Promise<VaultBackupEntry> {
-  const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.BACKUP_SAVE, { id });
+export async function rpcBackupSave(id: string, job: string): Promise<VaultBackupEntry> {
+  const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.BACKUP_SAVE, { id, job });
   return parseBackupEntry(requireRecord(raw, "backup_save").backup, id);
 }
 
-/** Zip the whole `.upriv` into `<name>.zip` inside `destDir`. */
+/** Zip the whole `.upriv` into `<name>.zip` inside `destDir`, as the job `job`. */
 export async function rpcDataFolderExport(
   destDir: string,
   name: string,
+  job: string,
 ): Promise<{ path: string; size: number }> {
-  const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.DATA_FOLDER_EXPORT, { destDir, name });
+  const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.DATA_FOLDER_EXPORT, {
+    destDir,
+    name,
+    job,
+  });
   const written = parsePathWriteResult(raw);
   if (!written) {
     throw new RpcError(BRIDGE.INVALID_RESPONSE, "data_folder_export: expected path+size", raw);
@@ -1098,15 +1097,12 @@ export async function rpcDataFolderExport(
   return written;
 }
 
-export async function rpcDataFolderExportStatus(): Promise<DataFolderExportProgress | null> {
-  return parseDataFolderExportStatus(
-    await nativeInvokeRaw(CORE_RPC_COMMANDS.DATA_FOLDER_EXPORT_STATUS, {}),
-  );
+export async function rpcJobStatus(job: string): Promise<JobProgress | null> {
+  return parseJobStatus(await nativeInvokeRaw(CORE_RPC_COMMANDS.JOB_STATUS, { job }));
 }
 
-export async function rpcDataFolderExportCancel(): Promise<boolean> {
-  const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.DATA_FOLDER_EXPORT_CANCEL, {});
-  return requireRecord(raw, "data_folder_export_cancel").cancelled === true;
+export async function rpcJobCancel(job: string, by: JobStopBy): Promise<void> {
+  await nativeInvokeRaw(CORE_RPC_COMMANDS.JOB_CANCEL, { job, by });
 }
 
 export async function rpcBackupGet(id: string, stamp: string): Promise<Uint8Array> {

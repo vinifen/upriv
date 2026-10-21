@@ -16,6 +16,7 @@ mod import;
 mod import_slots;
 mod open_close;
 mod os_import;
+mod partial;
 mod persistence;
 mod plain;
 mod rename;
@@ -45,8 +46,7 @@ pub use data_folder_export::{export_data_folder, DataFolderExport};
 pub use delete::delete_vault;
 pub use embedded_settings::{parse_embedded_settings, EmbeddedVaultSettings};
 pub use export::{
-    export_logical_seven_zip, export_logical_seven_zip_to_path, export_store_zip,
-    export_store_zip_to_path, probe_export_password,
+    export_logical_seven_zip_to_path, export_store_zip_to_path, probe_export_password,
 };
 pub use files_zip::{
     classify_import_zip_bytes, classify_import_zip_path, import_logical_files_zip,
@@ -71,6 +71,7 @@ pub use os_import::{
     abort_import_vault, import_logical_os_path, ingest_import_directory, ingest_import_reader,
     ingest_import_reader_staged, open_import_session,
 };
+pub use partial::{discard_partial, PartialWork};
 pub use persistence::{load_vault_persistence, VaultPersistence};
 pub(crate) use plain::{ensure_no_leftover, PlainSession};
 pub use plain::{
@@ -87,10 +88,7 @@ pub use seven_zip::{
 };
 pub use seven_zip_pack::seven_zip_export_available;
 pub use welcome::{VaultWelcome, WELCOME_FILE_MAX_BYTES, WELCOME_README_LOGICAL_PATH};
-pub use zip_io::{
-    probe_store_zip, read_zip_config_toml, zip_store_with_config_to_bytes,
-    zip_store_with_config_to_path,
-};
+pub use zip_io::{probe_store_zip, read_zip_config_toml};
 
 /// Wire DTO for `vault_list`.
 #[derive(Debug, Clone, PartialEq, Eq)]

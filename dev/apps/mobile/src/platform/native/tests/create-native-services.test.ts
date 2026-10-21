@@ -86,8 +86,8 @@ vi.mock("@/lib/rpc", () => ({
   rpcBackupGet: vi.fn(),
   rpcBackupExportToPath: vi.fn(),
   rpcDataFolderExport: vi.fn(async () => ({ path: "/upriv-saf-export/upriv.zip", size: 1 })),
-  rpcDataFolderExportStatus: vi.fn(async () => null),
-  rpcDataFolderExportCancel: vi.fn(async () => false),
+  rpcJobStatus: vi.fn(async () => null),
+  rpcJobCancel: vi.fn(async () => undefined),
   rpcVaultGroupList: vi.fn(async () => ({ groups: [], invalid: false })),
   rpcVaultGroupCreate: vi.fn(),
   rpcVaultGroupUpdate: vi.fn(),
@@ -256,9 +256,14 @@ describe("createNativeServices", () => {
     safReleaseImportTree.mockClear();
     const services = createNativeServices();
     expect(services.dataFolder).toBeDefined();
-    await services.dataFolder?.exportTo("content://tree/backup-drive", "phone-copy");
+    await services.dataFolder?.exportTo("content://tree/backup-drive", "phone-copy", "job-1");
     expect(mountSafExport).toHaveBeenCalledWith("content://tree/backup-drive");
-    expect(rpc.rpcDataFolderExport).toHaveBeenCalledWith("/upriv-saf-export", "phone-copy");
+    expect(rpc.rpcDataFolderExport).toHaveBeenCalledWith(
+      "/upriv-saf-export",
+      "phone-copy",
+      "job-1",
+    );
+    expect(rpc.rpcJobStatus).toHaveBeenCalledWith("job-1");
     expect(unmountSafExport).toHaveBeenCalledTimes(1);
     // The Data folder window keeps the pick for the next export.
     expect(safReleaseImportTree).not.toHaveBeenCalled();

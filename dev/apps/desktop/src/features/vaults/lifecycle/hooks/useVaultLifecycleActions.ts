@@ -8,8 +8,10 @@ import {
   type IdleAutoCloseWarning,
   type IdleLockResult,
   isRpcError,
+  isRpcTimeout,
   isVaultCredentialChallengeI18nKey,
   LOADING_BUDGET_MS,
+  newJobId,
   normalizeVaultSettingsConfig,
   plainFolderClassI18nKey,
   storageModeIsPlaintext,
@@ -37,6 +39,7 @@ import {
 import { TOAST_DEFAULT_MS, useClosingDisplayHold, useVaultPipelineRun } from "@upriv/shared/react";
 import { desktopErrorI18nKey } from "@/lib/errorMessages";
 import {
+  useJobService,
   useVaultFileSystemService,
   useVaultLifecycleService,
   useVaultService,
@@ -99,6 +102,7 @@ export function useVaultLifecycleActions({
   const vaultService = useVaultService();
   const fs = useVaultFileSystemService();
   const lifecycleService = useVaultLifecycleService();
+  const jobs = useJobService();
   const { settings, patchSettings, getSettingsSnapshot } = useAppSettingsContext();
   const {
     purgeForVaultClose,
@@ -112,8 +116,11 @@ export function useVaultLifecycleActions({
   const closingHold = useClosingDisplayHold();
   const pipelineBackgroundRef = useRef(false);
   const exportBusyGenRef = useRef(0);
-  /** Aborted on export timeout so a late run cannot start the download. */
-  const exportAbortRef = useRef<AbortController | null>(null);
+  /**
+   * The export in flight: aborted on timeout so a save dialog left open never
+   * starts it, and its job told to stop so core removes the partial file.
+   */
+  const exportRunRef = useRef<{ abort: AbortController; job: string } | null>(null);
   const vaultsRef = useRef(vaults);
   vaultsRef.current = vaults;
   const entriesRef = useRef(entries);
@@ -965,20 +972,20 @@ export function useVaultLifecycleActions({
       if (!exportVault || exportJobVaultId) return;
       const vault = exportVault;
       const gen = ++exportBusyGenRef.current;
-      exportAbortRef.current?.abort();
-      const abort = new AbortController();
-      exportAbortRef.current = abort;
+      exportRunRef.current?.abort.abort();
+      const run = { abort: new AbortController(), job: newJobId() };
+      exportRunRef.current = run;
       setExportJob({ vaultId: vault.id, startedAt: Date.now() });
       setExportSubmitting(true);
       void exportVaultPackage(
         vault,
         {
-          getExportBytes: (row, exportRequest) => vaultService.getExportBytes(row, exportRequest),
-          exportToPath: (row, exportRequest, destPath) =>
-            vaultService.exportToPath(row, exportRequest, destPath),
+          exportToPath: (row, exportRequest, destPath, job) =>
+            vaultService.exportToPath(row, exportRequest, destPath, job),
         },
         request,
-        abort.signal,
+        run.job,
+        run.abort.signal,
       )
         .then((outcome) => {
           if (gen !== exportBusyGenRef.current) return;
@@ -988,10 +995,17 @@ export function useVaultLifecycleActions({
         })
         .catch((error) => {
           if (gen !== exportBusyGenRef.current) return;
+          if (isRpcTimeout(error)) {
+            // The call gave up before the budget did; core still writes the file.
+            void jobs.cancel(run.job, "timeout").catch(() => {
+              /* The export result is ignored either way. */
+            });
+          }
           showError(error, "vault.export.failed");
         })
         .finally(() => {
           if (gen !== exportBusyGenRef.current) return;
+          exportRunRef.current = null;
           setExportSubmitting(false);
           setExportJob(null);
         });
@@ -999,6 +1013,7 @@ export function useVaultLifecycleActions({
     [
       exportJobVaultId,
       exportVault,
+      jobs,
       setExportJob,
       setExportSubmitting,
       setExportVaultId,
@@ -1011,11 +1026,18 @@ export function useVaultLifecycleActions({
 
   const handleExportTimeout = useCallback(() => {
     exportBusyGenRef.current += 1;
-    exportAbortRef.current?.abort();
+    const run = exportRunRef.current;
+    exportRunRef.current = null;
+    if (run) {
+      run.abort.abort();
+      void jobs.cancel(run.job, "timeout").catch(() => {
+        /* The export result is ignored either way. */
+      });
+    }
     setExportSubmitting(false);
     setExportJob(null);
     showToast(t("error.operation_timed_out"));
-  }, [setExportJob, setExportSubmitting, showToast, t]);
+  }, [jobs, setExportJob, setExportSubmitting, showToast, t]);
 
   const showIdleNotice = useCallback(
     (message: string) => {

@@ -80,17 +80,16 @@ export interface VaultService {
   unregisterSettings(vaultId: string): Promise<void>;
 
   /**
-   * Export bytes for `{display_name}.zip` or `{display_name}.7z`.
-   * Zip = envelope of `store/` (no zip password). `.7z` = logical stream (never `.enc` blobs).
-   * Prefer `exportToPath` so large archives skip the NDJSON cap.
+   * Write `{display_name}.zip` or `{display_name}.7z` to `destPath` in core,
+   * as the job `job`. Zip = envelope of `store/` (no zip password). `.7z` =
+   * logical stream (never `.enc` blobs). Rejects with `job_cancelled` after
+   * `JobService.cancel`; the file at `destPath` is then left as it was.
    */
-  getExportBytes(vault: VaultRow, request: VaultExportRequest): Promise<Uint8Array>;
-
-  /** Write the export archive to `destPath` in core (no base64 in NDJSON). */
   exportToPath(
     vault: VaultRow,
     request: VaultExportRequest,
     destPath: string,
+    job: string,
   ): Promise<VaultPathWriteResult>;
 
   /** Whether portable `.7z` export can run in RAM (always on when core is linked). Zip of `store/` is always available. */

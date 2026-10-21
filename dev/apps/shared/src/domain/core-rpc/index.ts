@@ -7,8 +7,10 @@ export {
 export {
   isRpcError,
   isRpcErrorBody,
+  isRpcTimeout,
   parseRpcErrorBody,
   RPC_PROTOCOL_ERROR_CODES,
+  RPC_TIMEOUT_CODE,
   RpcError,
 } from "./errors";
 export type { RpcErrorBody } from "./errors";

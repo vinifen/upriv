@@ -39,6 +39,7 @@ use upriv_core::{
 };
 
 mod data_folder_ops;
+mod job_ops;
 mod plain_ops;
 mod secret;
 mod vault_ops;
@@ -212,8 +213,8 @@ pub fn handle_rpc(req: RpcRequest) -> RpcResponse {
         "backup_save" => vault_ops::backup_save(req.params),
         "backup_get" => vault_ops::backup_get(req.params),
         "data_folder_export" => data_folder_ops::export(req.params),
-        "data_folder_export_status" => data_folder_ops::export_status(),
-        "data_folder_export_cancel" => data_folder_ops::export_cancel(),
+        "job_status" => job_ops::status(req.params),
+        "job_cancel" => job_ops::cancel(req.params),
         other => err("unknown_method", format!("unknown method: {other}")),
     }
 }
@@ -1952,9 +1953,10 @@ fn map_core_err_response(error: upriv_core::UprivError, emit_log: bool) -> RpcRe
         upriv_core::UprivError::RewrapUnchanged(upriv_core::RewrapUnchangedKind::UnlockRam) => {
             ("rewrap_kdf_unchanged", None)
         }
+        upriv_core::UprivError::JobCancelled => ("job_cancelled", None),
+        upriv_core::UprivError::JobIdInvalid => ("invalid_request", None),
         upriv_core::UprivError::DataFolderBusy => ("data_folder_busy", None),
         upriv_core::UprivError::DataFolderExportBusy => ("data_folder_export_busy", None),
-        upriv_core::UprivError::DataFolderExportCancelled => ("data_folder_export_cancelled", None),
         upriv_core::UprivError::DataFolderExportSpaceShort { .. } => {
             ("data_folder_export_space_short", None)
         }
@@ -1980,7 +1982,7 @@ fn map_core_err_response(error: upriv_core::UprivError, emit_log: bool) -> RpcRe
             | "vault_unlock_blocked"
             | "rewrap_password_unchanged"
             | "rewrap_kdf_unchanged"
-            | "data_folder_export_cancelled" => LogLevel::Warn,
+            | "job_cancelled" => LogLevel::Warn,
             _ => LogLevel::Error,
         };
         // `message` stays on the RPC response for the person at the screen.
@@ -2225,8 +2227,8 @@ mod contract_tests {
         "backup_save",
         "backup_get",
         "data_folder_export",
-        "data_folder_export_status",
-        "data_folder_export_cancel",
+        "job_status",
+        "job_cancel",
     ];
 
     #[test]
@@ -2243,6 +2245,77 @@ mod contract_tests {
                 "{method} must be registered in handle_rpc"
             );
         }
+    }
+
+    fn call(method: &str, params: Value) -> RpcResponse {
+        handle_rpc(RpcRequest {
+            method: method.into(),
+            params,
+        })
+    }
+
+    fn error_code(response: &RpcResponse) -> Option<&str> {
+        response.error.as_ref().map(|e| e.code.as_str())
+    }
+
+    #[test]
+    fn a_job_that_is_not_running_reports_so() {
+        let status = call("job_status", json!({ "job": "rpc-never-started" }));
+        assert_eq!(
+            status.result,
+            Some(json!({ "running": false, "bytesDone": 0, "bytesTotal": 0 }))
+        );
+        let cancel = call(
+            "job_cancel",
+            json!({ "job": "rpc-never-started", "by": "timeout" }),
+        );
+        assert_eq!(cancel.result, Some(json!({ "running": false })));
+        // A stop names who asked for it.
+        let unnamed = call("job_cancel", json!({ "job": "rpc-never-started" }));
+        assert_eq!(error_code(&unnamed), Some("invalid_request"));
+        let unknown = call("job_cancel", json!({ "job": "x", "by": "admin" }));
+        assert_eq!(error_code(&unknown), Some("invalid_request"));
+        for method in ["job_status", "job_cancel"] {
+            assert_eq!(
+                error_code(&call(method, json!({}))),
+                Some("invalid_request")
+            );
+        }
+    }
+
+    #[test]
+    fn long_jobs_need_a_job_id() {
+        for (method, params) in [
+            (
+                "vault_export",
+                json!({ "id": "notes", "destPath": "/media/usb/Notes.zip" }),
+            ),
+            ("backup_save", json!({ "id": "notes" })),
+            (
+                "data_folder_export",
+                json!({ "destDir": "/media/usb", "name": "copy" }),
+            ),
+        ] {
+            assert_eq!(
+                error_code(&call(method, params)),
+                Some("invalid_request"),
+                "{method}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_vault_export_needs_a_file_to_write() {
+        let response = call(
+            "vault_export",
+            json!({ "id": "notes", "job": "rpc-export" }),
+        );
+        assert_eq!(error_code(&response), Some("invalid_request"));
+        let blank = call(
+            "vault_export",
+            json!({ "id": "notes", "destPath": "  ", "job": "rpc-export" }),
+        );
+        assert_eq!(error_code(&blank), Some("invalid_request"));
     }
 
     #[test]

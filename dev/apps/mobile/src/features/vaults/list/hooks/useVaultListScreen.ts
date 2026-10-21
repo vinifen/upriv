@@ -24,6 +24,8 @@ import {
   hiddenUngroupedRootVaults,
   insertUngroupedVaultAtRoot,
   LOADING_BUDGET_MS,
+  isRpcTimeout,
+  newJobId,
   remapVaultIdInGroups,
   removeVaultFromGroups,
   sortVaultsByOrder,
@@ -66,6 +68,7 @@ import {
 import {
   useBackupService,
   useDataFolderService,
+  useJobService,
   useLogService,
   useVaultGroupService,
   useVaultLifecycleService,
@@ -184,8 +187,12 @@ export function useVaultListScreen() {
   const repairBudget = useLoadingBudget(repairBusy, LOADING_BUDGET_MS.default);
   const noteSaveGenerationRef = useRef(new Map<string, number>());
   const exportBusyGenRef = useRef(0);
-  /** Aborted on export timeout so a late run cannot open the share sheet. */
-  const exportAbortRef = useRef<AbortController | null>(null);
+  /**
+   * The export in flight: aborted on timeout so a late run cannot open the
+   * share sheet, and its job told to stop so core removes the partial file.
+   */
+  const exportRunRef = useRef<{ abort: AbortController; job: string } | null>(null);
+  const jobs = useJobService();
 
   const sortMode = settings.ui.vault_list_sort;
   const sortDirection = settings.ui.vault_list_sort_direction;
@@ -212,6 +219,7 @@ export function useVaultListScreen() {
     stop: stopDataFolderExport,
   } = useDataFolderExportJob(
     dataFolderService,
+    jobs,
     {
       onExported: (written) => {
         show(t("toast.data_folder_exported", { name: dataFolderZipName(written.path) }));
@@ -429,7 +437,7 @@ export function useVaultListScreen() {
   }, []);
   const backupService = useBackupService();
   const [backupListRefresh, setBackupListRefresh] = useState(0);
-  const backupJob = useVaultBackupJob(backupService, {
+  const backupJob = useVaultBackupJob(backupService, jobs, {
     onSaved: (vaultId) => {
       const name = vaults.find((vault) => vault.id === vaultId)?.displayName ?? vaultId;
       show(t("toast.backup_now_saved", { name }));
@@ -538,20 +546,20 @@ export function useVaultListScreen() {
       if (!exportVault || exportJob) return;
       const vault = exportVault;
       const gen = ++exportBusyGenRef.current;
-      exportAbortRef.current?.abort();
-      const abort = new AbortController();
-      exportAbortRef.current = abort;
+      exportRunRef.current?.abort.abort();
+      const run = { abort: new AbortController(), job: newJobId() };
+      exportRunRef.current = run;
       setExportJob({ vaultId: vault.id, startedAt: Date.now() });
       setExportSubmitting(true);
       void exportVaultPackage(
         vault,
         {
-          getExportBytes: (row, exportRequest) => vaultService.getExportBytes(row, exportRequest),
-          exportToPath: (row, exportRequest, destPath) =>
-            vaultService.exportToPath(row, exportRequest, destPath),
+          exportToPath: (row, exportRequest, destPath, job) =>
+            vaultService.exportToPath(row, exportRequest, destPath, job),
         },
         request,
-        abort.signal,
+        run.job,
+        run.abort.signal,
       )
         .then((outcome) => {
           if (gen !== exportBusyGenRef.current) return;
@@ -561,10 +569,17 @@ export function useVaultListScreen() {
         })
         .catch((error) => {
           if (gen !== exportBusyGenRef.current) return;
+          if (isRpcTimeout(error)) {
+            // The call gave up before the budget did; core still writes the file.
+            void jobs.cancel(run.job, "timeout").catch(() => {
+              /* The export result is ignored either way. */
+            });
+          }
           show(t(mobileErrorI18nKey(error, "vault.export.failed")));
         })
         .finally(() => {
           if (gen !== exportBusyGenRef.current) return;
+          exportRunRef.current = null;
           setExportSubmitting(false);
           setExportJob(null);
         });
@@ -572,6 +587,7 @@ export function useVaultListScreen() {
     [
       exportJob,
       exportVault,
+      jobs,
       setExportJob,
       setExportSubmitting,
       setExportVault,
@@ -1133,11 +1149,18 @@ export function useVaultListScreen() {
 
   const handleExportTimeout = useCallback(() => {
     exportBusyGenRef.current += 1;
-    exportAbortRef.current?.abort();
+    const run = exportRunRef.current;
+    exportRunRef.current = null;
+    if (run) {
+      run.abort.abort();
+      void jobs.cancel(run.job, "timeout").catch(() => {
+        /* The export result is ignored either way. */
+      });
+    }
     setExportSubmitting(false);
     setExportJob(null);
     show(t("error.operation_timed_out"));
-  }, [setExportJob, setExportSubmitting, show, t]);
+  }, [jobs, setExportJob, setExportSubmitting, show, t]);
 
   const handleCreateVault = (result: CreateVaultResult, password: string) => {
     const listed = vaults.some((vault) => vault.id === result.vaultId);

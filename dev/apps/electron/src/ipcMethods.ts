@@ -87,6 +87,6 @@ export const ELECTRON_IPC_METHODS = [
   "backup_save",
   "backup_get",
   "data_folder_export",
-  "data_folder_export_status",
-  "data_folder_export_cancel",
+  "job_status",
+  "job_cancel",
 ] as const;

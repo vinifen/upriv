@@ -41,6 +41,7 @@ export {
   sanitizeExportFilenameBase,
   vaultCanExport,
   vaultExportFilename,
+  vaultExportMenuShown,
 } from "./export";
 export { resolveVaultPasswordHint } from "./passwordHint";
 export { touchVaultLastAccessed, vaultLastAccessedLabel } from "./lastAccessed";

@@ -242,8 +242,9 @@ mod tests {
             heavy_lane("data_folder_export", &empty),
             Some(HeavyLane::DataFolder)
         );
-        assert_eq!(heavy_lane("data_folder_export_status", &empty), None);
-        assert_eq!(heavy_lane("data_folder_export_cancel", &empty), None);
+        // Progress and stop answer at once, beside the job they name.
+        assert_eq!(heavy_lane("job_status", &empty), None);
+        assert_eq!(heavy_lane("job_cancel", &empty), None);
         assert_ne!(
             heavy_lane("vault_close", &empty),
             heavy_lane("vault_import_7z", &empty)

@@ -179,14 +179,19 @@ pub enum UprivError {
     #[error("close every vault and wait for its work to finish before exporting the data folder")]
     DataFolderBusy,
 
+    /// A vault export, Back up now, or the data-folder export was stopped,
+    /// by the person or by its time limit. Its partial file was removed.
+    #[error("job cancelled")]
+    JobCancelled,
+
+    /// A job id is malformed or already names a running job.
+    #[error("job id is malformed or already running")]
+    JobIdInvalid,
+
     /// The data folder is being exported. Another export, a new vault, and a
     /// backup delete or pin wait until it ends.
     #[error("the data folder is being exported")]
     DataFolderExportBusy,
-
-    /// The user stopped the data-folder export. Its partial zip was removed.
-    #[error("data folder export cancelled")]
-    DataFolderExportCancelled,
 
     /// The chosen folder's drive does not have room for the data-folder zip.
     #[error("data folder export needs {needed} bytes, {available} free")]

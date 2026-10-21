@@ -3,15 +3,11 @@ import {
   LOADING_BUDGET_MS,
   RpcError,
   isSafContentUri,
-  type DataFolderExportProgress,
   type DataFolderService,
+  type JobProgress,
   type VaultPathWriteResult,
 } from "@upriv/shared";
-import {
-  rpcDataFolderExport,
-  rpcDataFolderExportCancel,
-  rpcDataFolderExportStatus,
-} from "@/lib/rpc";
+import { rpcDataFolderExport, rpcJobStatus } from "@/lib/rpc";
 import { SAF_EXPORT_ROOT } from "./androidVaultHome";
 import { mountSafExport, safReleaseImportTree, unmountSafExport } from "./safVaultRoot";
 
@@ -20,9 +16,9 @@ const SETTLE_POLL_MS = 1_000;
 
 /** Bridge calls the adapter uses. Injected so tests run without Android. */
 export interface NativeDataFolderIo {
-  exportTo(destDir: string, name: string): Promise<VaultPathWriteResult>;
-  exportProgress(): Promise<DataFolderExportProgress | null>;
-  cancelExport(): Promise<boolean>;
+  exportTo(destDir: string, name: string, job: string): Promise<VaultPathWriteResult>;
+  /** `job_status` of that export: `null` once core no longer runs it. */
+  jobStatus(job: string): Promise<JobProgress | null>;
   /** Mount Rust `/upriv-saf-export` on a picked `content://` tree. Throws when it cannot. */
   mountExportTree(treeUri: string): void;
   unmountExportTree(): void;
@@ -55,12 +51,12 @@ export function createNativeDataFolderService(io: NativeDataFolderIo): DataFolde
   /** The window let the mounted tree go; it is released when the export ends. */
   let releaseWhenDone = false;
 
-  const untilCoreIdle = async (): Promise<void> => {
+  const untilJobEnds = async (job: string): Promise<void> => {
     const deadline = Date.now() + LOADING_BUDGET_MS.dataFolderExport;
     while (Date.now() < deadline) {
-      let running: DataFolderExportProgress | null;
+      let running: JobProgress | null;
       try {
-        running = await io.exportProgress();
+        running = await io.jobStatus(job);
       } catch {
         return;
       }
@@ -70,9 +66,9 @@ export function createNativeDataFolderService(io: NativeDataFolderIo): DataFolde
   };
 
   return {
-    async exportTo(destDir, name) {
+    async exportTo(destDir, name, job) {
       const target = destDir.trim();
-      if (!isSafContentUri(target)) return io.exportTo(target, name);
+      if (!isSafContentUri(target)) return io.exportTo(target, name, job);
       if (mounted !== null) {
         // Mounting another tree would send the running export's writes there.
         throw new RpcError(
@@ -90,17 +86,15 @@ export function createNativeDataFolderService(io: NativeDataFolderIo): DataFolde
         throw error;
       }
       try {
-        return await io.exportTo(SAF_EXPORT_ROOT, name);
+        return await io.exportTo(SAF_EXPORT_ROOT, name, job);
       } finally {
-        await untilCoreIdle();
+        await untilJobEnds(job);
         io.unmountExportTree();
         mounted = null;
         if (releaseWhenDone) io.releaseTree(target);
         releaseWhenDone = false;
       }
     },
-    exportProgress: () => io.exportProgress(),
-    cancelExport: () => io.cancelExport(),
     releaseDestination(destDir) {
       const target = destDir.trim();
       if (!isSafContentUri(target)) return;
@@ -113,11 +107,10 @@ export function createNativeDataFolderService(io: NativeDataFolderIo): DataFolde
   };
 }
 
-/** Native → `upriv-ffi` `data_folder_export*` with the picked folder mounted. */
+/** Native → `upriv-ffi` `data_folder_export` with the picked folder mounted. */
 export const nativeDataFolderService = createNativeDataFolderService({
-  exportTo: (destDir, name) => rpcDataFolderExport(destDir, name),
-  exportProgress: () => rpcDataFolderExportStatus(),
-  cancelExport: () => rpcDataFolderExportCancel(),
+  exportTo: (destDir, name, job) => rpcDataFolderExport(destDir, name, job),
+  jobStatus: (job) => rpcJobStatus(job),
   mountExportTree: (treeUri) => mountSafExport(treeUri),
   unmountExportTree: () => unmountSafExport(),
   releaseTree: (treeUri) => safReleaseImportTree(treeUri),

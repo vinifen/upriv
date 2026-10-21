@@ -6,6 +6,7 @@ export type {
 export type { BackupService } from "./backup/BackupService";
 export type { CreateVaultService } from "./vault-create/CreateVaultService";
 export type { DataFolderService } from "./data-folder/DataFolderService";
+export type { JobService, JobStopBy } from "./jobs/JobService";
 export type {
   VaultFileSystemService,
   VaultBinaryByteSource,

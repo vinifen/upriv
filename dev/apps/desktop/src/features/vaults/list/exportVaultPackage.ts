@@ -1,15 +1,13 @@
-import { downloadFiles } from "@/lib/downloadZip";
-import { isElectronRenderer } from "@/lib/invoke";
 import { rpcPickSaveFile } from "@/lib/rpc";
 import type { VaultExportRequest, VaultPathWriteResult, VaultRow } from "@upriv/shared";
 import { vaultExportFilename } from "@upriv/shared";
 
 export interface ExportVaultPackageFns {
-  getExportBytes: (vault: VaultRow, request: VaultExportRequest) => Promise<Uint8Array>;
   exportToPath: (
     vault: VaultRow,
     request: VaultExportRequest,
     destPath: string,
+    job: string,
   ) => Promise<VaultPathWriteResult>;
 }
 
@@ -22,32 +20,26 @@ function saveFilters(
 }
 
 /**
- * Write `{display_name}.zip` / `.7z` via core `destPath` in Electron so the
- * archive never rides the NDJSON line. Browser mock still downloads bytes.
+ * Ask where to save `{display_name}.zip` / `.7z`, then write it in core as the
+ * job `job`, so the archive never rides the NDJSON line.
  *
- * `signal` is aborted when the caller's loading budget expires: an export that
- * outlived its overlay must not start a download the user already gave up on.
+ * `signal` is aborted when the caller's loading budget expires: an export the
+ * user gave up on while the save dialog was open never starts.
  */
 export async function exportVaultPackage(
   vault: VaultRow,
   fns: ExportVaultPackageFns,
   request: VaultExportRequest,
+  job: string,
   signal?: AbortSignal,
 ): Promise<"written" | "cancelled"> {
   const filename = vaultExportFilename(vault.displayName, request.format);
-  if (isElectronRenderer()) {
-    const destPath = await rpcPickSaveFile({
-      title: filename,
-      defaultPath: filename,
-      filters: saveFilters(request.format),
-    });
-    if (!destPath || signal?.aborted) return "cancelled";
-    await fns.exportToPath(vault, request, destPath);
-    return "written";
-  }
-
-  const data = await fns.getExportBytes(vault, request);
-  if (signal?.aborted) return "cancelled";
-  downloadFiles([{ filename, data }], filename);
+  const destPath = await rpcPickSaveFile({
+    title: filename,
+    defaultPath: filename,
+    filters: saveFilters(request.format),
+  });
+  if (!destPath || signal?.aborted) return "cancelled";
+  await fns.exportToPath(vault, request, destPath, job);
   return "written";
 }

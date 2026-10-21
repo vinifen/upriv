@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   LOADING_BUDGET_MS,
-  isDataFolderExportCancelled,
-  type DataFolderExportProgress,
+  isJobCancelled,
+  isRpcTimeout,
+  newJobId,
+  type JobProgress,
 } from "../domain";
-import type { DataFolderService, VaultPathWriteResult } from "../services";
+import type { DataFolderService, JobService, VaultPathWriteResult } from "../services";
 import { useLoadingBudget } from "./useLoadingBudget";
 import { scheduleInterval } from "./schedule";
 
@@ -13,9 +15,11 @@ export const DATA_FOLDER_EXPORT_POLL_MS = 1_000;
 
 /** The export in flight. */
 export interface DataFolderExportJob {
+  /** The job id its request carries (`job_status`, `job_cancel`). */
+  id: string;
   startedAt: number;
   /** `null` until the first answer. */
-  progress: DataFolderExportProgress | null;
+  progress: JobProgress | null;
   /** Stop was asked for. The export is removing its partial zip. */
   stopping: boolean;
 }
@@ -31,7 +35,10 @@ export interface DataFolderExportJobEvents {
   onFailed: (error: unknown) => void;
   /** The user stopped the export and it left no file. */
   onCancelled: () => void;
-  /** The budget ran out. The export is told to stop, and a later result is ignored. */
+  /**
+   * The budget or the call's own timeout ran out. The export is told to stop,
+   * and a later result is ignored.
+   */
   onTimedOut: () => void;
 }
 
@@ -45,6 +52,7 @@ export interface DataFolderExportJobEvents {
  */
 export function useDataFolderExportJob(
   service: DataFolderService | undefined,
+  jobs: JobService,
   events: DataFolderExportJobEvents,
   dataFolderKey: string,
 ) {
@@ -78,17 +86,28 @@ export function useDataFolderExportJob(
     [commit],
   );
 
+  /** Tell core to stop `id` after a timeout. Its result is ignored. */
+  const stopInCore = useCallback(
+    (id: string) => {
+      void jobs.cancel(id, "timeout").catch(() => {
+        /* The export result is ignored either way. */
+      });
+    },
+    [jobs],
+  );
+
   /** Start an export of `<name>.zip` into `destDir`. False while one runs. */
   const start = useCallback(
     (destDir: string, name: string): boolean => {
       if (!service || jobRef.current) return false;
       const gen = ++genRef.current;
+      const id = newJobId();
       // A data folder switch waits for the export, so this is the folder copied.
       const copiedKey = dataFolderKeyRef.current;
       setWritten(null);
-      commit({ startedAt: Date.now(), progress: null, stopping: false });
+      commit({ id, startedAt: Date.now(), progress: null, stopping: false });
       void service
-        .exportTo(destDir, name)
+        .exportTo(destDir, name, id)
         .then(
           (result) => {
             if (gen !== genRef.current) return;
@@ -97,8 +116,15 @@ export function useDataFolderExportJob(
           },
           (error: unknown) => {
             if (gen !== genRef.current) return;
-            if (isDataFolderExportCancelled(error)) eventsRef.current.onCancelled();
-            else eventsRef.current.onFailed(error);
+            if (isJobCancelled(error)) {
+              eventsRef.current.onCancelled();
+            } else if (isRpcTimeout(error)) {
+              // The call gave up before the budget did; core still runs the copy.
+              stopInCore(id);
+              eventsRef.current.onTimedOut();
+            } else {
+              eventsRef.current.onFailed(error);
+            }
           },
         )
         .finally(() => {
@@ -106,28 +132,29 @@ export function useDataFolderExportJob(
         });
       return true;
     },
-    [commit, service],
+    [commit, service, stopInCore],
   );
 
   /** Ask the running export to stop. Its result then settles the job. */
   const stop = useCallback(() => {
     const current = jobRef.current;
-    if (!service || !current || current.stopping) return;
+    if (!current || current.stopping) return;
     patch(genRef.current, { stopping: true });
-    void service.cancelExport().catch(() => {
+    void jobs.cancel(current.id, "user").catch(() => {
       /* The export result still settles the job. */
     });
-  }, [patch, service]);
+  }, [jobs, patch]);
 
+  const runningId = job?.id ?? null;
   useEffect(() => {
-    if (!running || !service) return;
+    if (runningId === null) return;
     const gen = genRef.current;
     let asking = false;
     const ask = () => {
       if (asking) return;
       asking = true;
-      void service
-        .exportProgress()
+      void jobs
+        .status(runningId)
         .then(
           (progress) => {
             if (progress) patch(gen, { progress });
@@ -142,17 +169,16 @@ export function useDataFolderExportJob(
     };
     ask();
     return scheduleInterval(ask, DATA_FOLDER_EXPORT_POLL_MS);
-  }, [patch, running, service]);
+  }, [jobs, patch, runningId]);
 
   useEffect(() => {
-    if (!budget.timedOut || !running) return;
+    const current = jobRef.current;
+    if (!budget.timedOut || !current) return;
     genRef.current += 1;
     commit(null);
-    void service?.cancelExport().catch(() => {
-      /* Nothing else to stop. */
-    });
+    stopInCore(current.id);
     eventsRef.current.onTimedOut();
-  }, [budget.timedOut, commit, running, service]);
+  }, [budget.timedOut, commit, stopInCore]);
 
   return {
     job,
