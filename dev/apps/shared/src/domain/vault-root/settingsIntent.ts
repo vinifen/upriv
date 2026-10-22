@@ -17,6 +17,13 @@
 import type { I18nKey } from "../../i18n/catalog";
 import type { IncompleteReplacePolicy, VaultRootDirStatus } from "./types";
 
+/**
+ * A changed path is checked on disk after this pause, so typing asks core once
+ * it settles rather than on every key. The draft reads `checking` (and blocks
+ * the primary action) from the first key.
+ */
+export const VAULT_ROOT_PATH_CHECK_DELAY_MS = 250;
+
 /** Continue (blocking gates) vs Apply (Data folder). */
 export type VaultRootConfirmAction = "continue" | "apply";
 

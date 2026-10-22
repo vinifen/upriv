@@ -77,16 +77,6 @@ export function vaultFileLanguageFromPath(path: string, mimeHint?: string): Vaul
   return "text";
 }
 
-/** True when the editor should not decode the file as text or an image. */
-export function isImportableBinaryPath(path: string, mimeHint?: string): boolean {
-  return vaultFileLanguageFromPath(path, mimeHint) === "binary";
-}
-
-/** Import is not typed-gated; reserved names are skipped elsewhere. */
-export function isVaultImportUnsupported(_path: string, _mimeHint?: string): boolean {
-  return false;
-}
-
 /** MIME for an image path (used when materializing a data URL). */
 export function imageMimeFromPath(path: string, mimeHint?: string): string {
   const hint = mimeHint?.trim().toLowerCase();

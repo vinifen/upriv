@@ -45,7 +45,7 @@ import {
   displayNameErrorI18nKey,
   EMPTY_CHANGE_PASSWORD_FIELDS,
   errorDisplayI18nKey,
-  rewrapErrorOnPasswordField,
+  errorOnPasswordField,
   NO_VAULT_GROUPS,
   isVaultInHiddenGroup,
   isHiddenGroup,
@@ -638,7 +638,7 @@ export function VaultSettingsModal({
         vaultId: id,
         kind,
         message: t(key ?? "error.settings_save_failed"),
-        onPasswordField: rewrapErrorOnPasswordField(key),
+        onPasswordField: errorOnPasswordField(key),
       };
       setRewrapFailure(failure);
       const showing = openRef.current && vaultIdRef.current === id && areaRef.current === kind;

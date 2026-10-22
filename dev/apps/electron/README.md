@@ -54,7 +54,7 @@ Chromium’s OS SUID sandbox often fails under AppArmor / AppImage (`setuid_sand
 
 ## RPC contract
 
-Method name constants: **`@upriv/shared` `CORE_RPC_COMMANDS`** (and desktop `lib/commands.ts`). Execution gate: **`upriv-rpc`** via **`upriv-daemon`**. Electron main handles the shell-only methods (`app_exit`, file dialogs, reveal, terminal, `winfsp_*`, `fuse_*`) and does not send them to the daemon.
+Method name constants: **`@upriv/shared` `CORE_RPC_COMMANDS`** and **`SHELL_ONLY_RPC_COMMANDS`**. The renderer allowlist is their union (`ELECTRON_IPC_METHODS`). Execution gate: **`upriv-rpc`** via **`upriv-daemon`**. Electron main handles the shell-only methods (`app_exit`, file dialogs, reveal, terminal, `winfsp_*`, `fuse_*`) and sends `app_shutdown` itself when the daemon should exit.
 
 Logs (daemon): `log_list` / `log_get` / `log_delete` are core methods and go to the daemon.
 
@@ -65,5 +65,5 @@ src/
 ├── main.ts           # BrowserWindow, IPC allowlist, CSP (prod), prod menu + no reload
 ├── preload.ts        # contextBridge → window.upriv
 └── daemon.ts         # stdio NDJSON ↔ upriv-daemon (env whitelist)
-build/icons/          # AppImage / installer icon (not prod-example/)
+build/icons/          # AppImage / installer icon
 ```

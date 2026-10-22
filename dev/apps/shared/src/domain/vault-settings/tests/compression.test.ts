@@ -39,7 +39,6 @@ describe("normalizeSevenZipSection", () => {
   const base = {
     encrypt_file_names: true,
     solid: false,
-    method: "lzma2" as const,
   };
 
   it("clears orphan compression_level on encrypt_only", () => {

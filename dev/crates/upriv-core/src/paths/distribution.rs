@@ -57,9 +57,9 @@ pub fn distribution_str(distribution: AppDistribution) -> &'static str {
 
 /// Read `UPRIV_DISTRIBUTION` when set to a known value.
 ///
-/// Unknown values (including future `flatpak` / `snap`) are ignored and fall through
+/// Unknown values (such as `flatpak` / `snap`) are ignored and fall through
 /// to [`infer_app_distribution`], which usually yields [`AppDistribution::Installed`]
-/// for sandboxed user-data homes — acceptable until those channels are first-class.
+/// for sandboxed user-data homes.
 pub fn env_app_distribution() -> Option<AppDistribution> {
     std::env::var_os(ENV_DISTRIBUTION).and_then(|value| {
         let raw = value.to_string_lossy();

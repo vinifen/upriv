@@ -133,37 +133,32 @@ pub fn renamed_open_path(path: &str, from: &str, to: &str) -> String {
     }
 }
 
-/// Logical path (`Docs/A.txt`, or empty for the root) to an NT path.
-///
-/// Directory listings send the leaf name. This form is what Windows sends
-/// back into [`nt_to_logical`].
-#[cfg_attr(not(test), allow(dead_code))]
-pub fn logical_to_nt(logical: &str) -> String {
-    if logical.is_empty() {
-        return "\\".to_string();
-    }
-    let mut out = String::from("\\");
-    out.push_str(&logical.replace('/', "\\"));
-    out
-}
-
 /// Unix milliseconds to a Windows `FILETIME` count.
 pub fn filetime_from_unix_millis(ms: u64) -> u64 {
     ms.saturating_mul(10_000)
         .saturating_add(WINDOWS_UNIX_EPOCH_100NS)
 }
 
-/// Inverse of [`filetime_from_unix_millis`]. Directory listings use the
-/// forward conversion; this one checks that round-trip.
-#[cfg_attr(not(test), allow(dead_code))]
-pub fn unix_millis_from_filetime(filetime: u64) -> Option<u64> {
-    let ticks = filetime.checked_sub(WINDOWS_UNIX_EPOCH_100NS)?;
-    Some(ticks / 10_000)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Logical path (`Docs/A.txt`, or empty for the root) to the NT path
+    /// Windows sends back into [`nt_to_logical`].
+    fn logical_to_nt(logical: &str) -> String {
+        if logical.is_empty() {
+            return "\\".to_string();
+        }
+        let mut out = String::from("\\");
+        out.push_str(&logical.replace('/', "\\"));
+        out
+    }
+
+    /// Inverse of [`filetime_from_unix_millis`], to check the round trip.
+    fn unix_millis_from_filetime(filetime: u64) -> Option<u64> {
+        let ticks = filetime.checked_sub(WINDOWS_UNIX_EPOCH_100NS)?;
+        Some(ticks / 10_000)
+    }
 
     #[test]
     fn directory_mount_uses_the_disk_device() {

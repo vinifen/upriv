@@ -10,7 +10,7 @@ export interface UprivDesktopApi {
   /**
    * Absolute path of an OS-dropped `File`.
    * Renderer passes a DOM `File`; typed as `object` because Electron main `tsconfig` has no DOM lib.
-   * Electron 32+ removed `File.path`; `webUtils.getPathForFile` is the replacement.
+   * Backed by `webUtils.getPathForFile`.
    */
   getPathForFile(file: object): string | undefined;
   /**

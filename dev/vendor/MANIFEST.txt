@@ -66,6 +66,10 @@
 # 4. If directory names changed, update [patch.crates-io] in ../Cargo.toml.
 # 5. cargo check --workspace. Do not cargo generate-lockfile (that re-resolves
 #    unrelated crates.io deps). Diff src/ vs the registry for the new versions.
+# 6. ../.cargo/config.toml turns on the ARMv8 AES backend of aes 0.8
+#    (`aes_armv8`) for aarch64. Check that a new aes still reads that cfg;
+#    later majors enable the backend without one. chacha20 0.9 keeps NEON
+#    behind `chacha20_force_neon`, documented as nightly-only, so it stays off.
 #
 # name version
 aead 0.5.2

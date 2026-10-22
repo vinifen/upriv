@@ -5,6 +5,7 @@ export { VaultChangeKdfFields } from "./VaultChangeKdfFields";
 export {
   PolicyRadioOption,
   settingsControlClass,
+  settingsInvalidControlClass,
   SettingsField,
   SettingsFormGrid,
   DisplayNameFieldError,

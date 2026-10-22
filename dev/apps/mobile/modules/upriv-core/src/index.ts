@@ -12,17 +12,17 @@ import { requireNativeModule } from "expo-modules-core";
 export type UprivCoreNativeModule = {
   appVersion(): string;
   /**
-   * Logical processors on this phone. Optional: older native builds omit it.
+   * Logical processors on this phone.
    * Hermes does not expose `navigator.hardwareConcurrency`.
    */
-  processorCount?(): number;
+  processorCount(): number;
   /** UniFFI CORE RPC — runs off the JS thread (Expo `AsyncFunction`). */
   invoke(method: string, paramsJson: string): Promise<string>;
   /**
    * Same envelope as `invoke`, for read-only probes (`vault_close_phase`) that
-   * must not queue behind a long `invoke`. Optional: older native builds omit it.
+   * must not queue behind a long `invoke`.
    */
-  invokeProbe?(method: string, paramsJson: string): Promise<string>;
+  invokeProbe(method: string, paramsJson: string): Promise<string>;
 
   /** `takePersistableUriPermission(READ|WRITE)`. Idempotent — safe to call after picker. */
   safPersistPermission(treeUri: string): void;
@@ -45,9 +45,8 @@ export type UprivCoreNativeModule = {
   safSetActiveUri(uri: string): void;
   /**
    * Document URI for the shared Documents directory, used as the folder screen's start.
-   * Optional: Expo Go and older native builds omit this method.
    */
-  safDocumentsInitialUri?(): string;
+  safDocumentsInitialUri(): string;
   /**
    * Mount Rust `/upriv-saf-root` on this persisted tree so vault create and
    * edit write there. Throws `saf_unreachable` when the tree's volume is gone
@@ -68,15 +67,13 @@ export type UprivCoreNativeModule = {
   /**
    * Open an existing OS path in the system Files app (Android).
    * Encrypted vaults have no OS folder — only a live mount / `upriv_plain` path.
-   * Optional: Expo Go and older native builds omit this method.
    */
-  revealInFileManager?(osPath: string): void;
+  revealInFileManager(osPath: string): void;
   /**
    * Stream one `content://` file into an open import session.
    * Returns the UniFFI JSON envelope (`{ ok, result | error }`).
-   * Optional: Expo Go and builds from before this method omit it.
    */
-  importContentUri?(vaultId: string, logicalPath: string, contentUri: string): Promise<string>;
+  importContentUri(vaultId: string, logicalPath: string, contentUri: string): Promise<string>;
 };
 
 /**
@@ -103,9 +100,9 @@ export function isNativeBridgeAvailable(): boolean {
   return getUprivCoreNative() !== null;
 }
 
-/** Logical processors, or 1 when the native module does not report them. */
+/** Logical processors, or 1 without the native module (Expo Go). */
 export function nativeProcessorCount(): number {
-  const count = getUprivCoreNative()?.processorCount?.();
+  const count = getUprivCoreNative()?.processorCount();
   if (typeof count === "number" && Number.isFinite(count) && count >= 1) {
     return Math.floor(count);
   }

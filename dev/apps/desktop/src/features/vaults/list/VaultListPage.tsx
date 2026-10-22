@@ -1,5 +1,4 @@
 import { AppSettingsModal, VaultRootDataFolderModal } from "@/features/system/settings";
-import { DataFolderExportModal } from "@/features/system/data-folder-export";
 import { VaultBackupsModal } from "@/features/vaults/backups";
 import { CreateVaultModal } from "@/features/vaults/create";
 import { FileManagerLayer } from "@/features/vaults/file-manager";
@@ -50,7 +49,6 @@ export function VaultListPage() {
     appSettings,
     groupsModal,
     dataFolder,
-    dataFolderExport,
     logs,
     help,
     systemInfo,
@@ -163,10 +161,12 @@ export function VaultListPage() {
       <ExportVaultModal
         vault={exportVault.vault}
         open={exportVault.open}
-        submitting={exportVault.submitting}
-        startedAt={exportVault.startedAt}
+        running={exportVault.running}
+        passwordError={exportVault.passwordError}
+        folders={exportVault.folders}
         onClose={exportVault.onClose}
         onConfirm={exportVault.onConfirm}
+        onPasswordEdited={exportVault.onPasswordEdited}
         onTimeout={exportVault.onTimeout}
       />
       <VaultSettingsModal
@@ -221,15 +221,7 @@ export function VaultListPage() {
         vaultActivityBlocksChange={
           !appConfigEditAllowed("data_folder", list.vaults, list.pipelineListStatus)
         }
-      />
-      <DataFolderExportModal
-        open={dataFolderExport.open}
-        canStart={dataFolderExport.canStart}
-        job={dataFolderExport.job}
-        written={dataFolderExport.written}
-        onClose={dataFolderExport.onClose}
-        onStart={dataFolderExport.onStart}
-        onStop={dataFolderExport.onStop}
+        exportControls={dataFolder.exportControls}
       />
       <LogsModal open={logs.open} onClose={logs.onClose} />
       <HelpModal open={help.open} onClose={help.onClose} />

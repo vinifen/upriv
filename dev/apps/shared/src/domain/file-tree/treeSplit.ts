@@ -68,23 +68,9 @@ function visualToCanonical(
 }
 
 /**
- * Pointer → shared canonical %. The visual drag range [visualMin, 65] maps onto
- * [15, 65] so hitting the desktop px floor stores 15, not 18.
- */
-export function percentFromPointer(
-  clientPos: number,
-  containerStart: number,
-  containerSize: number,
-  axis: TreeSplitAxis = "x",
-): number {
-  if (containerSize <= 0) return TREE_SPLIT_DEFAULT_PERCENT;
-  const raw = ((clientPos - containerStart) / containerSize) * 100;
-  return visualToCanonical(raw, containerSize, axis);
-}
-
-/**
  * Drag delta in px from the grab point — keeps the split under the pointer
- * instead of snapping to the pointer on press.
+ * instead of snapping to the pointer on press. The visual drag range
+ * [visualMin, 65] maps onto [15, 65] so hitting the desktop px floor stores 15.
  */
 export function percentFromDelta(
   startCanonicalPercent: number,

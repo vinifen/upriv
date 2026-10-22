@@ -34,9 +34,6 @@ export const RPC_PROTOCOL_ERROR_CODES = {
   INTERNAL_ERROR: "internal_error",
 } as const;
 
-export type RpcProtocolErrorCode =
-  (typeof RPC_PROTOCOL_ERROR_CODES)[keyof typeof RPC_PROTOCOL_ERROR_CODES];
-
 /**
  * Duck-typed: Vite may load `@upriv/shared` more than once, so `instanceof RpcError` is unreliable.
  */
@@ -48,6 +45,16 @@ export function isRpcError(error: unknown): error is RpcError {
     typeof record.code === "string" &&
     typeof record.message === "string"
   );
+}
+
+/**
+ * The client stopped waiting for a call (desktop `invoke`, mobile bridge).
+ * Core may still be running it.
+ */
+export const RPC_TIMEOUT_CODE = "rpc_timeout";
+
+export function isRpcTimeout(error: unknown): boolean {
+  return isRpcError(error) && error.code === RPC_TIMEOUT_CODE;
 }
 
 export function isRpcErrorBody(value: unknown): value is RpcErrorBody {

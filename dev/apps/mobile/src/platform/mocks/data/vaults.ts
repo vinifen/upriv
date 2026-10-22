@@ -20,7 +20,7 @@ export const MOCK_VAULTS: VaultListItem[] = [
     order: 2,
     lastAccessedWhen: "2 days ago",
     lastAccessedAt: "2026-05-31T10:00:00Z",
-    note: "Mock demo: unlock with gatefail, then lock to see the header test error.",
+    note: "",
   },
   {
     id: "cold-storage",
@@ -100,10 +100,4 @@ export function knownMockVaultIds(): Set<string> {
     ...remappedSeedVaults.map((vault) => vault.id),
     ...extraMockVaultIds,
   ]);
-}
-
-export function resetMockVaultIds(): void {
-  extraMockVaultIds.clear();
-  suppressedSeedVaultIds.clear();
-  remappedSeedVaults.length = 0;
 }

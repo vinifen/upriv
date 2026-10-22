@@ -229,7 +229,7 @@ function daemonEnv(): NodeJS.ProcessEnv {
   const isDev = process.argv.includes("--dev") || process.env.UPRIV_DEV === "1";
   if (!app.isPackaged) {
     // Unpackaged (dev or `electron .`): always pin app home so resolve is strict
-    // and cannot walk into `prod-example/` or other sibling trees.
+    // and cannot walk into sibling trees.
     if (isDev) {
       env.UPRIV_DEV = "1";
     }

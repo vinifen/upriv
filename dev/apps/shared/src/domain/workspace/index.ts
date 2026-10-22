@@ -1,11 +1,9 @@
-export {
-  RESERVED_UPRIV_WORKSPACE_CHILDREN,
-  type ReservedUprivWorkspaceChild,
-  type WorkspacePathIssue,
-} from "./types";
+export type { WorkspacePathIssue } from "./types";
 export {
   WORKSPACE_SYSTEMS,
   appWorkspace,
+  appWorkspaceForDaemon,
+  appWorkspaceChoice,
   currentWorkspaceSystem,
   detectHostPlatform,
   appWorkspacePlace,
@@ -14,6 +12,8 @@ export {
   hostPlatformFromSignals,
   normalizeWorkspaceTable,
   resolvedWorkspaceParent,
+  vaultFolderChosen,
+  vaultFolderRow,
   vaultMountForDaemon,
   vaultWorkspace,
   workspaceSystemFromHost,
@@ -28,6 +28,7 @@ export {
   type WorkspaceTable,
 } from "./os";
 export {
+  exportFolderIssue,
   isAbsoluteFilesystemPath,
   isAbsoluteOsFilesystemPath,
   isContentUri,
@@ -42,6 +43,7 @@ export {
   validateWorkspaceGlobalPath,
   validateWorkspaceTable,
   vaultRootPathForWorkspaceValidation,
+  type ExportFolderIssue,
 } from "./validate";
 export {
   WORKSPACE_ERROR_CODES,

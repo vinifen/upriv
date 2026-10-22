@@ -4,7 +4,6 @@ import type { VaultPipelineErrorCode } from "./codes";
 /** User-facing: pipeline wire codes → i18n keys. Keep in sync with `locales/*.json`. */
 export const VAULT_PIPELINE_ERROR_I18N_KEYS = {
   insufficient_ram: "error.insufficient_ram",
-  header_test_failed: "error.header_test_failed",
 } as const satisfies Record<VaultPipelineErrorCode, I18nKey>;
 
 export type VaultPipelineErrorI18nKey =

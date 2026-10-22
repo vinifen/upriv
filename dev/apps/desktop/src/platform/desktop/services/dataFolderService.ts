@@ -1,13 +1,7 @@
 import type { DataFolderService } from "@upriv/shared";
-import {
-  rpcDataFolderExport,
-  rpcDataFolderExportCancel,
-  rpcDataFolderExportStatus,
-} from "@/lib/rpc";
+import { rpcDataFolderExport } from "@/lib/rpc";
 
-/** Desktop → daemon `data_folder_export*`. */
+/** Desktop → daemon `data_folder_export`. Progress and stop go through the job service. */
 export const desktopDataFolderService: DataFolderService = {
-  exportTo: (destDir) => rpcDataFolderExport(destDir),
-  exportProgress: () => rpcDataFolderExportStatus(),
-  cancelExport: () => rpcDataFolderExportCancel(),
+  exportTo: (destDir, name, job) => rpcDataFolderExport(destDir, name, job),
 };

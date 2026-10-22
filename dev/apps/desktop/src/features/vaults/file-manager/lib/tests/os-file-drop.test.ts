@@ -1,18 +1,25 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DragEvent } from "react";
 import {
-  filesFromDataTransfer,
   filesFromFileInput,
-  filesFromOsDropSnapshot,
   listFilesFromOsDropSnapshot,
   isOsFileDrag,
   isPotentialOsFileDrag,
   snapshotLooksLikeOsImport,
   snapshotOsFileDrop,
+  type OsDropSnapshot,
 } from "../osFileDrop";
 
 function dragEvent(partial: Partial<DataTransfer>): DragEvent {
   return { dataTransfer: partial as DataTransfer } as DragEvent;
+}
+
+async function snapshotFiles(snapshot: OsDropSnapshot) {
+  return (await listFilesFromOsDropSnapshot(snapshot)).files;
+}
+
+function droppedFiles(event: DragEvent) {
+  return snapshotFiles(snapshotOsFileDrop(event));
 }
 
 describe("isOsFileDrag", () => {
@@ -67,7 +74,7 @@ describe("filesFromFileInput", () => {
   });
 });
 
-describe("filesFromDataTransfer", () => {
+describe("listFilesFromOsDropSnapshot", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
   });
@@ -101,7 +108,7 @@ describe("filesFromDataTransfer", () => {
   });
 
   it("returns empty when transfer is missing", async () => {
-    expect(await filesFromDataTransfer({ dataTransfer: null } as unknown as DragEvent)).toEqual([]);
+    expect(await droppedFiles({ dataTransfer: null } as unknown as DragEvent)).toEqual([]);
   });
 
   it("falls back to transfer.files", async () => {
@@ -110,7 +117,7 @@ describe("filesFromDataTransfer", () => {
       items: [],
       files: [file],
     } as unknown as DataTransfer;
-    const result = await filesFromDataTransfer(dragEvent(transfer));
+    const result = await droppedFiles(dragEvent(transfer));
     expect(result).toEqual([{ file, relativePath: "import.txt" }]);
   });
 
@@ -124,7 +131,7 @@ describe("filesFromDataTransfer", () => {
       items: [item],
       files: [],
     } as unknown as DataTransfer;
-    const result = await filesFromDataTransfer(dragEvent(transfer));
+    const result = await droppedFiles(dragEvent(transfer));
     expect(result).toEqual([{ file, relativePath: "from-item.md" }]);
   });
 
@@ -138,7 +145,7 @@ describe("filesFromDataTransfer", () => {
     const snapshot = snapshotOsFileDrop(dragEvent(transfer));
     (transfer as unknown as { items: unknown[] }).items = [];
     (transfer as unknown as { files: File[] }).files = [];
-    expect(await filesFromOsDropSnapshot(snapshot)).toEqual([{ file, relativePath: "import.txt" }]);
+    expect(await snapshotFiles(snapshot)).toEqual([{ file, relativePath: "import.txt" }]);
   });
 
   it("recovers a basename from getPathForFile when File.name is empty", async () => {
@@ -150,7 +157,7 @@ describe("filesFromDataTransfer", () => {
       items: [],
       files: [file],
     } as unknown as DataTransfer;
-    const result = await filesFromDataTransfer(dragEvent(transfer));
+    const result = await droppedFiles(dragEvent(transfer));
     expect(result).toHaveLength(1);
     expect(result[0]?.file.name).toBe("beach.jpg");
     expect(result[0]?.relativePath).toBe("beach.jpg");
@@ -196,7 +203,7 @@ describe("filesFromDataTransfer", () => {
       files: [],
       getData: (type: string) => (type === "text/uri-list" ? "file:///tmp/hello.txt" : ""),
     } as unknown as DataTransfer;
-    const files = await filesFromOsDropSnapshot(snapshotOsFileDrop(dragEvent(transfer)));
+    const files = await droppedFiles(dragEvent(transfer));
     expect(files).toHaveLength(1);
     expect(files[0]?.relativePath).toBe("hello.txt");
     await expect(files[0]?.file.text()).resolves.toBe("hi");
@@ -221,7 +228,7 @@ describe("filesFromDataTransfer", () => {
       files: [],
       getData: (type: string) => (type === "text/uri-list" ? "file:///tmp/demo.mkv" : ""),
     } as unknown as DataTransfer;
-    const files = await filesFromOsDropSnapshot(snapshotOsFileDrop(dragEvent(transfer)));
+    const files = await droppedFiles(dragEvent(transfer));
     expect(files).toHaveLength(1);
     expect(files[0]?.relativePath).toBe("demo.mkv");
     expect(files[0]?.osPath).toBe("/tmp/demo.mkv");
@@ -248,7 +255,7 @@ describe("filesFromDataTransfer", () => {
       files: [],
       getData: (type: string) => (type === "text/uri-list" ? "file:///tmp/huge.txt" : ""),
     } as unknown as DataTransfer;
-    const files = await filesFromOsDropSnapshot(snapshotOsFileDrop(dragEvent(transfer)));
+    const files = await droppedFiles(dragEvent(transfer));
     expect(files[0]?.relativePath).toBe("huge.txt");
     expect(files[0]?.osPath).toBe("/tmp/huge.txt");
     expect(files[0]?.byteSize).toBe(80 * 1024 * 1024);
@@ -273,7 +280,7 @@ describe("filesFromDataTransfer", () => {
       files: [],
       getData: (type: string) => (type === "text/uri-list" ? "file:///tmp/hello.txt" : ""),
     } as unknown as DataTransfer;
-    const files = await filesFromOsDropSnapshot(snapshotOsFileDrop(dragEvent(transfer)));
+    const files = await droppedFiles(dragEvent(transfer));
     expect(files[0]?.osPath).toBe("/tmp/hello.txt");
     expect(files[0]?.file.size).toBe(0);
   });
@@ -294,7 +301,7 @@ describe("filesFromDataTransfer", () => {
       files: [folder],
       getData: () => "",
     } as unknown as DataTransfer;
-    const files = await filesFromOsDropSnapshot(snapshotOsFileDrop(dragEvent(transfer)));
+    const files = await droppedFiles(dragEvent(transfer));
     expect(files.map((file) => file.relativePath)).toEqual(["photos/a.txt", "photos/b.txt"]);
   });
 
@@ -316,7 +323,7 @@ describe("filesFromDataTransfer", () => {
     const snapshot = snapshotOsFileDrop(dragEvent(transfer));
     expect(snapshot.portalKey).toBe("portal-key-1");
     expect(snapshotLooksLikeOsImport(snapshot)).toBe(true);
-    const files = await filesFromOsDropSnapshot(snapshot);
+    const files = await snapshotFiles(snapshot);
     expect(files[0]?.osPath).toBe("/tmp/portal-note.txt");
   });
 
@@ -350,7 +357,7 @@ describe("filesFromDataTransfer", () => {
       files: [folder, child],
       getData: () => "",
     } as unknown as DataTransfer;
-    await filesFromOsDropSnapshot(snapshotOsFileDrop(dragEvent(transfer)));
+    await droppedFiles(dragEvent(transfer));
     expect(seen[0]).toEqual(["/tmp/photos"]);
   });
 
@@ -372,7 +379,7 @@ describe("filesFromDataTransfer", () => {
       files: [folder, child],
       getData: () => "",
     } as unknown as DataTransfer;
-    await filesFromOsDropSnapshot(snapshotOsFileDrop(dragEvent(transfer)));
+    await droppedFiles(dragEvent(transfer));
     expect(seen[0]).toEqual(["C:/Photos"]);
   });
 
@@ -389,7 +396,7 @@ describe("filesFromDataTransfer", () => {
       files: [folder],
       getData: () => "",
     } as unknown as DataTransfer;
-    const files = await filesFromOsDropSnapshot(snapshotOsFileDrop(dragEvent(transfer)));
+    const files = await droppedFiles(dragEvent(transfer));
     expect(files).toEqual([]);
   });
 
@@ -412,7 +419,7 @@ describe("filesFromDataTransfer", () => {
       files: [folder, child],
       getData: () => "",
     } as unknown as DataTransfer;
-    await filesFromOsDropSnapshot(snapshotOsFileDrop(dragEvent(transfer)));
+    await droppedFiles(dragEvent(transfer));
     expect(seen[0]).toEqual(["/tmp/Photos", "/tmp/photos/a.txt"]);
   });
 
@@ -449,7 +456,7 @@ describe("filesFromDataTransfer", () => {
       files: [file],
       getData: () => "",
     } as unknown as DataTransfer;
-    const files = await filesFromOsDropSnapshot(snapshotOsFileDrop(dragEvent(transfer)));
+    const files = await droppedFiles(dragEvent(transfer));
     expect(files).toHaveLength(1);
     expect(files[0]?.osPath).toBeUndefined();
     expect(files[0]?.file.size).toBe(5);

@@ -14,13 +14,7 @@ import { useAppSettingsContext } from "@/features/system/settings";
 import { useTranslation } from "@/i18n";
 import { useTheme } from "@/theme";
 import { spacing } from "@/theme/tokens";
-import {
-  Button,
-  Modal,
-  ModalFooterActions,
-  modalFooterConfirmBtnStyle,
-  Toast,
-} from "@/components/ui";
+import { Button, Modal, ModalFooterActions, Toast } from "@/components/ui";
 import {
   FieldHint,
   FieldLabel,
@@ -220,13 +214,11 @@ export function VaultGroupsModal({
           <Button
             variant="danger"
             label={t("modal.settings.discard_confirm_action")}
-            style={modalFooterConfirmBtnStyle}
             onPress={handleDiscardAndClose}
           />
           <Button
             variant="ghost"
             label={t("modal.settings.discard_keep_editing")}
-            style={modalFooterConfirmBtnStyle}
             onPress={dismissFooterConfirm}
           />
         </ModalFooterActions>
@@ -237,7 +229,6 @@ export function VaultGroupsModal({
             label={
               saveConfirmOpen ? t("modal.settings.save_confirm_action") : t("modal.settings.save")
             }
-            style={modalFooterConfirmBtnStyle}
             disabled={saveConfirmOpen ? saveBusy : saveBlocked}
             onPress={saveConfirmOpen ? commitSave : handleSaveClick}
           />
@@ -245,7 +236,6 @@ export function VaultGroupsModal({
             <Button
               variant="ghost"
               label={t("modal.settings.save_cancel")}
-              style={modalFooterConfirmBtnStyle}
               disabled={saveBusy}
               onPress={dismissFooterConfirm}
             />

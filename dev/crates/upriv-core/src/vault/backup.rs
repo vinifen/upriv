@@ -10,11 +10,12 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use super::embedded_settings::snapshot_settings_bytes;
+use super::partial::{discard_partial, PartialWork};
 use crate::config::{load_vault_config, VaultBackupMode};
 use crate::error::{Result, UprivError};
 use crate::logging::{log_event, LogLevel};
 use crate::paths::VaultRoot;
-use crate::session::{ensure_data_folder_export_idle, with_vault_dir_lock};
+use crate::session::{ensure_data_folder_export_idle, with_vault_dir_lock, Job};
 use crate::time::utc_filename_stamp;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -311,39 +312,58 @@ pub fn backup_on_close(root: &VaultRoot, vault_id: &str) -> Result<Option<String
     if !config.backup.enabled {
         return Ok(None);
     }
-    let stamp = write_backup_zip(&vault_dir, vault_id, BackupDir::Standard)?;
+    let stamp = write_backup_zip(&vault_dir, vault_id, BackupDir::Standard, &Job::untracked())?;
     finish_backup_prune(&vault_dir, config.backup.mode, config.backup.keep_last)?;
     Ok(Some(stamp))
 }
 
-/// Zip this closed vault's `store/` straight into `backups/saves/`. A save is
-/// never pruned and is written even when close backups are off. Open, delete,
-/// and rename of this vault wait until the zip is written.
-pub fn save_backup_now(root: &VaultRoot, vault_id: &str) -> Result<BackupEntry> {
-    let hold = super::export::hold_closed_vault(root, vault_id)?;
-    super::export::with_held_vault(&hold, || {
-        let stamp = write_backup_zip(&hold.vault_dir, vault_id, BackupDir::Saves)?;
-        let file_name = backup_zip_filename(&stamp, vault_id)?;
-        let path = hold
-            .vault_dir
-            .join("backups")
-            .join("saves")
-            .join(&file_name);
-        Ok(BackupEntry {
-            created_at: stamp_to_iso(&stamp).unwrap_or_default(),
-            size_bytes: crate::host_fs::metadata(&path)?.len(),
-            stamp,
-            file_name,
-            saved: true,
+/// Zip this closed vault's `store/` straight into `backups/saves/` as the job
+/// `job_id`. A save is never pruned and is written even when close backups are
+/// off. Open, delete, and rename of this vault wait until the zip is written.
+/// A save stopped before its zip is in place leaves no file.
+pub fn save_backup_now(root: &VaultRoot, vault_id: &str, job_id: &str) -> Result<BackupEntry> {
+    let saved = (|| {
+        let job = Job::start(job_id)?;
+        let hold = super::export::hold_closed_vault(root, vault_id)?;
+        super::export::with_held_vault(&hold, || {
+            let stamp = job.settle(write_backup_zip(
+                &hold.vault_dir,
+                vault_id,
+                BackupDir::Saves,
+                &job,
+            ))?;
+            let file_name = backup_zip_filename(&stamp, vault_id)?;
+            let path = hold
+                .vault_dir
+                .join("backups")
+                .join("saves")
+                .join(&file_name);
+            Ok(BackupEntry {
+                created_at: stamp_to_iso(&stamp).unwrap_or_default(),
+                size_bytes: crate::host_fs::metadata(&path)?.len(),
+                stamp,
+                file_name,
+                saved: true,
+            })
         })
-    })
+    })();
+    if let Err(error) = &saved {
+        let fields: Vec<_> = vault_id_log_field(vault_id).into_iter().collect();
+        log_job_error(
+            "vault_backup_save_cancelled",
+            "vault_backup_save_failed",
+            &fields,
+            error,
+        );
+    }
+    saved
 }
 
-/// Why a close backup failed, without a filesystem path.
+/// Why a backup, an export, or a file removal failed, without a filesystem path.
 ///
 /// `reason` is `disk_full`, `permission`, or `other`. `kind` names the error
 /// (`io`, `store`, `config`, `path`, `other`). `os` is the raw code when one exists.
-pub(crate) fn classify_backup_failure(error: &UprivError) -> BackupFailureClass {
+pub(crate) fn classify_write_failure(error: &UprivError) -> WriteFailureClass {
     let kind = match error {
         UprivError::Io(_) => "io",
         UprivError::VaultStoreInvalid { .. } => "store",
@@ -358,17 +378,46 @@ pub(crate) fn classify_backup_failure(error: &UprivError) -> BackupFailureClass 
     } else {
         "other"
     };
-    BackupFailureClass {
+    WriteFailureClass {
         reason,
         kind,
         os: failure_os_code(error),
     }
 }
 
-pub(crate) struct BackupFailureClass {
+pub(crate) struct WriteFailureClass {
     pub reason: &'static str,
     pub kind: &'static str,
     pub os: Option<i32>,
+}
+
+/// Log a job that ended without its file: `cancelled` (Info) when it was
+/// stopped, `failed` (Warn) with [`classify_write_failure`] otherwise.
+pub(crate) fn log_job_error(
+    cancelled: &str,
+    failed: &str,
+    fields: &[(&str, &str)],
+    error: &UprivError,
+) {
+    if matches!(error, UprivError::JobCancelled) {
+        log_event(LogLevel::Info, cancelled, fields);
+        return;
+    }
+    let class = classify_write_failure(error);
+    let os = class.os.map(|code| code.to_string());
+    let mut all = fields.to_vec();
+    all.push(("reason", class.reason));
+    all.push(("kind", class.kind));
+    if let Some(code) = os.as_deref() {
+        all.push(("os", code));
+    }
+    log_event(LogLevel::Warn, failed, &all);
+}
+
+/// `id` for a log line, only when it is a vault folder id: a request may carry
+/// anything there.
+pub(crate) fn vault_id_log_field(vault_id: &str) -> Option<(&'static str, &str)> {
+    crate::paths::slug_id_is_valid(vault_id).then_some(("id", vault_id))
 }
 
 fn failure_is_disk_full(error: &UprivError) -> bool {
@@ -457,7 +506,7 @@ pub(crate) fn backup_before_rewrap(root: &VaultRoot, vault_id: &str) -> Result<(
     let vault_dir = root.vault_dir(vault_id)?;
     // A broken config fails before a zip is written.
     load_vault_config(&vault_dir)?;
-    write_backup_zip(&vault_dir, vault_id, BackupDir::Standard)?;
+    write_backup_zip(&vault_dir, vault_id, BackupDir::Standard, &Job::untracked())?;
     Ok(())
 }
 
@@ -479,7 +528,14 @@ enum BackupDir {
     Saves,
 }
 
-fn write_backup_zip(vault_dir: &Path, vault_id: &str, into: BackupDir) -> Result<String> {
+/// Write the zip as `<name>.partial`, check it, then rename it into place. A
+/// stop from `job` is honored until that rename.
+fn write_backup_zip(
+    vault_dir: &Path,
+    vault_id: &str,
+    into: BackupDir,
+    job: &Job,
+) -> Result<String> {
     let backups = vault_dir.join("backups");
     let dir = match into {
         BackupDir::Standard => backups.clone(),
@@ -494,22 +550,22 @@ fn write_backup_zip(vault_dir: &Path, vault_id: &str, into: BackupDir) -> Result
     let store = vault_dir.join(crate::paths::STORE_DIR_NAME);
     crate::store::ensure_danger_notice(&store)?;
     let settings = snapshot_settings_bytes(vault_dir, &store)?;
-    if let Err(error) =
-        super::zip_io::zip_store_with_config_to_path(&store, &settings, &stamp, &partial)
-    {
-        let _ = crate::host_fs::remove_file(&partial);
-        return Err(error);
-    }
-    if let Err(error) = sync_closed_file(&partial) {
-        let _ = crate::host_fs::remove_file(&partial);
-        return Err(error);
-    }
-    if let Err(error) = super::zip_io::verify_store_zip_copies(&partial) {
-        let _ = crate::host_fs::remove_file(&partial);
+    let checked = (|| {
+        super::zip_io::zip_store_with_config_to_path(&store, &settings, &stamp, &partial, job)?;
+        sync_closed_file(&partial)?;
+        super::zip_io::verify_store_zip_copies(&partial)?;
+        job.ensure_running()
+    })();
+    let work = match into {
+        BackupDir::Standard => PartialWork::Backup,
+        BackupDir::Saves => PartialWork::BackupSave,
+    };
+    if let Err(error) = checked {
+        discard_partial(&partial, work);
         return Err(error);
     }
     if let Err(error) = crate::host_fs::rename(&partial, &dest) {
-        let _ = crate::host_fs::remove_file(&partial);
+        discard_partial(&partial, work);
         return Err(error.into());
     }
     // The new stamp must be durable before `prune_backups` unlinks the previous
@@ -853,7 +909,7 @@ mod tests {
     #[allow(unused_imports)]
     use crate::host_fs::HostFsQuery;
     use crate::store::KdfUnlockPreset;
-    use crate::test_support::vault_root_with;
+    use crate::test_support::{test_job_id, vault_root_with};
     use crate::vault::create_vault;
 
     #[cfg(any(unix, windows))]
@@ -861,7 +917,7 @@ mod tests {
     fn classifies_a_full_disk_without_a_path() {
         let code = DISK_FULL_CODES[0];
         let io = UprivError::Io(std::io::Error::from_raw_os_error(code));
-        let class = classify_backup_failure(&io);
+        let class = classify_write_failure(&io);
         assert_eq!(class.reason, "disk_full");
         assert_eq!(class.kind, "io");
         assert_eq!(class.os, Some(code));
@@ -870,7 +926,7 @@ mod tests {
             path: std::path::PathBuf::from("/secret/store/file"),
             detail: format!("write failed (os error {code})"),
         };
-        let class = classify_backup_failure(&wrapped);
+        let class = classify_write_failure(&wrapped);
         assert_eq!(class.reason, "disk_full");
         assert_eq!(class.kind, "store");
         assert_eq!(class.os, Some(code));
@@ -879,9 +935,9 @@ mod tests {
     #[test]
     fn classifies_permission_and_leaves_other_failures_generic() {
         let denied = UprivError::Io(std::io::Error::from(std::io::ErrorKind::PermissionDenied));
-        assert_eq!(classify_backup_failure(&denied).reason, "permission");
+        assert_eq!(classify_write_failure(&denied).reason, "permission");
         let other = UprivError::Io(std::io::Error::from(std::io::ErrorKind::AlreadyExists));
-        let class = classify_backup_failure(&other);
+        let class = classify_write_failure(&other);
         assert_eq!(class.reason, "other");
         assert_eq!(class.kind, "io");
     }
@@ -892,13 +948,13 @@ mod tests {
     fn linux_codes_that_mean_something_else_on_windows_stay_generic() {
         for code in [libc::ENOTEMPTY, libc::EIO] {
             let io = UprivError::Io(std::io::Error::from_raw_os_error(code));
-            assert_eq!(classify_backup_failure(&io).reason, "other", "errno {code}");
+            assert_eq!(classify_write_failure(&io).reason, "other", "errno {code}");
             let wrapped = UprivError::VaultStoreInvalid {
                 path: std::path::PathBuf::new(),
                 detail: format!("failed (os error {code})"),
             };
             assert_eq!(
-                classify_backup_failure(&wrapped).reason,
+                classify_write_failure(&wrapped).reason,
                 "other",
                 "errno {code}"
             );
@@ -907,7 +963,7 @@ mod tests {
             path: std::path::PathBuf::new(),
             detail: "failed (os error 130)".into(),
         };
-        assert_eq!(classify_backup_failure(&longer).reason, "other");
+        assert_eq!(classify_write_failure(&longer).reason, "other");
     }
 
     fn sample_config(id: &str, name: &str) -> crate::config::VaultConfig {
@@ -1097,7 +1153,7 @@ mode = "encrypted_dir"
             KdfUnlockPreset::M32,
         )
         .unwrap();
-        let saved = save_backup_now(&root, "notes").unwrap();
+        let saved = save_backup_now(&root, "notes", &test_job_id()).unwrap();
         assert!(saved.saved);
         let zip = root
             .vault_dir("notes")
@@ -1118,7 +1174,7 @@ mode = "encrypted_dir"
         assert!(listed.contains(&saved));
 
         // Two saves within one second still get their own stamps.
-        let again = save_backup_now(&root, "notes").unwrap();
+        let again = save_backup_now(&root, "notes", &test_job_id()).unwrap();
         assert_ne!(again.stamp, saved.stamp);
         assert_eq!(list_backups(&root, "notes").unwrap().len(), 3);
     }
@@ -1129,8 +1185,48 @@ mode = "encrypted_dir"
         let mut config = sample_config("notes", "Notes");
         config.backup.enabled = false;
         create_vault(&root, config, b"pass-word-ok", KdfUnlockPreset::M32).unwrap();
-        let saved = save_backup_now(&root, "notes").unwrap();
+        let saved = save_backup_now(&root, "notes", &test_job_id()).unwrap();
         assert_eq!(list_backups(&root, "notes").unwrap(), vec![saved]);
+    }
+
+    #[test]
+    fn a_stopped_save_leaves_no_file() {
+        let (_tmp, root) = vault_root_with(&[]);
+        create_vault(
+            &root,
+            sample_config("notes", "Notes"),
+            b"pass-word-ok",
+            KdfUnlockPreset::M32,
+        )
+        .unwrap();
+        let job = test_job_id();
+        crate::session::cancel_job(&job);
+        assert!(matches!(
+            save_backup_now(&root, "notes", &job),
+            Err(UprivError::JobCancelled)
+        ));
+
+        let vault_dir = root.vault_dir("notes").unwrap();
+        let id = test_job_id();
+        let running = Job::start(&id).unwrap();
+        crate::session::cancel_job(&id);
+        assert!(matches!(
+            running.settle(write_backup_zip(
+                &vault_dir,
+                "notes",
+                BackupDir::Saves,
+                &running
+            )),
+            Err(UprivError::JobCancelled)
+        ));
+        let saves = vault_dir.join("backups").join("saves");
+        assert_eq!(crate::host_fs::read_dir(&saves).unwrap().count(), 0);
+        assert!(list_backups(&root, "notes").unwrap().is_empty());
+        assert!(
+            save_backup_now(&root, "notes", &test_job_id())
+                .unwrap()
+                .saved
+        );
     }
 
     #[test]
@@ -1142,14 +1238,18 @@ mode = "encrypted_dir"
         config.backup.enabled = false;
         create_vault(&root, config, b"pass-word-ok", KdfUnlockPreset::M32).unwrap();
         open_vault(&root, "notes", b"pass-word-ok").unwrap();
-        let err = save_backup_now(&root, "notes").unwrap_err();
+        let err = save_backup_now(&root, "notes", &test_job_id()).unwrap_err();
         assert!(matches!(err, UprivError::VaultMustBeClosed));
         let backups = root.vault_dir("notes").unwrap().join("backups");
         assert!(!backups.join("saves").host_exists());
         assert!(list_backups(&root, "notes").unwrap().is_empty());
 
         close_vault(&root, "notes").unwrap();
-        assert!(save_backup_now(&root, "notes").unwrap().saved);
+        assert!(
+            save_backup_now(&root, "notes", &test_job_id())
+                .unwrap()
+                .saved
+        );
     }
 
     #[test]

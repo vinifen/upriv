@@ -26,7 +26,6 @@ import {
   LoadingBudgetHint,
   Modal,
   ModalFooterActions,
-  modalFooterConfirmBtnStyle,
   Toast,
 } from "@/components/ui";
 import { useLoadingBudget, useToast } from "@upriv/shared/react";
@@ -381,7 +380,6 @@ export function LogsModal({ open, onClose }: LogsModalProps) {
           <Button
             label={t("action.delete")}
             variant="danger"
-            style={modalFooterConfirmBtnStyle}
             onPress={() => {
               void handleConfirmDelete();
             }}
@@ -389,19 +387,13 @@ export function LogsModal({ open, onClose }: LogsModalProps) {
           <Button
             label={t("action.cancel")}
             variant="ghost"
-            style={modalFooterConfirmBtnStyle}
             onPress={() => setDeleteTargets(null)}
           />
         </ModalFooterActions>
       </View>
     ) : activeFile ? (
       <ModalFooterActions layout="confirm">
-        <Button
-          label={t("modal.logs.back_to_list")}
-          variant="ghost"
-          style={modalFooterConfirmBtnStyle}
-          onPress={backToList}
-        />
+        <Button label={t("modal.logs.back_to_list")} variant="ghost" onPress={backToList} />
       </ModalFooterActions>
     ) : undefined;
 

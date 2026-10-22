@@ -350,16 +350,3 @@ export async function listGrantedImportFolder(
     releaseSafTree: directoryUri,
   };
 }
-
-export async function pickImportFolder(options?: {
-  /** A listing failure fails the pick. File-manager imports keep going. */
-  failClosed?: boolean;
-}): Promise<MobileImportPick | null> {
-  const grant = await pickImportFolderGrant();
-  if (!grant) return null;
-  return listGrantedImportFolder(
-    grant.directoryUri,
-    grant.folderName,
-    options?.failClosed === true,
-  );
-}

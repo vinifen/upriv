@@ -24,6 +24,9 @@ import {
   hiddenUngroupedRootVaults,
   insertUngroupedVaultAtRoot,
   LOADING_BUDGET_MS,
+  errorOnPasswordField,
+  isRpcTimeout,
+  newJobId,
   remapVaultIdInGroups,
   removeVaultFromGroups,
   sortVaultsByOrder,
@@ -31,7 +34,9 @@ import {
   vaultIdsUnhiddenByGroups,
   canDeleteVaultNow,
   dataFolderCanExport,
-  dataFolderZipName,
+  fileNameOfPath,
+  vaultExportFilename,
+  vaultExportSavedAs,
   vaultRowControls,
   resolveVaultListStatus,
   vaultCanExport,
@@ -56,6 +61,7 @@ import {
   type CreateVaultStepId,
   type PendingCreateGroupEffect,
   type VaultExportRequest,
+  type VaultExportRun,
   type VaultGroup,
   type KdfUnlockPreset,
   type VaultListItem,
@@ -65,23 +71,25 @@ import {
 import {
   useBackupService,
   useDataFolderService,
+  useJobService,
   useLogService,
   useVaultGroupService,
   useVaultLifecycleService,
   useVaultService,
 } from "@/platform/services";
 import { useAppSettingsContext } from "@/features/system/settings";
-import type { DataFolderExportWritten } from "@/features/system/data-folder-export";
+import type { DataFolderExportControls } from "@/features/system/data-folder-export";
 import { useTranslation } from "@/i18n";
 import { mobileErrorI18nKey } from "@/lib/errorMessages";
 import {
   useDataFolderExportJob,
+  useJobProgress,
   useLoadingBudget,
   useToast,
   useVaultBackupJob,
 } from "@upriv/shared/react";
 import { CONTROL_HEIGHT_MD, MAX_WIDTH_VAULT_LIST, spacing } from "@/theme/tokens";
-import { exportVaultPackage } from "@/features/vaults/list/exportVaultPackage";
+import { useVaultExportFolders } from "./useVaultExportFolders";
 import { useVaultLifecycle } from "@/features/vaults/lifecycle";
 import { useFileManager } from "@/features/vaults/file-manager";
 import {
@@ -167,7 +175,7 @@ export function useVaultListScreen() {
     setExportVault,
     exportJob,
     setExportJob,
-    setExportSubmitting,
+    setExportPasswordError,
     setBackupsVault,
     settingsGroupOpenRef,
     setGroupFormError,
@@ -183,8 +191,23 @@ export function useVaultListScreen() {
   const repairBudget = useLoadingBudget(repairBusy, LOADING_BUDGET_MS.default);
   const noteSaveGenerationRef = useRef(new Map<string, number>());
   const exportBusyGenRef = useRef(0);
-  /** Aborted on export timeout so a late run cannot open the share sheet. */
-  const exportAbortRef = useRef<AbortController | null>(null);
+  /** The job of the export in flight, told to stop on timeout so core removes the partial file. */
+  const exportJobRef = useRef<string | null>(null);
+  const jobs = useJobService();
+  const exportFolders = useVaultExportFolders();
+  /** The vault the Export window shows now, read when an export settles. */
+  const exportWindowVaultIdRef = useRef<string | null>(null);
+  exportWindowVaultIdRef.current = exportVault?.id ?? null;
+  // The Export window follows its vault's export while one runs; progress is asked only then.
+  const shownExportJob = exportJob && exportVault?.id === exportJob.vaultId ? exportJob : null;
+  const exportProgress = useJobProgress(jobs, shownExportJob?.id ?? null);
+  const exportRun: VaultExportRun | null = shownExportJob
+    ? {
+        format: shownExportJob.format,
+        startedAt: shownExportJob.startedAt,
+        progress: exportProgress,
+      }
+    : null;
 
   const sortMode = settings.ui.vault_list_sort;
   const sortDirection = settings.ui.vault_list_sort_direction;
@@ -204,19 +227,15 @@ export function useVaultListScreen() {
   const existingDisplayNames = useMemo(() => vaults.map((vault) => vault.displayName), [vaults]);
 
   const dataFolderService = useDataFolderService();
-  const [dataFolderExportWritten, setDataFolderExportWritten] =
-    useState<DataFolderExportWritten | null>(null);
-  /** The folder the running export writes into, shown once the zip is there. */
-  const dataFolderExportFolderRef = useRef("");
   const {
     job: dataFolderExportJob,
+    written: dataFolderExportWritten,
+    clearWritten: clearDataFolderExportWritten,
     start: startDataFolderExport,
     stop: stopDataFolderExport,
-  } = useDataFolderExportJob(dataFolderService, {
+  } = useDataFolderExportJob(dataFolderService, jobs, {
     onExported: (written) => {
-      const name = dataFolderZipName(written.path);
-      setDataFolderExportWritten({ name, folder: dataFolderExportFolderRef.current });
-      show(t("toast.data_folder_exported", { name }));
+      show(t("toast.data_folder_exported", { name: fileNameOfPath(written.path) }));
     },
     onFailed: (error) => {
       if (shouldBumpVaultRootEpoch(error)) {
@@ -429,7 +448,7 @@ export function useVaultListScreen() {
   }, []);
   const backupService = useBackupService();
   const [backupListRefresh, setBackupListRefresh] = useState(0);
-  const backupJob = useVaultBackupJob(backupService, {
+  const backupJob = useVaultBackupJob(backupService, jobs, {
     onSaved: (vaultId) => {
       const name = vaults.find((vault) => vault.id === vaultId)?.displayName ?? vaultId;
       show(t("toast.backup_now_saved", { name }));
@@ -499,19 +518,28 @@ export function useVaultListScreen() {
   );
 
   const dataFolderExportCanStart = dataFolderCanExport(vaults, pipelineStatus);
-  // Hidden while it cannot start; shown while it runs so the window can be reopened.
-  const showExportDataFolder =
-    dataFolderService !== undefined && (dataFolderExportJob !== null || dataFolderExportCanStart);
-
-  const handleStartDataFolderExport = useCallback(
-    (destDir: string): boolean => {
-      if (!dataFolderExportCanStart) return false;
-      dataFolderExportFolderRef.current = destDir;
-      if (!startDataFolderExport(destDir)) return false;
-      setDataFolderExportWritten(null);
-      return true;
-    },
-    [dataFolderExportCanStart, startDataFolderExport],
+  const dataFolderExportControls = useMemo<DataFolderExportControls | undefined>(
+    () =>
+      dataFolderService
+        ? {
+            canStart: dataFolderExportCanStart,
+            job: dataFolderExportJob,
+            written: dataFolderExportWritten,
+            clearWritten: clearDataFolderExportWritten,
+            onStart: (destDir, name) =>
+              dataFolderExportCanStart && startDataFolderExport(destDir, name),
+            onStop: stopDataFolderExport,
+          }
+        : undefined,
+    [
+      clearDataFolderExportWritten,
+      dataFolderExportCanStart,
+      dataFolderExportJob,
+      dataFolderExportWritten,
+      dataFolderService,
+      startDataFolderExport,
+      stopDataFolderExport,
+    ],
   );
 
   const backupSaving = backupJob.job !== null && backupJob.job.vaultId === backupsVaultId;
@@ -526,47 +554,62 @@ export function useVaultListScreen() {
     backupJob.start(vault.id);
   }, [backupJob, backupsVault, pipelineStatus, show, t]);
 
+  /** Write the export into the folder chosen in its window, named after the vault. */
   const handleConfirmExportVault = useCallback(
-    (request: VaultExportRequest) => {
+    (request: VaultExportRequest, destDir: string) => {
       if (!exportVault || exportJob) return;
       const vault = exportVault;
       const gen = ++exportBusyGenRef.current;
-      exportAbortRef.current?.abort();
-      const abort = new AbortController();
-      exportAbortRef.current = abort;
-      setExportJob({ vaultId: vault.id, startedAt: Date.now() });
-      setExportSubmitting(true);
-      void exportVaultPackage(
-        vault,
-        {
-          getExportBytes: (row, exportRequest) => vaultService.getExportBytes(row, exportRequest),
-          exportToPath: (row, exportRequest, destPath) =>
-            vaultService.exportToPath(row, exportRequest, destPath),
-        },
-        request,
-        abort.signal,
-      )
-        .then((outcome) => {
+      const job = newJobId();
+      exportJobRef.current = job;
+      setExportPasswordError(null);
+      setExportJob({ id: job, vaultId: vault.id, format: request.format, startedAt: Date.now() });
+      void vaultService
+        .exportToFolder(vault, request, destDir, job)
+        .then((written) => {
           if (gen !== exportBusyGenRef.current) return;
-          if (outcome === "cancelled") return;
-          show(t("vault.export.success", { name: vault.displayName }));
+          // A file already used the name: core saved this one with a number.
+          const savedAs = vaultExportSavedAs(vault.displayName, request.format, written.path);
+          show(
+            savedAs
+              ? t("vault.export.success_numbered", {
+                  filename: vaultExportFilename(vault.displayName, request.format),
+                  name: vault.displayName,
+                  saved: savedAs,
+                })
+              : t("vault.export.success", { name: vault.displayName }),
+          );
           setExportVault(null);
         })
         .catch((error) => {
           if (gen !== exportBusyGenRef.current) return;
-          show(t(mobileErrorI18nKey(error, "vault.export.failed")));
+          if (isRpcTimeout(error)) {
+            // The call gave up before the budget did; core still writes the file.
+            void jobs.cancel(job, "timeout").catch(() => {
+              /* The export result is ignored either way. */
+            });
+          }
+          const key = mobileErrorI18nKey(error, "vault.export.failed");
+          // A refused password goes on the window's password field; a window
+          // already closed, and every other failure, gets a toast.
+          if (errorOnPasswordField(key) && exportWindowVaultIdRef.current === vault.id) {
+            setExportPasswordError({ vaultId: vault.id, message: t(key) });
+            return;
+          }
+          show(t(key));
         })
         .finally(() => {
           if (gen !== exportBusyGenRef.current) return;
-          setExportSubmitting(false);
+          exportJobRef.current = null;
           setExportJob(null);
         });
     },
     [
       exportJob,
       exportVault,
+      jobs,
       setExportJob,
-      setExportSubmitting,
+      setExportPasswordError,
       setExportVault,
       show,
       t,
@@ -1126,11 +1169,16 @@ export function useVaultListScreen() {
 
   const handleExportTimeout = useCallback(() => {
     exportBusyGenRef.current += 1;
-    exportAbortRef.current?.abort();
-    setExportSubmitting(false);
+    const job = exportJobRef.current;
+    exportJobRef.current = null;
+    if (job) {
+      void jobs.cancel(job, "timeout").catch(() => {
+        /* The export result is ignored either way. */
+      });
+    }
     setExportJob(null);
     show(t("error.operation_timed_out"));
-  }, [setExportJob, setExportSubmitting, show, t]);
+  }, [jobs, setExportJob, show, t]);
 
   const handleCreateVault = (result: CreateVaultResult, password: string) => {
     const listed = vaults.some((vault) => vault.id === result.vaultId);
@@ -1282,12 +1330,7 @@ export function useVaultListScreen() {
     backupSaveStartedAt: backupSaving ? (backupJob.job?.startedAt ?? null) : null,
     backupListRefresh,
     handleBackupSaveNow,
-    showExportDataFolder,
-    dataFolderExportJob,
-    dataFolderExportCanStart,
-    dataFolderExportWritten,
-    handleStartDataFolderExport,
-    stopDataFolderExport,
+    dataFolderExportControls,
     displayRowsRef,
     searchNoMatches,
     visibleVaults,
@@ -1302,6 +1345,8 @@ export function useVaultListScreen() {
     handleConfirmExportVault,
     handleRowExport,
     handleExportTimeout,
+    exportFolders,
+    exportRun,
     rowDensity,
     rowPaddingY,
     rowPaddingX,

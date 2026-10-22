@@ -37,7 +37,6 @@ export function vaultSettingsFixture(
       archive_mode: "encrypt_only",
       compression_level: 0,
       solid: false,
-      method: "lzma2",
       ...overrides.sevenZip,
     },
   };

@@ -5,11 +5,9 @@ import {
   parseWorkspaceSnapshot,
   sanitizeWorkspaceSnapshot,
   serializeWorkspaceSnapshot,
-  shouldHydratePersistedWorkspace,
   workspaceSnapshotToHydrate,
   UPRIV_WORKSPACE_PATH,
   workspaceSnapshotFromState,
-  workspaceStateFromSnapshot,
 } from "../workspaceSnapshot";
 import { createDefaultWorkspaceState } from "../workspaceTypes";
 
@@ -112,7 +110,7 @@ describe("workspaceSnapshot", () => {
     expect(visible.children?.some((c) => c.name === "a.md")).toBe(true);
   });
 
-  it("round-trips state ↔ snapshot without drafts", () => {
+  it("snapshots the layout without drafts", () => {
     let state = createDefaultWorkspaceState();
     state = {
       ...state,
@@ -128,19 +126,22 @@ describe("workspaceSnapshot", () => {
     };
     const snap = workspaceSnapshotFromState(state);
     expect(snap.openTabs).toEqual(["/a.md"]);
-    const restored = workspaceStateFromSnapshot(snap);
-    expect(restored.openTabs).toEqual(["/a.md"]);
-    expect(restored.markdownView).toBe("source");
-    expect(restored.explorerCollapsed).toBe(true);
-    expect(restored.markdownOutlineOpen).toBe(true);
-    expect(restored.dirtyPaths).toEqual([]);
-    expect(restored.editorDrafts).toEqual({});
+    expect(snap.markdownView).toBe("source");
+    expect(snap.explorerCollapsed).toBe(true);
+    expect(snap.markdownOutlineOpen).toBe(true);
+    expect(snap).not.toHaveProperty("dirtyPaths");
+    expect(snap).not.toHaveProperty("editorDrafts");
   });
 
   it("hydrates a disk snapshot only when memory is still the cold-open layout", () => {
     const empty = workspaceSnapshotFromState(createDefaultWorkspaceState());
     const loaded = { ...empty, openTabs: ["/a.md"], activeTabPath: "/a.md", selectedPath: "/a.md" };
     const edited = { ...empty, openTabs: ["/b.md"], activeTabPath: "/b.md", selectedPath: "/b.md" };
+    const shouldHydratePersistedWorkspace = (
+      mount: typeof empty,
+      current: typeof empty,
+      saved: typeof empty,
+    ) => workspaceSnapshotToHydrate(mount, current, saved) != null;
     expect(shouldHydratePersistedWorkspace(empty, empty, loaded)).toBe(true);
     expect(shouldHydratePersistedWorkspace(loaded, loaded, loaded)).toBe(false);
     expect(shouldHydratePersistedWorkspace(empty, edited, loaded)).toBe(false);
@@ -169,6 +170,5 @@ describe("workspaceSnapshot", () => {
       ...saved,
       explorerCollapsed: true,
     });
-    expect(shouldHydratePersistedWorkspace(empty, hidden, saved)).toBe(true);
   });
 });

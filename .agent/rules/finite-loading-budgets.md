@@ -9,7 +9,8 @@ Every **blocking** loading / busy / applying overlay in the desktop (and later m
 3. Delay first paint via `useLoadingBudget().visible` — `LOADING_APPEAR_DELAY_MS` (1s) for short budgets; `LOADING_LONG_HINT_APPEAR_DELAY_MS` (10s) for 10-minute budgets so "up to 10 min" does not scare on a fast unlock. Budget/timeout still count from when the op started. Open modal + row share `pipeline.run.startedAt`.
 4. On timeout: **clear** the spinner / applying / `busy` state and offer **retry** (or a clear error). Never leave `applying` / `busy` stuck forever.
 5. Also **invalidate** the in-flight attempt: bump a generation token (`busyGen` on Setup / Repair / Data folder / Alias recovery; `resolveGen` on Gate applying) so a late RPC success cannot re-apply root / `setReady` / clear the timeout error.
-6. Electron **main** must honor the same map: renderer passes `METHOD_TIMEOUT_MS[method]` (CORE values from `@upriv/shared` `CORE_RPC_TIMEOUT_MS`, plus desktop `pick_directory` / `app_exit` / `app_shutdown` in `invoke.ts`) through preload into `daemonRpc` (unmapped methods fall back to 30s — do not leave long vault-root ops on that default).
+6. Work core runs as a **job** (`vault_export`, `backup_save`, `data_folder_export`, each with a `newJobId` id) is also **stopped in core** on timeout: send `job_cancel` for that id, so core does not keep holding the vault or writing the file after the UI gave up. The call's own `rpc_timeout` (`isRpcTimeout`) uses the same budget and often fires first, so it sends `job_cancel` too.
+7. Electron **main** must honor the same map: renderer passes `METHOD_TIMEOUT_MS[method]` (CORE values from `@upriv/shared` `CORE_RPC_TIMEOUT_MS`, plus the `SHELL_ONLY_RPC_COMMANDS` entries in `invoke.ts`) through preload into `daemonRpc` (unmapped methods fall back to 30s — do not leave long vault-root ops on that default). Electron main sends `app_shutdown` with its own `SHUTDOWN_TIMEOUT_MS`.
 
 ## Budgets (current)
 
@@ -22,9 +23,9 @@ Every **blocking** loading / busy / applying overlay in the desktop (and later m
 | `vaultRewrap` | 10 min | Vault settings password / KDF change |
 | `vaultCreate` | 10 min | Scratch create in the vault pipeline queue (Argon2id wrap + seed) |
 | `vaultPipeline` | 10 min | Open/close progress (password modal if open + row hint; Argon2id unlock + flush) |
-| `vaultExport` | 10 min | Export zip of `store/` or portable `.7z` |
-| `vaultBackupSave` | 10 min | Backups → Back up now (`backup_save`): zip of the closed `store/` into `backups/saves/` |
-| `dataFolderExport` | 60 min | Export data folder (`data_folder_export`): zip of the whole `.upriv`. Progress from `data_folder_export_status`. On timeout the job asks core to stop (`data_folder_export_cancel`), which removes the partial zip. |
+| `vaultExport` | 60 min | Export zip of `store/` or portable `.7z` (`vault_export`). The Export window shows progress from `job_status` (`useJobProgress`). On timeout the UI asks core to stop that job (`job_cancel`), which removes the partial file. |
+| `vaultBackupSave` | 10 min | Backups → Back up now (`backup_save`): zip of the closed `store/` into `backups/saves/`. On timeout the UI asks core to stop that job (`job_cancel`). |
+| `dataFolderExport` | 60 min | Export data folder (`data_folder_export`): zip of the whole `.upriv`. Progress from `job_status`. On timeout the job asks core to stop (`job_cancel`), which removes the partial zip. |
 | `vaultFsImport` | 10 min | In-app FM OS drop / picker. Explorer skeletons at the drop target (appear immediately). Editor loading + countdown only for the file currently being written (`LOADING_APPEAR_DELAY_MS`, that write's `startedAt`) — queued files in the same batch do not show the 10 min clock. Overlapping drops are allowed (one session per batch). Close and cancel stops queued files; the write already in flight still finishes (do not gen-kill a late successful write). On RPC/invoke failure drop the remaining skeletons for that batch. |
 | `vaultRename` | 2 min | Deep vault rename (`vault_rename` folder + id remap) |
 | `settingsSave` | 30 s | Settings Save / workspace path persist (`app_settings_save`) |

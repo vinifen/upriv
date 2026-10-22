@@ -3,6 +3,7 @@ import {
   isRpcErrorBody,
   parseRpcErrorBody,
   RPC_PROTOCOL_ERROR_CODES,
+  RPC_TIMEOUT_CODE,
   RpcError,
 } from "@upriv/shared";
 
@@ -11,7 +12,7 @@ export const BRIDGE_ERROR_CODES = {
   DAEMON_UNAVAILABLE: "daemon_unavailable",
   /** IPC/preload/serialization failure — daemon may still be up. */
   BRIDGE_INVOKE_FAILED: "bridge_invoke_failed",
-  RPC_TIMEOUT: "rpc_timeout",
+  RPC_TIMEOUT: RPC_TIMEOUT_CODE,
   INVALID_RESPONSE: "invalid_response",
   SHELL_UNAVAILABLE: "shell_unavailable",
 } as const;

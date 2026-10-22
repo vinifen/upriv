@@ -27,40 +27,14 @@ pub(super) struct SettingsToml {
     pub(super) workspace: WorkspaceSettings,
 }
 
+/// `[package]`: the settings format. The data-folder layout under `.upriv/` is fixed.
 #[derive(Debug, Deserialize, Serialize)]
 pub(super) struct PackageToml {
-    #[serde(default = "default_package_version")]
-    pub(super) version: i64,
-    #[serde(default = "default_label")]
-    pub(super) label: String,
-    #[serde(default = "default_vaults_dir")]
-    pub(super) vaults_dir: String,
-    #[serde(default = "default_state_file")]
-    pub(super) state_file: String,
-    #[serde(default = "default_logs_dir")]
-    pub(super) logs_dir: String,
-    #[serde(default = "default_app_dir")]
-    pub(super) app_dir: String,
+    pub(super) version: u32,
 }
 
-pub(crate) fn default_package_version() -> i64 {
-    1
-}
-pub(crate) fn default_label() -> String {
-    "Upriv".into()
-}
-pub(crate) fn default_vaults_dir() -> String {
-    ".upriv/vaults".into()
-}
-pub(crate) fn default_state_file() -> String {
-    ".upriv/state.json".into()
-}
-pub(crate) fn default_logs_dir() -> String {
-    ".upriv/logs".into()
-}
-pub(crate) fn default_app_dir() -> String {
-    ".upriv/app".into()
-}
+/// The only `settings.toml` format.
+pub(crate) const SETTINGS_FORMAT_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
@@ -251,10 +225,21 @@ pub(super) struct AppToml {
 }
 
 pub(super) fn parse_settings_toml(raw: &str, path: &Path) -> Result<SettingsToml> {
-    toml::from_str(raw).map_err(|error| UprivError::VaultRootIncomplete {
-        path: path.to_path_buf(),
-        detail: format!("invalid settings.toml: {error}"),
-    })
+    let parsed: SettingsToml =
+        toml::from_str(raw).map_err(|error| UprivError::VaultRootIncomplete {
+            path: path.to_path_buf(),
+            detail: format!("invalid settings.toml: {error}"),
+        })?;
+    if parsed.package.version != SETTINGS_FORMAT_VERSION {
+        return Err(UprivError::VaultRootIncomplete {
+            path: path.to_path_buf(),
+            detail: format!(
+                "settings.toml [package].version is {}, not {SETTINGS_FORMAT_VERSION}",
+                parsed.package.version
+            ),
+        });
+    }
+    Ok(parsed)
 }
 
 /// Pure `settings.toml` → [`AppSettings`] parse — no disk access, no alias merge.
@@ -290,21 +275,12 @@ pub fn parse_settings_toml_str(raw: &str) -> Result<AppSettings> {
     })
 }
 
-/// Pure [`AppSettings`] → `settings.toml` serialization with `[package]`
-/// preservation. `[app].last_opened_vault` is taken from the wire value
-/// (trimmed); empty clears the pointer — do not fall back to `previous`.
+/// Pure [`AppSettings`] → `settings.toml` serialization. `[app].last_opened_vault`
+/// is taken from the wire value (trimmed); empty clears the pointer.
 ///
 /// Symmetric with [`parse_settings_toml_str`] — no disk access. Vault-root
 /// mode/path fields are **not** written (same rule as [`write_settings_toml_only`]).
-///
-/// The Android SAF flow pairs this with the DocumentFile write in the Expo
-/// module: Rust owns TOML semantics, Kotlin only moves bytes through SAF.
-/// Callers must pass the real `last_opened_vault` from normalized settings
-/// (empty only when intentionally clearing).
-pub fn serialize_settings_toml_str(
-    settings: &AppSettings,
-    previous: Option<&str>,
-) -> Result<String> {
+pub fn serialize_settings_toml_str(settings: &AppSettings) -> Result<String> {
     let vault_root = if settings.app.vault_root_mode == VaultRootMode::CustomRoot
         && !settings.app.upriv_root_path.trim().is_empty()
     {
@@ -316,10 +292,11 @@ pub fn serialize_settings_toml_str(
     // `path_is_under_reserved_upriv_tree` inside validate (default_root / SAF).
     validate_workspace_table(&settings.workspace, vault_root)?;
 
-    let package = package_from_previous(previous);
     let last_opened_vault = settings.app.last_opened_vault.trim().to_string();
     let file = SettingsToml {
-        package,
+        package: PackageToml {
+            version: SETTINGS_FORMAT_VERSION,
+        },
         ui: ui_toml_from_settings(&settings.ui),
         logging: LoggingToml {
             enabled: settings.logging.enabled,
@@ -414,34 +391,10 @@ fn inject_package_section_comments(body: &str) -> String {
     }
 }
 
-/// Extract `[package]` from a previous TOML string.
-/// Falls back to fresh defaults when `previous` is missing or unparseable.
-fn package_from_previous(previous: Option<&str>) -> PackageToml {
-    let mut package = PackageToml {
-        version: default_package_version(),
-        label: default_label(),
-        vaults_dir: default_vaults_dir(),
-        state_file: default_state_file(),
-        logs_dir: default_logs_dir(),
-        app_dir: default_app_dir(),
-    };
-    if let Some(raw) = previous {
-        if let Ok(prev) = toml::from_str::<SettingsToml>(raw) {
-            package = prev.package;
-        }
-    }
-    package
-}
-
-/// Write `[ui]` / `[logging]` (preserve `[package]`; `last_opened_vault` from settings).
+/// Write the whole `settings.toml` from `settings`.
 pub(super) fn write_settings_toml_only(root: &Path, settings: &AppSettings) -> Result<()> {
     let path = root.join(VAULT_ROOT_SETTINGS_REL);
-    let existing = if path.host_is_file() {
-        crate::host_fs::read_to_string(&path).ok()
-    } else {
-        None
-    };
-    let contents = serialize_settings_toml_str(settings, existing.as_deref())?;
+    let contents = serialize_settings_toml_str(settings)?;
     // Mid-session: if `.upriv` was deleted, fail — never recreate it via create_dir_all.
     // First-time init already created `.upriv/` before this write (settings may not exist yet).
     let upriv = root.join(".upriv");
@@ -462,11 +415,6 @@ mod pure_toml_tests {
         let raw = r#"
 [package]
 version = 1
-label = "Upriv"
-vaults_dir = ".upriv/vaults"
-state_file = ".upriv/state.json"
-logs_dir = ".upriv/logs"
-app_dir = ".upriv/app"
 
 [ui]
 locale = "pt-BR"
@@ -518,11 +466,6 @@ last_opened_vault = "kept"
         let raw = r#"
 [package]
 version = 1
-label = "Upriv"
-vaults_dir = ".upriv/vaults"
-state_file = ".upriv/state.json"
-logs_dir = ".upriv/logs"
-app_dir = ".upriv/app"
 
 [ui]
 locale = "en"
@@ -537,7 +480,7 @@ file_manager_confirm_delete = false
         assert!(settings.ui.lifecycle_open_file_manager_on_open);
         assert!(settings.ui.lifecycle_keep_open_on_wake);
         assert!(!settings.ui.file_manager_confirm_delete);
-        let written = serialize_settings_toml_str(&settings, None).unwrap();
+        let written = serialize_settings_toml_str(&settings).unwrap();
         assert!(written.contains("lifecycle_close_modal_on_submit = true"));
         assert!(written.contains("lifecycle_open_file_manager_on_open = true"));
         assert!(written.contains("lifecycle_keep_open_on_wake = true"));
@@ -550,11 +493,6 @@ file_manager_confirm_delete = false
         let raw = r#"
 [package]
 version = 1
-label = "Upriv"
-vaults_dir = ".upriv/vaults"
-state_file = ".upriv/state.json"
-logs_dir = ".upriv/logs"
-app_dir = ".upriv/app"
 
 [ui]
 vault_list_show_vault_settings_button = false
@@ -565,35 +503,16 @@ vault_list_show_vault_settings_button = false
     }
 
     #[test]
-    fn serialize_nonempty_last_opened_wins_over_previous() {
-        let previous = r#"
-[package]
-version = 1
-label = "Upriv"
-vaults_dir = ".upriv/vaults"
-state_file = ".upriv/state.json"
-logs_dir = ".upriv/logs"
-app_dir = ".upriv/app"
-
-[ui]
-locale = "en"
-
-[logging]
-enabled = true
-
-[app]
-last_opened_vault = "notes"
-"#;
+    fn serialize_writes_last_opened_from_the_wire() {
         let mut settings = AppSettings::default();
         settings.ui.locale = "es".into();
-        settings.app.last_opened_vault = "from-wire".into();
+        settings.app.last_opened_vault = " from-wire ".into();
         // Explicit custom_root should NOT be written to TOML — alias is the source of truth.
         settings.app.vault_root_mode = VaultRootMode::CustomRoot;
         settings.app.upriv_root_path = "content://ignored".into();
-        let out = serialize_settings_toml_str(&settings, Some(previous)).unwrap();
+        let out = serialize_settings_toml_str(&settings).unwrap();
         assert!(out.contains("locale = \"es\""));
         assert!(out.contains("last_opened_vault = \"from-wire\""));
-        assert!(!out.contains("last_opened_vault = \"notes\""));
         let opened_idx = out
             .find("last_opened_vault = \"from-wire\"")
             .expect("last_opened");
@@ -613,54 +532,9 @@ last_opened_vault = "notes"
     }
 
     #[test]
-    fn serialize_empty_last_opened_clears_previous() {
-        let previous = r#"
-[package]
-version = 1
-label = "Upriv"
-vaults_dir = ".upriv/vaults"
-state_file = ".upriv/state.json"
-logs_dir = ".upriv/logs"
-app_dir = ".upriv/app"
-
-[app]
-last_opened_vault = "notes"
-"#;
-        let settings = AppSettings::default();
-        assert!(settings.app.last_opened_vault.is_empty());
-        let out = serialize_settings_toml_str(&settings, Some(previous)).unwrap();
-        assert!(out.contains("last_opened_vault = \"\""));
-        assert!(!out.contains("last_opened_vault = \"notes\""));
-    }
-
-    #[test]
-    fn serialize_preserves_package_fields_when_last_opened_cleared() {
-        let previous = r#"
-[package]
-version = 1
-label = "Upriv"
-vaults_dir = ".upriv/vaults"
-state_file = ".upriv/state.json"
-logs_dir = ".upriv/logs"
-app_dir = ".upriv/app"
-
-[app]
-last_opened_vault = "notes"
-"#;
-        let out = serialize_settings_toml_str(&AppSettings::default(), Some(previous)).unwrap();
-        assert!(out.contains("vaults_dir = \".upriv/vaults\""));
-        assert!(out.contains("state_file = \".upriv/state.json\""));
-        assert!(out.contains("logs_dir = \".upriv/logs\""));
-        assert!(out.contains("app_dir = \".upriv/app\""));
-        assert!(out.contains("label = \"Upriv\""));
-        assert!(out.contains("last_opened_vault = \"\""));
-    }
-
-    #[test]
-    fn serialize_without_previous_uses_defaults() {
-        let out = serialize_settings_toml_str(&AppSettings::default(), None).unwrap();
-        assert!(out.contains("[package]"));
-        assert!(out.contains("vaults_dir = \".upriv/vaults\""));
+    fn serialize_writes_defaults() {
+        let out = serialize_settings_toml_str(&AppSettings::default()).unwrap();
+        assert!(out.contains("[package]\nversion = 1\n"));
         assert!(out.contains("locale = \"en\""));
         assert!(!out.contains("[ui.vault_list]"));
         assert!(out.contains("vault_list_search = \"\""));
@@ -687,7 +561,6 @@ last_opened_vault = "notes"
         );
         assert!(out.contains("vault_list_show_vault_settings_button = true"));
         assert!(out.contains("vault_list_show_group_settings_button = true"));
-        assert!(!out.contains("vault_list_show_vault_group_settings_button"));
         assert!(out.contains("vault_list_sort = \"order\""));
         assert!(out.contains("vault_groups.toml"));
         let ui_idx = out.find("\n[ui]").expect("[ui] section");
@@ -700,7 +573,7 @@ last_opened_vault = "notes"
             out.contains(
                 "# List groups (optional): .upriv/vault_groups.toml — missing file = no groups.\n\n[ui]"
             ),
-            "blank line required after vault_groups comment (matches DEFAULT_SETTINGS_TOML): {out}"
+            "blank line required after vault_groups comment: {out}"
         );
         assert!(out.contains("last_opened_vault = \"\""));
     }
@@ -709,7 +582,7 @@ last_opened_vault = "notes"
     fn serialize_rejects_relative_workspace_path() {
         let mut settings = AppSettings::default();
         settings.workspace.linux.path = "workspace".into();
-        let err = serialize_settings_toml_str(&settings, None).unwrap_err();
+        let err = serialize_settings_toml_str(&settings).unwrap_err();
         assert!(matches!(err, UprivError::WorkspacePathInvalid { .. }));
     }
 
@@ -719,7 +592,7 @@ last_opened_vault = "notes"
         settings.app.vault_root_mode = VaultRootMode::CustomRoot;
         settings.app.upriv_root_path = "/data/root".into();
         settings.workspace.linux.path = "/data/root/.upriv/vaults".into();
-        let err = serialize_settings_toml_str(&settings, None).unwrap_err();
+        let err = serialize_settings_toml_str(&settings).unwrap_err();
         assert!(matches!(err, UprivError::WorkspacePathReserved(_)));
     }
 
@@ -728,51 +601,8 @@ last_opened_vault = "notes"
         let mut settings = AppSettings::default();
         assert_eq!(settings.app.vault_root_mode, VaultRootMode::DefaultRoot);
         settings.workspace.linux.path = "/tmp/foo/.upriv/vaults/x".into();
-        let err = serialize_settings_toml_str(&settings, None).unwrap_err();
+        let err = serialize_settings_toml_str(&settings).unwrap_err();
         assert!(matches!(err, UprivError::WorkspacePathReserved(_)));
-    }
-
-    #[test]
-    fn parse_ignores_nested_vault_list_table() {
-        let raw = r#"
-[package]
-version = 1
-label = "Upriv"
-vaults_dir = ".upriv/vaults"
-state_file = ".upriv/state.json"
-logs_dir = ".upriv/logs"
-app_dir = ".upriv/app"
-
-[ui]
-locale = "en"
-theme = "dark"
-
-[ui.vault_list]
-vault_list_sort = "name"
-vault_list_sort_direction = "desc"
-vault_list_view = "compact"
-vault_list_search = "notes"
-always_show_hidden_vaults = true
-vault_list_show_drag = false
-vault_list_allow_drag_into_group = false
-vault_list_show_create_button = false
-vault_list_show_search_button = false
-vault_list_show_sort_button = false
-vault_list_show_view_button = false
-vault_list_show_vault_more_button = false
-vault_list_show_vault_settings_button = false
-vault_list_show_group_settings_button = false
-"#;
-        let settings = parse_settings_toml_str(raw).unwrap();
-        assert_eq!(settings.ui.vault_list_sort, "order");
-        assert_eq!(settings.ui.vault_list_sort_direction, "asc");
-        assert_eq!(settings.ui.vault_list_view, "default");
-        assert_eq!(settings.ui.vault_list_search, "");
-        assert!(!settings.ui.always_show_hidden_vaults);
-        assert!(settings.ui.vault_list_show_drag);
-        assert!(settings.ui.vault_list_allow_drag_into_group);
-        assert!(settings.ui.vault_list_show_create_button);
-        assert!(settings.ui.vault_list_show_vault_settings_button);
     }
 
     #[test]
@@ -780,11 +610,6 @@ vault_list_show_group_settings_button = false
         let raw = r#"
 [package]
 version = 1
-label = "Upriv"
-vaults_dir = ".upriv/vaults"
-state_file = ".upriv/state.json"
-logs_dir = ".upriv/logs"
-app_dir = ".upriv/app"
 
 [ui]
 show_header_more_button = false
@@ -797,5 +622,20 @@ show_header_more_button = false
     fn parse_rejects_broken_toml() {
         let err = parse_settings_toml_str("[package\nversion = 1\n").unwrap_err();
         assert!(matches!(err, UprivError::VaultRootIncomplete { .. }));
+    }
+
+    #[test]
+    fn parse_requires_package_version_1() {
+        for raw in [
+            "[ui]\nlocale = \"en\"\n",
+            "[package]\n",
+            "[package]\nversion = 2\n",
+        ] {
+            let err = parse_settings_toml_str(raw).unwrap_err();
+            assert!(
+                matches!(err, UprivError::VaultRootIncomplete { .. }),
+                "{raw}: {err:?}"
+            );
+        }
     }
 }

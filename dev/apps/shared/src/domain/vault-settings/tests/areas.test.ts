@@ -50,13 +50,16 @@ describe("vaultRowControls", () => {
   const idle: VaultRowControls = {
     moreMenuBlocked: false,
     noteBlocked: false,
+    noteHidden: false,
     settingsGearBlocked: false,
     settingsSaveBlocked: false,
     dragBlocked: false,
   };
+  // The whole menu is closed: Note stays listed, greyed with the rest.
   const pipelineBusy: VaultRowControls = {
     moreMenuBlocked: true,
     noteBlocked: true,
+    noteHidden: false,
     settingsGearBlocked: true,
     settingsSaveBlocked: true,
     dragBlocked: true,
@@ -86,20 +89,24 @@ describe("vaultRowControls", () => {
     });
   });
 
-  it("keeps the more menu during export, and closes note, gear, save, and drag", () => {
-    expect(controls({ exportingVaultIds: ["demo"] })).toEqual({
+  it("keeps the more menu during export or a backup, leaves Note out, and closes gear, save, and drag", () => {
+    const holding: VaultRowControls = {
       ...idle,
       noteBlocked: true,
+      noteHidden: true,
       settingsGearBlocked: true,
       settingsSaveBlocked: true,
       dragBlocked: true,
-    });
+    };
+    expect(controls({ exportingVaultIds: ["demo"] })).toEqual(holding);
+    expect(controls({ backupJobVaultIds: ["demo"] })).toEqual(holding);
   });
 
   it("keeps the gear open during a password or unlock-RAM change so that countdown can reopen", () => {
     const rewrap: VaultRowControls = {
       ...idle,
       noteBlocked: true,
+      noteHidden: true,
       settingsSaveBlocked: true,
       dragBlocked: true,
     };

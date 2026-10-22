@@ -1,6 +1,6 @@
 /**
- * Rust RPC method names used by desktop (`upriv-daemon`) and mobile (`upriv-ffi`).
- * DX only — handlers live in `upriv-rpc` (`handle_rpc`). Keep vault_* in this map.
+ * Rust RPC method names used by both desktop (`upriv-daemon`) and mobile (`upriv-ffi`).
+ * DX only — handlers live in `upriv-rpc` (`handle_rpc`).
  * Keep string values in sync with `upriv-rpc` match arms.
  * Parity fixture (not runtime): `tests/rpc-methods.json` — TS + Rust tests only.
  */
@@ -8,18 +8,6 @@ export const CORE_RPC_COMMANDS = {
   APP_VERSION: "app_version",
   APP_SETTINGS_GET: "app_settings_get",
   APP_SETTINGS_SAVE: "app_settings_save",
-  /**
-   * Pure `settings.toml` → `AppSettingsConfig` parse (no disk access). Used by
-   * the Android SAF flow: Kotlin reads `.upriv/settings.toml` via DocumentFile,
-   * Rust owns the TOML → wire mapping so mobile stays identical to desktop.
-   */
-  APP_SETTINGS_PARSE_TOML: "app_settings_parse_toml",
-  /**
-   * Pure `AppSettingsConfig` → `settings.toml` serialization preserving
-   * `[package]` and `[app].last_opened_vault` from the previous body (when
-   * passed). Symmetric with `APP_SETTINGS_PARSE_TOML` for the SAF flow.
-   */
-  APP_SETTINGS_SERIALIZE_TOML: "app_settings_serialize_toml",
   LOG_LIST: "log_list",
   LOG_GET: "log_get",
   LOG_DELETE: "log_delete",
@@ -38,8 +26,6 @@ export const CORE_RPC_COMMANDS = {
    */
   VAULT_ROOT_DEACTIVATE_ALIAS: "vault_root_deactivate_alias",
   VAULT_ROOT_READ_ALIAS: "vault_root_read_alias",
-  /** Write `custom=` on `.upriv-root` — the last Android Custom folder. Does not switch mode. */
-  VAULT_ROOT_REMEMBER_CUSTOM: "vault_root_remember_custom",
   VAULT_ROOT_DEFAULT_ROOT_STATUS: "vault_root_default_root_status",
   VAULT_ROOT_INSPECT_PATH: "vault_root_inspect_path",
   VAULT_ROOT_SUGGESTED_CUSTOM_PATH: "vault_root_suggested_custom_path",
@@ -83,20 +69,12 @@ export const CORE_RPC_COMMANDS = {
   VAULT_DELETE: "vault_delete",
   VAULT_EXPORT: "vault_export",
   VAULT_EXPORT_CAPABILITIES: "vault_export_capabilities",
-  /** Argon2id unlock of a closed vault. Does not pack an export. */
-  VAULT_EXPORT_PROBE: "vault_export_probe",
   VAULT_IMPORT_ZIP: "vault_import_zip",
   VAULT_IMPORT_7Z: "vault_import_7z",
   /** Ordinary `.zip` of documents. Not a Upriv store zip. */
   VAULT_IMPORT_FILES_ZIP: "vault_import_files_zip",
   /** One OS file, or the children of one OS folder, streamed into a new vault. */
   VAULT_IMPORT_OS_PATH: "vault_import_os_path",
-  /** Unlock a just-created vault for streaming. Does not mount a file manager. */
-  VAULT_INGEST_OPEN: "vault_ingest_open",
-  /** One folder inside an import session, including its parents. */
-  VAULT_INGEST_DIRECTORY: "vault_ingest_directory",
-  /** Drop a failed import session and delete the vault. No close backup. */
-  VAULT_DISCARD_IMPORT: "vault_discard_import",
   VAULT_IMPORT_PROBE: "vault_import_probe",
   VAULT_FS_LIST: "vault_fs_list",
   VAULT_FS_REVISION: "vault_fs_revision",
@@ -112,7 +90,6 @@ export const CORE_RPC_COMMANDS = {
   /** Seal the index for files staged by a batch import. */
   VAULT_FS_IMPORT_SEAL: "vault_fs_import_seal",
   VAULT_FS_TRUNCATE: "vault_fs_truncate",
-  VAULT_FS_MKDIR: "vault_fs_mkdir",
   VAULT_FS_CREATE_FILE: "vault_fs_create_file",
   VAULT_FS_CREATE_FOLDER: "vault_fs_create_folder",
   VAULT_FS_ENSURE_FOLDER: "vault_fs_ensure_folder",
@@ -131,22 +108,40 @@ export const CORE_RPC_COMMANDS = {
   BACKUP_SAVE: "backup_save",
   BACKUP_GET: "backup_get",
   /**
-   * Zip the whole `.upriv` into `upriv-<stamp>.zip` in the chosen folder. Every
-   * vault must be closed or in recovery; they stay held until the zip is written.
+   * Zip the whole `.upriv` into `<name>.zip` in the chosen folder. Every vault
+   * must be closed or in recovery; they stay held until the zip is written.
    */
   DATA_FOLDER_EXPORT: "data_folder_export",
-  /** Bytes copied by the running data-folder export, or `running: false`. */
-  DATA_FOLDER_EXPORT_STATUS: "data_folder_export_status",
-  /** Stop the running data-folder export. Its partial zip is removed. */
-  DATA_FOLDER_EXPORT_CANCEL: "data_folder_export_cancel",
+  /**
+   * Bytes done by the job a `vault_export`, `backup_save`, or
+   * `data_folder_export` request names, or `running: false`. Light; polled.
+   */
+  JOB_STATUS: "job_status",
+  /**
+   * Stop that job. Its request fails with `job_cancelled` and leaves no file.
+   * A job still waiting for its lane ends as soon as it starts.
+   */
+  JOB_CANCEL: "job_cancel",
 } as const;
 
 /**
- * Daemon lifecycle — desktop/Electron only (`upriv-daemon` stdio). Not used on mobile.
- * Keep in sync with `upriv-rpc` + `upriv-daemon` wire (`app_shutdown`).
+ * Rust RPC methods only mobile (`upriv-ffi`) calls: the Android storage-access
+ * data folder and imports streamed from `content://` trees.
  */
-export const DESKTOP_ONLY_RPC_COMMANDS = {
-  APP_SHUTDOWN: "app_shutdown",
+export const MOBILE_ONLY_RPC_COMMANDS = {
+  /**
+   * Pure `settings.toml` → `AppSettingsConfig` parse (no disk access). Kotlin reads
+   * `.upriv/settings.toml` from the storage-access tree; Rust owns the TOML → wire mapping.
+   */
+  APP_SETTINGS_PARSE_TOML: "app_settings_parse_toml",
+  /** Write `custom=` on `.upriv-root` — the last Android Custom folder. Does not switch mode. */
+  VAULT_ROOT_REMEMBER_CUSTOM: "vault_root_remember_custom",
+  /** Unlock a just-created vault for streaming. Does not mount a file manager. */
+  VAULT_INGEST_OPEN: "vault_ingest_open",
+  /** One folder inside an import session, including its parents. */
+  VAULT_INGEST_DIRECTORY: "vault_ingest_directory",
+  /** Drop a failed import session and delete the vault. No close backup. */
+  VAULT_DISCARD_IMPORT: "vault_discard_import",
 } as const;
 
 /**
@@ -174,7 +169,5 @@ export const SHELL_ONLY_RPC_COMMANDS = {
 } as const;
 
 export type CoreRpcCommand = (typeof CORE_RPC_COMMANDS)[keyof typeof CORE_RPC_COMMANDS];
-export type DesktopOnlyRpcCommand =
-  (typeof DESKTOP_ONLY_RPC_COMMANDS)[keyof typeof DESKTOP_ONLY_RPC_COMMANDS];
-export type ShellOnlyRpcCommand =
-  (typeof SHELL_ONLY_RPC_COMMANDS)[keyof typeof SHELL_ONLY_RPC_COMMANDS];
+export type MobileOnlyRpcCommand =
+  (typeof MOBILE_ONLY_RPC_COMMANDS)[keyof typeof MOBILE_ONLY_RPC_COMMANDS];

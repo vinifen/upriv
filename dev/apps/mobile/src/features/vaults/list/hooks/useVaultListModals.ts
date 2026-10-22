@@ -3,6 +3,7 @@ import type {
   CreateVaultDraft,
   CreateVaultStepId,
   GroupedVaultSortMode,
+  VaultExportFormat,
   VaultGroup,
   VaultLifecycleRequest,
   VaultListItem,
@@ -15,8 +16,6 @@ export function useVaultListModals() {
   const [settingsDirty, setSettingsDirty] = useState(false);
   const [dataFolderOpen, setDataFolderOpen] = useState(false);
   const [dataFolderDirty, setDataFolderDirty] = useState(false);
-  /** Export data folder. Closing it leaves a running export in place. */
-  const [dataFolderExportOpen, setDataFolderExportOpen] = useState(false);
   const [groupsOpen, setGroupsOpen] = useState(false);
   const [groupsDirty, setGroupsDirty] = useState(false);
   const [logsOpen, setLogsOpen] = useState(false);
@@ -31,8 +30,18 @@ export function useVaultListModals() {
   const [settingsArea, setSettingsArea] = useState<VaultSettingsAreaId | null>(null);
   const [noteVaultId, setNoteVaultId] = useState<string | null>(null);
   const [exportVault, setExportVault] = useState<VaultListItem | null>(null);
-  const [exportSubmitting, setExportSubmitting] = useState(false);
-  const [exportJob, setExportJob] = useState<{ vaultId: string; startedAt: number } | null>(null);
+  /** The export in flight: its job id (`job_status`, `job_cancel`), vault, format, and start. */
+  const [exportJob, setExportJob] = useState<{
+    id: string;
+    vaultId: string;
+    format: VaultExportFormat;
+    startedAt: number;
+  } | null>(null);
+  /** The password a `.7z` export was refused with (wrong, or the unlock limit), on its field. */
+  const [exportPasswordError, setExportPasswordError] = useState<{
+    vaultId: string;
+    message: string;
+  } | null>(null);
   const [backupsVault, setBackupsVault] = useState<VaultListItem | null>(null);
   const [settingsGroup, setSettingsGroup] = useState<VaultGroup | null>(null);
   const settingsGroupOpenRef = useRef(false);
@@ -59,8 +68,6 @@ export function useVaultListModals() {
     setDataFolderOpen,
     dataFolderDirty,
     setDataFolderDirty,
-    dataFolderExportOpen,
-    setDataFolderExportOpen,
     groupsOpen,
     setGroupsOpen,
     groupsDirty,
@@ -89,10 +96,10 @@ export function useVaultListModals() {
     setNoteVaultId,
     exportVault,
     setExportVault,
-    exportSubmitting,
-    setExportSubmitting,
     exportJob,
     setExportJob,
+    exportPasswordError,
+    setExportPasswordError,
     backupsVault,
     setBackupsVault,
     settingsGroup,

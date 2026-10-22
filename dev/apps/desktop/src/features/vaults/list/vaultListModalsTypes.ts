@@ -1,6 +1,7 @@
 import type {
   CreateVaultDraft,
   CreateVaultStepId,
+  VaultExportFormat,
   VaultGroup,
   VaultLifecycleRequest,
   VaultListItem,
@@ -38,9 +39,6 @@ export interface VaultListModalsHandle {
   /** Returns false when System settings or Data folder has unsaved edits. */
   setGroupsOpen: (open: boolean) => boolean;
   setGroupsDirty: (dirty: boolean) => void;
-  /** Export data folder. Closing it leaves a running export in place. */
-  dataFolderExportOpen: boolean;
-  setDataFolderExportOpen: (open: boolean) => void;
   logsOpen: boolean;
   setLogsOpen: (open: boolean) => void;
   helpOpen: boolean;
@@ -69,12 +67,29 @@ export interface VaultListModalsHandle {
   exportVaultId: string | null;
   setExportVaultId: (id: string | null) => void;
   exportVault: VaultListItem | null;
-  exportSubmitting: boolean;
-  setExportSubmitting: (submitting: boolean) => void;
-  /** Vault whose export is still writing, even if the dialog is hidden. */
+  /** The export still writing, even if its window is hidden. */
+  exportJob: VaultExportJob | null;
+  /** Vault of that export. */
   exportJobVaultId: string | null;
-  exportStartedAt: number | null;
-  setExportJob: (job: { vaultId: string; startedAt: number } | null) => void;
+  setExportJob: (job: VaultExportJob | null) => void;
+  /** The password a `.7z` export of this vault was refused with, shown on its field. */
+  exportPasswordError: VaultExportPasswordError | null;
+  setExportPasswordError: (error: VaultExportPasswordError | null) => void;
+}
+
+/** The vault export in flight. */
+export interface VaultExportJob {
+  /** Its job id (`job_status`, `job_cancel`). */
+  id: string;
+  vaultId: string;
+  format: VaultExportFormat;
+  startedAt: number;
+}
+
+/** A `.7z` export refused its password: wrong, or the unlock limit. */
+export interface VaultExportPasswordError {
+  vaultId: string;
+  message: string;
 }
 
 /** Subset of modal handles that vault lifecycle actions need. */
@@ -86,11 +101,12 @@ export type VaultListLifecycleModals = Pick<
   | "setRecoveryVaultId"
   | "recoveryVaultId"
   | "setRecoverySubmitting"
+  | "exportVaultId"
   | "setExportVaultId"
   | "exportVault"
-  | "setExportSubmitting"
   | "exportJobVaultId"
   | "setExportJob"
+  | "setExportPasswordError"
   | "setCreateVaultOpen"
   | "setCreateVaultInitialDraft"
   | "setCreateVaultInitialStep"

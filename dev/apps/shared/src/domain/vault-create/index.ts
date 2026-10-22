@@ -15,7 +15,6 @@ export {
   importSetsVaultPassword,
   importZipWrapsDocuments,
   createVaultImportPackageKind,
-  isCreateVaultBackupImport,
 } from "./importKind";
 export {
   createDraftForImportSource,
@@ -33,7 +32,6 @@ export {
   getCreateVaultStepStatus,
   validateAllCreateVaultSteps,
   validateCreateVaultStep,
-  vaultIdForCreateDraft,
   CREATE_VAULT_PASSWORD_MIN_LENGTH,
   isLifecyclePasswordPresent,
   isMockLifecyclePasswordValid,

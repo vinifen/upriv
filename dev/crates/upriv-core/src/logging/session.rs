@@ -1,4 +1,4 @@
-//! Process-wide logging session (daemon / future mobile host).
+//! Process-wide logging session (daemon / mobile FFI host).
 //!
 //! Re-opens the writer when vault-root `logs_dir` or `[logging]` settings change.
 //!
@@ -58,6 +58,12 @@ pub fn clear_logging_session() {
 /// Uses on-disk `[logging]` settings. If no vault-root is available yet (or the
 /// marker vanished), clears any stale session logger and returns `Ok(None)`.
 pub fn ensure_logging_session() -> io::Result<Option<Arc<Logger>>> {
+    // `cargo test` runs inside `dev/`, where discovery would reach the developer's
+    // own data folder. Tests resolve one only after setting an app home.
+    #[cfg(test)]
+    if crate::paths::env_default_root_anchor().is_none() {
+        return Ok(session_logger());
+    }
     let loaded = match load_app_settings() {
         Ok(loaded) => loaded,
         Err(error) => {
@@ -127,14 +133,6 @@ pub fn session_logger() -> Option<Arc<Logger>> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .logger
         .clone()
-}
-
-/// Resolved `.upriv/logs` for the current vault-root (always from settings when possible).
-///
-/// Soft `None` for writers / early paths. Prefer [`require_session_logs_dir`] for
-/// read/delete RPC so mid-session missing roots fail loud (A/B).
-pub fn session_logs_dir() -> Option<PathBuf> {
-    require_session_logs_dir().unwrap_or_default()
 }
 
 /// Intended vault-root path when discover reports absence (alias or default anchor).
@@ -273,13 +271,6 @@ pub fn log_vault_root_leaving_on(logger: &Logger, from: &str, to: &str, mode: &s
         &[("from", from), ("to", to), ("mode", mode)],
     );
     logger.flush();
-}
-
-/// Write leaving on the current session logger without re-resolving the root.
-pub fn log_vault_root_leaving(from: &str, to: &str, mode: &str) {
-    if let Some(logger) = session_logger() {
-        log_vault_root_leaving_on(&logger, from, to, mode);
-    }
 }
 
 /// Write on the **new** root after switch (also re-arms + emits `vault_root_ready`).

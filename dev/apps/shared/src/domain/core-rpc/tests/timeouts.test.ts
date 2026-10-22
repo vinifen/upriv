@@ -1,13 +1,20 @@
 import { describe, expect, it } from "vitest";
 import { LOADING_BUDGET_MS } from "../../loading/budget";
-import { CORE_RPC_COMMANDS } from "../commands";
-import { CORE_RPC_TIMEOUT_MS, vaultImportProbeTimeoutMs } from "../timeouts";
+import { CORE_RPC_COMMANDS, MOBILE_ONLY_RPC_COMMANDS } from "../commands";
+import {
+  CORE_RPC_TIMEOUT_MS,
+  MOBILE_ONLY_RPC_TIMEOUT_MS,
+  vaultImportProbeTimeoutMs,
+} from "../timeouts";
 
 describe("CORE_RPC_TIMEOUT_MS", () => {
-  it("covers every CORE RPC and never uses 0", () => {
+  it("covers every CORE and mobile-only RPC and never uses 0", () => {
     for (const method of Object.values(CORE_RPC_COMMANDS)) {
       expect(CORE_RPC_TIMEOUT_MS[method], method).toEqual(expect.any(Number));
       expect(CORE_RPC_TIMEOUT_MS[method], method).toBeGreaterThan(0);
+    }
+    for (const method of Object.values(MOBILE_ONLY_RPC_COMMANDS)) {
+      expect(MOBILE_ONLY_RPC_TIMEOUT_MS[method], method).toBeGreaterThan(0);
     }
   });
 
@@ -25,7 +32,6 @@ describe("CORE_RPC_TIMEOUT_MS", () => {
     expect(CORE_RPC_TIMEOUT_MS.vault_close).toBe(LOADING_BUDGET_MS.vaultPipeline);
     expect(CORE_RPC_TIMEOUT_MS.vault_rename).toBe(LOADING_BUDGET_MS.vaultRename);
     expect(CORE_RPC_TIMEOUT_MS.vault_export).toBe(LOADING_BUDGET_MS.vaultExport);
-    expect(CORE_RPC_TIMEOUT_MS.vault_export_probe).toBe(LOADING_BUDGET_MS.vaultPipeline);
     expect(CORE_RPC_TIMEOUT_MS.vault_fs_import_os_file).toBe(LOADING_BUDGET_MS.vaultFsImport);
     expect(CORE_RPC_TIMEOUT_MS.vault_fs_import_seal).toBe(LOADING_BUDGET_MS.vaultFsImport);
     expect(CORE_RPC_TIMEOUT_MS.vault_import_probe).toBe(LOADING_BUDGET_MS.default);

@@ -47,10 +47,7 @@ pub enum RequestOutcome {
 /// The rest of the job runs on `upriv-pack`, not on this worker and not on
 /// the close worker.
 pub fn is_argon2_bound_method(method: &str, _params: &Value) -> bool {
-    matches!(
-        method,
-        "vault_open" | "vault_create" | "vault_export_probe" | "vault_ingest_open"
-    )
+    matches!(method, "vault_open" | "vault_create" | "vault_ingest_open")
 }
 
 /// Close, delete, backup download, and plaintext-folder work that waits for a
@@ -180,7 +177,7 @@ mod tests {
         assert!(!is_argon2_bound_method("vault_ingest_directory", &empty));
         assert!(!is_long_io_method("vault_ingest_directory", &empty));
         assert!(is_argon2_bound_method("vault_create", &empty));
-        assert!(is_argon2_bound_method("vault_export_probe", &empty));
+        assert!(!is_argon2_bound_method("vault_export", &empty));
         assert!(!is_argon2_bound_method("vault_import_7z", &empty));
         assert!(!is_argon2_bound_method("vault_import_zip", &empty));
         assert!(!is_argon2_bound_method("vault_close", &empty));
@@ -242,8 +239,9 @@ mod tests {
             heavy_lane("data_folder_export", &empty),
             Some(HeavyLane::DataFolder)
         );
-        assert_eq!(heavy_lane("data_folder_export_status", &empty), None);
-        assert_eq!(heavy_lane("data_folder_export_cancel", &empty), None);
+        // Progress and stop answer at once, beside the job they name.
+        assert_eq!(heavy_lane("job_status", &empty), None);
+        assert_eq!(heavy_lane("job_cancel", &empty), None);
         assert_ne!(
             heavy_lane("vault_close", &empty),
             heavy_lane("vault_import_7z", &empty)
@@ -303,7 +301,6 @@ mod tests {
             "vault_delete",
             "vault_discard_import",
             "vault_export",
-            "vault_export_probe",
             "vault_fs_import_os_file",
             "vault_fs_import_seal",
             "vault_import_7z",

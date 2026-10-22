@@ -37,7 +37,6 @@ function settings(patch: Partial<VaultSettingsConfig> = {}): VaultSettingsConfig
       archive_mode: "compress_encrypt",
       compression_level: 5,
       solid: true,
-      method: "lzma2",
     },
     ...patch,
   };

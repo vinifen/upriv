@@ -5,9 +5,9 @@ use std::sync::{Mutex, MutexGuard};
 
 use crate::error::{Result, UprivError};
 use crate::paths::{
-    app_home_dir, deactivate_vault_root_alias_everywhere, discover_vault_root_upward,
-    env_default_root_anchor, read_vault_root_alias, setup_default_root_anchor,
-    write_vault_root_alias_for_root, VaultRoot, VaultRootMode, VAULT_ROOT_SETTINGS_REL,
+    app_home_dir, deactivate_app_home_alias, discover_vault_root_upward, env_default_root_anchor,
+    read_vault_root_alias, setup_default_root_anchor, write_vault_root_alias_for_root, VaultRoot,
+    VaultRootMode, VAULT_ROOT_SETTINGS_REL,
 };
 
 use super::toml::{parse_settings_toml, ui_settings_from_toml, write_settings_toml_only};
@@ -190,7 +190,7 @@ pub fn save_app_settings_with_alias_sync(
 /// Align `.upriv-root` with settings: default_root → deactivate; custom → write active alias.
 pub fn sync_alias_with_app_settings(settings: &AppSettings) -> Result<()> {
     if settings.app.vault_root_mode == VaultRootMode::DefaultRoot {
-        deactivate_vault_root_alias_everywhere()?;
+        deactivate_app_home_alias()?;
         return Ok(());
     }
     let path = settings.app.upriv_root_path.trim();
@@ -364,14 +364,12 @@ mod tests {
         std::env::remove_var("APPIMAGE");
         std::env::set_var("UPRIV_DEFAULT_ROOT_ANCHOR", home.path());
 
-        // Unknown `[app]` keys must not override `.upriv-root` (alias wins).
         let settings_path = root.path().join(".upriv/settings.toml");
         crate::host_fs::write(
             &settings_path,
             r#"
 [package]
 version = 1
-vaults_dir = ".upriv/vaults"
 
 [ui]
 locale = "en"
@@ -380,7 +378,7 @@ locale = "en"
 enabled = true
 
 [app]
-obsolete_vault_root_flag = true
+last_opened_vault = ""
 "#,
         )
         .unwrap();
@@ -457,7 +455,6 @@ obsolete_vault_root_flag = true
             r#"
 [package]
 version = 1
-vaults_dir = ".upriv/vaults"
 [ui]
 locale = "en"
 [logging]

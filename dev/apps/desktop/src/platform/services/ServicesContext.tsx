@@ -40,6 +40,10 @@ export function useDataFolderService(): AppServices["dataFolder"] {
   return useServices().dataFolder;
 }
 
+export function useJobService(): AppServices["jobs"] {
+  return useServices().jobs;
+}
+
 export function useLogService(): AppServices["logs"] {
   return useServices().logs;
 }

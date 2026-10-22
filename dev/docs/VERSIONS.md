@@ -4,7 +4,7 @@
 
 **Product version:** edit **`VERSION`** at the repository root only, then run `npm run sync-version --prefix dev` (or `build` / `electron:build`, which sync automatically). CI runs `scripts/check-version.mjs` via `./r l` to catch drift.
 
-**Last reviewed:** 2026-10-05 (Android data folder is `/upriv-saf-root` via `SafFs`; in-app file manager. No `VaultStorage` trait.)
+**Last reviewed:** 2026-10-05 (Android data folder is `/upriv-saf-root` via `SafFs`; in-app file manager.)
 
 ## System
 
@@ -72,6 +72,6 @@
 | Electron **34.x** | Stable Chromium; pinned for reproducible AppImage builds |
 | React **18** not 19 | Broader library compatibility for a long-lived product |
 | Vite **6** not 7 | `@vitejs/plugin-react` 4.x targets Vite 4–6; v6 drops Vite 7 |
-| Tailwind **3** not 4 | Stable PostCSS workflow; upgrade to v4 when UI work starts |
+| Tailwind **3** not 4 | Stable PostCSS workflow; v4 is a separate migration |
 | Expo **52** + RN **0.76** | Matches React **18** desktop; SDK 53/RN 0.79 deferred |
-| `newArchEnabled: false` | Safer until custom Rust native code lands |
+| `newArchEnabled: false` | The `upriv-core` Expo module (UniFFI / JNA) is tested on the old architecture only |

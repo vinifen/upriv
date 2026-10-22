@@ -1,4 +1,5 @@
 import { Component, type CSSProperties, type ErrorInfo, type ReactNode } from "react";
+import { SHELL_ONLY_RPC_COMMANDS } from "@upriv/shared";
 import { METHOD_TIMEOUT_MS } from "@/lib/invoke";
 
 interface AppErrorBoundaryProps {
@@ -61,7 +62,8 @@ export class AppErrorBoundary extends Component<AppErrorBoundaryProps, AppErrorB
   private quit = (): void => {
     const api = window.upriv;
     if (api && typeof api.invoke === "function") {
-      void api.invoke("app_exit", {}, METHOD_TIMEOUT_MS.app_exit).catch(() => undefined);
+      const method = SHELL_ONLY_RPC_COMMANDS.APP_EXIT;
+      void api.invoke(method, {}, METHOD_TIMEOUT_MS[method]).catch(() => undefined);
       return;
     }
     window.close();

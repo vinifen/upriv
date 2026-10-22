@@ -5,7 +5,7 @@ import {
   canReorderVaultList,
   DEFAULT_VAULT_LIST_SORT,
 } from "..";
-import { reorderVaultList, sortVaultsByOrder } from "..";
+import { sortVaultsByOrder } from "..";
 import { vaultListItemFixture } from "./fixtures";
 
 describe("sortVaultsByOrder", () => {
@@ -35,19 +35,5 @@ describe("applyVaultListSort", () => {
     expect(canReorderVaultList({ mode: "name", direction: "asc" })).toBe(false);
     expect(canReorderGroupedVaults({ mode: "order", direction: "desc" })).toBe(true);
     expect(canReorderGroupedVaults({ mode: "name", direction: "asc" })).toBe(false);
-  });
-});
-
-describe("reorderVaultList", () => {
-  it("swaps order values after drag reorder", () => {
-    const vaults = [
-      vaultListItemFixture({ id: "a", order: 1 }),
-      vaultListItemFixture({ id: "b", order: 2 }),
-      vaultListItemFixture({ id: "c", order: 3 }),
-    ];
-    const next = reorderVaultList(vaults, "c", "a");
-    expect(next.find((v) => v.id === "c")?.order).toBe(1);
-    expect(next.find((v) => v.id === "b")?.order).toBe(2);
-    expect(next.find((v) => v.id === "a")?.order).toBe(3);
   });
 });

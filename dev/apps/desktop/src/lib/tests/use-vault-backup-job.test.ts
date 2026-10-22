@@ -1,7 +1,14 @@
 /** @vitest-environment jsdom */
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { LOADING_BUDGET_MS, type BackupService, type VaultBackupEntry } from "@upriv/shared";
+import {
+  LOADING_BUDGET_MS,
+  RPC_TIMEOUT_CODE,
+  RpcError,
+  type BackupService,
+  type JobService,
+  type VaultBackupEntry,
+} from "@upriv/shared";
 import { useVaultBackupJob, type VaultBackupJobEvents } from "@upriv/shared/react";
 
 function deferred<T>() {
@@ -32,6 +39,10 @@ function serviceSaving(saveNow: BackupService["saveNow"]): BackupService {
   };
 }
 
+function jobs(): JobService & { cancel: ReturnType<typeof vi.fn> } {
+  return { status: async () => null, cancel: vi.fn(async () => undefined) };
+}
+
 function events(): VaultBackupJobEvents & {
   onSaved: ReturnType<typeof vi.fn>;
   onFailed: ReturnType<typeof vi.fn>;
@@ -47,15 +58,16 @@ describe("useVaultBackupJob", () => {
 
   it("holds the job until the backup lands, then reports it", async () => {
     const run = deferred<VaultBackupEntry>();
-    const saveNow = vi.fn(() => run.promise);
+    const saveNow = vi.fn<BackupService["saveNow"]>(() => run.promise);
     const on = events();
     const service = serviceSaving(saveNow);
-    const { result } = renderHook(() => useVaultBackupJob(service, on));
+    const { result } = renderHook(() => useVaultBackupJob(service, jobs(), on));
 
     act(() => {
       expect(result.current.start("vault-a")).toBe(true);
     });
     expect(result.current.job?.vaultId).toBe("vault-a");
+    expect(saveNow).toHaveBeenCalledWith("vault-a", result.current.job?.id);
 
     await act(async () => {
       run.resolve(saved);
@@ -69,7 +81,7 @@ describe("useVaultBackupJob", () => {
     const saveNow = vi.fn(() => new Promise<VaultBackupEntry>(() => undefined));
     const service = serviceSaving(saveNow);
     const on = events();
-    const { result } = renderHook(() => useVaultBackupJob(service, on));
+    const { result } = renderHook(() => useVaultBackupJob(service, jobs(), on));
 
     act(() => {
       expect(result.current.start("vault-a")).toBe(true);
@@ -85,7 +97,7 @@ describe("useVaultBackupJob", () => {
     const run = deferred<VaultBackupEntry>();
     const service = serviceSaving(() => run.promise);
     const on = events();
-    const { result } = renderHook(() => useVaultBackupJob(service, on));
+    const { result } = renderHook(() => useVaultBackupJob(service, jobs(), on));
 
     act(() => {
       result.current.start("vault-a");
@@ -99,12 +111,33 @@ describe("useVaultBackupJob", () => {
     expect(on.onSaved).not.toHaveBeenCalled();
   });
 
-  it("gives up after the budget and ignores a late result", async () => {
+  it("stops its job in core when the call times out before the budget", async () => {
+    const run = deferred<VaultBackupEntry>();
+    const saveNow = vi.fn<BackupService["saveNow"]>(() => run.promise);
+    const runner = jobs();
+    const on = events();
+    const { result } = renderHook(() => useVaultBackupJob(serviceSaving(saveNow), runner, on));
+
+    act(() => {
+      result.current.start("vault-a");
+    });
+    await act(async () => {
+      run.reject(new RpcError(RPC_TIMEOUT_CODE, "invoke timeout"));
+    });
+    await waitFor(() => expect(result.current.job).toBeNull());
+    expect(runner.cancel).toHaveBeenCalledWith(saveNow.mock.calls[0][1], "timeout");
+    expect(on.onTimedOut).toHaveBeenCalledWith("vault-a");
+    expect(on.onFailed).not.toHaveBeenCalled();
+  });
+
+  it("gives up after the budget, stops its job in core, and ignores a late result", async () => {
     vi.useFakeTimers();
     const run = deferred<VaultBackupEntry>();
-    const service = serviceSaving(() => run.promise);
+    const saveNow = vi.fn<BackupService["saveNow"]>(() => run.promise);
+    const service = serviceSaving(saveNow);
+    const runner = jobs();
     const on = events();
-    const { result } = renderHook(() => useVaultBackupJob(service, on));
+    const { result } = renderHook(() => useVaultBackupJob(service, runner, on));
 
     act(() => {
       result.current.start("vault-a");
@@ -114,6 +147,8 @@ describe("useVaultBackupJob", () => {
     });
     expect(result.current.job).toBeNull();
     expect(on.onTimedOut).toHaveBeenCalledWith("vault-a");
+    expect(runner.cancel).toHaveBeenCalledTimes(1);
+    expect(runner.cancel).toHaveBeenCalledWith(saveNow.mock.calls[0][1], "timeout");
 
     await act(async () => {
       run.resolve(saved);

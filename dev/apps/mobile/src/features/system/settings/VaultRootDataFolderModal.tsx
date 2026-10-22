@@ -1,18 +1,25 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Platform, StyleSheet, Text, View } from "react-native";
 import {
+  dataFolderExportPending,
   isVaultRootDraftDirty,
   VAULT_ROOT_GATE_IDLE,
   type VaultRootMode,
   type VaultRootSettingsGate,
 } from "@upriv/shared";
 import { useVaultRootService } from "@/platform/services";
+import {
+  DataFolderExportFooter,
+  DataFolderExportPanel,
+  useDataFolderExportDestination,
+  type DataFolderExportControls,
+} from "@/features/system/data-folder-export";
 import { useAppSettingsContext } from "./AppSettingsContext";
 import { useTranslation } from "@/i18n";
 import { mobileErrorI18nKey } from "@/lib/errorMessages";
 import { alertIfPrivateRootLeftBehind, pickDocumentsUprivFolder } from "./dataFolderGrant";
 import { Button, Modal } from "@/components/ui";
-import { ModalFooterActions, modalFooterConfirmBtnStyle } from "@/components/ui/ModalFooterActions";
+import { ModalFooterActions } from "@/components/ui/ModalFooterActions";
 import { useTheme } from "@/theme";
 import { spacing } from "@/theme/tokens";
 import { VaultRootLocationSection } from "./VaultRootLocationSection";
@@ -30,6 +37,8 @@ interface VaultRootDataFolderModalProps {
    * Modal stays openable; controls + Apply stay locked (closed + recovery OK).
    */
   vaultActivityBlocksChange?: boolean;
+  /** Export data folder. Absent when this build has no data folder service. */
+  exportControls?: DataFolderExportControls;
 }
 
 /**
@@ -37,6 +46,10 @@ interface VaultRootDataFolderModalProps {
  * Not part of System Settings Save — avoids mixing appearance drafts with folder
  * switch. Mirrors desktop `VaultRootDataFolderModal` semantics. A system-picker
  * `content://` folder is the data folder: vaults are created and edited there.
+ * Export a copy is a third radio beside the two folders, and the one footer
+ * button follows the choice (Apply / Export / Stop export). Choosing it drops a
+ * folder draft, so the copy is always of the folder in use; choosing a folder
+ * again goes back.
  *
  * Keeps the recent Apply ordering: close the modal BEFORE `patchSettings`
  * reloads settings from the new root, so theme/locale do not flash while the
@@ -47,6 +60,7 @@ export function VaultRootDataFolderModal({
   onClose,
   onDirtyChange,
   vaultActivityBlocksChange = false,
+  exportControls,
 }: VaultRootDataFolderModalProps) {
   const { t } = useTranslation();
   const { colors, typography } = useTheme();
@@ -60,6 +74,19 @@ export function VaultRootDataFolderModal({
   const [busy, setBusy] = useState(false);
   const [appliedVisible, setAppliedVisible] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** Export a copy is the chosen radio. A running export keeps it chosen. */
+  const [exportChosen, setExportChosen] = useState(false);
+  const exportDestination = useDataFolderExportDestination();
+  const { resetZipName: resetExportZipName } = exportDestination;
+  const { cancelPick: cancelExportPick } = exportDestination.folder;
+  const exportSelected = exportControls != null && (exportChosen || exportControls.job != null);
+  const exportWritten = exportControls?.written ?? null;
+  const clearExportWritten = exportControls?.clearWritten;
+  // Chosen and still missing its folder or a usable name: the step left before Export.
+  const exportNeedsStep =
+    exportSelected &&
+    exportControls?.job == null &&
+    dataFolderExportPending(exportDestination.folder.path, exportDestination.zipName) !== null;
   const submitLock = useRef(false);
   const busyGen = useRef(0);
   const openedRef = useRef(false);
@@ -97,6 +124,10 @@ export function VaultRootDataFolderModal({
       setBusy(false);
       setAppliedVisible(false);
       setError(null);
+      setExportChosen(false);
+      cancelExportPick();
+      // The saved line belongs to this opening of the window; the folder stays.
+      clearExportWritten?.();
       submitLock.current = false;
       busyGen.current += 1;
       clearTimeout(appliedHideRef.current);
@@ -111,6 +142,9 @@ export function VaultRootDataFolderModal({
       setDiscardConfirmOpen(false);
       setAppliedVisible(false);
       setError(null);
+      resetExportZipName();
+      // An export that finished while the window was closed already had its toast.
+      clearExportWritten?.();
       return;
     }
     // Context reloaded vault-root while open: adopt if user has no local draft.
@@ -118,7 +152,20 @@ export function VaultRootDataFolderModal({
       setMode(settings.app.vault_root_mode);
       setPath(settings.app.upriv_root_path);
     }
-  }, [open, draftDirty, settings.app.upriv_root_path, settings.app.vault_root_mode]);
+  }, [
+    cancelExportPick,
+    clearExportWritten,
+    open,
+    draftDirty,
+    resetExportZipName,
+    settings.app.upriv_root_path,
+    settings.app.vault_root_mode,
+  ]);
+
+  // A fresh name after each export. A failed one keeps what was typed.
+  useEffect(() => {
+    if (exportWritten) resetExportZipName();
+  }, [exportWritten, resetExportZipName]);
 
   useEffect(() => {
     setConfirmOpen(false);
@@ -141,12 +188,24 @@ export function VaultRootDataFolderModal({
   const onDraftChange = useCallback(
     (patch: { vault_root_mode?: VaultRootMode; upriv_root_path?: string }) => {
       if (vaultActivityBlocksChange) return;
+      setExportChosen(false);
       if (patch.vault_root_mode != null) setMode(patch.vault_root_mode);
       if (patch.upriv_root_path != null) setPath(patch.upriv_root_path);
       setError(null);
     },
     [vaultActivityBlocksChange],
   );
+
+  // The copy is of the folder in use, so a folder draft is dropped. Choosing
+  // the option opens nothing; its Choose folder button does.
+  const selectExport = useCallback(() => {
+    setExportChosen(true);
+    setMode(settings.app.vault_root_mode);
+    setPath(settings.app.upriv_root_path);
+    setConfirmOpen(false);
+    setDiscardConfirmOpen(false);
+    setError(null);
+  }, [settings.app.upriv_root_path, settings.app.vault_root_mode]);
 
   const dismissFooterConfirm = useCallback(() => {
     setConfirmOpen(false);
@@ -318,6 +377,11 @@ export function VaultRootDataFolderModal({
     vaultRoot,
   ]);
 
+  // A running export explains its own hold, so the activity notice waits until it ends.
+  const showActivityNotice =
+    exportControls?.job == null &&
+    (vaultActivityBlocksChange || exportControls?.canStart === false);
+
   const footer = discardConfirmOpen ? (
     <View style={styles.footerCol}>
       <Text style={typography.bodyMuted}>{t("modal.settings.discard_confirm")}</Text>
@@ -325,17 +389,17 @@ export function VaultRootDataFolderModal({
         <Button
           variant="danger"
           label={t("modal.settings.discard_confirm_action")}
-          style={modalFooterConfirmBtnStyle}
           onPress={handleDiscardAndClose}
         />
         <Button
           variant="ghost"
           label={t("modal.settings.discard_keep_editing")}
-          style={modalFooterConfirmBtnStyle}
           onPress={dismissFooterConfirm}
         />
       </ModalFooterActions>
     </View>
+  ) : exportControls && exportSelected ? (
+    <DataFolderExportFooter controls={exportControls} destination={exportDestination} />
   ) : (
     <VaultRootConfirmFooter
       busy={busy || appliedVisible}
@@ -369,7 +433,7 @@ export function VaultRootDataFolderModal({
     >
       <View style={styles.body}>
         <Text style={typography.bodyMuted}>{t("modal.data_folder.body")}</Text>
-        {vaultActivityBlocksChange ? (
+        {showActivityNotice ? (
           <Text
             style={[typography.body, { color: colors.onErrorContainer }]}
             accessibilityRole="text"
@@ -384,6 +448,31 @@ export function VaultRootDataFolderModal({
           savedRootPath={settings.app.upriv_root_path}
           onVaultRootGateChange={onVaultRootGateChange}
           controlsDisabled={vaultActivityBlocksChange || busy || appliedVisible}
+          extraOption={
+            exportControls
+              ? {
+                  heading: t("modal.data_folder.copy_heading"),
+                  hint: t("modal.data_folder.copy_hint"),
+                  value: "export",
+                  checked: exportSelected,
+                  attention: exportNeedsStep,
+                  title: t("modal.data_folder_export.title"),
+                  description: t("modal.data_folder_export.body"),
+                  disabled:
+                    busy ||
+                    appliedVisible ||
+                    (exportControls.job == null && !exportControls.canStart),
+                  onSelect: selectExport,
+                  // Shown always, and inactive until the option is chosen.
+                  footer: (
+                    <DataFolderExportPanel
+                      controls={exportControls}
+                      destination={exportDestination}
+                    />
+                  ),
+                }
+              : undefined
+          }
         />
         {error ? (
           <Text

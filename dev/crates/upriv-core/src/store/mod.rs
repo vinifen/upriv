@@ -22,8 +22,8 @@ use crate::error::{Result, UprivError};
 #[cfg(test)]
 pub(crate) use chunk::blob_path;
 pub(crate) use chunk::{
-    blobs_need_pack, mutation_blob_ids, pack_blob_waste, record_imported_file, remove_file_chunks,
-    seal_import_chunk, BlobPackMode, ChunkBlobMutation, ImportBlob,
+    blobs_need_pack, mutation_blob_ids, pack_blob_waste, read_file_chunks, record_imported_file,
+    remove_file_chunks, seal_import_chunk, BlobPackMode, ChunkBlobMutation, ImportBlob,
 };
 pub use chunk::{
     read_logical_file, read_logical_range, seed_plaintext, truncate_logical_file,
@@ -81,6 +81,7 @@ fn create_store_core(
     Ok((header, content_key, index_key))
 }
 
+#[cfg(test)]
 pub fn create_empty_store(
     store_dir: impl AsRef<Path>,
     password: &[u8],
@@ -142,19 +143,11 @@ pub fn open_store(store_dir: impl AsRef<Path>, password: &[u8]) -> Result<Opened
     })
 }
 
-/// Argon2id wrap check only — does not load the index or keep keys.
-pub fn probe_store_password(store_dir: impl AsRef<Path>, password: &[u8]) -> Result<()> {
-    if password.is_empty() {
-        return Err(UprivError::WrongPassword);
-    }
-    drop(unlock_header(store_dir, password)?);
-    Ok(())
-}
-
 pub fn probe_unlock_preset(store_dir: impl AsRef<Path>) -> Option<KdfUnlockPreset> {
     load_header(store_dir).ok().and_then(|h| h.unlock_preset())
 }
 
+#[cfg(test)]
 pub fn flush_index(store_dir: impl AsRef<Path>, store: &mut OpenedStore) -> Result<()> {
     flush_index_parts(store_dir, &store.header, &store.index_key, &store.index)?;
     store.index.clear_unsealed_holes();

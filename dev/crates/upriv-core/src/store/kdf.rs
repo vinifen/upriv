@@ -36,8 +36,6 @@ pub enum KdfUnlockPreset {
 }
 
 impl KdfUnlockPreset {
-    pub const DEFAULT: Self = Self::M256;
-
     pub fn memory_kib(self) -> u32 {
         match self {
             Self::M32 => 32 * 1024,

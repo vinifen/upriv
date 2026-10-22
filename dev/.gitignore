@@ -19,8 +19,6 @@ Thumbs.db
 
 # Electron build output (each app also has local .gitignore)
 apps/electron/dist/
-# Legacy afterPack rcedit download cache (no longer used; keep ignored if present)
-apps/electron/build/tools/
 # Official WinFsp MSI fetched by apps/electron/scripts/fetch-winfsp.cjs
 apps/electron/build/winfsp/*.msi
 

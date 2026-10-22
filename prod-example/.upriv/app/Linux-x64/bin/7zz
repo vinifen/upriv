@@ -1,3 +1,0 @@
-#!/bin/sh
-echo "7-Zip 24.09 FAKE (7zz)"
-read -r -p "Enter..."

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   useBackupService,
   useDataFolderService,
+  useJobService,
   useVaultGroupService,
   useLogService,
   useVaultService,
@@ -27,7 +28,7 @@ import {
   createVaultImportPackage,
   canDeleteVaultNow,
   dataFolderCanExport,
-  dataFolderZipName,
+  fileNameOfPath,
   vaultCanSaveBackupNow,
   vaultRowControls,
   displayNameToGroupId,
@@ -48,11 +49,11 @@ import {
   vaultIdsUnhiddenByGroups,
   type GroupedVaultSortMode,
   type PendingCreateGroupEffect,
+  type VaultExportRun,
   type VaultListItem,
   type VaultListSort,
   type VaultListSortDirection,
   type VaultListViewMode,
-  type VaultPathWriteResult,
   type VaultRewrapRun,
   type VaultSettingsAreaId,
 } from "@upriv/shared";
@@ -60,11 +61,17 @@ import { useFileManager } from "@/features/vaults/file-manager";
 import { useTranslation } from "@/i18n";
 import { useVaultLifecycleActions } from "@/features/vaults/lifecycle";
 import { useErrorToast } from "@/hooks/useErrorToast";
-import { useDataFolderExportJob, useLoadingBudget, useVaultBackupJob } from "@upriv/shared/react";
+import {
+  useDataFolderExportJob,
+  useJobProgress,
+  useLoadingBudget,
+  useVaultBackupJob,
+} from "@upriv/shared/react";
 import { useDaemonReady } from "@/lib/useDaemonReady";
 import { useVaultListState } from "./useVaultListState";
 import { useVaultListModals } from "./useVaultListModals";
 import { useVaultImportDrop } from "./useVaultImportDrop";
+import { useVaultExportFolders } from "./useVaultExportFolders";
 import type { VaultListDropSource } from "../lib/vaultImportDrop";
 
 export function useVaultListScreen() {
@@ -490,9 +497,24 @@ export function useVaultListScreen() {
 
   const modals = useVaultListModals(vaults, groups);
   const { lifecycleRequest, setLifecycleRequest } = modals;
+  const exportFolders = useVaultExportFolders();
   const backupService = useBackupService();
+  const jobs = useJobService();
+  // The Export window follows its vault's export while one runs; progress is asked only then.
+  const shownExportJob =
+    modals.exportJob !== null && modals.exportJob.vaultId === modals.exportVaultId
+      ? modals.exportJob
+      : null;
+  const exportProgress = useJobProgress(jobs, shownExportJob?.id ?? null);
+  const exportRun: VaultExportRun | null = shownExportJob
+    ? {
+        format: shownExportJob.format,
+        startedAt: shownExportJob.startedAt,
+        progress: exportProgress,
+      }
+    : null;
   const [backupListRefresh, setBackupListRefresh] = useState(0);
-  const backupJob = useVaultBackupJob(backupService, {
+  const backupJob = useVaultBackupJob(backupService, jobs, {
     onSaved: (vaultId) => {
       const name = vaults.find((vault) => vault.id === vaultId)?.displayName ?? vaultId;
       showToast(t("toast.backup_now_saved", { name }));
@@ -506,12 +528,9 @@ export function useVaultListScreen() {
     },
   });
   const dataFolderService = useDataFolderService();
-  const [dataFolderExportWritten, setDataFolderExportWritten] =
-    useState<VaultPathWriteResult | null>(null);
-  const dataFolderExport = useDataFolderExportJob(dataFolderService, {
+  const dataFolderExport = useDataFolderExportJob(dataFolderService, jobs, {
     onExported: (written) => {
-      setDataFolderExportWritten(written);
-      showToast(t("toast.data_folder_exported", { name: dataFolderZipName(written.path) }));
+      showToast(t("toast.data_folder_exported", { name: fileNameOfPath(written.path) }));
     },
     onFailed: (error) => {
       if (shouldBumpVaultRootEpoch(error)) {
@@ -882,7 +901,6 @@ export function useVaultListScreen() {
     modals.settingsGroupId ||
     modals.appSettingsOpen ||
     modals.dataFolderOpen ||
-    modals.dataFolderExportOpen ||
     modals.logsOpen ||
     modals.helpOpen ||
     modals.noteVaultId ||
@@ -1202,11 +1220,6 @@ export function useVaultListScreen() {
           );
         }
       },
-      // Hidden while it cannot start; shown while it runs so the window can be reopened.
-      showExportDataFolder:
-        dataFolderService !== undefined &&
-        (dataFolderExport.job !== null || dataFolderExportCanStart),
-      onOpenExportDataFolder: () => modals.setDataFolderExportOpen(true),
       showCloseAllVaults:
         vaults.filter((vault) => resolveVaultDisplayStatus(vault) === "open").length > 1,
       onCloseAllVaults: () => {
@@ -1374,12 +1387,18 @@ export function useVaultListScreen() {
     exportVault: {
       vault: modals.exportVault,
       open: modals.exportVaultId !== null,
-      submitting: modals.exportSubmitting,
-      startedAt: modals.exportStartedAt,
+      running: exportRun,
+      passwordError:
+        modals.exportPasswordError && modals.exportPasswordError.vaultId === modals.exportVaultId
+          ? modals.exportPasswordError.message
+          : null,
+      folders: exportFolders,
       onClose: () => {
         modals.setExportVaultId(null);
+        modals.setExportPasswordError(null);
       },
       onConfirm: lifecycle.handleConfirmExportVault,
+      onPasswordEdited: () => modals.setExportPasswordError(null),
       onTimeout: lifecycle.handleExportTimeout,
     },
     settings: {
@@ -1447,19 +1466,17 @@ export function useVaultListScreen() {
         void modals.setDataFolderOpen(false);
       },
       onDirtyChange: modals.setDataFolderDirty,
-    },
-    dataFolderExport: {
-      open: modals.dataFolderExportOpen,
-      canStart: dataFolderExportCanStart,
-      job: dataFolderExport.job,
-      written: dataFolderExportWritten,
-      onClose: () => modals.setDataFolderExportOpen(false),
-      onStart: (destDir: string) => {
-        if (!dataFolderExportCanStart) return;
-        setDataFolderExportWritten(null);
-        dataFolderExport.start(destDir);
-      },
-      onStop: dataFolderExport.stop,
+      exportControls: dataFolderService
+        ? {
+            canStart: dataFolderExportCanStart,
+            job: dataFolderExport.job,
+            written: dataFolderExport.written,
+            clearWritten: dataFolderExport.clearWritten,
+            onStart: (destDir: string, name: string) =>
+              dataFolderExportCanStart && dataFolderExport.start(destDir, name),
+            onStop: dataFolderExport.stop,
+          }
+        : undefined,
     },
     logs: {
       open: modals.logsOpen,

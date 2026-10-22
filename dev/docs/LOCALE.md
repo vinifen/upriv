@@ -8,10 +8,9 @@ All **non-UI** project text must be in **English**:
 
 | In scope | Examples |
 |----------|----------|
-| Documentation | `README.md`, `PRD.md`, `SDD.md`, `LOCALE.md`, package READMEs |
+| Documentation | `README.md`, `prd.md`, `sdd.md`, `LOCALE.md`, package READMEs |
 | Config & data | TOML keys/comments, JSON field names, log messages, error codes |
 | Code | Identifiers, comments, commit messages, CLI help |
-| Demo bundle | `prod/` placeholders and README |
 | API / FFI | Command names, event names, structured errors |
 
 **Not allowed** in the above: Portuguese (or any other language) prose, labels, or comments — except where noted below.
@@ -30,6 +29,8 @@ dev/apps/shared/locales/
 └── README.md
 ```
 
+Electron main does not load these files. Its one dialog, the quit prompt while a vault is open, carries the text of `warning.vault_open_on_exit*` in `apps/electron/src/quitCopy.ts`, and `quitCopy.test.ts` fails when that text differs from any locale file.
+
 ### Key naming
 
 - Dot-separated, lowercase: `vault.status.open`, `action.lock`, `modal.backup.title`
@@ -38,16 +39,16 @@ dev/apps/shared/locales/
 
 ### Runtime locale
 
-User preference (example in `main.toml`):
+User preference in `.upriv/settings.toml`:
 
 ```toml
 [ui]
-locale = "en"   # "en" | "pt-BR" | "es" | future BCP-47 tags
+locale = "en"   # "en" | "pt-BR" | "es"
 ```
 
-- Default locale: **`en`**
-- Fallback chain: requested locale → `en` → key string (dev only)
-- Adding a locale = new `dev/apps/shared/locales/<tag>.json` + register in `SUPPORTED_LOCALES`; no code changes for copy-only updates beyond that
+- Default locale: **`en`**; a locale outside `SUPPORTED_LOCALES` loads `en`
+- Every locale file carries every key of `en.json` (`locales-parity.test.ts`). A key missing from the catalog renders as the key itself
+- Adding a locale = new `dev/apps/shared/locales/<tag>.json` + register in `SUPPORTED_LOCALES`, `@upriv/shared` `loadLocale` (desktop), mobile `loadMobileLocale`, and Electron `QUIT_COPY`
 
 ### What maps to i18n keys
 
@@ -65,16 +66,15 @@ locale = "en"   # "en" | "pt-BR" | "es" | future BCP-47 tags
 - Documents are written in **English**
 - Where UX copy matters, reference **i18n keys** (e.g. “shows `vault.status.closed`”) instead of embedding Portuguese UI text
 
-## Implementation checklist
+## In the code
 
-- [ ] Desktop/React loads `dev/apps/shared/locales/{locale}.json` (via `@upriv/shared` `loadLocale`)
-- [ ] No `language = "pt-BR"` as hardcoded UI strings in Rust/TS
-- [ ] Error types: `ErrorCode::WrongPassword` + i18n `error.wrong_password`
-- [ ] CI: reject new Portuguese comments in `crates/` (optional lint later)
+- Desktop loads `dev/apps/shared/locales/{locale}.json` through `@upriv/shared` `loadLocale`; mobile through `loadMobileLocale`
+- No hardcoded UI sentences in Rust/TS, outside the Electron quit prompt above
+- Errors cross the wire as `snake_case` codes (`UprivError::WrongPassword` → `wrong_password`); the UI maps each code to a key (`error.wrong_password`)
 
 ## Related files
 
 - `dev/apps/shared/locales/en.json` — English UI catalog (reference)
 - `dev/apps/shared/locales/pt-BR.json` — Portuguese UI catalog
 - `dev/apps/shared/locales/es.json` — Spanish UI catalog
-- `dev/prd.md`, `dev/sdd.md` — English product/engineering docs
+- `dev/docs/prd.md`, `dev/docs/sdd.md` — English product/engineering docs

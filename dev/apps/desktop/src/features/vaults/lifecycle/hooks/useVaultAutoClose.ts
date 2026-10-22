@@ -1,6 +1,6 @@
 import type { IdleAutoCloseWarning, IdleLockResult, VaultListItem } from "@upriv/shared";
 import { useIdleAutoClose, type IdleSessionEvent } from "@upriv/shared/react";
-import { isDesktop } from "@/lib/invoke";
+import { isElectronRenderer } from "@/lib/invoke";
 import { useVaultService } from "@/platform/services";
 
 interface UseVaultAutoCloseOptions {
@@ -40,7 +40,7 @@ export function useVaultAutoClose({
 function subscribeDesktopIdleSession(onSession: (event: IdleSessionEvent) => void): () => void {
   if (typeof window === "undefined") return () => {};
 
-  const stopPower = isDesktop()
+  const stopPower = isElectronRenderer()
     ? window.upriv?.onEvent((name, payload) => {
         if (name !== "power") return;
         if (payload === "suspend") onSession("pause");

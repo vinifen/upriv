@@ -21,14 +21,13 @@ export interface LiveVaultRpc {
   /** Deep rename via `vault_rename` (display name + optional folder migration). */
   rename?: (vaultId: string, displayName: string) => Promise<VaultRenameResult>;
   deleteVault?: (vaultId: string) => Promise<void>;
-  exportVault?: (vaultId: string, request: VaultExportRequest) => Promise<Uint8Array>;
-  exportVaultToPath?: (
+  exportVaultToFolder?: (
     vaultId: string,
     request: VaultExportRequest,
-    destPath: string,
+    destDir: string,
+    job: string,
   ) => Promise<VaultPathWriteResult>;
   exportCapabilities?: () => Promise<{ sevenZip: boolean }>;
-  probeExportPassword?: (vaultId: string, password: string) => Promise<boolean>;
   importZip?: (input: CreateVaultInput) => Promise<VaultListItem>;
   import7z?: (input: CreateVaultInput) => Promise<VaultListItem>;
   importFilesZip?: (input: CreateVaultInput) => Promise<VaultListItem>;
@@ -39,7 +38,7 @@ export interface LiveVaultRpc {
 export function createLiveVaultService(rpc: LiveVaultRpc): VaultService {
   const canPersist = typeof rpc.saveSettings === "function";
   const canDelete = typeof rpc.deleteVault === "function";
-  const canExport = typeof rpc.exportVault === "function";
+  const canExport = typeof rpc.exportVaultToFolder === "function";
   return {
     canPersistSettings: canPersist,
     canDeleteVault: canDelete,
@@ -98,18 +97,16 @@ export function createLiveVaultService(rpc: LiveVaultRpc): VaultService {
       forgetVaultSettings(vaultId);
     },
 
-    async getExportBytes(vault: VaultRow, request: VaultExportRequest) {
-      if (!rpc.exportVault) {
+    async exportToFolder(
+      vault: VaultRow,
+      request: VaultExportRequest,
+      destDir: string,
+      job: string,
+    ) {
+      if (!rpc.exportVaultToFolder) {
         notImplemented("Vault export");
       }
-      return rpc.exportVault(vault.id, request);
-    },
-
-    async exportToPath(vault: VaultRow, request: VaultExportRequest, destPath: string) {
-      if (!rpc.exportVaultToPath) {
-        notImplemented("Vault export");
-      }
-      return rpc.exportVaultToPath(vault.id, request, destPath);
+      return rpc.exportVaultToFolder(vault.id, request, destDir, job);
     },
 
     async exportCapabilities() {
@@ -117,13 +114,6 @@ export function createLiveVaultService(rpc: LiveVaultRpc): VaultService {
         return { sevenZip: false };
       }
       return rpc.exportCapabilities();
-    },
-
-    async probeExportPassword(vaultId, password) {
-      if (!rpc.probeExportPassword) {
-        notImplemented("Vault export password check");
-      }
-      return rpc.probeExportPassword(vaultId, password);
     },
   };
 }

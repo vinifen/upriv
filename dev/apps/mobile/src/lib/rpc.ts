@@ -1,8 +1,12 @@
 import {
   CORE_RPC_COMMANDS,
   CORE_RPC_TIMEOUT_MS,
+  MOBILE_ONLY_RPC_COMMANDS,
+  MOBILE_ONLY_RPC_TIMEOUT_MS,
+  RPC_TIMEOUT_CODE,
   RpcError,
   isRpcError,
+  appWorkspaceForDaemon,
   normalizeAppSettings,
   normalizeVaultSettingsConfig,
   vaultSettingsForDaemon,
@@ -27,9 +31,10 @@ import {
   parsePlainHeldStatus,
   parsePlainLeftover,
   parseBackupFailure,
-  parseDataFolderExportStatus,
+  parseJobStatus,
   type CloseVaultOutcome,
-  type DataFolderExportProgress,
+  type JobProgress,
+  type JobStopBy,
   type PlainDestination,
   type PlainHeldStatus,
   type PlainLeftover,
@@ -60,10 +65,16 @@ import { getUprivCoreNative } from "upriv-core";
 const BRIDGE = {
   INVALID_RESPONSE: "invalid_response",
   BRIDGE_INVOKE_FAILED: "bridge_invoke_failed",
-  RPC_TIMEOUT: "rpc_timeout",
+  RPC_TIMEOUT: RPC_TIMEOUT_CODE,
 } as const;
 
 const DEFAULT_INVOKE_TIMEOUT_MS = 30_000;
+
+/** Budget for every RPC this app sends to Rust. */
+const RPC_TIMEOUT_MS: Partial<Record<string, number>> = {
+  ...CORE_RPC_TIMEOUT_MS,
+  ...MOBILE_ONLY_RPC_TIMEOUT_MS,
+};
 
 function unwrapInvokeEnvelope(envelope: unknown): unknown {
   if (typeof envelope !== "object" || envelope === null) {
@@ -95,14 +106,13 @@ function invokeFailure(error: unknown): RpcError {
 
 /**
  * Call CORE RPC through UniFFI `invoke`. Same envelope as desktop daemon.
- * Honors `CORE_RPC_TIMEOUT_MS` / `LOADING_BUDGET_MS` like desktop `desktopInvokeRaw`.
+ * Honors the shared RPC budgets (`LOADING_BUDGET_MS`) like desktop `desktopInvokeRaw`.
  * @throws {RpcError}
  */
 export async function nativeInvokeRaw(
   method: string,
   params?: Record<string, unknown>,
-  timeoutMs = (CORE_RPC_TIMEOUT_MS as Record<string, number | undefined>)[method] ??
-    DEFAULT_INVOKE_TIMEOUT_MS,
+  timeoutMs = RPC_TIMEOUT_MS[method] ?? DEFAULT_INVOKE_TIMEOUT_MS,
 ): Promise<unknown> {
   const native = getUprivCoreNative();
   if (!native) {
@@ -114,7 +124,7 @@ export async function nativeInvokeRaw(
 
 /**
  * Read-only probe beside a long `invoke` (Expo runs `invoke` on one thread).
- * Returns `null` on native builds without `invokeProbe`.
+ * Returns `null` without the native module (Expo Go).
  * @throws {RpcError}
  */
 export async function nativeInvokeProbeRaw(
@@ -122,10 +132,8 @@ export async function nativeInvokeProbeRaw(
   params?: Record<string, unknown>,
 ): Promise<unknown | null> {
   const native = getUprivCoreNative();
-  if (!native?.invokeProbe) return null;
-  const timeoutMs =
-    (CORE_RPC_TIMEOUT_MS as Record<string, number | undefined>)[method] ??
-    DEFAULT_INVOKE_TIMEOUT_MS;
+  if (!native) return null;
+  const timeoutMs = RPC_TIMEOUT_MS[method] ?? DEFAULT_INVOKE_TIMEOUT_MS;
   return settleInvocation(
     method,
     timeoutMs,
@@ -196,7 +204,7 @@ export async function rpcAppSettingsSave(
   options?: { syncAlias?: boolean },
 ): Promise<{ wrote: boolean }> {
   const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.APP_SETTINGS_SAVE, {
-    settings,
+    settings: { ...settings, workspace: appWorkspaceForDaemon(settings.workspace) },
     syncAlias: options?.syncAlias ?? true,
   });
   if (
@@ -217,7 +225,7 @@ export async function rpcAppSettingsSave(
  * desktop stay identical downstream of the wire shape.
  */
 export async function rpcAppSettingsParseToml(toml: string): Promise<AppSettingsConfig> {
-  const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.APP_SETTINGS_PARSE_TOML, { toml });
+  const raw = await nativeInvokeRaw(MOBILE_ONLY_RPC_COMMANDS.APP_SETTINGS_PARSE_TOML, { toml });
   if (typeof raw !== "object" || raw === null) {
     throw new RpcError(BRIDGE.INVALID_RESPONSE, "app_settings_parse_toml: expected object", raw);
   }
@@ -230,34 +238,6 @@ export async function rpcAppSettingsParseToml(toml: string): Promise<AppSettings
     );
   }
   return normalizeAppSettings(settings as AppSettingsConfig);
-}
-
-/**
- * Pure `AppSettingsConfig` → `settings.toml` serialization preserving
- * `[package]` from `previousToml` (when provided). `[app].last_opened_vault`
- * comes from `settings` (empty clears). Symmetric with
- * [`rpcAppSettingsParseToml`] for the Android SAF flow.
- */
-export async function rpcAppSettingsSerializeToml(
-  settings: AppSettingsConfig,
-  previousToml?: string | null,
-): Promise<string> {
-  const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.APP_SETTINGS_SERIALIZE_TOML, {
-    settings,
-    previous: previousToml ?? null,
-  });
-  if (
-    typeof raw !== "object" ||
-    raw === null ||
-    typeof (raw as { toml?: unknown }).toml !== "string"
-  ) {
-    throw new RpcError(
-      BRIDGE.INVALID_RESPONSE,
-      "app_settings_serialize_toml: expected { toml }",
-      raw,
-    );
-  }
-  return (raw as { toml: string }).toml;
 }
 
 export async function rpcVaultRootResolve(options?: {
@@ -360,7 +340,7 @@ export async function rpcVaultRootDeactivateAlias(): Promise<void> {
 }
 
 export async function rpcVaultRootRememberCustom(path: string): Promise<void> {
-  await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_ROOT_REMEMBER_CUSTOM, { path });
+  await nativeInvokeRaw(MOBILE_ONLY_RPC_COMMANDS.VAULT_ROOT_REMEMBER_CUSTOM, { path });
 }
 
 export async function rpcVaultRootReadAlias(): Promise<VaultRootAliasInfo | null> {
@@ -609,17 +589,17 @@ export async function rpcVaultPlainDeletions(id: string, apply: boolean): Promis
 
 /** Unlock a just-created vault so files can be streamed. Does not mount. */
 export async function rpcVaultIngestOpen(id: string, password: string): Promise<void> {
-  await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_INGEST_OPEN, { id, password });
+  await nativeInvokeRaw(MOBILE_ONLY_RPC_COMMANDS.VAULT_INGEST_OPEN, { id, password });
 }
 
 /** One folder, including parents, inside an import session. */
 export async function rpcVaultIngestDirectory(id: string, path: string): Promise<void> {
-  await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_INGEST_DIRECTORY, { id, path });
+  await nativeInvokeRaw(MOBILE_ONLY_RPC_COMMANDS.VAULT_INGEST_DIRECTORY, { id, path });
 }
 
 /** Delete a vault whose import failed. Drops an open ingest session first. */
 export async function rpcVaultDiscardImport(id: string): Promise<void> {
-  await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_DISCARD_IMPORT, { id });
+  await nativeInvokeRaw(MOBILE_ONLY_RPC_COMMANDS.VAULT_DISCARD_IMPORT, { id });
 }
 
 /** Stream one Android `content://` file into the open import session. */
@@ -629,8 +609,8 @@ export async function rpcImportContentUri(
   contentUri: string,
 ): Promise<void> {
   const native = getUprivCoreNative();
-  if (!native?.importContentUri) {
-    throw new RpcError(BRIDGE.BRIDGE_INVOKE_FAILED, "content import is unavailable");
+  if (!native) {
+    throw new RpcError(BRIDGE.BRIDGE_INVOKE_FAILED, "UprivCore native module not loaded");
   }
   const timeoutMs = CORE_RPC_TIMEOUT_MS[CORE_RPC_COMMANDS.VAULT_FS_IMPORT_OS_FILE];
   const invocation = Promise.resolve(
@@ -789,33 +769,20 @@ export async function rpcVaultExportCapabilities(): Promise<{ sevenZip: boolean 
   return { sevenZip: (raw as { sevenZip?: unknown }).sevenZip === true };
 }
 
-export async function rpcVaultExportProbe(id: string, password: string): Promise<boolean> {
-  const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_EXPORT_PROBE, { id, password });
-  const record = requireRecord(raw, "vault_export_probe");
-  return record.ok === true;
-}
-
-export async function rpcVaultExport(id: string, request: VaultExportRequest): Promise<Uint8Array> {
-  const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_EXPORT, {
-    id,
-    format: request.format,
-    password: request.password,
-    sevenZip: request.sevenZip,
-  });
-  return bytesFromContentB64(raw);
-}
-
-export async function rpcVaultExportToPath(
+/** Write `{display_name}.zip` / `.7z` into the folder `destDir`, as the job `job`. */
+export async function rpcVaultExportToFolder(
   id: string,
   request: VaultExportRequest,
-  destPath: string,
+  destDir: string,
+  job: string,
 ): Promise<{ path: string; size: number }> {
   const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_EXPORT, {
     id,
     format: request.format,
     password: request.password,
     sevenZip: request.sevenZip,
-    destPath,
+    destDir,
+    job,
   });
   const written = parsePathWriteResult(raw);
   if (!written) {
@@ -1102,16 +1069,22 @@ export async function rpcBackupPromote(id: string, stamp: string): Promise<void>
   await nativeInvokeRaw(CORE_RPC_COMMANDS.BACKUP_PROMOTE, { id, stamp });
 }
 
-export async function rpcBackupSave(id: string): Promise<VaultBackupEntry> {
-  const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.BACKUP_SAVE, { id });
+export async function rpcBackupSave(id: string, job: string): Promise<VaultBackupEntry> {
+  const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.BACKUP_SAVE, { id, job });
   return parseBackupEntry(requireRecord(raw, "backup_save").backup, id);
 }
 
-/** Zip the whole `.upriv` into `upriv-<stamp>.zip` inside `destDir`. */
+/** Zip the whole `.upriv` into `<name>.zip` inside `destDir`, as the job `job`. */
 export async function rpcDataFolderExport(
   destDir: string,
+  name: string,
+  job: string,
 ): Promise<{ path: string; size: number }> {
-  const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.DATA_FOLDER_EXPORT, { destDir });
+  const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.DATA_FOLDER_EXPORT, {
+    destDir,
+    name,
+    job,
+  });
   const written = parsePathWriteResult(raw);
   if (!written) {
     throw new RpcError(BRIDGE.INVALID_RESPONSE, "data_folder_export: expected path+size", raw);
@@ -1119,15 +1092,12 @@ export async function rpcDataFolderExport(
   return written;
 }
 
-export async function rpcDataFolderExportStatus(): Promise<DataFolderExportProgress | null> {
-  return parseDataFolderExportStatus(
-    await nativeInvokeRaw(CORE_RPC_COMMANDS.DATA_FOLDER_EXPORT_STATUS, {}),
-  );
+export async function rpcJobStatus(job: string): Promise<JobProgress | null> {
+  return parseJobStatus(await nativeInvokeRaw(CORE_RPC_COMMANDS.JOB_STATUS, { job }));
 }
 
-export async function rpcDataFolderExportCancel(): Promise<boolean> {
-  const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.DATA_FOLDER_EXPORT_CANCEL, {});
-  return requireRecord(raw, "data_folder_export_cancel").cancelled === true;
+export async function rpcJobCancel(job: string, by: JobStopBy): Promise<void> {
+  await nativeInvokeRaw(CORE_RPC_COMMANDS.JOB_CANCEL, { job, by });
 }
 
 export async function rpcBackupGet(id: string, stamp: string): Promise<Uint8Array> {

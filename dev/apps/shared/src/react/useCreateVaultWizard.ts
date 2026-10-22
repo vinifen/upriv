@@ -17,6 +17,7 @@ import {
   createVaultWizardReducer,
   firstInvalidCreateVaultField,
   isRpcError,
+  isRpcTimeout,
   MODAL_OPEN_MS,
   NO_VAULT_GROUPS,
   resolveCreateVaultCloseIntent,
@@ -290,7 +291,7 @@ export function useCreateVaultWizard<
         ok = probed.ok;
         embedded = probed.embedded;
       } catch (error) {
-        timedOut = isRpcError(error) && error.code === "rpc_timeout";
+        timedOut = isRpcTimeout(error);
         unavailable = !(isRpcError(error) && error.code === VAULT_ERROR_CODES.WRONG_PASSWORD);
       }
       if (passwordTestGen.current !== generation) return;

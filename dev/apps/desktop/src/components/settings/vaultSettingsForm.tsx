@@ -7,6 +7,7 @@ import {
   KDF_UNLOCK_OPTION_META,
   KDF_UNLOCK_PRESETS,
   POLICY_RADIO_BADGE_I18N,
+  policyRadioBadgeList,
   IDLE_AUTO_CLOSE_MINUTES_MAX,
   IDLE_AUTO_CLOSE_MINUTES_MIN,
   VAULT_DISPLAY_NAME_MAX_LENGTH,
@@ -18,6 +19,8 @@ import {
   compressionPresetFromSevenZip,
   sevenZipPatchFromCompressionPreset,
   validateWorkspaceTable,
+  vaultFolderChosen,
+  vaultFolderRow,
   currentWorkspaceSystem,
   workspaceSystemHasShortcut,
   workspacePathIssueI18nKey,
@@ -48,6 +51,10 @@ import {
 
 export const settingsControlClass =
   "w-full rounded-lg border-0 bg-surface-container-highest px-2.5 py-2 text-sm text-on-surface outline-none ring-0 focus:ring-2 focus:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-60 sm:px-3 sm:py-2.5";
+
+/** Added to a control marked `aria-invalid`, such as a refused password. */
+export const settingsInvalidControlClass =
+  "aria-invalid:ring-2 aria-invalid:ring-on-error-container aria-invalid:focus:ring-on-error-container";
 
 interface SettingsFieldProps {
   label: string;
@@ -279,8 +286,8 @@ export function VaultSettingsStorageSection({
             disabled={storageModeLocked}
             title={t("modal.settings.option.storage.upriv_plain")}
             description={t("modal.settings.option.storage.upriv_plain_desc")}
-            badge="insecure"
-            tone="insecure"
+            badge="not-recommended"
+            tone="less-secure"
             onSelect={() => onChange({ mode: "upriv_plain" })}
           />
         </div>
@@ -451,7 +458,10 @@ function CurrentVaultFolderChoices({
   const shortcutGroup = useId();
   const vaultRootService = useVaultRootService();
   const trimmed = entry.path.trim();
-  const custom = trimmed !== "";
+  // Another folder can be chosen before its path is typed or picked: that path
+  // is the step left, so the option carries the attention border and Save waits.
+  const custom = vaultFolderChosen(entry);
+  const customPathMissing = custom && trimmed === "";
   const showShortcut = workspaceSystemHasShortcut(system) && !plaintext;
   const workspaceReady = appWorkspacePlace(appEntry) !== "unset";
   const shortcutLocked = !active || !workspaceReady;
@@ -470,8 +480,9 @@ function CurrentVaultFolderChoices({
       )})`
     : t("modal.settings.field.mount.shortcut_inherit");
 
+  // Kept as typed, so a space inside a folder name survives; saving trims it.
   function writePath(path: string) {
-    onChange({ [system]: { ...entry, path: path.trim() } });
+    onChange({ [system]: vaultFolderRow(path) });
   }
 
   function pickFolder(initial: string | null) {
@@ -483,7 +494,7 @@ function CurrentVaultFolderChoices({
           t("modal.app_settings.action.pick_workspace_folder"),
         );
         if (!picked?.trim()) return;
-        onChange({ [system]: { ...entry, path: picked.trim() } });
+        writePath(picked.trim());
       } catch (error) {
         showError(error, "error.unexpected");
       }
@@ -508,7 +519,7 @@ function CurrentVaultFolderChoices({
           attention={onNeedsDriver}
           onSelect={() => {
             if (!active) return;
-            onChange({ [system]: { ...entry, path: "" } });
+            onChange({ [system]: { place: "unset", path: "" } });
           }}
           footer={
             showShortcut ? (
@@ -576,10 +587,10 @@ function CurrentVaultFolderChoices({
           title={t("modal.settings.field.mount.custom")}
           description={t("modal.settings.field.mount.custom_desc")}
           disabled={!active}
-          attention={customNeedsDriver}
+          attention={customNeedsDriver || customPathMissing}
           onSelect={() => {
             if (!active || custom) return;
-            pickFolder(null);
+            writePath("");
           }}
           footer={
             <div className="flex flex-col gap-3">
@@ -589,7 +600,7 @@ function CurrentVaultFolderChoices({
                   className="sm:flex-1"
                   value={entry.path}
                   disabled={!active || !custom}
-                  placeholder={t("modal.settings.field.mount.path_placeholder")}
+                  placeholder={t("modal.folder_field.placeholder")}
                   onChange={(path) => {
                     if (!active) return;
                     writePath(path);
@@ -935,12 +946,14 @@ const POLICY_RADIO_BADGE_CLASS: Record<PolicyRadioBadge, string> = {
     "rounded bg-[color-mix(in_srgb,var(--accent)_15%,transparent)] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-accent",
   "more-secure":
     "rounded bg-[color-mix(in_srgb,var(--vault-status-open)_20%,transparent)] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-vault-open",
+  "in-use":
+    "rounded bg-[color-mix(in_srgb,var(--vault-status-open)_20%,transparent)] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-vault-open",
   default:
     "rounded bg-[color-mix(in_srgb,var(--accent)_15%,transparent)] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-accent",
   "less-secure":
     "rounded bg-[color-mix(in_srgb,var(--on-error-container)_15%,transparent)] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-on-error-container",
-  insecure:
-    "rounded bg-[color-mix(in_srgb,var(--on-error-container)_30%,transparent)] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-on-error-container",
+  "not-recommended":
+    "rounded bg-[color-mix(in_srgb,var(--on-error-container)_15%,transparent)] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-on-error-container",
 };
 
 interface PolicyRadioOptionProps {
@@ -954,14 +967,18 @@ interface PolicyRadioOptionProps {
   disabled?: boolean;
   /** Gray, still selectable. The file manager folder inside can stay locked. */
   muted?: boolean;
-  badge?: PolicyRadioBadge;
-  tone?: "default" | "less-secure" | "insecure";
+  /** One badge, or several shown in this order. */
+  badge?: PolicyRadioBadge | readonly PolicyRadioBadge[];
+  tone?: "default" | "less-secure";
   /**
    * Yellow/amber border while this option still needs follow-up config
    * (e.g. vault-root incomplete policy). Overrides the accent border when checked.
    */
   attention?: boolean;
-  /** Extra controls under the description — always visible; inactive until this option is selected. */
+  /**
+   * The option's own controls under the description. Pass them whether or not
+   * the option is chosen: they always show, disabled until it is.
+   */
   footer?: ReactNode;
   /** Click on an already-selected card (not its footer controls). */
   onCardPress?: () => void;
@@ -987,19 +1004,14 @@ export function PolicyRadioOption({
   const { t } = useTranslation();
   const inputId = useId();
   const isLessSecure = tone === "less-secure";
-  const isInsecure = tone === "insecure";
 
-  const cardBgClass = isInsecure
-    ? "bg-[color-mix(in_srgb,var(--error-container)_18%,var(--surface-container))]"
-    : isLessSecure
-      ? "bg-[color-mix(in_srgb,var(--error-container)_7%,var(--surface-container))]"
-      : "bg-surface-container";
+  const cardBgClass = isLessSecure
+    ? "bg-[color-mix(in_srgb,var(--error-container)_7%,var(--surface-container))]"
+    : "bg-surface-container";
 
-  const cardHoverClass = isInsecure
-    ? "hover:bg-[color-mix(in_srgb,var(--error-container)_26%,var(--surface-container))]"
-    : isLessSecure
-      ? "hover:bg-[color-mix(in_srgb,var(--error-container)_11%,var(--surface-container))]"
-      : "hover:bg-surface-container-highest/60";
+  const cardHoverClass = isLessSecure
+    ? "hover:bg-[color-mix(in_srgb,var(--error-container)_11%,var(--surface-container))]"
+    : "hover:bg-surface-container-highest/60";
 
   const borderClass = checked
     ? attention
@@ -1046,11 +1058,11 @@ export function PolicyRadioOption({
               <span className="inline-flex shrink-0 text-on-surface-variant">{icon}</span>
             ) : null}
             <span className="text-sm font-medium leading-snug text-on-surface">{title}</span>
-            {badge ? (
-              <span className={POLICY_RADIO_BADGE_CLASS[badge]}>
-                {t(POLICY_RADIO_BADGE_I18N[badge])}
+            {policyRadioBadgeList(badge).map((item) => (
+              <span key={item} className={POLICY_RADIO_BADGE_CLASS[item]}>
+                {t(POLICY_RADIO_BADGE_I18N[item])}
               </span>
-            ) : null}
+            ))}
           </span>
           {description ? (
             <span className="mt-1.5 block text-xs leading-relaxed text-on-surface-variant">
@@ -1060,15 +1072,19 @@ export function PolicyRadioOption({
         </span>
       </span>
       {footer ? (
-        <div
-          className={["mt-3 pl-6 sm:pl-7", checked ? "" : "pointer-events-none opacity-60"]
+        // Always shown. Until the option is chosen every control in it is
+        // disabled (the fieldset reaches keyboard focus too), and a click on
+        // it falls through to the card, which chooses the option.
+        <fieldset
+          disabled={!checked}
+          className={["mt-3 min-w-0 pl-6 sm:pl-7", checked ? "" : "pointer-events-none opacity-60"]
             .filter(Boolean)
             .join(" ")}
           onMouseDown={(event) => event.stopPropagation()}
           onClick={(event) => event.stopPropagation()}
         >
           {footer}
-        </div>
+        </fieldset>
       ) : null}
     </label>
   );

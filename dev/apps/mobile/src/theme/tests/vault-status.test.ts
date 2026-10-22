@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  vaultStatusBadgeColors,
-  vaultStatusDotColor,
-  vaultStatusIconColors,
-} from "../vault-status";
+import { vaultStatusBadgeColors, vaultStatusIconColors } from "../vault-status";
 
 const colors = {
   vaultStatusOpen: "#00ff00",
@@ -18,12 +14,6 @@ const colors = {
 } as const;
 
 describe("vault status theme mapping", () => {
-  it("returns dot color per status", () => {
-    expect(vaultStatusDotColor("open", colors as never)).toBe(colors.vaultStatusOpen);
-    expect(vaultStatusDotColor("recovery", colors as never)).toBe(colors.vaultStatusRecovery);
-    expect(vaultStatusDotColor("closed", colors as never)).toBe(colors.vaultStatusClosed);
-  });
-
   it("returns icon and badge colors per status", () => {
     expect(vaultStatusIconColors("open", colors as never)).toEqual({
       background: colors.vaultOpenIconBg,

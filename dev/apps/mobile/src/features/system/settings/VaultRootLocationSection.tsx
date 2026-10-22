@@ -55,6 +55,30 @@ interface VaultRootLocationSectionProps {
   controlsDisabled?: boolean;
   /** Bump to re-run inspect without changing mode/path (e.g. after setup RPC incomplete). */
   inspectNonce?: number;
+  /** A further radio in this group, after the two folder options. */
+  extraOption?: VaultRootExtraOption;
+}
+
+/**
+ * A choice beside the two folders, such as Data folder → Export a copy. While it
+ * is checked neither folder option is. Choosing it drops a folder lookup still
+ * on its way, so a late answer cannot pull the choice back; choosing a folder
+ * option again returns to it.
+ */
+export interface VaultRootExtraOption {
+  /** Title between the folder options and this one, since it is a different kind of choice. */
+  heading: string;
+  /** Subtitle under `heading`, like the hint under the folder options' label. */
+  hint: string;
+  value: string;
+  checked: boolean;
+  /** Chosen and still missing a step its footer asks for. */
+  attention: boolean;
+  title: string;
+  description: string;
+  disabled: boolean;
+  footer: ReactNode;
+  onSelect: () => void;
 }
 
 /**
@@ -63,7 +87,8 @@ interface VaultRootLocationSectionProps {
  * Same rich-field pattern: mode radios (`default_root` / `custom_root`), path
  * field with folder picker (SAF-aware on Android — the URI is read-only),
  * live inspect via `defaultRootStatus` / `inspectAtPath`, incomplete replace
- * panel, and gate reporting via `onVaultRootGateChange`.
+ * panel, and gate reporting via `onVaultRootGateChange`. Outside first-run
+ * Setup the folder in use carries an In use badge.
  */
 export function VaultRootLocationSection({
   config,
@@ -76,6 +101,7 @@ export function VaultRootLocationSection({
   customRootNotice,
   controlsDisabled = false,
   inspectNonce = 0,
+  extraOption,
 }: VaultRootLocationSectionProps) {
   const { t } = useTranslation();
   const { colors, typography } = useTheme();
@@ -410,6 +436,21 @@ export function VaultRootLocationSection({
   const customFieldPath =
     rememberedCustomFolderPath(config.upriv_root_path) || rememberedCustomPath;
   const pathIsSaf = isAndroidSafUri(customFieldPath);
+  const extraChecked = extraOption?.checked ?? false;
+  const defaultChecked = useDefaultRoot && !extraChecked;
+  const customChecked = !useDefaultRoot && !extraChecked;
+  // Android saves the Documents grant as a custom path; it is still the default folder.
+  const savedIsDefault =
+    savedVaultRootMode === "default_root" ||
+    (android && isAndroidDocumentsDefaultGrant(savedRootPath));
+  const savedCustomPath = rememberedCustomFolderPath(savedRootPath);
+  // First-run Setup has no folder in use yet.
+  const defaultInUse = !forceDirty && savedIsDefault;
+  const customInUse =
+    !forceDirty &&
+    !savedIsDefault &&
+    savedCustomPath !== "" &&
+    customFieldPath.trim() === savedCustomPath;
 
   return (
     <View style={styles.wrap}>
@@ -422,11 +463,11 @@ export function VaultRootLocationSection({
       >
         <PolicyRadioOption
           value="default_root"
-          checked={useDefaultRoot}
-          attention={useDefaultRoot && vaultRootGate.blocksPrimary && visibleDisk !== "checking"}
+          checked={defaultChecked}
+          attention={defaultChecked && vaultRootGate.blocksPrimary && visibleDisk !== "checking"}
           title={t(defaultRootTitleKey)}
           description={t(defaultRootDescKey)}
-          badge="default"
+          badge={defaultInUse ? ["in-use", "default"] : "default"}
           disabled={controlsDisabled}
           onSelect={() => {
             if (controlsDisabled) return;
@@ -499,12 +540,13 @@ export function VaultRootLocationSection({
         />
         <PolicyRadioOption
           value="custom_root"
-          checked={!useDefaultRoot}
-          attention={!useDefaultRoot && vaultRootGate.blocksPrimary && visibleDisk !== "checking"}
+          checked={customChecked}
+          attention={customChecked && vaultRootGate.blocksPrimary && visibleDisk !== "checking"}
           title={t("modal.app_settings.option.upriv_root.custom_root")}
           description={t(customRootDescKey, {
             file: VAULT_ROOT_ALIAS_FILE,
           })}
+          badge={customInUse ? "in-use" : undefined}
           disabled={controlsDisabled}
           onSelect={() => {
             if (controlsDisabled) return;
@@ -644,6 +686,32 @@ export function VaultRootLocationSection({
             </View>
           }
         />
+        {extraOption ? (
+          <>
+            <View style={styles.extraHeading}>
+              <View accessibilityRole="header">
+                <FieldLabel>{extraOption.heading}</FieldLabel>
+              </View>
+              <FieldHint>{extraOption.hint}</FieldHint>
+            </View>
+            <PolicyRadioOption
+              value={extraOption.value}
+              checked={extraOption.checked}
+              attention={extraOption.attention}
+              title={extraOption.title}
+              description={extraOption.description}
+              disabled={extraOption.disabled}
+              onSelect={() => {
+                if (extraOption.disabled) return;
+                aliasLoadGen.current += 1;
+                setCustomPathLoading(false);
+                setReplacePolicy(null);
+                extraOption.onSelect();
+              }}
+              footer={extraOption.footer}
+            />
+          </>
+        ) : null}
       </View>
     </View>
   );
@@ -652,6 +720,7 @@ export function VaultRootLocationSection({
 const styles = StyleSheet.create({
   wrap: { gap: spacing.sm },
   options: { gap: spacing.sm },
+  extraHeading: { marginTop: spacing.sm, gap: spacing.sm },
   footerCol: { gap: spacing.sm },
   errorRow: {
     flexDirection: "column",

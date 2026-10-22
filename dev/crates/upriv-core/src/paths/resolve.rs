@@ -84,7 +84,7 @@ pub struct VaultRootAlias {
 /// resolve found the root this launch. Never treat a mode value as a source (or vice versa).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VaultRootSource {
-    /// `--vault`, `UPRIV_VAULT_ROOT`, or an explicit path from the caller.
+    /// `UPRIV_VAULT_ROOT`, or an explicit path from the caller.
     Explicit,
     /// Active `.upriv-root` pointer in the app home (`custom_root` mode).
     CustomRoot,
@@ -127,7 +127,7 @@ pub struct ResolveVaultRootOptions {
 }
 
 /// Directory that owns the binary.
-pub fn binary_dir() -> Result<PathBuf> {
+fn binary_dir() -> Result<PathBuf> {
     let exe = std::env::current_exe()?;
     exe.parent()
         .map(Path::to_path_buf)
@@ -448,28 +448,11 @@ pub(crate) fn deactivate_vault_root_alias(home: impl AsRef<Path>) -> Result<()> 
     )
 }
 
-/// Deactivate alias in app home and, if different, beside the real binary (stale file).
+/// Mark the app home's alias inactive (default-root mode in use).
 ///
 /// See [`deactivate_vault_root_alias`] for single-instance / no-flock assumptions.
-pub fn deactivate_vault_root_alias_everywhere() -> Result<()> {
-    let home = app_home_dir()?;
-    deactivate_vault_root_alias(&home)?;
-    if let Ok(bin) = binary_dir() {
-        if !same_dir(&bin, &home) {
-            if let Err(error) = deactivate_vault_root_alias(&bin) {
-                eprintln!(
-                    "upriv-core: failed to deactivate stale .upriv-root beside binary {}: {error}",
-                    bin.display()
-                );
-                crate::logging::log_event(
-                    crate::logging::LogLevel::Warn,
-                    "vault_root_alias_deactivate_failed",
-                    &[("scope", "beside_binary")],
-                );
-            }
-        }
-    }
-    Ok(())
+pub fn deactivate_app_home_alias() -> Result<()> {
+    deactivate_vault_root_alias(app_home_dir()?)
 }
 
 /// Walk parents upward from `start` looking for `.upriv/settings.toml`.

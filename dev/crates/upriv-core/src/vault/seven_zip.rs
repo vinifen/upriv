@@ -9,7 +9,7 @@
 
 use crate::host_fs::File;
 use std::collections::HashSet;
-use std::io::{Cursor, ErrorKind, Read, Seek};
+use std::io::{BufReader, Cursor, ErrorKind, Read, Seek};
 use std::path::{Path, PathBuf};
 
 use sevenz_rust2::{ArchiveEntry, ArchiveReader};
@@ -26,11 +26,10 @@ use super::fs::{
     fs_ensure_folder_path_staged, fs_seal_staged_imports, fs_seal_staged_wave, fs_write_staged,
 };
 use super::open_close::{abandon_failed_import, close_vault, open_vault_for_ingest};
-use super::seven_zip_pack::{
-    ensure_seven_zip_export_ram, seven_zip_decode_budget, sevenz_member_name_unsafe,
-    sevenz_password,
-};
+use super::seven_zip_pack::{seven_zip_decode_threads, sevenz_member_name_unsafe, sevenz_password};
 use super::welcome::{seal_welcome_if_absent, VaultWelcome};
+
+const ARCHIVE_READ_BUFFER: usize = 1024 * 1024;
 
 fn map_sevenz_read_error(error: sevenz_rust2::Error) -> UprivError {
     match error {
@@ -54,11 +53,10 @@ fn open_prepared_reader<R: Read + Seek>(
     archive_password: &[u8],
     archive_len: u64,
 ) -> Result<ArchiveReader<R>> {
-    let decode = seven_zip_decode_budget();
-    ensure_seven_zip_export_ram(decode.ram)?;
+    let threads = seven_zip_decode_threads()?;
     let password = sevenz_password(archive_password)?;
     let mut reader = ArchiveReader::new(reader, password).map_err(map_sevenz_read_error)?;
-    reader.set_thread_count(decode.threads);
+    reader.set_thread_count(threads);
     let budget = plaintext_budget(archive_len);
     if reader
         .archive()
@@ -82,14 +80,20 @@ fn open_archive_reader<'a>(
     )
 }
 
-fn open_archive_path(path: &Path, archive_password: &[u8]) -> Result<(ArchiveReader<File>, u64)> {
+fn open_archive_path(
+    path: &Path,
+    archive_password: &[u8],
+) -> Result<(ArchiveReader<BufReader<File>>, u64)> {
     if !path.is_absolute() {
         return Err(UprivError::ImportArchiveNotFound(path.to_path_buf()));
     }
     let file = crate::paths::open_nofollow(path, crate::paths::NofollowMode::Read)
         .map_err(|error| super::import::map_archive_open_error(path, error))?;
     let len = file.metadata()?.len();
-    let reader = open_prepared_reader(file, archive_password, len)?;
+    // The AES decoder asks for 512 bytes at a time, and a storage-access file
+    // pays for each read.
+    let buffered = BufReader::with_capacity(ARCHIVE_READ_BUFFER, file);
+    let reader = open_prepared_reader(buffered, archive_password, len)?;
     Ok((reader, len))
 }
 
