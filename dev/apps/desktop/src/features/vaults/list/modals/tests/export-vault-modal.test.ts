@@ -187,16 +187,24 @@ describe("ExportVaultModal", () => {
     );
   });
 
-  it("exports the .7z on Enter in its password, and only once both are set", async () => {
+  it("goes from the .7z password to its folder picker on Enter, then exports", async () => {
+    pickFolder.mockResolvedValue("/media/sevens");
     const onConfirm = show();
     await capabilitiesLoaded();
     fireEvent.click(screen.getByText(SEVEN_ZIP_TITLE));
+    fireEvent.keyDown(passwordInput(), { key: "Enter" });
+    expect(pickFolder).not.toHaveBeenCalled();
+
     fireEvent.change(passwordInput(), { target: { value: "vault password" } });
     fireEvent.keyDown(passwordInput(), { key: "Enter" });
+    expect(pickFolder).toHaveBeenCalledWith(null, "vault.export.dialog.picker_title.seven_zip");
+    expect(document.activeElement).toBe(folderInputs()[1]);
     expect(onConfirm).not.toHaveBeenCalled();
+    await waitFor(() => expect(exportButton().disabled).toBe(false));
+    expect(folderInputs()[1].value).toBe("/media/sevens");
 
-    fireEvent.change(folderInputs()[1], { target: { value: "/media/sevens" } });
     fireEvent.keyDown(passwordInput(), { key: "Enter" });
+    expect(pickFolder).toHaveBeenCalledOnce();
     expect(onConfirm).toHaveBeenCalledOnce();
     expect(onConfirm).toHaveBeenCalledWith(
       expect.objectContaining({ format: "seven_zip", password: "vault password" }),
@@ -218,7 +226,7 @@ describe("ExportVaultModal", () => {
 
   it("marks a refused password on its field and waits until it is edited", async () => {
     const onPasswordEdited = vi.fn();
-    show({ passwordError: "error.wrong_password", onPasswordEdited });
+    const onConfirm = show({ passwordError: "error.wrong_password", onPasswordEdited });
     await capabilitiesLoaded();
     fireEvent.click(screen.getByText(SEVEN_ZIP_TITLE));
     fireEvent.change(folderInputs()[1], { target: { value: "/media/sevens" } });
@@ -230,6 +238,8 @@ describe("ExportVaultModal", () => {
     );
     expect(needsStep(SEVEN_ZIP_TITLE)).toBe(true);
     expect(exportButton().disabled).toBe(true);
+    fireEvent.keyDown(passwordInput(), { key: "Enter" });
+    expect(onConfirm).not.toHaveBeenCalled();
 
     fireEvent.change(passwordInput(), { target: { value: "another try" } });
     expect(onPasswordEdited).toHaveBeenCalled();

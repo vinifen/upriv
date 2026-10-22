@@ -1,4 +1,5 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useRef, useState, type RefObject } from "react";
+import { exportFolderIssue } from "@upriv/shared";
 import { useVaultRootService } from "@/platform/services";
 
 /**
@@ -12,8 +13,16 @@ export interface ExportFolder {
   setPath: (path: string) => void;
   picking: boolean;
   pickFailed: boolean;
-  /** Opens the folder picker. Only the field's Choose folder button calls it. */
+  /** The folder field's text input, for `chooseIfMissing`. */
+  fieldRef: RefObject<HTMLInputElement>;
+  /** Opens the folder picker: the field's Choose folder button. */
   choose: () => void;
+  /**
+   * Enter in the field before this one. While no usable folder is set, it
+   * focuses the folder field, opens the picker, and answers `true`. Once a
+   * folder is set it answers `false`, so Enter goes on to Export.
+   */
+  chooseIfMissing: () => boolean;
   /** The window closed: a pick still open is not kept. The folder stays. */
   cancelPick: () => void;
 }
@@ -29,6 +38,9 @@ export function useExportFolder(pickerTitle: string): ExportFolder {
   const [pickFailed, setPickFailed] = useState(false);
   const pathRef = useRef(path);
   pathRef.current = path;
+  const fieldRef = useRef<HTMLInputElement>(null);
+  /** One picker at a time, also between a press and the render that disables the button. */
+  const pickOpen = useRef(false);
   /** Bumped by `cancelPick`, so a pick still open when the window closed is not kept. */
   const pickGen = useRef(0);
 
@@ -38,6 +50,8 @@ export function useExportFolder(pickerTitle: string): ExportFolder {
   }, []);
 
   const choose = useCallback(() => {
+    if (pickOpen.current) return;
+    pickOpen.current = true;
     const gen = pickGen.current;
     setPicking(true);
     setPickFailed(false);
@@ -50,13 +64,23 @@ export function useExportFolder(pickerTitle: string): ExportFolder {
       .catch(() => {
         if (gen === pickGen.current) setPickFailed(true);
       })
-      .finally(() => setPicking(false));
+      .finally(() => {
+        pickOpen.current = false;
+        setPicking(false);
+      });
   }, [pickerTitle, vaultRoot]);
+
+  const chooseIfMissing = useCallback(() => {
+    if (exportFolderIssue(pathRef.current) === null) return false;
+    fieldRef.current?.focus();
+    choose();
+    return true;
+  }, [choose]);
 
   const cancelPick = useCallback(() => {
     pickGen.current += 1;
     setPickFailed(false);
   }, []);
 
-  return { path, setPath, picking, pickFailed, choose, cancelPick };
+  return { path, setPath, picking, pickFailed, fieldRef, choose, chooseIfMissing, cancelPick };
 }

@@ -176,6 +176,16 @@ export function ExportVaultModal({
     );
   };
 
+  /** Return in the password: on to the folder picker while no folder is picked, then Export. */
+  const passwordEntered = () => {
+    if (sevenZipPending === "password" || passwordError !== null) return;
+    if (folders.seven_zip.chooseIfMissing()) {
+      passwordRef.current?.blur();
+      return;
+    }
+    confirm();
+  };
+
   const folderHint = (option: VaultExportFormat) =>
     t("vault.export.dialog.folder_hint", {
       filename: vaultExportFilename(vault.displayName, option),
@@ -308,7 +318,8 @@ export function ExportVaultModal({
                       autoComplete="password"
                       autoCapitalize="none"
                       autoCorrect={false}
-                      onSubmitEditing={confirm}
+                      returnKeyType={ready ? "go" : "next"}
+                      onSubmitEditing={passwordEntered}
                       onChangeText={(value) => {
                         setPassword(value);
                         onPasswordEdited?.();

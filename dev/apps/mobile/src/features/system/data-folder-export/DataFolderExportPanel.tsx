@@ -1,4 +1,5 @@
-import { StyleSheet, Text, View } from "react-native";
+import { useRef } from "react";
+import { StyleSheet, Text, TextInput, View } from "react-native";
 import {
   DATA_FOLDER_EXPORT_PROGRESS_COPY,
   DATA_FOLDER_ZIP_NAME_MAX_BYTES,
@@ -19,6 +20,7 @@ import type {
   DataFolderExportControls,
   DataFolderExportDestination,
 } from "./dataFolderExportTypes";
+import { dataFolderExportReady, startDataFolderExport } from "./startDataFolderExport";
 
 interface DataFolderExportPanelProps {
   controls: DataFolderExportControls;
@@ -39,6 +41,17 @@ export function DataFolderExportPanel({ controls, destination }: DataFolderExpor
   });
   const nameIssue = dataFolderZipNameIssue(dataFolderZipNameFromInput(destination.zipName));
   const nameIssueKey = nameIssue ? dataFolderZipNameIssueI18nKey(nameIssue) : null;
+  const nameRef = useRef<TextInput>(null);
+
+  /** Return in the name: on to the folder picker while no folder is picked, then Export. */
+  const nameEntered = () => {
+    if (nameIssue) return;
+    if (destination.folder.chooseIfMissing()) {
+      nameRef.current?.blur();
+      return;
+    }
+    startDataFolderExport(controls, destination);
+  };
 
   return (
     <View style={styles.body}>
@@ -62,6 +75,7 @@ export function DataFolderExportPanel({ controls, destination }: DataFolderExpor
             <FieldHint>{t("modal.data_folder_export.name_hint")}</FieldHint>
             <View style={styles.nameRow}>
               <ThemedInput
+                ref={nameRef}
                 mono
                 value={destination.zipName}
                 maxLength={DATA_FOLDER_ZIP_NAME_MAX_BYTES}
@@ -71,6 +85,8 @@ export function DataFolderExportPanel({ controls, destination }: DataFolderExpor
                 autoCorrect={false}
                 spellCheck={false}
                 onChangeText={destination.setZipName}
+                returnKeyType={dataFolderExportReady(controls, destination) ? "go" : "next"}
+                onSubmitEditing={nameEntered}
                 style={styles.nameInput}
               />
               <Text style={[typography.mono, { color: colors.onSurfaceVariant }]}>.zip</Text>

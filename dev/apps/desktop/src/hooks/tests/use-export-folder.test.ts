@@ -80,6 +80,37 @@ describe("useExportFolder", () => {
     expect(pickFolder).toHaveBeenLastCalledWith("/media/My Copies", TITLE);
   });
 
+  it("opens the picker from the field before it only while no folder is set", async () => {
+    pickFolder.mockResolvedValue("/media/usb");
+    const { result } = renderHook(() => useExportFolder(TITLE));
+
+    let missing = false;
+    act(() => {
+      missing = result.current.chooseIfMissing();
+    });
+    expect(missing).toBe(true);
+    expect(pickFolder).toHaveBeenCalledOnce();
+    await waitFor(() => expect(result.current.path).toBe("/media/usb"));
+
+    act(() => {
+      missing = result.current.chooseIfMissing();
+    });
+    expect(missing).toBe(false);
+    expect(pickFolder).toHaveBeenCalledOnce();
+  });
+
+  it("opens one picker at a time", () => {
+    pickFolder.mockReturnValue(new Promise(() => undefined));
+    const { result } = renderHook(() => useExportFolder(TITLE));
+
+    act(() => {
+      result.current.chooseIfMissing();
+      result.current.chooseIfMissing();
+      result.current.choose();
+    });
+    expect(pickFolder).toHaveBeenCalledOnce();
+  });
+
   it("keeps the folder when the window closes", async () => {
     pickFolder.mockResolvedValue("/media/usb");
     const { result } = renderHook(() => useExportFolder(TITLE));

@@ -17,6 +17,7 @@ import type {
   DataFolderExportControls,
   DataFolderExportDestination,
 } from "./dataFolderExportTypes";
+import { startDataFolderExport } from "./startDataFolderExport";
 
 interface DataFolderExportPanelProps {
   controls: DataFolderExportControls;
@@ -37,6 +38,13 @@ export function DataFolderExportPanel({ controls, destination }: DataFolderExpor
   });
   const nameIssue = dataFolderZipNameIssue(dataFolderZipNameFromInput(destination.zipName));
   const nameIssueKey = nameIssue ? dataFolderZipNameIssueI18nKey(nameIssue) : null;
+
+  /** Enter in the name: on to the folder while it is missing, then Export. */
+  const nameEntered = () => {
+    if (nameIssue) return;
+    if (destination.folder.chooseIfMissing()) return;
+    startDataFolderExport(controls, destination);
+  };
 
   return (
     <div className="space-y-3">
@@ -72,6 +80,11 @@ export function DataFolderExportPanel({ controls, destination }: DataFolderExpor
                 maxLength={DATA_FOLDER_ZIP_NAME_MAX_BYTES}
                 aria-invalid={nameIssueKey ? true : undefined}
                 onChange={(event) => destination.setZipName(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key !== "Enter") return;
+                  event.preventDefault();
+                  nameEntered();
+                }}
                 className={[settingsControlClass, "font-mono"].join(" ")}
                 autoComplete="off"
                 spellCheck={false}

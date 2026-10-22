@@ -27,6 +27,7 @@ export function ExportFolderField({ folder, hint, disabled = false }: ExportFold
     <SettingsField label={t("modal.export_folder.label")} hint={hint} htmlFor={id}>
       <div className="flex flex-col gap-2 sm:flex-row sm:items-stretch">
         <PathField
+          ref={folder.fieldRef}
           id={id}
           className="sm:flex-1"
           value={folder.path}

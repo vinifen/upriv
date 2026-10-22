@@ -164,6 +164,13 @@ export function ExportVaultModal({
     );
   };
 
+  /** Enter in the password: on to the folder while it is missing, then Export. */
+  const passwordEntered = () => {
+    if (sevenZipPending === "password" || passwordError !== null) return;
+    if (folders.seven_zip.chooseIfMissing()) return;
+    confirm();
+  };
+
   const folderHint = (option: VaultExportFormat) =>
     t("vault.export.dialog.folder_hint", {
       filename: vaultExportFilename(vault.displayName, option),
@@ -298,7 +305,7 @@ export function ExportVaultModal({
                       onKeyDown={(event) => {
                         if (event.key !== "Enter") return;
                         event.preventDefault();
-                        confirm();
+                        passwordEntered();
                       }}
                       onChange={(event) => {
                         setPassword(event.target.value);

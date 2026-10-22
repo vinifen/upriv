@@ -189,6 +189,32 @@ describe("VaultRootDataFolderModal export choice", () => {
     expect(exportControls.onStart).toHaveBeenCalledWith("/media/usb", "trip copy");
   });
 
+  it("goes from the name to the folder picker on Enter, then exports", async () => {
+    pickFolder.mockResolvedValue("/media/usb");
+    const exportControls = controls();
+    show(exportControls);
+    fireEvent.click(screen.getByText(EXPORT_TITLE));
+
+    // A name that cannot be used keeps Enter in its field.
+    fireEvent.change(nameInput(), { target: { value: "trip/copy" } });
+    fireEvent.keyDown(nameInput(), { key: "Enter" });
+    expect(pickFolder).not.toHaveBeenCalled();
+
+    fireEvent.change(nameInput(), { target: { value: "trip copy" } });
+    fireEvent.keyDown(nameInput(), { key: "Enter" });
+    expect(pickFolder).toHaveBeenCalledWith(null, "modal.data_folder_export.picker_title");
+    expect(document.activeElement).toBe(folderInput());
+    expect(exportControls.onStart).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(footerButton("modal.data_folder_export.confirm")).toHaveProperty("disabled", false),
+    );
+    expect(folderInput().value).toBe("/media/usb");
+
+    fireEvent.keyDown(nameInput(), { key: "Enter" });
+    expect(exportControls.onStart).toHaveBeenCalledWith("/media/usb", "trip copy");
+    expect(pickFolder).toHaveBeenCalledOnce();
+  });
+
   it("keeps the folder after an export, while the name starts over", () => {
     const exportControls = controls();
     const view = show(exportControls);

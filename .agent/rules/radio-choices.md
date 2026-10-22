@@ -13,6 +13,7 @@ One pattern for every `PolicyRadioOption` group, desktop and mobile.
 7. **Folder paths are editable text on desktop** (`PathField` with `onChange`, placeholder `modal.folder_field.placeholder`), beside a Choose folder button that keeps working, and the reveal button inside the field. Keep the text as typed (trim only when it is saved or sent). A typed vault-root path is checked after `VAULT_ROOT_PATH_CHECK_DELAY_MS`, reading `checking` from the first key. An export's folder is the `ExportFolderField`.
 8. **Phones pick folders.** On Android a folder is a storage-access grant, and a typed path is not one, so mobile folder fields that need a grant stay picker-only. Rules 1–6 still apply.
 9. **Windows start with the first option chosen** when that option needs no extra step (Data folder: the folder in use; "Where should the files go?": Default workspace).
+10. **Enter moves to the next step.** In a field before an export folder (the vault `.7z` password, the Export a copy name), Enter (Return on a phone) stays put while that field's own step is missing. While the folder is missing it opens the picker (`chooseIfMissing`): desktop also puts the cursor in the folder field, so a cancelled pick can be typed. Once nothing is missing it runs the primary action.
 
 ## Do not
 

@@ -1,10 +1,10 @@
-import { dataFolderExportPending, dataFolderZipNameFromInput } from "@upriv/shared";
 import { Button } from "@/components/ui";
 import { useTranslation } from "@/i18n";
 import type {
   DataFolderExportControls,
   DataFolderExportDestination,
 } from "./dataFolderExportTypes";
+import { dataFolderExportReady, startDataFolderExport } from "./startDataFolderExport";
 
 interface DataFolderExportFooterProps {
   controls: DataFolderExportControls;
@@ -13,18 +13,10 @@ interface DataFolderExportFooterProps {
 
 /** Data folder footer while Export a copy is chosen: Export, or Stop export while it runs. */
 export function DataFolderExportFooter({ controls, destination }: DataFolderExportFooterProps) {
-  const { canStart, job, onStart, onStop } = controls;
-  const { folder } = destination;
+  const { job, onStop } = controls;
   const { t } = useTranslation();
-  const ready =
-    canStart &&
-    !folder.picking &&
-    dataFolderExportPending(folder.path, destination.zipName) === null;
-
-  // The folder stays chosen for the next export; the name starts over once this one is written.
-  const start = () => {
-    if (ready) onStart(folder.path.trim(), dataFolderZipNameFromInput(destination.zipName));
-  };
+  const ready = dataFolderExportReady(controls, destination);
+  const start = () => startDataFolderExport(controls, destination);
 
   return (
     <div className="flex flex-col gap-2 sm:flex-row-reverse sm:flex-wrap sm:justify-start [&_button]:w-full sm:[&_button]:w-auto">
