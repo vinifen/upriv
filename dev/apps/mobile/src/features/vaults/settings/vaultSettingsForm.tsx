@@ -57,10 +57,10 @@ type PatchDraft = <S extends keyof VaultSettingsConfig>(
 const STORAGE_RADIOS: ReadonlyArray<{
   mode: StorageMode;
   badge?: PolicyRadioBadge;
-  tone?: "default" | "insecure";
+  tone?: "default" | "less-secure";
 }> = [
   { mode: "encrypted_dir", badge: "recommended" },
-  { mode: "upriv_plain", badge: "insecure", tone: "insecure" },
+  { mode: "upriv_plain", badge: "not-recommended", tone: "less-secure" },
 ];
 
 const STORAGE_WARNING: Partial<Record<StorageMode, I18nKey>> = {

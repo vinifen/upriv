@@ -119,7 +119,7 @@ Rest is always `store/`; `.7z` is an **action** (import/export), never kept at r
 | Mode | Id | While open | At rest |
 |------|-----|------------|---------|
 | **Default** | `encrypted_dir` | Decrypt in RAM only. **Desktop:** FUSE (Linux) / WinFsp (Windows) folder. **Mobile:** in-app file manager (same session — no OS mount). | `store/` |
-| **Large / insecure** | `upriv_plain` | Real plaintext `workspace/` (UI warning) | `store/`; wipe workspace on close |
+| **Large / not recommended** | `upriv_plain` | Real plaintext `workspace/` (UI warning) | `store/`; wipe workspace on close |
 
 **States:** `open` is a **runtime session** (unlocked), not a disk enum. Where plaintext lives while open depends on mode — not on “open” itself:
 

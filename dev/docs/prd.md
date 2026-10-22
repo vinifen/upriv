@@ -62,7 +62,7 @@ Differentiators vs. manual 7-Zip use:
 | Mode | ID | When to use | Close behavior | v1 UI |
 |------|-----|-------------|----------------|-------|
 | **Encrypted directory (default)** | `encrypted_dir` | Normal use. Rest = `store/`. While open: decrypt in RAM (FUSE/WinFsp; in-app file manager on mobile). | Lock = close → flush session into `store/` → `closed` | **Yes** |
-| **Plaintext folder while open** | `upriv_plain` | Large vaults / when RAM cannot hold the working set. Rest = `store/`. While open: real plaintext `workspace/`. UI badge **Insecure**. | Lock = close → write `store/` → wipe workspace → `closed` | **Yes** |
+| **Plaintext folder while open** | `upriv_plain` | Large vaults / when RAM cannot hold the working set. Rest = `store/`. While open: real plaintext `workspace/`. UI badge **Not recommended**: while open, anyone or any app that can read the folder reads the files, and system copies can outlast the wipe. | Lock = close → write `store/` → wipe workspace → `closed` | **Yes** |
 
 **`encrypted_dir` RAM:** decrypted content is served through the virtual mount / session buffers. Open, edit, or close may **fail** if RAM is insufficient — never silently spill plaintext to ordinary disk. UI: `warning.encrypted_dir_ram`. Prefer **`upriv_plain`**, smaller vaults, or more RAM when hardware cannot meet this limit.
 
@@ -207,7 +207,7 @@ encrypted_dir / upriv_plain:
 | RF-02 | Open vault (`encrypted_dir` default): validate password, mount the file manager folder when it is on, load encrypted store | P0 |
 | RF-03 | Expose `workspace` to user (button `action.open_folder` → OS file manager) | P0 |
 | RF-04 | Close vault (`encrypted_dir`): unmount the file manager folder, flush session into `store/` using **session keys** (not a newly typed password), clear session keys. Default lock has **no password prompt** | P0 |
-| RF-04h | `upriv_plain` mode: rest = `store/`; while open plaintext `workspace/`; UI **`warning.upriv_plain`** + badge **insecure**; lock always **close** + wipe workspace → `closed`. Lock starts immediately and does not ask for the password | P1 |
+| RF-04h | `upriv_plain` mode: rest = `store/`; while open plaintext `workspace/`; UI **`warning.upriv_plain`** + badge **not recommended**; lock always **close** + wipe workspace → `closed`. Lock starts immediately and does not ask for the password | P1 |
 | RF-04c | (`encrypted_dir`) Require sufficient RAM for the **entire unlocked vault** while open; fail open/edit/close with user-visible error if not; UI **`warning.encrypted_dir_ram`** (RF-UI-17) | P0 |
 | RF-05 | On close: verify **open session / `vault.header`** before backup or flush — failure aborts; `store/` unchanged. Flush uses the open session keys. Lock does not ask for the password and does not rewrap the header | P0 |
 | RF-06 | Atomic write of `store/` (header + index + chunks); `.7z` is never kept at rest | P0 |
@@ -493,7 +493,7 @@ The password string stays in the app after a successful unlock, until lock or qu
 **Warnings:**
 
 - **RAM capacity:** show **`warning.encrypted_dir_ram`** when `encrypted_dir` (settings + create wizard). Insufficient memory → open/edit/close may fail (no silent spill to plaintext disk).
-- **`upriv_plain`:** show **`warning.upriv_plain`** (plaintext while open); radio badge **insecure**. Lock starts the close immediately and does not ask for the password.
+- **`upriv_plain`:** show **`warning.upriv_plain`** (plaintext while open); radio badge **not recommended**. Lock starts the close immediately and does not ask for the password.
 
 ---
 

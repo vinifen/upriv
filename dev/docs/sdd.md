@@ -700,7 +700,7 @@ Settings modal edits `config.toml` but **does not mirror every key** — advance
 | `storage.mode` | Warning key | When shown |
 |----------------|-------------|------------|
 | `encrypted_dir` | `warning.encrypted_dir_ram` | Storage section (settings + create wizard); Help → Security |
-| `upriv_plain` | `warning.upriv_plain` | Storage section; badge **Insecure**; plaintext while open |
+| `upriv_plain` | `warning.upriv_plain` | Storage section; badge **Not recommended** (soft red, as less secure); plaintext while open |
 
 Related: PRD **RF-UI-17**, §1.6.
 

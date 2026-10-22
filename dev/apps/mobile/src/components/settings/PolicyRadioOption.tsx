@@ -10,7 +10,7 @@ import { useTranslation } from "@/i18n";
 import { useTheme, type ThemeColors } from "@/theme";
 import { colorAlpha, radii, spacing } from "@/theme/tokens";
 
-type Tone = "default" | "less-secure" | "insecure";
+type Tone = "default" | "less-secure";
 
 interface PolicyRadioOptionProps {
   value: string;
@@ -52,13 +52,9 @@ function policyRadioBadgeColors(
         color: colors.vaultStatusOpen,
       };
     case "less-secure":
+    case "not-recommended":
       return {
         backgroundColor: colorAlpha(colors.onErrorContainer, 0.15),
-        color: colors.onErrorContainer,
-      };
-    case "insecure":
-      return {
-        backgroundColor: colorAlpha(colors.onErrorContainer, 0.3),
         color: colors.onErrorContainer,
       };
     case "recommended":
@@ -96,7 +92,6 @@ export function PolicyRadioOption({
   const { colors, typography } = useTheme();
 
   const isLessSecure = tone === "less-secure";
-  const isInsecure = tone === "insecure";
 
   const borderColor = checked
     ? attention
@@ -104,11 +99,9 @@ export function PolicyRadioOption({
       : colors.accent
     : colors.outlineVariant;
 
-  const cardBg = isInsecure
-    ? mixHex(colors.surfaceContainer, colors.errorContainer, 0.18)
-    : isLessSecure
-      ? mixHex(colors.surfaceContainer, colors.errorContainer, 0.07)
-      : colors.surfaceContainer;
+  const cardBg = isLessSecure
+    ? mixHex(colors.surfaceContainer, colors.errorContainer, 0.07)
+    : colors.surfaceContainer;
 
   return (
     <View style={styles.wrap}>

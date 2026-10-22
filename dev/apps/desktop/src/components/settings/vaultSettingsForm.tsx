@@ -286,8 +286,8 @@ export function VaultSettingsStorageSection({
             disabled={storageModeLocked}
             title={t("modal.settings.option.storage.upriv_plain")}
             description={t("modal.settings.option.storage.upriv_plain_desc")}
-            badge="insecure"
-            tone="insecure"
+            badge="not-recommended"
+            tone="less-secure"
             onSelect={() => onChange({ mode: "upriv_plain" })}
           />
         </div>
@@ -952,8 +952,8 @@ const POLICY_RADIO_BADGE_CLASS: Record<PolicyRadioBadge, string> = {
     "rounded bg-[color-mix(in_srgb,var(--accent)_15%,transparent)] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-accent",
   "less-secure":
     "rounded bg-[color-mix(in_srgb,var(--on-error-container)_15%,transparent)] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-on-error-container",
-  insecure:
-    "rounded bg-[color-mix(in_srgb,var(--on-error-container)_30%,transparent)] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-on-error-container",
+  "not-recommended":
+    "rounded bg-[color-mix(in_srgb,var(--on-error-container)_15%,transparent)] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-on-error-container",
 };
 
 interface PolicyRadioOptionProps {
@@ -969,7 +969,7 @@ interface PolicyRadioOptionProps {
   muted?: boolean;
   /** One badge, or several shown in this order. */
   badge?: PolicyRadioBadge | readonly PolicyRadioBadge[];
-  tone?: "default" | "less-secure" | "insecure";
+  tone?: "default" | "less-secure";
   /**
    * Yellow/amber border while this option still needs follow-up config
    * (e.g. vault-root incomplete policy). Overrides the accent border when checked.
@@ -1004,19 +1004,14 @@ export function PolicyRadioOption({
   const { t } = useTranslation();
   const inputId = useId();
   const isLessSecure = tone === "less-secure";
-  const isInsecure = tone === "insecure";
 
-  const cardBgClass = isInsecure
-    ? "bg-[color-mix(in_srgb,var(--error-container)_18%,var(--surface-container))]"
-    : isLessSecure
-      ? "bg-[color-mix(in_srgb,var(--error-container)_7%,var(--surface-container))]"
-      : "bg-surface-container";
+  const cardBgClass = isLessSecure
+    ? "bg-[color-mix(in_srgb,var(--error-container)_7%,var(--surface-container))]"
+    : "bg-surface-container";
 
-  const cardHoverClass = isInsecure
-    ? "hover:bg-[color-mix(in_srgb,var(--error-container)_26%,var(--surface-container))]"
-    : isLessSecure
-      ? "hover:bg-[color-mix(in_srgb,var(--error-container)_11%,var(--surface-container))]"
-      : "hover:bg-surface-container-highest/60";
+  const cardHoverClass = isLessSecure
+    ? "hover:bg-[color-mix(in_srgb,var(--error-container)_11%,var(--surface-container))]"
+    : "hover:bg-surface-container-highest/60";
 
   const borderClass = checked
     ? attention

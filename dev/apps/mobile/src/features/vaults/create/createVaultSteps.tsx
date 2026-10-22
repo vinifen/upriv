@@ -688,7 +688,7 @@ function CreateVaultAdvancedStep({
             {(
               [
                 ["encrypted_dir", "recommended", "default"],
-                ["upriv_plain", "insecure", "insecure"],
+                ["upriv_plain", "not-recommended", "less-secure"],
               ] as const
             ).map(([mode, badge, tone]) => (
               <PolicyRadioOption
