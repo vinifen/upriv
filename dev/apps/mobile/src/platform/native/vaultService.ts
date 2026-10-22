@@ -14,7 +14,6 @@ import {
   rpcVaultDelete,
   rpcVaultDiscardImport,
   rpcVaultExportCapabilities,
-  rpcVaultExportProbe,
   rpcVaultExportToFolder,
   rpcVaultImport7z,
   rpcVaultImportFilesZip,
@@ -108,9 +107,6 @@ export const nativeVaultService = createLiveVaultService({
   },
   async exportCapabilities() {
     return rpcVaultExportCapabilities();
-  },
-  async probeExportPassword(vaultId, password) {
-    return rpcVaultExportProbe(vaultId, password);
   },
   importZip: (input) =>
     finishImport(input.importPackage?.archivePath ?? "", () => rpcVaultImportZip(input)),

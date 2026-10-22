@@ -49,6 +49,7 @@ import {
   vaultIdsUnhiddenByGroups,
   type GroupedVaultSortMode,
   type PendingCreateGroupEffect,
+  type VaultExportRun,
   type VaultListItem,
   type VaultListSort,
   type VaultListSortDirection,
@@ -499,13 +500,19 @@ export function useVaultListScreen() {
   const exportFolders = useVaultExportFolders();
   const backupService = useBackupService();
   const jobs = useJobService();
-  // Asked only while the Export window shows that vault's running export.
-  const exportProgress = useJobProgress(
-    jobs,
-    modals.exportVaultId !== null && modals.exportVaultId === modals.exportJobVaultId
-      ? modals.exportJobId
-      : null,
-  );
+  // The Export window follows its vault's export while one runs; progress is asked only then.
+  const shownExportJob =
+    modals.exportJob !== null && modals.exportJob.vaultId === modals.exportVaultId
+      ? modals.exportJob
+      : null;
+  const exportProgress = useJobProgress(jobs, shownExportJob?.id ?? null);
+  const exportRun: VaultExportRun | null = shownExportJob
+    ? {
+        format: shownExportJob.format,
+        startedAt: shownExportJob.startedAt,
+        progress: exportProgress,
+      }
+    : null;
   const [backupListRefresh, setBackupListRefresh] = useState(0);
   const backupJob = useVaultBackupJob(backupService, jobs, {
     onSaved: (vaultId) => {
@@ -1380,14 +1387,18 @@ export function useVaultListScreen() {
     exportVault: {
       vault: modals.exportVault,
       open: modals.exportVaultId !== null,
-      submitting: modals.exportSubmitting,
-      startedAt: modals.exportStartedAt,
-      progress: exportProgress,
+      running: exportRun,
+      passwordError:
+        modals.exportPasswordError && modals.exportPasswordError.vaultId === modals.exportVaultId
+          ? modals.exportPasswordError.message
+          : null,
       folders: exportFolders,
       onClose: () => {
         modals.setExportVaultId(null);
+        modals.setExportPasswordError(null);
       },
       onConfirm: lifecycle.handleConfirmExportVault,
+      onPasswordEdited: () => modals.setExportPasswordError(null),
       onTimeout: lifecycle.handleExportTimeout,
     },
     settings: {

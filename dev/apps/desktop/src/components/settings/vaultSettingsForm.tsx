@@ -52,6 +52,10 @@ import {
 export const settingsControlClass =
   "w-full rounded-lg border-0 bg-surface-container-highest px-2.5 py-2 text-sm text-on-surface outline-none ring-0 focus:ring-2 focus:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-60 sm:px-3 sm:py-2.5";
 
+/** Added to a control marked `aria-invalid`, such as a refused password. */
+export const settingsInvalidControlClass =
+  "aria-invalid:ring-2 aria-invalid:ring-on-error-container aria-invalid:focus:ring-on-error-container";
+
 interface SettingsFieldProps {
   label: string;
   hint?: string;

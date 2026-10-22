@@ -12,11 +12,11 @@ import { vaultListItemFixture } from "./fixtures";
 
 describe("vaultExportPending", () => {
   it("asks for the folder the file goes into", () => {
-    expect(vaultExportPending("store_zip", null, false)).toBe("folder");
-    expect(vaultExportPending("store_zip", "  ", false)).toBe("folder");
-    expect(vaultExportPending("store_zip", "Downloads", false)).toBe("folder_not_absolute");
-    expect(vaultExportPending("store_zip", " /media/usb ", false)).toBeNull();
-    expect(vaultExportPending("store_zip", "E:\\Copies", false)).toBeNull();
+    expect(vaultExportPending("store_zip", null, "")).toBe("folder");
+    expect(vaultExportPending("store_zip", "  ", "")).toBe("folder");
+    expect(vaultExportPending("store_zip", "Downloads", "")).toBe("folder_not_absolute");
+    expect(vaultExportPending("store_zip", " /media/usb ", "")).toBeNull();
+    expect(vaultExportPending("store_zip", "E:\\Copies", "")).toBeNull();
   });
 
   it("takes a picked phone folder", () => {
@@ -24,16 +24,16 @@ describe("vaultExportPending", () => {
       vaultExportPending(
         "store_zip",
         "content://com.android.externalstorage.documents/tree/primary%3ADownload",
-        false,
+        "",
       ),
     ).toBeNull();
   });
 
-  it("asks a .7z for its checked password before its folder", () => {
-    expect(vaultExportPending("seven_zip", null, false)).toBe("password");
-    expect(vaultExportPending("seven_zip", "/media/usb", false)).toBe("password");
-    expect(vaultExportPending("seven_zip", null, true)).toBe("folder");
-    expect(vaultExportPending("seven_zip", "/media/usb", true)).toBeNull();
+  it("asks a .7z for its password before its folder", () => {
+    expect(vaultExportPending("seven_zip", null, "")).toBe("password");
+    expect(vaultExportPending("seven_zip", "/media/usb", "   ")).toBe("password");
+    expect(vaultExportPending("seven_zip", null, "vault password")).toBe("folder");
+    expect(vaultExportPending("seven_zip", "/media/usb", " spaced ")).toBeNull();
   });
 });
 

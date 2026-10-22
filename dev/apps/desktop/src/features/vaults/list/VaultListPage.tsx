@@ -161,12 +161,12 @@ export function VaultListPage() {
       <ExportVaultModal
         vault={exportVault.vault}
         open={exportVault.open}
-        submitting={exportVault.submitting}
-        startedAt={exportVault.startedAt}
-        progress={exportVault.progress}
+        running={exportVault.running}
+        passwordError={exportVault.passwordError}
         folders={exportVault.folders}
         onClose={exportVault.onClose}
         onConfirm={exportVault.onConfirm}
+        onPasswordEdited={exportVault.onPasswordEdited}
         onTimeout={exportVault.onTimeout}
       />
       <VaultSettingsModal

@@ -22,9 +22,7 @@ use crate::session::{
     record_unlock_failure, record_unlock_success, with_unlock_lock, with_vault_dir_lock, Job,
     PreparingGuard,
 };
-use crate::store::{
-    is_reserved_logical, open_store, probe_store_password, VaultHeader, VaultIndex,
-};
+use crate::store::{is_reserved_logical, open_store, VaultHeader, VaultIndex};
 use crate::time::utc_filename_stamp;
 
 use super::backup::{log_job_error, vault_id_log_field};
@@ -34,8 +32,7 @@ use super::export_folder::{
 };
 use super::partial::{discard_partial, PartialWork};
 use super::seven_zip_pack::{
-    ensure_seven_zip_export_ram, pack_logical_seven_zip_to_writer, plan_seven_zip_pack,
-    LogicalSevenZipSource, PackLimits,
+    pack_logical_seven_zip_to_writer, plan_seven_zip_pack, LogicalSevenZipSource, PackLimits,
 };
 use super::zip_io::zip_store_with_config_to_path;
 
@@ -248,8 +245,7 @@ fn pack_logical_seven_zip_to_path(
         outer,
         is_reserved_logical,
         PackLimits::current(),
-    );
-    ensure_seven_zip_export_ram(plan.ram)?;
+    )?;
     let file = crate::host_fs::File::create(dest)?;
     let file =
         pack_logical_seven_zip_to_writer(file, source, archive_password, opts, outer, &plan, job)?;
@@ -273,16 +269,6 @@ fn with_logical_store<T>(
             &opened.content_key,
             &opened.index,
         )
-    })
-}
-
-/// Argon2id wrap check for a closed vault. Does not pack a `.7z` or load the index.
-pub fn probe_export_password(root: &VaultRoot, vault_id: &str, password: &[u8]) -> Result<()> {
-    let hold = hold_closed_vault(root, vault_id)?;
-    with_held_vault(&hold, || {
-        unlock_closed_store(&hold.vault_dir, password, || {
-            probe_store_password(&hold.store, password)
-        })
     })
 }
 
@@ -587,20 +573,27 @@ mode = "encrypted_dir"
     }
 
     #[test]
-    fn probe_export_password_accepts_the_vault_password_only() {
-        let (_tmp, root) = vault_root_with(&[]);
-        create_vault(
-            &root,
-            sample_config("notes", "Notes"),
-            b"pass-word-ok",
-            KdfUnlockPreset::M32,
-        )
-        .unwrap();
-        probe_export_password(&root, "notes", b"pass-word-ok").unwrap();
-        let wrong = probe_export_password(&root, "notes", b"not-the-password").unwrap_err();
-        assert!(matches!(wrong, UprivError::WrongPassword));
-        let empty = probe_export_password(&root, "notes", b"").unwrap_err();
-        assert!(matches!(empty, UprivError::WrongPassword));
+    fn wrong_seven_zip_passwords_count_toward_the_unlock_limit() {
+        let (_tmp, root) = notes_root();
+        let notes = root.vault_dir("notes").unwrap();
+        crate::session::clear_throttle_key_for_tests(&notes);
+        let out = tempfile::tempdir().unwrap();
+        let export = |password: &[u8]| {
+            export_logical_seven_zip(&root, "notes", password, None, out.path(), &test_job_id())
+        };
+        for attempt in 0..5 {
+            assert!(
+                matches!(export(b"not-the-password"), Err(UprivError::WrongPassword)),
+                "attempt {attempt}"
+            );
+        }
+        assert!(matches!(
+            export(b"pass-word-ok"),
+            Err(UprivError::VaultUnlockBlocked { .. })
+        ));
+        assert!(entry_names(out.path()).is_empty());
+        crate::session::clear_throttle_key_for_tests(&notes);
+        export(b"pass-word-ok").unwrap();
     }
 
     #[test]

@@ -24,6 +24,7 @@ import {
   hiddenUngroupedRootVaults,
   insertUngroupedVaultAtRoot,
   LOADING_BUDGET_MS,
+  errorOnPasswordField,
   isRpcTimeout,
   newJobId,
   remapVaultIdInGroups,
@@ -60,6 +61,7 @@ import {
   type CreateVaultStepId,
   type PendingCreateGroupEffect,
   type VaultExportRequest,
+  type VaultExportRun,
   type VaultGroup,
   type KdfUnlockPreset,
   type VaultListItem,
@@ -173,7 +175,7 @@ export function useVaultListScreen() {
     setExportVault,
     exportJob,
     setExportJob,
-    setExportSubmitting,
+    setExportPasswordError,
     setBackupsVault,
     settingsGroupOpenRef,
     setGroupFormError,
@@ -193,11 +195,19 @@ export function useVaultListScreen() {
   const exportJobRef = useRef<string | null>(null);
   const jobs = useJobService();
   const exportFolders = useVaultExportFolders();
-  // Asked only while the Export window shows that vault's running export.
-  const exportProgress = useJobProgress(
-    jobs,
-    exportJob && exportVault?.id === exportJob.vaultId ? exportJob.id : null,
-  );
+  /** The vault the Export window shows now, read when an export settles. */
+  const exportWindowVaultIdRef = useRef<string | null>(null);
+  exportWindowVaultIdRef.current = exportVault?.id ?? null;
+  // The Export window follows its vault's export while one runs; progress is asked only then.
+  const shownExportJob = exportJob && exportVault?.id === exportJob.vaultId ? exportJob : null;
+  const exportProgress = useJobProgress(jobs, shownExportJob?.id ?? null);
+  const exportRun: VaultExportRun | null = shownExportJob
+    ? {
+        format: shownExportJob.format,
+        startedAt: shownExportJob.startedAt,
+        progress: exportProgress,
+      }
+    : null;
 
   const sortMode = settings.ui.vault_list_sort;
   const sortDirection = settings.ui.vault_list_sort_direction;
@@ -552,8 +562,8 @@ export function useVaultListScreen() {
       const gen = ++exportBusyGenRef.current;
       const job = newJobId();
       exportJobRef.current = job;
-      setExportJob({ id: job, vaultId: vault.id, startedAt: Date.now() });
-      setExportSubmitting(true);
+      setExportPasswordError(null);
+      setExportJob({ id: job, vaultId: vault.id, format: request.format, startedAt: Date.now() });
       void vaultService
         .exportToFolder(vault, request, destDir, job)
         .then((written) => {
@@ -579,12 +589,18 @@ export function useVaultListScreen() {
               /* The export result is ignored either way. */
             });
           }
-          show(t(mobileErrorI18nKey(error, "vault.export.failed")));
+          const key = mobileErrorI18nKey(error, "vault.export.failed");
+          // A refused password goes on the window's password field; a window
+          // already closed, and every other failure, gets a toast.
+          if (errorOnPasswordField(key) && exportWindowVaultIdRef.current === vault.id) {
+            setExportPasswordError({ vaultId: vault.id, message: t(key) });
+            return;
+          }
+          show(t(key));
         })
         .finally(() => {
           if (gen !== exportBusyGenRef.current) return;
           exportJobRef.current = null;
-          setExportSubmitting(false);
           setExportJob(null);
         });
     },
@@ -593,7 +609,7 @@ export function useVaultListScreen() {
       exportVault,
       jobs,
       setExportJob,
-      setExportSubmitting,
+      setExportPasswordError,
       setExportVault,
       show,
       t,
@@ -1160,10 +1176,9 @@ export function useVaultListScreen() {
         /* The export result is ignored either way. */
       });
     }
-    setExportSubmitting(false);
     setExportJob(null);
     show(t("error.operation_timed_out"));
-  }, [jobs, setExportJob, setExportSubmitting, show, t]);
+  }, [jobs, setExportJob, show, t]);
 
   const handleCreateVault = (result: CreateVaultResult, password: string) => {
     const listed = vaults.some((vault) => vault.id === result.vaultId);
@@ -1331,7 +1346,7 @@ export function useVaultListScreen() {
     handleRowExport,
     handleExportTimeout,
     exportFolders,
-    exportProgress,
+    exportRun,
     rowDensity,
     rowPaddingY,
     rowPaddingX,

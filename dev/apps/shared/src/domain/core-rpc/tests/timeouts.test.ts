@@ -32,7 +32,6 @@ describe("CORE_RPC_TIMEOUT_MS", () => {
     expect(CORE_RPC_TIMEOUT_MS.vault_close).toBe(LOADING_BUDGET_MS.vaultPipeline);
     expect(CORE_RPC_TIMEOUT_MS.vault_rename).toBe(LOADING_BUDGET_MS.vaultRename);
     expect(CORE_RPC_TIMEOUT_MS.vault_export).toBe(LOADING_BUDGET_MS.vaultExport);
-    expect(CORE_RPC_TIMEOUT_MS.vault_export_probe).toBe(LOADING_BUDGET_MS.vaultPipeline);
     expect(CORE_RPC_TIMEOUT_MS.vault_fs_import_os_file).toBe(LOADING_BUDGET_MS.vaultFsImport);
     expect(CORE_RPC_TIMEOUT_MS.vault_fs_import_seal).toBe(LOADING_BUDGET_MS.vaultFsImport);
     expect(CORE_RPC_TIMEOUT_MS.vault_import_probe).toBe(LOADING_BUDGET_MS.default);

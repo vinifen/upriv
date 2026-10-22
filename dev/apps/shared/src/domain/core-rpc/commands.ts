@@ -69,8 +69,6 @@ export const CORE_RPC_COMMANDS = {
   VAULT_DELETE: "vault_delete",
   VAULT_EXPORT: "vault_export",
   VAULT_EXPORT_CAPABILITIES: "vault_export_capabilities",
-  /** Argon2id unlock of a closed vault. Does not pack an export. */
-  VAULT_EXPORT_PROBE: "vault_export_probe",
   VAULT_IMPORT_ZIP: "vault_import_zip",
   VAULT_IMPORT_7Z: "vault_import_7z",
   /** Ordinary `.zip` of documents. Not a Upriv store zip. */

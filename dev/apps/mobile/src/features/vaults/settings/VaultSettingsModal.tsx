@@ -10,7 +10,7 @@ import {
   changePasswordFormIsDirty,
   createVaultErrorI18nKey,
   errorDisplayI18nKey,
-  rewrapErrorOnPasswordField,
+  errorOnPasswordField,
   displayNameErrorI18nKey,
   EMPTY_CHANGE_PASSWORD_FIELDS,
   NO_VAULT_GROUPS,
@@ -743,7 +743,7 @@ export function VaultSettingsModal({
         vaultId: id,
         kind,
         message: t(mobileErrorI18nKey(error)),
-        onPasswordField: rewrapErrorOnPasswordField(key),
+        onPasswordField: errorOnPasswordField(key),
       };
       setRewrapFailure(failure);
       const showing = openRef.current && vaultIdRef.current === id && areaRef.current === kind;

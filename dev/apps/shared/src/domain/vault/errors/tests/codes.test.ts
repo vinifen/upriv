@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  errorOnPasswordField,
   isVaultCredentialChallengeI18nKey,
-  rewrapErrorOnPasswordField,
   isVaultErrorCode,
   requireVaultErrorI18nKey,
   VAULT_ERROR_CODES,
@@ -37,9 +37,9 @@ describe("isVaultCredentialChallengeI18nKey", () => {
     expect(isVaultCredentialChallengeI18nKey(requireVaultErrorI18nKey("vault_not_found"))).toBe(
       false,
     );
-    expect(rewrapErrorOnPasswordField(requireVaultErrorI18nKey("wrong_password"))).toBe(true);
-    expect(rewrapErrorOnPasswordField(requireVaultErrorI18nKey("vault_unlock_blocked"))).toBe(true);
-    expect(rewrapErrorOnPasswordField(requireVaultErrorI18nKey("insufficient_ram"))).toBe(false);
-    expect(rewrapErrorOnPasswordField(requireVaultErrorI18nKey("vault_backup_failed"))).toBe(false);
+    expect(errorOnPasswordField(requireVaultErrorI18nKey("wrong_password"))).toBe(true);
+    expect(errorOnPasswordField(requireVaultErrorI18nKey("vault_unlock_blocked"))).toBe(true);
+    expect(errorOnPasswordField(requireVaultErrorI18nKey("insufficient_ram"))).toBe(false);
+    expect(errorOnPasswordField(requireVaultErrorI18nKey("vault_backup_failed"))).toBe(false);
   });
 });

@@ -722,12 +722,6 @@ export async function rpcVaultDelete(id: string): Promise<void> {
   await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_DELETE, { id });
 }
 
-export async function rpcVaultExportProbe(id: string, password: string): Promise<boolean> {
-  const raw = await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_EXPORT_PROBE, { id, password });
-  const record = requireRecord(raw, "vault_export_probe");
-  return record.ok === true;
-}
-
 export async function rpcVaultExportCapabilities(): Promise<{ sevenZip: boolean }> {
   const raw = await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_EXPORT_CAPABILITIES, {});
   if (typeof raw !== "object" || raw === null) {

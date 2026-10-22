@@ -769,12 +769,6 @@ export async function rpcVaultExportCapabilities(): Promise<{ sevenZip: boolean 
   return { sevenZip: (raw as { sevenZip?: unknown }).sevenZip === true };
 }
 
-export async function rpcVaultExportProbe(id: string, password: string): Promise<boolean> {
-  const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_EXPORT_PROBE, { id, password });
-  const record = requireRecord(raw, "vault_export_probe");
-  return record.ok === true;
-}
-
 /** Write `{display_name}.zip` / `.7z` into the folder `destDir`, as the job `job`. */
 export async function rpcVaultExportToFolder(
   id: string,

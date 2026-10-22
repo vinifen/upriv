@@ -5,12 +5,14 @@
 //! a plaintext staging tree on ordinary disk or tmpfs.
 //!
 //! A worker thread decrypts the files from `store/` in archive order, one
-//! chunk at a time, into a short queue that the encoder reads, so no file sits
-//! whole in RAM. Files are grouped into 7z blocks that close at
-//! [`SEVEN_ZIP_BLOCK_BYTES`] (one block with `solid`). Each block, and the
-//! encrypted header, gets its own random AES salt and IV, so files that start
-//! alike do not encrypt alike. The AES key is derived once per block, which is
-//! why a block does not hold a single small file.
+//! chunk at a time, into a short queue that the encoder reads. A copy-only or
+//! one-worker LZMA2 archive therefore holds a few chunks of plaintext at a
+//! time; several LZMA2 workers queue up to a block, which the RAM check counts.
+//! Files are grouped into 7z blocks that close at [`SEVEN_ZIP_BLOCK_BYTES`]
+//! (one block with `solid`). Each block, and the encrypted header, gets its own
+//! random AES salt and IV, so files that start alike do not encrypt alike. The
+//! AES key is derived once per block, so small files share a block instead of
+//! each paying that derivation.
 
 #[allow(unused_imports)]
 use crate::host_fs::HostFsQuery;
@@ -44,7 +46,7 @@ const ARCHIVE_WRITE_BUFFER: usize = 1024 * 1024;
 const DECRYPT_QUEUE_CHUNKS: usize = 8;
 /// A 7z block closes before the file that would take it past this much
 /// plaintext. A larger file gets a block of its own.
-pub(crate) const SEVEN_ZIP_BLOCK_BYTES: u64 = 64 * 1024 * 1024;
+const SEVEN_ZIP_BLOCK_BYTES: u64 = 64 * 1024 * 1024;
 /// LZMA2 coder state beyond its window and match finder: price tables, the
 /// optimum array, and the range coder buffer.
 const LZMA_CODER_BYTES: u64 = 1024 * 1024;
@@ -94,7 +96,7 @@ pub(crate) fn parse_mem_available_bytes(meminfo: &str) -> Option<u64> {
 }
 
 /// Working space for a `.7z` decoder beyond the compressed archive.
-pub(crate) const SEVEN_ZIP_DECODE_SLACK: u64 = 64 * 1024 * 1024;
+const SEVEN_ZIP_DECODE_SLACK: u64 = 64 * 1024 * 1024;
 
 /// Cores LZMA2 may use. Extra threads each keep their own encoder or decoder,
 /// so the count stays inside what the RAM check can still refuse.
@@ -130,26 +132,22 @@ pub(crate) fn threads_that_fit(
     fit
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct SevenZipDecodeBudget {
-    pub ram: u64,
-    pub threads: u32,
+/// Decoder threads for an import, from one reading of free RAM: as many as
+/// fit at [`SEVEN_ZIP_DECODE_SLACK`] each. Fails closed when not even one
+/// fits, or the system does not report free RAM. The archive length is not
+/// part of this; a caller that loads the archive into a `Vec` checks it on
+/// its own.
+pub(crate) fn seven_zip_decode_threads() -> Result<u32> {
+    decode_threads_in(seven_zip_cpu_threads(), mem_available_bytes())
 }
 
-/// Decoder threads that fit in currently free RAM, and the bytes those
-/// threads need. The archive length is not part of this. A caller that loads
-/// the archive into a `Vec` checks that length on its own.
-pub(crate) fn seven_zip_decode_budget() -> SevenZipDecodeBudget {
-    let threads = threads_that_fit(
-        seven_zip_cpu_threads(),
-        mem_available_bytes(),
-        SEVEN_ZIP_DECODE_SLACK,
-        0,
-    );
-    SevenZipDecodeBudget {
-        ram: SEVEN_ZIP_DECODE_SLACK.saturating_mul(u64::from(threads)),
-        threads,
-    }
+fn decode_threads_in(cores: u32, available: Option<u64>) -> Result<u32> {
+    let threads = threads_that_fit(cores, available, SEVEN_ZIP_DECODE_SLACK, 0);
+    ensure_available_ram(
+        available,
+        SEVEN_ZIP_DECODE_SLACK.saturating_mul(u64::from(threads)),
+    )?;
+    Ok(threads)
 }
 
 fn mem_available_bytes() -> Option<u64> {
@@ -405,8 +403,8 @@ impl PackLimits {
     }
 }
 
-/// One export: its members, its 7z blocks, the LZMA2 workers, and the RAM
-/// they take. Planned from the index before anything is decrypted.
+/// One export: its members, its 7z blocks, and the LZMA2 workers. Planned
+/// from the index before anything is decrypted.
 pub(crate) struct SevenZipPackPlan<'a> {
     dirs: Vec<&'a VaultNode>,
     files: Vec<&'a VaultNode>,
@@ -415,19 +413,35 @@ pub(crate) struct SevenZipPackPlan<'a> {
     /// Logical bytes of every file packed: the job's total.
     bytes: u64,
     threads: u32,
-    pub(crate) ram: u64,
 }
 
 /// Plan the `.7z` of `index`, leaving out every path `skip` names. LZMA2 gets
 /// as many workers as fit in free RAM, and one when no more fit; a copy-only
-/// archive uses one.
+/// archive uses one. The workers and the RAM check read the same `limits`, so
+/// a pack refused here could not have run on fewer workers either. Fails with
+/// [`UprivError::InsufficientRamExport`] when even that does not fit, or the
+/// system does not report free RAM.
 pub(crate) fn plan_seven_zip_pack<'a>(
     index: &'a VaultIndex,
     opts: &VaultSevenZipSection,
     outer_folder: &str,
     skip: impl Fn(&str) -> bool,
     limits: PackLimits,
-) -> SevenZipPackPlan<'a> {
+) -> Result<SevenZipPackPlan<'a>> {
+    let (plan, ram) = layout_seven_zip_pack(index, opts, outer_folder, skip, limits);
+    ensure_available_ram(limits.available, ram)?;
+    Ok(plan)
+}
+
+/// The plan of [`plan_seven_zip_pack`], and the RAM it takes, before that
+/// RAM is checked.
+fn layout_seven_zip_pack<'a>(
+    index: &'a VaultIndex,
+    opts: &VaultSevenZipSection,
+    outer_folder: &str,
+    skip: impl Fn(&str) -> bool,
+    limits: PackLimits,
+) -> (SevenZipPackPlan<'a>, u64) {
     let dirs = export_dir_nodes(index, &skip);
     let files = export_file_nodes(index, &skip);
     let bytes = files
@@ -455,24 +469,25 @@ pub(crate) fn plan_seven_zip_pack<'a>(
             (blocks, ram, threads) = (wider, needed, more);
         }
     }
-    SevenZipPackPlan {
+    let plan = SevenZipPackPlan {
         dirs,
         files,
         blocks,
         bytes,
         threads,
-        ram,
-    }
+    };
+    (plan, ram)
 }
 
-pub(crate) fn ensure_available_ram(available: Option<u64>, needed: u64) -> Result<()> {
+fn ensure_available_ram(available: Option<u64>, needed: u64) -> Result<()> {
     match available {
         Some(available) if available >= needed => Ok(()),
         _ => Err(UprivError::InsufficientRamExport),
     }
 }
 
-pub(crate) fn ensure_seven_zip_export_ram(needed: u64) -> Result<()> {
+/// Fails closed unless free RAM holds `needed` bytes now.
+pub(crate) fn ensure_free_ram(needed: u64) -> Result<()> {
     ensure_available_ram(mem_available_bytes(), needed)
 }
 
@@ -711,7 +726,9 @@ fn push_file_blocks<W: Write + Seek>(
     let (decrypted, queue) = sync_channel(DECRYPT_QUEUE_CHUNKS);
     let files = plan.files.as_slice();
     std::thread::scope(|scope| {
-        let worker = scope.spawn(move || decrypt_in_order(source, files, decrypted));
+        let worker = std::thread::Builder::new()
+            .name("upriv-7z-decrypt".into())
+            .spawn_scoped(scope, move || decrypt_in_order(source, files, decrypted))?;
         let pushed = push_blocks(writer, &queue, opts, password, outer_folder, plan, job);
         // Without its reader the worker stops at its next chunk.
         drop(queue);
@@ -800,6 +817,11 @@ mod tests {
         }
     }
 
+    /// A device with `cores` and more free RAM than any plan asks for.
+    fn roomy(cores: u32) -> PackLimits {
+        limits(cores, Some(u64::MAX))
+    }
+
     /// An index of files with these sizes. The chunk lists stay empty: a plan
     /// reads only paths and sizes.
     fn index_of(sizes: &[u64]) -> VaultIndex {
@@ -821,7 +843,12 @@ mod tests {
         opts: &VaultSevenZipSection,
         limits: PackLimits,
     ) -> SevenZipPackPlan<'a> {
-        plan_seven_zip_pack(index, opts, "Notes", is_reserved_logical, limits)
+        plan_seven_zip_pack(index, opts, "Notes", is_reserved_logical, limits).unwrap()
+    }
+
+    /// RAM the plan for `limits` asks the device for.
+    fn ram(index: &VaultIndex, opts: &VaultSevenZipSection, limits: PackLimits) -> u64 {
+        layout_seven_zip_pack(index, opts, "Notes", is_reserved_logical, limits).1
     }
 
     fn vault_config(id: &str) -> crate::config::VaultConfig {
@@ -910,7 +937,7 @@ mod tests {
     fn copy_only_pack_stays_on_one_thread() {
         let index = index_of(&[1000, 800]);
         let copy = VaultSevenZipSection::default();
-        assert_eq!(plan(&index, &copy, limits(8, Some(u64::MAX))).threads, 1);
+        assert_eq!(plan(&index, &copy, roomy(8)).threads, 1);
     }
 
     #[test]
@@ -921,9 +948,8 @@ mod tests {
             VaultSevenZipSection::default(),
             opts(VaultArchiveMode::CompressEncrypt, 5),
         ] {
-            let one = limits(1, Some(u64::MAX));
-            let small_ram = plan(&small, &opts, one).ram;
-            let large_ram = plan(&large, &opts, one).ram;
+            let small_ram = ram(&small, &opts, roomy(1));
+            let large_ram = ram(&large, &opts, roomy(1));
             // Only the two extra members of the header differ.
             assert!(large_ram - small_ram < MIB, "{opts:?}");
         }
@@ -933,11 +959,9 @@ mod tests {
     fn several_lzma_workers_count_the_largest_block_twice() {
         let index = index_of(&[512 * MIB]);
         let lzma = opts(VaultArchiveMode::CompressEncrypt, 5);
-        let one = plan(&index, &lzma, limits(1, Some(u64::MAX)));
-        let four = plan(&index, &lzma, limits(4, Some(u64::MAX)));
-        assert_eq!(four.threads, 4);
+        assert_eq!(plan(&index, &lzma, roomy(4)).threads, 4);
         assert_eq!(
-            four.ram - one.ram,
+            ram(&index, &lzma, roomy(4)) - ram(&index, &lzma, roomy(1)),
             3 * lzma_encoder_bytes(5) + 2 * 512 * MIB
         );
     }
@@ -946,22 +970,37 @@ mod tests {
     fn lzma_workers_grow_only_while_the_ram_fits() {
         let index = index_of(&[16 * MIB]);
         let lzma = opts(VaultArchiveMode::CompressEncrypt, 5);
-        let fits_three = plan(&index, &lzma, limits(3, Some(u64::MAX))).ram;
+        let fits_three = ram(&index, &lzma, roomy(3));
         assert_eq!(plan(&index, &lzma, limits(8, Some(fits_three))).threads, 3);
         assert_eq!(
             plan(&index, &lzma, limits(8, Some(fits_three - 1))).threads,
             2
         );
-        assert_eq!(plan(&index, &lzma, limits(8, Some(u64::MAX))).threads, 8);
-        // Unknown RAM keeps one worker; the export's RAM check then refuses.
-        assert_eq!(plan(&index, &lzma, limits(8, None)).threads, 1);
+        assert_eq!(plan(&index, &lzma, roomy(8)).threads, 8);
+    }
+
+    #[test]
+    fn a_pack_that_does_not_fit_even_one_worker_fails_closed() {
+        let index = index_of(&[16 * MIB]);
+        for opts in [
+            VaultSevenZipSection::default(),
+            opts(VaultArchiveMode::CompressEncrypt, 5),
+        ] {
+            let one = ram(&index, &opts, roomy(1));
+            for limits in [limits(8, Some(one - 1)), limits(8, None)] {
+                assert!(matches!(
+                    plan_seven_zip_pack(&index, &opts, "Notes", is_reserved_logical, limits),
+                    Err(UprivError::InsufficientRamExport)
+                ));
+            }
+        }
     }
 
     #[test]
     fn a_block_closes_before_the_file_that_would_pass_the_limit() {
         let index = index_of(&[40 * MIB, 20 * MIB, 10 * MIB, 200 * MIB, 0, MIB]);
         let copy = VaultSevenZipSection::default();
-        let planned = plan(&index, &copy, limits(1, Some(u64::MAX)));
+        let planned = plan(&index, &copy, roomy(1));
         assert_eq!(planned.blocks, vec![0..2, 2..3, 3..4, 4..6]);
         assert_eq!(planned.bytes, 271 * MIB);
     }
@@ -973,17 +1012,14 @@ mod tests {
             solid: true,
             ..VaultSevenZipSection::default()
         };
-        assert_eq!(
-            plan(&index, &solid, limits(1, Some(u64::MAX))).blocks,
-            vec![0..3]
-        );
+        assert_eq!(plan(&index, &solid, roomy(1)).blocks, vec![0..3]);
     }
 
     #[test]
     fn several_lzma_workers_get_a_chunk_each_per_block() {
         let index = index_of(&[64 * MIB; 8]);
         let lzma = opts(VaultArchiveMode::CompressEncrypt, 9);
-        let planned = plan(&index, &lzma, limits(8, Some(u64::MAX)));
+        let planned = plan(&index, &lzma, roomy(8));
         assert_eq!(planned.threads, 8);
         // Eight 64 MiB chunks: one per worker.
         assert_eq!(planned.blocks, vec![0..8]);
@@ -1007,11 +1043,16 @@ mod tests {
     }
 
     #[test]
-    fn import_decoder_ram_does_not_grow_with_the_archive() {
-        let needed = seven_zip_decode_budget().ram;
-        assert_eq!(needed % SEVEN_ZIP_DECODE_SLACK, 0);
-        assert!(needed >= SEVEN_ZIP_DECODE_SLACK);
-        assert!(needed / SEVEN_ZIP_DECODE_SLACK <= u64::from(seven_zip_cpu_threads()));
+    fn import_decoder_threads_fit_free_ram_or_fail_closed() {
+        let slack = SEVEN_ZIP_DECODE_SLACK;
+        assert_eq!(decode_threads_in(4, Some(slack * 3)).unwrap(), 3);
+        assert_eq!(decode_threads_in(4, Some(slack * 9)).unwrap(), 4);
+        for available in [Some(slack / 2), None] {
+            assert!(matches!(
+                decode_threads_in(4, available),
+                Err(UprivError::InsufficientRamExport)
+            ));
+        }
     }
 
     #[test]
@@ -1083,7 +1124,7 @@ mod tests {
             writes: 0,
         };
         let copy = VaultSevenZipSection::default();
-        let packed = pack_into(&root, dest, &copy, limits(1, None), &Job::untracked()).unwrap();
+        let packed = pack_into(&root, dest, &copy, roomy(1), &Job::untracked()).unwrap();
         assert!(packed.inner.get_ref().len() as u64 > 3 * MIB);
         // The AES coder emits 16 bytes per write; the buffer turns those into a few.
         assert!(packed.writes < 32, "{} writes", packed.writes);
@@ -1096,7 +1137,7 @@ mod tests {
         let copy = VaultSevenZipSection::default();
         let one_file_per_block = PackLimits {
             block_bytes: 4096,
-            ..limits(1, None)
+            ..roomy(1)
         };
         let packed = pack_into(
             &root,
@@ -1152,7 +1193,7 @@ mod tests {
         for (cores, blocks) in [(1, 2), (2, 1)] {
             let small_blocks = PackLimits {
                 block_bytes: 1000,
-                ..limits(cores, Some(u64::MAX))
+                ..roomy(cores)
             };
             let store = root
                 .vault_dir("notes")
@@ -1216,7 +1257,7 @@ mod tests {
             &root,
             Cursor::new(Vec::new()),
             &copy,
-            limits(1, None),
+            roomy(1),
             &Job::untracked(),
         )
         .unwrap_err();
@@ -1233,7 +1274,7 @@ mod tests {
         let id = test_job_id();
         let job = Job::start(&id).unwrap();
         let copy = VaultSevenZipSection::default();
-        pack_into(&root, Cursor::new(Vec::new()), &copy, limits(1, None), &job).unwrap();
+        pack_into(&root, Cursor::new(Vec::new()), &copy, roomy(1), &job).unwrap();
         let status = job_status(&id).unwrap();
         assert_eq!(status.bytes_total, 600_004);
         assert_eq!(status.bytes_done, 600_004);
@@ -1247,7 +1288,7 @@ mod tests {
         let job = Job::start(&id).unwrap();
         cancel_job(&id);
         let copy = VaultSevenZipSection::default();
-        let packed = pack_into(&root, Cursor::new(Vec::new()), &copy, limits(1, None), &job);
+        let packed = pack_into(&root, Cursor::new(Vec::new()), &copy, roomy(1), &job);
         assert!(matches!(job.settle(packed), Err(UprivError::JobCancelled)));
     }
 }

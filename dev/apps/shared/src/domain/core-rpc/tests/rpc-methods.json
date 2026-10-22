@@ -44,7 +44,6 @@
     "vault_delete",
     "vault_export",
     "vault_export_capabilities",
-    "vault_export_probe",
     "vault_import_zip",
     "vault_import_7z",
     "vault_import_files_zip",

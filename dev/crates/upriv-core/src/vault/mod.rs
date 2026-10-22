@@ -46,9 +46,7 @@ pub use create::{create_vault, create_vault_with_welcome};
 pub use data_folder_export::{export_data_folder, DataFolderExport};
 pub use delete::delete_vault;
 pub use embedded_settings::{parse_embedded_settings, EmbeddedVaultSettings};
-pub use export::{
-    export_logical_seven_zip, export_store_zip, probe_export_password, VaultExportFile,
-};
+pub use export::{export_logical_seven_zip, export_store_zip, VaultExportFile};
 pub use files_zip::{
     classify_import_zip_bytes, classify_import_zip_path, import_logical_files_zip,
     import_logical_files_zip_path, ZipImportClass,

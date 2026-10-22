@@ -61,7 +61,6 @@ vi.mock("@/lib/rpc", () => ({
   rpcVaultDelete: vi.fn(),
   rpcVaultExportToFolder: vi.fn(async () => ({ path: "/upriv-saf-export/Notes.zip", size: 1 })),
   rpcVaultExportCapabilities: vi.fn(async () => ({ sevenZip: true })),
-  rpcVaultExportProbe: vi.fn(async () => true),
   rpcVaultImportZip: vi.fn(),
   rpcVaultImport7z: vi.fn(),
   rpcVaultImportProbe: vi.fn(async () => ({ ok: true, kind: "seven_zip" })),

@@ -4,6 +4,7 @@ import {
   applyPlainPlaceChoice,
   canRunIdleAutoClose,
   currentWorkspaceSystem,
+  errorOnPasswordField,
   idleWarningText,
   type IdleAutoCloseWarning,
   type IdleLockResult,
@@ -168,12 +169,16 @@ export function useVaultLifecycleActions({
     setRecoveryVaultId,
     recoveryVaultId,
     setRecoverySubmitting,
+    exportVaultId,
     setExportVaultId,
     exportVault,
-    setExportSubmitting,
     exportJobVaultId,
     setExportJob,
+    setExportPasswordError,
   } = modals;
+  /** The vault the Export window shows now, read when an export settles. */
+  const exportWindowVaultIdRef = useRef(exportVaultId);
+  exportWindowVaultIdRef.current = exportVaultId;
   const lifecycleRequestRef = useRef(lifecycleRequest);
   lifecycleRequestRef.current = lifecycleRequest;
   const plainCloseRef = useRef<PlainCloseSummary | null>(null);
@@ -973,8 +978,8 @@ export function useVaultLifecycleActions({
       const gen = ++exportBusyGenRef.current;
       const job = newJobId();
       exportJobRef.current = job;
-      setExportJob({ id: job, vaultId: vault.id, startedAt: Date.now() });
-      setExportSubmitting(true);
+      setExportPasswordError(null);
+      setExportJob({ id: job, vaultId: vault.id, format: request.format, startedAt: Date.now() });
       void vaultService
         .exportToFolder(vault, request, destDir, job)
         .then((written) => {
@@ -1000,12 +1005,22 @@ export function useVaultLifecycleActions({
               /* The export result is ignored either way. */
             });
           }
-          showError(error, "vault.export.failed");
+          const key = desktopErrorI18nKey(error, "vault.export.failed");
+          if (!errorOnPasswordField(key)) {
+            showError(error, "vault.export.failed");
+            return;
+          }
+          // The window marks its password field; a window already closed gets a toast.
+          const message = t(key);
+          if (exportWindowVaultIdRef.current === vault.id) {
+            setExportPasswordError({ vaultId: vault.id, message });
+          } else {
+            showToast(message);
+          }
         })
         .finally(() => {
           if (gen !== exportBusyGenRef.current) return;
           exportJobRef.current = null;
-          setExportSubmitting(false);
           setExportJob(null);
         });
     },
@@ -1014,7 +1029,7 @@ export function useVaultLifecycleActions({
       exportVault,
       jobs,
       setExportJob,
-      setExportSubmitting,
+      setExportPasswordError,
       setExportVaultId,
       showError,
       showToast,
@@ -1032,10 +1047,9 @@ export function useVaultLifecycleActions({
         /* The export result is ignored either way. */
       });
     }
-    setExportSubmitting(false);
     setExportJob(null);
     showToast(t("error.operation_timed_out"));
-  }, [jobs, setExportJob, setExportSubmitting, showToast, t]);
+  }, [jobs, setExportJob, showToast, t]);
 
   const showIdleNotice = useCallback(
     (message: string) => {

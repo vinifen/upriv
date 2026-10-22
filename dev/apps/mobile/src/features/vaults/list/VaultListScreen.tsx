@@ -241,8 +241,8 @@ export function VaultListScreen() {
     setNoteVaultId,
     exportVault,
     setExportVault,
-    exportSubmitting,
-    exportJob,
+    exportPasswordError,
+    setExportPasswordError,
     backupsVault,
     backupSaving,
     backupSaveStartedAt,
@@ -308,7 +308,7 @@ export function VaultListScreen() {
     handleRowExport,
     handleExportTimeout,
     exportFolders,
-    exportProgress,
+    exportRun,
     rowDensity,
     rowPaddingY,
     rowPaddingX,
@@ -1367,14 +1367,19 @@ export function VaultListScreen() {
       <ExportVaultModal
         vault={exportVault}
         open={exportVault !== null}
-        submitting={exportSubmitting}
-        startedAt={exportJob?.startedAt ?? null}
-        progress={exportProgress}
+        running={exportRun}
+        passwordError={
+          exportPasswordError && exportPasswordError.vaultId === exportVault?.id
+            ? exportPasswordError.message
+            : null
+        }
         folders={exportFolders}
         onClose={() => {
           setExportVault(null);
+          setExportPasswordError(null);
         }}
         onConfirm={handleConfirmExportVault}
+        onPasswordEdited={() => setExportPasswordError(null)}
         onTimeout={handleExportTimeout}
         onSettingsLoadError={(error) => {
           show(t(mobileErrorI18nKey(error, "error.unexpected")));

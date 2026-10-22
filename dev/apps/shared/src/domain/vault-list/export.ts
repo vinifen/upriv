@@ -3,7 +3,8 @@ import type { VaultPipelineListStatus, VaultRow } from "../vault/types";
 import { fileNameOfPath } from "../format/fileName";
 import { normalizeStoredName } from "../format/storedName";
 import { isWindowsReservedName } from "../format/windowsReserved";
-import type { JobProgressCopy } from "../jobs/progress";
+import type { JobProgress, JobProgressCopy } from "../jobs/progress";
+import { isLifecyclePasswordPresent } from "../vault-create/validate";
 import { exportFolderIssue, type ExportFolderIssue } from "../workspace";
 
 export type VaultExportFormat = "store_zip" | "seven_zip";
@@ -30,17 +31,26 @@ export interface VaultExportRequest {
 export type VaultExportPending = "password" | ExportFolderIssue;
 
 /**
- * What the chosen format still needs before Export can run: a checked
- * password for `.7z`, then the folder the file goes into. While it is not
- * `null` that option carries the attention border and Export stays off.
+ * What the chosen format still needs before Export can run: the vault
+ * password for `.7z` (checked by the export itself), then the folder the file
+ * goes into. While it is not `null` that option carries the attention border
+ * and Export stays off.
  */
 export function vaultExportPending(
   format: VaultExportFormat,
   folder: string | null,
-  sevenZipPasswordOk: boolean,
+  sevenZipPassword: string,
 ): VaultExportPending | null {
-  if (format === "seven_zip" && !sevenZipPasswordOk) return "password";
+  if (format === "seven_zip" && !isLifecyclePasswordPresent(sevenZipPassword)) return "password";
   return exportFolderIssue(folder);
+}
+
+/** A vault export in flight, as its Export window shows it. */
+export interface VaultExportRun {
+  format: VaultExportFormat;
+  startedAt: number;
+  /** `null` until core first answers `job_status`. */
+  progress: JobProgress | null;
 }
 
 // eslint-disable-next-line no-control-regex

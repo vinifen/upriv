@@ -14,10 +14,10 @@ use upriv_core::{
     import_logical_files_zip_path, import_logical_os_path, import_logical_seven_zip,
     import_logical_seven_zip_path, import_store_from_archive_path, import_store_zip,
     ingest_import_directory, list_backups, parse_backup_import_path, parse_embedded_settings,
-    probe_export_password, probe_logical_seven_zip, probe_logical_seven_zip_path, probe_store_zip,
-    promote_backup_save, read_backup_zip_bytes, read_import_archive_bytes,
-    read_import_zip_settings, read_zip_config_toml, save_backup_now, seven_zip_export_available,
-    vault_list_item, BackupEntry, KdfUnlockPreset, PartialWork, VaultConfig, ZipImportClass,
+    probe_logical_seven_zip, probe_logical_seven_zip_path, probe_store_zip, promote_backup_save,
+    read_backup_zip_bytes, read_import_archive_bytes, read_import_zip_settings,
+    read_zip_config_toml, save_backup_now, seven_zip_export_available, vault_list_item,
+    BackupEntry, KdfUnlockPreset, PartialWork, VaultConfig, ZipImportClass,
 };
 
 use super::secret::{secret_bytes, SecretString};
@@ -140,13 +140,6 @@ struct BackupStampParams {
     stamps: Vec<String>,
     #[serde(default)]
     dest_path: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct VaultExportProbeParams {
-    id: String,
-    password: SecretString,
 }
 
 #[derive(Debug, Deserialize)]
@@ -826,23 +819,6 @@ pub(super) fn vault_export(params: Value) -> RpcResponse {
             Ok(path) => ok(json!({ "path": path, "size": file.size })),
             Err(response) => response,
         },
-        Err(error) => map_core_err(error),
-    }
-}
-
-/// Argon2id unlock only. A wrong password returns `{ ok: false }` and does not pack the `.7z`.
-pub(super) fn vault_export_probe(params: Value) -> RpcResponse {
-    let parsed: VaultExportProbeParams = match serde_json::from_value(params) {
-        Ok(v) => v,
-        Err(error) => return err("invalid_request", error.to_string()),
-    };
-    let root = match require_vault_root() {
-        Ok(root) => root,
-        Err(response) => return response,
-    };
-    match probe_export_password(&root, parsed.id.trim(), parsed.password.as_bytes()) {
-        Ok(()) => ok(json!({ "ok": true })),
-        Err(upriv_core::UprivError::WrongPassword) => ok(json!({ "ok": false })),
         Err(error) => map_core_err(error),
     }
 }

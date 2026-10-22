@@ -143,15 +143,6 @@ pub fn open_store(store_dir: impl AsRef<Path>, password: &[u8]) -> Result<Opened
     })
 }
 
-/// Argon2id wrap check only — does not load the index or keep keys.
-pub fn probe_store_password(store_dir: impl AsRef<Path>, password: &[u8]) -> Result<()> {
-    if password.is_empty() {
-        return Err(UprivError::WrongPassword);
-    }
-    drop(unlock_header(store_dir, password)?);
-    Ok(())
-}
-
 pub fn probe_unlock_preset(store_dir: impl AsRef<Path>) -> Option<KdfUnlockPreset> {
     load_header(store_dir).ok().and_then(|h| h.unlock_preset())
 }

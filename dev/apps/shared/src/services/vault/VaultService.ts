@@ -96,10 +96,4 @@ export interface VaultService {
 
   /** Whether portable `.7z` export can run in RAM (always on when core is linked). Zip of `store/` is always available. */
   exportCapabilities(): Promise<{ sevenZip: boolean }>;
-
-  /**
-   * Argon2id check that `password` unlocks this closed vault.
-   * Resolves `false` for a wrong password. Does not pack an export.
-   */
-  probeExportPassword(vaultId: string, password: string): Promise<boolean>;
 }

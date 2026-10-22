@@ -60,8 +60,11 @@ export function isVaultCredentialChallengeI18nKey(key: I18nKey): boolean {
   return CREDENTIAL_CHALLENGE_KEYS.has(key);
 }
 
-/** Wrong current password (or the unlock limit) — mark that field, not the form. */
-export function rewrapErrorOnPasswordField(key: I18nKey | null): boolean {
+/**
+ * A refused vault password (wrong, or the unlock limit): mark the password
+ * field, not the form. Password and unlock-RAM change, and a `.7z` export.
+ */
+export function errorOnPasswordField(key: I18nKey | null): boolean {
   return (
     key === VAULT_ERROR_I18N_KEYS.wrong_password ||
     key === VAULT_ERROR_I18N_KEYS.vault_unlock_blocked

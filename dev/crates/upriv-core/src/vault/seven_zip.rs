@@ -26,10 +26,7 @@ use super::fs::{
     fs_ensure_folder_path_staged, fs_seal_staged_imports, fs_seal_staged_wave, fs_write_staged,
 };
 use super::open_close::{abandon_failed_import, close_vault, open_vault_for_ingest};
-use super::seven_zip_pack::{
-    ensure_seven_zip_export_ram, seven_zip_decode_budget, sevenz_member_name_unsafe,
-    sevenz_password,
-};
+use super::seven_zip_pack::{seven_zip_decode_threads, sevenz_member_name_unsafe, sevenz_password};
 use super::welcome::{seal_welcome_if_absent, VaultWelcome};
 
 const ARCHIVE_READ_BUFFER: usize = 1024 * 1024;
@@ -56,11 +53,10 @@ fn open_prepared_reader<R: Read + Seek>(
     archive_password: &[u8],
     archive_len: u64,
 ) -> Result<ArchiveReader<R>> {
-    let decode = seven_zip_decode_budget();
-    ensure_seven_zip_export_ram(decode.ram)?;
+    let threads = seven_zip_decode_threads()?;
     let password = sevenz_password(archive_password)?;
     let mut reader = ArchiveReader::new(reader, password).map_err(map_sevenz_read_error)?;
-    reader.set_thread_count(decode.threads);
+    reader.set_thread_count(threads);
     let budget = plaintext_budget(archive_len);
     if reader
         .archive()

@@ -1,6 +1,8 @@
 import {
   CLOSING_PIPELINE_STEP_COUNT,
   OPENING_PIPELINE_STEP_COUNT,
+  RpcError,
+  VAULT_ERROR_CODES,
   VAULT_PIPELINE_ERROR_CODES,
   VaultPipelineError,
   createDefaultAppSettings,
@@ -330,6 +332,13 @@ export function createMobileMockServices(): AppServices {
       },
       // A mock pick is not a real folder: report the file core would write there.
       async exportToFolder(vault, request, destDir) {
+        // A `.7z` unlocks the vault with its password, as core does.
+        if (
+          request.format === "seven_zip" &&
+          !isMockLifecyclePasswordValid(request.password ?? "")
+        ) {
+          throw new RpcError(VAULT_ERROR_CODES.WRONG_PASSWORD, "mock: wrong vault password");
+        }
         const filename = vaultExportFilename(vault.displayName, request.format);
         return {
           path: `${destDir.replace(/\/+$/, "")}/${filename}`,
@@ -338,9 +347,6 @@ export function createMobileMockServices(): AppServices {
       },
       async exportCapabilities() {
         return { sevenZip: true };
-      },
-      async probeExportPassword(_vaultId, password) {
-        return isMockLifecyclePasswordValid(password);
       },
     },
 

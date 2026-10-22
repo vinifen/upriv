@@ -34,6 +34,7 @@ export type {
   VaultExportFormat,
   VaultExportPipelineStatus,
   VaultExportPending,
+  VaultExportRun,
   ExportFilenameSanitizeKind,
 } from "./export";
 export {

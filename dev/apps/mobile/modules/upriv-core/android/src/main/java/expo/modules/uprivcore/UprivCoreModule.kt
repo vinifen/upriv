@@ -306,7 +306,7 @@ private object CoreLanes {
   }
 
   fun dispatcher(method: String): CoroutineDispatcher = when (method) {
-    "vault_open", "vault_create", "vault_export_probe", "vault_ingest_open" -> argon2
+    "vault_open", "vault_create", "vault_ingest_open" -> argon2
     "vault_close", "vault_delete", "backup_get", "vault_discard_import",
     "vault_plain_confirm", "vault_plain_remove", "vault_plain_sync",
     "vault_plain_deletions" -> lifecycle

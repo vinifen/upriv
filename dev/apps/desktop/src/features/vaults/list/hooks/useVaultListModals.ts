@@ -7,7 +7,11 @@ import type {
   VaultSettingsAreaId,
 } from "@upriv/shared";
 import type { VaultLifecycleRequest } from "@/features/vaults/lifecycle";
-import type { VaultExportJob, VaultListModalsHandle } from "../vaultListModalsTypes";
+import type {
+  VaultExportJob,
+  VaultExportPasswordError,
+  VaultListModalsHandle,
+} from "../vaultListModalsTypes";
 
 export function useVaultListModals(
   vaults: VaultListItem[],
@@ -35,8 +39,10 @@ export function useVaultListModals(
   const [recoveryVaultId, setRecoveryVaultId] = useState<string | null>(null);
   const [recoverySubmitting, setRecoverySubmitting] = useState(false);
   const [exportVaultId, setExportVaultId] = useState<string | null>(null);
-  const [exportSubmitting, setExportSubmitting] = useState(false);
   const [exportJob, setExportJob] = useState<VaultExportJob | null>(null);
+  const [exportPasswordError, setExportPasswordError] = useState<VaultExportPasswordError | null>(
+    null,
+  );
 
   const noteVault = useMemo(
     () => vaults.find((vault) => vault.id === noteVaultId) ?? null,
@@ -174,11 +180,10 @@ export function useVaultListModals(
     exportVaultId,
     setExportVaultId,
     exportVault,
-    exportSubmitting,
-    setExportSubmitting,
+    exportJob,
     exportJobVaultId: exportJob?.vaultId ?? null,
-    exportJobId: exportJob?.id ?? null,
-    exportStartedAt: exportJob?.startedAt ?? null,
     setExportJob,
+    exportPasswordError,
+    setExportPasswordError,
   };
 }

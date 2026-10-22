@@ -6,10 +6,6 @@ export {
 } from "./useCreateVaultWizard";
 export { useLoadingBudget, type UseLoadingBudgetOptions } from "./useLoadingBudget";
 export { useIntegerDraft, type UseIntegerDraftOptions } from "./useIntegerDraft";
-export {
-  useExportPasswordCheck,
-  type UseExportPasswordCheckOptions,
-} from "./useExportPasswordCheck";
 export { TOAST_DEFAULT_MS, useToast, type ToastState } from "./useToast";
 export {
   useDataFolderExportJob,

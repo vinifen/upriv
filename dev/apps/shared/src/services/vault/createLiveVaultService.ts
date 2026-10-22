@@ -28,7 +28,6 @@ export interface LiveVaultRpc {
     job: string,
   ) => Promise<VaultPathWriteResult>;
   exportCapabilities?: () => Promise<{ sevenZip: boolean }>;
-  probeExportPassword?: (vaultId: string, password: string) => Promise<boolean>;
   importZip?: (input: CreateVaultInput) => Promise<VaultListItem>;
   import7z?: (input: CreateVaultInput) => Promise<VaultListItem>;
   importFilesZip?: (input: CreateVaultInput) => Promise<VaultListItem>;
@@ -115,13 +114,6 @@ export function createLiveVaultService(rpc: LiveVaultRpc): VaultService {
         return { sevenZip: false };
       }
       return rpc.exportCapabilities();
-    },
-
-    async probeExportPassword(vaultId, password) {
-      if (!rpc.probeExportPassword) {
-        notImplemented("Vault export password check");
-      }
-      return rpc.probeExportPassword(vaultId, password);
     },
   };
 }

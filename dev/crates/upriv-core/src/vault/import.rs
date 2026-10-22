@@ -18,7 +18,7 @@ use super::backup::{backup_locator_from_leaf, backup_zip_file, copy_ciphertext_t
 use super::create::claim_new_vault_dir;
 use super::embedded_settings::{parse_embedded_settings, EmbeddedVaultSettings};
 use super::persistence::{save_vault_persistence, VaultPersistence};
-use super::seven_zip_pack::{ensure_seven_zip_export_ram, try_vec_with_capacity};
+use super::seven_zip_pack::{ensure_free_ram, try_vec_with_capacity};
 use super::zip_io::{read_zip_config_toml, unzip_store_bytes, unzip_store_path};
 
 pub(crate) fn map_archive_open_error(path: &Path, error: std::io::Error) -> UprivError {
@@ -225,8 +225,8 @@ pub fn read_import_archive_bytes(path: &Path) -> Result<Vec<u8>> {
     };
     let len = file.metadata()?.len();
     // This path copies the archive into a buffer. The decoder's own check is
-    // the slack in `seven_zip_decode_budget`, separate from this length.
-    ensure_seven_zip_export_ram(len)?;
+    // `seven_zip_decode_threads`, separate from this length.
+    ensure_free_ram(len)?;
     let mut buf = try_vec_with_capacity(len)?;
     file.take(len).read_to_end(&mut buf)?;
     Ok(buf)

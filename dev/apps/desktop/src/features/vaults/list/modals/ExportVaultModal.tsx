@@ -4,10 +4,11 @@ import {
   PolicyRadioOption,
   SettingsField,
   settingsControlClass,
+  settingsInvalidControlClass,
   VaultSettingsSevenZipSection,
 } from "@/components/settings";
 import { ExportFolderField } from "@/components/ExportFolderField";
-import { useExportPasswordCheck, useLoadingBudget } from "@upriv/shared/react";
+import { useLoadingBudget } from "@upriv/shared/react";
 import { useTranslation } from "@/i18n";
 import { useVaultService } from "@/platform/services";
 import { useErrorToast } from "@/hooks/useErrorToast";
@@ -19,9 +20,9 @@ import {
   exportFilenameSanitizeKind,
   vaultExportFilename,
   vaultExportPending,
-  type JobProgress,
-  type VaultExportRequest,
   type VaultExportFormat,
+  type VaultExportRequest,
+  type VaultExportRun,
   type VaultListItem,
   type VaultSettingsConfig,
 } from "@upriv/shared";
@@ -30,28 +31,32 @@ import type { VaultExportFolders } from "../hooks/useVaultExportFolders";
 interface ExportVaultModalProps {
   vault: VaultListItem | null;
   open: boolean;
-  submitting?: boolean;
-  /** When set, the countdown continues from this origin after the dialog is reopened. */
-  startedAt?: number | null;
-  /** How far the running export got; `null` until core first answers. */
-  progress?: JobProgress | null;
+  /**
+   * This vault's export in flight. The options are locked, and the one being
+   * written shows how far it got in place of its fields.
+   */
+  running?: VaultExportRun | null;
+  /** Why the last `.7z` export refused its password (wrong, or the unlock limit). */
+  passwordError?: string | null;
   /** Each format's folder, kept by the vault list for the next export. */
   folders: VaultExportFolders;
   onClose: () => void;
   /** Export into `destDir`, the chosen format's folder. */
   onConfirm: (request: VaultExportRequest, destDir: string) => void;
+  /** The password changed, so its refusal no longer applies. */
+  onPasswordEdited?: () => void;
   onTimeout?: () => void;
 }
 
 export function ExportVaultModal({
   vault,
   open,
-  submitting = false,
-  startedAt = null,
-  progress = null,
+  running = null,
+  passwordError = null,
   folders,
   onClose,
   onConfirm,
+  onPasswordEdited,
   onTimeout,
 }: ExportVaultModalProps) {
   const { t } = useTranslation();
@@ -61,35 +66,36 @@ export function ExportVaultModal({
   const passwordId = useId();
   const passwordRef = useRef<HTMLInputElement>(null);
   const focusPasswordRef = useRef(false);
-  const [format, setFormat] = useState<VaultExportFormat>(DEFAULT_VAULT_EXPORT_FORMAT);
+  const [chosenFormat, setChosenFormat] = useState<VaultExportFormat>(DEFAULT_VAULT_EXPORT_FORMAT);
   const [sevenZip, setSevenZip] = useState<VaultSettingsConfig["seven_zip"]>(DEFAULT_SEVEN_ZIP);
   const [password, setPassword] = useState("");
   const [sevenZipAvailable, setSevenZipAvailable] = useState(false);
-  const passwordCheck = useExportPasswordCheck({
-    open: open && vault != null,
-    vaultId: vault?.id ?? null,
-    password,
-    probe: vaultService.probeExportPassword,
-    onProbeError: (error) => showError(error, "error.unexpected"),
-  });
-  // Live export = flush `store/` + zip/.7z — same family as vaultRewrap. Mock finishes instantly.
-  const budget = useLoadingBudget(submitting, LOADING_BUDGET_MS.vaultExport, {
-    startedAt: startedAt ?? undefined,
+  const exporting = running !== null;
+  const exportingRef = useRef(exporting);
+  exportingRef.current = exporting;
+  const budget = useLoadingBudget(exporting, LOADING_BUDGET_MS.vaultExport, {
+    startedAt: running?.startedAt,
   });
   const { cancelPick: cancelZipPick } = folders.store_zip;
   const { cancelPick: cancelSevenZipPick } = folders.seven_zip;
+  const vaultId = vault?.id ?? null;
 
+  // Opening the window for a vault starts its choices over, unless it shows that
+  // vault's export still running. An export that ends while the window is open
+  // keeps them, so a refused password can be corrected in place.
   useEffect(() => {
-    if (!open || !vault || submitting) return;
-    setFormat(DEFAULT_VAULT_EXPORT_FORMAT);
-    setSevenZip(DEFAULT_SEVEN_ZIP);
-    setPassword("");
-    setSevenZipAvailable(false);
+    if (!open || vaultId === null) return;
+    if (!exportingRef.current) {
+      setChosenFormat(DEFAULT_VAULT_EXPORT_FORMAT);
+      setSevenZip(DEFAULT_SEVEN_ZIP);
+      setPassword("");
+      setSevenZipAvailable(false);
+    }
     let cancelled = false;
     void vaultService
-      .getSettings(vault.id)
+      .getSettings(vaultId)
       .then((settings) => {
-        if (cancelled || !settings?.seven_zip) return;
+        if (cancelled || exportingRef.current || !settings?.seven_zip) return;
         setSevenZip(settings.seven_zip);
       })
       .catch((error) => {
@@ -101,7 +107,7 @@ export function ExportVaultModal({
       .then((caps) => {
         if (cancelled) return;
         setSevenZipAvailable(caps.sevenZip);
-        if (!caps.sevenZip) setFormat(DEFAULT_VAULT_EXPORT_FORMAT);
+        if (!caps.sevenZip && !exportingRef.current) setChosenFormat(DEFAULT_VAULT_EXPORT_FORMAT);
       })
       .catch(() => {
         if (cancelled) return;
@@ -110,7 +116,7 @@ export function ExportVaultModal({
     return () => {
       cancelled = true;
     };
-  }, [open, showError, submitting, vault, vaultService]);
+  }, [open, showError, vaultId, vaultService]);
 
   // The folders stay for the next export; a pick still open when the window closed is dropped.
   useEffect(() => {
@@ -121,32 +127,42 @@ export function ExportVaultModal({
   }, [cancelSevenZipPick, cancelZipPick, open]);
 
   useEffect(() => {
-    if (!budget.timedOut || !submitting) return;
+    if (!budget.timedOut || !exporting) return;
     onTimeout?.();
-  }, [budget.timedOut, onTimeout, submitting]);
+  }, [budget.timedOut, exporting, onTimeout]);
 
   useEffect(() => {
-    if (!focusPasswordRef.current || format !== "seven_zip") return;
+    if (!focusPasswordRef.current || chosenFormat !== "seven_zip") return;
     focusPasswordRef.current = false;
     passwordRef.current?.focus();
-  }, [format]);
+  }, [chosenFormat]);
 
   if (!open || !vault) return null;
 
+  // While an export runs, the window shows the format being written.
+  const format = running?.format ?? chosenFormat;
   const filenameKind = exportFilenameSanitizeKind(vault.displayName);
   const filename = vaultExportFilename(vault.displayName, format);
-  const zipPending = vaultExportPending("store_zip", folders.store_zip.path, false);
-  const sevenZipPending = vaultExportPending(
-    "seven_zip",
-    folders.seven_zip.path,
-    passwordCheck.passwordOk,
-  );
+  const zipPending = vaultExportPending("store_zip", folders.store_zip.path, "");
+  const sevenZipPending = vaultExportPending("seven_zip", folders.seven_zip.path, password);
   const folder = folders[format];
-  const ready =
-    !submitting &&
-    !passwordCheck.checking &&
-    !folder.picking &&
-    (format === "store_zip" ? zipPending === null : sevenZipAvailable && sevenZipPending === null);
+  const formatReady =
+    format === "store_zip"
+      ? zipPending === null
+      : sevenZipAvailable && sevenZipPending === null && passwordError === null;
+  const ready = !exporting && !folder.picking && formatReady;
+
+  const confirm = () => {
+    if (!ready) return;
+    onConfirm(
+      {
+        format,
+        sevenZip,
+        password: format === "seven_zip" ? password : undefined,
+      },
+      folder.path.trim(),
+    );
+  };
 
   const folderHint = (option: VaultExportFormat) =>
     t("vault.export.dialog.folder_hint", {
@@ -155,16 +171,33 @@ export function ExportVaultModal({
     });
 
   const selectSevenZip = () => {
-    if (submitting || !sevenZipAvailable) return;
+    if (exporting || !sevenZipAvailable) return;
     // The card is a label for the radio, so its click focuses that control after
     // this handler. Defer until the password is enabled and that focus has landed.
-    if (format === "seven_zip") {
+    if (chosenFormat === "seven_zip") {
       window.setTimeout(() => passwordRef.current?.focus(), 0);
       return;
     }
     focusPasswordRef.current = true;
-    setFormat("seven_zip");
+    setChosenFormat("seven_zip");
   };
+
+  /** The option being written: how far it got, and how long it may still take. */
+  const runningPanel = running ? (
+    <div className="space-y-2">
+      <JobProgressBar
+        progress={running.progress}
+        label={t("vault.export.dialog.title")}
+        copy={VAULT_EXPORT_PROGRESS_COPY}
+      />
+      <p className="text-xs leading-relaxed text-on-surface-variant">
+        {t("vault.export.dialog.background_note")}
+      </p>
+      {budget.visible ? (
+        <LoadingBudgetHint budgetMs={budget.budgetMs} remainingMs={budget.remainingMs} />
+      ) : null}
+    </div>
+  ) : null;
 
   return (
     <Modal
@@ -177,24 +210,10 @@ export function ExportVaultModal({
       footer={
         <div className="flex flex-wrap justify-end gap-2">
           <Button variant="ghost" size="sm" onClick={onClose}>
-            {submitting ? t("action.close") : t("action.cancel")}
+            {exporting ? t("action.close") : t("action.cancel")}
           </Button>
-          <Button
-            variant="primary"
-            size="sm"
-            disabled={!ready}
-            onClick={() =>
-              onConfirm(
-                {
-                  format,
-                  sevenZip,
-                  password: format === "seven_zip" ? password : undefined,
-                },
-                folder.path.trim(),
-              )
-            }
-          >
-            {submitting ? t("vault.export.dialog.submitting") : t("vault.export.dialog.confirm")}
+          <Button variant="primary" size="sm" disabled={!ready} onClick={confirm}>
+            {exporting ? t("vault.export.dialog.submitting") : t("vault.export.dialog.confirm")}
           </Button>
         </div>
       }
@@ -221,19 +240,26 @@ export function ExportVaultModal({
             title={t("vault.export.option.store_zip")}
             description={t("vault.export.option.store_zip_desc")}
             badge="recommended"
+            disabled={exporting && format !== "store_zip"}
             attention={zipPending !== null}
-            onSelect={() => setFormat("store_zip")}
+            onSelect={() => {
+              if (!exporting) setChosenFormat("store_zip");
+            }}
             footer={
-              <div className="space-y-3">
-                <ExportFolderField
-                  folder={folders.store_zip}
-                  hint={folderHint("store_zip")}
-                  disabled={submitting}
-                />
-                <p className="text-xs leading-relaxed text-on-surface-variant">
-                  {t("vault.export.dialog.zip_no_compression")}
-                </p>
-              </div>
+              format === "store_zip" && runningPanel ? (
+                runningPanel
+              ) : (
+                <div className="space-y-3">
+                  <ExportFolderField
+                    folder={folders.store_zip}
+                    hint={folderHint("store_zip")}
+                    disabled={exporting}
+                  />
+                  <p className="text-xs leading-relaxed text-on-surface-variant">
+                    {t("vault.export.dialog.zip_no_compression")}
+                  </p>
+                </div>
+              )
             }
           />
           <PolicyRadioOption
@@ -246,95 +272,65 @@ export function ExportVaultModal({
                 ? t("vault.export.option.seven_zip_desc")
                 : t("vault.export.dialog.seven_zip_unavailable")
             }
-            disabled={!sevenZipAvailable}
-            attention={sevenZipPending !== null && !passwordCheck.checking}
+            disabled={exporting ? format !== "seven_zip" : !sevenZipAvailable}
+            attention={sevenZipPending !== null || passwordError !== null}
             onSelect={selectSevenZip}
             onCardPress={selectSevenZip}
             footer={
-              <div className="space-y-3">
-                <SettingsField
-                  label={t("vault.export.dialog.seven_zip_password")}
-                  hint={t("vault.export.dialog.seven_zip_password_help")}
-                  htmlFor={passwordId}
-                >
-                  <PasswordInput
-                    ref={passwordRef}
-                    id={passwordId}
-                    value={password}
-                    autoComplete="new-password"
-                    disabled={submitting}
-                    className={settingsControlClass}
-                    onKeyDown={(event) => {
-                      if (event.key !== "Enter" || passwordCheck.passwordOk) return;
-                      event.preventDefault();
-                      passwordCheck.check();
-                    }}
-                    onChange={(event) => {
-                      setPassword(event.target.value);
-                      passwordCheck.notePasswordEdited();
-                    }}
-                  />
-                </SettingsField>
-                {passwordCheck.passwordOk ? (
-                  <p className="text-sm text-vault-open">
-                    {t("vault.export.dialog.seven_zip_password_ok")}
-                  </p>
-                ) : (
-                  <div className="space-y-2">
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      size="sm"
-                      disabled={submitting || !passwordCheck.canCheck}
-                      onClick={() => passwordCheck.check()}
-                    >
-                      {passwordCheck.checking
-                        ? t("vault.export.dialog.seven_zip_password_checking")
-                        : t("vault.export.dialog.seven_zip_password_check")}
-                    </Button>
-                    {passwordCheck.passwordWrong ? (
-                      <p className="text-sm text-on-error-container">{t("error.wrong_password")}</p>
-                    ) : null}
-                    {passwordCheck.timedOut ? (
-                      <p className="text-sm text-on-error-container">
-                        {t("error.operation_timed_out")}
+              format === "seven_zip" && runningPanel ? (
+                runningPanel
+              ) : (
+                <div className="space-y-3">
+                  <SettingsField
+                    label={t("vault.export.dialog.seven_zip_password")}
+                    hint={t("vault.export.dialog.seven_zip_password_help")}
+                    htmlFor={passwordId}
+                  >
+                    <PasswordInput
+                      ref={passwordRef}
+                      id={passwordId}
+                      value={password}
+                      autoComplete="current-password"
+                      disabled={exporting}
+                      aria-invalid={passwordError ? true : undefined}
+                      aria-errormessage={passwordError ? `${passwordId}-error` : undefined}
+                      inputClassName={[settingsControlClass, settingsInvalidControlClass].join(" ")}
+                      onKeyDown={(event) => {
+                        if (event.key !== "Enter") return;
+                        event.preventDefault();
+                        confirm();
+                      }}
+                      onChange={(event) => {
+                        setPassword(event.target.value);
+                        onPasswordEdited?.();
+                      }}
+                    />
+                    {passwordError ? (
+                      <p
+                        id={`${passwordId}-error`}
+                        role="alert"
+                        className="text-xs text-on-error-container"
+                      >
+                        {passwordError}
                       </p>
                     ) : null}
-                    {passwordCheck.checking && passwordCheck.budget.visible ? (
-                      <LoadingBudgetHint
-                        budgetMs={passwordCheck.budget.budgetMs}
-                        remainingMs={passwordCheck.budget.remainingMs}
-                      />
-                    ) : null}
-                  </div>
-                )}
-                <ExportFolderField
-                  folder={folders.seven_zip}
-                  hint={folderHint("seven_zip")}
-                  disabled={submitting}
-                />
-                <VaultSettingsSevenZipSection
-                  config={sevenZip}
-                  disabled={submitting}
-                  embedded
-                  onChange={(patch) => setSevenZip((current) => ({ ...current, ...patch }))}
-                />
-              </div>
+                  </SettingsField>
+                  <ExportFolderField
+                    folder={folders.seven_zip}
+                    hint={folderHint("seven_zip")}
+                    disabled={exporting}
+                  />
+                  <VaultSettingsSevenZipSection
+                    config={sevenZip}
+                    disabled={exporting}
+                    embedded
+                    onChange={(patch) => setSevenZip((current) => ({ ...current, ...patch }))}
+                  />
+                </div>
+              )
             }
           />
         </div>
-        {submitting ? (
-          <div className="space-y-2">
-            <JobProgressBar
-              progress={progress}
-              label={t("vault.export.dialog.title")}
-              copy={VAULT_EXPORT_PROGRESS_COPY}
-            />
-            {budget.visible ? (
-              <LoadingBudgetHint budgetMs={budget.budgetMs} remainingMs={budget.remainingMs} />
-            ) : null}
-          </div>
-        ) : null}
       </div>
     </Modal>
   );
