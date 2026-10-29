@@ -8,6 +8,7 @@ import {
   idleWarningText,
   type IdleAutoCloseWarning,
   type IdleLockResult,
+  isJobCancelled,
   isRpcError,
   isRpcTimeout,
   isVaultCredentialChallengeI18nKey,
@@ -999,6 +1000,11 @@ export function useVaultLifecycleActions({
         })
         .catch((error) => {
           if (gen !== exportBusyGenRef.current) return;
+          if (isJobCancelled(error)) {
+            showToast(t("toast.vault_export_cancelled"));
+            setExportVaultId(null);
+            return;
+          }
           if (isRpcTimeout(error)) {
             // The call gave up before the budget did; core still writes the file.
             void jobs.cancel(job, "timeout").catch(() => {
@@ -1037,6 +1043,16 @@ export function useVaultLifecycleActions({
       vaultService,
     ],
   );
+
+  /** Ask the running export to stop. Core will clean up any partial file. */
+  const handleStopExportVault = useCallback(() => {
+    const job = exportJobRef.current;
+    if (!job) return;
+    setExportJob((current) => (current ? { ...current, stopping: true } : null));
+    void jobs.cancel(job, "user").catch(() => {
+      /* The export result still settles the job. */
+    });
+  }, [jobs, setExportJob]);
 
   const handleExportTimeout = useCallback(() => {
     exportBusyGenRef.current += 1;
@@ -1347,6 +1363,7 @@ export function useVaultLifecycleActions({
     handleUnlockVault,
     handleExportVault,
     handleConfirmExportVault,
+    handleStopExportVault,
     handleExportTimeout,
     handleLifecycleConfirm,
     handleRecoveryAction,

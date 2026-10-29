@@ -275,16 +275,6 @@ export function VaultGroupsModal({
               />
               <DisplayNameFieldError name={newGroupName} allowEmpty />
             </View>
-            <SwitchRow
-              label={t("vault.group.settings.hidden")}
-              hint={t("vault.group.settings.hidden_help")}
-              value={hidden}
-              onValueChange={(next) => {
-                setHidden(next);
-                setSaveConfirmOpen(false);
-                setDiscardConfirmOpen(false);
-              }}
-            />
             <View style={styles.fieldGroup}>
               <FieldLabel>{t("vault.group.create.grouped_vaults")}</FieldLabel>
               <FieldHint>{t("vault.group.create.grouped_vaults_help")}</FieldHint>
@@ -304,6 +294,16 @@ export function VaultGroupsModal({
                 }}
               />
             </View>
+            <SwitchRow
+              label={t("vault.group.settings.hidden")}
+              hint={t("vault.group.settings.hidden_help")}
+              value={hidden}
+              onValueChange={(next) => {
+                setHidden(next);
+                setSaveConfirmOpen(false);
+                setDiscardConfirmOpen(false);
+              }}
+            />
           </View>
         </View>
       </Modal>

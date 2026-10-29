@@ -125,7 +125,7 @@ Transient: `closing`, `opening`, `recovery` — do not expose in UI as resting s
 ### Critical transitions
 
 **open (v1):**
-1. Resolve `<vault-root>` (`UPRIV_VAULT_ROOT`, the active `.upriv-root`, or `default_root`; the Gate asks when none is found).
+1. Resolve `<vault-root>` (`UPRIV_VAULT_ROOT`, the active `.upriv-data-folder`, or `default_root`; the Gate asks when none is found).
 2. Load `vaults/<id>/config.toml`.
 3. Try to acquire `runtime/<id>.lock` — failure → `error.vault_already_open`.
 4. Read `header/vault.header` (or `vault.header.copy` when the primary cannot be used); derive master key (Argon2id from header params) — failure → abort.
@@ -425,7 +425,6 @@ locale = "en"
 theme = "dark"
 show_header_more_button = true
 file_manager_dock_expanded = false
-# file_manager_tree_split_percent = 20       # optional; explorer/editor split % (15–65), all vaults
 # always_show_hidden_vaults = false          # optional; Hidden vaults section
 # vault_list_allow_drag_into_group = true    # optional
 # vault_list_show_drag = true                # optional
@@ -436,7 +435,6 @@ file_manager_dock_expanded = false
 # vault_list_show_create_button = true       # optional
 # lifecycle_close_modal_on_submit = false    # optional; close the unlock dialog on Confirm
 # lifecycle_open_file_manager_on_open = false # optional; open file manager after unlock if no other modal
-# file_manager_confirm_delete = true # optional; confirm before deleting in file manager
 
 [logging]
 enabled = true
@@ -446,17 +444,17 @@ keep_last_entries = 10000
 
 [app]
 last_opened_vault = "my-encrypted-notes"
-# Vault-root mode (`default_root` | `custom_root`): app-home `.upriv-root`, not here.
+# Vault-root mode (`default_root` | `custom_root`): app-home `.upriv-data-folder`, not here.
 # Missing/inactive → default_root; active + path → custom_root.
 ```
 
 **Upriv marker:** folder is `<vault-root>` if it contains `.upriv/settings.toml` with `[package] version = 1`. Any other version, or a file that does not parse, is an incomplete data folder (`vault_root_incomplete` → Repair).
 
-**Vault-root location:** `vault_root_mode` / custom path are **not** `[app]` keys in TOML and are never written there. They are derived from the app-home `.upriv-root` file and exposed on the settings RPC wire as `app.*` fields for the UI only.
+**Vault-root location:** `vault_root_mode` / custom path are **not** `[app]` keys in TOML and are never written there. They are derived from the app-home `.upriv-data-folder` file and exposed on the settings RPC wire as `app.*` fields for the UI only.
 
 #### `[ui]` — fields and where they are saved (v1 desktop)
 
-**On disk:** prefs are **flat keys under `[ui]`**. General UI (`locale`, `theme`, `show_header_more_button`, `file_manager_dock_expanded`, `file_manager_tree_split_percent`, `always_show_hidden_vaults`) then `vault_list_*` list prefs. **`show_header_more_button`** is the on-disk name for the header ⋮ (wire: `vault_list_show_header_more_button`).
+**On disk:** prefs are **flat keys under `[ui]`**. General UI (`locale`, `theme`, `show_header_more_button`, `file_manager_dock_expanded`, `always_show_hidden_vaults`) then `vault_list_*` list prefs. **`show_header_more_button`** is the on-disk name for the header ⋮ (wire: `vault_list_show_header_more_button`).
 
 **Wire / RPC:** flat `settings.ui.*` below (what TypeScript and the daemon exchange).
 
@@ -467,9 +465,7 @@ last_opened_vault = "my-encrypted-notes"
 | `vault_list_show_header_more_button` | `[ui].show_header_more_button` | Yes (General) | Explicit **Save** in System settings. Default `true`. Shows the header overflow (⋮) menu. |
 | `lifecycle_close_modal_on_submit` | `[ui].lifecycle_close_modal_on_submit` | Yes (General) | Explicit **Save** in System settings. Default `false`. When `true`, the unlock password dialog closes on Confirm (progress on the row). |
 | `lifecycle_open_file_manager_on_open` | `[ui].lifecycle_open_file_manager_on_open` | Yes (General) | Explicit **Save** in System settings. Default `false`. When `true`, after unlock succeeds open the in-app file manager if no other modal is open. |
-| `file_manager_confirm_delete` | `[ui].file_manager_confirm_delete` | Yes (General) | Explicit **Save** in System settings. Default `true`. When `true`, deleting a file/folder in the file manager asks for confirmation. |
 | `file_manager_dock_expanded` | `[ui].file_manager_dock_expanded` | **No** | When user **expands or collapses** the minimized file-manager dock (bottom-right chip list). Restored on next app launch. Default `false` (collapsed — count button only). |
-| `file_manager_tree_split_percent` | `[ui].file_manager_tree_split_percent` | **No** | When user **releases** the file-manager explorer/editor resize grip. App-wide for every vault (not per-vault `.upriv-workspace.json`). Default `20`; clamped to 15–65. |
 | `always_show_hidden_vaults` | `[ui].always_show_hidden_vaults` | Yes (Hidden vaults) | Explicit **Save** in System settings |
 | `vault_list_show_drag` | `[ui].vault_list_show_drag` | Yes (Vault list) | Explicit **Save** in System settings. Default `true`. Shows vertical drag grips on the vault list; off hides grips only (order/sort unchanged). |
 | `vault_list_show_create_button` | `[ui].vault_list_show_create_button` | Yes (Vault list) | Explicit **Save** in System settings. Default `true`. Shows the new-vault (+) button. |
@@ -485,8 +481,6 @@ last_opened_vault = "my-encrypted-notes"
 | `vault_list_search` | `[ui].vault_list_search` | No | When the user types in the vault-list search box (debounced). The control expands only while focused. Filters ungrouped vault names, group names, and vaults inside groups. |
 
 **Minimized file-manager dock:** after **Minimize** on a file-manager modal, vault chips appear in a floating dock. One control toggles between showing all chips vs. a single collapsed button with the count. That expanded/collapsed choice is written to `[ui] file_manager_dock_expanded` immediately on toggle — not exposed as a checkbox in System settings.
-
-**File-manager explorer split:** dragging the resize grip between explorer and editor updates a live preview; on pointer-up the canonical % is written to `[ui] file_manager_tree_split_percent` (shared by all vaults). Not a System settings control — adjust by dragging in any open file manager.
 
 #### Logs (`.upriv/logs/`)
 
@@ -582,6 +576,9 @@ wipe_pattern = "random"           # hidden default
 [auto_close]
 enabled = true
 idle_minutes = 15
+
+[file_manager]
+confirm_delete = true             # ask before deleting a file or folder
 
 [seven_zip]
 encrypt_file_names = true
@@ -689,6 +686,7 @@ Settings modal edits `config.toml` but **does not mirror every key** — advance
 | `[vault]` | `display_name`, `order`, `note`, `password_hint` | `id` (folder slug; derived/normalized on rename migration). Layout dirs `store/` and `backups/` are not TOML keys. |
 | `[storage]` | `mode` (`encrypted_dir` / `upriv_plain`) + contextual warnings | — |
 | `[auto_close]` | **Preferences / Auto-close:** close after idle time inside Upriv | — |
+| `[file_manager]` | **Preferences / Vault:** `confirm_delete` (Ask before deleting files) | — |
 | `[security]` | — | `wipe_passes`, `wipe_pattern`, `password_changed_at` (set by app). Plaintext close always overwrites the open folder. |
 | Password / Unlock RAM | Settings **areas** (not TOML sections): change password; change Argon2id preset | Cost lives in `store/header/vault.header`, never a `[kdf]` section |
 | `[seven_zip]` | compression preset (**none/low/medium/high** → `archive_mode` + `compression_level`), `encrypt_file_names` | `solid` (default `false`) |
@@ -710,7 +708,7 @@ Related: PRD **RF-UI-04**, **RF-UI-15**.
 
 #### 3.2.4 Mutable config (design requirement)
 
-Configuration **is not immutable** after vault creation. User can change `[seven_zip]`, `[backup]`, `[auto_close]`, `[security]` in `vaults/<id>/config.toml`, and `[ui]` in `.upriv/settings.toml`, **anytime** — via UI or by editing TOML.
+Configuration **is not immutable** after vault creation. User can change `[seven_zip]`, `[backup]`, `[auto_close]`, `[file_manager]`, `[security]` in `vaults/<id>/config.toml`, and `[ui]` in `.upriv/settings.toml`, **anytime** — via UI or by editing TOML.
 
 **Reading and saving:** each operation loads the TOML it needs from disk; there is no config cache. A save is an atomic write (temp + rename). `settings.toml` ignores keys and sections it does not define, except under `[workspace]`: an unknown key there makes the file unreadable (`vault_root_incomplete`). A save writes only the keys it defines. A vault `config.toml` with a key it does not define fails to load (`vault_config_invalid`) and stays as it is on disk.
 
@@ -721,6 +719,7 @@ Configuration **is not immutable** after vault creation. User can change `[seven
 | `[seven_zip]` (`archive_mode`, levels) | Next `.7z` export | Next `.7z` export (export needs the vault closed) |
 | `[backup]` | Next close | Next close |
 | `[auto_close]` | Next open | Next settings read while open (about 15 s). The current idle clock is kept |
+| `[file_manager] confirm_delete` | Next delete in the file manager | Next delete (read on each delete) |
 | `[security]` (`wipe_passes`, `wipe_pattern`, …) | Next **close** / discard | Wipe on close |
 | `[vault] password_hint`, `[vault] note`, `[vault] order` | Immediate (UI / list) | Immediate |
 | `[security] password_changed_at` | Set when change-password succeeds (**vault closed**) | **Blocked** — close vault first (`vault_closed`) |
@@ -1149,14 +1148,14 @@ ui/
 | Groups | `vault_group_list`, `vault_group_create`, `vault_group_update`, `vault_group_delete`, `vault_group_set_collapsed`, `vault_group_reorder`, `vault_group_reorder_grouped_vaults`, `vault_group_repair` |
 | Vaults | `vault_list`, `vault_create`, `vault_config_get`, `vault_config_save`, `vault_rename`, `vault_delete`, `vault_store_size`, `vault_change_password`, `vault_change_kdf` |
 | Open / close | `vault_open`, `vault_close`, `vault_close_phase`, `vault_plain_confirm`, `vault_plain_destination`, `vault_plain_leftover`, `vault_plain_remove`, `vault_plain_sync`, `vault_plain_status`, `vault_plain_deletions` |
-| File manager | `vault_fs_list`, `vault_fs_revision`, `vault_fs_read`, `vault_fs_read_range`, `vault_fs_write`, `vault_fs_write_range`, `vault_fs_import_os_file`, `vault_fs_import_seal`, `vault_fs_truncate`, `vault_fs_create_file`, `vault_fs_create_folder`, `vault_fs_ensure_folder`, `vault_fs_delete`, `vault_fs_rename`, `vault_fs_move`, `vault_fs_os_path` |
+| File manager | `vault_fs_list`, `vault_fs_revision`, `vault_fs_read`, `vault_fs_read_range`, `vault_fs_write`, `vault_fs_write_range`, `vault_fs_import_os_file`, `vault_fs_truncate`, `vault_fs_create_file`, `vault_fs_create_folder`, `vault_fs_ensure_folder`, `vault_fs_delete`, `vault_fs_rename`, `vault_fs_move`, `vault_fs_os_path` |
 | Export / import | `vault_export`, `vault_export_capabilities`, `vault_import_zip`, `vault_import_7z`, `vault_import_files_zip`, `vault_import_os_path`, `vault_import_probe` |
 | Backups | `backup_list`, `backup_get`, `backup_save`, `backup_delete`, `backup_promote` |
 | Jobs | `job_status`, `job_cancel` |
 | Mobile only | `app_settings_parse_toml`, `vault_root_remember_custom`, `vault_ingest_open`, `vault_ingest_directory`, `vault_discard_import` |
 | Electron main | `app_exit`, `pick_directory`, `pick_file`, `pick_save_file`, `reveal_in_file_manager`, `reveal_os_path`, `open_in_terminal`, `winfsp_status`, `winfsp_install`, `fuse_status`, `fuse_install`; main sends `app_shutdown` to the daemon itself |
 
-**Vault export.** `vault_export` takes the folder chosen in the export option (`destDir`) and writes `{display_name}.zip` or `.7z` there (`vault_export_file_stem`). It never replaces a file, or a partial one, already using that name: it takes the next free number (`{display_name} 2.zip`, `{display_name} 3.zip`, …, also when a file arrives under the name while it writes) and logs `vault_export_numbered` (`format`, `id`, `number`; no name or path). It refuses a folder inside a `.upriv` (`export_destination_reserved`). The answer is the written `path` and `size`; the UI names a numbered file in its toast (`vaultExportSavedAs`). A `.7z` export unlocks the vault with its password inside this call, through the same unlock limit as open: `wrong_password` or `vault_unlock_blocked` comes back before any file is written, and the Export window marks its password field (a toast when the window is closed).
+**Vault export.** `vault_export` takes the folder chosen in the export option (`destDir`) and writes `{display_name}.zip` or `.7z` there (`vault_export_file_stem`). It never replaces a file, or a partial one, already using that name: it takes the next free number (`{display_name} 2.zip`, `{display_name} 3.zip`, …, also when a file arrives under the name while it writes) and logs `vault_export_numbered` (`format`, `id`, `number`; no name or path). It refuses a folder inside a `.upriv` (`export_destination_reserved`). The answer is the written `path` and `size`; the UI names a numbered file in its toast (`vaultExportSavedAs`). A `.7z` export unlocks the vault with its password inside this call, through the same unlock limit as open: `wrong_password` or `vault_unlock_blocked` comes back before any file is written, and the Export window marks its password field (a toast when the window is closed). While the export runs, the window's one footer button is **Stop export**: it sends `job_cancel` (`by=user`), shows Stopping… until the call settles, and a stopped export ends with `toast.vault_export_cancelled` and no file left.
 
 **Jobs.** `vault_export`, `backup_save`, and `data_folder_export` each carry a `job` id the UI makes with `newJobId`. `job_status` reports the bytes that job has done; `job_cancel` stops it, and a stop for a job still waiting for its lane is kept, so it ends as soon as it starts. A stopped job fails with `job_cancelled` and leaves no file: the export's `.upriv-part`, the save's `.partial`, or the data folder's `.zip.upriv-part` is removed. When the UI gives up on one of these, by its budget or by the call's own `rpc_timeout` (whichever comes first), it sends `job_cancel` for it, so core does not keep holding the vault. `app_shutdown` stops every running job, and any that starts after it. The log records each stop (`job_cancel` with `by=user|timeout`, `jobs_stopped_on_quit`), how the job ended (`vault_export_cancelled|failed`, `vault_backup_save_cancelled|failed`, `data_folder_export_cancelled|failed`, with the failure reason and no path), and the removal of its unfinished file (`partial_removed`, or `partial_remove_failed` when the file stays).
 
@@ -1211,7 +1210,7 @@ Upriv (installed)
   → app folder, or ACTION_OPEN_DOCUMENT_TREE
   → takePersistableUriPermission(uri, READ|WRITE)
   → Rust addresses that folder as /upriv-saf-root
-  → app-home alias .upriv-root stores that logical path, not the content:// URI
+  → app-home alias .upriv-data-folder stores that logical path, not the content:// URI
 ```
 
 **Discovery:** vaults live under the chosen data folder's `.upriv/vaults/`. Do not use absolute path `/storage/XXXX-XXXX/...` as source of truth. Do not store the `content://` URI in `settings.toml`.
@@ -1220,7 +1219,7 @@ Upriv (installed)
 
 **Writes on the bridge:** every rewrite of an existing file (settings, configs, `state.json`, persistence) is a temp file, `fsync`, then rename onto the name — the live file is never truncated in place. DocumentsContract cannot rename onto an existing name, so `SafFs` renames the old document to `<name>.<unix-ms>.replacing`, renames the temp onto `<name>`, then deletes the aside copy. If the drive is pulled between those renames, the next lookup of `<name>` renames the newest aside copy back. Directory `fsync` is not available through the bridge.
 
-**Unplugged drive:** a removed volume answers every lookup as a miss. When an operation misses and the tree's own root document no longer answers, `SafFs` reports `unavailable`. `host_fs` maps that to `NotConnected` with a bridge-only marker, and RPC returns `vault_root_unreachable` (not `vault_root_not_found`). `mountSafRoot` throws `saf_unreachable` before probing. The grant, the active-URI pref, and `.upriv-root` are kept: settings load from `.upriv-root` (custom_root, not on disk). The Gate opens Setup with Custom still selected, shows the error in that screen and in a toast above it, and keeps the grant. Opening the app again with the drive connected continues straight in while that Custom choice is unchanged. Switching to the Documents default keeps that custom grant on the `custom=` line of `.upriv-root` and still shows the folder on the Custom option. If checking that folder finds the volume gone, inspect reports `unreachable` (the reconnect copy, not a writable-location failure) and Retry tries again. A later vault list while that grant is unmounted returns `vault_root_unreachable`, not `vault_root_not_found`. Choosing a different custom folder replaces `custom=` and releases the previous custom grant.
+**Unplugged drive:** a removed volume answers every lookup as a miss. When an operation misses and the tree's own root document no longer answers, `SafFs` reports `unavailable`. `host_fs` maps that to `NotConnected` with a bridge-only marker, and RPC returns `vault_root_unreachable` (not `vault_root_not_found`). `mountSafRoot` throws `saf_unreachable` before probing. The grant, the active-URI pref, and `.upriv-data-folder` are kept: settings load from `.upriv-data-folder` (custom_root, not on disk). The Gate opens Setup with Custom still selected, shows the error in that screen and in a toast above it, and keeps the grant. Opening the app again with the drive connected continues straight in while that Custom choice is unchanged. Switching to the Documents default keeps that custom grant on the `android_custom_folder=` line of `.upriv-data-folder` and still shows the folder on the Custom option. If checking that folder finds the volume gone, inspect reports `unreachable` (the reconnect copy, not a writable-location failure) and Retry tries again. A later vault list while that grant is unmounted returns `vault_root_unreachable`, not `vault_root_not_found`. Choosing a different custom folder replaces `android_custom_folder=` and releases the previous custom grant.
 
 **Export folders:** Export data folder and the vault export write straight into a folder the user picks with `ACTION_OPEN_DOCUMENT_TREE`. `mountSafExport` binds `SafExportFs` (the same bridge as `SafFs`, without the Documents → `Upriv` step) and Rust addresses that tree as `/upriv-saf-export`, beside the data folder mount. `host_fs` keeps the two trees apart: a rename between them is refused. Core refuses a picked tree whose address has a `.upriv` segment. One mobile adapter (`SafExportMount`) serves both exports, one at a time: it keeps the tree mounted until `job_status` reports that export's job ended, so a timed-out call still lets core remove its `.upriv-part`, then unmounts it. Each field that keeps a picked folder (Export a copy, the vault `.zip`, the vault `.7z`) holds its grant (`ExportFolderGrants`, never the data folder's), so the folder stays for the next export, also after its window closes. The grant is released once no field holds that folder (another pick replaced it, or the vault list went away) and no export is writing there. An export folder that stops answering fails the export as `io_error`; only the data folder answers `vault_root_unreachable`.
 
@@ -1248,19 +1247,31 @@ Same vault body as desktop: rest is `vaults/<id>/store/`. There is **no** OS mou
 
 **Explorer → editor:** single-click (desktop) / tap (mobile) a file in the tree opens or activates it in the editor (adds a tab if needed, expands ancestor folders, scrolls the tab into view) — same as VS Code reveal.
 
-**Markdown notes (desktop + mobile):** a new file is created as `.md`. A row under the tabs shows the open file's path as breadcrumbs that always start with the vault name (for example `Personal › notes › bank.md`). Each name truncates on its own; when the row is too narrow, earlier crumbs give up width first so the file name stays readable. On `.md` tabs that row also holds a Code | Read control (Code on the left) and, to its right, an outline button. The outline button shows or hides a sidebar on the right of the note, in both views. It lists the note's top-level headings (not those inside quotes, lists or footnotes) in order, each indented under the nearest shallower heading above it. Clicking an entry scrolls Read to that heading, or puts the Code cursor on its line (mobile Code: focus + caret, the OS scrolls it into view). Notes over the preview size cap show no headings. A note the parser cannot read is shown as source in Read, and the outline says it could not be read. Open/closed is per vault (`markdownOutlineOpen`). The choice is one vault-wide `markdownView` (`preview` = Read, `source` = Code) on `.upriv-workspace.json`. Missing and invalid values load as `preview`. Read draws the current draft (CommonMark plus GFM tables, strikethrough, task lists, autolinks, and footnotes) and does not accept typing. A task checkbox toggles its own `[ ]` / `[x]` in the draft, which marks the file unsaved like an edit in Code; read-only notes keep the checkboxes disabled. Inline code and fenced blocks copy on a second click (desktop) or tap (mobile) on the same value within `MARKDOWN_COPY_DOUBLE_TAP_MS` (500 ms, longer than the explorer's 300 ms double-tap), or with one press on their copy control. Images are not loaded — the alt text is shown. A link opens only when clicked, and only for `http`, `https`, and `mailto`. Raw HTML is shown as text. Code is the existing editor.
+**Markdown notes (desktop + mobile):** a new file is created as `.md`. A row under the tabs shows the open file's path as breadcrumbs that always start with the vault name (for example `Personal › notes › bank.md`). Each name truncates on its own; when the row is too narrow, earlier crumbs give up width first so the file name stays readable. On `.md` tabs that row also holds a Code | Read control (Code on the left) and, to its right, an outline button. The outline button shows or hides a sidebar on the right of the note, in both views. It lists the note's top-level headings (not those inside quotes, lists or footnotes) in order, each indented under the nearest shallower heading above it. Clicking an entry scrolls Read to that heading, or puts the Code cursor on its line (mobile Code: focus + caret, the OS scrolls it into view). Notes over the preview size cap show no headings. A note the parser cannot read is shown as source in Read, and the outline says it could not be read. Read or Code (`markdownView`: `preview` = Read, `source` = Code) and outline open/closed (`markdownOutlineOpen`) are kept per file under `files` in `.upriv-workspace.json`. A file with no saved choice opens in Read with the outline shown; missing and invalid values use those defaults. Read draws the current draft (CommonMark plus GFM tables, strikethrough, task lists, autolinks, and footnotes) and does not accept typing. A task checkbox toggles its own `[ ]` / `[x]` in the draft, which marks the file unsaved like an edit in Code; read-only notes keep the checkboxes disabled. Inline code and fenced blocks copy on a second click (desktop) or tap (mobile) on the same value within `MARKDOWN_COPY_DOUBLE_TAP_MS` (500 ms, longer than the explorer's 300 ms double-tap), or with one press on their copy control. Images are not loaded — the alt text is shown. A link opens only when clicked, and only for `http`, `https`, and `mailto`. Raw HTML is shown as text. Code is the existing editor.
+
+**Imports into an open vault (desktop + mobile):** a dropped or picked file (an OS path, or a content URI on Android) is listed as soon as its `vault_fs_import_os_file` or content-URI call returns, and the explorer revision moves with it. Its ciphertext is already on disk; the sealed index names it at the next seal, whichever comes first: 32 staged imports, 2 s after the pending batch began (the same timer as range writes), any other committed change (a rename, a save, the layout file), a flush, or close. A crash before that seal forgets those files and nothing else: the sealed index is replaced in one step, and open removes the ciphertext it does not name. A folder the import creates (`vault_fs_ensure_folder`) is staged the same way, and the UI asks for each folder once per batch. Core refuses a file whose folder is gone (`vault_path_not_found`), so a folder deleted during an import leaves no orphan. Imports read, encrypt, and flush their ciphertext in parallel without holding the session lock; the lock is held only to name and list each file. Large byte imports go through `vault_fs_write_range` and seal as range writes do. A vault created by one core call (a folder path, a `.zip`, a `.7z`) seals in the same waves; a phone creating a vault from picked files imports each one as described here.
+
+**Find in file (desktop):** text files and notes have a find field in the path row (Ctrl+F, ⌘F on macOS). It matches the typed text case-insensitively and literally (no patterns). Enter or ↓ goes to the next match and Shift+Enter or ↑ to the previous one, wrapping around; Escape clears the field. Code highlights matches behind the text; Read highlights the rendered text, so a match split by formatting (`**fo**o`) is found in Code only. The query is kept per file (`files.<path>.searchQuery`).
+
+**Word wrap (desktop + mobile):** Code wraps long lines by default. The path-row toggle (desktop also Alt+Z) turns wrapping off for that file (`files.<path>.wordWrap`). Desktop keyboard shortcuts (save, find, word wrap) act only on the file manager on screen; minimized ones ignore them.
+
+**Outline current heading (desktop + mobile):** the outline marks the last heading that reached the top of the note view: the first heading near the top, the last one at the end even when its section is too short to reach the top. Read follows the scroll; desktop Code also follows the scroll and the cursor. On desktop the outline scrolls to keep the marked heading visible.
 
 **Open-tab reorder (desktop + mobile):** drag a tab onto another tab to change strip order (`openTabs`). Desktop: HTML5 DnD. Mobile: long-press (~450ms) then pan. Order is part of `.upriv-workspace.json` persistence. Does not change the active file unless the user also activates a tab.
 
-**Workspace layout persistence (`.upriv-workspace.json`):** logical file at the vault root (encrypted with the vault body in `store/`). Hidden from the in-app explorer/editor (reserved name; create/rename/delete/move/open blocked). **Source of truth = vault tree**, not the JSON — on load, drop tabs/folders/selection that no longer exist; corrupt/unknown `format_version` → start clean. Host mounts FM with `key={vaultId}` so vault switches remount persistence cleanly. Explorer/editor **split %** is **not** per-vault — it lives in app `[ui].file_manager_tree_split_percent` (default 20, clamp 15–65), shared by every vault; dragging the FM grip patches settings on pointer-up (same pattern as dock expand).
+**Workspace layout persistence (`.upriv-workspace.json`):** logical file at the vault root (encrypted with the vault body in `store/`). Hidden from the in-app explorer/editor (reserved name; create/rename/delete/move/open blocked). **Source of truth = vault tree**, not the JSON — on load, drop tabs/folders/selection that no longer exist; corrupt/unknown `format_version` → start clean. Host mounts FM with `key={vaultId}` so vault switches remount persistence cleanly. Nothing about the file manager layout is an app setting in `settings.toml`.
 
-| Persist (vault `.upriv-workspace.json`) | Persist (app `settings.toml` `[ui]`) | Do not persist |
-|---------|----------------|----------------|
-| `openTabs` (+ order), `activeTabPath`, `expandedPaths`, `selectedPath`, `markdownView` (`preview` or `source`; missing → `preview`), `explorerCollapsed` (missing or not `true` → shown), `markdownOutlineOpen` (missing or not `true` → hidden) | `file_manager_tree_split_percent` | Unsaved drafts, dirty dots, session created/modified cues, modal UI |
+| Persist (vault `.upriv-workspace.json`) | Do not persist |
+|---------|----------------|
+| `openTabs` (+ order), `activeTabPath`, `expandedPaths`, `selectedPath`, `explorerCollapsed` (missing or not `true` → shown), `files` (per file: `markdownView`, `markdownOutlineOpen`, `wordWrap`, `searchQuery`; a missing field → Read, outline shown, wrapped, no search), `treeSplitPercent` (missing → 20) | Unsaved drafts, dirty dots, session created/modified cues, modal UI |
 
-**Hide explorer (desktop + mobile):** the explorer header starts with one button: a sidebar icon plus the "Explorer" label. It hides the explorer and its resize grip with no leftover strip; the icon alone moves to the start of the tab bar, and pressing it shows the explorer again. As the header narrows, the label truncates with an ellipsis; once only the icon is left, the four actions (new file, new folder, import files, import folder) wrap to a second row. On desktop, the explorer's right-click menu (empty area / root) also has **Hide explorer**. Per vault (`explorerCollapsed`), because each vault keeps its own layout. Rename and new file/folder type the name in the explorer row, so they show a hidden explorer. The split % is unchanged while hidden.
+**Explorer/editor split (desktop + mobile):** dragging the grip between explorer and editor resizes live; on release the canonical % (4–65) is saved as that vault's `treeSplitPercent`. The row layout keeps the explorer at least 64 px wide on screen without storing that floor, so canonical 4 is the minimum on both layouts. Releasing with the explorer under half of that minimum hides it (`explorerCollapsed`) and stores 4. On desktop the grip also takes the keyboard: arrows step 1 (Shift: 5), Home and End jump to 4 and 65.
 
-**When to write (product):** on each layout action (open/close/reorder tab, expand folder, selection, markdown Read/Code, hide/show explorer, show/hide outline) while the FM is open — skip write if the sanitized snapshot is unchanged. Also flush on FM dismiss, unmount (minimize), and vault close/purge. Split writes to app settings on drag end. Does **not** write on every editor keystroke (drafts are not persisted here).
+**Delete confirmation:** deleting a file or folder asks first. The choice is per vault: `[file_manager] confirm_delete` in that vault's `config.toml`, read on each delete (a read that fails still asks). **Don't ask again** in that prompt saves `false` through `vault_config_save`; other vaults keep asking. **Ask before deleting files** in Vault settings → Vault turns it back on, with the vault open or closed. Like the password hint, this yes/no is readable without the password.
+
+**Hide explorer (desktop + mobile):** the explorer header starts with one button: a sidebar icon plus the "Explorer" label. It hides the explorer and its resize grip with no leftover strip; the icon alone moves to the start of the tab bar, and pressing it shows the explorer again. As the header narrows, the label truncates with an ellipsis; once only the icon is left, the four actions wrap two by two: new file and new folder stay together, import files and import folder stay together, so the actions show as one row of four or two rows of two. Once wrapped below the label they spread evenly across their row. On desktop, the explorer's right-click menu (empty area / root) also has **Hide explorer**. Per vault (`explorerCollapsed`), because each vault keeps its own layout. Rename and new file/folder type the name in the explorer row, so they show a hidden explorer. Hiding with the button leaves the split % as it was; hiding by dragging stores 4.
+
+**When to write (product):** after layout actions (open/close/reorder tab, expand folder, selection, markdown Read/Code, hide/show explorer, show/hide outline, word wrap, the find query, the split) while the FM is open, once they pause for 500 ms (`WORKSPACE_WRITE_DELAY_MS`): typing a search is one write, not one per key. Skip the write if the sanitized snapshot is unchanged. Also flush on FM dismiss, unmount (minimize), and vault close/purge. The split % is written when a drag ends (or on a keyboard step on desktop). Does **not** write on every editor keystroke (drafts are not persisted here).
 
 **When to restore:** when the user **opens the file manager** for that vault (not auto-open on unlock). The shell paints immediately from memory. Hydration reads `.upriv-workspace.json` after paint and applies it only while memory is still the cold-open layout, so an edit made before that read wins. Tabs, folders, focus, the markdown Read/Code choice, whether the explorer is hidden, and whether the outline is open come back as last saved for that vault; split comes from app settings.
 
@@ -1284,9 +1295,11 @@ The in-app explorer (copy, move, rename, delete) is the editor on Android. Openi
 | 4 | Recovery | Unlock encrypted vault. A leftover plaintext folder shows a warning, then **Remove the folder** wipes it |
 | 5 | Closing | Progress while `store/` flushes |
 
+**Vault list refresh:** ⋯ → Refresh, or pulling the list down, reloads the vaults and groups. A pull does nothing while a window is open or still closing (`hasOpenModal`) or while a row is being dragged, and its spinner shows only that refresh, not the list's own reloads. A second ask while one runs joins it.
+
 ### 9.8 Android — app config (outside vault)
 
-The persistable grant is held by Android. Rust addresses the chosen folder as `/upriv-saf-root`. The app-home alias `.upriv-root` stores that logical path. A `custom=` line in the same file is the last Custom folder (`content://`). `settings.toml` does not store the grant. SharedPreferences keep only `active_uri` (the folder mounted now). Switching to Documents/Upriv keeps `custom=` and that grant. Choosing a different custom folder replaces the line and releases the previous grant.
+The persistable grant is held by Android. Rust addresses the chosen folder as `/upriv-saf-root`. The app-home alias `.upriv-data-folder` stores that logical path, and its comments say it is not a real path. An `android_custom_folder=` line in the same file is the last Custom folder (`content://`); a desktop file has no Android lines. `settings.toml` does not store the grant. SharedPreferences keep only `active_uri` (the folder mounted now). Switching to Documents/Upriv keeps `android_custom_folder=` and that grant. Choosing a different custom folder replaces the line and releases the previous grant.
 
 **Do not** store password. Optional: `last_opened_vault = "vault-example-1"`.
 
@@ -1322,7 +1335,7 @@ The persistable grant is held by Android. Rust addresses the chosen folder as `/
 
 ## 10. App home (outside the data folder)
 
-The app home holds one file, `.upriv-root`: the data folder path chosen with "another folder" (`custom_root` mode). It is also where `default_root` creates `.upriv/`.
+The app home holds one file, `.upriv-data-folder`: the data folder path chosen with "another folder" (`custom_root` mode). It is also where `default_root` creates `.upriv/`.
 
 | Launch | App home |
 |--------|----------|
@@ -1332,14 +1345,16 @@ The app home holds one file, `.upriv-root`: the data folder path chosen with "an
 | Installed, Windows | `%LOCALAPPDATA%\Upriv` |
 | Installed, macOS | `~/Library/Application Support/Upriv` |
 
-Content:
+Content, one `key=value` per line after the comments:
 
 ```text
+# Upriv data folder pointer. Not a vault; holds no secrets.
+# status=active: Upriv opens data_folder. status=inactive: Upriv opens the default data folder and keeps data_folder for later.
 status=active
-/media/user/HD/my-vault
+data_folder=/media/user/HD/my-vault
 ```
 
-`status=inactive` keeps the path while `default_root` is in use. The file is written only after the user picks another folder. **Do not** store a password here.
+`status=inactive` keeps `data_folder` while `default_root` is in use. On Android `data_folder` is `/upriv-saf-root`, and an `android_custom_folder=` line holds the last Custom folder (`content://`); each Android line brings its own comment, so a desktop file has none. Any other line makes the file invalid (`vault_root_alias_invalid`). The file is written only after the user picks another folder. **Do not** store a password here.
 
 ---
 
@@ -1421,7 +1436,7 @@ status=active
 | v1 platform | Linux + Windows desktop | Desktop parity from day one; shared `mount/` trait (FUSE / WinFsp); portable vault format |
 | Config | TOML + defaults | Readable, cross-platform |
 | Password on HD | Never | Session keys stay in RAM |
-| Data folder | `default_root` beside the app, or a chosen folder (`.upriv-root` in the app home); `UPRIV_VAULT_ROOT` overrides | Portable first; HD or system folder |
+| Data folder | `default_root` beside the app, or a chosen folder (`.upriv-data-folder` in the app home); `UPRIV_VAULT_ROOT` overrides | Portable first; HD or system folder |
 | Android data folder | Storage-access grant on Documents/Upriv | Survives uninstall; no broad storage permission |
 | Android distribution | APK in `.upriv/app/Android/` | Mandatory install; not loose “folder app” |
 | Portable mode | Portable `.exe` (Windows) and AppImage (Linux): no install, data folder beside the file; a read-only folder falls back to user data; macOS is installed only | One file for users who do not want to install (PRD §3.5.1) |

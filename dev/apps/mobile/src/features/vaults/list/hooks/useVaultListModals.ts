@@ -36,6 +36,8 @@ export function useVaultListModals() {
     vaultId: string;
     format: VaultExportFormat;
     startedAt: number;
+    /** Stop export was pressed; the export call has not settled yet. */
+    stopping?: boolean;
   } | null>(null);
   /** The password a `.7z` export was refused with (wrong, or the unlock limit), on its field. */
   const [exportPasswordError, setExportPasswordError] = useState<{

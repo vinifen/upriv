@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from "react-native";
-import { markdownOutline, type MarkdownOutlineEntry } from "@upriv/shared";
+import { hexWithAlpha, markdownOutline, type MarkdownOutlineEntry } from "@upriv/shared";
 import { Icon } from "@/components/icons";
 import { useTranslation } from "@/i18n";
 import { useTheme } from "@/theme";
@@ -42,9 +42,11 @@ export function MarkdownOutlineToggle({
 /** Right-hand map of the note's headings, indented by nesting. Tap jumps to the heading. */
 export function MarkdownOutlinePanel({
   markdown,
+  activeIndex = 0,
   onSelect,
 }: {
   markdown: string;
+  activeIndex?: number;
   onSelect: (index: number, entry: MarkdownOutlineEntry) => void;
 }) {
   const { t } = useTranslation();
@@ -68,9 +70,6 @@ export function MarkdownOutlinePanel({
         contentContainerStyle={styles.listContent}
         nestedScrollEnabled
       >
-        <Text style={[styles.title, { color: colors.onSurfaceVariant }]}>
-          {t("modal.file_manager.markdown.outline")}
-        </Text>
         {outline.status === "unparsed" ? (
           <Text style={[styles.empty, { color: colors.onSurfaceVariant }]}>
             {t("modal.file_manager.markdown.outline_unparsed")}
@@ -88,31 +87,45 @@ export function MarkdownOutlinePanel({
             contentContainerStyle={styles.listRow}
           >
             <View style={styles.listColumn}>
-              {entries.map((entry, index) => (
-                <Pressable
-                  key={`${index}-${entry.offset}`}
-                  accessibilityRole="button"
-                  accessibilityLabel={entry.text}
-                  onPress={() => onSelect(index, entry)}
-                  style={({ pressed }) => [
-                    styles.entry,
-                    { paddingLeft: 12 + entry.level * 12, opacity: pressed ? 0.6 : 1 },
-                  ]}
-                >
-                  <Text
-                    numberOfLines={1}
-                    ellipsizeMode="tail"
-                    style={[
-                      styles.entryText,
-                      entry.level === 0
-                        ? { color: colors.onSurface, fontWeight: "600" }
-                        : { color: colors.onSurfaceVariant },
+              {entries.map((entry, index) => {
+                const isActive = activeIndex === index;
+                return (
+                  <Pressable
+                    key={`${index}-${entry.offset}`}
+                    accessibilityRole="button"
+                    accessibilityLabel={entry.text}
+                    accessibilityState={{ selected: isActive }}
+                    onPress={() => onSelect(index, entry)}
+                    style={({ pressed }) => [
+                      styles.entry,
+                      {
+                        paddingLeft: 12 + entry.level * 12,
+                        borderLeftWidth: 2,
+                        borderLeftColor: isActive ? colors.accent : "transparent",
+                        backgroundColor: isActive
+                          ? hexWithAlpha(colors.accent, 0.1)
+                          : "transparent",
+                        opacity: pressed ? 0.6 : 1,
+                      },
                     ]}
                   >
-                    {entry.text || "…"}
-                  </Text>
-                </Pressable>
-              ))}
+                    <Text
+                      numberOfLines={1}
+                      ellipsizeMode="tail"
+                      style={[
+                        styles.entryText,
+                        isActive
+                          ? { color: colors.accent, fontWeight: "600" }
+                          : entry.level === 0
+                            ? { color: colors.onSurface, fontWeight: "600" }
+                            : { color: colors.onSurfaceVariant },
+                      ]}
+                    >
+                      {entry.text || "…"}
+                    </Text>
+                  </Pressable>
+                );
+              })}
             </View>
           </ScrollView>
         )}
@@ -141,20 +154,10 @@ const styles = StyleSheet.create({
     borderLeftWidth: StyleSheet.hairlineWidth,
   },
   panelNarrow: { width: "32%", maxWidth: 165 },
-  title: {
-    paddingHorizontal: 12,
-    paddingTop: 8,
-    paddingBottom: 4,
-    fontSize: 10,
-    fontWeight: "500",
-    fontFamily: "monospace",
-    textTransform: "uppercase",
-    letterSpacing: 1.6,
-  },
-  empty: { paddingHorizontal: 12, fontSize: 12 },
+  empty: { paddingHorizontal: 12, paddingVertical: 8, fontSize: 12 },
   list: { flex: 1, minHeight: 0 },
   /* flexGrow: content fills the panel, so empty space below the entries still drags. */
-  listContent: { flexGrow: 1, paddingBottom: 8 },
+  listContent: { flexGrow: 1, paddingVertical: 4 },
   /* No flexGrow: the empty space under the rows stays on the vertical scroller. */
   listRowView: { flexGrow: 0 },
   listRow: { flexGrow: 1 },

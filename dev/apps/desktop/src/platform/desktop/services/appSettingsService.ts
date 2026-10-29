@@ -10,7 +10,7 @@ import { rpcAppSettingsGet, rpcAppSettingsSave } from "@/lib/rpc";
 /**
  * Desktop → daemon `app_settings_get` / `app_settings_save`.
  * Persists `.upriv/settings.toml` (`[ui]` / `[logging]` / other `[app]` keys).
- * Vault-root mode+path are derived from / written to `.upriv-root` only (not TOML).
+ * Vault-root mode+path are derived from / written to `.upriv-data-folder` only (not TOML).
  * Before a vault-root exists, the UI keeps prefs in memory (`onDisk: false`) and
  * does not call save expecting a write. Mid-session missing/corrupt `.upriv` →
  * RPC error (`vault_root_not_found` / `incomplete`), not soft `wrote: false`.

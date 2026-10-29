@@ -19,7 +19,9 @@ use super::create::claim_new_vault_dir;
 use super::embedded_settings::{parse_embedded_settings, EmbeddedVaultSettings};
 use super::persistence::{save_vault_persistence, VaultPersistence};
 use super::seven_zip_pack::{ensure_free_ram, try_vec_with_capacity};
-use super::zip_io::{read_zip_config_toml, unzip_store_bytes, unzip_store_path};
+use super::zip_io::{
+    buffered_zip_reader, read_zip_config_toml, unzip_store_bytes, unzip_store_path,
+};
 
 pub(crate) fn map_archive_open_error(path: &Path, error: std::io::Error) -> UprivError {
     match crate::paths::nofollow_reject(&error) {
@@ -196,7 +198,7 @@ pub fn read_import_zip_settings(
         path.to_path_buf()
     };
     let file = File::open(&zip_path).map_err(|error| map_archive_open_error(&zip_path, error))?;
-    match read_zip_config_toml(file)? {
+    match read_zip_config_toml(buffered_zip_reader(file)?)? {
         Some(bytes) => Ok(Some(parse_embedded_settings(&bytes)?)),
         None => Ok(None),
     }
@@ -342,6 +344,60 @@ mode = "encrypted_dir"
             crate::host_fs::read(root.vault_store_dir("notes-backup").unwrap().join(notice))
                 .unwrap()
         );
+    }
+
+    #[test]
+    fn a_damaged_blob_restores_the_rest_of_the_vault() {
+        let (tmp, root) = vault_root_with(&[]);
+        create_vault(
+            &root,
+            sample_config("notes", "Notes"),
+            b"pass-word-ok",
+            KdfUnlockPreset::M32,
+        )
+        .unwrap();
+        open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        crate::vault::fs_write_file(&root, "notes", "/a.txt", b"first file").unwrap();
+        crate::vault::fs_write_file(&root, "notes", "/b.txt", b"second file").unwrap();
+        let a_blob =
+            crate::session::with_open_session(&root.vault_dir("notes").unwrap(), |session| {
+                let (file_id, _, _) = session
+                    .index
+                    .find("a.txt")
+                    .and_then(|node| node.as_file())
+                    .expect("a.txt");
+                Ok(format!("{}/{file_id}.blob", &file_id[..2]))
+            })
+            .unwrap();
+        close_vault(&root, "notes").unwrap();
+        let stamp = list_backups(&root, "notes").unwrap()[0].stamp.clone();
+        let mut bytes =
+            crate::host_fs::read(backup_zip_file(&root, "notes", &stamp).unwrap()).unwrap();
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes.clone())).unwrap();
+        let blob = (0..archive.len())
+            .find(|&index| archive.by_index(index).unwrap().name().ends_with(&a_blob))
+            .expect("the blob of a.txt");
+        let entry = archive.by_index(blob).unwrap();
+        let last = (entry.data_start() + entry.compressed_size() - 1) as usize;
+        drop(entry);
+        drop(archive);
+        // The blob's last byte, inside its AEAD tag: the zip checksum no
+        // longer matches either.
+        bytes[last] ^= 0x01;
+        let damaged = tmp.path().join("damaged.zip");
+        crate::host_fs::write(&damaged, &bytes).unwrap();
+
+        let from_file = import_store_zip_path(&root, sample_config("copy", "Copy"), &damaged);
+        let from_bytes = import_store_zip(&root, sample_config("copy2", "Copy 2"), &bytes);
+        for id in [from_file.unwrap(), from_bytes.unwrap()] {
+            open_vault(&root, &id, b"pass-word-ok").unwrap();
+            assert!(crate::vault::fs_read_file(&root, &id, "/a.txt").is_err());
+            assert_eq!(
+                crate::vault::fs_read_file(&root, &id, "/b.txt").unwrap(),
+                b"second file"
+            );
+            close_vault(&root, &id).unwrap();
+        }
     }
 
     #[test]

@@ -147,6 +147,23 @@ impl Default for VaultAutoCloseSection {
     }
 }
 
+/// `[file_manager]`. In-app file manager choices for this vault.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VaultFileManagerSection {
+    /// Ask before deleting a file or folder. Default true.
+    #[serde(default = "default_true")]
+    pub confirm_delete: bool,
+}
+
+impl Default for VaultFileManagerSection {
+    fn default() -> Self {
+        Self {
+            confirm_delete: true,
+        }
+    }
+}
+
 /// `[seven_zip]`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -205,6 +222,8 @@ pub struct VaultConfig {
     pub security: VaultSecuritySection,
     #[serde(default)]
     pub auto_close: VaultAutoCloseSection,
+    #[serde(default)]
+    pub file_manager: VaultFileManagerSection,
     #[serde(default)]
     pub seven_zip: VaultSevenZipSection,
 }

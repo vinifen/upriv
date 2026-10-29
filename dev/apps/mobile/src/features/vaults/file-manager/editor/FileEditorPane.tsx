@@ -1,4 +1,4 @@
-import { useMemo, useRef, type ReactNode, type RefObject } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import {
   Image,
   ScrollView,
@@ -9,7 +9,13 @@ import {
   type NativeSyntheticEvent,
   type TextInputScrollEventData,
 } from "react-native";
-import { fileBaseName, vaultFileLanguageFromPath } from "@upriv/shared";
+import {
+  fileBaseName,
+  fileEditorWordWrap,
+  fileMarkdownOutlineOpen,
+  fileMarkdownView,
+  vaultFileLanguageFromPath,
+} from "@upriv/shared";
 import { noteIdleActivity } from "@/lib/idleActivity";
 import { LoadingBudgetHint } from "@/components/ui";
 import { useTranslation } from "@/i18n";
@@ -20,6 +26,7 @@ import { EditorPathBar } from "./EditorPathBar";
 import { MarkdownOutlinePanel, MarkdownOutlineToggle } from "./MarkdownOutline";
 import { MarkdownPreview, type MarkdownPreviewHandle } from "./MarkdownPreview";
 import { MarkdownViewToggle } from "./MarkdownViewToggle";
+import { WordWrapToggle } from "./WordWrapToggle";
 
 interface FileEditorPaneProps {
   fm: FileManagerApi;
@@ -173,6 +180,11 @@ export function FileEditorPane({ fm, vaultName }: FileEditorPaneProps) {
   const activeTabPath = workspace.activeTabPath;
   const previewRef = useRef<MarkdownPreviewHandle>(null);
   const inputRef = useRef<TextInput>(null);
+  const [activeHeadingIndex, setActiveHeadingIndex] = useState(0);
+
+  useEffect(() => {
+    setActiveHeadingIndex(0);
+  }, [activeTabPath]);
 
   if (!activeTabPath) {
     return (
@@ -249,22 +261,36 @@ export function FileEditorPane({ fm, vaultName }: FileEditorPaneProps) {
     );
   }
 
+  const currentMarkdownView = fileMarkdownView(workspace, activeTabPath);
+  const currentOutlineOpen = fileMarkdownOutlineOpen(workspace, activeTabPath);
+  const currentWordWrap = fileEditorWordWrap(workspace, activeTabPath);
   const markdownFile = vaultFileLanguageFromPath(activeTabPath) === "markdown";
-  const showPreview = markdownFile && workspace.markdownView === "preview";
-  const showOutline = markdownFile && workspace.markdownOutlineOpen;
+  const showPreview = markdownFile && currentMarkdownView === "preview";
+  const showOutline = markdownFile && currentOutlineOpen;
+  const showWordWrap = !showPreview;
 
   return (
     <View style={styles.editorColumn}>
       <EditorPathBar vaultName={vaultName} path={activeTabPath}>
+        {showWordWrap ? (
+          <WordWrapToggle
+            wrap={currentWordWrap}
+            onChange={(wrap) => dispatch({ type: "set_file_word_wrap", path: activeTabPath, wrap })}
+          />
+        ) : null}
         {markdownFile ? (
           <>
             <MarkdownViewToggle
-              mode={workspace.markdownView}
-              onChange={(view) => dispatch({ type: "set_markdown_view", view })}
+              mode={currentMarkdownView}
+              onChange={(view) =>
+                dispatch({ type: "set_file_markdown_view", path: activeTabPath, view })
+              }
             />
             <MarkdownOutlineToggle
-              open={workspace.markdownOutlineOpen}
-              onChange={(open) => dispatch({ type: "set_markdown_outline_open", open })}
+              open={currentOutlineOpen}
+              onChange={(open) =>
+                dispatch({ type: "set_file_markdown_outline_open", path: activeTabPath, open })
+              }
             />
           </>
         ) : null}
@@ -276,6 +302,7 @@ export function FileEditorPane({ fm, vaultName }: FileEditorPaneProps) {
               key={activeTabPath}
               ref={previewRef}
               markdown={content}
+              onActiveHeadingChange={setActiveHeadingIndex}
               onCopyFailed={() => fm.showToast(t("modal.file_manager.markdown.copy_failed"))}
               onChange={
                 writesLocked
@@ -301,7 +328,9 @@ export function FileEditorPane({ fm, vaultName }: FileEditorPaneProps) {
         {showOutline ? (
           <MarkdownOutlinePanel
             markdown={content}
+            activeIndex={activeHeadingIndex}
             onSelect={(index, entry) => {
+              setActiveHeadingIndex(index);
               if (showPreview) {
                 previewRef.current?.scrollToHeading(index);
                 return;

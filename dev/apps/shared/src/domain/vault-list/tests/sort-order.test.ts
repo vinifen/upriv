@@ -16,6 +16,19 @@ describe("sortVaultsByOrder", () => {
     ]);
     expect(sorted.map((v) => v.id)).toEqual(["a", "b"]);
   });
+
+  it("orders names of one order as localeCompare does, case and accents aside", () => {
+    const names = ["beta", "Álpha", "alpha", "Gamma", "ALPHA", "éclair", "Eclair", "zeta", "Beta"];
+    const sorted = sortVaultsByOrder(
+      names.map((displayName, index) =>
+        vaultListItemFixture({ id: `v${index}`, displayName, order: 1 }),
+      ),
+    );
+    const expected = [...names].sort((a, b) =>
+      a.localeCompare(b, undefined, { sensitivity: "base" }),
+    );
+    expect(sorted.map((v) => v.displayName)).toEqual(expected);
+  });
 });
 
 describe("applyVaultListSort", () => {

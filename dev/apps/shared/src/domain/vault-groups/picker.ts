@@ -8,6 +8,12 @@ export interface GroupedVaultPickerItem {
   otherGroup: VaultGroup | null;
 }
 
+/**
+ * Rows the group vault picker shows before its list scrolls. Search appears
+ * only when there are more vaults than this.
+ */
+export const GROUPED_VAULT_PICKER_VISIBLE_ROWS = 6;
+
 function sortByDisplayName(a: VaultListItem, b: VaultListItem): number {
   return a.displayName.localeCompare(b.displayName);
 }

@@ -126,15 +126,15 @@ internal object SafVaultRoot {
     }
   }
 
-  /** `custom=` in the app-home `.upriv-root`. Missing file means nothing to keep. */
+  /** `android_custom_folder=` in the app-home `.upriv-data-folder`. Missing file means nothing to keep. */
   private fun rememberedCustomUri(context: Context): String? {
-    val file = File(context.filesDir, "upriv/.upriv-root")
+    val file = File(context.filesDir, "upriv/.upriv-data-folder")
     if (!file.isFile) return null
     return try {
       file.useLines { lines ->
         lines
-          .firstOrNull { it.startsWith("custom=") }
-          ?.removePrefix("custom=")
+          .firstOrNull { it.startsWith("android_custom_folder=") }
+          ?.removePrefix("android_custom_folder=")
           ?.trim()
           ?.takeIf { it.startsWith("content://") }
       }

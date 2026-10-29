@@ -5,7 +5,7 @@
 //! - [`initialize_vault_root`] — create default `.upriv/` layout  
 //!
 //! App settings TOML (`.upriv/settings.toml`) lives in [`crate::config`].
-//! Alias (`.upriv-root` in app home) is created only for “another folder”.
+//! Alias (`.upriv-data-folder` in app home) is created only for “another folder”.
 //! Default-root mode ignores an active alias (alias file is the on-disk source of truth for
 //! mode/path — not `settings.toml`) and deactivates it on save.
 

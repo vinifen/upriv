@@ -78,7 +78,7 @@ export function FileManagerProvider({
       try {
         await persistWorkspaceSnapshot(fs, vaultId, entry.workspace);
       } catch {
-        // Close must still run. Layout is also written on each edit while open.
+        // Close must still run. Layout is also written while open, once edits pause.
       }
     },
     [fs],

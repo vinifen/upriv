@@ -377,12 +377,13 @@ pub fn sealed_index_bytes(
     seal_index(index_key, &plain, &aad)
 }
 
+/// Seal `index` into both index files and return the bytes written.
 pub fn save_sealed_index(
     store_dir: impl AsRef<Path>,
     header: &VaultHeader,
     index_key: &[u8; INDEX_KEY_LEN],
     index: &VaultIndex,
-) -> Result<()> {
+) -> Result<Vec<u8>> {
     let store_dir = store_dir.as_ref();
     let path = index_path(store_dir);
     if let Some(parent) = path.parent() {
@@ -392,7 +393,8 @@ pub fn save_sealed_index(
     // Copy first. The primary file is the commit, so a crash before that write
     // still opens the previous tree.
     paths::write_bytes_atomic(&index_copy_path(store_dir), &sealed)?;
-    paths::write_bytes_atomic(&path, &sealed)
+    paths::write_bytes_atomic(&path, &sealed)?;
+    Ok(sealed)
 }
 
 pub fn load_sealed_index(

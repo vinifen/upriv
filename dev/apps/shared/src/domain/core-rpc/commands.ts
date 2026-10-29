@@ -20,7 +20,7 @@ export const CORE_RPC_COMMANDS = {
   VAULT_ROOT_SETUP_DEFAULT_ROOT: "vault_root_setup_default_root",
   VAULT_ROOT_SETUP_PATH: "vault_root_setup_path",
   /**
-   * Deactivate `.upriv-root` aliases only — does not create or open a vault-root.
+   * Deactivate `.upriv-data-folder` aliases only — does not create or open a vault-root.
    * Used by Android SAF custom-root setup so internal `filesDir` does not gain a
    * second `.upriv/` from `vault_root_setup_default_root`.
    */
@@ -87,8 +87,6 @@ export const CORE_RPC_COMMANDS = {
    * Desktop drop / picker with a real path; mobile `file://` cache copies.
    */
   VAULT_FS_IMPORT_OS_FILE: "vault_fs_import_os_file",
-  /** Seal the index for files staged by a batch import. */
-  VAULT_FS_IMPORT_SEAL: "vault_fs_import_seal",
   VAULT_FS_TRUNCATE: "vault_fs_truncate",
   VAULT_FS_CREATE_FILE: "vault_fs_create_file",
   VAULT_FS_CREATE_FOLDER: "vault_fs_create_folder",
@@ -134,7 +132,7 @@ export const MOBILE_ONLY_RPC_COMMANDS = {
    * `.upriv/settings.toml` from the storage-access tree; Rust owns the TOML → wire mapping.
    */
   APP_SETTINGS_PARSE_TOML: "app_settings_parse_toml",
-  /** Write `custom=` on `.upriv-root` — the last Android Custom folder. Does not switch mode. */
+  /** Write `android_custom_folder=` on `.upriv-data-folder` — the last Android Custom folder. Does not switch mode. */
   VAULT_ROOT_REMEMBER_CUSTOM: "vault_root_remember_custom",
   /** Unlock a just-created vault for streaming. Does not mount a file manager. */
   VAULT_INGEST_OPEN: "vault_ingest_open",

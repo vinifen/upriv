@@ -49,6 +49,7 @@ export function createEmptyCreateVaultDraft(existingOrders: readonly number[]): 
       wipe_pattern: "random",
     },
     seven_zip: { ...DEFAULT_SEVEN_ZIP },
+    file_manager: { confirm_delete: true },
     order: defaultOrderAtEnd(existingOrders),
     hidden: false,
     groupMode: "none",

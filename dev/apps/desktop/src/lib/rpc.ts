@@ -910,7 +910,6 @@ export async function rpcVaultFsImportOsFile(
   parentPath: string,
   name: string,
   osPath: string,
-  deferIndex?: boolean,
 ): Promise<{ path: string; revision: number }> {
   return requirePathRevision(
     await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_FS_IMPORT_OS_FILE, {
@@ -918,17 +917,8 @@ export async function rpcVaultFsImportOsFile(
       parentPath,
       name,
       osPath,
-      ...(deferIndex ? { deferIndex: true } : {}),
     }),
     "vault_fs_import_os_file",
-  );
-}
-
-/** Seal the index for files staged with `deferIndex`. */
-export async function rpcVaultFsImportSeal(id: string): Promise<number> {
-  return requireRevision(
-    await desktopInvokeRaw(CORE_RPC_COMMANDS.VAULT_FS_IMPORT_SEAL, { id }),
-    "vault_fs_import_seal",
   );
 }
 

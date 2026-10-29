@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   createDefaultWorkspaceState,
+  fileEditorWordWrap,
+  fileMarkdownOutlineOpen,
+  fileMarkdownView,
+  fileSearchQuery,
   hasUnsavedWorkspaceChanges,
   isPathDirty,
   resolveUnsavedPrompt,
@@ -15,7 +19,7 @@ describe("createDefaultWorkspaceState", () => {
     expect(state.openTabs).toEqual([]);
     expect(state.sessionCreatedPaths).toEqual([]);
     expect(state.sessionModifiedPaths).toEqual([]);
-    expect(state.markdownView).toBe("preview");
+    expect(state.fileStates).toEqual({});
     expect(hasUnsavedWorkspaceChanges(state)).toBe(false);
   });
 });
@@ -323,28 +327,25 @@ describe("vaultWorkspaceReducer", () => {
       activeTabPath: "/a.md",
       expandedPaths: ["/", "/notes"],
       selectedPath: "/a.md",
-      markdownView: "source",
       explorerCollapsed: true,
-      markdownOutlineOpen: true,
+      fileStates: { "/a.md": { markdownView: "source", markdownOutlineOpen: false } },
     });
     expect(state.openTabs).toEqual(["/a.md"]);
     expect(state.activeTabPath).toBe("/a.md");
     expect(state.expandedPaths).toEqual(["/", "/notes"]);
-    expect(state.markdownView).toBe("source");
+    expect(fileMarkdownView(state, "/a.md")).toBe("source");
+    expect(fileMarkdownOutlineOpen(state, "/a.md")).toBe(false);
     expect(state.explorerCollapsed).toBe(true);
-    expect(state.markdownOutlineOpen).toBe(true);
     expect(state.dirtyPaths).toEqual(["/tmp.md"]);
   });
 
-  it("keeps one markdown view for the vault and ignores a repeat", () => {
+  it("keeps the markdown view per file and ignores a repeat", () => {
     const initial = createDefaultWorkspaceState();
-    const source = vaultWorkspaceReducer(initial, { type: "set_markdown_view", view: "source" });
-    expect(source.markdownView).toBe("source");
-    expect(source).not.toBe(initial);
-    const again = vaultWorkspaceReducer(source, { type: "set_markdown_view", view: "source" });
-    expect(again).toBe(source);
-    const preview = vaultWorkspaceReducer(source, { type: "set_markdown_view", view: "preview" });
-    expect(preview.markdownView).toBe("preview");
+    const action = { type: "set_file_markdown_view", path: "/a.md", view: "source" } as const;
+    const source = vaultWorkspaceReducer(initial, action);
+    expect(fileMarkdownView(source, "/a.md")).toBe("source");
+    expect(fileMarkdownView(source, "/b.md")).toBe("preview");
+    expect(vaultWorkspaceReducer(source, action)).toBe(source);
   });
 
   it("hides and shows the explorer and ignores a repeat", () => {
@@ -368,16 +369,15 @@ describe("vaultWorkspaceReducer", () => {
     expect(shown.explorerCollapsed).toBe(false);
   });
 
-  it("opens and closes the markdown outline and ignores a repeat", () => {
+  it("opens and closes the markdown outline per file and ignores a repeat", () => {
     const initial = createDefaultWorkspaceState();
-    expect(initial.markdownOutlineOpen).toBe(false);
-    const open = vaultWorkspaceReducer(initial, { type: "set_markdown_outline_open", open: true });
-    expect(open.markdownOutlineOpen).toBe(true);
-    expect(vaultWorkspaceReducer(open, { type: "set_markdown_outline_open", open: true })).toBe(
-      open,
-    );
-    const closed = vaultWorkspaceReducer(open, { type: "set_markdown_outline_open", open: false });
-    expect(closed.markdownOutlineOpen).toBe(false);
+    expect(fileMarkdownOutlineOpen(initial, "/a.md")).toBe(true);
+    const action = { type: "set_file_markdown_outline_open", path: "/a.md", open: false } as const;
+    const closed = vaultWorkspaceReducer(initial, action);
+    expect(fileMarkdownOutlineOpen(closed, "/a.md")).toBe(false);
+    expect(vaultWorkspaceReducer(closed, action)).toBe(closed);
+    const open = vaultWorkspaceReducer(closed, { ...action, open: true });
+    expect(fileMarkdownOutlineOpen(open, "/a.md")).toBe(true);
   });
 
   it("start_rename shows a hidden explorer so the name field is visible", () => {
@@ -439,6 +439,96 @@ describe("vaultWorkspaceReducer", () => {
     expect(state.expandedPaths).toEqual(expect.arrayContaining(["/", "/notes", "/notes/deep"]));
     expect(state.userCollapsedPaths).not.toContain("/notes");
   });
+
+  it("handles per-file markdown view, outline, and search with path remapping and removal", () => {
+    let state = createDefaultWorkspaceState();
+    expect(fileMarkdownView(state, "/a.md")).toBe("preview");
+    expect(fileMarkdownOutlineOpen(state, "/a.md")).toBe(true);
+    expect(fileSearchQuery(state, "/a.md")).toBe("");
+
+    // Set per-file markdown view
+    state = vaultWorkspaceReducer(state, {
+      type: "set_file_markdown_view",
+      path: "/notes/todo.md",
+      view: "source",
+    });
+    expect(fileMarkdownView(state, "/notes/todo.md")).toBe("source");
+    expect(fileMarkdownView(state, "/notes/other.md")).toBe("preview");
+
+    // Set per-file outline
+    state = vaultWorkspaceReducer(state, {
+      type: "set_file_markdown_outline_open",
+      path: "/notes/todo.md",
+      open: false,
+    });
+    expect(fileMarkdownOutlineOpen(state, "/notes/todo.md")).toBe(false);
+    expect(fileMarkdownOutlineOpen(state, "/notes/other.md")).toBe(true);
+
+    // Set per-file search
+    state = vaultWorkspaceReducer(state, {
+      type: "set_file_search_query",
+      path: "/notes/todo.md",
+      query: "secret_password",
+    });
+    expect(fileSearchQuery(state, "/notes/todo.md")).toBe("secret_password");
+    expect(fileSearchQuery(state, "/notes/other.md")).toBe("");
+
+    // Remap paths on folder rename
+    state = vaultWorkspaceReducer(state, {
+      type: "remap_paths",
+      map: { "/notes": "/archive" },
+    });
+    expect(fileMarkdownView(state, "/archive/todo.md")).toBe("source");
+    expect(fileMarkdownOutlineOpen(state, "/archive/todo.md")).toBe(false);
+    expect(fileSearchQuery(state, "/archive/todo.md")).toBe("secret_password");
+    expect(state.fileStates["/notes/todo.md"]).toBeUndefined();
+
+    // Remove paths on file delete
+    state = vaultWorkspaceReducer(state, {
+      type: "remove_paths",
+      paths: ["/archive/todo.md"],
+    });
+    expect(state.fileStates["/archive/todo.md"]).toBeUndefined();
+    expect(fileMarkdownView(state, "/archive/todo.md")).toBe("preview");
+
+    // Remove folder purges child fileStates
+    state = vaultWorkspaceReducer(state, {
+      type: "set_file_markdown_view",
+      path: "/folder/doc.md",
+      view: "source",
+    });
+    expect(state.fileStates["/folder/doc.md"]).toBeDefined();
+    state = vaultWorkspaceReducer(state, {
+      type: "remove_paths",
+      paths: ["/folder"],
+    });
+    expect(state.fileStates["/folder/doc.md"]).toBeUndefined();
+  });
+
+  it("sets the tree split percent per vault and ignores a repeat", () => {
+    let state = createDefaultWorkspaceState();
+    expect(state.treeSplitPercent).toBeNull();
+
+    state = vaultWorkspaceReducer(state, { type: "set_tree_split_percent", percent: 35 });
+    expect(state.treeSplitPercent).toBe(35);
+    expect(vaultWorkspaceReducer(state, { type: "set_tree_split_percent", percent: 35 })).toBe(
+      state,
+    );
+  });
+
+  it("toggles word wrap per file, wrapped by default", () => {
+    let state = createDefaultWorkspaceState();
+    expect(fileEditorWordWrap(state, null)).toBe(true);
+    expect(fileEditorWordWrap(state, "/note.txt")).toBe(true);
+
+    state = vaultWorkspaceReducer(state, {
+      type: "set_file_word_wrap",
+      path: "/note.txt",
+      wrap: false,
+    });
+    expect(fileEditorWordWrap(state, "/note.txt")).toBe(false);
+    expect(fileEditorWordWrap(state, "/other.txt")).toBe(true);
+  });
 });
 
 describe("discard_all_dirty", () => {
@@ -484,5 +574,60 @@ describe("resolveUnsavedPrompt", () => {
     expect(
       resolveUnsavedPrompt(createDefaultWorkspaceState(), { type: "import_in_progress" }),
     ).toEqual({ type: "set_unsaved_prompt", prompt: null });
+  });
+});
+
+describe("sessionPathKind", () => {
+  /** The rule as a plain scan: the path itself, or a folder above a listed path. */
+  function listed(paths: readonly string[], path: string): boolean {
+    if (paths.includes(path)) return true;
+    if (path === "/") return paths.some((p) => p !== "/");
+    return paths.some((p) => p.startsWith(`${path}/`));
+  }
+
+  const lists: string[][] = [
+    [],
+    ["/"],
+    ["/a"],
+    ["/ab/c.txt"],
+    ["/a/b/c.txt", "/a/d.md"],
+    ["/x/y", "/x"],
+  ];
+  const queries = ["/", "/a", "/ab", "/a/b", "/a/b/c.txt", "/a/b/c", "/a/d.md", "/x", "/x/y", "/z"];
+
+  it("matches the listed path and every folder above it", () => {
+    for (const created of lists) {
+      for (const modified of lists) {
+        const state = {
+          ...createDefaultWorkspaceState(),
+          sessionCreatedPaths: [...created],
+          sessionModifiedPaths: [...modified],
+        };
+        for (const path of queries) {
+          const want = listed(created, path)
+            ? "created"
+            : listed(modified, path)
+              ? "modified"
+              : null;
+          expect(sessionPathKind(state, path), `${created} | ${modified} | ${path}`).toBe(want);
+        }
+      }
+    }
+  });
+
+  it("follows each new list the reducer makes", () => {
+    let state = createDefaultWorkspaceState();
+    expect(sessionPathKind(state, "/Photos")).toBeNull();
+    state = vaultWorkspaceReducer(state, {
+      type: "mark_session_created",
+      paths: ["/Photos/day1/a.jpg"],
+    });
+    expect(sessionPathKind(state, "/Photos")).toBe("created");
+    expect(sessionPathKind(state, "/Photos/day2")).toBeNull();
+    state = vaultWorkspaceReducer(state, {
+      type: "mark_session_created",
+      paths: ["/Photos/day2/b.jpg"],
+    });
+    expect(sessionPathKind(state, "/Photos/day2")).toBe("created");
   });
 });

@@ -10,8 +10,7 @@ use crate::error::{Result, UprivError};
 use crate::paths::{validate_workspace_table, VaultRootMode, VAULT_ROOT_SETTINGS_REL};
 
 use super::types::{
-    clamp_file_manager_tree_split_percent, AppSectionSettings, AppSettings, LoggingSettings,
-    UiSettings, WorkspaceSettings,
+    AppSectionSettings, AppSettings, LoggingSettings, UiSettings, WorkspaceSettings,
 };
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -43,8 +42,6 @@ pub(super) struct UiToml {
     pub(super) theme: String,
     pub(super) show_header_more_button: bool,
     pub(super) file_manager_dock_expanded: bool,
-    #[serde(default = "default_file_manager_tree_split_percent")]
-    pub(super) file_manager_tree_split_percent: u8,
     pub(super) always_show_hidden_vaults: bool,
     pub(super) vault_list_sort: String,
     pub(super) vault_list_sort_direction: String,
@@ -65,9 +62,6 @@ pub(super) struct UiToml {
     pub(super) lifecycle_open_file_manager_on_open: bool,
     /// Sleep and phone freeze do not count as inactivity. Default false.
     pub(super) lifecycle_keep_open_on_wake: bool,
-    /// Confirm before deleting in the file manager. Default true.
-    #[serde(default = "default_true")]
-    pub(super) file_manager_confirm_delete: bool,
 }
 
 impl Default for UiToml {
@@ -77,7 +71,6 @@ impl Default for UiToml {
             theme: default_theme(),
             show_header_more_button: true,
             file_manager_dock_expanded: false,
-            file_manager_tree_split_percent: default_file_manager_tree_split_percent(),
             always_show_hidden_vaults: false,
             vault_list_sort: default_sort(),
             vault_list_sort_direction: default_sort_dir(),
@@ -95,7 +88,6 @@ impl Default for UiToml {
             lifecycle_close_modal_on_submit: false,
             lifecycle_open_file_manager_on_open: false,
             lifecycle_keep_open_on_wake: false,
-            file_manager_confirm_delete: true,
         }
     }
 }
@@ -106,9 +98,6 @@ fn ui_toml_from_settings(ui: &UiSettings) -> UiToml {
         theme: ui.theme.clone(),
         show_header_more_button: ui.vault_list_show_header_more_button,
         file_manager_dock_expanded: ui.file_manager_dock_expanded,
-        file_manager_tree_split_percent: clamp_file_manager_tree_split_percent(
-            ui.file_manager_tree_split_percent,
-        ),
         always_show_hidden_vaults: ui.always_show_hidden_vaults,
         vault_list_sort: ui.vault_list_sort.clone(),
         vault_list_sort_direction: ui.vault_list_sort_direction.clone(),
@@ -126,7 +115,6 @@ fn ui_toml_from_settings(ui: &UiSettings) -> UiToml {
         lifecycle_close_modal_on_submit: ui.lifecycle_close_modal_on_submit,
         lifecycle_open_file_manager_on_open: ui.lifecycle_open_file_manager_on_open,
         lifecycle_keep_open_on_wake: ui.lifecycle_keep_open_on_wake,
-        file_manager_confirm_delete: ui.file_manager_confirm_delete,
     }
 }
 
@@ -144,10 +132,6 @@ pub(crate) fn default_sort_dir() -> String {
 }
 pub(crate) fn default_view() -> String {
     "default".into()
-}
-
-pub(crate) fn default_file_manager_tree_split_percent() -> u8 {
-    20
 }
 
 pub(super) fn ui_settings_from_toml(ui: &UiToml) -> UiSettings {
@@ -170,13 +154,9 @@ pub(super) fn ui_settings_from_toml(ui: &UiToml) -> UiSettings {
         vault_list_show_drag: ui.vault_list_show_drag,
         vault_list_allow_drag_into_group: ui.vault_list_allow_drag_into_group,
         file_manager_dock_expanded: ui.file_manager_dock_expanded,
-        file_manager_tree_split_percent: clamp_file_manager_tree_split_percent(
-            ui.file_manager_tree_split_percent,
-        ),
         lifecycle_close_modal_on_submit: ui.lifecycle_close_modal_on_submit,
         lifecycle_open_file_manager_on_open: ui.lifecycle_open_file_manager_on_open,
         lifecycle_keep_open_on_wake: ui.lifecycle_keep_open_on_wake,
-        file_manager_confirm_delete: ui.file_manager_confirm_delete,
     }
 }
 
@@ -219,7 +199,7 @@ pub(crate) fn default_keep() -> u32 {
 #[derive(Debug, Default, Deserialize, Serialize)]
 pub(super) struct AppToml {
     /// Last vault id opened in the UI (empty = none). Always written so the
-    /// key stays visible in `settings.toml`; vault-root mode lives in `.upriv-root`.
+    /// key stays visible in `settings.toml`; vault-root mode lives in `.upriv-data-folder`.
     #[serde(default)]
     pub(super) last_opened_vault: String,
 }
@@ -322,7 +302,7 @@ pub fn serialize_settings_toml_str(settings: &AppSettings) -> Result<String> {
 }
 
 const APP_SECTION_COMMENTS: &str = "\
-# Vault-root mode (`default_root` | `custom_root`): app-home `.upriv-root`, not here.
+# Vault-root mode (`default_root` | `custom_root`): app-home `.upriv-data-folder`, not here.
 # Missing/inactive → default_root; active + path → custom_root.";
 
 const WORKSPACE_SECTION_COMMENTS: &str = "\
@@ -452,8 +432,6 @@ last_opened_vault = "kept"
         assert!(!settings.ui.lifecycle_close_modal_on_submit);
         assert!(!settings.ui.lifecycle_open_file_manager_on_open);
         assert!(!settings.ui.lifecycle_keep_open_on_wake);
-        assert!(settings.ui.file_manager_confirm_delete);
-        assert_eq!(settings.ui.file_manager_tree_split_percent, 20);
         assert_eq!(settings.logging.level, "warn");
         assert_eq!(settings.logging.entries_per_file, 500);
         // Vault-root mode/path never come from TOML.
@@ -473,19 +451,15 @@ theme = "dark"
 lifecycle_close_modal_on_submit = true
 lifecycle_open_file_manager_on_open = true
 lifecycle_keep_open_on_wake = true
-file_manager_confirm_delete = false
 "#;
         let settings = parse_settings_toml_str(raw).unwrap();
         assert!(settings.ui.lifecycle_close_modal_on_submit);
         assert!(settings.ui.lifecycle_open_file_manager_on_open);
         assert!(settings.ui.lifecycle_keep_open_on_wake);
-        assert!(!settings.ui.file_manager_confirm_delete);
         let written = serialize_settings_toml_str(&settings).unwrap();
         assert!(written.contains("lifecycle_close_modal_on_submit = true"));
         assert!(written.contains("lifecycle_open_file_manager_on_open = true"));
         assert!(written.contains("lifecycle_keep_open_on_wake = true"));
-        assert!(written.contains("file_manager_confirm_delete = false"));
-        assert!(written.contains("file_manager_tree_split_percent = 20"));
     }
 
     #[test]

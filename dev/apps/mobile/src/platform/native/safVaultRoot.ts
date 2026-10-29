@@ -123,7 +123,7 @@ export function safReadSettings(treeUri: string): string | null {
 /**
  * The tree mounted at `/upriv-saf-root` (empty string / null = nothing mounted).
  * SharedPreferences store only this pointer. The last Custom folder is the
- * `custom=` line in the app-home `.upriv-root`.
+ * `android_custom_folder=` line in the app-home `.upriv-data-folder`.
  */
 export function safGetActiveUri(): string | null {
   const native = getUprivCoreNative();

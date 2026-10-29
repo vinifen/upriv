@@ -623,6 +623,9 @@ impl<'q> QueuedFile<'q> {
 
 impl Read for QueuedFile<'_> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if self.job.is_stopped() {
+            return Err(std::io::Error::other("job stopped"));
+        }
         if self.read == self.chunk.len() {
             if self.left == 0 {
                 return Ok(0);
@@ -631,6 +634,9 @@ impl Read for QueuedFile<'_> {
                 .queue
                 .recv()
                 .map_err(|_| std::io::Error::other("vault decrypt stopped"))?;
+            if self.job.is_stopped() {
+                return Err(std::io::Error::other("job stopped"));
+            }
             let len = chunk.len() as u64;
             if len == 0 || len > self.left {
                 return Err(std::io::Error::new(
@@ -656,8 +662,10 @@ fn decrypt_in_order(
     source: LogicalSevenZipSource<'_>,
     files: &[&VaultNode],
     queue: SyncSender<Zeroizing<Vec<u8>>>,
+    job: &Job,
 ) -> Result<()> {
     for node in files {
+        job.ensure_running()?;
         let mut encoder_gone = false;
         let read = read_file_chunks(
             source.store_dir,
@@ -665,6 +673,9 @@ fn decrypt_in_order(
             source.content_key,
             node,
             |chunk| {
+                if job.is_stopped() {
+                    return Err(UprivError::JobCancelled);
+                }
                 queue.send(chunk).map_err(|_| {
                     encoder_gone = true;
                     UprivError::JobCancelled
@@ -728,14 +739,16 @@ fn push_file_blocks<W: Write + Seek>(
     std::thread::scope(|scope| {
         let worker = std::thread::Builder::new()
             .name("upriv-7z-decrypt".into())
-            .spawn_scoped(scope, move || decrypt_in_order(source, files, decrypted))?;
+            .spawn_scoped(scope, move || {
+                decrypt_in_order(source, files, decrypted, job)
+            })?;
         let pushed = push_blocks(writer, &queue, opts, password, outer_folder, plan, job);
         // Without its reader the worker stops at its next chunk.
         drop(queue);
         let read = worker
             .join()
             .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
-        read.and(pushed)
+        job.settle(read.and(pushed))
     })
 }
 
@@ -751,6 +764,7 @@ pub(crate) fn pack_logical_seven_zip_to_writer<W: Write + Seek>(
     plan: &SevenZipPackPlan<'_>,
     job: &Job,
 ) -> Result<W> {
+    job.ensure_running()?;
     let password = sevenz_password(archive_password)?;
     let buffered = BufWriter::with_capacity(ARCHIVE_WRITE_BUFFER, dest);
     let mut writer = ArchiveWriter::new(job.writer(buffered)).map_err(map_sevenz_error)?;
@@ -761,6 +775,7 @@ pub(crate) fn pack_logical_seven_zip_to_writer<W: Write + Seek>(
         push_directory(&mut writer, outer_folder)?;
     } else {
         for dir in &plan.dirs {
+            job.ensure_running()?;
             let name = archive_member_name(&seven_zip_logical_member(outer_folder, &dir.path))?;
             push_directory(&mut writer, &name)?;
         }
@@ -775,6 +790,7 @@ pub(crate) fn pack_logical_seven_zip_to_writer<W: Write + Seek>(
         plan,
         job,
     )?;
+    job.ensure_running()?;
     // The header is sealed with its own salt and IV.
     writer.set_content_methods(content_methods(opts, password, plan.threads));
     let buffered = writer.finish().map_err(map_io_error)?.into_inner();
@@ -1289,6 +1305,30 @@ mod tests {
         cancel_job(&id);
         let copy = VaultSevenZipSection::default();
         let packed = pack_into(&root, Cursor::new(Vec::new()), &copy, roomy(1), &job);
+        assert!(matches!(job.settle(packed), Err(UprivError::JobCancelled)));
+    }
+
+    #[test]
+    fn a_stop_after_packing_starts_ends_the_pack() {
+        let data = vec![9u8; 1024 * 1024];
+        let (_tmp, root) = closed_vault(&[("/a.bin", &data), ("/b.bin", &data), ("/c.bin", &data)]);
+        let id = test_job_id();
+        let job = Job::start(&id).unwrap();
+        let id_clone = id.clone();
+        let cancel_thread = std::thread::spawn(move || {
+            for _ in 0..1000 {
+                if let Some(status) = job_status(&id_clone) {
+                    if status.bytes_done > 0 {
+                        cancel_job(&id_clone);
+                        return;
+                    }
+                }
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+        });
+        let copy = VaultSevenZipSection::default();
+        let packed = pack_into(&root, Cursor::new(Vec::new()), &copy, roomy(1), &job);
+        let _ = cancel_thread.join();
         assert!(matches!(job.settle(packed), Err(UprivError::JobCancelled)));
     }
 }

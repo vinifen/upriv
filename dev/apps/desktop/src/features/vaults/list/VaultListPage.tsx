@@ -166,6 +166,7 @@ export function VaultListPage() {
         folders={exportVault.folders}
         onClose={exportVault.onClose}
         onConfirm={exportVault.onConfirm}
+        onStop={exportVault.onStop}
         onPasswordEdited={exportVault.onPasswordEdited}
         onTimeout={exportVault.onTimeout}
       />

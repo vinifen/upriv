@@ -609,12 +609,6 @@ function GeneralFields({
         value={config.lifecycle_keep_open_on_wake}
         onValueChange={(lifecycle_keep_open_on_wake) => onChange({ lifecycle_keep_open_on_wake })}
       />
-      <SwitchRow
-        label={t("modal.app_settings.field.file_manager_confirm_delete")}
-        hint={t("modal.app_settings.field.file_manager_confirm_delete_help")}
-        value={config.file_manager_confirm_delete}
-        onValueChange={(file_manager_confirm_delete) => onChange({ file_manager_confirm_delete })}
-      />
     </View>
   );
 }

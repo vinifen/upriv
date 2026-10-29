@@ -33,14 +33,11 @@ export {
   TREE_SPLIT_DEFAULT_PERCENT,
   TREE_SPLIT_MIN_PERCENT,
   TREE_SPLIT_MAX_PERCENT,
-  TREE_SPLIT_MIN_PX,
-  TREE_SPLIT_MIN_PX_COLUMN,
   clampCanonicalTreeSplitPercent,
-  persistableTreeSplitPercent,
   displayTreeSplitPercent,
+  isTreeSplitDragCollapsed,
   percentFromDelta,
-  treeSplitMinPx,
-  treeSplitVisualMinPercent,
+  persistableTreeSplitPercent,
 } from "./treeSplit";
 export type { TreeSplitAxis } from "./treeSplit";
 export {

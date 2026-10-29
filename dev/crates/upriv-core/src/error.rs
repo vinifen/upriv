@@ -15,7 +15,7 @@ pub enum UprivError {
     #[error("vault root incomplete at {path}: {detail}")]
     VaultRootIncomplete { path: PathBuf, detail: String },
 
-    /// `.upriv-root` alias exists but does not point at a valid vault-root.
+    /// `.upriv-data-folder` alias exists but does not point at a valid vault-root.
     #[error("vault root alias invalid: {0}")]
     VaultRootAliasInvalid(PathBuf),
 

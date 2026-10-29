@@ -39,6 +39,7 @@ export function buildCreateVaultResult(
       wipe_pattern: draft.security.wipe_pattern,
     },
     auto_close: { ...draft.auto_close },
+    file_manager: { ...draft.file_manager },
     seven_zip: { ...draft.seven_zip },
   });
 

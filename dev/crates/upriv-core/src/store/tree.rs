@@ -79,7 +79,7 @@ pub fn file_name(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
 }
 
-fn require_parent_dir(index: &VaultIndex, path: &str) -> Result<()> {
+pub(crate) fn require_parent_dir(index: &VaultIndex, path: &str) -> Result<()> {
     match parent_logical(path) {
         None => Ok(()),
         Some(parent) => match index.find(parent) {
@@ -102,10 +102,14 @@ fn sibling_names(index: &VaultIndex, parent: &str) -> Vec<String> {
         .collect()
 }
 
+/// Index paths are canonical, so `parent/base` is taken exactly when a node
+/// has that path: one string comparison per node.
 fn name_taken(index: &VaultIndex, parent: &str, base: &str) -> bool {
-    index.nodes.iter().any(|node| {
-        parent_logical(&node.path).unwrap_or("") == parent && file_name(&node.path) == base
-    })
+    if parent.is_empty() {
+        index.find(base).is_some()
+    } else {
+        index.find(&format!("{parent}/{base}")).is_some()
+    }
 }
 
 fn unique_with_pattern(existing: &[String], base: &str, folder: bool) -> String {

@@ -2,16 +2,25 @@ export type {
   FileContextMenuState,
   FileDeleteTarget,
   MarkdownViewMode,
+  PerFileWorkspaceState,
   UnsavedPromptAction,
   VaultWorkspaceState,
 } from "./workspaceTypes";
 export {
   createDefaultWorkspaceState,
+  fileEditorWordWrap,
+  fileMarkdownOutlineOpen,
+  fileMarkdownView,
+  fileSearchQuery,
   hasUnsavedWorkspaceChanges,
   isPathDirty,
   markdownViewMode,
   sessionPathKind,
 } from "./workspaceTypes";
+export type { TextMatch } from "./fileSearch";
+export { findTextMatches, stepMatchIndex } from "./fileSearch";
+export type { OutlineScroll } from "./outlineScroll";
+export { activeOutlineIndex } from "./outlineScroll";
 export type { SessionPathKind } from "./workspaceTypes";
 export type { VaultWorkspaceAction } from "./workspaceReducer";
 export { vaultWorkspaceReducer, resolveUnsavedPrompt, reorderOpenTabs } from "./workspaceReducer";

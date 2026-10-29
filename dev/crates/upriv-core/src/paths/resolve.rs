@@ -3,7 +3,7 @@
 //!
 //! `UPRIV_VAULT_ROOT` (or caller `explicit`) always wins over wire mode/path.
 //!
-//! Alias file (`.upriv-root`) lives in the **app home**:
+//! Alias file (`.upriv-data-folder`) lives in the **app home**:
 //! - **Portable / AppImage** (writable folder): directory of `$APPIMAGE` / exe
 //! - **System install** (e.g. `/opt`, Program Files): user data dir
 //!   (`$XDG_DATA_HOME/upriv`, `%LOCALAPPDATA%\Upriv`, …)
@@ -15,10 +15,11 @@
 //!
 //! The file is created only when the user picks another folder. Switching back
 //! to `default_root` **deactivates** it (keeps the path); it is not deleted.
-//! `status=active` → `custom_root` path in use; `status=inactive` → `default_root` mode.
-//! Android also stores the last Custom folder on a `custom=` line (`content://`).
+//! One `key=value` per line: `status=active` → `custom_root` (`data_folder=` in
+//! use); `status=inactive` → `default_root` mode. Android also stores the last
+//! Custom folder on an `android_custom_folder=` line (`content://`).
 //!
-//! **On-disk source of truth for vault-root mode/path is `.upriv-root`**, not
+//! **On-disk source of truth for vault-root mode/path is `.upriv-data-folder`**, not
 //! `settings.toml` (which never stores `vault_root_mode` / `upriv_root_path`).
 //! Wire fields are derived from the alias on load; when mode is
 //! [`VaultRootMode::DefaultRoot`], resolve ignores an active alias and uses
@@ -53,19 +54,19 @@ pub enum VaultRootMode {
     /// Create/use `.upriv/` at the distribution default root; active alias is ignored.
     #[default]
     DefaultRoot,
-    /// Use the absolute path stored in `.upriv-root` (alias).
+    /// Use the absolute path stored in `.upriv-data-folder` (alias).
     CustomRoot,
 }
 
 /// Dotfile in the app home — path pointer to a vault-root (not a vault itself).
-pub const VAULT_ROOT_ALIAS_FILE: &str = ".upriv-root";
+pub const VAULT_ROOT_ALIAS_FILE: &str = ".upriv-data-folder";
 
 /// Max parent levels walked upward by [`discover_vault_root_upward`].
 /// Caps the walk so a misplaced install under `$HOME` does not scan the whole tree
 /// (PRD portable layout: root is at the app home, not arbitrarily deep).
 const PARENT_WALK_MAX_DEPTH: usize = 8;
 
-/// Parsed `.upriv-root` contents.
+/// Parsed `.upriv-data-folder` contents.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VaultRootAlias {
     /// Absolute path to the folder that contains `.upriv/settings.toml`.
@@ -86,7 +87,7 @@ pub struct VaultRootAlias {
 pub enum VaultRootSource {
     /// `UPRIV_VAULT_ROOT`, or an explicit path from the caller.
     Explicit,
-    /// Active `.upriv-root` pointer in the app home (`custom_root` mode).
+    /// Active `.upriv-data-folder` pointer in the app home (`custom_root` mode).
     CustomRoot,
     /// Marker found at the distribution `default_root` anchor (`default_root` mode).
     DefaultRoot,
@@ -105,7 +106,7 @@ pub enum ResolveVaultRoot {
     /// both are the app home. Wire keeps `defaultRootAnchor` / `aliasPath` (not a renamed
     /// `appHome`) so UI and docs stay aligned with the `default_root` mode name.
     NeedsSetup {
-        /// Absolute path of the `.upriv-root` file (under app home).
+        /// Absolute path of the `.upriv-data-folder` file (under app home).
         alias_path: PathBuf,
         /// Folder for “create `.upriv/` here” — same app home as `alias_path`'s parent.
         default_root_anchor: PathBuf,
@@ -118,8 +119,8 @@ pub enum ResolveVaultRoot {
 pub struct ResolveVaultRootOptions {
     /// Highest priority: CLI / env / caller override.
     pub explicit: Option<PathBuf>,
-    /// [`VaultRootMode::DefaultRoot`] (default): search default_root only (active `.upriv-root` is ignored).
-    /// [`VaultRootMode::CustomRoot`]: use `.upriv-root` path, ignoring default_root.
+    /// [`VaultRootMode::DefaultRoot`] (default): search default_root only (active `.upriv-data-folder` is ignored).
+    /// [`VaultRootMode::CustomRoot`]: use `.upriv-data-folder` path, ignoring default_root.
     pub mode: VaultRootMode,
     /// Directory that contains the executable (tests inject a temp dir).
     /// When set, becomes the app home (alias + default_root) and env override is ignored.
@@ -134,7 +135,7 @@ fn binary_dir() -> Result<PathBuf> {
         .ok_or_else(|| UprivError::Io(std::io::Error::other("executable has no parent directory")))
 }
 
-/// App home: owns `.upriv-root` and is the `default_root` create target.
+/// App home: owns `.upriv-data-folder` and is the `default_root` create target.
 ///
 /// Order:
 /// 1. `UPRIV_DEFAULT_ROOT_ANCHOR` (Electron always sets this after a writability probe)
@@ -221,31 +222,36 @@ pub fn vault_root_alias_path(home: impl AsRef<Path>) -> PathBuf {
     home.as_ref().join(VAULT_ROOT_ALIAS_FILE)
 }
 
+const STATUS_KEY: &str = "status=";
+/// The folder chosen under "Another folder" (it holds `.upriv/`).
+const DATA_FOLDER_KEY: &str = "data_folder=";
+/// The last Android Custom folder (`content://` tree).
+const ANDROID_CUSTOM_FOLDER_KEY: &str = "android_custom_folder=";
+
+/// One `key=value` per line, and a comment only for what applies: desktop
+/// gets no Android lines.
 fn alias_file_contents(path: &Path, active: bool, custom_uri: Option<&str>) -> Result<String> {
     let path_str = path_as_alias_line(path)?;
+    let mut text = String::from(
+        "# Upriv data folder pointer. Not a vault; holds no secrets.\n\
+         # status=active: Upriv opens data_folder. status=inactive: Upriv opens the default data folder and keeps data_folder for later.\n",
+    );
+    if path == Path::new(crate::host_fs::SAF_VAULT_ROOT) {
+        text.push_str("# /upriv-saf-root is the Android folder you granted, not a real path.\n");
+    }
+    let custom = custom_uri.filter(|uri| !uri.is_empty());
+    if custom.is_some() {
+        text.push_str(
+            "# android_custom_folder is the last Custom folder, kept while Documents/Upriv is in use.\n",
+        );
+    }
     let status = if active { "active" } else { "inactive" };
-    let status_note = if active {
-        "custom_root mode — this path is the vault-root (default_root `.upriv` is ignored)."
-    } else {
-        "not in use — default-root mode is active; path kept if you switch back."
-    };
-    let custom_line = match custom_uri {
-        Some(uri) if !uri.is_empty() => format!("custom={uri}\n"),
-        _ => String::new(),
-    };
-    Ok(format!(
-        "\
-# Upriv vault-root alias (not a vault — path pointer only).
-# Absolute path to the folder that contains `.upriv/settings.toml`.
-# Created only when the user chooses \"another folder\".
-# status={status} — {status_note}
-# custom= is the last Android Custom folder (content URI). It stays when Documents is in use.
-# Do not put passwords or secrets in this file.
-#
-status={status}
-{custom_line}{path_str}
-"
-    ))
+    text.push_str(&format!("{STATUS_KEY}{status}\n"));
+    if let Some(uri) = custom {
+        text.push_str(&format!("{ANDROID_CUSTOM_FOLDER_KEY}{uri}\n"));
+    }
+    text.push_str(&format!("{DATA_FOLDER_KEY}{path_str}\n"));
+    Ok(text)
 }
 
 /// Android Custom folder pointer. Empty clears it. Anything else must be a `content://` tree.
@@ -289,12 +295,12 @@ fn path_as_alias_line(path: &Path) -> Result<String> {
     Ok(s.to_string())
 }
 
-/// Read `.upriv-root` if present. Missing file → `Ok(None)`.
+/// Read `.upriv-data-folder` if present. Missing file → `Ok(None)`.
 ///
 /// Lines starting with `#` are comments. `status=active|inactive` sets the flag
-/// (default **inactive** when omitted — fail closed). First other non-empty line
-/// is the absolute vault-root path. File present without a valid absolute path
-/// line → [`UprivError::VaultRootAliasInvalid`].
+/// (default **inactive** when omitted — fail closed). `data_folder=` is the
+/// absolute vault-root path. A file without one, or with any other line,
+/// → [`UprivError::VaultRootAliasInvalid`].
 pub fn read_vault_root_alias(home: impl AsRef<Path>) -> Result<Option<VaultRootAlias>> {
     let path = vault_root_alias_path(home);
     let raw = match crate::host_fs::read_to_string(&path) {
@@ -312,14 +318,18 @@ pub fn read_vault_root_alias(home: impl AsRef<Path>) -> Result<Option<VaultRootA
         if trimmed.is_empty() || trimmed.starts_with('#') {
             continue;
         }
-        if let Some(value) = trimmed.strip_prefix("custom=") {
+        if let Some(value) = trimmed.strip_prefix(ANDROID_CUSTOM_FOLDER_KEY) {
             custom_uri = match parse_custom_uri(value) {
                 Ok(uri) => uri,
                 Err(_) => return Err(UprivError::VaultRootAliasInvalid(path)),
             };
             continue;
         }
-        if let Some(value) = trimmed.strip_prefix("status=") {
+        if let Some(value) = trimmed.strip_prefix(DATA_FOLDER_KEY) {
+            target = Some(PathBuf::from(value.trim()));
+            continue;
+        }
+        if let Some(value) = trimmed.strip_prefix(STATUS_KEY) {
             saw_status = true;
             active = match value.trim().to_ascii_lowercase().as_str() {
                 "active" => true,
@@ -327,7 +337,7 @@ pub fn read_vault_root_alias(home: impl AsRef<Path>) -> Result<Option<VaultRootA
                 other => {
                     // Rare typo / corruption: fail closed and rewrite as inactive (no UI).
                     eprintln!(
-                        "upriv-core: .upriv-root has unknown status={other:?}; rewriting as inactive"
+                        "upriv-core: .upriv-data-folder has unknown status={other:?}; rewriting as inactive"
                     );
                     crate::logging::log_event(
                         crate::logging::LogLevel::Warn,
@@ -340,9 +350,7 @@ pub fn read_vault_root_alias(home: impl AsRef<Path>) -> Result<Option<VaultRootA
             };
             continue;
         }
-        if target.is_none() {
-            target = Some(PathBuf::from(trimmed));
-        }
+        return Err(UprivError::VaultRootAliasInvalid(path));
     }
     let Some(target) = target else {
         return Err(UprivError::VaultRootAliasInvalid(path));
@@ -354,7 +362,7 @@ pub fn read_vault_root_alias(home: impl AsRef<Path>) -> Result<Option<VaultRootA
         // Best-effort heal; still return inactive even if the rewrite fails.
         if let Ok(contents) = alias_file_contents(&target, false, custom_uri.as_deref()) {
             if let Err(error) = write_alias_file_atomic(&path, &contents) {
-                eprintln!("upriv-core: failed to rewrite .upriv-root as inactive: {error}");
+                eprintln!("upriv-core: failed to rewrite .upriv-data-folder as inactive: {error}");
             }
         }
     }
@@ -366,7 +374,7 @@ pub fn read_vault_root_alias(home: impl AsRef<Path>) -> Result<Option<VaultRootA
     }))
 }
 
-/// Atomically write `.upriv-root` (temp + `sync_all` + rename) so a crash cannot
+/// Atomically write `.upriv-data-folder` (temp + `sync_all` + rename) so a crash cannot
 /// leave a 0-byte alias that the next launch treats as missing.
 fn write_alias_file_atomic(alias_path: &Path, contents: &str) -> Result<()> {
     crate::paths::write_bytes_atomic(alias_path, contents.as_bytes())
@@ -379,12 +387,12 @@ pub fn write_vault_root_alias(home: impl AsRef<Path>, target: impl AsRef<Path>) 
 }
 
 /// Write active alias using an already-validated [`VaultRoot`] (avoids a second discover).
-/// A `custom=` line already in the file is kept.
+/// An `android_custom_folder=` line already in the file is kept.
 pub fn write_vault_root_alias_for_root(home: impl AsRef<Path>, root: &VaultRoot) -> Result<()> {
     write_vault_root_alias_for_root_with_custom(home, root, None)
 }
 
-/// Write the active alias. `custom_uri` `None` keeps a `custom=` line already in the file.
+/// Write the active alias. `custom_uri` `None` keeps an `android_custom_folder=` line already in the file.
 /// `Some("")` clears it. A non-empty value must be a `content://` tree.
 pub fn write_vault_root_alias_for_root_with_custom(
     home: impl AsRef<Path>,
@@ -411,7 +419,7 @@ pub fn write_vault_root_alias_for_root_with_custom(
     )
 }
 
-/// Record the Android Custom folder on the existing `.upriv-root` without changing mode.
+/// Record the Android Custom folder on the existing `.upriv-data-folder` without changing mode.
 /// Missing alias file is left missing — setup writes the line with the folder.
 pub fn remember_vault_root_custom_uri(uri: &str) -> Result<()> {
     let home = app_home_dir()?;
@@ -866,7 +874,10 @@ mod tests {
         // Bypass write_vault_root_alias (requires a valid marker).
         crate::host_fs::write(
             vault_root_alias_path(home.path()),
-            format!("status=active\n{}\n", elsewhere.path().display()),
+            format!(
+                "status=active\ndata_folder={}\n",
+                elsewhere.path().display()
+            ),
         )
         .unwrap();
 
@@ -901,7 +912,7 @@ mod tests {
         let missing = home.path().join("gone");
         crate::host_fs::write(
             vault_root_alias_path(home.path()),
-            format!("status=active\n{}\n", missing.display()),
+            format!("status=active\ndata_folder={}\n", missing.display()),
         )
         .unwrap();
         let err = resolve_vault_root(ResolveVaultRootOptions {
@@ -966,6 +977,9 @@ mod tests {
 
         let raw = crate::host_fs::read_to_string(vault_root_alias_path(home.path())).unwrap();
         assert!(raw.contains("status=inactive"));
+        // A desktop file carries no Android lines.
+        assert!(!raw.contains("android"), "{raw}");
+        assert!(!raw.contains("upriv-saf-root"), "{raw}");
         assert!(vault_root_alias_path(home.path()).host_is_file());
 
         write_vault_root_alias(home.path(), elsewhere.path()).unwrap();
@@ -982,6 +996,15 @@ mod tests {
         let root = VaultRoot::discover(elsewhere.path()).unwrap();
         let uri = "content://com.android.externalstorage.documents/tree/ABCD-1234%3A";
         write_vault_root_alias_for_root_with_custom(home.path(), &root, Some(uri)).unwrap();
+        let raw = crate::host_fs::read_to_string(vault_root_alias_path(home.path())).unwrap();
+        assert!(
+            raw.contains(&format!("\nandroid_custom_folder={uri}\n")),
+            "{raw}"
+        );
+        assert!(
+            raw.contains("# android_custom_folder is the last Custom folder"),
+            "{raw}"
+        );
         deactivate_vault_root_alias(home.path()).unwrap();
         let alias = read_vault_root_alias(home.path()).unwrap().unwrap();
         assert!(!alias.active);
@@ -998,10 +1021,31 @@ mod tests {
         let elsewhere = tempfile::tempdir().unwrap();
         initialize_vault_root(elsewhere.path()).unwrap();
         let alias_path = vault_root_alias_path(home.path());
-        crate::host_fs::write(&alias_path, format!("{}\n", elsewhere.path().display())).unwrap();
+        crate::host_fs::write(
+            &alias_path,
+            format!("data_folder={}\n", elsewhere.path().display()),
+        )
+        .unwrap();
         let alias = read_vault_root_alias(home.path()).unwrap().unwrap();
         assert!(!alias.active);
         assert_eq!(alias.path, elsewhere.path());
+    }
+
+    #[test]
+    fn a_line_without_a_key_makes_the_pointer_invalid() {
+        let home = tempfile::tempdir().unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        initialize_vault_root(elsewhere.path()).unwrap();
+        let alias_path = vault_root_alias_path(home.path());
+        crate::host_fs::write(
+            &alias_path,
+            format!("status=active\n{}\n", elsewhere.path().display()),
+        )
+        .unwrap();
+        assert!(matches!(
+            read_vault_root_alias(home.path()),
+            Err(UprivError::VaultRootAliasInvalid(_))
+        ));
     }
 
     #[test]
@@ -1012,7 +1056,7 @@ mod tests {
         let alias_path = vault_root_alias_path(home.path());
         crate::host_fs::write(
             &alias_path,
-            format!("status=actve\n{}\n", elsewhere.path().display()),
+            format!("status=actve\ndata_folder={}\n", elsewhere.path().display()),
         )
         .unwrap();
         let alias = read_vault_root_alias(home.path()).unwrap().unwrap();
@@ -1219,7 +1263,7 @@ mod tests {
                 distribution,
             } => {
                 assert_eq!(distribution, AppDistribution::Installed);
-                assert_eq!(alias_path, appdata.join(".upriv-root"));
+                assert_eq!(alias_path, appdata.join(".upriv-data-folder"));
                 assert_eq!(default_root_anchor, appdata);
             }
             _ => panic!("expected needs_setup"),
@@ -1272,8 +1316,12 @@ mod tests {
         initialize_vault_root(target.path()).unwrap();
         write_vault_root_alias(home.path(), target.path()).unwrap();
         let raw = crate::host_fs::read_to_string(vault_root_alias_path(home.path())).unwrap();
-        assert!(raw.contains("# Upriv vault-root alias"));
-        assert!(raw.contains("status=active"));
+        assert!(raw.contains("# Upriv data folder pointer"));
+        assert!(raw.contains("\nstatus=active\n"));
+        assert!(raw.contains(&format!(
+            "\ndata_folder={}\n",
+            target.path().canonicalize().unwrap().display()
+        )));
         let parsed = read_vault_root_alias(home.path()).unwrap().unwrap();
         assert!(parsed.active);
         assert_eq!(parsed.path, target.path().canonicalize().unwrap());

@@ -56,6 +56,7 @@ export function applyEmbeddedVaultSettings(
     auto_close: unchanged(draft.auto_close, snapshot.auto_close, { ...source.auto_close }),
     security: unchanged(draft.security, snapshot.security, security),
     seven_zip: unchanged(draft.seven_zip, snapshot.seven_zip, { ...source.seven_zip }),
+    file_manager: unchanged(draft.file_manager, snapshot.file_manager, { ...source.file_manager }),
     archiveUnlockPreset: embedded.unlockPreset,
   };
   if (embedded.unlockPreset && createVaultChoosesKdf(next)) {
@@ -100,7 +101,7 @@ export function parseEmbeddedVaultSettings(
   ) {
     return null;
   }
-  if (!isRecord(settings.seven_zip)) return null;
+  if (!isRecord(settings.seven_zip) || !isRecord(settings.file_manager)) return null;
   const displayName = str(settings.vault.display_name);
   const mode = oneOf(str(settings.storage.mode) ?? "", ["encrypted_dir", "upriv_plain"] as const);
   const backupMode = oneOf(str(settings.backup.mode) ?? "", ["keep_last", "keep_all"] as const);
@@ -135,13 +136,15 @@ export function parseEmbeddedVaultSettings(
   const autoEnabled = bool(settings.auto_close.enabled);
   const encryptNames = bool(settings.seven_zip.encrypt_file_names);
   const solid = bool(settings.seven_zip.solid);
+  const confirmDelete = bool(settings.file_manager.confirm_delete);
   if (
     enabled === null ||
     skipUnchanged === null ||
     hidden === null ||
     autoEnabled === null ||
     encryptNames === null ||
-    solid === null
+    solid === null ||
+    confirmDelete === null
   ) {
     return null;
   }
@@ -173,6 +176,7 @@ export function parseEmbeddedVaultSettings(
         enabled: autoEnabled,
         idle_minutes: idle,
       },
+      file_manager: { confirm_delete: confirmDelete },
       seven_zip: {
         encrypt_file_names: encryptNames,
         archive_mode: archiveMode,

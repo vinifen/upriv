@@ -119,6 +119,13 @@ export const ICON_GLYPHS: Record<IconName, readonly IconShape[]> = {
   ],
   clock: [c(12, 12, 8, stroke), p("M12 8v4l3 2", roundJoin)],
   close: [p("M6 6l12 12M18 6L6 18", round)],
+  code: [
+    p("M16 18l6-6-6-6M8 6l-6 6 6 6", {
+      strokeWidth: 2,
+      strokeLinecap: "round",
+      strokeLinejoin: "round",
+    }),
+  ],
   copy: [r(9, 9, 11, 11, { rx: 2, strokeWidth: 1.75 }), p("M5 15V5a2 2 0 0 1 2-2h10", roundJoin)],
   cpu: [
     r(4, 4, 16, 16, { rx: 2, strokeWidth: 1.75 }),
@@ -247,4 +254,10 @@ export const ICON_GLYPHS: Record<IconName, readonly IconShape[]> = {
     p("M9.5 10.5L11 14M14.5 10.5L13 14", { strokeWidth: 1.5, strokeLinecap: "round" }),
   ],
   trash: [p(PATH_TRASH, roundJoin)],
+  "wrap-text": [
+    p("M3 6h18", round),
+    p("M3 12h15a3 3 0 1 1 0 6h-4", roundJoin),
+    p("M16 16l-2 2 2 2", roundJoin),
+    p("M3 18h7", round),
+  ],
 };

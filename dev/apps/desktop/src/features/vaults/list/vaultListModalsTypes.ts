@@ -71,7 +71,9 @@ export interface VaultListModalsHandle {
   exportJob: VaultExportJob | null;
   /** Vault of that export. */
   exportJobVaultId: string | null;
-  setExportJob: (job: VaultExportJob | null) => void;
+  setExportJob: (
+    job: VaultExportJob | null | ((current: VaultExportJob | null) => VaultExportJob | null),
+  ) => void;
   /** The password a `.7z` export of this vault was refused with, shown on its field. */
   exportPasswordError: VaultExportPasswordError | null;
   setExportPasswordError: (error: VaultExportPasswordError | null) => void;
@@ -84,6 +86,8 @@ export interface VaultExportJob {
   vaultId: string;
   format: VaultExportFormat;
   startedAt: number;
+  /** Stop export was pressed; the export call has not settled yet. */
+  stopping?: boolean;
 }
 
 /** A `.7z` export refused its password: wrong, or the unlock limit. */

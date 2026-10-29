@@ -18,7 +18,7 @@ See `dev/docs/ARCHITECTURE.md` and `dev/docs/sdd.md` §4.
 | `store/` | At-rest ciphertext: header (Argon2id wrap), sealed index (AES-SIV names), XChaCha20-Poly1305 chunks |
 | `session/` | Open session keys in RAM, unlock throttle |
 | `mount/` | Linux FUSE host, Windows WinFsp |
-| `paths/` | Layout, vault-root resolve, `.upriv-root` alias, workspace paths, `initialize_vault_root` |
+| `paths/` | Layout, vault-root resolve, `.upriv-data-folder` alias, workspace paths, `initialize_vault_root` |
 | `logging/` | Structured `.upriv/logs/` writers |
 | `runtime_state` / `lockfile` | `.upriv/state.json` open records and `runtime/<id>.lock` (dirty-close recovery) |
 | `host_fs` | Filesystem access, including Android storage-access trees |
@@ -40,7 +40,7 @@ let outcome = resolve_vault_root(ResolveVaultRootOptions {
 Order (see `paths/resolve.rs`):
 
 1. **Explicit** path / `UPRIV_VAULT_ROOT` — always wins over wire mode/path; must be valid or error  
-2. **CustomRoot** (`VaultRootMode::CustomRoot`): open **active** `.upriv-root` path only (inactive → NeedsSetup)  
+2. **CustomRoot** (`VaultRootMode::CustomRoot`): open **active** `.upriv-data-folder` path only (inactive → NeedsSetup)  
 3. **DefaultRoot** (`VaultRootMode::DefaultRoot`): search default_root from app home (then cwd); **active alias is ignored**  
 4. **NeedsSetup** — UI offers create `default_root` vs choose-path (+ alias + `distribution`)
 
@@ -64,13 +64,16 @@ Installed default_root search does **not** walk cwd/parents — only the app-hom
 | `portable` / `dev` with `UPRIV_DEFAULT_ROOT_ANCHOR` | **Strict** at default vault anchor |
 | Env unset (daemon only) | **Loose** — `discover_vault_root_upward` (walk parents upward) |
 
-### `.upriv-root` alias (app home)
+### `.upriv-data-folder` alias (app home)
 
 | File state | Meaning |
 |------------|---------|
 | Missing | Default-root mode (no custom path remembered) |
-| `status=inactive` + path | Default_root in use; path kept for switching back to custom_root |
-| `status=active` + path | Custom vault-root (when settings say `custom_root`) |
+| `status=inactive` + `data_folder=` | Default_root in use; path kept for switching back to custom_root |
+| `status=active` + `data_folder=` | Custom vault-root (when settings say `custom_root`) |
+| A line without a known key | Invalid (`VaultRootAliasInvalid`) |
+
+Android adds `android_custom_folder=` (the last Custom folder, `content://`) once one is picked.
 
 - Switching to default_root **deactivates** the alias (keeps path); custom_root reactivates / rewrites it  
 - File is created only when the user first chooses another folder  

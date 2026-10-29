@@ -42,14 +42,16 @@ describe("relocateInstallDirVault", () => {
     const userData = path.join(root, "Local", "Upriv");
     fs.mkdirSync(path.join(install, ".upriv", "vaults"), { recursive: true });
     fs.writeFileSync(path.join(install, ".upriv", "settings.toml"), "ok\n");
-    fs.writeFileSync(path.join(install, ".upriv-root"), "status=active\n");
+    fs.writeFileSync(path.join(install, ".upriv-data-folder"), "status=active\n");
 
     const result = relocateInstallDirVault(install, userData);
 
     expect(result).toEqual({ anchor: userData, notice: null, noticePath: null });
     expect(fs.existsSync(path.join(install, ".upriv"))).toBe(false);
     expect(fs.readFileSync(path.join(userData, ".upriv", "settings.toml"), "utf8")).toBe("ok\n");
-    expect(fs.readFileSync(path.join(userData, ".upriv-root"), "utf8")).toBe("status=active\n");
+    expect(fs.readFileSync(path.join(userData, ".upriv-data-folder"), "utf8")).toBe(
+      "status=active\n",
+    );
     fs.rmSync(root, { recursive: true, force: true });
   });
 

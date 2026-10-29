@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { Modal as RnModal, Pressable, StyleSheet, Text, View } from "react-native";
 import { Button, Checkbox, Modal, ModalFooterActions, Toast } from "@/components/ui";
-import { useAppSettingsContext } from "@/features/system/settings";
 import { useTranslation } from "@/i18n";
 import {
   unsavedPromptBodyKey,
@@ -19,7 +18,6 @@ interface FileManagerDialogsProps {
 export function FileManagerDialogs({ fm, promptsOpen = true }: FileManagerDialogsProps) {
   const { t } = useTranslation();
   const { typography, colors } = useTheme();
-  const { patchSettings } = useAppSettingsContext();
   const deleteTarget = fm.workspace.deleteTarget;
   const unsavedPrompt = fm.workspace.unsavedPrompt;
   const isMultiFilePrompt = unsavedPromptConfirmsAllFiles(unsavedPrompt);
@@ -35,9 +33,7 @@ export function FileManagerDialogs({ fm, promptsOpen = true }: FileManagerDialog
     const persistPref = dontAskAgain;
     setDontAskAgain(false);
     fm.confirmDelete();
-    if (persistPref) {
-      void patchSettings({ ui: { file_manager_confirm_delete: false } });
-    }
+    if (persistPref) fm.stopAskingBeforeDelete();
   };
 
   return (

@@ -53,9 +53,8 @@ pub use files_zip::{
 };
 pub use fs::{
     fs_create_file, fs_create_folder, fs_delete, fs_ensure_folder, fs_import_from_os_path,
-    fs_import_from_os_path_deferred, fs_list_tree, fs_mkdir, fs_move, fs_os_path, fs_read_file,
-    fs_read_range, fs_rename, fs_seal_staged_imports, fs_tree_revision, fs_truncate, fs_write_file,
-    fs_write_from_reader, fs_write_range,
+    fs_list_tree, fs_mkdir, fs_move, fs_os_path, fs_read_file, fs_read_range, fs_rename,
+    fs_tree_revision, fs_truncate, fs_write_file, fs_write_from_reader, fs_write_range,
 };
 pub use import::{
     import_from_backup, import_store_from_archive_path, import_store_tree, import_store_zip,
@@ -68,7 +67,7 @@ pub use open_close::{
 };
 pub use os_import::{
     abort_import_vault, import_logical_os_path, ingest_import_directory, ingest_import_reader,
-    ingest_import_reader_staged, open_import_session,
+    open_import_session,
 };
 pub use partial::{discard_partial, PartialWork};
 pub use persistence::{load_vault_persistence, VaultPersistence};

@@ -30,6 +30,17 @@ export function markdownViewMode(value: unknown): MarkdownViewMode {
   return value === "source" ? "source" : "preview";
 }
 
+/**
+ * Per-file view, outline, word wrap, and in-file search. A missing field uses the
+ * default: Read (`preview`), outline shown, wrapped, no search.
+ */
+export interface PerFileWorkspaceState {
+  markdownView?: MarkdownViewMode;
+  markdownOutlineOpen?: boolean;
+  searchQuery?: string;
+  wordWrap?: boolean;
+}
+
 export interface VaultWorkspaceState {
   expandedPaths: string[];
   /**
@@ -62,20 +73,21 @@ export interface VaultWorkspaceState {
   dragSourcePath: string | null;
   dropTargetPath: string | null;
   /**
-   * Preview or source for every Markdown file in this vault.
-   * Persisted on `.upriv-workspace.json`. RAM default is preview.
-   */
-  markdownView: MarkdownViewMode;
-  /**
    * Explorer hidden behind its toggle button. Per vault, persisted on
    * `.upriv-workspace.json`. RAM default is shown.
    */
   explorerCollapsed: boolean;
   /**
-   * Heading outline beside Markdown files (both views). Per vault, persisted on
-   * `.upriv-workspace.json`. RAM default is hidden.
+   * Per-file view mode, outline visibility, word wrap, and search state.
+   * Keyed by logical file path (e.g. `/readme.md`).
+   * Persisted on `.upriv-workspace.json`.
    */
-  markdownOutlineOpen: boolean;
+  fileStates: Record<string, PerFileWorkspaceState>;
+  /**
+   * Explorer/editor divider split width (canonical integer % of the FM pane, 4–65).
+   * Per vault, persisted on `.upriv-workspace.json`. Null uses `TREE_SPLIT_DEFAULT_PERCENT`.
+   */
+  treeSplitPercent: number | null;
 }
 
 export function createDefaultWorkspaceState(): VaultWorkspaceState {
@@ -96,10 +108,36 @@ export function createDefaultWorkspaceState(): VaultWorkspaceState {
     unsavedPrompt: null,
     dragSourcePath: null,
     dropTargetPath: null,
-    markdownView: "preview",
     explorerCollapsed: false,
-    markdownOutlineOpen: false,
+    fileStates: {},
+    treeSplitPercent: null,
   };
+}
+
+function fileState(
+  state: VaultWorkspaceState,
+  path: string | null,
+): PerFileWorkspaceState | undefined {
+  return path ? state.fileStates[path] : undefined;
+}
+
+export function fileMarkdownView(
+  state: VaultWorkspaceState,
+  path: string | null,
+): MarkdownViewMode {
+  return fileState(state, path)?.markdownView ?? "preview";
+}
+
+export function fileMarkdownOutlineOpen(state: VaultWorkspaceState, path: string | null): boolean {
+  return fileState(state, path)?.markdownOutlineOpen ?? true;
+}
+
+export function fileEditorWordWrap(state: VaultWorkspaceState, path: string | null): boolean {
+  return fileState(state, path)?.wordWrap ?? true;
+}
+
+export function fileSearchQuery(state: VaultWorkspaceState, path: string | null): string {
+  return fileState(state, path)?.searchQuery ?? "";
 }
 
 export function isPathDirty(state: VaultWorkspaceState, path: string): boolean {
@@ -110,11 +148,33 @@ export function hasUnsavedWorkspaceChanges(state: VaultWorkspaceState): boolean 
   return state.dirtyPaths.length > 0;
 }
 
+/**
+ * Each listed path and every folder above it, built once per list. The
+ * workspace lists are replaced, never edited, so a list keeps its set; the
+ * explorer asks once per row on every render.
+ */
+const listedWithAncestors = new WeakMap<readonly string[], ReadonlySet<string>>();
+
+function pathsWithAncestors(paths: readonly string[]): ReadonlySet<string> {
+  const cached = listedWithAncestors.get(paths);
+  if (cached) return cached;
+  const marked = new Set<string>();
+  for (const path of paths) {
+    // A path already marked has its folders marked too.
+    for (let current = path; !marked.has(current);) {
+      marked.add(current);
+      if (current === "/") break;
+      const slash = current.lastIndexOf("/");
+      current = slash <= 0 ? "/" : current.slice(0, slash);
+    }
+  }
+  listedWithAncestors.set(paths, marked);
+  return marked;
+}
+
+/** `path` is listed, or a folder above something listed. */
 function pathOrDescendantInList(paths: readonly string[], path: string): boolean {
-  if (paths.includes(path)) return true;
-  if (path === "/") return paths.some((p) => p !== "/");
-  const prefix = `${path}/`;
-  return paths.some((p) => p.startsWith(prefix));
+  return pathsWithAncestors(paths).has(path);
 }
 
 /**

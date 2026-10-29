@@ -117,9 +117,7 @@ describe("buildVaultWelcomeFiles", () => {
       activeTabPath: VAULT_WELCOME_README_PATH,
       expandedPaths: ["/"],
       selectedPath: VAULT_WELCOME_README_PATH,
-      markdownView: "preview",
       explorerCollapsed: false,
-      markdownOutlineOpen: false,
     });
   });
 });

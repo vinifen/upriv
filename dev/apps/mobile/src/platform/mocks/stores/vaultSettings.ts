@@ -21,6 +21,7 @@ const DEFAULTS: VaultSettingsConfig = {
     enabled: false,
     idle_minutes: 15,
   },
+  file_manager: { confirm_delete: true },
   seven_zip: {
     encrypt_file_names: true,
     archive_mode: "encrypt_only",
@@ -112,6 +113,7 @@ export function getMockVaultSettings(vaultId: string): VaultSettingsConfig {
     backup: { ...DEFAULTS.backup, ...custom?.backup },
     security: { ...DEFAULTS.security, ...custom?.security },
     auto_close: { ...DEFAULTS.auto_close, ...custom?.auto_close },
+    file_manager: { ...DEFAULTS.file_manager, ...custom?.file_manager },
     seven_zip: { ...DEFAULTS.seven_zip, ...custom?.seven_zip },
   };
 }

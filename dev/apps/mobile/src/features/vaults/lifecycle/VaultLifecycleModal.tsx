@@ -104,9 +104,6 @@ export function VaultLifecycleModal({
       dismissible
       footer={
         <ModalFooterActions layout="dialog">
-          {submitting ? null : (
-            <Button label={t("action.cancel")} variant="ghost" onPress={onClose} />
-          )}
           <Button
             label={
               submitting

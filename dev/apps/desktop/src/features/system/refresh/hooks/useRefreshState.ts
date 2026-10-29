@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
+/** A minimum turn of the refresh icon, so a refresh that settles at once still shows. */
 export function useRefreshState(durationMs = 800) {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const timeoutRef = useRef<number | null>(null);

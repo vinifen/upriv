@@ -9,8 +9,8 @@ use crate::paths::VaultRootMode;
 pub use crate::paths::WorkspaceSettings;
 
 use super::toml::{
-    default_entries, default_file_manager_tree_split_percent, default_keep, default_locale,
-    default_log_level, default_sort, default_sort_dir, default_theme, default_view,
+    default_entries, default_keep, default_locale, default_log_level, default_sort,
+    default_sort_dir, default_theme, default_view,
 };
 
 fn default_true() -> bool {
@@ -19,11 +19,6 @@ fn default_true() -> bool {
 
 fn default_false() -> bool {
     false
-}
-
-/// Clamp explorer/editor split % to the shared 15–65 band.
-pub(crate) fn clamp_file_manager_tree_split_percent(value: u8) -> u8 {
-    value.clamp(15, 65)
 }
 
 /// In-memory app settings matching the TS `AppSettingsConfig` wire shape (snake_case JSON).
@@ -80,9 +75,6 @@ pub struct UiSettings {
     #[serde(default = "default_true")]
     pub vault_list_allow_drag_into_group: bool,
     pub file_manager_dock_expanded: bool,
-    /// Explorer/editor split % (canonical 15–65). App-wide for every vault.
-    #[serde(default = "super::toml::default_file_manager_tree_split_percent")]
-    pub file_manager_tree_split_percent: u8,
     /// Close unlock/lock password dialog on Confirm (progress on the row). Default false.
     #[serde(default = "default_false")]
     pub lifecycle_close_modal_on_submit: bool,
@@ -92,9 +84,6 @@ pub struct UiSettings {
     /// Sleep and phone freeze do not count as inactivity. Default false — that time counts.
     #[serde(default = "default_false")]
     pub lifecycle_keep_open_on_wake: bool,
-    /// Confirm before deleting files/folders in the file manager. Default true.
-    #[serde(default = "default_true")]
-    pub file_manager_confirm_delete: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -107,9 +96,9 @@ pub struct LoggingSettings {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AppSectionSettings {
-    /// Derived from `.upriv-root` (`status=active` → [`VaultRootMode::CustomRoot`]). Not written to TOML.
+    /// Derived from `.upriv-data-folder` (`status=active` → [`VaultRootMode::CustomRoot`]). Not written to TOML.
     pub vault_root_mode: VaultRootMode,
-    /// Derived from `.upriv-root` when custom; empty when default_root. Not written to TOML.
+    /// Derived from `.upriv-data-folder` when custom; empty when default_root. Not written to TOML.
     #[serde(default)]
     pub upriv_root_path: String,
     /// `[app].last_opened_vault` — always written (empty = none).
@@ -147,11 +136,9 @@ impl Default for AppSettings {
                 vault_list_show_drag: true,
                 vault_list_allow_drag_into_group: true,
                 file_manager_dock_expanded: false,
-                file_manager_tree_split_percent: default_file_manager_tree_split_percent(),
                 lifecycle_close_modal_on_submit: false,
                 lifecycle_open_file_manager_on_open: false,
                 lifecycle_keep_open_on_wake: false,
-                file_manager_confirm_delete: true,
             },
             logging: LoggingSettings {
                 enabled: true,

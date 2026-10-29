@@ -10,6 +10,7 @@ import {
 } from "react";
 import { Clipboard, Linking, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import {
+  activeOutlineIndex,
   MARKDOWN_COPY_DOUBLE_TAP_MS,
   markdownLinkHref,
   parseMarkdownDocument,
@@ -30,6 +31,7 @@ interface MarkdownPreviewProps {
   onCopyFailed: () => void;
   /** Task checkbox edits. Omit for a read-only note (checkboxes stay disabled). */
   onChange?: (markdown: string) => void;
+  onActiveHeadingChange?: (index: number) => void;
 }
 
 interface PreviewActions {
@@ -59,6 +61,7 @@ function MarkdownPreviewBody({
   markdown,
   onCopyFailed,
   onChange,
+  onActiveHeadingChange,
   handleRef,
 }: MarkdownPreviewProps & { handleRef: ForwardedRef<MarkdownPreviewHandle> }) {
   const { t } = useTranslation();
@@ -69,6 +72,14 @@ function MarkdownPreviewBody({
   const noteY = useRef(new Map<string, number>());
   /** Top-level block index → y in the scroll content. */
   const headingY = useRef(new Map<number, number>());
+  /** Top-level block index of each outline entry, in order. */
+  const headingBlocks = useMemo(
+    () =>
+      model.status === "ok"
+        ? model.blocks.flatMap((block, index) => (block.type === "heading" ? [index] : []))
+        : [],
+    [model],
+  );
 
   useImperativeHandle(
     handleRef,
@@ -160,6 +171,21 @@ function MarkdownPreviewBody({
       ref={scrollRef}
       style={[styles.fill, { backgroundColor: colors.surfaceContainerHigh }]}
       contentContainerStyle={styles.content}
+      scrollEventThrottle={16}
+      onScroll={(event) => {
+        if (!onActiveHeadingChange || headingBlocks.length === 0) return;
+        const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+        onActiveHeadingChange(
+          activeOutlineIndex(
+            headingBlocks.map((block) => headingY.current.get(block)),
+            {
+              offset: contentOffset.y,
+              viewport: layoutMeasurement.height,
+              content: contentSize.height,
+            },
+          ),
+        );
+      }}
     >
       <Blocks
         blocks={model.blocks}

@@ -51,6 +51,8 @@ interface ExportVaultModalProps {
   onClose: () => void;
   /** Export into `destDir`, the chosen format's folder. */
   onConfirm: (request: VaultExportRequest, destDir: string) => void;
+  /** Ask the running export to stop (`job_cancel`); core removes its unfinished file. */
+  onStop: () => void;
   /** The password changed, so its refusal no longer applies. */
   onPasswordEdited?: () => void;
   onTimeout?: () => void;
@@ -65,6 +67,7 @@ export function ExportVaultModal({
   folders,
   onClose,
   onConfirm,
+  onStop,
   onPasswordEdited,
   onTimeout,
   onSettingsLoadError,
@@ -229,21 +232,25 @@ export function ExportVaultModal({
       dismissible
       panelClassName="max-w-lg"
       footer={
-        <ModalFooterActions layout="dialog">
-          <Button
-            label={exporting ? t("action.close") : t("action.cancel")}
-            variant="ghost"
-            onPress={onClose}
-          />
-          <Button
-            label={
-              exporting ? t("vault.export.dialog.submitting") : t("vault.export.dialog.confirm")
-            }
-            variant="primary"
-            disabled={!ready}
-            busy={exporting}
-            onPress={confirm}
-          />
+        <ModalFooterActions layout="confirm">
+          {running ? (
+            <Button
+              variant="secondary"
+              label={
+                running.stopping ? t("vault.export.dialog.stopping") : t("vault.export.dialog.stop")
+              }
+              disabled={running.stopping}
+              busy={running.stopping}
+              onPress={onStop}
+            />
+          ) : (
+            <Button
+              label={t("vault.export.dialog.confirm")}
+              variant="primary"
+              disabled={!ready}
+              onPress={confirm}
+            />
+          )}
         </ModalFooterActions>
       }
     >

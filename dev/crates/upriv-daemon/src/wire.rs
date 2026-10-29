@@ -90,7 +90,7 @@ pub fn is_pack_io_method(method: &str) -> bool {
 
 /// One vault file copied in from the operating system.
 pub fn is_import_io_method(method: &str) -> bool {
-    matches!(method, "vault_fs_import_os_file" | "vault_fs_import_seal")
+    method == "vault_fs_import_os_file"
 }
 
 /// The zip of the whole data folder. Own worker: an import, export, or backup
@@ -302,7 +302,6 @@ mod tests {
             "vault_discard_import",
             "vault_export",
             "vault_fs_import_os_file",
-            "vault_fs_import_seal",
             "vault_import_7z",
             "vault_import_files_zip",
             "vault_import_os_path",

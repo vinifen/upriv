@@ -32,6 +32,7 @@ export function vaultSettingsFixture(
       enabled: false,
       idle_minutes: 15,
     },
+    file_manager: { confirm_delete: true },
     seven_zip: {
       encrypt_file_names: true,
       archive_mode: "encrypt_only",

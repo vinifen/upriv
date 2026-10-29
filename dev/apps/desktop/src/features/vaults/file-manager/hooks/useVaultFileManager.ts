@@ -48,13 +48,12 @@ import {
   type PendingImportEntry,
   type VaultWorkspaceAction,
 } from "@upriv/shared";
-import { useVaultFileSystemService } from "@/platform/services";
+import { useVaultFileSystemService, useVaultService } from "@/platform/services";
 import { useToast, useLoadingBudget, useVaultFileTree } from "@upriv/shared/react";
 import { useFileManager } from "../FileManagerContext";
 import { useTranslation, type I18nKey } from "@/i18n";
-import { useAppSettingsContext } from "@/features/system/settings";
 import { isElectronRenderer } from "@/lib/invoke";
-import { rpcOpenInTerminal, rpcRevealInFileManager, rpcVaultFsImportSeal } from "@/lib/rpc";
+import { rpcOpenInTerminal, rpcRevealInFileManager } from "@/lib/rpc";
 import { desktopErrorI18nKey } from "@/lib/errorMessages";
 import { revealFailureKey } from "@/lib/revealInOs";
 import {
@@ -104,8 +103,8 @@ export function useVaultFileManager({
 }: UseVaultFileManagerOptions) {
   const { t } = useTranslation();
   const fs = useVaultFileSystemService();
+  const vaultService = useVaultService();
   const { setImportInFlight } = useFileManager();
-  const { getSettingsSnapshot } = useAppSettingsContext();
   const vaultId = entry.vaultId;
   const writesLockedRef = useRef(writesLocked);
   writesLockedRef.current = writesLocked;
@@ -534,10 +533,17 @@ export function useVaultFileManager({
     (path: string) => {
       if (path === "/") return;
       void (async () => {
-        const currentTree = await fs.getFileTree(vaultId);
+        const [currentTree, asksFirst] = await Promise.all([
+          fs.getFileTree(vaultId),
+          // A settings read that fails still asks: deleting is permanent.
+          vaultService.getSettings(vaultId).then(
+            (settings) => settings?.file_manager.confirm_delete !== false,
+            () => true,
+          ),
+        ]);
         const node = findNode(currentTree, path);
         if (!node) return;
-        if (getSettingsSnapshot().ui.file_manager_confirm_delete === false) {
+        if (!asksFirst) {
           const pathsToRemove =
             node.type === "folder" ? [...collectFilePaths(node, path), path] : [path];
           await fs.deletePath(vaultId, path);
@@ -551,8 +557,20 @@ export function useVaultFileManager({
         });
       })();
     },
-    [dispatch, fs, getSettingsSnapshot, syncTree, vaultId],
+    [dispatch, fs, syncTree, vaultId, vaultService],
   );
+
+  /** "Don't ask again" is saved in this vault's settings, where it can be turned back on. */
+  const stopAskingBeforeDelete = useCallback(() => {
+    void (async () => {
+      const settings = await vaultService.getSettings(vaultId);
+      if (!settings) throw new Error("vault settings unavailable");
+      await vaultService.registerSettings(vaultId, {
+        ...settings,
+        file_manager: { ...settings.file_manager, confirm_delete: false },
+      });
+    })().catch(() => showToast(t("modal.file_manager.toast.confirm_delete_save_failed")));
+  }, [showToast, t, vaultId, vaultService]);
 
   const confirmDelete = useCallback(() => {
     const target = workspace.deleteTarget;
@@ -636,10 +654,9 @@ export function useVaultFileManager({
           importFile: fs.importFile,
           signal,
           importSlots: importFileSlots(desktopProcessorCount(), false),
-          sealImports: () => rpcVaultFsImportSeal(vaultId).then(() => undefined),
           importBinaryFile: async (id, parent, name, logical) => {
             if (logical.osPath) {
-              return fs.importFileFromOsPath(id, parent, name, logical.osPath, true);
+              return fs.importFileFromOsPath(id, parent, name, logical.osPath);
             }
             return fs.importFileFromBytes(
               id,
@@ -1010,6 +1027,7 @@ export function useVaultFileManager({
     commitRename,
     requestDelete,
     confirmDelete,
+    stopAskingBeforeDelete,
     movePath,
     importFiles,
     importOsDrop,

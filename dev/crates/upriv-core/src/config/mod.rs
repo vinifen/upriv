@@ -8,7 +8,7 @@
 //! | [`vault_config`] | `.upriv/vaults/<id>/config.toml` | **Per-vault** options (identity, storage, …) |
 //! | [`vault_groups`] | `.upriv/vault_groups.toml` | Optional vault **groups** (list organization only) |
 //!
-//! Path discovery and `.upriv-root` alias stay in [`crate::paths`]. This module
+//! Path discovery and `.upriv-data-folder` alias stay in [`crate::paths`]. This module
 //! calls into `paths` when load/save must find a root or sync the alias.
 
 pub mod app_settings;

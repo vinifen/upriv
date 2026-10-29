@@ -1,11 +1,16 @@
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
+const appVersion = fs.readFileSync(path.resolve(root, "../../../VERSION"), "utf8").trim();
 
 export default defineConfig({
   cacheDir: path.join(root, ".vitest-cache"),
+  define: {
+    __UPRIV_APP_VERSION__: JSON.stringify(appVersion),
+  },
   resolve: {
     dedupe: ["react", "react-dom"],
     alias: {
@@ -17,6 +22,7 @@ export default defineConfig({
   },
   test: {
     environment: "node",
+    setupFiles: [path.resolve(root, "src/testSetup.ts")],
     include: ["src/**/tests/**/*.test.ts"],
   },
 });

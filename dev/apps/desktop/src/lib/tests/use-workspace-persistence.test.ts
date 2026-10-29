@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createDefaultWorkspaceState,
   serializeWorkspaceSnapshot,
@@ -9,7 +9,7 @@ import {
   type VaultWorkspaceAction,
   type VaultWorkspaceState,
 } from "@upriv/shared";
-import { useWorkspacePersistence } from "@upriv/shared/react";
+import { useWorkspacePersistence, WORKSPACE_WRITE_DELAY_MS } from "@upriv/shared/react";
 
 function stubFs(overrides: Partial<VaultFileSystemService> = {}): VaultFileSystemService {
   return {
@@ -48,7 +48,21 @@ function hydrateCalls(dispatch: { mock: { calls: unknown[][] } }): VaultWorkspac
     .filter((action) => action.type === "hydrate_persisted");
 }
 
+/** Applies a layout change on fake timers and runs out the write delay. */
+async function changePastWriteDelay(change: () => void): Promise<void> {
+  vi.useFakeTimers();
+  change();
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(WORKSPACE_WRITE_DELAY_MS);
+  });
+  vi.useRealTimers();
+}
+
 describe("useWorkspacePersistence", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("restores a disk snapshot onto a cold-open layout", async () => {
     const empty = createDefaultWorkspaceState();
     const loaded = {
@@ -105,6 +119,7 @@ describe("useWorkspacePersistence", () => {
         }),
       { initialProps: { workspace: empty } },
     );
+    vi.useFakeTimers();
     rerender({ workspace: hidden });
     await act(async () => {
       resolveRead({
@@ -112,7 +127,12 @@ describe("useWorkspacePersistence", () => {
         content: serializeWorkspaceSnapshot(workspaceSnapshotFromState(loaded)),
       });
     });
-    await waitFor(() => expect(hydrateCalls(dispatch)).toHaveLength(1));
+    // The load must not schedule a write of the layout it replaced.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(WORKSPACE_WRITE_DELAY_MS);
+    });
+    vi.useRealTimers();
+    expect(hydrateCalls(dispatch)).toHaveLength(1);
     expect(hydrateCalls(dispatch)[0]).toMatchObject({
       openTabs: ["/a.md"],
       explorerCollapsed: true,
@@ -193,22 +213,22 @@ describe("useWorkspacePersistence", () => {
     });
     setFileContent.mockClear();
 
-    rerender({
-      workspace: { ...empty, dropTargetPath: "/photos", expandedPaths: ["/", "/photos"] },
-    });
-    await act(async () => {
-      await Promise.resolve();
-      await Promise.resolve();
-    });
+    await changePastWriteDelay(() =>
+      rerender({
+        workspace: { ...empty, dropTargetPath: "/photos", expandedPaths: ["/", "/photos"] },
+      }),
+    );
     expect(setFileContent).not.toHaveBeenCalled();
 
-    rerender({
-      workspace: { ...empty, dropTargetPath: null, expandedPaths: ["/", "/photos"] },
-    });
+    await changePastWriteDelay(() =>
+      rerender({
+        workspace: { ...empty, dropTargetPath: null, expandedPaths: ["/", "/photos"] },
+      }),
+    );
     await waitFor(() => expect(setFileContent).toHaveBeenCalled());
   });
 
-  it("writes markdownView when the vault-wide choice changes", async () => {
+  it("writes a burst of search keys once, with the last query", async () => {
     const setFileContent = vi.fn<VaultFileSystemService["setFileContent"]>(async () => 1);
     const getFileContent = vi.fn(async () => null);
     const fs = stubFs({ setFileContent, getFileContent });
@@ -223,17 +243,27 @@ describe("useWorkspacePersistence", () => {
         }),
       { initialProps: { workspace: empty } },
     );
-
     await waitFor(() => expect(getFileContent).toHaveBeenCalled());
     await act(async () => {
       await Promise.resolve();
     });
     setFileContent.mockClear();
 
-    rerender({ workspace: { ...empty, markdownView: "source" } });
+    vi.useFakeTimers();
+    for (const searchQuery of ["p", "pa", "pas", "pass"]) {
+      rerender({ workspace: { ...empty, fileStates: { "/a.md": { searchQuery } } } });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(WORKSPACE_WRITE_DELAY_MS - 1);
+      });
+    }
+    expect(setFileContent).not.toHaveBeenCalled();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(WORKSPACE_WRITE_DELAY_MS * 2);
+    });
+    vi.useRealTimers();
     await waitFor(() => expect(setFileContent).toHaveBeenCalled());
-    const written = setFileContent.mock.calls.at(-1)?.[2] ?? "";
-    expect(written).toContain('"markdownView": "source"');
+    expect(setFileContent).toHaveBeenCalledTimes(1);
+    expect(setFileContent.mock.calls[0]?.[2]).toContain('"searchQuery": "pass"');
   });
 
   it("writes explorerCollapsed when the explorer is hidden", async () => {
@@ -258,13 +288,28 @@ describe("useWorkspacePersistence", () => {
     });
     setFileContent.mockClear();
 
-    rerender({ workspace: { ...empty, explorerCollapsed: true } });
+    await changePastWriteDelay(() =>
+      rerender({ workspace: { ...empty, explorerCollapsed: true } }),
+    );
     await waitFor(() => expect(setFileContent).toHaveBeenCalled());
     const written = setFileContent.mock.calls.at(-1)?.[2] ?? "";
     expect(written).toContain('"explorerCollapsed": true');
   });
 
-  it("writes markdownOutlineOpen when the outline is shown", async () => {
+  it.each<[string, Partial<VaultWorkspaceState>, string]>([
+    [
+      "a file's view",
+      { fileStates: { "/a.md": { markdownView: "source" } } },
+      '"markdownView": "source"',
+    ],
+    [
+      "a file's outline",
+      { fileStates: { "/a.md": { markdownOutlineOpen: false } } },
+      '"markdownOutlineOpen": false',
+    ],
+    ["a file's word wrap", { fileStates: { "/a.md": { wordWrap: false } } }, '"wordWrap": false'],
+    ["the explorer split", { treeSplitPercent: 35 }, '"treeSplitPercent": 35'],
+  ])("writes %s when it changes", async (_label, change, expected) => {
     const setFileContent = vi.fn<VaultFileSystemService["setFileContent"]>(async () => 1);
     const getFileContent = vi.fn(async () => null);
     const fs = stubFs({ setFileContent, getFileContent });
@@ -286,9 +331,9 @@ describe("useWorkspacePersistence", () => {
     });
     setFileContent.mockClear();
 
-    rerender({ workspace: { ...empty, markdownOutlineOpen: true } });
+    await changePastWriteDelay(() => rerender({ workspace: { ...empty, ...change } }));
     await waitFor(() => expect(setFileContent).toHaveBeenCalled());
     const written = setFileContent.mock.calls.at(-1)?.[2] ?? "";
-    expect(written).toContain('"markdownOutlineOpen": true');
+    expect(written).toContain(expected);
   });
 });

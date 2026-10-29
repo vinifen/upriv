@@ -26,6 +26,7 @@ use super::fs::{
 use super::open_close::{abandon_failed_import, close_vault, open_vault_for_ingest};
 use super::seven_zip_pack::sevenz_member_name_unsafe;
 use super::welcome::{seal_welcome_if_absent, VaultWelcome};
+use super::zip_io::buffered_zip_reader;
 
 /// Deflate of text can be well above the store-zip factor. Still finite.
 pub(crate) const FILES_ZIP_EXPAND_FACTOR: u64 = 64;
@@ -147,7 +148,8 @@ fn classify_reader<R: Read + Seek>(reader: R, source_len: u64) -> Result<ZipImpo
     classify_zip_entries(&entries, source_len)
 }
 
-/// Classify a `.zip` from an absolute path. Reads the central directory only.
+/// Classify a `.zip` from an absolute path. Reads the central directory and
+/// each entry's local header, not the file bodies.
 pub fn classify_import_zip_path(zip_path: &Path) -> Result<ZipImportClass> {
     if !zip_path.is_absolute() || !zip_path.host_is_file() {
         return Err(UprivError::ImportArchiveNotFound(zip_path.to_path_buf()));
@@ -155,7 +157,7 @@ pub fn classify_import_zip_path(zip_path: &Path) -> Result<ZipImportClass> {
     let file = crate::host_fs::File::open(zip_path)
         .map_err(|error| super::import::map_archive_open_error(zip_path, error))?;
     let len = file.metadata()?.len();
-    classify_reader(file, len)
+    classify_reader(buffered_zip_reader(file)?, len)
 }
 
 /// Classify a `.zip` already in memory.
@@ -384,7 +386,15 @@ pub fn import_logical_files_zip_path(
     let file = crate::host_fs::File::open(zip_path)
         .map_err(|error| super::import::map_archive_open_error(zip_path, error))?;
     let len = file.metadata()?.len();
-    import_reader(root, config, new_password, preset, file, len, welcome)
+    import_reader(
+        root,
+        config,
+        new_password,
+        preset,
+        buffered_zip_reader(file)?,
+        len,
+        welcome,
+    )
 }
 
 #[cfg(test)]

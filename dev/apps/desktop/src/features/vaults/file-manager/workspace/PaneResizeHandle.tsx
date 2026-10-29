@@ -5,7 +5,7 @@ import { useTranslation } from "@/i18n";
 
 interface PaneResizeHandleProps {
   axis: "x" | "y";
-  /** Canonical split percent (15–65). */
+  /** Canonical split percent (`TREE_SPLIT_MIN_PERCENT`–`TREE_SPLIT_MAX_PERCENT`). */
   value: number;
   onDragStart?: () => void;
   /** Pixel delta from the grab point (not the pointer's absolute position). */
@@ -83,6 +83,16 @@ export function PaneResizeHandle({
         "group-hover:text-[color-mix(in_srgb,var(--accent)_70%,transparent)] group-hover:opacity-100",
         "group-focus-visible:text-[color-mix(in_srgb,var(--accent)_70%,transparent)] group-focus-visible:opacity-100",
       ].join(" ");
+  const segment = (
+    <div
+      aria-hidden
+      className={[
+        "pointer-events-none min-h-0 min-w-0 flex-1 rounded-full transition-colors",
+        isColumn ? "h-px" : "w-px",
+        lineTone,
+      ].join(" ")}
+    />
+  );
 
   return (
     <div
@@ -106,14 +116,7 @@ export function PaneResizeHandle({
       onKeyDown={onKeyDown}
     >
       {/* Two segments — line never runs through the grip. */}
-      <div
-        aria-hidden
-        className={[
-          "pointer-events-none min-h-0 min-w-0 flex-1 rounded-full transition-colors",
-          isColumn ? "h-px" : "w-px",
-          lineTone,
-        ].join(" ")}
-      />
+      {segment}
       <Icon
         name="grip-vertical"
         size={iconSize}
@@ -124,14 +127,7 @@ export function PaneResizeHandle({
           iconTone,
         ].join(" ")}
       />
-      <div
-        aria-hidden
-        className={[
-          "pointer-events-none min-h-0 min-w-0 flex-1 rounded-full transition-colors",
-          isColumn ? "h-px" : "w-px",
-          lineTone,
-        ].join(" ")}
-      />
+      {segment}
     </div>
   );
 }

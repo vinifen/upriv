@@ -51,6 +51,8 @@ export interface VaultExportRun {
   startedAt: number;
   /** `null` until core first answers `job_status`. */
   progress: JobProgress | null;
+  /** Stop export was pressed; the export call has not settled yet. */
+  stopping?: boolean;
 }
 
 // eslint-disable-next-line no-control-regex

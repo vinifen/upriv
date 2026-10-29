@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { StyleSheet, Text, View } from "react-native";
 import {
   defaultOpenHelpSections,
   HELP_SECTION_BODY_KEYS,
@@ -11,9 +11,9 @@ import {
 } from "@upriv/shared";
 import { useTranslation, type I18nKey } from "@/i18n";
 import { useTheme } from "@/theme";
-import { radii, settingsSectionBoxShadow, spacing } from "@/theme/tokens";
-import { Collapse, Modal } from "@/components/ui";
-import { ThemedInput } from "@/components/settings";
+import { spacing } from "@/theme/tokens";
+import { Modal } from "@/components/ui";
+import { SettingsAccordionSection, ThemedInput } from "@/components/settings";
 import { getMobileAppVersion } from "@/lib/appVersion";
 
 interface HelpModalProps {
@@ -30,7 +30,7 @@ const DISTRIBUTION_LABEL_KEYS: Record<AppDistribution, I18nKey> = {
 /** Help — same sections/search/footer pattern as desktop HelpModal. */
 export function HelpModal({ open, onClose }: HelpModalProps) {
   const { t } = useTranslation();
-  const { colors, typography, theme } = useTheme();
+  const { typography } = useTheme();
   const [query, setQuery] = useState("");
   const [openSections, setOpenSections] = useState<Set<HelpSectionId>>(defaultOpenHelpSections);
   const [appVersion, setAppVersion] = useState(() => getMobileAppVersion().version);
@@ -59,12 +59,11 @@ export function HelpModal({ open, onClose }: HelpModalProps) {
     [query, t],
   );
 
-  const toggleSection = (sectionId: HelpSectionId) => {
-    if (searching) return;
+  const toggleSection = (sectionId: HelpSectionId, next: boolean) => {
     setOpenSections((current) => {
       const updated = new Set(current);
-      if (updated.has(sectionId)) updated.delete(sectionId);
-      else updated.add(sectionId);
+      if (next) updated.add(sectionId);
+      else updated.delete(sectionId);
       return updated;
     });
   };
@@ -104,42 +103,22 @@ export function HelpModal({ open, onClose }: HelpModalProps) {
         {visibleSections.length === 0 ? (
           <Text style={[typography.bodyMuted, styles.empty]}>{t("modal.help.search_empty")}</Text>
         ) : (
-          visibleSections.map((section) => {
-            const isOpen = searching || openSections.has(section.id);
-            return (
-              <View
+          <View style={styles.sections}>
+            {visibleSections.map((section) => (
+              <SettingsAccordionSection
                 key={section.id}
-                style={[
-                  styles.sectionCard,
-                  {
-                    backgroundColor: colors.surfaceContainerHigh,
-                    boxShadow: settingsSectionBoxShadow(theme),
-                  },
-                ]}
+                title={t(helpSectionTitleKey(section.id) as I18nKey)}
+                open={searching ? true : openSections.has(section.id)}
+                onOpenChange={searching ? undefined : (next) => toggleSection(section.id, next)}
               >
-                <Pressable
-                  onPress={() => toggleSection(section.id)}
-                  style={styles.sectionHeader}
-                  accessibilityRole="button"
-                  accessibilityState={{ expanded: isOpen }}
-                >
-                  <Text style={[typography.headline, styles.sectionTitle]}>
-                    {t(helpSectionTitleKey(section.id) as I18nKey)}
+                {HELP_SECTION_BODY_KEYS[section.id].map((bodyKey) => (
+                  <Text key={bodyKey} style={[typography.bodyMuted, styles.paragraph]}>
+                    {t(bodyKey as I18nKey)}
                   </Text>
-                  <Text style={typography.bodyMuted}>{isOpen ? "▾" : "▸"}</Text>
-                </Pressable>
-                <Collapse open={isOpen}>
-                  <View style={styles.sectionBody}>
-                    {HELP_SECTION_BODY_KEYS[section.id].map((bodyKey) => (
-                      <Text key={bodyKey} style={[typography.bodyMuted, styles.paragraph]}>
-                        {t(bodyKey as I18nKey)}
-                      </Text>
-                    ))}
-                  </View>
-                </Collapse>
-              </View>
-            );
-          })
+                ))}
+              </SettingsAccordionSection>
+            ))}
+          </View>
         )}
       </View>
     </Modal>
@@ -148,25 +127,8 @@ export function HelpModal({ open, onClose }: HelpModalProps) {
 
 const styles = StyleSheet.create({
   content: { gap: spacing.md },
+  sections: { gap: spacing.sm },
   empty: { textAlign: "center", paddingVertical: spacing.xxl },
-  sectionCard: {
-    borderRadius: radii.md,
-    overflow: "visible",
-  },
-  sectionHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.md,
-    gap: spacing.md,
-  },
-  sectionTitle: { flex: 1 },
-  sectionBody: {
-    paddingHorizontal: spacing.md,
-    paddingBottom: spacing.md,
-    gap: spacing.md,
-  },
   paragraph: { lineHeight: 22 },
   footer: { textAlign: "center" },
 });

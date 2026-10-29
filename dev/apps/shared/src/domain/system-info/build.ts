@@ -282,11 +282,6 @@ export function buildSystemInfoSections(
           value: yesNo(t, ui.file_manager_dock_expanded),
         },
         {
-          id: "file_manager_tree_split_percent",
-          label: t("modal.info.field.file_manager_tree_split_percent"),
-          value: String(ui.file_manager_tree_split_percent),
-        },
-        {
           id: "lifecycle_close_modal_on_submit",
           label: t("modal.info.field.lifecycle_close_modal_on_submit"),
           value: yesNo(t, ui.lifecycle_close_modal_on_submit),
@@ -300,11 +295,6 @@ export function buildSystemInfoSections(
           id: "lifecycle_keep_open_on_wake",
           label: t("modal.info.field.lifecycle_keep_open_on_wake"),
           value: yesNo(t, ui.lifecycle_keep_open_on_wake),
-        },
-        {
-          id: "file_manager_confirm_delete",
-          label: t("modal.info.field.file_manager_confirm_delete"),
-          value: yesNo(t, ui.file_manager_confirm_delete),
         },
         {
           id: "always_show_hidden_vaults",

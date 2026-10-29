@@ -83,7 +83,7 @@ Export offers **two** payloads. Import offers the same two choices. A chosen `.z
 | **Portable `.7z`** | One outer folder (sanitized display name) with the vault's files directly inside it. No settings sidecar. 7-Zip AES + SHA-256 KDF; files in blocks of up to 64 MiB, each block and the header with its own random salt and IV. Not a copy of ciphertext `store/`. | Weaker **offline guessing** than the store zip (honest copy — not “Upriv beats 7-Zip”) | Vault password (decrypts `store/`, packs in RAM). This vault must be closed. | 7-Zip / ZArchiver | Versatile; warn about guessing and that settings are not saved |
 | **Files `.zip`** | Ordinary zip of documents (no zip password). Same import option as a store `.zip`; the central directory decides. One shared top folder is stripped. | New Argon2id wrap, chosen at create | None on the zip. The new vault password wraps `store/`. | Any zip tool | Documents in; settings are not saved |
 
-**Create from a store `.zip`:** same as create-from-backup — new `vaults/<id>/`, copy extracted `store/` (no re-encrypt, no plaintext tree). Unlock = snapshot password.
+**Create from a store `.zip`:** same as create-from-backup — new `vaults/<id>/`, copy extracted `store/` (no re-encrypt, no plaintext tree). Each entry is copied up to its stated size with no zip-checksum gate: a damaged blob comes in as it is and fails only that file when its AEAD tag is checked (recovery B), and a damaged header or index file is restored from its copy on open, so the rest of the vault comes back. Unlock = snapshot password.
 
 **Create from `.7z`:** stream logical content into **new** `store/` (Argon2id wrap). Do not keep that `.7z` in the vault. Never pack `.enc` blobs into `.7z`. Decrypt only in RAM (SECURITY-PLAINTEXT).
 

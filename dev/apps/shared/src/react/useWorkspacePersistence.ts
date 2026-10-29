@@ -12,6 +12,7 @@ import {
   type VaultWorkspaceAction,
   type VaultWorkspaceState,
 } from "@upriv/shared";
+import { scheduleTimeout } from "./schedule";
 
 interface UseWorkspacePersistenceOptions {
   vaultId: string;
@@ -35,7 +36,14 @@ async function writeWorkspaceSnapshot(
 }
 
 /**
- * Write layout on each layout action (skip if unchanged). Flush on unmount.
+ * Layout changes are written once they pause this long. Typing in the find
+ * field changes the layout on every key, and each write lists the vault tree
+ * and seals the file into `store/`. Unmount and vault close write at once.
+ */
+export const WORKSPACE_WRITE_DELAY_MS = 500;
+
+/**
+ * Write layout after layout actions pause (skip if unchanged). Flush on unmount.
  * The file manager shell opens first; this effect hydrates tabs from the vault file.
  * Prefer `key={vaultId}` on the host.
  */
@@ -45,7 +53,7 @@ export function useWorkspacePersistence({
   fs,
   dispatch,
   suspend = false,
-}: UseWorkspacePersistenceOptions): { flush: () => void } {
+}: UseWorkspacePersistenceOptions): void {
   const hydratedRef = useRef(false);
   const lastWrittenRef = useRef<string | null>(null);
   const [hydrateGen, setHydrateGen] = useState(0);
@@ -56,13 +64,6 @@ export function useWorkspacePersistence({
   dispatchRef.current = dispatch;
   const fsRef = useRef(fs);
   fsRef.current = fs;
-
-  const flush = () => {
-    if (!hydratedRef.current) return;
-    void writeWorkspaceSnapshot(fsRef.current, vaultId, workspace, lastWrittenRef).catch(() => {
-      /* Persist is best-effort while open; close still flushes separately. */
-    });
-  };
 
   useEffect(() => {
     let cancelled = false;
@@ -97,9 +98,9 @@ export function useWorkspacePersistence({
             activeTabPath: merged.activeTabPath,
             expandedPaths: merged.expandedPaths,
             selectedPath: merged.selectedPath,
-            markdownView: merged.markdownView,
             explorerCollapsed: merged.explorerCollapsed,
-            markdownOutlineOpen: merged.markdownOutlineOpen,
+            fileStates: merged.files,
+            treeSplitPercent: merged.treeSplitPercent,
           });
           return;
         }
@@ -131,11 +132,15 @@ export function useWorkspacePersistence({
     const { vaultId: id, workspace: state } = layoutRef.current;
     if (id !== vaultId) return;
     if (state.dragSourcePath || state.dropTargetPath || suspend) return;
-    void writeWorkspaceSnapshot(fsRef.current, id, state, lastWrittenRef).catch(() => {
-      /* Persist is best-effort while open. */
-    });
+    return scheduleTimeout(() => {
+      const latest = layoutRef.current;
+      if (latest.vaultId !== id) return;
+      void writeWorkspaceSnapshot(fsRef.current, id, latest.workspace, lastWrittenRef).catch(() => {
+        /* Persist is best-effort while open. */
+      });
+    }, WORKSPACE_WRITE_DELAY_MS);
     // Persist layout fields only — skip while a drag is active so hover-expand
-    // cannot race OS file import.
+    // cannot race OS file import. A drag or import starting cancels the wait.
   }, [
     vaultId,
     hydrateGen,
@@ -143,9 +148,9 @@ export function useWorkspacePersistence({
     workspace.activeTabPath,
     workspace.expandedPaths,
     workspace.selectedPath,
-    workspace.markdownView,
     workspace.explorerCollapsed,
-    workspace.markdownOutlineOpen,
+    workspace.fileStates,
+    workspace.treeSplitPercent,
     workspace.dragSourcePath,
     workspace.dropTargetPath,
     suspend,
@@ -162,6 +167,4 @@ export function useWorkspacePersistence({
       });
     };
   }, [vaultId]);
-
-  return { flush };
 }

@@ -58,7 +58,7 @@ import {
   type VaultSettingsAreaId,
 } from "@upriv/shared";
 import { useFileManager } from "@/features/vaults/file-manager";
-import { useTranslation } from "@/i18n";
+import { useTranslation, type I18nKey } from "@/i18n";
 import { useVaultLifecycleActions } from "@/features/vaults/lifecycle";
 import { useErrorToast } from "@/hooks/useErrorToast";
 import {
@@ -89,7 +89,22 @@ export function useVaultListScreen() {
     vaultRootEpoch,
   } = useAppSettingsContext();
   const showHiddenVaults = settings.ui.always_show_hidden_vaults || showHiddenVaultsSession;
-  const { toast: toastState, show: showToast, showError, dismiss: dismissToast } = useErrorToast();
+  const {
+    toast: toastState,
+    show: showToast,
+    showError: baseShowError,
+    dismiss: dismissToast,
+  } = useErrorToast();
+  const showError = useCallback(
+    (error: unknown, fallback: I18nKey = "error.unexpected") => {
+      if (shouldBumpVaultRootEpoch(error)) {
+        void reportVaultRootIntegrityFailure(error);
+        return;
+      }
+      baseShowError(error, fallback);
+    },
+    [baseShowError, reportVaultRootIntegrityFailure],
+  );
   const daemonReady = useDaemonReady();
   const noteSaveGenerationRef = useRef<Map<string, number>>(new Map());
   const rewrapActivityRef = useRef<VaultRewrapRun | null>(null);
@@ -430,8 +445,18 @@ export function useVaultListScreen() {
     [initializeVaults],
   );
 
+  /** A group's settings are open; set once the modals are known, read when a refresh lands. */
+  const groupSettingsOpenRef = useRef(false);
   const { isRefreshing, refresh } = useAppRefresh({
     applyVaultList,
+    applyGroups: (result) => {
+      // Keep the open group's draft: its groups are not replaced under it.
+      if (groupSettingsOpenRef.current) {
+        showToast(t("toast.groups_refresh_blocked_settings"));
+        return;
+      }
+      applyGroupListResult(result);
+    },
     onError: (error) => {
       if (!settingsOnDisk && (isVaultRootGoneError(error) || isVaultRootUnreachableError(error))) {
         return;
@@ -496,6 +521,7 @@ export function useVaultListScreen() {
   }, [syncWithVaultList, vaults]);
 
   const modals = useVaultListModals(vaults, groups);
+  groupSettingsOpenRef.current = modals.settingsGroupId !== null;
   const { lifecycleRequest, setLifecycleRequest } = modals;
   const exportFolders = useVaultExportFolders();
   const backupService = useBackupService();
@@ -511,6 +537,7 @@ export function useVaultListScreen() {
         format: shownExportJob.format,
         startedAt: shownExportJob.startedAt,
         progress: exportProgress,
+        stopping: shownExportJob.stopping,
       }
     : null;
   const [backupListRefresh, setBackupListRefresh] = useState(0);
@@ -1169,22 +1196,7 @@ export function useVaultListScreen() {
     openFromVault,
     header: {
       onRefresh: () => {
-        void (async () => {
-          await refresh();
-          if (modals.settingsGroupId) {
-            showToast(t("toast.groups_refresh_blocked_settings"));
-            return;
-          }
-          try {
-            await reloadGroups();
-          } catch (error) {
-            if (shouldBumpVaultRootEpoch(error)) {
-              void reportVaultRootIntegrityFailure(error);
-              return;
-            }
-            showError(error, "toast.refresh_failed");
-          }
-        })();
+        void refresh();
       },
       isRefreshing,
       onOpenSystemSettings: () => {
@@ -1398,6 +1410,7 @@ export function useVaultListScreen() {
         modals.setExportPasswordError(null);
       },
       onConfirm: lifecycle.handleConfirmExportVault,
+      onStop: lifecycle.handleStopExportVault,
       onPasswordEdited: () => modals.setExportPasswordError(null),
       onTimeout: lifecycle.handleExportTimeout,
     },

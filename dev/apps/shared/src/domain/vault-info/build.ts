@@ -267,6 +267,11 @@ export function buildVaultInfoSections(
               })
             : t("modal.info.value.no"),
         },
+        {
+          id: "file_manager_confirm_delete",
+          label: t("modal.settings.field.file_manager.confirm_delete"),
+          value: yesNo(t, settings.file_manager.confirm_delete),
+        },
       ]
     : [{ id: "config_unavailable", label: t("modal.info.field.config"), value: "—" }];
 

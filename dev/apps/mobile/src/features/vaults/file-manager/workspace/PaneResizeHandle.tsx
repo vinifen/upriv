@@ -55,9 +55,18 @@ export function PaneResizeHandle({ axis, onDragStart, onDrag, onDragEnd }: PaneR
 
   const isColumn = axis === "y";
   /** Idle: line + grip invisible (hit size unchanged). Visible while dragging. */
-  const lineTone = active ? colors.accent : "transparent";
-  const iconTone = active ? colors.accent : "transparent";
+  const tone = active ? colors.accent : "transparent";
   const iconSize = isColumn ? 14 : 12;
+  const segment = (
+    <View
+      pointerEvents="none"
+      style={[
+        styles.segment,
+        isColumn ? styles.segmentY : styles.segmentX,
+        { backgroundColor: tone },
+      ]}
+    />
+  );
 
   return (
     <View
@@ -66,28 +75,14 @@ export function PaneResizeHandle({ axis, onDragStart, onDrag, onDragEnd }: PaneR
       accessibilityRole="adjustable"
       accessibilityLabel={t("modal.file_manager.split.resize")}
     >
-      <View
-        pointerEvents="none"
-        style={[
-          styles.segment,
-          isColumn ? styles.segmentY : styles.segmentX,
-          { backgroundColor: lineTone },
-        ]}
-      />
+      {segment}
       <View
         pointerEvents="none"
         style={[isColumn ? styles.gripRotate : undefined, { opacity: active ? 1 : 0 }]}
       >
-        <Icon name="grip-vertical" size={iconSize} color={iconTone} />
+        <Icon name="grip-vertical" size={iconSize} color={tone} />
       </View>
-      <View
-        pointerEvents="none"
-        style={[
-          styles.segment,
-          isColumn ? styles.segmentY : styles.segmentX,
-          { backgroundColor: lineTone },
-        ]}
-      />
+      {segment}
     </View>
   );
 }

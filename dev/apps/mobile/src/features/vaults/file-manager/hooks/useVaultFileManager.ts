@@ -51,10 +51,9 @@ import {
   type VaultWorkspaceAction,
 } from "@upriv/shared";
 import { useToast, useLoadingBudget, useVaultFileTree } from "@upriv/shared/react";
-import { useVaultFileSystemService } from "@/platform/services";
-import { rpcImportContentUri, rpcVaultFsImportSeal } from "@/lib/rpc";
+import { useVaultFileSystemService, useVaultService } from "@/platform/services";
+import { rpcImportContentUri } from "@/lib/rpc";
 import { useTranslation } from "@/i18n";
-import { useAppSettingsContext } from "@/features/system/settings";
 import { useFileManager } from "../FileManagerContext";
 import { mobileErrorI18nKey } from "@/lib/errorMessages";
 import { revealInOsFileManager } from "@/lib/revealInFileManager";
@@ -96,8 +95,8 @@ export function useVaultFileManager({
 }: UseVaultFileManagerOptions) {
   const { t } = useTranslation();
   const fs = useVaultFileSystemService();
+  const vaultService = useVaultService();
   const { setImportInFlight } = useFileManager();
-  const { getSettingsSnapshot } = useAppSettingsContext();
   const vaultId = entry.vaultId;
   const writesLockedRef = useRef(writesLocked);
   writesLockedRef.current = writesLocked;
@@ -518,14 +517,13 @@ export function useVaultFileManager({
           importFile: fs.importFile,
           signal,
           importSlots: importFileSlots(nativeProcessorCount(), true),
-          sealImports: () => rpcVaultFsImportSeal(vaultId).then(() => undefined),
           importBinaryFile: async (id, parent, name, file) => {
             if (Platform.OS === "android" && file.uri.startsWith("content:")) {
               await rpcImportContentUri(id, joinPath(parent, name).replace(/^\/+/, ""), file.uri);
               return joinPath(parent, name);
             }
             const osPath = nativeOsPathFromImportUri(file.cacheUri ?? file.uri);
-            if (osPath) return fs.importFileFromOsPath(id, parent, name, osPath, true);
+            if (osPath) return fs.importFileFromOsPath(id, parent, name, osPath);
             const source = await uriByteSource(file);
             return fs.importFileFromBytes(id, parent, name, source);
           },
@@ -807,10 +805,17 @@ export function useVaultFileManager({
     (path: string) => {
       if (path === "/") return;
       void (async () => {
-        const currentTree = await fs.getFileTree(vaultId);
+        const [currentTree, asksFirst] = await Promise.all([
+          fs.getFileTree(vaultId),
+          // A settings read that fails still asks: deleting is permanent.
+          vaultService.getSettings(vaultId).then(
+            (settings) => settings?.file_manager.confirm_delete !== false,
+            () => true,
+          ),
+        ]);
         const node = findNode(currentTree, path);
         if (!node) return;
-        if (getSettingsSnapshot().ui.file_manager_confirm_delete === false) {
+        if (!asksFirst) {
           const pathsToRemove =
             node.type === "folder" ? [...collectFilePaths(node, path), path] : [path];
           await fs.deletePath(vaultId, path);
@@ -824,8 +829,20 @@ export function useVaultFileManager({
         });
       })();
     },
-    [dispatch, fs, getSettingsSnapshot, syncTree, vaultId],
+    [dispatch, fs, syncTree, vaultId, vaultService],
   );
+
+  /** "Don't ask again" is saved in this vault's settings, where it can be turned back on. */
+  const stopAskingBeforeDelete = useCallback(() => {
+    void (async () => {
+      const settings = await vaultService.getSettings(vaultId);
+      if (!settings) throw new Error("vault settings unavailable");
+      await vaultService.registerSettings(vaultId, {
+        ...settings,
+        file_manager: { ...settings.file_manager, confirm_delete: false },
+      });
+    })().catch(() => showToast(t("modal.file_manager.toast.confirm_delete_save_failed")));
+  }, [showToast, t, vaultId, vaultService]);
 
   const confirmDelete = useCallback(() => {
     const target = workspace.deleteTarget;
@@ -989,6 +1006,7 @@ export function useVaultFileManager({
     movePath,
     requestDelete,
     confirmDelete,
+    stopAskingBeforeDelete,
     toast,
     osFolderAvailable,
     openInSystemFileManager,

@@ -131,6 +131,8 @@ interface VaultSettingsVaultSectionProps {
   hiddenLocked?: boolean;
   /** `vault.display_name` requires closed or recovery. */
   displayNameLocked?: boolean;
+  fileManager: VaultSettingsConfig["file_manager"];
+  onFileManagerChange: (patch: Partial<VaultSettingsConfig["file_manager"]>) => void;
 }
 
 export function VaultSettingsVaultSection({
@@ -138,6 +140,8 @@ export function VaultSettingsVaultSection({
   onChange,
   hiddenLocked = false,
   displayNameLocked = false,
+  fileManager,
+  onFileManagerChange,
 }: VaultSettingsVaultSectionProps) {
   const { t } = useTranslation();
   const displayNameId = useId();
@@ -145,6 +149,7 @@ export function VaultSettingsVaultSection({
   const hintId = useId();
   const noteId = useId();
   const hiddenId = useId();
+  const confirmDeleteId = useId();
 
   return (
     <SettingsFormGrid>
@@ -227,6 +232,13 @@ export function VaultSettingsVaultSection({
             ? t("modal.settings.field.vault.hidden_locked_by_group")
             : t("modal.settings.field.vault.hidden_help")
         }
+      />
+      <SwitchRow
+        id={confirmDeleteId}
+        checked={fileManager.confirm_delete}
+        onChange={(confirm_delete) => onFileManagerChange({ confirm_delete })}
+        label={t("modal.settings.field.file_manager.confirm_delete")}
+        hint={t("modal.settings.field.file_manager.confirm_delete_help")}
       />
     </SettingsFormGrid>
   );

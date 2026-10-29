@@ -22,6 +22,8 @@ import {
   persistableTreeSplitPercent,
   displayTreeSplitPercent,
   percentFromDelta,
+  treeSplitCollapseThresholdPx,
+  isTreeSplitDragCollapsed,
 } from "../treeSplit";
 
 describe("validateFileName", () => {
@@ -300,22 +302,28 @@ describe("foldersToExpandOnImport", () => {
 
 describe("tree split canonical ↔ visual mapping", () => {
   it("stores canonical min when the drag hits the row px floor", () => {
-    // visual min on 800px width = 18%; dragging past that edge → canonical 15
-    expect(percentFromDelta(20, -100, 800, "x")).toBe(TREE_SPLIT_MIN_PERCENT);
+    // visual min on 800px width = 8% (64px); dragging past that edge → canonical 4
+    expect(percentFromDelta(20, -150, 800, "x")).toBe(TREE_SPLIT_MIN_PERCENT);
   });
 
   it("maps canonical min to visual min on both axes (no leftover on column)", () => {
-    expect(displayTreeSplitPercent(TREE_SPLIT_MIN_PERCENT, 800, "x")).toBe(18);
+    expect(displayTreeSplitPercent(TREE_SPLIT_MIN_PERCENT, 800, "x")).toBe(8);
     expect(displayTreeSplitPercent(TREE_SPLIT_MIN_PERCENT, 500, "y")).toBe(TREE_SPLIT_MIN_PERCENT);
   });
 
   it("keeps mid-range proportion across axes", () => {
-    // canonical 40 is halfway-ish: t = (40-15)/50 = 0.5
-    expect(displayTreeSplitPercent(40, 800, "x")).toBe(18 + 0.5 * (65 - 18));
-    expect(displayTreeSplitPercent(40, 500, "y")).toBe(15 + 0.5 * (65 - 15));
+    // canonical 40: span = 65 - 4 = 61; t = (40 - 4) / 61 = 36 / 61
+    expect(displayTreeSplitPercent(40, 800, "x")).toBe(8 + (36 / 61) * (65 - 8));
+    expect(displayTreeSplitPercent(40, 500, "y")).toBe(40);
   });
 
-  it("clamps canonical storage to 15–65", () => {
+  it("holds the row px floor when it exceeds the max split", () => {
+    // 64px of an 80px row = 80%: every canonical % shows the floor and a drag stores the min.
+    expect(displayTreeSplitPercent(40, 80, "x")).toBe(80);
+    expect(percentFromDelta(40, 30, 80, "x")).toBe(TREE_SPLIT_MIN_PERCENT);
+  });
+
+  it("clamps canonical storage to 4–65", () => {
     expect(clampCanonicalTreeSplitPercent(0)).toBe(TREE_SPLIT_MIN_PERCENT);
     expect(clampCanonicalTreeSplitPercent(90)).toBe(65);
   });
@@ -327,15 +335,37 @@ describe("tree split canonical ↔ visual mapping", () => {
   });
 
   it("keeps the split still when the drag delta is 0", () => {
-    expect(percentFromDelta(20, 0, 1000, "x")).toBe(20);
+    expect(percentFromDelta(20, 0, 1600, "x")).toBe(20);
     expect(percentFromDelta(40, 0, 800, "x")).toBe(40);
     expect(percentFromDelta(TREE_SPLIT_MIN_PERCENT, 0, 500, "y")).toBe(TREE_SPLIT_MIN_PERCENT);
   });
 
   it("moves the split by the pointer delta without snapping to the pointer", () => {
     const start = 20;
-    const size = 1000;
-    expect(percentFromDelta(start, 50, size, "x")).toBe(25);
-    expect(percentFromDelta(start, -50, size, "x")).toBe(15);
+    const size = 1600;
+    expect(percentFromDelta(start, 80, size, "x")).toBe(25);
+    expect(percentFromDelta(start, -80, size, "x")).toBe(15);
+  });
+
+  it("computes collapse threshold at 50% of visual minimum", () => {
+    // 1600px width: visual min = 4% = 64px -> threshold = 32px
+    expect(treeSplitCollapseThresholdPx(1600, "x")).toBe(32);
+    // 800px width: visual min = 8% = 64px -> threshold = 32px
+    expect(treeSplitCollapseThresholdPx(800, "x")).toBe(32);
+    // 500px height: visual min = 4% = 20px -> threshold = 10px
+    expect(treeSplitCollapseThresholdPx(500, "y")).toBe(10);
+    expect(treeSplitCollapseThresholdPx(0, "x")).toBe(0);
+  });
+
+  it("identifies when dragging moves past the collapse threshold", () => {
+    // start at 20% on 1600px (320px). threshold is 32px.
+    // drag -200px -> 120px (> 32px): not collapsed
+    expect(isTreeSplitDragCollapsed(20, -200, 1600, "x")).toBe(false);
+    // drag -260px -> 60px (in detent zone below min 64px, above threshold 32px): not collapsed
+    expect(isTreeSplitDragCollapsed(20, -260, 1600, "x")).toBe(false);
+    // drag -288px -> 32px (at threshold): collapsed
+    expect(isTreeSplitDragCollapsed(20, -288, 1600, "x")).toBe(true);
+    // drag -300px -> 20px (past threshold towards 0): collapsed
+    expect(isTreeSplitDragCollapsed(20, -300, 1600, "x")).toBe(true);
   });
 });

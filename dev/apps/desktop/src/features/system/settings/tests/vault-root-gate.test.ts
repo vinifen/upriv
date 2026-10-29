@@ -12,6 +12,8 @@ import { VaultRootGate } from "../VaultRootGate";
 let snapshot: AppSettingsConfig = createDefaultAppSettings();
 const rendered = createDefaultAppSettings();
 const resolve = vi.fn<(options: { vaultRootMode: string }) => Promise<VaultRootResolveResult>>();
+const defaultRootStatus = vi.fn<() => Promise<{ status: string; defaultRootAnchor: string }>>();
+let vaultRootEpoch = 0;
 
 vi.mock("@/i18n", () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 
@@ -20,7 +22,9 @@ vi.mock("../AppSettingsContext", () => ({
     settings: rendered,
     settingsReady: true,
     settingsLoadFailed: false,
-    vaultRootEpoch: 0,
+    get vaultRootEpoch() {
+      return vaultRootEpoch;
+    },
     reloadSettings: async () => {},
     getSettingsSnapshot: () => snapshot,
   }),
@@ -29,8 +33,9 @@ vi.mock("../AppSettingsContext", () => ({
 vi.mock("@/platform/services", () => ({
   useVaultRootService: () => ({
     resolve,
-    defaultRootStatus: async () => ({ status: "missing", defaultRootAnchor: "/app" }),
+    defaultRootStatus,
     readAlias: async () => null,
+    inspectAtPath: async (path: string) => ({ status: "missing", path }),
   }),
 }));
 
@@ -44,19 +49,22 @@ vi.mock("../VaultRootAliasRecoveryModal", () => ({ VaultRootAliasRecoveryModal: 
 const needsSetup: VaultRootResolveResult = {
   status: "needs_setup",
   defaultRootAnchor: "/app",
-  aliasPath: "/app/.upriv-root",
+  aliasPath: "/app/.upriv-data-folder",
   distribution: "dev",
 };
 
 afterEach(() => {
   cleanup();
   resolve.mockReset();
+  defaultRootStatus.mockReset();
   snapshot = createDefaultAppSettings();
+  vaultRootEpoch = 0;
 });
 
 describe("VaultRootGate", () => {
   it("resolves a custom folder from Setup with the settings it just loaded", async () => {
     resolve.mockResolvedValue(needsSetup);
+    defaultRootStatus.mockResolvedValue({ status: "missing", defaultRootAnchor: "/app" });
     render(createElement(VaultRootGate, null, createElement("main")));
     const configured = await screen.findByText("configured");
     expect(resolve).toHaveBeenLastCalledWith(
@@ -77,5 +85,46 @@ describe("VaultRootGate", () => {
     expect(after).not.toHaveLength(0);
     expect(after.every((mode) => mode === "custom_root")).toBe(true);
     expect(screen.queryByText("configured")).toBeNull();
+  });
+
+  it("re-resolves and presents Setup modal when vaultRootEpoch bumps after .upriv is deleted", async () => {
+    resolve.mockResolvedValue({ status: "found", rootPath: "/home/Music", source: "custom_root" });
+    snapshot = {
+      ...snapshot,
+      app: { ...snapshot.app, vault_root_mode: "custom_root", upriv_root_path: "/home/Music" },
+    };
+
+    const { rerender } = render(
+      createElement(VaultRootGate, null, createElement("main", null, "app-content")),
+    );
+    expect(await screen.findByText("app-content")).toBeDefined();
+
+    // Now .upriv was deleted; an operation or refresh reported integrity failure, bumping vaultRootEpoch.
+    resolve.mockResolvedValue(needsSetup);
+    defaultRootStatus.mockResolvedValue({ status: "missing", defaultRootAnchor: "/app" });
+    vaultRootEpoch = 1;
+
+    await act(async () => {
+      rerender(createElement(VaultRootGate, null, createElement("main", null, "app-content")));
+    });
+
+    const configured = await screen.findByText("configured");
+    expect(configured).toBeDefined();
+    const main = screen.getByText("app-content");
+    expect(main.parentElement?.getAttribute("aria-hidden")).toBe("true");
+  });
+
+  it("presents Setup modal in custom_root mode even when default root is valid", async () => {
+    resolve.mockResolvedValue(needsSetup);
+    defaultRootStatus.mockResolvedValue({ status: "valid", defaultRootAnchor: "/app" });
+    snapshot = {
+      ...snapshot,
+      app: { ...snapshot.app, vault_root_mode: "custom_root", upriv_root_path: "/home/Music" },
+    };
+
+    render(createElement(VaultRootGate, null, createElement("main")));
+    const configured = await screen.findByText("configured");
+    expect(configured).toBeDefined();
+    expect(screen.queryByText("error.service_unavailable")).toBeNull();
   });
 });

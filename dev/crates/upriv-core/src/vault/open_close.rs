@@ -20,7 +20,7 @@ use crate::session::{
     OpenSession, PreparingGuard,
 };
 use crate::store::{
-    content_hash_hex, flush_index_parts, index_logical_hash, open_store, pack_blob_waste,
+    content_hash_with_index, flush_index_parts, index_logical_hash, open_store, pack_blob_waste,
     BlobPackMode, ChunkBlobMutation,
 };
 
@@ -422,25 +422,28 @@ fn close_vault_inner(
         }
         // Before the seal, so the digests of files written in order are stored.
         session.index.settle_digest_streams();
-        if let Err(error) =
-            flush_index_parts(&store, &session.header, &session.index_key, &session.index)
-        {
-            if packed_ok {
-                packed.restore_packed_nodes(&mut session.index);
-                packed.discard_created();
-            }
-            return Err(error);
-        }
+        let sealed_index =
+            match flush_index_parts(&store, &session.header, &session.index_key, &session.index) {
+                Ok(sealed) => sealed,
+                Err(error) => {
+                    if packed_ok {
+                        packed.restore_packed_nodes(&mut session.index);
+                        packed.discard_created();
+                    }
+                    return Err(error);
+                }
+            };
         session.index.clear_unsealed_holes();
         if packed_ok {
             packed.delete_superseded();
         }
-        let hash = content_hash_hex(&store)?;
+        // The index just written is still in hand; only the header is read.
+        let hash = content_hash_with_index(&store, &sealed_index)?;
+        drop(sealed_index);
+        let config = load_vault_config(&vault_dir).ok();
         // An unreadable config is not the default "skip": the backup attempt
         // reports that failure. A readable config with the key omitted is on.
-        let backup_config = load_vault_config(&vault_dir)
-            .ok()
-            .map(|config| config.backup);
+        let backup_config = config.as_ref().map(|config| config.backup.clone());
         let backups_off = backup_config.as_ref().is_some_and(|backup| !backup.enabled);
         let skip_when_unchanged = backup_config
             .as_ref()
@@ -455,9 +458,13 @@ fn close_vault_inner(
         let previous_stamp = previous
             .as_ref()
             .and_then(|saved| saved.backed_up_stamp.clone());
-        let display_name = crate::config::load_vault_config_raw(&vault_dir)
-            .map(|c| c.vault.display_name)
-            .unwrap_or_else(|_| session.vault_id.clone());
+        // A config whose mount does not validate still names the vault.
+        let display_name = match config {
+            Some(config) => config.vault.display_name,
+            None => crate::config::load_vault_config_raw(&vault_dir)
+                .map(|c| c.vault.display_name)
+                .unwrap_or_else(|_| session.vault_id.clone()),
+        };
         let mut persistence =
             VaultPersistence::closed(session.vault_id.clone(), display_name, Some(hash));
         persistence.backed_up_index_hash = previous_backup.clone();
@@ -792,6 +799,180 @@ mode = "encrypted_dir"
         timed_close("after the same 64 MiB written again");
         open_vault(&root, "notes", b"pass-word-ok").unwrap();
         timed_close("unchanged, all files");
+    }
+
+    /// A file copied into the Linux folder, timed. Needs FUSE and the helper
+    /// beside the test binary:
+    /// `cargo build --release -p upriv-fuse && cargo test --release -p upriv-core --lib mount_write_cost_report -- --ignored --nocapture`
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore]
+    fn mount_write_cost_report() {
+        use std::io::Write;
+        let (tmp, root) = vault_root_with(&[]);
+        create_vault(
+            &root,
+            sample_config("notes", "Notes"),
+            b"pass-word-ok",
+            KdfUnlockPreset::M32,
+        )
+        .unwrap();
+        open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        let point = tmp.path().join("folder");
+        let mounted =
+            crate::mount::mount_encrypted_dir(root.clone(), "notes".into(), point.clone()).unwrap();
+        let big: Vec<u8> = (0..16 * 1024 * 1024).map(|i| (i % 251) as u8).collect();
+        let started = std::time::Instant::now();
+        let mut out = std::fs::File::create(point.join("big.bin")).unwrap();
+        for part in big.chunks(1024 * 1024) {
+            out.write_all(part).unwrap();
+        }
+        out.sync_all().unwrap();
+        drop(out);
+        let wrote = started.elapsed();
+        assert_eq!(std::fs::read(point.join("big.bin")).unwrap(), big);
+        drop(mounted);
+        let started = std::time::Instant::now();
+        close_vault(&root, "notes").unwrap();
+        eprintln!(
+            "16 MiB through the folder: write {wrote:?}, close {:?}",
+            started.elapsed()
+        );
+    }
+
+    /// Edits made through the Linux folder read back the same through it and
+    /// from the store after a close and an unlock. Needs FUSE and the helper
+    /// beside the test binary:
+    /// `cargo build -p upriv-fuse && cargo test -p upriv-core --lib folder_edits_reach_the_store_intact -- --ignored`
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore]
+    fn folder_edits_reach_the_store_intact() {
+        use std::collections::BTreeMap;
+        use std::io::Write;
+        use std::os::unix::fs::FileExt;
+
+        const CHUNK: usize = 256 * 1024;
+        let pattern = |len: usize, seed: u8| -> Vec<u8> {
+            (0..len)
+                .map(|i| (i as u8).wrapping_mul(31).wrapping_add(seed))
+                .collect()
+        };
+        let (tmp, root) = vault_root_with(&[]);
+        create_vault(
+            &root,
+            sample_config("notes", "Notes"),
+            b"pass-word-ok",
+            KdfUnlockPreset::M32,
+        )
+        .unwrap();
+        open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        let point = tmp.path().join("folder");
+        let mounted =
+            crate::mount::mount_encrypted_dir(root.clone(), "notes".into(), point.clone()).unwrap();
+        let mut expected: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+
+        // Written in order, as a copy does, then edited in place.
+        let mut big = pattern(3 * CHUNK + 12_345, 1);
+        let mut out = std::fs::File::create(point.join("big.bin")).unwrap();
+        for part in big.chunks(1024 * 1024) {
+            out.write_all(part).unwrap();
+        }
+        drop(out);
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(point.join("big.bin"))
+            .unwrap();
+        let across_chunks = pattern(3_000, 2);
+        file.write_all_at(&across_chunks, (CHUNK - 1_000) as u64)
+            .unwrap();
+        big[CHUNK - 1_000..CHUNK + 2_000].copy_from_slice(&across_chunks);
+        // Shrink inside a chunk, then grow: the new bytes are zeros.
+        file.set_len((2 * CHUNK + 7) as u64).unwrap();
+        big.truncate(2 * CHUNK + 7);
+        file.set_len((2 * CHUNK + 5_000) as u64).unwrap();
+        big.resize(2 * CHUNK + 5_000, 0);
+        // A write past the end leaves zeros before it.
+        file.write_all_at(b"tail", (3 * CHUNK) as u64).unwrap();
+        big.resize(3 * CHUNK, 0);
+        big.extend_from_slice(b"tail");
+        file.sync_all().unwrap();
+        drop(file);
+        expected.insert("big.bin".into(), big);
+
+        std::fs::write(point.join("log.txt"), b"first\n").unwrap();
+        let mut log = std::fs::OpenOptions::new()
+            .append(true)
+            .open(point.join("log.txt"))
+            .unwrap();
+        log.write_all(b"second\n").unwrap();
+        drop(log);
+        expected.insert("log.txt".into(), b"first\nsecond\n".to_vec());
+
+        std::fs::create_dir_all(point.join("docs").join("drafts")).unwrap();
+        for i in 0..20u8 {
+            let name = format!("{i}.md");
+            let bytes = pattern(100 + usize::from(i), i);
+            std::fs::write(point.join("docs").join("drafts").join(&name), &bytes).unwrap();
+            expected.insert(format!("docs/final/{name}"), bytes);
+        }
+        std::fs::rename(
+            point.join("docs").join("drafts"),
+            point.join("docs").join("final"),
+        )
+        .unwrap();
+
+        // Saved as editors do it: a new file renamed over the old one.
+        std::fs::write(point.join("note.txt"), b"old text").unwrap();
+        let mut saved = std::fs::File::create(point.join("note.txt.tmp")).unwrap();
+        saved
+            .write_all(b"new text, longer than the old one")
+            .unwrap();
+        saved.sync_all().unwrap();
+        drop(saved);
+        std::fs::rename(point.join("note.txt.tmp"), point.join("note.txt")).unwrap();
+        expected.insert(
+            "note.txt".into(),
+            b"new text, longer than the old one".to_vec(),
+        );
+
+        std::fs::write(point.join("move-me.txt"), b"moved").unwrap();
+        std::fs::rename(
+            point.join("move-me.txt"),
+            point.join("docs").join("moved.txt"),
+        )
+        .unwrap();
+        expected.insert("docs/moved.txt".into(), b"moved".to_vec());
+        std::fs::write(point.join("gone.txt"), b"gone").unwrap();
+        std::fs::remove_file(point.join("gone.txt")).unwrap();
+        std::fs::create_dir(point.join("empty")).unwrap();
+        std::fs::remove_dir(point.join("empty")).unwrap();
+
+        for (path, bytes) in &expected {
+            let read = std::fs::read(point.join(path)).unwrap();
+            assert!(&read == bytes, "{path} through the folder");
+        }
+        drop(mounted);
+        close_vault(&root, "notes").unwrap();
+
+        open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        for (path, bytes) in &expected {
+            let read = crate::vault::fs_read_file(&root, "notes", &format!("/{path}")).unwrap();
+            assert!(&read == bytes, "{path} after an unlock");
+        }
+        for gone in [
+            "/gone.txt",
+            "/move-me.txt",
+            "/note.txt.tmp",
+            "/docs/drafts/0.md",
+            "/empty",
+        ] {
+            assert!(
+                crate::vault::fs_read_file(&root, "notes", gone).is_err(),
+                "{gone} is gone"
+            );
+        }
+        close_vault(&root, "notes").unwrap();
     }
 
     fn backup_names(root: &crate::paths::VaultRoot) -> Vec<String> {

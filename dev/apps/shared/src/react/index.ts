@@ -40,7 +40,12 @@ export {
   type VaultPipelinePresentation,
   type VaultPipelineRunState,
 } from "./useVaultPipelineRun";
-export { useWorkspacePersistence } from "./useWorkspacePersistence";
+export { useWorkspacePersistence, WORKSPACE_WRITE_DELAY_MS } from "./useWorkspacePersistence";
+export {
+  useTreeSplitDrag,
+  type TreeSplitDrag,
+  type UseTreeSplitDragOptions,
+} from "./useTreeSplitDrag";
 export {
   FileManagerProvider,
   useFileManager,

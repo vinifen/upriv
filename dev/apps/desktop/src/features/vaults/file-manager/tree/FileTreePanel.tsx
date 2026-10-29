@@ -3,10 +3,11 @@ import {
   useRef,
   useState,
   type ChangeEvent,
+  type CSSProperties,
   type DragEvent,
   type MouseEvent,
 } from "react";
-import { Icon } from "@/components/icons";
+import { Icon, type IconName } from "@/components/icons";
 import { Button } from "@/components/ui";
 import { useTranslation } from "@/i18n";
 import { useErrorToast } from "@/hooks/useErrorToast";
@@ -454,15 +455,43 @@ export function ExplorerToggle({ fm, showLabel }: { fm: FileManagerApi; showLabe
   );
 }
 
+const EXPLORER_TOOL_PAIR_CLASS =
+  "flex shrink-0 [@container(width<7.5rem)]:flex-1 [@container(width<7.5rem)]:justify-around";
+
+function ExplorerToolButton({
+  icon,
+  label,
+  onClick,
+}: {
+  icon: IconName;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-on-surface-variant transition-colors hover:bg-surface-container-highest hover:text-on-surface"
+      onClick={onClick}
+      aria-label={label}
+      title={label}
+    >
+      <Icon name={icon} size={14} />
+    </button>
+  );
+}
+
 export function FileTreePanel({ fm, splitPercent, layout }: FileTreePanelProps) {
   const { t } = useTranslation();
   const { showError } = useErrorToast();
   const importFilesInputRef = useRef<HTMLInputElement>(null);
   const importFolderInputRef = useRef<HTMLInputElement>(null);
-  const paneStyle =
-    layout === "column"
-      ? { height: `${splitPercent}%`, width: "100%" }
-      : { width: `${splitPercent}%`, height: "100%" };
+  const extent = `${splitPercent}%`;
+  const paneStyle: CSSProperties = {
+    ...(layout === "column"
+      ? { height: extent, width: "100%" }
+      : { width: extent, height: "100%" }),
+    display: splitPercent === 0 ? "none" : undefined,
+  };
 
   const openRootContextMenu = (clientX: number, clientY: number) => {
     fm.dispatch({ type: "set_context_menu", menu: { x: clientX, y: clientY, path: "/" } });
@@ -543,12 +572,16 @@ export function FileTreePanel({ fm, splitPercent, layout }: FileTreePanelProps) 
   return (
     <aside
       style={paneStyle}
-      className="flex min-h-0 shrink-0 flex-col overflow-hidden bg-surface-container"
+      className="flex min-h-0 min-w-0 shrink-0 flex-col overflow-hidden bg-surface-container"
     >
-      {/* Label truncates first; once only the icon is left, the actions wrap to a second row. */}
-      <div className="flex shrink-0 flex-wrap items-center gap-y-0.5 px-1 pb-0.5 pt-1">
+      {/*
+        Label truncates first; once only the icon is left, the actions wrap two by two
+        (create, import). They wrap below 7.5rem of content (label icon + four buttons),
+        and then spread evenly across their own rows.
+      */}
+      <div className="flex shrink-0 flex-wrap items-center gap-y-0.5 px-1 pb-0.5 pt-1 [container-type:inline-size]">
         <ExplorerToggle fm={fm} showLabel />
-        <div className="ml-auto flex shrink-0 items-center">
+        <div className="ml-auto flex max-w-full shrink-0 flex-wrap items-center justify-end [@container(width<7.5rem)]:grow">
           <input
             ref={importFilesInputRef}
             type="file"
@@ -570,42 +603,30 @@ export function FileTreePanel({ fm, splitPercent, layout }: FileTreePanelProps) 
             directory=""
             onChange={handleImportFolderChange}
           />
-          <button
-            type="button"
-            className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-on-surface-variant transition-colors hover:bg-surface-container-highest hover:text-on-surface"
-            onClick={() => fm.createFile(importTargetPath(fm))}
-            aria-label={t("modal.file_manager.context.new_file")}
-            title={t("modal.file_manager.context.new_file")}
-          >
-            <Icon name="file" size={14} />
-          </button>
-          <button
-            type="button"
-            className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-on-surface-variant transition-colors hover:bg-surface-container-highest hover:text-on-surface"
-            onClick={() => fm.createFolder(importTargetPath(fm))}
-            aria-label={t("modal.file_manager.context.new_folder")}
-            title={t("modal.file_manager.context.new_folder")}
-          >
-            <Icon name="folder" size={14} />
-          </button>
-          <button
-            type="button"
-            className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-on-surface-variant transition-colors hover:bg-surface-container-highest hover:text-on-surface disabled:pointer-events-none disabled:opacity-40"
-            onClick={openImportFilesPicker}
-            aria-label={t("modal.file_manager.explorer.import_files")}
-            title={t("modal.file_manager.explorer.import_files")}
-          >
-            <Icon name="arrow-up" size={14} />
-          </button>
-          <button
-            type="button"
-            className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-on-surface-variant transition-colors hover:bg-surface-container-highest hover:text-on-surface disabled:pointer-events-none disabled:opacity-40"
-            onClick={openImportFolderPicker}
-            aria-label={t("modal.file_manager.explorer.import_folder")}
-            title={t("modal.file_manager.explorer.import_folder")}
-          >
-            <Icon name="archive" size={14} />
-          </button>
+          <div className={EXPLORER_TOOL_PAIR_CLASS}>
+            <ExplorerToolButton
+              icon="file"
+              label={t("modal.file_manager.context.new_file")}
+              onClick={() => fm.createFile(importTargetPath(fm))}
+            />
+            <ExplorerToolButton
+              icon="folder"
+              label={t("modal.file_manager.context.new_folder")}
+              onClick={() => fm.createFolder(importTargetPath(fm))}
+            />
+          </div>
+          <div className={EXPLORER_TOOL_PAIR_CLASS}>
+            <ExplorerToolButton
+              icon="arrow-up"
+              label={t("modal.file_manager.explorer.import_files")}
+              onClick={openImportFilesPicker}
+            />
+            <ExplorerToolButton
+              icon="archive"
+              label={t("modal.file_manager.explorer.import_folder")}
+              onClick={openImportFolderPicker}
+            />
+          </div>
         </div>
       </div>
       <nav

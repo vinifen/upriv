@@ -165,39 +165,55 @@ pub fn sealed_index_contains(
     Ok(index.find(logical_path).is_some())
 }
 
+/// Seal `index` into `store/index/` and return the sealed bytes, which are now
+/// the primary index file.
 pub fn flush_index_parts(
     store_dir: impl AsRef<Path>,
     header: &VaultHeader,
     index_key: &[u8; aead::INDEX_KEY_LEN],
     index: &Index,
-) -> Result<()> {
+) -> Result<Vec<u8>> {
     save_sealed_index(store_dir, header, index_key, index)
 }
 
 /// SHA-256 of header + index ciphertext (recovery A / persistence `content_hash`).
 pub fn content_hash_hex(store_dir: impl AsRef<Path>) -> Result<String> {
     let store_dir = store_dir.as_ref();
-    let header_path = header::VaultHeader::path(store_dir);
-    let index_path = index::index_path(store_dir);
-    let header_bytes = match crate::host_fs::read(&header_path) {
-        Ok(bytes) => bytes,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            crate::host_fs::read(header::VaultHeader::copy_path(store_dir))
-                .map_err(UprivError::from)?
-        }
-        Err(error) => return Err(error.into()),
-    };
-    let index_bytes = match crate::host_fs::read(&index_path) {
+    let header_bytes = read_header_file(store_dir)?;
+    let index_bytes = match crate::host_fs::read(index::index_path(store_dir)) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             crate::host_fs::read(index::index_copy_path(store_dir)).map_err(UprivError::from)?
         }
         Err(error) => return Err(error.into()),
     };
+    Ok(hash_header_and_index(&header_bytes, &index_bytes))
+}
+
+/// [`content_hash_hex`] for a store whose primary index file holds
+/// `sealed_index`, as [`flush_index_parts`] just wrote it. Reads the header only.
+pub fn content_hash_with_index(store_dir: impl AsRef<Path>, sealed_index: &[u8]) -> Result<String> {
+    let header_bytes = read_header_file(store_dir.as_ref())?;
+    Ok(hash_header_and_index(&header_bytes, sealed_index))
+}
+
+/// The primary header file, or its copy when the primary is absent.
+fn read_header_file(store_dir: &Path) -> Result<Vec<u8>> {
+    match crate::host_fs::read(header::VaultHeader::path(store_dir)) {
+        Ok(bytes) => Ok(bytes),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            crate::host_fs::read(header::VaultHeader::copy_path(store_dir))
+                .map_err(UprivError::from)
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn hash_header_and_index(header: &[u8], index: &[u8]) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(&header_bytes);
-    hasher.update(&index_bytes);
-    Ok(format!("sha256:{:x}", hasher.finalize()))
+    hasher.update(header);
+    hasher.update(index);
+    format!("sha256:{:x}", hasher.finalize())
 }
 
 /// `.upriv-workspace.json` and the root plaintext policy: file-manager layout
@@ -253,6 +269,27 @@ mod tests {
     #[allow(unused_imports)]
     use crate::host_fs::HostFsQuery;
     use crate::store::header::unwrap_header_master;
+
+    #[test]
+    fn the_flushed_index_hashes_like_the_files_on_disk() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join(crate::paths::STORE_DIR_NAME);
+        create_empty_store(&dir, b"correct-horse", KdfUnlockPreset::M32).expect("create");
+        let mut opened = open_store(&dir, b"correct-horse").expect("open");
+        opened.index.nodes.push(VaultNode::dir("docs"));
+        let sealed =
+            flush_index_parts(&dir, &opened.header, &opened.index_key, &opened.index).unwrap();
+        assert_eq!(
+            content_hash_with_index(&dir, &sealed).unwrap(),
+            content_hash_hex(&dir).unwrap()
+        );
+        crate::host_fs::remove_file(header::VaultHeader::path(&dir)).unwrap();
+        assert_eq!(
+            content_hash_with_index(&dir, &sealed).unwrap(),
+            content_hash_hex(&dir).unwrap(),
+            "both read the header copy"
+        );
+    }
 
     #[test]
     fn create_open_round_trip_empty() {

@@ -116,7 +116,7 @@ impl Job {
         self.state.bytes_done.fetch_add(bytes, Ordering::Relaxed);
     }
 
-    fn is_stopped(&self) -> bool {
+    pub(crate) fn is_stopped(&self) -> bool {
         self.state.stop.load(Ordering::Relaxed)
     }
 
@@ -199,6 +199,9 @@ pub(crate) struct ProgressReader<'a, R> {
 
 impl<R: Read> Read for ProgressReader<'_, R> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if self.job.is_stopped() {
+            return Err(std::io::Error::other("job stopped"));
+        }
         let read = self.inner.read(buf)?;
         self.job.advance(read as u64);
         Ok(read)

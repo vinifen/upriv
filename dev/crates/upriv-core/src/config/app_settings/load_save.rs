@@ -24,7 +24,7 @@ fn lock_settings_write() -> MutexGuard<'static, ()> {
 
 /// Bootstrap: active alias root, else default_root (exact anchor when `UPRIV_DEFAULT_ROOT_ANCHOR` set).
 ///
-/// When `.upriv-root` is **active**, a failed open is returned as an error (no default_root
+/// When `.upriv-data-folder` is **active**, a failed open is returned as an error (no default_root
 /// fallback) so settings load/save cannot silently use a different root while the UI
 /// still shows custom_root mode. The logical storage-access path is absent until the
 /// phone grant is mounted; that absence is not a failed read.
@@ -62,7 +62,7 @@ pub fn discover_bootstrap_root() -> Result<Option<VaultRoot>> {
 }
 
 /// Load settings from the bootstrap root, or defaults when no root exists yet.
-/// Always merge vault-root mode from `.upriv-root` (even when no readable root yet).
+/// Always merge vault-root mode from `.upriv-data-folder` (even when no readable root yet).
 ///
 /// Active alias that fails to open → defaults + alias-derived wire fields (`on_disk: false`)
 /// so the UI can still show custom_root mode / Gate alias-invalid without falling back to default_root TOML.
@@ -103,7 +103,7 @@ pub fn load_app_settings() -> Result<LoadedAppSettings> {
     }
 }
 
-/// Apply `.upriv-root` → wire `vault_root_mode` / `upriv_root_path`.
+/// Apply `.upriv-data-folder` → wire `vault_root_mode` / `upriv_root_path`.
 fn apply_alias_to_app_settings(settings: &mut AppSettings) {
     settings.app.vault_root_mode = VaultRootMode::DefaultRoot;
     settings.app.upriv_root_path.clear();
@@ -127,7 +127,7 @@ fn apply_alias_to_app_settings(settings: &mut AppSettings) {
     }
 }
 
-/// Load `.upriv/settings.toml` at `root` and derive vault-root mode from `.upriv-root`.
+/// Load `.upriv/settings.toml` at `root` and derive vault-root mode from `.upriv-data-folder`.
 pub fn load_app_settings_at(root: &Path) -> Result<LoadedAppSettings> {
     // Same marker rules as discover / inspect (reject incomplete before serde defaults).
     crate::paths::validate_existing_vault_root(root)?;
@@ -162,12 +162,12 @@ pub fn load_app_settings_at(root: &Path) -> Result<LoadedAppSettings> {
     })
 }
 
-/// Write settings.toml at `root` and sync `.upriv-root` from wire `app` fields.
+/// Write settings.toml at `root` and sync `.upriv-data-folder` from wire `app` fields.
 pub fn save_app_settings(root: &Path, settings: &AppSettings) -> Result<()> {
     save_app_settings_with_alias_sync(root, settings, true)
 }
 
-/// Write settings.toml at `root`. When `sync_alias` is true, also align `.upriv-root`
+/// Write settings.toml at `root`. When `sync_alias` is true, also align `.upriv-data-folder`
 /// from wire `app` fields. Pass `false` when the caller already mutated the alias
 /// via setup/deactivate (single writer).
 ///
@@ -187,7 +187,7 @@ pub fn save_app_settings_with_alias_sync(
     Ok(())
 }
 
-/// Align `.upriv-root` with settings: default_root → deactivate; custom → write active alias.
+/// Align `.upriv-data-folder` with settings: default_root → deactivate; custom → write active alias.
 pub fn sync_alias_with_app_settings(settings: &AppSettings) -> Result<()> {
     if settings.app.vault_root_mode == VaultRootMode::DefaultRoot {
         deactivate_app_home_alias()?;
@@ -277,7 +277,7 @@ mod tests {
             !raw.contains("vault_root_mode") && !raw.contains("upriv_root_path"),
             "mode/path must not be persisted in settings.toml"
         );
-        assert!(raw.contains(".upriv-root"));
+        assert!(raw.contains(".upriv-data-folder"));
 
         let loaded = load_app_settings_at(dir.path()).unwrap();
         assert_eq!(loaded.settings.ui.locale, "pt-BR");
@@ -404,10 +404,10 @@ last_opened_vault = ""
         let default_root = tempfile::tempdir().unwrap();
         let missing = home.path().join("gone-custom");
         initialize_vault_root(default_root.path()).unwrap();
-        let alias_path = home.path().join(".upriv-root");
+        let alias_path = home.path().join(".upriv-data-folder");
         crate::host_fs::write(
             &alias_path,
-            format!("status=active\n{}\n", missing.display()),
+            format!("status=active\ndata_folder={}\n", missing.display()),
         )
         .unwrap();
         std::env::remove_var("APPIMAGE");

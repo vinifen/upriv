@@ -81,6 +81,8 @@ export interface CreateVaultDraft {
   security: Omit<VaultSettingsConfig["security"], "password_changed_at">;
   /** Carried from an import so create does not reset compression the form does not show. */
   seven_zip: VaultSettingsConfig["seven_zip"];
+  /** Carried from an import like `seven_zip`; the form does not show it. */
+  file_manager: VaultSettingsConfig["file_manager"];
   order: number;
   hidden: boolean;
   /** Deferred group membership — applied when the vault is created. */

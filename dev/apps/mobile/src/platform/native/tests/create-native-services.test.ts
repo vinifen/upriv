@@ -47,7 +47,10 @@ vi.mock("@/lib/rpc", () => ({
     source: "default_root",
   })),
   rpcVaultRootSetupDefaultRoot: vi.fn(async () => ({ rootPath: "/tmp" })),
-  rpcVaultRootSetupPath: vi.fn(async () => ({ rootPath: "/tmp", aliasPath: "/tmp/.upriv-root" })),
+  rpcVaultRootSetupPath: vi.fn(async () => ({
+    rootPath: "/tmp",
+    aliasPath: "/tmp/.upriv-data-folder",
+  })),
   rpcVaultRootSuggestedCustomPath: vi.fn(async () => "/tmp"),
   rpcVaultList: vi.fn(async () => []),
   rpcVaultCreate: vi.fn(),

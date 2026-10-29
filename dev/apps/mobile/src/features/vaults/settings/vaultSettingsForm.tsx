@@ -147,6 +147,8 @@ function renderSection(
           hiddenLocked={locks.hiddenLocked}
           displayNameLocked={locks.displayNameLocked}
           onChange={(patch) => patchDraft("vault", patch)}
+          fileManager={draft.file_manager}
+          onFileManagerChange={(patch) => patchDraft("file_manager", patch)}
         />
       );
     case "storage":
@@ -190,11 +192,15 @@ function VaultSection({
   onChange,
   hiddenLocked = false,
   displayNameLocked = false,
+  fileManager,
+  onFileManagerChange,
 }: {
   config: VaultSettingsConfig["vault"];
   onChange: (patch: Partial<VaultSettingsConfig["vault"]>) => void;
   hiddenLocked?: boolean;
   displayNameLocked?: boolean;
+  fileManager: VaultSettingsConfig["file_manager"];
+  onFileManagerChange: (patch: Partial<VaultSettingsConfig["file_manager"]>) => void;
 }) {
   const { t } = useTranslation();
   return (
@@ -245,6 +251,12 @@ function VaultSection({
         value={config.hidden || hiddenLocked}
         disabled={hiddenLocked}
         onValueChange={(hidden) => onChange({ hidden })}
+      />
+      <SwitchRow
+        label={t("modal.settings.field.file_manager.confirm_delete")}
+        hint={t("modal.settings.field.file_manager.confirm_delete_help")}
+        value={fileManager.confirm_delete}
+        onValueChange={(confirm_delete) => onFileManagerChange({ confirm_delete })}
       />
     </View>
   );
