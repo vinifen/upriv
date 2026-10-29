@@ -2,9 +2,8 @@
 //!
 //! One map per process (desktop daemon / mobile FFI). Closing Upriv clears it.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, TryLockError};
 use std::time::{Duration, Instant};
 
@@ -12,6 +11,11 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use crate::error::{Result, UprivError};
 use crate::store::{OpenedStore, VaultHeader, VaultIndex};
+
+mod jobs;
+
+pub(crate) use jobs::Job;
+pub use jobs::{cancel_job, job_status, stop_all_jobs, JobStatus};
 
 const FAILURE_WINDOW: Duration = Duration::from_secs(60);
 const BLOCK_DURATION: Duration = Duration::from_secs(60);
@@ -143,8 +147,8 @@ static VAULT_DIR_GATES: LazyLock<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>> =
 static VAULT_REGISTRY_GATE: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 /// Data folders being copied into a zip, keyed by vault-root. One export per
 /// folder at a time.
-static DATA_FOLDER_EXPORTS: LazyLock<Mutex<HashMap<PathBuf, Arc<DataFolderExportProgress>>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
+static DATA_FOLDER_EXPORTS: LazyLock<Mutex<HashSet<PathBuf>>> =
+    LazyLock::new(|| Mutex::new(HashSet::new()));
 
 fn session_lock_poisoned(detail: &str) -> UprivError {
     UprivError::VaultStoreInvalid {
@@ -234,18 +238,10 @@ fn lock_throttle() -> Result<std::sync::MutexGuard<'static, HashMap<PathBuf, Unl
     })
 }
 
-pub fn session_key(vault_dir: impl Into<PathBuf>) -> PathBuf {
-    vault_dir.into()
-}
-
 pub fn is_vault_open_at(vault_dir: &Path) -> bool {
     lock_sessions()
         .map(|g| g.contains_key(vault_dir))
         .unwrap_or(false)
-}
-
-pub fn is_vault_open(vault_dir: impl AsRef<Path>) -> bool {
-    is_vault_open_at(vault_dir.as_ref())
 }
 
 pub fn open_session_ids() -> Vec<String> {
@@ -359,24 +355,7 @@ pub(crate) fn any_preparing_under(vaults_dir: &Path) -> bool {
         .unwrap_or(true)
 }
 
-/// Bytes copied so far by a running data-folder export.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct DataFolderExportStatus {
-    pub bytes_done: u64,
-    /// Measured before the copy starts. A file that grows while it is read can
-    /// push `bytes_done` past it; [`data_folder_export_status`] caps that.
-    pub bytes_total: u64,
-}
-
-#[derive(Debug, Default)]
-pub(crate) struct DataFolderExportProgress {
-    bytes_done: AtomicU64,
-    bytes_total: AtomicU64,
-    cancel: AtomicBool,
-}
-
-fn lock_data_folder_exports(
-) -> Result<std::sync::MutexGuard<'static, HashMap<PathBuf, Arc<DataFolderExportProgress>>>> {
+fn lock_data_folder_exports() -> Result<std::sync::MutexGuard<'static, HashSet<PathBuf>>> {
     DATA_FOLDER_EXPORTS
         .lock()
         .map_err(|_| session_lock_poisoned("data folder export lock poisoned"))
@@ -389,36 +368,10 @@ pub fn is_data_folder_export_running() -> bool {
         .unwrap_or(true)
 }
 
-/// Progress of the export of the data folder at `root`, or `None` when none runs.
-pub fn data_folder_export_status(root: &Path) -> Option<DataFolderExportStatus> {
-    let guard = lock_data_folder_exports().ok()?;
-    let progress = guard.get(root)?;
-    let bytes_total = progress.bytes_total.load(Ordering::Relaxed);
-    let bytes_done = progress.bytes_done.load(Ordering::Relaxed).min(bytes_total);
-    Some(DataFolderExportStatus {
-        bytes_done,
-        bytes_total,
-    })
-}
-
-/// Ask the running export of the data folder at `root` to stop. It removes its
-/// partial zip and returns [`UprivError::DataFolderExportCancelled`]. False when
-/// no export runs.
-pub fn cancel_data_folder_export(root: &Path) -> bool {
-    let Ok(guard) = lock_data_folder_exports() else {
-        return false;
-    };
-    let Some(progress) = guard.get(root) else {
-        return false;
-    };
-    progress.cancel.store(true, Ordering::Relaxed);
-    true
-}
-
 /// Refuse work that would add, move, or remove files the running export of the
 /// data folder at `root` may still copy: a new vault folder, or a backup delete or pin.
 pub(crate) fn ensure_data_folder_export_idle(root: &Path) -> Result<()> {
-    if lock_data_folder_exports()?.contains_key(root) {
+    if lock_data_folder_exports()?.contains(root) {
         return Err(UprivError::DataFolderExportBusy);
     }
     Ok(())
@@ -427,36 +380,16 @@ pub(crate) fn ensure_data_folder_export_idle(root: &Path) -> Result<()> {
 /// Marks the data folder at `root` as being exported until dropped.
 pub(crate) struct DataFolderExportGuard {
     root: PathBuf,
-    progress: Arc<DataFolderExportProgress>,
 }
 
 impl DataFolderExportGuard {
     pub(crate) fn enter(root: &Path) -> Result<Self> {
-        let mut guard = lock_data_folder_exports()?;
-        if guard.contains_key(root) {
+        if !lock_data_folder_exports()?.insert(root.to_path_buf()) {
             return Err(UprivError::DataFolderExportBusy);
         }
-        let progress = Arc::new(DataFolderExportProgress::default());
-        guard.insert(root.to_path_buf(), Arc::clone(&progress));
         Ok(Self {
             root: root.to_path_buf(),
-            progress,
         })
-    }
-
-    pub(crate) fn set_total(&self, bytes: u64) {
-        self.progress.bytes_total.store(bytes, Ordering::Relaxed);
-    }
-
-    pub(crate) fn advance(&self, bytes: u64) {
-        self.progress.bytes_done.fetch_add(bytes, Ordering::Relaxed);
-    }
-
-    pub(crate) fn ensure_not_cancelled(&self) -> Result<()> {
-        if self.progress.cancel.load(Ordering::Relaxed) {
-            return Err(UprivError::DataFolderExportCancelled);
-        }
-        Ok(())
     }
 }
 
@@ -613,12 +546,6 @@ pub fn with_open_session<T>(
         .lock()
         .map_err(|_| session_lock_poisoned("open session poisoned"))?;
     f(&mut session)
-}
-
-pub fn get_session_vault_id(vault_dir: &Path) -> Option<String> {
-    let guard = lock_sessions().ok()?;
-    let arc = guard.get(vault_dir)?;
-    arc.lock().ok().map(|s| s.vault_id.clone())
 }
 
 /// Fail closed if this vault is in the 60 s block window.

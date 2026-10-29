@@ -18,10 +18,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{Result, UprivError};
 
-/// Standard child directories created under `<vault-root>/.upriv/` (not a mount parent).
-/// The reserved check rejects the **entire** `.upriv/` tree, not only these names.
-pub const RESERVED_UPRIV_WORKSPACE_CHILDREN: &[&str] = &["vaults", "logs", "app", "runtime"];
-
 /// True when `path` is an address this file may store for some system.
 ///
 /// Unix, Windows, and Android SAF shapes are all absolute here. The file is shared,
@@ -84,7 +80,8 @@ impl WorkspaceSystem {
 ///
 /// `Unset` is the start: no folder. `Beside` is the data folder, so `workspace`
 /// sits next to `.upriv`. `Custom` uses [`WorkspaceOsEntry::path`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum WorkspacePlace {
     #[default]
     Unset,
@@ -98,15 +95,6 @@ impl WorkspacePlace {
             Self::Unset => "unset",
             Self::Beside => "beside",
             Self::Custom => "custom",
-        }
-    }
-
-    fn parse(raw: &str) -> Option<Self> {
-        match raw.trim() {
-            "unset" => Some(Self::Unset),
-            "beside" => Some(Self::Beside),
-            "custom" => Some(Self::Custom),
-            _ => None,
         }
     }
 }
@@ -138,8 +126,8 @@ impl WorkspaceOsEntry {
     }
 }
 
-/// App row after read. `beside` and `unset` are kept. A missing `place` with a
-/// path is `custom`. An empty path is `unset`, not beside `.upriv`.
+/// App row after read. `custom` needs a path; without one the row is `unset`,
+/// not beside `.upriv`.
 pub fn app_workspace_place(entry: &WorkspaceOsEntry) -> WorkspacePlace {
     match entry.place {
         WorkspacePlace::Beside => WorkspacePlace::Beside,
@@ -353,6 +341,7 @@ impl<'de> Deserialize<'de> for VaultMountSection {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RawWorkspace {
     #[serde(default)]
     file_manager_folder: bool,
@@ -369,9 +358,10 @@ struct RawWorkspace {
 }
 
 #[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 struct RawOs {
     #[serde(default)]
-    place: String,
+    place: WorkspacePlace,
     #[serde(default)]
     path: String,
 }
@@ -434,10 +424,9 @@ fn table_from_raw(raw: RawWorkspace) -> WorkspaceTable {
     for (system, row) in rows {
         let entry = table.row_mut(system);
         let path = row.path.trim().to_string();
-        let place = match WorkspacePlace::parse(&row.place) {
-            Some(WorkspacePlace::Beside) => WorkspacePlace::Beside,
-            Some(WorkspacePlace::Custom) | None if !path.is_empty() => WorkspacePlace::Custom,
-            _ => WorkspacePlace::Unset,
+        let place = match row.place {
+            WorkspacePlace::Custom if path.is_empty() => WorkspacePlace::Unset,
+            place => place,
         };
         entry.place = place;
         entry.path = if place == WorkspacePlace::Custom {
@@ -681,14 +670,23 @@ pub fn resolve_vault_mount_point(
     })
 }
 
-/// Suggested default for `[workspace].path`: `<vault_root>/workspace`.
-pub fn suggested_default_workspace_path(vault_root: &Path) -> PathBuf {
-    vault_root.join("workspace")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn app_workspace_accepts_beside_and_rejects_vault_flags() {
+        let beside: WorkspaceSettings = serde_json::from_str(
+            r#"{"file_manager_folder":false,"linux":{"place":"beside","path":""},"windows":{"place":"unset","path":""},"macos":{"place":"unset","path":""},"android":{"place":"unset","path":""},"ios":{"place":"unset","path":""}}"#,
+        )
+        .expect("beside");
+        assert_eq!(beside.linux.place, WorkspacePlace::Beside);
+        assert!(beside.linux.path.is_empty());
+        let extra = serde_json::from_str::<WorkspaceSettings>(
+            r#"{"file_manager_folder":false,"app_file_manager_folder":"inherit","custom_file_manager_folder":false}"#,
+        );
+        assert!(extra.is_err());
+    }
 
     #[test]
     fn empty_global_ok() {
@@ -763,10 +761,6 @@ mod tests {
         assert_eq!(
             resolve_vault_mount_point("/global", "Notes", false).unwrap(),
             PathBuf::from("/global/workspace/Notes")
-        );
-        assert_eq!(
-            suggested_default_workspace_path(Path::new("/data/root")),
-            PathBuf::from("/data/root/workspace")
         );
         assert!(
             validate_workspace_global_path("content://com.android/tree/primary%3AUpriv", None)
@@ -952,8 +946,20 @@ mod tests {
         assert_eq!(explicit_unset.linux.place, WorkspacePlace::Unset);
         assert!(explicit_unset.linux.path.is_empty());
         assert!(explicit_unset.file_manager_folder);
-        let ignored: WorkspaceSettings = toml::from_str("path = \"/home/me/workspace\"\n").unwrap();
-        assert!(ignored.linux.path.is_empty());
-        assert_eq!(ignored.linux.place, WorkspacePlace::Unset);
+        let no_place: WorkspaceSettings =
+            toml::from_str("[linux]\npath = \"/home/me/workspace\"\n").unwrap();
+        assert_eq!(no_place.linux.place, WorkspacePlace::Unset);
+        assert!(no_place.linux.path.is_empty());
+    }
+
+    #[test]
+    fn workspace_rejects_an_unknown_place_or_key() {
+        for raw in [
+            "[linux]\nplace = \"elsewhere\"\n",
+            "path = \"/home/me/workspace\"\n",
+            "[linux]\nplace = \"custom\"\npath = \"/a\"\nnot_a_field = 1\n",
+        ] {
+            assert!(toml::from_str::<WorkspaceSettings>(raw).is_err(), "{raw}");
+        }
     }
 }

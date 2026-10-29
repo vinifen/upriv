@@ -26,14 +26,8 @@ export type ConfigEditGate =
   | "root_idle"
   | "no_open_session";
 
-export const CONFIG_EDIT_GATES = contract.gates as readonly ConfigEditGate[];
-
 export type VaultConfigEditTarget = keyof typeof contract.vault;
 export type AppConfigEditTarget = keyof typeof contract.app;
-
-export const VAULT_CONFIG_EDIT_TARGETS = Object.keys(contract.vault) as VaultConfigEditTarget[];
-
-export const APP_CONFIG_EDIT_TARGETS = Object.keys(contract.app) as AppConfigEditTarget[];
 
 /** Hybrid product policy — see AGENT.md. Sourced from edit-policy.json. */
 export const VAULT_CONFIG_EDIT_POLICY = contract.vault as Record<
@@ -47,10 +41,6 @@ export const APP_CONFIG_EDIT_POLICY = contract.app as Record<AppConfigEditTarget
 export const VAULT_CONFIG_EDIT_LOCKED_I18N = contract.lockedI18n as Partial<
   Record<VaultConfigEditTarget, I18nKey>
 >;
-
-/** Targets Rust `vault_config_save` refuses while session open / mid-close. */
-export const RUST_CONFIG_SAVE_QUIET_TARGETS =
-  contract.rustConfigSaveQuietTargets as readonly string[];
 
 export type ConfigEditContext = {
   vaultStatus?: VaultDisplayStatus;

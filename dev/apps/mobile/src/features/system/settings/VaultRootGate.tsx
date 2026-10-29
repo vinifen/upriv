@@ -15,13 +15,7 @@ import { useAppSettingsContext } from "./AppSettingsContext";
 import { useTranslation } from "@/i18n";
 import { mobileErrorI18nKey } from "@/lib/errorMessages";
 import { useLoadingBudget } from "@upriv/shared/react";
-import {
-  Button,
-  LoadingBudgetHint,
-  Modal,
-  ModalFooterActions,
-  modalFooterConfirmBtnStyle,
-} from "@/components/ui";
+import { Button, LoadingBudgetHint, Modal, ModalFooterActions } from "@/components/ui";
 import { useTheme } from "@/theme";
 import { spacing } from "@/theme/tokens";
 import { VaultRootSetupScreen } from "./VaultRootSetupScreen";
@@ -819,7 +813,6 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
             <Button
               label={t("action.continue")}
               variant="primary"
-              style={modalFooterConfirmBtnStyle}
               onPress={() => setEnvOverridePath(null)}
             />
           </ModalFooterActions>
@@ -842,7 +835,6 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
             <Button
               label={t("action.retry")}
               variant="primary"
-              style={modalFooterConfirmBtnStyle}
               onPress={() => {
                 setResolveError(null);
                 void runResolveRef.current();

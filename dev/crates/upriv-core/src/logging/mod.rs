@@ -3,8 +3,7 @@
 //! Emission: [`log_event`] / [`Logger`] → on-disk Upriv format.
 //! UI reads via RPC (`log_list` / `log_get` / `log_delete`) → [`store`] / [`session`].
 //!
-//! Line format matches `prod-example/README.md` § Logs and `@upriv/shared`
-//! `domain/logs/format.ts`.
+//! Line format: SDD §3.1 Logs; matches `@upriv/shared` `domain/logs/format.ts`.
 
 mod config;
 mod format;
@@ -20,9 +19,8 @@ pub use level::LogLevel;
 pub use session::{
     clear_logging_session, delete_session_log_files, ensure_logging_session, flush_logging_session,
     install_logging_at, list_session_log_files, log_app_start, log_event, log_vault_root_entered,
-    log_vault_root_leaving, log_vault_root_leaving_on, log_vault_root_ready,
-    map_needs_setup_after_ready, read_session_log_file, reset_vault_root_ready, session_logger,
-    session_logs_dir, vault_root_was_ready,
+    log_vault_root_leaving_on, log_vault_root_ready, map_needs_setup_after_ready,
+    read_session_log_file, reset_vault_root_ready, session_logger, vault_root_was_ready,
 };
 pub use store::{delete_log_files, list_log_files, read_log_file, LogFileInfo};
 pub use writer::Logger;

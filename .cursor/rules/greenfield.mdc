@@ -1,0 +1,6 @@
+---
+description: Greenfield — code, comments, tests, and docs describe only the current behavior; no legacy paths, no references to old behavior, no dead code.
+alwaysApply: true
+---
+
+Canonical rule: @.agent/rules/greenfield.md — edit there, not here.

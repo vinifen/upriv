@@ -5,16 +5,6 @@ import type { ParsedLogLevel, ParsedLogLine } from "./parsed";
 const LOG_LINE_RE = /^(\d{4})\s+(\S+)\s+(DEBUG|INFO|WARN|ERROR)\s+(\S+)(?:\s+(.*))?$/;
 // Line index is 4 digits (0001–1000) — matches Rust writer cap in `LogConfig::effective_entries_per_file`.
 
-/** Parse `000001-20260529120000.log` or `current-000002-20260529200000.log` → ISO UTC (`.000Z`). */
-export function logCreatedAtFromFilename(filename: string): string | null {
-  const match = filename.match(
-    /(?:current-)?\d{6}-(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})\.log$/,
-  );
-  if (!match) return null;
-  const [, y, mo, d, h, mi, s] = match;
-  return `${y}-${mo}-${d}T${h}:${mi}:${s}.000Z`;
-}
-
 export function formatLogFileDate(iso: string, locale: string): string {
   return formatIsoDate(iso, locale);
 }

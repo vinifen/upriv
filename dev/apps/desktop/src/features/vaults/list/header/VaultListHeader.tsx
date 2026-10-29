@@ -13,9 +13,6 @@ interface VaultListHeaderProps {
   onCloseAllVaults?: () => void;
   onOpenSystemSettings?: () => void;
   onOpenDataFolder?: () => void;
-  /** Export data folder can start now, or one is running and its window can be reopened. */
-  showExportDataFolder?: boolean;
-  onOpenExportDataFolder?: () => void;
   onViewLogs?: () => void;
   onOpenHelp?: () => void;
   onOpenSystemInfo?: () => void;
@@ -29,8 +26,6 @@ export function VaultListHeader({
   onCloseAllVaults,
   onOpenSystemSettings,
   onOpenDataFolder,
-  showExportDataFolder = false,
-  onOpenExportDataFolder,
   onViewLogs,
   onOpenHelp,
   onOpenSystemInfo,
@@ -63,25 +58,8 @@ export function VaultListHeader({
         icon: <Icon name="folder" size={18} />,
         onSelect: onOpenDataFolder,
       },
-      ...(showExportDataFolder
-        ? [
-            {
-              id: "export-data-folder",
-              label: t("app.menu.export_data_folder"),
-              icon: <Icon name="archive" size={18} />,
-              onSelect: onOpenExportDataFolder,
-            },
-          ]
-        : []),
     ],
-    [
-      t,
-      onOpenSystemSettings,
-      onOpenGroups,
-      onOpenDataFolder,
-      showExportDataFolder,
-      onOpenExportDataFolder,
-    ],
+    [t, onOpenSystemSettings, onOpenGroups, onOpenDataFolder],
   );
 
   const overflowItems = useMemo(

@@ -185,8 +185,8 @@ export function unmountSafExport(): void {
   }
 }
 
-/** Starting URI for the data-folder screen (Documents). Null when the bridge has no helper. */
+/** Starting URI for the data-folder screen (Documents). Null without the native module. */
 export function safDocumentsInitialUri(): string | null {
-  const uri = getUprivCoreNative()?.safDocumentsInitialUri?.()?.trim();
+  const uri = getUprivCoreNative()?.safDocumentsInitialUri().trim();
   return uri && uri.length > 0 ? uri : null;
 }

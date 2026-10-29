@@ -20,8 +20,8 @@ export const nativeBackupService = createLiveBackupService({
   async promoteToSave(vaultId, stamp) {
     return rpcBackupPromote(vaultId, stamp);
   },
-  async saveNow(vaultId) {
-    return rpcBackupSave(vaultId);
+  async saveNow(vaultId, job) {
+    return rpcBackupSave(vaultId, job);
   },
   async getBackupBytes(vaultId, stamp) {
     return rpcBackupGet(vaultId, stamp);

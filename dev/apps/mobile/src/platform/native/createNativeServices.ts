@@ -31,6 +31,8 @@ import { nativeVaultService } from "./vaultService";
 import { nativeVaultFileSystemService } from "./vaultFileSystemService";
 import { nativeBackupService } from "./backupService";
 import { nativeDataFolderService } from "./dataFolderService";
+import { nativeJobService } from "./jobService";
+import { nativeSafExportMount } from "./safExportMount";
 import { nativeCreateVaultService } from "./createVaultService";
 import { nativeVaultSecurityService } from "./vaultSecurityService";
 import { isSafLogicalRoot, SAF_VAULT_ROOT } from "./androidVaultHome";
@@ -73,18 +75,9 @@ const nativeLogService: LogService = {
 };
 
 /**
- * Kotlin `valid` only means non-empty UTF-8. Schema `valid` prefers Rust parse.
- * Stale `libupriv_ffi.so` (`unknown_method` on RAM toml RPCs): **dev only** —
- * require marker keys (`[package]`, `vaults_dir`, `[app]`). Release fails inspect.
+ * Kotlin `valid` only means non-empty UTF-8; the Rust parse decides. A library
+ * without that RPC (`unknown_method`) is thrown, not read as `incomplete`.
  */
-function staleFfiTomlFallbackAllowed(): boolean {
-  return typeof __DEV__ !== "undefined" && Boolean(__DEV__);
-}
-
-function looksLikeUprivSettingsToml(toml: string): boolean {
-  return /\[package\]/.test(toml) && /\bvaults_dir\s*=/.test(toml) && /\[app\]/.test(toml);
-}
-
 async function inspectSafWithSchema(safUri: string): Promise<SafInspectStatus> {
   const status = safInspectRoot(safUri);
   if (status !== "valid") return status;
@@ -94,12 +87,7 @@ async function inspectSafWithSchema(safUri: string): Promise<SafInspectStatus> {
     await rpcAppSettingsParseToml(toml);
     return "valid";
   } catch (error) {
-    if (isRpcError(error) && error.code === "unknown_method") {
-      if (staleFfiTomlFallbackAllowed() && looksLikeUprivSettingsToml(toml)) {
-        return "valid";
-      }
-      throw error;
-    }
+    if (isRpcError(error) && error.code === "unknown_method") throw error;
     return "incomplete";
   }
 }
@@ -375,6 +363,8 @@ export function createNativeServices(): AppServices {
     filesystem: nativeVaultFileSystemService,
     backups: nativeBackupService,
     dataFolder: nativeDataFolderService,
+    exportFolderGrants: nativeSafExportMount,
+    jobs: nativeJobService,
     createVault: nativeCreateVaultService,
     vaultSecurity: nativeVaultSecurityService,
   };

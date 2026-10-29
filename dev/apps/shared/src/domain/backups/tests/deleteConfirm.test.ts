@@ -16,12 +16,12 @@ describe("matchesBackupDeleteConfirmation", () => {
     expect(matchesBackupDeleteConfirmation("  Notes 2 ", "Notes", 2)).toBe(true);
   });
 
-  it("rejects a wrong count, name, case, or the old phrases", () => {
+  it("rejects a wrong count, name, case, or spacing", () => {
     expect(matchesBackupDeleteConfirmation("Notes 1", "Notes", 2)).toBe(false);
     expect(matchesBackupDeleteConfirmation("Notes2", "Notes", 2)).toBe(false);
     expect(matchesBackupDeleteConfirmation("notes 2", "Notes", 2)).toBe(false);
     expect(matchesBackupDeleteConfirmation("delete 2", "Notes", 2)).toBe(false);
-    expect(matchesBackupDeleteConfirmation("notes", "Notes", 1)).toBe(false);
+    expect(matchesBackupDeleteConfirmation("Notes", "Notes", 1)).toBe(false);
     expect(matchesBackupDeleteConfirmation("Notes 0", "Notes", 0)).toBe(false);
   });
 });

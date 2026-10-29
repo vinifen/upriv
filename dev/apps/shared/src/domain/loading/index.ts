@@ -7,5 +7,4 @@ export {
   loadingBudgetMinutes,
   loadingBudgetSeconds,
   loadingBudgetUsesMinutes,
-  type LoadingBudgetKey,
 } from "./budget";

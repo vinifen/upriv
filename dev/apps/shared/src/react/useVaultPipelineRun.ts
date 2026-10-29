@@ -21,7 +21,7 @@ export interface QueuedPipelineJob {
   kind: VaultPipelineKind;
 }
 
-export type VaultPipelineFailureMode = "overlay" | "advance";
+export type VaultPipelineFailureMode = "hold" | "advance";
 
 interface StartPipelineOptions {
   vaultId: string;
@@ -32,8 +32,8 @@ interface StartPipelineOptions {
   /** Default `vaultPipeline`. Create uses `vaultCreate`. */
   budgetMs?: number;
   /**
-   * `overlay` (default): keep the failed run until `dismissFailure` (legacy name;
-   * there is no full-screen pipeline overlay — modal/row/toast own the copy).
+   * `hold` (default): keep the failed run until `dismissFailure`; the modal or
+   * row shows the failure.
    * `advance`: toast/row owns the failure and the next queued job starts.
    */
   failureMode?: VaultPipelineFailureMode;
@@ -92,7 +92,7 @@ export function useVaultPipelineRun(errorToI18nKey: (error: unknown) => I18nKey)
       const { vaultId, kind, stepCount, runPipeline, onComplete, onError, onTimeout, onAbandoned } =
         job;
       const foreground = job.presentation !== "background";
-      const failureMode = job.failureMode ?? "overlay";
+      const failureMode = job.failureMode ?? "hold";
       const generation = ++generationRef.current;
       inFlightRef.current = true;
 

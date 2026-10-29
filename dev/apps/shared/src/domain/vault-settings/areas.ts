@@ -57,8 +57,14 @@ export function vaultSettingsMenuAreas(
 export type VaultRowControls = {
   /** ⋯ menu. Closed for opening, creating, and queued. Open while closing. */
   moreMenuBlocked: boolean;
-  /** Note item and its autosave. */
+  /** Note autosave, and the Note item while the menu itself is closed. */
   noteBlocked: boolean;
+  /**
+   * Note is left out of the ⋯ menu: export, a backup, or a password / unlock-RAM
+   * change refuses the write, as Export is left out when it cannot run. While
+   * the whole menu is closed it stays, greyed with the rest.
+   */
+  noteHidden: boolean;
   /** Settings gear. Open during a password or unlock-RAM change so that countdown can reopen. */
   settingsGearBlocked: boolean;
   /** Settings Save, including a screen that was already open. */
@@ -98,6 +104,7 @@ export function vaultRowControls(
   return {
     moreMenuBlocked,
     noteBlocked: moreMenuBlocked || configWriteBlocked,
+    noteHidden: configWriteBlocked,
     settingsGearBlocked,
     settingsSaveBlocked,
     dragBlocked: settingsSaveBlocked,

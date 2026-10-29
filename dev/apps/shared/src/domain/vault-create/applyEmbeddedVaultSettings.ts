@@ -112,8 +112,7 @@ export function parseEmbeddedVaultSettings(
     "compress_encrypt",
     "encrypt_only",
   ] as const);
-  const method = oneOf(str(settings.seven_zip.method) ?? "", ["lzma2"] as const);
-  if (!displayName || !mode || !backupMode || !wipePattern || !archiveMode || !method) {
+  if (!displayName || !mode || !backupMode || !wipePattern || !archiveMode) {
     return null;
   }
   const keepLast = num(settings.backup.keep_last);
@@ -179,7 +178,6 @@ export function parseEmbeddedVaultSettings(
         archive_mode: archiveMode,
         compression_level: compression,
         solid,
-        method,
       },
     },
   };

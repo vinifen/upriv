@@ -1,9 +1,4 @@
-import {
-  CORE_RPC_TIMEOUT_MS,
-  DESKTOP_ONLY_RPC_COMMANDS,
-  LOADING_BUDGET_MS,
-  SHELL_ONLY_RPC_COMMANDS,
-} from "@upriv/shared";
+import { CORE_RPC_TIMEOUT_MS, LOADING_BUDGET_MS, SHELL_ONLY_RPC_COMMANDS } from "@upriv/shared";
 import { BRIDGE_ERROR_CODES, RpcError, isRpcError } from "./errors";
 
 /** Matches `formatRpcError` in `apps/electron/src/daemon.ts` (`code: message`).
@@ -23,11 +18,6 @@ export function isElectronRenderer(): boolean {
   return false;
 }
 
-/** @alias isElectronRenderer */
-export function isDesktop(): boolean {
-  return isElectronRenderer();
-}
-
 const DEFAULT_INVOKE_TIMEOUT_MS = 30_000;
 
 /**
@@ -37,7 +27,6 @@ const DEFAULT_INVOKE_TIMEOUT_MS = 30_000;
  */
 export const METHOD_TIMEOUT_MS: Partial<Record<string, number>> = {
   ...CORE_RPC_TIMEOUT_MS,
-  [DESKTOP_ONLY_RPC_COMMANDS.APP_SHUTDOWN]: LOADING_BUDGET_MS.vaultPipeline,
   [SHELL_ONLY_RPC_COMMANDS.APP_EXIT]: LOADING_BUDGET_MS.vaultPipeline,
   [SHELL_ONLY_RPC_COMMANDS.PICK_DIRECTORY]: 0,
   [SHELL_ONLY_RPC_COMMANDS.PICK_FILE]: 0,
@@ -59,11 +48,7 @@ export function parseInvokeFailure(error: unknown): RpcError {
 
   if (error instanceof Error) {
     const match = DAEMON_ERROR_MESSAGE_RE.exec(error.message);
-    if (match) {
-      // Electron main used to emit `timeout:`; map to `rpc_timeout` for i18n.
-      const code = match[1] === "timeout" ? BRIDGE_ERROR_CODES.RPC_TIMEOUT : match[1];
-      return new RpcError(code, match[2]);
-    }
+    if (match) return new RpcError(match[1], match[2]);
     // Daemon-down messages are not `code: message` wire format — map them
     // to `daemon_unavailable`. Other preload/serialize failures stay as
     // `bridge_invoke_failed`.
@@ -91,7 +76,7 @@ export async function desktopInvokeRaw(
   params?: Record<string, unknown>,
   timeoutMs = METHOD_TIMEOUT_MS[method] ?? DEFAULT_INVOKE_TIMEOUT_MS,
 ): Promise<unknown> {
-  if (!isDesktop()) {
+  if (!isElectronRenderer()) {
     throw new RpcError(
       BRIDGE_ERROR_CODES.SHELL_UNAVAILABLE,
       "desktopInvoke called outside Electron shell",

@@ -10,7 +10,7 @@ import {
   changePasswordFormIsDirty,
   createVaultErrorI18nKey,
   errorDisplayI18nKey,
-  rewrapErrorOnPasswordField,
+  errorOnPasswordField,
   displayNameErrorI18nKey,
   EMPTY_CHANGE_PASSWORD_FIELDS,
   NO_VAULT_GROUPS,
@@ -55,7 +55,6 @@ import {
   LoadingBudgetHint,
   Modal,
   ModalFooterActions,
-  modalFooterConfirmBtnStyle,
 } from "@/components/ui";
 import { useLoadingBudget } from "@upriv/shared/react";
 import { useTheme } from "@/theme";
@@ -744,7 +743,7 @@ export function VaultSettingsModal({
         vaultId: id,
         kind,
         message: t(mobileErrorI18nKey(error)),
-        onPasswordField: rewrapErrorOnPasswordField(key),
+        onPasswordField: errorOnPasswordField(key),
       };
       setRewrapFailure(failure);
       const showing = openRef.current && vaultIdRef.current === id && areaRef.current === kind;
@@ -1054,7 +1053,6 @@ export function VaultSettingsModal({
             variant="danger"
             size="md"
             label={t("modal.settings.discard_confirm_action")}
-            style={modalFooterConfirmBtnStyle}
             disabled={busy}
             onPress={handleDiscardConfirmed}
           />
@@ -1062,7 +1060,6 @@ export function VaultSettingsModal({
             variant="ghost"
             size="md"
             label={t("modal.settings.discard_keep_editing")}
-            style={modalFooterConfirmBtnStyle}
             disabled={busy}
             onPress={dismissFooterConfirm}
           />
@@ -1073,7 +1070,6 @@ export function VaultSettingsModal({
             size="md"
             variant="primary"
             label={saveLabel}
-            style={modalFooterConfirmBtnStyle}
             onPress={() => {
               if (saveConfirmOpen) void handleConfirmSave();
               else handleSaveClick();
@@ -1086,7 +1082,6 @@ export function VaultSettingsModal({
               size="md"
               variant="ghost"
               label={t("modal.settings.save_cancel")}
-              style={modalFooterConfirmBtnStyle}
               disabled={busy}
               onPress={dismissFooterConfirm}
             />

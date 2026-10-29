@@ -46,17 +46,17 @@ pub fn vault_groups_path(root: &VaultRoot) -> PathBuf {
     root.root().join(".upriv").join(VAULT_GROUPS_FILE_NAME)
 }
 
-/// Parse + validate schema (no disk assignment check).
-pub fn parse_vault_groups_toml_str(raw: &str) -> Result<VaultGroupsFile> {
+/// Parse + validate schema (no disk assignment check). `path` names the file in errors.
+fn parse_vault_groups_toml(raw: &str, path: &Path) -> Result<VaultGroupsFile> {
     let mut parsed: VaultGroupsFile =
         toml::from_str(raw).map_err(|error| UprivError::VaultGroupsInvalid {
-            path: PathBuf::from(VAULT_GROUPS_FILE_NAME),
+            path: path.to_path_buf(),
             detail: format!("invalid vault_groups.toml: {error}"),
         })?;
     for group in &mut parsed.groups {
         group.resolve_identity();
     }
-    validate_schema(&parsed, Path::new(VAULT_GROUPS_FILE_NAME))?;
+    validate_schema(&parsed, path)?;
     Ok(parsed)
 }
 
@@ -266,16 +266,7 @@ fn parse_file_from_disk(root: &VaultRoot) -> Result<Option<VaultGroupsFile>> {
         return Ok(None);
     }
     let raw = crate::host_fs::read_to_string(&path).map_err(UprivError::from)?;
-    let mut parsed: VaultGroupsFile =
-        toml::from_str(&raw).map_err(|error| UprivError::VaultGroupsInvalid {
-            path: path.clone(),
-            detail: format!("invalid vault_groups.toml: {error}"),
-        })?;
-    for group in &mut parsed.groups {
-        group.resolve_identity();
-    }
-    validate_schema(&parsed, &path)?;
-    Ok(Some(parsed))
+    parse_vault_groups_toml(&raw, &path).map(Some)
 }
 
 fn trim_group_headers(file: VaultGroupsFile) -> VaultGroupsFile {
@@ -910,7 +901,7 @@ mod tests {
         crate::host_fs::create_dir_all(root_path.join(".upriv/vaults")).unwrap();
         crate::host_fs::write(
             root_path.join(".upriv/settings.toml"),
-            "[package]\nvaults_dir = \".upriv/vaults\"\n",
+            "[package]\nversion = 1\n",
         )
         .unwrap();
         for id in ids {
@@ -996,7 +987,7 @@ mod tests {
 id = "trasdf"
 grouped_vaults = []
 "#;
-        let parsed = parse_vault_groups_toml_str(raw).unwrap();
+        let parsed = parse_vault_groups_toml(raw, Path::new(VAULT_GROUPS_FILE_NAME)).unwrap();
         assert_eq!(parsed.groups[0].display_name, "trasdf");
     }
 
@@ -1269,7 +1260,7 @@ display_name = "Work"
 grouped_vaults = ["notes"]
 color = "red"
 "#;
-        assert!(parse_vault_groups_toml_str(raw).is_err());
+        assert!(parse_vault_groups_toml(raw, Path::new(VAULT_GROUPS_FILE_NAME)).is_err());
     }
 
     #[test]
@@ -1282,7 +1273,7 @@ grouped_vaults = ["notes"]
 grouped_vault_sort = "state"
 grouped_vault_sort_direction = "asc"
 "#;
-        let parsed = parse_vault_groups_toml_str(raw).unwrap();
+        let parsed = parse_vault_groups_toml(raw, Path::new(VAULT_GROUPS_FILE_NAME)).unwrap();
         assert_eq!(parsed.groups[0].grouped_vaults, vec!["notes"]);
         assert_eq!(parsed.groups[0].grouped_vault_sort, "state");
         assert_eq!(parsed.groups[0].grouped_vault_sort_direction, "asc");

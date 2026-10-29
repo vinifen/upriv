@@ -25,7 +25,7 @@ use crate::store::{
 };
 
 use super::backup::{
-    backup_on_close, backup_stamp_present, classify_backup_failure, list_backups,
+    backup_on_close, backup_stamp_present, classify_write_failure, list_backups,
     promote_backup_save,
 };
 use super::persistence::{load_vault_persistence, save_vault_persistence, VaultPersistence};
@@ -486,7 +486,7 @@ fn close_vault_inner(
                     Ok(None) => {}
                     Err(error) => {
                         backup_failed = true;
-                        let class = classify_backup_failure(&error);
+                        let class = classify_write_failure(&error);
                         backup_failure = Some(class.reason);
                         let os = class.os.map(|code| code.to_string());
                         let mut fields = vec![

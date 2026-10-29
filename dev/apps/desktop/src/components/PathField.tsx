@@ -1,3 +1,4 @@
+import { forwardRef } from "react";
 import { RevealPathButton } from "@/components/RevealPathButton";
 
 interface PathFieldProps {
@@ -15,19 +16,23 @@ interface PathFieldProps {
 
 /**
  * One path rectangle with the file-manager button inside it.
- * The button is a flex sibling, so it stays inside the rounded box.
+ * The button is a flex sibling, so it stays inside the rounded box. The ref
+ * is the text input.
  */
-export function PathField({
-  value,
-  openPath,
-  onChange,
-  readOnly = false,
-  disabled = false,
-  placeholder,
-  id,
-  invalid = false,
-  className = "",
-}: PathFieldProps) {
+export const PathField = forwardRef<HTMLInputElement, PathFieldProps>(function PathField(
+  {
+    value,
+    openPath,
+    onChange,
+    readOnly = false,
+    disabled = false,
+    placeholder,
+    id,
+    invalid = false,
+    className = "",
+  },
+  ref,
+) {
   const locked = readOnly || disabled || !onChange;
   return (
     <div
@@ -43,6 +48,7 @@ export function PathField({
         .join(" ")}
     >
       <input
+        ref={ref}
         id={id}
         type="text"
         value={value}
@@ -63,4 +69,4 @@ export function PathField({
       <RevealPathButton path={openPath ?? value} inset />
     </div>
   );
-}
+});

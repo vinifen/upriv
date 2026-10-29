@@ -19,10 +19,10 @@ export {
   type ModalTitleClusterProps,
 } from "./Modal";
 export { PasswordInput, type PasswordInputProps } from "./PasswordInput";
-export { StatusDot, type StatusDotProps } from "./StatusDot";
 export { Switch, SwitchRow, type SwitchProps, type SwitchRowProps } from "./Switch";
 export { Toast, type ToastProps } from "./Toast";
 export { Select, type SelectOption, type SelectOptionTone } from "./Select";
 export { LoadingBudgetHint } from "./LoadingBudgetHint";
+export { JobProgressBar } from "./JobProgressBar";
 export { ContentSkeleton } from "./ContentSkeleton";
 export { Collapse } from "./Collapse";

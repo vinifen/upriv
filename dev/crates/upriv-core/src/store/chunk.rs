@@ -1,8 +1,7 @@
 //! Logical files as XChaCha20-Poly1305 chunks under `store/data/`.
 //!
-//! One operating-system file per logical file. New files are
-//! `store/data/<hh>/<file_id>.blob`. Files already at `store/data/<file_id>.blob`
-//! stay there.
+//! One operating-system file per logical file:
+//! `store/data/<hh>/<file_id>.blob`.
 //! Chunks are concatenated inside it. The sealed index stores each chunk's
 //! byte offset. A rewrite writes the new ciphertext into a free span when one
 //! fits, otherwise it appends. The previous generation stays until the index
@@ -17,6 +16,7 @@ use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
+use zeroize::Zeroizing;
 
 use super::aead::{
     decrypt_xchacha, encrypt_xchacha, random_bytes, CONTENT_KEY_LEN, XCHACHA_NONCE_LEN,
@@ -83,43 +83,16 @@ fn blob_file_name(file_id: &Uuid) -> String {
     format!("{file_id}{BLOB_FILE_SUFFIX}")
 }
 
-fn flat_blob_path(store_dir: &Path, file_id: &Uuid) -> PathBuf {
-    store_dir.join(DATA_DIR_NAME).join(blob_file_name(file_id))
-}
-
-/// Two hex digits, so new blobs spread across 256 directories.
-fn sharded_blob_path(store_dir: &Path, file_id: &Uuid) -> PathBuf {
+/// Path of this file's blob: `store/data/<hh>/<file_id>.blob`, where `<hh>`
+/// is the first two hex digits of the id, so blobs spread across 256 directories.
+pub fn blob_path(store_dir: impl AsRef<Path>, file_id: &str) -> Result<PathBuf> {
+    let file_id = parse_file_id(file_id)?;
     let simple = file_id.simple().to_string();
-    store_dir
+    Ok(store_dir
+        .as_ref()
         .join(DATA_DIR_NAME)
         .join(&simple[..2])
-        .join(blob_file_name(file_id))
-}
-
-/// Where a new blob is created. Does not look at the flat directory.
-pub(crate) fn new_blob_path(store_dir: impl AsRef<Path>, file_id: &str) -> Result<PathBuf> {
-    Ok(sharded_blob_path(
-        store_dir.as_ref(),
-        &parse_file_id(file_id)?,
-    ))
-}
-
-/// Path of this file's blob.
-///
-/// New files live in `store/data/<hh>/`. A file created before that split is
-/// still `store/data/<file_id>.blob`.
-pub fn blob_path(store_dir: impl AsRef<Path>, file_id: &str) -> Result<PathBuf> {
-    let store_dir = store_dir.as_ref();
-    let parsed = parse_file_id(file_id)?;
-    let sharded = sharded_blob_path(store_dir, &parsed);
-    if crate::host_fs::is_file(&sharded) {
-        return Ok(sharded);
-    }
-    let flat = flat_blob_path(store_dir, &parsed);
-    if crate::host_fs::is_file(&flat) {
-        return Ok(flat);
-    }
-    Ok(sharded)
+        .join(blob_file_name(&file_id)))
 }
 
 pub fn chunk_count(file_size: u64, chunk_size: u32) -> u32 {
@@ -636,6 +609,51 @@ pub fn write_logical_file(
     Ok((previous.map(|(retired, _)| retired), mutation))
 }
 
+/// Decrypt the file `node` one chunk at a time, in order, and hand each chunk
+/// to `sink`. A chunk reaches `sink` only after its tag and AAD check out, and
+/// its buffer is wiped when `sink` drops it. Each chunk has the length the
+/// index records for it, so the chunks add up to the file size.
+pub(crate) fn read_file_chunks(
+    store_dir: &Path,
+    header: &VaultHeader,
+    content_key: &[u8; CONTENT_KEY_LEN],
+    node: &VaultNode,
+    mut sink: impl FnMut(Zeroizing<Vec<u8>>) -> Result<()>,
+) -> Result<()> {
+    let directory = || UprivError::VaultStoreInvalid {
+        path: PathBuf::from(&node.path),
+        detail: "logical path is a directory".into(),
+    };
+    let (file_id, size, chunk_versions) = node.as_file().ok_or_else(directory)?;
+    let chunk_offsets = node.chunk_offsets().ok_or_else(directory)?;
+    parse_file_id(file_id)?;
+    let chunk_size = header.chunk_size;
+    let count = chunk_count(size, chunk_size);
+    // The sealed index is the authority on length. A list that disagrees with
+    // the recorded size fails before any blob is opened.
+    require_chunk_lists(&node.path, count, chunk_versions, chunk_offsets)?;
+    if count == 0 {
+        return Ok(());
+    }
+    let mut blob = open_blob_read(store_dir, file_id)?;
+    for chunk_index in 0..count {
+        let plain = decrypt_one_chunk(
+            &mut blob,
+            header,
+            content_key,
+            SealedChunk {
+                file_id,
+                index: chunk_index,
+                plain_len: chunk_plain_len(size, chunk_index, chunk_size),
+                version: &chunk_versions[chunk_index as usize],
+                offset: chunk_offsets[chunk_index as usize],
+            },
+        )?;
+        sink(Zeroizing::new(plain))?;
+    }
+    Ok(())
+}
+
 /// Decrypt one logical file into RAM. Tag / AAD failure returns no plaintext.
 pub fn read_logical_file(
     store_dir: impl AsRef<Path>,
@@ -644,59 +662,15 @@ pub fn read_logical_file(
     index: &VaultIndex,
     logical_path: &str,
 ) -> Result<Vec<u8>> {
-    let store_dir = store_dir.as_ref();
     let node = index
         .find(logical_path)
         .ok_or_else(|| UprivError::VaultPathNotFound(logical_path.into()))?;
-    let (file_id, size, chunk_versions) =
-        node.as_file()
-            .ok_or_else(|| UprivError::VaultStoreInvalid {
-                path: PathBuf::from(logical_path),
-                detail: "logical path is a directory".into(),
-            })?;
-    let chunk_offsets = node
-        .chunk_offsets()
-        .ok_or_else(|| UprivError::VaultStoreInvalid {
-            path: PathBuf::from(logical_path),
-            detail: "logical path is a directory".into(),
-        })?;
-    let _ = Uuid::parse_str(file_id).map_err(|_| UprivError::VaultStoreInvalid {
-        path: PathBuf::from(DATA_DIR_NAME),
-        detail: "file_id is not a UUID".into(),
+    let size = node.as_file().map_or(0, |(_, size, _)| size);
+    let mut out = Vec::with_capacity(usize::try_from(size).unwrap_or(0));
+    read_file_chunks(store_dir.as_ref(), header, content_key, node, |chunk| {
+        out.extend_from_slice(&chunk);
+        Ok(())
     })?;
-    let chunk_size = header.chunk_size;
-    let count = chunk_count(size, chunk_size);
-    // The sealed index is the authority on length. A list that disagrees with
-    // the recorded size fails before any blob is opened.
-    require_chunk_lists(logical_path, count, chunk_versions, chunk_offsets)?;
-    let mut out = Vec::with_capacity(size as usize);
-    let mut blob = if count == 0 {
-        None
-    } else {
-        Some(open_blob_read(store_dir, file_id)?)
-    };
-    for chunk_index in 0..count {
-        let expected_len = chunk_plain_len(size, chunk_index, chunk_size);
-        let plain = decrypt_one_chunk(
-            blob.as_mut().expect("opened for a non-empty file"),
-            header,
-            content_key,
-            SealedChunk {
-                file_id,
-                index: chunk_index,
-                plain_len: expected_len,
-                version: &chunk_versions[chunk_index as usize],
-                offset: chunk_offsets[chunk_index as usize],
-            },
-        )?;
-        out.extend_from_slice(&plain);
-    }
-    if out.len() as u64 != size {
-        return Err(UprivError::VaultStoreInvalid {
-            path: PathBuf::from(logical_path),
-            detail: "reassembled file size mismatch".into(),
-        });
-    }
     Ok(out)
 }
 
@@ -831,7 +805,7 @@ pub(crate) struct ImportBlob {
 
 impl ImportBlob {
     pub(crate) fn create(store_dir: &Path, file_id: &str) -> Result<Self> {
-        let path = new_blob_path(store_dir, file_id)?;
+        let path = blob_path(store_dir, file_id)?;
         Ok(Self {
             inner: OpenBlob::create(path)?,
         })
@@ -1736,17 +1710,16 @@ pub(crate) fn remove_unreferenced_blobs(store_dir: &Path, index: &VaultIndex) {
         let Some(name) = entry.file_name().to_str().map(str::to_string) else {
             continue;
         };
-        if is_blob_shard_name(&name) {
-            let nested = match crate::host_fs::read_dir(entry.path()) {
-                Ok(nested) => nested,
-                Err(_) => continue,
-            };
-            for child in nested.flatten() {
-                drop_unreferenced_blob(&child, &referenced);
-            }
+        if !is_blob_shard_name(&name) {
             continue;
         }
-        drop_unreferenced_blob(&entry, &referenced);
+        let nested = match crate::host_fs::read_dir(entry.path()) {
+            Ok(nested) => nested,
+            Err(_) => continue,
+        };
+        for child in nested.flatten() {
+            drop_unreferenced_blob(&child, &referenced);
+        }
     }
 }
 
@@ -1782,26 +1755,16 @@ mod tests {
     const PW: &[u8] = b"chunk-round-trip-ok";
 
     #[test]
-    fn new_blobs_use_a_bucket_and_old_flat_blobs_still_open() {
+    fn blobs_live_in_a_two_hex_digit_bucket() {
         let tmp = std::env::temp_dir().join(format!("upriv-blob-{}", Uuid::new_v4().simple()));
-        crate::host_fs::create_dir_all(tmp.join(DATA_DIR_NAME)).unwrap();
-        let old_id = "11111111-1111-4111-8111-111111111111";
-        let flat = tmp
-            .join(DATA_DIR_NAME)
-            .join(format!("{old_id}{BLOB_FILE_SUFFIX}"));
-        crate::host_fs::write(&flat, b"old").unwrap();
-        assert_eq!(blob_path(&tmp, old_id).unwrap(), flat);
-        let new_id = Uuid::new_v4().to_string();
-        let created = new_blob_path(&tmp, &new_id).unwrap();
-        assert_ne!(
-            created,
+        let id = "1a111111-1111-4111-8111-111111111111";
+        assert_eq!(
+            blob_path(&tmp, id).unwrap(),
             tmp.join(DATA_DIR_NAME)
-                .join(format!("{new_id}{BLOB_FILE_SUFFIX}"))
+                .join("1a")
+                .join(format!("{id}{BLOB_FILE_SUFFIX}"))
         );
-        let bucket = created.parent().unwrap().file_name().unwrap();
-        assert_eq!(bucket.len(), 2);
-        assert_eq!(blob_path(&tmp, &new_id).unwrap(), created);
-        let _ = crate::host_fs::remove_dir_all(&tmp);
+        assert!(blob_path(&tmp, "not-a-uuid").is_err());
     }
 
     fn file_chunk_meta(
@@ -2418,9 +2381,8 @@ mod tests {
         )
         .unwrap();
         flush_index(&dir, &mut opened).unwrap();
-        let orphan = dir.join(DATA_DIR_NAME).join(format!(
-            "00000000-0000-4000-8000-000000000099{BLOB_FILE_SUFFIX}"
-        ));
+        let orphan = blob_path(&dir, "00000000-0000-4000-8000-000000000099").unwrap();
+        crate::host_fs::create_dir_all(orphan.parent().unwrap()).unwrap();
         crate::host_fs::write(&orphan, b"orphan").unwrap();
         let _ = open_store(&dir, PW).unwrap();
         assert!(

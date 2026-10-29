@@ -2603,7 +2603,7 @@ mode = "encrypted_dir"
 
     #[cfg(unix)]
     #[test]
-    fn a_failed_flush_keeps_the_batch_for_the_next_seal() {
+    fn a_failed_flush_keeps_the_batch_for_the_next_flush() {
         use std::os::unix::fs::PermissionsExt;
 
         let (_tmp, root) = open_notes();

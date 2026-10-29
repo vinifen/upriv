@@ -1,0 +1,36 @@
+{
+  "$comment": "Data-folder zip names. Rust validate_data_folder_zip_name and TS dataFolderZipNameIssue both test against this list.",
+  "valid": [
+    "upriv-2026-10-19-101500",
+    "Backup before the trip",
+    "cópia do pendrive",
+    "a",
+    "notes.2026",
+    "CONFIG",
+    "com10"
+  ],
+  "invalid": [
+    "",
+    " leading space",
+    "trailing space ",
+    "trailing dot.",
+    ".hidden",
+    "..",
+    "a/b",
+    "a\\b",
+    "a:b",
+    "a*b",
+    "a?b",
+    "a\"b",
+    "a<b",
+    "a>b",
+    "a|b",
+    "tab\tname",
+    "line\nbreak",
+    "CON",
+    "nul",
+    "lpt1",
+    "aux.backup",
+    "COM9"
+  ]
+}

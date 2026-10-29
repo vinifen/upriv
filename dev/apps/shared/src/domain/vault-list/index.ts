@@ -28,26 +28,28 @@ export {
   vaultBlocksGroupInnerColumns,
   vaultRowChrome,
 } from "./rowChrome";
-export { reorderVaultList, sortVaultsByOrder } from "./order";
+export { sortVaultsByOrder } from "./order";
 export type {
   VaultExportRequest,
   VaultExportFormat,
   VaultExportPipelineStatus,
+  VaultExportPending,
+  VaultExportRun,
   ExportFilenameSanitizeKind,
 } from "./export";
 export {
   DEFAULT_VAULT_EXPORT_FORMAT,
+  VAULT_EXPORT_PROGRESS_COPY,
   exportFilenameSanitizeKind,
   sanitizeExportFilenameBase,
   vaultCanExport,
   vaultExportFilename,
+  vaultExportMenuShown,
+  vaultExportPending,
+  vaultExportSavedAs,
 } from "./export";
 export { resolveVaultPasswordHint } from "./passwordHint";
-export {
-  formatLastAccessedWhen,
-  touchVaultLastAccessed,
-  vaultLastAccessedLabel,
-} from "./lastAccessed";
+export { touchVaultLastAccessed, vaultLastAccessedLabel } from "./lastAccessed";
 export { filterVisibleVaults } from "./visibility";
 export {
   applyPendingCreateGroupEffect,

@@ -34,6 +34,7 @@ export const VAULT_ERROR_I18N_KEYS = {
   vault_backup_failed: "error.vault_backup_failed",
   rewrap_password_unchanged: "vault.change_password.same_as_current",
   rewrap_kdf_unchanged: "vault.change_kdf.same_as_current",
+  export_destination_reserved: "error.export_destination_reserved",
 } as const satisfies Record<VaultErrorCode, I18nKey>;
 
 export type VaultErrorI18nKey = (typeof VAULT_ERROR_I18N_KEYS)[VaultErrorCode];
@@ -59,8 +60,11 @@ export function isVaultCredentialChallengeI18nKey(key: I18nKey): boolean {
   return CREDENTIAL_CHALLENGE_KEYS.has(key);
 }
 
-/** Wrong current password (or the unlock limit) — mark that field, not the form. */
-export function rewrapErrorOnPasswordField(key: I18nKey | null): boolean {
+/**
+ * A refused vault password (wrong, or the unlock limit): mark the password
+ * field, not the form. Password and unlock-RAM change, and a `.7z` export.
+ */
+export function errorOnPasswordField(key: I18nKey | null): boolean {
   return (
     key === VAULT_ERROR_I18N_KEYS.wrong_password ||
     key === VAULT_ERROR_I18N_KEYS.vault_unlock_blocked

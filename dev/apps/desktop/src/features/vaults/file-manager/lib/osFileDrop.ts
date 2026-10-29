@@ -189,8 +189,6 @@ function fileUrlToPath(url: string): string | null {
 }
 
 function absolutePathFromFile(file: File): string | undefined {
-  const legacy = (file as File & { path?: string }).path?.trim();
-  if (legacy) return legacy;
   if (typeof window === "undefined") return undefined;
   const api = window.upriv;
   if (!api || typeof api.getPathForFile !== "function") return undefined;
@@ -608,16 +606,6 @@ export async function listFilesFromOsDropSnapshot(snapshot: OsDropSnapshot): Pro
     return { files: [...fromDisk.files, ...kept], truncated: fromDisk.truncated };
   }
   return { files: collected, truncated: false };
-}
-
-export async function filesFromOsDropSnapshot(
-  snapshot: OsDropSnapshot,
-): Promise<DroppedImportFile[]> {
-  return (await listFilesFromOsDropSnapshot(snapshot)).files;
-}
-
-export async function filesFromDataTransfer(event: FileDropEvent): Promise<DroppedImportFile[]> {
-  return filesFromOsDropSnapshot(snapshotOsFileDrop(event));
 }
 
 export function beginOsFileImport(

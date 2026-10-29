@@ -2,6 +2,8 @@ import type { AppSettingsService } from "./app-settings/AppSettingsService";
 import type { BackupService } from "./backup/BackupService";
 import type { CreateVaultService } from "./vault-create/CreateVaultService";
 import type { DataFolderService } from "./data-folder/DataFolderService";
+import type { ExportFolderGrants } from "./export-folders/ExportFolderGrants";
+import type { JobService } from "./jobs/JobService";
 import type { VaultFileSystemService } from "./filesystem/VaultFileSystemService";
 import type { VaultLifecycleService } from "./lifecycle/VaultLifecycleService";
 import type { LogService } from "./logs/LogService";
@@ -27,6 +29,13 @@ export interface AppServices {
    * folder for that one export. Mocks leave it out.
    */
   dataFolder?: DataFolderService;
+  /**
+   * Grants behind folders picked for an export. Only the Android native build:
+   * a desktop folder is a path, and the mocks pick no real folder.
+   */
+  exportFolderGrants?: ExportFolderGrants;
+  /** Progress and stop of vault exports, Back up now, and the data-folder export. */
+  jobs: JobService;
   logs: LogService;
   filesystem: VaultFileSystemService;
   lifecycle: VaultLifecycleService;

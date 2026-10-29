@@ -19,7 +19,6 @@ export {
   resetVaultWorkspaceSnapshots,
   remapVaultWorkspaceSnapshot,
   setVaultFileContent,
-  vaultFileLanguageFromPath,
   createAsyncVaultFileSystemService,
 } from "./fileSystem";
 export {

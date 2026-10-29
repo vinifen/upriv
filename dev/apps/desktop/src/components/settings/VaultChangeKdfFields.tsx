@@ -9,7 +9,12 @@ import {
 } from "@upriv/shared";
 import { useTranslation } from "@/i18n";
 import { PasswordInput } from "@/components/ui";
-import { PolicyRadioOption, settingsControlClass, SettingsField } from "./vaultSettingsForm";
+import {
+  PolicyRadioOption,
+  settingsControlClass,
+  settingsInvalidControlClass,
+  SettingsField,
+} from "./vaultSettingsForm";
 
 interface VaultChangeKdfFieldsProps {
   /** Current unlock cost from `store/header/vault.header`. */
@@ -65,10 +70,7 @@ export function VaultChangeKdfFields({
           aria-errormessage={passwordFieldError ? `${passwordId}-error` : undefined}
           onChange={(e) => onChange({ password: e.target.value })}
           autoComplete="current-password"
-          inputClassName={[
-            settingsControlClass,
-            "aria-invalid:ring-2 aria-invalid:ring-on-error-container aria-invalid:focus:ring-on-error-container",
-          ].join(" ")}
+          inputClassName={[settingsControlClass, settingsInvalidControlClass].join(" ")}
         />
         {passwordFieldError ? (
           <p id={`${passwordId}-error`} role="alert" className="text-xs text-on-error-container">

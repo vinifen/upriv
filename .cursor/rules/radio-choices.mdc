@@ -1,0 +1,6 @@
+---
+description: Radio choices that need another step — attention border, no picker on select, editable folder paths.
+alwaysApply: true
+---
+
+Canonical rule: @.agent/rules/radio-choices.md — edit there, not here.

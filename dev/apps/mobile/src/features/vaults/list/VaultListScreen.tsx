@@ -66,7 +66,6 @@ import {
 } from "@/theme/tokens";
 import { AppSettingsModal } from "@/features/system/settings/AppSettingsModal";
 import { VaultRootDataFolderModal } from "@/features/system/settings/VaultRootDataFolderModal";
-import { DataFolderExportModal } from "@/features/system/data-folder-export";
 import { LogsModal } from "@/features/system/logs/LogsModal";
 import { HelpModal } from "@/features/system/help/HelpModal";
 import { SystemInfoModal } from "@/features/system/info/SystemInfoModal";
@@ -218,8 +217,6 @@ export function VaultListScreen() {
     setDataFolderOpen,
     dataFolderDirty,
     setDataFolderDirty,
-    dataFolderExportOpen,
-    setDataFolderExportOpen,
     groupsOpen,
     setGroupsOpen,
     groupsDirty,
@@ -244,19 +241,14 @@ export function VaultListScreen() {
     setNoteVaultId,
     exportVault,
     setExportVault,
-    exportSubmitting,
-    exportJob,
+    exportPasswordError,
+    setExportPasswordError,
     backupsVault,
     backupSaving,
     backupSaveStartedAt,
     backupListRefresh,
     handleBackupSaveNow,
-    showExportDataFolder,
-    dataFolderExportJob,
-    dataFolderExportCanStart,
-    dataFolderExportWritten,
-    handleStartDataFolderExport,
-    stopDataFolderExport,
+    dataFolderExportControls,
     setBackupsVault,
     settingsGroup,
     setSettingsGroup,
@@ -315,6 +307,8 @@ export function VaultListScreen() {
     handleConfirmExportVault,
     handleRowExport,
     handleExportTimeout,
+    exportFolders,
+    exportRun,
     rowDensity,
     rowPaddingY,
     rowPaddingX,
@@ -1284,13 +1278,6 @@ export function VaultListScreen() {
                   setDataFolderOpen(true);
                 }}
               />
-              {showExportDataFolder ? (
-                <MenuActionItem
-                  icon="archive"
-                  label={t("app.menu.export_data_folder")}
-                  onPress={() => setDataFolderExportOpen(true)}
-                />
-              ) : null}
             </DropdownPanel>
           </View>
         </View>
@@ -1380,12 +1367,19 @@ export function VaultListScreen() {
       <ExportVaultModal
         vault={exportVault}
         open={exportVault !== null}
-        submitting={exportSubmitting}
-        startedAt={exportJob?.startedAt ?? null}
+        running={exportRun}
+        passwordError={
+          exportPasswordError && exportPasswordError.vaultId === exportVault?.id
+            ? exportPasswordError.message
+            : null
+        }
+        folders={exportFolders}
         onClose={() => {
           setExportVault(null);
+          setExportPasswordError(null);
         }}
         onConfirm={handleConfirmExportVault}
+        onPasswordEdited={() => setExportPasswordError(null)}
         onTimeout={handleExportTimeout}
         onSettingsLoadError={(error) => {
           show(t(mobileErrorI18nKey(error, "error.unexpected")));
@@ -1648,15 +1642,7 @@ export function VaultListScreen() {
         onClose={() => setDataFolderOpen(false)}
         onDirtyChange={setDataFolderDirty}
         vaultActivityBlocksChange={!appConfigEditAllowed("data_folder", vaults, pipelineStatus)}
-      />
-      <DataFolderExportModal
-        open={dataFolderExportOpen}
-        canStart={dataFolderExportCanStart}
-        job={dataFolderExportJob}
-        written={dataFolderExportWritten}
-        onClose={() => setDataFolderExportOpen(false)}
-        onStart={handleStartDataFolderExport}
-        onStop={stopDataFolderExport}
+        exportControls={dataFolderExportControls}
       />
       <LogsModal open={logsOpen} onClose={() => setLogsOpen(false)} />
       <HelpModal open={helpOpen} onClose={() => setHelpOpen(false)} />

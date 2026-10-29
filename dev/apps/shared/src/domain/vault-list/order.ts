@@ -8,26 +8,3 @@ export function sortVaultsByOrder(vaults: VaultListItem[]): VaultListItem[] {
     return a.displayName.localeCompare(b.displayName, undefined, { sensitivity: "base" });
   });
 }
-
-/** Swap dragged vault with drop target; reassign `order` 1…n (local until config save). */
-export function reorderVaultList(
-  vaults: VaultListItem[],
-  draggedId: string,
-  targetId: string,
-): VaultListItem[] {
-  if (draggedId === targetId) return vaults;
-
-  const sorted = sortVaultsByOrder(vaults);
-  const fromIndex = sorted.findIndex((v) => v.id === draggedId);
-  const toIndex = sorted.findIndex((v) => v.id === targetId);
-  if (fromIndex < 0 || toIndex < 0) return vaults;
-
-  const next = [...sorted];
-  [next[fromIndex], next[toIndex]] = [next[toIndex], next[fromIndex]];
-
-  return next.map((vault, index) => ({
-    ...vault,
-    order: index + 1,
-    note: vault.note ?? "",
-  }));
-}

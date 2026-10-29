@@ -18,6 +18,21 @@ export function isAbsoluteFilesystemPath(path: string): boolean {
   return false;
 }
 
+/** What the folder an export writes into still needs: a folder at all, or an absolute one. */
+export type ExportFolderIssue = "folder" | "folder_not_absolute";
+
+/**
+ * The step a chosen export folder still needs, or `null` when core can take
+ * it. `folder` is the field as typed or picked (a phone pick is a `content://`
+ * tree, which counts as absolute).
+ */
+export function exportFolderIssue(folder: string | null): ExportFolderIssue | null {
+  const trimmed = folder?.trim() ?? "";
+  if (!trimmed) return "folder";
+  if (!isAbsoluteFilesystemPath(trimmed)) return "folder_not_absolute";
+  return null;
+}
+
 /**
  * Absolute OS filesystem path (`std::path::Path::is_absolute`).
  * SAF `content://` is absolute for mount/workspace, but `upriv-core` cannot `std::fs::read` it.
@@ -125,13 +140,19 @@ export function validateWorkspaceGlobalPath(
   return null;
 }
 
-/** Validate every path in a workspace table. Empty is unset. */
+/**
+ * Validate every path in a workspace table. An empty path is unset, except on
+ * a row whose folder option is chosen (`place` `custom`): that path is the
+ * step left, so it is `empty` and Save waits for it.
+ */
 export function validateWorkspaceTable(
   table: WorkspaceTable,
   vaultRootPath?: string | null,
 ): WorkspacePathIssue | null {
   for (const system of WORKSPACE_SYSTEMS) {
-    const issue = validateWorkspaceGlobalPath(table[system].path, vaultRootPath);
+    const row = table[system];
+    if (row.place === "custom" && !trimPath(row.path)) return "empty";
+    const issue = validateWorkspaceGlobalPath(row.path, vaultRootPath);
     if (issue) return issue;
   }
   return null;

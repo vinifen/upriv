@@ -49,6 +49,8 @@ export const VAULT_ERROR_CODES = {
   REWRAP_PASSWORD_UNCHANGED: "rewrap_password_unchanged",
   /** Unlock RAM preset matches the header. Not a broken vault header. */
   REWRAP_KDF_UNCHANGED: "rewrap_kdf_unchanged",
+  /** A vault export or the data-folder export chose a folder inside a `.upriv`. */
+  EXPORT_DESTINATION_RESERVED: "export_destination_reserved",
 } as const;
 
 export type VaultErrorCode = (typeof VAULT_ERROR_CODES)[keyof typeof VAULT_ERROR_CODES];

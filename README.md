@@ -9,7 +9,7 @@
 | **Mobile** | Expo / React Native + UniFFI (`upriv-ffi`) |
 | **UI languages** | English · Português (Brasil) · Español |
 
-> **Today:** greenfield. One store format (`format_version` 1). Vault root setup, settings, vault list, create, groups, open/close, the in-app file manager, Linux FUSE, the Windows vault folder (WinFsp, installed when that folder is turned on), zip and `.7z` import/export, and backups talk to live `upriv-core`. There is no importer for an older vault layout. Password change and unlock-RAM change are live on a closed vault.
+> **Today:** greenfield. One store format (`format_version` 1). Vault root setup, settings, vault list, create, groups, open/close, the in-app file manager, Linux FUSE, the Windows vault folder (WinFsp, installed when that folder is turned on), zip and `.7z` import/export, and backups talk to live `upriv-core`. Password change and unlock-RAM change are live on a closed vault.
 
 ---
 
@@ -69,7 +69,7 @@ Same via npm: `npm run desktop` · `npm run mobile`. `npm run mobile -- -a` open
 | Desktop app | `./r d` |
 | Mobile (Expo) | `./r m` |
 | Mobile on Android | `./r m -a` |
-| Browser UI only (mocks, no Electron) | `npm run dev` (from `dev/`) |
+| Vite renderer alone (no Electron, so every call fails with `shell_unavailable`) | `npm run dev` (from `dev/`) |
 | Lint + tests | `./r c` |
 
 ---

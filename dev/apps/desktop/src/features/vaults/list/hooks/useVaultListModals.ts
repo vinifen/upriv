@@ -7,7 +7,11 @@ import type {
   VaultSettingsAreaId,
 } from "@upriv/shared";
 import type { VaultLifecycleRequest } from "@/features/vaults/lifecycle";
-import type { VaultListModalsHandle } from "../vaultListModalsTypes";
+import type {
+  VaultExportJob,
+  VaultExportPasswordError,
+  VaultListModalsHandle,
+} from "../vaultListModalsTypes";
 
 export function useVaultListModals(
   vaults: VaultListItem[],
@@ -20,7 +24,6 @@ export function useVaultListModals(
   const [settingsGroupId, setSettingsGroupId] = useState<string | null>(null);
   const [appSettingsOpen, setAppSettingsOpen] = useState(false);
   const [dataFolderOpen, setDataFolderOpen] = useState(false);
-  const [dataFolderExportOpen, setDataFolderExportOpen] = useState(false);
   const [logsOpen, setLogsOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [systemInfoOpen, setSystemInfoOpen] = useState(false);
@@ -36,8 +39,10 @@ export function useVaultListModals(
   const [recoveryVaultId, setRecoveryVaultId] = useState<string | null>(null);
   const [recoverySubmitting, setRecoverySubmitting] = useState(false);
   const [exportVaultId, setExportVaultId] = useState<string | null>(null);
-  const [exportSubmitting, setExportSubmitting] = useState(false);
-  const [exportJob, setExportJob] = useState<{ vaultId: string; startedAt: number } | null>(null);
+  const [exportJob, setExportJob] = useState<VaultExportJob | null>(null);
+  const [exportPasswordError, setExportPasswordError] = useState<VaultExportPasswordError | null>(
+    null,
+  );
 
   const noteVault = useMemo(
     () => vaults.find((vault) => vault.id === noteVaultId) ?? null,
@@ -148,8 +153,6 @@ export function useVaultListModals(
     groupsDirty,
     setGroupsOpen: setGroupsOpenExclusive,
     setGroupsDirty,
-    dataFolderExportOpen,
-    setDataFolderExportOpen,
     logsOpen,
     setLogsOpen,
     helpOpen,
@@ -177,10 +180,10 @@ export function useVaultListModals(
     exportVaultId,
     setExportVaultId,
     exportVault,
-    exportSubmitting,
-    setExportSubmitting,
+    exportJob,
     exportJobVaultId: exportJob?.vaultId ?? null,
-    exportStartedAt: exportJob?.startedAt ?? null,
     setExportJob,
+    exportPasswordError,
+    setExportPasswordError,
   };
 }

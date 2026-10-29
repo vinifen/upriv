@@ -3,11 +3,23 @@
 //! Logical vault bytes stay in process memory. The destination `.7z` on disk is
 //! ciphertext. If RAM cannot hold the working set, the op fails closed — never
 //! a plaintext staging tree on ordinary disk or tmpfs.
+//!
+//! A worker thread decrypts the files from `store/` in archive order, one
+//! chunk at a time, into a short queue that the encoder reads. A copy-only or
+//! one-worker LZMA2 archive therefore holds a few chunks of plaintext at a
+//! time; several LZMA2 workers queue up to a block, which the RAM check counts.
+//! Files are grouped into 7z blocks that close at [`SEVEN_ZIP_BLOCK_BYTES`]
+//! (one block with `solid`). Each block, and the encrypted header, gets its own
+//! random AES salt and IV, so files that start alike do not encrypt alike. The
+//! AES key is derived once per block, so small files share a block instead of
+//! each paying that derivation.
 
 #[allow(unused_imports)]
 use crate::host_fs::HostFsQuery;
-use std::io::{Cursor, ErrorKind, Seek, Write};
+use std::io::{BufWriter, ErrorKind, Read, Seek, Write};
+use std::ops::Range;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 
 use sevenz_rust2::encoder_options::{AesEncoderOptions, Lzma2Options};
 use sevenz_rust2::{ArchiveEntry, ArchiveWriter, EncoderMethod, Password, SourceReader};
@@ -15,18 +27,29 @@ use zeroize::Zeroizing;
 
 use crate::config::vault_config::{VaultArchiveMode, VaultSevenZipSection};
 use crate::error::{Result, UprivError};
-use crate::store::{read_logical_file, VaultHeader, VaultIndex, VaultNode};
+use crate::session::Job;
+use crate::store::{read_file_chunks, VaultHeader, VaultIndex, VaultNode, CHUNK_SIZE};
 
 const ARCHIVE_HEADER_SLACK: u64 = 1024 * 1024;
+/// Fixed fields of one member: the writer's entry and its rows in the header.
+const ARCHIVE_ENTRY_BYTES: u64 = 256;
+/// Bytes per byte of a member name while packing: our copy, the writer's
+/// entry, and the UTF-16 raw header and its encoded copy.
+const ARCHIVE_NAME_COPIES: u64 = 6;
+/// Working room for the AES and copy coders, the CRCs, and the LZMA coder that
+/// packs the archive header.
 const ENCODER_SLACK: u64 = 32 * 1024 * 1024;
-
-#[derive(Clone, Copy)]
-pub(crate) enum SevenZipSink {
-    /// NDJSON / bytes path: ciphertext archive stays in a `Vec`.
-    Memory,
-    /// User dest path: ciphertext streams to a `File`.
-    File,
-}
+/// The AES coder hands the archive 16 bytes per write, and a storage-access
+/// file pays for each write.
+const ARCHIVE_WRITE_BUFFER: usize = 1024 * 1024;
+/// Decrypted chunks the worker may hold ahead of the encoder.
+const DECRYPT_QUEUE_CHUNKS: usize = 8;
+/// A 7z block closes before the file that would take it past this much
+/// plaintext. A larger file gets a block of its own.
+const SEVEN_ZIP_BLOCK_BYTES: u64 = 64 * 1024 * 1024;
+/// LZMA2 coder state beyond its window and match finder: price tables, the
+/// optimum array, and the range coder buffer.
+const LZMA_CODER_BYTES: u64 = 1024 * 1024;
 
 pub fn seven_zip_export_available() -> bool {
     true
@@ -73,10 +96,10 @@ pub(crate) fn parse_mem_available_bytes(meminfo: &str) -> Option<u64> {
 }
 
 /// Working space for a `.7z` decoder beyond the compressed archive.
-pub(crate) const SEVEN_ZIP_DECODE_SLACK: u64 = 64 * 1024 * 1024;
+const SEVEN_ZIP_DECODE_SLACK: u64 = 64 * 1024 * 1024;
 
-/// Cores LZMA2 may use. Extra threads each keep their own dictionary, so the
-/// count stays inside what the RAM check can still refuse.
+/// Cores LZMA2 may use. Extra threads each keep their own encoder or decoder,
+/// so the count stays inside what the RAM check can still refuse.
 pub(crate) fn seven_zip_cpu_threads() -> u32 {
     let cores = std::thread::available_parallelism()
         .map(|count| u32::try_from(count.get()).unwrap_or(1))
@@ -109,26 +132,22 @@ pub(crate) fn threads_that_fit(
     fit
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct SevenZipDecodeBudget {
-    pub ram: u64,
-    pub threads: u32,
+/// Decoder threads for an import, from one reading of free RAM: as many as
+/// fit at [`SEVEN_ZIP_DECODE_SLACK`] each. Fails closed when not even one
+/// fits, or the system does not report free RAM. The archive length is not
+/// part of this; a caller that loads the archive into a `Vec` checks it on
+/// its own.
+pub(crate) fn seven_zip_decode_threads() -> Result<u32> {
+    decode_threads_in(seven_zip_cpu_threads(), mem_available_bytes())
 }
 
-/// Decoder threads that fit in currently free RAM, and the bytes those
-/// threads need. The archive length is not part of this. A caller that loads
-/// the archive into a `Vec` checks that length on its own.
-pub(crate) fn seven_zip_decode_budget() -> SevenZipDecodeBudget {
-    let threads = threads_that_fit(
-        seven_zip_cpu_threads(),
-        mem_available_bytes(),
-        SEVEN_ZIP_DECODE_SLACK,
-        0,
-    );
-    SevenZipDecodeBudget {
-        ram: SEVEN_ZIP_DECODE_SLACK.saturating_mul(u64::from(threads)),
-        threads,
-    }
+fn decode_threads_in(cores: u32, available: Option<u64>) -> Result<u32> {
+    let threads = threads_that_fit(cores, available, SEVEN_ZIP_DECODE_SLACK, 0);
+    ensure_available_ram(
+        available,
+        SEVEN_ZIP_DECODE_SLACK.saturating_mul(u64::from(threads)),
+    )?;
+    Ok(threads)
 }
 
 fn mem_available_bytes() -> Option<u64> {
@@ -228,9 +247,10 @@ fn windows_mem_available_bytes() -> Option<u64> {
     Some(status.avail_phys)
 }
 
+/// Window of an LZMA2 encoder at `level`, which is also the chunk each
+/// worker compresses on its own.
 fn lzma_dict_bytes(level: u8) -> u64 {
-    // `lzma-rust2` 0.16 `LzmaOptions::PRESET_TO_DICT_SIZE`. Each extra
-    // worker keeps one of these.
+    // `lzma-rust2` 0.16 `LzmaOptions::PRESET_TO_DICT_SIZE`.
     const PRESETS: [u64; 10] = [
         1 << 18,
         1 << 20,
@@ -246,117 +266,228 @@ fn lzma_dict_bytes(level: u8) -> u64 {
     PRESETS[usize::from(level.min(9))]
 }
 
-fn pack_fixed_bytes(
-    sizes: LogicalExportSize,
-    opts: &VaultSevenZipSection,
-    sink: SevenZipSink,
-) -> u64 {
-    let plaintext = if opts.solid {
-        sizes.total
-    } else {
-        sizes.largest
-    };
-    let archive = match sink {
-        SevenZipSink::Memory => sizes
-            .total
-            .saturating_add(ARCHIVE_HEADER_SLACK)
-            .saturating_add(sizes.files.saturating_mul(4096)),
-        SevenZipSink::File => ARCHIVE_HEADER_SLACK,
-    };
-    plaintext
-        .saturating_add(archive)
-        .saturating_add(ENCODER_SLACK)
+/// Entries in the encoder's 4-byte hash table for a `dict`-byte window
+/// (`Hash234::get_hash4_size` in `lzma-rust2` 0.16).
+fn lzma_hash4_entries(dict: u64) -> u64 {
+    let mut h = u32::try_from(dict.saturating_sub(1)).unwrap_or(u32::MAX);
+    h |= h >> 1;
+    h |= h >> 2;
+    h |= h >> 4;
+    h |= h >> 8;
+    h >>= 1;
+    h |= 0xFFFF;
+    if h > 1 << 24 {
+        h >>= 1;
+    }
+    u64::from(h) + 1
 }
 
-/// LZMA2 workers for this pack. Copy-only archives stay on one thread.
-/// Each extra worker adds one dictionary to the RAM budget.
-pub(crate) fn seven_zip_pack_threads(
-    sizes: LogicalExportSize,
-    opts: &VaultSevenZipSection,
-    sink: SevenZipSink,
-) -> u32 {
+/// Bytes one LZMA2 encoder allocates at `level` in `lzma-rust2` 0.16: its
+/// window, the match finder (hash tables, plus a chain for presets 0–3 or a
+/// binary tree for 4–9), and the coder state. The crate's own
+/// `get_memory_usage` adds bytes to KiB, so it is not used.
+fn lzma_encoder_bytes(level: u8) -> u64 {
+    let dict = lzma_dict_bytes(level);
+    // The dictionary, up to 4 KiB of lookahead on each side, the longest
+    // match, and the reserve that lets the window move.
+    let window = dict + 2 * 4096 + 273 + (dict / 2 + (256 << 10)).min(512 << 20);
+    let hash = 4 * ((1 << 10) + (1 << 16) + lzma_hash4_entries(dict));
+    let finder_entries = if level <= 3 { dict + 1 } else { 2 * (dict + 1) };
+    window + hash + 4 * finder_entries + LZMA_CODER_BYTES
+}
+
+/// RAM of the content coder with `threads` LZMA2 workers. One worker streams.
+/// Several share a queue that takes a whole block of plaintext ahead of them,
+/// and finished chunks wait for the slowest one, so the largest block counts
+/// twice.
+fn coder_bytes(opts: &VaultSevenZipSection, threads: u32, largest_block: u64) -> u64 {
     if opts.archive_mode == VaultArchiveMode::EncryptOnly {
-        return 1;
+        return 0;
     }
-    threads_that_fit(
-        seven_zip_cpu_threads(),
-        mem_available_bytes(),
-        lzma_dict_bytes(opts.compression_level),
-        pack_fixed_bytes(sizes, opts, sink),
-    )
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct LogicalExportSize {
-    pub total: u64,
-    pub largest: u64,
-    pub files: u64,
-}
-
-pub(crate) fn logical_export_size(
-    index: &VaultIndex,
-    skip: impl Fn(&str) -> bool,
-) -> LogicalExportSize {
-    let mut total = 0u64;
-    let mut largest = 0u64;
-    let mut files = 0u64;
-    for node in &index.nodes {
-        if skip(&node.path) || node.is_dir() {
-            continue;
-        }
-        let Some((_, size, _)) = node.as_file() else {
-            continue;
-        };
-        total = total.saturating_add(size);
-        largest = largest.max(size);
-        files = files.saturating_add(1);
+    let encoder = lzma_encoder_bytes(opts.compression_level);
+    if threads <= 1 {
+        return encoder;
     }
-    LogicalExportSize {
-        total,
-        largest,
-        files,
+    encoder
+        .saturating_mul(u64::from(threads))
+        .saturating_add(largest_block.saturating_mul(2))
+}
+
+/// Where a block closes. With several LZMA2 workers a block holds at least
+/// one chunk per worker, so each has work.
+fn block_limit(opts: &VaultSevenZipSection, threads: u32, block_bytes: u64) -> u64 {
+    if opts.solid {
+        return u64::MAX;
     }
+    if opts.archive_mode == VaultArchiveMode::CompressEncrypt && threads > 1 {
+        let chunks = lzma_dict_bytes(opts.compression_level).saturating_mul(u64::from(threads));
+        return block_bytes.max(chunks);
+    }
+    block_bytes
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct SevenZipPackBudget {
-    pub ram: u64,
-    pub threads: u32,
+/// Plaintext the decrypt stream holds at once: the queue, the chunk the
+/// worker is decrypting and its ciphertext, and the chunk the encoder reads.
+fn decrypt_stream_bytes() -> u64 {
+    (DECRYPT_QUEUE_CHUNKS as u64 + 3) * u64::from(CHUNK_SIZE)
 }
 
-/// One snapshot of free RAM: the thread count and the bytes those threads need.
-pub(crate) fn seven_zip_pack_budget(
-    sizes: LogicalExportSize,
-    opts: &VaultSevenZipSection,
-    sink: SevenZipSink,
-) -> SevenZipPackBudget {
-    let threads = seven_zip_pack_threads(sizes, opts, sink);
-    let dicts = if opts.archive_mode == VaultArchiveMode::EncryptOnly {
-        0
-    } else {
-        lzma_dict_bytes(opts.compression_level).saturating_mul(u64::from(threads))
+/// The archive's record of its members, from the length of each logical path.
+fn archive_header_bytes(outer_folder: &str, paths: impl Iterator<Item = usize>) -> u64 {
+    let member = |path: usize| {
+        let name = (outer_folder.len() + 1 + path) as u64;
+        ARCHIVE_ENTRY_BYTES.saturating_add(name.saturating_mul(ARCHIVE_NAME_COPIES))
     };
-    SevenZipPackBudget {
-        threads,
-        ram: pack_fixed_bytes(sizes, opts, sink).saturating_add(dicts),
+    paths
+        .map(member)
+        .fold(ARCHIVE_HEADER_SLACK, u64::saturating_add)
+}
+
+fn file_size(node: &VaultNode) -> u64 {
+    node.as_file().map_or(0, |(_, size, _)| size)
+}
+
+/// Split `files` into 7z blocks. A block closes before the file that would
+/// take it past `limit`, so only a file larger than `limit` goes beyond it.
+fn plan_blocks(files: &[&VaultNode], limit: u64) -> Vec<Range<usize>> {
+    let mut blocks = Vec::new();
+    let mut start = 0;
+    let mut bytes = 0u64;
+    for (at, node) in files.iter().enumerate() {
+        let size = file_size(node);
+        if at > start && bytes.saturating_add(size) > limit {
+            blocks.push(start..at);
+            start = at;
+            bytes = 0;
+        }
+        bytes = bytes.saturating_add(size);
+    }
+    if start < files.len() {
+        blocks.push(start..files.len());
+    }
+    blocks
+}
+
+fn largest_block(files: &[&VaultNode], blocks: &[Range<usize>]) -> u64 {
+    blocks
+        .iter()
+        .map(|block| {
+            files[block.clone()]
+                .iter()
+                .map(|node| file_size(node))
+                .fold(0, u64::saturating_add)
+        })
+        .max()
+        .unwrap_or(0)
+}
+
+/// The device a pack is planned for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PackLimits {
+    /// Cores LZMA2 may use.
+    pub(crate) cores: u32,
+    /// Free RAM. `None` when the system does not report it.
+    pub(crate) available: Option<u64>,
+    /// Where a block closes: [`SEVEN_ZIP_BLOCK_BYTES`].
+    pub(crate) block_bytes: u64,
+}
+
+impl PackLimits {
+    /// This device, now.
+    pub(crate) fn current() -> Self {
+        Self {
+            cores: seven_zip_cpu_threads(),
+            available: mem_available_bytes(),
+            block_bytes: SEVEN_ZIP_BLOCK_BYTES,
+        }
     }
 }
 
-pub(crate) fn seven_zip_archive_vec_budget(sizes: LogicalExportSize) -> u64 {
-    sizes
-        .total
-        .saturating_add(ARCHIVE_HEADER_SLACK)
-        .saturating_add(sizes.files.saturating_mul(4096))
+/// One export: its members, its 7z blocks, and the LZMA2 workers. Planned
+/// from the index before anything is decrypted.
+pub(crate) struct SevenZipPackPlan<'a> {
+    dirs: Vec<&'a VaultNode>,
+    files: Vec<&'a VaultNode>,
+    /// Ranges of `files`, one per 7z block, in archive order.
+    blocks: Vec<Range<usize>>,
+    /// Logical bytes of every file packed: the job's total.
+    bytes: u64,
+    threads: u32,
 }
 
-pub(crate) fn ensure_available_ram(available: Option<u64>, needed: u64) -> Result<()> {
+/// Plan the `.7z` of `index`, leaving out every path `skip` names. LZMA2 gets
+/// as many workers as fit in free RAM, and one when no more fit; a copy-only
+/// archive uses one. The workers and the RAM check read the same `limits`, so
+/// a pack refused here could not have run on fewer workers either. Fails with
+/// [`UprivError::InsufficientRamExport`] when even that does not fit, or the
+/// system does not report free RAM.
+pub(crate) fn plan_seven_zip_pack<'a>(
+    index: &'a VaultIndex,
+    opts: &VaultSevenZipSection,
+    outer_folder: &str,
+    skip: impl Fn(&str) -> bool,
+    limits: PackLimits,
+) -> Result<SevenZipPackPlan<'a>> {
+    let (plan, ram) = layout_seven_zip_pack(index, opts, outer_folder, skip, limits);
+    ensure_available_ram(limits.available, ram)?;
+    Ok(plan)
+}
+
+/// The plan of [`plan_seven_zip_pack`], and the RAM it takes, before that
+/// RAM is checked.
+fn layout_seven_zip_pack<'a>(
+    index: &'a VaultIndex,
+    opts: &VaultSevenZipSection,
+    outer_folder: &str,
+    skip: impl Fn(&str) -> bool,
+    limits: PackLimits,
+) -> (SevenZipPackPlan<'a>, u64) {
+    let dirs = export_dir_nodes(index, &skip);
+    let files = export_file_nodes(index, &skip);
+    let bytes = files
+        .iter()
+        .map(|node| file_size(node))
+        .fold(0, u64::saturating_add);
+    let paths = dirs.iter().chain(&files).map(|node| node.path.len());
+    let fixed = ENCODER_SLACK
+        .saturating_add(ARCHIVE_WRITE_BUFFER as u64)
+        .saturating_add(decrypt_stream_bytes())
+        .saturating_add(archive_header_bytes(outer_folder, paths));
+    let layout = |threads: u32| {
+        let blocks = plan_blocks(&files, block_limit(opts, threads, limits.block_bytes));
+        let coder = coder_bytes(opts, threads, largest_block(&files, &blocks));
+        (blocks, fixed.saturating_add(coder))
+    };
+    let (mut blocks, mut ram) = layout(1);
+    let mut threads = 1;
+    if opts.archive_mode == VaultArchiveMode::CompressEncrypt {
+        for more in 2..=limits.cores.clamp(1, 8) {
+            let (wider, needed) = layout(more);
+            if limits.available.is_none_or(|free| needed > free) {
+                break;
+            }
+            (blocks, ram, threads) = (wider, needed, more);
+        }
+    }
+    let plan = SevenZipPackPlan {
+        dirs,
+        files,
+        blocks,
+        bytes,
+        threads,
+    };
+    (plan, ram)
+}
+
+fn ensure_available_ram(available: Option<u64>, needed: u64) -> Result<()> {
     match available {
         Some(available) if available >= needed => Ok(()),
         _ => Err(UprivError::InsufficientRamExport),
     }
 }
 
-pub(crate) fn ensure_seven_zip_export_ram(needed: u64) -> Result<()> {
+/// Fails closed unless free RAM holds `needed` bytes now.
+pub(crate) fn ensure_free_ram(needed: u64) -> Result<()> {
     ensure_available_ram(mem_available_bytes(), needed)
 }
 
@@ -400,6 +531,7 @@ fn archive_member_name(logical: &str) -> Result<String> {
     Ok(logical.to_string())
 }
 
+/// AES (with a fresh random salt and IV) over the content coder.
 fn content_methods(
     opts: &VaultSevenZipSection,
     password: Password,
@@ -420,7 +552,10 @@ fn content_methods(
     vec![aes, data]
 }
 
-fn export_file_nodes(index: &VaultIndex, skip: impl Fn(&str) -> bool) -> Vec<&VaultNode> {
+fn export_file_nodes<'a>(
+    index: &'a VaultIndex,
+    skip: &impl Fn(&str) -> bool,
+) -> Vec<&'a VaultNode> {
     index
         .nodes
         .iter()
@@ -443,33 +578,6 @@ fn seven_zip_logical_member(outer: &str, logical: &str) -> String {
     format!("{outer}/{logical}")
 }
 
-fn read_export_file(
-    store_dir: &Path,
-    header: &VaultHeader,
-    content_key: &[u8; 32],
-    index: &VaultIndex,
-    outer_folder: &str,
-    node: &VaultNode,
-) -> Result<(String, Zeroizing<Vec<u8>>)> {
-    let name = archive_member_name(&seven_zip_logical_member(outer_folder, &node.path))?;
-    let data = Zeroizing::new(read_logical_file(
-        store_dir,
-        header,
-        content_key,
-        index,
-        &node.path,
-    )?);
-    Ok((name, data))
-}
-
-fn push_one<W: Write + Seek>(writer: &mut ArchiveWriter<W>, name: &str, data: &[u8]) -> Result<()> {
-    let entry = ArchiveEntry::new_file(name);
-    writer
-        .push_archive_entry(entry, Some(Cursor::new(data)))
-        .map_err(map_sevenz_error)?;
-    Ok(())
-}
-
 fn push_directory<W: Write + Seek>(writer: &mut ArchiveWriter<W>, name: &str) -> Result<()> {
     let mut entry = ArchiveEntry::new_directory(name);
     // sevenz-rust2 0.20.2 writes the anti-item bit inverted (`has_anti |= !is_anti`),
@@ -482,86 +590,197 @@ fn push_directory<W: Write + Seek>(writer: &mut ArchiveWriter<W>, name: &str) ->
     Ok(())
 }
 
-fn push_solid<W: Write + Seek>(
-    writer: &mut ArchiveWriter<W>,
-    files: &[(String, Zeroizing<Vec<u8>>)],
-) -> Result<()> {
-    if files.is_empty() {
-        return Ok(());
-    }
-    let mut entries = Vec::with_capacity(files.len());
-    let mut readers = Vec::with_capacity(files.len());
-    for (name, data) in files {
-        let mut entry = ArchiveEntry::new_file(name);
-        entry.size = data.len() as u64;
-        entries.push(entry);
-        readers.push(SourceReader::new(Cursor::new(data.as_slice())));
-    }
-    writer
-        .push_archive_entries(entries, readers)
-        .map_err(map_sevenz_error)?;
-    Ok(())
-}
-
+/// Where the logical files are read from: a closed vault's `store/`, unlocked.
+#[derive(Clone, Copy)]
 pub(crate) struct LogicalSevenZipSource<'a> {
     pub store_dir: &'a Path,
     pub header: &'a VaultHeader,
     pub content_key: &'a [u8; 32],
-    pub index: &'a VaultIndex,
 }
 
+/// One file's plaintext, taken chunk by chunk from the decrypt queue. A
+/// chunk counts toward the job's progress when the encoder takes it.
+struct QueuedFile<'q> {
+    queue: &'q Receiver<Zeroizing<Vec<u8>>>,
+    job: &'q Job,
+    /// Bytes of this file not yet taken from the queue.
+    left: u64,
+    chunk: Zeroizing<Vec<u8>>,
+    read: usize,
+}
+
+impl<'q> QueuedFile<'q> {
+    fn new(queue: &'q Receiver<Zeroizing<Vec<u8>>>, job: &'q Job, size: u64) -> Self {
+        Self {
+            queue,
+            job,
+            left: size,
+            chunk: Zeroizing::new(Vec::new()),
+            read: 0,
+        }
+    }
+}
+
+impl Read for QueuedFile<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if self.read == self.chunk.len() {
+            if self.left == 0 {
+                return Ok(0);
+            }
+            let chunk = self
+                .queue
+                .recv()
+                .map_err(|_| std::io::Error::other("vault decrypt stopped"))?;
+            let len = chunk.len() as u64;
+            if len == 0 || len > self.left {
+                return Err(std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "decrypted chunk does not fit the file",
+                ));
+            }
+            self.left -= len;
+            self.job.advance(len);
+            self.chunk = chunk;
+            self.read = 0;
+        }
+        let n = buf.len().min(self.chunk.len() - self.read);
+        buf[..n].copy_from_slice(&self.chunk[self.read..self.read + n]);
+        self.read += n;
+        Ok(n)
+    }
+}
+
+/// Decrypt `files` in order into `queue`. Returns without an error once the
+/// encoder stops reading: the encoder reports why.
+fn decrypt_in_order(
+    source: LogicalSevenZipSource<'_>,
+    files: &[&VaultNode],
+    queue: SyncSender<Zeroizing<Vec<u8>>>,
+) -> Result<()> {
+    for node in files {
+        let mut encoder_gone = false;
+        let read = read_file_chunks(
+            source.store_dir,
+            source.header,
+            source.content_key,
+            node,
+            |chunk| {
+                queue.send(chunk).map_err(|_| {
+                    encoder_gone = true;
+                    UprivError::JobCancelled
+                })
+            },
+        );
+        if encoder_gone {
+            return Ok(());
+        }
+        read?;
+    }
+    Ok(())
+}
+
+fn push_blocks<W: Write + Seek>(
+    writer: &mut ArchiveWriter<W>,
+    queue: &Receiver<Zeroizing<Vec<u8>>>,
+    opts: &VaultSevenZipSection,
+    password: &Password,
+    outer_folder: &str,
+    plan: &SevenZipPackPlan<'_>,
+    job: &Job,
+) -> Result<()> {
+    for block in &plan.blocks {
+        job.ensure_running()?;
+        let files = &plan.files[block.clone()];
+        let mut entries = Vec::with_capacity(files.len());
+        let mut readers = Vec::with_capacity(files.len());
+        for node in files {
+            let name = archive_member_name(&seven_zip_logical_member(outer_folder, &node.path))?;
+            entries.push(ArchiveEntry::new_file(&name));
+            readers.push(SourceReader::new(QueuedFile::new(
+                queue,
+                job,
+                file_size(node),
+            )));
+        }
+        // Each block is sealed with its own salt and IV.
+        writer.set_content_methods(content_methods(opts, password.clone(), plan.threads));
+        writer
+            .push_archive_entries(entries, readers)
+            .map_err(map_sevenz_error)?;
+    }
+    Ok(())
+}
+
+/// Stream the files of `plan` into `writer`, one 7z block at a time, while a
+/// worker thread decrypts them. A decrypt failure is the error returned: it
+/// is why the encoder ran dry.
+fn push_file_blocks<W: Write + Seek>(
+    writer: &mut ArchiveWriter<W>,
+    source: LogicalSevenZipSource<'_>,
+    opts: &VaultSevenZipSection,
+    password: &Password,
+    outer_folder: &str,
+    plan: &SevenZipPackPlan<'_>,
+    job: &Job,
+) -> Result<()> {
+    let (decrypted, queue) = sync_channel(DECRYPT_QUEUE_CHUNKS);
+    let files = plan.files.as_slice();
+    std::thread::scope(|scope| {
+        let worker = std::thread::Builder::new()
+            .name("upriv-7z-decrypt".into())
+            .spawn_scoped(scope, move || decrypt_in_order(source, files, decrypted))?;
+        let pushed = push_blocks(writer, &queue, opts, password, outer_folder, plan, job);
+        // Without its reader the worker stops at its next chunk.
+        drop(queue);
+        let read = worker
+            .join()
+            .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
+        read.and(pushed)
+    })
+}
+
+/// Pack the files of `plan` into `dest`. `job` is checked before each block,
+/// every archive write fails once it is asked to stop, and its progress counts
+/// the logical bytes packed.
 pub(crate) fn pack_logical_seven_zip_to_writer<W: Write + Seek>(
     dest: W,
     source: LogicalSevenZipSource<'_>,
     archive_password: &[u8],
     opts: &VaultSevenZipSection,
     outer_folder: &str,
-    threads: u32,
-    skip: impl Fn(&str) -> bool,
+    plan: &SevenZipPackPlan<'_>,
+    job: &Job,
 ) -> Result<W> {
     let password = sevenz_password(archive_password)?;
-    let mut writer = ArchiveWriter::new(dest).map_err(map_sevenz_error)?;
+    let buffered = BufWriter::with_capacity(ARCHIVE_WRITE_BUFFER, dest);
+    let mut writer = ArchiveWriter::new(job.writer(buffered)).map_err(map_sevenz_error)?;
     writer.set_encrypt_header(opts.encrypt_file_names);
-    writer.set_content_methods(content_methods(opts, password, threads));
-    let dirs = export_dir_nodes(source.index, &skip);
-    let nodes = export_file_nodes(source.index, skip);
     // A vault with no files and no folders is one outer directory. Folders that
     // exist in the vault, including empty ones, are members under that name.
-    if nodes.is_empty() && dirs.is_empty() {
+    if plan.files.is_empty() && plan.dirs.is_empty() {
         push_directory(&mut writer, outer_folder)?;
     } else {
-        for dir in dirs {
+        for dir in &plan.dirs {
             let name = archive_member_name(&seven_zip_logical_member(outer_folder, &dir.path))?;
             push_directory(&mut writer, &name)?;
         }
     }
-    if opts.solid {
-        let mut files = Vec::with_capacity(nodes.len());
-        for node in nodes {
-            files.push(read_export_file(
-                source.store_dir,
-                source.header,
-                source.content_key,
-                source.index,
-                outer_folder,
-                node,
-            )?);
-        }
-        push_solid(&mut writer, &files)?;
-    } else {
-        for node in nodes {
-            let (name, data) = read_export_file(
-                source.store_dir,
-                source.header,
-                source.content_key,
-                source.index,
-                outer_folder,
-                node,
-            )?;
-            push_one(&mut writer, &name, data.as_slice())?;
-        }
-    }
-    writer.finish().map_err(map_io_error)
+    job.set_total(plan.bytes);
+    push_file_blocks(
+        &mut writer,
+        source,
+        opts,
+        &password,
+        outer_folder,
+        plan,
+        job,
+    )?;
+    // The header is sealed with its own salt and IV.
+    writer.set_content_methods(content_methods(opts, password, plan.threads));
+    let buffered = writer.finish().map_err(map_io_error)?.into_inner();
+    buffered
+        .into_inner()
+        .map_err(|error| map_io_error(error.into_error()))
 }
 
 #[cfg(test)]
@@ -569,6 +788,139 @@ mod tests {
     use super::*;
     #[allow(unused_imports)]
     use crate::host_fs::HostFsQuery;
+    use std::io::{Cursor, SeekFrom};
+
+    use crate::session::{cancel_job, job_status};
+    use crate::store::{blob_path, is_reserved_logical, open_store, KdfUnlockPreset};
+    use crate::test_support::{test_job_id, vault_root_with};
+    use crate::vault::create::create_vault;
+    use crate::vault::fs::{fs_read_file, fs_write_file};
+    use crate::vault::open_close::{close_vault, open_vault};
+    use crate::vault::seven_zip::import_logical_seven_zip;
+
+    const MIB: u64 = 1024 * 1024;
+    const PASSWORD: &[u8] = b"pass-word-ok";
+
+    fn opts(archive_mode: VaultArchiveMode, compression_level: u8) -> VaultSevenZipSection {
+        VaultSevenZipSection {
+            archive_mode,
+            compression_level,
+            ..VaultSevenZipSection::default()
+        }
+    }
+
+    fn limits(cores: u32, available: Option<u64>) -> PackLimits {
+        PackLimits {
+            cores,
+            available,
+            block_bytes: SEVEN_ZIP_BLOCK_BYTES,
+        }
+    }
+
+    /// A device with `cores` and more free RAM than any plan asks for.
+    fn roomy(cores: u32) -> PackLimits {
+        limits(cores, Some(u64::MAX))
+    }
+
+    /// An index of files with these sizes. The chunk lists stay empty: a plan
+    /// reads only paths and sizes.
+    fn index_of(sizes: &[u64]) -> VaultIndex {
+        let mut index = VaultIndex::empty();
+        for (at, size) in sizes.iter().enumerate() {
+            index.nodes.push(VaultNode::file(
+                &format!("docs/file-{at}.bin"),
+                uuid::Uuid::new_v4().to_string(),
+                *size,
+                Vec::new(),
+                Vec::new(),
+            ));
+        }
+        index
+    }
+
+    fn plan<'a>(
+        index: &'a VaultIndex,
+        opts: &VaultSevenZipSection,
+        limits: PackLimits,
+    ) -> SevenZipPackPlan<'a> {
+        plan_seven_zip_pack(index, opts, "Notes", is_reserved_logical, limits).unwrap()
+    }
+
+    /// RAM the plan for `limits` asks the device for.
+    fn ram(index: &VaultIndex, opts: &VaultSevenZipSection, limits: PackLimits) -> u64 {
+        layout_seven_zip_pack(index, opts, "Notes", is_reserved_logical, limits).1
+    }
+
+    fn vault_config(id: &str) -> crate::config::VaultConfig {
+        toml::from_str(&format!(
+            "[vault]\nid = \"{id}\"\ndisplay_name = \"{id}\"\norder = 1\n[storage]\nmode = \"encrypted_dir\"\n"
+        ))
+        .unwrap()
+    }
+
+    /// A closed vault `notes` holding `files`.
+    fn closed_vault(files: &[(&str, &[u8])]) -> (tempfile::TempDir, crate::paths::VaultRoot) {
+        let (tmp, root) = vault_root_with(&[]);
+        create_vault(&root, vault_config("notes"), PASSWORD, KdfUnlockPreset::M32).unwrap();
+        open_vault(&root, "notes", PASSWORD).unwrap();
+        for (path, bytes) in files {
+            fs_write_file(&root, "notes", path, bytes).unwrap();
+        }
+        close_vault(&root, "notes").unwrap();
+        (tmp, root)
+    }
+
+    /// Pack the closed vault `notes` into `dest` with `limits`.
+    fn pack_into<W: Write + Seek>(
+        root: &crate::paths::VaultRoot,
+        dest: W,
+        opts: &VaultSevenZipSection,
+        limits: PackLimits,
+        job: &Job,
+    ) -> Result<W> {
+        let store = root
+            .vault_dir("notes")
+            .unwrap()
+            .join(crate::paths::STORE_DIR_NAME);
+        let opened = open_store(&store, PASSWORD).unwrap();
+        let plan = plan(&opened.index, opts, limits);
+        pack_logical_seven_zip_to_writer(
+            dest,
+            LogicalSevenZipSource {
+                store_dir: &store,
+                header: &opened.header,
+                content_key: &opened.content_key,
+            },
+            PASSWORD,
+            opts,
+            "Notes",
+            &plan,
+            job,
+        )
+    }
+
+    /// Counts the writes that reach the archive file.
+    struct CountingCursor {
+        inner: Cursor<Vec<u8>>,
+        writes: usize,
+    }
+
+    impl Write for CountingCursor {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.writes += 1;
+            self.inner.write(buf)
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl Seek for CountingCursor {
+        fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+            self.inner.seek(pos)
+        }
+    }
 
     #[test]
     fn sevenz_password_rejects_newline_and_empty() {
@@ -583,25 +935,124 @@ mod tests {
 
     #[test]
     fn copy_only_pack_stays_on_one_thread() {
-        let opts = VaultSevenZipSection::default();
-        let sizes = LogicalExportSize {
-            total: 1000,
-            largest: 800,
-            files: 2,
-        };
-        assert_eq!(seven_zip_pack_threads(sizes, &opts, SevenZipSink::File), 1);
+        let index = index_of(&[1000, 800]);
+        let copy = VaultSevenZipSection::default();
+        assert_eq!(plan(&index, &copy, roomy(8)).threads, 1);
+    }
+
+    #[test]
+    fn plaintext_in_ram_does_not_grow_with_the_files() {
+        let small = index_of(&[MIB]);
+        let large = index_of(&[4096 * MIB, 4096 * MIB]);
+        for opts in [
+            VaultSevenZipSection::default(),
+            opts(VaultArchiveMode::CompressEncrypt, 5),
+        ] {
+            let small_ram = ram(&small, &opts, roomy(1));
+            let large_ram = ram(&large, &opts, roomy(1));
+            // Only the two extra members of the header differ.
+            assert!(large_ram - small_ram < MIB, "{opts:?}");
+        }
+    }
+
+    #[test]
+    fn several_lzma_workers_count_the_largest_block_twice() {
+        let index = index_of(&[512 * MIB]);
+        let lzma = opts(VaultArchiveMode::CompressEncrypt, 5);
+        assert_eq!(plan(&index, &lzma, roomy(4)).threads, 4);
         assert_eq!(
-            seven_zip_pack_budget(sizes, &opts, SevenZipSink::File).threads,
-            1
+            ram(&index, &lzma, roomy(4)) - ram(&index, &lzma, roomy(1)),
+            3 * lzma_encoder_bytes(5) + 2 * 512 * MIB
         );
     }
 
     #[test]
-    fn import_decoder_ram_does_not_grow_with_the_archive() {
-        let needed = seven_zip_decode_budget().ram;
-        assert_eq!(needed % SEVEN_ZIP_DECODE_SLACK, 0);
-        assert!(needed >= SEVEN_ZIP_DECODE_SLACK);
-        assert!(needed / SEVEN_ZIP_DECODE_SLACK <= u64::from(seven_zip_cpu_threads()));
+    fn lzma_workers_grow_only_while_the_ram_fits() {
+        let index = index_of(&[16 * MIB]);
+        let lzma = opts(VaultArchiveMode::CompressEncrypt, 5);
+        let fits_three = ram(&index, &lzma, roomy(3));
+        assert_eq!(plan(&index, &lzma, limits(8, Some(fits_three))).threads, 3);
+        assert_eq!(
+            plan(&index, &lzma, limits(8, Some(fits_three - 1))).threads,
+            2
+        );
+        assert_eq!(plan(&index, &lzma, roomy(8)).threads, 8);
+    }
+
+    #[test]
+    fn a_pack_that_does_not_fit_even_one_worker_fails_closed() {
+        let index = index_of(&[16 * MIB]);
+        for opts in [
+            VaultSevenZipSection::default(),
+            opts(VaultArchiveMode::CompressEncrypt, 5),
+        ] {
+            let one = ram(&index, &opts, roomy(1));
+            for limits in [limits(8, Some(one - 1)), limits(8, None)] {
+                assert!(matches!(
+                    plan_seven_zip_pack(&index, &opts, "Notes", is_reserved_logical, limits),
+                    Err(UprivError::InsufficientRamExport)
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn a_block_closes_before_the_file_that_would_pass_the_limit() {
+        let index = index_of(&[40 * MIB, 20 * MIB, 10 * MIB, 200 * MIB, 0, MIB]);
+        let copy = VaultSevenZipSection::default();
+        let planned = plan(&index, &copy, roomy(1));
+        assert_eq!(planned.blocks, vec![0..2, 2..3, 3..4, 4..6]);
+        assert_eq!(planned.bytes, 271 * MIB);
+    }
+
+    #[test]
+    fn solid_puts_every_file_in_one_block() {
+        let index = index_of(&[40 * MIB, 200 * MIB, MIB]);
+        let solid = VaultSevenZipSection {
+            solid: true,
+            ..VaultSevenZipSection::default()
+        };
+        assert_eq!(plan(&index, &solid, roomy(1)).blocks, vec![0..3]);
+    }
+
+    #[test]
+    fn several_lzma_workers_get_a_chunk_each_per_block() {
+        let index = index_of(&[64 * MIB; 8]);
+        let lzma = opts(VaultArchiveMode::CompressEncrypt, 9);
+        let planned = plan(&index, &lzma, roomy(8));
+        assert_eq!(planned.threads, 8);
+        // Eight 64 MiB chunks: one per worker.
+        assert_eq!(planned.blocks, vec![0..8]);
+    }
+
+    #[test]
+    fn lzma_encoder_bytes_follow_the_crate_allocations() {
+        assert_eq!(lzma_hash4_entries(1 << 18), 1 << 17);
+        assert_eq!(lzma_hash4_entries(1 << 20), 1 << 19);
+        assert_eq!(lzma_hash4_entries(1 << 23), 1 << 22);
+        assert_eq!(lzma_hash4_entries(1 << 26), 1 << 24);
+        // Level 5: 8 MiB window, BT4 tree of 64 MiB, 16 MiB hash table.
+        let level5 = lzma_encoder_bytes(5);
+        assert!((93 * MIB..95 * MIB).contains(&level5), "{level5}");
+        // Level 9: 64 MiB window, BT4 tree of 512 MiB, 64 MiB hash table.
+        let level9 = lzma_encoder_bytes(9);
+        assert!((673 * MIB..675 * MIB).contains(&level9), "{level9}");
+        // Level 1 chains (HC4) instead of a tree.
+        let level1 = lzma_encoder_bytes(1);
+        assert!((8 * MIB..10 * MIB).contains(&level1), "{level1}");
+    }
+
+    #[test]
+    fn import_decoder_threads_fit_free_ram_or_fail_closed() {
+        let slack = SEVEN_ZIP_DECODE_SLACK;
+        assert_eq!(decode_threads_in(4, Some(slack * 3)).unwrap(), 3);
+        assert_eq!(decode_threads_in(4, Some(slack * 9)).unwrap(), 4);
+        for available in [Some(slack / 2), None] {
+            assert!(matches!(
+                decode_threads_in(4, available),
+                Err(UprivError::InsufficientRamExport)
+            ));
+        }
     }
 
     #[test]
@@ -657,24 +1108,187 @@ mod tests {
     }
 
     #[test]
-    fn ram_needed_memory_sink_includes_archive() {
-        let opts = VaultSevenZipSection::default();
-        let sizes = LogicalExportSize {
-            total: 1000,
-            largest: 800,
-            files: 2,
-        };
-        let memory = seven_zip_pack_budget(sizes, &opts, SevenZipSink::Memory).ram;
-        let file = seven_zip_pack_budget(sizes, &opts, SevenZipSink::File).ram;
-        assert!(memory > file);
-        assert!(memory >= sizes.total + sizes.largest);
-    }
-
-    #[test]
     fn archive_member_name_rejects_dotdot() {
         assert!(archive_member_name("docs/hi.txt").is_ok());
         assert!(archive_member_name("../x").is_err());
         assert!(archive_member_name("/abs").is_err());
         assert!(sevenz_member_name_unsafe("docs//hi.txt"));
+    }
+
+    #[test]
+    fn the_archive_reaches_its_file_in_large_writes() {
+        let data = vec![7u8; 3 * 1024 * 1024];
+        let (_tmp, root) = closed_vault(&[("/docs/big.bin", &data)]);
+        let dest = CountingCursor {
+            inner: Cursor::new(Vec::new()),
+            writes: 0,
+        };
+        let copy = VaultSevenZipSection::default();
+        let packed = pack_into(&root, dest, &copy, roomy(1), &Job::untracked()).unwrap();
+        assert!(packed.inner.get_ref().len() as u64 > 3 * MIB);
+        // The AES coder emits 16 bytes per write; the buffer turns those into a few.
+        assert!(packed.writes < 32, "{} writes", packed.writes);
+    }
+
+    #[test]
+    fn identical_files_in_separate_blocks_encrypt_differently() {
+        let same = vec![0x5au8; 4096];
+        let (_tmp, root) = closed_vault(&[("/a.bin", &same), ("/b.bin", &same)]);
+        let copy = VaultSevenZipSection::default();
+        let one_file_per_block = PackLimits {
+            block_bytes: 4096,
+            ..roomy(1)
+        };
+        let packed = pack_into(
+            &root,
+            Cursor::new(Vec::new()),
+            &copy,
+            one_file_per_block,
+            &Job::untracked(),
+        )
+        .unwrap()
+        .into_inner();
+        // Copy-only blocks follow the 32-byte signature header in order, each
+        // as long as its file.
+        let first = &packed[32..32 + 4096];
+        let second = &packed[32 + 4096..32 + 2 * 4096];
+        assert_ne!(first, second, "two blocks share a key and IV");
+
+        let imported = import_logical_seven_zip(
+            &root,
+            vault_config("copy"),
+            PASSWORD,
+            KdfUnlockPreset::M32,
+            &packed,
+            PASSWORD,
+            None,
+        )
+        .unwrap();
+        open_vault(&root, &imported, PASSWORD).unwrap();
+        assert_eq!(fs_read_file(&root, &imported, "/a.bin").unwrap(), same);
+        assert_eq!(fs_read_file(&root, &imported, "/b.bin").unwrap(), same);
+        close_vault(&root, &imported).unwrap();
+    }
+
+    #[test]
+    fn compressed_exports_import_whole_with_one_worker_or_several() {
+        // Sixteen letters: about four bits a byte, well inside the import's
+        // 64x expansion cap.
+        let mut seed = 0x9e37_79b9_u32;
+        let text: Vec<u8> = (0..360_000)
+            .map(|_| {
+                seed ^= seed << 13;
+                seed ^= seed >> 17;
+                seed ^= seed << 5;
+                b'a' + (seed % 16) as u8
+            })
+            .collect();
+        let (_tmp, root) = closed_vault(&[
+            ("/one.txt", &text),
+            ("/two/three.txt", &text[..1000]),
+            ("/empty.txt", b""),
+        ]);
+        let lzma = opts(VaultArchiveMode::CompressEncrypt, 1);
+        // One worker streams, here in two blocks; two workers share one block.
+        for (cores, blocks) in [(1, 2), (2, 1)] {
+            let small_blocks = PackLimits {
+                block_bytes: 1000,
+                ..roomy(cores)
+            };
+            let store = root
+                .vault_dir("notes")
+                .unwrap()
+                .join(crate::paths::STORE_DIR_NAME);
+            let opened = open_store(&store, PASSWORD).unwrap();
+            assert_eq!(
+                plan(&opened.index, &lzma, small_blocks).blocks.len(),
+                blocks
+            );
+            let packed = pack_into(
+                &root,
+                Cursor::new(Vec::new()),
+                &lzma,
+                small_blocks,
+                &Job::untracked(),
+            )
+            .unwrap()
+            .into_inner();
+            assert!(packed.len() < text.len() * 3 / 4, "{} bytes", packed.len());
+            let imported = import_logical_seven_zip(
+                &root,
+                vault_config(&format!("lzma-{cores}")),
+                PASSWORD,
+                KdfUnlockPreset::M32,
+                &packed,
+                PASSWORD,
+                None,
+            )
+            .unwrap();
+            open_vault(&root, &imported, PASSWORD).unwrap();
+            assert_eq!(fs_read_file(&root, &imported, "/one.txt").unwrap(), text);
+            assert_eq!(
+                fs_read_file(&root, &imported, "/two/three.txt").unwrap(),
+                &text[..1000]
+            );
+            assert!(fs_read_file(&root, &imported, "/empty.txt")
+                .unwrap()
+                .is_empty());
+            close_vault(&root, &imported).unwrap();
+        }
+    }
+
+    #[test]
+    fn a_damaged_chunk_fails_the_export_with_the_store_error() {
+        let (_tmp, root) = closed_vault(&[("/docs/hi.txt", b"hello-export")]);
+        let store = root
+            .vault_dir("notes")
+            .unwrap()
+            .join(crate::paths::STORE_DIR_NAME);
+        let opened = open_store(&store, PASSWORD).unwrap();
+        let node = opened.index.find("docs/hi.txt").unwrap();
+        let blob = blob_path(&store, node.as_file().unwrap().0).unwrap();
+        let mut bytes = crate::host_fs::read(&blob).unwrap();
+        let last = bytes.len() - 1;
+        bytes[last] ^= 0x01;
+        crate::host_fs::write(&blob, &bytes).unwrap();
+
+        let copy = VaultSevenZipSection::default();
+        let err = pack_into(
+            &root,
+            Cursor::new(Vec::new()),
+            &copy,
+            roomy(1),
+            &Job::untracked(),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(&err, UprivError::VaultStoreInvalid { detail, .. } if detail == "chunk tag failed"),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn progress_counts_the_logical_bytes_packed() {
+        let data = vec![3u8; 600_000];
+        let (_tmp, root) = closed_vault(&[("/a.bin", &data), ("/b.bin", b"tail")]);
+        let id = test_job_id();
+        let job = Job::start(&id).unwrap();
+        let copy = VaultSevenZipSection::default();
+        pack_into(&root, Cursor::new(Vec::new()), &copy, roomy(1), &job).unwrap();
+        let status = job_status(&id).unwrap();
+        assert_eq!(status.bytes_total, 600_004);
+        assert_eq!(status.bytes_done, 600_004);
+    }
+
+    #[test]
+    fn a_stop_ends_the_pack_and_its_decrypt_worker() {
+        let data = vec![9u8; 2 * 1024 * 1024];
+        let (_tmp, root) = closed_vault(&[("/a.bin", &data), ("/b.bin", &data)]);
+        let id = test_job_id();
+        let job = Job::start(&id).unwrap();
+        cancel_job(&id);
+        let copy = VaultSevenZipSection::default();
+        let packed = pack_into(&root, Cursor::new(Vec::new()), &copy, roomy(1), &job);
+        assert!(matches!(job.settle(packed), Err(UprivError::JobCancelled)));
     }
 }

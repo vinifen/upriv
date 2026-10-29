@@ -93,15 +93,15 @@ describe("createVaultChoosesKdf", () => {
       createVaultChoosesKdf({
         source: "import",
         importKind: "backup",
-        importFileName: "20260528T120000",
-        importFilePath: "vaults/cold-storage/backups/20260528T120000-abc.zip",
+        importFileName: "20260528120000-cold-storage.zip",
+        importFilePath: "vaults/cold-storage/backups/20260528120000-cold-storage.zip",
       }),
     ).toBe(false);
     expect(
       createVaultChoosesKdf({
         source: "import",
-        importFileName: "20260528T120000",
-        importFilePath: "vaults/cold-storage/backups/20260528T120000",
+        importFileName: "Notes.7z",
+        importFilePath: "vaults/cold-storage/backups/Notes.7z",
       }),
     ).toBe(true);
     expect(

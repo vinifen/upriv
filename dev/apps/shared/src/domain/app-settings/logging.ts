@@ -36,12 +36,9 @@ export function normalizeLogKeepLastEntries(keepLastEntries: number | undefined)
   return LOG_KEEP_LAST_DEFAULT;
 }
 
-/** Normalize `[logging].level` to a UI preset (`error` | `warn` | `info` | `debug`). */
+/** Read `[logging].level` (`error` | `warn` | `info` | `debug`, any case). Anything else is `info`. */
 export function normalizeLogLevel(level: string | undefined): LogLevelPreset {
   const value = (level ?? "info").trim().toLowerCase();
-  if (value === "error") return "error";
-  if (value === "warn" || value === "warning") return "warn";
-  if (value === "debug") return "debug";
-  if (value === "info") return "info";
+  if (value === "error" || value === "warn" || value === "debug") return value;
   return "info";
 }

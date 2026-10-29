@@ -3,6 +3,7 @@ import { desktopAppSettingsService } from "./services/appSettingsService";
 import { desktopBackupService } from "./services/backupService";
 import { desktopCreateVaultService } from "./services/createVaultService";
 import { desktopDataFolderService } from "./services/dataFolderService";
+import { desktopJobService } from "./services/jobService";
 import { desktopLogService } from "./services/logService";
 import { desktopVaultFileSystemService } from "./services/vaultFileSystemService";
 import { desktopVaultGroupService } from "./services/vaultGroupService";
@@ -23,6 +24,7 @@ export function createDesktopServices(): AppServices {
     filesystem: desktopVaultFileSystemService,
     backups: desktopBackupService,
     dataFolder: desktopDataFolderService,
+    jobs: desktopJobService,
     createVault: desktopCreateVaultService,
     vaultSecurity: desktopVaultSecurityService,
   };

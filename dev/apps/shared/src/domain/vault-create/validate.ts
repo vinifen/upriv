@@ -56,13 +56,6 @@ export function isLifecyclePasswordPresent(password: string): boolean {
   return password.trim().length > 0;
 }
 
-export function vaultIdForCreateDraft(
-  draft: CreateVaultDraft,
-  existingIds: readonly string[],
-): string {
-  return displayNameToVaultId(draft.displayName, existingIds);
-}
-
 function importSourcePathAccepted(draft: CreateVaultDraft): boolean {
   if (!draft.importFileName.trim()) return false;
   if (draft.importShape === "directory") {
@@ -154,6 +147,11 @@ export function validateCreateVaultStep(
       const root = typeof vaultRootPath === "string" ? vaultRootPath.trim() : "";
       for (const system of ["linux", "windows", "macos", "android", "ios"] as const) {
         const raw = draft.mount[system].path.trim();
+        // Another folder chosen and its path still to enter.
+        if (!raw && draft.mount[system].place === "custom") {
+          errors.push("mount_path_empty");
+          return errors;
+        }
         if (!raw) continue;
         const issue = validateWorkspaceGlobalPath(raw, root || null);
         if (issue === "not_absolute") errors.push("mount_path_not_absolute");

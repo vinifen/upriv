@@ -121,7 +121,6 @@ export function patchStorageMode(
 }
 
 export type WipePattern = "random" | "zeros";
-export type SevenZipMethod = "lzma2";
 
 export interface VaultSectionConfig {
   id: string;
@@ -165,7 +164,6 @@ export interface VaultSettingsConfig {
     archive_mode: ArchiveMode;
     compression_level: number;
     solid: boolean;
-    method: SevenZipMethod;
   };
 }
 
@@ -175,7 +173,6 @@ export const DEFAULT_SEVEN_ZIP: VaultSettingsConfig["seven_zip"] = {
   archive_mode: "encrypt_only",
   compression_level: 0,
   solid: false,
-  method: "lzma2",
 };
 
 export function vaultSettingsEqual(a: VaultSettingsConfig, b: VaultSettingsConfig): boolean {

@@ -6,6 +6,7 @@ import { useTranslation } from "@/i18n";
 import {
   SUPPORTED_LOCALES,
   confirmNotesForReplacePolicy,
+  VAULT_ROOT_PATH_CHECK_DELAY_MS,
   diskFromDirStatus,
   sameVaultRootPath,
   vaultRootDiskProblemKey,
@@ -114,17 +115,21 @@ export function VaultRootRepairModal({
       setOtherDisk("needs_folder");
       return;
     }
+    // A typed path is checked once typing settles; it reads `checking` meanwhile.
     setOtherDisk("checking");
-    void vaultRoot
-      .inspectAtPath(path)
-      .then((result) => {
-        if (gen !== otherCheckGen.current) return;
-        setOtherDisk(diskFromDirStatus(result.status));
-      })
-      .catch(() => {
-        if (gen !== otherCheckGen.current) return;
-        setOtherDisk("unreadable");
-      });
+    const timer = window.setTimeout(() => {
+      void vaultRoot
+        .inspectAtPath(path)
+        .then((result) => {
+          if (gen !== otherCheckGen.current) return;
+          setOtherDisk(diskFromDirStatus(result.status));
+        })
+        .catch(() => {
+          if (gen !== otherCheckGen.current) return;
+          setOtherDisk("unreadable");
+        });
+    }, VAULT_ROOT_PATH_CHECK_DELAY_MS);
+    return () => window.clearTimeout(timer);
   }, [open, policy, otherPath, vaultRoot]);
 
   const otherGate = vaultRootGateFromState({
@@ -442,7 +447,9 @@ export function VaultRootRepairModal({
             groupName={policyGroup}
             value="choose_other"
             checked={policy === "choose_other"}
-            attention={policy === "choose_other" && otherGate.blocksPrimary}
+            attention={
+              policy === "choose_other" && otherGate.blocksPrimary && otherDisk !== "checking"
+            }
             title={t("modal.vault_root_repair.option_choose_other")}
             description={t("modal.vault_root_repair.choose_other_hint")}
             onSelect={() => {
@@ -455,8 +462,13 @@ export function VaultRootRepairModal({
                   <PathField
                     className="sm:flex-1"
                     value={otherPath}
-                    readOnly
-                    placeholder={t("modal.vault_root_setup.path_placeholder")}
+                    readOnly={busy || policy !== "choose_other"}
+                    placeholder={t("modal.folder_field.placeholder")}
+                    onChange={(typed) => {
+                      setOtherReplacePolicy(null);
+                      setOtherPath(typed);
+                      setError(null);
+                    }}
                   />
                   <Button
                     type="button"

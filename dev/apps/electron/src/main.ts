@@ -18,6 +18,7 @@ import {
   statDroppedImportPaths,
 } from "./droppedImport";
 import { ELECTRON_IPC_METHODS } from "./ipcMethods";
+import { quitCopyForLocale } from "./quitCopy";
 import { retrievePortalTransferPaths } from "./portalFileTransfer";
 import { isAbsoluteOsPath, revealOsPathInFileManager } from "./revealInFileManager";
 import { externalNavigationUrl } from "./externalNavigation";
@@ -73,32 +74,6 @@ let daemonStarting: Promise<DaemonConnection> | null = null;
 let stopEvents: (() => void) | null = null;
 let quitting = false;
 let quitPrompting = false;
-
-/** Keep in sync with `warning.vault_open_on_exit*` in shared locales. */
-const QUIT_COPY: Record<string, { message: string; confirm: string; now: string; cancel: string }> =
-  {
-    en: {
-      message:
-        "A vault is still open. Close it before exiting, or quit now and recover it next time?",
-      confirm: "Close and quit",
-      now: "Just close",
-      cancel: "Cancel",
-    },
-    "pt-BR": {
-      message:
-        "Um cofre ainda está aberto. Fechar antes de sair, ou sair agora e recuperar na próxima vez?",
-      confirm: "Fechar e sair",
-      now: "Só sair",
-      cancel: "Cancelar",
-    },
-    es: {
-      message:
-        "Una bóveda sigue abierta. ¿Cerrarla antes de salir, o salir ahora y recuperarla la próxima vez?",
-      confirm: "Cerrar y salir",
-      now: "Solo salir",
-      cancel: "Cancelar",
-    },
-  };
 
 type QuitChoice = "flush" | "now" | "cancel";
 
@@ -261,15 +236,6 @@ async function showQuitClosing(): Promise<void> {
   await new Promise<void>((resolve) => {
     setTimeout(resolve, 200);
   });
-}
-
-function quitCopyForLocale(locale: string): {
-  message: string;
-  confirm: string;
-  now: string;
-  cancel: string;
-} {
-  return QUIT_COPY[locale] ?? QUIT_COPY.en;
 }
 
 async function readUiLocale(): Promise<string> {

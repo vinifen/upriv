@@ -14,6 +14,7 @@ import { PolicyRadioOption, SettingsField, SettingsFormGrid } from "@/components
 import { useTranslation } from "@/i18n";
 import {
   VAULT_ROOT_ALIAS_FILE,
+  VAULT_ROOT_PATH_CHECK_DELAY_MS,
   diskFromDirStatus,
   isVaultRootDraftDirty,
   vaultRootDiskProblemKey,
@@ -48,10 +49,35 @@ interface VaultRootLocationSectionProps {
   controlsDisabled?: boolean;
   /** Bump to re-run inspect without changing mode/path (e.g. after setup RPC incomplete). */
   inspectNonce?: number;
+  /** A further radio in this group, after the two folder options. */
+  extraOption?: VaultRootExtraOption;
+}
+
+/**
+ * A choice beside the two folders, such as Data folder → Export a copy. While it
+ * is checked neither folder option is. Choosing it drops a folder lookup still
+ * on its way, so a late answer cannot pull the choice back; choosing a folder
+ * option again returns to it.
+ */
+export interface VaultRootExtraOption {
+  /** Title between the folder options and this one, since it is a different kind of choice. */
+  heading: string;
+  /** Subtitle under `heading`, like the hint under the folder options' label. */
+  hint: string;
+  value: string;
+  checked: boolean;
+  /** Chosen and still missing a step its footer asks for. */
+  attention: boolean;
+  title: string;
+  description: string;
+  disabled: boolean;
+  footer: ReactNode;
+  onSelect: () => void;
 }
 
 /**
  * Shared vault-root mode/path picker (Data folder Apply, Setup Continue, …).
+ * Outside first-run Setup the folder in use carries an In use badge.
  */
 export function VaultRootLocationSection({
   config,
@@ -64,6 +90,7 @@ export function VaultRootLocationSection({
   customRootNotice,
   controlsDisabled = false,
   inspectNonce = 0,
+  extraOption,
 }: VaultRootLocationSectionProps) {
   const { t } = useTranslation();
   const { showError } = useErrorToast();
@@ -236,17 +263,21 @@ export function VaultRootLocationSection({
       return;
     }
 
+    // A typed path is checked once typing settles; it reads `checking` meanwhile.
     noteDisk("checking");
-    void vaultRootService
-      .inspectAtPath(path)
-      .then((result) => {
-        if (gen !== checkGen.current) return;
-        noteDisk(diskFromDirStatus(result.status));
-      })
-      .catch(() => {
-        if (gen !== checkGen.current) return;
-        noteDisk("unreadable");
-      });
+    const timer = window.setTimeout(() => {
+      void vaultRootService
+        .inspectAtPath(path)
+        .then((result) => {
+          if (gen !== checkGen.current) return;
+          noteDisk(diskFromDirStatus(result.status));
+        })
+        .catch(() => {
+          if (gen !== checkGen.current) return;
+          noteDisk("unreadable");
+        });
+    }, VAULT_ROOT_PATH_CHECK_DELAY_MS);
+    return () => window.clearTimeout(timer);
   }, [
     config.vault_root_mode,
     config.upriv_root_path,
@@ -296,6 +327,16 @@ export function VaultRootLocationSection({
   const showDefaultRootExtras = useDefaultRoot && dirty;
   const showCustomExtras = !useDefaultRoot;
   const customFieldPath = config.upriv_root_path.trim() || rememberedCustomPath;
+  const extraChecked = extraOption?.checked ?? false;
+  const defaultChecked = useDefaultRoot && !extraChecked;
+  const customChecked = !useDefaultRoot && !extraChecked;
+  // First-run Setup has no folder in use yet.
+  const defaultInUse = !forceDirty && savedVaultRootMode === "default_root";
+  const customInUse =
+    !forceDirty &&
+    savedVaultRootMode === "custom_root" &&
+    savedRootPath.trim() !== "" &&
+    customFieldPath.trim() === savedRootPath.trim();
 
   const retryRecall = () => {
     const stashed = draftCustomPathRef.current.trim();
@@ -358,11 +399,11 @@ export function VaultRootLocationSection({
           <PolicyRadioOption
             groupName={rootModeGroup}
             value="default_root"
-            checked={useDefaultRoot}
-            attention={useDefaultRoot && vaultRootGate.blocksPrimary && visibleDisk !== "checking"}
+            checked={defaultChecked}
+            attention={defaultChecked && vaultRootGate.blocksPrimary && visibleDisk !== "checking"}
             title={t(defaultRootTitleKey)}
             description={t(defaultRootDescKey)}
-            badge="default"
+            badge={defaultInUse ? ["in-use", "default"] : "default"}
             disabled={controlsDisabled}
             onSelect={() => {
               if (controlsDisabled) return;
@@ -438,12 +479,13 @@ export function VaultRootLocationSection({
           <PolicyRadioOption
             groupName={rootModeGroup}
             value="custom_root"
-            checked={!useDefaultRoot}
-            attention={!useDefaultRoot && vaultRootGate.blocksPrimary && visibleDisk !== "checking"}
+            checked={customChecked}
+            attention={customChecked && vaultRootGate.blocksPrimary && visibleDisk !== "checking"}
             title={t("modal.app_settings.option.upriv_root.custom_root")}
             description={t("modal.app_settings.option.upriv_root.custom_root_desc", {
               file: VAULT_ROOT_ALIAS_FILE,
             })}
+            badge={customInUse ? "in-use" : undefined}
             disabled={controlsDisabled}
             onSelect={() => {
               if (controlsDisabled) return;
@@ -521,9 +563,23 @@ export function VaultRootLocationSection({
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-stretch">
                   <PathField
                     className="sm:flex-1"
-                    value={customFieldPath}
-                    readOnly
-                    placeholder={t("modal.app_settings.field.upriv_root_placeholder")}
+                    // Chosen: the draft path as typed, even empty. Not chosen: the one kept for later.
+                    value={customChecked ? config.upriv_root_path : customFieldPath}
+                    readOnly={!customChecked || controlsDisabled}
+                    placeholder={t("modal.folder_field.placeholder")}
+                    onChange={(typed) => {
+                      if (!customChecked || controlsDisabled) return;
+                      // A late remembered folder must not replace what is being typed.
+                      aliasLoadGen.current += 1;
+                      setCustomPathLoading(false);
+                      const kept = typed.trim();
+                      if (kept) {
+                        draftCustomPathRef.current = kept;
+                        setRememberedCustomPath(kept);
+                        setRecallError(false);
+                      }
+                      onChange({ vault_root_mode: "custom_root", upriv_root_path: typed });
+                    }}
                   />
                   <Button
                     type="button"
@@ -614,6 +670,33 @@ export function VaultRootLocationSection({
               </div>
             }
           />
+          {extraOption ? (
+            <>
+              <div className="space-y-1.5 pt-2">
+                <h3 className="text-sm font-medium text-on-surface">{extraOption.heading}</h3>
+                <p className="text-xs leading-relaxed text-on-surface-variant">
+                  {extraOption.hint}
+                </p>
+              </div>
+              <PolicyRadioOption
+                groupName={rootModeGroup}
+                value={extraOption.value}
+                checked={extraOption.checked}
+                attention={extraOption.attention}
+                title={extraOption.title}
+                description={extraOption.description}
+                disabled={extraOption.disabled}
+                onSelect={() => {
+                  if (extraOption.disabled) return;
+                  aliasLoadGen.current += 1;
+                  setCustomPathLoading(false);
+                  setReplacePolicy(null);
+                  extraOption.onSelect();
+                }}
+                footer={extraOption.footer}
+              />
+            </>
+          ) : null}
         </div>
       </SettingsField>
     </SettingsFormGrid>

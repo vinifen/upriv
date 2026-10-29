@@ -3,7 +3,11 @@ import { requireVaultConfigEditLockedI18nKey, type ChangePasswordFieldsState } f
 import { useTranslation } from "@/i18n";
 import { createVaultErrorI18nKey } from "@/lib/errorMessages";
 import { PasswordInput } from "@/components/ui";
-import { settingsControlClass, SettingsField } from "./vaultSettingsForm";
+import {
+  settingsControlClass,
+  settingsInvalidControlClass,
+  SettingsField,
+} from "./vaultSettingsForm";
 
 interface VaultChangePasswordFieldsProps {
   fields: ChangePasswordFieldsState;
@@ -17,9 +21,6 @@ interface VaultChangePasswordFieldsProps {
   /** This change is already running. */
   busy?: boolean;
 }
-
-const invalidPasswordClass =
-  "aria-invalid:ring-2 aria-invalid:ring-on-error-container aria-invalid:focus:ring-on-error-container";
 
 export function VaultChangePasswordFields({
   fields,
@@ -58,7 +59,7 @@ export function VaultChangePasswordFields({
           aria-errormessage={passwordFieldError ? `${currentId}-error` : undefined}
           onChange={(e) => onChange({ currentPassword: e.target.value })}
           autoComplete="current-password"
-          inputClassName={[settingsControlClass, invalidPasswordClass].join(" ")}
+          inputClassName={[settingsControlClass, settingsInvalidControlClass].join(" ")}
         />
         {passwordFieldError ? (
           <p id={`${currentId}-error`} role="alert" className="text-xs text-on-error-container">

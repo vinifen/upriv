@@ -1,11 +1,16 @@
 import { type ReactNode } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
-import { mixHex, POLICY_RADIO_BADGE_I18N, type PolicyRadioBadge } from "@upriv/shared";
+import {
+  mixHex,
+  POLICY_RADIO_BADGE_I18N,
+  policyRadioBadgeList,
+  type PolicyRadioBadge,
+} from "@upriv/shared";
 import { useTranslation } from "@/i18n";
 import { useTheme, type ThemeColors } from "@/theme";
 import { colorAlpha, radii, spacing } from "@/theme/tokens";
 
-type Tone = "default" | "less-secure" | "insecure";
+type Tone = "default" | "less-secure";
 
 interface PolicyRadioOptionProps {
   value: string;
@@ -17,14 +22,19 @@ interface PolicyRadioOptionProps {
   disabled?: boolean;
   /** Gray, still selectable. The file manager folder inside can stay locked. */
   muted?: boolean;
-  badge?: PolicyRadioBadge;
+  /** One badge, or several shown in this order. */
+  badge?: PolicyRadioBadge | readonly PolicyRadioBadge[];
   tone?: Tone;
   /**
    * Yellow/amber border while this option still needs follow-up config
    * (e.g. vault-root incomplete policy). Overrides the accent border when checked.
    */
   attention?: boolean;
-  /** Extra controls under the description — always visible; inactive until this option is selected. */
+  /**
+   * The option's own controls under the description. Pass them whether or not
+   * the option is chosen: they always show, inactive until it is, and a tap
+   * on them chooses the option.
+   */
   footer?: ReactNode;
   onSelect: () => void;
   accessibilityLabel?: string;
@@ -36,18 +46,15 @@ function policyRadioBadgeColors(
 ): { backgroundColor: string; color: string } {
   switch (badge) {
     case "more-secure":
+    case "in-use":
       return {
         backgroundColor: colorAlpha(colors.vaultStatusOpen, 0.2),
         color: colors.vaultStatusOpen,
       };
     case "less-secure":
+    case "not-recommended":
       return {
         backgroundColor: colorAlpha(colors.onErrorContainer, 0.15),
-        color: colors.onErrorContainer,
-      };
-    case "insecure":
-      return {
-        backgroundColor: colorAlpha(colors.onErrorContainer, 0.3),
         color: colors.onErrorContainer,
       };
     case "recommended":
@@ -85,7 +92,6 @@ export function PolicyRadioOption({
   const { colors, typography } = useTheme();
 
   const isLessSecure = tone === "less-secure";
-  const isInsecure = tone === "insecure";
 
   const borderColor = checked
     ? attention
@@ -93,14 +99,9 @@ export function PolicyRadioOption({
       : colors.accent
     : colors.outlineVariant;
 
-  const cardBg = isInsecure
-    ? mixHex(colors.surfaceContainer, colors.errorContainer, 0.18)
-    : isLessSecure
-      ? mixHex(colors.surfaceContainer, colors.errorContainer, 0.07)
-      : colors.surfaceContainer;
-
-  const badgeLabel = badge ? t(POLICY_RADIO_BADGE_I18N[badge]) : null;
-  const badgeTone = badge ? policyRadioBadgeColors(badge, colors) : null;
+  const cardBg = isLessSecure
+    ? mixHex(colors.surfaceContainer, colors.errorContainer, 0.07)
+    : colors.surfaceContainer;
 
   return (
     <View style={styles.wrap}>
@@ -149,13 +150,19 @@ export function PolicyRadioOption({
                 >
                   {title}
                 </Text>
-                {badgeLabel && badgeTone ? (
-                  <View style={[styles.badge, { backgroundColor: badgeTone.backgroundColor }]}>
-                    <Text style={[styles.badgeText, { color: badgeTone.color }]}>
-                      {badgeLabel.toLocaleUpperCase()}
-                    </Text>
-                  </View>
-                ) : null}
+                {policyRadioBadgeList(badge).map((item) => {
+                  const tone = policyRadioBadgeColors(item, colors);
+                  return (
+                    <View
+                      key={item}
+                      style={[styles.badge, { backgroundColor: tone.backgroundColor }]}
+                    >
+                      <Text style={[styles.badgeText, { color: tone.color }]}>
+                        {t(POLICY_RADIO_BADGE_I18N[item]).toLocaleUpperCase()}
+                      </Text>
+                    </View>
+                  );
+                })}
               </View>
               {description ? (
                 <Text

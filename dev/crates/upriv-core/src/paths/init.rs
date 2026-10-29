@@ -4,7 +4,7 @@
 use crate::host_fs::HostFsQuery;
 use std::path::{Path, PathBuf};
 
-use crate::config::{serialize_settings_toml_str, AppSettings};
+use crate::config::{parse_settings_toml_str, serialize_settings_toml_str, AppSettings};
 use crate::error::{Result, UprivError};
 use crate::paths::{VaultRoot, VAULT_ROOT_SETTINGS_REL};
 use crate::time::utc_filename_stamp;
@@ -41,18 +41,7 @@ fn initial_settings_toml_for(prefs: Option<&VaultRootBootstrapPrefs>) -> Result<
         .to_string();
     let mut settings = AppSettings::default();
     settings.ui.locale = effective_locale;
-    serialize_settings_toml_str(&settings, None).map(String::into_bytes)
-}
-
-/// Minimal TOML shape required for a usable vault-root marker.
-#[derive(Debug, serde::Deserialize)]
-struct SettingsTomlRequired {
-    package: PackageTomlRequired,
-}
-
-#[derive(Debug, serde::Deserialize)]
-struct PackageTomlRequired {
-    vaults_dir: String,
+    serialize_settings_toml_str(&settings).map(String::into_bytes)
 }
 
 /// Kind of `path` after following a symlink, `None` when it does not exist.
@@ -117,19 +106,17 @@ pub fn validate_existing_vault_root(dir: impl AsRef<Path>) -> Result<()> {
         });
     }
 
-    // Parse required keys — do not use substring checks (comments/tokens can fake them).
-    let parsed: SettingsTomlRequired =
-        toml::from_str(trimmed).map_err(|error| UprivError::VaultRootIncomplete {
-            path: settings.clone(),
-            detail: format!(".upriv/settings.toml is not valid TOML: {error}"),
-        })?;
-    if parsed.package.vaults_dir.trim().is_empty() {
-        return Err(UprivError::VaultRootIncomplete {
-            path: settings,
-            detail: ".upriv/settings.toml [package].vaults_dir is empty".into(),
-        });
+    // The same parse as a settings load: `[package] version = 1` and a readable schema.
+    match parse_settings_toml_str(trimmed) {
+        Ok(_) => Ok(()),
+        Err(UprivError::VaultRootIncomplete { detail, .. }) => {
+            Err(UprivError::VaultRootIncomplete {
+                path: settings,
+                detail,
+            })
+        }
+        Err(error) => Err(error),
     }
-    Ok(())
 }
 
 fn ensure_standard_dirs(dir: &Path) -> Result<()> {
@@ -478,8 +465,7 @@ mod tests {
         let root = initialize_vault_root(dir.path()).unwrap();
         assert!(is_vault_root_marker(root.root()));
         assert!(root.vaults_dir().host_is_dir());
-        // Suggested default parent only — not live mount resolution.
-        assert!(!crate::paths::suggested_default_workspace_path(root.root()).host_is_dir());
+        assert!(!root.root().join("workspace").host_is_dir());
         assert!(root.logs_dir().host_is_dir());
         let settings = crate::host_fs::read_to_string(root.settings_path()).unwrap();
         assert!(
@@ -493,15 +479,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let settings = dir.path().join(".upriv/settings.toml");
         crate::host_fs::create_dir_all(settings.parent().unwrap()).unwrap();
-        crate::host_fs::write(
-            &settings,
-            "[package]\nversion = 1\nvaults_dir = \".upriv/vaults\"\n",
-        )
-        .unwrap();
+        crate::host_fs::write(&settings, "[package]\nversion = 1\n[ui]\nlocale = \"es\"\n")
+            .unwrap();
         let _ = initialize_vault_root(dir.path()).unwrap();
         let raw = crate::host_fs::read_to_string(&settings).unwrap();
-        assert!(raw.contains("vaults_dir"));
-        assert!(!raw.contains("label = \"Upriv\""));
+        assert_eq!(raw, "[package]\nversion = 1\n[ui]\nlocale = \"es\"\n");
     }
 
     #[test]
@@ -545,7 +527,6 @@ mod tests {
             r#"
 [package]
 version =a broken
-vaults_dir = ".upriv/vaults"
 "#,
         )
         .unwrap();
@@ -565,7 +546,7 @@ vaults_dir = ".upriv/vaults"
         crate::host_fs::create_dir_all(settings.parent().unwrap()).unwrap();
         crate::host_fs::write(
             &settings,
-            "# [package]\n# vaults_dir = \".upriv/vaults\"\n[ui]\nlocale = \"en\"\n",
+            "# [package]\n# version = 1\n[ui]\nlocale = \"en\"\n",
         )
         .unwrap();
         let err = validate_existing_vault_root(dir.path()).unwrap_err();

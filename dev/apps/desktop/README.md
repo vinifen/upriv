@@ -65,7 +65,7 @@ src/
 │       └── help/            # Help modal + search
 │
 ├── components/
-│   ├── ui/                  # Reusable primitives (Button, Modal, StatusDot, …)
+│   ├── ui/                  # Reusable primitives (Button, Modal, Switch, …)
 │   ├── icons/               # Icon component + SVG assets
 │   ├── brand/               # UprivWordmark (theme prop from feature layer)
 │   ├── settings/            # Shared settings form kit (sections, fields, password panel)
@@ -75,7 +75,7 @@ src/
 │
 ├── i18n/                    # Locale loading, context, `useTranslation`
 ├── theme/                   # Design tokens, vault status → color/i18n mapping
-├── lib/                     # shell bridge (invoke, rpc, commands) + utilities
+├── lib/                     # shell bridge (invoke, rpc) + utilities
 ├── hooks/                   # Shared React hooks
 └── styles/                  # globals.css, CSS variables, fonts
 ```
@@ -86,7 +86,7 @@ src/
 | ------------------- | ------------------------------------------------------------------------------------------------------------------ |
 | UI copy             | `dev/apps/shared/locales/*.json` via `useTranslation()` — never hardcode sentences                                 |
 | Vault status colors | `theme/vault-status.ts` + CSS vars from `@upriv/shared` (`applyDocumentTheme`)                                     |
-| Desktop RPC         | `lib/commands.ts` — names match `crates/upriv-daemon`                                                              |
+| Desktop RPC         | `lib/rpc.ts` — `CORE_RPC_COMMANDS` and `SHELL_ONLY_RPC_COMMANDS` from `@upriv/shared`                              |
 | Domain types        | `@upriv/shared` (`shared/`) — `VaultRow`, settings, list sort/view                                                 |
 | Service layer       | `platform/services/` — factory + React context; live adapters in `platform/desktop/`                               |
 | App layout          | `AppShell` + `VaultListHeader` on the vault list home screen                                                       |
@@ -108,22 +108,23 @@ Each feature folder under `features/vaults/*` and `features/system/*` has **one*
 3. **`hooks/` per feature** — custom hooks live in `<feature>/hooks/` (functions `use*` only). Types use `<feature>Types.ts` or `vaultListModalsTypes.ts` at the feature root, not inside `hooks/`. No `hooks/index.ts`.
 4. **No umbrella index** — there is no `features/vaults/index.ts` or `features/system/index.ts`. Each sub-feature (`list/`, `lifecycle/`, `settings/`, …) owns its boundary.
 5. **Domain types from `@upriv/shared`** — import `VaultListItem`, settings helpers, sort types, etc. from `@upriv/shared`, not re-exported through feature indexes. Feature indexes expose **UI, hooks, and desktop-only adapters** consumed elsewhere.
-6. **Prefer the barrel over deep paths** — outside code imports `@/features/vaults/list`, not `@/features/vaults/list/exportVaultPackage`. If something is used outside, add it to that folder’s `index.ts` and import from there.
+6. **Prefer the barrel over deep paths** — outside code imports `@/features/vaults/list`, not `@/features/vaults/list/VaultListPage`. If something is used outside, add it to that folder’s `index.ts` and import from there.
 
 **Current public APIs** (maintain this table when adding exports)
 
-| Module                 | Import path                      | Exports                                                                                                                              |
-| ---------------------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `vaults/list/`         | `@/features/vaults/list`         | `VaultListPage`, `exportVaultPackage`, `VaultListLifecycleModals`                                                                    |
-| `vaults/lifecycle/`    | `@/features/vaults/lifecycle`    | `VaultLifecycleLayer`, `useVaultLifecycleActions`, `VaultLifecycleRequest`                                                           |
-| `vaults/settings/`     | `@/features/vaults/settings`     | `VaultSettingsModal`                                                                                                                 |
-| `vaults/create/`       | `@/features/vaults/create`       | `CreateVaultModal`                                                                                                                   |
-| `vaults/backups/`      | `@/features/vaults/backups`      | `VaultBackupsModal`                                                                                                                  |
-| `vaults/file-manager/` | `@/features/vaults/file-manager` | `FileManagerProvider`, `useFileManager`, `FileManagerLayer`                                                                          |
-| `system/settings/`     | `@/features/system/settings`     | `AppSettingsModal`, `AppSettingsProvider`, `useAppSettingsContext`, `VaultRootGate`, `VaultRootDataFolderModal`, bulk-export helpers |
-| `system/refresh/`      | `@/features/system/refresh`      | `useAppRefresh`                                                                                                                      |
-| `system/logs/`         | `@/features/system/logs`         | `LogsModal`                                                                                                                          |
-| `system/help/`         | `@/features/system/help`         | `HelpModal`                                                                                                                          |
+| Module                       | Import path                            | Exports                                                                                                                              |
+| ---------------------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `vaults/list/`               | `@/features/vaults/list`               | `VaultListPage`, `VaultListLifecycleModals`                                                                                          |
+| `vaults/lifecycle/`          | `@/features/vaults/lifecycle`          | `VaultLifecycleLayer`, `useVaultLifecycleActions`, `VaultLifecycleRequest`                                                           |
+| `vaults/settings/`           | `@/features/vaults/settings`           | `VaultSettingsModal`                                                                                                                 |
+| `vaults/create/`             | `@/features/vaults/create`             | `CreateVaultModal`                                                                                                                   |
+| `vaults/backups/`            | `@/features/vaults/backups`            | `VaultBackupsModal`                                                                                                                  |
+| `vaults/file-manager/`       | `@/features/vaults/file-manager`       | `FileManagerProvider`, `useFileManager`, `FileManagerLayer`                                                                          |
+| `system/settings/`           | `@/features/system/settings`           | `AppSettingsModal`, `AppSettingsProvider`, `useAppSettingsContext`, `VaultRootGate`, `VaultRootDataFolderModal`, bulk-export helpers |
+| `system/data-folder-export/` | `@/features/system/data-folder-export` | `DataFolderExportPanel`, `DataFolderExportFooter`, `useDataFolderExportDestination`, `DataFolderExportControls`                      |
+| `system/refresh/`            | `@/features/system/refresh`            | `useAppRefresh`                                                                                                                      |
+| `system/logs/`               | `@/features/system/logs`               | `LogsModal`                                                                                                                          |
+| `system/help/`               | `@/features/system/help`               | `HelpModal`                                                                                                                          |
 
 **When adding code**
 

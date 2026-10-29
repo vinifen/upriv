@@ -171,4 +171,32 @@ mod tests {
         let err = seal_index(&key, b"pt", b"").unwrap_err();
         assert!(matches!(err, UprivError::VaultStoreInvalid { .. }));
     }
+
+    /// AES-NI, ARMv8 AES (`aes_armv8`), and the software AES must seal the
+    /// same bytes, or an index written on one CPU would not open on another.
+    /// Recorded with AES-NI and with `--cfg aes_force_soft`.
+    #[test]
+    fn aes_siv_seals_the_same_bytes_on_every_aes_backend() {
+        let cipher = Aes256SivAead::new(GenericArray::from_slice(&[0x42u8; INDEX_KEY_LEN]));
+        let nonce = GenericArray::from_slice(&[0x24u8; AES_SIV_NONCE_LEN]);
+        let sealed = cipher
+            .encrypt(
+                nonce,
+                Payload {
+                    msg: &[0x5au8; 100],
+                    aad: b"upriv-index",
+                },
+            )
+            .unwrap();
+        let hex: String = sealed.iter().map(|byte| format!("{byte:02x}")).collect();
+        assert_eq!(
+            hex,
+            concat!(
+                "68b09ff13be19ad393750a93e249bcf7749ea29168014b64331e5a689c702db8",
+                "f1b3eba3218b961436969715f30a0287bc9f713c599f3752e4af4f5a542e1b32",
+                "c035c69b445ccdee58a2f849bc39a679e8b9e70959c8adf7065533fe3bf61381",
+                "f9a36ed5a1a96e41aa8999ebcafc574804897f78",
+            )
+        );
+    }
 }

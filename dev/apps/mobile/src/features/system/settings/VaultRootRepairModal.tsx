@@ -444,7 +444,9 @@ export function VaultRootRepairModal({
           <PolicyRadioOption
             value="choose_other"
             checked={policy === "choose_other"}
-            attention={policy === "choose_other" && otherGate.blocksPrimary}
+            attention={
+              policy === "choose_other" && otherGate.blocksPrimary && otherDisk !== "checking"
+            }
             title={t("modal.vault_root_repair.option_choose_other")}
             description={t("modal.vault_root_repair.choose_other_hint")}
             onSelect={() => {

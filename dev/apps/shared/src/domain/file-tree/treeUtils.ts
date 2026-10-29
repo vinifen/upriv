@@ -22,8 +22,3 @@ export function findNode(root: FileTreeNode, path: string): FileTreeNode | null 
   }
   return current;
 }
-
-export function isFolderPath(root: FileTreeNode, path: string): boolean {
-  const node = findNode(root, path);
-  return node?.type === "folder";
-}

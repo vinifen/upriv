@@ -1,6 +1,7 @@
 import type { I18nKey } from "../../i18n/catalog";
 import { isRpcError } from "../core-rpc/errors";
 import { dataFolderExportErrorI18nKey, isDataFolderExportErrorCode } from "../data-folder-export";
+import { isJobErrorCode, jobErrorI18nKey } from "../jobs";
 import { PLAIN_OPEN_CANCELLED } from "../vault-plain";
 import { isVaultPipelineError } from "../vault-lifecycle/errors/codes";
 import { vaultPipelineErrorI18nKey } from "../vault-lifecycle/errors/messages";
@@ -38,6 +39,7 @@ export function errorDisplayI18nKey(error: unknown): I18nKey | null {
   if (isRpcError(error) && isDataFolderExportErrorCode(error.code)) {
     return dataFolderExportErrorI18nKey(error.code);
   }
+  if (isRpcError(error) && isJobErrorCode(error.code)) return jobErrorI18nKey(error.code);
   if (isRpcError(error) && error.code === VAULT_ROOT_ERROR_CODES.IO_ERROR) {
     return vaultRootErrorI18nKey(VAULT_ROOT_ERROR_CODES.IO_ERROR);
   }

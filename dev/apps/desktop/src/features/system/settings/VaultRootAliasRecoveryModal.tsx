@@ -8,6 +8,7 @@ import {
   VAULT_ROOT_ALIAS_FILE,
   VAULT_ROOT_ERROR_CODES,
   RpcError,
+  VAULT_ROOT_PATH_CHECK_DELAY_MS,
   diskFromDirStatus,
   isRpcError,
   sameVaultRootPath,
@@ -126,17 +127,21 @@ export function VaultRootAliasRecoveryModal({
       setCustomDisk("needs_folder");
       return;
     }
+    // A typed path is checked once typing settles; it reads `checking` meanwhile.
     setCustomDisk("checking");
-    void vaultRoot
-      .inspectAtPath(path)
-      .then((result) => {
-        if (gen !== customCheckGen.current) return;
-        setCustomDisk(diskFromDirStatus(result.status));
-      })
-      .catch(() => {
-        if (gen !== customCheckGen.current) return;
-        setCustomDisk("unreadable");
-      });
+    const timer = window.setTimeout(() => {
+      void vaultRoot
+        .inspectAtPath(path)
+        .then((result) => {
+          if (gen !== customCheckGen.current) return;
+          setCustomDisk(diskFromDirStatus(result.status));
+        })
+        .catch(() => {
+          if (gen !== customCheckGen.current) return;
+          setCustomDisk("unreadable");
+        });
+    }, VAULT_ROOT_PATH_CHECK_DELAY_MS);
+    return () => window.clearTimeout(timer);
   }, [open, mode, pathInput, vaultRoot]);
 
   // Changing the draft dismisses footer confirm (two-step Continue pattern).
@@ -333,6 +338,11 @@ export function VaultRootAliasRecoveryModal({
   }, [blocked, busy, confirmOpen]);
 
   const customProblemKey = vaultRootDiskProblemKey(customDisk);
+  // Chosen and still missing a usable folder (not while a check runs), as in Data folder.
+  const customNeedsStep =
+    mode === "custom_root" &&
+    customDisk !== "checking" &&
+    (!pathInput.trim() || customDisk === "needs_folder" || customProblemKey !== null);
 
   return (
     <Modal
@@ -423,6 +433,7 @@ export function VaultRootAliasRecoveryModal({
             groupName={rootModeGroup}
             value="custom_root"
             checked={mode === "custom_root"}
+            attention={customNeedsStep}
             title={t("modal.app_settings.option.upriv_root.custom_root")}
             description={t("modal.app_settings.option.upriv_root.custom_root_desc", {
               file: VAULT_ROOT_ALIAS_FILE,
@@ -440,9 +451,13 @@ export function VaultRootAliasRecoveryModal({
                   <PathField
                     className="sm:flex-1"
                     value={pathInput}
-                    readOnly
+                    readOnly={busy || mode !== "custom_root"}
                     invalid={Boolean(error)}
-                    placeholder={t("modal.vault_root_setup.path_placeholder")}
+                    placeholder={t("modal.folder_field.placeholder")}
+                    onChange={(typed) => {
+                      setPathInput(typed);
+                      setError(null);
+                    }}
                   />
                   <Button
                     type="button"

@@ -327,14 +327,6 @@ export function isVaultDisplayStatusQuiet(status: VaultDisplayStatus): boolean {
   );
 }
 
-/** True when this vault has no open session and no open/close in flight. Recovery OK. */
-export function isVaultQuiet(row: VaultRow, pipeline: VaultPipelineListStatus = {}): boolean {
-  const status = resolveVaultListStatus(row, pipeline);
-  // A queued close is still an open session. Quiet edits must wait until it finishes.
-  if (status === "queued" && resolveVaultDisplayStatus(row) === "open") return false;
-  return isVaultDisplayStatusQuiet(status);
-}
-
 /** True only when the vault is not open and no open/close/create is in flight. */
 export function isVaultListClosed(row: VaultRow, pipeline: VaultPipelineListStatus = {}): boolean {
   return resolveVaultListStatus(row, pipeline) === "closed";

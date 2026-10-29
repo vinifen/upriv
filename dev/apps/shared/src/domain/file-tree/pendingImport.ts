@@ -71,11 +71,6 @@ function childrenAt(tree: FileTreeNode | undefined, parentPath: string): FileTre
   return findNode(tree, parentPath)?.children ?? [];
 }
 
-export type ImportPlanContext = {
-  relativePaths?: readonly string[];
-  tree?: FileTreeNode;
-};
-
 type ImportPlan = {
   entries: PendingImportEntry[];
   filePaths: (string | null)[];
@@ -185,18 +180,6 @@ export function pendingEntriesFromRelativePaths(
   tree?: FileTreeNode,
 ): PendingImportEntry[] {
   return planPendingImport(parentPath, relativePaths, sessionId, tree).entries;
-}
-
-export function plannedImportPath(
-  parentPath: string,
-  relativePath: string,
-  context?: ImportPlanContext,
-): string | null {
-  const relatives = context?.relativePaths ?? [relativePath];
-  const index = relatives.indexOf(relativePath);
-  if (index < 0) return null;
-  const planned = planPendingImport(parentPath, relatives, 0, context?.tree).filePaths[index];
-  return planned ?? null;
 }
 
 /** One plan for the whole batch. Per-file replanning walked every path again. */

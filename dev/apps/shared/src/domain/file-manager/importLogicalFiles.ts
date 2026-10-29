@@ -1,4 +1,3 @@
-import type { VaultWorkspaceAction } from "./workspaceReducer";
 import { foldersToExpandOnImport, resolveImportDestination } from "../file-tree/importPaths";
 import { joinPath } from "../file-tree/treeUtils";
 import { isInternalVaultFileName } from "./workspaceSnapshot";
@@ -351,35 +350,4 @@ async function importBinaryFilesAhead<T extends ImportLogicalFile>(
     readFailureName: null,
     writeFailureName,
   };
-}
-
-export function importBatchIsReadFailure(result: ImportLogicalResult): boolean {
-  return (
-    result.importedPaths.length === 0 &&
-    result.readFailureName !== null &&
-    result.skippedInvalid === 0 &&
-    result.skippedUnsupported === 0
-  );
-}
-
-export function importBatchIsWriteFailure(result: ImportLogicalResult): boolean {
-  return (
-    result.importedPaths.length === 0 &&
-    result.writeFailureName !== null &&
-    result.skippedInvalid === 0 &&
-    result.skippedUnsupported === 0
-  );
-}
-
-export async function applyImportedFilesToWorkspace(
-  result: ImportLogicalResult,
-  dispatch: (action: VaultWorkspaceAction) => void,
-  syncTree: () => void | Promise<void>,
-): Promise<void> {
-  if (result.importedPaths.length === 0) return;
-  await syncTree();
-  for (const path of result.foldersToExpand) {
-    dispatch({ type: "expand_folder", path });
-  }
-  dispatch({ type: "mark_session_created", paths: result.importedPaths });
 }

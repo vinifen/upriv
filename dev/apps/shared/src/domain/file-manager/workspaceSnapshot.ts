@@ -1,6 +1,6 @@
 import { findNode, type FileTreeNode } from "../file-tree";
 import type { MarkdownViewMode, VaultWorkspaceState } from "./workspaceTypes";
-import { createDefaultWorkspaceState, markdownViewMode } from "./workspaceTypes";
+import { markdownViewMode } from "./workspaceTypes";
 
 /** Logical file at vault root — encrypted in `store/` with the rest of the vault. */
 export const UPRIV_WORKSPACE_FILE_NAME = ".upriv-workspace.json";
@@ -8,7 +8,7 @@ export const UPRIV_WORKSPACE_PATH = `/${UPRIV_WORKSPACE_FILE_NAME}`;
 
 export const WORKSPACE_SNAPSHOT_FORMAT_VERSION = 1 as const;
 
-export interface WorkspaceSnapshotV1 {
+export interface WorkspaceSnapshot {
   format_version: typeof WORKSPACE_SNAPSHOT_FORMAT_VERSION;
   openTabs: string[];
   activeTabPath: string | null;
@@ -21,8 +21,6 @@ export interface WorkspaceSnapshotV1 {
   /** Missing or anything but `true` loads as hidden. */
   markdownOutlineOpen: boolean;
 }
-
-export type WorkspaceSnapshot = WorkspaceSnapshotV1;
 
 export function isInternalVaultFileName(name: string): boolean {
   return name === UPRIV_WORKSPACE_FILE_NAME;
@@ -172,21 +170,6 @@ export function workspaceSnapshotFromState(state: VaultWorkspaceState): Workspac
   };
 }
 
-/** Build a fresh workspace state from a sanitized snapshot (no drafts / session cues). */
-export function workspaceStateFromSnapshot(snapshot: WorkspaceSnapshot): VaultWorkspaceState {
-  const base = createDefaultWorkspaceState();
-  return {
-    ...base,
-    openTabs: snapshot.openTabs,
-    activeTabPath: snapshot.activeTabPath,
-    expandedPaths: snapshot.expandedPaths,
-    selectedPath: snapshot.selectedPath,
-    markdownView: markdownViewMode(snapshot.markdownView),
-    explorerCollapsed: snapshot.explorerCollapsed === true,
-    markdownOutlineOpen: snapshot.markdownOutlineOpen === true,
-  };
-}
-
 export function snapshotsEqual(a: WorkspaceSnapshot, b: WorkspaceSnapshot): boolean {
   return (
     a.format_version === b.format_version &&
@@ -251,21 +234,6 @@ export function workspaceSnapshotToHydrate(
   };
   if (snapshotsEqual(current, merged)) return null;
   return merged;
-}
-
-/**
- * Apply a loaded snapshot only when memory is still the cold-open file layout.
- * Host seed or user edits (open file / expand folder) must win — including when
- * a parent re-render recaptures “mount” as the already-edited layout.
- * Chrome toggled during the load (Read/Code, explorer, outline) does not count
- * as that edit.
- */
-export function shouldHydratePersistedWorkspace(
-  mount: WorkspaceSnapshot,
-  current: WorkspaceSnapshot,
-  loaded: WorkspaceSnapshot,
-): boolean {
-  return workspaceSnapshotToHydrate(mount, current, loaded) != null;
 }
 
 export function serializedLayoutSnapshot(

@@ -9,12 +9,7 @@ import {
   validateFileName,
 } from "../fileNameValidation";
 import { fileNameErrorI18nKey } from "../errorMessages";
-import {
-  vaultFileLanguageFromPath,
-  isVaultImportUnsupported,
-  isImportableBinaryPath,
-  imageDataUrlFromBase64,
-} from "../language";
+import { vaultFileLanguageFromPath, imageDataUrlFromBase64 } from "../language";
 import {
   foldersToExpandForImportBatch,
   foldersToExpandOnImport,
@@ -26,7 +21,6 @@ import {
   clampCanonicalTreeSplitPercent,
   persistableTreeSplitPercent,
   displayTreeSplitPercent,
-  percentFromPointer,
   percentFromDelta,
 } from "../treeSplit";
 
@@ -196,23 +190,15 @@ describe("vaultFileLanguageFromPath", () => {
     expect(vaultFileLanguageFromPath(path)).toBe(language);
   });
 
-  it("does not gate import on file type; editor language stays binary for opaque files", () => {
-    expect(isVaultImportUnsupported("doc.pdf")).toBe(false);
-    expect(isVaultImportUnsupported("clip.mp4")).toBe(false);
-    expect(isVaultImportUnsupported("clip.mkv")).toBe(false);
-    expect(isVaultImportUnsupported("pack.zip")).toBe(false);
-    expect(isVaultImportUnsupported("pack.7z")).toBe(false);
-    expect(isVaultImportUnsupported("song.mp3")).toBe(false);
-    expect(isVaultImportUnsupported("pic.png")).toBe(false);
-    expect(isImportableBinaryPath("doc.pdf")).toBe(true);
-    expect(isImportableBinaryPath("clip.mkv")).toBe(true);
-    expect(isImportableBinaryPath("note.txt")).toBe(false);
+  it("keeps the editor language binary for opaque files", () => {
+    expect(vaultFileLanguageFromPath("doc.pdf")).toBe("binary");
+    expect(vaultFileLanguageFromPath("clip.mkv")).toBe("binary");
+    expect(vaultFileLanguageFromPath("note.txt")).not.toBe("binary");
     expect(imageDataUrlFromBase64("AAAA", "pic.png")).toBe("data:image/png;base64,AAAA");
   });
 
   it("treats video MIME as binary even without an extension", () => {
-    expect(isImportableBinaryPath("clip", "video/x-matroska")).toBe(true);
-    expect(isVaultImportUnsupported("clip", "video/x-matroska")).toBe(false);
+    expect(vaultFileLanguageFromPath("clip", "video/x-matroska")).toBe("binary");
   });
 });
 
@@ -313,9 +299,9 @@ describe("foldersToExpandOnImport", () => {
 });
 
 describe("tree split canonical ↔ visual mapping", () => {
-  it("stores canonical min when the pointer hits the row px floor", () => {
-    // visual min on 800px width = 18%; pointer at that edge → canonical 15
-    expect(percentFromPointer((800 * 18) / 100, 0, 800, "x")).toBe(TREE_SPLIT_MIN_PERCENT);
+  it("stores canonical min when the drag hits the row px floor", () => {
+    // visual min on 800px width = 18%; dragging past that edge → canonical 15
+    expect(percentFromDelta(20, -100, 800, "x")).toBe(TREE_SPLIT_MIN_PERCENT);
   });
 
   it("maps canonical min to visual min on both axes (no leftover on column)", () => {
@@ -338,11 +324,6 @@ describe("tree split canonical ↔ visual mapping", () => {
     expect(persistableTreeSplitPercent(40.4)).toBe(40);
     expect(persistableTreeSplitPercent(40.6)).toBe(41);
     expect(persistableTreeSplitPercent(0)).toBe(TREE_SPLIT_MIN_PERCENT);
-  });
-
-  it("maps a mid pointer through canonical storage", () => {
-    expect(percentFromPointer(200, 0, 1000, "x")).toBe(20);
-    expect(percentFromPointer(75, 0, 500, "y")).toBe(TREE_SPLIT_MIN_PERCENT);
   });
 
   it("keeps the split still when the drag delta is 0", () => {

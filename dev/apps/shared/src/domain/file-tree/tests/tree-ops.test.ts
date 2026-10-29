@@ -14,7 +14,7 @@ import {
   uniqueFolderName,
   uniqueName,
 } from "../treeOps";
-import { fileBaseName, findNode, isFolderPath, joinPath } from "../treeUtils";
+import { fileBaseName, findNode, joinPath } from "../treeUtils";
 import type { FileTreeNode } from "../types";
 
 function rootWithNotes(): FileTreeNode {
@@ -41,8 +41,7 @@ describe("tree path helpers", () => {
     expect(getParentPath("/")).toBe("/");
     expect(fileBaseName("/notes/a.md")).toBe("a.md");
     expect(findNode(root, "/notes/a.md")?.type).toBe("file");
-    expect(isFolderPath(root, "/notes")).toBe(true);
-    expect(isFolderPath(root, "/readme.md")).toBe(false);
+    expect(findNode(root, "/notes")?.type).toBe("folder");
   });
 
   it("treats a folder as ancestor of itself and its children", () => {

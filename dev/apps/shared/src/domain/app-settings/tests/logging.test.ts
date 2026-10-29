@@ -8,9 +8,9 @@ import {
 } from "../logging";
 
 describe("normalizeLogLevel", () => {
-  it("maps aliases and unknown tokens to presets", () => {
+  it("reads each level in any case and maps anything else to info", () => {
     expect(normalizeLogLevel("ERROR")).toBe("error");
-    expect(normalizeLogLevel("warning")).toBe("warn");
+    expect(normalizeLogLevel(" Warn ")).toBe("warn");
     expect(normalizeLogLevel("trace")).toBe("info");
     expect(normalizeLogLevel(undefined)).toBe("info");
   });

@@ -154,10 +154,6 @@ export function createVaultImportPackage(
   };
 }
 
-export function isCreateVaultBackupImport(kind: CreateVaultImportKind | undefined): boolean {
-  return kind === "backup";
-}
-
 /** Fields written when the user picks a file or a folder in the Import option. */
 export function createVaultImportSelectionPatch(
   picked: { path: string; fileName: string; shape: CreateVaultImportShape },

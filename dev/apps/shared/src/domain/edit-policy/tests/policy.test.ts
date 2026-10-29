@@ -1,11 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { isVaultQuiet } from "../../vault/types";
 import { vaultRowFixture } from "../../vault/tests/fixtures.shared";
 import en from "../../../../locales/en.json";
 import contract from "../edit-policy.json";
 import {
   APP_CONFIG_EDIT_POLICY,
-  RUST_CONFIG_SAVE_QUIET_TARGETS,
   VAULT_CONFIG_EDIT_LOCKED_I18N,
   VAULT_CONFIG_EDIT_POLICY,
   appConfigEditAllowed,
@@ -19,7 +17,7 @@ describe("edit-policy.json contract", () => {
   it("matches exported vault/app tables", () => {
     expect(VAULT_CONFIG_EDIT_POLICY).toEqual(contract.vault);
     expect(APP_CONFIG_EDIT_POLICY).toEqual(contract.app);
-    expect([...RUST_CONFIG_SAVE_QUIET_TARGETS].sort()).toEqual(
+    expect([...contract.rustConfigSaveQuietTargets].sort()).toEqual(
       Object.entries(contract.vault)
         .filter(([, gate]) => gate === "vault_quiet")
         .map(([target]) => target)
@@ -38,8 +36,8 @@ describe("edit-policy.json contract", () => {
       ).toBe(key);
     }
     // `vault.id` is not a settings form field — no lockedI18n. Identity uses `vault_rename`.
-    expect(RUST_CONFIG_SAVE_QUIET_TARGETS).not.toContain("vault.id");
-    expect(RUST_CONFIG_SAVE_QUIET_TARGETS).not.toContain("vault.display_name");
+    expect(contract.rustConfigSaveQuietTargets).not.toContain("vault.id");
+    expect(contract.rustConfigSaveQuietTargets).not.toContain("vault.display_name");
     expect(vaultConfigEditLockedI18nKey("vault.id")).toBeUndefined();
     expect(vaultConfigEditLockedI18nKey("action.change_password")).toBe(
       "vault.change_password.vault_open",
@@ -121,7 +119,6 @@ describe("vaultConfigEditAllowed", () => {
 
   it("recovery allows quiet edits and rename, but not rewrap", () => {
     const recovery = vaultRowFixture({ id: "notes", session: "recovery" });
-    expect(isVaultQuiet(recovery)).toBe(true);
     expect(vaultConfigEditAllowed("storage.mode", recovery)).toBe(true);
     expect(vaultConfigEditAllowed("vault.display_name", recovery)).toBe(true);
     expect(vaultConfigEditAllowed("action.change_kdf", recovery)).toBe(false);
@@ -146,7 +143,6 @@ describe("vaultConfigEditAllowed", () => {
   it("a queued close on an open session is not quiet", () => {
     const open = vaultRowFixture({ id: "notes", session: "open" });
     const pipeline = { queuedVaultIds: ["notes"], queuedOpenVaultIds: [] as string[] };
-    expect(isVaultQuiet(open, pipeline)).toBe(false);
     expect(vaultConfigEditAllowed("storage.mode", open, pipeline)).toBe(false);
   });
 });

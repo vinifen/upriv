@@ -8,7 +8,7 @@ import {
   isVaultListRowUnlockTarget,
   resolveVaultListStatus,
   storageModeIsPlaintext,
-  vaultCanExport,
+  vaultExportMenuShown,
   VAULT_SETTINGS_AREA_ICON,
   VAULT_SETTINGS_AREA_I18N,
   vaultRowControls,
@@ -128,7 +128,7 @@ export function VaultRowActions({
       rememberedMount ?? fetchedMount,
       currentWorkspaceSystem(Platform.OS),
     );
-  const canExport = vaultService.canExportVault && vaultCanExport(vault, pipelineListStatus);
+  const canExport = vaultService.canExportVault && vaultExportMenuShown(vault, pipelineListStatus);
   const controls = vaultRowControls(vault, pipelineListStatus);
 
   const stacked = layout === "column";
@@ -203,12 +203,14 @@ export function VaultRowActions({
             disabled={controls.moreMenuBlocked}
             onPress={() => onOpenBackups(vault)}
           />
-          <MenuActionItem
-            icon="note"
-            label={t("action.note")}
-            disabled={controls.noteBlocked}
-            onPress={() => onOpenNote(vault)}
-          />
+          {controls.noteHidden ? null : (
+            <MenuActionItem
+              icon="note"
+              label={t("action.note")}
+              disabled={controls.noteBlocked}
+              onPress={() => onOpenNote(vault)}
+            />
+          )}
           <MenuActionItem
             icon="info"
             label={t("action.vault_info")}

@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { parseAppLogFile } from "../parse";
 import wireFixture from "./log-file-info.wire.json";
-import { logCreatedAtFromFilename } from "../format";
 
 describe("log file wire contract", () => {
   it("parses the shared golden fixture", () => {
@@ -39,14 +38,5 @@ describe("log file wire contract", () => {
         lineCount: 3.5,
       }),
     ).toThrow(/invalid shape/);
-  });
-});
-
-describe("logCreatedAtFromFilename", () => {
-  it("matches Rust stamp_to_iso (.000Z)", () => {
-    expect(logCreatedAtFromFilename("current-000001-20260101120000.log")).toBe(
-      "2026-01-01T12:00:00.000Z",
-    );
-    expect(logCreatedAtFromFilename("000002-20260529153045.log")).toBe("2026-05-29T15:30:45.000Z");
   });
 });

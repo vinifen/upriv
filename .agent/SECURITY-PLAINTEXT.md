@@ -3,7 +3,7 @@
 **Audience:** coding agents and humans implementing vault open/close/mount/7z.  
 **Status:** ship-blocking invariant for the default product mode.  
 **Canonical requirements:** PRD **RF-45**, **RF-49**, **RF-49b**, **RF-50**; SDD **§2.4**, **§2.6**.  
-**Product exception:** `storage.mode = upriv_plain` may write plaintext under `workspace/` **only** with the matching UI warning. Close overwrites that folder and then removes it. That is the **only** product choice that may expose vault file bytes on ordinary disk. (`plain` / `plain_only` in PRD are dropped — see [SECURITY-CRYPTO.md](SECURITY-CRYPTO.md).)
+**Product exception:** `storage.mode = upriv_plain` may write plaintext under `workspace/` **only** with the matching UI warning. Close overwrites that folder and then removes it. That is the **only** product choice that may expose vault file bytes on ordinary disk (modes: [SECURITY-CRYPTO.md](SECURITY-CRYPTO.md)).
 
 ---
 
@@ -31,7 +31,7 @@ In **`encrypted_dir`** (default):
 1. **Never** write decrypted vault file bytes to ordinary disk (vault volume, `/tmp`, `%TEMP%`, crash staging dirs, etc.).
 2. **Never** read vault content from a durable plaintext tree on disk (except `upriv_plain`).
 3. While open: decrypt only into **RAM** (FUSE/WinFsp reply buffers on desktop; in-app file-manager buffers on mobile); persist only **ciphertext** in `store/` (write-through).
-4. On close: flush the session into **`store/`**. Export `.7z` (separate action) packs **logical** content **in RAM** — do **not** pack `.enc` blobs; do **not** materialize a plaintext tree for `7zz`. Import `.7z` the same way (in-process decode into `store/`). Fail closed if RAM is insufficient. No Seal.
+4. On close: flush the session into **`store/`**. Export `.7z` (separate action) packs **logical** content **in RAM** — do **not** pack `.enc` blobs; do **not** materialize a plaintext tree for `7zz`. Import `.7z` the same way (in-process decode into `store/`). Fail closed if RAM is insufficient.
 5. If `7zz` absolutely requires a directory: **only** tmpfs (or equivalent) with **noswap** where available, RAII delete + secure wipe, **never** use real `workspace/` as staging (SDD §2.6).
 6. Insufficient RAM → **fail open/edit/close** with a user-visible error — **never** silently spill plaintext to disk (`warning.encrypted_dir_ram`).
 
@@ -45,8 +45,8 @@ Research snapshot Tauri tree under `temp/upriv/` (gitignored). FUSE session path
 
 | When | Bad pattern | Evidence (snapshot paths) |
 |------|-------------|-------------------------|
-| Every `encrypted_dir` close/seal | `tempfile::tempdir` → `export_logical_tree` → `create_from_dir` | `encrypted_dir/mod.rs` `finalize_close` |
-| Open sealed / materialize store | `7z extract` → plaintext tempfile → `import_logical_tree` | `materialize_store_from_archive` |
+| Every `encrypted_dir` close | `tempfile::tempdir` → `export_logical_tree` → `create_from_dir` | `encrypted_dir/mod.rs` `finalize_close` |
+| Open from its `.7z` | `7z extract` → plaintext tempfile → `import_logical_tree` | `materialize_store_from_archive` |
 | Recovery “use store” | same staging as close | `sync_archive_from_store` |
 | Change password | extract full archive to tempfile, recreate `.7z` | `vault/change_password.rs` |
 | Create vault | welcome file in tempfile | `vault/create.rs` |
@@ -60,20 +60,13 @@ Research snapshot Tauri tree under `temp/upriv/` (gitignored). FUSE session path
 
 ---
 
-## Required design for `dev/` (future work)
+## Design in `dev/`
 
-When implementing `seven_zip` + close pipeline:
-
-1. Prefer **`SevenZip::create_from_logical`** (or equivalent): stream decrypted bytes from store/session into `7zz` without a plaintext directory tree.
-2. Same rule for **import**, **export**, **change password**, **recovery** — no full-tree extract to disk in `encrypted_dir`.
-3. Pass password via **stdin / restricted channel**, never `-p` on argv.
-4. **Ban `DevPlaintext`** (or any “dump store to workspace”) in builds users can run — mount failure → fail closed.
-5. Hard `ensure_encrypted_dir` / `ensure_plain` on every open/close path so modes cannot mix.
-6. Automated tests (RF-49 / RF-45):
-   - After mount write: no regular files under the real file manager folder on the vault volume.
-   - Ciphertext present in `store/` (write-through).
-   - After close: no leftover plaintext staging under OS temp (or only documented tmpfs that is wiped).
-   - CI fails if release `encrypted_dir` paths call `export_logical_tree` to ordinary disk.
+1. **`.7z`** export packs logical files in RAM (`sevenz-rust2`, `vault/seven_zip_pack.rs`): a worker thread decrypts `store/` one chunk at a time into a short queue the encoder reads, and the pack fails closed when the RAM check refuses it. Import unpacks in RAM (`vault/seven_zip.rs`). There is no `7zz` process, so no password on argv.
+2. **Import, export, backup, recovery** copy ciphertext or stream logical bytes in RAM — no decrypted tree on disk in `encrypted_dir`. **Password and unlock-RAM change** reseal the header and name index only (`vault/rewrap.rs`); file blobs are not decrypted.
+3. **No dump store to workspace** in any build. A mount failure leaves the vault open in the in-app file manager and writes nothing.
+4. **Modes stay apart:** open writes a plaintext folder only for `upriv_plain` with the user's consent (`vault/open_close.rs`, `vault/plain/`).
+5. Tests that hold this (RF-49 / RF-45), among others: `encrypted_open_does_not_write_a_plaintext_folder`, `zip_export_contains_ciphertext_not_plaintext`, `wrong_password_yields_no_plaintext`. New I/O adds its own.
 
 ---
 
@@ -94,7 +87,7 @@ When implementing `seven_zip` + close pipeline:
 
 - [ ] No `export_logical_tree` / plaintext `create_from_dir` staging in `encrypted_dir` release paths  
 - [ ] No `DevPlaintext`-style fallback in user builds  
-- [ ] Close/materialize/password/recovery reviewed against RF-45  
+- [ ] Close/import/password/recovery reviewed against RF-45  
 - [ ] RF-49 tests added or explicitly tracked as blocking  
 - [ ] `upriv_plain` paths gated and warned; wipe on close  
 - [ ] Import/export/password/recovery: no plaintext leftover after cancel, timeout, or crash

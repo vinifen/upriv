@@ -70,18 +70,6 @@ describe("createLiveVaultService", () => {
     expect(createVault).not.toHaveBeenCalled();
   });
 
-  it("forwards export password probe when wired", async () => {
-    const probeExportPassword = vi.fn(async () => true);
-    const service = createLiveVaultService({
-      listVaults: vi.fn(async () => []),
-      createVault: vi.fn(),
-      getSettings: vi.fn(),
-      probeExportPassword,
-    });
-    await expect(service.probeExportPassword("notes", "pass-word-ok")).resolves.toBe(true);
-    expect(probeExportPassword).toHaveBeenCalledWith("notes", "pass-word-ok");
-  });
-
   it("keeps the last read so preferences can open without waiting", async () => {
     forgetVaultSettings("notes");
     const config = { vault: { id: "notes", display_name: "Notes" } } as never;

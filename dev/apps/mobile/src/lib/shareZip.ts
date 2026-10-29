@@ -83,21 +83,3 @@ export async function shareFilesAsZip(
   }
   await shareBytes(zipSync(entries), zipFilename, "application/zip", "public.zip-archive");
 }
-
-/** One file → share as-is; multiple → zip. Desktop `downloadFiles` parity. */
-export async function shareFiles(
-  files: ReadonlyArray<{ filename: string; data: Uint8Array }>,
-  zipFilename: string,
-): Promise<void> {
-  if (files.length === 0) return;
-  if (files.length === 1) {
-    await shareBytes(
-      files[0].data,
-      safeEntryName(files[0].filename),
-      "application/octet-stream",
-      "public.data",
-    );
-    return;
-  }
-  await shareFilesAsZip(files, zipFilename);
-}

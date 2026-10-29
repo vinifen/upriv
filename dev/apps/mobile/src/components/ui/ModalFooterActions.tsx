@@ -24,11 +24,6 @@ export function ModalFooterActions({ layout, children, style }: ModalFooterActio
 }
 
 /**
- * Kept for call-site compatibility. Desktop `sm+` uses auto-width buttons — do not stretch.
- */
-export const modalFooterConfirmBtnStyle: ViewStyle = {};
-
-/**
  * Create-vault / wizard footer — desktop Pattern C at `sm+`:
  * Back on the left; cancel + next/create on the right (row, not stacked).
  */

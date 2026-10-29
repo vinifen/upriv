@@ -32,10 +32,10 @@ once (`ACTION_OPEN_DOCUMENT_TREE`). Upriv then creates `Upriv` inside the
 grant. Uninstall drops the grant. The ciphertext stays. The next install
 confirms the same folder and opens the existing `.upriv` as-is.
 
-| Runtime                         | Bridge                                                   |
-| ------------------------------- | -------------------------------------------------------- |
-| Expo Go                         | Mocks only (`createMobileMockServices`)                  |
-| `expo-dev-client` / release APK | Live vault-root + settings + logs when `.so` is packaged |
+| Runtime                         | Bridge                                                        |
+| ------------------------------- | ------------------------------------------------------------- |
+| Expo Go                         | Mocks only (`createMobileMockServices`)                       |
+| `expo-dev-client` / release APK | Every service live through `upriv-ffi` when `.so` is packaged |
 
 ## Build Android `.so`
 
@@ -77,4 +77,4 @@ bindgen output so the `.kt` cannot drift silently.
 
 - `modules/upriv-core` — Expo module + `isNativeBridgeAvailable()`
 - `src/platform/services/createServices.ts` — native if linked, else mocks
-- `src/platform/native/createNativeServices.ts` — live root/settings/logs; vault list still mock
+- `src/platform/native/createNativeServices.ts` — every `AppServices` member over `upriv-ffi` (data folder, settings, logs, vaults, file manager, backups, export/import)
