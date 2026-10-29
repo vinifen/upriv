@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createDefaultWorkspaceState,
   serializeWorkspaceSnapshot,
@@ -48,7 +48,21 @@ function hydrateCalls(dispatch: { mock: { calls: unknown[][] } }): VaultWorkspac
     .filter((action) => action.type === "hydrate_persisted");
 }
 
+/** Applies a layout change on fake timers and runs out the write delay. */
+async function changePastWriteDelay(change: () => void): Promise<void> {
+  vi.useFakeTimers();
+  change();
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(WORKSPACE_WRITE_DELAY_MS);
+  });
+  vi.useRealTimers();
+}
+
 describe("useWorkspacePersistence", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("restores a disk snapshot onto a cold-open layout", async () => {
     const empty = createDefaultWorkspaceState();
     const loaded = {
@@ -202,9 +216,11 @@ describe("useWorkspacePersistence", () => {
     });
     expect(setFileContent).not.toHaveBeenCalled();
 
-    rerender({
-      workspace: { ...empty, dropTargetPath: null, expandedPaths: ["/", "/photos"] },
-    });
+    await changePastWriteDelay(() =>
+      rerender({
+        workspace: { ...empty, dropTargetPath: null, expandedPaths: ["/", "/photos"] },
+      }),
+    );
     await waitFor(() => expect(setFileContent).toHaveBeenCalled());
   });
 
@@ -229,13 +245,19 @@ describe("useWorkspacePersistence", () => {
     });
     setFileContent.mockClear();
 
+    vi.useFakeTimers();
     for (const searchQuery of ["p", "pa", "pas", "pass"]) {
       rerender({ workspace: { ...empty, fileStates: { "/a.md": { searchQuery } } } });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(WORKSPACE_WRITE_DELAY_MS - 1);
+      });
     }
-    await waitFor(() => expect(setFileContent).toHaveBeenCalled());
+    expect(setFileContent).not.toHaveBeenCalled();
     await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, WORKSPACE_WRITE_DELAY_MS + 100));
+      await vi.advanceTimersByTimeAsync(WORKSPACE_WRITE_DELAY_MS * 2);
     });
+    vi.useRealTimers();
+    await waitFor(() => expect(setFileContent).toHaveBeenCalled());
     expect(setFileContent).toHaveBeenCalledTimes(1);
     expect(setFileContent.mock.calls[0]?.[2]).toContain('"searchQuery": "pass"');
   });
@@ -262,7 +284,9 @@ describe("useWorkspacePersistence", () => {
     });
     setFileContent.mockClear();
 
-    rerender({ workspace: { ...empty, explorerCollapsed: true } });
+    await changePastWriteDelay(() =>
+      rerender({ workspace: { ...empty, explorerCollapsed: true } }),
+    );
     await waitFor(() => expect(setFileContent).toHaveBeenCalled());
     const written = setFileContent.mock.calls.at(-1)?.[2] ?? "";
     expect(written).toContain('"explorerCollapsed": true');
@@ -303,7 +327,7 @@ describe("useWorkspacePersistence", () => {
     });
     setFileContent.mockClear();
 
-    rerender({ workspace: { ...empty, ...change } });
+    await changePastWriteDelay(() => rerender({ workspace: { ...empty, ...change } }));
     await waitFor(() => expect(setFileContent).toHaveBeenCalled());
     const written = setFileContent.mock.calls.at(-1)?.[2] ?? "";
     expect(written).toContain(expected);

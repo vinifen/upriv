@@ -9,10 +9,11 @@ import {
 } from "../createLiveVaultFileSystemService";
 
 function bytesToB64(bytes: Uint8Array): string {
+  const chunk = 0x8000;
   let binary = "";
-  bytes.forEach((byte) => {
-    binary += String.fromCharCode(byte);
-  });
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...Array.from(bytes.subarray(i, i + chunk)));
+  }
   return btoa(binary);
 }
 
@@ -182,8 +183,8 @@ describe("createLiveVaultFileSystemService", () => {
   });
 
   it("stops a preview once the file is past the preview limit", async () => {
-    const chunk = new Uint8Array(VAULT_FS_INLINE_CHUNK_BYTES);
-    const readRange = vi.fn(async () => ({ contentB64: bytesToB64(chunk) }));
+    const contentB64 = bytesToB64(new Uint8Array(VAULT_FS_INLINE_CHUNK_BYTES));
+    const readRange = vi.fn(async () => ({ contentB64 }));
     const fs = createLiveVaultFileSystemService(rpcStub({ readRange }));
     await expect(fs.getFileContent("v", "/big.txt")).rejects.toBeInstanceOf(
       FilePreviewTooLargeError,
