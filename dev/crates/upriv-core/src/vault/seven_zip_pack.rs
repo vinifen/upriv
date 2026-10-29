@@ -1309,7 +1309,7 @@ mod tests {
     }
 
     #[test]
-    fn a_stop_during_pack_aborts_immediately() {
+    fn a_stop_after_packing_starts_ends_the_pack() {
         let data = vec![9u8; 1024 * 1024];
         let (_tmp, root) = closed_vault(&[("/a.bin", &data), ("/b.bin", &data), ("/c.bin", &data)]);
         let id = test_job_id();

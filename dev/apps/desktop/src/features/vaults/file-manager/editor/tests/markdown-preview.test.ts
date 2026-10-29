@@ -263,7 +263,7 @@ describe("MarkdownOutline", () => {
     expect(secondBtn.className).toContain("text-accent");
   });
 
-  it("notifies when active heading changes or initializes in preview", async () => {
+  it("reports the active heading once the preview lays out", async () => {
     const onActiveHeadingChange = vi.fn();
     renderWithI18n(
       createElement(MarkdownPreview, {
