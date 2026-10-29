@@ -345,6 +345,7 @@ mod tests {
         let name = "000001-20260101120000.log".to_string();
         fs::write(dir.path().join(&name), "x\n").unwrap();
         delete_log_files(dir.path(), std::slice::from_ref(&name)).unwrap();
+        assert!(!dir.path().join(&name).exists());
         delete_log_files(dir.path(), std::slice::from_ref(&name)).unwrap();
     }
 

@@ -215,8 +215,7 @@ mod tests {
         std::env::remove_var("UPRIV_DEV");
         std::env::remove_var("UPRIV_DEFAULT_ROOT_ANCHOR");
         std::env::remove_var("APPIMAGE");
-        // Infer still runs; just ensure unknown does not panic / return None from detect.
-        let _ = detect_app_distribution();
+        assert_eq!(detect_app_distribution(), infer_app_distribution());
         std::env::remove_var(ENV_DISTRIBUTION);
     }
 

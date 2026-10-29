@@ -632,8 +632,14 @@ mod tests {
             std::thread::current().id()
         ));
         clear_throttle_key_for_tests(&dir);
-        record_unlock_failure(&dir).unwrap();
+        for _ in 1..FAILURES_BEFORE_BLOCK {
+            record_unlock_failure(&dir).expect("not blocked yet");
+        }
         record_unlock_success(&dir);
+        // The count starts over: the same number of failures still does not block.
+        for _ in 1..FAILURES_BEFORE_BLOCK {
+            record_unlock_failure(&dir).expect("count was cleared");
+        }
         check_unlock_allowed(&dir).unwrap();
         clear_throttle_key_for_tests(&dir);
     }

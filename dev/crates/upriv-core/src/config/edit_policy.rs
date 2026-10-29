@@ -206,9 +206,9 @@ mode = "encrypted_dir"
         let dir = root.vault_dir("notes").unwrap();
         let mut after = crate::config::load_vault_config_raw(&dir).unwrap();
         after.vault.note = "ok when closed".into();
-        if !crate::session::is_unlock_in_flight() {
-            save_vault_config_checked(&root, "notes", &after).expect("note when closed");
-        }
+        save_vault_config_checked(&root, "notes", &after).expect("note when closed");
+        let saved = crate::config::load_vault_config_raw(&dir).unwrap();
+        assert_eq!(saved.vault.note, "ok when closed");
     }
 
     #[test]
@@ -221,6 +221,8 @@ mode = "encrypted_dir"
         let mut after = crate::config::load_vault_config_raw(&dir).unwrap();
         after.vault.note = "ok while open".into();
         save_vault_config_checked(&root, "notes", &after).expect("note anytime");
+        let saved = crate::config::load_vault_config_raw(&dir).unwrap();
+        assert_eq!(saved.vault.note, "ok while open");
         close_vault(&root, "notes").expect("close");
     }
 

@@ -119,6 +119,7 @@ describe("useWorkspacePersistence", () => {
         }),
       { initialProps: { workspace: empty } },
     );
+    vi.useFakeTimers();
     rerender({ workspace: hidden });
     await act(async () => {
       resolveRead({
@@ -126,7 +127,12 @@ describe("useWorkspacePersistence", () => {
         content: serializeWorkspaceSnapshot(workspaceSnapshotFromState(loaded)),
       });
     });
-    await waitFor(() => expect(hydrateCalls(dispatch)).toHaveLength(1));
+    // The load must not schedule a write of the layout it replaced.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(WORKSPACE_WRITE_DELAY_MS);
+    });
+    vi.useRealTimers();
+    expect(hydrateCalls(dispatch)).toHaveLength(1);
     expect(hydrateCalls(dispatch)[0]).toMatchObject({
       openTabs: ["/a.md"],
       explorerCollapsed: true,
@@ -207,13 +213,11 @@ describe("useWorkspacePersistence", () => {
     });
     setFileContent.mockClear();
 
-    rerender({
-      workspace: { ...empty, dropTargetPath: "/photos", expandedPaths: ["/", "/photos"] },
-    });
-    await act(async () => {
-      await Promise.resolve();
-      await Promise.resolve();
-    });
+    await changePastWriteDelay(() =>
+      rerender({
+        workspace: { ...empty, dropTargetPath: "/photos", expandedPaths: ["/", "/photos"] },
+      }),
+    );
     expect(setFileContent).not.toHaveBeenCalled();
 
     await changePastWriteDelay(() =>
