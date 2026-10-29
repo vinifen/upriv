@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useRef, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import {
   Animated,
   Easing,
   FlatList,
   Pressable,
+  RefreshControl,
   StyleSheet,
   Text,
   View,
@@ -21,6 +22,7 @@ import {
   isGroupedVaultDragKey,
   appConfigEditAllowed,
   groupedVaultSortOf,
+  hasOpenModal,
   hiddenUngroupedRootVaults,
   hiddenOmittedRootGroups,
   hexWithAlpha,
@@ -299,12 +301,14 @@ export function VaultListScreen() {
     allVaultsHidden,
     lifecycle,
     reload,
+    refresh,
     openCreate,
     closeCreate,
     pipelineStatus,
     onRewrapRunChange,
     rewrapRun,
     handleConfirmExportVault,
+    handleStopExportVault,
     handleRowExport,
     handleExportTimeout,
     exportFolders,
@@ -335,6 +339,15 @@ export function VaultListScreen() {
     vaultGroupService,
   } = useVaultListScreen();
   const { colors, typography, theme } = useTheme();
+
+  /** The pull spinner shows only a refresh the person pulled for, not the list's own reloads. */
+  const [pulling, setPulling] = useState(false);
+  const pullToRefresh = useCallback(() => {
+    // A window, or one still closing, owns the screen: the pull does nothing.
+    if (hasOpenModal()) return;
+    setPulling(true);
+    void refresh().finally(() => setPulling(false));
+  }, [refresh]);
 
   const dropRefCbs = useRef(new Map<string, (node: View | null) => void>());
   const bindDropTarget = (key: string) => {
@@ -886,6 +899,17 @@ export function VaultListScreen() {
               listData.length === 0 ? styles.listEmpty : null,
             ]}
             scrollEnabled={!draggingId && !dragScrollLock}
+            refreshControl={
+              <RefreshControl
+                refreshing={pulling}
+                onRefresh={pullToRefresh}
+                enabled={!draggingId}
+                progressViewOffset={appHeaderHeight}
+                colors={[colors.accent]}
+                tintColor={colors.accent}
+                progressBackgroundColor={colors.surfaceContainerHigh}
+              />
+            }
             keyboardShouldPersistTaps="handled"
             keyboardDismissMode="none"
             ListHeaderComponent={
@@ -1188,7 +1212,7 @@ export function VaultListScreen() {
                   icon="refresh"
                   label={t("action.refresh")}
                   disabled={refreshing}
-                  onPress={() => void reload()}
+                  onPress={() => void refresh()}
                 />
                 <MenuActionItem
                   icon="terminal"
@@ -1379,6 +1403,7 @@ export function VaultListScreen() {
           setExportPasswordError(null);
         }}
         onConfirm={handleConfirmExportVault}
+        onStop={handleStopExportVault}
         onPasswordEdited={() => setExportPasswordError(null)}
         onTimeout={handleExportTimeout}
         onSettingsLoadError={(error) => {

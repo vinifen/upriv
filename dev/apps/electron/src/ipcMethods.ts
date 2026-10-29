@@ -71,7 +71,6 @@ export const ELECTRON_IPC_METHODS = [
   "vault_fs_write",
   "vault_fs_write_range",
   "vault_fs_import_os_file",
-  "vault_fs_import_seal",
   "vault_fs_truncate",
   "vault_fs_create_file",
   "vault_fs_create_folder",

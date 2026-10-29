@@ -90,7 +90,7 @@ export function useSystemInfoData({
           throw vaultRootGoneRpcError();
         }
 
-        // App home = `.upriv-root` parent (default-root anchor). Vault-root
+        // App home = `.upriv-data-folder` parent (default-root anchor). Vault-root
         // (found `rootPath`) may be a different folder in `custom_root`.
         const appHome = defaultStatus.defaultRootAnchor;
         const vaultRootBase =
@@ -157,11 +157,9 @@ export function useSystemInfoData({
     ui.vault_list_show_drag,
     ui.vault_list_allow_drag_into_group,
     ui.file_manager_dock_expanded,
-    ui.file_manager_tree_split_percent,
     ui.lifecycle_close_modal_on_submit,
     ui.lifecycle_open_file_manager_on_open,
     ui.lifecycle_keep_open_on_wake,
-    ui.file_manager_confirm_delete,
     ui.always_show_hidden_vaults,
     logging.enabled,
     logging.level,

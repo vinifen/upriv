@@ -1,4 +1,5 @@
 import type { MarkdownViewMode } from "@upriv/shared";
+import { Icon } from "@/components/icons";
 import { useTranslation } from "@/i18n";
 
 interface MarkdownViewToggleProps {
@@ -6,42 +7,49 @@ interface MarkdownViewToggleProps {
   onChange: (mode: MarkdownViewMode) => void;
 }
 
-const OPTIONS: MarkdownViewMode[] = ["source", "preview"];
-
-/** Vault-wide Code / Read control. The choice is stored on the workspace file. */
+/** Single button toggle between Code (source) and Read (preview) markdown view. */
 export function MarkdownViewToggle({ mode, onChange }: MarkdownViewToggleProps) {
   const { t } = useTranslation();
 
+  const isPreview = mode === "preview";
+  const label = t("modal.file_manager.markdown.view");
+  const nextMode: MarkdownViewMode = isPreview ? "source" : "preview";
+  const title = `${t("modal.file_manager.markdown.source")} / ${t("modal.file_manager.markdown.preview")}`;
+
   return (
-    <div
-      role="group"
-      aria-label={t("modal.file_manager.markdown.view")}
-      className="flex shrink-0 items-center gap-1"
+    <button
+      type="button"
+      aria-label={label}
+      aria-pressed={isPreview}
+      title={title}
+      onClick={() => onChange(nextMode)}
+      className={[
+        "group flex h-6 shrink-0 items-center gap-0.5 rounded-md border border-outline-variant/70 bg-surface-container-highest/30 p-0.5 transition-colors",
+        "hover:border-outline-variant focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+      ].join(" ")}
     >
-      {OPTIONS.map((option) => {
-        const selected = mode === option;
-        const label =
-          option === "preview"
-            ? t("modal.file_manager.markdown.preview")
-            : t("modal.file_manager.markdown.source");
-        return (
-          <button
-            key={option}
-            type="button"
-            aria-pressed={selected}
-            onClick={() => onChange(option)}
-            className={[
-              "min-w-[4rem] rounded-full px-3.5 py-0.5 text-center text-[11px] leading-4 font-medium transition-colors",
-              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
-              selected
-                ? "bg-surface-container-highest text-on-surface"
-                : "text-on-surface-variant hover:bg-surface-container-highest/60 hover:text-on-surface",
-            ].join(" ")}
-          >
-            {label}
-          </button>
-        );
-      })}
-    </div>
+      <span
+        className={[
+          "flex h-4.5 w-5 items-center justify-center rounded transition-colors",
+          mode === "source"
+            ? "bg-surface-container-highest text-on-surface shadow-xs"
+            : "text-on-surface-variant/50 group-hover:text-on-surface-variant/80 hover:!text-on-surface",
+        ].join(" ")}
+        title={t("modal.file_manager.markdown.source")}
+      >
+        <Icon name="code" size={13} />
+      </span>
+      <span
+        className={[
+          "flex h-4.5 w-5 items-center justify-center rounded transition-colors",
+          mode === "preview"
+            ? "bg-surface-container-highest text-on-surface shadow-xs"
+            : "text-on-surface-variant/50 group-hover:text-on-surface-variant/80 hover:!text-on-surface",
+        ].join(" ")}
+        title={t("modal.file_manager.markdown.preview")}
+      >
+        <Icon name="eye" size={13} />
+      </span>
+    </button>
   );
 }

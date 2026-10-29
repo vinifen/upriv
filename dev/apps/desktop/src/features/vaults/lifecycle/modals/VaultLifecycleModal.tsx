@@ -96,11 +96,6 @@ export function VaultLifecycleModal({
       panelClassName="max-w-md"
       footer={
         <div className="flex flex-wrap justify-end gap-2">
-          {submitting ? null : (
-            <Button variant="ghost" size="sm" onClick={onClose}>
-              {t("action.cancel")}
-            </Button>
-          )}
           <Button variant="primary" size="sm" disabled={!canSubmit} onClick={handleConfirm}>
             {submitting
               ? budgetStartedAt != null

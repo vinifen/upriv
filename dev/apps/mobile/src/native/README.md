@@ -22,7 +22,7 @@ RPC (same env Electron sets for the daemon on desktop).
 `filesDir/upriv` is app-specific storage. Android removes it when the app is
 uninstalled, and the app can write there with no user prompt. A directory
 created there can be named Documents and is still deleted with the app. That
-directory keeps the folder pointer (`.upriv-root`) and the saved grant. It
+directory keeps the folder pointer (`.upriv-data-folder`) and the saved grant. It
 does not keep `.upriv/`.
 
 The vault lives in the phone's shared **Documents/Upriv**. Shared storage

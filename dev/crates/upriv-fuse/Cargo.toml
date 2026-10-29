@@ -16,5 +16,8 @@ path = "src/lib.rs"
 upriv-fuse-abi = { path = "../upriv-fuse-abi" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-fuser = "=0.15.1"
+# `abi-7-10` asks the kernel for big writes: a copy into the folder arrives in
+# pieces of up to 128 KiB, not one 4 KiB page per request, each of which would
+# seal its chunk again.
+fuser = { version = "=0.15.1", features = ["abi-7-10"] }
 libc = "=0.2.186"

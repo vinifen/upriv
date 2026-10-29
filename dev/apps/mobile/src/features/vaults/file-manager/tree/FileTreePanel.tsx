@@ -133,10 +133,18 @@ function dropFolderForRow(path: string, folderPaths: Set<string>): string {
   return folderPaths.has(path) ? path : getParentPath(path);
 }
 
+/** Explorer toggle icon and each toolbar action are this square. */
+const TOOL_BUTTON_SIZE = 24;
+/** Toolbar content that fits the label icon and all four actions on one row. */
+const TOOLBAR_ONE_ROW_MIN_WIDTH = TOOL_BUTTON_SIZE * 5;
+const TOOLBAR_PADDING_X = 4;
+
 export function FileTreePanel({ fm }: FileTreePanelProps) {
   const { t } = useTranslation();
   const { colors } = useTheme();
   const { workspace, dispatch, commitRename, movePath } = fm;
+  // Below the one-row width the actions get their own rows and spread across them.
+  const [toolbarWrapped, setToolbarWrapped] = useState(false);
 
   const entries = useMemo(() => {
     const out: FlatEntry[] = [];
@@ -444,46 +452,57 @@ export function FileTreePanel({ fm }: FileTreePanelProps) {
 
   return (
     <View style={[styles.panel, paneStyle, { backgroundColor: colors.surfaceContainer }]}>
-      {/* Label truncates first; once only the icon is left, the actions wrap to a second row. */}
-      <View style={styles.toolbar}>
+      {/* Label truncates first; once only the icon is left, the actions wrap two by two (create, import). */}
+      <View
+        style={styles.toolbar}
+        onLayout={(event) =>
+          setToolbarWrapped(
+            event.nativeEvent.layout.width - TOOLBAR_PADDING_X * 2 < TOOLBAR_ONE_ROW_MIN_WIDTH,
+          )
+        }
+      >
         <ExplorerToggle fm={fm} showLabel />
-        <View style={styles.toolbarActions}>
-          <IconButton
-            label={t("modal.file_manager.context.new_file")}
-            icon="file"
-            size={14}
-            tone="muted"
-            onPress={() => fm.createFile(createTargetPath(fm))}
-            style={styles.toolBtn}
-          />
-          <IconButton
-            label={t("modal.file_manager.context.new_folder")}
-            icon="folder"
-            size={14}
-            tone="muted"
-            onPress={() => fm.createFolder(createTargetPath(fm))}
-            style={styles.toolBtn}
-          />
-          <IconButton
-            label={t("modal.file_manager.explorer.import_files")}
-            icon="arrow-up"
-            size={14}
-            tone="muted"
-            onPress={() => {
-              void runImport(pickImportFiles);
-            }}
-            style={styles.toolBtn}
-          />
-          <IconButton
-            label={t("modal.file_manager.explorer.import_folder")}
-            icon="archive"
-            size={14}
-            tone="muted"
-            onPress={() => {
-              void fm.importPickedFolder(createTargetPath(fm));
-            }}
-            style={styles.toolBtn}
-          />
+        <View style={[styles.toolbarActions, toolbarWrapped && styles.toolbarActionsWrapped]}>
+          <View style={[styles.toolbarPair, toolbarWrapped && styles.toolbarPairWrapped]}>
+            <IconButton
+              label={t("modal.file_manager.context.new_file")}
+              icon="file"
+              size={14}
+              tone="muted"
+              onPress={() => fm.createFile(createTargetPath(fm))}
+              style={styles.toolBtn}
+            />
+            <IconButton
+              label={t("modal.file_manager.context.new_folder")}
+              icon="folder"
+              size={14}
+              tone="muted"
+              onPress={() => fm.createFolder(createTargetPath(fm))}
+              style={styles.toolBtn}
+            />
+          </View>
+          <View style={[styles.toolbarPair, toolbarWrapped && styles.toolbarPairWrapped]}>
+            <IconButton
+              label={t("modal.file_manager.explorer.import_files")}
+              icon="arrow-up"
+              size={14}
+              tone="muted"
+              onPress={() => {
+                void runImport(pickImportFiles);
+              }}
+              style={styles.toolBtn}
+            />
+            <IconButton
+              label={t("modal.file_manager.explorer.import_folder")}
+              icon="archive"
+              size={14}
+              tone="muted"
+              onPress={() => {
+                void fm.importPickedFolder(createTargetPath(fm));
+              }}
+              style={styles.toolBtn}
+            />
+          </View>
         </View>
       </View>
       <View
@@ -1065,7 +1084,7 @@ const styles = StyleSheet.create({
     flexWrap: "wrap",
     alignItems: "center",
     rowGap: 2,
-    paddingHorizontal: 4,
+    paddingHorizontal: TOOLBAR_PADDING_X,
     paddingTop: 4,
     paddingBottom: 2,
     flexShrink: 0,
@@ -1078,10 +1097,10 @@ const styles = StyleSheet.create({
   },
   explorerToggleLabeled: {
     // Wrapping is decided on the icon-only basis, so the label truncates away entirely before the actions wrap.
-    flexBasis: 24,
+    flexBasis: TOOL_BUTTON_SIZE,
     flexGrow: 1,
     flexShrink: 1,
-    minWidth: 24,
+    minWidth: TOOL_BUTTON_SIZE,
   },
   explorerToggleBare: {
     width: 32,
@@ -1090,7 +1109,12 @@ const styles = StyleSheet.create({
     borderRadius: 0,
     flexShrink: 0,
   },
-  explorerToggleIcon: { width: 24, alignItems: "center", justifyContent: "center", flexShrink: 0 },
+  explorerToggleIcon: {
+    width: TOOL_BUTTON_SIZE,
+    alignItems: "center",
+    justifyContent: "center",
+    flexShrink: 0,
+  },
   toolbarLabel: {
     flexShrink: 1,
     fontSize: 10,
@@ -1102,11 +1126,23 @@ const styles = StyleSheet.create({
   },
   toolbarActions: {
     flexDirection: "row",
+    flexWrap: "wrap",
     alignItems: "center",
+    justifyContent: "flex-end",
     flexShrink: 0,
     marginLeft: "auto",
+    maxWidth: "100%",
   },
-  toolBtn: { width: 24, height: 24, minWidth: 24, minHeight: 24, padding: 0 },
+  toolbarActionsWrapped: { flexGrow: 1 },
+  toolbarPair: { flexDirection: "row", flexShrink: 0 },
+  toolbarPairWrapped: { flexGrow: 1, justifyContent: "space-around" },
+  toolBtn: {
+    width: TOOL_BUTTON_SIZE,
+    height: TOOL_BUTTON_SIZE,
+    minWidth: TOOL_BUTTON_SIZE,
+    minHeight: TOOL_BUTTON_SIZE,
+    padding: 0,
+  },
   listShell: { flex: 1, minHeight: 0, borderWidth: 1, borderColor: "transparent" },
   list: { flex: 1, minHeight: 0 },
   listContent: { paddingBottom: 4, paddingTop: 0, flexGrow: 1 },

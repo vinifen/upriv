@@ -43,6 +43,8 @@ interface ExportVaultModalProps {
   onClose: () => void;
   /** Export into `destDir`, the chosen format's folder. */
   onConfirm: (request: VaultExportRequest, destDir: string) => void;
+  /** Ask the running export to stop (`job_cancel`); core removes its unfinished file. */
+  onStop: () => void;
   /** The password changed, so its refusal no longer applies. */
   onPasswordEdited?: () => void;
   onTimeout?: () => void;
@@ -56,6 +58,7 @@ export function ExportVaultModal({
   folders,
   onClose,
   onConfirm,
+  onStop,
   onPasswordEdited,
   onTimeout,
 }: ExportVaultModalProps) {
@@ -216,12 +219,15 @@ export function ExportVaultModal({
       panelClassName="max-w-lg"
       footer={
         <div className="flex flex-wrap justify-end gap-2">
-          <Button variant="ghost" size="sm" onClick={onClose}>
-            {exporting ? t("action.close") : t("action.cancel")}
-          </Button>
-          <Button variant="primary" size="sm" disabled={!ready} onClick={confirm}>
-            {exporting ? t("vault.export.dialog.submitting") : t("vault.export.dialog.confirm")}
-          </Button>
+          {running ? (
+            <Button variant="secondary" size="sm" disabled={running.stopping} onClick={onStop}>
+              {running.stopping ? t("vault.export.dialog.stopping") : t("vault.export.dialog.stop")}
+            </Button>
+          ) : (
+            <Button variant="primary" size="sm" disabled={!ready} onClick={confirm}>
+              {t("vault.export.dialog.confirm")}
+            </Button>
+          )}
         </div>
       }
     >

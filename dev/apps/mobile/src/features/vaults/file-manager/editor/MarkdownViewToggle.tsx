@@ -1,58 +1,66 @@
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { Pressable, StyleSheet, View } from "react-native";
 import type { MarkdownViewMode } from "@upriv/shared";
+import { Icon } from "@/components/icons";
 import { useTranslation } from "@/i18n";
 import { useTheme } from "@/theme";
+import { colorAlpha } from "@/theme/tokens";
 
 interface MarkdownViewToggleProps {
   mode: MarkdownViewMode;
   onChange: (mode: MarkdownViewMode) => void;
 }
 
-const OPTIONS: MarkdownViewMode[] = ["source", "preview"];
-
 /** Vault-wide Code / Read control. The choice is stored on the workspace file. */
 export function MarkdownViewToggle({ mode, onChange }: MarkdownViewToggleProps) {
   const { t } = useTranslation();
   const { colors } = useTheme();
 
+  const isPreview = mode === "preview";
+  const nextMode: MarkdownViewMode = isPreview ? "source" : "preview";
+
   return (
-    <View
-      accessibilityRole="radiogroup"
+    <Pressable
+      accessibilityRole="button"
       accessibilityLabel={t("modal.file_manager.markdown.view")}
-      style={styles.bar}
+      accessibilityState={{ selected: isPreview }}
+      onPress={() => onChange(nextMode)}
+      style={[
+        styles.bar,
+        {
+          borderColor: colors.outlineVariant,
+          backgroundColor: colors.surfaceContainerHighest + "4D",
+        },
+      ]}
     >
-      {OPTIONS.map((option) => {
-        const selected = mode === option;
-        const label =
-          option === "preview"
-            ? t("modal.file_manager.markdown.preview")
-            : t("modal.file_manager.markdown.source");
-        return (
-          <Pressable
-            key={option}
-            accessibilityRole="button"
-            accessibilityState={{ selected }}
-            onPress={() => onChange(option)}
-            style={[
-              styles.option,
-              {
-                backgroundColor: selected ? colors.surfaceContainerHighest : "transparent",
-              },
-            ]}
-          >
-            <Text
-              style={{
-                fontSize: 12,
-                fontWeight: "600",
-                color: selected ? colors.onSurface : colors.onSurfaceVariant,
-              }}
-            >
-              {label}
-            </Text>
-          </Pressable>
-        );
-      })}
-    </View>
+      <View
+        style={[
+          styles.option,
+          {
+            backgroundColor: mode === "source" ? colors.surfaceContainerHighest : "transparent",
+          },
+        ]}
+      >
+        <Icon
+          name="code"
+          size={13}
+          color={mode === "source" ? colors.onSurface : colorAlpha(colors.onSurfaceVariant, 0.5)}
+        />
+      </View>
+      <View
+        style={[
+          styles.option,
+          {
+            backgroundColor: mode === "preview" ? colors.surfaceContainerHighest : "transparent",
+          },
+        ]}
+      >
+        <Icon
+          name="eye"
+          size={13}
+          color={mode === "preview" ? colors.onSurface : colorAlpha(colors.onSurfaceVariant, 0.5)}
+        />
+      </View>
+    </Pressable>
   );
 }
 
@@ -60,13 +68,17 @@ const styles = StyleSheet.create({
   bar: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 4,
+    height: 24,
+    borderRadius: 6,
+    borderWidth: 1,
+    padding: 2,
+    gap: 2,
   },
   option: {
-    minWidth: 68,
+    width: 20,
+    height: 18,
     alignItems: "center",
-    borderRadius: 999,
-    paddingHorizontal: 14,
-    paddingVertical: 2,
+    justifyContent: "center",
+    borderRadius: 4,
   },
 });

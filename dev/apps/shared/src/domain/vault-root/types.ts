@@ -24,10 +24,10 @@ export type VaultRootPresentationState = {
   mode: VaultRootMode;
   /** Folder for creating `.upriv/` — app home; parent of `aliasPath`. */
   defaultRootAnchor: string;
-  /** Absolute path of the `.upriv-root` file. */
+  /** Absolute path of the `.upriv-data-folder` file. */
   aliasPath: string;
   /**
-   * Path remembered inside `.upriv-root` (active or inactive).
+   * Path remembered inside `.upriv-data-folder` (active or inactive).
    * May be set while `mode === "default_root"` (inactive alias).
    */
   rememberedAliasTarget: string | null;
@@ -45,7 +45,7 @@ export type VaultRootResolveResult =
   | {
       status: "needs_setup";
       /**
-       * Absolute path of `.upriv-root`. Invariant: parent directory equals
+       * Absolute path of `.upriv-data-folder`. Invariant: parent directory equals
        * `defaultRootAnchor` (both are app home).
        */
       aliasPath: string;
@@ -56,11 +56,11 @@ export type VaultRootResolveResult =
       relocatePath?: string;
     };
 
-/** Contents of `.upriv-root` when the file exists (active or inactive). */
+/** Contents of `.upriv-data-folder` when the file exists (active or inactive). */
 export type VaultRootAliasInfo = {
   path: string;
   active: boolean;
-  /** Android last Custom folder (`content://` on `custom=`). Absent when none is saved. */
+  /** Android last Custom folder (`content://` on `android_custom_folder=`). Absent when none is saved. */
   customPath?: string;
 };
 
@@ -120,4 +120,4 @@ export type VaultRootBootstrapPrefs = {
   locale?: string | null;
 };
 
-export const VAULT_ROOT_ALIAS_FILE = ".upriv-root";
+export const VAULT_ROOT_ALIAS_FILE = ".upriv-data-folder";

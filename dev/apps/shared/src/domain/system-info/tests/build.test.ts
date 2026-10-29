@@ -61,9 +61,7 @@ describe("buildSystemInfoSections", () => {
         "lifecycle_close_modal_on_submit",
         "lifecycle_open_file_manager_on_open",
         "lifecycle_keep_open_on_wake",
-        "file_manager_confirm_delete",
         "file_manager_dock_expanded",
-        "file_manager_tree_split_percent",
         "app_home",
         "logs_path",
       ]),
@@ -87,7 +85,7 @@ describe("buildSystemInfoSections", () => {
       snapshot({
         root: {
           status: "needs_setup",
-          aliasPath: "/home/.upriv-root",
+          aliasPath: "/home/.upriv-data-folder",
           defaultRootAnchor: "/home",
           distribution: "dev",
         },
@@ -105,7 +103,7 @@ describe("buildSystemInfoSections", () => {
     const alias = sections
       .flatMap((section) => section.fields)
       .find((field) => field.id === "alias_path");
-    expect(alias?.openPath).toBe("/home/.upriv-root");
+    expect(alias?.openPath).toBe("/home/.upriv-data-folder");
   });
 
   it("omits the mount switch on a phone row", () => {

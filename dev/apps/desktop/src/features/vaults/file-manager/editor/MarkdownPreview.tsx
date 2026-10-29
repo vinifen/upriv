@@ -10,6 +10,8 @@ import {
   type ReactNode,
 } from "react";
 import {
+  activeOutlineIndex,
+  findTextMatches,
   MARKDOWN_COPY_DOUBLE_TAP_MS,
   parseMarkdownDocument,
   toggleMarkdownTask,
@@ -28,6 +30,10 @@ interface MarkdownPreviewProps {
   onCopyFailed: () => void;
   /** Task checkbox edits. Omit for a read-only note (checkboxes stay disabled). */
   onChange?: (markdown: string) => void;
+  searchQuery?: string;
+  searchActiveIndex?: number;
+  onMatchCountChange?: (count: number) => void;
+  onActiveHeadingChange?: (index: number) => void;
 }
 
 interface PreviewActions {
@@ -45,6 +51,39 @@ interface PreviewActions {
 export interface MarkdownPreviewHandle {
   /** Index into `markdownOutline` — the n-th top-level heading. */
   scrollToHeading: (index: number) => void;
+  /** Scroll to match at index. */
+  scrollToMatch: (index: number) => void;
+}
+
+const MATCH_HIGHLIGHT = "file-search-match";
+const ACTIVE_HIGHLIGHT = "file-search-active";
+
+/** Rendered text that matches `query`, skipping controls and decorative labels. */
+function findTextRanges(root: HTMLElement, query: string): Range[] {
+  const ranges: Range[] = [];
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    if (node.parentElement?.closest("button, .select-none")) continue;
+    for (const match of findTextMatches(node.textContent ?? "", query)) {
+      const range = document.createRange();
+      range.setStart(node, match.start);
+      range.setEnd(node, match.end);
+      ranges.push(range);
+    }
+  }
+  return ranges;
+}
+
+function highlightsSupported(): boolean {
+  return typeof CSS !== "undefined" && "highlights" in CSS && typeof Highlight !== "undefined";
+}
+
+/**
+ * Highlight names are global. Every file manager stays mounted, so remove a
+ * name only while it still holds this preview's ranges.
+ */
+function deleteOwnHighlight(name: string, own: Highlight) {
+  if (CSS.highlights.get(name) === own) CSS.highlights.delete(name);
 }
 
 export const MarkdownPreview = forwardRef<MarkdownPreviewHandle, MarkdownPreviewProps>(
@@ -57,11 +96,17 @@ function MarkdownPreviewBody({
   markdown,
   onCopyFailed,
   onChange,
+  searchQuery,
+  searchActiveIndex = 0,
+  onMatchCountChange,
+  onActiveHeadingChange,
   handleRef,
 }: MarkdownPreviewProps & { handleRef: ForwardedRef<MarkdownPreviewHandle> }) {
   const { t } = useTranslation();
   const model = useMemo(() => parseMarkdownDocument(markdown), [markdown]);
   const scrollerRef = useRef<HTMLDivElement>(null);
+  const matchRangesRef = useRef<Range[]>([]);
+  const lastMatchCountRef = useRef<number>(-1);
 
   useImperativeHandle(
     handleRef,
@@ -74,11 +119,80 @@ function MarkdownPreviewBody({
           heading.getBoundingClientRect().top -
           scroller.getBoundingClientRect().top +
           scroller.scrollTop;
-        scroller.scrollTo({ top: Math.max(0, top - 4), behavior: "smooth" });
+        scroller.scrollTo?.({ top: Math.max(0, top - 4), behavior: "smooth" });
+      },
+      scrollToMatch: (index) => {
+        const scroller = scrollerRef.current;
+        const range = matchRangesRef.current[index];
+        if (!scroller || !range) return;
+        const rect = range.getBoundingClientRect();
+        const scrollerRect = scroller.getBoundingClientRect();
+        const top = rect.top - scrollerRect.top + scroller.scrollTop;
+        scroller.scrollTo?.({
+          top: Math.max(0, top - scrollerRect.height / 3),
+          behavior: "smooth",
+        });
       },
     }),
     [],
   );
+
+  useEffect(() => {
+    const root = scrollerRef.current;
+    const query = searchQuery?.trim();
+    const ranges = root && query ? findTextRanges(root, query) : [];
+    matchRangesRef.current = ranges;
+    if (lastMatchCountRef.current !== ranges.length) {
+      lastMatchCountRef.current = ranges.length;
+      onMatchCountChange?.(ranges.length);
+    }
+    if (ranges.length === 0 || !highlightsSupported()) return;
+
+    const matchHighlight = new Highlight();
+    const activeHighlight = new Highlight();
+    ranges.forEach((range, index) => {
+      (index === searchActiveIndex ? activeHighlight : matchHighlight).add(range);
+    });
+    CSS.highlights.set(MATCH_HIGHLIGHT, matchHighlight);
+    CSS.highlights.set(ACTIVE_HIGHLIGHT, activeHighlight);
+    return () => {
+      deleteOwnHighlight(MATCH_HIGHLIGHT, matchHighlight);
+      deleteOwnHighlight(ACTIVE_HIGHLIGHT, activeHighlight);
+    };
+  }, [markdown, searchQuery, searchActiveIndex, onMatchCountChange]);
+
+  /* Track the current visible top heading as the user scrolls. */
+  useEffect(() => {
+    const scroller = scrollerRef.current;
+    if (!scroller || !onActiveHeadingChange) return;
+
+    let rafId = 0;
+    const handleScroll = () => {
+      cancelAnimationFrame(rafId);
+      rafId = requestAnimationFrame(() => {
+        const headings = scroller.querySelectorAll<HTMLElement>("[data-outline-heading]");
+        const contentTop = scroller.getBoundingClientRect().top - scroller.scrollTop;
+        const tops = Array.from(
+          headings,
+          (heading) => heading.getBoundingClientRect().top - contentTop,
+        );
+        onActiveHeadingChange(
+          activeOutlineIndex(tops, {
+            offset: scroller.scrollTop,
+            viewport: scroller.clientHeight,
+            content: scroller.scrollHeight,
+          }),
+        );
+      });
+    };
+
+    scroller.addEventListener("scroll", handleScroll, { passive: true });
+    handleScroll();
+    return () => {
+      scroller.removeEventListener("scroll", handleScroll);
+      cancelAnimationFrame(rafId);
+    };
+  }, [markdown, onActiveHeadingChange]);
   const notes = useRef(new Map<string, HTMLElement>());
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -145,7 +259,7 @@ function MarkdownPreviewBody({
         note.getBoundingClientRect().top -
         scroller.getBoundingClientRect().top +
         scroller.scrollTop;
-      scroller.scrollTo({ top, behavior: "smooth" });
+      scroller.scrollTo?.({ top, behavior: "smooth" });
     },
     noteRef: (id, node) => {
       if (node) notes.current.set(id, node);

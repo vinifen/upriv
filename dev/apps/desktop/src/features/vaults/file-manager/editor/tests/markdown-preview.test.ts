@@ -2,7 +2,11 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { MARKDOWN_COPY_DOUBLE_TAP_MS, MARKDOWN_PREVIEW_MAX_CHARS } from "@upriv/shared";
+import {
+  MARKDOWN_COPY_DOUBLE_TAP_MS,
+  MARKDOWN_PREVIEW_MAX_CHARS,
+  markdownOutline,
+} from "@upriv/shared";
 import { I18nProvider } from "@/i18n";
 import { EditorPathBar } from "../EditorPathBar";
 import { MarkdownOutlinePanel, MarkdownOutlineToggle } from "../MarkdownOutline";
@@ -124,29 +128,58 @@ describe("MarkdownPreview", () => {
     );
     await waitFor(() => {
       expect(
-        screen.getByText("This note is too large to preview. Switch to Code to read it."),
+        screen.getByText("This file is too large to preview. Switch to Code to read it."),
       ).toBeTruthy();
+    });
+  });
+
+  it("reports match count for search queries and ignores UI chrome like copy buttons", async () => {
+    const onMatchCountChange = vi.fn();
+    renderWithI18n(
+      createElement(MarkdownPreview, {
+        markdown: "```ts\nconsole.log('copy me');\n```\n\nSome plain copy here.",
+        searchQuery: "copy",
+        onMatchCountChange,
+        onCopyFailed: () => undefined,
+      }),
+    );
+    await waitFor(() => {
+      // "copy" appears once in code text and once in plain text = 2 matches.
+      // The "Copy" button label and "ts" language badge must NOT be counted.
+      expect(onMatchCountChange).toHaveBeenCalledWith(2);
     });
   });
 });
 
 describe("MarkdownViewToggle", () => {
-  it("reports the vault-wide choice", async () => {
+  it("toggles between preview and source mode on click", async () => {
     const onChange = vi.fn();
-    renderWithI18n(createElement(MarkdownViewToggle, { mode: "preview", onChange }));
-    const code = await screen.findByRole("button", { name: "Code" });
-    fireEvent.click(code);
+    const { rerender } = renderWithI18n(
+      createElement(MarkdownViewToggle, { mode: "preview", onChange }),
+    );
+    const btn = await screen.findByRole("button", { name: "Markdown view" });
+    expect(btn).toBeTruthy();
+    expect(btn.getAttribute("aria-pressed")).toBe("true");
+
+    fireEvent.click(btn);
     expect(onChange).toHaveBeenCalledWith("source");
-    expect(screen.getByRole("button", { name: "Read" }).getAttribute("aria-pressed")).toBe("true");
+
+    rerender(
+      createElement(I18nProvider, {
+        locale: "en",
+        children: createElement(MarkdownViewToggle, { mode: "source", onChange }),
+      }),
+    );
+    expect(btn.getAttribute("aria-pressed")).toBe("false");
+    fireEvent.click(btn);
+    expect(onChange).toHaveBeenCalledWith("preview");
   });
 
-  it("puts Code on the left and Read on the right", async () => {
+  it("shows code and eye icons with title and accessibility label", async () => {
     renderWithI18n(createElement(MarkdownViewToggle, { mode: "preview", onChange: vi.fn() }));
-    const group = await screen.findByRole("group", { name: "Markdown view" });
-    expect([...group.querySelectorAll("button")].map((b) => b.textContent)).toEqual([
-      "Code",
-      "Read",
-    ]);
+    const btn = await screen.findByRole("button", { name: "Markdown view" });
+    expect(btn.querySelectorAll("svg").length).toBe(2);
+    expect(btn.getAttribute("title")).toBe("Code / Read");
   });
 });
 
@@ -162,7 +195,7 @@ describe("MarkdownOutline", () => {
     const onSelect = vi.fn();
     renderWithI18n(
       createElement(MarkdownOutlinePanel, {
-        markdown: "# Top\n\n## Child\n\n> # quoted\n\n# Next\n",
+        outline: markdownOutline("# Top\n\n## Child\n\n> # quoted\n\n# Next\n"),
         onSelect,
       }),
     );
@@ -176,9 +209,12 @@ describe("MarkdownOutline", () => {
 
   it("says when a note has no headings", async () => {
     renderWithI18n(
-      createElement(MarkdownOutlinePanel, { markdown: "just text", onSelect: vi.fn() }),
+      createElement(MarkdownOutlinePanel, {
+        outline: markdownOutline("just text"),
+        onSelect: vi.fn(),
+      }),
     );
-    expect(await screen.findByText("This note has no headings.")).toBeTruthy();
+    expect(await screen.findByText("This file has no headings.")).toBeTruthy();
   });
 
   it("marks only top-level headings as outline anchors in Read view", async () => {
@@ -192,6 +228,54 @@ describe("MarkdownOutline", () => {
     expect(
       [...container.querySelectorAll("[data-outline-heading]")].map((h) => h.textContent),
     ).toEqual(["Top", "Child"]);
+  });
+
+  it("highlights the active heading based on activeIndex", async () => {
+    const onSelect = vi.fn();
+    const { rerender } = renderWithI18n(
+      createElement(MarkdownOutlinePanel, {
+        outline: markdownOutline("# First\n\n## Second\n"),
+        activeIndex: 0,
+        onSelect,
+      }),
+    );
+    const firstBtn = await screen.findByRole("button", { name: "First" });
+    const secondBtn = screen.getByRole("button", { name: "Second" });
+
+    expect(firstBtn.getAttribute("aria-current")).toBe("location");
+    expect(firstBtn.className).toContain("text-accent");
+    expect(secondBtn.getAttribute("aria-current")).toBeNull();
+    expect(secondBtn.className).not.toContain("text-accent");
+
+    rerender(
+      createElement(I18nProvider, {
+        locale: "en",
+        children: createElement(MarkdownOutlinePanel, {
+          outline: markdownOutline("# First\n\n## Second\n"),
+          activeIndex: 1,
+          onSelect,
+        }),
+      }),
+    );
+
+    expect(firstBtn.getAttribute("aria-current")).toBeNull();
+    expect(secondBtn.getAttribute("aria-current")).toBe("location");
+    expect(secondBtn.className).toContain("text-accent");
+  });
+
+  it("notifies when active heading changes or initializes in preview", async () => {
+    const onActiveHeadingChange = vi.fn();
+    renderWithI18n(
+      createElement(MarkdownPreview, {
+        markdown: "# Heading 1\n\nSome text\n\n# Heading 2\n",
+        onCopyFailed: vi.fn(),
+        onActiveHeadingChange,
+      }),
+    );
+    await screen.findByText("Heading 1");
+    await waitFor(() => {
+      expect(onActiveHeadingChange).toHaveBeenCalled();
+    });
   });
 });
 

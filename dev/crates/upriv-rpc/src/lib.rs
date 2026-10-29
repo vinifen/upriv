@@ -106,7 +106,7 @@ struct PathParams {
     replace_policy: Option<String>,
     #[serde(default)]
     bootstrap: Option<BootstrapPrefsParams>,
-    /// Android: last Custom folder (`content://`). Stored on `.upriv-root` and kept
+    /// Android: last Custom folder (`content://`). Stored on `.upriv-data-folder` and kept
     /// when this setup selects the Documents default. Omitted on desktop.
     #[serde(default)]
     custom_uri: Option<String>,
@@ -197,7 +197,6 @@ pub fn handle_rpc(req: RpcRequest) -> RpcResponse {
         "vault_fs_write" => vault_ops::vault_fs_write(req.params),
         "vault_fs_write_range" => vault_ops::vault_fs_write_range(req.params),
         "vault_fs_import_os_file" => vault_ops::vault_fs_import_os_file(req.params),
-        "vault_fs_import_seal" => vault_ops::vault_fs_import_seal(req.params),
         "vault_fs_truncate" => vault_ops::vault_fs_truncate(req.params),
         "vault_fs_create_file" => vault_ops::vault_fs_create_file(req.params),
         "vault_fs_create_folder" => vault_ops::vault_fs_create_folder(req.params),
@@ -597,7 +596,7 @@ fn vault_root_suggested_custom_path() -> RpcResponse {
     }
 }
 
-/// Deactivate the app home's `.upriv-root` only. Does not create, open, or require a vault-root.
+/// Deactivate the app home's `.upriv-data-folder` only. Does not create, open, or require a vault-root.
 fn vault_root_deactivate_alias() -> RpcResponse {
     match deactivate_app_home_alias() {
         Ok(()) => ok(json!(null)),
@@ -761,7 +760,7 @@ struct RememberCustomParams {
     path: String,
 }
 
-/// Store the Android Custom folder on `.upriv-root` (`custom=`). Does not switch mode.
+/// Store the Android Custom folder on `.upriv-data-folder` (`android_custom_folder=`). Does not switch mode.
 fn vault_root_remember_custom(params: Value) -> RpcResponse {
     let parsed: RememberCustomParams = match serde_json::from_value(params) {
         Ok(value) => value,
@@ -1665,7 +1664,7 @@ fn vault_rename(params: Value) -> RpcResponse {
 struct AppSettingsSaveParams {
     /// Nested `AppSettings` (snake_case sections: `ui`, `logging`, `app`).
     settings: AppSettings,
-    /// When false, write TOML only (caller already mutated `.upriv-root`). Default true.
+    /// When false, write TOML only (caller already mutated `.upriv-data-folder`). Default true.
     /// Wire name is camelCase `syncAlias` only — `sync_alias` is rejected by deny_unknown_fields.
     #[serde(default = "default_sync_alias", rename = "syncAlias")]
     sync_alias: bool,
@@ -2210,7 +2209,6 @@ mod contract_tests {
         "vault_fs_write",
         "vault_fs_write_range",
         "vault_fs_import_os_file",
-        "vault_fs_import_seal",
         "vault_fs_truncate",
         "vault_fs_create_file",
         "vault_fs_create_folder",
@@ -2594,6 +2592,7 @@ level = \"info\"
             backup: Default::default(),
             security: Default::default(),
             auto_close: Default::default(),
+            file_manager: Default::default(),
             seven_zip: Default::default(),
         };
         upriv_core::create_vault(

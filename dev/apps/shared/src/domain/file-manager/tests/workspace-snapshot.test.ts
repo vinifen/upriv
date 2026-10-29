@@ -34,26 +34,14 @@ describe("workspaceSnapshot", () => {
       activeTabPath: "/b.md",
       expandedPaths: ["/", "/notes"],
       selectedPath: "/b.md",
-      markdownView: "source",
       explorerCollapsed: true,
-      markdownOutlineOpen: true,
+      files: { "/b.md": { markdownView: "source" } },
     });
     const parsed = parseWorkspaceSnapshot(raw);
     expect(parsed?.openTabs).toEqual(["/a.md", "/b.md"]);
     expect(parsed?.activeTabPath).toBe("/b.md");
-    expect(parsed?.markdownView).toBe("source");
     expect(parsed?.explorerCollapsed).toBe(true);
-    expect(parsed?.markdownOutlineOpen).toBe(true);
-  });
-
-  it("loads a missing or non-true outline flag as hidden", () => {
-    expect(parseWorkspaceSnapshot('{"format_version":1,"openTabs":[]}')?.markdownOutlineOpen).toBe(
-      false,
-    );
-    expect(
-      parseWorkspaceSnapshot('{"format_version":1,"openTabs":[],"markdownOutlineOpen":1}')
-        ?.markdownOutlineOpen,
-    ).toBe(false);
+    expect(parsed?.files).toEqual({ "/b.md": { markdownView: "source" } });
   });
 
   it("loads a missing or non-true explorer flag as shown", () => {
@@ -66,14 +54,18 @@ describe("workspaceSnapshot", () => {
     ).toBe(false);
   });
 
-  it("loads a missing or invalid markdown view as preview", () => {
-    expect(parseWorkspaceSnapshot('{"format_version":1,"openTabs":[]}')?.markdownView).toBe(
-      "preview",
+  it("drops per-file fields with invalid values and files left with none", () => {
+    const parsed = parseWorkspaceSnapshot(
+      JSON.stringify({
+        format_version: 1,
+        openTabs: [],
+        files: {
+          "/a.md": { markdownView: "nope", wordWrap: false },
+          "/b.md": { markdownView: "nope", markdownOutlineOpen: 1 },
+        },
+      }),
     );
-    expect(
-      parseWorkspaceSnapshot('{"format_version":1,"openTabs":[],"markdownView":"nope"}')
-        ?.markdownView,
-    ).toBe("preview");
+    expect(parsed?.files).toEqual({ "/a.md": { wordWrap: false } });
   });
 
   it("rejects corrupt or wrong version", () => {
@@ -89,9 +81,7 @@ describe("workspaceSnapshot", () => {
         activeTabPath: "/gone.md",
         expandedPaths: ["/", "/notes", "/missing"],
         selectedPath: "/gone.md",
-        markdownView: "source",
         explorerCollapsed: true,
-        markdownOutlineOpen: true,
       },
       tree,
     );
@@ -99,9 +89,7 @@ describe("workspaceSnapshot", () => {
     expect(sanitized.activeTabPath).toBe("/notes/nested.md");
     expect(sanitized.expandedPaths).toEqual(["/", "/notes"]);
     expect(sanitized.selectedPath).toBe("/notes/nested.md");
-    expect(sanitized.markdownView).toBe("source");
     expect(sanitized.explorerCollapsed).toBe(true);
-    expect(sanitized.markdownOutlineOpen).toBe(true);
   });
 
   it("omits internal file from explorer tree", () => {
@@ -118,17 +106,15 @@ describe("workspaceSnapshot", () => {
       activeTabPath: "/a.md",
       selectedPath: "/a.md",
       expandedPaths: ["/", "/notes"],
-      markdownView: "source",
       explorerCollapsed: true,
-      markdownOutlineOpen: true,
+      fileStates: { "/a.md": { markdownView: "source" } },
       dirtyPaths: ["/a.md"],
       editorDrafts: { "/a.md": "draft" },
     };
     const snap = workspaceSnapshotFromState(state);
     expect(snap.openTabs).toEqual(["/a.md"]);
-    expect(snap.markdownView).toBe("source");
+    expect(snap.files).toEqual({ "/a.md": { markdownView: "source" } });
     expect(snap.explorerCollapsed).toBe(true);
-    expect(snap.markdownOutlineOpen).toBe(true);
     expect(snap).not.toHaveProperty("dirtyPaths");
     expect(snap).not.toHaveProperty("editorDrafts");
   });
@@ -146,14 +132,15 @@ describe("workspaceSnapshot", () => {
     expect(shouldHydratePersistedWorkspace(loaded, loaded, loaded)).toBe(false);
     expect(shouldHydratePersistedWorkspace(empty, edited, loaded)).toBe(false);
     expect(shouldHydratePersistedWorkspace(edited, edited, empty)).toBe(false);
-    const sourceOnly = { ...empty, markdownView: "source" as const };
+    const sourceOnly = { ...empty, files: { "/a.md": { markdownView: "source" as const } } };
     expect(shouldHydratePersistedWorkspace(empty, empty, sourceOnly)).toBe(true);
     expect(shouldHydratePersistedWorkspace(empty, sourceOnly, sourceOnly)).toBe(false);
     const hiddenOnly = { ...empty, explorerCollapsed: true };
     expect(shouldHydratePersistedWorkspace(empty, empty, hiddenOnly)).toBe(true);
     expect(shouldHydratePersistedWorkspace(empty, hiddenOnly, hiddenOnly)).toBe(false);
-    const outlineOnly = { ...empty, markdownOutlineOpen: true };
-    expect(shouldHydratePersistedWorkspace(empty, empty, outlineOnly)).toBe(true);
+    const outlineClosed = { ...empty, files: { "/a.md": { markdownOutlineOpen: false } } };
+    expect(shouldHydratePersistedWorkspace(empty, empty, outlineClosed)).toBe(true);
+    expect(shouldHydratePersistedWorkspace(empty, outlineClosed, outlineClosed)).toBe(false);
   });
 
   it("keeps a chrome toggle made while tabs are still loading", () => {
@@ -164,11 +151,72 @@ describe("workspaceSnapshot", () => {
       openTabs: ["/a.md"],
       activeTabPath: "/a.md",
       selectedPath: "/a.md",
-      markdownView: "source" as const,
+      files: { "/a.md": { markdownView: "source" as const } },
     };
     expect(workspaceSnapshotToHydrate(empty, hidden, saved)).toEqual({
       ...saved,
       explorerCollapsed: true,
     });
+  });
+
+  it("parses and sanitizes per-file states and treeSplitPercent", () => {
+    const raw = JSON.stringify({
+      format_version: 1,
+      openTabs: ["/notes/a.md"],
+      activeTabPath: "/notes/a.md",
+      expandedPaths: ["/", "/notes"],
+      selectedPath: "/notes/a.md",
+      explorerCollapsed: false,
+      treeSplitPercent: 28,
+      files: {
+        "/notes/a.md": {
+          markdownView: "source",
+          markdownOutlineOpen: false,
+          searchQuery: "password123",
+          wordWrap: true,
+        },
+        "/deleted.md": {
+          markdownView: "source",
+        },
+        "/.upriv-workspace.json": {
+          markdownView: "source",
+        },
+      },
+    });
+
+    const parsed = parseWorkspaceSnapshot(raw);
+    expect(parsed).not.toBeNull();
+    expect(parsed?.treeSplitPercent).toBe(28);
+    expect(parsed?.files?.["/notes/a.md"]).toEqual({
+      markdownView: "source",
+      markdownOutlineOpen: false,
+      searchQuery: "password123",
+      wordWrap: true,
+    });
+    expect(parsed?.files?.["/.upriv-workspace.json"]).toBeUndefined();
+
+    // Sanitize with a tree where /notes/a.md exists, but /deleted.md does not
+    const tree: FileTreeNode = {
+      name: "",
+      type: "folder",
+      children: [
+        {
+          name: "notes",
+          type: "folder",
+          children: [
+            {
+              name: "a.md",
+              type: "file",
+            },
+          ],
+        },
+      ],
+    };
+
+    const sanitized = sanitizeWorkspaceSnapshot(parsed!, tree);
+    expect(sanitized.files?.["/notes/a.md"]).toBeDefined();
+    expect(sanitized.files?.["/notes/a.md"]?.wordWrap).toBe(true);
+    expect(sanitized.files?.["/deleted.md"]).toBeUndefined();
+    expect(sanitized.treeSplitPercent).toBe(28);
   });
 });

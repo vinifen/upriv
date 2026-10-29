@@ -2051,8 +2051,8 @@ mod tests {
         std::env::remove_var("APPIMAGE");
         std::env::set_var("UPRIV_DEFAULT_ROOT_ANCHOR", home.path());
         std::fs::write(
-            home.path().join(".upriv-root"),
-            "status=active\n/upriv-saf-root\n",
+            home.path().join(".upriv-data-folder"),
+            "status=active\ndata_folder=/upriv-saf-root\n",
         )
         .unwrap();
 

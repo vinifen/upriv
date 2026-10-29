@@ -159,6 +159,10 @@ export interface VaultSettingsConfig {
     /** Minutes without activity inside Upriv before this vault closes. */
     idle_minutes: number;
   };
+  file_manager: {
+    /** Ask before deleting a file or folder. "Don't ask again" turns it off. */
+    confirm_delete: boolean;
+  };
   seven_zip: {
     encrypt_file_names: boolean;
     archive_mode: ArchiveMode;

@@ -239,6 +239,7 @@ fn pack_logical_seven_zip_to_path(
     dest: &Path,
     job: &Job,
 ) -> Result<u64> {
+    job.ensure_running()?;
     let plan = plan_seven_zip_pack(
         index,
         opts,

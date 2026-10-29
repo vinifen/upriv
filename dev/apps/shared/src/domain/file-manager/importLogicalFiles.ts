@@ -1,4 +1,8 @@
-import { foldersToExpandOnImport, resolveImportDestination } from "../file-tree/importPaths";
+import {
+  foldersToExpandOnImport,
+  resolveImportDestination,
+  type EnsureFolderFn,
+} from "../file-tree/importPaths";
 import { joinPath } from "../file-tree/treeUtils";
 import { isInternalVaultFileName } from "./workspaceSnapshot";
 
@@ -21,14 +25,6 @@ export interface ImportLogicalResult {
 
 function isUnsupportedRead(error: unknown): boolean {
   return error instanceof Error && error.message === "unsupported";
-}
-
-function createImportIndexSeal(sealImports: (() => Promise<void>) | undefined) {
-  return {
-    async finish() {
-      if (sealImports) await sealImports();
-    },
-  };
 }
 
 /** Read + write one OS/picker batch. Does not toast or dispatch workspace actions. */
@@ -68,24 +64,32 @@ export async function importLogicalFiles<T extends ImportLogicalFile>(
      * Only byte imports use more than one. Text imports stay one file at a time.
      */
     importSlots?: number;
-    /**
-     * Seal staged blobs once, after the last file in this batch. A file does
-     * not wait on the index write.
-     */
-    sealImports?: () => Promise<void>;
   },
 ): Promise<ImportLogicalResult> {
   const slots = Math.max(1, Math.floor(options.importSlots ?? 1));
   const importBinaryFile = options.importBinaryFile;
-  const seal = createImportIndexSeal(options.sealImports);
-  try {
-    if (slots > 1 && importBinaryFile) {
-      return await importBinaryFilesAhead(files, options, importBinaryFile, slots, seal);
-    }
-    return await importLogicalFilesOneAtATime(files, options, seal);
-  } finally {
-    await seal.finish();
+  const batch = { ...options, ensureFolder: ensureEachFolderOnce(options.ensureFolder) };
+  if (slots > 1 && importBinaryFile) {
+    return importBinaryFilesAhead(files, batch, importBinaryFile, slots);
   }
+  return importLogicalFilesOneAtATime(files, batch);
+}
+
+/**
+ * Ask core for each folder once per batch: every later file in the same
+ * folder reuses its path. A folder deleted meanwhile still fails that file's
+ * write, since core refuses a file whose folder is gone.
+ */
+function ensureEachFolderOnce(ensureFolder: EnsureFolderFn): EnsureFolderFn {
+  const known = new Map<string, string>();
+  return async (vaultId, parentPath, name) => {
+    const key = `${parentPath}\u0000${name}`;
+    const cached = known.get(key);
+    if (cached !== undefined) return cached;
+    const path = await ensureFolder(vaultId, parentPath, name);
+    if (path) known.set(key, path);
+    return path;
+  };
 }
 
 async function importLogicalFilesOneAtATime<T extends ImportLogicalFile>(
@@ -116,7 +120,6 @@ async function importLogicalFilesOneAtATime<T extends ImportLogicalFile>(
     ) => string | null | Promise<string | null>;
     signal?: AbortSignal;
   },
-  _seal: { finish: () => Promise<void> },
 ): Promise<ImportLogicalResult> {
   const importedPaths: string[] = [];
   const foldersToExpand = new Set<string>();
@@ -237,7 +240,6 @@ async function importBinaryFilesAhead<T extends ImportLogicalFile>(
     file: T,
   ) => string | null | Promise<string | null>,
   slots: number,
-  _seal: { finish: () => Promise<void> },
 ): Promise<ImportLogicalResult> {
   const outcomes: AheadOutcome[] = files.map(() => ({ kind: "absent" }));
   let cursor = 0;

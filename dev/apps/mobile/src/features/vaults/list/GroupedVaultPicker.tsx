@@ -1,12 +1,16 @@
-import { useMemo, useState } from "react";
-import { Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from "react-native";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useEffect, useMemo, useState } from "react";
+import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import Svg, { Path } from "react-native-svg";
-import { buildGroupedVaultPickerItems, type VaultGroup, type VaultListItem } from "@upriv/shared";
+import {
+  buildGroupedVaultPickerItems,
+  GROUPED_VAULT_PICKER_VISIBLE_ROWS,
+  type VaultGroup,
+  type VaultListItem,
+} from "@upriv/shared";
 import { useTranslation } from "@/i18n";
 import { useTheme } from "@/theme";
 import { ThemedInput } from "@/components/settings";
-import { MODAL_MAX_HEIGHT_RATIO, radii, spacing } from "@/theme/tokens";
+import { radii, spacing } from "@/theme/tokens";
 
 interface GroupedVaultPickerProps {
   vaults: VaultListItem[];
@@ -16,18 +20,16 @@ interface GroupedVaultPickerProps {
   onToggle: (vaultId: string) => void;
   disabled?: boolean;
   includeHidden?: boolean;
-  /**
-   * List fills leftover modal height and is the only scroll pane.
-   * Use in create-group (`bodyScroll={false}`).
-   */
-  fill?: boolean;
 }
 
-const LIST_MAX_HEIGHT = 320;
-const CREATE_GROUP_CHROME =
-  52 /* title */ + 72 /* footer */ + 220; /* name + help + search + count */
+const ROW_HEIGHT = 36;
+/** Six rows, then the list scrolls. */
+const LIST_MAX_HEIGHT = GROUPED_VAULT_PICKER_VISIBLE_ROWS * ROW_HEIGHT;
 
-/** Searchable vault multi-select (nested ScrollView — not FlatList, for Modal body). */
+/**
+ * Vault multi-select of checkboxes (nested ScrollView, not FlatList, for the
+ * Modal body). Past six vaults it scrolls and gains a search field.
+ */
 export function GroupedVaultPicker({
   vaults,
   groups,
@@ -36,57 +38,55 @@ export function GroupedVaultPicker({
   onToggle,
   disabled = false,
   includeHidden = false,
-  fill = false,
 }: GroupedVaultPickerProps) {
   const { t } = useTranslation();
   const { colors, typography } = useTheme();
   const [query, setQuery] = useState("");
-  const insets = useSafeAreaInsets();
-  const { height: windowHeight } = useWindowDimensions();
 
-  const listMaxHeight = useMemo(() => {
-    const framePadTop = Math.max(insets.top, spacing.md);
-    const framePadBottom = Math.max(insets.bottom, spacing.md);
-    const dialogMaxHeight = Math.max(
-      240,
-      Math.round(windowHeight * MODAL_MAX_HEIGHT_RATIO) - framePadTop - framePadBottom,
-    );
-    if (fill) {
-      return Math.max(140, dialogMaxHeight - CREATE_GROUP_CHROME);
-    }
-    return Math.min(LIST_MAX_HEIGHT, Math.max(140, Math.round(windowHeight * 0.28)));
-  }, [fill, insets.bottom, insets.top, windowHeight]);
-
+  const allItems = useMemo(
+    () => buildGroupedVaultPickerItems({ vaults, groups, excludeGroupId, includeHidden }),
+    [excludeGroupId, groups, includeHidden, vaults],
+  );
+  const searchable = allItems.length > GROUPED_VAULT_PICKER_VISIBLE_ROWS;
+  // A list short enough to show whole has no search, and drops what was typed.
+  const activeQuery = searchable ? query : "";
+  useEffect(() => {
+    if (!searchable) setQuery("");
+  }, [searchable]);
   const items = useMemo(
     () =>
-      buildGroupedVaultPickerItems({
-        vaults,
-        groups,
-        excludeGroupId,
-        query,
-        includeHidden,
-      }),
-    [excludeGroupId, groups, includeHidden, query, vaults],
+      activeQuery.trim()
+        ? buildGroupedVaultPickerItems({
+            vaults,
+            groups,
+            excludeGroupId,
+            query: activeQuery,
+            includeHidden,
+          })
+        : allItems,
+    [activeQuery, allItems, excludeGroupId, groups, includeHidden, vaults],
   );
 
-  if (items.length === 0 && !query.trim()) {
+  if (allItems.length === 0) {
     return <Text style={typography.bodyMuted}>{t("vault.group.create.grouped_vaults_empty")}</Text>;
   }
 
   return (
-    <View style={[styles.root, fill ? styles.rootFill : null]}>
-      <ThemedInput
-        value={query}
-        editable={!disabled}
-        onChangeText={setQuery}
-        placeholder={t("vault.group.picker.search")}
-        autoCorrect={false}
-        autoCapitalize="none"
-        autoComplete="off"
-        spellCheck={false}
-        blurOnSubmit={false}
-        style={styles.search}
-      />
+    <View style={styles.root}>
+      {searchable ? (
+        <ThemedInput
+          value={query}
+          editable={!disabled}
+          onChangeText={setQuery}
+          placeholder={t("vault.group.picker.search")}
+          autoCorrect={false}
+          autoCapitalize="none"
+          autoComplete="off"
+          spellCheck={false}
+          blurOnSubmit={false}
+          style={styles.search}
+        />
+      ) : null}
 
       <Text style={typography.caption}>
         {t("vault.group.picker.count", {
@@ -102,7 +102,7 @@ export function GroupedVaultPicker({
           nestedScrollEnabled
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode="none"
-          style={{ maxHeight: listMaxHeight, flexGrow: 0, flexShrink: 1 }}
+          style={styles.list}
           showsVerticalScrollIndicator
           bounces={false}
         >
@@ -172,10 +172,10 @@ const styles = StyleSheet.create({
   root: {
     gap: spacing.sm,
   },
-  rootFill: {
-    flexGrow: 1,
+  list: {
+    maxHeight: LIST_MAX_HEIGHT,
+    flexGrow: 0,
     flexShrink: 1,
-    minHeight: 0,
   },
   search: {
     borderRadius: radii.sm,
@@ -184,7 +184,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
   },
   row: {
-    minHeight: 36,
+    minHeight: ROW_HEIGHT,
     width: "100%",
     flexDirection: "row",
     alignItems: "center",

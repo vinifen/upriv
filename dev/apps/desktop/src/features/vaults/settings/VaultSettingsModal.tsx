@@ -1314,6 +1314,8 @@ function renderPreferenceSection(
           hiddenLocked={locks.hiddenLocked}
           displayNameLocked={locks.displayNameLocked}
           onChange={(patch) => patchDraft("vault", patch)}
+          fileManager={draft.file_manager}
+          onFileManagerChange={(patch) => patchDraft("file_manager", patch)}
         />
       );
     case "storage":

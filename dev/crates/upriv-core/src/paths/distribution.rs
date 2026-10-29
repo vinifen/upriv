@@ -1,6 +1,6 @@
 //! How the desktop app was distributed — drives default vault-root placement.
 //!
-//! | Kind | Vault data (`default_root`) | App home (`.upriv-root` alias) |
+//! | Kind | Vault data (`default_root`) | App home (`.upriv-data-folder` alias) |
 //! |------|---------------------------|----------------------------------|
 //! | **Portable** | Beside AppImage / portable exe | Same as vault anchor |
 //! | **Installed** | User data dir (same as app home) | User data dir |

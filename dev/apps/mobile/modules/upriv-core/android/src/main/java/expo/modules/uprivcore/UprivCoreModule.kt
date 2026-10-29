@@ -311,7 +311,7 @@ private object CoreLanes {
     "vault_plain_confirm", "vault_plain_remove", "vault_plain_sync",
     "vault_plain_deletions" -> lifecycle
     "vault_change_password", "vault_change_kdf" -> rewrap
-    "vault_fs_import_os_file", "vault_fs_import_seal" -> importFiles
+    "vault_fs_import_os_file" -> importFiles
     "vault_import_zip",
     "vault_import_7z",
     "vault_import_files_zip",

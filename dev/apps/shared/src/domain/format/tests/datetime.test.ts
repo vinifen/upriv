@@ -11,4 +11,15 @@ describe("formatIsoDate", () => {
     expect(out).not.toBe("2026-05-28T12:00:00.000Z");
     expect(out.length).toBeGreaterThan(0);
   });
+
+  it("formats in each locale asked for, one after another", () => {
+    const iso = "2026-05-28T12:00:00.000Z";
+    for (const locale of ["en", "pt-BR", "es", "en"]) {
+      const expected = new Intl.DateTimeFormat(locale, {
+        dateStyle: "medium",
+        timeStyle: "short",
+      }).format(new Date(iso));
+      expect(formatIsoDate(iso, locale)).toBe(expected);
+    }
+  });
 });

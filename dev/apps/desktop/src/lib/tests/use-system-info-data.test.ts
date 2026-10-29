@@ -237,7 +237,7 @@ describe("useSystemInfoData", () => {
     const vaultRootService = {
       resolve: async () => ({
         status: "needs_setup" as const,
-        aliasPath: "/home/.upriv-root",
+        aliasPath: "/home/.upriv-data-folder",
         defaultRootAnchor: "/home",
         distribution: "dev" as const,
       }),

@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef } from "react";
-import { markdownOutline, type MarkdownOutlineEntry } from "@upriv/shared";
+import { useEffect, useRef } from "react";
+import type { MarkdownOutlineEntry, MarkdownOutlineModel } from "@upriv/shared";
 import { Icon } from "@/components/icons";
 import { useTranslation } from "@/i18n";
 import { createSmoothScroller, type SmoothScroller, wheelDeltaPx } from "@/lib/smoothWheelScroll";
@@ -38,17 +38,27 @@ export function MarkdownOutlineToggle({
 
 /** Right-hand map of the note's headings, indented by nesting. Click jumps to the heading. */
 export function MarkdownOutlinePanel({
-  markdown,
+  outline,
+  activeIndex = 0,
   onSelect,
 }: {
-  markdown: string;
+  /** `markdownOutline` of the open note. */
+  outline: MarkdownOutlineModel;
+  activeIndex?: number;
   onSelect: (index: number, entry: MarkdownOutlineEntry) => void;
 }) {
   const { t } = useTranslation();
-  const outline = useMemo(() => markdownOutline(markdown), [markdown]);
   const entries = outline.entries;
   const asideRef = useRef<HTMLElement>(null);
   const navRef = useRef<HTMLElement>(null);
+
+  /* Keep the current heading in view as it changes. */
+  useEffect(() => {
+    const nav = navRef.current;
+    if (!nav || nav.scrollHeight <= nav.clientHeight) return;
+    const activeEl = nav.querySelector<HTMLElement>('[aria-current="location"]');
+    activeEl?.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
+  }, [activeIndex]);
 
   /* Wheel anywhere on the panel (title included) scrolls the list; with nothing to scroll
      vertically, a plain wheel scrolls sideways (same idea as the tab strip). */
@@ -86,39 +96,46 @@ export function MarkdownOutlinePanel({
       aria-label={t("modal.file_manager.markdown.outline")}
       className="flex w-[10.25rem] min-w-0 md:w-[11.5rem] max-w-[40%] shrink-0 flex-col border-l border-outline-variant/40 bg-surface-container-high"
     >
-      <p className="shrink-0 px-3 pb-1 pt-2 font-mono text-[10px] font-medium uppercase tracking-widest text-on-surface-variant">
-        {t("modal.file_manager.markdown.outline")}
-      </p>
       {outline.status === "unparsed" ? (
-        <p className="px-3 text-xs text-on-surface-variant">
+        <p className="px-3 py-2 text-xs text-on-surface-variant">
           {t("modal.file_manager.markdown.outline_unparsed")}
         </p>
       ) : entries.length === 0 ? (
-        <p className="px-3 text-xs text-on-surface-variant">
+        <p className="px-3 py-2 text-xs text-on-surface-variant">
           {t("modal.file_manager.markdown.outline_empty")}
         </p>
       ) : (
-        <nav ref={navRef} className="min-h-0 flex-1 overflow-auto pb-2">
-          {/* w-max: long titles widen the list (horizontal scroll) instead of truncating. */}
+        <nav ref={navRef} className="min-h-0 flex-1 overflow-auto py-1">
+          {/* w-max: indented titles widen the list (horizontal scroll); each title truncates at 16rem. */}
           <ul className="w-max min-w-full">
-            {entries.map((entry, index) => (
-              <li key={`${index}-${entry.offset}`}>
-                <button
-                  type="button"
-                  title={entry.text}
-                  onClick={() => onSelect(index, entry)}
-                  style={{ paddingLeft: `${0.75 + entry.level * 0.75}rem` }}
-                  className={[
-                    "block w-full whitespace-nowrap py-0.5 pr-3 text-left text-xs leading-5 transition-colors",
-                    "hover:bg-surface-container-highest hover:text-on-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent",
-                    entry.level === 0 ? "font-medium text-on-surface" : "text-on-surface-variant",
-                  ].join(" ")}
-                >
-                  {/* Sideways scroll for indent + normal titles; very long titles still truncate. */}
-                  <span className="block max-w-[16rem] truncate">{entry.text || "…"}</span>
-                </button>
-              </li>
-            ))}
+            {entries.map((entry, index) => {
+              const isActive = activeIndex === index;
+              return (
+                <li key={`${index}-${entry.offset}`}>
+                  <button
+                    type="button"
+                    title={entry.text}
+                    onClick={() => onSelect(index, entry)}
+                    aria-current={isActive ? "location" : undefined}
+                    style={{ paddingLeft: `${0.75 + entry.level * 0.75}rem` }}
+                    className={[
+                      "block w-full whitespace-nowrap py-0.5 pr-3 text-left text-xs leading-5 border-l-2 transition-colors",
+                      "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent",
+                      isActive
+                        ? "border-accent bg-accent/10 font-medium text-accent hover:bg-accent/15"
+                        : [
+                            "border-transparent hover:bg-surface-container-highest hover:text-on-surface",
+                            entry.level === 0
+                              ? "font-medium text-on-surface"
+                              : "text-on-surface-variant",
+                          ].join(" "),
+                    ].join(" ")}
+                  >
+                    <span className="block max-w-[16rem] truncate">{entry.text || "…"}</span>
+                  </button>
+                </li>
+              );
+            })}
           </ul>
         </nav>
       )}

@@ -23,7 +23,7 @@ use crate::store::{is_plain_internal, is_reserved_logical, KdfUnlockPreset};
 use super::create::create_vault;
 use super::fs::{
     fs_ensure_folder, fs_ensure_folder_path_staged, fs_seal_staged_imports, fs_seal_staged_wave,
-    fs_write_send_reader, fs_write_staged,
+    fs_write_staged,
 };
 use super::open_close::{
     abandon_failed_import, close_vault, delete_failed_import, open_vault_for_ingest,
@@ -268,39 +268,19 @@ pub fn ingest_import_directory(root: &VaultRoot, vault_id: &str, logical_path: &
     ensure_folder_path(root, vault_id, &logical)
 }
 
-/// Stream one document into an import session. One commit for the whole file.
+/// Stream one document into the open vault (a file manager import, or an
+/// import session), staged for the next index seal like every file import.
 pub fn ingest_import_reader(
     root: &VaultRoot,
     vault_id: &str,
     logical_path: &str,
-    reader: &mut (impl Read + Send + ?Sized),
-) -> Result<()> {
-    ingest_import_reader_at(root, vault_id, logical_path, reader, false)
-}
-
-/// Stream one document without sealing the index.
-/// [`crate::fs_seal_staged_imports`] writes the index for the staged files.
-pub fn ingest_import_reader_staged(
-    root: &VaultRoot,
-    vault_id: &str,
-    logical_path: &str,
-    reader: &mut (impl Read + Send + ?Sized),
-) -> Result<()> {
-    ingest_import_reader_at(root, vault_id, logical_path, reader, true)
-}
-
-fn ingest_import_reader_at(
-    root: &VaultRoot,
-    vault_id: &str,
-    logical_path: &str,
-    reader: &mut (impl Read + Send + ?Sized),
-    defer_index: bool,
+    reader: &mut (impl Read + ?Sized),
 ) -> Result<()> {
     let logical = normalize_import_logical(logical_path)?;
     if let Some((parent, _)) = logical.rsplit_once('/') {
         ensure_folder_path(root, vault_id, parent)?;
     }
-    fs_write_send_reader(root, vault_id, &format!("/{logical}"), reader, defer_index)?;
+    fs_write_staged(root, vault_id, &format!("/{logical}"), reader)?;
     Ok(())
 }
 

@@ -376,35 +376,52 @@ describe("importLogicalFiles", () => {
     expect(result.importedPaths).toContain("/a.txt");
     expect(result.writeFailureName).toBeNull();
   });
+});
 
-  it("seals the index once after the batch, not between files", async () => {
-    const importOne = async (count: number, sealImports: () => Promise<void>) =>
-      importLogicalFiles(
-        Array.from({ length: count }, (_, index) => ({
-          name: `${index}.bin`,
-          relativePath: `${index}.bin`,
-        })),
-        {
-          vaultId: "v",
-          parentPath: "/",
-          importSlots: 2,
-          readContent: async () => "",
-          ensureFolder: () => "/",
-          importFile: () => "/no",
-          importBinaryFile: async (_id, _parent, name) => `/${name}`,
-          sealImports,
-        },
-      );
-    const short: string[] = [];
-    await importOne(3, async () => {
-      short.push("seal");
+describe("importLogicalFiles folders", () => {
+  const photos = Array.from({ length: 12 }, (_, index) => ({
+    name: `IMG_${index}.jpg`,
+    relativePath: `Trip/day${index % 3}/IMG_${index}.jpg`,
+  }));
+
+  it.each([1, 4])("asks core for each folder once per batch (%i at once)", async (slots) => {
+    const ensured: string[] = [];
+    const written: string[] = [];
+    const result = await importLogicalFiles(photos, {
+      vaultId: "v",
+      parentPath: "/",
+      importSlots: slots,
+      readContent: async () => "",
+      ensureFolder: async (_id, parent, name) => {
+        ensured.push(`${parent}|${name}`);
+        return parent === "/" ? `/${name}` : `${parent}/${name}`;
+      },
+      importFile: () => "/no",
+      importBinaryFile: async (_id, parent, name) => {
+        written.push(`${parent}/${name}`);
+        return `${parent}/${name}`;
+      },
     });
-    expect(short).toEqual(["seal"]);
-    const long: string[] = [];
-    await importOne(33, async () => {
-      long.push("seal");
+    expect(ensured.sort()).toEqual(["/Trip|day0", "/Trip|day1", "/Trip|day2", "/|Trip"]);
+    expect(result.importedPaths).toHaveLength(12);
+    expect(written).toContain("/Trip/day2/IMG_5.jpg");
+  });
+
+  it("asks again for a folder core could not ensure", async () => {
+    let calls = 0;
+    const result = await importLogicalFiles(photos.slice(0, 2), {
+      vaultId: "v",
+      parentPath: "/",
+      readContent: async () => "",
+      ensureFolder: async () => {
+        calls += 1;
+        return null;
+      },
+      importFile: () => "/no",
+      importBinaryFile: async () => "/never",
     });
-    expect(long).toEqual(["seal"]);
+    expect(calls).toBe(2);
+    expect(result.skippedInvalid).toBe(2);
   });
 });
 

@@ -57,15 +57,6 @@ pub struct OpenSession {
     /// Files appended by an import that are not in the sealed index yet.
     #[zeroize(skip)]
     pub unsealed_imports: u64,
-    /// Highest import append included in the last successful index seal.
-    #[zeroize(skip)]
-    pub sealed_seq: u64,
-    /// Next import append. Compared with [`Self::sealed_seq`].
-    #[zeroize(skip)]
-    pub import_seq: u64,
-    /// One importer is sealing the index for the current wave.
-    #[zeroize(skip)]
-    pub sealing: bool,
     /// Blob files named in the session and not yet flushed with the index.
     #[zeroize(skip)]
     pub staged_blobs: Vec<PathBuf>,
@@ -110,9 +101,6 @@ impl OpenSession {
             lock: None,
             skip_close_backup: false,
             unsealed_imports: 0,
-            sealed_seq: 0,
-            import_seq: 0,
-            sealing: false,
             staged_blobs: Vec::new(),
             deferred: None,
         }

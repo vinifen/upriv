@@ -25,6 +25,7 @@ import {
   insertUngroupedVaultAtRoot,
   LOADING_BUDGET_MS,
   errorOnPasswordField,
+  isJobCancelled,
   isRpcTimeout,
   newJobId,
   remapVaultIdInGroups,
@@ -206,6 +207,7 @@ export function useVaultListScreen() {
         format: shownExportJob.format,
         startedAt: shownExportJob.startedAt,
         progress: exportProgress,
+        stopping: shownExportJob.stopping,
       }
     : null;
 
@@ -354,7 +356,13 @@ export function useVaultListScreen() {
     blockOpenVaultIdsRef,
   });
 
+  /** Reloads in flight: `refreshing` stays on until the last one settles. */
+  const reloadsInFlightRef = useRef(0);
+  /** The reload the person asked for (Refresh, or a pull), shared while it runs. */
+  const userRefreshRef = useRef<Promise<VaultListItem[]> | null>(null);
+
   const reload = useCallback(async (): Promise<VaultListItem[]> => {
+    reloadsInFlightRef.current += 1;
     setRefreshing(true);
     const fetchStartedAt = Date.now();
     const epochAtStart = vaultRootEpochRef.current;
@@ -393,7 +401,12 @@ export function useVaultListScreen() {
       }
       return list;
     } catch (error) {
-      if (!settingsOnDisk && (isVaultRootGoneError(error) || isVaultRootUnreachableError(error))) {
+      if (vaultRootEpochRef.current !== epochAtStart) {
+        // The data folder changed under this reload; the new one loads on its own.
+      } else if (
+        !settingsOnDisk &&
+        (isVaultRootGoneError(error) || isVaultRootUnreachableError(error))
+      ) {
         // Children stay mounted under Gate. First-run and an already-unplugged
         // folder are not a new integrity failure (that would loop the epoch).
       } else if (shouldBumpVaultRootEpoch(error)) {
@@ -403,7 +416,8 @@ export function useVaultListScreen() {
       }
       return [];
     } finally {
-      setRefreshing(false);
+      reloadsInFlightRef.current -= 1;
+      if (reloadsInFlightRef.current === 0) setRefreshing(false);
     }
   }, [
     reportVaultRootIntegrityFailure,
@@ -420,6 +434,19 @@ export function useVaultListScreen() {
     vaultGroupService,
     vaultService,
   ]);
+
+  /**
+   * Refresh from the menu or a pull. A second ask while one runs joins it, so
+   * a pull during Refresh does not read the data folder twice.
+   */
+  const refresh = useCallback((): Promise<VaultListItem[]> => {
+    if (!userRefreshRef.current) {
+      userRefreshRef.current = reload().finally(() => {
+        userRefreshRef.current = null;
+      });
+    }
+    return userRefreshRef.current;
+  }, [reload]);
 
   useEffect(() => {
     if (!settingsReady) return;
@@ -455,6 +482,10 @@ export function useVaultListScreen() {
       setBackupListRefresh((token) => token + 1);
     },
     onFailed: (_vaultId, error) => {
+      if (shouldBumpVaultRootEpoch(error)) {
+        void reportVaultRootIntegrityFailure(error);
+        return;
+      }
       show(t(mobileErrorI18nKey(error, "toast.backup_now_failed")));
     },
     onTimedOut: () => {
@@ -583,11 +614,20 @@ export function useVaultListScreen() {
         })
         .catch((error) => {
           if (gen !== exportBusyGenRef.current) return;
+          if (isJobCancelled(error)) {
+            show(t("toast.vault_export_cancelled"));
+            setExportVault(null);
+            return;
+          }
           if (isRpcTimeout(error)) {
             // The call gave up before the budget did; core still writes the file.
             void jobs.cancel(job, "timeout").catch(() => {
               /* The export result is ignored either way. */
             });
+          }
+          if (shouldBumpVaultRootEpoch(error)) {
+            void reportVaultRootIntegrityFailure(error);
+            return;
           }
           const key = mobileErrorI18nKey(error, "vault.export.failed");
           // A refused password goes on the window's password field; a window
@@ -608,6 +648,7 @@ export function useVaultListScreen() {
       exportJob,
       exportVault,
       jobs,
+      reportVaultRootIntegrityFailure,
       setExportJob,
       setExportPasswordError,
       setExportVault,
@@ -616,6 +657,16 @@ export function useVaultListScreen() {
       vaultService,
     ],
   );
+
+  /** Ask the running export to stop. Core will clean up any partial file. */
+  const handleStopExportVault = useCallback(() => {
+    const job = exportJobRef.current;
+    if (!job) return;
+    setExportJob((current) => (current ? { ...current, stopping: true } : null));
+    void jobs.cancel(job, "user").catch(() => {
+      /* The export result still settles the job. */
+    });
+  }, [jobs, setExportJob]);
 
   const handleRowExport = useCallback(
     (vault: VaultListItem) => {
@@ -731,6 +782,10 @@ export function useVaultListScreen() {
   };
 
   const showGroupErr = (error: unknown) => {
+    if (shouldBumpVaultRootEpoch(error)) {
+      void reportVaultRootIntegrityFailure(error);
+      return;
+    }
     const message = t(mobileErrorI18nKey(error));
     setGroupFormError(message);
     show(message);
@@ -796,6 +851,10 @@ export function useVaultListScreen() {
         }
       } catch (error) {
         if (vaultOrderGenRef.current !== generation) return;
+        if (shouldBumpVaultRootEpoch(error)) {
+          void reportVaultRootIntegrityFailure(error);
+          return;
+        }
         show(t(mobileErrorI18nKey(error)));
       }
     })();
@@ -1006,6 +1065,10 @@ export function useVaultListScreen() {
     try {
       await vaultService.unregisterSettings(vaultId);
     } catch (error) {
+      if (shouldBumpVaultRootEpoch(error)) {
+        void reportVaultRootIntegrityFailure(error);
+        return;
+      }
       show(t(mobileErrorI18nKey(error, "error.unexpected")));
       return;
     }
@@ -1065,6 +1128,10 @@ export function useVaultListScreen() {
       } catch (error) {
         if (noteSaveGenerationRef.current.get(vaultId) !== nextGeneration) return false;
         rollback();
+        if (shouldBumpVaultRootEpoch(error)) {
+          void reportVaultRootIntegrityFailure(error);
+          return false;
+        }
         show(t(mobileErrorI18nKey(error, "error.settings_save_failed")));
         return false;
       }
@@ -1083,13 +1150,17 @@ export function useVaultListScreen() {
       } catch (error) {
         if (noteSaveGenerationRef.current.get(vaultId) !== nextGeneration) return false;
         rollback();
+        if (shouldBumpVaultRootEpoch(error)) {
+          void reportVaultRootIntegrityFailure(error);
+          return false;
+        }
         show(t(mobileErrorI18nKey(error, "error.settings_save_failed")));
         return false;
       }
       if (noteSaveGenerationRef.current.get(vaultId) !== nextGeneration) return false;
       return true;
     },
-    [pipelineStatus, setVaults, show, t, vaultService, vaults],
+    [pipelineStatus, reportVaultRootIntegrityFailure, setVaults, show, t, vaultService, vaults],
   );
 
   const vaultsRef = useRef(vaults);
@@ -1337,12 +1408,14 @@ export function useVaultListScreen() {
     allVaultsHidden,
     lifecycle,
     reload,
+    refresh,
     openCreate,
     closeCreate,
     pipelineStatus,
     onRewrapRunChange,
     rewrapRun,
     handleConfirmExportVault,
+    handleStopExportVault,
     handleRowExport,
     handleExportTimeout,
     exportFolders,

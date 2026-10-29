@@ -11,7 +11,7 @@ export interface AppSettingsLoadResult {
 
 export interface AppSettingsSaveOptions {
   /**
-   * When false, daemon writes TOML only (skip `.upriv-root` sync).
+   * When false, daemon writes TOML only (skip `.upriv-data-folder` sync).
    * Pass false after `setupDefaultRoot` / `setupAtPath` / deactivate already applied the alias.
    * Default true.
    */

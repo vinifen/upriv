@@ -1,16 +1,7 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import { StyleSheet, useWindowDimensions, View, type ViewStyle } from "react-native";
-import {
-  clampCanonicalTreeSplitPercent,
-  persistableTreeSplitPercent,
-  displayTreeSplitPercent,
-  percentFromDelta,
-  TREE_SPLIT_DEFAULT_PERCENT,
-  type FileManagerEntry,
-  type VaultWorkspaceAction,
-} from "@upriv/shared";
-import { useWorkspacePersistence } from "@upriv/shared/react";
-import { useAppSettingsContext } from "@/features/system/settings";
+import type { FileManagerEntry, VaultWorkspaceAction } from "@upriv/shared";
+import { useTreeSplitDrag, useWorkspacePersistence } from "@upriv/shared/react";
 import { useTheme } from "@/theme";
 import { useVaultFileSystemService } from "@/platform/services";
 import { useFileManager } from "../FileManagerContext";
@@ -23,6 +14,10 @@ import { PaneResizeHandle } from "./PaneResizeHandle";
 
 /** Same breakpoint as desktop `md:` / `useMediaQuery("(max-width: 767px)")`. */
 const NARROW_MAX_WIDTH = 767;
+
+function treeSlotExtentStyle(extent: number | `${number}%`, narrow: boolean): ViewStyle {
+  return narrow ? { height: extent, width: "100%" } : { width: extent, height: "100%" };
+}
 
 interface FileManagerWorkspaceProps {
   entry: FileManagerEntry;
@@ -44,26 +39,8 @@ export function FileManagerWorkspace({
   const isNarrow = windowWidth <= NARROW_MAX_WIDTH;
   const axis = isNarrow ? "y" : "x";
   const { dispatchWorkspace } = useFileManager();
-  const { settings, patchSettings } = useAppSettingsContext();
-  const layoutSize = useRef(0);
   const treeSlotRef = useRef<View>(null);
   const [containerSize, setContainerSize] = useState(0);
-
-  const settingsPercent = clampCanonicalTreeSplitPercent(
-    settings.ui.file_manager_tree_split_percent ?? TREE_SPLIT_DEFAULT_PERCENT,
-  );
-  const [livePercent, setLivePercent] = useState(settingsPercent);
-  const livePercentRef = useRef(settingsPercent);
-  const draggingRef = useRef(false);
-  const dragStartPercentRef = useRef(settingsPercent);
-  const dragStartSizeRef = useRef(0);
-  const [dragSize, setDragSize] = useState<number | null>(null);
-
-  useEffect(() => {
-    if (draggingRef.current) return;
-    livePercentRef.current = settingsPercent;
-    setLivePercent(settingsPercent);
-  }, [settingsPercent]);
 
   const dispatch = useCallback(
     (action: VaultWorkspaceAction) => dispatchWorkspace(entry.vaultId, action),
@@ -87,81 +64,40 @@ export function FileManagerWorkspace({
     suspend: fm.importBusy,
   });
 
-  const applyContainerSize = useCallback((size: number) => {
-    if (draggingRef.current) return;
-    if (size <= 0) return;
-    if (Math.abs(size - layoutSize.current) < 1) return;
-    layoutSize.current = size;
-    setContainerSize(size);
-  }, []);
-
-  const handleSplitDragStart = useCallback(() => {
-    draggingRef.current = true;
-    dragStartPercentRef.current = livePercentRef.current;
-    const size = layoutSize.current;
-    dragStartSizeRef.current = size;
-    setDragSize(size > 0 ? size : null);
-  }, []);
-
-  const applyTreeExtent = useCallback((extent: number, narrow: boolean) => {
-    treeSlotRef.current?.setNativeProps({
-      style: narrow
-        ? { height: extent, width: "100%", flexGrow: 0, flexShrink: 0 }
-        : { width: extent, height: "100%", flexGrow: 0, flexShrink: 0 },
-    });
-  }, []);
-
-  const handleSplitDrag = useCallback(
-    (deltaPx: number) => {
-      const percent = percentFromDelta(
-        dragStartPercentRef.current,
-        deltaPx,
-        dragStartSizeRef.current,
-        axis,
-      );
-      livePercentRef.current = percent;
-      const size = dragStartSizeRef.current;
-      if (size <= 0) return;
-      const shown = displayTreeSplitPercent(percent, size, axis);
-      applyTreeExtent(Math.round((size * shown) / 100), axis === "y");
+  // Moves resize the explorer through native props: a re-render per move is too slow.
+  const paintTreeExtent = useCallback(
+    (visualPercent: number, size: number) => {
+      treeSlotRef.current?.setNativeProps({
+        style: treeSlotExtentStyle(Math.round((size * visualPercent) / 100), isNarrow),
+      });
     },
-    [applyTreeExtent, axis],
+    [isNarrow],
   );
 
-  const persistSplitPercent = useCallback(
-    (next: number) => {
-      const percent = persistableTreeSplitPercent(next);
-      livePercentRef.current = percent;
-      setLivePercent(percent);
-      if (percent === settingsPercent) return;
-      void patchSettings({ ui: { file_manager_tree_split_percent: percent } });
-    },
-    [patchSettings, settingsPercent],
-  );
-
-  const handleSplitDragEnd = useCallback(() => {
-    draggingRef.current = false;
-    setDragSize(null);
-    persistSplitPercent(livePercentRef.current);
-  }, [persistSplitPercent]);
+  const split = useTreeSplitDrag({
+    savedPercent: entry.workspace.treeSplitPercent,
+    containerSize,
+    axis,
+    dispatch,
+    onDragFrame: paintTreeExtent,
+  });
 
   // A redraw while the finger is down would put the pre-drag size back.
   // Apply the live size again before paint.
   useLayoutEffect(() => {
-    if (!draggingRef.current) return;
-    const size = dragStartSizeRef.current;
-    if (size <= 0) return;
-    const shown = displayTreeSplitPercent(livePercentRef.current, size, axis);
-    applyTreeExtent(Math.round((size * shown) / 100), axis === "y");
+    split.repaintDrag();
   });
 
   const explorerCollapsed = entry.workspace.explorerCollapsed;
-  const sizeForSplit = dragSize ?? containerSize;
-  const splitPercent = displayTreeSplitPercent(livePercent, sizeForSplit, axis);
-  const treeExtent = sizeForSplit > 0 ? Math.round((sizeForSplit * splitPercent) / 100) : undefined;
-  const treeSlotStyle: ViewStyle = isNarrow
-    ? { height: treeExtent ?? "20%", width: "100%" }
-    : { width: treeExtent ?? "20%", height: "100%" };
+  const treeSlotStyle: ViewStyle = {
+    ...treeSlotExtentStyle(
+      containerSize > 0
+        ? Math.round((containerSize * split.visualPercent) / 100)
+        : `${split.visualPercent}%`,
+      isNarrow,
+    ),
+    display: split.visualPercent === 0 ? "none" : undefined,
+  };
 
   return (
     <>
@@ -176,7 +112,8 @@ export function FileManagerWorkspace({
         ]}
         onLayout={(event) => {
           const { width, height } = event.nativeEvent.layout;
-          applyContainerSize(axis === "y" ? height : width);
+          const size = axis === "y" ? height : width;
+          setContainerSize((prev) => (size <= 0 || Math.abs(prev - size) < 1 ? prev : size));
         }}
       >
         {explorerCollapsed ? null : (
@@ -186,9 +123,9 @@ export function FileManagerWorkspace({
             </View>
             <PaneResizeHandle
               axis={axis}
-              onDragStart={handleSplitDragStart}
-              onDrag={handleSplitDrag}
-              onDragEnd={handleSplitDragEnd}
+              onDragStart={split.onDragStart}
+              onDrag={split.onDrag}
+              onDragEnd={split.onDragEnd}
             />
           </>
         )}
@@ -215,6 +152,6 @@ const styles = StyleSheet.create({
   inactive: { display: "none" },
   rootColumn: { flexDirection: "column" },
   rootRow: { flexDirection: "row" },
-  treeSlot: { flexGrow: 0, flexShrink: 0, minWidth: 0, minHeight: 0 },
+  treeSlot: { flexGrow: 0, flexShrink: 0, minWidth: 0, minHeight: 0, overflow: "hidden" },
   editorCol: { flex: 1, minHeight: 0, minWidth: 0, overflow: "hidden" },
 });

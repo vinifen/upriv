@@ -49,9 +49,9 @@ First-run setup defaults to **`default_root`** for all distributions (beside the
 
 **Strict vs loose:** Electron always sets `UPRIV_DEFAULT_ROOT_ANCHOR` when unpackaged or packaged, so portable installs and `electron .` are strict — a sibling folder with `.upriv` next to the AppImage is **not** auto-imported; use `custom_root` mode / create in the default data folder. Loose walk (`discover_vault_root_upward`) is the fallback when the env is absent.
 
-Alias `.upriv-root` is created only for `custom_root` mode; lives in the **app home** (not necessarily beside the FUSE-mounted binary).
+Alias `.upriv-data-folder` is created only for `custom_root` mode; lives in the **app home** (not necessarily beside the FUSE-mounted binary).
 Switching to `default_root` marks it `status=inactive` (path kept); `custom_root` sets `status=active`.
-Mode+path are **not** stored in `settings.toml` — the UI fields are derived from `.upriv-root` on load.
+Mode+path are **not** stored in `settings.toml` — the UI fields are derived from `.upriv-data-folder` on load.
 
 ### RPC naming convention
 

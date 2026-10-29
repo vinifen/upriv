@@ -1,6 +1,5 @@
-import { findNode, type FileTreeNode } from "../file-tree";
-import type { MarkdownViewMode, VaultWorkspaceState } from "./workspaceTypes";
-import { markdownViewMode } from "./workspaceTypes";
+import { clampCanonicalTreeSplitPercent, findNode, type FileTreeNode } from "../file-tree";
+import type { PerFileWorkspaceState, VaultWorkspaceState } from "./workspaceTypes";
 
 /** Logical file at vault root — encrypted in `store/` with the rest of the vault. */
 export const UPRIV_WORKSPACE_FILE_NAME = ".upriv-workspace.json";
@@ -14,12 +13,12 @@ export interface WorkspaceSnapshot {
   activeTabPath: string | null;
   expandedPaths: string[];
   selectedPath: string | null;
-  /** Missing or any value other than `source` loads as `preview`. */
-  markdownView: MarkdownViewMode;
   /** Missing or anything but `true` loads as shown. */
   explorerCollapsed: boolean;
-  /** Missing or anything but `true` loads as hidden. */
-  markdownOutlineOpen: boolean;
+  /** Per-file view, outline, word wrap, and search. */
+  files?: Record<string, PerFileWorkspaceState>;
+  /** Vault-specific explorer/editor split percentage (4–65). */
+  treeSplitPercent?: number | null;
 }
 
 export function isInternalVaultFileName(name: string): boolean {
@@ -58,6 +57,39 @@ function dedupePaths(paths: string[]): string[] {
   return out;
 }
 
+function parseFilesRecord(raw: unknown): Record<string, PerFileWorkspaceState> | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const out: Record<string, PerFileWorkspaceState> = {};
+  for (const [path, entry] of Object.entries(raw as Record<string, unknown>)) {
+    if (!isNonEmptyString(path) || isInternalVaultPath(path)) continue;
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const fileObj = entry as Record<string, unknown>;
+    const fileState: PerFileWorkspaceState = {};
+    if (fileObj.markdownView === "source" || fileObj.markdownView === "preview") {
+      fileState.markdownView = fileObj.markdownView;
+    }
+    if (typeof fileObj.markdownOutlineOpen === "boolean") {
+      fileState.markdownOutlineOpen = fileObj.markdownOutlineOpen;
+    }
+    if (typeof fileObj.searchQuery === "string") {
+      fileState.searchQuery = fileObj.searchQuery;
+    }
+    if (typeof fileObj.wordWrap === "boolean") {
+      fileState.wordWrap = fileObj.wordWrap;
+    }
+    if (Object.keys(fileState).length > 0) {
+      out[path] = fileState;
+    }
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+function parseTreeSplitPercent(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  const rounded = Math.round(value);
+  return clampCanonicalTreeSplitPercent(rounded);
+}
+
 /**
  * Parse raw JSON text. Corrupt / unknown versions → null (caller starts clean).
  * Does **not** check that paths exist — use `sanitizeWorkspaceSnapshot` for that.
@@ -88,20 +120,53 @@ export function parseWorkspaceSnapshot(raw: string): WorkspaceSnapshot | null {
         ? obj.selectedPath
         : null;
 
+  const files = parseFilesRecord(obj.files);
+  const treeSplitPercent = parseTreeSplitPercent(obj.treeSplitPercent);
+
   return {
     format_version: WORKSPACE_SNAPSHOT_FORMAT_VERSION,
     openTabs,
     activeTabPath,
     expandedPaths,
     selectedPath,
-    markdownView: markdownViewMode(obj.markdownView),
     explorerCollapsed: obj.explorerCollapsed === true,
-    markdownOutlineOpen: obj.markdownOutlineOpen === true,
+    ...(files ? { files } : {}),
+    ...(treeSplitPercent !== null ? { treeSplitPercent } : {}),
   };
 }
 
 export function serializeWorkspaceSnapshot(snapshot: WorkspaceSnapshot): string {
-  return `${JSON.stringify(snapshot, null, 2)}\n`;
+  const clean: Record<string, unknown> = {
+    format_version: snapshot.format_version,
+    openTabs: snapshot.openTabs,
+    activeTabPath: snapshot.activeTabPath,
+    expandedPaths: snapshot.expandedPaths,
+    selectedPath: snapshot.selectedPath,
+    explorerCollapsed: snapshot.explorerCollapsed,
+  };
+  if (snapshot.files && Object.keys(snapshot.files).length > 0) {
+    clean.files = snapshot.files;
+  }
+  if (typeof snapshot.treeSplitPercent === "number") {
+    clean.treeSplitPercent = snapshot.treeSplitPercent;
+  }
+  return `${JSON.stringify(clean, null, 2)}\n`;
+}
+
+function sanitizeFilesRecord(
+  files: Record<string, PerFileWorkspaceState> | undefined,
+  tree: FileTreeNode,
+): Record<string, PerFileWorkspaceState> | undefined {
+  if (!files) return undefined;
+  const out: Record<string, PerFileWorkspaceState> = {};
+  for (const [path, state] of Object.entries(files)) {
+    if (isInternalVaultPath(path)) continue;
+    const node = findNode(tree, path);
+    if (node?.type === "file") {
+      out[path] = state;
+    }
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 /**
@@ -143,19 +208,30 @@ export function sanitizeWorkspaceSnapshot(
     selectedPath = activeTabPath;
   }
 
+  const files = sanitizeFilesRecord(snapshot.files, tree);
+
   return {
     format_version: WORKSPACE_SNAPSHOT_FORMAT_VERSION,
     openTabs,
     activeTabPath,
     expandedPaths,
     selectedPath,
-    markdownView: markdownViewMode(snapshot.markdownView),
     explorerCollapsed: snapshot.explorerCollapsed === true,
-    markdownOutlineOpen: snapshot.markdownOutlineOpen === true,
+    ...(files ? { files } : {}),
+    ...(typeof snapshot.treeSplitPercent === "number"
+      ? { treeSplitPercent: snapshot.treeSplitPercent }
+      : {}),
   };
 }
 
 export function workspaceSnapshotFromState(state: VaultWorkspaceState): WorkspaceSnapshot {
+  const files: Record<string, PerFileWorkspaceState> = {};
+  for (const [path, entry] of Object.entries(state.fileStates)) {
+    if (!isInternalVaultPath(path) && Object.keys(entry).length > 0) {
+      files[path] = entry;
+    }
+  }
+
   return {
     format_version: WORKSPACE_SNAPSHOT_FORMAT_VERSION,
     openTabs: state.openTabs.filter((p) => !isInternalVaultPath(p)),
@@ -164,10 +240,37 @@ export function workspaceSnapshotFromState(state: VaultWorkspaceState): Workspac
     expandedPaths: state.expandedPaths.length > 0 ? state.expandedPaths : ["/"],
     selectedPath:
       state.selectedPath && !isInternalVaultPath(state.selectedPath) ? state.selectedPath : null,
-    markdownView: markdownViewMode(state.markdownView),
     explorerCollapsed: state.explorerCollapsed,
-    markdownOutlineOpen: state.markdownOutlineOpen,
+    ...(Object.keys(files).length > 0 ? { files } : {}),
+    ...(typeof state.treeSplitPercent === "number"
+      ? { treeSplitPercent: state.treeSplitPercent }
+      : {}),
   };
+}
+
+function fileStatesEqual(
+  a?: Record<string, PerFileWorkspaceState>,
+  b?: Record<string, PerFileWorkspaceState>,
+): boolean {
+  const aKeys = Object.keys(a ?? {});
+  const bKeys = Object.keys(b ?? {});
+  if (aKeys.length !== bKeys.length) return false;
+  for (const key of aKeys) {
+    const aVal = a?.[key];
+    const bVal = b?.[key];
+    if (!bVal) return false;
+    const aSearchQuery = aVal?.searchQuery ?? "";
+    const bSearchQuery = bVal?.searchQuery ?? "";
+    if (
+      aVal?.markdownView !== bVal?.markdownView ||
+      aVal?.markdownOutlineOpen !== bVal?.markdownOutlineOpen ||
+      aVal?.wordWrap !== bVal?.wordWrap ||
+      aSearchQuery !== bSearchQuery
+    ) {
+      return false;
+    }
+  }
+  return true;
 }
 
 export function snapshotsEqual(a: WorkspaceSnapshot, b: WorkspaceSnapshot): boolean {
@@ -179,9 +282,9 @@ export function snapshotsEqual(a: WorkspaceSnapshot, b: WorkspaceSnapshot): bool
     a.openTabs.every((path, index) => path === b.openTabs[index]) &&
     a.expandedPaths.length === b.expandedPaths.length &&
     a.expandedPaths.every((path, index) => path === b.expandedPaths[index]) &&
-    a.markdownView === b.markdownView &&
     a.explorerCollapsed === b.explorerCollapsed &&
-    a.markdownOutlineOpen === b.markdownOutlineOpen
+    (a.treeSplitPercent ?? null) === (b.treeSplitPercent ?? null) &&
+    fileStatesEqual(a.files, b.files)
   );
 }
 
@@ -219,18 +322,24 @@ export function workspaceSnapshotToHydrate(
   loaded: WorkspaceSnapshot,
 ): WorkspaceSnapshot | null {
   if (!fileLayoutIsCold(current) || !sameFileLayout(mount, current)) return null;
+
+  const mergedFiles = {
+    ...(loaded.files ?? {}),
+    ...(current.files ?? {}),
+  };
+  const treeSplitPercent =
+    current.treeSplitPercent !== mount.treeSplitPercent
+      ? current.treeSplitPercent
+      : loaded.treeSplitPercent;
+
   const merged: WorkspaceSnapshot = {
     ...loaded,
-    markdownView:
-      current.markdownView !== mount.markdownView ? current.markdownView : loaded.markdownView,
     explorerCollapsed:
       current.explorerCollapsed !== mount.explorerCollapsed
         ? current.explorerCollapsed
         : loaded.explorerCollapsed,
-    markdownOutlineOpen:
-      current.markdownOutlineOpen !== mount.markdownOutlineOpen
-        ? current.markdownOutlineOpen
-        : loaded.markdownOutlineOpen,
+    ...(Object.keys(mergedFiles).length > 0 ? { files: mergedFiles } : {}),
+    ...(treeSplitPercent !== undefined && treeSplitPercent !== null ? { treeSplitPercent } : {}),
   };
   if (snapshotsEqual(current, merged)) return null;
   return merged;

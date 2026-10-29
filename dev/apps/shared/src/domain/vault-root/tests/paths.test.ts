@@ -16,7 +16,7 @@ describe("vaultRootContentorPath", () => {
       vaultRootContentorPath(
         {
           status: "needs_setup",
-          aliasPath: "/home/.upriv-root",
+          aliasPath: "/home/.upriv-data-folder",
           defaultRootAnchor: "/home",
           distribution: "dev",
         },

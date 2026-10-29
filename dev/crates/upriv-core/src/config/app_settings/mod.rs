@@ -3,7 +3,7 @@
 //! This is **not** per-vault `config.toml` (see [`crate::config::vault_config`]).
 //!
 //! Vault-root **mode and path are not stored in TOML**. They live in the app-home
-//! `.upriv-root` alias (`status=active|inactive` + path). The wire/`AppSettings`
+//! `.upriv-data-folder` pointer (`status=active|inactive` + `data_folder=`). The wire/`AppSettings`
 //! fields `vault_root_mode` and `upriv_root_path` are derived on load and
 //! drive alias updates on save.
 

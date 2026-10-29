@@ -41,13 +41,20 @@ const SEVEN_ZIP_TITLE = "vault.export.option.seven_zip";
 
 interface HarnessProps {
   onConfirm: (request: VaultExportRequest, dir: string) => void;
+  onStop?: () => void;
   onPasswordEdited?: () => void;
   running?: VaultExportRun | null;
   passwordError?: string | null;
 }
 
 /** The window with the folders the vault list keeps. */
-function Harness({ onConfirm, onPasswordEdited, running, passwordError }: HarnessProps) {
+function Harness({
+  onConfirm,
+  onStop = () => {},
+  onPasswordEdited,
+  running,
+  passwordError,
+}: HarnessProps) {
   const folders = useVaultExportFolders();
   return createElement(ExportVaultModal, {
     vault,
@@ -57,6 +64,7 @@ function Harness({ onConfirm, onPasswordEdited, running, passwordError }: Harnes
     folders,
     onClose: () => {},
     onConfirm,
+    onStop,
     onPasswordEdited,
   });
 }
@@ -265,8 +273,29 @@ describe("ExportVaultModal", () => {
     expect(within(card(ZIP_TITLE)).queryByRole("progressbar")).toBeNull();
     // The running option shows its progress in place of its fields.
     expect(screen.queryByLabelText("vault.export.dialog.seven_zip_password")).toBeNull();
-    const exporting = screen.getByRole("button", { name: "vault.export.dialog.submitting" });
-    expect((exporting as HTMLButtonElement).disabled).toBe(true);
+    // The one footer button stops the export instead of starting one.
+    expect(screen.queryByRole("button", { name: "vault.export.dialog.confirm" })).toBeNull();
+    expect(screen.getByRole("button", { name: "vault.export.dialog.stop" })).toBeDefined();
+  });
+
+  it("stops a running export once, then waits for it to settle", async () => {
+    const onStop = vi.fn();
+    const running = { format: "store_zip" as const, startedAt: Date.now(), progress: null };
+    const { rerender } = render(createElement(Harness, { onConfirm: vi.fn(), onStop, running }));
+    await capabilitiesLoaded();
+
+    fireEvent.click(screen.getByRole("button", { name: "vault.export.dialog.stop" }));
+    expect(onStop).toHaveBeenCalledTimes(1);
+
+    rerender(
+      createElement(Harness, {
+        onConfirm: vi.fn(),
+        onStop,
+        running: { ...running, stopping: true },
+      }),
+    );
+    const stopping = screen.getByRole("button", { name: "vault.export.dialog.stopping" });
+    expect((stopping as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("shows a running .zip export in the .zip option", async () => {

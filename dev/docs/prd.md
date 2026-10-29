@@ -215,7 +215,7 @@ encrypted_dir / upriv_plain:
 | RF-07b | Modes: `keep_last` (only latest backup) or `keep_all` (history) | P1 |
 | RF-08 | Recovery UI if workspace/marker exists with vault logically "closed" | P0 |
 | RF-09 | Open an existing data folder: the default folder beside the app, or one chosen in the Gate | P0 |
-| RF-10 | Remember the chosen data folder in the app home (`.upriv-root`) and the last opened vault in `settings.toml` `[app]` | P2 |
+| RF-10 | Remember the chosen data folder in the app home (`.upriv-data-folder`) and the last opened vault in `settings.toml` `[app]` | P2 |
 | RF-11 | **Multiple vaults** per HD: one `vaults/<id>/` folder per vault (`config.toml` + encrypted `store/`) | P1 |
 | RF-12 | File manager folder while open. App folder: `{place}/workspace/{display_name}/`. Vault's own folder: `{path}/{display_name}/`. Not created at init. See `.agent/AGENT.md`. | P0 |
 | RF-13 | Discover vaults by listing `.upriv/vaults/<id>/config.toml` | P0 |
@@ -503,7 +503,7 @@ The password string stays in the app after a successful unlock, until lock or qu
 <data-folder>/
 ├── Upriv-<version>-portable-x64.exe        # portable Windows app (§3.5.1), when used
 ├── Upriv-<version>-linux-<arch>.AppImage   # portable Linux app, when used
-├── .upriv-root                             # only after the user picked another data folder
+├── .upriv-data-folder                      # only after the user picked another data folder
 ├── workspace/                              # file manager folders while open (place = beside)
 │   └── <display name>/
 └── .upriv/

@@ -10,8 +10,8 @@ use crate::error::{Result, UprivError};
 
 pub use types::{
     VaultArchiveMode, VaultAutoCloseSection, VaultBackupMode, VaultBackupSection, VaultConfig,
-    VaultIdentitySection, VaultMountSection, VaultSecuritySection, VaultSevenZipSection,
-    VaultStorageMode, VaultStorageSection, VaultWipePattern,
+    VaultFileManagerSection, VaultIdentitySection, VaultMountSection, VaultSecuritySection,
+    VaultSevenZipSection, VaultStorageMode, VaultStorageSection, VaultWipePattern,
 };
 
 const CONFIG_FILE_NAME: &str = "config.toml";
@@ -404,6 +404,18 @@ display_name = "X"
     }
 
     #[test]
+    fn unknown_file_manager_fields_are_rejected() {
+        toml::from_str::<VaultFileManagerSection>("not_a_field = true")
+            .expect_err("unknown file manager field");
+    }
+
+    #[test]
+    fn a_missing_file_manager_section_asks_before_deleting() {
+        let section: VaultFileManagerSection = toml::from_str("").unwrap();
+        assert!(section.confirm_delete);
+    }
+
+    #[test]
     fn load_rejects_an_unknown_key_and_leaves_the_file() {
         let tmp = tempfile::tempdir().unwrap();
         let vault_dir = tmp.path().join("notes");
@@ -598,6 +610,7 @@ path = "relative/mount"
             backup: VaultBackupSection::default(),
             security: VaultSecuritySection::default(),
             auto_close: VaultAutoCloseSection::default(),
+            file_manager: VaultFileManagerSection::default(),
             seven_zip: VaultSevenZipSection::default(),
         };
         let err = serialize_vault_config_toml(&cfg).unwrap_err();
@@ -638,6 +651,9 @@ path = "relative/mount"
                 enabled: true,
                 idle_minutes: 30,
             },
+            file_manager: VaultFileManagerSection {
+                confirm_delete: false,
+            },
             seven_zip: VaultSevenZipSection {
                 encrypt_file_names: false,
                 archive_mode: VaultArchiveMode::CompressEncrypt,
@@ -654,6 +670,7 @@ path = "relative/mount"
             "[backup]",
             "[security]",
             "[auto_close]",
+            "[file_manager]",
             "[seven_zip]",
             "[mount.linux]",
         ] {
@@ -665,6 +682,7 @@ path = "relative/mount"
         assert_eq!(loaded.backup, cfg.backup);
         assert_eq!(loaded.security, cfg.security);
         assert_eq!(loaded.auto_close, cfg.auto_close);
+        assert_eq!(loaded.file_manager, cfg.file_manager);
         assert_eq!(loaded.seven_zip, cfg.seven_zip);
         assert_eq!(loaded.mount.linux.path, "/tmp/open");
         assert!(loaded.vault.hidden);

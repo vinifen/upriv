@@ -7,7 +7,7 @@
 use crate::host_fs::File;
 #[allow(unused_imports)]
 use crate::host_fs::HostFsQuery;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -31,8 +31,6 @@ use crate::store::{
     ImportBlob, RetiredFileChunks, VaultIndex, INTERNAL_WORKSPACE_FILE, VAULT_FS_MAX_INLINE_BYTES,
 };
 
-use super::import_slots::import_slots;
-
 fn store_dir(session: &OpenSession) -> std::path::PathBuf {
     session.vault_dir.join(crate::paths::STORE_DIR_NAME)
 }
@@ -53,13 +51,10 @@ fn seal_index(session: &mut OpenSession) -> Result<()> {
     flush_index_parts(&store, &session.header, &session.index_key, &session.index)?;
     session.staged_blobs.clear();
     session.index.clear_unsealed_holes();
-    session.sealed_seq = session.import_seq;
     session.unsealed_imports = 0;
-    session.sealing = false;
     session.deferred = None;
     session.dirty = false;
     session.tree_revision = session.tree_revision.saturating_add(1);
-    import_wave_notify();
     Ok(())
 }
 
@@ -437,25 +432,32 @@ fn defer_range_write(
         }
     }
     let ids = mutation_blob_ids(mutation);
-    let started = session.deferred.is_none();
-    let pending = session.deferred.get_or_insert_with(|| DeferredWrites {
-        batch: DEFERRED_BATCH.fetch_add(1, Ordering::Relaxed) + 1,
-        bytes: 0,
-        blob_ids: Vec::new(),
-    });
+    let pending = join_pending_batch(session);
     pending.bytes = pending.bytes.saturating_add(len);
     for id in ids {
         if !pending.blob_ids.contains(&id) {
             pending.blob_ids.push(id);
         }
     }
-    if started {
-        schedule_deferred_seal(session.vault_dir.clone(), pending.batch);
-    }
     if pending.bytes >= DEFERRED_SEAL_BYTES {
         return seal_deferred(session);
     }
     Ok(())
+}
+
+/// The batch waiting for the next seal, started with its timed seal when
+/// there is none.
+fn join_pending_batch(session: &mut OpenSession) -> &mut DeferredWrites {
+    let vault_dir = &session.vault_dir;
+    session.deferred.get_or_insert_with(|| {
+        let batch = DEFERRED_BATCH.fetch_add(1, Ordering::Relaxed) + 1;
+        schedule_deferred_seal(vault_dir.clone(), batch);
+        DeferredWrites {
+            batch,
+            bytes: 0,
+            blob_ids: Vec::new(),
+        }
+    })
 }
 
 /// Seal the pending batch with the rest of the index, then pack the blobs it
@@ -653,7 +655,9 @@ impl Drop for PreparedImport {
 
 /// Read, encrypt, and write this file's blob. The session lock stays free so
 /// other imports can do the same work at the same time. `None` is an empty file.
-/// With `hash`, the plaintext digest is taken from the same buffer.
+/// With `hash`, the plaintext digest is taken from the same buffer. With
+/// `durable`, the blob and the folders naming it are flushed here, before the
+/// index can name it; otherwise its caller lists it for the next index seal.
 #[allow(clippy::too_many_arguments)]
 fn seal_into_new_blob(
     store: &Path,
@@ -662,7 +666,7 @@ fn seal_into_new_blob(
     file_id: &str,
     reader: &mut (impl Read + ?Sized),
     map_read: impl FnOnce(std::io::Error) -> UprivError,
-    sync_dir: bool,
+    durable: bool,
     hash: bool,
 ) -> Result<Option<PreparedImport>> {
     use sha2::Digest;
@@ -732,8 +736,8 @@ fn seal_into_new_blob(
     };
     let mutation = blob.mutation();
     drop(blob);
-    if sync_dir {
-        if let Err(error) = mutation.sync_before_index() {
+    if durable {
+        if let Err(error) = sync_staged_blobs(&mutation.created) {
             mutation.discard_created();
             return Err(error);
         }
@@ -832,106 +836,15 @@ fn commit_empty_file(session: &mut OpenSession, path: &str) -> Result<()> {
     }
 }
 
-/// Importers currently encrypting or publishing a file, per vault directory.
-struct ImportWave {
-    busy: usize,
-}
-
-static IMPORT_WAVES: LazyLock<Mutex<HashMap<PathBuf, ImportWave>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
-static IMPORT_WAVE_NOTIFY: LazyLock<(Mutex<()>, Condvar)> =
-    LazyLock::new(|| (Mutex::new(()), Condvar::new()));
-
-fn import_wave_notify() {
-    let (lock, cv) = &*IMPORT_WAVE_NOTIFY;
-    drop(lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner()));
-    cv.notify_all();
-}
-
-fn import_wave_wait() {
-    let (lock, cv) = &*IMPORT_WAVE_NOTIFY;
-    let guard = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    let _ = cv.wait_timeout(guard, Duration::from_millis(50));
-}
-
-/// `true` when this append should seal the index for every file already added.
-/// A full wave, or the last importer still working, writes the index once.
-fn import_wave_ready(unsealed: u64, busy: usize, slots: usize) -> bool {
-    let slots = u64::try_from(slots.max(1)).unwrap_or(u64::MAX);
-    unsealed >= slots || busy <= usize::try_from(unsealed).unwrap_or(usize::MAX)
-}
-
-/// Counts this importer until it is dropped, including the encrypt step.
-struct ImportGuard {
-    dir: PathBuf,
-}
-
-impl ImportGuard {
-    fn enter(dir: &Path) -> Self {
-        let mut waves = IMPORT_WAVES
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        waves
-            .entry(dir.to_path_buf())
-            .or_insert(ImportWave { busy: 0 })
-            .busy += 1;
-        Self {
-            dir: dir.to_path_buf(),
-        }
-    }
-
-    fn busy(&self) -> usize {
-        let waves = IMPORT_WAVES
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        waves.get(&self.dir).map(|wave| wave.busy).unwrap_or(1)
-    }
-}
-
-impl Drop for ImportGuard {
-    fn drop(&mut self) {
-        let mut waves = IMPORT_WAVES
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let empty = if let Some(wave) = waves.get_mut(&self.dir) {
-            wave.busy = wave.busy.saturating_sub(1);
-            wave.busy == 0
-        } else {
-            false
-        };
-        if empty {
-            waves.remove(&self.dir);
-        }
-        drop(waves);
-        import_wave_notify();
-    }
-}
-
-fn forget_unsealed_file(index: &mut crate::store::VaultIndex, file_id: &str) {
-    index.nodes.retain(|node| {
-        node.as_file()
-            .map(|(id, _, _)| id != file_id)
-            .unwrap_or(true)
-    });
-}
-
-enum WaveLead {
-    Done(u64),
-    Wait,
-    Seal,
-}
-
-/// Append a new file without copying the index, then seal once for the wave.
-/// The blob is already durable. An existing path still commits on its own.
+/// Append a new file without copying the index, staged for the next seal.
+/// An existing path commits on its own.
 fn publish_prepared(
     dir: &Path,
     path: &str,
     file_id: &str,
     mut prepared: PreparedImport,
-    guard: &ImportGuard,
-    defer_index: bool,
 ) -> Result<u64> {
-    let appended = with_open_session(dir, |session| {
+    let staged = with_open_session(dir, |session| {
         if session.index.find(path).is_some() {
             return Ok(None);
         }
@@ -948,34 +861,35 @@ fn publish_prepared(
             mutation.discard_created();
             return Err(error);
         }
-        session.dirty = true;
-        session.import_seq = session.import_seq.wrapping_add(1);
-        session.unsealed_imports = session.unsealed_imports.saturating_add(1);
-        if defer_index {
-            session
-                .staged_blobs
-                .extend(mutation.created.iter().cloned());
-        }
-        Ok(Some((session.import_seq, mutation)))
+        stage_import(session);
+        Ok(Some(session.tree_revision))
     })?;
-    let Some((ticket, mutation)) = appended else {
-        return with_open_session(dir, |session| {
+    match staged {
+        Some(revision) => Ok(revision),
+        None => with_open_session(dir, |session| {
             commit_prepared(session, path, file_id, prepared).map(|_| session.tree_revision)
-        });
-    };
-    if defer_index {
-        return staged_revision(dir, mutation);
+        }),
     }
-    seal_import_wave(dir, ticket, file_id, mutation, guard)
 }
 
-/// The blob is already on disk. The index seal for this batch comes later.
-fn staged_revision(dir: &Path, mutation: ChunkBlobMutation) -> Result<u64> {
-    drop(mutation);
-    with_open_session(dir, |session| Ok(session.tree_revision))
+/// An imported file or folder is listed in RAM; a file's blob is already
+/// durable on disk. The sealed index names it at the next seal:
+/// [`STAGED_IMPORT_WAVE`] staged imports, [`DEFERRED_SEAL_AFTER`] after the
+/// pending batch began, any other committed change, a flush, or close. A crash
+/// before then forgets it; open removes its unnamed blob.
+fn stage_import(session: &mut OpenSession) {
+    session.dirty = true;
+    session.unsealed_imports = session.unsealed_imports.saturating_add(1);
+    session.tree_revision = session.tree_revision.saturating_add(1);
+    join_pending_batch(session);
+    if session.unsealed_imports >= STAGED_IMPORT_WAVE {
+        // A failed seal keeps the batch for its timer, which retries and logs.
+        let _ = seal_deferred(session);
+    }
 }
 
-/// Staged files and folders sealed together during a vault import.
+/// Staged imports sealed together: a file manager import, or the files and
+/// folders of a vault import.
 ///
 /// A kill keeps this prefix in the index. Blobs from the unfinished wave are
 /// not named there; open drops those unreferenced blobs.
@@ -995,7 +909,7 @@ pub(crate) fn fs_seal_staged_wave(root: &VaultRoot, vault_id: &str) -> Result<()
 }
 
 /// Flush the blobs staged since the last seal, then write the index once.
-pub fn fs_seal_staged_imports(root: &VaultRoot, vault_id: &str) -> Result<u64> {
+pub(crate) fn fs_seal_staged_imports(root: &VaultRoot, vault_id: &str) -> Result<u64> {
     let dir = require_open(root, vault_id)?;
     with_open_session(&dir, |session| {
         if session.unsealed_imports == 0 {
@@ -1044,17 +958,18 @@ pub(crate) fn fs_ensure_folder_path_staged(
     })
 }
 
-/// Stream one file into a batch without sealing the index.
-/// [`fs_seal_staged_wave`] seals a full wave; [`fs_seal_staged_imports`] seals the tail.
+/// Stream one file into the vault, staged for the next seal (see
+/// [`stage_import`]). It is encrypted without holding the session lock, so
+/// other imports can encrypt at the same time.
 pub(crate) fn fs_write_staged(
     root: &VaultRoot,
     vault_id: &str,
     ui_path: &str,
     reader: &mut (impl Read + ?Sized),
-) -> Result<()> {
+) -> Result<u64> {
     let dir = require_open(root, vault_id)?;
     let path = logical(ui_path)?;
-    write_reader_ahead(&dir, &path, reader, true).map(|_| ())
+    write_reader_ahead(&dir, &path, reader)
 }
 
 /// Flush each staged blob, then the directory that names it.
@@ -1086,85 +1001,7 @@ pub(crate) fn sync_staged_blobs(paths: &[PathBuf]) -> Result<()> {
     Ok(())
 }
 
-fn seal_import_wave(
-    dir: &Path,
-    ticket: u64,
-    file_id: &str,
-    mutation: ChunkBlobMutation,
-    guard: &ImportGuard,
-) -> Result<u64> {
-    loop {
-        let lead = with_open_session(dir, |session| {
-            if session.sealed_seq >= ticket {
-                return Ok(WaveLead::Done(session.tree_revision));
-            }
-            if session.sealing {
-                return Ok(WaveLead::Wait);
-            }
-            if import_wave_ready(session.unsealed_imports, guard.busy(), import_slots()) {
-                session.sealing = true;
-                return Ok(WaveLead::Seal);
-            }
-            Ok(WaveLead::Wait)
-        })?;
-        match lead {
-            WaveLead::Done(revision) => return Ok(revision),
-            WaveLead::Wait => import_wave_wait(),
-            WaveLead::Seal => {
-                let sealed = with_open_session(dir, |session| {
-                    if session.sealed_seq >= ticket {
-                        session.sealing = false;
-                        return Ok(session.tree_revision);
-                    }
-                    match commit(session) {
-                        Ok(()) => Ok(session.tree_revision),
-                        Err(error) => {
-                            forget_unsealed_file(&mut session.index, file_id);
-                            session.unsealed_imports = session.unsealed_imports.saturating_sub(1);
-                            session.sealing = false;
-                            mutation.discard_created();
-                            import_wave_notify();
-                            Err(error)
-                        }
-                    }
-                });
-                if sealed.is_err() {
-                    let _ = with_open_session(dir, |session| {
-                        session.sealing = false;
-                        Ok(())
-                    });
-                    import_wave_notify();
-                }
-                return sealed;
-            }
-        }
-    }
-}
-
-/// Same store as [`fs_write_from_reader`]. When more than one import slot is
-/// free, this file is encrypted without holding the session lock.
-pub(crate) fn fs_write_send_reader(
-    root: &VaultRoot,
-    vault_id: &str,
-    ui_path: &str,
-    reader: &mut (impl Read + Send + ?Sized),
-    defer_index: bool,
-) -> Result<u64> {
-    let dir = require_open(root, vault_id)?;
-    let path = logical(ui_path)?;
-    if defer_index || import_slots() > 1 {
-        return write_reader_ahead(&dir, &path, reader, defer_index);
-    }
-    fs_write_from_reader(root, vault_id, ui_path, reader)
-}
-
-fn write_reader_ahead(
-    dir: &Path,
-    path: &str,
-    reader: &mut (impl Read + ?Sized),
-    defer_index: bool,
-) -> Result<u64> {
-    let guard = ImportGuard::enter(dir);
+fn write_reader_ahead(dir: &Path, path: &str, reader: &mut (impl Read + ?Sized)) -> Result<u64> {
     with_open_session(dir, |_| require_user_visible_logical(path))?;
     let (header, key, hash) = session_secrets(dir)?;
     let file_id = uuid::Uuid::new_v4().to_string();
@@ -1176,11 +1013,11 @@ fn write_reader_ahead(
         &file_id,
         reader,
         |error| error.into(),
-        !defer_index,
+        true,
         hash,
     )?;
     match prepared {
-        Some(prepared) => publish_prepared(dir, path, &file_id, prepared, &guard, defer_index),
+        Some(prepared) => publish_prepared(dir, path, &file_id, prepared),
         None => with_open_session(dir, |session| {
             require_user_visible_logical(path)?;
             commit_empty_file(session, path).map(|_| session.tree_revision)
@@ -1194,9 +1031,7 @@ fn import_os_file_ahead(
     base_name: &str,
     source: &Path,
     mut file: File,
-    defer_index: bool,
 ) -> Result<(String, u64)> {
-    let guard = ImportGuard::enter(dir);
     let (header, key, hash) = session_secrets(dir)?;
     let file_id = uuid::Uuid::new_v4().to_string();
     let store = dir.join(crate::paths::STORE_DIR_NAME);
@@ -1208,7 +1043,7 @@ fn import_os_file_ahead(
         &file_id,
         &mut file,
         |_| UprivError::ImportSourceUnreadable(source_seal),
-        !defer_index,
+        true,
         hash,
     )?;
     let Some(mut prepared) = prepared else {
@@ -1217,7 +1052,7 @@ fn import_os_file_ahead(
             commit_empty_file(session, &path).map(|_| (to_ui_path(&path), session.tree_revision))
         });
     };
-    let (path, ticket, mutation) = with_open_session(dir, |session| {
+    with_open_session(dir, |session| {
         let path = import_destination(session, parent, base_name)?;
         let mutation = std::mem::take(&mut prepared.mutation);
         if let Err(error) = record_imported_file(
@@ -1232,24 +1067,12 @@ fn import_os_file_ahead(
             mutation.discard_created();
             return Err(error);
         }
-        session.dirty = true;
-        session.import_seq = session.import_seq.wrapping_add(1);
-        session.unsealed_imports = session.unsealed_imports.saturating_add(1);
-        if defer_index {
-            session
-                .staged_blobs
-                .extend(mutation.created.iter().cloned());
-        }
-        Ok((path, session.import_seq, mutation))
-    })?;
-    let revision = if defer_index {
-        staged_revision(dir, mutation)?
-    } else {
-        seal_import_wave(dir, ticket, &file_id, mutation, &guard)?
-    };
-    Ok((to_ui_path(&path), revision))
+        stage_import(session);
+        Ok((to_ui_path(&path), session.tree_revision))
+    })
 }
 
+/// A free name in `parent` (`unique_file_name` never returns a taken path).
 fn import_destination(session: &OpenSession, parent: &str, base_name: &str) -> Result<String> {
     let name = unique_file_name(&session.index, parent, base_name);
     let path = if parent.is_empty() {
@@ -1258,9 +1081,6 @@ fn import_destination(session: &OpenSession, parent: &str, base_name: &str) -> R
         format!("{parent}/{name}")
     };
     require_user_visible_logical(&path)?;
-    if session.index.find(&path).is_some() {
-        return Err(UprivError::VaultPathExists(path));
-    }
     Ok(path)
 }
 
@@ -1346,9 +1166,9 @@ pub fn fs_write_from_reader(
 /// The source must be an absolute regular file (no symlink). The opened path
 /// is canonicalized, and ciphertext under this vault's `store/` is refused so
 /// a directory symlink cannot re-encrypt our own store.
-/// Encryption and the blob write run without the session lock when more than
-/// one import slot is free. The lock is taken only to name the file and commit
-/// the index, so other imports can encrypt at the same time.
+/// Encryption and the blob write run without the session lock, so other
+/// imports can encrypt at the same time. The lock is taken only to name the
+/// file and stage it for the next seal (see [`stage_import`]).
 pub fn fs_import_from_os_path(
     root: &VaultRoot,
     vault_id: &str,
@@ -1356,143 +1176,11 @@ pub fn fs_import_from_os_path(
     base_name: &str,
     os_path: &Path,
 ) -> Result<(String, u64)> {
-    import_os_file_at(root, vault_id, parent_ui, base_name, os_path, false)
-}
-
-/// Same bytes as [`fs_import_from_os_path`], without sealing the index.
-/// [`fs_seal_staged_imports`] writes the index once for the files staged so far.
-pub fn fs_import_from_os_path_deferred(
-    root: &VaultRoot,
-    vault_id: &str,
-    parent_ui: &str,
-    base_name: &str,
-    os_path: &Path,
-) -> Result<(String, u64)> {
-    import_os_file_at(root, vault_id, parent_ui, base_name, os_path, true)
-}
-
-fn import_os_file_at(
-    root: &VaultRoot,
-    vault_id: &str,
-    parent_ui: &str,
-    base_name: &str,
-    os_path: &Path,
-    defer_index: bool,
-) -> Result<(String, u64)> {
     let source = validate_import_os_path(root, vault_id, os_path)?;
-    let mut file = open_import_source(&source)?;
+    let file = open_import_source(&source)?;
     let dir = require_open(root, vault_id)?;
     let parent = logical(parent_ui)?;
-    if defer_index || import_slots() > 1 {
-        return import_os_file_ahead(&dir, &parent, base_name, &source, file, defer_index);
-    }
-    with_open_session(&dir, |session| {
-        let name = unique_file_name(&session.index, &parent, base_name);
-        let path = if parent.is_empty() {
-            name
-        } else {
-            format!("{parent}/{name}")
-        };
-        require_user_visible_logical(&path)?;
-        if session.index.find(&path).is_some() {
-            return Err(UprivError::VaultPathExists(path));
-        }
-        let was_dirty = session.dirty;
-        session.dirty = true;
-        // New imports only append a node. Roll that back by length instead of
-        // cloning the whole index — the clone itself got slower on every file.
-        let nodes_before = session.index.nodes.len();
-        let mut mutation = ChunkBlobMutation::default();
-        let mut retired_acc = None;
-        let mut buf = vec![0u8; VAULT_FS_MAX_INLINE_BYTES as usize];
-        let mut offset = 0u64;
-        let mut first = true;
-        let streamed: Result<()> = (|| {
-            loop {
-                let n = file
-                    .read(&mut buf)
-                    .map_err(|_| UprivError::ImportSourceUnreadable(source.clone()))?;
-                if n == 0 {
-                    break;
-                }
-                let piece = if first {
-                    let (retired, piece) = write_logical_file(
-                        store_dir(session),
-                        &session.header,
-                        &session.content_key,
-                        &mut session.index,
-                        &path,
-                        &buf[..n],
-                    )?;
-                    retired_acc = retired;
-                    first = false;
-                    piece
-                } else {
-                    write_logical_range(
-                        store_dir(session),
-                        &session.header,
-                        &session.content_key,
-                        &mut session.index,
-                        &path,
-                        offset,
-                        &buf[..n],
-                    )?
-                };
-                mutation.merge(piece);
-                offset += n as u64;
-            }
-            if first {
-                let (retired, piece) = write_logical_file(
-                    store_dir(session),
-                    &session.header,
-                    &session.content_key,
-                    &mut session.index,
-                    &path,
-                    b"",
-                )?;
-                retired_acc = retired;
-                mutation.merge(piece);
-            }
-            Ok(())
-        })();
-        let outcome = match streamed {
-            Ok(()) => {
-                // Seal before return. A kill or "just close" does not run Drop,
-                // so an unsealed import would disappear on the next open.
-                // Flush the blob first so the index cannot name bytes still in cache.
-                if let Err(error) = mutation.sync_before_index() {
-                    session.index.nodes.truncate(nodes_before);
-                    mutation.discard_created();
-                    session.dirty = was_dirty;
-                    Err(error)
-                } else if let Err(error) = commit(session) {
-                    // The sealed index is unchanged. Keep every blob it still names.
-                    session.index.nodes.truncate(nodes_before);
-                    mutation.discard_created();
-                    session.dirty = was_dirty;
-                    Err(error)
-                } else {
-                    mutation.delete_superseded();
-                    if let Some(retired) = retired_acc {
-                        let _ = remove_file_chunks(
-                            &store_dir(session),
-                            &retired.file_id,
-                            retired.chunk_count,
-                        );
-                    }
-                    Ok((to_ui_path(&path), session.tree_revision))
-                }
-            }
-            Err(error) => {
-                session.index.nodes.truncate(nodes_before);
-                mutation.discard_created();
-                session.dirty = was_dirty;
-                Err(error)
-            }
-        };
-        buf.zeroize();
-        outcome
-    })
+    import_os_file_ahead(&dir, &parent, base_name, &source, file)
 }
 
 /// A link swapped in after the path was checked is refused on every system,
@@ -1650,6 +1338,8 @@ pub fn fs_create_folder(
     })
 }
 
+/// The folder `parent/name` an import writes into: an existing folder is
+/// reused, and a missing one is staged with the import (see [`stage_import`]).
 pub fn fs_ensure_folder(
     root: &VaultRoot,
     vault_id: &str,
@@ -1667,10 +1357,9 @@ pub fn fs_ensure_folder(
             }
             return Err(UprivError::VaultPathExists(path));
         }
-        session.dirty = true;
-        let before = session.index.clone();
+        // Fails before it touches the index, or adds this one folder.
         let created = ensure_folder(&mut session.index, &parent, name)?;
-        commit_or_restore(session, before)?;
+        stage_import(session);
         Ok((to_ui_path(&created), session.tree_revision))
     })
 }
@@ -1796,7 +1485,7 @@ pub(super) struct SealedFile {
 }
 
 /// Encrypt `reader` into a new blob without holding the session lock. The
-/// blob is flushed with the next index seal, like a staged import.
+/// blob is flushed with the next index seal, like a range write.
 pub(super) fn seal_reader(
     dir: &Path,
     reader: &mut (impl Read + ?Sized),
@@ -2026,13 +1715,6 @@ pub fn fs_os_path(root: &VaultRoot, vault_id: &str, ui_path: &str) -> Result<Pat
 mod tests {
     use super::*;
 
-    #[test]
-    fn import_wave_seals_when_the_group_is_full_or_alone() {
-        assert!(import_wave_ready(1, 1, 4));
-        assert!(!import_wave_ready(1, 4, 4));
-        assert!(import_wave_ready(4, 5, 4));
-        assert!(import_wave_ready(2, 2, 2));
-    }
     #[allow(unused_imports)]
     use crate::host_fs::HostFsQuery;
     use crate::store::{open_store, KdfUnlockPreset};
@@ -2719,7 +2401,7 @@ mode = "encrypted_dir"
             *byte = (index % 251) as u8;
         }
         let mut reader = ByteAtATime { rest: &data };
-        fs_write_send_reader(&root, "notes", "/short.bin", &mut reader, false).unwrap();
+        fs_write_staged(&root, "notes", "/short.bin", &mut reader).unwrap();
         let store = root.vault_store_dir("notes").unwrap();
         crate::session::with_open_session(&root.vault_dir("notes").unwrap(), |session| {
             let node = session
@@ -2839,7 +2521,7 @@ mode = "encrypted_dir"
                     entered: Arc::clone(&entered),
                     overlapped: Arc::clone(&overlapped),
                 };
-                fs_write_send_reader(&root, "notes", "/left.txt", &mut reader, false)
+                fs_write_staged(&root, "notes", "/left.txt", &mut reader)
             });
             let right = scope.spawn(|| {
                 let mut reader = Hold {
@@ -2848,15 +2530,13 @@ mode = "encrypted_dir"
                     entered: Arc::clone(&entered),
                     overlapped: Arc::clone(&overlapped),
                 };
-                fs_write_send_reader(&root, "notes", "/right.txt", &mut reader, false)
+                fs_write_staged(&root, "notes", "/right.txt", &mut reader)
             });
             (left.join().unwrap(), right.join().unwrap())
         });
         left.unwrap();
         right.unwrap();
-        if import_slots() > 1 {
-            assert!(overlapped.load(Ordering::SeqCst));
-        }
+        assert!(overlapped.load(Ordering::SeqCst));
         assert_eq!(
             fs_read_file(&root, "notes", "/left.txt").unwrap(),
             b"alpha-file-one"
@@ -2904,33 +2584,71 @@ mode = "encrypted_dir"
         close_vault(&root, "notes").unwrap();
     }
 
+    fn sealed_index_names(root: &VaultRoot, path: &str) -> bool {
+        with_open_session(&root.vault_dir("notes").unwrap(), |session| {
+            crate::store::sealed_index_contains(
+                &store_dir(session),
+                &session.header,
+                &session.index_key,
+                path,
+            )
+        })
+        .unwrap()
+    }
+
+    fn os_source(dir: &Path, name: &str, body: &[u8]) -> PathBuf {
+        let path = dir.join(name);
+        crate::host_fs::write(&path, body).unwrap();
+        path
+    }
+
     #[test]
-    fn import_seals_the_index_before_it_returns() {
-        let (tmp, root) = vault_root_with(&[]);
-        create_vault(
-            &root,
-            sample_config("notes", "Notes"),
-            b"pass-word-ok",
-            KdfUnlockPreset::M32,
-        )
-        .unwrap();
-        open_vault(&root, "notes", b"pass-word-ok").unwrap();
-        let src = tmp.path().join("one.txt");
-        crate::host_fs::write(&src, b"one").unwrap();
-        fs_import_from_os_path(&root, "notes", "/", "one.txt", &src).unwrap();
+    fn an_os_import_is_listed_at_once_and_its_timer_seals_it() {
+        let (tmp, root) = open_notes();
+        let before = fs_tree_revision(&root, "notes").unwrap();
+        let src = os_source(tmp.path(), "one.txt", b"one");
+        let (path, revision) =
+            fs_import_from_os_path(&root, "notes", "/", "one.txt", &src).unwrap();
+        assert!(revision > before, "the explorer sees the new file");
+        assert_eq!(fs_read_file(&root, "notes", &path).unwrap(), b"one");
+        // What a crash would keep: the sealed index does not name it yet.
+        assert!(!sealed_index_names(&root, "one.txt"));
+        let batch = pending_batch(&root).expect("the import joined the pending batch");
+
         let dir = root.vault_dir("notes").unwrap();
-        crate::session::with_open_session(&dir, |session| {
-            let store = store_dir(session);
-            assert!(
-                crate::store::sealed_index_contains(
-                    &store,
-                    &session.header,
-                    &session.index_key,
-                    "one.txt",
-                )
-                .unwrap(),
-                "import seals before it returns"
-            );
+        assert_eq!(seal_deferred_batch(&dir, batch, true), DeferredTimer::Done);
+        assert!(sealed_index_names(&root, "one.txt"));
+        assert_eq!(pending_batch(&root), None);
+        close_vault(&root, "notes").unwrap();
+    }
+
+    #[test]
+    fn a_full_wave_of_os_imports_seals_on_the_last_one() {
+        let (tmp, root) = open_notes();
+        let src = os_source(tmp.path(), "src.txt", b"wave");
+        for index in 0..STAGED_IMPORT_WAVE - 1 {
+            fs_import_from_os_path(&root, "notes", "/", &format!("w{index}.txt"), &src).unwrap();
+        }
+        assert!(!sealed_index_names(&root, "w0.txt"));
+        let last = STAGED_IMPORT_WAVE - 1;
+        fs_import_from_os_path(&root, "notes", "/", &format!("w{last}.txt"), &src).unwrap();
+        assert!(sealed_index_names(&root, "w0.txt"));
+        assert!(sealed_index_names(&root, &format!("w{last}.txt")));
+        assert_eq!(pending_batch(&root), None);
+        close_vault(&root, "notes").unwrap();
+    }
+
+    #[test]
+    fn an_import_into_a_folder_deleted_meanwhile_is_refused() {
+        let (tmp, root) = open_notes();
+        let src = os_source(tmp.path(), "a.txt", b"orphan?");
+        let (docs, _) = fs_ensure_folder(&root, "notes", "/", "docs").unwrap();
+        fs_delete(&root, "notes", &docs).unwrap();
+        let err = fs_import_from_os_path(&root, "notes", &docs, "a.txt", &src).unwrap_err();
+        assert!(matches!(err, UprivError::VaultPathNotFound(_)), "{err:?}");
+        with_open_session(&root.vault_dir("notes").unwrap(), |session| {
+            assert!(session.index.find("docs/a.txt").is_none());
+            assert_eq!(session.unsealed_imports, 0);
             Ok(())
         })
         .unwrap();
@@ -2938,8 +2656,48 @@ mode = "encrypted_dir"
     }
 
     #[test]
-    fn deferred_imports_seal_once_and_stay_readable() {
-        let (tmp, root) = vault_root_with(&[]);
+    fn a_new_import_folder_is_staged_with_its_files() {
+        let (tmp, root) = open_notes();
+        let src = os_source(tmp.path(), "a.txt", b"inside");
+        let before = fs_tree_revision(&root, "notes").unwrap();
+        let (docs, revision) = fs_ensure_folder(&root, "notes", "/", "docs").unwrap();
+        assert!(revision > before);
+        assert!(!sealed_index_names(&root, "docs"));
+        assert_eq!(
+            fs_ensure_folder(&root, "notes", "/", "docs").unwrap().0,
+            docs
+        );
+        fs_import_from_os_path(&root, "notes", &docs, "a.txt", &src).unwrap();
+        fs_flush(&root, "notes").unwrap();
+        assert!(sealed_index_names(&root, "docs"));
+        assert!(sealed_index_names(&root, "docs/a.txt"));
+        close_vault(&root, "notes").unwrap();
+    }
+
+    #[test]
+    fn another_change_or_close_seals_staged_imports() {
+        let (tmp, root) = open_notes();
+        let src = os_source(tmp.path(), "a.txt", b"staged");
+        fs_import_from_os_path(&root, "notes", "/", "a.txt", &src).unwrap();
+        fs_create_folder(&root, "notes", "/", "docs").unwrap();
+        assert!(sealed_index_names(&root, "a.txt"));
+
+        let mut body = b"streamed".as_slice();
+        crate::vault::ingest_import_reader(&root, "notes", "docs/b.txt", &mut body).unwrap();
+        assert!(!sealed_index_names(&root, "docs/b.txt"));
+        close_vault(&root, "notes").unwrap();
+        open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        assert_eq!(fs_read_file(&root, "notes", "/a.txt").unwrap(), b"staged");
+        assert_eq!(
+            fs_read_file(&root, "notes", "/docs/b.txt").unwrap(),
+            b"streamed"
+        );
+        close_vault(&root, "notes").unwrap();
+    }
+
+    #[test]
+    fn staged_imports_seal_once_and_stay_readable() {
+        let (_tmp, root) = vault_root_with(&[]);
         create_vault(
             &root,
             sample_config("notes", "Notes"),
@@ -2949,12 +2707,9 @@ mode = "encrypted_dir"
         .unwrap();
         open_vault(&root, "notes", b"pass-word-ok").unwrap();
         for index in 0..3 {
-            let name = format!("d{index}.txt");
-            let src = tmp.path().join(&name);
-            crate::host_fs::write(&src, format!("body-{index}")).unwrap();
-            let (path, _) =
-                fs_import_from_os_path_deferred(&root, "notes", "/", &name, &src).unwrap();
-            assert_eq!(path, format!("/{name}"));
+            let path = format!("/d{index}.txt");
+            let body = format!("body-{index}");
+            fs_write_staged(&root, "notes", &path, &mut body.as_bytes()).unwrap();
             assert_eq!(
                 fs_read_file(&root, "notes", &path).unwrap(),
                 format!("body-{index}").into_bytes()

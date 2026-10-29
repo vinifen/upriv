@@ -234,4 +234,15 @@
   .file-manager-tab-scroll::-webkit-scrollbar-corner {
     background: var(--surface-container);
   }
+
+  ::highlight(file-search-match) {
+    background-color: color-mix(in srgb, var(--accent) 30%, transparent);
+    color: inherit;
+  }
+
+  ::highlight(file-search-active) {
+    background-color: color-mix(in srgb, var(--accent) 70%, transparent);
+    outline: 1px solid var(--accent);
+    color: inherit;
+  }
 }

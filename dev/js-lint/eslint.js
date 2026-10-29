@@ -40,11 +40,7 @@ export function uprivEslint({
   extraRules = {},
   extraConfigs = [],
 } = {}) {
-  if (!tsconfigRootDir) {
-    throw new Error(
-      "uprivEslint requires tsconfigRootDir — pass import.meta.dirname from the app config",
-    );
-  }
+  const resolvedRoot = tsconfigRootDir || process.cwd();
   return tseslint.config(
     { ignores },
     ...extraConfigs,
@@ -55,7 +51,7 @@ export function uprivEslint({
       languageOptions: {
         ecmaVersion: 2020,
         parserOptions: {
-          tsconfigRootDir,
+          tsconfigRootDir: resolvedRoot,
         },
       },
       plugins: {
@@ -75,6 +71,7 @@ export function uprivEslint({
 
 /** Type-aware overlay (desktop `vite.config.mjs`). */
 export function uprivTypeChecked({ files, project, tsconfigRootDir }) {
+  const resolvedRoot = tsconfigRootDir || process.cwd();
   return {
     extends: [
       js.configs.recommended,
@@ -85,7 +82,7 @@ export function uprivTypeChecked({ files, project, tsconfigRootDir }) {
       ecmaVersion: 2020,
       parserOptions: {
         project,
-        tsconfigRootDir,
+        tsconfigRootDir: resolvedRoot,
       },
     },
   };
@@ -96,12 +93,13 @@ export function uprivTypeChecked({ files, project, tsconfigRootDir }) {
  * (that first wave is mostly `unsafe-*`, not floating promises).
  */
 export function uprivPromiseChecked({ files, project, tsconfigRootDir }) {
+  const resolvedRoot = tsconfigRootDir || process.cwd();
   return {
     files,
     languageOptions: {
       parserOptions: {
         project,
-        tsconfigRootDir,
+        tsconfigRootDir: resolvedRoot,
       },
     },
     rules: {

@@ -238,7 +238,7 @@ function daemonEnv(): NodeJS.ProcessEnv {
       env.UPRIV_DEFAULT_ROOT_ANCHOR = resolveDevDefaultRootAnchor();
     }
   } else if (!env.UPRIV_DEFAULT_ROOT_ANCHOR) {
-    // App home owns `.upriv-root` and is the default_root create target for every
+    // App home owns `.upriv-data-folder` and is the default_root create target for every
     // distribution. Distribution only affects UI copy and resolve strictness.
 
     // macOS packaged: always installed (Application Support). No portable-beside-.app.

@@ -35,4 +35,8 @@ export {
 } from "./order";
 export type { AssignVaultToGroupOptions } from "./order";
 export type { GroupedVaultPickerItem } from "./picker";
-export { buildGroupedVaultPickerItems, groupAssignmentClearOption } from "./picker";
+export {
+  buildGroupedVaultPickerItems,
+  groupAssignmentClearOption,
+  GROUPED_VAULT_PICKER_VISIBLE_ROWS,
+} from "./picker";

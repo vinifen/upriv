@@ -110,7 +110,7 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
       if (!loaded.onDisk) {
         // First-run / incomplete / unplugged drive: keep RAM prefs so the Gate
         // locale picker still works, but take the data-folder pointer from the
-        // load (`.upriv-root` / the active grant) so resolve keeps that folder.
+        // load (`.upriv-data-folder` / the active grant) so resolve keeps that folder.
         // A missing `.upriv` (case B) resets via `forgetVaultRootSession` instead.
         const current = settingsRef.current;
         const next = normalizeAppSettings({

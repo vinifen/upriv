@@ -127,7 +127,7 @@ function mountActiveSafUri(): string | null {
 
 /**
  * Mount the active grant for a settings read. An unplugged drive leaves the
- * bridge unmounted, so Rust answers from `.upriv-root` (custom_root, not on disk)
+ * bridge unmounted, so Rust answers from `.upriv-data-folder` (custom_root, not on disk)
  * and the pointer survives until the drive is back.
  */
 function mountActiveSafUriForLoad(): string | null {
@@ -233,7 +233,7 @@ function createSafAwareAppSettingsService(): AppSettingsService {
             await rpcVaultRootRememberCustom(plan.rememberCustomUri);
           } catch (error) {
             // Settings are already on this tree. The next launch must mount it.
-            // Keep the previous grant until `custom=` is written.
+            // Keep the previous grant until `android_custom_folder=` is written.
             safSetActiveUri(treeUri);
             throw error;
           }
@@ -244,7 +244,7 @@ function createSafAwareAppSettingsService(): AppSettingsService {
 
       // Record the Custom folder before the save. If that write fails, settings
       // stay unchanged and this folder stays mounted. If the save fails after
-      // it, `custom=` is already stored.
+      // it, `android_custom_folder=` is already stored.
       const leaving = rememberedCustomFolderPath(safGetActiveUri() ?? "");
       if (leaving) await rpcVaultRootRememberCustom(leaving);
       const wrote = await rustSave(normalized, options);

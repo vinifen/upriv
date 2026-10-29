@@ -86,7 +86,6 @@ export function AppSettingsGeneralSection({ config, onChange }: SectionPatchProp
   const closeModalOnSubmitId = useId();
   const openFileManagerOnOpenId = useId();
   const keepOpenOnWakeId = useId();
-  const confirmDeleteId = useId();
 
   return (
     <SettingsFormGrid>
@@ -150,13 +149,6 @@ export function AppSettingsGeneralSection({ config, onChange }: SectionPatchProp
         onChange={(lifecycle_keep_open_on_wake) => onChange({ lifecycle_keep_open_on_wake })}
         label={t("modal.app_settings.field.lifecycle_keep_open_on_wake")}
         hint={t("modal.app_settings.field.lifecycle_keep_open_on_wake_help")}
-      />
-      <SwitchRow
-        id={confirmDeleteId}
-        checked={config.file_manager_confirm_delete}
-        onChange={(file_manager_confirm_delete) => onChange({ file_manager_confirm_delete })}
-        label={t("modal.app_settings.field.file_manager_confirm_delete")}
-        hint={t("modal.app_settings.field.file_manager_confirm_delete_help")}
       />
     </SettingsFormGrid>
   );
@@ -314,13 +306,6 @@ export function AppSettingsGroupsSection({
         <DisplayNameFieldError name={newGroupName} allowEmpty />
       </SettingsField>
 
-      <SwitchRow
-        checked={hidden}
-        onChange={(next) => onHiddenChange?.(next)}
-        label={t("vault.group.settings.hidden")}
-        hint={t("vault.group.settings.hidden_help")}
-      />
-
       <div className="space-y-2">
         <p className="font-mono text-xs uppercase tracking-wide text-on-surface-variant">
           {t("vault.group.create.grouped_vaults")}
@@ -336,6 +321,13 @@ export function AppSettingsGroupsSection({
           onToggle={onToggleGroupedVault}
         />
       </div>
+
+      <SwitchRow
+        checked={hidden}
+        onChange={(next) => onHiddenChange?.(next)}
+        label={t("vault.group.settings.hidden")}
+        hint={t("vault.group.settings.hidden_help")}
+      />
     </SettingsFormGrid>
   );
 }

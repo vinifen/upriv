@@ -1,3 +1,4 @@
+import { baseCollator, deviceCollator } from "../format/intl";
 import type { VaultDisplayStatus } from "../vault";
 import type { VaultListItem } from "./types";
 
@@ -18,9 +19,9 @@ export const STATE_RANK: Record<VaultDisplayStatus, number> = {
 export function compareDisplayName(a: string, b: string): number {
   const aFirst = (a[0] ?? "").toLowerCase();
   const bFirst = (b[0] ?? "").toLowerCase();
-  const byFirst = aFirst.localeCompare(bFirst);
+  const byFirst = deviceCollator().compare(aFirst, bFirst);
   if (byFirst !== 0) return byFirst;
-  return a.localeCompare(b, undefined, { sensitivity: "base" });
+  return baseCollator().compare(a, b);
 }
 
 /** `lastAccessedAt` in ms, or 0 when it is missing or unreadable. */

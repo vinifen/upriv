@@ -9,6 +9,7 @@ export const ICON_NAMES = [
   "chevron-right",
   "clock",
   "close",
+  "code",
   "copy",
   "cpu",
   "download",
@@ -46,6 +47,7 @@ export const ICON_NAMES = [
   "sort",
   "terminal",
   "trash",
+  "wrap-text",
 ] as const;
 
 export type IconName = (typeof ICON_NAMES)[number];

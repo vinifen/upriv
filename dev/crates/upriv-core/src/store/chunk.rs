@@ -832,25 +832,26 @@ pub(crate) fn record_imported_file(
     content_sha256: Option<String>,
 ) -> Result<Option<RetiredFileChunks>> {
     validate_logical_path(logical_path)?;
-    if let Some(node) = index.find(logical_path) {
-        if node.as_file().is_none() {
-            return Err(UprivError::VaultStoreInvalid {
-                path: PathBuf::from(logical_path),
-                detail: "logical path is a directory".into(),
-            });
-        }
-    }
-    let previous = index.find(logical_path).and_then(|node| {
-        node.as_file().map(|(old_id, _, versions)| {
-            (
+    // A folder deleted while an import ran must not leave its files without it.
+    super::tree::require_parent_dir(index, logical_path)?;
+    let previous = match index.find(logical_path) {
+        None => None,
+        Some(node) => {
+            let Some((old_id, _, versions)) = node.as_file() else {
+                return Err(UprivError::VaultStoreInvalid {
+                    path: PathBuf::from(logical_path),
+                    detail: "logical path is a directory".into(),
+                });
+            };
+            Some((
                 RetiredFileChunks {
                     file_id: old_id.to_string(),
                     chunk_count: versions.len() as u32,
                 },
                 node.created_at,
-            )
-        })
-    });
+            ))
+        }
+    };
     let created_at = previous.as_ref().map(|(_, created_at)| *created_at);
     if let Some((retired, _)) = &previous {
         index.remove(logical_path);

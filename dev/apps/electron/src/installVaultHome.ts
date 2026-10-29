@@ -33,7 +33,7 @@ export type InstallVaultRelocate = {
 };
 
 /**
- * Move `.upriv` (and `.upriv-root` when the destination has none) out of a
+ * Move `.upriv` (and `.upriv-data-folder` when the destination has none) out of a
  * Windows install directory into the user-data folder.
  *
  * The source tree is removed only after the destination has the same files.
@@ -89,8 +89,8 @@ function pathKind(target: string): "directory" | "symlink" | "other" {
 
 function moveAlias(installDir: string, userData: string): void {
   try {
-    const source = path.join(installDir, ".upriv-root");
-    const dest = path.join(userData, ".upriv-root");
+    const source = path.join(installDir, ".upriv-data-folder");
+    const dest = path.join(userData, ".upriv-data-folder");
     if (!existsFile(source) || existsFile(dest)) return;
     fs.mkdirSync(userData, { recursive: true });
     moveFile(source, dest);

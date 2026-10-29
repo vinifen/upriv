@@ -39,7 +39,7 @@ export interface VaultRootService {
   }): Promise<VaultRootResolveResult>;
 
   /**
-   * Create default `.upriv/` at the default root (default_root anchor), deactivate `.upriv-root`
+   * Create default `.upriv/` at the default root (default_root anchor), deactivate `.upriv-data-folder`
    * if it exists (path kept), and switch to default-root mode.
    * When replacing incomplete: `delete` removes `.upriv/`; `rename` keeps it as
    * `.upriv-invalidated-<timestamp>`.
@@ -55,7 +55,7 @@ export interface VaultRootService {
 
   /**
    * Use `path` as vault-root (initialize if missing marker), write **active**
-   * `.upriv-root` alias, and switch to custom-path mode (alias wins over local `.upriv`).
+   * `.upriv-data-folder` alias, and switch to custom-path mode (alias wins over local `.upriv`).
    * `path` must be absolute.
    * When replacing incomplete: same policies as `setupDefaultRoot`.
    * `bootstrap` seeds the new root's `settings.toml` on create — see
@@ -70,7 +70,7 @@ export interface VaultRootService {
     },
   ): Promise<{ rootPath: string; aliasPath: string; privateRoot?: VaultRootPrivateRoot }>;
 
-  /** Read remembered `.upriv-root` path (active or inactive). Missing file → `null`. */
+  /** Read remembered `.upriv-data-folder` path (active or inactive). Missing file → `null`. */
   readAlias(): Promise<VaultRootAliasInfo | null>;
 
   /** Inspect `.upriv/` at the default-root anchor without creating or repairing it. */

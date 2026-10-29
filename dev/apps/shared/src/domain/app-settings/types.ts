@@ -7,7 +7,7 @@ export const DEFAULT_UI_THEME: UiTheme = "dark";
 /** Same four values as `LOG_LEVEL_PRESETS` / Rust `LogLevel` filter. */
 export type LogLevel = "error" | "warn" | "info" | "debug";
 
-/** How the app locates the vault-root: `default_root` (distribution default) or `custom_root` (absolute path via `.upriv-root`). */
+/** How the app locates the vault-root: `default_root` (distribution default) or `custom_root` (absolute path via `.upriv-data-folder`). */
 export type VaultRootMode = "default_root" | "custom_root";
 
 export const APP_SETTINGS_SECTIONS = [
@@ -65,11 +65,6 @@ export interface AppSettingsConfig {
      */
     file_manager_dock_expanded: boolean;
     /**
-     * Explorer/editor split width (canonical integer % of the FM pane, 15–65).
-     * App-wide — shared by every vault. Adjusted by dragging the FM resize grip.
-     */
-    file_manager_tree_split_percent: number;
-    /**
      * When true, unlock/lock password dialog closes as soon as Confirm queues the
      * pipeline (progress on the row). Default false — keep the dialog open so a
      * wrong password can be fixed in place.
@@ -85,11 +80,6 @@ export interface AppSettingsConfig {
      * does not count as inactivity. Default false — that time counts.
      */
     lifecycle_keep_open_on_wake: boolean;
-    /**
-     * When true, deleting a file/folder in the file manager asks for confirmation.
-     * Default true. The delete dialog can turn this off via “don’t ask again”.
-     */
-    file_manager_confirm_delete: boolean;
   };
   logging: {
     enabled: boolean;
@@ -99,12 +89,12 @@ export interface AppSettingsConfig {
   };
   app: {
     /**
-     * Wire/UI only — derived from app-home `.upriv-root` (`status=active` → `"custom_root"`).
+     * Wire/UI only — derived from app-home `.upriv-data-folder` (`status=active` → `"custom_root"`).
      * Not persisted in `settings.toml`.
      */
     vault_root_mode: VaultRootMode;
     /**
-     * Wire/UI only — absolute path from `.upriv-root` when `vault_root_mode` is
+     * Wire/UI only — absolute path from `.upriv-data-folder` when `vault_root_mode` is
      * `"custom_root"`; empty string in `"default_root"` mode.
      * Not persisted in `settings.toml`.
      */
@@ -150,11 +140,9 @@ export function appSettingsEqual(a: AppSettingsConfig, b: AppSettingsConfig): bo
     a.ui.vault_list_show_drag === b.ui.vault_list_show_drag &&
     a.ui.vault_list_allow_drag_into_group === b.ui.vault_list_allow_drag_into_group &&
     a.ui.file_manager_dock_expanded === b.ui.file_manager_dock_expanded &&
-    a.ui.file_manager_tree_split_percent === b.ui.file_manager_tree_split_percent &&
     a.ui.lifecycle_close_modal_on_submit === b.ui.lifecycle_close_modal_on_submit &&
     a.ui.lifecycle_open_file_manager_on_open === b.ui.lifecycle_open_file_manager_on_open &&
     a.ui.lifecycle_keep_open_on_wake === b.ui.lifecycle_keep_open_on_wake &&
-    a.ui.file_manager_confirm_delete === b.ui.file_manager_confirm_delete &&
     a.logging.enabled === b.logging.enabled &&
     a.logging.level === b.logging.level &&
     a.logging.entries_per_file === b.logging.entries_per_file &&

@@ -1,10 +1,23 @@
 import { markdownViewMode } from "./workspaceTypes";
-import type { MarkdownViewMode, UnsavedPromptAction, VaultWorkspaceState } from "./workspaceTypes";
+import type {
+  MarkdownViewMode,
+  PerFileWorkspaceState,
+  UnsavedPromptAction,
+  VaultWorkspaceState,
+} from "./workspaceTypes";
 import { ancestorFolderPaths, remapLogicalPath } from "../file-tree/treeOps";
 
-export type { UnsavedPromptAction, VaultWorkspaceState } from "./workspaceTypes";
+export type {
+  PerFileWorkspaceState,
+  UnsavedPromptAction,
+  VaultWorkspaceState,
+} from "./workspaceTypes";
 export {
   createDefaultWorkspaceState,
+  fileEditorWordWrap,
+  fileMarkdownOutlineOpen,
+  fileMarkdownView,
+  fileSearchQuery,
   hasUnsavedWorkspaceChanges,
   isPathDirty,
   sessionPathKind,
@@ -29,9 +42,9 @@ export type VaultWorkspaceAction =
       activeTabPath: string | null;
       expandedPaths: string[];
       selectedPath: string | null;
-      markdownView: MarkdownViewMode;
       explorerCollapsed: boolean;
-      markdownOutlineOpen: boolean;
+      fileStates?: Record<string, PerFileWorkspaceState>;
+      treeSplitPercent?: number | null;
     }
   | { type: "tree_mutated"; revision: number }
   | { type: "set_editor_draft"; path: string; content: string }
@@ -43,9 +56,12 @@ export type VaultWorkspaceAction =
   | { type: "set_delete_target"; target: VaultWorkspaceState["deleteTarget"] }
   | { type: "set_unsaved_prompt"; prompt: UnsavedPromptAction | null }
   | { type: "set_drag"; source: string | null; target: string | null }
-  | { type: "set_markdown_view"; view: MarkdownViewMode }
+  | { type: "set_file_markdown_view"; path: string; view: MarkdownViewMode }
   | { type: "set_explorer_collapsed"; collapsed: boolean }
-  | { type: "set_markdown_outline_open"; open: boolean }
+  | { type: "set_file_markdown_outline_open"; path: string; open: boolean }
+  | { type: "set_file_word_wrap"; path: string; wrap: boolean }
+  | { type: "set_file_search_query"; path: string; query: string }
+  | { type: "set_tree_split_percent"; percent: number }
   | { type: "remap_paths"; map: Record<string, string> }
   | { type: "remove_paths"; paths: string[] }
   | { type: "discard_unsaved_and"; next: VaultWorkspaceAction }
@@ -98,6 +114,17 @@ export function reorderOpenTabs(
   return next;
 }
 
+function patchFileState<K extends keyof PerFileWorkspaceState>(
+  state: VaultWorkspaceState,
+  path: string,
+  key: K,
+  value: NonNullable<PerFileWorkspaceState[K]>,
+): VaultWorkspaceState {
+  const prev = state.fileStates[path];
+  if (prev?.[key] === value) return state;
+  return { ...state, fileStates: { ...state.fileStates, [path]: { ...prev, [key]: value } } };
+}
+
 function applyPathMap(
   state: VaultWorkspaceState,
   map: Record<string, string>,
@@ -111,6 +138,10 @@ function applyPathMap(
   const editorDrafts: Record<string, string> = {};
   for (const [path, content] of Object.entries(state.editorDrafts)) {
     editorDrafts[remapPath(path, map)] = content;
+  }
+  const fileStates: Record<string, PerFileWorkspaceState> = {};
+  for (const [path, entry] of Object.entries(state.fileStates)) {
+    fileStates[remapPath(path, map)] = entry;
   }
   const dirtyPaths = remapList(state.dirtyPaths, map);
 
@@ -130,6 +161,7 @@ function applyPathMap(
     expandedPaths,
     userCollapsedPaths,
     editorDrafts,
+    fileStates,
     dirtyPaths,
     sessionCreatedPaths: remappedCreated,
     sessionModifiedPaths: mergeUniquePaths(remappedModified, modifiedExtra),
@@ -146,6 +178,12 @@ function applyPathRemoval(state: VaultWorkspaceState, paths: string[]): VaultWor
   }
   const editorDrafts = { ...state.editorDrafts };
   for (const path of paths) delete editorDrafts[path];
+  const fileStates = { ...state.fileStates };
+  for (const path of Object.keys(fileStates)) {
+    if (removeSet.has(path) || paths.some((p) => p !== "/" && path.startsWith(`${p}/`))) {
+      delete fileStates[path];
+    }
+  }
   return {
     ...state,
     openTabs,
@@ -155,6 +193,7 @@ function applyPathRemoval(state: VaultWorkspaceState, paths: string[]): VaultWor
     renamingPath:
       state.renamingPath && removeSet.has(state.renamingPath) ? null : state.renamingPath,
     editorDrafts,
+    fileStates,
     dirtyPaths: state.dirtyPaths.filter((p) => !removeSet.has(p)),
     sessionCreatedPaths: state.sessionCreatedPaths.filter((p) => !removeSet.has(p)),
     sessionModifiedPaths: state.sessionModifiedPaths.filter((p) => !removeSet.has(p)),
@@ -340,9 +379,10 @@ export function vaultWorkspaceReducer(
         activeTabPath: action.activeTabPath,
         expandedPaths: action.expandedPaths.length > 0 ? action.expandedPaths : ["/"],
         selectedPath: action.selectedPath,
-        markdownView: markdownViewMode(action.markdownView),
         explorerCollapsed: action.explorerCollapsed === true,
-        markdownOutlineOpen: action.markdownOutlineOpen === true,
+        fileStates: action.fileStates ? { ...action.fileStates } : state.fileStates,
+        treeSplitPercent:
+          action.treeSplitPercent !== undefined ? action.treeSplitPercent : state.treeSplitPercent,
       };
     case "tree_mutated":
       return { ...state, treeRevision: action.revision };
@@ -397,17 +437,20 @@ export function vaultWorkspaceReducer(
       return { ...state, unsavedPrompt: action.prompt };
     case "set_drag":
       return { ...state, dragSourcePath: action.source, dropTargetPath: action.target };
-    case "set_markdown_view": {
-      const view = markdownViewMode(action.view);
-      if (state.markdownView === view) return state;
-      return { ...state, markdownView: view };
-    }
+    case "set_file_markdown_view":
+      return patchFileState(state, action.path, "markdownView", markdownViewMode(action.view));
     case "set_explorer_collapsed":
       if (state.explorerCollapsed === action.collapsed) return state;
       return { ...state, explorerCollapsed: action.collapsed, contextMenu: null };
-    case "set_markdown_outline_open":
-      if (state.markdownOutlineOpen === action.open) return state;
-      return { ...state, markdownOutlineOpen: action.open };
+    case "set_file_markdown_outline_open":
+      return patchFileState(state, action.path, "markdownOutlineOpen", action.open);
+    case "set_file_word_wrap":
+      return patchFileState(state, action.path, "wordWrap", action.wrap);
+    case "set_file_search_query":
+      return patchFileState(state, action.path, "searchQuery", action.query);
+    case "set_tree_split_percent":
+      if (state.treeSplitPercent === action.percent) return state;
+      return { ...state, treeSplitPercent: action.percent };
     case "remap_paths":
       return applyPathMap(state, action.map);
     case "remove_paths":

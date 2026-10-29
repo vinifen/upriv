@@ -1,8 +1,9 @@
-import { useCallback, useId, useMemo, useRef, useState, type UIEvent } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type UIEvent } from "react";
 import { settingsControlClass } from "@/components/settings";
 import { useTranslation } from "@/i18n";
 import {
   buildGroupedVaultPickerItems,
+  GROUPED_VAULT_PICKER_VISIBLE_ROWS,
   type GroupedVaultPickerItem,
   type VaultGroup,
   type VaultListItem,
@@ -18,22 +19,25 @@ interface GroupedVaultPickerProps {
   disabled?: boolean;
   /** Show hidden vaults (system show-hidden). Default false. */
   includeHidden?: boolean;
-  /**
-   * List fills leftover modal height and is the only scroll pane.
-   * Use in create-group (`bodyScroll={false}`); settings keeps a capped list.
-   */
-  fill?: boolean;
 }
 
-const LIST_MAX_HEIGHT = 320;
 const ITEM_ROW_HEIGHT = 36;
+/** `space-y-0.5` between rows. */
+const ROW_GAP = 2;
+/** Six rows, then the list scrolls. */
+const LIST_MAX_HEIGHT =
+  GROUPED_VAULT_PICKER_VISIBLE_ROWS * ITEM_ROW_HEIGHT +
+  (GROUPED_VAULT_PICKER_VISIBLE_ROWS - 1) * ROW_GAP;
 const OVERSCAN = 8;
 const VIRTUALIZE_AFTER = 48;
 
 const checkboxClass =
   "h-4 w-4 shrink-0 rounded border-outline-variant/50 bg-surface-container-high text-accent accent-accent focus:ring-2 focus:ring-accent/40";
 
-/** Checkbox list of vaults with search and windowed rendering for large lists. */
+/**
+ * Checkbox list of vaults. Past six vaults it scrolls and gains a search
+ * field; a large list renders only the rows in view.
+ */
 export function GroupedVaultPicker({
   vaults,
   groups,
@@ -42,7 +46,6 @@ export function GroupedVaultPicker({
   onToggle,
   disabled = false,
   includeHidden = false,
-  fill = false,
 }: GroupedVaultPickerProps) {
   const { t } = useTranslation();
   const listId = useId();
@@ -50,16 +53,28 @@ export function GroupedVaultPicker({
   const [scrollTop, setScrollTop] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
 
+  const allItems = useMemo(
+    () => buildGroupedVaultPickerItems({ vaults, groups, excludeGroupId, includeHidden }),
+    [excludeGroupId, groups, includeHidden, vaults],
+  );
+  const searchable = allItems.length > GROUPED_VAULT_PICKER_VISIBLE_ROWS;
+  // A list short enough to show whole has no search, and drops what was typed.
+  const activeQuery = searchable ? query : "";
+  useEffect(() => {
+    if (!searchable) setQuery("");
+  }, [searchable]);
   const items = useMemo(
     () =>
-      buildGroupedVaultPickerItems({
-        vaults,
-        groups,
-        excludeGroupId,
-        query,
-        includeHidden,
-      }),
-    [excludeGroupId, groups, includeHidden, query, vaults],
+      activeQuery.trim()
+        ? buildGroupedVaultPickerItems({
+            vaults,
+            groups,
+            excludeGroupId,
+            query: activeQuery,
+            includeHidden,
+          })
+        : allItems,
+    [activeQuery, allItems, excludeGroupId, groups, includeHidden, vaults],
   );
 
   const useVirtual = items.length > VIRTUALIZE_AFTER;
@@ -67,17 +82,16 @@ export function GroupedVaultPicker({
 
   const windowRange = useMemo(() => {
     if (!useVirtual) return { start: 0, end: items.length };
-    const viewport = fill ? 720 : LIST_MAX_HEIGHT;
     const start = Math.max(0, Math.floor(scrollTop / ITEM_ROW_HEIGHT) - OVERSCAN);
-    const visible = Math.ceil(viewport / ITEM_ROW_HEIGHT) + OVERSCAN * 2;
+    const visible = Math.ceil(LIST_MAX_HEIGHT / ITEM_ROW_HEIGHT) + OVERSCAN * 2;
     return { start, end: Math.min(items.length, start + visible) };
-  }, [fill, items.length, scrollTop, useVirtual]);
+  }, [items.length, scrollTop, useVirtual]);
 
   const onScroll = useCallback((event: UIEvent<HTMLDivElement>) => {
     setScrollTop(event.currentTarget.scrollTop);
   }, []);
 
-  if (items.length === 0 && !query.trim()) {
+  if (allItems.length === 0) {
     return (
       <p className="text-sm text-on-surface-variant">
         {t("vault.group.create.grouped_vaults_empty")}
@@ -119,26 +133,24 @@ export function GroupedVaultPicker({
     );
   };
 
-  const listClass = ["min-h-0 overflow-y-auto", fill ? "flex-1" : "max-h-80"].join(" ");
-
   return (
-    <div
-      className={["flex min-h-0 flex-col gap-2", fill ? "flex-1" : ""].filter(Boolean).join(" ")}
-    >
-      <input
-        type="search"
-        className={`${settingsControlClass} shrink-0`}
-        value={query}
-        disabled={disabled}
-        placeholder={t("vault.group.picker.search")}
-        onChange={(event) => {
-          setQuery(event.target.value);
-          setScrollTop(0);
-          listRef.current?.scrollTo({ top: 0 });
-        }}
-        autoComplete="off"
-        spellCheck={false}
-      />
+    <div className="flex min-h-0 flex-col gap-2">
+      {searchable ? (
+        <input
+          type="search"
+          className={`${settingsControlClass} shrink-0`}
+          value={query}
+          disabled={disabled}
+          placeholder={t("vault.group.picker.search")}
+          onChange={(event) => {
+            setQuery(event.target.value);
+            setScrollTop(0);
+            if (listRef.current) listRef.current.scrollTop = 0;
+          }}
+          autoComplete="off"
+          spellCheck={false}
+        />
+      ) : null}
 
       <p className="shrink-0 text-xs text-on-surface-variant">
         {t("vault.group.picker.count", {
@@ -149,37 +161,37 @@ export function GroupedVaultPicker({
 
       {items.length === 0 ? (
         <p className="text-sm text-on-surface-variant">{t("vault.group.picker.search_empty")}</p>
-      ) : useVirtual ? (
+      ) : (
         <div
           ref={listRef}
-          className={listClass}
-          style={fill ? undefined : { maxHeight: LIST_MAX_HEIGHT }}
-          onScroll={onScroll}
+          className="min-h-0 overflow-y-auto"
+          style={{ maxHeight: LIST_MAX_HEIGHT }}
+          onScroll={useVirtual ? onScroll : undefined}
         >
-          <div className="relative" style={{ height: totalHeight }}>
-            {items.slice(windowRange.start, windowRange.end).map((item, index) => {
-              const top = (windowRange.start + index) * ITEM_ROW_HEIGHT;
-              return (
+          {useVirtual ? (
+            <div className="relative" style={{ height: totalHeight }}>
+              {items.slice(windowRange.start, windowRange.end).map((item, index) => (
                 <div
                   key={item.vault.id}
                   className="absolute inset-x-0"
-                  style={{ top, height: ITEM_ROW_HEIGHT }}
+                  style={{
+                    top: (windowRange.start + index) * ITEM_ROW_HEIGHT,
+                    height: ITEM_ROW_HEIGHT,
+                  }}
                 >
                   {renderRow(item)}
                 </div>
-              );
-            })}
-          </div>
-        </div>
-      ) : (
-        <div ref={listRef} className={listClass}>
-          <ul className="w-full space-y-0.5">
-            {items.map((item) => (
-              <li key={item.vault.id} className="w-full">
-                {renderRow(item)}
-              </li>
-            ))}
-          </ul>
+              ))}
+            </div>
+          ) : (
+            <ul className="w-full space-y-0.5">
+              {items.map((item) => (
+                <li key={item.vault.id} className="w-full">
+                  {renderRow(item)}
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
       )}
     </div>

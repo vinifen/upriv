@@ -32,6 +32,7 @@ function settings(patch: Partial<VaultSettingsConfig> = {}): VaultSettingsConfig
       enabled: true,
       idle_minutes: 5,
     },
+    file_manager: { confirm_delete: false },
     seven_zip: {
       encrypt_file_names: false,
       archive_mode: "compress_encrypt",
@@ -71,6 +72,7 @@ describe("applyEmbeddedVaultSettings", () => {
     expect(next.backup.skip_unchanged).toBe(false);
     expect(next.security.wipe_passes).toBe(2);
     expect(next.seven_zip.solid).toBe(true);
+    expect(next.file_manager.confirm_delete).toBe(false);
     expect(next.kdf.unlock_preset).toBe("128mib");
     expect(next.groupMode).toBe("none");
   });

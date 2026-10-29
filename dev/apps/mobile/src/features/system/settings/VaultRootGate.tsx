@@ -220,112 +220,116 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
               setReady(false);
               return;
             }
+          } catch (error) {
+            if (gen !== resolveGen.current) return;
+            if (!isVaultRootGoneError(error)) {
+              setSetup(null);
+              setRepair(null);
+              setResolveError(null);
+              setApplying(false);
+              setAliasInvalidPath(wireOrAliasPath);
+              setRecoveryPresentation({
+                mode: app.vault_root_mode,
+                defaultRootAnchor: "",
+                aliasPath: "",
+                rememberedAliasTarget: wireOrAliasPath || null,
+              });
+              setReady(false);
+              return;
+            }
+          }
+        }
+
+        if (app.vault_root_mode === "default_root" || !wireOrAliasPath) {
+          try {
+            const defaultRoot = await vaultRoot.defaultRootStatus();
+            if (gen !== resolveGen.current) return;
+            if (defaultRoot.status === "incomplete") {
+              if (Platform.OS === "android") {
+                setRepair(null);
+                setAliasInvalidPath(null);
+                setResolveError(null);
+                setApplying(false);
+                setSetup({
+                  presentation: {
+                    mode: "default_root",
+                    defaultRootAnchor: "",
+                    aliasPath: "",
+                    rememberedAliasTarget: null,
+                  },
+                  distribution: "installed",
+                });
+                setReady(false);
+                return;
+              }
+              setRepair({ targetPath: defaultRoot.defaultRootAnchor, mode: "default_root" });
+              setSetup(null);
+              setAliasInvalidPath(null);
+              setResolveError(null);
+              setApplying(false);
+              setReady(false);
+              return;
+            }
+            if (defaultRoot.status === "unreadable") {
+              setSetup(null);
+              setRepair(null);
+              setResolveError(null);
+              setApplying(false);
+              setAliasInvalidPath(defaultRoot.defaultRootAnchor.trim() || "");
+              setRecoveryPresentation({
+                mode: app.vault_root_mode,
+                defaultRootAnchor: defaultRoot.defaultRootAnchor,
+                aliasPath: "",
+                rememberedAliasTarget: defaultRoot.defaultRootAnchor.trim() || null,
+              });
+              setReady(false);
+              return;
+            }
+            if (defaultRoot.status === "valid" && app.vault_root_mode === "default_root") {
+              // needs_setup + valid default root is inconsistent — retry resolve once (M8).
+              if (!validDefaultRootRetryRef.current) {
+                validDefaultRootRetryRef.current = true;
+                const retry = await vaultRoot.resolve({
+                  vaultRootMode: app.vault_root_mode,
+                  explicitPath: null,
+                });
+                if (gen !== resolveGen.current) return;
+                if (retry.status === "found") {
+                  validDefaultRootRetryRef.current = false;
+                  setSetup(null);
+                  setRepair(null);
+                  setAliasInvalidPath(null);
+                  setResolveError(null);
+                  setApplying(false);
+                  setReady(true);
+                  setEnvOverridePath(retry.source === "explicit" ? retry.rootPath : null);
+                  return;
+                }
+              }
+              setSetup(null);
+              setRepair(null);
+              setAliasInvalidPath(null);
+              setApplying(false);
+              setReady(false);
+              setResolveError(tRef.current("error.service_unavailable"));
+              return;
+            }
           } catch {
             if (gen !== resolveGen.current) return;
             setSetup(null);
             setRepair(null);
             setResolveError(null);
             setApplying(false);
-            setAliasInvalidPath(wireOrAliasPath);
+            setAliasInvalidPath("");
             setRecoveryPresentation({
               mode: app.vault_root_mode,
               defaultRootAnchor: "",
               aliasPath: "",
-              rememberedAliasTarget: wireOrAliasPath || null,
+              rememberedAliasTarget: null,
             });
             setReady(false);
             return;
           }
-        }
-
-        try {
-          const defaultRoot = await vaultRoot.defaultRootStatus();
-          if (gen !== resolveGen.current) return;
-          if (defaultRoot.status === "incomplete") {
-            if (Platform.OS === "android") {
-              setRepair(null);
-              setAliasInvalidPath(null);
-              setResolveError(null);
-              setApplying(false);
-              setSetup({
-                presentation: {
-                  mode: "default_root",
-                  defaultRootAnchor: "",
-                  aliasPath: "",
-                  rememberedAliasTarget: null,
-                },
-                distribution: "installed",
-              });
-              setReady(false);
-              return;
-            }
-            setRepair({ targetPath: defaultRoot.defaultRootAnchor, mode: "default_root" });
-            setSetup(null);
-            setAliasInvalidPath(null);
-            setResolveError(null);
-            setApplying(false);
-            setReady(false);
-            return;
-          }
-          if (defaultRoot.status === "unreadable") {
-            setSetup(null);
-            setRepair(null);
-            setResolveError(null);
-            setApplying(false);
-            setAliasInvalidPath(defaultRoot.defaultRootAnchor.trim() || "");
-            setRecoveryPresentation({
-              mode: app.vault_root_mode,
-              defaultRootAnchor: defaultRoot.defaultRootAnchor,
-              aliasPath: "",
-              rememberedAliasTarget: defaultRoot.defaultRootAnchor.trim() || null,
-            });
-            setReady(false);
-            return;
-          }
-          if (defaultRoot.status === "valid") {
-            // needs_setup + valid default root is inconsistent — retry resolve once (M8).
-            if (!validDefaultRootRetryRef.current) {
-              validDefaultRootRetryRef.current = true;
-              const retry = await vaultRoot.resolve({
-                vaultRootMode: app.vault_root_mode,
-                explicitPath: null,
-              });
-              if (gen !== resolveGen.current) return;
-              if (retry.status === "found") {
-                validDefaultRootRetryRef.current = false;
-                setSetup(null);
-                setRepair(null);
-                setAliasInvalidPath(null);
-                setResolveError(null);
-                setApplying(false);
-                setReady(true);
-                setEnvOverridePath(retry.source === "explicit" ? retry.rootPath : null);
-                return;
-              }
-            }
-            setSetup(null);
-            setRepair(null);
-            setAliasInvalidPath(null);
-            setApplying(false);
-            setReady(false);
-            setResolveError(tRef.current("error.service_unavailable"));
-            return;
-          }
-        } catch {
-          if (gen !== resolveGen.current) return;
-          setSetup(null);
-          setRepair(null);
-          setResolveError(null);
-          setApplying(false);
-          setAliasInvalidPath("");
-          setRecoveryPresentation({
-            mode: app.vault_root_mode,
-            defaultRootAnchor: "",
-            aliasPath: "",
-            rememberedAliasTarget: null,
-          });
-          setReady(false);
-          return;
         }
 
         validDefaultRootRetryRef.current = false;
@@ -341,6 +345,9 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
           if (alias?.path.trim()) rememberedAliasTarget = alias.path.trim();
         } catch {
           /* optional enrichment */
+        }
+        if (!rememberedAliasTarget && wireOrAliasPath) {
+          rememberedAliasTarget = wireOrAliasPath;
         }
         if (gen !== resolveGen.current) return;
         setSetup({
@@ -379,10 +386,11 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
 
         const gone = isVaultRootGoneError(error);
         if (gone) {
-          // An active `.upriv-root` keeps every other RPC on the broken path, so a valid
+          // An active `.upriv-data-folder` keeps every other RPC on the broken path, so a valid
           // default_root probe must not count as ready — the user picks a folder in Setup.
           const aliasBroken =
             isRpcError(error) && error.code === VAULT_ROOT_ERROR_CODES.ALIAS_INVALID;
+          let rememberedAliasTarget: string | null = null;
           try {
             const result = await vaultRoot.resolve({
               vaultRootMode: "default_root",
@@ -428,12 +436,14 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
             setRecoveryPresentation(null);
             setResolveError(null);
             setApplying(false);
-            let rememberedAliasTarget: string | null = null;
             try {
               const alias = await vaultRoot.readAlias();
               if (alias?.path.trim()) rememberedAliasTarget = alias.path.trim();
             } catch {
               /* optional enrichment */
+            }
+            if (!rememberedAliasTarget && wireOrAliasPath) {
+              rememberedAliasTarget = wireOrAliasPath;
             }
             if (gen !== resolveGen.current) return;
             if (result.status === "needs_setup") {
@@ -470,7 +480,10 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
               mode: "default_root",
               defaultRootAnchor: "",
               aliasPath: "",
-              rememberedAliasTarget: aliasBroken ? pathFromRpcError(error) || null : null,
+              rememberedAliasTarget:
+                (aliasBroken
+                  ? pathFromRpcError(error)
+                  : (rememberedAliasTarget ?? pathFromRpcError(error))) || null,
             },
             distribution: "installed",
           });
