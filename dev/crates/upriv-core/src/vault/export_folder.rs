@@ -1,10 +1,12 @@
 //! The folder a person chose for an export, and the one file an export
-//! writes there: a vault `.zip` or `.7z`, or the data-folder zip.
+//! writes there: a vault `.zip`, `.7z`, or plain-text `.zip`, the backups of a
+//! vault, or the data-folder zip.
 //!
 //! The file is written as `<file>.upriv-part` and renamed into place once it
 //! is complete. A file already using the name, or one still being written, is
 //! never replaced: the data-folder zip refuses that name (its window asks for
-//! another), and a vault export takes the next free number (`Notes 2.zip`).
+//! another), and a vault or backup export takes the next free number
+//! (`Notes 2.zip`).
 
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
@@ -13,6 +15,9 @@ use crate::error::{Result, UprivError};
 #[allow(unused_imports)]
 use crate::host_fs::HostFsQuery;
 use crate::paths::VaultRoot;
+use crate::session::Job;
+
+use super::partial::{discard_partial, PartialWork};
 
 /// Suffix of an export file that is still being written.
 pub(super) const PART_SUFFIX: &str = ".upriv-part";
@@ -125,6 +130,76 @@ impl NumberedExportName {
                 Err(error) => return Err(error.into()),
             }
         }
+    }
+}
+
+/// The file a vault or backup export wrote.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExportedFile {
+    pub path: PathBuf,
+    pub size: u64,
+    /// `1` for the export's own name; higher when that name was taken and the
+    /// file got this number (`Notes 2.zip`).
+    pub number: u32,
+}
+
+/// Where a numbered export goes: the first free name in the chosen folder,
+/// and the partial it is written as.
+pub(super) struct NumberedExportTarget {
+    dir: PathBuf,
+    name: NumberedExportName,
+    number: u32,
+    partial: PathBuf,
+}
+
+impl NumberedExportTarget {
+    pub(super) fn new(dest_dir: &Path, name: NumberedExportName) -> Result<Self> {
+        let number = name.first_free(dest_dir, 1)?;
+        let partial = ExportFile::new(dest_dir, &name.file_name(number)).partial;
+        Ok(Self {
+            dir: dest_dir.to_path_buf(),
+            name,
+            number,
+            partial,
+        })
+    }
+
+    /// The file the export is written as until it is complete.
+    pub(super) fn partial(&self) -> &Path {
+        &self.partial
+    }
+
+    /// Write the export into its partial with `write`, then move it to its
+    /// free name. On any failure the partial is removed and logged as `work`;
+    /// a failure after a stop reads as the stop.
+    pub(super) fn write(
+        &self,
+        root: &VaultRoot,
+        job: &Job,
+        work: PartialWork,
+        write: impl FnOnce(&Path) -> Result<u64>,
+    ) -> Result<ExportedFile> {
+        self.write_clearing(root, job, write, |partial| discard_partial(partial, work))
+    }
+
+    /// [`Self::write`], with `clear` deciding how a failure gets rid of the partial.
+    pub(super) fn write_clearing(
+        &self,
+        root: &VaultRoot,
+        job: &Job,
+        write: impl FnOnce(&Path) -> Result<u64>,
+        clear: impl FnOnce(&Path),
+    ) -> Result<ExportedFile> {
+        let installed = (|| {
+            let size = job.settle(write(&self.partial))?;
+            job.ensure_running()?;
+            let (path, number) = self.name.install(&self.dir, &self.partial, self.number)?;
+            Ok(ExportedFile { path, size, number })
+        })();
+        installed.map_err(|error| {
+            clear(&self.partial);
+            unreachable_folder_as_io(error, root)
+        })
     }
 }
 

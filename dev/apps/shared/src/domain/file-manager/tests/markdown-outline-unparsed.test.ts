@@ -6,12 +6,14 @@ vi.mock("mdast-util-from-markdown", () => ({
   },
 }));
 
-import { markdownOutline, parseMarkdownDocument } from "../markdownDocument";
+import { parseMarkdownNote } from "../markdownDocument";
+
+const parseMarkdownDocument = (source: string) => parseMarkdownNote(source).document;
 
 describe("markdown parse failure", () => {
   it("shows the raw note in Read and does not claim the outline is empty", () => {
     const source = "# Still here\n";
-    expect(markdownOutline(source)).toEqual({ status: "unparsed", entries: [] });
+    expect(parseMarkdownNote(source).outline).toEqual({ status: "unparsed", entries: [] });
     expect(parseMarkdownDocument(source)).toEqual({
       status: "ok",
       blocks: [{ type: "code", text: source, lang: null }],

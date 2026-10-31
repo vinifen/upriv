@@ -17,18 +17,41 @@ export {
   markdownViewMode,
   sessionPathKind,
 } from "./workspaceTypes";
-export type { TextMatch } from "./fileSearch";
-export { findTextMatches, stepMatchIndex } from "./fileSearch";
+export type { IndexedMatch, TextMatch } from "./fileSearch";
+export {
+  findTextMatches,
+  lineStartOffsets,
+  matchesBySpan,
+  spanAt,
+  stepMatchIndex,
+} from "./fileSearch";
+export {
+  EDITOR_BLOCK_LINES,
+  editorBlocks,
+  gutterLabels,
+  lineFirstRows,
+  rowStartsByLine,
+  SINGLE_ROW,
+  type LineRows,
+} from "./editorRows";
+export { previewSearchMatches, type PreviewSearch, type PreviewTextNode } from "./previewSearch";
 export type { OutlineScroll } from "./outlineScroll";
 export { activeOutlineIndex } from "./outlineScroll";
 export type { SessionPathKind } from "./workspaceTypes";
 export type { VaultWorkspaceAction } from "./workspaceReducer";
 export { vaultWorkspaceReducer, resolveUnsavedPrompt, reorderOpenTabs } from "./workspaceReducer";
+export { MAX_DIRTY_DRAFT_SAVE_PASSES, saveDirtyVaultDrafts } from "./saveDirtyDrafts";
 export {
-  MAX_DIRTY_DRAFT_SAVE_PASSES,
-  saveDirtyVaultDrafts,
-  withSavedDraftDiskContents,
-} from "./saveDirtyDrafts";
+  TAB_CONTENT_CACHE_CHARS,
+  markTabRecent,
+  tabContentsToLoad,
+  tabsNeedingContent,
+  trimTabContents,
+  withSavedDrafts,
+  withTabContent,
+  type TabContent,
+  type TabContents,
+} from "./tabContents";
 export {
   unsavedPromptBodyKey,
   unsavedPromptConfirmsAllFiles,
@@ -56,6 +79,14 @@ export {
   fileManagerReducer,
 } from "./dockReducer";
 export {
+  createFileManagerStore,
+  fileManagerIndicator,
+  fileManagerShell,
+  sameFileManagerShell,
+  type FileManagerShell,
+  type FileManagerShellEntry,
+} from "./fileManagerStore";
+export {
   importLogicalFiles,
   type ImportLogicalFile,
   type ImportLogicalResult,
@@ -65,9 +96,9 @@ export { yieldToPaint } from "./yieldToPaint";
 export { markdownLinkHref } from "./markdownLink";
 export { breadcrumbShrink, pathBreadcrumbs } from "./pathBreadcrumbs";
 export {
+  createMarkdownParser,
   MARKDOWN_PREVIEW_MAX_CHARS,
-  markdownOutline,
-  parseMarkdownDocument,
+  parseMarkdownNote,
   toggleMarkdownTask,
 } from "./markdownDocument";
 export type {
@@ -78,6 +109,7 @@ export type {
   MarkdownListItem,
   MarkdownOutlineEntry,
   MarkdownOutlineModel,
+  MarkdownParser,
   MarkdownPreviewModel,
 } from "./markdownDocument";
 export {

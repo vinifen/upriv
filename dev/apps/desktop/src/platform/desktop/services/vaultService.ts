@@ -6,6 +6,7 @@ import {
   rpcVaultDelete,
   rpcVaultExportCapabilities,
   rpcVaultExportToFolder,
+  rpcVaultPlainExportSweep,
   rpcVaultImport7z,
   rpcVaultImportFilesZip,
   rpcVaultImportOsPath,
@@ -27,6 +28,9 @@ export const desktopVaultService = createLiveVaultService({
   exportVaultToFolder: (vaultId, request, destDir, job) =>
     rpcVaultExportToFolder(vaultId, request, destDir, job),
   exportCapabilities: () => rpcVaultExportCapabilities(),
+  sweepPlainExports: async () => {
+    await rpcVaultPlainExportSweep();
+  },
   importZip: (input) => rpcVaultImportZip(input),
   import7z: (input) => rpcVaultImport7z(input),
   importFilesZip: (input) => rpcVaultImportFilesZip(input),

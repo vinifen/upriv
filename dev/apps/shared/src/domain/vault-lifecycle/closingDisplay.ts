@@ -1,4 +1,4 @@
-/** Floor for the list "Closing" badge after a successful close. */
+/** Floor for the list "Closing" badge after a successful close. Close now has none. */
 export const MIN_CLOSING_DISPLAY_MS = 2_000;
 
 /** Remaining time so Open → Closed is not a one-frame snap when close is instant. */

@@ -125,6 +125,7 @@ export function VaultListPage() {
           onOpenFileManager={screen.openFromVault}
           onLockVault={list.onLockVault}
           onUnlockVault={list.onUnlockVault}
+          onCloseNow={list.onCloseNow}
         />
         {importDrop.isImportDropActive ? (
           <div
@@ -156,7 +157,11 @@ export function VaultListPage() {
         listRefreshToken={backups.listRefreshToken}
         onClose={backups.onClose}
         onCreateVaultFromBackup={backups.onCreateVaultFromBackup}
-        onDownloadNotice={backups.onDownloadNotice}
+        exportFolder={backups.exportFolder}
+        exportJob={backups.exportJob}
+        onExport={backups.onExport}
+        onExportBusy={backups.onExportBusy}
+        onStopExport={backups.onStopExport}
       />
       <ExportVaultModal
         vault={exportVault.vault}

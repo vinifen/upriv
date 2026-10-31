@@ -1,14 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { markdownLinkHref } from "../markdownLink";
 import {
+  createMarkdownParser,
   MARKDOWN_PREVIEW_MAX_CHARS,
-  markdownOutline,
-  parseMarkdownDocument,
+  parseMarkdownNote,
   toggleMarkdownTask,
   type MarkdownBlock,
   type MarkdownInline,
   type MarkdownPreviewModel,
 } from "../markdownDocument";
+
+const parseMarkdownDocument = (source: string) => parseMarkdownNote(source).document;
+const markdownOutline = (source: string) => parseMarkdownNote(source).outline;
 
 function ok(source: string): Extract<MarkdownPreviewModel, { status: "ok" }> {
   const model = parseMarkdownDocument(source);
@@ -72,7 +75,7 @@ describe("markdownLinkHref", () => {
   });
 });
 
-describe("parseMarkdownDocument", () => {
+describe("parseMarkdownNote document", () => {
   it("renders a password note as copyable code, not HTML", () => {
     const model = ok("# Bank\n\nPIN `1234`\n\n```\nhunter2\n```\n\n- [x] rotated\n");
     expect(model.blocks[0]).toEqual({
@@ -256,7 +259,41 @@ describe("parseMarkdownDocument", () => {
   });
 });
 
-describe("markdownOutline", () => {
+describe("createMarkdownParser", () => {
+  it("gives back the same note for the same text", () => {
+    const parser = createMarkdownParser();
+    const note = parser.note("# One\n");
+    parser.note("# Two\n");
+    expect(parser.note("# One\n")).toBe(note);
+  });
+
+  it("parses text it has not kept", () => {
+    const parser = createMarkdownParser();
+    expect(parser.note("# One\n")).not.toBe(parser.note("# Two\n"));
+  });
+
+  it("drops the note left longest ago once over budget", () => {
+    const one = "# One\n";
+    const two = "# Two\n";
+    const three = "# Six\n";
+    const parser = createMarkdownParser(one.length + two.length);
+    const firstOne = parser.note(one);
+    const firstTwo = parser.note(two);
+    // Reading the first note again makes the second the older one.
+    expect(parser.note(one)).toBe(firstOne);
+    parser.note(three);
+    expect(parser.note(one)).toBe(firstOne);
+    expect(parser.note(two)).not.toBe(firstTwo);
+  });
+
+  it("keeps the latest note even when it alone is over budget", () => {
+    const parser = createMarkdownParser(1);
+    const note = parser.note("# Longer than the budget\n");
+    expect(parser.note("# Longer than the budget\n")).toBe(note);
+  });
+});
+
+describe("parseMarkdownNote outline", () => {
   it("nests each heading under the nearest shallower one above it", () => {
     const source = "# Title\n\n## One\n\n#### Deep\n\n### Mid\n\n## Two\n\n# Next\n";
     expect(markdownOutline(source).entries.map(({ text, level }) => [text, level])).toEqual([

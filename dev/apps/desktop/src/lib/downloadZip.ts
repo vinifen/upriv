@@ -23,16 +23,3 @@ export function downloadFilesAsZip(
 
   triggerBrowserDownload(zipSync(entries), zipFilename, "application/zip");
 }
-
-/** One file → direct download; multiple → zip. */
-export function downloadFiles(
-  files: ReadonlyArray<{ filename: string; data: Uint8Array }>,
-  zipFilename: string,
-): void {
-  if (files.length === 0) return;
-  if (files.length === 1) {
-    triggerBrowserDownload(files[0].data, files[0].filename, "application/octet-stream");
-    return;
-  }
-  downloadFilesAsZip(files, zipFilename);
-}

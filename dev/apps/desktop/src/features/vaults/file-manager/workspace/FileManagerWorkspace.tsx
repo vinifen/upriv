@@ -1,6 +1,5 @@
-import { useCallback, useLayoutEffect, useRef, useState, type DragEvent } from "react";
+import { memo, useCallback, useLayoutEffect, useRef, useState, type DragEvent } from "react";
 import { useMediaQuery } from "@/lib/useMediaQuery";
-import { useErrorToast } from "@/hooks/useErrorToast";
 import { useFileManager } from "../FileManagerContext";
 import { FileEditorPane } from "../editor/FileEditorPane";
 import { FileManagerDialogs } from "../dialogs/FileManagerDialogs";
@@ -9,7 +8,11 @@ import { FileTreeContextMenu } from "../tree/FileTreeContextMenu";
 import { ExplorerToggle, FileTreePanel } from "../tree/FileTreePanel";
 import { PaneResizeHandle } from "./PaneResizeHandle";
 import type { FileManagerEntry, VaultWorkspaceAction } from "@upriv/shared";
-import { useTreeSplitDrag, useWorkspacePersistence } from "@upriv/shared/react";
+import {
+  useFileManagerEntry,
+  useTreeSplitDrag,
+  useWorkspacePersistence,
+} from "@upriv/shared/react";
 import { hasUnsavedEditableTabs, useVaultFileManager } from "../hooks/useVaultFileManager";
 import { useVaultFileSystemService } from "@/platform/services";
 import { allowFileManagerDrop, beginOsFileImport } from "../lib/osFileDrop";
@@ -17,44 +20,63 @@ import { osFileImportParentPath } from "../lib/osFileImportTarget";
 import { useNativeOsFileDrop } from "../hooks/useNativeOsFileDrop";
 
 interface FileManagerWorkspaceProps {
-  entry: FileManagerEntry;
+  vaultId: string;
   active?: boolean;
   writesLocked?: boolean;
-  onDismissConfirmed: () => void;
-  onVaultCloseConfirmed?: () => void;
+  onDismissConfirmed: (vaultId: string) => void;
+  onVaultCloseConfirmed?: (vaultId: string) => void;
 }
 
-export function FileManagerWorkspace({
+/** One vault's file manager. It draws again for that vault's changes only. */
+export const FileManagerWorkspace = memo(function FileManagerWorkspace({
+  vaultId,
+  ...props
+}: FileManagerWorkspaceProps) {
+  const entry = useFileManagerEntry(vaultId);
+  return entry ? <OpenFileManagerWorkspace entry={entry} {...props} /> : null;
+});
+
+function OpenFileManagerWorkspace({
   entry,
   active = true,
   writesLocked = false,
   onDismissConfirmed,
   onVaultCloseConfirmed,
-}: FileManagerWorkspaceProps) {
+}: Omit<FileManagerWorkspaceProps, "vaultId"> & { entry: FileManagerEntry }) {
+  const vaultId = entry.vaultId;
   const { dispatchWorkspace } = useFileManager();
   const fs = useVaultFileSystemService();
-  const { showError } = useErrorToast();
   const containerRef = useRef<HTMLDivElement>(null);
+  const explorerRef = useRef<HTMLElement>(null);
   const [containerSize, setContainerSize] = useState(0);
   const isMobile = useMediaQuery("(max-width: 767px)");
   const axis = isMobile ? "y" : "x";
 
   const dispatch = useCallback(
-    (action: VaultWorkspaceAction) => dispatchWorkspace(entry.vaultId, action),
-    [dispatchWorkspace, entry.vaultId],
+    (action: VaultWorkspaceAction) => dispatchWorkspace(vaultId, action),
+    [dispatchWorkspace, vaultId],
+  );
+  const handleDismissConfirmed = useCallback(
+    () => onDismissConfirmed(vaultId),
+    [onDismissConfirmed, vaultId],
+  );
+  const handleVaultCloseConfirmed = useCallback(
+    () => onVaultCloseConfirmed?.(vaultId),
+    [onVaultCloseConfirmed, vaultId],
   );
 
   const fm = useVaultFileManager({
     entry,
     dispatch,
-    onDismissConfirmed,
-    onVaultCloseConfirmed,
+    onDismissConfirmed: handleDismissConfirmed,
+    onVaultCloseConfirmed: handleVaultCloseConfirmed,
     writesLocked,
   });
 
   useWorkspacePersistence({
-    vaultId: entry.vaultId,
+    vaultId,
     workspace: entry.workspace,
+    tree: fm.treeStatus === "ready" ? fm.tree : null,
     fs,
     dispatch,
     suspend: fm.importBusy,
@@ -76,12 +98,30 @@ export function FileManagerWorkspace({
     return () => observer.disconnect();
   }, [axis]);
 
+  // A move sizes the explorer through its style: drawing the workspace on every move is too slow.
+  const paintExplorerExtent = useCallback(
+    (visualPercent: number) => {
+      const explorer = explorerRef.current;
+      if (!explorer) return;
+      explorer.style.display = visualPercent === 0 ? "none" : "";
+      explorer.style[axis === "y" ? "height" : "width"] = `${visualPercent}%`;
+    },
+    [axis],
+  );
+
   const split = useTreeSplitDrag({
     savedPercent: entry.workspace.treeSplitPercent,
     containerSize,
     axis,
     dispatch,
+    onDragFrame: paintExplorerExtent,
   });
+
+  // A redraw during a drag would put the size from before the grab back.
+  useLayoutEffect(() => {
+    split.repaintDrag();
+  });
+
   const explorerCollapsed = entry.workspace.explorerCollapsed;
 
   useNativeOsFileDrop({
@@ -90,7 +130,7 @@ export function FileManagerWorkspace({
     isInternalDrag: () => Boolean(fm.workspace.dragSourcePath),
     importOsDrop: fm.importOsDrop,
     onImported: () => fm.dispatch({ type: "set_drag", source: null, target: null }),
-    onError: (error) => showError(error, "error.unexpected"),
+    onError: fm.showError,
   });
 
   const handleWorkspaceDragOver = (event: DragEvent) => {
@@ -103,7 +143,7 @@ export function FileManagerWorkspace({
         event,
         osFileImportParentPath(fm.tree, fm.workspace),
         fm.importOsDrop,
-        (error) => showError(error, "error.unexpected"),
+        fm.showError,
         { openFirstViewable: true },
       )
     ) {
@@ -124,6 +164,7 @@ export function FileManagerWorkspace({
           <>
             <FileTreePanel
               fm={fm}
+              paneRef={explorerRef}
               splitPercent={split.visualPercent}
               layout={isMobile ? "column" : "row"}
             />

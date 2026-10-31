@@ -58,7 +58,7 @@ export function contentTreeFromFolderPick(picked: {
   for (const directory of picked.directories ?? []) {
     const logical = relativeUnderPickedFolder(directory, folderName);
     if (!logical) throw new Error("import folder entry is outside the chosen folder");
-    directories.push(logical);
+    if (!skippedImportLogical(logical)) directories.push(logical);
   }
   directories.sort(byDirectoryDepth);
   const files: ContentImportFile[] = [];
@@ -66,7 +66,7 @@ export function contentTreeFromFolderPick(picked: {
     const logical = relativeUnderPickedFolder(file.relativePath, folderName);
     if (!logical) throw new Error("import folder entry is outside the chosen folder");
     if (!file.uri.trim()) throw new Error("import folder entry is unavailable");
-    files.push({ logicalPath: logical, uri: file.uri });
+    if (!skippedImportLogical(logical)) files.push({ logicalPath: logical, uri: file.uri });
   }
   assertImportTreeNames(directories, files);
   return { directoryUri, folderName, directories, files };
@@ -89,10 +89,16 @@ export function contentTreeFromPickedFile(picked: {
 
 const RESERVED_SEED_PATH = "upriv-seed.txt";
 const RESERVED_WORKSPACE_FILE = ".upriv-workspace.json";
+const EXPORT_CONFIG_DIR = ".upriv-config";
 
 function fileNameOf(logical: string): string {
   const slash = logical.lastIndexOf("/");
   return slash === -1 ? logical : logical.slice(slash + 1);
+}
+
+/** The settings folder of an unpacked export: not vault data, as in `upriv-core`. */
+function skippedImportLogical(logical: string): boolean {
+  return logical.split("/").includes(EXPORT_CONFIG_DIR);
 }
 
 /** Same names `upriv-core` refuses while streaming an import. */

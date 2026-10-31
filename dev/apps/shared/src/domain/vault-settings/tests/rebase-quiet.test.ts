@@ -23,7 +23,7 @@ describe("rebaseQuietLockedVaultSettings", () => {
     const draft = {
       ...baseline,
       vault: { ...baseline.vault, display_name: "Renamed", note: "keep" },
-      storage: { mode: "upriv_plain" as const },
+      storage: { mode: "upriv_plain" as const, plain_files: "whole" as const },
       mount: {
         ...vaultWorkspace(),
         custom_file_manager_folder: true,
@@ -34,6 +34,7 @@ describe("rebaseQuietLockedVaultSettings", () => {
     expect(rebased.vault.display_name).toBe("Notes");
     expect(rebased.vault.note).toBe("keep");
     expect(rebased.storage.mode).toBe("encrypted_dir");
+    expect(rebased.storage.plain_files).toBe("chosen");
     expect(rebased.mount.linux.path).toBe("");
   });
 
@@ -42,7 +43,7 @@ describe("rebaseQuietLockedVaultSettings", () => {
     const draft = {
       ...baseline,
       vault: { ...baseline.vault, display_name: "Renamed", note: "keep" },
-      storage: { mode: "upriv_plain" as const },
+      storage: { mode: "upriv_plain" as const, plain_files: "whole" as const },
     };
     const rebased = rebaseQuietLockedVaultSettings(draft, baseline, closed, {
       creatingVaultIds: ["notes"],
@@ -50,5 +51,20 @@ describe("rebaseQuietLockedVaultSettings", () => {
     expect(rebased.vault.display_name).toBe("Notes");
     expect(rebased.vault.note).toBe("keep");
     expect(rebased.storage.mode).toBe("upriv_plain");
+    expect(rebased.storage.plain_files).toBe("chosen");
+  });
+
+  it("keeps the folder choice in recovery, also with a leftover folder", () => {
+    const leftover = vaultRowFixture({
+      id: "notes",
+      session: "recovery",
+      plainLeftover: true,
+    });
+    const draft = {
+      ...baseline,
+      storage: { ...baseline.storage, plain_files: "whole" as const },
+    };
+    const rebased = rebaseQuietLockedVaultSettings(draft, baseline, leftover);
+    expect(rebased.storage.plain_files).toBe("whole");
   });
 });

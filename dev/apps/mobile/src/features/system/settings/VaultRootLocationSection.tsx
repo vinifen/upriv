@@ -9,6 +9,7 @@ import {
 } from "react";
 import { Platform, StyleSheet, Text, View } from "react-native";
 import {
+  SAF_VAULT_ROOT,
   VAULT_ROOT_ALIAS_FILE,
   diskFromDirStatus,
   isVaultRootDraftDirty,
@@ -483,6 +484,7 @@ export function VaultRootLocationSection({
               {android ? (
                 <PathField
                   value={t("modal.app_settings.option.upriv_root.android_documents_path")}
+                  openPath={defaultInUse ? SAF_VAULT_ROOT : undefined}
                   editable={false}
                 />
               ) : defaultRootAnchor ? (

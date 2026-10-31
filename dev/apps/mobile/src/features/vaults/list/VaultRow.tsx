@@ -24,9 +24,9 @@ import {
   type VaultSettingsAreaId,
 } from "@upriv/shared";
 import { Icon } from "@/components/icons";
-import { LoadingBudgetHint } from "@/components/ui";
+import { LoadingBudgetHint, TextWidthProbe } from "@/components/ui";
 import { useTranslation, type I18nKey } from "@/i18n";
-import { useLoadingBudget } from "@upriv/shared/react";
+import { useLoadingBudget, useRowButtonStack } from "@upriv/shared/react";
 import { useTheme } from "@/theme";
 import { radii, spacing, vaultRowBoxShadow } from "@/theme/tokens";
 import { useVaultRowChrome } from "@/hooks/useVaultRowChrome";
@@ -68,6 +68,7 @@ interface VaultRowProps {
   onOpenSettings: (vault: VaultListItem, area: VaultSettingsAreaId) => void;
   onUnlock: (vault: VaultListItem) => void;
   onLock: (vault: VaultListItem) => void;
+  onCloseNow: (vault: VaultListItem) => void;
   onExport: (vault: VaultListItem) => void;
   onOpenBackups: (vault: VaultListItem) => void;
   onOpenNote: (vault: VaultListItem) => void;
@@ -94,6 +95,7 @@ export function VaultRow({
   onOpenSettings,
   onUnlock,
   onLock,
+  onCloseNow,
   onExport,
   onOpenBackups,
   onOpenNote,
@@ -114,7 +116,9 @@ export function VaultRow({
   const density = VAULT_ROW_DENSITY[viewMode === "blocks" ? "default" : viewMode];
   const blockTitleSize = VAULT_ROW_DENSITY.blocks.titleSize;
   const { chrome, onLayout: onChromeLayout } = useVaultRowChrome();
-  const comfortable = chrome === "comfortable";
+  const { stacked, measure } = useRowButtonStack();
+  // A row with its buttons on their own line has the room for the full look.
+  const comfortable = chrome === "comfortable" || stacked;
   const lastAccessedWhen = vaultLastAccessedLabel(vault, locale);
   const lastAccessedLabel = t("vault.last_accessed", { when: lastAccessedWhen });
   const lastAccessedText =
@@ -166,6 +170,7 @@ export function VaultRow({
 
   const handleLayout = (event: LayoutChangeEvent) => {
     onChromeLayout(event);
+    measure("rowWidth", event.nativeEvent.layout.width);
     dropTargetProps?.onLayout?.();
   };
 
@@ -183,22 +188,36 @@ export function VaultRow({
       onOpenFileManager={onOpenFileManager}
       onLockVault={onLock}
       onUnlockVault={onUnlock}
+      onCloseNow={onCloseNow}
     />
   );
 
   const identity = (
     <View style={styles.identity}>
-      <View style={styles.titleRow}>
+      <View
+        style={styles.titleRow}
+        onLayout={(event) => measure("slotWidth", event.nativeEvent.layout.width)}
+      >
+        <TextWidthProbe
+          text={vault.displayName}
+          style={[styles.title, { fontSize: density.titleSize }]}
+          onWidth={(width) => measure("textWidth", width)}
+        />
         <Text
           style={[styles.title, { color: colors.onSurface, fontSize: density.titleSize }]}
           numberOfLines={1}
         >
           {vault.displayName}
         </Text>
-        <VaultPlaintextIndicator storageMode={vault.storageMode} />
-        <VaultLastOpenedIndicator active={isLastOpened} />
-        <VaultFileManagerIndicator vaultId={vault.id} />
-        <VaultHiddenIndicator hidden={vault.hidden} />
+        <View
+          style={styles.titleMarks}
+          onLayout={(event) => measure("besideWidth", event.nativeEvent.layout.width)}
+        >
+          <VaultPlaintextIndicator storageMode={vault.storageMode} />
+          <VaultLastOpenedIndicator active={isLastOpened} />
+          <VaultFileManagerIndicator vaultId={vault.id} />
+          <VaultHiddenIndicator hidden={vault.hidden} />
+        </View>
       </View>
       <View style={styles.metaRow}>
         <VaultStatusBadge status={status} labelKey={statusLabelKey} />
@@ -316,6 +335,7 @@ export function VaultRow({
       accessibilityLabel={activateLabel}
       style={[
         styles.row,
+        stacked ? styles.rowStacked : null,
         nested ? styles.memberRow : null,
         {
           paddingVertical: density.paddingY,
@@ -333,26 +353,30 @@ export function VaultRow({
       ]}
     >
       {dropRing}
-      {showGrip ? (
-        <VaultDragHandle
-          disabled={gripDisabled}
-          label={dragHandleLabel}
-          onDragStart={onDragStart}
-          onDragMove={onDragMove}
-          onDragEnd={onDragEnd}
-          onDragCancel={onDragCancel}
+      <View style={styles.rowTop}>
+        {showGrip ? (
+          <VaultDragHandle
+            disabled={gripDisabled}
+            label={dragHandleLabel}
+            onDragStart={onDragStart}
+            onDragMove={onDragMove}
+            onDragEnd={onDragEnd}
+            onDragCancel={onDragCancel}
+          />
+        ) : null}
+        {comfortable ? avatar : null}
+        <View style={styles.rowPress}>{identity}</View>
+      </View>
+      <View style={styles.rowButtons}>
+        {actions}
+        <VaultLockButton
+          status={status}
+          appearance={comfortable ? "label" : "icon"}
+          resumeUnlock={resumeOpen}
+          onLock={() => onLock(vault)}
+          onUnlock={() => onUnlock(vault)}
         />
-      ) : null}
-      {comfortable ? avatar : null}
-      <View style={styles.rowPress}>{identity}</View>
-      {actions}
-      <VaultLockButton
-        status={status}
-        appearance={comfortable ? "label" : "icon"}
-        resumeUnlock={resumeOpen}
-        onLock={() => onLock(vault)}
-        onUnlock={() => onUnlock(vault)}
-      />
+      </View>
     </Pressable>
   );
 }
@@ -385,10 +409,27 @@ const styles = StyleSheet.create({
     marginBottom: spacing.sm,
     overflow: "visible",
   },
+  rowStacked: { flexDirection: "column", alignItems: "stretch", gap: spacing.sm },
   memberRow: { marginBottom: 0 },
+  rowTop: {
+    flexGrow: 1,
+    flexShrink: 1,
+    minWidth: 0,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+  },
+  rowButtons: {
+    flexShrink: 0,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "flex-end",
+    gap: 12,
+  },
   rowPress: { flex: 1, minWidth: 0, minHeight: 44, justifyContent: "center" },
   identity: { flex: 1, minWidth: 0, gap: 4, justifyContent: "center" },
   titleRow: { flexDirection: "row", alignItems: "center", gap: 8, minWidth: 0 },
+  titleMarks: { flexShrink: 0, flexDirection: "row", alignItems: "center", gap: 8 },
   title: { flexShrink: 1, minWidth: 0, fontWeight: "600", includeFontPadding: false },
   metaRow: { flexDirection: "row", alignItems: "center", gap: 8, minWidth: 0 },
   metaWhen: { flex: 1, minWidth: 0, flexDirection: "row", alignItems: "center", gap: 4 },

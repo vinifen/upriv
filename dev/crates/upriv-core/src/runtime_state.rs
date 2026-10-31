@@ -1,7 +1,9 @@
 //! `.upriv/state.json` — volatile open-session records (never `persistence.json`).
 //!
-//! Plaintext folder records are the one durable part: a record stays until its
-//! folder is wiped, so a crash or a failed wipe keeps the vault in recovery.
+//! Plaintext records are the durable part. A folder's record stays until the
+//! folder is wiped, so a crash or a failed wipe keeps the vault in recovery. A
+//! plain-text export's record stays until its unfinished file is gone, so a
+//! later launch can wipe what a crash left in the chosen folder.
 
 #[allow(unused_imports)]
 use crate::host_fs::HostFsQuery;
@@ -22,6 +24,9 @@ pub struct RuntimeState {
     pub format_version: u32,
     #[serde(default)]
     pub vaults: BTreeMap<String, RuntimeVaultEntry>,
+    /// Plain-text exports not known to have ended.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub plain_exports: Vec<PlainExportRecord>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -47,6 +52,22 @@ pub struct PlainRecord {
     pub token: String,
     /// UTC time the folder was made (RFC 3339).
     pub since: String,
+}
+
+/// An unfinished plain-text export, recorded before its first byte is written.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PlainExportRecord {
+    pub vault_id: String,
+    /// Host name of the computer that wrote the file.
+    pub host: String,
+    /// The `.upriv-part` file.
+    pub path: String,
+    /// The `content://` tree the file went through on a phone, where `path`
+    /// exists only while that tree is mounted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tree: Option<String>,
+    /// The export job. A record whose job still runs is not a leftover.
+    pub job: String,
 }
 
 impl PlainRecord {
@@ -77,6 +98,7 @@ impl RuntimeState {
         Self {
             format_version: STATE_FORMAT,
             vaults: BTreeMap::new(),
+            plain_exports: Vec::new(),
         }
     }
 }
@@ -287,6 +309,38 @@ pub(crate) fn reachable_plain_record(
     Ok(plain_records(root, vault_id)?
         .into_iter()
         .find(|record| record.reachable_here(host.as_deref())))
+}
+
+/// Record a plain-text export before any of it is written, on this computer.
+pub(crate) fn add_plain_export(root: &VaultRoot, mut record: PlainExportRecord) -> Result<()> {
+    record.host = this_host().unwrap_or_default();
+    with_state_lock(|| {
+        let mut state = load_runtime_state(root)?;
+        state.plain_exports.retain(|item| item.path != record.path);
+        state.plain_exports.push(record);
+        save_runtime_state(root, &state)
+    })
+}
+
+/// Forget a plain-text export once its unfinished file is gone.
+pub(crate) fn remove_plain_export(root: &VaultRoot, path: &str) -> Result<()> {
+    with_state_lock(|| {
+        let mut state = load_runtime_state(root)?;
+        let before = state.plain_exports.len();
+        state.plain_exports.retain(|item| item.path != path);
+        if state.plain_exports.len() != before {
+            save_runtime_state(root, &state)?;
+        }
+        Ok(())
+    })
+}
+
+/// Plain-text exports this computer recorded.
+pub(crate) fn plain_exports_here(root: &VaultRoot) -> Result<Vec<PlainExportRecord>> {
+    let host = this_host().unwrap_or_default();
+    let mut records = load_runtime_state(root)?.plain_exports;
+    records.retain(|record| record.host == host);
+    Ok(records)
 }
 
 /// Drop every record of a deleted vault.

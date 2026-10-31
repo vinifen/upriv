@@ -3,7 +3,6 @@ import { createDefaultWorkspaceState, type VaultWorkspaceState } from "../worksp
 import {
   MAX_DIRTY_DRAFT_SAVE_PASSES,
   saveDirtyVaultDrafts,
-  withSavedDraftDiskContents,
   type DirtyDraftVault,
 } from "../saveDirtyDrafts";
 
@@ -144,27 +143,5 @@ describe("saveDirtyVaultDrafts", () => {
 
     expect(status).toBe("failed");
     expect(writes).toBe(MAX_DIRTY_DRAFT_SAVE_PASSES);
-  });
-});
-
-describe("withSavedDraftDiskContents", () => {
-  it("copies a clean draft into the editor cache and leaves dirty text alone", () => {
-    const disk = { "/old.md": "old", "/dirty.md": "disk" };
-    const next = withSavedDraftDiskContents(disk, {
-      dirtyPaths: ["/dirty.md"],
-      editorDrafts: { "/old.md": "saved", "/dirty.md": "typing" },
-    });
-
-    expect(next).toEqual({ "/old.md": "saved", "/dirty.md": "disk" });
-    expect(next).not.toBe(disk);
-  });
-
-  it("returns the same cache when nothing clean changed", () => {
-    const disk = { "/a.md": "a" };
-    const next = withSavedDraftDiskContents(disk, {
-      dirtyPaths: ["/a.md"],
-      editorDrafts: { "/a.md": "typing" },
-    });
-    expect(next).toBe(disk);
   });
 });

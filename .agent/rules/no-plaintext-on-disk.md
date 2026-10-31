@@ -6,7 +6,7 @@ In default mode `encrypted_dir`, **never** write or read decrypted vault file tr
 
 **Transitional phases** (import, export, backup copy, password, recovery, cancel/crash) are the usual leak. A temp extract “just for 7zz / zip” is still a spill. Fail the op rather than write plaintext.
 
-The **only** product exception: `upriv_plain` may use real plaintext `workspace/` **while open**, with UI warning + wipe on close. Never use that path as a helper for `encrypted_dir`.
+The **only** product exceptions: `upriv_plain` may use real plaintext `workspace/` **while open**, with UI warning + wipe on close. It holds what the person sent there, or every file with `plain_files = "whole"`. Close now, the person's own choice, removes those files with no overwrite; no other close may. A plain-text `.zip` export is the readable file a person chose behind the vault password and a red warning, so they can always take their data out; its `.upriv-part` is wiped on a stop, a failure, or the launch after a crash. Never use either path as a helper for `encrypted_dir`.
 
 ## Do not port from `temp/upriv/`
 

@@ -13,29 +13,43 @@ import {
   activeOutlineIndex,
   MARKDOWN_COPY_DOUBLE_TAP_MS,
   markdownLinkHref,
-  parseMarkdownDocument,
+  previewSearchMatches,
   toggleMarkdownTask,
   type MarkdownAlign,
   type MarkdownBlock,
   type MarkdownInline,
   type MarkdownListItem,
+  type MarkdownParser,
+  type PreviewSearch,
+  type PreviewTextNode,
 } from "@upriv/shared";
 import { Icon } from "@/components/icons";
 import { useTranslation } from "@/i18n";
 import { useTheme, type ThemeColors } from "@/theme";
+import { colorAlpha } from "@/theme/tokens";
 
 const COPIED_MS = 1600;
+/** Space kept above a block the view scrolls to. */
+const REVEAL_MARGIN = 8;
 
 interface MarkdownPreviewProps {
   markdown: string;
+  parser: MarkdownParser;
   onCopyFailed: () => void;
   /** Task checkbox edits. Omit for a read-only note (checkboxes stay disabled). */
   onChange?: (markdown: string) => void;
   onActiveHeadingChange?: (index: number) => void;
+  /** The user started scrolling by hand. */
+  onUserScroll?: () => void;
+  searchQuery?: string;
+  searchActiveIndex?: number;
+  onMatchCountChange?: (count: number) => void;
 }
 
 interface PreviewActions {
   colors: ThemeColors;
+  search: PreviewSearch;
+  activeMatch: number;
   copiedKey: string | null;
   copy: (key: string, text: string) => void;
   /** Copies on the second tap of the same value within `MARKDOWN_COPY_DOUBLE_TAP_MS`. */
@@ -49,6 +63,8 @@ interface PreviewActions {
 export interface MarkdownPreviewHandle {
   /** Index into `markdownOutline` — the n-th top-level heading. */
   scrollToHeading: (index: number) => void;
+  /** The n-th search match, in reading order. */
+  scrollToMatch: (index: number) => void;
 }
 
 export const MarkdownPreview = forwardRef<MarkdownPreviewHandle, MarkdownPreviewProps>(
@@ -59,19 +75,25 @@ export const MarkdownPreview = forwardRef<MarkdownPreviewHandle, MarkdownPreview
 
 function MarkdownPreviewBody({
   markdown,
+  parser,
   onCopyFailed,
   onChange,
   onActiveHeadingChange,
+  onUserScroll,
+  searchQuery = "",
+  searchActiveIndex = 0,
+  onMatchCountChange,
   handleRef,
 }: MarkdownPreviewProps & { handleRef: ForwardedRef<MarkdownPreviewHandle> }) {
   const { t } = useTranslation();
   const { colors } = useTheme();
-  const model = useMemo(() => parseMarkdownDocument(markdown), [markdown]);
+  const model = useMemo(() => parser.note(markdown).document, [markdown, parser]);
+  const search = useMemo(() => previewSearchMatches(model, searchQuery), [model, searchQuery]);
   const scrollRef = useRef<ScrollView>(null);
   const sectionY = useRef(0);
   const noteY = useRef(new Map<string, number>());
   /** Top-level block index → y in the scroll content. */
-  const headingY = useRef(new Map<number, number>());
+  const blockY = useRef(new Map<number, number>());
   /** Top-level block index of each outline entry, in order. */
   const headingBlocks = useMemo(
     () =>
@@ -81,21 +103,32 @@ function MarkdownPreviewBody({
     [model],
   );
 
+  useEffect(() => {
+    onMatchCountChange?.(search.sectionOfMatch.length);
+  }, [onMatchCountChange, search]);
+
+  const scrollToY = (y: number | undefined) => {
+    if (y === undefined) return;
+    scrollRef.current?.scrollTo({ y: Math.max(0, y - REVEAL_MARGIN), animated: true });
+  };
+
   useImperativeHandle(
     handleRef,
     () => ({
-      scrollToHeading: (index) => {
+      scrollToHeading: (index) => scrollToY(blockY.current.get(headingBlocks[index] ?? -1)),
+      scrollToMatch: (index) => {
         if (model.status !== "ok") return;
-        let seen = -1;
-        const blockIndex = model.blocks.findIndex(
-          (block) => block.type === "heading" && ++seen === index,
+        const section = search.sectionOfMatch[index];
+        if (section === undefined) return;
+        const footnote = model.footnotes[section - model.blocks.length];
+        scrollToY(
+          footnote
+            ? sectionY.current + (noteY.current.get(footnote.id) ?? 0)
+            : blockY.current.get(section),
         );
-        const y = headingY.current.get(blockIndex);
-        if (y === undefined) return;
-        scrollRef.current?.scrollTo({ y: Math.max(0, y - 8), animated: true });
       },
     }),
-    [model],
+    [headingBlocks, model, search],
   );
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -139,15 +172,14 @@ function MarkdownPreviewBody({
 
   const actions: PreviewActions = {
     colors,
+    search,
+    activeMatch: searchActiveIndex,
     copiedKey,
     copy,
     copyOnDoubleTap,
     copyLabel: t("modal.file_manager.markdown.copy"),
     copiedLabel: t("modal.file_manager.markdown.copied"),
-    onFootnote: (id) => {
-      const y = sectionY.current + (noteY.current.get(id) ?? 0);
-      scrollRef.current?.scrollTo({ y: Math.max(0, y - 8), animated: true });
-    },
+    onFootnote: (id) => scrollToY(sectionY.current + (noteY.current.get(id) ?? 0)),
     toggleTask: onChange
       ? (offset, checked) => {
           const next = toggleMarkdownTask(markdown, offset, checked);
@@ -172,12 +204,13 @@ function MarkdownPreviewBody({
       style={[styles.fill, { backgroundColor: colors.surfaceContainerHigh }]}
       contentContainerStyle={styles.content}
       scrollEventThrottle={16}
+      onScrollBeginDrag={onUserScroll}
       onScroll={(event) => {
         if (!onActiveHeadingChange || headingBlocks.length === 0) return;
         const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
         onActiveHeadingChange(
           activeOutlineIndex(
-            headingBlocks.map((block) => headingY.current.get(block)),
+            headingBlocks.map((block) => blockY.current.get(block)),
             {
               offset: contentOffset.y,
               viewport: layoutMeasurement.height,
@@ -191,7 +224,7 @@ function MarkdownPreviewBody({
         blocks={model.blocks}
         actions={actions}
         path="doc"
-        onHeadingLayout={(index, y) => headingY.current.set(index, y)}
+        onBlockLayout={(index, y) => blockY.current.set(index, y)}
       />
       {model.footnotes.length > 0 ? (
         <View
@@ -223,30 +256,41 @@ function MarkdownPreviewBody({
   );
 }
 
-/** `onHeadingLayout`: top level only — those headings are the outline entries. */
+/**
+ * `onBlockLayout`: top level only, where the outline and search scroll to.
+ * Each top-level block then sits in a view that reports its position.
+ */
 function Blocks({
   blocks,
   actions,
   path,
-  onHeadingLayout,
+  onBlockLayout,
 }: {
   blocks: MarkdownBlock[];
   actions: PreviewActions;
   path: string;
-  onHeadingLayout?: (blockIndex: number, y: number) => void;
+  onBlockLayout?: (blockIndex: number, y: number) => void;
 }) {
   return (
     <>
-      {blocks.map((block, index) => (
-        <Block
-          key={`${block.type}-${index}`}
-          block={block}
-          actions={actions}
-          path={`${path}-${index}`}
-          first={index === 0}
-          onHeadingLayout={onHeadingLayout ? (y) => onHeadingLayout(index, y) : undefined}
-        />
-      ))}
+      {blocks.map((block, index) => {
+        const key = `${block.type}-${index}`;
+        const content = (
+          <Block
+            key={key}
+            block={block}
+            actions={actions}
+            path={`${path}-${index}`}
+            first={index === 0}
+          />
+        );
+        if (!onBlockLayout) return content;
+        return (
+          <View key={key} onLayout={(event) => onBlockLayout(index, event.nativeEvent.layout.y)}>
+            {content}
+          </View>
+        );
+      })}
     </>
   );
 }
@@ -256,13 +300,11 @@ function Block({
   actions,
   path,
   first,
-  onHeadingLayout,
 }: {
   block: MarkdownBlock;
   actions: PreviewActions;
   path: string;
   first: boolean;
-  onHeadingLayout?: (y: number) => void;
 }) {
   const { colors } = actions;
   switch (block.type) {
@@ -275,9 +317,6 @@ function Block({
     case "heading":
       return (
         <Text
-          onLayout={
-            onHeadingLayout ? (event) => onHeadingLayout(event.nativeEvent.layout.y) : undefined
-          }
           style={[
             headingStyle(block.depth),
             { color: colors.onSurface },
@@ -288,7 +327,7 @@ function Block({
         </Text>
       );
     case "code":
-      return <CodeBlock text={block.text} lang={block.lang} actions={actions} copyKey={path} />;
+      return <CodeBlock block={block} actions={actions} copyKey={path} />;
     case "quote":
       return (
         <View style={[styles.quote, { borderLeftColor: colors.accent }]}>
@@ -312,7 +351,7 @@ function Block({
     case "literal":
       return (
         <Text style={[styles.literal, { color: colors.onSurface }]} selectable>
-          {block.text}
+          {highlighted(block, actions)}
         </Text>
       );
     default:
@@ -468,17 +507,44 @@ function alignStyle(align: MarkdownAlign) {
   return { textAlign: "left" as const };
 }
 
+/** `node`'s text with its search matches marked; the current one stronger. */
+function highlighted(node: PreviewTextNode, actions: PreviewActions): ReactNode {
+  const text = node.type === "image" ? node.alt : node.text;
+  const matches = actions.search.byNode.get(node);
+  if (!matches) return text;
+  const pieces: ReactNode[] = [];
+  let from = 0;
+  for (const match of matches) {
+    if (match.start > from) pieces.push(text.slice(from, match.start));
+    pieces.push(
+      <Text
+        key={match.index}
+        style={{
+          backgroundColor: colorAlpha(
+            actions.colors.accent,
+            match.index === actions.activeMatch ? 0.7 : 0.3,
+          ),
+        }}
+      >
+        {text.slice(match.start, match.end)}
+      </Text>,
+    );
+    from = match.end;
+  }
+  if (from < text.length) pieces.push(text.slice(from));
+  return pieces;
+}
+
 function CodeBlock({
-  text,
-  lang,
+  block,
   actions,
   copyKey,
 }: {
-  text: string;
-  lang: string | null;
+  block: Extract<MarkdownBlock, { type: "code" }>;
   actions: PreviewActions;
   copyKey: string;
 }) {
+  const { text, lang } = block;
   const copied = actions.copiedKey === copyKey;
   const { colors } = actions;
   const tint = copied ? colors.accent : colors.onSurfaceVariant;
@@ -503,7 +569,7 @@ function CodeBlock({
           { color: colors.onSurface },
         ]}
       >
-        {text}
+        {highlighted(block, actions)}
       </Text>
       <Pressable
         accessibilityRole="button"
@@ -549,7 +615,7 @@ function Inline({
   const { colors } = actions;
   switch (node.type) {
     case "text":
-      return node.text;
+      return highlighted(node, actions);
     case "break":
       return "\n";
     case "strong":
@@ -583,7 +649,7 @@ function Inline({
     case "image":
       return (
         <Text key={copyKey} style={[styles.em, { color: colors.onSurfaceVariant }]}>
-          {node.alt}
+          {highlighted(node, actions)}
         </Text>
       );
     case "footnote":
@@ -611,7 +677,7 @@ function Inline({
               },
             ]}
           >
-            {node.text}
+            {highlighted(node, actions)}
           </Text>
           <Text
             selectable={false}

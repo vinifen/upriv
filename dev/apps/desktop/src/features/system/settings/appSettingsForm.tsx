@@ -86,6 +86,7 @@ export function AppSettingsGeneralSection({ config, onChange }: SectionPatchProp
   const closeModalOnSubmitId = useId();
   const openFileManagerOnOpenId = useId();
   const keepOpenOnWakeId = useId();
+  const confirmCloseNowId = useId();
 
   return (
     <SettingsFormGrid>
@@ -149,6 +150,13 @@ export function AppSettingsGeneralSection({ config, onChange }: SectionPatchProp
         onChange={(lifecycle_keep_open_on_wake) => onChange({ lifecycle_keep_open_on_wake })}
         label={t("modal.app_settings.field.lifecycle_keep_open_on_wake")}
         hint={t("modal.app_settings.field.lifecycle_keep_open_on_wake_help")}
+      />
+      <SwitchRow
+        id={confirmCloseNowId}
+        checked={config.lifecycle_confirm_close_now}
+        onChange={(lifecycle_confirm_close_now) => onChange({ lifecycle_confirm_close_now })}
+        label={t("modal.app_settings.field.lifecycle_confirm_close_now")}
+        hint={t("modal.app_settings.field.lifecycle_confirm_close_now_help")}
       />
     </SettingsFormGrid>
   );

@@ -1,6 +1,6 @@
 /** Corner radii (px). Desktop Tailwind: `rounded` / `md|lg` / `xl` / `2xl` / `full`. */
 export const RADII = {
-  /** Badges / chips / checkbox. */
+  /** Badges / chips. */
   xs: 8,
   /** Buttons / inputs / drag handle. */
   sm: 12,

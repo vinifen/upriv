@@ -262,6 +262,7 @@ export function VaultSettingsModal({
   const editAllowed = (target: Parameters<typeof vaultConfigEditAllowed>[0]) =>
     vault != null && vaultConfigEditAllowed(target, vault, pipelineListStatus);
   const storageModeLocked = !editAllowed("storage.mode");
+  const plainFilesLocked = !editAllowed("storage.plain_files");
   const displayNameLocked = !editAllowed("vault.display_name");
   const mountLocked = !editAllowed("mount.workspace_path");
   /** password / KDF — `vault_closed`. */
@@ -839,6 +840,7 @@ export function VaultSettingsModal({
           if (storageModeLocked) return current;
           return patchStorageMode(current, patch.mode as StorageMode);
         }
+        if (section === "storage" && "plain_files" in patch && plainFilesLocked) return current;
         if (section === "vault" && "display_name" in patch && displayNameLocked) {
           return current;
         }
@@ -850,7 +852,7 @@ export function VaultSettingsModal({
         };
       });
     },
-    [storageModeLocked, displayNameLocked, mountLocked],
+    [storageModeLocked, plainFilesLocked, displayNameLocked, mountLocked],
   );
 
   const resetActiveAreaDraft = useCallback(() => {
@@ -1177,9 +1179,11 @@ export function VaultSettingsModal({
                       patchDraft,
                       {
                         storageModeLocked,
+                        plainFilesLocked,
                         displayNameLocked,
                         mountLocked,
                         hiddenLocked,
+                        plainLeftover: vault?.plainLeftover === true,
                       },
                       vaultRootPathForWorkspaceValidation(
                         appSettings.app.vault_root_mode,
@@ -1297,9 +1301,11 @@ function renderPreferenceSection(
   ) => void,
   locks: {
     storageModeLocked: boolean;
+    plainFilesLocked: boolean;
     displayNameLocked: boolean;
     mountLocked: boolean;
     hiddenLocked: boolean;
+    plainLeftover: boolean;
   },
   vaultRootPath: string | null,
   onMountPathIssue: (invalid: boolean) => void,
@@ -1313,6 +1319,7 @@ function renderPreferenceSection(
           config={draft.vault}
           hiddenLocked={locks.hiddenLocked}
           displayNameLocked={locks.displayNameLocked}
+          plainLeftover={locks.plainLeftover}
           onChange={(patch) => patchDraft("vault", patch)}
           fileManager={draft.file_manager}
           onFileManagerChange={(patch) => patchDraft("file_manager", patch)}
@@ -1323,6 +1330,8 @@ function renderPreferenceSection(
         <VaultSettingsStorageSection
           config={draft.storage}
           storageModeLocked={locks.storageModeLocked}
+          plainFilesLocked={locks.plainFilesLocked}
+          plainLeftover={locks.plainLeftover}
           onChange={(patch) => patchDraft("storage", patch)}
         />
       );
@@ -1332,6 +1341,7 @@ function renderPreferenceSection(
           config={draft.mount}
           vaultRootPath={vaultRootPath}
           controlsDisabled={locks.mountLocked}
+          plainLeftover={locks.plainLeftover}
           plaintext={draft.storage.mode === "upriv_plain"}
           appWorkspace={appWorkspace}
           onPathIssueChange={(issue) => onMountPathIssue(issue != null)}

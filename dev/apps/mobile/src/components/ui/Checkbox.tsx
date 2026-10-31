@@ -1,7 +1,10 @@
 import { Pressable, StyleSheet, View } from "react-native";
 import Svg, { Path } from "react-native-svg";
 import { useTheme } from "@/theme";
-import { colorAlpha, radii } from "@/theme/tokens";
+import { colorAlpha } from "@/theme/tokens";
+
+/** A square box with softened corners, like the desktop checkbox. */
+const BOX_RADIUS = 4;
 
 interface CheckboxProps {
   checked: boolean;
@@ -80,7 +83,7 @@ const styles = StyleSheet.create({
   box: {
     width: 16,
     height: 16,
-    borderRadius: radii.xs,
+    borderRadius: BOX_RADIUS,
     borderWidth: 1,
     alignItems: "center",
     justifyContent: "center",

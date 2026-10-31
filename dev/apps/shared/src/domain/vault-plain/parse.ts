@@ -72,7 +72,7 @@ export function parsePlainCloseSummary(raw: unknown): PlainCloseSummary | null {
     saved: finite(body.saved),
     conflicts: finite(body.conflicts),
     heldDeletions: finite(body.heldDeletions),
-    wiped: finite(body.wiped),
+    removed: finite(body.removed),
     kept: finite(body.kept),
     totals: {
       added: finite(totals.added),

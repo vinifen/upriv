@@ -1,9 +1,9 @@
-//! Public vault settings carried inside a store `.zip` or a backup zip.
+//! Public vault settings carried inside a store `.zip`, a backup zip, or the
+//! `.upriv-config/` of a `.7z` or a plain-text `.zip`.
 //! The bytes are `config.toml` plus one comment naming the unlock preset.
 //! That comment is not a `[kdf]` section and is not written back to the new
 //! vault's `config.toml`. `README.md` sits beside it and records when the
-//! copy was written, plus the rounded size of the files in `store/`. A portable
-//! `.7z` does not carry either file.
+//! copy was written, plus the rounded size of the files in `store/`.
 
 use std::path::Path;
 
@@ -27,7 +27,7 @@ pub struct EmbeddedVaultSettings {
     pub unlock_preset: Option<KdfUnlockPreset>,
 }
 
-/// Settings bytes for a store zip or a backup: on-disk `config.toml` plus the header preset.
+/// Settings bytes an export or a backup carries: on-disk `config.toml` plus the header preset.
 pub(crate) fn snapshot_settings_bytes(vault_dir: &Path, store_dir: &Path) -> Result<Vec<u8>> {
     let raw = crate::host_fs::read_to_string(vault_config_path(vault_dir))?;
     Ok(settings_archive_bytes(&raw, probe_unlock_preset(store_dir)))

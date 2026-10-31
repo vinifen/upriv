@@ -78,6 +78,16 @@ export interface VaultWorkspaceState {
    */
   explorerCollapsed: boolean;
   /**
+   * Explorer search bar open behind its toolbar button. Per vault, persisted on
+   * `.upriv-workspace.json`. RAM default is closed.
+   */
+  explorerSearchOpen: boolean;
+  /**
+   * What the explorer is filtered by, open bar or not. Per vault, persisted on
+   * `.upriv-workspace.json`. RAM default is empty.
+   */
+  explorerSearchQuery: string;
+  /**
    * Per-file view mode, outline visibility, word wrap, and search state.
    * Keyed by logical file path (e.g. `/readme.md`).
    * Persisted on `.upriv-workspace.json`.
@@ -109,6 +119,8 @@ export function createDefaultWorkspaceState(): VaultWorkspaceState {
     dragSourcePath: null,
     dropTargetPath: null,
     explorerCollapsed: false,
+    explorerSearchOpen: false,
+    explorerSearchQuery: "",
     fileStates: {},
     treeSplitPercent: null,
   };
@@ -181,7 +193,10 @@ function pathOrDescendantInList(paths: readonly string[], path: string): boolean
  * Session cue for a file/folder icon (self or any descendant).
  * Created wins over modified — same priority as VS Code source-control colors.
  */
-export function sessionPathKind(state: VaultWorkspaceState, path: string): SessionPathKind | null {
+export function sessionPathKind(
+  state: Pick<VaultWorkspaceState, "sessionCreatedPaths" | "sessionModifiedPaths" | "dirtyPaths">,
+  path: string,
+): SessionPathKind | null {
   if (pathOrDescendantInList(state.sessionCreatedPaths, path)) return "created";
   if (
     pathOrDescendantInList(state.sessionModifiedPaths, path) ||

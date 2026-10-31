@@ -24,6 +24,8 @@ export interface SystemInfoSnapshot {
   lastOpenedVault: string;
   paths: {
     logsDir: string;
+    /** Where the system file manager opens `logsDir` (`vaultRootUprivOpenPath`). */
+    logsOpenPath: string;
     appHome: string;
   };
 }

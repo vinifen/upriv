@@ -16,6 +16,7 @@ import {
   parseVaultGroupListResult,
   parseVaultGroupWire,
   parseVaultListItemWire,
+  parseVaultCloseHurry,
   parseVaultClosePhase,
   parseVaultListResult,
   parseVaultRenameResult,
@@ -24,7 +25,6 @@ import {
   parseVaultRootResolve,
   vaultImportProbeTimeoutMs,
   backupSnapshotFileName,
-  bytesFromContentB64,
   parsePathWriteResult,
   parsePlainCloseSummary,
   parsePlainDestination,
@@ -46,11 +46,13 @@ import {
   type DefaultRootStatusResult,
   type IncompleteReplacePolicy,
   type VaultBackupEntry,
+  type VaultCloseReason,
   type VaultExportRequest,
   type VaultGroup,
   type VaultGroupCreateInput,
   type VaultGroupListResult,
   type VaultGroupUpdateInput,
+  type FolderRemoval,
   type VaultListItem,
   type VaultRootAliasInfo,
   type VaultRootBootstrapPrefs,
@@ -643,7 +645,7 @@ export async function rpcImportContentUri(
 
 export async function rpcVaultClose(
   id: string,
-  reason: "user" | "auto" = "user",
+  reason: VaultCloseReason = "user",
 ): Promise<CloseVaultOutcome> {
   const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_CLOSE, { id, reason });
   return parseCloseVaultOutcome(raw);
@@ -684,6 +686,13 @@ function parseCloseVaultOutcome(raw: unknown): CloseVaultOutcome {
     backupFailure: backupFailed ? (parseBackupFailure(body.backupFailure) ?? "other") : null,
     plain: parsePlainCloseSummary(body.plain),
   };
+}
+
+/** Tell the close running for this vault to finish the Close now way. False when none runs. */
+export async function rpcVaultCloseHurry(id: string): Promise<boolean> {
+  return parseVaultCloseHurry(
+    await nativeInvokeProbeRaw(CORE_RPC_COMMANDS.VAULT_CLOSE_HURRY, { id }),
+  );
 }
 
 export async function rpcVaultClosePhase(id: string): Promise<VaultClosePhase | null> {
@@ -744,6 +753,14 @@ function requireRevision(raw: unknown, label: string): number {
   return revision;
 }
 
+function requireCount(raw: unknown, field: string, label: string): number {
+  const count = requireRecord(raw, label)[field];
+  if (typeof count !== "number" || !Number.isFinite(count)) {
+    throw new RpcError(BRIDGE.INVALID_RESPONSE, `${label}: expected ${field}`, raw);
+  }
+  return count;
+}
+
 function requirePathRevision(raw: unknown, label: string): { path: string; revision: number } {
   const record = requireRecord(raw, label);
   if (typeof record.path !== "string" || typeof record.revision !== "number") {
@@ -769,7 +786,7 @@ export async function rpcVaultExportCapabilities(): Promise<{ sevenZip: boolean 
   return { sevenZip: (raw as { sevenZip?: unknown }).sevenZip === true };
 }
 
-/** Write `{display_name}.zip` / `.7z` into the folder `destDir`, as the job `job`. */
+/** Write the export named after the vault into the folder `destDir`, as the job `job`. */
 export async function rpcVaultExportToFolder(
   id: string,
   request: VaultExportRequest,
@@ -781,6 +798,8 @@ export async function rpcVaultExportToFolder(
     format: request.format,
     password: request.password,
     sevenZip: request.sevenZip,
+    includeWorkspace: request.include?.workspace,
+    includeSettings: request.include?.settings,
     destDir,
     job,
   });
@@ -789,6 +808,17 @@ export async function rpcVaultExportToFolder(
     throw new RpcError(BRIDGE.INVALID_RESPONSE, "vault_export: expected path+size", raw);
   }
   return written;
+}
+
+/**
+ * Wipe the unfinished plain-text exports a crash left. `folders` are the picked
+ * folders that hold one and are not mounted now.
+ */
+export async function rpcVaultPlainExportSweep(): Promise<{ folders: string[] }> {
+  const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_PLAIN_EXPORT_SWEEP, {});
+  const record = requireRecord(raw, "vault_plain_export_sweep");
+  const folders = Array.isArray(record.folders) ? record.folders : [];
+  return { folders: folders.filter((folder) => typeof folder === "string") };
 }
 
 export async function rpcVaultImportZip(input: CreateVaultInput): Promise<VaultListItem> {
@@ -810,6 +840,7 @@ export async function rpcVaultImport7z(input: CreateVaultInput): Promise<VaultLi
     archivePath: pkg?.archivePath,
     contentB64: pkg?.contentB64,
     archivePassword: pkg?.archivePassword ?? input.password,
+    keepWorkspace: pkg?.keepWorkspace,
     welcome: input.welcome,
   });
   return parseVaultResult(raw, "vault_import_7z");
@@ -823,6 +854,7 @@ export async function rpcVaultImportFilesZip(input: CreateVaultInput): Promise<V
     unlockPreset: input.unlockPreset,
     archivePath: pkg?.archivePath,
     contentB64: pkg?.contentB64,
+    keepWorkspace: pkg?.keepWorkspace,
     welcome: input.welcome,
   });
   return parseVaultResult(raw, "vault_import_files_zip");
@@ -849,6 +881,7 @@ export async function rpcVaultImportProbe(params: {
   ok: boolean;
   kind: string;
   embedded: ReturnType<typeof parseEmbeddedVaultSettings>;
+  carriesWorkspace: boolean;
 }> {
   const raw = await nativeInvokeRaw(
     CORE_RPC_COMMANDS.VAULT_IMPORT_PROBE,
@@ -860,6 +893,7 @@ export async function rpcVaultImportProbe(params: {
     ok: record.ok === true,
     kind: typeof record.kind === "string" ? record.kind : "store_zip",
     embedded: parseEmbeddedVaultSettings(record),
+    carriesWorkspace: record.carriesWorkspace === true,
   };
 }
 
@@ -1028,6 +1062,24 @@ export async function rpcVaultFsOsPath(
   return { osPath: osPath || null };
 }
 
+export async function rpcVaultFsPreviewFits(id: string, path: string): Promise<{ fits: boolean }> {
+  const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_FS_PREVIEW_FITS, { id, path });
+  return { fits: requireRecord(raw, "vault_fs_preview_fits").fits === true };
+}
+
+export async function rpcVaultPlainSend(id: string, paths: string[]): Promise<{ files: number }> {
+  const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_PLAIN_SEND, { id, paths });
+  return { files: requireCount(raw, "files", "vault_plain_send") };
+}
+
+export async function rpcVaultPlainUnsend(id: string, paths: string[]): Promise<FolderRemoval> {
+  const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_PLAIN_UNSEND, { id, paths });
+  return {
+    removed: requireCount(raw, "removed", "vault_plain_unsend"),
+    kept: requireCount(raw, "kept", "vault_plain_unsend"),
+  };
+}
+
 function parseBackupEntry(raw: unknown, vaultId: string): VaultBackupEntry {
   const record = requireRecord(raw, "backup");
   const stamp = typeof record.stamp === "string" ? record.stamp : "";
@@ -1090,32 +1142,22 @@ export async function rpcJobCancel(job: string, by: JobStopBy): Promise<void> {
   await nativeInvokeRaw(CORE_RPC_COMMANDS.JOB_CANCEL, { job, by });
 }
 
-export async function rpcBackupGet(id: string, stamp: string): Promise<Uint8Array> {
-  return bytesFromContentB64(await nativeInvokeRaw(CORE_RPC_COMMANDS.BACKUP_GET, { id, stamp }));
-}
-
-export async function rpcBackupExportToPath(
-  id: string,
-  stamp: string,
-  destPath: string,
-): Promise<{ path: string; size: number }> {
-  return rpcBackupExportStampsToPath(id, [stamp], destPath);
-}
-
-export async function rpcBackupExportStampsToPath(
+/** Copy the backups named by `stamps` into `destDir`, as the job `job`. */
+export async function rpcBackupExport(
   id: string,
   stamps: readonly string[],
-  destPath: string,
+  destDir: string,
+  job: string,
 ): Promise<{ path: string; size: number }> {
-  const raw = await nativeInvokeRaw(
-    CORE_RPC_COMMANDS.BACKUP_GET,
-    stamps.length === 1
-      ? { id, stamp: stamps[0], destPath }
-      : { id, stamps: [...stamps], destPath },
-  );
+  const raw = await nativeInvokeRaw(CORE_RPC_COMMANDS.BACKUP_EXPORT, {
+    id,
+    stamps: [...stamps],
+    destDir,
+    job,
+  });
   const written = parsePathWriteResult(raw);
   if (!written) {
-    throw new RpcError(BRIDGE.INVALID_RESPONSE, "backup_get: expected path+size", raw);
+    throw new RpcError(BRIDGE.INVALID_RESPONSE, "backup_export: expected path+size", raw);
   }
   return written;
 }

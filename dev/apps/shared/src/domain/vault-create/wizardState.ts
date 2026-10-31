@@ -1,6 +1,10 @@
 import type { EmbeddedSettingsSnapshot, EmbeddedVaultSettings } from "./applyEmbeddedVaultSettings";
-import { applyEmbeddedVaultSettings } from "./applyEmbeddedVaultSettings";
+import {
+  applyEmbeddedVaultSettings,
+  revertEmbeddedVaultSettings,
+} from "./applyEmbeddedVaultSettings";
 import { createEmptyCreateVaultDraft, createVaultDraftEqual } from "./defaults";
+import { importUsesCarriedSettings } from "./importKind";
 import { CREATE_VAULT_STEPS } from "./types";
 import type { CreateVaultDraft, CreateVaultStepId, CreateVaultStepStatus } from "./types";
 import {
@@ -19,10 +23,20 @@ export interface CreateVaultWizardContext {
   vaultRootPath?: string | null;
 }
 
+/** The vault settings the chosen file carries, kept so a switch can take them out again. */
+interface CarriedSettings {
+  embedded: EmbeddedVaultSettings;
+  snapshot: EmbeddedSettingsSnapshot;
+  existingDisplayNames: readonly string[];
+  /** The draft right after they went in. `null` while they are not in it. */
+  applied: CreateVaultDraft | null;
+}
+
 export interface CreateVaultWizardState {
   /** Draft as it was when the wizard opened — restored on discard. */
   baseline: CreateVaultDraft;
   draft: CreateVaultDraft;
+  carried: CarriedSettings | null;
   currentStep: CreateVaultStepId;
   /** Steps the user tried to leave — gates inline errors and stepper badges. */
   attemptedSteps: ReadonlySet<CreateVaultStepId>;
@@ -51,6 +65,7 @@ export type CreateVaultWizardAction =
       zipLayout: CreateVaultDraft["zipLayout"];
       rejected: boolean;
       probeFailed?: boolean;
+      carriesWorkspace?: boolean;
     }
   | { type: "discardConfirmRequested" }
   | { type: "discardConfirmDismissed" }
@@ -64,6 +79,7 @@ export function createVaultWizardInitialState(
   return {
     baseline: draft,
     draft,
+    carried: null,
     currentStep: "source",
     attemptedSteps: new Set(),
     submitAttempted: false,
@@ -84,6 +100,48 @@ function stepAt(offset: number, from: CreateVaultStepId): CreateVaultStepId | nu
   return CREATE_VAULT_STEPS[index] ?? null;
 }
 
+/** Put the file's settings in `draft`, or take them out, to match its switches. */
+function settleCarriedSettings(
+  carried: CarriedSettings | null,
+  draft: CreateVaultDraft,
+): Pick<CreateVaultWizardState, "carried" | "draft"> {
+  if (!carried) return { carried, draft };
+  const wanted = importUsesCarriedSettings(draft);
+  if (wanted && !carried.applied) {
+    const applied = applyEmbeddedVaultSettings(
+      draft,
+      carried.embedded,
+      carried.snapshot,
+      carried.existingDisplayNames,
+    );
+    return { carried: { ...carried, applied }, draft: applied };
+  }
+  if (!wanted && carried.applied) {
+    return {
+      carried: { ...carried, applied: null },
+      draft: revertEmbeddedVaultSettings(draft, carried.applied, carried.snapshot),
+    };
+  }
+  return { carried, draft };
+}
+
+/** Another file: nothing the last one carried or chose applies to it. */
+function forgetChosenFile(
+  carried: CarriedSettings | null,
+  draft: CreateVaultDraft,
+): CreateVaultDraft {
+  const next = carried?.applied
+    ? revertEmbeddedVaultSettings(draft, carried.applied, carried.snapshot)
+    : draft;
+  return {
+    ...next,
+    importKeepWorkspace: true,
+    importKeepSettings: true,
+    importCarriesWorkspace: false,
+    importCarriesSettings: false,
+  };
+}
+
 export function createVaultWizardReducer(
   state: CreateVaultWizardState,
   action: CreateVaultWizardAction,
@@ -93,6 +151,7 @@ export function createVaultWizardReducer(
       return {
         baseline: action.draft,
         draft: action.draft,
+        carried: null,
         currentStep: action.step,
         attemptedSteps: new Set(),
         submitAttempted: false,
@@ -100,12 +159,22 @@ export function createVaultWizardReducer(
         discardConfirmOpen: false,
       };
 
-    case "draftPatched":
+    case "draftPatched": {
+      const draft = { ...state.draft, ...action.patch };
+      if (draft.importFilePath !== state.draft.importFilePath) {
+        return {
+          ...state,
+          carried: null,
+          draft: forgetChosenFile(state.carried, draft),
+          discardConfirmOpen: false,
+        };
+      }
       return {
         ...state,
-        draft: { ...state.draft, ...action.patch },
+        ...settleCarriedSettings(state.carried, draft),
         discardConfirmOpen: false,
       };
+    }
 
     case "stepSelected":
       return { ...state, currentStep: action.step, discardConfirmOpen: false };
@@ -160,6 +229,7 @@ export function createVaultWizardReducer(
         zipLayout: action.zipLayout,
         importZipRejected: action.rejected,
         importZipProbeFailed: action.probeFailed === true,
+        importCarriesWorkspace: action.carriesWorkspace === true,
       };
       return {
         ...state,
@@ -169,14 +239,21 @@ export function createVaultWizardReducer(
     }
 
     case "embeddedSettings": {
-      const next = applyEmbeddedVaultSettings(
-        state.draft,
-        action.embedded,
-        action.snapshot,
-        action.existingDisplayNames ?? [],
+      // A second password test of the same file reads the same settings.
+      if (state.carried) return state;
+      const settled = settleCarriedSettings(
+        {
+          embedded: action.embedded,
+          snapshot: action.snapshot,
+          existingDisplayNames: action.existingDisplayNames ?? [],
+          applied: null,
+        },
+        { ...state.draft, importCarriesSettings: true },
       );
-      const baseline = createVaultDraftEqual(state.draft, state.baseline) ? next : state.baseline;
-      return { ...state, draft: next, baseline };
+      const baseline = createVaultDraftEqual(state.draft, state.baseline)
+        ? settled.draft
+        : state.baseline;
+      return { ...state, ...settled, baseline };
     }
 
     case "discardConfirmRequested":

@@ -99,6 +99,36 @@ describe("useExportFolder", () => {
     expect(pickFolder).toHaveBeenCalledOnce();
   });
 
+  it("tells the caller which folder the picker answered with, and nothing else", async () => {
+    pickFolder.mockResolvedValueOnce(" /media/usb ").mockResolvedValueOnce(null);
+    const onPicked = vi.fn();
+    const { result } = renderHook(() => useExportFolder(TITLE));
+
+    act(() => {
+      result.current.chooseIfMissing(onPicked);
+    });
+    await waitFor(() => expect(onPicked).toHaveBeenCalledWith("/media/usb"));
+    await waitFor(() => expect(result.current.picking).toBe(false));
+
+    act(() => result.current.choose(onPicked));
+    await waitFor(() => expect(result.current.picking).toBe(false));
+    expect(onPicked).toHaveBeenCalledOnce();
+  });
+
+  it("does not report a pick that answers after the window closed", async () => {
+    const pick = deferred<string | null>();
+    pickFolder.mockReturnValue(pick.promise);
+    const onPicked = vi.fn();
+    const { result } = renderHook(() => useExportFolder(TITLE));
+
+    act(() => result.current.choose(onPicked));
+    act(() => result.current.cancelPick());
+    await act(async () => {
+      pick.resolve("/media/usb");
+    });
+    expect(onPicked).not.toHaveBeenCalled();
+  });
+
   it("opens one picker at a time", () => {
     pickFolder.mockReturnValue(new Promise(() => undefined));
     const { result } = renderHook(() => useExportFolder(TITLE));

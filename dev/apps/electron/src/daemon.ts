@@ -5,6 +5,7 @@ import { app } from "electron";
 import {
   DEFAULT_RPC_TIMEOUT_MS,
   SHUTDOWN_METHOD,
+  SHUTDOWN_NOW_TIMEOUT_MS,
   SHUTDOWN_TIMEOUT_MS,
   STARTUP_TIMEOUT_MS,
   formatRpcError,
@@ -457,16 +458,20 @@ export async function startDaemon(): Promise<DaemonConnection> {
 
 export async function stopDaemon(
   connection: DaemonConnection | null,
-  options?: { flush?: boolean },
+  options?: { now?: boolean },
 ): Promise<void> {
   if (!connection?.alive) return;
 
-  if (options?.flush !== false) {
-    try {
-      await daemonRpc(connection, SHUTDOWN_METHOD, {}, SHUTDOWN_TIMEOUT_MS);
-    } catch {
-      // Daemon may already be stopping.
-    }
+  const now = options?.now === true;
+  try {
+    await daemonRpc(
+      connection,
+      SHUTDOWN_METHOD,
+      { now },
+      now ? SHUTDOWN_NOW_TIMEOUT_MS : SHUTDOWN_TIMEOUT_MS,
+    );
+  } catch {
+    // Daemon may already be stopping, or it ran out of time.
   }
 
   rejectAllPending(connection, new Error("upriv-daemon stopped"));

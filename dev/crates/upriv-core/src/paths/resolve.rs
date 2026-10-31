@@ -375,8 +375,12 @@ pub fn read_vault_root_alias(home: impl AsRef<Path>) -> Result<Option<VaultRootA
 }
 
 /// Atomically write `.upriv-data-folder` (temp + `sync_all` + rename) so a crash cannot
-/// leave a 0-byte alias that the next launch treats as missing.
+/// leave a 0-byte alias that the next launch treats as missing. A settings save
+/// passes through here every time, so a file that already says this is left alone.
 fn write_alias_file_atomic(alias_path: &Path, contents: &str) -> Result<()> {
+    if crate::host_fs::read_to_string(alias_path).is_ok_and(|current| current == contents) {
+        return Ok(());
+    }
     crate::paths::write_bytes_atomic(alias_path, contents.as_bytes())
 }
 
@@ -1325,5 +1329,25 @@ mod tests {
         let parsed = read_vault_root_alias(home.path()).unwrap().unwrap();
         assert!(parsed.active);
         assert_eq!(parsed.path, target.path().canonicalize().unwrap());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn writing_the_same_alias_leaves_the_file_in_place() {
+        use std::os::unix::fs::MetadataExt;
+
+        let home = tempfile::tempdir().unwrap();
+        let target = tempfile::tempdir().unwrap();
+        initialize_vault_root(target.path()).unwrap();
+        write_vault_root_alias(home.path(), target.path()).unwrap();
+        let alias = vault_root_alias_path(home.path());
+        let inode = std::fs::metadata(&alias).unwrap().ino();
+
+        write_vault_root_alias(home.path(), target.path()).unwrap();
+        assert_eq!(std::fs::metadata(&alias).unwrap().ino(), inode);
+
+        deactivate_vault_root_alias(home.path()).unwrap();
+        assert_ne!(std::fs::metadata(&alias).unwrap().ino(), inode);
+        assert!(!read_vault_root_alias(home.path()).unwrap().unwrap().active);
     }
 }

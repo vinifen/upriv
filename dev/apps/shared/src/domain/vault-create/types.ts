@@ -22,7 +22,8 @@ export const CREATE_VAULT_STEPS = [
 
 export type CreateVaultStepId = (typeof CREATE_VAULT_STEPS)[number];
 
-export type CreateVaultStepStatus = "ready" | "incomplete" | "error";
+/** `waiting`: this step's fields are locked until the `.7z` password test passes. */
+export type CreateVaultStepStatus = "ready" | "incomplete" | "error" | "waiting";
 
 /** How the new vault joins a group — applied only on Create (not while drafting). */
 export type CreateVaultGroupMode = "none" | "existing" | "create";
@@ -43,6 +44,17 @@ export interface CreateVaultDraft {
    * and a Upriv store `.zip`. Defaults on.
    */
   importExtract: boolean;
+  /** Keep the file manager layout the archive carries. Defaults on. */
+  importKeepWorkspace: boolean;
+  /** Use the vault settings the archive carries. Defaults on. */
+  importKeepSettings: boolean;
+  /** The chosen `.zip` of files carries a file manager layout. */
+  importCarriesWorkspace: boolean;
+  /**
+   * The chosen file carries vault settings. A `.zip` says so when it is read,
+   * a `.7z` when its password test passes.
+   */
+  importCarriesSettings: boolean;
   importFileName: string;
   importFilePath: string;
   /**
@@ -108,6 +120,7 @@ export interface CreateVaultResult {
   importKind: CreateVaultImportKind;
   importShape: CreateVaultImportShape;
   importExtract: boolean;
+  importKeepWorkspace: boolean;
   zipLayout: ZipImportLayout | null;
   importFilePath?: string;
   importFileName?: string;

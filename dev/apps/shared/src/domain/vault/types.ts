@@ -62,6 +62,8 @@ export type VaultPipelineListStatus = {
   queuedOpenVaultIds?: readonly string[];
   /** Active close that core reports is writing the close backup. Still displays `closing`. */
   backingUpVaultIds?: readonly string[];
+  /** Running or waiting closes already told to finish the Close now way. */
+  closeNowVaultIds?: readonly string[];
   /** Closed vault whose export is in flight. Displays `exporting`. */
   exportingVaultIds?: readonly string[];
   /**
@@ -183,6 +185,16 @@ export function isVaultOpenResumeTarget(
   return waitingOpens.includes(vaultId);
 }
 
+/** A close runs or waits on this row, and Close now was not asked for yet. */
+export function vaultCloseNowOffered(
+  status: VaultDisplayStatus,
+  vaultId: string,
+  pipeline: VaultPipelineListStatus = {},
+): boolean {
+  if (pipeline.closeNowVaultIds?.includes(vaultId)) return false;
+  return status === "closing" || isVaultCloseQueued(vaultId, pipeline);
+}
+
 /** Waiting close. The session is still open until that job starts. */
 export function isVaultCloseQueued(
   vaultId: string,
@@ -227,6 +239,8 @@ export interface VaultRow {
   passwordHint?: string;
   /** `[vault] hidden` — omitted from list and pickers unless show-hidden is active. */
   hidden?: boolean;
+  /** A plaintext folder from an earlier session waits to be removed. */
+  plainLeftover?: boolean;
 }
 
 /**

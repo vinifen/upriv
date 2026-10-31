@@ -1,9 +1,4 @@
-/**
- * Logical path Rust uses while the Android data folder is a folder the user
- * picked. The bytes live in that folder's storage-access grant. This path is
- * not created on disk. Must match `SAF_VAULT_ROOT` in `upriv-core` `host_fs`.
- */
-export const SAF_VAULT_ROOT = "/upriv-saf-root";
+import { SAF_VAULT_ROOT } from "@upriv/shared";
 
 /**
  * Logical folder Rust writes the Export data folder zip into while a picked

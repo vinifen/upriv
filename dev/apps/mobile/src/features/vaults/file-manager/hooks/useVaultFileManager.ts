@@ -18,7 +18,6 @@ import {
   validateFileName,
   persistLogicalFileName,
   LOGICAL_FILE_NAME_MAX_LENGTH,
-  FilePreviewTooLargeError,
   LOADING_APPEAR_DELAY_MS,
   LOADING_BUDGET_MS,
   attachImportedPath,
@@ -28,7 +27,6 @@ import {
   rememberLandedImportPaths,
   hasUnsavedWorkspaceChanges,
   MAX_DIRTY_DRAFT_SAVE_PASSES,
-  withSavedDraftDiskContents,
   IMPORT_EXPLORER_SKELETON_FILES,
   isImportQueueSlotPath,
   isImportWalkPlaceholderPath,
@@ -50,7 +48,14 @@ import {
   type PendingImportEntry,
   type VaultWorkspaceAction,
 } from "@upriv/shared";
-import { useToast, useLoadingBudget, useVaultFileTree } from "@upriv/shared/react";
+import {
+  useLoadingBudget,
+  useFolderFallback,
+  useOpenTabContents,
+  useToast,
+  useTreeFolderPresence,
+  useVaultFileTree,
+} from "@upriv/shared/react";
 import { useVaultFileSystemService, useVaultService } from "@/platform/services";
 import { rpcImportContentUri } from "@/lib/rpc";
 import { useTranslation } from "@/i18n";
@@ -109,17 +114,8 @@ export function useVaultFileManager({
   } = useVaultFileTree(fs, vaultId, workspace.treeRevision);
   const treeRef = useRef(tree);
   treeRef.current = tree;
-  const [diskContents, setDiskContents] = useState<Record<string, string>>({});
-  const [loadErrors, setLoadErrors] = useState<Record<string, true>>({});
   const workspaceRef = useRef(workspace);
   workspaceRef.current = workspace;
-  const diskContentsRef = useRef(diskContents);
-  diskContentsRef.current = diskContents;
-  const loadErrorsRef = useRef(loadErrors);
-  loadErrorsRef.current = loadErrors;
-  const [previewBlocked, setPreviewBlocked] = useState<Record<string, true>>({});
-  const previewBlockedRef = useRef(previewBlocked);
-  previewBlockedRef.current = previewBlocked;
   const [importBusy, setImportBusy] = useState(false);
   const importSessionSeqRef = useRef(0);
   const importInFlightRef = useRef(new Set<number>());
@@ -179,10 +175,6 @@ export function useVaultFileManager({
   }, [importBusy, setImportInFlight, vaultId]);
 
   useEffect(() => {
-    setDiskContents((current) => withSavedDraftDiskContents(current, workspace));
-  }, [workspace]);
-
-  useEffect(() => {
     if (importBusy) return;
     const promptType = workspace.unsavedPrompt?.type;
     if (promptType === "import_in_progress" || promptType === "close_vault_import") {
@@ -214,70 +206,59 @@ export function useVaultFileManager({
     }
   }, [dispatch, fs, setTree, syncTree, vaultId]);
 
+  const folderPresence = useTreeFolderPresence(tree, syncTree);
+
   const { toast, show: showToast, dismiss: dismissToast } = useToast(2800);
 
-  useEffect(() => {
-    let cancelled = false;
-    const paths = [...new Set(workspace.openTabs.filter(Boolean))];
-    void Promise.all(
-      paths.map(async (path) => {
-        if (
-          unresolvedImportPaths.has(path) ||
-          isImportWalkPlaceholderPath(path) ||
-          isImportQueueSlotPath(path)
-        ) {
-          return null;
+  const sendToFolder = useCallback(
+    async (path: string) => {
+      try {
+        const files = await fs.sendToFolder(vaultId, [path]);
+        if (files > 0) {
+          showToast(t("modal.file_manager.toast.folder_sending", { count: files }));
         }
-        if (!fs.isFileViewable(vaultId, path)) {
-          return { path, content: "", error: false as const };
-        }
-        if (previewBlockedRef.current[path]) {
-          return { path, content: "", error: false as const, previewBlocked: true as const };
-        }
-        try {
-          const file = await fs.getFileContent(vaultId, path);
-          return { path, content: file?.content ?? "", error: false as const };
-        } catch (error) {
-          if (error instanceof FilePreviewTooLargeError) {
-            return { path, content: "", error: false as const, previewBlocked: true as const };
-          }
-          return { path, content: "", error: true as const };
-        }
-      }),
-    ).then((entries) => {
-      if (cancelled) return;
-      const nextContents: Record<string, string> = {};
-      const nextErrors: Record<string, true> = {};
-      const nextBlocked: Record<string, true> = {};
-      let failed = false;
-      for (const entry of entries) {
-        if (!entry) continue;
-        if (entry.error) {
-          nextErrors[entry.path] = true;
-          failed = true;
-        } else if ("previewBlocked" in entry && entry.previewBlocked) {
-          nextBlocked[entry.path] = true;
-        } else {
-          nextContents[entry.path] = entry.content;
-        }
+        await syncTree();
+      } catch (error) {
+        showToast(t(mobileErrorI18nKey(error, "error.unexpected")));
       }
-      setDiskContents(nextContents);
-      setLoadErrors(nextErrors);
-      setPreviewBlocked(nextBlocked);
-      if (failed) showToast(t("modal.file_manager.toast.read_failed"));
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [
+    },
+    [fs, showToast, syncTree, t, vaultId],
+  );
+
+  const removeFromFolder = useCallback(
+    async (path: string) => {
+      try {
+        const { removed, kept } = await fs.removeFromFolder(vaultId, [path]);
+        showToast(
+          kept > 0
+            ? t("modal.file_manager.toast.folder_kept", { count: kept })
+            : t("modal.file_manager.toast.folder_removed", { count: removed }),
+        );
+        await syncTree();
+      } catch (error) {
+        showToast(t(mobileErrorI18nKey(error, "error.unexpected")));
+      }
+    },
+    [fs, showToast, syncTree, t, vaultId],
+  );
+
+  const showReadFailed = useCallback(
+    () => showToast(t("modal.file_manager.toast.read_failed")),
+    [showToast, t],
+  );
+  const { contents, contentOf, storeSavedText } = useOpenTabContents({
     fs,
-    showToast,
-    t,
-    unresolvedImportPaths,
     vaultId,
-    workspace.openTabs,
-    workspace.treeRevision,
-  ]);
+    workspace,
+    unresolvedImportPaths,
+    onReadFailed: showReadFailed,
+  });
+  const markOpened = useFolderFallback(
+    workspace.activeTabPath,
+    workspace.activeTabPath !== null && contents[workspace.activeTabPath]?.state === "too_large",
+    folderPresence,
+    sendToFolder,
+  );
 
   /** Real OS folder for this vault — gates "Open in file manager". */
   const [osFolderAvailable, setOsFolderAvailable] = useState(false);
@@ -318,9 +299,10 @@ export function useVaultFileManager({
   const getEditorContent = useCallback(
     (path: string): string => {
       if (path in workspace.editorDrafts) return workspace.editorDrafts[path];
-      return diskContents[path] ?? "";
+      const content = contents[path];
+      return content?.state === "loaded" ? content.text : "";
     },
-    [diskContents, workspace.editorDrafts],
+    [contents, workspace.editorDrafts],
   );
 
   const saveFile = useCallback(
@@ -328,14 +310,12 @@ export function useVaultFileManager({
       for (let pass = 0; pass < MAX_DIRTY_DRAFT_SAVE_PASSES; pass++) {
         const current = workspaceRef.current;
         if (!current.dirtyPaths.includes(path)) return true;
-        if (loadErrorsRef.current[path] || !(path in diskContentsRef.current)) {
+        const read = contentOf(path);
+        if (read?.state !== "loaded") {
           showToast(t("modal.file_manager.toast.read_failed"));
           return false;
         }
-        const content =
-          path in current.editorDrafts
-            ? current.editorDrafts[path]
-            : (diskContentsRef.current[path] ?? "");
+        const content = path in current.editorDrafts ? current.editorDrafts[path] : read.text;
         try {
           await fs.setFileContent(vaultId, path, content);
         } catch {
@@ -347,14 +327,14 @@ export function useVaultFileManager({
         const freshContent = fresh.editorDrafts[path];
         if (freshContent !== undefined && freshContent !== content) continue;
         const stored = freshContent ?? content;
-        setDiskContents((prev) => (prev[path] === stored ? prev : { ...prev, [path]: stored }));
+        storeSavedText(path, stored);
         dispatch({ type: "mark_saved", path, content: stored });
         return true;
       }
       showToast(t("modal.file_manager.toast.save_failed"));
       return false;
     },
-    [dispatch, fs, showToast, t, vaultId],
+    [contentOf, dispatch, fs, showToast, storeSavedText, t, vaultId],
   );
 
   const saveFiles = useCallback(
@@ -364,7 +344,7 @@ export function useVaultFileManager({
         if (!workspaceRef.current.dirtyPaths.includes(path) || !fs.isFileEditable(vaultId, path)) {
           continue;
         }
-        if (loadErrorsRef.current[path] || !(path in diskContentsRef.current)) {
+        if (contentOf(path)?.state !== "loaded") {
           blocked = true;
           continue;
         }
@@ -377,10 +357,13 @@ export function useVaultFileManager({
       }
       return true;
     },
-    [fs, saveFile, showToast, t, vaultId],
+    [contentOf, fs, saveFile, showToast, t, vaultId],
   );
 
   const saveAllFiles = useCallback(() => saveFiles(workspaceRef.current.dirtyPaths), [saveFiles]);
+
+  const [unsavedSaving, setUnsavedSaving] = useState(false);
+  const unsavedSaveGenRef = useRef(0);
 
   const openFile = useCallback(
     (path: string) => {
@@ -391,9 +374,10 @@ export function useVaultFileManager({
       )
         return;
       if (unresolvedImportPaths.has(path)) importPeekRef.current = path;
+      markOpened(path);
       dispatch({ type: "open_file", path });
     },
-    [dispatch, unresolvedImportPaths],
+    [dispatch, markOpened, unresolvedImportPaths],
   );
 
   const createFile = useCallback(
@@ -405,7 +389,7 @@ export function useVaultFileManager({
           await syncTree();
           dispatch({ type: "expand_folder", path: parentPath, force: true });
           dispatch({ type: "mark_session_created", paths: [path] });
-          dispatch({ type: "open_file", path });
+          dispatch({ type: "open_new_file", path });
           dispatch({ type: "start_rename", path });
         });
     },
@@ -793,12 +777,16 @@ export function useVaultFileManager({
   const movePath = useCallback(
     (fromPath: string, toFolderPath: string) => {
       void fs.movePath(vaultId, fromPath, toFolderPath).then(async (newPath) => {
-        if (!newPath || newPath === fromPath) return;
+        if (!newPath) {
+          showToast(t("modal.file_manager.toast.move_failed"));
+          return;
+        }
+        if (newPath === fromPath) return;
         await syncTree();
         dispatch({ type: "remap_paths", map: { [fromPath]: newPath } });
       });
     },
-    [dispatch, fs, syncTree, vaultId],
+    [dispatch, fs, showToast, syncTree, t, vaultId],
   );
 
   const requestDelete = useCallback(
@@ -905,53 +893,64 @@ export function useVaultFileManager({
     workspace.unsavedPrompt,
   ]);
 
+  /**
+   * The prompt stays up until the files are written: nothing can be edited
+   * behind it, so the close that follows cannot drop a newer change.
+   */
   const confirmSaveUnsaved = useCallback(() => {
     const prompt = workspace.unsavedPrompt;
-    if (!prompt) return;
+    if (!prompt || unsavedSaving) return;
+    const generation = (unsavedSaveGenRef.current += 1);
+    const stale = () => generation !== unsavedSaveGenRef.current;
 
     void (async () => {
-      switch (prompt.type) {
-        case "close_tab": {
-          const ok = await saveFile(prompt.path);
-          if (!ok) return;
-          dispatch({
-            type: "discard_unsaved_and",
-            next: resolveUnsavedPrompt(workspace, prompt),
-          });
-          return;
+      setUnsavedSaving(true);
+      try {
+        switch (prompt.type) {
+          case "close_tab": {
+            const ok = await saveFile(prompt.path);
+            if (!ok || stale()) return;
+            dispatch({
+              type: "discard_unsaved_and",
+              next: resolveUnsavedPrompt(workspace, prompt),
+            });
+            return;
+          }
+          case "close_tabs": {
+            const ok = await saveFiles(prompt.paths);
+            if (!ok || stale()) return;
+            dispatch({
+              type: "discard_unsaved_and",
+              next: resolveUnsavedPrompt(workspace, prompt),
+            });
+            return;
+          }
+          case "dismiss_workspace": {
+            const ok = await saveAllFiles();
+            if (!ok || stale()) return;
+            dispatch({
+              type: "discard_unsaved_and",
+              next: resolveUnsavedPrompt(workspace, prompt),
+            });
+            onDismissConfirmed?.();
+            return;
+          }
+          case "close_vault": {
+            const ok = await saveAllFiles();
+            if (!ok || stale()) return;
+            dispatch({
+              type: "discard_unsaved_and",
+              next: resolveUnsavedPrompt(workspace, prompt),
+            });
+            continueVaultClose();
+            return;
+          }
+          case "import_in_progress":
+          case "close_vault_import":
+            dispatch({ type: "set_unsaved_prompt", prompt: null });
         }
-        case "close_tabs": {
-          const ok = await saveFiles(prompt.paths);
-          if (!ok) return;
-          dispatch({
-            type: "discard_unsaved_and",
-            next: resolveUnsavedPrompt(workspace, prompt),
-          });
-          return;
-        }
-        case "dismiss_workspace": {
-          const ok = await saveAllFiles();
-          if (!ok) return;
-          dispatch({
-            type: "discard_unsaved_and",
-            next: resolveUnsavedPrompt(workspace, prompt),
-          });
-          onDismissConfirmed?.();
-          return;
-        }
-        case "close_vault": {
-          const ok = await saveAllFiles();
-          if (!ok) return;
-          dispatch({
-            type: "discard_unsaved_and",
-            next: resolveUnsavedPrompt(workspace, prompt),
-          });
-          continueVaultClose();
-          return;
-        }
-        case "import_in_progress":
-        case "close_vault_import":
-          dispatch({ type: "set_unsaved_prompt", prompt: null });
+      } finally {
+        if (!stale()) setUnsavedSaving(false);
       }
     })();
   }, [
@@ -961,8 +960,49 @@ export function useVaultFileManager({
     saveAllFiles,
     saveFile,
     saveFiles,
+    unsavedSaving,
     workspace,
   ]);
+
+  /** Give up on a save past its budget. A write that lands later closes nothing. */
+  const abandonUnsavedSave = useCallback(() => {
+    unsavedSaveGenRef.current += 1;
+    setUnsavedSaving(false);
+    showToast(t("modal.file_manager.toast.save_failed"));
+  }, [showToast, t]);
+
+  const fileLoadError = useCallback(
+    (path: string) =>
+      contents[path]?.state === "failed"
+        ? t("modal.file_manager.viewer.read_failed_body", { name: fileBaseName(path) })
+        : null,
+    [contents, t],
+  );
+  const isFileContentReady = useCallback(
+    (path: string) => !unresolvedImportPaths.has(path) && path in contents,
+    [contents, unresolvedImportPaths],
+  );
+  const isFileEditable = useCallback(
+    (path: string) =>
+      !writesLocked &&
+      fs.isFileEditable(vaultId, path) &&
+      contents[path]?.state === "loaded" &&
+      !unresolvedImportPaths.has(path),
+    [contents, fs, unresolvedImportPaths, vaultId, writesLocked],
+  );
+  const isFileViewable = useCallback(
+    (path: string) => fs.isFileViewable(vaultId, path) && contents[path]?.state !== "too_large",
+    [contents, fs, vaultId],
+  );
+  const isFileImage = useCallback((path: string) => fs.isFileImage(vaultId, path), [fs, vaultId]);
+  const isImportPending = useCallback(
+    (path: string) => unresolvedImportPaths.has(path),
+    [unresolvedImportPaths],
+  );
+  const isImportProcessing = useCallback(
+    (path: string) => processingPathSet.has(path),
+    [processingPathSet],
+  );
 
   return {
     vaultId,
@@ -973,25 +1013,16 @@ export function useVaultFileManager({
     retryTree,
     workspace,
     getEditorContent,
-    fileLoadError: (path: string) =>
-      loadErrors[path]
-        ? t("modal.file_manager.viewer.read_failed_body", { name: fileBaseName(path) })
-        : null,
-    isFileContentReady: (path: string) =>
-      !unresolvedImportPaths.has(path) &&
-      (path in diskContents || Boolean(loadErrors[path]) || Boolean(previewBlocked[path])),
-    isFileEditable: (path: string) =>
-      !writesLocked &&
-      fs.isFileEditable(vaultId, path) &&
-      !loadErrors[path] &&
-      path in diskContents &&
-      !unresolvedImportPaths.has(path),
-    isFileViewable: (path: string) => fs.isFileViewable(vaultId, path) && !previewBlocked[path],
-    isFileImage: (path: string) => fs.isFileImage(vaultId, path),
-    isImportPending: (path: string) => unresolvedImportPaths.has(path),
-    isImportProcessing: (path: string) => processingPathSet.has(path),
-    isImportWalkPlaceholder: isImportWalkPlaceholderPath,
-    isImportQueueSlot: isImportQueueSlotPath,
+    fileLoadError,
+    isFileContentReady,
+    isFileEditable,
+    isFileViewable,
+    isFileImage,
+    isImportPending,
+    isImportProcessing,
+    /** Same sets as the two checks above, for the explorer's rows. */
+    pendingImportPaths: unresolvedImportPaths,
+    processingImportPaths: processingPathSet,
     saveFile,
     saveAllFiles,
     openFile,
@@ -1010,10 +1041,15 @@ export function useVaultFileManager({
     toast,
     osFolderAvailable,
     openInSystemFileManager,
+    folderPresence,
+    sendToFolder,
+    removeFromFolder,
     showToast,
     dismissToast,
     confirmUnsaved,
     confirmSaveUnsaved,
+    unsavedSaving,
+    abandonUnsavedSave,
     dispatch,
   };
 }

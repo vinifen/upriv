@@ -1,12 +1,15 @@
 //! Open / close against `store/` with an in-process session.
 
 use std::path::Path;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use std::time::Duration;
 
 use crate::config::{load_app_settings_at, load_vault_config, VaultStorageMode};
 use crate::error::{Result, UprivError};
 #[allow(unused_imports)]
 use crate::host_fs::HostFsQuery;
-use crate::lockfile::acquire_vault_lock;
+use crate::lockfile::{acquire_vault_lock, wait_for_lock_holder, LOCK_HOLDER_WAIT};
 use crate::logging::{log_event, LogLevel};
 use crate::paths::{
     encrypted_shortcut_active, resolve_vault_mount_point, resolved_workspace_parent, VaultRoot,
@@ -14,10 +17,10 @@ use crate::paths::{
 };
 use crate::runtime_state::{mark_session_closed, mark_session_open, release_recorded_mount};
 use crate::session::{
-    check_unlock_allowed, insert_session, is_vault_closing_at, is_vault_open_at, open_session_ids,
-    record_unlock_failure, record_unlock_success, take_session, vault_close_phase_at,
-    with_open_session, with_unlock_lock, with_vault_dir_lock, ClosePhase, ClosingGuard,
-    OpenSession, PreparingGuard,
+    any_close_under, check_unlock_allowed, hurry_close_at, hurry_closes_under, insert_session,
+    is_vault_closing_at, is_vault_open_at, open_session_ids_under, record_unlock_failure,
+    record_unlock_success, take_session, vault_close_phase_at, with_open_session, with_unlock_lock,
+    with_vault_dir_lock, ClosePhase, ClosingGuard, Job, OpenSession, PreparingGuard,
 };
 use crate::store::{
     content_hash_with_index, flush_index_parts, index_logical_hash, open_store, pack_blob_waste,
@@ -25,10 +28,13 @@ use crate::store::{
 };
 
 use super::backup::{
-    backup_on_close, backup_stamp_present, classify_write_failure, list_backups,
-    promote_backup_save,
+    backup_on_close, backup_stamp_present, classify_write_failure, discard_unfinished_backups,
+    list_backups, promote_backup_save,
 };
 use super::persistence::{load_vault_persistence, save_vault_persistence, VaultPersistence};
+
+/// How often quit looks for closes still running on other threads.
+const CLOSE_WAIT_POLL: Duration = Duration::from_millis(20);
 
 /// Unmount, then start thumbnail cleanup for that path.
 /// The cache lives outside the mount. Cleanup returns immediately, so a bad
@@ -219,6 +225,10 @@ fn open_unlocked_session(
         if !vault_dir.host_is_dir() {
             return Err(UprivError::VaultNotFound(vault_dir.clone()));
         }
+        // The core of an app that went away may still be closing this vault.
+        if !is_vault_open_at(&vault_dir) && !is_vault_closing_at(&vault_dir) {
+            wait_for_lock_holder(&root.runtime_lock_path(vault_id)?, LOCK_HOLDER_WAIT);
+        }
         let config = load_vault_config(&vault_dir)?;
         let consent = match kind {
             OpenKind::User { consent } => Some(consent),
@@ -241,8 +251,10 @@ fn open_unlocked_session(
                 });
             }
             let lock = acquire_vault_lock(root.runtime_lock_path(vault_id)?)?;
-            // This process now owns the lock, so any recorded mount is stale.
+            // This process now owns the lock, so any recorded mount is stale,
+            // and a backup zip still marked unfinished will never finish.
             release_recorded_mount(root, vault_id);
+            discard_unfinished_backups(&vault_dir);
             let store = vault_dir.join(crate::paths::STORE_DIR_NAME);
             let opened = match open_store(&store, password) {
                 Ok(opened) => opened,
@@ -253,8 +265,12 @@ fn open_unlocked_session(
                 Err(other) => return Err(other),
             };
             record_unlock_success(&vault_dir);
-            let mut session =
-                OpenSession::from_opened(vault_id.to_string(), vault_dir.clone(), opened);
+            let mut session = OpenSession::from_opened(
+                vault_id.to_string(),
+                config.vault.display_name.clone(),
+                vault_dir.clone(),
+                opened,
+            );
             // Writes hash only when a close will compare contents. Turning the
             // skip on later costs one zip, not a re-read.
             session.index.writes.track_digests =
@@ -316,7 +332,11 @@ fn drop_unfinished_session(root: &VaultRoot, vault_id: &str, vault_dir: &Path) {
 enum CloseKind {
     User,
     Auto,
+    /// Close now: a close that starts out hurried.
+    Now,
     Shutdown,
+    /// [`CloseKind::Now`] while the app quits.
+    ShutdownNow,
 }
 
 impl CloseKind {
@@ -324,8 +344,18 @@ impl CloseKind {
         match self {
             Self::User => "user",
             Self::Auto => "auto",
+            Self::Now => "now",
             Self::Shutdown => "shutdown",
+            Self::ShutdownNow => "shutdown_now",
         }
+    }
+
+    fn quitting(self) -> bool {
+        matches!(self, Self::Shutdown | Self::ShutdownNow)
+    }
+
+    fn immediate(self) -> bool {
+        matches!(self, Self::Now | Self::ShutdownNow)
     }
 }
 
@@ -357,6 +387,13 @@ pub fn close_phase(root: &VaultRoot, vault_id: &str) -> Result<Option<ClosePhase
     Ok(vault_close_phase_at(&vault_dir))
 }
 
+/// Make the close running for this vault finish the way [`close_vault_now`]
+/// does: the closing pass, the backup, and the overwrite stop where they are.
+/// Sealing the index still finishes. False when no close is running.
+pub fn hurry_close(root: &VaultRoot, vault_id: &str) -> Result<bool> {
+    Ok(hurry_close_at(&root.vault_dir(vault_id)?))
+}
+
 fn close_vault_inner(
     root: &VaultRoot,
     vault_id: &str,
@@ -364,19 +401,30 @@ fn close_vault_inner(
 ) -> Result<CloseVaultOutcome> {
     let vault_dir = vault_dir_or_not_found(root, vault_id)?;
     let closing = ClosingGuard::enter(&vault_dir)?;
-    let plain_pass = super::plain::before_close(&vault_dir);
+    let hurry = Arc::clone(closing.hurry());
+    if kind.immediate() {
+        hurry.store(true, Ordering::Relaxed);
+    }
+    let hurried = || hurry.load(Ordering::Relaxed);
+    let plain_pass = super::plain::before_close(&vault_dir, &hurry);
     let mut session = take_session(&vault_dir)?;
     let pin_backup = session
         .plain
         .as_ref()
         .is_some_and(super::plain::wants_pinned_backup);
+    if hurried() {
+        if let Some(plain) = session.plain.as_mut() {
+            super::plain::drop_files_before_seal(vault_id, &vault_dir, plain);
+        }
+    }
     let store = vault_dir.join(crate::paths::STORE_DIR_NAME);
     let mut backup_failed = false;
     let mut backup_failure: Option<&'static str> = None;
     let mut backup_pinned = false;
     let persist = (|| {
         // Only blobs this session left dead bytes in. Every other blob was
-        // already measured by the close after its last write.
+        // already measured by the close after its last write. A hurried close
+        // leaves them: dead bytes cost space, and the next write packs them.
         let rewritten: Vec<String> = session
             .index
             .writes
@@ -384,22 +432,26 @@ fn close_vault_inner(
             .iter()
             .cloned()
             .collect();
-        let packed = match pack_blob_waste(
-            &store,
-            &session.header,
-            &session.content_key,
-            &mut session.index,
-            BlobPackMode::Close,
-            Some(&rewritten),
-        ) {
-            Ok(mutation) => mutation,
-            Err(_error) => {
-                log_event(
-                    LogLevel::Warn,
-                    "vault_blob_pack_failed",
-                    &[("id", vault_id)],
-                );
-                ChunkBlobMutation::default()
+        let packed = if hurried() {
+            ChunkBlobMutation::default()
+        } else {
+            match pack_blob_waste(
+                &store,
+                &session.header,
+                &session.content_key,
+                &mut session.index,
+                BlobPackMode::Close,
+                Some(&rewritten),
+            ) {
+                Ok(mutation) => mutation,
+                Err(_error) => {
+                    log_event(
+                        LogLevel::Warn,
+                        "vault_blob_pack_failed",
+                        &[("id", vault_id)],
+                    );
+                    ChunkBlobMutation::default()
+                }
             }
         };
         let packed_ok = if packed.created.is_empty() {
@@ -416,8 +468,13 @@ fn close_vault_inner(
             );
             false
         };
+        // The layout held since the last seal is sealed by this close.
+        let layout = super::fs::stage_pending_layout(&mut session);
         if !session.staged_blobs.is_empty() {
-            super::fs::sync_staged_blobs(&session.staged_blobs)?;
+            if let Err(error) = super::fs::sync_staged_blobs(&session.staged_blobs) {
+                super::fs::settle_staged_layout(&mut session, layout, false);
+                return Err(error);
+            }
             session.staged_blobs.clear();
         }
         // Before the seal, so the digests of files written in order are stored.
@@ -426,6 +483,7 @@ fn close_vault_inner(
             match flush_index_parts(&store, &session.header, &session.index_key, &session.index) {
                 Ok(sealed) => sealed,
                 Err(error) => {
+                    super::fs::settle_staged_layout(&mut session, layout, false);
                     if packed_ok {
                         packed.restore_packed_nodes(&mut session.index);
                         packed.discard_created();
@@ -433,6 +491,7 @@ fn close_vault_inner(
                     return Err(error);
                 }
             };
+        super::fs::settle_staged_layout(&mut session, layout, true);
         session.index.clear_unsealed_holes();
         if packed_ok {
             packed.delete_superseded();
@@ -449,8 +508,9 @@ fn close_vault_inner(
             .as_ref()
             .is_some_and(|backup| backup.enabled && backup.skip_unchanged);
         // Only a close that may skip its zip needs the contents id.
-        let logical_hash = (skip_when_unchanged && !session.skip_close_backup)
-            .then(|| index_logical_hash(&session.index));
+        let skip_backup = session.skip_close_backup || hurried();
+        let logical_hash =
+            (skip_when_unchanged && !skip_backup).then(|| index_logical_hash(&session.index));
         let previous = load_vault_persistence(&vault_dir).ok().flatten();
         let previous_backup = previous
             .as_ref()
@@ -473,7 +533,7 @@ fn close_vault_inner(
         if pin_backup {
             backup_pinned = pin_newest_backup(root, vault_id);
         }
-        if !session.skip_close_backup && !backups_off {
+        if !skip_backup && !backups_off {
             let already_backed_up = logical_hash.as_ref().is_some_and(|hash| {
                 previous_backup.as_deref() == Some(hash.as_str())
                     && previous_stamp
@@ -482,7 +542,7 @@ fn close_vault_inner(
             });
             if !already_backed_up {
                 closing.set_phase(ClosePhase::Backup);
-                match backup_on_close(root, vault_id) {
+                match backup_on_close(root, vault_id, &Job::stopped_by(Arc::clone(&hurry))) {
                     Ok(Some(stamp)) => {
                         if let Some(hash) = logical_hash {
                             persistence.backed_up_index_hash = Some(hash);
@@ -490,7 +550,8 @@ fn close_vault_inner(
                             save_vault_persistence(&vault_dir, &persistence)?;
                         }
                     }
-                    Ok(None) => {}
+                    // Close now ended it; the next normal close writes it.
+                    Ok(None) | Err(UprivError::JobCancelled) => {}
                     Err(error) => {
                         backup_failed = true;
                         let class = classify_write_failure(&error);
@@ -512,7 +573,7 @@ fn close_vault_inner(
         Ok(())
     })();
     if let Err(error) = persist {
-        if matches!(kind, CloseKind::Shutdown) {
+        if kind.quitting() {
             // Quit must exit. Drop the session and its mount; do not put them
             // back. A plaintext folder stays recorded for recovery.
             let mount = session.mount.take();
@@ -527,7 +588,7 @@ fn close_vault_inner(
     // failing the state write would reinsert an open session with no mount.
     let mount = session.mount.take();
     if let Err(error) = mark_session_closed(root, vault_id) {
-        if matches!(kind, CloseKind::Shutdown) {
+        if kind.quitting() {
             drop(session);
             discard_mount(mount);
             return Err(error);
@@ -536,10 +597,18 @@ fn close_vault_inner(
         reinsert_after_failed_close(session, &vault_dir, vault_id);
         return Err(error);
     }
-    // Wipe the folder while the lock file is still held, so another process
+    // Clear the folder while the lock file is still held, so another process
     // cannot fill it again meanwhile.
     let plain = session.plain.take().map(|plain| {
-        super::plain::after_close(root, vault_id, &vault_dir, plain, plain_pass, backup_pinned)
+        super::plain::after_close(
+            root,
+            vault_id,
+            &vault_dir,
+            plain,
+            plain_pass,
+            backup_pinned,
+            &hurry,
+        )
     });
     drop(session);
     discard_mount(mount);
@@ -574,13 +643,41 @@ pub fn close_vault_auto(root: &VaultRoot, vault_id: &str) -> Result<CloseVaultOu
     close_vault_inner(root, vault_id, CloseKind::Auto)
 }
 
-/// Flush every open vault. Used by `app_shutdown`.
+/// Seal the open session and drop its keys and mount, with no backup. A
+/// plaintext vault's folder is removed without the closing pass or an
+/// overwrite, so what other apps changed since the last pass is lost.
+pub fn close_vault_now(root: &VaultRoot, vault_id: &str) -> Result<CloseVaultOutcome> {
+    close_vault_inner(root, vault_id, CloseKind::Now)
+}
+
+/// Flush every open vault, and wait for the closes already running. Used by
+/// `app_shutdown`.
 pub fn close_all_vaults(root: &VaultRoot) -> Result<Vec<String>> {
-    let ids = open_session_ids();
+    close_every_vault(root, CloseKind::Shutdown)
+}
+
+/// [`close_vault_now`] for every open vault, and [`hurry_close`] for every
+/// close already running. Used by `app_shutdown` on the quit dialog's Close now.
+pub fn close_all_vaults_now(root: &VaultRoot) -> Result<Vec<String>> {
+    close_every_vault(root, CloseKind::ShutdownNow)
+}
+
+fn close_every_vault(root: &VaultRoot, kind: CloseKind) -> Result<Vec<String>> {
+    let vaults_dir = root.vaults_dir();
+    if kind.immediate() {
+        hurry_closes_under(&vaults_dir);
+    }
     let mut closed = Vec::new();
     let mut first_err = None;
-    for id in ids {
-        match close_vault_inner(root, &id, CloseKind::Shutdown) {
+    for id in open_session_ids_under(&vaults_dir) {
+        // Its close is already running; the wait below covers it.
+        if root
+            .vault_dir(&id)
+            .is_ok_and(|dir| is_vault_closing_at(&dir))
+        {
+            continue;
+        }
+        match close_vault_inner(root, &id, kind) {
             Ok(_) => closed.push(id),
             Err(error) => {
                 if first_err.is_none() {
@@ -588,6 +685,11 @@ pub fn close_all_vaults(root: &VaultRoot) -> Result<Vec<String>> {
                 }
             }
         }
+    }
+    // The process exits next, and a close on another thread must not die
+    // halfway. Electron's limit on `app_shutdown` bounds this.
+    while any_close_under(&vaults_dir) {
+        std::thread::sleep(CLOSE_WAIT_POLL);
     }
     match first_err {
         Some(error) => Err(error),
@@ -725,6 +827,144 @@ mode = "encrypted_dir"
         let second = list_backups(&root, "notes").unwrap();
         assert_eq!(second.len(), 1);
         assert_eq!(second[0].file_name, first[0].file_name);
+    }
+
+    #[test]
+    fn close_now_seals_the_files_and_writes_no_backup() {
+        let (_tmp, root) = vault_root_with(&[]);
+        create_vault(
+            &root,
+            sample_config("notes", "Notes"),
+            b"pass-word-ok",
+            KdfUnlockPreset::M32,
+        )
+        .unwrap();
+        open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        crate::vault::fs_write_file(&root, "notes", "/hello.txt", b"secret").unwrap();
+        let outcome = close_vault_now(&root, "notes").unwrap();
+        assert!(!outcome.backup_failed);
+        assert!(list_backups(&root, "notes").unwrap().is_empty());
+
+        open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        assert_eq!(
+            crate::vault::fs_read_file(&root, "notes", "/hello.txt").unwrap(),
+            b"secret"
+        );
+        // The next close makes the backup Close now skipped.
+        close_vault(&root, "notes").unwrap();
+        assert_eq!(list_backups(&root, "notes").unwrap().len(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_close_now_that_fails_leaves_the_next_close_its_backup() {
+        use std::os::unix::fs::PermissionsExt;
+        let (_tmp, root) = vault_root_with(&[]);
+        create_vault(
+            &root,
+            sample_config("notes", "Notes"),
+            b"pass-word-ok",
+            KdfUnlockPreset::M32,
+        )
+        .unwrap();
+        open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        crate::vault::fs_write_file(&root, "notes", "/hello.txt", b"secret").unwrap();
+        let index = root.vault_dir("notes").unwrap().join("store/index");
+        std::fs::set_permissions(&index, std::fs::Permissions::from_mode(0o500)).unwrap();
+        let failed = close_vault_now(&root, "notes");
+        std::fs::set_permissions(&index, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(failed.is_err());
+
+        close_vault(&root, "notes").unwrap();
+        assert_eq!(list_backups(&root, "notes").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_stopped_close_backup_leaves_no_zip_and_the_next_close_writes_one() {
+        let (_tmp, root) = vault_root_with(&[]);
+        create_vault(
+            &root,
+            sample_config("notes", "Notes"),
+            b"pass-word-ok",
+            KdfUnlockPreset::M32,
+        )
+        .unwrap();
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let stopped = backup_on_close(&root, "notes", &Job::stopped_by(stop));
+        assert!(matches!(stopped, Err(UprivError::JobCancelled)));
+        assert!(list_backups(&root, "notes").unwrap().is_empty());
+        let backups = root.vault_dir("notes").unwrap().join("backups");
+        let leftovers = crate::host_fs::read_dir(&backups).map_or(0, |dir| {
+            dir.flatten().filter(|entry| entry.path().is_file()).count()
+        });
+        assert_eq!(leftovers, 0);
+
+        open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        close_vault(&root, "notes").unwrap();
+        assert_eq!(list_backups(&root, "notes").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn hurry_close_says_when_no_close_is_running() {
+        let (_tmp, root) = vault_root_with(&[]);
+        create_vault(
+            &root,
+            sample_config("notes", "Notes"),
+            b"pass-word-ok",
+            KdfUnlockPreset::M32,
+        )
+        .unwrap();
+        assert!(!hurry_close(&root, "notes").unwrap());
+        let vault_dir = root.vault_dir("notes").unwrap();
+        let closing = ClosingGuard::enter(&vault_dir).unwrap();
+        assert!(hurry_close(&root, "notes").unwrap());
+        assert!(closing.hurry().load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn close_all_waits_for_a_close_already_running() {
+        let (_tmp, root) = vault_root_with(&[]);
+        create_vault(
+            &root,
+            sample_config("notes", "Notes"),
+            b"pass-word-ok",
+            KdfUnlockPreset::M32,
+        )
+        .unwrap();
+        let vault_dir = root.vault_dir("notes").unwrap();
+        let closing = ClosingGuard::enter(&vault_dir).unwrap();
+        let ending = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(100));
+            let hurried = closing.hurry().load(Ordering::Relaxed);
+            drop(closing);
+            hurried
+        });
+        close_all_vaults_now(&root).unwrap();
+        assert!(!is_vault_closing_at(&vault_dir));
+        assert!(
+            ending.join().unwrap(),
+            "quit tells a running close to hurry"
+        );
+    }
+
+    #[test]
+    fn close_all_now_closes_every_vault_with_no_backup() {
+        let (_tmp, root) = vault_root_with(&[]);
+        for (id, name) in [("notes", "Notes"), ("photos", "Photos")] {
+            create_vault(
+                &root,
+                sample_config(id, name),
+                b"pass-word-ok",
+                KdfUnlockPreset::M32,
+            )
+            .unwrap();
+            open_vault(&root, id, b"pass-word-ok").unwrap();
+        }
+        let mut closed = close_all_vaults_now(&root).unwrap();
+        closed.sort();
+        assert_eq!(closed, ["notes", "photos"]);
+        assert!(list_backups(&root, "notes").unwrap().is_empty());
+        assert!(list_backups(&root, "photos").unwrap().is_empty());
     }
 
     #[test]

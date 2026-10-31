@@ -10,12 +10,17 @@ use crate::host_fs as fs;
 use crate::host_fs::HostFsQuery;
 use std::io::{self, Seek, SeekFrom, Write};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use rand::RngCore;
 
 use crate::config::vault_config::VaultWipePattern;
 use crate::error::{Result, UprivError};
 use crate::paths::{open_nofollow, NofollowMode};
+
+/// Bytes overwritten between flushes to disk. One flush at the end of a large
+/// file would hold a stop for minutes.
+const OVERWRITE_SYNC_BYTES: u64 = 64 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy)]
 pub struct WipeOptions {
@@ -80,9 +85,19 @@ pub fn secure_wipe_path(path: &Path, opts: &WipeOptions) -> Result<()> {
 /// Overwrite one regular file, then remove its name. The open does not follow
 /// a link swapped in after the caller looked at the path.
 pub(crate) fn wipe_file_then_unlink(path: &Path, opts: &WipeOptions) -> io::Result<()> {
+    wipe_file_then_unlink_until(path, opts, &AtomicBool::new(false))
+}
+
+/// [`wipe_file_then_unlink`]; once `stop` is set the rest of the file is left
+/// as it is and its name still goes.
+pub(crate) fn wipe_file_then_unlink_until(
+    path: &Path,
+    opts: &WipeOptions,
+    stop: &AtomicBool,
+) -> io::Result<()> {
     let mut file = open_nofollow(path, NofollowMode::ReadWrite)?;
     let len = file.metadata()?.len();
-    overwrite_contents(&mut file, len, opts)?;
+    overwrite_contents(&mut file, len, opts, stop)?;
     drop(file);
     match fs::remove_file(path) {
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
@@ -108,11 +123,13 @@ impl Overwrite for fs::File {
 }
 
 /// Write `opts.pattern` over the first `len` bytes, `opts.passes` times, and
-/// flush after each pass.
+/// flush after each pass and every [`OVERWRITE_SYNC_BYTES`]. Once `stop` is
+/// set the rest of the file is left as it is.
 pub(crate) fn overwrite_contents(
     file: &mut impl Overwrite,
     len: u64,
     opts: &WipeOptions,
+    stop: &AtomicBool,
 ) -> io::Result<()> {
     if len == 0 {
         return Ok(());
@@ -121,11 +138,21 @@ pub(crate) fn overwrite_contents(
     for _ in 0..opts.passes.max(1) {
         file.seek(SeekFrom::Start(0))?;
         let mut remaining = len;
+        let mut unsynced = 0u64;
         while remaining > 0 {
+            if stop.load(Ordering::Relaxed) {
+                return Ok(());
+            }
             let n = remaining.min(buf.len() as u64) as usize;
             fill_pattern(&mut buf[..n], opts.pattern);
             file.write_all(&buf[..n])?;
             remaining -= n as u64;
+            unsynced += n as u64;
+            if unsynced >= OVERWRITE_SYNC_BYTES {
+                file.flush()?;
+                file.flush_to_disk()?;
+                unsynced = 0;
+            }
         }
         file.flush()?;
         file.flush_to_disk()?;
@@ -151,6 +178,20 @@ mod tests {
             passes: 1,
             pattern: VaultWipePattern::Zeros,
         }
+    }
+
+    #[test]
+    fn a_stop_leaves_the_rest_of_the_file_and_still_removes_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("secret.bin");
+        crate::host_fs::write(&path, b"plaintext-secret").unwrap();
+        // An open descriptor still sees the bytes after the name is gone.
+        let mut reader = std::fs::File::open(&path).unwrap();
+        wipe_file_then_unlink_until(&path, &zeros(), &AtomicBool::new(true)).unwrap();
+        assert!(!path.host_exists());
+        let mut left = Vec::new();
+        io::Read::read_to_end(&mut reader, &mut left).unwrap();
+        assert_eq!(left, b"plaintext-secret");
     }
 
     #[test]

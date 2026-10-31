@@ -21,7 +21,7 @@ export function vaultSettingsFixture(
       hidden: false,
       ...overrides.vault,
     },
-    storage: { mode: storageMode },
+    storage: { mode: storageMode, plain_files: "chosen" },
     mount: vaultWorkspace(),
     backup: { enabled: true, mode: "keep_last", keep_last: 1, skip_unchanged: true },
     security: {

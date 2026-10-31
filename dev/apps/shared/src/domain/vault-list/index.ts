@@ -28,10 +28,14 @@ export {
   vaultBlocksGroupInnerColumns,
   vaultRowChrome,
 } from "./rowChrome";
+export type { RowButtonStackPart } from "./rowButtonStack";
+export { EMPTY_ROW_BUTTON_STACK, nextRowButtonStack } from "./rowButtonStack";
 export { sortVaultsByOrder } from "./order";
 export type {
   VaultExportRequest,
   VaultExportFormat,
+  VaultExportInclude,
+  VaultExportPasswordFormat,
   VaultExportPipelineStatus,
   VaultExportPending,
   VaultExportRun,
@@ -39,6 +43,7 @@ export type {
 } from "./export";
 export {
   DEFAULT_VAULT_EXPORT_FORMAT,
+  DEFAULT_VAULT_EXPORT_INCLUDE,
   VAULT_EXPORT_PROGRESS_COPY,
   exportFilenameSanitizeKind,
   sanitizeExportFilenameBase,

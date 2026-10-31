@@ -19,6 +19,7 @@ import { isElectronRenderer } from "@/lib/invoke";
 import {
   rpcAppSettingsGet,
   rpcVaultClose,
+  rpcVaultCloseHurry,
   rpcVaultClosePhase,
   rpcVaultConfigGet,
   rpcVaultOpen,
@@ -72,6 +73,10 @@ export const desktopVaultLifecycleService: VaultLifecycleService = {
     );
     onStep(CLOSING_DONE_STEP);
     return outcome;
+  },
+
+  hurryClose(vaultId) {
+    return rpcVaultCloseHurry(vaultId);
   },
 
   resolveWorkspacePath(displayName, parentPath) {

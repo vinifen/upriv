@@ -1,4 +1,4 @@
-import { useId } from "react";
+import { useId, type ReactNode } from "react";
 import { PathField } from "@/components/PathField";
 import { Button, PasswordInput, SwitchRow } from "@/components/ui";
 import {
@@ -7,14 +7,15 @@ import {
   createVaultImportNeedsArchivePassword,
   createVaultImportNeedsRename,
   createVaultImportSelectionPatch,
+  createVaultSettingsLocked,
   importExtractApplies,
   importExtractEnabled,
+  importKeepSettingsApplies,
+  importKeepWorkspaceApplies,
   importSetsVaultPassword,
   importZipWrapsDocuments,
   isHiddenGroup,
   validateCreateVaultStep,
-  IDLE_AUTO_CLOSE_MINUTES_MAX,
-  IDLE_AUTO_CLOSE_MINUTES_MIN,
   NO_VAULT_GROUPS,
   VAULT_DISPLAY_NAME_MAX_LENGTH,
   VAULT_NOTE_MAX_LENGTH,
@@ -36,6 +37,7 @@ import {
   SettingsField,
   SettingsFormGrid,
   VaultSettingsBackupSection,
+  VaultSettingsCloseSection,
   VaultSettingsGroupSection,
   VaultSettingsKdfSection,
   VaultSettingsMountSection,
@@ -108,6 +110,40 @@ function FieldErrors({ errors }: { errors: readonly CreateVaultValidationCode[] 
         </p>
       ))}
     </div>
+  );
+}
+
+/** Says why fields are locked and where to go. Shows only while they are. */
+function SettingsLockedNotice({ draft }: { draft: CreateVaultDraft }) {
+  const { t } = useTranslation();
+  if (!createVaultSettingsLocked(draft)) return null;
+  return (
+    <p
+      role="status"
+      className="rounded-lg border border-[var(--vault-status-recovery)] px-3 py-2 text-sm leading-relaxed text-on-surface"
+    >
+      {t("vault.create.settings_locked")}
+    </p>
+  );
+}
+
+/**
+ * Inputs a `.7z` may fill. They lock until its password test passes; the step
+ * and the section around them stay open. Disabling the fieldset reaches every
+ * control in it, keyboard included.
+ */
+function SettingsLockedFields({
+  draft,
+  children,
+}: {
+  draft: CreateVaultDraft;
+  children: ReactNode;
+}) {
+  const locked = createVaultSettingsLocked(draft);
+  return (
+    <fieldset disabled={locked} className={locked ? "min-w-0 opacity-60" : "min-w-0"}>
+      {children}
+    </fieldset>
   );
 }
 
@@ -186,6 +222,22 @@ function CreateVaultSourceStep({ draft, errors, onChange, existingDisplayNames =
           }
         />
       ) : null}
+      {importKeepWorkspaceApplies(draft) ? (
+        <SwitchRow
+          checked={draft.importKeepWorkspace}
+          label={t("vault.create.keep_workspace")}
+          hint={t("vault.create.keep_workspace_hint")}
+          onChange={(importKeepWorkspace) => onChange({ importKeepWorkspace })}
+        />
+      ) : null}
+      {importKeepSettingsApplies(draft) ? (
+        <SwitchRow
+          checked={draft.importKeepSettings}
+          label={t("vault.create.keep_settings")}
+          hint={t("vault.create.keep_settings_hint")}
+          onChange={(importKeepSettings) => onChange({ importKeepSettings })}
+        />
+      ) : null}
       {draft.source === "import" && draft.importShape === "directory" ? (
         <p className="text-xs text-on-surface-variant">
           {t("vault.create.option.import_folder_note")}
@@ -198,7 +250,11 @@ function CreateVaultSourceStep({ draft, errors, onChange, existingDisplayNames =
       ) : null}
       {extractOn && draft.zipLayout === "files" ? (
         <p role="alert" className="text-xs text-on-error-container">
-          {t("vault.create.option.import_files_zip_note")}
+          {t(
+            draft.importCarriesSettings && draft.importKeepSettings
+              ? "vault.create.option.import_plain_zip_note"
+              : "vault.create.option.import_files_zip_note",
+          )}
         </p>
       ) : null}
     </div>
@@ -289,51 +345,56 @@ function CreateVaultIdentityStep({
           {t("vault.import.rename_prompt")}
         </p>
       ) : null}
-      <SettingsField
-        label={importNeedsRename ? t("vault.import.suggested_name") : t("vault.name.label")}
-        htmlFor={nameId}
-      >
-        <input
-          id={nameId}
-          ref={bindFieldRef?.("displayName")}
-          type="text"
-          value={draft.displayName}
-          maxLength={VAULT_DISPLAY_NAME_MAX_LENGTH}
-          onFocus={() => onFieldFocus?.("displayName")}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") {
-              event.preventDefault();
-              onFieldSubmit?.("displayName");
-            }
-          }}
-          autoComplete="off"
-          spellCheck={false}
-          onChange={(e) => onChange({ displayName: e.target.value })}
-          className={settingsControlClass}
-        />
-        <DisplayNameFieldError name={draft.displayName} allowEmpty />
-        <FieldErrors
-          errors={createVaultErrorsForField(errors, "displayName").filter(
-            (code) => code === "empty" || code === "duplicate",
-          )}
-        />
-      </SettingsField>
-      <SettingsField
-        label={t("vault.create.note")}
-        htmlFor={noteId}
-        hint={t("vault.create.note_help", { max: VAULT_NOTE_MAX_LENGTH })}
-      >
-        <textarea
-          id={noteId}
-          ref={bindFieldRef?.("note")}
-          value={draft.note}
-          maxLength={VAULT_NOTE_MAX_LENGTH}
-          rows={3}
-          onFocus={() => onFieldFocus?.("note")}
-          onChange={(e) => onChange({ note: e.target.value })}
-          className={[settingsControlClass, "resize-y"].join(" ")}
-        />
-      </SettingsField>
+      <SettingsLockedNotice draft={draft} />
+      <SettingsLockedFields draft={draft}>
+        <SettingsFormGrid>
+          <SettingsField
+            label={importNeedsRename ? t("vault.import.suggested_name") : t("vault.name.label")}
+            htmlFor={nameId}
+          >
+            <input
+              id={nameId}
+              ref={bindFieldRef?.("displayName")}
+              type="text"
+              value={draft.displayName}
+              maxLength={VAULT_DISPLAY_NAME_MAX_LENGTH}
+              onFocus={() => onFieldFocus?.("displayName")}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  onFieldSubmit?.("displayName");
+                }
+              }}
+              autoComplete="off"
+              spellCheck={false}
+              onChange={(e) => onChange({ displayName: e.target.value })}
+              className={settingsControlClass}
+            />
+            <DisplayNameFieldError name={draft.displayName} allowEmpty />
+            <FieldErrors
+              errors={createVaultErrorsForField(errors, "displayName").filter(
+                (code) => code === "empty" || code === "duplicate",
+              )}
+            />
+          </SettingsField>
+          <SettingsField
+            label={t("vault.create.note")}
+            htmlFor={noteId}
+            hint={t("vault.create.note_help", { max: VAULT_NOTE_MAX_LENGTH })}
+          >
+            <textarea
+              id={noteId}
+              ref={bindFieldRef?.("note")}
+              value={draft.note}
+              maxLength={VAULT_NOTE_MAX_LENGTH}
+              rows={3}
+              onFocus={() => onFieldFocus?.("note")}
+              onChange={(e) => onChange({ note: e.target.value })}
+              className={[settingsControlClass, "resize-y"].join(" ")}
+            />
+          </SettingsField>
+        </SettingsFormGrid>
+      </SettingsLockedFields>
     </SettingsFormGrid>
   );
 }
@@ -357,6 +418,7 @@ function CreateVaultPasswordStep({
   const setsVaultPassword = !isImport || importSetsVaultPassword(draft);
   const needsArchivePassword = createVaultImportNeedsArchivePassword(draft);
   const showPassword = setsVaultPassword || needsArchivePassword;
+  const hintLocked = createVaultSettingsLocked(draft);
 
   return (
     <SettingsFormGrid>
@@ -437,16 +499,28 @@ function CreateVaultPasswordStep({
           ) : null}
         </div>
       ) : null}
+      {needsArchivePassword && draft.passwordValidated && draft.importKeepSettings ? (
+        <p role="status" className="text-sm leading-relaxed text-on-surface-variant">
+          {t(
+            draft.importCarriesSettings
+              ? "vault.create.password_settings_read"
+              : "vault.create.password_no_settings",
+          )}
+        </p>
+      ) : null}
       <SettingsField
         label={t("vault.create.password_hint")}
         htmlFor={hintId}
-        hint={t("vault.create.password_hint_help")}
+        hint={t(
+          hintLocked ? "vault.create.password_hint_locked" : "vault.create.password_hint_help",
+        )}
       >
         <input
           id={hintId}
           ref={bindFieldRef?.("passwordHint")}
           type="text"
           value={draft.passwordHint}
+          disabled={hintLocked}
           maxLength={VAULT_PASSWORD_HINT_MAX_LENGTH}
           onFocus={() => onFieldFocus?.("passwordHint")}
           onKeyDown={(event) => {
@@ -471,57 +545,40 @@ function CreateVaultGeneralStep({
   includeHidden = false,
 }: StepProps) {
   const { t } = useTranslation();
-  const autoCloseId = useId();
-  const idleId = useId();
   return (
     <div className="space-y-1.5 sm:space-y-2">
       <p className="text-sm text-on-surface-variant">{t("vault.create.general_intro")}</p>
+      <SettingsLockedNotice draft={draft} />
 
       <VaultSettingsSection title={t("modal.settings.section.kdf")} defaultOpen>
-        <VaultSettingsKdfSection
-          config={draft.kdf}
-          choosesPreset={createVaultChoosesKdf(draft)}
-          archivePreset={draft.archiveUnlockPreset}
-          onChange={(patch) => onChange({ kdf: { ...draft.kdf, ...patch } })}
-        />
+        <SettingsLockedFields draft={draft}>
+          <VaultSettingsKdfSection
+            config={draft.kdf}
+            choosesPreset={createVaultChoosesKdf(draft)}
+            archivePreset={draft.archiveUnlockPreset}
+            onChange={(patch) => onChange({ kdf: { ...draft.kdf, ...patch } })}
+          />
+        </SettingsLockedFields>
       </VaultSettingsSection>
 
       <VaultSettingsSection title={t("modal.settings.section.backup")} defaultOpen>
-        <VaultSettingsBackupSection
-          config={draft.backup}
-          onChange={(patch) => onChange({ backup: { ...draft.backup, ...patch } })}
-        />
+        <SettingsLockedFields draft={draft}>
+          <VaultSettingsBackupSection
+            config={draft.backup}
+            onChange={(patch) => onChange({ backup: { ...draft.backup, ...patch } })}
+          />
+        </SettingsLockedFields>
       </VaultSettingsSection>
 
       <VaultSettingsSection title={t("modal.settings.section.auto_close")} defaultOpen>
-        <SettingsFormGrid>
-          <SwitchRow
-            id={autoCloseId}
-            checked={draft.auto_close.enabled}
-            onChange={(enabled) => onChange({ auto_close: { ...draft.auto_close, enabled } })}
-            label={t("modal.settings.field.auto_close.enabled")}
+        <SettingsLockedFields draft={draft}>
+          <VaultSettingsCloseSection
+            autoClose={draft.auto_close}
+            onAutoCloseChange={(patch) =>
+              onChange({ auto_close: { ...draft.auto_close, ...patch } })
+            }
           />
-          <SettingsField
-            label={t("modal.settings.field.auto_close.idle_minutes")}
-            hint={t("modal.settings.field.auto_close.idle_minutes_help")}
-            htmlFor={idleId}
-            disabled={!draft.auto_close.enabled}
-          >
-            <IntegerInput
-              id={idleId}
-              min={IDLE_AUTO_CLOSE_MINUTES_MIN}
-              max={IDLE_AUTO_CLOSE_MINUTES_MAX}
-              value={draft.auto_close.idle_minutes}
-              disabled={!draft.auto_close.enabled}
-              onChange={(idle_minutes) =>
-                onChange({
-                  auto_close: { ...draft.auto_close, idle_minutes },
-                })
-              }
-              className={[settingsControlClass, "font-mono tabular-nums"].join(" ")}
-            />
-          </SettingsField>
-        </SettingsFormGrid>
+        </SettingsLockedFields>
       </VaultSettingsSection>
 
       <VaultSettingsSection title={t("vault.group.assignment.section")} defaultOpen>
@@ -573,66 +630,67 @@ function CreateVaultAdvancedStep({
   const hiddenId = useId();
   const hiddenLocked = draft.groupMode === "existing" && isHiddenGroup(groups, draft.groupId);
 
-  const setStorageMode = (mode: CreateVaultDraft["storage"]["mode"]) => {
-    onChange({ storage: { mode } });
-  };
-
   return (
     <div className="space-y-1.5 sm:space-y-2">
       <p className="text-sm text-on-surface-variant">{t("vault.create.advanced_intro")}</p>
       <p className="text-sm leading-relaxed text-on-surface-variant">
         {t("vault.create.settings_editable_later")}
       </p>
+      <SettingsLockedNotice draft={draft} />
 
       <VaultSettingsSection title={t("modal.settings.section.vault")}>
-        <SettingsFormGrid>
-          <SettingsField
-            label={t("modal.settings.field.vault.order")}
-            hint={t("modal.settings.field.vault.order_help")}
-            htmlFor={orderId}
-          >
-            <IntegerInput
-              id={orderId}
-              min={0}
-              value={draft.order}
-              onChange={(order) => onChange({ order })}
-              className={[settingsControlClass, "font-mono tabular-nums"].join(" ")}
+        <SettingsLockedFields draft={draft}>
+          <SettingsFormGrid>
+            <SettingsField
+              label={t("modal.settings.field.vault.order")}
+              hint={t("modal.settings.field.vault.order_help")}
+              htmlFor={orderId}
+            >
+              <IntegerInput
+                id={orderId}
+                min={0}
+                value={draft.order}
+                onChange={(order) => onChange({ order })}
+                className={[settingsControlClass, "font-mono tabular-nums"].join(" ")}
+              />
+            </SettingsField>
+            <SwitchRow
+              id={hiddenId}
+              checked={draft.hidden || hiddenLocked}
+              disabled={hiddenLocked}
+              onChange={(hidden) => onChange({ hidden })}
+              label={t("modal.settings.field.vault.hidden")}
+              hint={
+                hiddenLocked
+                  ? t("modal.settings.field.vault.hidden_locked_by_group")
+                  : t("modal.settings.field.vault.hidden_help")
+              }
             />
-          </SettingsField>
-          <SwitchRow
-            id={hiddenId}
-            checked={draft.hidden || hiddenLocked}
-            disabled={hiddenLocked}
-            onChange={(hidden) => onChange({ hidden })}
-            label={t("modal.settings.field.vault.hidden")}
-            hint={
-              hiddenLocked
-                ? t("modal.settings.field.vault.hidden_locked_by_group")
-                : t("modal.settings.field.vault.hidden_help")
-            }
-          />
-        </SettingsFormGrid>
+          </SettingsFormGrid>
+        </SettingsLockedFields>
       </VaultSettingsSection>
 
       <VaultSettingsSection title={t("modal.settings.section.storage")}>
-        <VaultSettingsStorageSection
-          config={draft.storage}
-          onChange={(patch) => {
-            if (patch.mode !== undefined) setStorageMode(patch.mode);
-          }}
-        />
+        <SettingsLockedFields draft={draft}>
+          <VaultSettingsStorageSection
+            config={draft.storage}
+            onChange={(patch) => onChange({ storage: { ...draft.storage, ...patch } })}
+          />
+        </SettingsLockedFields>
         <FieldErrors errors={createVaultErrorsForField(errors, "storage")} />
       </VaultSettingsSection>
 
       <VaultSettingsSection title={t("modal.settings.section.mount")}>
-        <VaultSettingsMountSection
-          config={draft.mount}
-          vaultRootPath={vaultRootPath}
-          plaintext={draft.storage.mode === "upriv_plain"}
-          appWorkspace={appWorkspace}
-          onDriverAttentionChange={onDriverAttentionChange}
-          onChange={(patch) => onChange({ mount: { ...draft.mount, ...patch } })}
-        />
+        <SettingsLockedFields draft={draft}>
+          <VaultSettingsMountSection
+            config={draft.mount}
+            vaultRootPath={vaultRootPath}
+            plaintext={draft.storage.mode === "upriv_plain"}
+            appWorkspace={appWorkspace}
+            onDriverAttentionChange={onDriverAttentionChange}
+            onChange={(patch) => onChange({ mount: { ...draft.mount, ...patch } })}
+          />
+        </SettingsLockedFields>
         <FieldErrors errors={createVaultErrorsForField(errors, "mount")} />
       </VaultSettingsSection>
     </div>

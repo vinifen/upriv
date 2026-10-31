@@ -14,6 +14,7 @@ export {
   OPENING_PIPELINE_STEP_COUNT,
   runTimedPipeline,
 } from "./pipeline";
+export { closeNowApplies, closeNowNeedsConfirm, closeNowNoticeKeys } from "./closeNow";
 export { MIN_CLOSING_DISPLAY_MS, remainingClosingDisplayMs } from "./closingDisplay";
 export { borrowSessionRamPassword } from "./sessionRamPassword";
 export {
@@ -27,6 +28,8 @@ export {
 export { isVaultOpenJobPending } from "./openPending";
 export {
   CLOSE_PHASE_POLL_MS,
+  askCloseToHurry,
+  parseVaultCloseHurry,
   parseVaultClosePhase,
   watchClosePhase,
   type VaultClosePhase,

@@ -70,22 +70,3 @@ export async function saveDirtyVaultDrafts(args: {
     return pending ? "failed" : "saved";
   }
 }
-
-/**
- * Editor cache of the last stored bytes. A clean draft is the text just saved
- * (including a save started outside this file manager), so the cache must
- * match it before a later discard shows the editor.
- */
-export function withSavedDraftDiskContents(
-  disk: Record<string, string>,
-  workspace: Pick<VaultWorkspaceState, "dirtyPaths" | "editorDrafts">,
-): Record<string, string> {
-  const dirty = new Set(workspace.dirtyPaths);
-  let next: Record<string, string> | null = null;
-  for (const [path, draft] of Object.entries(workspace.editorDrafts)) {
-    if (dirty.has(path) || disk[path] === draft) continue;
-    next ??= { ...disk };
-    next[path] = draft;
-  }
-  return next ?? disk;
-}

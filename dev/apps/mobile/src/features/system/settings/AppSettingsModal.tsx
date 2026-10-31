@@ -609,6 +609,12 @@ function GeneralFields({
         value={config.lifecycle_keep_open_on_wake}
         onValueChange={(lifecycle_keep_open_on_wake) => onChange({ lifecycle_keep_open_on_wake })}
       />
+      <SwitchRow
+        label={t("modal.app_settings.field.lifecycle_confirm_close_now")}
+        hint={t("modal.app_settings.field.lifecycle_confirm_close_now_help")}
+        value={config.lifecycle_confirm_close_now}
+        onValueChange={(lifecycle_confirm_close_now) => onChange({ lifecycle_confirm_close_now })}
+      />
     </View>
   );
 }

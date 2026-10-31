@@ -16,7 +16,7 @@
 
 ### 1.1 What it is
 
-Upriv is a **portable vault manager**. At rest the vault body is **`store/`** (Argon2id → HKDF → XChaCha20-Poly1305 chunks, AES-SIV names). **Lock = close** (flush the session into `store/`). Portable files are a **separate export action**: recommended ordinary **`.zip` of `store/`** (zip is an envelope, no zip password) or **`.7z`** (logical Plan B). Canonical protocol: [`.agent/SECURITY-CRYPTO.md`](../../.agent/SECURITY-CRYPTO.md).
+Upriv is a **portable vault manager**. At rest the vault body is **`store/`** (Argon2id → HKDF → XChaCha20-Poly1305 chunks, AES-SIV names). **Lock = close** (flush the session into `store/`). Portable files are a **separate export action**: recommended ordinary **`.zip` of `store/`** (zip is an envelope, no zip password), **`.7z`** (logical Plan B), or a **plain-text `.zip`** (not encrypted, so a person with the password can always take their data out). Canonical protocol: [`.agent/SECURITY-CRYPTO.md`](../../.agent/SECURITY-CRYPTO.md).
 
 **v1 (initial goal):** both storage modes on **Linux and Windows desktop** (Electron + `upriv-daemon` + `upriv-core`): default **`encrypted_dir`** (FUSE on Linux, WinFsp on Windows; decrypt in RAM) and exception **`upriv_plain`** (real plaintext `workspace/` on disk while open, UI warning + wipe on close). macOS and mobile follow the same layout (in-app file manager on mobile — no FUSE).
 
@@ -68,6 +68,8 @@ Differentiators vs. manual 7-Zip use:
 
 The user chooses the mode in `vaults/<id>/config.toml` (`[storage] mode`). UI warnings: `warning.encrypted_dir_ram`, `warning.upriv_plain`.
 
+`[storage] plain_files` says what a plaintext folder holds: `chosen` (default, **Only files I choose**) or `whole`. It is a choice inside `upriv_plain`, not a third mode.
+
 **Helper (shared domain):** `storageModeIsPlaintext` = `upriv_plain`. Both modes keep `store/` at rest and both can export.
 
 ### 1.7 Vault states
@@ -115,13 +117,13 @@ encrypted_dir / upriv_plain:
 
 | Step | What |
 |-------|--------|
-| 1 | **Open:** stream `store/` into the folder already chosen. No FUSE/WinFsp, even when the file manager folder is on. |
-| 2 | **Edit:** the folder is the working copy. `store/` stays the source of truth. Outside edits are saved after the folder is quiet, on a two-minute pass, and on close. |
+| 1 | **Open:** with `plain_files = "chosen"` the folder already chosen starts empty, so opening takes about as long as RAM mode. With `"whole"`, stream `store/` into it. No FUSE/WinFsp, even when the file manager folder is on. |
+| 2 | **Edit:** what is in the folder is the working copy of those files. `store/` stays the source of truth, and the in-app file manager reads, edits, deletes, and finds every file, sent or not. Outside edits are saved after the folder is quiet, on a two-minute pass, and on close. Deleting a sent file from the folder deletes it from the vault for good, with no extra step. **Remove from folder** wipes the folder's copy and keeps the file. |
 | 3 | **Lock:** the same triggers as RAM mode. Lock starts the close immediately. A clean wipe removes the folder. |
 
 **Accepted trade-off (v1):** after reboot, the user **must re-enter the password** to open again. Data in `store/` is not lost. Crash while `upriv_plain` is **open** leaves plaintext on disk until close/wipe.
 
-**Export (separate action):** user chooses `.zip` of `store/` (Recommended) or portable `.7z`. **This vault must be closed** (other vaults may stay open). File zip/7z import and create-from-backup copy a frozen tree; they do not require the source vault closed. `.7z` never stores `.enc` blobs; zip envelope has **no** zip password.
+**Export (separate action):** user chooses `.zip` of `store/` (Recommended), portable `.7z`, or a plain-text `.zip` (Insecure). **This vault must be closed** (other vaults may stay open). File zip/7z import and create-from-backup copy a frozen tree; they do not require the source vault closed. `.7z` never stores `.enc` blobs; zip envelope has **no** zip password.
 
 ### 1.8 Technical mitigations (architecture)
 
@@ -137,7 +139,7 @@ encrypted_dir / upriv_plain:
 | 8 | Two PCs on same HD | `runtime/<id>.lock` + warning; simultaneous use remains user responsibility |
 | 9 | `upriv_plain` mode | Strong UI warning; wipe on close (documented SSD limits) |
 | 10 | Custom crypto | Standard primitives (Argon2id + AEAD); universality/portability via **`.7z`** |
-| 11 | Old backups | UI: list/download/delete; **create new vault from backup** (no in-place restore) |
+| 11 | Old backups | UI: list/export/delete; **create new vault from backup** (no in-place restore) |
 
 **Store encryption:** use the most mature and auditable libraries and formats possible (do not reinvent AEAD/KDF). Plan B and backups remain in **7z**.
 
@@ -223,7 +225,9 @@ encrypted_dir / upriv_plain:
 | RF-15 | **Unique `vault_id`:** normalized slug for `vaults/<vault_id>/`; `display_name` for UI / export file name / `workspace/` | P0 |
 | RF-15b | **Validate `display_name`:** reject `\ / : * ? " < > \|`, controls, empty, trailing space/`.`, reserved Windows stems, length > 128; allow Unicode accents and spaces | P0 |
 | RF-15c | **`vault_id` slug:** normalize from `display_name` (lowercase, spaces→`-`, strip forbidden, optional accent fold); max 64 chars; collision suffix | P0 |
-| RF-15d | **Export:** each option (`.zip` of encrypted `store/`, or `.7z`) has its own folder field, chosen before Export and kept for the session; the file is `{display_name}.zip` / `{display_name}.7z` in that folder, with characters a system refuses replaced in the file name only; a file already using that name is never replaced: the export gets the next free number (`{display_name} 2.zip`) and the toast names it; source `display_name` unchanged | P1 |
+| RF-15d | **Export:** each option (`.zip` of encrypted `store/`, `.7z`, or plain-text `.zip`) has its own folder field, chosen before Export and kept for the session; the file is `{display_name}.zip` / `{display_name}.7z` in that folder, with characters a system refuses replaced in the file name only; a file already using that name is never replaced: the export gets the next free number (`{display_name} 2.zip`) and the toast names it; source `display_name` unchanged | P1 |
+| RF-15e | **Plain-text `.zip` export:** a third export option below `.7z`, marked Insecure on a red card that explains the file is readable by anyone who gets it. It asks for the vault password and a folder, and has the same progress and Stop as the other exports. The vault's files sit at the zip's root, so unpacking gives a folder named after the vault with the files directly inside. A stop, a failure, a timeout, or the launch after a crash wipes the unfinished file. Purpose: a person who has the password can always take their data out | P1 |
+| RF-15f | **`.upriv-config/`:** a `.7z` and a plain-text `.zip` may carry the vault's settings (`config.toml`) and file manager layout (`workspace.json`) in this folder at their root, with a `README.md`. Each has an export toggle, on by default. The create wizard has a matching switch, on by default, and applies what the file carries; a new vault never keeps the folder. A `.zip` is read when it is picked. A `.7z` is read when its password test passes, so the input fields it can fill stay locked until then, with a notice, while their steps and sections stay open. Importing works with any of this missing | P1 |
 | RF-15e | **Import `.zip` / `.7z` → new vault:** stem → `display_name` in the create wizard; an invalid stem is pre-filled with a valid suggestion (`suggestValidDisplayName`), and a name already in use gets ` 2`, ` 3`, … (`suggestedImportDisplayName`); the user can edit it before Create | P0 |
 | RF-15f | **`[vault] order`:** optional non-negative integer in `config.toml`; vault list sorted ascending by `order`, tie-break by `display_name`; editable in vault settings and via drag-and-drop on list | P1 |
 | RF-16 | Create/import picks a free `id` (`-2`, `-3`, …); core refuses a create whose `vaults/<id>/` already exists (`vault_already_exists`) | P0 |
@@ -263,8 +267,12 @@ encrypted_dir / upriv_plain:
 | RF-39 | Auto-close uses the same close as a user close: flush `store/`, unmount, drop the session. No `.7z` pack | P0 |
 | RF-40 | Global default: `enabled = false` if section missing | P0 |
 | RF-41 | `upriv_plain` close and discard overwrite the plaintext folder before delete | P1 |
-| RF-42 | Plaintext close always does that overwrite. Pass count is a hidden default of 1, not a screen | P1 |
+| RF-42 | Plaintext close does that overwrite; only Close now (RF-42b) skips it. Pass count is a hidden default of 1, not a screen | P1 |
+| RF-42b | **Close now** closes one open vault with no backup, from More options below Note, on desktop and mobile. `store/` is sealed, the keys dropped, and the mount released. An `upriv_plain` folder gets no closing pass and no overwrite: changes the vault has not saved are lost, and file bytes stay on the disk until it reuses the space. It asks first (global setting, on by default, with Don't ask again); an unsaved editor tab always asks. A close already running or waiting offers it in the same menu: what is left of the final sync, the backup, and the overwrite stops, and the seal finishes. The quit dialog offers the same close for every open vault, limited to 30 s | P1 |
 | RF-43 | Wipe also on recovery **Remove the folder** (`upriv_plain`) | P1 |
+| RF-43b | **Only files I choose** (`[storage] plain_files`, default on) on the plain-text option, in create and vault settings, changes only while the vault is closed or in recovery. On: the folder starts empty on every open; **Send to folder** and **Remove from folder** in the file manager move a file or a whole folder in and out, and each explorer row shows what the folder holds. Off: every open writes the whole vault there. Other apps see only what is in the folder. | P1 |
+| RF-43c | The file manager explorer finds files and folders by name at any depth, in both storage modes, on desktop and mobile. The search button, the fifth in the explorer toolbar, opens and closes the search bar. The bar starts closed. Each vault's layout remembers the bar and the search text, also across closing and reopening the vault. The search keeps filtering the explorer while the bar is closed, and the button says so. Folders in the results collapse and open for that search only; that is never saved and leaves the vault's expanded folders as they were. | P2 |
+| RF-43d | A file the viewer cannot hold (over the preview cap, or more than free RAM holds) opens from the disk instead on `upriv_plain`: when the person opens it, a vault of chosen files sends it to the folder, and the notice offers **Open in file manager**. A tab restored with the vault writes nothing until the person presses **Send to folder**. An `encrypted_dir` vault never writes plaintext for this; with a mounted folder the notice offers that folder. | P2 |
 | RF-44 | Document limit: SSD/flash **do not** guarantee physical wipe in exception mode | P1 |
 | RF-45 | (`encrypted_dir`) Flush / export `.7z` using **logical content stream** (do not pack `.enc` blobs; no plaintext temp) | P0 |
 | RF-46 | (`encrypted_dir`) After reboot: reopen requires password; data preserved in `store/` | P0 |
@@ -280,7 +288,7 @@ encrypted_dir / upriv_plain:
 | RF-53c | Lock UI is **`action.lock` / `action.close` only** | P0 |
 | RF-54 | **Lockfile** `runtime/<id>.lock` on vault open; refuse second open in another process/PC | P1 |
 | RF-55 | Crypto primitives: Argon2id + AEAD (e.g. XChaCha20-Poly1305); protected names/paths | P0 |
-| RF-56 | **Backups** UI per vault: list `backups/<stamp>-<id>.zip`, metadata, download (one zip, or one zip of several), delete, **create new vault from backup** (does not replace the source vault) | P1 |
+| RF-56 | **Backups** UI per vault: list `backups/<stamp>-<id>.zip`, metadata, export into a chosen folder with visible progress and a stop (one zip, or one zip of several), delete, **create new vault from backup** (does not replace the source vault) | P1 |
 | RF-57 | **Real states:** `open` only with active session; `closed` = `store/` at rest | P0 |
 
 ### 3.4 Rest, identity, lock, backups
@@ -301,7 +309,7 @@ At rest the vault body is **`store/`** (`header/vault.header`, `header/vault.hea
 
 **After OK close:** session keys dropped; `store/` is the rest body.
 
-**Backups:** `backups/<stamp>-<id>.zip` is a **Stored zip of `store/`** (no zip password). Create-from-backup unpacks that snapshot into a **new** vault — never in-place restore. Download copies one `.zip`, or bundles several snapshot zips into one file.
+**Backups:** `backups/<stamp>-<id>.zip` is a **Stored zip of `store/`** (no zip password). Create-from-backup unpacks that snapshot into a **new** vault — never in-place restore. Export copies one `.zip` into a chosen folder, or bundles several snapshot zips into one file.
 
 **Export** is a separate action (files stay **outside** `.upriv`): `{display_name}.zip` of `store/` (Recommended) or `{display_name}.7z` (Plan B).
 
@@ -315,7 +323,7 @@ At rest the vault body is **`store/`** (`header/vault.header`, `header/vault.hea
 
 ### 3.3.1 Threat: sensitive traces on disk
 
-While a vault is **open**, plaintext exists only in **session RAM** (desktop: FUSE/WinFsp; mobile: in-app file manager). On ordinary disk, default mode `encrypted_dir` persists **ciphertext in `store/`** only. Close flushes the session into `store/` (lock = close). Export `.zip` of `store/` or portable `.7z` is a **separate** user action; the exported file is not kept in the data folder.
+While a vault is **open**, plaintext exists only in **session RAM** (desktop: FUSE/WinFsp; mobile: in-app file manager). On ordinary disk, default mode `encrypted_dir` persists **ciphertext in `store/`** only. Close flushes the session into `store/` (lock = close). Export `.zip` of `store/`, portable `.7z`, or plain-text `.zip` is a **separate** user action; the exported file is not kept in the data folder.
 
 | Mitigated in v1 | Outside app control |
 |----------------|-------------------------|
@@ -324,7 +332,7 @@ While a vault is **open**, plaintext exists only in **session RAM** (desktop: FU
 | File and folder names encrypted in the store (AES-SIV index; opaque `data/` blobs — forensic tools cannot map blobs to logical paths without the password) | Registry metadata still visible (`display_name`, vault folder id) |
 | Password stays in session RAM and is never written to disk | Compromised host (keylogger) |
 | Export streams logical content or copies ciphertext; never stages a decrypted tree | Last write if power loss during write |
-| Close of `upriv_plain` overwrites the plaintext folder, then removes it | Old encrypted versions on SSD |
+| Close of `upriv_plain` overwrites the plaintext folder, then removes it | Old encrypted versions on SSD; file bytes after the person chooses Close now (RF-42b) |
 | Swap minimization (RF-51) | 100% anti-swap on all OSes (platform limitation) |
 
 **Encrypted traces on SSD:** do not expose content without the password; old ciphertext versions may remain until rotation — acceptable for confidentiality, document in UI.
@@ -452,7 +460,7 @@ Opened by **`action.settings`** on vault row.
 
 - Edits vault `config.toml` via a **subset** of sections (RF-UI-04, SDD §3.2.3a). **Explicit Save** when dirty (with confirm); closing with unsaved edits prompts **discard all and close**.
 - **`[vault]` in UI:** `display_name`, optional **`order`** (same as drag-and-drop reorder), optional **`note`**, optional **`password_hint`**. **Not shown:** `id` (folder slug; migrates when display name normalizes).
-- **`[security]` in UI:** nothing. Change password is the Password area (vault closed). Plaintext close always overwrites the open folder. **Not shown:** `wipe_passes`, `wipe_pattern`.
+- **`[security]` in UI:** nothing. Change password is the Password area (vault closed). Plaintext close overwrites the open folder; only Close now skips that (RF-42b). **Not shown:** `wipe_passes`, `wipe_pattern`.
 - **`[seven_zip]` in UI:** compression preset (**none / low / medium / high**) + `encrypt_file_names` (`method`/`solid` = defaults; level derived from preset).
 - **`modal.settings.danger_zone` section:** **`modal.settings.delete_vault`** — confirmation with text field; user must **type vault name** (`id`) to confirm deletion (removes `.7z`, store, config entries, and backups per policy).
 
@@ -654,7 +662,7 @@ Suggested Rust modules: `upriv_core::store`, `::session`, `::plain`.
 | Close vault | Flush session into `store/` → unmount → zeroize RAM |
 | `open` | Active `session` (runtime) |
 | `closed` | `store/` at rest |
-| Export | Separate action: `.zip` of `store/` (Recommended) or `.7z` |
+| Export | Separate action: `.zip` of `store/` (Recommended), `.7z`, or plain-text `.zip` (Insecure) |
 | SAF | Storage Access Framework (Android) |
 | Vault URI | `content://` reference to vault root on Android |
 

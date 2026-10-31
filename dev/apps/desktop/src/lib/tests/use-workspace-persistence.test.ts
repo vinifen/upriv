@@ -5,6 +5,7 @@ import {
   createDefaultWorkspaceState,
   serializeWorkspaceSnapshot,
   workspaceSnapshotFromState,
+  type FileTreeNode,
   type VaultFileSystemService,
   type VaultWorkspaceAction,
   type VaultWorkspaceState,
@@ -37,6 +38,9 @@ function stubFs(overrides: Partial<VaultFileSystemService> = {}): VaultFileSyste
     osPath: async () => {
       throw new Error("osPath not stubbed");
     },
+    sendToFolder: async () => 0,
+    removeFromFolder: async () => ({ removed: 0, kept: 0 }),
+    previewFits: async () => true,
     languageFromPath: () => "text",
     ...overrides,
   };
@@ -78,7 +82,9 @@ describe("useWorkspacePersistence", () => {
       }),
     });
     const dispatch = vi.fn();
-    renderHook(() => useWorkspacePersistence({ vaultId: "notes", workspace: empty, fs, dispatch }));
+    renderHook(() =>
+      useWorkspacePersistence({ vaultId: "notes", workspace: empty, tree: null, fs, dispatch }),
+    );
 
     await waitFor(() => {
       expect(hydrateCalls(dispatch)).toHaveLength(1);
@@ -114,6 +120,7 @@ describe("useWorkspacePersistence", () => {
         useWorkspacePersistence({
           vaultId: "notes",
           workspace: props.workspace,
+          tree: null,
           fs,
           dispatch,
         }),
@@ -165,6 +172,7 @@ describe("useWorkspacePersistence", () => {
         useWorkspacePersistence({
           vaultId: "teste",
           workspace: props.workspace,
+          tree: null,
           fs,
           dispatch: props.dispatch,
         }),
@@ -201,6 +209,7 @@ describe("useWorkspacePersistence", () => {
         useWorkspacePersistence({
           vaultId: "notes",
           workspace: props.workspace,
+          tree: null,
           fs,
           dispatch: vi.fn(),
         }),
@@ -238,6 +247,7 @@ describe("useWorkspacePersistence", () => {
         useWorkspacePersistence({
           vaultId: "notes",
           workspace: props.workspace,
+          tree: null,
           fs,
           dispatch: vi.fn(),
         }),
@@ -276,6 +286,7 @@ describe("useWorkspacePersistence", () => {
         useWorkspacePersistence({
           vaultId: "notes",
           workspace: props.workspace,
+          tree: null,
           fs,
           dispatch: vi.fn(),
         }),
@@ -309,6 +320,12 @@ describe("useWorkspacePersistence", () => {
     ],
     ["a file's word wrap", { fileStates: { "/a.md": { wordWrap: false } } }, '"wordWrap": false'],
     ["the explorer split", { treeSplitPercent: 35 }, '"treeSplitPercent": 35'],
+    ["the explorer search bar", { explorerSearchOpen: true }, '"explorerSearchOpen": true'],
+    [
+      "the explorer search text",
+      { explorerSearchQuery: "report" },
+      '"explorerSearchQuery": "report"',
+    ],
   ])("writes %s when it changes", async (_label, change, expected) => {
     const setFileContent = vi.fn<VaultFileSystemService["setFileContent"]>(async () => 1);
     const getFileContent = vi.fn(async () => null);
@@ -319,6 +336,7 @@ describe("useWorkspacePersistence", () => {
         useWorkspacePersistence({
           vaultId: "notes",
           workspace: props.workspace,
+          tree: null,
           fs,
           dispatch: vi.fn(),
         }),
@@ -335,5 +353,77 @@ describe("useWorkspacePersistence", () => {
     await waitFor(() => expect(setFileContent).toHaveBeenCalled());
     const written = setFileContent.mock.calls.at(-1)?.[2] ?? "";
     expect(written).toContain(expected);
+  });
+
+  it("checks a write against the loaded tree without listing the vault", async () => {
+    const setFileContent = vi.fn<VaultFileSystemService["setFileContent"]>(async () => 1);
+    const getFileContent = vi.fn(async () => null);
+    const getFileTree = vi.fn<VaultFileSystemService["getFileTree"]>();
+    const fs = stubFs({ setFileContent, getFileContent, getFileTree });
+    const tree: FileTreeNode = {
+      name: "",
+      type: "folder",
+      children: [{ name: "b.md", type: "file" }],
+    };
+    const empty = createDefaultWorkspaceState();
+    const { rerender } = renderHook(
+      (props: { workspace: VaultWorkspaceState }) =>
+        useWorkspacePersistence({
+          vaultId: "notes",
+          workspace: props.workspace,
+          tree,
+          fs,
+          dispatch: vi.fn(),
+        }),
+      { initialProps: { workspace: empty } },
+    );
+    await waitFor(() => expect(getFileContent).toHaveBeenCalled());
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    await changePastWriteDelay(() =>
+      rerender({ workspace: { ...empty, openTabs: ["/b.md"], activeTabPath: "/b.md" } }),
+    );
+    await waitFor(() => expect(setFileContent).toHaveBeenCalled());
+    expect(setFileContent.mock.calls.at(-1)?.[2]).toContain('"/b.md"');
+    expect(getFileTree).not.toHaveBeenCalled();
+  });
+
+  it("writes again once a tab opened before its tree arrived is in the tree", async () => {
+    const setFileContent = vi.fn<VaultFileSystemService["setFileContent"]>(async () => 1);
+    const getFileContent = vi.fn(async () => null);
+    const fs = stubFs({ setFileContent, getFileContent });
+    const before: FileTreeNode = { name: "", type: "folder", children: [] };
+    const after: FileTreeNode = {
+      name: "",
+      type: "folder",
+      children: [{ name: "new.md", type: "file" }],
+    };
+    const opened = {
+      ...createDefaultWorkspaceState(),
+      openTabs: ["/new.md"],
+      activeTabPath: "/new.md",
+    };
+    const { rerender } = renderHook(
+      (props: { tree: FileTreeNode }) =>
+        useWorkspacePersistence({
+          vaultId: "notes",
+          workspace: opened,
+          tree: props.tree,
+          fs,
+          dispatch: vi.fn(),
+        }),
+      { initialProps: { tree: before } },
+    );
+    await waitFor(() => expect(getFileContent).toHaveBeenCalled());
+    await act(async () => {
+      await Promise.resolve();
+    });
+    setFileContent.mockClear();
+
+    await changePastWriteDelay(() => rerender({ tree: after }));
+    await waitFor(() => expect(setFileContent).toHaveBeenCalled());
+    expect(setFileContent.mock.calls.at(-1)?.[2]).toContain('"/new.md"');
   });
 });

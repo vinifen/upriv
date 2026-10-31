@@ -17,6 +17,18 @@ pub enum VaultStorageMode {
     UprivPlain,
 }
 
+/// `[storage] plain_files` (TS `PlainFiles`): what an `upriv_plain` vault puts
+/// in its folder while open. The in-app file manager always holds every file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum VaultPlainFiles {
+    /// Only what the person sends from the file manager. The folder starts empty.
+    #[default]
+    Chosen,
+    /// Every file, written at open.
+    Whole,
+}
+
 /// `[backup] mode`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -65,6 +77,8 @@ pub struct VaultIdentitySection {
 pub struct VaultStorageSection {
     #[serde(default)]
     pub mode: VaultStorageMode,
+    #[serde(default)]
+    pub plain_files: VaultPlainFiles,
 }
 
 pub use crate::paths::VaultMountSection;

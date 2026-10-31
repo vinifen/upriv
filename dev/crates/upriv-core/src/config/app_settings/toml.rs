@@ -62,6 +62,8 @@ pub(super) struct UiToml {
     pub(super) lifecycle_open_file_manager_on_open: bool,
     /// Sleep and phone freeze do not count as inactivity. Default false.
     pub(super) lifecycle_keep_open_on_wake: bool,
+    /// Close now asks first. Default true.
+    pub(super) lifecycle_confirm_close_now: bool,
 }
 
 impl Default for UiToml {
@@ -88,6 +90,7 @@ impl Default for UiToml {
             lifecycle_close_modal_on_submit: false,
             lifecycle_open_file_manager_on_open: false,
             lifecycle_keep_open_on_wake: false,
+            lifecycle_confirm_close_now: true,
         }
     }
 }
@@ -115,6 +118,7 @@ fn ui_toml_from_settings(ui: &UiSettings) -> UiToml {
         lifecycle_close_modal_on_submit: ui.lifecycle_close_modal_on_submit,
         lifecycle_open_file_manager_on_open: ui.lifecycle_open_file_manager_on_open,
         lifecycle_keep_open_on_wake: ui.lifecycle_keep_open_on_wake,
+        lifecycle_confirm_close_now: ui.lifecycle_confirm_close_now,
     }
 }
 
@@ -157,6 +161,7 @@ pub(super) fn ui_settings_from_toml(ui: &UiToml) -> UiSettings {
         lifecycle_close_modal_on_submit: ui.lifecycle_close_modal_on_submit,
         lifecycle_open_file_manager_on_open: ui.lifecycle_open_file_manager_on_open,
         lifecycle_keep_open_on_wake: ui.lifecycle_keep_open_on_wake,
+        lifecycle_confirm_close_now: ui.lifecycle_confirm_close_now,
     }
 }
 
@@ -428,10 +433,11 @@ last_opened_vault = "kept"
         assert!(settings.ui.vault_list_show_group_settings_button);
         assert!(settings.ui.vault_list_show_drag);
         assert!(settings.ui.vault_list_allow_drag_into_group);
-        // Omitted lifecycle prefs default false.
+        // Omitted lifecycle prefs default false, except the Close now question.
         assert!(!settings.ui.lifecycle_close_modal_on_submit);
         assert!(!settings.ui.lifecycle_open_file_manager_on_open);
         assert!(!settings.ui.lifecycle_keep_open_on_wake);
+        assert!(settings.ui.lifecycle_confirm_close_now);
         assert_eq!(settings.logging.level, "warn");
         assert_eq!(settings.logging.entries_per_file, 500);
         // Vault-root mode/path never come from TOML.
@@ -451,15 +457,18 @@ theme = "dark"
 lifecycle_close_modal_on_submit = true
 lifecycle_open_file_manager_on_open = true
 lifecycle_keep_open_on_wake = true
+lifecycle_confirm_close_now = false
 "#;
         let settings = parse_settings_toml_str(raw).unwrap();
         assert!(settings.ui.lifecycle_close_modal_on_submit);
         assert!(settings.ui.lifecycle_open_file_manager_on_open);
         assert!(settings.ui.lifecycle_keep_open_on_wake);
+        assert!(!settings.ui.lifecycle_confirm_close_now);
         let written = serialize_settings_toml_str(&settings).unwrap();
         assert!(written.contains("lifecycle_close_modal_on_submit = true"));
         assert!(written.contains("lifecycle_open_file_manager_on_open = true"));
         assert!(written.contains("lifecycle_keep_open_on_wake = true"));
+        assert!(written.contains("lifecycle_confirm_close_now = false"));
     }
 
     #[test]

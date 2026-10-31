@@ -50,20 +50,21 @@ pub fn is_argon2_bound_method(method: &str, _params: &Value) -> bool {
     matches!(method, "vault_open" | "vault_create" | "vault_ingest_open")
 }
 
-/// Close, delete, backup download, and plaintext-folder work that waits for a
-/// sync pass. Own worker so a lock is not stuck behind a multi-minute import,
-/// export, or rewrap, and stdin is not stuck behind a pass.
+/// Close, delete, and plaintext-folder work that waits for a sync pass. Own
+/// worker so a lock is not stuck behind a multi-minute import, export, or
+/// rewrap, and stdin is not stuck behind a pass.
 pub fn is_lifecycle_io_method(method: &str) -> bool {
     matches!(
         method,
         "vault_close"
             | "vault_delete"
-            | "backup_get"
             | "vault_discard_import"
             | "vault_plain_confirm"
             | "vault_plain_remove"
             | "vault_plain_sync"
             | "vault_plain_deletions"
+            | "vault_plain_send"
+            | "vault_plain_unsend"
     )
 }
 
@@ -74,8 +75,9 @@ pub fn is_rewrap_io_method(method: &str) -> bool {
     matches!(method, "vault_change_password" | "vault_change_kdf")
 }
 
-/// Zip and `.7z` import, portable export, and a save of the closed `store/`.
-/// File imports use [`is_import_io_method`] so they can run beside each other.
+/// Zip and `.7z` import, portable export, the wipe of what a crashed plain-text
+/// export left, a save of the closed `store/`, and a backup export. File imports
+/// use [`is_import_io_method`] so they can run beside each other.
 pub fn is_pack_io_method(method: &str) -> bool {
     matches!(
         method,
@@ -84,7 +86,9 @@ pub fn is_pack_io_method(method: &str) -> bool {
             | "vault_import_files_zip"
             | "vault_import_os_path"
             | "vault_export"
+            | "vault_plain_export_sweep"
             | "backup_save"
+            | "backup_export"
     )
 }
 
@@ -212,7 +216,6 @@ mod tests {
             heavy_lane("vault_change_password", &empty)
         );
         assert!(is_lifecycle_io_method("vault_delete"));
-        assert!(is_lifecycle_io_method("backup_get"));
         assert_eq!(
             heavy_lane("vault_close", &empty),
             Some(HeavyLane::Lifecycle)
@@ -235,6 +238,7 @@ mod tests {
             Some(HeavyLane::Pack)
         );
         assert_eq!(heavy_lane("backup_save", &empty), Some(HeavyLane::Pack));
+        assert_eq!(heavy_lane("backup_export", &empty), Some(HeavyLane::Pack));
         assert_eq!(
             heavy_lane("data_folder_export", &empty),
             Some(HeavyLane::DataFolder)
@@ -291,7 +295,7 @@ mod tests {
             let _ = parts.next();
         }
         let expected = [
-            "backup_get",
+            "backup_export",
             "backup_save",
             "data_folder_export",
             "vault_change_kdf",
@@ -310,8 +314,11 @@ mod tests {
             "vault_open",
             "vault_plain_confirm",
             "vault_plain_deletions",
+            "vault_plain_export_sweep",
             "vault_plain_remove",
+            "vault_plain_send",
             "vault_plain_sync",
+            "vault_plain_unsend",
         ];
         let expected: std::collections::BTreeSet<_> = expected
             .iter()

@@ -76,7 +76,7 @@ export interface UseCreateVaultWizardOptions {
     password: string,
     importFile: { path: string; fileName: string; kind?: "file" | "backup" },
   ) => Promise<{ ok: boolean; embedded: EmbeddedVaultSettings | null }>;
-  /** Classify a `.zip` and load store settings. A `.7z` does not carry settings. */
+  /** Classify a `.zip` and load the settings it carries. A `.7z` waits for its password. */
   readImportPackageSettings?: (importFile: {
     path: string;
     fileName: string;
@@ -211,8 +211,9 @@ export function useCreateVaultWizard<
           type: "zipClassified",
           zipLayout: classified.zipLayout,
           rejected: false,
+          carriesWorkspace: classified.carriesWorkspace,
         });
-        if (classified.zipLayout === "store" && classified.embedded) {
+        if (classified.embedded) {
           dispatch({
             type: "embeddedSettings",
             embedded: classified.embedded,
@@ -301,6 +302,7 @@ export function useCreateVaultWizard<
           type: "embeddedSettings",
           embedded,
           snapshot: settingsSnapshot.current ?? draftRef.current,
+          existingDisplayNames: existingDisplayNamesRef.current,
         });
       }
       // A timed-out probe can still finish in the daemon. Drop this generation

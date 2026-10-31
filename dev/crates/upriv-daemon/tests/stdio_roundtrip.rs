@@ -240,6 +240,148 @@ fn stdio_app_shutdown_exits_cleanly() {
     }
 }
 
+/// A daemon on `root` with the vault `left-open` open and one file written.
+fn daemon_with_open_vault(
+    root: &std::path::Path,
+) -> (
+    std::process::Child,
+    std::process::ChildStdin,
+    std::io::BufReader<std::process::ChildStdout>,
+    std::process::ChildStderr,
+) {
+    upriv_core::initialize_vault_root(root).expect("initialize vault root");
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_upriv-daemon"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .env("UPRIV_DEFAULT_ROOT_ANCHOR", root)
+        .env("UPRIV_DISTRIBUTION", "portable")
+        .spawn()
+        .expect("spawn upriv-daemon");
+    let mut stdout = std::io::BufReader::new(child.stdout.take().expect("stdout"));
+    let mut stdin = child.stdin.take().expect("stdin");
+    let stderr = child.stderr.take().expect("stderr");
+
+    let _ready = read_line(&mut stdout);
+    let _event = read_line(&mut stdout);
+
+    let requests = [
+        serde_json::json!({
+            "type": "request",
+            "id": 1,
+            "method": "vault_create",
+            "params": {
+                "password": "pass-word-ok",
+                "unlockPreset": "32mib",
+                "settings": {
+                    "vault": { "id": "left-open", "display_name": "Left Open", "order": 1 },
+                    "storage": { "mode": "encrypted_dir" }
+                }
+            }
+        }),
+        serde_json::json!({
+            "type": "request",
+            "id": 2,
+            "method": "vault_open",
+            "params": { "id": "left-open", "password": "pass-word-ok" }
+        }),
+        serde_json::json!({
+            "type": "request",
+            "id": 3,
+            "method": "vault_fs_write",
+            "params": { "id": "left-open", "path": "/note.txt", "contentB64": "aGVsbG8=" }
+        }),
+    ];
+    for request in requests {
+        writeln!(stdin, "{request}").expect("write request");
+        stdin.flush().expect("flush stdin");
+        let response: serde_json::Value =
+            serde_json::from_str(&read_line(&mut stdout)).expect("parse response");
+        assert_eq!(response["ok"], true, "{response}");
+    }
+    (child, stdin, stdout, stderr)
+}
+
+fn wait_for_exit(child: &mut std::process::Child) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("poll daemon") {
+            break status;
+        }
+        assert!(std::time::Instant::now() < deadline, "daemon did not exit");
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    assert!(status.success());
+}
+
+/// The vault is closed on disk. Returns how many backup zips it has.
+fn closed_vault_backups(root: &std::path::Path) -> usize {
+    let upriv = root.join(".upriv");
+    assert!(
+        !upriv.join("runtime/left-open.lock").exists(),
+        "the vault lock must be released"
+    );
+    let state = std::fs::read_to_string(upriv.join("state.json")).expect("read state");
+    assert!(!state.contains("left-open"), "still recorded open: {state}");
+    std::fs::read_dir(upriv.join("vaults/left-open/backups"))
+        .map(|backups| {
+            backups
+                .flatten()
+                .filter(|entry| entry.file_name().to_string_lossy().ends_with(".zip"))
+                .count()
+        })
+        .unwrap_or(0)
+}
+
+#[test]
+fn stdio_losing_the_app_closes_open_vaults() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let (mut child, stdin, stdout, stderr) = daemon_with_open_vault(root.path());
+
+    // Every pipe to the app closes at once, as when the app is killed.
+    drop(stdin);
+    drop(stdout);
+    drop(stderr);
+
+    wait_for_exit(&mut child);
+    assert_eq!(
+        closed_vault_backups(root.path()),
+        1,
+        "the close must write its backup"
+    );
+}
+
+#[test]
+fn stdio_close_now_quit_closes_open_vaults_with_no_backup() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let (mut child, mut stdin, mut stdout, _stderr) = daemon_with_open_vault(root.path());
+
+    writeln!(
+        stdin,
+        r#"{{"type":"request","id":8,"method":"vault_close_hurry","params":{{"id":"left-open"}}}}"#
+    )
+    .expect("write request");
+    stdin.flush().expect("flush stdin");
+    let response: serde_json::Value =
+        serde_json::from_str(&read_line(&mut stdout)).expect("parse response");
+    assert_eq!(response["ok"], true, "{response}");
+    assert_eq!(response["result"]["running"], false, "{response}");
+
+    writeln!(
+        stdin,
+        r#"{{"type":"request","id":9,"method":"app_shutdown","params":{{"now":true}}}}"#
+    )
+    .expect("write request");
+    stdin.flush().expect("flush stdin");
+    let response: serde_json::Value =
+        serde_json::from_str(&read_line(&mut stdout)).expect("parse response");
+    assert_eq!(response["ok"], true, "{response}");
+
+    wait_for_exit(&mut child);
+    assert_eq!(closed_vault_backups(root.path()), 0);
+}
+
 #[test]
 fn stdio_app_settings_save_rejects_flattened_shape() {
     let mut child = spawn_daemon();

@@ -92,6 +92,15 @@ pub(crate) fn ensure_no_leftover(root: &VaultRoot, vault_id: &str) -> Result<()>
     }
 }
 
+/// True while [`ensure_no_leftover`] would refuse this vault. Reads only: the
+/// vault list asks this, so a stale record stays until a write drops it.
+pub(crate) fn holds_leftover(root: &VaultRoot, vault_id: &str) -> bool {
+    matches!(
+        runtime_state::reachable_plain_record(root, vault_id),
+        Ok(Some(record)) if verified_marker(&record.folder(root), vault_id, &record.token).is_some()
+    )
+}
+
 /// Drop a recorded leftover whose folder is gone or no longer this vault's.
 fn forget_stale_record(root: &VaultRoot, vault_id: &str) -> Result<()> {
     let Some(record) = runtime_state::reachable_plain_record(root, vault_id)? else {
@@ -230,7 +239,7 @@ fn wipe_recorded(
 fn wipe_folder(folder: &Path, marker: &Marker, opts: &WipeOptions) -> Result<PlainWipe> {
     let swept = sweep::sweep_folder(folder, &[MARKER_NAME], opts, &mut |_, _| Visit::Wipe)?;
     let wipe = PlainWipe {
-        wiped: swept.wiped,
+        wiped: swept.removed,
         kept: swept.kept.len() as u32,
     };
     if wipe.kept == 0 {
@@ -339,6 +348,36 @@ mod tests {
     }
 
     #[test]
+    fn the_list_marks_a_leftover_until_it_is_removed() {
+        let listed = |root: &VaultRoot| {
+            crate::list_vaults(root)
+                .unwrap()
+                .into_iter()
+                .find(|vault| vault.id == "notes")
+                .unwrap()
+                .plain_leftover
+        };
+        let (tmp, root) = plain_root();
+        assert!(!listed(&root));
+        let folder = tmp.path().join("places").join("Notes");
+        leftover(&folder, "notes", "t1");
+        runtime_state::adopt_plain_record(&root, "notes", record(&folder, "t1")).unwrap();
+        assert!(listed(&root));
+
+        remove_plain_leftover(&root, "notes").unwrap();
+        assert!(!listed(&root));
+    }
+
+    #[test]
+    fn the_list_does_not_mark_a_folder_with_another_token() {
+        let (tmp, root) = plain_root();
+        let folder = tmp.path().join("places").join("Notes");
+        leftover(&folder, "notes", "someone-else");
+        runtime_state::adopt_plain_record(&root, "notes", record(&folder, "t1")).unwrap();
+        assert!(!holds_leftover(&root, "notes"));
+    }
+
+    #[test]
     fn a_folder_with_another_token_is_forgotten_not_wiped() {
         let (tmp, root) = plain_root();
         let folder = tmp.path().join("places").join("Notes");
@@ -390,6 +429,7 @@ mod tests {
             .mount
             .row_mut(crate::paths::WorkspaceSystem::current())
             .path = parent.display().to_string();
+        config.storage.plain_files = crate::config::vault_config::VaultPlainFiles::Whole;
         config
     }
 
@@ -426,6 +466,341 @@ mod tests {
             b"secret"
         );
         crate::close_vault(&root, "notes").unwrap();
+    }
+
+    /// A plaintext vault open in `<tmp>/places/Notes` with `hello.txt` saved.
+    fn open_plain_vault(tmp: &tempfile::TempDir, root: &VaultRoot) -> std::path::PathBuf {
+        let parent = tmp.path().join("places");
+        std::fs::create_dir_all(&parent).unwrap();
+        crate::create_vault(
+            root,
+            own_folder_config("notes", "Notes", &parent, true),
+            b"pass-word-ok",
+            KdfUnlockPreset::M32,
+        )
+        .unwrap();
+        let folder = parent.join("Notes");
+        crate::open_vault(root, "notes", b"pass-word-ok").unwrap();
+        crate::confirm_plain_destination(root, "notes", &folder).unwrap();
+        crate::vault::fs_write_file(root, "notes", "/hello.txt", b"secret").unwrap();
+        crate::plain_sync(root, "notes").unwrap();
+        folder
+    }
+
+    /// A plaintext vault of chosen files, open, with two files in `docs/` and
+    /// one at the top, none of them sent.
+    fn open_chosen_vault(tmp: &tempfile::TempDir, root: &VaultRoot) -> std::path::PathBuf {
+        let parent = tmp.path().join("places");
+        std::fs::create_dir_all(&parent).unwrap();
+        let mut config = own_folder_config("notes", "Notes", &parent, true);
+        config.storage.plain_files = crate::config::vault_config::VaultPlainFiles::Chosen;
+        crate::create_vault(root, config, b"pass-word-ok", KdfUnlockPreset::M32).unwrap();
+        let folder = parent.join("Notes");
+        crate::open_vault(root, "notes", b"pass-word-ok").unwrap();
+        crate::confirm_plain_destination(root, "notes", &folder).unwrap();
+        crate::vault::fs_mkdir(root, "notes", "/docs").unwrap();
+        crate::vault::fs_write_file(root, "notes", "/docs/a.txt", b"first").unwrap();
+        crate::vault::fs_write_file(root, "notes", "/docs/b.txt", b"second").unwrap();
+        crate::vault::fs_write_file(root, "notes", "/top.txt", b"third").unwrap();
+        crate::plain_sync(root, "notes").unwrap();
+        folder
+    }
+
+    fn send(root: &VaultRoot, paths: &[&str]) -> u32 {
+        let paths: Vec<String> = paths.iter().map(|path| path.to_string()).collect();
+        let queued = crate::plain_send(root, "notes", &paths).unwrap();
+        crate::plain_sync(root, "notes").unwrap();
+        queued
+    }
+
+    fn folder_files(folder: &Path) -> Vec<String> {
+        let mut found = Vec::new();
+        let mut pending = vec![folder.to_path_buf()];
+        while let Some(dir) = pending.pop() {
+            for entry in std::fs::read_dir(dir).unwrap().flatten() {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if entry.path().is_dir() {
+                    pending.push(entry.path());
+                } else if !name.starts_with('.') {
+                    found.push(name);
+                }
+            }
+        }
+        found.sort();
+        found
+    }
+
+    #[test]
+    fn chosen_files_leave_the_folder_empty_until_one_is_sent() {
+        let (tmp, root) = vault_root_with(&[]);
+        let folder = open_chosen_vault(&tmp, &root);
+        assert!(folder_files(&folder).is_empty());
+        assert!(!folder.join("docs").exists());
+
+        assert_eq!(send(&root, &["/docs/a.txt"]), 1);
+        assert_eq!(folder_files(&folder), ["a.txt"]);
+        assert_eq!(std::fs::read(folder.join("docs/a.txt")).unwrap(), b"first");
+        crate::close_vault(&root, "notes").unwrap();
+        assert!(!folder.exists());
+    }
+
+    #[test]
+    fn sending_a_folder_sends_what_is_under_it() {
+        let (tmp, root) = vault_root_with(&[]);
+        let folder = open_chosen_vault(&tmp, &root);
+        assert_eq!(send(&root, &["/docs"]), 2);
+        assert_eq!(folder_files(&folder), ["a.txt", "b.txt"]);
+        crate::close_vault(&root, "notes").unwrap();
+    }
+
+    #[test]
+    fn the_tree_marks_only_what_the_folder_holds() {
+        let (tmp, root) = vault_root_with(&[]);
+        open_chosen_vault(&tmp, &root);
+        send(&root, &["/docs/a.txt"]);
+        let tree = crate::vault::fs_list_tree(&root, "notes").unwrap();
+        assert_eq!(tree.in_folder, Some(true));
+        let children = tree.children.unwrap();
+        let docs = children.iter().find(|node| node.name == "docs").unwrap();
+        assert_eq!(docs.in_folder, Some(true));
+        let inner = docs.children.as_ref().unwrap();
+        let marks: Vec<_> = inner.iter().map(|node| node.in_folder).collect();
+        assert_eq!(marks, [Some(true), Some(false)]);
+        let top = children.iter().find(|node| node.name == "top.txt").unwrap();
+        assert_eq!(top.in_folder, Some(false));
+        crate::close_vault(&root, "notes").unwrap();
+    }
+
+    #[test]
+    fn a_whole_vault_tree_carries_no_marks() {
+        let (tmp, root) = vault_root_with(&[]);
+        open_plain_vault(&tmp, &root);
+        let tree = crate::vault::fs_list_tree(&root, "notes").unwrap();
+        assert_eq!(tree.in_folder, None);
+        crate::close_vault(&root, "notes").unwrap();
+    }
+
+    #[test]
+    fn the_app_edits_and_deletes_files_never_sent() {
+        let (tmp, root) = vault_root_with(&[]);
+        let folder = open_chosen_vault(&tmp, &root);
+        crate::vault::fs_write_file(&root, "notes", "/top.txt", b"edited").unwrap();
+        crate::vault::fs_delete(&root, "notes", "/docs/b.txt").unwrap();
+        crate::plain_sync(&root, "notes").unwrap();
+        assert!(folder_files(&folder).is_empty());
+        assert_eq!(
+            crate::vault::fs_read_file(&root, "notes", "/top.txt").unwrap(),
+            b"edited"
+        );
+        assert!(crate::vault::fs_read_file(&root, "notes", "/docs/b.txt").is_err());
+        crate::close_vault(&root, "notes").unwrap();
+    }
+
+    #[test]
+    fn deleting_a_sent_file_from_the_folder_deletes_it_from_the_vault() {
+        let (tmp, root) = vault_root_with(&[]);
+        let folder = open_chosen_vault(&tmp, &root);
+        send(&root, &["/docs/a.txt"]);
+        std::fs::remove_file(folder.join("docs/a.txt")).unwrap();
+        crate::plain_sync(&root, "notes").unwrap();
+        assert!(crate::vault::fs_read_file(&root, "notes", "/docs/a.txt").is_err());
+        assert_eq!(
+            crate::vault::fs_read_file(&root, "notes", "/docs/b.txt").unwrap(),
+            b"second"
+        );
+        crate::close_vault(&root, "notes").unwrap();
+    }
+
+    #[test]
+    fn deleting_a_folder_from_disk_keeps_the_files_never_sent() {
+        let (tmp, root) = vault_root_with(&[]);
+        let folder = open_chosen_vault(&tmp, &root);
+        send(&root, &["/docs/a.txt"]);
+        std::fs::remove_dir_all(folder.join("docs")).unwrap();
+        crate::plain_sync(&root, "notes").unwrap();
+        crate::plain_sync(&root, "notes").unwrap();
+        assert!(crate::vault::fs_read_file(&root, "notes", "/docs/a.txt").is_err());
+        assert_eq!(
+            crate::vault::fs_read_file(&root, "notes", "/docs/b.txt").unwrap(),
+            b"second"
+        );
+        assert!(!folder.join("docs").exists());
+        crate::close_vault(&root, "notes").unwrap();
+    }
+
+    #[test]
+    fn a_file_another_app_adds_joins_the_vault() {
+        let (tmp, root) = vault_root_with(&[]);
+        let folder = open_chosen_vault(&tmp, &root);
+        std::fs::write(folder.join("new.txt"), b"from an app").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(2_100));
+        crate::plain_sync(&root, "notes").unwrap();
+        assert_eq!(
+            crate::vault::fs_read_file(&root, "notes", "/new.txt").unwrap(),
+            b"from an app"
+        );
+        crate::close_vault(&root, "notes").unwrap();
+    }
+
+    #[test]
+    fn removing_from_the_folder_keeps_the_file_in_the_vault() {
+        let (tmp, root) = vault_root_with(&[]);
+        let folder = open_chosen_vault(&tmp, &root);
+        send(&root, &["/docs/a.txt", "/top.txt"]);
+        let outcome = crate::plain_unsend(&root, "notes", &["/docs/a.txt".to_string()]).unwrap();
+        assert_eq!((outcome.removed, outcome.kept), (1, 0));
+        crate::plain_sync(&root, "notes").unwrap();
+        assert_eq!(folder_files(&folder), ["top.txt"]);
+        assert!(!folder.join("docs").exists());
+        assert_eq!(
+            crate::vault::fs_read_file(&root, "notes", "/docs/a.txt").unwrap(),
+            b"first"
+        );
+        crate::close_vault(&root, "notes").unwrap();
+    }
+
+    #[test]
+    fn a_sent_file_follows_a_rename_in_the_app() {
+        let (tmp, root) = vault_root_with(&[]);
+        let folder = open_chosen_vault(&tmp, &root);
+        send(&root, &["/top.txt"]);
+        crate::vault::fs_rename(&root, "notes", "/top.txt", "renamed.txt").unwrap();
+        let shown = crate::vault::fs_tree_revision(&root, "notes").unwrap();
+        crate::plain_sync(&root, "notes").unwrap();
+        assert_eq!(folder_files(&folder), ["renamed.txt"]);
+        // Same count of files, another name: the marks still have to move.
+        assert!(crate::vault::fs_tree_revision(&root, "notes").unwrap() > shown);
+        let tree = crate::vault::fs_list_tree(&root, "notes").unwrap();
+        let children = tree.children.unwrap();
+        let renamed = children.iter().find(|node| node.name == "renamed.txt");
+        assert_eq!(renamed.and_then(|node| node.in_folder), Some(true));
+        crate::close_vault(&root, "notes").unwrap();
+    }
+
+    #[test]
+    fn a_sent_folder_follows_a_rename_and_a_move_in_the_app() {
+        let (tmp, root) = vault_root_with(&[]);
+        let folder = open_chosen_vault(&tmp, &root);
+        send(&root, &["/docs"]);
+        crate::vault::fs_rename(&root, "notes", "/docs", "papers").unwrap();
+        crate::plain_sync(&root, "notes").unwrap();
+        assert!(folder.join("papers/a.txt").exists());
+        assert!(folder.join("papers/b.txt").exists());
+        assert!(!folder.join("docs").exists());
+
+        crate::vault::fs_mkdir(&root, "notes", "/shelf").unwrap();
+        crate::vault::fs_move(&root, "notes", "/papers/a.txt", "/shelf").unwrap();
+        crate::plain_sync(&root, "notes").unwrap();
+        assert!(folder.join("shelf/a.txt").exists());
+        assert!(!folder.join("papers/a.txt").exists());
+        assert!(folder.join("papers/b.txt").exists());
+        crate::close_vault(&root, "notes").unwrap();
+    }
+
+    #[test]
+    fn a_whole_vault_folder_keeps_every_file() {
+        let (tmp, root) = vault_root_with(&[]);
+        let folder = open_plain_vault(&tmp, &root);
+        let outcome = crate::plain_unsend(&root, "notes", &["/hello.txt".to_string()]).unwrap();
+        assert_eq!((outcome.removed, outcome.kept), (0, 0));
+        assert!(folder.join("hello.txt").exists());
+        crate::close_vault(&root, "notes").unwrap();
+    }
+
+    #[test]
+    fn a_file_changed_this_moment_stays_in_the_folder() {
+        let (tmp, root) = vault_root_with(&[]);
+        let folder = open_chosen_vault(&tmp, &root);
+        send(&root, &["/top.txt"]);
+        std::fs::write(folder.join("top.txt"), b"still being written").unwrap();
+        let outcome = crate::plain_unsend(&root, "notes", &["/top.txt".to_string()]).unwrap();
+        assert_eq!((outcome.removed, outcome.kept), (0, 1));
+        assert_eq!(
+            std::fs::read(folder.join("top.txt")).unwrap(),
+            b"still being written"
+        );
+        crate::close_vault(&root, "notes").unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_close_now_sends_the_same_files_again() {
+        use std::os::unix::fs::PermissionsExt;
+        let (tmp, root) = vault_root_with(&[]);
+        let folder = open_chosen_vault(&tmp, &root);
+        send(&root, &["/docs/a.txt"]);
+        let index = root.vault_dir("notes").unwrap().join("store/index");
+        std::fs::set_permissions(&index, std::fs::Permissions::from_mode(0o500)).unwrap();
+        let failed = crate::close_vault_now(&root, "notes");
+        std::fs::set_permissions(&index, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(failed.is_err());
+
+        crate::plain_sync(&root, "notes").unwrap();
+        assert_eq!(folder_files(&folder), ["a.txt"]);
+        // `a.txt` and the folder's helper file, once: what the failed close
+        // removed is not counted again.
+        let closed = crate::close_vault(&root, "notes").unwrap();
+        assert_eq!(closed.plain.unwrap().removed, 2);
+    }
+
+    #[test]
+    fn close_now_removes_the_folder_and_loses_what_the_last_pass_never_saw() {
+        let (tmp, root) = vault_root_with(&[]);
+        let folder = open_plain_vault(&tmp, &root);
+        std::fs::write(folder.join("hello.txt"), b"changed").unwrap();
+        std::fs::write(folder.join("unsaved.txt"), b"new").unwrap();
+
+        let closed = crate::close_vault_now(&root, "notes").unwrap();
+        let summary = closed.plain.unwrap();
+        assert_eq!((summary.saved, summary.kept), (0, 0));
+        assert!(!folder.exists());
+        assert!(plain_leftover(&root, "notes").unwrap().is_none());
+
+        crate::open_vault_confirmed(&root, "notes", b"pass-word-ok", &folder).unwrap();
+        assert_eq!(
+            crate::vault::fs_read_file(&root, "notes", "/hello.txt").unwrap(),
+            b"secret"
+        );
+        assert!(crate::vault::fs_read_file(&root, "notes", "/unsaved.txt").is_err());
+        crate::close_vault(&root, "notes").unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_close_now_that_cannot_seal_keeps_the_vault_open_and_refills_the_folder() {
+        use std::os::unix::fs::PermissionsExt;
+        let (tmp, root) = vault_root_with(&[]);
+        let folder = open_plain_vault(&tmp, &root);
+        let index = root.vault_dir("notes").unwrap().join("store/index");
+        std::fs::set_permissions(&index, std::fs::Permissions::from_mode(0o500)).unwrap();
+        let failed = crate::close_vault_now(&root, "notes");
+        std::fs::set_permissions(&index, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(failed.is_err());
+        assert!(!folder.join("hello.txt").exists());
+
+        crate::plain_sync(&root, "notes").unwrap();
+        assert_eq!(std::fs::read(folder.join("hello.txt")).unwrap(), b"secret");
+        assert_eq!(
+            crate::vault::fs_read_file(&root, "notes", "/hello.txt").unwrap(),
+            b"secret"
+        );
+        crate::close_vault(&root, "notes").unwrap();
+    }
+
+    #[test]
+    fn close_now_keeps_files_it_cannot_prove_are_the_sessions() {
+        let (tmp, root) = vault_root_with(&[]);
+        let folder = open_plain_vault(&tmp, &root);
+        std::fs::remove_file(folder.join(marker::MARKER_NAME)).unwrap();
+        std::fs::write(folder.join("theirs.txt"), b"not the vault's").unwrap();
+
+        let closed = crate::close_vault_now(&root, "notes").unwrap();
+        assert_eq!(closed.plain.unwrap().kept, 1);
+        assert!(!folder.join("hello.txt").exists());
+        assert_eq!(
+            std::fs::read(folder.join("theirs.txt")).unwrap(),
+            b"not the vault's"
+        );
     }
 
     #[cfg(unix)]

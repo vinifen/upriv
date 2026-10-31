@@ -7,6 +7,12 @@ export interface VaultBinaryByteSource {
   slice(start: number, end: number): Promise<Uint8Array>;
 }
 
+/** A file still being written elsewhere stays in the folder and counts as `kept`. */
+export interface FolderRemoval {
+  removed: number;
+  kept: number;
+}
+
 /**
  * Open-vault workspace file tree. Mutations persist into `store/` via the
  * daemon / FFI. Path-kind helpers stay sync (extension only).
@@ -16,6 +22,8 @@ export interface VaultFileSystemService {
   getTreeRevision(vaultId: string): Promise<number>;
   getFileTree(vaultId: string): Promise<FileTreeNode>;
   getFileContent(vaultId: string, path: string): Promise<VaultFileContent | null>;
+  /** Free RAM can hold a preview of this file. */
+  previewFits(vaultId: string, path: string): Promise<boolean>;
   isFileEditable(vaultId: string, path: string): boolean;
   isFileViewable(vaultId: string, path: string): boolean;
   isFileImage(vaultId: string, path: string): boolean;
@@ -53,5 +61,9 @@ export interface VaultFileSystemService {
    * `null` when this vault has no OS folder (switch off, macOS, or mobile).
    */
   osPath(vaultId: string, path: string): Promise<string | null>;
+  /** Put these paths in a plain-text vault's folder. Resolves to how many files go there. */
+  sendToFolder(vaultId: string, paths: string[]): Promise<number>;
+  /** Take these paths out of a plain-text vault's folder. The vault keeps them. */
+  removeFromFolder(vaultId: string, paths: string[]): Promise<FolderRemoval>;
   languageFromPath(path: string): VaultFileLanguage;
 }

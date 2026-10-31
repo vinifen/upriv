@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useId, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useBackupService } from "@/platform/services";
 import { Icon } from "@/components/icons";
 import { Button, IconButton, LoadingBudgetHint, Modal, Toast } from "@/components/ui";
@@ -6,6 +6,8 @@ import {
   backupDeleteConfirmPhrase,
   backupEntryFileName,
   backupEntryKey,
+  backupExportFilename,
+  backupExportRowKey,
   formatBytes,
   formatBackupDate,
   LOADING_BUDGET_MS,
@@ -15,10 +17,17 @@ import {
 } from "@upriv/shared";
 import { useTranslation } from "@/i18n";
 import { useErrorToast } from "@/hooks/useErrorToast";
+import type { ExportFolder } from "@/hooks/useExportFolder";
 import { useRevealWhen } from "@/hooks/useRevealWhen";
+import { useRowButtonsBelow } from "@/hooks/useRowButtonsBelow";
 import { settingsControlClass } from "@/components/settings";
-import { useLoadingBudget, useVaultBackups } from "@upriv/shared/react";
-import { pickBackupDownload } from "./downloadBackupsZip";
+import {
+  useBackupExportStep,
+  useLoadingBudget,
+  useVaultBackups,
+  type BackupExportJob,
+} from "@upriv/shared/react";
+import { BackupExportFolderStep, BackupExportProgress } from "./BackupExportPanel";
 
 const backupCheckboxClass =
   "h-4 w-4 shrink-0 rounded border-outline-variant/50 bg-surface-container-high text-accent focus:ring-accent/40";
@@ -36,8 +45,16 @@ interface VaultBackupsModalProps {
   listRefreshToken: number;
   onClose: () => void;
   onCreateVaultFromBackup?: (stamp: string, fileName: string, saved?: boolean) => void;
-  /** List-level toast so a download can finish after this modal closes. */
-  onDownloadNotice?: (message: string) => void;
+  /** The folder a backup export writes into, kept by the vault list for the next one. */
+  exportFolder: ExportFolder;
+  /** The backup export in flight, of any vault. Survives closing the modal. */
+  exportJob: BackupExportJob | null;
+  /** Export these backups of this vault into `destDir`. */
+  onExport: (keys: readonly string[], destDir: string) => void;
+  /** Another export is running, so this one cannot start. */
+  onExportBusy: () => void;
+  /** Ask the running export to stop (`job_cancel`); core removes its unfinished file. */
+  onStopExport: () => void;
 }
 
 export function VaultBackupsModal({
@@ -50,7 +67,11 @@ export function VaultBackupsModal({
   listRefreshToken,
   onClose,
   onCreateVaultFromBackup,
-  onDownloadNotice,
+  exportFolder,
+  exportJob,
+  onExport,
+  onExportBusy,
+  onStopExport,
 }: VaultBackupsModalProps) {
   const { locale, t } = useTranslation();
   const { toast, dismiss, showError, errorText } = useErrorToast();
@@ -79,6 +100,16 @@ export function VaultBackupsModal({
     () => backups.map((entry) => backupEntryKey(entry, vaultId ?? "")),
     [backups, vaultId],
   );
+  const exportStep = useBackupExportStep({
+    folder: exportFolder,
+    open,
+    listed: rowKeys,
+    busy: exportJob !== null,
+    onBusy: onExportBusy,
+    onStart: onExport,
+  });
+  const shownExport = exportJob !== null && exportJob.vaultId === vaultId ? exportJob : null;
+  const exportingKeys = useMemo(() => new Set(shownExport?.keys), [shownExport?.keys]);
   const allSelected = backups.length > 0 && rowKeys.every((key) => selected.has(key));
   const someSelected = selected.size > 0;
   /** A single backup has nothing to multi-select: row actions cover it. */
@@ -174,41 +205,50 @@ export function VaultBackupsModal({
     });
   };
 
-  const handleDownloadSelected = () => {
-    startDownload(backups.filter((entry) => selected.has(backupEntryKey(entry, vault.id))));
+  const exportStepHint = (keys: readonly string[]) =>
+    t("vault.export.dialog.folder_hint", {
+      filename: backupExportFilename(keys, vault.id),
+      numbered: backupExportFilename(keys, vault.id, 2),
+    });
+
+  /** The folder step of `keys`, or the export already running for them. */
+  const exportPanel = (keys: readonly string[] | null, running: BackupExportJob | null) => {
+    const title = (count: number) =>
+      count > 1 ? t("modal.backup.export_count", { count: String(count) }) : undefined;
+    if (running) {
+      return (
+        <BackupExportProgress
+          job={running}
+          title={title(running.keys.length)}
+          onStop={onStopExport}
+        />
+      );
+    }
+    if (!keys) return null;
+    return (
+      <BackupExportFolderStep
+        folder={exportFolder}
+        hint={exportStepHint(keys)}
+        title={title(keys.length)}
+        onConfirm={exportStep.confirm}
+        onCancel={exportStep.cancel}
+        onPicked={exportStep.picked}
+      />
+    );
   };
 
-  const handleDownloadOne = (key: string) => {
-    const entry = backups.find((item) => backupEntryKey(item, vault.id) === key);
-    if (!entry) return;
-    startDownload([entry]);
-  };
-
-  const startDownload = (targets: VaultBackupEntry[]) => {
-    if (!vault || targets.length === 0) return;
-    const vaultId = vault.id;
-    void pickBackupDownload(
-      targets,
-      vaultId,
-      t("modal.backup.download_zip_name", { id: vaultId }),
-      {
-        getBackupBytes: (entry) => backupService.getBackupBytes(vaultId, entry),
-        exportSnapshotsToPath: (stamps, destPath) =>
-          backupService.exportSnapshotsToPath(vaultId, stamps, destPath),
-      },
-    )
-      .then((picked) => {
-        if (picked === "cancelled") return;
-        onDownloadNotice?.(t("toast.backup_download_started"));
-        return picked.write().then(() => {
-          onDownloadNotice?.(t("toast.backup_download_saved"));
-        });
-      })
-      .catch((error) => {
-        if (onDownloadNotice) onDownloadNotice(t("toast.backup_download_failed"));
-        else showError(error, "toast.backup_download_failed");
-      });
-  };
+  const stepRowKey = exportStep.keys ? backupExportRowKey(exportStep.keys) : null;
+  const runningRowKey = shownExport ? backupExportRowKey(shownExport.keys) : null;
+  const rowExportPanel = (key: string) =>
+    exportPanel(
+      stepRowKey === key ? exportStep.keys : null,
+      runningRowKey === key ? shownExport : null,
+    );
+  const listExportPanel = exportPanel(
+    exportStep.keys && stepRowKey === null ? exportStep.keys : null,
+    shownExport && runningRowKey === null ? shownExport : null,
+  );
+  const selectedKeys = rowKeys.filter((key) => selected.has(key));
 
   return (
     <Modal
@@ -218,6 +258,7 @@ export function VaultBackupsModal({
       contextTitle={vault.displayName}
       onClose={handleClose}
       panelClassName="max-w-2xl"
+      bodyScroll={false}
     >
       <p className="mb-4 text-sm text-on-surface-variant">{t("modal.backup.hint")}</p>
 
@@ -238,18 +279,24 @@ export function VaultBackupsModal({
               selectedCount={selected.size}
               onToggleSelectAll={toggleSelectAll}
               promoteCount={selectedStandardKeys.length}
-              promoteDisabled={isBusy}
+              promoteDisabled={isBusy || selectedStandardKeys.some((key) => exportingKeys.has(key))}
               onPromoteSelected={() => {
                 void promoteToSave(selectedStandardKeys).catch((err) => {
                   showError(err, "toast.backup_promote_failed");
                 });
               }}
-              onDownload={handleDownloadSelected}
+              onExport={() => exportStep.begin(selectedKeys)}
+              deleteDisabled={selectedKeys.some((key) => exportingKeys.has(key))}
               onDeleteSelected={() => beginDelete(Array.from(selected))}
             />
           ) : null}
 
-          <div className="max-h-[min(52vh,28rem)] space-y-5 overflow-y-auto pr-0.5">
+          {listExportPanel ? (
+            <div className="mb-3 rounded-xl bg-surface-container px-4 py-3">{listExportPanel}</div>
+          ) : null}
+
+          {/* The one scroller: the hint, toolbar, and export stay put above it. */}
+          <div className="modal-scroll-pane min-h-0 flex-1 space-y-5 overflow-y-auto pr-0.5">
             <BackupSection
               title={t("modal.backup.section.saves")}
               help={t("modal.backup.section.saves_help")}
@@ -285,8 +332,10 @@ export function VaultBackupsModal({
               vaultId={vault?.id ?? ""}
               selected={selected}
               selectionDisabled={deleteTargets !== null}
+              exportingKeys={exportingKeys}
+              rowExportPanel={rowExportPanel}
               onToggleSelected={selectable ? toggleSelected : undefined}
-              onDownload={handleDownloadOne}
+              onExport={(key) => exportStep.begin([key])}
               onDelete={(stamp) => beginDelete([stamp])}
               onCreateVaultFromBackup={onCreateVaultFromBackup}
             />
@@ -299,8 +348,10 @@ export function VaultBackupsModal({
               vaultId={vault?.id ?? ""}
               selected={selected}
               selectionDisabled={deleteTargets !== null}
+              exportingKeys={exportingKeys}
+              rowExportPanel={rowExportPanel}
               onToggleSelected={selectable ? toggleSelected : undefined}
-              onDownload={handleDownloadOne}
+              onExport={(key) => exportStep.begin([key])}
               onDelete={(stamp) => beginDelete([stamp])}
               onCreateVaultFromBackup={onCreateVaultFromBackup}
               onPromoteToSave={handlePromoteToSave}
@@ -359,8 +410,12 @@ interface BackupSectionProps {
   vaultId: string;
   selected: Set<string>;
   selectionDisabled: boolean;
+  /** The backups a running export reads: they cannot be moved or deleted until it ends. */
+  exportingKeys: ReadonlySet<string>;
+  /** Grows the row: its folder step or its running export. */
+  rowExportPanel: (key: string) => ReactNode;
   onToggleSelected?: (stamp: string) => void;
-  onDownload: (stamp: string) => void;
+  onExport: (stamp: string) => void;
   onDelete: (stamp: string) => void;
   onCreateVaultFromBackup?: (stamp: string, fileName: string, saved?: boolean) => void;
   onPromoteToSave?: (stamp: string) => void;
@@ -377,8 +432,10 @@ function BackupSection({
   vaultId,
   selected,
   selectionDisabled,
+  exportingKeys,
+  rowExportPanel,
   onToggleSelected,
-  onDownload,
+  onExport,
   onDelete,
   onCreateVaultFromBackup,
   onPromoteToSave,
@@ -410,8 +467,10 @@ function BackupSection({
                 fileName={fileName}
                 checked={Boolean(onToggleSelected) && selected.has(key)}
                 selectionDisabled={selectionDisabled}
+                exporting={exportingKeys.has(key)}
+                exportPanel={rowExportPanel(key)}
                 onToggleSelected={onToggleSelected ? () => onToggleSelected(key) : undefined}
-                onDownload={() => onDownload(key)}
+                onExport={() => onExport(key)}
                 onDelete={() => onDelete(key)}
                 onCreateVaultFromBackup={
                   onCreateVaultFromBackup
@@ -437,7 +496,8 @@ interface BackupListToolbarProps {
   promoteDisabled: boolean;
   onToggleSelectAll: () => void;
   onPromoteSelected: () => void;
-  onDownload: () => void;
+  onExport: () => void;
+  deleteDisabled: boolean;
   onDeleteSelected: () => void;
 }
 
@@ -449,7 +509,8 @@ function BackupListToolbar({
   promoteDisabled,
   onToggleSelectAll,
   onPromoteSelected,
-  onDownload,
+  onExport,
+  deleteDisabled,
   onDeleteSelected,
 }: BackupListToolbarProps) {
   const { t } = useTranslation();
@@ -493,11 +554,11 @@ function BackupListToolbar({
         ) : null}
         {someSelected ? (
           <IconButton
-            label={t("modal.backup.download_selected")}
+            label={t("modal.backup.export_selected")}
             size="row"
             variant="row-action"
             className="-mr-1 text-on-surface-variant hover:bg-accent/15 hover:text-accent"
-            onClick={onDownload}
+            onClick={onExport}
           >
             <Icon name="download" size={18} />
           </IconButton>
@@ -507,6 +568,7 @@ function BackupListToolbar({
             label={t("modal.backup.delete_selected")}
             size="row"
             variant="row-action"
+            disabled={deleteDisabled}
             className="-mr-1 text-on-surface-variant hover:bg-error-container/20 hover:text-on-error-container"
             onClick={onDeleteSelected}
           >
@@ -524,9 +586,13 @@ interface BackupRowProps {
   fileName: string;
   checked: boolean;
   selectionDisabled: boolean;
+  /** A running export reads this backup: it cannot be moved or deleted until it ends. */
+  exporting: boolean;
+  /** Under the row: this backup's folder step or running export. */
+  exportPanel: ReactNode;
   /** Omitted when the list has a single entry: no checkbox. */
   onToggleSelected?: () => void;
-  onDownload: () => void;
+  onExport: () => void;
   onDelete: () => void;
   onCreateVaultFromBackup?: () => void;
   onPromoteToSave?: () => void;
@@ -538,107 +604,140 @@ function BackupRow({
   fileName,
   checked,
   selectionDisabled,
+  exporting,
+  exportPanel,
   onToggleSelected,
-  onDownload,
+  onExport,
   onDelete,
   onCreateVaultFromBackup,
   onPromoteToSave,
 }: BackupRowProps) {
   const { t } = useTranslation();
   const checkboxId = useId();
+  const exportPanelRef = useRevealWhen<HTMLDivElement>(Boolean(exportPanel));
+  const rowRef = useRef<HTMLDivElement>(null);
+  const titleRef = useRef<HTMLParagraphElement>(null);
+  const nameRef = useRef<HTMLSpanElement>(null);
+  const badgeRef = useRef<HTMLSpanElement>(null);
+  const buttonsBelow = useRowButtonsBelow(
+    { row: rowRef, slot: titleRef, text: nameRef, beside: badgeRef },
+    fileName,
+  );
 
   return (
     <li
       className={[
-        "flex min-h-14 items-center gap-3 rounded-xl border border-transparent py-3 pl-4 pr-2 transition-colors sm:py-3.5 sm:pl-4 sm:pr-3",
+        "rounded-xl border border-transparent transition-colors",
         "bg-surface-container",
         checked ? "border-accent/40" : "hover:bg-surface-container-high/80",
-        selectionDisabled ? "pointer-events-none opacity-60" : "",
       ]
         .filter(Boolean)
         .join(" ")}
     >
-      {onToggleSelected ? (
-        <input
-          id={checkboxId}
-          type="checkbox"
-          checked={checked}
-          disabled={selectionDisabled}
-          onChange={onToggleSelected}
-          className={[backupCheckboxClass, "disabled:opacity-40"].join(" ")}
-        />
-      ) : null}
-      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-surface-container-highest text-on-surface-variant">
-        <Icon name="archive" size={18} />
-      </div>
-      <label
-        htmlFor={onToggleSelected ? checkboxId : undefined}
+      <div
+        ref={rowRef}
         className={[
-          "min-w-0 flex-1 select-none",
-          selectionDisabled || !onToggleSelected ? "cursor-default" : "cursor-pointer",
-        ].join(" ")}
+          "flex min-h-14 gap-3 py-3 pl-4 pr-2 sm:py-3.5 sm:pl-4 sm:pr-3",
+          buttonsBelow ? "flex-col items-stretch" : "items-center",
+          selectionDisabled ? "pointer-events-none opacity-60" : "",
+        ]
+          .filter(Boolean)
+          .join(" ")}
       >
-        <p className="flex min-w-0 items-center gap-2">
-          <span className="truncate font-mono text-xs text-on-surface sm:text-sm">{fileName}</span>
-          {entry.saved ? (
-            <span className="shrink-0 rounded bg-[color-mix(in_srgb,var(--accent)_15%,transparent)] px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-accent">
-              {t("modal.backup.saved_badge")}
-            </span>
+        <div className="flex min-w-0 flex-1 items-center gap-3">
+          {onToggleSelected ? (
+            <input
+              id={checkboxId}
+              type="checkbox"
+              checked={checked}
+              disabled={selectionDisabled}
+              onChange={onToggleSelected}
+              className={[backupCheckboxClass, "disabled:opacity-40"].join(" ")}
+            />
           ) : null}
-        </p>
-        <p className="mt-0.5 text-xs text-on-surface-variant">
-          {formatBackupDate(entry.createdAt, locale)}
-          <span aria-hidden className="mx-1.5">
-            ·
-          </span>
-          <span className="font-mono">{formatBytes(entry.sizeBytes)}</span>
-        </p>
-      </label>
-      <div className="flex shrink-0 items-center gap-0.5">
-        {onPromoteToSave ? (
-          <Button
-            variant="secondary"
-            size="sm"
-            disabled={selectionDisabled}
-            className="mr-0.5 h-8 shrink-0 px-2 text-xs sm:px-2.5"
-            onClick={onPromoteToSave}
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-surface-container-highest text-on-surface-variant">
+            <Icon name="archive" size={18} />
+          </div>
+          <label
+            htmlFor={onToggleSelected ? checkboxId : undefined}
+            className={[
+              "min-w-0 flex-1 select-none",
+              selectionDisabled || !onToggleSelected ? "cursor-default" : "cursor-pointer",
+            ].join(" ")}
           >
-            {t("modal.backup.promote_to_save")}
-          </Button>
-        ) : null}
-        {onCreateVaultFromBackup ? (
+            <p ref={titleRef} className="flex min-w-0 items-center gap-2">
+              <span ref={nameRef} className="truncate font-mono text-xs text-on-surface sm:text-sm">
+                {fileName}
+              </span>
+              {entry.saved ? (
+                <span
+                  ref={badgeRef}
+                  className="shrink-0 rounded bg-[color-mix(in_srgb,var(--accent)_15%,transparent)] px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-accent"
+                >
+                  {t("modal.backup.saved_badge")}
+                </span>
+              ) : null}
+            </p>
+            <p className="mt-0.5 text-xs text-on-surface-variant">
+              {formatBackupDate(entry.createdAt, locale)}
+              <span aria-hidden className="mx-1.5">
+                ·
+              </span>
+              <span className="font-mono">{formatBytes(entry.sizeBytes)}</span>
+            </p>
+          </label>
+        </div>
+        <div className="flex shrink-0 items-center justify-end gap-0.5">
+          {onPromoteToSave ? (
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={selectionDisabled || exporting}
+              className="mr-0.5 h-8 shrink-0 px-2 text-xs sm:px-2.5"
+              onClick={onPromoteToSave}
+            >
+              {t("modal.backup.promote_to_save")}
+            </Button>
+          ) : null}
+          {onCreateVaultFromBackup ? (
+            <IconButton
+              label={t("action.create_vault_from_backup")}
+              size="row"
+              variant="row-action"
+              disabled={selectionDisabled}
+              className="-mr-1 text-on-surface-variant hover:bg-accent/15 hover:text-accent"
+              onClick={onCreateVaultFromBackup}
+            >
+              <Icon name="add" size={18} />
+            </IconButton>
+          ) : null}
           <IconButton
-            label={t("action.create_vault_from_backup")}
+            label={t("modal.backup.export")}
             size="row"
             variant="row-action"
-            disabled={selectionDisabled}
+            disabled={selectionDisabled || exporting}
             className="-mr-1 text-on-surface-variant hover:bg-accent/15 hover:text-accent"
-            onClick={onCreateVaultFromBackup}
+            onClick={onExport}
           >
-            <Icon name="add" size={18} />
+            <Icon name="download" size={18} />
           </IconButton>
-        ) : null}
-        <IconButton
-          label={t("action.download")}
-          size="row"
-          variant="row-action"
-          disabled={selectionDisabled}
-          className="-mr-1 text-on-surface-variant hover:bg-accent/15 hover:text-accent"
-          onClick={onDownload}
-        >
-          <Icon name="download" size={18} />
-        </IconButton>
-        <IconButton
-          label={t("action.delete")}
-          size="row"
-          variant="row-action"
-          disabled={selectionDisabled}
-          className="-mr-1 text-on-surface-variant hover:bg-error-container/20 hover:text-on-error-container"
-          onClick={onDelete}
-        >
-          <Icon name="trash" size={18} />
-        </IconButton>
+          <IconButton
+            label={t("action.delete")}
+            size="row"
+            variant="row-action"
+            disabled={selectionDisabled || exporting}
+            className="-mr-1 text-on-surface-variant hover:bg-error-container/20 hover:text-on-error-container"
+            onClick={onDelete}
+          >
+            <Icon name="trash" size={18} />
+          </IconButton>
+        </div>
       </div>
+      {exportPanel ? (
+        <div ref={exportPanelRef} className="border-t border-outline-variant/20 px-4 py-3">
+          {exportPanel}
+        </div>
+      ) : null}
     </li>
   );
 }

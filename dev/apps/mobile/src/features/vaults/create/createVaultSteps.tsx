@@ -1,4 +1,4 @@
-import { useState, useSyncExternalStore } from "react";
+import { useState, useSyncExternalStore, type ReactNode } from "react";
 import { Platform, StyleSheet, Text, View } from "react-native";
 import {
   createVaultChoosesKdf,
@@ -7,16 +7,17 @@ import {
   createVaultImportNeedsArchivePassword,
   createVaultImportNeedsRename,
   createVaultImportSelectionPatch,
+  createVaultSettingsLocked,
   importExtractApplies,
   importExtractEnabled,
+  importKeepSettingsApplies,
+  importKeepWorkspaceApplies,
   validateCreateVaultStep,
   importSetsVaultPassword,
   importZipWrapsDocuments,
   isHiddenGroup,
   groupsForAssignmentPicker,
   groupAssignmentClearOption,
-  IDLE_AUTO_CLOSE_MINUTES_MAX,
-  IDLE_AUTO_CLOSE_MINUTES_MIN,
   NO_VAULT_GROUPS,
   VAULT_DISPLAY_NAME_MAX_LENGTH,
   VAULT_NOTE_MAX_LENGTH,
@@ -24,7 +25,6 @@ import {
   type CreateVaultDraft,
   type CreateVaultStepId,
   type CreateVaultValidationCode,
-  type StorageMode,
   type VaultGroup,
   type WorkspaceTable,
 } from "@upriv/shared";
@@ -37,6 +37,7 @@ import { useCreateVaultService } from "@/platform/services";
 import { useTranslation, type I18nKey } from "@/i18n";
 import { useTheme } from "@/theme";
 import { spacing } from "@/theme/tokens";
+import { LongTextInput } from "@/components/LongTextInput";
 import { PathField } from "@/components/PathField";
 import { Button, Select } from "@/components/ui";
 import { IntegerInput, PolicyRadioOption, SettingsAccordionSection } from "@/components/settings";
@@ -51,6 +52,9 @@ import {
 } from "@/components/settings/settingsFields";
 import {
   KdfSection,
+  PlainFilesSwitch,
+  VaultSettingsAutoCloseSection,
+  VaultSettingsBackupSection,
   VaultSettingsMountSection,
 } from "@/features/vaults/settings/vaultSettingsForm";
 import type { CreateVaultStepFocusProps } from "@upriv/shared/react";
@@ -73,6 +77,45 @@ interface StepProps extends Partial<CreateVaultStepFocusProps> {
   appWorkspace?: WorkspaceTable;
   /** Display names already on the vault list, so a picked file can take `name 2`. */
   existingDisplayNames?: readonly string[];
+}
+
+/** Says why fields are locked and where to go. Shows only while they are. */
+function SettingsLockedNotice({ draft }: { draft: CreateVaultDraft }) {
+  const { t } = useTranslation();
+  const { colors, typography } = useTheme();
+  if (!createVaultSettingsLocked(draft)) return null;
+  return (
+    <View
+      accessibilityRole="alert"
+      style={[styles.lockedNotice, { borderColor: colors.vaultStatusRecovery }]}
+    >
+      <Text style={typography.body}>{t("vault.create.settings_locked")}</Text>
+    </View>
+  );
+}
+
+/**
+ * Inputs a `.7z` may fill. They lock until its password test passes; the step
+ * and the section around them stay open.
+ */
+function SettingsLockedFields({
+  draft,
+  children,
+}: {
+  draft: CreateVaultDraft;
+  children: ReactNode;
+}) {
+  const locked = createVaultSettingsLocked(draft);
+  return (
+    <View
+      pointerEvents={locked ? "none" : "auto"}
+      accessibilityElementsHidden={locked}
+      importantForAccessibility={locked ? "no-hide-descendants" : "auto"}
+      style={locked ? styles.locked : undefined}
+    >
+      {children}
+    </View>
+  );
 }
 
 export function renderCreateVaultStep(
@@ -246,6 +289,22 @@ function CreateVaultSourceStep({ draft, errors, onChange, existingDisplayNames =
           }
         />
       ) : null}
+      {importKeepWorkspaceApplies(draft) ? (
+        <SwitchRow
+          label={t("vault.create.keep_workspace")}
+          hint={t("vault.create.keep_workspace_hint")}
+          value={draft.importKeepWorkspace}
+          onValueChange={(importKeepWorkspace) => onChange({ importKeepWorkspace })}
+        />
+      ) : null}
+      {importKeepSettingsApplies(draft) ? (
+        <SwitchRow
+          label={t("vault.create.keep_settings")}
+          hint={t("vault.create.keep_settings_hint")}
+          value={draft.importKeepSettings}
+          onValueChange={(importKeepSettings) => onChange({ importKeepSettings })}
+        />
+      ) : null}
       {draft.source === "import" && draft.importShape === "directory" ? (
         <Text style={[typography.caption, { color: colors.onSurfaceVariant }]}>
           {t("vault.create.option.import_folder_note")}
@@ -271,7 +330,11 @@ function CreateVaultSourceStep({ draft, errors, onChange, existingDisplayNames =
           accessibilityRole="alert"
           style={[typography.caption, { color: colors.onErrorContainer }]}
         >
-          {t("vault.create.option.import_files_zip_note")}
+          {t(
+            draft.importCarriesSettings && draft.importKeepSettings
+              ? "vault.create.option.import_plain_zip_note"
+              : "vault.create.option.import_files_zip_note",
+          )}
         </Text>
       ) : null}
     </View>
@@ -348,44 +411,54 @@ function CreateVaultIdentityStep({
   const { t } = useTranslation();
   const { typography } = useTheme();
   const importNeedsRename = createVaultImportNeedsRename(draft);
+  const locked = createVaultSettingsLocked(draft);
   return (
     <View style={styles.fields}>
       <Text style={typography.bodyMuted}>{t("vault.create.identity_intro")}</Text>
       {importNeedsRename ? (
         <Text style={typography.bodyMuted}>{t("vault.import.rename_prompt")}</Text>
       ) : null}
-      <FieldLabel>
-        {importNeedsRename ? t("vault.import.suggested_name") : t("vault.name.label")}
-      </FieldLabel>
-      <ThemedInput
-        ref={bindFieldRef?.("displayName")}
-        value={draft.displayName}
-        maxLength={VAULT_DISPLAY_NAME_MAX_LENGTH}
-        autoCorrect={false}
-        spellCheck={false}
-        onFocus={() => onFieldFocus?.("displayName")}
-        onChangeText={(displayName) => onChange({ displayName })}
-        returnKeyType="next"
-        submitBehavior="submit"
-        onSubmitEditing={() => onFieldSubmit?.("displayName")}
-      />
-      <DisplayNameFieldError name={draft.displayName} allowEmpty />
-      <FieldErrors
-        errors={createVaultErrorsForField(errors, "displayName").filter(
-          (code) => code === "empty" || code === "duplicate",
-        )}
-      />
-      <FieldLabel>{t("vault.create.note")}</FieldLabel>
-      <FieldHint>{t("vault.create.note_help", { max: String(VAULT_NOTE_MAX_LENGTH) })}</FieldHint>
-      <ThemedInput
-        ref={bindFieldRef?.("note")}
-        value={draft.note}
-        maxLength={VAULT_NOTE_MAX_LENGTH}
-        onFocus={() => onFieldFocus?.("note")}
-        onChangeText={(note) => onChange({ note })}
-        multiline
-        style={styles.multiline}
-      />
+      <SettingsLockedNotice draft={draft} />
+      <SettingsLockedFields draft={draft}>
+        <View style={styles.fields}>
+          <FieldLabel>
+            {importNeedsRename ? t("vault.import.suggested_name") : t("vault.name.label")}
+          </FieldLabel>
+          <ThemedInput
+            ref={bindFieldRef?.("displayName")}
+            value={draft.displayName}
+            editable={!locked}
+            maxLength={VAULT_DISPLAY_NAME_MAX_LENGTH}
+            autoCorrect={false}
+            spellCheck={false}
+            onFocus={() => onFieldFocus?.("displayName")}
+            onChangeText={(displayName) => onChange({ displayName })}
+            returnKeyType="next"
+            submitBehavior="submit"
+            onSubmitEditing={() => onFieldSubmit?.("displayName")}
+          />
+          <DisplayNameFieldError name={draft.displayName} allowEmpty />
+          <FieldErrors
+            errors={createVaultErrorsForField(errors, "displayName").filter(
+              (code) => code === "empty" || code === "duplicate",
+            )}
+          />
+          <FieldLabel>{t("vault.create.note")}</FieldLabel>
+          <FieldHint>
+            {t("vault.create.note_help", { max: String(VAULT_NOTE_MAX_LENGTH) })}
+          </FieldHint>
+          <LongTextInput
+            ref={bindFieldRef?.("note")}
+            value={draft.note}
+            editable={!locked}
+            maxLength={VAULT_NOTE_MAX_LENGTH}
+            onFocus={() => onFieldFocus?.("note")}
+            onChangeText={(note) => onChange({ note })}
+            multiline
+            style={styles.multiline}
+          />
+        </View>
+      </SettingsLockedFields>
     </View>
   );
 }
@@ -407,6 +480,7 @@ function CreateVaultPasswordStep({
   const setsVaultPassword = !isImport || importSetsVaultPassword(draft);
   const needsArchivePassword = createVaultImportNeedsArchivePassword(draft);
   const showPassword = setsVaultPassword || needsArchivePassword;
+  const hintLocked = createVaultSettingsLocked(draft);
 
   return (
     <View style={styles.fields}>
@@ -479,11 +553,23 @@ function CreateVaultPasswordStep({
           ) : null}
         </View>
       ) : null}
+      {needsArchivePassword && draft.passwordValidated && draft.importKeepSettings ? (
+        <Text accessibilityRole="alert" style={typography.bodyMuted}>
+          {t(
+            draft.importCarriesSettings
+              ? "vault.create.password_settings_read"
+              : "vault.create.password_no_settings",
+          )}
+        </Text>
+      ) : null}
       <FieldLabel>{t("vault.create.password_hint")}</FieldLabel>
-      <FieldHint>{t("vault.create.password_hint_help")}</FieldHint>
+      <FieldHint>
+        {t(hintLocked ? "vault.create.password_hint_locked" : "vault.create.password_hint_help")}
+      </FieldHint>
       <ThemedInput
         ref={bindFieldRef?.("passwordHint")}
         value={draft.passwordHint}
+        editable={!hintLocked}
         maxLength={VAULT_PASSWORD_HINT_MAX_LENGTH}
         onFocus={() => onFieldFocus?.("passwordHint")}
         onChangeText={(passwordHint) => onChange({ passwordHint })}
@@ -518,78 +604,37 @@ function CreateVaultGeneralStep({
   return (
     <View style={styles.fields}>
       <Text style={typography.bodyMuted}>{t("vault.create.general_intro")}</Text>
+      <SettingsLockedNotice draft={draft} />
 
       <SettingsAccordionSection title={t("modal.settings.section.kdf")} defaultOpen>
-        <KdfSection
-          config={draft.kdf}
-          choosesPreset={createVaultChoosesKdf(draft)}
-          archivePreset={draft.archiveUnlockPreset}
-          onChange={(patch) => onChange({ kdf: { ...draft.kdf, ...patch } })}
-        />
+        <SettingsLockedFields draft={draft}>
+          <KdfSection
+            config={draft.kdf}
+            choosesPreset={createVaultChoosesKdf(draft)}
+            archivePreset={draft.archiveUnlockPreset}
+            onChange={(patch) => onChange({ kdf: { ...draft.kdf, ...patch } })}
+          />
+        </SettingsLockedFields>
       </SettingsAccordionSection>
 
       <SettingsAccordionSection title={t("modal.settings.section.backup")} defaultOpen>
-        <View style={styles.fields}>
-          <SwitchRow
-            label={t("modal.settings.field.backup.enabled")}
-            value={draft.backup.enabled}
-            onValueChange={(enabled) => onChange({ backup: { ...draft.backup, enabled } })}
+        <SettingsLockedFields draft={draft}>
+          <VaultSettingsBackupSection
+            config={draft.backup}
+            onChange={(patch) => onChange({ backup: { ...draft.backup, ...patch } })}
           />
-          <SwitchRow
-            label={t("modal.settings.field.backup.skip_unchanged")}
-            hint={t("modal.settings.field.backup.skip_unchanged_help")}
-            value={draft.backup.skip_unchanged}
-            disabled={!draft.backup.enabled}
-            onValueChange={(skip_unchanged) =>
-              onChange({ backup: { ...draft.backup, skip_unchanged } })
-            }
-          />
-          <Select
-            label={t("modal.settings.field.backup.mode")}
-            value={draft.backup.mode}
-            disabled={!draft.backup.enabled}
-            options={[
-              { value: "keep_last", label: t("modal.settings.option.backup.keep_last") },
-              { value: "keep_all", label: t("modal.settings.option.backup.keep_all") },
-            ]}
-            onChange={(mode) => onChange({ backup: { ...draft.backup, mode } })}
-          />
-          <FieldLabel disabled={!draft.backup.enabled || draft.backup.mode !== "keep_last"}>
-            {t("modal.settings.field.backup.keep_last")}
-          </FieldLabel>
-          <IntegerInput
-            min={1}
-            max={99}
-            disabled={!draft.backup.enabled || draft.backup.mode !== "keep_last"}
-            value={draft.backup.keep_last}
-            onChange={(keep_last) => onChange({ backup: { ...draft.backup, keep_last } })}
-          />
-        </View>
+        </SettingsLockedFields>
       </SettingsAccordionSection>
 
       <SettingsAccordionSection title={t("modal.settings.section.auto_close")} defaultOpen>
-        <View style={styles.fields}>
-          <SwitchRow
-            label={t("modal.settings.field.auto_close.enabled")}
-            value={draft.auto_close.enabled}
-            onValueChange={(enabled) => onChange({ auto_close: { ...draft.auto_close, enabled } })}
-          />
-          <FieldLabel disabled={!draft.auto_close.enabled}>
-            {t("modal.settings.field.auto_close.idle_minutes")}
-          </FieldLabel>
-          <FieldHint disabled={!draft.auto_close.enabled}>
-            {t("modal.settings.field.auto_close.idle_minutes_help")}
-          </FieldHint>
-          <IntegerInput
-            min={IDLE_AUTO_CLOSE_MINUTES_MIN}
-            max={IDLE_AUTO_CLOSE_MINUTES_MAX}
-            disabled={!draft.auto_close.enabled}
-            value={draft.auto_close.idle_minutes}
-            onChange={(idle_minutes) =>
-              onChange({ auto_close: { ...draft.auto_close, idle_minutes } })
+        <SettingsLockedFields draft={draft}>
+          <VaultSettingsAutoCloseSection
+            autoClose={draft.auto_close}
+            onAutoCloseChange={(patch) =>
+              onChange({ auto_close: { ...draft.auto_close, ...patch } })
             }
           />
-        </View>
+        </SettingsLockedFields>
       </SettingsAccordionSection>
 
       <SettingsAccordionSection title={t("vault.group.assignment.section")} defaultOpen>
@@ -652,75 +697,87 @@ function CreateVaultAdvancedStep({
   const { typography } = useTheme();
   const hiddenLocked = draft.groupMode === "existing" && isHiddenGroup(groups, draft.groupId);
 
-  const setStorageMode = (mode: StorageMode) => {
-    onChange({ storage: { mode } });
+  const patchStorage = (patch: Partial<CreateVaultDraft["storage"]>) => {
+    onChange({ storage: { ...draft.storage, ...patch } });
   };
 
   return (
     <View style={styles.fields}>
       <Text style={typography.bodyMuted}>{t("vault.create.advanced_intro")}</Text>
       <FieldHint>{t("vault.create.settings_editable_later")}</FieldHint>
+      <SettingsLockedNotice draft={draft} />
 
       <SettingsAccordionSection title={t("modal.settings.section.vault")}>
-        <View style={styles.fields}>
-          <FieldLabel>{t("modal.settings.field.vault.order")}</FieldLabel>
-          <FieldHint>{t("modal.settings.field.vault.order_help")}</FieldHint>
-          <IntegerInput min={0} value={draft.order} onChange={(order) => onChange({ order })} />
-          <SwitchRow
-            label={t("modal.settings.field.vault.hidden")}
-            hint={
-              hiddenLocked
-                ? t("modal.settings.field.vault.hidden_locked_by_group")
-                : t("modal.settings.field.vault.hidden_help")
-            }
-            value={draft.hidden || hiddenLocked}
-            disabled={hiddenLocked}
-            onValueChange={(hidden) => onChange({ hidden })}
-          />
-        </View>
+        <SettingsLockedFields draft={draft}>
+          <View style={styles.fields}>
+            <FieldLabel>{t("modal.settings.field.vault.order")}</FieldLabel>
+            <FieldHint>{t("modal.settings.field.vault.order_help")}</FieldHint>
+            <IntegerInput min={0} value={draft.order} onChange={(order) => onChange({ order })} />
+            <SwitchRow
+              label={t("modal.settings.field.vault.hidden")}
+              hint={
+                hiddenLocked
+                  ? t("modal.settings.field.vault.hidden_locked_by_group")
+                  : t("modal.settings.field.vault.hidden_help")
+              }
+              value={draft.hidden || hiddenLocked}
+              disabled={hiddenLocked}
+              onValueChange={(hidden) => onChange({ hidden })}
+            />
+          </View>
+        </SettingsLockedFields>
       </SettingsAccordionSection>
 
       <SettingsAccordionSection title={t("modal.settings.section.storage")}>
-        <View style={styles.fields}>
-          <FieldLabel>{t("modal.settings.field.storage.mode")}</FieldLabel>
-          <FieldHint>{t("modal.settings.field.storage.mode_help")}</FieldHint>
-          <RadioGroup>
-            {(
-              [
-                ["encrypted_dir", "recommended", "default"],
-                ["upriv_plain", "not-recommended", "less-secure"],
-              ] as const
-            ).map(([mode, badge, tone]) => (
-              <PolicyRadioOption
-                key={mode}
-                value={mode}
-                checked={draft.storage.mode === mode}
-                title={t(`modal.settings.option.storage.${mode}` as I18nKey)}
-                description={t(`modal.settings.option.storage.${mode}_desc` as I18nKey)}
-                badge={badge}
-                tone={tone}
-                onSelect={() => setStorageMode(mode)}
-              />
-            ))}
-          </RadioGroup>
-          {draft.storage.mode === "encrypted_dir" ? (
-            <FieldHint>{t("warning.encrypted_dir_ram")}</FieldHint>
-          ) : null}
-          {draft.storage.mode === "upriv_plain" ? (
-            <FieldHint>{t("warning.upriv_plain")}</FieldHint>
-          ) : null}
-          <FieldErrors errors={createVaultErrorsForField(errors, "storage")} />
-        </View>
+        <SettingsLockedFields draft={draft}>
+          <View style={styles.fields}>
+            <FieldLabel>{t("modal.settings.field.storage.mode")}</FieldLabel>
+            <FieldHint>{t("modal.settings.field.storage.mode_help")}</FieldHint>
+            <RadioGroup>
+              {(
+                [
+                  ["encrypted_dir", "recommended", "default"],
+                  ["upriv_plain", "not-recommended", "less-secure"],
+                ] as const
+              ).map(([mode, badge, tone]) => (
+                <PolicyRadioOption
+                  key={mode}
+                  value={mode}
+                  checked={draft.storage.mode === mode}
+                  title={t(`modal.settings.option.storage.${mode}` as I18nKey)}
+                  description={t(`modal.settings.option.storage.${mode}_desc` as I18nKey)}
+                  badge={badge}
+                  tone={tone}
+                  footer={
+                    mode === "upriv_plain" ? (
+                      <PlainFilesSwitch config={draft.storage} onChange={patchStorage} />
+                    ) : undefined
+                  }
+                  onSelect={() => patchStorage({ mode })}
+                />
+              ))}
+            </RadioGroup>
+            {draft.storage.mode === "encrypted_dir" ? (
+              <FieldHint>{t("warning.encrypted_dir_ram")}</FieldHint>
+            ) : null}
+            {draft.storage.mode === "upriv_plain" ? (
+              <FieldHint>{t("warning.upriv_plain")}</FieldHint>
+            ) : null}
+            <FieldErrors errors={createVaultErrorsForField(errors, "storage")} />
+          </View>
+        </SettingsLockedFields>
       </SettingsAccordionSection>
 
       <SettingsAccordionSection title={t("modal.settings.section.mount")}>
-        <VaultSettingsMountSection
-          config={draft.mount}
-          vaultRootPath={vaultRootPath}
-          plaintext={draft.storage.mode === "upriv_plain"}
-          appWorkspace={appWorkspace}
-          onChange={(patch) => onChange({ mount: { ...draft.mount, ...patch } })}
-        />
+        <SettingsLockedFields draft={draft}>
+          <VaultSettingsMountSection
+            config={draft.mount}
+            vaultRootPath={vaultRootPath}
+            plaintext={draft.storage.mode === "upriv_plain"}
+            appWorkspace={appWorkspace}
+            onChange={(patch) => onChange({ mount: { ...draft.mount, ...patch } })}
+          />
+        </SettingsLockedFields>
         <FieldErrors errors={createVaultErrorsForField(errors, "mount")} />
       </SettingsAccordionSection>
     </View>
@@ -732,4 +789,6 @@ const styles = StyleSheet.create({
   multiline: { minHeight: 88, textAlignVertical: "top" },
   row: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: spacing.sm },
   fieldErrors: { gap: 2, marginTop: -spacing.sm },
+  locked: { opacity: 0.6 },
+  lockedNotice: { borderWidth: 1, borderRadius: 8, padding: spacing.sm },
 });

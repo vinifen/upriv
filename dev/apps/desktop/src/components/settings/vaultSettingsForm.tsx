@@ -131,6 +131,8 @@ interface VaultSettingsVaultSectionProps {
   hiddenLocked?: boolean;
   /** `vault.display_name` requires closed or recovery. */
   displayNameLocked?: boolean;
+  /** Locked by a leftover plaintext folder, not by a busy vault. */
+  plainLeftover?: boolean;
   fileManager: VaultSettingsConfig["file_manager"];
   onFileManagerChange: (patch: Partial<VaultSettingsConfig["file_manager"]>) => void;
 }
@@ -140,6 +142,7 @@ export function VaultSettingsVaultSection({
   onChange,
   hiddenLocked = false,
   displayNameLocked = false,
+  plainLeftover = false,
   fileManager,
   onFileManagerChange,
 }: VaultSettingsVaultSectionProps) {
@@ -159,7 +162,7 @@ export function VaultSettingsVaultSection({
         disabled={displayNameLocked}
         hint={
           displayNameLocked
-            ? t(requireVaultConfigEditLockedI18nKey("vault.display_name"))
+            ? t(requireVaultConfigEditLockedI18nKey("vault.display_name", plainLeftover))
             : undefined
         }
       >
@@ -251,12 +254,18 @@ interface SectionPatchProps<S extends keyof VaultSettingsConfig> {
 
 interface VaultSettingsStorageSectionProps extends SectionPatchProps<"storage"> {
   storageModeLocked?: boolean;
+  /** `storage.plain_files` needs the vault closed or in recovery. */
+  plainFilesLocked?: boolean;
+  /** Locked by a leftover plaintext folder, not by a busy vault. */
+  plainLeftover?: boolean;
 }
 
 export function VaultSettingsStorageSection({
   config,
   onChange,
   storageModeLocked = false,
+  plainFilesLocked = false,
+  plainLeftover = false,
 }: VaultSettingsStorageSectionProps) {
   const { t } = useTranslation();
   const storageModeGroup = useId();
@@ -273,7 +282,7 @@ export function VaultSettingsStorageSection({
       >
         {storageModeLocked ? (
           <p className="text-xs leading-relaxed text-on-surface-variant">
-            {t(requireVaultConfigEditLockedI18nKey("storage.mode"))}
+            {t(requireVaultConfigEditLockedI18nKey("storage.mode", plainLeftover))}
           </p>
         ) : null}
         <div
@@ -300,6 +309,19 @@ export function VaultSettingsStorageSection({
             description={t("modal.settings.option.storage.upriv_plain_desc")}
             badge="not-recommended"
             tone="less-secure"
+            footer={
+              <SwitchRow
+                checked={config.plain_files === "chosen"}
+                disabled={plainFilesLocked}
+                onChange={(chosen) => onChange({ plain_files: chosen ? "chosen" : "whole" })}
+                label={t("modal.settings.field.storage.plain_files")}
+                hint={t(
+                  plainFilesLocked
+                    ? requireVaultConfigEditLockedI18nKey("storage.plain_files")
+                    : "modal.settings.field.storage.plain_files_help",
+                )}
+              />
+            }
             onSelect={() => onChange({ mode: "upriv_plain" })}
           />
         </div>
@@ -326,6 +348,8 @@ interface VaultSettingsMountSectionProps extends SectionPatchProps<"mount"> {
   onDriverAttentionChange?: (active: boolean) => void;
   /** `mount.workspace_path` requires vault_quiet. */
   controlsDisabled?: boolean;
+  /** Locked by a leftover plaintext folder, not by a busy vault. */
+  plainLeftover?: boolean;
   /** Plain text writes files in the folder and has no file manager folder switch. */
   plaintext?: boolean;
   /** App workspace, so "Use the app folder" can follow that file manager folder. */
@@ -339,6 +363,7 @@ export function VaultSettingsMountSection({
   onPathIssueChange,
   onDriverAttentionChange,
   controlsDisabled = false,
+  plainLeftover = false,
   plaintext = false,
   appWorkspace: appFolders = appWorkspace(),
 }: VaultSettingsMountSectionProps) {
@@ -371,7 +396,7 @@ export function VaultSettingsMountSection({
       </p>
       {controlsDisabled ? (
         <p className="text-xs leading-relaxed text-on-surface-variant">
-          {t(requireVaultConfigEditLockedI18nKey("mount.workspace_path"))}
+          {t(requireVaultConfigEditLockedI18nKey("mount.workspace_path", plainLeftover))}
         </p>
       ) : null}
       {workspaceSystemsCurrentFirst().map((system) => {
@@ -966,6 +991,24 @@ const POLICY_RADIO_BADGE_CLASS: Record<PolicyRadioBadge, string> = {
     "rounded bg-[color-mix(in_srgb,var(--on-error-container)_15%,transparent)] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-on-error-container",
   "not-recommended":
     "rounded bg-[color-mix(in_srgb,var(--on-error-container)_15%,transparent)] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-on-error-container",
+  insecure:
+    "rounded bg-[color-mix(in_srgb,var(--on-error-container)_25%,transparent)] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-on-error-container",
+};
+
+/** Card fill and hover per risk tone. `insecure` is the strongest: nothing is encrypted. */
+const POLICY_RADIO_TONE_CLASS = {
+  default: {
+    card: "bg-surface-container",
+    hover: "hover:bg-surface-container-highest/60",
+  },
+  "less-secure": {
+    card: "bg-[color-mix(in_srgb,var(--error-container)_7%,var(--surface-container))]",
+    hover: "hover:bg-[color-mix(in_srgb,var(--error-container)_11%,var(--surface-container))]",
+  },
+  insecure: {
+    card: "bg-[color-mix(in_srgb,var(--error-container)_14%,var(--surface-container))]",
+    hover: "hover:bg-[color-mix(in_srgb,var(--error-container)_20%,var(--surface-container))]",
+  },
 };
 
 interface PolicyRadioOptionProps {
@@ -981,10 +1024,11 @@ interface PolicyRadioOptionProps {
   muted?: boolean;
   /** One badge, or several shown in this order. */
   badge?: PolicyRadioBadge | readonly PolicyRadioBadge[];
-  tone?: "default" | "less-secure";
+  tone?: keyof typeof POLICY_RADIO_TONE_CLASS;
   /**
    * Yellow/amber border while this option still needs follow-up config
-   * (e.g. vault-root incomplete policy). Overrides the accent border when checked.
+   * (e.g. vault-root incomplete policy). Overrides the accent or red border when
+   * checked.
    */
   attention?: boolean;
   /**
@@ -1015,21 +1059,18 @@ export function PolicyRadioOption({
 }: PolicyRadioOptionProps) {
   const { t } = useTranslation();
   const inputId = useId();
-  const isLessSecure = tone === "less-secure";
-
-  const cardBgClass = isLessSecure
-    ? "bg-[color-mix(in_srgb,var(--error-container)_7%,var(--surface-container))]"
-    : "bg-surface-container";
-
-  const cardHoverClass = isLessSecure
-    ? "hover:bg-[color-mix(in_srgb,var(--error-container)_11%,var(--surface-container))]"
-    : "hover:bg-surface-container-highest/60";
+  const toneClass = POLICY_RADIO_TONE_CLASS[tone];
+  const insecure = tone === "insecure";
 
   const borderClass = checked
     ? attention
       ? "border-2 border-[var(--vault-status-recovery)]"
-      : "border-2 border-[var(--accent)]"
-    : "border border-outline-variant";
+      : insecure
+        ? "border-2 border-[var(--danger-border)]"
+        : "border-2 border-[var(--accent)]"
+    : insecure
+      ? "border border-[var(--danger-border)]"
+      : "border border-outline-variant";
 
   const radioClass =
     "mt-0.5 h-4 w-4 shrink-0 rounded-full border border-outline-variant accent-accent text-accent focus:ring-0 focus-visible:ring-0";
@@ -1041,9 +1082,9 @@ export function PolicyRadioOption({
         "block select-none rounded-xl p-2.5 transition-colors sm:p-3",
         disabled ? "cursor-not-allowed opacity-60" : "cursor-pointer",
         muted && !disabled ? "opacity-60" : "",
-        cardBgClass,
+        toneClass.card,
         borderClass,
-        !checked && !disabled ? cardHoverClass : "",
+        !checked && !disabled ? toneClass.hover : "",
       ]
         .filter(Boolean)
         .join(" ")}

@@ -25,7 +25,14 @@ internal fun revealInFileManager(context: Context, osPath: String) {
     throw RevealCodedException("open_path_failed", "path must be absolute")
   }
   if (trimmed.startsWith("content://", ignoreCase = true)) {
-    openContentDocument(context, Uri.parse(trimmed))
+    // The data folder's grant can be Documents; the data folder is its `Upriv` child.
+    val dataFolder =
+      if (trimmed == SafPrefs.getActiveUri(context)?.trim()) {
+        safDocumentForLogicalPath(context, SAF_LOGICAL_ROOT)
+      } else {
+        null
+      }
+    openContentDocument(context, dataFolder ?: Uri.parse(trimmed))
     return
   }
   if (!trimmed.startsWith("/")) {
@@ -90,12 +97,32 @@ private fun safDocumentForLogicalPath(context: Context, path: String): Uri? {
   return DocumentsContract.buildDocumentUriUsingTree(parsed, documentId)
 }
 
+/**
+ * The Files app opens a folder only from its plain document URI. Given a tree,
+ * or a document addressed through a tree, it shows its own start screen.
+ */
+private fun plainDocumentUri(context: Context, uri: Uri): Uri {
+  val documentId = try {
+    when {
+      DocumentsContract.isDocumentUri(context, uri) -> DocumentsContract.getDocumentId(uri)
+      DocumentsContract.isTreeUri(uri) -> DocumentsContract.getTreeDocumentId(uri)
+      else -> return uri
+    }
+  } catch (_: Throwable) {
+    return uri
+  }
+  return DocumentsContract.buildDocumentUri(uri.authority, documentId)
+}
+
 private fun openContentDocument(context: Context, uri: Uri) {
   val mime = queryMime(context, uri)
   if (mime != null && mime != DocumentsContract.Document.MIME_TYPE_DIR) {
+    // A viewer reads the file through this app's grant.
     startViewIntent(context, uri, mime)
     return
   }
+  // The Files app browses the folder itself and needs no grant from this app.
+  val folder = plainDocumentUri(context, uri)
   val attempts = listOf(
     DocumentsContract.Document.MIME_TYPE_DIR,
     "resource/folder",
@@ -104,7 +131,7 @@ private fun openContentDocument(context: Context, uri: Uri) {
   var last: Exception? = null
   for (type in attempts) {
     try {
-      startViewIntent(context, uri, type)
+      startViewIntent(context, folder, type, grantRead = false)
       return
     } catch (error: Exception) {
       last = error
@@ -172,11 +199,11 @@ private fun openFile(context: Context, file: File) {
   }
 }
 
-private fun startViewIntent(context: Context, uri: Uri, mime: String) {
+private fun startViewIntent(context: Context, uri: Uri, mime: String, grantRead: Boolean = true) {
   val intent = Intent(Intent.ACTION_VIEW).apply {
     setDataAndType(uri, mime)
     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    if (grantRead) addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
   }
   try {
     context.startActivity(intent)

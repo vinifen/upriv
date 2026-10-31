@@ -1,8 +1,8 @@
 /** @vitest-environment jsdom */
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createElement } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDefaultWorkspaceState } from "@upriv/shared";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDefaultWorkspaceState, EDITOR_BLOCK_LINES } from "@upriv/shared";
 import { I18nProvider } from "@/i18n";
 import type { FileManagerApi } from "../../hooks/useVaultFileManager";
 import { FileEditorPane } from "../FileEditorPane";
@@ -37,6 +37,48 @@ function createMockFm(overrides: Partial<FileManagerApi> = {}) {
 
   return { fm, dispatch };
 }
+
+describe("FileEditorPane preview notice", () => {
+  function renderUnshown(overrides: Partial<FileManagerApi>) {
+    const { fm } = createMockFm({ isFileViewable: vi.fn(() => false), ...overrides });
+    render(
+      createElement(I18nProvider, {
+        locale: "en",
+        children: createElement(FileEditorPane, { fm, vaultName: "Personal", active: true }),
+      }),
+    );
+  }
+
+  it("offers the folder for a file a plain-text vault has not sent", async () => {
+    const sendToFolder = vi.fn(async () => undefined);
+    renderUnshown({
+      folderPresence: new Map([["/notes.md", "none"]]),
+      osFolderAvailable: true,
+      sendToFolder,
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Send to folder" }));
+    expect(sendToFolder).toHaveBeenCalledWith("/notes.md");
+    expect(screen.queryByRole("button", { name: "Open in file manager" })).toBeNull();
+  });
+
+  it("opens a file the folder holds from the disk", async () => {
+    const openInSystemFileManager = vi.fn(async () => undefined);
+    renderUnshown({
+      folderPresence: new Map([["/notes.md", "all"]]),
+      osFolderAvailable: true,
+      openInSystemFileManager,
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Open in file manager" }));
+    expect(openInSystemFileManager).toHaveBeenCalledWith("/notes.md");
+  });
+
+  it("offers no way to the disk on an encrypted vault without a folder", async () => {
+    renderUnshown({ folderPresence: null, osFolderAvailable: false });
+    expect(await screen.findByText(/too large for the memory available/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Send to folder" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Open in file manager" })).toBeNull();
+  });
+});
 
 describe("FileEditorPane", () => {
   it("renders with preview mode and outline enabled by default, and toggles per-file", async () => {
@@ -162,6 +204,118 @@ describe("FileEditorPane", () => {
     const backdrop = mark?.closest("div[aria-hidden]");
     expect(backdrop).toBeTruthy();
     expect((backdrop as HTMLDivElement).scrollTop).toBe(60);
+  });
+
+  describe("wrapped line numbers", () => {
+    const BLOCK_PX = EDITOR_BLOCK_LINES * 20;
+    const numbers = (container: HTMLElement) =>
+      [...container.querySelectorAll("span.tabular-nums")].map((span) => span.textContent);
+    const gutterOf = (container: HTMLElement) =>
+      container.querySelector("span.tabular-nums")?.closest(".invisible");
+
+    beforeEach(() => {
+      vi.spyOn(HTMLElement.prototype, "offsetTop", "get").mockImplementation(function (
+        this: HTMLElement,
+      ) {
+        return [...(this.parentElement?.children ?? [])].indexOf(this) * BLOCK_PX;
+      });
+    });
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    function renderLongFile(lines: readonly string[]) {
+      const { fm } = createMockFm({ getEditorContent: vi.fn(() => lines.join("\n")) });
+      fm.workspace.fileStates = { "/notes.md": { markdownView: "source", wordWrap: true } };
+      return render(
+        createElement(I18nProvider, {
+          locale: "en",
+          children: createElement(FileEditorPane, { fm, vaultName: "Personal", active: true }),
+        }),
+      );
+    }
+
+    const longFile = Array.from(
+      { length: EDITOR_BLOCK_LINES * 10 },
+      (_, line) => `line ${line + 1}`,
+    );
+
+    it("numbers the lines near the top of a long file, not all of it", async () => {
+      const { container } = renderLongFile(longFile);
+      await waitFor(() => expect(numbers(container)).toContain("1"));
+      expect(numbers(container)).toHaveLength(EDITOR_BLOCK_LINES);
+    });
+
+    it("keeps every line's text in the copy, so it wraps to the same height", async () => {
+      const { container } = renderLongFile(longFile);
+      await waitFor(() => expect(numbers(container)).toContain("1"));
+      const gutter = gutterOf(container);
+      expect(gutter?.children).toHaveLength(10);
+      expect(gutter?.textContent).toContain(longFile.at(-1));
+    });
+
+    it("moves the numbers with the scroll", async () => {
+      const { container } = renderLongFile(longFile);
+      await waitFor(() => expect(numbers(container)).toContain("1"));
+      const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
+      Object.defineProperty(textarea, "clientHeight", { value: 400, configurable: true });
+      Object.defineProperty(textarea, "scrollTop", { value: 5 * BLOCK_PX, writable: true });
+
+      fireEvent.scroll(textarea);
+
+      await waitFor(() => expect(numbers(container)).not.toContain("1"));
+      const firstShown = 4 * EDITOR_BLOCK_LINES + 1;
+      const lastShown = 6 * EDITOR_BLOCK_LINES;
+      expect(numbers(container)).toContain(String(firstShown));
+      expect(numbers(container)).toContain(String(lastShown));
+      expect(numbers(container)).not.toContain(String(firstShown - 1));
+      expect(numbers(container)).not.toContain(String(lastShown + 1));
+    });
+
+    it("gives an empty last line of a far block its row", async () => {
+      const lines = [...longFile];
+      lines[3 * EDITOR_BLOCK_LINES - 1] = "";
+      const { container } = renderLongFile(lines);
+      await waitFor(() => expect(numbers(container)).toContain("1"));
+      expect(gutterOf(container)?.children[2].textContent?.endsWith("\n​")).toBe(true);
+    });
+  });
+
+  describe("switching tabs", () => {
+    function fmOn(activeTabPath: string, openTabs: string[]) {
+      const { fm } = createMockFm({
+        getEditorContent: vi.fn((path: string) => (path === "/a.ts" ? "file a" : "file b")),
+      });
+      fm.workspace.openTabs = openTabs;
+      fm.workspace.activeTabPath = activeTabPath;
+      return fm;
+    }
+    const paneOf = (fm: FileManagerApi) =>
+      createElement(I18nProvider, {
+        locale: "en",
+        children: createElement(FileEditorPane, { fm, vaultName: "Personal", active: true }),
+      });
+    const shownText = (container: HTMLElement) => container.querySelector("textarea")?.value;
+
+    it("draws the new file after the frame that marks the tab", async () => {
+      const { container, rerender } = render(paneOf(fmOn("/a.ts", ["/a.ts", "/b.ts"])));
+      await waitFor(() => expect(shownText(container)).toBe("file a"));
+
+      rerender(paneOf(fmOn("/b.ts", ["/a.ts", "/b.ts"])));
+
+      expect(shownText(container)).toBe("file a");
+      await waitFor(() => expect(shownText(container)).toBe("file b"));
+    });
+
+    it("leaves a closed tab's file at once", async () => {
+      const { container, rerender } = render(paneOf(fmOn("/a.ts", ["/a.ts", "/b.ts"])));
+      await waitFor(() => expect(shownText(container)).toBe("file a"));
+
+      rerender(paneOf(fmOn("/b.ts", ["/b.ts"])));
+
+      expect(shownText(container)).toBe("file b");
+    });
   });
 
   it("renders WordWrapToggle in Code view and toggles on click and Alt+Z", async () => {

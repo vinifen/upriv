@@ -53,6 +53,10 @@ export const CORE_RPC_COMMANDS = {
   VAULT_PLAIN_STATUS: "vault_plain_status",
   /** Apply or restore held mass deletions. */
   VAULT_PLAIN_DELETIONS: "vault_plain_deletions",
+  /** Put chosen files in the folder. The sync thread writes them. */
+  VAULT_PLAIN_SEND: "vault_plain_send",
+  /** Wipe chosen files from the folder. The vault keeps them. */
+  VAULT_PLAIN_UNSEND: "vault_plain_unsend",
   VAULT_CLOSE: "vault_close",
   /** Rewrap the closed vault under a new password. Same master key; files stay. */
   VAULT_CHANGE_PASSWORD: "vault_change_password",
@@ -60,6 +64,7 @@ export const CORE_RPC_COMMANDS = {
   VAULT_CHANGE_KDF: "vault_change_kdf",
   /** Phase of an in-flight `vault_close` (`flush` | `backup` | null). Light; polled while closing. */
   VAULT_CLOSE_PHASE: "vault_close_phase",
+  VAULT_CLOSE_HURRY: "vault_close_hurry",
   VAULT_CONFIG_GET: "vault_config_get",
   /** Sum of regular-file lengths under `store/`. Metadata only; not the vault list. */
   VAULT_STORE_SIZE: "vault_store_size",
@@ -68,6 +73,7 @@ export const CORE_RPC_COMMANDS = {
   VAULT_RENAME: "vault_rename",
   VAULT_DELETE: "vault_delete",
   VAULT_EXPORT: "vault_export",
+  VAULT_PLAIN_EXPORT_SWEEP: "vault_plain_export_sweep",
   VAULT_EXPORT_CAPABILITIES: "vault_export_capabilities",
   VAULT_IMPORT_ZIP: "vault_import_zip",
   VAULT_IMPORT_7Z: "vault_import_7z",
@@ -78,6 +84,7 @@ export const CORE_RPC_COMMANDS = {
   VAULT_IMPORT_PROBE: "vault_import_probe",
   VAULT_FS_LIST: "vault_fs_list",
   VAULT_FS_REVISION: "vault_fs_revision",
+  VAULT_FS_PREVIEW_FITS: "vault_fs_preview_fits",
   VAULT_FS_READ: "vault_fs_read",
   VAULT_FS_READ_RANGE: "vault_fs_read_range",
   VAULT_FS_WRITE: "vault_fs_write",
@@ -104,14 +111,15 @@ export const CORE_RPC_COMMANDS = {
   BACKUP_PROMOTE: "backup_promote",
   /** Zip the closed vault straight into `backups/saves/`. */
   BACKUP_SAVE: "backup_save",
-  BACKUP_GET: "backup_get",
+  /** Copy one backup zip, or bundle several, into the chosen folder. The vault may be open. */
+  BACKUP_EXPORT: "backup_export",
   /**
    * Zip the whole `.upriv` into `<name>.zip` in the chosen folder. Every vault
    * must be closed or in recovery; they stay held until the zip is written.
    */
   DATA_FOLDER_EXPORT: "data_folder_export",
   /**
-   * Bytes done by the job a `vault_export`, `backup_save`, or
+   * Bytes done by the job a `vault_export`, `backup_save`, `backup_export`, or
    * `data_folder_export` request names, or `running: false`. Light; polled.
    */
   JOB_STATUS: "job_status",
@@ -149,7 +157,6 @@ export const SHELL_ONLY_RPC_COMMANDS = {
   APP_EXIT: "app_exit",
   PICK_DIRECTORY: "pick_directory",
   PICK_FILE: "pick_file",
-  PICK_SAVE_FILE: "pick_save_file",
   /** Open the vault mount path in Finder / Explorer / the desktop file manager. */
   REVEAL_IN_FILE_MANAGER: "reveal_in_file_manager",
   /** Open an absolute OS path in Finder / Explorer / the desktop file manager. */

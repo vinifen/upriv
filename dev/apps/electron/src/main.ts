@@ -212,27 +212,27 @@ async function resolveVaultMountOsPath(
   return osPath;
 }
 
-async function teardownDaemon(flush: boolean): Promise<void> {
+async function teardownDaemon(now: boolean): Promise<void> {
   stopEvents?.();
   stopEvents = null;
-  await stopDaemon(daemon, { flush });
+  await stopDaemon(daemon, { now });
   daemon = null;
   setDaemonExitHandler(null);
 }
 
-async function gracefulShutdown(exitCode = 0, flush = true): Promise<void> {
+async function gracefulShutdown(exitCode = 0, now = false): Promise<void> {
   if (quitting) return;
   quitting = true;
-  if (flush) await showQuitClosing();
-  await teardownDaemon(flush);
+  await showQuitClosing(now);
+  await teardownDaemon(now);
   app.exit(exitCode);
 }
 
-/** Let the renderer paint a closing overlay before the flush RPC blocks this quit. */
-async function showQuitClosing(): Promise<void> {
+/** Let the renderer paint a closing overlay before the shutdown RPC blocks this quit. */
+async function showQuitClosing(now: boolean): Promise<void> {
   const win = mainWindow;
   if (!win || win.isDestroyed()) return;
-  win.webContents.send("upriv-event", "quit_closing", null);
+  win.webContents.send("upriv-event", "quit_closing", { now });
   await new Promise<void>((resolve) => {
     setTimeout(resolve, 200);
   });
@@ -289,7 +289,7 @@ async function confirmQuitIfVaultsOpen(): Promise<QuitChoice> {
 
 async function quitFromChoice(choice: QuitChoice): Promise<void> {
   if (choice === "cancel") return;
-  await gracefulShutdown(0, choice === "flush");
+  await gracefulShutdown(0, choice === "now");
 }
 
 async function createWindow(): Promise<void> {
@@ -462,28 +462,6 @@ ipcMain.handle(
         return null;
       }
       return result.filePaths[0];
-    }
-
-    if (method === "pick_save_file") {
-      const title =
-        typeof params?.title === "string" && params.title.trim() ? params.title.trim() : undefined;
-      const defaultPath =
-        typeof params?.defaultPath === "string" && params.defaultPath.trim()
-          ? params.defaultPath.trim()
-          : undefined;
-      const filters = parseOpenDialogFilters(params?.filters);
-      const options: Electron.SaveDialogOptions = {
-        ...(title ? { title } : {}),
-        ...(defaultPath ? { defaultPath } : {}),
-        ...(filters ? { filters } : {}),
-      };
-      const result = mainWindow
-        ? await dialog.showSaveDialog(mainWindow, options)
-        : await dialog.showSaveDialog(options);
-      if (result.canceled || !result.filePath) {
-        return null;
-      }
-      return result.filePath;
     }
 
     if (method === "reveal_in_file_manager") {

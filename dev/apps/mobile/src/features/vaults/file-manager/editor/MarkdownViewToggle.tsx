@@ -3,7 +3,7 @@ import type { MarkdownViewMode } from "@upriv/shared";
 import { Icon } from "@/components/icons";
 import { useTranslation } from "@/i18n";
 import { useTheme } from "@/theme";
-import { colorAlpha } from "@/theme/tokens";
+import { colorAlpha, radii } from "@/theme/tokens";
 
 interface MarkdownViewToggleProps {
   mode: MarkdownViewMode;
@@ -69,7 +69,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     height: 24,
-    borderRadius: 6,
+    borderRadius: radii.full,
     borderWidth: 1,
     padding: 2,
     gap: 2,
@@ -79,6 +79,6 @@ const styles = StyleSheet.create({
     height: 18,
     alignItems: "center",
     justifyContent: "center",
-    borderRadius: 4,
+    borderRadius: radii.full,
   },
 });

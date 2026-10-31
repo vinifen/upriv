@@ -195,7 +195,7 @@ describe("FileEditorSearch", () => {
     expect(screen.getByRole("button", { name: "Find in file (Ctrl+F)" })).toBeTruthy();
   });
 
-  it("disables next and prev buttons when totalMatches is 0 and does not render a close button", async () => {
+  it("disables next and prev buttons when totalMatches is 0", async () => {
     renderWithI18n(
       createElement(
         FileEditorSearch,
@@ -211,9 +211,35 @@ describe("FileEditorSearch", () => {
     const nextBtn = screen.getByRole("button", { name: "Next match (Enter)" });
     expect((prevBtn as HTMLButtonElement).disabled).toBe(true);
     expect((nextBtn as HTMLButtonElement).disabled).toBe(true);
+  });
 
-    // No close ('✕') button exists
-    expect(screen.queryByRole("button", { name: /close/i })).toBeNull();
+  it("swaps the search icon for a clear button once there is text, which empties and closes", async () => {
+    const onQueryChange = vi.fn();
+    const { rerender } = renderWithI18n(
+      createElement(FileEditorSearch, defaultProps({ query: "", onQueryChange })),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Find in file (Ctrl+F)" }));
+    const input = (await screen.findByPlaceholderText("Find in file…")) as HTMLInputElement;
+    expect(screen.queryByRole("button", { name: "Clear and close search" })).toBeNull();
+
+    rerender(
+      createElement(I18nProvider, {
+        locale: "en",
+        children: createElement(FileEditorSearch, defaultProps({ query: "abc", onQueryChange })),
+      }),
+    );
+    input.focus();
+    fireEvent.click(screen.getByRole("button", { name: "Clear and close search" }));
+    expect(onQueryChange).toHaveBeenCalledWith("");
+    expect(document.activeElement).not.toBe(input);
+
+    rerender(
+      createElement(I18nProvider, {
+        locale: "en",
+        children: createElement(FileEditorSearch, defaultProps({ query: "", onQueryChange })),
+      }),
+    );
+    expect(screen.queryByPlaceholderText("Find in file…")).toBeNull();
   });
 
   it("clamps the active match index display when totalMatches is smaller than activeMatchIndex", async () => {

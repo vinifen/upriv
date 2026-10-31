@@ -1,31 +1,36 @@
 import {
   createContext,
-  useCallback,
   useContext,
-  useEffect,
   useMemo,
-  useReducer,
   useRef,
+  useState,
+  useSyncExternalStore,
   type ReactNode,
 } from "react";
 import {
-  createEmptyFileManagerState,
-  fileManagerReducer,
-  persistWorkspaceSnapshot,
+  createFileManagerStore,
+  fileManagerShell,
   isVaultFileManagerRetained,
+  persistWorkspaceSnapshot,
+  sameFileManagerShell,
   type FileManagerEntry,
+  type FileManagerShell,
+  type FileManagerState,
   type VaultFileSystemService,
   type VaultListItem,
   type VaultWorkspaceAction,
 } from "@upriv/shared";
 
-export interface FileManagerContextValue {
-  entries: Record<string, FileManagerEntry>;
-  entryOrder: readonly string[];
-  maximizedVaultId: string | null;
-  focusedVaultId: string | null;
-  maximizedEntry: FileManagerEntry | null;
-  minimizedEntries: FileManagerEntry[];
+/**
+ * File-manager sessions and their actions. The object never changes, so
+ * holding it does not draw again: read state with {@link useFileManagerSelector}
+ * (or the hooks built on it) or, inside a handler, with `getEntry`.
+ */
+export interface FileManagerController {
+  getState: () => FileManagerState;
+  /** The entry as it is now, including a dispatch made since the last render. */
+  getEntry: (vaultId: string) => FileManagerEntry | null;
+  subscribe: (listener: () => void) => () => void;
   openFromVault: (vault: VaultListItem) => void;
   minimize: (vaultId: string) => void;
   maximize: (vaultId: string) => void;
@@ -41,7 +46,7 @@ export interface FileManagerContextValue {
   setImportInFlight: (vaultId: string, inFlight: boolean) => void;
 }
 
-const FileManagerContext = createContext<FileManagerContextValue | null>(null);
+const FileManagerContext = createContext<FileManagerController | null>(null);
 
 export function FileManagerProvider({
   fs,
@@ -50,148 +55,104 @@ export function FileManagerProvider({
   fs: VaultFileSystemService;
   children: ReactNode;
 }) {
-  const [state, dispatch] = useReducer(fileManagerReducer, createEmptyFileManagerState());
-  const orderRef = useRef(state.order);
-  const entriesRef = useRef(state.entries);
+  const [store] = useState(() => createFileManagerStore());
 
-  useEffect(() => {
-    orderRef.current = state.order;
-  }, [state.order]);
-
-  useEffect(() => {
-    entriesRef.current = state.entries;
-  }, [state.entries]);
-
-  const persistEntrySnapshot = useCallback(
-    (vaultId: string) => {
-      const entry = entriesRef.current[vaultId];
-      if (!entry) return;
-      void persistWorkspaceSnapshot(fs, vaultId, entry.workspace);
-    },
-    [fs],
-  );
-
-  const flushWorkspaceSnapshot = useCallback(
-    async (vaultId: string) => {
-      const entry = entriesRef.current[vaultId];
-      if (!entry) return;
-      try {
-        await persistWorkspaceSnapshot(fs, vaultId, entry.workspace);
-      } catch {
-        // Close must still run. Layout is also written while open, once edits pause.
-      }
-    },
-    [fs],
-  );
-
-  const openFromVault = useCallback((vault: VaultListItem) => {
-    // Show the shell now. Layout hydration reads the vault file after paint.
-    const existing = entriesRef.current[vault.id];
-    dispatch({
-      type: "open_from_vault",
-      vault,
-      workspace: existing?.workspace,
-    });
-  }, []);
-
-  const minimize = useCallback((vaultId: string) => {
-    dispatch({ type: "minimize", vaultId });
-  }, []);
-
-  const maximize = useCallback((vaultId: string) => {
-    dispatch({ type: "maximize", vaultId });
-  }, []);
-
-  const dismiss = useCallback(
-    (vaultId: string) => {
-      persistEntrySnapshot(vaultId);
-      dispatch({ type: "dismiss", vaultId });
-    },
-    [persistEntrySnapshot],
-  );
-
-  const purgeForVaultClose = useCallback(
-    (vaultId: string) => {
-      fs.resetSession(vaultId);
-      dispatch({ type: "purge_for_vault_close", vaultId });
-    },
-    [fs],
-  );
-
-  const syncWithVaultList = useCallback(
-    (vaults: VaultListItem[]) => {
-      const openIds = new Set(
-        vaults.filter((vault) => isVaultFileManagerRetained(vault)).map((vault) => vault.id),
-      );
-      const knownIds = new Set(vaults.map((vault) => vault.id));
-      for (const vaultId of orderRef.current) {
-        if (!knownIds.has(vaultId) || !openIds.has(vaultId)) {
-          fs.resetSession(vaultId);
-        }
-      }
-      dispatch({ type: "sync_with_vault_list", vaults });
-    },
-    [fs],
-  );
-
-  const dispatchWorkspace = useCallback(
-    (vaultId: string, workspaceAction: VaultWorkspaceAction) => {
-      dispatch({ type: "workspace", vaultId, action: workspaceAction });
-    },
-    [],
-  );
-
-  const setImportInFlight = useCallback((vaultId: string, inFlight: boolean) => {
-    dispatch({ type: "set_import_in_flight", vaultId, inFlight });
-  }, []);
-
-  const value = useMemo(() => {
-    const maximizedEntry = state.maximizedVaultId
-      ? (state.entries[state.maximizedVaultId] ?? null)
-      : null;
-    const minimizedEntries = state.order
-      .map((id) => state.entries[id])
-      .filter((entry): entry is FileManagerEntry =>
-        Boolean(entry && entry.surface === "minimized"),
-      );
-
+  const controller = useMemo<FileManagerController>(() => {
+    const getEntry = (vaultId: string) => store.getState().entries[vaultId] ?? null;
     return {
-      entries: state.entries,
-      entryOrder: state.order,
-      maximizedVaultId: state.maximizedVaultId,
-      focusedVaultId: state.focusedVaultId,
-      maximizedEntry,
-      minimizedEntries,
-      openFromVault,
-      minimize,
-      maximize,
-      dismiss,
-      flushWorkspaceSnapshot,
-      purgeForVaultClose,
-      syncWithVaultList,
-      dispatchWorkspace,
-      setImportInFlight,
+      getState: store.getState,
+      getEntry,
+      subscribe: store.subscribe,
+      // Show the shell now. Layout hydration reads the vault file after paint.
+      openFromVault: (vault) => store.dispatch({ type: "open_from_vault", vault }),
+      minimize: (vaultId) => store.dispatch({ type: "minimize", vaultId }),
+      maximize: (vaultId) => store.dispatch({ type: "maximize", vaultId }),
+      dismiss(vaultId) {
+        const entry = getEntry(vaultId);
+        if (entry) {
+          void persistWorkspaceSnapshot(fs, vaultId, entry.workspace).catch(() => {
+            /* Best-effort: the workspace also writes its layout as it unmounts. */
+          });
+        }
+        store.dispatch({ type: "dismiss", vaultId });
+      },
+      async flushWorkspaceSnapshot(vaultId) {
+        const entry = getEntry(vaultId);
+        if (!entry) return;
+        try {
+          await persistWorkspaceSnapshot(fs, vaultId, entry.workspace);
+        } catch {
+          // Close must still run. Layout is also written while open, once edits pause.
+        }
+      },
+      purgeForVaultClose(vaultId) {
+        fs.resetSession(vaultId);
+        store.dispatch({ type: "purge_for_vault_close", vaultId });
+      },
+      syncWithVaultList(vaults) {
+        const openIds = new Set(
+          vaults.filter((vault) => isVaultFileManagerRetained(vault)).map((vault) => vault.id),
+        );
+        const knownIds = new Set(vaults.map((vault) => vault.id));
+        for (const vaultId of store.getState().order) {
+          if (!knownIds.has(vaultId) || !openIds.has(vaultId)) {
+            fs.resetSession(vaultId);
+          }
+        }
+        store.dispatch({ type: "sync_with_vault_list", vaults });
+      },
+      dispatchWorkspace: (vaultId, action) =>
+        store.dispatch({ type: "workspace", vaultId, action }),
+      setImportInFlight: (vaultId, inFlight) =>
+        store.dispatch({ type: "set_import_in_flight", vaultId, inFlight }),
     };
-  }, [
-    state,
-    openFromVault,
-    minimize,
-    maximize,
-    dismiss,
-    flushWorkspaceSnapshot,
-    purgeForVaultClose,
-    syncWithVaultList,
-    dispatchWorkspace,
-    setImportInFlight,
-  ]);
+  }, [fs, store]);
 
-  return <FileManagerContext.Provider value={value}>{children}</FileManagerContext.Provider>;
+  return <FileManagerContext.Provider value={controller}>{children}</FileManagerContext.Provider>;
 }
 
-export function useFileManager(): FileManagerContextValue {
-  const ctx = useContext(FileManagerContext);
-  if (!ctx) {
+export function useFileManager(): FileManagerController {
+  const controller = useContext(FileManagerContext);
+  if (!controller) {
     throw new Error("useFileManager must be used within FileManagerProvider");
   }
-  return ctx;
+  return controller;
+}
+
+interface SelectionCache<T> {
+  state: FileManagerState;
+  select: (state: FileManagerState) => T;
+  value: T;
+}
+
+/**
+ * Draw again only when the selected value changes. `isEqual` keeps the
+ * previous value when a new one matches it, so a selector may build objects.
+ */
+export function useFileManagerSelector<T>(
+  select: (state: FileManagerState) => T,
+  isEqual: (a: T, b: T) => boolean = Object.is,
+): T {
+  const { getState, subscribe } = useFileManager();
+  const cache = useRef<SelectionCache<T> | null>(null);
+  const getSnapshot = () => {
+    const state = getState();
+    const last = cache.current;
+    if (last && last.state === state && last.select === select) return last.value;
+    const value = select(state);
+    const kept = last && isEqual(last.value, value) ? last.value : value;
+    cache.current = { state, select, value: kept };
+    return kept;
+  };
+  return useSyncExternalStore(subscribe, getSnapshot);
+}
+
+/** One vault's file manager. Another vault's edits do not draw it again. */
+export function useFileManagerEntry(vaultId: string): FileManagerEntry | null {
+  return useFileManagerSelector((state) => state.entries[vaultId] ?? null);
+}
+
+/** Open file managers without their workspaces: the dock and the modal frame. */
+export function useFileManagerShell(): FileManagerShell {
+  return useFileManagerSelector(fileManagerShell, sameFileManagerShell);
 }

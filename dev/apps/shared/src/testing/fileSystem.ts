@@ -439,6 +439,9 @@ export function createAsyncVaultFileSystemService(): VaultFileSystemService {
         "OS mount is not available in the in-memory file manager",
       );
     },
+    sendToFolder: async () => 0,
+    removeFromFolder: async () => ({ removed: 0, kept: 0 }),
+    previewFits: async () => true,
     languageFromPath: (path: string) => languageFromPath(path),
   };
 }

@@ -7,11 +7,6 @@ interface CollapseProps {
   children: ReactNode;
   openMs?: number;
   closeMs?: number;
-  /**
-   * Size the clip box to the children width instead of stretching to the parent.
-   * Default body is `left/right: 0` (group rows). Dock chips need shrink-wrap.
-   */
-  fitContent?: boolean;
 }
 
 /**
@@ -25,11 +20,9 @@ export function Collapse({
   children,
   openMs = GROUP_EXPAND_MS,
   closeMs = GROUP_COLLAPSE_MS,
-  fitContent = false,
 }: CollapseProps) {
   const [mounted, setMounted] = useState(open);
   const [contentH, setContentH] = useState(0);
-  const [contentW, setContentW] = useState(0);
   const [settledOpen, setSettledOpen] = useState(false);
   const height = useRef(new Animated.Value(0)).current;
   const openRef = useRef(open);
@@ -79,7 +72,6 @@ export function Collapse({
       style={[
         waitingFirstMeasure || settledOpen ? styles.unclipped : styles.clip,
         { height },
-        fitContent && contentW > 0 ? { width: contentW } : null,
         waitingFirstMeasure ? styles.waitingMeasure : null,
       ]}
       pointerEvents={open ? "auto" : "none"}
@@ -88,13 +80,9 @@ export function Collapse({
     >
       <View
         collapsable={false}
-        style={fitContent ? styles.bodyFitContent : styles.body}
+        style={styles.body}
         onLayout={(event) => {
           const nextH = Math.round(event.nativeEvent.layout.height);
-          const nextW = Math.round(event.nativeEvent.layout.width);
-          if (fitContent && nextW > 0 && nextW !== contentW) {
-            setContentW(nextW);
-          }
           if (nextH <= 0 || nextH === contentH) return;
           const wasMeasured = contentH > 0;
           setContentH(nextH);
@@ -123,10 +111,5 @@ const styles = StyleSheet.create({
     position: "absolute",
     left: 0,
     right: 0,
-  },
-  bodyFitContent: {
-    position: "absolute",
-    left: 0,
-    top: 0,
   },
 });

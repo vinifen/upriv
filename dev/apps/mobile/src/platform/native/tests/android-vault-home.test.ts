@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { isSafLogicalRoot, SAF_VAULT_ROOT } from "../androidVaultHome";
+import { SAF_VAULT_ROOT } from "@upriv/shared";
+import { isSafLogicalRoot } from "../androidVaultHome";
 
 describe("isSafLogicalRoot", () => {
   it("matches the rust logical data-folder path", () => {

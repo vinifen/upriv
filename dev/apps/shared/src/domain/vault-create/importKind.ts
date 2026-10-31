@@ -10,6 +10,10 @@ export type CreateVaultImportDraft = Pick<
   | "importKind"
   | "importShape"
   | "importExtract"
+  | "importKeepWorkspace"
+  | "importKeepSettings"
+  | "importCarriesWorkspace"
+  | "importCarriesSettings"
   | "importFileName"
   | "zipLayout"
   | "importZipRejected"
@@ -65,6 +69,46 @@ function isStoreZip(draft: ImportDecision): boolean {
 export function createVaultImportNeedsArchivePassword(draft: ImportDecision): boolean {
   if (draft.source !== "import" || draft.importKind === "backup") return false;
   return importExtractEnabled(draft) && archiveKind(draft.importFileName ?? "") === "seven_zip";
+}
+
+/**
+ * The switch that keeps the archive's file manager layout shows. A `.7z` cannot
+ * be read before its password, so it shows there whether the file has one or not.
+ */
+export function importKeepWorkspaceApplies(draft: ImportDecision): boolean {
+  if (!importExtractEnabled(draft)) return false;
+  return (
+    archiveKind(draft.importFileName ?? "") === "seven_zip" || draft.importCarriesWorkspace === true
+  );
+}
+
+/** The switch that keeps the archive's vault settings shows, like the layout's. */
+export function importKeepSettingsApplies(draft: ImportDecision): boolean {
+  if (!importExtractEnabled(draft)) return false;
+  return (
+    archiveKind(draft.importFileName ?? "") === "seven_zip" || draft.importCarriesSettings === true
+  );
+}
+
+/** Vault settings a file carries belong in this draft. A store copy always takes them. */
+export function importUsesCarriedSettings(draft: ImportDecision): boolean {
+  if (draft.importKind === "backup" || draft.zipLayout === "store") return true;
+  return importExtractEnabled(draft) && draft.importKeepSettings !== false;
+}
+
+/**
+ * The fields a `.7z` may fill wait for its password test: until then the wizard
+ * cannot read the file, so an edit could lose to a value nobody has seen. Other
+ * imports read their settings when the file is picked.
+ */
+export function createVaultSettingsLocked(
+  draft: ImportDecision & { passwordValidated: boolean },
+): boolean {
+  return (
+    createVaultImportNeedsArchivePassword(draft) &&
+    draft.importKeepSettings !== false &&
+    !draft.passwordValidated
+  );
 }
 
 /**
@@ -136,6 +180,7 @@ export function createVaultImportPackage(
       kind: "store_zip" | "seven_zip" | "files_zip" | "os_tree";
       archivePath?: string;
       archivePassword?: string;
+      keepWorkspace?: boolean;
     }
   | undefined {
   if (result.source !== "import") return undefined;
@@ -151,6 +196,10 @@ export function createVaultImportPackage(
     kind,
     archivePath,
     archivePassword: kind === "seven_zip" ? password : undefined,
+    keepWorkspace:
+      kind === "seven_zip" || kind === "files_zip"
+        ? result.importKeepWorkspace === true
+        : undefined,
   };
 }
 

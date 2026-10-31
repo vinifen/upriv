@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
-import Svg, { Path } from "react-native-svg";
 import {
   buildGroupedVaultPickerItems,
   GROUPED_VAULT_PICKER_VISIBLE_ROWS,
@@ -10,6 +9,7 @@ import {
 import { useTranslation } from "@/i18n";
 import { useTheme } from "@/theme";
 import { ThemedInput } from "@/components/settings";
+import { Checkbox } from "@/components/ui";
 import { radii, spacing } from "@/theme/tokens";
 
 interface GroupedVaultPickerProps {
@@ -129,28 +129,7 @@ export function GroupedVaultPicker({
                   },
                 ]}
               >
-                <View
-                  style={[
-                    styles.checkbox,
-                    {
-                      borderColor: checked ? colors.accent : colors.outlineVariant,
-                      backgroundColor: checked ? colors.accent : colors.surfaceContainerHigh,
-                    },
-                  ]}
-                >
-                  {checked ? (
-                    <Svg width={10} height={10} viewBox="0 0 16 16">
-                      <Path
-                        d="M3.2 8.2 6.5 11.4 12.8 4.6"
-                        fill="none"
-                        stroke={colors.accentForeground}
-                        strokeWidth={2}
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      />
-                    </Svg>
-                  ) : null}
-                </View>
+                <Checkbox checked={checked} interactive={false} />
                 <Text style={[typography.body, styles.rowLabel]} numberOfLines={1}>
                   {item.vault.displayName}
                 </Text>
@@ -192,14 +171,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     paddingVertical: 6,
     borderRadius: radii.sm,
-  },
-  checkbox: {
-    width: 16,
-    height: 16,
-    borderRadius: radii.xs,
-    borderWidth: 1,
-    alignItems: "center",
-    justifyContent: "center",
   },
   rowLabel: {
     flex: 1,

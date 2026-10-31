@@ -303,6 +303,7 @@ function TabChip({
   /** Items of the menu a double tap opens (desktop right-click). */
   menu: ReactNode;
 }) {
+  const labelWeight = { fontWeight: isActive ? ("600" as const) : ("400" as const) };
   const armedRef = useRef(false);
   const panGrantedRef = useRef(false);
   const movedRef = useRef(false);
@@ -468,21 +469,32 @@ function TabChip({
                 : colors.onSurfaceVariant
           }
         />
-        <Text
-          style={[
-            styles.tabLabel,
-            typography.caption,
-            {
-              color: isActive ? colors.onSurface : colors.onSurfaceVariant,
-              fontWeight: isActive ? "600" : "400",
-            },
-          ]}
-          numberOfLines={1}
-          ellipsizeMode="tail"
-        >
-          {name}
-        </Text>
-        {isDirty ? <View style={styles.dirtyDot} /> : null}
+        {/* The hidden name sets the width, so the dot takes room from the title. */}
+        <View style={styles.tabLabelSlot}>
+          <Text
+            style={[styles.tabLabel, styles.tabLabelSizer, typography.caption, labelWeight]}
+            numberOfLines={1}
+            accessibilityElementsHidden
+            importantForAccessibility="no-hide-descendants"
+          >
+            {name}
+          </Text>
+          <View style={styles.tabLabelRow}>
+            <Text
+              style={[
+                styles.tabLabel,
+                typography.caption,
+                labelWeight,
+                { color: isActive ? colors.onSurface : colors.onSurfaceVariant },
+              ]}
+              numberOfLines={1}
+              ellipsizeMode="tail"
+            >
+              {name}
+            </Text>
+            {isDirty ? <View style={styles.dirtyDot} /> : null}
+          </View>
+        </View>
       </View>
       {!dragActive ? (
         <View
@@ -546,6 +558,18 @@ const styles = StyleSheet.create({
     paddingLeft: 10,
     paddingRight: 4,
     maxWidth: TAB_LABEL_MAX + 22,
+  },
+  tabLabelSlot: {
+    flexShrink: 1,
+  },
+  tabLabelSizer: {
+    opacity: 0,
+  },
+  tabLabelRow: {
+    ...StyleSheet.absoluteFillObject,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
   },
   tabLabel: {
     maxWidth: TAB_LABEL_MAX,

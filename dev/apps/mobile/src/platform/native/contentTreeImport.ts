@@ -129,12 +129,6 @@ export function releaseContentTree(path: string): boolean {
   return true;
 }
 
-/** Drop a pick no job took, including its cache copy. */
-export function releaseUnclaimedImport(path: string): void {
-  if (!releaseContentTree(path)) return;
-  void releaseImportCache(path).catch(() => undefined);
-}
-
 /** The creating job finished reading this listing. */
 export function releaseContentJob(tree: ContentImportTree): void {
   for (const [id, claimed] of claimedByVault) {

@@ -22,6 +22,7 @@ import {
   type AppSettingsLoadResult,
   type CreateVaultInput,
   backupEntryKey,
+  backupExportFilename,
   type VaultBackupEntry,
   type VaultListItem,
   type VaultPipelineError as VaultPipelineErrorType,
@@ -332,9 +333,9 @@ export function createMobileMockServices(): AppServices {
       },
       // A mock pick is not a real folder: report the file core would write there.
       async exportToFolder(vault, request, destDir) {
-        // A `.7z` unlocks the vault with its password, as core does.
+        // A `.7z` or a plain-text `.zip` unlocks the vault with its password, as core does.
         if (
-          request.format === "seven_zip" &&
+          request.format !== "store_zip" &&
           !isMockLifecyclePasswordValid(request.password ?? "")
         ) {
           throw new RpcError(VAULT_ERROR_CODES.WRONG_PASSWORD, "mock: wrong vault password");
@@ -348,6 +349,7 @@ export function createMobileMockServices(): AppServices {
       async exportCapabilities() {
         return { sevenZip: true };
       },
+      async sweepPlainExports() {},
     },
 
     vaultGroups: mockGroups.service,
@@ -510,17 +512,8 @@ export function createMobileMockServices(): AppServices {
         MOCK_BACKUPS[vaultId] = [entry, ...(MOCK_BACKUPS[vaultId] ?? [])];
         return { ...entry };
       },
-      async getBackupBytes(_vaultId, entry) {
-        const header = `[Upriv mock backup]\n${entry.stamp}\n${entry.saved ? "saved\n" : ""}`;
-        return new TextEncoder().encode(header);
-      },
-      async exportToPath(_vaultId, entry, destPath) {
-        const header = `[Upriv mock backup]\n${entry.stamp}\n${entry.saved ? "saved\n" : ""}`;
-        const data = new TextEncoder().encode(header);
-        return { path: destPath, size: data.byteLength };
-      },
-      async exportSnapshotsToPath(_vaultId, stamps, destPath) {
-        return { path: destPath, size: stamps.length };
+      async exportTo(vaultId, keys, destDir) {
+        return { path: `${destDir}/${backupExportFilename(keys, vaultId)}`, size: keys.length };
       },
     },
 
@@ -573,6 +566,9 @@ export function createMobileMockServices(): AppServices {
         await runTimedPipeline(CLOSING_PIPELINE_STEP_COUNT, onStep);
         return { backupFailed: false, backupFailure: null, plain: null };
       },
+      async hurryClose() {
+        return true;
+      },
       resolveWorkspacePath(displayName, parentPath) {
         return resolveVaultMountPoint(parentPath ?? "", displayName) ?? "";
       },
@@ -606,7 +602,7 @@ export function createMobileMockServices(): AppServices {
         return { ok: password.length > 0, embedded: null };
       },
       async readImportPackageSettings() {
-        return { embedded: null, zipLayout: "store" as const };
+        return { embedded: null, zipLayout: "store" as const, carriesWorkspace: false };
       },
       async selectImportPackageForProbe() {
         return {

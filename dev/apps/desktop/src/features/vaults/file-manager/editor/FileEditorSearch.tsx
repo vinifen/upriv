@@ -85,11 +85,15 @@ export const FileEditorSearch = forwardRef<FileEditorSearchHandle, FileEditorSea
         onPrevMatch();
       } else if (event.key === "Escape") {
         event.preventDefault();
-        onQueryChange("");
-        setFocusedOpen(false);
-        inputRef.current?.blur();
+        clearAndClose();
       }
     };
+
+    function clearAndClose() {
+      onQueryChange("");
+      setFocusedOpen(false);
+      inputRef.current?.blur();
+    }
 
     if (!isOpen) {
       const label = t("modal.file_manager.search.open");
@@ -110,19 +114,28 @@ export const FileEditorSearch = forwardRef<FileEditorSearchHandle, FileEditorSea
     const matchLabel =
       hasQuery && totalMatches > 0 ? `${safeActiveIndex + 1}/${totalMatches}` : hasQuery ? "∅" : "";
 
+    // Up to 12rem; the path beside it gives up its width first, then this field down to 7rem.
     return (
       <div
         ref={rootRef}
         role="search"
         aria-label={t("modal.file_manager.search.placeholder")}
-        className="flex h-6 shrink-0 items-center gap-1 rounded-md border border-outline-variant/70 bg-surface-container-highest px-1.5 text-[11px] leading-none transition-all"
+        className="flex h-6 min-w-[7rem] max-w-[12rem] flex-[0_1_12rem] items-center gap-1 rounded-full border border-outline-variant/70 bg-surface-container-highest px-1.5 text-[11px] leading-none transition-all"
       >
-        <Icon
-          name="search"
-          size={12}
-          className={["shrink-0", hasQuery ? "text-accent" : "text-on-surface-variant"].join(" ")}
-          aria-hidden
-        />
+        {hasQuery ? (
+          <button
+            type="button"
+            aria-label={t("modal.file_manager.search.clear")}
+            title={t("modal.file_manager.search.clear")}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={clearAndClose}
+            className="flex h-4 w-4 shrink-0 items-center justify-center rounded text-on-surface-variant transition-colors hover:bg-surface-container hover:text-on-surface"
+          >
+            <Icon name="close" size={11} />
+          </button>
+        ) : (
+          <Icon name="search" size={12} className="shrink-0 text-on-surface-variant" aria-hidden />
+        )}
         <input
           ref={inputRef}
           type="text"
@@ -138,7 +151,7 @@ export const FileEditorSearch = forwardRef<FileEditorSearchHandle, FileEditorSea
           }}
           onChange={(event) => onQueryChange(event.target.value)}
           onKeyDown={handleKeyDown}
-          className="h-full w-24 bg-transparent text-[11px] leading-5 text-on-surface outline-none placeholder:text-on-surface-variant/60 sm:w-32"
+          className="h-full min-w-0 flex-1 bg-transparent text-[11px] leading-5 text-on-surface outline-none placeholder:text-on-surface-variant/60"
         />
         {matchLabel ? (
           <span

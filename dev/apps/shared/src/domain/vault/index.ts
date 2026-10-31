@@ -19,6 +19,7 @@ export {
   isVaultPipelineDisplayBusy,
   isVaultOpenCredentialResumeStatus,
   isVaultOpenResumeTarget,
+  vaultCloseNowOffered,
   isVaultCloseQueued,
   isVaultCloseWritesLocked,
   isVaultListRowActivatable,

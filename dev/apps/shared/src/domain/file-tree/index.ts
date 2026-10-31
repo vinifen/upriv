@@ -1,5 +1,7 @@
 export type { FileTreeNode, FileTreeNodeType, VaultFileContent, VaultFileLanguage } from "./types";
 export { parseFileTreeNode } from "./parse";
+export { treeFolderPresence, type FolderPresence } from "./folderPresence";
+export { searchTreeRows } from "./searchTree";
 export { vaultFileLanguageFromPath, imageMimeFromPath, imageDataUrlFromBase64 } from "./language";
 export {
   validateFileName,
@@ -12,7 +14,13 @@ export {
 export type { FileNameValidationResult } from "./fileNameValidation";
 export { renameBasenameSelection } from "./renameSelection";
 export { fileNameErrorI18nKey, type FileNameErrorCode } from "./errorMessages";
-export { joinPath, fileBaseName, findNode } from "./treeUtils";
+export {
+  joinPath,
+  fileBaseName,
+  findNode,
+  visibleTreeRows,
+  type VisibleTreeRow,
+} from "./treeUtils";
 export {
   getParentPath,
   ancestorFolderPaths,

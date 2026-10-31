@@ -8,12 +8,15 @@ import {
   rpcVaultFsList,
   rpcVaultFsMove,
   rpcVaultFsOsPath,
+  rpcVaultFsPreviewFits,
   rpcVaultFsRead,
   rpcVaultFsReadRange,
   rpcVaultFsRename,
   rpcVaultFsRevision,
   rpcVaultFsTruncate,
   rpcVaultFsWrite,
+  rpcVaultPlainSend,
+  rpcVaultPlainUnsend,
   rpcVaultFsWriteRange,
 } from "@/lib/rpc";
 
@@ -35,4 +38,7 @@ export const desktopVaultFileSystemService = createLiveVaultFileSystemService({
   rename: (id, path, newName) => rpcVaultFsRename(id, path, newName),
   move: (id, fromPath, toFolderPath) => rpcVaultFsMove(id, fromPath, toFolderPath),
   osPath: (id, path) => rpcVaultFsOsPath(id, path),
+  previewFits: (id, path) => rpcVaultFsPreviewFits(id, path),
+  plainSend: (id, paths) => rpcVaultPlainSend(id, paths),
+  plainUnsend: (id, paths) => rpcVaultPlainUnsend(id, paths),
 });

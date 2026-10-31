@@ -5,6 +5,7 @@
 #[allow(unused_imports)]
 use crate::host_fs::HostFsQuery;
 mod backup;
+mod config_folder;
 mod create;
 mod data_folder_export;
 mod delete;
@@ -20,6 +21,7 @@ mod os_import;
 mod partial;
 mod persistence;
 mod plain;
+mod plain_zip;
 mod rename;
 mod rewrap;
 mod seven_zip;
@@ -39,22 +41,24 @@ use crate::session::is_vault_open_at;
 use crate::store::{content_hash_hex, probe_unlock_preset, KdfUnlockPreset};
 
 pub use backup::{
-    backup_on_close, backup_zip_file, delete_backups, export_backups_to_path, list_backups,
-    promote_backup_save, read_backup_zip_bytes, save_backup_now, BackupEntry,
+    backup_zip_file, delete_backups, export_backups, list_backups, promote_backup_save,
+    save_backup_now, BackupEntry,
 };
+pub use config_folder::{ExportInclude, ImportExtras};
 pub use create::{create_vault, create_vault_with_welcome};
 pub use data_folder_export::{export_data_folder, DataFolderExport};
 pub use delete::delete_vault;
 pub use embedded_settings::{parse_embedded_settings, EmbeddedVaultSettings};
-pub use export::{export_logical_seven_zip, export_store_zip, VaultExportFile};
+pub use export::{export_logical_seven_zip, export_plain_zip, export_store_zip};
+pub use export_folder::ExportedFile;
 pub use files_zip::{
-    classify_import_zip_bytes, classify_import_zip_path, import_logical_files_zip,
-    import_logical_files_zip_path, ZipImportClass,
+    import_logical_files_zip, import_logical_files_zip_path, probe_import_zip_bytes,
+    probe_import_zip_path, ImportZipProbe, ZipImportClass,
 };
 pub use fs::{
     fs_create_file, fs_create_folder, fs_delete, fs_ensure_folder, fs_import_from_os_path,
-    fs_list_tree, fs_mkdir, fs_move, fs_os_path, fs_read_file, fs_read_range, fs_rename,
-    fs_tree_revision, fs_truncate, fs_write_file, fs_write_from_reader, fs_write_range,
+    fs_list_tree, fs_mkdir, fs_move, fs_os_path, fs_preview_fits, fs_read_file, fs_read_range,
+    fs_rename, fs_tree_revision, fs_truncate, fs_write_file, fs_write_from_reader, fs_write_range,
 };
 pub use import::{
     import_from_backup, import_store_from_archive_path, import_store_tree, import_store_zip,
@@ -62,22 +66,23 @@ pub use import::{
 };
 pub use import_slots::{import_slots, import_slots_for};
 pub use open_close::{
-    close_all_vaults, close_phase, close_vault, close_vault_auto, confirm_plain_destination,
-    open_vault, open_vault_confirmed, CloseVaultOutcome, OpenVaultOutcome,
+    close_all_vaults, close_all_vaults_now, close_phase, close_vault, close_vault_auto,
+    close_vault_now, confirm_plain_destination, hurry_close, open_vault, open_vault_confirmed,
+    CloseVaultOutcome, OpenVaultOutcome,
 };
 pub use os_import::{
     abort_import_vault, import_logical_os_path, ingest_import_directory, ingest_import_reader,
     open_import_session,
 };
-pub use partial::{discard_partial, PartialWork};
 pub use persistence::{load_vault_persistence, VaultPersistence};
-pub(crate) use plain::{ensure_no_leftover, PlainSession};
+pub(crate) use plain::{ensure_no_leftover, holds_leftover, PlainSession};
 pub use plain::{
-    plain_deletions, plain_destination, plain_leftover, plain_status, plain_sync,
-    remove_plain_leftover, set_plain_observer, PlainCloseSummary, PlainDestination,
+    plain_deletions, plain_destination, plain_leftover, plain_send, plain_status, plain_sync,
+    plain_unsend, remove_plain_leftover, set_plain_observer, PlainCloseSummary, PlainDestination,
     PlainFolderClass, PlainLeftover, PlainObserver, PlainPlace, PlainStatus, PlainSyncReport,
-    PlainTotals, PlainWipe,
+    PlainTotals, PlainUnsend, PlainWipe,
 };
+pub use plain_zip::sweep_plain_exports;
 pub use rename::{rename_vault, VaultRenameResult};
 pub use rewrap::{change_vault_kdf, change_vault_password};
 pub use seven_zip::{
@@ -101,6 +106,9 @@ pub struct VaultListItem {
     pub note: String,
     pub last_accessed_at: Option<String>,
     pub unlock_preset: Option<KdfUnlockPreset>,
+    /// A plaintext folder from an earlier session waits to be removed. Its
+    /// folder path, mode, and name are locked until then.
+    pub plain_leftover: bool,
 }
 
 /// One vault under a vault-root (scan row before session/header enrichment).
@@ -249,7 +257,11 @@ fn content_hash_mismatch(vault_dir: &Path, saved: Option<&str>) -> bool {
     }
 }
 
-fn list_item_from_entry(entry: &VaultListEntry, dirty: &HashSet<String>) -> VaultListItem {
+fn list_item_from_entry(
+    root: &VaultRoot,
+    entry: &VaultListEntry,
+    dirty: &HashSet<String>,
+) -> VaultListItem {
     let saved = listed_persistence(&entry.vault_dir, &entry.id);
     let last_accessed_at = saved
         .as_ref()
@@ -267,6 +279,9 @@ fn list_item_from_entry(entry: &VaultListEntry, dirty: &HashSet<String>) -> Vaul
     } else {
         None
     };
+    // Every leftover is a dirty close, so a clean vault pays for no state read.
+    let plain_leftover =
+        session != Some("open") && dirty.contains(&entry.id) && holds_leftover(root, &entry.id);
     VaultListItem {
         id: entry.id.clone(),
         display_name: entry.display_name.clone(),
@@ -278,6 +293,7 @@ fn list_item_from_entry(entry: &VaultListEntry, dirty: &HashSet<String>) -> Vaul
         note: entry.note.clone(),
         last_accessed_at,
         unlock_preset,
+        plain_leftover,
     }
 }
 
@@ -292,7 +308,7 @@ pub fn list_vaults(root: &VaultRoot) -> Result<Vec<VaultListItem>> {
         .collect();
     Ok(entries
         .iter()
-        .map(|e| list_item_from_entry(e, &dirty))
+        .map(|e| list_item_from_entry(root, e, &dirty))
         .collect())
 }
 
@@ -358,6 +374,7 @@ pub fn vault_list_item(root: &VaultRoot, vault_id: &str) -> Result<VaultListItem
         .collect();
     let config = load_vault_config_raw(&vault_dir)?;
     Ok(list_item_from_entry(
+        root,
         &VaultListEntry {
             id: config.vault.id.clone(),
             display_name: config.vault.display_name.clone(),

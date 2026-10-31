@@ -2,7 +2,7 @@ import type { VaultExportFormat } from "@upriv/shared";
 import { useExportFolder, type ExportFolder } from "@/hooks/useExportFolder";
 import { useTranslation } from "@/i18n";
 
-/** The folder each export format writes into: one for the `.zip`, one for the `.7z`. */
+/** The folder each export format writes into, one per format. */
 export type VaultExportFolders = Record<VaultExportFormat, ExportFolder>;
 
 /**
@@ -15,5 +15,6 @@ export function useVaultExportFolders(): VaultExportFolders {
   return {
     store_zip: useExportFolder(t("vault.export.dialog.picker_title.store_zip")),
     seven_zip: useExportFolder(t("vault.export.dialog.picker_title.seven_zip")),
+    plain_zip: useExportFolder(t("vault.export.dialog.picker_title.plain_zip")),
   };
 }

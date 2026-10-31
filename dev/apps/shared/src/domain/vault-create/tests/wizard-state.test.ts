@@ -5,11 +5,13 @@ import {
   createVaultWizardReducer,
   resolveCreateVaultCloseIntent,
   selectCreateVaultWizardView,
+  type CreateVaultDraft,
   type CreateVaultWizardAction,
   type CreateVaultWizardContext,
   type CreateVaultWizardState,
+  type EmbeddedVaultSettings,
 } from "..";
-import { createVaultDraftFixture } from "./fixtures";
+import { createVaultDraftFixture, vaultSettingsFixture } from "./fixtures";
 
 const EMPTY_CONTEXT: CreateVaultWizardContext = { existingVaultIds: [], knownGroupIds: [] };
 
@@ -173,12 +175,140 @@ describe("createVaultWizardReducer / submit and close", () => {
     expect(reopened).toEqual({
       baseline: draft,
       draft,
+      carried: null,
       currentStep: "source",
       attemptedSteps: new Set(),
       submitAttempted: false,
       testingPassword: false,
       discardConfirmOpen: false,
     });
+  });
+});
+
+describe("createVaultWizardReducer / settings a file carries", () => {
+  const embedded = (): EmbeddedVaultSettings => {
+    const settings = vaultSettingsFixture();
+    return {
+      settings: {
+        ...settings,
+        vault: { ...settings.vault, display_name: "Carried", note: "from the file" },
+        backup: { ...settings.backup, keep_last: 9 },
+      },
+      unlockPreset: "1gib",
+    };
+  };
+  const picked = (overrides: Partial<CreateVaultDraft> = {}) =>
+    createVaultDraftFixture([], {
+      source: "import",
+      importFileName: "Notes.7z",
+      importFilePath: "/tmp/Notes.7z",
+      displayName: "Notes",
+      ...overrides,
+    });
+  const withSettings = (draft = picked(), existingDisplayNames: readonly string[] = []) =>
+    reduce(openedAt("password", draft), {
+      type: "embeddedSettings",
+      embedded: embedded(),
+      snapshot: draft,
+      existingDisplayNames,
+    });
+
+  it("fills the draft and says the file carries settings", () => {
+    const { draft } = withSettings();
+    expect(draft.displayName).toBe("Carried");
+    expect(draft.note).toBe("from the file");
+    expect(draft.backup.keep_last).toBe(9);
+    expect(draft.kdf.unlock_preset).toBe("1gib");
+    expect(draft.archiveUnlockPreset).toBe("1gib");
+    expect(draft.importCarriesSettings).toBe(true);
+  });
+
+  it("gives a re-import a free name beside the vault it came from", () => {
+    expect(withSettings(picked(), ["Carried"]).draft.displayName).toBe("Carried 2");
+  });
+
+  it("takes the settings out when the switch goes off and back in when it goes on", () => {
+    const filled = withSettings();
+    const off = reduce(filled, { type: "draftPatched", patch: { importKeepSettings: false } });
+    expect(off.draft.displayName).toBe("Notes");
+    expect(off.draft.note).toBe("");
+    expect(off.draft.archiveUnlockPreset).toBeNull();
+    expect(off.draft.importCarriesSettings).toBe(true);
+
+    const on = reduce(off, { type: "draftPatched", patch: { importKeepSettings: true } });
+    expect(on.draft.displayName).toBe("Carried");
+    expect(on.draft.backup.keep_last).toBe(9);
+  });
+
+  it("takes them out when Extract goes off", () => {
+    const off = reduce(withSettings(), {
+      type: "draftPatched",
+      patch: { importExtract: false },
+    });
+    expect(off.draft.displayName).toBe("Notes");
+  });
+
+  it("keeps an edit made after they went in", () => {
+    const off = reduce(
+      withSettings(),
+      { type: "draftPatched", patch: { note: "my own note" } },
+      { type: "draftPatched", patch: { importKeepSettings: false } },
+    );
+    expect(off.draft.note).toBe("my own note");
+    expect(off.draft.displayName).toBe("Notes");
+  });
+
+  it("does not read them twice when the same file is tested again", () => {
+    const edited = reduce(withSettings(), {
+      type: "draftPatched",
+      patch: { note: "my own note" },
+    });
+    const tested = reduce(edited, {
+      type: "embeddedSettings",
+      embedded: embedded(),
+      snapshot: picked(),
+    });
+    expect(tested).toBe(edited);
+  });
+
+  it("drops a file's settings and switches when another file is chosen", () => {
+    const next = reduce(
+      withSettings(),
+      { type: "draftPatched", patch: { importKeepWorkspace: false } },
+      {
+        type: "draftPatched",
+        patch: {
+          importFilePath: "/tmp/Other.7z",
+          importFileName: "Other.7z",
+          displayName: "Other",
+        },
+      },
+    );
+    expect(next.carried).toBeNull();
+    expect(next.draft.displayName).toBe("Other");
+    expect(next.draft.note).toBe("");
+    expect(next.draft.backup.keep_last).toBe(picked().backup.keep_last);
+    expect(next.draft.importCarriesSettings).toBe(false);
+    expect(next.draft.importKeepWorkspace).toBe(true);
+  });
+
+  it("does not apply settings to a file whose switch is already off", () => {
+    const draft = picked({ importKeepSettings: false });
+    const { draft: next, carried } = withSettings(draft);
+    expect(next.displayName).toBe("Notes");
+    expect(next.importCarriesSettings).toBe(true);
+    expect(carried?.applied).toBeNull();
+  });
+
+  it("keeps the layout a zip carries in the baseline, so reading it is not an edit", () => {
+    const state = reduce(openedAt("source", picked({ importFileName: "Notes.zip" })), {
+      type: "zipClassified",
+      zipLayout: "files",
+      rejected: false,
+      carriesWorkspace: true,
+    });
+    expect(state.draft.importCarriesWorkspace).toBe(true);
+    expect(resolveCreateVaultCloseIntent(state)).toBe("close");
   });
 });
 

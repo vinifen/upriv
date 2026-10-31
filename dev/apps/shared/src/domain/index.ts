@@ -17,6 +17,7 @@ export * from "./jobs";
 export * from "./theme";
 export * from "./loading";
 export * from "./motion";
+export { delayMs } from "./timing/delay";
 export * from "./modal";
 export * from "./logs";
 export * from "./vault";

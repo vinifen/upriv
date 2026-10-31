@@ -22,9 +22,7 @@ function serviceWith(overrides: Partial<BackupService>): BackupService {
     deleteBackups: async () => undefined,
     promoteToSave: async () => undefined,
     saveNow: async () => ({ ...entry("saved"), saved: true }),
-    getBackupBytes: async () => new Uint8Array(),
-    exportToPath: async (_vaultId, _entry, destPath) => ({ path: destPath, size: 0 }),
-    exportSnapshotsToPath: async (_vaultId, _stamps, destPath) => ({ path: destPath, size: 0 }),
+    exportTo: async (_vaultId, _keys, destDir) => ({ path: destDir, size: 0 }),
     ...overrides,
   };
 }

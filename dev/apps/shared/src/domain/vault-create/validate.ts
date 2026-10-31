@@ -9,7 +9,11 @@ import {
   validateWorkspaceGlobalPath,
 } from "../workspace";
 import type { CreateVaultDraft, CreateVaultStepId, CreateVaultStepStatus } from "./types";
-import { createVaultImportNeedsArchivePassword, importSetsVaultPassword } from "./importKind";
+import {
+  createVaultImportNeedsArchivePassword,
+  createVaultSettingsLocked,
+  importSetsVaultPassword,
+} from "./importKind";
 
 export type CreateVaultValidationCode =
   | DisplayNameValidationCode
@@ -95,6 +99,8 @@ export function validateCreateVaultStep(
       return errors;
     }
     case "identity": {
+      // The name may still come from the file, and this step's fields are locked.
+      if (createVaultSettingsLocked(draft)) return [];
       const errors: CreateVaultValidationCode[] = [];
       const nameError = validateDisplayName(draft.displayName);
       if (nameError) errors.push(nameError);
@@ -197,7 +203,10 @@ export function getCreateVaultStepStatus(
   vaultRootPath?: string | null,
 ): CreateVaultStepStatus {
   const errors = validateCreateVaultStep(stepId, draft, existingIds, knownGroupIds, vaultRootPath);
-  if (errors.length === 0) return "ready";
+  if (errors.length === 0) {
+    const locks = stepId === "identity" || stepId === "general" || stepId === "advanced";
+    return locks && createVaultSettingsLocked(draft) ? "waiting" : "ready";
+  }
   if (submitAttempted || attemptedSteps.has(stepId)) return "error";
   return "incomplete";
 }

@@ -8,7 +8,7 @@ const MAX_FILE_BYTES = 4 * 1024 * 1024;
 /** Cap for the path that reads file bytes into this process. */
 const CONTENT_MAX_FILES = 200;
 const MAX_DEPTH = 12;
-const SKIP_NAMES = new Set([".upriv-workspace.json", "upriv-seed.txt"]);
+const SKIP_NAMES = new Set([".upriv-workspace.json", ".upriv-config", "upriv-seed.txt"]);
 /** Leave at least this much RAM for the OS and the vault process. */
 const MIN_MEMORY_RESERVE_BYTES = 256 * 1024 * 1024;
 

@@ -7,8 +7,8 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use upriv_core::{
     confirm_plain_destination, open_vault, open_vault_confirmed, plain_deletions,
-    plain_destination, plain_leftover, plain_status, plain_sync, remove_plain_leftover,
-    OpenVaultOutcome,
+    plain_destination, plain_leftover, plain_send, plain_status, plain_sync, plain_unsend,
+    remove_plain_leftover, OpenVaultOutcome,
 };
 
 use super::secret::SecretString;
@@ -42,6 +42,13 @@ struct VaultPlainConfirmParams {
 struct VaultPlainDeletionsParams {
     id: String,
     apply: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct VaultPlainPathsParams {
+    id: String,
+    paths: Vec<String>,
 }
 
 pub(super) fn vault_open(params: Value) -> RpcResponse {
@@ -151,6 +158,36 @@ pub(super) fn vault_plain_sync(params: Value) -> RpcResponse {
     };
     match plain_sync(&root, parsed.id.trim()) {
         Ok(report) => ok(serde_json::to_value(report).unwrap_or(json!(null))),
+        Err(error) => map_core_err(error),
+    }
+}
+
+pub(super) fn vault_plain_send(params: Value) -> RpcResponse {
+    let parsed: VaultPlainPathsParams = match serde_json::from_value(params) {
+        Ok(value) => value,
+        Err(error) => return err("invalid_request", error.to_string()),
+    };
+    let root = match require_vault_root() {
+        Ok(root) => root,
+        Err(response) => return response,
+    };
+    match plain_send(&root, parsed.id.trim(), &parsed.paths) {
+        Ok(files) => ok(json!({ "files": files })),
+        Err(error) => map_core_err(error),
+    }
+}
+
+pub(super) fn vault_plain_unsend(params: Value) -> RpcResponse {
+    let parsed: VaultPlainPathsParams = match serde_json::from_value(params) {
+        Ok(value) => value,
+        Err(error) => return err("invalid_request", error.to_string()),
+    };
+    let root = match require_vault_root() {
+        Ok(root) => root,
+        Err(response) => return response,
+    };
+    match plain_unsend(&root, parsed.id.trim(), &parsed.paths) {
+        Ok(outcome) => ok(serde_json::to_value(outcome).unwrap_or(json!(null))),
         Err(error) => map_core_err(error),
     }
 }

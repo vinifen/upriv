@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   currentWorkspaceSystem,
   encryptedShortcutActive,
@@ -8,8 +8,10 @@ import {
   shouldBumpVaultRootEpoch,
   vaultRootContentorPath,
   vaultRootGoneRpcError,
+  vaultRootUprivOpenPath,
   vaultStoreDisplayPaths,
   type AppSettingsConfig,
+  type VaultBackupEntry,
   type VaultGroup,
   type VaultInfoSnapshot,
   type VaultListItem,
@@ -44,6 +46,13 @@ export interface UseVaultInfoDataOptions {
   host?: string | null;
 }
 
+interface SlowVaultInfo {
+  vaultId: string;
+  /** `null` while the list is read. */
+  backups: VaultBackupEntry[] | null;
+  storeBytes: VaultRuntimeStats["storeBytes"];
+}
+
 /** Core does not report these session counters — Info shows an em dash, not a guess. */
 const UNAVAILABLE_RUNTIME_STATS: Omit<VaultRuntimeStats, "storeBytes"> = {
   openCount: null,
@@ -67,7 +76,8 @@ export function useVaultInfoData({
   host,
 }: UseVaultInfoDataOptions) {
   const [snapshot, setSnapshot] = useState<VaultInfoSnapshot | null>(null);
-  const [loading, setLoading] = useState(false);
+  /** Backups and store size: slow on a big vault, so Info shows without them first. */
+  const [slow, setSlow] = useState<SlowVaultInfo | null>(null);
   const [loadError, setLoadError] = useState(false);
   const [loadFailure, setLoadFailure] = useState<unknown>(null);
   const [loadAttempt, setLoadAttempt] = useState(0);
@@ -83,26 +93,46 @@ export function useVaultInfoData({
   useEffect(() => {
     if (!open || vault == null || vaultId == null) {
       setSnapshot(null);
+      setSlow(null);
       setLoadError(false);
       setLoadFailure(null);
-      setLoading(false);
       return;
     }
 
     const current = vault;
     let cancelled = false;
-    setLoading(true);
     setLoadError(false);
     setLoadFailure(null);
     setSnapshot((prev) => (prev?.vault.id === current.id ? prev : null));
+    setSlow((prev) =>
+      prev?.vaultId === current.id
+        ? prev
+        : { vaultId: current.id, backups: null, storeBytes: "measuring" },
+    );
+
+    const fail = (error: unknown) => {
+      if (cancelled) return;
+      if (shouldBumpVaultRootEpoch(error)) {
+        setSnapshot(null);
+      }
+      setLoadFailure(error);
+      setLoadError(true);
+    };
+    const patchSlow = (patch: Partial<Omit<SlowVaultInfo, "vaultId">>) => {
+      if (cancelled) return;
+      setSlow((prev) => (prev?.vaultId === current.id ? { ...prev, ...patch } : prev));
+    };
+    void backupService.listBackups(current.id).then((backups) => patchSlow({ backups }), fail);
+    void vaultService
+      .storeOnDiskBytes(current.id)
+      .catch(() => null)
+      .then((storeBytes) => patchSlow({ storeBytes }));
 
     void (async () => {
       try {
-        const [settings, backups, root, storeBytes] = await Promise.all([
+        const [settings, root] = await Promise.all([
           vaultService.getSettings(current.id),
-          backupService.listBackups(current.id),
           vaultRootService.resolve({ vaultRootMode }),
-          vaultService.storeOnDiskBytes(current.id).catch(() => null),
         ]);
         if (cancelled) return;
         if (root.status !== "found") {
@@ -111,7 +141,7 @@ export function useVaultInfoData({
 
         const isOpen = current.session === "open";
         const passwordInSession = lifecycleService.hasPasswordInSession(current.id);
-        const runtime = { ...UNAVAILABLE_RUNTIME_STATS, storeBytes };
+        const runtime = { ...UNAVAILABLE_RUNTIME_STATS, storeBytes: "measuring" as const };
         const vaultRootBase = vaultRootContentorPath(root, fallbackVaultRootBase);
         const storePaths = vaultStoreDisplayPaths(vaultRootBase, current.id);
         const system = currentWorkspaceSystem(host);
@@ -129,7 +159,7 @@ export function useVaultInfoData({
           kdfPreset: current.unlockPreset ?? null,
           groupName,
           groupHidden,
-          backups,
+          backups: null,
           runtime,
           passwordInSession,
           workspacePath,
@@ -139,17 +169,12 @@ export function useVaultInfoData({
           workspaceSystem: system,
           storePath: storePaths.storePath,
           backupsPath: storePaths.backupsPath,
+          storeOpenPath: vaultRootUprivOpenPath(vaultRootBase, `vaults/${current.id}/store`),
+          backupsOpenPath: vaultRootUprivOpenPath(vaultRootBase, `vaults/${current.id}/backups`),
           locale,
         });
       } catch (error) {
-        if (cancelled) return;
-        if (shouldBumpVaultRootEpoch(error)) {
-          setSnapshot(null);
-        }
-        setLoadFailure(error);
-        setLoadError(true);
-      } finally {
-        if (!cancelled) setLoading(false);
+        fail(error);
       }
     })();
 
@@ -184,9 +209,18 @@ export function useVaultInfoData({
     loadAttempt,
   ]);
 
+  const shown = useMemo(() => {
+    if (!snapshot) return null;
+    const landed = slow?.vaultId === snapshot.vault.id ? slow : null;
+    return {
+      ...snapshot,
+      backups: landed ? landed.backups : null,
+      runtime: { ...snapshot.runtime, storeBytes: landed ? landed.storeBytes : "measuring" },
+    } satisfies VaultInfoSnapshot;
+  }, [slow, snapshot]);
+
   return {
-    snapshot,
-    loading,
+    snapshot: shown,
     loadError,
     loadFailure,
     retryLoad: () => setLoadAttempt((n) => n + 1),

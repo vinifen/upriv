@@ -6,9 +6,9 @@
 //! **Concurrency:** Off-stdin lanes, so a long import or rewrap does not sit in
 //! front of a lock.
 //! - `upriv-argon2`: short unlocks (`vault_open`, `vault_create`, export probe).
-//! - `upriv-fs-io`: close, delete, backup download.
+//! - `upriv-fs-io`: close and delete.
 //! - `upriv-rewrap`: password and unlock-RAM change (safety zip plus header commit).
-//! - `upriv-pack`: zip and `.7z` import, and export. One at a time.
+//! - `upriv-pack`: zip and `.7z` import, vault and backup export. One at a time.
 //! - `upriv-data-folder`: the zip of the whole data folder. Work it refuses on
 //!   the other lanes answers at once instead of waiting behind the copy.
 //! - `upriv-import`: file imports. One thread per import slot (one file on a
@@ -93,6 +93,12 @@ fn extract_request_id(raw: &str) -> Option<u64> {
     value.get("id")?.as_u64()
 }
 
+/// For anything that can run after the app is gone: `eprintln!` panics once
+/// the stderr pipe has no reader, and the vaults still have to be closed.
+fn log_stderr(message: std::fmt::Arguments<'_>) {
+    let _ = writeln!(io::stderr(), "[upriv-daemon] {message}");
+}
+
 fn run_request_caught(id: u64, method: String, params: serde_json::Value) -> RequestOutcome {
     panic::catch_unwind(AssertUnwindSafe(|| handle_request(id, method, params)))
         .unwrap_or_else(|_| RequestOutcome::Continue(internal_error_response(id)))
@@ -125,7 +131,7 @@ fn spawn_worker_pool(
                             RequestOutcome::Continue(wire) | RequestOutcome::Shutdown(wire) => wire,
                         };
                         if let Err(error) = write_out(&stdout, &response) {
-                            eprintln!("[upriv-daemon] {name} stdout error: {error}");
+                            log_stderr(format_args!("{name} stdout error: {error}"));
                             break;
                         }
                     }
@@ -154,7 +160,7 @@ fn spawn_named_worker(
                             RequestOutcome::Continue(wire) | RequestOutcome::Shutdown(wire) => wire,
                         };
                         if let Err(error) = write_out(&stdout, &response) {
-                            eprintln!("[upriv-daemon] {thread_name} stdout error: {error}");
+                            log_stderr(format_args!("{thread_name} stdout error: {error}"));
                             break;
                         }
                     }
@@ -216,13 +222,15 @@ fn run() -> io::Result<()> {
         }
     }
 
+    let mut shut_down = false;
     let stdin = io::stdin();
+    // A write that fails means the app is gone, the same as stdin ending.
     for line in stdin.lock().lines() {
         // Lines carry passwords and file bytes; wipe each one when its iteration ends.
         let line = match line {
             Ok(value) => Zeroizing::new(value),
             Err(error) => {
-                eprintln!("[upriv-daemon] stdin read error: {error}");
+                log_stderr(format_args!("stdin read error: {error}"));
                 break;
             }
         };
@@ -238,10 +246,10 @@ fn run() -> io::Result<()> {
                 trimmed.len()
             );
             if let Some(id) = extract_request_id(trimmed) {
-                write_out(
-                    &stdout,
-                    &invalid_request(id, "request line too large".to_string()),
-                )?;
+                let refused = invalid_request(id, "request line too large".to_string());
+                if write_out(&stdout, &refused).is_err() {
+                    break;
+                }
             }
             continue;
         }
@@ -251,10 +259,10 @@ fn run() -> io::Result<()> {
             Err(error) => {
                 eprintln!("[upriv-daemon] invalid request JSON: {error}");
                 if let Some(id) = extract_request_id(trimmed) {
-                    write_out(
-                        &stdout,
-                        &invalid_request(id, format!("invalid request JSON: {error}")),
-                    )?;
+                    let refused = invalid_request(id, format!("invalid request JSON: {error}"));
+                    if write_out(&stdout, &refused).is_err() {
+                        break;
+                    }
                 }
                 continue;
             }
@@ -273,16 +281,21 @@ fn run() -> io::Result<()> {
                         HeavyLane::DataFolder => &data_folder_tx,
                     };
                     if tx.send(HeavyJob::Request { id, method, params }).is_err() {
-                        write_out(&stdout, &internal_error_response(id))?;
+                        let _ = write_out(&stdout, &internal_error_response(id));
                         break;
                     }
                     continue;
                 }
 
                 match run_request_caught(id, method, params) {
-                    RequestOutcome::Continue(response) => write_out(&stdout, &response)?,
+                    RequestOutcome::Continue(response) => {
+                        if write_out(&stdout, &response).is_err() {
+                            break;
+                        }
+                    }
                     RequestOutcome::Shutdown(response) => {
-                        write_out(&stdout, &response)?;
+                        shut_down = true;
+                        let _ = write_out(&stdout, &response);
                         break;
                     }
                 }
@@ -290,31 +303,37 @@ fn run() -> io::Result<()> {
         }
     }
 
+    // The app left without `app_shutdown`: a crash, a kill, or a quit that did
+    // not wait. Do what that call does, so the next launch finds the vaults closed.
+    if !shut_down {
+        let _ = run_request_caught(0, "app_shutdown".to_string(), json!({}));
+    }
+
     // Finish in-flight work before flushing logs / exiting.
     let _ = argon2_tx.send(HeavyJob::Shutdown);
     drop(argon2_tx);
     if let Err(error) = argon2_join.join() {
-        eprintln!("[upriv-daemon] argon2 worker join panicked: {error:?}");
+        log_stderr(format_args!("argon2 worker join panicked: {error:?}"));
     }
     let _ = lifecycle_tx.send(HeavyJob::Shutdown);
     drop(lifecycle_tx);
     if let Err(error) = lifecycle_join.join() {
-        eprintln!("[upriv-daemon] fs-io worker join panicked: {error:?}");
+        log_stderr(format_args!("fs-io worker join panicked: {error:?}"));
     }
     let _ = rewrap_tx.send(HeavyJob::Shutdown);
     drop(rewrap_tx);
     if let Err(error) = rewrap_join.join() {
-        eprintln!("[upriv-daemon] rewrap worker join panicked: {error:?}");
+        log_stderr(format_args!("rewrap worker join panicked: {error:?}"));
     }
     let _ = pack_tx.send(HeavyJob::Shutdown);
     drop(pack_tx);
     if let Err(error) = pack_join.join() {
-        eprintln!("[upriv-daemon] pack worker join panicked: {error:?}");
+        log_stderr(format_args!("pack worker join panicked: {error:?}"));
     }
     let _ = data_folder_tx.send(HeavyJob::Shutdown);
     drop(data_folder_tx);
     if let Err(error) = data_folder_join.join() {
-        eprintln!("[upriv-daemon] data-folder worker join panicked: {error:?}");
+        log_stderr(format_args!("data-folder worker join panicked: {error:?}"));
     }
     for _ in 0..import_joins.len() {
         let _ = import_tx.send(HeavyJob::Shutdown);
@@ -322,7 +341,7 @@ fn run() -> io::Result<()> {
     drop(import_tx);
     for handle in import_joins {
         if let Err(error) = handle.join() {
-            eprintln!("[upriv-daemon] import worker join panicked: {error:?}");
+            log_stderr(format_args!("import worker join panicked: {error:?}"));
         }
     }
 

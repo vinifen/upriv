@@ -8,6 +8,7 @@ import {
   isVaultListRowUnlockTarget,
   resolveVaultListStatus,
   storageModeIsPlaintext,
+  vaultCloseNowOffered,
   vaultExportMenuShown,
   VAULT_SETTINGS_AREA_ICON,
   VAULT_SETTINGS_AREA_I18N,
@@ -55,6 +56,7 @@ interface VaultRowActionsProps {
   onOpenFileManager: (vault: VaultListItem) => void;
   onLockVault: (vault: VaultListItem) => void;
   onUnlockVault: (vault: VaultListItem) => void;
+  onCloseNow: (vault: VaultListItem) => void;
   /** Block cards: stack ⋯ / settings to the right of the title. */
   layout?: "row" | "column";
 }
@@ -71,6 +73,7 @@ export function VaultRowActions({
   onOpenFileManager,
   onLockVault,
   onUnlockVault,
+  onCloseNow,
   layout = "row",
 }: VaultRowActionsProps) {
   const { t } = useTranslation();
@@ -130,6 +133,7 @@ export function VaultRowActions({
     );
   const canExport = vaultService.canExportVault && vaultExportMenuShown(vault, pipelineListStatus);
   const controls = vaultRowControls(vault, pipelineListStatus);
+  const closeNowOffered = vaultCloseNowOffered(listStatus, vault.id, pipelineListStatus);
 
   const stacked = layout === "column";
   const iconStyle = stacked ? columnIconStyle : rowIconStyle;
@@ -158,7 +162,7 @@ export function VaultRowActions({
               label={t("app.menu.more")}
               icon="more-horizontal"
               size={iconSize}
-              disabled={controls.moreMenuBlocked}
+              disabled={controls.moreMenuBlocked && !closeNowOffered}
               style={iconStyle}
             />
           }
@@ -211,6 +215,13 @@ export function VaultRowActions({
               onPress={() => onOpenNote(vault)}
             />
           )}
+          {isOpen || closeNowOffered ? (
+            <MenuActionItem
+              icon="lock"
+              label={t("action.close_now")}
+              onPress={() => onCloseNow(vault)}
+            />
+          ) : null}
           <MenuActionItem
             icon="info"
             label={t("action.vault_info")}

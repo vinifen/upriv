@@ -1,5 +1,48 @@
 import { describe, expect, it } from "vitest";
-import { findTextMatches, stepMatchIndex } from "../fileSearch";
+import {
+  findTextMatches,
+  lineStartOffsets,
+  matchesBySpan,
+  spanAt,
+  stepMatchIndex,
+} from "../fileSearch";
+
+describe("lineStartOffsets and spanAt", () => {
+  it("starts a line after every break, including a final one", () => {
+    expect(lineStartOffsets("")).toEqual([0]);
+    expect(lineStartOffsets("ab\n\ncd\n")).toEqual([0, 3, 4, 7]);
+  });
+
+  it("finds the span holding an offset, a break belonging to the line it ends", () => {
+    const starts = lineStartOffsets("ab\n\ncd\n");
+    expect(spanAt(starts, 0)).toBe(0);
+    expect(spanAt(starts, 2)).toBe(0);
+    expect(spanAt(starts, 3)).toBe(1);
+    expect(spanAt(starts, 5)).toBe(2);
+    expect(spanAt(starts, 7)).toBe(3);
+    expect(spanAt(starts, 99)).toBe(3);
+  });
+});
+
+describe("matchesBySpan", () => {
+  it("groups matches by span with offsets inside it and keeps their file-wide number", () => {
+    const text = "cat\ndog cat\ncat";
+    const starts = lineStartOffsets(text);
+    const bySpan = matchesBySpan(starts, findTextMatches(text, "cat"));
+    expect([...bySpan.entries()]).toEqual([
+      [0, [{ start: 0, end: 3, index: 0 }]],
+      [1, [{ start: 4, end: 7, index: 1 }]],
+      [2, [{ start: 0, end: 3, index: 2 }]],
+    ]);
+  });
+
+  it("leaves a span without matches out", () => {
+    const text = "a\nb\na";
+    const bySpan = matchesBySpan([0, 4], findTextMatches(text, "a"));
+    expect([...bySpan.keys()]).toEqual([0, 1]);
+    expect(bySpan.get(1)).toEqual([{ start: 0, end: 1, index: 1 }]);
+  });
+});
 
 describe("findTextMatches", () => {
   it("returns empty array for empty query or empty text", () => {

@@ -27,9 +27,9 @@ export interface SafExportIo {
 
 /**
  * The phone's one export mount, Rust `/upriv-saf-export`, and the grants
- * behind the folders picked for an export. The vault export and Export data
- * folder share it; one export writes through it at a time, as the UI and core
- * already allow only one.
+ * behind the folders picked for an export. The vault export, the backup
+ * export, and Export data folder share it. One export writes through it at a
+ * time: a second one into a picked folder is refused with `vault_busy`.
  */
 export interface SafExportMount extends ExportFolderGrants {
   /**

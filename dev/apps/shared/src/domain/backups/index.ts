@@ -1,8 +1,9 @@
 export type { VaultBackupEntry } from "./types";
 export {
-  backupBundleEntryName,
   backupEntryFileName,
   backupEntryKey,
+  backupExportFilename,
+  backupExportRowKey,
   backupSnapshotFileName,
   formatBackupDate,
 } from "./format";

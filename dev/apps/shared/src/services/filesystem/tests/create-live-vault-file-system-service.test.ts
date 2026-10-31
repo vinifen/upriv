@@ -21,6 +21,7 @@ function rpcStub(overrides: Partial<LiveVaultFileSystemRpc> = {}): LiveVaultFile
   return {
     list: async () => ({ tree: { name: "", type: "folder", children: [] }, revision: 1 }),
     revision: async () => 1,
+    previewFits: async () => ({ fits: true }),
     read: async () => ({ contentB64: "" }),
     readRange: async () => ({ contentB64: "" }),
     write: async () => 1,
@@ -34,6 +35,8 @@ function rpcStub(overrides: Partial<LiveVaultFileSystemRpc> = {}): LiveVaultFile
     rename: async () => ({ path: "/renamed", revision: 1 }),
     move: async () => ({ path: "/moved", revision: 1 }),
     osPath: async () => ({ osPath: "/tmp/mount" }),
+    plainSend: async () => ({ files: 0 }),
+    plainUnsend: async () => ({ removed: 0, kept: 0 }),
     ...overrides,
   };
 }
@@ -49,6 +52,47 @@ describe("createLiveVaultFileSystemService", () => {
     const file = await fs.getFileContent("v", "/note.txt");
     expect(file?.content).toBe("hello-range");
     expect(readRange).toHaveBeenCalled();
+  });
+
+  it("joins an image's reads into one data URL", async () => {
+    const payload = Uint8Array.from({ length: 10 }, (_, index) => index + 1);
+    const readRange = vi.fn(async (_id: string, _path: string, offset: number, len: number) => ({
+      contentB64: bytesToB64(payload.subarray(offset, offset + len)),
+    }));
+    const fs = createLiveVaultFileSystemService(rpcStub({ readRange }));
+    const file = await fs.getFileContent("v", "/pic.png");
+    expect(file).toEqual({
+      language: "image",
+      content: `data:image/png;base64,${bytesToB64(payload)}`,
+    });
+    // Whole 3-byte groups, so base64 from consecutive reads joins cleanly.
+    expect(readRange.mock.calls[0][3] % 3).toBe(0);
+  });
+
+  it("joins an image spread over several reads", async () => {
+    const chunk = VAULT_FS_INLINE_CHUNK_BYTES - (VAULT_FS_INLINE_CHUNK_BYTES % 3);
+    const size = chunk + 7;
+    const payload = Uint8Array.from({ length: size }, (_, index) => index % 251);
+    const readRange = vi.fn(async (_id: string, _path: string, offset: number, len: number) => ({
+      contentB64: bytesToB64(payload.subarray(offset, offset + len)),
+    }));
+    const fs = createLiveVaultFileSystemService(rpcStub({ readRange }));
+    const file = await fs.getFileContent("v", "/pic.png");
+    expect(readRange).toHaveBeenCalledTimes(2);
+    expect(file?.content).toBe(`data:image/png;base64,${bytesToB64(payload)}`);
+  });
+
+  it("stops reading an image past the preview limit", async () => {
+    const chunk = VAULT_FS_INLINE_CHUNK_BYTES - (VAULT_FS_INLINE_CHUNK_BYTES % 3);
+    const whole = bytesToB64(new Uint8Array(chunk));
+    const readRange = vi.fn(async () => ({ contentB64: whole }));
+    const fs = createLiveVaultFileSystemService(rpcStub({ readRange }));
+    await expect(fs.getFileContent("v", "/pic.png")).rejects.toBeInstanceOf(
+      FilePreviewTooLargeError,
+    );
+    expect(readRange.mock.calls.length).toBeLessThanOrEqual(
+      Math.ceil(VAULT_FS_PREVIEW_MAX_BYTES / chunk) + 1,
+    );
   });
 
   it("writes oversized files with range + truncate, not a single vault_fs_write", async () => {
@@ -198,6 +242,27 @@ describe("createLiveVaultFileSystemService", () => {
     const readRange = vi.fn(async () => ({ contentB64: bytesToB64(new Uint8Array([0xff])) }));
     const fs = createLiveVaultFileSystemService(rpcStub({ readRange }));
     await expect(fs.getFileContent("v", "/note.txt")).rejects.toThrow(TypeError);
+  });
+
+  it("sends paths to the folder and reports the files on their way", async () => {
+    const plainSend = vi.fn(async () => ({ files: 3 }));
+    const fs = createLiveVaultFileSystemService(rpcStub({ plainSend }));
+    await expect(fs.sendToFolder("v", ["/docs"])).resolves.toBe(3);
+    expect(plainSend).toHaveBeenCalledWith("v", ["/docs"]);
+  });
+
+  it("removes paths from the folder and reports what stayed", async () => {
+    const plainUnsend = vi.fn(async () => ({ removed: 2, kept: 1 }));
+    const fs = createLiveVaultFileSystemService(rpcStub({ plainUnsend }));
+    await expect(fs.removeFromFolder("v", ["/docs"])).resolves.toEqual({ removed: 2, kept: 1 });
+    expect(plainUnsend).toHaveBeenCalledWith("v", ["/docs"]);
+  });
+
+  it("asks core whether a preview fits in free RAM", async () => {
+    const previewFits = vi.fn(async () => ({ fits: false }));
+    const fs = createLiveVaultFileSystemService(rpcStub({ previewFits }));
+    await expect(fs.previewFits("v", "/big.png")).resolves.toBe(false);
+    expect(previewFits).toHaveBeenCalledWith("v", "/big.png");
   });
 
   it("forwards osPath to the live RPC", async () => {

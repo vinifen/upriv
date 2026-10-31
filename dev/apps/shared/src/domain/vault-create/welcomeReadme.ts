@@ -122,6 +122,8 @@ export function buildVaultWelcomeFiles(
       expandedPaths: ["/"],
       selectedPath: VAULT_WELCOME_README_PATH,
       explorerCollapsed: false,
+      explorerSearchOpen: false,
+      explorerSearchQuery: "",
     }),
   };
 }

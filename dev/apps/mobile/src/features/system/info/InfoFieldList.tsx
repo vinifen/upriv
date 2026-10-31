@@ -38,7 +38,8 @@ export function InfoFieldList({ fields }: InfoFieldListProps) {
             >
               {field.value}
             </Text>
-            <RevealPathButton path={field.openPath} />
+            {/* The app home is private app storage: the Files app cannot open it. */}
+            {field.id === "app_home" ? null : <RevealPathButton path={field.openPath} />}
           </View>
         </View>
       ))}

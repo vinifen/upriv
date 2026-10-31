@@ -84,6 +84,9 @@ pub struct UiSettings {
     /// Sleep and phone freeze do not count as inactivity. Default false — that time counts.
     #[serde(default = "default_false")]
     pub lifecycle_keep_open_on_wake: bool,
+    /// Close now asks first. Default true.
+    #[serde(default = "default_true")]
+    pub lifecycle_confirm_close_now: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -139,6 +142,7 @@ impl Default for AppSettings {
                 lifecycle_close_modal_on_submit: false,
                 lifecycle_open_file_manager_on_open: false,
                 lifecycle_keep_open_on_wake: false,
+                lifecycle_confirm_close_now: true,
             },
             logging: LoggingSettings {
                 enabled: true,

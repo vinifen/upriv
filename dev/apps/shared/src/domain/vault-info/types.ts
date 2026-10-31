@@ -9,7 +9,7 @@ export interface VaultRuntimeStats {
   lastOpenedAt: string | null;
   sessionRamBytes: number | null;
   /** Regular-file bytes in `store/`. `null` when that measurement did not run. */
-  storeBytes: number | null;
+  storeBytes: number | null | "measuring";
   logicalFileCount: number | null;
 }
 
@@ -20,7 +20,8 @@ export interface VaultInfoSnapshot {
   groupName: string | null;
   /** True when the vault’s current group is hidden (locks the vault hidden switch). */
   groupHidden: boolean;
-  backups: VaultBackupEntry[];
+  /** `null` while the list is read. */
+  backups: VaultBackupEntry[] | null;
   runtime: VaultRuntimeStats;
   passwordInSession: boolean;
   /** Resolved mount point when parent is known; shown even when vault is closed. */
@@ -31,5 +32,8 @@ export interface VaultInfoSnapshot {
   workspaceSystem: WorkspaceSystem;
   storePath: string;
   backupsPath: string;
+  /** Where the system file manager opens `storePath` (`vaultRootUprivOpenPath`). */
+  storeOpenPath: string;
+  backupsOpenPath: string;
   locale: string;
 }

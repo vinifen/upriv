@@ -5,18 +5,18 @@ use std::path::Path;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use upriv_core::{
-    abort_import_vault, classify_import_zip_bytes, classify_import_zip_path, close_all_vaults,
-    delete_backups, delete_vault, discard_partial, export_backups_to_path,
-    export_logical_seven_zip, export_store_zip, fs_create_file, fs_create_folder, fs_delete,
-    fs_ensure_folder, fs_import_from_os_path, fs_list_tree, fs_move, fs_os_path, fs_read_file,
-    fs_read_range, fs_rename, fs_tree_revision, fs_truncate, fs_write_file,
-    import_logical_files_zip, import_logical_files_zip_path, import_logical_os_path,
-    import_logical_seven_zip, import_logical_seven_zip_path, import_store_from_archive_path,
-    import_store_zip, ingest_import_directory, list_backups, parse_backup_import_path,
-    parse_embedded_settings, probe_logical_seven_zip, probe_logical_seven_zip_path,
-    probe_store_zip, promote_backup_save, read_backup_zip_bytes, read_import_archive_bytes,
-    read_import_zip_settings, read_zip_config_toml, save_backup_now, seven_zip_export_available,
-    vault_list_item, BackupEntry, KdfUnlockPreset, PartialWork, VaultConfig, ZipImportClass,
+    abort_import_vault, close_all_vaults, close_all_vaults_now, delete_backups, delete_vault,
+    export_backups, export_logical_seven_zip, export_plain_zip, export_store_zip, fs_create_file,
+    fs_create_folder, fs_delete, fs_ensure_folder, fs_import_from_os_path, fs_list_tree, fs_move,
+    fs_os_path, fs_preview_fits, fs_read_file, fs_read_range, fs_rename, fs_tree_revision,
+    fs_truncate, fs_write_file, import_logical_files_zip, import_logical_files_zip_path,
+    import_logical_os_path, import_logical_seven_zip, import_logical_seven_zip_path,
+    import_store_from_archive_path, import_store_zip, ingest_import_directory, list_backups,
+    parse_backup_import_path, parse_embedded_settings, probe_import_zip_bytes,
+    probe_import_zip_path, probe_logical_seven_zip, probe_logical_seven_zip_path, probe_store_zip,
+    promote_backup_save, read_import_archive_bytes, read_import_zip_settings, read_zip_config_toml,
+    save_backup_now, seven_zip_export_available, sweep_plain_exports, vault_list_item, BackupEntry,
+    ExportInclude, ImportExtras, ImportZipProbe, KdfUnlockPreset, VaultConfig, ZipImportClass,
 };
 
 use super::secret::{secret_bytes, SecretString};
@@ -130,12 +130,17 @@ struct BackupStampsParams {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct BackupStampParams {
     id: String,
-    #[serde(default)]
     stamp: String,
-    #[serde(default)]
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct BackupExportParams {
+    id: String,
     stamps: Vec<String>,
-    #[serde(default)]
-    dest_path: Option<String>,
+    dest_dir: String,
+    /// Names this export for `job_status` and `job_cancel`.
+    job: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -148,6 +153,12 @@ struct VaultExportParams {
     password: Option<SecretString>,
     #[serde(default)]
     seven_zip: Option<upriv_core::config::vault_config::VaultSevenZipSection>,
+    /// `.upriv-config/` of a `.7z` or a plain-text `.zip` carries the file-manager layout.
+    #[serde(default)]
+    include_workspace: bool,
+    /// `.upriv-config/` of a `.7z` or a plain-text `.zip` carries the vault settings.
+    #[serde(default)]
+    include_settings: bool,
     /// The folder the export file goes into, named after the vault.
     dest_dir: String,
     /// Names this export for `job_status` and `job_cancel`.
@@ -187,6 +198,9 @@ struct VaultImport7zParams {
     archive_password: Option<SecretString>,
     #[serde(default)]
     welcome: Option<super::VaultWelcomeParams>,
+    /// Keep the file-manager layout the archive carries.
+    #[serde(default)]
+    keep_workspace: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -202,6 +216,9 @@ struct VaultImportFilesZipParams {
     archive_path: Option<String>,
     #[serde(default)]
     welcome: Option<super::VaultWelcomeParams>,
+    /// Keep the file-manager layout the archive carries.
+    #[serde(default)]
+    keep_workspace: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -233,141 +250,6 @@ fn load_archive_bytes(
     ))
 }
 
-fn parse_dest_path(raw: Option<&str>) -> Result<Option<std::path::PathBuf>, RpcResponse> {
-    let Some(trimmed) = raw.map(str::trim).filter(|s| !s.is_empty()) else {
-        return Ok(None);
-    };
-    let path = std::path::PathBuf::from(trimmed);
-    if !path.is_absolute() {
-        return Err(err(
-            "invalid_request",
-            "destPath must be an absolute path".into(),
-        ));
-    }
-    if path.is_dir() {
-        return Err(err("invalid_request", "destPath is a directory".into()));
-    }
-    let parent = path.parent().filter(|p| !p.as_os_str().is_empty());
-    if parent.is_none() || path.file_name().is_none() {
-        return Err(err(
-            "invalid_request",
-            "destPath must include a file name".into(),
-        ));
-    }
-    Ok(Some(path))
-}
-
-fn fsync_path(path: &std::path::Path) -> std::io::Result<()> {
-    // Windows `FlushFileBuffers` requires write access. Read-only open fails.
-    #[cfg(windows)]
-    {
-        std::fs::OpenOptions::new()
-            .write(true)
-            .open(path)?
-            .sync_all()
-    }
-    #[cfg(not(windows))]
-    {
-        std::fs::File::open(path)?.sync_all()
-    }
-}
-
-/// Install `tmp` at `dest`. Unix `rename` replaces a file atomically. Windows
-/// cannot rename over an existing file; `ReplaceFileW` swaps them in one call
-/// so a failure leaves the previous dest in place.
-fn replace_dest_file(tmp: &std::path::Path, dest: &std::path::Path) -> std::io::Result<()> {
-    match std::fs::rename(tmp, dest) {
-        Ok(()) => Ok(()),
-        #[cfg(windows)]
-        Err(_) if dest.exists() => replace_existing_windows_file(tmp, dest),
-        Err(error) => Err(error),
-    }
-}
-
-/// Replace `dest` with `tmp` via `ReplaceFileW`.
-///
-/// Windows `rename` fails when `dest` already exists. This call swaps the two
-/// names in one step and does not keep a backup. On failure `dest` is unchanged
-/// and `tmp` is still the new bytes. On success `dest` is the new file and the
-/// `tmp` name is gone.
-#[cfg(windows)]
-fn replace_existing_windows_file(
-    tmp: &std::path::Path,
-    dest: &std::path::Path,
-) -> std::io::Result<()> {
-    use std::os::windows::ffi::OsStrExt;
-    fn wide(path: &std::path::Path) -> Vec<u16> {
-        let mut encoded: Vec<u16> = path.as_os_str().encode_wide().collect();
-        encoded.push(0);
-        encoded
-    }
-    let replaced = wide(dest);
-    let replacement = wide(tmp);
-    let ok = unsafe {
-        ReplaceFileW(
-            replaced.as_ptr(),
-            replacement.as_ptr(),
-            std::ptr::null(),
-            0,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-        )
-    };
-    if ok == 0 {
-        Err(std::io::Error::last_os_error())
-    } else {
-        Ok(())
-    }
-}
-
-#[cfg(windows)]
-#[link(name = "kernel32")]
-extern "system" {
-    fn ReplaceFileW(
-        replaced: *const u16,
-        replacement: *const u16,
-        backup: *const u16,
-        flags: u32,
-        exclude: *mut core::ffi::c_void,
-        reserved: *mut core::ffi::c_void,
-    ) -> i32;
-}
-
-/// Write `<dest>.upriv-part`, then move it over `dest`. When the write or its
-/// `fsync` fails, the unfinished file is removed and logged as `work`. When
-/// only the move fails, the finished file is kept unless `dest` still exists.
-fn write_atomic_dest(
-    dest: &std::path::Path,
-    work: PartialWork,
-    write: impl FnOnce(&std::path::Path) -> upriv_core::Result<u64>,
-) -> RpcResponse {
-    let parent = dest.parent().expect("parse_dest_path");
-    let name = dest.file_name().expect("parse_dest_path");
-    let tmp = parent.join(format!("{}.upriv-part", name.to_string_lossy()));
-    let size = match write(&tmp) {
-        Ok(size) => size,
-        Err(error) => {
-            discard_partial(&tmp, work);
-            return map_core_err(error);
-        }
-    };
-    if let Err(error) = fsync_path(&tmp) {
-        discard_partial(&tmp, work);
-        return map_core_err(error.into());
-    }
-    if let Err(error) = replace_dest_file(&tmp, dest) {
-        // A failed replace that left `dest` in place has nothing to keep.
-        if dest.exists() {
-            discard_partial(&tmp, work);
-        }
-        return map_core_err(error.into());
-    }
-    ok(json!({
-        "path": dest.to_string_lossy(),
-        "size": size
-    }))
-}
-
 fn infer_import_kind(kind: Option<&str>, archive_path: Option<&str>) -> &'static str {
     if let Some(raw) = kind.map(str::trim).filter(|s| !s.is_empty()) {
         if raw.eq_ignore_ascii_case("seven_zip") || raw.eq_ignore_ascii_case("7z") {
@@ -385,7 +267,17 @@ fn infer_import_kind(kind: Option<&str>, archive_path: Option<&str>) -> &'static
     "store_zip"
 }
 
-pub(super) fn app_shutdown() -> RpcResponse {
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AppShutdownParams {
+    /// The quit dialog's Close now.
+    #[serde(default)]
+    now: bool,
+}
+
+pub(super) fn app_shutdown(params: Value) -> RpcResponse {
+    // Quit always runs. Params it cannot read mean the full close.
+    let now = serde_json::from_value::<AppShutdownParams>(params).is_ok_and(|parsed| parsed.now);
     // The daemon waits for its workers before it exits. Every export and
     // Back up now, running or still queued, stops within one buffer and
     // removes its file.
@@ -399,10 +291,17 @@ pub(super) fn app_shutdown() -> RpcResponse {
         );
     }
     match optional_vault_root() {
-        Ok(Some(root)) => match close_all_vaults(&root) {
-            Ok(_) => ok(json!(null)),
-            Err(error) => map_core_err(error),
-        },
+        Ok(Some(root)) => {
+            let closed = if now {
+                close_all_vaults_now(&root)
+            } else {
+                close_all_vaults(&root)
+            };
+            match closed {
+                Ok(_) => ok(json!(null)),
+                Err(error) => map_core_err(error),
+            }
+        }
         Ok(None) => ok(json!(null)),
         Err(response) => response,
     }
@@ -440,6 +339,21 @@ pub(super) fn vault_fs_revision(params: Value) -> RpcResponse {
     };
     match fs_tree_revision(&root, parsed.id.trim()) {
         Ok(revision) => ok(json!({ "revision": revision })),
+        Err(error) => map_core_err(error),
+    }
+}
+
+pub(super) fn vault_fs_preview_fits(params: Value) -> RpcResponse {
+    let parsed: VaultFsPathParams = match serde_json::from_value(params) {
+        Ok(v) => v,
+        Err(error) => return err("invalid_request", error.to_string()),
+    };
+    let root = match require_vault_root() {
+        Ok(root) => root,
+        Err(response) => return response,
+    };
+    match fs_preview_fits(&root, parsed.id.trim(), &parsed.path) {
+        Ok(fits) => ok(json!({ "fits": fits })),
         Err(error) => map_core_err(error),
     }
 }
@@ -758,8 +672,8 @@ pub(super) fn vault_export_capabilities(_params: Value) -> RpcResponse {
     ok(json!({ "sevenZip": seven_zip_export_available() }))
 }
 
-/// Write `{display_name}.zip` or `.7z` into the chosen folder. Returns when the
-/// file is in place, when it fails, or when `job_cancel` stops it.
+/// Write `{display_name}.zip` or `.7z` into the chosen folder. Returns when the file is in place, when it fails, or when
+/// `job_cancel` stops it.
 pub(super) fn vault_export(params: Value) -> RpcResponse {
     let parsed: VaultExportParams = match serde_json::from_value(params) {
         Ok(v) => v,
@@ -773,12 +687,25 @@ pub(super) fn vault_export(params: Value) -> RpcResponse {
         Ok(root) => root,
         Err(response) => return response,
     };
+    let include = ExportInclude {
+        workspace: parsed.include_workspace,
+        settings: parsed.include_settings,
+    };
     let exported = match parsed.format.as_deref().unwrap_or("store_zip") {
         "seven_zip" => export_logical_seven_zip(
             &root,
             parsed.id.trim(),
             secret_bytes(parsed.password.as_ref()),
             parsed.seven_zip.as_ref(),
+            include,
+            &dest_dir,
+            &parsed.job,
+        ),
+        "plain_zip" => export_plain_zip(
+            &root,
+            parsed.id.trim(),
+            secret_bytes(parsed.password.as_ref()),
+            include,
             &dest_dir,
             &parsed.job,
         ),
@@ -838,10 +765,13 @@ pub(super) fn vault_import_7z(params: Value) -> RpcResponse {
     };
     let archive_pw = secret_bytes(parsed.archive_password.as_ref());
     let preset = parsed.unlock_preset.unwrap_or(KdfUnlockPreset::M256);
-    let welcome = parsed
-        .welcome
-        .as_ref()
-        .map(super::VaultWelcomeParams::as_core);
+    let extras = ImportExtras {
+        welcome: parsed
+            .welcome
+            .as_ref()
+            .map(super::VaultWelcomeParams::as_core),
+        keep_workspace: parsed.keep_workspace,
+    };
     let imported = if let Some(path) = parsed
         .archive_path
         .as_deref()
@@ -855,7 +785,7 @@ pub(super) fn vault_import_7z(params: Value) -> RpcResponse {
             preset,
             Path::new(path),
             archive_pw,
-            welcome,
+            extras,
         )
     } else {
         let bytes = match load_archive_bytes(parsed.content_b64.as_deref(), None) {
@@ -869,7 +799,7 @@ pub(super) fn vault_import_7z(params: Value) -> RpcResponse {
             preset,
             &bytes,
             archive_pw,
-            welcome,
+            extras,
         )
     };
     match imported {
@@ -894,10 +824,13 @@ pub(super) fn vault_import_files_zip(params: Value) -> RpcResponse {
         Err(response) => return response,
     };
     let preset = parsed.unlock_preset.unwrap_or(KdfUnlockPreset::M256);
-    let welcome = parsed
-        .welcome
-        .as_ref()
-        .map(super::VaultWelcomeParams::as_core);
+    let extras = ImportExtras {
+        welcome: parsed
+            .welcome
+            .as_ref()
+            .map(super::VaultWelcomeParams::as_core),
+        keep_workspace: parsed.keep_workspace,
+    };
     let path = parsed
         .archive_path
         .as_deref()
@@ -910,7 +843,7 @@ pub(super) fn vault_import_files_zip(params: Value) -> RpcResponse {
             parsed.password.as_bytes(),
             preset,
             Path::new(path),
-            welcome,
+            extras,
         )
     } else {
         match load_archive_bytes(parsed.content_b64.as_deref(), None) {
@@ -920,7 +853,7 @@ pub(super) fn vault_import_files_zip(params: Value) -> RpcResponse {
                 parsed.password.as_bytes(),
                 preset,
                 &bytes,
-                welcome,
+                extras,
             ),
             Err(response) => return response,
         }
@@ -992,19 +925,21 @@ pub(super) fn vault_import_probe(params: Value) -> RpcResponse {
         .filter(|value| !value.is_empty());
     let probed = if kind == "seven_zip" {
         if let Some(path) = path {
-            probe_logical_seven_zip_path(Path::new(path), archive_pw).map(|()| None)
+            probe_logical_seven_zip_path(Path::new(path), archive_pw)
         } else {
             let bytes = match load_archive_bytes(parsed.content_b64.as_deref(), None) {
                 Ok(bytes) => bytes,
                 Err(response) => return response,
             };
-            probe_logical_seven_zip(&bytes, archive_pw).map(|()| None)
+            probe_logical_seven_zip(&bytes, archive_pw)
         }
     } else if let Some(path) = path {
         if parse_backup_import_path(path).is_none() {
-            match classify_import_zip_path(Path::new(path)) {
-                Ok(ZipImportClass::Files) => return ok(probe_ok_body("files_zip", None)),
-                Ok(ZipImportClass::Store) => {}
+            match probe_import_zip_path(Path::new(path)) {
+                Ok(probe) if probe.class == ZipImportClass::Files => {
+                    return ok(files_zip_probe_body(&probe))
+                }
+                Ok(_) => {}
                 Err(error) => return map_core_err(error),
             }
         }
@@ -1014,9 +949,11 @@ pub(super) fn vault_import_probe(params: Value) -> RpcResponse {
             Ok(bytes) => bytes,
             Err(response) => return response,
         };
-        match classify_import_zip_bytes(&bytes) {
-            Ok(ZipImportClass::Files) => return ok(probe_ok_body("files_zip", None)),
-            Ok(ZipImportClass::Store) => probe_store_zip(&bytes).and_then(|_| {
+        match probe_import_zip_bytes(&bytes) {
+            Ok(probe) if probe.class == ZipImportClass::Files => {
+                return ok(files_zip_probe_body(&probe))
+            }
+            Ok(_) => probe_store_zip(&bytes).and_then(|_| {
                 read_zip_config_toml(std::io::Cursor::new(bytes)).and_then(parse_optional_settings)
             }),
             Err(error) => return map_core_err(error),
@@ -1039,6 +976,13 @@ fn parse_optional_settings(
     }
 }
 
+/// A `.zip` of readable files, with what its `.upriv-config/` carries.
+fn files_zip_probe_body(probe: &ImportZipProbe) -> Value {
+    let mut body = probe_ok_body("files_zip", probe.settings.as_ref());
+    body["carriesWorkspace"] = json!(probe.workspace);
+    body
+}
+
 fn probe_ok_body(kind: &str, settings: Option<&upriv_core::EmbeddedVaultSettings>) -> Value {
     let mut body = json!({ "ok": true, "kind": kind });
     let Some(parsed) = settings else {
@@ -1057,6 +1001,19 @@ fn probe_ok_body(kind: &str, settings: Option<&upriv_core::EmbeddedVaultSettings
         body["unlockPreset"] = serde_json::to_value(preset).unwrap_or(Value::Null);
     }
     body
+}
+
+/// Wipe the unfinished plain-text exports a crash left. `folders` are the
+/// storage-access folders holding one that are not mounted now.
+pub(super) fn vault_plain_export_sweep(_params: Value) -> RpcResponse {
+    let root = match require_vault_root() {
+        Ok(root) => root,
+        Err(response) => return response,
+    };
+    match sweep_plain_exports(&root) {
+        Ok(folders) => ok(json!({ "folders": folders })),
+        Err(error) => map_core_err(error),
+    }
 }
 
 pub(super) fn backup_list(params: Value) -> RpcResponse {
@@ -1133,119 +1090,35 @@ pub(super) fn backup_promote(params: Value) -> RpcResponse {
     }
 }
 
-pub(super) fn backup_get(params: Value) -> RpcResponse {
-    let parsed: BackupStampParams = match serde_json::from_value(params) {
+/// Copy one backup, or bundle several, into the chosen folder. Returns when
+/// the file is in place, when it fails, or when `job_cancel` stops it.
+pub(super) fn backup_export(params: Value) -> RpcResponse {
+    let parsed: BackupExportParams = match serde_json::from_value(params) {
         Ok(v) => v,
         Err(error) => return err("invalid_request", error.to_string()),
     };
-    let stamps: Vec<String> = if parsed.stamps.is_empty() {
-        let stamp = parsed.stamp.trim().to_string();
-        if stamp.is_empty() {
-            return err("invalid_request", "stamp is required".into());
-        }
-        vec![stamp]
-    } else {
-        parsed
-            .stamps
-            .into_iter()
-            .map(|stamp| stamp.trim().to_string())
-            .filter(|stamp| !stamp.is_empty())
-            .collect()
-    };
-    if stamps.is_empty() {
-        return err("invalid_request", "stamp is required".into());
+    if parsed.stamps.is_empty() {
+        return err("invalid_request", "stamps is required".into());
+    }
+    let dest_dir = std::path::PathBuf::from(parsed.dest_dir.trim());
+    if !dest_dir.is_absolute() {
+        return err("invalid_request", "destDir must be an absolute path".into());
     }
     let root = match require_vault_root() {
         Ok(root) => root,
         Err(response) => return response,
     };
-    let dest = match parse_dest_path(parsed.dest_path.as_deref()) {
-        Ok(dest) => dest,
-        Err(response) => return response,
-    };
-    let id = parsed.id.trim();
-    if let Some(dest) = dest {
-        return write_atomic_dest(&dest, PartialWork::BackupDownload, |tmp| {
-            export_backups_to_path(&root, id, &stamps, tmp)
-        });
-    }
-    if stamps.len() != 1 {
-        return err(
-            "invalid_request",
-            "destPath is required to export several backups".into(),
-        );
-    }
-    match read_backup_zip_bytes(&root, id, &stamps[0]) {
-        Ok(bytes) => ok(json!({ "contentB64": b64_encode(&bytes) })),
+    match export_backups(
+        &root,
+        parsed.id.trim(),
+        &parsed.stamps,
+        &dest_dir,
+        &parsed.job,
+    ) {
+        Ok(file) => match path_utf8(&file.path) {
+            Ok(path) => ok(json!({ "path": path, "size": file.size })),
+            Err(response) => response,
+        },
         Err(error) => map_core_err(error),
-    }
-}
-
-#[cfg(test)]
-mod dest_tests {
-    use super::*;
-
-    #[test]
-    fn parse_dest_path_none_and_blank_are_inline() {
-        assert!(parse_dest_path(None).unwrap().is_none());
-        assert!(parse_dest_path(Some("  ")).unwrap().is_none());
-    }
-
-    #[test]
-    fn parse_dest_path_rejects_relative() {
-        let err = parse_dest_path(Some("out.zip")).unwrap_err();
-        assert_eq!(err.error.as_ref().unwrap().code, "invalid_request");
-    }
-
-    #[test]
-    fn parse_dest_path_rejects_directory() {
-        let dir = tempfile::tempdir().unwrap();
-        let err = parse_dest_path(Some(dir.path().to_str().unwrap())).unwrap_err();
-        assert_eq!(
-            err.error.as_ref().unwrap().message,
-            "destPath is a directory"
-        );
-    }
-
-    #[test]
-    fn replace_dest_file_overwrites_existing() {
-        let dir = tempfile::tempdir().unwrap();
-        let dest = dir.path().join("out.bin");
-        let tmp = dir.path().join("out.bin.upriv-part");
-        std::fs::write(&dest, b"old").unwrap();
-        std::fs::write(&tmp, b"new-content").unwrap();
-        replace_dest_file(&tmp, &dest).unwrap();
-        assert_eq!(std::fs::read(&dest).unwrap(), b"new-content");
-        assert!(!tmp.exists());
-    }
-
-    #[test]
-    fn write_atomic_dest_overwrites_existing_and_drops_part_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let dest = dir.path().join("out.bin");
-        std::fs::write(&dest, b"old").unwrap();
-        let response = write_atomic_dest(&dest, PartialWork::VaultExport, |tmp| {
-            std::fs::write(tmp, b"new-bytes")?;
-            Ok(9)
-        });
-        assert!(response.ok, "{response:?}");
-        assert_eq!(std::fs::read(&dest).unwrap(), b"new-bytes");
-        assert!(!dir.path().join("out.bin.upriv-part").exists());
-        let result = response.result.expect("path+size");
-        assert_eq!(result["size"], 9);
-        assert_eq!(result["path"], dest.to_string_lossy().as_ref());
-    }
-
-    #[test]
-    fn write_atomic_dest_keeps_original_when_write_fails() {
-        let dir = tempfile::tempdir().unwrap();
-        let dest = dir.path().join("out.bin");
-        std::fs::write(&dest, b"keep-me").unwrap();
-        let response = write_atomic_dest(&dest, PartialWork::VaultExport, |_tmp| {
-            Err(std::io::Error::other("boom").into())
-        });
-        assert!(!response.ok);
-        assert_eq!(std::fs::read(&dest).unwrap(), b"keep-me");
-        assert!(!dir.path().join("out.bin.upriv-part").exists());
     }
 }

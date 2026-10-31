@@ -441,7 +441,7 @@ describe("canSubmitCreateVault", () => {
 
   it("allows upriv_plain on the advanced step", () => {
     const draft = createVaultDraftFixture([], {
-      storage: { mode: "upriv_plain" },
+      storage: { mode: "upriv_plain", plain_files: "chosen" },
     });
     expect(validateCreateVaultStep("advanced", draft, [])).toEqual([]);
     expect(canSubmitCreateVault(draft, [])).toBe(true);

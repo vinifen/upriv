@@ -19,8 +19,9 @@ export interface UseTreeSplitDragOptions {
   axis: TreeSplitAxis;
   dispatch: (action: VaultWorkspaceAction) => void;
   /**
-   * Paints the explorer during a drag (visual %, 0 while collapsed; size frozen at grab).
-   * When set, a move does not re-render; without it `percent` follows every move.
+   * Paints the explorer during a drag and once more with the saved % at release
+   * (visual %, 0 while collapsed; size frozen at grab). When set, a move does
+   * not re-render; without it `percent` follows every move.
    */
   onDragFrame?: (visualPercent: number, size: number) => void;
 }
@@ -122,7 +123,8 @@ export function useTreeSplitDrag({
   );
 
   const onDragEnd = useCallback(() => {
-    if (!dragRef.current) return;
+    const drag = dragRef.current;
+    if (!drag) return;
     dragRef.current = null;
     if (collapsedRef.current) {
       setCollapsed(false);
@@ -131,7 +133,9 @@ export function useTreeSplitDrag({
       return;
     }
     commit(percentRef.current);
-  }, [commit, dispatch, setCollapsed]);
+    // The saved % is rounded; paint it, since a render that keeps the same % changes nothing.
+    paint(drag);
+  }, [commit, dispatch, paint, setCollapsed]);
 
   const repaintDrag = useCallback(() => {
     if (dragRef.current) paint(dragRef.current);

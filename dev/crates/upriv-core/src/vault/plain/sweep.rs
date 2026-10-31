@@ -1,4 +1,4 @@
-//! Wipe inside a plaintext folder that other apps can also write.
+//! Clear a plaintext folder that other apps can also write.
 //!
 //! The walk never follows a link and never enters another filesystem. A file
 //! is overwritten only while it has one name, so a hard link cannot carry the
@@ -10,6 +10,7 @@
 //! are removed, so it cannot be renamed or replaced by a junction.
 
 use std::path::Path;
+use std::sync::atomic::AtomicBool;
 
 use super::disk::DiskStamp;
 use crate::vault::wipe::WipeOptions;
@@ -19,14 +20,17 @@ const MAX_DEPTH: usize = 128;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Visit {
+    /// Overwrite the file, then remove its name.
     Wipe,
+    /// Remove the name. The bytes stay on the disk until it reuses the space.
+    Delete,
     Keep,
 }
 
 /// What one walk did. Paths are relative to the folder, `/`-separated.
 #[derive(Debug, Default)]
 pub(super) struct Sweep {
-    pub wiped: u32,
+    pub removed: u32,
     pub kept: Vec<String>,
 }
 
@@ -34,19 +38,41 @@ impl Sweep {
     fn keep(&mut self, rel: &str) {
         self.kept.push(rel.to_string());
     }
+
+    /// Count a file that is gone. True when it is.
+    fn count(&mut self, removal: std::io::Result<()>) -> bool {
+        let removed = removal.is_ok();
+        if removed {
+            self.removed += 1;
+        }
+        removed
+    }
 }
 
-/// Wipe what `choose` picks under `folder`, then remove the folders left
-/// empty. `folder` itself stays. `skip_root` names at the top are left alone
-/// and not reported.
+/// Remove what `choose` picks under `folder`, then the folders left empty.
+/// `folder` itself stays. `skip_root` names at the top are left alone and not
+/// reported.
 pub(super) fn sweep_folder(
     folder: &Path,
     skip_root: &[&str],
     opts: &WipeOptions,
     choose: &mut dyn FnMut(&str, &DiskStamp) -> Visit,
 ) -> std::io::Result<Sweep> {
+    sweep_folder_until(folder, skip_root, opts, &AtomicBool::new(false), choose)
+}
+
+/// [`sweep_folder`]. Once `stop` is set, an overwrite under way leaves the
+/// rest of its file as it is and the name still goes.
+pub(super) fn sweep_folder_until(
+    folder: &Path,
+    skip_root: &[&str],
+    opts: &WipeOptions,
+    stop: &AtomicBool,
+    choose: &mut dyn FnMut(&str, &DiskStamp) -> Visit,
+) -> std::io::Result<Sweep> {
     let mut walk = Walk {
         opts,
+        stop,
         choose,
         skip_root,
         out: Sweep::default(),
@@ -85,6 +111,7 @@ pub(super) fn wipe_path(
 
 struct Walk<'a> {
     opts: &'a WipeOptions,
+    stop: &'a AtomicBool,
     choose: &'a mut dyn FnMut(&str, &DiskStamp) -> Visit,
     skip_root: &'a [&'a str],
     out: Sweep,
@@ -104,8 +131,13 @@ fn child_rel(parent: &str, name: &str) -> String {
     }
 }
 
-fn overwrite(file: &mut std::fs::File, len: u64, opts: &WipeOptions) -> std::io::Result<()> {
-    crate::vault::wipe::overwrite_contents(file, len, opts)
+fn overwrite(
+    file: &mut std::fs::File,
+    len: u64,
+    opts: &WipeOptions,
+    stop: &AtomicBool,
+) -> std::io::Result<()> {
+    crate::vault::wipe::overwrite_contents(file, len, opts, stop)
 }
 
 #[cfg(unix)]
@@ -115,6 +147,7 @@ mod local {
     use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
     use std::os::unix::ffi::OsStrExt;
     use std::path::Path;
+    use std::sync::atomic::AtomicBool;
 
     use super::{child_rel, overwrite, DiskStamp, Visit, Walk, MAX_DEPTH};
     use crate::vault::wipe::WipeOptions;
@@ -318,13 +351,11 @@ mod local {
                 Kind::Dir => sweep_child_dir(dir, &name, &child, &stat, root_dev, depth, walk),
                 Kind::File => match (walk.choose)(&child, &stat.stamp) {
                     Visit::Keep => false,
-                    Visit::Wipe => match wipe_file_at(dir, &name, &stat, walk.opts) {
-                        Ok(()) => {
-                            walk.out.wiped += 1;
-                            true
-                        }
-                        Err(_) => false,
-                    },
+                    Visit::Wipe => {
+                        let wiped = wipe_file_at(dir, &name, &stat, walk.opts, walk.stop);
+                        walk.out.count(wiped)
+                    }
+                    Visit::Delete => walk.out.count(dir.unlink(&name, false)),
                 },
                 // A link, pipe, socket, or device holds no vault bytes.
                 Kind::Other => dir.unlink(&name, false).is_ok(),
@@ -371,7 +402,13 @@ mod local {
         true
     }
 
-    fn wipe_file_at(dir: &Dir, name: &CStr, seen: &Stat, opts: &WipeOptions) -> io::Result<()> {
+    fn wipe_file_at(
+        dir: &Dir,
+        name: &CStr,
+        seen: &Stat,
+        opts: &WipeOptions,
+        stop: &AtomicBool,
+    ) -> io::Result<()> {
         if seen.nlink <= 1 && seen.stamp.len > 0 {
             let mut file = open_writable(dir, name, seen)?;
             let now = fstat(file.as_raw_fd())?;
@@ -379,7 +416,7 @@ mod local {
                 return Err(io::Error::other("file was replaced"));
             }
             if now.nlink <= 1 {
-                overwrite(&mut file, now.stamp.len, opts)?;
+                overwrite(&mut file, now.stamp.len, opts, stop)?;
             }
         }
         dir.unlink(name, false)
@@ -423,7 +460,7 @@ mod local {
         if stat.kind != Kind::File || stat.stamp != *expected {
             return Ok(false);
         }
-        wipe_file_at(&dir, &name, &stat, opts)?;
+        wipe_file_at(&dir, &name, &stat, opts, &AtomicBool::new(false))?;
         Ok(true)
     }
 }
@@ -433,6 +470,7 @@ mod local {
     use std::io;
     use std::os::windows::fs::OpenOptionsExt;
     use std::path::Path;
+    use std::sync::atomic::AtomicBool;
 
     use super::{child_rel, overwrite, DiskStamp, Visit, Walk, MAX_DEPTH};
     use crate::host_fs::{
@@ -513,13 +551,11 @@ mod local {
             } else {
                 match (walk.choose)(&child, &stamp_of_info(&info)) {
                     Visit::Keep => false,
-                    Visit::Wipe => match wipe_file(&child_path, &info, walk.opts) {
-                        Ok(()) => {
-                            walk.out.wiped += 1;
-                            true
-                        }
-                        Err(_) => false,
-                    },
+                    Visit::Wipe => {
+                        let wiped = wipe_file(&child_path, &info, walk.opts, walk.stop);
+                        walk.out.count(wiped)
+                    }
+                    Visit::Delete => walk.out.count(delete_file(&child_path, &info)),
                 }
             };
             if !removed {
@@ -570,15 +606,37 @@ mod local {
         true
     }
 
-    /// Overwrite the file `seen` describes, then remove its name. A file with
-    /// another name elsewhere is only unlinked.
-    fn wipe_file(path: &Path, seen: &WindowsFileInfo, opts: &WipeOptions) -> io::Result<()> {
+    fn clear_read_only(path: &Path, seen: &WindowsFileInfo) -> io::Result<()> {
         if seen.attributes & FILE_ATTRIBUTE_READONLY != 0 {
             let mut perms = std::fs::symlink_metadata(path)?.permissions();
             #[allow(clippy::permissions_set_readonly_false)]
             perms.set_readonly(false);
             std::fs::set_permissions(path, perms)?;
         }
+        Ok(())
+    }
+
+    fn remove_name(path: &Path) -> io::Result<()> {
+        match std::fs::remove_file(path) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            other => other,
+        }
+    }
+
+    fn delete_file(path: &Path, seen: &WindowsFileInfo) -> io::Result<()> {
+        clear_read_only(path, seen)?;
+        remove_name(path)
+    }
+
+    /// Overwrite the file `seen` describes, then remove its name. A file with
+    /// another name elsewhere is only unlinked.
+    fn wipe_file(
+        path: &Path,
+        seen: &WindowsFileInfo,
+        opts: &WipeOptions,
+        stop: &AtomicBool,
+    ) -> io::Result<()> {
+        clear_read_only(path, seen)?;
         if seen.len > 0 {
             let mut file = std::fs::OpenOptions::new()
                 .write(true)
@@ -592,20 +650,21 @@ mod local {
                 return Err(io::Error::other("file was replaced"));
             }
             if info.links <= 1 {
-                overwrite(&mut file, info.len, opts)?;
+                overwrite(&mut file, info.len, opts, stop)?;
                 drop(file);
-                overwrite_named_streams(path, opts)?;
+                overwrite_named_streams(path, opts, stop)?;
             }
         }
-        match std::fs::remove_file(path) {
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-            other => other,
-        }
+        remove_name(path)
     }
 
     /// Another app can keep bytes in a named stream (`notes.txt:draft`).
     /// Deleting the file frees them without an overwrite.
-    fn overwrite_named_streams(path: &Path, opts: &WipeOptions) -> io::Result<()> {
+    fn overwrite_named_streams(
+        path: &Path,
+        opts: &WipeOptions,
+        stop: &AtomicBool,
+    ) -> io::Result<()> {
         for (name, len) in named_streams(path)? {
             if len == 0 {
                 continue;
@@ -617,7 +676,7 @@ mod local {
                 .write(true)
                 .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
                 .open(Path::new(&stream_path))?;
-            overwrite(&mut stream, len, opts)?;
+            overwrite(&mut stream, len, opts, stop)?;
         }
         Ok(())
     }
@@ -693,7 +752,7 @@ mod local {
         if info.attributes & (REPARSE_POINT | DIRECTORY) != 0 || stamp_of_info(&info) != *expected {
             return Ok(false);
         }
-        wipe_file(path, &info, opts)?;
+        wipe_file(path, &info, opts, &AtomicBool::new(false))?;
         Ok(true)
     }
 }
@@ -727,7 +786,7 @@ mod bridge {
     use super::{child_rel, DiskStamp, Visit, Walk, MAX_DEPTH};
     use crate::host_fs::{self, HostFsQuery};
     use crate::vault::plain::disk;
-    use crate::vault::wipe::WipeOptions;
+    use crate::vault::wipe::{wipe_file_then_unlink, wipe_file_then_unlink_until, WipeOptions};
 
     pub(super) fn sweep(folder: &Path, walk: &mut Walk<'_>) -> io::Result<()> {
         if !folder.host_is_dir() {
@@ -776,22 +835,20 @@ mod bridge {
                 continue;
             }
             let stamp = disk::listed_stamp(&entry);
-            let wiped = match (walk.choose)(&child, &stamp) {
+            let removed = match (walk.choose)(&child, &stamp) {
                 Visit::Keep => false,
-                Visit::Wipe => wipe_file(&child_path, walk.opts).is_ok(),
+                Visit::Wipe => {
+                    let wiped = wipe_file_then_unlink_until(&child_path, walk.opts, walk.stop);
+                    walk.out.count(wiped)
+                }
+                Visit::Delete => walk.out.count(host_fs::remove_file(&child_path)),
             };
-            if wiped {
-                walk.out.wiped += 1;
-            } else {
+            if !removed {
                 walk.out.keep(&child);
                 emptied = false;
             }
         }
         emptied
-    }
-
-    fn wipe_file(path: &Path, opts: &WipeOptions) -> io::Result<()> {
-        crate::vault::wipe::wipe_file_then_unlink(path, opts)
     }
 
     pub(super) fn wipe_one(
@@ -801,7 +858,7 @@ mod bridge {
     ) -> io::Result<bool> {
         match disk::stamp_at(path)? {
             Some(disk::Seen::File(stamp)) if stamp == *expected => {
-                wipe_file(path, opts)?;
+                wipe_file_then_unlink(path, opts)?;
                 Ok(true)
             }
             _ => Ok(false),
@@ -835,7 +892,7 @@ mod tests {
         std::fs::write(folder.join(".upriv-plain"), b"marker").unwrap();
 
         let swept = sweep_folder(&folder, &[".upriv-plain"], &opts(), &mut wipe_all).unwrap();
-        assert_eq!(swept.wiped, 2);
+        assert_eq!(swept.removed, 2);
         assert!(swept.kept.is_empty());
         assert!(folder.is_dir());
         assert!(!folder.join("a").exists());
@@ -873,7 +930,7 @@ mod tests {
         std::fs::hard_link(&outside, folder.join("linked.txt")).unwrap();
 
         let swept = sweep_folder(&folder, &[], &opts(), &mut wipe_all).unwrap();
-        assert_eq!(swept.wiped, 1);
+        assert_eq!(swept.removed, 1);
         assert!(!folder.join("linked.txt").exists());
         assert_eq!(std::fs::read(&outside).unwrap(), b"other file");
     }
@@ -895,6 +952,45 @@ mod tests {
     }
 
     #[test]
+    fn sweep_delete_removes_the_file_without_touching_its_bytes() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let folder = tmp.path().join("leaf");
+        std::fs::create_dir_all(folder.join("docs")).unwrap();
+        let path = folder.join("docs/locked.txt");
+        std::fs::write(&path, b"plaintext").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o400)).unwrap();
+        // An open descriptor still sees the inode after the name is gone.
+        let mut reader = std::fs::File::open(&path).unwrap();
+
+        let swept = sweep_folder(&folder, &[], &opts(), &mut |_, _| Visit::Delete).unwrap();
+        assert_eq!(swept.removed, 1);
+        assert!(swept.kept.is_empty());
+        assert!(!folder.join("docs").exists());
+        let mut left = Vec::new();
+        std::io::Read::read_to_end(&mut reader, &mut left).unwrap();
+        assert_eq!(left, b"plaintext");
+    }
+
+    #[test]
+    fn a_stop_leaves_a_wiped_file_unwritten_and_still_removes_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let folder = tmp.path().join("leaf");
+        std::fs::create_dir_all(&folder).unwrap();
+        let path = folder.join("secret.txt");
+        std::fs::write(&path, b"plaintext").unwrap();
+        let mut reader = std::fs::File::open(&path).unwrap();
+
+        let stop = AtomicBool::new(true);
+        let swept = sweep_folder_until(&folder, &[], &opts(), &stop, &mut wipe_all).unwrap();
+        assert_eq!(swept.removed, 1);
+        assert!(!path.exists());
+        let mut left = Vec::new();
+        std::io::Read::read_to_end(&mut reader, &mut left).unwrap();
+        assert_eq!(left, b"plaintext");
+    }
+
+    #[test]
     fn sweep_keeps_what_choose_keeps_and_the_folders_that_hold_it() {
         let tmp = tempfile::tempdir().unwrap();
         let folder = tmp.path().join("leaf");
@@ -910,7 +1006,7 @@ mod tests {
             }
         };
         let swept = sweep_folder(&folder, &[], &opts(), &mut choose).unwrap();
-        assert_eq!(swept.wiped, 1);
+        assert_eq!(swept.removed, 1);
         assert_eq!(swept.kept, vec!["docs/unsaved.txt".to_string()]);
         assert!(folder.join("docs/unsaved.txt").exists());
         assert!(!folder.join("docs/saved.txt").exists());
@@ -927,7 +1023,7 @@ mod tests {
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o400)).unwrap();
 
         let swept = sweep_folder(&folder, &[], &opts(), &mut wipe_all).unwrap();
-        assert_eq!(swept.wiped, 1);
+        assert_eq!(swept.removed, 1);
         assert!(!path.exists());
     }
 

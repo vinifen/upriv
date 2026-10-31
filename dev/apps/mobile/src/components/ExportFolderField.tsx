@@ -14,13 +14,20 @@ interface ExportFolderFieldProps {
   hint?: string;
   /** Locked while the export runs. */
   disabled?: boolean;
+  /** The picker answered with a folder. */
+  onPicked?: (folder: string) => void;
 }
 
 /**
  * Where an export goes: a folder from the picker. The export itself starts
  * from its window's own button.
  */
-export function ExportFolderField({ folder, hint, disabled = false }: ExportFolderFieldProps) {
+export function ExportFolderField({
+  folder,
+  hint,
+  disabled = false,
+  onPicked,
+}: ExportFolderFieldProps) {
   const { t } = useTranslation();
   const { colors, typography } = useTheme();
 
@@ -28,11 +35,9 @@ export function ExportFolderField({ folder, hint, disabled = false }: ExportFold
     <View style={styles.group}>
       <FieldLabel>{t("modal.export_folder.label")}</FieldLabel>
       {hint ? <FieldHint>{hint}</FieldHint> : null}
-      {/* A picked tree is a storage-access grant, not a location the Files
-          app opens: no open button. */}
       <PathField
         value={workspacePathDisplay(folder.path)}
-        openPath=""
+        openPath={folder.path}
         editable={false}
         placeholder={t("modal.export_folder.none")}
       />
@@ -42,7 +47,7 @@ export function ExportFolderField({ folder, hint, disabled = false }: ExportFold
         label={t("modal.export_folder.choose")}
         disabled={disabled || folder.picking}
         busy={folder.picking}
-        onPress={folder.choose}
+        onPress={() => folder.choose(onPicked)}
       />
       {folder.pickFailed ? (
         <Text

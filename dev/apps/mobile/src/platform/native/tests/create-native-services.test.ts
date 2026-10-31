@@ -64,6 +64,7 @@ vi.mock("@/lib/rpc", () => ({
   rpcVaultDelete: vi.fn(),
   rpcVaultExportToFolder: vi.fn(async () => ({ path: "/upriv-saf-export/Notes.zip", size: 1 })),
   rpcVaultExportCapabilities: vi.fn(async () => ({ sevenZip: true })),
+  rpcVaultPlainExportSweep: vi.fn(async () => ({ folders: [] })),
   rpcVaultImportZip: vi.fn(),
   rpcVaultImport7z: vi.fn(),
   rpcVaultImportProbe: vi.fn(async () => ({ ok: true, kind: "seven_zip" })),
@@ -84,8 +85,7 @@ vi.mock("@/lib/rpc", () => ({
   rpcBackupList: vi.fn(async () => []),
   rpcBackupDelete: vi.fn(),
   rpcBackupPromote: vi.fn(),
-  rpcBackupGet: vi.fn(),
-  rpcBackupExportToPath: vi.fn(),
+  rpcBackupExport: vi.fn(),
   rpcDataFolderExport: vi.fn(async () => ({ path: "/upriv-saf-export/upriv.zip", size: 1 })),
   rpcJobStatus: vi.fn(async () => null),
   rpcJobCancel: vi.fn(async () => undefined),
@@ -290,6 +290,31 @@ describe("createNativeServices", () => {
     expect(safReleaseImportTree).toHaveBeenCalledWith(picked);
     expect(mountSafRoot).not.toHaveBeenCalled();
     expect(unmountSafRoot).not.toHaveBeenCalled();
+  });
+
+  it("mounts each folder a crash left a plain-text export in, then lets it go", async () => {
+    const { createNativeServices } = await importModule();
+    const rpc = await import("@/lib/rpc");
+    const reachable = "content://com.android.externalstorage.documents/tree/primary%3ADownload";
+    const gone = "content://com.android.externalstorage.documents/tree/primary%3AMusic";
+    vi.mocked(rpc.rpcVaultPlainExportSweep)
+      .mockResolvedValueOnce({ folders: [gone, reachable] })
+      .mockResolvedValue({ folders: [] });
+    mountSafExport.mockImplementationOnce(() => {
+      throw new Error("the grant is gone");
+    });
+    mountSafExport.mockClear();
+    unmountSafExport.mockClear();
+    safReleaseImportTree.mockClear();
+    const services = createNativeServices();
+
+    await services.vault.sweepPlainExports();
+
+    expect(mountSafExport.mock.calls).toEqual([[gone], [reachable]]);
+    expect(rpc.rpcVaultPlainExportSweep).toHaveBeenCalledTimes(2);
+    expect(unmountSafExport).toHaveBeenCalledTimes(1);
+    expect(safReleaseImportTree).toHaveBeenCalledWith(reachable);
+    expect(safReleaseImportTree).not.toHaveBeenCalledWith(gone);
   });
 
   it("calls path vault RPCs while a SAF tree is active", async () => {
