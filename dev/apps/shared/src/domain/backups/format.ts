@@ -32,19 +32,23 @@ export function backupEntryKey(
 }
 
 /**
- * Name inside a downloaded bundle of several snapshots. A pin that shares its
- * file name with the copy in `backups/` is `saves-<file name>` so the two zips
- * stay distinct. Core uses the same rule.
+ * The file an export of the backups `keys` (`backupEntryKey`) writes into its
+ * folder: one keeps its own name, several go into `upriv-backups-<id>.zip`.
+ * While that name is taken core adds the next free `number` (`{name} 2.zip`,
+ * `export_backups`).
  */
-export function backupBundleEntryName(
-  entry: { stamp: string; fileName?: string; saved?: boolean },
-  vaultId: string,
-  entries: readonly { stamp: string; fileName?: string; saved?: boolean }[],
-): string {
-  const name = backupEntryFileName(entry, vaultId);
-  if (!entry.saved) return name;
-  const clashes = entries.some(
-    (other) => !other.saved && backupEntryFileName(other, vaultId) === name,
-  );
-  return clashes ? `saves-${name}` : name;
+export function backupExportFilename(keys: readonly string[], vaultId: string, number = 1): string {
+  const stem =
+    keys.length === 1
+      ? keys[0].slice(keys[0].lastIndexOf("/") + 1).replace(/\.zip$/, "")
+      : `upriv-backups-${vaultId.trim()}`;
+  return number > 1 ? `${stem} ${number}.zip` : `${stem}.zip`;
+}
+
+/**
+ * The row that shows an export of `keys`: one backup grows its own row.
+ * `null` for several, which show above the list, under the toolbar.
+ */
+export function backupExportRowKey(keys: readonly string[]): string | null {
+  return keys.length === 1 ? keys[0] : null;
 }

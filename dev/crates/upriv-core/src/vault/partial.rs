@@ -1,7 +1,8 @@
 //! The unfinished file a write leaves when it stops or fails: an export's
 //! `.upriv-part`, a backup's `.partial`, or the data-folder zip's
 //! `.zip.upriv-part`. It is removed, and the log says whether that worked, so
-//! a file left behind is always on record. No path goes to the log.
+//! a file left behind is always on record. A plain-text export holds readable
+//! vault files, so its partial is overwritten first. No path goes to the log.
 
 use std::io::ErrorKind;
 use std::path::Path;
@@ -10,18 +11,19 @@ use crate::error::UprivError;
 use crate::logging::{log_event, LogLevel};
 
 use super::backup::classify_write_failure;
+use super::wipe::{wipe_file_then_unlink, WipeOptions};
 
 /// What was writing the unfinished file, as the log names it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PartialWork {
-    /// A vault `.zip` or `.7z` export.
+    /// A vault `.zip`, `.7z`, or plain-text `.zip` export.
     VaultExport,
     /// Back up now.
     BackupSave,
     /// The backup a close or a password / unlock-RAM change writes.
     Backup,
-    /// A download of backup zips.
-    BackupDownload,
+    /// A copy of backup zips into a chosen folder.
+    BackupExport,
     /// The zip of the whole data folder.
     DataFolderExport,
 }
@@ -32,7 +34,7 @@ impl PartialWork {
             PartialWork::VaultExport => "vault_export",
             PartialWork::BackupSave => "backup_save",
             PartialWork::Backup => "backup",
-            PartialWork::BackupDownload => "backup_download",
+            PartialWork::BackupExport => "backup_export",
             PartialWork::DataFolderExport => "data_folder_export",
         }
     }
@@ -48,20 +50,46 @@ pub fn discard_partial(path: &Path, work: PartialWork) {
             &[("work", work.as_str())],
         ),
         Err(error) if error.kind() == ErrorKind::NotFound => {}
+        Err(error) => log_partial_failure("partial_remove_failed", work, error),
+    }
+}
+
+/// Overwrite the unfinished plaintext file at `path`, remove it, and log the
+/// outcome. A file the overwrite could not reach still loses its name. Returns
+/// false while the file is still there, so a later launch can try again.
+pub fn wipe_partial(path: &Path, work: PartialWork, opts: &WipeOptions) -> bool {
+    match wipe_file_then_unlink(path, opts) {
+        Ok(()) => {
+            log_event(LogLevel::Info, "partial_wiped", &[("work", work.as_str())]);
+            true
+        }
+        Err(error) if error.kind() == ErrorKind::NotFound => true,
         Err(error) => {
-            let class = classify_write_failure(&UprivError::Io(error));
-            let os = class.os.map(|code| code.to_string());
-            let mut fields = vec![
-                ("work", work.as_str()),
-                ("reason", class.reason),
-                ("kind", class.kind),
-            ];
-            if let Some(code) = os.as_deref() {
-                fields.push(("os", code));
+            log_partial_failure("partial_wipe_failed", work, error);
+            match crate::host_fs::remove_file(path) {
+                Ok(()) => true,
+                Err(error) if error.kind() == ErrorKind::NotFound => true,
+                Err(error) => {
+                    log_partial_failure("partial_remove_failed", work, error);
+                    false
+                }
             }
-            log_event(LogLevel::Warn, "partial_remove_failed", &fields);
         }
     }
+}
+
+fn log_partial_failure(event: &str, work: PartialWork, error: std::io::Error) {
+    let class = classify_write_failure(&UprivError::Io(error));
+    let os = class.os.map(|code| code.to_string());
+    let mut fields = vec![
+        ("work", work.as_str()),
+        ("reason", class.reason),
+        ("kind", class.kind),
+    ];
+    if let Some(code) = os.as_deref() {
+        fields.push(("os", code));
+    }
+    log_event(LogLevel::Warn, event, &fields);
 }
 
 #[cfg(test)]
@@ -79,6 +107,25 @@ mod tests {
         assert!(!partial.host_exists());
         discard_partial(&partial, PartialWork::VaultExport);
         assert!(!partial.host_exists());
+    }
+
+    #[test]
+    fn a_wipe_overwrites_the_file_before_its_name_goes() {
+        use crate::config::vault_config::VaultWipePattern;
+        let opts = WipeOptions {
+            passes: 1,
+            pattern: VaultWipePattern::Zeros,
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let partial = dir.path().join("Notes plain text.zip.upriv-part");
+        crate::host_fs::write(&partial, b"readable vault file").unwrap();
+        // A second name keeps the bytes readable after the first one goes.
+        let second = dir.path().join("second-name");
+        std::fs::hard_link(&partial, &second).unwrap();
+        assert!(wipe_partial(&partial, PartialWork::VaultExport, &opts));
+        assert!(!partial.host_exists());
+        assert_eq!(crate::host_fs::read(&second).unwrap(), vec![0u8; 19]);
+        assert!(wipe_partial(&partial, PartialWork::VaultExport, &opts));
     }
 
     #[cfg(unix)]

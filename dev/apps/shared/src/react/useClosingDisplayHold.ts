@@ -35,9 +35,9 @@ export function useClosingDisplayHold() {
   }, []);
 
   const settle = useCallback(
-    (vaultId: string, onReveal: () => void) => {
+    (vaultId: string, onReveal: () => void, opts?: { immediate?: boolean }) => {
       const startedAt = startedAtRef.current.get(vaultId) ?? Date.now();
-      const remain = remainingClosingDisplayMs(startedAt);
+      const remain = opts?.immediate ? 0 : remainingClosingDisplayMs(startedAt);
       const reveal = () => {
         cancelTimerRef.current.delete(vaultId);
         startedAtRef.current.delete(vaultId);

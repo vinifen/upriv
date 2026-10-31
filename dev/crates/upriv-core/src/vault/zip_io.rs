@@ -20,6 +20,9 @@ use crate::store::{
 };
 
 const ZIP_WRITE_BUFFER: usize = 256 * 1024;
+/// Bytes a store zip writes between flushes to disk. One flush at the end of a
+/// large zip would hold a stop for minutes.
+const ZIP_SYNC_BYTES: u64 = 64 * 1024 * 1024;
 /// Bytes moved per read when a file goes into or out of a zip.
 const ZIP_COPY_BUFFER: usize = 256 * 1024;
 /// What [`SeekBufReader`] reads at a time. A scan of local headers reads at
@@ -35,9 +38,38 @@ pub(super) struct SeekBufWriter<W: Write + Seek> {
     inner: BufWriter<W>,
 }
 
-pub(super) fn buffered_zip_file(file: File) -> SeekBufWriter<File> {
+pub(super) fn buffered_zip_file<W: Write + Seek>(file: W) -> SeekBufWriter<W> {
     SeekBufWriter {
         inner: BufWriter::with_capacity(ZIP_WRITE_BUFFER, file),
+    }
+}
+
+/// A file flushed to disk every [`ZIP_SYNC_BYTES`], so a job's stop is never
+/// further than one such flush away.
+struct PacedFile {
+    file: File,
+    unsynced: u64,
+}
+
+impl Write for PacedFile {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let written = self.file.write(buf)?;
+        self.unsynced += written as u64;
+        if self.unsynced >= ZIP_SYNC_BYTES {
+            self.file.sync_data()?;
+            self.unsynced = 0;
+        }
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.file.flush()
+    }
+}
+
+impl Seek for PacedFile {
+    fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+        self.file.seek(pos)
     }
 }
 
@@ -236,12 +268,13 @@ fn zip_entry_is_store_header(name: &str) -> bool {
 /// Every entry is read through to the end so its checksum is checked before
 /// an older backup can be deleted. Skipping bodies on a storage-access folder
 /// let a bad persist replace the previous zip.
-pub(crate) fn verify_store_zip_copies(path: &Path) -> Result<()> {
+pub(crate) fn verify_store_zip_copies(path: &Path, job: &Job) -> Result<()> {
     let file = buffered_zip_reader(File::open(path)?)?;
     let mut archive = ZipArchive::new(file).map_err(|e| zip_err(path, e))?;
     let mut primary = None;
     let mut copy = None;
     for i in 0..archive.len() {
+        job.ensure_running()?;
         let mut entry = archive.by_index(i).map_err(|e| zip_err(path, e))?;
         let name = entry.name().replace('\\', "/");
         let keep = index_zip_role(&name);
@@ -350,19 +383,35 @@ pub(super) fn zip_store_with_config_to_path(
     let tree = ZipTree::list(store, Path::new(STORE_DIR_NAME))?;
     job.set_total(tree.bytes);
     let readme = store_zip_readme(created_stamp, tree.bytes)?;
-    let file = job.writer(buffered_zip_file(File::create(dest)?));
-    let mut file = write_zip_with_config(&tree, config_toml, &readme, file, job)?;
-    // Position on the fd we already hold. A new open would be another
-    // storage-access round trip just to read the length.
-    match file.stream_position() {
+    let file = job.writer(buffered_zip_file(PacedFile {
+        file: File::create(dest)?,
+        unsynced: 0,
+    }));
+    let file = write_zip_with_config(&tree, config_toml, &readme, file, job)?;
+    written_len(file, dest)
+}
+
+/// Length of the file `out` wrote to `dest`, from the position on the fd we
+/// already hold. A new open would be another storage-access round trip just to
+/// read the length.
+fn written_len<W: Seek>(mut out: W, dest: &Path) -> Result<u64> {
+    match out.stream_position() {
         Ok(len) => Ok(len),
         Err(error) => {
-            drop(file);
+            drop(out);
             crate::host_fs::metadata(dest)
                 .map(|meta| meta.len())
                 .map_err(|_| error.into())
         }
     }
+}
+
+/// Write the end of `zip` and flush it into `dest`. Returns the file's length.
+pub(super) fn finish_zip_file<W: Write + Seek>(mut zip: ZipWriter<W>, dest: &Path) -> Result<u64> {
+    let mut out = zip.finish().map_err(|e| zip_err(dest, e))?;
+    // Dropping a buffered writer would discard a failed last flush.
+    out.flush()?;
+    written_len(out, dest)
 }
 
 /// The root `config.toml`, if this zip carries vault settings.
@@ -519,28 +568,44 @@ pub(super) fn open_regular_nofollow(src: &Path) -> Result<File> {
     }
 }
 
+/// Copy one regular file to `dest`. Each write fails once `job` is asked to
+/// stop; its progress counts the bytes copied.
+pub(super) fn copy_file_to_path(src: &Path, dest: &Path, job: &Job) -> Result<u64> {
+    let mut input = job.progress_reader(open_regular_nofollow(src)?);
+    let mut output = job.writer(File::create(dest)?);
+    let mut buf = vec![0u8; ZIP_COPY_BUFFER];
+    let copied = copy_through(&mut input, &mut output, &mut buf)?;
+    output.flush()?;
+    Ok(copied)
+}
+
 /// Stored zip whose entries are existing files (a bundle of backup `.zip`s).
-pub fn zip_files_to_path(entries: &[(String, &Path)], dest: &Path) -> Result<u64> {
-    let file = File::create(dest)?;
-    let mut zip = ZipWriter::new(buffered_zip_file(file));
+/// Each write fails once `job` is asked to stop; its progress counts the bytes
+/// of those files copied.
+pub(super) fn zip_files_to_path(
+    entries: &[(String, PathBuf)],
+    dest: &Path,
+    job: &Job,
+) -> Result<u64> {
+    let mut zip = ZipWriter::new(job.writer(buffered_zip_file(File::create(dest)?)));
     let options = FileOptions::default().compression_method(CompressionMethod::Stored);
     let mut buf = vec![0u8; ZIP_COPY_BUFFER];
     for (name, src) in entries {
+        job.ensure_running()?;
         if name.contains("..") || name.contains('/') || name.contains('\\') {
             return Err(UprivError::VaultStoreInvalid {
                 path: src.to_path_buf(),
                 detail: "refusing a zip entry name that is not a single file".into(),
             });
         }
-        zip.start_file(name, options).map_err(|e| zip_err(src, e))?;
-        let mut input = open_regular_nofollow(src)?;
+        let input = open_regular_nofollow(src)?;
+        let large = input.metadata()?.len() >= u64::from(u32::MAX);
+        zip.start_file(name, options.large_file(large))
+            .map_err(|e| zip_err(src, e))?;
+        let mut input = job.progress_reader(input);
         copy_through(&mut input, &mut zip, &mut buf).map_err(|e| zip_err(src, e))?;
     }
-    let mut out = zip.finish().map_err(|e| zip_err(dest, e))?;
-    // Dropping a buffered writer would discard a failed last flush.
-    out.flush()?;
-    drop(out);
-    Ok(crate::host_fs::metadata(dest)?.len())
+    finish_zip_file(zip, dest)
 }
 
 /// Extract a `.zip` of `store/` into `dest`. Rejects path escape.
@@ -1137,15 +1202,26 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let good = tmp.path().join("good.zip");
         write_index_pair(&good, b"sealed", b"sealed");
-        verify_store_zip_copies(&good).unwrap();
+        let job = Job::untracked();
+        verify_store_zip_copies(&good, &job).unwrap();
 
         let drifted = tmp.path().join("drifted.zip");
         write_index_pair(&drifted, b"sealed", b"other");
-        assert!(verify_store_zip_copies(&drifted).is_err());
+        assert!(verify_store_zip_copies(&drifted, &job).is_err());
 
         let missing = tmp.path().join("missing.zip");
         write_index_pair(&missing, b"sealed", b"");
-        assert!(verify_store_zip_copies(&missing).is_err());
+        assert!(verify_store_zip_copies(&missing, &job).is_err());
+    }
+
+    #[test]
+    fn verify_ends_at_a_stop() {
+        let tmp = tempfile::tempdir().unwrap();
+        let good = tmp.path().join("good.zip");
+        write_index_pair(&good, b"sealed", b"sealed");
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let stopped = verify_store_zip_copies(&good, &Job::stopped_by(stop));
+        assert!(matches!(stopped, Err(UprivError::JobCancelled)));
     }
 
     fn write_index_pair(path: &Path, primary: &[u8], copy: &[u8]) {

@@ -50,7 +50,7 @@ describe("parsePlainCloseSummary", () => {
         saved: 1,
         conflicts: 0,
         heldDeletions: 2,
-        wiped: 3,
+        removed: 3,
         kept: 0,
         totals: { added: 1, changed: 0, removed: 0 },
         backupPinned: true,

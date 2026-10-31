@@ -3,15 +3,18 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { createElement, type ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  createMarkdownParser,
   MARKDOWN_COPY_DOUBLE_TAP_MS,
   MARKDOWN_PREVIEW_MAX_CHARS,
-  markdownOutline,
+  parseMarkdownNote,
 } from "@upriv/shared";
 import { I18nProvider } from "@/i18n";
 import { EditorPathBar } from "../EditorPathBar";
 import { MarkdownOutlinePanel, MarkdownOutlineToggle } from "../MarkdownOutline";
 import { MarkdownPreview } from "../MarkdownPreview";
 import { MarkdownViewToggle } from "../MarkdownViewToggle";
+
+const parser = createMarkdownParser();
 
 const NOTE = [
   "PIN `1234`",
@@ -48,7 +51,7 @@ describe("MarkdownPreview", () => {
     stubClipboard(writeText);
     const onCopyFailed = vi.fn();
     const { container } = renderWithI18n(
-      createElement(MarkdownPreview, { markdown: NOTE, onCopyFailed }),
+      createElement(MarkdownPreview, { markdown: NOTE, parser, onCopyFailed }),
     );
 
     await waitFor(() => {
@@ -106,7 +109,7 @@ describe("MarkdownPreview", () => {
     const onChange = vi.fn();
     const markdown = "- [ ] one\n- [x] two\n";
     renderWithI18n(
-      createElement(MarkdownPreview, { markdown, onCopyFailed: () => undefined, onChange }),
+      createElement(MarkdownPreview, { markdown, parser, onCopyFailed: () => undefined, onChange }),
     );
     await waitFor(() => expect(screen.getAllByRole("checkbox")).toHaveLength(2));
     const boxes = screen.getAllByRole("checkbox");
@@ -123,6 +126,7 @@ describe("MarkdownPreview", () => {
     renderWithI18n(
       createElement(MarkdownPreview, {
         markdown: "a".repeat(MARKDOWN_PREVIEW_MAX_CHARS + 1),
+        parser,
         onCopyFailed: () => undefined,
       }),
     );
@@ -138,6 +142,7 @@ describe("MarkdownPreview", () => {
     renderWithI18n(
       createElement(MarkdownPreview, {
         markdown: "```ts\nconsole.log('copy me');\n```\n\nSome plain copy here.",
+        parser,
         searchQuery: "copy",
         onMatchCountChange,
         onCopyFailed: () => undefined,
@@ -195,7 +200,7 @@ describe("MarkdownOutline", () => {
     const onSelect = vi.fn();
     renderWithI18n(
       createElement(MarkdownOutlinePanel, {
-        outline: markdownOutline("# Top\n\n## Child\n\n> # quoted\n\n# Next\n"),
+        outline: parseMarkdownNote("# Top\n\n## Child\n\n> # quoted\n\n# Next\n").outline,
         onSelect,
       }),
     );
@@ -210,7 +215,7 @@ describe("MarkdownOutline", () => {
   it("says when a note has no headings", async () => {
     renderWithI18n(
       createElement(MarkdownOutlinePanel, {
-        outline: markdownOutline("just text"),
+        outline: parseMarkdownNote("just text").outline,
         onSelect: vi.fn(),
       }),
     );
@@ -221,6 +226,7 @@ describe("MarkdownOutline", () => {
     const { container } = renderWithI18n(
       createElement(MarkdownPreview, {
         markdown: "# Top\n\n> # quoted\n\n## Child\n",
+        parser,
         onCopyFailed: vi.fn(),
       }),
     );
@@ -234,7 +240,7 @@ describe("MarkdownOutline", () => {
     const onSelect = vi.fn();
     const { rerender } = renderWithI18n(
       createElement(MarkdownOutlinePanel, {
-        outline: markdownOutline("# First\n\n## Second\n"),
+        outline: parseMarkdownNote("# First\n\n## Second\n").outline,
         activeIndex: 0,
         onSelect,
       }),
@@ -251,7 +257,7 @@ describe("MarkdownOutline", () => {
       createElement(I18nProvider, {
         locale: "en",
         children: createElement(MarkdownOutlinePanel, {
-          outline: markdownOutline("# First\n\n## Second\n"),
+          outline: parseMarkdownNote("# First\n\n## Second\n").outline,
           activeIndex: 1,
           onSelect,
         }),
@@ -268,6 +274,7 @@ describe("MarkdownOutline", () => {
     renderWithI18n(
       createElement(MarkdownPreview, {
         markdown: "# Heading 1\n\nSome text\n\n# Heading 2\n",
+        parser,
         onCopyFailed: vi.fn(),
         onActiveHeadingChange,
       }),

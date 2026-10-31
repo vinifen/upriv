@@ -1,12 +1,17 @@
-import { useCallback, useLayoutEffect, useRef, useState } from "react";
+import { memo, useCallback, useLayoutEffect, useRef, useState } from "react";
 import { StyleSheet, useWindowDimensions, View, type ViewStyle } from "react-native";
 import type { FileManagerEntry, VaultWorkspaceAction } from "@upriv/shared";
-import { useTreeSplitDrag, useWorkspacePersistence } from "@upriv/shared/react";
+import {
+  useFileManagerEntry,
+  useTreeSplitDrag,
+  useWorkspacePersistence,
+} from "@upriv/shared/react";
 import { useTheme } from "@/theme";
 import { useVaultFileSystemService } from "@/platform/services";
 import { useFileManager } from "../FileManagerContext";
 import { FileManagerDialogs } from "../dialogs/FileManagerDialogs";
 import { FileEditorPane } from "../editor/FileEditorPane";
+import type { FileEditorSearchHandle } from "../editor/FileEditorSearch";
 import { FileManagerTabBar } from "../editor/FileManagerTabBar";
 import { hasUnsavedEditableTabs, useVaultFileManager } from "../hooks/useVaultFileManager";
 import { ExplorerToggle, FileTreePanel } from "../tree/FileTreePanel";
@@ -20,45 +25,65 @@ function treeSlotExtentStyle(extent: number | `${number}%`, narrow: boolean): Vi
 }
 
 interface FileManagerWorkspaceProps {
-  entry: FileManagerEntry;
+  vaultId: string;
   active?: boolean;
   writesLocked?: boolean;
-  onDismissConfirmed: () => void;
-  onVaultCloseConfirmed?: () => void;
+  onDismissConfirmed: (vaultId: string) => void;
+  onVaultCloseConfirmed?: (vaultId: string) => void;
 }
 
-export function FileManagerWorkspace({
+/** One vault's file manager. It draws again for that vault's changes only. */
+export const FileManagerWorkspace = memo(function FileManagerWorkspace({
+  vaultId,
+  ...props
+}: FileManagerWorkspaceProps) {
+  const entry = useFileManagerEntry(vaultId);
+  return entry ? <OpenFileManagerWorkspace entry={entry} {...props} /> : null;
+});
+
+function OpenFileManagerWorkspace({
   entry,
   active = true,
   writesLocked = false,
   onDismissConfirmed,
   onVaultCloseConfirmed,
-}: FileManagerWorkspaceProps) {
+}: Omit<FileManagerWorkspaceProps, "vaultId"> & { entry: FileManagerEntry }) {
+  const vaultId = entry.vaultId;
   const { colors } = useTheme();
   const { width: windowWidth } = useWindowDimensions();
   const isNarrow = windowWidth <= NARROW_MAX_WIDTH;
   const axis = isNarrow ? "y" : "x";
   const { dispatchWorkspace } = useFileManager();
   const treeSlotRef = useRef<View>(null);
+  const searchRef = useRef<FileEditorSearchHandle>(null);
   const [containerSize, setContainerSize] = useState(0);
 
   const dispatch = useCallback(
-    (action: VaultWorkspaceAction) => dispatchWorkspace(entry.vaultId, action),
-    [dispatchWorkspace, entry.vaultId],
+    (action: VaultWorkspaceAction) => dispatchWorkspace(vaultId, action),
+    [dispatchWorkspace, vaultId],
+  );
+  const handleDismissConfirmed = useCallback(
+    () => onDismissConfirmed(vaultId),
+    [onDismissConfirmed, vaultId],
+  );
+  const handleVaultCloseConfirmed = useCallback(
+    () => onVaultCloseConfirmed?.(vaultId),
+    [onVaultCloseConfirmed, vaultId],
   );
 
   const fm = useVaultFileManager({
     entry,
     dispatch,
-    onDismissConfirmed,
-    onVaultCloseConfirmed,
+    onDismissConfirmed: handleDismissConfirmed,
+    onVaultCloseConfirmed: handleVaultCloseConfirmed,
     writesLocked,
   });
 
   const fs = useVaultFileSystemService();
   useWorkspacePersistence({
-    vaultId: entry.vaultId,
+    vaultId,
     workspace: entry.workspace,
+    tree: fm.treeStatus === "ready" ? fm.tree : null,
     fs,
     dispatch,
     suspend: fm.importBusy,
@@ -110,6 +135,9 @@ export function FileManagerWorkspace({
           { backgroundColor: colors.surfaceContainerHigh },
           active ? null : styles.inactive,
         ]}
+        onTouchStart={(event) =>
+          searchRef.current?.blurIfOutside(event.nativeEvent.pageX, event.nativeEvent.pageY)
+        }
         onLayout={(event) => {
           const { width, height } = event.nativeEvent.layout;
           const size = axis === "y" ? height : width;
@@ -139,7 +167,7 @@ export function FileManagerWorkspace({
             showSave={hasUnsavedEditableTabs(fm)}
             onSave={fm.saveAllFiles}
           />
-          <FileEditorPane fm={fm} vaultName={entry.displayName} />
+          <FileEditorPane fm={fm} vaultName={entry.displayName} searchRef={searchRef} />
         </View>
       </View>
       <FileManagerDialogs fm={fm} promptsOpen={active} />

@@ -5,7 +5,9 @@
 //! payload. Members stream into `store/` in waves. Each full wave seals the
 //! index; the tail is sealed after the last member.
 //! Plaintext is capped at 64 times the archive length, the same factor as a
-//! files zip.
+//! files zip. `.upriv-config/` beside the vault's files is optional: an export
+//! writes it as the archive's first block, so a password test reads the
+//! settings without decoding a vault file.
 
 use crate::host_fs::File;
 use std::collections::HashSet;
@@ -13,21 +15,25 @@ use std::io::{BufReader, Cursor, ErrorKind, Read, Seek};
 use std::path::{Path, PathBuf};
 
 use sevenz_rust2::{ArchiveEntry, ArchiveReader};
+use zeroize::Zeroizing;
 
 use crate::config::VaultConfig;
 use crate::error::{Result, UprivError};
 use crate::logging::{log_event, LogLevel};
 use crate::paths::VaultRoot;
-use crate::store::{is_plain_internal, is_reserved_logical, KdfUnlockPreset};
+use crate::store::{is_reserved_logical, is_skipped_on_import, KdfUnlockPreset};
 
+use super::config_folder::{
+    config_member, read_carried_layout, read_carried_settings, ConfigMember, ImportExtras,
+};
 use super::create::create_vault;
+use super::embedded_settings::EmbeddedVaultSettings;
 use super::files_zip::FILES_ZIP_EXPAND_FACTOR;
 use super::fs::{
     fs_ensure_folder_path_staged, fs_seal_staged_imports, fs_seal_staged_wave, fs_write_staged,
 };
 use super::open_close::{abandon_failed_import, close_vault, open_vault_for_ingest};
 use super::seven_zip_pack::{seven_zip_decode_threads, sevenz_member_name_unsafe, sevenz_password};
-use super::welcome::{seal_welcome_if_absent, VaultWelcome};
 
 const ARCHIVE_READ_BUFFER: usize = 1024 * 1024;
 
@@ -134,6 +140,13 @@ enum ArchiveMember {
     Directory(Option<String>),
     /// Logical path with the outer folder removed.
     File(String),
+    /// `.upriv-config/config.toml`.
+    Settings,
+    /// `.upriv-config/workspace.json`.
+    Workspace,
+    /// A file that is not vault data: the rest of `.upriv-config/`, or a
+    /// plaintext-folder marker.
+    Skipped,
 }
 
 fn archive_layout_error(detail: impl Into<String>) -> UprivError {
@@ -143,8 +156,8 @@ fn archive_layout_error(detail: impl Into<String>) -> UprivError {
     }
 }
 
-/// One outer folder. Every document sits directly under it. A `.7z` is documents
-/// only: it does not carry the store-zip `README.md` envelope.
+/// One outer folder. Every document sits directly under it, beside an optional
+/// `.upriv-config/`.
 fn classify_archive_member(
     entry: &ArchiveEntry,
     outer: &mut Option<String>,
@@ -181,7 +194,16 @@ fn classify_archive_member(
         return Ok(ArchiveMember::Directory(Some(parts[1..].join("/"))));
     }
     let logical = parts[1..].join("/");
-    if is_reserved_logical(&logical) && !is_plain_internal(&logical) {
+    match config_member(&logical) {
+        Some(ConfigMember::Settings) => return Ok(ArchiveMember::Settings),
+        Some(ConfigMember::Workspace) => return Ok(ArchiveMember::Workspace),
+        Some(ConfigMember::Other) => return Ok(ArchiveMember::Skipped),
+        None => {}
+    }
+    if is_skipped_on_import(&logical) {
+        return Ok(ArchiveMember::Skipped);
+    }
+    if is_reserved_logical(&logical) {
         return Err(archive_layout_error("reserved internal file in .7z"));
     }
     Ok(ArchiveMember::File(logical))
@@ -191,52 +213,84 @@ fn budget_exceeded() -> UprivError {
     archive_layout_error("7z expanded plaintext exceeds the archive budget")
 }
 
-/// Stages the member. The caller seals each full wave, then the tail.
-fn ingest_archive_member(
-    root: &VaultRoot,
-    vault_id: &str,
-    entry: &ArchiveEntry,
-    payload: &mut dyn Read,
-    outer: &mut Option<String>,
-    budget: &mut u64,
-    folders: &mut HashSet<String>,
-) -> Result<()> {
-    match classify_archive_member(entry, outer)? {
-        ArchiveMember::Directory(None) => Ok(()),
-        ArchiveMember::Directory(Some(logical)) if is_reserved_logical(&logical) => Ok(()),
-        ArchiveMember::Directory(Some(logical)) => {
-            fs_ensure_folder_path_staged(root, vault_id, &logical, folders)
-        }
-        ArchiveMember::File(logical) => {
-            if entry.size > *budget {
-                return Err(budget_exceeded());
+/// One import walking the archive's members into a new vault.
+struct MemberIngest<'a> {
+    root: &'a VaultRoot,
+    vault_id: &'a str,
+    keep_workspace: bool,
+    outer: Option<String>,
+    budget: u64,
+    folders: HashSet<String>,
+    /// The carried file-manager layout, when `keep_workspace` asked for it.
+    layout: Option<Zeroizing<Vec<u8>>>,
+}
+
+impl MemberIngest<'_> {
+    /// Stages the member. The caller seals each full wave, then the tail.
+    /// Every member's bytes are read through: the decoder reads them in order.
+    fn ingest(&mut self, entry: &ArchiveEntry, payload: &mut dyn Read) -> Result<()> {
+        let member = classify_archive_member(entry, &mut self.outer)?;
+        match &member {
+            ArchiveMember::Directory(None) => return Ok(()),
+            ArchiveMember::Directory(Some(logical)) if is_reserved_logical(logical) => {
+                return Ok(());
             }
-            let mut limited = BudgetReader {
-                inner: payload,
-                budget: *budget,
-            };
-            if is_plain_internal(&logical) {
-                std::io::copy(&mut limited, &mut std::io::sink())?;
-            } else {
+            ArchiveMember::Directory(Some(logical)) => {
+                return fs_ensure_folder_path_staged(
+                    self.root,
+                    self.vault_id,
+                    logical,
+                    &mut self.folders,
+                );
+            }
+            _ => {}
+        }
+        if entry.size > self.budget {
+            return Err(budget_exceeded());
+        }
+        let mut limited = BudgetReader {
+            inner: payload,
+            budget: self.budget,
+        };
+        match member {
+            ArchiveMember::File(logical) => {
                 if let Some((parent, _)) = logical.rsplit_once('/') {
-                    fs_ensure_folder_path_staged(root, vault_id, parent, folders)?;
+                    fs_ensure_folder_path_staged(
+                        self.root,
+                        self.vault_id,
+                        parent,
+                        &mut self.folders,
+                    )?;
                 }
-                fs_write_staged(root, vault_id, &format!("/{logical}"), &mut limited)?;
+                let path = format!("/{logical}");
+                fs_write_staged(self.root, self.vault_id, &path, &mut limited)?;
             }
-            *budget = limited.budget;
-            Ok(())
+            ArchiveMember::Workspace if self.keep_workspace => {
+                self.layout = read_carried_layout(&mut limited)?;
+            }
+            _ => {
+                std::io::copy(&mut limited, &mut std::io::sink())?;
+            }
         }
+        self.budget = limited.budget;
+        Ok(())
     }
 }
 
-/// Password check. A `.7z` has no settings member.
+/// Password check, and the settings the archive carries.
 ///
-/// A wrong password fails even when the header is not encrypted: one byte of
-/// the first user file is decoded. An archive that is only the outer folder
-/// succeeds after that directory is classified.
-fn probe_reader<R: Read + Seek>(reader: &mut ArchiveReader<R>, archive_len: u64) -> Result<()> {
+/// A wrong password fails even when the header is not encrypted: `config.toml`
+/// is read to its end, so its checksum is checked, or else one byte of the first
+/// file is decoded. An archive that is only the outer folder succeeds after that
+/// directory is classified. Only the first member is read, so no vault file is
+/// decoded for the settings.
+fn probe_reader<R: Read + Seek>(
+    reader: &mut ArchiveReader<R>,
+    archive_len: u64,
+) -> Result<Option<EmbeddedVaultSettings>> {
     let budget = plaintext_budget(archive_len);
     let mut outer = None;
+    let mut settings = None;
     let mut layout_error: Option<UprivError> = None;
     reader
         .for_each_entries(|entry, payload| {
@@ -245,7 +299,11 @@ fn probe_reader<R: Read + Seek>(reader: &mut ArchiveReader<R>, archive_len: u64)
             }
             match classify_archive_member(entry, &mut outer) {
                 Ok(ArchiveMember::Directory(_)) => Ok(true),
-                Ok(ArchiveMember::File(_)) => {
+                Ok(ArchiveMember::Settings) => {
+                    settings = read_carried_settings(payload)?;
+                    Ok(false)
+                }
+                Ok(ArchiveMember::File(_) | ArchiveMember::Workspace | ArchiveMember::Skipped) => {
                     if entry.size > budget {
                         layout_error = Some(budget_exceeded());
                         return Ok(false);
@@ -275,21 +333,24 @@ fn probe_reader<R: Read + Seek>(reader: &mut ArchiveReader<R>, archive_len: u64)
     if outer.is_none() {
         return Err(archive_layout_error("missing .7z outer folder"));
     }
-    Ok(())
+    Ok(settings)
 }
 
-/// Password check. A `.7z` has no settings member.
-///
-/// A wrong password fails even when the header is not encrypted: one byte of
-/// the first user file is decoded. An archive that is only the outer folder
-/// succeeds after that directory is classified.
-pub fn probe_logical_seven_zip(archive_bytes: &[u8], archive_password: &[u8]) -> Result<()> {
+/// Password check of a `.7z` in memory, and the settings it carries.
+pub fn probe_logical_seven_zip(
+    archive_bytes: &[u8],
+    archive_password: &[u8],
+) -> Result<Option<EmbeddedVaultSettings>> {
     let mut reader = open_archive_reader(archive_bytes, archive_password)?;
     probe_reader(&mut reader, archive_bytes.len() as u64)
 }
 
-/// Password check of a `.7z` file. The compressed bytes stay on disk.
-pub fn probe_logical_seven_zip_path(path: &Path, archive_password: &[u8]) -> Result<()> {
+/// Password check of a `.7z` file, and the settings it carries. The compressed
+/// bytes stay on disk.
+pub fn probe_logical_seven_zip_path(
+    path: &Path,
+    archive_password: &[u8],
+) -> Result<Option<EmbeddedVaultSettings>> {
     let (mut reader, len) = open_archive_path(path, archive_password)?;
     probe_reader(&mut reader, len)
 }
@@ -301,36 +362,32 @@ fn import_reader<R: Read + Seek>(
     preset: KdfUnlockPreset,
     mut reader: ArchiveReader<R>,
     archive_len: u64,
-    welcome: Option<VaultWelcome<'_>>,
+    extras: ImportExtras<'_>,
 ) -> Result<String> {
     if new_password.is_empty() {
         return Err(UprivError::WrongPassword);
     }
-    if let Some(welcome) = welcome {
-        welcome.files()?;
-    }
+    extras.check()?;
     create_vault(root, config.clone(), new_password, preset)?;
     let id = config.vault.id.trim().to_string();
     let ingest = (|| {
         open_vault_for_ingest(root, &id, new_password)?;
-        let mut budget = plaintext_budget(archive_len);
+        let mut members = MemberIngest {
+            root,
+            vault_id: &id,
+            keep_workspace: extras.keep_workspace,
+            outer: None,
+            budget: plaintext_budget(archive_len),
+            folders: HashSet::new(),
+            layout: None,
+        };
         let mut write_error: Option<UprivError> = None;
-        let mut outer = None;
-        let mut folders = HashSet::new();
         reader
             .for_each_entries(|entry, payload| {
                 if write_error.is_some() {
                     return Ok(false);
                 }
-                match ingest_archive_member(
-                    root,
-                    &id,
-                    entry,
-                    payload,
-                    &mut outer,
-                    &mut budget,
-                    &mut folders,
-                ) {
+                match members.ingest(entry, payload) {
                     Ok(()) => match fs_seal_staged_wave(root, &id) {
                         Ok(()) => Ok(true),
                         Err(error) => {
@@ -348,14 +405,11 @@ fn import_reader<R: Read + Seek>(
         if let Some(error) = write_error {
             return Err(error);
         }
-        if outer.is_none() {
+        if members.outer.is_none() {
             return Err(archive_layout_error("missing .7z outer folder"));
         }
         fs_seal_staged_imports(root, &id)?;
-        if let Some(welcome) = welcome {
-            seal_welcome_if_absent(root, &id, welcome)?;
-        }
-        Ok(())
+        extras.seal(root, &id, members.layout)
     })();
     if let Err(ingest_error) = ingest {
         return Err(abandon_failed_import(root, &id, ingest_error));
@@ -373,7 +427,7 @@ pub fn import_logical_seven_zip(
     preset: KdfUnlockPreset,
     archive_bytes: &[u8],
     archive_password: &[u8],
-    welcome: Option<VaultWelcome<'_>>,
+    extras: ImportExtras<'_>,
 ) -> Result<String> {
     let reader = open_archive_reader(archive_bytes, archive_password)?;
     import_reader(
@@ -383,7 +437,7 @@ pub fn import_logical_seven_zip(
         preset,
         reader,
         archive_bytes.len() as u64,
-        welcome,
+        extras,
     )
 }
 
@@ -395,10 +449,10 @@ pub fn import_logical_seven_zip_path(
     preset: KdfUnlockPreset,
     archive_path: &Path,
     archive_password: &[u8],
-    welcome: Option<VaultWelcome<'_>>,
+    extras: ImportExtras<'_>,
 ) -> Result<String> {
     let (reader, len) = open_archive_path(archive_path, archive_password)?;
-    import_reader(root, config, new_password, preset, reader, len, welcome)
+    import_reader(root, config, new_password, preset, reader, len, extras)
 }
 
 #[cfg(test)]
@@ -430,6 +484,28 @@ mod import_mem_tests {
         let mut layout = ArchiveEntry::new();
         layout.name = "Notes/.upriv-workspace.json".into();
         assert!(classify_archive_member(&layout, &mut outer).is_err());
+
+        let mut carried = ArchiveEntry::new();
+        carried.name = "Notes/.upriv-config/config.toml".into();
+        assert!(matches!(
+            classify_archive_member(&carried, &mut outer).unwrap(),
+            ArchiveMember::Settings
+        ));
+        carried.name = "Notes/.upriv-config/workspace.json".into();
+        assert!(matches!(
+            classify_archive_member(&carried, &mut outer).unwrap(),
+            ArchiveMember::Workspace
+        ));
+        carried.name = "Notes/.upriv-config/README.md".into();
+        assert!(matches!(
+            classify_archive_member(&carried, &mut outer).unwrap(),
+            ArchiveMember::Skipped
+        ));
+        carried.name = "Notes/docs/.upriv-config/config.toml".into();
+        assert!(matches!(
+            classify_archive_member(&carried, &mut outer).unwrap(),
+            ArchiveMember::Skipped
+        ));
 
         let mut second = ArchiveEntry::new();
         second.name = "Other/notes.txt".into();

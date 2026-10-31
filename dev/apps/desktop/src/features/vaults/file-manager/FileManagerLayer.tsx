@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { memo, useCallback } from "react";
 import { useTranslation } from "@/i18n";
 import { useFileManager } from "./FileManagerContext";
 import {
@@ -8,12 +8,19 @@ import {
   vaultCloseActivityLabelKey,
   type VaultPipelineListStatus,
 } from "@upriv/shared";
+import { useFileManagerSelector, useFileManagerShell } from "@upriv/shared/react";
 import { FileManagerDock } from "./shell/FileManagerDock";
 import { FileManagerModal } from "./shell/FileManagerModal";
 import { FileManagerWorkspace } from "./workspace/FileManagerWorkspace";
 
-export function FileManagerLayer({
-  pipelineListStatus = {},
+const NO_PIPELINE_STATUS: VaultPipelineListStatus = {};
+
+/**
+ * Drawn from the open file managers only, not their workspaces: typing in one
+ * vault draws that vault's workspace and leaves this frame and the dock alone.
+ */
+export const FileManagerLayer = memo(function FileManagerLayer({
+  pipelineListStatus = NO_PIPELINE_STATUS,
   onCloseVault,
 }: {
   pipelineListStatus?: VaultPipelineListStatus;
@@ -21,36 +28,19 @@ export function FileManagerLayer({
   onCloseVault?: (vaultId: string) => void;
 }) {
   const { t } = useTranslation();
-  const {
-    maximizedEntry,
-    maximizedVaultId,
-    entries,
-    entryOrder,
-    minimize,
-    maximize,
-    dismiss,
-    focusedVaultId,
-    dispatchWorkspace,
-  } = useFileManager();
-  const openEntries = entryOrder
-    .map((id) => entries[id])
-    .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry));
-
-  const suspendMinimize = Boolean(maximizedEntry?.workspace.unsavedPrompt);
+  const { getEntry, getState, minimize, maximize, dismiss, dispatchWorkspace } = useFileManager();
+  const { entries, maximizedVaultId, focusedVaultId } = useFileManagerShell();
+  const maximizedEntry = entries.find((entry) => entry.vaultId === maximizedVaultId) ?? null;
+  const suspendMinimize = useFileManagerSelector((state) =>
+    Boolean(maximizedVaultId && state.entries[maximizedVaultId]?.workspace.unsavedPrompt),
+  );
   const closeActivityKey = maximizedEntry
     ? vaultCloseActivityLabelKey(maximizedEntry.vaultId, pipelineListStatus)
     : null;
 
-  const handleDismissConfirmed = useCallback(
-    (vaultId: string) => {
-      dismiss(vaultId);
-    },
-    [dismiss],
-  );
-
   const requestDismiss = useCallback(
     (vaultId: string) => {
-      const entry = entries[vaultId];
+      const entry = getEntry(vaultId);
       if (!entry) {
         dismiss(vaultId);
         return;
@@ -58,7 +48,7 @@ export function FileManagerLayer({
 
       const prompt = fileManagerBlockingPrompt(fileManagerDismissIntent(entry));
       if (prompt) {
-        if (maximizedVaultId !== vaultId) {
+        if (getState().maximizedVaultId !== vaultId) {
           maximize(vaultId);
         }
         if (entry.workspace.unsavedPrompt?.type !== prompt.type) {
@@ -69,12 +59,12 @@ export function FileManagerLayer({
 
       dismiss(vaultId);
     },
-    [dismiss, dispatchWorkspace, entries, maximize, maximizedVaultId],
+    [dismiss, dispatchWorkspace, getEntry, getState, maximize],
   );
 
   return (
     <>
-      {openEntries.length > 0 ? (
+      {entries.length > 0 ? (
         <FileManagerModal
           open={maximizedEntry !== null}
           keepMounted
@@ -91,7 +81,7 @@ export function FileManagerLayer({
             if (maximizedEntry) requestDismiss(maximizedEntry.vaultId);
           }}
         >
-          {openEntries.map((entry) => {
+          {entries.map((entry) => {
             const active = entry.vaultId === maximizedVaultId;
             return (
               <div
@@ -100,11 +90,11 @@ export function FileManagerLayer({
                 className={active ? "flex min-h-0 flex-1 flex-col overflow-hidden" : "hidden"}
               >
                 <FileManagerWorkspace
-                  entry={entry}
+                  vaultId={entry.vaultId}
                   active={active}
                   writesLocked={isVaultCloseWritesLocked(entry.vaultId, pipelineListStatus)}
-                  onDismissConfirmed={() => handleDismissConfirmed(entry.vaultId)}
-                  onVaultCloseConfirmed={() => onCloseVault?.(entry.vaultId)}
+                  onDismissConfirmed={dismiss}
+                  onVaultCloseConfirmed={onCloseVault}
                 />
               </div>
             );
@@ -112,7 +102,7 @@ export function FileManagerLayer({
         </FileManagerModal>
       ) : null}
       <FileManagerDock
-        entries={openEntries}
+        entries={entries}
         focusedVaultId={focusedVaultId}
         maximizedVaultId={maximizedVaultId}
         onMinimize={minimize}
@@ -121,4 +111,4 @@ export function FileManagerLayer({
       />
     </>
   );
-}
+});

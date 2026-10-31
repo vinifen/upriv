@@ -92,7 +92,7 @@ Vault crypto and disk I/O never run in the renderer. When vault RPCs ship, passw
 | `CORE_RPC_COMMANDS` | `@upriv/shared` | Rust ops the desktop renderer and mobile both call |
 | `MOBILE_ONLY_RPC_COMMANDS` | `@upriv/shared` | Rust ops only mobile calls (storage-access settings parse, import ingest) |
 | `SHELL_ONLY_RPC_COMMANDS` | `@upriv/shared` | Electron main only (`app_exit`, dialogs, reveal, terminal, WinFsp, FUSE) |
-| `app_shutdown` | Electron main → daemon | Flush open vaults and exit the daemon before SIGTERM. Absent from the renderer allowlist |
+| `app_shutdown` | Electron main → daemon | Close open vaults and exit the daemon before SIGTERM. `now` runs Close now on each one. Absent from the renderer allowlist |
 | `RpcErrorBody` / `RpcError` | `@upriv/shared` (`core-rpc/errors.ts`) | Wire envelope + protocol codes |
 | `VAULT_ERROR_CODES` | `@upriv/shared` (`vault/errors/codes.ts`) | upriv-core domain wire codes (`snake_case`) |
 | `VAULT_ERROR_I18N_KEYS` / `vaultErrorI18nKey()` | `@upriv/shared` (`vault/errors/messages.ts`) | User UI: vault wire code → i18n |

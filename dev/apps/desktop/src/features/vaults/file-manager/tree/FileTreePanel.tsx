@@ -1,51 +1,108 @@
 import {
+  memo,
+  useDeferredValue,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ChangeEvent,
   type CSSProperties,
   type DragEvent,
   type MouseEvent,
+  type Ref,
 } from "react";
 import { Icon, type IconName } from "@/components/icons";
 import { Button } from "@/components/ui";
 import { useTranslation } from "@/i18n";
-import { useErrorToast } from "@/hooks/useErrorToast";
 import {
   findNode,
   getParentPath,
   isDescendantPath,
-  isPathDirty,
-  joinPath,
+  isImportQueueSlotPath,
+  isImportWalkPlaceholderPath,
   liveFileNameError,
   fileNameErrorI18nKey,
   FILE_MANAGER_LONG_PRESS_MS,
   FILE_MANAGER_LONG_PRESS_MOVE_PX,
   LOGICAL_FILE_NAME_MAX_LENGTH,
   renameBasenameSelection,
+  searchTreeRows,
   sessionPathKind,
+  visibleTreeRows,
+  type FolderPresence,
+  type SessionPathKind,
+  type VaultWorkspaceAction,
 } from "@upriv/shared";
-import type { FileTreeNode } from "@upriv/shared";
+import { useSearchCollapsedFolders } from "@upriv/shared/react";
 import { allowFileManagerDrop, beginOsFileImport, filesFromFileInput } from "../lib/osFileDrop";
 import type { FileManagerApi } from "../hooks/useVaultFileManager";
+import { ExplorerSearch } from "./ExplorerSearch";
+import { treeDropZoneEdges, type TreeDropZoneEdge } from "./treeDropZone";
 
 interface FileTreePanelProps {
   fm: FileManagerApi;
+  /** The explorer's own element: a divider drag sizes it directly. */
+  paneRef?: Ref<HTMLElement>;
   splitPercent: number;
   layout: "row" | "column";
 }
 
+/**
+ * What every row may do. One object for the explorer's life, so a row draws
+ * again only when its own marks change, not when the file manager does.
+ */
+interface FileTreeRowActions {
+  dispatch: (action: VaultWorkspaceAction) => void;
+  toggleFolder: (path: string) => void;
+  openFile: (path: string) => void;
+  commitRename: (path: string, name: string) => void;
+  movePath: (fromPath: string, toFolderPath: string) => void;
+  importOsDrop: FileManagerApi["importOsDrop"];
+  showError: (error: unknown) => void;
+  /** The drag as it is now. Hovering one row does not draw the others. */
+  drag: () => { source: string | null; target: string | null };
+}
+
 interface FileTreeRowProps {
-  node: FileTreeNode;
   path: string;
+  name: string;
+  isFolder: boolean;
   depth: number;
-  fm: FileManagerApi;
+  isExpanded: boolean;
+  isSelected: boolean;
+  isDirty: boolean;
+  pathKind: SessionPathKind | null;
+  isRenaming: boolean;
+  isDragging: boolean;
+  dropZone: TreeDropZoneEdge | null;
+  isPending: boolean;
+  isWalkPlaceholder: boolean;
+  isQueueSlot: boolean;
+  isProcessing: boolean;
+  /** How much of this entry is in a chosen-files vault's folder. */
+  folderMark: FolderPresence | null;
+  actions: FileTreeRowActions;
 }
 
 const TWISTIE_COL = "0.75rem";
 const ICON_COL = "0.875rem";
 const ROW_GRID = `${TWISTIE_COL} ${ICON_COL} minmax(0, 1fr)`;
 const DEPTH_INDENT_PX = 10;
+
+/** Outline around the folder under a drag and its rows, one edge per row. */
+const DROP_ZONE_SHADOW: Record<TreeDropZoneEdge, string> = {
+  single: "inset 0 0 0 1px var(--accent)",
+  first: "inset 1px 1px 0 0 var(--accent), inset -1px 0 0 0 var(--accent)",
+  middle: "inset 1px 0 0 0 var(--accent), inset -1px 0 0 0 var(--accent)",
+  last: "inset 1px -1px 0 0 var(--accent), inset -1px 0 0 0 var(--accent)",
+};
+
+const DROP_ZONE_ROUNDING: Record<TreeDropZoneEdge, string> = {
+  single: "rounded-sm",
+  first: "rounded-t-sm",
+  middle: "",
+  last: "rounded-b-sm",
+};
 
 function importTargetPath(fm: FileManagerApi): string {
   const selected = fm.workspace.selectedPath;
@@ -55,31 +112,36 @@ function importTargetPath(fm: FileManagerApi): string {
   return getParentPath(selected);
 }
 
-function FileTreeRow({ node, path, depth, fm }: FileTreeRowProps) {
+const FileTreeRow = memo(function FileTreeRow({
+  path,
+  name,
+  isFolder,
+  depth,
+  isExpanded,
+  isSelected,
+  isDirty,
+  pathKind,
+  isRenaming,
+  isDragging,
+  dropZone,
+  isPending,
+  isWalkPlaceholder,
+  isQueueSlot,
+  isProcessing,
+  folderMark,
+  actions,
+}: FileTreeRowProps) {
   const { t } = useTranslation();
-  const { showError } = useErrorToast();
-  const { workspace, dispatch, commitRename, movePath, importOsDrop } = fm;
-  const isFolder = node.type === "folder";
-  const isExpanded = isFolder && workspace.expandedPaths.includes(path);
-  const isSelected = workspace.activeTabPath === path;
-  const isDirty = !isFolder && isPathDirty(workspace, path);
-  const pathKind = sessionPathKind(workspace, path);
-  const isRenaming = workspace.renamingPath === path;
-  const isDragging = workspace.dragSourcePath === path;
-  const isDropTarget = workspace.dropTargetPath === path && isFolder;
+  const { dispatch } = actions;
   const isRoot = path === "/";
-  const isPending = fm.isImportPending(path);
-  const isWalkPlaceholder = fm.isImportWalkPlaceholder(path);
-  const isQueueSlot = fm.isImportQueueSlot(path);
-  const isProcessing = fm.isImportProcessing(path) || isWalkPlaceholder || isQueueSlot;
   const longPressRef = useRef<number | null>(null);
   const pressOriginRef = useRef<{ x: number; y: number } | null>(null);
-  const [renameValue, setRenameValue] = useState(node.name);
+  const [renameValue, setRenameValue] = useState(name);
   const renameError = isRenaming ? liveFileNameError(renameValue) : null;
 
   useEffect(() => {
-    if (isRenaming) setRenameValue(node.name);
-  }, [isRenaming, node.name]);
+    if (isRenaming) setRenameValue(name);
+  }, [isRenaming, name]);
 
   const openContextMenu = (clientX: number, clientY: number) => {
     dispatch({ type: "set_context_menu", menu: { x: clientX, y: clientY, path } });
@@ -89,10 +151,10 @@ function FileTreeRow({ node, path, depth, fm }: FileTreeRowProps) {
   const handleActivate = () => {
     if (isRenaming || isWalkPlaceholder || isQueueSlot) return;
     if (isFolder) {
-      dispatch({ type: "toggle_folder", path });
+      actions.toggleFolder(path);
       return;
     }
-    fm.openFile(path);
+    actions.openFile(path);
   };
 
   const handleContextMenu = (event: MouseEvent) => {
@@ -159,34 +221,28 @@ function FileTreeRow({ node, path, depth, fm }: FileTreeRowProps) {
   const dropFolderPath = isFolder ? path : getParentPath(path);
 
   const handleDragOver = (event: DragEvent) => {
-    const source = workspace.dragSourcePath;
+    const { source, target } = actions.drag();
     if (source) {
       if (isDescendantPath(source, dropFolderPath)) {
         event.stopPropagation();
         allowFileManagerDrop(event, "none");
-        if (workspace.dropTargetPath) {
+        if (target) {
           dispatch({ type: "set_drag", source, target: null });
         }
         return;
       }
       allowFileManagerDrop(event, "move");
       event.stopPropagation();
-      if (workspace.dropTargetPath !== dropFolderPath) {
+      if (target !== dropFolderPath) {
         dispatch({ type: "set_drag", source, target: dropFolderPath });
-        if (dropFolderPath !== "/") {
-          dispatch({ type: "expand_folder", path: dropFolderPath, force: true });
-        }
       }
       return;
     }
 
     allowFileManagerDrop(event, "copy");
     event.stopPropagation();
-    if (workspace.dropTargetPath !== dropFolderPath) {
+    if (target !== dropFolderPath) {
       dispatch({ type: "set_drag", source: null, target: dropFolderPath });
-      if (dropFolderPath !== "/") {
-        dispatch({ type: "expand_folder", path: dropFolderPath, force: true });
-      }
     }
   };
 
@@ -194,17 +250,13 @@ function FileTreeRow({ node, path, depth, fm }: FileTreeRowProps) {
     event.preventDefault();
     event.stopPropagation();
 
-    if (
-      beginOsFileImport(event, dropFolderPath, importOsDrop, (error) =>
-        showError(error, "error.unexpected"),
-      )
-    ) {
+    if (beginOsFileImport(event, dropFolderPath, actions.importOsDrop, actions.showError)) {
       dispatch({ type: "set_drag", source: null, target: null });
       return;
     }
 
-    const from = workspace.dragSourcePath ?? event.dataTransfer.getData("text/plain");
-    if (from && !isDescendantPath(from, dropFolderPath)) movePath(from, dropFolderPath);
+    const from = actions.drag().source ?? event.dataTransfer.getData("text/plain");
+    if (from && !isDescendantPath(from, dropFolderPath)) actions.movePath(from, dropFolderPath);
     dispatch({ type: "set_drag", source: null, target: null });
   };
 
@@ -213,10 +265,10 @@ function FileTreeRow({ node, path, depth, fm }: FileTreeRowProps) {
       if (fromBlur) dispatch({ type: "cancel_rename" });
       return;
     }
-    commitRename(path, renameValue);
+    actions.commitRename(path, renameValue);
   };
 
-  const row = (
+  return (
     <div
       role={isRenaming ? undefined : "button"}
       tabIndex={isRenaming ? -1 : 0}
@@ -232,9 +284,9 @@ function FileTreeRow({ node, path, depth, fm }: FileTreeRowProps) {
       }}
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
-      onDragEnter={isFolder ? undefined : handleDragOver}
-      onDragOver={isFolder ? undefined : handleDragOver}
-      onDrop={isFolder ? undefined : handleDrop}
+      onDragEnter={handleDragOver}
+      onDragOver={handleDragOver}
+      onDrop={handleDrop}
       onContextMenu={handleContextMenu}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
@@ -248,11 +300,13 @@ function FileTreeRow({ node, path, depth, fm }: FileTreeRowProps) {
           : "text-on-surface-variant hover:bg-surface-container-highest hover:text-on-surface",
         isDragging ? "opacity-50" : "",
         isProcessing ? "animate-pulse" : isPending ? "opacity-75" : "",
+        dropZone ? DROP_ZONE_ROUNDING[dropZone] : "",
       ].join(" ")}
       aria-busy={isProcessing ? true : undefined}
       style={{
         gridTemplateColumns: ROW_GRID,
         paddingLeft: `${depth * DEPTH_INDENT_PX + 2}px`,
+        boxShadow: dropZone ? DROP_ZONE_SHADOW[dropZone] : undefined,
       }}
     >
       {isFolder ? (
@@ -328,41 +382,39 @@ function FileTreeRow({ node, path, depth, fm }: FileTreeRowProps) {
           ) : isWalkPlaceholder ? (
             <span className="h-2.5 w-24 shrink-0 rounded bg-on-surface-variant/20" aria-hidden />
           ) : (
-            <span className="min-w-0 truncate">{node.name}</span>
+            <span className="min-w-0 truncate">{name}</span>
           )}
           {isDirty ? (
             <span className="size-1.5 shrink-0 rounded-full bg-white" aria-hidden />
+          ) : null}
+          {folderMark === "all" || folderMark === "some" ? (
+            <FolderMark partial={folderMark === "some"} />
           ) : null}
         </span>
       )}
     </div>
   );
+});
 
-  if (!isFolder) return row;
-
+function FolderMark({ partial }: { partial: boolean }) {
+  const { t } = useTranslation();
+  const label = t(
+    partial
+      ? "modal.file_manager.explorer.partly_in_folder"
+      : "modal.file_manager.explorer.in_folder",
+  );
   return (
-    <div
+    <span
+      role="img"
+      aria-label={label}
+      title={label}
       className={[
-        "w-full min-w-0",
-        isDropTarget ? "rounded-sm ring-1 ring-inset ring-[var(--accent)]" : "",
+        "ml-auto mr-1 shrink-0 text-on-surface-variant",
+        partial ? "opacity-50" : "",
       ].join(" ")}
-      onDragEnter={handleDragOver}
-      onDragOver={handleDragOver}
-      onDrop={handleDrop}
     >
-      {row}
-      {isExpanded
-        ? node.children?.map((child) => (
-            <FileTreeRow
-              key={joinPath(path, child.name)}
-              node={child}
-              path={joinPath(path, child.name)}
-              depth={depth + 1}
-              fm={fm}
-            />
-          ))
-        : null}
-    </div>
+      <Icon name="plaintext" size={11} aria-hidden />
+    </span>
   );
 }
 
@@ -397,24 +449,137 @@ function FileTreeSkeleton({ label }: { label: string }) {
   );
 }
 
-function FileTreeRoot({ tree, fm }: { tree: FileTreeNode; fm: FileManagerApi }) {
-  if (tree.type === "folder" && tree.children?.length) {
-    return (
-      <>
-        {tree.children.map((child) => (
-          <FileTreeRow
-            key={joinPath("/", child.name)}
-            node={child}
-            path={joinPath("/", child.name)}
-            depth={0}
-            fm={fm}
-          />
-        ))}
-      </>
-    );
-  }
+/**
+ * Every visible row, flat and depth first. A row draws again only when its own
+ * marks change: typing, a divider drag, or opening another file leave the rest.
+ * A search shows its matches with the folders that lead to them, open. Those
+ * folders collapse for that search only; the saved ones stay as they are.
+ */
+function FileTreeRows({ fm, search }: { fm: FileManagerApi; search: string }) {
+  const { t } = useTranslation();
+  const { displayTree, folderPresence, workspace, pendingImportPaths, processingImportPaths } = fm;
+  const searching = search.trim().length > 0;
+  const { collapsed: searchCollapsed, toggle: toggleSearchFolder } = useSearchCollapsedFolders(
+    fm.vaultId,
+    search,
+  );
+  const fmRef = useRef(fm);
+  fmRef.current = fm;
+  const toggleFolderRef = useRef<(path: string) => void>(() => undefined);
+  toggleFolderRef.current = (path) => {
+    if (searching) toggleSearchFolder(path);
+    else fm.dispatch({ type: "toggle_folder", path });
+  };
+  const [actions] = useState<FileTreeRowActions>(() => ({
+    dispatch: (action) => fmRef.current.dispatch(action),
+    toggleFolder: (path) => toggleFolderRef.current(path),
+    openFile: (path) => fmRef.current.openFile(path),
+    commitRename: (path, name) => fmRef.current.commitRename(path, name),
+    movePath: (fromPath, toFolderPath) => fmRef.current.movePath(fromPath, toFolderPath),
+    importOsDrop: (parentPath, snapshot, options) =>
+      fmRef.current.importOsDrop(parentPath, snapshot, options),
+    showError: (error) => fmRef.current.showError(error),
+    drag: () => ({
+      source: fmRef.current.workspace.dragSourcePath,
+      target: fmRef.current.workspace.dropTargetPath,
+    }),
+  }));
 
-  return <FileTreeRow node={tree} path="/" depth={0} fm={fm} />;
+  const rows = useMemo(
+    () =>
+      searching
+        ? searchTreeRows(displayTree, search, {
+            renamingPath: workspace.renamingPath,
+            collapsed: searchCollapsed,
+          })
+        : visibleTreeRows(displayTree, workspace.expandedPaths),
+    [
+      displayTree,
+      search,
+      searchCollapsed,
+      searching,
+      workspace.expandedPaths,
+      workspace.renamingPath,
+    ],
+  );
+  const expanded = useMemo(() => new Set(workspace.expandedPaths), [workspace.expandedPaths]);
+  const dirty = useMemo(() => new Set(workspace.dirtyPaths), [workspace.dirtyPaths]);
+  const dropZones = useMemo(
+    () => treeDropZoneEdges(rows, workspace.dropTargetPath),
+    [rows, workspace.dropTargetPath],
+  );
+  const {
+    activeTabPath,
+    renamingPath,
+    dragSourcePath,
+    sessionCreatedPaths,
+    sessionModifiedPaths,
+    dirtyPaths,
+  } = workspace;
+
+  // The same elements while nothing a row shows changed, so React skips them all.
+  return useMemo(() => {
+    const kinds = { sessionCreatedPaths, sessionModifiedPaths, dirtyPaths };
+    const rowProps = (path: string, name: string, isFolder: boolean, depth: number) => {
+      const isWalkPlaceholder = isImportWalkPlaceholderPath(path);
+      const isQueueSlot = isImportQueueSlotPath(path);
+      return {
+        path,
+        name,
+        isFolder,
+        depth,
+        isExpanded: isFolder && (searching ? !searchCollapsed.has(path) : expanded.has(path)),
+        isSelected: activeTabPath === path,
+        isDirty: !isFolder && dirty.has(path),
+        pathKind: sessionPathKind(kinds, path),
+        isRenaming: renamingPath === path,
+        isDragging: dragSourcePath === path,
+        dropZone: dropZones.get(path) ?? null,
+        isPending: pendingImportPaths.has(path),
+        isWalkPlaceholder,
+        isQueueSlot,
+        isProcessing: processingImportPaths.has(path) || isWalkPlaceholder || isQueueSlot,
+        folderMark: folderPresence?.get(path) ?? null,
+        actions,
+      };
+    };
+    if (rows.length === 0 && searching) {
+      return (
+        <p role="status" className="px-3 py-2 text-xs text-on-surface-variant">
+          {t("modal.file_manager.explorer.search_empty")}
+        </p>
+      );
+    }
+    if (rows.length === 0) {
+      // An empty vault shows its root folder.
+      return <FileTreeRow {...rowProps("/", displayTree.name, displayTree.type === "folder", 0)} />;
+    }
+    return rows.map((row) => (
+      <FileTreeRow
+        key={row.path}
+        {...rowProps(row.path, row.node.name, row.node.type === "folder", row.depth)}
+      />
+    ));
+  }, [
+    actions,
+    activeTabPath,
+    dirty,
+    dirtyPaths,
+    displayTree,
+    dragSourcePath,
+    dropZones,
+    expanded,
+    folderPresence,
+    pendingImportPaths,
+    processingImportPaths,
+    renamingPath,
+    rows,
+    searchCollapsed,
+    searching,
+    sessionCreatedPaths,
+    sessionModifiedPaths,
+    t,
+  ]);
 }
 
 /** Icon + "Explorer" hide the explorer; the icon alone (in the tab bar) shows it again. */
@@ -456,23 +621,37 @@ export function ExplorerToggle({ fm, showLabel }: { fm: FileManagerApi; showLabe
 }
 
 const EXPLORER_TOOL_PAIR_CLASS =
-  "flex shrink-0 [@container(width<7.5rem)]:flex-1 [@container(width<7.5rem)]:justify-around";
+  "flex shrink-0 [@container(width<9rem)]:flex-1 [@container(width<9rem)]:justify-around";
 
 function ExplorerToolButton({
   icon,
   label,
+  pressed,
+  active = false,
   onClick,
 }: {
   icon: IconName;
   label: string;
+  /** A toggle's state. A plain action leaves it out. */
+  pressed?: boolean;
+  /** Still at work with its panel closed. */
+  active?: boolean;
   onClick: () => void;
 }) {
   return (
     <button
       type="button"
-      className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-on-surface-variant transition-colors hover:bg-surface-container-highest hover:text-on-surface"
+      className={[
+        "flex h-6 w-6 shrink-0 items-center justify-center rounded transition-colors",
+        pressed
+          ? "bg-surface-container-highest text-on-surface"
+          : active
+            ? "text-[var(--accent)] hover:bg-surface-container-highest"
+            : "text-on-surface-variant hover:bg-surface-container-highest hover:text-on-surface",
+      ].join(" ")}
       onClick={onClick}
       aria-label={label}
+      aria-pressed={pressed}
       title={label}
     >
       <Icon name={icon} size={14} />
@@ -480,11 +659,25 @@ function ExplorerToolButton({
   );
 }
 
-export function FileTreePanel({ fm, splitPercent, layout }: FileTreePanelProps) {
+export function FileTreePanel({ fm, paneRef, splitPercent, layout }: FileTreePanelProps) {
   const { t } = useTranslation();
-  const { showError } = useErrorToast();
   const importFilesInputRef = useRef<HTMLInputElement>(null);
   const importFolderInputRef = useRef<HTMLInputElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  /** The button opened the bar, so typing starts there. A restored bar leaves focus alone. */
+  const focusSearchRef = useRef(false);
+  const { explorerSearchOpen: searchOpen, explorerSearchQuery: search } = fm.workspace;
+  // A large vault filters behind the typing, not in its way.
+  const deferredSearch = useDeferredValue(search);
+  const searchAtWork = !searchOpen && search.trim().length > 0;
+  useEffect(() => {
+    if (searchOpen && focusSearchRef.current) searchInputRef.current?.focus();
+    focusSearchRef.current = false;
+  }, [searchOpen]);
+  const setSearchOpen = (open: boolean) => {
+    focusSearchRef.current = open;
+    fm.dispatch({ type: "set_explorer_search_open", open });
+  };
   const extent = `${splitPercent}%`;
   const paneStyle: CSSProperties = {
     ...(layout === "column"
@@ -531,11 +724,7 @@ export function FileTreePanel({ fm, splitPercent, layout }: FileTreePanelProps) 
 
     event.preventDefault();
 
-    if (
-      beginOsFileImport(event, "/", fm.importOsDrop, (error) =>
-        showError(error, "error.unexpected"),
-      )
-    ) {
+    if (beginOsFileImport(event, "/", fm.importOsDrop, fm.showError)) {
       fm.dispatch({ type: "set_drag", source: null, target: null });
       return;
     }
@@ -571,17 +760,18 @@ export function FileTreePanel({ fm, splitPercent, layout }: FileTreePanelProps) 
 
   return (
     <aside
+      ref={paneRef}
       style={paneStyle}
       className="flex min-h-0 min-w-0 shrink-0 flex-col overflow-hidden bg-surface-container"
     >
       {/*
-        Label truncates first; once only the icon is left, the actions wrap two by two
-        (create, import). They wrap below 7.5rem of content (label icon + four buttons),
-        and then spread evenly across their own rows.
+        Label truncates first; once only the icon is left, the actions wrap by group
+        (create, import, search). They wrap below 9rem of content (label icon + five
+        buttons), and then spread evenly across their own rows.
       */}
       <div className="flex shrink-0 flex-wrap items-center gap-y-0.5 px-1 pb-0.5 pt-1 [container-type:inline-size]">
         <ExplorerToggle fm={fm} showLabel />
-        <div className="ml-auto flex max-w-full shrink-0 flex-wrap items-center justify-end [@container(width<7.5rem)]:grow">
+        <div className="ml-auto flex max-w-full shrink-0 flex-wrap items-center justify-end [@container(width<9rem)]:grow">
           <input
             ref={importFilesInputRef}
             type="file"
@@ -627,8 +817,34 @@ export function FileTreePanel({ fm, splitPercent, layout }: FileTreePanelProps) 
               onClick={openImportFolderPicker}
             />
           </div>
+          <div className={EXPLORER_TOOL_PAIR_CLASS}>
+            <ExplorerToolButton
+              icon="search"
+              label={t(
+                searchAtWork
+                  ? "modal.file_manager.explorer.search_toggle_active"
+                  : "modal.file_manager.explorer.search_toggle",
+              )}
+              pressed={searchOpen}
+              active={searchAtWork}
+              onClick={() => setSearchOpen(!searchOpen)}
+            />
+          </div>
         </div>
       </div>
+      {searchOpen ? (
+        <ExplorerSearch
+          inputRef={searchInputRef}
+          query={search}
+          onQueryChange={(query) => fm.dispatch({ type: "set_explorer_search_query", query })}
+          onClose={() => setSearchOpen(false)}
+        />
+      ) : null}
+      {fm.folderPresence?.get("/") === "none" ? (
+        <p className="shrink-0 px-2 pb-1 text-[11px] leading-snug text-on-surface-variant">
+          {t("modal.file_manager.explorer.folder_empty")}
+        </p>
+      ) : null}
       <nav
         className={[
           "min-h-0 flex-1 overflow-y-auto overscroll-y-contain pb-1.5 pt-0",
@@ -653,7 +869,7 @@ export function FileTreePanel({ fm, splitPercent, layout }: FileTreePanelProps) 
             </Button>
           </div>
         ) : (
-          <FileTreeRoot tree={fm.displayTree} fm={fm} />
+          <FileTreeRows fm={fm} search={deferredSearch} />
         )}
       </nav>
     </aside>

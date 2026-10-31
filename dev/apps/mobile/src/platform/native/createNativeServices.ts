@@ -7,7 +7,12 @@ import type {
   LogService,
   VaultRootService,
 } from "@upriv/shared";
-import { isRpcError, isVaultRootUnreachableError, normalizeAppSettings } from "@upriv/shared";
+import {
+  isRpcError,
+  isVaultRootUnreachableError,
+  normalizeAppSettings,
+  SAF_VAULT_ROOT,
+} from "@upriv/shared";
 import {
   rpcAppSettingsGet,
   rpcAppSettingsParseToml,
@@ -35,7 +40,7 @@ import { nativeJobService } from "./jobService";
 import { nativeSafExportMount } from "./safExportMount";
 import { nativeCreateVaultService } from "./createVaultService";
 import { nativeVaultSecurityService } from "./vaultSecurityService";
-import { isSafLogicalRoot, SAF_VAULT_ROOT } from "./androidVaultHome";
+import { isSafLogicalRoot } from "./androidVaultHome";
 import { planSafSwitch, rememberedCustomFolderPath } from "./documentsGrant";
 import { isAndroidSafUri, pickVaultRootFolder } from "./pickVaultRootFolder";
 import {

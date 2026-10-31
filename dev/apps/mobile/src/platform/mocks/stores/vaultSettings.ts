@@ -10,7 +10,7 @@ const DEFAULTS: VaultSettingsConfig = {
     note: "",
     hidden: false,
   },
-  storage: { mode: "encrypted_dir" },
+  storage: { mode: "encrypted_dir", plain_files: "chosen" },
   mount: vaultWorkspace(),
   backup: { enabled: true, mode: "keep_last", keep_last: 1, skip_unchanged: true },
   security: {

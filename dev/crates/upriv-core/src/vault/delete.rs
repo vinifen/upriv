@@ -10,8 +10,8 @@ use crate::host_fs::HostFsQuery;
 use crate::logging::{log_event, LogLevel};
 use crate::paths::{VaultRoot, STORE_DIR_NAME};
 use crate::session::{
-    is_vault_closing_at, is_vault_open_at, is_vault_preparing_at, record_unlock_success,
-    with_vault_dir_lock, ClosingGuard,
+    is_vault_backup_export_at, is_vault_closing_at, is_vault_open_at, is_vault_preparing_at,
+    record_unlock_success, with_vault_dir_lock, ClosingGuard,
 };
 use crate::store::{HEADER_DIR_NAME, INDEX_DIR_NAME};
 
@@ -21,6 +21,7 @@ fn refuse_if_busy(vault_dir: &std::path::Path) -> Result<()> {
     if is_vault_open_at(vault_dir)
         || is_vault_closing_at(vault_dir)
         || is_vault_preparing_at(vault_dir)
+        || is_vault_backup_export_at(vault_dir)
     {
         return Err(UprivError::VaultConfigBusy {
             target: "action.delete".into(),
@@ -56,7 +57,10 @@ pub fn delete_vault(root: &VaultRoot, vault_id: &str) -> Result<()> {
     refuse_if_busy(&vault_dir)?;
     let _closing = ClosingGuard::enter(&vault_dir)?;
     with_vault_dir_lock(&vault_dir, || {
-        if is_vault_open_at(&vault_dir) || is_vault_preparing_at(&vault_dir) {
+        if is_vault_open_at(&vault_dir)
+            || is_vault_preparing_at(&vault_dir)
+            || is_vault_backup_export_at(&vault_dir)
+        {
             return Err(UprivError::VaultConfigBusy {
                 target: "action.delete".into(),
             });

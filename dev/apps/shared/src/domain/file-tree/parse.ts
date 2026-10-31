@@ -11,9 +11,10 @@ export function parseFileTreeNode(raw: unknown): FileTreeNode {
   }
   const name = typeof raw.name === "string" ? raw.name : "";
   const type = raw.type === "file" ? "file" : "folder";
+  const marks = typeof raw.inFolder === "boolean" ? { inFolder: raw.inFolder } : {};
   if (type === "file") {
-    return { name, type };
+    return { name, type, ...marks };
   }
   const children = Array.isArray(raw.children) ? raw.children.map(parseFileTreeNode) : [];
-  return { name, type, children };
+  return { name, type, children, ...marks };
 }

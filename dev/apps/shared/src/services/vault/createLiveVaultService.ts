@@ -28,6 +28,7 @@ export interface LiveVaultRpc {
     job: string,
   ) => Promise<VaultPathWriteResult>;
   exportCapabilities?: () => Promise<{ sevenZip: boolean }>;
+  sweepPlainExports?: () => Promise<void>;
   importZip?: (input: CreateVaultInput) => Promise<VaultListItem>;
   import7z?: (input: CreateVaultInput) => Promise<VaultListItem>;
   importFilesZip?: (input: CreateVaultInput) => Promise<VaultListItem>;
@@ -115,5 +116,7 @@ export function createLiveVaultService(rpc: LiveVaultRpc): VaultService {
       }
       return rpc.exportCapabilities();
     },
+
+    sweepPlainExports: () => (rpc.sweepPlainExports ? rpc.sweepPlainExports() : Promise.resolve()),
   };
 }

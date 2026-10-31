@@ -13,23 +13,23 @@ export interface QuitCopy {
 export const QUIT_COPY: Record<string, QuitCopy> = {
   en: {
     message:
-      "A vault is still open. Close it before exiting, or quit now and recover it next time?",
+      "A vault is still open. Close and quit saves everything and writes the backup. Close now quits in seconds, with no backup and no overwrite of plain-text folders, and loses changes not saved yet.",
     confirm: "Close and quit",
-    now: "Just close",
+    now: "Close now",
     cancel: "Cancel",
   },
   "pt-BR": {
     message:
-      "Um cofre ainda está aberto. Fechar antes de sair, ou sair agora e recuperar na próxima vez?",
+      "Um cofre ainda está aberto. Fechar e sair salva tudo e grava o backup. Fechar agora sai em segundos, sem backup e sem sobrescrever pastas de texto puro, e perde as alterações ainda não salvas.",
     confirm: "Fechar e sair",
-    now: "Só sair",
+    now: "Fechar agora",
     cancel: "Cancelar",
   },
   es: {
     message:
-      "Una bóveda sigue abierta. ¿Cerrarla antes de salir, o salir ahora y recuperarla la próxima vez?",
+      "Una bóveda sigue abierta. Cerrar y salir guarda todo y escribe la copia de seguridad. Cerrar ahora sale en segundos, sin copia de seguridad y sin sobrescribir carpetas en texto plano, y pierde los cambios aún no guardados.",
     confirm: "Cerrar y salir",
-    now: "Solo salir",
+    now: "Cerrar ahora",
     cancel: "Cancelar",
   },
 };

@@ -4,10 +4,12 @@ import {
   SHELL_ONLY_RPC_COMMANDS,
 } from "../../../shared/src/domain/core-rpc/commands";
 import contract from "../../../shared/src/domain/core-rpc/tests/rpc-methods.json";
+import { LOADING_BUDGET_MS } from "../../../shared/src/domain/loading/budget";
 import { ELECTRON_IPC_METHODS } from "../ipcMethods";
 import {
   MAX_STDOUT_BUFFER_CHARS,
   SHUTDOWN_METHOD,
+  SHUTDOWN_NOW_TIMEOUT_MS,
   SHUTDOWN_TIMEOUT_MS,
   formatRpcError,
   parseDaemonStdoutLine,
@@ -52,6 +54,10 @@ describe("daemon protocol helpers", () => {
 
   it("gives app_shutdown the vault-pipeline budget so close_all can flush", () => {
     expect(SHUTDOWN_TIMEOUT_MS).toBe(600_000);
+  });
+
+  it("gives the quit dialog's Close now the budget its overlay counts down", () => {
+    expect(SHUTDOWN_NOW_TIMEOUT_MS).toBe(LOADING_BUDGET_MS.quitCloseNow);
   });
 
   it("flags an oversized stdout buffer", () => {

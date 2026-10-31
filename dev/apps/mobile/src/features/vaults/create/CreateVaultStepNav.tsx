@@ -45,13 +45,17 @@ export function CreateVaultStepNav({
               ? colors.vaultStatusOpen
               : status === "error"
                 ? colors.onErrorContainer
-                : colors.onSurfaceVariant;
+                : status === "waiting"
+                  ? colors.vaultStatusRecovery
+                  : colors.onSurfaceVariant;
           const badgeBg =
             status === "ready"
               ? colors.vaultStatusOpen + "26"
               : status === "error"
                 ? colors.errorContainer + "40"
-                : colors.surfaceContainerHighest;
+                : status === "waiting"
+                  ? colors.vaultStatusRecovery + "26"
+                  : colors.surfaceContainerHighest;
 
           return (
             <Pressable

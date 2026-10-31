@@ -144,4 +144,34 @@ describe("job rpc", () => {
       JSON.stringify({ id: "notes", job: "job-3" }),
     );
   });
+
+  it("sends a backup export's folder and job with its backups", async () => {
+    native.invoke.mockResolvedValueOnce(
+      JSON.stringify({
+        ok: true,
+        result: { path: "/upriv-saf-export/upriv-backups-notes.zip", size: 10 },
+      }),
+    );
+    const { rpcBackupExport } = await import("../rpc");
+    await expect(
+      rpcBackupExport("notes", ["a.zip", "saves/b.zip"], "/upriv-saf-export", "job-4"),
+    ).resolves.toEqual({ path: "/upriv-saf-export/upriv-backups-notes.zip", size: 10 });
+    expect(native.invoke).toHaveBeenCalledWith(
+      "backup_export",
+      JSON.stringify({
+        id: "notes",
+        stamps: ["a.zip", "saves/b.zip"],
+        destDir: "/upriv-saf-export",
+        job: "job-4",
+      }),
+    );
+  });
+
+  it("refuses a backup export answer without a path", async () => {
+    native.invoke.mockResolvedValueOnce(JSON.stringify({ ok: true, result: { size: 10 } }));
+    const { rpcBackupExport } = await import("../rpc");
+    await expect(rpcBackupExport("notes", ["a.zip"], "/upriv-saf-export", "job-5")).rejects.toThrow(
+      "backup_export: expected path+size",
+    );
+  });
 });

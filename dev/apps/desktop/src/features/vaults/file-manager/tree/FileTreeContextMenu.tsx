@@ -20,6 +20,8 @@ export function FileTreeContextMenu({ fm, tree }: FileTreeContextMenuProps) {
   const isFolder = node.type === "folder";
   const parentForCreate = isFolder ? path : getParentPath(path);
   const title = isRoot ? t("modal.file_manager.explorer.title") : node.name;
+  const presence = fm.folderPresence?.get(path);
+  const onDisk = isRoot || presence !== "none";
 
   const copyPath = async () => {
     try {
@@ -61,7 +63,23 @@ export function FileTreeContextMenu({ fm, tree }: FileTreeContextMenuProps) {
     label: t("modal.file_manager.context.copy_path"),
     onSelect: () => void copyPath(),
   });
-  if (fm.osFolderAvailable) {
+  if (presence === "none" || presence === "some") {
+    items.push({
+      id: "send-to-folder",
+      icon: "arrow-up",
+      label: t("modal.file_manager.context.send_to_folder"),
+      onSelect: () => void fm.sendToFolder(path),
+    });
+  }
+  if (presence === "all" || presence === "some") {
+    items.push({
+      id: "remove-from-folder",
+      icon: "arrow-down",
+      label: t("modal.file_manager.context.remove_from_folder"),
+      onSelect: () => void fm.removeFromFolder(path),
+    });
+  }
+  if (fm.osFolderAvailable && onDisk) {
     items.push(
       {
         id: "open-system",

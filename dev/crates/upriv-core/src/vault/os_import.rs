@@ -18,7 +18,7 @@ use crate::config::VaultConfig;
 use crate::error::{Result, UprivError};
 use crate::logging::{log_event, LogLevel};
 use crate::paths::VaultRoot;
-use crate::store::{is_plain_internal, is_reserved_logical, KdfUnlockPreset};
+use crate::store::{is_reserved_logical, is_skipped_on_import, KdfUnlockPreset};
 
 use super::create::create_vault;
 use super::fs::{
@@ -77,7 +77,8 @@ fn ensure_folder_path(root: &VaultRoot, vault_id: &str, logical: &str) -> Result
 
 /// Names and source paths only. File bytes stay on the user's disk until ingest.
 /// Links inside a folder are skipped, never followed. The chosen path itself
-/// must not be a link. Plaintext-folder names are skipped in every mode.
+/// must not be a link. Plaintext-folder names and the settings folder of an
+/// unpacked export are skipped in every mode.
 fn plan_os_path(source: &Path) -> Result<PlannedOs> {
     if !source.is_absolute() {
         return Err(layout_error(source, "choose an absolute file or folder"));
@@ -130,7 +131,7 @@ fn plan_os_path(source: &Path) -> Result<PlannedOs> {
             } else {
                 format!("{prefix}/{name}")
             };
-            if is_plain_internal(&logical) {
+            if is_skipped_on_import(&logical) {
                 continue;
             }
             let supported = child_meta.host_is_dir() || child_meta.host_is_file();

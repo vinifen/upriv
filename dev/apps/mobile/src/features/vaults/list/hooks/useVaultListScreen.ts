@@ -83,13 +83,16 @@ import type { DataFolderExportControls } from "@/features/system/data-folder-exp
 import { useTranslation } from "@/i18n";
 import { mobileErrorI18nKey } from "@/lib/errorMessages";
 import {
+  useBackupExportJob,
   useDataFolderExportJob,
   useJobProgress,
   useLoadingBudget,
   useToast,
+  usePlainExportSweep,
   useVaultBackupJob,
 } from "@upriv/shared/react";
 import { CONTROL_HEIGHT_MD, MAX_WIDTH_VAULT_LIST, spacing } from "@/theme/tokens";
+import { useExportFolder } from "@/hooks/useExportFolder";
 import { useVaultExportFolders } from "./useVaultExportFolders";
 import { useVaultLifecycle } from "@/features/vaults/lifecycle";
 import { useFileManager } from "@/features/vaults/file-manager";
@@ -97,7 +100,6 @@ import {
   claimContentTreeForCreate,
   contentTreeClaimedForCreate,
   releaseContentJob,
-  releaseUnclaimedImport,
 } from "@/platform/native/contentTreeImport";
 import { releaseImportCache } from "@/platform/native/importCache";
 import { useVaultListModals } from "./useVaultListModals";
@@ -356,6 +358,8 @@ export function useVaultListScreen() {
     blockOpenVaultIdsRef,
   });
 
+  usePlainExportSweep(vaultService, settingsOnDisk, vaultRootEpoch);
+
   /** Reloads in flight: `refreshing` stays on until the last one settles. */
   const reloadsInFlightRef = useRef(0);
   /** The reload the person asked for (Refresh, or a pull), shared while it runs. */
@@ -528,6 +532,7 @@ export function useVaultListScreen() {
       creatingVaultIds: [...lifecycle.creatingVaultIds],
       queuedVaultIds: [...lifecycle.queuedVaultIds],
       queuedOpenVaultIds: [...lifecycle.queuedOpenVaultIds],
+      closeNowVaultIds: lifecycle.closeNowVaultIds,
       activeVaultId: lifecycle.activePipelineVaultId ?? undefined,
       activeStartedAt: lifecycle.activePipelineStartedAt ?? undefined,
       dataFolderExporting: dataFolderExportJob !== null,
@@ -536,6 +541,7 @@ export function useVaultListScreen() {
       lifecycle.activePipelineStartedAt,
       lifecycle.activePipelineVaultId,
       lifecycle.backingUpVaultIds,
+      lifecycle.closeNowVaultIds,
       lifecycle.closingVaultIds,
       lifecycle.creatingVaultIds,
       backupJob.job,
@@ -572,6 +578,36 @@ export function useVaultListScreen() {
       stopDataFolderExport,
     ],
   );
+
+  const backupExportFolder = useExportFolder(t("modal.backup.export_picker_title"));
+  const backupExport = useBackupExportJob(backupService, jobs, {
+    onExported: (written) => {
+      show(t("toast.backup_export_saved", { name: fileNameOfPath(written.path) }));
+    },
+    onFailed: (error) => {
+      if (shouldBumpVaultRootEpoch(error)) {
+        void reportVaultRootIntegrityFailure(error);
+        return;
+      }
+      show(t(mobileErrorI18nKey(error, "toast.backup_export_failed")));
+    },
+    onCancelled: () => {
+      show(t("toast.backup_export_cancelled"));
+    },
+    onTimedOut: () => {
+      show(t("error.operation_timed_out"));
+    },
+  });
+  const { start: startBackupExport } = backupExport;
+  const handleBackupExport = useCallback(
+    (keys: readonly string[], destDir: string) => {
+      if (backupsVaultId !== null) startBackupExport(backupsVaultId, keys, destDir);
+    },
+    [backupsVaultId, startBackupExport],
+  );
+  const handleBackupExportBusy = useCallback(() => {
+    show(t("toast.backup_export_busy"));
+  }, [show, t]);
 
   const backupSaving = backupJob.job !== null && backupJob.job.vaultId === backupsVaultId;
   const handleBackupSaveNow = useCallback(() => {
@@ -1252,15 +1288,12 @@ export function useVaultListScreen() {
   }, [jobs, setExportJob, show, t]);
 
   const handleCreateVault = (result: CreateVaultResult, password: string) => {
-    const listed = vaults.some((vault) => vault.id === result.vaultId);
-    const createInFlight =
-      lifecycle.creatingVaultIds.length > 0 || (isVaultPipelineBusy(result.vaultId) && !listed);
-    if (createInFlight) {
-      show(t("vault.create.busy"));
-      releaseUnclaimedImport(result.importFilePath ?? "");
-      return;
-    }
-    if (listed) {
+    // Another vault being created only queues this one. The same id still in
+    // flight (a create past its budget) is taken.
+    if (
+      vaults.some((vault) => vault.id === result.vaultId) ||
+      isVaultPipelineBusy(result.vaultId)
+    ) {
       throw new RpcError(
         VAULT_ERROR_CODES.VAULT_ALREADY_EXISTS,
         `vault already exists: ${result.vaultId}`,
@@ -1289,13 +1322,18 @@ export function useVaultListScreen() {
       void releaseImportCache(result.importFilePath ?? "").catch(() => undefined);
     };
 
+    // Take the picked folder now: the wizard lets go of it when it closes, and
+    // this create may wait behind another.
+    const claim = claimsContentTree(result)
+      ? claimContentTreeForCreate(result.vaultId, result.importFilePath ?? "")
+      : Promise.resolve();
+    claim.catch(() => undefined);
+
     const welcome = buildVaultWelcomeFiles(result, { t, locale });
-    const started = lifecycle.startCreatePipeline(
+    lifecycle.startCreatePipeline(
       result.vaultId,
       async () => {
-        if (claimsContentTree(result)) {
-          await claimContentTreeForCreate(result.vaultId, result.importFilePath ?? "");
-        }
+        await claim;
         await vaultService.createVault({
           password,
           unlockPreset: result.unlockPreset,
@@ -1344,23 +1382,6 @@ export function useVaultListScreen() {
         },
       },
     );
-
-    if (!started) {
-      const claimed = contentTreeClaimedForCreate(result.vaultId);
-      if (claimed) releaseContentJob(claimed);
-      const pendingEffect = pendingCreateGroupsRef.current.get(result.vaultId);
-      pendingCreatesRef.current.delete(result.vaultId);
-      pendingCreateGroupsRef.current.delete(result.vaultId);
-      sessionWritesRef.current.delete(result.vaultId);
-      setVaults((current) => current.filter((vault) => vault.id !== result.vaultId));
-      if (pendingEffect) {
-        setGroups((current) => rollbackPendingCreateGroupEffect(current, pendingEffect));
-      }
-      throw new RpcError(
-        VAULT_ERROR_CODES.VAULT_ALREADY_EXISTS,
-        `vault already exists: ${result.vaultId}`,
-      );
-    }
   };
 
   return {
@@ -1401,6 +1422,11 @@ export function useVaultListScreen() {
     backupSaveStartedAt: backupSaving ? (backupJob.job?.startedAt ?? null) : null,
     backupListRefresh,
     handleBackupSaveNow,
+    backupExportFolder,
+    backupExportJob: backupExport.job,
+    handleBackupExport,
+    handleBackupExportBusy,
+    handleBackupExportStop: backupExport.stop,
     dataFolderExportControls,
     displayRowsRef,
     searchNoMatches,

@@ -1,6 +1,7 @@
 import type { I18nKey } from "@/i18n/types";
 import type { VaultListItem } from "@upriv/shared";
 import { CloseAllUnsavedModal } from "./modals/CloseAllUnsavedModal";
+import { CloseNowModal } from "./modals/CloseNowModal";
 import { PlainHeldModal, PlainPlaceModal } from "./modals/PlainFolderModals";
 import { VaultLifecycleModal } from "./modals/VaultLifecycleModal";
 import { VaultRecoveryModal } from "./modals/VaultRecoveryModal";
@@ -41,6 +42,11 @@ interface VaultLifecycleLayerProps {
   heldSubmitting: boolean;
   onHeldApply: () => void;
   onHeldRestore: () => void;
+  closeNowVault: VaultListItem | null;
+  closeNowUnsaved: boolean;
+  closeNowAsks: boolean;
+  onCloseNowCancel: () => void;
+  onCloseNowConfirm: (dontAskAgain: boolean) => void;
   closeAllUnsavedOpen: boolean;
   closeAllUnsavedSaving: boolean;
   onCloseAllUnsavedCancel: () => void;
@@ -80,6 +86,11 @@ export function VaultLifecycleLayer({
   heldSubmitting,
   onHeldApply,
   onHeldRestore,
+  closeNowVault,
+  closeNowUnsaved,
+  closeNowAsks,
+  onCloseNowCancel,
+  onCloseNowConfirm,
   closeAllUnsavedOpen,
   closeAllUnsavedSaving,
   onCloseAllUnsavedCancel,
@@ -125,6 +136,13 @@ export function VaultLifecycleLayer({
         onDiscard={onCloseAllUnsavedDiscard}
         onSave={onCloseAllUnsavedSave}
         onSaveTimeout={onCloseAllUnsavedTimeout}
+      />
+      <CloseNowModal
+        vault={closeNowVault}
+        unsaved={closeNowUnsaved}
+        asks={closeNowAsks}
+        onCancel={onCloseNowCancel}
+        onConfirm={onCloseNowConfirm}
       />
       <VaultRecoveryModal
         vault={recoveryVault}

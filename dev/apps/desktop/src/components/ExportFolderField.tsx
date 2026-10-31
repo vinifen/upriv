@@ -12,13 +12,20 @@ interface ExportFolderFieldProps {
   hint?: string;
   /** Locked while the export runs. */
   disabled?: boolean;
+  /** The picker answered with a folder. */
+  onPicked?: (folder: string) => void;
 }
 
 /**
  * Where an export goes: a folder typed or picked, checked as it is typed. The
  * export itself starts from its window's own button.
  */
-export function ExportFolderField({ folder, hint, disabled = false }: ExportFolderFieldProps) {
+export function ExportFolderField({
+  folder,
+  hint,
+  disabled = false,
+  onPicked,
+}: ExportFolderFieldProps) {
   const { t } = useTranslation();
   const id = useId();
   const notAbsolute = exportFolderIssue(folder.path) === "folder_not_absolute";
@@ -42,7 +49,7 @@ export function ExportFolderField({ folder, hint, disabled = false }: ExportFold
           size="md"
           className="w-full shrink-0 sm:w-auto"
           disabled={disabled || folder.picking}
-          onClick={folder.choose}
+          onClick={() => folder.choose(onPicked)}
         >
           {t("modal.export_folder.choose")}
         </Button>

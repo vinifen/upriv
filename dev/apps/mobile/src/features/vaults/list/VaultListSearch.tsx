@@ -6,14 +6,17 @@ import { Icon } from "@/components/icons";
 import { useTranslation } from "@/i18n";
 import { useTheme } from "@/theme";
 import { CONTROL_HEIGHT_MD, CONTROL_WIDTH_CHROME, radii } from "@/theme/tokens";
+import { VAULT_LIST_SEARCH_OPEN_MIN_WIDTH } from "./lib/headerRoom";
 
-const EXPANDED_MAX_WIDTH = 256;
+const EXPANDED_MAX_WIDTH = 240;
 const OPEN_MS = 200;
 const CLOSE_MS = 180;
 
 interface VaultListSearchProps {
   value: string;
   onChange: (next: string) => void;
+  /** The field opened or closed. */
+  onOpenChange?: (open: boolean) => void;
 }
 
 export type VaultListSearchHandle = {
@@ -24,12 +27,14 @@ export type VaultListSearchHandle = {
 };
 
 /**
- * Magnifier that expands into a search field only while focused.
- * Collapse on blur only — Android `keyboardDidHide` also fires when the list
- * refilters, and blurring there stole focus after the first character.
+ * Magnifier that expands into a search field while focused or holding text.
+ * With text, the magnifier becomes a clear button that empties the field,
+ * closes it, and drops the keyboard. Focus leaves on blur only — Android
+ * `keyboardDidHide` also fires when the list refilters, and blurring there
+ * stole focus after the first character.
  */
 export const VaultListSearch = forwardRef<VaultListSearchHandle, VaultListSearchProps>(
-  function VaultListSearch({ value, onChange }, ref) {
+  function VaultListSearch({ value, onChange, onOpenChange }, ref) {
     const { t } = useTranslation();
     const { colors } = useTheme();
     const shellRef = useRef<View>(null);
@@ -38,13 +43,23 @@ export const VaultListSearch = forwardRef<VaultListSearchHandle, VaultListSearch
     const [slotWidth, setSlotWidth] = useState(CONTROL_WIDTH_CHROME);
     const width = useRef(new Animated.Value(CONTROL_WIDTH_CHROME)).current;
     const hasQuery = value.trim().length > 0;
+    const open = focused || hasQuery;
     const label = t("vault.list.search.label");
     const placeholder = t("vault.list.search.placeholder");
     const showHint = focused && !hasQuery;
     const targetWidth = useMemo(() => {
-      if (!focused) return CONTROL_WIDTH_CHROME;
-      return Math.min(EXPANDED_MAX_WIDTH, Math.max(CONTROL_WIDTH_CHROME, slotWidth));
-    }, [focused, slotWidth]);
+      if (!open) return CONTROL_WIDTH_CHROME;
+      return Math.min(EXPANDED_MAX_WIDTH, Math.max(VAULT_LIST_SEARCH_OPEN_MIN_WIDTH, slotWidth));
+    }, [open, slotWidth]);
+
+    useEffect(() => {
+      onOpenChange?.(open);
+    }, [onOpenChange, open]);
+
+    const clearAndClose = () => {
+      onChange("");
+      inputRef.current?.blur();
+    };
 
     useImperativeHandle(ref, () => ({
       blur: () => {
@@ -58,11 +73,11 @@ export const VaultListSearch = forwardRef<VaultListSearchHandle, VaultListSearch
     useEffect(() => {
       Animated.timing(width, {
         toValue: targetWidth,
-        duration: focused ? OPEN_MS : CLOSE_MS,
+        duration: open ? OPEN_MS : CLOSE_MS,
         easing: Easing.out(Easing.cubic),
         useNativeDriver: false,
       }).start();
-    }, [focused, targetWidth, width]);
+    }, [open, targetWidth, width]);
 
     return (
       <View
@@ -78,18 +93,25 @@ export const VaultListSearch = forwardRef<VaultListSearchHandle, VaultListSearch
           collapsable={false}
           style={[styles.shell, { width, borderColor: colors.outlineVariant }]}
         >
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={label}
-            onPress={() => inputRef.current?.focus()}
-            style={styles.iconCol}
-          >
-            <Icon
-              name="search"
-              size={20}
-              color={!focused && hasQuery ? colors.accent : colors.onSurfaceVariant}
-            />
-          </Pressable>
+          {hasQuery ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={t("vault.list.search.clear")}
+              onPress={clearAndClose}
+              style={styles.iconCol}
+            >
+              <Icon name="close" size={20} color={colors.onSurfaceVariant} />
+            </Pressable>
+          ) : (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={label}
+              onPress={() => inputRef.current?.focus()}
+              style={styles.iconCol}
+            >
+              <Icon name="search" size={20} color={colors.onSurfaceVariant} />
+            </Pressable>
+          )}
           <View style={styles.field}>
             {showHint ? (
               <View pointerEvents="none" style={styles.hintOverlay}>
@@ -134,7 +156,7 @@ export const VaultListSearch = forwardRef<VaultListSearchHandle, VaultListSearch
               style={[
                 styles.input,
                 {
-                  color: focused ? colors.onSurface : "transparent",
+                  color: open ? colors.onSurface : "transparent",
                 },
               ]}
             />

@@ -1,6 +1,7 @@
 import { Icon } from "@/components/icons";
-import { useFileManager } from "@/features/vaults/file-manager";
 import { useTranslation } from "@/i18n";
+import { fileManagerIndicator } from "@upriv/shared";
+import { useFileManagerSelector } from "@upriv/shared/react";
 
 interface VaultFileManagerIndicatorProps {
   vaultId: string;
@@ -14,14 +15,13 @@ export function VaultFileManagerIndicator({
   className = "",
 }: VaultFileManagerIndicatorProps) {
   const { t } = useTranslation();
-  const { entries } = useFileManager();
-  const entry = entries[vaultId];
-  if (!entry) return null;
+  const indicator = useFileManagerSelector((state) => fileManagerIndicator(state, vaultId));
+  if (!indicator) return null;
 
-  const importing = entry.importInFlight;
+  const importing = indicator === "importing";
   const label = importing
     ? t("vault.file_manager.importing")
-    : entry.surface === "maximized"
+    : indicator === "maximized"
       ? t("vault.file_manager.active")
       : t("vault.file_manager.active_minimized");
 

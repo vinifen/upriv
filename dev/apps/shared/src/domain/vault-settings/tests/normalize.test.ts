@@ -29,8 +29,8 @@ describe("vaultSettingsSectionsForStorage", () => {
         "vault",
         "storage",
         "mount",
-        "auto_close",
         "backup",
+        "auto_close",
       ]);
     }
   });

@@ -1,9 +1,7 @@
 import { createLiveBackupService } from "@upriv/shared";
 import {
   rpcBackupDelete,
-  rpcBackupExportStampsToPath,
-  rpcBackupExportToPath,
-  rpcBackupGet,
+  rpcBackupExport,
   rpcBackupList,
   rpcBackupPromote,
   rpcBackupSave,
@@ -15,8 +13,5 @@ export const desktopBackupService = createLiveBackupService({
   deleteBackups: (vaultId, stamps) => rpcBackupDelete(vaultId, stamps),
   promoteToSave: (vaultId, stamp) => rpcBackupPromote(vaultId, stamp),
   saveNow: (vaultId, job) => rpcBackupSave(vaultId, job),
-  getBackupBytes: (vaultId, stamp) => rpcBackupGet(vaultId, stamp),
-  exportToPath: (vaultId, stamp, destPath) => rpcBackupExportToPath(vaultId, stamp, destPath),
-  exportSnapshotsToPath: (vaultId, stamps, destPath) =>
-    rpcBackupExportStampsToPath(vaultId, stamps, destPath),
+  exportTo: (vaultId, keys, destDir, job) => rpcBackupExport(vaultId, keys, destDir, job),
 });

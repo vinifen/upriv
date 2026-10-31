@@ -1,5 +1,6 @@
-//! Job RPC handlers: progress and stop for a vault export, Back up now, and
-//! the data-folder export, by the job id the UI sent with that request.
+//! Job RPC handlers: progress and stop for a vault export, Back up now, a
+//! backup export, and the data-folder export, by the job id the UI sent with
+//! that request.
 
 use serde::Deserialize;
 use serde_json::{json, Value};

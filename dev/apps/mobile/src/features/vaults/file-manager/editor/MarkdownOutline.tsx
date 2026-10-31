@@ -1,6 +1,5 @@
-import { useMemo } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from "react-native";
-import { hexWithAlpha, markdownOutline, type MarkdownOutlineEntry } from "@upriv/shared";
+import { hexWithAlpha, type MarkdownOutlineEntry, type MarkdownOutlineModel } from "@upriv/shared";
 import { Icon } from "@/components/icons";
 import { useTranslation } from "@/i18n";
 import { useTheme } from "@/theme";
@@ -41,17 +40,17 @@ export function MarkdownOutlineToggle({
 
 /** Right-hand map of the note's headings, indented by nesting. Tap jumps to the heading. */
 export function MarkdownOutlinePanel({
-  markdown,
+  outline,
   activeIndex = 0,
   onSelect,
 }: {
-  markdown: string;
+  /** Outline of the open note. */
+  outline: MarkdownOutlineModel;
   activeIndex?: number;
   onSelect: (index: number, entry: MarkdownOutlineEntry) => void;
 }) {
   const { t } = useTranslation();
   const { colors } = useTheme();
-  const outline = useMemo(() => markdownOutline(markdown), [markdown]);
   const entries = outline.entries;
   const narrow = useWindowDimensions().width < NARROW_SCREEN_WIDTH;
   return (

@@ -36,6 +36,33 @@ describe("vaultWorkspaceReducer", () => {
     expect(state.expandedPaths).toEqual(expect.arrayContaining(["/", "/notes"]));
   });
 
+  it("opens a new file in Code view with the outline hidden, kept through its rename", () => {
+    let state = vaultWorkspaceReducer(createDefaultWorkspaceState(), {
+      type: "open_new_file",
+      path: "/notes/New file",
+    });
+    expect(state.activeTabPath).toBe("/notes/New file");
+    expect(state.expandedPaths).toEqual(expect.arrayContaining(["/", "/notes"]));
+    expect(fileMarkdownView(state, "/notes/New file")).toBe("source");
+    expect(fileMarkdownOutlineOpen(state, "/notes/New file")).toBe(false);
+
+    state = vaultWorkspaceReducer(state, {
+      type: "remap_paths",
+      map: { "/notes/New file": "/notes/todo.md" },
+    });
+    expect(fileMarkdownView(state, "/notes/todo.md")).toBe("source");
+    expect(fileMarkdownOutlineOpen(state, "/notes/todo.md")).toBe(false);
+  });
+
+  it("opens a file it never showed in Read view with the outline", () => {
+    const state = vaultWorkspaceReducer(createDefaultWorkspaceState(), {
+      type: "open_file",
+      path: "/README.md",
+    });
+    expect(fileMarkdownView(state, "/README.md")).toBe("preview");
+    expect(fileMarkdownOutlineOpen(state, "/README.md")).toBe(true);
+  });
+
   it("marks editor drafts dirty and clears on mark_saved as modified", () => {
     let state = vaultWorkspaceReducer(createDefaultWorkspaceState(), {
       type: "open_file",
@@ -328,6 +355,8 @@ describe("vaultWorkspaceReducer", () => {
       expandedPaths: ["/", "/notes"],
       selectedPath: "/a.md",
       explorerCollapsed: true,
+      explorerSearchOpen: true,
+      explorerSearchQuery: "report",
       fileStates: { "/a.md": { markdownView: "source", markdownOutlineOpen: false } },
     });
     expect(state.openTabs).toEqual(["/a.md"]);
@@ -336,7 +365,37 @@ describe("vaultWorkspaceReducer", () => {
     expect(fileMarkdownView(state, "/a.md")).toBe("source");
     expect(fileMarkdownOutlineOpen(state, "/a.md")).toBe(false);
     expect(state.explorerCollapsed).toBe(true);
+    expect(state.explorerSearchOpen).toBe(true);
+    expect(state.explorerSearchQuery).toBe("report");
     expect(state.dirtyPaths).toEqual(["/tmp.md"]);
+  });
+
+  it("keeps the search text when the bar closes, and ignores a repeat", () => {
+    const typed = vaultWorkspaceReducer(createDefaultWorkspaceState(), {
+      type: "set_explorer_search_query",
+      query: "report",
+    });
+    expect(typed.explorerSearchQuery).toBe("report");
+    expect(
+      vaultWorkspaceReducer(typed, { type: "set_explorer_search_query", query: "report" }),
+    ).toBe(typed);
+    const closed = vaultWorkspaceReducer(
+      { ...typed, explorerSearchOpen: true },
+      { type: "set_explorer_search_open", open: false },
+    );
+    expect(closed.explorerSearchQuery).toBe("report");
+  });
+
+  it("starts with the search bar closed, opens it, and ignores a repeat", () => {
+    const initial = createDefaultWorkspaceState();
+    expect(initial.explorerSearchOpen).toBe(false);
+    const open = vaultWorkspaceReducer(initial, { type: "set_explorer_search_open", open: true });
+    expect(open.explorerSearchOpen).toBe(true);
+    expect(vaultWorkspaceReducer(open, { type: "set_explorer_search_open", open: true })).toBe(
+      open,
+    );
+    const closed = vaultWorkspaceReducer(open, { type: "set_explorer_search_open", open: false });
+    expect(closed.explorerSearchOpen).toBe(false);
   });
 
   it("keeps the markdown view per file and ignores a repeat", () => {
@@ -629,5 +688,42 @@ describe("sessionPathKind", () => {
       paths: ["/Photos/day2/b.jpg"],
     });
     expect(sessionPathKind(state, "/Photos/day2")).toBe("created");
+  });
+});
+
+describe("vaultWorkspaceReducer no-ops", () => {
+  const state = {
+    ...createDefaultWorkspaceState(),
+    selectedPath: "/a.md",
+    treeRevision: 4,
+    dragSourcePath: "/a.md",
+    dropTargetPath: "/docs",
+  };
+
+  it.each([
+    ["the same selection", { type: "select_path", path: "/a.md" }],
+    ["the same tree revision", { type: "tree_mutated", revision: 4 }],
+    ["a rename cancel with none running", { type: "cancel_rename" }],
+    ["clearing a closed context menu", { type: "set_context_menu", menu: null }],
+    ["clearing a closed delete prompt", { type: "set_delete_target", target: null }],
+    ["clearing a closed unsaved prompt", { type: "set_unsaved_prompt", prompt: null }],
+    ["the same drag", { type: "set_drag", source: "/a.md", target: "/docs" }],
+  ] as const)("keeps the state for %s", (_label, action) => {
+    expect(vaultWorkspaceReducer(state, action)).toBe(state);
+  });
+
+  it("keeps the dirty list while the same file stays unsaved", () => {
+    const typed = vaultWorkspaceReducer(state, {
+      type: "set_editor_draft",
+      path: "/a.md",
+      content: "a",
+    });
+    const more = vaultWorkspaceReducer(typed, {
+      type: "set_editor_draft",
+      path: "/a.md",
+      content: "ab",
+    });
+    expect(more.dirtyPaths).toBe(typed.dirtyPaths);
+    expect(more.editorDrafts["/a.md"]).toBe("ab");
   });
 });

@@ -1,6 +1,7 @@
 import {
   memo,
   useCallback,
+  useDeferredValue,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -11,21 +12,25 @@ import {
   type RefObject,
 } from "react";
 import { useTranslation } from "@/i18n";
-import { useErrorToast } from "@/hooks/useErrorToast";
 import {
   activeOutlineIndex,
+  createMarkdownParser,
+  editorBlocks,
   fileBaseName,
   fileEditorWordWrap,
   fileMarkdownOutlineOpen,
   fileMarkdownView,
   fileSearchQuery,
   findTextMatches,
-  markdownOutline,
+  lineStartOffsets,
+  MARKDOWN_OUTLINE_SETTLE_MS,
+  spanAt,
   stepMatchIndex,
   vaultFileLanguageFromPath,
   type TextMatch,
 } from "@upriv/shared";
-import { LoadingBudgetHint } from "@/components/ui";
+import { useOutlineHeading, useSettledValue, useValueAfterPaint } from "@upriv/shared/react";
+import { Button, LoadingBudgetHint } from "@/components/ui";
 import { allowFileManagerDrop, beginOsFileImport } from "../lib/osFileDrop";
 import { osFileImportParentPath } from "../lib/osFileImportTarget";
 import type { FileManagerApi } from "../hooks/useVaultFileManager";
@@ -160,14 +165,56 @@ const WrappedGutterLine = memo(function WrappedGutterLine({
   );
 });
 
+interface GutterBlockProps {
+  firstLine: number;
+  text: string;
+  /** Near the viewport. A block further away has no line numbers to show. */
+  numbered: boolean;
+  gutterWidthCh: number;
+}
+
+/**
+ * Lines of the wrapped gutter's copy of the text. Each line is its own element
+ * only near the viewport. A block further away is one text node that wraps to
+ * the same height, so the numbers stay lined up with far fewer elements.
+ */
+const GutterBlock = memo(function GutterBlock({
+  firstLine,
+  text,
+  numbered,
+  gutterWidthCh,
+}: GutterBlockProps) {
+  if (numbered) {
+    return (
+      <div>
+        {text.split("\n").map((lineText, index) => (
+          <WrappedGutterLine
+            key={index}
+            lineNumber={firstLine + index + 1}
+            lineText={lineText}
+            gutterWidthCh={gutterWidthCh}
+          />
+        ))}
+      </div>
+    );
+  }
+  // A last line that is empty has no row of its own without a character on it.
+  return <div>{text === "" || text.endsWith("\n") ? `${text}\u200b` : text}</div>;
+});
+
 interface EditorWithLineNumbersProps {
   content: string;
+  /**
+   * `content` as the line numbers and search highlights draw it. It trails a
+   * fast typist by a render, so a key reaches the textarea first.
+   */
+  shownContent: string;
   fileName: string;
   ariaLabel: string;
   readOnly?: boolean;
   onChange: (content: string) => void;
   textareaRef: RefObject<HTMLTextAreaElement>;
-  /** Search matches in `content`, highlighted behind the text. */
+  /** Search matches in `shownContent`, highlighted behind the text. */
   matches: readonly TextMatch[];
   searchActiveIndex?: number;
   wordWrap?: boolean;
@@ -177,6 +224,7 @@ interface EditorWithLineNumbersProps {
 
 function EditorWithLineNumbers({
   content,
+  shownContent,
   fileName,
   ariaLabel,
   readOnly = false,
@@ -191,12 +239,31 @@ function EditorWithLineNumbers({
   const gutterRef = useRef<HTMLDivElement>(null);
   const backdropRef = useRef<HTMLDivElement>(null);
 
-  const splitLines = useMemo(() => content.split("\n"), [content]);
-  const lines = splitLines.length;
-  const lineNumbersText = useMemo(
-    () => Array.from({ length: lines }, (_, index) => String(index + 1)).join("\n"),
-    [lines],
+  const lineStarts = useMemo(() => lineStartOffsets(shownContent), [shownContent]);
+  const lines = lineStarts.length;
+  const blocks = useMemo(
+    () => (wordWrap ? editorBlocks(shownContent, lineStarts) : []),
+    [lineStarts, shownContent, wordWrap],
   );
+  const lineNumbersText = useMemo(
+    () =>
+      wordWrap ? "" : Array.from({ length: lines }, (_, index) => String(index + 1)).join("\n"),
+    [lines, wordWrap],
+  );
+  const [numberedBlocks, setNumberedBlocks] = useState({ first: 0, last: 1 });
+
+  /** Number the blocks within one viewport of the screen. */
+  const updateNumberedBlocks = useCallback(() => {
+    const textarea = textareaRef.current;
+    const gutter = gutterRef.current;
+    if (!textarea || !gutter || !wordWrap) return;
+    const tops = Array.from(gutter.children, (block) => (block as HTMLElement).offsetTop);
+    const first = spanAt(tops, textarea.scrollTop - textarea.clientHeight);
+    const last = spanAt(tops, textarea.scrollTop + 2 * textarea.clientHeight);
+    setNumberedBlocks((current) =>
+      current.first === first && current.last === last ? current : { first, last },
+    );
+  }, [textareaRef, wordWrap]);
 
   const syncScroll = () => {
     if (textareaRef.current) {
@@ -207,10 +274,52 @@ function EditorWithLineNumbers({
         backdropRef.current.scrollTop = textareaRef.current.scrollTop;
         backdropRef.current.scrollLeft = textareaRef.current.scrollLeft;
       }
+      updateNumberedBlocks();
       onScroll?.();
     }
   };
 
+  const highlightedSegments = useMemo(() => {
+    if (matches.length === 0) return null;
+    const segments: ReactNode[] = [];
+    let lastIndex = 0;
+    for (let i = 0; i < matches.length; i++) {
+      const match = matches[i];
+      if (match.start > lastIndex) {
+        segments.push(
+          <span key={`text-${lastIndex}`} className="text-transparent">
+            {shownContent.slice(lastIndex, match.start)}
+          </span>,
+        );
+      }
+      const isActive = i === searchActiveIndex;
+      segments.push(
+        <mark
+          key={`match-${match.start}`}
+          className={[
+            "rounded-[2px] p-0 m-0 text-transparent select-none",
+            isActive
+              ? "bg-[color-mix(in_srgb,var(--accent)_70%,transparent)] ring-1 ring-accent"
+              : "bg-[color-mix(in_srgb,var(--accent)_30%,transparent)]",
+          ].join(" ")}
+        >
+          {shownContent.slice(match.start, match.end)}
+        </mark>,
+      );
+      lastIndex = match.end;
+    }
+    if (lastIndex < shownContent.length) {
+      segments.push(
+        <span key={`text-${lastIndex}`} className="text-transparent">
+          {shownContent.slice(lastIndex)}
+        </span>,
+      );
+    }
+    return segments;
+  }, [shownContent, matches, searchActiveIndex]);
+
+  // Line numbers, highlights, and the scrollbar width follow the drawn text,
+  // so they are lined up again only when it, the wrap, or the highlights change.
   useLayoutEffect(() => {
     const textarea = textareaRef.current;
     if (!textarea) return;
@@ -229,7 +338,8 @@ function EditorWithLineNumbers({
       const scrollbarWidth = textarea.offsetWidth - textarea.clientWidth;
       backdropRef.current.style.right = `${scrollbarWidth}px`;
     }
-  });
+    updateNumberedBlocks();
+  }, [textareaRef, shownContent, wordWrap, highlightedSegments, updateNumberedBlocks]);
 
   useEffect(() => {
     const textarea = textareaRef.current;
@@ -248,52 +358,14 @@ function EditorWithLineNumbers({
           }
           gutterRef.current.scrollTop = textareaRef.current.scrollTop;
         }
+        updateNumberedBlocks();
       }
     });
     observer.observe(textarea);
     return () => observer.disconnect();
-  }, [textareaRef, wordWrap]);
+  }, [textareaRef, updateNumberedBlocks, wordWrap]);
 
   const gutterWidthCh = Math.max(2, String(lines).length);
-
-  const highlightedSegments = useMemo(() => {
-    if (matches.length === 0) return null;
-    const segments: ReactNode[] = [];
-    let lastIndex = 0;
-    for (let i = 0; i < matches.length; i++) {
-      const match = matches[i];
-      if (match.start > lastIndex) {
-        segments.push(
-          <span key={`text-${lastIndex}`} className="text-transparent">
-            {content.slice(lastIndex, match.start)}
-          </span>,
-        );
-      }
-      const isActive = i === searchActiveIndex;
-      segments.push(
-        <mark
-          key={`match-${match.start}`}
-          className={[
-            "rounded-[2px] p-0 m-0 text-transparent select-none",
-            isActive
-              ? "bg-[color-mix(in_srgb,var(--accent)_70%,transparent)] ring-1 ring-accent"
-              : "bg-[color-mix(in_srgb,var(--accent)_30%,transparent)]",
-          ].join(" ")}
-        >
-          {content.slice(match.start, match.end)}
-        </mark>,
-      );
-      lastIndex = match.end;
-    }
-    if (lastIndex < content.length) {
-      segments.push(
-        <span key={`text-${lastIndex}`} className="text-transparent">
-          {content.slice(lastIndex)}
-        </span>,
-      );
-    }
-    return segments;
-  }, [content, matches, searchActiveIndex]);
 
   return (
     <div
@@ -326,11 +398,12 @@ function EditorWithLineNumbers({
             paddingLeft: `calc(${GUTTER_INSET} + ${gutterWidthCh}ch + ${GUTTER_TEXT_GAP})`,
           }}
         >
-          {splitLines.map((lineText, index) => (
-            <WrappedGutterLine
-              key={index}
-              lineNumber={index + 1}
-              lineText={lineText}
+          {blocks.map((block, index) => (
+            <GutterBlock
+              key={block.firstLine}
+              firstLine={block.firstLine}
+              text={block.text}
+              numbered={index >= numberedBlocks.first && index <= numberedBlocks.last}
               gutterWidthCh={gutterWidthCh}
             />
           ))}
@@ -418,7 +491,6 @@ function ImagePreview({
 }
 
 function ViewerDropZone({ fm, children }: { fm: FileManagerApi; children: ReactNode }) {
-  const { showError } = useErrorToast();
   const [dropActive, setDropActive] = useState(false);
 
   const handleDragOver = (event: DragEvent) => {
@@ -438,7 +510,7 @@ function ViewerDropZone({ fm, children }: { fm: FileManagerApi; children: ReactN
         event,
         osFileImportParentPath(fm.tree, fm.workspace),
         fm.importOsDrop,
-        (error) => showError(error, "error.unexpected"),
+        fm.showError,
         { openFirstViewable: true },
       )
     ) {
@@ -499,14 +571,22 @@ export function FileEditorPane({ fm, vaultName, active }: FileEditorPaneProps) {
     isImportProcessing,
     importBudget,
   } = fm;
-  const activeTabPath = workspace.activeTabPath;
+  // The tab bar marks a click at once; the file draws after that has painted.
+  // A closed tab's file is left straight away, because its text may be gone.
+  const paintedTabPath = useValueAfterPaint(workspace.activeTabPath);
+  const activeTabPath =
+    paintedTabPath && workspace.openTabs.includes(paintedTabPath)
+      ? paintedTabPath
+      : workspace.activeTabPath;
+  const [markdownParser] = useState(createMarkdownParser);
   const previewRef = useRef<MarkdownPreviewHandle>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const searchHandleRef = useRef<FileEditorSearchHandle>(null);
 
   const [activeMatchIndex, setActiveMatchIndex] = useState(0);
   const [previewMatchesCount, setPreviewMatchesCount] = useState(0);
-  const [activeHeadingIndex, setActiveHeadingIndex] = useState(0);
+  const heading = useOutlineHeading(activeTabPath);
+  const { follow: followHeading, release: releaseHeading } = heading;
 
   const searchQuery = fileSearchQuery(workspace, activeTabPath);
   const currentMarkdownView = fileMarkdownView(workspace, activeTabPath);
@@ -514,12 +594,18 @@ export function FileEditorPane({ fm, vaultName, active }: FileEditorPaneProps) {
   const currentWordWrap = fileEditorWordWrap(workspace, activeTabPath);
 
   const content = activeTabPath ? getEditorContent(activeTabPath) : "";
+  // Matches and line numbers read this copy: a render with a new key commits
+  // the textarea first and they catch up when React has time. Another tab's
+  // text never stands in, so a tab switch draws the new file at once.
+  const deferredContent = useDeferredValue(content);
+  const deferredTabPath = useDeferredValue(activeTabPath);
+  const shownContent = deferredTabPath === activeTabPath ? deferredContent : content;
   const isImage = activeTabPath ? isFileImage(activeTabPath) : false;
   const viewable = activeTabPath ? isFileViewable(activeTabPath) : false;
   const canSearch = viewable && !isImage;
   const codeMatches = useMemo(
-    () => (canSearch && searchQuery ? findTextMatches(content, searchQuery) : []),
-    [canSearch, searchQuery, content],
+    () => (canSearch && searchQuery ? findTextMatches(shownContent, searchQuery) : []),
+    [canSearch, searchQuery, shownContent],
   );
 
   const markdownFile = activeTabPath
@@ -531,18 +617,15 @@ export function FileEditorPane({ fm, vaultName, active }: FileEditorPaneProps) {
 
   const totalMatches = showPreview ? previewMatchesCount : codeMatches.length;
 
-  const outlineModel = useMemo(() => {
-    if (!markdownFile) return null;
-    return markdownOutline(content);
-  }, [markdownFile, content]);
+  const outlineSource = useSettledValue(content, MARKDOWN_OUTLINE_SETTLE_MS, activeTabPath);
+  const outlineModel = useMemo(
+    () => (markdownFile ? markdownParser.note(outlineSource).outline : null),
+    [markdownFile, markdownParser, outlineSource],
+  );
 
   useEffect(() => {
     setActiveMatchIndex(0);
   }, [activeTabPath, searchQuery]);
-
-  useEffect(() => {
-    setActiveHeadingIndex(0);
-  }, [activeTabPath]);
 
   useEffect(() => {
     if (totalMatches > 0 && activeMatchIndex >= totalMatches) {
@@ -559,7 +642,7 @@ export function FileEditorPane({ fm, vaultName, active }: FileEditorPaneProps) {
       const textarea = textareaRef.current;
       if (!textarea || !outlineModel || outlineModel.entries.length === 0) return;
       const offsets = outlineModel.entries.map((entry) => entry.offset);
-      setActiveHeadingIndex(
+      followHeading(
         activeOutlineIndex(textareaLineTops(textarea, offsets, currentWordWrap), {
           offset: textarea.scrollTop,
           viewport: textarea.clientHeight,
@@ -567,7 +650,7 @@ export function FileEditorPane({ fm, vaultName, active }: FileEditorPaneProps) {
         }),
       );
     });
-  }, [outlineModel, currentWordWrap]);
+  }, [followHeading, outlineModel, currentWordWrap]);
 
   const handleCodeCaretChange = useCallback(() => {
     const textarea = textareaRef.current;
@@ -578,8 +661,8 @@ export function FileEditorPane({ fm, vaultName, active }: FileEditorPaneProps) {
       if (outlineModel.entries[i].offset <= pos) active = i;
       else break;
     }
-    setActiveHeadingIndex(active);
-  }, [outlineModel]);
+    followHeading(active);
+  }, [followHeading, outlineModel]);
 
   const scrollToCurrentMatch = (nextIndex: number) => {
     if (showPreview) {
@@ -703,9 +786,32 @@ export function FileEditorPane({ fm, vaultName, active }: FileEditorPaneProps) {
   }
 
   if (!viewable || (isImage && !loadError && !content)) {
+    const presence = fm.folderPresence?.get(activeTabPath);
+    const sendable = presence === "none";
+    const openable = fm.osFolderAvailable && !sendable;
     return fileNotice(
       t("modal.file_manager.viewer.preview_unavailable_kicker"),
-      t("modal.file_manager.viewer.preview_unavailable_body", { name: fileName }),
+      t(
+        sendable
+          ? "modal.file_manager.viewer.preview_send_body"
+          : openable
+            ? "modal.file_manager.viewer.preview_open_body"
+            : "modal.file_manager.viewer.preview_unavailable_body",
+        { name: fileName },
+      ),
+      sendable ? (
+        <Button variant="ghost" size="sm" onClick={() => void fm.sendToFolder(activeTabPath)}>
+          {t("modal.file_manager.context.send_to_folder")}
+        </Button>
+      ) : openable ? (
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => void fm.openInSystemFileManager(activeTabPath)}
+        >
+          {t("modal.file_manager.context.open_system")}
+        </Button>
+      ) : null,
     );
   }
 
@@ -766,16 +872,24 @@ export function FileEditorPane({ fm, vaultName, active }: FileEditorPaneProps) {
         ) : null}
       </EditorPathBar>
       <div className="flex min-h-0 flex-1 overflow-hidden">
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        {/* Scrolling the note by hand hands the outline mark back to the scroll. */}
+        <div
+          className="flex min-h-0 min-w-0 flex-1 flex-col"
+          onWheel={releaseHeading}
+          onPointerDown={releaseHeading}
+          onTouchStart={releaseHeading}
+          onKeyDown={releaseHeading}
+        >
           {showPreview ? (
             <MarkdownPreview
               key={activeTabPath}
               ref={previewRef}
               markdown={content}
+              parser={markdownParser}
               searchQuery={searchQuery}
               searchActiveIndex={activeMatchIndex}
               onMatchCountChange={setPreviewMatchesCount}
-              onActiveHeadingChange={setActiveHeadingIndex}
+              onActiveHeadingChange={followHeading}
               onCopyFailed={() => fm.showToast(t("modal.file_manager.markdown.copy_failed"))}
               onChange={
                 writesLocked
@@ -789,6 +903,7 @@ export function FileEditorPane({ fm, vaultName, active }: FileEditorPaneProps) {
               key={activeTabPath}
               textareaRef={textareaRef}
               content={content}
+              shownContent={shownContent}
               fileName={fileName}
               ariaLabel={t("modal.file_manager.viewer.editor_label", { name: fileName })}
               readOnly={writesLocked}
@@ -807,9 +922,9 @@ export function FileEditorPane({ fm, vaultName, active }: FileEditorPaneProps) {
         {showOutline && outlineModel ? (
           <MarkdownOutlinePanel
             outline={outlineModel}
-            activeIndex={activeHeadingIndex}
+            activeIndex={heading.index}
             onSelect={(index, entry) => {
-              setActiveHeadingIndex(index);
+              heading.pick(index);
               if (showPreview) previewRef.current?.scrollToHeading(index);
               else if (textareaRef.current)
                 jumpTextareaTo(textareaRef.current, entry.offset, currentWordWrap);

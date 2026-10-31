@@ -80,6 +80,11 @@ export interface AppSettingsConfig {
      * does not count as inactivity. Default false — that time counts.
      */
     lifecycle_keep_open_on_wake: boolean;
+    /**
+     * When true, Close now asks first. Default true. Unsaved editor tabs are
+     * asked about either way.
+     */
+    lifecycle_confirm_close_now: boolean;
   };
   logging: {
     enabled: boolean;
@@ -143,6 +148,7 @@ export function appSettingsEqual(a: AppSettingsConfig, b: AppSettingsConfig): bo
     a.ui.lifecycle_close_modal_on_submit === b.ui.lifecycle_close_modal_on_submit &&
     a.ui.lifecycle_open_file_manager_on_open === b.ui.lifecycle_open_file_manager_on_open &&
     a.ui.lifecycle_keep_open_on_wake === b.ui.lifecycle_keep_open_on_wake &&
+    a.ui.lifecycle_confirm_close_now === b.ui.lifecycle_confirm_close_now &&
     a.logging.enabled === b.logging.enabled &&
     a.logging.level === b.logging.level &&
     a.logging.entries_per_file === b.logging.entries_per_file &&

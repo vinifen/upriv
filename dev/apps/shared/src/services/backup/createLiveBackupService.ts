@@ -1,4 +1,4 @@
-import { backupEntryKey, type VaultBackupEntry } from "../../domain/backups";
+import type { VaultBackupEntry } from "../../domain/backups";
 import type { BackupService } from "./BackupService";
 
 export interface VaultPathWriteResult {
@@ -11,29 +11,12 @@ export interface LiveBackupRpc {
   deleteBackups: (vaultId: string, stamps: readonly string[]) => Promise<void>;
   promoteToSave: (vaultId: string, stamp: string) => Promise<void>;
   saveNow: (vaultId: string, job: string) => Promise<VaultBackupEntry>;
-  getBackupBytes: (vaultId: string, stamp: string) => Promise<Uint8Array>;
-  exportToPath: (vaultId: string, stamp: string, destPath: string) => Promise<VaultPathWriteResult>;
-  exportSnapshotsToPath: (
+  exportTo: (
     vaultId: string,
-    stamps: readonly string[],
-    destPath: string,
+    keys: readonly string[],
+    destDir: string,
+    job: string,
   ) => Promise<VaultPathWriteResult>;
-}
-
-function bytesFromB64(b64: string): Uint8Array {
-  const binary = atob(b64);
-  const out = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i += 1) {
-    out[i] = binary.charCodeAt(i);
-  }
-  return out;
-}
-
-export function bytesFromContentB64(raw: unknown): Uint8Array {
-  if (typeof raw !== "object" || raw === null) return new Uint8Array();
-  const b64 = (raw as { contentB64?: unknown }).contentB64;
-  if (typeof b64 !== "string" || !b64.trim()) return new Uint8Array();
-  return bytesFromB64(b64);
 }
 
 export function parsePathWriteResult(raw: unknown): VaultPathWriteResult | null {
@@ -50,12 +33,6 @@ export function createLiveBackupService(rpc: LiveBackupRpc): BackupService {
     deleteBackups: (vaultId, stamps) => rpc.deleteBackups(vaultId, stamps),
     promoteToSave: (vaultId, stamp) => rpc.promoteToSave(vaultId, stamp),
     saveNow: (vaultId, job) => rpc.saveNow(vaultId, job),
-    getBackupBytes: (vaultId, entry) => rpc.getBackupBytes(vaultId, backupEntryKey(entry, vaultId)),
-    exportToPath: (vaultId, entry, destPath) =>
-      rpc.exportToPath(vaultId, backupEntryKey(entry, vaultId), destPath),
-    exportSnapshotsToPath: (vaultId, stamps, destPath) =>
-      stamps.length === 1
-        ? rpc.exportToPath(vaultId, stamps[0], destPath)
-        : rpc.exportSnapshotsToPath(vaultId, stamps, destPath),
+    exportTo: (vaultId, keys, destDir, job) => rpc.exportTo(vaultId, keys, destDir, job),
   };
 }

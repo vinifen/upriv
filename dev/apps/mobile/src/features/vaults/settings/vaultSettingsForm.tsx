@@ -32,6 +32,7 @@ import {
   groupAssignmentClearOption,
   requireVaultConfigEditLockedI18nKey,
 } from "@upriv/shared";
+import { LongTextInput } from "@/components/LongTextInput";
 import { PathField } from "@/components/PathField";
 import { mobileErrorI18nKey } from "@/lib/errorMessages";
 import { useTranslation, type I18nKey } from "@/i18n";
@@ -72,8 +73,11 @@ interface VaultSettingsFormProps {
   draft: VaultSettingsConfig;
   patchDraft: PatchDraft;
   storageModeLocked?: boolean;
+  plainFilesLocked?: boolean;
   displayNameLocked?: boolean;
   mountLocked?: boolean;
+  /** Locked by a leftover plaintext folder, not by a busy vault. */
+  plainLeftover?: boolean;
   /** Resolved vault-root for reserved mount-path checks. */
   vaultRootPath?: string | null;
   onPathIssueChange?: (issue: WorkspacePathIssue | null) => void;
@@ -86,8 +90,10 @@ export function VaultSettingsForm({
   draft,
   patchDraft,
   storageModeLocked = false,
+  plainFilesLocked = false,
   displayNameLocked = false,
   mountLocked = false,
+  plainLeftover = false,
   vaultRootPath = null,
   onPathIssueChange,
   appWorkspace: appFolders = appWorkspace(),
@@ -97,9 +103,11 @@ export function VaultSettingsForm({
   const { t } = useTranslation();
   const locks = {
     storageModeLocked,
+    plainFilesLocked,
     displayNameLocked,
     mountLocked,
     hiddenLocked,
+    plainLeftover,
   };
 
   return (
@@ -131,9 +139,11 @@ function renderSection(
   patchDraft: PatchDraft,
   locks: {
     storageModeLocked: boolean;
+    plainFilesLocked: boolean;
     displayNameLocked: boolean;
     mountLocked: boolean;
     hiddenLocked: boolean;
+    plainLeftover: boolean;
   },
   vaultRootPath: string | null,
   appFolders: WorkspaceTable,
@@ -146,6 +156,7 @@ function renderSection(
           config={draft.vault}
           hiddenLocked={locks.hiddenLocked}
           displayNameLocked={locks.displayNameLocked}
+          plainLeftover={locks.plainLeftover}
           onChange={(patch) => patchDraft("vault", patch)}
           fileManager={draft.file_manager}
           onFileManagerChange={(patch) => patchDraft("file_manager", patch)}
@@ -156,6 +167,8 @@ function renderSection(
         <StorageSection
           config={draft.storage}
           locked={locks.storageModeLocked}
+          plainFilesLocked={locks.plainFilesLocked}
+          plainLeftover={locks.plainLeftover}
           onChange={(patch) => patchDraft("storage", patch)}
         />
       );
@@ -165,6 +178,7 @@ function renderSection(
           config={draft.mount}
           vaultRootPath={vaultRootPath}
           controlsDisabled={locks.mountLocked}
+          plainLeftover={locks.plainLeftover}
           plaintext={draft.storage.mode === "upriv_plain"}
           appWorkspace={appFolders}
           onPathIssueChange={onPathIssueChange}
@@ -173,14 +187,17 @@ function renderSection(
       );
     case "auto_close":
       return (
-        <AutoCloseSection
+        <VaultSettingsAutoCloseSection
           autoClose={draft.auto_close}
           onAutoCloseChange={(patch) => patchDraft("auto_close", patch)}
         />
       );
     case "backup":
       return (
-        <BackupSection config={draft.backup} onChange={(patch) => patchDraft("backup", patch)} />
+        <VaultSettingsBackupSection
+          config={draft.backup}
+          onChange={(patch) => patchDraft("backup", patch)}
+        />
       );
     default:
       return null;
@@ -192,6 +209,7 @@ function VaultSection({
   onChange,
   hiddenLocked = false,
   displayNameLocked = false,
+  plainLeftover = false,
   fileManager,
   onFileManagerChange,
 }: {
@@ -199,6 +217,7 @@ function VaultSection({
   onChange: (patch: Partial<VaultSettingsConfig["vault"]>) => void;
   hiddenLocked?: boolean;
   displayNameLocked?: boolean;
+  plainLeftover?: boolean;
   fileManager: VaultSettingsConfig["file_manager"];
   onFileManagerChange: (patch: Partial<VaultSettingsConfig["file_manager"]>) => void;
 }) {
@@ -209,7 +228,9 @@ function VaultSection({
         {t("modal.settings.field.vault.display_name")}
       </FieldLabel>
       {displayNameLocked ? (
-        <FieldHint>{t(requireVaultConfigEditLockedI18nKey("vault.display_name"))}</FieldHint>
+        <FieldHint>
+          {t(requireVaultConfigEditLockedI18nKey("vault.display_name", plainLeftover))}
+        </FieldHint>
       ) : null}
       <ThemedInput
         value={config.display_name}
@@ -234,7 +255,7 @@ function VaultSection({
       <FieldHint>
         {t("modal.settings.field.vault.note_help", { max: String(VAULT_NOTE_MAX_LENGTH) })}
       </FieldHint>
-      <ThemedInput
+      <LongTextInput
         value={config.note}
         maxLength={VAULT_NOTE_MAX_LENGTH}
         onChangeText={(note) => onChange({ note })}
@@ -262,13 +283,43 @@ function VaultSection({
   );
 }
 
+/** A plain-text vault's choice of what its folder holds. Shown with the plain-text option. */
+export function PlainFilesSwitch({
+  config,
+  locked = false,
+  onChange,
+}: {
+  config: VaultSettingsConfig["storage"];
+  locked?: boolean;
+  onChange: (patch: Partial<VaultSettingsConfig["storage"]>) => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <SwitchRow
+      label={t("modal.settings.field.storage.plain_files")}
+      hint={t(
+        locked
+          ? requireVaultConfigEditLockedI18nKey("storage.plain_files")
+          : "modal.settings.field.storage.plain_files_help",
+      )}
+      value={config.plain_files === "chosen"}
+      disabled={locked}
+      onValueChange={(chosen) => onChange({ plain_files: chosen ? "chosen" : "whole" })}
+    />
+  );
+}
+
 function StorageSection({
   config,
   locked,
+  plainFilesLocked,
+  plainLeftover,
   onChange,
 }: {
   config: VaultSettingsConfig["storage"];
   locked: boolean;
+  plainFilesLocked: boolean;
+  plainLeftover: boolean;
   onChange: (patch: Partial<VaultSettingsConfig["storage"]>) => void;
 }) {
   const { t } = useTranslation();
@@ -279,7 +330,9 @@ function StorageSection({
       <FieldLabel>{t("modal.settings.field.storage.mode")}</FieldLabel>
       <FieldHint>{t("modal.settings.field.storage.mode_help")}</FieldHint>
       {locked ? (
-        <FieldHint>{t(requireVaultConfigEditLockedI18nKey("storage.mode"))}</FieldHint>
+        <FieldHint>
+          {t(requireVaultConfigEditLockedI18nKey("storage.mode", plainLeftover))}
+        </FieldHint>
       ) : null}
       <RadioGroup>
         {STORAGE_RADIOS.map(({ mode, badge, tone }) => (
@@ -292,6 +345,11 @@ function StorageSection({
             description={t(`modal.settings.option.storage.${mode}_desc` as I18nKey)}
             badge={badge}
             tone={tone}
+            footer={
+              mode === "upriv_plain" ? (
+                <PlainFilesSwitch config={config} locked={plainFilesLocked} onChange={onChange} />
+              ) : undefined
+            }
             onSelect={() => onChange({ mode })}
           />
         ))}
@@ -307,6 +365,7 @@ export function VaultSettingsMountSection({
   vaultRootPath = null,
   onPathIssueChange,
   controlsDisabled = false,
+  plainLeftover = false,
   plaintext = false,
   appWorkspace: appFolders = appWorkspace(),
 }: {
@@ -315,6 +374,7 @@ export function VaultSettingsMountSection({
   vaultRootPath?: string | null;
   onPathIssueChange?: (issue: WorkspacePathIssue | null) => void;
   controlsDisabled?: boolean;
+  plainLeftover?: boolean;
   plaintext?: boolean;
   appWorkspace?: WorkspaceTable;
 }) {
@@ -331,7 +391,9 @@ export function VaultSettingsMountSection({
     <View style={styles.fields}>
       <FieldHint>{t("modal.settings.section.mount_intro")}</FieldHint>
       {controlsDisabled ? (
-        <FieldHint>{t(requireVaultConfigEditLockedI18nKey("mount.workspace_path"))}</FieldHint>
+        <FieldHint>
+          {t(requireVaultConfigEditLockedI18nKey("mount.workspace_path", plainLeftover))}
+        </FieldHint>
       ) : null}
       {workspaceSystemsCurrentFirst(Platform.OS).map((system) => {
         const active = system === current && !controlsDisabled;
@@ -562,7 +624,7 @@ function CurrentVaultFolderChoices({
   );
 }
 
-function AutoCloseSection({
+export function VaultSettingsAutoCloseSection({
   autoClose,
   onAutoCloseChange,
 }: {
@@ -595,7 +657,7 @@ function AutoCloseSection({
   );
 }
 
-function BackupSection({
+export function VaultSettingsBackupSection({
   config,
   onChange,
 }: {

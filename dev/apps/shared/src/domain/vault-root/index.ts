@@ -15,9 +15,11 @@ export type {
 export { VAULT_ROOT_ALIAS_FILE } from "./types";
 export {
   isSafContentUri,
+  SAF_VAULT_ROOT,
   vaultRootContentorPath,
   vaultRootLogsDisplayPath,
   vaultRootUprivDisplayPath,
+  vaultRootUprivOpenPath,
   vaultStoreDisplayPaths,
 } from "./paths";
 export {

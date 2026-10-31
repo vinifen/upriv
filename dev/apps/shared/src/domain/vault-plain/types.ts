@@ -29,7 +29,7 @@ export interface PlainCloseSummary {
   saved: number;
   conflicts: number;
   heldDeletions: number;
-  wiped: number;
+  removed: number;
   kept: number;
   totals: { added: number; changed: number; removed: number };
   backupPinned: boolean;

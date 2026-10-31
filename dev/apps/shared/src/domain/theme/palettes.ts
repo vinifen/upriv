@@ -36,6 +36,8 @@ export type ThemePalette = {
   editorGutterMuted: string;
   errorContainer: string;
   onErrorContainer: string;
+  /** Border of an option that is not safe: a strong red against its tinted card. */
+  dangerBorder: string;
   modalScrim: string;
   modalShadow: string;
   vaultRowShadow: string;
@@ -74,6 +76,7 @@ const DARK: ThemePalette = {
   editorGutterMuted: "#8b8b8b",
   errorContainer: "#93000a",
   onErrorContainer: "#ffdad6",
+  dangerBorder: "#ff5449",
   modalScrim: hexWithAlpha("#081425", 0.8),
   modalShadow: `0 12px 32px ${hexWithAlpha("#000000", 0.22)}`,
   vaultRowShadow: `0 10px 14px -10px ${hexWithAlpha("#000000", 0.4)}`,
@@ -111,6 +114,7 @@ const NEUTRAL: ThemePalette = {
   editorGutterMuted: "#9aa3b0",
   errorContainer: "#a82028",
   onErrorContainer: "#ffe8e4",
+  dangerBorder: "#ff6b63",
   modalScrim: hexWithAlpha("#202632", 0.74),
   modalShadow: `0 12px 32px ${hexWithAlpha("#000000", 0.2)}`,
   vaultRowShadow: `0 10px 14px -10px ${hexWithAlpha("#000000", 0.34)}`,
@@ -148,6 +152,7 @@ const LIGHT: ThemePalette = {
   editorGutterMuted: "#687488",
   errorContainer: "#edd8d4",
   onErrorContainer: "#721218",
+  dangerBorder: "#ba1a1a",
   modalScrim: hexWithAlpha("#243048", 0.32),
   modalShadow: `0 12px 32px ${hexWithAlpha("#243048", 0.08)}`,
   vaultRowShadow: `0 10px 14px -10px ${hexWithAlpha("#243048", 0.16)}`,

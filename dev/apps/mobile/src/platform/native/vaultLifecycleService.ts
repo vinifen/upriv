@@ -13,7 +13,13 @@ import {
   watchClosePhase,
   type VaultLifecycleService,
 } from "@upriv/shared";
-import { rpcVaultClose, rpcVaultClosePhase, rpcVaultOpen, rpcVaultPlainConfirm } from "@/lib/rpc";
+import {
+  rpcVaultClose,
+  rpcVaultCloseHurry,
+  rpcVaultClosePhase,
+  rpcVaultOpen,
+  rpcVaultPlainConfirm,
+} from "@/lib/rpc";
 
 /** Session RAM only — never persist. */
 const vaultPasswordInRam = new Map<string, string>();
@@ -59,6 +65,10 @@ export const nativeVaultLifecycleService: VaultLifecycleService = {
     );
     onStep(CLOSING_DONE_STEP);
     return outcome;
+  },
+
+  hurryClose(vaultId) {
+    return rpcVaultCloseHurry(vaultId);
   },
 
   resolveWorkspacePath(displayName, parentPath) {

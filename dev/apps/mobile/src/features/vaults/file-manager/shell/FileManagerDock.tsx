@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Animated,
@@ -11,14 +11,15 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import {
+  delayMs,
   DOCK_COLLAPSE_MS,
   DOCK_EXPAND_MS,
-  DOCK_FADE_MS,
   vaultDisplayLetters,
-  type FileManagerEntry,
+  type FileManagerShellEntry,
 } from "@upriv/shared";
+import { useOptimisticValue } from "@upriv/shared/react";
 import { Icon } from "@/components/icons";
-import { Collapse, IconButton } from "@/components/ui";
+import { IconButton } from "@/components/ui";
 import { useAppSettingsContext } from "@/features/system/settings";
 import { useTranslation } from "@/i18n";
 import { useTheme } from "@/theme";
@@ -28,9 +29,11 @@ import { dockChipBoxShadow, radii, spacing, touchMin } from "@/theme/tokens";
 const DOCK_MAX_WIDTH = 232;
 /** Room for per-chip `boxShadow` (desktop grid `px-1.5`). */
 const SHADOW_PAD = spacing.sm;
+/** How far the chips rise as they appear. */
+const REVEAL_RISE = 8;
 
 interface FileManagerDockProps {
-  entries: readonly FileManagerEntry[];
+  entries: readonly FileManagerShellEntry[];
   focusedVaultId: string | null;
   maximizedVaultId: string | null;
   onMinimize: (vaultId: string) => void;
@@ -75,35 +78,53 @@ export function FileManagerDock({
   const insets = useSafeAreaInsets();
   const { width: windowWidth } = useWindowDimensions();
   const { settings, patchSettings } = useAppSettingsContext();
-  const expanded = settings.ui.file_manager_dock_expanded ?? false;
+  // The dock moves on the tap. The setting is written once it has moved, so
+  // the save and the re-render it brings do not share frames with the motion.
+  const saveExpanded = useCallback(
+    (next: boolean) =>
+      delayMs(next ? DOCK_EXPAND_MS : DOCK_COLLAPSE_MS).then(() =>
+        patchSettings({ ui: { file_manager_dock_expanded: next } }),
+      ),
+    [patchSettings],
+  );
+  const [expanded, setExpanded] = useOptimisticValue(
+    settings.ui.file_manager_dock_expanded ?? false,
+    saveExpanded,
+  );
   const dockMaxWidth = Math.min(DOCK_MAX_WIDTH, windowWidth - spacing.lg * 2);
   const chipMaxWidth = Math.max(0, dockMaxWidth - SHADOW_PAD * 2);
   const namesKey = entries.map((entry) => `${entry.vaultId}:${entry.displayName}`).join("|");
   const [columnWidth, setColumnWidth] = useState<number | undefined>(undefined);
-  const listOpacity = useRef(new Animated.Value(expanded ? 1 : 0)).current;
   const chipShadow = useMemo(() => ({ boxShadow: dockChipBoxShadow(theme) }), [theme]);
+  // The chips fade and rise on the native driver. The dock floats over the
+  // screen, so nothing else moves and no frame waits on a layout pass.
+  const reveal = useRef(new Animated.Value(expanded ? 1 : 0)).current;
+  const [listShown, setListShown] = useState(expanded);
+  if (expanded && !listShown) setListShown(true);
 
   useEffect(() => {
     setColumnWidth(undefined);
   }, [namesKey, chipMaxWidth]);
 
   useEffect(() => {
-    Animated.timing(listOpacity, {
+    const animation = Animated.timing(reveal, {
       toValue: expanded ? 1 : 0,
-      duration: DOCK_FADE_MS,
+      duration: expanded ? DOCK_EXPAND_MS : DOCK_COLLAPSE_MS,
       easing: Easing.out(Easing.cubic),
       useNativeDriver: true,
-    }).start();
-  }, [expanded, listOpacity]);
+    });
+    animation.start(({ finished }) => {
+      if (finished && !expanded) setListShown(false);
+    });
+    return () => animation.stop();
+  }, [expanded, reveal]);
 
   if (entries.length === 0) return null;
 
   const highlightVaultId =
     focusedVaultId ?? maximizedVaultId ?? (entries.length === 1 ? entries[0].vaultId : null);
 
-  const toggleExpanded = () => {
-    void patchSettings({ ui: { file_manager_dock_expanded: !expanded } });
-  };
+  const toggleExpanded = () => setExpanded(!expanded);
 
   const handleEntryClick = (vaultId: string) => {
     if (vaultId === maximizedVaultId) {
@@ -127,9 +148,25 @@ export function FileManagerDock({
       accessibilityLabel={t("modal.file_manager.dock.label")}
     >
       <View style={styles.stack}>
-        <Collapse open={expanded} openMs={DOCK_EXPAND_MS} closeMs={DOCK_COLLAPSE_MS} fitContent>
+        {listShown ? (
           <Animated.View
-            style={[styles.list, { opacity: listOpacity }]}
+            pointerEvents={expanded ? "auto" : "none"}
+            accessibilityElementsHidden={!expanded}
+            importantForAccessibility={expanded ? "auto" : "no-hide-descendants"}
+            style={[
+              styles.list,
+              {
+                opacity: reveal,
+                transform: [
+                  {
+                    translateY: reveal.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: [REVEAL_RISE, 0],
+                    }),
+                  },
+                ],
+              },
+            ]}
             onLayout={(event) => {
               const next = Math.min(Math.round(event.nativeEvent.layout.width), chipMaxWidth);
               if (next <= 0) return;
@@ -220,7 +257,7 @@ export function FileManagerDock({
               );
             })}
           </Animated.View>
-        </Collapse>
+        ) : null}
 
         <View
           collapsable={false}

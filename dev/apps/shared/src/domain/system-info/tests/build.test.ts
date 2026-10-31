@@ -22,7 +22,7 @@ function snapshot(overrides: Partial<SystemInfoSnapshot> = {}): SystemInfoSnapsh
     },
     workspaceSystem: "linux",
     lastOpenedVault: "notes",
-    paths: { logsDir: "/data/.upriv/logs", appHome: "/data" },
+    paths: { logsDir: "/data/.upriv/logs", logsOpenPath: "/data/.upriv/logs", appHome: "/data" },
     ...overrides,
   };
 }
@@ -61,6 +61,7 @@ describe("buildSystemInfoSections", () => {
         "lifecycle_close_modal_on_submit",
         "lifecycle_open_file_manager_on_open",
         "lifecycle_keep_open_on_wake",
+        "lifecycle_confirm_close_now",
         "file_manager_dock_expanded",
         "app_home",
         "logs_path",

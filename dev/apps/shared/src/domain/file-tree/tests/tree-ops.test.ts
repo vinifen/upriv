@@ -14,7 +14,7 @@ import {
   uniqueFolderName,
   uniqueName,
 } from "../treeOps";
-import { fileBaseName, findNode, joinPath } from "../treeUtils";
+import { fileBaseName, findNode, joinPath, visibleTreeRows } from "../treeUtils";
 import type { FileTreeNode } from "../types";
 
 function rootWithNotes(): FileTreeNode {
@@ -56,6 +56,40 @@ describe("tree path helpers", () => {
     expect(ancestorFolderPaths("/notes/a.md")).toEqual(["/", "/notes"]);
     expect(ancestorFolderPaths("/readme.md")).toEqual(["/"]);
     expect(ancestorFolderPaths("/")).toEqual(["/"]);
+  });
+});
+
+describe("visibleTreeRows", () => {
+  it("lists the root's children and what each expanded folder holds, depth first", () => {
+    const root = rootWithNotes();
+    expect(visibleTreeRows(root, ["/"]).map((row) => [row.path, row.depth])).toEqual([
+      ["/notes", 0],
+      ["/readme.md", 0],
+    ]);
+    expect(visibleTreeRows(root, ["/", "/notes"]).map((row) => [row.path, row.depth])).toEqual([
+      ["/notes", 0],
+      ["/notes/a.md", 1],
+      ["/readme.md", 0],
+    ]);
+  });
+
+  it("hides what sits under a collapsed folder, even when expanded itself", () => {
+    const root: FileTreeNode = {
+      name: "",
+      type: "folder",
+      children: [
+        {
+          name: "a",
+          type: "folder",
+          children: [{ name: "b", type: "folder", children: [{ name: "c.md", type: "file" }] }],
+        },
+      ],
+    };
+    expect(visibleTreeRows(root, ["/a/b"]).map((row) => row.path)).toEqual(["/a"]);
+  });
+
+  it("has no rows for an empty root", () => {
+    expect(visibleTreeRows({ name: "", type: "folder", children: [] }, ["/"])).toEqual([]);
   });
 });
 

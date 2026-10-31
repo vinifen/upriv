@@ -10,20 +10,17 @@ export interface BackupService {
    * it is open or busy. Rejects with `job_cancelled` after `JobService.cancel`.
    */
   saveNow(vaultId: string, job: string): Promise<VaultBackupEntry>;
-  getBackupBytes(vaultId: string, entry: VaultBackupEntry): Promise<Uint8Array>;
-  /** Stream a zip of the frozen `store/` tree to `destPath` (no NDJSON payload). */
-  exportToPath(
-    vaultId: string,
-    entry: VaultBackupEntry,
-    destPath: string,
-  ): Promise<VaultPathWriteResult>;
   /**
-   * One stamp copies that snapshot `.zip`. Several stamps write one zip whose
-   * entries are those snapshot files.
+   * Copy the backups named by `keys` (`backupEntryKey`) into the folder
+   * `destDir`, as the job `job`: one keeps its file name, several become one
+   * zip of those files. Core takes the next free number when the name is in
+   * the folder (`backupExportFilename`). Resolves once the file is in place.
+   * Rejects with `job_cancelled` after `JobService.cancel`, and leaves no file.
    */
-  exportSnapshotsToPath(
+  exportTo(
     vaultId: string,
-    stamps: readonly string[],
-    destPath: string,
+    keys: readonly string[],
+    destDir: string,
+    job: string,
   ): Promise<VaultPathWriteResult>;
 }

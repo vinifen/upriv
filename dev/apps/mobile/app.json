@@ -30,6 +30,7 @@
       "expo-font",
       "expo-dev-client",
       "expo-document-picker",
+      "./plugins/withAndroidArchitectures.js",
       [
         "expo-splash-screen",
         {

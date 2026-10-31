@@ -21,22 +21,38 @@ pub const PLAIN_RESERVED_PREFIX: &str = ".upriv-plain";
 /// Encrypted record of the place a plaintext folder was confirmed for, per system.
 pub const PLAIN_POLICY_FILE: &str = ".upriv-plain-policy.json";
 
+/// Folder beside the vault's files in a `.7z` or a plain-text `.zip`. It carries
+/// the vault's settings and file-manager layout. A vault never holds this name:
+/// an import moves what the folder carries to its place and leaves the folder.
+pub const EXPORT_CONFIG_DIR: &str = ".upriv-config";
+
 /// Paths the vault keeps for itself: the seed at the root, the file-manager
-/// layout in every folder, and anything under a [`PLAIN_RESERVED_PREFIX`] name.
-/// They are never listed, mounted, exported, or written to a plaintext folder.
+/// layout in every folder, anything under a [`PLAIN_RESERVED_PREFIX`] name, and
+/// [`EXPORT_CONFIG_DIR`]. They are never listed, mounted, exported as vault
+/// files, or written to a plaintext folder.
 pub fn is_reserved_logical(path: &str) -> bool {
     path == SEED_LOGICAL_PATH
         || file_name(path) == INTERNAL_WORKSPACE_FILE
         || is_plain_internal(path)
+        || is_export_config(path)
 }
 
 /// True when any part of `path` starts with [`PLAIN_RESERVED_PREFIX`].
-///
-/// Imports skip these paths instead of failing: a copy of a plaintext folder
-/// carries its marker, and the marker is not vault data.
 pub fn is_plain_internal(path: &str) -> bool {
     path.split('/')
         .any(|part| part.starts_with(PLAIN_RESERVED_PREFIX))
+}
+
+/// True when any part of `path` is [`EXPORT_CONFIG_DIR`].
+pub fn is_export_config(path: &str) -> bool {
+    path.split('/').any(|part| part == EXPORT_CONFIG_DIR)
+}
+
+/// Paths an import skips instead of refusing: a copy of a plaintext folder
+/// carries its marker, a `.7z` or plain-text `.zip` carries its settings folder,
+/// and neither is vault data.
+pub fn is_skipped_on_import(path: &str) -> bool {
+    is_plain_internal(path) || is_export_config(path)
 }
 
 /// Windows component limit; matches `@upriv/shared` `LOGICAL_FILE_NAME_MAX_LENGTH`.
@@ -50,6 +66,9 @@ pub struct FileTreeNode {
     pub node_type: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub children: Option<Vec<FileTreeNode>>,
+    /// In the plaintext folder right now. Only a vault of chosen files sets it.
+    #[serde(rename = "inFolder", skip_serializing_if = "Option::is_none")]
+    pub in_folder: Option<bool>,
 }
 
 /// UI paths are `/notes/a.txt`. Core index paths are `notes/a.txt`. Root is `""` / `"/"`.
@@ -467,6 +486,7 @@ pub fn build_file_tree(index: &VaultIndex, root_name: &str) -> FileTreeNode {
                 name,
                 node_type: "file",
                 children: None,
+                in_folder: None,
             });
         }
         children.sort_by(|a, b| match (a.node_type, b.node_type) {
@@ -478,6 +498,7 @@ pub fn build_file_tree(index: &VaultIndex, root_name: &str) -> FileTreeNode {
             name,
             node_type: "folder",
             children: Some(children),
+            in_folder: None,
         }
     }
     into_node(root_name.to_string(), root)

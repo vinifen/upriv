@@ -10,12 +10,15 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use super::embedded_settings::snapshot_settings_bytes;
+use super::export_folder::{
+    check_export_folder, ExportedFile, NumberedExportName, NumberedExportTarget,
+};
 use super::partial::{discard_partial, PartialWork};
 use crate::config::{load_vault_config, VaultBackupMode};
 use crate::error::{Result, UprivError};
 use crate::logging::{log_event, LogLevel};
 use crate::paths::VaultRoot;
-use crate::session::{ensure_data_folder_export_idle, with_vault_dir_lock, Job};
+use crate::session::{ensure_data_folder_export_idle, with_vault_dir_lock, BackupExportGuard, Job};
 use crate::time::utc_filename_stamp;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -306,13 +309,22 @@ fn stamp_to_iso(stamp: &str) -> Option<String> {
     crate::time::filename_stamp_to_iso(stamp)
 }
 
-pub fn backup_on_close(root: &VaultRoot, vault_id: &str) -> Result<Option<String>> {
+pub(crate) fn backup_on_close(
+    root: &VaultRoot,
+    vault_id: &str,
+    job: &Job,
+) -> Result<Option<String>> {
     let vault_dir = root.vault_dir(vault_id)?;
     let config = load_vault_config(&vault_dir)?;
     if !config.backup.enabled {
         return Ok(None);
     }
-    let stamp = write_backup_zip(&vault_dir, vault_id, BackupDir::Standard, &Job::untracked())?;
+    let stamp = job.settle(write_backup_zip(
+        &vault_dir,
+        vault_id,
+        BackupDir::Standard,
+        job,
+    ))?;
     finish_backup_prune(&vault_dir, config.backup.mode, config.backup.keep_last)?;
     Ok(Some(stamp))
 }
@@ -521,6 +533,30 @@ pub(crate) fn prune_after_rewrap(root: &VaultRoot, vault_id: &str) -> Result<()>
     finish_backup_prune(&vault_dir, config.backup.mode, config.backup.keep_last)
 }
 
+/// Remove the zips a killed process never finished. The caller holds this
+/// vault's lock, so nothing is writing them.
+pub(crate) fn discard_unfinished_backups(vault_dir: &Path) {
+    let backups = vault_dir.join("backups");
+    let saves = backups.join("saves");
+    for (dir, work) in [
+        (&backups, PartialWork::Backup),
+        (&saves, PartialWork::BackupSave),
+    ] {
+        let Ok(entries) = crate::host_fs::read_dir(dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let file_name = entry.file_name();
+            let unfinished = file_name
+                .to_str()
+                .is_some_and(|name| stamp_from_partial_name(name).is_some());
+            if unfinished {
+                discard_partial(&dir.join(&file_name), work);
+            }
+        }
+    }
+}
+
 /// Where a new zip goes: `backups/`, rotated by retention, or `backups/saves/`.
 #[derive(Clone, Copy)]
 enum BackupDir {
@@ -553,7 +589,7 @@ fn write_backup_zip(
     let checked = (|| {
         super::zip_io::zip_store_with_config_to_path(&store, &settings, &stamp, &partial, job)?;
         sync_closed_file(&partial)?;
-        super::zip_io::verify_store_zip_copies(&partial)?;
+        super::zip_io::verify_store_zip_copies(&partial, job)?;
         job.ensure_running()
     })();
     let work = match into {
@@ -681,26 +717,106 @@ fn locate_backup_zip(root: &VaultRoot, vault_id: &str, stamp: &str) -> Result<Pa
     one_store_zip(&vault_dir.join("backups"), &key, stamp)
 }
 
-/// One snapshot becomes its `.zip` at `dest`. Several become one zip of those files.
-pub fn export_backups_to_path(
+/// Copy backups of this vault into `dest_dir` as the job `job_id`. One keeps
+/// its own file name; several go into one Stored zip, `upriv-backups-<id>.zip`.
+/// A name already in the folder is never replaced: the file takes the next
+/// free number (`upriv-backups-<id> 2.zip`) and the export logs
+/// `backup_export_numbered`. A stopped or failed export leaves no file.
+///
+/// Backups are frozen files, so this vault may be open and every other export
+/// stays free. Delete and rename of this vault refuse until the export ends. A
+/// backup deleted or rotated away before its turn fails the export.
+pub fn export_backups(
     root: &VaultRoot,
     vault_id: &str,
     stamps: &[String],
-    dest: &Path,
-) -> Result<u64> {
-    if stamps.is_empty() {
-        return Err(UprivError::VaultPathNotFound(dest.display().to_string()));
+    dest_dir: &Path,
+    job_id: &str,
+) -> Result<ExportedFile> {
+    let written = (|| {
+        let job = Job::start(job_id)?;
+        write_backup_export(root, vault_id, stamps, dest_dir, &job)
+    })();
+    log_backup_export_outcome(vault_id, &written);
+    written
+}
+
+fn write_backup_export(
+    root: &VaultRoot,
+    vault_id: &str,
+    stamps: &[String],
+    dest_dir: &Path,
+    job: &Job,
+) -> Result<ExportedFile> {
+    let vault_dir = root.vault_dir(vault_id)?;
+    // Under the lock delete and rename hold, so neither is halfway through.
+    let _reading = with_vault_dir_lock(&vault_dir, || {
+        if !vault_dir.host_is_dir() {
+            return Err(UprivError::VaultNotFound(vault_dir.clone()));
+        }
+        BackupExportGuard::enter(&vault_dir)
+    })?;
+    check_export_folder(root, dest_dir)?;
+    let sources = backup_export_sources(root, vault_id, stamps)?;
+    let mut total = 0u64;
+    for (_, path) in &sources {
+        total = total.saturating_add(crate::host_fs::metadata(path)?.len());
     }
-    if stamps.len() == 1 {
-        return write_one_backup_zip(root, vault_id, &stamps[0], dest);
+    job.set_total(total);
+    let stem = match sources.as_slice() {
+        [(name, _)] => name.strip_suffix(".zip").unwrap_or(name).to_string(),
+        _ => format!("upriv-backups-{vault_id}"),
+    };
+    let target = NumberedExportTarget::new(dest_dir, NumberedExportName::new(&stem, "zip"))?;
+    target.write(
+        root,
+        job,
+        PartialWork::BackupExport,
+        |partial| match sources.as_slice() {
+            [(_, source)] => super::zip_io::copy_file_to_path(source, partial, job),
+            bundle => super::zip_io::zip_files_to_path(bundle, partial, job),
+        },
+    )
+}
+
+/// `backup_export_numbered` when the name was taken and the file got a number;
+/// `backup_export_cancelled` or `backup_export_failed` for an export that ended
+/// without its file. No path or name goes to the log.
+fn log_backup_export_outcome(vault_id: &str, written: &Result<ExportedFile>) {
+    let mut fields: Vec<_> = vault_id_log_field(vault_id).into_iter().collect();
+    match written {
+        Ok(file) if file.number > 1 => {
+            let number = file.number.to_string();
+            fields.push(("number", number.as_str()));
+            log_event(LogLevel::Info, "backup_export_numbered", &fields);
+        }
+        Ok(_) => {}
+        Err(error) => log_job_error(
+            "backup_export_cancelled",
+            "backup_export_failed",
+            &fields,
+            error,
+        ),
+    }
+}
+
+/// Each backup to export once, with the name it takes in a bundle. A pin that
+/// shares its file name with the copy in `backups/` is `saves-<file name>`.
+fn backup_export_sources(
+    root: &VaultRoot,
+    vault_id: &str,
+    stamps: &[String],
+) -> Result<Vec<(String, PathBuf)>> {
+    if stamps.is_empty() {
+        return Err(UprivError::VaultPathNotFound(vault_id.into()));
     }
     let mut seen = std::collections::BTreeSet::new();
     let mut rows: Vec<(String, bool, PathBuf)> = Vec::new();
     for stamp in stamps {
-        if !seen.insert(stamp.clone()) {
+        let path = locate_backup_zip(root, vault_id, stamp)?;
+        if !seen.insert(path.clone()) {
             continue;
         }
-        let path = locate_backup_zip(root, vault_id, stamp)?;
         let name = path
             .file_name()
             .and_then(|file_name| file_name.to_str())
@@ -728,37 +844,12 @@ pub fn export_backups_to_path(
         if !used.insert(entry_name.clone()) {
             return Err(UprivError::VaultStoreInvalid {
                 path,
-                detail: "two backups share a download name".into(),
+                detail: "two backups share an export name".into(),
             });
         }
         entries.push((entry_name, path));
     }
-    let borrowed: Vec<(String, &Path)> = entries
-        .iter()
-        .map(|(name, path)| (name.clone(), path.as_path()))
-        .collect();
-    super::zip_io::zip_files_to_path(&borrowed, dest)
-}
-
-fn read_backup_file(path: &Path) -> Result<crate::host_fs::File> {
-    crate::paths::open_nofollow(path, crate::paths::NofollowMode::Read).map_err(UprivError::from)
-}
-
-fn write_one_backup_zip(root: &VaultRoot, vault_id: &str, stamp: &str, dest: &Path) -> Result<u64> {
-    let path = locate_backup_zip(root, vault_id, stamp)?;
-    let mut input = read_backup_file(&path)?;
-    let mut output = crate::host_fs::File::create(dest)?;
-    let copied = std::io::copy(&mut input, &mut output)?;
-    output.sync_all()?;
-    Ok(copied)
-}
-
-pub fn read_backup_zip_bytes(root: &VaultRoot, vault_id: &str, stamp: &str) -> Result<Vec<u8>> {
-    let path = locate_backup_zip(root, vault_id, stamp)?;
-    let mut file = read_backup_file(&path)?;
-    let mut bytes = Vec::new();
-    std::io::Read::read_to_end(&mut file, &mut bytes)?;
-    Ok(bytes)
+    Ok(entries)
 }
 
 fn prune_backups(vault_dir: &Path, mode: VaultBackupMode, keep_last: u32) -> Result<()> {
@@ -1007,6 +1098,41 @@ mode = "encrypted_dir"
     }
 
     #[test]
+    fn discards_only_unfinished_backup_zips() {
+        let tmp = tempfile::tempdir().unwrap();
+        let backups = tmp.path().join("backups");
+        let saves = backups.join("saves");
+        crate::host_fs::create_dir_all(&saves).unwrap();
+        let finished = backups.join("20260101000000-notes.zip");
+        let saved = saves.join("20260101000001-notes.zip");
+        let other = backups.join("notes.partial");
+        for keep in [&finished, &saved, &other] {
+            crate::host_fs::write(keep, b"keep").unwrap();
+        }
+        let unfinished = [
+            backups.join("20260101000002-notes.zip.partial"),
+            saves.join("20260101000003-notes.zip.partial"),
+        ];
+        for path in &unfinished {
+            crate::host_fs::write(path, b"half").unwrap();
+        }
+
+        discard_unfinished_backups(tmp.path());
+
+        assert!(!unfinished[0].host_exists());
+        assert!(!unfinished[1].host_exists());
+        assert!(finished.host_exists());
+        assert!(saved.host_exists());
+        assert!(other.host_exists());
+    }
+
+    #[test]
+    fn discarding_unfinished_backups_needs_no_backups_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        discard_unfinished_backups(tmp.path());
+    }
+
+    #[test]
     fn copy_ciphertext_tree_preserves_bytes() {
         let tmp = tempfile::tempdir().unwrap();
         let src = tmp.path().join("store");
@@ -1043,7 +1169,9 @@ mode = "encrypted_dir"
             .join(crate::store::STORE_DANGER_FILE_NAME);
         let notice_bytes = crate::host_fs::read(&notice).unwrap();
         crate::host_fs::remove_file(&notice).unwrap();
-        let stamp = backup_on_close(&root, "notes").unwrap().expect("stamp");
+        let stamp = backup_on_close(&root, "notes", &Job::untracked())
+            .unwrap()
+            .expect("stamp");
         assert_eq!(crate::host_fs::read(&notice).unwrap(), notice_bytes);
         let zip = root
             .vault_dir("notes")
@@ -1167,8 +1295,12 @@ mode = "encrypted_dir"
         assert_eq!(list_backups(&root, "notes").unwrap(), vec![saved.clone()]);
 
         // `keep_last = 1` rotates standard backups only.
-        backup_on_close(&root, "notes").unwrap().expect("stamp");
-        backup_on_close(&root, "notes").unwrap().expect("stamp");
+        backup_on_close(&root, "notes", &Job::untracked())
+            .unwrap()
+            .expect("stamp");
+        backup_on_close(&root, "notes", &Job::untracked())
+            .unwrap()
+            .expect("stamp");
         let listed = list_backups(&root, "notes").unwrap();
         assert_eq!(listed.len(), 2);
         assert!(listed.contains(&saved));
@@ -1262,7 +1394,9 @@ mode = "encrypted_dir"
             KdfUnlockPreset::M32,
         )
         .unwrap();
-        let stamp = backup_on_close(&root, "notes").unwrap().expect("stamp");
+        let stamp = backup_on_close(&root, "notes", &Job::untracked())
+            .unwrap()
+            .expect("stamp");
         let backups = root.vault_dir("notes").unwrap().join("backups");
         let original = backups.join(format!("{stamp}-notes.zip"));
         let other = backups.join(format!("{stamp}-other.zip"));
@@ -1294,7 +1428,9 @@ mode = "encrypted_dir"
             KdfUnlockPreset::M32,
         )
         .unwrap();
-        let stamp = backup_on_close(&root, "notes").unwrap().expect("stamp");
+        let stamp = backup_on_close(&root, "notes", &Job::untracked())
+            .unwrap()
+            .expect("stamp");
         let backups = root.vault_dir("notes").unwrap().join("backups");
         let name = format!("{stamp}-notes.zip");
         let original = backups.join(&name);
@@ -1312,22 +1448,18 @@ mode = "encrypted_dir"
         let found = backup_zip_file(&root, "notes", &format!("saves/{name}")).unwrap();
         assert_eq!(found, pinned);
         let bundle_dir = tempfile::tempdir().unwrap();
-        let bundle = bundle_dir.path().join("both.zip");
-        export_backups_to_path(
+        let bundle = export_backups(
             &root,
             "notes",
             &[name.clone(), format!("saves/{name}")],
-            &bundle,
+            bundle_dir.path(),
+            &test_job_id(),
         )
         .unwrap();
-        let mut archive =
-            zip::ZipArchive::new(crate::host_fs::File::open(&bundle).unwrap()).unwrap();
-        let mut packed = Vec::new();
-        for index in 0..archive.len() {
-            packed.push(archive.by_index(index).unwrap().name().to_string());
-        }
-        packed.sort();
-        assert_eq!(packed, vec![name.clone(), format!("saves-{name}")]);
+        assert_eq!(
+            zip_entry_names(&bundle.path),
+            vec![name.clone(), format!("saves-{name}")]
+        );
         delete_backups(&root, "notes", &[name.clone(), name.clone()]).unwrap();
         assert!(!original.host_exists());
         assert!(pinned.host_is_file());
@@ -1345,7 +1477,9 @@ mode = "encrypted_dir"
             KdfUnlockPreset::M32,
         )
         .unwrap();
-        let stamp = backup_on_close(&root, "notes").unwrap().expect("stamp");
+        let stamp = backup_on_close(&root, "notes", &Job::untracked())
+            .unwrap()
+            .expect("stamp");
         let backups = root.vault_dir("notes").unwrap().join("backups");
         let name = format!("{stamp}-notes.zip");
         let original = backups.join(&name);
@@ -1369,7 +1503,9 @@ mode = "encrypted_dir"
             KdfUnlockPreset::M32,
         )
         .unwrap();
-        let stamp = backup_on_close(&root, "notes").unwrap().expect("stamp");
+        let stamp = backup_on_close(&root, "notes", &Job::untracked())
+            .unwrap()
+            .expect("stamp");
         let backups = root.vault_dir("notes").unwrap().join("backups");
         let name = format!("{stamp}-notes.zip");
         let original = backups.join(&name);
@@ -1378,6 +1514,236 @@ mode = "encrypted_dir"
         std::os::unix::fs::symlink(&hold, &original).unwrap();
         assert!(list_backups(&root, "notes").unwrap().is_empty());
         assert!(backup_zip_file(&root, "notes", &name).is_err());
-        assert!(read_backup_zip_bytes(&root, "notes", &name).is_err());
+        let out = tempfile::tempdir().unwrap();
+        assert!(export_backups(&root, "notes", &[name], out.path(), &test_job_id()).is_err());
+        assert_eq!(crate::host_fs::read_dir(out.path()).unwrap().count(), 0);
+    }
+
+    fn zip_entry_names(path: &Path) -> Vec<String> {
+        let mut archive = zip::ZipArchive::new(crate::host_fs::File::open(path).unwrap()).unwrap();
+        let mut names = Vec::new();
+        for index in 0..archive.len() {
+            names.push(archive.by_index(index).unwrap().name().to_string());
+        }
+        names.sort();
+        names
+    }
+
+    /// A vault `notes` with two standard backups, and their file names.
+    fn vault_with_two_backups() -> (tempfile::TempDir, VaultRoot, String, String) {
+        let (tmp, root) = vault_root_with(&[]);
+        let mut config = sample_config("notes", "Notes");
+        config.backup.mode = VaultBackupMode::KeepAll;
+        create_vault(&root, config, b"pass-word-ok", KdfUnlockPreset::M32).unwrap();
+        let first = backup_on_close(&root, "notes", &Job::untracked())
+            .unwrap()
+            .expect("stamp");
+        let second = backup_on_close(&root, "notes", &Job::untracked())
+            .unwrap()
+            .expect("stamp");
+        (
+            tmp,
+            root,
+            format!("{first}-notes.zip"),
+            format!("{second}-notes.zip"),
+        )
+    }
+
+    #[test]
+    fn one_backup_is_copied_under_its_own_name() {
+        let (_tmp, root, name, _) = vault_with_two_backups();
+        let out = tempfile::tempdir().unwrap();
+        let stamps = std::slice::from_ref(&name);
+        let written = export_backups(&root, "notes", stamps, out.path(), &test_job_id()).unwrap();
+        assert_eq!(written.path, out.path().join(&name));
+        assert_eq!(written.number, 1);
+        let source = backup_zip_file(&root, "notes", &name).unwrap();
+        let bytes = crate::host_fs::read(&written.path).unwrap();
+        assert_eq!(bytes, crate::host_fs::read(&source).unwrap());
+        assert_eq!(written.size, bytes.len() as u64);
+    }
+
+    #[test]
+    fn the_same_backup_twice_is_one_file() {
+        let (_tmp, root, name, _) = vault_with_two_backups();
+        let out = tempfile::tempdir().unwrap();
+        let stamps = [name.clone(), name.clone()];
+        let written = export_backups(&root, "notes", &stamps, out.path(), &test_job_id()).unwrap();
+        assert_eq!(written.path, out.path().join(&name));
+    }
+
+    #[test]
+    fn several_backups_are_one_stored_zip_named_for_the_vault() {
+        let (_tmp, root, first, second) = vault_with_two_backups();
+        let out = tempfile::tempdir().unwrap();
+        let stamps = [first.clone(), second.clone()];
+        let written = export_backups(&root, "notes", &stamps, out.path(), &test_job_id()).unwrap();
+        assert_eq!(written.path, out.path().join("upriv-backups-notes.zip"));
+        assert_eq!(
+            written.size,
+            crate::host_fs::metadata(&written.path).unwrap().len()
+        );
+
+        let mut archive =
+            zip::ZipArchive::new(crate::host_fs::File::open(&written.path).unwrap()).unwrap();
+        let mut names = Vec::new();
+        for index in 0..archive.len() {
+            let mut entry = archive.by_index(index).unwrap();
+            assert_eq!(entry.compression(), zip::CompressionMethod::Stored);
+            let mut body = Vec::new();
+            std::io::Read::read_to_end(&mut entry, &mut body).unwrap();
+            let source = backup_zip_file(&root, "notes", entry.name()).unwrap();
+            assert_eq!(body, crate::host_fs::read(&source).unwrap());
+            names.push(entry.name().to_string());
+        }
+        names.sort();
+        let mut expected = vec![first, second];
+        expected.sort();
+        assert_eq!(names, expected);
+    }
+
+    #[test]
+    fn a_taken_name_gets_the_next_free_number_and_nothing_is_replaced() {
+        let (_tmp, root, first, second) = vault_with_two_backups();
+        let out = tempfile::tempdir().unwrap();
+        let older = out.path().join(&first);
+        crate::host_fs::write(&older, b"older").unwrap();
+        let stamps = std::slice::from_ref(&first);
+        let written = export_backups(&root, "notes", stamps, out.path(), &test_job_id()).unwrap();
+        let stem = first.strip_suffix(".zip").unwrap();
+        assert_eq!(written.path, out.path().join(format!("{stem} 2.zip")));
+        assert_eq!(written.number, 2);
+        assert_eq!(crate::host_fs::read(&older).unwrap(), b"older");
+
+        crate::host_fs::write(out.path().join("upriv-backups-notes.zip"), b"older").unwrap();
+        let bundle =
+            export_backups(&root, "notes", &[first, second], out.path(), &test_job_id()).unwrap();
+        assert_eq!(bundle.path, out.path().join("upriv-backups-notes 2.zip"));
+    }
+
+    #[test]
+    fn a_stopped_export_leaves_no_file() {
+        let (_tmp, root, first, second) = vault_with_two_backups();
+        let out = tempfile::tempdir().unwrap();
+        let stopped = test_job_id();
+        crate::session::cancel_job(&stopped);
+        assert!(matches!(
+            export_backups(
+                &root,
+                "notes",
+                std::slice::from_ref(&first),
+                out.path(),
+                &stopped
+            ),
+            Err(UprivError::JobCancelled)
+        ));
+
+        for stamps in [vec![first.clone()], vec![first.clone(), second.clone()]] {
+            let id = test_job_id();
+            let running = Job::start(&id).unwrap();
+            crate::session::cancel_job(&id);
+            assert!(matches!(
+                write_backup_export(&root, "notes", &stamps, out.path(), &running),
+                Err(UprivError::JobCancelled)
+            ));
+        }
+        assert_eq!(crate::host_fs::read_dir(out.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn a_failed_export_leaves_no_file() {
+        let (_tmp, root, first, second) = vault_with_two_backups();
+        let out = tempfile::tempdir().unwrap();
+        let stamps = [first.clone(), second];
+        let source = backup_zip_file(&root, "notes", &stamps[1]).unwrap();
+        crate::host_fs::remove_file(&source).unwrap();
+        assert!(export_backups(&root, "notes", &stamps, out.path(), &test_job_id()).is_err());
+        assert!(export_backups(&root, "notes", &[], out.path(), &test_job_id()).is_err());
+        assert_eq!(crate::host_fs::read_dir(out.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn progress_counts_the_bytes_of_the_backups() {
+        let (_tmp, root, first, second) = vault_with_two_backups();
+        let out = tempfile::tempdir().unwrap();
+        let stamps = [first.clone(), second.clone()];
+        let id = test_job_id();
+        let job = Job::start(&id).unwrap();
+        write_backup_export(&root, "notes", &stamps, out.path(), &job).unwrap();
+        let expected: u64 = [first, second]
+            .iter()
+            .map(|name| {
+                let path = backup_zip_file(&root, "notes", name).unwrap();
+                crate::host_fs::metadata(path).unwrap().len()
+            })
+            .sum();
+        assert_eq!(
+            crate::session::job_status(&id),
+            Some(crate::session::JobStatus {
+                bytes_done: expected,
+                bytes_total: expected
+            })
+        );
+    }
+
+    #[test]
+    fn delete_and_rename_wait_until_the_export_ends() {
+        let (_tmp, root, name, _) = vault_with_two_backups();
+        let vault_dir = root.vault_dir("notes").unwrap();
+        let reading = BackupExportGuard::enter(&vault_dir).unwrap();
+        assert!(matches!(
+            crate::vault::delete_vault(&root, "notes"),
+            Err(UprivError::VaultConfigBusy { .. })
+        ));
+        assert!(matches!(
+            crate::vault::rename_vault(&root, "notes", "Journal"),
+            Err(UprivError::VaultConfigBusy { .. })
+        ));
+        assert!(backup_zip_file(&root, "notes", &name)
+            .unwrap()
+            .host_is_file());
+
+        // A second export reads beside the first; the last one out frees the vault.
+        let second = BackupExportGuard::enter(&vault_dir).unwrap();
+        drop(reading);
+        assert!(matches!(
+            crate::vault::delete_vault(&root, "notes"),
+            Err(UprivError::VaultConfigBusy { .. })
+        ));
+        drop(second);
+        crate::vault::delete_vault(&root, "notes").unwrap();
+        assert!(!vault_dir.host_exists());
+    }
+
+    #[test]
+    fn an_export_ends_its_hold_on_the_vault() {
+        let (_tmp, root, name, _) = vault_with_two_backups();
+        let out = tempfile::tempdir().unwrap();
+        export_backups(&root, "notes", &[name], out.path(), &test_job_id()).unwrap();
+        crate::vault::delete_vault(&root, "notes").unwrap();
+    }
+
+    #[test]
+    fn an_export_into_a_upriv_is_refused_and_an_open_vault_exports() {
+        use crate::vault::{close_vault, open_vault};
+
+        let (_tmp, root, name, _) = vault_with_two_backups();
+        let inside = root.root().join(".upriv/app");
+        crate::host_fs::create_dir_all(&inside).unwrap();
+        assert!(matches!(
+            export_backups(
+                &root,
+                "notes",
+                std::slice::from_ref(&name),
+                &inside,
+                &test_job_id()
+            ),
+            Err(UprivError::ExportDestinationReserved(_))
+        ));
+
+        open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        let out = tempfile::tempdir().unwrap();
+        export_backups(&root, "notes", &[name], out.path(), &test_job_id()).unwrap();
+        close_vault(&root, "notes").unwrap();
     }
 }

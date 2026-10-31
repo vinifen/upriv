@@ -2,6 +2,7 @@ import {
   createLiveVaultService,
   isContentUri,
   LOADING_BUDGET_MS,
+  newJobId,
   RpcError,
   type CreateVaultInput,
 } from "@upriv/shared";
@@ -22,6 +23,7 @@ import {
   rpcVaultIngestDirectory,
   rpcVaultIngestOpen,
   rpcVaultList,
+  rpcVaultPlainExportSweep,
   rpcVaultRename,
   rpcVaultClose,
 } from "@/lib/rpc";
@@ -107,6 +109,18 @@ export const nativeVaultService = createLiveVaultService({
   },
   async exportCapabilities() {
     return rpcVaultExportCapabilities();
+  },
+  // Rust reaches a picked folder only while it is mounted, so each one that
+  // holds a leftover is mounted for a second sweep. Its access stays after a
+  // kill, because nothing ran to release it. A folder that no longer answers
+  // keeps its record for the next launch.
+  async sweepPlainExports() {
+    const { folders } = await rpcVaultPlainExportSweep();
+    for (const folder of folders) {
+      await nativeSafExportMount
+        .withExportFolder(folder, newJobId(), 0, () => rpcVaultPlainExportSweep())
+        .catch(() => undefined);
+    }
   },
   importZip: (input) =>
     finishImport(input.importPackage?.archivePath ?? "", () => rpcVaultImportZip(input)),

@@ -1,11 +1,19 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
+import {
+  memo,
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MutableRefObject,
+} from "react";
 import {
   AccessibilityInfo,
   Animated,
   Clipboard,
   Easing,
   FlatList,
-  PanResponder,
   Pressable,
   StyleSheet,
   Text,
@@ -13,26 +21,31 @@ import {
   View,
   type GestureResponderEvent,
   type ListRenderItem,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
   type ViewStyle,
 } from "react-native";
 import {
   findNode,
   getParentPath,
   isDescendantPath,
-  isPathDirty,
-  joinPath,
+  isImportQueueSlotPath,
+  isImportWalkPlaceholderPath,
   liveFileNameError,
   fileNameErrorI18nKey,
   LOGICAL_FILE_NAME_MAX_LENGTH,
   renameBasenameSelection,
+  searchTreeRows,
   sessionPathKind,
   FILE_MANAGER_LONG_PRESS_MS,
   FILE_MANAGER_LONG_PRESS_MOVE_PX,
-  FILE_MANAGER_DROP_EXPAND_MS,
   pointInHitRect,
   smallestContainingKey,
-  type FileTreeNode,
+  visibleTreeRows,
+  type FolderPresence,
+  type VisibleTreeRow,
 } from "@upriv/shared";
+import { useSearchCollapsedFolders } from "@upriv/shared/react";
 import { Icon } from "@/components/icons";
 import { noteIdleActivity } from "@/lib/idleActivity";
 import {
@@ -54,6 +67,7 @@ import {
   FolderPickerUnavailableError,
   type MobileImportPick,
 } from "../lib/osFileImport";
+import { ExplorerSearch, ExplorerSearchToggle } from "./ExplorerSearch";
 
 interface FileTreePanelProps {
   fm: FileManagerApi;
@@ -95,31 +109,31 @@ export function ExplorerToggle({ fm, showLabel }: { fm: FileManagerApi; showLabe
   );
 }
 
-interface FlatEntry {
-  path: string;
-  node: FileTreeNode;
-  depth: number;
+/**
+ * What every row may do. One object for the explorer's life, so a row draws
+ * again only when its own marks change, not when the file manager does.
+ */
+interface FileTreeRowActions {
+  activate: (path: string, isFolder: boolean) => void;
+  commitRename: (path: string, name: string) => void;
+  cancelRename: () => void;
+  startRename: (path: string) => void;
+  createFile: (parentPath: string) => void;
+  createFolder: (parentPath: string) => void;
+  openInSystemFileManager: (path: string) => void;
+  sendToFolder: (path: string) => void;
+  removeFromFolder: (path: string) => void;
+  requestDelete: (path: string) => void;
+  showToast: (message: string) => void;
+  /** A drag is running, so a touch on a row is not a tap. */
+  isDragging: () => boolean;
 }
 
 const DEPTH_INDENT = 10;
 const TWISTIE = 14;
 const ROOT_DROP_KEY = "/";
 
-function walkExpanded(
-  node: FileTreeNode,
-  path: string,
-  depth: number,
-  expandedPaths: readonly string[],
-  out: FlatEntry[],
-): void {
-  for (const child of node.children ?? []) {
-    const childPath = joinPath(path, child.name);
-    out.push({ path: childPath, node: child, depth });
-    if (child.type === "folder" && expandedPaths.includes(childPath)) {
-      walkExpanded(child, childPath, depth + 1, expandedPaths, out);
-    }
-  }
-}
+const treeRowKey = (row: VisibleTreeRow) => row.path;
 
 function createTargetPath(fm: FileManagerApi): string {
   const selected = fm.workspace.selectedPath;
@@ -135,29 +149,110 @@ function dropFolderForRow(path: string, folderPaths: Set<string>): string {
 
 /** Explorer toggle icon and each toolbar action are this square. */
 const TOOL_BUTTON_SIZE = 24;
-/** Toolbar content that fits the label icon and all four actions on one row. */
-const TOOLBAR_ONE_ROW_MIN_WIDTH = TOOL_BUTTON_SIZE * 5;
+/** Toolbar content that fits the label icon and all five actions on one row. */
+const TOOLBAR_ONE_ROW_MIN_WIDTH = TOOL_BUTTON_SIZE * 6;
 const TOOLBAR_PADDING_X = 4;
 
 export function FileTreePanel({ fm }: FileTreePanelProps) {
   const { t } = useTranslation();
   const { colors } = useTheme();
-  const { workspace, dispatch, commitRename, movePath } = fm;
+  const { workspace, movePath } = fm;
   // Below the one-row width the actions get their own rows and spread across them.
   const [toolbarWrapped, setToolbarWrapped] = useState(false);
+  const fmRef = useRef(fm);
+  fmRef.current = fm;
+  const dragSourceRef = useRef<string | null>(null);
+  /** Held here, not in the workspace: a drop target change draws the explorer, not the editor. */
+  const [drag, setDrag] = useState<{ source: string | null; target: string | null }>({
+    source: null,
+    target: null,
+  });
+  const toggleFolderRef = useRef<(path: string) => void>(() => undefined);
+  const [rowActions] = useState<FileTreeRowActions>(() => ({
+    activate: (path, isFolder) => {
+      if (isImportWalkPlaceholderPath(path) || isImportQueueSlotPath(path)) return;
+      if (isFolder) {
+        toggleFolderRef.current(path);
+        return;
+      }
+      fmRef.current.openFile(path);
+    },
+    commitRename: (path, name) => fmRef.current.commitRename(path, name),
+    cancelRename: () => fmRef.current.dispatch({ type: "cancel_rename" }),
+    startRename: (path) => fmRef.current.dispatch({ type: "start_rename", path }),
+    createFile: (parentPath) => fmRef.current.createFile(parentPath),
+    createFolder: (parentPath) => fmRef.current.createFolder(parentPath),
+    openInSystemFileManager: (path) => {
+      void fmRef.current.openInSystemFileManager(path);
+    },
+    sendToFolder: (path) => {
+      void fmRef.current.sendToFolder(path);
+    },
+    removeFromFolder: (path) => {
+      void fmRef.current.removeFromFolder(path);
+    },
+    requestDelete: (path) => fmRef.current.requestDelete(path),
+    showToast: (message) => fmRef.current.showToast(message),
+    isDragging: () => dragSourceRef.current !== null,
+  }));
 
-  const entries = useMemo(() => {
-    const out: FlatEntry[] = [];
-    if (fm.displayTree.type === "folder") {
-      walkExpanded(fm.displayTree, "/", 0, workspace.expandedPaths, out);
-    }
-    return out;
-  }, [fm.displayTree, workspace.expandedPaths]);
+  const { explorerSearchOpen: searchOpen, explorerSearchQuery: search } = workspace;
+  // A large vault filters behind the typing, not in its way.
+  const deferredSearch = useDeferredValue(search);
+  const searching = deferredSearch.trim().length > 0;
+  // Folders collapse for this search only; the saved ones stay as they are.
+  const { collapsed: searchCollapsed, toggle: toggleSearchFolder } = useSearchCollapsedFolders(
+    fm.vaultId,
+    deferredSearch,
+  );
+  toggleFolderRef.current = (path) => {
+    if (searching) toggleSearchFolder(path);
+    else fm.dispatch({ type: "toggle_folder", path });
+  };
+  const searchInputRef = useRef<TextInput>(null);
+  /** The button opened the bar, so typing starts there. A restored bar leaves the keyboard down. */
+  const focusSearchRef = useRef(false);
+  useEffect(() => {
+    if (searchOpen && focusSearchRef.current) searchInputRef.current?.focus();
+    focusSearchRef.current = false;
+  }, [searchOpen]);
 
-  const listRef = useRef<FlatList<FlatEntry>>(null);
+  const entries = useMemo(
+    () =>
+      searching
+        ? searchTreeRows(fm.displayTree, deferredSearch, {
+            renamingPath: workspace.renamingPath,
+            collapsed: searchCollapsed,
+          })
+        : visibleTreeRows(fm.displayTree, workspace.expandedPaths),
+    [
+      deferredSearch,
+      fm.displayTree,
+      searchCollapsed,
+      searching,
+      workspace.expandedPaths,
+      workspace.renamingPath,
+    ],
+  );
+
+  const listRef = useRef<FlatList<VisibleTreeRow>>(null);
   /** Content offset and drag state while a finger is down, so a scroll is not a tap. */
   const listOffsetRef = useRef(0);
   const listScrollingRef = useRef(false);
+  const onListScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    listOffsetRef.current = event.nativeEvent.contentOffset.y;
+  }, []);
+  const onListScrollStart = useCallback(() => {
+    listScrollingRef.current = true;
+  }, []);
+  const onListScrollEnd = useCallback(() => {
+    listScrollingRef.current = false;
+  }, []);
+  const onScrollToIndexFailed = useCallback(
+    ({ index, averageItemLength }: { index: number; averageItemLength: number }) =>
+      listRef.current?.scrollToOffset({ offset: index * averageItemLength }),
+    [],
+  );
   const entriesRef = useRef(entries);
   entriesRef.current = entries;
 
@@ -171,19 +266,21 @@ export function FileTreePanel({ fm }: FileTreePanelProps) {
 
   const dropViewsRef = useRef(new Map<string, View>());
   const dropRectsRef = useRef(new Map<string, PageRect>());
-  const dragSourceRef = useRef<string | null>(null);
   const dropTargetRef = useRef<string | null>(null);
+  const dragMovedRef = useRef(false);
   const folderPathsRef = useRef<Set<string>>(new Set());
-  const expandedPathsRef = useRef(workspace.expandedPaths);
-  const dwellTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const dwellFolderRef = useRef<string | null>(null);
-  expandedPathsRef.current = workspace.expandedPaths;
 
-  folderPathsRef.current = new Set(
-    entries.filter((e) => e.node.type === "folder").map((e) => e.path),
+  const folderPaths = useMemo(
+    () => new Set(entries.filter((e) => e.node.type === "folder").map((e) => e.path)),
+    [entries],
   );
+  folderPathsRef.current = folderPaths;
 
+  // Android detaches rows scrolled out of the list, and a detached row does not
+  // answer `measure`. Its last rect would sit over a row now in that spot, so
+  // each refresh starts empty and only rows on screen count.
   const refreshDropRects = useCallback(() => {
+    dropRectsRef.current.clear();
     dropViewsRef.current.forEach((view, key) => {
       measurePageRect(view, (rect) => {
         dropRectsRef.current.set(key, rect);
@@ -212,42 +309,9 @@ export function FileTreePanel({ fm }: FileTreePanelProps) {
   }, []);
 
   useEffect(() => {
-    if (!workspace.dragSourcePath) return;
+    if (!drag.source) return;
     refreshDropRects();
-  }, [workspace.dragSourcePath, entries, refreshDropRects]);
-
-  const clearExpandDwell = useCallback(() => {
-    if (dwellTimerRef.current) {
-      clearTimeout(dwellTimerRef.current);
-      dwellTimerRef.current = null;
-    }
-    dwellFolderRef.current = null;
-  }, []);
-
-  const scheduleExpandDwell = useCallback(
-    (folder: string | null) => {
-      const canExpand = Boolean(
-        folder && folder !== ROOT_DROP_KEY && !expandedPathsRef.current.includes(folder),
-      );
-      const next = canExpand ? folder : null;
-      if (dwellFolderRef.current === next) return;
-      if (dwellTimerRef.current) {
-        clearTimeout(dwellTimerRef.current);
-        dwellTimerRef.current = null;
-      }
-      dwellFolderRef.current = next;
-      if (!next) return;
-      dwellTimerRef.current = setTimeout(() => {
-        dwellTimerRef.current = null;
-        if (dropTargetRef.current === next && dragSourceRef.current) {
-          dispatch({ type: "expand_folder", path: next, force: true });
-        }
-      }, FILE_MANAGER_DROP_EXPAND_MS);
-    },
-    [dispatch],
-  );
-
-  useEffect(() => () => clearExpandDwell(), [clearExpandDwell]);
+  }, [drag.source, entries, refreshDropRects]);
 
   const hitDropFolder = useCallback((pageX: number, pageY: number): string | null => {
     const source = dragSourceRef.current;
@@ -273,42 +337,49 @@ export function FileTreePanel({ fm }: FileTreePanelProps) {
   }, []);
 
   const clearDrag = useCallback(() => {
-    clearExpandDwell();
     dragSourceRef.current = null;
     dropTargetRef.current = null;
-    dispatch({ type: "set_drag", source: null, target: null });
-  }, [clearExpandDwell, dispatch]);
+    dragMovedRef.current = false;
+    setDrag({ source: null, target: null });
+  }, []);
 
   const onDragStart = useCallback(
-    (path: string, _pageX: number, _pageY: number) => {
+    (path: string) => {
       dragSourceRef.current = path;
       dropTargetRef.current = null;
-      dispatch({ type: "set_drag", source: path, target: null });
+      dragMovedRef.current = false;
+      setDrag({ source: path, target: null });
       refreshDropRects();
     },
-    [dispatch, refreshDropRects],
+    [refreshDropRects],
   );
 
   const onDragMove = useCallback(
-    (pageX: number, pageY: number) => {
+    (event: GestureResponderEvent) => {
       const source = dragSourceRef.current;
       if (!source) return;
-      const target = hitDropFolder(pageX, pageY);
+      dragMovedRef.current = true;
+      const target = hitDropFolder(event.nativeEvent.pageX, event.nativeEvent.pageY);
       if (dropTargetRef.current !== target) {
         dropTargetRef.current = target;
-        dispatch({ type: "set_drag", source, target });
+        setDrag({ source, target });
       }
-      scheduleExpandDwell(target);
     },
-    [dispatch, hitDropFolder, scheduleExpandDwell],
+    [hitDropFolder],
   );
 
-  const onDragEnd = useCallback(
-    (pageX: number, pageY: number) => {
+  /**
+   * The finger left the screen. Release and touch end both land here, whichever
+   * comes first ends the drag. A long press that never moved is not a drop.
+   */
+  const onDragLift = useCallback(
+    (event: GestureResponderEvent) => {
       const source = dragSourceRef.current;
-      const target = dropTargetRef.current ?? hitDropFolder(pageX, pageY);
-      if (source && target && !isDescendantPath(source, target)) {
-        if (!(target === ROOT_DROP_KEY && getParentPath(source) === "/")) {
+      if (!source) return;
+      if (dragMovedRef.current) {
+        const { pageX, pageY } = event.nativeEvent;
+        const target = dropTargetRef.current ?? hitDropFolder(pageX, pageY);
+        if (target && !isDescendantPath(source, target) && getParentPath(source) !== target) {
           movePath(source, target);
         }
       }
@@ -316,6 +387,14 @@ export function FileTreePanel({ fm }: FileTreePanelProps) {
     },
     [clearDrag, hitDropFolder, movePath],
   );
+
+  /** A new touch during a drag means the last one's end never arrived. */
+  const dropUnfinishedDrag = useCallback(() => {
+    if (dragSourceRef.current) clearDrag();
+    return false;
+  }, [clearDrag]);
+
+  const captureDragMove = useCallback(() => dragSourceRef.current !== null, []);
 
   const runImport = async (pick: () => Promise<MobileImportPick | null>) => {
     try {
@@ -341,36 +420,8 @@ export function FileTreePanel({ fm }: FileTreePanelProps) {
     }
   };
 
-  const isDragging = Boolean(workspace.dragSourcePath);
-  const treeListExtraData = useMemo(
-    () => ({
-      dragSourcePath: workspace.dragSourcePath,
-      dropTargetPath: workspace.dropTargetPath,
-      selectedPath: workspace.selectedPath,
-      activeTabPath: workspace.activeTabPath,
-      renamingPath: workspace.renamingPath,
-      expandedPaths: workspace.expandedPaths,
-      dirtyPaths: workspace.dirtyPaths,
-      sessionCreatedPaths: workspace.sessionCreatedPaths,
-      sessionModifiedPaths: workspace.sessionModifiedPaths,
-      importBusy: fm.importBusy,
-      displayTree: fm.displayTree,
-    }),
-    [
-      workspace.dragSourcePath,
-      workspace.dropTargetPath,
-      workspace.selectedPath,
-      workspace.activeTabPath,
-      workspace.renamingPath,
-      workspace.expandedPaths,
-      workspace.dirtyPaths,
-      workspace.sessionCreatedPaths,
-      workspace.sessionModifiedPaths,
-      fm.importBusy,
-      fm.displayTree,
-    ],
-  );
-  const rootDropActive = workspace.dropTargetPath === ROOT_DROP_KEY;
+  const isDragging = drag.source !== null;
+  const rootDropActive = drag.target === ROOT_DROP_KEY;
   const setRootDropRef = useCallback(
     (node: View | null) => {
       registerDropTarget(ROOT_DROP_KEY, node);
@@ -380,10 +431,8 @@ export function FileTreePanel({ fm }: FileTreePanelProps) {
   const onRootDropLayout = useCallback(() => {
     remeasureDropTarget(ROOT_DROP_KEY);
   }, [remeasureDropTarget]);
-  const dropTargetPath =
-    workspace.dropTargetPath && workspace.dropTargetPath !== ROOT_DROP_KEY
-      ? workspace.dropTargetPath
-      : null;
+  const dropTargetPath = drag.target && drag.target !== ROOT_DROP_KEY ? drag.target : null;
+  const dragSourcePath = drag.source;
   const dropZoneEndPath = useMemo(() => {
     if (!dropTargetPath) return null;
     let last: string | null = null;
@@ -395,64 +444,89 @@ export function FileTreePanel({ fm }: FileTreePanelProps) {
     return last;
   }, [dropTargetPath, entries]);
 
-  const renderItem: ListRenderItem<FlatEntry> = ({ item }) => {
-    const isFolder = item.node.type === "folder";
-    const isExpanded = isFolder && workspace.expandedPaths.includes(item.path);
-    const isSelected = workspace.activeTabPath === item.path;
-    const isDirty = !isFolder && isPathDirty(workspace, item.path);
-    const pathKind = sessionPathKind(workspace, item.path);
-    const isRenaming = workspace.renamingPath === item.path;
-    const isRowDragging = workspace.dragSourcePath === item.path;
-    const inDropZone = Boolean(
-      dropTargetPath &&
-      (item.path === dropTargetPath || isDescendantPath(dropTargetPath, item.path)),
-    );
+  const expanded = useMemo(() => new Set(workspace.expandedPaths), [workspace.expandedPaths]);
+  const dirty = useMemo(() => new Set(workspace.dirtyPaths), [workspace.dirtyPaths]);
+  const { activeTabPath, renamingPath, sessionCreatedPaths, sessionModifiedPaths, dirtyPaths } =
+    workspace;
+  const { folderPresence, pendingImportPaths, processingImportPaths, osFolderAvailable } = fm;
 
-    return (
-      <FileTreeRow
-        path={item.path}
-        name={item.node.name}
-        isFolder={isFolder}
-        isExpanded={isExpanded}
-        isSelected={isSelected}
-        isDirty={isDirty}
-        pathKind={pathKind}
-        isRenaming={isRenaming}
-        isDragging={isRowDragging}
-        inDropZone={inDropZone}
-        dropZoneStart={inDropZone && item.path === dropTargetPath}
-        dropZoneEnd={inDropZone && item.path === dropZoneEndPath}
-        depth={item.depth}
-        fm={fm}
-        dragActive={isDragging}
-        registerDropTarget={registerDropTarget}
-        remeasureDropTarget={remeasureDropTarget}
-        onDragStart={onDragStart}
-        onDragMove={onDragMove}
-        onDragEnd={onDragEnd}
-        onDragCancel={clearDrag}
-        listOffsetRef={listOffsetRef}
-        listScrollingRef={listScrollingRef}
-        onActivate={() => {
-          if (isRenaming || isDragging) return;
-          if (fm.isImportWalkPlaceholder(item.path) || fm.isImportQueueSlot(item.path)) return;
-          if (isFolder) {
-            dispatch({ type: "toggle_folder", path: item.path });
-            return;
+  // Stable while nothing a row shows changed, so typing does not draw the list.
+  const renderItem = useCallback<ListRenderItem<VisibleTreeRow>>(
+    ({ item }) => {
+      const isFolder = item.node.type === "folder";
+      const inDropZone = Boolean(
+        dropTargetPath &&
+        (item.path === dropTargetPath || isDescendantPath(dropTargetPath, item.path)),
+      );
+      const isWalkPlaceholder = isImportWalkPlaceholderPath(item.path);
+      const isQueueSlot = isImportQueueSlotPath(item.path);
+
+      return (
+        <FileTreeRow
+          path={item.path}
+          name={item.node.name}
+          isFolder={isFolder}
+          isExpanded={
+            isFolder && (searching ? !searchCollapsed.has(item.path) : expanded.has(item.path))
           }
-          fm.openFile(item.path);
-        }}
-        onCommitRename={(name) => commitRename(item.path, name)}
-        onCancelRename={() => dispatch({ type: "cancel_rename" })}
-      />
-    );
-  };
+          isSelected={activeTabPath === item.path}
+          isDirty={!isFolder && dirty.has(item.path)}
+          pathKind={sessionPathKind(
+            { sessionCreatedPaths, sessionModifiedPaths, dirtyPaths },
+            item.path,
+          )}
+          isRenaming={renamingPath === item.path}
+          isDragging={dragSourcePath === item.path}
+          inDropZone={inDropZone}
+          dropZoneStart={inDropZone && item.path === dropTargetPath}
+          dropZoneEnd={inDropZone && item.path === dropZoneEndPath}
+          isPending={pendingImportPaths.has(item.path)}
+          isWalkPlaceholder={isWalkPlaceholder}
+          isQueueSlot={isQueueSlot}
+          isProcessing={processingImportPaths.has(item.path) || isWalkPlaceholder || isQueueSlot}
+          osFolderAvailable={osFolderAvailable}
+          folderMark={folderPresence?.get(item.path) ?? null}
+          depth={item.depth}
+          actions={rowActions}
+          registerDropTarget={registerDropTarget}
+          remeasureDropTarget={remeasureDropTarget}
+          onDragStart={onDragStart}
+          onDragCancel={clearDrag}
+          listOffsetRef={listOffsetRef}
+          listScrollingRef={listScrollingRef}
+        />
+      );
+    },
+    [
+      activeTabPath,
+      clearDrag,
+      dirty,
+      dirtyPaths,
+      dragSourcePath,
+      dropTargetPath,
+      dropZoneEndPath,
+      expanded,
+      folderPresence,
+      onDragStart,
+      osFolderAvailable,
+      pendingImportPaths,
+      processingImportPaths,
+      registerDropTarget,
+      remeasureDropTarget,
+      renamingPath,
+      rowActions,
+      searchCollapsed,
+      searching,
+      sessionCreatedPaths,
+      sessionModifiedPaths,
+    ],
+  );
 
   const paneStyle: ViewStyle = { flex: 1, minHeight: 0, minWidth: 0 };
 
   return (
     <View style={[styles.panel, paneStyle, { backgroundColor: colors.surfaceContainer }]}>
-      {/* Label truncates first; once only the icon is left, the actions wrap two by two (create, import). */}
+      {/* Label truncates first; once only the icon is left, the actions wrap by group (create, import, search). */}
       <View
         style={styles.toolbar}
         onLayout={(event) =>
@@ -503,12 +577,48 @@ export function FileTreePanel({ fm }: FileTreePanelProps) {
               style={styles.toolBtn}
             />
           </View>
+          <View style={[styles.toolbarPair, toolbarWrapped && styles.toolbarPairWrapped]}>
+            <ExplorerSearchToggle
+              open={searchOpen}
+              atWork={!searchOpen && search.trim().length > 0}
+              onToggle={() => {
+                focusSearchRef.current = !searchOpen;
+                fm.dispatch({ type: "set_explorer_search_open", open: !searchOpen });
+              }}
+            />
+          </View>
         </View>
       </View>
+      {searchOpen ? (
+        <ExplorerSearch
+          inputRef={searchInputRef}
+          query={search}
+          onQueryChange={(query) => fm.dispatch({ type: "set_explorer_search_query", query })}
+        />
+      ) : null}
+      {folderPresence?.get("/") === "none" ? (
+        <Text style={[styles.folderEmpty, { color: colors.onSurfaceVariant }]}>
+          {t("modal.file_manager.explorer.folder_empty")}
+        </Text>
+      ) : null}
+      {/*
+        A long press on a row starts the drag; from then on this view owns the
+        gesture, so a row drawing again or leaving the list cannot strand it.
+      */}
       <View
         ref={setRootDropRef}
         onLayout={onRootDropLayout}
         collapsable={false}
+        onStartShouldSetResponderCapture={dropUnfinishedDrag}
+        onMoveShouldSetResponderCapture={captureDragMove}
+        // `true` keeps the list's native scroll out of the gesture.
+        onResponderGrant={() => true}
+        onResponderMove={onDragMove}
+        onResponderRelease={onDragLift}
+        onResponderTerminationRequest={() => false}
+        onResponderTerminate={clearDrag}
+        onTouchEnd={onDragLift}
+        onTouchCancel={clearDrag}
         style={[styles.listShell, rootDropActive ? { borderColor: colors.accent } : null]}
       >
         {fm.treeStatus === "loading" ? (
@@ -524,30 +634,30 @@ export function FileTreePanel({ fm }: FileTreePanelProps) {
           <FlatList
             ref={listRef}
             data={entries}
-            onScrollToIndexFailed={({ index, averageItemLength }) =>
-              listRef.current?.scrollToOffset({ offset: index * averageItemLength })
-            }
-            extraData={treeListExtraData}
-            keyExtractor={(item) => item.path}
+            onScrollToIndexFailed={onScrollToIndexFailed}
+            extraData={renderItem}
+            keyExtractor={treeRowKey}
             renderItem={renderItem}
             scrollEnabled={!isDragging}
-            onScroll={(event) => {
-              listOffsetRef.current = event.nativeEvent.contentOffset.y;
-            }}
-            onScrollBeginDrag={() => {
-              listScrollingRef.current = true;
-            }}
-            onScrollEndDrag={() => {
-              listScrollingRef.current = false;
-            }}
-            onMomentumScrollEnd={() => {
-              listScrollingRef.current = false;
-            }}
+            onScroll={onListScroll}
+            onScrollBeginDrag={onListScrollStart}
+            onScrollEndDrag={onListScrollEnd}
+            onMomentumScrollEnd={onListScrollEnd}
             scrollEventThrottle={16}
             keyboardShouldPersistTaps="handled"
             keyboardDismissMode="none"
             style={styles.list}
             contentContainerStyle={styles.listContent}
+            ListEmptyComponent={
+              searching ? (
+                <Text
+                  accessibilityLiveRegion="polite"
+                  style={[styles.searchEmpty, { color: colors.onSurfaceVariant }]}
+                >
+                  {t("modal.file_manager.explorer.search_empty")}
+                </Text>
+              ) : null
+            }
           />
         )}
       </View>
@@ -628,23 +738,24 @@ interface FileTreeRowProps {
   inDropZone: boolean;
   dropZoneStart: boolean;
   dropZoneEnd: boolean;
+  isPending: boolean;
+  isWalkPlaceholder: boolean;
+  isQueueSlot: boolean;
+  isProcessing: boolean;
+  osFolderAvailable: boolean;
+  /** How much of this entry is in a chosen-files vault's folder. */
+  folderMark: FolderPresence | null;
   depth: number;
-  fm: FileManagerApi;
-  dragActive: boolean;
+  actions: FileTreeRowActions;
   registerDropTarget: (path: string, node: View | null) => void;
   remeasureDropTarget: (path: string) => void;
-  onDragStart: (path: string, pageX: number, pageY: number) => void;
-  onDragMove: (pageX: number, pageY: number) => void;
-  onDragEnd: (pageX: number, pageY: number) => void;
+  onDragStart: (path: string) => void;
   onDragCancel: () => void;
   listOffsetRef: MutableRefObject<number>;
   listScrollingRef: MutableRefObject<boolean>;
-  onActivate: () => void;
-  onCommitRename: (name: string) => void;
-  onCancelRename: () => void;
 }
 
-function FileTreeRow({
+const FileTreeRow = memo(function FileTreeRow({
   path,
   name,
   isFolder,
@@ -657,20 +768,20 @@ function FileTreeRow({
   inDropZone,
   dropZoneStart,
   dropZoneEnd,
+  isPending,
+  isWalkPlaceholder,
+  isQueueSlot,
+  isProcessing,
+  osFolderAvailable,
+  folderMark,
   depth,
-  fm,
-  dragActive,
+  actions,
   registerDropTarget,
   remeasureDropTarget,
   onDragStart,
-  onDragMove,
-  onDragEnd,
   onDragCancel,
   listOffsetRef,
   listScrollingRef,
-  onActivate,
-  onCommitRename,
-  onCancelRename,
 }: FileTreeRowProps) {
   const { t } = useTranslation();
   const { colors } = useTheme();
@@ -680,10 +791,12 @@ function FileTreeRow({
   >();
   const renameError = isRenaming ? liveFileNameError(renameValue) : null;
   const parentForCreate = isFolder ? path : getParentPath(path);
-  const isPending = fm.isImportPending(path);
-  const isWalkPlaceholder = fm.isImportWalkPlaceholder(path);
-  const isQueueSlot = fm.isImportQueueSlot(path);
-  const isProcessing = fm.isImportProcessing(path) || isWalkPlaceholder || isQueueSlot;
+  const onActivate = () => {
+    if (isRenaming || actions.isDragging()) return;
+    actions.activate(path, isFolder);
+  };
+  const onCommitRename = (nextName: string) => actions.commitRename(path, nextName);
+  const onCancelRename = actions.cancelRename;
 
   const setDropRef = useCallback(
     (node: View | null) => {
@@ -696,33 +809,14 @@ function FileTreeRow({
   }, [path, remeasureDropTarget]);
 
   const armedRef = useRef(false);
-  const panGrantedRef = useRef(false);
   const movedRef = useRef(false);
   const offsetAtTouchRef = useRef(0);
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const touchStartRef = useRef<{ x: number; y: number } | null>(null);
   const menuRef = useRef<DropdownPanelHandle>(null);
   const isDoubleTap = useDoubleTap();
-  const callbacksRef = useRef({
-    path,
-    isRenaming,
-    dragActive,
-    onActivate,
-    onDragStart,
-    onDragMove,
-    onDragEnd,
-    onDragCancel,
-  });
-  callbacksRef.current = {
-    path,
-    isRenaming,
-    dragActive,
-    onActivate,
-    onDragStart,
-    onDragMove,
-    onDragEnd,
-    onDragCancel,
-  };
+  const callbacksRef = useRef({ path, isRenaming, onActivate, onDragStart, onDragCancel });
+  callbacksRef.current = { path, isRenaming, onActivate, onDragStart, onDragCancel };
 
   const clearLongPressTimer = useCallback(() => {
     if (longPressTimerRef.current) {
@@ -734,8 +828,9 @@ function FileTreeRow({
   useEffect(() => {
     return () => {
       clearLongPressTimer();
+      // Its own touch end will not arrive, so that touch cannot finish a held press.
+      if (armedRef.current) callbacksRef.current.onDragCancel();
       armedRef.current = false;
-      panGrantedRef.current = false;
     };
   }, [clearLongPressTimer]);
 
@@ -745,63 +840,22 @@ function FileTreeRow({
       setRenameSelection(renameBasenameSelection(name));
       clearLongPressTimer();
       armedRef.current = false;
-      panGrantedRef.current = false;
     } else {
       setRenameSelection(undefined);
     }
   }, [isRenaming, name, clearLongPressTimer]);
 
-  const pan = useMemo(
-    () =>
-      PanResponder.create({
-        onStartShouldSetPanResponder: () => false,
-        onMoveShouldSetPanResponder: () => armedRef.current,
-        onMoveShouldSetPanResponderCapture: () => armedRef.current,
-        onPanResponderTerminationRequest: () => !armedRef.current,
-        onShouldBlockNativeResponder: () => armedRef.current,
-        onPanResponderGrant: (event) => {
-          panGrantedRef.current = true;
-          const { path: p, onDragStart: start } = callbacksRef.current;
-          start(p, event.nativeEvent.pageX, event.nativeEvent.pageY);
-        },
-        onPanResponderMove: (event) => {
-          callbacksRef.current.onDragMove(event.nativeEvent.pageX, event.nativeEvent.pageY);
-        },
-        onPanResponderRelease: (event) => {
-          armedRef.current = false;
-          panGrantedRef.current = false;
-          clearLongPressTimer();
-          callbacksRef.current.onDragEnd(event.nativeEvent.pageX, event.nativeEvent.pageY);
-        },
-        onPanResponderTerminate: () => {
-          armedRef.current = false;
-          panGrantedRef.current = false;
-          clearLongPressTimer();
-          callbacksRef.current.onDragCancel();
-        },
-      }),
-    [clearLongPressTimer],
-  );
-
   const onTouchStart = (event: GestureResponderEvent) => {
-    if (
-      callbacksRef.current.isRenaming ||
-      callbacksRef.current.dragActive ||
-      isPending ||
-      isQueueSlot
-    )
-      return;
+    if (callbacksRef.current.isRenaming || actions.isDragging() || isPending || isQueueSlot) return;
     const { pageX, pageY } = event.nativeEvent;
     touchStartRef.current = { x: pageX, y: pageY };
     offsetAtTouchRef.current = listOffsetRef.current;
     armedRef.current = false;
-    panGrantedRef.current = false;
     movedRef.current = false;
     clearLongPressTimer();
     longPressTimerRef.current = setTimeout(() => {
       armedRef.current = true;
-      const { path: p, onDragStart: start } = callbacksRef.current;
-      start(p, pageX, pageY);
+      callbacksRef.current.onDragStart(callbacksRef.current.path);
     }, FILE_MANAGER_LONG_PRESS_MS);
   };
 
@@ -821,7 +875,6 @@ function FileTreeRow({
 
   const finishTouch = (cancelled: boolean, pageX: number | null, pageY: number | null) => {
     const wasArmed = armedRef.current;
-    const panHadGrant = panGrantedRef.current;
     const start = touchStartRef.current;
     let wasMoved = movedRef.current;
     if (
@@ -839,26 +892,18 @@ function FileTreeRow({
     clearLongPressTimer();
     touchStartRef.current = null;
     movedRef.current = false;
-
-    if (panHadGrant) {
-      // Release/terminate already finished the drag.
-      return;
-    }
-
-    if (wasArmed) {
-      armedRef.current = false;
-      callbacksRef.current.onDragCancel();
-      return;
-    }
-
     armedRef.current = false;
+
+    // The press became a drag, and the explorer ends that.
+    if (wasArmed) return;
+
     // A scroll steals the touch. That cancel is not a tap, so the file stays closed.
     if (
       cancelled ||
       wasMoved ||
       listScrollingRef.current ||
       callbacksRef.current.isRenaming ||
-      callbacksRef.current.dragActive
+      actions.isDragging()
     ) {
       return;
     }
@@ -872,9 +917,9 @@ function FileTreeRow({
   const copyPath = () => {
     try {
       Clipboard.setString(path);
-      fm.showToast(t("modal.file_manager.toast.copied"));
+      actions.showToast(t("modal.file_manager.toast.copied"));
     } catch {
-      fm.showToast(t("modal.file_manager.toast.copy_failed"));
+      actions.showToast(t("modal.file_manager.toast.copy_failed"));
     }
   };
 
@@ -914,7 +959,6 @@ function FileTreeRow({
         />
       ) : null}
       <View
-        {...pan.panHandlers}
         onTouchStart={onTouchStart}
         onTouchMove={onTouchMove}
         onTouchEnd={(event) => finishTouch(false, event.nativeEvent.pageX, event.nativeEvent.pageY)}
@@ -1010,10 +1054,23 @@ function FileTreeRow({
               </Text>
             )}
             {isDirty ? <View style={styles.dirtyDot} /> : null}
+            {folderMark === "all" || folderMark === "some" ? (
+              <View
+                accessibilityRole="image"
+                accessibilityLabel={t(
+                  folderMark === "some"
+                    ? "modal.file_manager.explorer.partly_in_folder"
+                    : "modal.file_manager.explorer.in_folder",
+                )}
+                style={folderMark === "some" ? styles.folderMarkPartial : null}
+              >
+                <Icon name="plaintext" size={11} color={colors.onSurfaceVariant} />
+              </View>
+            ) : null}
           </View>
         )}
       </View>
-      {!isRenaming && !dragActive && !isPending && !isQueueSlot ? (
+      {!isRenaming && !isPending && !isQueueSlot ? (
         // No “open in terminal” on mobile — desktop-only (SDD §9.5).
         <DropdownPanel
           ref={menuRef}
@@ -1037,45 +1094,57 @@ function FileTreeRow({
               <MenuActionItem
                 icon="file"
                 label={t("modal.file_manager.context.new_file")}
-                onPress={() => fm.createFile(parentForCreate)}
+                onPress={() => actions.createFile(parentForCreate)}
               />
               <MenuActionItem
                 icon="folder"
                 label={t("modal.file_manager.context.new_folder")}
-                onPress={() => fm.createFolder(parentForCreate)}
+                onPress={() => actions.createFolder(parentForCreate)}
               />
             </>
           ) : null}
           <MenuActionItem
             icon="pencil"
             label={t("modal.file_manager.context.rename")}
-            onPress={() => fm.dispatch({ type: "start_rename", path })}
+            onPress={() => actions.startRename(path)}
           />
           <MenuActionItem
             icon="copy"
             label={t("modal.file_manager.context.copy_path")}
             onPress={copyPath}
           />
-          {fm.osFolderAvailable ? (
+          {folderMark === "none" || folderMark === "some" ? (
+            <MenuActionItem
+              icon="arrow-up"
+              label={t("modal.file_manager.context.send_to_folder")}
+              onPress={() => actions.sendToFolder(path)}
+            />
+          ) : null}
+          {folderMark === "all" || folderMark === "some" ? (
+            <MenuActionItem
+              icon="arrow-down"
+              label={t("modal.file_manager.context.remove_from_folder")}
+              onPress={() => actions.removeFromFolder(path)}
+            />
+          ) : null}
+          {osFolderAvailable && folderMark !== "none" ? (
             <MenuActionItem
               icon="file-manager"
               label={t("modal.file_manager.context.open_system")}
-              onPress={() => {
-                void fm.openInSystemFileManager(path);
-              }}
+              onPress={() => actions.openInSystemFileManager(path)}
             />
           ) : null}
           <MenuActionItem
             icon="trash"
             label={t("modal.file_manager.context.delete")}
             danger
-            onPress={() => fm.requestDelete(path)}
+            onPress={() => actions.requestDelete(path)}
           />
         </DropdownPanel>
       ) : null}
     </View>
   );
-}
+});
 
 const styles = StyleSheet.create({
   panel: { minHeight: 0, minWidth: 0, overflow: "hidden" },
@@ -1194,6 +1263,15 @@ const styles = StyleSheet.create({
     backgroundColor: "#ffffff",
     flexShrink: 0,
   },
+  folderMarkPartial: { opacity: 0.5 },
+  folderEmpty: {
+    flexShrink: 0,
+    paddingHorizontal: 8,
+    paddingBottom: 4,
+    fontSize: 11,
+    lineHeight: 14,
+  },
+  searchEmpty: { paddingHorizontal: 12, paddingVertical: 8, fontSize: 12, lineHeight: 16 },
   rowMoreBtn: { width: 24, height: 24, minWidth: 24, minHeight: 24, padding: 0, flexShrink: 0 },
   renameInput: {
     minWidth: 0,

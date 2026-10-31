@@ -9,9 +9,20 @@ import {
 import {
   createVaultImportNeedsArchivePassword,
   createVaultImportPackage,
+  createVaultSettingsLocked,
   importExtractApplies,
+  importKeepSettingsApplies,
+  importKeepWorkspaceApplies,
+  importUsesCarriedSettings,
 } from "../importKind";
+import type { CreateVaultDraft, CreateVaultStepId } from "../types";
+import {
+  canSubmitCreateVault,
+  getCreateVaultStepStatus,
+  validateCreateVaultStep,
+} from "../validate";
 import { importZipClassificationFromProbe } from "../zipClassification";
+import { createVaultDraftFixture, vaultSettingsFixture } from "./fixtures";
 
 describe("createDraftFromBackup", () => {
   it("seeds import source with a backup-named display name", () => {
@@ -172,6 +183,7 @@ describe("createVaultImportPackage", () => {
       kind: "seven_zip",
       archivePath: "/tmp/notes.7z",
       archivePassword: "secret",
+      keepWorkspace: false,
     });
     expect(
       createVaultImportPackage(
@@ -204,6 +216,7 @@ describe("createVaultImportPackage", () => {
       kind: "files_zip",
       archivePath: "/tmp/Photos.zip",
       archivePassword: undefined,
+      keepWorkspace: false,
     });
     expect(
       createVaultImportNeedsArchivePassword({
@@ -305,18 +318,154 @@ describe("createVaultImportPackage", () => {
 });
 
 describe("importZipClassificationFromProbe", () => {
+  const probed = (ok: boolean, kind: string) => ({
+    ok,
+    kind,
+    embedded: null,
+    carriesWorkspace: false,
+  });
+
   it("treats a files zip as documents and a store zip as a copy", () => {
+    expect(importZipClassificationFromProbe(probed(true, "files_zip"))).toEqual({
+      embedded: null,
+      zipLayout: "files",
+      carriesWorkspace: false,
+    });
+    expect(importZipClassificationFromProbe(probed(true, "store_zip"))).toEqual({
+      embedded: null,
+      zipLayout: "store",
+      carriesWorkspace: false,
+    });
+    expect(importZipClassificationFromProbe(probed(false, "store_zip"))).toEqual({
+      embedded: null,
+      zipLayout: "store",
+      carriesWorkspace: false,
+    });
+    expect(importZipClassificationFromProbe(probed(false, "files_zip"))).toBe(null);
+  });
+
+  it("keeps what a plain-text zip carries", () => {
+    const embedded = { settings: vaultSettingsFixture(), unlockPreset: null };
     expect(
-      importZipClassificationFromProbe({ ok: true, kind: "files_zip", embedded: null }),
-    ).toEqual({ embedded: null, zipLayout: "files" });
+      importZipClassificationFromProbe({
+        ok: true,
+        kind: "files_zip",
+        embedded,
+        carriesWorkspace: true,
+      }),
+    ).toEqual({ embedded, zipLayout: "files", carriesWorkspace: true });
+  });
+});
+
+describe("the .upriv-config switches", () => {
+  const sevenZip = createVaultDraftFixture([], {
+    source: "import",
+    importFileName: "Notes.7z",
+    importFilePath: "/tmp/Notes.7z",
+  });
+  const plainZip = createVaultDraftFixture([], {
+    source: "import",
+    importFileName: "Notes plain text.zip",
+    importFilePath: "/tmp/Notes plain text.zip",
+    zipLayout: "files",
+    importCarriesWorkspace: true,
+    importCarriesSettings: true,
+  });
+
+  it("shows both on a .7z, which cannot be read before its password", () => {
+    expect(importKeepWorkspaceApplies(sevenZip)).toBe(true);
+    expect(importKeepSettingsApplies(sevenZip)).toBe(true);
+    expect(importKeepWorkspaceApplies({ ...sevenZip, importExtract: false })).toBe(false);
+    expect(importKeepSettingsApplies({ ...sevenZip, importExtract: false })).toBe(false);
+  });
+
+  it("shows each one on a .zip only when the file carries it", () => {
+    expect(importKeepWorkspaceApplies(plainZip)).toBe(true);
+    expect(importKeepSettingsApplies(plainZip)).toBe(true);
+    const ordinary = { ...plainZip, importCarriesWorkspace: false, importCarriesSettings: false };
+    expect(importKeepWorkspaceApplies(ordinary)).toBe(false);
+    expect(importKeepSettingsApplies(ordinary)).toBe(false);
+  });
+
+  it("does not show on an encrypted vault zip", () => {
+    const store = { ...plainZip, zipLayout: "store" as const };
+    expect(importKeepWorkspaceApplies(store)).toBe(false);
+    expect(importKeepSettingsApplies(store)).toBe(false);
+  });
+
+  it("sends the layout choice with a .7z and a .zip of files only", () => {
+    expect(createVaultImportPackage(sevenZip, "secret")?.keepWorkspace).toBe(true);
+    expect(createVaultImportPackage(plainZip, "secret")?.keepWorkspace).toBe(true);
     expect(
-      importZipClassificationFromProbe({ ok: true, kind: "store_zip", embedded: null }),
-    ).toEqual({ embedded: null, zipLayout: "store" });
+      createVaultImportPackage({ ...plainZip, importKeepWorkspace: false }, "secret")
+        ?.keepWorkspace,
+    ).toBe(false);
     expect(
-      importZipClassificationFromProbe({ ok: false, kind: "store_zip", embedded: null }),
-    ).toEqual({ embedded: null, zipLayout: "store" });
-    expect(importZipClassificationFromProbe({ ok: false, kind: "files_zip", embedded: null })).toBe(
-      null,
-    );
+      createVaultImportPackage({ ...plainZip, zipLayout: "store" }, "secret")?.keepWorkspace,
+    ).toBeUndefined();
+  });
+
+  it("keeps a store copy on its settings with no switch to turn off", () => {
+    expect(importUsesCarriedSettings({ ...plainZip, zipLayout: "store" })).toBe(true);
+    expect(
+      importUsesCarriedSettings({
+        source: "import",
+        importKind: "backup",
+        importKeepSettings: false,
+      }),
+    ).toBe(true);
+    expect(importUsesCarriedSettings({ ...plainZip, importKeepSettings: false })).toBe(false);
+    expect(importUsesCarriedSettings({ ...plainZip, importExtract: false })).toBe(false);
+  });
+});
+
+describe("createVaultSettingsLocked", () => {
+  const sevenZip = createVaultDraftFixture([], {
+    source: "import",
+    importFileName: "Notes.7z",
+    importFilePath: "/tmp/Notes.7z",
+    displayName: "",
+  });
+
+  it("locks a .7z until its password test passes", () => {
+    expect(createVaultSettingsLocked(sevenZip)).toBe(true);
+    expect(createVaultSettingsLocked({ ...sevenZip, passwordValidated: true })).toBe(false);
+  });
+
+  it("does not lock when the file's settings are turned off, or it is stored whole", () => {
+    expect(createVaultSettingsLocked({ ...sevenZip, importKeepSettings: false })).toBe(false);
+    expect(createVaultSettingsLocked({ ...sevenZip, importExtract: false })).toBe(false);
+  });
+
+  it("does not lock any other import", () => {
+    expect(
+      createVaultSettingsLocked(
+        createVaultDraftFixture([], {
+          source: "import",
+          importFileName: "Notes.zip",
+          importFilePath: "/tmp/Notes.zip",
+          zipLayout: "files",
+        }),
+      ),
+    ).toBe(false);
+    expect(createVaultSettingsLocked(createVaultDraftFixture())).toBe(false);
+  });
+
+  it("lets the person walk past the locked name, then asks for it once it can be typed", () => {
+    expect(validateCreateVaultStep("identity", sevenZip, [])).toEqual([]);
+    expect(
+      validateCreateVaultStep("identity", { ...sevenZip, passwordValidated: true }, []),
+    ).toEqual(["empty"]);
+    expect(canSubmitCreateVault(sevenZip, [])).toBe(false);
+  });
+
+  it("shows the locked steps as waiting, not ready, until the test passes", () => {
+    const status = (step: CreateVaultStepId, draft: CreateVaultDraft) =>
+      getCreateVaultStepStatus(step, draft, [], new Set(), false);
+    expect(status("identity", sevenZip)).toBe("waiting");
+    expect(status("general", sevenZip)).toBe("waiting");
+    expect(status("advanced", sevenZip)).toBe("waiting");
+    expect(status("password", sevenZip)).toBe("incomplete");
+    expect(status("general", { ...sevenZip, passwordValidated: true })).toBe("ready");
   });
 });

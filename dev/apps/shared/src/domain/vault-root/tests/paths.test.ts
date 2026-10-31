@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { vaultRootContentorPath, vaultRootLogsDisplayPath, vaultStoreDisplayPaths } from "../paths";
+import {
+  SAF_VAULT_ROOT,
+  vaultRootContentorPath,
+  vaultRootLogsDisplayPath,
+  vaultRootUprivOpenPath,
+  vaultStoreDisplayPaths,
+} from "../paths";
 
 describe("vaultRootContentorPath", () => {
   it("uses found rootPath (vault-root, not .upriv)", () => {
@@ -40,6 +46,23 @@ describe("vaultStoreDisplayPaths", () => {
       storePath: `${uri} · .upriv/vaults/notes/store`,
       backupsPath: `${uri} · .upriv/vaults/notes/backups`,
     });
+  });
+});
+
+describe("vaultRootUprivOpenPath", () => {
+  it("opens a POSIX data folder at the path itself", () => {
+    expect(vaultRootUprivOpenPath("/data/", "vaults/notes/store")).toBe(
+      "/data/.upriv/vaults/notes/store",
+    );
+  });
+
+  it("opens a storage-access tree through the logical data folder path", () => {
+    const uri = "content://com.android.externalstorage.documents/tree/primary%3ADocuments";
+    expect(vaultRootUprivOpenPath(uri, "logs")).toBe(`${SAF_VAULT_ROOT}/.upriv/logs`);
+  });
+
+  it("has nothing to open before a data folder exists", () => {
+    expect(vaultRootUprivOpenPath("  ", "logs")).toBe("");
   });
 });
 

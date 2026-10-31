@@ -1,6 +1,6 @@
 # 🔐 Upriv
 
-**Encrypted vaults you control** — files stay ciphertext on disk (`store/`). Open in a session, lock when you’re done. Export a normal **`.zip` of that ciphertext** (recommended) or a portable **`.7z`**.
+**Encrypted vaults you control** — files stay ciphertext on disk (`store/`). Open in a session, lock when you’re done. Export a normal **`.zip` of that ciphertext** (recommended), a portable **`.7z`**, or, with your password, a **plain-text `.zip`** that takes your files out as they are.
 
 | | |
 |---|---|
@@ -18,7 +18,7 @@
 - 📁 **Data folder** — pick a default or custom root; repair / recover if something’s incomplete
 - 🗂️ **Vault list** — create, group, sort, search, hide, open / lock
 - 🔑 **Unlock** — Argon2id + AEAD at rest; optional public password hint
-- 📦 **Export** — `.zip` of `store/` (envelope only) or `.7z` (weaker offline guessing)
+- 📦 **Export** — `.zip` of `store/` (envelope only), `.7z` (weaker offline guessing), or a plain-text `.zip` (not encrypted, clearly marked)
 - 🖥️📱 **Same product** — shared domain package `@upriv/shared` on desktop and mobile
 
 **Security stance (short):** default mode never leaves a decrypted vault tree on ordinary disk. Details: [`.agent/SECURITY-CRYPTO.md`](.agent/SECURITY-CRYPTO.md) · [`.agent/SECURITY-PLAINTEXT.md`](.agent/SECURITY-PLAINTEXT.md).

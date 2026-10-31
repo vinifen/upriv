@@ -22,6 +22,7 @@
     "vault.display_name": "vault_closed_or_recovery",
     "mount.workspace_path": "vault_quiet",
     "storage.mode": "vault_quiet",
+    "storage.plain_files": "vault_closed_or_recovery",
     "vault.id": "vault_closed_or_recovery",
     "action.change_password": "vault_closed",
     "action.change_kdf": "vault_closed"
@@ -38,8 +39,11 @@
     "vault.display_name": "modal.settings.field.vault.display_name_locked",
     "mount.workspace_path": "modal.settings.field.mount.locked",
     "storage.mode": "modal.settings.field.storage.mode_locked",
+    "storage.plain_files": "modal.settings.field.storage.plain_files_locked",
     "action.change_password": "vault.change_password.vault_open",
     "action.change_kdf": "vault.change_kdf.vault_open"
   },
-  "rustConfigSaveQuietTargets": ["mount.workspace_path", "storage.mode"]
+  "rustConfigSaveQuietTargets": ["mount.workspace_path", "storage.mode"],
+  "plainLeftoverLocked": ["mount.workspace_path", "storage.mode", "vault.display_name", "vault.id"],
+  "plainLeftoverLockedI18n": "modal.settings.field.plain_leftover_locked"
 }

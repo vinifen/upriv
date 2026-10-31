@@ -22,9 +22,9 @@ use upriv_core::logging::{
 };
 use upriv_core::{
     active_alias_is_unmounted_saf, app_home_dir, change_vault_kdf, change_vault_password,
-    close_phase, close_vault, close_vault_auto, create_vault_group_with_sort,
+    close_phase, close_vault, close_vault_auto, close_vault_now, create_vault_group_with_sort,
     create_vault_with_welcome, deactivate_app_home_alias, delete_vault_group,
-    discover_bootstrap_root, inspect_vault_root_at, known_vault_ids, list_vaults,
+    discover_bootstrap_root, hurry_close, inspect_vault_root_at, known_vault_ids, list_vaults,
     load_app_settings, load_vault_config, load_vault_groups, open_import_session,
     open_or_initialize_vault_root, parse_settings_toml_str, read_vault_root_alias,
     relocate_upriv_dir, remember_vault_root_custom_uri, rename_vault,
@@ -136,7 +136,7 @@ pub fn handle_rpc(req: RpcRequest) -> RpcResponse {
             "version": upriv_core::app_version(),
             "distribution": upriv_core::distribution_str(upriv_core::detect_app_distribution()),
         })),
-        "app_shutdown" => vault_ops::app_shutdown(),
+        "app_shutdown" => vault_ops::app_shutdown(req.params),
         "app_settings_get" => app_settings_get(),
         "app_settings_save" => app_settings_save(req.params),
         "app_settings_parse_toml" => app_settings_parse_toml(req.params),
@@ -171,10 +171,13 @@ pub fn handle_rpc(req: RpcRequest) -> RpcResponse {
         "vault_plain_sync" => plain_ops::vault_plain_sync(req.params),
         "vault_plain_status" => plain_ops::vault_plain_status(req.params),
         "vault_plain_deletions" => plain_ops::vault_plain_deletions(req.params),
+        "vault_plain_send" => plain_ops::vault_plain_send(req.params),
+        "vault_plain_unsend" => plain_ops::vault_plain_unsend(req.params),
         "vault_close" => vault_close(req.params),
         "vault_change_password" => vault_change_password(req.params),
         "vault_change_kdf" => vault_change_kdf(req.params),
         "vault_close_phase" => vault_close_phase(req.params),
+        "vault_close_hurry" => vault_close_hurry(req.params),
         "vault_export_capabilities" => vault_ops::vault_export_capabilities(req.params),
         "vault_config_get" => vault_config_get(req.params),
         "vault_store_size" => vault_store_size(req.params),
@@ -182,6 +185,7 @@ pub fn handle_rpc(req: RpcRequest) -> RpcResponse {
         "vault_rename" => vault_rename(req.params),
         "vault_delete" => vault_ops::vault_delete(req.params),
         "vault_export" => vault_ops::vault_export(req.params),
+        "vault_plain_export_sweep" => vault_ops::vault_plain_export_sweep(req.params),
         "vault_import_zip" => vault_ops::vault_import_zip(req.params),
         "vault_import_7z" => vault_ops::vault_import_7z(req.params),
         "vault_import_files_zip" => vault_ops::vault_import_files_zip(req.params),
@@ -192,6 +196,7 @@ pub fn handle_rpc(req: RpcRequest) -> RpcResponse {
         "vault_import_probe" => vault_ops::vault_import_probe(req.params),
         "vault_fs_list" => vault_ops::vault_fs_list(req.params),
         "vault_fs_revision" => vault_ops::vault_fs_revision(req.params),
+        "vault_fs_preview_fits" => vault_ops::vault_fs_preview_fits(req.params),
         "vault_fs_read" => vault_ops::vault_fs_read(req.params),
         "vault_fs_read_range" => vault_ops::vault_fs_read_range(req.params),
         "vault_fs_write" => vault_ops::vault_fs_write(req.params),
@@ -209,7 +214,7 @@ pub fn handle_rpc(req: RpcRequest) -> RpcResponse {
         "backup_delete" => vault_ops::backup_delete(req.params),
         "backup_promote" => vault_ops::backup_promote(req.params),
         "backup_save" => vault_ops::backup_save(req.params),
-        "backup_get" => vault_ops::backup_get(req.params),
+        "backup_export" => vault_ops::backup_export(req.params),
         "data_folder_export" => data_folder_ops::export(req.params),
         "job_status" => job_ops::status(req.params),
         "job_cancel" => job_ops::cancel(req.params),
@@ -1336,6 +1341,7 @@ fn vault_list_item_json(item: &VaultListItem) -> Value {
         "note": item.note,
         "lastAccessedAt": item.last_accessed_at,
         "unlockPreset": unlock_preset,
+        "plainLeftover": item.plain_leftover,
     })
 }
 
@@ -1510,10 +1516,11 @@ fn vault_close(params: Value) -> RpcResponse {
     let closed = match parsed.reason.as_deref().unwrap_or("user") {
         "user" => close_vault(&root, id),
         "auto" => close_vault_auto(&root, id),
+        "now" => close_vault_now(&root, id),
         other => {
             return err(
                 "invalid_request",
-                format!("vault_close reason must be user or auto, got {other}"),
+                format!("vault_close reason must be user, auto, or now, got {other}"),
             );
         }
     };
@@ -1552,6 +1559,23 @@ fn vault_close_phase(params: Value) -> RpcResponse {
     };
     match close_phase(&root, parsed.id.trim()) {
         Ok(phase) => ok(json!({ "phase": phase.map(|p| p.as_str()) })),
+        Err(error) => map_core_err(error),
+    }
+}
+
+/// Close now on a close that is already running. Light: it must answer while
+/// that close holds its lane.
+fn vault_close_hurry(params: Value) -> RpcResponse {
+    let parsed: VaultIdParams = match serde_json::from_value(params) {
+        Ok(value) => value,
+        Err(error) => return err("invalid_request", error.to_string()),
+    };
+    let root = match require_vault_root() {
+        Ok(root) => root,
+        Err(response) => return response,
+    };
+    match hurry_close(&root, parsed.id.trim()) {
+        Ok(running) => ok(json!({ "running": running })),
         Err(error) => map_core_err(error),
     }
 }
@@ -2183,10 +2207,13 @@ mod contract_tests {
         "vault_plain_sync",
         "vault_plain_status",
         "vault_plain_deletions",
+        "vault_plain_send",
+        "vault_plain_unsend",
         "vault_close",
         "vault_change_password",
         "vault_change_kdf",
         "vault_close_phase",
+        "vault_close_hurry",
         "vault_export_capabilities",
         "vault_config_get",
         "vault_store_size",
@@ -2194,6 +2221,7 @@ mod contract_tests {
         "vault_rename",
         "vault_delete",
         "vault_export",
+        "vault_plain_export_sweep",
         "vault_import_zip",
         "vault_import_7z",
         "vault_import_files_zip",
@@ -2204,6 +2232,7 @@ mod contract_tests {
         "vault_import_probe",
         "vault_fs_list",
         "vault_fs_revision",
+        "vault_fs_preview_fits",
         "vault_fs_read",
         "vault_fs_read_range",
         "vault_fs_write",
@@ -2221,7 +2250,7 @@ mod contract_tests {
         "backup_delete",
         "backup_promote",
         "backup_save",
-        "backup_get",
+        "backup_export",
         "data_folder_export",
         "job_status",
         "job_cancel",
@@ -2288,6 +2317,10 @@ mod contract_tests {
             ),
             ("backup_save", json!({ "id": "notes" })),
             (
+                "backup_export",
+                json!({ "id": "notes", "stamps": ["20260101000000"], "destDir": "/media/usb" }),
+            ),
+            (
                 "data_folder_export",
                 json!({ "destDir": "/media/usb", "name": "copy" }),
             ),
@@ -2314,6 +2347,27 @@ mod contract_tests {
             );
             assert_eq!(error_code(&refused), Some("invalid_request"), "{dest_dir}");
         }
+    }
+
+    #[test]
+    fn a_plain_text_export_needs_a_folder_and_a_job_like_the_others() {
+        let no_job = call(
+            "vault_export",
+            json!({ "id": "notes", "format": "plain_zip", "destDir": "/media/usb" }),
+        );
+        assert_eq!(error_code(&no_job), Some("invalid_request"));
+        let relative = call(
+            "vault_export",
+            json!({
+                "id": "notes",
+                "format": "plain_zip",
+                "destDir": "relative/folder",
+                "job": "rpc-export",
+                "includeWorkspace": true,
+                "includeSettings": false,
+            }),
+        );
+        assert_eq!(error_code(&relative), Some("invalid_request"));
     }
 
     #[test]
@@ -2585,9 +2639,7 @@ level = \"info\"
                 hidden: false,
                 password_hint: String::new(),
             },
-            storage: upriv_core::VaultStorageSection {
-                mode: upriv_core::VaultStorageMode::EncryptedDir,
-            },
+            storage: upriv_core::VaultStorageSection::default(),
             mount: Default::default(),
             backup: Default::default(),
             security: Default::default(),

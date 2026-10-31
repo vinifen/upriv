@@ -42,6 +42,9 @@ export const VAULT_CONFIG_EDIT_LOCKED_I18N = contract.lockedI18n as Partial<
   Record<VaultConfigEditTarget, I18nKey>
 >;
 
+/** Targets core refuses (`plain_leftover`) until a leftover plaintext folder is removed. */
+const PLAIN_LEFTOVER_LOCKED: ReadonlySet<string> = new Set(contract.plainLeftoverLocked);
+
 export type ConfigEditContext = {
   vaultStatus?: VaultDisplayStatus;
   vaults?: readonly VaultRow[];
@@ -81,6 +84,7 @@ export function vaultConfigEditAllowed(
   row: VaultRow,
   pipeline: VaultPipelineListStatus = {},
 ): boolean {
+  if (row.plainLeftover && PLAIN_LEFTOVER_LOCKED.has(target)) return false;
   const gate = VAULT_CONFIG_EDIT_POLICY[target];
   let vaultStatus = resolveVaultListStatus(row, pipeline);
   if (vaultStatus === "queued" && resolveVaultDisplayStatus(row) === "open") {
@@ -103,13 +107,22 @@ export function appConfigEditAllowed(
 }
 
 /** i18n key when `vaultConfigEditAllowed` is false; undefined if no dedicated copy. */
-export function vaultConfigEditLockedI18nKey(target: VaultConfigEditTarget): I18nKey | undefined {
+export function vaultConfigEditLockedI18nKey(
+  target: VaultConfigEditTarget,
+  plainLeftover = false,
+): I18nKey | undefined {
+  if (plainLeftover && PLAIN_LEFTOVER_LOCKED.has(target)) {
+    return contract.plainLeftoverLockedI18n as I18nKey;
+  }
   return VAULT_CONFIG_EDIT_LOCKED_I18N[target];
 }
 
 /** Locked hint for UI-facing targets that always have `lockedI18n` in the contract. */
-export function requireVaultConfigEditLockedI18nKey(target: VaultConfigEditTarget): I18nKey {
-  const key = vaultConfigEditLockedI18nKey(target);
+export function requireVaultConfigEditLockedI18nKey(
+  target: VaultConfigEditTarget,
+  plainLeftover = false,
+): I18nKey {
+  const key = vaultConfigEditLockedI18nKey(target, plainLeftover);
   if (!key) {
     throw new Error(`edit-policy lockedI18n missing for ${target}`);
   }

@@ -6,6 +6,10 @@ export {
 } from "./useCreateVaultWizard";
 export { useLoadingBudget, type UseLoadingBudgetOptions } from "./useLoadingBudget";
 export { useIntegerDraft, type UseIntegerDraftOptions } from "./useIntegerDraft";
+export { usePlainExportSweep } from "./usePlainExportSweep";
+export { useOptimisticValue } from "./useOptimisticValue";
+export { useSettledValue } from "./useSettledValue";
+export { useOutlineHeading } from "./useOutlineHeading";
 export { TOAST_DEFAULT_MS, useToast, type ToastState } from "./useToast";
 export {
   useDataFolderExportJob,
@@ -13,13 +17,29 @@ export {
   type DataFolderExportJobEvents,
 } from "./useDataFolderExportJob";
 export { JOB_PROGRESS_POLL_MS, useJobProgress } from "./useJobProgress";
+export {
+  useBackupExportJob,
+  type BackupExportJob,
+  type BackupExportJobEvents,
+} from "./useBackupExportJob";
+export {
+  useBackupExportStep,
+  type BackupExportFolder,
+  type UseBackupExportStepOptions,
+} from "./useBackupExportStep";
 export { useVaultBackups } from "./useVaultBackups";
 export {
   useVaultBackupJob,
   type VaultBackupJob,
   type VaultBackupJobEvents,
 } from "./useVaultBackupJob";
+export { useFolderFallback } from "./useFolderFallback";
+export { useSearchCollapsedFolders } from "./useSearchCollapsedFolders";
+export { useTreeFolderPresence } from "./useTreeFolderPresence";
 export { useVaultFileTree } from "./useVaultFileTree";
+export { useOpenTabContents } from "./useOpenTabContents";
+export { useValueAfterPaint } from "./useValueAfterPaint";
+export { useRowButtonStack } from "./useRowButtonStack";
 export { useVaultInfoData, type UseVaultInfoDataOptions } from "./useVaultInfoData";
 export {
   useSystemInfoData,
@@ -49,5 +69,8 @@ export {
 export {
   FileManagerProvider,
   useFileManager,
-  type FileManagerContextValue,
+  useFileManagerEntry,
+  useFileManagerSelector,
+  useFileManagerShell,
+  type FileManagerController,
 } from "./FileManagerContext";

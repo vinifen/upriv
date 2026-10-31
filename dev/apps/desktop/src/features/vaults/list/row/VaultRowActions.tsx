@@ -14,6 +14,7 @@ import {
   isVaultListRowUnlockTarget,
   resolveVaultListStatus,
   storageModeIsPlaintext,
+  vaultCloseNowOffered,
   vaultExportMenuShown,
   VAULT_SETTINGS_AREA_ICON,
   VAULT_SETTINGS_AREA_I18N,
@@ -44,6 +45,7 @@ interface VaultRowActionsProps {
   includeLockAction?: boolean;
   onLockVault?: (vault: VaultListItem) => void;
   onUnlockVault?: (vault: VaultListItem) => void;
+  onCloseNow: (vault: VaultListItem) => void;
 }
 
 export function VaultRowActions({
@@ -59,6 +61,7 @@ export function VaultRowActions({
   includeLockAction = false,
   onLockVault,
   onUnlockVault,
+  onCloseNow,
 }: VaultRowActionsProps) {
   const { t } = useTranslation();
   const { toast, show, dismiss } = useToast();
@@ -102,6 +105,7 @@ export function VaultRowActions({
     );
   const canExport = vaultService.canExportVault && vaultExportMenuShown(vault, pipelineListStatus);
   const controls = vaultRowControls(vault, pipelineListStatus);
+  const closeNowOffered = vaultCloseNowOffered(listStatus, vault.id, pipelineListStatus);
 
   const stacked = layout === "column";
   const actionBtnProps = stacked
@@ -209,6 +213,18 @@ export function VaultRowActions({
               },
             },
           ]),
+      ...(isOpen || closeNowOffered
+        ? [
+            {
+              id: "close-now",
+              label: t("action.close_now"),
+              icon: <Icon name="lock" size={18} />,
+              onSelect: () => {
+                window.requestAnimationFrame(() => onCloseNow(vault));
+              },
+            },
+          ]
+        : []),
       {
         id: "vault-info",
         label: t("action.vault_info"),
@@ -224,9 +240,11 @@ export function VaultRowActions({
       canExport,
       canUnlock,
       canUseOpenWorkspace,
+      closeNowOffered,
       showOsFileManager,
       includeLockAction,
       isOpen,
+      onCloseNow,
       onExportVault,
       onLockVault,
       onOpenBackups,
@@ -260,7 +278,7 @@ export function VaultRowActions({
             <IconButton
               label={t("app.menu.more")}
               {...actionBtnProps}
-              disabled={controls.moreMenuBlocked}
+              disabled={controls.moreMenuBlocked && !closeNowOffered}
             >
               <Icon name="more-horizontal" size={actionIconSize} />
             </IconButton>

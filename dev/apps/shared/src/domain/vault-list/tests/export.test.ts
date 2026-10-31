@@ -29,6 +29,12 @@ describe("vaultExportPending", () => {
     ).toBeNull();
   });
 
+  it("asks a plain-text .zip for the vault password before its folder", () => {
+    expect(vaultExportPending("plain_zip", null, "")).toBe("password");
+    expect(vaultExportPending("plain_zip", null, "secret")).toBe("folder");
+    expect(vaultExportPending("plain_zip", "/media/usb", "secret")).toBeNull();
+  });
+
   it("asks a .7z for its password before its folder", () => {
     expect(vaultExportPending("seven_zip", null, "")).toBe("password");
     expect(vaultExportPending("seven_zip", "/media/usb", "   ")).toBe("password");
@@ -49,6 +55,12 @@ describe("vaultExportFilename", () => {
 
   it("collapses extra spaces in the display name", () => {
     expect(vaultExportFilename("My    notes", "store_zip")).toBe("My notes.zip");
+  });
+
+  it("names a plain-text .zip after the vault, so it unpacks to that folder", () => {
+    expect(vaultExportFilename("Notes", "plain_zip")).toBe("Notes.zip");
+    expect(vaultExportFilename("Notes", "plain_zip", 2)).toBe("Notes 2.zip");
+    expect(vaultExportFilename("Notes", "store_zip")).toBe("Notes.zip");
   });
 
   it("adds the number core gives a taken name", () => {

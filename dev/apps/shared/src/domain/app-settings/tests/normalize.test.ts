@@ -64,6 +64,18 @@ describe("normalizeAppSettings", () => {
     expect(normalizeAppSettings(settings).ui.lifecycle_keep_open_on_wake).toBe(true);
   });
 
+  it("defaults lifecycle_confirm_close_now to true", () => {
+    const settings = createDefaultAppSettings();
+    expect(settings.ui.lifecycle_confirm_close_now).toBe(true);
+    const omitted = {
+      ...settings,
+      ui: { ...settings.ui, lifecycle_confirm_close_now: undefined as unknown as boolean },
+    };
+    expect(normalizeAppSettings(omitted).ui.lifecycle_confirm_close_now).toBe(true);
+    settings.ui.lifecycle_confirm_close_now = false;
+    expect(normalizeAppSettings(settings).ui.lifecycle_confirm_close_now).toBe(false);
+  });
+
   it("defaults lifecycle_open_file_manager_on_open to false", () => {
     const settings = createDefaultAppSettings();
     expect(settings.ui.lifecycle_open_file_manager_on_open).toBe(false);

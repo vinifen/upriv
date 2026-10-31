@@ -7,6 +7,9 @@ import type {
 
 export type { VaultPipelineKind };
 
+/** `now` is Close now: no backup, no closing pass, and no overwrite of a plaintext folder. */
+export type VaultCloseReason = "user" | "auto" | "now";
+
 /** Outcome of `vault_close`. Close still succeeds if the optional close-backup copy fails. */
 export type BackupFailureReason = "disk_full" | "permission" | "other";
 
@@ -48,8 +51,10 @@ export interface VaultLifecycleService {
   runClosingPipeline(
     vaultId: string,
     onStep: (stepIndex: number) => void,
-    reason?: "user" | "auto",
+    reason?: VaultCloseReason,
   ): Promise<CloseVaultOutcome>;
+  /** Tell the close running for this vault to finish the Close now way. False when none runs. */
+  hurryClose(vaultId: string): Promise<boolean>;
 
   /** Virtual mount path shown until the platform opens the OS file manager. */
   resolveWorkspacePath(displayName: string, parentPath?: string | null): string;

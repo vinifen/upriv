@@ -22,19 +22,20 @@ export const LOADING_BUDGET_MS = {
    */
   vaultRewrap: 600_000,
   /**
-   * Scratch create in the vault pipeline queue (Argon2id wrap + seed chunk).
-   * Same 10 min ceiling as other Argon2-bound ops — own key so it is not
-   * mistaken for change-password. The create modal closes immediately; the
-   * list row shows `creating` instead of a blocking overlay.
+   * Vault create in the pipeline queue (Argon2id wrap + seed chunk), and the
+   * imports that create a vault from a zip, a `.7z`, or OS files. 20 min: a
+   * large import on a slow disk or phone runs past the other Argon2-bound
+   * ceilings. The create modal closes immediately; the list row shows
+   * `creating` instead of a blocking overlay.
    */
-  vaultCreate: 600_000,
+  vaultCreate: 1_200_000,
   /**
    * Open/close pipeline progress (password modal if open + row hint; Argon2id
    * unlock + flush into `store/`). Not a full-screen overlay.
    */
   vaultPipeline: 600_000,
   /**
-   * Export `{display_name}.zip` of `store/` or portable `.7z` (`vault_export`).
+   * Export `{display_name}.zip` of `store/`, portable `.7z`, or plain-text `.zip` (`vault_export`).
    * A large vault packed with LZMA2, or written from a phone, can run long, so
    * it shares the `dataFolderExport` ceiling; the Export window shows progress
    * from `job_status`.
@@ -45,6 +46,13 @@ export const LOADING_BUDGET_MS = {
    * into `backups/saves/`. Same work as a store-zip export.
    */
   vaultBackupSave: 600_000,
+  /**
+   * Backups → Export (`backup_export`): copies of backup zips into the chosen
+   * folder, bundled when there are several. Each can be as large as a vault
+   * export, so it shares that ceiling; the Backups window shows progress from
+   * `job_status`.
+   */
+  backupExport: 3_600_000,
   /**
    * Export data folder (`data_folder_export`): one zip of the whole `.upriv`,
    * every vault and backup included. Progress from `job_status`.
@@ -74,6 +82,12 @@ export const LOADING_BUDGET_MS = {
    * remove the vault directory including backups. Not the 30s settings save.
    */
   vaultDelete: 600_000,
+  /**
+   * Quit dialog's Close now: every open vault sealed with no backup and no
+   * wipe. Keep in sync with Electron `SHUTDOWN_NOW_TIMEOUT_MS`, which stops the
+   * daemon when this runs out.
+   */
+  quitCloseNow: 30_000,
 } as const;
 
 /**

@@ -12,14 +12,17 @@ export interface ExportFolder {
   path: string;
   picking: boolean;
   pickFailed: boolean;
-  /** Opens the folder picker: the field's Choose folder button. */
-  choose: () => void;
+  /**
+   * Opens the folder picker: the field's Choose folder button. `onPicked` runs
+   * with the folder when the picker answers with one.
+   */
+  choose: (onPicked?: (folder: string) => void) => void;
   /**
    * Return in the field before this one. While no folder is picked, it opens
    * the picker and answers `true`. Once one is picked it answers `false`, so
    * Return goes on to Export.
    */
-  chooseIfMissing: () => boolean;
+  chooseIfMissing: (onPicked?: (folder: string) => void) => boolean;
   /** The window closed: a pick still open is let go when it answers. The folder stays. */
   cancelPick: () => void;
 }
@@ -46,38 +49,45 @@ export function useExportFolder(pickerTitle: string): ExportFolder {
 
   useEffect(() => () => hold.clear(), [hold]);
 
-  const choose = useCallback(() => {
-    if (pickOpen.current) return;
-    pickOpen.current = true;
-    const gen = pickGen.current;
-    setPicking(true);
-    setPickFailed(false);
-    void vaultRoot
-      .pickFolder(hold.held(), pickerTitle)
-      .then((picked) => {
-        const folder = picked?.trim();
-        if (!folder) return;
-        if (gen !== pickGen.current) {
-          hold.drop(folder);
-          return;
-        }
-        hold.pick(folder);
-        setPath(folder);
-      })
-      .catch(() => {
-        if (gen === pickGen.current) setPickFailed(true);
-      })
-      .finally(() => {
-        pickOpen.current = false;
-        setPicking(false);
-      });
-  }, [hold, pickerTitle, vaultRoot]);
+  const choose = useCallback(
+    (onPicked?: (folder: string) => void) => {
+      if (pickOpen.current) return;
+      pickOpen.current = true;
+      const gen = pickGen.current;
+      setPicking(true);
+      setPickFailed(false);
+      void vaultRoot
+        .pickFolder(hold.held(), pickerTitle)
+        .then((picked) => {
+          const folder = picked?.trim();
+          if (!folder) return;
+          if (gen !== pickGen.current) {
+            hold.drop(folder);
+            return;
+          }
+          hold.pick(folder);
+          setPath(folder);
+          onPicked?.(folder);
+        })
+        .catch(() => {
+          if (gen === pickGen.current) setPickFailed(true);
+        })
+        .finally(() => {
+          pickOpen.current = false;
+          setPicking(false);
+        });
+    },
+    [hold, pickerTitle, vaultRoot],
+  );
 
-  const chooseIfMissing = useCallback(() => {
-    if (exportFolderIssue(pathRef.current) === null) return false;
-    choose();
-    return true;
-  }, [choose]);
+  const chooseIfMissing = useCallback(
+    (onPicked?: (folder: string) => void) => {
+      if (exportFolderIssue(pathRef.current) === null) return false;
+      choose(onPicked);
+      return true;
+    },
+    [choose],
+  );
 
   const cancelPick = useCallback(() => {
     pickGen.current += 1;

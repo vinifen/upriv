@@ -32,5 +32,11 @@ export function rebaseQuietLockedVaultSettings(
       storage: { ...next.storage, mode: baseline.storage.mode },
     };
   }
+  if (!vaultConfigEditAllowed("storage.plain_files", row, pipeline)) {
+    next = {
+      ...next,
+      storage: { ...next.storage, plain_files: baseline.storage.plain_files },
+    };
+  }
   return next;
 }

@@ -11,7 +11,59 @@ import {
   vaultConfigEditAllowed,
   vaultConfigEditLockedI18nKey,
   requireVaultConfigEditLockedI18nKey,
+  type VaultConfigEditTarget,
 } from "../policy";
+
+describe("a leftover plaintext folder", () => {
+  const row = vaultRowFixture({ session: "recovery", plainLeftover: true });
+
+  it("locks what core refuses until the folder is removed", () => {
+    for (const target of contract.plainLeftoverLocked) {
+      expect(vaultConfigEditAllowed(target as VaultConfigEditTarget, row)).toBe(false);
+    }
+  });
+
+  it("leaves everything else editable", () => {
+    expect(vaultConfigEditAllowed("backup", row)).toBe(true);
+    expect(vaultConfigEditAllowed("vault.note", row)).toBe(true);
+  });
+
+  it("does not lock a recovery with no leftover", () => {
+    const plain = vaultRowFixture({ session: "recovery" });
+    expect(vaultConfigEditAllowed("storage.mode", plain)).toBe(true);
+    expect(vaultConfigEditAllowed("vault.display_name", plain)).toBe(true);
+  });
+
+  it("says what to do instead of asking to wait", () => {
+    expect(requireVaultConfigEditLockedI18nKey("storage.mode", true)).toBe(
+      contract.plainLeftoverLockedI18n,
+    );
+    expect(en).toHaveProperty([contract.plainLeftoverLockedI18n]);
+    expect(requireVaultConfigEditLockedI18nKey("storage.mode")).toBe(
+      contract.lockedI18n["storage.mode"],
+    );
+  });
+});
+
+describe("the plain-text folder choice", () => {
+  it("changes while the vault is closed or in recovery", () => {
+    expect(vaultConfigEditAllowed("storage.plain_files", vaultRowFixture())).toBe(true);
+    const recovery = vaultRowFixture({ session: "recovery" });
+    expect(vaultConfigEditAllowed("storage.plain_files", recovery)).toBe(true);
+  });
+
+  it("stays editable with a leftover folder, which holds no choice to protect", () => {
+    const leftover = vaultRowFixture({ session: "recovery", plainLeftover: true });
+    expect(vaultConfigEditAllowed("storage.plain_files", leftover)).toBe(true);
+  });
+
+  it("locks while the vault is open or closing", () => {
+    const open = vaultRowFixture({ session: "open" });
+    expect(vaultConfigEditAllowed("storage.plain_files", open)).toBe(false);
+    const closing = vaultRowFixture({ session: "closing" });
+    expect(vaultConfigEditAllowed("storage.plain_files", closing)).toBe(false);
+  });
+});
 
 describe("edit-policy.json contract", () => {
   it("matches exported vault/app tables", () => {

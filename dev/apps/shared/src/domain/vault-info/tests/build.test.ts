@@ -48,6 +48,8 @@ function snapshot(overrides: Partial<VaultInfoSnapshot> = {}): VaultInfoSnapshot
     workspaceSystem: "linux",
     storePath: "/data/.upriv/vaults/notes/store/",
     backupsPath: "/data/.upriv/vaults/notes/backups/",
+    storeOpenPath: "/data/.upriv/vaults/notes/store",
+    backupsOpenPath: "/data/.upriv/vaults/notes/backups",
     locale: "en",
     ...overrides,
   };
@@ -73,6 +75,9 @@ describe("buildVaultInfoSections", () => {
       "backups",
     ]);
     expect(field(sections, "storage_mode")).toBe("modal.settings.option.storage.encrypted_dir");
+    expect(sections.flatMap((section) => section.fields).map((entry) => entry.id)).not.toContain(
+      "plain_files",
+    );
     expect(field(sections, "kdf_preset")).toBe("modal.settings.option.kdf.256mib");
     expect(field(sections, "file_manager")).toBe("modal.info.value.eligible");
     expect(field(sections, "backup_skip_unchanged")).toBe("modal.info.value.yes");
@@ -116,10 +121,10 @@ describe("buildVaultInfoSections", () => {
     expect(field(sections, "display_status")).toBe("vault.status.open");
     const storage = sections.flatMap((section) => section.fields);
     expect(storage.find((entry) => entry.id === "store_path")?.openPath).toBe(
-      "/data/.upriv/vaults/notes/store/",
+      "/data/.upriv/vaults/notes/store",
     );
     expect(storage.find((entry) => entry.id === "backups_path")?.openPath).toBe(
-      "/data/.upriv/vaults/notes/backups/",
+      "/data/.upriv/vaults/notes/backups",
     );
     expect(storage.find((entry) => entry.id === "workspace_path")?.openPath).toBe(
       "/data/workspace/Notes",
@@ -239,5 +244,17 @@ describe("buildVaultInfoSections", () => {
     expect(field(sections, "session_ram")).toBe("—");
     expect(field(sections, "logical_file_count")).toBe("—");
     expect(field(sections, "store_size")).toBe("—");
+  });
+
+  it("shows loading for the backups and store size it is still reading", () => {
+    const base = snapshot();
+    const sections = buildVaultInfoSections(
+      { ...base, backups: null, runtime: { ...base.runtime, storeBytes: "measuring" } },
+      t,
+    );
+    expect(field(sections, "store_size")).toBe("modal.info.loading");
+    expect(field(sections, "backup_count")).toBe("modal.info.loading");
+    expect(field(sections, "backup_latest")).toBe("modal.info.loading");
+    expect(field(sections, "backup_total_size")).toBe("modal.info.loading");
   });
 });

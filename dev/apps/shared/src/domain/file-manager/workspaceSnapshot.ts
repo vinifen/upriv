@@ -15,6 +15,10 @@ export interface WorkspaceSnapshot {
   selectedPath: string | null;
   /** Missing or anything but `true` loads as shown. */
   explorerCollapsed: boolean;
+  /** Missing or anything but `true` loads as closed. */
+  explorerSearchOpen: boolean;
+  /** Missing or not a string loads as no search. */
+  explorerSearchQuery: string;
   /** Per-file view, outline, word wrap, and search. */
   files?: Record<string, PerFileWorkspaceState>;
   /** Vault-specific explorer/editor split percentage (4–65). */
@@ -130,6 +134,8 @@ export function parseWorkspaceSnapshot(raw: string): WorkspaceSnapshot | null {
     expandedPaths,
     selectedPath,
     explorerCollapsed: obj.explorerCollapsed === true,
+    explorerSearchOpen: obj.explorerSearchOpen === true,
+    explorerSearchQuery: typeof obj.explorerSearchQuery === "string" ? obj.explorerSearchQuery : "",
     ...(files ? { files } : {}),
     ...(treeSplitPercent !== null ? { treeSplitPercent } : {}),
   };
@@ -143,6 +149,8 @@ export function serializeWorkspaceSnapshot(snapshot: WorkspaceSnapshot): string 
     expandedPaths: snapshot.expandedPaths,
     selectedPath: snapshot.selectedPath,
     explorerCollapsed: snapshot.explorerCollapsed,
+    explorerSearchOpen: snapshot.explorerSearchOpen,
+    explorerSearchQuery: snapshot.explorerSearchQuery,
   };
   if (snapshot.files && Object.keys(snapshot.files).length > 0) {
     clean.files = snapshot.files;
@@ -217,6 +225,8 @@ export function sanitizeWorkspaceSnapshot(
     expandedPaths,
     selectedPath,
     explorerCollapsed: snapshot.explorerCollapsed === true,
+    explorerSearchOpen: snapshot.explorerSearchOpen === true,
+    explorerSearchQuery: snapshot.explorerSearchQuery,
     ...(files ? { files } : {}),
     ...(typeof snapshot.treeSplitPercent === "number"
       ? { treeSplitPercent: snapshot.treeSplitPercent }
@@ -241,6 +251,8 @@ export function workspaceSnapshotFromState(state: VaultWorkspaceState): Workspac
     selectedPath:
       state.selectedPath && !isInternalVaultPath(state.selectedPath) ? state.selectedPath : null,
     explorerCollapsed: state.explorerCollapsed,
+    explorerSearchOpen: state.explorerSearchOpen,
+    explorerSearchQuery: state.explorerSearchQuery,
     ...(Object.keys(files).length > 0 ? { files } : {}),
     ...(typeof state.treeSplitPercent === "number"
       ? { treeSplitPercent: state.treeSplitPercent }
@@ -283,6 +295,8 @@ export function snapshotsEqual(a: WorkspaceSnapshot, b: WorkspaceSnapshot): bool
     a.expandedPaths.length === b.expandedPaths.length &&
     a.expandedPaths.every((path, index) => path === b.expandedPaths[index]) &&
     a.explorerCollapsed === b.explorerCollapsed &&
+    a.explorerSearchOpen === b.explorerSearchOpen &&
+    a.explorerSearchQuery === b.explorerSearchQuery &&
     (a.treeSplitPercent ?? null) === (b.treeSplitPercent ?? null) &&
     fileStatesEqual(a.files, b.files)
   );
@@ -312,9 +326,10 @@ function sameFileLayout(a: WorkspaceSnapshot, b: WorkspaceSnapshot): boolean {
 /**
  * Saved layout to apply, or null when tabs, folders, or selection already changed.
  *
- * Read/Code, hide explorer, and the outline can be toggled while the file is
- * still loading. Those flags stay as the user left them. The saved tabs are
- * still applied, so that click does not replace the file with an empty layout.
+ * Read/Code, hide explorer, the explorer search, and the outline can change
+ * while the file is still loading. Those stay as the user left them. The saved
+ * tabs are still applied, so that click does not replace the file with an empty
+ * layout.
  */
 export function workspaceSnapshotToHydrate(
   mount: WorkspaceSnapshot,
@@ -338,6 +353,14 @@ export function workspaceSnapshotToHydrate(
       current.explorerCollapsed !== mount.explorerCollapsed
         ? current.explorerCollapsed
         : loaded.explorerCollapsed,
+    explorerSearchOpen:
+      current.explorerSearchOpen !== mount.explorerSearchOpen
+        ? current.explorerSearchOpen
+        : loaded.explorerSearchOpen,
+    explorerSearchQuery:
+      current.explorerSearchQuery !== mount.explorerSearchQuery
+        ? current.explorerSearchQuery
+        : loaded.explorerSearchQuery,
     ...(Object.keys(mergedFiles).length > 0 ? { files: mergedFiles } : {}),
     ...(treeSplitPercent !== undefined && treeSplitPercent !== null ? { treeSplitPercent } : {}),
   };

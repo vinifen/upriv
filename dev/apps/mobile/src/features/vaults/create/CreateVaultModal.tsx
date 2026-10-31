@@ -220,7 +220,6 @@ export function CreateVaultModal({
           }
           trailing={
             <>
-              <Button variant="ghost" label={t("action.cancel")} onPress={requestClose} />
               {isLastStep ? (
                 <Button
                   variant="primary"

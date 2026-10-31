@@ -37,6 +37,7 @@ export const THEME_CSS_VAR_NAMES = {
   vaultOpenGlow: "--vault-open-glow",
   editorGutterMuted: "--editor-gutter-muted",
   errorContainer: "--error-container",
+  dangerBorder: "--danger-border",
   onErrorContainer: "--on-error-container",
   modalScrim: "--modal-scrim",
   modalShadow: "--modal-shadow",

@@ -7,7 +7,7 @@ describe("buildCreateVaultResult", () => {
     const result = buildCreateVaultResult(
       createVaultDraftFixture([1, 2], {
         displayName: "My Vault",
-        storage: { mode: "upriv_plain" },
+        storage: { mode: "upriv_plain", plain_files: "chosen" },
         security: {
           wipe_passes: 1,
           wipe_pattern: "random",

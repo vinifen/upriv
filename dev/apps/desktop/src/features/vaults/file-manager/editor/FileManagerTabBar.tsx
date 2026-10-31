@@ -129,9 +129,14 @@ export function FileManagerTabBar({
             clearTabDrag();
           };
 
+          // A tab drag is the strip's own: the workspace around it would set
+          // `copy` for an OS import, which a `move` drag refuses, and no drop
+          // would follow.
           const handleDragOver = (event: DragEvent) => {
             const source = dragSourceRef.current;
-            if (!source || source === path) return;
+            if (!source) return;
+            event.stopPropagation();
+            if (source === path) return;
             event.preventDefault();
             event.dataTransfer.dropEffect = "move";
             didDragRef.current = true;
@@ -140,6 +145,7 @@ export function FileManagerTabBar({
 
           const handleDrop = (event: DragEvent) => {
             event.preventDefault();
+            event.stopPropagation();
             const source =
               dragSourceRef.current ?? event.dataTransfer.getData("text/plain") ?? null;
             if (source && source !== path) {
@@ -201,10 +207,18 @@ export function FileManagerTabBar({
                         : "text-on-surface-variant",
                   ].join(" ")}
                 />
-                <span className="min-w-0 truncate">{name}</span>
-                {dirty ? (
-                  <span className="size-1.5 shrink-0 rounded-full bg-white" aria-hidden />
-                ) : null}
+                {/* The hidden name sets the width, so the dot takes room from the title. */}
+                <span className="grid min-w-0">
+                  <span className="invisible truncate [grid-area:1/1]" aria-hidden>
+                    {name}
+                  </span>
+                  <span className="flex min-w-0 items-center gap-1.5 [grid-area:1/1]">
+                    <span className="min-w-0 truncate">{name}</span>
+                    {dirty ? (
+                      <span className="size-1.5 shrink-0 rounded-full bg-white" aria-hidden />
+                    ) : null}
+                  </span>
+                </span>
               </button>
               <button
                 type="button"

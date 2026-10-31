@@ -16,13 +16,16 @@ export {
   parseKdfUnlockPreset,
 } from "./kdf";
 
-/** Preference screens in vault settings. Lock is always close. */
+/**
+ * Preference screens in vault settings, Backup before Auto-close as the
+ * create window lists them. Lock is always close.
+ */
 export const VAULT_SETTINGS_SECTIONS = [
   "vault",
   "storage",
   "mount",
-  "auto_close",
   "backup",
+  "auto_close",
 ] as const;
 
 export type VaultSettingsSectionId = (typeof VAULT_SETTINGS_SECTIONS)[number];
@@ -116,9 +119,12 @@ export function patchStorageMode(
 ): VaultSettingsConfig {
   return normalizeVaultSettingsConfig({
     ...config,
-    storage: { mode },
+    storage: { ...config.storage, mode },
   });
 }
+
+/** What a plain-text vault puts in its folder while open. The file manager holds everything. */
+export type PlainFiles = "chosen" | "whole";
 
 export type WipePattern = "random" | "zeros";
 
@@ -133,7 +139,7 @@ export interface VaultSectionConfig {
 
 export interface VaultSettingsConfig {
   vault: VaultSectionConfig;
-  storage: { mode: StorageMode };
+  storage: { mode: StorageMode; plain_files: PlainFiles };
   /**
    * Per-system folder path. Empty path follows the app place. `app_file_manager_folder`
    * and `custom_file_manager_folder` are stored once. `app_file_manager_folder` is `inherit`, `on`,

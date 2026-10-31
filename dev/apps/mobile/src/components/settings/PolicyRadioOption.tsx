@@ -10,7 +10,14 @@ import { useTranslation } from "@/i18n";
 import { useTheme, type ThemeColors } from "@/theme";
 import { colorAlpha, radii, spacing } from "@/theme/tokens";
 
-type Tone = "default" | "less-secure";
+type Tone = "default" | "less-secure" | "insecure";
+
+/** How far the error color goes into the card, per risk tone. */
+const TONE_ERROR_MIX: Record<Tone, number> = {
+  default: 0,
+  "less-secure": 0.07,
+  insecure: 0.14,
+};
 
 interface PolicyRadioOptionProps {
   value: string;
@@ -57,6 +64,11 @@ function policyRadioBadgeColors(
         backgroundColor: colorAlpha(colors.onErrorContainer, 0.15),
         color: colors.onErrorContainer,
       };
+    case "insecure":
+      return {
+        backgroundColor: colorAlpha(colors.onErrorContainer, 0.25),
+        color: colors.onErrorContainer,
+      };
     case "recommended":
     case "default":
       return {
@@ -91,17 +103,22 @@ export function PolicyRadioOption({
   const { t } = useTranslation();
   const { colors, typography } = useTheme();
 
-  const isLessSecure = tone === "less-secure";
+  const insecure = tone === "insecure";
 
   const borderColor = checked
     ? attention
       ? colors.vaultStatusRecovery
-      : colors.accent
-    : colors.outlineVariant;
+      : insecure
+        ? colors.dangerBorder
+        : colors.accent
+    : insecure
+      ? colors.dangerBorder
+      : colors.outlineVariant;
 
-  const cardBg = isLessSecure
-    ? mixHex(colors.surfaceContainer, colors.errorContainer, 0.07)
-    : colors.surfaceContainer;
+  const cardBg =
+    tone === "default"
+      ? colors.surfaceContainer
+      : mixHex(colors.surfaceContainer, colors.errorContainer, TONE_ERROR_MIX[tone]);
 
   return (
     <View style={styles.wrap}>

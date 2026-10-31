@@ -1,13 +1,12 @@
-import { createLiveBackupService } from "@upriv/shared";
+import { LOADING_BUDGET_MS, createLiveBackupService } from "@upriv/shared";
 import {
   rpcBackupDelete,
-  rpcBackupExportStampsToPath,
-  rpcBackupExportToPath,
-  rpcBackupGet,
+  rpcBackupExport,
   rpcBackupList,
   rpcBackupPromote,
   rpcBackupSave,
 } from "@/lib/rpc";
+import { nativeSafExportMount } from "./safExportMount";
 
 /** Native → `upriv-ffi` `backup_*` (skipped on SAF trees). */
 export const nativeBackupService = createLiveBackupService({
@@ -23,13 +22,13 @@ export const nativeBackupService = createLiveBackupService({
   async saveNow(vaultId, job) {
     return rpcBackupSave(vaultId, job);
   },
-  async getBackupBytes(vaultId, stamp) {
-    return rpcBackupGet(vaultId, stamp);
-  },
-  async exportToPath(vaultId, stamp, destPath) {
-    return rpcBackupExportToPath(vaultId, stamp, destPath);
-  },
-  async exportSnapshotsToPath(vaultId, stamps, destPath) {
-    return rpcBackupExportStampsToPath(vaultId, stamps, destPath);
+  // A picked folder is mounted for the export, so Rust writes the file straight into it.
+  async exportTo(vaultId, keys, destDir, job) {
+    return nativeSafExportMount.withExportFolder(
+      destDir,
+      job,
+      LOADING_BUDGET_MS.backupExport,
+      (dir) => rpcBackupExport(vaultId, keys, dir, job),
+    );
   },
 });

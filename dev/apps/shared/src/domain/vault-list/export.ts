@@ -7,7 +7,10 @@ import type { JobProgress, JobProgressCopy } from "../jobs/progress";
 import { isLifecyclePasswordPresent } from "../vault-create/validate";
 import { exportFolderIssue, type ExportFolderIssue } from "../workspace";
 
-export type VaultExportFormat = "store_zip" | "seven_zip";
+export type VaultExportFormat = "store_zip" | "seven_zip" | "plain_zip";
+
+/** The formats that decrypt the vault, so the person types its password. */
+export type VaultExportPasswordFormat = Exclude<VaultExportFormat, "store_zip">;
 
 /** Ordinary `.zip` of `store/` — not a custom file type (SECURITY-CRYPTO). */
 export const DEFAULT_VAULT_EXPORT_FORMAT: VaultExportFormat = "store_zip";
@@ -19,12 +22,30 @@ export const VAULT_EXPORT_PROGRESS_COPY: JobProgressCopy = {
   finishing: "vault.export.dialog.finishing",
 };
 
-/** Format + 7z options for `exportToFolder` (zip ignores `sevenZip` / `password`). */
+/** What `.upriv-config/` carries in a `.7z` or a plain-text `.zip`. */
+export interface VaultExportInclude {
+  /** The file manager layout (`.upriv-workspace.json`). */
+  workspace: boolean;
+  /** The vault's settings (`config.toml`). */
+  settings: boolean;
+}
+
+/** An export carries both until a toggle turns one off. */
+export const DEFAULT_VAULT_EXPORT_INCLUDE: VaultExportInclude = {
+  workspace: true,
+  settings: true,
+};
+
+/** Format + options for `exportToFolder`. A store zip uses none of them. */
 export interface VaultExportRequest {
   format: VaultExportFormat;
   sevenZip?: VaultSettingsConfig["seven_zip"];
-  /** 7-Zip AES password; also unlocks `store/` so logical files can be decrypted. */
+  /**
+   * Unlocks `store/` so logical files can be decrypted. For a `.7z` it is also
+   * the 7-Zip AES password; a plain-text `.zip` has none.
+   */
   password?: string;
+  include?: VaultExportInclude;
 }
 
 /** The step the chosen export option still needs, first one first. */
@@ -32,16 +53,16 @@ export type VaultExportPending = "password" | ExportFolderIssue;
 
 /**
  * What the chosen format still needs before Export can run: the vault
- * password for `.7z` (checked by the export itself), then the folder the file
- * goes into. While it is not `null` that option carries the attention border
- * and Export stays off.
+ * password for `.7z` and plain-text `.zip` (checked by the export itself), then
+ * the folder the file goes into. While it is not `null` that option carries the
+ * attention border and Export stays off.
  */
 export function vaultExportPending(
   format: VaultExportFormat,
   folder: string | null,
-  sevenZipPassword: string,
+  password: string,
 ): VaultExportPending | null {
-  if (format === "seven_zip" && !isLifecyclePasswordPresent(sevenZipPassword)) return "password";
+  if (format !== "store_zip" && !isLifecyclePasswordPresent(password)) return "password";
   return exportFolderIssue(folder);
 }
 
@@ -72,9 +93,10 @@ export function sanitizeExportFilenameBase(displayName: string): string {
 
 /**
  * The file an export writes into its folder: the vault **display name** (not
- * registry id). Encrypted vault zip: `{name}.zip`. Portable 7-Zip: `{name}.7z`.
- * While that name is taken core adds the next free `number` (`{name} 2.zip`),
- * the same way (`vault_export_file_stem`, `NumberedExportName`).
+ * registry id). Either zip: `{name}.zip`. Portable 7-Zip: `{name}.7z`. A
+ * plain-text zip holds its files at its root, so unpacking it gives `{name}/`
+ * with the files inside. While that name is taken core adds the next free `number`
+ * (`{name} 2.zip`), the same way (`vault_export_file_stem`, `NumberedExportName`).
  */
 export function vaultExportFilename(
   displayName: string,
@@ -83,7 +105,7 @@ export function vaultExportFilename(
 ): string {
   const stem = sanitizeExportFilenameBase(displayName);
   const name = number > 1 ? `${stem} ${number}` : stem;
-  return format === "store_zip" ? `${name}.zip` : `${name}.7z`;
+  return format === "seven_zip" ? `${name}.7z` : `${name}.zip`;
 }
 
 /**
@@ -117,8 +139,8 @@ export function exportFilenameSanitizeKind(displayName: string): ExportFilenameS
 export type VaultExportPipelineStatus = VaultPipelineListStatus;
 
 /**
- * Single-vault export (`.zip` of `store/` or `.7z`). This vault must be
- * closed. Opening, closing, creating, queued, recovery, an open session, and
+ * Single-vault export (`.zip` of `store/`, `.7z`, or plain-text `.zip`). This
+ * vault must be closed. Opening, closing, creating, queued, recovery, an open session, and
  * an export, backup, or rewrap already running cannot export. Neither can any
  * vault while the data folder is exported. Other vaults may stay open.
  */

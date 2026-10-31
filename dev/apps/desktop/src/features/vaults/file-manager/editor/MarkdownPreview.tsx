@@ -13,12 +13,12 @@ import {
   activeOutlineIndex,
   findTextMatches,
   MARKDOWN_COPY_DOUBLE_TAP_MS,
-  parseMarkdownDocument,
   toggleMarkdownTask,
   type MarkdownAlign,
   type MarkdownBlock,
   type MarkdownInline,
   type MarkdownListItem,
+  type MarkdownParser,
 } from "@upriv/shared";
 import { Icon } from "@/components/icons";
 import { useTranslation } from "@/i18n";
@@ -27,6 +27,7 @@ const COPIED_MS = 1600;
 
 interface MarkdownPreviewProps {
   markdown: string;
+  parser: MarkdownParser;
   onCopyFailed: () => void;
   /** Task checkbox edits. Omit for a read-only note (checkboxes stay disabled). */
   onChange?: (markdown: string) => void;
@@ -94,6 +95,7 @@ export const MarkdownPreview = forwardRef<MarkdownPreviewHandle, MarkdownPreview
 
 function MarkdownPreviewBody({
   markdown,
+  parser,
   onCopyFailed,
   onChange,
   searchQuery,
@@ -103,7 +105,7 @@ function MarkdownPreviewBody({
   handleRef,
 }: MarkdownPreviewProps & { handleRef: ForwardedRef<MarkdownPreviewHandle> }) {
   const { t } = useTranslation();
-  const model = useMemo(() => parseMarkdownDocument(markdown), [markdown]);
+  const model = useMemo(() => parser.note(markdown).document, [markdown, parser]);
   const scrollerRef = useRef<HTMLDivElement>(null);
   const matchRangesRef = useRef<Range[]>([]);
   const lastMatchCountRef = useRef<number>(-1);

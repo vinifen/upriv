@@ -50,6 +50,14 @@ pub fn refuse_config_save_if_busy(
     before: &VaultConfig,
     after: &VaultConfig,
 ) -> Result<()> {
+    // Read at open, so a session never changes it under its own folder.
+    if before.storage.plain_files != after.storage.plain_files
+        && (is_vault_open_at(vault_dir) || is_vault_closing_at(vault_dir))
+    {
+        return Err(UprivError::VaultConfigBusy {
+            target: "storage.plain_files".into(),
+        });
+    }
     if !session_blocks_quiet(vault_dir) {
         return Ok(());
     }
@@ -114,6 +122,41 @@ pub fn save_vault_config_checked(
         crate::config::save_vault_config(vault_dir, &stored)?;
         Ok(())
     })
+}
+
+#[cfg(test)]
+mod plain_files_tests {
+    use super::*;
+    use crate::config::vault_config::VaultPlainFiles;
+    use crate::store::KdfUnlockPreset;
+    use crate::test_support::vault_root_with;
+    use crate::vault::{close_vault, create_vault, open_vault};
+
+    fn saved_with(root: &VaultRoot, plain_files: VaultPlainFiles) -> Result<()> {
+        let vault_dir = root.vault_dir("notes")?;
+        let mut after = crate::config::load_vault_config_raw(&vault_dir)?;
+        after.storage.plain_files = plain_files;
+        save_vault_config_checked(root, "notes", &after)
+    }
+
+    #[test]
+    fn the_folder_choice_changes_only_while_the_vault_is_closed() {
+        let (_tmp, root) = vault_root_with(&[]);
+        let config: VaultConfig = toml::from_str(
+            "[vault]\nid = \"notes\"\ndisplay_name = \"Notes\"\norder = 1\n[storage]\nmode = \"encrypted_dir\"\n",
+        )
+        .unwrap();
+        create_vault(&root, config, b"pass-word-ok", KdfUnlockPreset::M32).unwrap();
+        open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        let refused = saved_with(&root, VaultPlainFiles::Whole);
+        assert!(matches!(refused, Err(UprivError::VaultConfigBusy { .. })));
+
+        close_vault(&root, "notes").unwrap();
+        saved_with(&root, VaultPlainFiles::Whole).unwrap();
+        let vault_dir = root.vault_dir("notes").unwrap();
+        let stored = crate::config::load_vault_config_raw(&vault_dir).unwrap();
+        assert_eq!(stored.storage.plain_files, VaultPlainFiles::Whole);
+    }
 }
 
 #[cfg(test)]

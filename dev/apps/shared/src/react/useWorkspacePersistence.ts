@@ -8,6 +8,7 @@ import {
   workspaceSnapshotToHydrate,
   UPRIV_WORKSPACE_PATH,
   workspaceSnapshotFromState,
+  type FileTreeNode,
   type VaultFileSystemService,
   type VaultWorkspaceAction,
   type VaultWorkspaceState,
@@ -17,6 +18,12 @@ import { scheduleTimeout } from "./schedule";
 interface UseWorkspacePersistenceOptions {
   vaultId: string;
   workspace: VaultWorkspaceState;
+  /**
+   * The explorer's tree once it has loaded (null before). A write checks the
+   * layout against it instead of listing the vault, and checks again when it
+   * changes, so a tab opened before the new tree arrived is still written.
+   */
+  tree: FileTreeNode | null;
   fs: VaultFileSystemService;
   dispatch: (action: VaultWorkspaceAction) => void;
   /** Skip layout writes (import in flight — pending tabs are RAM-only). */
@@ -27,9 +34,10 @@ async function writeWorkspaceSnapshot(
   fs: VaultFileSystemService,
   vaultId: string,
   state: VaultWorkspaceState,
+  tree: FileTreeNode | null,
   lastWrittenRef: { current: string | null },
 ): Promise<void> {
-  const raw = serializedLayoutSnapshot(state, await fs.getFileTree(vaultId));
+  const raw = serializedLayoutSnapshot(state, tree ?? (await fs.getFileTree(vaultId)));
   if (lastWrittenRef.current === raw) return;
   await fs.setFileContent(vaultId, UPRIV_WORKSPACE_PATH, raw);
   lastWrittenRef.current = raw;
@@ -37,8 +45,8 @@ async function writeWorkspaceSnapshot(
 
 /**
  * Layout changes are written once they pause this long. Typing in the find
- * field changes the layout on every key, and each write lists the vault tree
- * and seals the file into `store/`. Unmount and vault close write at once.
+ * field changes the layout on every key; one write per pause is enough.
+ * Unmount and vault close write at once.
  */
 export const WORKSPACE_WRITE_DELAY_MS = 500;
 
@@ -50,6 +58,7 @@ export const WORKSPACE_WRITE_DELAY_MS = 500;
 export function useWorkspacePersistence({
   vaultId,
   workspace,
+  tree,
   fs,
   dispatch,
   suspend = false,
@@ -58,8 +67,8 @@ export function useWorkspacePersistence({
   const lastWrittenRef = useRef<string | null>(null);
   const [hydrateGen, setHydrateGen] = useState(0);
   /** Bound to this mount’s vault — unmount flush must not use a switched vault’s layout. */
-  const layoutRef = useRef({ vaultId, workspace });
-  layoutRef.current = { vaultId, workspace };
+  const layoutRef = useRef({ vaultId, workspace, tree });
+  layoutRef.current = { vaultId, workspace, tree };
   const dispatchRef = useRef(dispatch);
   dispatchRef.current = dispatch;
   const fsRef = useRef(fs);
@@ -99,6 +108,8 @@ export function useWorkspacePersistence({
             expandedPaths: merged.expandedPaths,
             selectedPath: merged.selectedPath,
             explorerCollapsed: merged.explorerCollapsed,
+            explorerSearchOpen: merged.explorerSearchOpen,
+            explorerSearchQuery: merged.explorerSearchQuery,
             fileStates: merged.files,
             treeSplitPercent: merged.treeSplitPercent,
           });
@@ -135,7 +146,13 @@ export function useWorkspacePersistence({
     return scheduleTimeout(() => {
       const latest = layoutRef.current;
       if (latest.vaultId !== id) return;
-      void writeWorkspaceSnapshot(fsRef.current, id, latest.workspace, lastWrittenRef).catch(() => {
+      void writeWorkspaceSnapshot(
+        fsRef.current,
+        id,
+        latest.workspace,
+        latest.tree,
+        lastWrittenRef,
+      ).catch(() => {
         /* Persist is best-effort while open. */
       });
     }, WORKSPACE_WRITE_DELAY_MS);
@@ -144,11 +161,14 @@ export function useWorkspacePersistence({
   }, [
     vaultId,
     hydrateGen,
+    tree,
     workspace.openTabs,
     workspace.activeTabPath,
     workspace.expandedPaths,
     workspace.selectedPath,
     workspace.explorerCollapsed,
+    workspace.explorerSearchOpen,
+    workspace.explorerSearchQuery,
     workspace.fileStates,
     workspace.treeSplitPercent,
     workspace.dragSourcePath,
@@ -162,7 +182,13 @@ export function useWorkspacePersistence({
       if (!hydratedRef.current) return;
       const latest = layoutRef.current;
       if (latest.vaultId !== id) return;
-      void writeWorkspaceSnapshot(fsRef.current, id, latest.workspace, lastWrittenRef).catch(() => {
+      void writeWorkspaceSnapshot(
+        fsRef.current,
+        id,
+        latest.workspace,
+        latest.tree,
+        lastWrittenRef,
+      ).catch(() => {
         /* Vault may already be closed; layout is flushed before vault_close. */
       });
     };

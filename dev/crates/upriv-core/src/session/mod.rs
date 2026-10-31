@@ -4,10 +4,11 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, TryLockError};
 use std::time::{Duration, Instant};
 
-use zeroize::{Zeroize, ZeroizeOnDrop};
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use crate::error::{Result, UprivError};
 use crate::store::{OpenedStore, VaultHeader, VaultIndex};
@@ -24,6 +25,9 @@ const FAILURES_BEFORE_BLOCK: usize = 5;
 #[derive(Zeroize, ZeroizeOnDrop)]
 pub struct OpenSession {
     pub vault_id: String,
+    /// The vault's name as `config.toml` gave it at open. A rename needs the
+    /// vault closed, so it holds for the session; the explorer's root shows it.
+    pub display_name: String,
     #[zeroize(skip)]
     pub vault_dir: PathBuf,
     #[zeroize(skip)]
@@ -63,6 +67,10 @@ pub struct OpenSession {
     /// Range writes waiting for the next index seal. Every seal clears it.
     #[zeroize(skip)]
     pub deferred: Option<DeferredWrites>,
+    /// The file-manager layout (root `.upriv-workspace.json`) written since
+    /// the last seal. Layout is not vault data, so it waits in RAM for the
+    /// next seal or close instead of sealing the index on its own.
+    pub pending_layout: Option<Zeroizing<Vec<u8>>>,
 }
 
 /// Range writes whose chunks are already in their blobs while the sealed index
@@ -78,7 +86,12 @@ pub struct DeferredWrites {
 }
 
 impl OpenSession {
-    pub fn from_opened(vault_id: String, vault_dir: PathBuf, opened: OpenedStore) -> Self {
+    pub fn from_opened(
+        vault_id: String,
+        display_name: String,
+        vault_dir: PathBuf,
+        opened: OpenedStore,
+    ) -> Self {
         let mut master_key = [0u8; 32];
         master_key.copy_from_slice(opened.master_key.as_ref());
         let mut content_key = [0u8; 32];
@@ -87,6 +100,7 @@ impl OpenSession {
         index_key.copy_from_slice(opened.index_key.as_ref());
         Self {
             vault_id,
+            display_name,
             vault_dir,
             header: opened.header,
             master_key,
@@ -103,6 +117,7 @@ impl OpenSession {
             unsealed_imports: 0,
             staged_blobs: Vec::new(),
             deferred: None,
+            pending_layout: None,
         }
     }
 }
@@ -121,12 +136,15 @@ static THROTTLE: LazyLock<Mutex<HashMap<PathBuf, UnlockThrottle>>> =
 static UNLOCK_GATE: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 /// Vault dirs mid-close (`take_session` … flush done). Covers the gap where
 /// the session map is empty but flush still runs against the current root.
-static CLOSING: LazyLock<Mutex<HashMap<PathBuf, ClosePhase>>> =
+static CLOSING: LazyLock<Mutex<HashMap<PathBuf, Closing>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 /// Vault dirs mid-open / mid-create-seed (before `insert_session`). Refcounted so
 /// overlapping `open_vault` calls keep the mark until the last guard drops.
 /// `rename_vault` honors this without waiting on Argon2 or using `UNLOCK_GATE`.
 static PREPARING: LazyLock<Mutex<HashMap<PathBuf, usize>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+/// Vault dirs whose backups an export is reading. Refcounted like `PREPARING`.
+static BACKUP_EXPORTS: LazyLock<Mutex<HashMap<PathBuf, usize>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 /// Serializes create (and other dir-scoped writes) per `vaults/<id>/`.
 static VAULT_DIR_GATES: LazyLock<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>> =
@@ -232,6 +250,18 @@ pub fn is_vault_open_at(vault_dir: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// Ids of the sessions open under `vaults_dir`.
+pub(crate) fn open_session_ids_under(vaults_dir: &Path) -> Vec<String> {
+    let Ok(guard) = lock_sessions() else {
+        return Vec::new();
+    };
+    guard
+        .iter()
+        .filter(|(dir, _)| dir.starts_with(vaults_dir))
+        .filter_map(|(_, session)| session.lock().ok().map(|inner| inner.vault_id.clone()))
+        .collect()
+}
+
 pub fn open_session_ids() -> Vec<String> {
     let Ok(guard) = lock_sessions() else {
         return Vec::new();
@@ -308,7 +338,42 @@ pub fn is_vault_closing_at(vault_dir: &Path) -> bool {
 
 /// Where an in-flight close of this vault is. `None` when no close is running.
 pub fn vault_close_phase_at(vault_dir: &Path) -> Option<ClosePhase> {
-    CLOSING.lock().ok().and_then(|g| g.get(vault_dir).copied())
+    CLOSING
+        .lock()
+        .ok()
+        .and_then(|g| g.get(vault_dir).map(|closing| closing.phase))
+}
+
+/// Make the close running for this vault finish the Close now way. False when
+/// none is running.
+pub(crate) fn hurry_close_at(vault_dir: &Path) -> bool {
+    CLOSING
+        .lock()
+        .ok()
+        .and_then(|g| {
+            g.get(vault_dir)
+                .map(|closing| closing.hurry.store(true, Ordering::Relaxed))
+        })
+        .is_some()
+}
+
+/// [`hurry_close_at`] for every close running under `vaults_dir`.
+pub(crate) fn hurry_closes_under(vaults_dir: &Path) {
+    if let Ok(guard) = CLOSING.lock() {
+        guard
+            .iter()
+            .filter(|(dir, _)| dir.starts_with(vaults_dir))
+            .for_each(|(_, closing)| closing.hurry.store(true, Ordering::Relaxed));
+    }
+}
+
+/// True while a close runs under `vaults_dir`. A poisoned lock reads as none:
+/// the one caller is waiting to exit.
+pub(crate) fn any_close_under(vaults_dir: &Path) -> bool {
+    CLOSING
+        .lock()
+        .map(|g| g.keys().any(|dir| dir.starts_with(vaults_dir)))
+        .unwrap_or(false)
 }
 
 /// True while this vault is mid-open or mid-create-seed. Fail closed on poison.
@@ -389,6 +454,47 @@ impl Drop for DataFolderExportGuard {
     }
 }
 
+/// True while a backup export reads this vault's backups. Fail closed on poison.
+pub(crate) fn is_vault_backup_export_at(vault_dir: &Path) -> bool {
+    BACKUP_EXPORTS
+        .lock()
+        .map(|g| g.get(vault_dir).is_some_and(|count| *count > 0))
+        .unwrap_or(true)
+}
+
+/// Keeps `vault_dir` in place while a backup export reads from it: delete and
+/// rename refuse until dropped. A backup is a frozen file, so open, close, and
+/// every other export stay free.
+pub(crate) struct BackupExportGuard {
+    vault_dir: PathBuf,
+}
+
+impl BackupExportGuard {
+    pub(crate) fn enter(vault_dir: &Path) -> Result<Self> {
+        let mut guard = BACKUP_EXPORTS
+            .lock()
+            .map_err(|_| session_lock_poisoned("backup export lock poisoned"))?;
+        *guard.entry(vault_dir.to_path_buf()).or_insert(0) += 1;
+        Ok(Self {
+            vault_dir: vault_dir.to_path_buf(),
+        })
+    }
+}
+
+impl Drop for BackupExportGuard {
+    fn drop(&mut self) {
+        if let Ok(mut guard) = BACKUP_EXPORTS.lock() {
+            match guard.get_mut(&self.vault_dir) {
+                Some(count) if *count > 1 => *count -= 1,
+                Some(_) => {
+                    guard.remove(&self.vault_dir);
+                }
+                None => {}
+            }
+        }
+    }
+}
+
 /// Step of an in-flight close, read by the UI while `vault_close` runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClosePhase {
@@ -407,9 +513,17 @@ impl ClosePhase {
     }
 }
 
+/// One close in flight.
+struct Closing {
+    phase: ClosePhase,
+    /// Set once this close should finish the Close now way.
+    hurry: Arc<AtomicBool>,
+}
+
 /// Mark `vault_dir` as closing until dropped (covers flush after `take_session`).
 pub(crate) struct ClosingGuard {
     vault_dir: PathBuf,
+    hurry: Arc<AtomicBool>,
 }
 
 impl ClosingGuard {
@@ -417,16 +531,28 @@ impl ClosingGuard {
         let mut guard = CLOSING
             .lock()
             .map_err(|_| session_lock_poisoned("closing lock poisoned"))?;
-        guard.insert(vault_dir.to_path_buf(), ClosePhase::Flush);
+        let hurry = Arc::new(AtomicBool::new(false));
+        guard.insert(
+            vault_dir.to_path_buf(),
+            Closing {
+                phase: ClosePhase::Flush,
+                hurry: Arc::clone(&hurry),
+            },
+        );
         Ok(Self {
             vault_dir: vault_dir.to_path_buf(),
+            hurry,
         })
+    }
+
+    pub(crate) fn hurry(&self) -> &Arc<AtomicBool> {
+        &self.hurry
     }
 
     pub(crate) fn set_phase(&self, phase: ClosePhase) {
         if let Ok(mut guard) = CLOSING.lock() {
             if let Some(current) = guard.get_mut(&self.vault_dir) {
-                *current = phase;
+                current.phase = phase;
             }
         }
     }

@@ -136,7 +136,11 @@ describe("hidden vaults", () => {
         },
         workspaceSystem: "linux",
         lastOpenedVault: "",
-        paths: { logsDir: "/data/.upriv/logs", appHome: "/data" },
+        paths: {
+          logsDir: "/data/.upriv/logs",
+          logsOpenPath: "/data/.upriv/logs",
+          appHome: "/data",
+        },
       },
       t,
     );

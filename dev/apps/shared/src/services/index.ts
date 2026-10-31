@@ -9,6 +9,7 @@ export type { DataFolderService } from "./data-folder/DataFolderService";
 export type { ExportFolderGrants } from "./export-folders/ExportFolderGrants";
 export type { JobService, JobStopBy } from "./jobs/JobService";
 export type {
+  FolderRemoval,
   VaultFileSystemService,
   VaultBinaryByteSource,
 } from "./filesystem/VaultFileSystemService";
@@ -16,6 +17,7 @@ export type {
   VaultLifecycleService,
   CloseVaultOutcome,
   BackupFailureReason,
+  VaultCloseReason,
 } from "./lifecycle/VaultLifecycleService";
 export {
   BACKUP_CLOSE_TOAST_MS,
@@ -44,11 +46,7 @@ export {
   VAULT_FS_PREVIEW_MAX_BYTES,
 } from "./filesystem/createLiveVaultFileSystemService";
 export type { LiveVaultFileSystemRpc } from "./filesystem/createLiveVaultFileSystemService";
-export {
-  createLiveBackupService,
-  bytesFromContentB64,
-  parsePathWriteResult,
-} from "./backup/createLiveBackupService";
+export { createLiveBackupService, parsePathWriteResult } from "./backup/createLiveBackupService";
 export type { LiveBackupRpc, VaultPathWriteResult } from "./backup/createLiveBackupService";
 export type { VaultGroupService } from "./vault-groups/VaultGroupService";
 export type { VaultRootService } from "./vault-root/VaultRootService";

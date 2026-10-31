@@ -62,15 +62,19 @@ import { useTranslation, type I18nKey } from "@/i18n";
 import { useVaultLifecycleActions } from "@/features/vaults/lifecycle";
 import { useErrorToast } from "@/hooks/useErrorToast";
 import {
+  useBackupExportJob,
   useDataFolderExportJob,
+  useFileManagerSelector,
   useJobProgress,
   useLoadingBudget,
+  usePlainExportSweep,
   useVaultBackupJob,
 } from "@upriv/shared/react";
 import { useDaemonReady } from "@/lib/useDaemonReady";
 import { useVaultListState } from "./useVaultListState";
 import { useVaultListModals } from "./useVaultListModals";
 import { useVaultImportDrop } from "./useVaultImportDrop";
+import { useExportFolder } from "@/hooks/useExportFolder";
 import { useVaultExportFolders } from "./useVaultExportFolders";
 import type { VaultListDropSource } from "../lib/vaultImportDrop";
 
@@ -79,7 +83,8 @@ export function useVaultListScreen() {
   const vaultService = useVaultService();
   const vaultGroupService = useVaultGroupService();
   const logService = useLogService();
-  const { openFromVault, syncWithVaultList, maximizedVaultId } = useFileManager();
+  const { openFromVault, syncWithVaultList } = useFileManager();
+  const fileManagerMaximized = useFileManagerSelector((state) => state.maximizedVaultId !== null);
   const {
     settings,
     patchSettings,
@@ -516,6 +521,8 @@ export function useVaultListScreen() {
     vaultService,
   ]);
 
+  usePlainExportSweep(vaultService, settingsOnDisk, vaultRootEpoch);
+
   useEffect(() => {
     syncWithVaultList(vaults);
   }, [syncWithVaultList, vaults]);
@@ -549,6 +556,25 @@ export function useVaultListScreen() {
     },
     onFailed: (_vaultId, error) => {
       showError(error, "toast.backup_now_failed");
+    },
+    onTimedOut: () => {
+      showToast(t("error.operation_timed_out"));
+    },
+  });
+  const backupExportFolder = useExportFolder(t("modal.backup.export_picker_title"));
+  const backupExport = useBackupExportJob(backupService, jobs, {
+    onExported: (written) => {
+      showToast(t("toast.backup_export_saved", { name: fileNameOfPath(written.path) }));
+    },
+    onFailed: (error) => {
+      if (shouldBumpVaultRootEpoch(error)) {
+        void reportVaultRootIntegrityFailure(error);
+        return;
+      }
+      showError(error, "toast.backup_export_failed");
+    },
+    onCancelled: () => {
+      showToast(t("toast.backup_export_cancelled"));
     },
     onTimedOut: () => {
       showToast(t("error.operation_timed_out"));
@@ -658,16 +684,12 @@ export function useVaultListScreen() {
 
   const handleCreateVault = useCallback(
     (result: CreateVaultResult, password: string) => {
-      const listed = vaults.some((vault) => vault.id === result.vaultId);
-      const createInFlight =
-        lifecycle.pipeline.creatingVaultIds.length > 0 ||
-        lifecycle.pipeline.queued.some((job) => job.kind === "create") ||
-        (lifecycle.pipeline.isVaultPipelineBusy(result.vaultId) && !listed);
-      if (createInFlight) {
-        showToast(t("vault.create.busy"));
-        return;
-      }
-      if (listed) {
+      // Another vault being created only queues this one. The same id still in
+      // flight (a create past its budget) is taken.
+      if (
+        vaults.some((vault) => vault.id === result.vaultId) ||
+        lifecycle.pipeline.isVaultPipelineBusy(result.vaultId)
+      ) {
         throw new RpcError(
           VAULT_ERROR_CODES.VAULT_ALREADY_EXISTS,
           `vault already exists: ${result.vaultId}`,
@@ -689,7 +711,7 @@ export function useVaultListScreen() {
       }
 
       const welcome = buildVaultWelcomeFiles(result, { t, locale });
-      const started = lifecycle.startCreatePipeline(
+      lifecycle.startCreatePipeline(
         result.vaultId,
         async () => {
           await vaultService.createVault({
@@ -783,20 +805,6 @@ export function useVaultListScreen() {
           },
         },
       );
-
-      if (!started) {
-        const pendingEffect = pendingCreateGroupsRef.current.get(result.vaultId);
-        pendingCreatesRef.current.delete(result.vaultId);
-        pendingCreateGroupsRef.current.delete(result.vaultId);
-        removeVault(result.vaultId);
-        if (pendingEffect) {
-          setGroups((current) => rollbackPendingCreateGroupEffect(current, pendingEffect));
-        }
-        throw new RpcError(
-          VAULT_ERROR_CODES.VAULT_ALREADY_EXISTS,
-          `vault already exists: ${result.vaultId}`,
-        );
-      }
     },
     [
       addVault,
@@ -809,7 +817,6 @@ export function useVaultListScreen() {
       removeVault,
       setGroups,
       showError,
-      showToast,
       t,
       touchSessionWrite,
       vaultGroupService,
@@ -935,7 +942,7 @@ export function useVaultListScreen() {
     modals.settingsVaultId ||
     modals.lifecycleRequest ||
     modals.recoveryVaultId ||
-    maximizedVaultId,
+    fileManagerMaximized,
   );
 
   const importDrop = useVaultImportDrop({
@@ -1306,6 +1313,7 @@ export function useVaultListScreen() {
       },
       onLockVault: lifecycle.handleLockVault,
       onUnlockVault: lifecycle.handleUnlockVault,
+      onCloseNow: lifecycle.handleCloseNow,
     },
     importDrop,
     lifecycle: {
@@ -1355,6 +1363,11 @@ export function useVaultListScreen() {
       onCloseAllUnsavedDiscard: lifecycle.confirmCloseAllDiscard,
       onCloseAllUnsavedSave: lifecycle.confirmCloseAllSave,
       onCloseAllUnsavedTimeout: lifecycle.timeoutCloseAllSave,
+      closeNowVault: lifecycle.closeNowVault,
+      closeNowUnsaved: lifecycle.closeNowUnsaved,
+      closeNowAsks: lifecycle.closeNowAsks,
+      onCloseNowCancel: lifecycle.cancelCloseNow,
+      onCloseNowConfirm: lifecycle.confirmCloseNow,
     },
     onCloseVaultAfterUnsaved: lifecycle.closeVaultAfterUnsaved,
     toast: {
@@ -1394,7 +1407,14 @@ export function useVaultListScreen() {
       listRefreshToken: backupListRefresh,
       onClose: () => modals.setBackupVaultId(null),
       onCreateVaultFromBackup: handleCreateVaultFromBackup,
-      onDownloadNotice: showToast,
+      exportFolder: backupExportFolder,
+      exportJob: backupExport.job,
+      onExport: (keys: readonly string[], destDir: string) => {
+        const vault = modals.backupVault;
+        if (vault) backupExport.start(vault.id, keys, destDir);
+      },
+      onExportBusy: () => showToast(t("toast.backup_export_busy")),
+      onStopExport: backupExport.stop,
     },
     exportVault: {
       vault: modals.exportVault,

@@ -16,7 +16,7 @@
 
 #[allow(unused_imports)]
 use crate::host_fs::HostFsQuery;
-use std::io::{BufWriter, ErrorKind, Read, Seek, Write};
+use std::io::{BufWriter, Cursor, ErrorKind, Read, Seek, Write};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
@@ -29,6 +29,8 @@ use crate::config::vault_config::{VaultArchiveMode, VaultSevenZipSection};
 use crate::error::{Result, UprivError};
 use crate::session::Job;
 use crate::store::{read_file_chunks, VaultHeader, VaultIndex, VaultNode, CHUNK_SIZE};
+
+use super::config_folder::ConfigFile;
 
 const ARCHIVE_HEADER_SLACK: u64 = 1024 * 1024;
 /// Fixed fields of one member: the writer's entry and its rows in the header.
@@ -150,7 +152,7 @@ fn decode_threads_in(cores: u32, available: Option<u64>) -> Result<u32> {
     Ok(threads)
 }
 
-fn mem_available_bytes() -> Option<u64> {
+pub(crate) fn mem_available_bytes() -> Option<u64> {
     #[cfg(any(target_os = "linux", target_os = "android"))]
     {
         let text = crate::host_fs::read_to_string("/proc/meminfo").ok()?;
@@ -343,7 +345,7 @@ fn archive_header_bytes(outer_folder: &str, paths: impl Iterator<Item = usize>) 
         .fold(ARCHIVE_HEADER_SLACK, u64::saturating_add)
 }
 
-fn file_size(node: &VaultNode) -> u64 {
+pub(super) fn file_size(node: &VaultNode) -> u64 {
     node.as_file().map_or(0, |(_, size, _)| size)
 }
 
@@ -521,7 +523,7 @@ fn map_sevenz_error(err: sevenz_rust2::Error) -> UprivError {
     }
 }
 
-fn archive_member_name(logical: &str) -> Result<String> {
+pub(super) fn archive_member_name(logical: &str) -> Result<String> {
     if sevenz_member_name_unsafe(logical) {
         return Err(UprivError::VaultStoreInvalid {
             path: PathBuf::from(logical),
@@ -552,7 +554,7 @@ fn content_methods(
     vec![aes, data]
 }
 
-fn export_file_nodes<'a>(
+pub(super) fn export_file_nodes<'a>(
     index: &'a VaultIndex,
     skip: &impl Fn(&str) -> bool,
 ) -> Vec<&'a VaultNode> {
@@ -563,7 +565,10 @@ fn export_file_nodes<'a>(
         .collect()
 }
 
-fn export_dir_nodes<'a>(index: &'a VaultIndex, skip: &impl Fn(&str) -> bool) -> Vec<&'a VaultNode> {
+pub(super) fn export_dir_nodes<'a>(
+    index: &'a VaultIndex,
+    skip: &impl Fn(&str) -> bool,
+) -> Vec<&'a VaultNode> {
     let mut dirs: Vec<&VaultNode> = index
         .nodes
         .iter()
@@ -573,7 +578,8 @@ fn export_dir_nodes<'a>(index: &'a VaultIndex, skip: &impl Fn(&str) -> bool) -> 
     dirs
 }
 
-fn seven_zip_logical_member(outer: &str, logical: &str) -> String {
+/// A vault path as its archive member: one outer folder holds the vault.
+pub(super) fn logical_member(outer: &str, logical: &str) -> String {
     let logical = logical.trim_start_matches('/');
     format!("{outer}/{logical}")
 }
@@ -592,10 +598,18 @@ fn push_directory<W: Write + Seek>(writer: &mut ArchiveWriter<W>, name: &str) ->
 
 /// Where the logical files are read from: a closed vault's `store/`, unlocked.
 #[derive(Clone, Copy)]
-pub(crate) struct LogicalSevenZipSource<'a> {
+pub(crate) struct LogicalSource<'a> {
     pub store_dir: &'a Path,
     pub header: &'a VaultHeader,
     pub content_key: &'a [u8; 32],
+}
+
+/// The shape of a `.7z`: one outer folder, and the files of `.upriv-config/`
+/// beside the vault's own.
+#[derive(Clone, Copy)]
+pub(crate) struct ArchiveLayout<'a> {
+    pub outer: &'a str,
+    pub config_files: &'a [ConfigFile],
 }
 
 /// One file's plaintext, taken chunk by chunk from the decrypt queue. A
@@ -659,7 +673,7 @@ impl Read for QueuedFile<'_> {
 /// Decrypt `files` in order into `queue`. Returns without an error once the
 /// encoder stops reading: the encoder reports why.
 fn decrypt_in_order(
-    source: LogicalSevenZipSource<'_>,
+    source: LogicalSource<'_>,
     files: &[&VaultNode],
     queue: SyncSender<Zeroizing<Vec<u8>>>,
     job: &Job,
@@ -705,7 +719,7 @@ fn push_blocks<W: Write + Seek>(
         let mut entries = Vec::with_capacity(files.len());
         let mut readers = Vec::with_capacity(files.len());
         for node in files {
-            let name = archive_member_name(&seven_zip_logical_member(outer_folder, &node.path))?;
+            let name = archive_member_name(&logical_member(outer_folder, &node.path))?;
             entries.push(ArchiveEntry::new_file(&name));
             readers.push(SourceReader::new(QueuedFile::new(
                 queue,
@@ -722,12 +736,38 @@ fn push_blocks<W: Write + Seek>(
     Ok(())
 }
 
+/// `.upriv-config/` as the archive's first block, with its own salt and IV. A
+/// password test reads it without decoding a vault file, also in a solid
+/// archive, whose vault files share one block after this one.
+fn push_config_block<W: Write + Seek>(
+    writer: &mut ArchiveWriter<W>,
+    opts: &VaultSevenZipSection,
+    password: &Password,
+    layout: ArchiveLayout<'_>,
+) -> Result<()> {
+    if layout.config_files.is_empty() {
+        return Ok(());
+    }
+    let mut entries = Vec::with_capacity(layout.config_files.len());
+    let mut readers = Vec::with_capacity(layout.config_files.len());
+    for file in layout.config_files {
+        let name = archive_member_name(&logical_member(layout.outer, &file.path()))?;
+        entries.push(ArchiveEntry::new_file(&name));
+        readers.push(SourceReader::new(Cursor::new(file.bytes.as_slice())));
+    }
+    writer.set_content_methods(content_methods(opts, password.clone(), 1));
+    writer
+        .push_archive_entries(entries, readers)
+        .map_err(map_sevenz_error)?;
+    Ok(())
+}
+
 /// Stream the files of `plan` into `writer`, one 7z block at a time, while a
 /// worker thread decrypts them. A decrypt failure is the error returned: it
 /// is why the encoder ran dry.
 fn push_file_blocks<W: Write + Seek>(
     writer: &mut ArchiveWriter<W>,
-    source: LogicalSevenZipSource<'_>,
+    source: LogicalSource<'_>,
     opts: &VaultSevenZipSection,
     password: &Password,
     outer_folder: &str,
@@ -757,10 +797,10 @@ fn push_file_blocks<W: Write + Seek>(
 /// the logical bytes packed.
 pub(crate) fn pack_logical_seven_zip_to_writer<W: Write + Seek>(
     dest: W,
-    source: LogicalSevenZipSource<'_>,
+    source: LogicalSource<'_>,
     archive_password: &[u8],
     opts: &VaultSevenZipSection,
-    outer_folder: &str,
+    layout: ArchiveLayout<'_>,
     plan: &SevenZipPackPlan<'_>,
     job: &Job,
 ) -> Result<W> {
@@ -772,21 +812,22 @@ pub(crate) fn pack_logical_seven_zip_to_writer<W: Write + Seek>(
     // A vault with no files and no folders is one outer directory. Folders that
     // exist in the vault, including empty ones, are members under that name.
     if plan.files.is_empty() && plan.dirs.is_empty() {
-        push_directory(&mut writer, outer_folder)?;
+        push_directory(&mut writer, layout.outer)?;
     } else {
         for dir in &plan.dirs {
             job.ensure_running()?;
-            let name = archive_member_name(&seven_zip_logical_member(outer_folder, &dir.path))?;
+            let name = archive_member_name(&logical_member(layout.outer, &dir.path))?;
             push_directory(&mut writer, &name)?;
         }
     }
     job.set_total(plan.bytes);
+    push_config_block(&mut writer, opts, &password, layout)?;
     push_file_blocks(
         &mut writer,
         source,
         opts,
         &password,
-        outer_folder,
+        layout.outer,
         plan,
         job,
     )?;
@@ -809,6 +850,7 @@ mod tests {
     use crate::session::{cancel_job, job_status};
     use crate::store::{blob_path, is_reserved_logical, open_store, KdfUnlockPreset};
     use crate::test_support::{test_job_id, vault_root_with};
+    use crate::vault::config_folder::ImportExtras;
     use crate::vault::create::create_vault;
     use crate::vault::fs::{fs_read_file, fs_write_file};
     use crate::vault::open_close::{close_vault, open_vault};
@@ -902,14 +944,17 @@ mod tests {
         let plan = plan(&opened.index, opts, limits);
         pack_logical_seven_zip_to_writer(
             dest,
-            LogicalSevenZipSource {
+            LogicalSource {
                 store_dir: &store,
                 header: &opened.header,
                 content_key: &opened.content_key,
             },
             PASSWORD,
             opts,
-            "Notes",
+            ArchiveLayout {
+                outer: "Notes",
+                config_files: &[],
+            },
             &plan,
             job,
         )
@@ -1177,7 +1222,7 @@ mod tests {
             KdfUnlockPreset::M32,
             &packed,
             PASSWORD,
-            None,
+            ImportExtras::default(),
         )
         .unwrap();
         open_vault(&root, &imported, PASSWORD).unwrap();
@@ -1237,7 +1282,7 @@ mod tests {
                 KdfUnlockPreset::M32,
                 &packed,
                 PASSWORD,
-                None,
+                ImportExtras::default(),
             )
             .unwrap();
             open_vault(&root, &imported, PASSWORD).unwrap();

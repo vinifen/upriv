@@ -1,6 +1,7 @@
 export {
   applyEmbeddedVaultSettings,
   parseEmbeddedVaultSettings,
+  revertEmbeddedVaultSettings,
   type EmbeddedSettingsSnapshot,
   type EmbeddedVaultSettings,
 } from "./applyEmbeddedVaultSettings";
@@ -10,9 +11,13 @@ export {
   createVaultImportNeedsArchivePassword,
   createVaultImportPackage,
   createVaultImportSelectionPatch,
+  createVaultSettingsLocked,
   importExtractApplies,
   importExtractEnabled,
+  importKeepSettingsApplies,
+  importKeepWorkspaceApplies,
   importSetsVaultPassword,
+  importUsesCarriedSettings,
   importZipWrapsDocuments,
   createVaultImportPackageKind,
 } from "./importKind";

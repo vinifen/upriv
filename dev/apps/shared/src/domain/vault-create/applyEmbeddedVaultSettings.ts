@@ -5,7 +5,7 @@ import type { KdfUnlockPreset, VaultSettingsConfig } from "../vault-settings";
 import { createVaultChoosesKdf } from "../vault-settings/kdf";
 import type { CreateVaultDraft } from "./types";
 
-/** Settings read from a store zip, a backup zip, or a portable `.7z`. */
+/** Settings read from a store zip, a backup zip, a `.7z`, or a plain-text `.zip`. */
 export interface EmbeddedVaultSettings {
   settings: VaultSettingsConfig;
   unlockPreset: KdfUnlockPreset | null;
@@ -50,7 +50,7 @@ export function applyEmbeddedVaultSettings(
     passwordHint: unchanged(draft.passwordHint, snapshot.passwordHint, source.vault.password_hint),
     hidden: unchanged(draft.hidden, snapshot.hidden, source.vault.hidden),
     order: unchanged(draft.order, snapshot.order, source.vault.order),
-    storage: unchanged(draft.storage, snapshot.storage, { mode: source.storage.mode }),
+    storage: unchanged(draft.storage, snapshot.storage, { ...source.storage }),
     mount: unchanged(draft.mount, snapshot.mount, source.mount),
     backup: unchanged(draft.backup, snapshot.backup, { ...source.backup }),
     auto_close: unchanged(draft.auto_close, snapshot.auto_close, { ...source.auto_close }),
@@ -63,6 +63,42 @@ export function applyEmbeddedVaultSettings(
     next.kdf = unchanged(draft.kdf, snapshot.kdf, { unlock_preset: embedded.unlockPreset });
   }
   return next;
+}
+
+/** Fields `applyEmbeddedVaultSettings` may change, besides `archiveUnlockPreset`. */
+const EMBEDDED_DRAFT_FIELDS = [
+  "displayName",
+  "note",
+  "passwordHint",
+  "hidden",
+  "order",
+  "storage",
+  "mount",
+  "backup",
+  "auto_close",
+  "security",
+  "seven_zip",
+  "file_manager",
+  "kdf",
+] as const satisfies readonly (keyof CreateVaultDraft)[];
+
+/**
+ * Take a file's settings back out of a draft: the person turned them off, or
+ * chose another file. A field goes back to `snapshot` only while it still holds
+ * what `applied` put there, so an edit made since stays.
+ */
+export function revertEmbeddedVaultSettings(
+  draft: CreateVaultDraft,
+  applied: CreateVaultDraft,
+  snapshot: EmbeddedSettingsSnapshot,
+): CreateVaultDraft {
+  const restore = <K extends (typeof EMBEDDED_DRAFT_FIELDS)[number]>(field: K) => ({
+    [field]: unchanged(draft[field], applied[field], snapshot[field]),
+  });
+  return Object.assign(
+    { ...draft, archiveUnlockPreset: null },
+    ...EMBEDDED_DRAFT_FIELDS.map(restore),
+  ) as CreateVaultDraft;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -104,6 +140,8 @@ export function parseEmbeddedVaultSettings(
   if (!isRecord(settings.seven_zip) || !isRecord(settings.file_manager)) return null;
   const displayName = str(settings.vault.display_name);
   const mode = oneOf(str(settings.storage.mode) ?? "", ["encrypted_dir", "upriv_plain"] as const);
+  const plainFiles =
+    oneOf(str(settings.storage.plain_files) ?? "", ["chosen", "whole"] as const) ?? "chosen";
   const backupMode = oneOf(str(settings.backup.mode) ?? "", ["keep_last", "keep_all"] as const);
   const wipePattern = oneOf(str(settings.security.wipe_pattern) ?? "", [
     "random",
@@ -160,7 +198,7 @@ export function parseEmbeddedVaultSettings(
         note: str(settings.vault.note) ?? "",
         hidden,
       },
-      storage: { mode },
+      storage: { mode, plain_files: plainFiles },
       mount: normalizeWorkspaceTable(settings.mount, "vault"),
       backup: {
         enabled,

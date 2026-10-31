@@ -103,15 +103,21 @@ fn is_device_name(name: &str) -> bool {
 /// same entry as another one there. A bad folder is listed once, not with
 /// every file under it; both spellings of a clash are listed.
 pub(super) fn unsupported_names(index: &VaultIndex, rules: &NameRules) -> Vec<String> {
+    let paths = index.nodes.iter().map(|node| node.path.as_str());
+    unsupported_paths(paths.filter(|path| !is_reserved_logical(path)), rules)
+}
+
+/// [`unsupported_names`] for these paths only: what a send would put in the folder.
+pub(super) fn unsupported_paths<'a>(
+    paths: impl Iterator<Item = &'a str>,
+    rules: &NameRules,
+) -> Vec<String> {
     let mut bad = BTreeSet::new();
     // Folded parent + folded name → the first store spelling.
     let mut seen: HashMap<(String, String), String> = HashMap::new();
-    for node in &index.nodes {
-        if is_reserved_logical(&node.path) {
-            continue;
-        }
+    for path in paths {
         let mut parent = String::new();
-        for part in node.path.split('/') {
+        for part in path.split('/') {
             let spelled = if parent.is_empty() {
                 part.to_string()
             } else {

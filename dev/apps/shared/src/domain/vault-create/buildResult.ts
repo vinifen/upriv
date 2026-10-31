@@ -57,6 +57,7 @@ export function buildCreateVaultResult(
     importKind: draft.importKind,
     importShape: draft.importShape,
     importExtract: draft.importExtract,
+    importKeepWorkspace: draft.importKeepWorkspace,
     zipLayout: draft.zipLayout,
     importFilePath: draft.importFilePath,
     importFileName: draft.importFileName,

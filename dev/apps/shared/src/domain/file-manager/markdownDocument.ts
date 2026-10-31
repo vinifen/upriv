@@ -95,7 +95,6 @@ interface ParseCtx {
  */
 type MarkdownTree = { tree: MdNode } | "too_large" | "unparsed";
 
-/** One parse for Read and the outline, so a failure cannot disagree between them. */
 function readMarkdownTree(source: string): MarkdownTree {
   if (source.length > MARKDOWN_PREVIEW_MAX_CHARS) return "too_large";
   try {
@@ -112,21 +111,73 @@ function readMarkdownTree(source: string): MarkdownTree {
   }
 }
 
-export function parseMarkdownDocument(source: string): MarkdownPreviewModel {
+/** A note as Read view and the outline show it. */
+export interface MarkdownNote {
+  document: MarkdownPreviewModel;
+  outline: MarkdownOutlineModel;
+}
+
+/** One parse for both, so a failure cannot disagree between them. */
+export function parseMarkdownNote(source: string): MarkdownNote {
   const read = readMarkdownTree(source);
-  if (read === "too_large") return { status: "too_large" };
+  if (read === "too_large") {
+    return { document: { status: "too_large" }, outline: { status: "ok", entries: [] } };
+  }
   if (read === "unparsed") {
     return {
-      status: "ok",
-      blocks: [{ type: "code", text: source, lang: null }],
-      footnotes: [],
+      document: {
+        status: "ok",
+        blocks: [{ type: "code", text: source, lang: null }],
+        footnotes: [],
+      },
+      outline: { status: "unparsed", entries: [] },
     };
   }
   const ctx = collect(read.tree, source);
   return {
-    status: "ok",
-    blocks: blocksFrom(read.tree.children, ctx),
-    footnotes: footnotesFrom(ctx),
+    document: {
+      status: "ok",
+      blocks: blocksFrom(read.tree.children, ctx),
+      footnotes: footnotesFrom(ctx),
+    },
+    outline: { status: "ok", entries: headingsFrom(read.tree, ctx) },
+  };
+}
+
+/** Text of the notes a {@link MarkdownParser} keeps; always room for the latest one. */
+export const MARKDOWN_PARSER_CACHE_CHARS = 512_000;
+
+/** Parses notes and keeps the last few, so going back to a tab does not parse it again. */
+export interface MarkdownParser {
+  note: (source: string) => MarkdownNote;
+}
+
+/**
+ * Held by one file manager window and dropped with it, because it keeps note
+ * text in RAM just as that window's open tabs do.
+ */
+export function createMarkdownParser(budgetChars = MARKDOWN_PARSER_CACHE_CHARS): MarkdownParser {
+  // A Map keeps insertion order: the oldest key comes first.
+  const notes = new Map<string, MarkdownNote>();
+  return {
+    note(source) {
+      const held = notes.get(source);
+      if (held) {
+        notes.delete(source);
+        notes.set(source, held);
+        return held;
+      }
+      const parsed = parseMarkdownNote(source);
+      notes.set(source, parsed);
+      let chars = 0;
+      for (const key of notes.keys()) chars += key.length;
+      for (const key of notes.keys()) {
+        if (chars <= budgetChars || key === source) break;
+        chars -= key.length;
+        notes.delete(key);
+      }
+      return parsed;
+    },
   };
 }
 
@@ -152,19 +203,11 @@ export interface MarkdownOutlineModel {
 
 /**
  * Top-level headings in document order. Entry `i` is the `i`-th top-level
- * `heading` block of {@link parseMarkdownDocument} (same empty-heading rule),
- * so Read view can find it by position. Headings inside quotes, lists or
- * footnotes are not listed.
+ * `heading` block of the note's document (same empty-heading rule), so Read
+ * view can find it by position. Headings inside quotes, lists or footnotes are
+ * not listed.
  */
-export function markdownOutline(source: string): MarkdownOutlineModel {
-  const read = readMarkdownTree(source);
-  if (read === "unparsed") return { status: "unparsed", entries: [] };
-  if (read === "too_large") return { status: "ok", entries: [] };
-  return { status: "ok", entries: headingsFrom(read.tree, source) };
-}
-
-function headingsFrom(tree: MdNode, source: string): MarkdownOutlineEntry[] {
-  const ctx = collect(tree, source);
+function headingsFrom(tree: MdNode, ctx: ParseCtx): MarkdownOutlineEntry[] {
   const entries: MarkdownOutlineEntry[] = [];
   const open: number[] = [];
   for (const node of tree.children ?? []) {

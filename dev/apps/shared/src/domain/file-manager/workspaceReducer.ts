@@ -29,6 +29,8 @@ export type VaultWorkspaceAction =
   | { type: "expand_folder"; path: string; force?: boolean }
   | { type: "select_path"; path: string }
   | { type: "open_file"; path: string }
+  /** A file the user just made: opens in Code view with the outline hidden. */
+  | { type: "open_new_file"; path: string }
   | { type: "request_close_tab"; path: string }
   | { type: "close_tab"; path: string }
   | { type: "request_close_tabs"; paths: string[] }
@@ -43,6 +45,8 @@ export type VaultWorkspaceAction =
       expandedPaths: string[];
       selectedPath: string | null;
       explorerCollapsed: boolean;
+      explorerSearchOpen: boolean;
+      explorerSearchQuery: string;
       fileStates?: Record<string, PerFileWorkspaceState>;
       treeSplitPercent?: number | null;
     }
@@ -58,6 +62,8 @@ export type VaultWorkspaceAction =
   | { type: "set_drag"; source: string | null; target: string | null }
   | { type: "set_file_markdown_view"; path: string; view: MarkdownViewMode }
   | { type: "set_explorer_collapsed"; collapsed: boolean }
+  | { type: "set_explorer_search_open"; open: boolean }
+  | { type: "set_explorer_search_query"; query: string }
   | { type: "set_file_markdown_outline_open"; path: string; open: boolean }
   | { type: "set_file_word_wrap"; path: string; wrap: boolean }
   | { type: "set_file_search_query"; path: string; query: string }
@@ -307,6 +313,7 @@ export function vaultWorkspaceReducer(
       };
     }
     case "select_path":
+      if (state.selectedPath === action.path) return state;
       return { ...state, selectedPath: action.path };
     case "open_file": {
       const openTabs = state.openTabs.includes(action.path)
@@ -319,6 +326,20 @@ export function vaultWorkspaceReducer(
         selectedPath: action.path,
         expandedPaths: expandUnlessUserCollapsed(state, ancestorFolderPaths(action.path)),
         unsavedPrompt: null,
+      };
+    }
+    case "open_new_file": {
+      const opened = vaultWorkspaceReducer(state, { type: "open_file", path: action.path });
+      return {
+        ...opened,
+        fileStates: {
+          ...opened.fileStates,
+          [action.path]: {
+            ...opened.fileStates[action.path],
+            markdownView: "source",
+            markdownOutlineOpen: false,
+          },
+        },
       };
     }
     case "request_close_tab":
@@ -380,11 +401,14 @@ export function vaultWorkspaceReducer(
         expandedPaths: action.expandedPaths.length > 0 ? action.expandedPaths : ["/"],
         selectedPath: action.selectedPath,
         explorerCollapsed: action.explorerCollapsed === true,
+        explorerSearchOpen: action.explorerSearchOpen === true,
+        explorerSearchQuery: action.explorerSearchQuery,
         fileStates: action.fileStates ? { ...action.fileStates } : state.fileStates,
         treeSplitPercent:
           action.treeSplitPercent !== undefined ? action.treeSplitPercent : state.treeSplitPercent,
       };
     case "tree_mutated":
+      if (state.treeRevision === action.revision) return state;
       return { ...state, treeRevision: action.revision };
     case "set_editor_draft": {
       const dirtyPaths = state.dirtyPaths.includes(action.path)
@@ -428,20 +452,33 @@ export function vaultWorkspaceReducer(
       };
     }
     case "cancel_rename":
+      if (state.renamingPath === null) return state;
       return { ...state, renamingPath: null };
     case "set_context_menu":
+      if (state.contextMenu === action.menu) return state;
       return { ...state, contextMenu: action.menu };
     case "set_delete_target":
+      if (state.deleteTarget === action.target && state.contextMenu === null) return state;
       return { ...state, deleteTarget: action.target, contextMenu: null };
     case "set_unsaved_prompt":
+      if (state.unsavedPrompt === action.prompt) return state;
       return { ...state, unsavedPrompt: action.prompt };
     case "set_drag":
+      if (state.dragSourcePath === action.source && state.dropTargetPath === action.target) {
+        return state;
+      }
       return { ...state, dragSourcePath: action.source, dropTargetPath: action.target };
     case "set_file_markdown_view":
       return patchFileState(state, action.path, "markdownView", markdownViewMode(action.view));
     case "set_explorer_collapsed":
       if (state.explorerCollapsed === action.collapsed) return state;
       return { ...state, explorerCollapsed: action.collapsed, contextMenu: null };
+    case "set_explorer_search_open":
+      if (state.explorerSearchOpen === action.open) return state;
+      return { ...state, explorerSearchOpen: action.open };
+    case "set_explorer_search_query":
+      if (state.explorerSearchQuery === action.query) return state;
+      return { ...state, explorerSearchQuery: action.query };
     case "set_file_markdown_outline_open":
       return patchFileState(state, action.path, "markdownOutlineOpen", action.open);
     case "set_file_word_wrap":

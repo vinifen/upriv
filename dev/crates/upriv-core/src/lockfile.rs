@@ -5,6 +5,7 @@ use crate::host_fs::HostFsQuery;
 use crate::host_fs::{self as fs, File, OpenOptions};
 use std::io::{Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
@@ -308,6 +309,31 @@ fn identity_of_path(path: &Path) -> std::io::Result<FileIdentity> {
     }
 }
 
+/// How long an open waits for another process to let go of a vault.
+///
+/// An app that went away leaves its core running until it has closed its
+/// vaults, backup zips included. Short of the open's own 10 minute budget, so
+/// a large vault still opens. A second running copy of Upriv holds on for
+/// longer, and the open then refuses with [`UprivError::VaultLocked`].
+pub const LOCK_HOLDER_WAIT: Duration = if cfg!(test) {
+    Duration::from_millis(50)
+} else {
+    Duration::from_secs(8 * 60)
+};
+const LOCK_HOLDER_POLL: Duration = Duration::from_millis(100);
+
+/// Wait up to `limit` for another process to release this lock.
+pub fn wait_for_lock_holder(path: &Path, limit: Duration) {
+    let deadline = Instant::now() + limit;
+    while lock_held_by_live_process(path) {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return;
+        }
+        std::thread::sleep(left.min(LOCK_HOLDER_POLL));
+    }
+}
+
 /// True when another process holds the exclusive flock on `path`.
 /// A free flock is not live, including when the body names another host.
 pub fn lock_held_by_live_process(path: &Path) -> bool {
@@ -325,6 +351,46 @@ mod tests {
     use super::*;
     #[allow(unused_imports)]
     use crate::host_fs::HostFsQuery;
+
+    #[test]
+    fn wait_ends_when_the_holder_lets_go() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("notes.lock");
+        let held = acquire_vault_lock(path.clone()).unwrap();
+        let holder = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(150));
+            drop(held);
+        });
+
+        wait_for_lock_holder(&path, Duration::from_secs(30));
+
+        holder.join().unwrap();
+        assert!(acquire_vault_lock(path).is_ok());
+    }
+
+    #[test]
+    fn wait_gives_up_on_a_holder_that_stays() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("notes.lock");
+        let _held = acquire_vault_lock(path.clone()).unwrap();
+
+        let started = Instant::now();
+        wait_for_lock_holder(&path, Duration::from_millis(50));
+
+        assert!(started.elapsed() < Duration::from_secs(5));
+        assert!(matches!(
+            acquire_vault_lock(path),
+            Err(UprivError::VaultLocked(_))
+        ));
+    }
+
+    #[test]
+    fn wait_returns_at_once_without_a_lock_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let started = Instant::now();
+        wait_for_lock_holder(&tmp.path().join("notes.lock"), Duration::from_secs(30));
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
 
     #[test]
     fn acquire_and_drop_releases() {

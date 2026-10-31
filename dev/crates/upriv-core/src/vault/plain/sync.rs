@@ -216,6 +216,15 @@ fn plan(
     paths.extend(view.keys().map(String::as_str));
     paths.extend(scan.entries.keys().map(String::as_str));
     paths.extend(synced.keys().map(String::as_str));
+    // A file sent to the folder keeps its place there when the app renames it.
+    let renamed: HashSet<NodeStamp> = synced
+        .iter()
+        .filter(|(path, _)| !view.contains_key(path.as_str()))
+        .filter_map(|(_, entry)| match entry {
+            Synced::File { node, .. } => Some(*node),
+            Synced::Dir => None,
+        })
+        .collect();
 
     let mut gone_from_folder: Vec<(String, NodeStamp, DiskStamp)> = Vec::new();
     let mut gone_from_store: Vec<(String, DiskStamp, NodeStamp)> = Vec::new();
@@ -270,12 +279,16 @@ fn plan(
                     }) if node == last_node => {
                         gone_from_folder.push((path.to_string(), node, last_disk));
                     }
-                    _ if !closing => plan.exports.push(Export {
-                        path: path.to_string(),
-                        node,
-                        size,
-                        replace: None,
-                    }),
+                    _ if !closing
+                        && (last.is_some() || session.wants(path) || renamed.contains(&node)) =>
+                    {
+                        plan.exports.push(Export {
+                            path: path.to_string(),
+                            node,
+                            size,
+                            replace: None,
+                        });
+                    }
                     _ => {}
                 }
             }
@@ -303,7 +316,7 @@ fn plan(
                 }
                 if last == Some(Synced::Dir) {
                     folder_dir_gone.push(path.to_string());
-                } else if !closing {
+                } else if !closing && session.wants(path) {
                     plan.folder_dirs.push(path.to_string());
                 }
             }
@@ -356,7 +369,7 @@ fn plan(
         .map(|(path, disk, _)| (path, disk))
         .collect();
 
-    resolve_store_dir_deletes(&mut plan, folder_dir_gone, view, &session.held, closing);
+    resolve_store_dir_deletes(&mut plan, folder_dir_gone, view, session, closing);
     resolve_folder_dir_deletes(&mut plan, store_dir_gone, scan);
 
     if !closing {
@@ -496,12 +509,13 @@ fn resolve_store_dir_deletes(
     plan: &mut Plan,
     gone: Vec<String>,
     view: &HashMap<String, Side>,
-    held: &BTreeSet<String>,
+    session: &PlainSession,
     closing: bool,
 ) {
     if gone.is_empty() {
         return;
     }
+    let held = &session.held;
     let leaving: HashSet<&str> = plan
         .store_deletes
         .iter()
@@ -520,7 +534,10 @@ fn resolve_store_dir_deletes(
             plan.store_dir_deletes.push(dir.clone());
         }
     }
-    if !closing {
+    if !session.whole {
+        // Files never sent keep it in the store. It stays out of the folder.
+        plan.forget.extend(kept);
+    } else if !closing {
         plan.folder_dirs.extend(kept);
     }
 }
@@ -642,6 +659,22 @@ fn plain_mut(session: &mut OpenSession) -> &mut PlainSession {
     session.plain.as_mut().expect("checked by Pass::with_plain")
 }
 
+/// Fails its next read once the pass is cancelled, so one large file cannot
+/// hold up a close that was told to hurry.
+struct CancelReader<'a, R> {
+    inner: R,
+    cancel: &'a AtomicBool,
+}
+
+impl<R: Read> Read for CancelReader<'_, R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if self.cancel.load(Ordering::Relaxed) {
+            return Err(io::Error::other("pass cancelled"));
+        }
+        self.inner.read(buf)
+    }
+}
+
 /// Run one pass. `closing` only saves the folder's changes into the store.
 pub(super) fn run(
     dir: &Path,
@@ -728,14 +761,34 @@ struct Tally {
 
 fn finish(dir: &Path, mut report: PlainSyncReport, tally: Tally) -> Result<PlainSyncReport> {
     with_open_session(dir, |session| {
-        if let Some(plain) = session.plain.as_mut() {
-            plain.totals.added += tally.added;
-            plain.totals.changed += tally.changed;
-            plain.totals.removed += tally.removed;
-            plain.touched.extend(tally.touched);
-            plain.tracked = plain.tracked.max(tracked_files(&plain.synced));
-            report.held_deletions = plain.held.len() as u32;
-            plain.last = Some(report.clone());
+        let store_files = session
+            .index
+            .nodes
+            .iter()
+            .filter(|node| node.as_file().is_some() && !is_reserved_logical(&node.path))
+            .count();
+        let index = &session.index;
+        let Some(plain) = session.plain.as_mut() else {
+            return Ok(());
+        };
+        plain.totals.added += tally.added;
+        plain.totals.changed += tally.changed;
+        plain.totals.removed += tally.removed;
+        plain.touched.extend(tally.touched);
+        // A few chosen files in the folder say nothing about the vault's size.
+        let tracked = if plain.whole {
+            tracked_files(&plain.synced)
+        } else {
+            store_files
+        };
+        plain.tracked = plain.tracked.max(tracked);
+        plain
+            .pending
+            .retain(|path| !plain.synced.contains_key(path) && index.find(path).is_some());
+        report.held_deletions = plain.held.len() as u32;
+        plain.last = Some(report.clone());
+        if plain.listing_changed() {
+            session.tree_revision = session.tree_revision.saturating_add(1);
         }
         Ok(())
     })?;
@@ -1052,7 +1105,11 @@ fn import_file(pass: &mut Pass<'_>, import: &Import) -> Result<bool> {
             return Ok(false);
         }
     };
-    let sealed = match seal_reader(pass.dir, &mut file, |_| {
+    let mut reader = CancelReader {
+        inner: &mut file,
+        cancel: pass.cancel,
+    };
+    let sealed = match seal_reader(pass.dir, &mut reader, |_| {
         UprivError::ImportSourceUnreadable(PathBuf::new())
     }) {
         Ok(sealed) => sealed,
@@ -1189,12 +1246,7 @@ fn export_file(pass: &mut Pass<'_>, export: &Export) -> Result<Step> {
     let Ok((temp, mut file)) = disk::create_temp(parent_dir) else {
         return Ok(Step::Refused);
     };
-    let written = write_export(pass, export, &mut file).and_then(|complete| {
-        if complete {
-            file.sync_all()?;
-        }
-        Ok(complete)
-    });
+    let written = write_export(pass, export, &mut file);
     drop(file);
     let complete = match written {
         Ok(complete) => complete,
@@ -1296,7 +1348,8 @@ fn replace_checked(
             }
             let single = disk::single_name(&old)?;
             crate::host_fs::rename(temp, target)?;
-            if single && overwrite_contents(&mut old, expected.len, pass.wipe).is_err() {
+            let never = AtomicBool::new(false);
+            if single && overwrite_contents(&mut old, expected.len, pass.wipe, &never).is_err() {
                 log_event(LogLevel::Warn, "vault_plain_overwrite_failed", &[]);
             }
             return Ok(());
@@ -1437,6 +1490,7 @@ pub(super) fn settle_held(session: &mut OpenSession, apply: bool) -> Result<u32>
             doomed.push(path);
         } else {
             plain.synced.remove(&path);
+            plain.pending.insert(path);
         }
     }
     if doomed.is_empty() {

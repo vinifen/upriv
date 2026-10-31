@@ -20,6 +20,7 @@ import {
 import type { VaultPipelineListStatus } from "./VaultList";
 import { vaultStatusIconClass, vaultStatusI18nKey, vaultStatusRowClass } from "@/theme";
 import { useElementWidth } from "@/hooks/useElementWidth";
+import { useRowButtonsBelow } from "@/hooks/useRowButtonsBelow";
 import { vaultListDropOverClass } from "../lib/dropOverClass";
 import { vaultListDropKeyProps } from "../lib/listDropKey";
 import { VaultDragHandle } from "./VaultDragHandle";
@@ -55,6 +56,7 @@ interface VaultRowProps {
   onOpenFileManager: (vault: VaultListItem) => void;
   onLockVault: (vault: VaultListItem) => void;
   onUnlockVault: (vault: VaultListItem) => void;
+  onCloseNow: (vault: VaultListItem) => void;
 }
 
 function listWidthEstimate(): number {
@@ -82,6 +84,7 @@ export function VaultRow({
   onOpenFileManager,
   onLockVault,
   onUnlockVault,
+  onCloseNow,
 }: VaultRowProps) {
   const { t, locale } = useTranslation();
   const { settings: appSettings } = useAppSettingsContext();
@@ -99,9 +102,17 @@ export function VaultRow({
     viewMode === "blocks" ? vaultRowDensityClass.default : vaultRowDensityClass[viewMode];
   const rowGap = viewMode === "large" ? "gap-4" : "gap-3";
   const articleRef = useRef<HTMLElement>(null);
+  const titleRef = useRef<HTMLHeadingElement>(null);
+  const nameRef = useRef<HTMLSpanElement>(null);
+  const marksRef = useRef<HTMLSpanElement>(null);
   const estimatedWidth = useMemo(listWidthEstimate, []);
   const rowWidth = useElementWidth(articleRef, estimatedWidth);
-  const comfortable = vaultRowChrome(rowWidth) === "comfortable";
+  const buttonsBelow = useRowButtonsBelow(
+    { row: articleRef, slot: titleRef, text: nameRef, beside: marksRef },
+    vault.displayName,
+  );
+  // A row with its buttons on their own line has the room for the full look.
+  const comfortable = vaultRowChrome(rowWidth) === "comfortable" || buttonsBelow;
   const lastAccessedWhen = vaultLastAccessedLabel(vault, locale);
   const lastAccessedLabel = t("vault.last_accessed", { when: lastAccessedWhen });
   const rowBudget = vaultPipelineRowBudget(status, pipelineListStatus, vault.id);
@@ -124,7 +135,8 @@ export function VaultRow({
       ref={articleRef}
       {...vaultListDropKeyProps(dropKey)}
       className={[
-        "vault-row relative z-0 flex min-w-0 w-full flex-row items-center justify-between overflow-visible rounded-xl px-4 transition-[opacity,box-shadow,background-color]",
+        "vault-row relative z-0 flex min-w-0 w-full justify-between overflow-visible rounded-xl px-4 transition-[opacity,box-shadow,background-color]",
+        buttonsBelow ? "flex-col items-stretch" : "flex-row items-center",
         dragDisabled ? "pl-4" : "pl-2",
         "pr-4 sm:pr-6",
         rowGap,
@@ -183,16 +195,21 @@ export function VaultRow({
           ) : null}
           <div className="flex min-w-0 flex-1 flex-col gap-1">
             <h3
+              ref={titleRef}
               className={[
                 "flex min-w-0 items-center gap-2 font-semibold text-on-surface",
                 density.title,
               ].join(" ")}
             >
-              <span className="truncate">{vault.displayName}</span>
-              <VaultPlaintextIndicator storageMode={vault.storageMode} />
-              <VaultLastOpenedIndicator active={isLastOpened} />
-              <VaultFileManagerIndicator vaultId={vault.id} />
-              <VaultHiddenIndicator hidden={vault.hidden} />
+              <span ref={nameRef} className="truncate">
+                {vault.displayName}
+              </span>
+              <span ref={marksRef} className="flex shrink-0 items-center gap-2">
+                <VaultPlaintextIndicator storageMode={vault.storageMode} />
+                <VaultLastOpenedIndicator active={isLastOpened} />
+                <VaultFileManagerIndicator vaultId={vault.id} />
+                <VaultHiddenIndicator hidden={vault.hidden} />
+              </span>
             </h3>
             <div className="flex min-w-0 items-center gap-2">
               <VaultStatusBadge status={status} labelKey={statusLabelKey} />
@@ -237,6 +254,7 @@ export function VaultRow({
           onOpenFileManager={onOpenFileManager}
           onLockVault={onLockVault}
           onUnlockVault={onUnlockVault}
+          onCloseNow={onCloseNow}
         />
         <VaultLockButton
           status={status}

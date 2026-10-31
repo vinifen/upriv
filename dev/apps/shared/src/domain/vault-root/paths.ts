@@ -1,6 +1,13 @@
 import type { VaultRootResolveResult } from "./types";
 
 /**
+ * Logical path the core uses while the Android data folder is a folder the
+ * user picked. The bytes live in that folder's storage-access grant; this
+ * path is not on disk. Must match `SAF_VAULT_ROOT` in `upriv-core` `host_fs`.
+ */
+export const SAF_VAULT_ROOT = "/upriv-saf-root";
+
+/**
  * Folder that contains `.upriv/` (`vaults/<id>/store/`, `backups/`, `logs/`).
  * Wire `rootPath` from `vault_root_resolve` is this folder — not `.upriv` itself.
  * Prefer a successful resolve; `fallback` is mock / last-resort only.
@@ -30,6 +37,17 @@ export function vaultRootUprivDisplayPath(rootBase: string): string {
   if (!base) return "";
   if (isSafContentUri(base)) return `${base} · .upriv`;
   return `${base}/.upriv`;
+}
+
+/**
+ * Location the system file manager opens for `.upriv/<inside>` of a data
+ * folder. A storage-access tree has no filesystem path, so it is the logical
+ * path under {@link SAF_VAULT_ROOT}, which the app maps to that tree's document.
+ */
+export function vaultRootUprivOpenPath(rootBase: string, inside: string): string {
+  const base = trimRootBase(rootBase);
+  if (!base) return "";
+  return `${isSafContentUri(base) ? SAF_VAULT_ROOT : base}/.upriv/${inside}`;
 }
 
 /** `{vault-root}/.upriv/logs` — session logs live under the marker, not beside it. */

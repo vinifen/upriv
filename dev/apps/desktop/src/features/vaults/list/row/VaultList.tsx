@@ -101,6 +101,7 @@ interface VaultListProps {
   onOpenFileManager: (vault: VaultListItem) => void;
   onLockVault: (vault: VaultListItem) => void;
   onUnlockVault: (vault: VaultListItem) => void;
+  onCloseNow: (vault: VaultListItem) => void;
 }
 
 export function VaultList({
@@ -128,6 +129,7 @@ export function VaultList({
   onOpenFileManager,
   onLockVault,
   onUnlockVault,
+  onCloseNow,
 }: VaultListProps) {
   const { t } = useTranslation();
   const gridRef = useRef<HTMLDivElement>(null);
@@ -272,6 +274,7 @@ export function VaultList({
         onOpenFileManager={onOpenFileManager}
         onLockVault={onLockVault}
         onUnlockVault={onUnlockVault}
+        onCloseNow={onCloseNow}
       />
     );
 
@@ -388,6 +391,7 @@ export function VaultList({
               onOpenFileManager={onOpenFileManager}
               onLockVault={onLockVault}
               onUnlockVault={onUnlockVault}
+              onCloseNow={onCloseNow}
             />
           );
         }
@@ -451,6 +455,7 @@ export function VaultList({
                       onOpenFileManager={onOpenFileManager}
                       onLockVault={onLockVault}
                       onUnlockVault={onUnlockVault}
+                      onCloseNow={onCloseNow}
                     />
                   );
                 })}

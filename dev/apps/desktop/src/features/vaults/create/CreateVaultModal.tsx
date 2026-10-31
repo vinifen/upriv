@@ -169,9 +169,6 @@ export function CreateVaultModal({
           </>
         ) : (
           <>
-            <Button variant="ghost" size="md" onClick={requestClose}>
-              {t("action.cancel")}
-            </Button>
             {isLastStep ? (
               <Button
                 variant="primary"

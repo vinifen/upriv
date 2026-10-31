@@ -1,5 +1,48 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { parseVaultClosePhase, watchClosePhase, type VaultClosePhase } from "../closePhase";
+import {
+  askCloseToHurry,
+  parseVaultCloseHurry,
+  parseVaultClosePhase,
+  watchClosePhase,
+  type VaultClosePhase,
+} from "../closePhase";
+
+describe("parseVaultCloseHurry", () => {
+  it("is true only when a running close heard it", () => {
+    expect(parseVaultCloseHurry({ running: true })).toBe(true);
+    expect(parseVaultCloseHurry({ running: false })).toBe(false);
+    expect(parseVaultCloseHurry(null)).toBe(false);
+  });
+});
+
+describe("askCloseToHurry", () => {
+  it("stops once a running close hears it", async () => {
+    const hurry = vi.fn<() => Promise<boolean>>().mockResolvedValue(true);
+    await askCloseToHurry(hurry, () => true, 0);
+    expect(hurry).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks again while the close has not started, and a failed call is not heard", async () => {
+    const hurry = vi
+      .fn<() => Promise<boolean>>()
+      .mockResolvedValueOnce(false)
+      .mockRejectedValueOnce(new Error("rpc"))
+      .mockResolvedValueOnce(true);
+    await askCloseToHurry(hurry, () => true, 0);
+    expect(hurry).toHaveBeenCalledTimes(3);
+  });
+
+  it("gives up when it is no longer wanted", async () => {
+    const hurry = vi.fn<() => Promise<boolean>>().mockResolvedValue(false);
+    let wanted = true;
+    hurry.mockImplementationOnce(async () => {
+      wanted = false;
+      return false;
+    });
+    await askCloseToHurry(hurry, () => wanted, 0);
+    expect(hurry).toHaveBeenCalledTimes(1);
+  });
+});
 
 function deferred<T>() {
   let resolve!: (value: T) => void;

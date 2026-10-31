@@ -17,7 +17,7 @@ function settings(patch: Partial<VaultSettingsConfig> = {}): VaultSettingsConfig
       note: "tax year",
       hidden: true,
     },
-    storage: { mode: "encrypted_dir" },
+    storage: { mode: "encrypted_dir", plain_files: "whole" },
     mount: {
       ...vaultWorkspace(),
       custom_file_manager_folder: true,
@@ -75,6 +75,7 @@ describe("applyEmbeddedVaultSettings", () => {
     expect(next.file_manager.confirm_delete).toBe(false);
     expect(next.kdf.unlock_preset).toBe("128mib");
     expect(next.groupMode).toBe("none");
+    expect(next.storage.plain_files).toBe("whole");
   });
 
   it("keeps a backup mode the user already changed", () => {

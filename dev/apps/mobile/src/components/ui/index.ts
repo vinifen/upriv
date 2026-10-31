@@ -19,5 +19,6 @@ export {
 export { Select, type SelectOption, type SelectOptionTone } from "./Select";
 export { FloatingToast, Toast } from "./Toast";
 export { LoadingBudgetHint } from "./LoadingBudgetHint";
+export { TextWidthProbe } from "./TextWidthProbe";
 export { JobProgressBar } from "./JobProgressBar";
 export { ContentSkeleton } from "./ContentSkeleton";

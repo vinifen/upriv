@@ -57,6 +57,7 @@ export function createDefaultAppSettings(): AppSettingsConfig {
       lifecycle_close_modal_on_submit: false,
       lifecycle_open_file_manager_on_open: false,
       lifecycle_keep_open_on_wake: false,
+      lifecycle_confirm_close_now: true,
     },
     logging: {
       enabled: true,
@@ -105,6 +106,7 @@ export function normalizeAppSettings(config: AppSettingsConfig): AppSettingsConf
       lifecycle_close_modal_on_submit: config.ui.lifecycle_close_modal_on_submit === true,
       lifecycle_open_file_manager_on_open: config.ui.lifecycle_open_file_manager_on_open === true,
       lifecycle_keep_open_on_wake: config.ui.lifecycle_keep_open_on_wake === true,
+      lifecycle_confirm_close_now: config.ui.lifecycle_confirm_close_now !== false,
     },
     logging,
     app: {

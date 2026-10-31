@@ -5,7 +5,7 @@ import { useTranslation } from "@/i18n";
 import { useTheme } from "@/theme";
 import { spacing } from "@/theme/tokens";
 import { Modal } from "@/components/ui";
-import { ThemedInput } from "@/components/settings";
+import { LongTextInput } from "@/components/LongTextInput";
 
 const DEBOUNCE_MS = 400;
 const SAVED_INDICATOR_MS = 1500;
@@ -104,7 +104,7 @@ export function VaultNoteModal({
       <Text style={[typography.bodyMuted, styles.help]}>
         {t("vault.create.note_help", { max: VAULT_NOTE_MAX_LENGTH })}
       </Text>
-      <ThemedInput
+      <LongTextInput
         value={draft}
         editable={!saveHeld}
         onChangeText={setDraft}

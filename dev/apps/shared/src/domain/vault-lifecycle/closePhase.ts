@@ -11,6 +11,28 @@ export function parseVaultClosePhase(raw: unknown): VaultClosePhase | null {
   return phase === "flush" || phase === "backup" ? phase : null;
 }
 
+/** `vault_close_hurry` result: true when a close was running to hear it. */
+export function parseVaultCloseHurry(raw: unknown): boolean {
+  return typeof raw === "object" && raw !== null && (raw as { running?: unknown }).running === true;
+}
+
+/**
+ * Tell a close to hurry until one running hears it, or `wanted` ends. A close
+ * still waiting in the queue has not started, so it is asked again. A failed
+ * call counts as not heard.
+ */
+export async function askCloseToHurry(
+  hurry: () => Promise<boolean>,
+  wanted: () => boolean,
+  pollMs: number = CLOSE_PHASE_POLL_MS,
+): Promise<void> {
+  while (wanted()) {
+    const heard = await hurry().catch(() => false);
+    if (heard) return;
+    await delayMs(pollMs);
+  }
+}
+
 /**
  * Poll the core close phase while `work` runs and call `onBackup` once when the
  * close backup starts. A failed read is skipped; it never fails the close.

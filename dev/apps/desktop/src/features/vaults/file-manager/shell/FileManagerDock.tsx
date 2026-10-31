@@ -1,3 +1,4 @@
+import { useCallback } from "react";
 import { createPortal } from "react-dom";
 import { Icon } from "@/components/icons";
 import { Collapse, IconButton } from "@/components/ui";
@@ -8,11 +9,12 @@ import {
   DOCK_EXPAND_MS,
   DOCK_FADE_MS,
   vaultDisplayLetters,
-  type FileManagerEntry,
+  type FileManagerShellEntry,
 } from "@upriv/shared";
+import { useOptimisticValue } from "@upriv/shared/react";
 
 interface FileManagerDockProps {
-  entries: readonly FileManagerEntry[];
+  entries: readonly FileManagerShellEntry[];
   focusedVaultId: string | null;
   maximizedVaultId: string | null;
   onMinimize: (vaultId: string) => void;
@@ -30,7 +32,15 @@ export function FileManagerDock({
 }: FileManagerDockProps) {
   const { t } = useTranslation();
   const { settings, patchSettings } = useAppSettingsContext();
-  const expanded = settings.ui.file_manager_dock_expanded ?? false;
+  const saveExpanded = useCallback(
+    (next: boolean) => patchSettings({ ui: { file_manager_dock_expanded: next } }),
+    [patchSettings],
+  );
+  // The dock moves on the click; the setting is written behind it.
+  const [expanded, setExpanded] = useOptimisticValue(
+    settings.ui.file_manager_dock_expanded ?? false,
+    saveExpanded,
+  );
   const motionMs = expanded ? DOCK_EXPAND_MS : DOCK_COLLAPSE_MS;
 
   if (entries.length === 0) return null;
@@ -38,9 +48,7 @@ export function FileManagerDock({
   const highlightVaultId =
     focusedVaultId ?? maximizedVaultId ?? (entries.length === 1 ? entries[0].vaultId : null);
 
-  const toggleExpanded = () => {
-    void patchSettings({ ui: { file_manager_dock_expanded: !expanded } });
-  };
+  const toggleExpanded = () => setExpanded(!expanded);
 
   const handleEntryClick = (vaultId: string) => {
     if (vaultId === maximizedVaultId) {

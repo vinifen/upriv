@@ -140,6 +140,7 @@ export function VaultSettingsModal({
   const editAllowed = (target: Parameters<typeof vaultConfigEditAllowed>[0]) =>
     vault != null && vaultConfigEditAllowed(target, vault, pipelineListStatus);
   const storageModeLocked = !editAllowed("storage.mode");
+  const plainFilesLocked = !editAllowed("storage.plain_files");
   const displayNameLocked = !editAllowed("vault.display_name");
   const mountLocked = !editAllowed("mount.workspace_path");
   const rewrapBlocked = Boolean(
@@ -484,6 +485,7 @@ export function VaultSettingsModal({
           if (storageModeLocked) return current;
           return patchStorageMode(current, patch.mode as StorageMode);
         }
+        if (section === "storage" && "plain_files" in patch && plainFilesLocked) return current;
         if (section === "vault" && "display_name" in patch && displayNameLocked) {
           return current;
         }
@@ -495,7 +497,7 @@ export function VaultSettingsModal({
         };
       });
     },
-    [storageModeLocked, displayNameLocked, mountLocked],
+    [storageModeLocked, plainFilesLocked, displayNameLocked, mountLocked],
   );
 
   const submitBudgetMs = nameDirty ? LOADING_BUDGET_MS.vaultRename : LOADING_BUDGET_MS.settingsSave;
@@ -1152,8 +1154,10 @@ export function VaultSettingsModal({
               draft={draft}
               patchDraft={patchDraft}
               storageModeLocked={storageModeLocked}
+              plainFilesLocked={plainFilesLocked}
               displayNameLocked={displayNameLocked}
               mountLocked={mountLocked}
+              plainLeftover={vault?.plainLeftover === true}
               vaultRootPath={vaultRootPathForWorkspaceValidation(
                 appSettings.app.vault_root_mode,
                 appSettings.app.upriv_root_path,

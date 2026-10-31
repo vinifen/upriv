@@ -42,7 +42,7 @@ export function MarkdownOutlinePanel({
   activeIndex = 0,
   onSelect,
 }: {
-  /** `markdownOutline` of the open note. */
+  /** Outline of the open note. */
   outline: MarkdownOutlineModel;
   activeIndex?: number;
   onSelect: (index: number, entry: MarkdownOutlineEntry) => void;

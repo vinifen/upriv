@@ -1,5 +1,6 @@
-import { createEmptyCreateVaultDraft } from "..";
+import { buildCreateVaultResult, createEmptyCreateVaultDraft } from "..";
 import type { CreateVaultDraft } from "..";
+import type { VaultSettingsConfig } from "../../vault-settings";
 
 export function createVaultDraftFixture(
   existingOrders: readonly number[] = [],
@@ -13,4 +14,9 @@ export function createVaultDraftFixture(
     passwordConfirm: "secret-pass",
     ...overrides,
   };
+}
+
+/** The settings a default draft would save. */
+export function vaultSettingsFixture(): VaultSettingsConfig {
+  return buildCreateVaultResult(createVaultDraftFixture(), []).settings;
 }

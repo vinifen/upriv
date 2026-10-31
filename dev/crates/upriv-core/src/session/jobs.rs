@@ -1,5 +1,5 @@
-//! Long jobs a person can stop: a vault export, Back up now, and the zip of
-//! the data folder.
+//! Long jobs a person can stop: a vault export, Back up now, a backup export,
+//! and the zip of the data folder.
 //!
 //! The UI names each job with an id it sends with the request, then asks
 //! `job_status` and `job_cancel` by that id. A stop can arrive while the
@@ -33,7 +33,7 @@ pub struct JobStatus {
 struct JobState {
     bytes_done: AtomicU64,
     bytes_total: AtomicU64,
-    stop: AtomicBool,
+    stop: Arc<AtomicBool>,
 }
 
 #[derive(Default)]
@@ -99,12 +99,24 @@ impl Job {
         })
     }
 
-    /// Work nobody watches or stops: the backup a close writes, and the
-    /// safety zip before a password or unlock-RAM change.
+    /// Work nobody watches or stops: the safety zip before a password or
+    /// unlock-RAM change.
     pub(crate) fn untracked() -> Self {
         Self {
             listed: None,
             state: Arc::default(),
+        }
+    }
+
+    /// Work nobody watches that stops once `stop` is set: the backup a close
+    /// writes, which Close now ends.
+    pub(crate) fn stopped_by(stop: Arc<AtomicBool>) -> Self {
+        Self {
+            listed: None,
+            state: Arc::new(JobState {
+                stop,
+                ..JobState::default()
+            }),
         }
     }
 

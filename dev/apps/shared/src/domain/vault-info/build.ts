@@ -71,6 +71,8 @@ export function buildVaultInfoSections(
     workspacePathIsActive,
     storePath,
     backupsPath,
+    storeOpenPath,
+    backupsOpenPath,
     locale,
   } = snapshot;
 
@@ -173,11 +175,11 @@ export function buildVaultInfoSections(
   const storageFields = [
     withOpenPath(
       { id: "store_path", label: t("modal.info.field.store_path"), value: storePath },
-      storePath,
+      storeOpenPath,
     ),
     withOpenPath(
       { id: "backups_path", label: t("modal.info.field.backups_path"), value: backupsPath },
-      backupsPath,
+      backupsOpenPath,
     ),
     withOpenPath(
       {
@@ -194,7 +196,10 @@ export function buildVaultInfoSections(
     {
       id: "store_size",
       label: t("modal.info.field.store_size"),
-      value: formatBytes(runtime.storeBytes ?? undefined),
+      value:
+        runtime.storeBytes === "measuring"
+          ? t("modal.info.loading")
+          : formatBytes(runtime.storeBytes ?? undefined),
     },
   ];
 
@@ -225,6 +230,15 @@ export function buildVaultInfoSections(
           },
           mountPath,
         ),
+        ...(settings.storage.mode === "upriv_plain"
+          ? [
+              {
+                id: "plain_files",
+                label: t("modal.info.field.plain_files"),
+                value: t(`modal.info.value.plain_files.${settings.storage.plain_files}`),
+              },
+            ]
+          : []),
         ...(settings.storage.mode === "encrypted_dir" && workspaceSystemHasShortcut(workspaceSystem)
           ? [
               {
@@ -275,21 +289,22 @@ export function buildVaultInfoSections(
       ]
     : [{ id: "config_unavailable", label: t("modal.info.field.config"), value: "—" }];
 
+  const listing = t("modal.info.loading");
   const backupFields = [
     {
       id: "backup_count",
       label: t("modal.info.field.backup_count"),
-      value: String(backups.length),
+      value: backups ? String(backups.length) : listing,
     },
     {
       id: "backup_latest",
       label: t("modal.info.field.backup_latest"),
-      value: latestBackupName(backups, vault.id),
+      value: backups ? latestBackupName(backups, vault.id) : listing,
     },
     {
       id: "backup_total_size",
       label: t("modal.info.field.backup_total_size"),
-      value: formatBytes(backupTotalBytes(backups)),
+      value: backups ? formatBytes(backupTotalBytes(backups)) : listing,
     },
   ];
 

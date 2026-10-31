@@ -2,7 +2,7 @@
 //! One OS import seals before it returns. A batch stages each file and seals
 //! a full wave of them, then the tail, so a crash keeps the last finished wave.
 //! A range write into an existing file waits for the next seal; see
-//! [`fs_write_range`].
+//! [`fs_write_range`]. So does the file-manager layout; see [`fs_write_file`].
 
 use crate::host_fs::File;
 #[allow(unused_imports)]
@@ -14,8 +14,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Condvar, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
+use super::seven_zip_pack::mem_available_bytes;
 use crate::error::{Result, UprivError};
 use crate::logging::{log_event, LogLevel};
 use crate::paths::VaultRoot;
@@ -23,12 +24,13 @@ use crate::session::{with_open_session, DeferredWrites, OpenSession};
 use crate::store::{
     blobs_need_pack, build_file_tree, child_logical_path, delete_empty_directory,
     delete_logical_path, ensure_folder, file_name, flush_index_parts, from_ui_path,
-    is_plain_internal, is_reserved_logical, mkdir_logical, move_logical_path, mutation_blob_ids,
-    pack_blob_waste, read_logical_file, read_logical_range, record_imported_file,
-    relocate_logical_path, relocate_replacing, remove_file_chunks, rename_logical_path,
-    seal_import_chunk, to_ui_path, truncate_logical_file, unique_file_name, unique_folder_name,
-    write_logical_file, write_logical_range, BlobPackMode, ChunkBlobMutation, FileTreeNode,
-    ImportBlob, RetiredFileChunks, VaultIndex, INTERNAL_WORKSPACE_FILE, VAULT_FS_MAX_INLINE_BYTES,
+    is_export_config, is_plain_internal, is_reserved_logical, mkdir_logical, move_logical_path,
+    mutation_blob_ids, pack_blob_waste, read_logical_file, read_logical_range,
+    record_imported_file, relocate_logical_path, relocate_replacing, remove_file_chunks,
+    rename_logical_path, seal_import_chunk, to_ui_path, truncate_logical_file, unique_file_name,
+    unique_folder_name, write_logical_file, write_logical_range, BlobPackMode, ChunkBlobMutation,
+    FileTreeNode, ImportBlob, RetiredFileChunks, VaultIndex, INTERNAL_WORKSPACE_FILE,
+    VAULT_FS_MAX_INLINE_BYTES,
 };
 
 fn store_dir(session: &OpenSession) -> std::path::PathBuf {
@@ -46,9 +48,17 @@ fn commit(session: &mut OpenSession) -> Result<()> {
 }
 
 fn seal_index(session: &mut OpenSession) -> Result<()> {
-    sync_staged_blobs(&session.staged_blobs)?;
-    let store = store_dir(session);
-    flush_index_parts(&store, &session.header, &session.index_key, &session.index)?;
+    let layout = stage_pending_layout(session);
+    let sealed = sync_staged_blobs(&session.staged_blobs).and_then(|()| {
+        flush_index_parts(
+            store_dir(session),
+            &session.header,
+            &session.index_key,
+            &session.index,
+        )
+    });
+    settle_staged_layout(session, layout, sealed.is_ok());
+    sealed?;
     session.staged_blobs.clear();
     session.index.clear_unsealed_holes();
     session.unsealed_imports = 0;
@@ -56,6 +66,77 @@ fn seal_index(session: &mut OpenSession) -> Result<()> {
     session.dirty = false;
     session.tree_revision = session.tree_revision.saturating_add(1);
     Ok(())
+}
+
+/// The layout the file manager writes at the vault root. A layout file in a
+/// folder below is reserved too, but nothing writes it, so it is not held.
+fn is_root_layout(path: &str) -> bool {
+    path == INTERNAL_WORKSPACE_FILE
+}
+
+/// A held layout written into the index for the seal about to run.
+pub(crate) struct StagedLayout {
+    bytes: Zeroizing<Vec<u8>>,
+    retired: Option<RetiredFileChunks>,
+    superseded: ChunkBlobMutation,
+}
+
+/// Write the held layout into the index and stage its blob with the others,
+/// so the seal syncs it. A layout that cannot be written stays held, and the
+/// seal goes on without it: layout must not fail a save.
+pub(crate) fn stage_pending_layout(session: &mut OpenSession) -> Option<StagedLayout> {
+    let bytes = session.pending_layout.take()?;
+    match write_logical_file(
+        store_dir(session),
+        &session.header,
+        &session.content_key,
+        &mut session.index,
+        INTERNAL_WORKSPACE_FILE,
+        &bytes,
+    ) {
+        Ok((retired, mutation)) => {
+            for path in &mutation.created {
+                if !session.staged_blobs.contains(path) {
+                    session.staged_blobs.push(path.clone());
+                }
+            }
+            Some(StagedLayout {
+                bytes,
+                retired,
+                superseded: mutation,
+            })
+        }
+        Err(_error) => {
+            log_event(
+                LogLevel::Warn,
+                "vault_layout_stage_failed",
+                &[("id", session.vault_id.as_str())],
+            );
+            session.pending_layout = Some(bytes);
+            None
+        }
+    }
+}
+
+/// After a seal, remove the layout blob it replaced. After a failed seal the
+/// layout is held again for the next one; its new blob is unlinked by the
+/// next open if no index ever names it.
+pub(crate) fn settle_staged_layout(
+    session: &mut OpenSession,
+    staged: Option<StagedLayout>,
+    sealed: bool,
+) {
+    let Some(staged) = staged else {
+        return;
+    };
+    if !sealed {
+        session.pending_layout = Some(staged.bytes);
+        return;
+    }
+    staged.superseded.delete_superseded();
+    if let Some(retired) = staged.retired {
+        let _ = remove_file_chunks(&store_dir(session), &retired.file_id, retired.chunk_count);
+    }
 }
 
 fn commit_or_restore(session: &mut OpenSession, before: VaultIndex) -> Result<()> {
@@ -179,10 +260,11 @@ fn require_open(root: &VaultRoot, vault_id: &str) -> Result<std::path::PathBuf> 
 }
 
 /// A plaintext-folder name is never addressable from the app, so the confirmed
-/// place cannot be read or replaced through a file call.
+/// place cannot be read or replaced through a file call. Neither is the settings
+/// folder of an export: a vault never holds it.
 fn logical(ui_path: &str) -> Result<String> {
     let path = from_ui_path(ui_path)?;
-    if is_plain_internal(&path) {
+    if is_plain_internal(&path) || is_export_config(&path) {
         return Err(reserved_path(&path));
     }
     Ok(path)
@@ -214,13 +296,42 @@ pub fn fs_tree_revision(root: &VaultRoot, vault_id: &str) -> Result<u64> {
     with_open_session(&dir, |session| Ok(session.tree_revision))
 }
 
+/// RAM a preview holds per byte of the file: the base64 on its way to the UI
+/// and the UTF-16 text or data URL the viewer keeps.
+const PREVIEW_RAM_PER_BYTE: u64 = 4;
+/// RAM left to the rest of the system after a preview.
+const PREVIEW_RAM_SPARE: u64 = 64 * 1024 * 1024;
+
+fn preview_fits(size: u64, available: Option<u64>) -> bool {
+    let needed = size
+        .saturating_mul(PREVIEW_RAM_PER_BYTE)
+        .saturating_add(PREVIEW_RAM_SPARE);
+    available.is_none_or(|free| needed <= free)
+}
+
+/// `vault_fs_preview_fits`: whether free RAM can hold a preview of this file.
+/// A system that does not report free RAM gets the read.
+pub fn fs_preview_fits(root: &VaultRoot, vault_id: &str, ui_path: &str) -> Result<bool> {
+    let dir = require_open(root, vault_id)?;
+    let path = logical(ui_path)?;
+    let size = with_open_session(&dir, |session| {
+        Ok(session
+            .index
+            .find(&path)
+            .and_then(|node| node.as_file())
+            .map_or(0, |(_, size, _)| size))
+    })?;
+    Ok(preview_fits(size, mem_available_bytes()))
+}
+
 pub fn fs_list_tree(root: &VaultRoot, vault_id: &str) -> Result<FileTreeNode> {
     let dir = require_open(root, vault_id)?;
     with_open_session(&dir, |session| {
-        let name = crate::config::load_vault_config_raw(&session.vault_dir)
-            .map(|c| c.vault.display_name)
-            .unwrap_or_else(|_| session.vault_id.clone());
-        Ok(build_file_tree(&session.index, &name))
+        let mut tree = build_file_tree(&session.index, &session.display_name);
+        if let Some(plain) = session.plain.as_ref() {
+            super::plain::mark_tree(plain, &mut tree);
+        }
+        Ok(tree)
     })
 }
 
@@ -228,6 +339,11 @@ pub fn fs_read_file(root: &VaultRoot, vault_id: &str, ui_path: &str) -> Result<V
     let dir = require_open(root, vault_id)?;
     let path = logical(ui_path)?;
     with_open_session(&dir, |session| {
+        if is_root_layout(&path) {
+            if let Some(layout) = &session.pending_layout {
+                return Ok(layout.to_vec());
+            }
+        }
         if let Some(node) = session.index.find(&path) {
             if let Some((_, size, _)) = node.as_file() {
                 if size > VAULT_FS_MAX_INLINE_BYTES {
@@ -295,6 +411,15 @@ pub fn fs_read_range(
         });
     }
     with_open_session(&dir, |session| {
+        if is_root_layout(&path) {
+            if let Some(layout) = &session.pending_layout {
+                let start = usize::try_from(offset).map_or(layout.len(), |at| at.min(layout.len()));
+                let end = usize::try_from(len).map_or(layout.len(), |len| {
+                    start.saturating_add(len).min(layout.len())
+                });
+                return Ok(layout[start..end].to_vec());
+            }
+        }
         match read_logical_range(
             store_dir(session),
             &session.header,
@@ -311,6 +436,11 @@ pub fn fs_read_range(
     })
 }
 
+/// Replace a whole file and seal the index.
+///
+/// The root layout file is held in RAM instead (reads return it) and reaches
+/// `store/` with the next seal of any change, or at close. A crash loses the
+/// layout written since then, never a file.
 pub fn fs_write_file(root: &VaultRoot, vault_id: &str, ui_path: &str, data: &[u8]) -> Result<u64> {
     if data.len() as u64 > VAULT_FS_MAX_INLINE_BYTES {
         return Err(UprivError::VaultFileTooLarge {
@@ -322,6 +452,10 @@ pub fn fs_write_file(root: &VaultRoot, vault_id: &str, ui_path: &str, data: &[u8
     let dir = require_open(root, vault_id)?;
     let path = logical(ui_path)?;
     with_open_session(&dir, |session| {
+        if is_root_layout(&path) {
+            session.pending_layout = Some(Zeroizing::new(data.to_vec()));
+            return Ok(session.tree_revision);
+        }
         session.dirty = true;
         let before = session.index.clone();
         let (retired, mutation) = write_logical_file(
@@ -364,6 +498,10 @@ pub fn fs_write_range(
     let dir = require_open(root, vault_id)?;
     let path = logical(ui_path)?;
     with_open_session(&dir, |session| {
+        // A range lands on the stored layout, which a held one would replace at the seal.
+        if is_root_layout(&path) {
+            session.pending_layout = None;
+        }
         if session.index.find(&path).is_none() {
             // A new name changes the tree, which is sealed before it is shown.
             session.dirty = true;
@@ -1224,6 +1362,10 @@ pub fn fs_truncate(root: &VaultRoot, vault_id: &str, ui_path: &str, size: u64) -
     let dir = require_open(root, vault_id)?;
     let path = logical(ui_path)?;
     with_open_session(&dir, |session| {
+        // Same as a range write: the stored layout is the one being cut.
+        if is_root_layout(&path) {
+            session.pending_layout = None;
+        }
         session.dirty = true;
         let before = session.index.clone();
         let mutation = truncate_logical_file(
@@ -1721,6 +1863,20 @@ mod tests {
     use crate::test_support::vault_root_with;
     use crate::vault::{close_vault, create_vault, open_vault};
 
+    #[test]
+    fn a_preview_needs_room_for_itself_and_the_rest_of_the_system() {
+        const MIB: u64 = 1024 * 1024;
+        assert!(preview_fits(MIB, Some(68 * MIB)));
+        assert!(!preview_fits(MIB, Some(68 * MIB - 1)));
+        assert!(!preview_fits(0, Some(63 * MIB)));
+        assert!(!preview_fits(u64::MAX, Some(u64::MAX - 1)));
+    }
+
+    #[test]
+    fn a_system_that_hides_free_ram_gets_the_read() {
+        assert!(preview_fits(u64::MAX, None));
+    }
+
     struct ByteAtATime<'a> {
         rest: &'a [u8],
     }
@@ -2174,6 +2330,117 @@ mode = "encrypted_dir"
         )
         .unwrap();
         assert_eq!(durable, b"generation-two");
+    }
+
+    const LAYOUT: &str = "/.upriv-workspace.json";
+
+    fn sealed_index_file(root: &VaultRoot) -> Vec<u8> {
+        let store = root.vault_store_dir("notes").unwrap();
+        crate::host_fs::read(
+            store
+                .join(crate::store::INDEX_DIR_NAME)
+                .join(crate::store::INDEX_FILE_NAME),
+        )
+        .unwrap()
+    }
+
+    fn blob_count(root: &VaultRoot) -> usize {
+        fn count(dir: &Path) -> usize {
+            crate::host_fs::read_dir(dir)
+                .unwrap()
+                .map(|entry| {
+                    let path = entry.unwrap().path();
+                    if path.host_is_dir() {
+                        count(&path)
+                    } else {
+                        1
+                    }
+                })
+                .sum()
+        }
+        count(
+            &root
+                .vault_store_dir("notes")
+                .unwrap()
+                .join(crate::store::DATA_DIR_NAME),
+        )
+    }
+
+    #[test]
+    fn a_layout_write_waits_in_ram_until_the_next_seal() {
+        let (_tmp, root) = open_notes();
+        let layout = b"{\"format_version\":1,\"openTabs\":[\"/notes.txt\"]}\n";
+        let revision = fs_tree_revision(&root, "notes").unwrap();
+        let index = sealed_index_file(&root);
+
+        assert_eq!(
+            fs_write_file(&root, "notes", LAYOUT, layout).unwrap(),
+            revision
+        );
+        assert_eq!(
+            sealed_index_file(&root),
+            index,
+            "a layout write seals nothing"
+        );
+        assert_eq!(fs_read_file(&root, "notes", LAYOUT).unwrap(), layout);
+        assert_eq!(
+            fs_read_range(&root, "notes", LAYOUT, 2, 6).unwrap(),
+            &layout[2..8]
+        );
+        assert!(fs_read_range(&root, "notes", LAYOUT, 4096, 8)
+            .unwrap()
+            .is_empty());
+
+        fs_mkdir(&root, "notes", "/inbox").unwrap();
+        assert_eq!(sealed_bytes(&root, ".upriv-workspace.json"), layout);
+        close_vault(&root, "notes").unwrap();
+    }
+
+    #[test]
+    fn a_sealed_layout_replaces_the_previous_blob() {
+        let (_tmp, root) = open_notes();
+        fs_write_file(&root, "notes", LAYOUT, b"first").unwrap();
+        fs_mkdir(&root, "notes", "/inbox").unwrap();
+        let blobs = blob_count(&root);
+
+        fs_write_file(&root, "notes", LAYOUT, b"second").unwrap();
+        fs_mkdir(&root, "notes", "/outbox").unwrap();
+        assert_eq!(sealed_bytes(&root, ".upriv-workspace.json"), b"second");
+        assert_eq!(
+            blob_count(&root),
+            blobs,
+            "the first layout's blob is removed"
+        );
+        close_vault(&root, "notes").unwrap();
+    }
+
+    #[test]
+    fn close_seals_the_held_layout() {
+        let (_tmp, root) = open_notes();
+        fs_write_file(&root, "notes", LAYOUT, b"first").unwrap();
+        fs_mkdir(&root, "notes", "/inbox").unwrap();
+        fs_write_file(&root, "notes", LAYOUT, b"second").unwrap();
+        close_vault(&root, "notes").unwrap();
+
+        open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        assert_eq!(fs_read_file(&root, "notes", LAYOUT).unwrap(), b"second");
+        close_vault(&root, "notes").unwrap();
+    }
+
+    #[test]
+    fn a_range_write_of_the_layout_drops_the_held_copy() {
+        let (_tmp, root) = open_notes();
+        fs_write_file(&root, "notes", LAYOUT, b"stored").unwrap();
+        fs_mkdir(&root, "notes", "/inbox").unwrap();
+        fs_write_file(&root, "notes", LAYOUT, b"held").unwrap();
+
+        fs_write_range(&root, "notes", LAYOUT, 0, b"ranged").unwrap();
+        assert_eq!(fs_read_file(&root, "notes", LAYOUT).unwrap(), b"ranged");
+        close_vault(&root, "notes").unwrap();
+
+        open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        assert_eq!(fs_read_file(&root, "notes", LAYOUT).unwrap(), b"ranged");
+        close_vault(&root, "notes").unwrap();
     }
 
     #[test]

@@ -79,6 +79,7 @@ import { VaultNoteModal } from "@/features/vaults/list/VaultNoteModal";
 import { GroupedVaultPicker } from "@/features/vaults/list/GroupedVaultPicker";
 import {
   CloseAllUnsavedModal,
+  CloseNowModal,
   PlainHeldModal,
   PlainPlaceModal,
   VaultLifecycleModal,
@@ -118,6 +119,7 @@ import { VaultDragHandle } from "./VaultDragHandle";
 import { VaultHiddenIndicator } from "./VaultHiddenIndicator";
 import { VaultListEmptyState } from "./VaultListEmptyState";
 import { VaultListSearch } from "./VaultListSearch";
+import { vaultListTitleFits } from "./lib/headerRoom";
 import { VaultRow } from "./VaultRow";
 import { useVaultListScreen } from "./hooks";
 import { type BlocksGroupCell, type FlatHierarchyRow } from "./lib/hierarchyRows";
@@ -250,6 +252,11 @@ export function VaultListScreen() {
     backupSaveStartedAt,
     backupListRefresh,
     handleBackupSaveNow,
+    backupExportFolder,
+    backupExportJob,
+    handleBackupExport,
+    handleBackupExportBusy,
+    handleBackupExportStop,
     dataFolderExportControls,
     setBackupsVault,
     settingsGroup,
@@ -339,6 +346,19 @@ export function VaultListScreen() {
     vaultGroupService,
   } = useVaultListScreen();
   const { colors, typography, theme } = useTheme();
+
+  const [toolbarWidth, setToolbarWidth] = useState(0);
+  const [titleTextWidth, setTitleTextWidth] = useState(0);
+  const [listSearchOpen, setListSearchOpen] = useState(false);
+  const titleFits = vaultListTitleFits({
+    rowWidth: toolbarWidth,
+    titleTextWidth,
+    showCreate: settings.ui.vault_list_show_create_button !== false,
+    showSearch: settings.ui.vault_list_show_search_button !== false,
+    searchOpen: listSearchOpen,
+    showSort: settings.ui.vault_list_show_sort_button !== false,
+    showView: settings.ui.vault_list_show_view_button !== false,
+  });
 
   /** The pull spinner shows only a refresh the person pulled for, not the list's own reloads. */
   const [pulling, setPulling] = useState(false);
@@ -635,6 +655,7 @@ export function VaultListScreen() {
         }}
         onUnlock={(rowVault) => lifecycle.requestLifecycle(rowVault.id, "unlock")}
         onLock={(rowVault) => lifecycle.requestLifecycle(rowVault.id, "close")}
+        onCloseNow={(rowVault) => lifecycle.handleCloseNow(rowVault.id)}
         onExport={handleRowExport}
         onOpenBackups={(rowVault) => setBackupsVault(rowVault)}
         onOpenNote={(rowVault) => setNoteVaultId(rowVault.id)}
@@ -914,12 +935,29 @@ export function VaultListScreen() {
             keyboardDismissMode="none"
             ListHeaderComponent={
               <>
-                <View style={styles.toolbar}>
+                <View
+                  style={styles.toolbar}
+                  onLayout={(event) => setToolbarWidth(event.nativeEvent.layout.width)}
+                >
+                  {/* Measures the title at its full width, shown or not. */}
+                  <Text
+                    accessible={false}
+                    importantForAccessibility="no-hide-descendants"
+                    numberOfLines={1}
+                    onLayout={(event) => setTitleTextWidth(event.nativeEvent.layout.width)}
+                    style={[typography.headline, styles.toolbarTitle, styles.toolbarTitleMeasure]}
+                  >
+                    {t("vault.list.title")}
+                  </Text>
                   <View style={styles.toolbarTitleRow}>
-                    <Icon name="encrypted" size={22} color={colors.onSurfaceVariant} />
-                    <Text style={[typography.headline, styles.toolbarTitle]} numberOfLines={1}>
-                      {t("vault.list.title")}
-                    </Text>
+                    {titleFits ? (
+                      <>
+                        <Icon name="encrypted" size={22} color={colors.onSurfaceVariant} />
+                        <Text style={[typography.headline, styles.toolbarTitle]} numberOfLines={1}>
+                          {t("vault.list.title")}
+                        </Text>
+                      </>
+                    ) : null}
                     {settings.ui.vault_list_show_create_button !== false ? (
                       <Pressable
                         accessibilityRole="button"
@@ -948,6 +986,7 @@ export function VaultListScreen() {
                           ref={vaultListSearchRef}
                           value={listSearch}
                           onChange={setListSearch}
+                          onOpenChange={setListSearchOpen}
                         />
                       ) : null}
 
@@ -1324,6 +1363,14 @@ export function VaultListScreen() {
         onSaveTimeout={lifecycle.timeoutCloseAllSave}
       />
 
+      <CloseNowModal
+        vault={lifecycle.closeNowVault}
+        unsaved={lifecycle.closeNowUnsaved}
+        asks={lifecycle.closeNowAsks}
+        onCancel={lifecycle.cancelCloseNow}
+        onConfirm={lifecycle.confirmCloseNow}
+      />
+
       <VaultLifecycleModal
         vault={lifecycle.lifecycleVault}
         open={lifecycleRequest !== null}
@@ -1639,7 +1686,11 @@ export function VaultListScreen() {
             "source",
           );
         }}
-        onDownloadNotice={show}
+        exportFolder={backupExportFolder}
+        exportJob={backupExportJob}
+        onExport={handleBackupExport}
+        onExportBusy={handleBackupExportBusy}
+        onStopExport={handleBackupExportStop}
       />
 
       <FileManagerLayer
@@ -1800,6 +1851,12 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     includeFontPadding: false,
     textAlignVertical: "center",
+  },
+  toolbarTitleMeasure: {
+    position: "absolute",
+    left: 0,
+    top: 0,
+    opacity: 0,
   },
   toolbarFilterWrap: {
     flexShrink: 0,

@@ -1,12 +1,21 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Modal as RnModal, Pressable, StyleSheet, Text, View } from "react-native";
-import { Button, Checkbox, Modal, ModalFooterActions, Toast } from "@/components/ui";
+import {
+  Button,
+  Checkbox,
+  LoadingBudgetHint,
+  Modal,
+  ModalFooterActions,
+  Toast,
+} from "@/components/ui";
 import { useTranslation } from "@/i18n";
 import {
+  LOADING_BUDGET_MS,
   unsavedPromptBodyKey,
   unsavedPromptConfirmsAllFiles,
   unsavedPromptIsImport,
 } from "@upriv/shared";
+import { useLoadingBudget } from "@upriv/shared/react";
 import { useTheme } from "@/theme";
 import type { FileManagerApi } from "../hooks/useVaultFileManager";
 
@@ -18,6 +27,17 @@ interface FileManagerDialogsProps {
 export function FileManagerDialogs({ fm, promptsOpen = true }: FileManagerDialogsProps) {
   const { t } = useTranslation();
   const { typography, colors } = useTheme();
+  const saveBudget = useLoadingBudget(fm.unsavedSaving, LOADING_BUDGET_MS.vaultPipeline);
+  const { abandonUnsavedSave } = fm;
+
+  useEffect(() => {
+    if (saveBudget.timedOut) abandonUnsavedSave();
+  }, [abandonUnsavedSave, saveBudget.timedOut]);
+
+  /** The prompt holds through a save, so the files do not change under it. */
+  const cancelUnsavedPrompt = () => {
+    if (!fm.unsavedSaving) fm.dispatch({ type: "set_unsaved_prompt", prompt: null });
+  };
   const deleteTarget = fm.workspace.deleteTarget;
   const unsavedPrompt = fm.workspace.unsavedPrompt;
   const isMultiFilePrompt = unsavedPromptConfirmsAllFiles(unsavedPrompt);
@@ -89,7 +109,7 @@ export function FileManagerDialogs({ fm, promptsOpen = true }: FileManagerDialog
         }
         titleIcon="file"
         panelClassName="max-w-md"
-        onClose={() => fm.dispatch({ type: "set_unsaved_prompt", prompt: null })}
+        onClose={cancelUnsavedPrompt}
         footer={
           isImportInProgressPrompt ? (
             <ModalFooterActions layout="dialog">
@@ -112,7 +132,8 @@ export function FileManagerDialogs({ fm, promptsOpen = true }: FileManagerDialog
                 label={t("action.cancel")}
                 variant="ghost"
                 size="sm"
-                onPress={() => fm.dispatch({ type: "set_unsaved_prompt", prompt: null })}
+                disabled={fm.unsavedSaving}
+                onPress={cancelUnsavedPrompt}
               />
               <Button
                 label={
@@ -122,6 +143,7 @@ export function FileManagerDialogs({ fm, promptsOpen = true }: FileManagerDialog
                 }
                 variant="danger"
                 size="sm"
+                disabled={fm.unsavedSaving}
                 onPress={fm.confirmUnsaved}
               />
               <Button
@@ -132,6 +154,7 @@ export function FileManagerDialogs({ fm, promptsOpen = true }: FileManagerDialog
                 }
                 variant="primary"
                 size="sm"
+                disabled={fm.unsavedSaving}
                 onPress={fm.confirmSaveUnsaved}
               />
             </ModalFooterActions>
@@ -141,6 +164,9 @@ export function FileManagerDialogs({ fm, promptsOpen = true }: FileManagerDialog
         <Text style={[typography.body, { color: colors.onSurfaceVariant }]}>
           {unsavedPrompt ? t(unsavedPromptBodyKey(unsavedPrompt)) : null}
         </Text>
+        {saveBudget.visible ? (
+          <LoadingBudgetHint budgetMs={saveBudget.budgetMs} remainingMs={saveBudget.remainingMs} />
+        ) : null}
       </Modal>
 
       {promptsOpen || !fm.toast ? (

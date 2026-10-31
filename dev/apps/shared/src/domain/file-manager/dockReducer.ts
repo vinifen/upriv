@@ -27,7 +27,7 @@ export interface FileManagerState {
 }
 
 export type FileManagerAction =
-  | { type: "open_from_vault"; vault: VaultRow; workspace?: VaultWorkspaceState }
+  | { type: "open_from_vault"; vault: VaultRow }
   | { type: "minimize"; vaultId: string }
   | { type: "maximize"; vaultId: string }
   | { type: "dismiss"; vaultId: string }
@@ -131,7 +131,7 @@ export function fileManagerReducer(
         vaultId: action.vault.id,
         displayName: action.vault.displayName,
         surface: "maximized",
-        workspace: existing?.workspace ?? action.workspace ?? createDefaultWorkspaceState(),
+        workspace: existing?.workspace ?? createDefaultWorkspaceState(),
         importInFlight: existing?.importInFlight ?? false,
       };
 
@@ -181,14 +181,14 @@ export function fileManagerReducer(
     case "workspace": {
       const existing = state.entries[action.vaultId];
       if (!existing) return state;
+      const workspace = vaultWorkspaceReducer(existing.workspace, action.action);
+      // A no-op keeps the state, so nothing subscribed to it draws again.
+      if (workspace === existing.workspace) return state;
       return {
         ...state,
         entries: {
           ...state.entries,
-          [action.vaultId]: {
-            ...existing,
-            workspace: vaultWorkspaceReducer(existing.workspace, action.action),
-          },
+          [action.vaultId]: { ...existing, workspace },
         },
       };
     }

@@ -16,6 +16,8 @@ export interface VaultImportPackage {
   archivePath?: string;
   contentB64?: string;
   archivePassword?: string;
+  /** A `.7z` or `.zip` of files: keep the file manager layout it carries. */
+  keepWorkspace?: boolean;
 }
 
 export interface CreateVaultInput {
@@ -25,7 +27,8 @@ export interface CreateVaultInput {
   importPackage?: VaultImportPackage;
   /**
    * Welcome `README.md` + layout (`buildVaultWelcomeFiles`). Scratch and
-   * ordinary-file imports; core skips it when the root already has a README.
+   * ordinary-file imports; core skips it when the root already has a README
+   * or the import keeps a layout.
    * A store `.zip` / backup import never sends it.
    */
   welcome?: VaultWelcomeFiles;
@@ -96,4 +99,7 @@ export interface VaultService {
 
   /** Whether portable `.7z` export can run in RAM (always on when core is linked). Zip of `store/` is always available. */
   exportCapabilities(): Promise<{ sevenZip: boolean }>;
+
+  /** Wipe the unfinished plain-text exports a crash left. Core logs the outcome. */
+  sweepPlainExports(): Promise<void>;
 }

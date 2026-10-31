@@ -297,6 +297,11 @@ export function buildSystemInfoSections(
           value: yesNo(t, ui.lifecycle_keep_open_on_wake),
         },
         {
+          id: "lifecycle_confirm_close_now",
+          label: t("modal.info.field.lifecycle_confirm_close_now"),
+          value: yesNo(t, ui.lifecycle_confirm_close_now),
+        },
+        {
           id: "always_show_hidden_vaults",
           label: t("modal.info.field.always_show_hidden_vaults"),
           value: yesNo(t, ui.always_show_hidden_vaults),
@@ -367,7 +372,7 @@ export function buildSystemInfoSections(
         ),
         withOpenPath(
           { id: "logs_path", label: t("modal.info.field.logs_path"), value: paths.logsDir },
-          paths.logsDir,
+          paths.logsOpenPath,
         ),
       ],
     },

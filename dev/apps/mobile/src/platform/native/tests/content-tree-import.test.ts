@@ -41,6 +41,21 @@ describe("contentTreeFromFolderPick", () => {
     ]);
   });
 
+  it("skips the settings folder of an unpacked export at any depth", () => {
+    const tree = contentTreeFromFolderPick({
+      folderName: "Notes",
+      releaseSafTree: "content://tree/notes",
+      directories: ["Notes/.upriv-config", "Notes/docs"],
+      files: [
+        { relativePath: "Notes/.upriv-config/config.toml", uri: "content://doc/config" },
+        { relativePath: "Notes/docs/.upriv-config/README.md", uri: "content://doc/readme" },
+        { relativePath: "Notes/docs/a.txt", uri: "content://doc/a" },
+      ],
+    });
+    expect(tree.directories).toEqual(["docs"]);
+    expect(tree.files).toEqual([{ logicalPath: "docs/a.txt", uri: "content://doc/a" }]);
+  });
+
   it("rejects an entry outside the picked folder", () => {
     expect(() =>
       contentTreeFromFolderPick({

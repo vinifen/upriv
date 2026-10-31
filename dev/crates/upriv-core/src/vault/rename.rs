@@ -17,8 +17,8 @@ use crate::paths::{
     WorkspaceSystem,
 };
 use crate::session::{
-    is_vault_closing_at, is_vault_open_at, is_vault_preparing_at, with_vault_dir_lock,
-    with_vault_dir_locks, with_vault_registry_lock,
+    is_vault_backup_export_at, is_vault_closing_at, is_vault_open_at, is_vault_preparing_at,
+    with_vault_dir_lock, with_vault_dir_locks, with_vault_registry_lock,
 };
 
 use super::persistence::{load_vault_persistence, save_vault_persistence, VaultPersistence};
@@ -70,11 +70,12 @@ fn maybe_fail(step: &'static str) -> Result<()> {
 
 fn refuse_if_busy(vault_dir: &Path) -> Result<()> {
     // Rename does no Argon2 — refuse this vault's open / mid-close / preparing
-    // (open or create seed). Process-wide `is_unlock_in_flight` must not block
-    // a closed-vault migration of a *different* vault.
+    // (open or create seed) / backup export. Process-wide `is_unlock_in_flight`
+    // must not block a closed-vault migration of a *different* vault.
     if is_vault_open_at(vault_dir)
         || is_vault_closing_at(vault_dir)
         || is_vault_preparing_at(vault_dir)
+        || is_vault_backup_export_at(vault_dir)
     {
         return Err(UprivError::VaultConfigBusy {
             target: "vault.display_name".into(),

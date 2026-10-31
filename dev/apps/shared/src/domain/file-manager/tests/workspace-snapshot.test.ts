@@ -5,6 +5,7 @@ import {
   parseWorkspaceSnapshot,
   sanitizeWorkspaceSnapshot,
   serializeWorkspaceSnapshot,
+  snapshotsEqual,
   workspaceSnapshotToHydrate,
   UPRIV_WORKSPACE_PATH,
   workspaceSnapshotFromState,
@@ -35,13 +36,37 @@ describe("workspaceSnapshot", () => {
       expandedPaths: ["/", "/notes"],
       selectedPath: "/b.md",
       explorerCollapsed: true,
+      explorerSearchOpen: true,
+      explorerSearchQuery: "report",
       files: { "/b.md": { markdownView: "source" } },
     });
     const parsed = parseWorkspaceSnapshot(raw);
     expect(parsed?.openTabs).toEqual(["/a.md", "/b.md"]);
     expect(parsed?.activeTabPath).toBe("/b.md");
     expect(parsed?.explorerCollapsed).toBe(true);
+    expect(parsed?.explorerSearchOpen).toBe(true);
+    expect(parsed?.explorerSearchQuery).toBe("report");
     expect(parsed?.files).toEqual({ "/b.md": { markdownView: "source" } });
+  });
+
+  it("loads a missing or non-string search query as no search", () => {
+    expect(parseWorkspaceSnapshot('{"format_version":1,"openTabs":[]}')?.explorerSearchQuery).toBe(
+      "",
+    );
+    expect(
+      parseWorkspaceSnapshot('{"format_version":1,"openTabs":[],"explorerSearchQuery":7}')
+        ?.explorerSearchQuery,
+    ).toBe("");
+  });
+
+  it("loads a missing or non-true search flag as closed", () => {
+    expect(parseWorkspaceSnapshot('{"format_version":1,"openTabs":[]}')?.explorerSearchOpen).toBe(
+      false,
+    );
+    expect(
+      parseWorkspaceSnapshot('{"format_version":1,"openTabs":[],"explorerSearchOpen":"yes"}')
+        ?.explorerSearchOpen,
+    ).toBe(false);
   });
 
   it("loads a missing or non-true explorer flag as shown", () => {
@@ -82,6 +107,8 @@ describe("workspaceSnapshot", () => {
         expandedPaths: ["/", "/notes", "/missing"],
         selectedPath: "/gone.md",
         explorerCollapsed: true,
+        explorerSearchOpen: true,
+        explorerSearchQuery: "nested",
       },
       tree,
     );
@@ -90,6 +117,8 @@ describe("workspaceSnapshot", () => {
     expect(sanitized.expandedPaths).toEqual(["/", "/notes"]);
     expect(sanitized.selectedPath).toBe("/notes/nested.md");
     expect(sanitized.explorerCollapsed).toBe(true);
+    expect(sanitized.explorerSearchOpen).toBe(true);
+    expect(sanitized.explorerSearchQuery).toBe("nested");
   });
 
   it("omits internal file from explorer tree", () => {
@@ -157,6 +186,35 @@ describe("workspaceSnapshot", () => {
       ...saved,
       explorerCollapsed: true,
     });
+  });
+
+  it("restores the search bar, and keeps one opened or closed while tabs are loading", () => {
+    const empty = workspaceSnapshotFromState(createDefaultWorkspaceState());
+    const saved = { ...empty, openTabs: ["/a.md"], activeTabPath: "/a.md", selectedPath: "/a.md" };
+    const savedOpen = { ...saved, explorerSearchOpen: true };
+    expect(workspaceSnapshotToHydrate(empty, empty, savedOpen)?.explorerSearchOpen).toBe(true);
+
+    const opened = { ...empty, explorerSearchOpen: true };
+    expect(workspaceSnapshotToHydrate(empty, opened, saved)?.explorerSearchOpen).toBe(true);
+    expect(workspaceSnapshotToHydrate(opened, empty, savedOpen)?.explorerSearchOpen).toBe(false);
+  });
+
+  it("restores the search text, and keeps what was typed while tabs are loading", () => {
+    const empty = workspaceSnapshotFromState(createDefaultWorkspaceState());
+    const saved = { ...empty, openTabs: ["/a.md"], activeTabPath: "/a.md", selectedPath: "/a.md" };
+    const savedQuery = { ...saved, explorerSearchQuery: "report" };
+    expect(workspaceSnapshotToHydrate(empty, empty, savedQuery)?.explorerSearchQuery).toBe(
+      "report",
+    );
+
+    const typed = { ...empty, explorerSearchQuery: "plan" };
+    expect(workspaceSnapshotToHydrate(empty, typed, savedQuery)?.explorerSearchQuery).toBe("plan");
+  });
+
+  it("counts the search bar and its text as layout changes", () => {
+    const empty = workspaceSnapshotFromState(createDefaultWorkspaceState());
+    expect(snapshotsEqual(empty, { ...empty, explorerSearchOpen: true })).toBe(false);
+    expect(snapshotsEqual(empty, { ...empty, explorerSearchQuery: "report" })).toBe(false);
   });
 
   it("parses and sanitizes per-file states and treeSplitPercent", () => {

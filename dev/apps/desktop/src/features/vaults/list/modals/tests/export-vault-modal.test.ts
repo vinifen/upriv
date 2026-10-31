@@ -38,6 +38,8 @@ const vault: VaultListItem = {
 
 const ZIP_TITLE = "vault.export.option.store_zip";
 const SEVEN_ZIP_TITLE = "vault.export.option.seven_zip";
+const PLAIN_TITLE = "vault.export.option.plain_zip";
+const PASSWORD_LABEL = "vault.export.dialog.vault_password";
 
 interface HarnessProps {
   onConfirm: (request: VaultExportRequest, dir: string) => void;
@@ -95,13 +97,18 @@ function exportButton(): HTMLButtonElement {
   return screen.getByRole("button", { name: "vault.export.dialog.confirm" });
 }
 
-/** The `.zip` folder field, then the `.7z` one. */
+/** The `.zip` folder field, then the `.7z` one, then the plain-text one. */
 function folderInputs(): HTMLInputElement[] {
   return screen.getAllByLabelText("modal.export_folder.label");
 }
 
-function passwordInput(): HTMLInputElement {
-  return screen.getByLabelText("vault.export.dialog.seven_zip_password");
+/** The password field of the `.7z` option, or of the option named by `title`. */
+function passwordInput(title = SEVEN_ZIP_TITLE): HTMLInputElement {
+  return within(card(title)).getByLabelText(PASSWORD_LABEL);
+}
+
+function includeSwitch(title: string, label: string): HTMLElement {
+  return within(card(title)).getByLabelText(label);
 }
 
 function needsStep(title: string): boolean {
@@ -272,10 +279,86 @@ describe("ExportVaultModal", () => {
     );
     expect(within(card(ZIP_TITLE)).queryByRole("progressbar")).toBeNull();
     // The running option shows its progress in place of its fields.
-    expect(screen.queryByLabelText("vault.export.dialog.seven_zip_password")).toBeNull();
+    expect(within(card(SEVEN_ZIP_TITLE)).queryByLabelText(PASSWORD_LABEL)).toBeNull();
     // The one footer button stops the export instead of starting one.
     expect(screen.queryByRole("button", { name: "vault.export.dialog.confirm" })).toBeNull();
     expect(screen.getByRole("button", { name: "vault.export.dialog.stop" })).toBeDefined();
+  });
+
+  it("offers the plain-text .zip last, in red, with its own password and folder", async () => {
+    const onConfirm = show();
+    await capabilitiesLoaded();
+
+    const radios = Array.from(document.querySelectorAll('input[type="radio"]'));
+    const formats = radios.map((input) => input.getAttribute("value"));
+    expect(formats.filter((value) => value?.endsWith("_zip"))).toEqual([
+      "store_zip",
+      "seven_zip",
+      "plain_zip",
+    ]);
+    expect(formats.at(-1)).toBe("plain_zip");
+    expect(card(PLAIN_TITLE).textContent).toContain("modal.settings.badge.insecure");
+    expect(card(PLAIN_TITLE).className).toContain("--danger-border");
+
+    fireEvent.click(screen.getByText(PLAIN_TITLE));
+    expect(radio(PLAIN_TITLE).checked).toBe(true);
+    expect(card(PLAIN_TITLE).className).toContain("vault-status-recovery");
+    expect(exportButton().disabled).toBe(true);
+
+    fireEvent.change(passwordInput(PLAIN_TITLE), { target: { value: "vault password" } });
+    expect(needsStep(PLAIN_TITLE)).toBe(true);
+    fireEvent.change(folderInputs()[2], { target: { value: "/media/plain" } });
+    expect(needsStep(PLAIN_TITLE)).toBe(false);
+    expect(card(PLAIN_TITLE).className).toContain("--danger-border");
+    expect(passwordInput().value).toBe("");
+
+    fireEvent.click(exportButton());
+    expect(onConfirm).toHaveBeenCalledWith(
+      expect.objectContaining({
+        format: "plain_zip",
+        password: "vault password",
+        include: { workspace: true, settings: true },
+      }),
+      "/media/plain",
+    );
+  });
+
+  it("keeps each option's toggles apart, on by default", async () => {
+    const onConfirm = show();
+    await capabilitiesLoaded();
+    const layout = "vault.export.dialog.include_workspace";
+    const settings = "vault.export.dialog.include_settings";
+    expect(within(card(ZIP_TITLE)).queryByLabelText(layout)).toBeNull();
+
+    fireEvent.click(screen.getByText(SEVEN_ZIP_TITLE));
+    fireEvent.click(includeSwitch(SEVEN_ZIP_TITLE, layout));
+    fireEvent.change(passwordInput(), { target: { value: "vault password" } });
+    fireEvent.change(folderInputs()[1], { target: { value: "/media/sevens" } });
+    fireEvent.click(exportButton());
+    expect(onConfirm).toHaveBeenLastCalledWith(
+      expect.objectContaining({ include: { workspace: false, settings: true } }),
+      "/media/sevens",
+    );
+
+    fireEvent.click(screen.getByText(PLAIN_TITLE));
+    fireEvent.click(includeSwitch(PLAIN_TITLE, settings));
+    fireEvent.change(passwordInput(PLAIN_TITLE), { target: { value: "vault password" } });
+    fireEvent.change(folderInputs()[2], { target: { value: "/media/plain" } });
+    fireEvent.click(exportButton());
+    expect(onConfirm).toHaveBeenLastCalledWith(
+      expect.objectContaining({ include: { workspace: true, settings: false } }),
+      "/media/plain",
+    );
+  });
+
+  it("shows a refusal only on the option that got it and clears it on a new choice", async () => {
+    const onPasswordEdited = vi.fn();
+    show({ passwordError: "error.wrong_password", onPasswordEdited });
+    await capabilitiesLoaded();
+    fireEvent.click(screen.getByText(PLAIN_TITLE));
+    expect(onPasswordEdited).toHaveBeenCalled();
+    expect(within(card(PLAIN_TITLE)).getByRole("alert").textContent).toBe("error.wrong_password");
+    expect(within(card(SEVEN_ZIP_TITLE)).queryByRole("alert")).toBeNull();
   });
 
   it("stops a running export once, then waits for it to settle", async () => {

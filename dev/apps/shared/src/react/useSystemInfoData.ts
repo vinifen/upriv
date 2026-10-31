@@ -5,6 +5,7 @@ import {
   shouldBumpVaultRootEpoch,
   vaultRootGoneRpcError,
   vaultRootLogsDisplayPath,
+  vaultRootUprivOpenPath,
 } from "../domain";
 import type { AppSettingsConfig, SystemInfoSnapshot, VaultGroup, VaultListItem } from "../domain";
 import type { VaultRootService } from "../services";
@@ -114,6 +115,7 @@ export function useSystemInfoData({
           paths: {
             appHome,
             logsDir: vaultRootLogsDisplayPath(vaultRootBase),
+            logsOpenPath: vaultRootUprivOpenPath(vaultRootBase, "logs"),
           },
         });
       } catch (error) {
@@ -160,6 +162,7 @@ export function useSystemInfoData({
     ui.lifecycle_close_modal_on_submit,
     ui.lifecycle_open_file_manager_on_open,
     ui.lifecycle_keep_open_on_wake,
+    ui.lifecycle_confirm_close_now,
     ui.always_show_hidden_vaults,
     logging.enabled,
     logging.level,

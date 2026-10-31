@@ -28,6 +28,11 @@ export const FILE_MANAGER_LONG_PRESS_MOVE_PX = 6;
 export const FILE_MANAGER_DOUBLE_TAP_MS = 300;
 /** Second click/tap on the same code value within this window copies it (Markdown Read view). */
 export const MARKDOWN_COPY_DOUBLE_TAP_MS = 500;
+/**
+ * The outline reads the note again once typing pauses this long. Each read
+ * parses the whole note, which is too slow to run on every key.
+ */
+export const MARKDOWN_OUTLINE_SETTLE_MS = 300;
 /** Hover dwell before expanding a folder under a mobile explorer drop. */
 export const FILE_MANAGER_DROP_EXPAND_MS = 400;
 /** Retry OS-picker cache deletes while the file manager is mounted. */

@@ -48,6 +48,7 @@ interface VaultBlockCardProps {
   onOpenFileManager: (vault: VaultListItem) => void;
   onLockVault: (vault: VaultListItem) => void;
   onUnlockVault: (vault: VaultListItem) => void;
+  onCloseNow: (vault: VaultListItem) => void;
 }
 
 export function VaultBlockCard({
@@ -69,6 +70,7 @@ export function VaultBlockCard({
   onOpenFileManager,
   onLockVault,
   onUnlockVault,
+  onCloseNow,
 }: VaultBlockCardProps) {
   const { t, locale } = useTranslation();
   const { settings: appSettings } = useAppSettingsContext();
@@ -192,6 +194,7 @@ export function VaultBlockCard({
             onOpenSettings={onOpenSettings}
             onExportVault={onExportVault}
             onOpenFileManager={onOpenFileManager}
+            onCloseNow={onCloseNow}
           />
         </div>
       </div>

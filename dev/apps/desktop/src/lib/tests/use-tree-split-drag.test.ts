@@ -109,6 +109,18 @@ describe("useTreeSplitDrag", () => {
     expect(dispatch).toHaveBeenCalledWith({ type: "set_explorer_collapsed", collapsed: true });
   });
 
+  it("paints the rounded saved percent once at release", () => {
+    const onDragFrame = vi.fn<(visualPercent: number, size: number) => void>();
+    const { result } = renderSplit({ onDragFrame });
+    act(() => result.current.onDragStart());
+    act(() => result.current.onDrag(81));
+    expect(onDragFrame).toHaveBeenLastCalledWith(25.0625, SIZE);
+
+    act(() => result.current.onDragEnd());
+    expect(onDragFrame).toHaveBeenLastCalledWith(25, SIZE);
+    expect(result.current.percent).toBe(25);
+  });
+
   it("ignores moves before the container has a size", () => {
     const { result, dispatch } = renderSplit({ containerSize: 0 });
     act(() => result.current.onDragStart());

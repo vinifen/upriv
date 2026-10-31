@@ -10,8 +10,9 @@ use crate::error::{Result, UprivError};
 
 pub use types::{
     VaultArchiveMode, VaultAutoCloseSection, VaultBackupMode, VaultBackupSection, VaultConfig,
-    VaultFileManagerSection, VaultIdentitySection, VaultMountSection, VaultSecuritySection,
-    VaultSevenZipSection, VaultStorageMode, VaultStorageSection, VaultWipePattern,
+    VaultFileManagerSection, VaultIdentitySection, VaultMountSection, VaultPlainFiles,
+    VaultSecuritySection, VaultSevenZipSection, VaultStorageMode, VaultStorageSection,
+    VaultWipePattern,
 };
 
 const CONFIG_FILE_NAME: &str = "config.toml";
@@ -358,7 +359,10 @@ display_name = "Case mismatch"
         ];
 
         for (mode, expected) in cases {
-            let section = VaultStorageSection { mode };
+            let section = VaultStorageSection {
+                mode,
+                ..Default::default()
+            };
             let raw = toml::to_string(&section).expect("serialize storage");
             assert!(
                 raw.contains(expected),
@@ -599,9 +603,7 @@ path = "relative/mount"
                 hidden: false,
                 password_hint: String::new(),
             },
-            storage: VaultStorageSection {
-                mode: VaultStorageMode::EncryptedDir,
-            },
+            storage: VaultStorageSection::default(),
             mount: {
                 let mut mount = VaultMountSection::default();
                 mount.linux.path = "relative/mount".into();
@@ -628,9 +630,7 @@ path = "relative/mount"
                 hidden: true,
                 password_hint: "".into(),
             },
-            storage: VaultStorageSection {
-                mode: VaultStorageMode::EncryptedDir,
-            },
+            storage: VaultStorageSection::default(),
             mount: {
                 let mut mount = VaultMountSection::default();
                 mount.linux.path = "/tmp/open".into();

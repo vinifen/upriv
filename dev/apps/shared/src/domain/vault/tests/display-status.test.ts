@@ -9,6 +9,7 @@ import {
   isVaultPipelineDisplayBusy,
   isVaultOpenCredentialResumeStatus,
   isVaultOpenResumeTarget,
+  vaultCloseNowOffered,
   isVaultCloseQueued,
   isVaultCloseWritesLocked,
   isVaultListRowActivatable,
@@ -236,6 +237,18 @@ describe("vaultPipelineRowBudget", () => {
 });
 
 describe("vaultStatusLabelKey", () => {
+  it("offers Close now on a running or waiting close until it was asked for", () => {
+    expect(vaultCloseNowOffered("closing", "a")).toBe(true);
+    expect(
+      vaultCloseNowOffered("queued", "a", { queuedVaultIds: ["a"], queuedOpenVaultIds: [] }),
+    ).toBe(true);
+    expect(
+      vaultCloseNowOffered("queued", "a", { queuedVaultIds: ["a"], queuedOpenVaultIds: ["a"] }),
+    ).toBe(false);
+    expect(vaultCloseNowOffered("closing", "a", { closeNowVaultIds: ["a"] })).toBe(false);
+    expect(vaultCloseNowOffered("open", "a")).toBe(false);
+  });
+
   it("says auto-closed only for a closed vault that idle lock just finished", () => {
     expect(vaultStatusLabelKey("closed", "notes", {}, true)).toBe("vault.status.auto_closed");
     expect(vaultStatusLabelKey("closed", "notes")).toBe("vault.status.closed");

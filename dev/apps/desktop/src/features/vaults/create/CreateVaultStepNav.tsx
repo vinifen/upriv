@@ -41,7 +41,9 @@ function stepBadgeClass(status: CreateVaultStepStatus): string {
       ? "bg-vault-open/15 text-vault-open"
       : status === "error"
         ? "bg-on-error-container/15 text-on-error-container"
-        : "bg-surface-container-highest text-on-surface-variant",
+        : status === "waiting"
+          ? "bg-[color-mix(in_srgb,var(--vault-status-recovery)_15%,transparent)] text-[var(--vault-status-recovery)]"
+          : "bg-surface-container-highest text-on-surface-variant",
   ].join(" ");
 }
 
@@ -52,7 +54,9 @@ function stepStatusClass(status: CreateVaultStepStatus): string {
       ? "text-vault-open"
       : status === "error"
         ? "text-on-error-container"
-        : "text-on-surface-variant",
+        : status === "waiting"
+          ? "text-[var(--vault-status-recovery)]"
+          : "text-on-surface-variant",
   ].join(" ");
 }
 
