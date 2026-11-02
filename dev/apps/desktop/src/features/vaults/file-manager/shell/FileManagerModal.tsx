@@ -16,8 +16,6 @@ interface FileManagerModalProps {
   open: boolean;
   title: string;
   contextTitle?: string;
-  /** Closing / backing up, shown beside the vault name. */
-  activityLabel?: string;
   titleIcon?: IconName;
   onMinimize: () => void;
   onDismiss: () => void;
@@ -35,7 +33,6 @@ export function FileManagerModal({
   open,
   title,
   contextTitle,
-  activityLabel,
   titleIcon = "file-manager",
   onMinimize,
   onDismiss,
@@ -212,11 +209,6 @@ export function FileManagerModal({
                 titleIcon={titleIcon}
                 compact
               />
-              {activityLabel ? (
-                <span className="shrink-0 text-xs font-semibold uppercase tracking-wide text-primary">
-                  {activityLabel}
-                </span>
-              ) : null}
               <div className="flex shrink-0 items-center self-center gap-0.5">
                 <ModalChromeButton
                   onClick={onMinimize}

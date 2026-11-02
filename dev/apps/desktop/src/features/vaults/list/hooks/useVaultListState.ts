@@ -3,7 +3,7 @@ import {
   VAULT_NOTE_MAX_LENGTH,
   DEFAULT_VAULT_LIST_VIEW,
   type VaultListViewMode,
-  type VaultSession,
+  type VaultRuntimePatch,
   type VaultSettingsListPatch,
   type KdfUnlockPreset,
   type VaultListItem,
@@ -315,23 +315,12 @@ export function useVaultListState(
     setVaults((current) => sortVaultsByOrder([...current, vault]));
   }, []);
 
-  const setVaultRuntimeState = useCallback(
-    (
-      vaultId: string,
-      patch: {
-        session: VaultSession | null;
-        lastAccessedAt?: string;
-        lastAccessedWhen?: string;
-        autoClosed?: boolean;
-      },
-    ) => {
-      sessionWritesRef.current.set(vaultId, Date.now());
-      setVaults((current) =>
-        current.map((vault) => (vault.id === vaultId ? { ...vault, ...patch } : vault)),
-      );
-    },
-    [],
-  );
+  const setVaultRuntimeState = useCallback((vaultId: string, patch: VaultRuntimePatch) => {
+    sessionWritesRef.current.set(vaultId, Date.now());
+    setVaults((current) =>
+      current.map((vault) => (vault.id === vaultId ? { ...vault, ...patch } : vault)),
+    );
+  }, []);
 
   const setGroupCollapsed = useCallback((groupId: string, collapsed: boolean) => {
     setGroups((current) => current.map((g) => (g.id === groupId ? { ...g, collapsed } : g)));

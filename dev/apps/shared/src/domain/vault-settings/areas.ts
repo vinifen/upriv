@@ -82,12 +82,18 @@ const SETTINGS_GEAR_BLOCKED = new Set<VaultDisplayStatus>([
   "closing",
   "exporting",
   "backing_up",
+  "recovering",
 ]);
 
-/** `vault_config_save` returns `vault_busy` while export, a backup, or rewrap holds the vault. */
+/**
+ * `vault_config_save` returns `vault_busy` while export, a backup, or rewrap
+ * holds the vault. Removing a leftover folder ends with the folder gone, so
+ * its folder and mode wait too.
+ */
 const CONFIG_WRITE_BLOCKED = new Set<VaultDisplayStatus>([
   "exporting",
   "backing_up",
+  "recovering",
   "changing_password",
   "changing_kdf",
 ]);

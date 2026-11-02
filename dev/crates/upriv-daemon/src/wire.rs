@@ -60,7 +60,6 @@ pub fn is_lifecycle_io_method(method: &str) -> bool {
             | "vault_delete"
             | "vault_discard_import"
             | "vault_plain_confirm"
-            | "vault_plain_remove"
             | "vault_plain_sync"
             | "vault_plain_deletions"
             | "vault_plain_send"
@@ -75,9 +74,9 @@ pub fn is_rewrap_io_method(method: &str) -> bool {
     matches!(method, "vault_change_password" | "vault_change_kdf")
 }
 
-/// Zip and `.7z` import, portable export, the wipe of what a crashed plain-text
-/// export left, a save of the closed `store/`, and a backup export. File imports
-/// use [`is_import_io_method`] so they can run beside each other.
+/// Zip and `.7z` import, portable export, the wipes of what a crashed plain-text
+/// export or session left, a save of the closed `store/`, and a backup export.
+/// File imports use [`is_import_io_method`] so they can run beside each other.
 pub fn is_pack_io_method(method: &str) -> bool {
     matches!(
         method,
@@ -87,6 +86,7 @@ pub fn is_pack_io_method(method: &str) -> bool {
             | "vault_import_os_path"
             | "vault_export"
             | "vault_plain_export_sweep"
+            | "vault_plain_remove"
             | "backup_save"
             | "backup_export"
     )

@@ -29,7 +29,10 @@ interface StartPipelineOptions {
   stepCount: number;
   /** Default `"foreground"` — modal/row owns the busy UI. `"background"` = job only (no modal budget). */
   presentation?: VaultPipelinePresentation;
-  /** Default `vaultPipeline`. Create uses `vaultCreate`. */
+  /**
+   * Default `vaultPipeline`. Create uses `vaultCreate`. `runPipeline` may grow
+   * it once the work is measured (a close, from its backup's size).
+   */
   budgetMs?: number;
   /**
    * `hold` (default): keep the failed run until `dismissFailure`; the modal or
@@ -42,7 +45,12 @@ interface StartPipelineOptions {
    * keep the id busy until that result settles.
    */
   invalidateOnTimeout?: boolean;
-  runPipeline: (vaultId: string, onStep: (stepIndex: number) => void) => Promise<void>;
+  /** `growBudget` raises this job's budget from when it started; a smaller value is ignored. */
+  runPipeline: (
+    vaultId: string,
+    onStep: (stepIndex: number) => void,
+    growBudget: (budgetMs: number) => void,
+  ) => Promise<void>;
   onComplete: () => void;
   onError: (errorKey: I18nKey) => void;
   /** Budget elapsed; the job may still finish. Open handlers clear renderer password here. */
@@ -95,8 +103,9 @@ export function useVaultPipelineRun(errorToI18nKey: (error: unknown) => I18nKey)
       const failureMode = job.failureMode ?? "hold";
       const generation = ++generationRef.current;
       inFlightRef.current = true;
+      const startedAt = Date.now();
 
-      syncRun({ vaultId, kind, activeStep: 0, stepCount, foreground, startedAt: Date.now() });
+      syncRun({ vaultId, kind, activeStep: 0, stepCount, foreground, startedAt });
 
       const pumpQueue = () => {
         if (queueRef.current.length === 0) return;
@@ -107,7 +116,8 @@ export function useVaultPipelineRun(errorToI18nKey: (error: unknown) => I18nKey)
 
       void (async () => {
         let abandoned = false;
-        const cancelBudget = scheduleTimeout(() => {
+        let budgetMs = job.budgetMs ?? LOADING_BUDGET_MS.vaultPipeline;
+        const onBudgetSpent = () => {
           if (generationRef.current !== generation) return;
           const current = runRef.current;
           if (!current || current.vaultId !== vaultId || current.errorKey) return;
@@ -125,7 +135,14 @@ export function useVaultPipelineRun(errorToI18nKey: (error: unknown) => I18nKey)
           }
           syncRun({ ...current, foreground: true, errorKey: "loading.timed_out" });
           onTimeout?.();
-        }, job.budgetMs ?? LOADING_BUDGET_MS.vaultPipeline);
+        };
+        let cancelBudget = scheduleTimeout(onBudgetSpent, budgetMs);
+        const growBudget = (next: number) => {
+          if (generationRef.current !== generation || next <= budgetMs) return;
+          budgetMs = next;
+          cancelBudget();
+          cancelBudget = scheduleTimeout(onBudgetSpent, Math.max(0, startedAt + next - Date.now()));
+        };
 
         const finishAbandoned = (ok: boolean) => {
           settlingRef.current.delete(vaultId);
@@ -135,12 +152,16 @@ export function useVaultPipelineRun(errorToI18nKey: (error: unknown) => I18nKey)
         };
 
         try {
-          await runPipeline(vaultId, (stepIndex) => {
-            if (generationRef.current !== generation) return;
-            const current = runRef.current;
-            if (current?.vaultId !== vaultId) return;
-            syncRun({ ...current, activeStep: stepIndex });
-          });
+          await runPipeline(
+            vaultId,
+            (stepIndex) => {
+              if (generationRef.current !== generation) return;
+              const current = runRef.current;
+              if (current?.vaultId !== vaultId) return;
+              syncRun({ ...current, activeStep: stepIndex });
+            },
+            growBudget,
+          );
 
           if (abandoned) {
             finishAbandoned(true);

@@ -24,7 +24,6 @@ function createMockFm(overrides: Partial<FileManagerApi> = {}) {
     ),
     fileLoadError: vi.fn(() => null),
     isFileContentReady: vi.fn(() => true),
-    writesLocked: false,
     isFileEditable: vi.fn(() => true),
     isFileViewable: vi.fn(() => true),
     isFileImage: vi.fn(() => false),

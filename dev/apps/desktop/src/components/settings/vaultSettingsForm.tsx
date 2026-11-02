@@ -27,6 +27,8 @@ import {
   type CompressionPreset,
   type KdfUnlockPreset,
   type PolicyRadioBadge,
+  type VaultConfigEditHold,
+  type VaultDeleteHold,
   type VaultGroup,
   type VaultSettingsConfig,
   type WorkspaceOsEntry,
@@ -38,6 +40,7 @@ import {
   requireVaultConfigEditLockedI18nKey,
   liveDisplayNameError,
   displayNameErrorI18nKey,
+  VAULT_DELETE_HOLD_I18N_KEY,
 } from "@upriv/shared";
 import { useTranslation } from "@/i18n";
 import { useVaultRootService } from "@/platform/services";
@@ -131,8 +134,8 @@ interface VaultSettingsVaultSectionProps {
   hiddenLocked?: boolean;
   /** `vault.display_name` requires closed or recovery. */
   displayNameLocked?: boolean;
-  /** Locked by a leftover plaintext folder, not by a busy vault. */
-  plainLeftover?: boolean;
+  /** Work beside the vault's status that locks fields (`vaultConfigEditHold`). */
+  editHold?: VaultConfigEditHold;
   fileManager: VaultSettingsConfig["file_manager"];
   onFileManagerChange: (patch: Partial<VaultSettingsConfig["file_manager"]>) => void;
 }
@@ -142,7 +145,7 @@ export function VaultSettingsVaultSection({
   onChange,
   hiddenLocked = false,
   displayNameLocked = false,
-  plainLeftover = false,
+  editHold,
   fileManager,
   onFileManagerChange,
 }: VaultSettingsVaultSectionProps) {
@@ -162,7 +165,7 @@ export function VaultSettingsVaultSection({
         disabled={displayNameLocked}
         hint={
           displayNameLocked
-            ? t(requireVaultConfigEditLockedI18nKey("vault.display_name", plainLeftover))
+            ? t(requireVaultConfigEditLockedI18nKey("vault.display_name", editHold))
             : undefined
         }
       >
@@ -256,8 +259,8 @@ interface VaultSettingsStorageSectionProps extends SectionPatchProps<"storage"> 
   storageModeLocked?: boolean;
   /** `storage.plain_files` needs the vault closed or in recovery. */
   plainFilesLocked?: boolean;
-  /** Locked by a leftover plaintext folder, not by a busy vault. */
-  plainLeftover?: boolean;
+  /** Work beside the vault's status that locks fields (`vaultConfigEditHold`). */
+  editHold?: VaultConfigEditHold;
 }
 
 export function VaultSettingsStorageSection({
@@ -265,7 +268,7 @@ export function VaultSettingsStorageSection({
   onChange,
   storageModeLocked = false,
   plainFilesLocked = false,
-  plainLeftover = false,
+  editHold,
 }: VaultSettingsStorageSectionProps) {
   const { t } = useTranslation();
   const storageModeGroup = useId();
@@ -282,7 +285,7 @@ export function VaultSettingsStorageSection({
       >
         {storageModeLocked ? (
           <p className="text-xs leading-relaxed text-on-surface-variant">
-            {t(requireVaultConfigEditLockedI18nKey("storage.mode", plainLeftover))}
+            {t(requireVaultConfigEditLockedI18nKey("storage.mode", editHold))}
           </p>
         ) : null}
         <div
@@ -348,8 +351,8 @@ interface VaultSettingsMountSectionProps extends SectionPatchProps<"mount"> {
   onDriverAttentionChange?: (active: boolean) => void;
   /** `mount.workspace_path` requires vault_quiet. */
   controlsDisabled?: boolean;
-  /** Locked by a leftover plaintext folder, not by a busy vault. */
-  plainLeftover?: boolean;
+  /** Work beside the vault's status that locks fields (`vaultConfigEditHold`). */
+  editHold?: VaultConfigEditHold;
   /** Plain text writes files in the folder and has no file manager folder switch. */
   plaintext?: boolean;
   /** App workspace, so "Use the app folder" can follow that file manager folder. */
@@ -363,7 +366,7 @@ export function VaultSettingsMountSection({
   onPathIssueChange,
   onDriverAttentionChange,
   controlsDisabled = false,
-  plainLeftover = false,
+  editHold,
   plaintext = false,
   appWorkspace: appFolders = appWorkspace(),
 }: VaultSettingsMountSectionProps) {
@@ -396,7 +399,7 @@ export function VaultSettingsMountSection({
       </p>
       {controlsDisabled ? (
         <p className="text-xs leading-relaxed text-on-surface-variant">
-          {t(requireVaultConfigEditLockedI18nKey("mount.workspace_path", plainLeftover))}
+          {t(requireVaultConfigEditLockedI18nKey("mount.workspace_path", editHold))}
         </p>
       ) : null}
       {workspaceSystemsCurrentFirst().map((system) => {
@@ -1151,8 +1154,8 @@ interface VaultSettingsDangerZoneSectionProps {
   canConfirmDelete: boolean;
   busy?: boolean;
   enabled?: boolean;
-  /** Closed or recovery. When false the button stays off and the reason is shown. */
-  allowed?: boolean;
+  /** Why Delete waits (`vaultDeleteHold`). While set the button stays off and the reason shows. */
+  hold?: VaultDeleteHold | null;
   onRequestDelete: () => void;
   onCancelDelete: () => void;
   onConfirmDelete: () => void;
@@ -1167,7 +1170,7 @@ export function VaultSettingsDangerZoneSection({
   canConfirmDelete,
   busy = false,
   enabled = true,
-  allowed = true,
+  hold = null,
   onRequestDelete,
   onCancelDelete,
   onConfirmDelete,
@@ -1175,16 +1178,15 @@ export function VaultSettingsDangerZoneSection({
 }: VaultSettingsDangerZoneSectionProps) {
   const { t } = useTranslation();
   const confirmRef = useRevealWhen<HTMLDivElement>(deleteOpen);
+  const allowed = hold === null;
 
   if (!deleteOpen) {
     return (
       <div className="space-y-4">
         <p className="text-sm text-on-surface-variant">{t("modal.settings.danger_zone_help")}</p>
-        {allowed ? null : (
-          <p className="text-sm text-on-surface-variant">
-            {t("modal.settings.delete_only_closed")}
-          </p>
-        )}
+        {hold ? (
+          <p className="text-sm text-on-surface-variant">{t(VAULT_DELETE_HOLD_I18N_KEY[hold])}</p>
+        ) : null}
         <Button
           variant="danger"
           size="sm"

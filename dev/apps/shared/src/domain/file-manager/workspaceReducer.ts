@@ -220,7 +220,6 @@ function unsavedPromptPaths(state: VaultWorkspaceState): readonly string[] {
     case "close_tabs":
       return prompt.paths;
     case "dismiss_workspace":
-    case "close_vault":
       return state.dirtyPaths;
     default:
       return [];
@@ -513,8 +512,6 @@ export function resolveUnsavedPrompt(
     case "close_tabs":
       return { type: "close_tabs", paths: prompt.paths };
     case "dismiss_workspace":
-    case "close_vault":
-    case "close_vault_import":
     case "import_in_progress":
       return { type: "set_unsaved_prompt", prompt: null };
   }

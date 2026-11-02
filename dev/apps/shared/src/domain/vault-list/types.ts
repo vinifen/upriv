@@ -1,4 +1,4 @@
-import type { VaultRow } from "../vault";
+import type { VaultRow, VaultSession } from "../vault";
 import type { KdfUnlockPreset } from "../vault-settings/kdf";
 
 /** Vault row enriched for list UI (`vault_list` DTO + locale formatting). */
@@ -19,3 +19,11 @@ export interface VaultListItem extends VaultRow {
    */
   autoClosed?: boolean;
 }
+
+/**
+ * What one open, close, or recovery step changes on its row, so the row
+ * matches what the next `vault_list` reports without asking for it.
+ */
+export type VaultRuntimePatch = { session: VaultSession | null } & Partial<
+  Pick<VaultListItem, "lastAccessedAt" | "lastAccessedWhen" | "autoClosed" | "plainLeftover">
+>;

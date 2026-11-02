@@ -18,7 +18,10 @@ use crate::config::{load_vault_config, VaultBackupMode};
 use crate::error::{Result, UprivError};
 use crate::logging::{log_event, LogLevel};
 use crate::paths::VaultRoot;
-use crate::session::{ensure_data_folder_export_idle, with_vault_dir_lock, BackupExportGuard, Job};
+use crate::session::{
+    ensure_backups_not_exporting, ensure_data_folder_export_idle, remove_backup_unless_exporting,
+    with_vault_dir_lock, BackupExportGuard, Job,
+};
 use crate::time::utc_filename_stamp;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -631,7 +634,9 @@ fn finish_backup_prune(vault_dir: &Path, mode: VaultBackupMode, keep_last: u32) 
 
 /// Delete and pin run under the vault's directory lock and refuse while the
 /// data folder is being exported. The export copies each vault under the same
-/// lock, so its zip holds every backup once, before or after the change.
+/// lock, so its zip holds every backup once, before or after the change. A
+/// backup export takes its zips under that lock too, and each refuses a zip it
+/// holds.
 fn with_backups_settled<T>(
     root: &VaultRoot,
     vault_dir: &Path,
@@ -659,6 +664,7 @@ pub fn delete_backups(root: &VaultRoot, vault_id: &str, stamps: &[String]) -> Re
                 paths.push(path);
             }
         }
+        ensure_backups_not_exporting(&vault_dir, &paths)?;
         for path in paths {
             crate::host_fs::remove_file(path)?;
         }
@@ -682,6 +688,7 @@ fn promote_backup_save_in(vault_dir: &Path, stamp: &str) -> Result<()> {
         return Err(UprivError::VaultPathNotFound(stamp.into()));
     };
     let src = one_store_zip(&backups, &source, stamp)?;
+    ensure_backups_not_exporting(vault_dir, std::slice::from_ref(&src))?;
     let file_name = src
         .file_name()
         .ok_or_else(|| UprivError::VaultPathNotFound(stamp.into()))?
@@ -724,8 +731,9 @@ fn locate_backup_zip(root: &VaultRoot, vault_id: &str, stamp: &str) -> Result<Pa
 /// `backup_export_numbered`. A stopped or failed export leaves no file.
 ///
 /// Backups are frozen files, so this vault may be open and every other export
-/// stays free. Delete and rename of this vault refuse until the export ends. A
-/// backup deleted or rotated away before its turn fails the export.
+/// stays free. Until the export ends, delete and rename of this vault refuse,
+/// delete and pin of the chosen backups refuse (`backup_exporting`), and
+/// retention leaves them for a later close.
 pub fn export_backups(
     root: &VaultRoot,
     vault_id: &str,
@@ -749,15 +757,16 @@ fn write_backup_export(
     job: &Job,
 ) -> Result<ExportedFile> {
     let vault_dir = root.vault_dir(vault_id)?;
-    // Under the lock delete and rename hold, so neither is halfway through.
-    let _reading = with_vault_dir_lock(&vault_dir, || {
+    check_export_folder(root, dest_dir)?;
+    // Under the lock delete, pin, and rename hold, so none is halfway through.
+    let (_reading, sources) = with_vault_dir_lock(&vault_dir, || {
         if !vault_dir.host_is_dir() {
             return Err(UprivError::VaultNotFound(vault_dir.clone()));
         }
-        BackupExportGuard::enter(&vault_dir)
+        let sources = backup_export_sources(root, vault_id, stamps)?;
+        let zips = sources.iter().map(|(_, path)| path.clone()).collect();
+        Ok((BackupExportGuard::enter(&vault_dir, zips)?, sources))
     })?;
-    check_export_folder(root, dest_dir)?;
-    let sources = backup_export_sources(root, vault_id, stamps)?;
     let mut total = 0u64;
     for (_, path) in &sources {
         total = total.saturating_add(crate::host_fs::metadata(path)?.len());
@@ -888,7 +897,7 @@ fn prune_backups(vault_dir: &Path, mode: VaultBackupMode, keep_last: u32) -> Res
     }
     let drop_count = files.len() - keep;
     for (_stamp, _name, path) in files.into_iter().take(drop_count) {
-        crate::host_fs::remove_file(path)?;
+        remove_backup_unless_exporting(vault_dir, &path)?;
     }
     Ok(())
 }
@@ -1690,7 +1699,8 @@ mode = "encrypted_dir"
     fn delete_and_rename_wait_until_the_export_ends() {
         let (_tmp, root, name, _) = vault_with_two_backups();
         let vault_dir = root.vault_dir("notes").unwrap();
-        let reading = BackupExportGuard::enter(&vault_dir).unwrap();
+        let zip = backup_zip_file(&root, "notes", &name).unwrap();
+        let reading = BackupExportGuard::enter(&vault_dir, vec![zip.clone()]).unwrap();
         assert!(matches!(
             crate::vault::delete_vault(&root, "notes"),
             Err(UprivError::VaultConfigBusy { .. })
@@ -1704,7 +1714,7 @@ mode = "encrypted_dir"
             .host_is_file());
 
         // A second export reads beside the first; the last one out frees the vault.
-        let second = BackupExportGuard::enter(&vault_dir).unwrap();
+        let second = BackupExportGuard::enter(&vault_dir, vec![zip]).unwrap();
         drop(reading);
         assert!(matches!(
             crate::vault::delete_vault(&root, "notes"),
@@ -1713,6 +1723,64 @@ mode = "encrypted_dir"
         drop(second);
         crate::vault::delete_vault(&root, "notes").unwrap();
         assert!(!vault_dir.host_exists());
+    }
+
+    #[test]
+    fn a_backup_being_exported_is_neither_deleted_nor_pinned() {
+        let (_tmp, root, exported, other) = vault_with_two_backups();
+        let vault_dir = root.vault_dir("notes").unwrap();
+        let zip = backup_zip_file(&root, "notes", &exported).unwrap();
+        let reading = BackupExportGuard::enter(&vault_dir, vec![zip.clone()]).unwrap();
+
+        assert!(matches!(
+            delete_backups(&root, "notes", &[other.clone(), exported.clone()]),
+            Err(UprivError::BackupExporting)
+        ));
+        assert!(matches!(
+            promote_backup_save(&root, "notes", &exported),
+            Err(UprivError::BackupExporting)
+        ));
+        assert!(zip.host_is_file());
+        assert!(backup_zip_file(&root, "notes", &other)
+            .unwrap()
+            .host_is_file());
+
+        // The other backup is free, and the exported one is once the export ends.
+        delete_backups(&root, "notes", std::slice::from_ref(&other)).unwrap();
+        drop(reading);
+        delete_backups(&root, "notes", &[exported]).unwrap();
+        assert!(!zip.host_exists());
+    }
+
+    #[test]
+    fn retention_leaves_a_backup_being_exported_for_a_later_close() {
+        let (_tmp, root, oldest, newest) = vault_with_two_backups();
+        let vault_dir = root.vault_dir("notes").unwrap();
+        let zip = backup_zip_file(&root, "notes", &oldest).unwrap();
+        let reading = BackupExportGuard::enter(&vault_dir, vec![zip.clone()]).unwrap();
+
+        prune_backups(&vault_dir, VaultBackupMode::KeepLast, 1).unwrap();
+        assert!(zip.host_is_file());
+
+        drop(reading);
+        prune_backups(&vault_dir, VaultBackupMode::KeepLast, 1).unwrap();
+        assert!(!zip.host_exists());
+        assert!(backup_zip_file(&root, "notes", &newest)
+            .unwrap()
+            .host_is_file());
+    }
+
+    #[test]
+    fn an_export_refuses_a_backup_that_is_already_gone() {
+        let (_tmp, root, name, _) = vault_with_two_backups();
+        let vault_dir = root.vault_dir("notes").unwrap();
+        let zip = backup_zip_file(&root, "notes", &name).unwrap();
+        crate::host_fs::remove_file(&zip).unwrap();
+        assert!(matches!(
+            BackupExportGuard::enter(&vault_dir, vec![zip]),
+            Err(UprivError::VaultPathNotFound(_))
+        ));
+        assert!(!crate::session::is_vault_backup_export_at(&vault_dir));
     }
 
     #[test]

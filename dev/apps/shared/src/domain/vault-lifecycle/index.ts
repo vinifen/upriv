@@ -15,6 +15,13 @@ export {
   runTimedPipeline,
 } from "./pipeline";
 export { closeNowApplies, closeNowNeedsConfirm, closeNowNoticeKeys } from "./closeNow";
+export {
+  vaultCloseBlocker,
+  vaultClosePromptBodyKey,
+  vaultClosePromptTitleKey,
+  type VaultCloseBlocker,
+  type VaultClosePrompt,
+} from "./closePrompt";
 export { MIN_CLOSING_DISPLAY_MS, remainingClosingDisplayMs } from "./closingDisplay";
 export { borrowSessionRamPassword } from "./sessionRamPassword";
 export {
@@ -30,7 +37,8 @@ export {
   CLOSE_PHASE_POLL_MS,
   askCloseToHurry,
   parseVaultCloseHurry,
-  parseVaultClosePhase,
-  watchClosePhase,
-  type VaultClosePhase,
+  parseVaultCloseProgress,
+  waitForClose,
+  type ClosePhaseEvents,
+  type VaultCloseProgress,
 } from "./closePhase";

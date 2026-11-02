@@ -6,6 +6,7 @@ import {
   LOADING_BUDGET_MS,
   RPC_TIMEOUT_CODE,
   RpcError,
+  sizedBudgetMs,
   type BackupService,
   type JobService,
   type VaultPathWriteResult,
@@ -217,5 +218,41 @@ describe("useBackupExportJob", () => {
       run.resolve(WRITTEN);
     });
     expect(on.onExported).not.toHaveBeenCalled();
+  });
+
+  it("grows its budget with the bytes core measured, and waits that long", async () => {
+    vi.useFakeTimers();
+    const bytesTotal = 20 * 1024 * 1024 * 1024;
+    const run = deferred<VaultPathWriteResult>();
+    const service = serviceExporting(() => run.promise);
+    const runner: JobService & { cancel: ReturnType<typeof vi.fn> } = {
+      status: async () => ({ bytesDone: 0, bytesTotal }),
+      cancel: vi.fn(async () => undefined),
+    };
+    const on = events();
+    const { result } = renderHook(() => useBackupExportJob(service, runner, on));
+
+    act(() => {
+      result.current.start("vault-a", KEYS, "/media/usb");
+    });
+    expect(result.current.job?.budgetMs).toBe(LOADING_BUDGET_MS.backupExport);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    const sized = sizedBudgetMs("backupExport", bytesTotal);
+    expect(sized).toBeGreaterThan(LOADING_BUDGET_MS.backupExport);
+    expect(result.current.job?.budgetMs).toBe(sized);
+
+    // Past the floor, the sized budget keeps the export running.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(LOADING_BUDGET_MS.backupExport + 1_000);
+    });
+    expect(result.current.job).not.toBeNull();
+    expect(on.onTimedOut).not.toHaveBeenCalled();
+
+    await act(async () => {
+      run.resolve(WRITTEN);
+    });
+    expect(on.onExported).toHaveBeenCalledWith(WRITTEN);
   });
 });

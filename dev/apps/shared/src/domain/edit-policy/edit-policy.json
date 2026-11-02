@@ -45,5 +45,7 @@
   },
   "rustConfigSaveQuietTargets": ["mount.workspace_path", "storage.mode"],
   "plainLeftoverLocked": ["mount.workspace_path", "storage.mode", "vault.display_name", "vault.id"],
-  "plainLeftoverLockedI18n": "modal.settings.field.plain_leftover_locked"
+  "plainLeftoverLockedI18n": "modal.settings.field.plain_leftover_locked",
+  "backupExportLocked": ["vault.display_name", "vault.id"],
+  "backupExportLockedI18n": "modal.settings.field.backup_export_locked"
 }

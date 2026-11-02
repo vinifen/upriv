@@ -35,6 +35,7 @@ export const VAULT_ERROR_I18N_KEYS = {
   rewrap_password_unchanged: "vault.change_password.same_as_current",
   rewrap_kdf_unchanged: "vault.change_kdf.same_as_current",
   export_destination_reserved: "error.export_destination_reserved",
+  backup_exporting: "error.backup_exporting",
 } as const satisfies Record<VaultErrorCode, I18nKey>;
 
 export type VaultErrorI18nKey = (typeof VAULT_ERROR_I18N_KEYS)[VaultErrorCode];

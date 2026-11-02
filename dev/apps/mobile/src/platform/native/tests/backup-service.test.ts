@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { LOADING_BUDGET_MS } from "@upriv/shared";
+import { SIZED_BUDGET_CEILING_MS } from "@upriv/shared";
 
 const WRITTEN = { path: "/upriv-saf-export/upriv-backups-notes.zip", size: 4096 };
 const PICKED = "content://com.android.externalstorage.documents/tree/primary%3ADownload";
@@ -42,7 +42,7 @@ describe("nativeBackupService.exportTo", () => {
     expect(mocks.withExportFolder).toHaveBeenCalledWith(
       PICKED,
       "job-1",
-      LOADING_BUDGET_MS.backupExport,
+      SIZED_BUDGET_CEILING_MS,
       expect.any(Function),
     );
     expect(mocks.rpcBackupExport).toHaveBeenCalledWith(

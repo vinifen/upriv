@@ -79,10 +79,6 @@ interface UseVaultFileManagerOptions {
   entry: FileManagerEntry;
   dispatch: (action: VaultWorkspaceAction) => void;
   onDismissConfirmed?: () => void;
-  /** Lock asked to close this vault: save or discard, then close it. */
-  onVaultCloseConfirmed?: () => void;
-  /** Queued close: keep the current files. New drafts and imports wait. */
-  writesLocked?: boolean;
 }
 
 /** Cores for the import pool. The shell count matches the daemon; the page count is the fallback. */
@@ -103,16 +99,12 @@ export function useVaultFileManager({
   entry,
   dispatch,
   onDismissConfirmed,
-  onVaultCloseConfirmed,
-  writesLocked = false,
 }: UseVaultFileManagerOptions) {
   const { t } = useTranslation();
   const fs = useVaultFileSystemService();
   const vaultService = useVaultService();
-  const { setImportInFlight } = useFileManager();
+  const { setImportInFlight, handleImportCancel } = useFileManager();
   const vaultId = entry.vaultId;
-  const writesLockedRef = useRef(writesLocked);
-  writesLockedRef.current = writesLocked;
   const workspace = entry.workspace;
   const {
     tree,
@@ -128,8 +120,6 @@ export function useVaultFileManager({
   const importSessionSeqRef = useRef(0);
   const importInFlightRef = useRef(new Set<number>());
   const importAbortRef = useRef(new AbortController());
-  /** Lock confirmed "close and cancel import"; close the vault once writes stop. */
-  const closeVaultAfterImportRef = useRef(false);
   const importPeekRef = useRef<string | null>(null);
   const [pendingImports, setPendingImports] = useState<PendingImportEntry[]>([]);
   const [activeImportWrites, setActiveImportWrites] = useState<ActiveImportWrite[]>([]);
@@ -183,16 +173,9 @@ export function useVaultFileManager({
   }, [importBusy, setImportInFlight, vaultId]);
 
   useEffect(() => {
-    if (importBusy) return;
-    const promptType = workspace.unsavedPrompt?.type;
-    if (promptType === "import_in_progress" || promptType === "close_vault_import") {
-      dispatch({ type: "set_unsaved_prompt", prompt: null });
-    }
-    // Save/discard of a vault lock is still on screen. Closing waits for that answer.
-    if (!closeVaultAfterImportRef.current || promptType === "close_vault") return;
-    closeVaultAfterImportRef.current = false;
-    onVaultCloseConfirmed?.();
-  }, [dispatch, importBusy, onVaultCloseConfirmed, workspace.unsavedPrompt]);
+    if (importBusy || workspace.unsavedPrompt?.type !== "import_in_progress") return;
+    dispatch({ type: "set_unsaved_prompt", prompt: null });
+  }, [dispatch, importBusy, workspace.unsavedPrompt]);
 
   const beginImportSession = useCallback(() => {
     if (importAbortRef.current.signal.aborted) {
@@ -752,10 +735,6 @@ export function useVaultFileManager({
       files: readonly DroppedImportFile[],
       options?: ImportFileOptions,
     ) => {
-      if (writesLockedRef.current) {
-        showToast(t("modal.file_manager.toast.close_queued"));
-        return;
-      }
       const sessionId = beginImportSession();
       const signal = importAbortRef.current.signal;
       const planTree = treeRef.current;
@@ -797,10 +776,6 @@ export function useVaultFileManager({
 
   const importOsDrop = useCallback(
     async (parentPath: string, snapshot: OsDropSnapshot, options?: ImportFileOptions) => {
-      if (writesLockedRef.current) {
-        showToast(t("modal.file_manager.toast.close_queued"));
-        return;
-      }
       const sessionId = beginImportSession();
       const signal = importAbortRef.current.signal;
       importPeekRef.current = null;
@@ -852,35 +827,29 @@ export function useVaultFileManager({
     ],
   );
 
-  const continueVaultClose = useCallback(() => {
-    if (importInFlightRef.current.size > 0) {
-      closeVaultAfterImportRef.current = true;
-      return;
-    }
-    closeVaultAfterImportRef.current = false;
-    onVaultCloseConfirmed?.();
-  }, [onVaultCloseConfirmed]);
-
-  const cancelImportAndClose = useCallback(() => {
-    const closingVault = workspace.unsavedPrompt?.type === "close_vault_import";
+  /** Stop storing the files still waiting; the file being written lands. */
+  const cancelImports = useCallback(() => {
     importAbortRef.current.abort();
     setPendingImports([]);
     commitLandedImportPaths(new Set());
     setActiveImportWrites([]);
+  }, [commitLandedImportPaths]);
+
+  // Closing the vault from the list stops its import here.
+  useEffect(
+    () => handleImportCancel(vaultId, cancelImports),
+    [cancelImports, handleImportCancel, vaultId],
+  );
+
+  const cancelImportAndDismiss = useCallback(() => {
+    cancelImports();
     if (hasUnsavedWorkspaceChanges(workspace)) {
-      dispatch({
-        type: "set_unsaved_prompt",
-        prompt: { type: closingVault ? "close_vault" : "dismiss_workspace" },
-      });
+      dispatch({ type: "set_unsaved_prompt", prompt: { type: "dismiss_workspace" } });
       return;
     }
     dispatch({ type: "set_unsaved_prompt", prompt: null });
-    if (!closingVault) {
-      onDismissConfirmed?.();
-      return;
-    }
-    continueVaultClose();
-  }, [commitLandedImportPaths, continueVaultClose, dispatch, onDismissConfirmed, workspace]);
+    onDismissConfirmed?.();
+  }, [cancelImports, dispatch, onDismissConfirmed, workspace]);
 
   const confirmUnsaved = useCallback(() => {
     const prompt = workspace.unsavedPrompt;
@@ -906,29 +875,15 @@ export function useVaultFileManager({
         });
         onDismissConfirmed?.();
         return;
-      case "close_vault":
-        dispatch({
-          type: "discard_unsaved_and",
-          next: { type: "set_unsaved_prompt", prompt: null },
-        });
-        continueVaultClose();
-        return;
       case "import_in_progress":
-      case "close_vault_import":
-        cancelImportAndClose();
+        cancelImportAndDismiss();
         return;
     }
-  }, [
-    cancelImportAndClose,
-    continueVaultClose,
-    dispatch,
-    onDismissConfirmed,
-    workspace.unsavedPrompt,
-  ]);
+  }, [cancelImportAndDismiss, dispatch, onDismissConfirmed, workspace.unsavedPrompt]);
 
   /**
    * The prompt stays up until the files are written: nothing can be edited
-   * behind it, so the close that follows cannot drop a newer change.
+   * behind it, so the dismiss that follows cannot drop a newer change.
    */
   const confirmSaveUnsaved = useCallback(() => {
     const prompt = workspace.unsavedPrompt;
@@ -968,34 +923,14 @@ export function useVaultFileManager({
             onDismissConfirmed?.();
             return;
           }
-          case "close_vault": {
-            const ok = await saveAllFiles();
-            if (!ok || stale()) return;
-            dispatch({
-              type: "discard_unsaved_and",
-              next: resolveUnsavedPrompt(workspace, prompt),
-            });
-            continueVaultClose();
-            return;
-          }
           case "import_in_progress":
-          case "close_vault_import":
             dispatch({ type: "set_unsaved_prompt", prompt: null });
         }
       } finally {
         if (!stale()) setUnsavedSaving(false);
       }
     })();
-  }, [
-    continueVaultClose,
-    dispatch,
-    onDismissConfirmed,
-    saveAllFiles,
-    saveFile,
-    saveFiles,
-    unsavedSaving,
-    workspace,
-  ]);
+  }, [dispatch, onDismissConfirmed, saveAllFiles, saveFile, saveFiles, unsavedSaving, workspace]);
 
   /** Give up on a save past its budget. A write that lands later closes nothing. */
   const abandonUnsavedSave = useCallback(() => {
@@ -1017,11 +952,10 @@ export function useVaultFileManager({
   );
   const isFileEditable = useCallback(
     (path: string) =>
-      !writesLocked &&
       fs.isFileEditable(vaultId, path) &&
       contents[path]?.state === "loaded" &&
       !unresolvedImportPaths.has(path),
-    [contents, fs, unresolvedImportPaths, vaultId, writesLocked],
+    [contents, fs, unresolvedImportPaths, vaultId],
   );
   const isFileViewable = useCallback(
     (path: string) => fs.isFileViewable(vaultId, path) && contents[path]?.state !== "too_large",
@@ -1039,7 +973,6 @@ export function useVaultFileManager({
 
   return {
     vaultId,
-    writesLocked,
     tree,
     displayTree,
     treeStatus,
@@ -1070,7 +1003,7 @@ export function useVaultFileManager({
     importOsDrop,
     importBusy,
     importBudget,
-    cancelImportAndClose,
+    cancelImportAndDismiss,
     toast,
     osFolderAvailable,
     openInSystemFileManager,

@@ -65,7 +65,6 @@ export function useIdleAutoClose({
   onWarn,
 }: UseIdleAutoCloseOptions): {
   reportIdleCloseFailure: (vaultId: string) => void;
-  scheduleIdleRetry: () => void;
 } {
   const vaultsRef = useRef(vaults);
   const keepOpenRef = useRef(keepOpenOnWake);
@@ -86,7 +85,6 @@ export function useIdleAutoClose({
   const targetsRef = useRef<IdleAutoCloseTarget[]>([]);
   const pausedAtRef = useRef<number | null>(null);
   const cancelWakeRef = useRef<() => void>(() => {});
-  const wakeAtRef = useRef<number | null>(null);
   /** Bumped when an effect cleans up so an in-flight pass cannot arm another timer. */
   const epochRef = useRef(0);
   const disposedRef = useRef(false);
@@ -94,7 +92,7 @@ export function useIdleAutoClose({
   const evaluateRef = useRef<() => void>(() => {});
   const runningRef = useRef(false);
   const againRef = useRef(false);
-  /** A close deferred inside `onLock` still needs a short retry after this pass. */
+  /** A warning that could not show yet still needs a short retry after this pass. */
   const retrySoonRef = useRef(false);
   /** One settings sweep at a time. A file read can hold the daemon past the next tick. */
   const reloadingRef = useRef(false);
@@ -107,21 +105,14 @@ export function useIdleAutoClose({
     .sort()
     .join("\0");
 
-  const stopScheduledWake = () => {
-    cancelWakeRef.current();
-    wakeAtRef.current = null;
-  };
-
   const scheduleWake = (delay: number | null) => {
-    stopScheduledWake();
+    cancelWakeRef.current();
     if (delay == null || disposedRef.current) return;
     const bounded = capIdleTimerMs(delay);
     if (bounded <= 0) return;
     const epoch = epochRef.current;
-    wakeAtRef.current = Date.now() + bounded;
     cancelWakeRef.current = scheduleTimeout(() => {
       if (disposedRef.current || epoch !== epochRef.current) return;
-      wakeAtRef.current = null;
       evaluateRef.current();
     }, bounded);
   };
@@ -150,7 +141,7 @@ export function useIdleAutoClose({
           const clockNow = held ? (pausedAtRef.current ?? now) : now;
           clocksRef.current = syncIdleClocks(clockNow, clocksRef.current, targetsRef.current);
           if (held) {
-            stopScheduledWake();
+            cancelWakeRef.current();
             break;
           }
           const plan = planIdleAutoClose(now, clocksRef.current);
@@ -176,7 +167,7 @@ export function useIdleAutoClose({
           }
           if (stale()) return;
           if (pauseHoldsClock()) {
-            stopScheduledWake();
+            cancelWakeRef.current();
             break;
           }
           // Re-plan after the await. Another vault may have reached its deadline
@@ -221,21 +212,8 @@ export function useIdleAutoClose({
     evaluateRef.current();
   };
 
-  const scheduleIdleRetry = () => {
-    if (disposedRef.current) return;
-    if (runningRef.current) {
-      retrySoonRef.current = true;
-      return;
-    }
-    const wakeAt = wakeAtRef.current;
-    if (wakeAt != null && wakeAt - Date.now() <= IDLE_AUTO_CLOSE_RETRY_MS) return;
-    scheduleWake(IDLE_AUTO_CLOSE_RETRY_MS);
-  };
-
   const reportRef = useRef(reportIdleCloseFailure);
-  const retryRef = useRef(scheduleIdleRetry);
   reportRef.current = reportIdleCloseFailure;
-  retryRef.current = scheduleIdleRetry;
 
   const readAutoCloseRef = useRef<() => Promise<void>>(async () => {});
   readAutoCloseRef.current = async () => {
@@ -245,7 +223,7 @@ export function useIdleAutoClose({
       if (generation !== reloadGenRef.current) return;
       targetsRef.current = [];
       clocksRef.current = [];
-      stopScheduledWake();
+      cancelWakeRef.current();
       return;
     }
     const targets: IdleAutoCloseTarget[] = [];
@@ -293,7 +271,6 @@ export function useIdleAutoClose({
       disposedRef.current = true;
       epochRef.current += 1;
       cancelWakeRef.current();
-      wakeAtRef.current = null;
     };
     // Nothing open: one clear, then no timer. The poll starts again with the next open vault.
     if (openKey.length === 0) {
@@ -320,15 +297,11 @@ export function useIdleAutoClose({
       disposedRef.current = true;
       epochRef.current += 1;
       cancelWakeRef.current();
-      wakeAtRef.current = null;
     };
     const onSession = (event: IdleSessionEvent) => {
       if (event === "pause") {
         if (pausedAtRef.current == null) pausedAtRef.current = Date.now();
-        if (keepOpenRef.current) {
-          cancelWakeRef.current();
-          wakeAtRef.current = null;
-        }
+        if (keepOpenRef.current) cancelWakeRef.current();
         return;
       }
       const pausedAt = pausedAtRef.current;
@@ -364,6 +337,5 @@ export function useIdleAutoClose({
 
   return {
     reportIdleCloseFailure: (vaultId) => reportRef.current(vaultId),
-    scheduleIdleRetry: () => retryRef.current(),
   };
 }

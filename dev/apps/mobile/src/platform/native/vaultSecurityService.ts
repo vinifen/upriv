@@ -4,10 +4,15 @@ import { rpcVaultChangeKdf, rpcVaultChangePassword } from "@/lib/rpc";
 /** Native → `vault_change_password` / `vault_change_kdf`. */
 export const nativeVaultSecurityService: VaultSecurityService = {
   changePassword(vaultId, input) {
-    return rpcVaultChangePassword(vaultId, input.currentPassword, input.newPassword);
+    return rpcVaultChangePassword(
+      vaultId,
+      input.currentPassword,
+      input.newPassword,
+      input.budgetMs,
+    );
   },
 
   changeKdfPreset(vaultId, input) {
-    return rpcVaultChangeKdf(vaultId, input.currentPassword, input.nextPreset);
+    return rpcVaultChangeKdf(vaultId, input.currentPassword, input.nextPreset, input.budgetMs);
   },
 };

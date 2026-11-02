@@ -66,7 +66,7 @@ pub use import::{
 };
 pub use import_slots::{import_slots, import_slots_for};
 pub use open_close::{
-    close_all_vaults, close_all_vaults_now, close_phase, close_vault, close_vault_auto,
+    close_all_vaults, close_all_vaults_now, close_progress, close_vault, close_vault_auto,
     close_vault_now, confirm_plain_destination, hurry_close, open_vault, open_vault_confirmed,
     CloseVaultOutcome, OpenVaultOutcome,
 };

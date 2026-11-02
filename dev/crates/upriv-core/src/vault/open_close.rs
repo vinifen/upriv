@@ -19,8 +19,9 @@ use crate::runtime_state::{mark_session_closed, mark_session_open, release_recor
 use crate::session::{
     any_close_under, check_unlock_allowed, hurry_close_at, hurry_closes_under, insert_session,
     is_vault_closing_at, is_vault_open_at, open_session_ids_under, record_unlock_failure,
-    record_unlock_success, take_session, vault_close_phase_at, with_open_session, with_unlock_lock,
-    with_vault_dir_lock, ClosePhase, ClosingGuard, Job, OpenSession, PreparingGuard,
+    record_unlock_success, take_session, vault_close_progress_at, with_open_session,
+    with_unlock_lock, with_vault_dir_lock, ClosePhase, CloseProgress, ClosingGuard, OpenSession,
+    PreparingGuard,
 };
 use crate::store::{
     content_hash_with_index, flush_index_parts, index_logical_hash, open_store, pack_blob_waste,
@@ -381,10 +382,11 @@ fn pin_newest_backup(root: &VaultRoot, vault_id: &str) -> bool {
     }
 }
 
-/// Phase of a `close_vault` still running for this vault. `None` when idle.
-pub fn close_phase(root: &VaultRoot, vault_id: &str) -> Result<Option<ClosePhase>> {
+/// Phase and backup progress of a `close_vault` still running for this vault.
+/// `None` when idle.
+pub fn close_progress(root: &VaultRoot, vault_id: &str) -> Result<Option<CloseProgress>> {
     let vault_dir = root.vault_dir(vault_id)?;
-    Ok(vault_close_phase_at(&vault_dir))
+    Ok(vault_close_progress_at(&vault_dir))
 }
 
 /// Make the close running for this vault finish the way [`close_vault_now`]
@@ -542,7 +544,7 @@ fn close_vault_inner(
             });
             if !already_backed_up {
                 closing.set_phase(ClosePhase::Backup);
-                match backup_on_close(root, vault_id, &Job::stopped_by(Arc::clone(&hurry))) {
+                match backup_on_close(root, vault_id, closing.backup_job()) {
                     Ok(Some(stamp)) => {
                         if let Some(hash) = logical_hash {
                             persistence.backed_up_index_hash = Some(hash);
@@ -745,6 +747,7 @@ mod tests {
     use super::*;
     #[allow(unused_imports)]
     use crate::host_fs::HostFsQuery;
+    use crate::session::Job;
     use crate::store::KdfUnlockPreset;
     use crate::test_support::vault_root_with;
     use crate::vault::create_vault;

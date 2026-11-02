@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { LOADING_BUDGET_MS } from "../../loading/budget";
+import { SIZED_BUDGET_CEILING_MS } from "../../loading/sizedBudget";
 import { CORE_RPC_COMMANDS, MOBILE_ONLY_RPC_COMMANDS } from "../commands";
 import {
   CORE_RPC_TIMEOUT_MS,
@@ -29,10 +30,7 @@ describe("CORE_RPC_TIMEOUT_MS", () => {
     expect(CORE_RPC_TIMEOUT_MS.vault_group_list).toBe(LOADING_BUDGET_MS.default);
     expect(CORE_RPC_TIMEOUT_MS.vault_create).toBe(LOADING_BUDGET_MS.vaultCreate);
     expect(CORE_RPC_TIMEOUT_MS.vault_open).toBe(LOADING_BUDGET_MS.vaultPipeline);
-    expect(CORE_RPC_TIMEOUT_MS.vault_close).toBe(LOADING_BUDGET_MS.vaultPipeline);
     expect(CORE_RPC_TIMEOUT_MS.vault_rename).toBe(LOADING_BUDGET_MS.vaultRename);
-    expect(CORE_RPC_TIMEOUT_MS.vault_export).toBe(LOADING_BUDGET_MS.vaultExport);
-    expect(CORE_RPC_TIMEOUT_MS.backup_export).toBe(LOADING_BUDGET_MS.backupExport);
     expect(CORE_RPC_TIMEOUT_MS.vault_fs_import_os_file).toBe(LOADING_BUDGET_MS.vaultFsImport);
     expect(CORE_RPC_TIMEOUT_MS.vault_import_probe).toBe(LOADING_BUDGET_MS.default);
     expect(vaultImportProbeTimeoutMs({ kind: "seven_zip" })).toBe(LOADING_BUDGET_MS.vaultCreate);
@@ -43,5 +41,23 @@ describe("CORE_RPC_TIMEOUT_MS", () => {
     expect(vaultImportProbeTimeoutMs({ kind: "store_zip", archivePath: "/tmp/notes.7z" })).toBe(
       LOADING_BUDGET_MS.default,
     );
+  });
+
+  it("lets work sized while it runs reach the ceiling, so its visible budget ends the wait", () => {
+    for (const method of [
+      CORE_RPC_COMMANDS.VAULT_CLOSE,
+      CORE_RPC_COMMANDS.VAULT_PLAIN_REMOVE,
+      CORE_RPC_COMMANDS.VAULT_EXPORT,
+      CORE_RPC_COMMANDS.BACKUP_SAVE,
+      CORE_RPC_COMMANDS.BACKUP_EXPORT,
+      CORE_RPC_COMMANDS.DATA_FOLDER_EXPORT,
+    ]) {
+      expect(CORE_RPC_TIMEOUT_MS[method], method).toBe(SIZED_BUDGET_CEILING_MS);
+    }
+  });
+
+  it("keeps the floor for work sized before it starts; the caller passes the sized budget", () => {
+    expect(CORE_RPC_TIMEOUT_MS.vault_change_password).toBe(LOADING_BUDGET_MS.vaultRewrap);
+    expect(CORE_RPC_TIMEOUT_MS.vault_change_kdf).toBe(LOADING_BUDGET_MS.vaultRewrap);
   });
 });

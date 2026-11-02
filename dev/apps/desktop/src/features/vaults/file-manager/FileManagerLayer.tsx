@@ -1,32 +1,17 @@
 import { memo, useCallback } from "react";
 import { useTranslation } from "@/i18n";
 import { useFileManager } from "./FileManagerContext";
-import {
-  fileManagerBlockingPrompt,
-  fileManagerDismissIntent,
-  isVaultCloseWritesLocked,
-  vaultCloseActivityLabelKey,
-  type VaultPipelineListStatus,
-} from "@upriv/shared";
+import { fileManagerBlockingPrompt, fileManagerDismissIntent } from "@upriv/shared";
 import { useFileManagerSelector, useFileManagerShell } from "@upriv/shared/react";
 import { FileManagerDock } from "./shell/FileManagerDock";
 import { FileManagerModal } from "./shell/FileManagerModal";
 import { FileManagerWorkspace } from "./workspace/FileManagerWorkspace";
 
-const NO_PIPELINE_STATUS: VaultPipelineListStatus = {};
-
 /**
  * Drawn from the open file managers only, not their workspaces: typing in one
  * vault draws that vault's workspace and leaves this frame and the dock alone.
  */
-export const FileManagerLayer = memo(function FileManagerLayer({
-  pipelineListStatus = NO_PIPELINE_STATUS,
-  onCloseVault,
-}: {
-  pipelineListStatus?: VaultPipelineListStatus;
-  /** After the user saves or discards from a lock prompt, close that vault. */
-  onCloseVault?: (vaultId: string) => void;
-}) {
+export const FileManagerLayer = memo(function FileManagerLayer() {
   const { t } = useTranslation();
   const { getEntry, getState, minimize, maximize, dismiss, dispatchWorkspace } = useFileManager();
   const { entries, maximizedVaultId, focusedVaultId } = useFileManagerShell();
@@ -34,9 +19,6 @@ export const FileManagerLayer = memo(function FileManagerLayer({
   const suspendMinimize = useFileManagerSelector((state) =>
     Boolean(maximizedVaultId && state.entries[maximizedVaultId]?.workspace.unsavedPrompt),
   );
-  const closeActivityKey = maximizedEntry
-    ? vaultCloseActivityLabelKey(maximizedEntry.vaultId, pipelineListStatus)
-    : null;
 
   const requestDismiss = useCallback(
     (vaultId: string) => {
@@ -70,7 +52,6 @@ export const FileManagerLayer = memo(function FileManagerLayer({
           keepMounted
           title={maximizedEntry ? t("modal.file_manager.title") : ""}
           contextTitle={maximizedEntry?.displayName}
-          activityLabel={closeActivityKey ? t(closeActivityKey) : undefined}
           titleIcon="file-manager"
           suspendMinimize={suspendMinimize}
           onMinimize={() => {
@@ -92,9 +73,7 @@ export const FileManagerLayer = memo(function FileManagerLayer({
                 <FileManagerWorkspace
                   vaultId={entry.vaultId}
                   active={active}
-                  writesLocked={isVaultCloseWritesLocked(entry.vaultId, pipelineListStatus)}
                   onDismissConfirmed={dismiss}
-                  onVaultCloseConfirmed={onCloseVault}
                 />
               </div>
             );

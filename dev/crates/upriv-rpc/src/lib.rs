@@ -22,7 +22,7 @@ use upriv_core::logging::{
 };
 use upriv_core::{
     active_alias_is_unmounted_saf, app_home_dir, change_vault_kdf, change_vault_password,
-    close_phase, close_vault, close_vault_auto, close_vault_now, create_vault_group_with_sort,
+    close_progress, close_vault, close_vault_auto, close_vault_now, create_vault_group_with_sort,
     create_vault_with_welcome, deactivate_app_home_alias, delete_vault_group,
     discover_bootstrap_root, hurry_close, inspect_vault_root_at, known_vault_ids, list_vaults,
     load_app_settings, load_vault_config, load_vault_groups, open_import_session,
@@ -1548,6 +1548,8 @@ struct VaultIdParams {
     id: String,
 }
 
+/// Where a running close is, and how far its backup zip got. The backup's
+/// total is the size of `store/`: the UI sizes its wait from it.
 fn vault_close_phase(params: Value) -> RpcResponse {
     let parsed: VaultIdParams = match serde_json::from_value(params) {
         Ok(value) => value,
@@ -1557,8 +1559,13 @@ fn vault_close_phase(params: Value) -> RpcResponse {
         Ok(root) => root,
         Err(response) => return response,
     };
-    match close_phase(&root, parsed.id.trim()) {
-        Ok(phase) => ok(json!({ "phase": phase.map(|p| p.as_str()) })),
+    match close_progress(&root, parsed.id.trim()) {
+        Ok(Some(progress)) => ok(json!({
+            "phase": progress.phase.as_str(),
+            "backupBytesDone": progress.backup.bytes_done,
+            "backupBytesTotal": progress.backup.bytes_total,
+        })),
+        Ok(None) => ok(json!({ "phase": null })),
         Err(error) => map_core_err(error),
     }
 }
@@ -1979,6 +1986,7 @@ fn map_core_err_response(error: upriv_core::UprivError, emit_log: bool) -> RpcRe
         upriv_core::UprivError::JobIdInvalid => ("invalid_request", None),
         upriv_core::UprivError::DataFolderBusy => ("data_folder_busy", None),
         upriv_core::UprivError::DataFolderExportBusy => ("data_folder_export_busy", None),
+        upriv_core::UprivError::BackupExporting => ("backup_exporting", None),
         upriv_core::UprivError::DataFolderExportSpaceShort { .. } => {
             ("data_folder_export_space_short", None)
         }

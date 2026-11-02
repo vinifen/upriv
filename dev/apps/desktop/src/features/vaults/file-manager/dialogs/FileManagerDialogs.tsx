@@ -101,7 +101,7 @@ export function FileManagerDialogs({ fm, promptsOpen = true }: FileManagerDialog
         footer={
           isImportInProgressPrompt ? (
             <div className="flex flex-wrap justify-end gap-2">
-              <Button variant="danger" size="sm" onClick={fm.cancelImportAndClose}>
+              <Button variant="danger" size="sm" onClick={fm.cancelImportAndDismiss}>
                 {t("modal.file_manager.import_in_progress.close_and_cancel")}
               </Button>
               <Button

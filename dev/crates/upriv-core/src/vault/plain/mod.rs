@@ -221,6 +221,9 @@ pub struct PlainCloseSummary {
     pub held_deletions: u32,
     pub removed: u32,
     pub kept: u32,
+    /// The kept files stay in a folder its marker still proves is this
+    /// vault's: the list shows a leftover until Remove the folder wipes it.
+    pub leftover: bool,
     pub totals: PlainTotals,
     /// The backup from before this session was kept for good.
     pub backup_pinned: bool,
@@ -707,6 +710,7 @@ pub(crate) fn after_close(
         held_deletions: plain.held.len() as u32,
         removed: plain.dropped + cleared.removed,
         kept: cleared.kept,
+        leftover: cleared.kept > 0 && leftover::holds_leftover(root, vault_id),
         totals: plain.totals,
         backup_pinned,
     };

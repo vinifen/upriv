@@ -65,7 +65,6 @@ interface CodeEditorProps {
   /** `content` as line numbers and highlights draw it; trails typing by a render. */
   shownContent: string;
   ariaLabel: string;
-  readOnly: boolean;
   wordWrap: boolean;
   /** Search matches in `shownContent`. */
   matches: readonly TextMatch[];
@@ -169,7 +168,6 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function
     content,
     shownContent,
     ariaLabel,
-    readOnly,
     wordWrap,
     matches,
     activeMatchIndex,
@@ -354,7 +352,6 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function
     <TextInput
       key={start.generation}
       ref={inputRef}
-      editable={!readOnly}
       onScroll={resetInnerScroll}
       onSelectionChange={(event) => {
         selectionRef.current = event.nativeEvent.selection;
@@ -366,14 +363,6 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function
         focusedRef.current = false;
       }}
       onChangeText={(text) => {
-        if (readOnly) {
-          // A key that landed as the editor locked is not stored: show the stored text again.
-          setStart((current) => ({
-            text: typedRef.current,
-            generation: current.generation + 1,
-          }));
-          return;
-        }
         noteIdleActivity();
         typedRef.current = text;
         onChange(text);

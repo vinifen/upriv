@@ -12,7 +12,7 @@ import {
   isVaultPipelineError,
   parsePendingPlainConfirm,
   resolveVaultMountPoint,
-  watchClosePhase,
+  waitForClose,
   type VaultLifecycleService,
 } from "@upriv/shared";
 import { isElectronRenderer } from "@/lib/invoke";
@@ -20,7 +20,7 @@ import {
   rpcAppSettingsGet,
   rpcVaultClose,
   rpcVaultCloseHurry,
-  rpcVaultClosePhase,
+  rpcVaultCloseProgress,
   rpcVaultConfigGet,
   rpcVaultOpen,
   rpcVaultPlainConfirm,
@@ -64,12 +64,15 @@ export const desktopVaultLifecycleService: VaultLifecycleService = {
     onStep(1);
   },
 
-  async runClosingPipeline(vaultId, onStep, reason = "user") {
+  async runClosingPipeline(vaultId, onStep, reason = "user", onMeasured) {
     onStep(CLOSING_FLUSH_STEP);
-    const outcome = await watchClosePhase(
+    const outcome = await waitForClose(
       rpcVaultClose(vaultId, reason),
-      () => rpcVaultClosePhase(vaultId),
-      () => onStep(CLOSING_BACKUP_STEP),
+      () => rpcVaultCloseProgress(vaultId),
+      {
+        onBackup: () => onStep(CLOSING_BACKUP_STEP),
+        onMeasured: (bytes) => onMeasured?.(bytes),
+      },
     );
     onStep(CLOSING_DONE_STEP);
     return outcome;

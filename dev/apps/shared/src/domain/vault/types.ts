@@ -30,12 +30,14 @@ export function storageModeIsPlaintext(mode: StorageMode): boolean {
  * unlock/lock modal hints), not a full-screen pipeline overlay.
  * `queued` = FIFO job waiting; active job uses opening/closing/creating.
  * `exporting` / `backing_up` / `changing_password` / `changing_kdf` are closed-vault work.
+ * `recovering` is Remove the folder wiping a leftover plain-text folder.
  * The row names that work and open stays refused until it finishes.
  */
 export type VaultDisplayStatus =
   | "open"
   | "closed"
   | "recovery"
+  | "recovering"
   | "closing"
   | "opening"
   | "creating"
@@ -74,10 +76,24 @@ export type VaultPipelineListStatus = {
   /** Closed vault whose Back up now zip is in flight. Displays `backing_up`. */
   backupJobVaultIds?: readonly string[];
   /**
+   * Vault whose backups a backup export is copying. Not a display status: the
+   * vault stays free, and only its rename and delete wait (`vaultDeleteHold`,
+   * edit-policy `backupExportLocked`).
+   */
+  backupExportVaultIds?: readonly string[];
+  /**
    * Clock for Back up now. Shared by the Backups modal and the row hint.
    * Not the FIFO open/create clock.
    */
   backupJobStartedAt?: number;
+  /** Budget of that Back up now, grown with the size of `store/`. */
+  backupJobBudgetMs?: number;
+  /** Vault whose leftover plain-text folder is being wiped. Displays `recovering`. */
+  recoveringVaultIds?: readonly string[];
+  /** Clock for that wipe. Not the FIFO open/create clock. */
+  recoveringStartedAt?: number;
+  /** Budget of that wipe, grown with the bytes of the folder. */
+  recoveringBudgetMs?: number;
   /** Closed vault whose password rewrap is in flight. */
   passwordChangeVaultIds?: readonly string[];
   /** Closed vault whose unlock-RAM rewrap is in flight. */
@@ -87,6 +103,8 @@ export type VaultPipelineListStatus = {
    * Shared by the settings screen and the row hint. Not the FIFO open/create clock.
    */
   rewrapStartedAt?: number;
+  /** Budget of that rewrap, sized from `store/`. */
+  rewrapBudgetMs?: number;
   /** Active FIFO job — shared clock for modal + row budget hints. */
   activeVaultId?: string;
   activeStartedAt?: number;
@@ -95,11 +113,13 @@ export type VaultPipelineListStatus = {
 /** Password or unlock-RAM rewrap started from vault settings. */
 export type VaultRewrapKind = "password" | "kdf";
 
-/** In-flight rewrap. `startedAt` is the clock for `LOADING_BUDGET_MS.vaultRewrap`. */
+/** In-flight rewrap. `startedAt` is the clock for `budgetMs`. */
 export type VaultRewrapRun = {
   vaultId: string;
   kind: VaultRewrapKind;
   startedAt: number;
+  /** `sizedBudgetMs("vaultRewrap")` for this vault's `store/`; the floor until it is measured. */
+  budgetMs: number;
 };
 
 /** Start time of the in-flight job for this vault, if it is the active run. */
@@ -114,7 +134,9 @@ export function pipelineActiveStartedAt(
 /**
  * Row budget hint.
  * Opening and creating use the active FIFO clock.
- * Password and unlock-RAM changes use `rewrapStartedAt` and `vaultRewrap`.
+ * Password and unlock-RAM changes use `rewrapStartedAt` and `rewrapBudgetMs`;
+ * Back up now uses `backupJobStartedAt` and `backupJobBudgetMs`; the wipe of a
+ * leftover folder uses `recoveringStartedAt` and `recoveringBudgetMs`.
  */
 export function vaultPipelineRowBudget(
   status: VaultDisplayStatus,
@@ -122,18 +144,22 @@ export function vaultPipelineRowBudget(
   vaultId: string,
 ): { active: boolean; budgetMs: number; startedAt?: number } {
   if (status === "changing_password" || status === "changing_kdf") {
+    const budgetMs = pipeline.rewrapBudgetMs ?? LOADING_BUDGET_MS.vaultRewrap;
     const startedAt = pipeline.rewrapStartedAt;
-    if (startedAt == null) {
-      return { active: false, budgetMs: LOADING_BUDGET_MS.vaultRewrap };
-    }
-    return { active: true, budgetMs: LOADING_BUDGET_MS.vaultRewrap, startedAt };
+    if (startedAt == null) return { active: false, budgetMs };
+    return { active: true, budgetMs, startedAt };
   }
   if (status === "backing_up") {
+    const budgetMs = pipeline.backupJobBudgetMs ?? LOADING_BUDGET_MS.vaultBackupSave;
     const startedAt = pipeline.backupJobStartedAt;
-    if (startedAt == null) {
-      return { active: false, budgetMs: LOADING_BUDGET_MS.vaultBackupSave };
-    }
-    return { active: true, budgetMs: LOADING_BUDGET_MS.vaultBackupSave, startedAt };
+    if (startedAt == null) return { active: false, budgetMs };
+    return { active: true, budgetMs, startedAt };
+  }
+  if (status === "recovering") {
+    const budgetMs = pipeline.recoveringBudgetMs ?? LOADING_BUDGET_MS.plainLeftoverRemove;
+    const startedAt = pipeline.recoveringStartedAt;
+    if (startedAt == null) return { active: false, budgetMs };
+    return { active: true, budgetMs, startedAt };
   }
   const startedAt = pipelineActiveStartedAt(pipeline, vaultId);
   if (startedAt == null) {
@@ -156,6 +182,7 @@ export function isVaultPipelineDisplayBusy(status: VaultDisplayStatus): boolean 
     status === "queued" ||
     status === "exporting" ||
     status === "backing_up" ||
+    status === "recovering" ||
     status === "changing_password" ||
     status === "changing_kdf"
   );
@@ -203,15 +230,6 @@ export function isVaultCloseQueued(
   if (!pipeline.queuedVaultIds?.includes(vaultId)) return false;
   if (pipeline.queuedOpenVaultIds?.includes(vaultId)) return false;
   return true;
-}
-
-/** Queued or active close. Editor drafts and imports stay blocked until it finishes. */
-export function isVaultCloseWritesLocked(
-  vaultId: string,
-  pipeline: VaultPipelineListStatus = {},
-): boolean {
-  if (isVaultCloseQueued(vaultId, pipeline)) return true;
-  return pipeline.closingVaultIds?.includes(vaultId) ?? false;
 }
 
 /** Row / card may be activated (file manager or unlock / resume unlock). */
@@ -323,6 +341,7 @@ export function resolveVaultListStatus(
     return "exporting";
   }
   if (pipeline.backupJobVaultIds?.includes(row.id)) return "backing_up";
+  if (pipeline.recoveringVaultIds?.includes(row.id)) return "recovering";
   if (pipeline.passwordChangeVaultIds?.includes(row.id)) return "changing_password";
   if (pipeline.kdfChangeVaultIds?.includes(row.id)) return "changing_kdf";
   return resolveVaultDisplayStatus(row);
@@ -336,6 +355,7 @@ export function isVaultDisplayStatusQuiet(status: VaultDisplayStatus): boolean {
     status !== "closing" &&
     status !== "exporting" &&
     status !== "backing_up" &&
+    status !== "recovering" &&
     status !== "changing_password" &&
     status !== "changing_kdf"
   );
@@ -346,7 +366,20 @@ export function isVaultListClosed(row: VaultRow, pipeline: VaultPipelineListStat
   return resolveVaultListStatus(row, pipeline) === "closed";
 }
 
-/** Delete removes the vault folder. Only a closed vault, or one in recovery, may start it. */
-export function canDeleteVaultNow(status: VaultDisplayStatus): boolean {
-  return status === "closed" || status === "recovery";
+/** Why Delete must wait: the vault's own state, or a backup export reading its backups. */
+export type VaultDeleteHold = "busy" | "backup_export";
+
+/**
+ * Delete removes the vault folder. Only a closed vault, or one in recovery,
+ * may start it, and not while a backup export copies its backups. `null` when
+ * it may start.
+ */
+export function vaultDeleteHold(
+  row: VaultRow,
+  pipeline: VaultPipelineListStatus = {},
+): VaultDeleteHold | null {
+  const status = resolveVaultListStatus(row, pipeline);
+  if (status !== "closed" && status !== "recovery") return "busy";
+  if (pipeline.backupExportVaultIds?.includes(row.id)) return "backup_export";
+  return null;
 }

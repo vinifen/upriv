@@ -29,10 +29,21 @@ export {
 } from "./useBackupExportStep";
 export { useVaultBackups } from "./useVaultBackups";
 export {
+  usePlainRemoveJob,
+  type PlainRemoveJob,
+  type PlainRemoveJobEvents,
+} from "./usePlainRemoveJob";
+export {
   useVaultBackupJob,
   type VaultBackupJob,
   type VaultBackupJobEvents,
 } from "./useVaultBackupJob";
+export {
+  useVaultExportJob,
+  type VaultExportJob,
+  type VaultExportJobEvents,
+  type VaultExportTarget,
+} from "./useVaultExportJob";
 export { useFolderFallback } from "./useFolderFallback";
 export { useSearchCollapsedFolders } from "./useSearchCollapsedFolders";
 export { useTreeFolderPresence } from "./useTreeFolderPresence";

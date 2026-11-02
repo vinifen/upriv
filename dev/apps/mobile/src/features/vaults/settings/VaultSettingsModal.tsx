@@ -16,7 +16,6 @@ import {
   NO_VAULT_GROUPS,
   isVaultInHiddenGroup,
   isHiddenGroup,
-  canDeleteVaultNow,
   resolveVaultListStatus,
   selectedGroupIdAfterAssignment,
   normalizeVaultSettingsConfig,
@@ -30,10 +29,14 @@ import {
   vaultSettingsToListPatch,
   vaultSettingsIdentityListPatch,
   vaultRootPathForWorkspaceValidation,
+  sizedBudgetMs,
   vaultConfigEditAllowed,
+  vaultConfigEditHold,
+  vaultDeleteHold,
   vaultRowControls,
   rebaseQuietLockedVaultSettings,
   normalizeStoredName,
+  VAULT_DELETE_HOLD_I18N_KEY,
   type CreateVaultGroupAssignment,
   type ChangeKdfFieldsState,
   type ChangePasswordFieldsState,
@@ -136,7 +139,9 @@ export function VaultSettingsModal({
   const settingsSaveBlocked = Boolean(
     vault && vaultRowControls(vault, pipelineListStatus).settingsSaveBlocked,
   );
-  const canDeleteNow = canDeleteVaultNow(vaultListStatus);
+  const deleteHold = vault ? vaultDeleteHold(vault, pipelineListStatus) : "busy";
+  const canDeleteNow = deleteHold === null;
+  const editHold = vault ? vaultConfigEditHold(vault, pipelineListStatus) : {};
   const editAllowed = (target: Parameters<typeof vaultConfigEditAllowed>[0]) =>
     vault != null && vaultConfigEditAllowed(target, vault, pipelineListStatus);
   const storageModeLocked = !editAllowed("storage.mode");
@@ -502,9 +507,11 @@ export function VaultSettingsModal({
 
   const submitBudgetMs = nameDirty ? LOADING_BUDGET_MS.vaultRename : LOADING_BUDGET_MS.settingsSave;
   const submitBudget = useLoadingBudget(busy, submitBudgetMs);
-  const rewrapBudget = useLoadingBudget(rewrapRun !== null, LOADING_BUDGET_MS.vaultRewrap, {
-    startedAt: rewrapRun?.startedAt,
-  });
+  const rewrapBudget = useLoadingBudget(
+    rewrapRun !== null,
+    rewrapRun?.budgetMs ?? LOADING_BUDGET_MS.vaultRewrap,
+    { startedAt: rewrapRun?.startedAt },
+  );
 
   useEffect(() => {
     if (!submitBudget.timedOut) return;
@@ -719,7 +726,12 @@ export function VaultSettingsModal({
         return null;
       }
       const generation = (rewrapGenRef.current += 1);
-      const run: RewrapRun = { vaultId: id, kind, startedAt: Date.now() };
+      const run: RewrapRun = {
+        vaultId: id,
+        kind,
+        startedAt: Date.now(),
+        budgetMs: LOADING_BUDGET_MS.vaultRewrap,
+      };
       rewrapRunRef.current = run;
       setRewrapRun(run);
       setRewrapFailure(null);
@@ -731,6 +743,22 @@ export function VaultSettingsModal({
   const rewrapStillCurrent = useCallback(
     (generation: number) => generation === rewrapGenRef.current,
     [],
+  );
+
+  /** Size the running rewrap from `store/`, which its backup zip copies first. */
+  const sizeRewrap = useCallback(
+    async (id: string, generation: number): Promise<number> => {
+      const bytes = await vaultService.storeOnDiskBytes(id).catch(() => null);
+      const budgetMs = sizedBudgetMs("vaultRewrap", bytes);
+      const current = rewrapRunRef.current;
+      if (rewrapStillCurrent(generation) && current?.vaultId === id) {
+        const sized = { ...current, budgetMs };
+        rewrapRunRef.current = sized;
+        setRewrapRun(sized);
+      }
+      return budgetMs;
+    },
+    [rewrapStillCurrent, vaultService],
   );
 
   const clearRewrapRun = useCallback(() => {
@@ -764,9 +792,12 @@ export function VaultSettingsModal({
     if (generation === null) return;
     setPasswordError(null);
     try {
+      const budgetMs = await sizeRewrap(vault.id, generation);
+      if (!rewrapStillCurrent(generation)) return;
       await vaultSecurityService.changePassword(vault.id, {
         currentPassword: passwordFields.currentPassword,
         newPassword: passwordFields.newPassword,
+        budgetMs,
       });
       if (!rewrapStillCurrent(generation)) return;
       clearRewrapRun();
@@ -820,6 +851,7 @@ export function VaultSettingsModal({
     resetPasswordForm,
     rewrapStillCurrent,
     showToast,
+    sizeRewrap,
     t,
     vault,
     vaultSecurityService,
@@ -833,9 +865,12 @@ export function VaultSettingsModal({
     setKdfError(null);
     const nextPreset = kdfFields.nextPreset;
     try {
+      const budgetMs = await sizeRewrap(vault.id, generation);
+      if (!rewrapStillCurrent(generation)) return;
       await vaultSecurityService.changeKdfPreset(vault.id, {
         currentPassword: kdfFields.password,
         nextPreset,
+        budgetMs,
       });
       if (!rewrapStillCurrent(generation)) return;
       clearRewrapRun();
@@ -866,6 +901,7 @@ export function VaultSettingsModal({
     resetKdfForm,
     rewrapStillCurrent,
     showToast,
+    sizeRewrap,
     t,
     vault,
     vaultSecurityService,
@@ -1157,7 +1193,7 @@ export function VaultSettingsModal({
               plainFilesLocked={plainFilesLocked}
               displayNameLocked={displayNameLocked}
               mountLocked={mountLocked}
-              plainLeftover={vault?.plainLeftover === true}
+              editHold={editHold}
               vaultRootPath={vaultRootPathForWorkspaceValidation(
                 appSettings.app.vault_root_mode,
                 appSettings.app.upriv_root_path,
@@ -1174,11 +1210,11 @@ export function VaultSettingsModal({
                       <Text style={typography.bodyMuted}>
                         {t("modal.settings.danger_zone_help")}
                       </Text>
-                      {canDeleteNow ? null : (
+                      {deleteHold ? (
                         <Text style={typography.bodyMuted}>
-                          {t("modal.settings.delete_only_closed")}
+                          {t(VAULT_DELETE_HOLD_I18N_KEY[deleteHold])}
                         </Text>
-                      )}
+                      ) : null}
                       <Button
                         variant="danger"
                         size="sm"

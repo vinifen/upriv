@@ -2,7 +2,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { createElement } from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import type { VaultBackupEntry, VaultListItem } from "@upriv/shared";
+import { LOADING_BUDGET_MS, type VaultBackupEntry, type VaultListItem } from "@upriv/shared";
 import type { BackupExportJob } from "@upriv/shared/react";
 import { useExportFolder } from "@/hooks/useExportFolder";
 import { VaultBackupsModal } from "../VaultBackupsModal";
@@ -77,8 +77,7 @@ function Harness({
     vault,
     open: true,
     canSaveNow: true,
-    saving: false,
-    saveStartedAt: null,
+    saveJob: null,
     onSaveNow: () => {},
     listRefreshToken: 0,
     onClose: () => {},
@@ -115,6 +114,7 @@ function job(keys: readonly string[], overrides: Partial<BackupExportJob> = {}):
     startedAt: Date.now(),
     progress: { bytesDone: 512, bytesTotal: 1024 },
     stopping: false,
+    budgetMs: LOADING_BUDGET_MS.backupExport,
     ...overrides,
   };
 }
@@ -157,7 +157,7 @@ describe("VaultBackupsModal export", () => {
     const field = await within(row(PLAIN)).findByLabelText("modal.export_folder.label");
     await waitFor(() => expect(pickFolder).toHaveBeenCalledOnce());
     fireEvent.change(field, { target: { value: "/media/typed" } });
-    fireEvent.click(rowButton(PLAIN, "vault.export.dialog.confirm"));
+    fireEvent.click(rowButton(PLAIN, "modal.backup.export_confirm"));
     expect(onExport).toHaveBeenCalledWith([PLAIN_KEY], "/media/typed");
   });
 
@@ -211,7 +211,7 @@ describe("VaultBackupsModal export", () => {
     expect(rowButton(PLAIN, "modal.backup.export").disabled).toBe(true);
     expect(rowButton(PIN, "action.delete").disabled).toBe(false);
 
-    fireEvent.click(rowButton(PLAIN, "vault.export.dialog.stop"));
+    fireEvent.click(rowButton(PLAIN, "modal.backup.export_stop"));
     expect(onStopExport).toHaveBeenCalledOnce();
   });
 
@@ -222,7 +222,7 @@ describe("VaultBackupsModal export", () => {
     expect(follows(screen.getByLabelText("modal.backup.select_all"), bar)).toBe(true);
     expect(follows(bar, screen.getByText("modal.backup.section.saves"))).toBe(true);
     expect(within(row(PIN)).queryByRole("progressbar")).toBeNull();
-    expect(screen.getByRole("button", { name: "vault.export.dialog.stop" })).toBeDefined();
+    expect(screen.getByRole("button", { name: "modal.backup.export_stop" })).toBeDefined();
   });
 
   it("keeps Stop usable while a delete is being confirmed", async () => {
@@ -230,7 +230,7 @@ describe("VaultBackupsModal export", () => {
     await show({ exportJob: job([PLAIN_KEY]), onStopExport });
 
     fireEvent.click(rowButton(PIN, "action.delete"));
-    fireEvent.click(rowButton(PLAIN, "vault.export.dialog.stop"));
+    fireEvent.click(rowButton(PLAIN, "modal.backup.export_stop"));
     expect(onStopExport).toHaveBeenCalledOnce();
   });
 
@@ -249,6 +249,6 @@ describe("VaultBackupsModal export", () => {
   it("says when the stop is on its way", async () => {
     await show({ exportJob: job([PLAIN_KEY], { stopping: true }) });
 
-    expect(rowButton(PLAIN, "vault.export.dialog.stopping").disabled).toBe(true);
+    expect(rowButton(PLAIN, "modal.backup.export_stopping").disabled).toBe(true);
   });
 });

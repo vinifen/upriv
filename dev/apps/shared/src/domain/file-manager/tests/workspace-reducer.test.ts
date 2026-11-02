@@ -600,7 +600,7 @@ describe("discard_all_dirty", () => {
     });
     state = vaultWorkspaceReducer(state, {
       type: "set_unsaved_prompt",
-      prompt: { type: "close_vault" },
+      prompt: { type: "dismiss_workspace" },
     });
     state = vaultWorkspaceReducer(state, { type: "discard_all_dirty" });
     expect(state.dirtyPaths).toEqual([]);
@@ -622,13 +622,6 @@ describe("resolveUnsavedPrompt", () => {
     ).toEqual({ type: "close_tabs", paths: ["/a"] });
     expect(
       resolveUnsavedPrompt(createDefaultWorkspaceState(), { type: "dismiss_workspace" }),
-    ).toEqual({ type: "set_unsaved_prompt", prompt: null });
-    expect(resolveUnsavedPrompt(createDefaultWorkspaceState(), { type: "close_vault" })).toEqual({
-      type: "set_unsaved_prompt",
-      prompt: null,
-    });
-    expect(
-      resolveUnsavedPrompt(createDefaultWorkspaceState(), { type: "close_vault_import" }),
     ).toEqual({ type: "set_unsaved_prompt", prompt: null });
     expect(
       resolveUnsavedPrompt(createDefaultWorkspaceState(), { type: "import_in_progress" }),

@@ -1,11 +1,4 @@
-import {
-  Pressable,
-  StyleSheet,
-  Text,
-  View,
-  type LayoutChangeEvent,
-  type ViewStyle,
-} from "react-native";
+import { Pressable, StyleSheet, Text, View, type LayoutChangeEvent } from "react-native";
 import {
   vaultRowControls,
   resolveVaultListStatus,
@@ -18,7 +11,6 @@ import {
   vaultStatusI18nKey,
   vaultStatusLabelKey,
   VAULT_ROW_DENSITY,
-  type VaultDisplayStatus,
   type VaultListItem,
   type VaultListViewMode,
   type VaultSettingsAreaId,
@@ -30,7 +22,7 @@ import { useLoadingBudget, useRowButtonStack } from "@upriv/shared/react";
 import { useTheme } from "@/theme";
 import { radii, spacing, vaultRowBoxShadow } from "@/theme/tokens";
 import { useVaultRowChrome } from "@/hooks/useVaultRowChrome";
-import { vaultStatusIconColors } from "@/theme/vault-status";
+import { vaultStatusIconColors, vaultStatusRowSurface } from "@/theme/vault-status";
 import { DropOverRing } from "./DropOverRing";
 import { VaultDragHandle } from "./VaultDragHandle";
 import { VaultHiddenIndicator } from "./VaultHiddenIndicator";
@@ -291,12 +283,7 @@ export function VaultRow({
         style={[
           styles.blockCard,
           { boxShadow: vaultRowBoxShadow(theme) },
-          rowSurface(
-            status,
-            colors.surfaceContainer,
-            colors.vaultStatusOpen,
-            colors.vaultStatusRecovery,
-          ),
+          vaultStatusRowSurface(status, colors),
           isDragging ? { opacity: 0.45 } : null,
         ]}
       >
@@ -343,12 +330,7 @@ export function VaultRow({
           paddingLeft: showGrip ? Math.max(density.paddingX - 8, spacing.sm) : density.paddingX,
           boxShadow: vaultRowBoxShadow(theme),
         },
-        rowSurface(
-          status,
-          colors.surfaceContainer,
-          colors.vaultStatusOpen,
-          colors.vaultStatusRecovery,
-        ),
+        vaultStatusRowSurface(status, colors),
         isDragging ? { opacity: 0.45 } : null,
       ]}
     >
@@ -379,21 +361,6 @@ export function VaultRow({
       </View>
     </Pressable>
   );
-}
-
-function rowSurface(
-  status: VaultDisplayStatus,
-  surface: string,
-  open: string,
-  recovery: string,
-): ViewStyle {
-  if (status === "open") {
-    return { backgroundColor: surface, borderLeftWidth: 2, borderLeftColor: open };
-  }
-  if (status === "recovery") {
-    return { backgroundColor: surface, borderLeftWidth: 2, borderLeftColor: recovery };
-  }
-  return { backgroundColor: surface, borderLeftWidth: 2, borderLeftColor: "transparent" };
 }
 
 const styles = StyleSheet.create({

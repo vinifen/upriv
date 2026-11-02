@@ -33,9 +33,11 @@ export function DataFolderExportPanel({ controls, destination }: DataFolderExpor
   const { job, written } = controls;
   const { t } = useTranslation();
   const nameId = useId();
-  const budget = useLoadingBudget(job !== null, LOADING_BUDGET_MS.dataFolderExport, {
-    startedAt: job?.startedAt,
-  });
+  const budget = useLoadingBudget(
+    job !== null,
+    job?.budgetMs ?? LOADING_BUDGET_MS.dataFolderExport,
+    { startedAt: job?.startedAt },
+  );
   const nameIssue = dataFolderZipNameIssue(dataFolderZipNameFromInput(destination.zipName));
   const nameIssueKey = nameIssue ? dataFolderZipNameIssueI18nKey(nameIssue) : null;
 

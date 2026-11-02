@@ -117,7 +117,7 @@ export function FileManagerDialogs({ fm, promptsOpen = true }: FileManagerDialog
                 label={t("modal.file_manager.import_in_progress.close_and_cancel")}
                 variant="danger"
                 size="sm"
-                onPress={fm.cancelImportAndClose}
+                onPress={fm.cancelImportAndDismiss}
               />
               <Button
                 label={t("modal.file_manager.import_in_progress.stay")}

@@ -7,11 +7,7 @@ import type {
   VaultSettingsAreaId,
 } from "@upriv/shared";
 import type { VaultLifecycleRequest } from "@/features/vaults/lifecycle";
-import type {
-  VaultExportJob,
-  VaultExportPasswordError,
-  VaultListModalsHandle,
-} from "../vaultListModalsTypes";
+import type { VaultExportPasswordError, VaultListModalsHandle } from "../vaultListModalsTypes";
 
 export function useVaultListModals(
   vaults: VaultListItem[],
@@ -37,9 +33,7 @@ export function useVaultListModals(
   );
   const [lifecycleRequest, setLifecycleRequest] = useState<VaultLifecycleRequest | null>(null);
   const [recoveryVaultId, setRecoveryVaultId] = useState<string | null>(null);
-  const [recoverySubmitting, setRecoverySubmitting] = useState(false);
   const [exportVaultId, setExportVaultId] = useState<string | null>(null);
-  const [exportJob, setExportJob] = useState<VaultExportJob | null>(null);
   const [exportPasswordError, setExportPasswordError] = useState<VaultExportPasswordError | null>(
     null,
   );
@@ -175,14 +169,9 @@ export function useVaultListModals(
     recoveryVaultId,
     setRecoveryVaultId,
     recoveryVault,
-    recoverySubmitting,
-    setRecoverySubmitting,
     exportVaultId,
     setExportVaultId,
     exportVault,
-    exportJob,
-    exportJobVaultId: exportJob?.vaultId ?? null,
-    setExportJob,
     exportPasswordError,
     setExportPasswordError,
   };

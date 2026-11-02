@@ -21,6 +21,7 @@ import {
   type KdfUnlockPreset,
   type PolicyRadioBadge,
   type StorageMode,
+  type VaultConfigEditHold,
   type VaultGroup,
   type VaultSettingsConfig,
   type VaultSettingsSectionId,
@@ -76,8 +77,8 @@ interface VaultSettingsFormProps {
   plainFilesLocked?: boolean;
   displayNameLocked?: boolean;
   mountLocked?: boolean;
-  /** Locked by a leftover plaintext folder, not by a busy vault. */
-  plainLeftover?: boolean;
+  /** Work beside the vault's status that locks fields (`vaultConfigEditHold`). */
+  editHold?: VaultConfigEditHold;
   /** Resolved vault-root for reserved mount-path checks. */
   vaultRootPath?: string | null;
   onPathIssueChange?: (issue: WorkspacePathIssue | null) => void;
@@ -93,7 +94,7 @@ export function VaultSettingsForm({
   plainFilesLocked = false,
   displayNameLocked = false,
   mountLocked = false,
-  plainLeftover = false,
+  editHold = {},
   vaultRootPath = null,
   onPathIssueChange,
   appWorkspace: appFolders = appWorkspace(),
@@ -107,7 +108,7 @@ export function VaultSettingsForm({
     displayNameLocked,
     mountLocked,
     hiddenLocked,
-    plainLeftover,
+    editHold,
   };
 
   return (
@@ -143,7 +144,7 @@ function renderSection(
     displayNameLocked: boolean;
     mountLocked: boolean;
     hiddenLocked: boolean;
-    plainLeftover: boolean;
+    editHold: VaultConfigEditHold;
   },
   vaultRootPath: string | null,
   appFolders: WorkspaceTable,
@@ -156,7 +157,7 @@ function renderSection(
           config={draft.vault}
           hiddenLocked={locks.hiddenLocked}
           displayNameLocked={locks.displayNameLocked}
-          plainLeftover={locks.plainLeftover}
+          editHold={locks.editHold}
           onChange={(patch) => patchDraft("vault", patch)}
           fileManager={draft.file_manager}
           onFileManagerChange={(patch) => patchDraft("file_manager", patch)}
@@ -168,7 +169,7 @@ function renderSection(
           config={draft.storage}
           locked={locks.storageModeLocked}
           plainFilesLocked={locks.plainFilesLocked}
-          plainLeftover={locks.plainLeftover}
+          editHold={locks.editHold}
           onChange={(patch) => patchDraft("storage", patch)}
         />
       );
@@ -178,7 +179,7 @@ function renderSection(
           config={draft.mount}
           vaultRootPath={vaultRootPath}
           controlsDisabled={locks.mountLocked}
-          plainLeftover={locks.plainLeftover}
+          editHold={locks.editHold}
           plaintext={draft.storage.mode === "upriv_plain"}
           appWorkspace={appFolders}
           onPathIssueChange={onPathIssueChange}
@@ -209,7 +210,7 @@ function VaultSection({
   onChange,
   hiddenLocked = false,
   displayNameLocked = false,
-  plainLeftover = false,
+  editHold,
   fileManager,
   onFileManagerChange,
 }: {
@@ -217,7 +218,7 @@ function VaultSection({
   onChange: (patch: Partial<VaultSettingsConfig["vault"]>) => void;
   hiddenLocked?: boolean;
   displayNameLocked?: boolean;
-  plainLeftover?: boolean;
+  editHold?: VaultConfigEditHold;
   fileManager: VaultSettingsConfig["file_manager"];
   onFileManagerChange: (patch: Partial<VaultSettingsConfig["file_manager"]>) => void;
 }) {
@@ -229,7 +230,7 @@ function VaultSection({
       </FieldLabel>
       {displayNameLocked ? (
         <FieldHint>
-          {t(requireVaultConfigEditLockedI18nKey("vault.display_name", plainLeftover))}
+          {t(requireVaultConfigEditLockedI18nKey("vault.display_name", editHold))}
         </FieldHint>
       ) : null}
       <ThemedInput
@@ -313,13 +314,13 @@ function StorageSection({
   config,
   locked,
   plainFilesLocked,
-  plainLeftover,
+  editHold,
   onChange,
 }: {
   config: VaultSettingsConfig["storage"];
   locked: boolean;
   plainFilesLocked: boolean;
-  plainLeftover: boolean;
+  editHold: VaultConfigEditHold;
   onChange: (patch: Partial<VaultSettingsConfig["storage"]>) => void;
 }) {
   const { t } = useTranslation();
@@ -330,9 +331,7 @@ function StorageSection({
       <FieldLabel>{t("modal.settings.field.storage.mode")}</FieldLabel>
       <FieldHint>{t("modal.settings.field.storage.mode_help")}</FieldHint>
       {locked ? (
-        <FieldHint>
-          {t(requireVaultConfigEditLockedI18nKey("storage.mode", plainLeftover))}
-        </FieldHint>
+        <FieldHint>{t(requireVaultConfigEditLockedI18nKey("storage.mode", editHold))}</FieldHint>
       ) : null}
       <RadioGroup>
         {STORAGE_RADIOS.map(({ mode, badge, tone }) => (
@@ -365,7 +364,7 @@ export function VaultSettingsMountSection({
   vaultRootPath = null,
   onPathIssueChange,
   controlsDisabled = false,
-  plainLeftover = false,
+  editHold,
   plaintext = false,
   appWorkspace: appFolders = appWorkspace(),
 }: {
@@ -374,7 +373,7 @@ export function VaultSettingsMountSection({
   vaultRootPath?: string | null;
   onPathIssueChange?: (issue: WorkspacePathIssue | null) => void;
   controlsDisabled?: boolean;
-  plainLeftover?: boolean;
+  editHold?: VaultConfigEditHold;
   plaintext?: boolean;
   appWorkspace?: WorkspaceTable;
 }) {
@@ -392,7 +391,7 @@ export function VaultSettingsMountSection({
       <FieldHint>{t("modal.settings.section.mount_intro")}</FieldHint>
       {controlsDisabled ? (
         <FieldHint>
-          {t(requireVaultConfigEditLockedI18nKey("mount.workspace_path", plainLeftover))}
+          {t(requireVaultConfigEditLockedI18nKey("mount.workspace_path", editHold))}
         </FieldHint>
       ) : null}
       {workspaceSystemsCurrentFirst(Platform.OS).map((system) => {

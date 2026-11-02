@@ -1,5 +1,5 @@
 import { StyleSheet, Text, View } from "react-native";
-import { exportFolderIssue, LOADING_BUDGET_MS, VAULT_EXPORT_PROGRESS_COPY } from "@upriv/shared";
+import { BACKUP_EXPORT_PROGRESS_COPY, exportFolderIssue } from "@upriv/shared";
 import { useLoadingBudget, type BackupExportJob } from "@upriv/shared/react";
 import { ExportFolderField } from "@/components/ExportFolderField";
 import { Button, JobProgressBar, LoadingBudgetHint, ModalFooterActions } from "@/components/ui";
@@ -39,7 +39,7 @@ export function BackupExportFolderStep({
       <ModalFooterActions layout="dialog">
         <Button label={t("action.cancel")} variant="ghost" size="sm" onPress={onCancel} />
         <Button
-          label={t("vault.export.dialog.confirm")}
+          label={t("modal.backup.export_confirm")}
           variant="primary"
           size="sm"
           disabled={!ready}
@@ -61,19 +61,17 @@ interface BackupExportProgressProps {
 export function BackupExportProgress({ job, title, onStop }: BackupExportProgressProps) {
   const { t } = useTranslation();
   const { typography } = useTheme();
-  const budget = useLoadingBudget(true, LOADING_BUDGET_MS.backupExport, {
-    startedAt: job.startedAt,
-  });
+  const budget = useLoadingBudget(true, job.budgetMs, { startedAt: job.startedAt });
 
   return (
     <View style={styles.panel}>
       {title ? <Text style={[typography.body, styles.title]}>{title}</Text> : null}
       <JobProgressBar
         progress={job.progress}
-        label={t("vault.export.dialog.title")}
-        copy={VAULT_EXPORT_PROGRESS_COPY}
+        label={t("modal.backup.export")}
+        copy={BACKUP_EXPORT_PROGRESS_COPY}
       />
-      <Text style={typography.caption}>{t("vault.export.dialog.background_note")}</Text>
+      <Text style={typography.caption}>{t("modal.backup.export_background_note")}</Text>
       {budget.visible ? (
         <LoadingBudgetHint
           budgetMs={budget.budgetMs}
@@ -83,7 +81,7 @@ export function BackupExportProgress({ job, title, onStop }: BackupExportProgres
       ) : null}
       <ModalFooterActions layout="dialog">
         <Button
-          label={job.stopping ? t("vault.export.dialog.stopping") : t("vault.export.dialog.stop")}
+          label={job.stopping ? t("modal.backup.export_stopping") : t("modal.backup.export_stop")}
           variant="secondary"
           size="sm"
           disabled={job.stopping}

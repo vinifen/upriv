@@ -1,9 +1,9 @@
 import type { I18nKey } from "@/i18n/types";
-import type { VaultListItem } from "@upriv/shared";
-import { CloseAllUnsavedModal } from "./modals/CloseAllUnsavedModal";
+import type { VaultClosePrompt, VaultListItem } from "@upriv/shared";
 import { CloseNowModal } from "./modals/CloseNowModal";
 import { PlainHeldModal, PlainPlaceModal } from "./modals/PlainFolderModals";
 import { VaultLifecycleModal } from "./modals/VaultLifecycleModal";
+import { VaultClosePromptModal } from "./modals/VaultClosePromptModal";
 import { VaultRecoveryModal } from "./modals/VaultRecoveryModal";
 import type {
   PlainFolderClass,
@@ -25,7 +25,6 @@ interface VaultLifecycleLayerProps {
   recoveryVault: VaultListItem | null;
   recoveryLeftover: PlainLeftover | null | undefined;
   recoveryOpen: boolean;
-  recoverySubmitting: boolean;
   onRecoveryClose: () => void;
   onRecoveryAction: (action: PlainRecoveryAction) => void;
   placeOpen: boolean;
@@ -47,15 +46,17 @@ interface VaultLifecycleLayerProps {
   closeNowAsks: boolean;
   onCloseNowCancel: () => void;
   onCloseNowConfirm: (dontAskAgain: boolean) => void;
-  closeAllUnsavedOpen: boolean;
-  closeAllUnsavedSaving: boolean;
-  onCloseAllUnsavedCancel: () => void;
-  onCloseAllUnsavedDiscard: () => void;
-  onCloseAllUnsavedSave: () => void;
-  onCloseAllUnsavedTimeout: () => void;
+  closePrompt: VaultClosePrompt | null;
+  closePromptVaultName?: string;
+  closePromptSaving: boolean;
+  onClosePromptCancel: () => void;
+  onClosePromptDiscard: () => void;
+  onClosePromptSave: () => void;
+  onClosePromptSaveTimeout: () => void;
+  onClosePromptCancelImport: () => void;
 }
 
-/** Unlock password dialog, plaintext folder prompts, close-all unsaved prompt, and recovery. */
+/** Unlock password dialog, plaintext folder prompts, the close prompt, and recovery. */
 export function VaultLifecycleLayer({
   lifecycleVault,
   lifecycleOpen,
@@ -69,7 +70,6 @@ export function VaultLifecycleLayer({
   recoveryVault,
   recoveryLeftover,
   recoveryOpen,
-  recoverySubmitting,
   onRecoveryClose,
   onRecoveryAction,
   placeOpen,
@@ -91,12 +91,14 @@ export function VaultLifecycleLayer({
   closeNowAsks,
   onCloseNowCancel,
   onCloseNowConfirm,
-  closeAllUnsavedOpen,
-  closeAllUnsavedSaving,
-  onCloseAllUnsavedCancel,
-  onCloseAllUnsavedDiscard,
-  onCloseAllUnsavedSave,
-  onCloseAllUnsavedTimeout,
+  closePrompt,
+  closePromptVaultName,
+  closePromptSaving,
+  onClosePromptCancel,
+  onClosePromptDiscard,
+  onClosePromptSave,
+  onClosePromptSaveTimeout,
+  onClosePromptCancelImport,
 }: VaultLifecycleLayerProps) {
   return (
     <>
@@ -129,13 +131,15 @@ export function VaultLifecycleLayer({
         onApply={onHeldApply}
         onRestore={onHeldRestore}
       />
-      <CloseAllUnsavedModal
-        open={closeAllUnsavedOpen}
-        saving={closeAllUnsavedSaving}
-        onCancel={onCloseAllUnsavedCancel}
-        onDiscard={onCloseAllUnsavedDiscard}
-        onSave={onCloseAllUnsavedSave}
-        onSaveTimeout={onCloseAllUnsavedTimeout}
+      <VaultClosePromptModal
+        prompt={closePrompt}
+        vaultName={closePromptVaultName}
+        saving={closePromptSaving}
+        onCancel={onClosePromptCancel}
+        onDiscard={onClosePromptDiscard}
+        onSave={onClosePromptSave}
+        onSaveTimeout={onClosePromptSaveTimeout}
+        onCancelImport={onClosePromptCancelImport}
       />
       <CloseNowModal
         vault={closeNowVault}
@@ -148,7 +152,6 @@ export function VaultLifecycleLayer({
         vault={recoveryVault}
         leftover={recoveryLeftover}
         open={recoveryOpen}
-        submitting={recoverySubmitting}
         onClose={onRecoveryClose}
         onAction={onRecoveryAction}
       />
