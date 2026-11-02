@@ -193,6 +193,10 @@ pub enum UprivError {
     #[error("the data folder is being exported")]
     DataFolderExportBusy,
 
+    /// A backup export is reading this backup. Delete and pin wait until it ends.
+    #[error("this backup is being exported")]
+    BackupExporting,
+
     /// The chosen folder's drive does not have room for the data-folder zip.
     #[error("data folder export needs {needed} bytes, {available} free")]
     DataFolderExportSpaceShort { needed: u64, available: u64 },

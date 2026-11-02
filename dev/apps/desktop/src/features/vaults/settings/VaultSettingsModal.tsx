@@ -23,6 +23,7 @@ import type {
   ChangePasswordFieldsState,
   CreateVaultGroupAssignment,
   StorageMode,
+  VaultConfigEditHold,
   VaultGroup,
   VaultListItem,
   VaultSettingsAreaId,
@@ -49,7 +50,6 @@ import {
   NO_VAULT_GROUPS,
   isVaultInHiddenGroup,
   isHiddenGroup,
-  canDeleteVaultNow,
   resolveVaultListStatus,
   selectedGroupIdAfterAssignment,
   normalizeVaultSettingsConfig,
@@ -64,7 +64,10 @@ import {
   vaultSettingsToListPatch,
   vaultSettingsIdentityListPatch,
   vaultRootPathForWorkspaceValidation,
+  sizedBudgetMs,
   vaultConfigEditAllowed,
+  vaultConfigEditHold,
+  vaultDeleteHold,
   vaultRowControls,
   rebaseQuietLockedVaultSettings,
   normalizeStoredName,
@@ -258,7 +261,9 @@ export function VaultSettingsModal({
   const settingsSaveBlocked = Boolean(
     vault && vaultRowControls(vault, pipelineListStatus).settingsSaveBlocked,
   );
-  const canDeleteNow = canDeleteVaultNow(vaultListStatus);
+  const deleteHold = vault ? vaultDeleteHold(vault, pipelineListStatus) : "busy";
+  const canDeleteNow = deleteHold === null;
+  const editHold = vault ? vaultConfigEditHold(vault, pipelineListStatus) : {};
   const editAllowed = (target: Parameters<typeof vaultConfigEditAllowed>[0]) =>
     vault != null && vaultConfigEditAllowed(target, vault, pipelineListStatus);
   const storageModeLocked = !editAllowed("storage.mode");
@@ -613,7 +618,12 @@ export function VaultSettingsModal({
         return null;
       }
       const generation = (rewrapGenRef.current += 1);
-      const run: RewrapRun = { vaultId: id, kind, startedAt: Date.now() };
+      const run: RewrapRun = {
+        vaultId: id,
+        kind,
+        startedAt: Date.now(),
+        budgetMs: LOADING_BUDGET_MS.vaultRewrap,
+      };
       rewrapRunRef.current = run;
       setRewrapRun(run);
       setRewrapFailure(null);
@@ -625,6 +635,22 @@ export function VaultSettingsModal({
   const rewrapStillCurrent = useCallback(
     (generation: number) => generation === rewrapGenRef.current,
     [],
+  );
+
+  /** Size the running rewrap from `store/`, which its backup zip copies first. */
+  const sizeRewrap = useCallback(
+    async (id: string, generation: number): Promise<number> => {
+      const bytes = await vaultService.storeOnDiskBytes(id).catch(() => null);
+      const budgetMs = sizedBudgetMs("vaultRewrap", bytes);
+      const current = rewrapRunRef.current;
+      if (rewrapStillCurrent(generation) && current?.vaultId === id) {
+        const sized = { ...current, budgetMs };
+        rewrapRunRef.current = sized;
+        setRewrapRun(sized);
+      }
+      return budgetMs;
+    },
+    [rewrapStillCurrent, vaultService],
   );
 
   const clearRewrapRun = useCallback(() => {
@@ -658,9 +684,12 @@ export function VaultSettingsModal({
     if (generation === null) return;
     setPasswordError(null);
     try {
+      const budgetMs = await sizeRewrap(vaultId, generation);
+      if (!rewrapStillCurrent(generation)) return;
       await vaultSecurityService.changePassword(vaultId, {
         currentPassword: passwordFields.currentPassword,
         newPassword: passwordFields.newPassword,
+        budgetMs,
       });
       if (!rewrapStillCurrent(generation)) return;
       clearRewrapRun();
@@ -708,6 +737,7 @@ export function VaultSettingsModal({
     clearRewrapRun,
     recordRewrapFailure,
     rewrapStillCurrent,
+    sizeRewrap,
     vaultId,
     passwordCanSubmit,
     passwordFields,
@@ -727,9 +757,12 @@ export function VaultSettingsModal({
     setKdfError(null);
     const nextPreset = kdfFields.nextPreset;
     try {
+      const budgetMs = await sizeRewrap(vaultId, generation);
+      if (!rewrapStillCurrent(generation)) return;
       await vaultSecurityService.changeKdfPreset(vaultId, {
         currentPassword: kdfFields.password,
         nextPreset,
+        budgetMs,
       });
       if (!rewrapStillCurrent(generation)) return;
       clearRewrapRun();
@@ -758,6 +791,7 @@ export function VaultSettingsModal({
     notice,
     resetKdfForm,
     rewrapStillCurrent,
+    sizeRewrap,
     t,
     flashSaved,
     vaultId,
@@ -770,9 +804,11 @@ export function VaultSettingsModal({
       ? LOADING_BUDGET_MS.vaultRename
       : LOADING_BUDGET_MS.settingsSave;
   const submitBudget = useLoadingBudget(sectionBusy, submitBudgetMs);
-  const rewrapBudget = useLoadingBudget(rewrapRun !== null, LOADING_BUDGET_MS.vaultRewrap, {
-    startedAt: rewrapRun?.startedAt,
-  });
+  const rewrapBudget = useLoadingBudget(
+    rewrapRun !== null,
+    rewrapRun?.budgetMs ?? LOADING_BUDGET_MS.vaultRewrap,
+    { startedAt: rewrapRun?.startedAt },
+  );
   const settingsLoading = Boolean(open && vaultId && loading && !loadTimedOut);
   const loadBudget = useLoadingBudget(settingsLoading, LOADING_BUDGET_MS.settingsLoad);
 
@@ -1183,7 +1219,7 @@ export function VaultSettingsModal({
                         displayNameLocked,
                         mountLocked,
                         hiddenLocked,
-                        plainLeftover: vault?.plainLeftover === true,
+                        editHold,
                       },
                       vaultRootPathForWorkspaceValidation(
                         appSettings.app.vault_root_mode,
@@ -1218,7 +1254,7 @@ export function VaultSettingsModal({
                     onConfirmChange={setDeleteConfirm}
                     busy={sectionBusy}
                     enabled={vaultService.canDeleteVault}
-                    allowed={canDeleteNow}
+                    hold={deleteHold}
                   />
                 </VaultSettingsSection>
               </>
@@ -1305,7 +1341,7 @@ function renderPreferenceSection(
     displayNameLocked: boolean;
     mountLocked: boolean;
     hiddenLocked: boolean;
-    plainLeftover: boolean;
+    editHold: VaultConfigEditHold;
   },
   vaultRootPath: string | null,
   onMountPathIssue: (invalid: boolean) => void,
@@ -1319,7 +1355,7 @@ function renderPreferenceSection(
           config={draft.vault}
           hiddenLocked={locks.hiddenLocked}
           displayNameLocked={locks.displayNameLocked}
-          plainLeftover={locks.plainLeftover}
+          editHold={locks.editHold}
           onChange={(patch) => patchDraft("vault", patch)}
           fileManager={draft.file_manager}
           onFileManagerChange={(patch) => patchDraft("file_manager", patch)}
@@ -1331,7 +1367,7 @@ function renderPreferenceSection(
           config={draft.storage}
           storageModeLocked={locks.storageModeLocked}
           plainFilesLocked={locks.plainFilesLocked}
-          plainLeftover={locks.plainLeftover}
+          editHold={locks.editHold}
           onChange={(patch) => patchDraft("storage", patch)}
         />
       );
@@ -1341,7 +1377,7 @@ function renderPreferenceSection(
           config={draft.mount}
           vaultRootPath={vaultRootPath}
           controlsDisabled={locks.mountLocked}
-          plainLeftover={locks.plainLeftover}
+          editHold={locks.editHold}
           plaintext={draft.storage.mode === "upriv_plain"}
           appWorkspace={appWorkspace}
           onPathIssueChange={(issue) => onMountPathIssue(issue != null)}

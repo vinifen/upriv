@@ -13,6 +13,7 @@ use super::{dest, residue};
 use crate::error::{Result, UprivError};
 use crate::paths::VaultRoot;
 use crate::runtime_state::{self, PlainRecord};
+use crate::session::Job;
 use crate::vault::wipe::WipeOptions;
 
 /// `vault_plain_leftover`: what recovery shows for this computer.
@@ -63,21 +64,29 @@ pub fn plain_leftover(root: &VaultRoot, vault_id: &str) -> Result<Option<PlainLe
     Ok(Some(leftover))
 }
 
-/// Remove: wipe every file in the leftover folder. A folder that is gone or
-/// not this vault's is forgotten without being touched.
-pub fn remove_plain_leftover(root: &VaultRoot, vault_id: &str) -> Result<PlainWipe> {
+/// Remove: wipe every file in the leftover folder, as the job `job_id`, whose
+/// total is the folder's bytes. A folder that is gone or not this vault's is
+/// forgotten without being touched. A stop leaves the files not reached yet:
+/// the vault stays in recovery, and a later Remove finishes the wipe.
+pub fn remove_plain_leftover(root: &VaultRoot, vault_id: &str, job_id: &str) -> Result<PlainWipe> {
+    let job = Job::start(job_id)?;
     let vault_dir = root.vault_dir(vault_id)?;
     crate::session::with_vault_dir_lock(&vault_dir, || {
         ensure_closed(root, vault_id)?;
         let Some(record) = runtime_state::reachable_plain_record(root, vault_id)? else {
             return Ok(PlainWipe::default());
         };
-        wipe_recorded(
+        let wipe = wipe_recorded(
             root,
             vault_id,
             &record,
             &WipeOptions::for_vault_dir(&vault_dir),
-        )
+            &job,
+        )?;
+        if wipe.kept > 0 && job.is_stopped() {
+            return Err(UprivError::JobCancelled);
+        }
+        Ok(wipe)
     })
 }
 
@@ -120,7 +129,7 @@ pub(crate) fn clear_for_delete(root: &VaultRoot, vault_id: &str, vault_dir: &Pat
         return Ok(());
     };
     let wipe = WipeOptions::for_vault_dir(vault_dir);
-    if wipe_recorded(root, vault_id, &record, &wipe)?.kept > 0 {
+    if wipe_recorded(root, vault_id, &record, &wipe, &Job::untracked())?.kept > 0 {
         return Err(UprivError::PlainLeftover);
     }
     Ok(())
@@ -212,10 +221,11 @@ fn wipe_recorded(
     vault_id: &str,
     record: &PlainRecord,
     opts: &WipeOptions,
+    job: &Job,
 ) -> Result<PlainWipe> {
     let folder = record.folder(root);
     let wipe = match verified_marker(&folder, vault_id, &record.token) {
-        Some(marker) => wipe_folder(&folder, &marker, opts)?,
+        Some(marker) => wipe_folder(&folder, &marker, opts, job)?,
         None => PlainWipe::default(),
     };
     if wipe.kept == 0 {
@@ -235,9 +245,19 @@ fn wipe_recorded(
 }
 
 /// Wipe everything under a folder this vault wrote, then leave it the way
-/// [`finish_folder`] does.
-fn wipe_folder(folder: &Path, marker: &Marker, opts: &WipeOptions) -> Result<PlainWipe> {
-    let swept = sweep::sweep_folder(folder, &[MARKER_NAME], opts, &mut |_, _| Visit::Wipe)?;
+/// [`finish_folder`] does. `job` reports the bytes, and a stop keeps what is
+/// left.
+fn wipe_folder(folder: &Path, marker: &Marker, opts: &WipeOptions, job: &Job) -> Result<PlainWipe> {
+    if let Ok((_, bytes)) = disk::tally(folder, &[MARKER_NAME]) {
+        job.set_total(bytes);
+    }
+    let swept = sweep::sweep_folder(folder, &[MARKER_NAME], opts, &mut |_, stamp| {
+        if job.is_stopped() {
+            return Visit::Keep;
+        }
+        job.advance(stamp.len);
+        Visit::Wipe
+    })?;
     let wipe = PlainWipe {
         wiped: swept.removed,
         kept: swept.kept.len() as u32,
@@ -330,6 +350,56 @@ mod tests {
         }
     }
 
+    /// Tests run side by side, and a running job id is taken.
+    fn remove_leftover(root: &VaultRoot) -> Result<PlainWipe> {
+        static NEXT_JOB: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let job = NEXT_JOB.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        remove_plain_leftover(root, "notes", &format!("leftover-{job}"))
+    }
+
+    #[test]
+    fn a_stopped_wipe_keeps_the_rest_and_the_vault_stays_in_recovery() {
+        let (tmp, root) = plain_root();
+        let folder = tmp.path().join("places").join("Notes");
+        leftover(&folder, "notes", "t1");
+        let saved = record(&folder, "t1");
+        runtime_state::adopt_plain_record(&root, "notes", saved.clone()).unwrap();
+
+        let stopped = Job::stopped_by(std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
+            true,
+        )));
+        let wipe = wipe_recorded(
+            &root,
+            "notes",
+            &saved,
+            &WipeOptions::for_vault_dir(&root.vault_dir("notes").unwrap()),
+            &stopped,
+        )
+        .unwrap();
+        assert_eq!(wipe.wiped, 0);
+        assert!(wipe.kept > 0);
+        assert!(folder.join("a.txt").exists());
+        assert!(holds_leftover(&root, "notes"));
+
+        assert_eq!(remove_leftover(&root).unwrap().kept, 0);
+        assert!(!holds_leftover(&root, "notes"));
+    }
+
+    #[test]
+    fn a_wipe_reports_the_bytes_of_the_folder() {
+        let (tmp, root) = plain_root();
+        let folder = tmp.path().join("places").join("Notes");
+        leftover(&folder, "notes", "t1");
+        let saved = record(&folder, "t1");
+        runtime_state::adopt_plain_record(&root, "notes", saved.clone()).unwrap();
+
+        let job = Job::untracked();
+        let wipe = WipeOptions::for_vault_dir(&root.vault_dir("notes").unwrap());
+        wipe_recorded(&root, "notes", &saved, &wipe, &job).unwrap();
+        let status = job.gauge().status();
+        assert_eq!((status.bytes_done, status.bytes_total), (16, 16));
+    }
+
     #[test]
     fn remove_wipes_a_folder_with_the_recorded_marker() {
         let (tmp, root) = plain_root();
@@ -341,7 +411,7 @@ mod tests {
         assert!(found.found);
         assert_eq!((found.files, found.bytes), (2, 16));
 
-        let wipe = remove_plain_leftover(&root, "notes").unwrap();
+        let wipe = remove_leftover(&root).unwrap();
         assert_eq!(wipe, PlainWipe { wiped: 3, kept: 0 });
         assert!(plain_leftover(&root, "notes").unwrap().is_none());
         assert!(!folder.exists());
@@ -364,7 +434,7 @@ mod tests {
         runtime_state::adopt_plain_record(&root, "notes", record(&folder, "t1")).unwrap();
         assert!(listed(&root));
 
-        remove_plain_leftover(&root, "notes").unwrap();
+        remove_leftover(&root).unwrap();
         assert!(!listed(&root));
     }
 
@@ -385,10 +455,7 @@ mod tests {
         runtime_state::adopt_plain_record(&root, "notes", record(&folder, "t1")).unwrap();
 
         assert!(!plain_leftover(&root, "notes").unwrap().unwrap().found);
-        assert_eq!(
-            remove_plain_leftover(&root, "notes").unwrap(),
-            PlainWipe::default()
-        );
+        assert_eq!(remove_leftover(&root).unwrap(), PlainWipe::default());
         assert!(plain_leftover(&root, "notes").unwrap().is_none());
         assert_eq!(std::fs::read(folder.join("a.txt")).unwrap(), b"secret a");
     }
@@ -412,7 +479,7 @@ mod tests {
         adopt_orphans(&root, &crate::vault::list_vault_entries(&root).unwrap());
         let found = plain_leftover(&root, "notes").unwrap().expect("adopted");
         assert!(found.found);
-        assert_eq!(remove_plain_leftover(&root, "notes").unwrap().kept, 0);
+        assert_eq!(remove_leftover(&root).unwrap().kept, 0);
     }
 
     fn own_folder_config(id: &str, name: &str, parent: &Path, plain: bool) -> VaultConfig {
@@ -795,12 +862,38 @@ mod tests {
         std::fs::write(folder.join("theirs.txt"), b"not the vault's").unwrap();
 
         let closed = crate::close_vault_now(&root, "notes").unwrap();
-        assert_eq!(closed.plain.unwrap().kept, 1);
+        let summary = closed.plain.unwrap();
+        assert_eq!((summary.kept, summary.leftover), (1, false));
         assert!(!folder.join("hello.txt").exists());
         assert_eq!(
             std::fs::read(folder.join("theirs.txt")).unwrap(),
             b"not the vault's"
         );
+    }
+
+    #[test]
+    fn a_close_that_keeps_files_reports_the_leftover_the_list_shows() {
+        let listed = |root: &VaultRoot| {
+            crate::list_vaults(root)
+                .unwrap()
+                .into_iter()
+                .find(|vault| vault.id == "notes")
+                .unwrap()
+        };
+        let (tmp, root) = vault_root_with(&[]);
+        let folder = open_plain_vault(&tmp, &root);
+        // A name the vault never holds: the closing pass leaves it in the folder.
+        std::fs::create_dir_all(folder.join(".upriv-config")).unwrap();
+        std::fs::write(folder.join(".upriv-config/notes.txt"), b"not the vault's").unwrap();
+
+        let summary = crate::close_vault(&root, "notes").unwrap().plain.unwrap();
+        assert_eq!((summary.kept, summary.leftover), (1, true));
+        assert!(listed(&root).plain_leftover);
+
+        remove_leftover(&root).unwrap();
+        let after = listed(&root);
+        assert!(!after.plain_leftover);
+        assert_eq!(after.session, None);
     }
 
     #[cfg(unix)]

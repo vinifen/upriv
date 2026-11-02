@@ -1,4 +1,4 @@
-import { LOADING_BUDGET_MS, createLiveBackupService } from "@upriv/shared";
+import { SIZED_BUDGET_CEILING_MS, createLiveBackupService } from "@upriv/shared";
 import {
   rpcBackupDelete,
   rpcBackupExport,
@@ -24,11 +24,8 @@ export const nativeBackupService = createLiveBackupService({
   },
   // A picked folder is mounted for the export, so Rust writes the file straight into it.
   async exportTo(vaultId, keys, destDir, job) {
-    return nativeSafExportMount.withExportFolder(
-      destDir,
-      job,
-      LOADING_BUDGET_MS.backupExport,
-      (dir) => rpcBackupExport(vaultId, keys, dir, job),
+    return nativeSafExportMount.withExportFolder(destDir, job, SIZED_BUDGET_CEILING_MS, (dir) =>
+      rpcBackupExport(vaultId, keys, dir, job),
     );
   },
 });

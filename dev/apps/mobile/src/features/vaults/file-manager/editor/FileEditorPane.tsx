@@ -85,7 +85,6 @@ export function FileEditorPane({ fm, vaultName, searchRef }: FileEditorPaneProps
     getEditorContent,
     fileLoadError,
     isFileContentReady,
-    writesLocked,
     isFileViewable,
     isFileImage,
     isImportPending,
@@ -309,11 +308,8 @@ export function FileEditorPane({ fm, vaultName, searchRef }: FileEditorPaneProps
               onActiveHeadingChange={heading.follow}
               onUserScroll={heading.release}
               onCopyFailed={() => fm.showToast(t("modal.file_manager.markdown.copy_failed"))}
-              onChange={
-                writesLocked
-                  ? undefined
-                  : (next) =>
-                      dispatch({ type: "set_editor_draft", path: activeTabPath, content: next })
+              onChange={(next) =>
+                dispatch({ type: "set_editor_draft", path: activeTabPath, content: next })
               }
             />
           ) : (
@@ -323,7 +319,6 @@ export function FileEditorPane({ fm, vaultName, searchRef }: FileEditorPaneProps
               content={content}
               shownContent={shownContent}
               ariaLabel={t("modal.file_manager.viewer.editor_label", { name: fileName })}
-              readOnly={writesLocked}
               wordWrap={currentWordWrap}
               matches={codeMatches}
               activeMatchIndex={activeMatchIndex}

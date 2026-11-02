@@ -15,8 +15,8 @@ use crate::store::{OpenedStore, VaultHeader, VaultIndex};
 
 mod jobs;
 
-pub(crate) use jobs::Job;
 pub use jobs::{cancel_job, job_status, stop_all_jobs, JobStatus};
+pub(crate) use jobs::{Job, JobGauge};
 
 const FAILURE_WINDOW: Duration = Duration::from_secs(60);
 const BLOCK_DURATION: Duration = Duration::from_secs(60);
@@ -143,8 +143,9 @@ static CLOSING: LazyLock<Mutex<HashMap<PathBuf, Closing>>> =
 /// `rename_vault` honors this without waiting on Argon2 or using `UNLOCK_GATE`.
 static PREPARING: LazyLock<Mutex<HashMap<PathBuf, usize>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
-/// Vault dirs whose backups an export is reading. Refcounted like `PREPARING`.
-static BACKUP_EXPORTS: LazyLock<Mutex<HashMap<PathBuf, usize>>> =
+/// Backup zips an export is reading, by vault dir. Each export adds its own
+/// entries, so two exports of one zip each hold it.
+static BACKUP_EXPORTS: LazyLock<Mutex<HashMap<PathBuf, Vec<PathBuf>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 /// Serializes create (and other dir-scoped writes) per `vaults/<id>/`.
 static VAULT_DIR_GATES: LazyLock<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>> =
@@ -337,11 +338,13 @@ pub fn is_vault_closing_at(vault_dir: &Path) -> bool {
 }
 
 /// Where an in-flight close of this vault is. `None` when no close is running.
-pub fn vault_close_phase_at(vault_dir: &Path) -> Option<ClosePhase> {
-    CLOSING
-        .lock()
-        .ok()
-        .and_then(|g| g.get(vault_dir).map(|closing| closing.phase))
+pub fn vault_close_progress_at(vault_dir: &Path) -> Option<CloseProgress> {
+    CLOSING.lock().ok().and_then(|g| {
+        g.get(vault_dir).map(|closing| CloseProgress {
+            phase: closing.phase,
+            backup: closing.backup.status(),
+        })
+    })
 }
 
 /// Make the close running for this vault finish the Close now way. False when
@@ -454,43 +457,95 @@ impl Drop for DataFolderExportGuard {
     }
 }
 
+fn lock_backup_exports() -> Result<std::sync::MutexGuard<'static, HashMap<PathBuf, Vec<PathBuf>>>> {
+    BACKUP_EXPORTS
+        .lock()
+        .map_err(|_| session_lock_poisoned("backup export lock poisoned"))
+}
+
 /// True while a backup export reads this vault's backups. Fail closed on poison.
 pub(crate) fn is_vault_backup_export_at(vault_dir: &Path) -> bool {
     BACKUP_EXPORTS
         .lock()
-        .map(|g| g.get(vault_dir).is_some_and(|count| *count > 0))
+        .map(|g| g.get(vault_dir).is_some_and(|zips| !zips.is_empty()))
         .unwrap_or(true)
 }
 
-/// Keeps `vault_dir` in place while a backup export reads from it: delete and
-/// rename refuse until dropped. A backup is a frozen file, so open, close, and
-/// every other export stay free.
+/// Refuse with [`UprivError::BackupExporting`] while an export reads any of
+/// `zips`, so a delete or a pin never pulls a backup from under it.
+pub(crate) fn ensure_backups_not_exporting(vault_dir: &Path, zips: &[PathBuf]) -> Result<()> {
+    let exports = lock_backup_exports()?;
+    let reading = exports
+        .get(vault_dir)
+        .is_some_and(|held| zips.iter().any(|zip| held.contains(zip)));
+    if reading {
+        return Err(UprivError::BackupExporting);
+    }
+    Ok(())
+}
+
+/// Remove `zip` unless an export reads it; true when it was removed. The
+/// registry stays locked across the removal, so an export never starts on a
+/// zip that is halfway gone. Retention uses this: it runs without the vault's
+/// lock, and a zip it skips goes on a later close.
+pub(crate) fn remove_backup_unless_exporting(vault_dir: &Path, zip: &Path) -> Result<bool> {
+    let exports = lock_backup_exports()?;
+    if exports
+        .get(vault_dir)
+        .is_some_and(|held| held.iter().any(|read| read == zip))
+    {
+        return Ok(false);
+    }
+    crate::host_fs::remove_file(zip)?;
+    Ok(true)
+}
+
+/// Holds the backup zips an export reads. Until it is dropped, delete and
+/// rename of the vault refuse, delete and pin of those zips refuse, and
+/// retention leaves them. A backup is a frozen file, so open, close, and every
+/// other export stay free.
 pub(crate) struct BackupExportGuard {
     vault_dir: PathBuf,
+    zips: Vec<PathBuf>,
 }
 
 impl BackupExportGuard {
-    pub(crate) fn enter(vault_dir: &Path) -> Result<Self> {
-        let mut guard = BACKUP_EXPORTS
-            .lock()
-            .map_err(|_| session_lock_poisoned("backup export lock poisoned"))?;
-        *guard.entry(vault_dir.to_path_buf()).or_insert(0) += 1;
+    /// Each zip must still be a file: retention may have removed one since
+    /// the export found it.
+    pub(crate) fn enter(vault_dir: &Path, zips: Vec<PathBuf>) -> Result<Self> {
+        use crate::host_fs::HostFsQuery;
+
+        let mut exports = lock_backup_exports()?;
+        if let Some(gone) = zips.iter().find(|zip| !zip.host_is_file()) {
+            return Err(UprivError::VaultPathNotFound(gone.display().to_string()));
+        }
+        exports
+            .entry(vault_dir.to_path_buf())
+            .or_default()
+            .extend(zips.iter().cloned());
         Ok(Self {
             vault_dir: vault_dir.to_path_buf(),
+            zips,
         })
     }
 }
 
 impl Drop for BackupExportGuard {
     fn drop(&mut self) {
-        if let Ok(mut guard) = BACKUP_EXPORTS.lock() {
-            match guard.get_mut(&self.vault_dir) {
-                Some(count) if *count > 1 => *count -= 1,
-                Some(_) => {
-                    guard.remove(&self.vault_dir);
-                }
-                None => {}
+        let Ok(mut exports) = BACKUP_EXPORTS.lock() else {
+            return;
+        };
+        let Some(held) = exports.get_mut(&self.vault_dir) else {
+            return;
+        };
+        // One entry per zip of this export; another export of the same zip keeps its own.
+        for zip in &self.zips {
+            if let Some(at) = held.iter().position(|read| read == zip) {
+                held.swap_remove(at);
             }
+        }
+        if held.is_empty() {
+            exports.remove(&self.vault_dir);
         }
     }
 }
@@ -513,17 +568,29 @@ impl ClosePhase {
     }
 }
 
+/// Where an in-flight close is, read by the UI while `vault_close` runs. The
+/// backup's total is the size of `store/`, so the UI sizes its wait from it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CloseProgress {
+    pub phase: ClosePhase,
+    /// The close backup zip. Zero until it has listed `store/`, and while
+    /// backups are off.
+    pub backup: JobStatus,
+}
+
 /// One close in flight.
 struct Closing {
     phase: ClosePhase,
     /// Set once this close should finish the Close now way.
     hurry: Arc<AtomicBool>,
+    backup: JobGauge,
 }
 
 /// Mark `vault_dir` as closing until dropped (covers flush after `take_session`).
 pub(crate) struct ClosingGuard {
     vault_dir: PathBuf,
     hurry: Arc<AtomicBool>,
+    backup: Job,
 }
 
 impl ClosingGuard {
@@ -532,21 +599,30 @@ impl ClosingGuard {
             .lock()
             .map_err(|_| session_lock_poisoned("closing lock poisoned"))?;
         let hurry = Arc::new(AtomicBool::new(false));
+        // Close now ends the backup, and the UI reads how far it got.
+        let backup = Job::stopped_by(Arc::clone(&hurry));
         guard.insert(
             vault_dir.to_path_buf(),
             Closing {
                 phase: ClosePhase::Flush,
                 hurry: Arc::clone(&hurry),
+                backup: backup.gauge(),
             },
         );
         Ok(Self {
             vault_dir: vault_dir.to_path_buf(),
             hurry,
+            backup,
         })
     }
 
     pub(crate) fn hurry(&self) -> &Arc<AtomicBool> {
         &self.hurry
+    }
+
+    /// The job the close backup zip runs as.
+    pub(crate) fn backup_job(&self) -> &Job {
+        &self.backup
     }
 
     pub(crate) fn set_phase(&self, phase: ClosePhase) {
@@ -804,22 +880,53 @@ mod tests {
     }
 
     #[test]
-    fn close_phase_follows_guard() {
+    fn close_progress_follows_guard() {
         let dir = PathBuf::from(format!(
             "/upriv-test-close-phase-{}-{:?}",
             std::process::id(),
             std::thread::current().id()
         ));
-        assert_eq!(vault_close_phase_at(&dir), None);
+        let phase = |dir: &Path| vault_close_progress_at(dir).map(|progress| progress.phase);
+        assert_eq!(vault_close_progress_at(&dir), None);
         {
             let guard = ClosingGuard::enter(&dir).expect("enter closing");
-            assert_eq!(vault_close_phase_at(&dir), Some(ClosePhase::Flush));
+            assert_eq!(phase(&dir), Some(ClosePhase::Flush));
             guard.set_phase(ClosePhase::Backup);
-            assert_eq!(vault_close_phase_at(&dir), Some(ClosePhase::Backup));
+            assert_eq!(phase(&dir), Some(ClosePhase::Backup));
             assert!(is_vault_closing_at(&dir));
         }
-        assert_eq!(vault_close_phase_at(&dir), None);
+        assert_eq!(vault_close_progress_at(&dir), None);
         assert!(!is_vault_closing_at(&dir));
+    }
+
+    #[test]
+    fn close_progress_reports_the_backup_bytes() {
+        let dir = PathBuf::from(format!(
+            "/upriv-test-close-bytes-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let guard = ClosingGuard::enter(&dir).expect("enter closing");
+        let backup = |dir: &Path| vault_close_progress_at(dir).map(|progress| progress.backup);
+        assert_eq!(
+            backup(&dir),
+            Some(JobStatus {
+                bytes_done: 0,
+                bytes_total: 0
+            })
+        );
+        guard.backup_job().set_total(2048);
+        guard.backup_job().advance(512);
+        assert_eq!(
+            backup(&dir),
+            Some(JobStatus {
+                bytes_done: 512,
+                bytes_total: 2048
+            })
+        );
+        // Close now stops the backup the guard hands out.
+        guard.hurry().store(true, Ordering::Relaxed);
+        assert!(guard.backup_job().is_stopped());
     }
 
     #[test]

@@ -3,7 +3,6 @@ import type {
   CreateVaultDraft,
   CreateVaultStepId,
   GroupedVaultSortMode,
-  VaultExportFormat,
   VaultGroup,
   VaultLifecycleRequest,
   VaultListItem,
@@ -30,15 +29,6 @@ export function useVaultListModals() {
   const [settingsArea, setSettingsArea] = useState<VaultSettingsAreaId | null>(null);
   const [noteVaultId, setNoteVaultId] = useState<string | null>(null);
   const [exportVault, setExportVault] = useState<VaultListItem | null>(null);
-  /** The export in flight: its job id (`job_status`, `job_cancel`), vault, format, and start. */
-  const [exportJob, setExportJob] = useState<{
-    id: string;
-    vaultId: string;
-    format: VaultExportFormat;
-    startedAt: number;
-    /** Stop export was pressed; the export call has not settled yet. */
-    stopping?: boolean;
-  } | null>(null);
   /** The password a `.7z` export was refused with (wrong, or the unlock limit), on its field. */
   const [exportPasswordError, setExportPasswordError] = useState<{
     vaultId: string;
@@ -98,8 +88,6 @@ export function useVaultListModals() {
     setNoteVaultId,
     exportVault,
     setExportVault,
-    exportJob,
-    setExportJob,
     exportPasswordError,
     setExportPasswordError,
     backupsVault,

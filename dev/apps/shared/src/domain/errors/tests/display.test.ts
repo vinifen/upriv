@@ -23,6 +23,9 @@ describe("errorDisplayI18nKey", () => {
     expect(errorDisplayI18nKey(new RpcError("vault_backup_failed", "zip"))).toBe(
       "error.vault_backup_failed",
     );
+    expect(errorDisplayI18nKey(new RpcError("backup_exporting", "held"))).toBe(
+      "error.backup_exporting",
+    );
     expect(errorDisplayI18nKey(new RpcError("vault_mount_filesystem", "exfat"))).toBe(
       "error.vault_mount_filesystem",
     );

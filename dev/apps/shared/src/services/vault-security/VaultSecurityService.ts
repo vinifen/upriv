@@ -3,11 +3,15 @@ import type { KdfUnlockPreset } from "../../domain/vault-settings";
 export interface ChangeVaultPasswordInput {
   currentPassword: string;
   newPassword: string;
+  /** The call's timeout: `sizedBudgetMs("vaultRewrap")` for this vault's `store/`. */
+  budgetMs: number;
 }
 
 export interface ChangeVaultKdfInput {
   currentPassword: string;
   nextPreset: KdfUnlockPreset;
+  /** The call's timeout: `sizedBudgetMs("vaultRewrap")` for this vault's `store/`. */
+  budgetMs: number;
 }
 
 /**
@@ -20,7 +24,7 @@ export interface ChangeVaultKdfInput {
  * are resealed. Expo Go uses the mock, which does not touch a real `store/`.
  */
 export interface VaultSecurityService {
-  /** Rewraps `vault.header` + `store/` under a new password. */
+  /** Writes a backup zip of `store/`, then rewraps `vault.header` under a new password. */
   changePassword(vaultId: string, input: ChangeVaultPasswordInput): Promise<void>;
   /** Rewraps under new Argon2id cost; the vault must be closed. */
   changeKdfPreset(vaultId: string, input: ChangeVaultKdfInput): Promise<void>;

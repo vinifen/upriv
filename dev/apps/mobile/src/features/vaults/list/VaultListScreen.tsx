@@ -78,7 +78,7 @@ import { VaultGroupsModal } from "@/features/vaults/list/VaultGroupsModal";
 import { VaultNoteModal } from "@/features/vaults/list/VaultNoteModal";
 import { GroupedVaultPicker } from "@/features/vaults/list/GroupedVaultPicker";
 import {
-  CloseAllUnsavedModal,
+  VaultClosePromptModal,
   CloseNowModal,
   PlainHeldModal,
   PlainPlaceModal,
@@ -248,8 +248,7 @@ export function VaultListScreen() {
     exportPasswordError,
     setExportPasswordError,
     backupsVault,
-    backupSaving,
-    backupSaveStartedAt,
+    backupSaveJob,
     backupListRefresh,
     handleBackupSaveNow,
     backupExportFolder,
@@ -317,7 +316,6 @@ export function VaultListScreen() {
     handleConfirmExportVault,
     handleStopExportVault,
     handleRowExport,
-    handleExportTimeout,
     exportFolders,
     exportRun,
     rowDensity,
@@ -1354,13 +1352,15 @@ export function VaultListScreen() {
         saveHeld={noteVault != null && vaultRowControls(noteVault, pipelineStatus).noteBlocked}
       />
 
-      <CloseAllUnsavedModal
-        open={lifecycle.closeAllUnsavedOpen}
-        saving={lifecycle.closeAllUnsavedSaving}
-        onCancel={lifecycle.cancelCloseAllUnsaved}
-        onDiscard={lifecycle.confirmCloseAllDiscard}
-        onSave={lifecycle.confirmCloseAllSave}
-        onSaveTimeout={lifecycle.timeoutCloseAllSave}
+      <VaultClosePromptModal
+        prompt={lifecycle.closePrompt}
+        vaultName={lifecycle.closePromptVaultName}
+        saving={lifecycle.closePromptSaving}
+        onCancel={lifecycle.cancelClosePrompt}
+        onDiscard={lifecycle.confirmClosePromptDiscard}
+        onSave={lifecycle.confirmClosePromptSave}
+        onSaveTimeout={lifecycle.timeoutClosePromptSave}
+        onCancelImport={lifecycle.confirmClosePromptCancelImport}
       />
 
       <CloseNowModal
@@ -1391,7 +1391,6 @@ export function VaultListScreen() {
         vault={lifecycle.recoveryVault}
         leftover={lifecycle.recoveryLeftover}
         open={lifecycle.recoveryOpen}
-        submitting={lifecycle.recoverySubmitting}
         onClose={lifecycle.cancelRecovery}
         onAction={lifecycle.handleRecoveryAction}
       />
@@ -1452,7 +1451,6 @@ export function VaultListScreen() {
         onConfirm={handleConfirmExportVault}
         onStop={handleStopExportVault}
         onPasswordEdited={() => setExportPasswordError(null)}
-        onTimeout={handleExportTimeout}
         onSettingsLoadError={(error) => {
           show(t(mobileErrorI18nKey(error, "error.unexpected")));
         }}
@@ -1663,8 +1661,7 @@ export function VaultListScreen() {
         vault={backupsVault}
         open={backupsVault !== null}
         canSaveNow={backupsVault !== null && vaultCanSaveBackupNow(backupsVault, pipelineStatus)}
-        saving={backupSaving}
-        saveStartedAt={backupSaveStartedAt}
+        saveJob={backupSaveJob}
         onSaveNow={handleBackupSaveNow}
         listRefreshToken={backupListRefresh}
         onClose={() => setBackupsVault(null)}
@@ -1693,10 +1690,7 @@ export function VaultListScreen() {
         onStopExport={handleBackupExportStop}
       />
 
-      <FileManagerLayer
-        pipelineListStatus={pipelineStatus}
-        onCloseVault={lifecycle.closeVaultAfterUnsaved}
-      />
+      <FileManagerLayer />
 
       <AppSettingsModal
         open={settingsOpen}

@@ -74,6 +74,8 @@ export interface VaultExportRun {
   progress: JobProgress | null;
   /** Stop export was pressed; the export call has not settled yet. */
   stopping?: boolean;
+  /** `sizedBudgetMs("vaultExport")` for the bytes core measured. The list enforces it. */
+  budgetMs: number;
 }
 
 // eslint-disable-next-line no-control-regex

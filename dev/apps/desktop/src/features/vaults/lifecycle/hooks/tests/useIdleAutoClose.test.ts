@@ -296,24 +296,6 @@ describe("useIdleAutoClose pause", () => {
     unmount();
   });
 
-  it("keeps a sooner wake when a retry is asked", async () => {
-    const onLock = vi.fn(async () => "started" as const);
-    const { result, unmount } = await mount(false, onLock);
-
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(15 * 60_000 - 2_000);
-    });
-    expect(onLock).not.toHaveBeenCalled();
-    act(() => {
-      result.current.scheduleIdleRetry();
-    });
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(2_000);
-    });
-    expect(onLock).toHaveBeenCalledTimes(1);
-    unmount();
-  });
-
   it("does not arm a lock after the screen unmounts during a close", async () => {
     let release: (result: "wait") => void = () => {};
     const onLock = vi.fn(

@@ -57,4 +57,9 @@ describe("parsePlainCloseSummary", () => {
       })?.backupPinned,
     ).toBe(true);
   });
+
+  it("reports a leftover only when core says the folder holds one", () => {
+    expect(parsePlainCloseSummary({ kept: 2, leftover: true })?.leftover).toBe(true);
+    expect(parsePlainCloseSummary({ kept: 2 })?.leftover).toBe(false);
+  });
 });

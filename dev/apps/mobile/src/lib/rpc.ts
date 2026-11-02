@@ -17,7 +17,7 @@ import {
   parseVaultGroupWire,
   parseVaultListItemWire,
   parseVaultCloseHurry,
-  parseVaultClosePhase,
+  parseVaultCloseProgress,
   parseVaultListResult,
   parseVaultRenameResult,
   parseVaultRootInspect,
@@ -30,6 +30,7 @@ import {
   parsePlainDestination,
   parsePlainHeldStatus,
   parsePlainLeftover,
+  parsePlainWipe,
   parseBackupFailure,
   parseJobStatus,
   type CloseVaultOutcome,
@@ -38,7 +39,8 @@ import {
   type PlainDestination,
   type PlainHeldStatus,
   type PlainLeftover,
-  type VaultClosePhase,
+  type PlainWipe,
+  type VaultCloseProgress,
   type AllowlistedUiLogEvent,
   type AppLogFile,
   type AppSettingsConfig,
@@ -573,8 +575,8 @@ export async function rpcVaultPlainLeftover(id: string): Promise<PlainLeftover |
   return leftover;
 }
 
-export async function rpcVaultPlainRemove(id: string): Promise<void> {
-  await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_PLAIN_REMOVE, { id });
+export async function rpcVaultPlainRemove(id: string, job: string): Promise<PlainWipe> {
+  return parsePlainWipe(await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_PLAIN_REMOVE, { id, job }));
 }
 
 export async function rpcVaultPlainSync(id: string): Promise<void> {
@@ -651,28 +653,32 @@ export async function rpcVaultClose(
   return parseCloseVaultOutcome(raw);
 }
 
+/** `timeoutMs` is the rewrap's sized budget (`sizedBudgetMs("vaultRewrap")`). */
 export async function rpcVaultChangePassword(
   id: string,
   currentPassword: string,
   newPassword: string,
+  timeoutMs: number,
 ): Promise<void> {
-  await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_CHANGE_PASSWORD, {
-    id,
-    currentPassword,
-    newPassword,
-  });
+  await nativeInvokeRaw(
+    CORE_RPC_COMMANDS.VAULT_CHANGE_PASSWORD,
+    { id, currentPassword, newPassword },
+    timeoutMs,
+  );
 }
 
+/** `timeoutMs` is the rewrap's sized budget (`sizedBudgetMs("vaultRewrap")`). */
 export async function rpcVaultChangeKdf(
   id: string,
   currentPassword: string,
   unlockPreset: string,
+  timeoutMs: number,
 ): Promise<void> {
-  await nativeInvokeRaw(CORE_RPC_COMMANDS.VAULT_CHANGE_KDF, {
-    id,
-    currentPassword,
-    unlockPreset,
-  });
+  await nativeInvokeRaw(
+    CORE_RPC_COMMANDS.VAULT_CHANGE_KDF,
+    { id, currentPassword, unlockPreset },
+    timeoutMs,
+  );
 }
 
 function parseCloseVaultOutcome(raw: unknown): CloseVaultOutcome {
@@ -695,8 +701,8 @@ export async function rpcVaultCloseHurry(id: string): Promise<boolean> {
   );
 }
 
-export async function rpcVaultClosePhase(id: string): Promise<VaultClosePhase | null> {
-  return parseVaultClosePhase(
+export async function rpcVaultCloseProgress(id: string): Promise<VaultCloseProgress | null> {
+  return parseVaultCloseProgress(
     await nativeInvokeProbeRaw(CORE_RPC_COMMANDS.VAULT_CLOSE_PHASE, { id }),
   );
 }

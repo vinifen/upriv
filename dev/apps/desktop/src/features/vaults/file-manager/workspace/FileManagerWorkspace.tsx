@@ -22,9 +22,7 @@ import { useNativeOsFileDrop } from "../hooks/useNativeOsFileDrop";
 interface FileManagerWorkspaceProps {
   vaultId: string;
   active?: boolean;
-  writesLocked?: boolean;
   onDismissConfirmed: (vaultId: string) => void;
-  onVaultCloseConfirmed?: (vaultId: string) => void;
 }
 
 /** One vault's file manager. It draws again for that vault's changes only. */
@@ -39,9 +37,7 @@ export const FileManagerWorkspace = memo(function FileManagerWorkspace({
 function OpenFileManagerWorkspace({
   entry,
   active = true,
-  writesLocked = false,
   onDismissConfirmed,
-  onVaultCloseConfirmed,
 }: Omit<FileManagerWorkspaceProps, "vaultId"> & { entry: FileManagerEntry }) {
   const vaultId = entry.vaultId;
   const { dispatchWorkspace } = useFileManager();
@@ -60,17 +56,11 @@ function OpenFileManagerWorkspace({
     () => onDismissConfirmed(vaultId),
     [onDismissConfirmed, vaultId],
   );
-  const handleVaultCloseConfirmed = useCallback(
-    () => onVaultCloseConfirmed?.(vaultId),
-    [onVaultCloseConfirmed, vaultId],
-  );
 
   const fm = useVaultFileManager({
     entry,
     dispatch,
     onDismissConfirmed: handleDismissConfirmed,
-    onVaultCloseConfirmed: handleVaultCloseConfirmed,
-    writesLocked,
   });
 
   useWorkspacePersistence({

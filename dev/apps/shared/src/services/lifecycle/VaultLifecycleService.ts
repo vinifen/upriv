@@ -48,10 +48,15 @@ export interface VaultLifecycleService {
   readonly closingStepCount: number;
 
   runOpeningPipeline(vaultId: string, onStep: (stepIndex: number) => void): Promise<void>;
+  /**
+   * `onMeasured` gets the bytes of `store/` the close backup copies, once core
+   * knows them, so the caller can size its wait (`sizedBudgetMs("vaultClose")`).
+   */
   runClosingPipeline(
     vaultId: string,
     onStep: (stepIndex: number) => void,
     reason?: VaultCloseReason,
+    onMeasured?: (bytes: number) => void,
   ): Promise<CloseVaultOutcome>;
   /** Tell the close running for this vault to finish the Close now way. False when none runs. */
   hurryClose(vaultId: string): Promise<boolean>;

@@ -2,7 +2,7 @@ import { ExportFolderField } from "@/components/ExportFolderField";
 import { Button, JobProgressBar, LoadingBudgetHint } from "@/components/ui";
 import type { ExportFolder } from "@/hooks/useExportFolder";
 import { useTranslation } from "@/i18n";
-import { exportFolderIssue, LOADING_BUDGET_MS, VAULT_EXPORT_PROGRESS_COPY } from "@upriv/shared";
+import { BACKUP_EXPORT_PROGRESS_COPY, exportFolderIssue } from "@upriv/shared";
 import { useLoadingBudget, type BackupExportJob } from "@upriv/shared/react";
 
 interface BackupExportFolderStepProps {
@@ -43,7 +43,7 @@ export function BackupExportFolderStep({
           {t("action.cancel")}
         </Button>
         <Button type="submit" variant="primary" size="sm" disabled={!ready}>
-          {t("vault.export.dialog.confirm")}
+          {t("modal.backup.export_confirm")}
         </Button>
       </div>
     </form>
@@ -60,9 +60,7 @@ interface BackupExportProgressProps {
 /** How far this export got, how long it may still take, and its stop. */
 export function BackupExportProgress({ job, title, onStop }: BackupExportProgressProps) {
   const { t } = useTranslation();
-  const budget = useLoadingBudget(true, LOADING_BUDGET_MS.backupExport, {
-    startedAt: job.startedAt,
-  });
+  const budget = useLoadingBudget(true, job.budgetMs, { startedAt: job.startedAt });
 
   return (
     <div className="space-y-2">
@@ -71,8 +69,8 @@ export function BackupExportProgress({ job, title, onStop }: BackupExportProgres
         <div className="min-w-0 flex-1 space-y-1.5">
           <JobProgressBar
             progress={job.progress}
-            label={t("vault.export.dialog.title")}
-            copy={VAULT_EXPORT_PROGRESS_COPY}
+            label={t("modal.backup.export")}
+            copy={BACKUP_EXPORT_PROGRESS_COPY}
           />
         </div>
         <Button
@@ -82,11 +80,11 @@ export function BackupExportProgress({ job, title, onStop }: BackupExportProgres
           disabled={job.stopping}
           onClick={onStop}
         >
-          {job.stopping ? t("vault.export.dialog.stopping") : t("vault.export.dialog.stop")}
+          {job.stopping ? t("modal.backup.export_stopping") : t("modal.backup.export_stop")}
         </Button>
       </div>
       <p className="text-xs leading-relaxed text-on-surface-variant">
-        {t("vault.export.dialog.background_note")}
+        {t("modal.backup.export_background_note")}
       </p>
       {budget.visible ? (
         <LoadingBudgetHint

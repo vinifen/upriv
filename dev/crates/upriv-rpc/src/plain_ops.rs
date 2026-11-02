@@ -132,8 +132,16 @@ pub(super) fn vault_plain_leftover(params: Value) -> RpcResponse {
     }
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct VaultPlainRemoveParams {
+    id: String,
+    /// Names this wipe for `job_status` and `job_cancel`.
+    job: String,
+}
+
 pub(super) fn vault_plain_remove(params: Value) -> RpcResponse {
-    let parsed: VaultIdParams = match serde_json::from_value(params) {
+    let parsed: VaultPlainRemoveParams = match serde_json::from_value(params) {
         Ok(value) => value,
         Err(error) => return err("invalid_request", error.to_string()),
     };
@@ -141,7 +149,7 @@ pub(super) fn vault_plain_remove(params: Value) -> RpcResponse {
         Ok(root) => root,
         Err(response) => return response,
     };
-    match remove_plain_leftover(&root, parsed.id.trim()) {
+    match remove_plain_leftover(&root, parsed.id.trim(), &parsed.job) {
         Ok(wipe) => ok(serde_json::to_value(wipe).unwrap_or(json!(null))),
         Err(error) => map_core_err(error),
     }

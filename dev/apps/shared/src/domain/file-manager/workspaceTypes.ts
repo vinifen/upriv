@@ -10,14 +10,14 @@ export interface FileDeleteTarget {
   isFolder: boolean;
 }
 
+/**
+ * What the file manager asks before closing its own tabs or itself. Closing the
+ * vault asks from the vault list instead (`VaultClosePrompt`).
+ */
 export type UnsavedPromptAction =
   | { type: "close_tab"; path: string }
   | { type: "close_tabs"; paths: string[] }
   | { type: "dismiss_workspace" }
-  /** Lock / close-all: after save or discard, close the vault. */
-  | { type: "close_vault" }
-  /** Lock while an import is still writing. Cancel continues into close. */
-  | { type: "close_vault_import" }
   | { type: "import_in_progress" };
 
 /** VS Code-style explorer cue: created (green) outranks modified (accent). */

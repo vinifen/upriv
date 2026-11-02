@@ -26,14 +26,14 @@ import {
   buildVaultWelcomeFiles,
   createDraftFromImportPackage,
   createVaultImportPackage,
-  canDeleteVaultNow,
   dataFolderCanExport,
   fileNameOfPath,
   vaultCanSaveBackupNow,
+  vaultDeleteHold,
   vaultRowControls,
+  VAULT_DELETE_HOLD_I18N_KEY,
   displayNameToGroupId,
   resolveVaultDisplayStatus,
-  resolveVaultListStatus,
   mergePendingCreatingGroups,
   mergePendingCreatingVaults,
   pendingCreateGroupId,
@@ -65,7 +65,6 @@ import {
   useBackupExportJob,
   useDataFolderExportJob,
   useFileManagerSelector,
-  useJobProgress,
   useLoadingBudget,
   usePlainExportSweep,
   useVaultBackupJob,
@@ -533,20 +532,6 @@ export function useVaultListScreen() {
   const exportFolders = useVaultExportFolders();
   const backupService = useBackupService();
   const jobs = useJobService();
-  // The Export window follows its vault's export while one runs; progress is asked only then.
-  const shownExportJob =
-    modals.exportJob !== null && modals.exportJob.vaultId === modals.exportVaultId
-      ? modals.exportJob
-      : null;
-  const exportProgress = useJobProgress(jobs, shownExportJob?.id ?? null);
-  const exportRun: VaultExportRun | null = shownExportJob
-    ? {
-        format: shownExportJob.format,
-        startedAt: shownExportJob.startedAt,
-        progress: exportProgress,
-        stopping: shownExportJob.stopping,
-      }
-    : null;
   const [backupListRefresh, setBackupListRefresh] = useState(0);
   const backupJob = useVaultBackupJob(backupService, jobs, {
     onSaved: (vaultId) => {
@@ -626,6 +611,18 @@ export function useVaultListScreen() {
     settingsPersistVaultIdsRef,
     blockOpenVaultIdsRef,
   });
+  // The Export window follows its vault's export while one runs.
+  const shownExportJob =
+    lifecycle.exportJob?.vaultId === modals.exportVaultId ? lifecycle.exportJob : null;
+  const exportRun: VaultExportRun | null = shownExportJob
+    ? {
+        format: shownExportJob.format,
+        startedAt: shownExportJob.startedAt,
+        progress: shownExportJob.progress,
+        stopping: shownExportJob.stopping,
+        budgetMs: shownExportJob.budgetMs,
+      }
+    : null;
 
   const handleSortChange = useCallback(
     (next: VaultListSort) => {
@@ -661,11 +658,24 @@ export function useVaultListScreen() {
       passwordChangeVaultIds: rewrapRun?.kind === "password" ? [rewrapRun.vaultId] : undefined,
       kdfChangeVaultIds: rewrapRun?.kind === "kdf" ? [rewrapRun.vaultId] : undefined,
       rewrapStartedAt: rewrapRun?.startedAt,
+      rewrapBudgetMs: rewrapRun?.budgetMs,
       backupJobVaultIds: backupJob.job ? [backupJob.job.vaultId] : undefined,
       backupJobStartedAt: backupJob.job?.startedAt,
+      backupJobBudgetMs: backupJob.job?.budgetMs,
+      backupExportVaultIds: backupExport.job ? [backupExport.job.vaultId] : undefined,
+      recoveringVaultIds: lifecycle.plainRemoveJob ? [lifecycle.plainRemoveJob.vaultId] : undefined,
+      recoveringStartedAt: lifecycle.plainRemoveJob?.startedAt,
+      recoveringBudgetMs: lifecycle.plainRemoveJob?.budgetMs,
       dataFolderExporting: dataFolderExport.job !== null,
     }),
-    [backupJob.job, dataFolderExport.job, lifecycle.pipelineListStatus, rewrapRun],
+    [
+      backupExport.job,
+      backupJob.job,
+      dataFolderExport.job,
+      lifecycle.pipelineListStatus,
+      lifecycle.plainRemoveJob,
+      rewrapRun,
+    ],
   );
   const dataFolderExportCanStart = dataFolderCanExport(vaults, pipelineListStatus);
   rowControlsRef.current = new Map(
@@ -999,8 +1009,9 @@ export function useVaultListScreen() {
         throw error;
       }
       const target = vaults.find((vault) => vault.id === vaultId);
-      if (!target || !canDeleteVaultNow(resolveVaultListStatus(target, pipelineListStatus))) {
-        showToast(t("modal.settings.delete_only_closed"));
+      const hold = target ? vaultDeleteHold(target, pipelineListStatus) : "busy";
+      if (hold) {
+        showToast(t(VAULT_DELETE_HOLD_I18N_KEY[hold]));
         return;
       }
 
@@ -1337,10 +1348,7 @@ export function useVaultListScreen() {
       onLifecycleConfirm: lifecycle.handleLifecycleConfirm,
       recoveryVault: modals.recoveryVault,
       recoveryOpen: modals.recoveryVaultId !== null,
-      recoverySubmitting: modals.recoverySubmitting,
-      onRecoveryClose: () => {
-        if (!modals.recoverySubmitting) modals.setRecoveryVaultId(null);
-      },
+      onRecoveryClose: () => modals.setRecoveryVaultId(null),
       onRecoveryAction: lifecycle.handleRecoveryAction,
       recoveryLeftover: lifecycle.recoveryLeftover,
       placeOpen: lifecycle.placeOpen,
@@ -1357,19 +1365,20 @@ export function useVaultListScreen() {
       heldSubmitting: lifecycle.heldSubmitting,
       onHeldApply: lifecycle.onHeldApply,
       onHeldRestore: lifecycle.onHeldRestore,
-      closeAllUnsavedOpen: lifecycle.closeAllUnsavedOpen,
-      closeAllUnsavedSaving: lifecycle.closeAllUnsavedSaving,
-      onCloseAllUnsavedCancel: lifecycle.cancelCloseAllUnsaved,
-      onCloseAllUnsavedDiscard: lifecycle.confirmCloseAllDiscard,
-      onCloseAllUnsavedSave: lifecycle.confirmCloseAllSave,
-      onCloseAllUnsavedTimeout: lifecycle.timeoutCloseAllSave,
+      closePrompt: lifecycle.closePrompt,
+      closePromptVaultName: lifecycle.closePromptVaultName,
+      closePromptSaving: lifecycle.closePromptSaving,
+      onClosePromptCancel: lifecycle.cancelClosePrompt,
+      onClosePromptDiscard: lifecycle.confirmClosePromptDiscard,
+      onClosePromptSave: lifecycle.confirmClosePromptSave,
+      onClosePromptSaveTimeout: lifecycle.timeoutClosePromptSave,
+      onClosePromptCancelImport: lifecycle.confirmClosePromptCancelImport,
       closeNowVault: lifecycle.closeNowVault,
       closeNowUnsaved: lifecycle.closeNowUnsaved,
       closeNowAsks: lifecycle.closeNowAsks,
       onCloseNowCancel: lifecycle.cancelCloseNow,
       onCloseNowConfirm: lifecycle.confirmCloseNow,
     },
-    onCloseVaultAfterUnsaved: lifecycle.closeVaultAfterUnsaved,
     toast: {
       toast: toastState,
       onDismiss: dismissToast,
@@ -1389,10 +1398,9 @@ export function useVaultListScreen() {
       canSaveNow:
         modals.backupVault !== null &&
         vaultCanSaveBackupNow(modals.backupVault, pipelineListStatus),
-      saving: backupJob.job !== null && backupJob.job.vaultId === modals.backupVault?.id,
-      saveStartedAt:
+      saveJob:
         backupJob.job !== null && backupJob.job.vaultId === modals.backupVault?.id
-          ? backupJob.job.startedAt
+          ? backupJob.job
           : null,
       onSaveNow: () => {
         const vault = modals.backupVault;
@@ -1432,7 +1440,6 @@ export function useVaultListScreen() {
       onConfirm: lifecycle.handleConfirmExportVault,
       onStop: lifecycle.handleStopExportVault,
       onPasswordEdited: () => modals.setExportPasswordError(null),
-      onTimeout: lifecycle.handleExportTimeout,
     },
     settings: {
       vault: modals.settingsVault,

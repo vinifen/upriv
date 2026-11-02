@@ -2,7 +2,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createElement } from "react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDefaultAppSettings, type AppSettingsConfig } from "@upriv/shared";
+import { createDefaultAppSettings, LOADING_BUDGET_MS, type AppSettingsConfig } from "@upriv/shared";
 import type { DataFolderExportJob } from "@upriv/shared/react";
 import type { DataFolderExportControls } from "@/features/system/data-folder-export";
 import { VaultRootDataFolderModal } from "../VaultRootDataFolderModal";
@@ -49,6 +49,7 @@ const running: DataFolderExportJob = {
   startedAt: Date.now(),
   progress: null,
   stopping: false,
+  budgetMs: LOADING_BUDGET_MS.dataFolderExport,
 };
 
 function show(

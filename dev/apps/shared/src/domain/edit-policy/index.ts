@@ -5,10 +5,12 @@ export {
   appConfigEditAllowed,
   configEditGateAllows,
   vaultConfigEditAllowed,
+  vaultConfigEditHold,
   vaultConfigEditLockedI18nKey,
   requireVaultConfigEditLockedI18nKey,
   type AppConfigEditTarget,
   type ConfigEditContext,
   type ConfigEditGate,
+  type VaultConfigEditHold,
   type VaultConfigEditTarget,
 } from "./policy";

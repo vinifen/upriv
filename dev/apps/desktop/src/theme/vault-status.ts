@@ -18,6 +18,8 @@ export const vaultStatusRowClass = {
     "border-l-2 border-transparent bg-surface-container hover:bg-surface-row-hover [&:has(button:hover)]:bg-surface-container",
   recovery:
     "border-l-2 border-vault-recovery bg-surface-container hover:bg-surface-row-hover [&:has(button:hover)]:bg-surface-container",
+  recovering:
+    "border-l-2 border-vault-closed/60 bg-surface-container opacity-95 hover:bg-surface-row-hover [&:has(button:hover)]:bg-surface-container",
   closing:
     "border-l-2 border-vault-closed/60 bg-surface-container opacity-95 hover:bg-surface-row-hover [&:has(button:hover)]:bg-surface-container",
   opening:
@@ -41,6 +43,7 @@ export const vaultStatusBadgeClass = {
   open: "bg-[var(--vault-open-badge-bg)] text-vault-open",
   closed: "bg-surface-container-highest text-on-surface-variant",
   recovery: "bg-[var(--vault-recovery-badge-bg)] text-vault-recovery",
+  recovering: "bg-surface-container-highest text-on-surface-variant animate-pulse",
   closing: "bg-surface-container-highest text-on-surface-variant animate-pulse",
   opening: "bg-surface-container-highest text-on-surface-variant animate-pulse",
   creating: "bg-surface-container-highest text-on-surface-variant animate-pulse",
@@ -56,6 +59,7 @@ export const vaultStatusIconClass = {
   open: "bg-[var(--vault-open-icon-bg)] text-vault-open",
   closed: "bg-surface-container-highest text-on-surface-variant",
   recovery: "bg-[var(--vault-recovery-icon-bg)] text-vault-recovery",
+  recovering: "bg-surface-container-highest text-on-surface-variant",
   closing: "bg-surface-container-highest text-on-surface-variant",
   opening: "bg-surface-container-highest text-on-surface-variant",
   creating: "bg-surface-container-highest text-on-surface-variant",

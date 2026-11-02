@@ -51,6 +51,8 @@ export const VAULT_ERROR_CODES = {
   REWRAP_KDF_UNCHANGED: "rewrap_kdf_unchanged",
   /** A vault export or the data-folder export chose a folder inside a `.upriv`. */
   EXPORT_DESTINATION_RESERVED: "export_destination_reserved",
+  /** Delete or pin of a backup a backup export is reading. */
+  BACKUP_EXPORTING: "backup_exporting",
 } as const;
 
 export type VaultErrorCode = (typeof VAULT_ERROR_CODES)[keyof typeof VAULT_ERROR_CODES];

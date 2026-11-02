@@ -53,13 +53,13 @@ pub use paths::{
 pub use runtime_state::{dirty_close_ids, sweep_stale_mount_leaves};
 pub use session::{
     cancel_job, is_data_folder_export_running, is_unlock_in_flight, job_status, open_session_ids,
-    stop_all_jobs, vault_activity_blocks_root_switch, ClosePhase, JobStatus,
+    stop_all_jobs, vault_activity_blocks_root_switch, ClosePhase, CloseProgress, JobStatus,
 };
 pub use store::{KdfUnlockPreset, FORMAT_VERSION as STORE_FORMAT_VERSION};
 pub use time::{utc_filename_stamp, utc_timestamp_iso_millis, utc_ymdhms};
 pub use vault::{
     abort_import_vault, backup_zip_file, change_vault_kdf, change_vault_password, close_all_vaults,
-    close_all_vaults_now, close_phase, close_vault, close_vault_auto, close_vault_now,
+    close_all_vaults_now, close_progress, close_vault, close_vault_auto, close_vault_now,
     confirm_plain_destination, create_vault, create_vault_with_welcome, delete_backups,
     delete_vault, export_backups, export_data_folder, export_logical_seven_zip, export_plain_zip,
     export_store_zip, fs_create_file, fs_create_folder, fs_delete, fs_ensure_folder,

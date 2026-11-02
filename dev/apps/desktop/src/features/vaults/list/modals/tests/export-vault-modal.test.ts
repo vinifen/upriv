@@ -2,7 +2,12 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { createElement } from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import type { VaultExportRequest, VaultExportRun, VaultListItem } from "@upriv/shared";
+import {
+  LOADING_BUDGET_MS,
+  type VaultExportRequest,
+  type VaultExportRun,
+  type VaultListItem,
+} from "@upriv/shared";
 import { useVaultExportFolders } from "../../hooks/useVaultExportFolders";
 import { ExportVaultModal } from "../ExportVaultModal";
 
@@ -266,6 +271,7 @@ describe("ExportVaultModal", () => {
         format: "seven_zip",
         startedAt: Date.now(),
         progress: { bytesDone: 512, bytesTotal: 2048 },
+        budgetMs: LOADING_BUDGET_MS.vaultExport,
       },
     });
     await capabilitiesLoaded();
@@ -363,7 +369,12 @@ describe("ExportVaultModal", () => {
 
   it("stops a running export once, then waits for it to settle", async () => {
     const onStop = vi.fn();
-    const running = { format: "store_zip" as const, startedAt: Date.now(), progress: null };
+    const running = {
+      format: "store_zip" as const,
+      startedAt: Date.now(),
+      progress: null,
+      budgetMs: LOADING_BUDGET_MS.vaultExport,
+    };
     const { rerender } = render(createElement(Harness, { onConfirm: vi.fn(), onStop, running }));
     await capabilitiesLoaded();
 
@@ -382,7 +393,14 @@ describe("ExportVaultModal", () => {
   });
 
   it("shows a running .zip export in the .zip option", async () => {
-    show({ running: { format: "store_zip", startedAt: Date.now(), progress: null } });
+    show({
+      running: {
+        format: "store_zip",
+        startedAt: Date.now(),
+        progress: null,
+        budgetMs: LOADING_BUDGET_MS.vaultExport,
+      },
+    });
     await capabilitiesLoaded();
 
     expect(radio(ZIP_TITLE).checked).toBe(true);

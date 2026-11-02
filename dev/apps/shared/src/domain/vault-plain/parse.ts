@@ -8,6 +8,7 @@ import type {
   PlainLeftover,
   PlainPlace,
   PlainRecoveryOffers,
+  PlainWipe,
 } from "./types";
 
 const FOLDER_CLASSES = new Set<PlainFolderClass>(["local", "removable", "network", "cloud"]);
@@ -64,6 +65,11 @@ export function parsePlainLeftover(raw: unknown): PlainLeftover | null {
   };
 }
 
+export function parsePlainWipe(raw: unknown): PlainWipe {
+  const body = record(raw);
+  return { wiped: finite(body?.wiped), kept: finite(body?.kept) };
+}
+
 export function parsePlainCloseSummary(raw: unknown): PlainCloseSummary | null {
   const body = record(raw);
   if (!body) return null;
@@ -74,6 +80,7 @@ export function parsePlainCloseSummary(raw: unknown): PlainCloseSummary | null {
     heldDeletions: finite(body.heldDeletions),
     removed: finite(body.removed),
     kept: finite(body.kept),
+    leftover: body.leftover === true,
     totals: {
       added: finite(totals.added),
       changed: finite(totals.changed),

@@ -19,6 +19,7 @@ import {
   type VaultFileSystemService,
   type VaultListItem,
   type VaultWorkspaceAction,
+  type VaultWorkspaceState,
 } from "@upriv/shared";
 
 /**
@@ -34,10 +35,17 @@ export interface FileManagerController {
   openFromVault: (vault: VaultListItem) => void;
   minimize: (vaultId: string) => void;
   maximize: (vaultId: string) => void;
-  /** Hide file-manager UI; vault stays open on the list. */
+  /** Hide file-manager UI and write its layout; vault stays open on the list. */
   dismiss: (vaultId: string) => void;
-  /** Flush layout into the open session. Await this before `vault_close`. */
+  /**
+   * Flush layout into the open session: the file manager's own, or the write
+   * a dismiss started. Await this before `vault_close`.
+   */
   flushWorkspaceSnapshot: (vaultId: string) => Promise<void>;
+  /** Stop storing the files still waiting in this vault's import; the file being written lands. */
+  cancelImports: (vaultId: string) => void;
+  /** The file manager of `vaultId` answers `cancelImports`. Returns the call that stops answering. */
+  handleImportCancel: (vaultId: string, cancel: () => void) => () => void;
   /** Vault closed/deleted — tear down in-memory file session (do not write). */
   purgeForVaultClose: (vaultId: string) => void;
   /** Drop file-manager tabs for vaults that are gone or no longer open. */
@@ -56,9 +64,25 @@ export function FileManagerProvider({
   children: ReactNode;
 }) {
   const [store] = useState(() => createFileManagerStore());
+  /** Layout writes by vault, so a close right after a dismiss waits for its write. */
+  const [layoutWrites] = useState(() => new Map<string, Promise<void>>());
+  const [importCancels] = useState(() => new Map<string, () => void>());
 
   const controller = useMemo<FileManagerController>(() => {
     const getEntry = (vaultId: string) => store.getState().entries[vaultId] ?? null;
+    const writeLayout = (vaultId: string, workspace: VaultWorkspaceState): Promise<void> => {
+      const write = persistWorkspaceSnapshot(fs, vaultId, workspace).then(
+        () => undefined,
+        () => {
+          // Close must still run. Layout is also written while open, once edits pause.
+        },
+      );
+      layoutWrites.set(vaultId, write);
+      void write.finally(() => {
+        if (layoutWrites.get(vaultId) === write) layoutWrites.delete(vaultId);
+      });
+      return write;
+    };
     return {
       getState: store.getState,
       getEntry,
@@ -69,21 +93,21 @@ export function FileManagerProvider({
       maximize: (vaultId) => store.dispatch({ type: "maximize", vaultId }),
       dismiss(vaultId) {
         const entry = getEntry(vaultId);
-        if (entry) {
-          void persistWorkspaceSnapshot(fs, vaultId, entry.workspace).catch(() => {
-            /* Best-effort: the workspace also writes its layout as it unmounts. */
-          });
-        }
+        if (entry) void writeLayout(vaultId, entry.workspace);
         store.dispatch({ type: "dismiss", vaultId });
       },
       async flushWorkspaceSnapshot(vaultId) {
         const entry = getEntry(vaultId);
-        if (!entry) return;
-        try {
-          await persistWorkspaceSnapshot(fs, vaultId, entry.workspace);
-        } catch {
-          // Close must still run. Layout is also written while open, once edits pause.
-        }
+        await (entry ? writeLayout(vaultId, entry.workspace) : layoutWrites.get(vaultId));
+      },
+      cancelImports(vaultId) {
+        importCancels.get(vaultId)?.();
+      },
+      handleImportCancel(vaultId, cancel) {
+        importCancels.set(vaultId, cancel);
+        return () => {
+          if (importCancels.get(vaultId) === cancel) importCancels.delete(vaultId);
+        };
       },
       purgeForVaultClose(vaultId) {
         fs.resetSession(vaultId);

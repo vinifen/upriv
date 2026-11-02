@@ -8,3 +8,10 @@ export {
   loadingBudgetSeconds,
   loadingBudgetUsesMinutes,
 } from "./budget";
+export {
+  SIZED_BUDGET_CEILING_MS,
+  SIZED_WORK,
+  SLOW_DISK_BYTES_PER_SECOND,
+  sizedBudgetMs,
+  type SizedWorkKind,
+} from "./sizedBudget";

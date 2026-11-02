@@ -1,9 +1,9 @@
 import { Pressable, StyleSheet, View } from "react-native";
 import type { MarkdownViewMode } from "@upriv/shared";
-import { Icon } from "@/components/icons";
+import { Icon, type IconName } from "@/components/icons";
 import { useTranslation } from "@/i18n";
 import { useTheme } from "@/theme";
-import { colorAlpha, radii } from "@/theme/tokens";
+import { radii } from "@/theme/tokens";
 
 interface MarkdownViewToggleProps {
   mode: MarkdownViewMode;
@@ -13,8 +13,6 @@ interface MarkdownViewToggleProps {
 /** Vault-wide Code / Read control. The choice is stored on the workspace file. */
 export function MarkdownViewToggle({ mode, onChange }: MarkdownViewToggleProps) {
   const { t } = useTranslation();
-  const { colors } = useTheme();
-
   const isPreview = mode === "preview";
   const nextMode: MarkdownViewMode = isPreview ? "source" : "preview";
 
@@ -23,44 +21,28 @@ export function MarkdownViewToggle({ mode, onChange }: MarkdownViewToggleProps) 
       accessibilityRole="button"
       accessibilityLabel={t("modal.file_manager.markdown.view")}
       accessibilityState={{ selected: isPreview }}
+      hitSlop={6}
       onPress={() => onChange(nextMode)}
+      style={({ pressed }) => [styles.bar, { opacity: pressed ? 0.7 : 1 }]}
+    >
+      <Segment icon="code" active={mode === "source"} />
+      <Segment icon="eye" active={isPreview} />
+    </Pressable>
+  );
+}
+
+/** Same fills as the outline toggle beside it. */
+function Segment({ icon, active }: { icon: IconName; active: boolean }) {
+  const { colors } = useTheme();
+  return (
+    <View
       style={[
-        styles.bar,
-        {
-          borderColor: colors.outlineVariant,
-          backgroundColor: colors.surfaceContainerHighest + "4D",
-        },
+        styles.option,
+        { backgroundColor: active ? colors.surfaceContainerHighest : "transparent" },
       ]}
     >
-      <View
-        style={[
-          styles.option,
-          {
-            backgroundColor: mode === "source" ? colors.surfaceContainerHighest : "transparent",
-          },
-        ]}
-      >
-        <Icon
-          name="code"
-          size={13}
-          color={mode === "source" ? colors.onSurface : colorAlpha(colors.onSurfaceVariant, 0.5)}
-        />
-      </View>
-      <View
-        style={[
-          styles.option,
-          {
-            backgroundColor: mode === "preview" ? colors.surfaceContainerHighest : "transparent",
-          },
-        ]}
-      >
-        <Icon
-          name="eye"
-          size={13}
-          color={mode === "preview" ? colors.onSurface : colorAlpha(colors.onSurfaceVariant, 0.5)}
-        />
-      </View>
-    </Pressable>
+      <Icon name={icon} size={13} color={active ? colors.onSurface : colors.onSurfaceVariant} />
+    </View>
   );
 }
 
@@ -70,7 +52,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     height: 24,
     borderRadius: radii.full,
-    borderWidth: 1,
     padding: 2,
     gap: 2,
   },

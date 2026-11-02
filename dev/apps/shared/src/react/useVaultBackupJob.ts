@@ -1,15 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { LOADING_BUDGET_MS, isRpcTimeout, newJobId, type VaultBackupEntry } from "../domain";
+import { useCallback } from "react";
+import type { VaultBackupEntry } from "../domain";
 import type { BackupService, JobService } from "../services";
-import { useLoadingBudget } from "./useLoadingBudget";
+import { useCoreJob, type CoreJob } from "./useCoreJob";
 
 /** One Back up now in flight. */
-export interface VaultBackupJob {
-  /** The job id its request carries (`job_cancel`). */
-  id: string;
-  vaultId: string;
-  startedAt: number;
-}
+export type VaultBackupJob = CoreJob<{ vaultId: string }>;
 
 export interface VaultBackupJobEvents {
   onSaved: (vaultId: string, entry: VaultBackupEntry) => void;
@@ -24,77 +19,32 @@ export interface VaultBackupJobEvents {
 /**
  * Back up now, owned by the vault list so it keeps running when the Backups
  * modal closes. One vault at a time, like export. While `job` is set the list
- * shows that vault as `backing_up` and refuses to open it.
+ * shows that vault as `backing_up` and refuses to open it. Its budget grows
+ * with the size of `store/` (`sizedBudgetMs("vaultBackupSave")`).
  */
 export function useVaultBackupJob(
   backupService: BackupService,
   jobs: JobService,
   events: VaultBackupJobEvents,
 ) {
-  const [job, setJob] = useState<VaultBackupJob | null>(null);
-  const jobRef = useRef(job);
-  const genRef = useRef(0);
-  const eventsRef = useRef(events);
-  eventsRef.current = events;
-  const budget = useLoadingBudget(job !== null, LOADING_BUDGET_MS.vaultBackupSave, {
-    startedAt: job?.startedAt,
-  });
-
-  const finish = useCallback(() => {
-    jobRef.current = null;
-    setJob(null);
-  }, []);
-
-  /** Tell core to stop `id` after a timeout. Its result is ignored. */
-  const stopInCore = useCallback(
-    (id: string) => {
-      void jobs.cancel(id, "timeout").catch(() => {
-        /* The save result is ignored either way. */
-      });
+  const { job, start: startJob } = useCoreJob<{ vaultId: string }, VaultBackupEntry>(
+    jobs,
+    "vaultBackupSave",
+    {
+      onDone: (entry, { vaultId }) => events.onSaved(vaultId, entry),
+      onFailed: (error, { vaultId }) => events.onFailed(vaultId, error),
+      // Nobody stops a save by hand: a stop comes from quitting, or from its
+      // own timeout, which `onTimedOut` already reported.
+      onCancelled: () => undefined,
+      onTimedOut: ({ vaultId }) => events.onTimedOut(vaultId),
     },
-    [jobs],
   );
 
   /** Start a backup of `vaultId`. False while another backup is running. */
   const start = useCallback(
-    (vaultId: string): boolean => {
-      if (jobRef.current) return false;
-      const gen = ++genRef.current;
-      const next = { id: newJobId(), vaultId, startedAt: Date.now() };
-      jobRef.current = next;
-      setJob(next);
-      void backupService
-        .saveNow(vaultId, next.id)
-        .then(
-          (entry) => {
-            if (gen === genRef.current) eventsRef.current.onSaved(vaultId, entry);
-          },
-          (error: unknown) => {
-            if (gen !== genRef.current) return;
-            if (isRpcTimeout(error)) {
-              // The call gave up before the budget did; core still writes the zip.
-              stopInCore(next.id);
-              eventsRef.current.onTimedOut(vaultId);
-            } else {
-              eventsRef.current.onFailed(vaultId, error);
-            }
-          },
-        )
-        .finally(() => {
-          if (gen === genRef.current) finish();
-        });
-      return true;
-    },
-    [backupService, finish, stopInCore],
+    (vaultId: string): boolean => startJob({ vaultId }, (id) => backupService.saveNow(vaultId, id)),
+    [backupService, startJob],
   );
-
-  useEffect(() => {
-    if (!budget.timedOut || !job) return;
-    genRef.current += 1;
-    finish();
-    stopInCore(job.id);
-    eventsRef.current.onTimedOut(job.vaultId);
-  }, [budget.timedOut, finish, job, stopInCore]);
 
   return { job, start };
 }

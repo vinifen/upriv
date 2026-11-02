@@ -1,4 +1,4 @@
-export type { VaultListItem } from "./types";
+export type { VaultListItem, VaultRuntimePatch } from "./types";
 export { parseVaultListItemWire, parseVaultListResult } from "./parse";
 export type {
   GroupedVaultSort,

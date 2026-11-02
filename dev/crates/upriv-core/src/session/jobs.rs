@@ -120,6 +120,12 @@ impl Job {
         }
     }
 
+    /// A read-only view of this job's progress for a registry that reports it
+    /// while the job runs elsewhere: the backup a close writes.
+    pub(crate) fn gauge(&self) -> JobGauge {
+        JobGauge(Arc::clone(&self.state))
+    }
+
     pub(crate) fn set_total(&self, bytes: u64) {
         self.state.bytes_total.store(bytes, Ordering::Relaxed);
     }
@@ -227,17 +233,30 @@ pub fn job_status(id: &str) -> Option<JobStatus> {
 
 fn status_in(registry: Registry, id: &str) -> Option<JobStatus> {
     let jobs = lock(registry).ok()?;
-    let state = jobs.running.get(id)?;
+    Some(status_of(jobs.running.get(id)?))
+}
+
+fn status_of(state: &JobState) -> JobStatus {
     let bytes_total = state.bytes_total.load(Ordering::Relaxed);
     let bytes_done = state.bytes_done.load(Ordering::Relaxed);
-    Some(JobStatus {
+    JobStatus {
         bytes_done: if bytes_total > 0 {
             bytes_done.min(bytes_total)
         } else {
             bytes_done
         },
         bytes_total,
-    })
+    }
+}
+
+/// Reads a job's progress from outside it ([`Job::gauge`]).
+#[derive(Clone)]
+pub(crate) struct JobGauge(Arc<JobState>);
+
+impl JobGauge {
+    pub(crate) fn status(&self) -> JobStatus {
+        status_of(&self.0)
+    }
 }
 
 /// Ask the job `id` to stop. True when it was running. Otherwise the stop is

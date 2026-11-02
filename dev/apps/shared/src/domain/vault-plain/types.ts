@@ -25,12 +25,20 @@ export interface PlainLeftover {
   bytes: number;
 }
 
+/** `vault_plain_remove`. `kept` files could not be wiped: the vault stays in recovery. */
+export interface PlainWipe {
+  wiped: number;
+  kept: number;
+}
+
 export interface PlainCloseSummary {
   saved: number;
   conflicts: number;
   heldDeletions: number;
   removed: number;
   kept: number;
+  /** The kept files stay in this vault's folder: the row has a leftover to remove. */
+  leftover: boolean;
   totals: { added: number; changed: number; removed: number };
   backupPinned: boolean;
 }

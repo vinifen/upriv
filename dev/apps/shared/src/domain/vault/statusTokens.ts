@@ -1,11 +1,12 @@
 import type { I18nKey } from "../../i18n/catalog";
-import type { VaultDisplayStatus, VaultPipelineListStatus } from "../vault/types";
+import type { VaultDeleteHold, VaultDisplayStatus, VaultPipelineListStatus } from "../vault/types";
 
 /** CSS custom property names — single source for vault row/dot colors (SDD §8.2). */
 export const vaultStatusColorVar = {
   open: "--vault-status-open",
   closed: "--vault-status-closed",
   recovery: "--vault-status-recovery",
+  recovering: "--vault-status-closed",
   closing: "--vault-status-closed",
   opening: "--vault-status-closed",
   creating: "--vault-status-closed",
@@ -21,6 +22,7 @@ export const vaultStatusI18nKey = {
   open: "vault.status.open",
   closed: "vault.status.closed",
   recovery: "vault.status.recovery",
+  recovering: "vault.status.recovering",
   closing: "vault.status.closing",
   opening: "vault.status.opening",
   creating: "vault.status.creating",
@@ -30,6 +32,12 @@ export const vaultStatusI18nKey = {
   changing_password: "vault.status.changing_password",
   changing_kdf: "vault.status.changing_kdf",
 } as const satisfies Record<VaultDisplayStatus, string>;
+
+/** Why Delete waits (`vaultDeleteHold`): the danger zone line and its toast. */
+export const VAULT_DELETE_HOLD_I18N_KEY = {
+  busy: "modal.settings.delete_only_closed",
+  backup_export: "modal.settings.delete_backup_export",
+} as const satisfies Record<VaultDeleteHold, I18nKey>;
 
 /** Row / badge / Info label. A closing vault in its backup phase says so. */
 export function vaultStatusLabelKey(
@@ -43,14 +51,4 @@ export function vaultStatusLabelKey(
   }
   if (status === "closed" && autoClosed) return "vault.status.auto_closed";
   return vaultStatusI18nKey[status];
-}
-
-/** File-manager chrome while this vault is closing. `null` when it is not. */
-export function vaultCloseActivityLabelKey(
-  vaultId: string,
-  pipeline: VaultPipelineListStatus = {},
-): I18nKey | null {
-  if (!pipeline.closingVaultIds?.includes(vaultId)) return null;
-  if (pipeline.backingUpVaultIds?.includes(vaultId)) return "vault.status.backing_up";
-  return "vault.status.closing";
 }

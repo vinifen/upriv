@@ -4,14 +4,12 @@ import {
   isVaultBlockingWorkspaceClear,
   isVaultFileManagerEligible,
   isVaultFileManagerRetained,
-  canDeleteVaultNow,
   isVaultListClosed,
   isVaultPipelineDisplayBusy,
   isVaultOpenCredentialResumeStatus,
   isVaultOpenResumeTarget,
   vaultCloseNowOffered,
   isVaultCloseQueued,
-  isVaultCloseWritesLocked,
   isVaultListRowActivatable,
   isVaultListRowUnlockTarget,
   listHasVaultBlockingDataFolderChange,
@@ -19,6 +17,7 @@ import {
   pipelineActiveStartedAt,
   resolveVaultDisplayStatus,
   resolveVaultListStatus,
+  vaultDeleteHold,
   vaultPipelineRowBudget,
   vaultStatusLabelKey,
 } from "..";
@@ -63,13 +62,6 @@ describe("resolveVaultListStatus", () => {
     expect(isVaultListClosed(row, { queuedVaultIds: ["a"] })).toBe(false);
     expect(isVaultListClosed(row)).toBe(true);
     expect(isVaultListClosed(vaultRowFixture({ id: "a", session: "open" }))).toBe(false);
-    expect(canDeleteVaultNow("closed")).toBe(true);
-    expect(canDeleteVaultNow("recovery")).toBe(true);
-    expect(canDeleteVaultNow("open")).toBe(false);
-    expect(canDeleteVaultNow("opening")).toBe(false);
-    expect(canDeleteVaultNow("closing")).toBe(false);
-    expect(canDeleteVaultNow("creating")).toBe(false);
-    expect(canDeleteVaultNow("queued")).toBe(false);
   });
 
   it("prefers active opening over queued for the same id", () => {
@@ -108,13 +100,6 @@ describe("resolveVaultListStatus", () => {
       false,
     );
     expect(isVaultCloseQueued("a", {})).toBe(false);
-    expect(isVaultCloseWritesLocked("a", { queuedVaultIds: ["a"], queuedOpenVaultIds: [] })).toBe(
-      true,
-    );
-    expect(isVaultCloseWritesLocked("a", { closingVaultIds: ["a"] })).toBe(true);
-    expect(
-      isVaultCloseWritesLocked("a", { queuedVaultIds: ["a"], queuedOpenVaultIds: ["a"] }),
-    ).toBe(false);
     expect(isVaultListRowActivatable("queued")).toBe(true);
     expect(isVaultListRowUnlockTarget("opening")).toBe(true);
     expect(isVaultListRowUnlockTarget("open")).toBe(false);
@@ -139,8 +124,62 @@ describe("resolveVaultListStatus", () => {
     expect(isVaultPipelineDisplayBusy("exporting")).toBe(true);
     expect(isVaultPipelineDisplayBusy("changing_password")).toBe(true);
     expect(isVaultPipelineDisplayBusy("changing_kdf")).toBe(true);
-    expect(canDeleteVaultNow("exporting")).toBe(false);
     expect(isVaultListClosed(row, { exportingVaultIds: ["a"] })).toBe(false);
+  });
+});
+
+describe("a leftover folder being removed", () => {
+  const row = vaultRowFixture({ id: "a", session: "recovery" });
+  const wiping = { recoveringVaultIds: ["a"], recoveringStartedAt: 5, recoveringBudgetMs: 9_000 };
+
+  it("displays as recovering and leaves the other vaults alone", () => {
+    expect(resolveVaultListStatus(row, wiping)).toBe("recovering");
+    expect(resolveVaultListStatus(vaultRowFixture({ id: "b" }), wiping)).toBe("closed");
+    expect(resolveVaultListStatus(row)).toBe("recovery");
+  });
+
+  it("is work in flight: the row cannot be opened and the vault cannot be deleted", () => {
+    expect(isVaultPipelineDisplayBusy("recovering")).toBe(true);
+    expect(isVaultListRowActivatable("recovering")).toBe(false);
+    expect(isVaultListRowUnlockTarget("recovering")).toBe(false);
+    expect(vaultDeleteHold(row, wiping)).toBe("busy");
+  });
+
+  it("shows the clock and the budget of the wipe on the row", () => {
+    expect(vaultPipelineRowBudget("recovering", wiping, "a")).toEqual({
+      active: true,
+      budgetMs: 9_000,
+      startedAt: 5,
+    });
+    expect(vaultPipelineRowBudget("recovering", {}, "a").active).toBe(false);
+  });
+});
+
+describe("vaultDeleteHold", () => {
+  const closed = vaultRowFixture({ id: "a" });
+
+  it("lets a closed vault or one in recovery start a delete", () => {
+    expect(vaultDeleteHold(closed)).toBeNull();
+    expect(vaultDeleteHold(vaultRowFixture({ id: "a", session: "recovery" }))).toBeNull();
+  });
+
+  it("waits while the vault is open or has work in flight", () => {
+    expect(vaultDeleteHold(vaultRowFixture({ id: "a", session: "open" }))).toBe("busy");
+    expect(vaultDeleteHold(vaultRowFixture({ id: "a", session: "closing" }))).toBe("busy");
+    for (const pipeline of [
+      { openingVaultIds: ["a"] },
+      { creatingVaultIds: ["a"] },
+      { queuedVaultIds: ["a"] },
+      { exportingVaultIds: ["a"] },
+    ]) {
+      expect(vaultDeleteHold(closed, pipeline)).toBe("busy");
+    }
+  });
+
+  it("waits while a backup export copies this vault's backups, and only this vault", () => {
+    expect(vaultDeleteHold(closed, { backupExportVaultIds: ["a"] })).toBe("backup_export");
+    expect(vaultDeleteHold(closed, { backupExportVaultIds: ["b"] })).toBeNull();
+    expect(resolveVaultListStatus(closed, { backupExportVaultIds: ["a"] })).toBe("closed");
   });
 });
 
@@ -233,6 +272,20 @@ describe("vaultPipelineRowBudget", () => {
       startedAt: 12,
     });
     expect(vaultPipelineRowBudget("backing_up", {}, "a").active).toBe(false);
+  });
+
+  it("shows the budget the work was sized to", () => {
+    const sized = 3 * LOADING_BUDGET_MS.vaultRewrap;
+    expect(
+      vaultPipelineRowBudget("changing_kdf", { rewrapStartedAt: 5, rewrapBudgetMs: sized }, "a"),
+    ).toEqual({ active: true, budgetMs: sized, startedAt: 5 });
+    expect(
+      vaultPipelineRowBudget(
+        "backing_up",
+        { backupJobStartedAt: 7, backupJobBudgetMs: sized },
+        "a",
+      ),
+    ).toEqual({ active: true, budgetMs: sized, startedAt: 7 });
   });
 });
 

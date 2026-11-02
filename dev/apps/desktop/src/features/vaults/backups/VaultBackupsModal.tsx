@@ -26,6 +26,7 @@ import {
   useLoadingBudget,
   useVaultBackups,
   type BackupExportJob,
+  type VaultBackupJob,
 } from "@upriv/shared/react";
 import { BackupExportFolderStep, BackupExportProgress } from "./BackupExportPanel";
 
@@ -37,9 +38,8 @@ interface VaultBackupsModalProps {
   open: boolean;
   /** Back up now runs only while this vault is closed and idle (`vaultCanSaveBackupNow`). */
   canSaveNow: boolean;
-  /** This vault's list-owned Back up now is in flight. Survives closing the modal. */
-  saving: boolean;
-  saveStartedAt: number | null;
+  /** This vault's list-owned Back up now in flight. Survives closing the modal. */
+  saveJob: VaultBackupJob | null;
   onSaveNow: () => void;
   /** Bumped when that job finishes so the open list reloads. */
   listRefreshToken: number;
@@ -61,8 +61,7 @@ export function VaultBackupsModal({
   vault,
   open,
   canSaveNow,
-  saving,
-  saveStartedAt,
+  saveJob,
   onSaveNow,
   listRefreshToken,
   onClose,
@@ -83,9 +82,12 @@ export function VaultBackupsModal({
     open,
     listRefreshToken,
   );
-  const saveBudget = useLoadingBudget(saving, LOADING_BUDGET_MS.vaultBackupSave, {
-    startedAt: saveStartedAt ?? undefined,
-  });
+  const saving = saveJob !== null;
+  const saveBudget = useLoadingBudget(
+    saving,
+    saveJob?.budgetMs ?? LOADING_BUDGET_MS.vaultBackupSave,
+    { startedAt: saveJob?.startedAt },
+  );
 
   const savedBackups = useMemo(() => backups.filter((entry) => entry.saved), [backups]);
   const standardBackups = useMemo(() => backups.filter((entry) => !entry.saved), [backups]);

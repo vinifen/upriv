@@ -147,7 +147,6 @@ interface ExportVaultModalProps {
   onStop: () => void;
   /** The password changed, so its refusal no longer applies. */
   onPasswordEdited?: () => void;
-  onTimeout?: () => void;
   onSettingsLoadError?: (error: unknown) => void;
 }
 
@@ -161,7 +160,6 @@ export function ExportVaultModal({
   onConfirm,
   onStop,
   onPasswordEdited,
-  onTimeout,
   onSettingsLoadError,
 }: ExportVaultModalProps) {
   const { t } = useTranslation();
@@ -183,7 +181,8 @@ export function ExportVaultModal({
   // the window must not start over when the list re-renders (a folder pick).
   const onSettingsLoadErrorRef = useRef(onSettingsLoadError);
   onSettingsLoadErrorRef.current = onSettingsLoadError;
-  const budget = useLoadingBudget(exporting, LOADING_BUDGET_MS.vaultExport, {
+  // The list owns the export and ends it on timeout; the window only shows the budget.
+  const budget = useLoadingBudget(exporting, running?.budgetMs ?? LOADING_BUDGET_MS.vaultExport, {
     startedAt: running?.startedAt,
   });
   const { cancelPick: cancelZipPick } = folders.store_zip;
@@ -242,11 +241,6 @@ export function ExportVaultModal({
     cancelSevenZipPick();
     cancelPlainPick();
   }, [cancelPlainPick, cancelSevenZipPick, cancelZipPick, open]);
-
-  useEffect(() => {
-    if (!budget.timedOut || !exporting) return;
-    onTimeout?.();
-  }, [budget.timedOut, exporting, onTimeout]);
 
   useEffect(() => {
     if (focusPasswordRef.current !== chosenFormat) return;

@@ -1,7 +1,6 @@
 import type {
   CreateVaultDraft,
   CreateVaultStepId,
-  VaultExportFormat,
   VaultGroup,
   VaultLifecycleRequest,
   VaultListItem,
@@ -62,32 +61,12 @@ export interface VaultListModalsHandle {
   recoveryVaultId: string | null;
   setRecoveryVaultId: (id: string | null) => void;
   recoveryVault: VaultListItem | null;
-  recoverySubmitting: boolean;
-  setRecoverySubmitting: (submitting: boolean) => void;
   exportVaultId: string | null;
   setExportVaultId: (id: string | null) => void;
   exportVault: VaultListItem | null;
-  /** The export still writing, even if its window is hidden. */
-  exportJob: VaultExportJob | null;
-  /** Vault of that export. */
-  exportJobVaultId: string | null;
-  setExportJob: (
-    job: VaultExportJob | null | ((current: VaultExportJob | null) => VaultExportJob | null),
-  ) => void;
   /** The password a `.7z` export of this vault was refused with, shown on its field. */
   exportPasswordError: VaultExportPasswordError | null;
   setExportPasswordError: (error: VaultExportPasswordError | null) => void;
-}
-
-/** The vault export in flight. */
-export interface VaultExportJob {
-  /** Its job id (`job_status`, `job_cancel`). */
-  id: string;
-  vaultId: string;
-  format: VaultExportFormat;
-  startedAt: number;
-  /** Stop export was pressed; the export call has not settled yet. */
-  stopping?: boolean;
 }
 
 /** A `.7z` export refused its password: wrong, or the unlock limit. */
@@ -104,12 +83,9 @@ export type VaultListLifecycleModals = Pick<
   | "lifecycleVault"
   | "setRecoveryVaultId"
   | "recoveryVaultId"
-  | "setRecoverySubmitting"
   | "exportVaultId"
   | "setExportVaultId"
   | "exportVault"
-  | "exportJobVaultId"
-  | "setExportJob"
   | "setExportPasswordError"
   | "setCreateVaultOpen"
   | "setCreateVaultInitialDraft"

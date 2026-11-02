@@ -6,6 +6,7 @@ export {
   parsePlainDestination,
   parsePlainHeldStatus,
   parsePlainLeftover,
+  parsePlainWipe,
   plainFolderClassI18nKey,
   plainRecoveryOffers,
 } from "./parse";
@@ -17,4 +18,5 @@ export {
   type PlainHeldStatus,
   type PlainLeftover,
   type PlainRecoveryAction,
+  type PlainWipe,
 } from "./types";

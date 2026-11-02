@@ -1,6 +1,7 @@
-import { Text, View } from "react-native";
+import { Animated, Text } from "react-native";
 import type { VaultDisplayStatus } from "@upriv/shared";
-import { vaultStatusI18nKey } from "@upriv/shared";
+import { isVaultPipelineDisplayBusy, vaultStatusI18nKey } from "@upriv/shared";
+import { usePulseOpacity } from "@/hooks/usePulseOpacity";
 import { useTranslation, type I18nKey } from "@/i18n";
 import { useTheme } from "@/theme";
 import { radii } from "@/theme/tokens";
@@ -12,14 +13,15 @@ interface VaultStatusBadgeProps {
   labelKey?: I18nKey;
 }
 
-/** Uppercase mono chip — desktop `VaultStatusBadge`. */
+/** Uppercase mono chip — desktop `VaultStatusBadge`. Work in flight pulses. */
 export function VaultStatusBadge({ status, labelKey }: VaultStatusBadgeProps) {
   const { t } = useTranslation();
   const { colors } = useTheme();
   const tone = vaultStatusBadgeColors(status, colors);
+  const pulse = usePulseOpacity(isVaultPipelineDisplayBusy(status));
 
   return (
-    <View
+    <Animated.View
       style={{
         alignSelf: "flex-start",
         backgroundColor: tone.background,
@@ -27,6 +29,7 @@ export function VaultStatusBadge({ status, labelKey }: VaultStatusBadgeProps) {
         paddingHorizontal: 8,
         paddingVertical: 2,
         flexShrink: 0,
+        opacity: pulse,
       }}
     >
       <Text
@@ -43,6 +46,6 @@ export function VaultStatusBadge({ status, labelKey }: VaultStatusBadgeProps) {
       >
         {t(labelKey ?? (vaultStatusI18nKey[status] as I18nKey)).toLocaleUpperCase()}
       </Text>
-    </View>
+    </Animated.View>
   );
 }

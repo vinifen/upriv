@@ -56,7 +56,6 @@ export function VaultListPage() {
     createVault,
     importDrop,
     exportVault,
-    onCloseVaultAfterUnsaved,
   } = screen;
 
   return (
@@ -151,8 +150,7 @@ export function VaultListPage() {
         vault={backups.vault}
         open={backups.open}
         canSaveNow={backups.canSaveNow}
-        saving={backups.saving}
-        saveStartedAt={backups.saveStartedAt}
+        saveJob={backups.saveJob}
         onSaveNow={backups.onSaveNow}
         listRefreshToken={backups.listRefreshToken}
         onClose={backups.onClose}
@@ -173,7 +171,6 @@ export function VaultListPage() {
         onConfirm={exportVault.onConfirm}
         onStop={exportVault.onStop}
         onPasswordEdited={exportVault.onPasswordEdited}
-        onTimeout={exportVault.onTimeout}
       />
       <VaultSettingsModal
         vault={settings.vault}
@@ -201,10 +198,7 @@ export function VaultListPage() {
         onDelete={groupSettings.onDelete}
         onBusyTimeout={groupSettings.onBusyTimeout}
       />
-      <FileManagerLayer
-        pipelineListStatus={list.pipelineListStatus}
-        onCloseVault={onCloseVaultAfterUnsaved}
-      />
+      <FileManagerLayer />
       <AppSettingsModal
         open={appSettings.open}
         onClose={appSettings.onClose}

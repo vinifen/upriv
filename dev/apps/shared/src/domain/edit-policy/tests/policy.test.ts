@@ -9,6 +9,7 @@ import {
   appConfigEditAllowed,
   configEditGateAllows,
   vaultConfigEditAllowed,
+  vaultConfigEditHold,
   vaultConfigEditLockedI18nKey,
   requireVaultConfigEditLockedI18nKey,
   type VaultConfigEditTarget,
@@ -35,13 +36,45 @@ describe("a leftover plaintext folder", () => {
   });
 
   it("says what to do instead of asking to wait", () => {
-    expect(requireVaultConfigEditLockedI18nKey("storage.mode", true)).toBe(
+    expect(requireVaultConfigEditLockedI18nKey("storage.mode", vaultConfigEditHold(row))).toBe(
       contract.plainLeftoverLockedI18n,
     );
     expect(en).toHaveProperty([contract.plainLeftoverLockedI18n]);
     expect(requireVaultConfigEditLockedI18nKey("storage.mode")).toBe(
       contract.lockedI18n["storage.mode"],
     );
+  });
+});
+
+describe("a backup export of the vault's backups", () => {
+  const row = vaultRowFixture({ id: "notes" });
+  const exporting = { backupExportVaultIds: ["notes"] };
+
+  it("locks the rename core refuses until the export ends", () => {
+    for (const target of contract.backupExportLocked) {
+      expect(vaultConfigEditAllowed(target as VaultConfigEditTarget, row, exporting)).toBe(false);
+    }
+    expect(vaultConfigEditAllowed("vault.display_name", row)).toBe(true);
+  });
+
+  it("leaves the folder, the mode, and the rest editable", () => {
+    expect(vaultConfigEditAllowed("storage.mode", row, exporting)).toBe(true);
+    expect(vaultConfigEditAllowed("mount.workspace_path", row, exporting)).toBe(true);
+    expect(vaultConfigEditAllowed("action.change_password", row, exporting)).toBe(true);
+  });
+
+  it("names the export in the locked hint", () => {
+    const hold = vaultConfigEditHold(row, exporting);
+    expect(hold).toEqual({ plainLeftover: false, backupExport: true });
+    expect(requireVaultConfigEditLockedI18nKey("vault.display_name", hold)).toBe(
+      contract.backupExportLockedI18n,
+    );
+    expect(en).toHaveProperty([contract.backupExportLockedI18n]);
+  });
+
+  it("does not hold another vault", () => {
+    const other = vaultRowFixture({ id: "journal" });
+    expect(vaultConfigEditAllowed("vault.display_name", other, exporting)).toBe(true);
   });
 });
 

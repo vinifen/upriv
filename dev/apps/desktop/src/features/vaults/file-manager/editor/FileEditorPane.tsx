@@ -211,7 +211,6 @@ interface EditorWithLineNumbersProps {
   shownContent: string;
   fileName: string;
   ariaLabel: string;
-  readOnly?: boolean;
   onChange: (content: string) => void;
   textareaRef: RefObject<HTMLTextAreaElement>;
   /** Search matches in `shownContent`, highlighted behind the text. */
@@ -227,7 +226,6 @@ function EditorWithLineNumbers({
   shownContent,
   fileName,
   ariaLabel,
-  readOnly = false,
   onChange,
   textareaRef,
   matches,
@@ -442,7 +440,6 @@ function EditorWithLineNumbers({
       <textarea
         ref={textareaRef}
         value={content}
-        readOnly={readOnly}
         wrap={wordWrap ? "soft" : "off"}
         onChange={(event) => onChange(event.target.value)}
         onScroll={syncScroll}
@@ -563,7 +560,6 @@ export function FileEditorPane({ fm, vaultName, active }: FileEditorPaneProps) {
     getEditorContent,
     fileLoadError,
     isFileContentReady,
-    writesLocked,
     isFileEditable,
     isFileViewable,
     isFileImage,
@@ -891,11 +887,8 @@ export function FileEditorPane({ fm, vaultName, active }: FileEditorPaneProps) {
               onMatchCountChange={setPreviewMatchesCount}
               onActiveHeadingChange={followHeading}
               onCopyFailed={() => fm.showToast(t("modal.file_manager.markdown.copy_failed"))}
-              onChange={
-                writesLocked
-                  ? undefined
-                  : (next) =>
-                      dispatch({ type: "set_editor_draft", path: activeTabPath, content: next })
+              onChange={(next) =>
+                dispatch({ type: "set_editor_draft", path: activeTabPath, content: next })
               }
             />
           ) : (
@@ -906,16 +899,14 @@ export function FileEditorPane({ fm, vaultName, active }: FileEditorPaneProps) {
               shownContent={shownContent}
               fileName={fileName}
               ariaLabel={t("modal.file_manager.viewer.editor_label", { name: fileName })}
-              readOnly={writesLocked}
               matches={codeMatches}
               searchActiveIndex={activeMatchIndex}
               wordWrap={currentWordWrap}
               onScroll={updateCodeActiveHeading}
               onSelect={handleCodeCaretChange}
-              onChange={(next) => {
-                if (writesLocked) return;
-                dispatch({ type: "set_editor_draft", path: activeTabPath, content: next });
-              }}
+              onChange={(next) =>
+                dispatch({ type: "set_editor_draft", path: activeTabPath, content: next })
+              }
             />
           )}
         </div>

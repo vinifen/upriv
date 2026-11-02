@@ -15,17 +15,18 @@ interface VaultRecoveryModalProps {
   vault: VaultListItem | null;
   leftover: PlainLeftover | null | undefined;
   open: boolean;
-  submitting?: boolean;
   onClose: () => void;
   onAction: (action: PlainRecoveryAction) => void;
 }
 
-/** Dirty-close recovery. A leftover plaintext folder is wiped from the warning. */
+/**
+ * Dirty-close recovery. The button on a leftover plaintext folder starts its
+ * wipe and this window closes; the row shows `recovering` until it ends.
+ */
 export function VaultRecoveryModal({
   vault,
   leftover,
   open,
-  submitting = false,
   onClose,
   onAction,
 }: VaultRecoveryModalProps) {
@@ -38,7 +39,7 @@ export function VaultRecoveryModal({
   if (!open || !vault) return null;
 
   const runPrimary = () => {
-    if (submitting || pending) return;
+    if (pending) return;
     onAction(offers.remove ? { kind: "remove_folder" } : { kind: "resume_store" });
   };
 
@@ -48,31 +49,16 @@ export function VaultRecoveryModal({
       title={t("recovery.title")}
       titleIcon="refresh"
       contextTitle={vault.displayName}
-      onClose={() => {
-        if (!submitting) onClose();
-      }}
-      dismissible={!submitting}
+      onClose={onClose}
       panelClassName="max-w-lg"
       footer={
         <ModalFooterActions layout="dialog">
+          <Button label={t("action.cancel")} variant="ghost" size="sm" onPress={onClose} />
           <Button
-            label={t("action.cancel")}
-            variant="ghost"
-            size="sm"
-            disabled={submitting}
-            onPress={onClose}
-          />
-          <Button
-            label={
-              submitting
-                ? t("close.dialog.submitting")
-                : offers.remove
-                  ? t("recovery.remove")
-                  : t("action.continue")
-            }
+            label={offers.remove ? t("recovery.remove") : t("action.continue")}
             variant={offers.remove ? "danger" : "primary"}
             size="sm"
-            disabled={submitting || pending}
+            disabled={pending}
             onPress={runPrimary}
           />
         </ModalFooterActions>

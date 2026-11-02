@@ -12,7 +12,6 @@ interface VaultRecoveryModalProps {
   vault: VaultListItem | null;
   leftover: PlainLeftover | null | undefined;
   open: boolean;
-  submitting?: boolean;
   onClose: () => void;
   onAction: (action: PlainRecoveryAction) => void;
 }
@@ -20,13 +19,13 @@ interface VaultRecoveryModalProps {
 /**
  * Dirty-close recovery.
  * Encrypted, or a plaintext vault with no leftover folder: unlock the store.
- * A leftover folder: the warning is the only step. The button wipes it.
+ * A leftover folder: the warning is the only step. The button starts the wipe
+ * and this window closes; the row shows `recovering` until it ends.
  */
 export function VaultRecoveryModal({
   vault,
   leftover,
   open,
-  submitting = false,
   onClose,
   onAction,
 }: VaultRecoveryModalProps) {
@@ -38,7 +37,7 @@ export function VaultRecoveryModal({
   if (!open || !vault) return null;
 
   const runPrimary = () => {
-    if (submitting || pending) return;
+    if (pending) return;
     onAction(offers.remove ? { kind: "remove_folder" } : { kind: "resume_store" });
   };
 
@@ -48,26 +47,20 @@ export function VaultRecoveryModal({
       title={t("recovery.title")}
       titleIcon="refresh"
       contextTitle={vault.displayName}
-      onClose={() => {
-        if (!submitting) onClose();
-      }}
+      onClose={onClose}
       panelClassName="max-w-lg"
       footer={
         <div className="flex flex-wrap justify-end gap-2">
-          <Button variant="ghost" size="sm" disabled={submitting} onClick={onClose}>
+          <Button variant="ghost" size="sm" onClick={onClose}>
             {t("action.cancel")}
           </Button>
           <Button
             variant={offers.remove ? "danger" : "primary"}
             size="sm"
-            disabled={submitting || pending}
+            disabled={pending}
             onClick={runPrimary}
           >
-            {submitting
-              ? t("close.dialog.submitting")
-              : offers.remove
-                ? t("recovery.remove")
-                : t("action.continue")}
+            {offers.remove ? t("recovery.remove") : t("action.continue")}
           </Button>
         </div>
       }

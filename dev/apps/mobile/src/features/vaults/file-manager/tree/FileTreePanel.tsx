@@ -9,10 +9,8 @@ import {
   type MutableRefObject,
 } from "react";
 import {
-  AccessibilityInfo,
   Animated,
   Clipboard,
-  Easing,
   FlatList,
   Pressable,
   StyleSheet,
@@ -47,6 +45,7 @@ import {
 } from "@upriv/shared";
 import { useSearchCollapsedFolders } from "@upriv/shared/react";
 import { Icon } from "@/components/icons";
+import { usePulseOpacity } from "@/hooks/usePulseOpacity";
 import { noteIdleActivity } from "@/lib/idleActivity";
 import {
   Button,
@@ -674,37 +673,9 @@ const TREE_SKELETON_ROWS = [
   { depth: 0, width: 96 },
 ] as const;
 
-/** Desktop `animate-pulse`: opacity 1 → 0.5 → 1 every 2 s, off with Reduce Motion. */
-function useSkeletonPulse() {
-  const pulse = useRef(new Animated.Value(1)).current;
-
-  useEffect(() => {
-    let loop: Animated.CompositeAnimation | null = null;
-    let cancelled = false;
-    const step = (toValue: number) =>
-      Animated.timing(pulse, {
-        toValue,
-        duration: 1000,
-        easing: Easing.bezier(0.4, 0, 0.6, 1),
-        useNativeDriver: true,
-      });
-    void AccessibilityInfo.isReduceMotionEnabled().then((reduce) => {
-      if (cancelled || reduce) return;
-      loop = Animated.loop(Animated.sequence([step(0.5), step(1)]));
-      loop.start();
-    });
-    return () => {
-      cancelled = true;
-      loop?.stop();
-    };
-  }, [pulse]);
-
-  return pulse;
-}
-
 function FileTreeSkeleton({ label }: { label: string }) {
   const { colors } = useTheme();
-  const pulse = useSkeletonPulse();
+  const pulse = usePulseOpacity();
   const fill = { backgroundColor: colorAlpha(colors.onSurfaceVariant, 0.2) };
   return (
     <Animated.View

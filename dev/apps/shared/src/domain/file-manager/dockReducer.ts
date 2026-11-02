@@ -46,32 +46,11 @@ export function fileManagerDismissIntent(
   return "dismiss";
 }
 
-/**
- * Drafts were already saved or discarded. The workspace ref can still say
- * unsaved until the next render. An import still blocks.
- */
-export function closeIntentAfterUnsavedResolved(
-  intent: FileManagerDismissIntent,
-  unsavedResolved: boolean,
-): FileManagerDismissIntent {
-  if (unsavedResolved && intent === "unsaved") return "dismiss";
-  return intent;
-}
-
 export function fileManagerBlockingPrompt(
   intent: FileManagerDismissIntent,
 ): UnsavedPromptAction | null {
   if (intent === "import_in_progress") return { type: "import_in_progress" };
   if (intent === "unsaved") return { type: "dismiss_workspace" };
-  return null;
-}
-
-/** Vault lock / close-all: saving or discarding continues into closing that vault. */
-export function vaultCloseBlockingPrompt(
-  intent: FileManagerDismissIntent,
-): UnsavedPromptAction | null {
-  if (intent === "import_in_progress") return { type: "close_vault_import" };
-  if (intent === "unsaved") return { type: "close_vault" };
   return null;
 }
 

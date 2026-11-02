@@ -2,6 +2,9 @@
  * Finite loading budgets (ms) — every blocking UI load must use one of these
  * and show the budget to the user. Never wait forever.
  *
+ * Work whose time follows the bytes it moves takes its entry here as the floor
+ * and grows with `sizedBudgetMs` (`./sizedBudget`).
+ *
  * Keep `vaultRootSetup` / Gate in sync with `@upriv/shared` `CORE_RPC_TIMEOUT_MS`.
  */
 export const LOADING_BUDGET_MS = {
@@ -17,8 +20,9 @@ export const LOADING_BUDGET_MS = {
   /** Logs list / viewer fetch — keep in sync with `log_*` invoke timeouts. */
   logs: 60_000,
   /**
-   * Vault settings submit: password / KDF change rewraps `vault.header` and the
-   * key wrap in `store/`, so a large vault can legitimately take minutes.
+   * Vault settings submit: password / KDF change writes a backup zip of
+   * `store/`, then rewraps `vault.header` and the name index. Floor of
+   * `sizedBudgetMs("vaultRewrap")`.
    */
   vaultRewrap: 600_000,
   /**
@@ -31,33 +35,39 @@ export const LOADING_BUDGET_MS = {
   vaultCreate: 1_200_000,
   /**
    * Open/close pipeline progress (password modal if open + row hint; Argon2id
-   * unlock + flush into `store/`). Not a full-screen overlay.
+   * unlock + flush into `store/`). Not a full-screen overlay. A close grows
+   * from here once core measures its backup zip (`sizedBudgetMs("vaultClose")`).
    */
   vaultPipeline: 600_000,
   /**
    * Export `{display_name}.zip` of `store/`, portable `.7z`, or plain-text `.zip` (`vault_export`).
-   * A large vault packed with LZMA2, or written from a phone, can run long, so
-   * it shares the `dataFolderExport` ceiling; the Export window shows progress
-   * from `job_status`.
+   * Floor of `sizedBudgetMs("vaultExport")`, which grows with the total
+   * `job_status` reports; the Export window shows that progress.
    */
   vaultExport: 3_600_000,
   /**
    * Backups → Back up now (`backup_save`): a zip of the closed vault's `store/`
-   * into `backups/saves/`. Same work as a store-zip export.
+   * into `backups/saves/`. Floor of `sizedBudgetMs("vaultBackupSave")`.
    */
   vaultBackupSave: 600_000,
   /**
    * Backups → Export (`backup_export`): copies of backup zips into the chosen
-   * folder, bundled when there are several. Each can be as large as a vault
-   * export, so it shares that ceiling; the Backups window shows progress from
+   * folder, bundled when there are several. Floor of
+   * `sizedBudgetMs("backupExport")`; the Backups window shows progress from
    * `job_status`.
    */
   backupExport: 3_600_000,
   /**
    * Export data folder (`data_folder_export`): one zip of the whole `.upriv`,
-   * every vault and backup included. Progress from `job_status`.
+   * every vault and backup included. Floor of `sizedBudgetMs("dataFolderExport")`.
    */
   dataFolderExport: 3_600_000,
+  /**
+   * Recovery → Remove the folder (`vault_plain_remove`): overwrite and delete
+   * what a plain-text session left. The row shows `recovering`. Floor of
+   * `sizedBudgetMs("plainLeftoverRemove")`, sized from the folder's bytes.
+   */
+  plainLeftoverRemove: 600_000,
   /**
    * In-app file manager import (OS drop / picker). Desktop streams the OS path
    * in the daemon (`vault_fs_import_os_file`); explorer skeletons appear at the

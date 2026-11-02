@@ -1,5 +1,6 @@
 export type {
   StorageMode,
+  VaultDeleteHold,
   VaultDisplayStatus,
   VaultPipelineListStatus,
   VaultRewrapKind,
@@ -13,7 +14,6 @@ export {
   isVaultBlockingWorkspaceClear,
   isVaultFileManagerEligible,
   isVaultFileManagerRetained,
-  canDeleteVaultNow,
   isVaultListClosed,
   isVaultDisplayStatusQuiet,
   isVaultPipelineDisplayBusy,
@@ -21,7 +21,6 @@ export {
   isVaultOpenResumeTarget,
   vaultCloseNowOffered,
   isVaultCloseQueued,
-  isVaultCloseWritesLocked,
   isVaultListRowActivatable,
   isVaultListRowUnlockTarget,
   listHasVaultBlockingDataFolderChange,
@@ -30,6 +29,7 @@ export {
   resolveVaultDisplayStatus,
   resolveVaultListStatus,
   storageModeIsPlaintext,
+  vaultDeleteHold,
   vaultPipelineRowBudget,
 } from "./types";
 export type { VaultLifecycleIntent, VaultLifecycleRequest } from "./lifecycle";
@@ -80,10 +80,10 @@ export {
 export { displayNameErrorI18nKey, DISPLAY_NAME_ERROR_I18N_KEYS } from "./errors/nameMessages";
 export type { DisplayNameErrorI18nKey } from "./errors/nameMessages";
 export {
+  VAULT_DELETE_HOLD_I18N_KEY,
   vaultStatusColorVar,
   vaultStatusI18nKey,
   vaultStatusLabelKey,
-  vaultCloseActivityLabelKey,
 } from "./statusTokens";
 /** Rust wire codes + UI i18n. */
 export { isVaultErrorCode, VAULT_ERROR_CODES } from "./errors/codes";
