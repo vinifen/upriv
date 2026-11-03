@@ -19,20 +19,19 @@ use zeroize::Zeroizing;
 
 use crate::config::VaultConfig;
 use crate::error::{Result, UprivError};
-use crate::logging::{log_event, LogLevel};
 use crate::paths::VaultRoot;
+use crate::session::{Job, JobKind, ProgressReader};
 use crate::store::{is_reserved_logical, is_skipped_on_import, KdfUnlockPreset};
 
 use super::config_folder::{
     config_member, read_carried_layout, read_carried_settings, ConfigMember, ImportExtras,
 };
-use super::create::create_vault;
 use super::embedded_settings::EmbeddedVaultSettings;
 use super::files_zip::FILES_ZIP_EXPAND_FACTOR;
 use super::fs::{
     fs_ensure_folder_path_staged, fs_seal_staged_imports, fs_seal_staged_wave, fs_write_staged,
 };
-use super::open_close::{abandon_failed_import, close_vault, open_vault_for_ingest};
+use super::import_job::fill_new_vault;
 use super::seven_zip_pack::{seven_zip_decode_threads, sevenz_member_name_unsafe, sevenz_password};
 
 const ARCHIVE_READ_BUFFER: usize = 1024 * 1024;
@@ -75,31 +74,38 @@ fn open_prepared_reader<R: Read + Seek>(
     Ok(reader)
 }
 
-fn open_archive_reader<'a>(
+/// The archive in memory, read through `job`: a stop fails the next read.
+fn open_archive_reader<'a, 'j>(
     archive_bytes: &'a [u8],
     archive_password: &[u8],
-) -> Result<ArchiveReader<Cursor<&'a [u8]>>> {
+    job: &'j Job,
+) -> Result<ArchiveReader<ProgressReader<'j, Cursor<&'a [u8]>>>> {
+    let len = archive_bytes.len() as u64;
+    job.set_total(len);
     open_prepared_reader(
-        Cursor::new(archive_bytes),
+        job.progress_reader(Cursor::new(archive_bytes)),
         archive_password,
-        archive_bytes.len() as u64,
+        len,
     )
 }
 
-fn open_archive_path(
+/// The archive at `path`, read through `job`: a stop fails the next read.
+fn open_archive_path<'j>(
     path: &Path,
     archive_password: &[u8],
-) -> Result<(ArchiveReader<BufReader<File>>, u64)> {
+    job: &'j Job,
+) -> Result<(ArchiveReader<ProgressReader<'j, BufReader<File>>>, u64)> {
     if !path.is_absolute() {
         return Err(UprivError::ImportArchiveNotFound(path.to_path_buf()));
     }
     let file = crate::paths::open_nofollow(path, crate::paths::NofollowMode::Read)
         .map_err(|error| super::import::map_archive_open_error(path, error))?;
     let len = file.metadata()?.len();
+    job.set_total(len);
     // The AES decoder asks for 512 bytes at a time, and a storage-access file
     // pays for each read.
     let buffered = BufReader::with_capacity(ARCHIVE_READ_BUFFER, file);
-    let reader = open_prepared_reader(buffered, archive_password, len)?;
+    let reader = open_prepared_reader(job.progress_reader(buffered), archive_password, len)?;
     Ok((reader, len))
 }
 
@@ -336,25 +342,33 @@ fn probe_reader<R: Read + Seek>(
     Ok(settings)
 }
 
-/// Password check of a `.7z` in memory, and the settings it carries.
+/// Password check of a `.7z` in memory, and the settings it carries, as the
+/// job `job_id`.
 pub fn probe_logical_seven_zip(
     archive_bytes: &[u8],
     archive_password: &[u8],
+    job_id: &str,
 ) -> Result<Option<EmbeddedVaultSettings>> {
-    let mut reader = open_archive_reader(archive_bytes, archive_password)?;
-    probe_reader(&mut reader, archive_bytes.len() as u64)
+    Job::run(job_id, JobKind::ImportProbe, None, |job| {
+        let mut reader = open_archive_reader(archive_bytes, archive_password, job)?;
+        probe_reader(&mut reader, archive_bytes.len() as u64)
+    })
 }
 
-/// Password check of a `.7z` file, and the settings it carries. The compressed
-/// bytes stay on disk.
+/// Password check of a `.7z` file, and the settings it carries, as the job
+/// `job_id`. The compressed bytes stay on disk.
 pub fn probe_logical_seven_zip_path(
     path: &Path,
     archive_password: &[u8],
+    job_id: &str,
 ) -> Result<Option<EmbeddedVaultSettings>> {
-    let (mut reader, len) = open_archive_path(path, archive_password)?;
-    probe_reader(&mut reader, len)
+    Job::run(job_id, JobKind::ImportProbe, None, |job| {
+        let (mut reader, len) = open_archive_path(path, archive_password, job)?;
+        probe_reader(&mut reader, len)
+    })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn import_reader<R: Read + Seek>(
     root: &VaultRoot,
     config: VaultConfig,
@@ -363,18 +377,16 @@ fn import_reader<R: Read + Seek>(
     mut reader: ArchiveReader<R>,
     archive_len: u64,
     extras: ImportExtras<'_>,
+    job: &Job,
 ) -> Result<String> {
     if new_password.is_empty() {
         return Err(UprivError::WrongPassword);
     }
     extras.check()?;
-    create_vault(root, config.clone(), new_password, preset)?;
-    let id = config.vault.id.trim().to_string();
-    let ingest = (|| {
-        open_vault_for_ingest(root, &id, new_password)?;
+    fill_new_vault(root, config, new_password, preset, job, |id| {
         let mut members = MemberIngest {
             root,
-            vault_id: &id,
+            vault_id: id,
             keep_workspace: extras.keep_workspace,
             outer: None,
             budget: plaintext_budget(archive_len),
@@ -388,7 +400,7 @@ fn import_reader<R: Read + Seek>(
                     return Ok(false);
                 }
                 match members.ingest(entry, payload) {
-                    Ok(()) => match fs_seal_staged_wave(root, &id) {
+                    Ok(()) => match fs_seal_staged_wave(root, id) {
                         Ok(()) => Ok(true),
                         Err(error) => {
                             write_error = Some(error);
@@ -408,18 +420,14 @@ fn import_reader<R: Read + Seek>(
         if members.outer.is_none() {
             return Err(archive_layout_error("missing .7z outer folder"));
         }
-        fs_seal_staged_imports(root, &id)?;
-        extras.seal(root, &id, members.layout)
-    })();
-    if let Err(ingest_error) = ingest {
-        return Err(abandon_failed_import(root, &id, ingest_error));
-    }
-    close_vault(root, &id)?;
-    log_event(LogLevel::Info, "vault_imported", &[("id", id.as_str())]);
-    Ok(id)
+        fs_seal_staged_imports(root, id)?;
+        extras.seal(root, id, members.layout)
+    })
 }
 
-/// Create a new vault and stream logical files from a `.7z` into `store/`.
+/// Create a new vault and stream logical files from a `.7z` into `store/`, as
+/// the job `job_id`.
+#[allow(clippy::too_many_arguments)]
 pub fn import_logical_seven_zip(
     root: &VaultRoot,
     config: VaultConfig,
@@ -428,20 +436,27 @@ pub fn import_logical_seven_zip(
     archive_bytes: &[u8],
     archive_password: &[u8],
     extras: ImportExtras<'_>,
+    job_id: &str,
 ) -> Result<String> {
-    let reader = open_archive_reader(archive_bytes, archive_password)?;
-    import_reader(
-        root,
-        config,
-        new_password,
-        preset,
-        reader,
-        archive_bytes.len() as u64,
-        extras,
-    )
+    let vault_id = config.vault.id.clone();
+    Job::run(job_id, JobKind::VaultImport, Some(&vault_id), |job| {
+        let reader = open_archive_reader(archive_bytes, archive_password, job)?;
+        import_reader(
+            root,
+            config,
+            new_password,
+            preset,
+            reader,
+            archive_bytes.len() as u64,
+            extras,
+            job,
+        )
+    })
 }
 
-/// Create a new vault from a `.7z` path. The archive is not loaded into a `Vec`.
+/// Create a new vault from a `.7z` path, as the job `job_id`. The archive is
+/// not loaded into a `Vec`.
+#[allow(clippy::too_many_arguments)]
 pub fn import_logical_seven_zip_path(
     root: &VaultRoot,
     config: VaultConfig,
@@ -450,15 +465,19 @@ pub fn import_logical_seven_zip_path(
     archive_path: &Path,
     archive_password: &[u8],
     extras: ImportExtras<'_>,
+    job_id: &str,
 ) -> Result<String> {
-    let (reader, len) = open_archive_path(archive_path, archive_password)?;
-    import_reader(root, config, new_password, preset, reader, len, extras)
+    let vault_id = config.vault.id.clone();
+    Job::run(job_id, JobKind::VaultImport, Some(&vault_id), |job| {
+        let (reader, len) = open_archive_path(archive_path, archive_password, job)?;
+        import_reader(root, config, new_password, preset, reader, len, extras, job)
+    })
 }
 
 #[cfg(test)]
 mod import_mem_tests {
     use super::*;
-    use crate::open_vault;
+    use crate::{close_vault, create_vault, open_vault};
 
     #[test]
     fn classifies_the_outer_folder_layout() {
@@ -546,7 +565,9 @@ mode = "encrypted_dir"
 
     #[test]
     fn probe_rejects_empty_password() {
-        let err = probe_logical_seven_zip(b"7z\xbc\xaf'\x1c", b"").unwrap_err();
+        let err =
+            probe_logical_seven_zip(b"7z\xbc\xaf'\x1c", b"", &crate::test_support::test_job_id())
+                .unwrap_err();
         assert!(matches!(err, UprivError::WrongPassword));
     }
 

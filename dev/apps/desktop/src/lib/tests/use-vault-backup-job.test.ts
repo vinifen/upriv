@@ -2,8 +2,7 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  LOADING_BUDGET_MS,
-  RPC_TIMEOUT_CODE,
+  JOB_ERROR_CODES,
   RpcError,
   type BackupService,
   type JobService,
@@ -44,9 +43,10 @@ function jobs(): JobService & { cancel: ReturnType<typeof vi.fn> } {
 function events(): VaultBackupJobEvents & {
   onSaved: ReturnType<typeof vi.fn>;
   onFailed: ReturnType<typeof vi.fn>;
-  onTimedOut: ReturnType<typeof vi.fn>;
+  onCancelled: ReturnType<typeof vi.fn>;
+  onStopRefused: ReturnType<typeof vi.fn>;
 } {
-  return { onSaved: vi.fn(), onFailed: vi.fn(), onTimedOut: vi.fn() };
+  return { onSaved: vi.fn(), onFailed: vi.fn(), onCancelled: vi.fn(), onStopRefused: vi.fn() };
 }
 
 describe("useVaultBackupJob", () => {
@@ -109,7 +109,35 @@ describe("useVaultBackupJob", () => {
     expect(on.onSaved).not.toHaveBeenCalled();
   });
 
-  it("stops its job in core when the call times out before the budget", async () => {
+  it("has no time limit: a backup an hour long still lands", async () => {
+    vi.useFakeTimers();
+    const run = deferred<VaultBackupEntry>();
+    const runner = jobs();
+    const on = events();
+    const { result } = renderHook(() =>
+      useVaultBackupJob(
+        serviceSaving(() => run.promise),
+        runner,
+        on,
+      ),
+    );
+
+    act(() => {
+      result.current.start("vault-a");
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60 * 60 * 1_000);
+    });
+    expect(result.current.job?.vaultId).toBe("vault-a");
+    expect(runner.cancel).not.toHaveBeenCalled();
+
+    await act(async () => {
+      run.resolve(saved);
+    });
+    expect(on.onSaved).toHaveBeenCalledWith("vault-a", saved);
+  });
+
+  it("stops in core when asked, and reports the stop, not a failure", async () => {
     const run = deferred<VaultBackupEntry>();
     const saveNow = vi.fn<BackupService["saveNow"]>(() => run.promise);
     const runner = jobs();
@@ -119,39 +147,35 @@ describe("useVaultBackupJob", () => {
     act(() => {
       result.current.start("vault-a");
     });
+    act(() => result.current.stop());
+    expect(runner.cancel).toHaveBeenCalledWith(saveNow.mock.calls[0][1], "user");
+    expect(result.current.job?.stoppingSince).not.toBeNull();
+
     await act(async () => {
-      run.reject(new RpcError(RPC_TIMEOUT_CODE, "invoke timeout"));
+      run.reject(new RpcError(JOB_ERROR_CODES.CANCELLED, "stopped"));
     });
     await waitFor(() => expect(result.current.job).toBeNull());
-    expect(runner.cancel).toHaveBeenCalledWith(saveNow.mock.calls[0][1], "timeout");
-    expect(on.onTimedOut).toHaveBeenCalledWith("vault-a");
+    expect(on.onCancelled).toHaveBeenCalledWith("vault-a");
     expect(on.onFailed).not.toHaveBeenCalled();
   });
 
-  it("gives up after the budget, stops its job in core, and ignores a late result", async () => {
-    vi.useFakeTimers();
-    const run = deferred<VaultBackupEntry>();
-    const saveNow = vi.fn<BackupService["saveNow"]>(() => run.promise);
-    const service = serviceSaving(saveNow);
-    const runner = jobs();
+  it("keeps running when core refuses the stop in its last step", async () => {
+    const refusal = new RpcError(JOB_ERROR_CODES.NOT_STOPPABLE, "finishing");
+    const runner: JobService = {
+      status: async () => null,
+      cancel: vi.fn(async () => Promise.reject(refusal)),
+    };
     const on = events();
+    const service = serviceSaving(() => new Promise<VaultBackupEntry>(() => undefined));
     const { result } = renderHook(() => useVaultBackupJob(service, runner, on));
 
     act(() => {
       result.current.start("vault-a");
     });
-    act(() => {
-      vi.advanceTimersByTime(LOADING_BUDGET_MS.vaultBackupSave);
-    });
-    expect(result.current.job).toBeNull();
-    expect(on.onTimedOut).toHaveBeenCalledWith("vault-a");
-    expect(runner.cancel).toHaveBeenCalledTimes(1);
-    expect(runner.cancel).toHaveBeenCalledWith(saveNow.mock.calls[0][1], "timeout");
-
     await act(async () => {
-      run.resolve(saved);
+      result.current.stop();
     });
-    expect(on.onSaved).not.toHaveBeenCalled();
-    expect(result.current.job).toBeNull();
+    expect(on.onStopRefused).toHaveBeenCalledWith("vault-a", refusal);
+    expect(result.current.job?.stoppingSince).toBeNull();
   });
 });

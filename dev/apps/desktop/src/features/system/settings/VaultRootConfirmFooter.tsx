@@ -1,8 +1,7 @@
 import { useEffect, useRef } from "react";
 import type { I18nKey, VaultRootConfirmAction } from "@upriv/shared";
-import { LOADING_BUDGET_MS } from "@upriv/shared";
-import { Button, LoadingBudgetHint } from "@/components/ui";
-import { useLoadingBudget } from "@upriv/shared/react";
+import { Button } from "@/components/ui";
+import { useOperationLimit } from "@upriv/shared/react";
 import { useTranslation } from "@/i18n";
 
 interface VaultRootConfirmFooterProps {
@@ -29,7 +28,7 @@ interface VaultRootConfirmFooterProps {
   /** Second click — run the side effects. */
   onConfirmPrimary: () => void;
   onCancelConfirm: () => void;
-  /** Budget exhausted while `busy` — parent must clear busy and surface retry/error. */
+  /** `OPERATION_LIMIT_MS` passed while `busy` — parent must clear busy and surface retry/error. */
   onBusyTimeout?: () => void;
 }
 
@@ -56,7 +55,7 @@ export function VaultRootConfirmFooter({
   const primaryDisabled = busy || blocked;
   const isApply = primaryAction === "apply";
   const showIdleStatus = !confirmOpen && !successKey && idleStatusKey != null;
-  const budget = useLoadingBudget(busy && !successKey, LOADING_BUDGET_MS.vaultRoot);
+  const limit = useOperationLimit(busy && !successKey);
   const timedOutNotified = useRef(false);
 
   useEffect(() => {
@@ -64,10 +63,10 @@ export function VaultRootConfirmFooter({
       timedOutNotified.current = false;
       return;
     }
-    if (!budget.timedOut || timedOutNotified.current) return;
+    if (!limit.timedOut || timedOutNotified.current) return;
     timedOutNotified.current = true;
     onBusyTimeout?.();
-  }, [budget.timedOut, busy, onBusyTimeout]);
+  }, [limit.timedOut, busy, onBusyTimeout]);
 
   return (
     <div className="flex flex-col gap-3" aria-busy={showIdleStatus || busy || undefined}>
@@ -90,19 +89,15 @@ export function VaultRootConfirmFooter({
                 {t(key)}
               </p>
             ))}
-            {busy && budget.visible ? (
-              <LoadingBudgetHint budgetMs={budget.budgetMs} remainingMs={budget.remainingMs} />
-            ) : null}
           </div>
         ) : showIdleStatus ? (
           <p className="text-on-surface-variant" role="status">
             {t(idleStatusKey)}
           </p>
-        ) : busy && budget.visible ? (
-          <div className="text-on-surface-variant">
-            <p role="status">{t("modal.vault_root_setup.busy")}</p>
-            <LoadingBudgetHint budgetMs={budget.budgetMs} remainingMs={budget.remainingMs} />
-          </div>
+        ) : busy && limit.visible ? (
+          <p className="text-on-surface-variant" role="status">
+            {t("modal.vault_root_setup.busy")}
+          </p>
         ) : null}
       </div>
       <div className="flex flex-col gap-2 sm:flex-row-reverse sm:flex-wrap sm:justify-start [&_button]:w-full sm:[&_button]:w-auto">

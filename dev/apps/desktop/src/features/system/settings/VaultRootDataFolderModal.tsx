@@ -34,6 +34,8 @@ interface VaultRootDataFolderModalProps {
   vaultActivityBlocksChange?: boolean;
   /** Export data folder. Absent when this build has no data folder service. */
   exportControls?: DataFolderExportControls;
+  /** List toast. An Apply keeps running after the window closes and reports here. */
+  onNotice?: (message: string) => void;
 }
 
 /**
@@ -50,6 +52,7 @@ export function VaultRootDataFolderModal({
   onDirtyChange,
   vaultActivityBlocksChange = false,
   exportControls,
+  onNotice,
 }: VaultRootDataFolderModalProps) {
   const { t } = useTranslation();
   const vaultRoot = useVaultRootService();
@@ -76,7 +79,10 @@ export function VaultRootDataFolderModal({
     exportControls?.job == null &&
     dataFolderExportPending(exportDestination.folder.path, exportDestination.zipName) !== null;
   const submitLock = useRef(false);
+  /** Bumped only when Apply runs past `OPERATION_LIMIT_MS`; closing never drops a result. */
   const busyGen = useRef(0);
+  const openRef = useRef(open);
+  openRef.current = open;
   const openedRef = useRef(false);
   const appliedHideRef = useRef<ReturnType<typeof setTimeout>>();
   const gateRef = useRef(gate);
@@ -106,18 +112,16 @@ export function VaultRootDataFolderModal({
 
   useEffect(() => {
     if (!open) {
+      // An Apply in flight keeps running; its outcome comes back as a list toast.
       openedRef.current = false;
       setConfirmOpen(false);
       setDiscardConfirmOpen(false);
-      setBusy(false);
       setAppliedVisible(false);
       setError(null);
       setExportChosen(false);
       cancelExportPick();
       // The saved line belongs to this opening of the window; the folder stays.
       clearExportWritten?.();
-      submitLock.current = false;
-      busyGen.current += 1;
       clearTimeout(appliedHideRef.current);
       return;
     }
@@ -201,7 +205,13 @@ export function VaultRootDataFolderModal({
   }, []);
 
   const requestClose = useCallback(() => {
-    if (busy || appliedVisible) return;
+    // The Applied line closes the window itself a moment later.
+    if (appliedVisible) return;
+    // A folder being applied is not a draft: Apply keeps running and reports with a toast.
+    if (busy) {
+      onClose();
+      return;
+    }
     if (confirmOpen || discardConfirmOpen) {
       dismissFooterConfirm();
       return;
@@ -304,6 +314,10 @@ export function VaultRootDataFolderModal({
       if (!saved) {
         throw new Error("settings_save_failed");
       }
+      if (!openRef.current) {
+        onNotice?.(t("modal.data_folder.applied"));
+        return;
+      }
       setConfirmOpen(false);
       setAppliedVisible(true);
       clearTimeout(appliedHideRef.current);
@@ -315,7 +329,9 @@ export function VaultRootDataFolderModal({
     })()
       .catch((err) => {
         if (gen !== busyGen.current) return;
-        setError(t(desktopErrorI18nKey(err, "modal.vault_root_setup.error_init")));
+        const message = t(desktopErrorI18nKey(err, "modal.vault_root_setup.error_init"));
+        if (openRef.current) setError(message);
+        else onNotice?.(message);
       })
       .finally(() => {
         if (gen !== busyGen.current) return;
@@ -328,6 +344,7 @@ export function VaultRootDataFolderModal({
     draftDirty,
     mode,
     onClose,
+    onNotice,
     patchSettings,
     path,
     settings.ui.locale,

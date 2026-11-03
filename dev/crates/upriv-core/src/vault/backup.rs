@@ -6,7 +6,6 @@
 
 #[allow(unused_imports)]
 use crate::host_fs::HostFsQuery;
-use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use super::embedded_settings::snapshot_settings_bytes;
@@ -18,9 +17,10 @@ use crate::config::{load_vault_config, VaultBackupMode};
 use crate::error::{Result, UprivError};
 use crate::logging::{log_event, LogLevel};
 use crate::paths::VaultRoot;
+use crate::runtime_state::UnfinishedWork;
 use crate::session::{
     ensure_backups_not_exporting, ensure_data_folder_export_idle, remove_backup_unless_exporting,
-    with_vault_dir_lock, BackupExportGuard, Job,
+    with_vault_dir_lock, BackupExportGuard, Job, JobKind,
 };
 use crate::time::utc_filename_stamp;
 
@@ -337,15 +337,14 @@ pub(crate) fn backup_on_close(
 /// off. Open, delete, and rename of this vault wait until the zip is written.
 /// A save stopped before its zip is in place leaves no file.
 pub fn save_backup_now(root: &VaultRoot, vault_id: &str, job_id: &str) -> Result<BackupEntry> {
-    let saved = (|| {
-        let job = Job::start(job_id)?;
+    Job::run(job_id, JobKind::BackupSave, Some(vault_id), |job| {
         let hold = super::export::hold_closed_vault(root, vault_id)?;
         super::export::with_held_vault(&hold, || {
             let stamp = job.settle(write_backup_zip(
                 &hold.vault_dir,
                 vault_id,
                 BackupDir::Saves,
-                &job,
+                job,
             ))?;
             let file_name = backup_zip_filename(&stamp, vault_id)?;
             let path = hold
@@ -361,72 +360,7 @@ pub fn save_backup_now(root: &VaultRoot, vault_id: &str, job_id: &str) -> Result
                 saved: true,
             })
         })
-    })();
-    if let Err(error) = &saved {
-        let fields: Vec<_> = vault_id_log_field(vault_id).into_iter().collect();
-        log_job_error(
-            "vault_backup_save_cancelled",
-            "vault_backup_save_failed",
-            &fields,
-            error,
-        );
-    }
-    saved
-}
-
-/// Why a backup, an export, or a file removal failed, without a filesystem path.
-///
-/// `reason` is `disk_full`, `permission`, or `other`. `kind` names the error
-/// (`io`, `store`, `config`, `path`, `other`). `os` is the raw code when one exists.
-pub(crate) fn classify_write_failure(error: &UprivError) -> WriteFailureClass {
-    let kind = match error {
-        UprivError::Io(_) => "io",
-        UprivError::VaultStoreInvalid { .. } => "store",
-        UprivError::VaultConfigInvalid { .. } => "config",
-        UprivError::VaultPathNotFound(_) => "path",
-        _ => "other",
-    };
-    let reason = if failure_is_disk_full(error) {
-        "disk_full"
-    } else if failure_is_permission(error) {
-        "permission"
-    } else {
-        "other"
-    };
-    WriteFailureClass {
-        reason,
-        kind,
-        os: failure_os_code(error),
-    }
-}
-
-pub(crate) struct WriteFailureClass {
-    pub reason: &'static str,
-    pub kind: &'static str,
-    pub os: Option<i32>,
-}
-
-/// Log a job that ended without its file: `cancelled` (Info) when it was
-/// stopped, `failed` (Warn) with [`classify_write_failure`] otherwise.
-pub(crate) fn log_job_error(
-    cancelled: &str,
-    failed: &str,
-    fields: &[(&str, &str)],
-    error: &UprivError,
-) {
-    if matches!(error, UprivError::JobCancelled) {
-        log_event(LogLevel::Info, cancelled, fields);
-        return;
-    }
-    let class = classify_write_failure(error);
-    let os = class.os.map(|code| code.to_string());
-    let mut all = fields.to_vec();
-    all.push(("reason", class.reason));
-    all.push(("kind", class.kind));
-    if let Some(code) = os.as_deref() {
-        all.push(("os", code));
-    }
-    log_event(LogLevel::Warn, failed, &all);
+    })
 }
 
 /// `id` for a log line, only when it is a vault folder id: a request may carry
@@ -435,94 +369,20 @@ pub(crate) fn vault_id_log_field(vault_id: &str) -> Option<(&'static str, &str)>
     crate::paths::slug_id_is_valid(vault_id).then_some(("id", vault_id))
 }
 
-fn failure_is_disk_full(error: &UprivError) -> bool {
-    match error {
-        UprivError::Io(io) => io_is_disk_full(io),
-        UprivError::VaultStoreInvalid { detail, .. } => text_is_disk_full(detail),
-        _ => false,
-    }
-}
-
-fn failure_is_permission(error: &UprivError) -> bool {
-    match error {
-        UprivError::Io(io) => io_is_permission(io),
-        UprivError::VaultStoreInvalid { detail, .. } => text_is_permission(detail),
-        _ => false,
-    }
-}
-
-fn failure_os_code(error: &UprivError) -> Option<i32> {
-    match error {
-        UprivError::Io(io) => io.raw_os_error(),
-        UprivError::VaultStoreInvalid { detail, .. } => os_code_in_text(detail),
-        _ => None,
-    }
-}
-
-/// This system's codes for a full disk. The same number means something else
-/// on another system (Linux 39 is a folder that is not empty).
-#[cfg(unix)]
-const DISK_FULL_CODES: &[i32] = &[libc::ENOSPC];
-/// `ERROR_HANDLE_DISK_FULL`, `ERROR_DISK_FULL`.
-#[cfg(windows)]
-const DISK_FULL_CODES: &[i32] = &[39, 112];
-#[cfg(not(any(unix, windows)))]
-const DISK_FULL_CODES: &[i32] = &[];
-
-#[cfg(unix)]
-const PERMISSION_CODES: &[i32] = &[libc::EACCES, libc::EPERM];
-/// `ERROR_ACCESS_DENIED`.
-#[cfg(windows)]
-const PERMISSION_CODES: &[i32] = &[5];
-#[cfg(not(any(unix, windows)))]
-const PERMISSION_CODES: &[i32] = &[];
-
-/// An error that only kept its text names the code as `os error N`.
-fn text_names_code(detail: &str, codes: &[i32]) -> bool {
-    os_code_in_text(detail).is_some_and(|code| codes.contains(&code))
-}
-
-fn io_is_disk_full(error: &std::io::Error) -> bool {
-    error.kind() == ErrorKind::StorageFull || text_is_disk_full(&error.to_string())
-}
-
-fn io_is_permission(error: &std::io::Error) -> bool {
-    error.kind() == ErrorKind::PermissionDenied || text_is_permission(&error.to_string())
-}
-
-fn text_is_disk_full(detail: &str) -> bool {
-    let lower = detail.to_ascii_lowercase();
-    lower.contains("no space left")
-        || lower.contains("not enough space")
-        || lower.contains("disk full")
-        || text_names_code(&lower, DISK_FULL_CODES)
-}
-
-fn text_is_permission(detail: &str) -> bool {
-    let lower = detail.to_ascii_lowercase();
-    lower.contains("permission denied")
-        || lower.contains("access is denied")
-        || text_names_code(&lower, PERMISSION_CODES)
-}
-
-fn os_code_in_text(detail: &str) -> Option<i32> {
-    let lower = detail.to_ascii_lowercase();
-    let rest = lower.split("os error ").nth(1)?;
-    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
-    digits.parse().ok()
-}
-
 /// One zip of the current `store/`, even when backups are off or a close would
 /// skip because the file tree is unchanged. That skip compares file names, not
 /// the header, so an older zip can still be sealed with a previous password.
 /// Retention is [`prune_after_rewrap`], after the header commit. A failed
-/// rewrap keeps this zip and the older ones.
-pub(crate) fn backup_before_rewrap(root: &VaultRoot, vault_id: &str) -> Result<()> {
+/// rewrap keeps this zip and the older ones; a stopped one removes this zip.
+/// Written as part of `job`, so its stop ends the zip. Returns the zip.
+pub(crate) fn backup_before_rewrap(root: &VaultRoot, vault_id: &str, job: &Job) -> Result<PathBuf> {
     let vault_dir = root.vault_dir(vault_id)?;
     // A broken config fails before a zip is written.
     load_vault_config(&vault_dir)?;
-    write_backup_zip(&vault_dir, vault_id, BackupDir::Standard, &Job::untracked())?;
-    Ok(())
+    let stamp = write_backup_zip(&vault_dir, vault_id, BackupDir::Standard, job)?;
+    Ok(vault_dir
+        .join("backups")
+        .join(backup_zip_filename(&stamp, vault_id)?))
 }
 
 /// Apply this vault's backup retention to the safety zip. Call only after the header commit.
@@ -741,11 +601,10 @@ pub fn export_backups(
     dest_dir: &Path,
     job_id: &str,
 ) -> Result<ExportedFile> {
-    let written = (|| {
-        let job = Job::start(job_id)?;
-        write_backup_export(root, vault_id, stamps, dest_dir, &job)
-    })();
-    log_backup_export_outcome(vault_id, &written);
+    let written = Job::run(job_id, JobKind::BackupExport, Some(vault_id), |job| {
+        write_backup_export(root, vault_id, stamps, dest_dir, job)
+    });
+    log_backup_export_numbered(vault_id, &written);
     written
 }
 
@@ -780,7 +639,8 @@ fn write_backup_export(
     target.write(
         root,
         job,
-        PartialWork::BackupExport,
+        UnfinishedWork::BackupExport,
+        Some(vault_id),
         |partial| match sources.as_slice() {
             [(_, source)] => super::zip_io::copy_file_to_path(source, partial, job),
             bundle => super::zip_io::zip_files_to_path(bundle, partial, job),
@@ -788,25 +648,19 @@ fn write_backup_export(
     )
 }
 
-/// `backup_export_numbered` when the name was taken and the file got a number;
-/// `backup_export_cancelled` or `backup_export_failed` for an export that ended
-/// without its file. No path or name goes to the log.
-fn log_backup_export_outcome(vault_id: &str, written: &Result<ExportedFile>) {
-    let mut fields: Vec<_> = vault_id_log_field(vault_id).into_iter().collect();
-    match written {
-        Ok(file) if file.number > 1 => {
-            let number = file.number.to_string();
-            fields.push(("number", number.as_str()));
-            log_event(LogLevel::Info, "backup_export_numbered", &fields);
-        }
-        Ok(_) => {}
-        Err(error) => log_job_error(
-            "backup_export_cancelled",
-            "backup_export_failed",
-            &fields,
-            error,
-        ),
+/// `backup_export_numbered` when the name was taken and the file got a number.
+/// How the export ended is the job's own log. No path or name goes to the log.
+fn log_backup_export_numbered(vault_id: &str, written: &Result<ExportedFile>) {
+    let Ok(file) = written else {
+        return;
+    };
+    if file.number <= 1 {
+        return;
     }
+    let number = file.number.to_string();
+    let mut fields = vec![("number", number.as_str())];
+    fields.extend(vault_id_log_field(vault_id));
+    log_event(LogLevel::Info, "backup_export_numbered", &fields);
 }
 
 /// Each backup to export once, with the name it takes in a bundle. A pin that
@@ -916,9 +770,10 @@ fn unused_backup_stamp(backups: &Path, mut stamp: String) -> Result<String> {
     })
 }
 
-pub(crate) fn copy_ciphertext_tree(src: &Path, dst: &Path) -> Result<()> {
+pub(crate) fn copy_ciphertext_tree(src: &Path, dst: &Path, job: &Job) -> Result<()> {
     crate::host_fs::create_dir_all(dst)?;
     for entry in crate::host_fs::read_dir(src)? {
+        job.ensure_running()?;
         let entry = entry?;
         let to = dst.join(entry.file_name());
         let ft = entry.file_type()?;
@@ -929,7 +784,7 @@ pub(crate) fn copy_ciphertext_tree(src: &Path, dst: &Path) -> Result<()> {
             });
         }
         if ft.host_is_dir() {
-            copy_ciphertext_tree(&entry.path(), &to)?;
+            copy_ciphertext_tree(&entry.path(), &to, job)?;
         } else if ft.host_is_file() {
             copy_regular_nofollow(&entry.path(), &to)?;
         } else {
@@ -1011,60 +866,6 @@ mod tests {
     use crate::store::KdfUnlockPreset;
     use crate::test_support::{test_job_id, vault_root_with};
     use crate::vault::create_vault;
-
-    #[cfg(any(unix, windows))]
-    #[test]
-    fn classifies_a_full_disk_without_a_path() {
-        let code = DISK_FULL_CODES[0];
-        let io = UprivError::Io(std::io::Error::from_raw_os_error(code));
-        let class = classify_write_failure(&io);
-        assert_eq!(class.reason, "disk_full");
-        assert_eq!(class.kind, "io");
-        assert_eq!(class.os, Some(code));
-
-        let wrapped = UprivError::VaultStoreInvalid {
-            path: std::path::PathBuf::from("/secret/store/file"),
-            detail: format!("write failed (os error {code})"),
-        };
-        let class = classify_write_failure(&wrapped);
-        assert_eq!(class.reason, "disk_full");
-        assert_eq!(class.kind, "store");
-        assert_eq!(class.os, Some(code));
-    }
-
-    #[test]
-    fn classifies_permission_and_leaves_other_failures_generic() {
-        let denied = UprivError::Io(std::io::Error::from(std::io::ErrorKind::PermissionDenied));
-        assert_eq!(classify_write_failure(&denied).reason, "permission");
-        let other = UprivError::Io(std::io::Error::from(std::io::ErrorKind::AlreadyExists));
-        let class = classify_write_failure(&other);
-        assert_eq!(class.reason, "other");
-        assert_eq!(class.kind, "io");
-    }
-
-    /// The same number is a different error on another system.
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn linux_codes_that_mean_something_else_on_windows_stay_generic() {
-        for code in [libc::ENOTEMPTY, libc::EIO] {
-            let io = UprivError::Io(std::io::Error::from_raw_os_error(code));
-            assert_eq!(classify_write_failure(&io).reason, "other", "errno {code}");
-            let wrapped = UprivError::VaultStoreInvalid {
-                path: std::path::PathBuf::new(),
-                detail: format!("failed (os error {code})"),
-            };
-            assert_eq!(
-                classify_write_failure(&wrapped).reason,
-                "other",
-                "errno {code}"
-            );
-        }
-        let longer = UprivError::VaultStoreInvalid {
-            path: std::path::PathBuf::new(),
-            detail: "failed (os error 130)".into(),
-        };
-        assert_eq!(classify_write_failure(&longer).reason, "other");
-    }
 
     fn sample_config(id: &str, name: &str) -> crate::config::VaultConfig {
         toml::from_str(&format!(
@@ -1150,7 +951,7 @@ mode = "encrypted_dir"
         crate::host_fs::write(src.join("header").join("vault.header"), b"header-bytes").unwrap();
         crate::host_fs::write(src.join("data").join("a.blob"), b"cipher-bytes").unwrap();
         let dst = tmp.path().join("frozen");
-        copy_ciphertext_tree(&src, &dst).unwrap();
+        copy_ciphertext_tree(&src, &dst, &Job::untracked()).unwrap();
         assert_eq!(
             crate::host_fs::read(dst.join("header").join("vault.header")).unwrap(),
             b"header-bytes"
@@ -1201,7 +1002,7 @@ mode = "encrypted_dir"
         assert_eq!(listed[0].file_name, format!("{stamp}-notes.zip"));
         let out = tempfile::tempdir().unwrap();
         let extracted = out.path().join("store");
-        super::super::zip_io::unzip_store_path(&zip, &extracted).unwrap();
+        super::super::zip_io::unzip_store_path(&zip, &extracted, &Job::untracked()).unwrap();
         assert!(extracted.join("header").join("vault.header").host_is_file());
         let notice_name = crate::store::STORE_DANGER_FILE_NAME;
         let packed = format!("{}/{notice_name}", crate::paths::STORE_DIR_NAME);
@@ -1341,7 +1142,7 @@ mode = "encrypted_dir"
         )
         .unwrap();
         let job = test_job_id();
-        crate::session::cancel_job(&job);
+        crate::session::cancel_job(&job).unwrap();
         assert!(matches!(
             save_backup_now(&root, "notes", &job),
             Err(UprivError::JobCancelled)
@@ -1350,7 +1151,7 @@ mode = "encrypted_dir"
         let vault_dir = root.vault_dir("notes").unwrap();
         let id = test_job_id();
         let running = Job::start(&id).unwrap();
-        crate::session::cancel_job(&id);
+        crate::session::cancel_job(&id).unwrap();
         assert!(matches!(
             running.settle(write_backup_zip(
                 &vault_dir,
@@ -1635,7 +1436,7 @@ mode = "encrypted_dir"
         let (_tmp, root, first, second) = vault_with_two_backups();
         let out = tempfile::tempdir().unwrap();
         let stopped = test_job_id();
-        crate::session::cancel_job(&stopped);
+        crate::session::cancel_job(&stopped).unwrap();
         assert!(matches!(
             export_backups(
                 &root,
@@ -1650,7 +1451,7 @@ mode = "encrypted_dir"
         for stamps in [vec![first.clone()], vec![first.clone(), second.clone()]] {
             let id = test_job_id();
             let running = Job::start(&id).unwrap();
-            crate::session::cancel_job(&id);
+            crate::session::cancel_job(&id).unwrap();
             assert!(matches!(
                 write_backup_export(&root, "notes", &stamps, out.path(), &running),
                 Err(UprivError::JobCancelled)
@@ -1690,7 +1491,8 @@ mode = "encrypted_dir"
             crate::session::job_status(&id),
             Some(crate::session::JobStatus {
                 bytes_done: expected,
-                bytes_total: expected
+                bytes_total: expected,
+                stoppable: true,
             })
         );
     }

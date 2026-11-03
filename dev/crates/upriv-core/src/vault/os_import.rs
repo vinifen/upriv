@@ -18,17 +18,19 @@ use crate::config::VaultConfig;
 use crate::error::{Result, UprivError};
 use crate::logging::{log_event, LogLevel};
 use crate::paths::VaultRoot;
+use crate::session::{Job, JobKind};
 use crate::store::{is_reserved_logical, is_skipped_on_import, KdfUnlockPreset};
 
-use super::create::create_vault;
 use super::fs::{
     fs_ensure_folder, fs_ensure_folder_path_staged, fs_seal_staged_imports, fs_seal_staged_wave,
     fs_write_staged,
 };
+use super::import_job::fill_new_vault;
 use super::open_close::{
-    abandon_failed_import, close_vault, delete_failed_import, open_vault_for_ingest,
+    close_vault, delete_failed_import, open_vault_for_ingest, CloseVaultOutcome,
 };
 use super::seven_zip_pack::sevenz_member_name_unsafe;
+use super::unfinished::forget_import;
 use super::welcome::{seal_welcome_if_absent, VaultWelcome};
 
 enum PlannedOsEntry {
@@ -182,21 +184,28 @@ fn open_regular_file(path: &Path) -> Result<File> {
 }
 
 /// Stage every entry. A full wave seals the index, and the tail is sealed once
-/// at the end. A returned error still abandons the new vault. A kill keeps the
-/// last sealed wave.
-fn ingest_planned(root: &VaultRoot, vault_id: &str, planned: &[PlannedOsEntry]) -> Result<()> {
+/// at the end. A returned error, or a stop of `job`, still abandons the new
+/// vault.
+fn ingest_planned(
+    root: &VaultRoot,
+    vault_id: &str,
+    planned: &[PlannedOsEntry],
+    job: &Job,
+) -> Result<()> {
     let mut folders = HashSet::new();
     for entry in planned {
+        job.ensure_running()?;
         match entry {
             PlannedOsEntry::Directory(logical) => {
                 fs_ensure_folder_path_staged(root, vault_id, logical, &mut folders)?
             }
             PlannedOsEntry::File { logical, source } => {
-                let mut file = open_regular_file(source)?;
+                let file = open_regular_file(source)?;
                 if let Some((parent, _)) = logical.rsplit_once('/') {
                     fs_ensure_folder_path_staged(root, vault_id, parent, &mut folders)?;
                 }
-                fs_write_staged(root, vault_id, &format!("/{logical}"), &mut file)?;
+                let mut reader = job.progress_reader(file);
+                fs_write_staged(root, vault_id, &format!("/{logical}"), &mut reader)?;
             }
         }
         fs_seal_staged_wave(root, vault_id)?;
@@ -205,35 +214,7 @@ fn ingest_planned(root: &VaultRoot, vault_id: &str, planned: &[PlannedOsEntry]) 
     Ok(())
 }
 
-/// Create the vault, stream `planned` into it, and close it. A failure deletes
-/// the new vault.
-fn import_planned(
-    root: &VaultRoot,
-    config: VaultConfig,
-    new_password: &[u8],
-    preset: KdfUnlockPreset,
-    planned: &PlannedOs,
-    welcome: Option<VaultWelcome<'_>>,
-) -> Result<String> {
-    create_vault(root, config.clone(), new_password, preset)?;
-    let id = config.vault.id.trim().to_string();
-    let ingest = (|| {
-        open_vault_for_ingest(root, &id, new_password)?;
-        ingest_planned(root, &id, &planned.entries)?;
-        if let Some(welcome) = welcome {
-            seal_welcome_if_absent(root, &id, welcome)?;
-        }
-        Ok(())
-    })();
-    if let Err(ingest_error) = ingest {
-        return Err(abandon_failed_import(root, &id, ingest_error));
-    }
-    close_vault(root, &id)?;
-    log_event(LogLevel::Info, "vault_imported", &[("id", id.as_str())]);
-    Ok(id)
-}
-
-/// Create a vault and stream `source` into it.
+/// Create a vault and stream `source` into it, as the job `job_id`.
 ///
 /// A file becomes that one document. A folder's children become the vault
 /// root, including subfolders. The folder's own name is not added as a prefix.
@@ -244,6 +225,7 @@ pub fn import_logical_os_path(
     preset: KdfUnlockPreset,
     source: &Path,
     welcome: Option<VaultWelcome<'_>>,
+    job_id: &str,
 ) -> Result<String> {
     if new_password.is_empty() {
         return Err(UprivError::WrongPassword);
@@ -251,8 +233,17 @@ pub fn import_logical_os_path(
     if let Some(welcome) = welcome {
         welcome.files()?;
     }
-    let planned = plan_os_path(source)?;
-    import_planned(root, config, new_password, preset, &planned, welcome)
+    let vault_id = config.vault.id.clone();
+    Job::run(job_id, JobKind::VaultImport, Some(&vault_id), |job| {
+        let planned = plan_os_path(source)?;
+        fill_new_vault(root, config, new_password, preset, job, |id| {
+            ingest_planned(root, id, &planned.entries, job)?;
+            if let Some(welcome) = welcome {
+                seal_welcome_if_absent(root, id, welcome)?;
+            }
+            Ok(())
+        })
+    })
 }
 
 /// Unlock a vault that was just created so files can be streamed in.
@@ -270,24 +261,42 @@ pub fn ingest_import_directory(root: &VaultRoot, vault_id: &str, logical_path: &
 }
 
 /// Stream one document into the open vault (a file manager import, or an
-/// import session), staged for the next index seal like every file import.
+/// import session), staged for the next index seal like every file import,
+/// as the job `job_id`. A stop leaves no file: the document enters the index
+/// only once its blob is written, and an orphan blob goes at the next open.
 pub fn ingest_import_reader(
     root: &VaultRoot,
     vault_id: &str,
     logical_path: &str,
     reader: &mut (impl Read + ?Sized),
+    job_id: &str,
 ) -> Result<()> {
-    let logical = normalize_import_logical(logical_path)?;
-    if let Some((parent, _)) = logical.rsplit_once('/') {
-        ensure_folder_path(root, vault_id, parent)?;
-    }
-    fs_write_staged(root, vault_id, &format!("/{logical}"), reader)?;
-    Ok(())
+    Job::run(job_id, JobKind::FileImport, Some(vault_id), |job| {
+        let logical = normalize_import_logical(logical_path)?;
+        if let Some((parent, _)) = logical.rsplit_once('/') {
+            ensure_folder_path(root, vault_id, parent)?;
+        }
+        fs_write_staged(
+            root,
+            vault_id,
+            &format!("/{logical}"),
+            &mut job.progress_reader(reader),
+        )?;
+        Ok(())
+    })
 }
 
 /// Drop an in-progress import without flushing a backup, then delete the vault.
 pub fn abort_import_vault(root: &VaultRoot, vault_id: &str) -> Result<()> {
     delete_failed_import(root, vault_id)
+}
+
+/// Close an import session whose files are all in: the vault is complete, and
+/// its unfinished-import record is dropped.
+pub fn finish_import_session(root: &VaultRoot, vault_id: &str) -> Result<CloseVaultOutcome> {
+    let closed = close_vault(root, vault_id)?;
+    forget_import(root, vault_id);
+    Ok(closed)
 }
 
 fn normalize_import_logical(path: &str) -> Result<String> {
@@ -346,6 +355,7 @@ mode = "encrypted_dir"
             KdfUnlockPreset::M32,
             &single,
             None,
+            &crate::test_support::test_job_id(),
         )
         .unwrap();
         crate::open_vault(&root, "notes", b"pass-word-ok").unwrap();
@@ -367,6 +377,7 @@ mode = "encrypted_dir"
             KdfUnlockPreset::M32,
             &dir,
             Some(welcome),
+            &crate::test_support::test_job_id(),
         )
         .unwrap();
         crate::open_vault(&root, "notes", b"pass-word-ok").unwrap();
@@ -396,6 +407,7 @@ mode = "encrypted_dir"
             KdfUnlockPreset::M32,
             &missing,
             None,
+            &crate::test_support::test_job_id(),
         )
         .unwrap_err();
         assert!(matches!(err, UprivError::ImportSourceUnreadable(_)));
@@ -422,6 +434,7 @@ mode = "encrypted_dir"
             KdfUnlockPreset::M32,
             &dir,
             None,
+            &crate::test_support::test_job_id(),
         )
         .unwrap();
         crate::open_vault(&root, "notes", b"pass-word-ok").unwrap();
@@ -453,6 +466,7 @@ mode = "encrypted_dir"
             KdfUnlockPreset::M32,
             &link,
             None,
+            &crate::test_support::test_job_id(),
         )
         .unwrap_err();
         assert!(matches!(err, UprivError::VaultStoreInvalid { .. }));
@@ -465,8 +479,8 @@ mode = "encrypted_dir"
         crate::create_vault(&root, config(), b"pass-word-ok", KdfUnlockPreset::M32).unwrap();
         open_import_session(&root, "notes", b"pass-word-ok").unwrap();
         ingest_import_directory(&root, "notes", "empty").unwrap();
-        ingest_import_reader(&root, "notes", "trip/a.txt", &mut &b"alpha"[..]).unwrap();
-        crate::close_vault(&root, "notes").unwrap();
+        ingest_import_reader(&root, "notes", "trip/a.txt", &mut &b"alpha"[..], &job()).unwrap();
+        finish_import_session(&root, "notes").unwrap();
         let backups = root.vault_dir("notes").unwrap().join("backups");
         let zip_count = backups.read_dir().map_or(0, |entries| {
             entries
@@ -494,11 +508,56 @@ mode = "encrypted_dir"
         let (_tmp, root) = crate::test_support::vault_root_with(&[]);
         crate::create_vault(&root, config(), b"pass-word-ok", KdfUnlockPreset::M32).unwrap();
         open_import_session(&root, "notes", b"pass-word-ok").unwrap();
-        ingest_import_reader(&root, "notes", "ok.txt", &mut &b"keep"[..]).unwrap();
-        let err =
-            ingest_import_reader(&root, "notes", "upriv-seed.txt", &mut &b"no"[..]).unwrap_err();
+        ingest_import_reader(&root, "notes", "ok.txt", &mut &b"keep"[..], &job()).unwrap();
+        let err = ingest_import_reader(&root, "notes", "upriv-seed.txt", &mut &b"no"[..], &job())
+            .unwrap_err();
         assert!(matches!(err, UprivError::VaultStoreInvalid { .. }));
         abort_import_vault(&root, "notes").unwrap();
         assert!(!root.vault_dir("notes").unwrap().host_exists());
+    }
+
+    #[test]
+    fn a_stopped_file_import_leaves_no_file() {
+        let (_tmp, root) = crate::test_support::vault_root_with(&[]);
+        crate::create_vault(&root, config(), b"pass-word-ok", KdfUnlockPreset::M32).unwrap();
+        open_import_session(&root, "notes", b"pass-word-ok").unwrap();
+        let id = job();
+        crate::session::cancel_job(&id).unwrap();
+        let err =
+            ingest_import_reader(&root, "notes", "big.bin", &mut &b"bytes"[..], &id).unwrap_err();
+        assert!(matches!(err, UprivError::JobCancelled));
+        finish_import_session(&root, "notes").unwrap();
+        crate::open_vault(&root, "notes", b"pass-word-ok").unwrap();
+        assert!(crate::vault::fs::fs_read_file(&root, "notes", "/big.bin").is_err());
+        crate::close_vault(&root, "notes").unwrap();
+    }
+
+    #[test]
+    fn a_phone_import_stays_unfinished_until_it_finishes() {
+        let (_tmp, root) = crate::test_support::vault_root_with(&[]);
+        crate::create_vault_as_job(
+            &root,
+            config(),
+            b"pass-word-ok",
+            KdfUnlockPreset::M32,
+            None,
+            true,
+            &job(),
+        )
+        .unwrap();
+        let unfinished = || {
+            crate::runtime_state::load_runtime_state(&root)
+                .unwrap()
+                .unfinished_imports
+        };
+        assert_eq!(unfinished(), vec!["notes"]);
+        open_import_session(&root, "notes", b"pass-word-ok").unwrap();
+        ingest_import_reader(&root, "notes", "a.txt", &mut &b"alpha"[..], &job()).unwrap();
+        finish_import_session(&root, "notes").unwrap();
+        assert!(unfinished().is_empty());
+    }
+
+    fn job() -> String {
+        crate::test_support::test_job_id()
     }
 }

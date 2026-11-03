@@ -18,6 +18,7 @@ use crate::config::VaultConfig;
 use crate::error::{Result, UprivError};
 use crate::logging::{log_event, LogLevel};
 use crate::paths::{VaultRoot, STORE_DIR_NAME};
+use crate::session::{Job, JobKind};
 use crate::store::{
     is_reserved_logical, is_skipped_on_import, KdfUnlockPreset, EXPORT_CONFIG_DIR, HEADER_DIR_NAME,
     HEADER_FILE_NAME,
@@ -26,12 +27,11 @@ use crate::store::{
 use super::config_folder::{
     config_member, read_carried_layout, read_carried_settings, ConfigMember, ImportExtras,
 };
-use super::create::create_vault;
 use super::embedded_settings::EmbeddedVaultSettings;
 use super::fs::{
     fs_ensure_folder_path_staged, fs_seal_staged_imports, fs_seal_staged_wave, fs_write_staged,
 };
-use super::open_close::{abandon_failed_import, close_vault, open_vault_for_ingest};
+use super::import_job::fill_new_vault;
 use super::seven_zip_pack::sevenz_member_name_unsafe;
 use super::zip_io::buffered_zip_reader;
 
@@ -376,8 +376,7 @@ impl<R: Read> Read for BudgetReader<R> {
 
 /// Stage every entry and return the carried layout when `keep_workspace` asks
 /// for it. A full wave seals the index, and the tail is sealed once at the end.
-/// A returned error still abandons the new vault. A kill keeps the last sealed
-/// wave.
+/// A returned error, or a stop of `job`, still abandons the new vault.
 fn ingest_planned<R: Read + Seek>(
     root: &VaultRoot,
     vault_id: &str,
@@ -385,11 +384,13 @@ fn ingest_planned<R: Read + Seek>(
     planned: &[PlannedZipEntry],
     source_len: u64,
     keep_workspace: bool,
+    job: &Job,
 ) -> Result<Option<Zeroizing<Vec<u8>>>> {
     let mut budget = source_len.saturating_mul(FILES_ZIP_EXPAND_FACTOR);
     let mut folders = HashSet::new();
     let mut layout = None;
     for entry in planned {
+        job.ensure_running()?;
         match entry {
             PlannedZipEntry::Directory(logical) => {
                 fs_ensure_folder_path_staged(root, vault_id, logical, &mut folders)?
@@ -424,6 +425,7 @@ fn ingest_planned<R: Read + Seek>(
     Ok(layout)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn import_reader<R: Read + Seek>(
     root: &VaultRoot,
     config: VaultConfig,
@@ -432,12 +434,14 @@ fn import_reader<R: Read + Seek>(
     reader: R,
     source_len: u64,
     extras: ImportExtras<'_>,
+    job: &Job,
 ) -> Result<String> {
     if new_password.is_empty() {
         return Err(UprivError::WrongPassword);
     }
     extras.check()?;
-    let mut archive = ZipArchive::new(reader).map_err(map_zip_error)?;
+    job.set_total(source_len);
+    let mut archive = ZipArchive::new(job.progress_reader(reader)).map_err(map_zip_error)?;
     let entries = collect_entries(&mut archive)?;
     let planned = plan_files_zip(&entries, source_len, is_plain_text_export(&archive))?;
     let links = entries.iter().filter(|entry| entry.symlink).count();
@@ -448,29 +452,22 @@ fn import_reader<R: Read + Seek>(
             &[("count", links.to_string().as_str())],
         );
     }
-    create_vault(root, config.clone(), new_password, preset)?;
-    let id = config.vault.id.trim().to_string();
-    let ingest = (|| {
-        open_vault_for_ingest(root, &id, new_password)?;
+    fill_new_vault(root, config, new_password, preset, job, |id| {
         let layout = ingest_planned(
             root,
-            &id,
+            id,
             &mut archive,
             &planned,
             source_len,
             extras.keep_workspace,
+            job,
         )?;
-        extras.seal(root, &id, layout)
-    })();
-    if let Err(ingest_error) = ingest {
-        return Err(abandon_failed_import(root, &id, ingest_error));
-    }
-    close_vault(root, &id)?;
-    log_event(LogLevel::Info, "vault_imported", &[("id", id.as_str())]);
-    Ok(id)
+        extras.seal(root, id, layout)
+    })
 }
 
-/// Create a new vault and stream documents from an in-memory files `.zip`.
+/// Create a new vault and stream documents from an in-memory files `.zip`, as
+/// the job `job_id`.
 pub fn import_logical_files_zip(
     root: &VaultRoot,
     config: VaultConfig,
@@ -478,16 +475,21 @@ pub fn import_logical_files_zip(
     preset: KdfUnlockPreset,
     zip_bytes: &[u8],
     extras: ImportExtras<'_>,
+    job_id: &str,
 ) -> Result<String> {
-    import_reader(
-        root,
-        config,
-        new_password,
-        preset,
-        Cursor::new(zip_bytes),
-        zip_bytes.len() as u64,
-        extras,
-    )
+    let vault_id = config.vault.id.clone();
+    Job::run(job_id, JobKind::VaultImport, Some(&vault_id), |job| {
+        import_reader(
+            root,
+            config,
+            new_password,
+            preset,
+            Cursor::new(zip_bytes),
+            zip_bytes.len() as u64,
+            extras,
+            job,
+        )
+    })
 }
 
 /// Same import, reading the archive from an absolute path one entry at a time.
@@ -498,22 +500,27 @@ pub fn import_logical_files_zip_path(
     preset: KdfUnlockPreset,
     zip_path: &Path,
     extras: ImportExtras<'_>,
+    job_id: &str,
 ) -> Result<String> {
     if !zip_path.is_absolute() || !zip_path.host_is_file() {
         return Err(UprivError::ImportArchiveNotFound(zip_path.to_path_buf()));
     }
-    let file = crate::host_fs::File::open(zip_path)
-        .map_err(|error| super::import::map_archive_open_error(zip_path, error))?;
-    let len = file.metadata()?.len();
-    import_reader(
-        root,
-        config,
-        new_password,
-        preset,
-        buffered_zip_reader(file)?,
-        len,
-        extras,
-    )
+    let vault_id = config.vault.id.clone();
+    Job::run(job_id, JobKind::VaultImport, Some(&vault_id), |job| {
+        let file = crate::host_fs::File::open(zip_path)
+            .map_err(|error| super::import::map_archive_open_error(zip_path, error))?;
+        let len = file.metadata()?.len();
+        import_reader(
+            root,
+            config,
+            new_password,
+            preset,
+            buffered_zip_reader(file)?,
+            len,
+            extras,
+            job,
+        )
+    })
 }
 
 #[cfg(test)]
@@ -740,6 +747,7 @@ mode = "encrypted_dir"
             KdfUnlockPreset::M32,
             &rejected,
             ImportExtras::default(),
+            &crate::test_support::test_job_id(),
         )
         .unwrap_err();
         assert!(matches!(err, UprivError::VaultStoreInvalid { .. }));
@@ -752,6 +760,7 @@ mode = "encrypted_dir"
             KdfUnlockPreset::M32,
             &bytes,
             ImportExtras::default(),
+            &crate::test_support::test_job_id(),
         )
         .unwrap();
         crate::open_vault(&root, "notes", b"pass-word-ok").unwrap();
@@ -797,6 +806,7 @@ mode = "encrypted_dir"
             KdfUnlockPreset::M32,
             &bytes,
             ImportExtras::default(),
+            &crate::test_support::test_job_id(),
         )
         .unwrap();
         crate::open_vault(&root, "notes", b"pass-word-ok").unwrap();
@@ -836,6 +846,7 @@ mode = "encrypted_dir"
                 welcome: Some(welcome),
                 keep_workspace: false,
             },
+            &crate::test_support::test_job_id(),
         )
         .unwrap();
         crate::open_vault(&root, "plain", b"pass-word-ok").unwrap();
@@ -857,6 +868,7 @@ mode = "encrypted_dir"
                 welcome: Some(welcome),
                 keep_workspace: false,
             },
+            &crate::test_support::test_job_id(),
         )
         .unwrap();
         crate::open_vault(&root, "own", b"pass-word-ok").unwrap();

@@ -122,6 +122,17 @@ describe("createVaultWizardReducer / import password test", () => {
     expect(done.draft.passwordProbeUnavailable).toBe(true);
   });
 
+  it("leaves the step as it was when the test is stopped", () => {
+    const before = openedAt("password");
+    const done = reduce(
+      before,
+      { type: "importPasswordTestStarted" },
+      { type: "importPasswordTestStopped" },
+    );
+    expect(done.testingPassword).toBe(false);
+    expect(done.draft).toEqual(before.draft);
+  });
+
   it("keeps the discard confirmation open when a probe answers", () => {
     const done = reduce(
       openedAt("password"),

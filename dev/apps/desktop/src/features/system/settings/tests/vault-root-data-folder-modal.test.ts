@@ -2,13 +2,15 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createElement } from "react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDefaultAppSettings, LOADING_BUDGET_MS, type AppSettingsConfig } from "@upriv/shared";
+import { createDefaultAppSettings, type AppSettingsConfig } from "@upriv/shared";
 import type { DataFolderExportJob } from "@upriv/shared/react";
 import type { DataFolderExportControls } from "@/features/system/data-folder-export";
+import { pressStop } from "@/lib/tests/pressStop";
 import { VaultRootDataFolderModal } from "../VaultRootDataFolderModal";
 
 let settings: AppSettingsConfig = createDefaultAppSettings();
 const pickFolder = vi.fn<(initial: string | null, title: string) => Promise<string | null>>();
+const setupDefaultRoot = vi.fn<() => Promise<{ rootPath: string }>>();
 
 vi.mock("@/i18n", () => ({ useTranslation: () => ({ t: (key: string) => key, locale: "en" }) }));
 vi.mock("@/lib/appVersion", () => ({
@@ -18,15 +20,18 @@ vi.mock("@/lib/appVersion", () => ({
 vi.mock("../AppSettingsContext", () => ({
   useAppSettingsContext: () => ({ settings, patchSettings: async () => true }),
 }));
-vi.mock("@/platform/services", () => ({
-  useVaultRootService: () => ({
-    pickFolder,
+vi.mock("@/platform/services", () => {
+  // One object, as the real provider gives: effects keyed on it run once.
+  const service = {
+    pickFolder: (initial: string | null, title: string) => pickFolder(initial, title),
     defaultRootStatus: async () => ({ status: "valid", defaultRootAnchor: "/app" }),
     inspectAtPath: async () => ({ status: "valid" }),
     readAlias: async () => ({ path: "/data/other" }),
     suggestedCustomRootPath: async () => "",
-  }),
-}));
+    setupDefaultRoot: () => setupDefaultRoot(),
+  };
+  return { useVaultRootService: () => service };
+});
 
 const DEFAULT_TITLE = "modal.app_settings.option.upriv_root.default_root";
 const CUSTOM_TITLE = "modal.app_settings.option.upriv_root.custom_root";
@@ -48,8 +53,7 @@ const running: DataFolderExportJob = {
   id: "job-running",
   startedAt: Date.now(),
   progress: null,
-  stopping: false,
-  budgetMs: LOADING_BUDGET_MS.dataFolderExport,
+  stoppingSince: null,
 };
 
 function show(
@@ -310,9 +314,9 @@ describe("VaultRootDataFolderModal export choice", () => {
     fireEvent.click(screen.getByText(DEFAULT_TITLE));
     expect(footerButton("action.apply")).toBeNull();
 
-    act(() => {
-      footerButton("modal.data_folder_export.stop")?.click();
-    });
+    const stop = footerButton("modal.data_folder_export.stop");
+    expect(stop).not.toBeNull();
+    act(() => pressStop(stop as HTMLElement));
     expect(exportControls.onStop).toHaveBeenCalledTimes(1);
   });
 
@@ -331,9 +335,9 @@ describe("VaultRootDataFolderModal export choice", () => {
       });
     const view = render(at(null));
     expect(shown()).toEqual(["modal.data_folder_export.measuring"]);
-    view.rerender(at({ bytesDone: 10, bytesTotal: 40 }));
+    view.rerender(at({ bytesDone: 10, bytesTotal: 40, stoppable: true }));
     expect(shown()).toEqual(["modal.data_folder_export.progress"]);
-    view.rerender(at({ bytesDone: 40, bytesTotal: 40 }));
+    view.rerender(at({ bytesDone: 40, bytesTotal: 40, stoppable: false }));
     expect(shown()).toEqual(["modal.data_folder_export.finishing"]);
   });
 
@@ -354,5 +358,51 @@ describe("VaultRootDataFolderModal export choice", () => {
     expect(follows(heading, hint)).toBe(true);
     expect(follows(hint, exportOption)).toBe(true);
     expect(screen.getByText("modal.app_settings.field.upriv_root_mode_help")).toBeDefined();
+  });
+});
+
+describe("VaultRootDataFolderModal apply", () => {
+  /** Apply the default folder while the custom one is in use; the setup waits for `finish`. */
+  async function applyDefault(onClose: () => void, onNotice: (message: string) => void) {
+    settings = {
+      ...createDefaultAppSettings(),
+      app: {
+        ...createDefaultAppSettings().app,
+        vault_root_mode: "custom_root",
+        upriv_root_path: "/data/other",
+      },
+    };
+    let finish: () => void = () => undefined;
+    setupDefaultRoot.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = () => resolve({ rootPath: "/app" });
+        }),
+    );
+    const props = { open: true, onClose, onNotice, exportControls: controls() };
+    const view = render(createElement(VaultRootDataFolderModal, props));
+    fireEvent.click(screen.getByText(DEFAULT_TITLE));
+    // The folder check settles first; a change of its result closes an open confirm.
+    await waitFor(() => {
+      const apply = footerButton("action.apply");
+      if (apply) fireEvent.click(apply);
+      expect(footerButton("modal.data_folder.apply_confirm_action")).not.toBeNull();
+    });
+    fireEvent.click(footerButton("modal.data_folder.apply_confirm_action") as HTMLElement);
+    await waitFor(() => expect(setupDefaultRoot).toHaveBeenCalledTimes(1));
+    return { view, props, finish: () => finish() };
+  }
+
+  it("closes while Apply runs, and the list toast reports how it ended", async () => {
+    const onClose = vi.fn();
+    const onNotice = vi.fn();
+    const { view, props, finish } = await applyDefault(onClose, onNotice);
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(onClose).toHaveBeenCalledTimes(1);
+    view.rerender(createElement(VaultRootDataFolderModal, { ...props, open: false }));
+
+    await act(async () => finish());
+    await waitFor(() => expect(onNotice).toHaveBeenCalledWith("modal.data_folder.applied"));
   });
 });

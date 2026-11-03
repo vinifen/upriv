@@ -4,9 +4,11 @@ export {
   type CreateVaultStepFocusProps,
   type UseCreateVaultWizardOptions,
 } from "./useCreateVaultWizard";
-export { useLoadingBudget, type UseLoadingBudgetOptions } from "./useLoadingBudget";
+export { useElapsed, type Elapsed } from "./useElapsed";
+export { disarmRowButton, useArmedRowButton, useRowArming } from "./useRowArming";
+export { useOperationLimit } from "./useOperationLimit";
 export { useIntegerDraft, type UseIntegerDraftOptions } from "./useIntegerDraft";
-export { usePlainExportSweep } from "./usePlainExportSweep";
+export { useUnfinishedSweep } from "./useUnfinishedSweep";
 export { useOptimisticValue } from "./useOptimisticValue";
 export { useSettledValue } from "./useSettledValue";
 export { useOutlineHeading } from "./useOutlineHeading";
@@ -16,7 +18,7 @@ export {
   type DataFolderExportJob,
   type DataFolderExportJobEvents,
 } from "./useDataFolderExportJob";
-export { JOB_PROGRESS_POLL_MS, useJobProgress } from "./useJobProgress";
+export { JOB_PROGRESS_POLL_MS, useJobProgress, type JobTrack } from "./useJobProgress";
 export {
   useBackupExportJob,
   type BackupExportJob,
@@ -38,6 +40,13 @@ export {
   type VaultBackupJob,
   type VaultBackupJobEvents,
 } from "./useVaultBackupJob";
+export {
+  useVaultRewrapJob,
+  type VaultRewrapJob,
+  type VaultRewrapJobEvents,
+  type VaultRewrapOutcome,
+  type VaultRewrapTarget,
+} from "./useVaultRewrapJob";
 export {
   useVaultExportJob,
   type VaultExportJob,
@@ -70,6 +79,7 @@ export {
   type VaultPipelineFailureMode,
   type VaultPipelinePresentation,
   type VaultPipelineRunState,
+  type VaultPipelineRunWork,
 } from "./useVaultPipelineRun";
 export { useWorkspacePersistence, WORKSPACE_WRITE_DELAY_MS } from "./useWorkspacePersistence";
 export {

@@ -60,12 +60,15 @@ describe("createLiveVaultService", () => {
       importZip,
       importFilesZip,
     });
-    await service.createVault({
-      password: "secret",
-      settings: { vault: { id: "photos" } } as never,
-      importPackage: { kind: "files_zip", archivePath: "/tmp/Photos.zip" },
-    });
-    expect(importFilesZip).toHaveBeenCalledOnce();
+    await service.createVault(
+      {
+        password: "secret",
+        settings: { vault: { id: "photos" } } as never,
+        importPackage: { kind: "files_zip", archivePath: "/tmp/Photos.zip" },
+      },
+      "job-1",
+    );
+    expect(importFilesZip).toHaveBeenCalledWith(expect.anything(), "job-1");
     expect(importZip).not.toHaveBeenCalled();
     expect(createVault).not.toHaveBeenCalled();
   });

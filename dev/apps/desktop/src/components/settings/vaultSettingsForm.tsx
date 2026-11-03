@@ -3,6 +3,7 @@ import { PathField } from "@/components/PathField";
 import { Button, Select, SwitchRow } from "@/components/ui";
 import { useRevealWhen } from "@/hooks/useRevealWhen";
 import {
+  AUTO_CLOSE_WHEN_BUSY,
   COMPRESSION_PRESETS,
   KDF_UNLOCK_OPTION_META,
   KDF_UNLOCK_PRESETS,
@@ -759,6 +760,7 @@ export function VaultSettingsCloseSection({
   const { t } = useTranslation();
   const enabledId = useId();
   const idleId = useId();
+  const whenBusyGroup = useId();
 
   return (
     <SettingsFormGrid>
@@ -768,6 +770,29 @@ export function VaultSettingsCloseSection({
         onChange={(enabled) => onAutoCloseChange({ enabled })}
         label={t("modal.settings.field.auto_close.enabled")}
       />
+      <SettingsField
+        label={t("modal.settings.field.auto_close.when_busy")}
+        hint={t("modal.settings.field.auto_close.when_busy_help")}
+        disabled={!autoClose.enabled}
+      >
+        <div
+          role="radiogroup"
+          aria-label={t("modal.settings.field.auto_close.when_busy")}
+          className="grid gap-2"
+        >
+          {AUTO_CLOSE_WHEN_BUSY.map((value) => (
+            <PolicyRadioOption
+              key={value}
+              groupName={whenBusyGroup}
+              value={value}
+              checked={autoClose.when_busy === value}
+              disabled={!autoClose.enabled}
+              title={t(`modal.settings.field.auto_close.when_busy.${value}`)}
+              onSelect={() => onAutoCloseChange({ when_busy: value })}
+            />
+          ))}
+        </div>
+      </SettingsField>
       <SettingsField
         label={t("modal.settings.field.auto_close.idle_minutes")}
         hint={t("modal.settings.field.auto_close.idle_minutes_help")}

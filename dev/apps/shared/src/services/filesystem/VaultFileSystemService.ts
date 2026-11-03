@@ -42,14 +42,16 @@ export interface VaultFileSystemService {
     source: VaultBinaryByteSource,
   ): Promise<string | null>;
   /**
-   * Daemon/FFI streams `osPath` into `store/` (no renderer/JSON file bytes).
-   * The file is in the sealed index when this resolves.
+   * Daemon/FFI streams `osPath` into `store/` (no renderer/JSON file bytes),
+   * as the job `job`. The file is in the sealed index when this resolves; a
+   * stop rejects with `job_cancelled` and leaves nothing of it.
    */
   importFileFromOsPath(
     vaultId: string,
     parentPath: string,
     fileName: string,
     osPath: string,
+    job: string,
   ): Promise<string | null>;
   createFolder(vaultId: string, parentPath: string, baseName: string): Promise<string | null>;
   ensureFolder(vaultId: string, parentPath: string, folderName: string): Promise<string | null>;

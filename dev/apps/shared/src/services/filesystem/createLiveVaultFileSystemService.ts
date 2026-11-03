@@ -42,6 +42,7 @@ export interface LiveVaultFileSystemRpc {
     parentPath: string,
     name: string,
     osPath: string,
+    job: string,
   ): Promise<{ path: string; revision: number }>;
   truncate(id: string, path: string, size: number): Promise<number>;
   createFile(
@@ -321,8 +322,8 @@ export function createLiveVaultFileSystemService(
       }
     },
 
-    async importFileFromOsPath(vaultId, parentPath, fileName, osPath) {
-      const created = await rpc.importOsFile(vaultId, parentPath, fileName, osPath);
+    async importFileFromOsPath(vaultId, parentPath, fileName, osPath, job) {
+      const created = await rpc.importOsFile(vaultId, parentPath, fileName, osPath, job);
       return created.path;
     },
 

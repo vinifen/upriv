@@ -24,6 +24,7 @@ import { useTheme } from "@/theme";
 import { spacing } from "@/theme/tokens";
 import { VaultRootLocationSection } from "./VaultRootLocationSection";
 import { VaultRootConfirmFooter } from "./VaultRootConfirmFooter";
+import { useDataFolderCopy } from "./useDataFolderCopy";
 
 const APPLIED_INDICATOR_MS = 900;
 
@@ -39,6 +40,8 @@ interface VaultRootDataFolderModalProps {
   vaultActivityBlocksChange?: boolean;
   /** Export data folder. Absent when this build has no data folder service. */
   exportControls?: DataFolderExportControls;
+  /** List toast. An Apply keeps running after the window closes and reports here. */
+  onNotice?: (message: string) => void;
 }
 
 /**
@@ -61,6 +64,7 @@ export function VaultRootDataFolderModal({
   onDirtyChange,
   vaultActivityBlocksChange = false,
   exportControls,
+  onNotice,
 }: VaultRootDataFolderModalProps) {
   const { t } = useTranslation();
   const { colors, typography } = useTheme();
@@ -74,6 +78,9 @@ export function VaultRootDataFolderModal({
   const [busy, setBusy] = useState(false);
   const [appliedVisible, setAppliedVisible] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const dataFolderCopy = useDataFolderCopy((stopError) =>
+    setError(t(mobileErrorI18nKey(stopError, "error.job_not_stoppable"))),
+  );
   /** Export a copy is the chosen radio. A running export keeps it chosen. */
   const [exportChosen, setExportChosen] = useState(false);
   const exportDestination = useDataFolderExportDestination();
@@ -88,7 +95,10 @@ export function VaultRootDataFolderModal({
     exportControls?.job == null &&
     dataFolderExportPending(exportDestination.folder.path, exportDestination.zipName) !== null;
   const submitLock = useRef(false);
+  /** Bumped only when Apply runs past `OPERATION_LIMIT_MS`; closing never drops a result. */
   const busyGen = useRef(0);
+  const openRef = useRef(open);
+  openRef.current = open;
   const openedRef = useRef(false);
   const appliedHideRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const gateRef = useRef(gate);
@@ -118,19 +128,16 @@ export function VaultRootDataFolderModal({
 
   useEffect(() => {
     if (!open) {
+      // An Apply in flight keeps running; its outcome comes back as a list toast.
       openedRef.current = false;
       setConfirmOpen(false);
       setDiscardConfirmOpen(false);
-      setBusy(false);
       setAppliedVisible(false);
       setError(null);
       setExportChosen(false);
       cancelExportPick();
       // The saved line belongs to this opening of the window; the folder stays.
       clearExportWritten?.();
-      submitLock.current = false;
-      busyGen.current += 1;
-      clearTimeout(appliedHideRef.current);
       return;
     }
     if (!openedRef.current) {
@@ -213,7 +220,13 @@ export function VaultRootDataFolderModal({
   }, []);
 
   const requestClose = useCallback(() => {
-    if (busy || appliedVisible) return;
+    // The Applied line closes the window itself a moment later.
+    if (appliedVisible) return;
+    // A folder being applied is not a draft: Apply keeps running and reports with a toast.
+    if (busy) {
+      onClose();
+      return;
+    }
     if (confirmOpen || discardConfirmOpen) {
       dismissFooterConfirm();
       return;
@@ -296,11 +309,14 @@ export function VaultRootDataFolderModal({
           setConfirmOpen(false);
           return;
         }
-        const applied = await vaultRoot.setupAtPath(picked.uri, {
-          replaceIncomplete: replacePolicy != null,
-          replacePolicy,
-          bootstrap: { locale: settings.ui.locale },
-        });
+        const applied = await vaultRoot
+          .setupAtPath(picked.uri, {
+            replaceIncomplete: replacePolicy != null,
+            replacePolicy,
+            bootstrap: { locale: settings.ui.locale },
+            job: dataFolderCopy.begin(picked.uri),
+          })
+          .finally(dataFolderCopy.end);
         alertIfPrivateRootLeftBehind(
           applied.privateRoot,
           t("modal.vault_root_setup.title"),
@@ -321,11 +337,14 @@ export function VaultRootDataFolderModal({
           setError(t("modal.vault_root_setup.error_path_required"));
           return;
         }
-        const applied = await vaultRoot.setupAtPath(nextPath, {
-          replaceIncomplete: replacePolicy != null,
-          replacePolicy,
-          bootstrap: { locale: settings.ui.locale },
-        });
+        const applied = await vaultRoot
+          .setupAtPath(nextPath, {
+            replaceIncomplete: replacePolicy != null,
+            replacePolicy,
+            bootstrap: { locale: settings.ui.locale },
+            job: dataFolderCopy.begin(nextPath),
+          })
+          .finally(dataFolderCopy.end);
         alertIfPrivateRootLeftBehind(
           applied.privateRoot,
           t("modal.vault_root_setup.title"),
@@ -334,15 +353,7 @@ export function VaultRootDataFolderModal({
       }
       if (gen !== busyGen.current) return;
 
-      // Applied indicator briefly, then close BEFORE patchSettings reload —
-      // keeps the modal from flashing the new root's theme while still open.
-      setConfirmOpen(false);
-      setAppliedVisible(true);
-      clearTimeout(appliedHideRef.current);
-      appliedHideRef.current = setTimeout(() => {
-        if (gen !== busyGen.current) return;
-        setAppliedVisible(false);
-        onClose();
+      const saveRoot = () =>
         void patchSettings(
           {
             app: {
@@ -352,11 +363,28 @@ export function VaultRootDataFolderModal({
           },
           { vaultRootAlreadyApplied: true },
         );
+      if (!openRef.current) {
+        onNotice?.(t("modal.data_folder.applied"));
+        saveRoot();
+        return;
+      }
+      // Applied indicator briefly, then close BEFORE patchSettings reload —
+      // keeps the modal from flashing the new root's theme while still open.
+      setConfirmOpen(false);
+      setAppliedVisible(true);
+      clearTimeout(appliedHideRef.current);
+      appliedHideRef.current = setTimeout(() => {
+        if (gen !== busyGen.current) return;
+        setAppliedVisible(false);
+        onClose();
+        saveRoot();
       }, APPLIED_INDICATOR_MS);
     })()
       .catch((err) => {
         if (gen !== busyGen.current) return;
-        setError(t(mobileErrorI18nKey(err, "modal.vault_root_setup.error_init")));
+        const message = t(mobileErrorI18nKey(err, "modal.vault_root_setup.error_init"));
+        if (openRef.current) setError(message);
+        else onNotice?.(message);
       })
       .finally(() => {
         if (gen !== busyGen.current) return;
@@ -366,9 +394,11 @@ export function VaultRootDataFolderModal({
   }, [
     appliedVisible,
     busy,
+    dataFolderCopy,
     draftDirty,
     mode,
     onClose,
+    onNotice,
     patchSettings,
     path,
     settings.ui.locale,
@@ -419,6 +449,8 @@ export function VaultRootDataFolderModal({
         setConfirmOpen(false);
         setError(t("loading.timed_out"));
       }}
+      copy={dataFolderCopy.copy}
+      onStopCopy={dataFolderCopy.stop}
     />
   );
 

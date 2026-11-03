@@ -54,6 +54,8 @@ export type CreateVaultWizardAction =
   | { type: "submitRequested" }
   | { type: "importPasswordTestStarted" }
   | { type: "importPasswordTestFinished"; ok: boolean; unavailable?: boolean }
+  /** The person stopped the test: the step stays as it was, nothing marked or filled. */
+  | { type: "importPasswordTestStopped" }
   | {
       type: "embeddedSettings";
       embedded: EmbeddedVaultSettings;
@@ -209,6 +211,9 @@ export function createVaultWizardReducer(
 
     case "importPasswordTestStarted":
       return { ...state, testingPassword: true };
+
+    case "importPasswordTestStopped":
+      return { ...state, testingPassword: false };
 
     // Leaves `discardConfirmOpen` alone: an async probe answering is not the
     // user answering the close prompt they opened while it was in flight.

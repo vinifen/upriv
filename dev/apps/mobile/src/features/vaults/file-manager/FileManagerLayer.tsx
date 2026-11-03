@@ -5,6 +5,7 @@ import {
   fileManagerDismissIntent,
 } from "@upriv/shared";
 import { useFileManagerSelector, useFileManagerShell } from "@upriv/shared/react";
+import { Button } from "@/components/ui";
 import { useTranslation } from "@/i18n";
 import { useLogService } from "@/platform/services";
 import { useFileManager } from "./FileManagerContext";
@@ -20,11 +21,15 @@ import { FileManagerWorkspace } from "./workspace/FileManagerWorkspace";
 export const FileManagerLayer = memo(function FileManagerLayer() {
   const { t } = useTranslation();
   const logService = useLogService();
-  const { getEntry, getState, minimize, maximize, dismiss, dispatchWorkspace } = useFileManager();
+  const { getEntry, getState, minimize, maximize, dismiss, dispatchWorkspace, cancelImports } =
+    useFileManager();
   const { entries, maximizedVaultId, focusedVaultId } = useFileManagerShell();
   const maximizedEntry = entries.find((entry) => entry.vaultId === maximizedVaultId) ?? null;
   const suspendMinimize = useFileManagerSelector((state) =>
     Boolean(maximizedVaultId && state.entries[maximizedVaultId]?.workspace.unsavedPrompt),
+  );
+  const importing = useFileManagerSelector((state) =>
+    Boolean(maximizedVaultId && state.entries[maximizedVaultId]?.importInFlight),
   );
 
   const requestDismiss = useCallback(
@@ -75,6 +80,17 @@ export const FileManagerLayer = memo(function FileManagerLayer() {
           keepMounted
           title={maximizedEntry ? t("modal.file_manager.title") : ""}
           contextTitle={maximizedEntry?.displayName}
+          titleAccessory={
+            importing && maximizedEntry ? (
+              // One tap: the files waiting are dropped and the one being written leaves nothing.
+              <Button
+                variant="secondary"
+                size="sm"
+                label={t("modal.file_manager.action.stop_import")}
+                onPress={() => cancelImports(maximizedEntry.vaultId)}
+              />
+            ) : null
+          }
           suspendMinimize={suspendMinimize}
           onMinimize={() => {
             if (!maximizedEntry || suspendMinimize) return;

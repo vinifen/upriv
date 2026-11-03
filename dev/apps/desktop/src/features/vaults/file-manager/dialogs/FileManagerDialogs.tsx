@@ -1,13 +1,12 @@
 import { useEffect, useState } from "react";
-import { Button, LoadingBudgetHint, Modal, Toast } from "@/components/ui";
+import { Button, Modal, Toast } from "@/components/ui";
 import { useTranslation } from "@/i18n";
 import {
-  LOADING_BUDGET_MS,
   unsavedPromptBodyKey,
   unsavedPromptConfirmsAllFiles,
   unsavedPromptIsImport,
 } from "@upriv/shared";
-import { useLoadingBudget } from "@upriv/shared/react";
+import { useOperationLimit } from "@upriv/shared/react";
 import type { FileManagerApi } from "../hooks/useVaultFileManager";
 
 interface FileManagerDialogsProps {
@@ -22,12 +21,12 @@ export function FileManagerDialogs({ fm, promptsOpen = true }: FileManagerDialog
   const isMultiFilePrompt = unsavedPromptConfirmsAllFiles(unsavedPrompt);
   const isImportInProgressPrompt = unsavedPromptIsImport(unsavedPrompt);
   const [dontAskAgain, setDontAskAgain] = useState(false);
-  const saveBudget = useLoadingBudget(fm.unsavedSaving, LOADING_BUDGET_MS.vaultPipeline);
+  const saveLimit = useOperationLimit(fm.unsavedSaving);
   const { abandonUnsavedSave } = fm;
 
   useEffect(() => {
-    if (saveBudget.timedOut) abandonUnsavedSave();
-  }, [abandonUnsavedSave, saveBudget.timedOut]);
+    if (saveLimit.timedOut) abandonUnsavedSave();
+  }, [abandonUnsavedSave, saveLimit.timedOut]);
 
   /** The prompt holds through a save, so the files do not change under it. */
   const cancelUnsavedPrompt = () => {
@@ -149,9 +148,6 @@ export function FileManagerDialogs({ fm, promptsOpen = true }: FileManagerDialog
         <p className="text-sm leading-relaxed text-on-surface-variant">
           {unsavedPrompt ? t(unsavedPromptBodyKey(unsavedPrompt)) : null}
         </p>
-        {saveBudget.visible ? (
-          <LoadingBudgetHint budgetMs={saveBudget.budgetMs} remainingMs={saveBudget.remainingMs} />
-        ) : null}
       </Modal>
 
       <Toast toast={fm.toast} onDismiss={fm.dismissToast} className="bottom-20 z-[130]" />

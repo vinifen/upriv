@@ -159,15 +159,16 @@ pub fn probe_saf_fs() -> bool {
     upriv_core::host_fs::probe_mounted().is_ok()
 }
 
-/// Stream one Android content file into the open import session.
+/// Stream one Android content file into the open import session, as the job
+/// `job` (`job_cancel` stops it).
 ///
 /// `fd` is owned by this call (`ParcelFileDescriptor.detachFd`). Returns the
 /// same JSON envelope as [`invoke`].
 #[uniffi::export]
-pub fn import_content_fd(vault_id: String, logical_path: String, fd: i32) -> String {
+pub fn import_content_fd(vault_id: String, logical_path: String, fd: i32, job: String) -> String {
     install_panic_hook();
     let response = catch_unwind(AssertUnwindSafe(|| {
-        upriv_rpc::ingest_content_fd(&vault_id, &logical_path, fd)
+        upriv_rpc::ingest_content_fd(&vault_id, &logical_path, fd, &job)
     }))
     .unwrap_or_else(|_| RpcResponse {
         ok: false,

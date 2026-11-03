@@ -1,6 +1,7 @@
 import { type ReactNode, useEffect, useState } from "react";
 import { Platform, StyleSheet, Text, View } from "react-native";
 import {
+  AUTO_CLOSE_WHEN_BUSY,
   KDF_UNLOCK_OPTION_META,
   KDF_UNLOCK_PRESETS,
   IDLE_AUTO_CLOSE_MINUTES_MAX,
@@ -639,6 +640,24 @@ export function VaultSettingsAutoCloseSection({
         value={autoClose.enabled}
         onValueChange={(enabled) => onAutoCloseChange({ enabled })}
       />
+      <FieldLabel disabled={!autoClose.enabled}>
+        {t("modal.settings.field.auto_close.when_busy")}
+      </FieldLabel>
+      <FieldHint disabled={!autoClose.enabled}>
+        {t("modal.settings.field.auto_close.when_busy_help")}
+      </FieldHint>
+      <RadioGroup>
+        {AUTO_CLOSE_WHEN_BUSY.map((value) => (
+          <PolicyRadioOption
+            key={value}
+            value={value}
+            checked={autoClose.when_busy === value}
+            disabled={!autoClose.enabled}
+            title={t(`modal.settings.field.auto_close.when_busy.${value}`)}
+            onSelect={() => onAutoCloseChange({ when_busy: value })}
+          />
+        ))}
+      </RadioGroup>
       <FieldLabel disabled={!autoClose.enabled}>
         {t("modal.settings.field.auto_close.idle_minutes")}
       </FieldLabel>

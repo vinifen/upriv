@@ -1,4 +1,5 @@
 import {
+  OPERATION_LIMIT_MS,
   RpcError,
   VAULT_ERROR_CODES,
   isSafContentUri,
@@ -36,16 +37,11 @@ export interface SafExportMount extends ExportFolderGrants {
    * Run `write` with the folder core writes into: a filesystem path as it is,
    * or `/upriv-saf-export` mounted on a picked `content://` tree, so the file
    * goes straight there and nothing is staged in app storage. The mount is
-   * dropped only once core no longer runs `job`, waiting at most `budgetMs`:
-   * after a timed-out call core may still be removing its partial file
-   * through it.
+   * dropped once `job_status` says `job` ended (waiting at most
+   * `OPERATION_LIMIT_MS` after the call returned): a call that failed in the
+   * bridge may leave core still removing its partial file through it.
    */
-  withExportFolder<T>(
-    destDir: string,
-    job: string,
-    budgetMs: number,
-    write: (dir: string) => Promise<T>,
-  ): Promise<T>;
+  withExportFolder<T>(destDir: string, job: string, write: (dir: string) => Promise<T>): Promise<T>;
 }
 
 function timer(ms: number): Promise<void> {
@@ -67,8 +63,8 @@ export function createSafExportMount(io: SafExportIo): SafExportMount {
     io.releaseTree(uri);
   };
 
-  const untilJobEnds = async (job: string, budgetMs: number): Promise<void> => {
-    const deadline = Date.now() + budgetMs;
+  const untilJobEnds = async (job: string): Promise<void> => {
+    const deadline = Date.now() + OPERATION_LIMIT_MS;
     while (Date.now() < deadline) {
       let running: JobProgress | null;
       try {
@@ -95,7 +91,7 @@ export function createSafExportMount(io: SafExportIo): SafExportMount {
       else holds.delete(uri);
       releaseIfUnused(uri);
     },
-    async withExportFolder(destDir, job, budgetMs, write) {
+    async withExportFolder(destDir, job, write) {
       const target = destDir.trim();
       if (!isSafContentUri(target)) return write(target);
       if (mounted !== null) {
@@ -116,7 +112,7 @@ export function createSafExportMount(io: SafExportIo): SafExportMount {
       try {
         return await write(SAF_EXPORT_ROOT);
       } finally {
-        await untilJobEnds(job, budgetMs);
+        await untilJobEnds(job);
         io.unmountExportTree();
         mounted = null;
         releaseIfUnused(target);

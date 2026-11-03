@@ -1,6 +1,6 @@
 import { useId, type ReactNode } from "react";
 import { PathField } from "@/components/PathField";
-import { Button, PasswordInput, SwitchRow } from "@/components/ui";
+import { Button, ElapsedTime, JobStopButton, PasswordInput, SwitchRow } from "@/components/ui";
 import {
   createVaultChoosesKdf,
   createVaultErrorsForField,
@@ -72,10 +72,7 @@ export function invalidateImportPicks(): void {
 
 export function renderCreateVaultStep(
   stepId: CreateVaultStepId,
-  props: StepProps & {
-    onTestImportPassword?: () => void;
-    testingPassword?: boolean;
-  },
+  props: StepProps & PasswordTestProps,
 ) {
   switch (stepId) {
     case "source":
@@ -399,16 +396,26 @@ function CreateVaultIdentityStep({
   );
 }
 
+/** The `.7z` password test: it has no time limit, and its Stop ends it. */
+interface PasswordTestProps {
+  onTestImportPassword?: () => void;
+  onStopTestImportPassword?: () => void;
+  testingPassword?: boolean;
+  passwordTestStartedAt?: number | null;
+}
+
 function CreateVaultPasswordStep({
   draft,
   errors,
   onChange,
   onTestImportPassword,
+  onStopTestImportPassword,
   testingPassword = false,
+  passwordTestStartedAt = null,
   bindFieldRef,
   onFieldFocus,
   onFieldSubmit,
-}: StepProps & { onTestImportPassword?: () => void; testingPassword?: boolean }) {
+}: StepProps & PasswordTestProps) {
   const { t } = useTranslation();
   const passwordId = useId();
   const confirmId = useId();
@@ -483,17 +490,29 @@ function CreateVaultPasswordStep({
         </SettingsField>
       ) : needsArchivePassword ? (
         <div className="flex flex-wrap items-center gap-2">
-          <Button
-            type="button"
-            variant="secondary"
-            size="md"
-            disabled={!draft.password.trim() || testingPassword}
-            onClick={onTestImportPassword}
-          >
-            {testingPassword
-              ? t("vault.create.action.testing_password")
-              : t("vault.create.action.test_password")}
-          </Button>
+          {testingPassword ? (
+            <>
+              <span className="text-sm text-on-surface-variant" role="status">
+                {t("vault.create.action.testing_password")}
+              </span>
+              <ElapsedTime startedAt={passwordTestStartedAt} layout="inline" />
+              <JobStopButton
+                stoppingSince={null}
+                stoppable
+                onStop={() => onStopTestImportPassword?.()}
+              />
+            </>
+          ) : (
+            <Button
+              type="button"
+              variant="secondary"
+              size="md"
+              disabled={!draft.password.trim()}
+              onClick={onTestImportPassword}
+            >
+              {t("vault.create.action.test_password")}
+            </Button>
+          )}
           {draft.passwordValidated ? (
             <span className="text-sm text-vault-open">{t("vault.create.password_validated")}</span>
           ) : null}

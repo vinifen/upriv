@@ -1,9 +1,9 @@
 import { ExportFolderField } from "@/components/ExportFolderField";
-import { Button, JobProgressBar, LoadingBudgetHint } from "@/components/ui";
+import { Button, JobProgressBar, JobStopButton } from "@/components/ui";
 import type { ExportFolder } from "@/hooks/useExportFolder";
 import { useTranslation } from "@/i18n";
 import { BACKUP_EXPORT_PROGRESS_COPY, exportFolderIssue } from "@upriv/shared";
-import { useLoadingBudget, type BackupExportJob } from "@upriv/shared/react";
+import type { BackupExportJob } from "@upriv/shared/react";
 
 interface BackupExportFolderStepProps {
   folder: ExportFolder;
@@ -57,10 +57,9 @@ interface BackupExportProgressProps {
   onStop: () => void;
 }
 
-/** How far this export got, how long it may still take, and its stop. */
+/** How far this export got, how long it has run, and its stop. */
 export function BackupExportProgress({ job, title, onStop }: BackupExportProgressProps) {
   const { t } = useTranslation();
-  const budget = useLoadingBudget(true, job.budgetMs, { startedAt: job.startedAt });
 
   return (
     <div className="space-y-2">
@@ -69,30 +68,25 @@ export function BackupExportProgress({ job, title, onStop }: BackupExportProgres
         <div className="min-w-0 flex-1 space-y-1.5">
           <JobProgressBar
             progress={job.progress}
+            startedAt={job.startedAt}
             label={t("modal.backup.export")}
             copy={BACKUP_EXPORT_PROGRESS_COPY}
           />
         </div>
-        <Button
-          variant="secondary"
-          size="sm"
-          className="shrink-0"
-          disabled={job.stopping}
-          onClick={onStop}
-        >
-          {job.stopping ? t("modal.backup.export_stopping") : t("modal.backup.export_stop")}
-        </Button>
+        <span className="shrink-0">
+          <JobStopButton
+            size="sm"
+            stoppingSince={job.stoppingSince}
+            stoppable={job.progress?.stoppable ?? true}
+            onStop={onStop}
+            label={t("modal.backup.export_stop")}
+            stoppingLabel={t("modal.backup.export_stopping")}
+          />
+        </span>
       </div>
       <p className="text-xs leading-relaxed text-on-surface-variant">
         {t("modal.backup.export_background_note")}
       </p>
-      {budget.visible ? (
-        <LoadingBudgetHint
-          budgetMs={budget.budgetMs}
-          remainingMs={budget.remainingMs}
-          layout="inline"
-        />
-      ) : null}
     </div>
   );
 }

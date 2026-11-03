@@ -2,15 +2,19 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { app, BrowserWindow, dialog, ipcMain, Menu, powerMonitor } from "electron";
-import { nativeImage, session, shell } from "electron";
+import { nativeImage, powerSaveBlocker, session, shell } from "electron";
 import {
   connectDaemonEvents,
   daemonRpc,
+  hurryDaemonShutdown,
+  killDaemon,
   setDaemonExitHandler,
   startDaemon,
   stopDaemon,
   type DaemonConnection,
 } from "./daemon";
+import { SHUTDOWN_NOW_TIMEOUT_MS, settleInvoke } from "./daemonProtocol";
+import { IDLE_WORK, parseWorkReport, workKeepsAwake, type WorkReport } from "./workReport";
 import {
   classifyDroppedPath,
   readDroppedImportPaths,
@@ -74,6 +78,13 @@ let daemonStarting: Promise<DaemonConnection> | null = null;
 let stopEvents: (() => void) | null = null;
 let quitting = false;
 let quitPrompting = false;
+/** The quit became Close now (dialog, overlay, or the OS ending the session). */
+let quitNow = false;
+/** The renderer's running work, as it last reported it. */
+let work: WorkReport = IDLE_WORK;
+/** Resolves the wait of a normal quit once the jobs end, or Close now is asked. */
+let jobsSettled: (() => void) | null = null;
+let keepAwakeId: number | null = null;
 
 type QuitChoice = "flush" | "now" | "cancel";
 
@@ -215,17 +226,67 @@ async function resolveVaultMountOsPath(
 async function teardownDaemon(now: boolean): Promise<void> {
   stopEvents?.();
   stopEvents = null;
+  // A daemon stopped for running out of time is not an unexpected exit.
+  setDaemonExitHandler(null);
   await stopDaemon(daemon, { now });
   daemon = null;
-  setDaemonExitHandler(null);
 }
 
+/**
+ * Quit. A normal quit first waits for the renderer's jobs (the overlay lists
+ * them, each with Stop), then closes every vault with its backup, with no
+ * deadline. Close now stops everything and quits within
+ * `SHUTDOWN_NOW_TIMEOUT_MS`.
+ */
 async function gracefulShutdown(exitCode = 0, now = false): Promise<void> {
-  if (quitting) return;
+  if (quitting) {
+    if (now) await requestQuitNow();
+    return;
+  }
   quitting = true;
+  quitNow = now;
   await showQuitClosing(now);
-  await teardownDaemon(now);
+  if (!now) await jobsToSettle();
+  await teardownDaemon(quitNow);
   app.exit(exitCode);
+}
+
+function jobsToSettle(): Promise<void> {
+  if (work.jobs === 0 || quitNow) return Promise.resolve();
+  return new Promise((resolve) => {
+    jobsSettled = () => {
+      jobsSettled = null;
+      resolve();
+    };
+  });
+}
+
+/** Close now during a normal quit: stop the jobs and hurry the closes. */
+async function requestQuitNow(): Promise<void> {
+  if (!quitting || quitNow) return;
+  quitNow = true;
+  const win = mainWindow;
+  if (win && !win.isDestroyed()) win.webContents.send("upriv-event", "quit_closing", { now: true });
+  if (jobsSettled) {
+    // Still waiting for jobs: the shutdown that follows runs the Close now way.
+    jobsSettled();
+    return;
+  }
+  const connection = daemon;
+  await hurryDaemonShutdown(connection);
+  setTimeout(() => void killDaemon(connection), SHUTDOWN_NOW_TIMEOUT_MS);
+}
+
+function applyWorkReport(next: WorkReport): void {
+  work = next;
+  const awake = workKeepsAwake(next);
+  if (awake && keepAwakeId === null) {
+    keepAwakeId = powerSaveBlocker.start("prevent-app-suspension");
+  } else if (!awake && keepAwakeId !== null) {
+    powerSaveBlocker.stop(keepAwakeId);
+    keepAwakeId = null;
+  }
+  if (next.jobs === 0) jobsSettled?.();
 }
 
 /** Let the renderer paint a closing overlay before the shutdown RPC blocks this quit. */
@@ -268,8 +329,10 @@ async function anyVaultSessionOpen(): Promise<boolean> {
   }
 }
 
-async function confirmQuitIfVaultsOpen(): Promise<QuitChoice> {
-  if (!(await anyVaultSessionOpen())) return "flush";
+/** Ask before quitting while a vault is open or the renderer reports work running. */
+async function confirmQuitIfBusy(): Promise<QuitChoice> {
+  const vaultOpen = await anyVaultSessionOpen();
+  if (!vaultOpen && work.jobs === 0) return "flush";
   const copy = quitCopyForLocale(await readUiLocale());
   const options: Electron.MessageBoxOptions = {
     type: "warning",
@@ -277,7 +340,7 @@ async function confirmQuitIfVaultsOpen(): Promise<QuitChoice> {
     defaultId: 0,
     cancelId: 2,
     noLink: true,
-    message: copy.message,
+    message: vaultOpen ? copy.message : copy.workMessage,
   };
   const result = mainWindow
     ? await dialog.showMessageBox(mainWindow, options)
@@ -367,17 +430,37 @@ async function createWindow(): Promise<void> {
     quitPrompting = true;
     void (async () => {
       try {
-        await quitFromChoice(await confirmQuitIfVaultsOpen());
+        await quitFromChoice(await confirmQuitIfBusy());
       } finally {
         quitPrompting = false;
       }
     })();
   });
 
+  // Windows log-off or shutdown: the OS will not wait for a full close.
+  mainWindow.on("session-end", () => {
+    void gracefulShutdown(0, true);
+  });
+
+  // A renderer that is gone reports nothing more: its work would hold a quit
+  // and keep the computer awake for good. `app_shutdown` stops what core still runs.
+  mainWindow.webContents.on("render-process-gone", () => {
+    applyWorkReport(IDLE_WORK);
+  });
+
   mainWindow.on("closed", () => {
     mainWindow = null;
+    applyWorkReport(IDLE_WORK);
   });
 }
+
+ipcMain.on("upriv-work", (_event, report: unknown) => {
+  applyWorkReport(parseWorkReport(report));
+});
+
+ipcMain.on("upriv-quit-now", () => {
+  void requestQuitNow();
+});
 
 /** Same CPU count Rust `available_parallelism` uses for the import pool. */
 function logicalProcessorCount(): number {
@@ -413,124 +496,134 @@ ipcMain.handle("upriv-retrieve-portal-drop", async (_event, key: unknown) => {
   return retrievePortalTransferPaths(key);
 });
 
+// A failed call is an answer, not a crash of this handler: a refused password
+// or a stopped job must not print as "Error occurred in handler". The preload
+// turns `{ ok: false }` back into the `code: message` error the renderer reads.
 ipcMain.handle(
   "upriv-invoke",
-  async (_event, method: string, params: Record<string, unknown>, timeoutMs?: number) => {
-    if (typeof method !== "string" || !ALLOWED_IPC_METHODS.has(method)) {
-      throw new Error(`unknown_method: unknown IPC method: ${String(method)}`);
-    }
-
-    if (method === "app_exit") {
-      await gracefulShutdown(0);
-      return null;
-    }
-
-    if (method === "pick_directory") {
-      const defaultPath =
-        typeof params?.defaultPath === "string" && params.defaultPath.trim()
-          ? params.defaultPath.trim()
-          : undefined;
-      const title =
-        typeof params?.title === "string" && params.title.trim() ? params.title.trim() : undefined;
-      const options: Electron.OpenDialogOptions = {
-        properties: ["openDirectory", "createDirectory"],
-        ...(title ? { title } : {}),
-        ...(defaultPath ? { defaultPath } : {}),
-      };
-      const result = mainWindow
-        ? await dialog.showOpenDialog(mainWindow, options)
-        : await dialog.showOpenDialog(options);
-      if (result.canceled || result.filePaths.length === 0) {
-        return null;
-      }
-      return result.filePaths[0];
-    }
-
-    if (method === "pick_file") {
-      const title =
-        typeof params?.title === "string" && params.title.trim() ? params.title.trim() : undefined;
-      const filters = parseOpenDialogFilters(params?.filters);
-      const options: Electron.OpenDialogOptions = {
-        properties: ["openFile"],
-        ...(title ? { title } : {}),
-        ...(filters ? { filters } : {}),
-      };
-      const result = mainWindow
-        ? await dialog.showOpenDialog(mainWindow, options)
-        : await dialog.showOpenDialog(options);
-      if (result.canceled || result.filePaths.length === 0) {
-        return null;
-      }
-      return result.filePaths[0];
-    }
-
-    if (method === "reveal_in_file_manager") {
-      const osPath = await resolveVaultMountOsPath(params, finiteTimeoutMs(timeoutMs));
-      await revealOsPathInFileManager(osPath, fs, shell);
-      return null;
-    }
-
-    if (method === "reveal_os_path") {
-      const target = typeof params?.path === "string" ? params.path.trim() : "";
-      if (!isAbsoluteOsPath(target)) {
-        throw new Error("open_path_failed: path must be absolute");
-      }
-      await revealOsPathInFileManager(target, fs, shell);
-      return null;
-    }
-
-    if (method === "open_in_terminal") {
-      const osPath = await resolveVaultMountOsPath(params, finiteTimeoutMs(timeoutMs));
-      await openOsPathInTerminal(osPath, fs, createDefaultTerminalHost());
-      return null;
-    }
-
-    if (method === "winfsp_status") {
-      return {
-        applicable: process.platform === "win32",
-        installed: winFspRuntimeInstalled(),
-      };
-    }
-
-    if (method === "winfsp_install") {
-      if (process.platform !== "win32" || winFspRuntimeInstalled()) {
-        return { ok: true };
-      }
-      const script = winfspScriptCandidates(process.resourcesPath, app.getAppPath()).find((file) =>
-        fs.existsSync(file),
-      );
-      if (!script) return { ok: false };
-      const code = await runBundledWinFspInstaller(script);
-      return { ok: winfspInstallSucceeded(code) && winFspRuntimeInstalled() };
-    }
-
-    if (method === "fuse_status") {
-      return {
-        applicable: process.platform === "linux",
-        installed: fuseRuntimePresent(),
-      };
-    }
-
-    if (method === "fuse_install") {
-      if (process.platform !== "linux" || fuseRuntimePresent()) {
-        return { ok: true };
-      }
-      let osRelease = "";
-      try {
-        osRelease = fs.readFileSync("/etc/os-release", "utf8");
-      } catch {
-        return { ok: false };
-      }
-      const plan = fuseInstallPlan({ osRelease, canExecute: canExecuteFile });
-      if (!plan) return { ok: false };
-      const code = await runFuseInstall(plan);
-      return { ok: code === 0 && fuseRuntimePresent() };
-    }
-
-    const activeDaemon = await ensureDaemon();
-    return daemonRpc(activeDaemon, method, params, finiteTimeoutMs(timeoutMs));
-  },
+  (_event, method: string, params: Record<string, unknown>, timeoutMs?: number) =>
+    settleInvoke(() => handleInvoke(method, params, timeoutMs)),
 );
+
+async function handleInvoke(
+  method: string,
+  params: Record<string, unknown>,
+  timeoutMs: number | undefined,
+): Promise<unknown> {
+  if (typeof method !== "string" || !ALLOWED_IPC_METHODS.has(method)) {
+    throw new Error(`unknown_method: unknown IPC method: ${String(method)}`);
+  }
+
+  if (method === "app_exit") {
+    await gracefulShutdown(0);
+    return null;
+  }
+
+  if (method === "pick_directory") {
+    const defaultPath =
+      typeof params?.defaultPath === "string" && params.defaultPath.trim()
+        ? params.defaultPath.trim()
+        : undefined;
+    const title =
+      typeof params?.title === "string" && params.title.trim() ? params.title.trim() : undefined;
+    const options: Electron.OpenDialogOptions = {
+      properties: ["openDirectory", "createDirectory"],
+      ...(title ? { title } : {}),
+      ...(defaultPath ? { defaultPath } : {}),
+    };
+    const result = mainWindow
+      ? await dialog.showOpenDialog(mainWindow, options)
+      : await dialog.showOpenDialog(options);
+    if (result.canceled || result.filePaths.length === 0) {
+      return null;
+    }
+    return result.filePaths[0];
+  }
+
+  if (method === "pick_file") {
+    const title =
+      typeof params?.title === "string" && params.title.trim() ? params.title.trim() : undefined;
+    const filters = parseOpenDialogFilters(params?.filters);
+    const options: Electron.OpenDialogOptions = {
+      properties: ["openFile"],
+      ...(title ? { title } : {}),
+      ...(filters ? { filters } : {}),
+    };
+    const result = mainWindow
+      ? await dialog.showOpenDialog(mainWindow, options)
+      : await dialog.showOpenDialog(options);
+    if (result.canceled || result.filePaths.length === 0) {
+      return null;
+    }
+    return result.filePaths[0];
+  }
+
+  if (method === "reveal_in_file_manager") {
+    const osPath = await resolveVaultMountOsPath(params, finiteTimeoutMs(timeoutMs));
+    await revealOsPathInFileManager(osPath, fs, shell);
+    return null;
+  }
+
+  if (method === "reveal_os_path") {
+    const target = typeof params?.path === "string" ? params.path.trim() : "";
+    if (!isAbsoluteOsPath(target)) {
+      throw new Error("open_path_failed: path must be absolute");
+    }
+    await revealOsPathInFileManager(target, fs, shell);
+    return null;
+  }
+
+  if (method === "open_in_terminal") {
+    const osPath = await resolveVaultMountOsPath(params, finiteTimeoutMs(timeoutMs));
+    await openOsPathInTerminal(osPath, fs, createDefaultTerminalHost());
+    return null;
+  }
+
+  if (method === "winfsp_status") {
+    return {
+      applicable: process.platform === "win32",
+      installed: winFspRuntimeInstalled(),
+    };
+  }
+
+  if (method === "winfsp_install") {
+    if (process.platform !== "win32" || winFspRuntimeInstalled()) {
+      return { ok: true };
+    }
+    const script = winfspScriptCandidates(process.resourcesPath, app.getAppPath()).find((file) =>
+      fs.existsSync(file),
+    );
+    if (!script) return { ok: false };
+    const code = await runBundledWinFspInstaller(script);
+    return { ok: winfspInstallSucceeded(code) && winFspRuntimeInstalled() };
+  }
+
+  if (method === "fuse_status") {
+    return {
+      applicable: process.platform === "linux",
+      installed: fuseRuntimePresent(),
+    };
+  }
+
+  if (method === "fuse_install") {
+    if (process.platform !== "linux" || fuseRuntimePresent()) {
+      return { ok: true };
+    }
+    let osRelease = "";
+    try {
+      osRelease = fs.readFileSync("/etc/os-release", "utf8");
+    } catch {
+      return { ok: false };
+    }
+    const plan = fuseInstallPlan({ osRelease, canExecute: canExecuteFile });
+    if (!plan) return { ok: false };
+    const code = await runFuseInstall(plan);
+    return { ok: code === 0 && fuseRuntimePresent() };
+  }
+
+  const activeDaemon = await ensureDaemon();
+  return daemonRpc(activeDaemon, method, params, finiteTimeoutMs(timeoutMs));
+}
 
 function winFspRuntimeInstalled(): boolean {
   if (process.platform !== "win32") return true;
@@ -588,6 +681,10 @@ app.whenReady().then(() => {
   if (!gotSingleInstanceLock) return;
   powerMonitor.on("suspend", () => sendPower("suspend"));
   powerMonitor.on("resume", () => sendPower("resume"));
+  // Linux and macOS shutdown: the OS will not wait for a full close.
+  powerMonitor.on("shutdown", () => {
+    void gracefulShutdown(0, true);
+  });
   if (process.platform === "win32") {
     app.setAppUserModelId("com.upriv.desktop");
   }
@@ -612,7 +709,7 @@ app.on("before-quit", (event) => {
   quitPrompting = true;
   void (async () => {
     try {
-      const choice = await confirmQuitIfVaultsOpen();
+      const choice = await confirmQuitIfBusy();
       if (choice !== "cancel") {
         await quitFromChoice(choice);
         return;
@@ -626,12 +723,16 @@ app.on("before-quit", (event) => {
   })();
 });
 
+// The OS or a service manager ending the process will not wait: Close now.
+process.on("SIGTERM", () => {
+  void gracefulShutdown(0, true);
+});
+
 if (isDev) {
-  const gracefulDevExit = (): void => {
+  // Ctrl+C in the dev terminal quits the normal way.
+  process.on("SIGINT", () => {
     if (!quitting) void gracefulShutdown(0);
-  };
-  process.on("SIGINT", gracefulDevExit);
-  process.on("SIGTERM", gracefulDevExit);
+  });
 }
 
 app.on("activate", () => {

@@ -14,7 +14,12 @@ export {
   OPENING_PIPELINE_STEP_COUNT,
   runTimedPipeline,
 } from "./pipeline";
-export { closeNowApplies, closeNowNeedsConfirm, closeNowNoticeKeys } from "./closeNow";
+export {
+  closeNowApplies,
+  closeNowNeedsConfirm,
+  closeNowNoticeKeys,
+  closeNowQuitNoticeKeys,
+} from "./closeNow";
 export {
   vaultCloseBlocker,
   vaultClosePromptBodyKey,

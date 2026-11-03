@@ -163,6 +163,8 @@ export function useSystemInfoData({
     ui.lifecycle_open_file_manager_on_open,
     ui.lifecycle_keep_open_on_wake,
     ui.lifecycle_confirm_close_now,
+    ui.lifecycle_confirm_stop,
+    ui.lifecycle_confirm_lock,
     ui.always_show_hidden_vaults,
     logging.enabled,
     logging.level,

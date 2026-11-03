@@ -5,17 +5,23 @@
 //!
 //! **Concurrency:** Off-stdin lanes, so a long import or rewrap does not sit in
 //! front of a lock.
-//! - `upriv-argon2`: short unlocks (`vault_open`, `vault_create`, export probe).
-//! - `upriv-fs-io`: close and delete.
+//! - `upriv-argon2`: short unlocks (`vault_open`, `vault_create`).
+//! - `upriv-fs-io`: close, delete, and the quit (`app_shutdown`).
 //! - `upriv-rewrap`: password and unlock-RAM change (safety zip plus header commit).
 //! - `upriv-pack`: zip and `.7z` import, vault and backup export. One at a time.
-//! - `upriv-data-folder`: the zip of the whole data folder. Work it refuses on
-//!   the other lanes answers at once instead of waiting behind the copy.
-//! - `upriv-import`: file imports. One thread per import slot (one file on a
-//!   single core, up to four on a large desktop).
+//! - `upriv-data-folder`: the zip of the whole data folder, and a phone's copy
+//!   of its private data folder. Work it refuses on the other lanes answers at
+//!   once instead of waiting behind the copy.
+//! - `upriv-import`: file imports and the `.7z` password test. One thread per
+//!   import slot (one file on a single core, up to four on a large desktop).
 //!
-//! Light RPCs stay on the stdin loop. Electron matches responses by `id`.
-//! One Argon2 at a time: single worker + core `with_unlock_lock`.
+//! Light RPCs stay on the stdin loop, so `job_status` and `job_cancel` answer
+//! beside every job. Electron matches responses by `id`. One Argon2 at a time:
+//! single worker + core `with_unlock_lock`.
+//!
+//! **Quit:** the first `app_shutdown` runs on the close lane. A second one,
+//! sent when the person chooses Close now meanwhile, hurries it from stdin and
+//! answers at once. Electron ends stdin once the first one answers.
 
 mod plain_watch;
 mod wire;
@@ -29,7 +35,7 @@ use std::thread::{self, JoinHandle};
 use serde_json::json;
 use upriv_rpc::RpcErrorBody;
 use wire::{
-    handle_request, heavy_lane, is_heavy_method, HeavyLane, RequestOutcome, WireIn, WireOut,
+    handle_request, heavy_lane, is_heavy_method, HeavyLane, WireIn, WireOut, SHUTDOWN_METHOD,
 };
 use zeroize::Zeroizing;
 
@@ -99,9 +105,9 @@ fn log_stderr(message: std::fmt::Arguments<'_>) {
     let _ = writeln!(io::stderr(), "[upriv-daemon] {message}");
 }
 
-fn run_request_caught(id: u64, method: String, params: serde_json::Value) -> RequestOutcome {
+fn run_request_caught(id: u64, method: String, params: serde_json::Value) -> WireOut {
     panic::catch_unwind(AssertUnwindSafe(|| handle_request(id, method, params)))
-        .unwrap_or_else(|_| RequestOutcome::Continue(internal_error_response(id)))
+        .unwrap_or_else(|_| internal_error_response(id))
 }
 
 fn spawn_worker_pool(
@@ -127,9 +133,7 @@ fn spawn_worker_pool(
                 match job {
                     Ok(HeavyJob::Shutdown) | Err(_) => break,
                     Ok(HeavyJob::Request { id, method, params }) => {
-                        let response = match run_request_caught(id, method, params) {
-                            RequestOutcome::Continue(wire) | RequestOutcome::Shutdown(wire) => wire,
-                        };
+                        let response = run_request_caught(id, method, params);
                         if let Err(error) = write_out(&stdout, &response) {
                             log_stderr(format_args!("{name} stdout error: {error}"));
                             break;
@@ -155,10 +159,7 @@ fn spawn_named_worker(
                 match job {
                     HeavyJob::Shutdown => break,
                     HeavyJob::Request { id, method, params } => {
-                        // Off-stdin methods are never `app_shutdown`.
-                        let response = match run_request_caught(id, method, params) {
-                            RequestOutcome::Continue(wire) | RequestOutcome::Shutdown(wire) => wire,
-                        };
+                        let response = run_request_caught(id, method, params);
                         if let Err(error) = write_out(&stdout, &response) {
                             log_stderr(format_args!("{thread_name} stdout error: {error}"));
                             break;
@@ -222,7 +223,8 @@ fn run() -> io::Result<()> {
         }
     }
 
-    let mut shut_down = false;
+    // Set once the first `app_shutdown` went to the close lane.
+    let mut shutting_down = false;
     let stdin = io::stdin();
     // A write that fails means the app is gone, the same as stdin ending.
     for line in stdin.lock().lines() {
@@ -270,6 +272,23 @@ fn run() -> io::Result<()> {
 
         match inbound {
             WireIn::Request { id, method, params } => {
+                if method == SHUTDOWN_METHOD {
+                    if shutting_down {
+                        // Close now while the quit runs: hurry it, answer now.
+                        upriv_rpc::hurry_shutdown();
+                        let hurried = WireOut::Response {
+                            id,
+                            ok: true,
+                            result: Some(json!(null)),
+                            error: None,
+                        };
+                        if write_out(&stdout, &hurried).is_err() {
+                            break;
+                        }
+                        continue;
+                    }
+                    shutting_down = true;
+                }
                 if is_heavy_method(&method, &params) {
                     let lane = heavy_lane(&method, &params).expect("heavy method has a lane");
                     let tx = match lane {
@@ -287,26 +306,19 @@ fn run() -> io::Result<()> {
                     continue;
                 }
 
-                match run_request_caught(id, method, params) {
-                    RequestOutcome::Continue(response) => {
-                        if write_out(&stdout, &response).is_err() {
-                            break;
-                        }
-                    }
-                    RequestOutcome::Shutdown(response) => {
-                        shut_down = true;
-                        let _ = write_out(&stdout, &response);
-                        break;
-                    }
+                let response = run_request_caught(id, method, params);
+                if write_out(&stdout, &response).is_err() {
+                    break;
                 }
             }
         }
     }
 
     // The app left without `app_shutdown`: a crash, a kill, or a quit that did
-    // not wait. Do what that call does, so the next launch finds the vaults closed.
-    if !shut_down {
-        let _ = run_request_caught(0, "app_shutdown".to_string(), json!({}));
+    // not wait. Do what that call does, so the next launch finds the vaults
+    // closed. A quit already on the close lane finishes before the join below.
+    if !shutting_down {
+        let _ = run_request_caught(0, SHUTDOWN_METHOD.to_string(), json!({}));
     }
 
     // Finish in-flight work before flushing logs / exiting.

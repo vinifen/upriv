@@ -1,4 +1,4 @@
-import { LoadingBudgetHint } from "@/components/ui";
+import { ElapsedTime } from "@/components/ui";
 import { useTranslation } from "@/i18n";
 import {
   vaultRowControls,
@@ -6,13 +6,17 @@ import {
   isVaultListRowActivatable,
   isVaultListRowUnlockTarget,
   isVaultOpenResumeTarget,
-  vaultPipelineRowBudget,
   vaultDisplayLetters,
   vaultLastAccessedLabel,
+  vaultRowButtonRole,
+  vaultRowButtonTwoStep,
+  vaultRowWorkClock,
   vaultStatusLabelKey,
   type VaultListItem,
   type VaultSettingsAreaId,
 } from "@upriv/shared";
+import { disarmRowButton, useRowArming } from "@upriv/shared/react";
+import { ROW_ARM_ATTR } from "@/hooks/useRowArmingDismiss";
 import type { VaultPipelineListStatus } from "./VaultList";
 import { vaultStatusIconClass, vaultStatusI18nKey, vaultStatusRowClass } from "@/theme";
 import { vaultListDropOverClass } from "../lib/dropOverClass";
@@ -27,7 +31,6 @@ import { VaultRowActions } from "./VaultRowActions";
 import { VaultStatusBadge } from "./VaultStatusBadge";
 import type { VaultListPointerDragHandlers } from "./vaultListPointerDrag";
 import { useAppSettingsContext } from "@/features/system/settings";
-import { useLoadingBudget } from "@upriv/shared/react";
 
 interface VaultBlockCardProps {
   vault: VaultListItem;
@@ -49,6 +52,7 @@ interface VaultBlockCardProps {
   onLockVault: (vault: VaultListItem) => void;
   onUnlockVault: (vault: VaultListItem) => void;
   onCloseNow: (vault: VaultListItem) => void;
+  onStopWork: (vault: VaultListItem) => void;
 }
 
 export function VaultBlockCard({
@@ -71,6 +75,7 @@ export function VaultBlockCard({
   onLockVault,
   onUnlockVault,
   onCloseNow,
+  onStopWork,
 }: VaultBlockCardProps) {
   const { t, locale } = useTranslation();
   const { settings: appSettings } = useAppSettingsContext();
@@ -81,10 +86,9 @@ export function VaultBlockCard({
     pipelineListStatus,
     vault.autoClosed === true,
   );
-  const rowBudget = vaultPipelineRowBudget(status, pipelineListStatus, vault.id);
-  const openingBudget = useLoadingBudget(rowBudget.active, rowBudget.budgetMs, {
-    startedAt: rowBudget.startedAt,
-  });
+  const work = pipelineListStatus.rowWork?.[vault.id] ?? null;
+  const role = vaultRowButtonRole(status, work);
+  const arming = useRowArming(vault.id, role, vaultRowButtonTwoStep(role, appSettings.ui));
   const isOpen = status === "open";
   const dragHeld = vaultRowControls(vault, pipelineListStatus).dragBlocked;
   const isLastOpened = appSettings.app.last_opened_vault.trim() === vault.id;
@@ -95,6 +99,8 @@ export function VaultBlockCard({
   const openOrUnlock = () => {
     if (isReorderActive || isDragging) return;
     if (isOpen) onOpenFileManager(vault);
+    // A click on the card is Unlock, with the button's guard: a click just after Stop turned into Unlock does nothing.
+    else if (role === "unlock") arming.press(() => onUnlockVault(vault));
     else if (canUnlockFromRow) onUnlockVault(vault);
   };
   const rowActivates = isVaultListRowActivatable(status) && (status !== "queued" || resumeOpen);
@@ -102,6 +108,7 @@ export function VaultBlockCard({
   return (
     <article
       {...vaultListDropKeyProps(dropKey)}
+      {...{ [ROW_ARM_ATTR]: vault.id }}
       className={[
         "vault-row relative z-0 flex min-h-0 min-w-0 w-full flex-col gap-2.5 overflow-visible rounded-xl p-3.5 transition-[opacity,box-shadow,background-color] sm:gap-3 sm:p-4",
         vaultStatusRowClass[status],
@@ -166,23 +173,22 @@ export function VaultBlockCard({
           </div>
           <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
             <VaultStatusBadge status={status} labelKey={statusLabelKey} />
-            {openingBudget.visible ? (
-              <LoadingBudgetHint
-                budgetMs={openingBudget.budgetMs}
-                remainingMs={openingBudget.remainingMs}
-                layout="inline"
-              />
-            ) : (
-              <p className="min-w-0 flex-1 text-[11px] leading-snug text-on-surface-variant sm:text-xs">
-                {t("vault.last_accessed", { when: vaultLastAccessedLabel(vault, locale) })}
-              </p>
-            )}
+            <ElapsedTime
+              startedAt={vaultRowWorkClock(work)}
+              layout="inline"
+              fallback={
+                <p className="min-w-0 flex-1 text-[11px] leading-snug text-on-surface-variant sm:text-xs">
+                  {t("vault.last_accessed", { when: vaultLastAccessedLabel(vault, locale) })}
+                </p>
+              }
+            />
           </div>
         </div>
         <div
           className="flex shrink-0 self-stretch"
           onClick={(event) => event.stopPropagation()}
           onKeyDown={(event) => event.stopPropagation()}
+          onPointerDownCapture={() => disarmRowButton()}
         >
           <VaultRowActions
             vault={vault}
@@ -205,11 +211,16 @@ export function VaultBlockCard({
         onKeyDown={(event) => event.stopPropagation()}
       >
         <VaultLockButton
+          vaultId={vault.id}
           status={status}
+          role={role}
+          armed={arming.armed}
+          press={arming.press}
           layout="block"
           resumeUnlock={resumeOpen}
           onLock={() => onLockVault(vault)}
           onUnlock={() => onUnlockVault(vault)}
+          onStop={() => onStopWork(vault)}
         />
       </div>
     </article>

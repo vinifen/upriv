@@ -57,9 +57,10 @@ export interface VaultService {
   /**
    * Scratch create: writes `config.toml` + seeded `store/` (password is not stored).
    * `input.importPackage` routes to an import instead. `input.welcome` adds
-   * `README.md` and the layout that opens it.
+   * `README.md` and the layout that opens it. Runs as the job `job`: a stop
+   * removes the new vault and rejects with `job_cancelled`.
    */
-  createVault(input: CreateVaultInput): Promise<VaultListItem>;
+  createVault(input: CreateVaultInput, job: string): Promise<VaultListItem>;
 
   /** Load `vaults/<id>/config.toml` equivalent. */
   getSettings(vaultId: string): Promise<VaultSettingsConfig | undefined>;
@@ -100,6 +101,9 @@ export interface VaultService {
   /** Whether portable `.7z` export can run in RAM (always on when core is linked). Zip of `store/` is always available. */
   exportCapabilities(): Promise<{ sevenZip: boolean }>;
 
-  /** Wipe the unfinished plain-text exports a crash left. Core logs the outcome. */
-  sweepPlainExports(): Promise<void>;
+  /**
+   * Clear what a crash left from a job: delete the vaults an import never
+   * finished and remove the unfinished export files. Core logs the outcome.
+   */
+  sweepUnfinished(): Promise<void>;
 }

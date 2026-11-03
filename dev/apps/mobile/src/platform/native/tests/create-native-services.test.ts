@@ -64,7 +64,7 @@ vi.mock("@/lib/rpc", () => ({
   rpcVaultDelete: vi.fn(),
   rpcVaultExportToFolder: vi.fn(async () => ({ path: "/upriv-saf-export/Notes.zip", size: 1 })),
   rpcVaultExportCapabilities: vi.fn(async () => ({ sevenZip: true })),
-  rpcVaultPlainExportSweep: vi.fn(async () => ({ folders: [] })),
+  rpcVaultUnfinishedSweep: vi.fn(async () => ({ folders: [] })),
   rpcVaultImportZip: vi.fn(),
   rpcVaultImport7z: vi.fn(),
   rpcVaultImportProbe: vi.fn(async () => ({ ok: true, kind: "seven_zip" })),
@@ -176,10 +176,8 @@ describe("createNativeServices", () => {
     expect(rpc.rpcVaultRootResolve).toHaveBeenCalledTimes(1);
     expect(rpc.rpcVaultRootDeactivateAlias).not.toHaveBeenCalled();
     await services.vaultRoot.setupAtPath("/storage/emulated/0/Download");
-    expect(rpc.rpcVaultRootSetupPath).toHaveBeenCalledWith(
-      "/storage/emulated/0/Download",
-      undefined,
-    );
+    // A filesystem path copies nothing, so it carries no job.
+    expect(rpc.rpcVaultRootSetupPath).toHaveBeenCalledWith("/storage/emulated/0/Download", {});
   });
 
   it("creates a data folder on a storage-access tree", async () => {
@@ -190,13 +188,15 @@ describe("createNativeServices", () => {
     await expect(
       services.vaultRoot.setupAtPath("content://tree/new", {
         bootstrap: { locale: "en" },
+        job: "job-copy",
       }),
     ).resolves.toMatchObject({ rootPath: "content://tree/new" });
     expect(safPersist).toHaveBeenCalledWith("content://tree/new");
     expect(mountSafRoot).toHaveBeenCalledWith("content://tree/new");
+    // The copy of the private data folder runs as the caller's job, so its Stop reaches it.
     expect(rpc.rpcVaultRootSetupPath).toHaveBeenCalledWith("/upriv-saf-root", {
       bootstrap: { locale: "en" },
-      adoptPrivateRoot: true,
+      adoptPrivateRoot: { job: "job-copy" },
       customUri: "content://tree/new",
     });
     expect(safState.activeUri).toBe("content://tree/new");
@@ -216,7 +216,7 @@ describe("createNativeServices", () => {
     expect(safState.activeUri).toBe(documents);
     expect(rpc.rpcVaultRootSetupPath).toHaveBeenCalledWith("/upriv-saf-root", {
       bootstrap: { locale: "en" },
-      adoptPrivateRoot: true,
+      adoptPrivateRoot: { job: expect.any(String) },
       customUri: usb,
     });
   });
@@ -292,12 +292,12 @@ describe("createNativeServices", () => {
     expect(unmountSafRoot).not.toHaveBeenCalled();
   });
 
-  it("mounts each folder a crash left a plain-text export in, then lets it go", async () => {
+  it("mounts each folder a crash left an unfinished file in, then lets it go", async () => {
     const { createNativeServices } = await importModule();
     const rpc = await import("@/lib/rpc");
     const reachable = "content://com.android.externalstorage.documents/tree/primary%3ADownload";
     const gone = "content://com.android.externalstorage.documents/tree/primary%3AMusic";
-    vi.mocked(rpc.rpcVaultPlainExportSweep)
+    vi.mocked(rpc.rpcVaultUnfinishedSweep)
       .mockResolvedValueOnce({ folders: [gone, reachable] })
       .mockResolvedValue({ folders: [] });
     mountSafExport.mockImplementationOnce(() => {
@@ -308,10 +308,10 @@ describe("createNativeServices", () => {
     safReleaseImportTree.mockClear();
     const services = createNativeServices();
 
-    await services.vault.sweepPlainExports();
+    await services.vault.sweepUnfinished();
 
     expect(mountSafExport.mock.calls).toEqual([[gone], [reachable]]);
-    expect(rpc.rpcVaultPlainExportSweep).toHaveBeenCalledTimes(2);
+    expect(rpc.rpcVaultUnfinishedSweep).toHaveBeenCalledTimes(2);
     expect(unmountSafExport).toHaveBeenCalledTimes(1);
     expect(safReleaseImportTree).toHaveBeenCalledWith(reachable);
     expect(safReleaseImportTree).not.toHaveBeenCalledWith(gone);
@@ -329,7 +329,7 @@ describe("createNativeServices", () => {
     expect(rpc.rpcVaultList).toHaveBeenCalled();
     await services.vaultGroups.list();
     expect(rpc.rpcVaultGroupList).toHaveBeenCalled();
-    await services.lifecycle.runOpeningPipeline("notes", () => undefined);
+    await services.lifecycle.runOpeningPipeline("notes", () => undefined, "job-open");
     expect(rpc.rpcVaultOpen).toHaveBeenCalled();
   });
 
@@ -337,17 +337,22 @@ describe("createNativeServices", () => {
     const { createNativeServices } = await importModule();
     const services = createNativeServices();
     await expect(
-      services.createVault.testImportPackagePassword("x", {
-        path: "/tmp/notes.zip",
-        fileName: "notes.zip",
-      }),
+      services.createVault.testImportPackagePassword(
+        "x",
+        { path: "/tmp/notes.zip", fileName: "notes.zip" },
+        "job-1",
+      ),
     ).resolves.toEqual({ ok: true, embedded: null });
     await expect(
-      services.createVault.testImportPackagePassword("x", {
-        path: "vaults/notes/backups/20260528120000-notes.zip",
-        fileName: "20260528120000-notes.zip",
-        kind: "backup",
-      }),
+      services.createVault.testImportPackagePassword(
+        "x",
+        {
+          path: "vaults/notes/backups/20260528120000-notes.zip",
+          fileName: "20260528120000-notes.zip",
+          kind: "backup",
+        },
+        "job-2",
+      ),
     ).resolves.toEqual({ ok: true, embedded: null });
   });
 
@@ -356,7 +361,9 @@ describe("createNativeServices", () => {
     const rpc = await import("@/lib/rpc");
     vi.mocked(rpc.rpcBackupList).mockClear();
     const services = createNativeServices();
-    await expect(services.createVault.testImportPackagePassword("x")).resolves.toEqual({
+    await expect(
+      services.createVault.testImportPackagePassword("x", undefined, "job-1"),
+    ).resolves.toEqual({
       ok: false,
       embedded: null,
     });

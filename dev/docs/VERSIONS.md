@@ -47,6 +47,7 @@
 | `expo-dev-client` | **~5.0.20** | Custom native module / `libupriv_ffi.so` (not Expo Go) |
 | `upriv-core` (local Expo module) | `file:./modules/upriv-core` | UniFFI Kotlin → `invoke` / `appVersion` |
 | `expo-status-bar` | **2.0.1** | Status bar API |
+| `expo-keep-awake` | **~14.0.3** | Keeps the phone awake while a job runs or a vault closes (`useKeepAwakeWhile`); the version Expo 52 ships |
 | `react-native-safe-area-context` | **4.12.0** | Safe areas |
 | `react-native-screens` | **4.4.0** | Native screen primitives |
 | `typescript` | **5.7.3** | Same as desktop |

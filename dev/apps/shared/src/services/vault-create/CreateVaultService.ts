@@ -8,10 +8,14 @@ export interface ImportPackageProbe {
 
 /** Create-vault wizard platform hooks (import package probe). */
 export interface CreateVaultService {
-  /** `ok: false` is a wrong password — probing is not an error path. */
+  /**
+   * `ok: false` is a wrong password — probing is not an error path. A `.7z`
+   * test runs as the job `job`: a stop rejects with `job_cancelled`.
+   */
   testImportPackagePassword(
     password: string,
-    importFile?: { path: string; fileName: string; kind?: "file" | "backup" },
+    importFile: { path: string; fileName: string; kind?: "file" | "backup" } | undefined,
+    job: string,
   ): Promise<ImportPackageProbe>;
   /**
    * Classify a `.zip` (store copy vs documents) and read store settings.

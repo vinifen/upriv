@@ -1,8 +1,10 @@
 /** @vitest-environment jsdom */
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { VaultListItem } from "@upriv/shared";
+import type { VaultListItem, VaultSettingsConfig } from "@upriv/shared";
 import { useIdleAutoClose, type IdleSessionEvent } from "@upriv/shared/react";
+
+type AutoClose = VaultSettingsConfig["auto_close"];
 
 const start = new Date("2026-06-01T00:00:00.000Z");
 const vault = { id: "notes", session: "open" } as VaultListItem;
@@ -24,13 +26,11 @@ describe("useIdleAutoClose pause", () => {
 
   async function mount(
     keepOpenOnWake: boolean,
-    onLock: (vaultId: string) => Promise<"started" | "wait">,
+    onLock: (vaultId: string, whenBusy: AutoClose["when_busy"]) => Promise<"started" | "wait">,
     onWarn: () => boolean = () => true,
     options?: {
       vaults?: VaultListItem[];
-      loadAutoClose?: (
-        vaultId: string,
-      ) => Promise<{ enabled: boolean; idle_minutes: number } | null>;
+      loadAutoClose?: (vaultId: string) => Promise<AutoClose | null>;
     },
   ) {
     const hook = renderHook(() =>
@@ -38,7 +38,8 @@ describe("useIdleAutoClose pause", () => {
         vaults: options?.vaults ?? [vault],
         keepOpenOnWake,
         loadAutoClose:
-          options?.loadAutoClose ?? (async () => ({ enabled: true, idle_minutes: 15 })),
+          options?.loadAutoClose ??
+          (async () => ({ enabled: true, idle_minutes: 15, when_busy: "wait" as const })),
         subscribeSession: (listener) => {
           onSession = listener;
           return () => {};
@@ -110,7 +111,7 @@ describe("useIdleAutoClose pause", () => {
     act(() => {
       onSession("resume");
     });
-    expect(onLock).toHaveBeenCalledWith("notes");
+    expect(onLock).toHaveBeenCalledWith("notes", "wait");
     unmount();
   });
 
@@ -124,7 +125,7 @@ describe("useIdleAutoClose pause", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(15 * 60_000);
     });
-    expect(onLock).toHaveBeenCalledWith("notes");
+    expect(onLock).toHaveBeenCalledWith("notes", "wait");
     unmount();
   });
 
@@ -208,10 +209,10 @@ describe("useIdleAutoClose pause", () => {
   });
 
   it("does not stack a settings read on every tick while one is still running", async () => {
-    const pending: Array<(value: { enabled: boolean; idle_minutes: number }) => void> = [];
+    const pending: Array<(value: AutoClose) => void> = [];
     const loadAutoClose = vi.fn(
       () =>
-        new Promise<{ enabled: boolean; idle_minutes: number }>((resolve) => {
+        new Promise<AutoClose>((resolve) => {
           pending.push(resolve);
         }),
     );
@@ -229,7 +230,7 @@ describe("useIdleAutoClose pause", () => {
     expect(loadAutoClose).toHaveBeenCalledTimes(1);
 
     await act(async () => {
-      pending.shift()?.({ enabled: true, idle_minutes: 15 });
+      pending.shift()?.({ enabled: true, idle_minutes: 15, when_busy: "wait" as const });
       await Promise.resolve();
       await Promise.resolve();
     });
@@ -237,8 +238,24 @@ describe("useIdleAutoClose pause", () => {
     unmount();
   });
 
+  it("hands each vault's choice for busy work to the close", async () => {
+    const onLock = vi.fn(async () => "started" as const);
+    const { unmount } = await mount(false, onLock, () => true, {
+      loadAutoClose: async () => ({ enabled: true, idle_minutes: 1, when_busy: "close" as const }),
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2 * 60_000);
+    });
+    expect(onLock).toHaveBeenCalledWith("notes", "close");
+    unmount();
+  });
+
   it("does not poll settings while every vault is closed", async () => {
-    const loadAutoClose = vi.fn(async () => ({ enabled: true, idle_minutes: 15 }));
+    const loadAutoClose = vi.fn(async () => ({
+      enabled: true,
+      idle_minutes: 15,
+      when_busy: "wait" as const,
+    }));
     const onLock = vi.fn(async () => "started" as const);
     const { unmount } = await mount(false, onLock, () => true, {
       vaults: [{ id: "notes", session: null } as VaultListItem],
@@ -266,8 +283,9 @@ describe("useIdleAutoClose pause", () => {
     });
     let photosEnabled = true;
     const loadAutoClose = vi.fn(async (id: string) => {
-      if (id === "photos" && !photosEnabled) return { enabled: false, idle_minutes: 15 };
-      return { enabled: true, idle_minutes: 15 };
+      if (id === "photos" && !photosEnabled)
+        return { enabled: false, idle_minutes: 15, when_busy: "wait" as const };
+      return { enabled: true, idle_minutes: 15, when_busy: "wait" as const };
     });
     const photos = { id: "photos", session: "open" } as VaultListItem;
     const { unmount } = await mount(false, onLock, () => true, {
@@ -279,7 +297,7 @@ describe("useIdleAutoClose pause", () => {
       await vi.advanceTimersByTimeAsync(15 * 60_000);
     });
     expect(onLock).toHaveBeenCalledTimes(1);
-    expect(onLock).toHaveBeenCalledWith("notes");
+    expect(onLock).toHaveBeenCalledWith("notes", "wait");
 
     photosEnabled = false;
     await act(async () => {
@@ -292,7 +310,7 @@ describe("useIdleAutoClose pause", () => {
       await Promise.resolve();
       await Promise.resolve();
     });
-    expect(onLock).not.toHaveBeenCalledWith("photos");
+    expect(onLock).not.toHaveBeenCalledWith("photos", expect.anything());
     unmount();
   });
 

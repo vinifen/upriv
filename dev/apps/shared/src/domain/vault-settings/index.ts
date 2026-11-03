@@ -1,6 +1,7 @@
 export type { StorageMode } from "../vault";
 export type {
   ArchiveMode,
+  AutoCloseWhenBusy,
   BackupMode,
   CompressionPreset,
   KdfParams,
@@ -12,6 +13,7 @@ export type {
   WipePattern,
 } from "./types";
 export {
+  AUTO_CLOSE_WHEN_BUSY,
   COMPRESSION_PRESETS,
   CONFIG_TOML_KDF_ANNOTATION,
   CONFIG_TOML_GROUPS_ANNOTATION,

@@ -1,5 +1,3 @@
-import { RPC_TIMEOUT_CODE, RpcError } from "../core-rpc/errors";
-import { sizedBudgetMs } from "../loading/sizedBudget";
 import { delayMs } from "../timing/delay";
 
 /** Step of a running close. */
@@ -8,8 +6,6 @@ export type VaultClosePhase = "flush" | "backup";
 /** `vault_close_phase` result while `vault_close` runs. */
 export interface VaultCloseProgress {
   phase: VaultClosePhase;
-  /** Bytes of `store/` the close backup zip copies. `0` until it has measured them. */
-  backupBytesTotal: number;
 }
 
 export const CLOSE_PHASE_POLL_MS = 400;
@@ -17,13 +13,9 @@ export const CLOSE_PHASE_POLL_MS = 400;
 /** `null` when no close runs, or the answer is not one. */
 export function parseVaultCloseProgress(raw: unknown): VaultCloseProgress | null {
   if (typeof raw !== "object" || raw === null) return null;
-  const body = raw as { phase?: unknown; backupBytesTotal?: unknown };
-  if (body.phase !== "flush" && body.phase !== "backup") return null;
-  const total = body.backupBytesTotal;
-  return {
-    phase: body.phase,
-    backupBytesTotal: typeof total === "number" && Number.isFinite(total) && total > 0 ? total : 0,
-  };
+  const phase = (raw as { phase?: unknown }).phase;
+  if (phase !== "flush" && phase !== "backup") return null;
+  return { phase };
 }
 
 /** `vault_close_hurry` result: true when a close was running to hear it. */
@@ -48,28 +40,17 @@ export async function askCloseToHurry(
   }
 }
 
-/** What a running close tells its watcher, each once. */
+/** What a running close tells its watcher, once. */
 export interface ClosePhaseEvents {
   /** The close backup started. */
   onBackup: () => void;
-  /** The close backup measured `store/`: `bytes` is what it copies. */
-  onMeasured: (bytes: number) => void;
 }
 
-type Timers = {
-  setTimeout?: (fn: () => void, delay: number) => unknown;
-  clearTimeout?: (handle: unknown) => void;
-};
-
 /**
- * Wait for `work`, the `vault_close` call. While it runs, poll the core close:
- * call `onBackup` when the close backup starts and `onMeasured` once it knows
- * its size, then stop asking. A failed read is skipped; it never fails the close.
- *
- * The wait ends with `rpc_timeout` once `sizedBudgetMs("vaultClose")` has
- * passed since it began: the floor until the backup is measured, then the
- * budget for that size. The call's own timeout is the ceiling, so it never
- * cuts a large close short.
+ * Wait for `work`, the `vault_close` call. While it runs, poll the core close
+ * and call `onBackup` when its backup starts, then stop asking. A failed read
+ * is skipped; it never fails the close. A close has no time limit: Close now
+ * is its stop.
  */
 export async function waitForClose<T>(
   work: Promise<T>,
@@ -77,31 +58,8 @@ export async function waitForClose<T>(
   events: ClosePhaseEvents,
   pollMs: number = CLOSE_PHASE_POLL_MS,
 ): Promise<T> {
-  const timers = globalThis as Timers;
-  const startedAt = Date.now();
-  let budgetMs = sizedBudgetMs("vaultClose", null);
-  let deadline: unknown;
-  let giveUp: (error: RpcError) => void = () => {};
-  const spent = new Promise<never>((_, reject) => {
-    giveUp = reject;
-  });
-  const armDeadline = () => {
-    if (deadline !== undefined) timers.clearTimeout?.(deadline);
-    deadline = timers.setTimeout?.(
-      () => giveUp(new RpcError(RPC_TIMEOUT_CODE, `vault_close: no answer within ${budgetMs}ms`)),
-      Math.max(0, startedAt + budgetMs - Date.now()),
-    );
-  };
-  const measured = (bytes: number) => {
-    budgetMs = Math.max(budgetMs, sizedBudgetMs("vaultClose", bytes));
-    armDeadline();
-    events.onMeasured(bytes);
-  };
-  armDeadline();
-
   let settled = false;
   const poll = async () => {
-    let backup = false;
     while (!settled) {
       let progress: VaultCloseProgress | null = null;
       try {
@@ -110,12 +68,8 @@ export async function waitForClose<T>(
         progress = null;
       }
       if (settled) return;
-      if (progress?.phase === "backup" && !backup) {
-        backup = true;
+      if (progress?.phase === "backup") {
         events.onBackup();
-      }
-      if (backup && progress && progress.backupBytesTotal > 0) {
-        measured(progress.backupBytesTotal);
         return;
       }
       await delayMs(pollMs);
@@ -123,9 +77,8 @@ export async function waitForClose<T>(
   };
   void poll();
   try {
-    return await Promise.race([work, spent]);
+    return await work;
   } finally {
     settled = true;
-    timers.clearTimeout?.(deadline);
   }
 }

@@ -27,6 +27,8 @@ interface FileManagerModalProps {
   open: boolean;
   title: string;
   contextTitle?: string;
+  /** After the title, on the left: work this file manager runs (Stop import). */
+  titleAccessory?: ReactNode;
   onMinimize: () => void;
   onDismiss: () => void;
   /** When true, back / backdrop must not minimize (unsaved dialog active). */
@@ -49,6 +51,7 @@ export function FileManagerModal({
   open,
   title,
   contextTitle,
+  titleAccessory,
   onMinimize,
   onDismiss,
   suspendMinimize = false,
@@ -227,6 +230,7 @@ export function FileManagerModal({
                   </Text>
                 </>
               ) : null}
+              {titleAccessory}
             </View>
             <IconButton
               label={t("modal.file_manager.action.minimize")}

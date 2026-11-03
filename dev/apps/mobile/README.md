@@ -1,6 +1,6 @@
 # upriv-mobile (Expo 52)
 
-React Native shell for Upriv. Shares `@upriv/shared` (types, i18n, budgets, `AppServices`).
+React Native shell for Upriv. Shares `@upriv/shared` (types, i18n, operation limits, `AppServices`).
 
 ## Status
 
@@ -30,7 +30,8 @@ npm run typecheck
 modules/upriv-core/  # Expo module: UniFFI Kotlin, storage-access bridge (SafFs)
 src/
   providers/AppProviders.tsx
-  components/        # ui/ (Button, Modal, Toast, LoadingBudgetHint), settings/, system/
+  components/        # ui/ (Button, Modal, Toast, ElapsedTime, JobStopButton), settings/, system/
+  hooks/             # row arming and chrome, pulse, keep-awake (expo-keep-awake), export folders
   features/
     system/          # settings (Gate, Setup, AppSettings, Data folder), data-folder-export, info, logs, help
     vaults/          # list, create, lifecycle, file-manager, settings, backups, info

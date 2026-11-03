@@ -9,11 +9,13 @@ use crate::logging::{log_event, LogLevel};
 use crate::paths::VaultRoot;
 use crate::session::{
     ensure_data_folder_export_idle, with_unlock_lock, with_vault_dir_lock,
-    with_vault_registry_lock, PreparingGuard,
+    with_vault_registry_lock, Job, JobKind, PreparingGuard,
 };
 use crate::store::{content_hash_hex, create_seeded_store, KdfUnlockPreset};
 
+use super::open_close::abandon_failed_import;
 use super::persistence::{save_vault_persistence, VaultPersistence};
+use super::unfinished::{forget_import, record_import};
 use super::welcome::VaultWelcome;
 
 /// Registry + Argon2id header + seed chunk. Import paths call this, stream
@@ -27,8 +29,35 @@ pub fn create_vault(
     create_vault_with_welcome(root, config, password, preset, None)
 }
 
+/// Scratch create as the job `job_id`. The Argon2id wrap cannot be cut short:
+/// a stop that arrives while it runs removes the new vault once it is made.
+/// `for_import` keeps the vault recorded as unfinished until the import
+/// session that fills it finishes ([`super::finish_import_session`]); a crash
+/// before that deletes it at the next launch.
+pub fn create_vault_as_job(
+    root: &VaultRoot,
+    config: VaultConfig,
+    password: &[u8],
+    preset: KdfUnlockPreset,
+    welcome: Option<VaultWelcome<'_>>,
+    for_import: bool,
+    job_id: &str,
+) -> Result<()> {
+    let id = config.vault.id.trim().to_string();
+    Job::run(job_id, JobKind::VaultCreate, Some(&id), |job| {
+        create_vault_with_welcome(root, config, password, preset, welcome)?;
+        let kept = (|| {
+            if for_import {
+                record_import(root, &id)?;
+            }
+            job.final_step()
+        })();
+        kept.map_err(|error| abandon_failed_import(root, &id, error))
+    })
+}
+
 /// Scratch create. `welcome` is sealed in the same pass as the seed chunk.
-pub fn create_vault_with_welcome(
+pub(super) fn create_vault_with_welcome(
     root: &VaultRoot,
     mut config: VaultConfig,
     password: &[u8],
@@ -54,6 +83,9 @@ pub fn create_vault_with_welcome(
     let _preparing = claim_new_vault_dir(root, &dest)?;
     with_vault_dir_lock(&dest, || {
         let created: Result<()> = (|| {
+            // A crash before the vault is complete leaves this record, and the
+            // next launch deletes the folder.
+            record_import(root, &id)?;
             save_vault_config(&dest, &config)?;
             let store = dest.join(crate::paths::STORE_DIR_NAME);
             // Same process-wide Argon2 gate as `open_vault` — never two KDFs at once.
@@ -70,8 +102,9 @@ pub fn create_vault_with_welcome(
             )?;
             Ok(())
         })();
-        if created.is_err() {
-            let _ = crate::host_fs::remove_dir_all(&dest);
+        let folder_gone = created.is_ok() || crate::host_fs::remove_dir_all(&dest).is_ok();
+        if folder_gone {
+            forget_import(root, &id);
         }
         created
     })?;

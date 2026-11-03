@@ -14,14 +14,13 @@ import {
   isVaultListRowUnlockTarget,
   listHasVaultBlockingDataFolderChange,
   listHasVaultBlockingWorkspaceClear,
-  pipelineActiveStartedAt,
   resolveVaultDisplayStatus,
   resolveVaultListStatus,
   vaultDeleteHold,
-  vaultPipelineRowBudget,
+  vaultRowJobWork,
+  vaultRowWorkClock,
   vaultStatusLabelKey,
 } from "..";
-import { LOADING_BUDGET_MS } from "../../loading/budget";
 import { vaultRowFixture } from "./fixtures.shared";
 
 describe("resolveVaultDisplayStatus", () => {
@@ -74,12 +73,6 @@ describe("resolveVaultListStatus", () => {
     ).toBe("opening");
   });
 
-  it("exposes the active job start only for that vault", () => {
-    const pipeline = { activeVaultId: "a", activeStartedAt: 1_000 };
-    expect(pipelineActiveStartedAt(pipeline, "a")).toBe(1_000);
-    expect(pipelineActiveStartedAt(pipeline, "b")).toBeUndefined();
-  });
-
   it("treats creating and queued like other in-flight pipeline statuses", () => {
     expect(isVaultPipelineDisplayBusy("creating")).toBe(true);
     expect(isVaultPipelineDisplayBusy("opening")).toBe(true);
@@ -130,7 +123,7 @@ describe("resolveVaultListStatus", () => {
 
 describe("a leftover folder being removed", () => {
   const row = vaultRowFixture({ id: "a", session: "recovery" });
-  const wiping = { recoveringVaultIds: ["a"], recoveringStartedAt: 5, recoveringBudgetMs: 9_000 };
+  const wiping = { recoveringVaultIds: ["a"] };
 
   it("displays as recovering and leaves the other vaults alone", () => {
     expect(resolveVaultListStatus(row, wiping)).toBe("recovering");
@@ -143,15 +136,6 @@ describe("a leftover folder being removed", () => {
     expect(isVaultListRowActivatable("recovering")).toBe(false);
     expect(isVaultListRowUnlockTarget("recovering")).toBe(false);
     expect(vaultDeleteHold(row, wiping)).toBe("busy");
-  });
-
-  it("shows the clock and the budget of the wipe on the row", () => {
-    expect(vaultPipelineRowBudget("recovering", wiping, "a")).toEqual({
-      active: true,
-      budgetMs: 9_000,
-      startedAt: 5,
-    });
-    expect(vaultPipelineRowBudget("recovering", {}, "a").active).toBe(false);
   });
 });
 
@@ -230,62 +214,48 @@ describe("isVaultBlockingDataFolderChange", () => {
   });
 });
 
-describe("vaultPipelineRowBudget", () => {
-  it("activates only for the active opening or creating job", () => {
-    const pipeline = { activeVaultId: "a", activeStartedAt: 9 };
-    expect(vaultPipelineRowBudget("opening", pipeline, "a")).toEqual({
-      active: true,
-      budgetMs: LOADING_BUDGET_MS.vaultPipeline,
+describe("vaultRowJobWork", () => {
+  it("offers Stop while the job can stop, and disables it in its last step", () => {
+    const running = { startedAt: 9, stoppable: true, stoppingSince: null };
+    expect(vaultRowJobWork(running)).toEqual({
       startedAt: 9,
+      timed: true,
+      stop: "ready",
+      stoppingSince: null,
     });
-    expect(vaultPipelineRowBudget("creating", pipeline, "a")).toEqual({
-      active: true,
-      budgetMs: LOADING_BUDGET_MS.vaultCreate,
-      startedAt: 9,
-    });
-    expect(vaultPipelineRowBudget("opening", pipeline, "b").active).toBe(false);
-    expect(vaultPipelineRowBudget("closing", pipeline, "a").active).toBe(false);
-    expect(vaultPipelineRowBudget("queued", pipeline, "a").active).toBe(false);
+    expect(vaultRowJobWork({ ...running, stoppable: false }).stop).toBe("final");
   });
 
-  it("counts a password or unlock-RAM change from its own start", () => {
-    const pipeline = { rewrapStartedAt: 40 };
-    expect(vaultPipelineRowBudget("changing_password", pipeline, "a")).toEqual({
-      active: true,
-      budgetMs: LOADING_BUDGET_MS.vaultRewrap,
-      startedAt: 40,
-    });
-    expect(vaultPipelineRowBudget("changing_kdf", pipeline, "a")).toEqual({
-      active: true,
-      budgetMs: LOADING_BUDGET_MS.vaultRewrap,
-      startedAt: 40,
-    });
-    expect(vaultPipelineRowBudget("changing_password", {}, "a").active).toBe(false);
-    expect(vaultPipelineRowBudget("opening", pipeline, "a").active).toBe(false);
+  it("says Stopping once Stop was asked for", () => {
+    const work = vaultRowJobWork({ startedAt: 9, stoppable: true, stoppingSince: 30 });
+    expect(work.stop).toBe("stopping");
+    expect(work.stoppingSince).toBe(30);
   });
 
-  it("counts Back up now from its own start", () => {
-    const pipeline = { backupJobStartedAt: 12 };
-    expect(vaultPipelineRowBudget("backing_up", pipeline, "a")).toEqual({
-      active: true,
-      budgetMs: LOADING_BUDGET_MS.vaultBackupSave,
-      startedAt: 12,
-    });
-    expect(vaultPipelineRowBudget("backing_up", {}, "a").active).toBe(false);
-  });
-
-  it("shows the budget the work was sized to", () => {
-    const sized = 3 * LOADING_BUDGET_MS.vaultRewrap;
+  it("can leave the clock out for work that is short by nature", () => {
     expect(
-      vaultPipelineRowBudget("changing_kdf", { rewrapStartedAt: 5, rewrapBudgetMs: sized }, "a"),
-    ).toEqual({ active: true, budgetMs: sized, startedAt: 5 });
-    expect(
-      vaultPipelineRowBudget(
-        "backing_up",
-        { backupJobStartedAt: 7, backupJobBudgetMs: sized },
-        "a",
-      ),
-    ).toEqual({ active: true, budgetMs: sized, startedAt: 7 });
+      vaultRowJobWork({ startedAt: 9, stoppable: true, stoppingSince: null, timed: false }),
+    ).toMatchObject({ timed: false });
+  });
+});
+
+describe("vaultRowWorkClock", () => {
+  const work = vaultRowJobWork({ startedAt: 9, stoppable: true, stoppingSince: null });
+
+  it("counts from when core started the work", () => {
+    expect(vaultRowWorkClock(work)).toBe(9);
+  });
+
+  it("counts nothing while the work is queued, untimed, or absent", () => {
+    expect(vaultRowWorkClock({ ...work, startedAt: null })).toBeNull();
+    expect(vaultRowWorkClock({ ...work, timed: false })).toBeNull();
+    expect(vaultRowWorkClock(undefined)).toBeNull();
+  });
+
+  it("counts Stopping from the stop, also for untimed work", () => {
+    expect(vaultRowWorkClock({ ...work, timed: false, stop: "stopping", stoppingSince: 40 })).toBe(
+      40,
+    );
   });
 });
 
@@ -306,5 +276,23 @@ describe("vaultStatusLabelKey", () => {
     expect(vaultStatusLabelKey("closed", "notes", {}, true)).toBe("vault.status.auto_closed");
     expect(vaultStatusLabelKey("closed", "notes")).toBe("vault.status.closed");
     expect(vaultStatusLabelKey("open", "notes", {}, true)).toBe("vault.status.open");
+  });
+
+  it("says Queued while the row's job waits for its lane, then the status", () => {
+    const waiting = vaultRowJobWork({ startedAt: null, stoppable: true, stoppingSince: null });
+    const running = vaultRowJobWork({ startedAt: 5, stoppable: true, stoppingSince: null });
+    expect(vaultStatusLabelKey("exporting", "a", { rowWork: { a: waiting } })).toBe(
+      "vault.status.queued",
+    );
+    expect(vaultStatusLabelKey("exporting", "a", { rowWork: { a: running } })).toBe(
+      "vault.status.exporting",
+    );
+  });
+
+  it("says Stopping once Stop was asked for", () => {
+    const stopping = vaultRowJobWork({ startedAt: 5, stoppable: true, stoppingSince: 9 });
+    expect(vaultStatusLabelKey("creating", "a", { rowWork: { a: stopping } })).toBe(
+      "vault.status.stopping",
+    );
   });
 });

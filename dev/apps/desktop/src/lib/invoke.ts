@@ -1,4 +1,9 @@
-import { CORE_RPC_TIMEOUT_MS, LOADING_BUDGET_MS, SHELL_ONLY_RPC_COMMANDS } from "@upriv/shared";
+import {
+  CORE_RPC_TIMEOUT_MS,
+  NO_DEADLINE_MS,
+  OPERATION_LIMIT_MS,
+  SHELL_ONLY_RPC_COMMANDS,
+} from "@upriv/shared";
 import { BRIDGE_ERROR_CODES, RpcError, isRpcError } from "./errors";
 
 /** Matches `formatRpcError` in `apps/electron/src/daemon.ts` (`code: message`).
@@ -18,27 +23,20 @@ export function isElectronRenderer(): boolean {
   return false;
 }
 
-const DEFAULT_INVOKE_TIMEOUT_MS = 30_000;
-
 /**
- * Per-method renderer + Electron main timeout. `0` = no timeout (native dialogs).
- * CORE values come from `@upriv/shared` `CORE_RPC_TIMEOUT_MS`.
- * Passed through preload so main `daemonRpc` does not clamp to 30s.
+ * Per-method renderer + Electron main timeout: `OPERATION_LIMIT_MS`, or
+ * `NO_DEADLINE_MS` for a job or a dialog that waits for the person. CORE
+ * values come from `@upriv/shared` `CORE_RPC_TIMEOUT_MS`. Passed through
+ * preload so main `daemonRpc` uses the same value.
  */
 export const METHOD_TIMEOUT_MS: Partial<Record<string, number>> = {
   ...CORE_RPC_TIMEOUT_MS,
-  [SHELL_ONLY_RPC_COMMANDS.APP_EXIT]: LOADING_BUDGET_MS.vaultPipeline,
-  [SHELL_ONLY_RPC_COMMANDS.PICK_DIRECTORY]: 0,
-  [SHELL_ONLY_RPC_COMMANDS.PICK_FILE]: 0,
-  [SHELL_ONLY_RPC_COMMANDS.REVEAL_IN_FILE_MANAGER]: 10_000,
-  [SHELL_ONLY_RPC_COMMANDS.REVEAL_OS_PATH]: 10_000,
-  [SHELL_ONLY_RPC_COMMANDS.OPEN_IN_TERMINAL]: 10_000,
-  [SHELL_ONLY_RPC_COMMANDS.WINFSP_STATUS]: 10_000,
-  /** Windows permission prompt. `0` waits until the user answers. */
-  [SHELL_ONLY_RPC_COMMANDS.WINFSP_INSTALL]: 0,
-  [SHELL_ONLY_RPC_COMMANDS.FUSE_STATUS]: 10_000,
-  /** Linux permission prompt. `0` waits until the user answers. */
-  [SHELL_ONLY_RPC_COMMANDS.FUSE_INSTALL]: 0,
+  [SHELL_ONLY_RPC_COMMANDS.PICK_DIRECTORY]: NO_DEADLINE_MS,
+  [SHELL_ONLY_RPC_COMMANDS.PICK_FILE]: NO_DEADLINE_MS,
+  /** Windows permission prompt: waits until the user answers. */
+  [SHELL_ONLY_RPC_COMMANDS.WINFSP_INSTALL]: NO_DEADLINE_MS,
+  /** Linux permission prompt: waits until the user answers. */
+  [SHELL_ONLY_RPC_COMMANDS.FUSE_INSTALL]: NO_DEADLINE_MS,
 };
 
 /** Normalize Electron/preload invoke failures into `RpcError` (wire `code: message`). */
@@ -67,13 +65,13 @@ export function parseInvokeFailure(error: unknown): RpcError {
 /**
  * Low-level IPC invoke with timeout. Prefer typed helpers in `./rpc.ts`.
  * Unknown daemon methods are rejected by `upriv-rpc` (via `upriv-daemon`).
- * Pass `timeoutMs: 0` (or set the method map to `0`) to wait indefinitely.
+ * `timeoutMs <= 0` waits with no deadline: a job (it has Stop) or a dialog.
  * @throws {RpcError}
  */
 export async function desktopInvokeRaw(
   method: string,
   params?: Record<string, unknown>,
-  timeoutMs = METHOD_TIMEOUT_MS[method] ?? DEFAULT_INVOKE_TIMEOUT_MS,
+  timeoutMs = METHOD_TIMEOUT_MS[method] ?? OPERATION_LIMIT_MS,
 ): Promise<unknown> {
   if (!isElectronRenderer()) {
     throw new RpcError(

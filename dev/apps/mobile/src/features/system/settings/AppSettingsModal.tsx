@@ -3,7 +3,6 @@ import { Platform, StyleSheet, Text, View } from "react-native";
 import {
   APP_SETTINGS_ERROR_I18N_KEYS,
   APP_SETTINGS_SECTIONS,
-  LOADING_BUDGET_MS,
   LOG_ENTRIES_PER_FILE,
   LOG_KEEP_LAST_ENTRY_OPTIONS,
   LOG_KEEP_LAST_UNLIMITED,
@@ -36,7 +35,6 @@ import { useTheme } from "@/theme";
 import { spacing } from "@/theme/tokens";
 import {
   Button,
-  LoadingBudgetHint,
   Modal,
   ModalFooterActions,
   Select,
@@ -53,7 +51,7 @@ import {
 } from "@/components/settings";
 import { PathField } from "@/components/PathField";
 import { mobileErrorI18nKey } from "@/lib/errorMessages";
-import { useLoadingBudget, useToast, useVaultRootIntegrityClose } from "@upriv/shared/react";
+import { useOperationLimit, useToast, useVaultRootIntegrityClose } from "@upriv/shared/react";
 import { useVaultRootService } from "@/platform/services";
 
 const SAVED_INDICATOR_MS = 1500;
@@ -66,7 +64,17 @@ interface AppSettingsModalProps {
   onDirtyChange?: (dirty: boolean) => void;
   /** Disable Clear on workspace path while any vault session is open. */
   hasOpenVault?: boolean;
+  /** List toast. A save keeps running after the window closes and reports here. */
+  onNotice?: (message: string) => void;
 }
+
+/** A save in flight, or one that failed, shown again when the window reopens. */
+type PendingAppSave = {
+  config: AppSettingsConfig;
+  showHidden: boolean;
+  /** `null` while it runs; the error line once it failed. */
+  failure: string | null;
+};
 
 /**
  * System settings — draft + Save parity with desktop `AppSettingsModal`.
@@ -77,10 +85,24 @@ export function AppSettingsModal({
   onClose,
   onDirtyChange,
   hasOpenVault = false,
+  onNotice,
 }: AppSettingsModalProps) {
   const { t, locale } = useTranslation();
   const { colors, typography } = useTheme();
   const { toast, show, dismiss } = useToast();
+  const openRef = useRef(open);
+  openRef.current = open;
+  const onNoticeRef = useRef(onNotice);
+  onNoticeRef.current = onNotice;
+  /** The window's own toast while it shows; the list's once it closed. */
+  const notice = useCallback(
+    (message: string) => {
+      const report = onNoticeRef.current;
+      if (!openRef.current && report) report(message);
+      else show(message);
+    },
+    [show],
+  );
   const vaultRootService = useVaultRootService();
   const {
     settings,
@@ -104,8 +126,12 @@ export function AppSettingsModal({
   /** True after the user patches workspace this modal session — skip live Context sync. */
   const workspaceTouchedRef = useRef(false);
   const commitSaveLock = useRef(false);
+  /** Bumped only when a save runs past `OPERATION_LIMIT_MS`; closing never drops a result. */
   const saveBusyGen = useRef(0);
-  const saveBudget = useLoadingBudget(saveBusy, LOADING_BUDGET_MS.settingsSave);
+  const saveLimit = useOperationLimit(saveBusy);
+  const [pendingSave, setPendingSave] = useState<PendingAppSave | null>(null);
+  const pendingSaveRef = useRef(pendingSave);
+  pendingSaveRef.current = pendingSave;
 
   const isDirty = useMemo(
     () =>
@@ -123,9 +149,11 @@ export function AppSettingsModal({
     if (!open) return;
     if (openedSessionRef.current) return;
     openedSessionRef.current = true;
-    workspaceTouchedRef.current = false;
-    setDraft(settings);
-    setDraftShowHiddenVaultsSession(showHiddenVaultsSession);
+    // A save still running, or one that failed, shows its values again.
+    const pending = pendingSaveRef.current;
+    workspaceTouchedRef.current = pending !== null;
+    setDraft(pending?.config ?? settings);
+    setDraftShowHiddenVaultsSession(pending?.showHidden ?? showHiddenVaultsSession);
   }, [open, settings, showHiddenVaultsSession]);
 
   useEffect(() => {
@@ -188,16 +216,14 @@ export function AppSettingsModal({
 
   useEffect(() => {
     if (!open) {
+      // A save in flight keeps running; its outcome comes back as a list toast.
       openedSessionRef.current = false;
       workspaceTouchedRef.current = false;
-      saveBusyGen.current += 1;
-      commitSaveLock.current = false;
       setDraft(null);
       setDraftShowHiddenVaultsSession(showHiddenVaultsSession);
       setSaveConfirmOpen(false);
       setDiscardConfirmOpen(false);
       setSavedVisible(false);
-      setSaveBusy(false);
     }
   }, [open, showHiddenVaultsSession]);
 
@@ -208,12 +234,13 @@ export function AppSettingsModal({
   useEffect(() => () => clearTimeout(savedHideRef.current), []);
 
   useEffect(() => {
-    if (!saveBudget.timedOut || !saveBusy) return;
+    if (!saveLimit.timedOut || !saveBusy) return;
     saveBusyGen.current += 1;
     commitSaveLock.current = false;
     setSaveBusy(false);
-    show(t("error.operation_timed_out"));
-  }, [saveBudget.timedOut, saveBusy, show, t]);
+    setPendingSave(null);
+    notice(t("error.operation_timed_out"));
+  }, [saveLimit.timedOut, saveBusy, notice, t]);
 
   const dismissFooterConfirm = useCallback(() => {
     setDiscardConfirmOpen(false);
@@ -274,6 +301,11 @@ export function AppSettingsModal({
   }, [open, settingsOnDisk, onClose]);
 
   const requestClose = () => {
+    // Values already being saved are not unsaved.
+    if (saveBusy) {
+      handleClose();
+      return;
+    }
     if (discardConfirmOpen || saveConfirmOpen) {
       dismissFooterConfirm();
       return;
@@ -337,16 +369,23 @@ export function AppSettingsModal({
       app: { ...settings.app },
       workspace: workspaceForSave,
     });
+    const showHidden = draftShowHiddenVaultsSession;
     setSaveBusy(true);
+    setPendingSave({ config: normalized, showHidden, failure: null });
+    let failure: string | null = null;
     void (async () => {
       try {
         if (!appSettingsEqual(normalized, settings)) {
           await replaceSettings(normalized);
           if (generation !== saveBusyGen.current) return;
-          setDraft(normalized);
+          if (openRef.current) setDraft(normalized);
         }
         if (generation !== saveBusyGen.current) return;
-        setShowHiddenVaultsSession(draftShowHiddenVaultsSession);
+        setShowHiddenVaultsSession(showHidden);
+        if (!openRef.current) {
+          notice(t("modal.app_settings.saved_closed"));
+          return;
+        }
         setSavedVisible(true);
         clearTimeout(savedHideRef.current);
         savedHideRef.current = setTimeout(() => setSavedVisible(false), SAVED_INDICATOR_MS);
@@ -355,19 +394,22 @@ export function AppSettingsModal({
         if (generation !== saveBusyGen.current) return;
         setSaveConfirmOpen(false);
         if (shouldBumpVaultRootEpoch(error)) {
+          // Context already toasted + bumped Gate epoch; dismiss so Setup/Repair is usable.
           setDraft(settings);
-          handleClose();
+          if (openRef.current) handleClose();
           return;
         }
         const fallback =
           isRpcError(error) && error.code === "invalid_request"
             ? APP_SETTINGS_ERROR_I18N_KEYS.INVALID_REQUEST
             : APP_SETTINGS_ERROR_I18N_KEYS.SAVE_FAILED;
-        show(t(mobileErrorI18nKey(error, fallback)));
+        failure = t(mobileErrorI18nKey(error, fallback));
+        notice(failure);
       } finally {
         if (generation === saveBusyGen.current) {
           commitSaveLock.current = false;
           setSaveBusy(false);
+          setPendingSave(failure ? { config: normalized, showHidden, failure } : null);
         }
       }
     })();
@@ -386,22 +428,21 @@ export function AppSettingsModal({
     <Text style={[typography.body, { color: colors.vaultStatusOpen }]}>
       {t("modal.settings.saved")}
     </Text>
+  ) : saveBusy && saveLimit.visible ? (
+    <Text style={typography.bodyMuted}>{t("modal.settings.saving")}</Text>
+  ) : pendingSave?.failure ? (
+    <Text
+      style={[typography.caption, { color: colors.onErrorContainer }]}
+      accessibilityRole="alert"
+    >
+      {pendingSave.failure}
+    </Text>
   ) : null;
-  const showFooterStatus = Boolean(footerStatus) || saveBudget.visible;
+  const showFooterStatus = Boolean(footerStatus);
 
   const footer = (
     <View style={showFooterStatus ? styles.footerCol : undefined}>
-      {showFooterStatus ? (
-        <View>
-          {footerStatus}
-          {saveBudget.visible ? (
-            <LoadingBudgetHint
-              budgetMs={saveBudget.budgetMs}
-              remainingMs={saveBudget.remainingMs}
-            />
-          ) : null}
-        </View>
-      ) : null}
+      {showFooterStatus ? <View accessibilityLiveRegion="polite">{footerStatus}</View> : null}
       {discardConfirmOpen ? (
         <ModalFooterActions layout="confirm">
           <Button
@@ -614,6 +655,18 @@ function GeneralFields({
         hint={t("modal.app_settings.field.lifecycle_confirm_close_now_help")}
         value={config.lifecycle_confirm_close_now}
         onValueChange={(lifecycle_confirm_close_now) => onChange({ lifecycle_confirm_close_now })}
+      />
+      <SwitchRow
+        label={t("modal.app_settings.field.lifecycle_confirm_stop")}
+        hint={t("modal.app_settings.field.lifecycle_confirm_stop_help")}
+        value={config.lifecycle_confirm_stop}
+        onValueChange={(lifecycle_confirm_stop) => onChange({ lifecycle_confirm_stop })}
+      />
+      <SwitchRow
+        label={t("modal.app_settings.field.lifecycle_confirm_lock")}
+        hint={t("modal.app_settings.field.lifecycle_confirm_lock_help")}
+        value={config.lifecycle_confirm_lock}
+        onValueChange={(lifecycle_confirm_lock) => onChange({ lifecycle_confirm_lock })}
       />
     </View>
   );

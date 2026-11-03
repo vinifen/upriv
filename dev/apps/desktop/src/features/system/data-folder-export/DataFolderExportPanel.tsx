@@ -1,18 +1,16 @@
 import { useId } from "react";
 import { ExportFolderField } from "@/components/ExportFolderField";
 import { SettingsField, settingsControlClass } from "@/components/settings";
-import { JobProgressBar, LoadingBudgetHint } from "@/components/ui";
+import { JobProgressBar } from "@/components/ui";
 import { useTranslation } from "@/i18n";
 import {
   DATA_FOLDER_EXPORT_PROGRESS_COPY,
   DATA_FOLDER_ZIP_NAME_MAX_BYTES,
-  LOADING_BUDGET_MS,
   dataFolderZipNameFromInput,
   dataFolderZipNameIssue,
   dataFolderZipNameIssueI18nKey,
   fileNameOfPath,
 } from "@upriv/shared";
-import { useLoadingBudget } from "@upriv/shared/react";
 import type {
   DataFolderExportControls,
   DataFolderExportDestination,
@@ -33,11 +31,6 @@ export function DataFolderExportPanel({ controls, destination }: DataFolderExpor
   const { job, written } = controls;
   const { t } = useTranslation();
   const nameId = useId();
-  const budget = useLoadingBudget(
-    job !== null,
-    job?.budgetMs ?? LOADING_BUDGET_MS.dataFolderExport,
-    { startedAt: job?.startedAt },
-  );
   const nameIssue = dataFolderZipNameIssue(dataFolderZipNameFromInput(destination.zipName));
   const nameIssueKey = nameIssue ? dataFolderZipNameIssueI18nKey(nameIssue) : null;
 
@@ -57,15 +50,13 @@ export function DataFolderExportPanel({ controls, destination }: DataFolderExpor
         <div className="space-y-2">
           <JobProgressBar
             progress={job.progress}
+            startedAt={job.startedAt}
             label={t("modal.data_folder_export.title")}
             copy={DATA_FOLDER_EXPORT_PROGRESS_COPY}
           />
           <p className="text-xs leading-relaxed text-on-surface-variant">
             {t("modal.data_folder_export.background_note")}
           </p>
-          {budget.visible ? (
-            <LoadingBudgetHint budgetMs={budget.budgetMs} remainingMs={budget.remainingMs} />
-          ) : null}
         </div>
       ) : (
         <>

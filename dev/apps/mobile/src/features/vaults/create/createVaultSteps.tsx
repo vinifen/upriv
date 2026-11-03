@@ -39,7 +39,7 @@ import { useTheme } from "@/theme";
 import { spacing } from "@/theme/tokens";
 import { LongTextInput } from "@/components/LongTextInput";
 import { PathField } from "@/components/PathField";
-import { Button, Select } from "@/components/ui";
+import { Button, ElapsedTime, JobStopButton, Select } from "@/components/ui";
 import { IntegerInput, PolicyRadioOption, SettingsAccordionSection } from "@/components/settings";
 import {
   FieldHint,
@@ -120,10 +120,7 @@ function SettingsLockedFields({
 
 export function renderCreateVaultStep(
   stepId: CreateVaultStepId,
-  props: StepProps & {
-    onTestImportPassword?: () => void;
-    testingPassword?: boolean;
-  },
+  props: StepProps & PasswordTestProps,
 ) {
   switch (stepId) {
     case "source":
@@ -463,16 +460,26 @@ function CreateVaultIdentityStep({
   );
 }
 
+/** The `.7z` password test: it has no time limit, and its Stop ends it. */
+interface PasswordTestProps {
+  onTestImportPassword?: () => void;
+  onStopTestImportPassword?: () => void;
+  testingPassword?: boolean;
+  passwordTestStartedAt?: number | null;
+}
+
 function CreateVaultPasswordStep({
   draft,
   errors,
   onChange,
   onTestImportPassword,
+  onStopTestImportPassword,
   testingPassword = false,
+  passwordTestStartedAt = null,
   bindFieldRef,
   onFieldFocus,
   onFieldSubmit,
-}: StepProps & { onTestImportPassword?: () => void; testingPassword?: boolean }) {
+}: StepProps & PasswordTestProps) {
   const { t } = useTranslation();
   const { colors, typography } = useTheme();
   const isImport = draft.source === "import";
@@ -535,17 +542,26 @@ function CreateVaultPasswordStep({
         </>
       ) : needsArchivePassword ? (
         <View style={styles.row}>
-          <Button
-            label={
-              testingPassword
-                ? t("vault.create.action.testing_password")
-                : t("vault.create.action.test_password")
-            }
-            variant="ghost"
-            disabled={!draft.password.trim() || testingPassword}
-            busy={testingPassword}
-            onPress={onTestImportPassword}
-          />
+          {testingPassword ? (
+            <>
+              <Text style={typography.bodyMuted} accessibilityLiveRegion="polite">
+                {t("vault.create.action.testing_password")}
+              </Text>
+              <ElapsedTime startedAt={passwordTestStartedAt} layout="inline" />
+              <JobStopButton
+                stoppingSince={null}
+                stoppable
+                onStop={() => onStopTestImportPassword?.()}
+              />
+            </>
+          ) : (
+            <Button
+              label={t("vault.create.action.test_password")}
+              variant="ghost"
+              disabled={!draft.password.trim()}
+              onPress={onTestImportPassword}
+            />
+          )}
           {draft.passwordValidated ? (
             <Text style={[typography.body, { color: colors.vaultStatusOpen }]}>
               {t("vault.create.password_validated")}

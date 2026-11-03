@@ -1,13 +1,13 @@
 import { useEffect, useRef } from "react";
 import { StyleSheet, Text, View } from "react-native";
 import type { I18nKey, VaultRootConfirmAction } from "@upriv/shared";
-import { LOADING_BUDGET_MS } from "@upriv/shared";
-import { Button, LoadingBudgetHint } from "@/components/ui";
+import { Button, ElapsedTime, JobStopButton } from "@/components/ui";
 import { ModalFooterActions } from "@/components/ui/ModalFooterActions";
-import { useLoadingBudget } from "@upriv/shared/react";
+import { useOperationLimit } from "@upriv/shared/react";
 import { useTranslation } from "@/i18n";
 import { useTheme } from "@/theme";
 import { spacing } from "@/theme/tokens";
+import type { DataFolderCopy } from "./useDataFolderCopy";
 
 interface VaultRootConfirmFooterProps {
   busy: boolean;
@@ -33,14 +33,17 @@ interface VaultRootConfirmFooterProps {
   /** Second tap — run the side effects. */
   onConfirmPrimary: () => void;
   onCancelConfirm: () => void;
-  /** Budget exhausted while `busy` — parent must clear busy and surface retry/error. */
+  /** `OPERATION_LIMIT_MS` passed while `busy` — parent must clear busy and surface retry/error. */
   onBusyTimeout?: () => void;
+  /** The private data folder copy this setup runs: Stop replaces the primary. */
+  copy?: DataFolderCopy | null;
+  onStopCopy?: () => void;
 }
 
 /**
  * Two-step primary footer: first tap opens confirm + notes; second tap commits.
  * Mirrors desktop `VaultRootConfirmFooter` semantics (busy timeout, confirmDanger,
- * success line) using RN Button / LoadingBudgetHint primitives.
+ * success line) using RN Button primitives.
  */
 export function VaultRootConfirmFooter({
   busy,
@@ -55,13 +58,16 @@ export function VaultRootConfirmFooter({
   onConfirmPrimary,
   onCancelConfirm,
   onBusyTimeout,
+  copy = null,
+  onStopCopy,
 }: VaultRootConfirmFooterProps) {
   const { t } = useTranslation();
   const { colors, typography } = useTheme();
   const primaryDisabled = busy || blocked;
   const isApply = primaryAction === "apply";
   const showIdleStatus = !confirmOpen && !successKey && idleStatusKey != null;
-  const budget = useLoadingBudget(busy && !successKey, LOADING_BUDGET_MS.vaultRoot);
+  // A copy has no time limit: it ends when it is done, fails, or is stopped.
+  const limit = useOperationLimit(busy && !successKey && !copy);
   const timedOutNotified = useRef(false);
 
   useEffect(() => {
@@ -69,10 +75,10 @@ export function VaultRootConfirmFooter({
       timedOutNotified.current = false;
       return;
     }
-    if (!budget.timedOut || timedOutNotified.current) return;
+    if (!limit.timedOut || timedOutNotified.current) return;
     timedOutNotified.current = true;
     onBusyTimeout?.();
-  }, [budget.timedOut, busy, onBusyTimeout]);
+  }, [limit.timedOut, busy, onBusyTimeout]);
 
   return (
     <View style={styles.wrap}>
@@ -84,6 +90,13 @@ export function VaultRootConfirmFooter({
           >
             {t(successKey)}
           </Text>
+        ) : copy ? (
+          <View style={styles.copyRow}>
+            <Text style={typography.bodyMuted}>{t("modal.vault_root_setup.busy")}</Text>
+            {copy.stoppingSince === null ? (
+              <ElapsedTime startedAt={copy.startedAt} layout="inline" />
+            ) : null}
+          </View>
         ) : confirmOpen ? (
           <View style={styles.confirmCol}>
             <Text style={typography.bodyMuted}>
@@ -98,47 +111,51 @@ export function VaultRootConfirmFooter({
                 {t(key)}
               </Text>
             ))}
-            {busy && budget.visible ? (
-              <LoadingBudgetHint budgetMs={budget.budgetMs} remainingMs={budget.remainingMs} />
-            ) : null}
           </View>
         ) : showIdleStatus ? (
           <Text style={typography.bodyMuted} accessibilityRole="text">
             {t(idleStatusKey!)}
           </Text>
-        ) : busy && budget.visible ? (
-          <View style={styles.confirmCol}>
-            <Text style={typography.bodyMuted}>{t("modal.vault_root_setup.busy")}</Text>
-            <LoadingBudgetHint budgetMs={budget.budgetMs} remainingMs={budget.remainingMs} />
-          </View>
+        ) : busy && limit.visible ? (
+          <Text style={typography.bodyMuted}>{t("modal.vault_root_setup.busy")}</Text>
         ) : null}
       </View>
 
-      <ModalFooterActions layout="confirm">
-        <Button
-          variant={confirmOpen && confirmDanger ? "danger" : "primary"}
-          label={
-            confirmOpen
-              ? t(
-                  isApply
-                    ? "modal.data_folder.apply_confirm_action"
-                    : "modal.vault_root_gate.continue_confirm_action",
-                )
-              : t(isApply ? "action.apply" : "action.continue")
-          }
-          busy={busy && !successKey}
-          disabled={primaryDisabled}
-          onPress={confirmOpen ? onConfirmPrimary : onRequestPrimary}
-        />
-        {confirmOpen ? (
-          <Button
-            variant="ghost"
-            label={t("action.cancel")}
-            disabled={busy}
-            onPress={onCancelConfirm}
+      {copy ? (
+        <ModalFooterActions layout="confirm">
+          <JobStopButton
+            stoppingSince={copy.stoppingSince}
+            stoppable={copy.progress?.stoppable ?? true}
+            onStop={() => onStopCopy?.()}
           />
-        ) : null}
-      </ModalFooterActions>
+        </ModalFooterActions>
+      ) : (
+        <ModalFooterActions layout="confirm">
+          <Button
+            variant={confirmOpen && confirmDanger ? "danger" : "primary"}
+            label={
+              confirmOpen
+                ? t(
+                    isApply
+                      ? "modal.data_folder.apply_confirm_action"
+                      : "modal.vault_root_gate.continue_confirm_action",
+                  )
+                : t(isApply ? "action.apply" : "action.continue")
+            }
+            busy={busy && !successKey}
+            disabled={primaryDisabled}
+            onPress={confirmOpen ? onConfirmPrimary : onRequestPrimary}
+          />
+          {confirmOpen ? (
+            <Button
+              variant="ghost"
+              label={t("action.cancel")}
+              disabled={busy}
+              onPress={onCancelConfirm}
+            />
+          ) : null}
+        </ModalFooterActions>
+      )}
     </View>
   );
 }
@@ -146,4 +163,5 @@ export function VaultRootConfirmFooter({
 const styles = StyleSheet.create({
   wrap: { gap: spacing.md },
   confirmCol: { gap: spacing.xs },
+  copyRow: { flexDirection: "row", alignItems: "baseline", gap: spacing.sm },
 });

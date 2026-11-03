@@ -3,6 +3,7 @@ export {
   CORE_RPC_TIMEOUT_MS,
   MOBILE_ONLY_RPC_TIMEOUT_MS,
   vaultImportProbeTimeoutMs,
+  vaultRootSetupPathTimeoutMs,
 } from "./timeouts";
 export {
   isRpcError,

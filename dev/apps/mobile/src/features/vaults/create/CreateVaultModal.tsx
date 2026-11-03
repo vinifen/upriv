@@ -17,7 +17,7 @@ import {
   retainsPendingImport,
   subscribeImportFolderListing,
 } from "@/platform/native/contentTreeImport";
-import { useCreateVaultService, useVaultRootService } from "@/platform/services";
+import { useCreateVaultService, useJobService, useVaultRootService } from "@/platform/services";
 import { useTranslation } from "@/i18n";
 import { mobileErrorI18nKey } from "@/lib/errorMessages";
 import { useTheme } from "@/theme";
@@ -57,6 +57,7 @@ export function CreateVaultModal({
   const insets = useSafeAreaInsets();
   const { height: windowHeight } = useWindowDimensions();
   const createVaultService = useCreateVaultService();
+  const jobService = useJobService();
   const {
     settings: appSettings,
     showHiddenVaultsSession,
@@ -140,8 +141,9 @@ export function CreateVaultModal({
       else void releasePendingImport(path).catch(() => undefined);
       onClose();
     },
-    testImportPassword: (password, importFile) =>
-      createVaultService.testImportPackagePassword(password, importFile),
+    testImportPassword: (password, importFile, job) =>
+      createVaultService.testImportPackagePassword(password, importFile, job),
+    stopJob: (job) => jobService.cancel(job, "user"),
     readImportPackageSettings: (importFile) =>
       createVaultService.readImportPackageSettings(importFile),
     onVaultRootFailure: reportImportVaultRootFailure,
@@ -158,12 +160,14 @@ export function CreateVaultModal({
     canCreate,
     discardConfirmOpen,
     testingPassword,
+    passwordTestStartedAt,
     patchDraft,
     goToStep,
     handleBack,
     handleNext,
     handleCreate,
     handleTestImportPassword,
+    stopTestImportPassword,
     requestClose,
     handleDiscardAndClose,
     dismissFooterConfirm,
@@ -293,7 +297,9 @@ export function CreateVaultModal({
           vaultRootPath,
           appWorkspace: appSettings.workspace,
           onTestImportPassword: handleTestImportPassword,
+          onStopTestImportPassword: stopTestImportPassword,
           testingPassword,
+          passwordTestStartedAt,
           ...stepFocus,
         })}
       </ScrollView>

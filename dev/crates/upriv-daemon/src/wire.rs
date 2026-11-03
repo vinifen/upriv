@@ -33,11 +33,6 @@ pub enum WireOut {
     },
 }
 
-pub enum RequestOutcome {
-    Continue(WireOut),
-    Shutdown(WireOut),
-}
-
 /// Methods whose whole call is Argon2id. Handled on the daemon `upriv-argon2`
 /// worker so light RPCs (`app_settings_*`, groups, list, …) are not blocked on
 /// stdin.
@@ -85,31 +80,27 @@ pub fn is_pack_io_method(method: &str) -> bool {
             | "vault_import_files_zip"
             | "vault_import_os_path"
             | "vault_export"
-            | "vault_plain_export_sweep"
+            | "vault_unfinished_sweep"
             | "vault_plain_remove"
             | "backup_save"
             | "backup_export"
     )
 }
 
-/// One vault file copied in from the operating system.
+/// One vault file copied in from the operating system, and the password test
+/// of a `.7z` before an import. Several slots, so neither waits behind a long
+/// export, and a stop for either still reaches stdin.
 pub fn is_import_io_method(method: &str) -> bool {
-    method == "vault_fs_import_os_file"
+    matches!(method, "vault_fs_import_os_file" | "vault_import_probe")
 }
 
-/// The zip of the whole data folder. Own worker: an import, export, or backup
-/// it refuses answers at once instead of queuing behind a copy of every vault.
-pub fn is_data_folder_io_method(method: &str) -> bool {
+/// The zip of the whole data folder, and the copy of a phone's private data
+/// folder into the one it granted. Own worker: an import, export, or backup it
+/// refuses answers at once instead of queuing behind a copy of every vault.
+pub fn is_data_folder_io_method(method: &str, params: &Value) -> bool {
     method == "data_folder_export"
-}
-
-/// Long contents I/O that would stall stdin if run inline.
-pub fn is_long_io_method(method: &str, _params: &Value) -> bool {
-    is_lifecycle_io_method(method)
-        || is_rewrap_io_method(method)
-        || is_pack_io_method(method)
-        || is_import_io_method(method)
-        || is_data_folder_io_method(method)
+        || (method == "vault_root_setup_path"
+            && params.get("adoptPrivateRoot").and_then(Value::as_bool) == Some(true))
 }
 
 /// Which off-stdin worker runs this method.
@@ -129,6 +120,12 @@ pub fn heavy_lane(method: &str, params: &Value) -> Option<HeavyLane> {
     if is_argon2_bound_method(method, params) {
         return Some(HeavyLane::Argon2);
     }
+    // A normal quit closes every vault, and closing may take long. On the
+    // close lane, after any close already running, stdin stays free for
+    // `job_status`, `job_cancel`, and a Close now that hurries the quit.
+    if method == SHUTDOWN_METHOD {
+        return Some(HeavyLane::Lifecycle);
+    }
     if is_lifecycle_io_method(method) {
         return Some(HeavyLane::Lifecycle);
     }
@@ -141,7 +138,7 @@ pub fn heavy_lane(method: &str, params: &Value) -> Option<HeavyLane> {
     if is_pack_io_method(method) {
         return Some(HeavyLane::Pack);
     }
-    if is_data_folder_io_method(method) {
+    if is_data_folder_io_method(method, params) {
         return Some(HeavyLane::DataFolder);
     }
     None
@@ -149,22 +146,20 @@ pub fn heavy_lane(method: &str, params: &Value) -> Option<HeavyLane> {
 
 /// Off-stdin work: Argon2, a ciphertext export zip, a long OS-path import, vault close, or vault delete.
 pub fn is_heavy_method(method: &str, params: &Value) -> bool {
-    is_argon2_bound_method(method, params) || is_long_io_method(method, params)
+    heavy_lane(method, params).is_some()
 }
 
-pub fn handle_request(id: u64, method: String, params: Value) -> RequestOutcome {
-    let shutdown = method == "app_shutdown";
+/// Quit: Electron sends it once, and again with `now` when the person chooses
+/// Close now while the first one runs.
+pub const SHUTDOWN_METHOD: &str = "app_shutdown";
+
+pub fn handle_request(id: u64, method: String, params: Value) -> WireOut {
     let response = handle_rpc(RpcRequest { method, params });
-    let wire = WireOut::Response {
+    WireOut::Response {
         id,
         ok: response.ok,
         result: response.result,
         error: response.error,
-    };
-    if shutdown {
-        RequestOutcome::Shutdown(wire)
-    } else {
-        RequestOutcome::Continue(wire)
     }
 }
 
@@ -179,7 +174,7 @@ mod tests {
         assert!(is_argon2_bound_method("vault_ingest_open", &empty));
         assert!(is_lifecycle_io_method("vault_discard_import"));
         assert!(!is_argon2_bound_method("vault_ingest_directory", &empty));
-        assert!(!is_long_io_method("vault_ingest_directory", &empty));
+        assert!(!is_heavy_method("vault_ingest_directory", &empty));
         assert!(is_argon2_bound_method("vault_create", &empty));
         assert!(!is_argon2_bound_method("vault_export", &empty));
         assert!(!is_argon2_bound_method("vault_import_7z", &empty));
@@ -190,12 +185,16 @@ mod tests {
         assert!(!is_heavy_method("vault_store_size", &empty));
         assert!(!is_heavy_method("vault_close_phase", &empty));
         assert!(!is_argon2_bound_method("app_shutdown", &empty));
+        assert_eq!(
+            heavy_lane("app_shutdown", &empty),
+            Some(HeavyLane::Lifecycle)
+        );
         assert!(!is_argon2_bound_method("vault_fs_import_os_file", &empty));
         assert!(is_import_io_method("vault_fs_import_os_file"));
         assert!(!is_pack_io_method("vault_fs_import_os_file"));
-        assert!(is_long_io_method("vault_fs_import_os_file", &empty));
-        assert!(is_long_io_method("vault_import_zip", &empty));
-        assert!(is_long_io_method("vault_import_7z", &empty));
+        assert!(is_heavy_method("vault_fs_import_os_file", &empty));
+        assert!(is_heavy_method("vault_import_zip", &empty));
+        assert!(is_heavy_method("vault_import_7z", &empty));
         assert!(is_lifecycle_io_method("vault_close"));
         assert!(!is_lifecycle_io_method("vault_change_password"));
         assert!(!is_lifecycle_io_method("vault_change_kdf"));
@@ -243,6 +242,18 @@ mod tests {
             heavy_lane("data_folder_export", &empty),
             Some(HeavyLane::DataFolder)
         );
+        // A `.7z` password test and the copy of a phone's data folder are
+        // jobs: off stdin, so their stop gets through.
+        assert_eq!(
+            heavy_lane("vault_import_probe", &empty),
+            Some(HeavyLane::Import)
+        );
+        let adopting = serde_json::json!({ "path": "/upriv-saf-root", "adoptPrivateRoot": true });
+        assert_eq!(
+            heavy_lane("vault_root_setup_path", &adopting),
+            Some(HeavyLane::DataFolder)
+        );
+        assert_eq!(heavy_lane("vault_root_setup_path", &empty), None);
         // Progress and stop answer at once, beside the job they name.
         assert_eq!(heavy_lane("job_status", &empty), None);
         assert_eq!(heavy_lane("job_cancel", &empty), None);
@@ -265,7 +276,6 @@ mod tests {
         let seven_zip = serde_json::json!({ "format": "seven_zip" });
         for params in [&store_zip, &missing, &seven_zip] {
             assert!(!is_argon2_bound_method("vault_export", params));
-            assert!(is_long_io_method("vault_export", params));
             assert!(is_heavy_method("vault_export", params));
             assert_eq!(heavy_lane("vault_export", params), Some(HeavyLane::Pack));
         }
@@ -309,16 +319,17 @@ mod tests {
             "vault_import_7z",
             "vault_import_files_zip",
             "vault_import_os_path",
+            "vault_import_probe",
             "vault_import_zip",
             "vault_ingest_open",
             "vault_open",
             "vault_plain_confirm",
             "vault_plain_deletions",
-            "vault_plain_export_sweep",
             "vault_plain_remove",
             "vault_plain_send",
             "vault_plain_sync",
             "vault_plain_unsend",
+            "vault_unfinished_sweep",
         ];
         let expected: std::collections::BTreeSet<_> = expected
             .iter()

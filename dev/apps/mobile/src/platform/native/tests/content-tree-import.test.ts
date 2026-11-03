@@ -136,6 +136,7 @@ describe("contentTreeFromPickedFile", () => {
 });
 
 describe("importContentTree", () => {
+  const JOB = "job-import";
   const input = {
     password: "secret",
     unlockPreset: "256mib",
@@ -155,8 +156,10 @@ describe("importContentTree", () => {
       if (failAt === name) throw new Error(name);
     };
     return {
-      createVault: async (createInput) => {
+      createVault: async (createInput, job) => {
         expect(createInput.importPackage).toBeUndefined();
+        // One job covers the create and every file, so one Stop ends them all.
+        expect(job).toBe(JOB);
         await run("create");
         return created;
       },
@@ -164,7 +167,8 @@ describe("importContentTree", () => {
       addDirectory: async (_id, path) => {
         steps.push(`dir:${path}`);
       },
-      addFile: async (_id, path, uri) => {
+      addFile: async (_id, path, uri, job) => {
+        expect(job).toBe(JOB);
         steps.push(`file:${path}:${uri}`);
         if (failAt === "file") throw new Error("file");
       },
@@ -175,7 +179,7 @@ describe("importContentTree", () => {
 
   it("creates, streams, and closes without opening a file manager", async () => {
     const steps: string[] = [];
-    const created = await importContentTree(input, tree, io(steps));
+    const created = await importContentTree(input, tree, io(steps), JOB);
     expect(created.id).toBe("notes");
     expect(steps).toEqual(["create", "open", "dir:empty", "file:a.txt:content://doc/a", "close"]);
   });
@@ -190,26 +194,26 @@ describe("importContentTree", () => {
         return { id: "notes" } as VaultListItem;
       },
     });
-    await importContentTree({ ...input, welcome }, tree, capture(io([])));
+    await importContentTree({ ...input, welcome }, tree, capture(io([])), JOB);
     const withReadme = contentTreeFromFolderPick({
       folderName: "Photos",
       releaseSafTree: "content://tree/photos",
       files: [{ relativePath: "Photos/Readme.md", uri: "content://doc/r" }],
     });
-    await importContentTree({ ...input, welcome }, withReadme, capture(io([])));
+    await importContentTree({ ...input, welcome }, withReadme, capture(io([])), JOB);
     const withReadmeDir = contentTreeFromFolderPick({
       folderName: "Photos",
       releaseSafTree: "content://tree/photos",
       directories: ["Photos/README.md"],
       files: [{ relativePath: "Photos/note.txt", uri: "content://doc/n" }],
     });
-    await importContentTree({ ...input, welcome }, withReadmeDir, capture(io([])));
+    await importContentTree({ ...input, welcome }, withReadmeDir, capture(io([])), JOB);
     expect(sent).toEqual([welcome, undefined, undefined]);
   });
 
   it("deletes the new vault when a file fails and does not close it", async () => {
     const steps: string[] = [];
-    await expect(importContentTree(input, tree, io(steps, "file"))).rejects.toThrow("file");
+    await expect(importContentTree(input, tree, io(steps, "file"), JOB)).rejects.toThrow("file");
     expect(steps).toEqual(["create", "open", "dir:empty", "file:a.txt:content://doc/a", "abort"]);
   });
 
@@ -223,7 +227,7 @@ describe("importContentTree", () => {
         throw new Error("disk full");
       },
     };
-    await expect(importContentTree(input, tree, failingAbort)).rejects.toThrow("disk full");
+    await expect(importContentTree(input, tree, failingAbort, JOB)).rejects.toThrow("disk full");
     expect(steps).toContain("abort");
     expect(steps).not.toContain("close");
   });

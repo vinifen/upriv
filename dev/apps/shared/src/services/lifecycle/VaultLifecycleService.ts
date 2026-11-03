@@ -47,16 +47,20 @@ export interface VaultLifecycleService {
   readonly openingStepCount: number;
   readonly closingStepCount: number;
 
-  runOpeningPipeline(vaultId: string, onStep: (stepIndex: number) => void): Promise<void>;
   /**
-   * `onMeasured` gets the bytes of `store/` the close backup copies, once core
-   * knows them, so the caller can size its wait (`sizedBudgetMs("vaultClose")`).
+   * Unlock as the job `job`. A stop rejects with `job_cancelled` and leaves the
+   * vault closed (a plaintext folder already being filled is wiped).
    */
+  runOpeningPipeline(
+    vaultId: string,
+    onStep: (stepIndex: number) => void,
+    job: string,
+  ): Promise<void>;
+  /** A close has no time limit; Close now (`hurryClose`) is its stop. */
   runClosingPipeline(
     vaultId: string,
     onStep: (stepIndex: number) => void,
     reason?: VaultCloseReason,
-    onMeasured?: (bytes: number) => void,
   ): Promise<CloseVaultOutcome>;
   /** Tell the close running for this vault to finish the Close now way. False when none runs. */
   hurryClose(vaultId: string): Promise<boolean>;

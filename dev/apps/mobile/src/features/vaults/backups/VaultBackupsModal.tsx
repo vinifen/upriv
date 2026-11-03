@@ -8,7 +8,6 @@ import {
   backupExportRowKey,
   formatBackupDate,
   formatBytes,
-  LOADING_BUDGET_MS,
   matchesBackupDeleteConfirmation,
   type VaultBackupEntry,
   type VaultListItem,
@@ -20,8 +19,9 @@ import { mobileErrorI18nKey } from "@/lib/errorMessages";
 import {
   Button,
   Checkbox,
+  ElapsedTime,
   IconButton,
-  LoadingBudgetHint,
+  JobStopButton,
   Modal,
   ModalFooterActions,
   TextWidthProbe,
@@ -33,7 +33,6 @@ import { useTheme } from "@/theme";
 import { colorAlpha, radii, spacing } from "@/theme/tokens";
 import {
   useBackupExportStep,
-  useLoadingBudget,
   useRowButtonStack,
   useToast,
   type BackupExportJob,
@@ -50,6 +49,8 @@ interface VaultBackupsModalProps {
   /** This vault's list-owned Back up now in flight. Survives closing the modal. */
   saveJob: VaultBackupJob | null;
   onSaveNow: () => void;
+  /** Ask the running Back up now to stop; core removes its unfinished zip. */
+  onStopSave: () => void;
   /** Bumped when that job finishes so the open list reloads. */
   listRefreshToken: number;
   onClose: () => void;
@@ -72,6 +73,7 @@ export function VaultBackupsModal({
   canSaveNow,
   saveJob,
   onSaveNow,
+  onStopSave,
   listRefreshToken,
   onClose,
   onCreateVaultFromBackup,
@@ -92,13 +94,6 @@ export function VaultBackupsModal({
     open,
     listRefreshToken,
   );
-  const saving = saveJob !== null;
-  const saveBudget = useLoadingBudget(
-    saving,
-    saveJob?.budgetMs ?? LOADING_BUDGET_MS.vaultBackupSave,
-    { startedAt: saveJob?.startedAt },
-  );
-
   const savedBackups = useMemo(() => backups.filter((entry) => entry.saved), [backups]);
   const standardBackups = useMemo(() => backups.filter((entry) => !entry.saved), [backups]);
 
@@ -309,24 +304,35 @@ export function VaultBackupsModal({
             title={t("modal.backup.section.saves")}
             help={t("modal.backup.section.saves_help")}
             action={
-              <Button
-                label={saving ? t("modal.backup.backup_now_running") : t("modal.backup.backup_now")}
-                variant="secondary"
-                size="sm"
-                busy={saving}
-                disabled={saving || !canSaveNow || isBusy || deleteTargets !== null}
-                onPress={onSaveNow}
-              />
+              saveJob ? (
+                <JobStopButton
+                  size="sm"
+                  stoppingSince={saveJob.stoppingSince}
+                  stoppable={saveJob.progress?.stoppable ?? true}
+                  onStop={onStopSave}
+                />
+              ) : (
+                <Button
+                  label={t("modal.backup.backup_now")}
+                  variant="secondary"
+                  size="sm"
+                  disabled={!canSaveNow || isBusy || deleteTargets !== null}
+                  onPress={onSaveNow}
+                />
+              )
             }
             notice={
-              saving ? (
-                saveBudget.visible ? (
-                  <LoadingBudgetHint
-                    budgetMs={saveBudget.budgetMs}
-                    remainingMs={saveBudget.remainingMs}
-                    layout="inline"
-                  />
-                ) : null
+              saveJob ? (
+                <View style={styles.saveStatus}>
+                  <Text style={typography.caption}>
+                    {saveJob.startedAt === null
+                      ? t("vault.status.queued")
+                      : t("modal.backup.backup_now_running")}
+                  </Text>
+                  {saveJob.stoppingSince === null ? (
+                    <ElapsedTime startedAt={saveJob.startedAt} layout="inline" />
+                  ) : null}
+                </View>
               ) : canSaveNow ? null : (
                 <Text style={typography.caption}>{t("modal.backup.backup_now_blocked")}</Text>
               )
@@ -717,6 +723,7 @@ function BackupRow({
 
 const styles = StyleSheet.create({
   hint: { marginBottom: spacing.md },
+  saveStatus: { flexDirection: "row", alignItems: "baseline", gap: spacing.sm },
   list: { gap: spacing.lg },
   empty: { textAlign: "center", paddingVertical: 40, fontSize: 14 },
   toolbar: {

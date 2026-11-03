@@ -21,6 +21,7 @@ import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "@/components/icons";
 import { Collapse } from "@/components/ui";
 import { useTranslation } from "@/i18n";
+import { useRowArmingDismiss } from "@/hooks/useRowArmingDismiss";
 import { vaultListDropOverClass } from "../lib/dropOverClass";
 import { vaultListDropKeyProps } from "../lib/listDropKey";
 import { VaultBlockCard } from "./VaultBlockCard";
@@ -102,6 +103,8 @@ interface VaultListProps {
   onLockVault: (vault: VaultListItem) => void;
   onUnlockVault: (vault: VaultListItem) => void;
   onCloseNow: (vault: VaultListItem) => void;
+  /** Stop the work the row shows (`pipelineListStatus.rowWork`). */
+  onStopWork: (vault: VaultListItem) => void;
 }
 
 export function VaultList({
@@ -130,7 +133,9 @@ export function VaultList({
   onLockVault,
   onUnlockVault,
   onCloseNow,
+  onStopWork,
 }: VaultListProps) {
+  useRowArmingDismiss();
   const { t } = useTranslation();
   const gridRef = useRef<HTMLDivElement>(null);
   const [gridWidth, setGridWidth] = useState(900);
@@ -275,6 +280,7 @@ export function VaultList({
         onLockVault={onLockVault}
         onUnlockVault={onUnlockVault}
         onCloseNow={onCloseNow}
+        onStopWork={onStopWork}
       />
     );
 
@@ -392,6 +398,7 @@ export function VaultList({
               onLockVault={onLockVault}
               onUnlockVault={onUnlockVault}
               onCloseNow={onCloseNow}
+              onStopWork={onStopWork}
             />
           );
         }
@@ -456,6 +463,7 @@ export function VaultList({
                       onLockVault={onLockVault}
                       onUnlockVault={onUnlockVault}
                       onCloseNow={onCloseNow}
+                      onStopWork={onStopWork}
                     />
                   );
                 })}

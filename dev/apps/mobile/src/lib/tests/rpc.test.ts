@@ -88,13 +88,20 @@ describe("job rpc", () => {
   it("reads progress only while the job runs", async () => {
     native.invoke
       .mockResolvedValueOnce(
-        JSON.stringify({ ok: true, result: { running: true, bytesDone: 5, bytesTotal: 50 } }),
+        JSON.stringify({
+          ok: true,
+          result: { running: true, bytesDone: 5, bytesTotal: 50, stoppable: false },
+        }),
       )
       .mockResolvedValueOnce(
         JSON.stringify({ ok: true, result: { running: false, bytesDone: 0, bytesTotal: 0 } }),
       );
     const { rpcJobStatus } = await import("../rpc");
-    await expect(rpcJobStatus("job-1")).resolves.toEqual({ bytesDone: 5, bytesTotal: 50 });
+    await expect(rpcJobStatus("job-1")).resolves.toEqual({
+      bytesDone: 5,
+      bytesTotal: 50,
+      stoppable: false,
+    });
     await expect(rpcJobStatus("job-1")).resolves.toBeNull();
     expect(native.invoke).toHaveBeenCalledWith("job_status", JSON.stringify({ job: "job-1" }));
   });

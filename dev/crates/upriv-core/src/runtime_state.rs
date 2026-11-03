@@ -1,9 +1,10 @@
 //! `.upriv/state.json` — volatile open-session records (never `persistence.json`).
 //!
 //! Plaintext records are the durable part. A folder's record stays until the
-//! folder is wiped, so a crash or a failed wipe keeps the vault in recovery. A
-//! plain-text export's record stays until its unfinished file is gone, so a
-//! later launch can wipe what a crash left in the chosen folder.
+//! folder is wiped, so a crash or a failed wipe keeps the vault in recovery.
+//! An export's record stays until its unfinished file is gone, and an import's
+//! until the new vault is complete or removed, so a later launch can clear what
+//! a crash left (`vault::sweep_unfinished`).
 
 #[allow(unused_imports)]
 use crate::host_fs::HostFsQuery;
@@ -24,9 +25,12 @@ pub struct RuntimeState {
     pub format_version: u32,
     #[serde(default)]
     pub vaults: BTreeMap<String, RuntimeVaultEntry>,
-    /// Plain-text exports not known to have ended.
+    /// Files a job writes outside the vault, not known to have ended.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub plain_exports: Vec<PlainExportRecord>,
+    pub unfinished_files: Vec<UnfinishedFileRecord>,
+    /// Vault ids of new vaults an import is still filling.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unfinished_imports: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -54,10 +58,25 @@ pub struct PlainRecord {
     pub since: String,
 }
 
-/// An unfinished plain-text export, recorded before its first byte is written.
+/// The job that writes an unfinished file.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum UnfinishedWork {
+    /// A `.zip` of `store/` or a `.7z`.
+    VaultExport,
+    /// A plain-text `.zip`: readable vault files, overwritten before removal.
+    PlainExport,
+    BackupExport,
+    DataFolderExport,
+}
+
+/// A file a job writes outside the vault, recorded before its first byte.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PlainExportRecord {
-    pub vault_id: String,
+pub struct UnfinishedFileRecord {
+    pub work: UnfinishedWork,
+    /// The vault it came from; none for the data-folder zip.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vault_id: Option<String>,
     /// Host name of the computer that wrote the file.
     pub host: String,
     /// The `.upriv-part` file.
@@ -66,7 +85,7 @@ pub struct PlainExportRecord {
     /// exists only while that tree is mounted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tree: Option<String>,
-    /// The export job. A record whose job still runs is not a leftover.
+    /// The job writing it. A record whose job still runs is not a leftover.
     pub job: String,
 }
 
@@ -98,7 +117,8 @@ impl RuntimeState {
         Self {
             format_version: STATE_FORMAT,
             vaults: BTreeMap::new(),
-            plain_exports: Vec::new(),
+            unfinished_files: Vec::new(),
+            unfinished_imports: Vec::new(),
         }
     }
 }
@@ -311,36 +331,72 @@ pub(crate) fn reachable_plain_record(
         .find(|record| record.reachable_here(host.as_deref())))
 }
 
-/// Record a plain-text export before any of it is written, on this computer.
-pub(crate) fn add_plain_export(root: &VaultRoot, mut record: PlainExportRecord) -> Result<()> {
+/// Record a file before any of it is written, on this computer.
+pub(crate) fn add_unfinished_file(
+    root: &VaultRoot,
+    mut record: UnfinishedFileRecord,
+) -> Result<()> {
     record.host = this_host().unwrap_or_default();
     with_state_lock(|| {
         let mut state = load_runtime_state(root)?;
-        state.plain_exports.retain(|item| item.path != record.path);
-        state.plain_exports.push(record);
+        state
+            .unfinished_files
+            .retain(|item| item.path != record.path);
+        state.unfinished_files.push(record);
         save_runtime_state(root, &state)
     })
 }
 
-/// Forget a plain-text export once its unfinished file is gone.
-pub(crate) fn remove_plain_export(root: &VaultRoot, path: &str) -> Result<()> {
+/// Forget a file once it is gone or complete.
+pub(crate) fn remove_unfinished_file(root: &VaultRoot, path: &str) -> Result<()> {
     with_state_lock(|| {
         let mut state = load_runtime_state(root)?;
-        let before = state.plain_exports.len();
-        state.plain_exports.retain(|item| item.path != path);
-        if state.plain_exports.len() != before {
+        let before = state.unfinished_files.len();
+        state.unfinished_files.retain(|item| item.path != path);
+        if state.unfinished_files.len() != before {
             save_runtime_state(root, &state)?;
         }
         Ok(())
     })
 }
 
-/// Plain-text exports this computer recorded.
-pub(crate) fn plain_exports_here(root: &VaultRoot) -> Result<Vec<PlainExportRecord>> {
+/// Unfinished files this computer recorded.
+pub(crate) fn unfinished_files_here(root: &VaultRoot) -> Result<Vec<UnfinishedFileRecord>> {
     let host = this_host().unwrap_or_default();
-    let mut records = load_runtime_state(root)?.plain_exports;
+    let mut records = load_runtime_state(root)?.unfinished_files;
     records.retain(|record| record.host == host);
     Ok(records)
+}
+
+/// Record a new vault before an import writes its folder.
+pub(crate) fn add_unfinished_import(root: &VaultRoot, vault_id: &str) -> Result<()> {
+    with_state_lock(|| {
+        let mut state = load_runtime_state(root)?;
+        if state.unfinished_imports.iter().any(|id| id == vault_id) {
+            return Ok(());
+        }
+        state.unfinished_imports.push(vault_id.to_string());
+        save_runtime_state(root, &state)
+    })
+}
+
+/// Forget an import once its vault is complete or removed.
+pub(crate) fn remove_unfinished_import(root: &VaultRoot, vault_id: &str) -> Result<()> {
+    with_state_lock(|| {
+        let mut state = load_runtime_state(root)?;
+        let before = state.unfinished_imports.len();
+        state.unfinished_imports.retain(|id| id != vault_id);
+        if state.unfinished_imports.len() != before {
+            save_runtime_state(root, &state)?;
+        }
+        Ok(())
+    })
+}
+
+/// Every import not known to have ended, from any computer: the new vault is
+/// inside the data folder.
+pub(crate) fn unfinished_imports(root: &VaultRoot) -> Result<Vec<String>> {
+    Ok(load_runtime_state(root)?.unfinished_imports)
 }
 
 /// Drop every record of a deleted vault.

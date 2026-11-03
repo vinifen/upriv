@@ -772,7 +772,7 @@ internal interface UniffiLib : Library {
     ): RustBuffer.ByValue
     fun uniffi_upriv_ffi_fn_func_configure_runtime(`appHome`: RustBuffer.ByValue,`distribution`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
-    fun uniffi_upriv_ffi_fn_func_import_content_fd(`vaultId`: RustBuffer.ByValue,`logicalPath`: RustBuffer.ByValue,`fd`: Int,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_upriv_ffi_fn_func_import_content_fd(`vaultId`: RustBuffer.ByValue,`logicalPath`: RustBuffer.ByValue,`fd`: Int,`job`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_upriv_ffi_fn_func_invoke(`method`: RustBuffer.ByValue,`paramsJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -941,7 +941,7 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_upriv_ffi_checksum_func_configure_runtime() != 60242.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_upriv_ffi_checksum_func_import_content_fd() != 45401.toShort()) {
+    if (lib.uniffi_upriv_ffi_checksum_func_import_content_fd() != 48959.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_upriv_ffi_checksum_func_invoke() != 41611.toShort()) {
@@ -1231,15 +1231,16 @@ public object FfiConverterTypeSafFsCallback: FfiConverterCallbackInterface<SafFs
     
 
         /**
-         * Stream one Android content file into the open import session.
+         * Stream one Android content file into the open import session, as the job
+         * `job` (`job_cancel` stops it).
          *
          * `fd` is owned by this call (`ParcelFileDescriptor.detachFd`). Returns the
          * same JSON envelope as [`invoke`].
-         */ fun `importContentFd`(`vaultId`: kotlin.String, `logicalPath`: kotlin.String, `fd`: kotlin.Int): kotlin.String {
+         */ fun `importContentFd`(`vaultId`: kotlin.String, `logicalPath`: kotlin.String, `fd`: kotlin.Int, `job`: kotlin.String): kotlin.String {
             return FfiConverterString.lift(
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_upriv_ffi_fn_func_import_content_fd(
-        FfiConverterString.lower(`vaultId`),FfiConverterString.lower(`logicalPath`),FfiConverterInt.lower(`fd`),_status)
+        FfiConverterString.lower(`vaultId`),FfiConverterString.lower(`logicalPath`),FfiConverterInt.lower(`fd`),FfiConverterString.lower(`job`),_status)
 }
     )
     }

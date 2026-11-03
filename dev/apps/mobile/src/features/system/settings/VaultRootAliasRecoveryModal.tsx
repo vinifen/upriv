@@ -29,6 +29,7 @@ import { PathField } from "@/components/PathField";
 import { Button, Modal, Select, type SelectOption } from "@/components/ui";
 import { PolicyRadioOption } from "@/components/settings";
 import { VaultRootConfirmFooter } from "./VaultRootConfirmFooter";
+import { useDataFolderCopy } from "./useDataFolderCopy";
 
 interface VaultRootAliasRecoveryModalProps {
   open: boolean;
@@ -79,6 +80,9 @@ export function VaultRootAliasRecoveryModal({
   const [busy, setBusy] = useState(false);
   const [picking, setPicking] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const dataFolderCopy = useDataFolderCopy((stopError) =>
+    setError(t(mobileErrorI18nKey(stopError, "error.job_not_stoppable"))),
+  );
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [customDisk, setCustomDisk] = useState<VaultRootDiskStatus>("needs_folder");
   const submitLock = useRef(false);
@@ -196,9 +200,12 @@ export function VaultRootAliasRecoveryModal({
           );
           if (gen !== busyGen.current) return;
           if (picked.status === "cancelled") return;
-          const { rootPath, privateRoot } = await vaultRoot.setupAtPath(picked.uri, {
-            bootstrap: { locale: settings.ui.locale },
-          });
+          const { rootPath, privateRoot } = await vaultRoot
+            .setupAtPath(picked.uri, {
+              bootstrap: { locale: settings.ui.locale },
+              job: dataFolderCopy.begin(picked.uri),
+            })
+            .finally(dataFolderCopy.end);
           if (gen !== busyGen.current) return;
           alertIfPrivateRootLeftBehind(
             privateRoot,
@@ -290,9 +297,12 @@ export function VaultRootAliasRecoveryModal({
           }
         }
         try {
-          const { rootPath, privateRoot } = await vaultRoot.setupAtPath(path, {
-            bootstrap: { locale: settings.ui.locale },
-          });
+          const { rootPath, privateRoot } = await vaultRoot
+            .setupAtPath(path, {
+              bootstrap: { locale: settings.ui.locale },
+              job: dataFolderCopy.begin(path),
+            })
+            .finally(dataFolderCopy.end);
           if (gen !== busyGen.current) return;
           alertIfPrivateRootLeftBehind(
             privateRoot,
@@ -347,6 +357,7 @@ export function VaultRootAliasRecoveryModal({
         setBusy(false);
       });
   }, [
+    dataFolderCopy,
     mode,
     onCustomIncomplete,
     onDefaultRootIncomplete,
@@ -425,6 +436,8 @@ export function VaultRootAliasRecoveryModal({
             setConfirmOpen(false);
             setError(t("loading.timed_out"));
           }}
+          copy={dataFolderCopy.copy}
+          onStopCopy={dataFolderCopy.stop}
         />
       }
     >

@@ -10,8 +10,8 @@ use std::path::Path;
 use crate::error::UprivError;
 use crate::logging::{log_event, LogLevel};
 
-use super::backup::classify_write_failure;
 use super::wipe::{wipe_file_then_unlink, WipeOptions};
+use crate::failure::classify_write_failure;
 
 /// What was writing the unfinished file, as the log names it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,16 +41,23 @@ impl PartialWork {
 }
 
 /// Remove the unfinished file at `path` and log the outcome. A file that is
-/// already gone needs nothing and logs nothing.
-pub fn discard_partial(path: &Path, work: PartialWork) {
+/// already gone needs nothing and logs nothing. Returns false while the file is
+/// still there.
+pub fn discard_partial(path: &Path, work: PartialWork) -> bool {
     match crate::host_fs::remove_file(path) {
-        Ok(()) => log_event(
-            LogLevel::Info,
-            "partial_removed",
-            &[("work", work.as_str())],
-        ),
-        Err(error) if error.kind() == ErrorKind::NotFound => {}
-        Err(error) => log_partial_failure("partial_remove_failed", work, error),
+        Ok(()) => {
+            log_event(
+                LogLevel::Info,
+                "partial_removed",
+                &[("work", work.as_str())],
+            );
+            true
+        }
+        Err(error) if error.kind() == ErrorKind::NotFound => true,
+        Err(error) => {
+            log_partial_failure("partial_remove_failed", work, error);
+            false
+        }
     }
 }
 

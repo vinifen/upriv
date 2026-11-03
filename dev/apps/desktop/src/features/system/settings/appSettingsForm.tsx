@@ -87,6 +87,8 @@ export function AppSettingsGeneralSection({ config, onChange }: SectionPatchProp
   const openFileManagerOnOpenId = useId();
   const keepOpenOnWakeId = useId();
   const confirmCloseNowId = useId();
+  const confirmStopId = useId();
+  const confirmLockId = useId();
 
   return (
     <SettingsFormGrid>
@@ -157,6 +159,20 @@ export function AppSettingsGeneralSection({ config, onChange }: SectionPatchProp
         onChange={(lifecycle_confirm_close_now) => onChange({ lifecycle_confirm_close_now })}
         label={t("modal.app_settings.field.lifecycle_confirm_close_now")}
         hint={t("modal.app_settings.field.lifecycle_confirm_close_now_help")}
+      />
+      <SwitchRow
+        id={confirmStopId}
+        checked={config.lifecycle_confirm_stop}
+        onChange={(lifecycle_confirm_stop) => onChange({ lifecycle_confirm_stop })}
+        label={t("modal.app_settings.field.lifecycle_confirm_stop")}
+        hint={t("modal.app_settings.field.lifecycle_confirm_stop_help")}
+      />
+      <SwitchRow
+        id={confirmLockId}
+        checked={config.lifecycle_confirm_lock}
+        onChange={(lifecycle_confirm_lock) => onChange({ lifecycle_confirm_lock })}
+        label={t("modal.app_settings.field.lifecycle_confirm_lock")}
+        hint={t("modal.app_settings.field.lifecycle_confirm_lock_help")}
       />
     </SettingsFormGrid>
   );

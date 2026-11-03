@@ -12,20 +12,17 @@ export type BackupExportJob = CoreJob<{
 export interface BackupExportJobEvents {
   onExported: (result: VaultPathWriteResult) => void;
   onFailed: (error: unknown) => void;
-  /** The user stopped the export and it left no file. */
+  /** The export was stopped and left no file. */
   onCancelled: () => void;
-  /**
-   * The budget or the call's own timeout ran out. The export is told to stop,
-   * and a later result is ignored.
-   */
-  onTimedOut: () => void;
+  /** Core refused the stop: the file is being put in place. */
+  onStopRefused: (error: unknown) => void;
 }
 
 /**
  * Backup export, owned by the vault list so it keeps running when the Backups
- * modal closes and that modal shows it again when it reopens. One at a time,
- * of any vault. The vault stays free: a backup is a frozen file. Its budget
- * grows with the bytes of the chosen backups (`sizedBudgetMs("backupExport")`).
+ * window closes and that window shows it again when it reopens. One at a time,
+ * of any vault. The vault stays free: a backup is a frozen file, so the row
+ * shows the export as a mark beside its name, not as its status.
  */
 export function useBackupExportJob(
   backupService: BackupService,
@@ -36,16 +33,12 @@ export function useBackupExportJob(
     job,
     start: startJob,
     stop,
-  } = useCoreJob<{ vaultId: string; keys: readonly string[] }, VaultPathWriteResult>(
-    jobs,
-    "backupExport",
-    {
-      onDone: (result) => events.onExported(result),
-      onFailed: (error) => events.onFailed(error),
-      onCancelled: () => events.onCancelled(),
-      onTimedOut: () => events.onTimedOut(),
-    },
-  );
+  } = useCoreJob<{ vaultId: string; keys: readonly string[] }, VaultPathWriteResult>(jobs, {
+    onDone: (result) => events.onExported(result),
+    onFailed: (error) => events.onFailed(error),
+    onCancelled: () => events.onCancelled(),
+    onStopRefused: (error) => events.onStopRefused(error),
+  });
 
   /** Start copying the backups `keys` into `destDir`. False while one runs. */
   const start = useCallback(

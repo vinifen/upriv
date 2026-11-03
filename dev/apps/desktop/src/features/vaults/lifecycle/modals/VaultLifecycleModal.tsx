@@ -1,16 +1,16 @@
 import { useEffect, useId, useState } from "react";
-import { Button, LoadingBudgetHint, Modal, PasswordInput } from "@/components/ui";
+import { Button, ElapsedTime, JobStopButton, Modal, PasswordInput } from "@/components/ui";
 import { useTranslation } from "@/i18n";
 import type { I18nKey } from "@/i18n/types";
 import {
-  LOADING_BUDGET_MS,
   lifecycleBusyLabelKey,
   requireVaultErrorI18nKey,
   resolveVaultPasswordHint,
+  vaultRowWorkClock,
   VAULT_ERROR_CODES,
   type VaultListItem,
+  type VaultRowWork,
 } from "@upriv/shared";
-import { useLoadingBudget } from "@upriv/shared/react";
 import { useVaultLifecycleService } from "@/platform/services";
 import { VaultPasswordHintCallout } from "./VaultPasswordHintCallout";
 import { SettingsField } from "@/components/settings";
@@ -23,12 +23,14 @@ interface VaultLifecycleModalProps {
   open: boolean;
   submitting?: boolean;
   pipelineStep?: number;
-  budgetStartedAt?: number;
+  /** The open in flight for this vault: its clock and its Stop. */
+  work?: VaultRowWork | null;
   verifyErrorKey?: I18nKey | null;
   /** Prefill after a failed attempt — the field, not the session RAM map. */
   initialPassword?: string;
   onClose: () => void;
   onConfirm: (password: string) => void;
+  onStop: () => void;
 }
 
 /** Unlock password dialog. Lock starts the close without a dialog. */
@@ -37,11 +39,12 @@ export function VaultLifecycleModal({
   open,
   submitting = false,
   pipelineStep = 0,
-  budgetStartedAt,
+  work = null,
   verifyErrorKey = null,
   initialPassword,
   onClose,
   onConfirm,
+  onStop,
 }: VaultLifecycleModalProps) {
   const { t } = useTranslation();
   const lifecycleService = useVaultLifecycleService();
@@ -62,14 +65,6 @@ export function VaultLifecycleModal({
     if (!verifyErrorKey) return;
     setError(t(verifyErrorKey));
   }, [t, verifyErrorKey]);
-
-  const budget = useLoadingBudget(
-    open && submitting && budgetStartedAt != null,
-    LOADING_BUDGET_MS.vaultPipeline,
-    {
-      startedAt: budgetStartedAt,
-    },
-  );
 
   if (!open || !vault) return null;
 
@@ -95,14 +90,28 @@ export function VaultLifecycleModal({
       dismissible
       panelClassName="max-w-md"
       footer={
-        <div className="flex flex-wrap justify-end gap-2">
-          <Button variant="primary" size="sm" disabled={!canSubmit} onClick={handleConfirm}>
-            {submitting
-              ? budgetStartedAt != null
-                ? t(lifecycleBusyLabelKey("unlock", pipelineStep))
-                : t("vault.status.queued")
-              : t("unlock.submit")}
-          </Button>
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          {submitting ? (
+            <>
+              <span className="text-sm text-on-surface-variant" role="status">
+                {work?.startedAt != null
+                  ? t(lifecycleBusyLabelKey("unlock", pipelineStep))
+                  : t("vault.status.queued")}
+              </span>
+              {work?.stop ? (
+                <JobStopButton
+                  size="sm"
+                  stoppingSince={work.stoppingSince}
+                  stoppable={work.stop !== "final"}
+                  onStop={onStop}
+                />
+              ) : null}
+            </>
+          ) : (
+            <Button variant="primary" size="sm" disabled={!canSubmit} onClick={handleConfirm}>
+              {t("unlock.submit")}
+            </Button>
+          )}
         </div>
       }
     >
@@ -127,8 +136,8 @@ export function VaultLifecycleModal({
           {passwordHint ? <VaultPasswordHintCallout hint={passwordHint} /> : null}
         </div>
         {error ? <p className="text-sm text-on-error-container">{error}</p> : null}
-        {budget.visible ? (
-          <LoadingBudgetHint budgetMs={budget.budgetMs} remainingMs={budget.remainingMs} />
+        {submitting && work?.stop !== "stopping" ? (
+          <ElapsedTime startedAt={vaultRowWorkClock(work)} />
         ) : null}
       </div>
     </Modal>

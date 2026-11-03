@@ -1,12 +1,11 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { Button, LoadingBudgetHint, Modal } from "@/components/ui";
-import { useLoadingBudget } from "@upriv/shared/react";
+import { Button, Modal } from "@/components/ui";
+import { useOperationLimit } from "@upriv/shared/react";
 import { useTranslation } from "@/i18n";
 import { desktopErrorI18nKey } from "@/lib/errorMessages";
 import { useAppSettingsContext } from "./AppSettingsContext";
 import { useVaultRootService } from "@/platform/services";
 import {
-  LOADING_BUDGET_MS,
   VAULT_ROOT_ERROR_CODES,
   isRpcError,
   isVaultRootGoneError,
@@ -74,7 +73,7 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
     getSettingsSnapshot,
   } = useAppSettingsContext();
   const [ready, setReady] = useState(false);
-  /** Starts true so the launch resolve runs under the `vaultRootResolve` budget. */
+  /** Starts true so the launch resolve runs under `OPERATION_LIMIT_MS`. */
   const [applying, setApplying] = useState(true);
   /** Latched once the launch settles; `AppBootCover` covers everything until then. */
   const [booted, setBooted] = useState(false);
@@ -538,29 +537,28 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
     aliasInvalidPath === null &&
     resolveError === null;
 
-  const settingsBudget = useLoadingBudget(
+  const settingsLimit = useOperationLimit(
     showLoadingSettings && !settingsLoadTimedOut && !settingsLoadFailed,
-    LOADING_BUDGET_MS.settingsLoad,
   );
-  const applyingBudget = useLoadingBudget(showApplying, LOADING_BUDGET_MS.vaultRootResolve);
+  const applyingLimit = useOperationLimit(showApplying);
 
   useEffect(() => {
-    if (!settingsBudget.timedOut || !showLoadingSettings) return;
+    if (!settingsLimit.timedOut || !showLoadingSettings) return;
     setSettingsLoadTimedOut(true);
-  }, [settingsBudget.timedOut, showLoadingSettings]);
+  }, [settingsLimit.timedOut, showLoadingSettings]);
 
   useEffect(() => {
     if (settingsReady) setSettingsLoadTimedOut(false);
   }, [settingsReady]);
 
   useEffect(() => {
-    if (!applyingBudget.timedOut || !showApplying) return;
+    if (!applyingLimit.timedOut || !showApplying) return;
     // Invalidate in-flight `runResolve` so a late success cannot setReady after timeout.
     resolveGen.current += 1;
     setApplying(false);
     setReady(false);
     setResolveError(tRef.current("modal.vault_root_setup.error_timeout"));
-  }, [applyingBudget.timedOut, showApplying]);
+  }, [applyingLimit.timedOut, showApplying]);
 
   const bootSettled =
     settingsReady &&
@@ -583,8 +581,8 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
   };
 
   const settingsLoadStuck = settingsLoadTimedOut || settingsLoadFailed;
-  const settingsLoadVisible = showLoadingSettings && (settingsBudget.visible || settingsLoadStuck);
-  const applyingVisible = showApplying && applyingBudget.visible;
+  const settingsLoadVisible = showLoadingSettings && (settingsLimit.visible || settingsLoadStuck);
+  const applyingVisible = showApplying && applyingLimit.visible;
   const settingsLoadMessage = settingsLoadTimedOut
     ? t("loading.timed_out")
     : settingsLoadFailed
@@ -679,12 +677,7 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
                 <Button variant="primary" size="md" onClick={retrySettingsLoad}>
                   {t("action.retry")}
                 </Button>
-              ) : (
-                <LoadingBudgetHint
-                  budgetMs={settingsBudget.budgetMs}
-                  remainingMs={settingsBudget.remainingMs}
-                />
-              )}
+              ) : null}
             </>
           ) : applyingVisible ? (
             <>
@@ -692,10 +685,6 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
               <p className="max-w-sm text-sm leading-relaxed text-on-surface-variant" role="status">
                 {t("modal.vault_root_setup.busy")}
               </p>
-              <LoadingBudgetHint
-                budgetMs={applyingBudget.budgetMs}
-                remainingMs={applyingBudget.remainingMs}
-              />
             </>
           ) : null
         }
@@ -722,12 +711,6 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
           <p className="text-sm leading-relaxed text-on-surface-variant" role="status">
             {settingsLoadMessage}
           </p>
-          {!settingsLoadStuck ? (
-            <LoadingBudgetHint
-              budgetMs={settingsBudget.budgetMs}
-              remainingMs={settingsBudget.remainingMs}
-            />
-          ) : null}
         </Modal>
       ) : null}
       {booted && applyingVisible ? (
@@ -743,10 +726,6 @@ export function VaultRootGate({ children }: VaultRootGateProps) {
           <p className="text-sm leading-relaxed text-on-surface-variant" role="status">
             {t("modal.vault_root_setup.busy")}
           </p>
-          <LoadingBudgetHint
-            budgetMs={applyingBudget.budgetMs}
-            remainingMs={applyingBudget.remainingMs}
-          />
         </Modal>
       ) : null}
       {relocateNotice && settingsReady ? (

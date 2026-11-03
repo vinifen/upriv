@@ -21,7 +21,7 @@ import {
   vaultFileLanguageFromPath,
 } from "@upriv/shared";
 import { useOutlineHeading, useSettledValue, useValueAfterPaint } from "@upriv/shared/react";
-import { Button, LoadingBudgetHint } from "@/components/ui";
+import { Button, ElapsedTime } from "@/components/ui";
 import { useTranslation } from "@/i18n";
 import { useTheme } from "@/theme";
 import { spacing } from "@/theme/tokens";
@@ -89,7 +89,8 @@ export function FileEditorPane({ fm, vaultName, searchRef }: FileEditorPaneProps
     isFileImage,
     isImportPending,
     isImportProcessing,
-    importBudget,
+    editorImportStartedAt,
+    stopImports,
   } = fm;
   // The tab bar marks a tap at once; the file draws after that has painted.
   // A closed tab's file is left straight away, because its text may be gone.
@@ -175,12 +176,10 @@ export function FileEditorPane({ fm, vaultName, searchRef }: FileEditorPaneProps
       processing
         ? t("modal.file_manager.import.loading_body")
         : t("modal.file_manager.import.queued_body", { name: fileName }),
-      processing && importBudget.visible ? (
-        <LoadingBudgetHint
-          budgetMs={importBudget.budgetMs}
-          remainingMs={importBudget.remainingMs}
-        />
-      ) : null,
+      <View style={styles.importNotice}>
+        {processing ? <ElapsedTime startedAt={editorImportStartedAt} /> : null}
+        <Button label={t("action.stop")} variant="ghost" size="sm" onPress={stopImports} />
+      </View>,
     );
   }
 
@@ -349,6 +348,7 @@ export function FileEditorPane({ fm, vaultName, searchRef }: FileEditorPaneProps
 
 const styles = StyleSheet.create({
   editorColumn: { flex: 1, minHeight: 0, minWidth: 0 },
+  importNotice: { alignItems: "center", gap: spacing.sm },
   editorRow: { flex: 1, minHeight: 0, flexDirection: "row" },
   empty: {
     flex: 1,

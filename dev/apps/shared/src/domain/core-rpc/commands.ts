@@ -73,7 +73,7 @@ export const CORE_RPC_COMMANDS = {
   VAULT_RENAME: "vault_rename",
   VAULT_DELETE: "vault_delete",
   VAULT_EXPORT: "vault_export",
-  VAULT_PLAIN_EXPORT_SWEEP: "vault_plain_export_sweep",
+  VAULT_UNFINISHED_SWEEP: "vault_unfinished_sweep",
   VAULT_EXPORT_CAPABILITIES: "vault_export_capabilities",
   VAULT_IMPORT_ZIP: "vault_import_zip",
   VAULT_IMPORT_7Z: "vault_import_7z",

@@ -1,7 +1,7 @@
 //! Open / close against `store/` with an in-process session.
 
 use std::path::Path;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -19,9 +19,8 @@ use crate::runtime_state::{mark_session_closed, mark_session_open, release_recor
 use crate::session::{
     any_close_under, check_unlock_allowed, hurry_close_at, hurry_closes_under, insert_session,
     is_vault_closing_at, is_vault_open_at, open_session_ids_under, record_unlock_failure,
-    record_unlock_success, take_session, vault_close_progress_at, with_open_session,
-    with_unlock_lock, with_vault_dir_lock, ClosePhase, CloseProgress, ClosingGuard, OpenSession,
-    PreparingGuard,
+    record_unlock_success, take_session, vault_close_phase_at, with_open_session, with_unlock_lock,
+    with_vault_dir_lock, ClosePhase, ClosingGuard, Job, JobKind, OpenSession, PreparingGuard,
 };
 use crate::store::{
     content_hash_with_index, flush_index_parts, index_logical_hash, open_store, pack_blob_waste,
@@ -29,10 +28,11 @@ use crate::store::{
 };
 
 use super::backup::{
-    backup_on_close, backup_stamp_present, classify_write_failure, discard_unfinished_backups,
-    list_backups, promote_backup_save,
+    backup_on_close, backup_stamp_present, discard_unfinished_backups, list_backups,
+    promote_backup_save,
 };
 use super::persistence::{load_vault_persistence, save_vault_persistence, VaultPersistence};
+use crate::failure::classify_write_failure;
 
 /// How often quit looks for closes still running on other threads.
 const CLOSE_WAIT_POLL: Duration = Duration::from_millis(20);
@@ -145,15 +145,68 @@ pub enum OpenVaultOutcome {
 /// mount when that is on; a plaintext vault fills its folder. Password bytes
 /// are used exactly as given.
 pub fn open_vault(root: &VaultRoot, vault_id: &str, password: &[u8]) -> Result<OpenVaultOutcome> {
-    open_unlocked_session(root, vault_id, password, OpenKind::User { consent: None })
+    wait_for_previous_app(root, vault_id)?;
+    open_unlocked_session(
+        root,
+        vault_id,
+        password,
+        OpenKind::User { consent: None },
+        &Job::untracked(),
+    )
+}
+
+/// [`open_vault`] as the job `job_id`. The wait for an app that is still
+/// closing this vault comes first, so the job starts only when the unlock
+/// does. A stop during Argon2id lets the hash finish, then drops the keys; a
+/// stop while a plaintext folder fills wipes what was written. The vault stays
+/// closed either way.
+pub fn open_vault_as_job(
+    root: &VaultRoot,
+    vault_id: &str,
+    password: &[u8],
+    job_id: &str,
+) -> Result<OpenVaultOutcome> {
+    wait_for_previous_app(root, vault_id)?;
+    Job::run(job_id, JobKind::VaultOpen, Some(vault_id), |job| {
+        open_unlocked_session(
+            root,
+            vault_id,
+            password,
+            OpenKind::User { consent: None },
+            job,
+        )
+    })
+}
+
+/// The core of an app that went away may still be closing this vault: wait
+/// for it to let go of the vault's lock.
+fn wait_for_previous_app(root: &VaultRoot, vault_id: &str) -> Result<()> {
+    let vault_dir = vault_dir_or_not_found(root, vault_id)?;
+    if !is_vault_open_at(&vault_dir) && !is_vault_closing_at(&vault_dir) {
+        wait_for_lock_holder(&root.runtime_lock_path(vault_id)?, LOCK_HOLDER_WAIT);
+    }
+    Ok(())
 }
 
 /// Fill the folder of a plaintext vault that is already unlocked, once the
-/// user agreed to `plain_path`. Close drops the keys if they cancel.
+/// user agreed to `plain_path`, as the job `job_id`. Close drops the keys if
+/// they cancel; a stop wipes what was written and closes the vault.
 pub fn confirm_plain_destination(
     root: &VaultRoot,
     vault_id: &str,
     plain_path: &Path,
+    job_id: &str,
+) -> Result<()> {
+    Job::run(job_id, JobKind::PlainFill, Some(vault_id), |job| {
+        confirm_plain_destination_in(root, vault_id, plain_path, job)
+    })
+}
+
+fn confirm_plain_destination_in(
+    root: &VaultRoot,
+    vault_id: &str,
+    plain_path: &Path,
+    job: &Job,
 ) -> Result<()> {
     let vault_dir = vault_dir_or_not_found(root, vault_id)?;
     if !is_vault_open_at(&vault_dir) {
@@ -163,7 +216,7 @@ pub fn confirm_plain_destination(
     if already {
         return Ok(());
     }
-    if let Err(error) = super::plain::activate(root, vault_id, &vault_dir, Some(plain_path)) {
+    if let Err(error) = super::plain::activate(root, vault_id, &vault_dir, Some(plain_path), job) {
         drop_unfinished_session(root, vault_id, &vault_dir);
         return Err(error);
     }
@@ -171,26 +224,32 @@ pub fn confirm_plain_destination(
 }
 
 /// [`open_vault`] once the user agreed to put a plaintext vault's files at
-/// `plain_path`, the path [`UprivError::PlainDestinationUnconfirmed`] named.
+/// `plain_path`, the path [`UprivError::PlainDestinationUnconfirmed`] named,
+/// as the job `job_id`.
 pub fn open_vault_confirmed(
     root: &VaultRoot,
     vault_id: &str,
     password: &[u8],
     plain_path: &Path,
+    job_id: &str,
 ) -> Result<OpenVaultOutcome> {
     let vault_dir = root.vault_dir(vault_id)?;
     if is_vault_open_at(&vault_dir) {
-        confirm_plain_destination(root, vault_id, plain_path)?;
+        confirm_plain_destination(root, vault_id, plain_path, job_id)?;
         return Ok(OpenVaultOutcome::Opened);
     }
-    open_unlocked_session(
-        root,
-        vault_id,
-        password,
-        OpenKind::User {
-            consent: Some(plain_path),
-        },
-    )
+    wait_for_previous_app(root, vault_id)?;
+    Job::run(job_id, JobKind::VaultOpen, Some(vault_id), |job| {
+        open_unlocked_session(
+            root,
+            vault_id,
+            password,
+            OpenKind::User {
+                consent: Some(plain_path),
+            },
+            job,
+        )
+    })
 }
 
 /// Unlock for an in-process ingest (an import). Nothing appears outside the
@@ -200,7 +259,14 @@ pub(crate) fn open_vault_for_ingest(
     vault_id: &str,
     password: &[u8],
 ) -> Result<()> {
-    open_unlocked_session(root, vault_id, password, OpenKind::Ingest).map(|_| ())
+    open_unlocked_session(
+        root,
+        vault_id,
+        password,
+        OpenKind::Ingest,
+        &Job::untracked(),
+    )
+    .map(|_| ())
 }
 
 #[derive(Clone, Copy)]
@@ -211,11 +277,15 @@ enum OpenKind<'a> {
     Ingest,
 }
 
+/// The unlock itself. `job` decides when a stop still applies: up to the
+/// session insert for an encrypted vault, up to the end of the folder fill for
+/// a plaintext one.
 fn open_unlocked_session(
     root: &VaultRoot,
     vault_id: &str,
     password: &[u8],
     kind: OpenKind<'_>,
+    job: &Job,
 ) -> Result<OpenVaultOutcome> {
     if password.is_empty() {
         return Err(UprivError::WrongPassword);
@@ -225,10 +295,6 @@ fn open_unlocked_session(
     with_vault_dir_lock(&vault_dir, || {
         if !vault_dir.host_is_dir() {
             return Err(UprivError::VaultNotFound(vault_dir.clone()));
-        }
-        // The core of an app that went away may still be closing this vault.
-        if !is_vault_open_at(&vault_dir) && !is_vault_closing_at(&vault_dir) {
-            wait_for_lock_holder(&root.runtime_lock_path(vault_id)?, LOCK_HOLDER_WAIT);
         }
         let config = load_vault_config(&vault_dir)?;
         let consent = match kind {
@@ -266,6 +332,14 @@ fn open_unlocked_session(
                 Err(other) => return Err(other),
             };
             record_unlock_success(&vault_dir);
+            // Argon2id cannot be cut short; a stop that came meanwhile drops
+            // the keys here, before any session exists. An encrypted vault has
+            // nothing left to stop once its session is in.
+            if plain {
+                job.ensure_running()?;
+            } else {
+                job.final_step()?;
+            }
             let mut session = OpenSession::from_opened(
                 vault_id.to_string(),
                 config.vault.display_name.clone(),
@@ -292,7 +366,7 @@ fn open_unlocked_session(
         if let (true, Some(consent)) = (plain, consent) {
             // Outside the unlock lock: filling a folder can take minutes, and
             // other vaults must still open meanwhile.
-            match super::plain::activate(root, vault_id, &vault_dir, consent) {
+            match super::plain::activate(root, vault_id, &vault_dir, consent, job) {
                 Ok(()) => {}
                 Err(UprivError::PlainDestinationUnconfirmed { path, class })
                     if consent.is_none() =>
@@ -382,11 +456,10 @@ fn pin_newest_backup(root: &VaultRoot, vault_id: &str) -> bool {
     }
 }
 
-/// Phase and backup progress of a `close_vault` still running for this vault.
-/// `None` when idle.
-pub fn close_progress(root: &VaultRoot, vault_id: &str) -> Result<Option<CloseProgress>> {
+/// Phase of a `close_vault` still running for this vault. `None` when idle.
+pub fn close_phase(root: &VaultRoot, vault_id: &str) -> Result<Option<ClosePhase>> {
     let vault_dir = root.vault_dir(vault_id)?;
-    Ok(vault_close_progress_at(&vault_dir))
+    Ok(vault_close_phase_at(&vault_dir))
 }
 
 /// Make the close running for this vault finish the way [`close_vault_now`]
@@ -664,6 +737,18 @@ pub fn close_all_vaults_now(root: &VaultRoot) -> Result<Vec<String>> {
     close_every_vault(root, CloseKind::ShutdownNow)
 }
 
+/// Set once a quit turns into Close now; it never clears, because the process
+/// is about to exit.
+static QUIT_NOW: AtomicBool = AtomicBool::new(false);
+
+/// The person chose Close now while a normal quit ([`close_all_vaults`]) is
+/// closing vaults: hurry every close already running, and close the rest the
+/// Close now way.
+pub fn hurry_quit(root: &VaultRoot) {
+    QUIT_NOW.store(true, Ordering::Relaxed);
+    hurry_closes_under(&root.vaults_dir());
+}
+
 fn close_every_vault(root: &VaultRoot, kind: CloseKind) -> Result<Vec<String>> {
     let vaults_dir = root.vaults_dir();
     if kind.immediate() {
@@ -679,6 +764,11 @@ fn close_every_vault(root: &VaultRoot, kind: CloseKind) -> Result<Vec<String>> {
         {
             continue;
         }
+        let kind = if QUIT_NOW.load(Ordering::Relaxed) {
+            CloseKind::ShutdownNow
+        } else {
+            kind
+        };
         match close_vault_inner(root, &id, kind) {
             Ok(_) => closed.push(id),
             Err(error) => {
@@ -713,6 +803,7 @@ pub(crate) fn delete_failed_import(root: &VaultRoot, vault_id: &str) -> Result<(
     if dir.host_is_dir() {
         super::delete::delete_vault(root, vault_id)?;
     }
+    super::unfinished::forget_import(root, vault_id);
     Ok(())
 }
 

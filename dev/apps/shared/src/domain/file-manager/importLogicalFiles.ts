@@ -187,7 +187,8 @@ async function importLogicalFilesOneAtATime<T extends ImportLogicalFile>(
         );
       }
     } catch {
-      writeFailureName = file.name;
+      // A write stopped with the rest of the batch is not a failure.
+      if (!options.signal?.aborted) writeFailureName = file.name;
       break;
     }
     if (!path) {
@@ -306,7 +307,8 @@ async function importBinaryFilesAhead<T extends ImportLogicalFile>(
           file,
         );
       } catch {
-        outcomes[index] = { kind: "write-fail" };
+        // A write stopped with the rest of the batch is not a failure.
+        outcomes[index] = options.signal?.aborted ? { kind: "absent" } : { kind: "write-fail" };
         stop = true;
         return;
       }

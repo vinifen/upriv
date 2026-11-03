@@ -17,6 +17,8 @@ interface FileManagerModalProps {
   title: string;
   contextTitle?: string;
   titleIcon?: IconName;
+  /** Beside the title, on the left: work this file manager runs (Stop import). */
+  titleAccessory?: ReactNode;
   onMinimize: () => void;
   onDismiss: () => void;
   /** When true, Escape and backdrop click do not minimize (unsaved dialog is active). */
@@ -34,6 +36,7 @@ export function FileManagerModal({
   title,
   contextTitle,
   titleIcon = "file-manager",
+  titleAccessory,
   onMinimize,
   onDismiss,
   suspendMinimize = false,
@@ -201,14 +204,20 @@ export function FileManagerModal({
         >
           {showChrome ? (
             <header className="flex min-h-11 shrink-0 items-center justify-between gap-2 px-4 sm:min-h-12 sm:px-5">
-              <ModalTitleCluster
-                titleId={titleId}
-                contextId={contextId}
-                title={title}
-                contextTitle={contextTitle}
-                titleIcon={titleIcon}
-                compact
-              />
+              <div className="flex min-w-0 flex-1 items-center gap-3">
+                {/* The title takes only its width, so the accessory sits right after it. */}
+                <div className="flex min-w-0">
+                  <ModalTitleCluster
+                    titleId={titleId}
+                    contextId={contextId}
+                    title={title}
+                    contextTitle={contextTitle}
+                    titleIcon={titleIcon}
+                    compact
+                  />
+                </div>
+                {titleAccessory ? <div className="shrink-0">{titleAccessory}</div> : null}
+              </div>
               <div className="flex shrink-0 items-center self-center gap-0.5">
                 <ModalChromeButton
                   onClick={onMinimize}

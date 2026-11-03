@@ -46,6 +46,10 @@ export function vaultStatusLabelKey(
   pipeline: VaultPipelineListStatus = {},
   autoClosed = false,
 ): I18nKey {
+  const work = pipeline.rowWork?.[vaultId];
+  if (work?.stop === "stopping") return "vault.status.stopping";
+  // A job waiting for its lane has not started: it says so, and counts nothing.
+  if (work && work.startedAt === null) return "vault.status.queued";
   if (status === "closing" && pipeline.backingUpVaultIds?.includes(vaultId)) {
     return "vault.status.backing_up";
   }

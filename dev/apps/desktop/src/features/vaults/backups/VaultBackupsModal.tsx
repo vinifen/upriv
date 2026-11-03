@@ -1,7 +1,7 @@
 import { type ReactNode, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useBackupService } from "@/platform/services";
 import { Icon } from "@/components/icons";
-import { Button, IconButton, LoadingBudgetHint, Modal, Toast } from "@/components/ui";
+import { Button, ElapsedTime, IconButton, JobStopButton, Modal, Toast } from "@/components/ui";
 import {
   backupDeleteConfirmPhrase,
   backupEntryFileName,
@@ -10,7 +10,6 @@ import {
   backupExportRowKey,
   formatBytes,
   formatBackupDate,
-  LOADING_BUDGET_MS,
   matchesBackupDeleteConfirmation,
   type VaultBackupEntry,
   type VaultListItem,
@@ -23,7 +22,6 @@ import { useRowButtonsBelow } from "@/hooks/useRowButtonsBelow";
 import { settingsControlClass } from "@/components/settings";
 import {
   useBackupExportStep,
-  useLoadingBudget,
   useVaultBackups,
   type BackupExportJob,
   type VaultBackupJob,
@@ -41,6 +39,7 @@ interface VaultBackupsModalProps {
   /** This vault's list-owned Back up now in flight. Survives closing the modal. */
   saveJob: VaultBackupJob | null;
   onSaveNow: () => void;
+  onStopSave: () => void;
   /** Bumped when that job finishes so the open list reloads. */
   listRefreshToken: number;
   onClose: () => void;
@@ -63,6 +62,7 @@ export function VaultBackupsModal({
   canSaveNow,
   saveJob,
   onSaveNow,
+  onStopSave,
   listRefreshToken,
   onClose,
   onCreateVaultFromBackup,
@@ -81,12 +81,6 @@ export function VaultBackupsModal({
     vaultId,
     open,
     listRefreshToken,
-  );
-  const saving = saveJob !== null;
-  const saveBudget = useLoadingBudget(
-    saving,
-    saveJob?.budgetMs ?? LOADING_BUDGET_MS.vaultBackupSave,
-    { startedAt: saveJob?.startedAt },
   );
 
   const savedBackups = useMemo(() => backups.filter((entry) => entry.saved), [backups]);
@@ -303,25 +297,39 @@ export function VaultBackupsModal({
               title={t("modal.backup.section.saves")}
               help={t("modal.backup.section.saves_help")}
               action={
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  className="shrink-0"
-                  disabled={saving || !canSaveNow || isBusy || deleteTargets !== null}
-                  onClick={onSaveNow}
-                >
-                  {saving ? t("modal.backup.backup_now_running") : t("modal.backup.backup_now")}
-                </Button>
+                saveJob ? (
+                  <span className="shrink-0">
+                    <JobStopButton
+                      size="sm"
+                      stoppingSince={saveJob.stoppingSince}
+                      stoppable={saveJob.progress?.stoppable ?? true}
+                      onStop={onStopSave}
+                    />
+                  </span>
+                ) : (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    className="shrink-0"
+                    disabled={!canSaveNow || isBusy || deleteTargets !== null}
+                    onClick={onSaveNow}
+                  >
+                    {t("modal.backup.backup_now")}
+                  </Button>
+                )
               }
               notice={
-                saving ? (
-                  saveBudget.visible ? (
-                    <LoadingBudgetHint
-                      budgetMs={saveBudget.budgetMs}
-                      remainingMs={saveBudget.remainingMs}
-                      layout="inline"
-                    />
-                  ) : null
+                saveJob ? (
+                  <p className="flex items-baseline gap-2 text-xs text-on-surface-variant">
+                    <span>
+                      {saveJob.startedAt === null
+                        ? t("vault.status.queued")
+                        : t("modal.backup.backup_now_running")}
+                    </span>
+                    {saveJob.stoppingSince === null ? (
+                      <ElapsedTime startedAt={saveJob.startedAt} layout="inline" />
+                    ) : null}
+                  </p>
                 ) : canSaveNow ? null : (
                   <p className="text-xs text-on-surface-variant">
                     {t("modal.backup.backup_now_blocked")}

@@ -9,10 +9,10 @@ use std::path::{Path, PathBuf};
 use crate::error::{Result, UprivError};
 
 pub use types::{
-    VaultArchiveMode, VaultAutoCloseSection, VaultBackupMode, VaultBackupSection, VaultConfig,
-    VaultFileManagerSection, VaultIdentitySection, VaultMountSection, VaultPlainFiles,
-    VaultSecuritySection, VaultSevenZipSection, VaultStorageMode, VaultStorageSection,
-    VaultWipePattern,
+    AutoCloseWhenBusy, VaultArchiveMode, VaultAutoCloseSection, VaultBackupMode,
+    VaultBackupSection, VaultConfig, VaultFileManagerSection, VaultIdentitySection,
+    VaultMountSection, VaultPlainFiles, VaultSecuritySection, VaultSevenZipSection,
+    VaultStorageMode, VaultStorageSection, VaultWipePattern,
 };
 
 const CONFIG_FILE_NAME: &str = "config.toml";
@@ -541,6 +541,7 @@ display_name = "X"
         assert!(cfg.backup.skip_unchanged);
         assert!(!cfg.auto_close.enabled);
         assert_eq!(cfg.auto_close.idle_minutes, 15);
+        assert_eq!(cfg.auto_close.when_busy, AutoCloseWhenBusy::Wait);
         assert!(cfg.seven_zip.encrypt_file_names);
         assert_eq!(cfg.seven_zip.archive_mode, VaultArchiveMode::EncryptOnly);
         assert!(cfg.mount.linux.path.is_empty());
@@ -650,6 +651,7 @@ path = "relative/mount"
             auto_close: VaultAutoCloseSection {
                 enabled: true,
                 idle_minutes: 30,
+                when_busy: AutoCloseWhenBusy::Close,
             },
             file_manager: VaultFileManagerSection {
                 confirm_delete: false,

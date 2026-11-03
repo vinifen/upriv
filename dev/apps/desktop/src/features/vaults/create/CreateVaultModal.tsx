@@ -3,7 +3,7 @@ import { Button, Modal } from "@/components/ui";
 import { useAppSettingsContext } from "@/features/system/settings";
 import { useTranslation } from "@/i18n";
 import { desktopErrorI18nKey } from "@/lib/errorMessages";
-import { useCreateVaultService, useVaultRootService } from "@/platform/services";
+import { useCreateVaultService, useJobService, useVaultRootService } from "@/platform/services";
 import {
   NO_VAULT_GROUPS,
   vaultRootPathForWorkspaceValidation,
@@ -41,6 +41,7 @@ export function CreateVaultModal({
 }: CreateVaultModalProps) {
   const { t } = useTranslation();
   const createVaultService = useCreateVaultService();
+  const jobService = useJobService();
   const {
     settings: appSettings,
     showHiddenVaultsSession,
@@ -102,8 +103,9 @@ export function CreateVaultModal({
     initialStep,
     onCreate,
     onClose,
-    testImportPassword: (password, importFile) =>
-      createVaultService.testImportPackagePassword(password, importFile),
+    testImportPassword: (password, importFile, job) =>
+      createVaultService.testImportPackagePassword(password, importFile, job),
+    stopJob: (job) => jobService.cancel(job, "user"),
     readImportPackageSettings: (importFile) =>
       createVaultService.readImportPackageSettings(importFile),
     onVaultRootFailure: reportImportVaultRootFailure,
@@ -119,12 +121,14 @@ export function CreateVaultModal({
     canCreate,
     discardConfirmOpen,
     testingPassword,
+    passwordTestStartedAt,
     patchDraft,
     goToStep,
     handleBack,
     handleNext,
     handleCreate,
     handleTestImportPassword,
+    stopTestImportPassword,
     requestClose,
     handleDiscardAndClose,
     dismissFooterConfirm,
@@ -230,7 +234,9 @@ export function CreateVaultModal({
             appWorkspace: appSettings.workspace,
             onDriverAttentionChange: setDriverAttention,
             onTestImportPassword: handleTestImportPassword,
+            onStopTestImportPassword: stopTestImportPassword,
             testingPassword,
+            passwordTestStartedAt,
             ...stepFocus,
           })}
         </div>

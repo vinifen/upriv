@@ -11,7 +11,7 @@ use crate::config::{known_vault_ids, save_vault_config, VaultConfig};
 use crate::error::{Result, UprivError};
 use crate::logging::{log_event, LogLevel};
 use crate::paths::{display_name_to_vault_id, VaultRoot};
-use crate::session::with_vault_dir_lock;
+use crate::session::{with_vault_dir_lock, Job, JobKind};
 use crate::store::{content_hash_hex, load_header, INDEX_DIR_NAME};
 
 use super::backup::{backup_locator_from_leaf, backup_zip_file, copy_ciphertext_tree};
@@ -19,6 +19,7 @@ use super::create::claim_new_vault_dir;
 use super::embedded_settings::{parse_embedded_settings, EmbeddedVaultSettings};
 use super::persistence::{save_vault_persistence, VaultPersistence};
 use super::seven_zip_pack::{ensure_free_ram, try_vec_with_capacity};
+use super::unfinished::{forget_import, record_import};
 use super::zip_io::{
     buffered_zip_reader, read_zip_config_toml, unzip_store_bytes, unzip_store_path,
 };
@@ -78,9 +79,13 @@ fn prepare_imported_id(root: &VaultRoot, config: &mut VaultConfig) -> Result<Str
     Ok(id)
 }
 
+/// Make the new vault and fill its `store/` with `fill_store` while `job`
+/// runs. A failure or a stop removes the folder; a crash leaves it recorded as
+/// unfinished, and the next launch removes it.
 fn materialize_imported_store(
     root: &VaultRoot,
     mut config: VaultConfig,
+    job: &Job,
     fill_store: impl FnOnce(&Path) -> Result<()>,
 ) -> Result<String> {
     let id = prepare_imported_id(root, &mut config)?;
@@ -89,6 +94,7 @@ fn materialize_imported_store(
     let _preparing = claim_new_vault_dir(root, &dest)?;
     with_vault_dir_lock(&dest, || {
         let created: Result<()> = (|| {
+            record_import(root, &id)?;
             save_vault_config(&dest, &config)?;
             let store = dest.join(crate::paths::STORE_DIR_NAME);
             fill_store(&store)?;
@@ -100,6 +106,7 @@ fn materialize_imported_store(
                     detail: "imported store is missing index/".into(),
                 });
             }
+            job.final_step()?;
             crate::host_fs::create_dir_all(dest.join("backups"))?;
             let hash = content_hash_hex(&store)?;
             save_vault_persistence(
@@ -112,8 +119,9 @@ fn materialize_imported_store(
             )?;
             Ok(())
         })();
-        if created.is_err() {
-            let _ = crate::host_fs::remove_dir_all(&dest);
+        let folder_gone = created.is_ok() || crate::host_fs::remove_dir_all(&dest).is_ok();
+        if folder_gone {
+            forget_import(root, &id);
         }
         created
     })?;
@@ -121,29 +129,50 @@ fn materialize_imported_store(
     Ok(id)
 }
 
-/// Create a new vault whose `store/` is a ciphertext copy of the zip payload.
-pub fn import_store_zip(root: &VaultRoot, config: VaultConfig, zip_bytes: &[u8]) -> Result<String> {
-    materialize_imported_store(root, config, |store| unzip_store_bytes(zip_bytes, store))
+/// Create a new vault whose `store/` is a ciphertext copy of the zip payload,
+/// as the job `job_id`.
+pub fn import_store_zip(
+    root: &VaultRoot,
+    config: VaultConfig,
+    zip_bytes: &[u8],
+    job_id: &str,
+) -> Result<String> {
+    let vault_id = config.vault.id.clone();
+    Job::run(job_id, JobKind::VaultImport, Some(&vault_id), |job| {
+        materialize_imported_store(root, config, job, |store| {
+            unzip_store_bytes(zip_bytes, store, job)
+        })
+    })
 }
 
 /// Same as [`import_store_zip`], reading the archive from disk one entry at a time.
-pub fn import_store_zip_path(
+fn import_store_zip_path(
     root: &VaultRoot,
     config: VaultConfig,
     zip_path: &Path,
+    job: &Job,
 ) -> Result<String> {
     if !zip_path.is_absolute() || !zip_path.host_is_file() {
         return Err(UprivError::ImportArchiveNotFound(zip_path.to_path_buf()));
     }
-    materialize_imported_store(root, config, |store| unzip_store_path(zip_path, store))
+    materialize_imported_store(root, config, job, |store| {
+        unzip_store_path(zip_path, store, job)
+    })
 }
 
 /// Create a new vault by copying an existing ciphertext `store/` (or backup) tree.
-pub fn import_store_tree(root: &VaultRoot, config: VaultConfig, src: &Path) -> Result<String> {
+fn import_store_tree(
+    root: &VaultRoot,
+    config: VaultConfig,
+    src: &Path,
+    job: &Job,
+) -> Result<String> {
     if !src.host_is_dir() {
         return Err(UprivError::VaultPathNotFound(src.display().to_string()));
     }
-    materialize_imported_store(root, config, |store| copy_ciphertext_tree(src, store))
+    materialize_imported_store(root, config, job, |store| {
+        copy_ciphertext_tree(src, store, job)
+    })
 }
 
 /// Locator `vaults/<id>/backups/<leaf>` or `…/backups/saves/<leaf>`.
@@ -205,14 +234,15 @@ pub fn read_import_zip_settings(
 }
 
 /// Unpack `backups/<stamp>-<id>.zip` into a new vault.
-pub fn import_from_backup(
+fn import_from_backup(
     root: &VaultRoot,
     source_vault_id: &str,
     stamp: &str,
     config: VaultConfig,
+    job: &Job,
 ) -> Result<String> {
     let zip = backup_zip_file(root, source_vault_id, stamp)?;
-    import_store_zip_path(root, config, &zip)
+    import_store_zip_path(root, config, &zip, job)
 }
 
 /// Read a dropped/picked `.zip` or `.7z` from disk. Relative names (a drop
@@ -234,29 +264,34 @@ pub fn read_import_archive_bytes(path: &Path) -> Result<Vec<u8>> {
     Ok(buf)
 }
 
-/// Zip file, ciphertext directory, or in-root backup locator (`vaults/<id>/backups/<stamp>`).
+/// Zip file, ciphertext directory, or in-root backup locator
+/// (`vaults/<id>/backups/<stamp>`), as the job `job_id`.
 pub fn import_store_from_archive_path(
     root: &VaultRoot,
     config: VaultConfig,
     archive_path: &str,
+    job_id: &str,
 ) -> Result<String> {
-    if let Some((source_id, stamp)) = parse_backup_import_path(archive_path) {
-        match import_from_backup(root, &source_id, &stamp, config.clone()) {
-            Ok(id) => return Ok(id),
-            Err(error) => {
-                let path = Path::new(archive_path);
-                if path.host_is_dir() {
-                    return import_store_tree(root, config, path);
+    let vault_id = config.vault.id.clone();
+    Job::run(job_id, JobKind::VaultImport, Some(&vault_id), |job| {
+        if let Some((source_id, stamp)) = parse_backup_import_path(archive_path) {
+            match import_from_backup(root, &source_id, &stamp, config.clone(), job) {
+                Ok(id) => return Ok(id),
+                Err(error) => {
+                    let path = Path::new(archive_path);
+                    if path.host_is_dir() && !job.is_stopped() {
+                        return import_store_tree(root, config, path, job);
+                    }
+                    return Err(error);
                 }
-                return Err(error);
             }
         }
-    }
-    let path = Path::new(archive_path);
-    if path.host_is_dir() {
-        return import_store_tree(root, config, path);
-    }
-    import_store_zip_path(root, config, path)
+        let path = Path::new(archive_path);
+        if path.host_is_dir() {
+            return import_store_tree(root, config, path, job);
+        }
+        import_store_zip_path(root, config, path, job)
+    })
 }
 
 #[cfg(test)]
@@ -332,6 +367,7 @@ mode = "encrypted_dir"
             "notes",
             &stamp,
             sample_config("notes-backup", "Notes backup"),
+            &Job::untracked(),
         )
         .unwrap();
         assert_eq!(new_id, "notes-backup");
@@ -387,8 +423,18 @@ mode = "encrypted_dir"
         let damaged = tmp.path().join("damaged.zip");
         crate::host_fs::write(&damaged, &bytes).unwrap();
 
-        let from_file = import_store_zip_path(&root, sample_config("copy", "Copy"), &damaged);
-        let from_bytes = import_store_zip(&root, sample_config("copy2", "Copy 2"), &bytes);
+        let from_file = import_store_zip_path(
+            &root,
+            sample_config("copy", "Copy"),
+            &damaged,
+            &Job::untracked(),
+        );
+        let from_bytes = import_store_zip(
+            &root,
+            sample_config("copy2", "Copy 2"),
+            &bytes,
+            &test_job_id(),
+        );
         for id in [from_file.unwrap(), from_bytes.unwrap()] {
             open_vault(&root, &id, b"pass-word-ok").unwrap();
             assert!(crate::vault::fs_read_file(&root, &id, "/a.txt").is_err());
@@ -403,8 +449,13 @@ mode = "encrypted_dir"
     #[test]
     fn import_zip_rejects_relative_filename() {
         let (_tmp, root) = vault_root_with(&[]);
-        let err = import_store_from_archive_path(&root, sample_config("x", "X"), "Notes.zip")
-            .unwrap_err();
+        let err = import_store_from_archive_path(
+            &root,
+            sample_config("x", "X"),
+            "Notes.zip",
+            &test_job_id(),
+        )
+        .unwrap_err();
         assert!(matches!(err, UprivError::ImportArchiveNotFound(_)));
     }
 
@@ -416,6 +467,7 @@ mode = "encrypted_dir"
             &root,
             sample_config("x", "X"),
             missing.to_str().expect("utf8 path"),
+            &test_job_id(),
         )
         .unwrap_err();
         assert!(matches!(err, UprivError::ImportArchiveNotFound(_)));
@@ -443,10 +495,40 @@ mode = "encrypted_dir"
             crate::vault::export_store_zip(&root, "notes", out.path(), &test_job_id()).unwrap();
         let zip = crate::host_fs::read(&exported.path).unwrap();
         open_vault(&root, "other", b"pass-word-ok").unwrap();
-        let new_id =
-            import_store_zip(&root, sample_config("copy", "Copy"), &zip).expect("file import");
+        let new_id = import_store_zip(&root, sample_config("copy", "Copy"), &zip, &test_job_id())
+            .expect("file import");
         assert_eq!(new_id, "copy");
         close_vault(&root, "other").unwrap();
+    }
+
+    #[test]
+    fn a_stopped_import_leaves_no_vault_and_no_record() {
+        let (_tmp, root) = vault_root_with(&[]);
+        create_vault(
+            &root,
+            sample_config("notes", "Notes"),
+            b"pass-word-ok",
+            KdfUnlockPreset::M32,
+        )
+        .unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let exported =
+            crate::vault::export_store_zip(&root, "notes", out.path(), &test_job_id()).unwrap();
+        let zip = crate::host_fs::read(&exported.path).unwrap();
+        let id = test_job_id();
+        let job = Job::start(&id).unwrap();
+        crate::session::cancel_job(&id).unwrap();
+        let err = materialize_imported_store(&root, sample_config("copy", "Copy"), &job, |store| {
+            unzip_store_bytes(&zip, store, &job)
+        })
+        .unwrap_err();
+        assert!(matches!(
+            job.settle::<()>(Err(err)),
+            Err(UprivError::JobCancelled)
+        ));
+        assert!(!root.vault_dir("copy").unwrap().host_exists());
+        let state = crate::runtime_state::load_runtime_state(&root).unwrap();
+        assert!(state.unfinished_imports.is_empty());
     }
 
     #[test]
@@ -468,6 +550,7 @@ mode = "encrypted_dir"
             "notes",
             &stamp,
             sample_config("notes-backup", "Notes backup"),
+            &Job::untracked(),
         )
         .unwrap();
         assert_eq!(new_id, "notes-backup");
@@ -500,6 +583,7 @@ mode = "encrypted_dir"
             "notes",
             &stamp,
             sample_config("notes-backup", "Notes backup"),
+            &Job::untracked(),
         )
         .unwrap();
         assert_eq!(new_id, "notes-backup");

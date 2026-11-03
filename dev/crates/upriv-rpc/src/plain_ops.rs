@@ -6,7 +6,7 @@ use std::path::Path;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use upriv_core::{
-    confirm_plain_destination, open_vault, open_vault_confirmed, plain_deletions,
+    confirm_plain_destination, open_vault_as_job, open_vault_confirmed, plain_deletions,
     plain_destination, plain_leftover, plain_send, plain_status, plain_sync, plain_unsend,
     remove_plain_leftover, OpenVaultOutcome,
 };
@@ -28,6 +28,7 @@ struct VaultOpenParams {
     password: Option<SecretString>,
     #[serde(default)]
     confirm_path: Option<String>,
+    job: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -35,6 +36,7 @@ struct VaultOpenParams {
 struct VaultPlainConfirmParams {
     id: String,
     path: String,
+    job: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -67,9 +69,9 @@ pub(super) fn vault_open(params: Value) -> RpcResponse {
     let id = parsed.id.trim();
     let opened = match parsed.confirm_path.as_deref().map(str::trim) {
         Some(path) if !path.is_empty() => {
-            open_vault_confirmed(&root, id, password, Path::new(path))
+            open_vault_confirmed(&root, id, password, Path::new(path), &parsed.job)
         }
-        _ => open_vault(&root, id, password),
+        _ => open_vault_as_job(&root, id, password, &parsed.job),
     };
     match opened {
         Ok(OpenVaultOutcome::Opened) => ok(json!(null)),
@@ -96,7 +98,7 @@ pub(super) fn vault_plain_confirm(params: Value) -> RpcResponse {
         Ok(root) => root,
         Err(response) => return response,
     };
-    match confirm_plain_destination(&root, parsed.id.trim(), Path::new(path)) {
+    match confirm_plain_destination(&root, parsed.id.trim(), Path::new(path), &parsed.job) {
         Ok(()) => ok(json!(null)),
         Err(error) => map_core_err(error),
     }

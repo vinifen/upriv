@@ -1,21 +1,13 @@
 import { useEffect, useState } from "react";
 import { Modal as RnModal, Pressable, StyleSheet, Text, View } from "react-native";
-import {
-  Button,
-  Checkbox,
-  LoadingBudgetHint,
-  Modal,
-  ModalFooterActions,
-  Toast,
-} from "@/components/ui";
+import { Button, Checkbox, Modal, ModalFooterActions, Toast } from "@/components/ui";
 import { useTranslation } from "@/i18n";
 import {
-  LOADING_BUDGET_MS,
   unsavedPromptBodyKey,
   unsavedPromptConfirmsAllFiles,
   unsavedPromptIsImport,
 } from "@upriv/shared";
-import { useLoadingBudget } from "@upriv/shared/react";
+import { useOperationLimit } from "@upriv/shared/react";
 import { useTheme } from "@/theme";
 import type { FileManagerApi } from "../hooks/useVaultFileManager";
 
@@ -27,12 +19,12 @@ interface FileManagerDialogsProps {
 export function FileManagerDialogs({ fm, promptsOpen = true }: FileManagerDialogsProps) {
   const { t } = useTranslation();
   const { typography, colors } = useTheme();
-  const saveBudget = useLoadingBudget(fm.unsavedSaving, LOADING_BUDGET_MS.vaultPipeline);
+  const saveLimit = useOperationLimit(fm.unsavedSaving);
   const { abandonUnsavedSave } = fm;
 
   useEffect(() => {
-    if (saveBudget.timedOut) abandonUnsavedSave();
-  }, [abandonUnsavedSave, saveBudget.timedOut]);
+    if (saveLimit.timedOut) abandonUnsavedSave();
+  }, [abandonUnsavedSave, saveLimit.timedOut]);
 
   /** The prompt holds through a save, so the files do not change under it. */
   const cancelUnsavedPrompt = () => {
@@ -164,9 +156,6 @@ export function FileManagerDialogs({ fm, promptsOpen = true }: FileManagerDialog
         <Text style={[typography.body, { color: colors.onSurfaceVariant }]}>
           {unsavedPrompt ? t(unsavedPromptBodyKey(unsavedPrompt)) : null}
         </Text>
-        {saveBudget.visible ? (
-          <LoadingBudgetHint budgetMs={saveBudget.budgetMs} remainingMs={saveBudget.remainingMs} />
-        ) : null}
       </Modal>
 
       {promptsOpen || !fm.toast ? (

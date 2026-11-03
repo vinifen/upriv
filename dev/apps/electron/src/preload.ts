@@ -1,9 +1,12 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
+// Type only: a sandboxed preload cannot load local modules at runtime.
+import type { InvokeReply } from "./daemonProtocol";
 
 export interface UprivDesktopApi {
   /**
-   * @param timeoutMs Daemon RPC timeout in main. `undefined` → Electron default (30s).
-   * `0` → no timeout (native dialogs). Renderer should pass `METHOD_TIMEOUT_MS[method]`.
+   * @param timeoutMs Daemon RPC timeout in main. `undefined` → `DEFAULT_RPC_TIMEOUT_MS`.
+   * `0` → no timeout (a job, a close, or a dialog). Renderer should pass `METHOD_TIMEOUT_MS[method]`.
+   * A failed call rejects with an `Error` whose message is the wire `code: message`.
    */
   invoke(method: string, params?: Record<string, unknown>, timeoutMs?: number): Promise<unknown>;
   onEvent(callback: (name: string, payload: unknown) => void): () => void;
@@ -47,11 +50,25 @@ export interface UprivDesktopApi {
    * so the caller can fall back to `navigator.hardwareConcurrency`.
    */
   logicalProcessors(): number;
+  /**
+   * The running jobs and closing vaults, sent whenever they change. Main asks
+   * before quitting, waits for the jobs, and keeps the computer awake.
+   */
+  reportWork(report: { jobs: number; closing: number }): void;
+  /** Close now from the quit overlay. */
+  quitNow(): void;
 }
 
 const api: UprivDesktopApi = {
-  invoke(method, params, timeoutMs) {
-    return ipcRenderer.invoke("upriv-invoke", method, params ?? {}, timeoutMs);
+  async invoke(method, params, timeoutMs) {
+    const reply = (await ipcRenderer.invoke(
+      "upriv-invoke",
+      method,
+      params ?? {},
+      timeoutMs,
+    )) as InvokeReply;
+    if (!reply.ok) throw new Error(reply.error);
+    return reply.value;
   },
   onEvent(callback) {
     const listener = (_event: Electron.IpcRendererEvent, name: string, payload: unknown) => {
@@ -95,6 +112,12 @@ const api: UprivDesktopApi = {
       // Older shells have no handler. The renderer falls back.
     }
     return 0;
+  },
+  reportWork(report) {
+    ipcRenderer.send("upriv-work", report);
+  },
+  quitNow() {
+    ipcRenderer.send("upriv-quit-now");
   },
 };
 

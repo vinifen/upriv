@@ -3,6 +3,7 @@ export {
   jobProgressLine,
   jobProgressPercent,
   parseJobStatus,
+  type JobBytes,
   type JobProgress,
   type JobProgressCopy,
 } from "./progress";

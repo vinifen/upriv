@@ -15,6 +15,7 @@ mod export_folder;
 mod files_zip;
 pub(crate) mod fs;
 mod import;
+mod import_job;
 mod import_slots;
 mod open_close;
 mod os_import;
@@ -26,6 +27,7 @@ mod rename;
 mod rewrap;
 mod seven_zip;
 mod seven_zip_pack;
+mod unfinished;
 mod welcome;
 pub(crate) mod wipe;
 mod zip_io;
@@ -45,7 +47,7 @@ pub use backup::{
     save_backup_now, BackupEntry,
 };
 pub use config_folder::{ExportInclude, ImportExtras};
-pub use create::{create_vault, create_vault_with_welcome};
+pub use create::{create_vault, create_vault_as_job};
 pub use data_folder_export::{export_data_folder, DataFolderExport};
 pub use delete::delete_vault;
 pub use embedded_settings::{parse_embedded_settings, EmbeddedVaultSettings};
@@ -61,18 +63,18 @@ pub use fs::{
     fs_rename, fs_tree_revision, fs_truncate, fs_write_file, fs_write_from_reader, fs_write_range,
 };
 pub use import::{
-    import_from_backup, import_store_from_archive_path, import_store_tree, import_store_zip,
-    parse_backup_import_path, read_import_archive_bytes, read_import_zip_settings,
+    import_store_from_archive_path, import_store_zip, parse_backup_import_path,
+    read_import_archive_bytes, read_import_zip_settings,
 };
 pub use import_slots::{import_slots, import_slots_for};
 pub use open_close::{
-    close_all_vaults, close_all_vaults_now, close_progress, close_vault, close_vault_auto,
-    close_vault_now, confirm_plain_destination, hurry_close, open_vault, open_vault_confirmed,
-    CloseVaultOutcome, OpenVaultOutcome,
+    close_all_vaults, close_all_vaults_now, close_phase, close_vault, close_vault_auto,
+    close_vault_now, confirm_plain_destination, hurry_close, hurry_quit, open_vault,
+    open_vault_as_job, open_vault_confirmed, CloseVaultOutcome, OpenVaultOutcome,
 };
 pub use os_import::{
-    abort_import_vault, import_logical_os_path, ingest_import_directory, ingest_import_reader,
-    open_import_session,
+    abort_import_vault, finish_import_session, import_logical_os_path, ingest_import_directory,
+    ingest_import_reader, open_import_session,
 };
 pub use persistence::{load_vault_persistence, VaultPersistence};
 pub(crate) use plain::{ensure_no_leftover, holds_leftover, PlainSession};
@@ -82,7 +84,6 @@ pub use plain::{
     PlainFolderClass, PlainLeftover, PlainObserver, PlainPlace, PlainStatus, PlainSyncReport,
     PlainTotals, PlainUnsend, PlainWipe,
 };
-pub use plain_zip::sweep_plain_exports;
 pub use rename::{rename_vault, VaultRenameResult};
 pub use rewrap::{change_vault_kdf, change_vault_password};
 pub use seven_zip::{
@@ -90,6 +91,7 @@ pub use seven_zip::{
     probe_logical_seven_zip_path,
 };
 pub use seven_zip_pack::seven_zip_export_available;
+pub use unfinished::sweep_unfinished;
 pub use welcome::{VaultWelcome, WELCOME_FILE_MAX_BYTES, WELCOME_README_LOGICAL_PATH};
 pub use zip_io::{probe_store_zip, read_zip_config_toml};
 

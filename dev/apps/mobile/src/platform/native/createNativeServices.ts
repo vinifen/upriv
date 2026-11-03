@@ -10,6 +10,7 @@ import type {
 import {
   isRpcError,
   isVaultRootUnreachableError,
+  newJobId,
   normalizeAppSettings,
   SAF_VAULT_ROOT,
 } from "@upriv/shared";
@@ -287,10 +288,12 @@ function createNativeVaultRootService(): VaultRootService {
 
     async setupAtPath(path, options) {
       const trimmed = path.trim();
+      // Only a picked storage-access folder copies the private data folder: the job is its.
+      const { job, ...setup } = options ?? {};
       if (!isSafTreeUri(trimmed)) {
         const leaving = rememberedCustomFolderPath(safGetActiveUri() ?? "");
         if (leaving) await rpcVaultRootRememberCustom(leaving);
-        const result = await rpcVaultRootSetupPath(trimmed, options);
+        const result = await rpcVaultRootSetupPath(trimmed, setup);
         clearActiveSafUri();
         return result;
       }
@@ -300,8 +303,8 @@ function createNativeVaultRootService(): VaultRootService {
         safPersist(trimmed);
         mountSafRoot(trimmed);
         const result = await rpcVaultRootSetupPath(SAF_VAULT_ROOT, {
-          ...options,
-          adoptPrivateRoot: true,
+          ...setup,
+          adoptPrivateRoot: { job: job ?? newJobId() },
           ...(plan.rememberCustomUri ? { customUri: plan.rememberCustomUri } : {}),
         });
         commitSafSwitch(previous, trimmed);

@@ -5,17 +5,23 @@ import {
   type JobProgressCopy,
 } from "@upriv/shared";
 import { useTranslation } from "@/i18n";
+import { ElapsedTime } from "./ElapsedTime";
 
 interface JobProgressBarProps {
   /** `null` until core first answers `job_status`. */
   progress: JobProgress | null;
+  /** When core started the job; `null` while it waits for its turn (Queued…). */
+  startedAt: number | null;
   /** Names the bar for assistive technology. */
   label: string;
   copy: JobProgressCopy;
 }
 
-/** How far a running job got: a bar, then a line with the bytes done of the total. */
-export function JobProgressBar({ progress, label, copy }: JobProgressBarProps) {
+/**
+ * How far a running job got: a bar, then a line with the bytes done of the
+ * total and how long it has run.
+ */
+export function JobProgressBar({ progress, startedAt, label, copy }: JobProgressBarProps) {
   const { t } = useTranslation();
   const percent = jobProgressPercent(progress);
   const line = jobProgressLine(progress, copy);
@@ -38,8 +44,14 @@ export function JobProgressBar({ progress, label, copy }: JobProgressBarProps) {
           style={percent === null ? undefined : { width: `${percent}%` }}
         />
       </div>
-      <p className="text-sm text-on-surface" role="status">
-        {t(line.key, line.params)}
+      <p
+        className="flex items-baseline justify-between gap-3 text-sm text-on-surface"
+        role="status"
+      >
+        <span className="min-w-0">
+          {startedAt === null ? t("vault.status.queued") : t(line.key, line.params)}
+        </span>
+        <ElapsedTime startedAt={startedAt} layout="inline" />
       </p>
     </>
   );

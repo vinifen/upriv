@@ -22,12 +22,12 @@ use upriv_core::logging::{
 };
 use upriv_core::{
     active_alias_is_unmounted_saf, app_home_dir, change_vault_kdf, change_vault_password,
-    close_progress, close_vault, close_vault_auto, close_vault_now, create_vault_group_with_sort,
-    create_vault_with_welcome, deactivate_app_home_alias, delete_vault_group,
-    discover_bootstrap_root, hurry_close, inspect_vault_root_at, known_vault_ids, list_vaults,
-    load_app_settings, load_vault_config, load_vault_groups, open_import_session,
-    open_or_initialize_vault_root, parse_settings_toml_str, read_vault_root_alias,
-    relocate_upriv_dir, remember_vault_root_custom_uri, rename_vault,
+    close_phase, close_vault, close_vault_auto, close_vault_now, copy_data_folder_into,
+    create_vault_as_job, create_vault_group_with_sort, deactivate_app_home_alias,
+    delete_vault_group, discover_bootstrap_root, finish_import_session, hurry_close,
+    inspect_vault_root_at, known_vault_ids, list_vaults, load_app_settings, load_vault_config,
+    load_vault_groups, open_import_session, open_or_initialize_vault_root, parse_settings_toml_str,
+    read_vault_root_alias, relocate_upriv_dir, remember_vault_root_custom_uri, rename_vault,
     reorder_vault_group_grouped_vaults, reorder_vault_groups, repair_vault_groups,
     resolve_vault_root, save_app_settings_session_with_alias_sync, suggested_vault_root,
     update_vault_group, vault_list_item, vault_store_on_disk_bytes,
@@ -45,7 +45,7 @@ mod secret;
 mod vault_ops;
 
 use secret::SecretString;
-pub use vault_ops::ingest_content_fd;
+pub use vault_ops::{hurry_shutdown, ingest_content_fd};
 
 #[derive(Debug, Deserialize)]
 pub struct RpcRequest {
@@ -115,6 +115,10 @@ struct PathParams {
     /// is left as-is.
     #[serde(default)]
     adopt_private_root: bool,
+    /// The job that copy runs as, so the person can stop it. Required with
+    /// `adopt_private_root`.
+    #[serde(default)]
+    job: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -185,7 +189,7 @@ pub fn handle_rpc(req: RpcRequest) -> RpcResponse {
         "vault_rename" => vault_rename(req.params),
         "vault_delete" => vault_ops::vault_delete(req.params),
         "vault_export" => vault_ops::vault_export(req.params),
-        "vault_plain_export_sweep" => vault_ops::vault_plain_export_sweep(req.params),
+        "vault_unfinished_sweep" => vault_ops::vault_unfinished_sweep(req.params),
         "vault_import_zip" => vault_ops::vault_import_zip(req.params),
         "vault_import_7z" => vault_ops::vault_import_7z(req.params),
         "vault_import_files_zip" => vault_ops::vault_import_files_zip(req.params),
@@ -255,7 +259,7 @@ fn with_relocate_notice(mut body: Value) -> Value {
     body
 }
 
-fn adopt_private_root_into_grant(path: &Path) -> Result<&'static str, RpcResponse> {
+fn adopt_private_root_into_grant(path: &Path, job: &str) -> Result<&'static str, RpcResponse> {
     if path != Path::new(upriv_core::host_fs::SAF_VAULT_ROOT) {
         return Err(err(
             "invalid_request",
@@ -272,7 +276,7 @@ fn adopt_private_root_into_grant(path: &Path) -> Result<&'static str, RpcRespons
         Ok(dir) => dir,
         Err(error) => return Err(map_core_err(error)),
     };
-    match relocate_upriv_dir(&home, path) {
+    match copy_data_folder_into(&home, path, job) {
         Ok(UprivDirRelocate::Absent) => Ok("none"),
         Ok(UprivDirRelocate::Moved) => Ok("moved"),
         Ok(UprivDirRelocate::DestinationOccupied) => Ok("left_behind"),
@@ -664,7 +668,10 @@ fn vault_root_setup_path(params: Value) -> RpcResponse {
         None
     };
     let private_root = if parsed.adopt_private_root {
-        match adopt_private_root_into_grant(&path) {
+        let Some(job) = parsed.job.as_deref() else {
+            return err("invalid_request", "adoptPrivateRoot requires a job".into());
+        };
+        match adopt_private_root_into_grant(&path, job) {
             Ok(status) => Some(status),
             Err(response) => return response,
         }
@@ -1368,6 +1375,11 @@ struct VaultCreateParams {
     settings: VaultConfig,
     #[serde(default)]
     welcome: Option<VaultWelcomeParams>,
+    job: String,
+    /// A phone import fills this vault next (`vault_ingest_*`); it stays
+    /// recorded as unfinished until `vault_close` with `reason: "import"`.
+    #[serde(default)]
+    for_import: bool,
 }
 
 /// Localized `README.md` + the layout that opens it. Sent on scratch create and
@@ -1404,12 +1416,14 @@ fn vault_create(params: Value) -> RpcResponse {
     // Same trim `create_vault` persists — padded request ids still resolve via
     // `vault_dir`, but the returned row must be looked up with that folder id.
     let id = parsed.settings.vault.id.trim().to_string();
-    match create_vault_with_welcome(
+    match create_vault_as_job(
         &root,
         parsed.settings,
         parsed.password.as_bytes(),
         preset,
         parsed.welcome.as_ref().map(VaultWelcomeParams::as_core),
+        parsed.for_import,
+        &parsed.job,
     ) {
         Ok(()) => match vault_list_item(&root, &id) {
             Ok(item) => ok(json!({ "vault": vault_list_item_json(&item) })),
@@ -1453,6 +1467,7 @@ struct VaultChangePasswordParams {
     id: String,
     current_password: SecretString,
     new_password: SecretString,
+    job: String,
 }
 
 fn vault_change_password(params: Value) -> RpcResponse {
@@ -1469,6 +1484,7 @@ fn vault_change_password(params: Value) -> RpcResponse {
         parsed.id.trim(),
         parsed.current_password.as_bytes(),
         parsed.new_password.as_bytes(),
+        &parsed.job,
     ) {
         Ok(()) => ok(json!(null)),
         Err(error) => map_core_err(error),
@@ -1481,6 +1497,7 @@ struct VaultChangeKdfParams {
     id: String,
     current_password: SecretString,
     unlock_preset: KdfUnlockPreset,
+    job: String,
 }
 
 fn vault_change_kdf(params: Value) -> RpcResponse {
@@ -1497,6 +1514,7 @@ fn vault_change_kdf(params: Value) -> RpcResponse {
         parsed.id.trim(),
         parsed.current_password.as_bytes(),
         parsed.unlock_preset,
+        &parsed.job,
     ) {
         Ok(()) => ok(json!(null)),
         Err(error) => map_core_err(error),
@@ -1517,10 +1535,12 @@ fn vault_close(params: Value) -> RpcResponse {
         "user" => close_vault(&root, id),
         "auto" => close_vault_auto(&root, id),
         "now" => close_vault_now(&root, id),
+        // A phone import whose files are all in.
+        "import" => finish_import_session(&root, id),
         other => {
             return err(
                 "invalid_request",
-                format!("vault_close reason must be user, auto, or now, got {other}"),
+                format!("vault_close reason must be user, auto, now, or import, got {other}"),
             );
         }
     };
@@ -1548,8 +1568,7 @@ struct VaultIdParams {
     id: String,
 }
 
-/// Where a running close is, and how far its backup zip got. The backup's
-/// total is the size of `store/`: the UI sizes its wait from it.
+/// Where a running close is: its flush or its backup zip.
 fn vault_close_phase(params: Value) -> RpcResponse {
     let parsed: VaultIdParams = match serde_json::from_value(params) {
         Ok(value) => value,
@@ -1559,12 +1578,8 @@ fn vault_close_phase(params: Value) -> RpcResponse {
         Ok(root) => root,
         Err(response) => return response,
     };
-    match close_progress(&root, parsed.id.trim()) {
-        Ok(Some(progress)) => ok(json!({
-            "phase": progress.phase.as_str(),
-            "backupBytesDone": progress.backup.bytes_done,
-            "backupBytesTotal": progress.backup.bytes_total,
-        })),
+    match close_phase(&root, parsed.id.trim()) {
+        Ok(Some(phase)) => ok(json!({ "phase": phase.as_str() })),
         Ok(None) => ok(json!({ "phase": null })),
         Err(error) => map_core_err(error),
     }
@@ -1984,6 +1999,7 @@ fn map_core_err_response(error: upriv_core::UprivError, emit_log: bool) -> RpcRe
         }
         upriv_core::UprivError::JobCancelled => ("job_cancelled", None),
         upriv_core::UprivError::JobIdInvalid => ("invalid_request", None),
+        upriv_core::UprivError::JobNotStoppable => ("job_not_stoppable", None),
         upriv_core::UprivError::DataFolderBusy => ("data_folder_busy", None),
         upriv_core::UprivError::DataFolderExportBusy => ("data_folder_export_busy", None),
         upriv_core::UprivError::BackupExporting => ("backup_exporting", None),
@@ -2012,7 +2028,8 @@ fn map_core_err_response(error: upriv_core::UprivError, emit_log: bool) -> RpcRe
             | "vault_unlock_blocked"
             | "rewrap_password_unchanged"
             | "rewrap_kdf_unchanged"
-            | "job_cancelled" => LogLevel::Warn,
+            | "job_cancelled"
+            | "job_not_stoppable" => LogLevel::Warn,
             _ => LogLevel::Error,
         };
         // `message` stays on the RPC response for the person at the screen.
@@ -2229,7 +2246,7 @@ mod contract_tests {
         "vault_rename",
         "vault_delete",
         "vault_export",
-        "vault_plain_export_sweep",
+        "vault_unfinished_sweep",
         "vault_import_zip",
         "vault_import_7z",
         "vault_import_files_zip",
@@ -2296,13 +2313,25 @@ mod contract_tests {
         let status = call("job_status", json!({ "job": "rpc-never-started" }));
         assert_eq!(
             status.result,
-            Some(json!({ "running": false, "bytesDone": 0, "bytesTotal": 0 }))
+            Some(json!({ "running": false, "bytesDone": 0, "bytesTotal": 0, "stoppable": true }))
         );
         let cancel = call(
             "job_cancel",
+            json!({ "job": "rpc-never-started", "by": "user" }),
+        );
+        assert_eq!(cancel.result, Some(json!({ "stopping": false })));
+        let by_auto_close = call(
+            "job_cancel",
+            json!({ "job": "rpc-never-started-2", "by": "auto_close" }),
+        );
+        assert_eq!(by_auto_close.result, Some(json!({ "stopping": false })));
+        let malformed = call("job_cancel", json!({ "job": "a/b", "by": "user" }));
+        assert_eq!(error_code(&malformed), Some("invalid_request"));
+        let timeout = call(
+            "job_cancel",
             json!({ "job": "rpc-never-started", "by": "timeout" }),
         );
-        assert_eq!(cancel.result, Some(json!({ "running": false })));
+        assert_eq!(error_code(&timeout), Some("invalid_request"));
         // A stop names who asked for it.
         let unnamed = call("job_cancel", json!({ "job": "rpc-never-started" }));
         assert_eq!(error_code(&unnamed), Some("invalid_request"));

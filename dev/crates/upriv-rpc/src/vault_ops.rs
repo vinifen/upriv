@@ -15,7 +15,7 @@ use upriv_core::{
     parse_backup_import_path, parse_embedded_settings, probe_import_zip_bytes,
     probe_import_zip_path, probe_logical_seven_zip, probe_logical_seven_zip_path, probe_store_zip,
     promote_backup_save, read_import_archive_bytes, read_import_zip_settings, read_zip_config_toml,
-    save_backup_now, seven_zip_export_available, sweep_plain_exports, vault_list_item, BackupEntry,
+    save_backup_now, seven_zip_export_available, sweep_unfinished, vault_list_item, BackupEntry,
     ExportInclude, ImportExtras, ImportZipProbe, KdfUnlockPreset, VaultConfig, ZipImportClass,
 };
 
@@ -101,6 +101,7 @@ struct VaultFsImportOsFileParams {
     parent_path: String,
     name: String,
     os_path: String,
+    job: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -181,6 +182,7 @@ struct VaultImportZipParams {
     content_b64: Option<String>,
     #[serde(default)]
     archive_path: Option<String>,
+    job: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -196,6 +198,7 @@ struct VaultImport7zParams {
     archive_path: Option<String>,
     #[serde(default)]
     archive_password: Option<SecretString>,
+    job: String,
     #[serde(default)]
     welcome: Option<super::VaultWelcomeParams>,
     /// Keep the file-manager layout the archive carries.
@@ -214,6 +217,7 @@ struct VaultImportFilesZipParams {
     content_b64: Option<String>,
     #[serde(default)]
     archive_path: Option<String>,
+    job: String,
     #[serde(default)]
     welcome: Option<super::VaultWelcomeParams>,
     /// Keep the file-manager layout the archive carries.
@@ -232,6 +236,10 @@ struct VaultImportProbeParams {
     archive_password: Option<SecretString>,
     #[serde(default)]
     kind: Option<String>,
+    /// The job a `.7z` password test runs as. Required for a `.7z`; a zip is
+    /// read at once and takes none.
+    #[serde(default)]
+    job: Option<String>,
 }
 
 fn load_archive_bytes(
@@ -275,12 +283,21 @@ struct AppShutdownParams {
     now: bool,
 }
 
-pub(super) fn app_shutdown(params: Value) -> RpcResponse {
-    // Quit always runs. Params it cannot read mean the full close.
-    let now = serde_json::from_value::<AppShutdownParams>(params).is_ok_and(|parsed| parsed.now);
-    // The daemon waits for its workers before it exits. Every export and
-    // Back up now, running or still queued, stops within one buffer and
-    // removes its file.
+/// A normal quit is closing vaults and the person chose Close now: stop every
+/// job that can still stop and hurry the closes. Returns at once; the quit
+/// already running finishes the Close now way.
+pub fn hurry_shutdown() {
+    stop_jobs_for_quit();
+    if let Ok(Some(root)) = optional_vault_root() {
+        upriv_core::hurry_quit(&root);
+    }
+}
+
+/// The daemon waits for its workers before it exits. A normal quit lets the
+/// app's jobs end first, so what is left here has no window to finish in:
+/// every job that can still stop, running or queued, stops within one buffer
+/// and removes what it wrote. A job in its last step finishes.
+fn stop_jobs_for_quit() {
     let stopped = upriv_core::stop_all_jobs();
     if stopped > 0 {
         let count = stopped.to_string();
@@ -290,6 +307,12 @@ pub(super) fn app_shutdown(params: Value) -> RpcResponse {
             &[("count", count.as_str())],
         );
     }
+}
+
+pub(super) fn app_shutdown(params: Value) -> RpcResponse {
+    // Quit always runs. Params it cannot read mean the full close.
+    let now = serde_json::from_value::<AppShutdownParams>(params).is_ok_and(|parsed| parsed.now);
+    stop_jobs_for_quit();
     match optional_vault_root() {
         Ok(Some(root)) => {
             let closed = if now {
@@ -453,6 +476,7 @@ pub(super) fn vault_fs_import_os_file(params: Value) -> RpcResponse {
         &parsed.parent_path,
         parsed.name.trim(),
         Path::new(parsed.os_path.trim()),
+        &parsed.job,
     ) {
         Ok((path, revision)) => ok(json!({ "path": path, "revision": revision })),
         Err(error) => map_core_err(error),
@@ -638,11 +662,12 @@ pub(super) fn vault_ingest_directory(params: Value) -> RpcResponse {
     }
 }
 
-/// Read one already-open file descriptor into the import session.
+/// Read one already-open file descriptor into the import session, as the job
+/// `job`.
 ///
 /// The caller transferred ownership of `fd` (Android `detachFd`). Not a JSON
 /// RPC: a desktop daemon must not import an arbitrary process file descriptor.
-pub fn ingest_content_fd(vault_id: &str, logical_path: &str, fd: i32) -> RpcResponse {
+pub fn ingest_content_fd(vault_id: &str, logical_path: &str, fd: i32, job: &str) -> RpcResponse {
     if fd < 0 {
         return err("invalid_request", "import file is unavailable".into());
     }
@@ -656,14 +681,14 @@ pub fn ingest_content_fd(vault_id: &str, logical_path: &str, fd: i32) -> RpcResp
             Ok(root) => root,
             Err(response) => return response,
         };
-        match ingest_import_reader(&root, vault_id.trim(), logical_path.trim(), &mut file) {
+        match ingest_import_reader(&root, vault_id.trim(), logical_path.trim(), &mut file, job) {
             Ok(()) => ok(json!(null)),
             Err(error) => map_core_err(error),
         }
     }
     #[cfg(not(unix))]
     {
-        let _ = (vault_id, logical_path, fd);
+        let _ = (vault_id, logical_path, fd, job);
         err("not_implemented", "content import is unavailable".into())
     }
 }
@@ -735,10 +760,10 @@ pub(super) fn vault_import_zip(params: Value) -> RpcResponse {
         .map(str::trim)
         .filter(|s| !s.is_empty())
     {
-        import_store_from_archive_path(&root, parsed.settings, path)
+        import_store_from_archive_path(&root, parsed.settings, path, &parsed.job)
     } else {
         match load_archive_bytes(parsed.content_b64.as_deref(), None) {
-            Ok(bytes) => import_store_zip(&root, parsed.settings, &bytes),
+            Ok(bytes) => import_store_zip(&root, parsed.settings, &bytes, &parsed.job),
             Err(response) => return response,
         }
     };
@@ -786,6 +811,7 @@ pub(super) fn vault_import_7z(params: Value) -> RpcResponse {
             Path::new(path),
             archive_pw,
             extras,
+            &parsed.job,
         )
     } else {
         let bytes = match load_archive_bytes(parsed.content_b64.as_deref(), None) {
@@ -800,6 +826,7 @@ pub(super) fn vault_import_7z(params: Value) -> RpcResponse {
             &bytes,
             archive_pw,
             extras,
+            &parsed.job,
         )
     };
     match imported {
@@ -844,6 +871,7 @@ pub(super) fn vault_import_files_zip(params: Value) -> RpcResponse {
             preset,
             Path::new(path),
             extras,
+            &parsed.job,
         )
     } else {
         match load_archive_bytes(parsed.content_b64.as_deref(), None) {
@@ -854,6 +882,7 @@ pub(super) fn vault_import_files_zip(params: Value) -> RpcResponse {
                 preset,
                 &bytes,
                 extras,
+                &parsed.job,
             ),
             Err(response) => return response,
         }
@@ -898,6 +927,7 @@ pub(super) fn vault_import_os_path(params: Value) -> RpcResponse {
             .welcome
             .as_ref()
             .map(super::VaultWelcomeParams::as_core),
+        &parsed.job,
     ) {
         Ok(id) => match vault_list_item(&root, &id) {
             Ok(item) => ok(json!({ "vault": super::vault_list_item_json(&item) })),
@@ -924,14 +954,20 @@ pub(super) fn vault_import_probe(params: Value) -> RpcResponse {
         .map(str::trim)
         .filter(|value| !value.is_empty());
     let probed = if kind == "seven_zip" {
+        let Some(job) = parsed.job.as_deref() else {
+            return err(
+                "invalid_request",
+                "a .7z password test requires a job".into(),
+            );
+        };
         if let Some(path) = path {
-            probe_logical_seven_zip_path(Path::new(path), archive_pw)
+            probe_logical_seven_zip_path(Path::new(path), archive_pw, job)
         } else {
             let bytes = match load_archive_bytes(parsed.content_b64.as_deref(), None) {
                 Ok(bytes) => bytes,
                 Err(response) => return response,
             };
-            probe_logical_seven_zip(&bytes, archive_pw)
+            probe_logical_seven_zip(&bytes, archive_pw, job)
         }
     } else if let Some(path) = path {
         if parse_backup_import_path(path).is_none() {
@@ -1003,14 +1039,15 @@ fn probe_ok_body(kind: &str, settings: Option<&upriv_core::EmbeddedVaultSettings
     body
 }
 
-/// Wipe the unfinished plain-text exports a crash left. `folders` are the
-/// storage-access folders holding one that are not mounted now.
-pub(super) fn vault_plain_export_sweep(_params: Value) -> RpcResponse {
+/// Clear what a crash left from a job: the vaults an import never finished
+/// and the unfinished export files. `folders` are the storage-access folders
+/// holding such a file that are not mounted now.
+pub(super) fn vault_unfinished_sweep(_params: Value) -> RpcResponse {
     let root = match require_vault_root() {
         Ok(root) => root,
         Err(response) => return response,
     };
-    match sweep_plain_exports(&root) {
+    match sweep_unfinished(&root) {
         Ok(folders) => ok(json!({ "folders": folders })),
         Err(error) => map_core_err(error),
     }

@@ -17,20 +17,16 @@ export interface VaultExportJobEvents {
   onExported: (result: VaultPathWriteResult, target: VaultExportTarget) => void;
   /** Includes a refused password, which the Export window marks on its field. */
   onFailed: (error: unknown, target: VaultExportTarget) => void;
-  /** The user stopped the export and it left no file. */
+  /** The export was stopped and left no file. */
   onCancelled: (target: VaultExportTarget) => void;
-  /**
-   * The budget or the call's own timeout ran out. The export is told to stop,
-   * and a later result is ignored.
-   */
-  onTimedOut: (target: VaultExportTarget) => void;
+  /** Core refused the stop: the file is being put in place. */
+  onStopRefused: (error: unknown, target: VaultExportTarget) => void;
 }
 
 /**
- * Vault export, owned by the vault list so it keeps running, and keeps its
- * budget, when the Export window closes. One at a time. While `job` is set the
- * list shows that vault as `exporting` and refuses to open it. Its budget grows
- * with the bytes of the vault (`sizedBudgetMs("vaultExport")`).
+ * Vault export, owned by the vault list so it keeps running when the Export
+ * window closes. One at a time. While `job` is set the list shows that vault
+ * as `exporting` and refuses to open it.
  */
 export function useVaultExportJob(
   vaultService: VaultService,
@@ -41,11 +37,11 @@ export function useVaultExportJob(
     job,
     start: startJob,
     stop,
-  } = useCoreJob<VaultExportTarget, VaultPathWriteResult>(jobs, "vaultExport", {
+  } = useCoreJob<VaultExportTarget, VaultPathWriteResult>(jobs, {
     onDone: (result, target) => events.onExported(result, target),
     onFailed: (error, target) => events.onFailed(error, target),
     onCancelled: (target) => events.onCancelled(target),
-    onTimedOut: (target) => events.onTimedOut(target),
+    onStopRefused: (error, target) => events.onStopRefused(error, target),
   });
 
   /** Export `vault` as `request` into `destDir`. False while an export runs. */

@@ -29,6 +29,7 @@ mod worker;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use serde::Serialize;
 
@@ -43,7 +44,7 @@ use crate::error::{Result, UprivError};
 use crate::logging::{log_event, LogLevel};
 use crate::paths::VaultRoot;
 use crate::runtime_state::{self, PlainRecord};
-use crate::session::with_open_session;
+use crate::session::{is_vault_closing_at, with_open_session, Job};
 use crate::store::{from_ui_path, is_reserved_logical, parent_logical, FileTreeNode, VaultIndex};
 use crate::vault::wipe::WipeOptions;
 
@@ -246,14 +247,15 @@ pub(crate) fn check_before_unlock(
 /// Fill the folder of a vault that was just unlocked. `consent` is the path
 /// the user agreed to after [`UprivError::PlainDestinationUnconfirmed`].
 ///
-/// On failure the caller drops the session. What was written is wiped
-/// first; when that wipe falls short, the record stays and the vault lists
-/// as recovery.
+/// On failure, or a stop of `job`, the caller drops the session. What was
+/// written is wiped first; when that wipe falls short, the record stays and
+/// the vault lists as recovery. The fill is the job's last stoppable step.
 pub(crate) fn activate(
     root: &VaultRoot,
     vault_id: &str,
     vault_dir: &Path,
     consent: Option<&Path>,
+    job: &Job,
 ) -> Result<()> {
     let config = load_vault_config(vault_dir)?;
     let wipe = WipeOptions::from_vault_config(&config);
@@ -330,10 +332,13 @@ pub(crate) fn activate(
         let _ = runtime_state::remove_plain_record(root, vault_id, &marker.token);
         return Err(error);
     }
-    let worker = worker::register(vault_id, vault_dir, wipe);
+    let worker = worker::register(vault_id, vault_dir, wipe, job.stop_flag());
     match fill(vault_dir, &dest, leaf, &marker, &worker) {
         Ok(Filled::Done(files)) => {
-            if let Err(error) = worker::start(&worker, &dest.folder) {
+            if let Err(error) = job
+                .final_step()
+                .and_then(|()| worker::start(&worker, &dest.folder))
+            {
                 abandon(root, vault_id, vault_dir, &wipe);
                 return Err(error);
             }
@@ -347,7 +352,12 @@ pub(crate) fn activate(
         }
         // Close asked to stop while the folder was filling. It runs next and
         // wipes what was written.
-        Ok(Filled::Cancelled) => Ok(()),
+        Ok(Filled::Cancelled) if is_vault_closing_at(vault_dir) => Ok(()),
+        // The person stopped the open: wipe what was written here.
+        Ok(Filled::Cancelled) => {
+            abandon(root, vault_id, vault_dir, &wipe);
+            Err(UprivError::JobCancelled)
+        }
         Err(error) => {
             abandon(root, vault_id, vault_dir, &wipe);
             Err(error)
@@ -647,7 +657,7 @@ pub(crate) fn resume_after_failed_close(vault_dir: &Path, vault_id: &str) {
         return;
     };
     let wipe = WipeOptions::for_vault_dir(vault_dir);
-    let worker = worker::register(vault_id, vault_dir, wipe);
+    let worker = worker::register(vault_id, vault_dir, wipe, Arc::default());
     if worker::start(&worker, &folder).is_err() {
         log_event(
             LogLevel::Warn,

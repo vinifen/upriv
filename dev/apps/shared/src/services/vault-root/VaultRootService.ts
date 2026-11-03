@@ -60,6 +60,9 @@ export interface VaultRootService {
    * When replacing incomplete: same policies as `setupDefaultRoot`.
    * `bootstrap` seeds the new root's `settings.toml` on create — see
    * `setupDefaultRoot` for the same contract.
+   * `job`: on a phone, the copy of the private app-folder `.upriv` into the
+   * picked folder runs as this core job. It has no deadline, and Stop leaves
+   * the original where it was (`job_cancelled`). Desktop ignores it.
    */
   setupAtPath(
     path: string,
@@ -67,6 +70,7 @@ export interface VaultRootService {
       replaceIncomplete?: boolean;
       replacePolicy?: IncompleteReplacePolicy;
       bootstrap?: VaultRootBootstrapPrefs | null;
+      job?: string;
     },
   ): Promise<{ rootPath: string; aliasPath: string; privateRoot?: VaultRootPrivateRoot }>;
 

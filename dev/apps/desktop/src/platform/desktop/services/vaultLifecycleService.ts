@@ -20,7 +20,7 @@ import {
   rpcAppSettingsGet,
   rpcVaultClose,
   rpcVaultCloseHurry,
-  rpcVaultCloseProgress,
+  rpcVaultClosePhase,
   rpcVaultConfigGet,
   rpcVaultOpen,
   rpcVaultPlainConfirm,
@@ -48,13 +48,14 @@ export const desktopVaultLifecycleService: VaultLifecycleService = {
   openingStepCount: LIVE_OPENING_PIPELINE_STEP_COUNT,
   closingStepCount: LIVE_CLOSING_PIPELINE_STEP_COUNT,
 
-  async runOpeningPipeline(vaultId, onStep) {
+  async runOpeningPipeline(vaultId, onStep, job) {
     onStep(0);
     await installWinFspWhenFolderNeeded(vaultId);
     const password = borrowSessionRamPassword(vaultPasswordInRam, vaultId);
     await finishPlainOpen({
       vaultId,
       password,
+      job,
       open: rpcVaultOpen,
       confirm: rpcVaultPlainConfirm,
       close: (id) => rpcVaultClose(id, "user").then(() => undefined),
@@ -64,15 +65,12 @@ export const desktopVaultLifecycleService: VaultLifecycleService = {
     onStep(1);
   },
 
-  async runClosingPipeline(vaultId, onStep, reason = "user", onMeasured) {
+  async runClosingPipeline(vaultId, onStep, reason = "user") {
     onStep(CLOSING_FLUSH_STEP);
     const outcome = await waitForClose(
       rpcVaultClose(vaultId, reason),
-      () => rpcVaultCloseProgress(vaultId),
-      {
-        onBackup: () => onStep(CLOSING_BACKUP_STEP),
-        onMeasured: (bytes) => onMeasured?.(bytes),
-      },
+      () => rpcVaultClosePhase(vaultId),
+      { onBackup: () => onStep(CLOSING_BACKUP_STEP) },
     );
     onStep(CLOSING_DONE_STEP);
     return outcome;

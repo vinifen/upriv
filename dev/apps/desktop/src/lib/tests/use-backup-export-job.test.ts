@@ -3,10 +3,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   JOB_ERROR_CODES,
-  LOADING_BUDGET_MS,
-  RPC_TIMEOUT_CODE,
   RpcError,
-  sizedBudgetMs,
   type BackupService,
   type JobService,
   type VaultPathWriteResult,
@@ -44,13 +41,13 @@ function events(): BackupExportJobEvents & {
   onExported: ReturnType<typeof vi.fn>;
   onFailed: ReturnType<typeof vi.fn>;
   onCancelled: ReturnType<typeof vi.fn>;
-  onTimedOut: ReturnType<typeof vi.fn>;
+  onStopRefused: ReturnType<typeof vi.fn>;
 } {
   return {
     onExported: vi.fn(),
     onFailed: vi.fn(),
     onCancelled: vi.fn(),
-    onTimedOut: vi.fn(),
+    onStopRefused: vi.fn(),
   };
 }
 
@@ -70,7 +67,11 @@ describe("useBackupExportJob", () => {
     act(() => {
       expect(result.current.start("vault-a", KEYS, "/media/usb")).toBe(true);
     });
-    expect(result.current.job).toMatchObject({ vaultId: "vault-a", keys: KEYS, stopping: false });
+    expect(result.current.job).toMatchObject({
+      vaultId: "vault-a",
+      keys: KEYS,
+      stoppingSince: null,
+    });
     expect(exportTo).toHaveBeenCalledWith("vault-a", KEYS, "/media/usb", result.current.job?.id);
 
     await act(async () => {
@@ -84,8 +85,9 @@ describe("useBackupExportJob", () => {
   it("shows how far core got", async () => {
     const run = deferred<VaultPathWriteResult>();
     const service = serviceExporting(() => run.promise);
+    const progress = { bytesDone: 1024, bytesTotal: 4096, stoppable: true };
     const runner: JobService = {
-      status: async () => ({ bytesDone: 1024, bytesTotal: 4096 }),
+      status: async () => progress,
       cancel: async () => undefined,
     };
     const on = events();
@@ -94,9 +96,7 @@ describe("useBackupExportJob", () => {
     act(() => {
       result.current.start("vault-a", KEYS, "/media/usb");
     });
-    await waitFor(() =>
-      expect(result.current.job?.progress).toEqual({ bytesDone: 1024, bytesTotal: 4096 }),
-    );
+    await waitFor(() => expect(result.current.job?.progress).toEqual(progress));
     await act(async () => {
       run.resolve(WRITTEN);
     });
@@ -146,7 +146,7 @@ describe("useBackupExportJob", () => {
     });
     const id = result.current.job?.id;
     act(() => result.current.stop());
-    expect(result.current.job?.stopping).toBe(true);
+    expect(result.current.job?.stoppingSince).not.toBeNull();
     expect(runner.cancel).toHaveBeenCalledWith(id, "user");
 
     await act(async () => {
@@ -175,27 +175,7 @@ describe("useBackupExportJob", () => {
     expect(on.onFailed).toHaveBeenCalledWith(error);
   });
 
-  it("stops its job in core when the call times out before the budget", async () => {
-    const run = deferred<VaultPathWriteResult>();
-    const service = serviceExporting(() => run.promise);
-    const runner = jobs();
-    const on = events();
-    const { result } = renderHook(() => useBackupExportJob(service, runner, on));
-
-    act(() => {
-      result.current.start("vault-a", KEYS, "/media/usb");
-    });
-    const id = result.current.job?.id;
-    await act(async () => {
-      run.reject(new RpcError(RPC_TIMEOUT_CODE, "timed out"));
-    });
-    await waitFor(() => expect(result.current.job).toBeNull());
-    expect(runner.cancel).toHaveBeenCalledWith(id, "timeout");
-    expect(on.onTimedOut).toHaveBeenCalledOnce();
-    expect(on.onFailed).not.toHaveBeenCalled();
-  });
-
-  it("gives up at the budget, stops core, and ignores a late result", async () => {
+  it("has no time limit: it keeps the export running however long it takes", async () => {
     vi.useFakeTimers();
     const run = deferred<VaultPathWriteResult>();
     const service = serviceExporting(() => run.promise);
@@ -206,28 +186,25 @@ describe("useBackupExportJob", () => {
     act(() => {
       result.current.start("vault-a", KEYS, "/media/usb");
     });
-    const id = result.current.job?.id;
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(LOADING_BUDGET_MS.backupExport + 1_000);
+      await vi.advanceTimersByTimeAsync(12 * 60 * 60 * 1_000);
     });
-    expect(result.current.job).toBeNull();
-    expect(runner.cancel).toHaveBeenCalledWith(id, "timeout");
-    expect(on.onTimedOut).toHaveBeenCalledOnce();
+    expect(result.current.job).not.toBeNull();
+    expect(runner.cancel).not.toHaveBeenCalled();
 
     await act(async () => {
       run.resolve(WRITTEN);
     });
-    expect(on.onExported).not.toHaveBeenCalled();
+    expect(on.onExported).toHaveBeenCalledWith(WRITTEN);
   });
 
-  it("grows its budget with the bytes core measured, and waits that long", async () => {
-    vi.useFakeTimers();
-    const bytesTotal = 20 * 1024 * 1024 * 1024;
+  it("starts the clock when core first says the job runs, not when it was sent", async () => {
+    let running = false;
     const run = deferred<VaultPathWriteResult>();
     const service = serviceExporting(() => run.promise);
-    const runner: JobService & { cancel: ReturnType<typeof vi.fn> } = {
-      status: async () => ({ bytesDone: 0, bytesTotal }),
-      cancel: vi.fn(async () => undefined),
+    const runner: JobService = {
+      status: async () => (running ? { bytesDone: 0, bytesTotal: 10, stoppable: true } : null),
+      cancel: async () => undefined,
     };
     const on = events();
     const { result } = renderHook(() => useBackupExportJob(service, runner, on));
@@ -235,24 +212,15 @@ describe("useBackupExportJob", () => {
     act(() => {
       result.current.start("vault-a", KEYS, "/media/usb");
     });
-    expect(result.current.job?.budgetMs).toBe(LOADING_BUDGET_MS.backupExport);
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(0);
+      await Promise.resolve();
     });
-    const sized = sizedBudgetMs("backupExport", bytesTotal);
-    expect(sized).toBeGreaterThan(LOADING_BUDGET_MS.backupExport);
-    expect(result.current.job?.budgetMs).toBe(sized);
+    expect(result.current.job?.startedAt).toBeNull();
 
-    // Past the floor, the sized budget keeps the export running.
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(LOADING_BUDGET_MS.backupExport + 1_000);
-    });
-    expect(result.current.job).not.toBeNull();
-    expect(on.onTimedOut).not.toHaveBeenCalled();
-
+    running = true;
+    await waitFor(() => expect(result.current.job?.startedAt).not.toBeNull(), { timeout: 3_000 });
     await act(async () => {
       run.resolve(WRITTEN);
     });
-    expect(on.onExported).toHaveBeenCalledWith(WRITTEN);
   });
 });

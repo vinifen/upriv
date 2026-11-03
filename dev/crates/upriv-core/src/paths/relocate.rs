@@ -1,15 +1,22 @@
 //! Move a `.upriv` tree from one parent folder to another.
 //!
-//! Used when an installed app's data still sits in a directory the uninstaller
-//! deletes (Windows install directory) and when Android copies the private app
-//! folder into a granted folder. A same-disk move is a rename. A copy removes
-//! the source only after the destination has the same files and directories.
-//! If the destination already has `.upriv`, both trees stay.
+//! Used when Android copies the private app folder into a granted folder, and
+//! to put it back when that setup does not finish. A same-disk move is a
+//! rename. A copy is written as `.upriv.upriv-part` and renamed to `.upriv` only
+//! once it has the same files and directories as the source, so a copy a crash
+//! cut off is never taken for a data folder. The source is removed after that
+//! rename. If the destination already has `.upriv`, both trees stay.
 
 use std::collections::BTreeMap;
+use std::io::Write;
 use std::path::Path;
 
 use crate::error::{Result, UprivError};
+use crate::session::{Job, JobKind};
+
+/// The copy's name until every file is in place. A leftover one is a copy a
+/// crash cut off; the next copy removes it first.
+const COPY_NAME: &str = ".upriv.upriv-part";
 
 /// Outcome of [`relocate_upriv_dir`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -22,13 +29,30 @@ pub enum UprivDirRelocate {
     DestinationOccupied,
 }
 
-/// Move `{source_parent}/.upriv` to `{dest_parent}/.upriv`.
-///
+/// Copy `{source_parent}/.upriv` into `{dest_parent}/.upriv` as the job
+/// `job_id`, which the person can stop until the copy is renamed into place.
+/// A stop removes the copy and leaves the source as it was.
+pub fn copy_data_folder_into(
+    source_parent: &Path,
+    dest_parent: &Path,
+    job_id: &str,
+) -> Result<UprivDirRelocate> {
+    Job::run(job_id, JobKind::DataFolderCopy, None, |job| {
+        relocate(source_parent, dest_parent, job)
+    })
+}
+
+/// Move `{source_parent}/.upriv` to `{dest_parent}/.upriv`, with no job: the
+/// way back when a setup that copied it does not finish.
+pub fn relocate_upriv_dir(source_parent: &Path, dest_parent: &Path) -> Result<UprivDirRelocate> {
+    relocate(source_parent, dest_parent, &Job::untracked())
+}
+
 /// Local folders on the same disk are renamed. A storage-access destination,
 /// or a cross-device move, is copied and the source is removed only after the
 /// file list matches. A symlink anywhere in the source fails the move and
 /// leaves the source in place.
-pub fn relocate_upriv_dir(source_parent: &Path, dest_parent: &Path) -> Result<UprivDirRelocate> {
+fn relocate(source_parent: &Path, dest_parent: &Path, job: &Job) -> Result<UprivDirRelocate> {
     let source = source_parent.join(".upriv");
     let dest = dest_parent.join(".upriv");
     if !dir_exists_nofollow(&source)? {
@@ -44,25 +68,37 @@ pub fn relocate_upriv_dir(source_parent: &Path, dest_parent: &Path) -> Result<Up
     }
 
     let source_files = file_manifest(&source)?;
-    if let Some(parent) = dest.parent() {
-        crate::host_fs::create_dir_all(parent)?;
-    }
+    job.set_total(source_files.values().sum());
+    crate::host_fs::create_dir_all(dest_parent)?;
     if local_rename(&source, &dest) {
         return Ok(UprivDirRelocate::Moved);
     }
-    if let Err(error) = copy_tree(&source, &dest) {
-        let _ = crate::host_fs::remove_dir_all(&dest);
+    let copy = dest_parent.join(COPY_NAME);
+    remove_copy(&copy)?;
+    let copied = copy_tree(&source, &copy, job).and_then(|()| match file_manifest(&copy) {
+        Ok(copied) if copied == source_files => Ok(()),
+        Ok(_) | Err(_) => Err(io_other("copied data folder does not match the source")),
+    });
+    // A stop that came first keeps the copy from being renamed into place.
+    if let Err(error) = copied.and_then(|()| job.final_step()) {
+        let _ = remove_copy(&copy);
         return Err(error);
     }
-    match file_manifest(&dest) {
-        Ok(copied) if copied == source_files => {}
-        Ok(_) | Err(_) => {
-            let _ = crate::host_fs::remove_dir_all(&dest);
-            return Err(io_other("copied data folder does not match the source"));
-        }
+    if let Err(error) = crate::host_fs::rename(&copy, &dest) {
+        let _ = remove_copy(&copy);
+        return Err(UprivError::Io(error));
     }
     crate::host_fs::remove_dir_all(&source).map_err(UprivError::Io)?;
     Ok(UprivDirRelocate::Moved)
+}
+
+/// Remove a copy that is not in place. Nothing there is fine.
+fn remove_copy(copy: &Path) -> Result<()> {
+    match crate::host_fs::remove_dir_all(copy) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(UprivError::Io(error)),
+    }
 }
 
 /// True when `path` exists and is not a symlink. A symlink is an error.
@@ -144,9 +180,10 @@ fn relative_key(root: &Path, path: &Path) -> Result<String> {
     Ok(parts.join("/"))
 }
 
-fn copy_tree(src: &Path, dst: &Path) -> Result<()> {
+fn copy_tree(src: &Path, dst: &Path, job: &Job) -> Result<()> {
     crate::host_fs::create_dir_all(dst).map_err(UprivError::Io)?;
     for entry in crate::host_fs::read_dir(src).map_err(UprivError::Io)? {
+        job.ensure_running()?;
         let entry = entry.map_err(UprivError::Io)?;
         let from = entry.path();
         let to = dst.join(entry.file_name());
@@ -155,9 +192,9 @@ fn copy_tree(src: &Path, dst: &Path) -> Result<()> {
             return Err(io_other("refusing a symlink"));
         }
         if meta.is_dir() {
-            copy_tree(&from, &to)?;
+            copy_tree(&from, &to, job)?;
         } else if meta.is_file() {
-            copy_file(&from, &to)?;
+            copy_file(&from, &to, job)?;
         } else {
             return Err(io_other("refusing a special file"));
         }
@@ -165,11 +202,14 @@ fn copy_tree(src: &Path, dst: &Path) -> Result<()> {
     Ok(())
 }
 
-fn copy_file(src: &Path, dst: &Path) -> Result<()> {
-    let mut input = crate::host_fs::File::open(src).map_err(UprivError::Io)?;
-    let mut output = crate::host_fs::File::create(dst).map_err(UprivError::Io)?;
-    std::io::copy(&mut input, &mut output).map_err(UprivError::Io)?;
-    output.sync_all().map_err(UprivError::Io)?;
+/// Each block written fails once `job` is asked to stop.
+fn copy_file(src: &Path, dst: &Path, job: &Job) -> Result<()> {
+    let input = crate::host_fs::File::open(src).map_err(UprivError::Io)?;
+    let output = crate::host_fs::File::create(dst).map_err(UprivError::Io)?;
+    let mut writer = job.writer(output);
+    std::io::copy(&mut job.progress_reader(input), &mut writer).map_err(UprivError::Io)?;
+    writer.flush().map_err(UprivError::Io)?;
+    writer.into_inner().sync_all().map_err(UprivError::Io)?;
     Ok(())
 }
 
@@ -351,6 +391,42 @@ mod tests {
         assert!(error.is_err());
         assert!(src_parent.path().join(".upriv/settings.toml").is_file());
         assert!(!dst_parent.path().join(".upriv").exists());
+    }
+
+    #[test]
+    fn a_stopped_copy_leaves_no_folder_and_keeps_the_source() {
+        let _force = ForceCopy::new();
+        let src_parent = tempfile::tempdir().unwrap();
+        let dst_parent = tempfile::tempdir().unwrap();
+        write_tree(src_parent.path());
+        let job = crate::test_support::test_job_id();
+        crate::session::cancel_job(&job).unwrap();
+        let error = copy_data_folder_into(src_parent.path(), dst_parent.path(), &job).unwrap_err();
+        assert!(matches!(error, UprivError::JobCancelled));
+        assert!(src_parent.path().join(".upriv/settings.toml").is_file());
+        assert!(!dst_parent.path().join(".upriv").exists());
+        assert!(!dst_parent.path().join(COPY_NAME).exists());
+    }
+
+    #[test]
+    fn a_copy_a_crash_cut_off_is_never_the_data_folder_and_goes_next_time() {
+        let _force = ForceCopy::new();
+        let src_parent = tempfile::tempdir().unwrap();
+        let dst_parent = tempfile::tempdir().unwrap();
+        write_tree(src_parent.path());
+        let cut_off = dst_parent.path().join(COPY_NAME);
+        crate::host_fs::create_dir_all(cut_off.join("vaults")).unwrap();
+        crate::host_fs::write(cut_off.join("settings.toml"), b"half").unwrap();
+        assert!(!dst_parent.path().join(".upriv").exists());
+
+        let job = crate::test_support::test_job_id();
+        let outcome = copy_data_folder_into(src_parent.path(), dst_parent.path(), &job).unwrap();
+        assert_eq!(outcome, UprivDirRelocate::Moved);
+        assert!(!cut_off.exists());
+        assert_eq!(
+            crate::host_fs::read(dst_parent.path().join(".upriv/settings.toml")).unwrap(),
+            b"locale = \"en\"\n"
+        );
     }
 
     #[cfg(unix)]

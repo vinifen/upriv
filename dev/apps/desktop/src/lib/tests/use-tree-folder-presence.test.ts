@@ -1,7 +1,7 @@
 /** @vitest-environment jsdom */
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { FileTreeNode } from "@upriv/shared";
+import { RpcError, VAULT_ERROR_CODES, type FileTreeNode } from "@upriv/shared";
 import { useTreeFolderPresence } from "@upriv/shared/react";
 
 const chosen: FileTreeNode = {
@@ -56,7 +56,7 @@ describe("useTreeFolderPresence", () => {
 
   it("keeps polling after one fails", async () => {
     const syncTree = vi.fn(async () => {
-      throw new Error("vault closing");
+      throw new Error("disk busy");
     });
     renderHook(() => useTreeFolderPresence(chosen, syncTree));
 
@@ -64,5 +64,17 @@ describe("useTreeFolderPresence", () => {
       await vi.advanceTimersByTimeAsync(4000);
     });
     expect(syncTree).toHaveBeenCalledTimes(2);
+  });
+
+  it("stops once core says the vault is not open (a close took it)", async () => {
+    const syncTree = vi.fn(async () => {
+      throw new RpcError(VAULT_ERROR_CODES.VAULT_NOT_OPEN, "vault not open");
+    });
+    renderHook(() => useTreeFolderPresence(chosen, syncTree));
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(syncTree).toHaveBeenCalledTimes(1);
   });
 });

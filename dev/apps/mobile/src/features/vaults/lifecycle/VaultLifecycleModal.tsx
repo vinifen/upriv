@@ -1,17 +1,17 @@
 import { useEffect, useRef, useState } from "react";
 import { StyleSheet, Text, TextInput, View } from "react-native";
 import {
-  LOADING_BUDGET_MS,
   lifecycleBusyLabelKey,
   requireVaultErrorI18nKey,
   resolveVaultPasswordHint,
+  vaultRowWorkClock,
   VAULT_ERROR_CODES,
   type VaultListItem,
+  type VaultRowWork,
 } from "@upriv/shared";
-import { useLoadingBudget } from "@upriv/shared/react";
 import { useVaultLifecycleService } from "@/platform/services";
 import { useTranslation, type I18nKey } from "@/i18n";
-import { Button, LoadingBudgetHint, Modal, ModalFooterActions } from "@/components/ui";
+import { Button, ElapsedTime, JobStopButton, Modal, ModalFooterActions } from "@/components/ui";
 import { FieldLabel, PasswordInput } from "@/components/settings/settingsFields";
 import { useTheme } from "@/theme";
 import { spacing } from "@/theme/tokens";
@@ -21,12 +21,14 @@ interface VaultLifecycleModalProps {
   open: boolean;
   submitting?: boolean;
   pipelineStep?: number;
-  budgetStartedAt?: number;
+  /** The open in flight for this vault: its clock and its Stop. */
+  work?: VaultRowWork | null;
   verifyErrorKey?: I18nKey | null;
   /** Prefill after a failed attempt — the field, not the session RAM map. */
   initialPassword?: string;
   onClose: () => void;
   onConfirm: (password: string) => void;
+  onStop: () => void;
 }
 
 /** Unlock password dialog. Lock starts the close without a dialog. */
@@ -35,11 +37,12 @@ export function VaultLifecycleModal({
   open,
   submitting = false,
   pipelineStep = 0,
-  budgetStartedAt,
+  work = null,
   verifyErrorKey = null,
   initialPassword,
   onClose,
   onConfirm,
+  onStop,
 }: VaultLifecycleModalProps) {
   const { t } = useTranslation();
   const { colors, typography } = useTheme();
@@ -71,14 +74,6 @@ export function VaultLifecycleModal({
     return () => clearTimeout(id);
   }, [open, vault?.id]);
 
-  const budget = useLoadingBudget(
-    open && submitting && budgetStartedAt != null,
-    LOADING_BUDGET_MS.vaultPipeline,
-    {
-      startedAt: budgetStartedAt,
-    },
-  );
-
   if (!open || !vault) return null;
 
   const handleConfirm = () => {
@@ -104,18 +99,26 @@ export function VaultLifecycleModal({
       dismissible
       footer={
         <ModalFooterActions layout="dialog">
-          <Button
-            label={
-              submitting
-                ? budgetStartedAt != null
-                  ? t(lifecycleBusyLabelKey("unlock", pipelineStep))
-                  : t("vault.status.queued")
-                : t("unlock.submit")
-            }
-            variant="primary"
-            disabled={!canSubmit}
-            onPress={handleConfirm}
-          />
+          {submitting && work?.stop ? (
+            <JobStopButton
+              stoppingSince={work.stoppingSince}
+              stoppable={work.stop !== "final"}
+              onStop={onStop}
+            />
+          ) : (
+            <Button
+              label={
+                submitting
+                  ? work?.startedAt != null
+                    ? t(lifecycleBusyLabelKey("unlock", pipelineStep))
+                    : t("vault.status.queued")
+                  : t("unlock.submit")
+              }
+              variant="primary"
+              disabled={!canSubmit}
+              onPress={handleConfirm}
+            />
+          )}
         </ModalFooterActions>
       }
     >
@@ -146,8 +149,15 @@ export function VaultLifecycleModal({
         <Text style={[typography.body, { color: colors.onErrorContainer }]}>{error}</Text>
       ) : null}
 
-      {budget.visible ? (
-        <LoadingBudgetHint budgetMs={budget.budgetMs} remainingMs={budget.remainingMs} />
+      {submitting ? (
+        <Text style={[typography.body, { color: colors.onSurfaceVariant }]}>
+          {work?.startedAt != null
+            ? t(lifecycleBusyLabelKey("unlock", pipelineStep))
+            : t("vault.status.queued")}
+        </Text>
+      ) : null}
+      {submitting && work?.stop !== "stopping" ? (
+        <ElapsedTime startedAt={vaultRowWorkClock(work)} />
       ) : null}
     </Modal>
   );

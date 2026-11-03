@@ -31,6 +31,7 @@ export function vaultSettingsFixture(
     auto_close: {
       enabled: false,
       idle_minutes: 15,
+      when_busy: "wait",
     },
     file_manager: { confirm_delete: true },
     seven_zip: {

@@ -13,7 +13,7 @@ use super::{dest, residue};
 use crate::error::{Result, UprivError};
 use crate::paths::VaultRoot;
 use crate::runtime_state::{self, PlainRecord};
-use crate::session::Job;
+use crate::session::{Job, JobKind};
 use crate::vault::wipe::WipeOptions;
 
 /// `vault_plain_leftover`: what recovery shows for this computer.
@@ -69,24 +69,25 @@ pub fn plain_leftover(root: &VaultRoot, vault_id: &str) -> Result<Option<PlainLe
 /// forgotten without being touched. A stop leaves the files not reached yet:
 /// the vault stays in recovery, and a later Remove finishes the wipe.
 pub fn remove_plain_leftover(root: &VaultRoot, vault_id: &str, job_id: &str) -> Result<PlainWipe> {
-    let job = Job::start(job_id)?;
-    let vault_dir = root.vault_dir(vault_id)?;
-    crate::session::with_vault_dir_lock(&vault_dir, || {
-        ensure_closed(root, vault_id)?;
-        let Some(record) = runtime_state::reachable_plain_record(root, vault_id)? else {
-            return Ok(PlainWipe::default());
-        };
-        let wipe = wipe_recorded(
-            root,
-            vault_id,
-            &record,
-            &WipeOptions::for_vault_dir(&vault_dir),
-            &job,
-        )?;
-        if wipe.kept > 0 && job.is_stopped() {
-            return Err(UprivError::JobCancelled);
-        }
-        Ok(wipe)
+    Job::run(job_id, JobKind::PlainRemove, Some(vault_id), |job| {
+        let vault_dir = root.vault_dir(vault_id)?;
+        crate::session::with_vault_dir_lock(&vault_dir, || {
+            ensure_closed(root, vault_id)?;
+            let Some(record) = runtime_state::reachable_plain_record(root, vault_id)? else {
+                return Ok(PlainWipe::default());
+            };
+            let wipe = wipe_recorded(
+                root,
+                vault_id,
+                &record,
+                &WipeOptions::for_vault_dir(&vault_dir),
+                job,
+            )?;
+            if wipe.kept > 0 && job.is_stopped() {
+                return Err(UprivError::JobCancelled);
+            }
+            Ok(wipe)
+        })
     })
 }
 
@@ -325,7 +326,7 @@ mod tests {
     use super::*;
     use crate::config::{load_vault_config, VaultConfig};
     use crate::store::KdfUnlockPreset;
-    use crate::test_support::{vault_root_with, VaultSpec};
+    use crate::test_support::{test_job_id, vault_root_with, VaultSpec};
 
     fn plain_root() -> (tempfile::TempDir, VaultRoot) {
         vault_root_with(&[VaultSpec::upriv_plain("notes", "Notes", 1)])
@@ -393,10 +394,11 @@ mod tests {
         let saved = record(&folder, "t1");
         runtime_state::adopt_plain_record(&root, "notes", saved.clone()).unwrap();
 
-        let job = Job::untracked();
+        let id = test_job_id();
+        let job = Job::start(&id).unwrap();
         let wipe = WipeOptions::for_vault_dir(&root.vault_dir("notes").unwrap());
         wipe_recorded(&root, "notes", &saved, &wipe, &job).unwrap();
-        let status = job.gauge().status();
+        let status = crate::session::job_status(&id).expect("running");
         assert_eq!((status.bytes_done, status.bytes_total), (16, 16));
     }
 
@@ -518,7 +520,7 @@ mod tests {
             panic!("first open confirms the place");
         };
         assert_eq!(path, folder);
-        crate::confirm_plain_destination(&root, "notes", &folder).unwrap();
+        crate::confirm_plain_destination(&root, "notes", &folder, &test_job_id()).unwrap();
         crate::vault::fs_write_file(&root, "notes", "/hello.txt", b"secret").unwrap();
         crate::plain_sync(&root, "notes").unwrap();
         assert_eq!(std::fs::read(folder.join("hello.txt")).unwrap(), b"secret");
@@ -527,7 +529,8 @@ mod tests {
         assert_eq!(closed.plain.unwrap().kept, 0);
         assert!(!folder.exists());
 
-        crate::open_vault_confirmed(&root, "notes", b"pass-word-ok", &folder).unwrap();
+        crate::open_vault_confirmed(&root, "notes", b"pass-word-ok", &folder, &test_job_id())
+            .unwrap();
         assert_eq!(
             crate::vault::fs_read_file(&root, "notes", "/hello.txt").unwrap(),
             b"secret"
@@ -548,7 +551,7 @@ mod tests {
         .unwrap();
         let folder = parent.join("Notes");
         crate::open_vault(root, "notes", b"pass-word-ok").unwrap();
-        crate::confirm_plain_destination(root, "notes", &folder).unwrap();
+        crate::confirm_plain_destination(root, "notes", &folder, &test_job_id()).unwrap();
         crate::vault::fs_write_file(root, "notes", "/hello.txt", b"secret").unwrap();
         crate::plain_sync(root, "notes").unwrap();
         folder
@@ -564,7 +567,7 @@ mod tests {
         crate::create_vault(root, config, b"pass-word-ok", KdfUnlockPreset::M32).unwrap();
         let folder = parent.join("Notes");
         crate::open_vault(root, "notes", b"pass-word-ok").unwrap();
-        crate::confirm_plain_destination(root, "notes", &folder).unwrap();
+        crate::confirm_plain_destination(root, "notes", &folder, &test_job_id()).unwrap();
         crate::vault::fs_mkdir(root, "notes", "/docs").unwrap();
         crate::vault::fs_write_file(root, "notes", "/docs/a.txt", b"first").unwrap();
         crate::vault::fs_write_file(root, "notes", "/docs/b.txt", b"second").unwrap();
@@ -823,7 +826,8 @@ mod tests {
         assert!(!folder.exists());
         assert!(plain_leftover(&root, "notes").unwrap().is_none());
 
-        crate::open_vault_confirmed(&root, "notes", b"pass-word-ok", &folder).unwrap();
+        crate::open_vault_confirmed(&root, "notes", b"pass-word-ok", &folder, &test_job_id())
+            .unwrap();
         assert_eq!(
             crate::vault::fs_read_file(&root, "notes", "/hello.txt").unwrap(),
             b"secret"
@@ -913,7 +917,7 @@ mod tests {
         )
         .unwrap();
         crate::open_vault(&root, "notes", b"pass-word-ok").unwrap();
-        crate::confirm_plain_destination(&root, "notes", &folder).unwrap();
+        crate::confirm_plain_destination(&root, "notes", &folder, &test_job_id()).unwrap();
         crate::vault::fs_write_file(&root, "notes", "/hello.txt", b"secret").unwrap();
         crate::plain_sync(&root, "notes").unwrap();
 

@@ -1,0 +1,6 @@
+---
+description: Work the person can stop has no time limit; everything else has one 10-minute limit; long work shows elapsed time, never an estimate.
+alwaysApply: true
+---
+
+Canonical rule: @.agent/rules/operation-durations.md — edit there, not here.

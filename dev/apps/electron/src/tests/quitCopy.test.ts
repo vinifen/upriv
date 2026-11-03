@@ -12,6 +12,7 @@ describe("QUIT_COPY", () => {
     for (const [locale, strings] of Object.entries(LOCALES)) {
       expect(QUIT_COPY[locale]).toEqual({
         message: strings["warning.vault_open_on_exit"],
+        workMessage: strings["warning.work_running_on_exit"],
         confirm: strings["warning.vault_open_on_exit_confirm"],
         now: strings["warning.vault_open_on_exit_now"],
         cancel: strings["warning.vault_open_on_exit_cancel"],

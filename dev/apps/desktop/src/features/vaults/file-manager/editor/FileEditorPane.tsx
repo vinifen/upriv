@@ -30,7 +30,7 @@ import {
   type TextMatch,
 } from "@upriv/shared";
 import { useOutlineHeading, useSettledValue, useValueAfterPaint } from "@upriv/shared/react";
-import { Button, LoadingBudgetHint } from "@/components/ui";
+import { Button, ElapsedTime } from "@/components/ui";
 import { allowFileManagerDrop, beginOsFileImport } from "../lib/osFileDrop";
 import { osFileImportParentPath } from "../lib/osFileImportTarget";
 import type { FileManagerApi } from "../hooks/useVaultFileManager";
@@ -565,7 +565,8 @@ export function FileEditorPane({ fm, vaultName, active }: FileEditorPaneProps) {
     isFileImage,
     isImportPending,
     isImportProcessing,
-    importBudget,
+    editorImportStartedAt,
+    stopImports,
   } = fm;
   // The tab bar marks a click at once; the file draws after that has painted.
   // A closed tab's file is left straight away, because its text may be gone.
@@ -765,12 +766,12 @@ export function FileEditorPane({ fm, vaultName, active }: FileEditorPaneProps) {
       processing
         ? t("modal.file_manager.import.loading_body")
         : t("modal.file_manager.import.queued_body", { name: fileName }),
-      processing && importBudget.visible ? (
-        <LoadingBudgetHint
-          budgetMs={importBudget.budgetMs}
-          remainingMs={importBudget.remainingMs}
-        />
-      ) : null,
+      <div className="flex flex-col items-center gap-2">
+        {processing ? <ElapsedTime startedAt={editorImportStartedAt} /> : null}
+        <Button variant="ghost" size="sm" onClick={stopImports}>
+          {t("action.stop")}
+        </Button>
+      </div>,
     );
   }
 

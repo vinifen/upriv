@@ -65,7 +65,7 @@ class UprivCoreModule : Module() {
 
     AsyncFunction("invoke") Coroutine { method: String, paramsJson: String ->
       ensureRuntimeConfigured()
-      withContext(CoreLanes.dispatcher(method)) { invoke(method, paramsJson) }
+      withContext(CoreLanes.laneFor(method, paramsJson)) { invoke(method, paramsJson) }
     }
 
     // Long work leaves Expo's async thread. Probes stay on the IO pool so a
@@ -224,14 +224,15 @@ class UprivCoreModule : Module() {
     }
 
     /**
-     * Stream one `content://` document into the open import session.
-     * Returns the UniFFI JSON envelope. Does not copy the file into app cache.
+     * Stream one `content://` document into the open import session, as the
+     * job `job` (`job_cancel` stops it). Returns the UniFFI JSON envelope.
+     * Does not copy the file into app cache.
      */
-    AsyncFunction("importContentUri") Coroutine { vaultId: String, logicalPath: String, contentUri: String ->
+    AsyncFunction("importContentUri") Coroutine { vaultId: String, logicalPath: String, contentUri: String, job: String ->
       ensureRuntimeConfigured()
       val context = requireContext()
       withContext(CoreLanes.importFiles) {
-        streamContentUri(context, vaultId, logicalPath, contentUri)
+        streamContentUri(context, vaultId, logicalPath, contentUri, job)
       }
     }
   }
@@ -279,7 +280,8 @@ private val PROBE_METHODS = setOf("vault_close_phase", "vault_close_hurry")
  * A one-core phone uses one thread.
  *
  * Method names match `is_argon2_bound_method`, `is_lifecycle_io_method`,
- * `is_rewrap_io_method`, `is_import_io_method`, and `is_pack_io_method`.
+ * `is_rewrap_io_method`, `is_import_io_method`, `is_pack_io_method`, and
+ * `is_data_folder_io_method`.
  */
 private object CoreLanes {
   private fun single(name: String): CoroutineDispatcher =
@@ -311,19 +313,36 @@ private object CoreLanes {
     "vault_plain_confirm", "vault_plain_sync",
     "vault_plain_deletions", "vault_plain_send", "vault_plain_unsend" -> lifecycle
     "vault_change_password", "vault_change_kdf" -> rewrap
-    "vault_fs_import_os_file" -> importFiles
+    "vault_fs_import_os_file", "vault_import_probe" -> importFiles
     "vault_import_zip",
     "vault_import_7z",
     "vault_import_files_zip",
     "vault_import_os_path",
     "vault_export",
-    "vault_plain_export_sweep",
+    "vault_unfinished_sweep",
     "vault_plain_remove",
     "backup_save",
     "backup_export" -> pack
     "data_folder_export" -> dataFolder
     else -> light
   }
+
+  /**
+   * [dispatcher], except a setup that copies the private data folder into the
+   * granted one: that copy is a job, so it runs on the data folder lane and its
+   * stop still reaches the light lane. Same rule as `wire.rs`.
+   */
+  fun laneFor(method: String, paramsJson: String): CoroutineDispatcher =
+    if (method == SETUP_PATH && adoptsPrivateRoot(paramsJson)) dataFolder else dispatcher(method)
+
+  private fun adoptsPrivateRoot(paramsJson: String): Boolean =
+    try {
+      org.json.JSONObject(paramsJson).optBoolean("adoptPrivateRoot", false)
+    } catch (_: Exception) {
+      false
+    }
+
+  private const val SETUP_PATH = "vault_root_setup_path"
 }
 
 private class SafCodedException(code: String, message: String) : CodedException(code, message, null)
@@ -355,6 +374,7 @@ private fun streamContentUri(
   vaultId: String,
   logicalPath: String,
   contentUri: String,
+  job: String,
 ): String {
   val uri = Uri.parse(contentUri)
   val resolver = context.contentResolver
@@ -367,7 +387,7 @@ private fun streamContentUri(
   if (descriptor != null) {
     val fd = descriptor.detachFd()
     descriptor.close()
-    return importContentFd(vaultId, logicalPath, fd)
+    return importContentFd(vaultId, logicalPath, fd, job)
   }
   val input =
     try {
@@ -400,7 +420,7 @@ private fun streamContentUri(
   val readFd = readSide.detachFd()
   val imported =
     try {
-      importContentFd(vaultId, logicalPath, readFd)
+      importContentFd(vaultId, logicalPath, readFd, job)
     } catch (_: Exception) {
       // Rust takes the descriptor only after this call is entered. Closing it
       // here unblocks the writer when the call never reached Rust.

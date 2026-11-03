@@ -31,6 +31,7 @@ function settings(patch: Partial<VaultSettingsConfig> = {}): VaultSettingsConfig
     auto_close: {
       enabled: true,
       idle_minutes: 5,
+      when_busy: "close",
     },
     file_manager: { confirm_delete: false },
     seven_zip: {

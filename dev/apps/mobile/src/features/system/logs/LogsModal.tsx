@@ -3,7 +3,6 @@ import { FlatList, Pressable, StyleSheet, Text, View } from "react-native";
 import {
   formatBytes,
   formatLogFileDate,
-  LOADING_BUDGET_MS,
   MODAL_CLOSE_MS,
   parseLogLine,
   logSeqRange,
@@ -23,12 +22,11 @@ import {
   ContentSkeleton,
   Checkbox,
   IconButton,
-  LoadingBudgetHint,
   Modal,
   ModalFooterActions,
   Toast,
 } from "@/components/ui";
-import { useLoadingBudget, useToast } from "@upriv/shared/react";
+import { useOperationLimit, useToast } from "@upriv/shared/react";
 import { logLevelColor } from "./logFormat";
 import { shareLogsZip } from "./shareLogsZip";
 
@@ -70,11 +68,8 @@ export function LogsModal({ open, onClose }: LogsModalProps) {
 
   openingFilenameRef.current = openingFilename;
 
-  const listBudget = useLoadingBudget(open && listLoading && !listTimedOut, LOADING_BUDGET_MS.logs);
-  const viewerBudget = useLoadingBudget(
-    open && Boolean(openingFilename) && !viewerTimedOut,
-    LOADING_BUDGET_MS.logs,
-  );
+  const listLimit = useOperationLimit(open && listLoading && !listTimedOut);
+  const viewerLimit = useOperationLimit(open && Boolean(openingFilename) && !viewerTimedOut);
 
   const allFilenames = useMemo(() => files.map((entry) => entry.filename), [files]);
   const allSelected =
@@ -123,14 +118,14 @@ export function LogsModal({ open, onClose }: LogsModalProps) {
   );
 
   useEffect(() => {
-    if (!listBudget.timedOut) return;
+    if (!listLimit.timedOut) return;
     listGen.current += 1;
     setListLoading(false);
     setListTimedOut(true);
-  }, [listBudget.timedOut]);
+  }, [listLimit.timedOut]);
 
   useEffect(() => {
-    if (!viewerBudget.timedOut) return;
+    if (!viewerLimit.timedOut) return;
     const timedOutName = openingFilenameRef.current;
     viewerGen.current += 1;
     setViewerLoading(false);
@@ -142,7 +137,7 @@ export function LogsModal({ open, onClose }: LogsModalProps) {
       setViewerTimedOutFilename(timedOutName);
       showToast(t("loading.timed_out"));
     }
-  }, [viewerBudget.timedOut, showToast, t]);
+  }, [viewerLimit.timedOut, showToast, t]);
 
   useEffect(() => {
     if (!open) {
@@ -428,13 +423,9 @@ export function LogsModal({ open, onClose }: LogsModalProps) {
               </Text>
               <Button label={t("action.retry")} variant="primary" onPress={retryList} />
             </View>
-          ) : listLoading && listBudget.visible ? (
+          ) : listLoading && listLimit.visible ? (
             <View style={styles.center}>
               <Text style={typography.mono}>{t("modal.logs.loading")}</Text>
-              <LoadingBudgetHint
-                budgetMs={listBudget.budgetMs}
-                remainingMs={listBudget.remainingMs}
-              />
             </View>
           ) : !listLoading && listFailed && files.length === 0 && !integrityHideEmpty ? (
             <View style={styles.center}>
@@ -474,14 +465,6 @@ export function LogsModal({ open, onClose }: LogsModalProps) {
                   selectionDisabled={deleteTargets !== null || Boolean(openingFilename)}
                   opening={openingFilename === entry.filename}
                   timedOut={viewerTimedOutFilename === entry.filename}
-                  openingBudget={
-                    openingFilename === entry.filename && viewerBudget.visible
-                      ? {
-                          budgetMs: viewerBudget.budgetMs,
-                          remainingMs: viewerBudget.remainingMs,
-                        }
-                      : null
-                  }
                   onToggleSelected={selectable ? () => toggleSelected(entry.filename) : undefined}
                   onOpen={() => openLogFile(entry.filename)}
                   onRetry={() => retryViewer(entry.filename)}
@@ -566,7 +549,6 @@ interface LogFileRowProps {
   selectionDisabled: boolean;
   opening?: boolean;
   timedOut?: boolean;
-  openingBudget?: { budgetMs: number; remainingMs: number } | null;
   /** Omitted when the list has a single file: no checkbox. */
   onToggleSelected?: () => void;
   onOpen: () => void;
@@ -582,7 +564,6 @@ function LogFileRow({
   selectionDisabled,
   opening = false,
   timedOut = false,
-  openingBudget = null,
   onToggleSelected,
   onOpen,
   onRetry,
@@ -647,12 +628,6 @@ function LogFileRow({
               })}
             </Text>
           </Text>
-          {openingBudget ? (
-            <LoadingBudgetHint
-              budgetMs={openingBudget.budgetMs}
-              remainingMs={openingBudget.remainingMs}
-            />
-          ) : null}
           {timedOut ? (
             <Text style={typography.caption} accessibilityRole="alert">
               {t("loading.timed_out")}

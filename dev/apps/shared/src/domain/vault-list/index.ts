@@ -28,6 +28,15 @@ export {
   vaultBlocksGroupInnerColumns,
   vaultRowChrome,
 } from "./rowChrome";
+export type { RowPress, RowPressInput, VaultRowButtonRole } from "./rowArming";
+export {
+  ROW_ARM_CONFIRM_AFTER_MS,
+  ROW_ARM_WINDOW_MS,
+  ROW_ROLE_GUARD_MS,
+  rowPress,
+  vaultRowButtonRole,
+  vaultRowButtonTwoStep,
+} from "./rowArming";
 export type { RowButtonStackPart } from "./rowButtonStack";
 export { EMPTY_ROW_BUTTON_STACK, nextRowButtonStack } from "./rowButtonStack";
 export { sortVaultsByOrder } from "./order";

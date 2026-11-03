@@ -23,7 +23,6 @@ import {
   hiddenOmittedRootGroups,
   hiddenUngroupedRootVaults,
   insertUngroupedVaultAtRoot,
-  LOADING_BUDGET_MS,
   errorOnPasswordField,
   isVaultPipelineDisplayBusy,
   remapVaultIdInGroups,
@@ -65,8 +64,8 @@ import {
   type VaultGroup,
   type KdfUnlockPreset,
   type VaultListItem,
-  type VaultRewrapRun,
   type VaultRuntimePatch,
+  vaultRowJobWork,
 } from "@upriv/shared";
 import {
   useBackupService,
@@ -75,6 +74,7 @@ import {
   useLogService,
   useVaultGroupService,
   useVaultLifecycleService,
+  useVaultSecurityService,
   useVaultService,
 } from "@/platform/services";
 import { useAppSettingsContext } from "@/features/system/settings";
@@ -84,14 +84,18 @@ import { mobileErrorI18nKey } from "@/lib/errorMessages";
 import {
   useBackupExportJob,
   useDataFolderExportJob,
-  useLoadingBudget,
+  useFileManagerSelector,
+  useOperationLimit,
   useToast,
-  usePlainExportSweep,
+  useUnfinishedSweep,
   useVaultBackupJob,
   useVaultExportJob,
+  useVaultRewrapJob,
+  type VaultRewrapOutcome,
 } from "@upriv/shared/react";
 import { CONTROL_HEIGHT_MD, MAX_WIDTH_VAULT_LIST, spacing } from "@/theme/tokens";
 import { useExportFolder } from "@/hooks/useExportFolder";
+import { useKeepAwakeWhile } from "@/hooks/useKeepAwakeWhile";
 import { useVaultExportFolders } from "./useVaultExportFolders";
 import { useVaultLifecycle } from "@/features/vaults/lifecycle";
 import { useFileManager } from "@/features/vaults/file-manager";
@@ -187,8 +191,8 @@ export function useVaultListScreen() {
   const groupBusyGenRef = useRef(0);
   const vaultOrderGenRef = useRef(0);
   const repairGenRef = useRef(0);
-  const groupBudget = useLoadingBudget(groupBusy, LOADING_BUDGET_MS.default);
-  const repairBudget = useLoadingBudget(repairBusy, LOADING_BUDGET_MS.default);
+  const groupLimit = useOperationLimit(groupBusy);
+  const repairLimit = useOperationLimit(repairBusy);
   const noteSaveGenerationRef = useRef(new Map<string, number>());
   const jobs = useJobService();
   const exportFolders = useVaultExportFolders();
@@ -228,9 +232,7 @@ export function useVaultListScreen() {
       show(t("toast.vault_export_cancelled"));
       setExportVault(null);
     },
-    onTimedOut: () => {
-      show(t("error.operation_timed_out"));
-    },
+    onStopRefused: (error) => show(t(mobileErrorI18nKey(error, "error.job_not_stoppable"))),
   });
   const exportJob = vaultExport.job;
   // The Export window follows its vault's export while one runs.
@@ -240,8 +242,7 @@ export function useVaultListScreen() {
         format: shownExportJob.format,
         startedAt: shownExportJob.startedAt,
         progress: shownExportJob.progress,
-        stopping: shownExportJob.stopping,
-        budgetMs: shownExportJob.budgetMs,
+        stoppingSince: shownExportJob.stoppingSince,
       }
     : null;
 
@@ -283,9 +284,7 @@ export function useVaultListScreen() {
     onCancelled: () => {
       show(t("toast.data_folder_export_cancelled"));
     },
-    onTimedOut: () => {
-      show(t("error.operation_timed_out"));
-    },
+    onStopRefused: (error) => show(t(mobileErrorI18nKey(error, "error.job_not_stoppable"))),
   });
 
   const openCreate = useCallback(
@@ -388,7 +387,7 @@ export function useVaultListScreen() {
     blockOpenVaultIdsRef,
   });
 
-  usePlainExportSweep(vaultService, settingsOnDisk, vaultRootEpoch);
+  useUnfinishedSweep(vaultService, settingsOnDisk, vaultRootEpoch);
 
   /** Reloads in flight: `refreshing` stays on until the last one settles. */
   const reloadsInFlightRef = useRef(0);
@@ -503,10 +502,30 @@ export function useVaultListScreen() {
     syncWithVaultList(vaults);
   }, [syncWithVaultList, vaults]);
 
-  const [rewrapRun, setRewrapRun] = useState<VaultRewrapRun | null>(null);
-  const onRewrapRunChange = useCallback((run: VaultRewrapRun | null) => {
-    setRewrapRun(run);
-  }, []);
+  const securityService = useVaultSecurityService();
+  const [rewrapOutcome, setRewrapOutcome] = useState<VaultRewrapOutcome | null>(null);
+  const rewrapSeqRef = useRef(0);
+  const rewrap = useVaultRewrapJob(securityService, jobs, {
+    onChanged: (target) => {
+      if (target.nextPreset) handleUnlockPresetSaved(target.vaultId, target.nextPreset);
+      show(
+        t(
+          target.kind === "password" ? "vault.change_password.success" : "vault.change_kdf.success",
+        ),
+      );
+      setRewrapOutcome({ seq: ++rewrapSeqRef.current, ...target, error: null });
+    },
+    onFailed: (error, target) => {
+      setRewrapOutcome({ seq: ++rewrapSeqRef.current, ...target, error });
+      // The settings window marks the outcome itself while it shows this change.
+      const shown =
+        modals.settingsVault?.id === target.vaultId && modals.settingsArea === target.kind;
+      if (!shown) show(t(mobileErrorI18nKey(error, "error.settings_save_failed")));
+    },
+    onCancelled: () => show(t("error.job_cancelled")),
+    onStopRefused: (error) => show(t(mobileErrorI18nKey(error, "error.job_not_stoppable"))),
+  });
+  const rewrapJob = rewrap.job;
   const backupService = useBackupService();
   const [backupListRefresh, setBackupListRefresh] = useState(0);
   const backupJob = useVaultBackupJob(backupService, jobs, {
@@ -522,15 +541,15 @@ export function useVaultListScreen() {
       }
       show(t(mobileErrorI18nKey(error, "toast.backup_now_failed")));
     },
-    onTimedOut: () => {
-      show(t("error.operation_timed_out"));
-    },
+    onCancelled: () => show(t("toast.backup_now_cancelled")),
+    onStopRefused: (_vaultId, error) =>
+      show(t(mobileErrorI18nKey(error, "error.job_not_stoppable"))),
   });
   // The data folder export holds every vault: none may open until it ends.
   blockOpenVaultIdsRef.current = new Set(
     [
       exportJob?.vaultId,
-      rewrapRun?.vaultId,
+      rewrapJob?.vaultId,
       backupJob.job?.vaultId,
       ...(dataFolderExportJob ? vaults.map((vault) => vault.id) : []),
     ].filter((id): id is string => id != null),
@@ -544,7 +563,7 @@ export function useVaultListScreen() {
     dataFolderExportJob,
     exportJob,
     lifecycleRequest,
-    rewrapRun,
+    rewrapJob,
     setLifecycleRequest,
   ]);
 
@@ -563,53 +582,78 @@ export function useVaultListScreen() {
     onCancelled: () => {
       show(t("toast.backup_export_cancelled"));
     },
-    onTimedOut: () => {
-      show(t("error.operation_timed_out"));
-    },
+    onStopRefused: (error) => show(t(mobileErrorI18nKey(error, "error.job_not_stoppable"))),
   });
 
-  const pipelineStatus = useMemo(
-    () => ({
+  const backupNowJob = backupJob.job;
+  const pipelineStatus = useMemo(() => {
+    const rowWork = { ...lifecycle.rowWork };
+    for (const job of [exportJob, rewrapJob, backupNowJob]) {
+      if (!job) continue;
+      rowWork[job.vaultId] = vaultRowJobWork({
+        startedAt: job.startedAt,
+        stoppable: job.progress?.stoppable ?? true,
+        stoppingSince: job.stoppingSince,
+      });
+    }
+    return {
       openingVaultIds: [...lifecycle.openingVaultIds],
       closingVaultIds: [...lifecycle.closingVaultIds],
       backingUpVaultIds: [...lifecycle.backingUpVaultIds],
       exportingVaultIds: exportJob ? [exportJob.vaultId] : [],
-      backupJobVaultIds: backupJob.job ? [backupJob.job.vaultId] : undefined,
-      backupJobStartedAt: backupJob.job?.startedAt,
-      backupJobBudgetMs: backupJob.job?.budgetMs,
+      backupJobVaultIds: backupNowJob ? [backupNowJob.vaultId] : undefined,
       backupExportVaultIds: backupExport.job ? [backupExport.job.vaultId] : undefined,
       recoveringVaultIds: lifecycle.plainRemoveJob ? [lifecycle.plainRemoveJob.vaultId] : undefined,
-      recoveringStartedAt: lifecycle.plainRemoveJob?.startedAt,
-      recoveringBudgetMs: lifecycle.plainRemoveJob?.budgetMs,
-      passwordChangeVaultIds: rewrapRun?.kind === "password" ? [rewrapRun.vaultId] : undefined,
-      kdfChangeVaultIds: rewrapRun?.kind === "kdf" ? [rewrapRun.vaultId] : undefined,
-      rewrapStartedAt: rewrapRun?.startedAt,
-      rewrapBudgetMs: rewrapRun?.budgetMs,
+      passwordChangeVaultIds: rewrapJob?.kind === "password" ? [rewrapJob.vaultId] : undefined,
+      kdfChangeVaultIds: rewrapJob?.kind === "kdf" ? [rewrapJob.vaultId] : undefined,
       creatingVaultIds: [...lifecycle.creatingVaultIds],
       queuedVaultIds: [...lifecycle.queuedVaultIds],
       queuedOpenVaultIds: [...lifecycle.queuedOpenVaultIds],
       closeNowVaultIds: lifecycle.closeNowVaultIds,
-      activeVaultId: lifecycle.activePipelineVaultId ?? undefined,
-      activeStartedAt: lifecycle.activePipelineStartedAt ?? undefined,
       dataFolderExporting: dataFolderExportJob !== null,
-    }),
-    [
-      lifecycle.activePipelineStartedAt,
-      lifecycle.activePipelineVaultId,
-      lifecycle.backingUpVaultIds,
-      lifecycle.closeNowVaultIds,
-      lifecycle.closingVaultIds,
-      lifecycle.creatingVaultIds,
-      lifecycle.plainRemoveJob,
-      backupExport.job,
-      backupJob.job,
-      dataFolderExportJob,
-      exportJob,
-      lifecycle.openingVaultIds,
-      lifecycle.queuedOpenVaultIds,
-      lifecycle.queuedVaultIds,
-      rewrapRun,
-    ],
+      rowWork,
+    };
+  }, [
+    lifecycle.backingUpVaultIds,
+    lifecycle.closeNowVaultIds,
+    lifecycle.closingVaultIds,
+    lifecycle.creatingVaultIds,
+    lifecycle.plainRemoveJob,
+    lifecycle.rowWork,
+    backupExport.job,
+    backupNowJob,
+    dataFolderExportJob,
+    exportJob,
+    lifecycle.openingVaultIds,
+    lifecycle.queuedOpenVaultIds,
+    lifecycle.queuedVaultIds,
+    rewrapJob,
+  ]);
+
+  /** Stop the work a row shows, whichever owner runs it. */
+  const { stopVaultWork } = lifecycle;
+  const stopRowWork = useCallback(
+    (vaultId: string) => {
+      if (exportJob?.vaultId === vaultId) vaultExport.stop();
+      else if (rewrapJob?.vaultId === vaultId) rewrap.stop();
+      else if (backupNowJob?.vaultId === vaultId) backupJob.stop();
+      else stopVaultWork(vaultId);
+    },
+    [backupJob, backupNowJob, exportJob, rewrap, rewrapJob, stopVaultWork, vaultExport],
+  );
+
+  /** A file manager import runs in some vault. */
+  const importingFiles = useFileManagerSelector((state) =>
+    Object.values(state.entries).some((entry) => entry.importInFlight),
+  );
+  // Jobs, closes, and imports keep the phone awake until the last one ends.
+  useKeepAwakeWhile(
+    Object.keys(pipelineStatus.rowWork).length > 0 ||
+      pipelineStatus.closingVaultIds.length > 0 ||
+      backupExport.job !== null ||
+      dataFolderExportJob !== null ||
+      importingFiles,
+    "upriv-vault-work",
   );
 
   const dataFolderExportCanStart = dataFolderCanExport(vaults, pipelineStatus);
@@ -1217,22 +1261,22 @@ export function useVaultListScreen() {
   }, []);
 
   useEffect(() => {
-    if (!groupBudget.timedOut || !groupBusy) return;
+    if (!groupLimit.timedOut || !groupBusy) return;
     groupBusyGenRef.current += 1;
     setGroupBusy(false);
     show(t("error.operation_timed_out"));
-  }, [groupBudget.timedOut, groupBusy, setGroupBusy, show, t]);
+  }, [groupLimit.timedOut, groupBusy, setGroupBusy, show, t]);
 
   useEffect(() => {
-    if (!repairBudget.timedOut || !repairBusy) return;
+    if (!repairLimit.timedOut || !repairBusy) return;
     repairGenRef.current += 1;
     setRepairBusy(false);
     show(t("error.operation_timed_out"));
-  }, [repairBudget.timedOut, repairBusy, setRepairBusy, show, t]);
+  }, [repairLimit.timedOut, repairBusy, setRepairBusy, show, t]);
 
   const handleCreateVault = (result: CreateVaultResult, password: string) => {
     // Another vault being created only queues this one. The same id still in
-    // flight (a create past its budget) is taken.
+    // flight is taken.
     if (
       vaults.some((vault) => vault.id === result.vaultId) ||
       isVaultPipelineBusy(result.vaultId)
@@ -1275,15 +1319,18 @@ export function useVaultListScreen() {
     const welcome = buildVaultWelcomeFiles(result, { t, locale });
     lifecycle.startCreatePipeline(
       result.vaultId,
-      async () => {
+      async (job) => {
         await claim;
-        await vaultService.createVault({
-          password,
-          unlockPreset: result.unlockPreset,
-          settings: result.settings,
-          importPackage: createVaultImportPackage(result, password),
-          welcome,
-        });
+        await vaultService.createVault(
+          {
+            password,
+            unlockPreset: result.unlockPreset,
+            settings: result.settings,
+            importPackage: createVaultImportPackage(result, password),
+            welcome,
+          },
+          job,
+        );
       },
       {
         onComplete: () => {
@@ -1309,7 +1356,7 @@ export function useVaultListScreen() {
             }
           })();
         },
-        onError: () => {
+        onRemoved: () => {
           releaseCreateImport();
           const pendingEffect = pendingCreateGroupsRef.current.get(result.vaultId);
           pendingCreatesRef.current.delete(result.vaultId);
@@ -1319,9 +1366,6 @@ export function useVaultListScreen() {
           if (pendingEffect) {
             setGroups((current) => rollbackPendingCreateGroupEffect(current, pendingEffect));
           }
-        },
-        onAbandoned: () => {
-          releaseCreateImport();
         },
       },
     );
@@ -1343,8 +1387,6 @@ export function useVaultListScreen() {
     groupsRef,
     groupBusyGenRef,
     repairGenRef,
-    groupBudget,
-    repairBudget,
     sortMode,
     sortDirection,
     viewMode,
@@ -1381,8 +1423,13 @@ export function useVaultListScreen() {
     openCreate,
     closeCreate,
     pipelineStatus,
-    onRewrapRunChange,
-    rewrapRun,
+    stopRowWork,
+    rewrapJob,
+    rewrapOutcome,
+    changePassword: rewrap.changePassword,
+    changeKdf: rewrap.changeKdf,
+    stopRewrap: rewrap.stop,
+    backupSaveStop: backupJob.stop,
     handleConfirmExportVault,
     handleStopExportVault,
     handleRowExport,
@@ -1408,7 +1455,6 @@ export function useVaultListScreen() {
     handleNoteChange,
     vaultsRef,
     handleVaultSettingsSaved,
-    handleUnlockPresetSaved,
     handlePersistBusyChange,
     handleCreateVault,
     vaultGroupService,

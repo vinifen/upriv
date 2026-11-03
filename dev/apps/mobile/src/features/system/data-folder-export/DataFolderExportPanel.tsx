@@ -3,16 +3,14 @@ import { StyleSheet, Text, TextInput, View } from "react-native";
 import {
   DATA_FOLDER_EXPORT_PROGRESS_COPY,
   DATA_FOLDER_ZIP_NAME_MAX_BYTES,
-  LOADING_BUDGET_MS,
   dataFolderZipNameFromInput,
   dataFolderZipNameIssue,
   dataFolderZipNameIssueI18nKey,
   fileNameOfPath,
 } from "@upriv/shared";
-import { useLoadingBudget } from "@upriv/shared/react";
 import { ExportFolderField } from "@/components/ExportFolderField";
 import { FieldHint, FieldLabel, ThemedInput } from "@/components/settings";
-import { JobProgressBar, LoadingBudgetHint } from "@/components/ui";
+import { JobProgressBar } from "@/components/ui";
 import { useTranslation } from "@/i18n";
 import { useTheme } from "@/theme";
 import { spacing } from "@/theme/tokens";
@@ -36,11 +34,6 @@ export function DataFolderExportPanel({ controls, destination }: DataFolderExpor
   const { job, written } = controls;
   const { t } = useTranslation();
   const { colors, typography } = useTheme();
-  const budget = useLoadingBudget(
-    job !== null,
-    job?.budgetMs ?? LOADING_BUDGET_MS.dataFolderExport,
-    { startedAt: job?.startedAt },
-  );
   const nameIssue = dataFolderZipNameIssue(dataFolderZipNameFromInput(destination.zipName));
   const nameIssueKey = nameIssue ? dataFolderZipNameIssueI18nKey(nameIssue) : null;
   const nameRef = useRef<TextInput>(null);
@@ -62,13 +55,11 @@ export function DataFolderExportPanel({ controls, destination }: DataFolderExpor
         <View style={styles.group}>
           <JobProgressBar
             progress={job.progress}
+            startedAt={job.startedAt}
             label={t("modal.data_folder_export.title")}
             copy={DATA_FOLDER_EXPORT_PROGRESS_COPY}
           />
           <Text style={typography.caption}>{t("modal.data_folder_export.background_note")}</Text>
-          {budget.visible ? (
-            <LoadingBudgetHint budgetMs={budget.budgetMs} remainingMs={budget.remainingMs} />
-          ) : null}
         </View>
       ) : (
         <>

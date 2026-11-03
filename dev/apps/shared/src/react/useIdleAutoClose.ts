@@ -7,6 +7,7 @@ import {
   resolveVaultDisplayStatus,
   shiftIdleClocksForWake,
   syncIdleClocks,
+  type AutoCloseWhenBusy,
   type IdleAutoCloseTarget,
   type IdleAutoCloseWarning,
   type IdleLockResult,
@@ -42,7 +43,12 @@ export interface UseIdleAutoCloseOptions {
   subscribeSession: (onSession: (event: IdleSessionEvent) => void) => () => void;
   /** Input inside Upriv. A vault that is already due keeps its deadline. */
   subscribeActivity: (onActivity: () => void) => () => void;
-  onLock: (vaultId: string) => Promise<IdleLockResult>;
+  /**
+   * Close `vaultId`, its time being up. `whenBusy` is its `[auto_close]
+   * when_busy`: `wait` returns `wait` while work keeps the vault open, and the
+   * close is tried again; `close` stops that work and closes.
+   */
+  onLock: (vaultId: string, whenBusy: AutoCloseWhenBusy) => Promise<IdleLockResult>;
   /**
    * One notice for every vault that just entered its warning window.
    * Return false when another toast is still up, so this one waits instead of
@@ -83,6 +89,8 @@ export function useIdleAutoClose({
 
   const clocksRef = useRef<IdleVaultClock[]>([]);
   const targetsRef = useRef<IdleAutoCloseTarget[]>([]);
+  /** Each target's `when_busy`, read with its settings. */
+  const whenBusyRef = useRef(new Map<string, AutoCloseWhenBusy>());
   const pausedAtRef = useRef<number | null>(null);
   const cancelWakeRef = useRef<() => void>(() => {});
   /** Bumped when an effect cleans up so an in-flight pass cannot arm another timer. */
@@ -154,7 +162,7 @@ export function useIdleAutoClose({
             if (!fresh.lockIds.includes(id)) continue;
             let result: IdleLockResult;
             try {
-              result = await onLockRef.current(id);
+              result = await onLockRef.current(id, whenBusyRef.current.get(id) ?? "wait");
             } catch {
               result = "abort";
             }
@@ -227,6 +235,7 @@ export function useIdleAutoClose({
       return;
     }
     const targets: IdleAutoCloseTarget[] = [];
+    const whenBusy = new Map(whenBusyRef.current);
     for (const vault of open) {
       try {
         const autoClose = await loadRef.current(vault.id);
@@ -237,6 +246,7 @@ export function useIdleAutoClose({
           enabled: true,
           idleMinutes: autoClose.idle_minutes,
         });
+        whenBusy.set(vault.id, autoClose.when_busy);
       } catch {
         if (generation !== reloadGenRef.current) return;
         const previous = targetsRef.current.find((target) => target.id === vault.id);
@@ -245,6 +255,7 @@ export function useIdleAutoClose({
     }
     if (generation !== reloadGenRef.current) return;
     targetsRef.current = targets;
+    whenBusyRef.current = whenBusy;
     evaluateRef.current();
   };
 
