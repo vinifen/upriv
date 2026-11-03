@@ -80,6 +80,19 @@ pub fn vault_root_with(specs: &[VaultSpec]) -> (TempDir, VaultRoot) {
     (tmp, root)
 }
 
+/// Write `ui_path` in the open vault, making the folders above it first the
+/// way the file manager does: a write refuses a folder that is not there.
+pub fn write_with_folders(root: &VaultRoot, vault_id: &str, ui_path: &str, bytes: &[u8]) {
+    let parts: Vec<&str> = ui_path.trim_matches('/').split('/').collect();
+    let mut parent = "/".to_string();
+    for name in &parts[..parts.len() - 1] {
+        parent = crate::vault::fs_ensure_folder(root, vault_id, &parent, name)
+            .unwrap()
+            .0;
+    }
+    crate::vault::fs_write_file(root, vault_id, ui_path, bytes).unwrap();
+}
+
 /// A job id no other test uses. Jobs share one process-wide registry.
 pub fn test_job_id() -> String {
     static NEXT: AtomicU64 = AtomicU64::new(0);

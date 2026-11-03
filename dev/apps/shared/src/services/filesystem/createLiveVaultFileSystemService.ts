@@ -354,8 +354,9 @@ export function createLiveVaultFileSystemService(
       try {
         await rpc.delete(vaultId, path);
         return true;
-      } catch {
-        return false;
+      } catch (error) {
+        // Already gone: the import never created it, or another delete won.
+        return isRpcError(error) && error.code === VAULT_ERROR_CODES.PATH_NOT_FOUND;
       }
     },
 

@@ -56,6 +56,7 @@ export interface VaultFileSystemService {
   createFolder(vaultId: string, parentPath: string, baseName: string): Promise<string | null>;
   ensureFolder(vaultId: string, parentPath: string, folderName: string): Promise<string | null>;
   renamePath(vaultId: string, path: string, newName: string): Promise<string | null>;
+  /** True once `path` is gone, also when it was gone already. */
   deletePath(vaultId: string, path: string): Promise<boolean>;
   movePath(vaultId: string, fromPath: string, toFolderPath: string): Promise<string | null>;
   /**

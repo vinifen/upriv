@@ -427,6 +427,7 @@
   "modal.file_manager.toast.import_skipped_unsupported_suffix": "Skipped {count} binary file(s).",
   "modal.file_manager.toast.rename_reserved": "This name is reserved by Upriv.",
   "modal.file_manager.toast.rename_failed": "Could not rename this item.",
+  "modal.file_manager.toast.delete_failed": "Could not delete “{name}”. It is still in the vault.",
   "modal.backup.title": "Backups",
   "modal.backup.hint": "Each backup keeps the password from when it was created. To use an old snapshot, create a new vault from that backup (does not replace this vault). Saves are never removed by retention; standard backups follow your keep-last setting.",
   "modal.backup.loading": "Loading backups…",

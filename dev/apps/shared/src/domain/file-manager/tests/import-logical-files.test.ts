@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { RpcError } from "../../core-rpc/errors";
+import { VAULT_ERROR_CODES } from "../../vault/errors/codes";
 import { importLogicalFiles } from "../importLogicalFiles";
 import { importFileSlots } from "../importSlots";
 
@@ -406,6 +408,46 @@ describe("importLogicalFiles folders", () => {
     expect(result.importedPaths).toHaveLength(12);
     expect(written).toContain("/Trip/day2/IMG_5.jpg");
   });
+
+  it.each([1, 4])(
+    "drops the files of a folder deleted meanwhile and imports the rest (%i at once)",
+    async (slots) => {
+      const gone = new RpcError(VAULT_ERROR_CODES.PATH_NOT_FOUND, "folder deleted");
+      const dropped: string[] = [];
+      const result = await importLogicalFiles(photos, {
+        vaultId: "v",
+        parentPath: "/",
+        importSlots: slots,
+        readContent: async () => "",
+        // day2 was never made: core refuses it the way it refuses a folder under a deleted one.
+        ensureFolder: async (_id, parent, name) => {
+          if (name === "day2") throw gone;
+          return parent === "/" ? `/${name}` : `${parent}/${name}`;
+        },
+        importFile: () => "/no",
+        // day1 was deleted after core made it.
+        importBinaryFile: async (_id, parent, name) => {
+          if (parent === "/Trip/day1") throw gone;
+          return `${parent}/${name}`;
+        },
+        onImportDropped: (path) => dropped.push(path),
+      });
+      expect(result.importedPaths.sort()).toEqual([
+        "/Trip/day0/IMG_0.jpg",
+        "/Trip/day0/IMG_3.jpg",
+        "/Trip/day0/IMG_6.jpg",
+        "/Trip/day0/IMG_9.jpg",
+      ]);
+      expect(dropped.sort()).toEqual([
+        "/Trip/day1/IMG_1.jpg",
+        "/Trip/day1/IMG_10.jpg",
+        "/Trip/day1/IMG_4.jpg",
+        "/Trip/day1/IMG_7.jpg",
+      ]);
+      expect(result.writeFailureName).toBeNull();
+      expect(result.skippedInvalid).toBe(0);
+    },
+  );
 
   it("asks again for a folder core could not ensure", async () => {
     let calls = 0;

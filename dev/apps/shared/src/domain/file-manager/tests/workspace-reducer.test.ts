@@ -311,6 +311,25 @@ describe("vaultWorkspaceReducer", () => {
     expect(state.editorDrafts["/a.md"]).toBeUndefined();
   });
 
+  it("remove_paths of a folder drops everything under it, and only that", () => {
+    let state = createDefaultWorkspaceState();
+    for (const path of ["/docs/a.md", "/docs/sub/b.md", "/docs-old/c.md"]) {
+      state = vaultWorkspaceReducer(state, { type: "open_file", path });
+    }
+    state = vaultWorkspaceReducer(state, {
+      type: "set_editor_draft",
+      path: "/docs/sub/b.md",
+      content: "unsaved",
+    });
+    state = vaultWorkspaceReducer(state, { type: "expand_folder", path: "/docs/sub" });
+    state = vaultWorkspaceReducer(state, { type: "remove_paths", paths: ["/docs"] });
+    expect(state.openTabs).toEqual(["/docs-old/c.md"]);
+    expect(state.activeTabPath).toBe("/docs-old/c.md");
+    expect(state.editorDrafts["/docs/sub/b.md"]).toBeUndefined();
+    expect(state.dirtyPaths).toEqual([]);
+    expect(state.expandedPaths).not.toContain("/docs/sub");
+  });
+
   it("reorders open tabs by drag fromPath → toPath index", () => {
     let state = createDefaultWorkspaceState();
     for (const path of ["/a.md", "/b.md", "/c.md"]) {

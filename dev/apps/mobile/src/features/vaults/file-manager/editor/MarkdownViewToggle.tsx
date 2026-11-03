@@ -1,65 +1,70 @@
 import { Pressable, StyleSheet, View } from "react-native";
 import type { MarkdownViewMode } from "@upriv/shared";
 import { Icon, type IconName } from "@/components/icons";
-import { useTranslation } from "@/i18n";
+import { useTranslation, type I18nKey } from "@/i18n";
 import { useTheme } from "@/theme";
-import { radii } from "@/theme/tokens";
+import { colorAlpha } from "@/theme/tokens";
 
 interface MarkdownViewToggleProps {
   mode: MarkdownViewMode;
   onChange: (mode: MarkdownViewMode) => void;
 }
 
-/** Vault-wide Code / Read control. The choice is stored on the workspace file. */
+const VIEWS: readonly { mode: MarkdownViewMode; icon: IconName; label: I18nKey }[] = [
+  { mode: "source", icon: "code", label: "modal.file_manager.markdown.source" },
+  { mode: "preview", icon: "eye", label: "modal.file_manager.markdown.preview" },
+];
+
+/**
+ * Code and Read, each its own button: a tap on the other view picks it, and a
+ * tap on the view in use switches to the other one. The view in use wears the
+ * fill of the outline toggle beside it; the other is muted.
+ */
 export function MarkdownViewToggle({ mode, onChange }: MarkdownViewToggleProps) {
   const { t } = useTranslation();
-  const isPreview = mode === "preview";
-  const nextMode: MarkdownViewMode = isPreview ? "source" : "preview";
-
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={t("modal.file_manager.markdown.view")}
-      accessibilityState={{ selected: isPreview }}
-      hitSlop={6}
-      onPress={() => onChange(nextMode)}
-      style={({ pressed }) => [styles.bar, { opacity: pressed ? 0.7 : 1 }]}
-    >
-      <Segment icon="code" active={mode === "source"} />
-      <Segment icon="eye" active={isPreview} />
-    </Pressable>
-  );
-}
-
-/** Same fills as the outline toggle beside it. */
-function Segment({ icon, active }: { icon: IconName; active: boolean }) {
   const { colors } = useTheme();
+  const other: MarkdownViewMode = mode === "preview" ? "source" : "preview";
   return (
-    <View
-      style={[
-        styles.option,
-        { backgroundColor: active ? colors.surfaceContainerHighest : "transparent" },
-      ]}
-    >
-      <Icon name={icon} size={13} color={active ? colors.onSurface : colors.onSurfaceVariant} />
+    <View accessibilityLabel={t("modal.file_manager.markdown.view")} style={styles.pair}>
+      {VIEWS.map((view) => {
+        const selected = view.mode === mode;
+        return (
+          <Pressable
+            key={view.mode}
+            accessibilityRole="button"
+            accessibilityLabel={t(view.label)}
+            accessibilityState={{ selected }}
+            hitSlop={4}
+            onPress={() => onChange(selected ? other : view.mode)}
+            style={({ pressed }) => [
+              styles.option,
+              {
+                backgroundColor: selected ? colors.surfaceContainerHighest : "transparent",
+                opacity: pressed ? 0.7 : 1,
+              },
+            ]}
+          >
+            <Icon
+              name={view.icon}
+              size={14}
+              color={selected ? colors.onSurface : colorAlpha(colors.onSurfaceVariant, 0.6)}
+            />
+          </Pressable>
+        );
+      })}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  bar: {
-    flexDirection: "row",
-    alignItems: "center",
-    height: 24,
-    borderRadius: radii.full,
-    padding: 2,
-    gap: 2,
-  },
+  /* The path bar's own gap, so the pair is spaced like every other button there. */
+  pair: { flexDirection: "row", alignItems: "center", gap: 8 },
   option: {
-    width: 20,
-    height: 18,
+    width: 24,
+    height: 24,
+    borderRadius: 999,
     alignItems: "center",
     justifyContent: "center",
-    borderRadius: radii.full,
+    flexShrink: 0,
   },
 });

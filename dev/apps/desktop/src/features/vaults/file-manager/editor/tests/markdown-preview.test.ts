@@ -157,17 +157,22 @@ describe("MarkdownPreview", () => {
 });
 
 describe("MarkdownViewToggle", () => {
-  it("toggles between preview and source mode on click", async () => {
+  it("marks the view in use; a click on the other picks it, on the one in use switches", async () => {
     const onChange = vi.fn();
     const { rerender } = renderWithI18n(
       createElement(MarkdownViewToggle, { mode: "preview", onChange }),
     );
-    const btn = await screen.findByRole("button", { name: "Markdown view" });
-    expect(btn).toBeTruthy();
-    expect(btn.getAttribute("aria-pressed")).toBe("true");
+    expect(await screen.findByRole("group", { name: "Markdown view" })).toBeTruthy();
+    const code = screen.getByRole("button", { name: "Code" });
+    const read = screen.getByRole("button", { name: "Read" });
+    expect(read.getAttribute("aria-pressed")).toBe("true");
+    expect(code.getAttribute("aria-pressed")).toBe("false");
 
-    fireEvent.click(btn);
-    expect(onChange).toHaveBeenCalledWith("source");
+    // The view in use switches to the other one.
+    fireEvent.click(read);
+    expect(onChange).toHaveBeenLastCalledWith("source");
+    fireEvent.click(code);
+    expect(onChange).toHaveBeenLastCalledWith("source");
 
     rerender(
       createElement(I18nProvider, {
@@ -175,16 +180,20 @@ describe("MarkdownViewToggle", () => {
         children: createElement(MarkdownViewToggle, { mode: "source", onChange }),
       }),
     );
-    expect(btn.getAttribute("aria-pressed")).toBe("false");
-    fireEvent.click(btn);
-    expect(onChange).toHaveBeenCalledWith("preview");
+    expect(code.getAttribute("aria-pressed")).toBe("true");
+    expect(read.getAttribute("aria-pressed")).toBe("false");
+    fireEvent.click(read);
+    expect(onChange).toHaveBeenLastCalledWith("preview");
+    fireEvent.click(code);
+    expect(onChange).toHaveBeenLastCalledWith("preview");
   });
 
-  it("shows code and eye icons with title and accessibility label", async () => {
+  it("names each view in its tooltip", async () => {
     renderWithI18n(createElement(MarkdownViewToggle, { mode: "preview", onChange: vi.fn() }));
-    const btn = await screen.findByRole("button", { name: "Markdown view" });
-    expect(btn.querySelectorAll("svg").length).toBe(2);
-    expect(btn.getAttribute("title")).toBe("Code / Read");
+    expect((await screen.findByRole("button", { name: "Code" })).getAttribute("title")).toBe(
+      "Code",
+    );
+    expect(screen.getByRole("button", { name: "Read" }).getAttribute("title")).toBe("Read");
   });
 });
 

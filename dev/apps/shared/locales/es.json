@@ -427,6 +427,7 @@
   "modal.file_manager.toast.import_skipped_unsupported_suffix": "Se omitieron {count} archivo(s) binario(s).",
   "modal.file_manager.toast.rename_reserved": "Este nombre está reservado por Upriv.",
   "modal.file_manager.toast.rename_failed": "No se pudo cambiar el nombre de este elemento.",
+  "modal.file_manager.toast.delete_failed": "No se pudo eliminar “{name}”. Sigue en la bóveda.",
   "modal.backup.title": "Copias de seguridad",
   "modal.backup.hint": "Cada copia de seguridad conserva la contraseña de cuando se creó. Para usar una instantánea antigua, crea una bóveda nueva a partir de esa copia (no reemplaza esta bóveda). Las copias guardadas nunca se eliminan por retención; las estándar siguen tu ajuste de conservar las últimas.",
   "modal.backup.loading": "Cargando copias de seguridad…",

@@ -264,6 +264,10 @@ pub fn ingest_import_directory(root: &VaultRoot, vault_id: &str, logical_path: &
 /// import session), staged for the next index seal like every file import,
 /// as the job `job_id`. A stop leaves no file: the document enters the index
 /// only once its blob is written, and an orphan blob goes at the next open.
+///
+/// Its folder must already be in the vault: the file manager creates it
+/// first, and an import session adds every folder before the files. A folder
+/// deleted meanwhile refuses the document (`VaultPathNotFound`) and stays gone.
 pub fn ingest_import_reader(
     root: &VaultRoot,
     vault_id: &str,
@@ -273,9 +277,6 @@ pub fn ingest_import_reader(
 ) -> Result<()> {
     Job::run(job_id, JobKind::FileImport, Some(vault_id), |job| {
         let logical = normalize_import_logical(logical_path)?;
-        if let Some((parent, _)) = logical.rsplit_once('/') {
-            ensure_folder_path(root, vault_id, parent)?;
-        }
         fs_write_staged(
             root,
             vault_id,
@@ -479,6 +480,7 @@ mode = "encrypted_dir"
         crate::create_vault(&root, config(), b"pass-word-ok", KdfUnlockPreset::M32).unwrap();
         open_import_session(&root, "notes", b"pass-word-ok").unwrap();
         ingest_import_directory(&root, "notes", "empty").unwrap();
+        ingest_import_directory(&root, "notes", "trip").unwrap();
         ingest_import_reader(&root, "notes", "trip/a.txt", &mut &b"alpha"[..], &job()).unwrap();
         finish_import_session(&root, "notes").unwrap();
         let backups = root.vault_dir("notes").unwrap().join("backups");

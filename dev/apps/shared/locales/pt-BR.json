@@ -427,6 +427,7 @@
   "modal.file_manager.toast.import_skipped_unsupported_suffix": "{count} arquivo(s) binário(s) ignorado(s).",
   "modal.file_manager.toast.rename_reserved": "Este nome é reservado pelo Upriv.",
   "modal.file_manager.toast.rename_failed": "Não foi possível renomear este item.",
+  "modal.file_manager.toast.delete_failed": "Não foi possível excluir “{name}”. O item continua no cofre.",
   "modal.backup.title": "Backups",
   "modal.backup.hint": "Cada backup mantém a senha de quando foi criado. Para usar um snapshot antigo, crie um cofre novo a partir desse backup (não substitui este cofre). Saves nunca são removidos pela retenção; os padrões seguem o “manter últimos N”.",
   "modal.backup.loading": "Carregando backups…",
